@@ -22,7 +22,7 @@ import {
   logRerankFailure,
   type RerankFailureReason,
 } from "./rerank-audit.ts";
-import { awsRegion } from "../llm/gateway.ts";
+import { awsRegion, generationFields, responseText } from "../llm/gateway.ts";
 import { trackedInvoke } from "../budget.ts";
 
 
@@ -115,7 +115,7 @@ export async function rerank<T extends ChunkPayloadForRerank>(
           modelId,
           system: [{ text: SYSTEM_PROMPT }],
           messages: [{ role: "user", content: [{ text: userMessage }] }],
-          inferenceConfig: { maxTokens: MAX_OUTPUT_TOKENS, temperature: 0 },
+          ...generationFields(modelId, MAX_OUTPUT_TOKENS, 0),
         }),
         // Per-call deadline: a stuck upstream must not hold search hostage.
         { abortSignal: AbortSignal.timeout(timeoutMs) },
@@ -126,7 +126,7 @@ export async function rerank<T extends ChunkPayloadForRerank>(
           outputTokens: resp.usage.outputTokens ?? 0,
         });
       }
-      const text = resp.output?.message?.content?.[0]?.text?.trim() ?? "[]";
+      const text = responseText(resp.output?.message?.content)?.trim() ?? "[]";
       const match = text.match(INDEX_ARRAY);
       if (!match) {
         audit("parse", `no index array in model output (${text.slice(0, 80)})`);

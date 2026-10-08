@@ -28,6 +28,8 @@ import {
   awsRegion,
   bedrockClientConfig,
   chatTimeoutMs,
+  generationFields,
+  responseText,
   utilityTimeoutMs,
   withInflightCap,
 } from "./gateway.ts";
@@ -171,10 +173,7 @@ export async function callHaiku(
           modelId,
           system: [{ text: input.system }],
           messages: [{ role: "user", content: buildUserContent(input, withCache) }],
-          inferenceConfig: {
-            maxTokens: input.maxTokens,
-            temperature: input.temperature ?? 0,
-          },
+          ...generationFields(modelId, input.maxTokens, input.temperature ?? 0),
         }),
         { requestTimeout: chatTimeoutMs(utilityTimeoutMs(), input.maxTokens) },
       ),
@@ -227,7 +226,7 @@ export function toLlmCallResult(
   resp: Pick<ConverseCommandOutput, "output" | "usage" | "stopReason">,
   modelId: string,
 ): LlmCallResult {
-  const text = resp.output?.message?.content?.[0]?.text ?? "";
+  const text = responseText(resp.output?.message?.content) ?? "";
   const u = resp.usage;
   const usage: LlmUsage | undefined = u
     ? {

@@ -20,7 +20,7 @@ import {
   BedrockRuntimeClient,
   ConverseCommand,
 } from "@aws-sdk/client-bedrock-runtime";
-import { awsRegion, bedrockClientConfig, SEARCH_LLM_BUDGET_MS, utilityTimeoutMs, withDeadline } from "../llm/gateway.ts";
+import { awsRegion, bedrockClientConfig, generationFields, responseText, SEARCH_LLM_BUDGET_MS, utilityTimeoutMs, withDeadline } from "../llm/gateway.ts";
 import { isBudgetRefusal, trackedInvoke } from "../budget.ts";
 
 
@@ -137,7 +137,7 @@ export async function expandQuery(
             modelId,
             system: [{ text: SYSTEM_PROMPT.replace("N", String(max)) }],
             messages: [{ role: "user", content: [{ text: safeQuery }] }],
-            inferenceConfig: { maxTokens: 120, temperature: 0.3 },
+            ...generationFields(modelId, 120, 0.3),
           }),
           { abortSignal },
         ),
@@ -148,7 +148,7 @@ export async function expandQuery(
           outputTokens: resp.usage.outputTokens ?? 0,
         });
       }
-      const text = resp.output?.message?.content?.[0]?.text ?? "";
+      const text = responseText(resp.output?.message?.content) ?? "";
       const lowerQuery = safeQuery.toLowerCase();
       const lines = text
         .split(/\r?\n/)

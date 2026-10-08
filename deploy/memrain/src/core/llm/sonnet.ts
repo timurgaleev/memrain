@@ -21,7 +21,9 @@ import {
   awsRegion,
   bedrockClientConfig,
   chatTimeoutMs,
+  generationFields,
   reasoningTimeoutMs,
+  responseText,
   withInflightCap,
 } from "./gateway.ts";
 import { trackedInvoke } from "../budget.ts";
@@ -124,15 +126,12 @@ export async function callSonnet(
             modelId,
             system: [{ text: input.system }],
             messages: [{ role: "user", content: [{ text: input.user }] }],
-            inferenceConfig: {
-              maxTokens: input.maxTokens,
-              temperature: input.temperature ?? 0,
-            },
+            ...generationFields(modelId, input.maxTokens, input.temperature ?? 0),
           }),
           { requestTimeout: chatTimeoutMs(reasoningTimeoutMs(), input.maxTokens) },
         ),
       );
-      const text = resp.output?.message?.content?.[0]?.text ?? "";
+      const text = responseText(resp.output?.message?.content) ?? "";
       const usage: SonnetUsage = {
         inputTokens: resp.usage?.inputTokens ?? 0,
         outputTokens: resp.usage?.outputTokens ?? 0,

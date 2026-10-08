@@ -34,7 +34,11 @@ export const MODEL_PRICING: { match: string; price: ModelPricing }[] = [
   // `opus` must precede `sonnet`/`haiku`: first substring match wins, and the
   // deep tier's opus id must not fall through to a cheaper row's pricing.
   { match: "opus", price: { inputPer1M: 15.0, outputPer1M: 75.0 } },
+  // The 5-generation rows precede their family row for the same reason. Rates
+  // are the Bedrock `eu.` regional-profile card (list price + 10%).
+  { match: "sonnet-5", price: { inputPer1M: 2.2, outputPer1M: 11.0 } },
   { match: "sonnet", price: { inputPer1M: 3.0, outputPer1M: 15.0 } },
+  { match: "haiku-5", price: { inputPer1M: 0.11, outputPer1M: 0.55 } },
   { match: "haiku", price: { inputPer1M: 1.0, outputPer1M: 5.0 } },
 ];
 

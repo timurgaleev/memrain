@@ -40,6 +40,12 @@ describe("budget pricing", () => {
     expect(costUsd("sonnet", { inputTokens: 1_000_000, outputTokens: 0 })).toBeCloseTo(3.0, 6);
   });
 
+  it("prices the 5-generation ids by their own row, not the family row", () => {
+    expect(priceFor("eu.anthropic.claude-haiku-5-5")).toEqual({ inputPer1M: 0.11, outputPer1M: 0.55 });
+    expect(priceFor("eu.anthropic.claude-sonnet-5-5")).toEqual({ inputPer1M: 2.2, outputPer1M: 11.0 });
+    expect(priceFor("eu.anthropic.claude-haiku-4-5-20251001-v1:0")).toEqual({ inputPer1M: 1.0, outputPer1M: 5.0 });
+  });
+
   it("throws BudgetExhausted at the cap and on unpriced models", () => {
     const b = new BudgetTracker(0.001, "test");
     expect(() =>

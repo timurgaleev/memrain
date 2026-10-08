@@ -2,7 +2,7 @@
  * LLM gateway: per-process inflight concurrency cap + availability probe.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { withInflightCap, isLlmAvailable } from "../src/core/llm/gateway.ts";
+import { generationFields, isLlmAvailable, responseText, withInflightCap } from "../src/core/llm/gateway.ts";
 
 afterEach(() => delete process.env.MEMRAIN_LLM_MAX_INFLIGHT);
 
@@ -44,5 +44,41 @@ describe("isLlmAvailable", () => {
     expect(isLlmAvailable()).toBe(true);
     if (prev === undefined) delete process.env.AWS_REGION;
     else process.env.AWS_REGION = prev;
+  });
+});
+
+describe("generationFields", () => {
+  it("keeps the caller's temperature on pre-5 models", () => {
+    expect(generationFields("eu.anthropic.claude-haiku-4-5-20251001-v1:0", 64, 0.3)).toEqual({
+      inferenceConfig: { maxTokens: 64, temperature: 0.3 },
+    });
+  });
+
+  it("drops temperature and turns thinking off on Haiku 5.5", () => {
+    expect(generationFields("eu.anthropic.claude-haiku-5-5", 64, 0)).toEqual({
+      inferenceConfig: { maxTokens: 64 },
+      additionalModelRequestFields: { thinking: { type: "disabled" } },
+    });
+  });
+
+  it("uses between_tools on Sonnet 5.5, which rejects disabled", () => {
+    expect(generationFields("eu.anthropic.claude-sonnet-5-5", 64, 0).additionalModelRequestFields).toEqual({
+      thinking: { type: "between_tools" },
+    });
+  });
+
+  it("leaves thinking at the model default where it cannot be turned off", () => {
+    expect(generationFields("eu.anthropic.claude-opus-5-5", 64, 0)).toEqual({ inferenceConfig: { maxTokens: 64 } });
+  });
+});
+
+describe("responseText", () => {
+  it("skips a leading reasoning block", () => {
+    expect(responseText([{}, { text: "answer" }])).toBe("answer");
+  });
+
+  it("is undefined when there is no text block", () => {
+    expect(responseText(undefined)).toBeUndefined();
+    expect(responseText([{}])).toBeUndefined();
   });
 });

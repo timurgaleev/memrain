@@ -24,7 +24,7 @@ import {
 import type { Engine } from "./engine/interface.ts";
 import { sanitizeForPrompt } from "./llm/sanitize.ts";
 import { parseModelJson } from "./llm/json-output.ts";
-import { awsRegion, bedrockClientConfig, chatTimeoutMs, utilityTimeoutMs } from "./llm/gateway.ts";
+import { awsRegion, bedrockClientConfig, chatTimeoutMs, generationFields, responseText, utilityTimeoutMs } from "./llm/gateway.ts";
 import { trackedInvoke } from "./budget.ts";
 
 /** Ledger label — the skill-rewrite suggestions behind `friction propose-fix`. */
@@ -210,7 +210,7 @@ export async function proposeForSkill(
     modelId,
     system: [{ text: SYSTEM_PROMPT }],
     messages: [{ role: "user", content: [{ text: userPrompt }] }],
-    inferenceConfig: { maxTokens: MAX_OUTPUT_TOKENS, temperature: 0.2 },
+    ...generationFields(modelId, MAX_OUTPUT_TOKENS, 0.2),
   });
   const text = await trackedInvoke(
     {
@@ -228,7 +228,7 @@ export async function proposeForSkill(
         outputTokens: response.usage.outputTokens ?? 0,
       });
     }
-    return response.output?.message?.content?.[0]?.text;
+    return responseText(response.output?.message?.content);
   });
   if (typeof text !== "string" || text.trim().length === 0) {
     throw new Error("proposeForSkill: empty response from model");

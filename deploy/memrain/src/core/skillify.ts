@@ -19,7 +19,7 @@ import {
   BedrockRuntimeClient,
   ConverseCommand,
 } from "@aws-sdk/client-bedrock-runtime";
-import { awsRegion, bedrockClientConfig, chatTimeoutMs, utilityTimeoutMs } from "./llm/gateway.ts";
+import { awsRegion, bedrockClientConfig, chatTimeoutMs, generationFields, responseText, utilityTimeoutMs } from "./llm/gateway.ts";
 import { trackedInvoke } from "./budget.ts";
 import { OPERATIONS } from "../mcp/operations.ts";
 import { parseSkillFrontmatter } from "./skillpack/frontmatter.ts";
@@ -154,7 +154,7 @@ export async function draftSkill(
         ],
       },
     ],
-    inferenceConfig: { maxTokens: MAX_OUTPUT_TOKENS, temperature: 0.3 },
+    ...generationFields(modelId, MAX_OUTPUT_TOKENS, 0.3),
   });
 
   const text = await trackedInvoke(
@@ -176,7 +176,7 @@ export async function draftSkill(
         outputTokens: response.usage.outputTokens ?? 0,
       });
     }
-    return response.output?.message?.content?.[0]?.text;
+    return responseText(response.output?.message?.content);
   });
   if (typeof text !== "string" || text.trim().length === 0) {
     throw new Error("draftSkill: empty response from model");

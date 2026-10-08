@@ -25,7 +25,7 @@ import {
   ConverseCommand,
 } from "@aws-sdk/client-bedrock-runtime";
 import { classifyQueryTaxonomy } from "./query-intent.ts";
-import { awsRegion, bedrockClientConfig, SEARCH_LLM_BUDGET_MS, utilityTimeoutMs, withDeadline } from "../llm/gateway.ts";
+import { awsRegion, bedrockClientConfig, generationFields, responseText, SEARCH_LLM_BUDGET_MS, utilityTimeoutMs, withDeadline } from "../llm/gateway.ts";
 import { isBudgetRefusal, trackedInvoke } from "../budget.ts";
 
 export type Intent = "factual" | "topic" | "howto" | "personal" | "exact";
@@ -104,7 +104,7 @@ export async function classifyIntent(
             modelId,
             system: [{ text: SYSTEM_PROMPT }],
             messages: [{ role: "user", content: [{ text: trimmed }] }],
-            inferenceConfig: { maxTokens: 8, temperature: 0 },
+            ...generationFields(modelId, 8, 0),
           }),
           { abortSignal },
         ),
@@ -116,7 +116,7 @@ export async function classifyIntent(
         });
       }
       const text =
-        resp.output?.message?.content?.[0]?.text?.trim().toLowerCase() ?? "";
+        responseText(resp.output?.message?.content)?.trim().toLowerCase() ?? "";
       const word = text.split(/\s+/)[0] ?? "";
       if (VALID_INTENTS.has(word as Intent)) return word as Intent;
       return taxonomyToIntent(trimmed);

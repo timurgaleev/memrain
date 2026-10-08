@@ -177,3 +177,40 @@ export function bedrockClientConfig(timeoutMs: number): {
     requestHandler: new NodeHttpHandler({ requestTimeout: timeoutMs, throwOnRequestTimeout: true }),
   };
 }
+
+const CLAUDE_5 = /claude-(?:haiku|sonnet|opus|fable|mythos)-5/;
+
+/**
+ * The per-model half of a Converse request. Claude 5-generation models reject a
+ * non-default temperature with a 400, so it is dropped for them. They also
+ * think by default, which bills output tokens on calls that only want a short
+ * answer: Haiku 5.x and Sonnet 5 take `disabled`, Sonnet 5.5 refuses it and
+ * takes `between_tools` instead. Opus 5.5 and Fable cannot turn thinking off,
+ * so they keep the model default. Older models keep the caller's temperature.
+ */
+export function generationFields(
+  modelId: string,
+  maxTokens: number,
+  temperature: number,
+): {
+  inferenceConfig: { maxTokens: number; temperature?: number };
+  additionalModelRequestFields?: { thinking: { type: string } };
+} {
+  const id = modelId.toLowerCase();
+  if (!CLAUDE_5.test(id)) return { inferenceConfig: { maxTokens, temperature } };
+  const thinkingOff = id.includes("claude-sonnet-5-5")
+    ? "between_tools"
+    : /claude-(?:haiku|sonnet)-5/.test(id) ? "disabled" : undefined;
+  return {
+    inferenceConfig: { maxTokens },
+    ...(thinkingOff ? { additionalModelRequestFields: { thinking: { type: thinkingOff } } } : {}),
+  };
+}
+
+/** The first text block of a Converse reply. A model that thinks puts its
+ *  reasoning block first, so `content[0]` is not always the answer. */
+export function responseText(
+  content: ReadonlyArray<{ text?: string }> | undefined,
+): string | undefined {
+  return content?.find(b => typeof b.text === "string")?.text;
+}

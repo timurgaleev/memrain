@@ -22,6 +22,7 @@ import {
   awsRegion,
   bedrockClientConfig,
   chatTimeoutMs,
+  generationFields,
   reasoningTimeoutMs,
   withInflightCap,
 } from "./gateway.ts";
@@ -110,7 +111,7 @@ export async function converseTurn(input: ConverseTurnInput): Promise<ConverseTu
             system: [{ text: input.system }],
             messages,
             ...(tools.length > 0 ? { toolConfig: { tools } } : {}),
-            inferenceConfig: { maxTokens: input.maxTokens, temperature: 0 },
+            ...generationFields(modelId, input.maxTokens, 0),
           }),
           { requestTimeout: chatTimeoutMs(reasoningTimeoutMs(), input.maxTokens) },
         ),
