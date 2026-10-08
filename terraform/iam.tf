@@ -27,7 +27,7 @@ resource "aws_iam_role_policy_attachment" "cloudwatch" {
 
 data "aws_iam_policy_document" "memrain_custom" {
   # Bedrock invoke — limited to the models the stack actually calls
-  # (Titan embed + Nova family + Claude Haiku 4.5 + Claude Sonnet 4.6).
+  # (Titan embed + Nova family + Claude Haiku 4.5/5.5 + Claude Sonnet 4.6/5.5).
   # Region-scoped where
   # possible. Cross-region inference profiles ("eu." / "global.") are
   # listed explicitly so a compromised instance role cannot invoke
@@ -60,11 +60,17 @@ data "aws_iam_policy_document" "memrain_custom" {
       # conversation->facts extractor (MEMRAIN_FACTS_MODEL). Stays region-locked
       # via the BedrockDenyOffRegion statement below, same posture as Haiku.
       "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6*",
+      # The 5.5 generation, selectable per tier via MEMRAIN_UTILITY_MODEL /
+      # MEMRAIN_FACTS_MODEL. Region-locked by the same Deny below.
+      "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5*",
+      "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5-5*",
 
       # Cross-region inference profiles — enumerated, no wildcards.
       "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/eu.amazon.nova-*",
       "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/eu.anthropic.claude-haiku-4-5*",
       "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/eu.anthropic.claude-sonnet-4-6*",
+      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/eu.anthropic.claude-haiku-5-5*",
+      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/eu.anthropic.claude-sonnet-5-5*",
       "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/global.amazon.nova-*",
     ]
   }

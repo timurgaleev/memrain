@@ -172,6 +172,8 @@ variable "bedrock_model_id" {
     === Anthropic Claude — what Memrain runs on ===
       eu.anthropic.claude-haiku-4-5-20251001  — Haiku 4.5, utility tier (default; ~$2-3/mo)
       eu.anthropic.claude-sonnet-4-6          — Sonnet 4.6, paid slices (~$15-25/mo)
+      eu.anthropic.claude-haiku-5-5           — Haiku 5.5, ~10x cheaper than Haiku 4.5
+      eu.anthropic.claude-sonnet-5-5          — Sonnet 5.5
 
     === Amazon Nova — credit-eligible alternates ===
       global.amazon.nova-2-lite-v1:0   — Nova 2 Lite (multi-turn-safe)
@@ -192,6 +194,8 @@ variable "bedrock_model_id" {
       "eu.amazon.nova-pro-v1:0",
       "eu.anthropic.claude-haiku-4-5-20251001",
       "eu.anthropic.claude-sonnet-4-6",
+      "eu.anthropic.claude-haiku-5-5",
+      "eu.anthropic.claude-sonnet-5-5",
     ], var.bedrock_model_id)
     error_message = "Must be a valid Bedrock CRIS inference profile ID. See variable description for the full list."
   }
