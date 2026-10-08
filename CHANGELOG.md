@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.7] — 2026-10-08
+
+### Added
+- Memrain runs on the Claude 5.5 models. Point `MEMRAIN_UTILITY_MODEL` or
+  `MEMRAIN_FACTS_MODEL` at `eu.anthropic.claude-haiku-5-5` (about a tenth of
+  Haiku 4.5's price) or `eu.anthropic.claude-sonnet-5-5`. These models reject a
+  custom temperature and think by default, so Memrain leaves the temperature
+  out for them and turns thinking off where the model allows it. The defaults
+  stay on Haiku 4.5 and Sonnet 4.6.
+- The spend ledger prices Haiku 5.5 and Sonnet 5.5 at their own rates instead
+  of the older family's.
+- Terraform lets the instance role call Haiku 5.5 and Sonnet 5.5, still
+  region-locked like the other Claude models. Your AWS account also needs the
+  Bedrock model agreement and a non-zero tokens-per-minute quota for them.
+
+### Fixed
+- A reply whose first block is the model's reasoning no longer reads as empty:
+  Memrain takes the first text block of the answer.
+
 ## [1.0.6] — 2026-10-03
 
 ### Fixed

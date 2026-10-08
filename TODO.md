@@ -3036,6 +3036,33 @@ Closed operator decisions this roadmap does not re-raise:
 ---
 
 
+## Claude 5.5 model support — review follow-ups (2026-10-08, v1.0.7)
+
+Found by the review of the 5-generation support. None of them affects Haiku 4.5
+or Haiku 5.5, which is what runs today.
+
+- **MEDIUM — agent loop and models that keep thinking on.** Sonnet 5.5, Opus 5.5
+  and Fable return `reasoningContent` blocks that must be replayed with their
+  `signature`. `agent/runner.ts` stores reply content as JSON, so a
+  `redactedContent` `Uint8Array` comes back as `{"0":…}` and the next turn gets
+  a 400. Fix before pointing the reasoning tier at one of them: base64 the bytes
+  on write and restore them on read, or refuse those models in the agent loop.
+- **MEDIUM — takes judges lose their temperature spread on Claude 5.**
+  `synthesis/takes.ts` runs one judge at 0 and the rest at 0.6; the 5-generation
+  models reject a custom temperature, so `generationFields` drops it and every
+  judge runs at the model default. The stable anchor judge is no longer stable.
+  Decide whether to keep the judges on a 4.x model or accept it.
+- **LOW — truncation retry assumes temperature 0** (`llm/output-limits.ts`,
+  `llm/truncation.ts`). Still correct on Claude 5, but the stated reason is not;
+  update the comment when either file is next touched.
+- **LOW — tiny `maxTokens` on models that cannot disable thinking.** `intent.ts`
+  (8) and `expansion.ts` (120) would get `max_tokens` with no text block on Opus
+  5.5 or Fable. Only the deep tier would plausibly point there.
+- **LOW — `CLAUDE_5` has no boundary after the 5** (`llm/gateway.ts`), so a future
+  `claude-sonnet-50` would match. Tighten it when the next generation lands.
+
+---
+
 ## Auth and re-read hardening follow-ups (2026-09-28, v1.155.0–v1.160.0)
 
 - **Four `timur`-owned `/memory` rows carry no `last_indexed_mtime`.** The
