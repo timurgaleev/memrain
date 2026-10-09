@@ -146,9 +146,36 @@ interface AssistantTurn extends Message {
   model_id?: string;
 }
 
-function asMessage(row: MessageRow): Message {
+/** Redacted reasoning is opaque bytes; JSON turns a Uint8Array into an
+ *  index-keyed object Bedrock rejects on replay, so the ledger keeps base64. */
+interface StoredRedacted { base64: string }
+
+function toStored(content: ContentBlock[]): ContentBlock[] {
+  return content.map((b) => {
+    const bytes = b.reasoningContent?.redactedContent;
+    if (!(bytes instanceof Uint8Array)) return b;
+    const stored: StoredRedacted = { base64: Buffer.from(bytes).toString("base64") };
+    return { reasoningContent: { redactedContent: stored as never } };
+  });
+}
+
+function fromStored(content: ContentBlock[]): ContentBlock[] {
+  return content.map((b) => {
+    const stored = b.reasoningContent?.redactedContent as unknown as StoredRedacted | undefined;
+    if (typeof stored?.base64 !== "string") return b;
+    return { reasoningContent: { redactedContent: new Uint8Array(Buffer.from(stored.base64, "base64")) } };
+  });
+}
+
+/** The row as the ledger holds it; sized for estimates, never sent. */
+function storedMessage(row: MessageRow): Message {
   const c = row.content as Message;
   return { role: c.role, content: c.content ?? [] };
+}
+
+function asMessage(row: MessageRow): Message {
+  const m = storedMessage(row);
+  return { role: m.role, content: fromStored(m.content ?? []) };
 }
 
 function textOf(message: Message): string {
@@ -182,7 +209,7 @@ function estimateInputTokens(
     if (row.role !== "assistant") continue;
     const usage = (row.content as AssistantTurn).usage;
     if (!usage) break;
-    const since = rows.slice(i + 1).map(asMessage);
+    const since = rows.slice(i + 1).map(storedMessage);
     return (
       usage.inputTokens +
       (usage.cacheReadInputTokens ?? 0) +
@@ -192,7 +219,7 @@ function estimateInputTokens(
       ESTIMATE_OVERHEAD_TOKENS
     );
   }
-  const everything = JSON.stringify({ system, messages: rows.map(asMessage), tools });
+  const everything = JSON.stringify({ system, messages: rows.map(storedMessage), tools });
   return Buffer.byteLength(everything, "utf8") + ESTIMATE_OVERHEAD_TOKENS;
 }
 
@@ -399,7 +426,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
 
     const turn: AssistantTurn = {
       role: "assistant",
-      content: reply.message.content ?? [],
+      content: toStored(reply.message.content ?? []),
       stop_reason: reply.stopReason,
       usage: reply.usage,
       model_id: reply.modelId,

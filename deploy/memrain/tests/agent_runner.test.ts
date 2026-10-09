@@ -145,6 +145,31 @@ describe("runAgent", () => {
     expect(await jobCost(job.id)).toBeCloseTo(r.cost_usd, 9);
   });
 
+  it("replays reasoning blocks byte for byte, redacted bytes included", async () => {
+    const job = await claimNew();
+    const redacted = new Uint8Array([0, 1, 254, 255]);
+    const s = script([
+      {
+        content: [
+          { reasoningContent: { reasoningText: { text: "plan", signature: "sig" } } },
+          { reasoningContent: { redactedContent: redacted } },
+          use("t1"),
+        ],
+        stopReason: "tool_use",
+      },
+      { content: [{ text: "done" }], stopReason: "end_turn" },
+    ]);
+    await runAgent({
+      storage, job, task: "t", maxUsd: 0.25, modelId: HAIKU,
+      converse: s.fn, dispatch: counter().fn, ...ctxFor(job),
+    });
+    const replayed = s.calls[1]!.messages[1]!.content!;
+    expect(replayed[0]!.reasoningContent!.reasoningText).toEqual({ text: "plan", signature: "sig" });
+    const bytes = replayed[1]!.reasoningContent!.redactedContent;
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect([...bytes!]).toEqual([...redacted]);
+  });
+
   it("resumes after a kill mid-tool without re-running the finished tool", async () => {
     const first = await claimNew();
     const hang = new Promise<ToolCallResult>(() => {});

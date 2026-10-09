@@ -3038,15 +3038,9 @@ Closed operator decisions this roadmap does not re-raise:
 
 ## Claude 5.5 model support — review follow-ups (2026-10-08, v1.0.7)
 
-Found by the review of the 5-generation support. None of them affects Haiku 4.5
-or Haiku 5.5, which is what runs today.
+Found by the review of the 5-generation support. The live stack runs Haiku 5.5
+and Sonnet 5.5; dream synthesis (takes) is off there, so none of these fire.
 
-- **MEDIUM — agent loop and models that keep thinking on.** Sonnet 5.5, Opus 5.5
-  and Fable return `reasoningContent` blocks that must be replayed with their
-  `signature`. `agent/runner.ts` stores reply content as JSON, so a
-  `redactedContent` `Uint8Array` comes back as `{"0":…}` and the next turn gets
-  a 400. Fix before pointing the reasoning tier at one of them: base64 the bytes
-  on write and restore them on read, or refuse those models in the agent loop.
 - **MEDIUM — takes judges lose their temperature spread on Claude 5.**
   `synthesis/takes.ts` runs one judge at 0 and the rest at 0.6; the 5-generation
   models reject a custom temperature, so `generationFields` drops it and every

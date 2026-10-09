@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.8] — 2026-10-09
+
+### Fixed
+- The deployed stack now passes `MEMRAIN_UTILITY_MODEL` to the container, so
+  setting it in `.env` moves every utility-tier call, not only the ones with a
+  per-feature key.
+- The agent loop can run on models that keep thinking on, such as Sonnet 5.5.
+  Redacted reasoning blocks were stored as JSON and came back as an
+  index-keyed object, so the next turn failed with a 400; the ledger now keeps
+  their bytes as base64 and restores them on replay.
+
 ## [1.0.7] — 2026-10-08
 
 ### Added
