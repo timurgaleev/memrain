@@ -161,3 +161,28 @@ describe("findBacklinks (wikilink, page links)", () => {
     expect(await findBacklinks(storage, "projects/memory")).toEqual([]);
   });
 });
+
+describe("findBacklinks (wikilink, vault document mentions)", () => {
+  async function seedMention(docId: string, path: string, name: string) {
+    const db = storage.raw();
+    const eid = entityId("wikilink", name);
+    await db.exec(`
+      INSERT INTO documents (id, source_path, title) VALUES ('${docId}', '${path}', '${docId}');
+      INSERT INTO chunks (id, document_id, chunk_index, content) VALUES ('${docId}c0', '${docId}', 0, 'x');
+      INSERT INTO entities (id, type, name) VALUES ('${eid}', 'wikilink', 'n') ON CONFLICT DO NOTHING;
+      INSERT INTO entity_mentions (chunk_id, entity_id, surface_form) VALUES ('${docId}c0', '${eid}', 'n');
+    `);
+  }
+
+  it("finds a vault document whose [[link]] exists only as a mention", async () => {
+    await seedMention("vidx", "/memory/INDEX.md", "diu-suzuki-projects");
+    const hits = await findBacklinks(storage, "diu-suzuki-projects");
+    expect(hits.map((h) => h.sourcePath)).toEqual(["/memory/INDEX.md"]);
+  });
+
+  it("does not match folded mention ids for a non-Latin name", async () => {
+    // entityId folds every Cyrillic name to the same id.
+    await seedMention("vru", "/memory/other.md", "проекты/другое");
+    expect(await findBacklinks(storage, "проекты/память")).toEqual([]);
+  });
+});

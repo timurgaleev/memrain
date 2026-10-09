@@ -412,13 +412,20 @@
             "page://tenantB/vault-b/target"
           ]
         ]
+      },
+      {
+        "text": "SELECT d.id AS document_id, d.source_path AS source_path, d.title AS title, COUNT(*)::int AS mention_count, MIN(em.surface_form) AS surface_form FROM entity_mentions em JOIN chunks c ON c.id = em.chunk_id JOIN documents d ON d.id = c.document_id WHERE em.entity_id = $1 GROUP BY d.id, d.source_path, d.title ORDER BY mention_count DESC, d.title NULLS LAST, d.source_path LIMIT $2",
+        "params": [
+          "ent_wikilink_alice",
+          50
+        ]
       }
     ],
     "result": {
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"name\": \"Alice\",\n  \"hits\": [\n    {\n      \"documentId\": \"page://tenantA/vault-a/target\",\n      \"sourcePath\": \"page://tenantA/vault-a/target\",\n      \"title\": \"Target A\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    },\n    {\n      \"documentId\": \"page://tenantB/vault-b/target\",\n      \"sourcePath\": \"page://tenantB/vault-b/target\",\n      \"title\": \"Target B\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"name\": \"Alice\",\n  \"hits\": [\n    {\n      \"documentId\": \"page://tenantA/vault-a/target\",\n      \"sourcePath\": \"page://tenantA/vault-a/target\",\n      \"title\": \"Target A\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    },\n    {\n      \"documentId\": \"page://tenantB/vault-b/target\",\n      \"sourcePath\": \"page://tenantB/vault-b/target\",\n      \"title\": \"Target B\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    },\n    {\n      \"documentId\": \"doc-a-notes\",\n      \"sourcePath\": \"/tenant-a/notes.md\",\n      \"title\": \"AAA Notes\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"Alice\"\n    },\n    {\n      \"documentId\": \"doc-b-notes\",\n      \"sourcePath\": \"/tenant-b/notes.md\",\n      \"title\": \"BBB Notes\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"Alice\"\n    }\n  ]\n}"
         }
       ]
     }

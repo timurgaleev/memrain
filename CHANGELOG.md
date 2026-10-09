@@ -27,8 +27,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (after an image rollback) or is missing ones below the newest applied, and
   `/health` reports `schema_ahead`.
 - `backlinks` works for Cyrillic and long page names, and follows renamed
-  pages. It now reads page links instead of entity ids, which reduced every
-  non-Latin name to the same id. Names over 256 characters are refused, and a
+  pages. It now reads page links as well as the links in vault documents;
+  the old lookup reduced every non-Latin name to the same id. Names over 256 characters are refused, and a
   remote caller no longer sees links into a diary page, including through an
   alias of one.
 - The Postgres driver survives a backend that is killed mid-query or during

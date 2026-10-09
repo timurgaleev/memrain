@@ -62,15 +62,38 @@ export async function findBacklinks(
   if (limit < 1 || limit > 1000) {
     throw new Error(`backlinks: limit must be in [1, 1000] (got ${limit})`);
   }
-  if (type === "wikilink") {
-    return findPageBacklinks(storage, name, limit, opts.sourceIds, opts.excludeTarget);
+  if (type !== "wikilink") {
+    return findMentionBacklinks(storage, type, name, limit, opts.sourceIds);
   }
+  const pages = await findPageBacklinks(storage, name, limit, opts.sourceIds, opts.excludeTarget);
+  if (pages === null) return [];
+  // Vault documents carry their [[links]] only as entity mentions; page
+  // links cover pages and non-Latin names. Merge both, page edges first.
+  // entityId() folds non-ASCII names together and truncates long ones, so
+  // their mention ids would match unrelated pages.
+  const mentionsReliable = /^[\x20-\x7E]*$/.test(name) && name.length <= 60;
+  const mentions = mentionsReliable
+    ? await findMentionBacklinks(storage, type, name, limit, opts.sourceIds)
+    : [];
+  const seen = new Set(pages.map((h) => h.sourcePath));
+  return [...pages, ...mentions.filter((h) => !seen.has(h.sourcePath))]
+    .sort((a, b) => b.mentionCount - a.mentionCount)
+    .slice(0, limit);
+}
+
+async function findMentionBacklinks(
+  storage: Storage,
+  type: EntityType,
+  name: string,
+  limit: number,
+  sourceIds: string[] | undefined,
+): Promise<BacklinkHit[]> {
   const eid = entityId(type, name);
 
   const params: unknown[] = [eid, limit];
   // Tenant scope (mig047): filter the joined documents (nullable source_id)
   // whenever a list is given; `[]` matches nothing.
-  const scopeFilter = andSourceScope("d.source_id", opts.sourceIds, params);
+  const scopeFilter = andSourceScope("d.source_id", sourceIds, params);
 
   const db = storage.raw();
   const result = await db.query<{
@@ -116,7 +139,7 @@ async function findPageBacklinks(
   limit: number,
   sourceIds: string[] | undefined,
   excludeTarget: ((slug: string) => boolean) | undefined,
-): Promise<BacklinkHit[]> {
+): Promise<BacklinkHit[] | null> {
   const trimmed = name.trim();
   const fallback = slugifyTarget(trimmed);
   if (fallback === "unknown") return [];
@@ -127,7 +150,7 @@ async function findPageBacklinks(
   );
   const resolved = await resolver.resolve(trimmed);
   const targets = [...new Set([resolved.slug, fallback])];
-  if (excludeTarget && targets.some(excludeTarget)) return [];
+  if (excludeTarget && targets.some(excludeTarget)) return null;
 
   const params: unknown[] = [targets, limit];
   const linkScope = andSourceScope("l.source_id", sourceIds, params);
