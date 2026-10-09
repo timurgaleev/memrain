@@ -20,6 +20,8 @@ FROM oven/bun:1.3.13-alpine
 WORKDIR /app
 
 COPY package.json bun.lock bunfig.toml tsconfig.json ./
+# patchedDependencies: bun applies these during install, so they must be in place first.
+COPY patches/ ./patches/
 RUN bun install --frozen-lockfile --production
 
 COPY src/ ./src/
