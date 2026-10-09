@@ -20,6 +20,11 @@ services:
       args:
         MEMRAIN_VERSION: "${MEMRAIN_VERSION:-${MEMEX_VERSION:-dev}}"
     restart: unless-stopped
+    # init: a real PID 1 forwards SIGTERM to bun and reaps children.
+    # stop_grace_period: room for the jobs worker to drain and hand back its
+    # running job (MEMRAIN_WORKER_DRAIN_MS) before Docker sends SIGKILL.
+    init: true
+    stop_grace_period: 30s
     # Cap container memory so a runaway (a cycle phase has hit 3.48 GB RSS on
     # the ~3.7 GB host) is a clean cgroup OOM-kill + restart of THIS container,
     # not a kernel global-OOM that kills an arbitrary process (Postgres client,
@@ -271,6 +276,9 @@ services:
       - MEMRAIN_MCP_INSTRUCTIONS=${MEMRAIN_MCP_INSTRUCTIONS:-${MEMEX_MCP_INSTRUCTIONS:-}}
       - MEMRAIN_MCP_LENIENT_ARGS=${MEMRAIN_MCP_LENIENT_ARGS:-${MEMEX_MCP_LENIENT_ARGS:-}}
       - MEMRAIN_JOB_TIMEOUT_MS=${MEMRAIN_JOB_TIMEOUT_MS:-${MEMEX_JOB_TIMEOUT_MS:-}}
+      # How long shutdown lets a running job finish before handing it back to
+      # the queue (default 8000). Keep it under stop_grace_period above.
+      - MEMRAIN_WORKER_DRAIN_MS=${MEMRAIN_WORKER_DRAIN_MS:-${MEMEX_WORKER_DRAIN_MS:-}}
       # Operator agent loop (`memrain agent run`): off unless set to 1; the
       # per-job dollar ceiling defaults to 0.25. MEMRAIN_AGENT_TENANT_ENABLED=1
       # additionally lets OAuth clients granted 'agent' use submit_agent.

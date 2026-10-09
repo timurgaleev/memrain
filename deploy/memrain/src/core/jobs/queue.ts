@@ -449,6 +449,28 @@ export class Queue {
     return r.rows[0] ? rowToJob(r.rows[0]) : null;
   }
 
+  /**
+   * Hand a running attempt back to the queue because its worker is shutting
+   * down. The row goes straight to `pending` and is due at once; no retry or
+   * stall budget is spent, since the job did not fail — its worker left.
+   * Fenced by claim generation like every other attempt write. Returns true
+   * when the row was handed back.
+   */
+  async releaseForShutdown(id: string, gen: number): Promise<boolean> {
+    const r = await this.engine.query<{ id: string }>(
+      `UPDATE jobs
+          SET status = 'pending',
+              last_error = 'worker_shutdown',
+              started_at = NULL,
+              lock_until = NULL,
+              updated_at = NOW()
+        WHERE id = $1 AND status = 'running' AND claim_generation = $2
+        RETURNING id`,
+      [id, gen],
+    );
+    return r.rows.length > 0;
+  }
+
   async cancel(id: string): Promise<JobRow | null> {
     const r = await this.engine.query<RawJobRow>(
       `UPDATE jobs

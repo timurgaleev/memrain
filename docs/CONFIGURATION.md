@@ -633,6 +633,7 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_CODE_SWEEP_DELAY_MS` | `20` (compose) / `0` | Delay between files during the code-index sweep. | free |
 | `MEMRAIN_PARSE_TIMEOUT_MS` | `5000` (5s) | Per-file chunker parse cap; `0` disables the cap. | free |
 | `MEMRAIN_JOB_TIMEOUT_MS` | off | Per-job wall-clock cap. Off unless set. | free |
+| `MEMRAIN_WORKER_DRAIN_MS` | `8000` (8s) | On shutdown, how long the jobs worker lets a running job finish. A job still running after it is aborted and handed back to `pending` (`last_error = 'worker_shutdown'`) without spending its retry or stall budget, and the worker lock is released at once. `0` hands back immediately. Keep it under the compose `stop_grace_period` (30s). | free |
 | `MEMRAIN_MAX_BODY_BYTES` | `1048576` (1 MiB) | HTTP request-body size cap; over-cap requests get 413. | free |
 | `MEMRAIN_NO_SANITY` | off (`=1` on) | Kill switch for the content-sanity ingest gate. Set truthy to skip junk/oversize/markup assessment entirely. The gate runs unless this is set. | free |
 | `MEMRAIN_SANITY_DISPOSITION` | `quarantine` | How a junk-flagged doc is handled: default quarantines + stamps `content_flag` (still stored, embed-skipped); `reject` hard-rejects it at ingest. | free |

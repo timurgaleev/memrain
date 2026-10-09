@@ -431,6 +431,12 @@ export function startBackgroundWork(
     const parsed = Number.parseInt(jobTimeoutRaw, 10);
     if (parsed > 0) workerOpts.jobTimeoutMs = parsed;
   }
+  // How long shutdown lets a running job finish before handing it back to the
+  // queue. Same strict digits-only parse; 0 hands back at once.
+  const drainRaw = process.env.MEMRAIN_WORKER_DRAIN_MS?.trim();
+  if (drainRaw !== undefined && /^\d+$/.test(drainRaw)) {
+    workerOpts.drainMs = Number.parseInt(drainRaw, 10);
+  }
   // Register the `remediation` handler so `doctor --remediate` jobs actually
   // run instead of dead-lettering with "no handler registered".
   registerRemediationHandlers(storage);
