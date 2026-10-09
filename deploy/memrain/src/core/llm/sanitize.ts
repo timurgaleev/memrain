@@ -26,7 +26,12 @@ export const INJECTION_PATTERNS: Array<{ name: string; rx: RegExp; replacement: 
   { name: "new-instructions", rx: /(?:new|updated|revised)\s+instructions?:/gi, replacement: "[redacted]:" },
   { name: "system-prompt", rx: /system\s*:\s*(?:you\s+are|you\s+must|never|always)/gi, replacement: "[redacted]" },
   { name: "role-jailbreak", rx: /you\s+are\s+(?:now|actually|really)\s+(?:a|an)\s+\w+/gi, replacement: "[redacted]" },
-  { name: "do-anything-now", rx: /\b(?:DAN|do\s+anything\s+now|developer\s+mode\s+enabled?)\b/gi, replacement: "[redacted]" },
+  // The bare acronym is matched case-sensitively: under /i the person name
+  // "Dan" was redacted out of every fact and timeline line. "dan mode" in any
+  // case still reads as the jailbreak.
+  { name: "do-anything-now", rx: /\bDAN\b/g, replacement: "[redacted]" },
+  { name: "dan-mode", rx: /\bdan\s+mode\b/gi, replacement: "[redacted]" },
+  { name: "do-anything-now-phrase", rx: /\b(?:do\s+anything\s+now|developer\s+mode\s+enabled?)\b/gi, replacement: "[redacted]" },
   // Tag injection — neutralize attempts to open a fake control block or close
   // a <data> / <turn> / <existing> / <new> fence (callers use one of these).
   { name: "close-data", rx: /<\s*\/\s*data\s*>/gi, replacement: "&lt;/data&gt;" },
