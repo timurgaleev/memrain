@@ -20,6 +20,7 @@ import { indexPageIntoSearch } from "../src/core/page-index.ts";
 import { addLink } from "../src/core/links.ts";
 import { addFact } from "../src/core/facts.ts";
 import { registerSource } from "../src/core/sources.ts";
+import { setSlugAlias } from "../src/core/slug-aliases.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
 const SOURCE = "fence-a";
@@ -195,5 +196,42 @@ describe("think fallback diary fence", () => {
     expect(out.fallback.answer).toContain("milestone");
     expect(res.content[0]!.text).not.toContain("never shared");
     expect(res.content[0]!.text).not.toContain("life/diary");
+  });
+});
+
+// Last on purpose: the edge added here gives the diary page an inbound link,
+// which would break the find_orphans case above.
+describe("backlinks diary fence", () => {
+  it("hides edges into a diary target from a remote caller", async () => {
+    await addLink(storage, { source_slug: NORMAL, target_slug: DIARY, type: "wikilink", source_id: SOURCE });
+    const local = payload(await call("backlinks", { name: DIARY }, false));
+    expect(local.hits.map((h: { sourcePath: string }) => h.sourcePath)).toEqual([
+      `page://${SOURCE}/${NORMAL}`,
+    ]);
+    const remote = payload(await call("backlinks", { name: DIARY }, true));
+    expect(remote.hits).toEqual([]);
+  });
+
+  it("hides an alias edge whose alias resolves to a diary page", async () => {
+    await setSlugAlias(storage.engine(), {
+      alias_slug: "notes/old-diary",
+      canonical_slug: DIARY,
+      source_id: SOURCE,
+    });
+    await addLink(storage, {
+      source_slug: NORMAL,
+      target_slug: "notes/old-diary",
+      type: "wikilink",
+      source_id: SOURCE,
+    });
+    const local = payload(await call("backlinks", { name: "notes/old-diary" }, false));
+    expect(local.hits.length).toBeGreaterThan(0);
+    const remote = payload(await call("backlinks", { name: "notes/old-diary" }, true));
+    expect(remote.hits).toEqual([]);
+  });
+
+  it("rejects an over-long name", async () => {
+    const res = await call("backlinks", { name: "x".repeat(257) }, true);
+    expect(res.isError).toBe(true);
   });
 });

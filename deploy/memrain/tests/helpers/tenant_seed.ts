@@ -155,6 +155,9 @@ export async function seedTenantContract(storage: Storage): Promise<{ factIdA: n
   await putPage(storage, { slug: "vault-b/target", type: "note", title: "Target B", markdown_body: "tb", source_id: B });
   await addLink(storage, { source_slug: GATEWAY, target_slug: "vault-a/target", type: "mentions", source_id: A });
   await addLink(storage, { source_slug: GATEWAY, target_slug: "vault-b/target", type: "mentions", source_id: B });
+  // Per-tenant wikilink edges to the shared WIKI_NAME target (backlinks).
+  await addLink(storage, { source_slug: "vault-a/target", target_slug: WIKI_NAME, type: "wikilink", source_id: A });
+  await addLink(storage, { source_slug: "vault-b/target", target_slug: WIKI_NAME, type: "wikilink", source_id: B });
 
   // --- Degree hub per tenant (find_experts / find_anomalies / salience) ------
   for (const [hub, spokes, src] of [
@@ -178,7 +181,7 @@ export async function seedTenantContract(storage: Storage): Promise<{ factIdA: n
     await addLink(storage, { source_slug: a1, target_slug: a2, type: "contradicts", source_id: src, allowAdHocType: true });
   }
 
-  // --- documents / chunks / mentions (backlinks + code_* reads) -------------
+  // --- documents / chunks / mentions (code_* reads) -------------------------
   await seedDoc(DOC_A_NOTES, "/tenant-a/notes.md", "AAA Notes", A);
   await seedDoc(DOC_B_NOTES, "/tenant-b/notes.md", "BBB Notes", B);
   await seedChunk("ch-a-notes", DOC_A_NOTES, 0, `mentions [[${WIKI_NAME}]] ${A_BODY}`);

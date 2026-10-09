@@ -356,10 +356,61 @@
     "call": "backlinks {\"name\":\"Alice\"}",
     "sql": [
       {
-        "text": "SELECT d.id AS document_id, d.source_path AS source_path, d.title AS title, COUNT(*)::int AS mention_count, MIN(em.surface_form) AS surface_form FROM entity_mentions em JOIN chunks c ON c.id = em.chunk_id JOIN documents d ON d.id = c.document_id WHERE em.entity_id = $1 GROUP BY d.id, d.source_path, d.title ORDER BY mention_count DESC, d.title NULLS LAST, d.source_path LIMIT $2",
+        "text": "SELECT canonical_slug FROM slug_aliases WHERE alias_slug = $1 ORDER BY id LIMIT 1",
         "params": [
-          "ent_wikilink_alice",
+          "alice"
+        ]
+      },
+      {
+        "text": "SELECT 1 AS one FROM pages WHERE slug = $1 AND deleted_at IS NULL LIMIT 1",
+        "params": [
+          "alice"
+        ]
+      },
+      {
+        "text": "SELECT pa.slug AS slug FROM page_aliases pa JOIN pages p ON p.slug = pa.slug AND p.deleted_at IS NULL WHERE pa.alias_norm = $1 LIMIT 2",
+        "params": [
+          "alice"
+        ]
+      },
+      {
+        "text": "SELECT p.slug AS slug FROM pages p WHERE p.deleted_at IS NULL AND p.slug <> $2 AND p.slug LIKE '%/%' AND regexp_replace(p.slug, '^.*/', '') = $1 LIMIT 2",
+        "params": [
+          "alice",
+          ""
+        ]
+      },
+      {
+        "text": "SELECT p.slug AS slug FROM pages p WHERE p.deleted_at IS NULL AND p.slug <> $2 AND p.slug LIKE '%/%' AND regexp_replace(p.slug, '^.*/', '') LIKE $1 || '%' AND regexp_replace(p.slug, '^.*/', '') <> $1 LIMIT 2",
+        "params": [
+          "alice",
+          ""
+        ]
+      },
+      {
+        "text": "SELECT p.slug AS slug, GREATEST( similarity(lower(COALESCE(p.title, '')), lower($1)), similarity(regexp_replace(p.slug, '^.*/', ''), $2) ) AS sim FROM pages p WHERE p.deleted_at IS NULL AND p.slug <> $3 ORDER BY sim DESC, p.slug ASC LIMIT 2",
+        "params": [
+          "Alice",
+          "alice",
+          ""
+        ]
+      },
+      {
+        "text": "SELECT p.slug AS slug, p.source_id AS source_id, p.title AS title, COUNT(*)::int AS mention_count, MIN(l.target_slug) AS target_slug FROM links l JOIN pages p ON p.slug = l.source_slug AND p.deleted_at IS NULL WHERE l.target_slug = ANY($1::text[]) GROUP BY p.slug, p.source_id, p.title ORDER BY mention_count DESC, p.title NULLS LAST, p.slug LIMIT $2",
+        "params": [
+          [
+            "alice"
+          ],
           50
+        ]
+      },
+      {
+        "text": "SELECT id, source_path FROM documents WHERE source_path = ANY($1::text[]) ORDER BY id",
+        "params": [
+          [
+            "page://tenantA/vault-a/target",
+            "page://tenantB/vault-b/target"
+          ]
         ]
       }
     ],
@@ -367,7 +418,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"name\": \"Alice\",\n  \"hits\": [\n    {\n      \"documentId\": \"doc-a-notes\",\n      \"sourcePath\": \"/tenant-a/notes.md\",\n      \"title\": \"AAA Notes\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"Alice\"\n    },\n    {\n      \"documentId\": \"doc-b-notes\",\n      \"sourcePath\": \"/tenant-b/notes.md\",\n      \"title\": \"BBB Notes\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"Alice\"\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"name\": \"Alice\",\n  \"hits\": [\n    {\n      \"documentId\": \"page://tenantA/vault-a/target\",\n      \"sourcePath\": \"page://tenantA/vault-a/target\",\n      \"title\": \"Target A\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    },\n    {\n      \"documentId\": \"page://tenantB/vault-b/target\",\n      \"sourcePath\": \"page://tenantB/vault-b/target\",\n      \"title\": \"Target B\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    }\n  ]\n}"
         }
       ]
     }
@@ -448,7 +499,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"start\": \"shared/gateway\",\n  \"hits\": [\n    {\n      \"slug\": \"vault-a/target\",\n      \"depth\": 1\n    },\n    {\n      \"slug\": \"vault-b/target\",\n      \"depth\": 1\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"start\": \"shared/gateway\",\n  \"hits\": [\n    {\n      \"slug\": \"vault-a/target\",\n      \"depth\": 1\n    },\n    {\n      \"slug\": \"vault-b/target\",\n      \"depth\": 1\n    },\n    {\n      \"slug\": \"alice\",\n      \"depth\": 2\n    }\n  ]\n}"
         }
       ]
     }
@@ -465,7 +516,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"sources\": [\n    {\n      \"type\": \"mentions\",\n      \"count\": 8,\n      \"known\": true\n    },\n    {\n      \"type\": \"contradicts\",\n      \"count\": 2,\n      \"known\": true\n    },\n    {\n      \"type\": \"advises\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"attended\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"documents\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"founded\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"invested_in\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"knows\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"located_at\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"met\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"related_to\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"supersedes\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"wikilink\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"works_at\",\n      \"count\": 0,\n      \"known\": true\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"sources\": [\n    {\n      \"type\": \"mentions\",\n      \"count\": 8,\n      \"known\": true\n    },\n    {\n      \"type\": \"contradicts\",\n      \"count\": 2,\n      \"known\": true\n    },\n    {\n      \"type\": \"wikilink\",\n      \"count\": 2,\n      \"known\": true\n    },\n    {\n      \"type\": \"advises\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"attended\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"documents\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"founded\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"invested_in\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"knows\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"located_at\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"met\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"related_to\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"supersedes\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"works_at\",\n      \"count\": 0,\n      \"known\": true\n    }\n  ]\n}"
         }
       ]
     }

@@ -1264,6 +1264,10 @@ async function callBacklinks(
   if (typeof name !== "string" || name.length === 0) {
     return errResult("backlinks: `name` is required");
   }
+  // The name feeds a trigram scan over every live page in scope.
+  if (name.length > 256) {
+    return errResult("backlinks: `name` must be at most 256 characters");
+  }
   const opts: Parameters<typeof findBacklinks>[2] = {};
   const type = args["type"];
   if (type !== undefined) {
@@ -1284,9 +1288,12 @@ async function callBacklinks(
     opts.limit = limit as number;
   }
   if (readSources !== undefined) opts.sourceIds = readSources;
+  if (remote) opts.excludeTarget = isDiarySlug;
   let hits = await findBacklinks(storage, name, opts);
   // Diary fence: drop backlinks originating from a diary page (its mirror
   // source_path carries the life/diary/* slug) for a non-operator caller.
+  // Edges into a diary target are dropped by `excludeTarget` above; this
+  // drops edges out of a diary page.
   if (remote) hits = hits.filter((h) => !isDiarySourcePath(h.sourcePath));
   // Public ingress: `surfaceForm` is note-authored free text — strip it,
   // mirroring the search/page/fact body redaction policy.

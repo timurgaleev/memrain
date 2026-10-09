@@ -93,12 +93,12 @@ beforeAll(async () => {
     { embedFn: async (t: string) => deterministicEmbed(t) },
   );
 
-  const fooId = entityId("wikilink", "Zeddicus");
+  const fooId = entityId("tag", "zeddicus");
   await storage.raw().exec(`
     INSERT INTO documents (id, source_path, title, source_id) VALUES ('bl-b', '/tenant-b/bl.md', 'BL', 'b');
-    INSERT INTO chunks (id, document_id, chunk_index, content) VALUES ('bl-b-c0', 'bl-b', 0, 'see [[Zeddicus]]');
-    INSERT INTO entities (id, type, name) VALUES ('${fooId}', 'wikilink', 'Zeddicus');
-    INSERT INTO entity_mentions (chunk_id, entity_id, surface_form) VALUES ('bl-b-c0', '${fooId}', 'Zeddicus');
+    INSERT INTO chunks (id, document_id, chunk_index, content) VALUES ('bl-b-c0', 'bl-b', 0, 'see #zeddicus');
+    INSERT INTO entities (id, type, name) VALUES ('${fooId}', 'tag', 'zeddicus');
+    INSERT INTO entity_mentions (chunk_id, entity_id, surface_form) VALUES ('bl-b-c0', '${fooId}', 'zeddicus');
   `);
 });
 
@@ -280,8 +280,10 @@ describe("chunks and backlinks", () => {
   });
 
   it("findBacklinks", async () => {
-    expect(await findBacklinks(storage, "Zeddicus", { sourceIds: NONE })).toEqual([]);
-    expect((await findBacklinks(storage, "Zeddicus")).length).toBe(1);
+    expect(await findBacklinks(storage, TARGET, { sourceIds: NONE })).toEqual([]);
+    expect((await findBacklinks(storage, TARGET)).length).toBe(1);
+    expect(await findBacklinks(storage, "zeddicus", { type: "tag", sourceIds: NONE })).toEqual([]);
+    expect((await findBacklinks(storage, "zeddicus", { type: "tag" })).length).toBe(1);
   });
 });
 

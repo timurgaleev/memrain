@@ -342,7 +342,7 @@ export const OPERATIONS: readonly Operation[] = [
   {
     name: "backlinks",
     description:
-      "Find documents whose chunks reference the named entity. Default type is `wikilink` ([[Name]] references in markdown).",
+      "Find what links to a target. Default type `wikilink`: `name` (a page name or slug, any script) is resolved to its canonical page slug, redirects and declared aliases included, and the pages linking to it are returned (`sourcePath` is the page's `page://` path, `surfaceForm` the target slug). Type `tag` / `date`: documents whose chunks mention that tag or date.",
     params: {
       name: str(req),
       type: str({ enum: ["wikilink", "tag", "date"] }),
