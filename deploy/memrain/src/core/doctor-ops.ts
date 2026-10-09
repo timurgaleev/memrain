@@ -9,7 +9,7 @@
  */
 import type { CheckStatus } from "./doctor-categories.ts";
 import type { Engine } from "./engine/interface.ts";
-import { discoverMigrations } from "./migrate.ts";
+import { diffMigrationIds, discoverMigrations } from "./migrate.ts";
 import { EMBED_DIMENSIONS } from "./embedding.ts";
 import { grammarSelfCheck } from "./chunkers/parsers.ts";
 import { isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
@@ -125,33 +125,46 @@ export async function checkQueueHealth(engine: Engine): Promise<OpsCheckResult> 
 }
 
 /**
- * Applied vs available schema version: the highest migration id recorded in the
- * `migrations` table against the highest migration file on disk. Unapplied
- * migrations flip ok:false — a real, actionable drift (run `memrain
- * apply-migrations`).
+ * Applied vs available schema version, compared as full id sets (see
+ * `diffMigrationIds`). Unapplied migrations past the applied head flip
+ * ok:false — a real, actionable drift (run `memrain apply-migrations`).
+ * Applied ids this build does not know (the image was rolled back under a newer
+ * schema) and holes below the head both warn.
  */
 export async function checkSchemaVersion(
   engine: Engine,
 ): Promise<OpsCheckResult> {
-  const r = await engine.query<{ hi: number | null; n: number }>(
-    `SELECT MAX(id)::int AS hi, count(*)::int AS n FROM migrations`,
+  const r = await engine.query<{ id: number }>(
+    `SELECT id::int AS id FROM migrations ORDER BY id`,
   );
-  const applied = r.rows[0]?.hi ?? 0;
-  const appliedCount = r.rows[0]?.n ?? 0;
-  let available = applied;
+  const appliedIds = r.rows.map((row) => Number(row.id));
+  const head = appliedIds.length > 0 ? Math.max(...appliedIds) : 0;
+  let availableIds: number[] | null = null;
   try {
-    const ids = discoverMigrations().map((m) => m.id);
-    if (ids.length > 0) available = Math.max(...ids);
+    availableIds = discoverMigrations().map((m) => m.id);
   } catch {
     // Can't read the migrations dir (packaged oddly) — report applied only.
   }
-  const pending = available > applied;
+  const base = `schema at migration ${head} (${appliedIds.length} applied)`;
+  if (availableIds === null) {
+    return { ok: true, status: "ok", detail: `${base}, migration files unreadable` };
+  }
+  const { ahead, gaps, pending } = diffMigrationIds(appliedIds, availableIds);
+  const notes: string[] = [];
+  if (pending.length > 0) {
+    notes.push(`${pending.length} unapplied through ${pending[pending.length - 1]}; run \`memrain apply-migrations\``);
+  }
+  if (ahead.length > 0) {
+    notes.push(`schema ahead of this build: applied migration(s) ${ahead.join(", ")} unknown to the image (rolled back?)`);
+  }
+  if (gaps.length > 0) {
+    notes.push(`gap: migration(s) ${gaps.join(", ")} not applied below the head`);
+  }
+  const status = pending.length > 0 ? "fail" : notes.length > 0 ? "warn" : "ok";
   return {
-    ok: !pending,
-    status: pending ? "fail" : "ok",
-    detail: pending
-      ? `schema at migration ${applied} (${appliedCount} applied) — ${available - applied} unapplied through ${available}; run \`memrain apply-migrations\``
-      : `schema at migration ${applied} (${appliedCount} applied), up to date`,
+    ok: status !== "fail",
+    status,
+    detail: notes.length > 0 ? `${base} — ${notes.join("; ")}` : `${base}, up to date`,
   };
 }
 

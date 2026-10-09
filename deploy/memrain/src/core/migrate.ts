@@ -136,6 +136,37 @@ export function discoverMigrations(dir: string = DEFAULT_DIR): MigrationFile[] {
   return out;
 }
 
+export interface MigrationDrift {
+  /** Recorded in the DB but unknown to this build — the image is older than the schema. */
+  ahead: number[];
+  /** Known to this build, not recorded, and below the highest applied id. */
+  gaps: number[];
+  /** Known to this build, not recorded, and above the highest applied id. */
+  pending: number[];
+}
+
+/**
+ * Compare the applied migration ids against the ones this build ships. A
+ * MAX(id)-only comparison calls a rolled-back image "up to date" when the DB
+ * already carries migrations the image has never seen; comparing the full sets
+ * separates that from ordinary pending work and from holes in the history.
+ */
+export function diffMigrationIds(
+  appliedIds: Iterable<number>,
+  availableIds: Iterable<number>,
+): MigrationDrift {
+  const applied = new Set(appliedIds);
+  const available = new Set(availableIds);
+  const maxApplied = applied.size > 0 ? Math.max(...applied) : 0;
+  const ahead = [...applied].filter((id) => !available.has(id)).sort((a, b) => a - b);
+  const unapplied = [...available].filter((id) => !applied.has(id)).sort((a, b) => a - b);
+  return {
+    ahead,
+    gaps: unapplied.filter((id) => id < maxApplied),
+    pending: unapplied.filter((id) => id > maxApplied),
+  };
+}
+
 /**
  * A connection stuck `idle in transaction` can hold the lock a DDL migration
  * needs. Surface such blockers so the operator has a paste-ready

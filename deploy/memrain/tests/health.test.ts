@@ -57,6 +57,26 @@ test("probeLiveness returns 503 with a generic message on DB failure", async () 
   expect(JSON.stringify(result.body)).not.toContain("db-internal-host");
 });
 
+test("GET /health reports schema_ahead without failing the probe", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "tb-health-ahead-"));
+  const storage = new Storage({ dbPath: dir });
+  await storage.init();
+  try {
+    expect((await probeLiveness(storage)).body.schema_ahead).toBe(false);
+    // A newer image recorded a migration this build does not ship, then the
+    // image was rolled back and booted again.
+    await storage.engine().exec("INSERT INTO migrations (id, name) VALUES (99999, 'from_a_newer_image')");
+    await storage.init();
+    const { status, body } = await probeLiveness(storage);
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.schema_ahead).toBe(true);
+  } finally {
+    await storage.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("non-/health routes return 404", async () => {
   const dir = mkdtempSync(join(tmpdir(), "tb-health-"));
   const storage = new Storage({ dbPath: dir });

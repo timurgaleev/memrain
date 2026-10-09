@@ -39,9 +39,9 @@ async function healthText(maintenance?: boolean): Promise<{ status: number; text
 }
 
 describe("/health maintenance flag", () => {
-  const plain = JSON.stringify({ ok: true, db: "pglite", version: VERSION });
+  const plain = JSON.stringify({ ok: true, db: "pglite", version: VERSION, schema_ahead: false });
 
-  it("maintenance off (default): the body is exactly {ok, db, version}", async () => {
+  it("maintenance off (default): the body is exactly {ok, db, version, schema_ahead}", async () => {
     const r = await healthText();
     expect(r.status).toBe(200);
     expect(r.text).toBe(plain);
@@ -55,7 +55,7 @@ describe("/health maintenance flag", () => {
     const r = await healthText(true);
     expect(r.status).toBe(200);
     expect(r.text).toBe(
-      JSON.stringify({ ok: true, db: "pglite", version: VERSION, maintenance: true }),
+      JSON.stringify({ ok: true, db: "pglite", version: VERSION, schema_ahead: false, maintenance: true }),
     );
     expect(r.text).not.toMatch(/code_sweep|jobs_worker|cycle|jobs_|lock/);
   });

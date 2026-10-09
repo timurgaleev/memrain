@@ -59,6 +59,9 @@ export async function probeLiveness(
         // same string for every image ever built. A deploy check that reads
         // this field could not tell a fresh container from a stale one.
         version: VERSION,
+        // Measured at boot, never per probe. Informational: a rolled-back image
+        // under a newer schema still serves, so this never turns /health red.
+        schema_ahead: storage.schemaAhead(),
         ...(maintenance ? { maintenance: true } : {}),
       },
     };

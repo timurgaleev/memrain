@@ -9,7 +9,7 @@
  * Engine has the same `query` / `exec` / `close` shape regardless of the
  * underlying driver.
  */
-import { runMigrations, type MigrationResult } from "./migrate.ts";
+import { diffMigrationIds, discoverMigrations, runMigrations, type MigrationResult } from "./migrate.ts";
 import type { Engine } from "./engine/interface.ts";
 import { makeEngine } from "./engine/factory.ts";
 import type { Config } from "./config.ts";
@@ -25,6 +25,7 @@ export interface StorageStats {
 export class Storage {
   private _engine: Engine;
   private _config: Config | null;
+  private _schemaAhead = false;
 
   constructor(engineOrConfig: Engine | Config | { dbPath: string }) {
     if (isEngine(engineOrConfig)) {
@@ -73,7 +74,28 @@ export class Storage {
     // which is the exact shape of defect the ledger exists to end. Same lazy
     // wiring the search telemetry writer uses.
     setSpendLedgerEngine(this._engine);
+    this._schemaAhead = await this.readSchemaAhead();
     return result;
+  }
+
+  /**
+   * True when the DB records migrations this build does not ship — the image
+   * was rolled back under a newer schema. Measured once at init so /health can
+   * report it without a query per probe.
+   */
+  schemaAhead(): boolean {
+    return this._schemaAhead;
+  }
+
+  private async readSchemaAhead(): Promise<boolean> {
+    try {
+      const r = await this._engine.query<{ id: number }>("SELECT id::int AS id FROM migrations");
+      const available = discoverMigrations().map((m) => m.id);
+      return diffMigrationIds(r.rows.map((row) => Number(row.id)), available).ahead.length > 0;
+    } catch {
+      // Unreadable migrations dir: the doctor check reports it; /health stays liveness.
+      return false;
+    }
   }
 
   /** Engine surface — issue arbitrary SQL via .query / .exec. */

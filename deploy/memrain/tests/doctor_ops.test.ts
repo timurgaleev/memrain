@@ -21,6 +21,7 @@ import {
 } from "../src/core/doctor-ops.ts";
 import { buildRemediationEnvelope, runDoctor } from "../src/commands/doctor.ts";
 import { buildRemediationPlan } from "../src/core/remediation.ts";
+import { diffMigrationIds } from "../src/core/migrate.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -99,6 +100,50 @@ describe("checkSchemaVersion", () => {
     expect(verb).toBeDefined();
     const cli = readFileSync(join(import.meta.dir, "../src/cli.ts"), "utf8");
     expect(cli).toContain(`case "${verb}":`);
+  });
+
+  it("warns, not 'up to date', when the DB holds a migration the build does not ship", async () => {
+    // The rolled-back-image shape: MAX(id) alone would compare a higher applied
+    // head against the build's files and call it current.
+    await storage.engine().exec("INSERT INTO migrations (id, name) VALUES (99999, 'from_a_newer_image')");
+    const r = await checkSchemaVersion(storage.engine());
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("warn");
+    expect(r.detail).toContain("schema ahead");
+    expect(r.detail).toContain("99999");
+    expect(r.detail).not.toContain("up to date");
+  });
+
+  it("warns on a hole below the applied head", async () => {
+    await storage.engine().exec("DELETE FROM migrations WHERE id = (SELECT MIN(id) FROM migrations)");
+    const r = await checkSchemaVersion(storage.engine());
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("warn");
+    expect(r.detail).toContain("gap");
+  });
+});
+
+describe("diffMigrationIds", () => {
+  it("reports nothing when the sets match", () => {
+    expect(diffMigrationIds([1, 2, 3], [1, 2, 3])).toEqual({ ahead: [], gaps: [], pending: [] });
+  });
+
+  it("separates applied-but-unknown, holes and pending work", () => {
+    expect(diffMigrationIds([1, 3, 5, 7], [1, 2, 3, 4, 5, 6, 8])).toEqual({
+      ahead: [7],
+      gaps: [2, 4, 6],
+      pending: [8],
+    });
+  });
+
+  it("flags a rollback whose head is still below the DB head", () => {
+    const d = diffMigrationIds([1, 2, 3, 4], [1, 2, 3]);
+    expect(d.ahead).toEqual([4]);
+    expect(d.pending).toEqual([]);
+  });
+
+  it("treats an empty DB as all pending", () => {
+    expect(diffMigrationIds([], [1, 2])).toEqual({ ahead: [], gaps: [], pending: [1, 2] });
   });
 });
 
