@@ -213,6 +213,8 @@ services:
       - MEMRAIN_EMBED_TIMEOUT_MS=${MEMRAIN_EMBED_TIMEOUT_MS:-${MEMEX_EMBED_TIMEOUT_MS:-}}
       # Override the paid-tier model (default eu.anthropic.claude-sonnet-4-6).
       - MEMRAIN_FACTS_MODEL=${MEMRAIN_FACTS_MODEL:-${MEMEX_FACTS_MODEL:-}}
+      # Override the utility-tier model (default Claude Haiku 4.5).
+      - MEMRAIN_UTILITY_MODEL=${MEMRAIN_UTILITY_MODEL:-${MEMEX_UTILITY_MODEL:-}}
       # Credentials in ingested text: redact (default) | flag | reject, and
       # comma-separated 12-hex fingerprints to leave alone.
       - MEMRAIN_SECRET_SCAN_DISPOSITION=${MEMRAIN_SECRET_SCAN_DISPOSITION:-${MEMEX_SECRET_SCAN_DISPOSITION:-}}

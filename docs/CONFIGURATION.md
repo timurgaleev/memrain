@@ -228,7 +228,7 @@ you opt in.
 | `MEMRAIN_TAKE_EMBED` | off (`=1` on) | Embed each synthesized take so takes are semantically searchable; off leaves the take's embedding column NULL. Code-only. | cheap (embed) |
 | `MEMRAIN_DREAM_INTERVAL_S` | `21600` (6h) | Maintenance-cycle interval. | free |
 | `MEMRAIN_DREAM_STALE_DAYS` | `30` | Re-embed docs older than this many days during the cycle. | free |
-| `MEMRAIN_UTILITY_MODEL` | `eu.anthropic.claude-haiku-4-5-20251001-v1:0` | Overrides the Haiku utility-tier model id (intent classification, query expansion, rerank, synthesis, contextual blurbs). **Code-only:** `deploy/docker-compose.yml` does not pass it through, so it has no effect on the deployed stack unless you add it to the compose allowlist. Use the per-feature keys below to move one call site. | cheap (Haiku) |
+| `MEMRAIN_UTILITY_MODEL` | `eu.anthropic.claude-haiku-4-5-20251001-v1:0` | Overrides the Haiku utility-tier model id (intent classification, query expansion, rerank, synthesis, contextual blurbs). Use the per-feature keys below to move one call site. | cheap (Haiku) |
 | `MEMRAIN_INTENT_LLM` | off (`=1` on) | Paid Haiku tie-break for queries the regex intent taxonomy cannot place. Off, intent classification makes no model call. Code-only. | cheap (Haiku) |
 | `MEMRAIN_QUERY_EXPANSION` | off (`=1` on) | LLM query expansion: Haiku generates query variants for extra keyword passes. Off in the default search mode. Code-only. | cheap (Haiku) |
 | `MEMRAIN_EXPANSION_MODEL` | utility model | Model id for query expansion only. Allowlisted. | cheap (Haiku) |
@@ -762,7 +762,7 @@ schema in `terraform/variables.tf`.
 | `availability_zone` | `eu-west-1b` | AZ for the primary subnet. |
 | `multi_az_subnet_cidrs` | `{eu-west-1a=10.0.2.0/24, eu-west-1c=10.0.3.0/24}` | Extra subnets to satisfy the RDS multi-AZ subnet group. |
 | `bedrock_allowed_regions` | EU family + `us-east-1` | Regions where the instance role may invoke the expensive Claude models; an IAM Deny blocks `anthropic.claude-*` elsewhere. |
-| `bedrock_model_id` | `eu.anthropic.claude-haiku-4-5-20251001` | Bedrock CRIS inference-profile id for the primary model, validated against an allowed list. The **runtime** utility tier is the built-in Claude Haiku default (overridable per feature with the `MEMRAIN_<FEATURE>_MODEL` keys, or with the code-only `MEMRAIN_UTILITY_MODEL`); this terraform var is informational: it feeds only the `bedrock_model` output, and IAM does not reference it. |
+| `bedrock_model_id` | `eu.anthropic.claude-haiku-4-5-20251001` | Bedrock CRIS inference-profile id for the primary model, validated against an allowed list. The **runtime** utility tier is the built-in Claude Haiku default (overridable per feature with the `MEMRAIN_<FEATURE>_MODEL` keys, or with `MEMRAIN_UTILITY_MODEL`); this terraform var is informational: it feeds only the `bedrock_model` output, and IAM does not reference it. |
 | `alarm_email` | `""` | Email for the EC2 status-check CloudWatch alarm. Empty skips email (alarm still fires). |
 | `ssh_allowed_cidr` | `""` | CIDR allowed inbound SSH. Empty disables SSH — use SSM Session Manager. |
 | `enable_vpc_endpoints` | `false` | Enable interface VPC endpoints (Bedrock, SM, SSM, Logs). ~$43/mo — off for personal use. |
@@ -774,8 +774,8 @@ schema in `terraform/variables.tf`.
 
 > The `bedrock_model_id` var does not change what runs:
 > the **retrieval brain calls only Anthropic models via Bedrock at runtime** —
-> Claude Haiku for the utility tier (built-in default; `MEMRAIN_UTILITY_MODEL` is
-> code-only, not in the compose allowlist) and Claude Sonnet for the paid slices
+> Claude Haiku for the utility tier (built-in default, overridden by
+> `MEMRAIN_UTILITY_MODEL`) and Claude Sonnet for the paid slices
 > (`MEMRAIN_FACTS_MODEL`). Amazon Nova was removed from the request path.
 
 ### Resource name variables
