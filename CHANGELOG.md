@@ -6,6 +6,47 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.9] — 2026-10-09
+
+### Fixed
+- Retrieval scores are measured per page. Several chunks of one page used to
+  count as separate hits, which inflated recall and skewed MRR in `eval`,
+  the replay probe and A/B compares.
+- Queries with no expected answer no longer score a perfect recall. `eval`
+  keeps them out of the averages and reports them on their own, with how
+  often they still returned something.
+- The capped replay probe scores the same questions every run (lowest ids
+  first) and records a hash of the set, so trends compare like with like.
+- A probe run that fails or is capped now leaves a snapshot row with its
+  status (`ok`, `capped` or `error`) instead of vanishing. `doctor` shows it.
+- `eval` stops with exit code 2 when more than half of the expected pages are
+  missing from the brain, instead of reporting a score for a stale set.
+- The prompt sanitizer no longer redacts the name "Dan". Only the uppercase
+  jailbreak token and "DAN mode" phrases are removed.
+- `doctor` warns when the database has migrations this build does not know
+  (after an image rollback) or is missing ones below the newest applied, and
+  `/health` reports `schema_ahead`.
+- `backlinks` works for Cyrillic and long page names, and follows renamed
+  pages. It now reads page links instead of entity ids, which reduced every
+  non-Latin name to the same id. Names over 256 characters are refused, and a
+  remote caller no longer sees links into a diary page, including through an
+  alias of one.
+- The Postgres driver survives a backend that is killed mid-query or during
+  an RDS failover: the pool slot reconnects at once instead of waiting out
+  the connect timeout, a connection that died inside a transaction is not
+  reused, and a stale error can no longer surface on the next caller's query.
+- A deploy no longer costs a running job a retry. On stop the worker lets the
+  job finish for up to `MEMRAIN_WORKER_DRAIN_MS` (default 8 s), then hands it
+  back to the queue untouched and releases the worker lock, so the new
+  container picks it up straight away. Compose gives the service 30 s to stop.
+
+### Changed
+- `eval gate` refuses to judge a run against a baseline written under the old
+  scoring (page dedup and abstention changed the numbers). It reports
+  `rebaseline: true` and asks for `--write-baseline` instead of failing.
+- Migration 121 adds a `status` column to `eval_snapshots`. Rolling back past
+  1.0.0 now needs `--down 121` before `--down 120` (see UPGRADING.md).
+
 ## [1.0.8] — 2026-10-09
 
 ### Fixed

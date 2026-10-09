@@ -9,6 +9,43 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ---
 
+## Follow-ups from the October hardening batch
+
+- **Worker lock released before the pool closes.** On stop, an aborted job's
+  DB writes can still run until `storage.close()`; a replacement worker that
+  claims the handed-back row in that window would repeat them. Compose stops
+  the old container before starting the new one, so the window is short in
+  practice. Fix by releasing the lock after the pool closes.
+- **`last_error='worker_shutdown'` overwrites the previous attempt's error.**
+  Keep the earlier text, e.g. append the shutdown marker.
+- **Trim the postgres.js patch** to the hunks Memrain relies on (startup
+  reset in `closed()`, the `fetchArrayTypes` catch, poisoned-connection
+  termination, the `drain()` reserved guard, the `onclose` reservation
+  reject). `cancelActive` re-cancels every second while a query stays active;
+  nothing calls `query.cancel()` today.
+- **`schema_ahead` on the unauthenticated `/health`** tells outsiders an image
+  was rolled back. Consider moving it behind the operator view.
+- **`backlinks` `documentId` falls back to the `page://` path** for a page
+  that was never indexed; that value is not a document id. Return null or
+  document the fallback.
+- **Deterministic-embedding canary as an `eval` flag.** Needs a corpus
+  embedded with the same toy embedder; `retrieval_quality_hybrid.test.ts`
+  covers the check for now.
+- **A failed eval probe is stamped with its start time**, so a concurrent
+  probe that finished earlier but started later reads as the latest
+  snapshot. Stamp error rows at completion like successful ones.
+- **The stale-qrels check counts archived and quarantined documents as
+  present**, though search never returns them; such targets then score as
+  misses instead of tripping exit 2.
+- **`schema_ahead` caches `false` when its check fails** at startup, so a
+  transient metadata error hides a rolled-back image for the life of the
+  process. Report "unknown" or retry.
+- **`entityId()` collapses non-Latin names** to `ent_wikilink_x`. `backlinks`
+  no longer depends on it, but tag mentions and the code graph still do:
+  re-key with `\p{L}\p{N}` plus a hash suffix, migrate and backfill.
+
+---
+
 ## Roadmap — 2026-09-13
 
 The program makes memex safe and fast as a brain that one connector can share
@@ -1156,10 +1193,11 @@ not have.
   (adds `resources/*` to the transport).
 - Unknown parameters: warn mode by default with suggestions; reject mode behind
   `MEMEX_MCP_STRICT_PARAMS`.
-- Surface tiers (`starter` < `full`) with a per-client pin in `oauth_clients`
-  and a `request_tools` discovery op — the concrete shape of the pending
-  `MEMEX_TOOL_PROFILE` proposal; the starter set comes from memex's own
-  `mcp_request_log`.
+- ~~Surface tiers (`starter` < `full`) with a per-client pin and a
+  `request_tools` discovery op.~~ **Decided 2026-10-09: not doing.** A held-out
+  tool-selection benchmark scored the full catalog 93.2%, a trimmed starter set
+  84.7% and a verbs-only set 83.3%, with no meaningful token saving. Revisit
+  only if a harness appears that caps the number of tools.
 - Typed array `items`/defaults in `ParamDef`; a generated tool catalog doc; a
   response-shape conformance runner against a live `/mcp` endpoint using
   `response-contract.ts` (post-deploy verify helper).
@@ -3029,7 +3067,7 @@ Closed operator decisions this roadmap does not re-raise:
 12. **`MEMRAIN_CONTEXTUAL_LLM=0` experiment** against the eval-probe baseline
     (RM-02).
 13. **Also pending:** the 182-day takes grading bar; `synth_takes.holder`
-    default `world`; the `MEMRAIN_TOOL_PROFILE` starter set (RM-07); pilot Bedrock
+    default `world`; pilot Bedrock
     posture (no Guardrail, invocation logging off, Nova still allowed in
     `terraform/iam.tf`, `us-east-1` in allowed regions).
 
