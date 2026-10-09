@@ -20,12 +20,17 @@
  *   - meanRR over queries that have an expected doc
  *   - hitRate over queries that have an expected doc
  *   - perQuery deltas for the report
+ *   - unscored: queries without an expected doc, counted on their own
+ *
+ * Replay walks the set in id order, so a limit selects the same queries every
+ * run; `replayedIdsSha256` names that set.
  */
+import { createHash } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import type { Storage } from "./storage.ts";
 import { hybridSearch, type SearchOptions } from "./search/hybrid.ts";
 import { keywordSearch } from "./search/keyword.ts";
-import { jaccardAtK, top1Stable } from "./search/metrics.ts";
+import { distinctInOrder, jaccardAtK, top1Stable } from "./search/metrics.ts";
 import { ci95, deltaCi95, type Ci95 } from "./search/bootstrap.ts";
 
 export type EvalTag = "good" | "bad";
@@ -90,6 +95,16 @@ export interface ReplayReport {
   /** Seeded bootstrap intervals over the scored queries. */
   meanRRCi95: Ci95;
   hitRateCi95: Ci95;
+  /** sha256 of the replayed query ids, sorted: two runs (or two snapshots)
+   *  compare like with like only when this matches. */
+  replayedIdsSha256: string;
+  /** Queries without an expected doc: outside meanRR and hitRate, counted
+   *  here so the averages' n is never silently smaller than the run. */
+  unscored: {
+    count: number;
+    /** Of those, how many came back with at least one result. */
+    returnedAny: number;
+  };
   baseline?: {
     /** Queries that have both a baseline and a current score. Every field
      *  below is over this subset, so a query captured after the last
@@ -230,6 +245,9 @@ export async function getQuery(
 export interface ListOptions {
   tag?: EvalTag;
   limit?: number;
+  /** `newest` (default) lists the latest captures first; `id` is the stable
+   *  order replay uses, so a limit always selects the same subset. */
+  order?: "newest" | "id";
 }
 
 export async function listQueries(
@@ -244,11 +262,30 @@ export async function listQueries(
     where = `WHERE tag = $${params.length}`;
   }
   params.push(limit);
+  const orderBy =
+    opts.order === "id" ? `id COLLATE "C"` : `captured_at DESC, id COLLATE "C" DESC`;
   const r = await engine.query<RawEvalRow>(
-    `SELECT ${SELECT_COLS} FROM eval_queries ${where} ORDER BY captured_at DESC, id COLLATE "C" DESC LIMIT $${params.length}`,
+    `SELECT ${SELECT_COLS} FROM eval_queries ${where} ORDER BY ${orderBy} LIMIT $${params.length}`,
     params,
   );
   return r.rows.map(rowToEval);
+}
+
+/** Rows in the eval set (optionally one tag), whatever a replay's limit. */
+export async function countQueries(engine: Engine, tag?: EvalTag): Promise<number> {
+  const r = await engine.query<{ n: number }>(
+    tag
+      ? `SELECT count(*)::int AS n FROM eval_queries WHERE tag = $1`
+      : `SELECT count(*)::int AS n FROM eval_queries`,
+    tag ? [tag] : [],
+  );
+  return Number(r.rows[0]?.n ?? 0);
+}
+
+/** Fingerprint of a replayed set: order-independent, one id per line. */
+export function replayedIdsHash(ids: string[]): string {
+  const sorted = [...ids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return createHash("sha256").update(sorted.join("\n")).digest("hex");
 }
 
 export async function deleteQuery(engine: Engine, id: string): Promise<boolean> {
@@ -259,7 +296,8 @@ export async function deleteQuery(engine: Engine, id: string): Promise<boolean> 
 }
 
 /**
- * Compute per-query metrics against a list of result documentIds.
+ * Compute per-query metrics against a list of result documentIds. The rank
+ * counts distinct documents: repeated chunks of one document hold one rank.
  * Pure function for unit testing.
  */
 export function scoreOne(
@@ -267,7 +305,7 @@ export function scoreOne(
   expectedDocId: string | null,
 ): { hit: boolean | null; rank: number | null; rr: number | null } {
   if (!expectedDocId) return { hit: null, rank: null, rr: null };
-  const idx = resultDocIds.findIndex((id) => id === expectedDocId);
+  const idx = distinctInOrder(resultDocIds).findIndex((id) => id === expectedDocId);
   if (idx === -1) return { hit: false, rank: null, rr: 0 };
   const rank = idx + 1;
   return { hit: true, rank, rr: 1 / rank };
@@ -334,6 +372,7 @@ export async function replayAll(
   const queries = await listQueries(engine, {
     ...(opts.tag !== undefined ? { tag: opts.tag } : {}),
     ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    order: "id",
   });
   const search =
     opts.searcher ??
@@ -357,12 +396,15 @@ export async function replayAll(
   let stabScored = 0;
   let jaccardSum = 0;
   let top1Stable_ = 0;
+  let unscored = 0;
+  let unscoredReturned = 0;
 
   for (const q of queries) {
     const t0 = Date.now();
     const hits_ = await search(q.query, { k: q.k }, q.searchMode);
     const dur = Date.now() - t0;
-    const ids = hits_.map((h) => h.documentId);
+    // Several chunks of one document are one result: score documents.
+    const ids = distinctInOrder(hits_.map((h) => h.documentId));
     const { hit, rank, rr } = scoreOne(ids, q.expectedDocId);
     let delta: RunResult["delta"] = null;
     if (q.expectedDocId) {
@@ -391,6 +433,9 @@ export async function replayAll(
           rr: (rr ?? 0) - q.baselineRr,
         };
       }
+    } else {
+      unscored++;
+      if (ids.length > 0) unscoredReturned++;
     }
     let stability: RunResult["stability"] = null;
     if (q.baselineDocIds !== null) {
@@ -439,6 +484,8 @@ export async function replayAll(
     hitRate: round4(hitRate),
     meanRRCi95: ci95(rrs),
     hitRateCi95: ci95(hitFlags),
+    replayedIdsSha256: replayedIdsHash(queries.map((q) => q.id)),
+    unscored: { count: unscored, returnedAny: unscoredReturned },
     perQuery,
   };
   if (baseScored > 0) {

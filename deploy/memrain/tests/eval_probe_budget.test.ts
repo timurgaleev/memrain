@@ -42,12 +42,17 @@ describe("probeSummary", () => {
         hitRate: 0.889,
         meanRRCi95: { lo: 0.39, hi: 0.83 },
         hitRateCi95: { lo: 0.67, hi: 1 },
+        replayedIdsSha256: "b".repeat(64),
+        unscored: { count: 0, returnedAny: 0 },
         perQuery: [],
       },
       7,
+      "capped",
     );
     expect(out).toMatchObject({
       snapshot_id: 7,
+      status: "capped",
+      replayed_ids_sha256: "b".repeat(64),
       mean_rr: 0.611,
       mean_rr_ci95: { lo: 0.39, hi: 0.83 },
       hit_rate: 0.889,

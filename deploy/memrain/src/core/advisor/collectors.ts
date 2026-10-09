@@ -429,9 +429,8 @@ export const collectChronicle: AdvisorCollector = {
  * under `ok:true`. A passing run reporting zeros is the trap: it reads as a
  * measurement that came back empty-handed, when nothing was measured at all.
  *
- * `total_queries = 0` is unambiguous here: `recordEvalSnapshot` has one caller
- * (commands/eval-probe.ts) and it runs AFTER `replayAll`, which never returns
- * `ok:false` — a probe that fails throws and writes no row. So a recorded zero
+ * A probe that throws records a `status = 'error'` row whose zeros measure
+ * nothing; those rows are skipped here, so among the rest a recorded zero
  * means the eval set was empty, never that the probe broke.
  *
  * Silent when the probe has never run at all: `doctor` already reports that
@@ -442,7 +441,7 @@ export const collectEvalBlind: AdvisorCollector = {
   id: "eval-blind",
   collect: async (ctx) => {
     const snap = await latestEvalSnapshot(ctx.engine);
-    if (!snap || snap.total_queries > 0) return [];
+    if (!snap || snap.total_queries > 0 || snap.status === "error") return [];
 
     // How long we have been blind: zero-query snapshots newer than the last
     // probe that had queries to replay. The streak resets on `total_queries`,
@@ -455,6 +454,7 @@ export const collectEvalBlind: AdvisorCollector = {
         `SELECT count(*)::int AS n
            FROM eval_snapshots
           WHERE total_queries = 0
+            AND status <> 'error'
             AND ran_at > COALESCE(
                   (SELECT max(ran_at) FROM eval_snapshots WHERE total_queries > 0),
                   '-infinity'::timestamptz)`,

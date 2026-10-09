@@ -23,7 +23,7 @@
  * chunk/doc id space; without this a repeated relevant id would inflate
  * precision/recall (recall could even exceed 1.0).
  */
-function distinctInOrder(hits: readonly string[]): string[] {
+export function distinctInOrder(hits: readonly string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const h of hits) {
@@ -62,13 +62,18 @@ export function recallAtK(
   return found / relevant.size;
 }
 
-/** Reciprocal rank of the first relevant hit (0 if none found). */
+/**
+ * Reciprocal rank of the first relevant hit (0 if none found). Ranks count
+ * distinct ids, so a page that fills ranks 1-2 with two chunks pushes the next
+ * page to rank 2, not 3.
+ */
 export function reciprocalRank(
   hits: readonly string[],
   relevant: ReadonlySet<string>,
 ): number {
-  for (let i = 0; i < hits.length; i++) {
-    if (relevant.has(hits[i]!)) return 1 / (i + 1);
+  const distinct = distinctInOrder(hits);
+  for (let i = 0; i < distinct.length; i++) {
+    if (relevant.has(distinct[i]!)) return 1 / (i + 1);
   }
   return 0;
 }

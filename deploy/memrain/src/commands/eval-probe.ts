@@ -11,13 +11,21 @@
  * the baseline (read-only against the eval set apart from the snapshot append)
  * and NEVER exits non-zero on a quality drop: this is a passive probe, not a CI
  * gate (that is `eval-replay run`). An empty eval set records a zero-scored row
- * and exits 0.
+ * and exits 0. Every run leaves a row: one a limit cut short is `capped`, one
+ * that threw is `error` (and the probe still exits non-zero).
+ *
+ * The replayed subset is the eval set in id order, so a cap selects the same
+ * queries night after night; `detail.replayed_ids_sha256` names the set.
  */
 import { Storage } from "../core/storage.ts";
 import { withStorage } from "./with-storage.ts";
 import { loadConfig } from "../core/config.ts";
-import { replayAll, type ReplayReport } from "../core/eval-replay.ts";
-import { recordEvalSnapshot } from "../core/eval-snapshot.ts";
+import { countQueries, replayAll, type ReplayReport } from "../core/eval-replay.ts";
+import {
+  recordEvalSnapshot,
+  recordFailedEvalSnapshot,
+  type EvalSnapshotStatus,
+} from "../core/eval-snapshot.ts";
 
 export interface EvalProbeOptions {
   /** Cap on queries replayed. Forwarded to replayAll (default 100 there). */
@@ -52,10 +60,15 @@ export function effectiveProbeLimit(
 }
 
 /** The probe's stdout JSON: the trend axes with their bootstrap intervals. */
-export function probeSummary(report: ReplayReport, snapshotId: number): Record<string, unknown> {
+export function probeSummary(
+  report: ReplayReport,
+  snapshotId: number,
+  status: EvalSnapshotStatus = "ok",
+): Record<string, unknown> {
   return {
     ok: true,
     snapshot_id: snapshotId,
+    status,
     ran_at: report.ranAt,
     total_queries: report.totalQueries,
     scored: report.scored,
@@ -63,18 +76,53 @@ export function probeSummary(report: ReplayReport, snapshotId: number): Record<s
     mean_rr_ci95: report.meanRRCi95,
     hit_rate: report.hitRate,
     hit_rate_ci95: report.hitRateCi95,
+    replayed_ids_sha256: report.replayedIdsSha256,
+    unscored: report.unscored,
   };
+}
+
+/**
+ * Replay once and record exactly one snapshot, whatever happens: `ok` for a
+ * run over the whole eval set, `capped` when the limit left queries out,
+ * `error` (then rethrow) when the replay threw.
+ */
+export async function probeOnce(
+  storage: Storage,
+  opts: EvalProbeOptions = {},
+  replay: typeof replayAll = replayAll,
+): Promise<{ id: number; status: EvalSnapshotStatus; report: ReplayReport }> {
+  const engine = storage.engine();
+  const ranAt = new Date().toISOString();
+  const replayOpts: Parameters<typeof replayAll>[1] = {};
+  const effLimit = effectiveProbeLimit(opts.limit, opts.maxUsd);
+  if (effLimit !== undefined) replayOpts.limit = effLimit;
+  // Counted before the replay, so a query captured mid-run cannot mark a
+  // complete run as capped.
+  const available = await countQueries(engine);
+  let report: ReplayReport;
+  try {
+    report = await replay(storage, replayOpts);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    try {
+      await recordFailedEvalSnapshot(engine, ranAt, message);
+    } catch (writeErr) {
+      console.error(
+        `eval-probe: could not record the failed run: ${writeErr instanceof Error ? writeErr.message : writeErr}`,
+      );
+    }
+    throw e;
+  }
+  const status: EvalSnapshotStatus = available > report.totalQueries ? "capped" : "ok";
+  const { id } = await recordEvalSnapshot(engine, report, status);
+  return { id, status, report };
 }
 
 export async function runEvalProbe(opts: EvalProbeOptions = {}): Promise<void> {
   const config = loadConfig();
   const storage = new Storage(config);
   return withStorage(storage, async () => {
-    const replayOpts: Parameters<typeof replayAll>[1] = {};
-    const effLimit = effectiveProbeLimit(opts.limit, opts.maxUsd);
-    if (effLimit !== undefined) replayOpts.limit = effLimit;
-    const report = await replayAll(storage, replayOpts);
-    const { id } = await recordEvalSnapshot(storage.engine(), report);
-    console.log(JSON.stringify(probeSummary(report, id), null, 2));
+    const { id, status, report } = await probeOnce(storage, opts);
+    console.log(JSON.stringify(probeSummary(report, id, status), null, 2));
   });
 }

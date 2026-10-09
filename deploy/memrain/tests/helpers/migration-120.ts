@@ -36,6 +36,19 @@ export function migrationsThrough(maxId: number): { dir: string; cleanup: () => 
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
+/**
+ * Apply the shipped migrations up to and including 120, and no later one: the
+ * 120 down refuses unless 120 is the latest applied migration.
+ */
+export async function migrateTo120(e: Engine): ReturnType<typeof runMigrations> {
+  const through = migrationsThrough(120);
+  try {
+    return await runMigrations(e, through.dir);
+  } finally {
+    through.cleanup();
+  }
+}
+
 export interface Db {
   kind: "pglite" | "postgres";
   /** Current engine; `reopen()` replaces it, so read it each time. */

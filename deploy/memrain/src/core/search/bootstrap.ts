@@ -136,8 +136,14 @@ export function deltaCi95(
  */
 export const METRIC_GLOSSARY: Readonly<Record<string, string>> = {
   meanRecall:
-    "Recall@k averaged over queries: share of a query's expected paths found in the top k. A query with no expected paths scores 1.",
-  meanReciprocalRank: "MRR: mean of 1/rank of the first expected hit (0 when none is retrieved).",
+    "Recall@k averaged over queries that have expected paths: share of a query's expected paths found in the top k distinct pages.",
+  meanReciprocalRank:
+    "MRR: mean of 1/rank of the first expected hit (0 when none is retrieved). Ranks count distinct pages, so two chunks of one page hold one rank.",
+  scoredQueries: "Queries with expected paths: the n behind every mean and interval.",
+  abstention:
+    "Queries with no expected paths, kept out of the averages. falsePositiveRate is the share of them that returned any hit (there is no score threshold).",
+  replayedIdsSha256: "sha256 of the sorted replayed query ids; trends compare like with like only when it matches.",
+  unscored: "Replay queries without an expected document: outside meanRR and hitRate; returnedAny counts those with any result.",
   meanRR: "MRR over captured replay queries that name an expected document.",
   hitRate: "Share of queries with at least one expected hit in the top k.",
   meanNdcg:

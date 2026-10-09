@@ -59,6 +59,11 @@ describe("scoreOne", () => {
       rr: 0,
     });
   });
+  it("ranks documents, not chunks: two chunks of one document hold one rank", () => {
+    const r = scoreOne(["b", "b", "a"], "a");
+    expect(r.rank).toBe(2);
+    expect(r.rr).toBe(0.5);
+  });
   it("returns nulls when no expected doc provided", () => {
     expect(scoreOne(["a"], null)).toEqual({
       hit: null,
@@ -251,10 +256,50 @@ describe("replayAll", () => {
     const r = await replayAll(storage, { searcher: stub });
     expect(r.scored).toBe(2);
     expect(r.meanRR).toBe(1);
+    // Replay walks the set in id order ("h" < "k"), not capture order.
     expect(seen).toEqual([
-      { query: "beta", mode: "keyword" },
       { query: "alpha", mode: "hybrid" },
+      { query: "beta", mode: "keyword" },
     ]);
+  });
+
+  it("replays the same subset under a limit, whatever order the rows were captured in", async () => {
+    const e = storage.engine();
+    // Captured newest-last: c, then a, then b.
+    for (const id of ["c", "a", "b"]) {
+      await recordQuery(e, { id, query: id, tag: "good", expectedDocId: id });
+    }
+    const stub = async (q: string) => [{ documentId: q }];
+    const first = await replayAll(storage, { searcher: stub, limit: 2 });
+    expect(first.perQuery.map((p) => p.queryId)).toEqual(["a", "b"]);
+    await recordQuery(e, { id: "d", query: "d", tag: "good", expectedDocId: "d" });
+    const second = await replayAll(storage, { searcher: stub, limit: 2 });
+    expect(second.perQuery.map((p) => p.queryId)).toEqual(["a", "b"]);
+    expect(second.replayedIdsSha256).toBe(first.replayedIdsSha256);
+    const all = await replayAll(storage, { searcher: stub });
+    expect(all.replayedIdsSha256).not.toBe(first.replayedIdsSha256);
+  });
+
+  it("dedups repeated documents before scoring and stability", async () => {
+    const e = storage.engine();
+    await recordQuery(e, { id: "q", query: "q", tag: "good", k: 3, expectedDocId: "a" });
+    const stub = async () => [{ documentId: "b" }, { documentId: "b" }, { documentId: "a" }];
+    const r = await replayAll(storage, { searcher: stub });
+    const pq = r.perQuery[0]!;
+    expect(pq.resultDocIds).toEqual(["b", "a"]);
+    expect(pq.rank).toBe(2);
+    expect(r.meanRR).toBe(0.5);
+  });
+
+  it("counts queries without an expected doc instead of dropping them silently", async () => {
+    const e = storage.engine();
+    await recordQuery(e, { id: "scored", query: "s", tag: "good", expectedDocId: "a" });
+    await recordQuery(e, { id: "quiet", query: "quiet", tag: "bad" });
+    await recordQuery(e, { id: "noisy", query: "noisy", tag: "bad" });
+    const stub = async (q: string) => (q === "quiet" ? [] : [{ documentId: "a" }]);
+    const r = await replayAll(storage, { searcher: stub });
+    expect(r.scored).toBe(1);
+    expect(r.unscored).toEqual({ count: 2, returnedAny: 1 });
   });
 
   it("rejects an invalid searchMode at capture time", async () => {

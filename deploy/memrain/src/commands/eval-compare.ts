@@ -35,6 +35,11 @@ import {
   evalRun,
   loadQrels,
   defaultQrelsPath,
+  expectedTargets,
+  presentTargetPaths,
+  staleQrelsReason,
+  EXIT_STALE_QRELS,
+  EVAL_SCORING_VERSION,
   type EvalKnobConfig,
   type EvalOptions,
   type EvalReport,
@@ -105,7 +110,10 @@ export async function runEvalRunAll(opts: EvalRunAllOptions = {}): Promise<numbe
 
   const storage = new Storage(loadConfig(opts.configPath));
   const records: EvalResultRecord[] = [];
-  await withStorage(storage, async () => {
+  const stale = await withStorage(storage, async () => {
+    const targets = expectedTargets(qrels);
+    const reason = staleQrelsReason(targets, await presentTargetPaths(storage, targets));
+    if (reason) return reason;
     for (const mode of modes) {
       const started = Date.now();
       const base: Omit<EvalResultRecord, "status" | "duration_ms"> = {
@@ -144,7 +152,12 @@ export async function runEvalRunAll(opts: EvalRunAllOptions = {}): Promise<numbe
         });
       }
     }
+    return null;
   });
+  if (stale) {
+    console.error(stale);
+    return EXIT_STALE_QRELS;
+  }
 
   for (const r of records) appendFileSync(out, JSON.stringify(r) + "\n");
   console.log(
@@ -261,6 +274,18 @@ export interface EvalBaseline {
   per_query?: Record<string, { recall: number; rr: number }>;
   qrels_sha256?: string;
   run_config_hash?: string;
+  /** EVAL_SCORING_VERSION the baseline was scored under; absent means 1. */
+  scoring_version?: number;
+}
+
+/**
+ * The baseline the gate may judge against, or null when it was scored under
+ * another formula: its means are not comparable, so the run is held to the
+ * correctness floor and the baseline should be rewritten.
+ */
+export function comparableBaseline(baseline: EvalBaseline | null): EvalBaseline | null {
+  if (!baseline) return null;
+  return (baseline.scoring_version ?? 1) === EVAL_SCORING_VERSION ? baseline : null;
 }
 
 /**
@@ -286,7 +311,7 @@ export function gateDeltaCi(
   const after = { recall: [] as number[], rr: [] as number[] };
   for (const q of report.perQuery) {
     const b = per[q.id];
-    if (!b) continue;
+    if (!b || q.abstention) continue;
     before.recall.push(b.recall);
     before.rr.push(b.rr);
     after.recall.push(q.recallAtK);
@@ -298,7 +323,7 @@ export function gateDeltaCi(
     a.reduce((s, x, i) => s + x - b[i]!, 0) / n;
   return {
     n,
-    scored: report.perQuery.length,
+    scored: report.perQuery.filter((q) => !q.abstention).length,
     mean_recall_delta: meanDelta(before.recall, after.recall),
     mean_mrr_delta: meanDelta(before.rr, after.rr),
     mean_recall: deltaCi95(before.recall, after.recall),
@@ -369,15 +394,32 @@ export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
   }
 
   const storage = new Storage(loadConfig(opts.configPath));
-  const report = await withStorage(storage, async () =>
-    evalRun(storage, qrels, { name: "gate" }, {
+  const report = await withStorage(storage, async () => {
+    const targets = expectedTargets(qrels);
+    const stale = staleQrelsReason(targets, await presentTargetPaths(storage, targets));
+    if (stale) {
+      console.error(stale);
+      return null;
+    }
+    return evalRun(storage, qrels, { name: "gate" }, {
       ...(opts.k !== undefined ? { k: opts.k } : {}),
       ...(opts.searchFn ? { searchFn: opts.searchFn } : {}),
-    }));
+    });
+  });
+  if (!report) return EXIT_STALE_QRELS;
 
+  const comparable = comparableBaseline(baseline);
+  const scoringChanged = baseline !== null && comparable === null;
+  if (scoringChanged) {
+    console.error(
+      `memrain eval gate: the baseline at ${baselinePath} was scored under scoring version ` +
+        `${baseline?.scoring_version ?? 1}, this run under ${EVAL_SCORING_VERSION}; it is not ` +
+        `judged against. Re-baseline with --write-baseline.`,
+    );
+  }
   // The interval is reported next to the verdict; it does not decide it.
-  const verdict = gateVerdict(report, baseline, maxDrop, minRecall);
-  const deltaCi = gateDeltaCi(report, baseline);
+  const verdict = gateVerdict(report, comparable, maxDrop, minRecall);
+  const deltaCi = gateDeltaCi(report, comparable);
   const qrelsChanged =
     baseline?.qrels_sha256 !== undefined && baseline.qrels_sha256 !== report.qrels_sha256;
   if (opts.writeBaseline && verdict.pass) {
@@ -388,10 +430,13 @@ export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
       mean_mrr: report.meanReciprocalRank,
       hit_rate: report.hitRate,
       per_query: Object.fromEntries(
-        report.perQuery.map((q) => [q.id, { recall: q.recallAtK, rr: q.mrr }]),
+        report.perQuery
+          .filter((q) => !q.abstention)
+          .map((q) => [q.id, { recall: q.recallAtK, rr: q.mrr }]),
       ),
       qrels_sha256: report.qrels_sha256,
       run_config_hash: report.run_config_hash,
+      scoring_version: EVAL_SCORING_VERSION,
     };
     mkdirSync(dirname(baselinePath), { recursive: true });
     writeFileSync(baselinePath, JSON.stringify(next, null, 2) + "\n");
@@ -409,6 +454,7 @@ export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
         mrr_ci95: report.mrrCi95,
         ...(deltaCi ? { delta_ci95: deltaCi } : {}),
         ...(qrelsChanged ? { qrels_changed: true } : {}),
+        ...(scoringChanged ? { scoring_changed: true, rebaseline: true } : {}),
         run_config_hash: report.run_config_hash,
         qrels_sha256: report.qrels_sha256,
         reasons: verdict.reasons,

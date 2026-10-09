@@ -20,8 +20,14 @@
  * production behaviour. That makes this command Bedrock-billable;
  * keep `qrels.json` small.
  *
+ * Recall, MRR, nDCG and P@k score distinct pages: two chunks of one page are
+ * one hit. Queries with no expected paths are abstention checks — they stay out
+ * of every average and are reported on their own as a false-positive rate.
+ *
  * Exit code (single-run mode): 0 if average recall@5 >= MIN_RECALL
- * (default 0.6), else 1. Suitable as a CI gate.
+ * (default 0.6), else 1. Suitable as a CI gate. Exit 2, before any query
+ * runs, when more than half of the qrels' expected paths are missing from
+ * the brain: stale ground truth would read as a retrieval regression.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -35,7 +41,14 @@ import { resolveSearchKnobs } from "../core/search/hybrid.ts";
 import { DEFAULT_RRF_K } from "../core/rrf.ts";
 import { embeddingSignature } from "../core/embedding.ts";
 import { wilsonCI, smallSampleNote, type WilsonCI } from "../core/wilson.ts";
-import { ndcgAtK, precisionAtK, binaryGrades } from "../core/search/metrics.ts";
+import {
+  ndcgAtK,
+  precisionAtK,
+  recallAtK,
+  reciprocalRank,
+  binaryGrades,
+  distinctInOrder,
+} from "../core/search/metrics.ts";
 import { ci95, METRIC_GLOSSARY, type Ci95 } from "../core/search/bootstrap.ts";
 
 export interface Qrel {
@@ -62,6 +75,18 @@ export interface QueryReport {
   topPaths: string[];
   /** Set when this query threw — the run continues, the query scores 0. */
   error?: string;
+  /** No expected paths: the right answer is "nothing relevant". Scored in the
+   *  report's `abstention` block, never in the recall/MRR averages. */
+  abstention?: boolean;
+}
+
+export interface AbstentionReport {
+  /** Queries whose qrels list no expected path. */
+  count: number;
+  /** Of those, how many came back with at least one hit. */
+  returnedAny: number;
+  /** returnedAny / count, or null when there are no abstention queries. */
+  falsePositiveRate: number | null;
 }
 
 export interface EvalReport {
@@ -84,6 +109,9 @@ export interface EvalReport {
   wilsonCi95: WilsonCI;
   /** Present when n < 30 — the CI is too wide to act on. */
   smallSampleNote?: string;
+  /** Queries with expected paths: the n behind every mean and interval above. */
+  scoredQueries: number;
+  abstention: AbstentionReport;
   /** Queries that threw (isolated, did not abort the run). */
   errors: { id: string; error: string }[];
   perQuery: QueryReport[];
@@ -247,28 +275,59 @@ export function runConfigHash(
   );
 }
 
-function recallAtK(found: string[], expected: string[]): number {
-  if (expected.length === 0) {
-    // "Should return nothing relevant" queries — recall is meaningless.
-    // We treat any non-relevant top-k as full recall (1.0) to keep the
-    // metric well-behaved; the eval still flags drift through MRR=0.
-    return 1.0;
-  }
-  const set = new Set(expected);
-  const hit = found.filter((p) => set.has(p)).length;
-  return hit / expected.length;
+/** Above this share of expected paths missing from the brain, a run would
+ *  measure the qrels' age, not retrieval, so eval refuses to score it. */
+export const MAX_ABSENT_TARGET_RATIO = 0.5;
+
+/** Exit code for a refused run (qrels no longer match the brain). */
+export const EXIT_STALE_QRELS = 2;
+
+/** Distinct expected paths across the qrels, in first-seen order. */
+export function expectedTargets(qrels: Qrels): string[] {
+  return distinctInOrder(qrels.queries.flatMap((q) => q.expected_paths));
 }
 
-function reciprocalRank(found: string[], expected: string[]): number {
-  if (expected.length === 0) return 0;
-  const set = new Set(expected);
-  for (let i = 0; i < found.length; i++) {
-    if (set.has(found[i] ?? "")) {
-      return 1 / (i + 1);
-    }
-  }
-  return 0;
+/** The subset of `paths` held by a live (not soft-deleted) document. */
+export async function presentTargetPaths(
+  storage: Storage,
+  paths: string[],
+): Promise<Set<string>> {
+  if (paths.length === 0) return new Set();
+  const r = await storage.engine().query<{ source_path: string }>(
+    `SELECT DISTINCT source_path FROM documents
+      WHERE source_path = ANY($1::text[]) AND deleted_at IS NULL`,
+    [paths],
+  );
+  return new Set(r.rows.map((row) => row.source_path));
 }
+
+/**
+ * Why the qrels cannot be scored against this brain, or null when they can:
+ * more than {@link MAX_ABSENT_TARGET_RATIO} of the expected paths are gone, so
+ * recall would fall for reasons retrieval has no part in.
+ */
+export function staleQrelsReason(targets: string[], present: ReadonlySet<string>): string | null {
+  if (targets.length === 0) return null;
+  const absent = targets.filter((p) => !present.has(p));
+  if (absent.length / targets.length <= MAX_ABSENT_TARGET_RATIO) return null;
+  const sample = absent.slice(0, 5).join(", ");
+  return (
+    `memrain eval: ${absent.length} of ${targets.length} expected paths in the qrels ` +
+    `are not in this brain (e.g. ${sample}${absent.length > 5 ? ", ..." : ""}). ` +
+    `The ground truth no longer matches the corpus; update the qrels before scoring.`
+  );
+}
+
+/**
+ * How metrics are computed. A baseline scored under another version is not
+ * comparable even when the run config and qrels hashes match. 2: page-level
+ * dedup, abstention queries outside the averages.
+ */
+export const EVAL_SCORING_VERSION = 2;
+
+/** hybridSearch's k counts chunks; fetch this many times k so that k distinct
+ *  pages usually remain after page dedup. */
+const PAGE_OVERFETCH = 3;
 
 async function defaultSearchFn(
   storage: Storage,
@@ -277,7 +336,7 @@ async function defaultSearchFn(
   k: number,
 ): Promise<string[]> {
   const hits = await hybridSearch(storage, query, {
-    k,
+    k: k * PAGE_OVERFETCH,
     noCache: true,
     ...(cfg.rrfK !== undefined ? { rrfK: cfg.rrfK } : {}),
     ...(cfg.expansion !== undefined ? { expansion: cfg.expansion } : {}),
@@ -289,7 +348,7 @@ async function defaultSearchFn(
     ...(cfg.backlinkBoost !== undefined ? { backlinkBoost: cfg.backlinkBoost } : {}),
     ...(cfg.tokenBudget !== undefined ? { tokenBudget: cfg.tokenBudget } : {}),
   });
-  return hits.map((h) => h.sourcePath);
+  return distinctInOrder(hits.map((h) => h.sourcePath)).slice(0, k);
 }
 
 /**
@@ -314,18 +373,22 @@ export async function evalRun(
   const errors: { id: string; error: string }[] = [];
   try {
     for (const q of qrels.queries) {
+      const abstention = q.expected_paths.length === 0;
       try {
-        const paths = await searchFn(storage, q.query, cfg, k);
+        // Several chunks of one page are one hit: score pages, in rank order.
+        const paths = distinctInOrder(await searchFn(storage, q.query, cfg, k));
+        const expected = new Set(q.expected_paths);
         perQuery.push({
           id: q.id,
           query: q.query,
-          recallAtK: recallAtK(paths, q.expected_paths),
-          mrr: reciprocalRank(paths, q.expected_paths),
+          recallAtK: recallAtK(paths, expected, k),
+          mrr: reciprocalRank(paths, expected),
           ndcg: ndcgAtK(paths, binaryGrades(q.expected_paths), k),
-          precision: precisionAtK(paths, new Set(q.expected_paths), k),
+          precision: precisionAtK(paths, expected, k),
           hits: paths.length,
           expected: q.expected_paths.length,
           topPaths: paths.slice(0, 3),
+          ...(abstention ? { abstention } : {}),
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -341,6 +404,7 @@ export async function evalRun(
           expected: q.expected_paths.length,
           topPaths: [],
           error: msg,
+          ...(abstention ? { abstention } : {}),
         });
       }
     }
@@ -351,18 +415,33 @@ export async function evalRun(
     }
   }
 
-  const meanRecall = perQuery.reduce((s, q) => s + q.recallAtK, 0) / perQuery.length;
-  const meanReciprocalRank = perQuery.reduce((s, q) => s + q.mrr, 0) / perQuery.length;
-  const meanNdcg = perQuery.reduce((s, q) => s + q.ndcg, 0) / perQuery.length;
-  const meanPrecision = perQuery.reduce((s, q) => s + q.precision, 0) / perQuery.length;
+  // Abstention queries have nothing to recall; averaging them in at any fixed
+  // score would move the means without measuring retrieval.
+  const scored = perQuery.filter((q) => !q.abstention);
+  const abstentions = perQuery.filter((q) => q.abstention);
+  const n = scored.length;
+  const mean = (pick: (q: QueryReport) => number): number =>
+    n === 0 ? 0 : scored.reduce((s, q) => s + pick(q), 0) / n;
+  const meanRecall = mean((q) => q.recallAtK);
+  const meanReciprocalRank = mean((q) => q.mrr);
+  const meanNdcg = mean((q) => q.ndcg);
+  const meanPrecision = mean((q) => q.precision);
   const qrelsSha256 = qrels.sha256 ?? sha256Hex(canonicalJson({ queries: qrels.queries }));
   // Hit-rate: fraction of queries that retrieved at least one expected path.
   // A binomial proportion — bound it with a Wilson 95% CI so the score reads
   // as a measurement with uncertainty, not a bare number.
-  const hitCount = perQuery.filter((q) => q.recallAtK > 0).length;
-  const hitRate = hitCount / perQuery.length;
-  const wilsonCi95 = wilsonCI(hitCount, perQuery.length);
-  const note = smallSampleNote(perQuery.length);
+  const hitCount = scored.filter((q) => q.recallAtK > 0).length;
+  const hitRate = n === 0 ? 0 : hitCount / n;
+  const wilsonCi95 = wilsonCI(hitCount, n);
+  const note = smallSampleNote(n);
+  // No score threshold exists to tell a confident hit from a stray one, so a
+  // false positive here is any hit at all for a question with no answer.
+  const returnedAny = abstentions.filter((q) => !q.error && q.hits > 0).length;
+  const abstention: AbstentionReport = {
+    count: abstentions.length,
+    returnedAny,
+    falsePositiveRate: abstentions.length === 0 ? null : returnedAny / abstentions.length,
+  };
 
   return {
     ok: true,
@@ -372,13 +451,15 @@ export async function evalRun(
     meanReciprocalRank,
     meanNdcg,
     meanPrecision,
-    recallCi95: ci95(perQuery.map((q) => q.recallAtK)),
-    mrrCi95: ci95(perQuery.map((q) => q.mrr)),
+    recallCi95: ci95(scored.map((q) => q.recallAtK)),
+    mrrCi95: ci95(scored.map((q) => q.mrr)),
     run_config_hash: runConfigHash(cfg, k, qrelsSha256),
     qrels_sha256: qrelsSha256,
     hitRate,
     wilsonCi95,
     ...(note ? { smallSampleNote: note } : {}),
+    scoredQueries: n,
+    abstention,
     errors,
     perQuery,
   };
@@ -392,6 +473,13 @@ export async function runEval(opts: EvalOptions = {}): Promise<void> {
 
   const storage = new Storage(loadConfig(opts.configPath));
   return withStorage(storage, async () => {
+    const targets = expectedTargets(qrels);
+    const stale = staleQrelsReason(targets, await presentTargetPaths(storage, targets));
+    if (stale) {
+      console.error(stale);
+      process.exitCode = EXIT_STALE_QRELS;
+      return;
+    }
     if (opts.configB) {
       const cfgB: EvalKnobConfig = { name: "Config B", ...opts.configB };
       const evalOpts = { k, ...(opts.searchFn ? { searchFn: opts.searchFn } : {}) };

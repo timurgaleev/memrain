@@ -8,11 +8,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import postgres from "postgres";
-import { runMigrations } from "../src/core/migrate.ts";
 import { Storage } from "../src/core/storage.ts";
 import { PostgresEngine } from "../src/core/engine/postgres.ts";
 import { runApplyMigrations } from "../src/commands/apply-migrations.ts";
-import { ENGINES, seedLegacy, UP_120_SQL, type Db } from "./helpers/migration-120.ts";
+import { ENGINES, migrateTo120, seedLegacy, UP_120_SQL, type Db } from "./helpers/migration-120.ts";
 
 /** Re-assert the seeded forgotten claim ("Owns a  Boat"), restated. */
 async function readd(db: Db): Promise<boolean> {
@@ -52,25 +51,25 @@ for (const { name, open } of ENGINES) {
     });
 
     it("a forgotten claim stays forgotten across up, down and up again", async () => {
-      await runMigrations(db.engine);
+      await migrateTo120(db.engine);
       expect(await readd(db)).toBe(true);
       await down(db);
       expect(await topId(db)).toBe(119);
       expect(await readd(db)).toBe(true);
-      const again = await runMigrations(db.engine);
+      const again = await migrateTo120(db.engine);
       expect(again.applied.map((m) => m.id)).toEqual([120]);
       expect(await readd(db)).toBe(true);
     });
 
     it("running the 120 file a second time changes nothing", async () => {
-      await runMigrations(db.engine);
+      await migrateTo120(db.engine);
       const first = await db.manifest();
       await db.engine.transaction(async (tx) => tx.exec(UP_120_SQL));
       expect(await db.manifest()).toBe(first);
     });
 
     it("--down refuses a missing --yes and a non-latest id, before touching the database", async () => {
-      await runMigrations(db.engine);
+      await migrateTo120(db.engine);
       const before = await db.manifest();
       const storage = new Storage(db.engine);
       await expect(runApplyMigrations({ down: 120, storage })).rejects.toThrow(/--yes/);
@@ -113,7 +112,7 @@ for (const { name, open } of ENGINES) {
 
       for (const r of refusals) {
         it(`refuses with ${r.why}, through --down and through the file alone`, async () => {
-          await runMigrations(db.engine);
+          await migrateTo120(db.engine);
           await r.setup(db);
           const before = await db.manifest();
           await expect(db.runDownFile()).rejects.toThrow(r.message);
@@ -131,7 +130,7 @@ for (const { name, open } of ENGINES) {
       });
 
       it.skipIf(name !== "Postgres")("refuses while another client is connected", async () => {
-        await runMigrations(db.engine);
+        await migrateTo120(db.engine);
         const before = await db.manifest();
         const other = postgres((db as Db & { url: string }).url, { max: 1, onnotice: () => {} });
         try {

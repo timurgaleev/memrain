@@ -318,6 +318,15 @@ forward on 1.0.x; the step 1 backups are for a disaster restore only.
      run src/cli.ts apply-migrations --down 120 --yes
    ```
 
+   If the new image also applied migration 121 (eval snapshot status), run
+   `apply-migrations --down 121 --yes` first: each down only reverts the
+   latest migration.
+
+   `memrain eval gate` now scores distinct pages and keeps queries with no
+   expected paths out of the averages. A baseline written before that is not
+   judged against: the gate reports `scoring_changed` and asks for a new one
+   (`memrain eval gate --write-baseline`).
+
    (or apply
    `deploy/memrain/src/core/migrations-down/120_memrain_rename.down.sql` with
    `psql -1 -f`). It refuses, and changes nothing, if 120 is not the latest

@@ -8,8 +8,8 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { Engine } from "../src/core/engine/interface.ts";
-import { revertMigration, runMigrations } from "../src/core/migrate.ts";
-import { ENGINES, rolledBack, seedLegacy, type Db } from "./helpers/migration-120.ts";
+import { revertMigration } from "../src/core/migrate.ts";
+import { ENGINES, migrateTo120, rolledBack, seedLegacy, type Db } from "./helpers/migration-120.ts";
 
 async function v1163Paths(tx: Engine): Promise<unknown> {
   const out: Record<string, unknown> = {};
@@ -147,7 +147,7 @@ for (const { name, open } of ENGINES) {
     });
 
     it("gives the same results after 120 and after 120's down", async () => {
-      await runMigrations(db.engine);
+      await migrateTo120(db.engine);
       expect(await rolledBack(db.engine, v1163Paths)).toEqual(at119);
       await revertMigration(db.engine, 120);
       expect(await rolledBack(db.engine, v1163Paths)).toEqual(at119);

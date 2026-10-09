@@ -8,14 +8,14 @@
  * PGLite, and on Postgres with psql when MEMRAIN_TEST_POSTGRES_URL is set.
  */
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { runMigrations, revertMigration } from "../src/core/migrate.ts";
+import { revertMigration, runMigrations } from "../src/core/migrate.ts";
 import { Storage } from "../src/core/storage.ts";
 import { OAuthProvider } from "../src/core/oauth-provider.ts";
 import type { loadConfig } from "../src/core/config.ts";
 import { MAINTENANCE_ENV, resolveQuiescence } from "../src/core/quiescence.ts";
 import { bootTokenSweep, startBackgroundWork, type BackgroundDeps } from "../src/commands/serve.ts";
 import { setSpendLedgerEngine } from "../src/core/budget.ts";
-import { changedKeys, ENGINES, seedLegacy, type Db } from "./helpers/migration-120.ts";
+import { changedKeys, ENGINES, migrateTo120, seedLegacy, type Db } from "./helpers/migration-120.ts";
 
 for (const { name, open } of ENGINES) {
   describe(`migration 120 up → down is an identity (${name})`, () => {
@@ -37,22 +37,24 @@ for (const { name, open } of ENGINES) {
     });
 
     it("up → down restores every line; up → down → up differs from the first up only in migrations", async () => {
-      await runMigrations(db.engine);
+      await migrateTo120(db.engine);
       const up1 = await db.manifest();
       expect(changedKeys(base, up1).length).toBe(4);
       await revertMigration(db.engine, 120);
       expect(await db.manifest()).toBe(base);
-      await runMigrations(db.engine);
+      await migrateTo120(db.engine);
       expect(changedKeys(up1, await db.manifest())).toEqual(["table\tmigrations"]);
     });
 
     it("up → down through the down file alone (psql -1 -f) restores every line", async () => {
-      await runMigrations(db.engine);
+      await migrateTo120(db.engine);
       await db.runDownFile();
       expect(await db.manifest()).toBe(base);
     });
 
     it("a boot in maintenance between up and down writes nothing", async () => {
+      // Every shipped migration, 120 and the later ones (each with its own
+      // down, reverted below before 120's), so the boot has none left to apply.
       await runMigrations(db.engine);
       const up = await db.manifest();
 
@@ -89,12 +91,13 @@ for (const { name, open } of ENGINES) {
       }
       expect(await db.manifest()).toBe(up);
 
+      await revertMigration(db.engine, 121);
       await revertMigration(db.engine, 120);
       expect(await db.manifest()).toBe(base);
     });
 
     it("control: the boot token sweep would change the fixture", async () => {
-      await runMigrations(db.engine);
+      await migrateTo120(db.engine);
       const up = await db.manifest();
       const err = console.error;
       console.error = () => {};

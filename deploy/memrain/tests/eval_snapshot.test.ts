@@ -7,9 +7,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { recordEvalSnapshot, latestEvalSnapshot } from "../src/core/eval-snapshot.ts";
-import type { ReplayReport } from "../src/core/eval-replay.ts";
+import {
+  recordEvalSnapshot,
+  recordFailedEvalSnapshot,
+  latestEvalSnapshot,
+} from "../src/core/eval-snapshot.ts";
+import { recordQuery, type replayAll, type ReplayReport } from "../src/core/eval-replay.ts";
 import { evalTrendDetail } from "../src/commands/doctor.ts";
+import { probeOnce } from "../src/commands/eval-probe.ts";
+import { collectEvalBlind } from "../src/core/advisor/collectors.ts";
+import type { AdvisorContext } from "../src/core/advisor/types.ts";
+import { revertMigration, runMigrations } from "../src/core/migrate.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -35,9 +43,21 @@ function report(overrides: Partial<ReplayReport> = {}): ReplayReport {
     hitRate: 0.8,
     meanRRCi95: { lo: 0.21, hi: 0.63 },
     hitRateCi95: { lo: 0.5, hi: 1 },
+    replayedIdsSha256: "a".repeat(64),
+    unscored: { count: 1, returnedAny: 1 },
     perQuery: [],
     ...overrides,
   };
+}
+
+async function seedQueries(n: number): Promise<void> {
+  for (let i = 0; i < n; i++) {
+    await recordQuery(storage.engine(), { id: `q${i}`, query: `query ${i}`, tag: "good", expectedDocId: `d${i}` });
+  }
+}
+
+function replayStub(fn: (limit: number | undefined) => Promise<ReplayReport>): typeof replayAll {
+  return (_s, opts) => fn(opts?.limit);
 }
 
 describe("eval snapshots", () => {
@@ -87,11 +107,109 @@ describe("eval snapshots", () => {
     expect(latest?.scored).toBe(0);
   });
 
+  it("records the replayed-set hash and the unscored count in detail", async () => {
+    await recordEvalSnapshot(storage.engine(), report());
+    const latest = await latestEvalSnapshot(storage.engine());
+    expect(latest?.status).toBe("ok");
+    expect(latest?.detail["replayed_ids_sha256"]).toBe("a".repeat(64));
+    expect(latest?.detail["unscored"]).toEqual({ count: 1, returnedAny: 1 });
+  });
+
   it("round-trips the bootstrap intervals through detail", async () => {
     await recordEvalSnapshot(storage.engine(), report());
     const latest = await latestEvalSnapshot(storage.engine());
     expect(latest?.detail["mean_rr_ci95"]).toEqual({ lo: 0.21, hi: 0.63 });
     expect(latest?.detail["hit_rate_ci95"]).toEqual({ lo: 0.5, hi: 1 });
+  });
+});
+
+describe("probe run status", () => {
+  it("records ok when the replay covered the whole eval set", async () => {
+    await seedQueries(2);
+    const out = await probeOnce(storage, {}, replayStub(async () => report({ totalQueries: 2 })));
+    expect(out.status).toBe("ok");
+    expect((await latestEvalSnapshot(storage.engine()))?.status).toBe("ok");
+  });
+
+  it("records capped when the limit left part of the eval set out", async () => {
+    await seedQueries(3);
+    let seenLimit: number | undefined;
+    const out = await probeOnce(
+      storage,
+      { limit: 2 },
+      replayStub(async (limit) => {
+        seenLimit = limit;
+        return report({ totalQueries: 2 });
+      }),
+    );
+    expect(seenLimit).toBe(2);
+    expect(out.status).toBe("capped");
+    const latest = await latestEvalSnapshot(storage.engine());
+    expect(latest?.status).toBe("capped");
+    expect(evalTrendDetail(latest!)).toContain("capped");
+  });
+
+  it("counts the eval set before the replay, so a mid-run capture is not a cap", async () => {
+    await seedQueries(2);
+    const out = await probeOnce(
+      storage,
+      {},
+      replayStub(async () => {
+        await recordQuery(storage.engine(), { id: "late", query: "late", tag: "good" });
+        return report({ totalQueries: 2 });
+      }),
+    );
+    expect(out.status).toBe("ok");
+  });
+
+  it("records an error row and rethrows when the replay throws", async () => {
+    await expect(
+      probeOnce(storage, {}, replayStub(async () => {
+        throw new Error("bedrock unreachable");
+      })),
+    ).rejects.toThrow("bedrock unreachable");
+    const latest = await latestEvalSnapshot(storage.engine());
+    expect(latest?.status).toBe("error");
+    expect(latest?.detail["error"]).toBe("bedrock unreachable");
+    expect(evalTrendDetail(latest!)).toContain("FAILED");
+    expect(evalTrendDetail(latest!)).not.toContain("EMPTY");
+  });
+
+  it("does not read a failed run as an empty eval set", async () => {
+    await recordFailedEvalSnapshot(storage.engine(), new Date().toISOString(), "boom");
+    const findings = await collectEvalBlind.collect({
+      engine: storage.raw(),
+      version: "1.0.0",
+      now: new Date(),
+    } as AdvisorContext);
+    expect(findings).toEqual([]);
+  });
+});
+
+describe("migration 121", () => {
+  it("reverts to the pre-status table, dropping failed rows, and re-applies", async () => {
+    const e = storage.engine();
+    await recordEvalSnapshot(e, report());
+    await recordFailedEvalSnapshot(e, new Date().toISOString(), "boom");
+    await expect(
+      e.query(`INSERT INTO eval_snapshots (status) VALUES ('weird')`),
+    ).rejects.toThrow();
+
+    await revertMigration(e, 121);
+    const cols = await e.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'eval_snapshots' AND column_name = 'status'`,
+    );
+    expect(cols.rows).toEqual([]);
+    const rows = await e.query<{ n: number }>(`SELECT count(*)::int AS n FROM eval_snapshots`);
+    expect(rows.rows[0]!.n).toBe(1);
+
+    // A reader on the reverted (pre-121) table still gets the latest row.
+    expect((await latestEvalSnapshot(e))?.status).toBe("ok");
+
+    const again = await runMigrations(e);
+    expect(again.applied.map((m) => m.id)).toEqual([121]);
+    expect((await latestEvalSnapshot(e))?.status).toBe("ok");
   });
 });
 

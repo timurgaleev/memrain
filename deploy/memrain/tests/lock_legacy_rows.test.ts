@@ -7,11 +7,11 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { hostname } from "node:os";
-import { revertMigration, runMigrations } from "../src/core/migrate.ts";
+import { revertMigration } from "../src/core/migrate.ts";
 import { CYCLE_LOCK_ID, reapDeadHolderLocks, tryAcquireDbLock } from "../src/core/db-lock.ts";
 import { quiescentFailures, readQuiescence } from "../src/commands/status.ts";
 import { MAINTENANCE_ENV } from "../src/core/quiescence.ts";
-import { ENGINES, seedLegacy, type Db } from "./helpers/migration-120.ts";
+import { ENGINES, migrateTo120, seedLegacy, type Db } from "./helpers/migration-120.ts";
 
 const lockLines = (out: string) =>
   out.split("\n").filter((l) => /^table\t(?:cycle_locks|worker_lock)\t/.test(l));
@@ -31,11 +31,11 @@ for (const { name, open } of ENGINES) {
     it("migration 120 and its down delete no lock row", async () => {
       const before = lockLines(await db.manifest());
       expect(before.length).toBe(2);
-      await runMigrations(db.engine);
+      await migrateTo120(db.engine);
       expect(lockLines(await db.manifest())).toEqual(before);
       await revertMigration(db.engine, 120);
       expect(lockLines(await db.manifest())).toEqual(before);
-      await runMigrations(db.engine);
+      await migrateTo120(db.engine);
     });
 
     it("a stale memex-cycle row survives a new cycle lock and the reaper", async () => {

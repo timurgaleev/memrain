@@ -113,8 +113,13 @@ function snapshotCi(detail: Record<string, unknown>, key: string): string {
  * probe stored bootstrap intervals render exactly as they always did.
  */
 export function evalTrendDetail(
-  snap: Pick<EvalSnapshotRow, "ran_at" | "total_queries" | "scored" | "mean_rr" | "hit_rate" | "detail">,
+  snap: Pick<EvalSnapshotRow, "ran_at" | "total_queries" | "scored" | "mean_rr" | "hit_rate" | "detail"> &
+    Partial<Pick<EvalSnapshotRow, "status">>,
 ): string {
+  if (snap.status === "error") {
+    const err = typeof snap.detail?.["error"] === "string" ? snap.detail["error"] : "unknown error";
+    return `last probe ${snap.ran_at}: FAILED — nothing measured (${err})`;
+  }
   // A zero-query replay scores 0/0. Rendering that as mean_rr=0.000 reads as
   // "measured, and bad" when the truth is "not measured" — the advisor's
   // eval_set_empty finding carries the fix.
@@ -126,7 +131,8 @@ export function evalTrendDetail(
   return `last probe ${snap.ran_at}: mean_rr=${snap.mean_rr.toFixed(3)}` +
     `${snapshotCi(detail, "mean_rr_ci95")} ` +
     `hit_rate=${snap.hit_rate.toFixed(3)}${snapshotCi(detail, "hit_rate_ci95")} ` +
-    `(scored ${snap.scored}/${snap.total_queries})`;
+    `(scored ${snap.scored}/${snap.total_queries})` +
+    (snap.status === "capped" ? " capped: part of the eval set was not replayed" : "");
 }
 
 /**

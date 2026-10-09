@@ -1,7 +1,8 @@
 /**
  * Eval upgrades — config-vs-config A/B, run-all per-mode aggregate, and the
  * regression gate. Hermetic: the searchFn seam returns canned rankings, so
- * no Bedrock and no corpus needed (the storage handle is just plumbing).
+ * no Bedrock is needed. The brain holds only the documents the qrels name,
+ * because eval refuses to score qrels whose targets are gone.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
@@ -13,9 +14,12 @@ import {
   evalRun,
   loadQrels,
   runConfigHash,
+  EVAL_SCORING_VERSION,
   type EvalOptions,
 } from "../src/commands/eval.ts";
 import { Storage } from "../src/core/storage.ts";
+import { writeDocumentTransaction } from "../src/core/indexer-tx.ts";
+import { deterministicEmbed } from "./det-embed.ts";
 import {
   runEvalRunAll,
   runEvalCompareCmd,
@@ -39,8 +43,21 @@ function capture(): { lines: string[]; restore: () => void } {
   return { lines, restore: () => (console.log = orig) };
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   mkdirSync(cfgDir, { recursive: true });
+  const seed = new Storage({ dbPath: join(cfgDir, "brain.pglite") });
+  await seed.init();
+  try {
+    for (const path of ["notes/a.md", "notes/b.md"]) {
+      await writeDocumentTransaction(
+        seed,
+        { documentId: path, sourcePath: path, title: path, frontmatter: {}, embeddingModel: "deterministic-test" },
+        [{ text: path, entities: [], embedding: deterministicEmbed(path) }],
+      );
+    }
+  } finally {
+    await seed.close();
+  }
   writeFileSync(
     cfgPath,
     JSON.stringify({
@@ -406,5 +423,141 @@ describe("gate intervals", () => {
     const mismatch = await gate(mismatchPath, true);
     expect(mismatch.code).toBe(0);
     expect(mismatch.out.qrels_changed).toBe(true);
+  });
+});
+
+describe("scoring version", () => {
+  async function gateAgainst(baseline: Record<string, unknown>) {
+    const path = join(tmp, `baseline-sv-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(path, JSON.stringify(baseline));
+    const out = capture();
+    const errLines: string[] = [];
+    const origErr = console.error;
+    console.error = (...a: unknown[]) => errLines.push(a.map(String).join(" "));
+    let code: number;
+    try {
+      code = await runEvalGate({ baseline: path, qrelsPath, configPath: cfgPath, searchFn: cannedSearch(true) });
+    } finally {
+      out.restore();
+      console.error = origErr;
+    }
+    return { code, out: JSON.parse(out.lines.join("\n")), err: errLines.join("\n") };
+  }
+  // Unreachable under today's scoring: these means fail any comparable gate.
+  const high = { saved_at: "", k: 5, mean_recall: 9, mean_mrr: 9, hit_rate: 1 };
+
+  it("asks for a re-baseline instead of judging a baseline from the old formula", async () => {
+    for (const legacy of [high, { ...high, scoring_version: 1 }]) {
+      const r = await gateAgainst(legacy);
+      expect(r.code).toBe(0);
+      expect(r.out.scoring_changed).toBe(true);
+      expect(r.out.rebaseline).toBe(true);
+      expect(r.err).toContain("Re-baseline");
+    }
+  });
+
+  it("judges a baseline scored under the current version", async () => {
+    const r = await gateAgainst({ ...high, scoring_version: EVAL_SCORING_VERSION });
+    expect(r.code).toBe(1);
+    expect(r.out.scoring_changed).toBeUndefined();
+  });
+
+  it("records the scoring version in a written baseline", async () => {
+    const path = join(tmp, "baseline-sv-written.json");
+    const out = capture();
+    try {
+      await runEvalGate({ baseline: path, writeBaseline: true, qrelsPath, configPath: cfgPath, searchFn: cannedSearch(true) });
+    } finally {
+      out.restore();
+    }
+    expect(JSON.parse(readFileSync(path, "utf-8")).scoring_version).toBe(EVAL_SCORING_VERSION);
+  });
+});
+
+describe("stale qrels", () => {
+  function captureErr(): { lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => lines.push(a.map(String).join(" "));
+    return { lines, restore: () => (console.error = orig) };
+  }
+
+  it("refuses with exit 2, before searching, when most expected paths are gone", async () => {
+    const stalePath = join(tmp, "qrels-stale.json");
+    writeFileSync(
+      stalePath,
+      JSON.stringify({
+        queries: [
+          { id: "s1", query: "alpha", expected_paths: ["notes/a.md", "/vault/gone-1.md"] },
+          { id: "s2", query: "beta", expected_paths: ["/vault/gone-2.md"] },
+        ],
+      }),
+    );
+    let searched = 0;
+    const counting: SearchFn = async () => {
+      searched++;
+      return [];
+    };
+    const err = captureErr();
+    const out = capture();
+    let runCode: typeof process.exitCode;
+    let gateCode: number;
+    try {
+      await runEval({ qrelsPath: stalePath, configPath: cfgPath, searchFn: counting });
+      runCode = process.exitCode;
+      process.exitCode = 0;
+      gateCode = await runEvalGate({
+        baseline: join(tmp, "baseline-stale.json"),
+        qrelsPath: stalePath,
+        configPath: cfgPath,
+        searchFn: counting,
+      });
+    } finally {
+      out.restore();
+      err.restore();
+      process.exitCode = 0;
+    }
+    const out2 = capture();
+    const err2 = captureErr();
+    let runAllCode: number;
+    try {
+      runAllCode = await runEvalRunAll({
+        modes: ["conservative"],
+        qrelsPath: stalePath,
+        out: join(tmp, "stale-results.jsonl"),
+        configPath: cfgPath,
+        searchFn: counting,
+      });
+    } finally {
+      out2.restore();
+      err2.restore();
+    }
+    expect(runAllCode).toBe(2);
+    expect(existsSync(join(tmp, "stale-results.jsonl"))).toBe(false);
+    expect(runCode).toBe(2);
+    expect(gateCode).toBe(2);
+    expect(searched).toBe(0);
+    expect(err.lines.join("\n")).toContain("2 of 3 expected paths");
+  });
+
+  it("still scores when exactly half of the expected paths are present", async () => {
+    const halfPath = join(tmp, "qrels-half.json");
+    writeFileSync(
+      halfPath,
+      JSON.stringify({
+        queries: [{ id: "h1", query: "alpha", expected_paths: ["notes/a.md", "/vault/gone.md"] }],
+      }),
+    );
+    const out = capture();
+    let runCode: typeof process.exitCode;
+    try {
+      await runEval({ qrelsPath: halfPath, configPath: cfgPath, searchFn: cannedSearch(true) });
+      runCode = process.exitCode;
+    } finally {
+      out.restore();
+      process.exitCode = 0;
+    }
+    expect(runCode).not.toBe(2);
+    expect(JSON.parse(out.lines.join("\n")).meanRecall).toBe(0.5);
   });
 });

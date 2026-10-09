@@ -6,10 +6,10 @@
  * MEMRAIN_TEST_POSTGRES_URL is set.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { runMigrations } from "../src/core/migrate.ts";
 import {
   changedKeys,
   ENGINES,
+  migrateTo120,
   seedLegacy,
   withoutExpected,
   type Db,
@@ -38,7 +38,7 @@ for (const { name, open } of ENGINES) {
       await seedLegacy(db.engine);
       pre = await db.manifest();
       legacyDefs = await functionDefs(db);
-      const r = await runMigrations(db.engine);
+      const r = await migrateTo120(db.engine);
       expect(r.applied).toEqual([{ id: 120, name: "memrain_rename" }]);
       post = await db.manifest();
     });

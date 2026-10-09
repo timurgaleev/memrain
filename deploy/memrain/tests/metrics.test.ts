@@ -112,6 +112,13 @@ describe("duplicate ids do not inflate scores", () => {
   it("nDCG does not double-count a repeated relevant id", () => {
     expect(ndcgAtK(["a", "a"], binaryGrades(["a"]), 2)).toBe(1); // a at rank 1, dup ignored
   });
+  it("reciprocal rank counts distinct ids, so a repeated miss does not push the hit down", () => {
+    expect(reciprocalRank(["b", "b", "a"], rel("a"))).toBe(0.5); // not 1/3
+  });
+  it("two chunks of one relevant page are one hit for recall and rank", () => {
+    expect(recallAtK(["a", "a", "b"], rel("a", "c"), 3)).toBe(0.5);
+    expect(reciprocalRank(["a", "a", "b"], rel("a", "c"))).toBe(1);
+  });
 });
 
 describe("top1Stable", () => {
