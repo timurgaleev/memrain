@@ -72,6 +72,7 @@ import { runCapture } from "./commands/capture.ts";
 import { runTranscripts } from "./commands/transcripts.ts";
 import { runConnectors } from "./commands/connectors.ts";
 import { runQuarantine, type QuarantineSub } from "./commands/quarantine.ts";
+import { runSecretsAudit } from "./commands/secrets.ts";
 import {
   runEvalRunAll,
   runEvalCompareCmd,
@@ -283,6 +284,9 @@ function printUsage(): void {
   console.log("  quarantine clear <slug|path> [--force]");
   console.log("  quarantine scan [--limit N] [--apply]");
   console.log("                               operator surface for the content-sanity gate");
+  console.log("  secrets audit [--source ID] [--kinds K,K] [--limit N] [--json] [--apply --yes]");
+  console.log("                               rescan stored text with the current secret rules; dry run");
+  console.log("                               by default, never prints a value");
   console.log("  version | --version          print build version (git tag+sha, or 'dev')");
   console.log("  --help                       show this help");
 }
@@ -1636,6 +1640,28 @@ async function main(argv: readonly string[]): Promise<number> {
       }
       if (flags.has("--json")) opts.json = true;
       return await runQuarantine(opts);
+    }
+    case "secrets": {
+      if (positional[0] !== "audit") {
+        console.error("memrain secrets: subcommand required (audit)");
+        return 1;
+      }
+      const opts: Parameters<typeof runSecretsAudit>[0] = {
+        apply: flags.has("--apply"),
+        yes: flags.has("--yes"),
+        json: flags.has("--json"),
+      };
+      const src = values.get("--source");
+      if (src) opts.sourceId = src;
+      const kinds = values.get("--kinds");
+      if (kinds) opts.kinds = kinds.split(",").map((k) => k.trim()).filter(Boolean);
+      const limitStr = values.get("--limit");
+      if (limitStr !== undefined) {
+        const n = Number(limitStr);
+        if (!Number.isInteger(n) || n < 1) throw new Error(`memrain secrets audit: invalid --limit ${limitStr}`);
+        opts.limit = n;
+      }
+      return await runSecretsAudit(opts);
     }
     case "version":
     case "--version":

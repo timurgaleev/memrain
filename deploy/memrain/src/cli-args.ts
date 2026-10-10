@@ -111,7 +111,7 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--expected-doc", "--expected-revision", "--family",
   "--federated-read", "--file", "--format",
   "--filter", "--from", "--grant", "--grant-types", "--host", "--id", "--indexed-policy",
-  "--input", "--k", "--keep-days", "--kind", "--label", "--limit", "--max-drop",
+  "--input", "--k", "--keep-days", "--kind", "--kinds", "--label", "--limit", "--max-drop",
   "--max-cost-usd", "--max-jobs", "--max-pages", "--max-retries", "--max-usd",
   "--min-confidence", "--min-recall", "--model", "--modes", "--notes",
   "--older-than-days", "--out", "--path-prefix", "--paths", "--pattern",
@@ -309,6 +309,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
     "quarantine",
     new Set(["--apply", "--force", "--include-flagged", "--json", "--limit"]),
   ],
+  ["secrets", new Set(["--apply", "--json", "--kinds", "--limit", "--source", "--yes"])],
   [
     "transcripts",
     new Set([
@@ -338,7 +339,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
       "connectors", "migrate-engine", "reindex", "skillify", "transcripts",
     ]),
   ],
-  ["--apply", new Set(["eval-prune", "page-retype", "quarantine", "search"])],
+  ["--apply", new Set(["eval-prune", "page-retype", "quarantine", "search", "secrets"])],
   ["--fix", new Set(["lint"])],
 ]);
 

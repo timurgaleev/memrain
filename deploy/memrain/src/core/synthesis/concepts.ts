@@ -18,6 +18,7 @@
 import type { Engine } from "../engine/interface.ts";
 import type { Storage } from "../storage.ts";
 import { putPage } from "../pages.ts";
+import { guardFields } from "../secret-scan.ts";
 import { resolveLlmFn, type LlmFn } from "../llm/haiku.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
 import { BudgetTracker } from "../budget.ts";
@@ -259,8 +260,10 @@ export async function synthesizeConceptsPhase(
       }
     }
 
-    const title = (group.slug.split("/").pop() ?? group.slug).replace(/-/g, " ");
+    let title = (group.slug.split("/").pop() ?? group.slug).replace(/-/g, " ");
     try {
+      // The narrative is model output over atom text, which can carry a credential.
+      ({ title, narrative } = await guardFields(engine, group.slug, null, "concept", { title, narrative }));
       await engine.transaction(async (tx) => {
         await tx.query(
           `INSERT INTO synth_concepts (concept_slug, title, narrative, tier, atom_count, generated_at, model_id)

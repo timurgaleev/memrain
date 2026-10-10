@@ -26,7 +26,7 @@ UPGRADING.md|COMPAT-DOC|38|the upgrade guide for installs from before the rename
 deploy/cloudflared/docs/OPERATIONS.md|COMPAT-DOC|2|tunnel origins through the legacy network alias
 deploy/cloudflared/docs/README.md|COMPAT-DOC|1|tunnel origins through the legacy network alias
 deploy/deploy.sh|COMPAT|9|legacy overlay and secrets-file preflights, MEMEX_ fallbacks
-deploy/docker-compose.yml|COMPAT|100|MEMEX_* fallbacks, the legacy config bind, network alias and prefix default
+deploy/docker-compose.yml|COMPAT|101|MEMEX_* fallbacks, the legacy config bind, network alias and prefix default
 deploy/lib/legacy-guard.sh|COMPAT|15|refuses to run beside a pre-rename install
 deploy/memrain/.gitignore|COMPAT|1|the legacy local data dir
 deploy/memrain/docs/ARCHITECTURE.md|COMPAT-DOC|3|legacy config dir and yml fallback

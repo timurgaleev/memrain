@@ -51,6 +51,55 @@ scope. Examples:
 - `MEMRAIN_PUBLIC_WRITE` defaults to `0` — a fresh clone cannot accept
   mutating MCP traffic without an explicit opt-in.
 
+## If a secret reached the brain
+
+Every write path redacts credential-shaped text before it is stored: vendor
+key prefixes, Memrain's own tokens, JWTs, PEM private keys, passwords inside
+URLs, HTTP Basic and Bearer credentials, and high-entropy `KEY=`/`TOKEN=`/
+`PASSWORD=` assignments. Source code is scanned the same way when it is
+indexed. No pattern set is complete, and text stored before a rule existed
+keeps what it carried. If you find a live credential in the brain:
+
+1. **Rotate the credential first.** Anything a connected agent could read is
+   exposed, whatever happens to the stored copy.
+2. **Find every stored copy**, on the host:
+
+   ```bash
+   memrain secrets audit            # dry run; add --json for the full list
+   ```
+
+   It rescans pages, page versions, facts, timeline events, synthesis rows,
+   chunks and raw data with the current rules and lists each hit by store,
+   row, field, kind, fingerprint and line. It never prints the value. The
+   fingerprint is the one in the `[REDACTED:<kind>:<fingerprint>]` marker.
+   It does not read slugs, document titles and frontmatter, the query cache
+   or the ingest log; check those by hand if the value could be there.
+3. **Redact them:**
+
+   ```bash
+   memrain secrets audit --apply --yes
+   ```
+
+   A live page gets a new version written by `secrets-audit` and is mirrored
+   into search again. Older versions are rewritten in place and stamped
+   `scrubbed_at`, so their `hash_new` no longer matches their body. Every
+   other row is rewritten in place, and only if it still holds the text that
+   was scanned; a row that changed in between is reported, so run the audit
+   again. Each rewrite leaves a `secret-audit-redacted` ingest-log row with
+   kinds and fingerprints only.
+4. **Rebuild what the audit cannot rewrite.** If code chunks were listed,
+   run `memrain reindex --source code --all`. A rewritten chunk keeps the
+   embedding computed from its old text until it is embedded again.
+5. **Check the other copies.** Database backups and snapshots, the vault or
+   repository the text came from (and its git history), and any export
+   directory still hold the value.
+6. `memrain doctor` reports `secret-exposure`: a warning while the brain has
+   never been audited, the last audit used older scanner rules or is more
+   than 30 days old, or its hits were never redacted.
+
+Add a fingerprint to `MEMRAIN_SECRET_SCAN_ALLOW` only for a value you have
+confirmed is not a credential.
+
 ## Known accepted risks
 
 These are documented choices, not bugs — report only if you've found a

@@ -64,6 +64,7 @@ describe("doctor categorize", () => {
       "queue-health",
       "runtime-config-legacy-rows",
       "schema-version",
+      "secret-exposure",
       "source-health",
       "source-routing-health",
       "stale-locks",

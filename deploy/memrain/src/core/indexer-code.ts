@@ -39,6 +39,7 @@ import {
 } from "./indexer-tx.ts";
 import { normalizeSourcePath } from "./indexer.ts";
 import { guardLocalIndex, type RereadGuard } from "./sources.ts";
+import { auditSecrets, guardSecrets, guardWrite } from "./secret-scan.ts";
 
 export interface IndexCodeResult extends IndexTxResult {
   /**
@@ -62,6 +63,11 @@ export interface IndexCodeInput {
   sourceId?: string | null;
   /** See DocumentWrite.expectOwner — the code sweep only. */
   expectOwner?: string | null;
+}
+
+/** `MEMRAIN_CODE_SECRET_SCAN=0` indexes source text unscanned. On by default. */
+function codeSecretScanOn(): boolean {
+  return !["0", "false", "off", "no"].includes((process.env.MEMRAIN_CODE_SECRET_SCAN ?? "").trim().toLowerCase());
 }
 
 function shortHash(s: string): string {
@@ -161,8 +167,20 @@ export async function indexCodeDocument(
     };
   }
 
+  // A key committed to a repository is still a key: redact it before the
+  // parse, line for line, so every symbol's start/end line still points at the
+  // file on disk.
+  const secrets = codeSecretScanOn()
+    ? await guardWrite(storage.engine(), input.sourcePath, input.sourceId ?? null, () =>
+        guardSecrets(input.text, input.sourcePath, { preserveLines: true }))
+    : { text: input.text, findings: [] };
+  if (secrets.findings.length > 0) {
+    await auditSecrets(storage.engine(), secrets.findings, input.sourcePath, input.sourceId ?? null);
+  }
+  const text = secrets.text;
+
   const parsed = await chunkCodeOrDegrade(
-    input.text,
+    text,
     input.sourcePath,
     language,
   );
@@ -232,8 +250,8 @@ export async function indexCodeDocument(
   // separators. Line stamps for the fallback: startLine 1,
   // endLine = the window's own line count (window offsets aren't tracked).
   // File-level imports, when present, attach to the first fallback chunk.
-  if (parsed.symbols.length === 0 && input.text.trim().length > 0) {
-    const windows = chunkPlainText(input.text);
+  if (parsed.symbols.length === 0 && text.trim().length > 0) {
+    const windows = chunkPlainText(text);
     for (let i = 0; i < windows.length; i++) {
       chunkWrites.push({
         text: windows[i]!,

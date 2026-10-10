@@ -111,6 +111,7 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "config": subs("show", "get", "set", "unset"),
   "capture": free,
   "quarantine": subs("list", "clear", "scan"),
+  "secrets": subs("audit"),
   "version": bare,
   "help": bare,
 };

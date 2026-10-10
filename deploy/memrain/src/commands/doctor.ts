@@ -55,6 +55,7 @@ import {
 } from "../core/doctor-ops.ts";
 import { checkConnectorHealth } from "../core/connectors/health.ts";
 import { checkEmbedBacklog } from "../core/doctor-embed.ts";
+import { checkSecretExposure } from "../core/doctor-secrets.ts";
 import {
   checkFederationHealth,
   checkOauthClientHealth,
@@ -425,6 +426,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["code-grammars", checkGrammars],
       ["connector-health", checkConnectorHealth],
       ["embed-backlog", checkEmbedBacklog],
+      ["secret-exposure", checkSecretExposure],
     ] as const) {
       try {
         const r = await probe(storage.raw());

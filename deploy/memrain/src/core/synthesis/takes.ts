@@ -39,6 +39,8 @@ import { resolveTake } from "./takes-canon.ts";
 import { normalizeScope } from "../source-scope.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
 import { clearSynthFailure, filterBackedOff, recordSynthFailure } from "./synth-failures.ts";
+import { quarantineFilterFragment } from "../quarantine.ts";
+import { guardFields } from "../secret-scan.ts";
 
 export const PROPOSE_TAKES_PROMPT_VERSION = "v1-nova";
 
@@ -359,6 +361,7 @@ async function discoverTakeDocuments(
        FROM documents d
        JOIN chunks c ON c.document_id = d.id
       WHERE d.deleted_at IS NULL
+        AND ${quarantineFilterFragment("d")}
       GROUP BY d.id
       ORDER BY d.updated_at DESC`,
   );
@@ -570,7 +573,15 @@ export async function proposeTakesPhase(
       continue;
     }
 
-    for (const take of takes) {
+    for (const parsedTake of takes) {
+      // The model can lift a credential out of its source text into a claim.
+      let take: typeof parsedTake;
+      try {
+        take = { ...parsedTake, ...(await guardFields(engine, doc.id, null, "take claim", { claim_text: parsedTake.claim_text })) };
+      } catch (e) {
+        result.errors.push(`${doc.id} take write: ${e instanceof Error ? e.message : String(e)}`);
+        continue;
+      }
       const key = takeKey(doc.id, doc.contentHash16, promptVersion, take.claim_text);
       // Embed the claim so `think`'s take VECTOR stream can rank it (opt-in;
       // fail-soft — an embed error leaves the column NULL, keyword recall intact).
@@ -1096,13 +1107,15 @@ export async function gradeTakesPhase(
 
     const sig = evidenceSignature(evidence, modelId);
     try {
+      // The judge quotes its evidence, and evidence is corpus text.
+      const { reasoning } = await guardFields(engine, `take:${take.id}`, null, "take grade", { reasoning: v.reasoning });
       const { rows: written } = await engine.query<{ id: number }>(
         `INSERT INTO synth_take_grades
            (take_id, prompt_version, evidence_signature, verdict, confidence, reasoning, model_id, grader_model, judge_count)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (take_id, prompt_version, evidence_signature) DO NOTHING
          RETURNING id`,
-        [take.id, promptVersion, sig, v.verdict, v.confidence, v.reasoning, modelId, graderModel, judgeCount],
+        [take.id, promptVersion, sig, v.verdict, v.confidence, reasoning, modelId, graderModel, judgeCount],
       );
       if (written.length > 0) result.gradesWritten += 1;
       else result.cacheHits += 1;
