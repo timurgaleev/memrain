@@ -463,6 +463,8 @@ export const OPERATIONS: readonly Operation[] = [
   {
     name: "page_edit",
     scope: "write",
+    // The diff quotes the stored lines around the edit.
+    outputRedaction: "retrieval",
     description:
       "Change part of an existing page without resending it: apply 1 to 50 exact-text replacements `{old_text, new_text}` to its markdown_body, in order, each to the text the previous one left. Each old_text must occur exactly once in the page (copy it from page_get, whitespace included); otherwise nothing is written and the error says which edit failed (`edit_no_match`, `edit_ambiguous_match`). The facts and takes fences are protected: an edit that touches one, or writes a fence marker, is refused (`edit_protected_span`) — use add_fact / forget_fact and the takes tools for those. `expected_version` is required (`version` from page_get); a page that changed since is refused with `version_conflict` and its current version. Title and frontmatter are kept. Returns the new version and a unified diff of the change (cut at 8 KB, `diff_truncated`). Search sees the change as for page_put (`search_indexed`, or `search_pending` + `search_job_id`; `wait_for_index: true` to wait). WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
     params: {
@@ -893,6 +895,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_tags",
+    outputRedaction: "retrieval",
     description:
       "List a page's tags in lexical order. Empty list for an unknown or untagged page.",
     params: { slug: str(req) },

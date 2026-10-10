@@ -72,6 +72,18 @@ describe("purge_deleted_pages params", () => {
     expect(await remaining()).toEqual(["notes/a", "notes/b"]);
   });
 
+  it("refuses an admin token that holds no write source instead of purging every tenant", async () => {
+    // MEMRAIN_TENANT_FAIL_CLOSED unset: the tool gate lets this client through.
+    await deletedPage("notes/a");
+    const authInfo = { token: "tok-admin", clientId: "client-admin", scopes: ["admin"], isPublic: false };
+    for (const args of [{ slugs: ["notes/a"] }, {}]) {
+      const r = await dispatchTool(storage, { name: "purge_deleted_pages", arguments: args }, { authInfo });
+      expect(r.isError).toBe(true);
+      expect(JSON.parse(r.content[0]!.text).error).toBe("permission_denied");
+    }
+    expect(await remaining()).toEqual(["notes/a"]);
+  });
+
   it("refuses a slug list that is not all strings", async () => {
     const r = await purge({ slugs: ["notes/a", 3] });
     expect(r.isError).toBe(true);

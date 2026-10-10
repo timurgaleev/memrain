@@ -116,7 +116,7 @@ import {
 } from "../core/context/volunteer-events.ts";
 import { runAdvisor } from "../core/advisor/run.ts";
 import { getSkillDetail, listSkillCatalog } from "../core/skillpack/brain-resident.ts";
-import { boundedDiff, parsePageEdits } from "../core/page-edit.ts";
+import { pageEditResponse, parsePageEdits } from "../core/page-edit.ts";
 import { isPublicMcpToolForbidden } from "../http/public_guard.ts";
 import { describeCaller } from "./caller-capabilities.ts";
 import {
@@ -612,6 +612,7 @@ async function dispatchToolInner(
           ),
         );
       case "page_edit":
+        requireOwnWriteSource(req.name, opts.authInfo, writeSource);
         return await withWriteRequest(storage, req.name, args, writeRequestPrincipal(opts, writeSource), (receipt) =>
           callPageEdit(storage, args, {
             writeSource,
@@ -732,6 +733,7 @@ async function dispatchToolInner(
       case "whoami":
         return await callWhoami(storage, opts.authInfo, readSources, opts.isPublic ?? false);
       case "purge_deleted_pages":
+        requireOwnWriteSource(req.name, opts.authInfo, writeSource);
         return await callPurgeDeletedPages(storage, args, writeSource);
       case "query":
         return await callQuery(storage, args, readSources, isOperator, opts.embedQuery);
@@ -896,6 +898,21 @@ async function withSlugSuggestions(
   if (slugs.length === 0) return e;
   const hint = `Did you mean ${slugs.map((s) => `\`${s}\``).join(", ")}?`;
   return new PageNotFoundError(e.slug, e.suggestion ? `${hint} ${e.suggestion}` : hint);
+}
+
+/**
+ * An authenticated client with no write source is let through the tool gate
+ * while MEMRAIN_TENANT_FAIL_CLOSED is off, and then reads as unscoped — the
+ * operator's view. page_edit would write past the ownership fence and
+ * purge_deleted_pages would reap every tenant's pages, so both refuse it.
+ */
+function requireOwnWriteSource(tool: string, authInfo: AuthInfo | undefined, writeSource: string | undefined): void {
+  if (authInfo === undefined || writeSource !== undefined) return;
+  throw new OperationError(
+    "permission_denied",
+    `no write source is granted to this client for '${tool}'`,
+    "Request a token bound to a write source.",
+  );
 }
 
 /**
@@ -1717,18 +1734,9 @@ async function callPageEdit(
     ...(ctx.writeSource !== undefined ? { source_id: ctx.writeSource } : {}),
     ...(ctx.receipt !== undefined ? { receipt: ctx.receipt } : {}),
   });
-  const { edited, ...result } = r;
   const derived = await afterPageWrite(storage, r, ctx.writeSource, ctx.isPublic, "page_edit", args["wait_for_index"] === true);
-  const before = edited?.before ?? "";
-  const after = edited?.after ?? before;
   return jsonResult({
-    ok: true,
-    slug: result.slug,
-    version: result.version_n,
-    changed: result.changed,
-    edits_applied: edits.length,
-    ...boundedDiff(before, after, `${slug}.md`),
-    ...(result.secrets_found !== undefined ? { secrets_found: result.secrets_found } : {}),
+    ...pageEditResponse(r, edits.length, r.edited, r.secrets_found),
     ...derived,
   });
 }

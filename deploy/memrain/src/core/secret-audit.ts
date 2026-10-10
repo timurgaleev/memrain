@@ -447,6 +447,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
         // Echo-dictionary size when each text field was scanned: a field
         // scanned before a later field claimed a value is swept again below.
         const echoSizeAt = new Map<string, number>();
+        const jsonEchoSizeAt = new Map<string, number>();
         for (const f of spec.text) {
           const v = row[f];
           if (typeof v !== "string" || v.length === 0) continue;
@@ -458,6 +459,10 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
         for (const f of spec.json) {
           const v = parseJson(row[f]);
           if (v === null || v === undefined) continue;
+          // Taken before the walk: its strings are scanned one at a time, so a
+          // string walked before a later one in the same field claimed a value
+          // needs the second pass too.
+          jsonEchoSizeAt.set(f, echo ? echo.size : 0);
           const s = scanJson(v, f, echo, allow, highEntropy);
           if (s.hits.length > 0) next[f] = s.value;
           hits.push(...s.hits);
@@ -471,6 +476,13 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
             const s = scanText(current, f, echo, allow, highEntropy);
             if (s.hits.length > 0) next[f] = s.value;
             hits.push(...s.hits);
+          }
+          for (const [f, size] of jsonEchoSizeAt) {
+            if (echo.size === size) continue;
+            const s = scanJson(next[f] ?? parseJson(row[f]), f, echo, allow, highEntropy);
+            if (s.hits.length > 0) next[f] = s.value;
+            hits.push(...s.hits);
+            if (s.keyCollisions && !collidedFields.includes(f)) collidedFields.push(f);
           }
         }
         if (hits.length === 0) continue;

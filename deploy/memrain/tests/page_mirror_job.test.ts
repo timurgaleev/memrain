@@ -279,6 +279,27 @@ describe("an abandoned page_mirror attempt", () => {
       getHandler("page_mirror")!({ slug: "notes/midway", remote: false }, { job, signal: abort.signal }),
     ).rejects.toThrow("lost its claim");
   });
+
+  it("still takes the mirror out of a page deleted while it embeds, even when aborted", async () => {
+    _resetHandlersForTesting();
+    const abort = new AbortController();
+    let deleted = false;
+    registerPageMirrorHandler(storage, {
+      embedFn: async (t: string) => {
+        if (!deleted) {
+          deleted = true;
+          await dispatchTool(storage, { name: "page_delete", arguments: { slug: "notes/racing-abort" } });
+          abort.abort(new Error("lost its claim"));
+        }
+        return deterministicEmbed(t);
+      },
+    });
+    await putPage(storage, { slug: "notes/racing-abort", markdown_body: body("stoats") });
+    await expect(
+      getHandler("page_mirror")!({ slug: "notes/racing-abort", remote: false }, { job, signal: abort.signal }),
+    ).rejects.toThrow("lost its claim");
+    expect(await mirror("page://notes/racing-abort")).toBeNull();
+  });
 });
 
 describe("deleting a page", () => {

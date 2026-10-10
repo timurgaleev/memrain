@@ -131,6 +131,29 @@ describe("auditStoredSecrets dry run", () => {
     expect(JSON.stringify(r)).not.toContain(bearer);
   });
 
+  it("catches a bare echo inside JSON scanned before the JSON string that claimed the value", async () => {
+    const bearer = "w8Kd" + "Rt5Nq2Vb".repeat(3);
+    process.env.MEMRAIN_SECRET_SCAN_DISPOSITION = "flag";
+    // JSONB orders the shorter key first, so the bare echo is walked before the claim.
+    await putPage(storage, {
+      slug: "notes/json-echo",
+      type: "note",
+      markdown_body: "nothing here",
+      compiled_truth: { a_note: `deploy ${bearer}`, b_header: `Authorization: Bearer ${bearer}` },
+    });
+    delete process.env.MEMRAIN_SECRET_SCAN_DISPOSITION;
+    const r = await auditStoredSecrets(storage, { kinds: ["pages"] });
+    const fields = r.hits.map((h) => `${h.field}:${h.secret_kind}`).sort();
+    expect(fields).toEqual(["compiled_truth:bearer-token", "compiled_truth:bearer-token-echo"]);
+    expect(JSON.stringify(r)).not.toContain(bearer);
+
+    await auditStoredSecrets(storage, { kinds: ["pages"], apply: true, mirror });
+    const row = await storage.engine().query<{ compiled_truth: unknown }>(
+      `SELECT compiled_truth FROM pages WHERE slug = 'notes/json-echo'`,
+    );
+    expect(JSON.stringify(row.rows[0]!.compiled_truth)).not.toContain(bearer);
+  });
+
   it("caps the listed hits but keeps the counts whole", async () => {
     await seedLegacy();
     const r = await auditStoredSecrets(storage, { limit: 2 });

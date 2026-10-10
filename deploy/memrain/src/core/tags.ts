@@ -18,6 +18,7 @@
 import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { PageNotFoundError } from "./operation-error.ts";
+import { guardFields } from "./secret-scan.ts";
 
 /** Upper bound on a single normalized tag (defence vs unbounded writes).
  *  An over-limit tag is REJECTED, not truncated — truncating would collapse
@@ -58,7 +59,7 @@ export async function addTag(
   if (typeof slug !== "string" || slug.length === 0) {
     throw new Error("addTag: `slug` is required");
   }
-  const norm = requireTag(tag);
+  requireTag(tag); // fail fast on a blank or oversized tag, before the page lookup
   // Tenant scope (mig047): a scoped caller stamps its own source and may only tag
   // a page it owns.
   const scope =
@@ -83,7 +84,9 @@ export async function addTag(
   if (owner === undefined) {
     throw new PageNotFoundError(slug);
   }
-  const params: unknown[] = [slug, norm, owner];
+  // Scanned before normalizing: lowercasing hides case-sensitive key shapes.
+  const guarded = await guardFields(storage.engine(), slug, owner, `tag on page '${slug}'`, { tag });
+  const params: unknown[] = [slug, requireTag(guarded.tag), owner];
   // The conflict target folds in source_id (migration 059), so each tenant owns
   // its own (slug, tag, source_id) row.
   await storage.engine().query(

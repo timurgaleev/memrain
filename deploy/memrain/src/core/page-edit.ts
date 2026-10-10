@@ -192,15 +192,7 @@ export function applyPageEdits(body: string, edits: readonly PageEdit[]): string
   // Edits can assemble a marker no single new_text carries (two edits, or one
   // next to partial marker text): the result must hold exactly the fences the
   // page had, byte for byte.
-  const protectedText = (segs: Segment[]) => segs.filter((s) => !s.editable).map((s) => s.text);
-  let after: string[] | null;
-  try {
-    after = protectedText(bodySegments(result));
-  } catch {
-    after = null; // the edits left a stray or unbalanced marker
-  }
-  const before = protectedText(bodySegments(body));
-  if (after === null || after.length !== before.length || after.some((t, i) => t !== before[i])) {
+  if (!sameFences(body, result)) {
     throw new PageEditError(
       "edit_protected_span",
       "page_edit: the edits together would create or change a facts or takes fence",
@@ -208,6 +200,53 @@ export function applyPageEdits(body: string, edits: readonly PageEdit[]): string
     );
   }
   return result;
+}
+
+/** True when `after` holds exactly the facts and takes fences `before` has, byte for byte. */
+function sameFences(before: string, after: string): boolean {
+  const protectedText = (segs: Segment[]) => segs.filter((s) => !s.editable).map((s) => s.text);
+  let kept: string[];
+  try {
+    kept = protectedText(bodySegments(after));
+  } catch {
+    return false; // a stray or unbalanced marker
+  }
+  const had = protectedText(bodySegments(before));
+  return kept.length === had.length && kept.every((t, i) => t === had[i]);
+}
+
+/**
+ * The secret scan runs over the whole edited body, so it can rewrite text
+ * inside a fence, and the reconcile after the write would take the rewritten
+ * fence as the ledger's new truth. Refuse instead of changing a fence.
+ */
+export function assertScanKeptFences(edited: string, scanned: string): void {
+  if (scanned === edited || sameFences(edited, scanned)) return;
+  throw new PageEditError(
+    "edit_protected_span",
+    "page_edit: the page holds a credential inside a facts or takes fence, which an edit cannot rewrite",
+    "Run `memrain secrets audit` to clear the stored credential, then retry the edit.",
+  );
+}
+
+/** page_edit's response, less the search and derived-write fields. */
+export function pageEditResponse(
+  r: { slug: string; version_n: number; changed: boolean },
+  editsApplied: number,
+  edited: { before: string; after: string } | undefined,
+  secretsFound: number | undefined,
+): Record<string, unknown> {
+  const before = edited?.before ?? "";
+  const after = edited?.after ?? before;
+  return {
+    ok: true,
+    slug: r.slug,
+    version: r.version_n,
+    changed: r.changed,
+    edits_applied: editsApplied,
+    ...boundedDiff(before, after, `${r.slug}.md`),
+    ...(secretsFound !== undefined ? { secrets_found: secretsFound } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------

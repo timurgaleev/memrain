@@ -215,12 +215,12 @@ describe("write guards", () => {
       { authInfo: auth(B, { allowedSources: [A] }) },
     );
     expect(payload(writeOnly).error).toBe("not_found");
-    // Reads A, no write source.
+    // Reads A, no write source: refused before any page is looked up.
     const noWriteSource = await edit(
       { slug: "team-b/doc", expected_version: 1, edits: [{ old_text: "secret", new_text: "public" }] },
       { authInfo: auth(A, { sourceId: undefined }) },
     );
-    expect(payload(noWriteSource).error).toBe("not_found");
+    expect(payload(noWriteSource).error).toBe("permission_denied");
     expect((await getPage(storage, "team-b/doc"))!.markdown_body).toBe("secret plan");
   });
 
@@ -273,5 +273,149 @@ describe("diff", () => {
     expect(d.diff_truncated).toBe(true);
     expect(Buffer.byteLength(d.diff)).toBeLessThanOrEqual(PAGE_EDIT_DIFF_MAX_BYTES);
     expect(d.diff.endsWith("\n")).toBe(true);
+  });
+});
+
+describe("callers with no write source", () => {
+  const sourceless = (extra: Partial<AuthInfo> = {}): AuthInfo => ({
+    token: "tok-sourceless",
+    clientId: "client-sourceless",
+    scopes: ["read", "write"],
+    isPublic: false,
+    ...extra,
+  });
+
+  it("refuses an authenticated client that holds no write source, whatever page it names", async () => {
+    // MEMRAIN_TENANT_FAIL_CLOSED unset: such a client is let through the tool
+    // gate, and must not fall through to an unscoped write.
+    await putPage(storage, { slug: "team-b/doc", markdown_body: "secret plan", source_id: B });
+    await putPage(storage, { slug: "notes/shared", markdown_body: "draft" });
+    for (const [slug, oldText] of [["team-b/doc", "secret"], ["notes/shared", "draft"]] as const) {
+      const r = await edit(
+        { slug, expected_version: 1, edits: [{ old_text: oldText, new_text: "x" }] },
+        { authInfo: sourceless() },
+      );
+      expect(r.isError).toBe(true);
+      expect(payload(r).error).toBe("permission_denied");
+      expect(payload(r).message).toContain("no write source");
+    }
+    expect((await getPage(storage, "team-b/doc"))!.markdown_body).toBe("secret plan");
+    expect((await getPage(storage, "notes/shared"))!.markdown_body).toBe("draft");
+  });
+
+  it("refuses a read-only token", async () => {
+    await putPage(storage, { slug: "team-a/doc", markdown_body: "draft", source_id: A });
+    const r = await edit(
+      { slug: "team-a/doc", expected_version: 1, edits: [{ old_text: "draft", new_text: "done" }] },
+      { authInfo: auth(A, { scopes: ["read"] }) },
+    );
+    expect(r.isError).toBe(true);
+    expect(payload(r).error).toBe("insufficient_scope");
+    expect((await getPage(storage, "team-a/doc"))!.markdown_body).toBe("draft");
+  });
+});
+
+async function withFlagDisposition<T>(fn: () => Promise<T>): Promise<T> {
+  const saved = process.env["MEMRAIN_SECRET_SCAN_DISPOSITION"];
+  // `flag` stores the credential as written: a page from before the scan.
+  process.env["MEMRAIN_SECRET_SCAN_DISPOSITION"] = "flag";
+  try {
+    return await fn();
+  } finally {
+    if (saved === undefined) delete process.env["MEMRAIN_SECRET_SCAN_DISPOSITION"];
+    else process.env["MEMRAIN_SECRET_SCAN_DISPOSITION"] = saved;
+  }
+}
+
+describe("response redaction", () => {
+  const GH = `gh${"p"}_${"z".repeat(36)}`;
+  const leakyPage = (sourceId?: string) =>
+    withFlagDisposition(() =>
+      putPage(storage, {
+        slug: "team-a/leaky",
+        markdown_body: `token ${GH}\nStatus: draft\n`,
+        ...(sourceId !== undefined ? { source_id: sourceId } : {}),
+      }),
+    );
+
+  it("redacts a stored credential in the diff for a tenant", async () => {
+    await leakyPage(A);
+    const r = await edit(
+      { slug: "team-a/leaky", expected_version: 1, edits: [{ old_text: "draft", new_text: "final" }] },
+      { authInfo: auth(A) },
+    );
+    expect(r.isError).toBeFalsy();
+    expect(r.content[0]!.text).not.toContain(GH);
+    expect(payload(r).diff).toContain("[REDACTED:github-token:");
+    expect(payload(r).version).toBe(2);
+  });
+
+  it("returns the diff raw to the operator", async () => {
+    await leakyPage();
+    const r = payload(await edit({ slug: "team-a/leaky", expected_version: 1, edits: [{ old_text: "draft", new_text: "final" }] }));
+    expect(r.diff).toContain(`-token ${GH}`);
+  });
+});
+
+describe("credentials inside a protected fence", () => {
+  it("refuses an edit whose secret scan would rewrite a facts fence", async () => {
+    const body = `Intro\n\n${FACTS.replace("Alice likes tea", `Alice's key is ${AWS}`)}\n\nOutro`;
+    await withFlagDisposition(() => putPage(storage, { slug: "people/alice", markdown_body: body }));
+    const r = await edit({ slug: "people/alice", expected_version: 1, edits: [{ old_text: "Outro", new_text: "Closing" }] });
+    expect(r.isError).toBe(true);
+    expect(payload(r).error).toBe("edit_protected_span");
+    expect(payload(r).message).toContain("credential");
+    expect(payload(r).suggestion).toContain("memrain secrets audit");
+    expect((await getPage(storage, "people/alice"))!.markdown_body).toBe(body);
+    expect(await version("people/alice")).toBe(1);
+  });
+});
+
+describe("request_id replay", () => {
+  it("replays page_edit's own response after the derived work failed", async () => {
+    await putPage(storage, { slug: "notes/plan", markdown_body: "Status: draft\n" });
+    const engine = storage.engine();
+    const query = engine.query.bind(engine);
+    let failed = false;
+    // The derived work after the commit (link watermark) throws once.
+    engine.query = (async (sql: string, params?: unknown[]) => {
+      if (!failed && sql.includes("links_extracted_at = NOW()")) {
+        failed = true;
+        throw new Error("derived sync failed");
+      }
+      return query(sql, params);
+    }) as typeof engine.query;
+    const args = {
+      slug: "notes/plan",
+      expected_version: 1,
+      edits: [{ old_text: "draft", new_text: "final" }],
+      request_id: "edit-once",
+    };
+    let first: ToolCallResult;
+    try {
+      first = await edit(args);
+    } finally {
+      engine.query = query;
+    }
+    expect(failed).toBe(true);
+    expect(first.isError).toBe(true);
+
+    const retry = payload(await edit(args));
+    expect(retry).toMatchObject({ ok: true, replayed: true, slug: "notes/plan", version: 2, changed: true, edits_applied: 1 });
+    expect(retry.diff).toContain("+Status: final");
+    expect(retry.version_n).toBeUndefined();
+    expect(retry.content_hash).toBeUndefined();
+    expect(retry.created).toBeUndefined();
+    expect(await version("notes/plan")).toBe(2);
+  });
+
+  it("replays the same response after a clean first call", async () => {
+    await putPage(storage, { slug: "notes/plan", markdown_body: "Status: draft\n" });
+    const args = { slug: "notes/plan", expected_version: 1, edits: [{ old_text: "draft", new_text: "final" }], request_id: "edit-twice" };
+    const first = payload(await edit(args));
+    const retry = payload(await edit(args));
+    expect(retry.replayed).toBe(true);
+    expect(retry.version).toBe(first.version);
+    expect(retry.diff).toBe(first.diff);
   });
 });

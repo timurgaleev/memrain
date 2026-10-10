@@ -24,7 +24,8 @@ const EXEMPT = new Set([
   "sources_list",
   "sources_status",
   "source_health",
-  "get_tags",
+  // get_tags is not exempt: a tag is free text a caller wrote, and one stored
+  // before add_tag scanned it can hold a credential.
   "list_skills",
   "resolve_slugs",
   "list_link_sources",
@@ -48,11 +49,12 @@ describe("outputRedaction policy", () => {
     }
   });
 
-  it("no mutating tool is tagged", () => {
+  it("no mutating tool is tagged unless its response echoes stored text", () => {
+    // page_edit's diff quotes the stored lines around the edit.
     const tagged = OPERATIONS.filter((op) => !operationAnnotations(op).readOnlyHint && op.outputRedaction).map(
       (op) => op.name,
     );
-    expect(tagged).toEqual([]);
+    expect(tagged).toEqual(["page_edit"]);
   });
 });
 

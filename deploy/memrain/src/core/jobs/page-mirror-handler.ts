@@ -63,14 +63,16 @@ export function registerPageMirrorHandler(
     // A failed mirror throws so the worker retries it with backoff; the
     // operator's failure row is written only on the last attempt.
     if (!ok) throw new Error(`page_mirror: mirroring ${slug} failed`);
-    ctx.signal?.throwIfAborted();
     // A delete that landed while this job was embedding has already removed the
     // mirror — and this job just wrote it back. Take it out again, or a deleted
-    // page answers searches until the cycle's orphan sweep.
+    // page answers searches until the cycle's orphan sweep. This runs before the
+    // abort check: it undoes this attempt's own write, which no re-claim redoes.
     if (!(await getPageExact(storage, slug))) {
       await removePageFromSearch(storage, slug, page.source_id);
+      ctx.signal?.throwIfAborted();
       return { slug, status: "skipped", reason: "deleted_while_mirroring" };
     }
+    ctx.signal?.throwIfAborted();
     return { slug, status: "mirrored" };
   });
 }

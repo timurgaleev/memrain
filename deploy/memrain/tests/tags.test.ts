@@ -13,6 +13,9 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { deletePage, putPage } from "../src/core/pages.ts";
 import { addTag, getTags, normalizeTag, removeTag } from "../src/core/tags.ts";
+import { registerSource } from "../src/core/sources.ts";
+import { dispatchTool } from "../src/mcp/dispatch.ts";
+import type { AuthInfo } from "../src/core/auth-info.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -152,5 +155,45 @@ describe("getTags", () => {
     await addTag(storage, "bob", "colleague");
     expect(await getTags(storage, "alice")).toEqual(["friend"]);
     expect(await getTags(storage, "bob")).toEqual(["colleague"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// credentials in tag text
+// ---------------------------------------------------------------------------
+
+describe("tag secrets", () => {
+  const GH = `gh${"p"}_${"t".repeat(36)}`;
+
+  it("addTag never stores a credential", async () => {
+    await addTag(storage, "alice", `key ${GH}`);
+    const tags = await getTags(storage, "alice");
+    expect(tags).toHaveLength(1);
+    expect(tags[0]).not.toContain(GH);
+    expect(tags[0]).toContain("redacted");
+  });
+
+  it("get_tags redacts a stored credential for a tenant and not for the operator", async () => {
+    await registerSource(storage.engine(), { id: "tags-a", kind: "vault", pathPrefix: "/tags-a" });
+    await putPage(storage, { slug: "team/doc", markdown_body: "doc", source_id: "tags-a" });
+    // A tag written before add_tag scanned its text.
+    await storage.engine().query(`INSERT INTO tags (slug, tag, source_id) VALUES ($1, $2, $3)`, [
+      "team/doc",
+      `key ${GH}`,
+      "tags-a",
+    ]);
+    const tenant: AuthInfo = {
+      token: "tok-tags",
+      clientId: "client-tags",
+      scopes: ["read"],
+      sourceId: "tags-a",
+      allowedSources: ["tags-a"],
+      isPublic: false,
+    };
+    const scoped = await dispatchTool(storage, { name: "get_tags", arguments: { slug: "team/doc" } }, { authInfo: tenant });
+    expect(scoped.isError).toBeFalsy();
+    expect(scoped.content[0]!.text).not.toContain(GH);
+    const operator = await dispatchTool(storage, { name: "get_tags", arguments: { slug: "team/doc" } });
+    expect(operator.content[0]!.text).toContain(GH);
   });
 });

@@ -25,7 +25,7 @@ import { andSourceScope } from "./source-scope.ts";
 import { carryFactWithdrawals } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { recordWriteRequest, type WriteRequestKey } from "./write-requests.ts";
-import { applyPageEdits, type PageEdit } from "./page-edit.ts";
+import { applyPageEdits, assertScanKeptFences, pageEditResponse, type PageEdit } from "./page-edit.ts";
 
 // Catalogue of well-known page types. Not enforced at the DB level (see
 // migration 015 comment); kept here so application code can normalise +
@@ -514,7 +514,9 @@ export async function putPage(
       }
       // Each new_text was scanned alone; a credential split across edits, or
       // completed by text already on the page, only exists in the result.
-      const guarded = guardSecrets(applyPageEdits(current.markdown_body, edits), where);
+      const applied = applyPageEdits(current.markdown_body, edits);
+      const guarded = guardSecrets(applied, where);
+      assertScanKeptFences(applied, guarded.text);
       secretFindings.push(...guarded.findings);
       body = guarded.text;
       hashNew = hashBody(body);
@@ -718,7 +720,13 @@ export async function putPage(
   const result = await engine.transaction(async (tx) => {
     const r = await writeLocked(tx);
     if (input.receipt !== undefined) {
-      await recordWriteRequest(tx, input.receipt, { ok: true, ...r, ...(warnings.length > 0 ? { warnings } : {}) });
+      // A retry replays this receipt when the derived work after the commit
+      // failed, so an edit stores page_edit's response shape, not the row's.
+      const receipt =
+        edits !== undefined
+          ? pageEditResponse(r, edits.length, edited, secretFindings.length > 0 ? secretFindings.length : undefined)
+          : { ok: true, ...r, ...(warnings.length > 0 ? { warnings } : {}) };
+      await recordWriteRequest(tx, input.receipt, receipt);
     }
     return r;
   });
