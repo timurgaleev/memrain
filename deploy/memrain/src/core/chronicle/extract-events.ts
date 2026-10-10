@@ -26,6 +26,9 @@ import { isLlmAvailable } from "../llm/gateway.ts";
 import { isJunkEntityName } from "../entity-junk.ts";
 import { BudgetTracker, BudgetExhausted } from "../budget.ts";
 import { classifyFactsAbsorbError } from "../ingest-log.ts";
+import type { ChronicleDropCounts, ChronicleDropReason } from "./types.ts";
+
+export type { ChronicleDropCounts, ChronicleDropReason } from "./types.ts";
 
 export interface ChronicleEventProposal {
   when: string; // ISO datetime or YYYY-MM-DD
@@ -64,7 +67,12 @@ export interface ChronicleExtractResult {
   slug: string;
   status: "extracted" | "no_events" | "skipped";
   events_written: number;
+  /** On `no_events` after proposals were made: the dominant drop reason when
+   *  every proposed event was refused by the date screen. */
   reason?: string;
+  /** Proposals refused by the date screen, by reason; never written. Omitted
+   *  when nothing was dropped. */
+  events_dropped?: ChronicleDropCounts;
 }
 
 /** At most this many events are written per depth page (mirrors the facts
@@ -138,6 +146,51 @@ export function isValidProposal(e: unknown): e is ChronicleEventProposal {
     Array.isArray(o.who) && o.who.every((w) => typeof w === "string") &&
     typeof o.kind === "string"
   );
+}
+
+/** A `when` that names a day: YYYY-MM-DD alone or followed by a time. */
+const DAY_PRECISION = /^\d{4}-\d{2}-\d{2}(?:$|[T ])/;
+
+/**
+ * Refuse proposals the page cannot support, before anything is written. A
+ * `when` without a day is `date_imprecise`. A day after the page's own day —
+ * or after today, which also bounds an undated page or a page dated ahead —
+ * is `future_dated`: the page records it as planned, not as having happened.
+ * Days are compared as YYYY-MM-DD strings in the pinned timezone.
+ */
+export function screenChronicleProposals(
+  proposals: ChronicleEventProposal[],
+  pageDay: string | null,
+  todayDay: string,
+  tz = "UTC",
+): { kept: ChronicleEventProposal[]; dropped: ChronicleDropCounts } {
+  const cutoff = pageDay !== null && pageDay < todayDay ? pageDay : todayDay;
+  const kept: ChronicleEventProposal[] = [];
+  const dropped: ChronicleDropCounts = {};
+  for (const ev of proposals) {
+    const when = ev.when.trim();
+    const reason: ChronicleDropReason | null = !DAY_PRECISION.test(when)
+      ? "date_imprecise"
+      : isoDay(when, tz) > cutoff
+        ? "future_dated"
+        : null;
+    if (reason) dropped[reason] = (dropped[reason] ?? 0) + 1;
+    else kept.push(ev);
+  }
+  return { kept, dropped };
+}
+
+/** The reason a page records when the judge proposed events and all were dropped. */
+function allDroppedReason(dropped: ChronicleDropCounts): ChronicleDropReason {
+  return (dropped.date_imprecise ?? 0) > (dropped.future_dated ?? 0) ? "date_imprecise" : "future_dated";
+}
+
+/** The page's own day in `tz`, or null when its date is missing or names no day. */
+function pageDayOf(effectiveDate: string | null, tz: string): string | null {
+  if (effectiveDate === null) return null;
+  const raw = effectiveDate.trim();
+  if (!DAY_PRECISION.test(raw) || Number.isNaN(new Date(raw).getTime())) return null;
+  return isoDay(raw, tz);
 }
 
 function collectAttendees(truth: Record<string, unknown>): string[] {
@@ -259,10 +312,20 @@ export async function runChronicleExtract(
     return { slug: opts.slug, status: "skipped", events_written: 0, reason: "malformed_proposal" };
   }
 
+  const todayDay = isoDay(new Date(opts.now ?? Date.now()).toISOString(), tz);
+  const { kept, dropped } = screenChronicleProposals(proposals, pageDayOf(effectiveDate, tz), todayDay, tz);
+  const droppedField = Object.keys(dropped).length > 0 ? { events_dropped: dropped } : {};
+  if (kept.length === 0) {
+    return {
+      slug: opts.slug, status: "no_events", events_written: 0,
+      reason: allDroppedReason(dropped), ...droppedField,
+    };
+  }
+
   let written = 0;
   // Cap per page AFTER the barrier: the whole batch had to validate, but only
   // the first N are written (a bound on fan-out from one page).
-  for (const ev of proposals.slice(0, MAX_EVENTS_PER_PAGE)) {
+  for (const ev of kept.slice(0, MAX_EVENTS_PER_PAGE)) {
     // Placeholder participants ("team", "someone") are dropped from the stored
     // `who`; the slug still hashes what the judge returned so a re-run upserts
     // the page it wrote before this gate existed instead of forking a twin.
@@ -300,7 +363,7 @@ export async function runChronicleExtract(
     });
     written++;
   }
-  return { slug: opts.slug, status: "extracted", events_written: written };
+  return { slug: opts.slug, status: "extracted", events_written: written, ...droppedField };
 }
 
 const JUDGE_SYSTEM = [
@@ -310,6 +373,10 @@ const JUDGE_SYSTEM = [
   '{"when": ISO datetime or YYYY-MM-DD, "who": [entity slugs/names], "what": one-clause summary,',
   '"where": optional string, "kind": one of meeting|call|meal|solo|travel|work|commitment|decision|intro|conflict|milestone|event}.',
   'Prefer the page\'s known date for "when" when the text gives no explicit time.',
+  "Extract only what already happened by the page's date: the meeting itself and what was decided, said, agreed or done in it.",
+  "A commitment made in the meeting is an event on the meeting's day, never on its due date.",
+  "Never extract plans, follow-ups, deadlines or scheduled meetings that the text places after the page's date.",
+  'If the text gives only a year or a month for an earlier event, omit that event; never invent a day such as the first of the month.',
   'Use the provided attendee slugs for "who" when the text does not name participants.',
   "No prose, no markdown — just the JSON array.",
 ].join("\n");

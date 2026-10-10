@@ -29,7 +29,7 @@ import { callWithTruncationRetry } from "../llm/truncation.ts";
 import { parseModelJson } from "../llm/json-output.ts";
 import { excludeEmptyExtractionTombstone } from "./takes.ts";
 
-export const PROBE_CONTRADICTIONS_PROMPT_VERSION = "v1-sonnet";
+export const PROBE_CONTRADICTIONS_PROMPT_VERSION = "v2-sonnet";
 
 const DEFAULT_MAX_PAIRS = 40;
 const DEFAULT_LOOKBACK_DAYS = 365;
@@ -50,6 +50,10 @@ export interface CandidatePair {
   /** Side kinds — default 'fact' (the pre-073 fact/fact pair shape). */
   a_kind?: PairSideKind;
   b_kind?: PairSideKind;
+  /** YYYY-MM-DD each side dates from (a fact's valid_from, else the day it was
+   *  written; a take's generation day). Null/absent renders "(date unknown)". */
+  a_date?: string | null;
+  b_date?: string | null;
 }
 
 /** Typed resolution proposals — advisory; the probe never auto-applies. */
@@ -73,7 +77,18 @@ export interface ProbeContradictionsOptions {
 
 export interface ProbeContradictionsResult {
   pairsScanned: number;
+  /** Judge calls made (cache hits and budget stops excluded): judged +
+   *  parseFailures + judgeErrors. The trend row's rate denominator. */
+  attempted: number;
+  /** Calls that returned a parseable verdict. */
   judged: number;
+  /** Calls that threw (gateway error, refusal, timeout). */
+  judgeErrors: number;
+  /** Calls whose reply held no parseable verdict — neither a negative nor cached. */
+  parseFailures: number;
+  /** More than a quarter of the attempted calls produced no verdict, so the
+   *  run's contradiction rate does not describe the pairs it scanned. */
+  judgeFailed: boolean;
   contradictionsFound: number;
   cacheHits: number;
   budgetExhausted: boolean;
@@ -106,7 +121,34 @@ resolution_kind: "supersede" when one side is clearly outdated by the other,
 "debate" when both are defensible positions worth keeping, "synthesize" when
 they should be merged into one reconciled statement, "manual" otherwise.
 
+Each claim is labelled with the day it dates from, "(from: YYYY-MM-DD)", or
+"(date unknown)". Rules:
+- Time check first. A time-ordered update needs evidence of two DIFFERENT
+  times: different (from:) dates, different dates written in the text, or
+  explicit change wording ("now", "previously", "grew from").
+- Never infer an order from the values themselves (a larger or smaller number),
+  from the kind of claim, or from which claim is listed first.
+- When both claims carry the same date, or nothing dates either claim, time
+  does not explain the difference: two different values for the same fact
+  about the same subject are a contradiction.
+- A conflict needs a value for the same attribute on BOTH sides. Silence is not
+  a conflict: when one claim does not mention what the other states, return
+  contradicts=false.
+
 If they are compatible or merely a time-ordered update, return contradicts=false.`;
+
+/** "(from: YYYY-MM-DD)" for a dated side, "(date unknown)" otherwise. */
+function dateTag(date: string | null | undefined): string {
+  return typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date) ? `(from: ${date})` : "(date unknown)";
+}
+
+/** The judge's user message: each claim labelled with the day it dates from. */
+export function buildJudgeUserMessage(pair: CandidatePair): string {
+  return (
+    `A ${dateTag(pair.a_date)}: ${sanitizeForPrompt(pair.a_text).text}\n\n` +
+    `B ${dateTag(pair.b_date)}: ${sanitizeForPrompt(pair.b_text).text}`
+  );
+}
 
 /** Deterministic idempotency key: hash(a_ref + b_ref + prompt_version). */
 export function pairKey(aRef: string, bRef: string, promptVersion: string): string {
@@ -116,7 +158,7 @@ export function pairKey(aRef: string, bRef: string, promptVersion: string): stri
 /** Estimate one judge call's usage for the pre-call budget gate, from the actual
  *  prompt size (~4 chars/token) so a large claim pair can't slip past a thin budget. */
 function estimatePairUsage(a: string, b: string): SonnetUsage {
-  const inputChars = JUDGE_SYSTEM_PROMPT.length + a.length + b.length + 64;
+  const inputChars = JUDGE_SYSTEM_PROMPT.length + a.length + b.length + 100;
   return { inputTokens: Math.ceil(inputChars / 4), outputTokens: 200 };
 }
 
@@ -227,6 +269,32 @@ export function wilsonInterval(
  * All streams are same-tenant only and lookback-bounded at the SQL layer so we
  * never materialize an O(n^2) product. Fail-soft to [] per stream.
  */
+/**
+ * Only a live claim is worth a paid verdict: a forgotten or superseded fact
+ * (forgotten_at set) and a fact already folded into a consolidated one are
+ * retired, and a take that is inactive, rejected, superseded, resolved or whose
+ * document was deleted is no longer a standing position.
+ */
+function liveFact(f: string): string {
+  return `${f}.forgotten_at IS NULL AND ${f}.consolidated = false`;
+}
+
+function liveTake(t: string): string {
+  return `${t}.active
+          AND ${t}.status <> 'rejected'
+          AND ${t}.superseded_by IS NULL
+          AND ${t}.resolved_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM documents dd
+             WHERE dd.id = ${t}.source_ref AND dd.deleted_at IS NOT NULL
+          )`;
+}
+
+/** The day a fact dates from: when it became true, else when it was written. */
+function factDate(f: string): string {
+  return `COALESCE(${f}.valid_from, ${f}.written_at::date)::text`;
+}
+
 async function defaultPairs(
   engine: Engine,
   maxPairs: number,
@@ -240,7 +308,8 @@ async function defaultPairs(
       `SELECT f1.id::text AS a_ref, f1.fact AS a_text,
               f2.id::text AS b_ref, f2.fact AS b_text,
               f1.source_id AS source_id,
-              'fact' AS a_kind, 'fact' AS b_kind
+              'fact' AS a_kind, 'fact' AS b_kind,
+              ${factDate("f1")} AS a_date, ${factDate("f2")} AS b_date
          FROM entity_facts f1
          JOIN entity_facts f2
            ON f2.entity_slug = f1.entity_slug
@@ -254,6 +323,7 @@ async function defaultPairs(
           AND f2.written_at >= now() - ($1 * interval '1 day')
           -- dimensional ontology rows have their own read path, not the probe.
           AND f1.dimension IS NULL AND f2.dimension IS NULL
+          AND ${liveFact("f1")} AND ${liveFact("f2")}
         ORDER BY f1.entity_slug ASC, f1.id ASC, f2.id ASC
         LIMIT $2`,
       [lookbackDays, maxPairs],
@@ -270,7 +340,8 @@ async function defaultPairs(
       `SELECT t1.take_key AS a_ref, t1.claim_text AS a_text,
               t2.take_key AS b_ref, t2.claim_text AS b_text,
               d1.source_id AS source_id,
-              'take' AS a_kind, 'take' AS b_kind
+              'take' AS a_kind, 'take' AS b_kind,
+              t1.generated_at::date::text AS a_date, t2.generated_at::date::text AS b_date
          FROM synth_takes t1
          JOIN synth_takes t2
            ON t2.domain = t1.domain
@@ -283,6 +354,7 @@ async function defaultPairs(
           AND d2.source_id IS NOT DISTINCT FROM d1.source_id
           AND t1.generated_at >= now() - ($1 * interval '1 day')
           AND t2.generated_at >= now() - ($1 * interval '1 day')
+          AND ${liveTake("t1")} AND ${liveTake("t2")}
         ORDER BY t1.domain ASC, t1.id ASC, t2.id ASC
         LIMIT $2`,
       [lookbackDays, maxPairs - out.length],
@@ -304,7 +376,8 @@ async function defaultPairs(
       `SELECT t.take_key AS a_ref, t.claim_text AS a_text,
               f.id::text AS b_ref, f.fact AS b_text,
               f.source_id AS source_id,
-              'take' AS a_kind, 'fact' AS b_kind
+              'take' AS a_kind, 'fact' AS b_kind,
+              t.generated_at::date::text AS a_date, ${factDate("f")} AS b_date
          FROM synth_takes t
          LEFT JOIN documents d ON d.id = t.source_ref
          JOIN entity_facts f
@@ -315,6 +388,7 @@ async function defaultPairs(
           AND f.written_at >= now() - ($1 * interval '1 day')
           -- dimensional ontology rows have their own read path, not the probe.
           AND f.dimension IS NULL
+          AND ${liveFact("f")} AND ${liveTake("t")}
           AND length(regexp_replace(f.entity_slug, '.*/', '')) > 3
           AND t.claim_text ILIKE
               '%' || replace(regexp_replace(f.entity_slug, '.*/', ''), '-', ' ') || '%'
@@ -397,6 +471,12 @@ export interface ContradictionRunRow {
   wilson_ci_lower: number;
   wilson_ci_upper: number;
   cost_usd: number;
+  /** Judge calls that threw; 0 on rows written before migration 131. */
+  judge_errors: number;
+  /** Judge replies with no parseable verdict; 0 on rows before migration 131. */
+  parse_failures: number;
+  /** The run's rate is unreliable: over a quarter of its calls gave no verdict. */
+  judge_failed: boolean;
 }
 
 /**
@@ -409,7 +489,8 @@ export async function latestContradictionRun(
 ): Promise<ContradictionRunRow | null> {
   const r = await engine.query<ContradictionRunRow>(
     `SELECT ran_at::text AS ran_at, found, judged,
-            wilson_ci_lower, wilson_ci_upper, cost_usd
+            wilson_ci_lower, wilson_ci_upper, cost_usd,
+            judge_errors, parse_failures, judge_failed
        FROM synth_contradiction_runs
       ORDER BY ran_at DESC
       LIMIT 1`,
@@ -427,7 +508,11 @@ export async function probeContradictionsPhase(
 ): Promise<ProbeContradictionsResult> {
   const result: ProbeContradictionsResult = {
     pairsScanned: 0,
+    attempted: 0,
     judged: 0,
+    judgeErrors: 0,
+    parseFailures: 0,
+    judgeFailed: false,
     contradictionsFound: 0,
     cacheHits: 0,
     budgetExhausted: false,
@@ -496,7 +581,7 @@ export async function probeContradictionsPhase(
         (cap) =>
           sonnetFn({
             system: JUDGE_SYSTEM_PROMPT,
-            user: `A: ${sanitizeForPrompt(pair.a_text).text}\n\nB: ${sanitizeForPrompt(pair.b_text).text}`,
+            user: buildJudgeUserMessage(pair),
             maxTokens: cap,
             temperature: 0,
           }),
@@ -517,20 +602,31 @@ export async function probeContradictionsPhase(
       judgment = parseJudgment(resp.text);
     } catch (e) {
       budget.release(hold);
+      result.attempted += 1;
+      result.judgeErrors += 1;
       result.errors.push(`pair ${pair.a_ref}/${pair.b_ref} judge: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+    result.attempted += 1;
+
+    // A reply with no parseable verdict is a failed judgment, not a negative:
+    // it stays out of the rate and out of the verdict cache, so the pair is
+    // judged again next run.
+    if (!judgment) {
+      result.parseFailures += 1;
+      result.errors.push(`pair ${pair.a_ref}/${pair.b_ref} parse: no verdict in judge reply`);
+      if (overCap) break;
       continue;
     }
     result.judged += 1;
 
     // Cache every parsed verdict — negatives included — so an unchanged pair
     // is not re-spent until the TTL expires.
-    if (judgment) {
-      await putCachedVerdict(engine, key, judgment, usedModel, ttlDays);
-    }
+    await putCachedVerdict(engine, key, judgment, usedModel, ttlDays);
 
     // Only a SUSPECTED contradiction is stored as a finding, now with a typed
     // resolution proposal (judge hint wins; structural classifier otherwise).
-    if (judgment && judgment.contradicts) {
+    if (judgment.contradicts) {
       const kind = classifyResolution(pair, judgment.resolution_kind);
       const command =
         judgment.resolution_command.length > 0
@@ -561,8 +657,12 @@ export async function probeContradictionsPhase(
     if (overCap) break; // this call tipped the ceiling — stop.
   }
 
+  // Calls that produced no verdict are counted, not hidden: past a quarter of
+  // the attempts the rate below no longer describes the pairs scanned.
+  result.judgeFailed = result.judgeErrors + result.parseFailures > result.attempted / 4;
+
   // One trend row per run (Wilson 95% CI over the contradiction rate among the
-  // pairs actually judged this run). Best-effort — a trend write failure never
+  // verdicts this run returned). Best-effort — a trend write failure never
   // fails the probe.
   const runId = `probe-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}-${randomUUID().slice(0, 8)}`;
   const ci = wilsonInterval(result.contradictionsFound, result.judged);
@@ -570,13 +670,15 @@ export async function probeContradictionsPhase(
     await engine.query(
       `INSERT INTO synth_contradiction_runs
          (run_id, model_id, prompt_version, pairs_scanned, judged, found,
-          cache_hits, wilson_ci_lower, wilson_ci_upper, cost_usd, duration_ms)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          cache_hits, wilson_ci_lower, wilson_ci_upper, cost_usd, duration_ms,
+          judge_errors, parse_failures, judge_failed)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        ON CONFLICT (run_id) DO NOTHING`,
       [
         runId, probeModel, promptVersion, result.pairsScanned, result.judged,
         result.contradictionsFound, result.cacheHits, ci.lower, ci.upper,
         Number(budget.totalSpent().toFixed(6)), Date.now() - startedAt,
+        result.judgeErrors, result.parseFailures, result.judgeFailed,
       ],
     );
     result.runId = runId;

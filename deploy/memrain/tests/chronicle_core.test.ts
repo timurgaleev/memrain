@@ -9,10 +9,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { getPage, putPage } from "../src/core/pages.ts";
-import { getLastSeen, getTimelineForDate } from "../src/core/chronicle.ts";
+import { getLastSeen, getTimelineForDate, upsertEventProjection } from "../src/core/chronicle.ts";
 import { isChronicleEligible } from "../src/core/chronicle/eligibility.ts";
 import {
   runChronicleExtract,
+  screenChronicleProposals,
   type ChronicleJudge,
   type ChronicleEventProposal,
 } from "../src/core/chronicle/extract-events.ts";
@@ -84,6 +85,24 @@ describe("isChronicleEligible", () => {
 
   it("excludes non-conversation types", () => {
     expect(isChronicleEligible({ type: "note", slug: "notes/x", body: LONG_BODY }).ok).toBe(false);
+  });
+});
+
+describe("screenChronicleProposals", () => {
+  const ev = (when: string): ChronicleEventProposal => ({ when, who: [], what: "x", kind: "event" });
+
+  it("cuts off at the earlier of the page's day and today", () => {
+    const proposals = [ev("2026-01-10"), ev("2026-01-11"), ev("2026-01-09T23:00:00Z")];
+    expect(screenChronicleProposals(proposals, "2026-01-10", "2026-05-01").dropped).toEqual({ future_dated: 1 });
+    // A page dated ahead of today is still bounded by today.
+    expect(screenChronicleProposals(proposals, "2026-12-31", "2026-01-10").kept).toHaveLength(2);
+    expect(screenChronicleProposals(proposals, null, "2026-01-09").kept).toHaveLength(1);
+  });
+
+  it("marks a when with no day as date_imprecise", () => {
+    const { kept, dropped } = screenChronicleProposals([ev("2024"), ev("2026-03"), ev("2026-03-02 10:00")], "2026-03-02", "2026-04-01");
+    expect(kept.map((e) => e.when)).toEqual(["2026-03-02 10:00"]);
+    expect(dropped).toEqual({ date_imprecise: 2 });
   });
 });
 
@@ -197,6 +216,59 @@ describe("runChronicleExtract", () => {
       "SELECT COUNT(*)::int AS n FROM pages WHERE type = 'event' AND deleted_at IS NULL",
     );
     expect(n.rows[0]!.n).toBe(10);
+  });
+
+  it("drops a proposal dated after the page's day and keeps the meeting itself", async () => {
+    const slug = await seedDepth();
+    const res = await runChronicleExtract(storage, {
+      slug,
+      judge: stubJudge([
+        { when: "2026-01-10", who: ["people/alice"], what: "Kickoff call", kind: "call" },
+        { when: "2026-01-24", who: ["people/alice"], what: "Follow-up review", kind: "meeting" },
+      ]),
+    });
+    expect(res.status).toBe("extracted");
+    expect(res.events_written).toBe(1);
+    expect(res.events_dropped).toEqual({ future_dated: 1 });
+    expect(await getTimelineForDate(storage, "2026-01-24", { sourceIds: ["default"] })).toHaveLength(0);
+  });
+
+  it("refuses year- or month-only dates instead of pinning them to the first", async () => {
+    const slug = await seedDepth();
+    const res = await runChronicleExtract(storage, {
+      slug,
+      judge: stubJudge([
+        { when: "2024", who: [], what: "Founded the company", kind: "milestone" },
+        { when: "2025-03", who: [], what: "Moved to Berlin", kind: "travel" },
+      ]),
+    });
+    expect(res.status).toBe("no_events");
+    expect(res.reason).toBe("date_imprecise");
+    expect(res.events_dropped).toEqual({ date_imprecise: 2 });
+    const n = await storage.engine().query<{ n: number }>(
+      "SELECT COUNT(*)::int AS n FROM pages WHERE type = 'event' AND deleted_at IS NULL",
+    );
+    expect(n.rows[0]!.n).toBe(0);
+  });
+
+  it("bounds an undated page by today", async () => {
+    await putPage(storage, {
+      slug: "meetings/undated",
+      type: "meeting",
+      title: "Sync",
+      compiled_truth: { attendees: ["people/alice"] },
+      markdown_body: LONG_BODY,
+    });
+    const res = await runChronicleExtract(storage, {
+      slug: "meetings/undated",
+      now: new Date("2026-02-01T12:00:00Z"),
+      judge: stubJudge([
+        { when: "2026-02-01T09:00:00Z", who: [], what: "Sync call", kind: "call" },
+        { when: "2026-02-15", who: [], what: "Launch", kind: "milestone" },
+      ]),
+    });
+    expect(res.events_written).toBe(1);
+    expect(res.events_dropped).toEqual({ future_dated: 1 });
   });
 
   it("propagates a TRANSIENT judge error so the job can retry", async () => {
@@ -321,10 +393,31 @@ describe("getLastSeen date bound", () => {
       sourceId: "default",
       judge: stubJudge([
         { when: "2026-01-10", who: ["people/alice"], what: "Kickoff call", kind: "call" },
-        { when: "2099-05-05", who: ["people/alice"], what: "Planned launch", kind: "call" },
       ]),
     });
-    expect(res.events_written).toBe(2);
+    expect(res.events_written).toBe(1);
+    // The extractor refuses future-dated proposals, so the future row is
+    // written the way older extractions left them: an event page + projection.
+    const eventSlug = "life/events/2099-05-05-planned";
+    await putPage(storage, {
+      slug: eventSlug,
+      type: "event",
+      title: "Planned launch",
+      compiled_truth: {
+        type: "event",
+        event: { when: "2099-05-05", who: ["people/alice"], what: "Planned launch", kind: "call", depth: "meetings/2026-01-10" },
+      },
+      markdown_body: "Planned launch",
+      source_id: "default",
+    });
+    await upsertEventProjection(storage, {
+      depthSlug: "meetings/2026-01-10",
+      eventSlug,
+      dateISO: "2099-05-05",
+      occurredAt: "2099-05-05T00:00:00.000Z",
+      summary: "Planned launch",
+      sourceId: "default",
+    });
   }
 
   it("skips a future-dated event and returns the most recent PAST one", async () => {

@@ -91,6 +91,7 @@ for (const { name, open } of ENGINES) {
       }
       expect(await db.manifest()).toBe(up);
 
+      await revertMigration(db.engine, 131);
       await revertMigration(db.engine, 121);
       await revertMigration(db.engine, 120);
       expect(await db.manifest()).toBe(base);

@@ -195,6 +195,8 @@ describe("migration 121", () => {
       e.query(`INSERT INTO eval_snapshots (status) VALUES ('weird')`),
     ).rejects.toThrow();
 
+    // Later migrations sit on top of 121; only the latest can be reverted.
+    await revertMigration(e, 131);
     await revertMigration(e, 121);
     const cols = await e.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns
@@ -208,7 +210,7 @@ describe("migration 121", () => {
     expect((await latestEvalSnapshot(e))?.status).toBe("ok");
 
     const again = await runMigrations(e);
-    expect(again.applied.map((m) => m.id)).toEqual([121]);
+    expect(again.applied.map((m) => m.id)).toEqual([121, 131]);
     expect((await latestEvalSnapshot(e))?.status).toBe("ok");
   });
 });

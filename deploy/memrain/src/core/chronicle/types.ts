@@ -23,6 +23,17 @@ export interface ChronicleTimelineRow {
   kind: string | null;
 }
 
+/**
+ * Why the extractor refused a proposed event before writing it:
+ *   - `future_dated`: dated after the depth page's own day (or after today) —
+ *     a plan, follow-up or scheduled item, not something that happened.
+ *   - `date_imprecise`: `when` names only a year or a month ("2024",
+ *     "2026-03"); the timeline stores days, so pinning it to the first of the
+ *     month or year would invent one.
+ */
+export type ChronicleDropReason = "future_dated" | "date_imprecise";
+export type ChronicleDropCounts = Partial<Record<ChronicleDropReason, number>>;
+
 export interface ChronicleTimelineOpts {
   /** getTimelineForDate: expand to the ISO week (Mon–Sun) containing `date`. */
   week?: boolean;
