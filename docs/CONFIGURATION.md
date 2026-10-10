@@ -254,6 +254,8 @@ that stops making calls once the budget is spent. All default OFF.
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
 | `MEMRAIN_THINK` | off | Enables `memrain think <q>` deep synthesis — **CLI-only**, does not fire on search. | **paid (Sonnet)** |
+| `MEMRAIN_DAILY_BUDGET_USD` | off | Brain-wide daily USD cap over every paid call (all clients, cycle, jobs and CLI) in a UTC day, holds included. Blank, malformed or negative is off; `0` refuses everything. Refusals carry reason `daily_cap`. Suggested `1.00`. Allowlisted. | — |
+| `MEMRAIN_CYCLE_MAX_USD_PER_DAY` | off | Daily USD cap over calls made under a cycle phase. Same parsing as `MEMRAIN_DAILY_BUDGET_USD`. Suggested `0.30`. Allowlisted. | — |
 | `MEMRAIN_THINK_BUDGET_USD` | `1.0` | USD ceiling for `think`. | — |
 | `MEMRAIN_THINK_OUTPUT_TOKENS` | `4000` | Output-token cap for one `think` call. `think` returns structured JSON, so a cut-off answer is total loss rather than a shorter answer — raise this if answers come back incomplete. Clamped to 8000. Code-only. | — |
 | `MEMRAIN_THINK_AUTO_ANCHOR` | on (`=0` off) | When a temporal question ("when did X change, is it still…") names no anchor, `think` derives candidate entity slugs from the question + retrieved pages and anchors on them. Temporal/knowledge-update intents only, fail-soft. A behavior toggle inside the `think` flow — no extra billable call beyond `think` itself. Code-only. | — |
@@ -673,7 +675,9 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_AUDIT_DIR` | built-in | Directory for the weekly audit file. | free |
 | `MEMRAIN_WASM_DIR` | built-in | Override path to the tree-sitter WASM parser directory. | free |
 | `MEMRAIN_INGEST_MAX_BYTES` | `1048576` (1 MiB) | Payload cap for `POST /ingest`, counted as the body streams. Allowlisted. | free |
-| `MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES` | `26214400` (25 MiB) | Largest session log `POST /ingest` accepts from `memrain transcripts push` (and the CLI reads); a bigger log is refused whole, never truncated. Allowlisted. | free |
+| `MEMRAIN_SECRET_SCAN_HIGH_ENTROPY` | on | Redacts high-entropy values assigned to secret-looking keys (`password=`, `api_key:` …). `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
+| `MEMRAIN_SECRET_SCAN_ECHO` | on | Also redacts bare repeats of a value already caught in the same write. `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
+| `MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES` | `8388608` (8 MiB) | Largest session log `POST /ingest` accepts from `memrain transcripts push` (and the CLI reads); a bigger log is refused whole, never truncated. Allowlisted. | free |
 | `MEMRAIN_TRANSCRIPT_MAX_FILE_BYTES` | `104857600` (100 MiB) | Largest export `memrain transcripts ingest` accepts; a bigger file is refused whole, never truncated. Allowlisted. | free |
 | `MEMRAIN_MAX_FENCES_PER_PAGE` | `100` | Fenced code blocks per markdown page that are chunked as code. | free |
 | `MEMRAIN_BODY_TIMELINE` | on (`=0` off) | Turns `## Timeline` bullets, `### YYYY-MM-DD` headers and `[Source: X, YYYY-MM-DD]` citations in a written page into timeline events. Allowlisted. | free |

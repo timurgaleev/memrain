@@ -118,13 +118,21 @@ describe("forget_fact similar_active", () => {
   });
 
   it("never names private facts to a tenant, though the operator sees them", async () => {
-    const tenantGone = await seed("Alice works at Acme Corporation in Berlin", { source_id: "tenant-a" });
+    const tenantGone = await seed("Alice works at Acme Corporation in Berlin", { source_id: "tenant-a", visibility: "world" });
     await seed("Alice works at the Acme Corporation in Berlin", { source_id: "tenant-a" });
     expect((await forget(tenantGone, { authInfo: tenantA })).body.similar_active!.candidates).toEqual([]);
     const opGone = await seed("Alice lives in Lisbon, Portugal", { source_id: "tenant-a" });
     const opClose = await seed("Alice lives in Lisbon Portugal", { source_id: "tenant-a" });
     const op = (await forget(opGone)).body.similar_active!;
     expect(op.candidates.map((c) => c.fact_id)).toEqual([opClose]);
+  });
+
+  it("lets a tenant neither forget nor probe a private fact in its own source", async () => {
+    const hidden = await seed("Alice's private note", { source_id: "tenant-a", visibility: "private" });
+    const { body } = await forget(hidden, { authInfo: tenantA });
+    expect(body).toMatchObject({ found: false, forgotten: false });
+    const live = await storage.engine().query(`SELECT 1 FROM entity_facts WHERE id = $1 AND forgotten_at IS NULL`, [hidden]);
+    expect(live.rows).toHaveLength(1);
   });
 
   it("is absent when the forget flipped nothing", async () => {

@@ -19,9 +19,9 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { JSONL_TRANSCRIPT_FORMATS, type TranscriptFormat, type TranscriptSession } from "./types.ts";
 
 export const TRANSCRIPT_PUSH_CONTENT_TYPE = "application/x-memrain-transcript+jsonl";
-export const DEFAULT_TRANSCRIPT_PUSH_MAX_BYTES = 25 * 1024 * 1024;
+export const DEFAULT_TRANSCRIPT_PUSH_MAX_BYTES = 8 * 1024 * 1024;
 
-/** MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES, a positive integer (default 25 MiB). */
+/** MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES, a positive integer (default 8 MiB). */
 export function transcriptPushMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
   const raw = (env.MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES ?? "").trim();
   const n = Number(raw);

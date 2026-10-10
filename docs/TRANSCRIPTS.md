@@ -71,7 +71,7 @@ memrain transcripts push <path> --url https://brain.example.com \
   you can read (`chmod 600`). Push refuses a token file that other users can
   read, and it never accepts a token on the command line.
 - `--url` must be `https`. Plain `http` is accepted only for `localhost`.
-- The file is capped at `MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES` (default 25 MiB)
+- The file is capped at `MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES` (default 8 MiB)
   on both ends. A bigger file is refused whole, never truncated.
 
 The server checks the log the same way `transcripts ingest` does, against the
@@ -89,6 +89,7 @@ text:
 | 403 | `permission_denied` | No write source, or the session is outside the token's bound prefixes. |
 | 413 | | Over `MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES`. |
 | 415 | `unsupported_transcript` | A log that is not from Codex or Claude Code. |
+| 429 | `push_in_flight` | Another push from the same client is still being read; retry after `Retry-After`. |
 
 ### Claude Code session hook
 

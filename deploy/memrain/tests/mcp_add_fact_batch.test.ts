@@ -186,6 +186,28 @@ describe("add_fact replaces", () => {
     expect((await row(theirs.id!)).forgotten_at).toBeNull();
   });
 
+  it("never retires a fact about another entity", async () => {
+    const bobs = await addFact(storage, { entity_slug: "people/bob", fact: "works at Acme" });
+    const r = body(await call({ entity_slug: "people/alice", fact: "works at Globex", replaces: bobs.id }));
+    expect(r.replaced).toBe(false);
+    expect(r.replace_reason).toBe("entity_mismatch");
+    const kept = await row(bobs.id!);
+    expect(kept.forgotten_at).toBeNull();
+    expect(kept.superseded_by).toBeNull();
+  });
+
+  it("lets a tenant retire only world facts in its own source, as it reads only those", async () => {
+    const hidden = await addFact(storage, { entity_slug: "people/a", fact: "private claim", source_id: "tenant-a", visibility: "private" });
+    const r = body(await call({ entity_slug: "people/a", fact: "A's claim", visibility: "world", replaces: hidden.id }, { authInfo: tenant("tenant-a") }));
+    expect(r.replaced).toBe(false);
+    expect(r.replace_reason).toBe("not_live_or_out_of_scope");
+    expect((await row(hidden.id!)).forgotten_at).toBeNull();
+
+    const shown = await addFact(storage, { entity_slug: "people/a", fact: "world claim", source_id: "tenant-a", visibility: "world" });
+    const ok = body(await call({ entity_slug: "people/a", fact: "newer world claim", visibility: "world", replaces: shown.id }, { authInfo: tenant("tenant-a") }));
+    expect(ok.replaced).toBe(true);
+  });
+
   it("does not retire the fact it just refreshed", async () => {
     const first = body(await call({ entity_slug: "people/a", fact: "same claim" }));
     const again = body(await call({ entity_slug: "people/a", fact: "same claim", replaces: first.id }));

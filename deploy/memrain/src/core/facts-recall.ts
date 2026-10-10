@@ -116,6 +116,9 @@ export interface ForgetFactInput {
    * apart and never suppress a superseded fence claim's legitimate re-insert.
    */
   cause?: ForgetCause;
+  /** A remote (non-operator) caller reads only world facts, so it may only
+   *  forget, or learn of, those. */
+  worldOnly?: boolean;
 }
 
 export interface ForgetFactResult {
@@ -157,6 +160,7 @@ export async function forgetFact(
   // Structured cause (mig062) — defaults to 'forget'; a supersede/dedup path
   // passes 'supersede'. The CHECK constraint rejects any other value.
   const cause: ForgetCause = input.cause === "supersede" ? "supersede" : "forget";
+  const world = input.worldOnly === true ? " AND visibility = 'world'" : "";
   // Tenant write scope (mig047): when a scope is given, the row lookup, the
   // tombstone UPDATE and the existence probe are confined to it. A fact owned by
   // another source neither flips nor reports found — a scoped caller can never
@@ -169,7 +173,7 @@ export async function forgetFact(
     // UPDATE may wait on a fence reconcile that deleted this row and is about
     // to insert under the shared lock, so it must not hold the exclusive one.
     const updParams: unknown[] = [factId, reason, cause];
-    const updFilter = andSourceScope("source_id", sourceIds, updParams);
+    const updFilter = andSourceScope("source_id", sourceIds, updParams) + world;
     const upd = await tx.query<{
       source_id: string;
       visibility: string;
@@ -236,7 +240,7 @@ export async function forgetFact(
   // forgotten. One cheap, same-scope existence probe tells the two apart so the
   // caller gets an honest envelope without leaking another tenant's row.
   const probeParams: unknown[] = [factId];
-  const probeFilter = andSourceScope("source_id", sourceIds, probeParams);
+  const probeFilter = andSourceScope("source_id", sourceIds, probeParams) + world;
   const exists = await storage.engine().query<{ id: number }>(
     `SELECT id FROM entity_facts WHERE id = $1${probeFilter}`,
     probeParams,

@@ -23,8 +23,10 @@ import {
   auditRejection,
   auditSecrets,
   describeFindings,
+  guardEchoes,
   guardSecrets,
   SecretRejectedError,
+  type EchoDictionary,
   secretDisposition,
   type SecretFinding,
 } from "../secret-scan.ts";
@@ -51,15 +53,21 @@ export function prepareSession(session: TranscriptSession): PreparedSession {
   const base = sessionBaseSlug(session);
   const where = `transcript '${base}'`;
   const findings: SecretFinding[] = [];
+  // One dictionary for the whole session: a token claimed in message 9 is
+  // also swept from the title and messages 1-8 that echoed it bare.
+  const echo: EchoDictionary = new Map();
   const guard = (text: string): string => {
-    const r = guardSecrets(text, where);
+    const r = guardSecrets(text, where, { echo });
     findings.push(...r.findings);
     return r.text;
   };
+  const sweep = (text: string): string => guardEchoes(text, echo, findings);
+  const title = session.title === null ? null : guard(session.title);
+  const texts = session.messages.map((m) => guard(m.text));
   const clean: TranscriptSession = {
     ...session,
-    title: session.title === null ? null : guard(session.title),
-    messages: session.messages.map((m) => ({ ...m, text: guard(m.text) })),
+    title: title === null ? null : sweep(title),
+    messages: session.messages.map((m, i) => ({ ...m, text: sweep(texts[i]!) })),
   };
   return { session: clean, base, parts: renderSession(clean), findings };
 }
@@ -77,6 +85,8 @@ export interface IngestTranscriptsOptions {
    * so a bulk backfill does not pay for every embedding up front.
    */
   deferMirror?: boolean;
+  /** Mirror as a remote write (a pushed transcript), not an operator one. */
+  remote?: boolean;
   /** Called for every part written or rewritten (not unchanged, not deleted). */
   onPartWritten?: (part: { slug: string; body: string; sourceId: string }) => void;
 }
@@ -188,7 +198,7 @@ async function writeSession(
           content_hash: put.content_hash,
           source_id: sourceId,
         },
-        { remote: false, timingLabel: "transcripts_ingest", ...(opts.embedFn ? { embedFn: opts.embedFn } : {}) },
+        { remote: opts.remote === true, timingLabel: "transcripts_ingest", ...(opts.embedFn ? { embedFn: opts.embedFn } : {}) },
       );
       if (!ok) result.mirror_failures++;
     }
@@ -264,7 +274,8 @@ export async function ingestSessions(
       result.failed.push({
         id: session.id,
         code: "permission_denied",
-        reason: `${foreign.join(", ")} owned by another source; re-run with that --source`,
+        // The slugs are another tenant's; a count is all this caller may learn.
+        reason: `${foreign.length} part(s) owned by another source; re-run with that --source`,
       });
       continue;
     }

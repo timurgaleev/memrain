@@ -12,7 +12,9 @@ import type { AuthInfo } from "../src/core/auth-info.ts";
 import { _resetHandlersForTesting, getHandler } from "../src/core/jobs/handlers.ts";
 import type { JobRow } from "../src/core/jobs/types.ts";
 import { Storage } from "../src/core/storage.ts";
-import { pushEndpoint, resolvePushPath } from "../src/core/transcripts/push.ts";
+import { pushEndpoint, resolvePushPath, transcriptPushMaxBytes } from "../src/core/transcripts/push.ts";
+import * as pageIndex from "../src/core/page-index.ts";
+import { currentSpendContext } from "../src/core/budget.ts";
 import { runTranscripts } from "../src/commands/transcripts.ts";
 import { handleIngestRoute, registerIngestCaptureHandler, TRANSCRIPTS_INGEST_JOB_KIND } from "../src/http/ingest.ts";
 
@@ -86,6 +88,51 @@ describe("POST /ingest transcript push", () => {
     expect((await handleIngestRoute(pushReq(claudeRaw), deps(writeAuth))).status).toBe(202);
     process.env.MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES = "100";
     expect((await handleIngestRoute(pushReq(claudeRaw), deps(writeAuth))).status).toBe(413);
+  });
+
+  it("defaults the transcript cap to 8 MiB", () => {
+    expect(transcriptPushMaxBytes({})).toBe(8 * 1024 * 1024);
+  });
+
+  it("refuses a second push from a client while its first is still being read", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = new ReadableStream<Uint8Array>({
+      async pull(c) {
+        await gate;
+        c.enqueue(new TextEncoder().encode(claudeRaw));
+        c.close();
+      },
+    });
+    const first = handleIngestRoute(
+      new Request("http://test/ingest", { method: "POST", headers: { "content-type": CT }, body: slow }),
+      deps(writeAuth),
+    );
+    await Bun.sleep(5);
+    const second = await handleIngestRoute(pushReq(claudeRaw), deps(writeAuth));
+    expect(second.status).toBe(429);
+    expect(second.headers.get("Retry-After")).not.toBeNull();
+    // Another client is not held up.
+    expect((await handleIngestRoute(pushReq(claudeRaw), deps({ ...writeAuth, clientId: "laptop-2" }))).status).toBe(202);
+    release();
+    expect((await first).status).toBe(202);
+    expect((await handleIngestRoute(pushReq(claudeRaw), deps(writeAuth))).status).toBe(202);
+  });
+
+  it("runs the job under the pushing client's spend id and cap, mirrored as a remote write", async () => {
+    const res = await handleIngestRoute(pushReq(claudeRaw), deps({ ...writeAuth, spendId: "grant-9", budgetUsdPerDay: 0.25 }));
+    const jobId = String(((await res.json()) as Record<string, unknown>).job_id);
+    const seen: Array<{ spend: unknown; remote: boolean }> = [];
+    const spy = spyOn(pageIndex, "mirrorPage").mockImplementation(async (_s, _p, opts) => {
+      seen.push({ spend: currentSpendContext(), remote: opts.remote });
+      return true;
+    });
+    try {
+      expect(await runJob(jobId)).toMatchObject({ parts_written: 1 });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(seen).toEqual([{ spend: { clientId: "grant-9", capUsd: 0.25 }, remote: true }]);
   });
 
   it("refuses an unreadable log without echoing it", async () => {

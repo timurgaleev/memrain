@@ -643,6 +643,7 @@ async function dispatchToolInner(
             opts.isPublic ?? false,
             writerIdentity(opts),
             opts.authInfo?.boundSlugPrefixes,
+            remote,
           ),
         );
       case "add_timeline_event":
@@ -2397,6 +2398,7 @@ async function callAddFact(
   isPublic = false,
   fallbackWrittenBy = "operator",
   boundPrefixes?: readonly string[],
+  remote = false,
 ): Promise<ToolCallResult> {
   // Both retire or fan out writes an anonymous caller has no business making.
   if (isPublic && (args["items"] !== undefined || args["replaces"] !== undefined)) {
@@ -2408,7 +2410,7 @@ async function callAddFact(
   }
   const bound = boundPrefixes !== undefined && boundPrefixes.length > 0 ? boundPrefixes : undefined;
   const writeOne = (itemArgs: Record<string, unknown>) =>
-    addOneFact(storage, itemArgs, writeSource, isPublic, fallbackWrittenBy, bound);
+    addOneFact(storage, itemArgs, writeSource, isPublic, fallbackWrittenBy, bound, remote);
   let body: Record<string, unknown>;
   if (args["items"] !== undefined) {
     const items = normalizeAddFactItems(args);
@@ -2431,6 +2433,7 @@ async function addOneFact(
   isPublic: boolean,
   fallbackWrittenBy: string,
   boundPrefixes: readonly string[] | undefined,
+  remote: boolean,
 ): Promise<Awaited<ReturnType<typeof addFact>> & { replaced?: boolean; replace_reason?: string }> {
   if (typeof args["entity_slug"] !== "string" || args["entity_slug"].length === 0)
     throw new OperationError("invalid_params", "add_fact: `entity_slug` is required", "Pass the entity the fact is about, e.g. `people/alice`.");
@@ -2495,6 +2498,7 @@ async function addOneFact(
       r.id,
       writeSource ? [writeSource] : undefined,
       boundPrefixes ? (slug) => slugUnderPrefixes(slug, boundPrefixes) : undefined,
+      { worldOnly: remote },
     );
     return { ...r, ...outcome };
   } catch (e) {
@@ -3034,6 +3038,7 @@ async function callForgetFact(
   }
   const opts: Parameters<typeof forgetFact>[2] = {};
   if (typeof args["reason"] === "string") opts.reason = args["reason"];
+  if (remote) opts.worldOnly = true;
   // A destructive write scopes to the caller's SINGLE write source (a scalar),
   // never the federated READ set — a tenant may read many sources but must only
   // forget within its own write source. Undefined → unscoped, unchanged.

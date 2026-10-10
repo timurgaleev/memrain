@@ -16,7 +16,7 @@ import { pageSourcePath } from "../src/core/page-index.ts";
 import { fingerprintSecret } from "../src/core/secret-scan.ts";
 import { listRecentTranscripts } from "../src/core/transcripts-read.ts";
 import { mergePage } from "../src/core/entity-merge.ts";
-import { ingestSessions } from "../src/core/transcripts/ingest.ts";
+import { ingestSessions, prepareSession } from "../src/core/transcripts/ingest.ts";
 import type { TranscriptSession } from "../src/core/transcripts/types.ts";
 import { runTranscripts } from "../src/commands/transcripts.ts";
 import { deterministicEmbed } from "./det-embed.ts";
@@ -147,6 +147,18 @@ describe("ingestSessions", () => {
     expect(audit.rows[0]!.summary).not.toContain(PAT);
   });
 
+  it("redacts a bare echo in the title and earlier messages of a value claimed later", () => {
+    const token = "Zx9Kq2Lm7Np4Rt8Vw3Yb6Hd1Fg5";
+    const s = session("echo", 3, 1500, (i) =>
+      i === 0 ? `my token is ${token}, keep it` : i === 1 ? "noted" : `curl -H "Authorization: Bearer ${token}" https://api.example.com`,
+    );
+    const prepared = prepareSession({ ...s, title: `debugging ${token}` });
+    expect(prepared.session.title).not.toContain(token);
+    for (const m of prepared.session.messages) expect(m.text).not.toContain(token);
+    expect(prepared.session.messages[0]!.text).toContain("[REDACTED:bearer-token-echo:");
+    for (const p of prepared.parts) expect(p.body).not.toContain(token);
+  });
+
   it("refuses the whole session under the reject disposition", async () => {
     process.env.MEMRAIN_SECRET_SCAN_DISPOSITION = "reject";
     // The credential sits in the last message, so a per-part scan would have
@@ -204,6 +216,9 @@ describe("ingestSessions", () => {
     expect(r.failed).toEqual([
       expect.objectContaining({ id: "moved", code: "permission_denied" }),
     ]);
+    // The other tenant's slugs are not this caller's to learn.
+    expect(r.failed[0]!.reason).not.toContain("moved-p1");
+    expect(r.failed[0]!.reason).toContain("1 part(s)");
     expect((await getPage(storage, "transcripts/chatgpt/moved-p1"))!.source_id).toBe("other");
     expect(await liveParts(storage, "transcripts/chatgpt/after")).toEqual(["transcripts/chatgpt/after-p1"]);
     const log = await storage.engine().query<{ summary: string }>(

@@ -39,6 +39,7 @@ import { registerHandler } from "../core/jobs/handlers.ts";
 import { dispatchTool, slugUnderPrefixes } from "../mcp/dispatch.ts";
 import { readBodyWithCap } from "./body_limit.ts";
 import { logIngest } from "../core/ingest-log.ts";
+import { runWithSpendClient } from "../core/budget.ts";
 
 import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "../core/jobs/kinds.ts";
 import { parseTranscriptJsonl } from "../core/transcripts/detect.ts";
@@ -193,6 +194,13 @@ function readIngestHeaders(req: Request): Record<IngestHeader, string | null> | 
   return out;
 }
 
+/**
+ * Clients with a transcript push in flight. A push buffers up to the
+ * transcript cap, so one at a time per client keeps a single write token from
+ * holding many of those buffers at once under the general rate limit.
+ */
+const transcriptPushesInFlight = new Set<string>();
+
 export async function handleIngestRoute(
   req: Request,
   deps: IngestRouteDeps,
@@ -235,7 +243,24 @@ export async function handleIngestRoute(
   if (pushingTranscript && isNoSourceSentinel(effectiveWriteSourceIdForIngress(auth, { failClosed: tenantFailClosedEnabled() }))) {
     return err(403, "permission_denied", "no write source is granted to this client for POST /ingest");
   }
-  const read = await readBodyWithCap(req, pushingTranscript ? transcriptPushMaxBytes() : ingestMaxBytes());
+  if (pushingTranscript) {
+    if (transcriptPushesInFlight.has(auth.clientId)) {
+      return Response.json(
+        { error: "push_in_flight", message: "a transcript push from this client is still being read; retry when it finishes" },
+        { status: 429, headers: { "Retry-After": "5" } },
+      );
+    }
+    transcriptPushesInFlight.add(auth.clientId);
+    try {
+      const read = await readBodyWithCap(req, transcriptPushMaxBytes());
+      if (!read.ok) return read.response;
+      if (read.buf.byteLength === 0) return err(400, "empty_body", "POST /ingest requires a non-empty body");
+      return await handleTranscriptPush(deps, auth, read.buf);
+    } finally {
+      transcriptPushesInFlight.delete(auth.clientId);
+    }
+  }
+  const read = await readBodyWithCap(req, ingestMaxBytes());
   if (!read.ok) return read.response;
   if (read.buf.byteLength === 0) {
     return err(400, "empty_body", "POST /ingest requires a non-empty body");
@@ -257,7 +282,6 @@ export async function handleIngestRoute(
     req.headers.get("content-type") ||
     ""
   ).toLowerCase();
-  if (pushingTranscript) return handleTranscriptPush(deps, auth, read.buf);
   const contentType = resolveIngestContentType(declared);
   if (contentType === null) {
     return err(
@@ -497,6 +521,10 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
       payload: {
         source_id: sourceId,
         client_id: auth.clientId,
+        // The job runs later, outside this request: it carries who the paid
+        // calls are for and that client's cap, so the push is capped like a call.
+        spend_id: auth.spendId ?? auth.clientId,
+        ...(auth.budgetUsdPerDay !== undefined ? { budget_usd_per_day: auth.budgetUsdPerDay } : {}),
         ref,
         sessions: prepared.map((p) => p.session),
         ...(boundPrefixes && boundPrefixes.length > 0 ? { bound_slug_prefixes: boundPrefixes } : {}),
@@ -626,7 +654,16 @@ export function registerIngestCaptureHandler(storage: Storage): void {
       }
     }
     const ref = typeof payload.ref === "string" ? payload.ref : "push";
-    const result = await ingestSessions(storage, sessions, { sourceId, ref });
+    const run = () => ingestSessions(storage, sessions, { sourceId, ref, remote: true });
+    const spendId = payload.spend_id;
+    const cap = payload.budget_usd_per_day;
+    const result =
+      typeof spendId === "string" && spendId !== ""
+        ? await runWithSpendClient(
+            { clientId: spendId, ...(typeof cap === "number" || cap === null ? { capUsd: cap } : {}) },
+            run,
+          )
+        : await run();
     return { ...result };
   });
 }
