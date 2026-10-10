@@ -215,7 +215,7 @@
   },
   {
     "name": "page_put",
-    "description": "Create or update a page in the DB-canonical store. Idempotent: re-putting identical content is a no-op. Each real change appends a row to page_versions. Search sees the page once its search mirror is written: by default before this returns (`search_indexed`). When the operator has moved the mirror to a background job, the response carries `search_pending: true` and `search_job_id` instead, and search sees the page once that job runs, normally within seconds. Pass `wait_for_index: true` when you need to search for the page straight away. WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
+    "description": "Create or update a page in the DB-canonical store. Idempotent: re-putting identical content is a no-op. Each real change appends a row to page_versions. Search sees the page once its search mirror is written: by default before this returns (`search_indexed`). When the operator has moved the mirror to a background job, the response carries `search_pending: true` and `search_job_id` instead, and search sees the page once that job runs, normally within seconds. Pass `wait_for_index: true` when you need to search for the page straight away. To change part of a page, prefer page_edit. When the operator sets MEMRAIN_REQUIRE_WRITE_PRECONDITION, overwriting a live page without `expected_version` (or `force: true`) either adds a `warnings` entry or is refused with `precondition_required` and the page's `current_version`. WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -311,6 +311,70 @@
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "page_edit",
+    "description": "Change part of an existing page without resending it: apply 1 to 50 exact-text replacements `{old_text, new_text}` to its markdown_body, in order, each to the text the previous one left. Each old_text must occur exactly once in the page (copy it from page_get, whitespace included); otherwise nothing is written and the error says which edit failed (`edit_no_match`, `edit_ambiguous_match`). The facts and takes fences are protected: an edit that touches one, or writes a fence marker, is refused (`edit_protected_span`) — use add_fact / forget_fact and the takes tools for those. `expected_version` is required (`version` from page_get); a page that changed since is refused with `version_conflict` and its current version. Title and frontmatter are kept. Returns the new version and a unified diff of the change (cut at 8 KB, `diff_truncated`). Search sees the change as for page_put (`search_indexed`, or `search_pending` + `search_job_id`; `wait_for_index: true` to wait). WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "The page to edit; it must exist."
+        },
+        "expected_version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The page's current version (`version` from page_get). On a mismatch nothing is written and the error names the current version."
+        },
+        "edits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "old_text": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Exact text to replace; must occur exactly once."
+              },
+              "new_text": {
+                "type": "string",
+                "description": "Replacement text; empty deletes old_text."
+              }
+            },
+            "required": [
+              "old_text",
+              "new_text"
+            ],
+            "additionalProperties": false
+          },
+          "description": "1 to 50 replacements, applied in order, all or nothing."
+        },
+        "written_by": {
+          "type": "string",
+          "description": "Optional caller identifier for the audit trail (skill slug, recipe name, …)."
+        },
+        "wait_for_index": {
+          "type": "boolean",
+          "description": "Write the search mirror before returning even when mirrors are queued, so the change is searchable the moment this call returns. Slower."
+        },
+        "request_id": {
+          "type": "string",
+          "description": "Optional caller-chosen id for this write (1-128 chars). Retrying with the same id and the same arguments returns the first call's result with `replayed: true` and writes nothing; the same id with different arguments is refused. Remembered for 7 days."
+        }
+      },
+      "required": [
+        "slug",
+        "expected_version",
+        "edits"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
       "openWorldHint": false
     }
   },
@@ -483,7 +547,7 @@
   },
   {
     "name": "page_versions",
-    "description": "Read the edit history of a page, newest-first. Includes body snapshots and compiled_truth snapshots at every revision.",
+    "description": "Read the edit history of a page, newest-first. Includes body snapshots and compiled_truth snapshots at every revision. The operator and admin-scoped callers also see `written_by_principal`, the credential each version was written with (null for internal writes and versions older than the column).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1601,7 +1665,7 @@
   },
   {
     "name": "whoami",
-    "description": "Introspect the CALLING identity: the client_id, granted OAuth scopes, the write source, and the read sources this token may see. Returns {client_id, scopes, write_source, read_sources, is_public}. `read_sources` is null when the caller is unscoped (local CLI / internal token = whole-brain). Reveals only the caller's own auth context — no corpus. Cheap; no Bedrock. Useful for debugging the client_credentials multi-client setup.",
+    "description": "Introspect the CALLING identity: the client_id, granted OAuth scopes, the write source, and the read sources this token may see. Returns {client_id, scopes, write_source, read_sources, is_public, operator, bound_slug_prefixes, takes_holders, budget_usd_per_day, spent_today_usd, spend_id, callable_tools}. `read_sources` is null when the caller is unscoped (local CLI / internal token = whole-brain); the per-grant fields are null without a grant. `callable_tools` is exactly the set of tools this caller can call. Reveals only the caller's own auth context — no corpus. Cheap; no Bedrock. Useful for debugging the client_credentials multi-client setup.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -2045,7 +2109,7 @@
   },
   {
     "name": "list_brain_skillpack",
-    "description": "List the brain-resident skillpack this brain ships (the local deploy/skills pack): each skill's slug and one-line description. Read-only. The skills are served, not installed: read one with get_skill (list_skills is the flat listing). On the host, `memrain skillpack` builds a tarball with a sha256 manifest for verification and `memrain skillpack lint` checks the pack against the real tools and commands.",
+    "description": "List the brain-resident skillpack this brain ships (the local deploy/skills pack) — the same catalog as list_skills: each skill's slug, description, triggers, declared tools split into `usable_tools` (callable by you) and `unavailable_tools`, and whether it mutates. Read-only. The skills are served, not installed: read one with get_skill (list_skills is the flat listing). On the host, `memrain skillpack` builds a tarball with a sha256 manifest for verification and `memrain skillpack lint` checks the pack against the real tools and commands.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -2307,7 +2371,7 @@
   },
   {
     "name": "list_skills",
-    "description": "Enumerate the brain-resident skillpack this brain ships (the local deploy/skills pack): each skill's slug and one-line description, byte-ordered. The flat companion to list_brain_skillpack; pair with get_skill to fetch a skill's full body. Read-only; no LLM.",
+    "description": "Enumerate the brain-resident skillpack this brain ships (the local deploy/skills pack), byte-ordered: each skill's slug, description, `triggers`, declared `tools` split into `usable_tools` (callable by you) and `unavailable_tools`, `mutating`, `requires` and `writes_to`, plus routing `instructions`. Match the task against the triggers, then fetch the skill with get_skill. Read-only; no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -2320,7 +2384,7 @@
   },
   {
     "name": "get_skill",
-    "description": "Fetch one brain-resident skill's full markdown body by slug (as returned by list_skills). Returns {slug, description, body}, or an error when the slug is unknown. Read-only; no LLM.",
+    "description": "Fetch one brain-resident skill's full markdown body by slug (as returned by list_skills). Returns {slug, description, body, frontmatter, usable_tools, unavailable_tools}, or an error when the slug is unknown. Read-only; no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {

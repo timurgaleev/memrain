@@ -25,6 +25,7 @@ import { andSourceScope } from "./source-scope.ts";
 import { carryFactWithdrawals } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { recordWriteRequest, type WriteRequestKey } from "./write-requests.ts";
+import { applyPageEdits, type PageEdit } from "./page-edit.ts";
 
 // Catalogue of well-known page types. Not enforced at the DB level (see
 // migration 015 comment); kept here so application code can normalise +
@@ -177,7 +178,48 @@ export interface PageInput {
   expectedVersion?: number;
   /** A claimed `request_id` (write-requests.ts): its receipt commits with this write. */
   receipt?: WriteRequestKey;
+  /**
+   * Replace exact spans of the CURRENT body instead of writing a whole one
+   * (page_edit). Applied to the body read under the slug's write lock, after
+   * the version check; `markdown_body` is ignored when it is set.
+   */
+  edits?: PageEdit[];
+  /**
+   * What to do when this write would overwrite a live page without naming the
+   * version it read (`expectedVersion`): `warn` writes and reports it, `refuse`
+   * writes nothing. Unset = no check. Only MCP page_put sets it.
+   */
+  preconditionPolicy?: "warn" | "refuse";
+  /** The authenticated principal behind the write (page_versions.written_by_principal). */
+  written_by_principal?: string;
 }
+
+/**
+ * An unconditional overwrite of a live page, refused by
+ * MEMRAIN_REQUIRE_WRITE_PRECONDITION=refuse. Carries the current version so
+ * the caller can retry with it.
+ */
+export class PreconditionRequiredError extends OperationError {
+  constructor(
+    slug: string,
+    public readonly currentVersion: number,
+  ) {
+    super(
+      "precondition_required",
+      `page '${slug}' exists at version ${currentVersion}; this brain refuses an overwrite that does not name the version it read`,
+      "Read the page (page_get), then pass its version as expected_version, or pass force: true to overwrite on purpose.",
+    );
+    this.name = "PreconditionRequiredError";
+  }
+
+  override toEnvelope(isPublic: boolean): PublicErrorEnvelope & { current_version: number } {
+    return { ...super.toEnvelope(isPublic), current_version: this.currentVersion };
+  }
+}
+
+/** The warning a `warn` precondition policy attaches to an unconditional overwrite. */
+export const PRECONDITION_WARNING =
+  "precondition_missing: this overwrote a live page without expected_version; read the page and pass its version to avoid losing a concurrent update";
 
 /**
  * A conditional write lost the race: the page moved on since the caller read
@@ -251,6 +293,10 @@ export interface PutResult {
   created: boolean;
   /** Credentials found in the write (redacted unless the disposition is `flag`). */
   secrets_found?: number;
+  /** Advisories about a write that went ahead (the `warn` precondition policy). */
+  warnings?: string[];
+  /** For an `edits` write: the body before and after, for the caller's diff. */
+  edited?: { before: string; after: string };
 }
 
 export interface PageVersionRow {
@@ -262,6 +308,8 @@ export interface PageVersionRow {
   compiled_truth_snapshot: Record<string, unknown>;
   written_by: string | null;
   written_at: string;
+  /** Only when read with `withPrincipal` (operator/admin views). */
+  written_by_principal?: string | null;
 }
 
 /** JSON with every object's keys sorted, for an order-free comparison. */
@@ -357,11 +405,17 @@ export async function putPage(
     return guardEchoes({
       body: guard(input.markdown_body ?? ""),
       append: input.appendContent !== undefined ? guard(input.appendContent) : undefined,
+      // Only the replacement text is new content; old_text must keep matching the stored body.
+      newTexts: input.edits?.map((e) => guard(e.new_text)),
       title: typeof input.title === "string" ? guard(input.title) : (input.title ?? null),
       truth: guardSecretsDeep(input.compiled_truth ?? {}, where, secretFindings, echo) as Record<string, unknown>,
     }, echo, secretFindings);
   });
   const appendContent = scanned.append;
+  const edits = input.edits?.map((e, i) => ({ old_text: e.old_text, new_text: scanned.newTexts![i]! }));
+  const writtenByPrincipal = input.written_by_principal ?? null;
+  let edited: PutResult["edited"];
+  const warnings: string[] = [];
   let body = input.markdown_body === undefined ? "" : scanned.body;
   const truth = scanned.truth;
   let title = scanned.title;
@@ -443,7 +497,35 @@ export async function putPage(
     checkExpectedVersion(input.slug, Number(existing.rows[0]?.version_n ?? 0), input.expectedVersion);
 
     const current = existing.rows[0];
-    if (appendContent !== undefined) {
+    if (
+      input.preconditionPolicy !== undefined &&
+      input.expectedVersion === undefined &&
+      current !== undefined &&
+      current.deleted_at === null
+    ) {
+      if (input.preconditionPolicy === "refuse") {
+        throw new PreconditionRequiredError(input.slug, Number(current.version_n));
+      }
+      warnings.push(PRECONDITION_WARNING);
+    }
+    if (edits !== undefined) {
+      if (current === undefined || current.deleted_at !== null) {
+        throw new PageNotFoundError(input.slug, CREATE_IT_FIRST);
+      }
+      // Each new_text was scanned alone; a credential split across edits, or
+      // completed by text already on the page, only exists in the result.
+      const guarded = guardSecrets(applyPageEdits(current.markdown_body, edits), where);
+      secretFindings.push(...guarded.findings);
+      body = guarded.text;
+      hashNew = hashBody(body);
+      edited = { before: current.markdown_body, after: body };
+      // Like an append, an edit changes the body only: title and truth come
+      // from the row read under the lock.
+      title = current.title;
+      const lockedTruth = wellFormJsonbValue(current.compiled_truth ?? {}) as Record<string, unknown>;
+      aliasNorms = extractAliasNorms(lockedTruth);
+      truthJson = JSON.stringify(lockedTruth);
+    } else if (appendContent !== undefined) {
       if (current === undefined || current.deleted_at !== null) {
         throw new PageNotFoundError(input.slug, CREATE_IT_FIRST);
       }
@@ -543,9 +625,9 @@ export async function putPage(
       await tx.query(
         `INSERT INTO page_versions
            (slug, version_n, hash_prev, hash_new,
-            body_snapshot, compiled_truth_snapshot, written_by, source_id)
-         VALUES ($1, 1, NULL, $2, $3, $4::text::jsonb, $5, $6)`,
-        [input.slug, hashNew, body, truthJson, writtenBy, sourceId],
+            body_snapshot, compiled_truth_snapshot, written_by, source_id, written_by_principal)
+         VALUES ($1, 1, NULL, $2, $3, $4::text::jsonb, $5, $6, $7)`,
+        [input.slug, hashNew, body, truthJson, writtenBy, sourceId, writtenByPrincipal],
       );
       await bumpPageGeneration(tx, input.slug);
       await setPageAliases(tx, input.slug, aliasNorms, sourceId);
@@ -606,8 +688,8 @@ export async function putPage(
     await tx.query(
       `INSERT INTO page_versions
          (slug, version_n, hash_prev, hash_new,
-          body_snapshot, compiled_truth_snapshot, written_by, source_id)
-       VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, $7, $8)`,
+          body_snapshot, compiled_truth_snapshot, written_by, source_id, written_by_principal)
+       VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, $7, $8, $9)`,
       [
         input.slug,
         nextVersion,
@@ -617,6 +699,7 @@ export async function putPage(
         truthJson,
         writtenBy,
         prev.source_id ?? sourceId,
+        writtenByPrincipal,
       ],
     );
     await bumpPageGeneration(tx, input.slug);
@@ -634,15 +717,21 @@ export async function putPage(
   };
   const result = await engine.transaction(async (tx) => {
     const r = await writeLocked(tx);
-    if (input.receipt !== undefined) await recordWriteRequest(tx, input.receipt, { ok: true, ...r });
+    if (input.receipt !== undefined) {
+      await recordWriteRequest(tx, input.receipt, { ok: true, ...r, ...(warnings.length > 0 ? { warnings } : {}) });
+    }
     return r;
   });
+  const extras = {
+    ...(warnings.length > 0 ? { warnings } : {}),
+    ...(edited !== undefined ? { edited } : {}),
+  };
   // A no-op stored nothing, so there is nothing new to audit; under `flag` the
   // credential sits in the unchanged body and would otherwise be re-audited on
   // every identical re-put.
-  if (secretFindings.length === 0) return result;
+  if (secretFindings.length === 0) return { ...result, ...extras };
   if (result.changed) await auditSecrets(engine, secretFindings, input.slug, callerSource);
-  return { ...result, secrets_found: secretFindings.length };
+  return { ...result, ...extras, secrets_found: secretFindings.length };
 }
 
 export interface AppendInput {
@@ -659,6 +748,8 @@ export interface AppendInput {
   source_id?: string;
   /** A claimed `request_id` (write-requests.ts): its receipt commits with this write. */
   receipt?: WriteRequestKey;
+  /** The authenticated principal behind the write (page_versions.written_by_principal). */
+  written_by_principal?: string;
 }
 
 export async function appendPage(
@@ -698,6 +789,7 @@ export async function appendPage(
     source_id: writeSourceId,
     allowAdHocType: true, // existing type, definitionally allowed
     ...(input.receipt !== undefined ? { receipt: input.receipt } : {}),
+    ...(input.written_by_principal !== undefined ? { written_by_principal: input.written_by_principal } : {}),
   });
 }
 
@@ -848,6 +940,7 @@ export async function pageVersions(
   slug: string,
   limit = 20,
   sourceIds?: readonly string[],
+  opts: { withPrincipal?: boolean } = {},
 ): Promise<PageVersionRow[]> {
   validateSlug(slug);
   const cap =
@@ -861,7 +954,7 @@ export async function pageVersions(
   const r = await storage.engine().query<PageVersionRow>(
     `SELECT slug, version_n, hash_prev, hash_new,
             body_snapshot, compiled_truth_snapshot,
-            written_by, written_at::text AS written_at
+            written_by, written_at::text AS written_at${opts.withPrincipal === true ? ", written_by_principal" : ""}
        FROM page_versions
        WHERE slug = $1${sourceFilter}
        ORDER BY version_n DESC
@@ -888,7 +981,7 @@ export async function deletePage(
   slug: string,
   writtenBy?: string,
   writeSource?: string,
-  opts: { expectedVersion?: number } = {},
+  opts: { expectedVersion?: number; writtenByPrincipal?: string } = {},
 ): Promise<DeleteResult> {
   validateSlug(slug);
   // Tenant write scope (mig047): when a scoped caller supplies its write source,
@@ -938,8 +1031,8 @@ export async function deletePage(
     await tx.query(
       `INSERT INTO page_versions
          (slug, version_n, hash_prev, hash_new,
-          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id)
-       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6)`,
+          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id, written_by_principal)
+       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6, $7)`,
       [
         slug,
         nextN.rows[0]!.n,
@@ -947,6 +1040,7 @@ export async function deletePage(
         tombstone,
         writtenBy ?? null,
         r.rows[0]!.source_id,
+        opts.writtenByPrincipal ?? null,
       ],
     );
     await bumpPageGeneration(tx, slug);
@@ -971,6 +1065,7 @@ export async function restorePage(
   slug: string,
   writtenBy?: string,
   writeSource?: string,
+  opts: { writtenByPrincipal?: string } = {},
 ): Promise<RestoreResult> {
   validateSlug(slug);
   // Tenant write scope (mig047): a scoped caller can only undelete a page in its
@@ -1008,9 +1103,9 @@ export async function restorePage(
     await tx.query(
       `INSERT INTO page_versions
          (slug, version_n, hash_prev, hash_new,
-          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id)
-       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6)`,
-      [slug, nextN.rows[0]!.n, r.rows[0]!.content_hash, marker, writtenBy ?? null, r.rows[0]!.source_id],
+          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id, written_by_principal)
+       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6, $7)`,
+      [slug, nextN.rows[0]!.n, r.rows[0]!.content_hash, marker, writtenBy ?? null, r.rows[0]!.source_id, opts.writtenByPrincipal ?? null],
     );
     await bumpPageGeneration(tx, slug);
     return { slug, restored: true };
@@ -1042,7 +1137,7 @@ export async function revertPage(
   targetVersion: number,
   writtenBy?: string,
   writeSource?: string,
-  opts: { expectedVersion?: number } = {},
+  opts: { expectedVersion?: number; writtenByPrincipal?: string } = {},
 ): Promise<RevertResult> {
   validateSlug(slug);
   // Tenant write scope (mig047): confine the page fetch, the version snapshot
@@ -1103,6 +1198,7 @@ export async function revertPage(
     // Checked by putPage under the slug lock, so an edit that lands between
     // the snapshot read above and the re-put is caught, not reverted over.
     ...(opts.expectedVersion !== undefined ? { expectedVersion: opts.expectedVersion } : {}),
+    ...(opts.writtenByPrincipal !== undefined ? { written_by_principal: opts.writtenByPrincipal } : {}),
   });
   return {
     slug,

@@ -54,6 +54,7 @@ export const MATRIX: MatrixRow[] = [
   write("log_friction"),
   write("page_put"),
   write("page_append"),
+  write("page_edit"),
   write("page_delete"),
   write("page_restore"),
   write("page_revert"),

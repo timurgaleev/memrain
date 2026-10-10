@@ -100,6 +100,7 @@ const PUBLIC_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "index",
   "page_put",
   "page_append",
+  "page_edit",
   "add_fact",
   "add_timeline_event",
   "add_tag",
@@ -441,7 +442,7 @@ function timingSafeEqualStrings(a: string, b: string): boolean {
 /**
  * MCP tools/call extra check — even with a valid bearer, mutating tools are
  * rejected from public requests by default. `MEMRAIN_PUBLIC_WRITE=1` opens ONLY
- * the constructive PUBLIC_WRITE_TOOLS (index / page_put / page_append /
+ * the constructive PUBLIC_WRITE_TOOLS (index / page_put / page_append / page_edit /
  * add_fact / add_timeline_event / add_tag / link). The always-internal set
  * (destructive writes + privacy-sensitive content/identifier reads) stays
  * forbidden regardless of the flag.

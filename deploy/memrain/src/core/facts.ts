@@ -128,6 +128,12 @@ export interface AddFactInput {
    */
   attributed_to?: string;
   /**
+   * The authenticated principal behind the write (migration 134). Unlike
+   * `written_by`, which a caller names, this comes from the caller's
+   * credentials; it is audit-only and never part of the claim's identity.
+   */
+  written_by_principal?: string;
+  /**
    * Insert-time dedup / supersede. Present -> opt in for this call; absent ->
    * governed by `MEMRAIN_FACTS_DEDUP` (default OFF, exact-tuple dedup only).
    */
@@ -737,6 +743,10 @@ export async function addFact(
   if (attributedTo !== null) {
     cols.push("attributed_to");
     params.push(attributedTo);
+  }
+  if (typeof input.written_by_principal === "string" && input.written_by_principal.length > 0) {
+    cols.push("written_by_principal");
+    params.push(input.written_by_principal);
   }
   if (sourceId !== null) {
     cols.push("source_id");

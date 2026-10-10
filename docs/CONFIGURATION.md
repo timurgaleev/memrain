@@ -688,6 +688,7 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_AUDIT_DIR` | built-in | Directory for the weekly audit file. | free |
 | `MEMRAIN_WASM_DIR` | built-in | Override path to the tree-sitter WASM parser directory. | free |
 | `MEMRAIN_INGEST_MAX_BYTES` | `1048576` (1 MiB) | Payload cap for `POST /ingest`, counted as the body streams. Allowlisted. | free |
+| `MEMRAIN_REQUIRE_WRITE_PRECONDITION` | `off` | What MCP `page_put` does when it would overwrite an existing page without `expected_version` (and without `force`): `off` writes as before, `warn` writes and adds a warning, `refuse` (also `1`/`true`) fails with `precondition_required` and the current version. Creates always pass. Allowlisted. | free |
 | `MEMRAIN_SECRET_SCAN_HIGH_ENTROPY` | on | Redacts high-entropy values assigned to secret-looking keys (`password=`, `api_key:` …). `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
 | `MEMRAIN_SECRET_SCAN_ECHO` | on | Also redacts bare repeats of a value already caught in the same write. `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
 | `MEMRAIN_CODE_SECRET_SCAN` | on | Scans source files for credentials before the code indexer chunks them (line numbers are kept). `0` turns it off. Allowlisted. | free |

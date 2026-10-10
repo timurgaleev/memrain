@@ -37,6 +37,8 @@ export interface AddTimelineEventInput {
    * 'default' applies, preserving whole-brain behavior.
    */
   source_id?: string;
+  /** The authenticated principal behind the write (migration 134); audit-only. */
+  written_by_principal?: string;
 }
 
 export interface TimelineEventRow {
@@ -84,6 +86,27 @@ function normaliseOccurredAt(v: string | Date): string {
 }
 
 /**
+ * The columns stamped only when set — source_id so its NOT NULL DEFAULT
+ * applies otherwise, written_by_principal so an internal write stays NULL —
+ * appended to `params` with their placeholders.
+ */
+function optionalCols(
+  params: unknown[],
+  sourceId: string | null,
+  principal: string | null,
+): { cols: string; values: string } {
+  let cols = "";
+  let values = "";
+  for (const [col, value] of [["source_id", sourceId], ["written_by_principal", principal]] as const) {
+    if (value === null) continue;
+    params.push(value);
+    cols += `, ${col}`;
+    values += `, $${params.length}`;
+  }
+  return { cols, values };
+}
+
+/**
  * Append an event. Idempotent on (slug, occurred_at, source_chunk_id)
  * — a recipe re-emitting the same event from the same chunk does
  * not create duplicate rows. Returns `inserted: false` in that case.
@@ -126,7 +149,10 @@ export async function addTimelineEvent(
       throw new PageNotFoundError(input.slug);
     }
   }
-  const sourceCol = sourceId !== null ? ", source_id" : "";
+  const principal =
+    typeof input.written_by_principal === "string" && input.written_by_principal.length > 0
+      ? input.written_by_principal
+      : null;
   const { event, detail } = await guardFields(
     storage.engine(),
     `timeline:${input.slug}`,
@@ -141,11 +167,11 @@ export async function addTimelineEvent(
   // that.
   if (chunkId === null) {
     const params: unknown[] = [input.slug, occurred, event, detail, sourceLabel];
-    if (sourceId !== null) params.push(sourceId);
+    const extra = optionalCols(params, sourceId, principal);
     const r = await storage.engine().query<{ id: number }>(
       `INSERT INTO timeline_events
-         (slug, occurred_at, event, detail, source_label, source_chunk_id${sourceCol})
-       VALUES ($1, $2::timestamptz, $3, $4, $5, NULL${sourceId !== null ? ", $6" : ""})
+         (slug, occurred_at, event, detail, source_label, source_chunk_id${extra.cols})
+       VALUES ($1, $2::timestamptz, $3, $4, $5, NULL${extra.values})
        ON CONFLICT (slug, occurred_at, event, source_label, source_id)
          WHERE source_chunk_id IS NULL
          DO NOTHING
@@ -160,11 +186,11 @@ export async function addTimelineEvent(
     };
   }
   const params: unknown[] = [input.slug, occurred, event, detail, sourceLabel, chunkId];
-  if (sourceId !== null) params.push(sourceId);
+  const extra = optionalCols(params, sourceId, principal);
   const r = await storage.engine().query<{ id: number }>(
     `INSERT INTO timeline_events
-       (slug, occurred_at, event, detail, source_label, source_chunk_id${sourceCol})
-     VALUES ($1, $2::timestamptz, $3, $4, $5, $6${sourceId !== null ? ", $7" : ""})
+       (slug, occurred_at, event, detail, source_label, source_chunk_id${extra.cols})
+     VALUES ($1, $2::timestamptz, $3, $4, $5, $6${extra.values})
      ON CONFLICT (slug, occurred_at, source_chunk_id)
        WHERE source_chunk_id IS NOT NULL
        DO NOTHING

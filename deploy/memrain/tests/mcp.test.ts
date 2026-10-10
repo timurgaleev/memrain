@@ -174,6 +174,7 @@ describe("MCP HTTP transport", () => {
       "ontology_propose",
       "page_append",
       "page_delete",
+      "page_edit",
       "page_get",
       "page_list",
       "page_put",

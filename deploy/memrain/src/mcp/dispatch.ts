@@ -47,6 +47,7 @@ import {
   restorePage,
   revertPage,
   getPage,
+  getPageExact,
   listPages,
   pageVersions,
   KNOWN_PAGE_TYPES,
@@ -110,7 +111,10 @@ import {
   volunteerEventRowsFrom,
 } from "../core/context/volunteer-events.ts";
 import { runAdvisor } from "../core/advisor/run.ts";
-import { listBrainSkillpacks, getBrainSkill } from "../core/skillpack/brain-resident.ts";
+import { getSkillDetail, listSkillCatalog } from "../core/skillpack/brain-resident.ts";
+import { boundedDiff, parsePageEdits } from "../core/page-edit.ts";
+import { isPublicMcpToolForbidden } from "../http/public_guard.ts";
+import { describeCaller } from "./caller-capabilities.ts";
 import {
   listConcepts,
   listTakes,
@@ -581,6 +585,7 @@ async function dispatchToolInner(
             opts.isPublic ?? false,
             remoteWriterIdentity(opts),
             receipt,
+            writerPrincipal(opts),
           ),
         );
       case "page_append":
@@ -592,20 +597,34 @@ async function dispatchToolInner(
             opts.isPublic ?? false,
             remoteWriterIdentity(opts),
             receipt,
+            writerPrincipal(opts),
           ),
         );
+      case "page_edit":
+        return await withWriteRequest(storage, req.name, args, writeRequestPrincipal(opts, writeSource), (receipt) =>
+          callPageEdit(storage, args, {
+            writeSource,
+            isPublic: opts.isPublic ?? false,
+            redact,
+            remote,
+            readSources,
+            remoteIdentity: remoteWriterIdentity(opts),
+            principal: writerPrincipal(opts),
+            receipt,
+          }),
+        );
       case "page_delete":
-        return await callPageDelete(storage, args, writeSource);
+        return await callPageDelete(storage, args, writeSource, writerPrincipal(opts));
       case "page_restore":
-        return await callPageRestore(storage, args, writeSource, opts.isPublic ?? false);
+        return await callPageRestore(storage, args, writeSource, opts.isPublic ?? false, writerPrincipal(opts));
       case "page_revert":
-        return await callPageRevert(storage, args, writeSource, opts.isPublic ?? false);
+        return await callPageRevert(storage, args, writeSource, opts.isPublic ?? false, writerPrincipal(opts));
       case "page_get":
         return await callPageGet(storage, args, redact, readSources, remote);
       case "page_list":
         return await callPageList(storage, args, redact, readSources, remote);
       case "page_versions":
-        return await callPageVersions(storage, args, redact, readSources, remote);
+        return await callPageVersions(storage, args, redact, readSources, remote, seesPrincipal(opts));
       case "link":
         return await callLink(storage, args, writeSource);
       case "unlink":
@@ -644,11 +663,12 @@ async function dispatchToolInner(
             writerIdentity(opts),
             opts.authInfo?.boundSlugPrefixes,
             remote,
+            writerPrincipal(opts),
           ),
         );
       case "add_timeline_event":
         return await withWriteRequest(storage, req.name, args, writeRequestPrincipal(opts, writeSource), () =>
-          callAddTimelineEvent(storage, args, writeSource),
+          callAddTimelineEvent(storage, args, writeSource, writerPrincipal(opts)),
         );
       case "entity_facts":
         return await callEntityFacts(storage, args, redact, readSources, remote);
@@ -699,7 +719,7 @@ async function dispatchToolInner(
       case "get_brain_identity":
         return await callGetBrainIdentity(storage, readSources);
       case "whoami":
-        return callWhoami(opts.authInfo, readSources, opts.isPublic ?? false);
+        return await callWhoami(storage, opts.authInfo, readSources, opts.isPublic ?? false);
       case "purge_deleted_pages":
         return await callPurgeDeletedPages(storage, args, writeSource);
       case "query":
@@ -723,7 +743,7 @@ async function dispatchToolInner(
       case "advisor":
         return await callAdvisor(storage, readSources);
       case "list_brain_skillpack":
-        return await callListBrainSkillpack();
+        return await callListBrainSkillpack(callerCanCall(opts));
       case "list_concepts":
         return await callListConcepts(storage, args, readSources);
       case "list_takes":
@@ -782,9 +802,9 @@ async function dispatchToolInner(
       case "run_doctor":
         return await callRunDoctor(storage);
       case "list_skills":
-        return callListSkills();
+        return callListSkills(callerCanCall(opts));
       case "get_skill":
-        return callGetSkill(args);
+        return callGetSkill(args, callerCanCall(opts));
       case "get_recent_transcripts":
         return await callGetRecentTranscripts(storage, args, redact, readSources, remote);
       case "chronicle_day":
@@ -1480,6 +1500,20 @@ function asPageInput(
   return input;
 }
 
+/**
+ * MEMRAIN_REQUIRE_WRITE_PRECONDITION: what an MCP page_put that overwrites a
+ * live page without `expected_version` (and without `force: true`) gets —
+ * `off` (default) nothing, `warn` a `warnings` entry, `refuse` the
+ * `precondition_required` error. Only MCP page_put reads it: putPage's
+ * internal callers write without a version on purpose.
+ */
+export function writePreconditionPolicy(): "warn" | "refuse" | undefined {
+  const v = (process.env["MEMRAIN_REQUIRE_WRITE_PRECONDITION"] ?? "").trim().toLowerCase();
+  if (v === "warn") return "warn";
+  if (v === "refuse" || v === "1" || v === "true") return "refuse";
+  return undefined;
+}
+
 async function callPagePut(
   storage: Storage,
   args: Record<string, unknown>,
@@ -1487,6 +1521,7 @@ async function callPagePut(
   isPublic = false,
   remoteIdentity?: string,
   receipt?: WriteRequestKey,
+  principal?: string,
 ): Promise<ToolCallResult> {
   const input = asPageInput(args, remoteIdentity);
   if (typeof input === "string") return errResult(input);
@@ -1494,16 +1529,37 @@ async function callPagePut(
   const { expectedVersion } = writePrecondition("page_put", args);
   if (expectedVersion !== undefined) input.expectedVersion = expectedVersion;
   if (receipt !== undefined) input.receipt = receipt;
+  if (principal !== undefined) input.written_by_principal = principal;
+  const policy = writePreconditionPolicy();
+  if (policy !== undefined && args["force"] !== true) input.preconditionPolicy = policy;
   const r = await putPage(storage, input);
+  const derived = await afterPageWrite(storage, r, writeSource, isPublic, "page_put", args["wait_for_index"] === true);
+  return jsonResult({ ok: true, ...r, ...derived });
+}
+
+/**
+ * Everything a page_put or page_edit does after the page row commits: links,
+ * mentions, typed and verb edges, body timeline, the search mirror, the
+ * on-write extraction backstops, and the facts and takes fences. Returns the
+ * response fields it produces.
+ */
+async function afterPageWrite(
+  storage: Storage,
+  r: { slug: string; changed: boolean; content_hash: string },
+  writeSource: string | undefined,
+  isPublic: boolean,
+  op: "page_put" | "page_edit",
+  waitForIndex: boolean,
+): Promise<Record<string, unknown>> {
   let mirror: Awaited<ReturnType<typeof mirrorOrQueue>> = {};
   let chronicleBackstop = false;
   let bodyTimeline: BodyTimelineSyncResult | undefined;
   if (r.changed) {
     // Fetch the canonical row once: an omitted title lands as NULL while an
-    // omitted body keeps the page's current one, so the stored row — not
-    // `input` — is what actually became searchable.
+    // omitted body keeps the page's current one, so the stored row — not the
+    // caller's input — is what actually became searchable.
     const page = await getPage(storage, r.slug);
-    const body = page?.markdown_body ?? input.markdown_body ?? "";
+    const body = page?.markdown_body ?? "";
     // Every derived write below carries the PAGE's source, not the caller's.
     // An unscoped operator write is allowed onto a named-source page
     // (pages.ts), and these reconcilers read an omitted source as "unscoped":
@@ -1540,7 +1596,7 @@ async function callPagePut(
     // committed and is the source of truth — an embed failure must not fail
     // the write. The cycle backstop reconciles unindexed pages later.
     if (page) {
-      mirror = await mirrorOrQueue(storage, page, isPublic || writeSource !== undefined, "page_put", args["wait_for_index"] === true);
+      mirror = await mirrorOrQueue(storage, page, isPublic || writeSource !== undefined, op, waitForIndex);
       // On-write fact extraction (default-OFF, best-effort). Only on a real
       // content change and only for prose-eligible pages.
       // NOT derivedSource: here `writeSource` only picks the serialization
@@ -1575,14 +1631,94 @@ async function callPagePut(
   } catch (e) {
     console.error("[memrain] takes-fence sync failed (non-fatal):", e);
   }
-  return jsonResult({
-    ok: true,
-    ...r,
+  return {
     ...mirror,
     ...(chronicleBackstop ? { chronicle_backstop: true } : {}),
     ...(bodyTimeline && (bodyTimeline.derived > 0 || bodyTimeline.removed > 0)
       ? { body_timeline: bodyTimeline }
       : {}),
+  };
+}
+
+/**
+ * page_edit: exact-text replacements on a live page, under the same gates as
+ * page_put (public write flag, write source, slug-prefix fence) plus two of
+ * its own. A matcher answers whether text is in the page, so it is a read:
+ * where this ingress withholds page bodies, or the page is a diary a remote
+ * caller may not see, it is refused or reads as not found. And the page must
+ * be the caller's own — another source's page reads as not found, never as
+ * "owned by another source".
+ */
+async function callPageEdit(
+  storage: Storage,
+  args: Record<string, unknown>,
+  ctx: {
+    writeSource: string | undefined;
+    isPublic: boolean;
+    redact: boolean;
+    remote: boolean;
+    readSources: string[] | undefined;
+    remoteIdentity: string | undefined;
+    principal: string;
+    receipt: WriteRequestKey | undefined;
+  },
+): Promise<ToolCallResult> {
+  const slug = args["slug"];
+  if (typeof slug !== "string" || slug.length === 0) {
+    throw new OperationError("invalid_params", "page_edit: `slug` is required", "Pass the slug of the page to edit.");
+  }
+  const expected = args["expected_version"];
+  if (typeof expected !== "number" || !Number.isInteger(expected) || expected < 1) {
+    throw new OperationError(
+      "invalid_params",
+      "page_edit: `expected_version` is required",
+      "Read the page with page_get and pass its `version`.",
+    );
+  }
+  const edits = parsePageEdits(args["edits"]);
+  if (ctx.redact) {
+    throw new OperationError(
+      "permission_denied",
+      "page_edit: page bodies are not readable on this ingress",
+      "Use page_put to replace the whole page.",
+    );
+  }
+  // The diff and the matcher both read the page, so the caller must be able to
+  // read it as well as write it: a write grant outside the read grant, or a
+  // token with a read grant and no write source, must not open a read path.
+  const scope = ctx.writeSource !== undefined ? [ctx.writeSource] : ctx.readSources;
+  const current = await getPageExact(storage, slug, scope);
+  if (
+    !current ||
+    (ctx.readSources !== undefined && !ctx.readSources.includes(current.source_id)) ||
+    (ctx.remote && isDiaryPage(current.type, current.slug))
+  ) {
+    throw new PageNotFoundError(slug, "page_edit changes an existing page; create it with page_put first.");
+  }
+  const writtenBy = sanitizeWrittenBy(args["written_by"], ctx.remoteIdentity);
+  const r = await putPage(storage, {
+    slug,
+    edits,
+    expectedVersion: expected,
+    allowAdHocType: true, // the page's own type
+    written_by_principal: ctx.principal,
+    ...(writtenBy !== undefined ? { written_by: writtenBy } : {}),
+    ...(ctx.writeSource !== undefined ? { source_id: ctx.writeSource } : {}),
+    ...(ctx.receipt !== undefined ? { receipt: ctx.receipt } : {}),
+  });
+  const { edited, ...result } = r;
+  const derived = await afterPageWrite(storage, r, ctx.writeSource, ctx.isPublic, "page_edit", args["wait_for_index"] === true);
+  const before = edited?.before ?? "";
+  const after = edited?.after ?? before;
+  return jsonResult({
+    ok: true,
+    slug: result.slug,
+    version: result.version_n,
+    changed: result.changed,
+    edits_applied: edits.length,
+    ...boundedDiff(before, after, `${slug}.md`),
+    ...(result.secrets_found !== undefined ? { secrets_found: result.secrets_found } : {}),
+    ...derived,
   });
 }
 
@@ -1741,7 +1877,7 @@ async function mirrorOrQueue(
   storage: Storage,
   page: { slug: string; title: string | null; markdown_body: string; content_hash?: string; source_id?: string | null },
   remote: boolean,
-  op: "page_put" | "page_append",
+  op: "page_put" | "page_append" | "page_edit",
   waitForIndex: boolean,
 ): Promise<{ search_indexed?: boolean; search_pending?: true; search_job_id?: string }> {
   if (pageMirrorSync() || waitForIndex) {
@@ -1777,6 +1913,7 @@ async function callPageAppend(
   isPublic = false,
   remoteIdentity?: string,
   receipt?: WriteRequestKey,
+  principal?: string,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string") {
     return errResult("page_append: `slug` is required");
@@ -1793,6 +1930,7 @@ async function callPageAppend(
     })(),
     ...(writeSource ? { source_id: writeSource } : {}),
     ...(receipt !== undefined ? { receipt } : {}),
+    ...(principal !== undefined ? { written_by_principal: principal } : {}),
   });
   let mirror: Awaited<ReturnType<typeof mirrorOrQueue>> = {};
   let chronicleBackstop = false;
@@ -1838,13 +1976,17 @@ async function callPageDelete(
   storage: Storage,
   args: Record<string, unknown>,
   writeSource?: string,
+  principal?: string,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string") {
     return errResult("page_delete: `slug` is required");
   }
   const writtenBy =
     typeof args["written_by"] === "string" ? args["written_by"] : undefined;
-  const r = await deletePage(storage, args["slug"], writtenBy, writeSource, writePrecondition("page_delete", args));
+  const r = await deletePage(storage, args["slug"], writtenBy, writeSource, {
+    ...writePrecondition("page_delete", args),
+    ...(principal !== undefined ? { writtenByPrincipal: principal } : {}),
+  });
   // A soft-deleted page must stop serving its fence-derived facts; explicit
   // (NULL source_markdown_slug) facts are left intact.
   if (!r.already_deleted) {
@@ -1879,13 +2021,14 @@ async function callPageRestore(
   args: Record<string, unknown>,
   writeSource?: string,
   isPublic = false,
+  principal?: string,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string") {
     return errResult("page_restore: `slug` is required");
   }
   const writtenBy =
     typeof args["written_by"] === "string" ? args["written_by"] : undefined;
-  const r = await restorePage(storage, args["slug"], writtenBy, writeSource);
+  const r = await restorePage(storage, args["slug"], writtenBy, writeSource, principal !== undefined ? { writtenByPrincipal: principal } : {});
   if (r.restored) {
     // Re-derive ONLY what delete tore down: facts (purged on delete) and the
     // search mirror (dropped on delete). Links/mentions/typed-links are NOT
@@ -1905,6 +2048,7 @@ async function callPageRevert(
   args: Record<string, unknown>,
   writeSource?: string,
   isPublic = false,
+  principal?: string,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string") {
     return errResult("page_revert: `slug` is required");
@@ -1915,7 +2059,10 @@ async function callPageRevert(
   }
   const writtenBy =
     typeof args["written_by"] === "string" ? args["written_by"] : undefined;
-  const r = await revertPage(storage, args["slug"], v as number, writtenBy, writeSource, writePrecondition("page_revert", args));
+  const r = await revertPage(storage, args["slug"], v as number, writtenBy, writeSource, {
+    ...writePrecondition("page_revert", args),
+    ...(principal !== undefined ? { writtenByPrincipal: principal } : {}),
+  });
   if (r.reverted) {
     // The body changed — refresh links, mentions, facts, and the search mirror,
     // exactly as a normal page_put would.
@@ -2048,6 +2195,7 @@ async function callPageVersions(
   redact = false,
   readSources?: string[],
   remote = false,
+  withPrincipal = false,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string") {
     return errResult("page_versions: `slug` is required");
@@ -2060,7 +2208,7 @@ async function callPageVersions(
   }
   const limit = typeof args["limit"] === "number" ? args["limit"] : 20;
   const sourceIds = readSources;
-  const versions = await pageVersions(storage, args["slug"], limit, sourceIds);
+  const versions = await pageVersions(storage, args["slug"], limit, sourceIds, { withPrincipal });
   // Version rows carry body snapshots; redact each through the same
   // page allowlist so public callers see metadata only.
   const out = redact
@@ -2391,6 +2539,32 @@ export function writerIdentity(opts: DispatchOptions): string {
   return id !== undefined && id.length > 0 ? `client:${id}` : "operator";
 }
 
+/**
+ * The credential a write arrived on, for `written_by_principal`: the writer
+ * identity, plus the enrollment when a shared connector books under one.
+ * Taken from the resolved grant, never from an argument.
+ */
+export function writerPrincipal(opts: DispatchOptions): string {
+  const base = writerIdentity(opts);
+  const spendId = opts.authInfo?.spendId;
+  return spendId !== undefined && spendId.length > 0 && spendId !== opts.authInfo?.clientId
+    ? `${base}|enrollment:${spendId}`
+    : base;
+}
+
+/** Whether a caller may read `written_by_principal`: the operator, or an admin-scoped grant. */
+function seesPrincipal(opts: DispatchOptions): boolean {
+  if (opts.authInfo === undefined) return !(opts.isPublic ?? false);
+  return hasScope(opts.authInfo.scopes ?? [], "admin");
+}
+
+/** The tools/list predicate for this caller, as the skill catalog needs it. */
+function callerCanCall(opts: DispatchOptions): (tool: string) => boolean {
+  const isPublic = opts.isPublic ?? false;
+  return (tool) =>
+    dispatchRefusal(tool, opts.authInfo) === null && !(isPublic && isPublicMcpToolForbidden(tool));
+}
+
 async function callAddFact(
   storage: Storage,
   args: Record<string, unknown>,
@@ -2399,6 +2573,7 @@ async function callAddFact(
   fallbackWrittenBy = "operator",
   boundPrefixes?: readonly string[],
   remote = false,
+  principal?: string,
 ): Promise<ToolCallResult> {
   // Both retire or fan out writes an anonymous caller has no business making.
   if (isPublic && (args["items"] !== undefined || args["replaces"] !== undefined)) {
@@ -2410,7 +2585,7 @@ async function callAddFact(
   }
   const bound = boundPrefixes !== undefined && boundPrefixes.length > 0 ? boundPrefixes : undefined;
   const writeOne = (itemArgs: Record<string, unknown>) =>
-    addOneFact(storage, itemArgs, writeSource, isPublic, fallbackWrittenBy, bound, remote);
+    addOneFact(storage, itemArgs, writeSource, isPublic, fallbackWrittenBy, bound, remote, principal);
   let body: Record<string, unknown>;
   if (args["items"] !== undefined) {
     const items = normalizeAddFactItems(args);
@@ -2434,6 +2609,7 @@ async function addOneFact(
   fallbackWrittenBy: string,
   boundPrefixes: readonly string[] | undefined,
   remote: boolean,
+  principal?: string,
 ): Promise<Awaited<ReturnType<typeof addFact>> & { replaced?: boolean; replace_reason?: string }> {
   if (typeof args["entity_slug"] !== "string" || args["entity_slug"].length === 0)
     throw new OperationError("invalid_params", "add_fact: `entity_slug` is required", "Pass the entity the fact is about, e.g. `people/alice`.");
@@ -2487,6 +2663,7 @@ async function addOneFact(
   ) {
     input.written_by = fallbackWrittenBy;
   }
+  if (principal !== undefined) input.written_by_principal = principal;
   const r = await addFact(storage, input);
   const replaces = args["replaces"];
   if (typeof replaces !== "number") return r;
@@ -2511,6 +2688,7 @@ async function callAddTimelineEvent(
   storage: Storage,
   args: Record<string, unknown>,
   writeSource?: string,
+  principal?: string,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string")
     return errResult("add_timeline_event: `slug` is required");
@@ -2528,6 +2706,7 @@ async function callAddTimelineEvent(
   if (typeof args["source_chunk_id"] === "string")
     input.source_chunk_id = args["source_chunk_id"];
   if (writeSource) input.source_id = writeSource;
+  if (principal !== undefined) input.written_by_principal = principal;
   const r = await addTimelineEvent(storage, input);
   return jsonResult({ ok: true, ...r });
 }
@@ -3070,11 +3249,17 @@ async function callGetBrainIdentity(
 
 /** Introspect the calling identity — the caller's own auth context, no corpus.
  *  Unscoped (no authInfo / no read scope) reports read_sources: null. */
-function callWhoami(
+async function callWhoami(
+  storage: Storage,
   authInfo: AuthInfo | undefined,
   readSources: string[] | undefined,
   isPublic: boolean,
-): ToolCallResult {
+): Promise<ToolCallResult> {
+  const capabilities = await describeCaller(storage.engine(), {
+    authInfo,
+    isPublic,
+    forbidPublic: isPublicMcpToolForbidden,
+  });
   return jsonResult({
     ok: true,
     client_id: authInfo?.clientId ?? null,
@@ -3082,6 +3267,7 @@ function callWhoami(
     write_source: authInfo?.sourceId ?? null,
     read_sources: readSources ?? null,
     is_public: isPublic,
+    ...capabilities,
   });
 }
 
@@ -3385,8 +3571,8 @@ async function callAdvisor(
   return jsonResult({ ok: true, ...report });
 }
 
-async function callListBrainSkillpack(): Promise<ToolCallResult> {
-  return jsonResult({ ok: true, ...listBrainSkillpacks() });
+async function callListBrainSkillpack(callable: (tool: string) => boolean): Promise<ToolCallResult> {
+  return jsonResult({ ok: true, ...listSkillCatalog({ callable }) });
 }
 
 async function callListConcepts(
@@ -3566,15 +3752,14 @@ async function callExtractFacts(
   return jsonResult({ ok: true, ...result });
 }
 
-function callListSkills(): ToolCallResult {
-  const pack = listBrainSkillpacks();
-  return jsonResult({ ok: true, ...pack });
+function callListSkills(callable: (tool: string) => boolean): ToolCallResult {
+  return jsonResult({ ok: true, ...listSkillCatalog({ callable }) });
 }
 
-function callGetSkill(args: Record<string, unknown>): ToolCallResult {
+function callGetSkill(args: Record<string, unknown>, callable: (tool: string) => boolean): ToolCallResult {
   const name = typeof args["name"] === "string" ? args["name"] : "";
   if (!name) return errResult("get_skill: `name` is required");
-  const skill = getBrainSkill(name);
+  const skill = getSkillDetail(name, { callable });
   if (!skill) return errResult(`get_skill: skill not found: ${name}`);
   return jsonResult({ ok: true, skill });
 }

@@ -1049,7 +1049,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"client_id\": null,\n  \"scopes\": [],\n  \"write_source\": null,\n  \"read_sources\": null,\n  \"is_public\": false\n}"
+          "text": "{\n  \"ok\": true,\n  \"client_id\": null,\n  \"scopes\": [],\n  \"write_source\": null,\n  \"read_sources\": null,\n  \"is_public\": false,\n  \"operator\": true,\n  \"bound_slug_prefixes\": null,\n  \"takes_holders\": null,\n  \"budget_usd_per_day\": null,\n  \"spent_today_usd\": null,\n  \"spend_id\": null,\n  \"callable_tools\": [\n    \"search\",\n    \"index\",\n    \"backlinks\",\n    \"stats\",\n    \"source_health\",\n    \"log_friction\",\n    \"page_put\",\n    \"page_append\",\n    \"page_edit\",\n    \"page_delete\",\n    \"page_restore\",\n    \"page_revert\",\n    \"page_get\",\n    \"page_list\",\n    \"page_versions\",\n    \"link\",\n    \"unlink\",\n    \"graph_neighbors\",\n    \"graph_query\",\n    \"traverse_graph\",\n    \"add_fact\",\n    \"add_timeline_event\",\n    \"entity_facts\",\n    \"fact_supersessions\",\n    \"entity_timeline\",\n    \"entity_recall\",\n    \"jobs_submit\",\n    \"jobs_cancel\",\n    \"jobs_list\",\n    \"jobs_get\",\n    \"jobs_logs\",\n    \"submit_agent\",\n    \"get_agent_job\",\n    \"get_chunks\",\n    \"resolve_slugs\",\n    \"add_tag\",\n    \"remove_tag\",\n    \"get_tags\",\n    \"relational_recall\",\n    \"get_links\",\n    \"list_link_sources\",\n    \"find_orphans\",\n    \"find_experts\",\n    \"find_contradictions\",\n    \"find_trajectory\",\n    \"get_recent_salience\",\n    \"find_anomalies\",\n    \"recall\",\n    \"forget_fact\",\n    \"get_brain_identity\",\n    \"whoami\",\n    \"purge_deleted_pages\",\n    \"query\",\n    \"code_callers\",\n    \"code_callees\",\n    \"code_def\",\n    \"code_refs\",\n    \"code_blast\",\n    \"code_flow\",\n    \"volunteer_context\",\n    \"context_pack\",\n    \"advisor\",\n    \"list_brain_skillpack\",\n    \"list_concepts\",\n    \"list_takes\",\n    \"set_take_status\",\n    \"takes_search\",\n    \"get_calibration_profile\",\n    \"takes_scorecard\",\n    \"takes_calibration\",\n    \"extract_facts\",\n    \"list_skills\",\n    \"get_skill\",\n    \"get_recent_transcripts\",\n    \"think\",\n    \"put_raw_data\",\n    \"get_raw_data\",\n    \"log_ingest\",\n    \"get_ingest_log\",\n    \"retry_job\",\n    \"get_job_progress\",\n    \"sources_list\",\n    \"sources_status\",\n    \"get_status_snapshot\",\n    \"run_doctor\",\n    \"chronicle_day\",\n    \"chronicle_since\",\n    \"chronicle_on_this_day\",\n    \"chronicle_last_seen\",\n    \"ontology_get\",\n    \"ontology_propose\",\n    \"ontology_dimensions\",\n    \"ontology_conflicts\",\n    \"volunteer_chronicle\",\n    \"chronicle_backfill\"\n  ]\n}"
         }
       ]
     }
@@ -1058,7 +1058,7 @@
     "call": "page_versions {\"slug\":\"team-b/alice\"}",
     "sql": [
       {
-        "text": "SELECT slug, version_n, hash_prev, hash_new, body_snapshot, compiled_truth_snapshot, written_by, written_at::text AS written_at FROM page_versions WHERE slug = $1 ORDER BY version_n DESC LIMIT $2",
+        "text": "SELECT slug, version_n, hash_prev, hash_new, body_snapshot, compiled_truth_snapshot, written_by, written_at::text AS written_at, written_by_principal FROM page_versions WHERE slug = $1 ORDER BY version_n DESC LIMIT $2",
         "params": [
           "team-b/alice",
           20
@@ -1069,7 +1069,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"versions\": [\n    {\n      \"slug\": \"team-b/alice\",\n      \"version_n\": 2,\n      \"hash_prev\": \"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\n      \"hash_new\": \"a593938132fcd000f2b001d45cb7c7b72abd4587b74a320c0409f0c117436023\",\n      \"body_snapshot\": \"BBB_SECRET_NOTES_BODY\\nBBB_APPENDED\",\n      \"compiled_truth_snapshot\": {},\n      \"written_by\": null,\n      \"written_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"team-b/alice\",\n      \"version_n\": 1,\n      \"hash_prev\": null,\n      \"hash_new\": \"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\n      \"body_snapshot\": \"BBB_SECRET_NOTES_BODY\",\n      \"compiled_truth_snapshot\": {},\n      \"written_by\": null,\n      \"written_at\": \"<ts>\"\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"versions\": [\n    {\n      \"slug\": \"team-b/alice\",\n      \"version_n\": 2,\n      \"hash_prev\": \"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\n      \"hash_new\": \"a593938132fcd000f2b001d45cb7c7b72abd4587b74a320c0409f0c117436023\",\n      \"body_snapshot\": \"BBB_SECRET_NOTES_BODY\\nBBB_APPENDED\",\n      \"compiled_truth_snapshot\": {},\n      \"written_by\": null,\n      \"written_at\": \"<ts>\",\n      \"written_by_principal\": \"client:client-tenantB\"\n    },\n    {\n      \"slug\": \"team-b/alice\",\n      \"version_n\": 1,\n      \"hash_prev\": null,\n      \"hash_new\": \"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\n      \"body_snapshot\": \"BBB_SECRET_NOTES_BODY\",\n      \"compiled_truth_snapshot\": {},\n      \"written_by\": null,\n      \"written_at\": \"<ts>\",\n      \"written_by_principal\": null\n    }\n  ]\n}"
         }
       ]
     }
