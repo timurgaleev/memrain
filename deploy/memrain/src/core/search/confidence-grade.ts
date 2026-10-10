@@ -10,6 +10,9 @@
  *   strong   — the top hit is an identity or two-arm match (title, alias, both arms)
  *   moderate — the top hit is a keyword match, or a later head hit is strong
  *   weak     — no hits, or the head holds only semantic neighbours
+ *   unknown  — a cache hit: the stored ranking carries no arm membership, so
+ *              its default evidence would grade the same query differently
+ *              from the miss that stored it (reason "cache_hit")
  *
  * Operator-only: on an empty fenced result a grade would still describe
  * content the caller cannot see, so publicSearchMeta never carries it.
@@ -17,12 +20,15 @@
 import type { Evidence } from "./evidence.ts";
 import { RANK_BAND } from "./evidence.ts";
 
-export type ConfidenceGrade = "strong" | "moderate" | "weak";
+export type ConfidenceGrade = "strong" | "moderate" | "weak" | "unknown";
 
 export interface SearchConfidence {
   grade: ConfidenceGrade;
   reason: string;
 }
+
+/** The grade a cache hit reports; see the header for why it claims nothing. */
+export const CACHE_HIT_CONFIDENCE: SearchConfidence = { grade: "unknown", reason: "cache_hit" };
 
 const STRONG: ReadonlySet<Evidence> = new Set(["exact_title_match", "alias_hit", "high_vector_match"]);
 

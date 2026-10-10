@@ -85,13 +85,37 @@ export async function keywordSearchScored(
 /** Lexemes past this many are dropped from the OR retry: a long query already found its AND rows or it is prose. */
 const MAX_RELAXED_LEXEMES = 16;
 
+/** Shorter lexemes match too many chunks to be a useful OR term. */
+const MIN_RELAXED_LEXEME_LENGTH = 3;
+
+/**
+ * Function words the 'simple' config keeps. In an OR any one of them matches
+ * most chunks and fills the LIMIT before the content words rank, so they never
+ * enter the retry. English and German, the brain's two languages; words under
+ * {@link MIN_RELAXED_LEXEME_LENGTH} are dropped anyway and are not listed.
+ */
+const RELAXED_STOPWORDS: ReadonlySet<string> = new Set([
+  "the", "and", "for", "are", "but", "not", "was", "were", "with", "from",
+  "this", "that", "these", "those", "there", "their", "they", "them", "then",
+  "than", "what", "when", "where", "which", "who", "whom", "why", "how",
+  "about", "into", "onto", "over", "also", "been", "being", "have", "has",
+  "had", "does", "did", "its", "can", "will", "would", "should", "could",
+  "you", "your", "our", "his", "her", "all", "any", "some",
+  "der", "die", "das", "und", "den", "dem", "des", "ein", "eine", "einer",
+  "eines", "einem", "einen", "mit", "von", "für", "auf", "ist", "sind",
+  "nicht", "auch", "als", "wie", "wer", "aus", "bei", "nach", "über",
+  "oder", "aber", "sich", "wir", "ihr", "sie", "zum", "zur", "dass", "noch",
+  "nur", "war", "wird", "werden", "kann", "hat", "haben",
+]);
+
 /**
  * The OR form of {@link keywordSearch}: a chunk matching ANY of the query's
- * lexemes. Used only as a retry when the strict AND pass came back thin. The
- * lexemes come from the same 'simple' parser the AND form uses, and each goes
+ * content lexemes. Used only as a retry when the strict AND pass came back
+ * thin. The lexemes come from the same 'simple' parser the AND form uses, in
+ * query order (the cap keeps the words the caller typed first), and each goes
  * back in as its own bound parameter, so no user text is ever spliced into a
- * tsquery string. A query with fewer than two lexemes has no OR form and
- * returns [].
+ * tsquery string. A query with fewer than two lexemes has no OR form, and one
+ * left with no content lexeme has nothing to match: both return [].
  */
 export async function keywordSearchRelaxed(
   engine: Engine,
@@ -100,11 +124,15 @@ export async function keywordSearchRelaxed(
   opts: KeywordSearchOptions = {},
 ): Promise<KeywordRow[]> {
   const lex = await engine.query<{ lex: string }>(
-    `SELECT DISTINCT unnest(tsvector_to_array(to_tsvector('simple', $1))) AS lex ORDER BY lex`,
+    `SELECT lexeme AS lex FROM unnest(to_tsvector('simple', $1)) ORDER BY positions[1], lexeme`,
     [query],
   );
-  const lexemes = lex.rows.map((r) => r.lex).filter(Boolean).slice(0, MAX_RELAXED_LEXEMES);
-  if (lexemes.length < 2) return [];
+  const all = lex.rows.map((r) => r.lex).filter(Boolean);
+  if (all.length < 2) return [];
+  const lexemes = all
+    .filter((l) => l.length >= MIN_RELAXED_LEXEME_LENGTH && !RELAXED_STOPWORDS.has(l))
+    .slice(0, MAX_RELAXED_LEXEMES);
+  if (lexemes.length === 0) return [];
   const tsquery = `(${lexemes.map((_, i) => `plainto_tsquery('simple', $${i + 1})`).join(" || ")})`;
   return runKeywordQuery(engine, lexemes, tsquery, limit, opts);
 }

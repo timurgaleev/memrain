@@ -19,6 +19,11 @@ describe("pageKeyFor", () => {
     expect(pageKeyFor("people/alice.md", null, "d3")).toBe(page);
     expect(pageKeyFor("page://people/alice", "other", "d4")).not.toBe(page);
   });
+  it("meets a tenant mirror and its file twin on the source-stripped slug", () => {
+    const twin = pageKeyFor("people/alice.md", "tenantA", "d1");
+    expect(pageKeyFor("page://tenantA/people/alice", "tenantA", "d2")).toBe(twin);
+    expect(pageKeyFor("page-truth://tenantA/people/alice", "tenantA", "d3")).toBe(twin);
+  });
   it("keeps a path with no slug form as its own page", () => {
     expect(pageKeyFor("/abs/file.ts", null, "d1")).toBe("doc:d1");
   });
@@ -52,6 +57,14 @@ describe("fuseByPage", () => {
     const chunkGrain = reciprocalRankFusion(lists, { weights });
     const fused = fuseByPage(lists, { weights, pageOf: () => undefined });
     expect(fused.map(({ id, score }) => ({ id, score }))).toEqual(chunkGrain);
+  });
+
+  it("breaks score ties the way chunk-grain RRF does", () => {
+    // Every id ties with another; the order must not depend on which grain fused it.
+    const lists = [["z", "y"], ["y", "z"], ["b", "a"], ["a", "b"]];
+    const chunkGrain = reciprocalRankFusion(lists).map((r) => r.id);
+    const fused = fuseByPage(lists, { pageOf: () => undefined }).map((r) => r.id);
+    expect(fused).toEqual(chunkGrain);
   });
 });
 

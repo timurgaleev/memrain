@@ -17,6 +17,7 @@ import {
   knobsCacheSuffix,
 } from "../src/core/search/hybrid.ts";
 import { writeDocumentTransaction } from "../src/core/indexer-tx.ts";
+import type { SearchMeta } from "../src/core/search/search-meta.ts";
 import {
   putCachedQuery,
   queryCacheKey,
@@ -145,6 +146,27 @@ describe("hybridSearch query cache (hit path, no Bedrock)", () => {
     // the cap never wrote back, so there is no poisoning across calls.
     const full = await hybridSearch(storage, "cap me", { k: 5 });
     expect(full.map((h) => h.chunkId)).toEqual(["doc_b_c0", "doc_a_c0"]);
+  });
+
+  it("grades no confidence from a cache hit's arm-blind evidence", async () => {
+    // The hit path stamps default evidence (a title match still reads as
+    // exact_title_match, everything else weak_semantic), so a grade derived
+    // from it would disagree with the miss that stored the ranking.
+    const clock = await currentDocumentClock(storage.engine());
+    await putCachedQuery(
+      storage.engine(),
+      queryCacheKey("Alpha", 5, undefined, false, hybridSig()),
+      "Alpha",
+      5,
+      "entity",
+      ["doc_a_c0", "doc_b_c0"],
+      clock,
+    );
+    let meta: SearchMeta | undefined;
+    const hits = await hybridSearch(storage, "Alpha", { k: 5, onMeta: (m) => { meta = m; } });
+    expect(hits.map((h) => h.chunkId)).toEqual(["doc_a_c0", "doc_b_c0"]);
+    expect(meta?.cache).toBe("hit");
+    expect(meta?.confidence).toEqual({ grade: "unknown", reason: "cache_hit" });
   });
 
   it("invalidates the entry hybridSearch would read once the clock advances", async () => {

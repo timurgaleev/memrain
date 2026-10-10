@@ -86,20 +86,25 @@ export function fuseByPage(
         ? { id, score: pageTotal.get(page)!, votes: pageVotes.get(page)! }
         : { id, score, votes: ownVotes.get(id)! };
     })
+    // Same tie rule as core/rrf.ts: a stable sort over first-seen order, so
+    // tied hits keep the order chunk-grain fusion would give them.
     .sort((a, b) => b.score - a.score);
 }
 
 /**
- * The page a document belongs to: its source plus the first slug form of its
- * path, so `page://x`, `page-truth://x` and the file twin `x.md` meet on one
- * key. A path with no slug form (code, absolute paths) is its own page.
+ * The page a document belongs to: its source plus the slug form of its path
+ * (source-stripped for a tenant mirror), so `page://x`, `page-truth://x` and
+ * the file twin `x.md` meet on one key. A path with no slug form (code, absolute paths) is its own page.
  */
 export function pageKeyFor(
   sourcePath: string | null | undefined,
   sourceId: string | null | undefined,
   documentId: string,
 ): string {
-  const slug = slugCandidatesForPath(sourcePath, sourceId)[0];
+  // A tenant mirror `page://<source>/<slug>` yields the bare form first and the
+  // source-stripped slug second; only the stripped one meets its file twin.
+  const candidates = slugCandidatesForPath(sourcePath, sourceId);
+  const slug = candidates[1] ?? candidates[0];
   return slug ? `${sourceId ?? "default"}:${slug}` : `doc:${documentId}`;
 }
 

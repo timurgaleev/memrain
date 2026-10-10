@@ -35,6 +35,27 @@ describe("keywordSearchRelaxed", () => {
     expect(await keywordSearchRelaxed(fx.storage.engine(), "quokka", 20)).toEqual([]);
   });
 
+  it("drops stopwords and short words before building the OR", async () => {
+    // "the" alone matches most of the fixture; "to"/"a" are short.
+    const rows = await keywordSearchRelaxed(fx.storage.engine(), "the quokka and a survey to the", 20);
+    expect(rows.map((r) => r.id)).toEqual(["quokka_c0", "survey_c0"]);
+    // German function words go the same way.
+    const de = await keywordSearchRelaxed(fx.storage.engine(), "der quokka und die survey für", 20);
+    expect(de.map((r) => r.id)).toEqual(["quokka_c0", "survey_c0"]);
+  });
+
+  it("returns nothing when only stopwords and short words remain", async () => {
+    expect(await keywordSearchRelaxed(fx.storage.engine(), "the and of a for", 20)).toEqual([]);
+  });
+
+  it("keeps the lexemes in query order when it caps them", async () => {
+    // Sixteen fillers sort before "zephyr"; an alphabetical cap would drop it.
+    const fillers = Array.from({ length: 16 }, (_, i) => `filler${String.fromCharCode(97 + i)}`);
+    const rows = await keywordSearchRelaxed(fx.storage.engine(), ["zephyr", ...fillers].join(" "), 20);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.id.startsWith("zephyr_"))).toBe(true);
+  });
+
   it("takes query punctuation as data, never as tsquery syntax", async () => {
     const rows = await keywordSearchRelaxed(fx.storage.engine(), "quokka' | !survey & (:*", 20);
     expect(rows.map((r) => r.id)).toEqual(["quokka_c0", "survey_c0"]);

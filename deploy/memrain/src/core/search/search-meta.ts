@@ -38,7 +38,7 @@ export interface SearchMeta {
   /** Candidates in the fused pool (or the cached ranked set on a cache hit), before hydrate, dedup and the k trim. */
   retrieved: number;
   returned: number;
-  /** How sure the answer is, from the returned hits' evidence (operator-only). */
+  /** How sure the answer is, from the returned hits' evidence (operator-only); "unknown" on a cache hit. */
   confidence?: SearchConfidence;
 }
 

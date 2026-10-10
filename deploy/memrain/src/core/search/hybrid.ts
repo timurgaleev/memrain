@@ -119,7 +119,7 @@ import { skipMetadataBoosts } from "./metadata-boost-gate.ts";
 import { downweightKeywordArm, KEYWORD_WEAK_WEIGHT } from "./arm-confidence.ts";
 import { fuseByPage, pageKeysForChunks } from "./page-fusion.ts";
 import { promoteExactLookup } from "./exact-lookup.ts";
-import { gradeConfidence } from "./confidence-grade.ts";
+import { CACHE_HIT_CONFIDENCE, gradeConfidence } from "./confidence-grade.ts";
 
 /**
  * RRF weight for the deterministic relational arm (opt-in 4th arm). A gentle
@@ -846,7 +846,7 @@ export async function hybridSearch(
       degraded: hydrated.length > hits.length ? ["budget_truncated"] : [],
       retrieved: hydrated.length,
       returned: kept.length,
-      confidence: gradeConfidence(kept),
+      confidence: { ...CACHE_HIT_CONFIDENCE },
     });
     return kept;
   };
