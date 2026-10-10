@@ -112,7 +112,9 @@ describe("resolveLiveAuthority", () => {
 
   it("refuses once the daily cap is cleared", async () => {
     const s = await snap();
-    await provider.setClientBudget(clientId, null);
+    // setClientBudget bumps the revision, which refuses first; clear the cap
+    // behind its back so this check is the one that fires.
+    await storage.engine().query("UPDATE oauth_clients SET budget_usd_per_day = NULL WHERE client_id = $1", [clientId]);
     expect(await refusal(s)).toBe("daily budget cleared");
   });
 

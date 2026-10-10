@@ -345,7 +345,7 @@ that stops making calls once the budget is spent. All default OFF.
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
 | `MEMRAIN_TENANT_FAIL_CLOSED` | off (`=1` on) | When on, an authenticated PUBLIC principal with no source grant reads/writes **nothing** instead of the redacted whole brain. The static bearer (no `authInfo`) is unaffected. Flip once a real remote OAuth client with a grant exists. | free |
-| `MEMRAIN_OPERATOR` | unset (falls back to `USER`, then `cli`) | Name recorded as the actor on grant changes made with `memrain auth rescope-client`. Audit data only; it grants nothing. | free |
+| `MEMRAIN_OPERATOR` | unset (falls back to `USER`, then `cli`) | Name recorded as the actor on grant changes made with `memrain auth rescope-client`. Audit data only; it grants nothing. A self-chosen label, not an authenticated identity. | free |
 | `MEMRAIN_PUBLIC_WRITE` | `0` | When `1`, the public `/mcp` path may call the constructive write tools (`index`, `page_put`, `page_append`, `add_fact`, `add_timeline_event`, `add_tag`, `link`). Destructive ops + privacy-sensitive reads stay internal-only regardless. The static bearer is permanent, so anyone holding it can then write; prefer scoped PATs or OAuth clients for writers. | free |
 | `MEMRAIN_ASSUME_PUBLIC` | off (`=1` on) | Treat every HTTP request as public ingress. Public detection otherwise keys on the `Cf-Connecting-Ip` header a Cloudflare Tunnel injects; behind another proxy that does not add it, set this (or inject the header) or remote callers are judged as internal peers. Allowlisted. | free |
 | `MEMRAIN_HTTP_CORS_ORIGIN` | unset (no cross-origin) | CSV of browser origins allowed to call Memrain cross-origin. Unset denies every cross-origin request. Allowlisted. | free |
@@ -603,6 +603,12 @@ the before/after diff and the current revision), then apply it with
 shows who changed the grant and when; the admin API exposes the same through
 `POST /admin/api/rescope-client` (`dry_run`, `expected_revision`) and
 `GET /admin/api/grant-audit?client_id=`.
+
+The `actor` on an audit row is a label, not an authenticated identity. The CLI
+records `MEMRAIN_OPERATOR` (else `USER`, else `cli`), which whoever runs the
+command can set to anything; the admin API records `admin` for every change.
+Read it as a note about who said they made the change, and rely on host access
+logs when you need to know who did.
 
 Two things to know before you rely on this:
 

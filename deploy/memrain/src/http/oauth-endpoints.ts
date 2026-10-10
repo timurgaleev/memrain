@@ -313,6 +313,9 @@ export async function handleTokenRoute(
       }
       const scopeParam = params.get("scope");
       const scopes = scopeParam ? parseScopeString(scopeParam) : undefined;
+      if (scopes !== undefined && scopes.length === 0) {
+        return oauthError("invalid_scope", "scope names no scope", 400);
+      }
       const tokens = await provider.exchangeRefreshToken(
         client,
         refreshToken,

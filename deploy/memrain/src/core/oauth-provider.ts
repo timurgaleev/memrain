@@ -897,6 +897,31 @@ async function deleteUnbound(tx: Engine, clientId: string): Promise<UnboundRevoc
   return tallyUnbound(t.rows, c.rows.length);
 }
 
+/**
+ * Cut every token the client holds down to what it was issued AND the client
+ * now holds, and delete the ones left with nothing. Verify and refresh also
+ * intersect at call time, but against the client's current scopes only, so
+ * without the stored cut a client narrowed and then widened again would hand
+ * its pre-narrowing tokens their old scopes back. Runs under rescopeClient's
+ * row lock, which every refresh waits on.
+ */
+async function narrowIssuedTokens(tx: Engine, clientId: string, clientScopes: string[]): Promise<void> {
+  const r = await tx.query<{ token_hash: string; scopes: string[] | null }>(
+    // A revoked row is already dead and stays as it is for its audit trail.
+    "SELECT token_hash, scopes FROM oauth_tokens WHERE client_id = $1 AND revoked_at IS NULL FOR UPDATE",
+    [clientId],
+  );
+  for (const row of r.rows) {
+    const issued = row.scopes ?? [];
+    const kept = intersectGrantedScopes(issued, clientScopes);
+    if (kept.length === 0) {
+      await tx.query("DELETE FROM oauth_tokens WHERE token_hash = $1", [row.token_hash]);
+    } else if (JSON.stringify(sortedCopy(kept)) !== JSON.stringify(sortedCopy(issued))) {
+      await tx.query("UPDATE oauth_tokens SET scopes = $2::text[] WHERE token_hash = $1", [row.token_hash, kept]);
+    }
+  }
+}
+
 /** One row of the enrollment trail; `before` is null for an issue. */
 async function writeEnrollmentAudit(
   tx: Engine,
@@ -1207,6 +1232,10 @@ export class OAuthProvider {
    * tenant and survive; a client_credentials token of such a client goes too,
    * and the caller mints a fresh one with its secret.
    *
+   * A change that names scopes also rewrites the scopes stored on every token
+   * the client holds to their intersection with the new set, deleting tokens
+   * left with none, so widening the client later gives them nothing back.
+   *
    * Runs under a row lock so the revision check, validation and write see one
    * consistent row. A stale `expectedRevision` fails with `grant_conflict`
    * before anything is written; validation collects every reason code instead
@@ -1359,6 +1388,7 @@ export class OAuthProvider {
       // means the invariant broke and the change must not look applied.
       if (revision === undefined) throw new Error(`grant write for "${clientId}" affected no row`);
       const revokedUnbound = movesTenant ? await deleteUnbound(tx, clientId) : NO_UNBOUND_REVOKED;
+      if (scope !== undefined) await narrowIssuedTokens(tx, clientId, after.scopes);
       return { clientId, revision: Number(revision), before, after, changed, dryRun: false, revokedUnbound, ttls };
     });
   }
@@ -2124,8 +2154,8 @@ export class OAuthProvider {
    * token when no client has that id. `null` removes the cap, which
    * is also the default — an uncapped client is allowed, exactly as before the
    * column existed. The column is NUMERIC(10,2); a value that would not fit is
-   * refused here rather than silently rounded by the database. A token's cap
-   * change is audited and revision-bumped like its scopes.
+   * refused here rather than silently rounded by the database. A client's or a
+   * token's cap change is audited and revision-bumped like its scopes.
    */
   async setClientBudget(
     clientId: string,
@@ -2140,14 +2170,50 @@ export class OAuthProvider {
         throw new Error("budget exceeds the NUMERIC(10,2) column");
       }
     }
-    const r = await this.engine.query<{ client_id: string }>(
-      `UPDATE oauth_clients
-          SET budget_usd_per_day = $2
-        WHERE client_id = $1 AND deleted_at IS NULL
-        RETURNING client_id`,
-      [clientId, usdPerDay],
-    );
-    if (r.rows.length > 0) return true;
+    const isClient = await this.engine.transaction(async (tx) => {
+      const locked = await tx.query<{
+        source_id: string | null;
+        federated_read: string[] | null;
+        bound_slug_prefixes: string[] | null;
+        tenant_mode: string | null;
+        scope: string | null;
+        budget_usd_per_day: unknown;
+      }>(
+        `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode, scope, budget_usd_per_day
+           FROM oauth_clients
+          WHERE client_id = $1 AND deleted_at IS NULL
+          FOR UPDATE`,
+        [clientId],
+      );
+      const row = locked.rows[0];
+      if (!row) return false;
+      const snapshot = grantSnapshot(row);
+      const applied = await tx.query<{ revision: number }>(
+        `WITH u AS (
+           UPDATE oauth_clients SET budget_usd_per_day = $2, grant_revision = grant_revision + 1
+            WHERE client_id = $1 AND deleted_at IS NULL
+            RETURNING grant_revision
+         )
+         INSERT INTO oauth_grant_audit (client_id, revision, actor, via, before, after)
+         SELECT $1, u.grant_revision, $3, $4, $5::text::jsonb, $6::text::jsonb FROM u
+         RETURNING revision`,
+        [
+          clientId,
+          usdPerDay,
+          who.actor,
+          who.via,
+          JSON.stringify({
+            ...snapshot,
+            budget_usd_per_day: row.budget_usd_per_day == null ? null : Number(row.budget_usd_per_day),
+          }),
+          JSON.stringify({ ...snapshot, action: "set_budget", budget_usd_per_day: usdPerDay }),
+        ],
+      );
+      // The row is locked, so the UPDATE cannot miss it.
+      if (applied.rows[0]?.revision === undefined) throw new Error(`budget write for "${clientId}" affected no row`);
+      return true;
+    });
+    if (isClient) return true;
     // Not an OAuth client: a personal access token spends under its name.
     const t = await this.engine.transaction((tx) =>
       this.mutatePatGrant(
@@ -2441,6 +2507,11 @@ export class OAuthProvider {
     scopes?: string[],
     resource?: URL,
   ): Promise<OAuthTokens> {
+    // Checked before the token is consumed: an empty list passes every subset
+    // test and would mint tokens that hold no scope.
+    if (scopes !== undefined && scopes.length === 0) {
+      throw new Error("invalid_scope: the requested scope list is empty");
+    }
     const tokenHash = hashToken(refreshToken);
     const now = Math.floor(Date.now() / 1000);
 

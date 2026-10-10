@@ -899,6 +899,21 @@ describe("OAuth 2.1 authorization-code + PKCE / DCR / revoke", () => {
       expect(await storedResource(next.refresh_token)).toBe(`${url}/mcp`);
     });
 
+    it("refuses a refresh naming an empty scope list with invalid_scope and leaves the token usable", async () => {
+      const { code, verifier } = await codeFor();
+      const pair = (await (await exchange(code, verifier)).json()) as { refresh_token: string };
+      const refused = await tokenForm({
+        grant_type: "refresh_token",
+        client_id: webClientId,
+        client_secret: webClientSecret,
+        refresh_token: pair.refresh_token,
+        scope: " ",
+      });
+      expect(refused.status).toBe(400);
+      expect(((await refused.json()) as { error: string }).error).toBe("invalid_scope");
+      expect((await refresh(pair.refresh_token)).status).toBe(200);
+    });
+
     it("a code approved with no resource still issues unbound tokens", async () => {
       const { code, verifier } = await codeFor();
       const tok = await exchange(code, verifier);

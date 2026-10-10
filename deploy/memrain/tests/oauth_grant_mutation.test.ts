@@ -407,3 +407,32 @@ describe("listGrantAudit", () => {
     expect(await provider.listGrantAudit("memex_cl_missing")).toEqual([]);
   });
 });
+
+describe("setClientBudget — OAuth client", () => {
+  const field = (snap: unknown, key: string): unknown => (snap as Record<string, unknown>)[key];
+
+  it("bumps the revision and writes one audit row carrying the cap before and after", async () => {
+    const { clientId } = await register();
+    const rev = Number((await clientRow(clientId)).grant_revision);
+    expect(await provider.setClientBudget(clientId, 2.5, { actor: "ops", via: "cli" })).toBe(true);
+    expect(await provider.setClientBudget(clientId, null, { actor: "ops", via: "admin_api" })).toBe(true);
+
+    expect(Number((await clientRow(clientId)).grant_revision)).toBe(rev + 2);
+    const [cleared, set] = await provider.listGrantAudit(clientId);
+    expect(set!.actor).toBe("ops");
+    expect(set!.via).toBe("cli");
+    expect(field(set!.before, "budget_usd_per_day")).toBeNull();
+    expect(field(set!.after, "budget_usd_per_day")).toBe(2.5);
+    expect(field(set!.after, "action")).toBe("set_budget");
+    expect(set!.after.scopes).toEqual(["read", "write"]);
+    expect(cleared!.via).toBe("admin_api");
+    expect(field(cleared!.before, "budget_usd_per_day")).toBe(2.5);
+    expect(field(cleared!.after, "budget_usd_per_day")).toBeNull();
+  });
+
+  it("writes nothing for a refused value", async () => {
+    const { clientId } = await register();
+    await expect(provider.setClientBudget(clientId, -1)).rejects.toThrow();
+    expect(await auditCount(clientId)).toBe(0);
+  });
+});

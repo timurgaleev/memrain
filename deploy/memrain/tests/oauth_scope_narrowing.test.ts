@@ -119,6 +119,17 @@ describe("refresh", () => {
     const client = await browserClient();
     const first = await pair(client);
     await rescope(client, ["agent"]);
+    // The rescope deleted it outright.
+    await expect(provider.exchangeRefreshToken(client, first.refresh_token!)).rejects.toThrow(
+      "Refresh token not found",
+    );
+  });
+
+  it("is refused for a stored grant the client no longer covers", async () => {
+    const client = await browserClient();
+    const first = await pair(client);
+    // A row written before rescopes rewrote stored scopes.
+    await storage.raw().query("UPDATE oauth_clients SET scope = 'agent' WHERE client_id = $1", [client.client_id]);
     await expect(provider.exchangeRefreshToken(client, first.refresh_token!)).rejects.toThrow(
       "no longer holds any scope",
     );
@@ -227,5 +238,57 @@ describe("migration 124", () => {
     const client = await browserClient("read  write");
     await storage.raw().exec(sql);
     expect((await provider.getClient(client.client_id))!.scope).toBe("read  write");
+  });
+});
+
+describe("rescopeClient — narrowing rewrites issued tokens", () => {
+  async function storedScopes(clientId: string): Promise<string[][]> {
+    const r = await storage.raw().query<{ scopes: string[] }>(
+      "SELECT scopes FROM oauth_tokens WHERE client_id = $1 ORDER BY token_type",
+      [clientId],
+    );
+    return r.rows.map((row) => [...row.scopes].sort());
+  }
+
+  it("a token issued before a narrowing stays narrowed after the client is widened back", async () => {
+    const client = await browserClient("admin");
+    const tokens = await pair(client);
+    await rescope(client, ["read"]);
+    expect(await storedScopes(client.client_id)).toEqual([["read"], ["read"]]);
+
+    await rescope(client, ["admin"]);
+    expect((await provider.verifyAccessToken(tokens.access_token)).scopes).toEqual(["read"]);
+    const rotated = await provider.exchangeRefreshToken(client, tokens.refresh_token!);
+    expect(rotated.scope).toBe("read");
+    expect((await provider.verifyAccessToken(rotated.access_token)).scopes).toEqual(["read"]);
+  });
+
+  it("deletes a token with nothing left, so widening back cannot revive it", async () => {
+    const client = await browserClient();
+    const tokens = await pair(client);
+    await rescope(client, ["agent"]);
+    expect(await storedScopes(client.client_id)).toEqual([]);
+
+    await rescope(client, ["read", "write"]);
+    await expect(provider.verifyAccessToken(tokens.access_token)).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(provider.exchangeRefreshToken(client, tokens.refresh_token!)).rejects.toThrow();
+  });
+
+  it("leaves issued tokens alone on a dry run or a change that keeps the scopes", async () => {
+    const client = await browserClient();
+    await pair(client);
+    await provider.rescopeClient(client.client_id, { sourceId: "default", scopes: ["read"] }, { ...CLI, dryRun: true });
+    await provider.rescopeClient(client.client_id, { sourceId: "default" }, CLI);
+    expect(await storedScopes(client.client_id)).toEqual([["read", "write"], ["read", "write"]]);
+  });
+});
+
+describe("refresh — explicit scope list", () => {
+  it("refuses an empty requested scope list with invalid_scope and leaves the refresh token usable", async () => {
+    const client = await browserClient();
+    const tokens = await pair(client);
+    await expect(provider.exchangeRefreshToken(client, tokens.refresh_token!, [])).rejects.toThrow("invalid_scope");
+    const rotated = await provider.exchangeRefreshToken(client, tokens.refresh_token!);
+    expect(rotated.scope?.split(" ").sort()).toEqual(["read", "write"]);
   });
 });
