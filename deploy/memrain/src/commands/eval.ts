@@ -11,7 +11,11 @@
  *              [--graph-signals] [--cosine-rescore] [--relational-arm]
  *              [--dedup-type-ratio X] [--qrels PATH] [--k N]
  *   memrain eval --config-a '<json|path>' --config-b '<json|path>'
- *              A/B: run both knob sets over the same qrels, print the delta.
+ *              [--split dev|sealed|all] [--prereg PATH] [--record]
+ *              A/B: run both knob sets over the same qrels, interleaved per
+ *              query, and print paired statistics per metric. A config's
+ *              `env` map is applied around each of its queries, so a
+ *              MEMRAIN_RANK_* flag can be flipped for one side only.
  *
  * Eval queries always bypass the query cache — the metric must measure
  * retrieval, not cache reuse.
@@ -24,10 +28,15 @@
  * one hit. Queries with no expected paths are abstention checks — they stay out
  * of every average and are reported on their own as a false-positive rate.
  *
+ * The sealed split is scored once per pre-registration: it runs only as a
+ * recorded A/B under --prereg, and a second run under the same prereg is
+ * refused, so the held-out queries cannot be tuned against.
+ *
  * Exit code (single-run mode): 0 if average recall@5 >= MIN_RECALL
- * (default 0.6), else 1. Suitable as a CI gate. Exit 2, before any query
- * runs, when more than half of the qrels' expected paths are missing from
- * the brain: stale ground truth would read as a retrieval regression.
+ * (default 0.6), else 1. Suitable as a CI gate. A/B mode exits 1 when a query
+ * threw on either side. Exit 2, before any query runs, when more than half of
+ * the qrels' expected paths are missing from the brain: stale ground truth
+ * would read as a retrieval regression.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -49,13 +58,31 @@ import {
   binaryGrades,
   distinctInOrder,
 } from "../core/search/metrics.ts";
-import { ci95, METRIC_GLOSSARY, type Ci95 } from "../core/search/bootstrap.ts";
+import {
+  ci95,
+  holmAdjusted,
+  pairedClusterStatistics,
+  METRIC_GLOSSARY,
+  type Ci95,
+  type PairedClusterStatistics,
+} from "../core/search/bootstrap.ts";
+import { RANKING_FLAG_ENV } from "../core/search/ranking-flags.ts";
+import { recordAbSnapshot, sealedRunRecorded } from "../core/eval-snapshot.ts";
+
+export type QrelSplit = "dev" | "sealed";
+export type EvalSplit = QrelSplit | "all";
 
 export interface Qrel {
   id: string;
   query: string;
   expected_paths: string[];
   notes?: string;
+  /** Unlabelled queries belong to dev; sealed ones must say so. */
+  split?: QrelSplit;
+  /** Queries that share a cluster move together in the paired statistics. */
+  cluster?: string;
+  /** The first page returned must be one of expected_paths. */
+  expected_top1?: true;
 }
 export interface Qrels {
   queries: Qrel[];
@@ -78,6 +105,12 @@ export interface QueryReport {
   /** No expected paths: the right answer is "nothing relevant". Scored in the
    *  report's `abstention` block, never in the recall/MRR averages. */
   abstention?: boolean;
+  /** Wall time of the search call; absent when the query threw. */
+  latencyMs?: number;
+  /** Set for a qrel marked expected_top1. */
+  expectedTop1?: true;
+  /** An expected_top1 query whose first page was not an expected one. */
+  top1Miss?: true;
 }
 
 export interface AbstentionReport {
@@ -87,6 +120,11 @@ export interface AbstentionReport {
   returnedAny: number;
   /** returnedAny / count, or null when there are no abstention queries. */
   falsePositiveRate: number | null;
+}
+
+export interface LatencySummary {
+  p50Ms: number;
+  p95Ms: number;
 }
 
 export interface EvalReport {
@@ -114,13 +152,18 @@ export interface EvalReport {
   abstention: AbstentionReport;
   /** Queries that threw (isolated, did not abort the run). */
   errors: { id: string; error: string }[];
+  /** Search wall time over the queries that did not throw. */
+  latency: LatencySummary;
+  /** expected_top1 queries, and the ids among them that missed. */
+  expectedTop1: { count: number; misses: string[] };
+  split: EvalSplit;
   perQuery: QueryReport[];
 }
 
 /**
  * One ranking-knob set for an eval run. Maps 1:1 onto hybridSearch per-call
- * options; `dedupTypeRatio` is env-plane (MEMRAIN_MAX_TYPE_RATIO) and is
- * wrapped around the run.
+ * options; `dedupTypeRatio` (MEMRAIN_MAX_TYPE_RATIO) and `env` are env-plane
+ * and are applied around each query, then restored.
  */
 export interface EvalKnobConfig {
   name?: string;
@@ -135,7 +178,11 @@ export interface EvalKnobConfig {
   backlinkBoost?: boolean;
   tokenBudget?: number;
   dedupTypeRatio?: number;
+  /** MEMRAIN_* variables set for this config's queries only. */
+  env?: Record<string, string>;
 }
+
+const ENV_KEY = /^MEMRAIN_[A-Z0-9_]+$/;
 
 /** Parse a knob config from inline JSON or a file path. */
 export function parseEvalConfig(pathOrJson: string): EvalKnobConfig {
@@ -148,7 +195,47 @@ export function parseEvalConfig(pathOrJson: string): EvalKnobConfig {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("eval config must be a JSON object");
   }
+  const env = (parsed as { env?: unknown }).env;
+  if (env !== undefined) {
+    if (!env || typeof env !== "object" || Array.isArray(env)) {
+      throw new Error("eval config: env must be an object of MEMRAIN_* strings");
+    }
+    for (const [key, value] of Object.entries(env)) {
+      // Only the brain's own settings: an eval config is no place to change
+      // credentials or process-wide variables.
+      if (!ENV_KEY.test(key) || typeof value !== "string") {
+        throw new Error(
+          `eval config: env entry ${key} must be a MEMRAIN_* name with a string value`,
+        );
+      }
+    }
+  }
   return parsed as EvalKnobConfig;
+}
+
+/** The env-plane part of a config, as variables to set. */
+function knobEnv(cfg: EvalKnobConfig): Record<string, string> {
+  return {
+    ...(cfg.env ?? {}),
+    ...(cfg.dedupTypeRatio !== undefined
+      ? { MEMRAIN_MAX_TYPE_RATIO: String(cfg.dedupTypeRatio) }
+      : {}),
+  };
+}
+
+/** Set `overrides` in process.env; the returned function puts every key back. */
+function applyEnv(overrides: Record<string, string>): () => void {
+  const prev = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(overrides)) {
+    prev.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  return () => {
+    for (const [key, value] of prev) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
 }
 
 export interface EvalOptions {
@@ -162,6 +249,12 @@ export interface EvalOptions {
   config?: EvalKnobConfig;
   /** B-side knob set — presence turns on A/B comparison mode. */
   configB?: EvalKnobConfig;
+  /** Which qrels to score. Default all. */
+  split?: EvalSplit;
+  /** Pre-registration the run is judged under; required for the sealed split. */
+  preregPath?: string;
+  /** Append the A/B result to eval_snapshots as a kind 'ab' row. */
+  record?: boolean;
   /** Test seam — replaces the live hybridSearch call; returns ranked paths. */
   searchFn?: (
     storage: Storage,
@@ -188,7 +281,27 @@ export function loadQrels(qrelsPath: string): Qrels {
   if (!qrels.queries || qrels.queries.length === 0) {
     throw new Error(`memrain eval: no queries in ${qrelsPath}`);
   }
+  for (const q of qrels.queries) {
+    if (q.split !== undefined && q.split !== "dev" && q.split !== "sealed") {
+      throw new Error(`memrain eval: query ${q.id} has split '${String(q.split)}' (dev|sealed)`);
+    }
+  }
   return { ...qrels, sha256: sha256Hex(bytes) };
+}
+
+/** The queries of one split; the checksum stays the file's. */
+export function filterSplit(qrels: Qrels, split: EvalSplit): Qrels {
+  if (split === "all") return qrels;
+  const queries = qrels.queries.filter((q) => (q.split ?? "dev") === split);
+  if (queries.length === 0) {
+    throw new Error(`memrain eval: the qrels hold no ${split} queries`);
+  }
+  return { ...qrels, queries };
+}
+
+/** sha256 of the sorted query ids, so a receipt pins exactly which ran. */
+export function idsSha256(qrels: Qrels): string {
+  return sha256Hex(qrels.queries.map((q) => q.id).sort().join("\n"));
 }
 
 function sha256Hex(data: string | Uint8Array): string {
@@ -212,7 +325,7 @@ function canonicalJson(value: unknown): string {
  * already fold in. Budgets, timeouts and cache settings are left out: they
  * bound cost or latency, and eval runs with the cache off.
  */
-const RANKING_ENV_KNOBS = [
+const RANKING_ENV_KNOBS: readonly string[] = [
   "MEMRAIN_ALIAS_HOP",
   "MEMRAIN_CURATION_BOOST",
   "MEMRAIN_EMBED_DIM",
@@ -229,20 +342,38 @@ const RANKING_ENV_KNOBS = [
   "MEMRAIN_SEARCH_EXCLUDE",
   "MEMRAIN_TITLE_BOOST",
   "MEMRAIN_UTILITY_MODEL",
-] as const;
+  ...RANKING_FLAG_ENV,
+];
 
 /**
  * Run fingerprint over what the search actually runs with: the knobs as
  * hybridSearch resolves them (explicit config, then MEMRAIN_* env, then the
  * search-mode bundle), so the same effective setup hashes the same whether it
  * was spelled out or defaulted; plus the raw ranking env knobs, the embedding
- * signature, k and the qrels checksum. The display name is excluded, and so
- * is the corpus: eval runs against the live brain.
+ * signature, k, the qrels checksum and the split. The display name is
+ * excluded, and so is the corpus: eval runs against the live brain. A
+ * config's env overrides are applied while the hash is taken, exactly as
+ * they are around its queries.
  */
 export function runConfigHash(
   cfg: EvalKnobConfig,
   k: number,
   qrelsSha256: string,
+  split: EvalSplit = "all",
+): string {
+  const restore = applyEnv(knobEnv(cfg));
+  try {
+    return hashUnderCurrentEnv(cfg, k, qrelsSha256, split);
+  } finally {
+    restore();
+  }
+}
+
+function hashUnderCurrentEnv(
+  cfg: EvalKnobConfig,
+  k: number,
+  qrelsSha256: string,
+  split: EvalSplit,
 ): string {
   const env = process.env;
   const resolved = resolveSearchKnobs({
@@ -256,10 +387,10 @@ export function runConfigHash(
   });
   const envKnobs: Record<string, string | undefined> = {};
   for (const key of RANKING_ENV_KNOBS) envKnobs[key] = env[key];
-  // evalRun applies dedupTypeRatio through the env for the run's duration.
-  if (cfg.dedupTypeRatio !== undefined) {
-    envKnobs["MEMRAIN_MAX_TYPE_RATIO"] = String(cfg.dedupTypeRatio);
-  }
+  // An override outside the known knobs still changes the run.
+  const extraEnv = Object.fromEntries(
+    Object.entries(cfg.env ?? {}).filter(([key]) => !RANKING_ENV_KNOBS.includes(key)),
+  );
   return sha256Hex(
     canonicalJson({
       knobs: {
@@ -268,9 +399,11 @@ export function runConfigHash(
         maxPool: cfg.maxPool ?? env.MEMRAIN_MAXPOOL === "1",
       },
       env: envKnobs,
+      ...(Object.keys(extraEnv).length > 0 ? { env_extra: extraEnv } : {}),
       embedding: embeddingSignature(),
       k,
       qrels_sha256: qrelsSha256,
+      ...(split !== "all" ? { split } : {}),
     }),
   );
 }
@@ -351,70 +484,87 @@ async function defaultSearchFn(
   return distinctInOrder(hits.map((h) => h.sourcePath)).slice(0, k);
 }
 
+type SearchFn = NonNullable<EvalOptions["searchFn"]>;
+
 /**
- * Run one knob config over the qrels set. Per-query isolation: one query
- * throwing must not abort the run. `dedupTypeRatio` is applied by wrapping
- * MEMRAIN_MAX_TYPE_RATIO for the duration (the knob is env-resolved per call).
+ * Score one query under one config. A throw is caught and scored 0, so one
+ * query cannot abort the run. The config's env overrides are set for this call
+ * only: an A/B interleaves both sides in one process.
  */
-export async function evalRun(
+async function scoreQuery(
   storage: Storage,
+  q: Qrel,
+  cfg: EvalKnobConfig,
+  k: number,
+  searchFn: SearchFn,
+): Promise<QueryReport> {
+  const abstention = q.expected_paths.length === 0;
+  const top1 = q.expected_top1 === true && !abstention;
+  const restore = applyEnv(knobEnv(cfg));
+  try {
+    const started = performance.now();
+    // Several chunks of one page are one hit: score pages, in rank order.
+    const paths = distinctInOrder(await searchFn(storage, q.query, cfg, k));
+    const latencyMs = Math.round((performance.now() - started) * 10) / 10;
+    const expected = new Set(q.expected_paths);
+    return {
+      id: q.id,
+      query: q.query,
+      recallAtK: recallAtK(paths, expected, k),
+      mrr: reciprocalRank(paths, expected),
+      ndcg: ndcgAtK(paths, binaryGrades(q.expected_paths), k),
+      precision: precisionAtK(paths, expected, k),
+      hits: paths.length,
+      expected: q.expected_paths.length,
+      topPaths: paths.slice(0, 3),
+      latencyMs,
+      ...(abstention ? { abstention } : {}),
+      ...(top1 ? { expectedTop1: true as const } : {}),
+      ...(top1 && !(paths[0] !== undefined && expected.has(paths[0]))
+        ? { top1Miss: true as const }
+        : {}),
+    };
+  } catch (e) {
+    return {
+      id: q.id,
+      query: q.query,
+      recallAtK: 0,
+      mrr: 0,
+      ndcg: 0,
+      precision: 0,
+      hits: 0,
+      expected: q.expected_paths.length,
+      topPaths: [],
+      error: e instanceof Error ? e.message : String(e),
+      ...(abstention ? { abstention } : {}),
+      ...(top1 ? { expectedTop1: true as const, top1Miss: true as const } : {}),
+    };
+  } finally {
+    restore();
+  }
+}
+
+/** Nearest-rank percentile; 0 for an empty sample. */
+function percentile(sorted: readonly number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))]!;
+}
+
+function summarizeLatency(perQuery: readonly QueryReport[]): LatencySummary {
+  const ms = perQuery
+    .map((q) => q.latencyMs)
+    .filter((v): v is number => v !== undefined)
+    .sort((a, b) => a - b);
+  return { p50Ms: percentile(ms, 0.5), p95Ms: percentile(ms, 0.95) };
+}
+
+function summarize(
+  perQuery: QueryReport[],
   qrels: Qrels,
   cfg: EvalKnobConfig,
-  opts: { k?: number; searchFn?: EvalOptions["searchFn"] } = {},
-): Promise<EvalReport> {
-  const k = opts.k ?? cfg.k ?? 5;
-  const searchFn = opts.searchFn ?? defaultSearchFn;
-
-  const prevRatio = process.env["MEMRAIN_MAX_TYPE_RATIO"];
-  if (cfg.dedupTypeRatio !== undefined) {
-    process.env["MEMRAIN_MAX_TYPE_RATIO"] = String(cfg.dedupTypeRatio);
-  }
-  const perQuery: QueryReport[] = [];
-  const errors: { id: string; error: string }[] = [];
-  try {
-    for (const q of qrels.queries) {
-      const abstention = q.expected_paths.length === 0;
-      try {
-        // Several chunks of one page are one hit: score pages, in rank order.
-        const paths = distinctInOrder(await searchFn(storage, q.query, cfg, k));
-        const expected = new Set(q.expected_paths);
-        perQuery.push({
-          id: q.id,
-          query: q.query,
-          recallAtK: recallAtK(paths, expected, k),
-          mrr: reciprocalRank(paths, expected),
-          ndcg: ndcgAtK(paths, binaryGrades(q.expected_paths), k),
-          precision: precisionAtK(paths, expected, k),
-          hits: paths.length,
-          expected: q.expected_paths.length,
-          topPaths: paths.slice(0, 3),
-          ...(abstention ? { abstention } : {}),
-        });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        errors.push({ id: q.id, error: msg });
-        perQuery.push({
-          id: q.id,
-          query: q.query,
-          recallAtK: 0,
-          mrr: 0,
-          ndcg: 0,
-          precision: 0,
-          hits: 0,
-          expected: q.expected_paths.length,
-          topPaths: [],
-          error: msg,
-          ...(abstention ? { abstention } : {}),
-        });
-      }
-    }
-  } finally {
-    if (cfg.dedupTypeRatio !== undefined) {
-      if (prevRatio === undefined) delete process.env["MEMRAIN_MAX_TYPE_RATIO"];
-      else process.env["MEMRAIN_MAX_TYPE_RATIO"] = prevRatio;
-    }
-  }
-
+  k: number,
+  split: EvalSplit,
+): EvalReport {
   // Abstention queries have nothing to recall; averaging them in at any fixed
   // score would move the means without measuring retrieval.
   const scored = perQuery.filter((q) => !q.abstention);
@@ -442,6 +592,7 @@ export async function evalRun(
     returnedAny,
     falsePositiveRate: abstentions.length === 0 ? null : returnedAny / abstentions.length,
   };
+  const top1 = perQuery.filter((q) => q.expectedTop1);
 
   return {
     ok: true,
@@ -453,23 +604,170 @@ export async function evalRun(
     meanPrecision,
     recallCi95: ci95(scored.map((q) => q.recallAtK)),
     mrrCi95: ci95(scored.map((q) => q.mrr)),
-    run_config_hash: runConfigHash(cfg, k, qrelsSha256),
+    run_config_hash: runConfigHash(cfg, k, qrelsSha256, split),
     qrels_sha256: qrelsSha256,
     hitRate,
     wilsonCi95,
     ...(note ? { smallSampleNote: note } : {}),
     scoredQueries: n,
     abstention,
-    errors,
+    errors: perQuery
+      .filter((q) => q.error !== undefined)
+      .map((q) => ({ id: q.id, error: q.error! })),
+    latency: summarizeLatency(perQuery),
+    expectedTop1: {
+      count: top1.length,
+      misses: top1.filter((q) => q.top1Miss).map((q) => q.id),
+    },
+    split,
     perQuery,
   };
 }
 
+/**
+ * Run one knob config over the qrels set. Per-query isolation: one query
+ * throwing must not abort the run.
+ */
+export async function evalRun(
+  storage: Storage,
+  qrels: Qrels,
+  cfg: EvalKnobConfig,
+  opts: { k?: number; searchFn?: EvalOptions["searchFn"]; split?: EvalSplit } = {},
+): Promise<EvalReport> {
+  const k = opts.k ?? cfg.k ?? 5;
+  const searchFn = opts.searchFn ?? defaultSearchFn;
+  const perQuery: QueryReport[] = [];
+  for (const q of qrels.queries) perQuery.push(await scoreQuery(storage, q, cfg, k, searchFn));
+  return summarize(perQuery, qrels, cfg, k, opts.split ?? "all");
+}
+
+/**
+ * Run two configs over the same qrels, alternating which side goes first per
+ * query, so drift in the brain or in Bedrock latency during the run falls on
+ * both sides alike instead of on whichever ran second.
+ */
+export async function evalAB(
+  storage: Storage,
+  qrels: Qrels,
+  cfgA: EvalKnobConfig,
+  cfgB: EvalKnobConfig,
+  opts: { k?: number; searchFn?: EvalOptions["searchFn"]; split?: EvalSplit } = {},
+): Promise<{ a: EvalReport; b: EvalReport }> {
+  const k = opts.k ?? 5;
+  const searchFn = opts.searchFn ?? defaultSearchFn;
+  const perA: QueryReport[] = [];
+  const perB: QueryReport[] = [];
+  for (const [i, q] of qrels.queries.entries()) {
+    if (i % 2 === 0) {
+      perA.push(await scoreQuery(storage, q, cfgA, k, searchFn));
+      perB.push(await scoreQuery(storage, q, cfgB, k, searchFn));
+    } else {
+      perB.push(await scoreQuery(storage, q, cfgB, k, searchFn));
+      perA.push(await scoreQuery(storage, q, cfgA, k, searchFn));
+    }
+  }
+  const split = opts.split ?? "all";
+  return {
+    a: summarize(perA, qrels, cfgA, k, split),
+    b: summarize(perB, qrels, cfgB, k, split),
+  };
+}
+
+export interface AbMetricStatistics extends PairedClusterStatistics {
+  /** p_value after Holm adjustment across the metrics of this comparison. */
+  p_holm: number;
+}
+
+export type PairedComparison =
+  | { aggregate_only: false; paired: number; metrics: Record<string, AbMetricStatistics> }
+  | { aggregate_only: true; paired: number; unpaired: string[] };
+
+/**
+ * Per-metric paired statistics for B − A over the scored queries. A query that
+ * threw on either side has no pair; with any such query the comparison falls
+ * back to the aggregate means, since dropping it would bias the pairs toward
+ * the queries both sides could answer.
+ */
+export function pairedComparison(a: EvalReport, b: EvalReport, qrels: Qrels): PairedComparison {
+  const clusterOf = new Map(qrels.queries.map((q) => [q.id, q.cluster ?? q.id]));
+  const bById = new Map(b.perQuery.map((q) => [q.id, q]));
+  const pairs: { a: QueryReport; b: QueryReport }[] = [];
+  const unpaired: string[] = [];
+  for (const qa of a.perQuery) {
+    if (qa.abstention) continue;
+    const qb = bById.get(qa.id);
+    if (!qb || qa.error !== undefined || qb.error !== undefined) unpaired.push(qa.id);
+    else pairs.push({ a: qa, b: qb });
+  }
+  if (unpaired.length > 0 || pairs.length === 0) {
+    return { aggregate_only: true, paired: pairs.length, unpaired };
+  }
+  const clusters = pairs.map((p) => clusterOf.get(p.a.id) ?? p.a.id);
+  const metrics: [string, (q: QueryReport) => number][] = [
+    [`hit@${a.k}`, (q) => (q.recallAtK > 0 ? 1 : 0)],
+    ["mrr", (q) => q.mrr],
+    [`ndcg@${a.k}`, (q) => q.ndcg],
+  ];
+  const stats = metrics.map(([, pick]) =>
+    pairedClusterStatistics(
+      pairs.map((p) => pick(p.a)),
+      pairs.map((p) => pick(p.b)),
+      clusters,
+    ),
+  );
+  const holm = holmAdjusted(stats.map((s) => s.p_value));
+  return {
+    aggregate_only: false,
+    paired: pairs.length,
+    metrics: Object.fromEntries(
+      metrics.map(([name], i) => [
+        name,
+        { ...stats[i]!, p_holm: holm[i]! },
+      ]),
+    ),
+  };
+}
+
+function latencyRatio(b: number, a: number): number | null {
+  return a > 0 ? Math.round((b / a) * 1000) / 1000 : null;
+}
+
+/** Why the requested split/prereg/record combination cannot run, or null. */
+export function abRunRefusal(opts: {
+  ab: boolean;
+  split: EvalSplit;
+  preregPath?: string;
+  record?: boolean;
+}): string | null {
+  if (opts.record && !opts.ab) return "memrain eval: --record needs an A/B run (--config-b)";
+  if (opts.split !== "sealed") return null;
+  if (!opts.ab) return "memrain eval: the sealed split runs only as an A/B (--config-b)";
+  if (!opts.preregPath) return "memrain eval: the sealed split needs --prereg PATH";
+  // Recording is what makes the once-only rule enforceable.
+  if (!opts.record) return "memrain eval: a sealed run is always recorded; pass --record";
+  return null;
+}
+
 export async function runEval(opts: EvalOptions = {}): Promise<void> {
-  const qrels = loadQrels(opts.qrelsPath ?? defaultQrelsPath());
+  const split = opts.split ?? "all";
+  const refusal = abRunRefusal({
+    ab: opts.configB !== undefined,
+    split,
+    ...(opts.preregPath !== undefined ? { preregPath: opts.preregPath } : {}),
+    ...(opts.record !== undefined ? { record: opts.record } : {}),
+  });
+  if (refusal) {
+    console.error(refusal);
+    process.exitCode = 1;
+    return;
+  }
+  const allQrels = loadQrels(opts.qrelsPath ?? defaultQrelsPath());
+  const qrels = filterSplit(allQrels, split);
   const k = opts.k ?? 5;
   const minRecall = opts.minRecall ?? 0.6;
   const cfgA: EvalKnobConfig = { name: "Config A", ...(opts.config ?? {}) };
+  const preregSha256 =
+    opts.preregPath !== undefined ? sha256Hex(readFileSync(opts.preregPath)) : undefined;
 
   const storage = new Storage(loadConfig(opts.configPath));
   return withStorage(storage, async () => {
@@ -481,23 +779,104 @@ export async function runEval(opts: EvalOptions = {}): Promise<void> {
       return;
     }
     if (opts.configB) {
+      if (split === "sealed" && (await sealedRunRecorded(storage.engine(), preregSha256!))) {
+        console.error(
+          `memrain eval: the sealed split was already scored under this prereg ` +
+            `(sha256 ${preregSha256}); write a new pre-registration for another run.`,
+        );
+        process.exitCode = 1;
+        return;
+      }
       const cfgB: EvalKnobConfig = { name: "Config B", ...opts.configB };
-      const evalOpts = { k, ...(opts.searchFn ? { searchFn: opts.searchFn } : {}) };
-      const a = await evalRun(storage, qrels, cfgA, evalOpts);
-      const b = await evalRun(storage, qrels, cfgB, evalOpts);
+      const { a, b } = await evalAB(storage, qrels, cfgA, cfgB, {
+        k,
+        split,
+        ...(opts.searchFn ? { searchFn: opts.searchFn } : {}),
+      });
       const delta = {
         meanRecall: b.meanRecall - a.meanRecall,
         meanReciprocalRank: b.meanReciprocalRank - a.meanReciprocalRank,
         hitRate: b.hitRate - a.hitRate,
       };
+      const paired = pairedComparison(a, b, qrels);
+      const latency = {
+        a: a.latency,
+        b: b.latency,
+        ratio_p50: latencyRatio(b.latency.p50Ms, a.latency.p50Ms),
+        ratio_p95: latencyRatio(b.latency.p95Ms, a.latency.p95Ms),
+      };
+      const errors = { a: a.errors.length, b: b.errors.length };
+      const expectedTop1 = {
+        count: b.expectedTop1.count,
+        a_misses: a.expectedTop1.misses,
+        b_misses: b.expectedTop1.misses,
+      };
+      const receipt = {
+        split,
+        qrels_sha256: a.qrels_sha256,
+        ids_sha256: idsSha256(qrels),
+        ...(split === "sealed" ? { sealed_ids_sha256: idsSha256(qrels) } : {}),
+        ...(preregSha256 ? { prereg_sha256: preregSha256 } : {}),
+        run_config_hash_a: a.run_config_hash,
+        run_config_hash_b: b.run_config_hash,
+      };
+      let snapshotId: number | undefined;
+      if (opts.record) {
+        const recorded = await recordAbSnapshot(storage.engine(), {
+          ranAt: new Date().toISOString(),
+          totalQueries: qrels.queries.length,
+          scored: b.scoredQueries,
+          meanRR: b.meanReciprocalRank,
+          hitRate: b.hitRate,
+          detail: {
+            ...receipt,
+            k,
+            config_a: cfgA,
+            config_b: cfgB,
+            paired,
+            delta,
+            latency,
+            errors,
+            expected_top1: expectedTop1,
+          },
+          ...(split === "sealed" ? { oncePerPrereg: preregSha256! } : {}),
+        });
+        if (!recorded) {
+          console.error("memrain eval: a sealed run under this prereg was recorded meanwhile");
+          process.exitCode = 1;
+          return;
+        }
+        snapshotId = recorded.id;
+      }
+      const ok = errors.a === 0 && errors.b === 0;
       console.log(
-        JSON.stringify({ ok: true, mode: "ab", k, a, b, delta, glossary: METRIC_GLOSSARY }, null, 2),
+        JSON.stringify(
+          {
+            ok,
+            mode: "ab",
+            k,
+            receipt,
+            ...(snapshotId !== undefined ? { snapshot_id: snapshotId } : {}),
+            paired,
+            latency,
+            errors,
+            expected_top1: expectedTop1,
+            a,
+            b,
+            delta,
+            glossary: METRIC_GLOSSARY,
+          },
+          null,
+          2,
+        ),
       );
+      if (!ok) process.exitCode = 1;
       return;
     }
 
     const report = await evalRun(storage, qrels, cfgA, {
       k,
+      split,
       ...(opts.searchFn ? { searchFn: opts.searchFn } : {}),
     });
     const ok = report.meanRecall >= minRecall;

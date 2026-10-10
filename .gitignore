@@ -46,6 +46,8 @@ credentials
 # Per-installation operational notes (kept out of the public repo).
 OPERATIONS_NOTES.md
 *.local.md
+# Private eval qrels built from the live eval set (`memrain eval qrels build`).
+*.local.json
 
 # Python
 __pycache__/

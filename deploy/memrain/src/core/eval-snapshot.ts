@@ -11,6 +11,9 @@
  * Append-only: nothing updates a row. A zero-scored run (empty eval set) still
  * records, so "no eval queries yet" is distinguishable from "probe never ran",
  * and a probe that threw records a `status = 'error'` row (migration 121).
+ *
+ * `memrain eval --record` appends its A/B results here too, as `kind = 'ab'`
+ * rows (migration 135); readers of the probe trend filter on `kind = 'probe'`.
  */
 import type { Engine } from "./engine/interface.ts";
 import type { ReplayReport } from "./eval-replay.ts";
@@ -86,30 +89,100 @@ export async function recordFailedEvalSnapshot(
   return { id: r.rows[0]!.id };
 }
 
+export interface AbSnapshotInput {
+  ranAt: string;
+  totalQueries: number;
+  /** B side's scored queries, MRR and hit rate: the trend axes of the row. */
+  scored: number;
+  meanRR: number;
+  hitRate: number;
+  detail: Record<string, unknown>;
+  /** Insert only if no sealed A/B row carries this prereg_sha256 yet. */
+  oncePerPrereg?: string;
+}
+
+const SEALED_UNDER_PREREG = `SELECT 1 FROM eval_snapshots
+   WHERE kind = 'ab' AND detail->>'split' = 'sealed' AND detail->>'prereg_sha256' = $1`;
+
 /**
- * Most-recent snapshot, or null when the probe has never run (or the table
- * predates migration 068). Degrades to null on an undefined-table error so a
- * doctor read on an old brain doesn't crash.
+ * Append one `memrain eval --record` A/B result (kind 'ab', migration 135).
+ * With `oncePerPrereg`, the insert and the once-only check are one statement,
+ * and null comes back when a sealed run under that prereg already exists.
+ */
+export async function recordAbSnapshot(
+  engine: Engine,
+  input: AbSnapshotInput,
+): Promise<{ id: number } | null> {
+  const params = [
+    input.ranAt,
+    input.totalQueries,
+    input.scored,
+    input.meanRR,
+    input.hitRate,
+    JSON.stringify(input.detail),
+  ];
+  const r =
+    input.oncePerPrereg === undefined
+      ? await engine.query<{ id: number }>(
+          `INSERT INTO eval_snapshots
+             (ran_at, total_queries, scored, mean_rr, hit_rate, detail, status, kind)
+           VALUES ($1::timestamptz, $2, $3, $4, $5, $6::text::jsonb, 'ok', 'ab')
+           RETURNING id`,
+          params,
+        )
+      : await engine.query<{ id: number }>(
+          `INSERT INTO eval_snapshots
+             (ran_at, total_queries, scored, mean_rr, hit_rate, detail, status, kind)
+           SELECT $1::timestamptz, $2, $3, $4, $5, $6::text::jsonb, 'ok', 'ab'
+            WHERE NOT EXISTS (${SEALED_UNDER_PREREG.replace("$1", "$7")})
+           RETURNING id`,
+          [...params, input.oncePerPrereg],
+        );
+  return r.rows[0] ? { id: r.rows[0].id } : null;
+}
+
+/** True when a sealed A/B run was already recorded under this prereg. */
+export async function sealedRunRecorded(engine: Engine, preregSha256: string): Promise<boolean> {
+  const r = await engine.query(`${SEALED_UNDER_PREREG} LIMIT 1`, [preregSha256]);
+  return r.rows.length > 0;
+}
+
+/**
+ * Most-recent probe snapshot, or null when the probe has never run (or the
+ * table predates migration 068). A/B and gate rows (migration 135) are not
+ * probe runs and are skipped. Degrades to null on an undefined-table error so
+ * a doctor read on an old brain doesn't crash.
  */
 export async function latestEvalSnapshot(
   engine: Engine,
 ): Promise<EvalSnapshotRow | null> {
-  const select = (statusCol: string) =>
+  const select = (statusCol: string, where: string) =>
     engine.query<EvalSnapshotRow>(
       `SELECT id, ran_at::text AS ran_at, total_queries, scored,
               mean_rr, hit_rate, detail, ${statusCol} AS status
          FROM eval_snapshots
+        ${where}
         ORDER BY ran_at DESC, id DESC
         LIMIT 1`,
     );
+  const missingColumn = (e: unknown, col: string): boolean => {
+    const msg = (e as { message?: string } | null)?.message ?? "";
+    return new RegExp(`column .*${col}.* does not exist`, "i").test(msg);
+  };
   try {
     try {
-      return (await select("status")).rows[0] ?? null;
+      return (await select("status", "WHERE kind = 'probe'")).rows[0] ?? null;
     } catch (e) {
-      // Pre-121 table: every row it holds was a completed run.
-      const msg = (e as { message?: string } | null)?.message ?? "";
-      if (!/column .*status.* does not exist/i.test(msg)) throw e;
-      return (await select("'ok'::text")).rows[0] ?? null;
+      // Pre-135 table: every row it holds was written by the probe. A pre-121
+      // table is pre-135 too, and may name either missing column first.
+      if (!missingColumn(e, "kind") && !missingColumn(e, "status")) throw e;
+      try {
+        return (await select("status", "")).rows[0] ?? null;
+      } catch (e2) {
+        // Pre-121 table: every row it holds was a completed run.
+        if (!missingColumn(e2, "status")) throw e2;
+        return (await select("'ok'::text", "")).rows[0] ?? null;
+      }
     }
   } catch (e) {
     const code = (e as { code?: string } | null)?.code;

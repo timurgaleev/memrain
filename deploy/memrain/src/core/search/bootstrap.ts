@@ -130,6 +130,141 @@ export function deltaCi95(
   return { lo: round4(r.lo), hi: round4(r.hi) };
 }
 
+export interface PairedClusterStatistics {
+  /** mean(b − a) over the paired queries. */
+  delta: number;
+  lower95: number;
+  upper95: number;
+  /** Two-sided sign-flip randomization p-value over clusters. */
+  p_value: number;
+  /** Queries where b scored above / below / equal to a. */
+  wins: number;
+  losses: number;
+  ties: number;
+  n: number;
+  clusters: number;
+  /** True when every sign assignment was enumerated rather than sampled. */
+  exact: boolean;
+}
+
+/** Up to this many clusters every sign assignment is enumerated (2^16). */
+export const EXACT_SIGN_FLIP_MAX_CLUSTERS = 16;
+const SAMPLED_SIGN_FLIPS = 20000;
+
+/**
+ * Paired A/B statistics where queries that share a cluster (paraphrases of one
+ * question, say) move together: treating them as independent would count one
+ * finding several times and shrink the p-value. The interval resamples whole
+ * clusters; the p-value flips the sign of each cluster's summed difference,
+ * which is the exact null of "A and B are exchangeable" for paired data.
+ */
+export function pairedClusterStatistics(
+  a: readonly number[],
+  b: readonly number[],
+  clusters: readonly string[],
+  opts: BootstrapOptions = {},
+): PairedClusterStatistics {
+  if (a.length !== b.length || a.length !== clusters.length) {
+    throw new Error(
+      `pairedClusterStatistics: length mismatch (a=${a.length}, b=${b.length}, clusters=${clusters.length})`,
+    );
+  }
+  const n = a.length;
+  let wins = 0;
+  let losses = 0;
+  let ties = 0;
+  const sums = new Map<string, { sum: number; count: number }>();
+  for (let i = 0; i < n; i++) {
+    const d = b[i]! - a[i]!;
+    if (d > 0) wins++;
+    else if (d < 0) losses++;
+    else ties++;
+    const c = sums.get(clusters[i]!) ?? { sum: 0, count: 0 };
+    sums.set(clusters[i]!, { sum: c.sum + d, count: c.count + 1 });
+  }
+  const groups = [...sums.values()];
+  const base = { wins, losses, ties, n, clusters: groups.length };
+  if (n === 0) {
+    return { delta: 0, lower95: 0, upper95: 0, p_value: 1, exact: true, ...base };
+  }
+  const total = groups.reduce((s, g) => s + g.sum, 0);
+  const delta = total / n;
+  // Float sums of the same terms in another order can differ in the last
+  // bits; without the tolerance the observed statistic may fail to count
+  // itself.
+  const eps = 1e-9 * Math.max(1, Math.abs(total));
+  const observed = Math.abs(total);
+
+  let extreme = 0;
+  let draws: number;
+  const exact = groups.length <= EXACT_SIGN_FLIP_MAX_CLUSTERS;
+  const rand = mulberry32(opts.seed ?? DEFAULT_BOOTSTRAP_SEED);
+  if (exact) {
+    draws = 2 ** groups.length;
+    for (let mask = 0; mask < draws; mask++) {
+      let s = 0;
+      for (let j = 0; j < groups.length; j++) s += mask & (1 << j) ? -groups[j]!.sum : groups[j]!.sum;
+      if (Math.abs(s) >= observed - eps) extreme++;
+    }
+  } else {
+    draws = SAMPLED_SIGN_FLIPS;
+    for (let t = 0; t < draws; t++) {
+      let s = 0;
+      for (const g of groups) s += rand() < 0.5 ? -g.sum : g.sum;
+      if (Math.abs(s) >= observed - eps) extreme++;
+    }
+  }
+  // A sampled p-value counts the observed assignment as one of the draws, so
+  // it never reports 0.
+  const p_value = exact ? extreme / draws : (extreme + 1) / (draws + 1);
+
+  const iterations = Math.max(1, Math.floor(opts.iterations ?? DEFAULT_BOOTSTRAP_ITERATIONS));
+  const alpha = opts.alpha ?? 0.05;
+  const means = new Float64Array(iterations);
+  for (let it = 0; it < iterations; it++) {
+    let s = 0;
+    let m = 0;
+    for (let j = 0; j < groups.length; j++) {
+      const g = groups[Math.floor(rand() * groups.length)]!;
+      s += g.sum;
+      m += g.count;
+    }
+    means[it] = s / m;
+  }
+  means.sort();
+  const loIdx = Math.min(iterations - 1, Math.max(0, Math.floor((alpha / 2) * iterations)));
+  const hiIdx = Math.min(iterations - 1, Math.max(0, Math.ceil((1 - alpha / 2) * iterations) - 1));
+  return {
+    delta: round4(delta),
+    lower95: round4(Math.min(means[loIdx]!, delta)),
+    upper95: round4(Math.max(means[hiIdx]!, delta)),
+    // Unrounded: a sampled p-value can sit below 1e-4, and rounding it to 0
+    // would claim a certainty the sampling cannot give.
+    p_value,
+    exact,
+    ...base,
+  };
+}
+
+/**
+ * Holm step-down adjustment: controls the chance of any false finding across
+ * the family of tests without Bonferroni's full penalty on the smaller
+ * p-values. Returns adjusted values in the input order.
+ */
+export function holmAdjusted(pValues: readonly number[]): number[] {
+  const m = pValues.length;
+  const order = pValues.map((p, i) => ({ p, i })).sort((x, y) => x.p - y.p);
+  const out = Array.from<number>({ length: m });
+  let running = 0;
+  for (let rank = 0; rank < m; rank++) {
+    const { p, i } = order[rank]!;
+    // Monotone: an adjusted value never drops below the one before it.
+    running = Math.max(running, Math.min(1, (m - rank) * p));
+    out[i] = running;
+  }
+  return out;
+}
+
 /**
  * What each metric in the eval JSON outputs means. Keys are the field names
  * the reports emit, so a reader can look any of them up directly.
@@ -167,4 +302,10 @@ export const METRIC_GLOSSARY: Readonly<Record<string, string>> = {
   run_config_hash:
     "sha256 of the resolved ranking knobs (explicit config over MEMRAIN_* env over the search-mode bundle), the ranking env knobs, the embedding signature, k and qrels_sha256. Equal hashes mean the same ranking configuration; the corpus is not covered, so runs against a changed brain can differ under one hash.",
   qrels_sha256: "sha256 of the qrels file bytes the run scored against.",
+  paired:
+    "A/B: per metric, B − A over the scored queries both sides answered: delta, a cluster-bootstrap 95% interval (lower95, upper95), a two-sided sign-flip p_value over clusters (exact up to 16 clusters), p_holm adjusted across the metrics, and per-query wins/losses/ties. aggregate_only means a query threw on a side, so only the means compare.",
+  latency: "Search wall time per query, p50 and p95 in ms, over queries that did not throw; A/B adds B/A ratios.",
+  expected_top1: "Queries whose qrel pins an expected page at rank 1, and the ids that missed it.",
+  receipt:
+    "What an A/B scored: the split, qrels and query-id hashes, the prereg sha256 when one was given, and both run-config hashes.",
 };

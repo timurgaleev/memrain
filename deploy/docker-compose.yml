@@ -167,6 +167,21 @@ services:
       # Rerank candidate window (default 30). Read by the hybrid arm and
       # keyed into the query cache — unsettable from .env without this line.
       - MEMRAIN_RERANK_WINDOW=${MEMRAIN_RERANK_WINDOW:-${MEMEX_RERANK_WINDOW:-}}
+      # Ranking flags (default off; =1 on). Each is promoted only after a paired
+      # A/B on the live corpus (memrain eval --config-b); see docs/CONFIGURATION.md.
+      - MEMRAIN_RANK_METADATA_GATE=${MEMRAIN_RANK_METADATA_GATE:-${MEMEX_RANK_METADATA_GATE:-}}
+      - MEMRAIN_RANK_ENTITY_TRUTH_SOFT=${MEMRAIN_RANK_ENTITY_TRUTH_SOFT:-${MEMEX_RANK_ENTITY_TRUTH_SOFT:-}}
+      - MEMRAIN_RANK_KEYWORD_OR_RETRY=${MEMRAIN_RANK_KEYWORD_OR_RETRY:-${MEMEX_RANK_KEYWORD_OR_RETRY:-}}
+      - MEMRAIN_RANK_PAGE_FUSION=${MEMRAIN_RANK_PAGE_FUSION:-${MEMEX_RANK_PAGE_FUSION:-}}
+      - MEMRAIN_RANK_KEYWORD_CONFIDENCE=${MEMRAIN_RANK_KEYWORD_CONFIDENCE:-${MEMEX_RANK_KEYWORD_CONFIDENCE:-}}
+      - MEMRAIN_RANK_EXACT_LOOKUP=${MEMRAIN_RANK_EXACT_LOOKUP:-${MEMEX_RANK_EXACT_LOOKUP:-}}
+      # Search hits cut to this many characters at a word boundary, with a
+      # page_get pointer to the full text (default 0 = whole chunk).
+      - MEMRAIN_SEARCH_SNIPPET_CHARS=${MEMRAIN_SEARCH_SNIPPET_CHARS:-${MEMEX_SEARCH_SNIPPET_CHARS:-}}
+      # context_pack cards list newer pages that mention the entity (default on; 0 = off).
+      - MEMRAIN_CONTEXT_NEWER_MENTIONS=${MEMRAIN_CONTEXT_NEWER_MENTIONS:-${MEMEX_CONTEXT_NEWER_MENTIONS:-}}
+      # Pages the cycle's stale-link sweep re-extracts per run (default 200; 0 = off).
+      - MEMRAIN_LINKS_STALE_MAX_PER_CYCLE=${MEMRAIN_LINKS_STALE_MAX_PER_CYCLE:-${MEMEX_LINKS_STALE_MAX_PER_CYCLE:-}}
       # --- Paid opt-in Bedrock Claude Sonnet slices (all default OFF) ---------
       # Each makes a PAID Sonnet call only when its flag is set, bounded by its
       # own USD BudgetTracker (*_BUDGET_USD, default 1.0). See docs/CONFIGURATION.md.

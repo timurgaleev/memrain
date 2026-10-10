@@ -79,6 +79,7 @@ import {
   runEvalGate,
 } from "./commands/eval-compare.ts";
 import { parseEvalConfig, type EvalKnobConfig } from "./commands/eval.ts";
+import { runEvalQrelsBuild } from "./commands/eval-qrels.ts";
 import { runSalience } from "./commands/salience.ts";
 import { runWatch } from "./commands/watch.ts";
 import { runCycle, parsePhasesArg } from "./commands/cycle.ts";
@@ -121,13 +122,17 @@ function printUsage(): void {
   console.log("  integrity [--vault P]        vault-vs-index drift report");
   console.log("  eval [--k N] [--qrels P] [--rrf-k N] [--expand|--no-expand] [--rerank] [--max-pool]");
   console.log("       [--graph-signals] [--cosine-rescore] [--relational-arm] [--dedup-type-ratio X]");
-  console.log("       [--config-a <json|path>] [--config-b <json|path>]");
-  console.log("                               retrieval quality harness; --config-b = A/B compare");
+  console.log("       [--config-a <json|path>] [--config-b <json|path>] [--split dev|sealed|all]");
+  console.log("       [--prereg P] [--record]");
+  console.log("                               retrieval quality harness; --config-b = paired A/B compare");
+  console.log("  eval qrels build --out P.local.json [--sealed-fraction X] [--seed N] [--expected-top1 ids]");
+  console.log("                               qrels from the captured eval set, split into dev and sealed");
   console.log("  eval run-all [--modes a,b,c] [--qrels P] [--k N] [--out P]");
   console.log("                               run the suite once per search mode, append JSONL results");
   console.log("  eval compare [--input P] [--json]");
   console.log("                               per-mode comparison table from the results log");
   console.log("  eval gate [--baseline P] [--max-drop X] [--min-recall X] [--write-baseline]");
+  console.log("            [--split dev|all] [--allow-errors] [--max-latency-x X]");
   console.log("                               regression gate vs a stored baseline (exit 1 on drop)");
   console.log("  eval chronicle [--json]      deterministic Life Chronicle feature eval (own DB, no LLM)");
   console.log("  eval-probe [--limit N]       replay eval set, append a row to eval_snapshots (nightly probe)");
@@ -497,7 +502,52 @@ async function main(argv: readonly string[]): Promise<number> {
           }
           gateOpts.k = n;
         }
+        const gateSplit = values.get("--split");
+        if (gateSplit !== undefined) {
+          if (gateSplit !== "dev" && gateSplit !== "all") {
+            throw new Error(`memrain eval gate: invalid --split ${gateSplit} (dev|all)`);
+          }
+          gateOpts.split = gateSplit;
+        }
+        if (flags.has("--allow-errors")) gateOpts.allowErrors = true;
+        const maxLatencyX = values.get("--max-latency-x");
+        if (maxLatencyX !== undefined) {
+          const n = Number(maxLatencyX);
+          if (!Number.isFinite(n) || n < 1) {
+            throw new Error(`memrain eval gate: invalid --max-latency-x ${maxLatencyX}`);
+          }
+          gateOpts.maxLatencyX = n;
+        }
         return await runEvalGate(gateOpts);
+      }
+      if (positional[0] === "qrels") {
+        if (positional[1] !== "build") {
+          throw new Error("memrain eval qrels: subcommand required (build)");
+        }
+        const out = values.get("--out");
+        if (!out) throw new Error("memrain eval qrels build: --out is required");
+        const buildOpts: Parameters<typeof runEvalQrelsBuild>[0] = { out };
+        const fraction = values.get("--sealed-fraction");
+        if (fraction !== undefined) {
+          const n = Number(fraction);
+          if (!Number.isFinite(n) || n <= 0 || n >= 1) {
+            throw new Error(`memrain eval qrels build: invalid --sealed-fraction ${fraction}`);
+          }
+          buildOpts.sealedFraction = n;
+        }
+        const seed = values.get("--seed");
+        if (seed !== undefined) {
+          const n = Number(seed);
+          if (!Number.isInteger(n) || n < 0 || n > 2 ** 32) {
+            throw new Error(`memrain eval qrels build: invalid --seed ${seed}`);
+          }
+          buildOpts.seed = n;
+        }
+        const top1 = values.get("--expected-top1");
+        if (top1 !== undefined) {
+          buildOpts.expectedTop1 = top1.split(",").map((s) => s.trim()).filter(Boolean);
+        }
+        return await runEvalQrelsBuild(buildOpts);
       }
 
       const kStr = values.get("--k");
@@ -540,6 +590,16 @@ async function main(argv: readonly string[]): Promise<number> {
       if (values.has("--config-b")) {
         evalOpts.configB = parseEvalConfig(values.get("--config-b")!);
       }
+      const split = values.get("--split");
+      if (split !== undefined) {
+        if (split !== "dev" && split !== "sealed" && split !== "all") {
+          throw new Error(`memrain eval: invalid --split ${split} (dev|sealed|all)`);
+        }
+        evalOpts.split = split;
+      }
+      const prereg = values.get("--prereg");
+      if (prereg) evalOpts.preregPath = prereg;
+      if (flags.has("--record")) evalOpts.record = true;
       await runEval(evalOpts);
       return 0;
     }

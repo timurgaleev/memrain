@@ -12,11 +12,16 @@
  *       (suite, mode) wins — matches how an operator re-runs after a fix.
  *
  *   eval gate [--baseline PATH] [--max-drop X] [--min-recall X]
- *             [--write-baseline] [--qrels PATH] [--k N]
+ *             [--write-baseline] [--qrels PATH] [--k N] [--split dev|all]
+ *             [--allow-errors] [--max-latency-x X]
  *       Regression gate: run the CURRENT config over qrels and compare to a
  *       stored baseline JSON. Fails (exit 1) when meanRecall or MRR dropped
  *       by more than --max-drop (default 0.05), or — without a baseline —
  *       when meanRecall < --min-recall (correctness floor, default 0.6).
+ *       Fails closed: a query that threw fails the run unless --allow-errors;
+ *       p50 or p95 latency above --max-latency-x (default 2.0) times the
+ *       baseline's fails it; so does an expected_top1 query the baseline
+ *       answered at rank 1 and this run does not.
  *       --write-baseline saves this run as the new baseline.
  */
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from "node:fs";
@@ -34,6 +39,7 @@ import {
 import {
   evalRun,
   loadQrels,
+  filterSplit,
   defaultQrelsPath,
   expectedTargets,
   presentTargetPaths,
@@ -43,6 +49,7 @@ import {
   type EvalKnobConfig,
   type EvalOptions,
   type EvalReport,
+  type EvalSplit,
 } from "./eval.ts";
 import { deltaCi95, METRIC_GLOSSARY, type Ci95 } from "../core/search/bootstrap.ts";
 
@@ -276,6 +283,13 @@ export interface EvalBaseline {
   run_config_hash?: string;
   /** EVAL_SCORING_VERSION the baseline was scored under; absent means 1. */
   scoring_version?: number;
+  /** Absent on baselines written before latency was measured. */
+  latency_p50_ms?: number;
+  latency_p95_ms?: number;
+  /** expected_top1 query ids the baseline answered at rank 1. */
+  top1_hits?: string[];
+  /** Absent means all. */
+  split?: EvalSplit;
 }
 
 /**
@@ -340,20 +354,69 @@ export interface EvalGateOptions {
   k?: number;
   configPath?: string;
   searchFn?: EvalOptions["searchFn"];
+  /** Scored queries. The sealed split is not for gating. Default all. */
+  split?: Exclude<EvalSplit, "sealed">;
+  /** Pass a run in which queries threw. */
+  allowErrors?: boolean;
+  /** Fail when p50 or p95 latency exceeds this many times the baseline's. */
+  maxLatencyX?: number;
 }
 
 export function defaultBaselinePath(): string {
   return join(dirname(defaultConfigPath()), "eval-baseline.json");
 }
 
+export const DEFAULT_MAX_LATENCY_X = 2.0;
+
+/** A slowdown smaller than this is scheduler noise, whatever the ratio: a
+ *  canned or cached run measures single milliseconds. */
+export const LATENCY_SLACK_MS = 50;
+
+export interface GateChecks {
+  allowErrors?: boolean;
+  maxLatencyX?: number;
+}
+
 /** Pure gate verdict (exported for tests). */
 export function gateVerdict(
-  report: Pick<EvalReport, "meanRecall" | "meanReciprocalRank">,
+  report: Pick<EvalReport, "meanRecall" | "meanReciprocalRank"> &
+    Partial<Pick<EvalReport, "errors" | "latency" | "perQuery">>,
   baseline: EvalBaseline | null,
   maxDrop: number,
   minRecall: number,
+  checks: GateChecks = {},
 ): { pass: boolean; reasons: string[] } {
   const reasons: string[] = [];
+  // A query that threw scored 0; passing on it would call a broken run fine.
+  const errors = report.errors ?? [];
+  if (errors.length > 0 && !checks.allowErrors) {
+    reasons.push(
+      `${errors.length} quer${errors.length === 1 ? "y" : "ies"} threw ` +
+        `(${errors.slice(0, 5).map((e) => e.id).join(", ")}); pass --allow-errors to accept`,
+    );
+  }
+  const maxX = checks.maxLatencyX ?? DEFAULT_MAX_LATENCY_X;
+  const latency = report.latency;
+  if (latency && baseline) {
+    for (const [label, cur, base] of [
+      ["p50", latency.p50Ms, baseline.latency_p50_ms],
+      ["p95", latency.p95Ms, baseline.latency_p95_ms],
+    ] as const) {
+      if (base === undefined || base <= 0) continue;
+      if (cur > maxX * base && cur - base > LATENCY_SLACK_MS) {
+        reasons.push(
+          `${label} latency ${cur.toFixed(0)}ms is above ${maxX}x the baseline's ${base.toFixed(0)}ms`,
+        );
+      }
+    }
+  }
+  // Only a top-1 the baseline held can be lost; a known miss is what the
+  // pinned query is there to track, and must not block writing a baseline.
+  const held = new Set(baseline?.top1_hits ?? []);
+  const lost = (report.perQuery ?? []).filter((q) => q.top1Miss && held.has(q.id));
+  if (lost.length > 0) {
+    reasons.push(`expected top-1 lost for ${lost.map((q) => q.id).join(", ")}`);
+  }
   if (baseline) {
     const recallDrop = baseline.mean_recall - report.meanRecall;
     const mrrDrop = baseline.mean_mrr - report.meanReciprocalRank;
@@ -376,7 +439,12 @@ export function gateVerdict(
 }
 
 export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
-  const qrels = loadQrels(opts.qrelsPath ?? defaultQrelsPath());
+  const split: EvalSplit = opts.split ?? "all";
+  if ((split as EvalSplit) === "sealed") {
+    console.error("memrain eval gate: the sealed split is scored only by a recorded A/B");
+    return 1;
+  }
+  const qrels = filterSplit(loadQrels(opts.qrelsPath ?? defaultQrelsPath()), split);
   const maxDrop = opts.maxDrop ?? 0.05;
   const minRecall = opts.minRecall ?? 0.6;
   const baselinePath = opts.baseline ?? defaultBaselinePath();
@@ -402,14 +470,18 @@ export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
       return null;
     }
     return evalRun(storage, qrels, { name: "gate" }, {
+      split,
       ...(opts.k !== undefined ? { k: opts.k } : {}),
       ...(opts.searchFn ? { searchFn: opts.searchFn } : {}),
     });
   });
   if (!report) return EXIT_STALE_QRELS;
 
-  const comparable = comparableBaseline(baseline);
-  const scoringChanged = baseline !== null && comparable === null;
+  const splitChanged = baseline !== null && (baseline.split ?? "all") !== split;
+  const scoringComparable = comparableBaseline(baseline);
+  const scoringChanged = baseline !== null && scoringComparable === null;
+  // Means over another set of queries say nothing about this run.
+  const comparable = splitChanged ? null : scoringComparable;
   if (scoringChanged) {
     console.error(
       `memrain eval gate: the baseline at ${baselinePath} was scored under scoring version ` +
@@ -417,8 +489,17 @@ export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
         `judged against. Re-baseline with --write-baseline.`,
     );
   }
+  if (splitChanged) {
+    console.error(
+      `memrain eval gate: the baseline at ${baselinePath} scored the ${baseline?.split ?? "all"} ` +
+        `split, this run the ${split} split; it is not judged against.`,
+    );
+  }
   // The interval is reported next to the verdict; it does not decide it.
-  const verdict = gateVerdict(report, comparable, maxDrop, minRecall);
+  const verdict = gateVerdict(report, comparable, maxDrop, minRecall, {
+    ...(opts.allowErrors !== undefined ? { allowErrors: opts.allowErrors } : {}),
+    ...(opts.maxLatencyX !== undefined ? { maxLatencyX: opts.maxLatencyX } : {}),
+  });
   const deltaCi = gateDeltaCi(report, comparable);
   const qrelsChanged =
     baseline?.qrels_sha256 !== undefined && baseline.qrels_sha256 !== report.qrels_sha256;
@@ -437,6 +518,12 @@ export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
       qrels_sha256: report.qrels_sha256,
       run_config_hash: report.run_config_hash,
       scoring_version: EVAL_SCORING_VERSION,
+      latency_p50_ms: report.latency.p50Ms,
+      latency_p95_ms: report.latency.p95Ms,
+      top1_hits: report.perQuery
+        .filter((q) => q.expectedTop1 && !q.top1Miss)
+        .map((q) => q.id),
+      ...(split !== "all" ? { split } : {}),
     };
     mkdirSync(dirname(baselinePath), { recursive: true });
     writeFileSync(baselinePath, JSON.stringify(next, null, 2) + "\n");
@@ -454,7 +541,12 @@ export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
         mrr_ci95: report.mrrCi95,
         ...(deltaCi ? { delta_ci95: deltaCi } : {}),
         ...(qrelsChanged ? { qrels_changed: true } : {}),
+        ...(splitChanged ? { split_changed: true } : {}),
         ...(scoringChanged ? { scoring_changed: true, rebaseline: true } : {}),
+        split,
+        errors: report.errors,
+        latency: report.latency,
+        expected_top1: report.expectedTop1,
         run_config_hash: report.run_config_hash,
         qrels_sha256: report.qrels_sha256,
         reasons: verdict.reasons,

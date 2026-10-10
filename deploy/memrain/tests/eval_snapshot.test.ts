@@ -11,6 +11,8 @@ import {
   recordEvalSnapshot,
   recordFailedEvalSnapshot,
   latestEvalSnapshot,
+  recordAbSnapshot,
+  sealedRunRecorded,
 } from "../src/core/eval-snapshot.ts";
 import { recordQuery, type replayAll, type ReplayReport } from "../src/core/eval-replay.ts";
 import { evalTrendDetail } from "../src/commands/doctor.ts";
@@ -183,6 +185,88 @@ describe("probe run status", () => {
       now: new Date(),
     } as AdvisorContext);
     expect(findings).toEqual([]);
+  });
+});
+
+describe("A/B rows (migration 135)", () => {
+  async function recordAb(ranAt: string, totalQueries = 0): Promise<number> {
+    const r = await recordAbSnapshot(storage.engine(), {
+      ranAt,
+      totalQueries,
+      scored: totalQueries,
+      meanRR: 0.9,
+      hitRate: 1,
+      detail: { split: "dev" },
+    });
+    return r!.id;
+  }
+
+  it("are never read as the probe's latest snapshot", async () => {
+    const probe = await recordEvalSnapshot(storage.engine(), report());
+    await recordAb(new Date(Date.now() + 60_000).toISOString(), 5);
+    const latest = await latestEvalSnapshot(storage.engine());
+    expect(latest?.id).toBe(probe.id);
+    expect(latest?.mean_rr).toBeCloseTo(0.42, 5);
+  });
+
+  it("do not reset or extend the empty-eval-set streak", async () => {
+    const t = Date.now();
+    await recordEvalSnapshot(storage.engine(), report({ ranAt: new Date(t - 3000).toISOString(), totalQueries: 0, scored: 0 }));
+    await recordAb(new Date(t - 2000).toISOString(), 0);
+    await recordEvalSnapshot(storage.engine(), report({ ranAt: new Date(t - 1000).toISOString(), totalQueries: 0, scored: 0 }));
+    await recordAb(new Date(t).toISOString(), 5);
+    const findings = await collectEvalBlind.collect({
+      engine: storage.raw(),
+      version: "1.0.0",
+      now: new Date(),
+    } as AdvisorContext);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.title).toContain("recorded 2 snapshot(s)");
+  });
+
+  it("allow one sealed row per prereg", async () => {
+    const e = storage.engine();
+    const sealed = {
+      ranAt: new Date().toISOString(),
+      totalQueries: 3,
+      scored: 3,
+      meanRR: 0.5,
+      hitRate: 0.5,
+      detail: { split: "sealed", prereg_sha256: "p".repeat(64) },
+      oncePerPrereg: "p".repeat(64),
+    };
+    expect(await sealedRunRecorded(e, "p".repeat(64))).toBe(false);
+    expect(await recordAbSnapshot(e, sealed)).not.toBeNull();
+    expect(await sealedRunRecorded(e, "p".repeat(64))).toBe(true);
+    expect(await recordAbSnapshot(e, sealed)).toBeNull();
+    expect(await recordAbSnapshot(e, { ...sealed, detail: { ...sealed.detail, prereg_sha256: "q".repeat(64) }, oncePerPrereg: "q".repeat(64) })).not.toBeNull();
+  });
+
+  it("migration 135 reverts dropping the non-probe rows, and re-applies", async () => {
+    const e = storage.engine();
+    await recordEvalSnapshot(e, report());
+    await recordAb(new Date().toISOString(), 5);
+    await expect(
+      e.query(`INSERT INTO eval_snapshots (kind) VALUES ('weird')`),
+    ).rejects.toThrow();
+
+    const later = discoverMigrations().map((m) => m.id).filter((id) => id > 135).sort((a, b) => b - a);
+    for (const id of later) await revertMigration(e, id);
+    await revertMigration(e, 135);
+    const cols = await e.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'eval_snapshots' AND column_name = 'kind'`,
+    );
+    expect(cols.rows).toEqual([]);
+    const rows = await e.query<{ n: number }>(`SELECT count(*)::int AS n FROM eval_snapshots`);
+    expect(rows.rows[0]!.n).toBe(1);
+    // A reader on the pre-135 table still gets the probe row.
+    expect((await latestEvalSnapshot(e))?.mean_rr).toBeCloseTo(0.42, 5);
+
+    const again = await runMigrations(e);
+    expect(again.applied.map((m) => m.id)).toEqual([135, ...later.reverse()]);
+    const kinds = await e.query<{ kind: string }>(`SELECT kind FROM eval_snapshots`);
+    expect(kinds.rows.map((r) => r.kind)).toEqual(["probe"]);
   });
 });
 

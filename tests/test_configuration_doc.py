@@ -25,7 +25,8 @@ NOT_ENV = {
 }
 
 # Documented rows the source reads without spelling the full name:
-# resolve-model.ts builds MEMRAIN_<FEATURE>_MODEL at run time.
+# resolve-model.ts builds MEMRAIN_<FEATURE>_MODEL at run time, and
+# search/ranking-flags.ts builds MEMRAIN_RANK_<FLAG>.
 DOC_ONLY = {
     "MEMRAIN_THINK_MODEL",
     "MEMRAIN_DRIFT_MODEL",
@@ -33,6 +34,12 @@ DOC_ONLY = {
     "MEMRAIN_EXPANSION_MODEL",
     "MEMRAIN_INTENT_MODEL",
     "MEMRAIN_RERANK_MODEL",
+    "MEMRAIN_RANK_METADATA_GATE",
+    "MEMRAIN_RANK_ENTITY_TRUTH_SOFT",
+    "MEMRAIN_RANK_KEYWORD_OR_RETRY",
+    "MEMRAIN_RANK_PAGE_FUSION",
+    "MEMRAIN_RANK_KEYWORD_CONFIDENCE",
+    "MEMRAIN_RANK_EXACT_LOOKUP",
 }
 
 QUIESCENCE_SWITCHES = (

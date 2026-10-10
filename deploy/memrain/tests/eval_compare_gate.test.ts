@@ -561,3 +561,99 @@ describe("stale qrels", () => {
     expect(JSON.parse(out.lines.join("\n")).meanRecall).toBe(0.5);
   });
 });
+
+describe("gate fails closed", () => {
+  const base = {
+    saved_at: "",
+    k: 5,
+    mean_recall: 1,
+    mean_mrr: 1,
+    hit_rate: 1,
+    latency_p50_ms: 200,
+    latency_p95_ms: 400,
+    top1_hits: ["q1"],
+  };
+  const fine = { meanRecall: 1, meanReciprocalRank: 1 };
+
+  it("fails a run in which a query threw, unless errors are allowed", () => {
+    const report = { ...fine, errors: [{ id: "q2", error: "bedrock timeout" }] };
+    const v = gateVerdict(report, base, 0.05, 0.6);
+    expect(v.pass).toBe(false);
+    expect(v.reasons.join(" ")).toContain("q2");
+    expect(gateVerdict(report, base, 0.05, 0.6, { allowErrors: true }).pass).toBe(true);
+  });
+
+  it("fails a slowdown beyond the latency ratio, and ignores one inside the slack", () => {
+    const slow = { ...fine, latency: { p50Ms: 450, p95Ms: 500 } };
+    const v = gateVerdict(slow, base, 0.05, 0.6);
+    expect(v.pass).toBe(false);
+    expect(v.reasons.join(" ")).toContain("p50");
+    expect(gateVerdict(slow, base, 0.05, 0.6, { maxLatencyX: 3 }).pass).toBe(true);
+    // 3 ms against 1 ms is a ratio of 3, and still noise.
+    const tiny = { ...base, latency_p50_ms: 1, latency_p95_ms: 1 };
+    expect(gateVerdict({ ...fine, latency: { p50Ms: 3, p95Ms: 3 } }, tiny, 0.05, 0.6).pass).toBe(true);
+  });
+
+  it("fails when an expected top-1 the baseline held is lost, not on a known miss", () => {
+    const perQuery = [
+      { id: "q1", expectedTop1: true, top1Miss: true },
+      { id: "q2", expectedTop1: true, top1Miss: true },
+    ] as Parameters<typeof gateVerdict>[0]["perQuery"];
+    const v = gateVerdict({ ...fine, perQuery }, base, 0.05, 0.6);
+    expect(v.pass).toBe(false);
+    expect(v.reasons).toEqual(["expected top-1 lost for q1"]);
+    // Without a baseline nothing was held, so the run can still become one.
+    expect(gateVerdict({ ...fine, perQuery }, null, 0.05, 0.6).pass).toBe(true);
+  });
+
+  it("runEvalGate exits 1 on a thrown query and stores latency and top-1 hits in the baseline", async () => {
+    const top1Qrels = join(tmp, "qrels-top1.json");
+    writeFileSync(
+      top1Qrels,
+      JSON.stringify({
+        queries: [
+          { id: "q1", query: "alpha", expected_paths: ["notes/a.md"], expected_top1: true },
+          { id: "q2", query: "beta", expected_paths: ["notes/b.md"] },
+        ],
+      }),
+    );
+    const baselinePath = join(tmp, "baseline-closed.json");
+    const cap = capture();
+    let code: number;
+    try {
+      code = await runEvalGate({
+        baseline: baselinePath,
+        writeBaseline: true,
+        qrelsPath: top1Qrels,
+        configPath: cfgPath,
+        searchFn: cannedSearch(true),
+      });
+    } finally {
+      cap.restore();
+    }
+    expect(code).toBe(0);
+    const saved = JSON.parse(readFileSync(baselinePath, "utf-8"));
+    expect(saved.top1_hits).toEqual(["q1"]);
+    expect(typeof saved.latency_p50_ms).toBe("number");
+
+    const throwing: SearchFn = async (s, query, cfg, k) => {
+      if (query === "beta") throw new Error("bedrock timeout");
+      return cannedSearch(true)(s, query, cfg, k);
+    };
+    const cap2 = capture();
+    try {
+      code = await runEvalGate({
+        baseline: baselinePath,
+        qrelsPath: top1Qrels,
+        configPath: cfgPath,
+        searchFn: throwing,
+        maxDrop: 1,
+      });
+    } finally {
+      cap2.restore();
+    }
+    expect(code).toBe(1);
+    const out = JSON.parse(cap2.lines.join("\n"));
+    expect(out.errors).toEqual([{ id: "q2", error: "bedrock timeout" }]);
+  });
+});

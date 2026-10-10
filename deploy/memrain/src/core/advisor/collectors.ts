@@ -455,8 +455,10 @@ export const collectEvalBlind: AdvisorCollector = {
            FROM eval_snapshots
           WHERE total_queries = 0
             AND status <> 'error'
+            AND kind = 'probe'
             AND ran_at > COALESCE(
-                  (SELECT max(ran_at) FROM eval_snapshots WHERE total_queries > 0),
+                  (SELECT max(ran_at) FROM eval_snapshots
+                    WHERE total_queries > 0 AND kind = 'probe'),
                   '-infinity'::timestamptz)`,
       );
       nights = Number(r.rows[0]?.n ?? 0);

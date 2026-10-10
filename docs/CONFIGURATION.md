@@ -201,6 +201,18 @@ to `environment:` before overriding.
 | `MEMRAIN_TRAJECTORY_REGRESSION_THRESHOLD` | `0.1` | Drop in `find_trajectory` score that counts as a regression. Must be in `(0, 1)`; anything else uses the default. | free |
 | `MEMRAIN_ORPHAN_EXCLUDE_WRITERS` | built-in list | Replaces the list of `written_by` values whose pages never count as orphans. Presence decides: set to empty, every page counts. CSV. | free |
 | `MEMRAIN_ORPHAN_EXCLUDE_EXTRA` | empty | Adds `written_by` values to that list. CSV. | free |
+| `MEMRAIN_RANK_METADATA_GATE` | off (`=1` on) | Ranking flag: the recency, salience, chronicle, mattering, graph, backlink and alias boosts apply only when a lexical arm (keyword, title or relational) voted for the query. Read per call and keyed into the query cache. Allowlisted. | free |
+| `MEMRAIN_RANK_ENTITY_TRUTH_SOFT` | off (`=1` on) | Ranking flag: the ×2 entity-truth boost needs an explicit `detail: "low"`; a low detail inferred by the intent classifier gets ×1.2. Allowlisted. | free |
+| `MEMRAIN_RANK_KEYWORD_OR_RETRY` | off (`=1` on) | Ranking flag: when the all-terms keyword pass returns fewer than 3 rows, an any-term pass runs, its rows at half weight and never counted as exact keyword evidence. Allowlisted. | free |
+| `MEMRAIN_RANK_PAGE_FUSION` | off (`=1` on) | Ranking flag: fusion votes per page instead of per chunk, so a page's mirror and its truth copy hold one slot and agreement across arms counts once per arm. Allowlisted. | free |
+| `MEMRAIN_RANK_KEYWORD_CONFIDENCE` | off (`=1` on) | Ranking flag: when the keyword arm's top hit barely leads its runner-up and the vector arm voted, the keyword and title arms fuse at half weight. Allowlisted. | free |
+| `MEMRAIN_RANK_EXACT_LOOKUP` | off (`=1` on) | Ranking flag: when exactly one page's title or slug equals the whole query, its best chunk moves to rank 1. Allowlisted. | free |
+
+The `MEMRAIN_RANK_*` flags ship off and are promoted one at a time, after a
+paired A/B on the live corpus says the change helps. `memrain eval
+--config-a '{"name":"off"}' --config-b '{"name":"on","env":{"MEMRAIN_RANK_EXACT_LOOKUP":"1"}}'`
+sets the flag for the B side's queries only; see `docs/eval/PREREG-TEMPLATE.md`
+for the sealed run that decides a promotion.
 
 `near_symbol` and `walk_depth` are **search-tool parameters**, not env vars —
 pass them per call (`walk_depth` 1–2, capped at 2; inert unless `walk_depth > 0`
