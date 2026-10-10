@@ -209,6 +209,7 @@ services:
       # LLM-generated blurb situating it in its document. Bounded by its own
       # budget (default 5.0). Enable, then run `reindex --contextual` to backfill.
       - MEMRAIN_CONTEXTUAL_LLM=${MEMRAIN_CONTEXTUAL_LLM:-${MEMEX_CONTEXTUAL_LLM:-}}
+      - MEMRAIN_CONTEXTUAL_LLM_DOC_MAX_CHARS=${MEMRAIN_CONTEXTUAL_LLM_DOC_MAX_CHARS:-${MEMEX_CONTEXTUAL_LLM_DOC_MAX_CHARS:-}}
       - MEMRAIN_CONTEXTUAL_LLM_BUDGET_USD=${MEMRAIN_CONTEXTUAL_LLM_BUDGET_USD:-${MEMEX_CONTEXTUAL_LLM_BUDGET_USD:-}}
       # How many chunks a write situates and embeds at once, shared by every
       # concurrent write (default 4; empty = default). 1 restores the old serial
@@ -231,6 +232,7 @@ services:
       - MEMRAIN_EMBED_TIMEOUT_MS=${MEMRAIN_EMBED_TIMEOUT_MS:-${MEMEX_EMBED_TIMEOUT_MS:-}}
       # Override the paid-tier model (default eu.anthropic.claude-sonnet-4-6).
       - MEMRAIN_FACTS_MODEL=${MEMRAIN_FACTS_MODEL:-${MEMEX_FACTS_MODEL:-}}
+      - MEMRAIN_FACTS_EXTRACT_MODEL=${MEMRAIN_FACTS_EXTRACT_MODEL:-${MEMEX_FACTS_EXTRACT_MODEL:-}}
       # Override the utility-tier model (default Claude Haiku 4.5).
       - MEMRAIN_UTILITY_MODEL=${MEMRAIN_UTILITY_MODEL:-${MEMEX_UTILITY_MODEL:-}}
       # Credentials in ingested text: redact (default) | flag | reject, and
@@ -289,6 +291,11 @@ services:
       - MEMRAIN_MCP_INSTRUCTIONS=${MEMRAIN_MCP_INSTRUCTIONS:-${MEMEX_MCP_INSTRUCTIONS:-}}
       - MEMRAIN_MCP_LENIENT_ARGS=${MEMRAIN_MCP_LENIENT_ARGS:-${MEMEX_MCP_LENIENT_ARGS:-}}
       - MEMRAIN_JOB_TIMEOUT_MS=${MEMRAIN_JOB_TIMEOUT_MS:-${MEMEX_JOB_TIMEOUT_MS:-}}
+      - MEMRAIN_JOB_STALL_GRACE_MS=${MEMRAIN_JOB_STALL_GRACE_MS:-${MEMEX_JOB_STALL_GRACE_MS:-}}
+      - MEMRAIN_JOB_LLM_HALT=${MEMRAIN_JOB_LLM_HALT:-${MEMEX_JOB_LLM_HALT:-}}
+      - MEMRAIN_EMBED_GAPS=${MEMRAIN_EMBED_GAPS:-${MEMEX_EMBED_GAPS:-}}
+      - MEMRAIN_EMBED_GAPS_MAX_PER_CYCLE=${MEMRAIN_EMBED_GAPS_MAX_PER_CYCLE:-${MEMEX_EMBED_GAPS_MAX_PER_CYCLE:-}}
+      - MEMRAIN_SYNTHESIS_ONCE_PER_DAY=${MEMRAIN_SYNTHESIS_ONCE_PER_DAY:-${MEMEX_SYNTHESIS_ONCE_PER_DAY:-}}
       # How long shutdown lets a running job finish before handing it back to
       # the queue (default 8000). Keep it under stop_grace_period above.
       - MEMRAIN_WORKER_DRAIN_MS=${MEMRAIN_WORKER_DRAIN_MS:-${MEMEX_WORKER_DRAIN_MS:-}}
