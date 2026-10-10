@@ -24,6 +24,13 @@ import { buildGazetteer, type GazetteerEntry } from "./gazetteer.ts";
 import { PAGE_MIRROR_PATH_SQL } from "./page-index.ts";
 import { quarantineFilterFragment } from "./quarantine.ts";
 import {
+  assessContentSanity,
+  resolveDisabledPatterns,
+  resolveOperatorLiterals,
+  resolveSanityThresholds,
+  sanityGateEnabled,
+} from "./content-sanity.ts";
+import {
   resolveSonnetFn,
   resolveFactsModel,
   STOP_REASON_MAX_TOKENS,
@@ -691,7 +698,7 @@ export async function writeExtractedFacts(
           console.error(`[facts-extract] entity names unavailable, claims stay the owner's: ${errorClass(e)}`);
         }
       }
-      // A claim that names one known entity is about it, not the speaker.
+      // A claim whose subject is a known entity is about it, not the speaker.
       slug = inferSubject(f.fact, gazetteer) ?? owner;
     } else {
       // A placeholder entity ("team", "unknown", "the user") would mint a junk
@@ -981,25 +988,45 @@ export async function pageObservationDate(
 }
 
 /**
- * True when the page's search mirror is quarantined: the gate hid that text
- * from search, so it must not come back as facts either. A page with no
- * mirror yet, or a failed read, is not held here.
+ * True when the page's text is held from search, so it must not come back as
+ * facts either. The search mirror's verdict counts only while it was built
+ * from this page version: a mirror still queued (MEMRAIN_PAGE_MIRROR_SYNC=0)
+ * or built from an older text gives way to the gate run on the body itself.
+ * A failed read holds the page; the backfill picks it up again.
  */
-async function isQuarantinedPage(storage: Storage, slug: string, sourceId: string): Promise<boolean> {
+async function isQuarantinedPage(
+  storage: Storage,
+  slug: string,
+  sourceId: string,
+  body: string,
+): Promise<boolean> {
+  let row: { title: string | null; fresh: boolean; quarantined: boolean } | undefined;
   try {
-    const r = await storage.engine().query(
-      `SELECT 1
+    const r = await storage.engine().query<{ title: string | null; fresh: boolean; quarantined: boolean }>(
+      `SELECT p.title,
+              COALESCE(d.frontmatter->>'page_content_hash' = p.content_hash
+                       AND COALESCE(d.frontmatter->>'page_title', '') = COALESCE(p.title, ''), false) AS fresh,
+              COALESCE(NOT (${quarantineFilterFragment("d")}), false) AS quarantined
          FROM pages p
-         JOIN documents d ON d.source_path = ${PAGE_MIRROR_PATH_SQL}
+         LEFT JOIN documents d ON d.source_path = ${PAGE_MIRROR_PATH_SQL} AND d.deleted_at IS NULL
         WHERE p.slug = $1 AND p.source_id = $2 AND p.deleted_at IS NULL
-          AND NOT (${quarantineFilterFragment("d")})
         LIMIT 1`,
       [slug, sourceId],
     );
-    return r.rows.length > 0;
-  } catch {
-    return false;
+    row = r.rows[0];
+  } catch (e) {
+    console.error(`[facts-extract] quarantine state unreadable, ${slug} held: ${errorClass(e)}`);
+    return true;
   }
+  if (row?.fresh === true) return row.quarantined === true;
+  if (!sanityGateEnabled()) return false;
+  return assessContentSanity({
+    body,
+    title: row?.title ?? "",
+    extra_literals: resolveOperatorLiterals(),
+    disabled_patterns: resolveDisabledPatterns(),
+    ...resolveSanityThresholds(),
+  }).shouldQuarantine;
 }
 
 /** The absorb reason an extractor outcome files, or null for a readable one. */
@@ -1034,7 +1061,7 @@ export async function extractFactsForPage(
   const budget = new BudgetTracker(cap, "facts-extract:on-write");
   const windows = extractionWindows(opts.slug, opts.body, factsMaxWindows());
   const sourceId = opts.sourceId ?? "default";
-  if (await isQuarantinedPage(storage, opts.slug, sourceId)) {
+  if (await isQuarantinedPage(storage, opts.slug, sourceId, opts.body)) {
     return {
       factsWritten: 0,
       factsSkipped: 0,

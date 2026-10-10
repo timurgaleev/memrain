@@ -19,7 +19,7 @@ import { mirrorPage } from "../src/core/page-index.ts";
 import { Queue } from "../src/core/jobs/queue.ts";
 import { Worker } from "../src/core/jobs/worker.ts";
 import { _resetHandlersForTesting, getHandler } from "../src/core/jobs/handlers.ts";
-import type { JobRow } from "../src/core/jobs/types.ts";
+import { type JobRow, jobSpendClient } from "../src/core/jobs/types.ts";
 import { registerPageMirrorHandler } from "../src/core/jobs/page-mirror-handler.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
@@ -92,7 +92,7 @@ describe("where the mirror is built", () => {
     expect((await mirror("page://notes/queued"))?.content).toContain("badgers");
   });
 
-  it("books a queued mirror to the writing client's spend id", async () => {
+  it("books a queued mirror to the writing client's spend id and cap, without a grant", async () => {
     process.env.MEMRAIN_PAGE_MIRROR_SYNC = "0";
     await storage.engine().query(`INSERT INTO sources (id, kind, path_prefix) VALUES ('tenant-a', 'other', 'tenant:a')`);
     const r = await dispatchTool(
@@ -103,6 +103,7 @@ describe("where the mirror is built", () => {
           token: "tok-a",
           clientId: "client-a",
           spendId: "enr-1",
+          budgetUsdPerDay: 0.25,
           scopes: ["read", "write"],
           sourceId: "tenant-a",
           allowedSources: ["tenant-a"],
@@ -113,11 +114,18 @@ describe("where the mirror is built", () => {
     expect(r.isError ?? false).toBe(false);
     const res = JSON.parse((r.content[0] as { text: string }).text) as Record<string, unknown>;
     const job = await new Queue(storage.engine()).get(res.search_job_id as string);
-    expect(job?.submittedBy).toBe("enr-1");
+    // submittedBy names a grant's owner; a mirror runs under none.
+    expect(job?.submittedBy).toBeNull();
     expect(job?.authority).toBeNull();
+    expect(job?.payload).toMatchObject({ spendBy: "enr-1", spendCapUsd: 0.25 });
+    // The cap it was queued under survives a token revoked before the run.
+    expect(jobSpendClient(job!)).toEqual({ clientId: "enr-1", capUsd: 0.25 });
 
     const operator = await put({ slug: "notes/operator", markdown_body: body("egrets") });
-    expect((await new Queue(storage.engine()).get(operator.search_job_id as string))?.submittedBy).toBeNull();
+    const opJob = await new Queue(storage.engine()).get(operator.search_job_id as string);
+    expect(opJob?.submittedBy).toBeNull();
+    expect(opJob?.payload.spendBy).toBeUndefined();
+    expect(jobSpendClient(opJob!)).toBeNull();
   });
 
   it("builds it inline when the caller asks to wait for the index", async () => {

@@ -244,41 +244,30 @@ export function makeMcpHandler(opts: McpHandlerOptions) {
       return new Response(null, { status: 204 });
     }
 
-    // A batched `add_fact` (`items`) is that many writes in one call: charge
-    // every item past the first, to the same buckets the request paid.
-    for (let i = extraFactWrites(raw); i > 0; i--) {
+    if (Array.isArray(raw) && raw.length > MAX_BATCH_SIZE) {
+      return Response.json(
+        rpcError(null, ERR_INVALID_REQUEST, `batch too large (max ${MAX_BATCH_SIZE})`),
+        { status: 400 },
+      );
+    }
+    // The top of the request paid for one dispatch. A JSON-RPC batch runs N,
+    // and a batched `add_fact` (`items`) is that many writes: charge the rest
+    // up front, to every bucket the request paid, so a single POST of
+    // thousands of tools/call (each a paid Bedrock embed) can't amplify past
+    // either limiter's capacity.
+    const extraCost = (Array.isArray(raw) ? Math.max(raw.length - 1, 0) : 0) + extraFactWrites(raw);
+    for (let i = extraCost; i > 0; i--) {
       const ipOk = limiter.allow(clientId);
       if (!ipOk || (perTokenLimiter && tokenId && !perTokenLimiter.allow(tokenId))) {
         const retryAfter = ipOk ? perTokenLimiter!.retryAfterSeconds(tokenId!) : limiter.retryAfterSeconds(clientId);
         return Response.json(
-          rpcError(null, ERR_RATE_LIMITED, "rate limit exceeded (add_fact items)"),
+          rpcError(null, ERR_RATE_LIMITED, "rate limit exceeded"),
           { status: 429, headers: { "Retry-After": String(retryAfter) } },
         );
       }
     }
 
     if (Array.isArray(raw)) {
-      // A JSON-RPC batch runs N dispatches but only spent ONE rate-limit token
-      // at the top. Cap the batch, then charge the remaining N-1 tokens up front
-      // so a single POST of thousands of tools/call (each a paid Bedrock embed)
-      // can't amplify past the limiter's capacity.
-      if (raw.length > MAX_BATCH_SIZE) {
-        return Response.json(
-          rpcError(null, ERR_INVALID_REQUEST, `batch too large (max ${MAX_BATCH_SIZE})`),
-          { status: 400 },
-        );
-      }
-      for (let i = 1; i < raw.length; i++) {
-        if (!limiter.allow(clientId)) {
-          return Response.json(
-            rpcError(null, ERR_RATE_LIMITED, "rate limit exceeded (batch)"),
-            {
-              status: 429,
-              headers: { "Retry-After": String(limiter.retryAfterSeconds(clientId)) },
-            },
-          );
-        }
-      }
       const responses = await Promise.all(
         raw.map((r) =>
           handleSingle(opts.storage, r as JsonRpcRequest, ctx, forbidPublic),

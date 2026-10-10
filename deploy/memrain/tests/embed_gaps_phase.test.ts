@@ -7,7 +7,7 @@
  * Bedrock phases, and its paid calls carry the phase spend tag. The doctor warns
  * only on a backlog that is both large and a day old.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +16,7 @@ import { EMBED_DIMENSIONS } from "../src/core/embedding.ts";
 import { EMBED_GAPS_MAX_FAILURES, embedGapsPhase, embedGapsMaxPerCycle } from "../src/core/cycle/embed-gaps.ts";
 import { ALL_PHASES, runPhase } from "../src/core/cycle/index.ts";
 import { selectTickPhases } from "../src/recipes/cycle.ts";
-import { currentSpendTags } from "../src/core/budget.ts";
+import { DailyCapRefusal, currentSpendTags } from "../src/core/budget.ts";
 import { NOOP_PROGRESS } from "../src/core/output/progress.ts";
 import { checkEmbedBacklog } from "../src/core/doctor-embed.ts";
 
@@ -148,6 +148,70 @@ describe("embed-gaps phase", () => {
     );
     expect(n.rows[0]!.n).toBe(0);
     expect((await embedGapsPhase(storage.engine(), { embed })).embedded).toBe(3);
+  });
+
+  async function failureCounts(): Promise<number[]> {
+    const r = await storage.engine().query<{ n: number }>(`SELECT embed_failures AS n FROM chunks ORDER BY id`);
+    return r.rows.map((row) => row.n);
+  }
+
+  it("stops the run on a refusal every chunk would share, and counts nothing", async () => {
+    const quiet = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const err of [
+        new DailyCapRefusal("brain", "spent", "wait"),
+        Object.assign(new Error("not authorized to invoke model"), { name: "AccessDeniedException" }),
+        Object.assign(new Error("security token expired"), { name: "ExpiredTokenException" }),
+        Object.assign(new Error("model not found"), { name: "ResourceNotFoundException" }),
+      ]) {
+        await storage.engine().exec(`DELETE FROM chunks; DELETE FROM documents`);
+        await seedGaps(3);
+        let calls = 0;
+        const refusing = async (): Promise<number[]> => {
+          calls++;
+          throw err;
+        };
+        await expect(embedGapsPhase(storage.engine(), { embed: refusing })).rejects.toBe(err);
+        expect(calls).toBeLessThanOrEqual(2);
+        expect(await failureCounts()).toEqual([0, 0, 0]);
+      }
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it("does not count an unclassified failure against a chunk", async () => {
+    await seedGaps(2);
+    const quiet = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await embedGapsPhase(storage.engine(), { embed: async () => { throw new Error("boom"); } });
+    } finally {
+      quiet.mockRestore();
+    }
+    expect(await failureCounts()).toEqual([0, 0]);
+  });
+
+  it("fails the run when the vector cannot be stored, without counting it", async () => {
+    await seedGaps(2);
+    const engine = storage.engine();
+    const realQuery = engine.query.bind(engine);
+    const spy = spyOn(engine, "query").mockImplementation((async (sql: string, params?: unknown[]) => {
+      if (sql.includes("INSERT INTO embeddings")) throw new Error("relation is locked");
+      return realQuery(sql, params);
+    }) as typeof engine.query);
+    try {
+      await expect(embedGapsPhase(engine, { embed })).rejects.toThrow("relation is locked");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await failureCounts()).toEqual([0, 0]);
+  });
+
+  it("clears a chunk's failure count once its vector lands", async () => {
+    await seedGaps(1);
+    await storage.engine().exec(`UPDATE chunks SET embed_failures = 2`);
+    expect((await embedGapsPhase(storage.engine(), { embed })).embedded).toBe(1);
+    expect(await failureCounts()).toEqual([0]);
   });
 
   it("runs in the default cycle, outside quiet hours only", () => {

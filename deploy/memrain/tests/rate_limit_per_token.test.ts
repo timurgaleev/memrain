@@ -65,4 +65,31 @@ describe("per-token rate limiter", () => {
     expect(over.status).toBe(429);
     expect(over.headers.get("Retry-After")).not.toBeNull();
   });
+
+  test("a JSON-RPC batch charges the per-token bucket once per element, add_fact items included", async () => {
+    const perToken = new RateLimiter({ capacity: 6, refillPerSecond: 0 });
+    let ip = 0;
+    const handler = makeMcpHandler({
+      storage: { engine: () => ({ query: async () => ({ rows: [] }) }) } as never,
+      internalRateLimiter: new RateLimiter({ capacity: 100, refillPerSecond: 0 }),
+      perTokenRateLimiter: perToken,
+      clientKey: () => `ip-${ip++}`,
+    });
+    const ping = (id: number) => ({ jsonrpc: "2.0", id, method: "ping" });
+    const addFacts = (id: number, n: number) => ({
+      jsonrpc: "2.0", id, method: "tools/call",
+      params: { name: "add_fact", arguments: { items: Array.from({ length: n }, (_, i) => ({ entity_slug: "people/a", fact: `f${i}` })) } },
+    });
+    const post = (payload: unknown) =>
+      new Request("http://x/mcp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    const ctx = { isPublic: false, authInfo: { clientId: "tok1" } as never };
+
+    // Three pings plus a three-item add_fact: six dispatched writes/calls.
+    expect((await handler(post([ping(1), ping(2), ping(3), addFacts(4, 3)]), ctx)).status).toBe(200);
+    expect((await handler(post(ping(5)), ctx)).status).toBe(429);
+  });
 });

@@ -28,6 +28,8 @@ import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { BudgetTracker, BudgetExhausted } from "../budget.ts";
 import { callWithTruncationRetry } from "../llm/truncation.ts";
 import { filterWorthwhile, worthGateEnabled } from "./worth-gate.ts";
+import { quarantineFilterFragment } from "../quarantine.ts";
+import { PAGE_MIRROR_PATH_SQL } from "../page-index.ts";
 
 export interface ReflectionsPhaseResult {
   ran: boolean;
@@ -137,6 +139,12 @@ async function gatherTranscripts(
         AND p.slug NOT LIKE 'wiki/agents/%'
         AND length(btrim(p.markdown_body)) >= 200
         AND p.updated_at >= $3::timestamptz
+        -- Text the gate quarantined in search is not fed to the model either.
+        AND NOT EXISTS (
+          SELECT 1 FROM documents qd
+           WHERE qd.source_path = ${PAGE_MIRROR_PATH_SQL}
+             AND NOT (${quarantineFilterFragment("qd")})
+        )
         AND NOT EXISTS (
           SELECT 1 FROM links l
            WHERE l.target_slug = p.slug AND l.source_slug LIKE 'reflections/%'

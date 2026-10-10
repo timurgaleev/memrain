@@ -13,7 +13,8 @@
  */
 import { validateSlug } from "./pages.ts";
 import { isJunkEntitySlug } from "./entity-junk.ts";
-import { scanMentions, type GazetteerEntry } from "./gazetteer.ts";
+import type { GazetteerEntry } from "./gazetteer.ts";
+import { normalizeAlias } from "./page-aliases.ts";
 
 let warnedFor: string | null = null;
 
@@ -48,14 +49,26 @@ export function resolveOwnerEntity(
 }
 
 /**
- * The entity a first-person claim is about when its text names exactly one
- * known person or company page ("Alice moved to Berlin" said as `User`).
- * Null when it names none or several: the claim then stays the owner's. The
- * gazetteer already drops a name two pages share, so a match is unambiguous.
+ * The entity a first-person claim is about when the claim opens with a known
+ * person or company name, its grammatical subject ("Alice moved to Berlin"
+ * said as `User`). A name further in ("I called Alice", "Met Alice") or a
+ * possessive ("Alice's sister") leaves the claim the owner's: the speaker
+ * acted, or the subject is someone else. The gazetteer already drops a name
+ * two pages share, so a match is unambiguous.
  */
 export function inferSubject(text: string, entries: GazetteerEntry[]): string | null {
-  const hits = scanMentions(text, entries);
-  return hits.length === 1 ? hits[0]! : null;
+  const claim = text.normalize("NFKC").trimStart();
+  // A lowercase opening word is the common-word sense ("mark the date"), not a name.
+  if (!/^\p{Lu}/u.test(claim)) return null;
+  const norm = normalizeAlias(claim);
+  let best: GazetteerEntry | null = null;
+  for (const e of entries) {
+    if (e.phrase.length === 0 || !norm.startsWith(e.phrase)) continue;
+    if (best === null || e.phrase.length > best.phrase.length) best = e;
+  }
+  // Judged on the longest name only: "Alice Smith's" must not fall back to "Alice".
+  if (best === null || /^[\p{L}\p{N}_'\u2019]/u.test(norm.slice(best.phrase.length))) return null;
+  return best.slug;
 }
 
 /** Speaker labels a first-party importer gives the operator. */

@@ -27,7 +27,7 @@ import {
 import { bucketJobErrors, classifyJobError } from "../src/core/jobs/error-classify.ts";
 import { kindDefaultTimeoutMs } from "../src/core/jobs/kind-defaults.ts";
 import { BedrockHalted, resetBedrockCircuitForTests } from "../src/core/llm/bedrock-errors.ts";
-import { currentSpendClient, currentSpendTags, DailyCapRefusal, utcDayStart } from "../src/core/budget.ts";
+import { currentSpendClient, currentSpendContext, currentSpendTags, DailyCapRefusal, utcDayStart } from "../src/core/budget.ts";
 import { OperationError } from "../src/core/operation-error.ts";
 import { checkQueueHealth } from "../src/core/doctor-ops.ts";
 
@@ -243,6 +243,30 @@ describe("LLM outage defer", () => {
     expect(row?.lastError).toMatch(/^deferred: daily_cap: /);
     expect(row!.nextAttemptAt.getTime()).toBe(utcDayStart().getTime() + 86_400_000);
     expect(worker.getStats().deferred).toBe(1);
+  });
+
+  it("a daily-cap refusal the next day repeats fails the job at once", async () => {
+    registerHandler("capped-for-good", async () => {
+      throw new DailyCapRefusal("brain", "model has no price", "price it", false);
+    });
+    await queue.enqueue({ kind: "capped-for-good", id: "dp", maxRetries: 3 });
+    const worker = new Worker(queue, quiet);
+    await worker.drainOnce();
+    const row = await queue.get("dp");
+    expect(row?.status).toBe("failed");
+    expect(row?.deferredCount).toBe(0);
+    expect(worker.getStats().deferred).toBe(0);
+  });
+
+  it("refuses a submitter without a grant snapshot, and runs a payload's spender under its carried cap", async () => {
+    await expect(queue.enqueue({ kind: "x", submittedBy: "c1" })).rejects.toThrow("submittedBy and authority go together");
+    let seen: unknown = null;
+    registerHandler("spent", async () => {
+      seen = currentSpendContext();
+    });
+    await queue.enqueue({ kind: "spent", id: "sp", payload: { spendBy: "enr-9", spendCapUsd: 0.5 } });
+    await new Worker(queue, quiet).drainOnce();
+    expect(seen).toEqual({ clientId: "enr-9", capUsd: 0.5 });
   });
 
   it("a client's own budget refusal still retries the ordinary way", async () => {

@@ -25,6 +25,7 @@ import {
   cycleDailyCapUsd,
   isBudgetRefusal,
   isDailyCapRefusal,
+  isRolloverDailyCapRefusal,
   runWithSpendClient,
   runWithSpendTags,
   setSpendLedgerEngine,
@@ -102,6 +103,7 @@ describe("the brain-wide cap", () => {
     expect(isDailyCapRefusal(err)).toBe(true);
     expect(isBudgetRefusal(err)).toBe(true);
     expect((err as Error).message.startsWith(`${DAILY_CAP_REASON}:`)).toBe(true);
+    expect(isRolloverDailyCapRefusal(err)).toBe(true);
     const refused = await storage.engine().query(`SELECT 1 FROM mcp_spend_log WHERE outcome = 'refused'`);
     expect(refused.rows).toHaveLength(1);
   });
@@ -162,7 +164,15 @@ describe("the brain-wide cap", () => {
       sent = true;
     }).catch((e: unknown) => e);
     expect(isDailyCapRefusal(err)).toBe(true);
+    expect(isRolloverDailyCapRefusal(err)).toBe(false);
     expect(sent).toBe(false);
+  });
+
+  it("marks a call that alone costs more than the cap as not cleared by the day rollover", async () => {
+    process.env.MEMRAIN_DAILY_BUDGET_USD = "0.01";
+    const err = await trackedInvoke(TWO_CENTS, async (m) => ok(m)).catch((e: unknown) => e);
+    expect(isDailyCapRefusal(err)).toBe(true);
+    expect(isRolloverDailyCapRefusal(err)).toBe(false);
   });
 
   it("still applies the brain cap when the client's cap lookup fails", async () => {

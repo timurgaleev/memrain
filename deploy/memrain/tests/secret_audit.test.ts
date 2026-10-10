@@ -250,6 +250,53 @@ describe("auditStoredSecrets apply, partial failures", () => {
     expect(r.errors).toEqual([]);
     expect(String(await scalar(`SELECT markdown_body AS v FROM pages WHERE slug = 'notes/leak'`))).not.toContain(TOKEN);
     expect(JSON.stringify(r)).not.toContain(TOKEN);
+    // The stale search copy still holds the credential: the run is not clean.
+    expect(await scalar(`SELECT errors_total AS v FROM secret_audit_runs ORDER BY id DESC LIMIT 1`)).toBe(1);
+  });
+
+  it("exits 1 from --apply when a rewritten page's search mirror failed", async () => {
+    process.env.MEMRAIN_SECRET_SCAN_DISPOSITION = "flag";
+    await putPage(storage, { slug: "notes/leak", type: "note", markdown_body: `the token is ${TOKEN}` });
+    delete process.env.MEMRAIN_SECRET_SCAN_DISPOSITION;
+    const spy = spyOn(pageIndex, "mirrorPage").mockImplementation(async () => false);
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await runSecretsAudit({ apply: true, yes: true, kinds: ["pages"], storage })).toBe(1);
+    } finally {
+      spy.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  it("names a page whose slug carries a credential by its redacted form when its mirror fails", async () => {
+    const bearer = ["xo", "xb-"].join("") + "1234567890-abcdefghijklmnop";
+    const slug = `notes/${bearer}`;
+    process.env.MEMRAIN_SECRET_SCAN_DISPOSITION = "flag";
+    await putPage(storage, { slug, type: "note", markdown_body: `the bot token is ${bearer}` });
+    delete process.env.MEMRAIN_SECRET_SCAN_DISPOSITION;
+    const logged: string[] = [];
+    const err = spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      logged.push(a.map(String).join(" "));
+    });
+    const failing = {
+      embedFn: async (): Promise<number[]> => {
+        throw new Error(`embedding refused for ${slug}`);
+      },
+    };
+    let r: Awaited<ReturnType<typeof auditStoredSecrets>>;
+    try {
+      r = await auditStoredSecrets(storage, { kinds: ["pages"], apply: true, mirror: failing });
+    } finally {
+      err.mockRestore();
+    }
+    expect(r.mirror_failed).toBe(1);
+    expect(logged.join("\n")).toContain("[page-index] failed to mirror page notes/[REDACTED:");
+    expect(logged.join("\n")).not.toContain(bearer);
+    const rows = JSON.stringify(
+      (await storage.engine().query(`SELECT source_ref, pages_updated, summary FROM ingest_log WHERE source_type = 'page-mirror-failed'`)).rows,
+    );
+    expect(rows).toContain("REDACTED");
+    expect(rows).not.toContain(bearer);
   });
 
   it("reports a credential in a slug by its redacted form and never renames the page", async () => {

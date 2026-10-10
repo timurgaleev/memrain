@@ -782,6 +782,9 @@ export class DailyCapRefusal extends OperationError {
     readonly scope: "brain" | "cycle",
     message: string,
     suggestion: string,
+    /** False when the next UTC day refuses it the same way (an unpriced
+     *  model, a single call above the cap): only a config change helps. */
+    readonly rollover: boolean = true,
   ) {
     super("budget_exhausted", `${DAILY_CAP_REASON}: ${message}`, suggestion);
   }
@@ -795,6 +798,11 @@ export function isDailyCapRefusal(err: unknown): boolean {
     err.code === "budget_exhausted" &&
     (err as { reason?: unknown }).reason === DAILY_CAP_REASON
   );
+}
+
+/** A daily cap refusal the UTC day rollover clears: the day's spend, not the call itself, is over the cap. */
+export function isRolloverDailyCapRefusal(err: unknown): boolean {
+  return isDailyCapRefusal(err) && (err as { rollover?: unknown }).rollover !== false;
 }
 
 const _badCapWarned = new Set<string>();
@@ -953,6 +961,7 @@ async function holdForCall(call: TrackedCall): Promise<string | null> {
       `'${call.operation}' uses model '${call.model}', which has no price, so it ` +
         `cannot be counted against the ${brainCap !== null ? "brain" : "cycle"} daily budget`,
       "Price the model in MODEL_PRICING/EMBEDDING_PRICING, or unset the daily cap.",
+      false,
     );
   }
   type Held =
@@ -1001,6 +1010,7 @@ async function holdForCall(call: TrackedCall): Promise<string | null> {
       `${held.refused} daily budget exhausted (spent $${held.spentUsd.toFixed(4)} of ` +
         `$${held.capUsd.toFixed(2)}; '${call.operation}' may cost up to $${worst.toFixed(4)}) — refused`,
       `Wait for the UTC day to roll over, or raise ${which}.`,
+      worst <= held.capUsd,
     );
   }
   // OperationError, not BudgetExhausted: the MCP layer renders this code as a

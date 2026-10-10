@@ -475,6 +475,9 @@ export interface MirrorPageOptions {
    *  retried job passes false until its last attempt, so a failing page
    *  leaves one row, not one per retry. */
   logFailure?: boolean;
+  /** How logs and ingest rows name the page; default its slug. A caller whose
+   *  slug may itself carry a credential passes a redacted form. */
+  logLabel?: string;
   /** Test seams — production omits both. */
   embedFn?: IndexFileOptions["embedFn"];
   contextualLlmFn?: IndexFileOptions["contextualLlmFn"];
@@ -540,21 +543,23 @@ export async function mirrorPageVerdict(
       },
     );
     const deferred = indexed?.embeddingDeferred ?? 0;
-    if (deferred > 0) await logMirrorDeferred(storage, page, deferred);
+    if (deferred > 0) await logMirrorDeferred(storage, page, deferred, opts.logLabel ?? page.slug);
     return {
       ok: true,
       ...(indexed?.quarantined ? { quarantined: indexed.quarantined } : {}),
       ...(deferred > 0 ? { embeddingDeferred: deferred } : {}),
     };
   } catch (e) {
-    const reason = e instanceof Error ? e.message : String(e);
-    console.error(`[page-index] failed to mirror page ${page.slug} into search:`, reason);
+    const label = opts.logLabel ?? page.slug;
+    // An error message can echo the slug it failed on.
+    const reason = (e instanceof Error ? e.message : String(e)).split(page.slug).join(label);
+    console.error(`[page-index] failed to mirror page ${label} into search:`, reason);
     if (opts.logFailure === false) return { ok: false };
     try {
       await logIngest(storage.engine(), {
         source_type: "page-mirror-failed",
-        source_ref: page.slug,
-        pages_updated: [page.slug],
+        source_ref: label,
+        pages_updated: [label],
         summary: reason.slice(0, 500),
         ...(page.source_id ? { source_id: page.source_id } : {}),
       });
@@ -570,12 +575,17 @@ export async function mirrorPageVerdict(
  * ingest row: the page is keyword-searchable, and the row says why semantic
  * search misses it until the embed-gaps phase catches up.
  */
-async function logMirrorDeferred(storage: Storage, page: MirrorPageInput, chunks: number): Promise<void> {
+async function logMirrorDeferred(
+  storage: Storage,
+  page: MirrorPageInput,
+  chunks: number,
+  label: string,
+): Promise<void> {
   try {
     await logIngest(storage.engine(), {
       source_type: "page-mirror-deferred",
-      source_ref: page.slug,
-      pages_updated: [page.slug],
+      source_ref: label,
+      pages_updated: [label],
       summary: `${chunks} chunk(s) stored without embeddings; filled later by embed-gaps`,
       ...(page.source_id ? { source_id: page.source_id } : {}),
     });

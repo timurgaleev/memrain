@@ -16,12 +16,12 @@
 import { type BatchScope, runInBatchScope } from "../llm/bedrock-errors.ts";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
-import { isDailyCapRefusal, runWithSpendClient, runWithSpendTags, utcDayStart } from "../budget.ts";
+import { isDailyCapRefusal, isRolloverDailyCapRefusal, runWithSpendClient, runWithSpendTags, utcDayStart } from "../budget.ts";
 import { getHandler } from "./handlers.ts";
 import { kindDefaultTimeoutMs } from "./kind-defaults.ts";
 import { haltOf, llmHaltEnabled, noteHalt } from "./llm-halt.ts";
 import type { Queue } from "./queue.ts";
-import { type JobRow, UnrecoverableJobError } from "./types.ts";
+import { type JobRow, UnrecoverableJobError, jobSpendClient } from "./types.ts";
 import type { Engine } from "../engine/interface.ts";
 import {
   acquireWorkerLock,
@@ -383,12 +383,12 @@ export class Worker {
           { once: true },
         );
         // Paid calls book against this job, and against the client that
-        // submitted it, so a tenant's queued work counts toward its own cap.
-        const submittedBy = job.submittedBy;
+        // queued it, so a tenant's queued work counts toward its own cap.
+        const spender = jobSpendClient(job);
         const inScope = () => runInBatchScope(scope, () => handler(job.payload, ctx));
         const run = () =>
           runWithSpendTags({ jobId: job.id }, () =>
-            submittedBy ? runWithSpendClient({ clientId: submittedBy }, inScope) : inScope(),
+            spender ? runWithSpendClient(spender, inScope) : inScope(),
           );
         let result: Record<string, unknown> | void;
         try {
@@ -435,7 +435,10 @@ export class Worker {
         // retrying would only wedge the worker again. So does a failure the
         // handler marked unrecoverable.
         const timedOut = e instanceof JobTimeoutError;
-        const unrecoverable = !timedOut && isUnrecoverable(e);
+        // A cap refusal the next day would repeat (an unpriced model, one call
+        // above the cap) is as final as an unrecoverable failure.
+        const unrecoverable =
+          !timedOut && (isUnrecoverable(e) || (isDailyCapRefusal(e) && !isRolloverDailyCapRefusal(e)));
         if (!timedOut && !unrecoverable && (await this.deferForOutage(job, gen, e, message))) {
           return;
         }
@@ -560,7 +563,7 @@ export class Worker {
     err: unknown,
     message: string,
   ): Promise<boolean> {
-    if (!isDailyCapRefusal(err)) return false;
+    if (!isRolloverDailyCapRefusal(err)) return false;
     if (job.deferredCount >= MAX_DEFERS) {
       this.log("warn", `[${job.id}] ${job.kind} was deferred ${job.deferredCount} times; failing it`);
       return false;

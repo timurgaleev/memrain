@@ -1,6 +1,7 @@
 /**
  * Job queue types — the shape of rows + handler signatures.
  */
+import type { SpendClient } from "../budget.ts";
 
 export type JobStatus =
   | "pending"
@@ -121,11 +122,36 @@ export interface EnqueueInput {
    * dead-letters it (terminal, no retry). Omit to use the worker default.
    */
   timeoutMs?: number;
-  /**
-   * Submitting client: the job's paid calls book against it. With `authority`
-   * the job also runs under that client's grant.
-   */
+  /** Submitting client, for a job run under a tenant's grant. Requires `authority`. */
   submittedBy?: string;
   /** Grant snapshot the handler re-checks against the live client. Requires `submittedBy`. */
   authority?: Record<string, unknown>;
+}
+
+/**
+ * Payload keys naming whom a job's paid calls book against when it runs under
+ * no grant (`submittedBy` is the grant's owner and nothing else): the client
+ * whose request queued it, and the daily cap that client held then, so a token
+ * revoked before the job runs is still capped as it was.
+ */
+export const JOB_SPEND_BY = "spendBy";
+export const JOB_SPEND_CAP_USD = "spendCapUsd";
+
+/** The payload fields that carry `client`'s spend into a queued job; none outside a client. */
+export function spendPayload(client: SpendClient | null): Record<string, unknown> {
+  if (client === null) return {};
+  return {
+    [JOB_SPEND_BY]: client.clientId,
+    ...(client.capUsd !== undefined ? { [JOB_SPEND_CAP_USD]: client.capUsd } : {}),
+  };
+}
+
+/** Whom a job's paid calls book against: the grant's owner, else the client its payload names. */
+export function jobSpendClient(job: Pick<JobRow, "submittedBy" | "payload">): SpendClient | null {
+  if (job.submittedBy) return { clientId: job.submittedBy };
+  const by = job.payload[JOB_SPEND_BY];
+  if (typeof by !== "string" || by.length === 0) return null;
+  const cap = job.payload[JOB_SPEND_CAP_USD];
+  if (cap === null || (typeof cap === "number" && Number.isFinite(cap) && cap >= 0)) return { clientId: by, capUsd: cap };
+  return { clientId: by };
 }

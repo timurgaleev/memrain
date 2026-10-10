@@ -14,6 +14,7 @@ import { putPage, getPage } from "../src/core/pages.ts";
 import { reflectionsPhase } from "../src/core/synthesis/reflections.ts";
 import { conversationFactsBackfillPhase } from "../src/core/cycle/conversation-facts-backfill.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
+import { QUARANTINE_KEY } from "../src/core/quarantine.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -53,6 +54,14 @@ async function seedTranscripts(n: number): Promise<string[]> {
   return slugs;
 }
 
+/** A quarantined search mirror for page `slug`, as the content gate leaves one. */
+async function quarantineMirror(slug: string): Promise<void> {
+  await storage.engine().query(
+    `INSERT INTO documents (id, source_path, title, frontmatter) VALUES ($1, $2, 't', $3::text::jsonb)`,
+    [`held-${slug}`, `page://${slug}`, JSON.stringify({ [QUARANTINE_KEY]: { patterns: ["test"] } })],
+  );
+}
+
 beforeEach(async () => {
   tmp = mkdtempSync(join(tmpdir(), "memrain-reflections-"));
   storage = new Storage({ dbPath: join(tmp, "db") });
@@ -67,6 +76,14 @@ afterEach(async () => {
 });
 
 describe("reflectionsPhase", () => {
+  it("leaves a transcript the content gate quarantined out of the prompt", async () => {
+    const slugs = await seedTranscripts(3);
+    await quarantineMirror(slugs[0]!);
+    await reflectionsPhase(storage, { sonnetFn: fakeSonnet("[]") });
+    expect(lastPrompt).toContain("Entry 2:");
+    expect(lastPrompt).not.toContain("Entry 1:");
+  });
+
   it("writes a reflection page from structured output, citing transcripts", async () => {
     const slugs = await seedTranscripts(3);
     const payload = JSON.stringify([

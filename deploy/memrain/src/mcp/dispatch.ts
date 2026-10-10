@@ -184,6 +184,7 @@ import {
 import { putRawData, getRawData } from "../core/raw-data.ts";
 import { logIngest, getIngestLog } from "../core/ingest-log.ts";
 import { Queue } from "../core/jobs/queue.ts";
+import { spendPayload } from "../core/jobs/types.ts";
 import { PAGE_MIRROR_JOB_KIND } from "../core/jobs/page-mirror-handler.ts";
 import { isKnownJobKind, knownJobKinds } from "../core/jobs/handlers.ts";
 import { getJobProgress } from "../core/jobs/lifecycle.ts";
@@ -219,7 +220,7 @@ import {
 import { checkConnectorHealth } from "../core/connectors/health.ts";
 import {
   checkClientBudget,
-  currentSpendClient,
+  currentSpendContext,
   runWithSpendClient,
 } from "../core/budget.ts";
 import { MODE_BUNDLES, isSearchMode, expansionActive } from "../core/search/mode.ts";
@@ -1917,16 +1918,20 @@ async function mirrorOrQueue(
   // The handler mirrors the page as it is when it runs, so an older job landing
   // after a newer one is wasted work, never stale data.
   const id = `page_mirror:${page.source_id ?? "default"}:${page.slug}:${randomUUID()}`;
-  // The mirror's embeds are the writer's spend, as they are inline.
-  const spender = currentSpendClient();
   try {
     await new Queue(storage.engine()).enqueue({
       kind: PAGE_MIRROR_JOB_KIND,
-      payload: { slug: page.slug, remote, op, ...(page.content_hash ? { contentHash: page.content_hash } : {}) },
+      payload: {
+        slug: page.slug,
+        remote,
+        op,
+        ...(page.content_hash ? { contentHash: page.content_hash } : {}),
+        // The mirror's embeds are the writer's spend, under the writer's cap, as they are inline.
+        ...spendPayload(currentSpendContext()),
+      },
       id,
       priority: 1,
       timeoutMs: 300_000,
-      ...(spender !== null ? { submittedBy: spender } : {}),
     });
     return { search_pending: true, search_job_id: id };
   } catch (e) {

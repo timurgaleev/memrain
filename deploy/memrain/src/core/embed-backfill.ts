@@ -58,7 +58,8 @@
  * contextual vector to a raw one and the marker stays truthful on every path.
  * Unmarked chunks embed raw content, unchanged.
  */
-import { classifyBedrockError, isTransientBedrockError, runInBatchScope } from "./llm/bedrock-errors.ts";
+import { classifyBedrockError, runInBatchScope } from "./llm/bedrock-errors.ts";
+import { isBudgetRefusal } from "./budget.ts";
 import type { Engine } from "./engine/interface.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
 import { embeddableChunkFragment } from "./embed-skip.ts";
@@ -470,8 +471,10 @@ function embedInput(row: CandidateRow): string {
 
 /**
  * Embed one keyset page through the bounded worker pool. Each real insert calls
- * `onEmbedded`, each per-chunk failure `onFailed`; neither aborts the page (one
- * bad row never strands the rest). Mirrors the prior single-pass pool, now
+ * `onEmbedded`, each per-chunk embed failure `onFailed`; neither aborts the
+ * page (one bad row never strands the rest). A failure every row would share
+ * (a budget refusal, credentials, access, model config, the database) does:
+ * the run throws it. Mirrors the prior single-pass pool, now
  * scoped to a page so peak memory stays at one page.
  */
 async function embedPage(
@@ -486,13 +489,32 @@ async function embedPage(
 ): Promise<void> {
   let next = 0;
   const total = page.length;
+  // A failure no other row would escape (a spent budget, broken credentials,
+  // the database): the pool stops taking rows and the run fails with it.
+  let fatal: { err: unknown } | undefined;
   const worker = async (): Promise<void> => {
     for (;;) {
+      if (fatal) return;
       const i = next++;
       if (i >= total) return;
       const row = page[i]!;
+      let vec: number[];
       try {
-        const vec = await embedWithRetry(embed, embedInput(row));
+        vec = await embedWithRetry(embed, embedInput(row));
+      } catch (err) {
+        if (stopsTheRun(err)) {
+          fatal ??= { err };
+          return;
+        }
+        onFailed();
+        if (isContentRejection(err)) await countFailure(engine, row);
+        console.error(
+          `embed-backfill: chunk ${row.id} failed:`,
+          err instanceof Error ? err.message : err,
+        );
+        continue;
+      }
+      try {
         // Connection-retry the DB insert (transient RDS socket reset) — distinct
         // from embedWithRetry (Bedrock 429), which already ran. Idempotent
         // (ON CONFLICT DO NOTHING + RETURNING), so a replay after a drop still
@@ -516,7 +538,7 @@ async function embedPage(
                  ON CONFLICT (chunk_id) DO NOTHING
                  RETURNING chunk_id
                ), upd AS (
-                 UPDATE chunks c SET contextual_tier = $5
+                 UPDATE chunks c SET contextual_tier = $5, embed_failures = 0
                    FROM ins WHERE c.id = ins.chunk_id
                  RETURNING c.id
                )
@@ -539,17 +561,29 @@ async function embedPage(
         if (Number(outcome?.fresh ?? 0) === 0) onStale();
         else if (Number(outcome?.inserted ?? 0) > 0) onEmbedded();
       } catch (err) {
-        onFailed();
-        if (!isTransientBedrockError(err)) await countFailure(engine, row);
-        console.error(
-          `embed-backfill: chunk ${row.id} failed:`,
-          err instanceof Error ? err.message : err,
-        );
+        fatal ??= { err };
+        return;
       }
     }
   };
   const pool = Array.from({ length: Math.min(concurrency, total) }, () => worker());
   await Promise.all(pool);
+  if (fatal) throw fatal.err;
+}
+
+/** An embed failure every later row would hit too: a budget refusal, or a
+ *  credential, access or model config the operator has to fix. */
+function stopsTheRun(err: unknown): boolean {
+  if (isBudgetRefusal(err)) return true;
+  const cls = classifyBedrockError(err);
+  return cls === "credential" || cls === "access" || cls === "model_not_found";
+}
+
+/** The model refused this text itself: the only failure counted against a chunk. */
+function isContentRejection(err: unknown): boolean {
+  const cls = classifyBedrockError(err);
+  if (cls === "input_too_long") return true;
+  return cls === "other" && (err as { name?: unknown } | null)?.name === "ValidationException";
 }
 
 /**

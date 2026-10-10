@@ -321,6 +321,7 @@ async function fetchBatch(engine: Engine, spec: StoreSpec, cursor: unknown[] | n
  * Rewrite one row with its redacted fields: `rewritten`, `moved` when the row
  * changed since the scan, or `mirror_failed` when a live page got its new
  * version but its search mirror (which still holds the old text) did not.
+ * `ref` is the row as reports name it, its slug redacted.
  */
 async function applyRow(
   storage: Storage,
@@ -328,6 +329,7 @@ async function applyRow(
   row: Row,
   next: Record<string, unknown>,
   opts: SecretAuditOptions,
+  ref: string,
 ): Promise<"rewritten" | "moved" | "mirror_failed"> {
   const engine = storage.engine();
   if (spec.store === "pages" && row.deleted_at === null) {
@@ -351,7 +353,7 @@ async function applyRow(
         content_hash: put.content_hash,
         source_id: row.source_id as string | null,
       },
-      { remote: false, timingLabel: "secrets-audit", ...(opts.mirror ?? {}) },
+      { remote: false, timingLabel: "secrets-audit", logLabel: ref, ...(opts.mirror ?? {}) },
     );
     return mirrored ? "rewritten" : "mirror_failed";
   }
@@ -520,7 +522,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
         if (slugHit) result.errors.push(`${store} ${ref}: its slug carries a credential; the audit never renames a page`);
         if (Object.keys(next).length === 0) continue;
         try {
-          const outcome = await applyRow(storage, spec, row, next, opts);
+          const outcome = await applyRow(storage, spec, row, next, opts, ref);
           if (outcome !== "moved") {
             result.rows_rewritten += 1;
             if (outcome === "mirror_failed") result.mirror_failed += 1;
@@ -559,7 +561,8 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
         JSON.stringify(result.by_secret_kind),
         result.code_chunks_affected,
         result.rows_rewritten,
-        result.errors.length,
+        // A failed mirror leaves the old text in search chunks: the brain is not clean yet.
+        result.errors.length + result.mirror_failed,
       ],
     );
   }
@@ -577,7 +580,7 @@ export interface SecretAuditRunSummary {
   rows_affected: number;
   hits_total: number;
   code_chunks_affected: number;
-  /** Rows an applied run could not rewrite. */
+  /** Rows an applied run could not rewrite, or rewrote with a failed search mirror. */
   errors_total: number;
 }
 

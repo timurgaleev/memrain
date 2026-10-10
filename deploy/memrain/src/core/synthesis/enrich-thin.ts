@@ -28,6 +28,8 @@ import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { BudgetTracker, BudgetExhausted } from "../budget.ts";
 import { callWithTruncationRetry } from "../llm/truncation.ts";
 import { parseModelJson } from "../llm/json-output.ts";
+import { quarantineFilterFragment } from "../quarantine.ts";
+import { PAGE_MIRROR_PATH_SQL } from "../page-index.ts";
 
 export interface EnrichThinPhaseResult {
   ran: boolean;
@@ -183,6 +185,12 @@ async function gatherEvidence(
         AND p.source_id = $2
         AND p.slug <> $1
         AND length(btrim(coalesce(p.markdown_body, ''))) >= 40
+        -- Text the gate quarantined in search is not fed to the model either.
+        AND NOT EXISTS (
+          SELECT 1 FROM documents qd
+           WHERE qd.source_path = ${PAGE_MIRROR_PATH_SQL}
+             AND NOT (${quarantineFilterFragment("qd")})
+        )
         AND (
           p.slug IN (SELECT target_slug FROM links WHERE source_slug = $1)
           OR p.slug IN (SELECT source_slug FROM links WHERE target_slug = $1)

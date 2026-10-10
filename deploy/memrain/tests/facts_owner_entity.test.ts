@@ -96,7 +96,7 @@ describe("writeExtractedFacts with an owner entity", () => {
     ]);
   });
 
-  it("set: a claim that names exactly one known entity lands on that entity", async () => {
+  it("set: a claim whose subject is a known entity lands on that entity", async () => {
     process.env["MEMRAIN_OWNER_ENTITY"] = "people/robin";
     await putPage(storage, { slug: "people/alice-smith", type: "person", title: "Alice Smith", markdown_body: "Alice." });
     await putPage(storage, { slug: "companies/acme-corp", type: "company", title: "Acme Corp", markdown_body: "Acme." });
@@ -104,7 +104,7 @@ describe("writeExtractedFacts with an owner entity", () => {
       storage,
       [
         { ...OWNER_CLAIM, fact: "Alice Smith moved to Berlin." },
-        { ...OWNER_CLAIM, fact: "Alice Smith joined Acme Corp." },
+        { ...OWNER_CLAIM, fact: "I called Alice Smith about the move." },
         { ...OWNER_CLAIM, fact: "Prefers tea in the morning." },
       ],
       { firstParty: true },
@@ -113,7 +113,7 @@ describe("writeExtractedFacts with an owner entity", () => {
     const alice = await listFacts(storage, "people/alice-smith", { decay: false });
     expect(alice.map((r) => r.fact)).toEqual(["Alice Smith moved to Berlin."]);
     const robin = await listFacts(storage, "people/robin", { decay: false });
-    expect(robin.map((r) => r.fact).sort()).toEqual(["Alice Smith joined Acme Corp.", "Prefers tea in the morning."]);
+    expect(robin.map((r) => r.fact).sort()).toEqual(["I called Alice Smith about the move.", "Prefers tea in the morning."]);
   });
 
   it("unset: a claim naming a known entity is still dropped, as before", async () => {
@@ -124,14 +124,20 @@ describe("writeExtractedFacts with an owner entity", () => {
     expect(w).toMatchObject({ written: 0, skipped: 1 });
   });
 
-  it("inferSubject maps only a single unambiguous mention", () => {
+  it("inferSubject maps a claim only to the entity it opens with", () => {
     const entries = [
       { phrase: "alice smith", slug: "people/alice-smith" },
+      { phrase: "alice", slug: "people/alice-other" },
       { phrase: "acme corp", slug: "companies/acme-corp" },
     ];
     expect(inferSubject("Alice Smith said so.", entries)).toBe("people/alice-smith");
-    expect(inferSubject("Alice Smith and Alice Smith again.", entries)).toBe("people/alice-smith");
-    expect(inferSubject("Alice Smith joined Acme Corp.", entries)).toBeNull();
+    expect(inferSubject("  Alice  Smith joined Acme Corp.", entries)).toBe("people/alice-smith");
+    expect(inferSubject("Acme Corp hired two people.", entries)).toBe("companies/acme-corp");
+    expect(inferSubject("I called Alice Smith.", entries)).toBeNull();
+    expect(inferSubject("Met Alice Smith at the conference.", entries)).toBeNull();
+    expect(inferSubject("Alice Smith's sister moved here.", entries)).toBeNull();
+    expect(inferSubject("Alicestan is a place.", entries)).toBeNull();
+    expect(inferSubject("alice smith said so.", entries)).toBeNull();
     expect(inferSubject("Nobody we know.", entries)).toBeNull();
   });
 

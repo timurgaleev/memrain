@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { getPage } from "../src/core/pages.ts";
 import { driftPhase } from "../src/core/synthesis/drift.ts";
+import { QUARANTINE_KEY } from "../src/core/quarantine.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
 
 let tmp: string;
@@ -63,6 +64,17 @@ afterEach(async () => {
 });
 
 describe("driftPhase", () => {
+  it("does not re-read a source the content gate quarantined", async () => {
+    await seedDriftedTake("The project will ship in Q1.", "The project has been pushed to Q4.");
+    await storage.engine().query(`UPDATE documents SET frontmatter = $1::text::jsonb WHERE id = 'doc1'`, [
+      JSON.stringify({ [QUARANTINE_KEY]: { patterns: ["test"] } }),
+    ]);
+    lastPrompt = "";
+    const r = await driftPhase(storage, { sonnetFn: fakeSonnet("[]") });
+    expect(r.candidatesConsidered).toBe(0);
+    expect(lastPrompt).not.toContain("pushed to Q4");
+  });
+
   it("skips when no take has shifted evidence", async () => {
     const r = await driftPhase(storage, { sonnetFn: fakeSonnet("[]") });
     expect(r.ran).toBe(false);

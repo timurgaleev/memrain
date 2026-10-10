@@ -11,6 +11,7 @@ import { Storage } from "../src/core/storage.ts";
 import { putPage, getPage } from "../src/core/pages.ts";
 import { enrichThinPhase } from "../src/core/synthesis/enrich-thin.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
+import { QUARANTINE_KEY } from "../src/core/quarantine.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -24,6 +25,14 @@ const fakeSonnet = (text: string): SonnetFn => async (input) => {
     usage: { inputTokens: 200, outputTokens: 120 },
   };
 };
+
+/** A quarantined search mirror for page `slug`, as the content gate leaves one. */
+async function quarantineMirror(slug: string): Promise<void> {
+  await storage.engine().query(
+    `INSERT INTO documents (id, source_path, title, frontmatter) VALUES ($1, $2, 't', $3::text::jsonb)`,
+    [`held-${slug}`, `page://${slug}`, JSON.stringify({ [QUARANTINE_KEY]: { patterns: ["test"] } })],
+  );
+}
 
 async function link(source: string, target: string): Promise<void> {
   await storage.engine().query(
@@ -46,6 +55,23 @@ afterEach(async () => {
 });
 
 describe("enrichThinPhase", () => {
+  it("takes no evidence from a neighbour the content gate quarantined", async () => {
+    await putPage(storage, { slug: "people/dave", type: "person", title: "Dave", markdown_body: "stub", source_id: "default" });
+    await putPage(storage, {
+      slug: "notes/dave-held",
+      type: "note",
+      title: "Held",
+      markdown_body: "Dave quarantined neighbour text that the gate hid from search and must not reach the model.",
+      source_id: "default",
+    });
+    await link("people/dave", "notes/dave-held");
+    await quarantineMirror("notes/dave-held");
+    lastPrompt = "";
+    const r = await enrichThinPhase(storage, { sonnetFn: fakeSonnet("{}") });
+    expect(r.pagesEnriched).toBe(0);
+    expect(lastPrompt).not.toContain("quarantined neighbour text");
+  });
+
   it("skips a thin page with no neighbour evidence", async () => {
     await putPage(storage, { slug: "people/bob", type: "person", title: "Bob", markdown_body: "a short stub about Bob", source_id: "default" });
     const r = await enrichThinPhase(storage, { sonnetFn: fakeSonnet("{}") });

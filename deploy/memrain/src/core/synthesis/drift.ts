@@ -36,6 +36,7 @@ import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { BudgetTracker, BudgetExhausted } from "../budget.ts";
 import { callWithTruncationRetry } from "../llm/truncation.ts";
 import { parseModelJson } from "../llm/json-output.ts";
+import { quarantineFilterFragment } from "../quarantine.ts";
 
 export interface DriftPhaseResult {
   ran: boolean;
@@ -145,6 +146,8 @@ async function gatherCandidates(
        FROM synth_takes t
        JOIN documents d ON d.id = t.source_ref
       WHERE d.source_id = $1
+        -- A source the gate quarantined is not re-read into a drift check.
+        AND ${quarantineFilterFragment("d")}
         AND t.status <> 'rejected'
         AND t.weight >= 0.3 AND t.weight <= 0.85
         AND d.updated_at > t.generated_at

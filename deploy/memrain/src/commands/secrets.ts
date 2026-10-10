@@ -84,7 +84,7 @@ export async function runSecretsAudit(opts: SecretsAuditCmdOptions): Promise<num
       });
       if (opts.json) console.log(JSON.stringify(r, null, 2));
       else printHuman(r);
-      const remaining = r.applied ? r.errors.length : r.hits_total;
+      const remaining = r.applied ? r.errors.length + r.mirror_failed : r.hits_total;
       return remaining > 0 ? 1 : 0;
     },
     { owned: opts.storage === undefined },

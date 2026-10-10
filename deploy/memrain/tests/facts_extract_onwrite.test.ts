@@ -3,7 +3,7 @@
  * in-memory queue, and the best-effort per-page extractor (with an injected
  * fake Sonnet so no Bedrock call happens).
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +20,10 @@ import {
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
 import { putPage } from "../src/core/pages.ts";
 import { QUARANTINE_KEY } from "../src/core/quarantine.ts";
+
+const JUNK_BODY =
+  "Attention Required! | Cloudflare\n\nPlease enable cookies. Ray ID: 7abc. " +
+  "Checking your browser before accessing the site.";
 
 const LONG_BODY =
   "Alice said she will move to Gotham in March and prefers tea over coffee. " +
@@ -153,25 +157,38 @@ describe("extractFactsForPage", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  /** Mark (or create) the mirror document at `path` as quarantined. */
-  async function quarantineMirror(path: string): Promise<void> {
+  /**
+   * Give the page `slug` a mirror document, quarantined or not, built from the
+   * page as stored now (or from an older text when `stale`).
+   */
+  async function setMirror(slug: string, opts: { held: boolean; stale?: boolean }): Promise<void> {
     const e = storage.engine();
-    const held = `{"${QUARANTINE_KEY}":{"patterns":["test"]}}`;
-    await e.query(
-      `UPDATE documents SET frontmatter = COALESCE(frontmatter, '{}'::jsonb) || $2::jsonb WHERE source_path = $1`,
-      [path, held],
+    const page = await e.query<{ content_hash: string; title: string | null }>(
+      `SELECT content_hash, title FROM pages WHERE slug = $1`,
+      [slug],
     );
-    await e.query(
-      `INSERT INTO documents (id, source_path, title, frontmatter)
-       SELECT 'held-doc', $1, 'held', $2::jsonb
-        WHERE NOT EXISTS (SELECT 1 FROM documents WHERE source_path = $1)`,
-      [path, held],
-    );
+    const fm: Record<string, unknown> = {
+      page_content_hash: opts.stale ? "an-older-hash" : page.rows[0]!.content_hash,
+      page_title: page.rows[0]!.title ?? "",
+      ...(opts.held ? { [QUARANTINE_KEY]: { patterns: ["test"] } } : {}),
+    };
+    await e.query(`DELETE FROM documents WHERE source_path = $1`, [`page://${slug}`]);
+    await e.query(`INSERT INTO documents (id, source_path, title, frontmatter) VALUES ($1, $2, 't', $3::text::jsonb)`, [
+      `mirror-${slug}`,
+      `page://${slug}`,
+      JSON.stringify(fm),
+    ]);
+  }
+
+  async function extractCalls(slug: string, body: string): Promise<number> {
+    const { fn, calls } = fakeSonnet();
+    await extractFactsForPage(storage, { slug, type: "note", body, sonnetFn: fn });
+    return calls();
   }
 
   it("makes no call for a page whose search mirror is quarantined", async () => {
     await putPage(storage, { slug: "notes/held", type: "note", markdown_body: LONG_BODY });
-    await quarantineMirror("page://notes/held");
+    await setMirror("notes/held", { held: true });
     const { fn, calls } = fakeSonnet();
     const r = await extractFactsForPage(storage, {
       slug: "notes/held",
@@ -181,6 +198,42 @@ describe("extractFactsForPage", () => {
     });
     expect(calls()).toBe(0);
     expect(r.factsWritten).toBe(0);
+  });
+
+  it("holds a new page whose mirror is not built yet when the gate trips on its body", async () => {
+    await putPage(storage, { slug: "notes/new-junk", type: "note", markdown_body: JUNK_BODY });
+    expect(await extractCalls("notes/new-junk", JUNK_BODY)).toBe(0);
+  });
+
+  it("does not trust a clean mirror built from an older text", async () => {
+    await putPage(storage, { slug: "notes/edited", type: "note", markdown_body: JUNK_BODY });
+    await setMirror("notes/edited", { held: false, stale: true });
+    expect(await extractCalls("notes/edited", JUNK_BODY)).toBe(0);
+    // Once the mirror describes this text, its verdict is the one that counts.
+    await setMirror("notes/edited", { held: false });
+    expect(await extractCalls("notes/edited", JUNK_BODY)).toBeGreaterThan(0);
+  });
+
+  it("still extracts a clean page with no mirror yet", async () => {
+    await putPage(storage, { slug: "notes/new-clean", type: "note", markdown_body: LONG_BODY });
+    expect(await extractCalls("notes/new-clean", LONG_BODY)).toBeGreaterThan(0);
+  });
+
+  it("holds the page when its quarantine state cannot be read", async () => {
+    await putPage(storage, { slug: "notes/unread", type: "note", markdown_body: LONG_BODY });
+    const engine = storage.engine();
+    const realQuery = engine.query.bind(engine);
+    const spy = spyOn(engine, "query").mockImplementation((async (sql: string, params?: unknown[]) => {
+      if (sql.includes("page_content_hash")) throw new Error("connection reset");
+      return realQuery(sql, params);
+    }) as typeof engine.query);
+    const quiet = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await extractCalls("notes/unread", LONG_BODY)).toBe(0);
+    } finally {
+      spy.mockRestore();
+      quiet.mockRestore();
+    }
   });
 
   it("writes an extracted fact scoped to the page source", async () => {
