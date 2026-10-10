@@ -10,14 +10,15 @@
  *     and the durable per-client reservation ledger below. A cap with NO
  *     pricing match HARD-FAILS: never spend against an unpriced model.
  *   - Attribution (`trackedInvoke`, bottom of file) — the chokepoint every
- *     paid call passes through, booking a labelled row per call and refusing
- *     a call from a client that has spent its daily cap.
+ *     paid call passes through, booking a labelled row per call (feature,
+ *     spender, cycle phase, job, outcome, latency) and refusing a call that a
+ *     client's, the brain's or the cycle's daily cap leaves no room for.
  */
 import { randomUUID } from "node:crypto";
 import { OperationError } from "./operation-error.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { noteWriteTiming } from "./write-timing.ts";
-import { assertBedrockOpen, noteBedrockFailure, noteBedrockSuccess } from "./llm/bedrock-errors.ts";
+import { BedrockHalted, assertBedrockOpen, noteBedrockFailure, noteBedrockSuccess } from "./llm/bedrock-errors.ts";
 import { appendAudit, auditDir } from "./audit-week-file.ts";
 import type { Engine } from "./engine/interface.ts";
 import type { SonnetUsage } from "./llm/sonnet.ts";
@@ -289,6 +290,12 @@ export const RESERVED_SPEND_ID_PREFIXES = ["memrain_cl_", "memrain_enr_", "memex
 
 /** Why `name` cannot be minted as a PAT name, or null when it is free to use. */
 export function patNameSpendConflict(name: string): string | null {
+  if (name === BRAIN_SPEND_ID) {
+    return (
+      `the token name "${BRAIN_SPEND_ID}" is reserved — it is the ledger key of ` +
+      `the brain's own paid calls and would share their holds`
+    );
+  }
   const prefix = RESERVED_SPEND_ID_PREFIXES.find((p) => name.startsWith(p));
   if (prefix === undefined) return null;
   return (
@@ -307,7 +314,17 @@ export interface SpendLogInput {
   model?: string | null;
   /** What the provider reported; omitted when it reported nothing. */
   usage?: ReportedUsage;
+  /** Cycle phase the call ran under (see `runWithSpendTags`). */
+  phase?: string | null;
+  /** Queued job the call ran under. */
+  jobId?: string | null;
+  outcome?: SpendOutcome | null;
+  /** Time spent in the provider call. */
+  latencyMs?: number | null;
 }
+
+/** How a booked call ended; `refused` never reached the provider. */
+export type SpendOutcome = "ok" | "error" | "halted" | "refused";
 
 /** Append one completed paid call to the durable spend log. */
 export async function logSpend(engine: Engine, e: SpendLogInput): Promise<void> {
@@ -316,8 +333,9 @@ export async function logSpend(engine: Engine, e: SpendLogInput): Promise<void> 
   }
   await engine.query(
     `INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model,
-                                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                                phase, job_id, outcome, latency_ms)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
     [
       e.clientId ?? null,
       e.tokenName ?? null,
@@ -329,6 +347,10 @@ export async function logSpend(engine: Engine, e: SpendLogInput): Promise<void> 
       e.usage ? e.usage.outputTokens : null,
       e.usage ? (e.usage.cacheReadInputTokens ?? 0) : null,
       e.usage ? (e.usage.cacheWriteInputTokens ?? 0) : null,
+      e.phase ?? null,
+      e.jobId ?? null,
+      e.outcome ?? null,
+      e.latencyMs == null ? null : Math.max(0, Math.round(e.latencyMs)),
     ],
   );
 }
@@ -359,6 +381,40 @@ export async function daySpendUsd(
   const row = r.rows[0];
   const cents = Number(row?.actual ?? 0) + Number(row?.held ?? 0);
   return cents / CENTS_PER_USD;
+}
+
+/**
+ * Everything the brain has spent so far in the current UTC day, every spender
+ * together (clients, cycle, jobs, CLI): settled actuals plus pending holds.
+ * `cycleOnly` narrows both to calls made under a cycle phase.
+ */
+async function brainWideDaySpendUsd(engine: Engine, now: Date, cycleOnly: boolean): Promise<number> {
+  const dayStart = utcDayStart(now).toISOString();
+  const phaseFilter = cycleOnly ? " AND phase IS NOT NULL" : "";
+  const r = await engine.query<{ actual: string | number | null; held: string | number | null }>(
+    `SELECT
+       (SELECT COALESCE(SUM(spend_cents), 0)
+          FROM mcp_spend_log
+         WHERE created_at >= $1::timestamptz${phaseFilter}) AS actual,
+       (SELECT COALESCE(SUM(estimated_cents), 0)
+          FROM mcp_spend_reservations
+         WHERE status = 'pending'
+           AND created_at >= $1::timestamptz
+           AND expires_at > $2::timestamptz${phaseFilter}) AS held`,
+    [dayStart, now.toISOString()],
+  );
+  const row = r.rows[0];
+  return (Number(row?.actual ?? 0) + Number(row?.held ?? 0)) / CENTS_PER_USD;
+}
+
+/** The brain's spend so far today, every spender, held calls included. */
+export function brainDaySpendUsd(engine: Engine, now: Date = new Date()): Promise<number> {
+  return brainWideDaySpendUsd(engine, now, false);
+}
+
+/** The cycle's spend so far today: calls made under any cycle phase. */
+export function cycleDaySpendUsd(engine: Engine, now: Date = new Date()): Promise<number> {
+  return brainWideDaySpendUsd(engine, now, true);
 }
 
 export interface ClientBudgetCheck {
@@ -426,6 +482,8 @@ export interface ReserveSpendInput {
   ttlMs?: number;
   /** Clock seam (tests). */
   now?: Date;
+  /** Cycle phase the hold counts against; null outside one. */
+  phase?: string | null;
 }
 
 export type ReserveSpendResult =
@@ -444,37 +502,41 @@ export async function reserveSpend(
   engine: Engine,
   input: ReserveSpendInput,
 ): Promise<ReserveSpendResult> {
+  return engine.transaction((tx) => reserveWithin(tx, input));
+}
+
+/** `reserveSpend`'s body, for a caller already inside a transaction. */
+async function reserveWithin(tx: Engine, input: ReserveSpendInput): Promise<ReserveSpendResult> {
   const now = input.now ?? new Date();
   const estCents = usdToCents(input.estimatedUsd);
   const reservationId = randomUUID();
   const ttl = input.ttlMs ?? SPEND_RESERVATION_TTL_MS;
-  return engine.transaction(async (tx) => {
-    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
-      `memrain_spend:${input.clientId}`,
-    ]);
-    const check = await checkClientBudget(tx, input.clientId, now, input.capUsd);
-    if (
-      check.capUsd !== null &&
-      check.spentUsd + estCents / CENTS_PER_USD > check.capUsd
-    ) {
-      return { reserved: false, reason: "budget_exhausted", check };
-    }
-    await tx.query(
-      `INSERT INTO mcp_spend_reservations
-         (reservation_id, client_id, estimated_cents, model, provider, status, created_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5, 'pending', $6::timestamptz, $7::timestamptz)`,
-      [
-        reservationId,
-        input.clientId,
-        estCents,
-        input.model,
-        input.provider,
-        now.toISOString(),
-        new Date(now.getTime() + ttl).toISOString(),
-      ],
-    );
-    return { reserved: true, reservationId };
-  });
+  await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+    `memrain_spend:${input.clientId}`,
+  ]);
+  const check = await checkClientBudget(tx, input.clientId, now, input.capUsd);
+  if (
+    check.capUsd !== null &&
+    check.spentUsd + estCents / CENTS_PER_USD > check.capUsd
+  ) {
+    return { reserved: false, reason: "budget_exhausted", check };
+  }
+  await tx.query(
+    `INSERT INTO mcp_spend_reservations
+       (reservation_id, client_id, estimated_cents, model, provider, status, created_at, expires_at, phase)
+     VALUES ($1, $2, $3, $4, $5, 'pending', $6::timestamptz, $7::timestamptz, $8)`,
+    [
+      reservationId,
+      input.clientId,
+      estCents,
+      input.model,
+      input.provider,
+      now.toISOString(),
+      new Date(now.getTime() + ttl).toISOString(),
+      input.phase ?? null,
+    ],
+  );
+  return { reserved: true, reservationId };
 }
 
 /**
@@ -672,6 +734,101 @@ export function currentSpendContext(): SpendClient | null {
   return _spendClient.getStore() ?? null;
 }
 
+/**
+ * What a paid call is spent under besides its feature and spender: the cycle
+ * phase and the queued job running it. Carried like the spend client, so the
+ * leaf helpers book it without being told. A call outside any phase or job
+ * books NULL for that column.
+ */
+export interface SpendTags {
+  phase?: string;
+  jobId?: string;
+}
+
+const _spendTags = new AsyncLocalStorage<SpendTags>();
+
+/** Run `fn` with `tags` on every paid call inside it. Tags merge over the
+ *  enclosing ones: a job started inside a phase keeps the phase. Empty
+ *  strings and undefined leave the enclosing value in place. */
+export function runWithSpendTags<T>(tags: SpendTags, fn: () => T): T {
+  const merged: SpendTags = { ..._spendTags.getStore() };
+  if (tags.phase) merged.phase = tags.phase;
+  if (tags.jobId) merged.jobId = tags.jobId;
+  return _spendTags.run(merged, fn);
+}
+
+/** The tags in scope (a copy); `{}` outside any. */
+export function currentSpendTags(): SpendTags {
+  return { ..._spendTags.getStore() };
+}
+
+/**
+ * Ledger key of the brain's own held calls (cycle, jobs, CLI) when a
+ * brain-wide or cycle cap is on. Their ledger rows keep client_id NULL; only
+ * the hold needs a key, since `mcp_spend_reservations.client_id` is NOT NULL.
+ * No PAT may take this name (`patNameSpendConflict`).
+ */
+export const BRAIN_SPEND_ID = "memrain_brain";
+
+/** Why a brain-wide or cycle daily cap refused a call; the prefix of its message. */
+export const DAILY_CAP_REASON = "daily_cap";
+
+/** A brain-wide or cycle daily cap refused the call. Code `budget_exhausted`,
+ *  so `isBudgetRefusal` holds too; `reason` survives the public envelope, which
+ *  withholds the message. */
+export class DailyCapRefusal extends OperationError {
+  readonly reason = DAILY_CAP_REASON;
+  constructor(
+    readonly scope: "brain" | "cycle",
+    message: string,
+    suggestion: string,
+  ) {
+    super("budget_exhausted", `${DAILY_CAP_REASON}: ${message}`, suggestion);
+  }
+}
+
+/** The call was refused by the brain's or the cycle's daily cap — not by a
+ *  client's own budget. A batch loop stops for the UTC day on this. */
+export function isDailyCapRefusal(err: unknown): boolean {
+  return (
+    err instanceof OperationError &&
+    err.code === "budget_exhausted" &&
+    (err as { reason?: unknown }).reason === DAILY_CAP_REASON
+  );
+}
+
+const _badCapWarned = new Set<string>();
+
+/** A daily cap from the environment: a non-negative USD amount, else no cap.
+ *  Blank is off; a malformed or negative value is off with one warning. */
+function envCapUsd(name: string, env: NodeJS.ProcessEnv): number | null {
+  const raw = env[name]?.trim();
+  if (!raw) return null;
+  const usd = Number(raw);
+  if (Number.isFinite(usd) && usd >= 0) return usd;
+  if (!_badCapWarned.has(`${name}=${raw}`)) {
+    _badCapWarned.add(`${name}=${raw}`);
+    console.warn(`[memrain] ${name}=${JSON.stringify(raw)} is not a non-negative USD amount — no cap applies`);
+  }
+  return null;
+}
+
+/** The brain-wide daily cap over every paid call (`MEMRAIN_DAILY_BUDGET_USD`); null = none. */
+export function brainDailyCapUsd(env: NodeJS.ProcessEnv = process.env): number | null {
+  return envCapUsd("MEMRAIN_DAILY_BUDGET_USD", env);
+}
+
+/** The configured cycle daily cap (`MEMRAIN_CYCLE_MAX_USD_PER_DAY`), whether or
+ *  not a phase is in scope; null = none. */
+export function configuredCycleDailyCapUsd(env: NodeJS.ProcessEnv = process.env): number | null {
+  return envCapUsd("MEMRAIN_CYCLE_MAX_USD_PER_DAY", env);
+}
+
+/** The cycle daily cap as it applies to the current call: only under a phase. */
+export function cycleDailyCapUsd(env: NodeJS.ProcessEnv = process.env): number | null {
+  return currentSpendTags().phase ? configuredCycleDailyCapUsd(env) : null;
+}
+
 /** Model ids already warned about — one line per unpriced model, not per call. */
 const _unpricedWarned = new Set<string>();
 
@@ -710,12 +867,14 @@ export async function trackedInvoke<T>(
   }
   const sendStart = performance.now();
   let failure: unknown;
+  let outcome: SpendOutcome = "ok";
   try {
     const result = await send(meter);
     noteBedrockSuccess(call.model);
     return result;
   } catch (err) {
     failure = err;
+    outcome = err instanceof BedrockHalted ? "halted" : "error";
     noteBedrockFailure(call.model, err);
     throw err;
   } finally {
@@ -725,7 +884,7 @@ export async function trackedInvoke<T>(
     // and billed it: its hold keeps counting the worst case for the day rather
     // than settling at $0.
     const keepHold = usage === undefined && failure !== undefined && mayHaveBilled(failure);
-    await bookSpend(call, usage, keepHold ? null : holdId);
+    await bookSpend(call, usage, keepHold ? null : holdId, { outcome, latencyMs: bookStart - sendStart });
     noteWriteTiming("ledgerMs", performance.now() - bookStart);
   }
 }
@@ -746,54 +905,107 @@ const CALL_HOLD_TTL_MS = 24 * 60 * 60 * 1000;
  * overshoot by K calls. Near the cap this refuses a call whose actual cost
  * would still have fit — the error is on the safe side.
  *
- * Uncapped clients (the default) and callers with no client in scope hold
- * nothing and pay no query. A failure of the accounting query itself ALLOWS
- * the call unheld: accounting must never break a paid path, the same contract
- * `bookSpend` keeps.
+ * Two more caps sit above the client's, both off unless configured: the
+ * brain-wide daily cap (every spender, system calls included) and the cycle
+ * daily cap (calls under a cycle phase). Each is checked under ONE brain-wide
+ * advisory lock, taken before the per-client one, so racing calls from any
+ * spender see each other's holds. The call still takes ONE hold: under the
+ * client's id when a client is in scope, else under `BRAIN_SPEND_ID`; the
+ * brain-wide sums count every hold whatever its key.
+ *
+ * With no cap in scope (the default) nothing is held and no query runs. A
+ * failure of the accounting query itself ALLOWS the call unheld: accounting
+ * must never break a paid path, the same contract `bookSpend` keeps.
  */
 async function holdForCall(call: TrackedCall): Promise<string | null> {
-  const ctx = currentSpendContext();
   const engine = _ledgerEngine;
-  if (!ctx || !engine) return null;
-  let capUsd: number | null;
-  try {
-    capUsd = ctx.capUsd !== undefined ? ctx.capUsd : await lookupClientCap(engine, ctx.clientId);
-  } catch {
-    return null;
+  if (!engine) return null;
+  const ctx = currentSpendContext();
+  const brainCap = brainDailyCapUsd();
+  const cycleCap = cycleDailyCapUsd();
+  if (!ctx && brainCap === null && cycleCap === null) return null;
+  let clientCap: number | null = null;
+  if (ctx) {
+    try {
+      clientCap = ctx.capUsd !== undefined ? ctx.capUsd : await lookupClientCap(engine, ctx.clientId);
+    } catch {
+      return null;
+    }
   }
-  if (capUsd === null) return null;
+  if (clientCap === null && brainCap === null && cycleCap === null) return null;
+  const phase = currentSpendTags().phase ?? null;
   const worst = worstCaseUsd(call);
-  // A capped client cannot be charged for a call nobody can price: it would
-  // book an unknown cost and the cap would never see it.
+  // A cap cannot be charged for a call nobody can price: it would book an
+  // unknown cost and the cap would never see it.
   if (worst === null) {
-    throw new OperationError(
-      "budget_exhausted",
+    await bookRefusal(call);
+    if (clientCap !== null) {
+      throw new OperationError(
+        "budget_exhausted",
+        `'${call.operation}' uses model '${call.model}', which has no price, so it ` +
+          `cannot be counted against this client's daily budget`,
+        "Price the model in MODEL_PRICING/EMBEDDING_PRICING, or clear the client's budget.",
+      );
+    }
+    throw new DailyCapRefusal(
+      brainCap !== null ? "brain" : "cycle",
       `'${call.operation}' uses model '${call.model}', which has no price, so it ` +
-        `cannot be counted against this client's daily budget`,
-      "Price the model in MODEL_PRICING/EMBEDDING_PRICING, or clear the client's budget.",
+        `cannot be counted against the ${brainCap !== null ? "brain" : "cycle"} daily budget`,
+      "Price the model in MODEL_PRICING/EMBEDDING_PRICING, or unset the daily cap.",
     );
   }
-  let reserved: ReserveSpendResult;
+  type Held =
+    | { held: string }
+    | { refused: "brain" | "cycle"; spentUsd: number; capUsd: number }
+    | { refused: "client"; check: ClientBudgetCheck };
+  let held: Held;
   try {
-    reserved = await reserveSpend(engine, {
-      clientId: ctx.clientId,
-      capUsd,
-      estimatedUsd: worst,
-      model: call.model,
-      provider: call.provider ?? DEFAULT_SPEND_PROVIDER,
-      // Held for the rest of the day unless settled: a hold stranded by a
-      // crash over-counts until the day rolls over instead of dropping out
-      // while the call it stood for may still be billing.
-      ttlMs: CALL_HOLD_TTL_MS,
+    held = await engine.transaction(async (tx): Promise<Held> => {
+      const now = new Date();
+      if (brainCap !== null || cycleCap !== null) {
+        await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [BRAIN_SPEND_LOCK]);
+        if (brainCap !== null) {
+          const spentUsd = await brainDaySpendUsd(tx, now);
+          if (spentUsd + worst > brainCap) return { refused: "brain", spentUsd, capUsd: brainCap };
+        }
+        if (cycleCap !== null) {
+          const spentUsd = await cycleDaySpendUsd(tx, now);
+          if (spentUsd + worst > cycleCap) return { refused: "cycle", spentUsd, capUsd: cycleCap };
+        }
+      }
+      const r = await reserveWithin(tx, {
+        clientId: ctx?.clientId ?? BRAIN_SPEND_ID,
+        capUsd: clientCap,
+        estimatedUsd: worst,
+        model: call.model,
+        provider: call.provider ?? DEFAULT_SPEND_PROVIDER,
+        // Held for the rest of the day unless settled: a hold stranded by a
+        // crash over-counts until the day rolls over instead of dropping out
+        // while the call it stood for may still be billing.
+        ttlMs: CALL_HOLD_TTL_MS,
+        now,
+        phase,
+      });
+      return r.reserved ? { held: r.reservationId } : { refused: "client", check: r.check };
     });
   } catch {
     return null;
   }
-  if (reserved.reserved) return reserved.reservationId;
+  if ("held" in held) return held.held;
+  await bookRefusal(call);
+  if (held.refused !== "client") {
+    const which = held.refused === "brain" ? "MEMRAIN_DAILY_BUDGET_USD" : "MEMRAIN_CYCLE_MAX_USD_PER_DAY";
+    throw new DailyCapRefusal(
+      held.refused,
+      `${held.refused} daily budget exhausted (spent $${held.spentUsd.toFixed(4)} of ` +
+        `$${held.capUsd.toFixed(2)}; '${call.operation}' may cost up to $${worst.toFixed(4)}) — refused`,
+      `Wait for the UTC day to roll over, or raise ${which}.`,
+    );
+  }
   // OperationError, not BudgetExhausted: the MCP layer renders this code as a
   // proper `budget_exhausted` envelope, so the caller is told its budget ran
   // out rather than being handed a generic failure.
-  const check = reserved.check;
+  const check = held.check;
   throw new OperationError(
     "budget_exhausted",
     `daily budget exhausted for this client (spent $${check.spentUsd.toFixed(4)}` +
@@ -801,6 +1013,46 @@ async function holdForCall(call: TrackedCall): Promise<string | null> {
       `; '${call.operation}' may cost up to $${worst.toFixed(4)}) — refused`,
     "Wait for the UTC day to roll over, or raise the client's budget_usd_per_day.",
   );
+}
+
+/** The advisory lock every brain-wide and cycle cap check runs under. */
+const BRAIN_SPEND_LOCK = "memrain_spend:brain";
+
+/** Book a refused call as a $0 `refused` row, best-effort: the refusal is
+ *  attributable, and a failed write never replaces the refusal itself. */
+async function bookRefusal(call: TrackedCall): Promise<void> {
+  const engine = _ledgerEngine;
+  if (!engine) return;
+  try {
+    await logSpend(engine, spendEntry(call, 0, undefined, { outcome: "refused", latencyMs: null }));
+  } catch (err) {
+    console.warn(
+      `[memrain] spend ledger write failed for refused '${call.operation}': ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
+}
+
+/** The ledger row for one call, attributed to the client and tags in scope. */
+function spendEntry(
+  call: TrackedCall,
+  cost: number | null,
+  usage: ReportedUsage | undefined,
+  end: { outcome: SpendOutcome; latencyMs: number | null },
+): SpendLogInput {
+  const tags = currentSpendTags();
+  return {
+    operation: call.operation,
+    costUsd: cost,
+    ...(usage ? { usage } : {}),
+    provider: call.provider ?? DEFAULT_SPEND_PROVIDER,
+    model: call.model,
+    clientId: currentSpendClient(),
+    phase: tags.phase ?? null,
+    jobId: tags.jobId ?? null,
+    outcome: end.outcome,
+    latencyMs: end.latencyMs,
+  };
 }
 
 /** A timeout or an aborted read (including `withDeadline`'s): the request may
@@ -821,6 +1073,7 @@ async function bookSpend(
   call: TrackedCall,
   usage: ReportedUsage | undefined,
   holdId: string | null,
+  end: { outcome: SpendOutcome; latencyMs: number | null },
 ): Promise<void> {
   const engine = _ledgerEngine;
   if (!engine) return;
@@ -834,14 +1087,7 @@ async function bookSpend(
   }
   // Nothing reported means nothing billed; an unpriced model's cost is unknown.
   const cost = !usage ? 0 : priced ? costUsd(call.model, chargeableUsage(usage)) : null;
-  const entry: SpendLogInput = {
-    operation: call.operation,
-    costUsd: cost,
-    ...(usage ? { usage } : {}),
-    provider: call.provider ?? DEFAULT_SPEND_PROVIDER,
-    model: call.model,
-    clientId: currentSpendClient(),
-  };
+  const entry = spendEntry(call, cost, usage, end);
   try {
     if (!holdId) {
       await logSpend(engine, entry);

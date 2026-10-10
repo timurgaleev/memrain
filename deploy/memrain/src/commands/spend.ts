@@ -1,7 +1,8 @@
 /**
  * `memrain spend [--days N]` — where the LLM money went over the last N days
- * (default 7): by model, by feature, by spender, plus the calls the totals
- * cannot price.
+ * (default 7): by model, by feature, by spender, by cycle phase and by job,
+ * how the calls ended and how long they took, the calls the totals cannot
+ * price, and today's spend against the brain-wide and cycle daily caps.
  */
 import { spendReport } from "../core/spend-report.ts";
 import { loadConfig } from "../core/config.ts";
