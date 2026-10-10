@@ -35,6 +35,13 @@ export interface TranscriptSession {
   messages: TranscriptMessage[];
 }
 
+/**
+ * Skip reason for a session log that carried assistant turns but not one user
+ * turn: the shape a vendor renaming its user-turn record leaves behind. It is
+ * drift, never a quiet import of half a conversation.
+ */
+export const USER_TURNS_MISSING = "user_turns_missing";
+
 export interface SkippedSession {
   index: number;
   id?: string;
@@ -67,6 +74,10 @@ export interface TranscriptDiagnostics {
   skippedMessages: number;
   /** Bytes were read but nothing usable came out: the export shape moved. */
   format_drift: boolean;
+  /** Turns the person typed, a turn that is only pasted content left out. */
+  user_turns: number;
+  /** Sessions skipped as {@link USER_TURNS_MISSING}; any is drift. */
+  user_turns_missing: number;
   /** JSONL input only: lines that were not valid JSON. */
   malformed_lines?: number;
   /** Directory input only: session files read. */

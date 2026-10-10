@@ -5,6 +5,8 @@
  */
 export const CHRONICLE_EXTRACT_JOB_KIND = "chronicle_extract";
 export const INGEST_CAPTURE_JOB_KIND = "ingest_capture";
+/** A session log pushed to POST /ingest, written as conversation pages. */
+export const TRANSCRIPTS_INGEST_JOB_KIND = "transcripts_ingest";
 export const REMEDIATION_JOB_KIND = "remediation";
 export const PAGE_MIRROR_JOB_KIND = "page_mirror";
 /**

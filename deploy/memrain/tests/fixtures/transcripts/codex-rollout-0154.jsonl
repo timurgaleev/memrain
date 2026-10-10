@@ -1,0 +1,8 @@
+{"timestamp":"2026-10-01T08:00:00.000Z","type":"session_meta","payload":{"id":"rollout-0154","timestamp":"2026-10-01T08:00:00.000Z","cwd":"/home/alice-example/work","cli_version":"0.154.0","source":"cli"}}
+{"timestamp":"2026-10-01T08:00:01.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"INJECTED-ONLY: instructions preamble"}]}}
+{"timestamp":"2026-10-01T08:00:02.000Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"t-1","item":{"type":"UserMessage","id":"u-1","content":[{"type":"text","text":"Which bakery did we pick for the offsite?"},{"type":"image","url":"IMAGE-BLOCK-ONLY"}]}}}
+{"timestamp":"2026-10-01T08:00:03.000Z","type":"response_item","payload":{"type":"message","role":"assistant","id":"ri-a1","content":[{"type":"output_text","text":"The corner bakery on Elm Street."}]}}
+{"timestamp":"2026-10-01T08:00:03.100Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"t-1","item":{"type":"AgentMessage","id":"a-1","content":[{"type":"text","text":"AGENT-ITEM-ONLY: The corner bakery on Elm Street."}]}}}
+{"timestamp":"2026-10-01T08:01:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"Book it for Friday."}}
+{"timestamp":"2026-10-01T08:01:00.050Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"t-2","item":{"type":"UserMessage","id":"u-2","content":[{"type":"text","text":"Book it for Friday."}]}}}
+{"timestamp":"2026-10-01T08:01:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","id":"ri-a2","content":[{"type":"output_text","text":"Booked for Friday."}]}}

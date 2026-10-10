@@ -11,6 +11,7 @@ import {
   INGEST_CAPTURE_JOB_KIND,
   PAGE_MIRROR_JOB_KIND,
   REMEDIATION_JOB_KIND,
+  TRANSCRIPTS_INGEST_JOB_KIND,
 } from "./kinds.ts";
 import type { JobHandler } from "./types.ts";
 
@@ -45,6 +46,7 @@ export const BUILTIN_JOB_KINDS: ReadonlySet<string> = new Set([
   INGEST_CAPTURE_JOB_KIND,
   REMEDIATION_JOB_KIND,
   PAGE_MIRROR_JOB_KIND,
+  TRANSCRIPTS_INGEST_JOB_KIND,
 ]);
 
 /** True when a worker could run this kind: built in, or registered here. */

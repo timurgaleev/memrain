@@ -71,6 +71,14 @@ export interface IngestTranscriptsOptions {
   ref?: string;
   /** Test seam: deterministic embedder for the search mirror. */
   embedFn?: EmbedFn;
+  /**
+   * Write the parts but leave them out of search for now. The cycle's
+   * mirror-pages phase indexes and embeds them later, a bounded batch per run,
+   * so a bulk backfill does not pay for every embedding up front.
+   */
+  deferMirror?: boolean;
+  /** Called for every part written or rewritten (not unchanged, not deleted). */
+  onPartWritten?: (part: { slug: string; body: string; sourceId: string }) => void;
 }
 
 export interface IngestTranscriptsResult {
@@ -83,6 +91,8 @@ export interface IngestTranscriptsResult {
   redactions: number;
   /** Parts whose search mirror failed; each also has a page-mirror-failed row. */
   mirror_failures: number;
+  /** Parts written with the search mirror left to the cycle (`deferMirror`). */
+  mirror_deferred: number;
   rejected: Array<{ id: string; reason: string }>;
   /** Sessions that could not be written; earlier parts of one may have landed. */
   sessions_failed: number;
@@ -164,6 +174,11 @@ async function writeSession(
       sessionChanged = true;
       result.parts_written++;
       touched.push(part.slug);
+      opts.onPartWritten?.({ slug: part.slug, body: part.body, sourceId });
+      if (opts.deferMirror) {
+        result.mirror_deferred++;
+        continue;
+      }
       const ok = await mirrorPage(
         storage,
         {
@@ -223,6 +238,7 @@ export async function ingestSessions(
     parts_deleted: 0,
     redactions: 0,
     mirror_failures: 0,
+    mirror_deferred: 0,
     rejected: [],
     sessions_failed: 0,
     failed: [],

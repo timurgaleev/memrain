@@ -1,0 +1,4 @@
+{"type":"user","sessionId":"cc-pasted-1","uuid":"p-u1","timestamp":"2026-10-02T10:00:00.000Z","message":{"role":"user","content":"<pasted_content id=\"2830\">\nDear team, the quarterly numbers are attached. PASTED-EMAIL-BODY\n</pasted_content id=\"2830\">"}}
+{"type":"assistant","sessionId":"cc-pasted-1","uuid":"p-a1","timestamp":"2026-10-02T10:00:05.000Z","message":{"id":"msg-p1","role":"assistant","content":[{"type":"text","text":"That is an email about quarterly numbers."}]}}
+{"type":"user","sessionId":"cc-pasted-1","uuid":"p-u2","timestamp":"2026-10-02T10:01:00.000Z","message":{"role":"user","content":"Summarise it in one line for my notes"}}
+{"type":"assistant","sessionId":"cc-pasted-1","uuid":"p-a2","timestamp":"2026-10-02T10:01:04.000Z","message":{"id":"msg-p2","role":"assistant","content":[{"type":"text","text":"Quarterly numbers are attached."}]}}

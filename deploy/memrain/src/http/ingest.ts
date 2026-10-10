@@ -40,9 +40,18 @@ import { dispatchTool, slugUnderPrefixes } from "../mcp/dispatch.ts";
 import { readBodyWithCap } from "./body_limit.ts";
 import { logIngest } from "../core/ingest-log.ts";
 
-import { INGEST_CAPTURE_JOB_KIND } from "../core/jobs/kinds.ts";
+import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "../core/jobs/kinds.ts";
+import { parseTranscriptJsonl } from "../core/transcripts/detect.ts";
+import { ingestSessions, prepareSession, type PreparedSession } from "../core/transcripts/ingest.ts";
+import { sessionBaseSlug } from "../core/transcripts/render.ts";
+import {
+  sessionsFromPayload,
+  TRANSCRIPT_PUSH_CONTENT_TYPE,
+  transcriptPushMaxBytes,
+} from "../core/transcripts/push.ts";
+import { JSONL_TRANSCRIPT_FORMATS } from "../core/transcripts/types.ts";
 
-export { INGEST_CAPTURE_JOB_KIND };
+export { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND };
 
 const DEFAULT_INGEST_MAX_BYTES = 1_048_576; // 1 MiB
 
@@ -216,13 +225,22 @@ export async function handleIngestRoute(
     );
   }
 
-  const read = await readBodyWithCap(req, ingestMaxBytes());
+  const headers = readIngestHeaders(req);
+  // A session log is far larger than a capture, so it gets its own cap; the
+  // type is read from the headers before a byte of the body is.
+  const pushingTranscript =
+    !("ambiguous" in headers) &&
+    (headers["content-type"] || req.headers.get("content-type") || "").toLowerCase().startsWith(TRANSCRIPT_PUSH_CONTENT_TYPE);
+  // The larger cap is buffered only for a client that may write somewhere.
+  if (pushingTranscript && isNoSourceSentinel(effectiveWriteSourceIdForIngress(auth, { failClosed: tenantFailClosedEnabled() }))) {
+    return err(403, "permission_denied", "no write source is granted to this client for POST /ingest");
+  }
+  const read = await readBodyWithCap(req, pushingTranscript ? transcriptPushMaxBytes() : ingestMaxBytes());
   if (!read.ok) return read.response;
   if (read.buf.byteLength === 0) {
     return err(400, "empty_body", "POST /ingest requires a non-empty body");
   }
 
-  const headers = readIngestHeaders(req);
   if ("ambiguous" in headers) {
     return err(
       400,
@@ -239,6 +257,7 @@ export async function handleIngestRoute(
     req.headers.get("content-type") ||
     ""
   ).toLowerCase();
+  if (pushingTranscript) return handleTranscriptPush(deps, auth, read.buf);
   const contentType = resolveIngestContentType(declared);
   if (contentType === null) {
     return err(
@@ -405,6 +424,114 @@ export async function handleIngestRoute(
   }
 }
 
+/** True when every part of a session at `base` (`<base>-p<n>`) falls under
+ *  one of the prefixes: the prefix must be a directory above the base. */
+function sessionUnderPrefixes(base: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((p) => base.startsWith(p.endsWith("/") ? p : `${p}/`));
+}
+
+/**
+ * A Codex or Claude Code session log pushed by `memrain transcripts push`.
+ * Same gates as a capture (the caller's write source, the slug-prefix fence,
+ * a credential scan before anything is queued), then the log is parsed here
+ * so an unreadable one is refused now rather than failing in the worker.
+ * Errors name counts and reasons, never the log's text.
+ */
+async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: Uint8Array): Promise<Response> {
+  if (looksBinary(buf)) {
+    return err(415, "binary_content", "a transcript push takes a JSONL session log; the body is a binary file");
+  }
+  const writeSourceRaw = effectiveWriteSourceIdForIngress(auth, { failClosed: tenantFailClosedEnabled() });
+  if (isNoSourceSentinel(writeSourceRaw)) {
+    return err(403, "permission_denied", "no write source is granted to this client for POST /ingest");
+  }
+  const sourceId = writeSourceRaw ?? "default";
+
+  const { sessions, diagnostics } = parseTranscriptJsonl(new TextDecoder().decode(buf), buf.byteLength);
+  if (diagnostics.user_turns_missing > 0) {
+    return err(
+      400,
+      "user_turns_missing",
+      `read as ${diagnostics.format ?? "unknown"}: assistant turns but no user turn; the session log format may have changed, nothing was queued`,
+    );
+  }
+  if (sessions.length === 0) {
+    const reasons = [...new Set(diagnostics.skipped.map((s) => s.reason))].join("; ");
+    return err(
+      400,
+      "transcript_unreadable",
+      `no session in ${diagnostics.items} records (format ${diagnostics.format ?? "not recognised"}, ` +
+        `${diagnostics.malformed_lines ?? 0} malformed lines${reasons ? `, ${reasons}` : ""}); nothing was queued`,
+    );
+  }
+  if (sessions.some((s) => !JSONL_TRANSCRIPT_FORMATS.has(s.format))) {
+    return err(415, "unsupported_transcript", "a transcript push takes a Codex or Claude Code session log");
+  }
+
+  const boundPrefixes = auth.boundSlugPrefixes;
+  if (boundPrefixes && boundPrefixes.length > 0) {
+    const outside = sessions.map(sessionBaseSlug).filter((base) => !sessionUnderPrefixes(base, boundPrefixes));
+    if (outside.length > 0) {
+      return err(403, "permission_denied", `${outside.length} session(s) fall outside this client's bound prefixes`);
+    }
+  }
+
+  // Scanned after the tenancy gates, as a capture is: the queued sessions sit
+  // in the jobs table, so they hold redacted text only.
+  const prepared: PreparedSession[] = [];
+  try {
+    for (const s of sessions) prepared.push(prepareSession(s));
+  } catch (e) {
+    if (e instanceof SecretRejectedError) {
+      void auditRejection(deps.storage.engine(), e, `transcript-push:${auth.clientId}`, sourceId).catch(() => {});
+    }
+    return err(400, "secret_in_content", e instanceof Error ? e.message : "credential in content");
+  }
+
+  const contentHash = createHash("sha256").update(buf).digest("hex");
+  const ref = `push:${auth.clientId}:${contentHash.slice(0, 12)}`;
+  try {
+    const job = await new Queue(deps.storage.engine()).enqueue({
+      kind: TRANSCRIPTS_INGEST_JOB_KIND,
+      id: `ingest:transcript:${auth.clientId}:${contentHash}`,
+      payload: {
+        source_id: sourceId,
+        client_id: auth.clientId,
+        ref,
+        sessions: prepared.map((p) => p.session),
+        ...(boundPrefixes && boundPrefixes.length > 0 ? { bound_slug_prefixes: boundPrefixes } : {}),
+      },
+    });
+    const parts = prepared.reduce((n, p) => n + p.parts.length, 0);
+    void logIngest(deps.storage.engine(), {
+      source_type: "transcripts:push",
+      source_ref: ref,
+      pages_updated: [],
+      summary: `accepted ${buf.byteLength}B ${diagnostics.format} log, ${sessions.length} sessions, ${parts} parts -> job ${job.id}`,
+      source_id: sourceId,
+    }).catch(() => {});
+    for (const p of prepared) {
+      void auditSecrets(deps.storage.engine(), p.findings, p.base, sourceId).catch(() => {});
+    }
+    return Response.json(
+      {
+        job_id: job.id,
+        content_hash: contentHash,
+        source_id: sourceId,
+        format: diagnostics.format,
+        sessions: sessions.length,
+        parts,
+        user_turns: diagnostics.user_turns,
+        message: "Accepted. Transcript queued for ingestion.",
+      },
+      { status: 202 },
+    );
+  } catch (e) {
+    console.error("[memrain] POST /ingest transcript queue error:", e instanceof Error ? e.message : e);
+    return err(500, "queue_submission_failed", "could not queue the transcript");
+  }
+}
+
 /**
  * Register the `ingest_capture` worker handler. The capture lands through the
  * SAME `page_put` dispatch path MCP writes use — link sync, search mirror,
@@ -479,5 +606,27 @@ export function registerIngestCaptureHandler(storage: Storage): void {
       source_kind: event.source_kind,
       source_uri: event.source_uri,
     };
+  });
+
+  // A pushed session log: the ingress already parsed, fenced and scanned it;
+  // the shape and the fence are checked again because the payload has been
+  // through the queue.
+  registerHandler(TRANSCRIPTS_INGEST_JOB_KIND, async (payload) => {
+    const sourceId = payload.source_id;
+    if (typeof sourceId !== "string" || sourceId === "") throw new Error("transcripts_ingest: payload.source_id is required");
+    const sessions = sessionsFromPayload(payload.sessions);
+    if (typeof sessions === "string") throw new Error(`transcripts_ingest: ${sessions}`);
+    const boundRaw = payload.bound_slug_prefixes;
+    if (boundRaw !== undefined) {
+      if (!Array.isArray(boundRaw) || !boundRaw.every((p) => typeof p === "string")) {
+        throw new Error("transcripts_ingest: bound_slug_prefixes must be strings");
+      }
+      if (boundRaw.length > 0 && sessions.some((s) => !sessionUnderPrefixes(sessionBaseSlug(s), boundRaw as string[]))) {
+        throw new Error("transcripts_ingest: a session falls outside the client's bound prefixes");
+      }
+    }
+    const ref = typeof payload.ref === "string" ? payload.ref : "push";
+    const result = await ingestSessions(storage, sessions, { sourceId, ref });
+    return { ...result };
   });
 }

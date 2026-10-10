@@ -1,0 +1,2 @@
+{"type":"assistant","sessionId":"cc-assistant-only-1","uuid":"o-a1","timestamp":"2026-10-03T09:00:00.000Z","message":{"id":"msg-o1","role":"assistant","content":[{"type":"text","text":"Here is the plan you asked for."}]}}
+{"type":"assistant","sessionId":"cc-assistant-only-1","uuid":"o-a2","timestamp":"2026-10-03T09:00:10.000Z","message":{"id":"msg-o2","role":"assistant","content":[{"type":"text","text":"And the follow-up."}]}}

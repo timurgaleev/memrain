@@ -11,8 +11,10 @@ import { claudeAiAdapter } from "./claude-ai.ts";
 import { claudeCodeAdapter } from "./claude-code.ts";
 import { codexAdapter } from "./codex.ts";
 import { parseJsonlRecords } from "./jsonl.ts";
+import { isPasteOnly } from "./pasted-content.ts";
 import {
   asRecord,
+  USER_TURNS_MISSING,
   type TranscriptAdapter,
   type TranscriptDiagnostics,
   type TranscriptFormat,
@@ -68,6 +70,15 @@ function isEmptyValue(data: unknown): boolean {
   return rec !== null && Object.keys(rec).length === 0;
 }
 
+/** Turns the person typed across `sessions`; a paste-only turn is not one. */
+export function countUserTurns(sessions: readonly TranscriptSession[]): number {
+  let n = 0;
+  for (const s of sessions) {
+    for (const m of s.messages) if (m.role === "user" && !isPasteOnly(m.text)) n++;
+  }
+  return n;
+}
+
 export interface ParsedExport {
   sessions: TranscriptSession[];
   diagnostics: TranscriptDiagnostics;
@@ -84,6 +95,7 @@ export function parseTranscriptExport(
   const format = override ?? detectFormat(items, probeSize);
   const adapter = TRANSCRIPT_ADAPTERS.find((a) => a.format === format);
   const result = adapter ? adapter.parse(items) : { sessions: [], skipped: [], skippedMessages: 0 };
+  const userTurnsMissing = result.skipped.filter((s) => s.reason === USER_TURNS_MISSING).length;
   return {
     sessions: result.sessions,
     diagnostics: {
@@ -95,9 +107,12 @@ export function parseTranscriptExport(
       skipped: result.skipped,
       skippedMessages: result.skippedMessages,
       // An export with no conversations at all is empty, not drifted; content
-      // that no adapter could read is.
+      // that no adapter could read is, and so is a session with no user turn.
       format_drift:
-        result.sessions.length === 0 && bytes > 0 && (items.length > 0 || (found === null && !isEmptyValue(data))),
+        userTurnsMissing > 0 ||
+        (result.sessions.length === 0 && bytes > 0 && (items.length > 0 || (found === null && !isEmptyValue(data)))),
+      user_turns: countUserTurns(result.sessions),
+      user_turns_missing: userTurnsMissing,
     },
   };
 }

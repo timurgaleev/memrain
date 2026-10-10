@@ -10,11 +10,17 @@
  * and the context the harness injects into a prompt (`<system-reminder>`
  * blocks, slash-command bookkeeping). One reply is often written as several
  * records sharing an API message id; those are joined back into one turn.
+ *
+ * A turn that is only pasted content (`<pasted_content>` blocks) is kept as
+ * written, but it is not something the person said: it never names the
+ * session.
  */
 import { titleFromText } from "./jsonl.ts";
+import { isPasteOnly } from "./pasted-content.ts";
 import {
   asRecord,
   toEpochMs,
+  USER_TURNS_MISSING,
   type AdapterResult,
   type TranscriptAdapter,
   type TranscriptMessage,
@@ -51,6 +57,10 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
   let skippedMessages = 0;
   const uuids = new Set<string>();
   const summaries: Array<{ leaf: string; text: string }> = [];
+  // Any `user` record at all, kept or not: tool results and slash-command
+  // bookkeeping arrive as user records, so a log with those and no kept user
+  // turn is understood. One with none is the shape a renamed record leaves.
+  let sawUserRecord = false;
 
   for (const raw of records) {
     const rec = asRecord(raw);
@@ -66,6 +76,7 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
       continue;
     }
     if (type !== "user" && type !== "assistant") continue;
+    if (type === "user") sawUserRecord = true;
     const message = asRecord(rec["message"]);
     const text = message ? contentText(message["content"]) : "";
     if (rec["isSidechain"] === true || rec["isMeta"] === true || rec["isCompactSummary"] === true || !text) {
@@ -94,6 +105,9 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
   if (messages.length === 0) {
     return { sessions: [], skipped: [{ index: 0, id, reason: "no user or assistant text" }], skippedMessages };
   }
+  if (!sawUserRecord) {
+    return { sessions: [], skipped: [{ index: 0, id, reason: USER_TURNS_MISSING }], skippedMessages };
+  }
   // A resumed session file also carries summaries of the sessions it resumed;
   // only one that points into this file describes it.
   const own = summaries.filter((s) => uuids.has(s.leaf)).at(-1);
@@ -102,7 +116,7 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
       {
         format: "claude-code",
         id,
-        title: own?.text ?? titleFromText(messages.find((m) => m.role === "user")?.text),
+        title: own?.text ?? titleFromText(messages.find((m) => m.role === "user" && !isPasteOnly(m.text))?.text),
         startedAt: messages.find((m) => m.ts !== null)?.ts ?? null,
         messages,
       },

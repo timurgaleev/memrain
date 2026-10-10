@@ -269,7 +269,9 @@ function printUsage(): void {
   console.log("  config unset --pattern <pfx> bulk-delete keys by prefix");
   console.log("  capture [<text>] [--stdin] [--file P] [--slug S] [--type T] [--source ID] [--title T]");
   console.log("                               one-command note capture → page + search mirror");
-  console.log("  transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code] [--source ID] [--dry-run] [--json]");
+  console.log("  transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code] [--source ID] [--since ISO|auto] [--no-embed] [--facts --max-cost-usd N] [--dry-run] [--json]");
+  console.log("  transcripts status [--source ID] [--json]");
+  console.log("  transcripts push <path> --url URL --token-file F [--hook-stdin] [--dry-run] [--json]");
   console.log("                               import a ChatGPT / Claude.ai export or Codex / Claude Code session logs");
   console.log("                               (one file or a directory) as split, redacted conversation pages");
   console.log("  connectors github sync <owner/repo> --source ID [--token-file F] [--full] [--dry-run] [--json]");
@@ -1569,6 +1571,17 @@ async function main(argv: readonly string[]): Promise<number> {
       if (format) opts.format = format;
       const src = values.get("--source");
       if (src) opts.sourceId = src;
+      const since = values.get("--since");
+      if (since) opts.since = since;
+      const maxCost = values.get("--max-cost-usd");
+      if (maxCost) opts.maxCostUsd = maxCost;
+      const url = values.get("--url");
+      if (url) opts.url = url;
+      const tokenFile = values.get("--token-file");
+      if (tokenFile) opts.tokenFile = tokenFile;
+      if (flags.has("--no-embed")) opts.noEmbed = true;
+      if (flags.has("--facts")) opts.facts = true;
+      if (flags.has("--hook-stdin")) opts.hookStdin = true;
       if (flags.has("--dry-run")) opts.dryRun = true;
       if (flags.has("--json")) opts.json = true;
       return await runTranscripts(opts);
