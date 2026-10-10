@@ -37,8 +37,18 @@ function tierDefault(tier: ModelTier): string {
   return ""; // deep has no built-in default — it is opt-in
 }
 
-/** Call sites with a model key of their own (`MEMRAIN_<FEATURE>_MODEL`). */
-export type ModelFeature = "think" | "drift" | "concepts" | "expansion" | "intent" | "rerank";
+/** Call sites with a model key of their own (`MEMRAIN_<FEATURE>_MODEL`).
+ *  `facts_extract` reads `MEMRAIN_FACTS_EXTRACT_MODEL`: fact extraction can move
+ *  to a cheaper tier once the fidelity bench's live lane has measured it, without
+ *  moving every other reasoning-tier slice that shares `MEMRAIN_FACTS_MODEL`. */
+export type ModelFeature =
+  | "think"
+  | "drift"
+  | "concepts"
+  | "expansion"
+  | "intent"
+  | "rerank"
+  | "facts_extract";
 
 /** Resolve the Bedrock model id for a tier. `deep` with no override/env falls
  *  back to the reasoning model (Sonnet), so enabling the tier is a deliberate,

@@ -13,8 +13,11 @@
  *
  * Process-singleton (`getFactsQueue`); tests reset it with the test helper.
  * Deliberately simple: no shutdown/drain choreography — memrain is single-holder
- * and extraction is strictly best-effort, so a job still in flight at exit is an
- * acceptable loss (the backfill cycle phase re-covers missed pages).
+ * and extraction is strictly best-effort. The queue lives in memory only, so
+ * every job pending or in flight at exit — each restart and deploy — is lost,
+ * and nothing re-runs it on its own. The `conversation-facts-backfill` cycle
+ * phase re-covers such pages only when the operator runs it: it is not in the
+ * default phase set and needs MEMRAIN_FACTS_BACKFILL=1.
  */
 import { currentSpendContext, runWithSpendClient } from "./budget.ts";
 

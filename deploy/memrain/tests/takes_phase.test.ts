@@ -61,6 +61,11 @@ async function seedDoc(id: string, body: string): Promise<void> {
   );
 }
 
+/** A failed call parks the document (synth_failures); let that wait run out. */
+async function expireBackoff(): Promise<void> {
+  await engine.query(`UPDATE synth_failures SET next_eligible_at = now() - interval '1 second'`);
+}
+
 /** Counting LLM stub — the call count IS the token spend under test. */
 function countingLlm(text: string): { fn: LlmFn; calls: () => number } {
   let calls = 0;
@@ -224,6 +229,7 @@ describe("proposeTakesPhase — zero-yield tombstone", () => {
     expect(r1.errors.length).toBe(1);
     expect(await tombstoneRows()).toEqual([]);
 
+    await expireBackoff();
     const r2 = await proposeTakesPhase(engine, { llmFn: llm.fn });
     expect(r2.documentsScanned).toBe(1);
     expect(llm.calls()).toBe(2);
@@ -248,7 +254,9 @@ describe("proposeTakesPhase — zero-yield tombstone", () => {
     expect(await tombstoneRows()).toEqual([]);
     expect((await takeRows())[0]?.active).toBe(true);
 
-    // Still rediscoverable: nothing was memoized, so the next run re-scans it.
+    // Still rediscoverable: nothing was memoized, so once the failure backoff
+    // runs out the next run re-scans it.
+    await expireBackoff();
     const r2 = await proposeTakesPhase(engine, { llmFn: countingLlm("[]").fn });
     expect(r2.documentsScanned).toBe(1);
     expect(r2.tombstonesWritten).toBe(1);

@@ -133,6 +133,7 @@ function printUsage(): void {
   console.log("  bench [--family push|continuity|fidelity|all] [--corpus DIR] [--json]");
   console.log("                               agent-facing behaviour bench (push / continuity / write-back");
   console.log("                               fidelity); own throwaway DB, zero model spend, always exits 0");
+  console.log("  bench --live --family fidelity  paid lane: the fidelity corpus against the real extraction model, capped at $0.50");
   console.log("  backlinks <name> [--type T] [--limit N]");
   console.log("                               documents that mention this entity (default type=wikilink)");
   console.log("  extract [--all] [--vault P]  re-run regex entity extraction over existing chunks (cheap)");
@@ -570,8 +571,8 @@ async function main(argv: readonly string[]): Promise<number> {
       const corpus = values.get("--corpus");
       if (corpus !== undefined) benchOpts.corpus = corpus;
       if (flags.has("--json")) benchOpts.json = true;
-      // Parsed, then refused inside the command — see LIVE_REFUSAL. Dropping it
-      // here would silently run the stub arm and report it as a live one.
+      // The command runs it for --family fidelity and refuses it otherwise (see
+      // LIVE_REFUSAL). Dropping it here would silently run the stub arm instead.
       if (flags.has("--live")) benchOpts.live = true;
       return await runBenchCli(benchOpts);
     }

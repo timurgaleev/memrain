@@ -31,7 +31,16 @@
  * a fixture. These numbers grade what the pipeline does with a KNOWN model
  * answer — the parser, the gates, the resolver and the ledger. Whether a real
  * Sonnet call would have produced that answer is a different measurement, and
- * this family deliberately does not make it.
+ * the stub arm deliberately does not make it.
+ *
+ * THE LIVE LANE (`runFidelityCorpusLive`) makes it: the same corpus, the same
+ * shipped pipeline, a real Bedrock call where the stub was. It exists to measure
+ * an extraction-model switch (`MEMRAIN_FACTS_EXTRACT_MODEL`) before it ships. It
+ * runs only when asked, every call is reserved against one BudgetTracker cap
+ * (default $0.50) before it is sent, and its rates carry Wilson intervals,
+ * because a corpus this size cannot tell a few points of recall from noise.
+ * A real model rewords claims, so the lane grades with a looser text match
+ * (`claimsMatch`); its numbers are not comparable with the stub arm's.
  */
 
 import type { Storage } from "../storage.ts";
@@ -45,7 +54,10 @@ import { parseConversation } from "../conversation-parser.ts";
 import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { observationDateLine } from "../llm/date-grounding.ts";
 import { stripPastedContent } from "../transcripts/pasted-content.ts";
-import type { SonnetFn } from "../llm/sonnet.ts";
+import { callSonnet, resolveFactsModel, type SonnetFn } from "../llm/sonnet.ts";
+import { DEFAULT_EXTRACTION_MAX_TOKENS } from "../facts-extract.ts";
+import { costUsd, priceFor } from "../budget.ts";
+import { wilsonCI, type WilsonCI } from "../wilson.ts";
 import {
   runExtractConversationFacts,
   type ExtractConvFactsReport,
@@ -156,6 +168,33 @@ export function normalizeFactText(s: string): string {
     .trim();
 }
 
+/** How a ledger row is matched to a labelled claim. */
+export type ClaimMatcher = "exact" | "loose";
+
+/** Share of a gold claim's words a row must carry under the loose matcher. */
+const LOOSE_MATCH_MIN_OVERLAP = 0.6;
+
+function claimWords(s: string): Set<string> {
+  return new Set(normalizeFactText(s).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1));
+}
+
+/**
+ * Do two claim texts say the same thing? `exact` compares normalized text — the
+ * stub arm's grader, where the model answer is a fixture. `loose` also accepts
+ * a row carrying at least 60% of the gold claim's words, in either direction,
+ * because a live model words a claim its own way.
+ */
+export function claimsMatch(gold: string, row: string, matcher: ClaimMatcher): boolean {
+  if (normalizeFactText(gold) === normalizeFactText(row)) return true;
+  if (matcher === "exact") return false;
+  const g = claimWords(gold);
+  const r = claimWords(row);
+  if (g.size === 0 || r.size === 0) return false;
+  let shared = 0;
+  for (const w of g) if (r.has(w)) shared += 1;
+  return shared / g.size >= LOOSE_MATCH_MIN_OVERLAP && shared / r.size >= LOOSE_MATCH_MIN_OVERLAP;
+}
+
 /** One graded field on a gold fact that landed altered. */
 export interface FieldDistortion {
   field: keyof GoldExpect | "kind" | "notability";
@@ -258,27 +297,25 @@ function fieldsOf(gold: GoldFact, row: FactRow): FieldDistortion[] {
 export function scoreFidelity(
   fixture: FidelityFixture,
   rows: readonly FactRow[],
+  matcher: ClaimMatcher = "exact",
 ): { scores: FidelityScores; gold: GoldOutcome[]; reject: RejectOutcome[] } {
-  const normRows = rows.map((r) => ({ row: r, norm: normalizeFactText(r.fact) }));
-
   const goldOutcomes: GoldOutcome[] = fixture.gold.map((g) => {
-    const want = normalizeFactText(g.fact);
-    const hit = normRows.find((r) => r.norm === want && r.row.entity_slug === g.entity_slug);
+    const hit = rows.find((r) => r.entity_slug === g.entity_slug && claimsMatch(g.fact, r.fact, matcher));
     return {
       gold: g,
-      row: hit?.row ?? null,
-      distortions: hit ? fieldsOf(g, hit.row) : [],
+      row: hit ?? null,
+      distortions: hit ? fieldsOf(g, hit) : [],
     };
   });
 
-  const justified = normRows.filter(({ row, norm }) =>
-    fixture.gold.some((g) => normalizeFactText(g.fact) === norm && g.entity_slug === row.entity_slug),
+  const justified = rows.filter((row) =>
+    fixture.gold.some((g) => g.entity_slug === row.entity_slug && claimsMatch(g.fact, row.fact, matcher)),
   ).length;
 
-  const rejectOutcomes: RejectOutcome[] = fixture.reject.map((j) => {
-    const want = normalizeFactText(j.fact);
-    return { reject: j, complied: !normRows.some((r) => r.norm === want) };
-  });
+  const rejectOutcomes: RejectOutcome[] = fixture.reject.map((j) => ({
+    reject: j,
+    complied: !rows.some((r) => claimsMatch(j.fact, r.fact, matcher)),
+  }));
 
   const matched = goldOutcomes.filter((o) => o.row !== null);
   const distorted = matched.filter((o) => o.distortions.length > 0).length;
@@ -347,6 +384,17 @@ function refuseIfPaidPathsArmed(): void {
   }
 }
 
+/** The model one replay runs against: the gold stub, or a live call. */
+interface ReplayModel {
+  fn: SonnetFn;
+  modelId: string;
+  /** USD cap handed to the command's own BudgetTracker (live lane only). */
+  maxBudgetUsd?: number;
+  /** Set for the stub arm, whose prompt seam is checked after the run. */
+  stub?: GoldStub;
+  matcher: ClaimMatcher;
+}
+
 /**
  * Replay one fixture: empty the brain, seed its pages, run the shipped
  * extraction command against the stub, read the ledger back and grade it.
@@ -354,6 +402,20 @@ function refuseIfPaidPathsArmed(): void {
 export async function runFidelityFixture(
   storage: Storage,
   fixture: FidelityFixture,
+): Promise<FidelityFixtureRun> {
+  const stub = makeGoldStub(fixture);
+  return replayFixture(storage, fixture, {
+    fn: stub.fn,
+    modelId: fixture.stubModelId,
+    stub,
+    matcher: "exact",
+  });
+}
+
+async function replayFixture(
+  storage: Storage,
+  fixture: FidelityFixture,
+  model: ReplayModel,
 ): Promise<FidelityFixtureRun> {
   refuseIfPaidPathsArmed();
 
@@ -374,17 +436,18 @@ export async function runFidelityFixture(
     await seedFixture(storage, seed);
   }
 
-  const stub = makeGoldStub(fixture);
+  const stub = model.stub;
   const report = await runExtractConversationFacts(storage, {
     text: fixture.transcript,
     sourceSlug: fixture.sourceSlug,
     ...(fixture.dateContext ? { dateContext: fixture.dateContext } : {}),
     ...(fixture.ownerEntity ? { ownerEntity: fixture.ownerEntity } : {}),
-    sonnetFn: stub.fn,
-    modelId: fixture.stubModelId,
+    sonnetFn: model.fn,
+    modelId: model.modelId,
+    ...(model.maxBudgetUsd !== undefined ? { maxBudgetUsd: model.maxBudgetUsd } : {}),
   });
 
-  if (stub.unmatched.length > 0) {
+  if (stub && stub.unmatched.length > 0) {
     throw new Error(
       `fidelity fixture ${fixture.name}: the stub matched no turn for ` +
         `${stub.unmatched.length} prompt(s) — the extractor's prompt shape moved, so this ` +
@@ -410,14 +473,14 @@ export async function runFidelityFixture(
     .query<{ n: number }>(`SELECT count(*)::int AS n FROM entity_facts`);
   const rowsOutsideSource = Number(total.rows[0]?.n ?? 0) - rows.length;
 
-  const graded = scoreFidelity(fixture, rows);
+  const graded = scoreFidelity(fixture, rows, model.matcher);
   return {
     fixture: fixture.name,
     description: fixture.description,
     report,
     rows,
     rowsOutsideSource,
-    stubCalls: stub.callsByTurn,
+    stubCalls: stub?.callsByTurn ?? [],
     scores: graded.scores,
     gold: graded.gold,
     reject: graded.reject,
@@ -431,7 +494,10 @@ export async function runFidelityCorpus(
 ): Promise<FidelityCorpusRun> {
   const runs: FidelityFixtureRun[] = [];
   for (const f of fixtures) runs.push(await runFidelityFixture(storage, f));
+  return aggregateRuns(runs);
+}
 
+function aggregateRuns(runs: FidelityFixtureRun[]): FidelityCorpusRun {
   // Micro-averaged, matching the push family: a fixture with four gold claims
   // weighs four times one with a single claim, because that is what a caller
   // trusting the ledger actually pays.
@@ -470,6 +536,114 @@ export async function runFidelityCorpus(
     },
     spentUsd: runs.reduce((n, r) => n + r.report.spentUsd, 0),
   };
+}
+
+/** Default hard cap for one live-lane run, in USD. */
+export const DEFAULT_LIVE_FIDELITY_CAP_USD = 0.5;
+
+/** Spend-ledger label for the live lane's calls. */
+export const LIVE_FIDELITY_OPERATION = "bench-fidelity-live";
+
+/** Worst case of one extraction call, as the command itself reserves it. */
+const LIVE_WORST_CASE_USAGE = { inputTokens: 4000, outputTokens: DEFAULT_EXTRACTION_MAX_TOKENS };
+
+export interface FidelityLiveOptions {
+  /** Hard USD cap for the whole run. Default {@link DEFAULT_LIVE_FIDELITY_CAP_USD}. */
+  maxUsd?: number;
+  /** Extraction model. Default: what extraction resolves (`MEMRAIN_FACTS_EXTRACT_MODEL` first). */
+  modelId?: string;
+  /** Test seam in place of the Bedrock call. */
+  sonnetFn?: SonnetFn;
+}
+
+export interface FidelityLiveRun extends FidelityCorpusRun {
+  modelId: string;
+  capUsd: number;
+  /** Fixtures left out of the scores: never started, or cut short by the cap. */
+  fixturesSkipped: string[];
+  /** Wilson 95% intervals; null over an empty denominator. */
+  recallCI: WilsonCI | null;
+  precisionCI: WilsonCI | null;
+}
+
+/**
+ * The live lane: replay the corpus with a real extraction call where the stub
+ * was. Each fixture's command gets the cap's remaining headroom as its own
+ * BudgetTracker cap, so every call is reserved against what is left of the
+ * run's dollar before it is sent and the run as a whole cannot pass the cap.
+ * A fixture the cap cuts short is reported and left out of the scores — half a
+ * transcript would read as lost recall.
+ */
+export async function runFidelityCorpusLive(
+  storage: Storage,
+  fixtures: readonly FidelityFixture[],
+  opts: FidelityLiveOptions = {},
+): Promise<FidelityLiveRun> {
+  const capUsd = opts.maxUsd ?? DEFAULT_LIVE_FIDELITY_CAP_USD;
+  if (!Number.isFinite(capUsd) || capUsd <= 0) {
+    throw new Error(`fidelity live lane: the USD cap must be positive (got ${capUsd})`);
+  }
+  const modelId = resolveFactsModel(opts.modelId, "facts_extract");
+  if (priceFor(modelId) === null) {
+    throw new Error(`fidelity live lane: no price for ${modelId}, so no call could be capped`);
+  }
+  const fn: SonnetFn =
+    opts.sonnetFn ??
+    ((input) => callSonnet(input, { modelId, feature: "facts_extract", operation: LIVE_FIDELITY_OPERATION }));
+  const oneCallUsd = costUsd(modelId, LIVE_WORST_CASE_USAGE);
+
+  const scored: FidelityFixtureRun[] = [];
+  const fixturesSkipped: string[] = [];
+  let spentUsd = 0;
+  for (const fixture of fixtures) {
+    const headroom = capUsd - spentUsd;
+    if (headroom < oneCallUsd) {
+      fixturesSkipped.push(fixture.name);
+      continue;
+    }
+    const run = await replayFixture(storage, fixture, {
+      fn,
+      modelId,
+      maxBudgetUsd: headroom,
+      matcher: "loose",
+    });
+    spentUsd += run.report.spentUsd;
+    if (run.report.budgetExhausted) fixturesSkipped.push(fixture.name);
+    else scored.push(run);
+  }
+
+  const corpus = aggregateRuns(scored);
+  const s = corpus.scores;
+  return {
+    ...corpus,
+    spentUsd,
+    modelId,
+    capUsd,
+    fixturesSkipped,
+    recallCI: s.goldTotal === 0 ? null : wilsonCI(s.matchedGold, s.goldTotal),
+    precisionCI: s.ledgerRows === 0 ? null : wilsonCI(s.justifiedRows, s.ledgerRows),
+  };
+}
+
+function formatRate(v: number | null, ci: WilsonCI | null): string {
+  if (v === null) return "n/a";
+  return ci ? `${v.toFixed(3)} [${ci.lower.toFixed(3)}, ${ci.upper.toFixed(3)}]` : v.toFixed(3);
+}
+
+/** The live lane's printed report. */
+export function formatFidelityLive(run: FidelityLiveRun): string {
+  const s = run.scores;
+  const lines = [
+    `bench fidelity (mode: live, model: ${run.modelId}, spend: $${run.spentUsd.toFixed(4)} of $${run.capUsd.toFixed(2)})`,
+    `  recall     ${formatRate(s.fidelityRecall, run.recallCI)}  (${s.matchedGold}/${s.goldTotal})`,
+    `  precision  ${formatRate(s.fidelityPrecision, run.precisionCI)}  (${s.justifiedRows}/${s.ledgerRows})`,
+    `  drop       ${formatRate(s.dropCompliance, null)}`,
+    `  distortion ${formatRate(s.distortionRate, null)}`,
+  ];
+  if (run.fixturesSkipped.length > 0) {
+    lines.push(`  skipped by the cap: ${run.fixturesSkipped.join(", ")}`);
+  }
+  return lines.join("\n");
 }
 
 /** Reduce a corpus run to the shape the scoreboard prints. */

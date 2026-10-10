@@ -37,6 +37,8 @@ import { contentHash16 } from "./atoms.ts";
 import { embedText } from "../embedding.ts";
 import { resolveTake } from "./takes-canon.ts";
 import { normalizeScope } from "../source-scope.ts";
+import { resolveModel } from "../llm/resolve-model.ts";
+import { clearSynthFailure, filterBackedOff, recordSynthFailure } from "./synth-failures.ts";
 
 export const PROPOSE_TAKES_PROMPT_VERSION = "v1-nova";
 
@@ -349,6 +351,7 @@ async function discoverTakeDocuments(
   engine: Engine,
   maxDocs: number,
   promptVersion: string,
+  model: string,
 ): Promise<SourceDoc[]> {
   const { rows } = await engine.query<{ id: string; text: string }>(
     `SELECT d.id,
@@ -383,7 +386,9 @@ async function discoverTakeDocuments(
     [refs, hashes, promptVersion],
   );
   const done = new Set(existing.map((e) => `${e.source_ref} ${e.source_hash}`));
-  return candidates.filter((c) => !done.has(`${c.id} ${c.contentHash16}`)).slice(0, maxDocs);
+  const open = candidates.filter((c) => !done.has(`${c.id} ${c.contentHash16}`));
+  // Before the slice, so a document parked after a failed call gives up its slot.
+  return (await filterBackedOff(engine, "propose_takes", open, model)).slice(0, maxDocs);
 }
 
 /** Claims already extracted from this document (any hash / prompt version),
@@ -430,7 +435,9 @@ export async function proposeTakesPhase(
     errors: [],
   };
 
-  const docs = await discoverTakeDocuments(engine, maxDocs, promptVersion);
+  // The model the backoff is keyed on — the one `llm` will call.
+  const backoffModel = resolveModel("utility", opts.modelId);
+  const docs = await discoverTakeDocuments(engine, maxDocs, promptVersion, backoffModel);
   result.documentsScanned = docs.length;
 
   for (const doc of docs) {
@@ -460,11 +467,22 @@ export async function proposeTakesPhase(
       truncated = call.truncated;
     } catch (e) {
       result.errors.push(`${doc.id}: ${e instanceof Error ? e.message : String(e)}`);
+      await recordSynthFailure(engine, {
+        docId: doc.id, phase: "propose_takes", contentHash: doc.contentHash16, model: backoffModel, kind: "llm_error",
+      });
       continue;
     }
 
     const takes = parseTakesResponse(text);
     result.documentsProcessed += 1;
+    if (takes.length > 0 || isWellFormedEmptyExtraction(text)) {
+      await clearSynthFailure(engine, doc.id, "propose_takes");
+    } else {
+      await recordSynthFailure(engine, {
+        docId: doc.id, phase: "propose_takes", contentHash: doc.contentHash16, model: backoffModel,
+        kind: truncated ? "truncated" : "unparseable",
+      });
+    }
 
     // Memoize the empty case. A document that yields no claims gets no row from
     // the loop below, so without this its idempotency tuple is never recorded
@@ -483,8 +501,8 @@ export async function proposeTakesPhase(
         // document's real claims for good.
         result.errors.push(
           truncated
-            ? `${doc.id}: extractor output truncated at the output cap even after a larger-cap retry; not memoized, retried next run`
-            : `${doc.id}: extractor output not parseable as claims; not memoized, retried next run`,
+            ? `${doc.id}: extractor output truncated at the output cap even after a larger-cap retry; not memoized, retried after backoff`
+            : `${doc.id}: extractor output not parseable as claims; not memoized, retried after backoff`,
         );
         continue;
       }

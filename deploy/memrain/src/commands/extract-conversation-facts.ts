@@ -104,7 +104,7 @@ export async function runExtractConversationFacts(
   const budget = new BudgetTracker(cap, "extract-conversation-facts");
   // The model id is resolved up front so the pre-flight guard prices the same
   // model the call will use (a strict-as-possible pre-call ceiling).
-  const modelId = resolveFactsModel(opts.modelId);
+  const modelId = resolveFactsModel(opts.modelId, "facts_extract");
 
   let factsWritten = 0;
   let factsSkipped = 0;

@@ -50,6 +50,11 @@ async function seedDoc(id: string, body: string): Promise<void> {
   );
 }
 
+/** A failed call parks the document (synth_failures); let that wait run out. */
+async function expireBackoff(): Promise<void> {
+  await engine.query(`UPDATE synth_failures SET next_eligible_at = now() - interval '1 second'`);
+}
+
 const fakeLlm = (text: string): LlmFn => async () => ({ text, modelId: "fake-nova" });
 
 // Stateful Sonnet stub: returns each text in turn (last one repeats), with a
@@ -456,7 +461,8 @@ describe("propose_takes — truncated extraction", () => {
       `SELECT count(*)::int AS n FROM synth_takes`,
     );
     expect(Number(rows[0]?.n)).toBe(0);
-    // ...so the next run picks the document up again.
+    // ...so once the failure backoff runs out, a run picks the document up again.
+    await expireBackoff();
     const again = await proposeTakesPhase(engine, {
       llmFn: scriptedLlm([{ text: WHOLE }]).fn,
     });

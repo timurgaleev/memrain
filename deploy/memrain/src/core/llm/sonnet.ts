@@ -16,7 +16,7 @@ import {
   BedrockRuntimeClient,
   ConverseCommand,
 } from "@aws-sdk/client-bedrock-runtime";
-import { resolveModel } from "./resolve-model.ts";
+import { resolveModel, type ModelFeature } from "./resolve-model.ts";
 import {
   awsRegion,
   bedrockClientConfig,
@@ -83,6 +83,11 @@ export interface CallSonnetOptions {
    * whose dollar it is. Unnamed callers land in the tier bucket below.
    */
   operation?: string;
+  /**
+   * Call site with a model key of its own (`MEMRAIN_<FEATURE>_MODEL`), checked
+   * between an explicit `modelId` and `MEMRAIN_FACTS_MODEL`.
+   */
+  feature?: ModelFeature;
   /** Override the Bedrock client. `SonnetFn` is the seam for faking the CALL;
    *  this is the seam for exercising the transport itself without a network. */
   client?: BedrockRuntimeClient;
@@ -93,6 +98,7 @@ export const DEFAULT_REASONING_SPEND_OP = "reasoning-llm";
 
 /**
  * Resolve the paid-tier model id. Precedence: an explicit override → the
+ * feature's own env (`MEMRAIN_<FEATURE>_MODEL`, when `feature` is given) → the
  * `MEMRAIN_FACTS_MODEL` env → the built-in default. Uses `||` (not `??`) so an
  * EMPTY-STRING env value — what a `${MEMRAIN_FACTS_MODEL:-}` docker-compose
  * passthrough injects when the operator hasn't set it — is treated as "unset"
@@ -100,8 +106,8 @@ export const DEFAULT_REASONING_SPEND_OP = "reasoning-llm";
  * unpriced, and the budget guard would refuse to spend (silent "budget
  * exhausted before the call"). Every paid slice resolves its model through here.
  */
-export function resolveFactsModel(override?: string): string {
-  return resolveModel("reasoning", override);
+export function resolveFactsModel(override?: string, feature?: ModelFeature): string {
+  return resolveModel("reasoning", override, feature);
 }
 
 /** Production Sonnet call. Throws on any Bedrock/network error — the caller's
@@ -111,7 +117,7 @@ export async function callSonnet(
   opts: CallSonnetOptions = {},
 ): Promise<SonnetCallResult> {
   const region = opts.region ?? awsRegion();
-  const modelId = resolveFactsModel(opts.modelId);
+  const modelId = resolveFactsModel(opts.modelId, opts.feature);
   const c = opts.client ?? client(region);
   return trackedInvoke(
     {

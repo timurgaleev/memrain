@@ -207,12 +207,48 @@ describe("zero-yield memo (facts_backfill_scans)", () => {
     expect((await scanRows()).map((row) => row.source_id)).toEqual(["default", "tenant_b"]);
   });
 
-  it("writes no memo for a page that yields facts", async () => {
-    await putPage(storage, { slug: "notes/alice-sync", type: "note", markdown_body: LONG_BODY });
+  it("watermarks a page that yields facts as extracted, not as zero-yield", async () => {
+    const put = await putPage(storage, { slug: "notes/alice-sync", type: "note", markdown_body: LONG_BODY });
     const r = await conversationFactsBackfillPhase(storage, { sonnetFn: fakeSonnet() });
     expect(r.factsWritten).toBe(1);
     expect(r.zeroYieldRecorded).toBe(0);
-    expect(await scanRows()).toEqual([]);
+    const rows = await storage.engine().query<{ outcome: string; content_hash: string }>(
+      "SELECT outcome, content_hash FROM facts_backfill_scans",
+    );
+    expect(rows.rows).toEqual([{ outcome: "extracted", content_hash: put.content_hash }]);
+  });
+
+  it("re-covers an extracted page once its body changes", async () => {
+    await putPage(storage, { slug: "notes/alice-sync", type: "note", markdown_body: LONG_BODY });
+    let calls = 0;
+    const sonnet: SonnetFn = async (input) => {
+      calls += 1;
+      return fakeSonnet()(input);
+    };
+    await conversationFactsBackfillPhase(storage, { sonnetFn: sonnet });
+    expect((await conversationFactsBackfillPhase(storage, { sonnetFn: sonnet })).pagesConsidered).toBe(0);
+    expect(calls).toBe(1);
+
+    // The facts from the old body are still there; the edit alone re-opens it.
+    await putPage(storage, {
+      slug: "notes/alice-sync",
+      type: "note",
+      markdown_body: `${LONG_BODY} She also signed off the Q3 hiring plan.`,
+    });
+    const third = await conversationFactsBackfillPhase(storage, { sonnetFn: sonnet });
+    expect(third.pagesConsidered).toBe(1);
+    expect(calls).toBe(2);
+    expect((await conversationFactsBackfillPhase(storage, { sonnetFn: sonnet })).pagesConsidered).toBe(0);
+  });
+
+  it("still treats an unwatermarked page with an on-write fact as covered", async () => {
+    await putPage(storage, { slug: "notes/alice-sync", type: "note", markdown_body: LONG_BODY });
+    await storage.engine().query(
+      `INSERT INTO entity_facts (entity_slug, fact, source_slug, source_id, written_by)
+       VALUES ('people/alice', 'prefers tea', 'notes/alice-sync', 'default', 'facts-extract')`,
+    );
+    const r = await conversationFactsBackfillPhase(storage, { sonnetFn: fakeSonnet() });
+    expect(r.pagesConsidered).toBe(0);
   });
 
   it("a memo from another extractor version does not suppress the page", async () => {

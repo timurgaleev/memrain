@@ -45,6 +45,11 @@ async function seedDoc(id: string, body: string, effectiveDate?: string): Promis
   );
 }
 
+/** A failed call parks the document (synth_failures); let that wait run out. */
+async function expireBackoff(): Promise<void> {
+  await engine.query(`UPDATE synth_failures SET next_eligible_at = now() - interval '1 second'`);
+}
+
 /** Rewrite a seeded document's body — a source edit, so a new content hash. */
 async function editDoc(id: string, body: string): Promise<void> {
   await engine.query(`UPDATE chunks SET content = $1 WHERE id = $2`, [body, `${id}c0`]);
@@ -225,6 +230,7 @@ describe("extractAtomsPhase", () => {
     expect(r1.errors.length).toBe(1);
     expect(await scanStamp("d1")).toBeNull();
 
+    await expireBackoff();
     const r2 = await extractAtomsPhase(engine, {
       llmFn: fakeLlm(atomJson("Recovered", "A real claim.")),
     });
@@ -244,6 +250,7 @@ describe("extractAtomsPhase", () => {
     expect(r1.errors.length).toBe(1);
     expect(await scanStamp("d1")).toBeNull();
 
+    await expireBackoff();
     const r2 = await extractAtomsPhase(engine, {
       llmFn: fakeLlm(atomJson("Recovered", "A real claim.")),
     });
@@ -294,6 +301,7 @@ describe("extractAtomsPhase", () => {
     };
     await extractAtomsPhase(engine, { llmFn: boom });
     expect(await scanStamp("d1")).toBeNull();
+    await expireBackoff();
     const r = await extractAtomsPhase(engine, {
       llmFn: fakeLlm(atomJson("Recovered", "The model came back.")),
     });

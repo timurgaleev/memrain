@@ -29,6 +29,12 @@
  * the ledger is read before and after, and the delta is what the scoreboard
  * prints. Not a comment claiming the run is free: a number that would move if
  * it were not. See `spendLedgerSnapshot` for why the row COUNT is read too.
+ *
+ * THE ONE PAID MODE: `--live --family fidelity` replays the fidelity corpus
+ * against the real extraction model (`runFidelityCorpusLive`), under a hard
+ * BudgetTracker cap of $0.50. It is opt-in by flag, prints its own report with
+ * Wilson intervals instead of the stub scoreboard, and is never run by tests.
+ * `--live` with any other family is refused before anything bills.
  */
 
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
@@ -44,7 +50,12 @@ import { scorePush } from "../core/bench/push-metrics.ts";
 import { loadContinuityCorpus } from "../core/bench/continuity-fixtures.ts";
 import { runContinuityCorpus } from "../core/bench/continuity-harness.ts";
 import { loadFidelityCorpus } from "../core/bench/fidelity-fixtures.ts";
-import { runFidelityCorpus, fidelityFamilyReport } from "../core/bench/fidelity-harness.ts";
+import {
+  runFidelityCorpus,
+  runFidelityCorpusLive,
+  fidelityFamilyReport,
+  formatFidelityLive,
+} from "../core/bench/fidelity-harness.ts";
 import {
   formatScoreboard,
   scoreboardJson,
@@ -91,7 +102,7 @@ export interface BenchOptions {
   corpus?: string;
   /** Emit `scoreboardJson` instead of the human block. */
   json?: boolean;
-  /** Accepted so it can be REFUSED by name — see `LIVE_REFUSAL`. */
+  /** The paid fidelity lane; refused for every other family — see `LIVE_REFUSAL`. */
   live?: boolean;
 }
 
@@ -117,18 +128,17 @@ function clearPaidEnvKnobs(): void {
 }
 
 /**
- * Why `--live` is parsed and then refused rather than simply unknown.
+ * Why `--live` without `--family fidelity` is refused rather than run.
  *
- * An unknown flag reads as a typo; this one is a real mode that a reader of the
- * spec will reach for. Refusing it by name says which of the two it is, and
- * says so BEFORE anything bills.
+ * Only the fidelity family has a live lane. Refusing the rest by name says so
+ * BEFORE anything bills, instead of quietly running the stub arm.
  */
 export const LIVE_REFUSAL =
-  "memrain bench: --live is not available in v1.\n" +
+  "memrain bench: --live runs only with --family fidelity.\n" +
   "  A live-model arm cannot be pinned (model output is not deterministic), " +
   "cannot run in CI,\n" +
-  "  and costs real money per run. The stub arm is the whole bench for now — " +
-  "run it without --live.";
+  "  and costs real money per run; only the extractor's fidelity lane has one, " +
+  "capped at $0.50.";
 
 /** One family's fixture directory, checked before anything opens a database. */
 function corpusDirFor(root: string, family: BenchFamily): string {
@@ -260,7 +270,7 @@ export async function runBenchCli(opts: BenchOptions = {}): Promise<number> {
   // Refused first, so the refusal costs no database and no billing. Exit 1 is
   // the same code every other usage error in this CLI returns: the bench has no
   // second failure kind to distinguish, because a bad SCORE never fails here.
-  if (opts.live) {
+  if (opts.live && opts.family !== "fidelity") {
     process.stderr.write(`${LIVE_REFUSAL}\n`);
     return 1;
   }
@@ -269,6 +279,31 @@ export async function runBenchCli(opts: BenchOptions = {}): Promise<number> {
   const storage = new Storage({ dbPath: join(tmp, "db") });
   try {
     return await withStorage(storage, async () => {
+      if (opts.live) {
+        const root = opts.corpus ?? SHIPPED_CORPUS_ROOT;
+        const dir = corpusDirFor(root, "fidelity");
+        clearPaidEnvKnobs();
+        const run = await runFidelityCorpusLive(storage, loadFidelityCorpus(dir));
+        process.stdout.write(
+          opts.json
+            ? `${JSON.stringify(
+                {
+                  mode: "live",
+                  modelId: run.modelId,
+                  capUsd: run.capUsd,
+                  spendUsd: run.spentUsd,
+                  scores: run.scores,
+                  recallCI: run.recallCI,
+                  precisionCI: run.precisionCI,
+                  fixturesSkipped: run.fixturesSkipped,
+                },
+                null,
+                2,
+              )}\n`
+            : `${formatFidelityLive(run)}\n`,
+        );
+        return 0;
+      }
       const report = await runBenchOnStorage(storage, opts);
       process.stdout.write(
         opts.json

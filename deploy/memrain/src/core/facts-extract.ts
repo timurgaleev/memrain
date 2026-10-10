@@ -512,6 +512,7 @@ export async function extractFactsFromTurn(
   const fn = resolveSonnetFn(opts.sonnetFn, {
     ...(opts.modelId ? { modelId: opts.modelId } : {}),
     ...(opts.region ? { region: opts.region } : {}),
+    feature: "facts_extract",
   });
   const user = buildExtractorUserMessage(turnText, {
     observationDate: opts.observationDate ?? null,
@@ -963,7 +964,7 @@ export async function extractFactsForPage(
   storage: Storage,
   opts: ExtractForPageOptions,
 ): Promise<ExtractForPageResult> {
-  const modelId = resolveFactsModel(opts.modelId);
+  const modelId = resolveFactsModel(opts.modelId, "facts_extract");
   const cap = opts.maxBudgetUsd ?? perWriteBudgetUsd();
   const budget = new BudgetTracker(cap, "facts-extract:on-write");
   const windows = extractionWindows(opts.slug, opts.body, factsMaxWindows());
@@ -1148,7 +1149,7 @@ export async function extractFactsOnDemand(
   if ((text ?? "").trim().length === 0) {
     return { enabled: true, facts: [], modelId: null, spentUsd: 0, skipped: "empty_text" };
   }
-  const modelId = resolveFactsModel(opts.modelId);
+  const modelId = resolveFactsModel(opts.modelId, "facts_extract");
   const cap = opts.maxBudgetUsd ?? perWriteBudgetUsd();
   const budget = new BudgetTracker(cap, "facts-extract:on-demand");
   const hold = budget.reserve(modelId, WORST_CASE_USAGE);

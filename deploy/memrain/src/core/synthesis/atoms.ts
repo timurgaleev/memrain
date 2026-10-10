@@ -34,6 +34,8 @@ import { resolveLlmFn, type LlmFn } from "../llm/haiku.ts";
 import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { parseModelJson } from "../llm/json-output.ts";
 import { isQuoteInText } from "./quote-verify.ts";
+import { resolveModel } from "../llm/resolve-model.ts";
+import { clearSynthFailure, filterBackedOff, recordSynthFailure } from "./synth-failures.ts";
 
 /** Allowed atom_type values. A returned type outside this set falls back. */
 export const ATOM_TYPES = [
@@ -282,6 +284,7 @@ export function isWellFormedEmptyExtraction(raw: string): boolean {
 async function discoverDocuments(
   engine: Engine,
   maxDocs: number,
+  model: string,
 ): Promise<SourceDoc[]> {
   const { rows } = await engine.query<{
     id: string;
@@ -341,7 +344,8 @@ async function discoverDocuments(
   const done = new Set(existing.map((e) => `${e.source_ref} ${e.source_hash}`));
 
   const fresh = candidates.filter((c) => !done.has(`${c.id} ${c.contentHash16}`));
-  return fresh.slice(0, maxDocs);
+  // Before the slice, so a document parked after a failed call gives up its slot.
+  return (await filterBackedOff(engine, "extract_atoms", fresh, model)).slice(0, maxDocs);
 }
 
 /**
@@ -382,7 +386,9 @@ export async function extractAtomsPhase(
     errors: [],
   };
 
-  const docs = await discoverDocuments(engine, maxDocs);
+  // The model the backoff is keyed on — the one `llm` will call.
+  const backoffModel = resolveModel("utility", opts.modelId);
+  const docs = await discoverDocuments(engine, maxDocs, backoffModel);
   result.documentsScanned = docs.length;
 
   for (const doc of docs) {
@@ -400,6 +406,9 @@ export async function extractAtomsPhase(
     } catch (e) {
       // Fail-open: log + skip this document, never abort the phase.
       result.errors.push(`${doc.id}: ${e instanceof Error ? e.message : String(e)}`);
+      await recordSynthFailure(engine, {
+        docId: doc.id, phase: "extract_atoms", contentHash: doc.contentHash16, model: backoffModel, kind: "llm_error",
+      });
       continue;
     }
 
@@ -412,15 +421,21 @@ export async function extractAtomsPhase(
       return rest;
     });
     result.documentsProcessed += 1;
+    if (atoms.length > 0 || isWellFormedEmptyExtraction(text)) {
+      await clearSynthFailure(engine, doc.id, "extract_atoms");
+    }
     if (atoms.length === 0) {
       // Only a cleanly parsed `[]` is a genuine zero-yield note.
       // parseAtomsResponse also returns [] for malformed or truncated output,
       // and tombstoning that would permanently suppress a document that does
-      // carry atoms, so that case is logged and retried next run.
+      // carry atoms, so that case is logged and retried after a backoff.
       if (!isWellFormedEmptyExtraction(text)) {
         result.errors.push(
-          `${doc.id}: extractor output not parseable as atoms; not memoized, retried next run`,
+          `${doc.id}: extractor output not parseable as atoms; not memoized, retried after backoff`,
         );
+        await recordSynthFailure(engine, {
+          docId: doc.id, phase: "extract_atoms", contentHash: doc.contentHash16, model: backoffModel, kind: "unparseable",
+        });
         continue;
       }
       try {

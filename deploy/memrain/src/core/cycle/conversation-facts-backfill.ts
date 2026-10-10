@@ -11,14 +11,16 @@
  * A brain-wide USD budget (MEMRAIN_FACTS_BACKFILL_BUDGET_USD, default $1) and a
  * per-run page cap bound the spend; the phase stops cleanly when either is hit.
  *
- * Idempotency: a page is "already backfilled" once it has ANY fact authored by
- * the on-write writer (`facts-extract`) keyed to its (slug, source_id), or a
- * `facts_backfill_scans` zero-yield row for its (source_id, slug, content_hash,
- * FACTS_EXTRACT_VERSION). The memo is written only when the paid call read
- * cleanly and yielded no new fact, so editing the page or bumping the extractor
- * version re-opens it, while malformed, truncated, budget and model-error
- * outcomes, and extracted facts that failed to write, are never memoized and
- * stay retryable.
+ * Idempotency: a page is covered by a `facts_backfill_scans` row for its
+ * (source_id, slug, content_hash, FACTS_EXTRACT_VERSION) — `zero_yield` when the
+ * paid call read cleanly and yielded no new fact, `extracted` when it wrote
+ * facts (mig 129). Editing the page or bumping the extractor version therefore
+ * re-opens it. A page with no `extracted` row yet still counts as covered when
+ * it has a fact authored by the on-write writer (`facts-extract`) keyed to its
+ * (slug, source_id) — the coverage pages had before the watermark existed —
+ * until a backfill run writes a watermark for it. Malformed, truncated, budget
+ * and model-error outcomes, and extracted facts that failed to write, write no
+ * row and stay retryable.
  *
  * FALLS-OPEN: a per-page failure is collected in `errors[]`; the phase never
  * throws (the cycle marks it `warn` when errors[] is non-empty).
@@ -131,14 +133,24 @@ export async function conversationFactsBackfillPhase(
         -- them would pay to re-derive our own output on every run.
         AND p.slug NOT LIKE 'reflections/%'
         AND p.slug NOT LIKE 'patterns/%'
-        AND NOT EXISTS (
-          -- Match on (source_slug, source_id): a same-slug page in ANOTHER
-          -- source must not mask THIS page's un-extracted facts (pages are
-          -- keyed by (slug, source_id), so slug alone over-skips cross-source).
-          SELECT 1 FROM entity_facts f
-           WHERE f.source_slug = p.slug
-             AND f.source_id = p.source_id
-             AND f.written_by = $2
+        AND NOT (
+          EXISTS (
+            -- Match on (source_slug, source_id): a same-slug page in ANOTHER
+            -- source must not mask THIS page's un-extracted facts (pages are
+            -- keyed by (slug, source_id), so slug alone over-skips cross-source).
+            SELECT 1 FROM entity_facts f
+             WHERE f.source_slug = p.slug
+               AND f.source_id = p.source_id
+               AND f.written_by = $2
+          )
+          -- Once a run has watermarked the page, only the watermark below
+          -- decides; an on-write fact from an older body must not hide an edit.
+          AND NOT EXISTS (
+            SELECT 1 FROM facts_backfill_scans x
+             WHERE x.source_id = p.source_id
+               AND x.slug = p.slug
+               AND x.outcome = 'extracted'
+          )
         )
         -- Before LIMIT, so memoized zero-yield pages do not take this run's slots.
         AND NOT EXISTS (
@@ -217,22 +229,26 @@ export async function conversationFactsBackfillPhase(
           message: `${r.factsFailed} extracted fact(s) failed to write`,
         });
       }
-      if (r.absorbed === null && r.factsWritten === 0 && r.factsFailed === 0) {
+      // A clean read is watermarked against the body it read, so an edit
+      // re-opens the page; `zero_yield` when it wrote nothing new.
+      if (r.absorbed === null && r.factsFailed === 0) {
+        const outcome = r.factsWritten === 0 ? "zero_yield" : "extracted";
         await storage.engine().query(
           `INSERT INTO facts_backfill_scans
              (source_id, slug, content_hash, extractor_version, outcome, facts_skipped, model_id)
-           VALUES ($1, $2, $3, $4, 'zero_yield', $5, $6)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
            ON CONFLICT DO NOTHING`,
           [
             page.source_id,
             page.slug,
             page.content_hash,
             FACTS_EXTRACT_VERSION,
+            outcome,
             r.factsSkipped,
-            resolveFactsModel(opts.modelId),
+            resolveFactsModel(opts.modelId, "facts_extract"),
           ],
         );
-        result.zeroYieldRecorded += 1;
+        if (outcome === "zero_yield") result.zeroYieldRecorded += 1;
       }
     } catch (e) {
       result.errors.push({
