@@ -88,6 +88,7 @@ export const MATRIX: MatrixRow[] = [
   iso("get_links", { slug: GATEWAY }, "vault-a/target"),
   skip("list_link_sources", "returns per-type counts only, no token to observe", "tests/tenant_isolation_contract.test.ts"),
   iso("find_orphans"),
+  skip("wanted_pages", "needs links written to pages that do not exist yet", "tests/mcp_wanted_pages.test.ts"),
   iso("find_experts", { limit: 5 }, "hub-a"),
   iso("find_contradictions", {}, "claim-a1"),
   iso("find_trajectory", { entity_slug: ENTITY_SLUG }),

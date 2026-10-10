@@ -136,6 +136,9 @@ const FORBIDDEN_MCP_TOOLS_FROM_PUBLIC: ReadonlySet<string> = new Set([
   // consistent with resolve_slugs / relational_recall / get_chunks.
   "get_links",
   "find_orphans",
+  // wanted_pages lists the slugs pages link to and the linking slugs — the
+  // same slug graph get_links exposes.
+  "wanted_pages",
   "find_experts",
   "find_contradictions",
   "find_trajectory",

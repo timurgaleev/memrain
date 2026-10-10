@@ -32,6 +32,16 @@ describe("TOOL_DEFS generated from OPERATIONS", () => {
     expect(stale.map((t) => t.name)).toEqual([]);
   });
 
+  it("the code graph tools take a `lang` filter and wanted_pages caps its limit at 200", () => {
+    const props = (name: string) =>
+      (TOOL_DEFS.find((t) => t.name === name)?.inputSchema as { properties: Record<string, any> } | undefined)
+        ?.properties;
+    for (const name of ["code_def", "code_refs", "code_callers", "code_callees", "code_blast", "code_flow"]) {
+      expect({ name, lang: props(name)?.["lang"]?.type }).toEqual({ name, lang: "string" });
+    }
+    expect(props("wanted_pages")?.["limit"]).toEqual({ type: "integer", minimum: 1, maximum: 200 });
+  });
+
   it("every generated inputSchema is a closed object schema", () => {
     for (const t of TOOL_DEFS) {
       const s = t.inputSchema as Record<string, unknown>;

@@ -21,6 +21,9 @@ import {
 } from "../core/auth-info.ts";
 import { hybridSearch, type SearchOptions } from "../core/search/index.ts";
 import { publicSearchMeta, type SearchMeta } from "../core/search/search-meta.ts";
+import { gradeConfidence } from "../core/search/confidence-grade.ts";
+import { listWantedPages, type ListWantedPagesOptions } from "../core/wanted-links.ts";
+import type { Evidence } from "../core/search/evidence.ts";
 import { resolveDateBoundary } from "../core/search/filters.ts";
 import { indexDocument, indexFile } from "../core/indexer.ts";
 import { findBacklinks } from "../core/backlinks.ts";
@@ -83,6 +86,7 @@ import {
 } from "../core/page-index.ts";
 import { type QuarantineVerdict, readQuarantineVerdict } from "../core/quarantine.ts";
 import { outputRedactionEnabled, redactToolResult } from "../core/output-redaction.ts";
+import { capHitSnippets, searchSnippetChars } from "../core/search/snippet-cap.ts";
 import { allowedFingerprints } from "../core/secret-scan.ts";
 import { getChunksForPage, getChunksForSource } from "../core/chunks-read.ts";
 import { resolveSlugs } from "../core/slug-resolve.ts";
@@ -716,6 +720,8 @@ async function dispatchToolInner(
         return await callListLinkSources(storage, readSources);
       case "find_orphans":
         return await callFindOrphans(storage, args, readSources, remote);
+      case "wanted_pages":
+        return await callWantedPages(storage, args, readSources, remote);
       case "find_experts":
         return await callFindExperts(storage, args, readSources, remote);
       case "find_contradictions":
@@ -740,13 +746,13 @@ async function dispatchToolInner(
       case "query":
         return await callQuery(storage, args, readSources, isOperator, opts.embedQuery);
       case "code_callers":
-        return await callCodeCallers(storage, args, readSources);
+        return await callCodeCallers(storage, args, readSources, redact);
       case "code_callees":
-        return await callCodeCallees(storage, args, readSources);
+        return await callCodeCallees(storage, args, readSources, redact);
       case "code_def":
-        return await callCodeDefs(storage, args, readSources);
+        return await callCodeDefs(storage, args, readSources, redact);
       case "code_refs":
-        return await callCodeRefs(storage, args, readSources);
+        return await callCodeRefs(storage, args, readSources, redact);
       case "code_blast":
         return await callCodeWalk(storage, args, readSources, "callers");
       case "code_flow":
@@ -1144,13 +1150,17 @@ async function callSearch(
           ),
       )
     : hits;
-  const out = redact
-    ? redactBodies(visible as unknown as Record<string, unknown>[])
-    : visible;
+  const out = capHitSnippets(
+    (redact
+      ? redactBodies(visible as unknown as Record<string, unknown>[])
+      : visible) as Array<{ content: string; sourcePath: string }>,
+    searchSnippetChars(),
+    readSources,
+  );
   // Non-operators see corpus-independent reason codes only, keyed on the caller
   // rather than on body redaction: counts are an existence oracle even when
   // bodies are opted in.
-  const metaOut = responseSearchMeta(meta, out.length, isOperator);
+  const metaOut = responseSearchMeta(meta, out as ReadonlyArray<{ evidence?: Evidence }>, isOperator);
   const metaField = metaOut ? { meta: metaOut } : {};
   // A set-shaped question ("all the companies that…", "what are the different
   // approaches to…") is exactly the shape `search` answers badly when query
@@ -1190,18 +1200,25 @@ async function callSearch(
 
 /**
  * The `meta` block a search-backed tool returns. The operator gets the full
- * meta with `returned` re-counted after the offset slice. Everyone else (public
+ * meta with `returned` re-counted and the confidence grade re-read from the
+ * hits actually returned: the search graded its own head, which an `offset`
+ * slices away. A cache hit's grade claims nothing and stays. Everyone else (public
  * ingress and OAuth tenants alike) gets the redacted form: `retrieved`,
  * keyword_zero and budget_truncated are measured before hydrate re-scopes the
  * pool and before the diary/page fences, so they would confirm fenced matches.
  */
 function responseSearchMeta(
   meta: SearchMeta | undefined,
-  returned: number,
+  returnedHits: ReadonlyArray<{ evidence?: Evidence }>,
   isOperator: boolean,
 ): SearchMeta | ReturnType<typeof publicSearchMeta> | undefined {
   if (!meta) return undefined;
-  return isOperator ? { ...meta, returned } : publicSearchMeta(meta);
+  if (!isOperator) return publicSearchMeta(meta);
+  const confidence =
+    meta.confidence && meta.confidence.grade !== "unknown"
+      ? gradeConfidence(returnedHits)
+      : meta.confidence;
+  return { ...meta, returned: returnedHits.length, ...(confidence ? { confidence } : {}) };
 }
 
 const URI_SCHEME = /^[a-z][a-z0-9+.-]+:\/\//i;
@@ -3114,6 +3131,26 @@ async function callFindOrphans(
   return jsonResult({ ok: true, pages });
 }
 
+async function callWantedPages(
+  storage: Storage,
+  args: Record<string, unknown>,
+  readSources?: string[],
+  remote = false,
+): Promise<ToolCallResult> {
+  const opts: ListWantedPagesOptions = {};
+  if (typeof args["limit"] === "number") opts.limit = args["limit"];
+  if (readSources !== undefined) opts.sourceIds = readSources;
+  let pages = await listWantedPages(storage.engine(), opts);
+  // Diary fence: a diary slug must not surface to a non-operator caller,
+  // neither as a wanted target nor as one of the pages linking to it.
+  if (remote) {
+    pages = pages
+      .filter((p) => !isDiarySlug(p.target_slug))
+      .map((p) => ({ ...p, sample_from: p.sample_from.filter((s) => !isDiarySlug(s)) }));
+  }
+  return jsonResult({ ok: true, pages });
+}
+
 async function callFindExperts(
   storage: Storage,
   args: Record<string, unknown>,
@@ -3384,7 +3421,10 @@ async function callQuery(
     if (readSources !== undefined) opts.sourceIds = readSources;
     if (onCapture) opts.search = { onCapture };
     const hits = await queryRefine(storage, q, refine, opts);
-    return jsonResult({ ok: true, hits: fenceDiaryHits(hits, isOperator) });
+    return jsonResult({
+      ok: true,
+      hits: capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources),
+    });
   }
 
   const k = typeof args["k"] === "number" ? (args["k"] as number) : 20;
@@ -3437,22 +3477,30 @@ async function callQuery(
   const hitsAll = await hybridSearch(storage, q, searchOpts);
   const hitsOffset = offset > 0 ? hitsAll.slice(offset) : hitsAll;
   // Diary fence for the non-operator caller (mirrors callSearch).
-  const hits = fenceDiaryHits(hitsOffset, isOperator);
-  const metaOut = responseSearchMeta(meta, hits.length, isOperator);
+  const hits = capHitSnippets(fenceDiaryHits(hitsOffset, isOperator), searchSnippetChars(), readSources);
+  const metaOut = responseSearchMeta(meta, hits, isOperator);
   return jsonResult({ ok: true, hits, ...(metaOut ? { meta: metaOut } : {}) });
+}
+
+/** The optional `lang` filter of the code graph tools; empty means none. */
+function codeLangArg(args: Record<string, unknown>): string | undefined {
+  return typeof args["lang"] === "string" && args["lang"] ? args["lang"] : undefined;
 }
 
 async function callCodeCallers(
   storage: Storage,
   args: Record<string, unknown>,
   readSources?: string[],
+  redact = false,
 ): Promise<ToolCallResult> {
   if (typeof args["name"] !== "string" || args["name"].length === 0) {
     return errResult("code_callers: `name` is required");
   }
   const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
   const sourceIds = readSources;
-  const result = await codeCallers(storage.engine(), args["name"], limit, sourceIds);
+  const result = await codeCallers(storage.engine(), args["name"], limit, sourceIds, codeLangArg(args), {
+    snippet: !redact,
+  });
   return jsonResult({ ok: true, ...result });
 }
 
@@ -3460,13 +3508,16 @@ async function callCodeCallees(
   storage: Storage,
   args: Record<string, unknown>,
   readSources?: string[],
+  redact = false,
 ): Promise<ToolCallResult> {
   if (typeof args["target"] !== "string" || args["target"].length === 0) {
     return errResult("code_callees: `target` is required");
   }
   const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
   const sourceIds = readSources;
-  const result = await codeCallees(storage.engine(), args["target"], limit, sourceIds);
+  const result = await codeCallees(storage.engine(), args["target"], limit, sourceIds, codeLangArg(args), {
+    snippet: !redact,
+  });
   return jsonResult({ ok: true, ...result });
 }
 
@@ -3474,13 +3525,16 @@ async function callCodeDefs(
   storage: Storage,
   args: Record<string, unknown>,
   readSources?: string[],
+  redact = false,
 ): Promise<ToolCallResult> {
   if (typeof args["name"] !== "string" || args["name"].length === 0) {
     return errResult("code_def: `name` is required");
   }
   const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
   const sourceIds = readSources;
-  const result = await codeDefs(storage.engine(), args["name"], limit, sourceIds);
+  const result = await codeDefs(storage.engine(), args["name"], limit, sourceIds, codeLangArg(args), {
+    snippet: !redact,
+  });
   return jsonResult({ ok: true, ...result });
 }
 
@@ -3488,13 +3542,16 @@ async function callCodeRefs(
   storage: Storage,
   args: Record<string, unknown>,
   readSources?: string[],
+  redact = false,
 ): Promise<ToolCallResult> {
   if (typeof args["name"] !== "string" || args["name"].length === 0) {
     return errResult("code_refs: `name` is required");
   }
   const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
   const sourceIds = readSources;
-  const result = await codeRefs(storage.engine(), args["name"], limit, sourceIds);
+  const result = await codeRefs(storage.engine(), args["name"], limit, sourceIds, codeLangArg(args), {
+    snippet: !redact,
+  });
   return jsonResult({ ok: true, ...result });
 }
 
@@ -3526,6 +3583,7 @@ async function callCodeWalk(
     maxNodes,
     sourceIds,
     exact,
+    lang: codeLangArg(args),
   });
   return jsonResult({ ok: true, ...result });
 }

@@ -205,6 +205,7 @@ describe("MCP HTTP transport", () => {
       "unlink",
       "volunteer_chronicle",
       "volunteer_context",
+      "wanted_pages",
       "whoami",
     ]);
   });

@@ -197,6 +197,7 @@ to `environment:` before overriding.
 | `MEMRAIN_QUERY_CACHE_SIM` | `0.92` | Cosine floor for a hit on the semantic query-cache arm (`MEMRAIN_QUERY_CACHE_SEMANTIC`). Values outside `(0, 1]` fall back to the default. | free |
 | `MEMRAIN_QUERY_CACHE_TTL` | `3600` | Seconds a semantic query-cache entry lives. | free |
 | `MEMRAIN_RERANK_WINDOW` | `30` | How many top candidates the rerank pass sees; it may promote one from below the return cutoff. Clamped to `>= k`. Allowlisted. | free (the rerank call itself is priced under `MEMRAIN_RERANK`) |
+| `MEMRAIN_SEARCH_SNIPPET_CHARS` | `0` (off) | When `> 0`, the `search` and `query` MCP tools cut each hit's `content` to this many characters at a word boundary and mark it `truncated: true`; a page hit also gets `full: "page_get <slug>"`. `0`, unset or malformed returns hits uncut. Allowlisted. | free |
 | `MEMRAIN_RERANK_TIMEOUT_MS` | `5000` | Wall-clock limit for one rerank call; on timeout the hits come back unreranked. | free |
 | `MEMRAIN_TRAJECTORY_REGRESSION_THRESHOLD` | `0.1` | Drop in `find_trajectory` score that counts as a regression. Must be in `(0, 1)`; anything else uses the default. | free |
 | `MEMRAIN_ORPHAN_EXCLUDE_WRITERS` | built-in list | Replaces the list of `written_by` values whose pages never count as orphans. Presence decides: set to empty, every page counts. CSV. | free |

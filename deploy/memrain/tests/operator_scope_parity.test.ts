@@ -42,6 +42,7 @@ const CALLS: Array<[string, Record<string, unknown>]> = [
   ["find_trajectory", { entity_slug: ENTITY_SLUG }],
   ["find_anomalies", { sigma: 1, limit: 50 }],
   ["find_orphans", {}],
+  ["wanted_pages", {}],
   ["get_recent_salience", { limit: 100 }],
   ["entity_recall", { slug: ENTITY_SLUG }],
   ["entity_facts", { entity_slug: ENTITY_SLUG }],
