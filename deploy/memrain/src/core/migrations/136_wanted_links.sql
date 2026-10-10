@@ -12,7 +12,7 @@
 --   wanted_links.from_slug    the linking page; its delete drops the rows
 --   wanted_links.target_slug  the slugified target the link names
 --   wanted_links.surface      the reference as written, first one seen
---   wanted_links.first_seen   when the reference was first recorded
+--   wanted_links.first_seen   when the dangling link was first recorded
 --
 -- Rows are derived state: the page text stays the source of truth. Additive.
 

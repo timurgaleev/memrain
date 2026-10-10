@@ -6,6 +6,70 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-10-11
+
+### Added
+- Six ranking changes ship behind `MEMRAIN_RANK_*` flags, all off by default:
+  `METADATA_GATE` (metadata boosts only when a lexical arm voted),
+  `ENTITY_TRUTH_SOFT`, `KEYWORD_OR_RETRY` (OR keyword pass when the vector arm
+  is empty), `PAGE_FUSION` (fusion per page instead of per chunk),
+  `KEYWORD_CONFIDENCE` and `EXACT_LOOKUP`. With every flag off results and
+  cache keys are unchanged. Operators also get `meta.confidence`
+  (strong, moderate, weak, or unknown on a cache hit).
+- `memrain eval` A/B runs flip env per query, interleave the two sides,
+  record latency and report per-metric deltas with cluster sign-flip
+  p-values and Holm correction. Qrels gain dev/sealed splits, clusters and
+  `expected_top1`; a sealed run needs a preregistration and runs once.
+  `memrain eval qrels build` writes private qrels from stored eval queries.
+  docs/eval/PREREG-TEMPLATE.md describes a ranking decision.
+- Links to pages that do not exist yet are remembered and reconnected when
+  the page is created, restored or renamed; `wanted_pages` lists them.
+- A capped `links-stale` cycle phase re-extracts pages when the link extractor
+  version or the link switches change (`MEMRAIN_LINKS_STALE_MAX_PER_CYCLE`,
+  default 200, `0` off).
+- `context_pack` entity cards list up to 8 newer mentions
+  (`MEMRAIN_CONTEXT_NEWER_MENTIONS=0` turns this off).
+- `code_def`, `code_callers`, `code_refs`, `code_callees`, `code_blast` and
+  `code_flow` take `lang`; mentions carry language, kind and line range;
+  `code_callees` accepts a symbol name. A `code-graph` doctor check reports
+  code documents without definitions and stale unresolved edges.
+- `MEMRAIN_SEARCH_SNIPPET_CHARS` caps each `search`/`query` hit to that many
+  characters with a pointer to `page_get` (default `0`, unchanged).
+
+### Fixed
+- `code_blast` and `code_flow` returned nothing for class methods because
+  call edges store the callee as written; walks now match bare or qualified
+  names, stay in one language, read only live visible documents and suggest
+  names on a miss. Go `pkg.Fn()` calls and `this.repo.save()` delegations
+  become edges, and `map.get` is no longer an HTTP sink. Edges are written in
+  the document's transaction.
+- Graph reads (`graph_neighbors`, `graph_query`, `traverse_graph`,
+  `get_links`, relational recall) no longer return deleted, archived or
+  quarantined pages. Verb inference no longer types former roles or board
+  seats as employment.
+- `memrain eval gate` fails on query errors and on latency above
+  `--max-latency-x` (default 2.0); A/B receipts no longer count as the
+  nightly probe snapshot.
+- Jobs pass their abort signal to agent model calls. Daily-cap refusals that
+  clear at midnight defer the job instead of spending retries; permanent ones
+  fail it. Background mirrors are charged to the client that wrote the page,
+  under its cap.
+- `secrets audit` scans slugs and fails when a rewritten page's search mirror
+  could not be refreshed.
+- Chunks that Bedrock rejects for their content stop blocking the embed-gaps
+  phase after three attempts (migration 140); infrastructure errors no longer
+  count against a chunk.
+- JSON-RPC batches and `add_fact` items count against both rate limiters.
+- Quarantined content no longer feeds atoms, facts backfill, on-write fact
+  extraction, reflections, thin-page enrichment or drift.
+- With `MEMRAIN_OWNER_ENTITY` set, a user claim that opens with a known
+  person or company is filed on that entity.
+
+### Migrations
+- 135 `eval_snapshots.kind`, 136 `wanted_links`, 137 index on
+  `code_edges_symbol.from_symbol_qualified`, 138 index on
+  `reverse(documents.source_path)`, 140 `chunks.embed_failures`.
+
 ## [1.1.0] — 2026-10-10
 
 ### Added
