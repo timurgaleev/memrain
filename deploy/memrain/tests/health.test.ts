@@ -29,7 +29,9 @@ test("GET /health returns 200 liveness-only (no corpus stats)", async () => {
     await storage.close();
     rmSync(dir, { recursive: true, force: true });
   }
-});
+  // storage.init() runs every migration on a fresh PGLite; slow CI runners
+  // need more than the default 5 s for that.
+}, 30_000);
 
 test("probeLiveness returns 503 when the DB query exceeds the timeout", async () => {
   const hangingStorage = {
