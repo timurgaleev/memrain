@@ -44,7 +44,7 @@ afterAll(async () => {
 
 describe("classifySink", () => {
   it("classifies db / http / file_io / process_exec sinks", () => {
-    expect(classifySink("db.query")).toBe("db_call");
+    expect(classifySink("db.execute")).toBe("db_call");
     expect(classifySink("Repo::save")).toBe("db_call");
     expect(classifySink("fetch")).toBe("http_call");
     expect(classifySink("readFileSync")).toBe("file_io");

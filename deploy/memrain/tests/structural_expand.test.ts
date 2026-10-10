@@ -157,4 +157,20 @@ describe("scope and visibility on structural neighbours", () => {
       await e.query(`UPDATE documents SET deleted_at = NULL WHERE id = (SELECT document_id FROM chunks WHERE id = $1)`, [chunkB]);
     }
   });
+
+  it("walks to the caller of a method through its bare call edge, not a same-named method's caller", async () => {
+    const other = await indexCodeDocument(storage, {
+      sourcePath: "/other.ts",
+      text: ["export class Other {", "  d() { return this.c(); }", "  c() { return 2; }", "}"].join("\n"),
+    });
+    await resolveSymbolEdgesPhase(storage.engine());
+    const q = await storage.engine().query<{ id: string }>(
+      `SELECT id FROM chunks WHERE document_id = $1 AND symbol_name = 'd'`,
+      [other.documentId],
+    );
+    const chunkD = q.rows[0]!.id;
+    const out = ids(await expandAnchors(storage.engine(), [{ id: chunkC, score: 1 }], { walkDepth: 1 }));
+    expect(out.has(chunkB)).toBe(true);
+    expect(out.has(chunkD)).toBe(false);
+  });
 });

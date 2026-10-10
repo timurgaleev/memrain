@@ -24,6 +24,7 @@ import { bumpDocumentClock } from "./generation.ts";
 import { embeddingSignature } from "./embedding.ts";
 import { withRetry, BULK_RETRY_OPTS } from "./retry.ts";
 import { OperationError } from "./operation-error.ts";
+import { insertCodeEdges, type CodeEdgeInput } from "./code-edges.ts";
 import { wellFormForText, wellFormJsonbObject } from "./well-form.ts";
 import {
   importFilename,
@@ -137,6 +138,7 @@ export async function writeDocumentTransaction(
   storage: Storage,
   doc: DocumentWrite,
   chunks: readonly ChunkWrite[],
+  opts: { codeEdges?: readonly CodeEdgeInput[] } = {},
 ): Promise<IndexTxResult> {
   if (!doc.documentId || !doc.sourcePath) {
     throw new Error(
@@ -382,6 +384,12 @@ export async function writeDocumentTransaction(
       }
 
       entitiesWritten += await persistEntitiesViaTx(tx, cid, ch.entities);
+    }
+
+    // Same transaction as the chunks: a code document whose edges did not land
+    // keeps its previous chunks and mtime, so the next sweep retries it.
+    if (opts.codeEdges && opts.codeEdges.length > 0) {
+      await insertCodeEdges(tx, opts.codeEdges);
     }
   }), BULK_RETRY_OPTS);
 

@@ -44,6 +44,7 @@ import { countStaleChunkerDocs } from "../core/chunker-version.ts";
 import { checkCycleFreshness } from "../core/cycle-freshness.ts";
 import {
   checkGrammars,
+  checkCodeGraph,
   checkStaleLocks,
   checkQueueHealth,
   checkSchemaVersion,
@@ -424,6 +425,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["quarantined-pages", checkQuarantinedPages],
       ["junk-entity-hubs", checkJunkEntityHubs],
       ["code-grammars", checkGrammars],
+      ["code-graph", checkCodeGraph],
       ["connector-health", checkConnectorHealth],
       ["embed-backlog", checkEmbedBacklog],
       ["secret-exposure", checkSecretExposure],

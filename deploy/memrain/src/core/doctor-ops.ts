@@ -379,3 +379,80 @@ export async function checkEmbeddingWidth(
       : `stored embeddings are ${stored}-dim but config expects ${EMBED_DIMENSIONS} — reindex or align MEMRAIN_EMBED_DIM`,
   };
 }
+
+export interface CodeGraphThresholds {
+  /** Warn when more than this share of live code documents has no code-def. */
+  noDefRatio: number;
+  /** The ratio is only judged over at least this many code documents. */
+  minDocsForRatio: number;
+  /** Warn when an edge has waited longer than this for the resolve phase. */
+  resolveBacklogHours: number;
+}
+
+const CODE_GRAPH_DEFAULTS: CodeGraphThresholds = {
+  noDefRatio: 0.5,
+  minDocsForRatio: 20,
+  resolveBacklogHours: 24,
+};
+
+/**
+ * Code graph health. Readiness says `ready` as soon as one symbol exists, so a
+ * hollow index passes it: most code documents without a definition (the
+ * parser fell back to text windows), code chunks with no language (every
+ * language-filtered walk skips them), or edges the resolve-symbol-edges phase
+ * never reached. Warn, never fail — the graph still answers, just worse.
+ */
+export async function checkCodeGraph(
+  engine: Engine,
+  thresholds: Partial<CodeGraphThresholds> = {},
+): Promise<OpsCheckResult> {
+  const t = { ...CODE_GRAPH_DEFAULTS, ...thresholds };
+  const r = await engine.query<{
+    docs: number;
+    no_def: number;
+    no_lang: number;
+    backlog_hours: number | string | null;
+  }>(
+    `WITH code_docs AS (
+       SELECT d.id FROM documents d
+        WHERE d.frontmatter->>'kind' = 'code' AND d.deleted_at IS NULL
+     )
+     SELECT
+       (SELECT count(*)::int FROM code_docs) AS docs,
+       (SELECT count(*)::int FROM code_docs cd
+         WHERE NOT EXISTS (
+           SELECT 1 FROM chunks c
+             JOIN entity_mentions em ON em.chunk_id = c.id
+             JOIN entities e ON e.id = em.entity_id
+            WHERE c.document_id = cd.id AND e.type = 'code-def')) AS no_def,
+       (SELECT count(*)::int FROM chunks c JOIN code_docs cd ON cd.id = c.document_id
+         WHERE c.language IS NULL) AS no_lang,
+       (SELECT EXTRACT(EPOCH FROM (NOW() - MIN(e.created_at)))::float8 / 3600
+          FROM code_edges_symbol e
+          JOIN chunks c ON c.id = e.from_chunk_id
+          JOIN code_docs cd ON cd.id = c.document_id
+         WHERE c.edges_backfilled_at IS NULL) AS backlog_hours`,
+  );
+  const row = r.rows[0];
+  const docs = row?.docs ?? 0;
+  if (docs === 0) return { ok: true, status: "ok", detail: "no code indexed" };
+  const noDef = row?.no_def ?? 0;
+  const noLang = row?.no_lang ?? 0;
+  const backlog = row?.backlog_hours == null ? null : Number(row.backlog_hours);
+  const problems: string[] = [];
+  if (docs >= t.minDocsForRatio && noDef / docs > t.noDefRatio) {
+    problems.push(`${noDef}/${docs} code document(s) without a definition — check \`code-grammars\``);
+  }
+  if (noLang > 0) {
+    problems.push(`${noLang} code chunk(s) with no language — reindex the code sources`);
+  }
+  if (backlog !== null && backlog > t.resolveBacklogHours) {
+    problems.push(
+      `call edges awaiting resolution for ${Math.floor(backlog)}h — is the resolve-symbol-edges cycle phase running?`,
+    );
+  }
+  if (problems.length === 0) {
+    return { ok: true, status: "ok", detail: `${docs} code document(s); graph labelled and resolved` };
+  }
+  return { ok: true, status: "warn", detail: problems.join("; ") };
+}

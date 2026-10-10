@@ -777,10 +777,11 @@
     "call": "code_def {\"name\":\"processPayment\"}",
     "sql": [
       {
-        "text": "SELECT em.surface_form, em.chunk_id, c.document_id, d.source_path FROM entity_mentions em JOIN chunks c ON c.id = em.chunk_id JOIN documents d ON d.id = c.document_id WHERE em.entity_id = $1 AND d.deleted_at IS NULL ORDER BY d.source_path, c.start_line NULLS FIRST LIMIT $2",
+        "text": "SELECT em.surface_form, em.chunk_id, c.document_id, d.source_path, c.language, c.symbol_type AS kind, c.start_line, c.end_line, left(c.content, $3) AS snippet FROM entity_mentions em JOIN chunks c ON c.id = em.chunk_id JOIN documents d ON d.id = c.document_id WHERE em.entity_id = $1 AND d.deleted_at IS NULL ORDER BY d.source_path, c.start_line NULLS FIRST LIMIT $2",
         "params": [
           "ent_code-def_processpayment",
-          200
+          200,
+          500
         ]
       }
     ],
@@ -788,7 +789,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-def\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\"\n    },\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\"\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-def\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardAAA\"\n    },\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardBBB\"\n    }\n  ]\n}"
         }
       ]
     }
@@ -797,10 +798,11 @@
     "call": "code_refs {\"name\":\"processPayment\"}",
     "sql": [
       {
-        "text": "SELECT em.surface_form, em.chunk_id, c.document_id, d.source_path FROM entity_mentions em JOIN chunks c ON c.id = em.chunk_id JOIN documents d ON d.id = c.document_id WHERE em.entity_id = $1 AND d.deleted_at IS NULL ORDER BY d.source_path, c.start_line NULLS FIRST LIMIT $2",
+        "text": "SELECT em.surface_form, em.chunk_id, c.document_id, d.source_path, c.language, c.symbol_type AS kind, c.start_line, c.end_line, left(c.content, $3) AS snippet FROM entity_mentions em JOIN chunks c ON c.id = em.chunk_id JOIN documents d ON d.id = c.document_id WHERE em.entity_id = $1 AND d.deleted_at IS NULL ORDER BY d.source_path, c.start_line NULLS FIRST LIMIT $2",
         "params": [
           "ent_code-ref_processpayment",
-          200
+          200,
+          500
         ]
       }
     ],
@@ -808,7 +810,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-ref\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\"\n    },\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\"\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-ref\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardAAA\"\n    },\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardBBB\"\n    }\n  ]\n}"
         }
       ]
     }
@@ -817,10 +819,11 @@
     "call": "code_callers {\"name\":\"processPayment\"}",
     "sql": [
       {
-        "text": "SELECT em.surface_form, em.chunk_id, c.document_id, d.source_path FROM entity_mentions em JOIN chunks c ON c.id = em.chunk_id JOIN documents d ON d.id = c.document_id WHERE em.entity_id = $1 AND d.deleted_at IS NULL ORDER BY d.source_path, c.start_line NULLS FIRST LIMIT $2",
+        "text": "SELECT em.surface_form, em.chunk_id, c.document_id, d.source_path, c.language, c.symbol_type AS kind, c.start_line, c.end_line, left(c.content, $3) AS snippet FROM entity_mentions em JOIN chunks c ON c.id = em.chunk_id JOIN documents d ON d.id = c.document_id WHERE em.entity_id = $1 AND d.deleted_at IS NULL ORDER BY d.source_path, c.start_line NULLS FIRST LIMIT $2",
         "params": [
           "ent_code-caller_processpayment",
-          200
+          200,
+          500
         ]
       }
     ],
@@ -828,7 +831,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-caller\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"callerAAA\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\"\n    },\n    {\n      \"surface_form\": \"callerBBB\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\"\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-caller\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"callerAAA\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardAAA\"\n    },\n    {\n      \"surface_form\": \"callerBBB\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardBBB\"\n    }\n  ]\n}"
         }
       ]
     }
@@ -844,10 +847,11 @@
         ]
       },
       {
-        "text": "SELECT em.surface_form, em.chunk_id, c.document_id, d.source_path FROM entity_mentions em JOIN chunks c ON c.id = em.chunk_id JOIN documents d ON d.id = c.document_id WHERE em.entity_id = $1 AND d.deleted_at IS NULL ORDER BY d.source_path, c.start_line NULLS FIRST LIMIT $2",
+        "text": "SELECT em.surface_form, em.chunk_id, c.document_id, d.source_path, c.language, c.symbol_type AS kind, c.start_line, c.end_line, left(c.content, $3) AS snippet FROM entity_mentions em JOIN chunks c ON c.id = em.chunk_id JOIN documents d ON d.id = c.document_id WHERE em.entity_id = $1 AND d.deleted_at IS NULL ORDER BY d.source_path, c.start_line NULLS FIRST LIMIT $2",
         "params": [
           "ent_code-callee_processpayment",
-          200
+          200,
+          500
         ]
       }
     ],
@@ -855,7 +859,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-callee\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"chargeCardAAA\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\"\n    },\n    {\n      \"surface_form\": \"chargeCardBBB\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\"\n    }\n  ],\n  \"resolved_symbol\": \"processPayment\"\n}"
+          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-callee\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"chargeCardAAA\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardAAA\"\n    },\n    {\n      \"surface_form\": \"chargeCardBBB\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardBBB\"\n    }\n  ],\n  \"resolved_symbol\": \"processPayment\"\n}"
         }
       ]
     }
@@ -864,24 +868,39 @@
     "call": "code_flow {\"symbol\":\"processPayment\",\"exact\":true}",
     "sql": [
       {
-        "text": "SELECT DISTINCT e.to_symbol_qualified AS next_symbol, e.from_chunk_id AS chunk_id FROM code_edges_symbol e WHERE e.from_symbol_qualified = $1 LIMIT $2",
+        "text": "SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.id",
         "params": [
-          "processPayment",
-          200
+          [
+            "processPayment"
+          ]
         ]
       },
       {
-        "text": "SELECT DISTINCT e.to_symbol_qualified AS next_symbol, e.from_chunk_id AS chunk_id FROM code_edges_symbol e WHERE e.from_symbol_qualified = $1 LIMIT $2",
+        "text": "SELECT DISTINCT e.from_symbol_qualified AS parent, e.to_symbol_qualified AS target, e.from_chunk_id AS chunk_id, c.language, rc.id AS resolved_chunk_id, rc.symbol_name_qualified AS resolved_symbol FROM code_edges_symbol e JOIN chunks c ON c.id = e.from_chunk_id JOIN documents d ON d.id = c.document_id LEFT JOIN chunks rc ON rc.id = e.edge_metadata->>'resolved_chunk_id' WHERE e.from_symbol_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY e.from_chunk_id, e.to_symbol_qualified LIMIT $2",
         "params": [
-          "chargeCardAAA",
-          198
+          [
+            "processPayment"
+          ],
+          400
         ]
       },
       {
-        "text": "SELECT DISTINCT e.to_symbol_qualified AS next_symbol, e.from_chunk_id AS chunk_id FROM code_edges_symbol e WHERE e.from_symbol_qualified = $1 LIMIT $2",
+        "text": "SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name = ANY($1::text[]) AND c.symbol_name_qualified IS NOT NULL AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.id LIMIT 5000",
         "params": [
-          "chargeCardBBB",
-          198
+          [
+            "chargeCardAAA",
+            "chargeCardBBB"
+          ]
+        ]
+      },
+      {
+        "text": "SELECT DISTINCT e.from_symbol_qualified AS parent, e.to_symbol_qualified AS target, e.from_chunk_id AS chunk_id, c.language, rc.id AS resolved_chunk_id, rc.symbol_name_qualified AS resolved_symbol FROM code_edges_symbol e JOIN chunks c ON c.id = e.from_chunk_id JOIN documents d ON d.id = c.document_id LEFT JOIN chunks rc ON rc.id = e.edge_metadata->>'resolved_chunk_id' WHERE e.from_symbol_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY e.from_chunk_id, e.to_symbol_qualified LIMIT $2",
+        "params": [
+          [
+            "chargeCardAAA",
+            "chargeCardBBB"
+          ],
+          792
         ]
       }
     ],
@@ -889,7 +908,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"result\": \"ok\",\n  \"depth_groups\": [\n    {\n      \"depth\": 1,\n      \"nodes\": [\n        {\n          \"symbol\": \"chargeCardAAA\",\n          \"chunk_id\": \"ch-a-pay\"\n        },\n        {\n          \"symbol\": \"chargeCardBBB\",\n          \"chunk_id\": \"ch-b-pay\"\n        }\n      ],\n      \"confidence\": 0.769230\n    }\n  ],\n  \"cycles_detected\": false,\n  \"truncation\": \"none\"\n}"
+          "text": "{\n  \"ok\": true,\n  \"result\": \"ok\",\n  \"depth_groups\": [\n    {\n      \"depth\": 1,\n      \"nodes\": [\n        {\n          \"symbol\": \"chargeCardAAA\",\n          \"chunk_id\": \"ch-a-pay\",\n          \"resolved\": false\n        },\n        {\n          \"symbol\": \"chargeCardBBB\",\n          \"chunk_id\": \"ch-b-pay\",\n          \"resolved\": false\n        }\n      ],\n      \"confidence\": 0.769230\n    }\n  ],\n  \"cycles_detected\": false,\n  \"truncation\": \"none\"\n}"
         }
       ]
     }
@@ -898,24 +917,47 @@
     "call": "code_blast {\"symbol\":\"processPayment\",\"exact\":true}",
     "sql": [
       {
-        "text": "SELECT DISTINCT e.from_symbol_qualified AS next_symbol, e.from_chunk_id AS chunk_id FROM code_edges_symbol e WHERE e.to_symbol_qualified = $1 AND e.from_symbol_qualified IS NOT NULL LIMIT $2",
+        "text": "SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.id",
         "params": [
-          "processPayment",
-          200
+          [
+            "processPayment"
+          ]
         ]
       },
       {
-        "text": "SELECT DISTINCT e.from_symbol_qualified AS next_symbol, e.from_chunk_id AS chunk_id FROM code_edges_symbol e WHERE e.to_symbol_qualified = $1 AND e.from_symbol_qualified IS NOT NULL LIMIT $2",
+        "text": "SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.id",
         "params": [
-          "callerAAA",
-          198
+          [
+            "processPayment"
+          ]
         ]
       },
       {
-        "text": "SELECT DISTINCT e.from_symbol_qualified AS next_symbol, e.from_chunk_id AS chunk_id FROM code_edges_symbol e WHERE e.to_symbol_qualified = $1 AND e.from_symbol_qualified IS NOT NULL LIMIT $2",
+        "text": "SELECT DISTINCT e.to_symbol_qualified AS target, e.from_symbol_qualified AS next_symbol, e.from_chunk_id AS chunk_id, e.edge_metadata FROM code_edges_symbol e JOIN chunks c ON c.id = e.from_chunk_id JOIN documents d ON d.id = c.document_id WHERE e.to_symbol_qualified = ANY($1::text[]) AND e.from_symbol_qualified IS NOT NULL AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY e.from_chunk_id, e.to_symbol_qualified LIMIT $2",
         "params": [
-          "callerBBB",
-          198
+          [
+            "processPayment"
+          ],
+          400
+        ]
+      },
+      {
+        "text": "SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.id",
+        "params": [
+          [
+            "callerAAA",
+            "callerBBB"
+          ]
+        ]
+      },
+      {
+        "text": "SELECT DISTINCT e.to_symbol_qualified AS target, e.from_symbol_qualified AS next_symbol, e.from_chunk_id AS chunk_id, e.edge_metadata FROM code_edges_symbol e JOIN chunks c ON c.id = e.from_chunk_id JOIN documents d ON d.id = c.document_id WHERE e.to_symbol_qualified = ANY($1::text[]) AND e.from_symbol_qualified IS NOT NULL AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY e.from_chunk_id, e.to_symbol_qualified LIMIT $2",
+        "params": [
+          [
+            "callerAAA",
+            "callerBBB"
+          ],
+          792
         ]
       }
     ],
@@ -923,7 +965,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"result\": \"ok\",\n  \"depth_groups\": [\n    {\n      \"depth\": 1,\n      \"nodes\": [\n        {\n          \"symbol\": \"callerAAA\",\n          \"chunk_id\": \"ch-a-pay\"\n        },\n        {\n          \"symbol\": \"callerBBB\",\n          \"chunk_id\": \"ch-b-pay\"\n        }\n      ],\n      \"confidence\": 0.769230\n    }\n  ],\n  \"cycles_detected\": false,\n  \"truncation\": \"none\"\n}"
+          "text": "{\n  \"ok\": true,\n  \"result\": \"ok\",\n  \"depth_groups\": [\n    {\n      \"depth\": 1,\n      \"nodes\": [\n        {\n          \"symbol\": \"callerAAA\",\n          \"chunk_id\": \"ch-a-pay\",\n          \"def_chunk_id\": \"ch-a-pay\",\n          \"resolved\": false\n        },\n        {\n          \"symbol\": \"callerBBB\",\n          \"chunk_id\": \"ch-b-pay\",\n          \"def_chunk_id\": \"ch-b-pay\",\n          \"resolved\": false\n        }\n      ],\n      \"confidence\": 0.769230\n    }\n  ],\n  \"cycles_detected\": false,\n  \"truncation\": \"none\"\n}"
         }
       ]
     }

@@ -47,10 +47,10 @@ const CALL_NODE_TYPES: Record<CodeLanguage, ReadonlySet<string>> = {
   typescript: new Set(["call_expression", "new_expression"]),
   tsx: new Set(["call_expression", "new_expression"]),
   python: new Set(["call"]),
-  // Go: `foo()` exposes the callee via the `function` field. Package-qualified
-  // calls (`pkg.Fn()`, a selector_expression) resolve to null and are skipped —
-  // a bare-name graph would mis-key them. bash commands and SQL calls are too
-  // noisy / not name-graph edges, so they contribute no call entities.
+  // Go: `foo()` exposes the callee via the `function` field; a package or
+  // receiver call (`pkg.Fn()`, `s.repo.Save()`) is a selector_expression keyed
+  // by its field name, like a TS member call. bash commands and SQL calls are
+  // too noisy / not name-graph edges, so they contribute no call entities.
   go: new Set(["call_expression"]),
   bash: new Set<string>(),
   sql: new Set<string>(),
@@ -92,6 +92,13 @@ function surfaceFor(file: string, line: number, enclosing: string | null): strin
 /** Node types that continue a member-access chain, per grammar family. */
 const MEMBER_CHAIN_TYPES = new Set(["member_expression", "subscript_expression"]);
 const PYTHON_MEMBER_CHAIN_TYPES = new Set([...MEMBER_CHAIN_TYPES, "attribute"]);
+const GO_MEMBER_CHAIN_TYPES = new Set(["selector_expression"]);
+
+interface CalleeName {
+  name: string;
+  /** True for `obj.name()` / `pkg.Name()` — the call goes through a receiver. */
+  member: boolean;
+}
 
 /**
  * Extract the bare callee name from a call expression node. Handles:
@@ -107,8 +114,13 @@ const PYTHON_MEMBER_CHAIN_TYPES = new Set([...MEMBER_CHAIN_TYPES, "attribute"]);
  *   foo()                  → "foo"
  *   obj.method()           → "method"
  *   obj.cls.bar()          → "bar"
+ *
+ * Go:
+ *   Fn()                   → "Fn"
+ *   pkg.Fn()               → "Fn"
+ *   s.repo.Save()          → "Save"
  */
-function calleeNameFromCallNode(call: TSNode, language: CodeLanguage): string | null {
+function calleeNameFromCallNode(call: TSNode, language: CodeLanguage): CalleeName | null {
   // TS / TSX: `call_expression` / `new_expression` expose `function` field.
   // Python: `call` exposes `function` field too.
   let target: TSNode | null =
@@ -125,19 +137,30 @@ function calleeNameFromCallNode(call: TSNode, language: CodeLanguage): string | 
   // types is fixed per language, so resolve it once instead of re-testing the
   // language on every hop.
   const chainTypes =
-    language === "python" ? PYTHON_MEMBER_CHAIN_TYPES : MEMBER_CHAIN_TYPES;
+    language === "python"
+      ? PYTHON_MEMBER_CHAIN_TYPES
+      : language === "go"
+        ? GO_MEMBER_CHAIN_TYPES
+        : MEMBER_CHAIN_TYPES;
+  let member = false;
   while (target && chainTypes.has(target.type)) {
     const right: TSNode | null =
       target.childForFieldName("property") ??
       target.childForFieldName("attribute") ??
+      target.childForFieldName("field") ??
       target.namedChild(target.namedChildCount - 1);
     if (!right) break;
     target = right;
+    member = true;
   }
 
   if (!target) return null;
-  if (target.type === "identifier" || target.type === "property_identifier") {
-    return target.text;
+  if (
+    target.type === "identifier" ||
+    target.type === "property_identifier" ||
+    target.type === "field_identifier"
+  ) {
+    return { name: target.text, member };
   }
   return null;
 }
@@ -302,10 +325,13 @@ export async function extractCodeEntities(
       const lineInFile = symbol.startLine + node.startPosition.row;
 
       if (callTypes.has(node.type)) {
-        const callee = calleeNameFromCallNode(node, language);
-        if (callee) {
-          // Skip self-calls (recursion would generate a noise edge to itself).
-          if (callee !== symbol.name) {
+        const call = calleeNameFromCallNode(node, language);
+        if (call) {
+          const callee = call.name;
+          // Skip a bare recursive call (a noise edge to itself). A member call
+          // with the same name — `this.repo.save()` inside `save` — is a call
+          // to ANOTHER object's method and is kept.
+          if (call.member || callee !== symbol.name) {
             push({
               type: "code-caller",
               name: callee,

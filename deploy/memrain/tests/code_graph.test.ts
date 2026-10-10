@@ -80,6 +80,7 @@ describe("codeCallees", () => {
     expect(r.count).toBe(0);
   });
   it("throws on a malformed target", async () => {
-    await expect(codeCallees(storage.engine(), "no-line-here")).rejects.toThrow();
+    await expect(codeCallees(storage.engine(), "not a symbol")).rejects.toThrow();
+    await expect(codeCallees(storage.engine(), "   ")).rejects.toThrow();
   });
 });

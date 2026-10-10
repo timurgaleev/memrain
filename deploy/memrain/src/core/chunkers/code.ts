@@ -31,8 +31,12 @@ import { getParser, withParsedTree, type CodeLanguage } from "./parsers.ts";
  * v2: symbol-less files (re-export barrels, DML-only SQL) now emit windowed
  * fallback chunks instead of a zero-chunk document — bump re-chunks the code
  * corpus so existing zero-chunk docs gain their chunks.
+ *
+ * v3: call edges now include Go `pkg.Fn()` / receiver calls and member calls
+ * that share the enclosing symbol's name (`this.repo.save()` inside `save`);
+ * the bump re-extracts the edges of every code document.
  */
-export const CODE_CHUNKER_VERSION = 2;
+export const CODE_CHUNKER_VERSION = 3;
 import type { Node as TSNode } from "web-tree-sitter";
 
 export type SymbolKind =

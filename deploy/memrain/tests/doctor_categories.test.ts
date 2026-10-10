@@ -37,6 +37,7 @@ describe("doctor categorize", () => {
       "chronicle-projection-health",
       "chunker-version-lag",
       "code-grammars",
+      "code-graph",
       "config",
       "config-yml",
       "connector-health",

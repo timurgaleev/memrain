@@ -26,11 +26,7 @@ import {
 } from "./chunkers/parsers.ts";
 import { extractCodeEntities } from "./code-entities.ts";
 import { EMPTY_SOURCE_KEY } from "./empty-source.ts";
-import {
-  qualifiedSymbolName,
-  writeCodeEdgesForDocument,
-  type CodeEdgeInput,
-} from "./code-edges.ts";
+import { qualifiedSymbolName, type CodeEdgeInput } from "./code-edges.ts";
 import type { ExtractedEntity } from "./entities.ts";
 import {
   writeDocumentTransaction,
@@ -292,20 +288,8 @@ export async function indexCodeDocument(
       ...(input.expectOwner !== undefined ? { expectOwner: input.expectOwner } : {}),
     },
     chunkWrites,
+    { codeEdges },
   );
-
-  // Persist call edges (best-effort — the chunks/graph already committed; a
-  // failure here just leaves edges for the next reindex/cycle to rebuild).
-  if (codeEdges.length > 0) {
-    try {
-      await writeCodeEdgesForDocument(storage, id, codeEdges);
-    } catch (e) {
-      console.error(
-        `[code-edges] failed to write edges for ${input.sourcePath}:`,
-        e instanceof Error ? e.message : e,
-      );
-    }
-  }
 
   return {
     ...result,

@@ -12,7 +12,8 @@
  *
  * memrain's edge model is SYMBOL-anchored (no resolved `to_chunk_id` on the edge
  * row), so neighbors resolve differently per direction:
- *   - callers: `to_symbol_qualified = sym` → the caller IS `from_chunk_id`.
+ *   - callers: `to_symbol_qualified` is sym or its bare last segment → the
+ *     caller IS `from_chunk_id`.
  *   - callees: `from_symbol_qualified = sym` → the callee is a symbol name,
  *     resolved to its definition chunk via `chunks.symbol_name_qualified`.
  *
@@ -103,7 +104,7 @@ interface ParentNeighbor {
  * (stamped from the chunk's document) and def chunks on `chunks.source_id`, so
  * out-of-scope rows never consume the per-hop cap; the caller's `scopeChunks`
  * pass against `documents.source_id` stays the final check.
- *   - callers: `to_symbol_qualified ∈ frontier` → the caller IS `from_chunk_id`.
+ *   - callers: `to_symbol_qualified` is a frontier symbol or its bare name → the caller IS `from_chunk_id`.
  *   - callees (resolved): prefer the resolve-phase `resolved_chunk_id`.
  *   - callees (unresolved): join the callee name to a def chunk, keeping parent.
  */
@@ -119,15 +120,41 @@ async function frontierNeighbors(
   // operator follows it.
   const edgeScope = andSourceScope("e.source_id", sources, params);
 
-  const callers = await engine.query<{ parent: string; chunk_id: string }>(
-    `SELECT DISTINCT e.to_symbol_qualified AS parent, e.from_chunk_id AS chunk_id
+  // A call edge stores the callee as written (`this.c()` → bare `c`), so the
+  // callers read matches each frontier symbol by its qualified name and its
+  // last segment; an edge resolved to a definition counts only for that one.
+  const bareOf = (s: string): string => s.split("::").pop() ?? s;
+  const callerParams: unknown[] = [Array.from(new Set(symbols.flatMap((s) => [s, bareOf(s)])))];
+  const callerScope = andSourceScope("e.source_id", sources, callerParams);
+  const callerRows = await engine.query<{ target: string; chunk_id: string; resolved: string | null }>(
+    `SELECT DISTINCT e.to_symbol_qualified AS target, e.from_chunk_id AS chunk_id,
+            e.edge_metadata->>'resolved_chunk_id' AS resolved
        FROM code_edges_symbol e
       WHERE e.to_symbol_qualified = ANY($1::text[])
         AND e.from_symbol_qualified IS NOT NULL
-        AND e.from_chunk_id IS NOT NULL${edgeScope}
+        AND e.from_chunk_id IS NOT NULL${callerScope}
       LIMIT ${cap}`,
-    params,
+    callerParams,
   );
+  const defs = await engine.query<{ id: string; symbol_name_qualified: string }>(
+    `SELECT id, symbol_name_qualified FROM chunks WHERE symbol_name_qualified = ANY($1::text[])`,
+    [symbols],
+  );
+  const defIds = new Map<string, Set<string>>();
+  for (const d of defs.rows) {
+    const set = defIds.get(d.symbol_name_qualified) ?? new Set<string>();
+    set.add(d.id);
+    defIds.set(d.symbol_name_qualified, set);
+  }
+  const callers: { parent: string; chunk_id: string }[] = [];
+  for (const parent of symbols) {
+    const own = defIds.get(parent);
+    for (const r of callerRows.rows) {
+      if (r.target !== parent && r.target !== bareOf(parent)) continue;
+      if (r.resolved !== null && own !== undefined && !own.has(r.resolved)) continue;
+      callers.push({ parent, chunk_id: r.chunk_id });
+    }
+  }
   const calleesResolved = await engine.query<{ parent: string; chunk_id: string }>(
     `SELECT DISTINCT e.from_symbol_qualified AS parent,
             e.edge_metadata->>'resolved_chunk_id' AS chunk_id
@@ -156,7 +183,7 @@ async function frontierNeighbors(
   );
 
   const out: ParentNeighbor[] = [];
-  for (const r of callers.rows) if (r.chunk_id) out.push({ parent: r.parent, chunkId: r.chunk_id });
+  for (const r of callers) if (r.chunk_id) out.push({ parent: r.parent, chunkId: r.chunk_id });
   for (const r of calleesResolved.rows) if (r.chunk_id) out.push({ parent: r.parent, chunkId: r.chunk_id });
   for (const r of calleesUnresolved.rows) if (r.chunk_id) out.push({ parent: r.parent, chunkId: r.chunk_id });
   return out;
