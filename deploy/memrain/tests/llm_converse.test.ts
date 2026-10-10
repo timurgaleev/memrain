@@ -116,6 +116,32 @@ describe("converseTurn", () => {
     expect(rows.rows[0]!.spend_cents).toBeCloseTo(200, 6);
   });
 
+  it("hands the caller's abort signal to the SDK", async () => {
+    const opts: unknown[] = [];
+    const client = {
+      send: mock(async (_cmd: unknown, o: unknown) => {
+        opts.push(o);
+        return {
+          output: { message: { role: "assistant", content: [{ text: "x" }] } },
+          stopReason: "end_turn",
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      }),
+    } as unknown as BedrockRuntimeClient;
+    const ctl = new AbortController();
+    await converseTurn({
+      system: "s",
+      messages: [{ role: "user", content: [{ text: "hi" }] }],
+      tools: [],
+      maxTokens: 16,
+      operation: "agent",
+      modelId: HAIKU,
+      client,
+      signal: ctl.signal,
+    });
+    expect((opts[0] as { abortSignal?: AbortSignal }).abortSignal).toBe(ctl.signal);
+  });
+
   it("passes every stop reason through unchanged", async () => {
     for (const reason of ["max_tokens", "guardrail_intervened", "content_filtered", "end_turn"]) {
       const { client } = fakeClient({

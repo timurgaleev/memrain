@@ -46,6 +46,8 @@ export interface ConverseTurnInput {
   region?: string;
   /** Transport seam: exercise the real request shape without a network. */
   client?: BedrockRuntimeClient;
+  /** Aborts the request when the job it runs for is abandoned. */
+  signal?: AbortSignal;
 }
 
 export interface ConverseTurnResult {
@@ -113,7 +115,10 @@ export async function converseTurn(input: ConverseTurnInput): Promise<ConverseTu
             ...(tools.length > 0 ? { toolConfig: { tools } } : {}),
             ...generationFields(modelId, input.maxTokens, 0),
           }),
-          { requestTimeout: chatTimeoutMs(reasoningTimeoutMs(), input.maxTokens) },
+          {
+            requestTimeout: chatTimeoutMs(reasoningTimeoutMs(), input.maxTokens),
+            ...(input.signal ? { abortSignal: input.signal } : {}),
+          },
         ),
       );
       const usage: ReportedUsage = {

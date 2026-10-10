@@ -45,9 +45,10 @@ export type RemediationSeverity = "critical" | "high" | "medium" | "low";
 /**
  * One structured fix derived from a doctor check.
  *
- *   id             — content-stable identifier. Reused as the durable job id so
- *                    a repeated `--remediate` is idempotent (ON CONFLICT DO
- *                    NOTHING).
+ *   id             — content-stable identifier for the UTC day. Reused as the
+ *                    durable job id so a repeated `--remediate` the same day
+ *                    is idempotent; a job that failed or was cancelled is
+ *                    revived, and the next day mints a fresh id.
  *   check          — the originating doctor check name.
  *   status         — remediable | human_only | blocked.
  *   severity       — ordering + operator UX.
@@ -101,6 +102,8 @@ export interface RemediationInput {
   cycleStale?: boolean;
   /** Cycle phase to re-run for a stale cycle. Defaults to "embed-stale". */
   cyclePhase?: string;
+  /** Clock for the action ids' UTC day (tests). Defaults to now. */
+  now?: Date;
 }
 
 /** Read-only plan envelope behind `--remediation-plan`. */
@@ -118,7 +121,8 @@ export interface RemediationPlan {
 export interface SubmittedAction {
   id: string;
   check: string;
-  status: "submitted" | "dry_run" | "skipped_budget" | "duplicate";
+  /** `revived`: a failed or cancelled job under the same id was reset to run again. */
+  status: "submitted" | "revived" | "dry_run" | "skipped_budget" | "duplicate";
   est_usd_cost: number;
 }
 
@@ -143,10 +147,15 @@ function shortHash(input: string): string {
   return createHash("sha256").update(input).digest("hex").slice(0, 12);
 }
 
-/** Content-stable action id (also used as the durable job id for idempotency). */
-function actionId(action: string, payload: Record<string, unknown>): string {
+/**
+ * Content-stable action id for one UTC day (also the durable job id). The day
+ * keeps a fix that succeeded from blocking the same fix when it is needed
+ * again tomorrow.
+ */
+function actionId(action: string, payload: Record<string, unknown>, now: Date): string {
   const canonical = JSON.stringify(payload, Object.keys(payload).sort());
-  return `remediation:${action}:${shortHash(`${action}:${canonical}`)}`;
+  const day = now.toISOString().slice(0, 10);
+  return `remediation:${action}:${shortHash(`${action}:${canonical}`)}:${day}`;
 }
 
 /**
@@ -185,6 +194,7 @@ export function classifyRemediation(input: RemediationInput): RemediationAction[
   const failing = (name: string): boolean => byName.get(name)?.ok === false;
 
   const rootFailing = failing("config") || failing("pglite");
+  const now = input.now ?? new Date();
   const actions: RemediationAction[] = [];
 
   // Root causes — never auto-remediable.
@@ -255,7 +265,7 @@ export function classifyRemediation(input: RemediationInput): RemediationAction[
     const payload = { action: "reembed-source", source_id: src.source_id };
     const blocked = rootFailing;
     actions.push({
-      id: actionId("reembed-source", { source_id: src.source_id }),
+      id: actionId("reembed-source", { source_id: src.source_id }, now),
       check: "per-source-embed-coverage",
       status: blocked ? "blocked" : "remediable",
       severity: "high",
@@ -279,7 +289,7 @@ export function classifyRemediation(input: RemediationInput): RemediationAction[
     const payload = { action: "cycle-phase", phase };
     const blocked = rootFailing;
     actions.push({
-      id: actionId("cycle-phase", { phase }),
+      id: actionId("cycle-phase", { phase }, now),
       check: "cycle-freshness",
       status: blocked ? "blocked" : "remediable",
       severity: "medium",
@@ -347,8 +357,9 @@ export interface AutoFixOptions {
  *   - a per-run USD budget cap (stops before the first action that would
  *     exceed it; later actions are skipped_budget),
  *   - a maxJobs cap,
- *   - idempotency (the action id is the job id → a repeat run dedups via the
- *     queue's ON CONFLICT DO NOTHING; a pre-existing row reports `duplicate`).
+ *   - idempotency (the action id is the job id → a repeat run the same day
+ *     dedups; a pending, running or succeeded row reports `duplicate`, a
+ *     failed or cancelled one is reset to run again and reports `revived`).
  *
  * Named `autoFixDryViolations` for the doctor's safe-autofix
  * surface: "dry" == the dry, deterministic fixes (no LLM judgement), and the
@@ -389,20 +400,16 @@ export async function autoFixDryViolations(
       enqueued++;
       continue;
     }
-    const row = await queue.enqueue({
+    const { outcome } = await queue.enqueueOrRevive({
       kind: REMEDIATION_JOB_KIND,
       id: a.id,
       payload: { ...(a.payload ?? {}), check: a.check },
       priority: a.severity === "critical" || a.severity === "high" ? 3 : 5,
     });
-    // enqueue is idempotent: a returned row whose id matches but was created
-    // on a previous run is a duplicate. We can't cheaply tell "created now" vs
-    // "already existed" from the row alone, so treat a non-pending status as a
-    // clear duplicate; a pending row minted this run counts as submitted.
     const status: SubmittedAction["status"] =
-      row.status === "pending" && row.retryCount === 0 ? "submitted" : "duplicate";
+      outcome === "created" ? "submitted" : outcome === "revived" ? "revived" : "duplicate";
     submitted.push({ id: a.id, check: a.check, status, est_usd_cost: a.est_usd_cost });
-    if (status === "submitted") {
+    if (status !== "duplicate") {
       spent += a.est_usd_cost;
       enqueued++;
     }
@@ -413,7 +420,7 @@ export async function autoFixDryViolations(
     max_usd: maxUsd,
     submitted,
     submitted_count: submitted.filter(
-      (s) => s.status === "submitted" || s.status === "dry_run",
+      (s) => s.status === "submitted" || s.status === "revived" || s.status === "dry_run",
     ).length,
     spent_usd: Number(spent.toFixed(4)),
   };

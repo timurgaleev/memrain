@@ -17,12 +17,13 @@
  * deletes an existing one, whatever the signature-change env knob says. A run
  * that had work, embedded nothing and still leaves chunks unembedded throws, so
  * the job retries or dead-letters instead of reporting a success that fixed
- * nothing, and so does a pin that owns no live document.
+ * nothing. A pin that owns no live document, a payload missing its target and
+ * a missing runner fail at once: no retry can change them.
  *
  * To activate in the live worker, call `registerRemediationHandlers(storage)`
  * once at worker startup (alongside `new Worker(...)`).
  */
-import type { JobHandler } from "./types.ts";
+import { type JobHandler, UnrecoverableJobError } from "./types.ts";
 import type { Storage } from "../storage.ts";
 import type { Engine } from "../engine/interface.ts";
 import { registerHandler } from "./handlers.ts";
@@ -50,10 +51,10 @@ export function makeRemediationHandler(deps: RemediationDeps = {}): JobHandler {
       case "reembed-source": {
         const sourceId = payload["source_id"];
         if (typeof sourceId !== "string" || sourceId.length === 0) {
-          throw new Error("remediation reembed-source: missing source_id");
+          throw new UnrecoverableJobError("remediation reembed-source: missing source_id");
         }
         if (!deps.reembedSource) {
-          throw new Error(
+          throw new UnrecoverableJobError(
             "remediation reembed-source: no runner (register the handler with storage)",
           );
         }
@@ -77,14 +78,14 @@ export function makeRemediationHandler(deps: RemediationDeps = {}): JobHandler {
       case "cycle-phase": {
         const phase = typeof payload["phase"] === "string" ? payload["phase"] : "";
         if (phase.length === 0) {
-          throw new Error("remediation cycle-phase: missing phase");
+          throw new UnrecoverableJobError("remediation cycle-phase: missing phase");
         }
         const run = deps.runCyclePhase ?? defaultRunCyclePhase;
         const out = await run(phase);
         return { action, phase, ...(out ?? {}) };
       }
       default:
-        throw new Error(`remediation: unknown action '${action}'`);
+        throw new UnrecoverableJobError(`remediation: unknown action '${action}'`);
     }
   };
 }
@@ -117,7 +118,7 @@ function makeBackfillReembed(
       [sourceId],
     );
     if (Number(owned.rows[0]?.n ?? 0) === 0) {
-      throw new Error(`remediation reembed-source: no live documents for source ${sourceId}`);
+      throw new UnrecoverableJobError(`remediation reembed-source: no live documents for source ${sourceId}`);
     }
     const r = await runEmbedBackfill(engine, {
       sourceId,
@@ -154,7 +155,7 @@ async function defaultRunCyclePhase(
   const mod = (await import("../../commands/cycle.ts")) as Record<string, unknown>;
   const fn = mod["runCycle"];
   if (typeof fn !== "function") {
-    throw new TypeError(
+    throw new UnrecoverableJobError(
       "remediation cycle-phase: no cycle runner available (inject deps.runCyclePhase)",
     );
   }

@@ -3,7 +3,9 @@
  *
  * Subcommands:
  *   list       — print rows (filterable by --status / --kind, capped by --limit)
- *   stats      — print counts grouped by status
+ *   stats [--by-kind]
+ *              — print counts grouped by status; --by-kind adds per-kind
+ *                counts with deferred and wedged rows
  *   retry <id> — flip failed/cancelled → pending, ready for the next claim
  *   cancel <id>— flip pending/running → cancelled
  *   show <id>  — full row for a single job
@@ -53,6 +55,8 @@ export interface JobsCmdOptions {
   olderThanDays?: number;
   /** prune: preview the would-be-deleted count without deleting. */
   dryRun?: boolean;
+  /** stats: add per-kind counts. */
+  byKind?: boolean;
   /** Test seam — config file path. */
   configPath?: string;
 }
@@ -144,6 +148,11 @@ export async function runJobs(opts: JobsCmdOptions): Promise<void> {
       }
       case "stats": {
         const stats = await queue.stats();
+        if (opts.byKind) {
+          const byKind = await queue.statsByKind();
+          console.log(JSON.stringify({ ok: true, stats, by_kind: byKind }, null, 2));
+          return;
+        }
         console.log(JSON.stringify({ ok: true, stats }, null, 2));
         return;
       }

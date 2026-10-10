@@ -36,6 +36,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--all",
   "--allow-dropped-columns",
   "--apply",
+  "--by-kind",
   "--catch-up",
   "--contextual",
   "--cosine-rescore",
@@ -250,7 +251,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   [
     "jobs",
     new Set([
-      "--dry-run", "--id", "--kind", "--limit", "--max-retries",
+      "--by-kind", "--dry-run", "--id", "--kind", "--limit", "--max-retries",
       "--older-than-days", "--payload", "--priority", "--status",
     ]),
   ],

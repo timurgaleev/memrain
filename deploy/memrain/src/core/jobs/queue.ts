@@ -40,6 +40,7 @@ interface RawJobRow {
   claim_generation: number;
   submitted_by: string | null;
   authority: Record<string, unknown> | string | null;
+  deferred_count: number;
 }
 
 function toDate(v: string | Date): Date {
@@ -91,6 +92,7 @@ function rowToJob(r: RawJobRow): JobRow {
     claimGeneration: r.claim_generation,
     submittedBy: r.submitted_by ?? null,
     authority: toJson<Record<string, unknown>>(r.authority),
+    deferredCount: r.deferred_count ?? 0,
   };
 }
 
@@ -101,12 +103,42 @@ function toNum(v: number | string | null | undefined): number {
 }
 
 const SELECT_COLS =
-  "id, kind, payload, status, priority, retry_count, max_retries, next_attempt_at, quiet_hours_skip, last_error, result, created_at, updated_at, started_at, finished_at, lock_until, stall_count, max_stalled, timeout_ms, progress, tokens_input, tokens_output, tokens_cache_read, cost_usd, claim_generation, submitted_by, authority";
+  "id, kind, payload, status, priority, retry_count, max_retries, next_attempt_at, quiet_hours_skip, last_error, result, created_at, updated_at, started_at, finished_at, lock_until, stall_count, max_stalled, timeout_ms, progress, tokens_input, tokens_output, tokens_cache_read, cost_usd, claim_generation, submitted_by, authority, deferred_count";
 
 const DEFAULT_LOCK_SECONDS = 300; // 5 min — comfortably bigger than any
                                   // realistic job duration we run today.
 /** Postgres INTEGER ceiling for `jobs.timeout_ms` (~24.8 days). */
 const MAX_TIMEOUT_MS = 2_147_483_647;
+/** How long past `lock_until` the stall sweep waits before requeuing a row. */
+export const DEFAULT_STALL_GRACE_MS = 30_000;
+
+/**
+ * The stall sweep's grace past `lock_until`: MEMRAIN_JOB_STALL_GRACE_MS, digits
+ * only, else 30 s. A worker renews its lease well before it lapses, so a row
+ * past its lock by the grace has lost its worker, not merely a slow renewal.
+ */
+export function stallGraceMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.MEMRAIN_JOB_STALL_GRACE_MS?.trim();
+  if (raw !== undefined && /^\d+$/.test(raw)) return Number.parseInt(raw, 10);
+  return DEFAULT_STALL_GRACE_MS;
+}
+
+/** What `enqueueOrRevive` did with the id it was given. */
+export type EnqueueOutcome = "created" | "revived" | "existing";
+
+/** Per-kind queue counts behind `memrain jobs stats --by-kind`. */
+export interface KindStats {
+  kind: string;
+  pending: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  /** Pending rows waiting out an outage (`last_error` starts `deferred:`). */
+  deferred: number;
+  /** Running rows claimed longer ago than the wedge threshold. */
+  wedged: number;
+}
 
 export interface ClaimOptions {
   /** Override "now" (tests). Defaults to new Date(). */
@@ -126,6 +158,8 @@ export interface ClaimOptions {
 export interface HandleStalledOptions {
   /** Override "now" (tests). */
   now?: Date;
+  /** Grace past `lock_until` before a row counts as stalled. Default `stallGraceMs()`. */
+  graceMs?: number;
 }
 
 export interface HandleStalledResult {
@@ -167,6 +201,29 @@ export class Queue {
   constructor(private readonly engine: Engine) {}
 
   async enqueue(input: EnqueueInput): Promise<JobRow> {
+    return (await this.insert(input)).job;
+  }
+
+  /**
+   * Enqueue under a stable id, giving the id back to a job that died. A row
+   * left `failed` or `cancelled` under the id is reset to pending with fresh
+   * budgets, as `retry` would; a pending, running or succeeded row is left
+   * alone. A row of another kind under the id is never revived.
+   */
+  async enqueueOrRevive(
+    input: EnqueueInput,
+  ): Promise<{ job: JobRow; outcome: EnqueueOutcome }> {
+    const { job, created } = await this.insert(input);
+    if (created) return { job, outcome: "created" };
+    const revived = await this.reset(job.id, input.kind);
+    return revived
+      ? { job: revived, outcome: "revived" }
+      : { job, outcome: "existing" };
+  }
+
+  private async insert(
+    input: EnqueueInput,
+  ): Promise<{ job: JobRow; created: boolean }> {
     if (!input.kind) throw new Error("Queue.enqueue: kind is required");
     const id = input.id ?? randomUUID();
     const priority = input.priority ?? 5;
@@ -216,7 +273,7 @@ export class Queue {
         input.authority === undefined ? null : JSON.stringify(input.authority),
       ],
     );
-    if (r.rows[0]) return rowToJob(r.rows[0]);
+    if (r.rows[0]) return { job: rowToJob(r.rows[0]), created: true };
     // Idempotent insert — caller passed an existing id. Return the existing row.
     const existing = await this.get(id);
     if (!existing) {
@@ -224,7 +281,7 @@ export class Queue {
         `Queue.enqueue: insert reported conflict but row ${id} not found`,
       );
     }
-    return existing;
+    return { job: existing, created: false };
   }
 
   async get(id: string): Promise<JobRow | null> {
@@ -284,10 +341,9 @@ export class Queue {
   }
 
   /**
-   * Extend a running job's `lock_until`. The worker calls this when a job's
-   * hard `timeout_ms` is longer than the claim lock, so the stall sweep can't
-   * requeue the row out from under an in-flight handler before its timeout
-   * fires. Returns true if the attempt's claim was extended, false if the claim
+   * Extend a running job's `lock_until`. The worker renews the lease this way
+   * while the handler runs, so the stall sweep can't requeue the row out from
+   * under a live attempt. Returns true if the attempt's claim was extended, false if the claim
    * is gone (row no longer `running`, or re-claimed by a newer generation) so
    * the caller can abort the attempt.
    */
@@ -311,6 +367,9 @@ export class Queue {
     opts: HandleStalledOptions = {},
   ): Promise<HandleStalledResult> {
     const now = opts.now ?? new Date();
+    // A live worker renews its lease every third of the lock; the grace keeps
+    // a renewal that is merely late from being mistaken for a dead worker.
+    const cutoff = new Date(now.getTime() - (opts.graceMs ?? stallGraceMs()));
     // Fetch candidates, then update each — we need per-row branching
     // (stall_count vs max_stalled) which a single UPDATE can't express
     // cleanly across PGLite + Postgres. Volume is low (zero in healthy
@@ -326,7 +385,7 @@ export class Queue {
           AND lock_until IS NOT NULL
           AND lock_until < $1
         ORDER BY lock_until ASC`,
-      [now],
+      [cutoff],
     );
     const result: HandleStalledResult = {
       requeued: 0,
@@ -344,8 +403,8 @@ export class Queue {
                   finished_at = $3,
                   updated_at = $3,
                   lock_until = NULL
-            WHERE id = $1 AND status = 'running'`,
-          [row.id, nextStall, now],
+            WHERE id = $1 AND status = 'running' AND lock_until < $4`,
+          [row.id, nextStall, now, cutoff],
         );
         result.terminallyFailed++;
       } else {
@@ -358,8 +417,8 @@ export class Queue {
                   started_at = NULL,
                   lock_until = NULL,
                   updated_at = $3
-            WHERE id = $1 AND status = 'running'`,
-          [row.id, nextStall, now],
+            WHERE id = $1 AND status = 'running' AND lock_until < $4`,
+          [row.id, nextStall, now, cutoff],
         );
         result.requeued++;
       }
@@ -498,6 +557,17 @@ export class Queue {
    * just decided to discard.
    */
   async retry(id: string): Promise<JobRow | null> {
+    return this.reset(id);
+  }
+
+  /** `retry`'s reset, optionally only for a row of `kind`. */
+  private async reset(id: string, kind?: string): Promise<JobRow | null> {
+    const params: unknown[] = [id];
+    let kindClause = "";
+    if (kind !== undefined) {
+      params.push(kind);
+      kindClause = "AND kind = $2";
+    }
     const r = await this.engine.query<RawJobRow>(
       `UPDATE jobs
           SET status = 'pending',
@@ -506,13 +576,38 @@ export class Queue {
               finished_at = NULL,
               retry_count = 0,
               stall_count = 0,
+              deferred_count = 0,
               last_error = NULL,
               updated_at = NOW()
-        WHERE id = $1 AND status IN ('failed', 'cancelled')
+        WHERE id = $1 AND status IN ('failed', 'cancelled') ${kindClause}
         RETURNING ${SELECT_COLS}`,
-      [id],
+      params,
     );
     return r.rows[0] ? rowToJob(r.rows[0]) : null;
+  }
+
+  /**
+   * Put a running attempt back to wait until `until`, because what it needs is
+   * down for everyone (an LLM outage), not because the job failed. The retry
+   * and stall budgets are untouched; `deferred_count` goes up so the caller can
+   * cap how long a job waits. Fenced by claim generation like every other
+   * attempt write. Returns true when the row was deferred.
+   */
+  async defer(id: string, gen: number, until: Date, reason: string): Promise<boolean> {
+    const r = await this.engine.query<{ id: string }>(
+      `UPDATE jobs
+          SET status = 'pending',
+              next_attempt_at = $3,
+              last_error = $4,
+              deferred_count = deferred_count + 1,
+              started_at = NULL,
+              lock_until = NULL,
+              updated_at = NOW()
+        WHERE id = $1 AND status = 'running' AND claim_generation = $2
+        RETURNING id`,
+      [id, gen, until, `deferred: ${reason}`],
+    );
+    return r.rows.length > 0;
   }
 
   async list(opts: ListOptions = {}): Promise<JobRow[]> {
@@ -653,5 +748,64 @@ export class Queue {
     };
     for (const row of r.rows) out[row.status] = row.n;
     return out;
+  }
+
+  /**
+   * Counts per kind and status, plus the rows waiting out an outage and the
+   * running rows claimed longer ago than `wedgeSeconds` (default 1 h). Sorted
+   * by kind.
+   */
+  async statsByKind(opts: { wedgeSeconds?: number } = {}): Promise<KindStats[]> {
+    const wedgeSeconds = opts.wedgeSeconds ?? 3600;
+    const r = await this.engine.query<{
+      kind: string;
+      status: JobStatus;
+      n: number;
+      deferred: number;
+      wedged: number;
+    }>(
+      `SELECT kind, status, COUNT(*)::int AS n,
+              COUNT(*) FILTER (WHERE status = 'pending'
+                               AND last_error LIKE 'deferred:%')::int AS deferred,
+              COUNT(*) FILTER (WHERE status = 'running'
+                               AND started_at IS NOT NULL
+                               AND started_at < NOW() - $1 * INTERVAL '1 second')::int AS wedged
+         FROM jobs
+        GROUP BY kind, status`,
+      [wedgeSeconds],
+    );
+    const byKind = new Map<string, KindStats>();
+    for (const row of r.rows) {
+      const k = byKind.get(row.kind) ?? {
+        kind: row.kind,
+        pending: 0,
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        cancelled: 0,
+        deferred: 0,
+        wedged: 0,
+      };
+      k[row.status] = row.n;
+      k.deferred += row.deferred;
+      k.wedged += row.wedged;
+      byKind.set(row.kind, k);
+    }
+    return [...byKind.values()].sort((a, b) => a.kind.localeCompare(b.kind));
+  }
+
+  /** `last_error` of the rows that failed since `since`, newest first, capped. */
+  async recentFailures(
+    since: Date,
+    limit = 1000,
+  ): Promise<{ kind: string; lastError: string | null }[]> {
+    const r = await this.engine.query<{ kind: string; last_error: string | null }>(
+      `SELECT kind, last_error FROM jobs
+        WHERE status = 'failed' AND finished_at >= $1
+        ORDER BY finished_at DESC
+        LIMIT $2`,
+      [since, limit],
+    );
+    return r.rows.map((row) => ({ kind: row.kind, lastError: row.last_error }));
   }
 }

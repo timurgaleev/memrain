@@ -16,9 +16,12 @@
 import { type BatchScope, runInBatchScope } from "../llm/bedrock-errors.ts";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
+import { runWithSpendClient, runWithSpendTags } from "../budget.ts";
 import { getHandler } from "./handlers.ts";
+import { kindDefaultTimeoutMs } from "./kind-defaults.ts";
+import { haltOf, llmHaltEnabled, noteHalt } from "./llm-halt.ts";
 import type { Queue } from "./queue.ts";
-import type { JobRow } from "./types.ts";
+import { type JobRow, UnrecoverableJobError } from "./types.ts";
 import type { Engine } from "../engine/interface.ts";
 import {
   acquireWorkerLock,
@@ -29,9 +32,9 @@ import {
 
 /** Queue.claim's default lock seconds — mirrored so lock-vs-timeout math agrees. */
 const DEFAULT_LOCK_SECONDS = 300;
-/** Slack added past a job's timeout when extending its lock, so the timeout
- *  always fires before the (extended) lock expires. */
-const TIMEOUT_LOCK_GRACE_MS = 5000;
+/** Times a job may wait out an outage before it fails the ordinary way. At
+ *  the 30-minute cooldown cap that is about a day of waiting. */
+export const MAX_DEFERS = 48;
 /** How long stop() lets a running job finish before handing it back. Kept
  *  under Docker's default 10 s stop timeout. */
 export const DEFAULT_DRAIN_MS = 8000;
@@ -45,15 +48,16 @@ export interface WorkerOptions {
   concurrency?: number;
   /** Hook for log lines — defaults to console.log/console.error. */
   logger?: (level: "info" | "warn" | "error", msg: string) => void;
-  /** Seconds the running claim is valid for. Default 300. */
+  /** Seconds the running claim is valid for. Renewed every third of it while
+   *  the handler runs. Default 300. */
   lockSeconds?: number;
   /** Run handleStalled() at most this often (ms). Default 30 000. */
   stallSweepIntervalMs?: number;
   /**
    * Default hard wall-clock cap (ms) for a job's handler when the job row does
    * not set its own `timeoutMs`. A job exceeding it is dead-lettered and the
-   * worker freed. 0 / undefined = no default cap (today's behavior). A per-job
-   * `timeoutMs` always wins over this default.
+   * worker freed. A per-job `timeoutMs` always wins over this default; without
+   * either, the kind's built-in cap applies (`kind-defaults.ts`), else none.
    */
   jobTimeoutMs?: number;
   /**
@@ -96,6 +100,8 @@ export interface WorkerStats {
    * had re-claimed the row (or it was cancelled or removed meanwhile).
    */
   fenced: number;
+  /** Attempts put back to wait out an LLM outage, no retry spent. */
+  deferred: number;
 }
 
 export class Worker {
@@ -124,6 +130,7 @@ export class Worker {
     stallsTerminallyFailed: 0,
     timedOut: 0,
     fenced: 0,
+    deferred: 0,
   };
 
   constructor(
@@ -161,7 +168,7 @@ export class Worker {
       // wait is one UPDATE long, not one job long.
       this.drainExpired = true;
       this.log("warn", `drain window passed; handing back ${this.running.size} running job(s)`);
-      for (const ctl of this.running.values()) ctl.abort();
+      for (const ctl of this.running.values()) ctl.abort(new WorkerShutdownError());
       // Bounded so a stuck hand-back UPDATE cannot outlast stop_grace_period;
       // a row left `running` is recovered by the stall sweep.
       const handBackDeadline = Date.now() + HAND_BACK_WAIT_MS;
@@ -327,47 +334,23 @@ export class Worker {
       const msg = `no handler registered for kind '${job.kind}'`;
       this.log("error", `[${job.id}] ${msg}`);
       try {
-        const updated = await this.queue.fail(job.id, gen, msg);
+        // A process that cannot run the kind will not learn to by retrying.
+        const updated = await this.queue.fail(job.id, gen, msg, { terminal: true });
         if (!updated && (await this.claimLost(job.id, gen))) return;
-        if (updated && updated.status === "pending") this.stats.retried++;
-        else this.stats.failed++;
+        this.stats.failed++;
       } catch (e) {
         this.log("error", `[${job.id}] no-handler fail persist: ${asMessage(e)}`);
       }
       return;
     }
-    // Per-job hard wall-clock cap (job row wins over the worker default).
-    const timeoutMs = job.timeoutMs ?? this.opts.jobTimeoutMs ?? 0;
-    // If the timeout outlasts the claim lock, extend the lock so the stall
-    // sweep can't requeue the row before the timeout dead-letters it (the
-    // terminal fail would then no-op on a row that is no longer 'running').
-    if (timeoutMs > 0) {
-      const lockMs = (this.opts.lockSeconds ?? DEFAULT_LOCK_SECONDS) * 1000;
-      if (timeoutMs + TIMEOUT_LOCK_GRACE_MS > lockMs) {
-        // The lock MUST cover the timeout, else the stall sweep could requeue
-        // the row before the timeout dead-letters it. If we can't extend it
-        // (DB error, or the claim was already lost), abort this attempt rather
-        // than run a handler whose timeout can't be enforced — the job stays
-        // claimable and a later tick retries it.
-        let extended = false;
-        try {
-          extended = await this.queue.extendLock(
-            job.id,
-            gen,
-            new Date(Date.now() + timeoutMs + TIMEOUT_LOCK_GRACE_MS),
-          );
-        } catch (e) {
-          this.log("error", `[${job.id}] extendLock failed: ${asMessage(e)}`);
-        }
-        if (!extended) {
-          this.log(
-            "warn",
-            `[${job.id}] could not extend lock to cover timeout; skipping this attempt`,
-          );
-          return;
-        }
-      }
-    }
+    // Per-job hard wall-clock cap: the job row, then the worker default, then
+    // the kind's built-in cap.
+    const timeoutMs =
+      job.timeoutMs ?? this.opts.jobTimeoutMs ?? kindDefaultTimeoutMs(job.kind) ?? 0;
+    // Aborted when the attempt is abandoned: drain expired, timeout, or lease
+    // lost. The reason is the error the attempt settles with.
+    const abort = new AbortController();
+    if (this.drainExpired) abort.abort(new WorkerShutdownError());
     // Handler context: progress + token/cost usage persist onto the job row
     // while it runs (fenced by `gen`, so a lost claim makes them no-ops).
     const ctx = {
@@ -376,32 +359,54 @@ export class Worker {
         this.queue.updateProgress(job.id, gen, progress),
       recordUsage: (usage: Parameters<Queue["recordUsage"]>[2]) =>
         this.queue.recordUsage(job.id, gen, usage),
+      signal: abort.signal,
     };
-    const abort = new AbortController();
-    if (this.drainExpired) abort.abort();
     this.running.set(job.id, abort);
+    const lease = this.renewLease(job, gen, abort);
     // The whole body is guarded: a persistence failure (complete/fail) must
     // never crash the worker tick or escape as an unhandledRejection.
     try {
       try {
-        // A timed-out or aborted handler keeps running; the scope flag stops
-        // its paid calls.
-        const scope: BatchScope = { stopped: false, circuit: false };
-        abort.signal.addEventListener("abort", () => {
-          scope.stopReason = "worker_shutdown";
-        });
-        const run = () => runInBatchScope(scope, () => handler(job.payload, ctx));
-        const result = await runUntilAborted(
-          timeoutMs > 0 ? runWithTimeout(run, timeoutMs) : startRun(run),
-          abort.signal,
-        ).catch((e: unknown) => {
+        // An abandoned handler keeps running; the scope flag stops its paid
+        // calls. The circuit lets an LLM outage fail the rest of the job fast;
+        // the job then waits the outage out instead of spending its retries.
+        const scope: BatchScope = { stopped: false, circuit: llmHaltEnabled() };
+        abort.signal.addEventListener(
+          "abort",
+          () => {
+            const reason: unknown = abort.signal.reason;
+            if (reason instanceof WorkerShutdownError) scope.stopReason = "worker_shutdown";
+            else if (reason instanceof ClaimLostError) scope.stopReason = "claim_lost";
+            scope.stopped = true;
+          },
+          { once: true },
+        );
+        // Paid calls book against this job, and against the client that
+        // submitted it, so a tenant's queued work counts toward its own cap.
+        const submittedBy = job.submittedBy;
+        const inScope = () => runInBatchScope(scope, () => handler(job.payload, ctx));
+        const run = () =>
+          runWithSpendTags({ jobId: job.id }, () =>
+            submittedBy ? runWithSpendClient({ clientId: submittedBy }, inScope) : inScope(),
+          );
+        let result: Record<string, unknown> | void;
+        try {
+          result = await runUntilAborted(
+            timeoutMs > 0 ? runWithTimeout(run, timeoutMs) : startRun(run),
+            abort.signal,
+          );
+        } catch (e) {
           scope.stopped = true;
+          // The timed-out handler is abandoned: stop its in-flight calls.
+          if (e instanceof JobTimeoutError && !abort.signal.aborted) abort.abort(e);
           throw e;
-        });
+        } finally {
+          lease.stop();
+        }
         const done = await this.queue.complete(
           job.id,
           gen,
-          result === undefined ? {} : (result as Record<string, unknown>),
+          result === undefined ? {} : result,
         );
         if (done || !(await this.claimLost(job.id, gen))) {
           this.stats.succeeded++;
@@ -417,19 +422,31 @@ export class Worker {
           );
           return;
         }
+        if (e instanceof ClaimLostError) {
+          // The row is no longer this attempt's (cancelled, or requeued and
+          // re-claimed): whatever it would write belongs to someone else.
+          this.stats.fenced++;
+          this.log("warn", `[${job.id}] ${job.kind} ${e.message} (gen ${gen}); attempt abandoned, nothing written`);
+          return;
+        }
         const message = asMessage(e);
-        // A hard timeout dead-letters (terminal): JS cannot cancel the orphaned
-        // handler, but the worker is freed and retrying would only wedge it again.
+        // A hard timeout dead-letters (terminal): the handler is abandoned and
+        // retrying would only wedge the worker again. So does a failure the
+        // handler marked unrecoverable.
         const timedOut = e instanceof JobTimeoutError;
+        const unrecoverable = !timedOut && isUnrecoverable(e);
+        if (!timedOut && !unrecoverable && (await this.deferForOutage(job, gen, e, message))) {
+          return;
+        }
         this.log(
           "warn",
-          `[${job.id}] ${job.kind} ${timedOut ? "timed out" : "failed"}: ${message}`,
+          `[${job.id}] ${job.kind} ${timedOut ? "timed out" : unrecoverable ? "failed (unrecoverable)" : "failed"}: ${message}`,
         );
         const updated = await this.queue.fail(
           job.id,
           gen,
-          message,
-          timedOut ? { terminal: true } : {},
+          unrecoverable ? `unrecoverable: ${message}` : message,
+          timedOut || unrecoverable ? { terminal: true } : {},
         );
         if (timedOut) this.stats.timedOut++;
         if (!updated && (await this.claimLost(job.id, gen))) return;
@@ -442,8 +459,90 @@ export class Worker {
     } catch (e) {
       this.log("error", `[${job.id}] job bookkeeping failed: ${asMessage(e)}`);
     } finally {
+      lease.stop();
       this.running.delete(job.id);
     }
+  }
+
+  /**
+   * Keep this attempt's claim alive while its handler runs: every third of the
+   * lock, push `lock_until` out by a full lock. A refused renewal means the row
+   * is no longer this attempt's — cancelled, or requeued and re-claimed — so
+   * the attempt is aborted. A renewal that errors is logged and retried; once
+   * the lease would lapse before the next try, the attempt aborts too, since
+   * the stall sweep may hand the row to another worker after that.
+   */
+  private renewLease(job: JobRow, gen: number, abort: AbortController): { stop(): void } {
+    const lockMs = (this.opts.lockSeconds ?? DEFAULT_LOCK_SECONDS) * 1000;
+    const everyMs = Math.max(10, Math.floor(lockMs / 3));
+    let heldUntil = job.lockUntil?.getTime() ?? Date.now() + lockMs;
+    let renewing = false;
+    let stopped = false;
+    const lose = (why: string) => {
+      if (stopped || abort.signal.aborted) return;
+      this.log("warn", `[${job.id}] ${why}`);
+      abort.abort(new ClaimLostError(why));
+    };
+    const timer = setInterval(() => {
+      if (renewing || stopped) return;
+      renewing = true;
+      const until = Date.now() + lockMs;
+      this.queue
+        .extendLock(job.id, gen, new Date(until))
+        .then((held) => {
+          if (held) heldUntil = until;
+          else lose("lost its claim");
+        })
+        .catch((e: unknown) => {
+          this.log("error", `[${job.id}] lease renewal failed: ${asMessage(e)}`);
+          if (Date.now() + everyMs >= heldUntil) lose("lease could not be renewed before it lapsed");
+        })
+        .finally(() => {
+          renewing = false;
+        });
+    }, everyMs);
+    timer.unref?.();
+    return {
+      stop: () => {
+        stopped = true;
+        clearInterval(timer);
+      },
+    };
+  }
+
+  /**
+   * Put the attempt back to wait out an LLM outage, without spending a retry.
+   * True when the row needs nothing more from this attempt (deferred, or no
+   * longer this attempt's). A job past MAX_DEFERS fails the ordinary way.
+   */
+  private async deferForOutage(
+    job: JobRow,
+    gen: number,
+    err: unknown,
+    message: string,
+  ): Promise<boolean> {
+    if (!llmHaltEnabled()) return false;
+    const halt = haltOf(err);
+    if (!halt) return false;
+    if (job.deferredCount >= MAX_DEFERS) {
+      this.log("warn", `[${job.id}] ${job.kind} waited out ${job.deferredCount} outages; failing it`);
+      return false;
+    }
+    const until = noteHalt(halt.key, halt.cls);
+    const deferred = await this.queue.defer(
+      job.id,
+      gen,
+      new Date(until),
+      `${halt.cls}: ${message.slice(0, 300)}`,
+    );
+    if (!deferred) return this.claimLost(job.id, gen);
+    this.stats.deferred++;
+    this.log(
+      "warn",
+      `[${job.id}] ${job.kind} deferred until ${new Date(until).toISOString()} ` +
+        `(${halt.cls} on ${halt.key === "*" ? "every model" : halt.key}); no retry spent`,
+    );
+    return true;
   }
 
   /**
@@ -500,6 +599,18 @@ export class WorkerShutdownError extends Error {
   }
 }
 
+/** Thrown into a running job whose lease renewal found the claim gone. */
+export class ClaimLostError extends Error {
+  constructor(why = "lost its claim") {
+    super(why);
+    this.name = "ClaimLostError";
+  }
+}
+
+function isUnrecoverable(e: unknown): boolean {
+  return e instanceof UnrecoverableJobError || (e instanceof Error && e.name === "UnrecoverableJobError");
+}
+
 /** Call `start()`, turning a synchronous throw into a rejection. */
 function startRun<T>(start: () => Promise<T>): Promise<T> {
   try {
@@ -510,16 +621,18 @@ function startRun<T>(start: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Settle with `work`, or reject with `WorkerShutdownError` once `signal`
- * aborts. Like a timeout, the abandoned work keeps running; its late
- * settlement is swallowed.
+ * Settle with `work`, or reject with the abort reason (`WorkerShutdownError`
+ * when it is not an error) once `signal` aborts. Like a timeout, the abandoned
+ * work keeps running; its late settlement is swallowed.
  */
 function runUntilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   work.catch(() => {});
-  if (signal.aborted) return Promise.reject(new WorkerShutdownError());
+  const reason = (): Error =>
+    signal.reason instanceof Error ? signal.reason : new WorkerShutdownError();
+  if (signal.aborted) return Promise.reject(reason());
   let onAbort: (() => void) | undefined;
   const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => reject(new WorkerShutdownError());
+    onAbort = () => reject(reason());
     signal.addEventListener("abort", onAbort, { once: true });
   });
   return Promise.race([work, aborted]).finally(() => {

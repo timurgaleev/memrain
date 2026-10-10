@@ -56,6 +56,8 @@ export interface JobRow {
   submittedBy: string | null;
   /** Grant snapshot taken at submit, re-checked by the handler; null for operator jobs. */
   authority: Record<string, unknown> | null;
+  /** Times this row was deferred without spending a retry (migration 128). */
+  deferredCount: number;
 }
 
 /** Incremental token/cost usage a handler reports mid-run. All fields add. */
@@ -75,6 +77,14 @@ export interface JobUsageDelta {
  * tests can invoke handlers with a bare `{ job }` context): progress replaces
  * the row's `progress` JSONB, usage deltas accumulate onto the token/cost
  * columns. Both are no-ops once the attempt has lost its claim.
+ *
+ * `signal` aborts when the attempt is abandoned: its timeout fired, its claim
+ * was lost (cancelled, or re-claimed after a stall), or the worker is shutting
+ * down. Pass it to network calls so abandoned work stops paying.
+ *
+ * Throw `UnrecoverableJobError` for a failure no retry can fix (a malformed
+ * payload, a missing runner): the job fails terminally instead of spending its
+ * retries on the same answer.
  */
 export type JobHandler = (
   payload: Record<string, unknown>,
@@ -82,8 +92,17 @@ export type JobHandler = (
     job: JobRow;
     updateProgress?: (progress: Record<string, unknown>) => Promise<boolean>;
     recordUsage?: (usage: JobUsageDelta) => Promise<boolean>;
+    signal?: AbortSignal;
   },
 ) => Promise<Record<string, unknown> | void>;
+
+/** A job failure that retrying cannot fix; the worker dead-letters at once. */
+export class UnrecoverableJobError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnrecoverableJobError";
+  }
+}
 
 export interface EnqueueInput {
   kind: string;

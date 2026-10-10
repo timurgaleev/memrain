@@ -145,7 +145,7 @@ function printUsage(): void {
   console.log("  skillify check <slug> [--strict]");
   console.log("                               validate an existing skill against the contract; --strict elevates warnings");
   console.log("  jobs list [--status S] [--kind K] [--limit N]");
-  console.log("  jobs stats                   counts grouped by status");
+  console.log("  jobs stats [--by-kind]       counts grouped by status; --by-kind adds per-kind deferred/wedged");
   console.log("  jobs show|retry|cancel <id>  inspect/reset/cancel a single job");
   console.log("  jobs submit <kind> [--id X] [--priority N] [--max-retries N] [--payload '<json>']");
   console.log("  jobs progress <id>           status + handler-reported progress");
@@ -1229,6 +1229,8 @@ async function main(argv: readonly string[]): Promise<number> {
           opts.status = parts as JobStatus[];
         }
         if (flags.has("--dry-run")) opts.dryRun = true;
+      } else if (sub === "stats") {
+        if (flags.has("--by-kind")) opts.byKind = true;
       }
       await runJobs(opts);
       return 0;

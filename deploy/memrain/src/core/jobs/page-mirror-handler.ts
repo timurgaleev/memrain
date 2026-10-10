@@ -20,6 +20,7 @@
  */
 import type { Storage } from "../storage.ts";
 import { registerHandler } from "./handlers.ts";
+import { UnrecoverableJobError } from "./types.ts";
 import { getPageExact } from "../pages.ts";
 import { mirrorPage, removePageFromSearch } from "../page-index.ts";
 import type { IndexFileOptions } from "../indexer.ts";
@@ -40,7 +41,7 @@ export function registerPageMirrorHandler(
 ): void {
   registerHandler(PAGE_MIRROR_JOB_KIND, async (payload, ctx) => {
     const slug = typeof payload.slug === "string" ? payload.slug : "";
-    if (!slug) throw new Error("page_mirror: payload.slug is required");
+    if (!slug) throw new UnrecoverableJobError("page_mirror: payload.slug is required");
     const remote = payload.remote !== false;
     const page = await getPageExact(storage, slug);
     if (!page) return { slug, status: "skipped", reason: "page_not_found" };

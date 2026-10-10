@@ -13,6 +13,8 @@ import { diffMigrationIds, discoverMigrations } from "./migrate.ts";
 import { EMBED_DIMENSIONS } from "./embedding.ts";
 import { grammarSelfCheck } from "./chunkers/parsers.ts";
 import { isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
+import { Queue } from "./jobs/queue.ts";
+import { bucketJobErrors } from "./jobs/error-classify.ts";
 
 export interface OpsCheckResult {
   /** Exit-code driver — false only on `status:"fail"`. */
@@ -94,7 +96,8 @@ function jobWedgeSeconds(): number {
  * Job queue depth + wedged-job count (a `running` job older than the wedge
  * threshold, default 1h via MEMRAIN_DOCTOR_JOB_WEDGE_SEC). A deep pending queue is
  * normal mid-backfill (informational); a wedged job is the signal to look. Only
- * a wedged job flips ok:false.
+ * a wedged job flips ok:false. The detail also counts jobs waiting out an LLM
+ * outage and groups the last 24 h of failures by cause.
  */
 export async function checkQueueHealth(engine: Engine): Promise<OpsCheckResult> {
   const wedgeSec = jobWedgeSeconds();
@@ -102,24 +105,36 @@ export async function checkQueueHealth(engine: Engine): Promise<OpsCheckResult> 
     pending: number;
     running: number;
     wedged: number;
+    deferred: number;
   }>(
     `SELECT
         count(*) FILTER (WHERE status = 'pending')::int AS pending,
         count(*) FILTER (WHERE status = 'running')::int AS running,
         count(*) FILTER (WHERE status = 'running'
                          AND started_at IS NOT NULL
-                         AND started_at < NOW() - $1 * INTERVAL '1 second')::int AS wedged
+                         AND started_at < NOW() - $1 * INTERVAL '1 second')::int AS wedged,
+        count(*) FILTER (WHERE status = 'pending'
+                         AND last_error LIKE 'deferred:%')::int AS deferred
        FROM jobs`,
     [wedgeSec],
   );
   const pending = r.rows[0]?.pending ?? 0;
   const running = r.rows[0]?.running ?? 0;
   const wedged = r.rows[0]?.wedged ?? 0;
+  const deferred = r.rows[0]?.deferred ?? 0;
+  // What the last day's failures were, so the detail names the fix.
+  const failures = await new Queue(engine).recentFailures(new Date(Date.now() - 86_400_000));
+  const buckets = bucketJobErrors(failures.map((f) => f.lastError));
+  const failedNote =
+    failures.length === 0
+      ? ""
+      : ` failed_24h=${failures.length} (${buckets.map((b) => `${b.bucket}:${b.count}`).join(", ")})`;
   return {
     ok: wedged === 0,
     status: wedged === 0 ? "ok" : "fail",
     detail:
-      `pending=${pending} running=${running}` +
+      `pending=${pending} running=${running} deferred=${deferred}` +
+      failedNote +
       (wedged > 0 ? ` — ${wedged} wedged (running > ${wedgeSec}s)` : ""),
   };
 }

@@ -21,6 +21,7 @@ import {
   type RemediationInput,
 } from "../src/core/remediation.ts";
 import { makeRemediationHandler } from "../src/core/jobs/remediation-handlers.ts";
+import { UnrecoverableJobError } from "../src/core/jobs/types.ts";
 
 describe("classifyRemediation", () => {
   it("maps a 0-coverage source to a remediable + safe re-embed action", () => {
@@ -173,6 +174,34 @@ describe("autoFixDryViolations + submitRemediation (durable queue)", () => {
     );
     expect(report.submitted.filter((s) => s.status === "submitted")).toHaveLength(1);
   });
+
+  it("revives a failed fix the same day instead of reporting a duplicate", async () => {
+    const day = new Date("2026-10-10T12:00:00Z");
+    const input = { ...healthyInput, now: day };
+    const first = await submitRemediation(queue, input, { dryRun: false });
+    const id = first.report.submitted.find((s) => s.status === "submitted")!.id;
+    expect(id.endsWith(":2026-10-10")).toBe(true);
+    const job = await queue.claim({ kinds: [REMEDIATION_JOB_KIND] });
+    await queue.fail(job!.id, job!.claimGeneration, "boom", { terminal: true });
+
+    const again = await submitRemediation(queue, input, { dryRun: false });
+    const revived = again.report.submitted.find((s) => s.id === job!.id);
+    expect(revived?.status).toBe("revived");
+    expect((await queue.get(job!.id))?.status).toBe("pending");
+  });
+
+  it("a fix that succeeded stays a duplicate today and runs again tomorrow", async () => {
+    const today = { ...healthyInput, now: new Date("2026-10-10T23:00:00Z") };
+    await submitRemediation(queue, today, { dryRun: false });
+    for (let job = await queue.claim(); job; job = await queue.claim()) {
+      await queue.complete(job.id, job.claimGeneration, {});
+    }
+    const same = await submitRemediation(queue, today, { dryRun: false });
+    expect(same.report.submitted.every((s) => s.status === "duplicate")).toBe(true);
+    const tomorrow = { ...healthyInput, now: new Date("2026-10-11T01:00:00Z") };
+    const next = await submitRemediation(queue, tomorrow, { dryRun: false });
+    expect(next.report.submitted.every((s) => s.status === "submitted")).toBe(true);
+  });
 });
 
 describe("remediation job handler dispatch", () => {
@@ -215,5 +244,19 @@ describe("remediation job handler dispatch", () => {
     await expect(
       handler({ action: "reembed-source" }, { job: {} as never }),
     ).rejects.toThrow("missing source_id");
+  });
+
+  it("fails a malformed payload as unrecoverable, so no retry is spent on it", async () => {
+    const handler = makeRemediationHandler({ reembedSource: async () => {} });
+    for (const payload of [
+      { action: "reembed-source" },
+      { action: "cycle-phase" },
+      { action: "nope" },
+    ]) {
+      await expect(handler(payload, { job: {} as never })).rejects.toBeInstanceOf(UnrecoverableJobError);
+    }
+    await expect(
+      makeRemediationHandler({})({ action: "reembed-source", source_id: "s" }, { job: {} as never }),
+    ).rejects.toBeInstanceOf(UnrecoverableJobError);
   });
 });

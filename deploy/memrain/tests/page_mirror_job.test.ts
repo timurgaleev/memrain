@@ -155,6 +155,19 @@ describe("the page_mirror job", () => {
     expect(job?.status).toBe("succeeded");
     expect(job?.result).toMatchObject({ status: "skipped" });
   });
+
+  it("fails a payload without a slug at once instead of retrying it", async () => {
+    await new Queue(storage.engine()).enqueue({
+      kind: "page_mirror",
+      payload: { remote: true },
+      id: "page_mirror:test:noslug",
+      maxRetries: 3,
+    });
+    await drain();
+    const job = await new Queue(storage.engine()).get("page_mirror:test:noslug");
+    expect(job?.status).toBe("failed");
+    expect(job?.lastError).toBe("unrecoverable: page_mirror: payload.slug is required");
+  });
 });
 
 describe("the page_mirror job acts for one write", () => {

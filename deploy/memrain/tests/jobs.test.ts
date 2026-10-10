@@ -266,14 +266,14 @@ describe("Queue.cancel + retry + list + stats", () => {
     );
     const t0 = new Date(Date.now() + 60_000);
     await queue.claim({ now: t0, lockSeconds: 10 });
-    const dead = await queue.handleStalled({ now: new Date(t0.getTime() + 11_000) });
+    const dead = await queue.handleStalled({ now: new Date(t0.getTime() + 11_000), graceMs: 0 });
     expect(dead.terminallyFailed).toBe(1);
     expect((await queue.get(j.id))?.status).toBe("failed");
 
     await queue.retry(j.id);
     const t1 = new Date(Date.now() + 120_000);
     await queue.claim({ now: t1, lockSeconds: 10 });
-    const after = await queue.handleStalled({ now: new Date(t1.getTime() + 11_000) });
+    const after = await queue.handleStalled({ now: new Date(t1.getTime() + 11_000), graceMs: 0 });
     expect(after.requeued).toBe(1);
     expect(after.terminallyFailed).toBe(0);
     const fetched = await queue.get(j.id);
@@ -316,7 +316,7 @@ describe("Queue.handleStalled", () => {
     const t0 = nowAnchor();
     await queue.claim({ now: t0, lockSeconds: 10 });
     const t1 = new Date(t0.getTime() + 11_000);
-    const r = await queue.handleStalled({ now: t1 });
+    const r = await queue.handleStalled({ now: t1, graceMs: 0 });
     expect(r.requeued).toBe(1);
     expect(r.terminallyFailed).toBe(0);
     const fetched = await queue.get(j.id);
@@ -345,7 +345,7 @@ describe("Queue.handleStalled", () => {
     const t0 = nowAnchor();
     await queue.claim({ now: t0, lockSeconds: 10 });
     const t1 = new Date(t0.getTime() + 11_000);
-    const r = await queue.handleStalled({ now: t1 });
+    const r = await queue.handleStalled({ now: t1, graceMs: 0 });
     expect(r.terminallyFailed).toBe(1);
     expect(r.requeued).toBe(0);
     const fetched = await queue.get(j.id);
