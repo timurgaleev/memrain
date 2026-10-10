@@ -8,29 +8,25 @@
  *
  * Hierarchy:
  *
- *                    admin
- *                      │
- *      ┌──────────┬────┴────┬──────────┐
- *      ▼          ▼         ▼          ▼
- *   sources_admin  users_admin  write  read
- *                                │      ▲
- *                                └──────┘
+ *            admin
+ *              │
+ *              ▼
+ *            write
+ *              │
+ *              ▼
+ *            read
  *
- * `sources_admin` and `users_admin` are siblings on different axes
- * (source-management vs user-account-management); neither implies the other.
  * `agent` is a standalone sibling — `admin` does NOT imply it, so an admin
  * token must be re-registered with explicit bindings before it can dispatch
  * agent jobs.
  */
 
-export type Scope = 'read' | 'write' | 'admin' | 'sources_admin' | 'users_admin' | 'agent';
+export type Scope = 'read' | 'write' | 'admin' | 'agent';
 
 export const ALLOWED_SCOPES: ReadonlySet<Scope> = new Set<Scope>([
   'read',
   'write',
   'admin',
-  'sources_admin',
-  'users_admin',
   'agent',
 ]);
 
@@ -42,22 +38,24 @@ export const ALLOWED_SCOPES_LIST: ReadonlyArray<Scope> = Object.freeze([
   'admin',
   'agent',
   'read',
-  'sources_admin',
-  'users_admin',
   'write',
 ]);
 
 /**
+ * Scope names that were once accepted but never gated anything. Migration 124
+ * strips them from stored grants; DCR drops them from a request instead of
+ * refusing it, because discovery listed them until it advertised read/write.
+ */
+export const RETIRED_SCOPES: ReadonlySet<string> = new Set(['sources_admin', 'users_admin']);
+
+/**
  * Which required scopes are implied by which granted scope.
- * `admin` implies all account/source/data scopes (legacy + super-admin escape
- * hatch). `write` implies `read`. The two `*_admin` siblings and `agent` only
- * imply themselves.
+ * `admin` implies `write` and `read`; `write` implies `read`. `agent` only
+ * implies itself.
  */
 const IMPLIES: Record<Scope, ReadonlySet<Scope>> = {
-  admin: new Set<Scope>(['admin', 'sources_admin', 'users_admin', 'write', 'read']),
+  admin: new Set<Scope>(['admin', 'write', 'read']),
   write: new Set<Scope>(['write', 'read']),
-  sources_admin: new Set<Scope>(['sources_admin']),
-  users_admin: new Set<Scope>(['users_admin']),
   read: new Set<Scope>(['read']),
   agent: new Set<Scope>(['agent']),
 };
@@ -74,6 +72,21 @@ export function hasScope(grantedScopes: readonly string[], requiredScope: string
     if (implied.has(requiredScope as Scope)) return true;
   }
   return false;
+}
+
+/**
+ * The scopes a token issued with `issued` holds while its client is granted
+ * `current`. Capabilities intersect, not spellings: an `admin` token under a
+ * client narrowed to `write` holds `write` (and so `read`), never `admin`. A
+ * scope the client gained after issuance is not added — the token keeps at most
+ * what it was issued. An empty result means the token holds nothing.
+ */
+export function intersectGrantedScopes(issued: readonly string[], current: readonly string[]): string[] {
+  const effective = issued.filter((s) => isScope(s) && hasScope(current, s));
+  for (const s of current) {
+    if (isScope(s) && hasScope(issued, s) && !hasScope(effective, s)) effective.push(s);
+  }
+  return Array.from(new Set(effective));
 }
 
 export function isScope(s: string): s is Scope {

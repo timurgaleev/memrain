@@ -491,6 +491,7 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       read?: unknown;
       bound_slug_prefixes?: unknown;
       tenant_mode?: unknown;
+      scopes?: unknown;
       expected_revision?: unknown;
       dry_run?: unknown;
     };
@@ -526,6 +527,15 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       }
       tenantMode = body.tenant_mode;
     }
+    // Absent leaves the client's scopes; a list replaces them (validated by the
+    // provider, which answers invalid_scope).
+    let scopes: string[] | undefined;
+    if (body.scopes !== undefined) {
+      if (!Array.isArray(body.scopes) || !body.scopes.every((x) => typeof x === "string")) {
+        return badRequest("scopes must be an array of scope names");
+      }
+      scopes = body.scopes as string[];
+    }
     let expectedRevision: number | undefined;
     if (body.expected_revision !== undefined) {
       if (typeof body.expected_revision !== "number" || !Number.isInteger(body.expected_revision) || body.expected_revision < 0) {
@@ -540,7 +550,7 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       const provider = new OAuthProvider({ engine });
       const result = await provider.rescopeClient(
         body.client_id,
-        { sourceId: body.source, federatedRead, boundSlugPrefixes, tenantMode },
+        { sourceId: body.source, federatedRead, boundSlugPrefixes, tenantMode, scopes },
         // The admin session carries no per-person identity yet (one bootstrap
         // secret), so every admin change is attributed to the admin role.
         { actor: "admin", via: "admin_api", expectedRevision, dryRun: body.dry_run === true },

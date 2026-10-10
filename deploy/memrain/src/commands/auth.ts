@@ -45,11 +45,13 @@
  *              Set or clear the client's daily USD ceiling, enforced across
  *              every paid op. `none` removes the cap (the default).
  *   rescope-client <client_id> --source SRC [--federated-read a,b]
- *                              [--bound-slug-prefixes p1,p2]
+ *                              [--bound-slug-prefixes p1,p2] [--scopes read,write]
  *              Change an existing client's tenancy grant in place (write
  *              source + federated read set) — no revoke + re-register.
  *              --bound-slug-prefixes also replaces the slug write fence; pass
  *              an empty value ("") to lift it. Omit the flag to leave it as-is.
+ *              --scopes replaces the client's scopes; tokens already issued
+ *              are held to the narrower set from their next request on.
  *              --access-ttl / --refresh-ttl set the client's token lifetimes
  *              (access 5m..1d, refresh 1h..90d); "default" clears one.
  *   invalidate-tokens <client_id> [--grant ENROLLMENT_ID]
@@ -72,6 +74,10 @@
  *              Soft-revoke a personal access token by name.
  *   permissions <name> set-takes-holders a,b
  *              Replace the token's takes-visibility allow-list.
+ *   permissions <name> set-scopes read,write,admin
+ *              Replace the token's scopes. Both permissions changes, and
+ *              set-budget on a token, are audited as `pat:<id>` in the grant
+ *              history.
  *   doctor <base-url> (--client-file F | --token-file F)
  *          [--expect-source ID | --expect-operator] [--expect-version STAMP] [--json]
  *              Client-side end-to-end check of a deployed brain (see
@@ -112,8 +118,6 @@ const KNOWN_TOKEN_SCOPES = [
   "write",
   "admin",
   "agent",
-  "sources_admin",
-  "users_admin",
 ];
 
 export type AuthSub =
@@ -444,7 +448,7 @@ export function parseClientTtlFlag(name: string, raw: string | undefined): numbe
 
 async function rescopeClient(clientId: string, args: string[]): Promise<void> {
   const usage =
-    "Usage: auth rescope-client <client_id> --source SRC [--federated-read a,b] [--bound-slug-prefixes p1,p2] [--tenant-mode client|enrollment] [--access-ttl 1h|default] [--refresh-ttl 30d|default] [--expected-revision N] [--dry-run]";
+    "Usage: auth rescope-client <client_id> --source SRC [--federated-read a,b] [--bound-slug-prefixes p1,p2] [--tenant-mode client|enrollment] [--scopes read,write] [--access-ttl 1h|default] [--refresh-ttl 30d|default] [--expected-revision N] [--dry-run]";
   if (!clientId) throw new Error(usage);
   const { flags } = parseFlags(args);
   const dryRun = parseBoolFlag("dry-run", flags["dry-run"]);
@@ -457,13 +461,17 @@ async function rescopeClient(clientId: string, args: string[]): Promise<void> {
   //   auth rescope-client <id> --source <src> --bound-slug-prefixes ""
   const boundSlugPrefixes = parseFenceFlag(flags["bound-slug-prefixes"]);
   const tenantMode = flags["tenant-mode"] !== undefined ? parseTenantMode(flags["tenant-mode"]) : undefined;
+  // An empty list reaches the provider, which refuses it with invalid_scope.
+  const scopes = flags["scopes"] !== undefined
+    ? flags["scopes"].split(/[\s,]+/).filter(Boolean)
+    : undefined;
   const expectedRevision = parseExpectedRevision(flags["expected-revision"]);
   const accessTtlSeconds = parseClientTtlFlag("access-ttl", flags["access-ttl"]);
   const refreshTtlSeconds = parseClientTtlFlag("refresh-ttl", flags["refresh-ttl"]);
   const result = await withProvider((p) =>
     p.rescopeClient(
       clientId,
-      { sourceId, federatedRead, boundSlugPrefixes, tenantMode, accessTtlSeconds, refreshTtlSeconds },
+      { sourceId, federatedRead, boundSlugPrefixes, tenantMode, scopes, accessTtlSeconds, refreshTtlSeconds },
       { actor: cliActor(), via: "cli", expectedRevision, dryRun },
     ),
   );
@@ -544,7 +552,9 @@ async function setBudget(clientId: string, amount: string): Promise<void> {
     usdPerDay = Number(amount);
     if (!Number.isFinite(usdPerDay)) throw new Error(usage);
   }
-  const updated = await withProvider((p) => p.setClientBudget(clientId, usdPerDay));
+  const updated = await withProvider((p) =>
+    p.setClientBudget(clientId, usdPerDay, { actor: cliActor(), via: "cli" }),
+  );
   if (!updated) throw new Error(`No active client or token "${clientId}".`);
   console.log(
     JSON.stringify(
@@ -797,20 +807,15 @@ async function setScopes(name: string, value: string): Promise<void> {
       `unknown scope(s): ${unknown.join(", ")} — known: ${KNOWN_TOKEN_SCOPES.join(", ")}`,
     );
   }
-  const updated = await withProvider((_p, storage) =>
-    storage
-      .raw()
-      .query<{ id: number }>(
-        `UPDATE access_tokens SET scopes = $2::text[]
-          WHERE name = $1 AND revoked_at IS NULL RETURNING id`,
-        [name, list],
-      )
-      .then((r) => r.rows.length),
+  const changed = await withProvider((p) =>
+    p.setPatScopes(name, list, { actor: cliActor(), via: "cli" }),
   );
-  if (updated === 0) {
+  if (changed.length === 0) {
     throw new Error(`no live token named '${name}'`);
   }
-  console.log(JSON.stringify({ name, scopes: list }, null, 2));
+  console.log(
+    JSON.stringify({ name, scopes: list, revisions: changed.map((c) => c.revision) }, null, 2),
+  );
 }
 
 async function setPermissions(
@@ -833,25 +838,20 @@ async function setPermissions(
       'takes-holders list cannot be empty (use "world" for default-deny on private)',
     );
   }
-  // Deliberate: a JSONB merge preserves an operator-set permissions.source_id
-  // tenant grant — a wholesale replace would silently drop it and floor the
-  // token to the empty 'default' source.
-  const updated = await withProvider((_p, storage) =>
-    storage
-      .raw()
-      .query<{ id: number }>(
-        `UPDATE access_tokens
-            SET permissions = COALESCE(permissions, '{}'::jsonb) || $2::jsonb
-          WHERE name = $1 AND revoked_at IS NULL RETURNING id`,
-        [name, { takes_holders: list }],
-      )
-      .then((r) => r.rows.length),
+  // The provider merges into permissions, so an operator-set
+  // permissions.source_id tenant grant survives.
+  const changed = await withProvider((p) =>
+    p.setPatTakesHolders(name, list, { actor: cliActor(), via: "cli" }),
   );
-  if (updated === 0) {
+  if (changed.length === 0) {
     throw new Error(`Token "${name}" not found.`);
   }
   console.log(
-    JSON.stringify({ name, takes_holders: list, updated: true }, null, 2),
+    JSON.stringify(
+      { name, takes_holders: list, updated: true, revisions: changed.map((c) => c.revision) },
+      null,
+      2,
+    ),
   );
 }
 

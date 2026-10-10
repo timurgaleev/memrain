@@ -25,8 +25,11 @@ import type { Engine } from "./engine/interface.ts";
 import { validateSlug as validatePageSlug } from "./pages.ts";
 import {
   hasScope,
+  intersectGrantedScopes,
+  normalizeScopesInput,
   parseScopeString,
   assertAllowedScopes,
+  RETIRED_SCOPES,
 } from "./scope.ts";
 
 // ---------------------------------------------------------------------------
@@ -532,6 +535,8 @@ export interface GrantSnapshot {
   federated_read: string[];
   bound_slug_prefixes: string[] | null;
   tenant_mode: TenantMode;
+  /** The client's registered scopes. Issued tokens hold at most these. */
+  scopes: string[];
 }
 
 /**
@@ -544,6 +549,11 @@ export interface GrantChange {
   federatedRead?: string[];
   boundSlugPrefixes?: string[];
   tenantMode?: TenantMode;
+  /**
+   * The client's scopes: omitted leaves them, a list replaces them. Narrowing
+   * applies to already-issued tokens on their next verification.
+   */
+  scopes?: string[];
   /** Per-client token lifetimes: omitted leaves them, null clears them. */
   accessTtlSeconds?: number | null;
   refreshTtlSeconds?: number | null;
@@ -595,6 +605,7 @@ export type GrantReasonCode =
   | "empty_read_set"
   | "invalid_prefix"
   | "invalid_ttl"
+  | "invalid_scope"
   | "public_client_mode";
 
 export interface GrantReason {
@@ -653,6 +664,7 @@ const GRANT_FIELDS: (keyof GrantSnapshot)[] = [
   "federated_read",
   "bound_slug_prefixes",
   "tenant_mode",
+  "scopes",
 ];
 
 function sortedCopy(xs: string[]): string[] {
@@ -664,6 +676,7 @@ export function grantSnapshot(row: {
   federated_read: unknown;
   bound_slug_prefixes: unknown;
   tenant_mode: unknown;
+  scope: unknown;
 }): GrantSnapshot {
   const fence = Array.isArray(row.bound_slug_prefixes) && row.bound_slug_prefixes.length > 0
     ? sortedCopy(row.bound_slug_prefixes as string[])
@@ -673,11 +686,67 @@ export function grantSnapshot(row: {
     federated_read: Array.isArray(row.federated_read) ? sortedCopy(row.federated_read as string[]) : [],
     bound_slug_prefixes: fence,
     tenant_mode: parseTenantMode(row.tenant_mode as string | null),
+    scopes: sortedCopy(parseScopeString(typeof row.scope === "string" ? row.scope : null)),
   };
 }
 
 export function grantDiff(before: GrantSnapshot, after: GrantSnapshot): (keyof GrantSnapshot)[] {
   return GRANT_FIELDS.filter((f) => JSON.stringify(before[f]) !== JSON.stringify(after[f]));
+}
+
+/**
+ * A personal access token's grant as its audit rows record it. Built from the
+ * grant columns only — the token hash never reaches an audit row.
+ */
+export interface PatGrantSnapshot {
+  name: string;
+  /** null = no scopes recorded (verify falls back to read+write). */
+  scopes: string[] | null;
+  takes_holders: string[] | null;
+  source_id: string | string[] | null;
+  budget_usd_per_day: number | null;
+}
+
+/** One live token row a PAT grant change applied to. */
+export interface PatGrantChange {
+  id: number;
+  revision: number;
+  before: PatGrantSnapshot;
+  after: PatGrantSnapshot;
+}
+
+/** Who changed a PAT grant, recorded as data only; it authorizes nothing. */
+export interface GrantActor {
+  actor: string;
+  via: GrantVia;
+}
+
+const UNATTRIBUTED_GRANT: GrantActor = { actor: "unattributed", via: "cli" };
+
+function patSnapshot(row: {
+  name: string;
+  scopes: unknown;
+  permissions: unknown;
+  budget_usd_per_day: unknown;
+}): PatGrantSnapshot {
+  let perms: unknown = row.permissions;
+  if (typeof perms === "string") {
+    try {
+      perms = JSON.parse(perms);
+    } catch {
+      perms = undefined;
+    }
+  }
+  const p = perms && typeof perms === "object" ? (perms as Record<string, unknown>) : {};
+  const holders = p.takes_holders;
+  const source = p.source_id;
+  return {
+    name: row.name,
+    scopes: Array.isArray(row.scopes) ? sortedCopy(row.scopes as string[]) : null,
+    takes_holders: Array.isArray(holders) ? (holders as string[]) : null,
+    source_id: typeof source === "string" || Array.isArray(source) ? (source as string | string[]) : null,
+    budget_usd_per_day: row.budget_usd_per_day == null ? null : Number(row.budget_usd_per_day),
+  };
 }
 
 const NO_UNBOUND_REVOKED: UnboundRevocation = { accessTokens: 0, refreshTokens: 0, codes: 0 };
@@ -745,6 +814,8 @@ export function clientAllowsGrant(grantTypes: readonly string[] | null | undefin
 /** What a code or refresh exchange reads off the locked client row. */
 interface IssuePolicy {
   grantRevision: number;
+  /** The client's scopes now; an issued grant is cut down to these. */
+  scopes: string[];
   grantTypes: string[] | null;
   accessTtl: number | undefined;
   refreshTtl: number | undefined;
@@ -769,8 +840,9 @@ async function lockClientForIssue(tx: Engine, clientId: string): Promise<IssuePo
     grant_types: string[] | null;
     access_ttl_seconds: number | string | null;
     refresh_ttl_seconds: number | string | null;
+    scope: string | null;
   }>(
-    `SELECT grant_revision, grant_types, access_ttl_seconds, refresh_ttl_seconds
+    `SELECT grant_revision, grant_types, access_ttl_seconds, refresh_ttl_seconds, scope
        FROM oauth_clients WHERE client_id = $1 AND deleted_at IS NULL FOR SHARE`,
     [clientId],
   );
@@ -778,6 +850,7 @@ async function lockClientForIssue(tx: Engine, clientId: string): Promise<IssuePo
   if (!row) return undefined;
   return {
     grantRevision: Number(row.grant_revision),
+    scopes: parseScopeString(row.scope),
     grantTypes: row.grant_types,
     accessTtl: positiveOrUndefined(row.access_ttl_seconds),
     refreshTtl: positiveOrUndefined(row.refresh_ttl_seconds),
@@ -957,7 +1030,7 @@ export class OAuthProvider {
     // client asking for everything, not a client that can do nothing.
     const requestedScopes = parseScopeString(
       client.scope !== undefined && client.scope.trim() !== "" ? client.scope : "read write",
-    );
+    ).filter((s) => !RETIRED_SCOPES.has(s));
     assertAllowedScopes(requestedScopes);
     // SECURITY: Dynamic Client Registration is UNAUTHENTICATED (public /register).
     // A self-registered client must NEVER hold an elevated scope — otherwise
@@ -1162,9 +1235,10 @@ export class OAuthProvider {
         access_ttl_seconds: number | null;
         refresh_ttl_seconds: number | null;
         client_secret_hash: string | null;
+        scope: string | null;
       }>(
         `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode, grant_revision, grant_types,
-                access_ttl_seconds, refresh_ttl_seconds, client_secret_hash
+                access_ttl_seconds, refresh_ttl_seconds, client_secret_hash, scope
            FROM oauth_clients
           WHERE client_id = $1 AND deleted_at IS NULL
           FOR UPDATE`,
@@ -1178,7 +1252,7 @@ export class OAuthProvider {
       }
 
       const federated = change.federatedRead ?? [change.sourceId];
-      await this.validateGrantChange(tx, change, federated);
+      const scope = await this.validateGrantChange(tx, change, federated);
       // The same refusal register-client makes: with /authorize auto-approving,
       // a public client moved into client mode would mint tokens on its
       // client_id alone, and every sign-in would be refused from then on.
@@ -1213,6 +1287,7 @@ export class OAuthProvider {
         federated_read: federated,
         bound_slug_prefixes: fence,
         tenant_mode: change.tenantMode ?? row.tenant_mode,
+        scope: scope ?? row.scope,
       });
       const changed = grantDiff(before, after);
       const ttlsBefore = {
@@ -1253,6 +1328,7 @@ export class OAuthProvider {
                   tenant_mode = COALESCE($6, tenant_mode),
                   access_ttl_seconds = CASE WHEN $11::boolean THEN $12::integer ELSE access_ttl_seconds END,
                   refresh_ttl_seconds = CASE WHEN $13::boolean THEN $14::integer ELSE refresh_ttl_seconds END,
+                  scope = COALESCE($15::text, scope),
                   grant_revision = grant_revision + 1
             WHERE client_id = $1 AND deleted_at IS NULL
             RETURNING grant_revision
@@ -1275,6 +1351,7 @@ export class OAuthProvider {
           change.accessTtlSeconds ?? null,
           change.refreshTtlSeconds !== undefined,
           change.refreshTtlSeconds ?? null,
+          scope ?? null,
         ],
       );
       const revision = applied.rows[0]?.revision;
@@ -1286,9 +1363,24 @@ export class OAuthProvider {
     });
   }
 
-  /** Collect every reason a grant change is invalid; throw when there is any. */
-  private async validateGrantChange(tx: Engine, change: GrantChange, federated: string[]): Promise<void> {
+  /**
+   * Collect every reason a grant change is invalid; throw when there is any.
+   * Returns the normalized scope string when the change sets scopes.
+   */
+  private async validateGrantChange(
+    tx: Engine,
+    change: GrantChange,
+    federated: string[],
+  ): Promise<string | undefined> {
     const reasons: GrantReason[] = [];
+    let scope: string | undefined;
+    if (change.scopes !== undefined) {
+      try {
+        scope = normalizeScopesInput(change.scopes);
+      } catch (e) {
+        reasons.push({ code: "invalid_scope", detail: e instanceof Error ? e.message : String(e) });
+      }
+    }
     if (federated.length === 0) {
       reasons.push({ code: "empty_read_set", detail: "the read set must name at least one source" });
     }
@@ -1325,6 +1417,7 @@ export class OAuthProvider {
       }
     }
     if (reasons.length > 0) throw new GrantValidationError(reasons);
+    return scope;
   }
 
   /** A client's grant history, newest first. Grant fields only, no secrets. */
@@ -1361,8 +1454,9 @@ export class OAuthProvider {
         federated_read: string[] | null;
         bound_slug_prefixes: string[] | null;
         tenant_mode: string | null;
+        scope: string | null;
       }>(
-        `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode
+        `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode, scope
            FROM oauth_clients
           WHERE client_id = $1 AND deleted_at IS NULL
           FOR UPDATE`,
@@ -1455,8 +1549,9 @@ export class OAuthProvider {
         tenant_mode: string | null;
         grant_revision: number | string;
         redirect_uris: string[] | null;
+        scope: string | null;
       }>(
-        `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode, grant_revision, redirect_uris
+        `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode, grant_revision, redirect_uris, scope
            FROM oauth_clients
           WHERE client_id = $1 AND deleted_at IS NULL
           FOR UPDATE`,
@@ -1520,8 +1615,9 @@ export class OAuthProvider {
         tenant_mode: string | null;
         grant_revision: number | string;
         deleted_at: unknown;
+        scope: string | null;
       }>(
-        `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode, grant_revision, deleted_at
+        `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode, grant_revision, deleted_at, scope
            FROM oauth_clients WHERE client_id = $1 FOR UPDATE`,
         [clientId],
       );
@@ -1912,16 +2008,129 @@ export class OAuthProvider {
     );
   }
 
+  // -------------------------------------------------------------------------
+  // Personal access token grants
+  // -------------------------------------------------------------------------
+
+  /**
+   * Apply one grant change to every live token named `name`, under a row lock.
+   * Each row's `grant_revision` is bumped and one `oauth_grant_audit` row
+   * (`pat:<id>`) written by the same statement, so a PAT grant — promotion to
+   * admin included — never changes without a trace. Returns the rows changed;
+   * an empty list when no live token has that name.
+   */
+  private async mutatePatGrant(
+    tx: Engine,
+    name: string,
+    who: GrantActor,
+    action: string,
+    next: (before: PatGrantSnapshot) => PatGrantSnapshot,
+    set: { sql: string; params: unknown[] },
+  ): Promise<PatGrantChange[]> {
+    const locked = await tx.query<{
+      id: number | string;
+      name: string;
+      scopes: unknown;
+      permissions: unknown;
+      budget_usd_per_day: unknown;
+    }>(
+      `SELECT id, name, scopes, permissions, budget_usd_per_day
+         FROM access_tokens
+        WHERE name = $1 AND revoked_at IS NULL
+        ORDER BY id
+        FOR UPDATE`,
+      [name],
+    );
+    const out: PatGrantChange[] = [];
+    for (const row of locked.rows) {
+      const id = Number(row.id);
+      const before = patSnapshot(row);
+      const after = next(before);
+      const applied = await tx.query<{ revision: number | string }>(
+        `WITH u AS (
+           UPDATE access_tokens SET ${set.sql}, grant_revision = grant_revision + 1
+            WHERE id = $1 AND revoked_at IS NULL
+            RETURNING id, grant_revision
+         )
+         INSERT INTO oauth_grant_audit (client_id, revision, actor, via, before, after)
+         SELECT 'pat:' || u.id, u.grant_revision, $2, $3, $4::text::jsonb, $5::text::jsonb FROM u
+         RETURNING revision`,
+        [
+          id,
+          who.actor,
+          who.via,
+          JSON.stringify(before),
+          JSON.stringify({ ...after, action }),
+          ...set.params,
+        ],
+      );
+      const revision = applied.rows[0]?.revision;
+      // The row is locked, so the UPDATE cannot miss it.
+      if (revision === undefined) throw new Error(`grant write for token ${id} affected no row`);
+      out.push({ id, revision: Number(revision), before, after });
+    }
+    return out;
+  }
+
+  /**
+   * Replace the scopes of the live personal access token(s) named `name`.
+   * Audited and revision-bumped like a client rescope; the next request made
+   * with the token is verified against the new set.
+   */
+  async setPatScopes(name: string, scopes: string[], who: GrantActor): Promise<PatGrantChange[]> {
+    const list = Array.from(new Set(scopes.map((s) => s.trim()).filter(Boolean)));
+    if (list.length === 0) throw new Error("scope list cannot be empty");
+    assertAllowedScopes(list);
+    return this.engine.transaction((tx) =>
+      this.mutatePatGrant(
+        tx,
+        name,
+        who,
+        "set_scopes",
+        (b) => ({ ...b, scopes: sortedCopy(list) }),
+        { sql: "scopes = $6::text[]", params: [list] },
+      ),
+    );
+  }
+
+  /**
+   * Replace the takes-holder allow-list of the live token(s) named `name`.
+   * A JSONB merge, not a replace: an operator-set `permissions.source_id`
+   * tenant grant survives (a wholesale replace would floor the token to the
+   * 'default' source).
+   */
+  async setPatTakesHolders(name: string, holders: string[], who: GrantActor): Promise<PatGrantChange[]> {
+    const list = holders.map((s) => s.trim()).filter(Boolean);
+    if (list.length === 0) {
+      throw new Error('takes-holders list cannot be empty (use "world" for default-deny on private)');
+    }
+    return this.engine.transaction((tx) =>
+      this.mutatePatGrant(
+        tx,
+        name,
+        who,
+        "set_takes_holders",
+        (b) => ({ ...b, takes_holders: list }),
+        {
+          sql: "permissions = COALESCE(permissions, '{}'::jsonb) || $6::text::jsonb",
+          params: [JSON.stringify({ takes_holders: list })],
+        },
+      ),
+    );
+  }
+
   /**
    * Set (or clear) the daily USD ceiling of a client, or of a personal access
    * token when no client has that id. `null` removes the cap, which
    * is also the default — an uncapped client is allowed, exactly as before the
    * column existed. The column is NUMERIC(10,2); a value that would not fit is
-   * refused here rather than silently rounded by the database.
+   * refused here rather than silently rounded by the database. A token's cap
+   * change is audited and revision-bumped like its scopes.
    */
   async setClientBudget(
     clientId: string,
     usdPerDay: number | null,
+    who: GrantActor = UNATTRIBUTED_GRANT,
   ): Promise<boolean> {
     if (usdPerDay !== null) {
       if (!Number.isFinite(usdPerDay) || usdPerDay < 0) {
@@ -1940,14 +2149,17 @@ export class OAuthProvider {
     );
     if (r.rows.length > 0) return true;
     // Not an OAuth client: a personal access token spends under its name.
-    const t = await this.engine.query<{ name: string }>(
-      `UPDATE access_tokens
-          SET budget_usd_per_day = $2
-        WHERE name = $1 AND revoked_at IS NULL
-        RETURNING name`,
-      [clientId, usdPerDay],
+    const t = await this.engine.transaction((tx) =>
+      this.mutatePatGrant(
+        tx,
+        clientId,
+        who,
+        "set_budget",
+        (b) => ({ ...b, budget_usd_per_day: usdPerDay }),
+        { sql: "budget_usd_per_day = $6::numeric", params: [usdPerDay] },
+      ),
     );
-    if (t.rows.length > 0) return true;
+    if (t.length > 0) return true;
     // Or an enrollment: the person redeemed from it spends under its id.
     const e = await this.engine.query<{ id: string }>(
       // Addressed by its own id or by the spend key a replacement inherited.
@@ -2190,7 +2402,12 @@ export class OAuthProvider {
           return { error: "The client's grant changed after this code was approved; authorize again" };
         }
 
-        const scopes = (row["scopes"] as string[]) || [];
+        // A code carries the scopes approved at /authorize; the client may have
+        // been narrowed since.
+        const scopes = intersectGrantedScopes((row["scopes"] as string[]) || [], policy.scopes);
+        if (scopes.length === 0) {
+          return { error: "The client no longer holds any scope this code was approved for" };
+        }
         const withRefresh = clientAllowsGrant(policy?.grantTypes, "refresh_token");
         // The resource approved at /authorize binds the tokens; a request-time
         // value only fills in for a code that named none.
@@ -2283,7 +2500,13 @@ export class OAuthProvider {
         // Requested scope on refresh must be a subset of the original grant
         // (RFC 6749 §6). hasScope honors the hierarchy so an `admin` grant can
         // refresh down to an implied scope. Omitted scope inherits the grant.
-        const grantedScopes = (row.scopes as string[]) || [];
+        // The grant is first cut down to what the client holds now, and the new
+        // tokens carry the cut-down set, so a refresh never undoes a narrowing,
+        // not even after the client is widened again.
+        const grantedScopes = intersectGrantedScopes((row.scopes as string[]) || [], policy.scopes);
+        if (grantedScopes.length === 0) {
+          return { error: "The client no longer holds any scope this refresh token was granted" };
+        }
         if (scopes && scopes.some((s) => !hasScope(grantedScopes, s))) {
           return { error: "Requested scope exceeds refresh token grant" };
         }
@@ -2398,7 +2621,8 @@ export class OAuthProvider {
               e.budget_usd_per_day AS grant_budget_usd_per_day,
               e.revoked_at AS grant_revoked_at,
               ${legacyGrantRevoked("t")} AS legacy_grant_revoked,
-              c.deleted_at AS client_deleted_at
+              c.deleted_at AS client_deleted_at,
+              c.scope AS current_scope
        FROM oauth_tokens t
        LEFT JOIN oauth_clients c ON c.client_id = t.client_id
        LEFT JOIN oauth_enrollments e ON t.grant_bound AND e.id = t.grant_id
@@ -2442,11 +2666,20 @@ export class OAuthProvider {
         Array.isArray(boundRaw) && boundRaw.length > 0
           ? (boundRaw as string[])
           : undefined;
+      // The token holds what it was issued AND its client still holds, so a
+      // rescope that narrows the client binds tokens already handed out.
+      const scopes = intersectGrantedScopes(
+        (row.scopes as string[]) || [],
+        parseScopeString(typeof row.current_scope === "string" ? row.current_scope : null),
+      );
+      if (scopes.length === 0) {
+        throw new InvalidTokenError("Token holds no scope its client is still granted");
+      }
       return {
         token,
         clientId: row.client_id as string,
         clientName: (row.client_name as string | null) ?? undefined,
-        scopes: (row.scopes as string[]) || [],
+        scopes,
         expiresAt,
         resource: row.resource ? new URL(row.resource as string) : undefined,
         sourceId: (row.source_id as string | null) ?? undefined,

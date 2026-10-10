@@ -104,15 +104,24 @@ describe("grant snapshot + diff", () => {
       federated_read: ["beta", "acme"],
       bound_slug_prefixes: [],
       tenant_mode: null,
+      scope: "write read",
     });
-    expect(s).toEqual({ source_id: "acme", federated_read: ["acme", "beta"], bound_slug_prefixes: null, tenant_mode: "client" });
+    expect(s).toEqual({
+      source_id: "acme",
+      federated_read: ["acme", "beta"],
+      bound_slug_prefixes: null,
+      tenant_mode: "client",
+      scopes: ["read", "write"],
+    });
   });
 
   test("the diff names exactly the fields that differ, order-insensitively", () => {
-    const a = grantSnapshot({ source_id: "acme", federated_read: ["acme", "beta"], bound_slug_prefixes: null, tenant_mode: "client" });
-    const b = grantSnapshot({ source_id: "acme", federated_read: ["beta", "acme"], bound_slug_prefixes: ["inbox"], tenant_mode: "enrollment" });
+    const a = grantSnapshot({ source_id: "acme", federated_read: ["acme", "beta"], bound_slug_prefixes: null, tenant_mode: "client", scope: "read write" });
+    const b = grantSnapshot({ source_id: "acme", federated_read: ["beta", "acme"], bound_slug_prefixes: ["inbox"], tenant_mode: "enrollment", scope: "write read" });
+    const c = grantSnapshot({ source_id: "acme", federated_read: ["acme", "beta"], bound_slug_prefixes: null, tenant_mode: "client", scope: "read" });
     expect(grantDiff(a, a)).toEqual([]);
     expect(grantDiff(a, b)).toEqual(["bound_slug_prefixes", "tenant_mode"]);
+    expect(grantDiff(a, c)).toEqual(["scopes"]);
   });
 });
 
@@ -138,7 +147,13 @@ describe("rescopeClient — apply", () => {
     const history = await provider.listGrantAudit(clientId);
     expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({ client_id: clientId, revision: 1, actor: "ops", via: "cli" });
-    expect(history[0]!.before).toEqual({ source_id: "default", federated_read: ["default"], bound_slug_prefixes: null, tenant_mode: "client" });
+    expect(history[0]!.before).toEqual({
+      source_id: "default",
+      federated_read: ["default"],
+      bound_slug_prefixes: null,
+      tenant_mode: "client",
+      scopes: ["read", "write"],
+    });
     expect(history[0]!.after).toEqual(res.after);
 
     const kinds = await storage.raw().query<{ b: string; a: string }>(
