@@ -410,6 +410,22 @@ describe("subagent handler", () => {
     const r = await handler({ task: "t" }, { job, ...ctxFor(job) });
     expect(r).toMatchObject({ stop_reason: "end_turn", final_text: "done" });
   });
+
+  it("hands the attempt's abort signal to every model call", async () => {
+    await queue.enqueue({
+      kind: SUBAGENT_JOB_KIND, payload: { task: "t" }, maxRetries: 0, timeoutMs: AGENT_JOB_TIMEOUT_MS,
+    });
+    const job = (await queue.claim({ kinds: [SUBAGENT_JOB_KIND] }))!;
+    const s = script([
+      { content: [use("t1")], stopReason: "tool_use" },
+      { content: [{ text: "done" }], stopReason: "end_turn" },
+    ]);
+    const abort = new AbortController();
+    const handler = makeSubagentHandler(storage, { converse: s.fn, dispatch: counter().fn, modelId: HAIKU });
+    await handler({ task: "t" }, { job, ...ctxFor(job), signal: abort.signal });
+    expect(s.calls).toHaveLength(2);
+    for (const call of s.calls) expect(call.signal).toBe(abort.signal);
+  });
 });
 
 describe("parseSubagentPayload", () => {

@@ -149,6 +149,21 @@ describe("extractAtomsPhase", () => {
     expect(Number(rows[0]?.n)).toBe(1);
   });
 
+  it("never extracts from a quarantined document", async () => {
+    await seedDoc("held", "Q".repeat(500));
+    await engine.query(
+      `UPDATE documents SET frontmatter = '{"quarantine":{"patterns":["test"]}}'::jsonb WHERE id = 'held'`,
+    );
+    let calls = 0;
+    const llm: LlmFn = async () => {
+      calls++;
+      return { text: atomJson("Held", "Held body."), modelId: "fake-nova" };
+    };
+    const r = await extractAtomsPhase(engine, { llmFn: llm });
+    expect(r.documentsScanned).toBe(0);
+    expect(calls).toBe(0);
+  });
+
   it("skips short documents (budget/quality floor)", async () => {
     await seedDoc("d1", "too short");
     const r = await extractAtomsPhase(engine, { llmFn: fakeLlm("[]") });

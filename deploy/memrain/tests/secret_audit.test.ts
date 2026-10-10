@@ -234,7 +234,7 @@ describe("auditStoredSecrets apply", () => {
 });
 
 describe("auditStoredSecrets apply, partial failures", () => {
-  it("counts a page whose search mirror failed as an error, not a rewrite", async () => {
+  it("counts a page whose search mirror failed as a rewrite with a failed mirror, not an error", async () => {
     process.env.MEMRAIN_SECRET_SCAN_DISPOSITION = "flag";
     await putPage(storage, { slug: "notes/leak", type: "note", markdown_body: `the token is ${TOKEN}` });
     delete process.env.MEMRAIN_SECRET_SCAN_DISPOSITION;
@@ -245,10 +245,31 @@ describe("auditStoredSecrets apply, partial failures", () => {
     } finally {
       spy.mockRestore();
     }
-    expect(r.rows_rewritten).toBe(0);
-    expect(r.errors).toHaveLength(1);
-    expect(r.errors[0]).toContain("search mirror failed");
+    expect(r.rows_rewritten).toBe(1);
+    expect(r.mirror_failed).toBe(1);
+    expect(r.errors).toEqual([]);
+    expect(String(await scalar(`SELECT markdown_body AS v FROM pages WHERE slug = 'notes/leak'`))).not.toContain(TOKEN);
     expect(JSON.stringify(r)).not.toContain(TOKEN);
+  });
+
+  it("reports a credential in a slug by its redacted form and never renames the page", async () => {
+    const slug = `notes/${TOKEN}`;
+    await storage.engine().query(
+      `INSERT INTO pages (slug, type, title, markdown_body, content_hash) VALUES ($1, 'note', 't', 'clean body', 'h')`,
+      [slug],
+    );
+    const dry = await auditStoredSecrets(storage, { kinds: ["pages"] });
+    const hit = dry.hits.find((h) => h.field === "slug");
+    expect(hit).toMatchObject({ kind: "pages", secret_kind: "github-token", fingerprint: fingerprintSecret(TOKEN) });
+    expect(hit!.ref).toContain("[REDACTED:github-token:");
+    expect(JSON.stringify(dry)).not.toContain(TOKEN);
+
+    const applied = await auditStoredSecrets(storage, { kinds: ["pages"], apply: true, mirror });
+    expect(applied.rows_rewritten).toBe(0);
+    expect(applied.errors).toHaveLength(1);
+    expect(applied.errors[0]).toContain("slug carries a credential");
+    expect(JSON.stringify(applied)).not.toContain(TOKEN);
+    expect(await scalar(`SELECT count(*)::int AS v FROM pages WHERE slug = $1`, [slug])).toBe(1);
   });
 
   it("keeps both values when a redacted key lands on an existing key, and reports it", async () => {

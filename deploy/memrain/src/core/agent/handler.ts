@@ -104,6 +104,7 @@ export function makeSubagentHandler(storage: Storage, deps: SubagentDeps = {}): 
       maxUsd,
       ...(ctx.recordUsage ? { recordUsage: ctx.recordUsage } : {}),
       ...(ctx.updateProgress ? { updateProgress: ctx.updateProgress } : {}),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
       ...deps,
     });
     return { ...result };
@@ -143,6 +144,7 @@ async function runTenantJob(
       authorize,
       ...(ctx.recordUsage ? { recordUsage: ctx.recordUsage } : {}),
       ...(ctx.updateProgress ? { updateProgress: ctx.updateProgress } : {}),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
       ...deps,
     }),
   );

@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { EMBED_DIMENSIONS } from "../src/core/embedding.ts";
-import { embedGapsPhase, embedGapsMaxPerCycle } from "../src/core/cycle/embed-gaps.ts";
+import { EMBED_GAPS_MAX_FAILURES, embedGapsPhase, embedGapsMaxPerCycle } from "../src/core/cycle/embed-gaps.ts";
 import { ALL_PHASES, runPhase } from "../src/core/cycle/index.ts";
 import { selectTickPhases } from "../src/recipes/cycle.ts";
 import { currentSpendTags } from "../src/core/budget.ts";
@@ -113,6 +113,41 @@ describe("embed-gaps phase", () => {
     expect(r.embedded).toBe(0);
     expect(r.failed).toBe(50);
     expect(calls).toBe(50);
+  });
+
+  it("leaves out chunks that keep failing, so the ones behind them get filled", async () => {
+    await seedGaps(60);
+    const refused = (text: string): boolean => Number(text.split(" ").pop()) < 50;
+    const failing = async (text: string) => {
+      if (refused(text)) {
+        const e = new Error("Input is malformed");
+        e.name = "ValidationException";
+        throw e;
+      }
+      return embed();
+    };
+    for (let tick = 0; tick < EMBED_GAPS_MAX_FAILURES; tick++) {
+      const r = await embedGapsPhase(storage.engine(), { maxPerCycle: 200, embed: failing });
+      expect(r.embedded).toBe(0);
+    }
+    const r = await embedGapsPhase(storage.engine(), { maxPerCycle: 200, embed: failing });
+    expect(r).toMatchObject({ scanned: 10, embedded: 10, failed: 0 });
+    expect(await embeddedCount()).toBe(10);
+  });
+
+  it("does not count a transient failure against a chunk", async () => {
+    await seedGaps(3);
+    const outage = async () => {
+      throw Object.assign(new Error("service unavailable"), { $metadata: { httpStatusCode: 503 } });
+    };
+    for (let tick = 0; tick <= EMBED_GAPS_MAX_FAILURES; tick++) {
+      await embedGapsPhase(storage.engine(), { embed: outage });
+    }
+    const n = await storage.engine().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM chunks WHERE embed_failures > 0`,
+    );
+    expect(n.rows[0]!.n).toBe(0);
+    expect((await embedGapsPhase(storage.engine(), { embed })).embedded).toBe(3);
   });
 
   it("runs in the default cycle, outside quiet hours only", () => {

@@ -121,7 +121,10 @@ export interface EnqueueInput {
    * dead-letters it (terminal, no retry). Omit to use the worker default.
    */
   timeoutMs?: number;
-  /** Submitting client, for a job run under a tenant's grant. Requires `authority`. */
+  /**
+   * Submitting client: the job's paid calls book against it. With `authority`
+   * the job also runs under that client's grant.
+   */
   submittedBy?: string;
   /** Grant snapshot the handler re-checks against the live client. Requires `submittedBy`. */
   authority?: Record<string, unknown>;

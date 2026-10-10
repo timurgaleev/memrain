@@ -36,6 +36,7 @@ import { parseModelJson } from "../llm/json-output.ts";
 import { isQuoteInText } from "./quote-verify.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
 import { clearSynthFailure, filterBackedOff, recordSynthFailure } from "./synth-failures.ts";
+import { quarantineFilterFragment } from "../quarantine.ts";
 
 /** Allowed atom_type values. A returned type outside this set falls back. */
 export const ATOM_TYPES = [
@@ -279,7 +280,8 @@ export function isWellFormedEmptyExtraction(raw: string): boolean {
  *
  * memrain stores body text in `chunks`, not on `documents`, so the per-document
  * text is the concatenation of its chunks (ordered). Soft-deleted documents
- * (migration 040 added `deleted_at`) are excluded.
+ * (migration 040 added `deleted_at`) are excluded, and so are quarantined
+ * ones: text the gate hid from search must not come back as an atom.
  */
 async function discoverDocuments(
   engine: Engine,
@@ -298,6 +300,7 @@ async function discoverDocuments(
        FROM documents d
        JOIN chunks c ON c.document_id = d.id
       WHERE d.deleted_at IS NULL
+        AND ${quarantineFilterFragment("d")}
       GROUP BY d.id, d.source_id, d.effective_date, d.ingested_at
       ORDER BY MAX(d.updated_at) DESC`,
   );

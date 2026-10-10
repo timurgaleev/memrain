@@ -250,9 +250,11 @@ export class Queue {
       timeoutMs = input.timeoutMs;
     }
     // Authority travels only with its submitter: a snapshot nobody owns could
-    // not be fenced to an owner, and an owner without one would run unchecked.
-    if ((input.submittedBy === undefined) !== (input.authority === undefined)) {
-      throw new Error("Queue.enqueue: submittedBy and authority go together");
+    // not be fenced to an owner. A submitter without one only books the job's
+    // spend to that client; a handler that acts under a grant (subagent)
+    // refuses a row that carries no snapshot.
+    if (input.authority !== undefined && input.submittedBy === undefined) {
+      throw new Error("Queue.enqueue: authority requires submittedBy");
     }
     const r = await this.engine.query<RawJobRow>(
       `INSERT INTO jobs (id, kind, payload, priority, max_retries, next_attempt_at, quiet_hours_skip, timeout_ms,

@@ -137,6 +137,8 @@ export interface RunAgentOptions {
    * identity each tool is dispatched as. Absent for operator jobs.
    */
   authorize?: () => Promise<AuthInfo>;
+  /** The job attempt's abort signal: an abandoned attempt stops its in-flight model call. */
+  signal?: AbortSignal;
 }
 
 /** What an assistant ledger row holds beyond the Bedrock message. */
@@ -395,6 +397,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
         maxTokens,
         operation: AGENT_SPEND_OP,
         modelId,
+        ...(opts.signal ? { signal: opts.signal } : {}),
       });
     } catch (err) {
       budget.release(hold);

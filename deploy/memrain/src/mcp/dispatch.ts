@@ -219,6 +219,7 @@ import {
 import { checkConnectorHealth } from "../core/connectors/health.ts";
 import {
   checkClientBudget,
+  currentSpendClient,
   runWithSpendClient,
 } from "../core/budget.ts";
 import { MODE_BUNDLES, isSearchMode, expansionActive } from "../core/search/mode.ts";
@@ -1853,7 +1854,9 @@ async function maybeEnqueueChronicleExtract(
   if (!eligible.ok) return false;
   try {
     const sourceId = page.source_id ?? "default";
-    await new Queue(storage.engine()).enqueue({
+    // A failed job under this content's id gets another run; enqueue would
+    // leave it dead for as long as the text stays the same.
+    await new Queue(storage.engine()).enqueueOrRevive({
       kind: "chronicle_extract",
       payload: { slug: page.slug, sourceId },
       id: chronicleJobId(sourceId, page.slug, page.content_hash),
@@ -1914,6 +1917,8 @@ async function mirrorOrQueue(
   // The handler mirrors the page as it is when it runs, so an older job landing
   // after a newer one is wasted work, never stale data.
   const id = `page_mirror:${page.source_id ?? "default"}:${page.slug}:${randomUUID()}`;
+  // The mirror's embeds are the writer's spend, as they are inline.
+  const spender = currentSpendClient();
   try {
     await new Queue(storage.engine()).enqueue({
       kind: PAGE_MIRROR_JOB_KIND,
@@ -1921,6 +1926,7 @@ async function mirrorOrQueue(
       id,
       priority: 1,
       timeoutMs: 300_000,
+      ...(spender !== null ? { submittedBy: spender } : {}),
     });
     return { search_pending: true, search_job_id: id };
   } catch (e) {
@@ -4686,7 +4692,7 @@ async function callChronicleBackfill(
   for (const p of eligible) {
     const sourceId = p.source_id ?? "default";
     try {
-      await queue.enqueue({
+      await queue.enqueueOrRevive({
         kind: "chronicle_extract",
         payload: { slug: p.slug, sourceId },
         id: chronicleJobId(sourceId, p.slug, p.content_hash),

@@ -47,6 +47,9 @@ function printHuman(r: SecretAuditResult): void {
   }
   if (r.hits_truncated) console.log(`  … more hits not listed (raise --limit)`);
   if (r.applied) console.log(`Rewrote ${r.rows_rewritten} row(s).`);
+  if (r.mirror_failed > 0) {
+    console.log(`  ${r.mirror_failed} rewritten page(s) whose search mirror failed; run the audit again`);
+  }
   for (const e of r.errors) console.log(`  not rewritten: ${e}`);
   for (const c of r.key_collisions) {
     console.log(`  ${c.kind} ${c.ref} ${c.field}: a redacted key matched an existing key; kept both (suffix ~n)`);

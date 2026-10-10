@@ -19,8 +19,10 @@ import {
   resolveValidFrom,
 } from "./llm/date-grounding.ts";
 import { stripPastedContent } from "./transcripts/pasted-content.ts";
-import { resolveOwnerEntity } from "./facts-owner.ts";
+import { inferSubject, resolveOwnerEntity } from "./facts-owner.ts";
+import { buildGazetteer, type GazetteerEntry } from "./gazetteer.ts";
 import { PAGE_MIRROR_PATH_SQL } from "./page-index.ts";
+import { quarantineFilterFragment } from "./quarantine.ts";
 import {
   resolveSonnetFn,
   resolveFactsModel,
@@ -668,6 +670,8 @@ export async function writeExtractedFacts(
     opts.firstParty === true
       ? resolveOwnerEntity(opts.ownerEntity ?? process.env["MEMRAIN_OWNER_ENTITY"])
       : null;
+  // Built on the first owner claim only, so a batch without one reads nothing.
+  let gazetteer: GazetteerEntry[] | undefined;
   for (const f of facts) {
     // Notability gate: high-only drops non-HIGH facts.
     if (notabilityFilter === "high-only" && f.notability !== "high") {
@@ -679,7 +683,16 @@ export async function writeExtractedFacts(
     // owner slug is used as given — it names the operator's page exactly.
     let slug: string | null;
     if (owner !== null && f.entity === null && f.attributed_to === "user") {
-      slug = owner;
+      if (gazetteer === undefined) {
+        try {
+          gazetteer = await buildGazetteer(storage, opts.sourceSlug ?? "", opts.sourceId ? [opts.sourceId] : undefined);
+        } catch (e) {
+          gazetteer = [];
+          console.error(`[facts-extract] entity names unavailable, claims stay the owner's: ${errorClass(e)}`);
+        }
+      }
+      // A claim that names one known entity is about it, not the speaker.
+      slug = inferSubject(f.fact, gazetteer) ?? owner;
     } else {
       // A placeholder entity ("team", "unknown", "the user") would mint a junk
       // page, or resolve onto one, and every later fact would hang another edge
@@ -967,6 +980,28 @@ export async function pageObservationDate(
   }
 }
 
+/**
+ * True when the page's search mirror is quarantined: the gate hid that text
+ * from search, so it must not come back as facts either. A page with no
+ * mirror yet, or a failed read, is not held here.
+ */
+async function isQuarantinedPage(storage: Storage, slug: string, sourceId: string): Promise<boolean> {
+  try {
+    const r = await storage.engine().query(
+      `SELECT 1
+         FROM pages p
+         JOIN documents d ON d.source_path = ${PAGE_MIRROR_PATH_SQL}
+        WHERE p.slug = $1 AND p.source_id = $2 AND p.deleted_at IS NULL
+          AND NOT (${quarantineFilterFragment("d")})
+        LIMIT 1`,
+      [slug, sourceId],
+    );
+    return r.rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /** The absorb reason an extractor outcome files, or null for a readable one. */
 function outcomeAbsorbReason(outcome: ExtractOutcome): FactsAbsorbReason | null {
   return outcome === "truncated"
@@ -999,6 +1034,17 @@ export async function extractFactsForPage(
   const budget = new BudgetTracker(cap, "facts-extract:on-write");
   const windows = extractionWindows(opts.slug, opts.body, factsMaxWindows());
   const sourceId = opts.sourceId ?? "default";
+  if (await isQuarantinedPage(storage, opts.slug, sourceId)) {
+    return {
+      factsWritten: 0,
+      factsSkipped: 0,
+      factsFailed: 0,
+      spentUsd: 0,
+      absorbed: null,
+      windowsRun: 0,
+      junkSkipped: 0,
+    };
+  }
   const observationDate =
     opts.observationDate !== undefined
       ? opts.observationDate

@@ -15,6 +15,7 @@ import {
   backfillEnabled,
 } from "../src/core/cycle/conversation-facts-backfill.ts";
 import { FACTS_EXTRACT_VERSION } from "../src/core/facts-extract.ts";
+import { QUARANTINE_KEY } from "../src/core/quarantine.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
 import { ingestSessions } from "../src/core/transcripts/ingest.ts";
 import type { TranscriptSession } from "../src/core/transcripts/types.ts";
@@ -90,6 +91,25 @@ describe("conversationFactsBackfillPhase", () => {
     });
     expect(second.pagesConsidered).toBe(0);
     expect(second.factsWritten).toBe(0);
+  });
+
+  it("leaves out a page whose search mirror is quarantined", async () => {
+    await putPage(storage, { slug: "notes/held", type: "note", markdown_body: LONG_BODY });
+    const e = storage.engine();
+    const held = `{"${QUARANTINE_KEY}":{"patterns":["test"]}}`;
+    await e.query(
+      `UPDATE documents SET frontmatter = COALESCE(frontmatter, '{}'::jsonb) || $1::jsonb WHERE source_path = 'page://notes/held'`,
+      [held],
+    );
+    await e.query(
+      `INSERT INTO documents (id, source_path, title, frontmatter)
+       SELECT 'held-doc', 'page://notes/held', 'held', $1::jsonb
+        WHERE NOT EXISTS (SELECT 1 FROM documents WHERE source_path = 'page://notes/held')`,
+      [held],
+    );
+    const r = await conversationFactsBackfillPhase(storage, { sonnetFn: fakeSonnet() });
+    expect(r.pagesConsidered).toBe(0);
+    expect(r.factsWritten).toBe(0);
   });
 
   it("stops at the brain-wide page cap", async () => {

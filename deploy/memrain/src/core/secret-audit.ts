@@ -78,6 +78,12 @@ export interface SecretAuditResult {
   code_chunks_affected: number;
   /** Rows rewritten under `apply`. */
   rows_rewritten: number;
+  /**
+   * Live pages rewritten under `apply` whose search mirror then failed: the
+   * new version holds the redacted text, the search copy still the old one,
+   * which the next run finds again in `chunks`. Counted in rows_rewritten too.
+   */
+  mirror_failed: number;
   hits: SecretAuditHit[];
   hits_truncated: boolean;
   /** Rows an `apply` could not rewrite, by store and ref (no text). */
@@ -269,8 +275,10 @@ function parseJson(v: unknown): unknown {
 
 type Row = Record<string, unknown>;
 
-function refOf(spec: StoreSpec, row: Row): string {
-  if (spec.store === "page_versions") return `${String(row.slug)}@v${String(row.version_n)}`;
+/** `slug` is the slug as reported: redacted when it carries a credential itself. */
+function refOf(spec: StoreSpec, row: Row, slug: string | undefined): string {
+  if (spec.store === "page_versions") return `${slug ?? String(row.slug)}@v${String(row.version_n)}`;
+  if (slug !== undefined) return slug;
   return String(row[spec.keys[0]!]);
 }
 
@@ -424,6 +432,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
     by_secret_kind: {},
     code_chunks_affected: 0,
     rows_rewritten: 0,
+    mirror_failed: 0,
     hits: [],
     hits_truncated: false,
     errors: [],
@@ -448,6 +457,16 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
         // scanned before a later field claimed a value is swept again below.
         const echoSizeAt = new Map<string, number>();
         const jsonEchoSizeAt = new Map<string, number>();
+        // A slug is the row's key and every link's target: it is reported,
+        // never rewritten, and the report names the row by its redacted form.
+        let slugRef: string | undefined;
+        let slugHit = false;
+        if (spec.keys.includes("slug") && typeof row.slug === "string") {
+          const s = scanText(row.slug, "slug", echo, allow, highEntropy);
+          slugRef = s.value as string;
+          slugHit = s.hits.length > 0;
+          hits.push(...s.hits);
+        }
         for (const f of spec.text) {
           const v = row[f];
           if (typeof v !== "string" || v.length === 0) continue;
@@ -486,7 +505,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
           }
         }
         if (hits.length === 0) continue;
-        const ref = refOf(spec, row);
+        const ref = refOf(spec, row, slugRef);
         result.rows_affected += 1;
         result.hits_total += hits.length;
         result.by_kind[store] = (result.by_kind[store] ?? 0) + hits.length;
@@ -498,13 +517,13 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
           else result.hits_truncated = true;
         }
         if (!opts.apply) continue;
+        if (slugHit) result.errors.push(`${store} ${ref}: its slug carries a credential; the audit never renames a page`);
+        if (Object.keys(next).length === 0) continue;
         try {
           const outcome = await applyRow(storage, spec, row, next, opts);
           if (outcome !== "moved") {
-            // A failed mirror still wrote the redacted page version, but its
-            // search copy holds the old text: an error, not a rewrite.
-            if (outcome === "rewritten") result.rows_rewritten += 1;
-            else result.errors.push(`${store} ${ref}: rewritten, but its search mirror failed; run the audit again`);
+            result.rows_rewritten += 1;
+            if (outcome === "mirror_failed") result.mirror_failed += 1;
             await logIngest(engine, {
               source_type: "secret-audit-redacted",
               source_ref: `${store}:${ref}`,

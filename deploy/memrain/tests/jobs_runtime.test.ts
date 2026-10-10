@@ -27,7 +27,8 @@ import {
 import { bucketJobErrors, classifyJobError } from "../src/core/jobs/error-classify.ts";
 import { kindDefaultTimeoutMs } from "../src/core/jobs/kind-defaults.ts";
 import { BedrockHalted, resetBedrockCircuitForTests } from "../src/core/llm/bedrock-errors.ts";
-import { currentSpendClient, currentSpendTags } from "../src/core/budget.ts";
+import { currentSpendClient, currentSpendTags, DailyCapRefusal, utcDayStart } from "../src/core/budget.ts";
+import { OperationError } from "../src/core/operation-error.ts";
 import { checkQueueHealth } from "../src/core/doctor-ops.ts";
 
 let tmp: string;
@@ -226,6 +227,33 @@ describe("LLM outage defer", () => {
     await storage.engine().exec(`UPDATE jobs SET deferred_count = ${MAX_DEFERS} WHERE id = 'cap'`);
     await new Worker(queue, quiet).drainOnce();
     expect((await queue.get("cap"))?.status).toBe("failed");
+  });
+
+  it("a daily-cap refusal waits for the next UTC day without spending a retry", async () => {
+    registerHandler("capped", async () => {
+      throw new DailyCapRefusal("brain", "the brain spent its daily cap", "wait for tomorrow");
+    });
+    await queue.enqueue({ kind: "capped", id: "dc", maxRetries: 1 });
+    const worker = new Worker(queue, quiet);
+    await worker.drainOnce();
+    const row = await queue.get("dc");
+    expect(row?.status).toBe("pending");
+    expect(row?.retryCount).toBe(0);
+    expect(row?.deferredCount).toBe(1);
+    expect(row?.lastError).toMatch(/^deferred: daily_cap: /);
+    expect(row!.nextAttemptAt.getTime()).toBe(utcDayStart().getTime() + 86_400_000);
+    expect(worker.getStats().deferred).toBe(1);
+  });
+
+  it("a client's own budget refusal still retries the ordinary way", async () => {
+    registerHandler("client-capped", async () => {
+      throw new OperationError("budget_exhausted", "client spent its budget", "raise it");
+    });
+    await queue.enqueue({ kind: "client-capped", id: "cc", maxRetries: 1 });
+    await new Worker(queue, quiet).drainOnce();
+    const row = await queue.get("cc");
+    expect(row?.retryCount).toBe(1);
+    expect(row?.deferredCount).toBe(0);
   });
 
   it("defer is fenced by claim generation", async () => {

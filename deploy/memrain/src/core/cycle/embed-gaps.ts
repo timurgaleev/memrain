@@ -22,6 +22,12 @@ export const DEFAULT_EMBED_GAPS_MAX_PER_CYCLE = 200;
 const STEP = 50;
 /** Calls in flight: kept low so the fill never crowds out interactive embeds. */
 const CONCURRENCY = 2;
+/**
+ * A chunk whose embed failed this often for a reason that does not pass is
+ * left to an operator `memrain embed`: kept in the walk, a block of them at
+ * the front of the id order would use up every tick.
+ */
+export const EMBED_GAPS_MAX_FAILURES = 3;
 
 export interface EmbedGapsOptions {
   maxPerCycle?: number;
@@ -67,6 +73,7 @@ export async function embedGapsPhase(
       concurrency: CONCURRENCY,
       // Filling gaps only: a model swap's re-embed stays a deliberate operator run.
       reembedOnSignatureChange: false,
+      maxFailures: EMBED_GAPS_MAX_FAILURES,
       ...(cursor !== undefined ? { startAfterId: cursor } : {}),
       ...(opts.embed ? { embed: opts.embed } : {}),
     });

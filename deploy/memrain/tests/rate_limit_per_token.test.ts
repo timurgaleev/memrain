@@ -38,4 +38,31 @@ describe("per-token rate limiter", () => {
     const anon = await handler(mk(), { isPublic: false });
     expect(anon.status).toBe(200);
   });
+
+  test("an add_fact with items is charged one write per item", async () => {
+    const perToken = new RateLimiter({ capacity: 5, refillPerSecond: 0 });
+    const handler = makeMcpHandler({
+      storage: { engine: () => ({ query: async () => ({ rows: [] }) }) } as never,
+      internalRateLimiter: new RateLimiter({ capacity: 100, refillPerSecond: 0 }),
+      perTokenRateLimiter: perToken,
+      clientKey: () => "ip",
+    });
+    const call = (items: unknown[]) =>
+      new Request("http://x/mcp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "tools/call",
+          params: { name: "add_fact", arguments: { items } },
+        }),
+      });
+    const ctx = { isPublic: false, authInfo: { clientId: "tok1" } as never };
+    const items = (n: number) => Array.from({ length: n }, (_, i) => ({ entity_slug: "people/a", fact: `f${i}` }));
+
+    // Five items fit a five-write bucket; a sixth write does not.
+    expect((await handler(call(items(5)), ctx)).status).not.toBe(429);
+    const over = await handler(call(items(1)), ctx);
+    expect(over.status).toBe(429);
+    expect(over.headers.get("Retry-After")).not.toBeNull();
+  });
 });

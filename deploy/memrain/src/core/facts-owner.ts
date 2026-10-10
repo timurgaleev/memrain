@@ -13,6 +13,7 @@
  */
 import { validateSlug } from "./pages.ts";
 import { isJunkEntitySlug } from "./entity-junk.ts";
+import { scanMentions, type GazetteerEntry } from "./gazetteer.ts";
 
 let warnedFor: string | null = null;
 
@@ -44,6 +45,17 @@ export function resolveOwnerEntity(
     );
   }
   return null;
+}
+
+/**
+ * The entity a first-person claim is about when its text names exactly one
+ * known person or company page ("Alice moved to Berlin" said as `User`).
+ * Null when it names none or several: the claim then stays the owner's. The
+ * gazetteer already drops a name two pages share, so a match is unambiguous.
+ */
+export function inferSubject(text: string, entries: GazetteerEntry[]): string | null {
+  const hits = scanMentions(text, entries);
+  return hits.length === 1 ? hits[0]! : null;
 }
 
 /** Speaker labels a first-party importer gives the operator. */

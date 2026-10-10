@@ -11,7 +11,7 @@ import { Storage } from "../src/core/storage.ts";
 import { listFacts } from "../src/core/facts.ts";
 import { putPage } from "../src/core/pages.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { isOwnerSpeaker, resolveOwnerEntity } from "../src/core/facts-owner.ts";
+import { inferSubject, isOwnerSpeaker, resolveOwnerEntity } from "../src/core/facts-owner.ts";
 import {
   extractFactsForPage,
   writeExtractedFacts,
@@ -94,6 +94,45 @@ describe("writeExtractedFacts with an owner entity", () => {
     expect(rows.map((r) => [r.fact, r.attributed_to])).toEqual([
       ["Prefers Postgres over MySQL.", "user"],
     ]);
+  });
+
+  it("set: a claim that names exactly one known entity lands on that entity", async () => {
+    process.env["MEMRAIN_OWNER_ENTITY"] = "people/robin";
+    await putPage(storage, { slug: "people/alice-smith", type: "person", title: "Alice Smith", markdown_body: "Alice." });
+    await putPage(storage, { slug: "companies/acme-corp", type: "company", title: "Acme Corp", markdown_body: "Acme." });
+    const w = await writeExtractedFacts(
+      storage,
+      [
+        { ...OWNER_CLAIM, fact: "Alice Smith moved to Berlin." },
+        { ...OWNER_CLAIM, fact: "Alice Smith joined Acme Corp." },
+        { ...OWNER_CLAIM, fact: "Prefers tea in the morning." },
+      ],
+      { firstParty: true },
+    );
+    expect(w.written).toBe(3);
+    const alice = await listFacts(storage, "people/alice-smith", { decay: false });
+    expect(alice.map((r) => r.fact)).toEqual(["Alice Smith moved to Berlin."]);
+    const robin = await listFacts(storage, "people/robin", { decay: false });
+    expect(robin.map((r) => r.fact).sort()).toEqual(["Alice Smith joined Acme Corp.", "Prefers tea in the morning."]);
+  });
+
+  it("unset: a claim naming a known entity is still dropped, as before", async () => {
+    await putPage(storage, { slug: "people/alice-smith", type: "person", title: "Alice Smith", markdown_body: "Alice." });
+    const w = await writeExtractedFacts(storage, [{ ...OWNER_CLAIM, fact: "Alice Smith moved to Berlin." }], {
+      firstParty: true,
+    });
+    expect(w).toMatchObject({ written: 0, skipped: 1 });
+  });
+
+  it("inferSubject maps only a single unambiguous mention", () => {
+    const entries = [
+      { phrase: "alice smith", slug: "people/alice-smith" },
+      { phrase: "acme corp", slug: "companies/acme-corp" },
+    ];
+    expect(inferSubject("Alice Smith said so.", entries)).toBe("people/alice-smith");
+    expect(inferSubject("Alice Smith and Alice Smith again.", entries)).toBe("people/alice-smith");
+    expect(inferSubject("Alice Smith joined Acme Corp.", entries)).toBeNull();
+    expect(inferSubject("Nobody we know.", entries)).toBeNull();
   });
 
   it("set: never for a batch the caller did not call first-party", async () => {

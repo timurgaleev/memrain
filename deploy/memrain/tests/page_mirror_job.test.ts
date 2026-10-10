@@ -92,6 +92,34 @@ describe("where the mirror is built", () => {
     expect((await mirror("page://notes/queued"))?.content).toContain("badgers");
   });
 
+  it("books a queued mirror to the writing client's spend id", async () => {
+    process.env.MEMRAIN_PAGE_MIRROR_SYNC = "0";
+    await storage.engine().query(`INSERT INTO sources (id, kind, path_prefix) VALUES ('tenant-a', 'other', 'tenant:a')`);
+    const r = await dispatchTool(
+      storage,
+      { name: "page_put", arguments: { slug: "notes/spent", markdown_body: body("herons") } },
+      {
+        authInfo: {
+          token: "tok-a",
+          clientId: "client-a",
+          spendId: "enr-1",
+          scopes: ["read", "write"],
+          sourceId: "tenant-a",
+          allowedSources: ["tenant-a"],
+          isPublic: false,
+        },
+      },
+    );
+    expect(r.isError ?? false).toBe(false);
+    const res = JSON.parse((r.content[0] as { text: string }).text) as Record<string, unknown>;
+    const job = await new Queue(storage.engine()).get(res.search_job_id as string);
+    expect(job?.submittedBy).toBe("enr-1");
+    expect(job?.authority).toBeNull();
+
+    const operator = await put({ slug: "notes/operator", markdown_body: body("egrets") });
+    expect((await new Queue(storage.engine()).get(operator.search_job_id as string))?.submittedBy).toBeNull();
+  });
+
   it("builds it inline when the caller asks to wait for the index", async () => {
     process.env.MEMRAIN_PAGE_MIRROR_SYNC = "0";
     const res = await put({ slug: "notes/waited", markdown_body: body("herons"), wait_for_index: true });

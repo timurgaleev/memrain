@@ -453,6 +453,27 @@ describe("on-write chronicle backstop", () => {
       delete process.env["MEMRAIN_AUTO_CHRONICLE"];
     }
   });
+
+  it("gives a failed extraction of the same text another run", async () => {
+    process.env["MEMRAIN_AUTO_CHRONICLE"] = "1";
+    const markdown_body =
+      "Planning session with the team on the quarter's goals, the owners for each one, the risks we see, and how we will check progress every week.";
+    try {
+      await call("page_put", { slug: "meetings/backstop-revive", type: "meeting", markdown_body });
+      await storage.engine().query(
+        `UPDATE jobs SET status = 'failed', last_error = 'boom' WHERE id LIKE '%:meetings/backstop-revive:%'`,
+      );
+      // The same text again: a no-op put is not a change, so append-then-restore.
+      await call("page_put", { slug: "meetings/backstop-revive", type: "meeting", markdown_body: `${markdown_body} More.` });
+      await call("page_put", { slug: "meetings/backstop-revive", type: "meeting", markdown_body });
+      const jobs = await storage.engine().query<{ status: string }>(
+        `SELECT status FROM jobs WHERE id LIKE '%:meetings/backstop-revive:%' ORDER BY created_at`,
+      );
+      expect(jobs.rows.map((j) => j.status)).toEqual(["pending", "pending"]);
+    } finally {
+      delete process.env["MEMRAIN_AUTO_CHRONICLE"];
+    }
+  });
 });
 
 describe("direct page-read diary fence", () => {

@@ -38,6 +38,8 @@ import type { SonnetFn } from "../llm/sonnet.ts";
 import type { LlmFn } from "../llm/haiku.ts";
 import { filterWorthwhile, worthGateEnabled } from "../synthesis/worth-gate.ts";
 import { phaseFenceCheck } from "./phase-context.ts";
+import { quarantineFilterFragment } from "../quarantine.ts";
+import { PAGE_MIRROR_PATH_SQL } from "../page-index.ts";
 
 export interface ConversationFactsBackfillOptions {
   /** Cap on pages processed per run. Default 50. */
@@ -134,6 +136,12 @@ export async function conversationFactsBackfillPhase(
         -- them would pay to re-derive our own output on every run.
         AND p.slug NOT LIKE 'reflections/%'
         AND p.slug NOT LIKE 'patterns/%'
+        -- A page the gate quarantined in search is not mined for facts either.
+        AND NOT EXISTS (
+          SELECT 1 FROM documents qd
+           WHERE qd.source_path = ${PAGE_MIRROR_PATH_SQL}
+             AND NOT (${quarantineFilterFragment("qd")})
+        )
         AND NOT (
           -- Match on (source_slug, source_id): a same-slug page in ANOTHER
           -- source must not mask THIS page's un-extracted facts (pages are

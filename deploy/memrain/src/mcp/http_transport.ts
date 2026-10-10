@@ -244,6 +244,19 @@ export function makeMcpHandler(opts: McpHandlerOptions) {
       return new Response(null, { status: 204 });
     }
 
+    // A batched `add_fact` (`items`) is that many writes in one call: charge
+    // every item past the first, to the same buckets the request paid.
+    for (let i = extraFactWrites(raw); i > 0; i--) {
+      const ipOk = limiter.allow(clientId);
+      if (!ipOk || (perTokenLimiter && tokenId && !perTokenLimiter.allow(tokenId))) {
+        const retryAfter = ipOk ? perTokenLimiter!.retryAfterSeconds(tokenId!) : limiter.retryAfterSeconds(clientId);
+        return Response.json(
+          rpcError(null, ERR_RATE_LIMITED, "rate limit exceeded (add_fact items)"),
+          { status: 429, headers: { "Retry-After": String(retryAfter) } },
+        );
+      }
+    }
+
     if (Array.isArray(raw)) {
       // A JSON-RPC batch runs N dispatches but only spent ONE rate-limit token
       // at the top. Cap the batch, then charge the remaining N-1 tokens up front
@@ -281,6 +294,18 @@ export function makeMcpHandler(opts: McpHandlerOptions) {
     );
     return Response.json(single);
   };
+}
+
+/** `add_fact` items past the first in each `tools/call` of a request. */
+function extraFactWrites(raw: unknown): number {
+  let n = 0;
+  for (const r of Array.isArray(raw) ? raw : [raw]) {
+    const req = r as { method?: unknown; params?: { name?: unknown; arguments?: { items?: unknown } } } | null;
+    if (req?.method !== "tools/call" || req.params?.name !== "add_fact") continue;
+    const items = req.params.arguments?.items;
+    if (Array.isArray(items) && items.length > 1) n += items.length - 1;
+  }
+  return n;
 }
 
 async function handleSingle(

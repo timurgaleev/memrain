@@ -58,7 +58,7 @@
  * contextual vector to a raw one and the marker stays truthful on every path.
  * Unmarked chunks embed raw content, unchanged.
  */
-import { classifyBedrockError, runInBatchScope } from "./llm/bedrock-errors.ts";
+import { classifyBedrockError, isTransientBedrockError, runInBatchScope } from "./llm/bedrock-errors.ts";
 import type { Engine } from "./engine/interface.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
 import { embeddableChunkFragment } from "./embed-skip.ts";
@@ -89,6 +89,11 @@ const THROTTLE_BASE_DELAY_MS = 250;
 export interface EmbedBackfillOptions {
   /** Max chunks to embed this run. Default: no cap (all candidates). */
   limit?: number;
+  /**
+   * Leave out chunks whose embed has failed this many times for a reason
+   * that does not pass on its own (migration 140). Default: try every chunk.
+   */
+  maxFailures?: number;
   /** Checked before each page: an aborted run throws the signal's reason. */
   signal?: AbortSignal;
   /** Count candidates only — never write. */
@@ -197,6 +202,8 @@ function escapeLike(s: string): string {
 export interface EmbedScope {
   sourceId?: string;
   slugs?: string[];
+  /** Candidates only: chunks below this many counted embed failures. */
+  maxFailures?: number;
 }
 
 /**
@@ -247,6 +254,10 @@ function buildCandidateWhere(
   let where = `em.chunk_id IS NULL
         AND ${embeddableChunkFragment("d", "c")}`;
   where += scopeFragment(params, scope);
+  if (scope?.maxFailures !== undefined) {
+    params.push(scope.maxFailures);
+    where += `\n        AND c.embed_failures < $${params.length}`;
+  }
   if (cursor !== undefined) {
     params.push(cursor);
     where += `\n        AND c.id COLLATE "C" > $${params.length}`;
@@ -529,6 +540,7 @@ async function embedPage(
         else if (Number(outcome?.inserted ?? 0) > 0) onEmbedded();
       } catch (err) {
         onFailed();
+        if (!isTransientBedrockError(err)) await countFailure(engine, row);
         console.error(
           `embed-backfill: chunk ${row.id} failed:`,
           err instanceof Error ? err.message : err,
@@ -538,6 +550,25 @@ async function embedPage(
   };
   const pool = Array.from({ length: Math.min(concurrency, total) }, () => worker());
   await Promise.all(pool);
+}
+
+/**
+ * Count a failure that will not pass on its own against the chunk, only while
+ * it still holds the text that failed: a re-index starts its new text at zero.
+ * Best effort; a lost count only costs one more try.
+ */
+async function countFailure(engine: Engine, row: CandidateRow): Promise<void> {
+  try {
+    await engine.query(
+      `UPDATE chunks SET embed_failures = embed_failures + 1 WHERE id = $1 AND content = $2`,
+      [row.id, row.content],
+    );
+  } catch (err) {
+    console.error(
+      `embed-backfill: chunk ${row.id} failure count not recorded:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 /** Runs as a batch: a failure that would only repeat stops the run early. */
@@ -570,6 +601,10 @@ async function runEmbedBackfillBody(
           ...(opts.slugs && opts.slugs.length > 0 ? { slugs: opts.slugs } : {}),
         }
       : undefined;
+  // Candidates only: the forceReembed and signature selectors share EmbedScope
+  // through scopeFragment, which never reads it.
+  const candidateScope: EmbedScope | undefined =
+    opts.maxFailures !== undefined ? { ...scope, maxFailures: opts.maxFailures } : scope;
 
   // Provenance auto-invalidation (migration 066), opt-in. Count always (so a
   // dry run reports it); delete only on a real run so the freed rows become
@@ -592,7 +627,7 @@ async function runEmbedBackfillBody(
 
   // Total up front via a cheap count (index-only, no rows materialized). Used
   // for the dry-run result and as the progress denominator.
-  const total = await countCandidates(engine, opts.startAfterId, opts.limit, scope);
+  const total = await countCandidates(engine, opts.startAfterId, opts.limit, candidateScope);
 
   if (opts.dryRun) {
     return {
@@ -637,7 +672,7 @@ async function runEmbedBackfillBody(
       opts.limit !== undefined && opts.limit > 0 ? opts.limit - processed : undefined;
     const pageLimit = remaining !== undefined ? Math.min(pageSize, remaining) : pageSize;
 
-    const page = await fetchCandidatePage(engine, cursor, pageLimit, scope);
+    const page = await fetchCandidatePage(engine, cursor, pageLimit, candidateScope);
     if (page.length === 0) break;
 
     await embedPage(engine, page, model, embed, concurrency, onEmbedded, onFailed, onStale);

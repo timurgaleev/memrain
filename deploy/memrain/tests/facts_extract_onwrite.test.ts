@@ -18,6 +18,8 @@ import {
   __resetFactsQueueForTests,
 } from "../src/core/facts-queue.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
+import { putPage } from "../src/core/pages.ts";
+import { QUARANTINE_KEY } from "../src/core/quarantine.ts";
 
 const LONG_BODY =
   "Alice said she will move to Gotham in March and prefers tea over coffee. " +
@@ -149,6 +151,36 @@ describe("extractFactsForPage", () => {
   afterEach(async () => {
     await storage.close();
     rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /** Mark (or create) the mirror document at `path` as quarantined. */
+  async function quarantineMirror(path: string): Promise<void> {
+    const e = storage.engine();
+    const held = `{"${QUARANTINE_KEY}":{"patterns":["test"]}}`;
+    await e.query(
+      `UPDATE documents SET frontmatter = COALESCE(frontmatter, '{}'::jsonb) || $2::jsonb WHERE source_path = $1`,
+      [path, held],
+    );
+    await e.query(
+      `INSERT INTO documents (id, source_path, title, frontmatter)
+       SELECT 'held-doc', $1, 'held', $2::jsonb
+        WHERE NOT EXISTS (SELECT 1 FROM documents WHERE source_path = $1)`,
+      [path, held],
+    );
+  }
+
+  it("makes no call for a page whose search mirror is quarantined", async () => {
+    await putPage(storage, { slug: "notes/held", type: "note", markdown_body: LONG_BODY });
+    await quarantineMirror("page://notes/held");
+    const { fn, calls } = fakeSonnet();
+    const r = await extractFactsForPage(storage, {
+      slug: "notes/held",
+      type: "note",
+      body: LONG_BODY,
+      sonnetFn: fn,
+    });
+    expect(calls()).toBe(0);
+    expect(r.factsWritten).toBe(0);
   });
 
   it("writes an extracted fact scoped to the page source", async () => {

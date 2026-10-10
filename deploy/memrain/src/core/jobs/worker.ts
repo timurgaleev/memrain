@@ -16,7 +16,7 @@
 import { type BatchScope, runInBatchScope } from "../llm/bedrock-errors.ts";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
-import { runWithSpendClient, runWithSpendTags } from "../budget.ts";
+import { isDailyCapRefusal, runWithSpendClient, runWithSpendTags, utcDayStart } from "../budget.ts";
 import { getHandler } from "./handlers.ts";
 import { kindDefaultTimeoutMs } from "./kind-defaults.ts";
 import { haltOf, llmHaltEnabled, noteHalt } from "./llm-halt.ts";
@@ -40,6 +40,7 @@ export const MAX_DEFERS = 48;
 export const DEFAULT_DRAIN_MS = 8000;
 /** How long stop() waits for aborted jobs to hand their rows back. */
 const HAND_BACK_WAIT_MS = 5000;
+const DAY_MS = 86_400_000;
 
 export interface WorkerOptions {
   /** Polling interval when idle. Default 1000 ms. */
@@ -100,7 +101,7 @@ export interface WorkerStats {
    * had re-claimed the row (or it was cancelled or removed meanwhile).
    */
   fenced: number;
-  /** Attempts put back to wait out an LLM outage, no retry spent. */
+  /** Attempts put back to wait out an LLM outage or a daily cap, no retry spent. */
   deferred: number;
 }
 
@@ -438,6 +439,9 @@ export class Worker {
         if (!timedOut && !unrecoverable && (await this.deferForOutage(job, gen, e, message))) {
           return;
         }
+        if (!timedOut && !unrecoverable && (await this.deferForDailyCap(job, gen, e, message))) {
+          return;
+        }
         this.log(
           "warn",
           `[${job.id}] ${job.kind} ${timedOut ? "timed out" : unrecoverable ? "failed (unrecoverable)" : "failed"}: ${message}`,
@@ -541,6 +545,33 @@ export class Worker {
       "warn",
       `[${job.id}] ${job.kind} deferred until ${new Date(until).toISOString()} ` +
         `(${halt.cls} on ${halt.key === "*" ? "every model" : halt.key}); no retry spent`,
+    );
+    return true;
+  }
+
+  /**
+   * Put the attempt back until the next UTC day when the brain's or the
+   * cycle's daily cap refused it: a retry today is refused the same way, so
+   * it would only burn the job's retries. Counts toward MAX_DEFERS.
+   */
+  private async deferForDailyCap(
+    job: JobRow,
+    gen: number,
+    err: unknown,
+    message: string,
+  ): Promise<boolean> {
+    if (!isDailyCapRefusal(err)) return false;
+    if (job.deferredCount >= MAX_DEFERS) {
+      this.log("warn", `[${job.id}] ${job.kind} was deferred ${job.deferredCount} times; failing it`);
+      return false;
+    }
+    const until = new Date(utcDayStart().getTime() + DAY_MS);
+    const deferred = await this.queue.defer(job.id, gen, until, message.slice(0, 300));
+    if (!deferred) return this.claimLost(job.id, gen);
+    this.stats.deferred++;
+    this.log(
+      "warn",
+      `[${job.id}] ${job.kind} deferred until ${until.toISOString()} (daily spend cap); no retry spent`,
     );
     return true;
   }
