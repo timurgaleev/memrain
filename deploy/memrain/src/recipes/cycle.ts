@@ -17,6 +17,7 @@ import {
   type PhaseName,
 } from "../core/cycle/index.ts";
 import { consoleProgress } from "../core/output/progress.ts";
+import { phasesRunTodayUtc } from "../core/cycle/phase-runs.ts";
 import { runDeepSynthPhase } from "../core/synthesis/deep-synth.ts";
 import {
   tryAcquireDbLock,
@@ -78,12 +79,13 @@ export function firstTickDelayMs(intervalMs: number): number {
   return Math.min(Math.max(0, intervalMs), initialTickDelayMs());
 }
 
-// Phases skipped during quiet hours. embed-stale calls Bedrock; mirror-pages
-// re-embeds stale/missing page mirrors (also Bedrock); extract-timeline (when
+// Phases skipped during quiet hours. embed-stale and embed-gaps call Bedrock;
+// mirror-pages re-embeds stale/missing page mirrors (also Bedrock); extract-timeline (when
 // MEMRAIN_MEETING_TIMELINE=1) is a replace-own-projection that re-derives every
 // meeting's events, so it is write-heavy on a meeting-rich vault.
 const COSTLY_PHASES: ReadonlySet<PhaseName> = new Set([
   "embed-stale",
+  "embed-gaps",
   "mirror-pages",
   "embed-facts",
   "extract-timeline",
@@ -132,20 +134,30 @@ export function capEnv(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/** `MEMRAIN_SYNTHESIS_ONCE_PER_DAY`: on unless set to 0. */
+export function synthesisOncePerDay(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.MEMRAIN_SYNTHESIS_ONCE_PER_DAY !== "0";
+}
+
 /**
  * Build a tick's phase list. Quiet hours drop COSTLY_PHASES (embed-stale etc.)
  * AND are the only window where the opt-in synthesis chain runs (it's the
- * heaviest Haiku work, so keep it off peak). The operator skip-list applies last.
+ * heaviest Haiku work, so keep it off peak). A synthesis phase named in
+ * `ranTodayUtc` has already run this UTC day and is left out, so a short tick
+ * interval does not multiply its bill. The operator skip-list applies last.
  */
 export function selectTickPhases(opts: {
   inQuiet: boolean;
   synthEnabled: boolean;
   skipPhases: Set<string>;
+  ranTodayUtc?: ReadonlySet<string>;
 }): PhaseName[] {
   const base: PhaseName[] = opts.inQuiet
     ? ALL_PHASES.filter((p) => !COSTLY_PHASES.has(p))
     : [...ALL_PHASES];
-  if (opts.synthEnabled && opts.inQuiet) base.push(...SYNTHESIS_PHASES);
+  if (opts.synthEnabled && opts.inQuiet) {
+    base.push(...SYNTHESIS_PHASES.filter((p) => !opts.ranTodayUtc?.has(p)));
+  }
   return base.filter((p) => !opts.skipPhases.has(p));
 }
 
@@ -199,20 +211,12 @@ export function startCycleLoop(
         minGraded: capEnv(process.env.MEMRAIN_DREAM_SYNTHESIS_MIN_GRADED, 5),
       }
     : undefined;
+  const synthOnce = synthesisOncePerDay();
 
   const runTick = async (): Promise<void> => {
     if (stopped) return;
     const now = new Date();
     const inQuiet = isInQuietHours(now, quietStart, quietEnd);
-    const phases = selectTickPhases({ inQuiet, synthEnabled, skipPhases });
-
-    const opts: CycleOptions = {
-      phases,
-      staleDays,
-      progress: consoleProgress("cycle"),
-      storage,
-      ...(synthCaps ? { synthesis: synthCaps } : {}),
-    };
 
     // Background sweep: reclaim a `memrain-cycle` lock stranded by a holder that
     // crashed (OOM/SIGKILL) on THIS host, so a dead row never blocks a tick for
@@ -241,6 +245,17 @@ export function startCycleLoop(
       console.log(`[cycle] tick status=skipped reason=cycle_already_running (another holder owns ${CYCLE_LOCK_ID})`);
     } else {
       currentLock = lock;
+      // Read under the lock: a holder that just finished has recorded its runs.
+      const ranTodayUtc =
+        synthEnabled && inQuiet && synthOnce ? await phasesRunTodayUtc(storage.engine(), now) : undefined;
+      const phases = selectTickPhases({ inQuiet, synthEnabled, skipPhases, ...(ranTodayUtc ? { ranTodayUtc } : {}) });
+      const opts: CycleOptions = {
+        phases,
+        staleDays,
+        progress: consoleProgress("cycle"),
+        storage,
+        ...(synthCaps ? { synthesis: synthCaps } : {}),
+      };
       // Heartbeat: refresh the lock every ~TTL/10 (30s for the 5 min TTL) so a
       // long run (a heavy embed-stale pass) cannot outlive the short TTL and let
       // a second cycle acquire concurrently. The short TTL is what lets a crashed

@@ -21,6 +21,7 @@ import { reconcileLinksPhase } from "../src/core/cycle/reconcile-links.ts";
 import { orphansPurgePhase } from "../src/core/cycle/orphans-purge.ts";
 import { snapshotPhase } from "../src/core/cycle/snapshot.ts";
 import { entityId } from "../src/core/entities.ts";
+import { EMBED_DIMENSIONS } from "../src/core/embedding.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -314,15 +315,20 @@ describe("extract phase", () => {
 });
 
 describe("runCycleOnce orchestrator", () => {
-  it("runs all 13 phases by default; one phase failing doesn't stop others", async () => {
+  it("runs all 14 phases by default; one phase failing doesn't stop others", async () => {
     await seed();
     const e = storage.engine();
-    // staleDays huge so embed-stale finds nothing — fastest cheap pass
-    const r = await runCycleOnce(e, { staleDays: 99999 });
-    expect(r.phases.length).toBe(13);
+    // staleDays huge so embed-stale finds nothing — fastest cheap pass. The
+    // seeded chunks have no vectors, so embed-gaps gets an offline embedder.
+    const r = await runCycleOnce(e, {
+      staleDays: 99999,
+      embedGaps: { embed: async () => Array.from<number>({ length: EMBED_DIMENSIONS }).fill(0.01) },
+    });
+    expect(r.phases.length).toBe(14);
     expect(r.phases.map((p) => p.phase)).toEqual([
       "lint",
       "embed-stale",
+      "embed-gaps",
       "mirror-pages",
       "embed-facts",
       "extract",

@@ -11,6 +11,11 @@ import {
   type EmbedStaleOptions,
   type EmbedStaleResult,
 } from "./embed-stale.ts";
+import {
+  embedGapsPhase,
+  type EmbedGapsOptions,
+  type EmbedGapsResult,
+} from "./embed-gaps.ts";
 import { extractPhase, type ExtractPhaseOptions } from "./extract.ts";
 import { embedFactsPhase, type EmbedFactsResult } from "./embed-facts.ts";
 import {
@@ -102,10 +107,13 @@ import {
 import type { LlmFn } from "../llm/haiku.ts";
 import { heldLockOf } from "../db-lock.ts";
 import { runInPhaseContext } from "./phase-context.ts";
+import { recordPhaseRun } from "./phase-runs.ts";
+import { runWithSpendTags } from "../budget.ts";
 
 export type PhaseName =
   | "lint"
   | "embed-stale"
+  | "embed-gaps"
   | "mirror-pages"
   | "embed-facts"
   | "extract"
@@ -146,6 +154,7 @@ export type PhaseName =
 export const ALL_PHASES: readonly PhaseName[] = [
   "lint",
   "embed-stale",
+  "embed-gaps",
   "mirror-pages",
   "embed-facts",
   "extract",
@@ -222,6 +231,7 @@ export interface PhaseResult {
   durationMs: number;
   detail?:
     | EmbedStaleResult
+    | EmbedGapsResult
     | EmbedFactsResult
     | ExtractResult
     | ReconcileLinksResult
@@ -448,6 +458,8 @@ export interface CycleOptions {
   staleDays?: number;
   /** Forwarded to embed-stale. */
   embedMaxPerCycle?: number;
+  /** Forwarded to embed-gaps (its cap and the test seam). */
+  embedGaps?: EmbedGapsOptions;
   /** Forwarded to extract. */
   extractMaxDocs?: number;
   /**
@@ -696,8 +708,12 @@ export async function runPhase<T>(
   let orphaned = false;
   // The phase's own promise is kept apart from the deadline wrapper: once the
   // deadline rejects, only this one still tracks the work that is still going.
+  // The spend tag puts the phase's paid calls under the cycle daily cap and
+  // names the phase on each ledger row.
   const work = runInBatchScope(scope, () =>
-    runInPhaseContext({ signal: phaseStop.signal, ...(fence ? { fence } : {}) }, fn),
+    runInPhaseContext({ phase, signal: phaseStop.signal, ...(fence ? { fence } : {}) }, () =>
+      runWithSpendTags({ phase }, fn),
+    ),
   );
   const deadlined = withPhaseTimeout(phase, () => work);
   try {
@@ -732,6 +748,7 @@ export async function runPhase<T>(
         ts: Date.now(),
       });
     }
+    await recordPhaseRun(engine, phase, status);
     return {
       phase,
       ok: true,
@@ -768,6 +785,9 @@ export async function runPhase<T>(
       ...(orphaned ? { orphaned: true as const } : {}),
     };
     if (aborted) interruptedPhases.add(result);
+    // A failed run is still a run: what it spent before failing counts toward
+    // the once-a-day rule.
+    await recordPhaseRun(engine, phase, "fail");
     return result;
   }
 }
@@ -841,6 +861,9 @@ async function runPhases(
         r = await runFenced(engine, p, () => embedStalePhase(engine, o), progress, signal);
         break;
       }
+      case "embed-gaps":
+        r = await runFenced(engine, p, () => embedGapsPhase(engine, options.embedGaps ?? {}), progress, signal);
+        break;
       case "mirror-pages": {
         const storage = options.storage;
         r = await runFenced(

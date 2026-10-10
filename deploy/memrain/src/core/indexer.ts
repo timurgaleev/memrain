@@ -13,7 +13,6 @@
  */
 import { auditSecrets, guardSecrets, guardWrite } from "./secret-scan.ts";
 import { lstatSync, readFileSync, statSync } from "node:fs";
-import { isOperationError } from "./operation-error.ts";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { chunkMarkdown } from "./chunkers/index.ts";
@@ -59,7 +58,8 @@ import {
   defaultContextualLlmBudget,
   CONTEXTUAL_LLM_LABEL,
 } from "./search/contextual-llm.ts";
-import { BudgetTracker } from "./budget.ts";
+import { BudgetTracker, isBudgetRefusal } from "./budget.ts";
+import { isTransientBedrockError } from "./llm/bedrock-errors.ts";
 import type { LlmFn } from "./llm/haiku.ts";
 import { extractEntities } from "./entities.ts";
 import { bumpDocumentClock } from "./generation.ts";
@@ -77,6 +77,10 @@ import {
 export type IndexResult = IndexTxResult & {
   /** Set when the content-sanity gate hid the written document. */
   quarantined?: QuarantineVerdict;
+  /** Chunks written without a vector because embedding was deferred (a spent
+   *  budget or a passing Bedrock failure). Keyword search finds them now; the
+   *  cycle's embed-gaps phase or `memrain embed` adds the vectors later. */
+  embeddingDeferred?: number;
 };
 
 /** Embed one chunk into a vector. Injectable so tests embed offline. */
@@ -473,7 +477,10 @@ async function indexDocumentBody(
   // What a chunk embedded without the LLM tier gets: the deterministic prefix
   // when wrapping is on, raw text otherwise.
   const baseTier: ContextualTier = wrapActive ? "deterministic" : "none";
-  let budgetRefusedChunks = 0;
+  let deferredChunks = 0;
+  // The first deferral's reason. Once set, the remaining chunks skip their paid
+  // calls: the next one would only wait out the same outage or refusal.
+  let deferReason: string | null = null;
 
   // A stored vector for byte-identical text is reused instead of paid for again.
   // Checked before a write slot is taken: a chunk with nothing to pay for must
@@ -481,6 +488,11 @@ async function indexDocumentBody(
   const reusable = (i: number) => priorProse.get(parsed.chunks[i]!) ?? null;
 
   const vectorFor = async (i: number): Promise<void> => {
+    if (deferReason !== null) {
+      deferredChunks++;
+      tiers[i] = baseTier;
+      return;
+    }
     const chunk = parsed.chunks[i]!;
     let prefix = deterministicPrefix;
     if (llmActive) {
@@ -505,16 +517,18 @@ async function indexDocumentBody(
       tiers[i] ??= baseTier;
       vectors[i] = await embed(embedInput, { modelId: model });
     } catch (e) {
-      // A spent daily budget must not destroy the note. Every other embed
-      // failure still aborts before the DB is touched (the half-write guard
-      // above) — but a cap is policy, not an outage, and losing the caller's
-      // text to enforce it is the wrong trade. The chunk lands with a null
-      // vector: written, keyword-searchable, and picked up by `memrain embed`
-      // once the budget rolls over.
-      if (!(isOperationError(e) && e.code === "budget_exhausted")) throw e;
-      budgetRefusedChunks++;
-      // No vector yet: `memrain embed` fills it later with the deterministic
-      // prefix at most, so that is the tier this chunk will end up with.
+      // A spent budget or a passing Bedrock failure (throttle, timeout, 5xx,
+      // quota, a paused circuit) must not lose the caller's text: the vector can
+      // be added later, the text cannot. The chunk lands with a null vector —
+      // written, keyword-searchable, and filled by the cycle's embed-gaps phase
+      // or `memrain embed`. A failure that would repeat (credentials, access, an
+      // unknown model, an oversize input) still aborts before the DB is touched
+      // (the half-write guard below).
+      if (!(isBudgetRefusal(e) || isTransientBedrockError(e))) throw e;
+      deferredChunks++;
+      deferReason ??= e instanceof Error ? e.message.slice(0, 200) : String(e);
+      // No vector yet: the gap fill embeds with the deterministic prefix at
+      // most, so that is the tier this chunk will end up with.
       tiers[i] = baseTier;
     }
   };
@@ -559,11 +573,11 @@ async function indexDocumentBody(
   await Promise.all(Array.from({ length: workers }, () => worker()));
   if (hardError !== null) throw (hardError as { error: unknown }).error;
 
-  if (budgetRefusedChunks > 0) {
+  if (deferredChunks > 0) {
     console.warn(
-      `[memrain] daily budget exhausted mid-index: ${budgetRefusedChunks} chunk(s) of ` +
-        `'${input.sourcePath}' stored WITHOUT embeddings — keyword-searchable now, ` +
-        `run \`memrain embed\` after the budget rolls over to vectorise them`,
+      `[memrain] embedding deferred mid-index: ${deferredChunks} chunk(s) of ` +
+        `'${input.sourcePath}' stored WITHOUT embeddings (${deferReason}) — keyword-searchable now; ` +
+        `the cycle's embed-gaps phase or \`memrain embed\` vectorises them later`,
     );
   }
 
@@ -659,7 +673,11 @@ async function indexDocumentBody(
     await auditQuarantine(storage.engine(), sanityTrip, input.sourcePath, input.sourceId ?? null);
   }
   const quarantined = quarantineVerdictOf(frontmatter);
-  return quarantined ? { ...written, quarantined } : written;
+  return {
+    ...written,
+    ...(quarantined ? { quarantined } : {}),
+    ...(deferredChunks > 0 ? { embeddingDeferred: deferredChunks } : {}),
+  };
 }
 
 async function storedFrontmatter(

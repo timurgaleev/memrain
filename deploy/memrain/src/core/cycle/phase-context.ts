@@ -23,6 +23,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export interface PhaseContext {
+  /** The running phase's name; its paid calls are tagged with it as well. */
+  phase?: string;
   signal: AbortSignal;
   /** Resolves false once the cycle lock is no longer ours. */
   fence?: () => Promise<boolean>;

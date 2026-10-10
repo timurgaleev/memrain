@@ -509,6 +509,8 @@ export interface MirrorPageVerdict {
   ok: boolean;
   /** Set when the content-sanity gate hid the mirrored page from search. */
   quarantined?: QuarantineVerdict;
+  /** Chunks mirrored without a vector because embedding was deferred. */
+  embeddingDeferred?: number;
 }
 
 /**
@@ -537,7 +539,13 @@ export async function mirrorPageVerdict(
         ...(opts.contextualLlmFn ? { contextualLlmFn: opts.contextualLlmFn } : {}),
       },
     );
-    return indexed?.quarantined ? { ok: true, quarantined: indexed.quarantined } : { ok: true };
+    const deferred = indexed?.embeddingDeferred ?? 0;
+    if (deferred > 0) await logMirrorDeferred(storage, page, deferred);
+    return {
+      ok: true,
+      ...(indexed?.quarantined ? { quarantined: indexed.quarantined } : {}),
+      ...(deferred > 0 ? { embeddingDeferred: deferred } : {}),
+    };
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
     console.error(`[page-index] failed to mirror page ${page.slug} into search:`, reason);
@@ -554,5 +562,24 @@ export async function mirrorPageVerdict(
       // A logging failure must never turn a committed page write into a failed one.
     }
     return { ok: false };
+  }
+}
+
+/**
+ * A page mirrored without some of its vectors leaves a `page-mirror-deferred`
+ * ingest row: the page is keyword-searchable, and the row says why semantic
+ * search misses it until the embed-gaps phase catches up.
+ */
+async function logMirrorDeferred(storage: Storage, page: MirrorPageInput, chunks: number): Promise<void> {
+  try {
+    await logIngest(storage.engine(), {
+      source_type: "page-mirror-deferred",
+      source_ref: page.slug,
+      pages_updated: [page.slug],
+      summary: `${chunks} chunk(s) stored without embeddings; filled later by embed-gaps`,
+      ...(page.source_id ? { source_id: page.source_id } : {}),
+    });
+  } catch {
+    // A logging failure must never turn a committed page write into a failed one.
   }
 }

@@ -78,7 +78,8 @@ describe("classifying a failure", () => {
     expect(classifyBedrockError(new Error("The security token included in the request is expired"))).toBe("credential");
     // An instance-metadata hiccup clears on its own; it must not pause every model.
     expect(classifyBedrockError(new Error("Could not load credentials from any providers"))).toBe("other");
-    expect(classifyBedrockError(new Error("HTTP 503"))).toBe("other");
+    expect(classifyBedrockError(new Error("HTTP 503"))).toBe("server");
+    expect(classifyBedrockError(ACCESS)).not.toBe("server");
   });
 
   it("does not let an ARN's digits pass for a server error in fact extraction", () => {

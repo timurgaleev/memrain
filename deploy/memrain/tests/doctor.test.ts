@@ -114,6 +114,7 @@ describe("doctor", () => {
       "cycle-freshness",
       "document-id-drift",
       "duplicate-pages",
+      "embed-backlog",
       "embedding-width",
       "eval-trend",
       "federation-health",

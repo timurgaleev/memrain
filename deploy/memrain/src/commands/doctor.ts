@@ -54,6 +54,7 @@ import {
   checkJunkEntityHubs,
 } from "../core/doctor-ops.ts";
 import { checkConnectorHealth } from "../core/connectors/health.ts";
+import { checkEmbedBacklog } from "../core/doctor-embed.ts";
 import {
   checkFederationHealth,
   checkOauthClientHealth,
@@ -423,6 +424,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["junk-entity-hubs", checkJunkEntityHubs],
       ["code-grammars", checkGrammars],
       ["connector-health", checkConnectorHealth],
+      ["embed-backlog", checkEmbedBacklog],
     ] as const) {
       try {
         const r = await probe(storage.raw());

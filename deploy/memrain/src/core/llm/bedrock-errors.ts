@@ -24,12 +24,28 @@ export type BedrockErrorClass =
   | "throttle"
   /** The input is larger than the model accepts; retrying cannot help. */
   | "input_too_long"
+  /** The model id does not resolve for this account/region (a typo, a retired
+   *  id): every call on it fails the same way until the config changes. */
+  | "model_not_found"
+  /** The call ran out of time (client deadline, a 408/504, a model timeout). */
+  | "timeout"
+  /** The service failed on its side (5xx) or the connection to it dropped. */
+  | "server"
   | "other";
 
 // Only failures that stay failed. A credentials-provider error (an instance
 // metadata hiccup) or a bad signature (clock skew) often clears on its own and
 // must not pause every model.
 const CREDENTIAL = new Set(["ExpiredTokenException", "ExpiredToken", "UnrecognizedClientException"]);
+
+const TIMEOUT_NAMES = new Set(["TimeoutError", "RequestTimeout", "RequestTimeoutException", "ModelTimeoutException"]);
+const SERVER_NAMES = new Set(["InternalServerException", "ServiceUnavailableException", "ModelErrorException"]);
+// Node socket failures carry their cause in `code`, on an error named "Error".
+const TIMEOUT_CODES = new Set(["ETIMEDOUT", "ESOCKETTIMEDOUT"]);
+const SERVER_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE", "EAI_AGAIN", "ENOTFOUND"]);
+// Bedrock answers an unknown model id with a ValidationException, a known but
+// unavailable one with ResourceNotFoundException.
+const MODEL_NOT_FOUND_MSG = /model identifier is invalid|could not resolve the foundation model|model .{0,80}(?:not found|does not exist)/i;
 
 /**
  * Classify by the SDK's error name and HTTP status. A plain `Error` (a stub, a
@@ -39,8 +55,9 @@ const CREDENTIAL = new Set(["ExpiredTokenException", "ExpiredToken", "Unrecogniz
  */
 export function classifyBedrockError(err: unknown): BedrockErrorClass {
   if (typeof err !== "object" || err === null) return "other";
-  const e = err as { name?: unknown; message?: unknown; $metadata?: { httpStatusCode?: unknown } };
+  const e = err as { name?: unknown; message?: unknown; code?: unknown; $metadata?: { httpStatusCode?: unknown } };
   const name = typeof e.name === "string" ? e.name : "";
+  const code = typeof e.code === "string" ? e.code : "";
   // Bounded: the patterns below scan with `.*`, and an error message can carry
   // an echoed prompt.
   const msg = typeof e.message === "string" ? e.message.slice(0, 500) : "";
@@ -53,13 +70,36 @@ export function classifyBedrockError(err: unknown): BedrockErrorClass {
   if (name === "ValidationException" && /too long|too large|exceeds? .*(?:length|limit|tokens)|max(?:imum)? .*tokens/i.test(msg)) {
     return "input_too_long";
   }
+  if (name === "ResourceNotFoundException" || (name === "ValidationException" && MODEL_NOT_FOUND_MSG.test(msg))) {
+    return "model_not_found";
+  }
+  if (TIMEOUT_NAMES.has(name) || TIMEOUT_CODES.has(code) || status === 408 || status === 504) return "timeout";
+  if (SERVER_NAMES.has(name) || SERVER_CODES.has(code) || (typeof status === "number" && status >= 500 && status < 600)) {
+    return "server";
+  }
   if (name && name !== "Error") return "other";
 
   if (/expired ?token|security token .*(?:invalid|expired)/i.test(msg)) return "credential";
   if (/AccessDenied|not authorized to perform/i.test(msg)) return "access";
   if (/ServiceQuotaExceeded/i.test(msg)) return "quota";
   if (/Throttling|too many requests|rate exceeded|\b(?:HTTP|status)\s*429\b/i.test(msg)) return "throttle";
+  if (/ResourceNotFound/i.test(msg) || MODEL_NOT_FOUND_MSG.test(msg)) return "model_not_found";
+  if (/\btimed out\b|\b(?:HTTP|status)\s*(?:408|504)\b/i.test(msg)) return "timeout";
+  if (/\b(?:HTTP|status)\s*5\d\d\b|ECONNRESET|socket hang up/i.test(msg)) return "server";
   return "other";
+}
+
+/**
+ * A failure that says nothing about the input and is likely gone on a later
+ * try: a pause the circuit imposed, a throttle, a timeout, a server-side error,
+ * a spent quota. Work that can be finished later (an embedding) may defer on
+ * these; credentials, access, an unknown model and an oversize input repeat
+ * until someone changes something, so they still fail the call.
+ */
+export function isTransientBedrockError(err: unknown): boolean {
+  if (err instanceof BedrockHalted) return true;
+  const cls = classifyBedrockError(err);
+  return cls === "throttle" || cls === "timeout" || cls === "server" || cls === "quota";
 }
 
 /** Raised instead of sending when the circuit is open for this call. */
@@ -94,7 +134,7 @@ export function resetBedrockCircuitForTests(): void {
 export function noteBedrockFailure(model: string, err: unknown, now = Date.now()): void {
   if (!_batch.getStore()?.circuit) return;
   const cls = classifyBedrockError(err);
-  if (cls !== "credential" && cls !== "access" && cls !== "quota") return;
+  if (cls !== "credential" && cls !== "access" && cls !== "quota" && cls !== "model_not_found") return;
   const key = cls === "credential" ? "*" : model;
   const open = _open.get(key);
   if (open && open.until > now) return;
