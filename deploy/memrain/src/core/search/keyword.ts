@@ -61,6 +61,66 @@ export async function keywordSearch(
   limit: number,
   opts: KeywordSearchOptions = {},
 ): Promise<string[]> {
+  const rows = await keywordSearchScored(engine, query, limit, opts);
+  return rows.map((row) => row.id);
+}
+
+/** One keyword-arm row: the chunk, its page, and the arm's own rank score. */
+export interface KeywordRow {
+  id: string;
+  documentId: string;
+  score: number;
+}
+
+/** {@link keywordSearch} with each row's document and FTS score kept. */
+export async function keywordSearchScored(
+  engine: Engine,
+  query: string,
+  limit: number,
+  opts: KeywordSearchOptions = {},
+): Promise<KeywordRow[]> {
+  return runKeywordQuery(engine, [query], "plainto_tsquery('simple', $1)", limit, opts);
+}
+
+/** Lexemes past this many are dropped from the OR retry: a long query already found its AND rows or it is prose. */
+const MAX_RELAXED_LEXEMES = 16;
+
+/**
+ * The OR form of {@link keywordSearch}: a chunk matching ANY of the query's
+ * lexemes. Used only as a retry when the strict AND pass came back thin. The
+ * lexemes come from the same 'simple' parser the AND form uses, and each goes
+ * back in as its own bound parameter, so no user text is ever spliced into a
+ * tsquery string. A query with fewer than two lexemes has no OR form and
+ * returns [].
+ */
+export async function keywordSearchRelaxed(
+  engine: Engine,
+  query: string,
+  limit: number,
+  opts: KeywordSearchOptions = {},
+): Promise<KeywordRow[]> {
+  const lex = await engine.query<{ lex: string }>(
+    `SELECT DISTINCT unnest(tsvector_to_array(to_tsvector('simple', $1))) AS lex ORDER BY lex`,
+    [query],
+  );
+  const lexemes = lex.rows.map((r) => r.lex).filter(Boolean).slice(0, MAX_RELAXED_LEXEMES);
+  if (lexemes.length < 2) return [];
+  const tsquery = `(${lexemes.map((_, i) => `plainto_tsquery('simple', $${i + 1})`).join(" || ")})`;
+  return runKeywordQuery(engine, lexemes, tsquery, limit, opts);
+}
+
+/**
+ * The keyword arm's SQL, parameterised on the tsquery expression. The query
+ * text params are `$1..$n` (`queryParams`); every other param is appended after
+ * them.
+ */
+async function runKeywordQuery(
+  engine: Engine,
+  queryParams: readonly string[],
+  tsquery: string,
+  limit: number,
+  opts: KeywordSearchOptions,
+): Promise<KeywordRow[]> {
   // `undefined` is unscoped (operator, CLI, every pre-tenancy caller). An
   // EMPTY array is a caller granted nothing: the predicate still goes on and
   // `= ANY('{}')` matches no row. Collapsing the two — `opts.sourceIds ?? []`
@@ -69,7 +129,7 @@ export async function keywordSearch(
   const vis = visibilityClause("d");
   // Join documents so the visibility filter (deleted/archived/quarantine)
   // applies — soft-deleted/quarantined docs must never be candidates.
-  const params: unknown[] = [query];
+  const params: unknown[] = [...queryParams];
   let sourceFilter = "";
   if (sourceIds !== undefined) {
     params.push(sourceIds);
@@ -92,25 +152,28 @@ export async function keywordSearch(
   // the outer query re-ranks the pooled rows by score. Same matched set + WHERE
   // as the flat path — only the per-page collapse differs.
   const sql = opts.maxPool
-    ? `SELECT bpp.id FROM (
+    ? `SELECT bpp.id, bpp.document_id, bpp.score FROM (
          SELECT DISTINCT ON (COALESCE(d.source_id, 'default'), c.document_id)
                 c.id AS id,
-                ts_rank_cd(c.search_vector, plainto_tsquery('simple', $1)) * ${boostCase} AS score
+                c.document_id AS document_id,
+                ts_rank_cd(c.search_vector, ${tsquery}) * ${boostCase} AS score
            FROM chunks c
            JOIN documents d ON d.id = c.document_id
-          WHERE c.search_vector @@ plainto_tsquery('simple', $1)
+          WHERE c.search_vector @@ ${tsquery}
             AND ${vis}${sourceFilter}${filterClauses}${excludeClause}
           ORDER BY COALESCE(d.source_id, 'default'), c.document_id,
                    score DESC, c.id COLLATE "C" ASC
        ) bpp
        ORDER BY bpp.score DESC, bpp.id COLLATE "C" ASC
        LIMIT ${limitParam}`
-    : `SELECT c.id FROM chunks c
+    : `SELECT c.id, c.document_id,
+              ts_rank_cd(c.search_vector, ${tsquery}) * ${boostCase} AS score
+         FROM chunks c
        JOIN documents d ON d.id = c.document_id
-       WHERE c.search_vector @@ plainto_tsquery('simple', $1)
+       WHERE c.search_vector @@ ${tsquery}
          AND ${vis}${sourceFilter}${filterClauses}${excludeClause}
-       ORDER BY ts_rank_cd(c.search_vector, plainto_tsquery('simple', $1)) * ${boostCase} DESC, c.id COLLATE "C" ASC
+       ORDER BY score DESC, c.id COLLATE "C" ASC
        LIMIT ${limitParam}`;
-  const r = await engine.query<{ id: string }>(sql, params);
-  return r.rows.map((row) => row.id);
+  const r = await engine.query<{ id: string; document_id: string; score: number | string }>(sql, params);
+  return r.rows.map((row) => ({ id: row.id, documentId: row.document_id, score: Number(row.score) }));
 }

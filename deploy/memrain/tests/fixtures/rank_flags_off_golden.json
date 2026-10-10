@@ -1,0 +1,3050 @@
+{
+  "automobile servicing": {
+    "hits": [
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03141762987877968,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_v_c0",
+        "documentId": "veh_v",
+        "sourcePath": "notes/garage",
+        "title": "Garage",
+        "content": "car maintenance",
+        "score": 0.016840055295090584,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01654224081237998,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k2_c0",
+        "documentId": "veh_k2",
+        "sourcePath": "notes/receipt",
+        "title": "Receipt",
+        "content": "vehicle repair receipt paper stack folder",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "meta": {
+      "vectorEnabled": true,
+      "intent": "topic",
+      "mode": "conservative",
+      "cache": "off",
+      "degraded": [
+        "keyword_zero"
+      ],
+      "retrieved": 14,
+      "returned": 10
+    },
+    "keywordOnly": {
+      "hits": [],
+      "meta": {
+        "vectorEnabled": false,
+        "intent": "topic",
+        "mode": "conservative",
+        "cache": "off",
+        "degraded": [
+          "vector_arm_failed",
+          "keyword_zero"
+        ],
+        "retrieved": 0,
+        "returned": 0
+      }
+    },
+    "explain": [
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03141762987877968,
+        "intent": "topic",
+        "explain": {
+          "base": 0.016793893129770993,
+          "recency": 0.9353885259363951,
+          "salience": 2,
+          "final": 0.03141762987877968
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_v_c0",
+        "documentId": "veh_v",
+        "sourcePath": "notes/garage",
+        "title": "Garage",
+        "content": "car maintenance",
+        "score": 0.016840055295090584,
+        "intent": "topic",
+        "explain": {
+          "base": 0.01800327332242226,
+          "recency": 0.9353885259363951,
+          "final": 0.016840055295090584
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01654224081237998,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017684887459807074,
+          "recency": 0.9353885259363951,
+          "final": 0.01654224081237998
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017377567140600316,
+          "recency": 0.9353885259363951,
+          "final": 0.016254776912006864
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k2_c0",
+        "documentId": "veh_k2",
+        "sourcePath": "notes/receipt",
+        "title": "Receipt",
+        "content": "vehicle repair receipt paper stack folder",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017080745341614908,
+          "recency": 0.9353885259363951,
+          "final": 0.015977133206988115
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "explain": {
+          "base": 0.01651651651651652,
+          "recency": 0.9353885259363951,
+          "final": 0.01544936003798851
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "explain": {
+          "base": 0.016248153618906944,
+          "recency": 0.9353885259363951,
+          "final": 0.01519833646277747
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015988372093023256,
+          "recency": 0.9353885259363951,
+          "final": 0.01495533980421562
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015736766809728183,
+          "recency": 0.9353885259363951,
+          "final": 0.014719991109156432
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015027322404371588,
+          "recency": 0.9353885259363951,
+          "final": 0.014056384952596104
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "detailLow": [
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03141762987877968,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_truth_c0",
+        "documentId": "zephyr_truth",
+        "sourcePath": "page-truth://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr is the edge fleet rollout program",
+        "score": 0.02729250340928474,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_v_c0",
+        "documentId": "veh_v",
+        "sourcePath": "notes/garage",
+        "title": "Garage",
+        "content": "car maintenance",
+        "score": 0.016840055295090584,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01654224081237998,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k2_c0",
+        "documentId": "veh_k2",
+        "sourcePath": "notes/receipt",
+        "title": "Receipt",
+        "content": "vehicle repair receipt paper stack folder",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ]
+  },
+  "tell me about zephyr": {
+    "hits": [
+      {
+        "chunkId": "zephyr_truth_c0",
+        "documentId": "zephyr_truth",
+        "sourcePath": "page-truth://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr is the edge fleet rollout program",
+        "score": 0.06453291699193339,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.03225806451612903,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c1",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout risks and the rollback drill",
+        "score": 0.01639344262295082,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.015625,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.015384615384615385,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.015151515151515152,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.014925373134328358,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.014705882352941176,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.014492753623188406,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.014285714285714285,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "meta": {
+      "vectorEnabled": true,
+      "intent": "factual",
+      "mode": "conservative",
+      "cache": "off",
+      "degraded": [
+        "keyword_zero"
+      ],
+      "retrieved": 14,
+      "returned": 10
+    },
+    "keywordOnly": {
+      "hits": [
+        {
+          "chunkId": "zephyr_truth_c0",
+          "documentId": "zephyr_truth",
+          "sourcePath": "page-truth://projects/zephyr",
+          "title": "Zephyr",
+          "content": "zephyr is the edge fleet rollout program",
+          "score": 0.03278688524590164,
+          "intent": "factual",
+          "evidence": "weak_semantic",
+          "create_safety": "unknown"
+        },
+        {
+          "chunkId": "zephyr_page_c0",
+          "documentId": "zephyr_page",
+          "sourcePath": "page://projects/zephyr",
+          "title": "Zephyr",
+          "content": "zephyr rollout plan for the edge fleet",
+          "score": 0.016129032258064516,
+          "intent": "factual",
+          "evidence": "weak_semantic",
+          "create_safety": "unknown"
+        }
+      ],
+      "meta": {
+        "vectorEnabled": false,
+        "intent": "factual",
+        "mode": "conservative",
+        "cache": "off",
+        "degraded": [
+          "vector_arm_failed",
+          "keyword_zero"
+        ],
+        "retrieved": 2,
+        "returned": 2
+      }
+    },
+    "explain": [
+      {
+        "chunkId": "zephyr_truth_c0",
+        "documentId": "zephyr_truth",
+        "sourcePath": "page-truth://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr is the edge fleet rollout program",
+        "score": 0.06453291699193339,
+        "intent": "factual",
+        "explain": {
+          "base": 0.032266458495966696,
+          "compiled_truth": 2,
+          "final": 0.06453291699193339
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.03225806451612903,
+        "intent": "factual",
+        "explain": {
+          "base": 0.03225806451612903,
+          "final": 0.03225806451612903
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c1",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout risks and the rollback drill",
+        "score": 0.01639344262295082,
+        "intent": "factual",
+        "explain": {
+          "base": 0.01639344262295082,
+          "final": 0.01639344262295082
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.015625,
+        "intent": "factual",
+        "explain": {
+          "base": 0.015625,
+          "final": 0.015625
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.015384615384615385,
+        "intent": "factual",
+        "explain": {
+          "base": 0.015384615384615385,
+          "final": 0.015384615384615385
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.015151515151515152,
+        "intent": "factual",
+        "explain": {
+          "base": 0.015151515151515152,
+          "final": 0.015151515151515152
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.014925373134328358,
+        "intent": "factual",
+        "explain": {
+          "base": 0.014925373134328358,
+          "final": 0.014925373134328358
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.014705882352941176,
+        "intent": "factual",
+        "explain": {
+          "base": 0.014705882352941176,
+          "final": 0.014705882352941176
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.014492753623188406,
+        "intent": "factual",
+        "explain": {
+          "base": 0.014492753623188406,
+          "final": 0.014492753623188406
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.014285714285714285,
+        "intent": "factual",
+        "explain": {
+          "base": 0.014285714285714285,
+          "final": 0.014285714285714285
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "detailLow": [
+      {
+        "chunkId": "zephyr_truth_c0",
+        "documentId": "zephyr_truth",
+        "sourcePath": "page-truth://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr is the edge fleet rollout program",
+        "score": 0.06453291699193339,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.03225806451612903,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.015625,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.015384615384615385,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.015151515151515152,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.014925373134328358,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.014705882352941176,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.014492753623188406,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.014285714285714285,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.014084507042253521,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ]
+  },
+  "zephyr rollout": {
+    "hits": [
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.04696339065113635,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "zephyr_truth_c0",
+        "documentId": "zephyr_truth",
+        "sourcePath": "page-truth://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr is the edge fleet rollout program",
+        "score": 0.04643645196173703,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "zephyr_page_c1",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout risks and the rollback drill",
+        "score": 0.03192696700374211,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03089872007597702,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01570881493938984,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.01449193490887373,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "meta": {
+      "vectorEnabled": true,
+      "intent": "topic",
+      "mode": "conservative",
+      "cache": "off",
+      "degraded": [],
+      "retrieved": 14,
+      "returned": 10
+    },
+    "keywordOnly": {
+      "hits": [
+        {
+          "chunkId": "zephyr_page_c0",
+          "documentId": "zephyr_page",
+          "sourcePath": "page://projects/zephyr",
+          "title": "Zephyr",
+          "content": "zephyr rollout plan for the edge fleet",
+          "score": 0.030421149838756375,
+          "intent": "topic",
+          "evidence": "keyword_exact",
+          "create_safety": "probable"
+        },
+        {
+          "chunkId": "zephyr_truth_c0",
+          "documentId": "zephyr_truth",
+          "sourcePath": "page-truth://projects/zephyr",
+          "title": "Zephyr",
+          "content": "zephyr is the edge fleet rollout program",
+          "score": 0.03018167504973016,
+          "intent": "topic",
+          "evidence": "keyword_exact",
+          "create_safety": "probable"
+        },
+        {
+          "chunkId": "zephyr_page_c1",
+          "documentId": "zephyr_page",
+          "sourcePath": "page://projects/zephyr",
+          "title": "Zephyr",
+          "content": "zephyr rollout risks and the rollback drill",
+          "score": 0.015086911708651533,
+          "intent": "topic",
+          "evidence": "keyword_exact",
+          "create_safety": "probable"
+        }
+      ],
+      "meta": {
+        "vectorEnabled": false,
+        "intent": "topic",
+        "mode": "conservative",
+        "cache": "off",
+        "degraded": [
+          "vector_arm_failed"
+        ],
+        "retrieved": 3,
+        "returned": 3
+      }
+    },
+    "explain": [
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.04696339065113635,
+        "intent": "topic",
+        "explain": {
+          "base": 0.05020736234082241,
+          "recency": 0.9353885259363951,
+          "final": 0.04696339065113635
+        },
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "zephyr_truth_c0",
+        "documentId": "zephyr_truth",
+        "sourcePath": "page-truth://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr is the edge fleet rollout program",
+        "score": 0.04643645196173703,
+        "intent": "topic",
+        "explain": {
+          "base": 0.049644025636567016,
+          "recency": 0.9353885259363951,
+          "final": 0.04643645196173703
+        },
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "zephyr_page_c1",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout risks and the rollback drill",
+        "score": 0.03192696700374211,
+        "intent": "topic",
+        "explain": {
+          "base": 0.03413230558048677,
+          "recency": 0.9353885259363951,
+          "final": 0.03192696700374211
+        },
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03089872007597702,
+        "intent": "topic",
+        "explain": {
+          "base": 0.01651651651651652,
+          "recency": 0.9353885259363951,
+          "salience": 2,
+          "final": 0.03089872007597702
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017080745341614908,
+          "recency": 0.9353885259363951,
+          "final": 0.015977133206988115
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01570881493938984,
+        "intent": "topic",
+        "explain": {
+          "base": 0.016793893129770993,
+          "recency": 0.9353885259363951,
+          "final": 0.01570881493938984
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "explain": {
+          "base": 0.016248153618906944,
+          "recency": 0.9353885259363951,
+          "final": 0.01519833646277747
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015988372093023256,
+          "recency": 0.9353885259363951,
+          "final": 0.01495533980421562
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015736766809728183,
+          "recency": 0.9353885259363951,
+          "final": 0.014719991109156432
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.01449193490887373,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015492957746478877,
+          "recency": 0.9353885259363951,
+          "final": 0.01449193490887373
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "detailLow": [
+      {
+        "chunkId": "zephyr_truth_c0",
+        "documentId": "zephyr_truth",
+        "sourcePath": "page-truth://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr is the edge fleet rollout program",
+        "score": 0.09287290392347405,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.04696339065113635,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03089872007597702,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01570881493938984,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.01449193490887373,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.014270837427601038,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ]
+  },
+  "quokka habitat survey": {
+    "hits": [
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.03217429342519542,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03089872007597702,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.01654224081237998,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.01570881493938984,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.01449193490887373,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "meta": {
+      "vectorEnabled": true,
+      "intent": "topic",
+      "mode": "conservative",
+      "cache": "off",
+      "degraded": [
+        "keyword_zero"
+      ],
+      "retrieved": 14,
+      "returned": 10
+    },
+    "keywordOnly": {
+      "hits": [
+        {
+          "chunkId": "quokka_c0",
+          "documentId": "quokka",
+          "sourcePath": "notes/quokka",
+          "title": "Island trip",
+          "content": "quokka habitat notes from the island trip",
+          "score": 0.015334238130104838,
+          "intent": "topic",
+          "evidence": "weak_semantic",
+          "create_safety": "unknown"
+        }
+      ],
+      "meta": {
+        "vectorEnabled": false,
+        "intent": "topic",
+        "mode": "conservative",
+        "cache": "off",
+        "degraded": [
+          "vector_arm_failed",
+          "keyword_zero"
+        ],
+        "retrieved": 1,
+        "returned": 1
+      }
+    },
+    "explain": [
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.03217429342519542,
+        "intent": "topic",
+        "explain": {
+          "base": 0.03439671594537308,
+          "recency": 0.9353885259363951,
+          "final": 0.03217429342519542
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03089872007597702,
+        "intent": "topic",
+        "explain": {
+          "base": 0.01651651651651652,
+          "recency": 0.9353885259363951,
+          "salience": 2,
+          "final": 0.03089872007597702
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.01654224081237998,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017684887459807074,
+          "recency": 0.9353885259363951,
+          "final": 0.01654224081237998
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017377567140600316,
+          "recency": 0.9353885259363951,
+          "final": 0.016254776912006864
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017080745341614908,
+          "recency": 0.9353885259363951,
+          "final": 0.015977133206988115
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.01570881493938984,
+        "intent": "topic",
+        "explain": {
+          "base": 0.016793893129770993,
+          "recency": 0.9353885259363951,
+          "final": 0.01570881493938984
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "explain": {
+          "base": 0.016248153618906944,
+          "recency": 0.9353885259363951,
+          "final": 0.01519833646277747
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015988372093023256,
+          "recency": 0.9353885259363951,
+          "final": 0.01495533980421562
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015736766809728183,
+          "recency": 0.9353885259363951,
+          "final": 0.014719991109156432
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.01449193490887373,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015492957746478877,
+          "recency": 0.9353885259363951,
+          "final": 0.01449193490887373
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "detailLow": [
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.03217429342519542,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03089872007597702,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_truth_c0",
+        "documentId": "zephyr_truth",
+        "sourcePath": "page-truth://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr is the edge fleet rollout program",
+        "score": 0.02729250340928474,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.01654224081237998,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.01570881493938984,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ]
+  },
+  "vehicle repair": {
+    "hits": [
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.0315890150421117,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03141762987877968,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k2_c0",
+        "documentId": "veh_k2",
+        "sourcePath": "notes/receipt",
+        "title": "Receipt",
+        "content": "vehicle repair receipt paper stack folder",
+        "score": 0.031064044915639653,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "veh_v_c0",
+        "documentId": "veh_v",
+        "sourcePath": "notes/garage",
+        "title": "Garage",
+        "content": "car maintenance",
+        "score": 0.016840055295090584,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01654224081237998,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "meta": {
+      "vectorEnabled": true,
+      "intent": "topic",
+      "mode": "conservative",
+      "cache": "off",
+      "degraded": [],
+      "retrieved": 14,
+      "returned": 10
+    },
+    "keywordOnly": {
+      "hits": [
+        {
+          "chunkId": "veh_k1_c0",
+          "documentId": "veh_k1",
+          "sourcePath": "notes/invoice",
+          "title": "Invoice",
+          "content": "vehicle repair invoice paper stack folder",
+          "score": 0.015334238130104838,
+          "intent": "topic",
+          "evidence": "keyword_exact",
+          "create_safety": "probable"
+        },
+        {
+          "chunkId": "veh_k2_c0",
+          "documentId": "veh_k2",
+          "sourcePath": "notes/receipt",
+          "title": "Receipt",
+          "content": "vehicle repair receipt paper stack folder",
+          "score": 0.015086911708651533,
+          "intent": "topic",
+          "evidence": "keyword_exact",
+          "create_safety": "probable"
+        }
+      ],
+      "meta": {
+        "vectorEnabled": false,
+        "intent": "topic",
+        "mode": "conservative",
+        "cache": "off",
+        "degraded": [
+          "vector_arm_failed"
+        ],
+        "retrieved": 2,
+        "returned": 2
+      }
+    },
+    "explain": [
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.0315890150421117,
+        "intent": "topic",
+        "explain": {
+          "base": 0.03377100976355114,
+          "recency": 0.9353885259363951,
+          "final": 0.0315890150421117
+        },
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03141762987877968,
+        "intent": "topic",
+        "explain": {
+          "base": 0.016793893129770993,
+          "recency": 0.9353885259363951,
+          "salience": 2,
+          "final": 0.03141762987877968
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k2_c0",
+        "documentId": "veh_k2",
+        "sourcePath": "notes/receipt",
+        "title": "Receipt",
+        "content": "vehicle repair receipt paper stack folder",
+        "score": 0.031064044915639653,
+        "intent": "topic",
+        "explain": {
+          "base": 0.03320977759967943,
+          "recency": 0.9353885259363951,
+          "final": 0.031064044915639653
+        },
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "veh_v_c0",
+        "documentId": "veh_v",
+        "sourcePath": "notes/garage",
+        "title": "Garage",
+        "content": "car maintenance",
+        "score": 0.016840055295090584,
+        "intent": "topic",
+        "explain": {
+          "base": 0.01800327332242226,
+          "recency": 0.9353885259363951,
+          "final": 0.016840055295090584
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01654224081237998,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017684887459807074,
+          "recency": 0.9353885259363951,
+          "final": 0.01654224081237998
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "explain": {
+          "base": 0.01651651651651652,
+          "recency": 0.9353885259363951,
+          "final": 0.01544936003798851
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "explain": {
+          "base": 0.016248153618906944,
+          "recency": 0.9353885259363951,
+          "final": 0.01519833646277747
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015988372093023256,
+          "recency": 0.9353885259363951,
+          "final": 0.01495533980421562
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015736766809728183,
+          "recency": 0.9353885259363951,
+          "final": 0.014719991109156432
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015027322404371588,
+          "recency": 0.9353885259363951,
+          "final": 0.014056384952596104
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "detailLow": [
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.0315890150421117,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03141762987877968,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k2_c0",
+        "documentId": "veh_k2",
+        "sourcePath": "notes/receipt",
+        "title": "Receipt",
+        "content": "vehicle repair receipt paper stack folder",
+        "score": 0.031064044915639653,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "zephyr_truth_c0",
+        "documentId": "zephyr_truth",
+        "sourcePath": "page-truth://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr is the edge fleet rollout program",
+        "score": 0.02729250340928474,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_v_c0",
+        "documentId": "veh_v",
+        "sourcePath": "notes/garage",
+        "title": "Garage",
+        "content": "car maintenance",
+        "score": 0.016840055295090584,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.01654224081237998,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ]
+  },
+  "Quandalore": {
+    "hits": [
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.03880381633686835,
+        "intent": "topic",
+        "evidence": "exact_title_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.03217429342519542,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03195426641397623,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.03162915252103152,
+        "intent": "topic",
+        "evidence": "keyword_exact",
+        "create_safety": "probable"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "meta": {
+      "vectorEnabled": true,
+      "intent": "topic",
+      "mode": "conservative",
+      "cache": "off",
+      "degraded": [],
+      "retrieved": 14,
+      "returned": 10
+    },
+    "keywordOnly": {
+      "hits": [
+        {
+          "chunkId": "quand_c0",
+          "documentId": "quand",
+          "sourcePath": "notes/quandalore",
+          "title": "Quandalore",
+          "content": "tool rental platform for craft businesses",
+          "score": 0.019167797662631048,
+          "intent": "topic",
+          "evidence": "exact_title_match",
+          "create_safety": "exists"
+        },
+        {
+          "chunkId": "quand_price_c0",
+          "documentId": "quand_price",
+          "sourcePath": "notes/q-pricing",
+          "title": "Pricing",
+          "content": "quandalore pricing notes quandalore quandalore",
+          "score": 0.015334238130104838,
+          "intent": "topic",
+          "evidence": "keyword_exact",
+          "create_safety": "probable"
+        },
+        {
+          "chunkId": "quand_onb_c0",
+          "documentId": "quand_onb",
+          "sourcePath": "notes/q-onboarding",
+          "title": "Onboarding",
+          "content": "quandalore onboarding quandalore",
+          "score": 0.015086911708651533,
+          "intent": "topic",
+          "evidence": "keyword_exact",
+          "create_safety": "probable"
+        }
+      ],
+      "meta": {
+        "vectorEnabled": false,
+        "intent": "topic",
+        "mode": "conservative",
+        "cache": "off",
+        "degraded": [
+          "vector_arm_failed"
+        ],
+        "retrieved": 3,
+        "returned": 3
+      }
+    },
+    "explain": [
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.03880381633686835,
+        "intent": "topic",
+        "explain": {
+          "base": 0.033187335752721814,
+          "recency": 0.9353885259363951,
+          "title": 1.25,
+          "final": 0.03880381633686835
+        },
+        "evidence": "exact_title_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.03217429342519542,
+        "intent": "topic",
+        "explain": {
+          "base": 0.03439671594537308,
+          "recency": 0.9353885259363951,
+          "final": 0.03217429342519542
+        },
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03195426641397623,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017080745341614908,
+          "recency": 0.9353885259363951,
+          "salience": 2,
+          "final": 0.03195426641397623
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.03162915252103152,
+        "intent": "topic",
+        "explain": {
+          "base": 0.03381391971787159,
+          "recency": 0.9353885259363951,
+          "final": 0.03162915252103152
+        },
+        "evidence": "keyword_exact",
+        "create_safety": "probable"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017377567140600316,
+          "recency": 0.9353885259363951,
+          "final": 0.016254776912006864
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "explain": {
+          "base": 0.01651651651651652,
+          "recency": 0.9353885259363951,
+          "final": 0.01544936003798851
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "explain": {
+          "base": 0.016248153618906944,
+          "recency": 0.9353885259363951,
+          "final": 0.01519833646277747
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015988372093023256,
+          "recency": 0.9353885259363951,
+          "final": 0.01495533980421562
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015736766809728183,
+          "recency": 0.9353885259363951,
+          "final": 0.014719991109156432
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015027322404371588,
+          "recency": 0.9353885259363951,
+          "final": 0.014056384952596104
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "detailLow": [
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.03880381633686835,
+        "intent": "topic",
+        "evidence": "exact_title_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.03217429342519542,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.03195426641397623,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.03162915252103152,
+        "intent": "topic",
+        "evidence": "keyword_exact",
+        "create_safety": "probable"
+      },
+      {
+        "chunkId": "zephyr_truth_c0",
+        "documentId": "zephyr_truth",
+        "sourcePath": "page-truth://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr is the edge fleet rollout program",
+        "score": 0.02729250340928474,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "rollout_cal_c0",
+        "documentId": "rollout_cal",
+        "sourcePath": "notes/rollout-calendar",
+        "title": "Rollout calendar",
+        "content": "rollout calendar for the quarter",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ]
+  },
+  "car maintenance": {
+    "hits": [
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.061591453296082746,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.03187647894248482,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "veh_v_c0",
+        "documentId": "veh_v",
+        "sourcePath": "notes/garage",
+        "title": "Garage",
+        "content": "car maintenance",
+        "score": 0.031687492214715895,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k2_c0",
+        "documentId": "veh_k2",
+        "sourcePath": "notes/receipt",
+        "title": "Receipt",
+        "content": "vehicle repair receipt paper stack folder",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "meta": {
+      "vectorEnabled": true,
+      "intent": "topic",
+      "mode": "conservative",
+      "cache": "off",
+      "degraded": [],
+      "retrieved": 14,
+      "returned": 10
+    },
+    "keywordOnly": {
+      "hits": [
+        {
+          "chunkId": "car_b_c0",
+          "documentId": "car_b",
+          "sourcePath": "notes/car-b",
+          "title": "Car tips",
+          "content": "car maintenance tips for winter tires and the spare wheel kit",
+          "score": 0.030173823417303066,
+          "intent": "topic",
+          "evidence": "keyword_exact",
+          "create_safety": "probable"
+        },
+        {
+          "chunkId": "car_a_c0",
+          "documentId": "car_a",
+          "sourcePath": "notes/car-a",
+          "title": "Car log",
+          "content": "car maintenance schedule",
+          "score": 0.015334238130104838,
+          "intent": "topic",
+          "evidence": "keyword_exact",
+          "create_safety": "probable"
+        },
+        {
+          "chunkId": "veh_v_c0",
+          "documentId": "veh_v",
+          "sourcePath": "notes/garage",
+          "title": "Garage",
+          "content": "car maintenance",
+          "score": 0.014847436919625319,
+          "intent": "topic",
+          "evidence": "keyword_exact",
+          "create_safety": "probable"
+        }
+      ],
+      "meta": {
+        "vectorEnabled": false,
+        "intent": "topic",
+        "mode": "conservative",
+        "cache": "off",
+        "degraded": [
+          "vector_arm_failed"
+        ],
+        "retrieved": 3,
+        "returned": 3
+      }
+    },
+    "explain": [
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.061591453296082746,
+        "intent": "topic",
+        "explain": {
+          "base": 0.032922925387835505,
+          "recency": 0.9353885259363951,
+          "salience": 2,
+          "final": 0.061591453296082746
+        },
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.03187647894248482,
+        "intent": "topic",
+        "explain": {
+          "base": 0.034078330082757895,
+          "recency": 0.9353885259363951,
+          "final": 0.03187647894248482
+        },
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "veh_v_c0",
+        "documentId": "veh_v",
+        "sourcePath": "notes/garage",
+        "title": "Garage",
+        "content": "car maintenance",
+        "score": 0.031687492214715895,
+        "intent": "topic",
+        "explain": {
+          "base": 0.03387628919543813,
+          "recency": 0.9353885259363951,
+          "final": 0.031687492214715895
+        },
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017377567140600316,
+          "recency": 0.9353885259363951,
+          "final": 0.016254776912006864
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k2_c0",
+        "documentId": "veh_k2",
+        "sourcePath": "notes/receipt",
+        "title": "Receipt",
+        "content": "vehicle repair receipt paper stack folder",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "explain": {
+          "base": 0.017080745341614908,
+          "recency": 0.9353885259363951,
+          "final": 0.015977133206988115
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "explain": {
+          "base": 0.01651651651651652,
+          "recency": 0.9353885259363951,
+          "final": 0.01544936003798851
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "explain": {
+          "base": 0.016248153618906944,
+          "recency": 0.9353885259363951,
+          "final": 0.01519833646277747
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015988372093023256,
+          "recency": 0.9353885259363951,
+          "final": 0.01495533980421562
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quokka_c0",
+        "documentId": "quokka",
+        "sourcePath": "notes/quokka",
+        "title": "Island trip",
+        "content": "quokka habitat notes from the island trip",
+        "score": 0.014719991109156432,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015736766809728183,
+          "recency": 0.9353885259363951,
+          "final": 0.014719991109156432
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015027322404371588,
+          "recency": 0.9353885259363951,
+          "final": 0.014056384952596104
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ],
+    "detailLow": [
+      {
+        "chunkId": "car_b_c0",
+        "documentId": "car_b",
+        "sourcePath": "notes/car-b",
+        "title": "Car tips",
+        "content": "car maintenance tips for winter tires and the spare wheel kit",
+        "score": 0.061591453296082746,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "car_a_c0",
+        "documentId": "car_a",
+        "sourcePath": "notes/car-a",
+        "title": "Car log",
+        "content": "car maintenance schedule",
+        "score": 0.03187647894248482,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "veh_v_c0",
+        "documentId": "veh_v",
+        "sourcePath": "notes/garage",
+        "title": "Garage",
+        "content": "car maintenance",
+        "score": 0.031687492214715895,
+        "intent": "topic",
+        "evidence": "high_vector_match",
+        "create_safety": "exists"
+      },
+      {
+        "chunkId": "zephyr_truth_c0",
+        "documentId": "zephyr_truth",
+        "sourcePath": "page-truth://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr is the edge fleet rollout program",
+        "score": 0.02729250340928474,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k1_c0",
+        "documentId": "veh_k1",
+        "sourcePath": "notes/invoice",
+        "title": "Invoice",
+        "content": "vehicle repair invoice paper stack folder",
+        "score": 0.016254776912006864,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "veh_k2_c0",
+        "documentId": "veh_k2",
+        "sourcePath": "notes/receipt",
+        "title": "Receipt",
+        "content": "vehicle repair receipt paper stack folder",
+        "score": 0.015977133206988115,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_c0",
+        "documentId": "quand",
+        "sourcePath": "notes/quandalore",
+        "title": "Quandalore",
+        "content": "tool rental platform for craft businesses",
+        "score": 0.01544936003798851,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_onb_c0",
+        "documentId": "quand_onb",
+        "sourcePath": "notes/q-onboarding",
+        "title": "Onboarding",
+        "content": "quandalore onboarding quandalore",
+        "score": 0.01519833646277747,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "quand_price_c0",
+        "documentId": "quand_price",
+        "sourcePath": "notes/q-pricing",
+        "title": "Pricing",
+        "content": "quandalore pricing notes quandalore quandalore",
+        "score": 0.01495533980421562,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "zephyr_page_c0",
+        "documentId": "zephyr_page",
+        "sourcePath": "page://projects/zephyr",
+        "title": "Zephyr",
+        "content": "zephyr rollout plan for the edge fleet",
+        "score": 0.014056384952596104,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      }
+    ]
+  },
+  "__cache__": {
+    "rankingSignature": "8:tb=1.25:rd=:nd=0.85:gsf=undefined:ah=1:mode=conservative:gs=:cr=:bb=:xp=:rb=:cb=:sx=:mt=0.6:rw=",
+    "key": "8ad4c127a2a8323b0004ade36aa1730194986d5238ccef38c6cc5f87f7dec08b"
+  }
+}

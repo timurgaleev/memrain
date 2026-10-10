@@ -18,6 +18,8 @@ export interface DedupOptions {
   enabled?: boolean;
   /** How many chunks per doc to keep. Default 1. */
   maxPerDoc?: number;
+  /** Group by this key instead of documentId (a page spanning several documents). */
+  keyOf?: (hit: ChunkScore<unknown>) => string;
 }
 
 export function dedupByDocument<T>(
@@ -29,10 +31,11 @@ export function dedupByDocument<T>(
   const counts = new Map<string, number>();
   const out: ChunkScore<T>[] = [];
   for (const h of hits) {
-    const c = counts.get(h.documentId) ?? 0;
+    const key = opts.keyOf ? opts.keyOf(h) : h.documentId;
+    const c = counts.get(key) ?? 0;
     if (c < cap) {
       out.push(h);
-      counts.set(h.documentId, c + 1);
+      counts.set(key, c + 1);
     }
   }
   return out;

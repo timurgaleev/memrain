@@ -306,6 +306,19 @@ afterAll(async () => {
 
 const toDocId = (chunkId: string): string => chunkId.replace(/_c\d+$/, "");
 
+async function withGate<T>(value: string | undefined, fn: () => Promise<T>): Promise<T> {
+  const name = "MEMRAIN_RANK_METADATA_GATE";
+  const prev = process.env[name];
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env[name];
+    else process.env[name] = prev;
+  }
+}
+
 async function search(
   storage: Storage,
   query: string,
@@ -512,11 +525,19 @@ describe("eval miss shape B — English paraphrase over a German transcript", ()
     // `uniform` carries the same content date. In `dated` the voice note is
     // decayed by its filename date while the undated notes read as indexed-now,
     // and that alone is worth more rank positions than the whole fused score
-    // band spans.
-    const datedDocs = await rankedDocs(dated, Q_PARAPHRASE);
+    // band spans. The metadata gate skips that decay for this query, so it is
+    // held off here to keep pinning the cause.
+    const datedDocs = await withGate(undefined, () => rankedDocs(dated, Q_PARAPHRASE));
     expect(datedDocs.slice(0, 5)).not.toContain("doc_transcript_fine");
     const uniformDocs = await rankedDocs(uniform, Q_PARAPHRASE);
     expect(uniformDocs.slice(0, 5)).toContain("doc_transcript_fine");
+  });
+
+  it("the metadata gate keeps the dated answer in the window", async () => {
+    // Only the vector arm answers the paraphrase, so with the gate on the
+    // content-date decay never reorders it.
+    const datedDocs = await withGate("1", () => rankedDocs(dated, Q_PARAPHRASE));
+    expect(datedDocs.slice(0, 5)).toContain("doc_transcript_fine");
   });
 
   it("the decay penalises the document that declares a date, not the stale one", async () => {

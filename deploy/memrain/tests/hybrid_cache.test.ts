@@ -101,6 +101,25 @@ describe("hybridSearch query cache (hit path, no Bedrock)", () => {
     );
   });
 
+  it("keys each ranking flag apart from the all-off ranking", async () => {
+    const { RANKING_FLAG_ENV } = await import("../src/core/search/ranking-flags.ts");
+    for (const name of RANKING_FLAG_ENV) delete process.env[name];
+    const offSig = rankingSignature();
+    const seen = new Set([queryCacheKey("flagged", 5, undefined, false, hybridSig())]);
+    try {
+      for (const name of RANKING_FLAG_ENV) {
+        process.env[name] = "1";
+        expect(rankingSignature().startsWith(offSig)).toBe(true);
+        seen.add(queryCacheKey("flagged", 5, undefined, false, hybridSig()));
+        delete process.env[name];
+      }
+    } finally {
+      for (const name of RANKING_FLAG_ENV) delete process.env[name];
+    }
+    expect(seen.size).toBe(RANKING_FLAG_ENV.length + 1);
+    expect(rankingSignature()).toBe(offSig);
+  });
+
   it("adaptive return-sizing trims the view without poisoning the cache", async () => {
     const clock = await currentDocumentClock(storage.engine());
     const key = queryCacheKey("cap me", 5, undefined, false, hybridSig());

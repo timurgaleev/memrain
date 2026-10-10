@@ -26,7 +26,7 @@ import type { SourceKind } from "../sources.ts";
 import { embedText } from "../embedding.ts";
 import { reciprocalRankFusion } from "../rrf.ts";
 import { vectorSearch } from "./vector.ts";
-import { keywordSearch } from "./keyword.ts";
+import { keywordSearch, keywordSearchRelaxed, keywordSearchScored } from "./keyword.ts";
 import { resolveDateBoundary } from "./filters.ts";
 import { visibilityClause } from "../visibility.ts";
 import { andSourceScope, isNoGrant } from "../source-scope.ts";
@@ -114,6 +114,12 @@ import {
   type SearchExplain,
 } from "./explain.ts";
 import type { DegradedReason, SearchCacheState, SearchMeta } from "./search-meta.ts";
+import { rankFlag } from "./ranking-flags.ts";
+import { skipMetadataBoosts } from "./metadata-boost-gate.ts";
+import { downweightKeywordArm, KEYWORD_WEAK_WEIGHT } from "./arm-confidence.ts";
+import { fuseByPage, pageKeysForChunks } from "./page-fusion.ts";
+import { promoteExactLookup } from "./exact-lookup.ts";
+import { gradeConfidence } from "./confidence-grade.ts";
 
 /**
  * RRF weight for the deterministic relational arm (opt-in 4th arm). A gentle
@@ -165,6 +171,29 @@ function getRecencyBoostMap(): ReturnType<typeof resolveRecencyBoostMap> {
  */
 const COMPILED_TRUTH_BOOST = 2.0;
 const PAGE_TRUTH_PREFIX = "page-truth://";
+
+/**
+ * The classifier reads every "tell me about X" as detail 'low', and at ×2 a
+ * mirror that barely matches still outranks the page body that answers. With
+ * MEMRAIN_RANK_ENTITY_TRUTH_SOFT the full ×2 needs the caller to ask for
+ * detail 'low'; a classifier guess gets a tilt that only settles near-ties.
+ */
+const COMPILED_TRUTH_SOFT_BOOST = 1.2;
+
+export function compiledTruthBoost(
+  requestedDetail: SearchOptions["detail"],
+  resolvedDetail: SearchOptions["detail"],
+  soft: boolean,
+): number {
+  if (resolvedDetail !== "low") return 1;
+  if (!soft || requestedDetail === "low") return COMPILED_TRUTH_BOOST;
+  return COMPILED_TRUTH_SOFT_BOOST;
+}
+
+/** A strict keyword pass with fewer rows than this triggers the OR retry. */
+const KEYWORD_RELAX_MIN_ROWS = 3;
+/** RRF weight of the OR-retry rows: they matched some of the query, not all of it. */
+const RELAXED_KEYWORD_WEIGHT = 0.5;
 
 /** The resolved per-call ranking knob set (see {@link resolveSearchKnobs}). */
 export interface ResolvedSearchKnobs {
@@ -680,6 +709,16 @@ export async function hybridSearch(
   // explicit detail/salience/recency params override the heuristic).
   const detailResolved = opts.detail ?? suggestions.suggestedDetail;
   const temporalQuery = detailResolved === "high";
+  // Read per call so an eval run can flip one between queries; each is off by
+  // default and every stage below is untouched while it stays off.
+  const rank = {
+    metadataGate: rankFlag("METADATA_GATE"),
+    entityTruthSoft: rankFlag("ENTITY_TRUTH_SOFT"),
+    keywordOrRetry: rankFlag("KEYWORD_OR_RETRY"),
+    pageFusion: rankFlag("PAGE_FUSION"),
+    keywordConfidence: rankFlag("KEYWORD_CONFIDENCE"),
+    exactLookup: rankFlag("EXACT_LOOKUP"),
+  };
 
   const {
     rerankWanted,
@@ -807,6 +846,7 @@ export async function hybridSearch(
       degraded: hydrated.length > hits.length ? ["budget_truncated"] : [],
       retrieved: hydrated.length,
       returned: kept.length,
+      confidence: gradeConfidence(kept),
     });
     return kept;
   };
@@ -906,7 +946,7 @@ export async function hybridSearch(
   // queries must not be steered toward evergreen curated tiers.
   const armSourceBoost = !temporalQuery;
 
-  const [vectorIds, primaryKeywordIds] = await Promise.all([
+  const [vectorIds, primaryKeywordRows] = await Promise.all([
     queryVector
       ? vectorSearch(engine, queryVector, fanout, {
           sourceIds: opts.sourceIds,
@@ -916,18 +956,21 @@ export async function hybridSearch(
           onCandidatesIncomplete: () => degraded.push("vector_candidates_incomplete"),
         })
       : Promise.resolve<string[]>([]),
-    keywordSearch(engine, trimmed, fanout, {
+    keywordSearchScored(engine, trimmed, fanout, {
       sourceIds: opts.sourceIds,
       filters: chunkFilters,
       maxPool: maxPoolOn,
       sourceBoost: armSourceBoost,
     }),
   ]);
+  const primaryKeywordIds = primaryKeywordRows.map((r) => r.id);
   if (primaryKeywordIds.length === 0) degraded.push("keyword_zero");
 
   // 3. Expansion (default OFF — see SearchOptions.expansion; skipped for
   //    exact intent regardless).
   const lists: string[][] = [vectorIds, primaryKeywordIds];
+  // Arm name per list, for the page-fusion vote attribution in explain.
+  const listArms: string[] = ["vector", "keyword"];
   if (intent !== "exact" && expansionEnabled) {
     const variants = await (opts.expandQueryFn ?? expandQuery)(trimmed, { max: 3 });
     if (variants.length > 0) {
@@ -942,6 +985,7 @@ export async function hybridSearch(
         ),
       );
       lists.push(...extra);
+      listArms.push(...extra.map(() => "expansion"));
     }
   }
 
@@ -954,33 +998,91 @@ export async function hybridSearch(
   //     the ORIGINAL query, never an expansion variant: a page's name is the
   //     user's own word for it. Empty for a query that names nothing, which is
   //     the common case — a pure no-op on the fused result.
+  let titleIds: string[] = [];
+  let titleListIdx = -1;
   if (titleArmOn) {
-    const titleIds = await titleArmChunkIds(engine, trimmed, {
+    titleIds = await titleArmChunkIds(engine, trimmed, {
       ...(opts.sourceIds ? { sourceIds: opts.sourceIds } : {}),
       limit: fanout,
     });
     if (titleIds.length > 0) {
+      titleListIdx = lists.length;
       lists.push(titleIds);
+      listArms.push("title");
       rrfWeights.push(TITLE_ARM_WEIGHT);
     }
   }
   // 3b. Relational recall arm (opt-in, default OFF) — a deterministic 4th arm.
   //     Built from the ORIGINAL query (never an expansion variant); empty for
   //     non-relational queries → pure no-op. Fail-open inside the helper.
+  let relationalIds: string[] = [];
   if (relationalArmOn) {
-    const relationalIds = await relationalArmChunkIds(storage, trimmed, {
+    relationalIds = await relationalArmChunkIds(storage, trimmed, {
       ...(opts.sourceIds ? { sourceIds: [...opts.sourceIds] } : {}),
       limit: fanout,
     });
     if (relationalIds.length > 0) {
       lists.push(relationalIds);
+      listArms.push("relational");
       rrfWeights.push(relationalArmWeight());
     }
   }
-  const fused = reciprocalRankFusion(lists, {
-    k: opts.rrfK,
-    weights: rrfWeights,
-  }).slice(0, fanout);
+  // 3c. OR retry (MEMRAIN_RANK_KEYWORD_OR_RETRY): plainto_tsquery is AND-only,
+  //     so one stray word in the query empties the keyword arm. When the strict
+  //     pass is thin, chunks matching ANY query lexeme fuse as their own
+  //     low-weight list. They stay out of primaryKeywordIds, so they never earn
+  //     keyword_exact evidence nor count as a lexical vote for the gate.
+  //     Only while the vector arm returned nothing: next to a healthy vector
+  //     arm, any-word matches out-vote the semantic answer to a paraphrase
+  //     (the cross-lingual transcript in retrieval_quality_eval_misses drops
+  //     out of the window), so the retry is a rescue, not an extra voice.
+  if (
+    rank.keywordOrRetry &&
+    vectorIds.length === 0 &&
+    primaryKeywordIds.length < KEYWORD_RELAX_MIN_ROWS
+  ) {
+    const strict = new Set(primaryKeywordIds);
+    const relaxed = await keywordSearchRelaxed(engine, trimmed, fanout, {
+      sourceIds: opts.sourceIds,
+      filters: chunkFilters,
+      maxPool: maxPoolOn,
+      sourceBoost: armSourceBoost,
+    });
+    const relaxedIds = relaxed.map((r) => r.id).filter((id) => !strict.has(id));
+    if (relaxedIds.length > 0) {
+      lists.push(relaxedIds);
+      listArms.push("keyword_relaxed");
+      rrfWeights.push(RELAXED_KEYWORD_WEIGHT);
+    }
+  }
+  // 3d. Keyword-arm confidence (MEMRAIN_RANK_KEYWORD_CONFIDENCE): a keyword
+  //     arm that cannot separate its top two pages fuses at half weight, title
+  //     arm included. See arm-confidence.ts.
+  if (
+    downweightKeywordArm({
+      enabled: rank.keywordConfidence,
+      keywordRows: primaryKeywordRows,
+      vectorVoted: vectorIds.length > 0,
+      relationalVoted: relationalIds.length > 0,
+    })
+  ) {
+    rrfWeights[1] = rrfWeights[1]! * KEYWORD_WEAK_WEIGHT;
+    if (titleListIdx >= 0) rrfWeights[titleListIdx] = rrfWeights[titleListIdx]! * KEYWORD_WEAK_WEIGHT;
+  }
+  // 4a. Page-grain fusion (MEMRAIN_RANK_PAGE_FUSION), see page-fusion.ts. One
+  //     extra lookup maps every listed chunk to its page.
+  const pageKeys = rank.pageFusion ? await pageKeysForChunks(engine, lists.flat()) : null;
+  const pageFused = pageKeys
+    ? fuseByPage(lists, { k: opts.rrfK, weights: rrfWeights, pageOf: (id) => pageKeys.get(id) })
+    : null;
+  const fused = (
+    pageFused
+      ? pageFused.map(({ id, score }) => ({ id, score }))
+      : reciprocalRankFusion(lists, {
+          k: opts.rrfK,
+          weights: rrfWeights,
+        })
+  ).slice(0, fanout);
 
   // 4b. Structural two-pass expansion (near_symbol / walk_depth) — default OFF.
   //     Widen the candidate set with code-graph neighbors BEFORE hydrate so the
@@ -1045,6 +1147,7 @@ export async function hybridSearch(
       degraded,
       retrieved: 0,
       returned: 0,
+      confidence: gradeConfidence([]),
     });
     return [];
   }
@@ -1161,6 +1264,25 @@ export async function hybridSearch(
   // flag is on, so a normal search pays nothing.
   const explainAcc = explainOn ? new Map<string, Partial<SearchExplain>>() : null;
   if (explainAcc) for (const s of scored) explainAcc.set(s.chunkId, { base: s.score });
+  if (explainAcc && pageFused) {
+    const votesById = new Map(pageFused.map((r) => [r.id, r.votes] as const));
+    for (const s of scored) {
+      const votes = votesById.get(s.chunkId);
+      if (!votes) continue;
+      mergeExplain(explainAcc, s.chunkId, {
+        arms: votes.map((v) => ({ arm: listArms[v.list] ?? `list${v.list}`, rank: v.rank })),
+      });
+    }
+  }
+
+  // Metadata-boost gate (MEMRAIN_RANK_METADATA_GATE): on a query only the
+  // vector arm answered, the metadata stages below stand down and the
+  // similarity order stands. See metadata-boost-gate.ts.
+  const skipMetadata = skipMetadataBoosts({
+    enabled: rank.metadataGate,
+    vectorVoted: vectorIds.length > 0,
+    lexicalVoted: primaryKeywordIds.length > 0 || titleIds.length > 0 || relationalIds.length > 0,
+  });
 
   // 5d. Compiled-truth boost — a page's canonical answers (its compiled-truth
   //     mirror chunks) get ×2 so the distilled truth outranks body prose for
@@ -1168,12 +1290,13 @@ export async function hybridSearch(
   //     at medium/high the cross-page displacement outweighs the tilt.
   //     Pre-dedup like every other boost, so the truth chunk wins the
   //     per-doc collapse of its own mirror document.
-  if (detailResolved === "low") {
+  const truthBoost = compiledTruthBoost(opts.detail, detailResolved, rank.entityTruthSoft);
+  if (truthBoost > 1) {
     for (const s of scored) {
       if (s.payload?.sourcePath?.startsWith(PAGE_TRUTH_PREFIX)) {
-        s.score *= COMPILED_TRUTH_BOOST;
+        s.score *= truthBoost;
         if (explainAcc) {
-          mergeExplain(explainAcc, s.chunkId, { compiled_truth: COMPILED_TRUTH_BOOST });
+          mergeExplain(explainAcc, s.chunkId, { compiled_truth: truthBoost });
         }
       }
     }
@@ -1221,7 +1344,7 @@ export async function hybridSearch(
   const recencyBoostMap = recencyBoostMode === "off" ? null : getRecencyBoostMap();
   scored = scored.map((s) => {
     const contentDate = s.payload?.effective_date ?? s.payload?.updated_at ?? null;
-    const decayF = canonical
+    const decayF = canonical || skipMetadata
       ? 1
       : recencyMultiplierForPath(
           // Decay on the content date (effective_date, already COALESCE'd with
@@ -1233,7 +1356,7 @@ export async function hybridSearch(
           s.payload?.sourcePath ?? null,
           recencyMap,
         );
-    const boostF = recencyBoostMap
+    const boostF = recencyBoostMap && !skipMetadata
       ? recencyBoostMultiplierForPath(
           contentDate,
           nowMs,
@@ -1243,7 +1366,7 @@ export async function hybridSearch(
         )
       : 1;
     const recencyF = decayF * boostF;
-    const salienceF = canonical ? 1 : salienceMultiplier(s.payload?.frontmatter);
+    const salienceF = canonical || skipMetadata ? 1 : salienceMultiplier(s.payload?.frontmatter);
     // Curation tiers act ONLY inside the arm SQL (the
     // prefix factor shapes per-arm LIMIT survival; runPostFusionStages has no
     // curation stage). Multiplying the fused score again would double-apply
@@ -1253,10 +1376,12 @@ export async function hybridSearch(
     // Life-Chronicle lift for life/events + life/diary hits — gated on the same
     // recency-boost activation, so a non-temporal query leaves every hit at ×1
     // (bit-for-bit unchanged). Pure ranking; the diary read-fence lives elsewhere.
-    const chronicleF = chronicleBoostMultiplier(
-      s.payload?.sourcePath,
-      recencyBoostMode as "off" | "on" | "strong",
-    );
+    const chronicleF = skipMetadata
+      ? 1
+      : chronicleBoostMultiplier(
+          s.payload?.sourcePath,
+          recencyBoostMode as "off" | "on" | "strong",
+        );
     if (explainAcc) {
       const patch: Partial<SearchExplain> = {};
       if (recencyF !== 1) patch.recency = recencyF;
@@ -1280,7 +1405,7 @@ export async function hybridSearch(
     opts.salience !== undefined
       ? opts.salience !== "off"
       : !canonical && suggestions.suggestedSalience === "on";
-  if (matteringOn) {
+  if (matteringOn && !skipMetadata) {
     const floor = computeFloorThreshold(scored, graphFloorRatio);
     const preMattering = explainAcc ? snapshotScores(scored) : null;
     try {
@@ -1300,7 +1425,7 @@ export async function hybridSearch(
   //     diversification over the link graph, applied pre-dedup on the full
   //     scored set so a hub's chunk can rise before per-doc collapse. Mutates
   //     score in place; fail-open (a links query error leaves scores intact).
-  if (graphSignalsOn) {
+  if (graphSignalsOn && !skipMetadata) {
     // Relative score floor (MEMRAIN_GRAPH_SIGNALS_FLOOR): a hit must score within
     // `ratio` of the top hit to be eligible for a graph signal. Unset → the
     // ratio is undefined → computeFloorThreshold returns -Infinity; collapse
@@ -1325,7 +1450,7 @@ export async function hybridSearch(
   //     MEMRAIN_GRAPH_SIGNALS_FLOOR ratio (undefined → no gate, every hit
   //     eligible). Pre-dedup so the boost decides which chunk survives per-doc
   //     collapse; fail-open on a links query error.
-  if (backlinkBoostOn) {
+  if (backlinkBoostOn && !skipMetadata) {
     const floor = computeFloorThreshold(scored, graphFloorRatio);
     const preBacklink = explainAcc ? snapshotScores(scored) : null;
     await applyBacklinkBoost(scored, engine, {
@@ -1355,15 +1480,17 @@ export async function hybridSearch(
   // 6f. Alias-resolved canonical boost (×1.05) — pages that
   //     old slugs forward to (slug_aliases canonical side) are the explicitly
   //     disambiguated authority. Fail-open: a pre-migration store no-ops.
-  try {
-    const touched = await applyAliasResolvedBoost(scored, engine);
-    if (explainAcc) {
-      for (const i of touched) {
-        mergeExplain(explainAcc, scored[i]!.chunkId, { alias: ALIAS_RESOLVED_BOOST });
+  if (!skipMetadata) {
+    try {
+      const touched = await applyAliasResolvedBoost(scored, engine);
+      if (explainAcc) {
+        for (const i of touched) {
+          mergeExplain(explainAcc, scored[i]!.chunkId, { alias: ALIAS_RESOLVED_BOOST });
+        }
       }
+    } catch {
+      // Non-fatal — the boost is a nudge, never a dependency.
     }
-  } catch {
-    // Non-fatal — the boost is a nudge, never a dependency.
   }
 
   // Re-sort after boost + recency (RRF was already sorted but these flip).
@@ -1386,7 +1513,12 @@ export async function hybridSearch(
   const perDoc =
     intent === "exact" || opts.detail === "high"
       ? scored
-      : dedupByDocument(scored, { enabled: true, maxPerDoc });
+      : dedupByDocument(scored, {
+          enabled: true,
+          maxPerDoc,
+          // Under page fusion a page and its compiled-truth mirror share one cap.
+          ...(pageKeys ? { keyOf: (h) => pageKeys.get(h.chunkId) ?? `doc:${h.documentId}` } : {}),
+        });
 
   // 7b. Type-diversity layer: no page type may exceed
   //     MEMRAIN_MAX_TYPE_RATIO (default 0.6) of the candidate set, so one noisy
@@ -1439,6 +1571,9 @@ export async function hybridSearch(
     const ndThreshold = getNearDupThreshold();
     if (ndThreshold <= 1.0) final = dedupByTextSimilarity(reranked, ndThreshold);
   }
+  // 8b2. Exact lookup (MEMRAIN_RANK_EXACT_LOOKUP): the one page the whole query
+  //      names goes to rank 1. See exact-lookup.ts.
+  if (rank.exactLookup) final = promoteExactLookup(final, trimmed);
 
   // 8c. Alias-hop (default ON, exact-full-query-alias gated): if the whole
   //     query is a declared alias, boost the canonical page when present or
@@ -1588,6 +1723,7 @@ export async function hybridSearch(
     degraded,
     retrieved: fused.length,
     returned: kept.length,
+    confidence: gradeConfidence(kept),
   });
   return kept;
 }

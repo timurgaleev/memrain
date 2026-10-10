@@ -55,6 +55,8 @@ export interface SearchExplain {
   graph?: number;
   /** Two-pass reranker rank change (positive = promoted, negative = demoted). */
   rerank_delta?: number;
+  /** Retrieval lists that voted for this hit and the 1-based rank each gave it (page fusion only). */
+  arms?: Array<{ arm: string; rank: number }>;
   /** Score the hit was ranked/returned on (post all stages). */
   final: number;
 }
@@ -159,6 +161,9 @@ export function formatExplain(
   boost("alias", explain.alias);
   boost("backlink", explain.backlink);
   boost("graph", explain.graph);
+  if (explain.arms && explain.arms.length > 0) {
+    lines.push(`   votes ${explain.arms.map((a) => `${a.arm}#${a.rank}`).join(" ")}`);
+  }
   if (explain.rerank_delta !== undefined && explain.rerank_delta !== 0) {
     any = true;
     const arrow = explain.rerank_delta > 0 ? "↑" : "↓";

@@ -10,6 +10,7 @@
  * the caller that hidden content matched its query.
  */
 import type { Intent } from "./intent.ts";
+import type { SearchConfidence } from "./confidence-grade.ts";
 
 export const DEGRADED_REASONS = [
   "embed_timeout",
@@ -37,6 +38,8 @@ export interface SearchMeta {
   /** Candidates in the fused pool (or the cached ranked set on a cache hit), before hydrate, dedup and the k trim. */
   retrieved: number;
   returned: number;
+  /** How sure the answer is, from the returned hits' evidence (operator-only). */
+  confidence?: SearchConfidence;
 }
 
 export interface PublicSearchMeta {

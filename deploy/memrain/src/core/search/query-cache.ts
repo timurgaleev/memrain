@@ -49,6 +49,7 @@ import { getNearDupThreshold, getMaxTypeRatio } from "./dedup.ts";
 import { getGraphSignalsFloorRatio } from "./graph-signals.ts";
 import { aliasHopEnabled } from "./alias-hop.ts";
 import { resolveSearchMode } from "./mode.ts";
+import { rankFlagsSignature } from "./ranking-flags.ts";
 
 export interface CachedQuery {
   intent: string | null;
@@ -142,7 +143,10 @@ const RANKING_VERSION = "8";
  *     (`MEMRAIN_MAX_TYPE_RATIO`). A flag flip re-keys the cache instead of
  *     serving the pre-flip ranking until the TTL/clock catches up. Per-call
  *     overrides of the same knobs are appended by hybrid.ts on top of this
- *     env-level signature.
+ *     env-level signature;
+ *   - the MEMRAIN_RANK_* flags (ranking-flags.ts), appended only when one is
+ *     on, so the all-off key is the key every existing cached row was stored
+ *     under.
  * NOTE: time-based recency (a hit ages between writes) still drifts the true
  * order within a cache lifetime — that is inherent to caching a wall-clock
  * ranking and is accepted by design (the cache is gated on the document
@@ -163,7 +167,7 @@ export function rankingSignature(): string {
     `mt=${getMaxTypeRatio()}`,
     `rw=${env["MEMRAIN_RERANK_WINDOW"] ?? ""}`,
   ].join(":");
-  return `${RANKING_VERSION}:tb=${getTitleBoost()}:rd=${recency}:nd=${getNearDupThreshold()}:gsf=${getGraphSignalsFloorRatio()}:ah=${aliasHopEnabled() ? 1 : 0}:${knobs}`;
+  return `${RANKING_VERSION}:tb=${getTitleBoost()}:rd=${recency}:nd=${getNearDupThreshold()}:gsf=${getGraphSignalsFloorRatio()}:ah=${aliasHopEnabled() ? 1 : 0}:${knobs}${rankFlagsSignature()}`;
 }
 
 /**
