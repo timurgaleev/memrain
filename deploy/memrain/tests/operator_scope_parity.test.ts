@@ -80,6 +80,14 @@ let factIdB = 0;
 
 // Wall-clock values differ between runs, and recency decay moves scores in the
 // ninth decimal as the clock ticks; everything else must be identical.
+// The spend ledger binds latency_ms positionally, which the keyed scrub misses.
+function scrubLatencyParam(text: string, params: unknown): unknown {
+  const cols = /^INSERT INTO mcp_spend_log \(([^)]*)\)/.exec(text)?.[1];
+  if (!cols || !Array.isArray(params)) return params;
+  const i = cols.split(",").map((c) => c.trim()).indexOf("latency_ms");
+  return i < 0 ? params : params.map((p, j) => (j === i && typeof p === "number" ? 0 : p));
+}
+
 function scrub(value: unknown): unknown {
   return JSON.parse(
     JSON.stringify(value ?? null)
@@ -98,7 +106,8 @@ async function record(): Promise<Recorded[]> {
   const out: Recorded[] = [];
   let current: Recorded | undefined;
   (engine as { query: typeof engine.query }).query = async (text, params) => {
-    current?.sql.push({ text: text.replace(/\s+/g, " ").trim(), params: scrub(params) });
+    const flat = text.replace(/\s+/g, " ").trim();
+    current?.sql.push({ text: flat, params: scrub(scrubLatencyParam(flat, params)) });
     return original(text, params);
   };
   try {

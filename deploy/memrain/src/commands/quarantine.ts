@@ -223,7 +223,7 @@ async function runClear(engine: Engine, opts: QuarantineCmdOptions): Promise<num
   await engine.query(
     `UPDATE documents
         SET frontmatter = ((COALESCE(frontmatter, '{}'::jsonb) - 'quarantine') - 'content_flag' - 'embed_skip')
-                          || jsonb_build_object('${QUARANTINE_OVERRIDE_KEY}', $2::jsonb)
+                          || jsonb_build_object('${QUARANTINE_OVERRIDE_KEY}', $2::text::jsonb)
       WHERE id = $1`,
     [doc.id, JSON.stringify(override)],
   );

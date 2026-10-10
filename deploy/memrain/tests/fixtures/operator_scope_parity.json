@@ -14,7 +14,7 @@
         ]
       },
       {
-        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, phase, job_id, outcome, latency_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         "params": [
           null,
           null,
@@ -25,7 +25,11 @@
           null,
           null,
           null,
-          null
+          null,
+          null,
+          null,
+          "error",
+          0
         ]
       },
       {
@@ -118,7 +122,7 @@
         ]
       },
       {
-        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, phase, job_id, outcome, latency_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         "params": [
           null,
           null,
@@ -129,7 +133,11 @@
           null,
           null,
           null,
-          null
+          null,
+          null,
+          null,
+          "error",
+          0
         ]
       },
       {
@@ -177,7 +185,7 @@
         ]
       },
       {
-        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, phase, job_id, outcome, latency_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         "params": [
           null,
           null,
@@ -188,7 +196,11 @@
           null,
           null,
           null,
-          null
+          null,
+          null,
+          null,
+          "error",
+          0
         ]
       },
       {
@@ -270,7 +282,7 @@
     "call": "get_chunks {\"source_path\":\"/shared/pay.ts\"}",
     "sql": [
       {
-        "text": "SELECT c.id, c.chunk_index, c.content, c.symbol_name FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.source_path = $1 ORDER BY c.chunk_index",
+        "text": "SELECT c.id, c.chunk_index, c.content, c.symbol_name FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.source_path = $1 AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.chunk_index",
         "params": [
           "/shared/pay.ts"
         ]
@@ -665,7 +677,7 @@
         ]
       },
       {
-        "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, forgotten_at::text AS forgotten_at FROM entity_facts WHERE entity_slug = $1 AND forgotten_at IS NULL AND dimension IS NULL AND (valid_until IS NULL OR valid_until >= CURRENT_DATE) ORDER BY confidence DESC, written_at DESC, id DESC LIMIT $2",
+        "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, attributed_to, forgotten_at::text AS forgotten_at FROM entity_facts WHERE entity_slug = $1 AND forgotten_at IS NULL AND dimension IS NULL AND (valid_until IS NULL OR valid_until >= CURRENT_DATE) ORDER BY confidence DESC, written_at DESC, id DESC LIMIT $2",
         "params": [
           "people/alice",
           1000
@@ -683,7 +695,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"slug\": \"people/alice\",\n  \"page\": {\n    \"slug\": \"people/alice\",\n    \"type\": \"person\",\n    \"title\": \"Alice Entity\",\n    \"compiled_truth\": {},\n    \"markdown_body\": \"\",\n    \"content_hash\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n    \"source_id\": \"default\",\n    \"created_at\": \"<ts>\",\n    \"updated_at\": \"<ts>\",\n    \"deleted_at\": null\n  },\n  \"facts\": [\n    {\n      \"id\": 2,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"forgotten_at\": null\n    },\n    {\n      \"id\": 1,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"AAA_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"forgotten_at\": null\n    }\n  ],\n  \"timeline\": [\n    {\n      \"id\": 2,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"BBB_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    },\n    {\n      \"id\": 1,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"AAA_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"slug\": \"people/alice\",\n  \"page\": {\n    \"slug\": \"people/alice\",\n    \"type\": \"person\",\n    \"title\": \"Alice Entity\",\n    \"compiled_truth\": {},\n    \"markdown_body\": \"\",\n    \"content_hash\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n    \"source_id\": \"default\",\n    \"created_at\": \"<ts>\",\n    \"updated_at\": \"<ts>\",\n    \"deleted_at\": null\n  },\n  \"facts\": [\n    {\n      \"id\": 2,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null\n    },\n    {\n      \"id\": 1,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"AAA_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null\n    }\n  ],\n  \"timeline\": [\n    {\n      \"id\": 2,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"BBB_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    },\n    {\n      \"id\": 1,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"AAA_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    }\n  ]\n}"
         }
       ]
     }
@@ -692,7 +704,7 @@
     "call": "entity_facts {\"entity_slug\":\"people/alice\"}",
     "sql": [
       {
-        "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, forgotten_at::text AS forgotten_at FROM entity_facts WHERE entity_slug = $1 AND forgotten_at IS NULL AND dimension IS NULL AND (valid_until IS NULL OR valid_until >= CURRENT_DATE) ORDER BY confidence DESC, written_at DESC, id DESC LIMIT $2",
+        "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, attributed_to, forgotten_at::text AS forgotten_at FROM entity_facts WHERE entity_slug = $1 AND forgotten_at IS NULL AND dimension IS NULL AND (valid_until IS NULL OR valid_until >= CURRENT_DATE) ORDER BY confidence DESC, written_at DESC, id DESC LIMIT $2",
         "params": [
           "people/alice",
           1000
@@ -703,7 +715,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"entity_slug\": \"people/alice\",\n  \"facts\": [\n    {\n      \"id\": 2,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"forgotten_at\": null\n    },\n    {\n      \"id\": 1,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"AAA_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"forgotten_at\": null\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"entity_slug\": \"people/alice\",\n  \"facts\": [\n    {\n      \"id\": 2,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null\n    },\n    {\n      \"id\": 1,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"AAA_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null\n    }\n  ]\n}"
         }
       ]
     }
@@ -914,7 +926,7 @@
     "call": "list_takes {}",
     "sql": [
       {
-        "text": "SELECT take_key, claim_text, kind, holder, weight, domain, status, active, resolved_quality, resolved_at::text AS resolved_at, generated_at::text AS generated_at FROM synth_takes WHERE ($1::text IS NULL OR status = $1) AND claim_text <> $4 ORDER BY generated_at DESC, take_key ASC LIMIT $2 OFFSET $3",
+        "text": "SELECT take_key, claim_text, kind, holder, weight, domain, status, active, resolved_quality, resolved_at::text AS resolved_at, generated_at::text AS generated_at FROM synth_takes WHERE ($1::text IS NULL OR status = $1) AND claim_text <> $4 AND NOT EXISTS (SELECT 1 FROM documents qd WHERE qd.id = synth_takes.source_ref AND NOT (NOT (COALESCE(qd.frontmatter, '{}'::jsonb) ? 'quarantine'))) ORDER BY generated_at DESC, take_key ASC LIMIT $2 OFFSET $3",
         "params": [
           null,
           50,
@@ -936,7 +948,7 @@
     "call": "takes_search {\"q\":\"claim\"}",
     "sql": [
       {
-        "text": "SELECT take_key, claim_text, kind, holder, weight, domain, status FROM synth_takes WHERE (similarity(claim_text, $1) >= 0.3 OR claim_text ILIKE '%' || $1 || '%') AND claim_text <> $3 ORDER BY similarity(claim_text, $1) DESC, take_key ASC LIMIT $2",
+        "text": "SELECT take_key, claim_text, kind, holder, weight, domain, status FROM synth_takes WHERE (similarity(claim_text, $1) >= 0.3 OR claim_text ILIKE '%' || $1 || '%') AND claim_text <> $3 AND NOT EXISTS (SELECT 1 FROM documents qd WHERE qd.id = synth_takes.source_ref AND NOT (NOT (COALESCE(qd.frontmatter, '{}'::jsonb) ? 'quarantine'))) ORDER BY similarity(claim_text, $1) DESC, take_key ASC LIMIT $2",
         "params": [
           "claim",
           50,
@@ -1105,7 +1117,7 @@
     "call": "fact_supersessions {\"limit\":500}",
     "sql": [
       {
-        "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, forgotten_at::text AS forgotten_at FROM entity_facts WHERE forgotten_at IS NOT NULL AND superseded_by IS NOT NULL AND dimension IS NULL ORDER BY forgotten_at DESC LIMIT $1",
+        "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, attributed_to, forgotten_at::text AS forgotten_at FROM entity_facts WHERE forgotten_at IS NOT NULL AND superseded_by IS NOT NULL AND dimension IS NULL ORDER BY forgotten_at DESC LIMIT $1",
         "params": [
           500
         ]
@@ -1124,7 +1136,7 @@
     "call": "recall {\"id\":\"$factIdB\"}",
     "sql": [
       {
-        "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, forgotten_at::text AS forgotten_at FROM entity_facts WHERE id = $1 AND forgotten_at IS NULL",
+        "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, attributed_to, forgotten_at::text AS forgotten_at FROM entity_facts WHERE id = $1 AND forgotten_at IS NULL",
         "params": [
           2
         ]
@@ -1134,7 +1146,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"fact\": {\n    \"id\": 2,\n    \"entity_slug\": \"people/alice\",\n    \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n    \"confidence\": 1,\n    \"source_slug\": null,\n    \"source_chunk_id\": null,\n    \"written_by\": \"unattributed\",\n    \"written_at\": \"<ts>\",\n    \"kind\": \"belief\",\n    \"notability\": null,\n    \"valid_from\": null,\n    \"valid_until\": null,\n    \"visibility\": \"private\",\n    \"superseded_by\": null,\n    \"consolidated_into\": null,\n    \"context\": null,\n    \"source_session\": null,\n    \"forgotten_at\": null\n  }\n}"
+          "text": "{\n  \"ok\": true,\n  \"fact\": {\n    \"id\": 2,\n    \"entity_slug\": \"people/alice\",\n    \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n    \"confidence\": 1,\n    \"source_slug\": null,\n    \"source_chunk_id\": null,\n    \"written_by\": \"unattributed\",\n    \"written_at\": \"<ts>\",\n    \"kind\": \"belief\",\n    \"notability\": null,\n    \"valid_from\": null,\n    \"valid_until\": null,\n    \"visibility\": \"private\",\n    \"superseded_by\": null,\n    \"consolidated_into\": null,\n    \"context\": null,\n    \"source_session\": null,\n    \"attributed_to\": null,\n    \"forgotten_at\": null\n  }\n}"
         }
       ]
     }
