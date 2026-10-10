@@ -322,7 +322,7 @@ function addEcho(echo: EchoDictionary, value: string, kind: string, min: number)
  * of its next occurrence and is searched again only once the cursor has passed
  * it, so the pass is O(values × text) and holds O(values) state.
  */
-function sweepEchoes(text: string, echo: EchoDictionary, findings: SecretFinding[]): string {
+export function sweepEchoes(text: string, echo: EchoDictionary, findings: SecretFinding[]): string {
   const values = [...echo.keys()].sort((a, b) => b.length - a.length);
   const next = values.map((v) => text.indexOf(v));
   if (next.every((p) => p === -1)) return text;
@@ -433,13 +433,13 @@ export function secretDisposition(): SecretDisposition {
 }
 
 /** On unless the variable says `0`, `false`, `off` or `no`. */
-function switchedOn(name: string): boolean {
+export function switchedOn(name: string): boolean {
   return !["0", "false", "off", "no"].includes((process.env[name] ?? "").trim().toLowerCase());
 }
 
 let warnedShortAllow = false;
 
-function allowedFingerprints(): Set<string> {
+export function allowedFingerprints(): Set<string> {
   const allow = new Set<string>();
   for (const entry of (process.env.MEMRAIN_SECRET_SCAN_ALLOW ?? "").split(",")) {
     const s = entry.trim().toLowerCase();

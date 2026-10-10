@@ -77,9 +77,13 @@ import { bumpLastRetrievedAt } from "../core/last-retrieved.ts";
 import { linkVerbInferEnabled } from "../core/link-verb-infer.ts";
 import {
   mirrorPage,
+  mirrorPageVerdict,
   removePageFromSearch,
   isPageSourcePath,
 } from "../core/page-index.ts";
+import { type QuarantineVerdict, readQuarantineVerdict } from "../core/quarantine.ts";
+import { outputRedactionEnabled, redactToolResult } from "../core/output-redaction.ts";
+import { allowedFingerprints } from "../core/secret-scan.ts";
 import { getChunksForPage, getChunksForSource } from "../core/chunks-read.ts";
 import { resolveSlugs } from "../core/slug-resolve.ts";
 import { addTag, removeTag, getTags } from "../core/tags.ts";
@@ -401,9 +405,16 @@ export async function dispatchTool(
         ...(auth.budgetUsdPerDay !== undefined ? { capUsd: auth.budgetUsdPerDay } : {}),
       }
     : null;
-  const result = await runWithSpendClient(spendClient, () =>
+  const raw = await runWithSpendClient(spendClient, () =>
     dispatchToolInner(storage, req, opts),
   );
+  // The operator reads stored text as it is; everyone else gets retrieval
+  // results scanned for credentials that predate (or slipped past) the write scan.
+  const isOperator = opts.authInfo === undefined && !(opts.isPublic ?? false);
+  const result =
+    !isOperator && OP_BY_NAME.get(req.name)?.outputRedaction === "retrieval" && outputRedactionEnabled()
+      ? redactToolResult(raw, allowedFingerprints())
+      : raw;
   const injectable =
     !result.isError &&
     !(opts.isPublic ?? false) &&
@@ -620,7 +631,7 @@ async function dispatchToolInner(
       case "page_revert":
         return await callPageRevert(storage, args, writeSource, opts.isPublic ?? false, writerPrincipal(opts));
       case "page_get":
-        return await callPageGet(storage, args, redact, readSources, remote);
+        return await callPageGet(storage, args, redact, readSources, remote, seesPrincipal(opts));
       case "page_list":
         return await callPageList(storage, args, redact, readSources, remote);
       case "page_versions":
@@ -1879,10 +1890,17 @@ async function mirrorOrQueue(
   remote: boolean,
   op: "page_put" | "page_append" | "page_edit",
   waitForIndex: boolean,
-): Promise<{ search_indexed?: boolean; search_pending?: true; search_job_id?: string }> {
-  if (pageMirrorSync() || waitForIndex) {
-    return { search_indexed: await mirrorPage(storage, page, { remote, timingLabel: op }) };
-  }
+): Promise<{
+  search_indexed?: boolean;
+  search_pending?: true;
+  search_job_id?: string;
+  quarantined?: QuarantineVerdict;
+}> {
+  const inline = async () => {
+    const v = await mirrorPageVerdict(storage, page, { remote, timingLabel: op });
+    return { search_indexed: v.ok, ...(v.quarantined ? { quarantined: v.quarantined } : {}) };
+  };
+  if (pageMirrorSync() || waitForIndex) return await inline();
   // One job per write: a content-addressed id would collapse a revert, an A->B->A
   // edit or a title-only change onto a long-finished row and enqueue nothing.
   // The handler mirrors the page as it is when it runs, so an older job landing
@@ -1902,7 +1920,7 @@ async function mirrorOrQueue(
       `[page-index] could not queue the mirror for ${page.slug}, mirroring inline:`,
       e instanceof Error ? e.message : e,
     );
-    return { search_indexed: await mirrorPage(storage, page, { remote, timingLabel: op }) };
+    return await inline();
   }
 }
 
@@ -2092,6 +2110,7 @@ async function callPageGet(
   redact = false,
   readSources?: string[],
   remote = false,
+  isAdmin = false,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string") {
     return errResult("page_get: `slug` is required");
@@ -2149,11 +2168,23 @@ async function callPageGet(
   // chunk/document-level and don't carry a page slug, so they don't feed it.
   await bumpLastRetrievedAt(storage.engine(), [page.slug], page.source_id);
   const { version, ...row } = page;
+  // A page the content-sanity gate hid from search keeps it hidden here too:
+  // a non-operator gets the page without its body unless an admin asks for it.
+  const quarantined = await readQuarantineVerdict(storage.engine(), page.slug, page.source_id);
+  const withheld =
+    quarantined !== null && remote && !(args["include_quarantined"] === true && isAdmin);
+  let out: Record<string, unknown> = row as unknown as Record<string, unknown>;
+  if (withheld) {
+    const { markdown_body: _body, compiled_truth: _truth, ...meta } = row;
+    out = meta;
+  }
   return jsonResult({
     ok: true,
-    page: redact ? redactBody(row as unknown as Record<string, unknown>) : row,
+    page: redact ? redactBody(out) : out,
     version: Number(version ?? 0),
     ...(resolvedSlug ? { resolved_slug: resolvedSlug } : {}),
+    ...(quarantined ? { quarantined } : {}),
+    ...(withheld ? { notice: "page_quarantined" } : {}),
   });
 }
 
@@ -3289,7 +3320,15 @@ async function callPurgeDeletedPages(
   // Scope the reaper to the caller's write source when scoped. Passing
   // `olderThanHours` undefined still triggers the fn's default TTL (72h).
   const scope = writeSource ? [writeSource] : undefined;
-  const r = await purgeDeletedPages(storage.engine(), olderThanHours, scope);
+  const slugs = args["slugs"];
+  if (slugs !== undefined && (!Array.isArray(slugs) || slugs.some((s) => typeof s !== "string"))) {
+    return errResult("purge_deleted_pages: `slugs` must be an array of strings");
+  }
+  const r = await purgeDeletedPages(storage.engine(), olderThanHours, scope, {
+    ...(slugs !== undefined ? { slugs: slugs as string[] } : {}),
+    ...(args["dry_run"] === true ? { dryRun: true } : {}),
+    ...(typeof args["expected_plan_hash"] === "string" ? { expectedPlanHash: args["expected_plan_hash"] } : {}),
+  });
   return jsonResult({ ok: true, ...r });
 }
 

@@ -491,6 +491,10 @@
         "include_deleted": {
           "type": "boolean",
           "description": "Surface soft-deleted pages (default false)."
+        },
+        "include_quarantined": {
+          "type": "boolean",
+          "description": "Return the body of a page the content-sanity gate quarantined. Honored for admin-scoped callers only; anyone else gets the page without its body, `quarantined`, and notice `page_quarantined`."
         }
       },
       "required": [
@@ -1686,6 +1690,21 @@
           "type": "number",
           "minimum": 0,
           "description": "Age cutoff in hours. Pages soft-deleted longer ago than this are reaped. Default 72."
+        },
+        "slugs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Only these slugs, and only those soft-deleted past the cutoff. Omit to reap every expired page."
+        },
+        "dry_run": {
+          "type": "boolean",
+          "description": "Reap nothing; return `planned` (the slugs a real run would reap now) and its `plan_hash`."
+        },
+        "expected_plan_hash": {
+          "type": "string",
+          "description": "The `plan_hash` of an earlier dry run. The purge is refused unless the plan still hashes the same, so exactly the reviewed pages go."
         }
       },
       "additionalProperties": false

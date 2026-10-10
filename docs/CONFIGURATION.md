@@ -692,6 +692,7 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_SECRET_SCAN_HIGH_ENTROPY` | on | Redacts high-entropy values assigned to secret-looking keys (`password=`, `api_key:` …). `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
 | `MEMRAIN_SECRET_SCAN_ECHO` | on | Also redacts bare repeats of a value already caught in the same write. `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
 | `MEMRAIN_CODE_SECRET_SCAN` | on | Scans source files for credentials before the code indexer chunks them (line numbers are kept). `0` turns it off. Allowlisted. | free |
+| `MEMRAIN_OUTPUT_REDACTION` | on | Scans what retrieval tools return to non-operator callers and replaces credentials with `[REDACTED:<kind>:<fp>]`; ids, slugs and hashes pass unchanged. Honours `MEMRAIN_SECRET_SCAN_ALLOW`. `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
 | `MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES` | `8388608` (8 MiB) | Largest session log `POST /ingest` accepts from `memrain transcripts push` (and the CLI reads); a bigger log is refused whole, never truncated. Allowlisted. | free |
 | `MEMRAIN_TRANSCRIPT_MAX_FILE_BYTES` | `104857600` (100 MiB) | Largest export `memrain transcripts ingest` accepts; a bigger file is refused whole, never truncated. Allowlisted. | free |
 | `MEMRAIN_MAX_FENCES_PER_PAGE` | `100` | Fenced code blocks per markdown page that are chunked as code. | free |

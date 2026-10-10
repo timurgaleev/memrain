@@ -55,6 +55,12 @@ export interface Operation {
    * a parallel hand-kept list.
    */
   scope?: "read" | "write" | "admin" | "agent";
+  /**
+   * `"retrieval"`: the result carries stored text, so a non-operator caller's
+   * copy is scanned for credentials on the way out (core/output-redaction.ts).
+   * Every read op carries it unless it returns only counts, names and config.
+   */
+  outputRedaction?: "retrieval";
   /** Declaration order is preserved into `properties` + `required`. */
   params: Record<string, ParamDef>;
   /**
@@ -280,6 +286,7 @@ const requestIdParam = str({
 export const OPERATIONS: readonly Operation[] = [
   {
     name: "search",
+    outputRedaction: "retrieval",
     description:
       "Hybrid (vector + keyword) search over the indexed corpus. Returns ranked chunks with their parent document path and title. Optional filters (lang / symbol_kind / since / until) are applied post-ranking and bypass the query cache. Has no `expand` knob, and LLM query expansion is off in the default mode bundles — for a concept or landscape question ('everything about X', 'who works on Y'), escalate to `query` with `expand:true`, which widens the keyword arm with generated variants. A nonzero hit count here is not proof that the corpus was exhausted. The response carries `meta`: `vectorEnabled` plus `degraded[]` reason codes (embed_timeout, vector_arm_failed, keyword_zero, budget_truncated, vector_candidates_incomplete) that tell an empty brain from a degraded run; non-public callers also get intent, mode, cache, retrieved and returned.",
     argAliases: { query: "q", limit: "k" },
@@ -348,6 +355,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "backlinks",
+    outputRedaction: "retrieval",
     description:
       "Find what links to a target. Default type `wikilink`: `name` (a page name or slug, any script) is resolved to its canonical page slug, redirects and declared aliases included, and the pages linking to it are returned (`sourcePath` is the page's `page://` path, `surfaceForm` the target slug). Type `tag` / `date`: documents whose chunks mention that tag or date.",
     params: {
@@ -526,16 +534,22 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "page_get",
+    outputRedaction: "retrieval",
     description:
       "Read a page by slug. Returns an error if the page does not exist. `fuzzy:true` falls back to fuzzy slug resolution on a miss (a unique candidate is auto-read; multiple candidates return `ambiguous_slug` + the list). `include_deleted:true` surfaces a soft-deleted page with deleted_at populated (restore workflows). The response carries `version`, the page's current version number — pass it as `expected_version` to a later page_put, page_revert or page_delete to write only if nobody changed the page in between.",
     params: {
       slug: str(req),
       fuzzy: bool({ description: "Fuzzy slug resolution on a miss (default false)." }),
       include_deleted: bool({ description: "Surface soft-deleted pages (default false)." }),
+      include_quarantined: bool({
+        description:
+          "Return the body of a page the content-sanity gate quarantined. Honored for admin-scoped callers only; anyone else gets the page without its body, `quarantined`, and notice `page_quarantined`.",
+      }),
     },
   },
   {
     name: "page_list",
+    outputRedaction: "retrieval",
     description:
       "List pages, newest-first by default. Optional filters: `type`, `tag` (normalized), `since` (ISO timestamp), `limit` (1..100, default 50). `sort` picks the order (updated_desc default | updated_asc | created_desc | slug); `include_deleted:true` adds soft-deleted pages with deleted_at populated.",
     argAliases: {
@@ -554,6 +568,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "page_versions",
+    outputRedaction: "retrieval",
     description:
       "Read the edit history of a page, newest-first. Includes body snapshots and compiled_truth snapshots at every revision. The operator and admin-scoped callers also see `written_by_principal`, the credential each version was written with (null for internal writes and versions older than the column).",
     params: {
@@ -605,6 +620,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "graph_neighbors",
+    outputRedaction: "retrieval",
     description:
       "All links touching `slug` (outbound, inbound, or both), newest-first. Optional `type` filter. Returns the link rows with a per-row `direction` annotation.",
     params: {
@@ -619,6 +635,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "graph_query",
+    outputRedaction: "retrieval",
     description:
       "Typed-relationship query. Requires `type` plus at least one of `source_slug` or `target_slug`. Examples: { type:'works_at', source_slug:'people/alice' } → companies Alice works at; { type:'works_at', target_slug:'companies/acme' } → people who work at Acme.",
     params: {
@@ -630,6 +647,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "traverse_graph",
+    outputRedaction: "retrieval",
     description:
       "Recursive N-hop graph walk from a start slug over the link graph — the multi-hop counterpart to graph_neighbors. Returns each reachable node once at its shortest `depth`. `direction` (outbound|inbound|both, default outbound), optional `type` edge filter, `max_depth` (1..10, default 3), `limit` (1..1000, default 100). Example: {start_slug:'people/alice', direction:'both', max_depth:2} → everyone within 2 hops of Alice.",
     params: {
@@ -696,6 +714,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "entity_facts",
+    outputRedaction: "retrieval",
     description:
       "List facts about an entity, ordered by confidence (default) or recency. `entity_slug` is OPTIONAL: omit it for a cross-entity recall (\"what did I learn recently / this session\") across all entities. Optional `since` filter on written_at and `source_slug` filter to narrow to facts derived from a single page. Lifecycle filters (mig085): `session` (capture-session id), `grep` (case-insensitive substring on the fact text), `visibility` (private|world), `include_forgotten` (surface tombstoned rows for audit; internal callers only — forced off on public ingress).",
     params: {
@@ -712,6 +731,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "fact_supersessions",
+    outputRedaction: "retrieval",
     description:
       "Supersession audit log: facts retired WITH a replacement pointer (forgotten_at + superseded_by both set), newest retirement first. Each row is the RETIRED fact; superseded_by points at its replacement. Optional `entity_slug` / `since` (ISO, on the retirement time) / `limit` (1..1000, default 50). Tenant-scoped. Read-only; no LLM.",
     params: {
@@ -722,6 +742,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "entity_timeline",
+    outputRedaction: "retrieval",
     description:
       "Chronological event log for a page. Newest-first. Optional `since` / `until` date bounds.",
     params: {
@@ -733,6 +754,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "entity_recall",
+    outputRedaction: "retrieval",
     description:
       "One-shot 'what do I know about X?' aggregator. Returns the entity's page (compiled_truth + body) plus top-confidence facts plus most-recent timeline events in a single call. The page may be null when the entity exists only as a soft-stub (facts + timeline allowed, page not yet promoted).",
     argAliases: { entity: "slug" },
@@ -786,6 +808,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "jobs_list",
+    outputRedaction: "retrieval",
     description:
       "List jobs newest-first. Optional filters: status, kind, parent_job_id, since (ISO timestamp), limit (1..1000, default 100).",
     params: {
@@ -798,12 +821,14 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "jobs_get",
+    outputRedaction: "retrieval",
     description:
       "Get the full detail of a job including payload, result, children, and unread child-done inbox count.",
     params: { id: str(req) },
   },
   {
     name: "jobs_logs",
+    outputRedaction: "retrieval",
     description:
       "Compact log view of a job: status, retries, last_error, children count + status breakdown, unread inbox count. Designed to fit in a single chat reply.",
     params: { id: str(req) },
@@ -820,6 +845,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_agent_job",
+    outputRedaction: "retrieval",
     description:
       "Status and answer of an agent job you submitted with submit_agent: status, stop_reason, final_text, cost_usd, turns and an error when it failed. A job that is not yours reads as not found.",
     scope: "agent",
@@ -827,6 +853,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_chunks",
+    outputRedaction: "retrieval",
     description:
       "Return a page's (or document's) content chunks in order. Pass `slug` (resolved through the page's page://<slug> search mirror) or `source_path` (a raw document). At least one is required; chunks come back ordered by chunk_index.",
     params: {
@@ -872,6 +899,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "relational_recall",
+    outputRedaction: "retrieval",
     description:
       "Deterministic relational query — resolves a seed entity from a natural-language relationship question ('who does alice report to?', 'who works at acme', 'how is alice connected to bob') and fans out typed edges. Returns [{slug, relation, depth}]. No LLM.",
     params: {
@@ -882,6 +910,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_links",
+    outputRedaction: "retrieval",
     description:
       "All typed edges touching `slug`, grouped by type and direction. An `outbound` group holds edges where the slug is the source; `inbound` where it is the target. Groups are ordered by type then outbound-before-inbound; edges within a group are newest-first. Optional `limit` (1..1000, default 1000) caps the edges scanned per direction.",
     params: {
@@ -897,6 +926,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "find_orphans",
+    outputRedaction: "retrieval",
     description:
       "Pages with zero inbound links — nothing in the graph references them. The natural enrichment targets (a page nobody links to is new or forgotten). Newest-first. Optional `type` page-type filter; `limit` (1..1000, default 50). Deterministic, no LLM.",
     params: {
@@ -906,6 +936,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "find_experts",
+    outputRedaction: "retrieval",
     description:
       "Who knows about a topic — or the graph's hubs. With `topic`: person/company pages ranked by expertise (how strongly their body relates to the topic, via hybrid search) × relationship recency (6-month half-life) × salience. Without `topic`: pages ranked by graph link-degree (distinct live in+out neighbours; unresolved [[wikilink]] stubs don't inflate it). Optional `type` overrides the default person/company candidate set in topic mode, or filters the hub ranking; `limit` (1..200, default 5). Deterministic, no LLM.",
     params: {
@@ -923,6 +954,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "find_contradictions",
+    outputRedaction: "retrieval",
     description:
       "Conflicts in the brain, two ways. `contradictions`: page pairs joined by an explicit `contradicts` edge (markers already asserted in the graph). `probed`: LLM-suspected fact conflicts cached by the opt-in probe-contradictions cycle phase (severity/axis/confidence/resolution_command; empty until that phase has run). This tool only READS caches — it never calls an LLM itself. Optional `slug` substring filter (edges only, matches either side); `limit` (1..200, default 20).",
     params: {
@@ -936,6 +968,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "find_trajectory",
+    outputRedaction: "retrieval",
     description:
       "Chronological 'how did this entity change?' log for one slug — the merged, oldest-first view of its entity_facts ledger and its timeline_events. Each fact anchors at its valid_from (else written_at); each event at occurred_at. Optional `since`/`until` ISO bounds on that anchor; `limit` (1..500, default 100). Deterministic, no LLM.",
     params: {
@@ -956,6 +989,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_recent_salience",
+    outputRedaction: "retrieval",
     description:
       "Live pages ranked by the deterministic `salience` score (migration 036: high-emotion tags + graph link-degree, recomputed by the recompute-salience cycle phase) — the 'what matters' read. Optional `type` filter and `days` recency window. No LLM, no Bedrock. Surfaces page slugs/titles — hidden from public ingress.",
     params: {
@@ -972,6 +1006,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "find_anomalies",
+    outputRedaction: "retrieval",
     description:
       "Deterministic structural OUTLIERS over the live page graph. memrain has no retrieval/access counters, so this keys on the signals it does have: `degree_outlier` (a connectivity hub — link-degree at/above mean + sigma·stddev across live pages) and `stale_salient` (a high-salience page whose updated_at is older than staleDays — important memory gone cold). No LLM. Surfaces page slugs/titles — hidden from public ingress.",
     params: {
@@ -983,6 +1018,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "recall",
+    outputRedaction: "retrieval",
     description:
       "Read ONE fact by its numeric id from the entity_facts ledger. Returns the fact row (claim, confidence, source, mig037 metadata). Returns an error if the id is unknown or the fact has been forgotten (tombstoned via forget_fact). NOT a search and not a list read — you need an id you already have. To find facts about an entity use `entity_facts`, to ask \"what do I know about X\" use `entity_recall`, and to search the corpus use `search`.",
     params: {
@@ -1021,10 +1057,22 @@ export const OPERATIONS: readonly Operation[] = [
         minimum: 0,
         description: "Age cutoff in hours. Pages soft-deleted longer ago than this are reaped. Default 72.",
       }),
+      slugs: arr({
+        items: { type: "string" },
+        description: "Only these slugs, and only those soft-deleted past the cutoff. Omit to reap every expired page.",
+      }),
+      dry_run: bool({
+        description: "Reap nothing; return `planned` (the slugs a real run would reap now) and its `plan_hash`.",
+      }),
+      expected_plan_hash: str({
+        description:
+          "The `plan_hash` of an earlier dry run. The purge is refused unless the plan still hashes the same, so exactly the reviewed pages go.",
+      }),
     },
   },
   {
     name: "query",
+    outputRedaction: "retrieval",
     description:
       "Flagship full-control retrieval: hybrid search over the corpus with every per-call knob exposed — `detail` result granularity (low = 1 chunk/page, medium = default dedup, high = all chunks + temporal treatment), `salience`/`recency` ranking bias (off|on|strong; omit = auto-detected from the query), `since`/`until` content-date window, `offset` pagination, `expand` LLM query expansion (paid; default follows the mode bundle), `mode` bundle override (operator-only), `adaptive_return` intent-sized tight result sets, plus the code filters (lang / symbol_kind / near_symbol / walk_depth). Legacy refinement: pass `refine` (+weights) for the deterministic weighted-RRF two-query blend instead. Without `refine` the response carries the same `meta` block as `search` (vector arm state, degraded reason codes, cache, retrieved/returned).",
     params: {
@@ -1073,6 +1121,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "code_callers",
+    outputRedaction: "retrieval",
     description:
       "Call-graph: who calls the symbol `name`. Returns the `code-caller` mentions (surface form + chunk + source path) over the indexed code corpus. Deterministic, no LLM. An empty result carries `readiness: {state, code_documents, symbols}` for your sources, where state is `not_built` | `indexing` | `no_symbols` | `ready` (`ready` means the symbol really is absent). Optional `limit` (1..1000, default 200).",
     params: {
@@ -1082,6 +1131,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "code_callees",
+    outputRedaction: "retrieval",
     description:
       "Call-graph: what the symbol enclosing `<path>:<line>` calls. Two-phase — resolves the innermost code-def covering that file:line, then returns its `code-callee` mentions. `resolved_symbol` reports which symbol was matched (null = none covers that line). Deterministic, no LLM. An empty result carries `readiness: {state, code_documents, symbols}` for your sources, where state is `not_built` | `indexing` | `no_symbols` | `ready` (`ready` means the symbol really is absent). Optional `limit` (1..1000, default 200).",
     params: {
@@ -1091,6 +1141,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "code_def",
+    outputRedaction: "retrieval",
     description:
       "Where is the symbol `name` defined. Returns the `code-def` mentions (surface form + chunk + source path) for a bare symbol name across the indexed code corpus. Deterministic, no LLM. Complements `code_callers`/`code_callees` with 'where is X defined'. An empty result carries `readiness: {state, code_documents, symbols}` for your sources, where state is `not_built` | `indexing` | `no_symbols` | `ready` (`ready` means the symbol really is absent). Optional `limit` (1..1000, default 200).",
     params: {
@@ -1100,6 +1151,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "code_refs",
+    outputRedaction: "retrieval",
     description:
       "All references to the symbol `name` — the `code-ref` mentions (imports, type uses, non-call references) over the indexed code corpus. Deterministic, no LLM. Complements `code_callers` (call sites) for proof-grade symbol tracing. An empty result carries `readiness: {state, code_documents, symbols}` for your sources, where state is `not_built` | `indexing` | `no_symbols` | `ready` (`ready` means the symbol really is absent). Optional `limit` (1..1000, default 200).",
     params: {
@@ -1109,6 +1161,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "code_blast",
+    outputRedaction: "retrieval",
     description:
       "Blast radius: every transitive CALLER of `symbol`, grouped by hop depth (direct → 2-hop → 3-hop). Run before editing a function to size the change. BFS over the resolved code edge graph, bounded by `depth` (default 5, max 8) and `max_nodes` (default 200). Deterministic, no LLM. Returns {result, depth_groups?, cycles_detected?, truncation?, did_you_mean?, candidates?}. `result` is 'ok' | 'not_found' | 'ambiguous'. 'not_found', and 'ok' with empty `depth_groups`, carry `readiness: {state, code_documents, symbols}` for your sources, where state is `not_built` | `indexing` | `no_symbols` | `ready` (`ready` means the symbol really is absent).",
     params: {
@@ -1120,6 +1173,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "code_flow",
+    outputRedaction: "retrieval",
     description:
       "Execution flow: every transitive CALLEE reachable from the entry-point `symbol`, grouped by hop depth, with terminal side-effect tagging. Run to trace how a request flows to a DB write / HTTP call / file I/O. BFS over the resolved code edge graph, bounded by `depth` (default 8, max 12) and `max_nodes` (default 200). Deterministic, no LLM. Same envelope as `code_blast` plus `terminal_nodes: [{symbol, sink_kind}]` where sink_kind ∈ db_call|http_call|file_io|process_exec. 'not_found' and an empty 'ok' carry `readiness` like `code_blast`.",
     params: {
@@ -1131,6 +1185,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "volunteer_context",
+    outputRedaction: "retrieval",
     description:
       "Push-based context: given a rolling conversation window, deterministically extract entity candidates, resolve them to existing page pointers (alias 0.9 / title 0.8 / slug-suffix 0.6, + a 0.05 boost for newest-turn or >=2-turn mentions), gate by confidence, cap to N, and return volunteered pages [{slug,title,display,confidence,arm,rationale,synopsis}]. No LLM, no Bedrock. Surfaces page slugs/titles + synopses — hidden from public ingress. Set `stats:true` for the per-arm used/volunteered precision feedback (approximate, derived from last_retrieved_at).",
     params: {
@@ -1149,6 +1204,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "context_pack",
+    outputRedaction: "retrieval",
     description:
       "Budgeted \"what matters now\" pack for the start of a turn: entity cards (title, type, top facts, recent events; no page body) for up to 8 standing entities — explicit `slugs` first, then entities resolved from an optional conversation `window` by the volunteer resolver at its default gate — followed by the top decayed facts across your grant, minus facts already on a card. Trimmed to `token_budget`, cards before facts; `budget` reports what was dropped. A slug you cannot see gives no card, exactly like a missing one. Read-only, stateless, no LLM. Internal-only.",
     params: {
@@ -1161,18 +1217,21 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "advisor",
+    outputRedaction: "retrieval",
     description:
       "Ranked, read-only \"what to do next\" for this brain: pending migrations, version drift, stalled/failed jobs, low embedding coverage, and setup smells. Each finding has a severity (high/medium/low/info), a why-it-matters, and the exact fix command. Never mutates, never calls an LLM. Tell the user; ask before running any fix. Internal-only.",
     params: {},
   },
   {
     name: "list_brain_skillpack",
+    outputRedaction: "retrieval",
     description:
       "List the brain-resident skillpack this brain ships (the local deploy/skills pack) — the same catalog as list_skills: each skill's slug, description, triggers, declared tools split into `usable_tools` (callable by you) and `unavailable_tools`, and whether it mutates. Read-only. The skills are served, not installed: read one with get_skill (list_skills is the flat listing). On the host, `memrain skillpack` builds a tarball with a sha256 manifest for verification and `memrain skillpack lint` checks the pack against the real tools and commands.",
     params: {},
   },
   {
     name: "list_concepts",
+    outputRedaction: "retrieval",
     description:
       "List synthesized concept pages (LLM-derived from the corpus by the synthesize-concepts cycle phase): concept_slug, title, tier (T1/T2/T3), atom_count, narrative. Ordered by atom_count DESC. Read-only; internal-only (derived over private notes).",
     params: {
@@ -1181,6 +1240,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "list_takes",
+    outputRedaction: "retrieval",
     description:
       "List synthesized 'takes' (opinionated claims the propose-takes phase derived, optionally graded): take_key, claim_text, kind, weight, domain, status (queued/accepted/rejected). Optional filters: `kind`, `domain`; `sort` (generated_at default | weight), `offset` for pagination. Advisory only — never mutates notes. Read-only; internal-only.",
     params: {
@@ -1205,6 +1265,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "takes_search",
+    outputRedaction: "retrieval",
     description:
       "Fuzzy-search synthesized 'takes' by claim text (pg_trgm similarity + substring fallback), ranked best-match first: take_key, claim_text, kind, weight, domain, status. Read-only; internal-only.",
     params: {
@@ -1214,12 +1275,14 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_calibration_profile",
+    outputRedaction: "retrieval",
     description:
       "The latest narrative calibration/bias profile (from the calibration-profile phase): grade tallies, accuracy, pattern statements, bias tags. Read-only; internal-only. Null when no profile has been generated yet.",
     params: {},
   },
   {
     name: "takes_scorecard",
+    outputRedaction: "retrieval",
     description:
       "Calibration scorecard for synthesized takes graded by the opt-in take-grading phase: total/graded/resolved counts, per-verdict tallies (correct/incorrect/partial/unresolvable), accuracy (correct/(correct+incorrect)), partial_rate, and a Brier score over decided correct∨incorrect bets (stated weight vs outcome). Reads synth_takes × each take's LATEST synth_take_grades row — never calls an LLM. Zero scorecard until takes have been graded. Optional `domain` / `holder` filter and a `since`/`until` generated-date window; tenant-scoped via each take's source document, and a scoped token stays confined to its allowed holders. Read-only; internal-only.",
     params: {
@@ -1231,6 +1294,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "takes_calibration",
+    outputRedaction: "retrieval",
     description:
       "Reliability-diagram data for graded takes: decided (correct∨incorrect) bets binned by their stated weight, with observed hit-rate vs predicted (mean weight) per bucket — the curve behind the scorecard's Brier. `bucket_size` sets the bin width in (0,1] (default 0.1). Reads synth_takes × latest synth_take_grades; no LLM. Empty until takes are graded. Optional `domain` / `holder` filter; tenant-scoped. Read-only; internal-only.",
     params: {
@@ -1261,6 +1325,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_skill",
+    outputRedaction: "retrieval",
     description:
       "Fetch one brain-resident skill's full markdown body by slug (as returned by list_skills). Returns {slug, description, body, frontmatter, usable_tools, unavailable_tools}, or an error when the slug is unknown. Read-only; no LLM.",
     params: {
@@ -1269,6 +1334,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_recent_transcripts",
+    outputRedaction: "retrieval",
     description:
       "Recently-ingested conversation transcript pages (types: meeting, email, journal, note), newest-first, within a day window. Returns each page's slug/type/title/updated_at plus a summary (first ~300 chars) or — with summary=false — the body capped at 100 KB. Tenant-scoped; limit-capped (default 50, max 200). Surfaces page bodies — hidden from public ingress. Read-only; no LLM.",
     params: {
@@ -1310,6 +1376,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_raw_data",
+    outputRedaction: "retrieval",
     description:
       "Read a page's raw_data sidecar rows, newest first. Optional `source` filter to one data-source label; `limit` (1..200, default 50). Tenant-scoped via the owning page. Read-only; no LLM.",
     params: {
@@ -1332,6 +1399,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_ingest_log",
+    outputRedaction: "retrieval",
     description:
       "Recent ingestion-log entries, newest first, scoped to the caller's read set. Optional `source_type` filter; `limit` (1..50, default 20). Read-only; no LLM.",
     params: {
@@ -1350,6 +1418,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_job_progress",
+    outputRedaction: "retrieval",
     description:
       "Read a job's live progress envelope: status + the handler-reported `progress` JSON (mig083). Cheap poll target while a long job runs. Operator-only; read-only.",
     params: {
@@ -1374,6 +1443,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "get_status_snapshot",
+    outputRedaction: "retrieval",
     description:
       "One-shot operational snapshot for thin-client status: version, corpus stats, brain health (embed coverage, staleness, job queue), query-cache state, and the active job worker lock. Operator-only (exposes whole-brain operational state); read-only; no Bedrock.",
     params: {},
@@ -1392,6 +1462,7 @@ export const OPERATIONS: readonly Operation[] = [
   // FORBIDDEN_MCP_TOOLS_FROM_PUBLIC) — the public bearer reaches none of it.
   {
     name: "chronicle_day",
+    outputRedaction: "retrieval",
     description:
       "Life-chronicle timeline for one UTC calendar day (or the ISO week containing it, with `week:true`). Returns the projected events — each a summary/detail joined to its depth page and, for an event projection, the event kind. `narrative:true` also returns a day-by-day prose rendering. Tenant-scoped. Read-only; no LLM.",
     params: {
@@ -1404,6 +1475,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "chronicle_since",
+    outputRedaction: "retrieval",
     description:
       "Life-chronicle events on or after a date, oldest-first. Returns the projected timeline rows. Tenant-scoped. Read-only; no LLM.",
     params: {
@@ -1414,6 +1486,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "chronicle_on_this_day",
+    outputRedaction: "retrieval",
     description:
       "Life-chronicle 'on this day': events from the same month+day in prior years, most-recent-first. `date` defaults to today (UTC). Tenant-scoped. Read-only; no LLM.",
     params: {
@@ -1423,6 +1496,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "chronicle_last_seen",
+    outputRedaction: "retrieval",
     description:
       "When an entity last appeared in the life chronicle — the most recent timeline day its own page or an event's `who` array references it, plus days_ago. Tenant-scoped. Read-only; no LLM.",
     params: {
@@ -1431,6 +1505,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "ontology_get",
+    outputRedaction: "retrieval",
     description:
       "The live per-dimension ontology for an entity: the current value on each axis (role, employer, location, …), confidence, provenance, and bi-temporal validity. `asof` time-travels to a past date; `min_confidence` floors the rows; `include_quarantined` surfaces novel/unconfirmed dimensions. Non-operator callers see world-visible rows only and never diary-sourced values. Tenant-scoped. Read-only; no LLM.",
     params: {
@@ -1457,12 +1532,14 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "ontology_dimensions",
+    outputRedaction: "retrieval",
     description:
       "Which dimension axes exist across the (scoped) corpus and how heavily each is used — [{dimension, entities, observations}], busiest first. Tenant-scoped. Read-only; no LLM.",
     params: {},
   },
   {
     name: "ontology_conflicts",
+    outputRedaction: "retrieval",
     description:
       "Entities whose currently-open observations on one dimension disagree — at least two distinct values from at least two distinct sources. For non-operator callers, diary-sourced values are stripped and a conflict that no longer disagrees after that stripping is dropped. Tenant-scoped. Read-only; no LLM.",
     params: {
@@ -1471,6 +1548,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "volunteer_chronicle",
+    outputRedaction: "retrieval",
     description:
       "Push-based chronicle context: the recent timeline plus the validity-resolved ontology for the named entities, composed with zero LLM. Non-operator callers get a redacted view (diary-sourced + private-visibility ontology stripped). Tenant-scoped. Read-only; no LLM.",
     params: {

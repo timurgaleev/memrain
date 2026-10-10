@@ -333,6 +333,12 @@
           ],
           "tenantA"
         ]
+      },
+      {
+        "text": "SELECT frontmatter FROM documents WHERE source_path = $1 LIMIT 1",
+        "params": [
+          "page://tenantA/shared/gateway"
+        ]
       }
     ],
     "result": {
