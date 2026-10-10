@@ -315,7 +315,7 @@ describe("extract phase", () => {
 });
 
 describe("runCycleOnce orchestrator", () => {
-  it("runs all 14 phases by default; one phase failing doesn't stop others", async () => {
+  it("runs all 15 phases by default; one phase failing doesn't stop others", async () => {
     await seed();
     const e = storage.engine();
     // staleDays huge so embed-stale finds nothing — fastest cheap pass. The
@@ -324,7 +324,7 @@ describe("runCycleOnce orchestrator", () => {
       staleDays: 99999,
       embedGaps: { embed: async () => Array.from<number>({ length: EMBED_DIMENSIONS }).fill(0.01) },
     });
-    expect(r.phases.length).toBe(14);
+    expect(r.phases.length).toBe(15);
     expect(r.phases.map((p) => p.phase)).toEqual([
       "lint",
       "embed-stale",
@@ -333,6 +333,7 @@ describe("runCycleOnce orchestrator", () => {
       "embed-facts",
       "extract",
       "resolve-symbol-edges",
+      "links-stale",
       "reconcile-links",
       "orphans-purge",
       "recompute-salience",

@@ -18,7 +18,7 @@
  */
 import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
-import { validateSlug, KNOWN_LINK_TYPES, type LinkRow } from "./links.ts";
+import { validateSlug, KNOWN_LINK_TYPES, liveEdgeSql, type LinkRow } from "./links.ts";
 
 /** One typed-edge bucket for a slug — same type, one direction. */
 export interface LinkGroup {
@@ -68,6 +68,7 @@ export async function getLinks(
              'outbound' AS direction
         FROM links
        WHERE source_slug = $1${scopeFilter}
+         AND ${liveEdgeSql("links")}
        ORDER BY written_at DESC
        LIMIT $2)
      UNION ALL
@@ -76,6 +77,7 @@ export async function getLinks(
              'inbound' AS direction
         FROM links
        WHERE target_slug = $1${scopeFilter}
+         AND ${liveEdgeSql("links")}
        ORDER BY written_at DESC
        LIMIT $2)`,
     params,

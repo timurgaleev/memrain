@@ -7,6 +7,9 @@
  *
  *   top decayed facts across the grant, minus facts already on a card
  *
+ *   each card also lists up to 8 newer pages that link to the entity
+ *   (newer-mentions.ts); they are the first thing a tight budget trims
+ *
  *   token budget: cards first, then facts; the pack says what it dropped
  *
  * Stateless, read-only, zero-LLM. Every read underneath is already
@@ -24,6 +27,7 @@ import { estTokens } from "../search/token-budget.ts";
 import { extractCandidatesFromWindow } from "./entity-salience.ts";
 import { resolveEntitiesToPointers } from "./reflex.ts";
 import { parseWindow, VOLUNTEER_DEFAULT_MIN_CONFIDENCE } from "./volunteer.ts";
+import { newerMentionsEnabled, readNewerMentions } from "./newer-mentions.ts";
 
 export const CONTEXT_PACK_DEFAULT_ENTITIES = 5;
 export const CONTEXT_PACK_MAX_ENTITIES = 8;
@@ -48,12 +52,21 @@ export interface PackCardEvent {
   event?: string;
 }
 
+/** A page dated after the entity's own that links to it. Redacted: date only. */
+export interface PackCardNewer {
+  date: string;
+  slug?: string;
+  title?: string | null;
+}
+
 export interface PackCard {
   slug: string;
   title: string | null;
   type: string | null;
   facts: PackCardFact[];
   recent: PackCardEvent[];
+  /** Present only when something newer links to the entity. */
+  newer?: PackCardNewer[];
 }
 
 export interface PackFact {
@@ -70,6 +83,7 @@ export interface ContextPackBudget {
   facts_dropped: number;
   card_facts_dropped: number;
   card_events_dropped: number;
+  card_newer_dropped: number;
 }
 
 export interface ContextPack {
@@ -224,6 +238,13 @@ async function buildCard(
   // A soft-stub (facts without a page) and an out-of-grant page both read as
   // null here; neither gets a card.
   if (!r.page) return null;
+  const newer = newerMentionsEnabled()
+    ? await readNewerMentions(storage, slug, {
+        ...(opts.sourceIds !== undefined ? { sourceIds: opts.sourceIds } : {}),
+        isFenced,
+        includeDocuments: !opts.remote,
+      })
+    : [];
   return {
     slug,
     title: r.page.title ?? null,
@@ -236,19 +257,45 @@ async function buildCard(
     recent: r.timeline.map((e) =>
       opts.redact ? { date: toDate(e.occurred_at) } : { date: toDate(e.occurred_at), event: e.event },
     ),
+    ...(newer.length > 0
+      ? { newer: newer.map((m) => (opts.redact ? { date: m.date } : { date: m.date, slug: m.slug, title: m.title })) }
+      : {}),
   };
 }
 
+interface FittedCard {
+  card: PackCard;
+  cost: number;
+  factsDropped: number;
+  eventsDropped: number;
+  newerDropped: number;
+}
+
 /**
- * Fit one card into `room` tokens. Facts go first, then recent events; null
- * when the header alone does not fit.
+ * Fit one card into `room` tokens. Newer mentions are trimmed first, oldest
+ * first: they point elsewhere, while facts and events are the entity's own.
+ * Then facts go first, then recent events; null when the header alone does
+ * not fit.
  */
-function fitCard(
-  card: PackCard,
-  room: number,
-): { card: PackCard; cost: number; factsDropped: number; eventsDropped: number } | null {
+function fitCard(card: PackCard, room: number): FittedCard | null {
   const full = unitCost(card);
-  if (full <= room) return { card, cost: full, factsDropped: 0, eventsDropped: 0 };
+  if (full <= room) return { card, cost: full, factsDropped: 0, eventsDropped: 0, newerDropped: 0 };
+  const newer = card.newer ?? [];
+  for (let keep = newer.length - 1; keep >= 1; keep--) {
+    const shorter: PackCard = { ...card, newer: newer.slice(0, keep) };
+    const cost = unitCost(shorter);
+    if (cost <= room) return { card: shorter, cost, factsDropped: 0, eventsDropped: 0, newerDropped: newer.length - keep };
+  }
+  const { newer: _newer, ...bare } = card;
+  if (newer.length > 0) {
+    const cost = unitCost(bare);
+    if (cost <= room) return { card: bare, cost, factsDropped: 0, eventsDropped: 0, newerDropped: newer.length };
+  }
+  const fitted = fitFactsAndEvents(bare, room);
+  return fitted && { ...fitted, newerDropped: newer.length };
+}
+
+function fitFactsAndEvents(card: PackCard, room: number): Omit<FittedCard, "newerDropped"> | null {
   const trimmed: PackCard = { ...card, facts: [], recent: [] };
   if (unitCost(trimmed) > room) return null;
   for (const f of card.facts) {
@@ -326,6 +373,7 @@ export async function buildContextPack(
   const cards: PackCard[] = [];
   let cardFactsDropped = 0;
   let cardEventsDropped = 0;
+  let cardNewerDropped = 0;
   for (const card of built) {
     const fit = fitCard(card, tokenBudget - used);
     if (!fit) break;
@@ -333,6 +381,7 @@ export async function buildContextPack(
     used += fit.cost;
     cardFactsDropped += fit.factsDropped;
     cardEventsDropped += fit.eventsDropped;
+    cardNewerDropped += fit.newerDropped;
   }
   const facts: PackFact[] = [];
   // A dropped card outranks every brain fact, so none may take its place.
@@ -354,6 +403,7 @@ export async function buildContextPack(
       facts_dropped: brainFacts.length - facts.length,
       card_facts_dropped: cardFactsDropped,
       card_events_dropped: cardEventsDropped,
+      card_newer_dropped: cardNewerDropped,
     },
   };
 }

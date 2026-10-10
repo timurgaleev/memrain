@@ -31,6 +31,7 @@ import {
 import { syncMentionsForPage } from "./gazetteer.ts";
 import { syncTypedLinksForPage, typedLinksEnabled } from "./typed-links.ts";
 import { linkVerbInferEnabled } from "./link-verb-infer.ts";
+import { phaseFenceCheck } from "./cycle/phase-context.ts";
 
 // Keyset batch size. SMALL by design — each row carries full page content
 // (markdown_body + compiled_truth), unbounded in size. The LIMIT is the only
@@ -54,6 +55,10 @@ export interface ExtractStaleOpts {
   sourceIds?: string[];
   /** Loop until 0 stale, ignoring the time budget. */
   catchUp?: boolean;
+  /** Stop after this many pages (the cycle phase's per-tick cap). */
+  maxPages?: number;
+  /** Print nothing (the cycle phase reports through its result). */
+  quiet?: boolean;
 }
 
 export interface ExtractStaleResult {
@@ -114,7 +119,9 @@ export async function extractStaleLinks(
   storage: Storage,
   opts: ExtractStaleOpts = {},
 ): Promise<ExtractStaleResult> {
-  const { dryRun = false, jsonMode = false, sourceIds, catchUp = false } = opts;
+  const { dryRun = false, jsonMode = false, sourceIds, catchUp = false, quiet = false } = opts;
+  const maxPages =
+    typeof opts.maxPages === "number" && opts.maxPages > 0 ? Math.floor(opts.maxPages) : Infinity;
   const engine = storage.engine();
 
   const totalStale = await countStalePagesForExtraction(engine, { sourceIds });
@@ -131,7 +138,7 @@ export async function extractStaleLinks(
     return { pagesProcessed: 0, linksAdded: 0, linksRemoved: 0, staleRemaining: totalStale, budgetHit: false };
   }
   if (totalStale === 0) {
-    if (!jsonMode) console.log("No stale pages — link extraction is up to date.");
+    if (!jsonMode && !quiet) console.log("No stale pages — link extraction is up to date.");
     return { pagesProcessed: 0, linksAdded: 0, linksRemoved: 0, staleRemaining: 0, budgetHit: false };
   }
 
@@ -144,7 +151,7 @@ export async function extractStaleLinks(
 
   for (;;) {
     const rows = await listStalePagesForExtraction(engine, {
-      batchSize: STALE_BATCH_SIZE,
+      batchSize: Math.min(STALE_BATCH_SIZE, maxPages - pagesProcessed),
       afterSlug,
       sourceIds,
     });
@@ -152,6 +159,9 @@ export async function extractStaleLinks(
 
     const processedRefs: ExtractedPageRef[] = [];
     for (const page of rows) {
+      // Inside a cycle phase: stop before the next page's writes once the
+      // lock is gone. A no-op from the CLI.
+      await phaseFenceCheck();
       const churn = await reExtractPage(storage, page);
       linksAdded += churn.added;
       linksRemoved += churn.removed;
@@ -169,6 +179,7 @@ export async function extractStaleLinks(
     // extractor version still clears the version-staleness arm (see
     // markPagesExtractedBatch); without it the version-bump sweep would never
     // converge and re-extract the whole corpus every run.
+    await phaseFenceCheck();
     await markPagesExtractedBatch(
       engine,
       processedRefs,
@@ -179,6 +190,10 @@ export async function extractStaleLinks(
     pagesProcessed += rows.length;
     afterSlug = rows[rows.length - 1]!.slug;
 
+    if (pagesProcessed >= maxPages) {
+      budgetHit = true;
+      break;
+    }
     if (!catchUp && Date.now() - startMs > STALE_TIME_BUDGET_MS) {
       budgetHit = true;
       break;
@@ -194,6 +209,7 @@ export async function extractStaleLinks(
     budgetHit,
   };
 
+  if (quiet) return result;
   if (jsonMode) {
     process.stdout.write(JSON.stringify({ action: "extract_stale", ...result }) + "\n");
   } else {

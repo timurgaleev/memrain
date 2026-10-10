@@ -19,6 +19,7 @@ import type { Engine } from "./engine/interface.ts";
 import { bumpPageGeneration } from "./generation.ts";
 import { wellFormJsonbValue } from "./well-form.ts";
 import { extractAliasNorms, setPageAliases } from "./page-aliases.ts";
+import { reconnectWantedLinks } from "./wanted-links.ts";
 import { resolveSlugWithAlias, setSlugAlias } from "./slug-aliases.ts";
 import { OperationError, PageNotFoundError, type PublicErrorEnvelope } from "./operation-error.ts";
 import { andSourceScope } from "./source-scope.ts";
@@ -633,6 +634,7 @@ export async function putPage(
       );
       await bumpPageGeneration(tx, input.slug);
       await setPageAliases(tx, input.slug, aliasNorms, sourceId);
+      await reconnectWantedLinks(tx, input.slug, sourceId, aliasNorms);
       return {
         slug: input.slug,
         version_n: 1,
@@ -709,6 +711,11 @@ export async function putPage(
     // only reach a page it owns (fenced above), and an unscoped operator must
     // leave the owner's aliases where the owner can read them.
     await setPageAliases(tx, input.slug, aliasNorms, prev.source_id ?? sourceId);
+    // A live page already took every reference to its own slug; one coming
+    // back, or declaring aliases, may answer references made meanwhile.
+    if (prev.deleted_at !== null || aliasNorms.length > 0) {
+      await reconnectWantedLinks(tx, input.slug, prev.source_id ?? sourceId, aliasNorms);
+    }
     return {
       slug: input.slug,
       version_n: nextVersion,

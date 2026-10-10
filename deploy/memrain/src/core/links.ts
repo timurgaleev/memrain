@@ -20,6 +20,9 @@ import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { makeSlugResolver } from "./slug-canonicalize.ts";
 import { inferLinkType, edgeContextWindow } from "./link-verb-infer.ts";
+import { linkWatermarkSql } from "./link-watermark.ts";
+import { quarantineFilterFragment } from "./quarantine.ts";
+import { replaceWantedLinks } from "./wanted-links.ts";
 
 // Catalogue of well-known link types. Not a DB constraint -- extensible
 // at runtime. New types may be passed with `allowAdHocType: true`.
@@ -368,6 +371,38 @@ export async function removeLink(
   return { removed: r.rows[0]?.removed ?? 0 };
 }
 
+/**
+ * SQL that is true unless the endpoint `slugExpr` names a page the reader must
+ * not see: one that is soft-deleted, or whose body mirror is archived or
+ * quarantined. An endpoint with no page row at all stays — a dangling wikilink
+ * target, or a name a vault note links to, is not hidden by anything. Every
+ * graph read applies it to both ends of an edge.
+ *
+ * The mirror's own `deleted_at` is not consulted: a restored page is live
+ * before the mirror phase re-indexes it, and its edges must not vanish in
+ * between.
+ */
+export function liveEndpointSql(slugExpr: string): string {
+  if (!/^(?:[a-z_]\w*\.)?[a-z_]\w*$/i.test(slugExpr)) {
+    throw new Error(`unsafe SQL column: ${JSON.stringify(slugExpr)}`);
+  }
+  return `NOT EXISTS (
+      SELECT 1 FROM pages hp
+       WHERE hp.slug = ${slugExpr}
+         AND (hp.deleted_at IS NOT NULL
+              OR EXISTS (
+                SELECT 1 FROM documents hd
+                 WHERE hd.source_path = CASE
+                         WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug
+                         ELSE 'page://' || hp.source_id || '/' || hp.slug END
+                   AND (hd.archived OR NOT ${quarantineFilterFragment("hd")}))))`;
+}
+
+/** Both ends of the edge aliased `alias` are visible. */
+export function liveEdgeSql(alias: string): string {
+  return `${liveEndpointSql(`${alias}.source_slug`)} AND ${liveEndpointSql(`${alias}.target_slug`)}`;
+}
+
 export interface GraphNeighborsOptions {
   type?: string;
   direction?: "outbound" | "inbound" | "both";
@@ -420,7 +455,8 @@ export async function graphNeighbors(
               source_chunk_id, written_at::text AS written_at,
               'outbound' AS direction
        FROM links
-       WHERE source_slug = $1${typeFilter}${scopeFilter}`,
+       WHERE source_slug = $1${typeFilter}${scopeFilter}
+         AND ${liveEdgeSql("links")}`,
     );
   }
   if (direction === "inbound" || direction === "both") {
@@ -429,7 +465,8 @@ export async function graphNeighbors(
               source_chunk_id, written_at::text AS written_at,
               'inbound' AS direction
        FROM links
-       WHERE target_slug = $1${typeFilter}${scopeFilter}`,
+       WHERE target_slug = $1${typeFilter}${scopeFilter}
+         AND ${liveEdgeSql("links")}`,
     );
   }
   params.push(limit);
@@ -496,6 +533,7 @@ export async function graphQuery(
       ? Math.floor(opts.limit)
       : 100;
   params.push(limit);
+  where.push(liveEdgeSql("links"));
   const r = await storage.engine().query<LinkRow>(
     `SELECT id, source_slug, target_slug, type, inferred_confidence,
             source_chunk_id, written_at::text AS written_at
@@ -603,6 +641,7 @@ export async function traverseGraph(
        JOIN links l ON ${joinCond}
        WHERE w.depth < $2
          AND NOT (${nextExpr} = ANY(w.path))${typeFilter}${scopeFilter}
+         AND ${liveEdgeSql("l")}
      )
      SELECT slug, MIN(depth) AS depth
        FROM walk
@@ -808,6 +847,9 @@ export async function syncWikilinksForPage(
     scope !== null ? { sourceIds: [scope] } : {},
   );
   const byTarget = new Map<string, boolean>(); // slug -> qualified?
+  // References no page answers yet, recorded so the edge can be reconnected
+  // when the page appears (wanted-links.ts): target slug -> surface.
+  const wanted = new Map<string, string>();
   for (const name of extractWikilinks(body)) {
     const r = await resolver.resolve(name);
     if (r.slug === "unknown") continue;
@@ -817,17 +859,21 @@ export async function syncWikilinksForPage(
     if (r.slug === sourceSlug) continue;
     const prior = byTarget.get(r.slug);
     byTarget.set(r.slug, (prior ?? false) || r.resolved);
+    if (!r.resolved && !wanted.has(r.slug)) wanted.set(r.slug, name);
   }
   // Markdown-style [Name](dir/slug.md) links. A bare wikilink may stay
   // unqualified (a dangling `[[name]]` is an intentional placeholder), but a
   // markdown path is only an edge when it lands on a real page — memrain has no
   // dir whitelist to pre-filter it, so the resolver's existence check is the
-  // gate. An unresolved path is treated as prose and dropped.
+  // gate. An unresolved path makes no edge; when it could still name a page
+  // it is recorded as wanted, so the edge appears once that page exists.
   for (const path of extractMarkdownLinks(body)) {
     const r = await resolver.resolve(path);
-    if (!r.resolved || r.slug === sourceSlug) continue;
-    byTarget.set(r.slug, true);
+    if (r.slug === sourceSlug || r.slug === "unknown") continue;
+    if (r.resolved) byTarget.set(r.slug, true);
+    else if (couldNamePage(path) && !wanted.has(r.slug)) wanted.set(r.slug, path);
   }
+  for (const slug of [...wanted.keys()]) if (byTarget.get(slug) === true) wanted.delete(slug);
 
   const engine = storage.engine();
   // When scoped, the delete + insert confine to this source so a per-tenant
@@ -870,8 +916,14 @@ export async function syncWikilinksForPage(
       );
       if (ins.rows[0]?.inserted) added += 1;
     }
+    await replaceWantedLinks(tx, sourceSlug, scope, wanted);
     return { removed: del.rows[0]?.c ?? 0, added };
   });
+}
+
+/** A markdown path that a page could answer to: no file extension, no query. */
+function couldNamePage(path: string): boolean {
+  return !/\.[a-z0-9]{1,8}$/i.test(path) && !/[?=&@:]/.test(path);
 }
 
 // --- Verb-context typed edges (migration 053, opt-in) ---------------------
@@ -1104,19 +1156,15 @@ export async function syncCodeRefsForPage(
  * The link-extractor version stamp. A page whose `links_extracted_at` predates
  * this is STALE — re-extracting it would apply newer extractor logic. BUMP THIS
  * to the ship date whenever the link-extraction logic (the wikilink scanner,
- * gazetteer, or typed-NER rules) changes in a way that should re-run over the
- * whole corpus.
+ * gazetteer, typed-NER or verb rules) changes in a way that should re-run over
+ * the whole corpus.
  *
- * REMEDIATION CAVEAT: the watermark only advances on a
- * `page_put`/`page_append`/`page_revert` that actually changes the page. There
- * is no batch `extract --stale` sweep yet, so bumping this constant is
- * DETECT-ONLY — the `links-extraction-lag` doctor count rises for every
- * untouched page and only falls as each is next written. Add a stale-sweep
- * command before relying on a version bump to auto-remediate. (The NULL and
- * `updated_at >` staleness arms are fully remediated by the inline stamp; only
- * the version arm is detect-only.)
+ * The effective watermark is the later of this and the time the extractor
+ * switches last changed (link-watermark.ts). Stale pages are re-extracted by
+ * the capped `links-stale` cycle phase and by `memrain extract --stale`
+ * (links-stale-sweep.ts); a page write re-extracts its own page inline.
  */
-export const LINK_EXTRACTOR_VERSION_TS = "2026-06-27T00:00:00Z";
+export const LINK_EXTRACTOR_VERSION_TS = "2026-10-10T00:00:00Z";
 
 /**
  * Stamp a page as freshly link-extracted. Called AFTER the full link-sync set
@@ -1142,7 +1190,8 @@ export async function stampLinksExtracted(engine: Engine, slug: string, sourceId
 export interface StaleExtractionOpts {
   /** Tenant scope: count only pages in these sources. Unscoped when omitted. */
   sourceIds?: string[];
-  /** The version watermark (default LINK_EXTRACTOR_VERSION_TS). */
+  /** The code version watermark (default LINK_EXTRACTOR_VERSION_TS). The
+   *  extractor switches' generation (link-watermark.ts) lifts it in SQL. */
   versionTs?: string;
 }
 
@@ -1163,7 +1212,7 @@ export async function countStalePagesForExtraction(
        FROM pages
       WHERE deleted_at IS NULL${scopeFilter}
         AND (links_extracted_at IS NULL
-             OR links_extracted_at < $1::timestamptz
+             OR links_extracted_at < ${linkWatermarkSql("$1")}
              OR updated_at > links_extracted_at)`,
     params,
   );
@@ -1218,7 +1267,7 @@ export async function listStalePagesForExtraction(
        FROM pages
       WHERE deleted_at IS NULL${scopeFilter}
         AND (links_extracted_at IS NULL
-             OR links_extracted_at < $1::timestamptz
+             OR links_extracted_at < ${linkWatermarkSql("$1")}
              OR updated_at > links_extracted_at)${afterClause}
       ORDER BY slug
       LIMIT $${limitIdx}`,
@@ -1247,7 +1296,8 @@ export interface ExtractedPageRef {
  * `links_extracted_at < versionTs` (the version-bump trigger, v1.26.0) — so
  * stamping a raw `updated_at` that predates the version would leave the version
  * arm true and the page stale forever. `floorTs` (=
- * {@link LINK_EXTRACTOR_VERSION_TS}) lifts the stamp to `GREATEST(read
+ * {@link LINK_EXTRACTOR_VERSION_TS}, raised to the switches' generation in
+ * SQL) lifts the stamp to `GREATEST(read
  * updated_at, versionTs)`: clears all three arms, yet a later edit advancing
  * `updated_at` past the floor re-stales the page (D4 preserved).
  */
@@ -1265,7 +1315,7 @@ export async function markPagesExtractedBatch(
   let tsExpr = "v.ts::timestamptz";
   if (typeof floorTs === "string" && floorTs.length > 0) {
     params.push(floorTs);
-    tsExpr = `GREATEST(v.ts::timestamptz, $${params.length}::timestamptz)`;
+    tsExpr = `GREATEST(v.ts::timestamptz, ${linkWatermarkSql(`$${params.length}`)})`;
   }
   await engine.query(
     `UPDATE pages p SET links_extracted_at = ${tsExpr}

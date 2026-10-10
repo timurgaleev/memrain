@@ -22,6 +22,7 @@ import {
   reconcileLinksPhase,
   type ReconcileLinksResult,
 } from "./reconcile-links.ts";
+import { linksStalePhase, type LinksStaleResult } from "./links-stale.ts";
 import {
   orphansPurgePhase,
   type OrphansPurgeResult,
@@ -118,6 +119,7 @@ export type PhaseName =
   | "embed-facts"
   | "extract"
   | "resolve-symbol-edges"
+  | "links-stale"
   | "reconcile-links"
   | "orphans-purge"
   | "recompute-salience"
@@ -159,6 +161,7 @@ export const ALL_PHASES: readonly PhaseName[] = [
   "embed-facts",
   "extract",
   "resolve-symbol-edges",
+  "links-stale",
   "reconcile-links",
   "orphans-purge",
   "recompute-salience",
@@ -235,6 +238,7 @@ export interface PhaseResult {
     | EmbedFactsResult
     | ExtractResult
     | ReconcileLinksResult
+    | LinksStaleResult
     | OrphansPurgeResult
     | RecomputeSalienceResult
     | MeetingTimelineResult
@@ -895,6 +899,31 @@ async function runPhases(
       case "resolve-symbol-edges":
         r = await runFenced(engine, p, () => resolveSymbolEdgesPhase(engine), progress, signal);
         break;
+      case "links-stale": {
+        // Re-extraction runs the Storage-level link syncs; an engine-only
+        // harness has none, so the phase records that it did not run.
+        const storage = options.storage;
+        r = await runFenced(
+          engine,
+          p,
+          () =>
+            storage
+              ? linksStalePhase(storage)
+              : Promise.resolve<LinksStaleResult>({
+                  ran: false,
+                  reason: "no storage handle",
+                  flagsChanged: false,
+                  pagesProcessed: 0,
+                  linksAdded: 0,
+                  linksRemoved: 0,
+                  staleRemaining: 0,
+                  capHit: false,
+                }),
+          progress,
+          signal,
+        );
+        break;
+      }
       case "reconcile-links":
         r = await runFenced(engine, p, () => reconcileLinksPhase(engine), progress, signal);
         break;

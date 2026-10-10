@@ -147,3 +147,42 @@ describe("inferLinkType — role prior skips list sections", () => {
     expect(inferLinkType("person", "co-founded [[companies/acme]]", body, target, target)).toBe("founded");
   });
 });
+
+describe("inferLinkType — role checks", () => {
+  const acme = "companies/acme";
+
+  it("a board director advises, not works at", () => {
+    expect(inferLinkType("person", "She is a board director at [[companies/acme]].", undefined, acme, acme)).toBe("advises");
+    expect(inferLinkType("person", "non-executive director of [[companies/acme]]", undefined, acme, acme)).toBe("advises");
+    // A plain director is still employment.
+    expect(inferLinkType("person", "director of engineering at [[companies/acme]]", undefined, acme, acme)).toBe("works_at");
+  });
+
+  it("an ended role stays a mention and the page prior does not restore it", () => {
+    const body = "He is a senior engineer at [[companies/beta]]. He formerly worked at [[companies/acme]].";
+    expect(inferLinkType("person", "He formerly worked at [[companies/acme]].", body, acme, acme)).toBe("mentions");
+    expect(inferLinkType("person", "no longer works at [[companies/acme]]", undefined, acme, acme)).toBe("mentions");
+    expect(inferLinkType("person", "previously at [[companies/acme]]", undefined, acme, acme)).toBe("mentions");
+    expect(inferLinkType("person", "a former advisor to [[companies/acme]]", undefined, acme, acme)).toBe("mentions");
+    // Founding is not undone by leaving.
+    expect(inferLinkType("person", "co-founded [[companies/acme]] and later left", undefined, acme, acme)).toBe("founded");
+  });
+
+  it("spells adviser either way", () => {
+    expect(inferLinkType("person", "an adviser to [[companies/acme]]", undefined, acme, acme)).toBe("advises");
+    expect(inferLinkType("person", "serves as a strategic adviser", undefined, acme, acme)).toBe("advises");
+  });
+
+  it("a verb types only the wikilink nearest to it", () => {
+    const ctx = "She works at [[companies/beta]] and had lunch with [[people/bob]] near [[companies/acme]].";
+    expect(inferLinkType("person", ctx, undefined, acme, acme)).toBe("mentions");
+    expect(inferLinkType("person", ctx, undefined, "companies/beta", "companies/beta")).toBe("works_at");
+  });
+
+  it("employment and investment need a company target", () => {
+    expect(inferLinkType("person", "works at [[people/bob]]", undefined, "people/bob", "people/bob")).toBe("mentions");
+    expect(inferLinkType("person", "invested in [[projects/x]]", undefined, "projects/x", "projects/x")).toBe("mentions");
+    expect(inferLinkType("person", "works at [[acme]]", undefined, "acme", "acme")).toBe("works_at");
+    expect(inferLinkType("person", "advises [[people/bob]]", undefined, "people/bob", "people/bob")).toBe("advises");
+  });
+});

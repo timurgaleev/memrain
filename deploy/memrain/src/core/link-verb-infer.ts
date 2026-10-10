@@ -12,7 +12,10 @@
  *
  * Two layers:
  *   1. Per-edge: explicit verbs in the local window
- *      (FOUNDED > INVESTED > ADVISES > WORKS_AT).
+ *      (FOUNDED > INVESTED > ADVISES > WORKS_AT). A verb counts only when this
+ *      link is the wikilink nearest to it, a past or ended role ("former",
+ *      "no longer", "left") does not type the edge, and the target must be
+ *      able to hold the role (see targetTakesRole).
  *   2. Page-role prior: when the per-edge pass falls through, a person page
  *      whose body describes the subject as a partner/investor, advisor, or
  *      employee biases its outbound `companies/*` refs
@@ -34,14 +37,23 @@ const FOUNDED_RE =
   /\b(?:founded|co-?founded|started the company|incorporated|founder of|founders? (?:include|are)|the founder|is a co-?founder|is one of the founders)\b/i;
 
 // Advise context: rooted in "advisor"/"advise" (investors also sit on boards).
+// A board director advises the company; it is not employment there, and it is
+// checked before WORKS_AT_RE, whose "director at/of" would otherwise take it.
 const ADVISES_RE =
-  /\b(?:advises|advised|advisor (?:to|at|for|of)|advisory (?:board|role|position|capacity|engagement|partnership|contract|relationship|work)|board advisor|on .{0,20} advisory board|joined .{0,20} advisory board|in an? advisory (?:capacity|role|position)|as an? (?:advisor|security advisor|technical advisor|strategic advisor|industry advisor|product advisor|board advisor|senior advisor)|(?:strategic|technical|security|product|industry|senior|board) advisor (?:to|at|for|of)|consults for|consulting role (?:at|with))\b/i;
+  /\b(?:advises|advised|advis[eo]r (?:to|at|for|of)|board director|non-executive director|independent director|director on the board|sits on the board|board member (?:at|of)|advisory (?:board|role|position|capacity|engagement|partnership|contract|relationship|work)|board advisor|on .{0,20} advisory board|joined .{0,20} advisory board|in an? advisory (?:capacity|role|position)|as an? (?:advis[eo]r|security advis[eo]r|technical advis[eo]r|strategic advis[eo]r|industry advis[eo]r|product advis[eo]r|board advis[eo]r|senior advis[eo]r)|(?:strategic|technical|security|product|industry|senior|board) advis[eo]r (?:to|at|for|of)|consults for|consulting role (?:at|with))\b/i;
+
+// An ended or negated role: the prose names the relation but says it no longer
+// holds, so the edge stays a plain mention.
+const ENDED_ROLE_RE =
+  /\b(?:former(?:ly)?|ex-|no longer|not (?:at|with|working)|never (?:worked|was)|left|quit|departed|previously|used to)\b/i;
+/** How far before the verb an ended-role word still belongs to its clause. */
+const ENDED_ROLE_LOOKBACK = 40;
 
 // Page-level priors.
 const PARTNER_ROLE_RE =
   /\b(?:partner at|partner of|venture partner|VC partner|invested early|investor at|investor in|portfolio|venture capital|early-stage investor|seed investor|fund [A-Z]|invests across|backs companies)\b/i;
 const ADVISOR_ROLE_RE =
-  /\b(?:full-time advisor|professional advisor|advises (?:multiple|several|various)|is an? (?:advisor|security advisor|technical advisor|strategic advisor|industry advisor|product advisor|senior advisor)|took on advisory roles|(?:her|his|their) advisory (?:work|role|engagement|portfolio)|serves as (?:an )?advisor)\b/i;
+  /\b(?:full-time advis[eo]r|professional advis[eo]r|advises (?:multiple|several|various)|is an? (?:advis[eo]r|security advis[eo]r|technical advis[eo]r|strategic advis[eo]r|industry advis[eo]r|product advis[eo]r|senior advis[eo]r)|took on advisory roles|(?:her|his|their) advisory (?:work|role|engagement|portfolio)|serves as (?:an )?advis[eo]r)\b/i;
 const EMPLOYEE_ROLE_RE =
   /\b(?:is an? (?:senior|staff|principal|lead|backend|frontend|full-?stack|ML|data|security|DevOps|platform)? ?engineer at|is an? (?:senior|staff|principal|lead)? ?(?:developer|designer|product manager|engineering manager|director|VP) (?:at|of)|holds? the (?:CTO|CEO|CFO|COO|CMO|CRO|VP) (?:role|position|seat|title) at|is the (?:CTO|CEO|CFO|COO|CMO|CRO) of|employee at|on the team at|works on .{0,30} at)\b/i;
 
@@ -81,10 +93,20 @@ export function inferLinkType(
   }
 
   // Per-edge verb rules.
-  if (FOUNDED_RE.test(context)) return "founded";
-  if (INVESTED_RE.test(context)) return "invested_in";
-  if (ADVISES_RE.test(context)) return "advises";
-  if (WORKS_AT_RE.test(context)) return "works_at";
+  const verbs: Array<[RegExp, InferredLinkType, boolean]> = [
+    [FOUNDED_RE, "founded", false],
+    [INVESTED_RE, "invested_in", false],
+    [ADVISES_RE, "advises", true],
+    [WORKS_AT_RE, "works_at", true],
+  ];
+  let ended = false;
+  for (const [re, type, canEnd] of verbs) {
+    const hit = verbFor(re, context, surface, canEnd);
+    if (hit === "ended") ended = true;
+    if (hit === "yes") return targetTakesRole(type, targetSlug) ? type : "mentions";
+  }
+  // The prose said the role ended; the page-wide prior must not restore it.
+  if (ended) return "mentions";
 
   // Page-role prior — only person → companies/* links. Precedence within
   // priors: investor > advisor > employee (investors also sit on boards).
@@ -97,6 +119,62 @@ export function inferLinkType(
     if (EMPLOYEE_ROLE_RE.test(globalContext)) return "works_at";
   }
   return "mentions";
+}
+
+/**
+ * Whether the target can hold the role: employment and investment point at a
+ * company, so a namespaced target outside `companies/` (a person, a meeting,
+ * a project) keeps the plain mention. A flat slug is unknown and allowed.
+ */
+export function targetTakesRole(type: InferredLinkType, targetSlug: string | undefined): boolean {
+  if (type !== "works_at" && type !== "invested_in") return true;
+  if (targetSlug === undefined || !targetSlug.includes("/")) return true;
+  return targetSlug.startsWith("companies/");
+}
+
+const CONTEXT_LINK_RE = /\[\[([^\]\n|#]{1,256})(?:#[^\]\n|]*)?(?:\|[^\]\n]{0,512})?\]\]/g;
+
+/**
+ * Does `re` type this edge in `context`? "yes" when some match has this
+ * link as its nearest wikilink (a tie goes to the link after the verb, the
+ * usual place of its object); "ended" when such a match sits in a clause that
+ * says the role ended and `canEnd`; "no" otherwise. Without the surface, or
+ * when the context has no wikilink for it, any match counts.
+ */
+function verbFor(re: RegExp, context: string, surface: string | undefined, canEnd: boolean): "yes" | "ended" | "no" {
+  const global = new RegExp(re.source, "gi");
+  const links: Array<{ start: number; end: number; mine: boolean }> = [];
+  const want = surface?.trim().toLowerCase();
+  CONTEXT_LINK_RE.lastIndex = 0;
+  for (let m = CONTEXT_LINK_RE.exec(context); m !== null; m = CONTEXT_LINK_RE.exec(context)) {
+    links.push({ start: m.index, end: m.index + m[0].length, mine: m[1]!.trim().toLowerCase() === want });
+  }
+  const checkNearest = want !== undefined && links.some((l) => l.mine);
+  let ended = false;
+  for (let m = global.exec(context); m !== null; m = global.exec(context)) {
+    if (m[0].length === 0) global.lastIndex++;
+    const start = m.index;
+    const end = start + m[0].length;
+    let target: { start: number; end: number } | null = null;
+    if (checkNearest) {
+      let best: { gap: number; after: boolean; link: (typeof links)[number] } | null = null;
+      for (const l of links) {
+        const after = l.start >= end;
+        const gap = after ? l.start - end : l.end <= start ? start - l.end : 0;
+        if (best === null || gap < best.gap || (gap === best.gap && after && !best.after)) best = { gap, after, link: l };
+      }
+      if (!best?.link.mine) continue;
+      target = best.link;
+    }
+    const from = Math.max(0, Math.min(start, target?.start ?? start) - ENDED_ROLE_LOOKBACK);
+    const to = Math.max(end, target?.end ?? end);
+    if (canEnd && ENDED_ROLE_RE.test(context.slice(from, to))) {
+      ended = true;
+      continue;
+    }
+    return "yes";
+  }
+  return ended ? "ended" : "no";
 }
 
 type Range = readonly [number, number];

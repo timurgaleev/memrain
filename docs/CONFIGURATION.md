@@ -664,6 +664,8 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_JOB_LLM_HALT` | on | A Bedrock outage, throttle or missing model defers jobs (without spending a retry) for a cooling-off period. `0`, `false` or `off` restores plain retries. Allowlisted. | free |
 | `MEMRAIN_EMBED_GAPS` | on | Cycle phase that embeds chunks stored without a vector (after an outage or spend refusal). `0` turns it off. Allowlisted. | **paid (Titan)** |
 | `MEMRAIN_EMBED_GAPS_MAX_PER_CYCLE` | `200` | Most chunks the embed-gaps phase embeds per cycle. Allowlisted. | — |
+| `MEMRAIN_LINKS_STALE_MAX_PER_CYCLE` | `200` | Most pages the links-stale cycle phase re-extracts per cycle when the link extractor version or the link switches (gazetteer, typed links, verb inference) changed. `0` turns the phase off. Allowlisted. | free |
+| `MEMRAIN_CONTEXT_NEWER_MENTIONS` | on (`=0` off) | `context_pack` entity cards list up to 8 pages that mention the entity after its page was last written; trimmed first under the token budget. Allowlisted. | free |
 | `MEMRAIN_SYNTHESIS_ONCE_PER_DAY` | on | Runs each synthesis phase at most once per UTC day. `0` turns it off. Allowlisted. | free |
 | `MEMRAIN_WORKER_DRAIN_MS` | `8000` (8s) | On shutdown, how long the jobs worker lets a running job finish. A job still running after it is aborted and handed back to `pending` (`last_error = 'worker_shutdown'`) without spending its retry or stall budget, and the worker lock is released at once. `0` hands back immediately. Keep it under the compose `stop_grace_period` (30s). | free |
 | `MEMRAIN_MAX_BODY_BYTES` | `1048576` (1 MiB) | HTTP request-body size cap; over-cap requests get 413. | free |
