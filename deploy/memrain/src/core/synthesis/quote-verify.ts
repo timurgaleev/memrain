@@ -138,7 +138,7 @@ function wordSpans(norm: string): Array<[number, number]> {
   return spans;
 }
 
-const NEGATION_WORDS = new Set(["not", "never", "no", "не", "нет", "nicht", "kein", "keine", "keinen", "keinem", "keiner", "keines"]);
+const NEGATION_WORDS = new Set(["not", "never", "no", "\u043D\u0435", "\u043D\u0435\u0442", "nicht", "kein", "keine", "keinen", "keinem", "keiner", "keines"]);
 
 /** Negation tokens in order, from folded (lowercased) text. */
 function negations(norm: string): string[] {
