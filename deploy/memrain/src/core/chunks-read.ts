@@ -13,6 +13,7 @@
 import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { pageSourcePath } from "./page-index.ts";
+import { quarantineFilterFragment } from "./quarantine.ts";
 
 export interface ChunkRow {
   chunkId: string;
@@ -22,16 +23,22 @@ export interface ChunkRow {
   symbolName: string | null;
 }
 
+export interface ChunkReadOptions {
+  /** Also return the chunks of a quarantined document. Operator reads only. */
+  includeQuarantined?: boolean;
+}
+
 /**
  * Return every chunk belonging to the document at `sourcePath`, ordered by
  * `chunk_index`. An unknown / chunk-less source yields an empty array — the
  * absence of a document is not an error here (the caller decides what that
- * means).
+ * means). A quarantined document reads as chunk-less unless the caller opts in.
  */
 export async function getChunksForSource(
   storage: Storage,
   sourcePath: string,
   sourceIds?: string[],
+  opts: ChunkReadOptions = {},
 ): Promise<ChunkRow[]> {
   if (typeof sourcePath !== "string" || sourcePath.length === 0) {
     throw new Error("getChunksForSource: `sourcePath` is required");
@@ -42,6 +49,7 @@ export async function getChunksForSource(
   // Tenant scope: a chunk's owning source is its parent document's source_id.
   // Undefined => unscoped (back-compat); `[]` => nothing.
   const scopeFilter = andSourceScope("d.source_id", sourceIds, params);
+  const quarantineFilter = opts.includeQuarantined === true ? "" : ` AND ${quarantineFilterFragment("d")}`;
   const result = await db.query<{
     id: string;
     chunk_index: number;
@@ -51,7 +59,7 @@ export async function getChunksForSource(
     `SELECT c.id, c.chunk_index, c.content, c.symbol_name
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
-      WHERE d.source_path = $1${scopeFilter}
+      WHERE d.source_path = $1${scopeFilter}${quarantineFilter}
       ORDER BY c.chunk_index`,
     params,
   );
@@ -73,6 +81,7 @@ export async function getChunksForPage(
   storage: Storage,
   slug: string,
   sourceIds?: string[],
+  opts: ChunkReadOptions = {},
 ): Promise<ChunkRow[]> {
   if (typeof slug !== "string" || slug.length === 0) {
     throw new Error("getChunksForPage: `slug` is required");
@@ -89,7 +98,7 @@ export async function getChunksForPage(
     sourceIds?.length === 1
       ? sourceIds[0]
       : await resolvePageOwner(storage, slug);
-  return getChunksForSource(storage, pageSourcePath(slug, owner), sourceIds);
+  return getChunksForSource(storage, pageSourcePath(slug, owner), sourceIds, opts);
 }
 
 /**

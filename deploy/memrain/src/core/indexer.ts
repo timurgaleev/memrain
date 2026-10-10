@@ -24,12 +24,17 @@ import { qualifiedSymbolName } from "./code-edges.ts";
 import { stripFactsFence } from "./facts-fence.ts";
 import { stripTakesFence } from "./synthesis/takes-fence.ts";
 import { embedText, EMBED_DIMENSIONS } from "./embedding.ts";
-import { isEmbedSkipped, EMBED_SKIP_KEY } from "./embed-skip.ts";
+import { isEmbedSkipped } from "./embed-skip.ts";
 import {
-  QUARANTINE_KEY,
-  CONTENT_FLAG_KEY,
+  GATE_OWNED_KEYS,
+  QUARANTINE_OVERRIDE_KEY,
   auditQuarantine,
+  hasCurrentQuarantineOverride,
   isNewQuarantineVerdict,
+  parseQuarantineOverride,
+  quarantineVerdictOf,
+  withQuarantineOverride,
+  type QuarantineVerdict,
 } from "./quarantine.ts";
 import {
   assessContentSanity,
@@ -69,7 +74,10 @@ import {
   type IndexTxResult,
 } from "./indexer-tx.ts";
 
-export type IndexResult = IndexTxResult;
+export type IndexResult = IndexTxResult & {
+  /** Set when the content-sanity gate hid the written document. */
+  quarantined?: QuarantineVerdict;
+};
 
 /** Embed one chunk into a vector. Injectable so tests embed offline. */
 export type EmbedFn = (
@@ -313,7 +321,7 @@ async function indexDocumentBody(
   // Trust boundary (#1699): strip gate-owned markers from UNTRUSTED input so
   // only the content-sanity gate below and trusted local CLIs can set them.
   if (opts.remote === true) {
-    const stripKeys = [QUARANTINE_KEY, CONTENT_FLAG_KEY, EMBED_SKIP_KEY].filter(
+    const stripKeys = GATE_OWNED_KEYS.filter(
       (k) => Object.hasOwn(baseFrontmatter, k),
     );
     if (stripKeys.length > 0) {
@@ -332,18 +340,37 @@ async function indexDocumentBody(
   let frontmatter = baseFrontmatter;
   let sanityTrip: ContentSanityResult | null = null;
   if (sanityGateEnabled()) {
-    const sanity = assessContentSanity({
-      body: parsed.chunks.join("\n\n"),
-      title:
-        parsed.title ??
-        (typeof baseFrontmatter["title"] === "string"
-          ? (baseFrontmatter["title"] as string)
-          : ""),
+    const sanityBody = parsed.chunks.join("\n\n");
+    const sanityTitle =
+      parsed.title ??
+      (typeof baseFrontmatter["title"] === "string"
+        ? (baseFrontmatter["title"] as string)
+        : "");
+    let sanity = assessContentSanity({
+      body: sanityBody,
+      title: sanityTitle,
       page_kind: baseFrontmatter["kind"] === "code" ? "code" : undefined,
       extra_literals: resolveOperatorLiterals(),
       disabled_patterns: resolveDisabledPatterns(),
       ...resolveSanityThresholds(),
     });
+    // An operator's `quarantine clear` keeps holding while the title and body
+    // it was bound to are unchanged. The incoming header can carry it only
+    // from a trusted caller (remote writes had it stripped above); otherwise
+    // the stored document's override is carried forward. Read only on a trip,
+    // so a clean write costs no extra statement.
+    if (sanity.shouldQuarantine || sanity.flag_reason === "markup_heavy") {
+      const bound = { title: sanityTitle, body: sanityBody };
+      if (!hasCurrentQuarantineOverride({ ...bound, frontmatter: baseFrontmatter })) {
+        const stored = parseQuarantineOverride(
+          (await storedFrontmatter(storage, id))?.[QUARANTINE_OVERRIDE_KEY],
+        );
+        if (stored && hasCurrentQuarantineOverride({ ...bound, frontmatter: { [QUARANTINE_OVERRIDE_KEY]: stored } })) {
+          baseFrontmatter = { ...baseFrontmatter, [QUARANTINE_OVERRIDE_KEY]: stored };
+        }
+      }
+      sanity = withQuarantineOverride(sanity, { ...bound, frontmatter: baseFrontmatter });
+    }
     if (sanity.shouldQuarantine && sanityDisposition() === "reject") {
       await auditQuarantine(storage.engine(), sanity, input.sourcePath, input.sourceId ?? null);
       throw new ContentSanityBlockError(sanity);
@@ -631,7 +658,8 @@ async function indexDocumentBody(
   if (sanityTrip && isNewQuarantineVerdict(priorFrontmatter, sanityTrip)) {
     await auditQuarantine(storage.engine(), sanityTrip, input.sourcePath, input.sourceId ?? null);
   }
-  return written;
+  const quarantined = quarantineVerdictOf(frontmatter);
+  return quarantined ? { ...written, quarantined } : written;
 }
 
 async function storedFrontmatter(

@@ -9,7 +9,9 @@
  *   clear <slug|source_path> [--force] [--json]
  *         drop the markers so the document is searchable again. The gate
  *         re-runs first: content still assessed as junk refuses to clear
- *         unless --force. Cleared docs re-enter the vector arm via
+ *         unless --force. The clear records a `quarantine_override` bound to
+ *         the title and body, so re-indexing the same content (and `scan`)
+ *         keeps it released; any edit expires it. Cleared docs re-enter the vector arm via
  *         `memrain embed` (their chunks were never embedded).
  *   scan  [--limit N] [--apply] [--json]
  *         re-assess already-indexed documents through the CURRENT gate
@@ -28,7 +30,13 @@ import {
   resolveDisabledPatterns,
   resolveSanityThresholds,
 } from "../core/content-sanity.ts";
-import { auditQuarantine } from "../core/quarantine.ts";
+import {
+  QUARANTINE_OVERRIDE_KEY,
+  auditQuarantine,
+  quarantineOverrideBinding,
+  withQuarantineOverride,
+  type QuarantineOverride,
+} from "../core/quarantine.ts";
 import { bumpDocumentClock } from "../core/generation.ts";
 import { clearCache } from "../core/search/query-cache.ts";
 
@@ -95,10 +103,16 @@ async function listMarked(engine: Engine, includeFlagged: boolean): Promise<Mark
   return rows;
 }
 
-/** Reassemble a document's body text from its stored chunks (index order). */
+/**
+ * Reassemble a document's body text from its stored prose chunks (index
+ * order) — the same text the indexer's gate assessed and bound an override
+ * to. Fenced-code symbol chunks are copies of code already in the prose.
+ */
 async function docBody(engine: Engine, docId: string): Promise<string> {
   const r = await engine.query<{ content: string }>(
-    `SELECT content FROM chunks WHERE document_id = $1 ORDER BY chunk_index`,
+    `SELECT content FROM chunks
+      WHERE document_id = $1 AND chunk_source IS DISTINCT FROM 'fenced_code'
+      ORDER BY chunk_index`,
     [docId],
   );
   return r.rows.map((c) => c.content).join("\n\n");
@@ -112,16 +126,25 @@ interface DocRow {
   frontmatter: Record<string, unknown> | null;
 }
 
+/** The title the indexer's gate assessed: the title column, else the header's. */
+function docTitle(doc: DocRow): string {
+  const fm = doc.frontmatter ?? {};
+  return doc.title ?? (typeof fm["title"] === "string" ? (fm["title"] as string) : "");
+}
+
+/** The gate's verdict on a stored document, honouring a current operator override. */
 function assessDoc(doc: DocRow, body: string) {
   const fm = doc.frontmatter ?? {};
-  return assessContentSanity({
+  const title = docTitle(doc);
+  const sanity = assessContentSanity({
     body,
-    title: doc.title ?? (typeof fm["title"] === "string" ? (fm["title"] as string) : ""),
+    title,
     page_kind: fm["kind"] === "code" ? "code" : undefined,
     extra_literals: resolveOperatorLiterals(),
     disabled_patterns: resolveDisabledPatterns(),
     ...resolveSanityThresholds(),
   });
+  return withQuarantineOverride(sanity, { title, body, frontmatter: fm });
 }
 
 async function runList(engine: Engine, opts: QuarantineCmdOptions): Promise<number> {
@@ -177,8 +200,8 @@ async function runClear(engine: Engine, opts: QuarantineCmdOptions): Promise<num
 
   // Re-run the gate on the stored content: junk that is STILL junk would just
   // re-quarantine on the next ingest, so refuse unless --force.
+  const body = await docBody(engine, doc.id);
   if (!opts.force) {
-    const body = await docBody(engine, doc.id);
     const sanity = assessDoc(doc, body);
     if (sanity.shouldQuarantine) {
       console.error(
@@ -191,11 +214,18 @@ async function runClear(engine: Engine, opts: QuarantineCmdOptions): Promise<num
     }
   }
 
+  // The override is what makes the clear stick: the next index of this exact
+  // title and body keeps the classifier verdict off instead of re-hiding it.
+  const override: QuarantineOverride = {
+    binding: quarantineOverrideBinding(docTitle(doc), body),
+    cleared_at: new Date().toISOString(),
+  };
   await engine.query(
     `UPDATE documents
-        SET frontmatter = (COALESCE(frontmatter, '{}'::jsonb) - 'quarantine') - 'content_flag' - 'embed_skip'
+        SET frontmatter = ((COALESCE(frontmatter, '{}'::jsonb) - 'quarantine') - 'content_flag' - 'embed_skip')
+                          || jsonb_build_object('${QUARANTINE_OVERRIDE_KEY}', $2::jsonb)
       WHERE id = $1`,
-    [doc.id],
+    [doc.id, JSON.stringify(override)],
   );
   // Visibility flipped — cached rankings that excluded the doc are stale.
   await bumpDocumentClock(engine);

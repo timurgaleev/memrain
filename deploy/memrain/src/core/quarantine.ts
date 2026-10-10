@@ -10,8 +10,10 @@
  * change — the `? 'quarantine'` key test is the whole mechanism.
  */
 
+import { createHash } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import { logIngest } from "./ingest-log.ts";
+import { wellFormForText } from "./well-form.ts";
 import {
   describeQuarantineTrip,
   quarantinePatternNames,
@@ -23,6 +25,136 @@ export const QUARANTINE_KEY = "quarantine";
 /** `ingest_log.source_type` of a content-sanity trip. */
 export const QUARANTINE_AUDIT_SOURCE_TYPE = "quarantine";
 export const CONTENT_FLAG_KEY = "content_flag";
+
+/**
+ * An operator's decision that a held document is not junk, written by
+ * `memrain quarantine clear`. The gate re-derives `quarantine` on every index,
+ * so deleting the marker alone never survives the next write of the same
+ * content. The override is bound to the gate's inputs (title and body): while
+ * they are unchanged the gate keeps its classifier verdict (junk patterns,
+ * operator literals, markup ratio) off the document; any change expires it.
+ * The size gate (oversize `embed_skip`) is never overridden.
+ */
+export const QUARANTINE_OVERRIDE_KEY = "quarantine_override";
+
+/**
+ * Frontmatter keys only the gate and trusted local paths may set. An untrusted
+ * write has them stripped before the gate runs. `embed_skip` is spelled out
+ * rather than imported: embed-skip.ts imports this module.
+ */
+export const GATE_OWNED_KEYS: readonly string[] = Object.freeze([
+  QUARANTINE_KEY,
+  CONTENT_FLAG_KEY,
+  "embed_skip",
+  QUARANTINE_OVERRIDE_KEY,
+]);
+
+export interface QuarantineOverride {
+  binding: string;
+  cleared_at: string;
+}
+
+export interface QuarantineVerdict {
+  reason: string;
+  detail: string;
+}
+
+/** The document content an override is bound to: the gate's own inputs. */
+export interface OverrideBound {
+  title: string | null | undefined;
+  /** The prose chunks joined with a blank line, exactly what the gate assessed. */
+  body: string;
+  frontmatter?: Record<string, unknown> | null;
+}
+
+/**
+ * Hash binding an override to a document's title and body. Both are
+ * well-formed first so the value computed at index time matches the one
+ * recomputed from the stored (already well-formed) rows.
+ */
+export function quarantineOverrideBinding(title: string | null | undefined, body: string): string {
+  const payload = JSON.stringify([
+    "quarantine_override/v1",
+    wellFormForText(title ?? ""),
+    wellFormForText(body),
+  ]);
+  return createHash("sha256").update(payload, "utf8").digest("hex");
+}
+
+/** The override stored in `value`, or null when it is not a well-formed one. */
+export function parseQuarantineOverride(value: unknown): QuarantineOverride | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { binding, cleared_at } = value as Record<string, unknown>;
+  return typeof binding === "string" && /^[0-9a-f]{64}$/.test(binding) && typeof cleared_at === "string"
+    ? { binding, cleared_at }
+    : null;
+}
+
+/** Whether `page` carries an override bound to its current title and body. */
+export function hasCurrentQuarantineOverride(page: OverrideBound): boolean {
+  const override = parseQuarantineOverride(page.frontmatter?.[QUARANTINE_OVERRIDE_KEY]);
+  return !!override && override.binding === quarantineOverrideBinding(page.title, page.body);
+}
+
+/**
+ * The gate verdict with the classifier outcomes (hide, markup flag) removed
+ * for a document carrying a current override. Size outcomes stay: an oversize
+ * body is still embed-skipped and flagged.
+ */
+export function withQuarantineOverride(
+  result: ContentSanityResult,
+  page: OverrideBound,
+): ContentSanityResult {
+  if (!hasCurrentQuarantineOverride(page)) return result;
+  const classifier = new Set(["junk_pattern", "literal_substring", "high_markup"]);
+  const kept = result.reasons
+    .map((reason, i) => [reason, result.reason_messages[i]] as const)
+    .filter(([reason]) => !classifier.has(reason));
+  return {
+    ...result,
+    junk_pattern_matches: [],
+    literal_substring_matches: [],
+    reasons: kept.map(([reason]) => reason),
+    reason_messages: kept.map(([, message]) => message).filter((m): m is string => !!m),
+    shouldQuarantine: false,
+    shouldSkipEmbed: result.oversize,
+    shouldFlag: result.oversize,
+    flag_reason: result.oversize ? "oversized" : null,
+  };
+}
+
+/** The `quarantine` marker of a frontmatter object as a verdict, or null. */
+export function quarantineVerdictOf(
+  frontmatter: Record<string, unknown> | null | undefined,
+): QuarantineVerdict | null {
+  if (!isQuarantined(frontmatter)) return null;
+  const marker = frontmatter![QUARANTINE_KEY];
+  const m = marker && typeof marker === "object" ? (marker as Record<string, unknown>) : {};
+  return {
+    reason: typeof m["reason"] === "string" ? m["reason"] : "unknown",
+    detail: typeof m["detail"] === "string" ? m["detail"] : "",
+  };
+}
+
+/**
+ * The quarantine verdict on a page's search mirror, or null when the page is
+ * not held or has no mirror. `ownerSourceId` is the page's owning source; the
+ * path is built as `pageSourcePath` (page-index.ts) builds it, which is not
+ * imported because page-index.ts reaches this module through the indexer.
+ */
+export async function readQuarantineVerdict(
+  engine: Engine,
+  slug: string,
+  ownerSourceId: string | null | undefined,
+): Promise<QuarantineVerdict | null> {
+  const path =
+    ownerSourceId && ownerSourceId !== "default" ? `page://${ownerSourceId}/${slug}` : `page://${slug}`;
+  const r = await engine.query<{ frontmatter: Record<string, unknown> | null }>(
+    `SELECT frontmatter FROM documents WHERE source_path = $1 LIMIT 1`,
+    [path],
+  );
+  return quarantineVerdictOf(r.rows[0]?.frontmatter);
+}
 
 /**
  * Guard against SQL injection via a table alias. Aliases that feed string

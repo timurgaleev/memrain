@@ -30,6 +30,7 @@ import {
 import { MARKDOWN_CHUNKER_VERSION } from "./chunkers/recursive.ts";
 import type { Storage } from "./storage.ts";
 import { logIngest } from "./ingest-log.ts";
+import type { QuarantineVerdict } from "./quarantine.ts";
 
 /**
  * Reserved source_path namespace for page-derived search documents, keyed by
@@ -489,17 +490,38 @@ export interface MirrorPageOptions {
  */
 export async function mirrorPage(
   storage: Storage,
-  page: {
-    slug: string;
-    title: string | null;
-    markdown_body: string;
-    content_hash?: string;
-    source_id?: string | null;
-  },
+  page: MirrorPageInput,
   opts: MirrorPageOptions,
 ): Promise<boolean> {
+  return (await mirrorPageVerdict(storage, page, opts)).ok;
+}
+
+export interface MirrorPageInput {
+  slug: string;
+  title: string | null;
+  markdown_body: string;
+  content_hash?: string;
+  source_id?: string | null;
+}
+
+export interface MirrorPageVerdict {
+  /** The mirror was written (or removed for an empty page). */
+  ok: boolean;
+  /** Set when the content-sanity gate hid the mirrored page from search. */
+  quarantined?: QuarantineVerdict;
+}
+
+/**
+ * {@link mirrorPage}, also reporting whether the content-sanity gate hid the
+ * page, so a write path can tell its caller the page went into quarantine.
+ */
+export async function mirrorPageVerdict(
+  storage: Storage,
+  page: MirrorPageInput,
+  opts: MirrorPageOptions,
+): Promise<MirrorPageVerdict> {
   try {
-    await indexPageIntoSearch(
+    const indexed = await indexPageIntoSearch(
       storage,
       {
         slug: page.slug,
@@ -515,11 +537,11 @@ export async function mirrorPage(
         ...(opts.contextualLlmFn ? { contextualLlmFn: opts.contextualLlmFn } : {}),
       },
     );
-    return true;
+    return indexed?.quarantined ? { ok: true, quarantined: indexed.quarantined } : { ok: true };
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
     console.error(`[page-index] failed to mirror page ${page.slug} into search:`, reason);
-    if (opts.logFailure === false) return false;
+    if (opts.logFailure === false) return { ok: false };
     try {
       await logIngest(storage.engine(), {
         source_type: "page-mirror-failed",
@@ -531,6 +553,6 @@ export async function mirrorPage(
     } catch {
       // A logging failure must never turn a committed page write into a failed one.
     }
-    return false;
+    return { ok: false };
   }
 }

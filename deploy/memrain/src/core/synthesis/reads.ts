@@ -9,6 +9,7 @@
 import type { Engine } from "../engine/interface.ts";
 import { excludeEmptyExtractionTombstone } from "./takes.ts";
 import { normalizeScope } from "../source-scope.ts";
+import { quarantineFilterFragment } from "../quarantine.ts";
 
 function clampLimit(limit: number | undefined, max: number, dflt: number): number {
   return typeof limit === "number" && limit >= 1 && limit <= max
@@ -26,6 +27,15 @@ function normalizeHolderAllowList(holders: string[] | undefined): string[] | und
   const cleaned = holders.filter((s) => typeof s === "string" && s.length > 0);
   if (cleaned.length === 0 || cleaned.includes("*")) return undefined;
   return Array.from(new Set(cleaned));
+}
+
+/**
+ * `AND` clause dropping a take distilled from a quarantined document: content
+ * the gate hid from search must not resurface as a claim. A take whose
+ * `source_ref` is not a document is unaffected.
+ */
+function excludeQuarantinedSource(sourceRef: string): string {
+  return ` AND NOT EXISTS (SELECT 1 FROM documents qd WHERE qd.id = ${sourceRef} AND NOT (${quarantineFilterFragment("qd")}))`;
 }
 
 export interface ConceptRow {
@@ -153,6 +163,7 @@ export async function listTakes(
   // Unconditional: the zero-yield memo is not a claim, and this listing spans
   // every lifecycle state, so nothing else keeps it out of an unfiltered read.
   extraFilter += excludeEmptyExtractionTombstone("claim_text", params);
+  extraFilter += excludeQuarantinedSource("synth_takes.source_ref");
   // Whitelisted ORDER BY — the enum is the only path into the SQL.
   const order =
     opts.sort === "weight"
@@ -219,6 +230,7 @@ export async function searchTakes(
   }
   // The sentinel is ordinary prose to a trigram match — fence it by claim text.
   sourceFilter += excludeEmptyExtractionTombstone("claim_text", params);
+  sourceFilter += excludeQuarantinedSource("synth_takes.source_ref");
   try {
     const r = await engine.query<TakeSearchRow>(
       `SELECT take_key, claim_text, kind, holder, weight, domain, status
@@ -325,7 +337,10 @@ export async function getTakesScorecard(
   }
   // total_takes counts every take regardless of lifecycle, so the memo would
   // otherwise inflate the denominator behind accuracy and grade completion.
-  const where = clauses.join(" ") + excludeEmptyExtractionTombstone("t.claim_text", params);
+  const where =
+    clauses.join(" ") +
+    excludeEmptyExtractionTombstone("t.claim_text", params) +
+    excludeQuarantinedSource("t.source_ref");
   try {
     const r = await engine.query<{
       total_takes: number;
@@ -440,7 +455,7 @@ export async function getTakesCalibration(
       `AND EXISTS (SELECT 1 FROM documents d WHERE d.id = t.source_ref AND d.source_id = ANY($${params.length}::text[]))`,
     );
   }
-  const where = clauses.join(" ");
+  const where = clauses.join(" ") + excludeQuarantinedSource("t.source_ref");
   try {
     const r = await engine.query<{
       bucket_lo: number;
