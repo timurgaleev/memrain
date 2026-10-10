@@ -398,3 +398,27 @@ and 134 on start. Things to know:
 - **After deploying,** run `memrain secrets audit` once and read the dry run
   before deciding on `--apply --yes`, then `memrain reindex --source code
   --all` if code sources are indexed.
+
+## From 1.1 to 1.2
+
+1.2 is a normal deploy: `bash deploy/deploy.sh` applies migrations 135 to 138
+and 140 on start. Things to know:
+
+- **Ranking is unchanged.** The six `MEMRAIN_RANK_*` flags are off. Turn one
+  on only after a paired A/B on your own corpus (`memrain eval qrels build`,
+  then `memrain eval --config-a … --config-b …`; docs/eval/PREREG-TEMPLATE.md
+  has the decision rule).
+- **Links re-extract once.** The link extractor version moved, so every page
+  is stale for links after the deploy. The `links-stale` cycle phase works
+  through them, 200 pages per cycle (`MEMRAIN_LINKS_STALE_MAX_PER_CYCLE`), with
+  no model calls; doctor reports link-extraction lag until it is done.
+- **Code graph.** `CODE_CHUNKER_VERSION` is 3. Existing code documents keep
+  their old call edges until the file changes; run
+  `memrain reindex --source code --rechunk-stale` once to rebuild them now
+  (CPU only, no embeddings).
+- **Graph reads hide deleted, archived and quarantined pages.** Edges to
+  names with no page at all, such as vault notes, are unchanged.
+- **Rolling the image back past 1.2.** Migrations 135 to 140 only add a
+  column, a table and indexes, so a 1.1 image runs against them (`/health`
+  reports `schema_ahead`). Links pointing at pages created after the rollback
+  are not reconnected until 1.2 runs again.

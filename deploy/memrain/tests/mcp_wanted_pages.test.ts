@@ -45,7 +45,7 @@ beforeAll(async () => {
   const pages: Array<[string, string, string]> = [
     ["wa/one", "[[Orbit]] and [[Comet]]", "wa"],
     ["wa/two", "[[Orbit]]", "wa"],
-    ["life/diary/2026-07-01", "[[Orbit]] [[life/diary/later]]", "wa"],
+    ["life/diary/2026-07-01", "[[Orbit]] [[life/diary/later]] [[Secret Trip]]", "wa"],
     ["wb/one", "[[Nebula]]", "wb"],
   ];
   for (const [slug, body, source] of pages) {
@@ -67,6 +67,7 @@ describe("wanted_pages", () => {
     expect(pages[0].referenced_by).toBe(3);
     expect(targets).toContain("nebula");
     expect(targets).toContain("life/diary/later");
+    expect(targets).toContain("secret-trip");
   });
 
   it("keeps a tenant inside its own sources and out of diary slugs", async () => {
@@ -75,6 +76,8 @@ describe("wanted_pages", () => {
     expect(targets).toEqual(["comet", "orbit"]);
     const orbit = pages.find((p: { target_slug: string }) => p.target_slug === "orbit");
     expect(orbit.sample_from).toEqual(["wa/one", "wa/two"]);
+    // A diary link counts for nothing: neither in the count nor as a target only it names.
+    expect(orbit.referenced_by).toBe(2);
     expect(payload(await call({}, tenant("wb"))).pages.map((p: { target_slug: string }) => p.target_slug)).toEqual([
       "nebula",
     ]);

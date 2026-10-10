@@ -79,6 +79,33 @@ Engineering:
 
 ---
 
+## Follow-ups from the 1.2 batch
+
+Operator decisions:
+- **Ranking flags.** Build private qrels (`memrain eval qrels build`, at least
+  60 scored queries with the known misses as `expected_top1`), record a
+  baseline, then A/B each `MEMRAIN_RANK_*` flag in order (METADATA_GATE,
+  ENTITY_TRUTH_SOFT, KEYWORD_OR_RETRY, PAGE_FUSION, KEYWORD_CONFIDENCE,
+  EXACT_LOOKUP) and promote only on a sealed win (docs/eval/PREREG-TEMPLATE.md).
+- **Code graph rebuild:** `memrain reindex --source code --rechunk-stale` once
+  after deploy so existing files get the new call edges.
+
+Engineering:
+- `search`/`query` snippet pointers derive the slug from the hit path; a
+  default-source slug whose first segment equals a read source name is
+  stripped wrongly. Carry `source_id` on hits and build `full` from it.
+- `lang` on code tools has no length bound (parameterised, so no injection);
+  the param schema cannot express `maxLength` yet.
+- An unresolved bare call edge counts toward every definition with that name,
+  so `code_blast` over-reports for common method names until receiver types
+  are known.
+- `RET-02` (`return_unit` window/page evidence delivery) is not built; measure
+  the snippet cap's token savings first.
+- `skillopt_judge` linearity test flakes under full-suite load (ratio 20 vs
+  3); it passes alone.
+
+---
+
 ## Roadmap — 2026-09-13
 
 The program makes memex safe and fast as a brain that one connector can share

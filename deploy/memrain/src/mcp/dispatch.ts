@@ -3140,14 +3140,10 @@ async function callWantedPages(
   const opts: ListWantedPagesOptions = {};
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   if (readSources !== undefined) opts.sourceIds = readSources;
-  let pages = await listWantedPages(storage.engine(), opts);
-  // Diary fence: a diary slug must not surface to a non-operator caller,
-  // neither as a wanted target nor as one of the pages linking to it.
-  if (remote) {
-    pages = pages
-      .filter((p) => !isDiarySlug(p.target_slug))
-      .map((p) => ({ ...p, sample_from: p.sample_from.filter((s) => !isDiarySlug(s)) }));
-  }
+  // Diary fence: diary pages must not surface to a non-operator caller, as a
+  // wanted target, as a linker, or through link text and counts.
+  if (remote) opts.excludePrefix = "life/diary/";
+  const pages = await listWantedPages(storage.engine(), opts);
   return jsonResult({ ok: true, pages });
 }
 

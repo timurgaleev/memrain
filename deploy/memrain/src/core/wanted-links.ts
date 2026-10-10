@@ -252,6 +252,8 @@ export interface ListWantedPagesOptions {
   sourceIds?: string[];
   /** 1..200, default 50. */
   limit?: number;
+  /** Rows whose linking page or target starts with this prefix are left out before counting. */
+  excludePrefix?: string;
 }
 
 /** Missing link targets, most-referenced first. Hidden linking pages never count. */
@@ -263,6 +265,11 @@ export async function listWantedPages(
     typeof opts.limit === "number" && opts.limit >= 1 && opts.limit <= 200 ? Math.floor(opts.limit) : 50;
   const params: unknown[] = [limit];
   const scope = andSourceScope("w.source_id", opts.sourceIds, params);
+  let exclude = "";
+  if (opts.excludePrefix) {
+    params.push(`${escapeLike(opts.excludePrefix)}%`);
+    exclude = ` AND w.from_slug NOT LIKE $${params.length} AND w.target_slug NOT LIKE $${params.length}`;
+  }
   const r = await engine.query<{
     target_slug: string;
     referenced_by: number;
@@ -276,11 +283,11 @@ export async function listWantedPages(
             MIN(w.surface) AS surface,
             to_char(MIN(w.first_seen) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS first_seen
        FROM wanted_links w
-       JOIN pages o ON o.slug = w.from_slug AND o.deleted_at IS NULL
+       JOIN pages o ON o.slug = w.from_slug AND o.source_id = w.source_id AND o.deleted_at IS NULL
       WHERE NOT EXISTS (SELECT 1 FROM pages t
                          WHERE t.slug = w.target_slug AND t.deleted_at IS NULL
                            AND t.source_id = w.source_id)
-        AND ${liveEndpointSql("w.from_slug")}${scope}
+        AND ${liveEndpointSql("w.from_slug")}${scope}${exclude}
       GROUP BY w.target_slug
       ORDER BY referenced_by DESC, w.target_slug
       LIMIT $1`,
