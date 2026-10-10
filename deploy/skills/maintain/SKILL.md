@@ -6,7 +6,6 @@ description: |
   stale info detection, orphan pages, and benchmarks. Use when asked to check
   brain health, run maintenance, or audit quality.
 triggers:
-  - "brain health"
   - "check backlinks"
   - "maintenance"
   - "orphan pages"

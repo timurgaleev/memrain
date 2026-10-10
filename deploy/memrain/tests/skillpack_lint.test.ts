@@ -15,7 +15,7 @@ const PACK_DIR = resolve(MEMRAIN_DIR, "..", "skills");
 const FENCE = "```";
 
 function skill(name: string, tools: string, body: string): string {
-  return `---\nname: ${name}\ndescription: d\ntriggers:\n  - "t"\ntools: ${tools}\n---\n\n# ${name}\n\n${body}\n`;
+  return `---\nname: ${name}\ndescription: d\ntriggers:\n  - "run ${name}"\ntools: ${tools}\n---\n\n# ${name}\n\n${body}\n`;
 }
 
 let root: string;
@@ -169,7 +169,8 @@ describe("lintSkillpack", () => {
         ].join("\n"),
       ),
     });
-    expect(lintSkillpack(dir)).toEqual({ ok: true, skills: 1, issues: [] });
+    // jobs_* are operator-only; that warning is covered on its own below.
+    expect(lintSkillpack(dir, { operatorOnlyTools: new Set() })).toEqual({ ok: true, skills: 1, issues: [] });
   });
 
   it("reads commands under the current and the pre-rename CLI name", () => {
@@ -214,9 +215,53 @@ describe("lintSkillpack", () => {
 
   it("passes on the shipped pack", () => {
     const r = lintSkillpack(PACK_DIR);
-    expect(r.issues).toEqual([]);
+    expect(r.issues.filter((i) => i.severity !== "warn")).toEqual([]);
     expect(r.ok).toBe(true);
     expect(r.skills).toBeGreaterThan(40);
+    // Warnings are only the two advisory rules, never a silenced error.
+    expect(new Set(r.issues.map((i) => i.rule))).toEqual(new Set(["trigger-overlap", "operator-only-tool"]));
+  });
+
+  it("fails on a trigger two skills share, however it is spelled", () => {
+    const dir = writePack("trigger-dup", {
+      "omicron/SKILL.md": "---\nname: omicron\ndescription: d\ntriggers:\n  - \"Brain Health\"\ntools: [page_get]\n---\nBody.\n",
+      "pi/SKILL.md": "---\nname: pi\ndescription: d\ntriggers:\n  - \"brain-health!\"\n  - \"pi only\"\ntools: [page_get]\n---\nBody.\n",
+    });
+    const r = lintSkillpack(dir);
+    expect(r.ok).toBe(false);
+    expect(r.issues).toEqual([
+      { slug: "pi", rule: "trigger-overlap", detail: "\"brain health\" is also a trigger of omicron", line: 4 },
+    ]);
+  });
+
+  it("warns, without failing, when one skill's trigger sits inside another's", () => {
+    const dir = writePack("trigger-sub", {
+      "rho/SKILL.md": "---\nname: rho\ndescription: d\ntriggers:\n  - \"enrich\"\ntools: [page_get]\n---\nBody.\n",
+      "sigma/SKILL.md": "---\nname: sigma\ndescription: d\ntriggers:\n  - \"enrich this article\"\n  - \"enriching\"\ntools: [page_get]\n---\nBody.\n",
+    });
+    const r = lintSkillpack(dir);
+    expect(r.ok).toBe(true);
+    // "enriching" is not the word "enrich", so only the whole-word run counts.
+    expect(r.issues).toEqual([
+      {
+        slug: "sigma",
+        rule: "trigger-overlap",
+        detail: "\"enrich this article\" contains \"enrich\", a trigger of rho",
+        line: 4,
+        severity: "warn",
+      },
+    ]);
+  });
+
+  it("warns when a skill declares a tool tenants are never granted", () => {
+    const dir = writePack("operator-only", {
+      "tau/SKILL.md": skill("tau", "[page_get, run_doctor]", "Body."),
+    });
+    const r = lintSkillpack(dir);
+    expect(r.ok).toBe(true);
+    expect(r.issues).toEqual([
+      { slug: "tau", rule: "operator-only-tool", detail: "run_doctor", line: 6, severity: "warn" },
+    ]);
   });
 });
 

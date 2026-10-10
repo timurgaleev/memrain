@@ -8,7 +8,6 @@ triggers:
   - "smoke test"
   - "run smoke tests"
   - "container restart check"
-  - "health check"
   - "did the restart break anything"
   - "did the container restart break anything"
 tools:

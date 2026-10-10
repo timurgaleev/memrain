@@ -4,7 +4,6 @@ description: Route content to specialized ingestion skills. Detects input type a
 triggers:
   - "ingest this"
   - "save this to brain"
-  - "process this meeting"
 tools:
   - search
   - page_get

@@ -26,7 +26,7 @@ import { parseJsonBody } from "../http/body_limit.ts";
 import { publicSafeErrorMessage } from "../core/public_redaction.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
 import { resolveClientKey } from "../http/client-key.ts";
-import { resolveServerInfo, SERVER_INSTRUCTIONS } from "./server-instructions.ts";
+import { resolveServerInfo, resolveServerInstructions } from "./server-instructions.ts";
 
 /**
  * The MCP revisions this server speaks, oldest first. Each one's required
@@ -306,18 +306,22 @@ async function handleSingle(
   };
 
   switch (req.method) {
-    case "initialize":
+    case "initialize": {
+      // The contract names only tools this caller can call, judged by the
+      // same predicate tools/list uses.
+      const visible = new Set(visibleToolDefs(ctx, forbidPublic).map((t) => t.name));
       return rpcOk(id, {
         protocolVersion: negotiateProtocolVersion(req.params?.protocolVersion),
         serverInfo: SERVER_INFO,
         capabilities: { tools: {} },
-        instructions: SERVER_INSTRUCTIONS,
+        instructions: resolveServerInstructions(process.env, { callable: (name) => visible.has(name) }),
         // memrain's own response-shape version, distinct from the MCP protocol
         // version above: that pins the transport, this pins what memrain puts
         // inside a tool result. A client can refuse to run against a shape it
         // does not know instead of discovering the change in production.
         _meta: { memexResponseVersion: MEMRAIN_RESPONSE_VERSION },
       });
+    }
     case "tools/list":
       // Log tools/list too — a client that only ever lists tools should
       // still be visible in the admin Request Log.

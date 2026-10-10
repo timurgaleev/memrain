@@ -10,12 +10,18 @@
  * uses one teaches the agent a call that always fails.
  * References are only taken from inline code spans and fenced blocks: prose
  * that merely mentions memrain is not an instruction to run something.
+ * Across skills, triggers must route to one skill: the same trigger in two
+ * skills is an error, one skill's trigger inside another's is a warning.
+ * A skill that declares an operator-only tool is a warning: tenants are
+ * served the skill but refused the tool.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CLI_COMMANDS, type CliCommandSpec } from "../../cli-commands.ts";
 import { OPERATIONS } from "../../mcp/operations.ts";
+import { OPERATOR_ONLY_TOOLS } from "../../mcp/visibility.ts";
 import { parseSkillFrontmatter } from "./frontmatter.ts";
+import { containsWords, normalizeTrigger } from "./routing-eval.ts";
 import { LEGACY_CLI_WORD } from "../brand.ts";
 
 export type SkillLintRule =
@@ -26,6 +32,8 @@ export type SkillLintRule =
   | "unknown-cli-subcommand"
   | "unknown-call-tool"
   | "unknown-tool-arg"
+  | "trigger-overlap"
+  | "operator-only-tool"
   | "unreadable";
 
 export interface SkillLintIssue {
@@ -35,9 +43,12 @@ export interface SkillLintIssue {
   detail: string;
   /** 1-based line in the file. */
   line: number;
+  /** Absent = an error. A warning is reported but does not fail the lint. */
+  severity?: "warn";
 }
 
 export interface SkillLintResult {
+  /** No errors; warnings alone leave the lint passing. */
   ok: boolean;
   /** Routable skills linted (shared docs are scanned but not counted). */
   skills: number;
@@ -49,6 +60,8 @@ export interface SkillLintOptions {
   /** Declared argument keys per tool; a tool missing here is not key-checked. */
   opParams?: ReadonlyMap<string, ReadonlySet<string>>;
   cliCommands?: Readonly<Record<string, CliCommandSpec>>;
+  /** Tools a tenant may never call; a skill declaring one gets a warning. */
+  operatorOnlyTools?: ReadonlySet<string>;
 }
 
 export interface CliReference {
@@ -378,6 +391,7 @@ function checkReferences(
 
 interface PackSurfaces {
   opNames: ReadonlySet<string>;
+  operatorOnly: ReadonlySet<string>;
   opParams: ReadonlyMap<string, ReadonlySet<string>>;
   table: Readonly<Record<string, CliCommandSpec>>;
 }
@@ -388,7 +402,19 @@ function checkBody(slug: string, text: string, surfaces: PackSurfaces, issues: S
   checkToolCalls(slug, extractToolCalls(text, surfaces.opNames), surfaces.opNames, surfaces.opParams, issues);
 }
 
-function lintSkillFile(slug: string, text: string, surfaces: PackSurfaces, issues: SkillLintIssue[]): void {
+interface SkillTriggerLines {
+  slug: string;
+  triggers: readonly string[];
+  line: number;
+}
+
+/** Lint one routable skill; returns its triggers for the cross-skill check. */
+function lintSkillFile(
+  slug: string,
+  text: string,
+  surfaces: PackSurfaces,
+  issues: SkillLintIssue[],
+): SkillTriggerLines | null {
   const fm = parseSkillFrontmatter(text);
   if (fm === null) {
     issues.push({
@@ -398,7 +424,7 @@ function lintSkillFile(slug: string, text: string, surfaces: PackSurfaces, issue
       line: 1,
     });
     checkBody(slug, text, surfaces, issues);
-    return;
+    return null;
   }
   if (fm.name !== slug) {
     issues.push({
@@ -409,6 +435,15 @@ function lintSkillFile(slug: string, text: string, surfaces: PackSurfaces, issue
     });
   }
   for (const tool of fm.tools) {
+    if (surfaces.operatorOnly.has(tool)) {
+      issues.push({
+        slug,
+        rule: "operator-only-tool",
+        detail: tool,
+        line: fm.keyLines["tools"] ?? 1,
+        severity: "warn",
+      });
+    }
     if (surfaces.opNames.has(tool)) continue;
     issues.push({
       slug,
@@ -420,6 +455,48 @@ function lintSkillFile(slug: string, text: string, surfaces: PackSurfaces, issue
   // Descriptions and triggers are served too, so the frontmatter is scanned
   // for command references along with the body.
   checkBody(slug, text, surfaces, issues);
+  return { slug, triggers: fm.triggers, line: fm.keyLines["triggers"] ?? 1 };
+}
+
+/**
+ * Every trigger that cannot route to one skill. The same normalised trigger
+ * in two skills is an error (the router can only call it ambiguous); one
+ * skill's trigger appearing as whole words inside another skill's is a
+ * warning (the longer trigger wins, so the shorter one loses those requests).
+ * Reported on the later skill of each pair, in slug order.
+ */
+function checkTriggerOverlap(skills: readonly SkillTriggerLines[], issues: SkillLintIssue[]): void {
+  const all = skills.flatMap((s) =>
+    [...new Set(s.triggers.map(normalizeTrigger))]
+      .filter((t) => t.length > 0)
+      .map((t) => ({ slug: s.slug, trigger: t, line: s.line })),
+  );
+  const firstOwner = new Map<string, string>();
+  for (const a of all) {
+    const owner = firstOwner.get(a.trigger);
+    if (owner === undefined) {
+      firstOwner.set(a.trigger, a.slug);
+    } else if (owner !== a.slug) {
+      issues.push({
+        slug: a.slug,
+        rule: "trigger-overlap",
+        detail: `"${a.trigger}" is also a trigger of ${owner}`,
+        line: a.line,
+      });
+    }
+  }
+  for (const a of all) {
+    for (const b of all) {
+      if (a.slug === b.slug || a.trigger === b.trigger || !containsWords(b.trigger, a.trigger)) continue;
+      issues.push({
+        slug: b.slug,
+        rule: "trigger-overlap",
+        detail: `"${b.trigger}" contains "${a.trigger}", a trigger of ${a.slug}`,
+        line: b.line,
+        severity: "warn",
+      });
+    }
+  }
 }
 
 /**
@@ -450,6 +527,7 @@ function declaredParams(): Map<string, ReadonlySet<string>> {
 export function lintSkillpack(skillsDir: string, opts: SkillLintOptions = {}): SkillLintResult {
   const surfaces: PackSurfaces = {
     opNames: opts.opNames ?? new Set(OPERATIONS.map((o) => o.name)),
+    operatorOnly: opts.operatorOnlyTools ?? OPERATOR_ONLY_TOOLS,
     opParams: opts.opParams ?? declaredParams(),
     table: opts.cliCommands ?? CLI_COMMANDS,
   };
@@ -457,6 +535,7 @@ export function lintSkillpack(skillsDir: string, opts: SkillLintOptions = {}): S
     throw new Error(`skillpack lint: skills directory not found at ${skillsDir}`);
   }
   const issues: SkillLintIssue[] = [];
+  const triggerLines: SkillTriggerLines[] = [];
   let skills = 0;
   const names = readdirSync(skillsDir).sort();
   for (const name of names) {
@@ -490,7 +569,9 @@ export function lintSkillpack(skillsDir: string, opts: SkillLintOptions = {}): S
     skills++;
     const text = readText(file, slug, issues);
     if (text === null) continue;
-    lintSkillFile(slug, text, surfaces, issues);
+    const triggers = lintSkillFile(slug, text, surfaces, issues);
+    if (triggers !== null) triggerLines.push(triggers);
   }
-  return { ok: issues.length === 0, skills, issues };
+  checkTriggerOverlap(triggerLines, issues);
+  return { ok: !issues.some((i) => i.severity !== "warn"), skills, issues };
 }
