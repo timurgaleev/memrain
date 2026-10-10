@@ -212,6 +212,7 @@ describe("fidelity corpus", () => {
   it("ships the cases the family exists to cover", () => {
     expect(fixtures.map((f) => f.name)).toEqual([
       "anonymous-placeholders",
+      "claude-code-owner-session",
       "distortion-traps",
       "drop-required",
       "plain-transcript",
@@ -221,25 +222,25 @@ describe("fidelity corpus", () => {
   it("carries at least one claim the pipeline is required to discard", () => {
     // The corpus-level invariant, restated as a test: without it,
     // "persist every claim the model emitted" scores a perfect recall.
-    expect(fixtures.reduce((n, f) => n + f.reject.length, 0)).toBe(3);
+    expect(fixtures.reduce((n, f) => n + f.reject.length, 0)).toBe(5);
   });
 
   it("pins today's corpus scores", () => {
     expect(run.scores).toEqual({
-      goldTotal: 13,
-      ledgerRows: 10,
-      rejectTotal: 3,
-      matchedGold: 10,
-      justifiedRows: 9,
-      // 9 of 10 rows are accounted for by a label. The tenth is the
+      goldTotal: 15,
+      ledgerRows: 12,
+      rejectTotal: 5,
+      matchedGold: 12,
+      justifiedRows: 11,
+      // 11 of 12 rows are accounted for by a label. The twelfth is the
       // `someone-unheard-of` row drop-required plants on purpose.
-      fidelityPrecision: 0.9,
-      // 10 of 13 labelled claims land. The three that do not are
+      fidelityPrecision: 0.9167,
+      // 12 of 15 labelled claims land. The three that do not are
       // anonymous-placeholders', dropped by design.
-      fidelityRecall: 0.7692,
+      fidelityRecall: 0.8,
       dropCompliance: 1,
-      // 1 of the 10 landed claims landed altered — see the distortion pin below.
-      distortionRate: 0.1,
+      // 1 of the 12 landed claims landed altered — see the distortion pin below.
+      distortionRate: 0.0833,
     });
   });
 
@@ -260,6 +261,7 @@ describe("fidelity corpus", () => {
       // and this fixture declares nothing to drop. A passing grade for an exam
       // nobody sat is exactly what these nulls refuse to report.
       "anonymous-placeholders": [null, 0, null, null],
+      "claude-code-owner-session": [1, 1, 1, 0],
       "distortion-traps": [1, 1, null, 0.3333],
       "drop-required": [0.75, 1, 1, 0],
       "plain-transcript": [1, 1, null, 0],
@@ -276,7 +278,7 @@ describe("fidelity corpus", () => {
       }),
     ).toBe(
       "bench (corpus: shipped, mode: stub, spend: $0.0000)\n" +
-        "fidelity    gold=13 written=10 P=90.0% R=76.9% drop=100.0% distortion=10.0%",
+        "fidelity    gold=15 written=12 P=91.7% R=80.0% drop=100.0% distortion=8.3%",
     );
   });
 });
@@ -361,7 +363,9 @@ describe("the parser is in the loop", () => {
     const stub = makeGoldStub(fixture);
     const first = await stub.fn({
       system: "s",
-      user: "<turn>\nDana Reed: I'm moving the Northwind renewal to October.\n</turn>",
+      user:
+        "Observation date: 2026-08-14 (when this text was written or said; resolve relative dates against it).\n" +
+        "<turn>\nDana Reed: I'm moving the Northwind renewal to October.\n</turn>",
       maxTokens: 800,
     });
     expect(first.text).toBe(fixture.stubResponses["0"]!);
@@ -378,7 +382,8 @@ describe("the parser is in the loop", () => {
 
   it("asks each turn exactly once and writes nowhere but its own source", () => {
     for (const r of run.runs) {
-      expect(r.stubCalls).toEqual([1, 1, 1]);
+      // The session's last turn is nothing but a paste: never paid for.
+      expect(r.stubCalls).toEqual(r.fixture === "claude-code-owner-session" ? [1, 1, 0] : [1, 1, 1]);
       // Every fact this family writes carries the fixture's source slug, so a
       // non-zero count here means a row landed somewhere the grader never
       // looked — the score would be computed over a subset of what was written.
@@ -485,6 +490,7 @@ describe("scoreFidelity arithmetic", () => {
     consolidated_into: null,
     context: null,
     source_session: null,
+    attributed_to: null,
     forgotten_at: null,
     ...over,
   });

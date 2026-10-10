@@ -188,6 +188,17 @@ services:
       - MEMRAIN_TAKE_ENSEMBLE_JUDGES=${MEMRAIN_TAKE_ENSEMBLE_JUDGES:-${MEMEX_TAKE_ENSEMBLE_JUDGES:-}}
       - MEMRAIN_FACTS_EXTRACTION=${MEMRAIN_FACTS_EXTRACTION:-${MEMEX_FACTS_EXTRACTION:-}}
       - MEMRAIN_FACTS_BUDGET_USD=${MEMRAIN_FACTS_BUDGET_USD:-${MEMEX_FACTS_BUDGET_USD:-}}
+      # The owner's entity slug: first-person `User` claims from first-party
+      # transcripts land there instead of being dropped (unset = unchanged).
+      - MEMRAIN_OWNER_ENTITY=${MEMRAIN_OWNER_ENTITY:-${MEMEX_OWNER_ENTITY:-}}
+      # Junk gate on extracted facts (default on; 0 = off) and how many
+      # extractor calls one long non-transcript page may get (default 1).
+      - MEMRAIN_FACTS_JUNK_FILTER=${MEMRAIN_FACTS_JUNK_FILTER:-${MEMEX_FACTS_JUNK_FILTER:-}}
+      - MEMRAIN_FACTS_MAX_WINDOWS=${MEMRAIN_FACTS_MAX_WINDOWS:-${MEMEX_FACTS_MAX_WINDOWS:-}}
+      # `think`: quote check against the evidence (default on; 0 = off) and the
+      # IANA zone its "today" and page dates use (default UTC).
+      - MEMRAIN_THINK_QUOTE_VERIFY=${MEMRAIN_THINK_QUOTE_VERIFY:-${MEMEX_THINK_QUOTE_VERIFY:-}}
+      - MEMRAIN_TIMEZONE=${MEMRAIN_TIMEZONE:-${MEMEX_TIMEZONE:-}}
       # Contextual-retrieval embed wrapper (LLM-free). Enabling it changes ONLY
       # future embeds — run a full re-embed after enabling, or the vector space
       # becomes mixed (wrapped + unwrapped) and search quality degrades.
@@ -291,6 +302,7 @@ services:
       - MEMRAIN_HNSW_ZOMBIE_SWEEP=${MEMRAIN_HNSW_ZOMBIE_SWEEP:-${MEMEX_HNSW_ZOMBIE_SWEEP:-}}
       - MEMRAIN_MAX_BODY_BYTES=${MEMRAIN_MAX_BODY_BYTES:-${MEMEX_MAX_BODY_BYTES:-}}
       - MEMRAIN_INGEST_MAX_BYTES=${MEMRAIN_INGEST_MAX_BYTES:-${MEMEX_INGEST_MAX_BYTES:-}}
+      - MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES=${MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES:-${MEMEX_INGEST_TRANSCRIPT_MAX_BYTES:-}}
       # Admin login credential. Unset -> a fresh random token every restart,
       # which invalidates the operator's admin session on every recompose.
       - MEMRAIN_ADMIN_BOOTSTRAP=${MEMRAIN_ADMIN_BOOTSTRAP:-${MEMEX_ADMIN_BOOTSTRAP:-}}

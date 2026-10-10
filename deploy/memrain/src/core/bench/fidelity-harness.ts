@@ -43,6 +43,8 @@ import {
 } from "../facts.ts";
 import { parseConversation } from "../conversation-parser.ts";
 import { sanitizeForPrompt } from "../llm/sanitize.ts";
+import { observationDateLine } from "../llm/date-grounding.ts";
+import { stripPastedContent } from "../transcripts/pasted-content.ts";
 import type { SonnetFn } from "../llm/sonnet.ts";
 import {
   runExtractConversationFacts,
@@ -91,8 +93,13 @@ export function makeGoldStub(fixture: FidelityFixture): GoldStub {
   const byPrompt = new Map<string, number[]>();
   messages.forEach((m, i) => {
     const turn = `${m.speaker}: ${m.text}`.trim();
-    const { text: clean } = sanitizeForPrompt(turn, TURN_SANITIZE_CHARS);
-    const key = `<turn>\n${clean}\n</turn>`;
+    const { text: clean } = sanitizeForPrompt(stripPastedContent(turn).text, TURN_SANITIZE_CHARS);
+    // The command anchors each turn at its own day; an epoch-anchored parse
+    // (a time-only format with no dateContext) carries no real date.
+    const day = /^\d{4}-\d{2}-\d{2}/.test(m.timestamp) && !m.timestamp.startsWith("1970-")
+      ? m.timestamp.slice(0, 10)
+      : null;
+    const key = `${observationDateLine(day)}\n<turn>\n${clean}\n</turn>`;
     const bucket = byPrompt.get(key);
     if (bucket) bucket.push(i);
     else byPrompt.set(key, [i]);
@@ -225,6 +232,11 @@ function fieldsOf(gold: GoldFact, row: FactRow): FieldDistortion[] {
   }
   if (e.visibility !== undefined && row.visibility !== e.visibility) {
     push("visibility", e.visibility, row.visibility);
+  }
+  if ("attributed_to" in e) {
+    const want = e.attributed_to ?? null;
+    const got = row.attributed_to ?? null;
+    if (want !== got) push("attributed_to", want, got);
   }
   return out;
 }
@@ -367,6 +379,7 @@ export async function runFidelityFixture(
     text: fixture.transcript,
     sourceSlug: fixture.sourceSlug,
     ...(fixture.dateContext ? { dateContext: fixture.dateContext } : {}),
+    ...(fixture.ownerEntity ? { ownerEntity: fixture.ownerEntity } : {}),
     sonnetFn: stub.fn,
     modelId: fixture.stubModelId,
   });

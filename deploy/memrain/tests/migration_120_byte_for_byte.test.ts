@@ -8,7 +8,7 @@
  * PGLite, and on Postgres with psql when MEMRAIN_TEST_POSTGRES_URL is set.
  */
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { revertMigration, runMigrations } from "../src/core/migrate.ts";
+import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 import { Storage } from "../src/core/storage.ts";
 import { OAuthProvider } from "../src/core/oauth-provider.ts";
 import type { loadConfig } from "../src/core/config.ts";
@@ -91,8 +91,10 @@ for (const { name, open } of ENGINES) {
       }
       expect(await db.manifest()).toBe(up);
 
-      await revertMigration(db.engine, 131);
-      await revertMigration(db.engine, 121);
+      // storage.init applied every later migration too; each down only runs
+      // on top of its own migration.
+      const later = discoverMigrations().map((m) => m.id).filter((id) => id > 120).sort((a, b) => b - a);
+      for (const id of later) await revertMigration(db.engine, id);
       await revertMigration(db.engine, 120);
       expect(await db.manifest()).toBe(base);
     });

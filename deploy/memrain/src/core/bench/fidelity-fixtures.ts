@@ -58,6 +58,8 @@ export interface GoldExpect {
   written_by?: string;
   /** `addFact`'s mig085 default is 'private'; the CLI path passes none. */
   visibility?: string;
+  /** Who asserted it (mig130), or null for "must land with no speaker". */
+  attributed_to?: string | null;
 }
 
 /** A claim the pipeline must end up holding. */
@@ -88,6 +90,12 @@ export interface GoldFact {
  *                        all (a lone em dash, punctuation), so the canonical
  *                        cascade falls to the slugify floor and `slugifyEntity`
  *                        returns null (`:521`).
+ *   junk_filter          the claim is assistant narration or a provider error
+ *                        string; `parseFactsResponse`'s junk gate drops it
+ *                        (`isJunkFact`, on unless MEMRAIN_FACTS_JUNK_FILTER=0).
+ *   pasted_content       the claim came from a turn that is nothing but a
+ *                        `<pasted_content>` block; the command never asks the
+ *                        model about it (`isPasteOnly`).
  *
  * TWO REASONS THE SPEC LISTED ARE DELIBERATELY ABSENT, because naming a gate
  * that does not fire would let a corpus author encode a drop that never
@@ -109,12 +117,16 @@ export interface GoldFact {
 export type RejectReason =
   | "anonymous_speaker"
   | "null_entity"
-  | "unresolvable_entity";
+  | "unresolvable_entity"
+  | "junk_filter"
+  | "pasted_content";
 
 export const REJECT_REASONS: readonly RejectReason[] = [
   "anonymous_speaker",
   "null_entity",
   "unresolvable_entity",
+  "junk_filter",
+  "pasted_content",
 ];
 
 /** A claim the pipeline must NOT end up holding. */
@@ -140,6 +152,11 @@ export interface FidelityFixture {
   /** Provenance slug stamped on every fact this fixture's run writes. */
   sourceSlug: string;
   /**
+   * The brain owner's entity for this run, as MEMRAIN_OWNER_ENTITY would set
+   * it. Passed through the command's option, never the process environment.
+   */
+  ownerEntity?: string;
+  /**
    * RAW MODEL OUTPUT keyed by turn index — a string, never a parsed fact list.
    * An index with no entry gets `{"facts":[]}`. See the module header.
    */
@@ -164,6 +181,7 @@ const FIXTURE_KEYS = new Set([
   "transcript",
   "dateContext",
   "sourceSlug",
+  "ownerEntity",
   "stubResponses",
   "stubModelId",
   "gold",
@@ -177,7 +195,9 @@ const EXPECT_KEYS = new Set([
   "source_slug",
   "written_by",
   "visibility",
+  "attributed_to",
 ]);
+const ATTRIBUTIONS = ["user", "assistant", "other"];
 const REJECT_KEYS = new Set(["id", "reason", "fact"]);
 const NOTABILITIES: readonly FactNotability[] = ["high", "medium", "low"];
 
@@ -286,6 +306,13 @@ function parseExpect(where: string, raw: unknown): GoldExpect {
   if ("source_slug" in obj) out.source_slug = requireSlug(where, obj, "source_slug");
   if ("written_by" in obj) out.written_by = requireString(where, obj, "written_by");
   if ("visibility" in obj) out.visibility = requireString(where, obj, "visibility");
+  if ("attributed_to" in obj) {
+    const v = obj["attributed_to"];
+    if (v !== null && (typeof v !== "string" || !ATTRIBUTIONS.includes(v))) {
+      fail(`${where}.attributed_to`, `expected one of ${ATTRIBUTIONS.join(", ")} or null, got ${JSON.stringify(v)}`);
+    }
+    out.attributed_to = v as string | null;
+  }
   return out;
 }
 
@@ -355,6 +382,7 @@ export function parseFidelityFixture(where: string, raw: unknown): FidelityFixtu
     reject: [],
   };
   if ("note" in obj) fixture.note = requireString(where, obj, "note");
+  if ("ownerEntity" in obj) fixture.ownerEntity = requireSlug(where, obj, "ownerEntity");
 
   if ("dateContext" in obj) {
     const v = requireString(where, obj, "dateContext");

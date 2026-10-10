@@ -115,6 +115,45 @@ describe("consolidateFactsPhase", () => {
     );
   });
 
+  it("never folds an assistant's suggestion into the operator's take", async () => {
+    await seed("Alice prefers tea", 0, { confidence: 0.7 });
+    const suggested = await seed("Alice likes tea", 0, { confidence: 0.9 });
+    await storage
+      .engine()
+      .query(`UPDATE entity_facts SET attributed_to = 'assistant' WHERE id = $1`, [suggested]);
+
+    const res = await consolidateFactsPhase(storage.engine(), { minOldestAgeMs: 0, minFactsPerBucket: 2 });
+    // One operator fact is left: the bucket is below the cluster floor.
+    expect(res.bucketsScanned).toBe(0);
+    expect(res.takesWritten).toBe(0);
+    const row = await storage
+      .engine()
+      .query<{ consolidated: boolean }>(`SELECT consolidated FROM entity_facts WHERE id = $1`, [suggested]);
+    expect(row.rows[0]!.consolidated).toBe(false);
+  });
+
+  it("clusters the operator's facts and leaves the assistant's beside them", async () => {
+    const a = await seed("Alice prefers tea", 0, { confidence: 0.7 });
+    const b = await seed("Alice likes tea", 0, { confidence: 0.8 });
+    const suggested = await seed("Alice should drink tea", 0, { confidence: 0.95 });
+    await storage
+      .engine()
+      .query(`UPDATE entity_facts SET attributed_to = 'assistant' WHERE id = $1`, [suggested]);
+
+    const res = await consolidateFactsPhase(storage.engine(), { minOldestAgeMs: 0, minFactsPerBucket: 2 });
+    expect(res.takesWritten).toBe(1);
+    expect(res.factsConsolidated).toBe(2);
+    const take = await storage.engine().query<{ fact: string }>(
+      `SELECT fact FROM entity_facts WHERE written_by = 'facts-consolidate'`,
+    );
+    // The take restates the best OPERATOR claim, not the assistant's.
+    expect(take.rows.map((r) => r.fact)).toEqual(["Alice likes tea"]);
+    const marked = await storage.engine().query<{ id: number }>(
+      `SELECT id FROM entity_facts WHERE consolidated = true AND written_by <> 'facts-consolidate'`,
+    );
+    expect(marked.rows.map((r) => Number(r.id)).sort((x, y) => x - y)).toEqual([a, b].sort((x, y) => x - y));
+  });
+
   it("is idempotent: a second run promotes nothing new", async () => {
     await seed("Alice prefers tea", 0, { confidence: 0.7 });
     await seed("Alice likes tea", 0, { confidence: 0.9 });

@@ -1,0 +1,50 @@
+{
+  "name": "claude-code-owner-session",
+  "description": "A coding-agent session: the operator states a preference as `User`, the assistant recommends something and narrates its next step, and the operator pastes someone else's email. The preference lands on the owner entity with its own date, the recommendation lands as the assistant's, and neither the narration nor the pasted email becomes a fact.",
+  "note": "Exercises the owner entity (the model leaves the operator's first-person claim without an entity; ownerEntity maps it), attribution (the recommendation is stored with attributed_to=assistant), date grounding (the model's valid_from 2026-08-01 for 'last week' outranks the turn's own day), the junk gate (the narration arrives in the same answer as a real claim) and paste stripping (the last turn is nothing but a paste, so the model is never asked about it and its stubbed claim cannot land).",
+  "sourceSlug": "conversations/2026-08-08-agent-session",
+  "dateContext": "2026-08-08",
+  "ownerEntity": "people/robin",
+  "stubModelId": "eu.anthropic.claude-sonnet-4-6-v1:0",
+  "pages": [
+    {
+      "slug": "people/robin",
+      "type": "person",
+      "title": "Robin",
+      "body": "Robin runs this brain."
+    }
+  ],
+  "transcript": "[2026-08-08 10:00] User: I moved us to Postgres last week, I prefer it over MySQL.\n[2026-08-08 10:01] Claude: Let me read the file first. For vector search I would use pgvector with an HNSW index.\n[2026-08-08 10:03] User: <pasted_content id=\"7\">\n  Hi Robin, we moved the launch to November. Alex\n  </pasted_content id=\"7\">\n",
+  "stubResponses": {
+    "0": "{\"facts\":[{\"fact\":\"Robin prefers Postgres over MySQL.\",\"kind\":\"preference\",\"entity\":null,\"confidence\":0.9,\"notability\":\"high\",\"attributed_to\":\"user\",\"valid_from\":\"2026-08-01\"}]}",
+    "1": "{\"facts\":[{\"fact\":\"Let me read the file first.\",\"kind\":\"fact\",\"entity\":\"people/robin\",\"confidence\":0.6,\"notability\":\"low\",\"attributed_to\":\"assistant\",\"valid_from\":null},{\"fact\":\"Assistant recommended pgvector with an HNSW index for vector search.\",\"kind\":\"belief\",\"entity\":\"people/robin\",\"confidence\":0.8,\"notability\":\"medium\",\"attributed_to\":\"assistant\",\"valid_from\":null}]}",
+    "2": "{\"facts\":[{\"fact\":\"The launch moved to November.\",\"kind\":\"event\",\"entity\":\"people/robin\",\"confidence\":0.8,\"notability\":\"high\",\"attributed_to\":\"user\",\"valid_from\":null}]}"
+  },
+  "gold": [
+    {
+      "id": "g0",
+      "entity_slug": "people/robin",
+      "fact": "Robin prefers Postgres over MySQL.",
+      "kind": "preference",
+      "notability": "high",
+      "expect": {
+        "valid_from": "2026-08-01",
+        "confidence": 0.9,
+        "attributed_to": "user",
+        "written_by": "facts-extract"
+      }
+    },
+    {
+      "id": "g1",
+      "entity_slug": "people/robin",
+      "fact": "Assistant recommended pgvector with an HNSW index for vector search.",
+      "kind": "belief",
+      "notability": "medium",
+      "expect": { "valid_from": "2026-08-08", "attributed_to": "assistant" }
+    }
+  ],
+  "reject": [
+    { "id": "r0", "reason": "junk_filter", "fact": "Let me read the file first." },
+    { "id": "r1", "reason": "pasted_content", "fact": "The launch moved to November." }
+  ]
+}

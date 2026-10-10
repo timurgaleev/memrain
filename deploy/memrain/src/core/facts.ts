@@ -121,6 +121,13 @@ export interface AddFactInput {
   context?: string;
   source_session?: string;
   /**
+   * Who asserted the claim (migration 130): 'user' | 'assistant' | 'other'.
+   * Anything else, or omitted, stores NULL — the speaker was not recorded.
+   * Part of the claim's identity: an assistant's suggestion never refreshes
+   * the user's own claim of the same words.
+   */
+  attributed_to?: string;
+  /**
    * Insert-time dedup / supersede. Present -> opt in for this call; absent ->
    * governed by `MEMRAIN_FACTS_DEDUP` (default OFF, exact-tuple dedup only).
    */
@@ -139,6 +146,8 @@ const KIND_VALUES: ReadonlySet<string> = new Set([
 const NOTABILITY_VALUES: ReadonlySet<string> = new Set(["high", "medium", "low"]);
 /** Allowed `visibility` values — mirrors the migration 085 CHECK constraint. */
 const VISIBILITY_VALUES: ReadonlySet<string> = new Set(["private", "world"]);
+/** Allowed `attributed_to` values — mirrors the migration 130 CHECK constraint. */
+const ATTRIBUTION_VALUES: ReadonlySet<string> = new Set(["user", "assistant", "other"]);
 
 /** Normalize a caller-supplied kind to an allowed value, else the decay floor
  *  (never let a bad value reach — and abort on — the CHECK constraint, and
@@ -161,6 +170,13 @@ function normaliseVisibility(v: string | undefined): string | null {
   if (typeof v !== "string") return null;
   const s = v.trim().toLowerCase();
   return VISIBILITY_VALUES.has(s) ? s : null;
+}
+
+/** Normalize a caller-supplied speaker, else NULL (not recorded). */
+function normaliseAttribution(v: string | undefined): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim().toLowerCase();
+  return ATTRIBUTION_VALUES.has(s) ? s : null;
 }
 
 /** Canonicalize a free-form label (metric / event_type) to lowercase
@@ -302,6 +318,7 @@ async function fetchDedupCandidates(
   vecJson: string,
   effectiveSource: string,
   limit: number,
+  attributedTo: string | null,
 ): Promise<FactCandidate[]> {
   const r = await storage.engine().query<{
     id: number;
@@ -317,9 +334,11 @@ async function fetchDedupCandidates(
         AND source_id = $3
         -- dimensional ontology rows have their own read path; never a dedup match.
         AND dimension IS NULL
+        -- one speaker's claim never collapses onto another's (mig130).
+        AND attributed_to IS NOT DISTINCT FROM $5::text
       ORDER BY embedding <=> $2::vector
       LIMIT $4`,
-    [entitySlug, vecJson, effectiveSource, limit],
+    [entitySlug, vecJson, effectiveSource, limit, attributedTo],
   );
   return r.rows.map((row) => ({
     id: toFactId(row.id),
@@ -348,12 +367,18 @@ export const UNATTRIBUTED_WRITER = "unattributed";
  * `source_id` is the EFFECTIVE source ('default' when a caller left the column
  * to its DEFAULT), so a re-save that omits the tenant still matches its own
  * earlier write.
+ *
+ * `attributed_to` (migration 130) is part of it: the assistant recommending
+ * something is not the user claiming it, so one never refreshes the other.
+ * Omitted means NULL — a claim with no recorded speaker, as every legacy row
+ * and every consolidated take is.
  */
 export interface ClaimIdentity {
   entity_slug: string;
   source_id: string;
   fact: string;
   written_by: string;
+  attributed_to?: string | null;
 }
 
 /** The narrow query surface an Engine and an in-transaction handle both meet. */
@@ -373,11 +398,12 @@ export async function findLiveClaim(
   const r = await q.query<{ id: number }>(
     `SELECT id FROM entity_facts
       WHERE entity_slug = $1 AND source_id = $2 AND fact = $3 AND written_by = $4
+        AND attributed_to IS NOT DISTINCT FROM $5::text
         AND forgotten_at IS NULL
         AND dimension IS NULL
       ORDER BY id
       LIMIT 1`,
-    [id.entity_slug, id.source_id, id.fact, id.written_by],
+    [id.entity_slug, id.source_id, id.fact, id.written_by, id.attributed_to ?? null],
   );
   return toFactIdOrNull(r.rows[0]?.id);
 }
@@ -403,6 +429,8 @@ export interface FactRow {
   consolidated_into: number | null;
   context: string | null;
   source_session: string | null;
+  /** mig130 speaker ('user' | 'assistant' | 'other'); NULL when not recorded. */
+  attributed_to: string | null;
   /** mig043 tombstone; NULL on every live row (the default read set). */
   forgotten_at: string | null;
 }
@@ -488,6 +516,7 @@ export async function addFact(
   // the columns' DEFAULTs apply otherwise.
   const visibility = normaliseVisibility(input.visibility);
   const sourceSession = normaliseText(input.source_session);
+  const attributedTo = normaliseAttribution(input.attributed_to);
   // Tenant scope (mig047): stamp source_id only when provided so the NOT NULL
   // column's DEFAULT 'default' applies otherwise (never pass NULL).
   const sourceId =
@@ -537,6 +566,7 @@ export async function addFact(
     source_id: effectiveSource,
     fact,
     written_by: writtenBy,
+    attributed_to: attributedTo,
   });
   if (onFile !== null) {
     await refreshClaim(storage.engine(), onFile, {
@@ -571,6 +601,7 @@ export async function addFact(
         embeddingJson,
         effectiveSource,
         dedup.candidateLimit,
+        attributedTo,
       );
       const verdict = await classifyFact({ fact, kind }, candidates, {
         ...(dedup.llmFn ? { llmFn: dedup.llmFn } : {}),
@@ -650,6 +681,10 @@ export async function addFact(
   if (sourceSession !== null) {
     cols.push("source_session");
     params.push(sourceSession);
+  }
+  if (attributedTo !== null) {
+    cols.push("attributed_to");
+    params.push(attributedTo);
   }
   if (sourceId !== null) {
     cols.push("source_id");
@@ -948,7 +983,7 @@ export async function listFacts(
             valid_from::text  AS valid_from,
             valid_until::text AS valid_until,
             visibility, superseded_by, consolidated_into,
-            context, source_session,
+            context, source_session, attributed_to,
             forgotten_at::text AS forgotten_at
        FROM entity_facts
        WHERE ${where.length > 0 ? where.join(" AND ") : "1=1"}
@@ -1042,7 +1077,7 @@ export async function listSupersessions(
             valid_from::text  AS valid_from,
             valid_until::text AS valid_until,
             visibility, superseded_by, consolidated_into,
-            context, source_session,
+            context, source_session, attributed_to,
             forgotten_at::text AS forgotten_at
        FROM entity_facts
        WHERE ${where.join(" AND ")}

@@ -287,3 +287,38 @@ describe("context_pack budget", () => {
     expect(high.budget.token_budget).toBe(8000);
   });
 });
+
+describe("context_pack marks what the assistant said", () => {
+  let dir: string;
+  let storage: Storage;
+
+  beforeAll(async () => {
+    ({ dir, storage } = tmpStorage("memrain-context-pack-speaker-"));
+    await storage.init();
+    await putPage(storage, { slug: "projects/numbat", type: "note", title: "Numbat", markdown_body: "n" });
+    // The assistant's claim outranks the operator's on confidence alone.
+    await addFact(storage, { entity_slug: "projects/numbat", fact: "Use pgvector", confidence: 0.95, attributed_to: "assistant" });
+    await addFact(storage, { entity_slug: "projects/numbat", fact: "Numbat ships in May", confidence: 0.6, attributed_to: "user" });
+    await addFact(storage, { entity_slug: "people/quoll", fact: "Try HNSW", confidence: 0.9, attributed_to: "assistant" });
+    await addFact(storage, { entity_slug: "people/quoll", fact: "Quoll owns billing", confidence: 0.5 });
+  });
+
+  afterAll(async () => {
+    await storage.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("labels assistant claims and lists them after the operator's", async () => {
+    const p = await buildContextPack(storage, { slugs: ["projects/numbat"], decay: false });
+    expect(p.cards[0]!.facts.map((f) => f.fact)).toEqual([
+      "Numbat ships in May",
+      "(assistant said) Use pgvector",
+    ]);
+    expect(p.facts.map((f) => f.fact)).toEqual(["Quoll owns billing", "(assistant said) Try HNSW"]);
+  });
+
+  it("still orders them on the redacted shape, which carries no text", async () => {
+    const p = await buildContextPack(storage, { slugs: ["projects/numbat"], decay: false, redact: true });
+    expect(p.cards[0]!.facts.map((f) => Math.round(f.confidence * 100) / 100)).toEqual([0.6, 0.95]);
+  });
+});

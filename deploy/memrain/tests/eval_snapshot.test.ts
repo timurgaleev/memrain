@@ -17,7 +17,7 @@ import { evalTrendDetail } from "../src/commands/doctor.ts";
 import { probeOnce } from "../src/commands/eval-probe.ts";
 import { collectEvalBlind } from "../src/core/advisor/collectors.ts";
 import type { AdvisorContext } from "../src/core/advisor/types.ts";
-import { revertMigration, runMigrations } from "../src/core/migrate.ts";
+import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -195,8 +195,9 @@ describe("migration 121", () => {
       e.query(`INSERT INTO eval_snapshots (status) VALUES ('weird')`),
     ).rejects.toThrow();
 
-    // Later migrations sit on top of 121; only the latest can be reverted.
-    await revertMigration(e, 131);
+    // A down is only defined on top of its own migration.
+    const later = discoverMigrations().map((m) => m.id).filter((id) => id > 121).sort((a, b) => b - a);
+    for (const id of later) await revertMigration(e, id);
     await revertMigration(e, 121);
     const cols = await e.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns
@@ -210,7 +211,7 @@ describe("migration 121", () => {
     expect((await latestEvalSnapshot(e))?.status).toBe("ok");
 
     const again = await runMigrations(e);
-    expect(again.applied.map((m) => m.id)).toEqual([121, 131]);
+    expect(again.applied.map((m) => m.id)).toEqual([121, ...later.reverse()]);
     expect((await latestEvalSnapshot(e))?.status).toBe("ok");
   });
 });

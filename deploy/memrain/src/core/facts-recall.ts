@@ -52,6 +52,8 @@ export interface RecalledFact {
   consolidated_into: number | null;
   context: string | null;
   source_session: string | null;
+  /** mig130 speaker; NULL when not recorded. */
+  attributed_to: string | null;
   /** Tombstone timestamp; NULL for every live row recall returns. */
   forgotten_at: string | null;
 }
@@ -85,7 +87,7 @@ export async function recallFact(
             valid_from::text   AS valid_from,
             valid_until::text  AS valid_until,
             visibility, superseded_by, consolidated_into,
-            context, source_session,
+            context, source_session, attributed_to,
             forgotten_at::text AS forgotten_at
        FROM entity_facts
        WHERE id = $1 AND forgotten_at IS NULL${scopeFilter}`,

@@ -14,16 +14,19 @@ import { withStorage } from "./with-storage.ts";
 import { loadConfig } from "../core/config.ts";
 import { parseConversation } from "../core/conversation-parser.ts";
 import {
+  DEFAULT_EXTRACTION_MAX_TOKENS,
   extractFactsFromTurn,
   writeExtractedFacts,
 } from "../core/facts-extract.ts";
+import { isOwnerSpeaker } from "../core/facts-owner.ts";
+import { isPasteOnly } from "../core/transcripts/pasted-content.ts";
 import { BudgetTracker, BudgetExhausted } from "../core/budget.ts";
 import { resolveFactsModel, type SonnetFn } from "../core/llm/sonnet.ts";
 
 /** Conservative worst-case usage for the pre-flight budget guard: the sanitizer
- *  caps a turn at ~12K chars (~3K input tokens) + the extractor's 800-token
- *  output cap, rounded up. Keeps the cap a near-strict pre-call ceiling. */
-const WORST_CASE_USAGE = { inputTokens: 4000, outputTokens: 800 };
+ *  caps a turn at ~12K chars (~3K input tokens) + the extractor's output cap,
+ *  rounded up. Keeps the cap a near-strict pre-call ceiling. */
+const WORST_CASE_USAGE = { inputTokens: 4000, outputTokens: DEFAULT_EXTRACTION_MAX_TOKENS };
 
 export interface ExtractConvFactsOptions {
   /** Raw transcript text. */
@@ -37,6 +40,8 @@ export interface ExtractConvFactsOptions {
   /** Test seam — inject a fake model; bypasses the live-run env gate. */
   sonnetFn?: SonnetFn;
   modelId?: string;
+  /** Owner entity slug; omitted → MEMRAIN_OWNER_ENTITY. */
+  ownerEntity?: string;
 }
 
 export interface ExtractConvFactsReport {
@@ -108,10 +113,15 @@ export async function runExtractConversationFacts(
   for (const msg of messages) {
     const turn = `${msg.speaker}: ${msg.text}`.trim();
     if (!turn) continue;
+    // A turn that is nothing but a paste carries no words of the speaker's
+    // own; the extractor would see an empty turn, so it is not paid for.
+    if (isPasteOnly(msg.text)) continue;
     const validFrom = turnValidFrom(msg.timestamp);
     const writeOpts = {
       ...(opts.sourceSlug ? { sourceSlug: opts.sourceSlug } : {}),
       ...(validFrom ? { validFrom } : {}),
+      firstParty: isOwnerSpeaker(msg.speaker),
+      ...(opts.ownerEntity ? { ownerEntity: opts.ownerEntity } : {}),
     };
     // Pre-flight: don't dispatch a paid call when the worst-case cost would
     // breach the cap (also stops unpriced models — reserve returns null).
@@ -125,6 +135,7 @@ export async function runExtractConversationFacts(
       result = await extractFactsFromTurn(turn, {
         ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
         modelId,
+        observationDate: validFrom,
         // The hold above sized ONE call against the cap; a truncation retry is
         // a second paid call, so the hold widens to the projected TOTAL or the
         // retry is dropped.

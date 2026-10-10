@@ -269,6 +269,11 @@ that stops making calls once the budget is spent. All default OFF.
 | `MEMRAIN_TAKE_ENSEMBLE_JUDGES` | `3` | Judges per take. | — |
 | `MEMRAIN_FACTS_EXTRACTION` | off | Conversation → structured facts extraction via Sonnet. | **paid (Sonnet)** |
 | `MEMRAIN_FACTS_BUDGET_USD` | `1.0` | USD ceiling for facts extraction. | — |
+| `MEMRAIN_OWNER_ENTITY` | unset | Slug of the brain owner's entity page (e.g. `people/alice`). When set, a first-person claim the owner makes as `User` in a first-party transcript (Claude Code, Codex, ChatGPT, Claude.ai imports under `transcripts/`, or a `User:` turn in `extract-conversation-facts`) and that the extractor left without an entity is stored on this entity instead of being dropped. Diarised speakers ("Speaker 2") never map. Unset: no change. An invalid slug is ignored with one warning. | — |
+| `MEMRAIN_FACTS_JUNK_FILTER` | on (`=0` off) | Drops extracted "facts" that are assistant plan narration ("Let me read the file"), narration about the conversation itself, or a provider spend/rate-limit error sentence. Three anchored patterns; a `commitment` is exempt from the narration one. | free |
+| `MEMRAIN_FACTS_MAX_WINDOWS` | `1` | Extractor calls one long non-transcript page may get. `1` reads the first 12,000 characters, as before. Higher cuts the body at paragraph boundaries into 12,000-character windows, one call each under the same per-write ceiling (`MEMRAIN_FACTS_WRITE_BUDGET_USD`); the first window the ceiling refuses ends the run. Transcript pages are already split by the importer. Clamped to 20. | **paid (Sonnet)** per window |
+| `MEMRAIN_THINK_QUOTE_VERIFY` | on (`=0` off) | Checks every quoted span of four or more words in a `think` answer against the evidence it was given: an exact match stays, a near match is repaired to the evidence's wording, anything else loses its quotes and is marked `[unverified]`. Deterministic, no model call. | free |
+| `MEMRAIN_TIMEZONE` | `UTC` | IANA time zone `think` uses for "today" and for page dates (e.g. `Europe/Berlin`). An invalid name falls back to UTC. | free |
 | `MEMRAIN_FACTS_MODEL` | `eu.anthropic.claude-sonnet-4-6` | Overrides the paid-tier Sonnet model id for the slices above. | **paid (Sonnet)** |
 | `MEMRAIN_THINK_MODEL` | `MEMRAIN_FACTS_MODEL` | Model id for `think` only. Allowlisted. | **paid (Sonnet)** |
 | `MEMRAIN_DRIFT_MODEL` | `MEMRAIN_FACTS_MODEL` | Model id for the drift judge only (the cycle phase that checks whether a take's evidence still holds). Allowlisted. | **paid (Sonnet)** |
@@ -668,6 +673,7 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_AUDIT_DIR` | built-in | Directory for the weekly audit file. | free |
 | `MEMRAIN_WASM_DIR` | built-in | Override path to the tree-sitter WASM parser directory. | free |
 | `MEMRAIN_INGEST_MAX_BYTES` | `1048576` (1 MiB) | Payload cap for `POST /ingest`, counted as the body streams. Allowlisted. | free |
+| `MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES` | `26214400` (25 MiB) | Largest session log `POST /ingest` accepts from `memrain transcripts push` (and the CLI reads); a bigger log is refused whole, never truncated. Allowlisted. | free |
 | `MEMRAIN_TRANSCRIPT_MAX_FILE_BYTES` | `104857600` (100 MiB) | Largest export `memrain transcripts ingest` accepts; a bigger file is refused whole, never truncated. Allowlisted. | free |
 | `MEMRAIN_MAX_FENCES_PER_PAGE` | `100` | Fenced code blocks per markdown page that are chunked as code. | free |
 | `MEMRAIN_BODY_TIMELINE` | on (`=0` off) | Turns `## Timeline` bullets, `### YYYY-MM-DD` headers and `[Source: X, YYYY-MM-DD]` citations in a written page into timeline events. Allowlisted. | free |

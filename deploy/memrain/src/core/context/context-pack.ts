@@ -192,6 +192,20 @@ export async function selectPackEntities(
   return out;
 }
 
+/** An assistant's claim reads as one, so the caller never takes a suggestion
+ *  for something the operator said (mig130 `attributed_to`). */
+function packFactText(f: FactRow): string {
+  return f.attributed_to === "assistant" ? `(assistant said) ${f.fact}` : f.fact;
+}
+
+/** The operator's own claims first; assistant claims after, order otherwise kept. */
+function speakerOrdered(rows: readonly FactRow[]): FactRow[] {
+  return [
+    ...rows.filter((f) => f.attributed_to !== "assistant"),
+    ...rows.filter((f) => f.attributed_to === "assistant"),
+  ];
+}
+
 async function buildCard(
   storage: Storage,
   slug: string,
@@ -214,10 +228,10 @@ async function buildCard(
     slug,
     title: r.page.title ?? null,
     type: r.page.type ?? null,
-    facts: r.facts.map((f) =>
+    facts: speakerOrdered(r.facts).map((f) =>
       opts.redact
         ? { id: f.id, confidence: f.confidence }
-        : { id: f.id, fact: f.fact, confidence: f.confidence },
+        : { id: f.id, fact: packFactText(f), confidence: f.confidence },
     ),
     recent: r.timeline.map((e) =>
       opts.redact ? { date: toDate(e.occurred_at) } : { date: toDate(e.occurred_at), event: e.event },
@@ -300,10 +314,10 @@ export async function buildContextPack(
     }
     if (kept.length >= factsLimit || rows.length < limit || limit >= FACT_FETCH_CAP) break;
   }
-  const brainFacts: PackFact[] = kept.map((f) =>
+  const brainFacts: PackFact[] = speakerOrdered(kept).map((f) =>
     opts.redact
       ? { id: f.id, entity_slug: f.entity_slug, confidence: f.confidence }
-      : { id: f.id, entity_slug: f.entity_slug, fact: f.fact, confidence: f.confidence },
+      : { id: f.id, entity_slug: f.entity_slug, fact: packFactText(f), confidence: f.confidence },
   );
 
   // Charged on what the caller is allowed to see, so the dropped counts say

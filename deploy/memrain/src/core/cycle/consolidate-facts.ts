@@ -162,6 +162,8 @@ export async function consolidateFactsPhase(
         AND btrim(fact) <> ''
         -- dimensional ontology rows have their own read path, not consolidation.
         AND dimension IS NULL
+        -- an assistant's suggestion is not a claim the operator holds (mig130).
+        AND attributed_to IS DISTINCT FROM 'assistant'
       GROUP BY source_id, entity_slug
      HAVING COUNT(*) >= $1
       ORDER BY source_id, entity_slug
@@ -233,6 +235,7 @@ async function consolidateBucket(
         AND btrim(fact) <> ''
         -- dimensional ontology rows have their own read path, not consolidation.
         AND dimension IS NULL
+        AND attributed_to IS DISTINCT FROM 'assistant'
       ORDER BY written_at DESC
       LIMIT $3`,
     [bucket.source_id, bucket.entity_slug, cfg.maxFacts],
