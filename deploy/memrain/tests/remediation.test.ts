@@ -232,6 +232,43 @@ describe("remediation job handler dispatch", () => {
     expect(calls).toEqual(["phase:embed-stale"]);
   });
 
+  it("an aborted attempt runs nothing and throws the abort reason", async () => {
+    const calls: string[] = [];
+    const handler = makeRemediationHandler({
+      reembedSource: async (id) => {
+        calls.push(id);
+      },
+      runCyclePhase: async (p) => {
+        calls.push(p);
+      },
+    });
+    const abort = new AbortController();
+    abort.abort(new Error("lost its claim"));
+    for (const payload of [
+      { action: "reembed-source", source_id: "vault" },
+      { action: "cycle-phase", phase: "embed-stale" },
+    ]) {
+      await expect(handler(payload, { job: {} as never, signal: abort.signal })).rejects.toThrow("lost its claim");
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("passes the signal to the re-embed runner and stops when it aborts mid-run", async () => {
+    const abort = new AbortController();
+    let seen: AbortSignal | undefined;
+    const handler = makeRemediationHandler({
+      reembedSource: async (_id, signal) => {
+        seen = signal;
+        abort.abort(new Error("lost its claim"));
+        return { candidates: 1, embedded: 1 };
+      },
+    });
+    await expect(
+      handler({ action: "reembed-source", source_id: "vault" }, { job: {} as never, signal: abort.signal }),
+    ).rejects.toThrow("lost its claim");
+    expect(seen).toBe(abort.signal);
+  });
+
   it("throws on an unknown action", async () => {
     const handler = makeRemediationHandler({});
     await expect(

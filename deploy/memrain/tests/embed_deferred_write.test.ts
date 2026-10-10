@@ -158,6 +158,46 @@ describe("a write whose embedding fails", () => {
     expect(c.embeddings).toBe(c.chunks);
   });
 
+  it("writes a fenced-code symbol without a vector when its embedding defers", async () => {
+    const text = [
+      "# Fence",
+      "",
+      "Prose about the loader, long enough to be its own chunk of text.",
+      "",
+      "```typescript",
+      "export function loadWidget() { return makeWidget(); }",
+      "```",
+    ].join("\n");
+    // The prose chunk embeds first; the fence symbol's call is throttled.
+    let calls = 0;
+    const embedFn = async () => {
+      if (++calls > 1) throw THROTTLE;
+      return vec();
+    };
+    const r = await indexDocument(storage, { sourcePath: "/vault/fence.md", text }, { embedFn });
+    const fence = await storage.engine().query<{ content: string; embedded: boolean }>(
+      `SELECT c.content, e.chunk_id IS NOT NULL AS embedded
+         FROM documents d JOIN chunks c ON c.document_id = d.id
+         LEFT JOIN embeddings e ON e.chunk_id = c.id
+        WHERE d.source_path = '/vault/fence.md' AND c.chunk_source = 'fenced_code'`,
+    );
+    expect(fence.rows).toHaveLength(1);
+    expect(fence.rows[0]!.content).toContain("loadWidget");
+    expect(fence.rows[0]!.embedded).toBe(false);
+    expect(r.embeddingDeferred).toBeGreaterThanOrEqual(1);
+  });
+
+  it("still fails the write when a fenced-code embedding fails for good", async () => {
+    const text = "# Fence\n\n```typescript\nexport function loadGadget() { return 1; }\n```\n";
+    let calls = 0;
+    const embedFn = async () => {
+      if (++calls > 1) throw ACCESS;
+      return vec();
+    };
+    await expect(indexDocument(storage, { sourcePath: "/vault/fence-hard.md", text }, { embedFn })).rejects.toThrow();
+    expect((await counts("/vault/fence-hard.md")).chunks).toBe(0);
+  });
+
   it("logs a page-mirror-deferred row when a page mirror defers", async () => {
     const v = await mirrorPageVerdict(
       storage,

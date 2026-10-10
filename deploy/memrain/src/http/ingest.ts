@@ -522,9 +522,8 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
         source_id: sourceId,
         client_id: auth.clientId,
         // The job runs later, outside this request: it carries who the paid
-        // calls are for and that client's cap, so the push is capped like a call.
+        // calls are for, so the push is capped like a call (the cap is read live).
         spend_id: auth.spendId ?? auth.clientId,
-        ...(auth.budgetUsdPerDay !== undefined ? { budget_usd_per_day: auth.budgetUsdPerDay } : {}),
         ref,
         sessions: prepared.map((p) => p.session),
         ...(boundPrefixes && boundPrefixes.length > 0 ? { bound_slug_prefixes: boundPrefixes } : {}),
@@ -567,7 +566,7 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
  * event's source so tenancy stamping matches the submitting client.
  */
 export function registerIngestCaptureHandler(storage: Storage): void {
-  registerHandler(INGEST_CAPTURE_JOB_KIND, async (payload) => {
+  registerHandler(INGEST_CAPTURE_JOB_KIND, async (payload, ctx) => {
     const event = payload.event as IngestionEvent | undefined;
     if (!event) throw new Error("ingest_capture: payload.event is required");
     const invalid = validateIngestionEvent(event);
@@ -593,6 +592,8 @@ export function registerIngestCaptureHandler(storage: Storage): void {
       Array.isArray(boundRaw) && boundRaw.every((p) => typeof p === "string")
         ? (boundRaw as string[])
         : undefined;
+    // An abandoned attempt must not write: the one that re-claimed the row will.
+    ctx.signal?.throwIfAborted();
     const result = await dispatchTool(
       storage,
       {
@@ -639,7 +640,7 @@ export function registerIngestCaptureHandler(storage: Storage): void {
   // A pushed session log: the ingress already parsed, fenced and scanned it;
   // the shape and the fence are checked again because the payload has been
   // through the queue.
-  registerHandler(TRANSCRIPTS_INGEST_JOB_KIND, async (payload) => {
+  registerHandler(TRANSCRIPTS_INGEST_JOB_KIND, async (payload, ctx) => {
     const sourceId = payload.source_id;
     if (typeof sourceId !== "string" || sourceId === "") throw new Error("transcripts_ingest: payload.source_id is required");
     const sessions = sessionsFromPayload(payload.sessions);
@@ -654,15 +655,14 @@ export function registerIngestCaptureHandler(storage: Storage): void {
       }
     }
     const ref = typeof payload.ref === "string" ? payload.ref : "push";
-    const run = () => ingestSessions(storage, sessions, { sourceId, ref, remote: true });
+    const run = () =>
+      ingestSessions(storage, sessions, { sourceId, ref, remote: true, ...(ctx.signal ? { signal: ctx.signal } : {}) });
     const spendId = payload.spend_id;
-    const cap = payload.budget_usd_per_day;
+    // The cap is looked up when each paid call books, not taken from the
+    // payload: a cap lowered (or set) after the push must bind the job.
     const result =
       typeof spendId === "string" && spendId !== ""
-        ? await runWithSpendClient(
-            { clientId: spendId, ...(typeof cap === "number" || cap === null ? { capUsd: cap } : {}) },
-            run,
-          )
+        ? await runWithSpendClient({ clientId: spendId }, run)
         : await run();
     return { ...result };
   });

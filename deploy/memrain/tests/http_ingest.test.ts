@@ -266,6 +266,17 @@ describe("ingest_capture job handler", () => {
     expect(page?.markdown_body).toBe("captured with a slug");
   });
 
+  it("an aborted attempt writes no page", async () => {
+    registerIngestCaptureHandler(storage);
+    const handler = getHandler(INGEST_CAPTURE_JOB_KIND)!;
+    const abort = new AbortController();
+    abort.abort(new Error("lost its claim"));
+    await expect(
+      handler({ event: eventFor("abandoned capture"), slug: "notes/abandoned" }, { job: {} as JobRow, signal: abort.signal }),
+    ).rejects.toThrow("lost its claim");
+    expect(await getPage(storage, "notes/abandoned")).toBeNull();
+  });
+
   it("throws on a malformed event (fails the job)", async () => {
     registerIngestCaptureHandler(storage);
     const handler = getHandler(INGEST_CAPTURE_JOB_KIND)!;

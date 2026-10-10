@@ -573,14 +573,6 @@ async function indexDocumentBody(
   await Promise.all(Array.from({ length: workers }, () => worker()));
   if (hardError !== null) throw (hardError as { error: unknown }).error;
 
-  if (deferredChunks > 0) {
-    console.warn(
-      `[memrain] embedding deferred mid-index: ${deferredChunks} chunk(s) of ` +
-        `'${input.sourcePath}' stored WITHOUT embeddings (${deferReason}) — keyword-searchable now; ` +
-        `the cycle's embed-gaps phase or \`memrain embed\` vectorises them later`,
-    );
-  }
-
   const chunkWrites: ChunkWrite[] = parsed.chunks.map((text, i) => {
     // Frontmatter tags only attach to chunk 0 — they're document-level signals,
     // not chunk-level. Body wikilinks/hashtags/dates attach to the chunk they
@@ -599,44 +591,63 @@ async function indexDocumentBody(
   // symbols as extra searchable chunks so a code example ranks as code, not
   // prose. Skipped when the whole doc is already code (symbol-chunked elsewhere)
   // or embeddings are off. Bounded by MEMRAIN_MAX_FENCES_PER_PAGE; a parse failure
-  // on one fence is swallowed so it can never fail the page ingest.
+  // on one fence is swallowed so it can never fail the page ingest. Embedding
+  // follows the prose rules: a passing failure writes the symbol without a
+  // vector for the embed-gaps phase to fill, a failure that would repeat fails
+  // the write.
   if (!skipEmbed && !isCode) {
     for (const fence of extractFencedCode(text)) {
+      let parsedCode: Awaited<ReturnType<typeof chunkCode>>;
       try {
-        const parsedCode = await chunkCode(fence.source, `fence.${fence.lang}`, fence.lang);
-        for (const sym of parsedCode.symbols) {
-          let vec = priorFence.get(sym.body);
-          if (vec) {
-            if (stats) stats.reused++;
-          } else {
-            if (stats) stats.fenceEmbeds++;
-            const release = await acquireWriteEmbedSlot();
-            try {
-              vec = await embed(sym.body, { modelId: model });
-            } finally {
-              release();
-            }
-          }
-          chunkWrites.push({
-            text: sym.body,
-            startLine: sym.startLine,
-            endLine: sym.endLine,
-            embedding: vec,
-            symbolName: sym.name,
-            symbolNameQualified: qualifiedSymbolName(sym.parentSymbolPath, sym.name),
-            symbolType: sym.kind,
-            parentSymbolPath: sym.parentSymbolPath,
-            docComment: sym.docComment,
-            language: fence.lang,
-            chunkSource: "fenced_code",
-            contextualTier: "none",
-            entities: [],
-          });
-        }
+        parsedCode = await chunkCode(fence.source, `fence.${fence.lang}`, fence.lang);
       } catch {
         // parse timeout / grammar error — skip this fence, keep the page.
+        continue;
+      }
+      for (const sym of parsedCode.symbols) {
+        let vec: number[] | null = priorFence.get(sym.body) ?? null;
+        if (vec) {
+          if (stats) stats.reused++;
+        } else if (deferReason !== null) {
+          deferredChunks++;
+        } else {
+          if (stats) stats.fenceEmbeds++;
+          const release = await acquireWriteEmbedSlot();
+          try {
+            vec = await embed(sym.body, { modelId: model });
+          } catch (e) {
+            if (!(isBudgetRefusal(e) || isTransientBedrockError(e))) throw e;
+            deferredChunks++;
+            deferReason ??= e instanceof Error ? e.message.slice(0, 200) : String(e);
+          } finally {
+            release();
+          }
+        }
+        chunkWrites.push({
+          text: sym.body,
+          startLine: sym.startLine,
+          endLine: sym.endLine,
+          embedding: vec,
+          symbolName: sym.name,
+          symbolNameQualified: qualifiedSymbolName(sym.parentSymbolPath, sym.name),
+          symbolType: sym.kind,
+          parentSymbolPath: sym.parentSymbolPath,
+          docComment: sym.docComment,
+          language: fence.lang,
+          chunkSource: "fenced_code",
+          contextualTier: "none",
+          entities: [],
+        });
       }
     }
+  }
+
+  if (deferredChunks > 0) {
+    console.warn(
+      `[memrain] embedding deferred mid-index: ${deferredChunks} chunk(s) of ` +
+        `'${input.sourcePath}' stored WITHOUT embeddings (${deferReason}) — keyword-searchable now; ` +
+        `the cycle's embed-gaps phase or \`memrain embed\` vectorises them later`,
+    );
   }
 
   if (stats) stats.chunks = parsed.chunks.length;

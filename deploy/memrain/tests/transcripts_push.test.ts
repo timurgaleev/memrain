@@ -119,7 +119,7 @@ describe("POST /ingest transcript push", () => {
     expect((await handleIngestRoute(pushReq(claudeRaw), deps(writeAuth))).status).toBe(202);
   });
 
-  it("runs the job under the pushing client's spend id and cap, mirrored as a remote write", async () => {
+  it("runs the job under the pushing client's spend id, mirrored as a remote write, with the cap read live", async () => {
     const res = await handleIngestRoute(pushReq(claudeRaw), deps({ ...writeAuth, spendId: "grant-9", budgetUsdPerDay: 0.25 }));
     const jobId = String(((await res.json()) as Record<string, unknown>).job_id);
     const seen: Array<{ spend: unknown; remote: boolean }> = [];
@@ -132,7 +132,24 @@ describe("POST /ingest transcript push", () => {
     } finally {
       spy.mockRestore();
     }
-    expect(seen).toEqual([{ spend: { clientId: "grant-9", capUsd: 0.25 }, remote: true }]);
+    // No cap rides the job: a cap changed after the push must bind it, so the
+    // paid calls look it up when they book.
+    expect(seen).toEqual([{ spend: { clientId: "grant-9" }, remote: true }]);
+    const payload = JSON.parse(String((await jobs())[0]!.payload)) as Record<string, unknown>;
+    expect("budget_usd_per_day" in payload).toBe(false);
+  });
+
+  it("an aborted transcripts_ingest attempt writes no page", async () => {
+    const res = await handleIngestRoute(pushReq(claudeRaw), deps(writeAuth));
+    const jobId = String(((await res.json()) as Record<string, unknown>).job_id);
+    registerIngestCaptureHandler(storage);
+    const row = await storage.engine().query<JobRow>(`SELECT * FROM jobs WHERE id = $1`, [jobId]);
+    const job = row.rows[0]!;
+    const payload = (typeof job.payload === "string" ? JSON.parse(job.payload) : job.payload) as Record<string, unknown>;
+    const abort = new AbortController();
+    abort.abort(new Error("lost its claim"));
+    await expect(getHandler(TRANSCRIPTS_INGEST_JOB_KIND)!(payload, { job, signal: abort.signal })).rejects.toThrow("lost its claim");
+    expect((await storage.engine().query(`SELECT 1 FROM pages`)).rows).toHaveLength(0);
   });
 
   it("refuses an unreadable log without echoing it", async () => {

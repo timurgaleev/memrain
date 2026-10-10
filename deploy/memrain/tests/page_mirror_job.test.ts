@@ -18,7 +18,8 @@ import { putPage } from "../src/core/pages.ts";
 import { mirrorPage } from "../src/core/page-index.ts";
 import { Queue } from "../src/core/jobs/queue.ts";
 import { Worker } from "../src/core/jobs/worker.ts";
-import { _resetHandlersForTesting } from "../src/core/jobs/handlers.ts";
+import { _resetHandlersForTesting, getHandler } from "../src/core/jobs/handlers.ts";
+import type { JobRow } from "../src/core/jobs/types.ts";
 import { registerPageMirrorHandler } from "../src/core/jobs/page-mirror-handler.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
@@ -248,6 +249,35 @@ describe("the page_mirror job acts for one write", () => {
       `SELECT 1 FROM ingest_log WHERE source_type = 'page-mirror-failed' AND source_ref = 'notes/failing'`,
     );
     expect(rows.rows).toHaveLength(1);
+  });
+});
+
+describe("an abandoned page_mirror attempt", () => {
+  const job = { retryCount: 0, maxRetries: 3 } as JobRow;
+
+  it("writes no mirror once its attempt is aborted", async () => {
+    await putPage(storage, { slug: "notes/abandoned", markdown_body: body("voles") });
+    const abort = new AbortController();
+    abort.abort(new Error("lost its claim"));
+    await expect(
+      getHandler("page_mirror")!({ slug: "notes/abandoned", remote: false }, { job, signal: abort.signal }),
+    ).rejects.toThrow("lost its claim");
+    expect(await mirror("page://notes/abandoned")).toBeNull();
+  });
+
+  it("does not report success when the attempt is aborted while it embeds", async () => {
+    _resetHandlersForTesting();
+    const abort = new AbortController();
+    registerPageMirrorHandler(storage, {
+      embedFn: async (t: string) => {
+        abort.abort(new Error("lost its claim"));
+        return deterministicEmbed(t);
+      },
+    });
+    await putPage(storage, { slug: "notes/midway", markdown_body: body("shrews") });
+    await expect(
+      getHandler("page_mirror")!({ slug: "notes/midway", remote: false }, { job, signal: abort.signal }),
+    ).rejects.toThrow("lost its claim");
   });
 });
 

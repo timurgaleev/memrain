@@ -3,7 +3,7 @@
  * plan and its hash, and a real run that refuses unless the plan still hashes
  * the same — so an operator purges exactly the set they reviewed.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -117,6 +117,38 @@ describe("purgeDeletedPages dry run and plan hash", () => {
     const b = { slug: "notes/b", deleted_at: "t2" };
     expect(purgePlanHash([a, b])).toBe(purgePlanHash([b, a]));
     expect(purgePlanHash([a])).not.toBe(purgePlanHash([{ slug: "notes/a", deleted_at: "t3" }]));
+  });
+
+  it("the per-page fallback keeps a reviewed page that was restored and deleted again", async () => {
+    await deletedPage("notes/a");
+    await deletedPage("notes/b");
+    const dry = await purgeDeletedPages(storage.engine(), 72, undefined, { dryRun: true });
+    const engine = storage.engine();
+    const realQuery = engine.query.bind(engine);
+    let failedFastPath = false;
+    const spy = spyOn(engine, "query").mockImplementation((async (sql: string, params?: unknown[]) => {
+      // A row that does not cascade blocks the set-based DELETE.
+      if (!failedFastPath && sql.startsWith("DELETE FROM pages WHERE")) {
+        failedFastPath = true;
+        throw Object.assign(new Error("fk"), { code: "23503" });
+      }
+      const r = await realQuery(sql, params);
+      // Between the fallback's scan and its per-page DELETE, notes/a is
+      // restored and deleted again (still past the cutoff).
+      if (failedFastPath && sql.startsWith("SELECT slug")) {
+        await realQuery(`UPDATE pages SET deleted_at = deleted_at - interval '1 hour' WHERE slug = 'notes/a'`);
+      }
+      return r;
+    }) as typeof engine.query);
+    let r: Awaited<ReturnType<typeof purgeDeletedPages>>;
+    try {
+      r = await purgeDeletedPages(engine, 72, undefined, { expectedPlanHash: dry.plan_hash! });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(failedFastPath).toBe(true);
+    expect(r.slugs).toEqual(["notes/b"]);
+    expect(await remaining()).toEqual(["notes/a"]);
   });
 
   it("the plan respects the source scope", async () => {

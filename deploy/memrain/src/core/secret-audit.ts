@@ -82,6 +82,11 @@ export interface SecretAuditResult {
   hits_truncated: boolean;
   /** Rows an `apply` could not rewrite, by store and ref (no text). */
   errors: string[];
+  /**
+   * JSON fields where a redacted object key landed on a key the object already
+   * had. Both values are kept: the redacted one moves to a `~2`, `~3`... suffix.
+   */
+  key_collisions: Array<{ kind: AuditStore; ref: string; field: string }>;
 }
 
 export interface SecretAuditOptions {
@@ -200,6 +205,8 @@ function findingLines(before: string, after: string, findings: SecretFinding[]):
 interface FieldScan {
   value: unknown;
   hits: Array<{ field: string; secret_kind: string; fingerprint: string; line: number | null }>;
+  /** Redacted object keys that had to be suffixed to keep another key's value. */
+  keyCollisions?: number;
 }
 
 function scanText(text: string, field: string, echo: EchoDictionary | false, allow: ReadonlySet<string>, highEntropy: boolean): FieldScan {
@@ -214,6 +221,7 @@ function scanText(text: string, field: string, echo: EchoDictionary | false, all
 
 function scanJson(value: unknown, field: string, echo: EchoDictionary | false, allow: ReadonlySet<string>, highEntropy: boolean): FieldScan {
   const hits: FieldScan["hits"] = [];
+  let keyCollisions = 0;
   const walk = (v: unknown): unknown => {
     if (typeof v === "string") {
       const r = scanSecrets(v, allow, { echo, highEntropy });
@@ -222,14 +230,32 @@ function scanJson(value: unknown, field: string, echo: EchoDictionary | false, a
     }
     if (Array.isArray(v)) return v.map(walk);
     if (v !== null && typeof v === "object") {
+      const entries = Object.entries(v).map(([k, inner]) => {
+        const key = walk(k) as string;
+        return { key, redacted: key !== k, value: walk(inner) };
+      });
+      // Keys left as they were go in first, so a redacted key can never take
+      // another key's slot: a redacted key that lands on a taken name gets the
+      // first free `~n` suffix, and both values survive.
       const out: Record<string, unknown> = {};
-      for (const [k, inner] of Object.entries(v)) out[walk(k) as string] = walk(inner);
+      for (const e of entries) if (!e.redacted) out[e.key] = e.value;
+      for (const e of entries) {
+        if (!e.redacted) continue;
+        let key = e.key;
+        if (Object.hasOwn(out, key)) {
+          keyCollisions += 1;
+          let n = 2;
+          while (Object.hasOwn(out, `${e.key}~${n}`)) n += 1;
+          key = `${e.key}~${n}`;
+        }
+        out[key] = e.value;
+      }
       return out;
     }
     return v;
   };
   const out = walk(value);
-  return { value: hits.length > 0 ? out : value, hits };
+  return { value: hits.length > 0 ? out : value, hits, ...(keyCollisions > 0 ? { keyCollisions } : {}) };
 }
 
 function parseJson(v: unknown): unknown {
@@ -283,14 +309,18 @@ async function fetchBatch(engine: Engine, spec: StoreSpec, cursor: unknown[] | n
   return r.rows;
 }
 
-/** Rewrite one row with its redacted fields. Returns false when the row moved on since the scan. */
+/**
+ * Rewrite one row with its redacted fields: `rewritten`, `moved` when the row
+ * changed since the scan, or `mirror_failed` when a live page got its new
+ * version but its search mirror (which still holds the old text) did not.
+ */
 async function applyRow(
   storage: Storage,
   spec: StoreSpec,
   row: Row,
   next: Record<string, unknown>,
   opts: SecretAuditOptions,
-): Promise<boolean> {
+): Promise<"rewritten" | "moved" | "mirror_failed"> {
   const engine = storage.engine();
   if (spec.store === "pages" && row.deleted_at === null) {
     const put = await putPage(storage, {
@@ -304,7 +334,7 @@ async function applyRow(
       written_by: "secrets-audit",
       expectedVersion: Number(row.version_n),
     });
-    await mirrorPage(
+    const mirrored = await mirrorPage(
       storage,
       {
         slug: String(row.slug),
@@ -315,7 +345,7 @@ async function applyRow(
       },
       { remote: false, timingLabel: "secrets-audit", ...(opts.mirror ?? {}) },
     );
-    return true;
+    return mirrored ? "rewritten" : "mirror_failed";
   }
   const fields = Object.keys(next);
   const params: unknown[] = [];
@@ -348,11 +378,11 @@ async function applyRow(
     return engine.transaction(async (tx) => {
       await lockPageSlugs(tx, String(row.slug));
       const r = await tx.query<{ ok: number }>(`${sql} RETURNING 1 AS ok`, params);
-      return r.rows.length > 0;
+      return r.rows.length > 0 ? "rewritten" : "moved";
     });
   }
   const r = await engine.query<{ ok: number }>(`${sql} RETURNING 1 AS ok`, params);
-  return r.rows.length > 0;
+  return r.rows.length > 0 ? "rewritten" : "moved";
 }
 
 /**
@@ -397,6 +427,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
     hits: [],
     hits_truncated: false,
     errors: [],
+    key_collisions: [],
   };
 
   for (const store of kinds) {
@@ -412,6 +443,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
         const echo: EchoDictionary | false = echoOn ? new Map() : false;
         const next: Record<string, unknown> = {};
         const hits: FieldScan["hits"] = [];
+        const collidedFields: string[] = [];
         // Echo-dictionary size when each text field was scanned: a field
         // scanned before a later field claimed a value is swept again below.
         const echoSizeAt = new Map<string, number>();
@@ -429,6 +461,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
           const s = scanJson(v, f, echo, allow, highEntropy);
           if (s.hits.length > 0) next[f] = s.value;
           hits.push(...s.hits);
+          if (s.keyCollisions) collidedFields.push(f);
         }
         if (echo) {
           for (const [f, size] of echoSizeAt) {
@@ -446,6 +479,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
         result.hits_total += hits.length;
         result.by_kind[store] = (result.by_kind[store] ?? 0) + hits.length;
         if (store === "chunks" && row.is_code === true) result.code_chunks_affected += 1;
+        for (const field of collidedFields) result.key_collisions.push({ kind: store, ref, field });
         for (const h of hits) {
           result.by_secret_kind[h.secret_kind] = (result.by_secret_kind[h.secret_kind] ?? 0) + 1;
           if (result.hits.length < limit) result.hits.push({ kind: store, ref, ...h });
@@ -453,8 +487,12 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
         }
         if (!opts.apply) continue;
         try {
-          if (await applyRow(storage, spec, row, next, opts)) {
-            result.rows_rewritten += 1;
+          const outcome = await applyRow(storage, spec, row, next, opts);
+          if (outcome !== "moved") {
+            // A failed mirror still wrote the redacted page version, but its
+            // search copy holds the old text: an error, not a rewrite.
+            if (outcome === "rewritten") result.rows_rewritten += 1;
+            else result.errors.push(`${store} ${ref}: rewritten, but its search mirror failed; run the audit again`);
             await logIngest(engine, {
               source_type: "secret-audit-redacted",
               source_ref: `${store}:${ref}`,

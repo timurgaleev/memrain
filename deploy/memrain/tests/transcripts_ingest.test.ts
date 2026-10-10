@@ -101,6 +101,22 @@ describe("ingestSessions", () => {
     expect(await count(storage, `SELECT COUNT(*)::int AS n FROM ingest_log`)).toBe(logs);
   });
 
+  it("stops between parts once its signal aborts", async () => {
+    const abort = new AbortController();
+    const aborting = async (t: string) => {
+      abort.abort(new Error("lost its claim"));
+      return embedFn(t);
+    };
+    await expect(
+      ingestSessions(storage, [session("cut", 60)], { sourceId: "default", embedFn: aborting, signal: abort.signal }),
+    ).rejects.toThrow("lost its claim");
+    expect(await liveParts(storage, "transcripts/chatgpt/cut")).toHaveLength(1);
+    await expect(
+      ingestSessions(storage, [session("never", 60)], { sourceId: "default", embedFn, signal: abort.signal }),
+    ).rejects.toThrow("lost its claim");
+    expect(await liveParts(storage, "transcripts/chatgpt/never")).toHaveLength(0);
+  });
+
   it("soft-deletes the parts a shrunken session no longer has, only in its own source", async () => {
     const long = session("shrink", 80);
     const first = await ingestSessions(storage, [long], { sourceId: "default", embedFn });

@@ -89,6 +89,12 @@ export interface IngestTranscriptsOptions {
   remote?: boolean;
   /** Called for every part written or rewritten (not unchanged, not deleted). */
   onPartWritten?: (part: { slug: string; body: string; sourceId: string }) => void;
+  /**
+   * Checked before each session and each part write: once aborted (a job that
+   * lost its lease or timed out), the run throws the signal's reason instead of
+   * writing on alongside the attempt that took over.
+   */
+  signal?: AbortSignal;
 }
 
 export interface IngestTranscriptsResult {
@@ -167,6 +173,7 @@ async function writeSession(
   let sessionChanged = false;
   try {
     for (const part of prepared.parts) {
+      opts.signal?.throwIfAborted();
       const put = await putPage(storage, {
         slug: part.slug,
         type: TRANSCRIPT_PAGE_TYPE,
@@ -204,6 +211,7 @@ async function writeSession(
     }
 
     for (const slug of await staleParts(storage, prepared.base, sourceId, prepared.parts.length)) {
+      opts.signal?.throwIfAborted();
       const del = await deletePage(storage, slug, WRITTEN_BY, sourceId);
       if (del.already_deleted) continue;
       await removePageFromSearch(storage, slug, sourceId);
@@ -256,6 +264,7 @@ export async function ingestSessions(
   const touched: string[] = [];
 
   for (const session of sessions) {
+    opts.signal?.throwIfAborted();
     let prepared: PreparedSession;
     try {
       prepared = prepareSession(session);

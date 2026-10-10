@@ -147,6 +147,18 @@ describe("reembed-source remediation through the real worker", () => {
     expect(again?.result).toMatchObject({ candidates: 0, embedded: 0, failed: 0 });
   });
 
+  it("an aborted backfill stops before its next page", async () => {
+    const abort = new AbortController();
+    const embed = (t: string) => {
+      abort.abort(new Error("lost its claim"));
+      return detEmbed(t);
+    };
+    await expect(
+      runEmbedBackfill(storage.engine(), { sourceId: "alpha", embed, pageSize: 1, concurrency: 1, signal: abort.signal }),
+    ).rejects.toThrow("lost its claim");
+    expect((await unembeddedChunks("doc_alpha_1")) + (await unembeddedChunks("doc_alpha_2"))).toBe(ALPHA_EMBEDDABLE - 1);
+  });
+
   it("fails instead of succeeding when nothing could be embedded", async () => {
     registerRemediationHandlers(storage, {
       embed: () => Promise.reject(new Error("embedder down")),

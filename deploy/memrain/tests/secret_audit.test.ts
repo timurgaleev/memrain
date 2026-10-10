@@ -16,7 +16,8 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { putPage } from "../src/core/pages.ts";
 import { auditStoredSecrets, latestSecretAuditRun } from "../src/core/secret-audit.ts";
-import { SECRET_SCAN_VERSION, fingerprintSecret } from "../src/core/secret-scan.ts";
+import { SECRET_SCAN_VERSION, fingerprintSecret, scanSecrets } from "../src/core/secret-scan.ts";
+import * as pageIndex from "../src/core/page-index.ts";
 import { runSecretsAudit } from "../src/commands/secrets.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
@@ -206,6 +207,38 @@ describe("auditStoredSecrets apply", () => {
       spy.mockRestore();
     }
     expect(await scalar(`SELECT fact AS v FROM entity_facts`)).toBe("rewritten by someone else");
+  });
+});
+
+describe("auditStoredSecrets apply, partial failures", () => {
+  it("counts a page whose search mirror failed as an error, not a rewrite", async () => {
+    process.env.MEMRAIN_SECRET_SCAN_DISPOSITION = "flag";
+    await putPage(storage, { slug: "notes/leak", type: "note", markdown_body: `the token is ${TOKEN}` });
+    delete process.env.MEMRAIN_SECRET_SCAN_DISPOSITION;
+    const spy = spyOn(pageIndex, "mirrorPage").mockImplementation(async () => false);
+    let r: Awaited<ReturnType<typeof auditStoredSecrets>>;
+    try {
+      r = await auditStoredSecrets(storage, { kinds: ["pages"], apply: true, mirror });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(r.rows_rewritten).toBe(0);
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0]).toContain("search mirror failed");
+    expect(JSON.stringify(r)).not.toContain(TOKEN);
+  });
+
+  it("keeps both values when a redacted key lands on an existing key, and reports it", async () => {
+    const marker = scanSecrets(AWS).text;
+    expect(marker).not.toBe(AWS);
+    await storage.engine().query(`INSERT INTO raw_data (slug, source, data) VALUES ('people/a', 'test', $1::text::jsonb)`, [
+      JSON.stringify({ [marker]: "already redacted", [AWS]: "live value" }),
+    ]);
+    const r = await auditStoredSecrets(storage, { kinds: ["raw_data"], apply: true });
+    expect(r.errors).toEqual([]);
+    expect(r.key_collisions).toEqual([{ kind: "raw_data", ref: expect.any(String), field: "data" }]);
+    const data = (await scalar(`SELECT data AS v FROM raw_data`)) as Record<string, unknown>;
+    expect(data).toEqual({ [marker]: "already redacted", [`${marker}~2`]: "live value" });
   });
 });
 

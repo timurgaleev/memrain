@@ -18,7 +18,8 @@
  * re-opens it. A page with no `extracted` row yet still counts as covered when
  * it has a fact authored by the on-write writer (`facts-extract`) keyed to its
  * (slug, source_id) — the coverage pages had before the watermark existed —
- * until a backfill run writes a watermark for it. Malformed, truncated, budget
+ * until a backfill run writes a watermark for it, and only while the page has
+ * not been updated since the newest such fact. Malformed, truncated, budget
  * and model-error outcomes, and extracted facts that failed to write, write no
  * row and stay retryable.
  *
@@ -134,14 +135,17 @@ export async function conversationFactsBackfillPhase(
         AND p.slug NOT LIKE 'reflections/%'
         AND p.slug NOT LIKE 'patterns/%'
         AND NOT (
-          EXISTS (
-            -- Match on (source_slug, source_id): a same-slug page in ANOTHER
-            -- source must not mask THIS page's un-extracted facts (pages are
-            -- keyed by (slug, source_id), so slug alone over-skips cross-source).
-            SELECT 1 FROM entity_facts f
-             WHERE f.source_slug = p.slug
-               AND f.source_id = p.source_id
-               AND f.written_by = $2
+          -- Match on (source_slug, source_id): a same-slug page in ANOTHER
+          -- source must not mask THIS page's un-extracted facts (pages are
+          -- keyed by (slug, source_id), so slug alone over-skips cross-source).
+          -- Only a body no newer than the newest such fact counts as covered:
+          -- an edit since then re-opens the page.
+          COALESCE(
+            (SELECT max(f.written_at) FROM entity_facts f
+              WHERE f.source_slug = p.slug
+                AND f.source_id = p.source_id
+                AND f.written_by = $2) >= p.updated_at,
+            false
           )
           -- Once a run has watermarked the page, only the watermark below
           -- decides; an on-write fact from an older body must not hide an edit.

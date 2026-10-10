@@ -624,6 +624,11 @@ function startRun<T>(start: () => Promise<T>): Promise<T> {
  * Settle with `work`, or reject with the abort reason (`WorkerShutdownError`
  * when it is not an error) once `signal` aborts. Like a timeout, the abandoned
  * work keeps running; its late settlement is swallowed.
+ *
+ * Stopping it is the handler's job: the built-in handlers check `ctx.signal`
+ * between units of work and throw its reason. A handler that never looks at
+ * the signal runs on after a lost lease, so it can write alongside the attempt
+ * that re-claimed the row; such a handler must be idempotent.
  */
 function runUntilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   work.catch(() => {});

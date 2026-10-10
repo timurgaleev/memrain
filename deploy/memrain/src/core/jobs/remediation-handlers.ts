@@ -33,7 +33,7 @@ import { runEmbedBackfill } from "../embed-backfill.ts";
 /** Injectable runners so the handler never hard-couples to cycle/embed code. */
 export interface RemediationDeps {
   /** Re-embed a source that is stuck at 0% coverage. */
-  reembedSource?: (sourceId: string) => Promise<Record<string, unknown> | void>;
+  reembedSource?: (sourceId: string, signal?: AbortSignal) => Promise<Record<string, unknown> | void>;
   /** Re-run one maintenance-cycle phase. */
   runCyclePhase?: (phase: string) => Promise<Record<string, unknown> | void>;
   /** Embedder seam for the default re-embed runner; production uses Titan. */
@@ -45,7 +45,8 @@ export interface RemediationDeps {
  * deps and assert the correct runner fires for each `payload.action`.
  */
 export function makeRemediationHandler(deps: RemediationDeps = {}): JobHandler {
-  return async (payload) => {
+  return async (payload, ctx) => {
+    const signal = ctx?.signal;
     const action = typeof payload["action"] === "string" ? payload["action"] : "";
     switch (action) {
       case "reembed-source": {
@@ -58,7 +59,9 @@ export function makeRemediationHandler(deps: RemediationDeps = {}): JobHandler {
             "remediation reembed-source: no runner (register the handler with storage)",
           );
         }
-        const out = (await deps.reembedSource(sourceId)) ?? {};
+        signal?.throwIfAborted();
+        const out = (await deps.reembedSource(sourceId, signal)) ?? {};
+        signal?.throwIfAborted();
         const candidates = out["candidates"];
         // `remaining` is the recount after the run: another embedder (the
         // indexer, a concurrent backfill) may have filled the chunks this run
@@ -81,7 +84,9 @@ export function makeRemediationHandler(deps: RemediationDeps = {}): JobHandler {
           throw new UnrecoverableJobError("remediation cycle-phase: missing phase");
         }
         const run = deps.runCyclePhase ?? defaultRunCyclePhase;
+        signal?.throwIfAborted();
         const out = await run(phase);
+        signal?.throwIfAborted();
         return { action, phase, ...(out ?? {}) };
       }
       default:
@@ -107,8 +112,8 @@ export function registerRemediationHandlers(
 function makeBackfillReembed(
   engine: Engine,
   embed: RemediationDeps["embed"],
-): (sourceId: string) => Promise<Record<string, unknown>> {
-  return async (sourceId) => {
+): (sourceId: string, signal?: AbortSignal) => Promise<Record<string, unknown>> {
+  return async (sourceId, signal) => {
     // A pin that matches no live document (a display label such as
     // '(unclassified)', or a source removed since the plan) would report
     // candidates=0 and pass as a success that fixed nothing.
@@ -126,6 +131,7 @@ function makeBackfillReembed(
       // gap-fill into a delete-and-re-embed.
       reembedOnSignatureChange: false,
       ...(embed ? { embed } : {}),
+      ...(signal ? { signal } : {}),
     });
     const out: Record<string, unknown> = {
       candidates: r.candidates,
@@ -134,6 +140,7 @@ function makeBackfillReembed(
       last_id: r.lastId,
     };
     if (r.candidates > 0 && r.embedded === 0) {
+      signal?.throwIfAborted();
       const left = await runEmbedBackfill(engine, {
         sourceId,
         reembedOnSignatureChange: false,

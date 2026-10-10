@@ -117,21 +117,23 @@ export async function purgeDeletedPages(
   // row that does not cascade: one DELETE per page so the stuck ones are
   // reported and the rest still go. Each statement commits on its own — this
   // must not run inside a transaction, where the first violation aborts it.
-  const expired = await engine.query<{ slug: string }>(
-    `SELECT slug FROM pages WHERE ${expiredWhere} ORDER BY slug`,
+  const expired = await engine.query<{ slug: string; deleted_at: string }>(
+    `SELECT slug, deleted_at::text AS deleted_at FROM pages WHERE ${expiredWhere} ORDER BY slug`,
     params,
   );
   const slugs: string[] = [];
   const blocked: Array<{ slug: string; reason: string }> = [];
-  for (const { slug } of expired.rows) {
+  for (const { slug, deleted_at: deletedAt } of expired.rows) {
     try {
-      // Same predicate again: a restore or a move between the scan and this row
-      // keeps the page.
-      const rowParams: unknown[] = [String(olderThanHours), slug];
+      // Same predicate again, pinned to the deletion the scan saw (and so to
+      // the reviewed plan): a restore, a move, or a restore and a new delete
+      // between the scan and this row keeps the page.
+      const rowParams: unknown[] = [String(olderThanHours), slug, deletedAt];
       const rowFilter = andSourceScope("source_id", sourceIds, rowParams);
       const r = await engine.query<{ slug: string }>(
         `DELETE FROM pages
           WHERE slug = $2 AND deleted_at IS NOT NULL
+            AND deleted_at::text = $3
             AND deleted_at < NOW() - ($1 || ' hours')::interval${rowFilter}
           RETURNING slug`,
         rowParams,

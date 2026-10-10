@@ -48,6 +48,9 @@ function printHuman(r: SecretAuditResult): void {
   if (r.hits_truncated) console.log(`  … more hits not listed (raise --limit)`);
   if (r.applied) console.log(`Rewrote ${r.rows_rewritten} row(s).`);
   for (const e of r.errors) console.log(`  not rewritten: ${e}`);
+  for (const c of r.key_collisions) {
+    console.log(`  ${c.kind} ${c.ref} ${c.field}: a redacted key matched an existing key; kept both (suffix ~n)`);
+  }
   if (!r.applied && r.hits_total > 0) {
     console.log("Rotate every credential listed here first, then re-run with --apply --yes to redact the stored copies.");
   }

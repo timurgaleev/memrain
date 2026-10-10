@@ -89,6 +89,8 @@ const THROTTLE_BASE_DELAY_MS = 250;
 export interface EmbedBackfillOptions {
   /** Max chunks to embed this run. Default: no cap (all candidates). */
   limit?: number;
+  /** Checked before each page: an aborted run throws the signal's reason. */
+  signal?: AbortSignal;
   /** Count candidates only — never write. */
   dryRun?: boolean;
   /** Embedding model id recorded on each row. */
@@ -629,6 +631,7 @@ async function runEmbedBackfillBody(
   // The cap (`opts.limit`) bounds the total rows processed across pages; the
   // `em.chunk_id IS NULL` predicate + forward-only cursor keep it re-entrant.
   for (;;) {
+    opts.signal?.throwIfAborted();
     if (opts.limit !== undefined && opts.limit > 0 && processed >= opts.limit) break;
     const remaining =
       opts.limit !== undefined && opts.limit > 0 ? opts.limit - processed : undefined;

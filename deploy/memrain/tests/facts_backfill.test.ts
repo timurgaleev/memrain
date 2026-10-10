@@ -251,6 +251,16 @@ describe("zero-yield memo (facts_backfill_scans)", () => {
     expect(r.pagesConsidered).toBe(0);
   });
 
+  it("re-covers an unwatermarked page edited after its newest on-write fact", async () => {
+    await putPage(storage, { slug: "notes/alice-sync", type: "note", markdown_body: LONG_BODY });
+    await storage.engine().query(
+      `INSERT INTO entity_facts (entity_slug, fact, source_slug, source_id, written_by, written_at)
+       VALUES ('people/alice', 'prefers tea', 'notes/alice-sync', 'default', 'facts-extract', NOW() - interval '1 hour')`,
+    );
+    const r = await conversationFactsBackfillPhase(storage, { sonnetFn: fakeSonnet() });
+    expect(r.pagesConsidered).toBe(1);
+  });
+
   it("a memo from another extractor version does not suppress the page", async () => {
     const put = await putPage(storage, { slug: "notes/quiet", type: "note", markdown_body: LONG_BODY });
     await storage.engine().query(

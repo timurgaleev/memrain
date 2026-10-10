@@ -9,6 +9,7 @@ import {
   INGEST_CAPTURE_JOB_KIND,
   PAGE_MIRROR_JOB_KIND,
   REMEDIATION_JOB_KIND,
+  TRANSCRIPTS_INGEST_JOB_KIND,
 } from "./kinds.ts";
 
 export const KIND_DEFAULT_TIMEOUT_MS: Readonly<Record<string, number>> = {
@@ -16,6 +17,7 @@ export const KIND_DEFAULT_TIMEOUT_MS: Readonly<Record<string, number>> = {
   [PAGE_MIRROR_JOB_KIND]: 10 * 60_000,
   [CHRONICLE_EXTRACT_JOB_KIND]: 10 * 60_000,
   [INGEST_CAPTURE_JOB_KIND]: 5 * 60_000,
+  [TRANSCRIPTS_INGEST_JOB_KIND]: 15 * 60_000,
 };
 
 /** The built-in cap for `kind`, or undefined when it has none. */

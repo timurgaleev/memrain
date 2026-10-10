@@ -15,6 +15,7 @@ import { MAX_DEFERS, Worker } from "../src/core/jobs/worker.ts";
 import { UnrecoverableJobError } from "../src/core/jobs/types.ts";
 import {
   _resetHandlersForTesting,
+  BUILTIN_JOB_KINDS,
   registerHandler,
 } from "../src/core/jobs/handlers.ts";
 import {
@@ -312,6 +313,11 @@ describe("kind defaults", () => {
     expect(kindDefaultTimeoutMs("ingest_capture")).toBe(5 * 60_000);
     expect(kindDefaultTimeoutMs("subagent")).toBeUndefined();
     expect(kindDefaultTimeoutMs("toString")).toBeUndefined();
+  });
+
+  it("cap every built-in kind, so a hung handler cannot hold its lease forever", () => {
+    expect(kindDefaultTimeoutMs("transcripts_ingest")).toBe(15 * 60_000);
+    for (const kind of BUILTIN_JOB_KINDS) expect(kindDefaultTimeoutMs(kind)).toBeGreaterThan(0);
   });
 });
 
