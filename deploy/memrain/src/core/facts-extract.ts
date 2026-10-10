@@ -132,8 +132,10 @@ const EXTRACTOR_SYSTEM = EXTRACTOR_BASE + ATTRIBUTION_BLOCK + DATE_GROUNDING_BLO
  */
 // The first-person arms ("I'll …", "I'm going to …") are also the shape of a
 // real commitment, so this one pattern is skipped for kind `commitment`.
+// "Let's" counts only before a narration verb: "Let's Encrypt certs expire …"
+// is a claim about a product, not the assistant narrating its plan.
 const PLAN_NARRATION_PATTERN =
-  /^["'«]?(?:now,?\s+)?(?:let me\b|let's\b|i(?:'| wi)ll\b|i am going to\b|i'm going to\b|next,? i\b|about to\b|proceeding to\b)/i;
+  /^["'«]?(?:now,?\s+)?(?:let me\b|let's (?:read|check|look|start|try|see|run|open|find|search)\b|i(?:'| wi)ll\b|i am going to\b|i'm going to\b|next,? i\b|about to\b|proceeding to\b)/i;
 
 // The fact IS the error sentence (optionally led by an error/status token).
 // A fact that merely mentions a limit ("Alice wants a monthly spend limit of
@@ -630,11 +632,6 @@ export async function writeExtractedFacts(
      */
     validFrom?: string;
     /**
-     * When the source text was written (`YYYY-MM-DD`): the last-resort
-     * `valid_from` behind a model-stated date and `validFrom`.
-     */
-    observationDate?: string | null;
-    /**
      * The batch comes from the brain owner's own side of a first-party
      * transcript. With MEMRAIN_OWNER_ENTITY set, a user-attributed claim the
      * model left without an entity lands on the owner's entity; unset, this
@@ -700,10 +697,11 @@ export async function writeExtractedFacts(
         slug = slugifyEntity(f.entity);
       }
     }
+    // The observation date is prompt context only: a claim the model left
+    // undated stays undated rather than taking the day it was read.
     const validFrom = resolveValidFrom({
       extracted: f.valid_from ?? null,
       caller: opts.validFrom ?? null,
-      observation: opts.observationDate ?? null,
     });
     // The resolver can land a name that passed the gate on a placeholder page.
     if (!slug || isJunkEntitySlug(slug)) {
@@ -732,9 +730,11 @@ export async function writeExtractedFacts(
       });
       if (r.inserted) written += 1;
       if (r.inserted && r.id !== null) factIds.push(r.id);
-    } catch {
+    } catch (e) {
       skipped += 1;
       failed += 1;
+      // The error class and code only: a message can quote the fact itself.
+      console.error(`[facts-extract] fact write failed: ${errorClass(e)}`);
     }
   }
   return { written, skipped, failed, fact_ids: factIds };
@@ -910,6 +910,36 @@ export function extractionWindows(slug: string, body: string, maxWindows: number
  * when it was parsed from a `date`/`published` key or the filename. Never the
  * row timestamps — a backfill must not re-date old text to the day it ran.
  */
+/** "<ErrorName>[ code=<code>]" for a log line that must not echo the message. */
+function errorClass(e: unknown): string {
+  if (!(e instanceof Error)) return typeof e;
+  const code = (e as { code?: unknown }).code;
+  return typeof code === "string" || typeof code === "number" ? `${e.name} code=${code}` : e.name;
+}
+
+/**
+ * Owner mapping rule for the page path: a page is first-party — its `user`
+ * turns are the operator's own — only when it is a `transcripts/` page owned
+ * by the operator's `default` source. A tenant token can only write under its
+ * own source, so a session it pushed never maps onto the owner, whatever the
+ * model labels its speakers; a slug with no live page on file never maps
+ * either. Even then only facts the model attributes to `user` map (see
+ * `writeExtractedFacts`). The conversation-command path decides per turn
+ * instead, from the turn's speaker label (`isOwnerSpeaker`).
+ */
+async function isOperatorTranscript(storage: Storage, slug: string): Promise<boolean> {
+  if (!slug.startsWith("transcripts/")) return false;
+  try {
+    const r = await storage.engine().query<{ source_id: string }>(
+      `SELECT source_id FROM pages WHERE slug = $1 AND deleted_at IS NULL`,
+      [slug],
+    );
+    return r.rows[0]?.source_id === "default";
+  } catch {
+    return false;
+  }
+}
+
 export async function pageObservationDate(
   storage: Storage,
   slug: string,
@@ -1065,8 +1095,7 @@ export async function extractFactsForPage(
   const w = await writeExtractedFacts(storage, facts, {
     sourceSlug: opts.slug,
     writtenBy: ON_WRITE_WRITER,
-    observationDate,
-    firstParty: opts.slug.startsWith("transcripts/"),
+    firstParty: await isOperatorTranscript(storage, opts.slug),
     ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
   });
   return {

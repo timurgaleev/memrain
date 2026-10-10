@@ -12,6 +12,8 @@ import { getPage, putPage } from "../src/core/pages.ts";
 import { getLastSeen, getTimelineForDate, upsertEventProjection } from "../src/core/chronicle.ts";
 import { isChronicleEligible } from "../src/core/chronicle/eligibility.ts";
 import {
+  isoDay,
+  isValidProposal,
   runChronicleExtract,
   screenChronicleProposals,
   type ChronicleJudge,
@@ -103,6 +105,27 @@ describe("screenChronicleProposals", () => {
     const { kept, dropped } = screenChronicleProposals([ev("2024"), ev("2026-03"), ev("2026-03-02 10:00")], "2026-03-02", "2026-04-01");
     expect(kept.map((e) => e.when)).toEqual(["2026-03-02 10:00"]);
     expect(dropped).toEqual({ date_imprecise: 2 });
+  });
+
+  it("keeps the written day of a time without an offset, whatever the zone", () => {
+    const { kept } = screenChronicleProposals([ev("2026-03-05T18:00")], "2026-03-05", "2026-04-01", "Pacific/Kiritimati");
+    expect(kept).toHaveLength(1);
+    expect(isoDay("2026-03-05T18:00", "Pacific/Kiritimati")).toBe("2026-03-05");
+    expect(isoDay("2026-03-05 23:30:00", "Pacific/Pago_Pago")).toBe("2026-03-05");
+    // An explicit offset is still converted into the pinned zone.
+    expect(isoDay("2026-03-05T18:00:00Z", "Pacific/Kiritimati")).toBe("2026-03-06");
+    expect(isoDay("2026-03-05T18:00:00+02:00", "UTC")).toBe("2026-03-05");
+  });
+});
+
+describe("isValidProposal", () => {
+  const ev = (when: string) => ({ when, who: [], what: "x", kind: "event" });
+
+  it("rejects a calendar day that does not exist instead of rolling it over", () => {
+    expect(isValidProposal(ev("2026-02-30"))).toBe(false);
+    expect(isValidProposal(ev("2026-04-31T10:00"))).toBe(false);
+    expect(isValidProposal(ev("2026-02-28"))).toBe(true);
+    expect(isValidProposal(ev("2028-02-29T10:00:00Z"))).toBe(true);
   });
 });
 

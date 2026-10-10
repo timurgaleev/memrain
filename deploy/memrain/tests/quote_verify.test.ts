@@ -63,6 +63,58 @@ describe("verifyQuotes", () => {
   });
 });
 
+describe("verifyQuotes meaning guard", () => {
+  const ev = ["The board did not approve the merger in March 2026 after the vote."];
+
+  it("does not repair a near match that drops a negation", () => {
+    const r = verifyQuotes(`It says "the board did approve the merger in March 2026"`, ev);
+    expect(r.quote_check).toEqual({ grounded: 0, repaired: 0, unverified: 1 });
+    expect(r.answer).toContain(`the board did approve the merger in March 2026 [unverified]`);
+  });
+
+  it("does not repair a near match whose numbers differ", () => {
+    const r = verifyQuotes(`It says "the board did not approve the merger in March 2025"`, ev);
+    expect(r.quote_check).toEqual({ grounded: 0, repaired: 0, unverified: 1 });
+  });
+
+  it("does not repair across a contracted or non-English negation", () => {
+    const r1 = verifyQuotes(`"The board didn't approve the merger in March"`, ["The board did approve the merger in March."]);
+    expect(r1.quote_check.repaired).toBe(0);
+    const r2 = verifyQuotes(`"Совет директоров одобрил слияние в марте"`, ["Совет директоров не одобрил слияние в марте."]);
+    expect(r2.quote_check.repaired).toBe(0);
+    const r3 = verifyQuotes(`"Der Vorstand hat die Fusion im März genehmigt"`, ["Der Vorstand hat die Fusion im März nicht genehmigt."]);
+    expect(r3.quote_check.repaired).toBe(0);
+  });
+
+  it("still repairs when negations and numbers agree", () => {
+    const r = verifyQuotes(`"the board did not approve the merger in March 2026 after a vote"`, ev);
+    expect(r.quote_check.repaired).toBe(1);
+  });
+});
+
+describe("verifyQuotes quote shapes", () => {
+  it("checks German and guillemet quote pairs", () => {
+    const r = verifyQuotes(`Er sagte „wir verdoppeln das Team im nächsten Quartal“ und «nous doublerons l'équipe très bientôt».`, evidence);
+    expect(r.quote_check).toEqual({ grounded: 0, repaired: 0, unverified: 2 });
+    expect(r.answer).toBe(
+      `Er sagte wir verdoppeln das Team im nächsten Quartal [unverified] und nous doublerons l'équipe très bientôt [unverified].`,
+    );
+  });
+
+  it("does not take an inch mark after a digit for a quote opener", () => {
+    const r = verifyQuotes(`A 27" monitor, and "we will double headcount next quarter" was said.`, evidence);
+    expect(r.quote_check).toEqual({ grounded: 0, repaired: 0, unverified: 1 });
+    expect(r.unverified_quotes[0]!.text).toBe("we will double headcount next quarter");
+  });
+
+  it("treats bracketed ellipses as elisions on both sides", () => {
+    expect(verifyQuotes(`"The team agreed [...] pending the security review."`, evidence).quote_check.grounded).toBe(1);
+    expect(verifyQuotes(`"The team agreed […] pending the security review."`, evidence).quote_check.grounded).toBe(1);
+    const bracketed = ["The team agreed [...] pending the security review."];
+    expect(verifyQuotes(`"The team agreed … pending the security review."`, bracketed).quote_check.grounded).toBe(1);
+  });
+});
+
 describe("isQuoteInText", () => {
   it("matches after folding and rejects text not present", () => {
     expect(isQuoteInText("Ship the BETA in march.", evidence[0]!)).toBe(true);

@@ -119,6 +119,11 @@ function normalizeKind(k: string): string {
 /** Resolve a when value to a stable YYYY-MM-DD at the pinned timezone. */
 export function isoDay(when: string, tz: string): string {
   if (/^\d{4}-\d{2}-\d{2}$/.test(when)) return when;
+  // A wall-clock time with no offset or Z names its day as written; parsing it
+  // would read it in the server's zone and can move it to another day.
+  if (/^\d{4}-\d{2}-\d{2}[T ]/.test(when) && !/(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(when.trim())) {
+    return when.slice(0, 10);
+  }
   const d = new Date(when);
   if (Number.isNaN(d.getTime())) return when.slice(0, 10);
   if (tz === "UTC") return d.toISOString().slice(0, 10);
@@ -129,6 +134,14 @@ export function isoDay(when: string, tz: string): string {
   } catch {
     return d.toISOString().slice(0, 10);
   }
+}
+
+/** False for a leading YYYY-MM-DD that names no real day (2026-02-30): Date rolls it into March. */
+function isRealCalendarDay(when: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(when);
+  if (!m) return true;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.toISOString().slice(0, 10) === m[0];
 }
 
 /**
@@ -142,6 +155,7 @@ export function isValidProposal(e: unknown): e is ChronicleEventProposal {
   return (
     typeof o.when === "string" && o.when.length >= 4 &&
     !Number.isNaN(new Date(o.when).getTime()) &&
+    isRealCalendarDay(o.when) &&
     typeof o.what === "string" && o.what.trim().length > 0 &&
     Array.isArray(o.who) && o.who.every((w) => typeof w === "string") &&
     typeof o.kind === "string"

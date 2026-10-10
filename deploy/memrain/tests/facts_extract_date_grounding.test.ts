@@ -67,12 +67,10 @@ describe("date-grounding helpers", () => {
     expect(calendarDay("08/08/2026")).toBeNull();
   });
 
-  it("orders valid_from: extracted, then caller, then observation, then nothing", () => {
-    expect(resolveValidFrom({ extracted: "2026-08-01", caller: "2026-08-08", observation: "2026-08-09" }))
+  it("orders valid_from: extracted, then caller, then nothing", () => {
+    expect(resolveValidFrom({ extracted: "2026-08-01", caller: "2026-08-08" }))
       .toEqual({ date: "2026-08-01", source: "extracted" });
-    expect(resolveValidFrom({ caller: "2026-08-08", observation: "2026-08-09" }))
-      .toEqual({ date: "2026-08-08", source: "caller" });
-    expect(resolveValidFrom({ observation: "2026-08-09" })).toEqual({ date: "2026-08-09", source: "observation" });
+    expect(resolveValidFrom({ caller: "2026-08-08" })).toEqual({ date: "2026-08-08", source: "caller" });
     expect(resolveValidFrom({})).toBeNull();
   });
 
@@ -130,7 +128,7 @@ describe("valid_from on the write paths", () => {
     });
   });
 
-  it("the page path anchors on the page's own date and tells the model", async () => {
+  it("the page path tells the model the page's own date but never guesses valid_from from it", async () => {
     const body = "Alice said she flew to Lisbon last week and that she loved the city a lot.";
     await putPage(storage, {
       slug: "transcripts/chatgpt/abc-p1",
@@ -153,6 +151,6 @@ describe("valid_from on the write paths", () => {
     expect(r.factsWritten).toBe(1);
     expect(users[0]!.split("\n")[0]).toStartWith("Observation date: 2026-03-09 ");
     const rows = await listFacts(storage, "people/alice", { decay: false });
-    expect(rows[0]!.valid_from).toBe("2026-03-09");
+    expect(rows[0]!.valid_from).toBeNull();
   });
 });

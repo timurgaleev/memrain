@@ -14,6 +14,7 @@ import {
   parseJudgment,
   pairKey,
   latestContradictionRun,
+  PROBE_CONTRADICTIONS_PROMPT_VERSION,
   type CandidatePair,
 } from "../src/core/synthesis/contradictions.ts";
 import { listProbedContradictions } from "../src/core/insights.ts";
@@ -21,7 +22,7 @@ import { addFact } from "../src/core/facts.ts";
 import { registerSource } from "../src/core/sources.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
 import { BudgetTracker } from "../src/core/budget.ts";
-import { revertMigration, runMigrations } from "../src/core/migrate.ts";
+import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -169,11 +170,14 @@ describe("probeContradictionsPhase", () => {
     const run = await latestContradictionRun(engine);
     expect(run).toMatchObject({ judged: 2, found: 1, judge_errors: 1, parse_failures: 1, judge_failed: true });
 
-    // The unparseable reply was not cached as a negative: the next run judges it again.
+    // The unparseable reply was not cached as a negative verdict; it backs off
+    // instead, so the next run re-judges only the pair whose call threw.
     const r2 = await probeContradictionsPhase(engine, { sonnetFn: byPair, pairsFn: async () => pairs });
-    expect(r2.cacheHits).toBe(2);
-    expect(r2.attempted).toBe(2);
-    expect(r2.parseFailures).toBe(1);
+    expect(r2.cacheHits).toBe(3);
+    expect(r2.attempted).toBe(1);
+    expect(r2.judgeErrors).toBe(1);
+    expect(r2.parseFailures).toBe(0);
+    expect(r2.judged).toBe(0);
   });
 
   it("does not flag a run whose few failures stay within a quarter of its calls", async () => {
@@ -213,8 +217,77 @@ describe("probeContradictionsPhase", () => {
     await withProbeOn(() => probeContradictionsPhase(engine, { sonnetFn: capture }));
     const today = (await engine.query<{ d: string }>("SELECT now()::date::text AS d")).rows[0]!.d;
     expect(seen).toEqual([
-      `A (from: 2025-03-01): bob is CTO of Acme\n\nB (from: ${today}): bob is CEO of Acme`,
+      `A (from: 2025-03-01): bob is CTO of Acme\n\nB (recorded: ${today}): bob is CEO of Acme`,
     ]);
+  });
+
+  it("tells the judge a recorded date is not evidence of when a claim held", async () => {
+    let system = "";
+    const capture: SonnetFn = async (input) => {
+      system = input.system;
+      return { text: CONTRADICTS, modelId: "eu.anthropic.claude-sonnet-4-6", usage: { inputTokens: 10, outputTokens: 5 } };
+    };
+    await probeContradictionsPhase(engine, {
+      sonnetFn: capture,
+      pairsFn: async () => [{ ...pair("1", "2"), a_date: "2026-01-01", a_date_recorded: true }],
+    });
+    expect(system).toContain("(recorded: YYYY-MM-DD)");
+    expect(system).toContain("only (from:) dates can establish a time-ordered update");
+    expect(PROBE_CONTRADICTIONS_PROMPT_VERSION).not.toBe("v2-sonnet");
+  });
+
+  it("never pairs a take whose source document is quarantined", async () => {
+    const insertTake = (key: string, doc: string, claim: string) =>
+      engine.query(
+        `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, domain, model_id)
+         VALUES ($1, $2, 'h', 'v1', $3, 'markets', 'm')`,
+        [key, doc, claim],
+      );
+    await engine.query(`INSERT INTO documents (id, source_path) VALUES ('q1', '/vault/q1.md'), ('q2', '/vault/q2.md')`);
+    await engine.query(
+      `INSERT INTO documents (id, source_path, frontmatter) VALUES ('q3', '/vault/q3.md', '{"quarantine": {"patterns": ["x"]}}'::jsonb)`,
+    );
+    await insertTake("t-1", "q1", "rates will fall next year");
+    await insertTake("t-2", "q2", "rates will rise next year");
+    await insertTake("t-held", "q3", "rates will triple next year");
+    const seen: string[] = [];
+    const capture: SonnetFn = async (input) => {
+      seen.push(input.user);
+      return { text: CONTRADICTS, modelId: "eu.anthropic.claude-sonnet-4-6", usage: { inputTokens: 10, outputTokens: 5 } };
+    };
+    const r = await withProbeOn(() => probeContradictionsPhase(engine, { sonnetFn: capture }));
+    expect(r.pairsScanned).toBe(1);
+    expect(seen.join("\n")).not.toContain("triple");
+  });
+
+  it("backs off a pair whose judge reply never parses, without calling it a negative", async () => {
+    let calls = 0;
+    const garbled: SonnetFn = async () => {
+      calls += 1;
+      return { text: "I cannot decide.", modelId: "eu.anthropic.claude-sonnet-4-6", usage: { inputTokens: 10, outputTokens: 5 } };
+    };
+    const opts = { sonnetFn: garbled, pairsFn: async () => [pair("g1", "g2")] };
+    const expire = () => engine.query(`UPDATE synth_contradiction_verdicts SET expires_at = now() - interval '1 day'`);
+
+    const r1 = await probeContradictionsPhase(engine, opts);
+    expect(r1).toMatchObject({ parseFailures: 1, judged: 0 });
+    // Within the backoff the pair is not re-judged.
+    const r2 = await probeContradictionsPhase(engine, opts);
+    expect(calls).toBe(1);
+    expect(r2).toMatchObject({ attempted: 0, judged: 0, cacheHits: 1 });
+    // After it, a second and third try; then never again.
+    await expire();
+    await probeContradictionsPhase(engine, opts);
+    await expire();
+    await probeContradictionsPhase(engine, opts);
+    expect(calls).toBe(3);
+    await expire();
+    const r5 = await probeContradictionsPhase(engine, opts);
+    expect(calls).toBe(3);
+    expect(r5.judged).toBe(0);
+    // A later readable verdict replaces the marker.
+    const ok = await probeContradictionsPhase(engine, { ...opts, sonnetFn: fakeSonnet(CONTRADICTS), promptVersion: "other" });
+    expect(ok.judged).toBe(1);
   });
 
   it("defaultPairs never pairs a forgotten or consolidated fact", async () => {
@@ -311,6 +384,8 @@ describe("migration 131", () => {
       sonnetFn: fakeSonnet(CONTRADICTS),
       pairsFn: async () => [pair("1", "2")],
     });
+    const later = discoverMigrations().map((m) => m.id).filter((id) => id > 131).sort((a, b) => b - a);
+    for (const id of later) await revertMigration(engine, id);
     await revertMigration(engine, 131);
     const cols = await engine.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns
@@ -322,7 +397,7 @@ describe("migration 131", () => {
     expect(n.rows[0]!.n).toBe(1);
 
     const again = await runMigrations(engine);
-    expect(again.applied.map((m) => m.id)).toEqual([131]);
+    expect(again.applied.map((m) => m.id)).toEqual([131, ...later.reverse()]);
     expect(await latestContradictionRun(engine)).toMatchObject({
       judged: 1, judge_errors: 0, parse_failures: 0, judge_failed: false,
     });

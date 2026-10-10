@@ -89,25 +89,24 @@ export function parseExtractedEventDate(raw: unknown, now: Date = new Date()): s
 }
 
 /** Which input set a fact's `valid_from`. */
-export type ValidFromSource = "extracted" | "caller" | "observation";
+export type ValidFromSource = "extracted" | "caller";
 
 /**
  * `valid_from` precedence: a date the extractor stated (already validated) >
- * a caller-supplied time (the turn's own timestamp) > the observation date >
- * nothing. Unlike the write time, NULL is a real answer here: the decay and
- * recency surfaces fall back to `written_at` on their own.
+ * a caller-supplied time (the turn's own timestamp) > nothing. The observation
+ * date is never a fallback: the day a page was read is not evidence of when a
+ * claim held, and the prompt tells the model never to guess one. NULL is a
+ * real answer here: the decay and recency surfaces fall back to `written_at`
+ * on their own.
  */
 export function resolveValidFrom(input: {
   extracted?: string | null;
   caller?: string | null;
-  observation?: string | null;
 }): { date: string; source: ValidFromSource } | null {
   const extracted = calendarDay(input.extracted ?? undefined);
   if (extracted) return { date: extracted, source: "extracted" };
   const caller = calendarDay(input.caller ?? undefined);
   if (caller) return { date: caller, source: "caller" };
-  const observation = calendarDay(input.observation ?? undefined);
-  if (observation) return { date: observation, source: "observation" };
   return null;
 }
 

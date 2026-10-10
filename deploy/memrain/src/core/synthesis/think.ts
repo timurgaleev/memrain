@@ -42,6 +42,7 @@ import { pageSourcePath } from "../page-index.ts";
 import { isDiarySourcePath } from "../pages.ts";
 import { pageContentDate, resolveThinkTemporalContext } from "./think-temporal.ts";
 import { thinkQuoteVerifyEnabled, verifyQuotes, type QuoteCheck } from "./quote-verify.ts";
+import { quarantineFilterFragment } from "../quarantine.ts";
 
 export const THINK_PROMPT_VERSION = "v3-sonnet";
 
@@ -695,17 +696,18 @@ export function fusePageStreams(
  * is no slot in it for "withdrawn" or "already settled" — so a retired row
  * (active=false, e.g. a struck-through fence row or a take whose document no
  * longer yields it), an operator-rejected row, a resolved row, or a row whose
- * backing document was soft-deleted must not be handed to the model as a
- * current belief. A take whose `source_ref` names no document at all (legacy /
- * non-document provenance) still gathers: only a document that EXISTS and is
- * deleted disqualifies its takes.
+ * backing document was soft-deleted or quarantined must not be handed to the
+ * model as a current belief. A take whose `source_ref` names no document at all
+ * (legacy / non-document provenance) still gathers: only a document that EXISTS
+ * and is deleted or quarantined disqualifies its takes.
  */
 const TAKE_LIFECYCLE_FILTER = ` AND active
           AND status <> 'rejected'
           AND resolved_at IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM documents d
-             WHERE d.id = synth_takes.source_ref AND d.deleted_at IS NOT NULL
+             WHERE d.id = synth_takes.source_ref
+               AND (d.deleted_at IS NOT NULL OR NOT (${quarantineFilterFragment("d")}))
           )`;
 
 /**
@@ -1446,7 +1448,8 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
       // A later round that fails to parse keeps the previous round's answer.
       if (outcome.synthesis || round === 1) {
         synthesis = outcome.synthesis;
-        synthesisEvidence = [question, pagesBlock, takesBlock, trajectoryBlock];
+        // The question is not evidence: quoting its premise must not count as grounded.
+        synthesisEvidence = [pagesBlock, takesBlock, trajectoryBlock];
       }
       if (round === 1) {
         status = outcome.synthesis ? "ok" : cut ? "output_truncated" : outcome.status;

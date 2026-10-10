@@ -165,6 +165,33 @@ describe("the brain-wide cap", () => {
     expect(sent).toBe(false);
   });
 
+  it("still applies the brain cap when the client's cap lookup fails", async () => {
+    process.env.MEMRAIN_DAILY_BUDGET_USD = "0.03";
+    await spent(0.02);
+    const real = storage.engine();
+    const broken = new Proxy(real, {
+      get(target, prop, receiver) {
+        if (prop === "query") {
+          return (sql: string, params?: unknown[]) =>
+            sql.includes("FROM oauth_clients WHERE client_id")
+              ? Promise.reject(new Error("db hiccup"))
+              : real.query(sql, params as never);
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as Engine;
+    setSpendLedgerEngine(broken);
+    let sent = false;
+    const err = await runWithSpendClient({ clientId: "lookup-fails" }, () =>
+      trackedInvoke(TWO_CENTS, async (m) => {
+        sent = true;
+        ok(m);
+      }),
+    ).catch((e: unknown) => e);
+    expect(sent).toBe(false);
+    expect(isDailyCapRefusal(err)).toBe(true);
+  });
+
   it("lets the call through unheld when the accounting query fails", async () => {
     process.env.MEMRAIN_DAILY_BUDGET_USD = "0";
     const real = storage.engine();

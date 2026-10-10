@@ -929,7 +929,8 @@ async function holdForCall(call: TrackedCall): Promise<string | null> {
     try {
       clientCap = ctx.capUsd !== undefined ? ctx.capUsd : await lookupClientCap(engine, ctx.clientId);
     } catch {
-      return null;
+      // A failed lookup only waives the client's own cap; the brain and cycle caps still bind.
+      clientCap = null;
     }
   }
   if (clientCap === null && brainCap === null && cycleCap === null) return null;

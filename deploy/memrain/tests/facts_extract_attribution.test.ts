@@ -115,6 +115,57 @@ describe("the claim identity includes the speaker", () => {
     expect(rows.map((r) => r.attributed_to)).toEqual([null]);
   });
 
+  it("a speaker's claim adopts the legacy row with no speaker instead of duplicating it", async () => {
+    const legacy = await addFact(storage, {
+      entity_slug: "people/alice",
+      fact: "Prefers Postgres.",
+      written_by: "facts-extract",
+    });
+    const user = await addFact(storage, {
+      entity_slug: "people/alice",
+      fact: "Prefers Postgres.",
+      written_by: "facts-extract",
+      attributed_to: "user",
+    });
+    expect(user).toMatchObject({ id: legacy.id, inserted: false });
+    // The other speaker stays apart: the adopted row now belongs to the user.
+    const assistant = await addFact(storage, {
+      entity_slug: "people/alice",
+      fact: "Prefers Postgres.",
+      written_by: "facts-extract",
+      attributed_to: "assistant",
+    });
+    expect(assistant.inserted).toBe(true);
+    const rows = await listFacts(storage, "people/alice", { decay: false });
+    expect(rows.map((r) => r.attributed_to).sort()).toEqual(["assistant", "user"]);
+  });
+
+  it("keeps one chunk's user and assistant claims apart, and a re-emit dates only its own row", async () => {
+    const base = { entity_slug: "people/alice", fact: "Ship on Friday.", source_chunk_id: "c1" };
+    const user = await addFact(storage, { ...base, written_by: "w1", attributed_to: "user", valid_from: "2026-01-01" });
+    const assistant = await addFact(storage, { ...base, written_by: "w2", attributed_to: "assistant", valid_from: "2026-01-01" });
+    expect(user.inserted).toBe(true);
+    expect(assistant.inserted).toBe(true);
+    expect(assistant.id).not.toBe(user.id);
+
+    // A re-emit of the assistant's claim under a third writer hits the chunk
+    // tuple: it corrects the assistant row's date and leaves the user's alone.
+    const again = await addFact(storage, { ...base, written_by: "w3", attributed_to: "assistant", valid_from: "2026-02-02" });
+    expect(again.inserted).toBe(false);
+    const rows = await listFacts(storage, "people/alice", { decay: false });
+    const byWho = Object.fromEntries(rows.map((r) => [r.attributed_to, r.valid_from]));
+    expect(byWho).toEqual({ user: "2026-01-01", assistant: "2026-02-02" });
+  });
+
+  it("a speaker's chunk claim adopts a legacy row from the same chunk", async () => {
+    const base = { entity_slug: "people/alice", fact: "Ship on Monday.", source_chunk_id: "c2" };
+    const legacy = await addFact(storage, { ...base, written_by: "old-extractor" });
+    const user = await addFact(storage, { ...base, written_by: "facts-extract", attributed_to: "user" });
+    expect(user).toMatchObject({ id: legacy.id, inserted: false });
+    const rows = await listFacts(storage, "people/alice", { decay: false });
+    expect(rows.map((r) => r.attributed_to)).toEqual(["user"]);
+  });
+
   it("refuses a speaker outside the CHECK set at the column", async () => {
     await expect(
       storage.engine().query(

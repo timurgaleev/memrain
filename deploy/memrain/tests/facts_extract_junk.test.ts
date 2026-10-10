@@ -32,6 +32,8 @@ describe("isJunkFact", () => {
     "You've hit your org's monthly spend limit.",
     "Error: rate limit exceeded",
     "429 rate limit reached",
+    "Let's check the logs first.",
+    "Now let's run the tests.",
   ])("drops %p", (text) => {
     expect(isJunkFact(text, "fact")).toBe(true);
   });
@@ -42,6 +44,8 @@ describe("isJunkFact", () => {
     "Alice lets the team pick the venue.",
     "The user interface moved to React.",
     "Alice will move to Lisbon in March.",
+    "Let's Encrypt certs expire every 90 days.",
+    "Let's go to the beach is Alice's favourite phrase.",
   ])("keeps %p", (text) => {
     expect(isJunkFact(text, "fact")).toBe(false);
   });

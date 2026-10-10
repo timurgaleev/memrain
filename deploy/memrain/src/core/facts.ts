@@ -12,7 +12,7 @@
  * refreshes the row already on file instead of stacking a twin (see
  * `findLiveClaim` — the same identity the consolidate phase promotes takes
  * under). Chunk-sourced facts keep their narrower index-backed idempotency on
- * (entity_slug, fact, source_chunk_id) on top of it.
+ * (entity_slug, fact, source_chunk_id, speaker) on top of it (migration 132).
  */
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
@@ -408,6 +408,44 @@ export async function findLiveClaim(
   return toFactIdOrNull(r.rows[0]?.id);
 }
 
+/**
+ * A claim with a speaker adopts the live row holding the same claim with no
+ * speaker recorded (every row written before migration 130): the same identity,
+ * or — for a chunk-sourced claim — the same (entity, fact, chunk) in the same
+ * source. The row takes the speaker instead of a twin landing beside it, so a
+ * re-extraction does not duplicate the legacy ledger. Only a NULL row is ever
+ * adopted, so one speaker's claim never takes over another's. Returns the
+ * adopted id, or null.
+ */
+export async function adoptUnattributedClaim(
+  q: Queryable,
+  id: ClaimIdentity & { attributed_to: string },
+  chunkId: string | null,
+): Promise<number | null> {
+  const r = await q.query<{ id: number }>(
+    `UPDATE entity_facts SET attributed_to = $5
+      WHERE attributed_to IS NULL
+        AND id = (
+          SELECT e.id FROM entity_facts e
+           WHERE e.entity_slug = $1 AND e.source_id = $2 AND e.fact = $3
+             AND (e.written_by = $4 OR ($6::text IS NOT NULL AND e.source_chunk_id = $6))
+             AND e.attributed_to IS NULL
+             AND e.forgotten_at IS NULL
+             AND e.dimension IS NULL
+             -- never take a chunk tuple this speaker already holds
+             AND NOT EXISTS (
+               SELECT 1 FROM entity_facts o
+                WHERE o.entity_slug = e.entity_slug AND o.fact = e.fact
+                  AND o.source_chunk_id = e.source_chunk_id AND o.attributed_to = $5
+             )
+           ORDER BY e.id
+           LIMIT 1)
+      RETURNING id`,
+    [id.entity_slug, id.source_id, id.fact, id.written_by, id.attributed_to, chunkId],
+  );
+  return toFactIdOrNull(r.rows[0]?.id);
+}
+
 export interface FactRow {
   id: number;
   entity_slug: string;
@@ -483,7 +521,7 @@ function normaliseConfidence(c: number | undefined): number {
  * writer, text — `findLiveClaim`) is REFRESHED, not duplicated: re-saving a page
  * re-asserts its claims, it does not add new ones, and the ledger used to grow a
  * copy per save. Chunk-sourced facts additionally keep the index-backed
- * idempotency on (entity_slug, fact, source_chunk_id), which still catches a
+ * idempotency on (entity_slug, fact, source_chunk_id, speaker), which still catches a
  * re-emit that changed writer; a re-emit carrying a different `valid_from`
  * corrects the stored date in place instead of being swallowed.
  */
@@ -576,6 +614,20 @@ export async function addFact(
       validFrom,
     });
     return { id: onFile, entity_slug: input.entity_slug, inserted: false };
+  }
+  if (attributedTo !== null) {
+    const adopted = await adoptUnattributedClaim(
+      storage.engine(),
+      { entity_slug: input.entity_slug, source_id: effectiveSource, fact, written_by: writtenBy, attributed_to: attributedTo },
+      chunkId,
+    );
+    if (adopted !== null) {
+      await refreshClaim(storage.engine(), adopted, {
+        confidence: input.confidence === undefined ? null : conf,
+        validFrom,
+      });
+      return { id: adopted, entity_slug: input.entity_slug, inserted: false };
+    }
   }
 
   // Insert-time dedup / supersede (opt-in). Embed the new fact, fetch its
@@ -701,7 +753,7 @@ export async function addFact(
   // (NULL chunk) always insert.
   const conflict =
     chunkId !== null
-      ? `ON CONFLICT (entity_slug, fact, source_chunk_id)
+      ? `ON CONFLICT (entity_slug, fact, source_chunk_id, (COALESCE(attributed_to, '')))
            WHERE source_chunk_id IS NOT NULL
            DO NOTHING`
       : "";
@@ -751,8 +803,9 @@ export async function addFact(
         `UPDATE entity_facts
             SET valid_from = $4::date
           WHERE entity_slug = $1 AND fact = $2 AND source_chunk_id = $3
+            AND attributed_to IS NOT DISTINCT FROM $5::text
             AND valid_from IS DISTINCT FROM $4::date`,
-        [input.entity_slug, fact, chunkId, validFrom],
+        [input.entity_slug, fact, chunkId, validFrom, attributedTo],
       );
     }
 

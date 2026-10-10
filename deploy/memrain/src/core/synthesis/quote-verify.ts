@@ -5,8 +5,10 @@
  *   grounded    the span is in the evidence (after case, whitespace and
  *               typographic folding) — left as written.
  *   repaired    a near match (character-bigram Dice >= 0.9 against a window
- *               of the evidence) — the span is replaced with the evidence's
- *               own words, so the quotation marks stay truthful.
+ *               of the evidence) with the same negations and the same numbers
+ *               — the span is replaced with the evidence's own words, so the
+ *               quotation marks stay truthful. A near match that differs in a
+ *               "not" or in a number differs in meaning, so it is unverified.
  *   unverified  found nowhere — the quotation marks are removed and the text
  *               is marked "[unverified]", so no reader takes it for a quote.
  *
@@ -22,8 +24,12 @@ const MIN_LENGTH_RATIO = NEAR_MATCH_DICE / (2 - NEAR_MATCH_DICE);
 const MAX_QUOTES = 50;
 const UNVERIFIED_TEXT_CHARS = 300;
 
-/** Straight or curly double quotes, one line, bounded length. */
-const QUOTE_SPAN = /["“]([^"“”\n]{1,600})["”]/g;
+/**
+ * Straight or curly double quotes, „German“ and «guillemet» pairs; one line,
+ * bounded length. A straight quote right after a digit is an inch mark (27"),
+ * not an opener.
+ */
+const QUOTE_SPAN = /(?<!\d)["“]([^"“”\n]{1,600})["”]|„([^„“”\n]{1,600})[“”]|«([^«»\n]{1,600})»/g;
 const TRAILING_PUNCT = new Set([".", ",", ";", ":", "!", "?"]);
 
 function trimTrailingPunct(s: string): string {
@@ -56,6 +62,9 @@ interface Folded {
   end: number[];
 }
 
+/** Bracketed elisions, folded to "..." like a bare ellipsis. */
+const BRACKET_ELISIONS = ["[...]", "[…]"];
+
 /** Fold for comparison, keeping an offset map back into the original string. */
 function fold(s: string): Folded {
   let norm = "";
@@ -63,8 +72,10 @@ function fold(s: string): Folded {
   const end: number[] = [];
   let pendingSpace = false;
   let idx = 0;
-  for (const cp of s) {
+  while (idx < s.length) {
     const i = idx;
+    const elision = BRACKET_ELISIONS.find((e) => s.startsWith(e, i));
+    const cp = elision ?? String.fromCodePoint(s.codePointAt(i)!);
     idx += cp.length;
     if (/\s/u.test(cp)) {
       pendingSpace = norm.length > 0;
@@ -76,7 +87,7 @@ function fold(s: string): Folded {
     if (ch === "‘" || ch === "’" || ch === "ʼ") ch = "'";
     else if (ch === "“" || ch === "”") ch = '"';
     else if (ch === "–" || ch === "—" || ch === "−") ch = "-";
-    else if (ch === "…") ch = "...";
+    else if (ch === "…" || elision) ch = "...";
     if (pendingSpace) {
       norm += " ";
       start.push(i);
@@ -127,6 +138,25 @@ function wordSpans(norm: string): Array<[number, number]> {
   return spans;
 }
 
+const NEGATION_WORDS = new Set(["not", "never", "no", "не", "нет", "nicht", "kein", "keine", "keinen", "keinem", "keiner", "keines"]);
+
+/** Negation tokens in order, from folded (lowercased) text. */
+function negations(norm: string): string[] {
+  const out: string[] = [];
+  for (const w of norm.split(/[^\p{L}']+/u)) {
+    if (NEGATION_WORDS.has(w)) out.push(w);
+    else if (w.endsWith("n't")) out.push("n't");
+  }
+  return out;
+}
+
+/** A repair may change wording, never a negation or a number. */
+function sameMeaningMarkers(a: string, b: string): boolean {
+  const digitsA = a.match(/\d+/g) ?? [];
+  const digitsB = b.match(/\d+/g) ?? [];
+  return negations(a).join(" ") === negations(b).join(" ") && digitsA.join(" ") === digitsB.join(" ");
+}
+
 /** The best near-match window for `q` in one evidence block, as original text, or null. */
 function nearMatch(q: string, block: Folded, original: string): { text: string; score: number } | null {
   const qWords = q.split(" ").length;
@@ -142,8 +172,11 @@ function nearMatch(q: string, block: Folded, original: string): { text: string; 
       const to = words[last]![1];
       const span = to - from;
       if (Math.min(span, q.length) / Math.max(span, q.length) < MIN_LENGTH_RATIO) continue;
-      const score = dice(qGrams, qSize, block.norm.slice(from, to));
-      if (score >= NEAR_MATCH_DICE && (!best || score > best.score)) best = { from, to, score };
+      const window = block.norm.slice(from, to);
+      const score = dice(qGrams, qSize, window);
+      if (score >= NEAR_MATCH_DICE && (!best || score > best.score) && sameMeaningMarkers(q, window)) {
+        best = { from, to, score };
+      }
     }
   }
   if (!best) return null;
@@ -181,7 +214,7 @@ export function verifyQuotes(answer: string, evidence: readonly string[]): Quote
 
   for (const m of answer.matchAll(QUOTE_SPAN)) {
     if (checked >= MAX_QUOTES) break;
-    const inner = m[1]!;
+    const inner = (m[1] ?? m[2] ?? m[3])!;
     // A leading or trailing ellipsis only marks a cut; inner ones split the quote into parts.
     const parts = fold(inner)
       .norm.split("...")

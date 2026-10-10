@@ -9,6 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { listFacts } from "../src/core/facts.ts";
+import { putPage } from "../src/core/pages.ts";
+import { registerSource } from "../src/core/sources.ts";
 import { isOwnerSpeaker, resolveOwnerEntity } from "../src/core/facts-owner.ts";
 import {
   extractFactsForPage,
@@ -131,9 +133,48 @@ describe("the callers decide what is first-party", () => {
     expect(rows[0]!.valid_from).toBe("2026-08-08");
   });
 
+  it("the page path never maps a transcript a tenant pushed, or one with no page on file", async () => {
+    process.env["MEMRAIN_OWNER_ENTITY"] = "people/robin";
+    const body = "User: I prefer Postgres over MySQL, and I have for years now. ".repeat(3);
+    await registerSource(storage.engine(), { id: "tenant-a", kind: "vault", pathPrefix: "/tenant-a" });
+    await putPage(storage, {
+      slug: "transcripts/claude-code/t1-p1",
+      type: "conversation",
+      markdown_body: body,
+      source_id: "tenant-a",
+      allowAdHocType: true,
+    });
+    const pushed = await extractFactsForPage(storage, {
+      slug: "transcripts/claude-code/t1-p1",
+      type: "conversation",
+      body,
+      sourceId: "tenant-a",
+      sonnetFn: stub([{ ...OWNER_CLAIM }]),
+      modelId: MODEL,
+      observationDate: null,
+    });
+    expect(pushed.factsWritten).toBe(0);
+    const unknown = await extractFactsForPage(storage, {
+      slug: "transcripts/claude-code/missing-p1",
+      type: "conversation",
+      body,
+      sonnetFn: stub([{ ...OWNER_CLAIM }]),
+      modelId: MODEL,
+      observationDate: null,
+    });
+    expect(unknown.factsWritten).toBe(0);
+    expect(await listFacts(storage, "people/robin", { decay: false })).toHaveLength(0);
+  });
+
   it("the page path maps on transcripts/ pages only", async () => {
     process.env["MEMRAIN_OWNER_ENTITY"] = "people/robin";
     const body = "User: I prefer Postgres over MySQL, and I have for years now. ".repeat(3);
+    await putPage(storage, {
+      slug: "transcripts/claude-code/s1-p1",
+      type: "conversation",
+      markdown_body: body,
+      allowAdHocType: true,
+    });
     const transcript = await extractFactsForPage(storage, {
       slug: "transcripts/claude-code/s1-p1",
       type: "conversation",

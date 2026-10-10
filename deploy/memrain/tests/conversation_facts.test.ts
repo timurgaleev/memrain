@@ -97,6 +97,33 @@ describe("runExtractConversationFacts valid_from", () => {
   });
 });
 
+describe("runExtractConversationFacts write failures", () => {
+  it("counts a fact that failed to write and logs its error class, never its text", async () => {
+    await storage.engine().query(
+      `ALTER TABLE entity_facts ADD CONSTRAINT test_refuse CHECK (fact NOT LIKE '%secret-plan%')`,
+    );
+    const logged: string[] = [];
+    const prev = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    };
+    let report;
+    try {
+      report = await runExtractConversationFacts(storage, {
+        text: "[2024-03-15 09:00] Alice: my secret-plan is Lisbon\n[2024-03-15 09:01] Alice: I like tea",
+        maxBudgetUsd: 1.0,
+        sonnetFn: stub,
+      });
+    } finally {
+      console.error = prev;
+    }
+    expect(report.factsWritten).toBe(1);
+    expect(report.factsFailed).toBe(1);
+    expect(logged.join("\n")).toContain("fact write failed");
+    expect(logged.join("\n")).not.toContain("secret-plan");
+  });
+});
+
 describe("addFact valid_from", () => {
   it("stores a plain date and reduces an ISO timestamp to its UTC day", async () => {
     await addFact(storage, {

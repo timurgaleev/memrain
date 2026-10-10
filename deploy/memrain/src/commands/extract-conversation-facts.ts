@@ -50,6 +50,8 @@ export interface ExtractConvFactsReport {
   turns: number;
   factsWritten: number;
   factsSkipped: number;
+  /** Facts the model returned that failed to write (a subset of factsSkipped). */
+  factsFailed: number;
   spentUsd: number;
   budgetExhausted: boolean;
 }
@@ -92,6 +94,7 @@ export async function runExtractConversationFacts(
       turns: 0,
       factsWritten: 0,
       factsSkipped: 0,
+      factsFailed: 0,
       spentUsd: 0,
       budgetExhausted: false,
     };
@@ -108,6 +111,7 @@ export async function runExtractConversationFacts(
 
   let factsWritten = 0;
   let factsSkipped = 0;
+  let factsFailed = 0;
   let exhausted = false;
 
   for (const msg of messages) {
@@ -155,6 +159,7 @@ export async function runExtractConversationFacts(
         const w = await writeExtractedFacts(storage, result.facts, writeOpts);
         factsWritten += w.written;
         factsSkipped += w.skipped;
+        factsFailed += w.failed;
         break;
       }
       throw e;
@@ -162,6 +167,7 @@ export async function runExtractConversationFacts(
     const w = await writeExtractedFacts(storage, result.facts, writeOpts);
     factsWritten += w.written;
     factsSkipped += w.skipped;
+    factsFailed += w.failed;
   }
 
   return {
@@ -169,6 +175,7 @@ export async function runExtractConversationFacts(
     turns: messages.length,
     factsWritten,
     factsSkipped,
+    factsFailed,
     spentUsd: Number(budget.totalSpent().toFixed(6)),
     budgetExhausted: exhausted,
   };
@@ -203,9 +210,11 @@ export async function runExtractConversationFactsCli(
     } else {
       console.log(
         `extract-conversation-facts: ${report.turns} turns, ${report.factsWritten} facts written` +
-          ` (${report.factsSkipped} skipped), spent $${report.spentUsd.toFixed(4)}` +
+          ` (${report.factsSkipped} skipped, ${report.factsFailed} failed), spent $${report.spentUsd.toFixed(4)}` +
           (report.budgetExhausted ? " [budget exhausted]" : ""),
       );
     }
+    // A fact that failed to write is data lost, not a deliberate skip.
+    if (report.factsFailed > 0) process.exitCode = 1;
   });
 }

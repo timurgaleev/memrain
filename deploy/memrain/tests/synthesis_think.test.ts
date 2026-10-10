@@ -438,6 +438,21 @@ describe("runThink", () => {
     expect(seenUser).toContain('<take ref="tk1"');
   });
 
+  it("never gathers a take whose source document is quarantined", async () => {
+    await engine.query(
+      `INSERT INTO documents (id, source_path, frontmatter) VALUES ('doc1', '/vault/doc1.md', '{"quarantine": {"patterns": ["x"]}}'::jsonb)`,
+    );
+    await seedTake("tk1", "the migration will finish on time");
+    let seenUser = "";
+    const spy: SonnetFn = async (input) => {
+      seenUser = input.user;
+      return { text: okResponse, modelId: "eu.anthropic.claude-sonnet-4-6", usage: { inputTokens: 10, outputTokens: 5 } };
+    };
+    const r = await runThink(storage, { question: "migration", sonnetFn: spy, pagesFn: fakePages() });
+    expect(r.takesGathered).toBe(0);
+    expect(seenUser).not.toContain('<take ref="tk1"');
+  });
+
   it("rejects an empty question", async () => {
     const r = await runThink(storage, { question: "   ", sonnetFn: fakeSonnet(okResponse) });
     expect(r.ran).toBe(false);
@@ -848,6 +863,21 @@ describe("think quote check", () => {
     const page = await getPage(storage, saved.slug);
     expect(page?.markdown_body).toStartWith(`---\nunverified_quotes:\n  - "revenue tripled in the first quarter"\n---\n# what is the plan?`);
     expect(page?.markdown_body).toContain("[unverified]");
+  });
+
+  it("does not ground a quote of the question's own premise", async () => {
+    const premise = JSON.stringify({
+      answer: `You asked whether "the billing service was shut down last week" [notes/plan.md].`,
+      citations: [{ ref: "notes/plan.md", kind: "page" }],
+      gaps: [],
+    });
+    const r = await runThink(storage, {
+      question: "why was the billing service was shut down last week?",
+      sonnetFn: fakeSonnet(premise),
+      pagesFn: fakePages(pages),
+      embedFn: null,
+    });
+    expect(r.quote_check).toEqual({ grounded: 0, repaired: 0, unverified: 1 });
   });
 
   it("is skipped when MEMRAIN_THINK_QUOTE_VERIFY=0", async () => {

@@ -28,8 +28,9 @@ import { BudgetTracker, BudgetExhausted } from "../budget.ts";
 import { callWithTruncationRetry } from "../llm/truncation.ts";
 import { parseModelJson } from "../llm/json-output.ts";
 import { excludeEmptyExtractionTombstone } from "./takes.ts";
+import { quarantineFilterFragment } from "../quarantine.ts";
 
-export const PROBE_CONTRADICTIONS_PROMPT_VERSION = "v2-sonnet";
+export const PROBE_CONTRADICTIONS_PROMPT_VERSION = "v3-sonnet";
 
 const DEFAULT_MAX_PAIRS = 40;
 const DEFAULT_LOOKBACK_DAYS = 365;
@@ -54,6 +55,10 @@ export interface CandidatePair {
    *  written; a take's generation day). Null/absent renders "(date unknown)". */
   a_date?: string | null;
   b_date?: string | null;
+  /** True when that side's date is only the day the fact was stored (it has
+   *  no valid_from): rendered "(recorded: …)", never "(from: …)". */
+  a_date_recorded?: boolean;
+  b_date_recorded?: boolean;
 }
 
 /** Typed resolution proposals — advisory; the probe never auto-applies. */
@@ -121,8 +126,11 @@ resolution_kind: "supersede" when one side is clearly outdated by the other,
 "debate" when both are defensible positions worth keeping, "synthesize" when
 they should be merged into one reconciled statement, "manual" otherwise.
 
-Each claim is labelled with the day it dates from, "(from: YYYY-MM-DD)", or
-"(date unknown)". Rules:
+Each claim is labelled with the day it dates from, "(from: YYYY-MM-DD)", the day
+it was stored, "(recorded: YYYY-MM-DD)", or "(date unknown)".
+A recorded date is when the claim was stored, not evidence of when it held;
+only (from:) dates can establish a time-ordered update.
+Rules:
 - Time check first. A time-ordered update needs evidence of two DIFFERENT
   times: different (from:) dates, different dates written in the text, or
   explicit change wording ("now", "previously", "grew from").
@@ -137,16 +145,18 @@ Each claim is labelled with the day it dates from, "(from: YYYY-MM-DD)", or
 
 If they are compatible or merely a time-ordered update, return contradicts=false.`;
 
-/** "(from: YYYY-MM-DD)" for a dated side, "(date unknown)" otherwise. */
-function dateTag(date: string | null | undefined): string {
-  return typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date) ? `(from: ${date})` : "(date unknown)";
+/** "(from: YYYY-MM-DD)" for a dated side, "(recorded: …)" for a side dated only
+ *  by when it was stored, "(date unknown)" otherwise. */
+function dateTag(date: string | null | undefined, recorded: boolean | undefined): string {
+  if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return "(date unknown)";
+  return recorded === true ? `(recorded: ${date})` : `(from: ${date})`;
 }
 
 /** The judge's user message: each claim labelled with the day it dates from. */
 export function buildJudgeUserMessage(pair: CandidatePair): string {
   return (
-    `A ${dateTag(pair.a_date)}: ${sanitizeForPrompt(pair.a_text).text}\n\n` +
-    `B ${dateTag(pair.b_date)}: ${sanitizeForPrompt(pair.b_text).text}`
+    `A ${dateTag(pair.a_date, pair.a_date_recorded)}: ${sanitizeForPrompt(pair.a_text).text}\n\n` +
+    `B ${dateTag(pair.b_date, pair.b_date_recorded)}: ${sanitizeForPrompt(pair.b_text).text}`
   );
 }
 
@@ -286,13 +296,19 @@ function liveTake(t: string): string {
           AND ${t}.resolved_at IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM documents dd
-             WHERE dd.id = ${t}.source_ref AND dd.deleted_at IS NOT NULL
+             WHERE dd.id = ${t}.source_ref
+               AND (dd.deleted_at IS NOT NULL OR NOT (${quarantineFilterFragment("dd")}))
           )`;
 }
 
 /** The day a fact dates from: when it became true, else when it was written. */
 function factDate(f: string): string {
   return `COALESCE(${f}.valid_from, ${f}.written_at::date)::text`;
+}
+
+/** True when `factDate` fell back to the day the fact was written. */
+function factDateRecorded(f: string): string {
+  return `(${f}.valid_from IS NULL)`;
 }
 
 async function defaultPairs(
@@ -309,7 +325,8 @@ async function defaultPairs(
               f2.id::text AS b_ref, f2.fact AS b_text,
               f1.source_id AS source_id,
               'fact' AS a_kind, 'fact' AS b_kind,
-              ${factDate("f1")} AS a_date, ${factDate("f2")} AS b_date
+              ${factDate("f1")} AS a_date, ${factDate("f2")} AS b_date,
+              ${factDateRecorded("f1")} AS a_date_recorded, ${factDateRecorded("f2")} AS b_date_recorded
          FROM entity_facts f1
          JOIN entity_facts f2
            ON f2.entity_slug = f1.entity_slug
@@ -377,7 +394,8 @@ async function defaultPairs(
               f.id::text AS b_ref, f.fact AS b_text,
               f.source_id AS source_id,
               'take' AS a_kind, 'fact' AS b_kind,
-              t.generated_at::date::text AS a_date, ${factDate("f")} AS b_date
+              t.generated_at::date::text AS a_date, ${factDate("f")} AS b_date,
+              ${factDateRecorded("f")} AS b_date_recorded
          FROM synth_takes t
          LEFT JOIN documents d ON d.id = t.source_ref
          JOIN entity_facts f
@@ -421,20 +439,63 @@ function verdictTtlDays(): number {
   return Number.isFinite(n) && n > 0 ? n : 30;
 }
 
-/** Unexpired cached verdict for a pair, or null. Fail-soft (pre-073 brain). */
+/** A pair whose judge reply never parsed is retried after this many days… */
+const PARSE_FAILURE_RETRY_DAYS = 7;
+/** …and judged at most this many times in all under one prompt version. */
+const PARSE_FAILURE_MAX_ATTEMPTS = 3;
+
+/**
+ * The verdict cache's word on a pair: `skip` when an unexpired verdict is on
+ * file, or when the pair's replies have failed to parse and it is inside its
+ * retry backoff or out of attempts. A parse failure is stored as a marker in
+ * `verdict` (`{"parse_failure": true, "attempts": n}`); its `contradicts`
+ * column is a placeholder the NOT NULL column needs, never a negative verdict.
+ * Fail-soft (pre-073 brain): nothing on file.
+ */
 async function getCachedVerdict(
   engine: Engine,
   pairKeyHash: string,
-): Promise<{ contradicts: boolean } | null> {
+): Promise<{ skip: boolean; failedAttempts: number }> {
   try {
-    const { rows } = await engine.query<{ contradicts: boolean }>(
-      `SELECT contradicts FROM synth_contradiction_verdicts
-        WHERE pair_key = $1 AND expires_at > now()`,
+    const { rows } = await engine.query<{ live: boolean; parse_failure: boolean; attempts: number }>(
+      `SELECT expires_at > now() AS live,
+              COALESCE((verdict->>'parse_failure')::boolean, false) AS parse_failure,
+              COALESCE((verdict->>'attempts')::int, 0) AS attempts
+         FROM synth_contradiction_verdicts
+        WHERE pair_key = $1`,
       [pairKeyHash],
     );
-    return rows[0] ?? null;
+    const row = rows[0];
+    if (!row) return { skip: false, failedAttempts: 0 };
+    if (!row.parse_failure) return { skip: row.live, failedAttempts: 0 };
+    return { skip: row.live || row.attempts >= PARSE_FAILURE_MAX_ATTEMPTS, failedAttempts: row.attempts };
   } catch {
-    return null;
+    return { skip: false, failedAttempts: 0 };
+  }
+}
+
+/** Record one more unparseable reply for a pair, with a retry backoff. Fail-soft. */
+async function putParseFailure(
+  engine: Engine,
+  pairKeyHash: string,
+  attempts: number,
+  modelId: string,
+): Promise<void> {
+  try {
+    await engine.query(
+      `INSERT INTO synth_contradiction_verdicts
+         (pair_key, contradicts, verdict, model_id, judged_at, expires_at)
+       VALUES ($1, false, $2::text::jsonb, $3, now(), now() + ($4 * interval '1 day'))
+       ON CONFLICT (pair_key) DO UPDATE SET
+         contradicts = EXCLUDED.contradicts,
+         verdict = EXCLUDED.verdict,
+         model_id = EXCLUDED.model_id,
+         judged_at = EXCLUDED.judged_at,
+         expires_at = EXCLUDED.expires_at`,
+      [pairKeyHash, JSON.stringify({ parse_failure: true, attempts }), modelId, PARSE_FAILURE_RETRY_DAYS],
+    );
+  } catch {
+    /* cache write is best-effort */
   }
 }
 
@@ -556,8 +617,10 @@ export async function probeContradictionsPhase(
 
     // Cache 2: an unexpired verdict (negative included) → skip, no re-spend.
     // Positives always have a synth_contradictions row (written in the same
-    // pass), so a hit here is almost always a cached negative.
-    if (await getCachedVerdict(engine, key)) {
+    // pass), so a hit here is almost always a cached negative — or a pair
+    // whose replies never parsed, backing off between bounded retries.
+    const cached = await getCachedVerdict(engine, key);
+    if (cached.skip) {
       result.cacheHits += 1;
       continue;
     }
@@ -610,11 +673,12 @@ export async function probeContradictionsPhase(
     result.attempted += 1;
 
     // A reply with no parseable verdict is a failed judgment, not a negative:
-    // it stays out of the rate and out of the verdict cache, so the pair is
-    // judged again next run.
+    // it stays out of the rate, and the pair is retried after a backoff, a
+    // bounded number of times, rather than re-spent on every run.
     if (!judgment) {
       result.parseFailures += 1;
       result.errors.push(`pair ${pair.a_ref}/${pair.b_ref} parse: no verdict in judge reply`);
+      await putParseFailure(engine, key, cached.failedAttempts + 1, usedModel);
       if (overCap) break;
       continue;
     }
