@@ -134,7 +134,9 @@ describe("code mentions", () => {
   it("carry language, kind, line range and a snippet, and filter by language", async () => {
     const all = await codeDefs(storage.engine(), "step");
     expect(new Set(all.mentions.map((m) => m.language))).toEqual(new Set(["typescript", "python"]));
-    const py = await codeDefs(storage.engine(), "step", undefined, undefined, "python");
+    const py = await codeDefs(storage.engine(), "step", undefined, undefined, "python", {
+      snippet: true,
+    });
     expect(py.count).toBe(2);
     const m = py.mentions[0]!;
     expect(m.language).toBe("python");

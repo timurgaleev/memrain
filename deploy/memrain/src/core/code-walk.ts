@@ -232,14 +232,22 @@ async function defsByBare(
   const params: unknown[] = [names];
   const lang = andLanguage("c.language", scope.lang, params);
   const src = andSourceScope("d.source_id", scope.sources, params);
+  // The caller only asks whether a name has exactly one definition in its
+  // language besides the calling chunk, so three rows per name and language
+  // answer it. A cap shared across names could drop a second definition of one
+  // name and make the first look unique.
   const r = await engine.query<DefChunk>(
-    `SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language
-       FROM chunks c JOIN documents d ON d.id = c.document_id
-      WHERE c.symbol_name = ANY($1::text[])
-        AND c.symbol_name_qualified IS NOT NULL
-        AND ${visibilityClause("d")}${lang}${src}
-      ORDER BY c.id
-      LIMIT ${HOP_ROW_CAP}`,
+    `SELECT id, symbol_name, symbol_name_qualified, language
+       FROM (
+         SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language,
+                row_number() OVER (PARTITION BY c.symbol_name, c.language ORDER BY c.id) AS rn
+           FROM chunks c JOIN documents d ON d.id = c.document_id
+          WHERE c.symbol_name = ANY($1::text[])
+            AND c.symbol_name_qualified IS NOT NULL
+            AND ${visibilityClause("d")}${lang}${src}
+       ) ranked
+      WHERE rn <= 3
+      ORDER BY id`,
     params,
   );
   for (const row of r.rows) {
@@ -288,19 +296,27 @@ async function callersHop(
   const params: unknown[] = [keys];
   const lang = andLanguage("c.language", scope.lang, params);
   const src = andSourceScope("e.source_id", scope.sources, params);
+  params.push(frontier);
+  const exactParam = params.length;
   params.push(limit);
+  // Edges naming the exact symbol, then edges the resolve phase tied to a
+  // definition, then bare-name guesses: a common bare name like `get` must not
+  // fill the row limit and node budget before the real callers are read.
   const r = await engine.query<CallerRow>(
     `SELECT DISTINCT e.to_symbol_qualified AS target,
             e.from_symbol_qualified AS next_symbol,
             e.from_chunk_id AS chunk_id,
-            e.edge_metadata
+            e.edge_metadata,
+            CASE WHEN e.to_symbol_qualified = ANY($${exactParam}::text[]) THEN 0
+                 WHEN e.edge_metadata ? 'resolved_chunk_id' THEN 1
+                 ELSE 2 END AS rank
        FROM code_edges_symbol e
        JOIN chunks c ON c.id = e.from_chunk_id
        JOIN documents d ON d.id = c.document_id
       WHERE e.to_symbol_qualified = ANY($1::text[])
         AND e.from_symbol_qualified IS NOT NULL
         AND ${visibilityClause("d")}${lang}${src}
-      ORDER BY e.from_chunk_id, e.to_symbol_qualified
+      ORDER BY rank, e.from_chunk_id, e.to_symbol_qualified
       LIMIT $${params.length}`,
     params,
   );

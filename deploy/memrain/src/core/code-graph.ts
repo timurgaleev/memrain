@@ -17,6 +17,7 @@ import type { Engine } from "./engine/interface.ts";
 import { entityId, type EntityType } from "./entities.ts";
 import { andSourceScope, isNoGrant, normalizeScope, type SourceScope } from "./source-scope.ts";
 import { codeSweepCovers, codeSweepInProgress } from "./sweep-code.ts";
+import { visibilityClause } from "./visibility.ts";
 
 export interface CodeMention {
   surface_form: string;
@@ -29,8 +30,16 @@ export interface CodeMention {
   kind: string | null;
   start_line: number | null;
   end_line: number | null;
-  /** The chunk's first SNIPPET_CHARS characters. */
-  snippet: string;
+  /** The chunk's first SNIPPET_CHARS characters; present only when asked for. */
+  snippet?: string;
+}
+
+export interface CodeMentionOptions {
+  /**
+   * Carry each mention's chunk text as `snippet`. Off by default: a snippet is
+   * a raw page body, so only a caller allowed unredacted bodies turns it on.
+   */
+  snippet?: boolean;
 }
 
 /** Characters of chunk text a mention carries — enough to read a signature. */
@@ -185,6 +194,7 @@ interface MentionFilter {
   lang?: string;
   /** Only mentions from the chunk defining this qualified symbol. */
   symbolQualified?: string;
+  snippet?: boolean;
 }
 
 async function mentionsFor(
@@ -196,7 +206,7 @@ async function mentionsFor(
   filter: MentionFilter = {},
 ): Promise<CodeGraphResult> {
   const eid = entityId(type, name);
-  const params: unknown[] = [eid, limit, SNIPPET_CHARS];
+  const params: unknown[] = [eid, limit];
   // Scope on the joined documents.source_id. NULL (unclassified) rows are
   // excluded fail-closed: a tenant never sees an unclassified legacy mention.
   const sources = normalizeScope(sourceIds);
@@ -213,14 +223,18 @@ async function mentionsFor(
     params.push(filter.symbolQualified);
     sourceFilter += ` AND c.symbol_name_qualified = $${params.length}`;
   }
+  let snippetCol = "";
+  if (filter.snippet) {
+    params.push(SNIPPET_CHARS);
+    snippetCol = `, left(c.content, $${params.length}) AS snippet`;
+  }
   const r = await engine.query<CodeMention>(
     `SELECT em.surface_form, em.chunk_id, c.document_id, d.source_path,
-            c.language, c.symbol_type AS kind, c.start_line, c.end_line,
-            left(c.content, $3) AS snippet
+            c.language, c.symbol_type AS kind, c.start_line, c.end_line${snippetCol}
        FROM entity_mentions em
        JOIN chunks c ON c.id = em.chunk_id
        JOIN documents d ON d.id = c.document_id
-      WHERE em.entity_id = $1 AND d.deleted_at IS NULL${sourceFilter}
+      WHERE em.entity_id = $1 AND ${visibilityClause("d")}${sourceFilter}
       ORDER BY d.source_path, c.start_line NULLS FIRST
       LIMIT $2`,
     params,
@@ -240,8 +254,12 @@ export async function codeCallers(
   limit?: number,
   sourceIds?: string[],
   lang?: string,
+  options: CodeMentionOptions = {},
 ): Promise<CodeGraphResult> {
-  return mentionsFor(engine, "code-caller", name, clampLimit(limit), sourceIds, { lang });
+  return mentionsFor(engine, "code-caller", name, clampLimit(limit), sourceIds, {
+    lang,
+    snippet: options.snippet,
+  });
 }
 
 /** Where `name` is defined — the `code-def` mentions for a symbol (by bare
@@ -252,8 +270,12 @@ export async function codeDefs(
   limit?: number,
   sourceIds?: string[],
   lang?: string,
+  options: CodeMentionOptions = {},
 ): Promise<CodeGraphResult> {
-  return mentionsFor(engine, "code-def", name, clampLimit(limit), sourceIds, { lang });
+  return mentionsFor(engine, "code-def", name, clampLimit(limit), sourceIds, {
+    lang,
+    snippet: options.snippet,
+  });
 }
 
 /** All references to `name` — the `code-ref` mentions (imports, type uses,
@@ -264,8 +286,12 @@ export async function codeRefs(
   limit?: number,
   sourceIds?: string[],
   lang?: string,
+  options: CodeMentionOptions = {},
 ): Promise<CodeGraphResult> {
-  return mentionsFor(engine, "code-ref", name, clampLimit(limit), sourceIds, { lang });
+  return mentionsFor(engine, "code-ref", name, clampLimit(limit), sourceIds, {
+    lang,
+    snippet: options.snippet,
+  });
 }
 
 /** Resolve the innermost-enclosing code-def symbol covering file:line. */
@@ -289,7 +315,7 @@ export async function resolveSymbolAt(
        JOIN entity_mentions em ON em.chunk_id = c.id
        JOIN entities e ON e.id = em.entity_id
       WHERE d.source_path = $1
-        AND d.deleted_at IS NULL
+        AND ${visibilityClause("d")}
         AND $2 BETWEEN c.start_line AND c.end_line
         AND e.type = 'code-def'${sourceFilter}
       ORDER BY (c.end_line - c.start_line) ASC
@@ -310,6 +336,7 @@ export async function codeCallees(
   limit?: number,
   sourceIds?: string[],
   lang?: string,
+  options: CodeMentionOptions = {},
 ): Promise<CodeCalleesResult> {
   const parsed = parsePathLine(target);
   if (!parsed) {
@@ -323,6 +350,7 @@ export async function codeCallees(
     const bare = name.split("::").pop()!;
     const res = await mentionsFor(engine, "code-callee", bare, clampLimit(limit), sourceIds, {
       lang,
+      snippet: options.snippet,
       ...(name.includes("::") ? { symbolQualified: name } : {}),
     });
     return { ...res, query: { type: "code-callee", name }, resolved_symbol: name };
@@ -341,6 +369,9 @@ export async function codeCallees(
       sourceIds,
     );
   }
-  const res = await mentionsFor(engine, "code-callee", sym, clampLimit(limit), sourceIds, { lang });
+  const res = await mentionsFor(engine, "code-callee", sym, clampLimit(limit), sourceIds, {
+    lang,
+    snippet: options.snippet,
+  });
   return { ...res, resolved_symbol: sym };
 }

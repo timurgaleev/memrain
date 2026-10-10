@@ -37,23 +37,29 @@ export async function insertCodeEdges(
   tx: Engine,
   edges: readonly CodeEdgeInput[],
 ): Promise<number> {
-  let written = 0;
-  for (const e of edges) {
-    // The edge takes its source from the chunk's document, so a scoped reader
-    // walks exactly the graph of the sources it may read.
-    const r = await tx.query<{ id: number }>(
-      `INSERT INTO code_edges_symbol
-         (from_chunk_id, from_symbol_qualified, to_symbol_qualified,
-          edge_type, source_id)
-       SELECT c.id, $2, $3, $4, d.source_id
-         FROM chunks c JOIN documents d ON d.id = c.document_id
-        WHERE c.id = $1
-       ON CONFLICT (from_chunk_id, to_symbol_qualified, edge_type)
-         DO NOTHING
-       RETURNING id`,
-      [e.fromChunkId, e.fromSymbolQualified, e.toSymbolQualified, e.edgeType],
-    );
-    if (r.rows.length > 0) written++;
-  }
-  return written;
+  if (edges.length === 0) return 0;
+  // One statement for the whole document: a large file has thousands of edges
+  // and a round trip each held the document transaction open that long. The
+  // edge takes its source from the chunk's document, so a scoped reader walks
+  // exactly the graph of the sources it may read.
+  const r = await tx.query<{ id: number }>(
+    `INSERT INTO code_edges_symbol
+       (from_chunk_id, from_symbol_qualified, to_symbol_qualified,
+        edge_type, source_id)
+     SELECT c.id, i.from_symbol, i.to_symbol, i.edge_type, d.source_id
+       FROM unnest($1::text[], $2::text[], $3::text[], $4::text[])
+              AS i(from_chunk_id, from_symbol, to_symbol, edge_type)
+       JOIN chunks c ON c.id = i.from_chunk_id
+       JOIN documents d ON d.id = c.document_id
+     ON CONFLICT (from_chunk_id, to_symbol_qualified, edge_type)
+       DO NOTHING
+     RETURNING id`,
+    [
+      edges.map((e) => e.fromChunkId),
+      edges.map((e) => e.fromSymbolQualified),
+      edges.map((e) => e.toSymbolQualified),
+      edges.map((e) => e.edgeType),
+    ],
+  );
+  return r.rows.length;
 }
