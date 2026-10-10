@@ -26,6 +26,7 @@ import { andSourceScope } from "./source-scope.ts";
 import { lockWithdrawals } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { normalizeFactRow } from "./facts.ts";
+import type { SimilarActive } from "./facts-similar-active.ts";
 
 /**
  * A single fact row as returned by `recallFact`. Mirrors the projection in
@@ -129,6 +130,9 @@ export interface ForgetFactResult {
    * unflipped call.
    */
   withdrawn_duplicates: number;
+  /** Close live rewordings left behind; added by the MCP `forget_fact` handler
+   *  after a flip (see facts-similar-active.ts). */
+  similar_active?: SimilarActive;
 }
 
 /**

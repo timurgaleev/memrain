@@ -600,14 +600,13 @@ export const OPERATIONS: readonly Operation[] = [
     name: "add_fact",
     scope: "write",
     description:
-      "Append a fact about an entity to the entity_facts ledger. Corrections are new facts, never edits — but restating a claim you already wrote does NOT mint a duplicate: an identical claim about the same entity, from the same source and the same writer, refreshes the row on file and returns its id with `inserted: false`. A claim that differs in any of those is a new row. A claim forgotten with `forget_fact` stays forgotten: re-adding it for the same entity, source and visibility (whitespace and case do not matter) writes nothing and returns `withdrawn: true` with `id: null`. `visibility` decides who can read the fact back: it defaults to `private`, which only the operator can read, so a tenant-scoped caller that wants to recall its own write must pass `visibility: 'world'`. Provenance is recorded on every fact: name `source_slug`, `source_chunk_id` or `written_by` to say where the claim came from, and if you name none the fact is credited to your own caller identity — an unattributed fact cannot be audited or aged against its origin; a public caller cannot set `written_by` at all, since that is the audit field. WRITE — internal by default, and reachable from the public ingress only when `MEMRAIN_PUBLIC_WRITE=1` is set.",
+      "Append a fact about an entity to the entity_facts ledger. Corrections are new facts, never edits — but restating a claim you already wrote does NOT mint a duplicate: an identical claim about the same entity, from the same source and the same writer, refreshes the row on file and returns its id with `inserted: false`. A claim that differs in any of those is a new row. A claim forgotten with `forget_fact` stays forgotten: re-adding it for the same entity, source and visibility (whitespace and case do not matter) writes nothing and returns `withdrawn: true` with `id: null`. `visibility` decides who can read the fact back: it defaults to `private`, which only the operator can read, so a tenant-scoped caller that wants to recall its own write must pass `visibility: 'world'`. Provenance is recorded on every fact: name `source_slug`, `source_chunk_id` or `written_by` to say where the claim came from, and if you name none the fact is credited to your own caller identity — an unattributed fact cannot be audited or aged against its origin; a public caller cannot set `written_by` at all, since that is the audit field. Pass `replaces: <fact_id>` to retire one of your live facts in favour of this one (it is marked superseded, not withdrawn; the response says `replaced: true|false`). To save several facts in one call pass `items` instead of `fact`: up to 20 objects `{fact, entity_slug?, confidence?, visibility?, replaces?}`, with the top-level `entity_slug`, `confidence`, `visibility`, `source_slug`, `source_chunk_id` and `written_by` as defaults; every item is checked before any is written, and the response lists each item's outcome with `saved`, `failed` and `partial`. `items` and `replaces` are refused on the public ingress. WRITE — internal by default, and reachable from the public ingress only when `MEMRAIN_PUBLIC_WRITE=1` is set.",
     params: {
       entity_slug: str({
-        ...req,
         description:
-          "The entity the fact is about (e.g. `people/alice`). Soft reference — the entity's page need not exist yet.",
+          "The entity the fact is about (e.g. `people/alice`). Soft reference — the entity's page need not exist yet. Required unless every `items` entry names its own.",
       }),
-      fact: str({ ...req, description: "Short claim, one sentence." }),
+      fact: str({ description: "Short claim, one sentence. Required unless `items` is given." }),
       confidence: num({ minimum: 0, maximum: 1 }),
       source_slug: str({ description: "Page the fact was extracted from." }),
       source_chunk_id: str(),
@@ -618,6 +617,15 @@ export const OPERATIONS: readonly Operation[] = [
           "Who may read the fact back. `private` (the default) is operator-only; `world` is also readable by tenant-scoped and public callers. Ignored on public ingress, which always writes `private`.",
       }),
       request_id: requestIdParam,
+      replaces: int({
+        minimum: 1,
+        description:
+          "Id of a live fact in your own source that this fact replaces. Not combinable with `items` (put it on the item instead).",
+      }),
+      items: arr({
+        description:
+          "Several facts in one call, 1 to 20 objects `{fact, entity_slug?, confidence?, visibility?, replaces?}`. Replaces `fact`.",
+      }),
     },
   },
   {
@@ -941,7 +949,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "forget_fact",
     scope: "write",
     description:
-      "Forget (soft-delete) a fact by id — stamps forgotten_at so the fact stops surfacing in recall; the row is retained for audit. The forget is durable: the claim is withdrawn for that entity, source and visibility, every other live copy of it is retired too (`withdrawn_duplicates` counts them), and a later re-add, re-extraction or transcript import of the same claim lands forgotten. There is no undo. Idempotent: a second forget is a no-op (forgotten=false), an unknown id reports found=false. Optional `reason` is stored on the tombstoned row. WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
+      "Forget (soft-delete) a fact by id — stamps forgotten_at so the fact stops surfacing in recall; the row is retained for audit. The forget is durable: the claim is withdrawn for that entity, source and visibility, every other live copy of it is retired too (`withdrawn_duplicates` counts them), and a later re-add, re-extraction or transcript import of the same claim lands forgotten. There is no undo. Idempotent: a second forget is a no-op (forgotten=false), an unknown id reports found=false. Optional `reason` is stored on the tombstoned row. A forget that flipped a fact also returns `similar_active`: up to 5 other live facts about the same entity that read close to the withdrawn claim (fact ids and similarity scores only, no text) — rewordings the forget did not retire, worth confirming with the user before forgetting them too. WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
     params: {
       id: int({ ...req, minimum: 1, description: "Fact id to forget (entity_facts.id)." }),
       reason: str({ description: "Optional audit note stored on the forgotten row." }),
@@ -1242,6 +1250,7 @@ export const OPERATIONS: readonly Operation[] = [
       with_calibration: bool({ description: "Inject the calibration anti-bias block (opt-in)." }),
       k: int({ minimum: 1, maximum: 50, description: "Page hits to gather (default 12)." }),
       max_takes: int({ minimum: 1, maximum: 100, description: "Take rows to gather (default 20)." }),
+      reference_date: str({ description: "The day to treat as today when reading relative dates in the question (YYYY-MM-DD, not in the future). Default: today in the brain's time zone." }),
     },
   },
   {

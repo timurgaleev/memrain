@@ -239,7 +239,11 @@ import {
 } from "../core/public_redaction.ts";
 import { OperationError, PageNotFoundError, isOperationError } from "../core/operation-error.ts";
 import { suggestSlugs } from "../core/slug-suggest.ts";
-import { getBrainHotMemoryMeta } from "../core/hot-memory-meta.ts";
+import { getBrainHotMemoryMeta, invalidateHotMemoryMeta } from "../core/hot-memory-meta.ts";
+import { normalizeAddFactItems, runAddFactBatch } from "../core/facts-batch.ts";
+import { replaceFact } from "../core/facts-replace.ts";
+import { similarActiveAfterForget } from "../core/facts-similar-active.ts";
+import { ReferenceDateError, resolveThinkTemporalContext } from "../core/synthesis/think-temporal.ts";
 import { MAX_REQUEST_ID_LEN, OPERATIONS, validateParams } from "./operations.ts";
 import {
   claimWriteRequest,
@@ -370,13 +374,13 @@ export interface DispatchOptions {
 
 /**
  * Public entry: dispatch the tool call, then best-effort attach the
- * `_meta.brain_hot_memory` payload (Item 3, migration 020 surfacing).
+ * `_meta.brain_hot_memory` payload (recent live facts, see core/hot-memory-meta.ts).
  *
  * The injection is gated hard: it runs ONLY for a successful, non-public,
  * UNSCOPED (operator / trusted-local, `authInfo === undefined`) call, and is a
- * no-op unless MEMRAIN_HOT_MEMORY_META=1. `hot_memory` has no tenant/visibility
- * axis and holds unvetted PII, so it must never reach a public or tenant-scoped
- * caller. Any error here is swallowed — the meta hook can NEVER fail a tool call.
+ * no-op unless MEMRAIN_HOT_MEMORY_META=1. The payload carries raw fact text of
+ * every visibility, so it must never reach a public or tenant-scoped caller.
+ * Any error here is swallowed — the meta hook can NEVER fail a tool call.
  */
 export async function dispatchTool(
   storage: Storage,
@@ -402,7 +406,10 @@ export async function dispatchTool(
     opts.authInfo === undefined;
   if (injectable) {
     try {
-      const meta = await getBrainHotMemoryMeta(storage);
+      const readSources = effectiveReadSourceIdsForIngress(opts.authInfo, {
+        failClosed: tenantFailClosedEnabled(),
+      });
+      const meta = await getBrainHotMemoryMeta(storage, readSources !== undefined ? { sourceIds: readSources } : {});
       if (meta) return { ...result, _meta: meta };
     } catch {
       // Best-effort: never let the meta hook fail the underlying tool call.
@@ -635,6 +642,7 @@ async function dispatchToolInner(
             writeSource,
             opts.isPublic ?? false,
             writerIdentity(opts),
+            opts.authInfo?.boundSlugPrefixes,
           ),
         );
       case "add_timeline_event":
@@ -686,7 +694,7 @@ async function dispatchToolInner(
       case "recall":
         return await callRecall(storage, args, readSources, remote);
       case "forget_fact":
-        return await callForgetFact(storage, args, writeSource);
+        return await callForgetFact(storage, args, writeSource, remote);
       case "get_brain_identity":
         return await callGetBrainIdentity(storage, readSources);
       case "whoami":
@@ -2388,11 +2396,46 @@ async function callAddFact(
   writeSource?: string,
   isPublic = false,
   fallbackWrittenBy = "operator",
+  boundPrefixes?: readonly string[],
 ): Promise<ToolCallResult> {
-  if (typeof args["entity_slug"] !== "string")
-    return errResult("add_fact: `entity_slug` is required");
+  // Both retire or fan out writes an anonymous caller has no business making.
+  if (isPublic && (args["items"] !== undefined || args["replaces"] !== undefined)) {
+    throw new OperationError(
+      "permission_denied",
+      "add_fact: `items` and `replaces` are not available on the public ingress",
+      "Send one fact per call, without `replaces`.",
+    );
+  }
+  const bound = boundPrefixes !== undefined && boundPrefixes.length > 0 ? boundPrefixes : undefined;
+  const writeOne = (itemArgs: Record<string, unknown>) =>
+    addOneFact(storage, itemArgs, writeSource, isPublic, fallbackWrittenBy, bound);
+  let body: Record<string, unknown>;
+  if (args["items"] !== undefined) {
+    const items = normalizeAddFactItems(args);
+    // The dispatch-level fence judged only the top-level slug; every item is
+    // held to it before anything is written.
+    if (bound) for (const item of items) enforceSlugPrefixFence("add_fact", item, bound);
+    body = { ...(await runAddFactBatch(items, writeOne)) };
+  } else {
+    body = { ...(await writeOne(args)) };
+  }
+  invalidateHotMemoryMeta();
+  return jsonResult({ ok: true, ...body });
+}
+
+/** One fact through the single-fact path, plus its optional `replaces`. */
+async function addOneFact(
+  storage: Storage,
+  args: Record<string, unknown>,
+  writeSource: string | undefined,
+  isPublic: boolean,
+  fallbackWrittenBy: string,
+  boundPrefixes: readonly string[] | undefined,
+): Promise<Awaited<ReturnType<typeof addFact>> & { replaced?: boolean; replace_reason?: string }> {
+  if (typeof args["entity_slug"] !== "string" || args["entity_slug"].length === 0)
+    throw new OperationError("invalid_params", "add_fact: `entity_slug` is required", "Pass the entity the fact is about, e.g. `people/alice`.");
   if (typeof args["fact"] !== "string" || args["fact"].length === 0)
-    return errResult("add_fact: `fact` is required");
+    throw new OperationError("invalid_params", "add_fact: `fact` is required", "Pass a short claim, or several in `items`.");
   const input: Parameters<typeof addFact>[1] = {
     entity_slug: args["entity_slug"],
     fact: args["fact"],
@@ -2442,7 +2485,22 @@ async function callAddFact(
     input.written_by = fallbackWrittenBy;
   }
   const r = await addFact(storage, input);
-  return jsonResult({ ok: true, ...r });
+  const replaces = args["replaces"];
+  if (typeof replaces !== "number") return r;
+  // The new fact is already committed; a failed retirement must not hide that.
+  try {
+    const outcome = await replaceFact(
+      storage.engine(),
+      replaces,
+      r.id,
+      writeSource ? [writeSource] : undefined,
+      boundPrefixes ? (slug) => slugUnderPrefixes(slug, boundPrefixes) : undefined,
+    );
+    return { ...r, ...outcome };
+  } catch (e) {
+    console.error("[add_fact] replaces failed:", e instanceof Error ? e.message : e);
+    return { ...r, replaced: false, replace_reason: "error" };
+  }
 }
 
 async function callAddTimelineEvent(
@@ -2968,6 +3026,7 @@ async function callForgetFact(
   storage: Storage,
   args: Record<string, unknown>,
   writeSource?: string,
+  remote = false,
 ): Promise<ToolCallResult> {
   const id = args["id"];
   if (!Number.isInteger(id) || (id as number) < 1) {
@@ -2978,8 +3037,22 @@ async function callForgetFact(
   // A destructive write scopes to the caller's SINGLE write source (a scalar),
   // never the federated READ set — a tenant may read many sources but must only
   // forget within its own write source. Undefined → unscoped, unchanged.
-  const r = await forgetFact(storage, id as number, opts, writeSource ? [writeSource] : undefined);
-  return jsonResult({ ok: true, ...r });
+  const scope = writeSource ? [writeSource] : undefined;
+  const r = await forgetFact(storage, id as number, opts, scope);
+  if (!r.forgotten) return jsonResult({ ok: true, ...r });
+  invalidateHotMemoryMeta();
+  // Advisory: the forget already committed, so a failed lookup must not turn
+  // it into an error.
+  let similar: Awaited<ReturnType<typeof similarActiveAfterForget>> | undefined;
+  try {
+    similar = await similarActiveAfterForget(storage.engine(), r.id, {
+      ...(scope ? { sourceIds: scope } : {}),
+      remote,
+    });
+  } catch (e) {
+    console.error("[forget_fact] similar_active lookup failed:", e instanceof Error ? e.message : e);
+  }
+  return jsonResult({ ok: true, ...r, ...(similar ? { similar_active: similar } : {}) });
 }
 
 async function callGetBrainIdentity(
@@ -3660,6 +3733,19 @@ async function callThink(
   if (args["with_calibration"] === true) thinkOpts.withCalibration = true;
   if (typeof args["k"] === "number") thinkOpts.k = args["k"] as number;
   if (typeof args["max_takes"] === "number") thinkOpts.maxTakes = args["max_takes"] as number;
+  if (typeof args["reference_date"] === "string") {
+    // Checked here as well as in runThink so a bad date is refused on every
+    // path, including the no-grant answer below that never reaches runThink.
+    try {
+      resolveThinkTemporalContext({ referenceDate: args["reference_date"] });
+    } catch (e) {
+      if (e instanceof ReferenceDateError) {
+        throw new OperationError("invalid_params", `think: ${e.message}`, "Pass `reference_date` as a past or current YYYY-MM-DD day.");
+      }
+      throw e;
+    }
+    thinkOpts.referenceDate = args["reference_date"];
+  }
   if (ctx.readSources !== undefined) thinkOpts.sourceIds = ctx.readSources;
   // Same diary fence as `search`: a failed compose quotes gathered pages
   // verbatim, so a non-operator must never gather life/diary/* at all.
