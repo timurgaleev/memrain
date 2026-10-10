@@ -8,9 +8,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { putPage, deletePage } from "../src/core/pages.ts";
+import { putPage, deletePage, restorePage, renamePage } from "../src/core/pages.ts";
 import { syncWikilinksForPage } from "../src/core/links.ts";
-import { listWantedPages } from "../src/core/wanted-links.ts";
+import { listWantedPages, reconnectWantedLinks } from "../src/core/wanted-links.ts";
+import type { Engine } from "../src/core/engine/interface.ts";
 import { registerSource } from "../src/core/sources.ts";
 
 let tmp: string;
@@ -119,5 +120,85 @@ describe("wanted links", () => {
     expect(await edges("t1/notes/g")).toEqual([{ target: "orbit", resolution: "unqualified" }]);
     await putPage(storage, { slug: "projects/orbit", markdown_body: "t1 orbit", source_id: "t1" });
     expect(await edges("t1/notes/g")).toEqual([{ target: "projects/orbit", resolution: "qualified" }]);
+  });
+
+  it("a target created while a re-extract is between resolve and commit still gets the edge", async () => {
+    await write("notes/r", "Met [[Alice Smith]] at the [[Roadmap]] review.");
+    // Run the target writes right before the re-extract opens its transaction,
+    // after its resolver has already called both links dangling.
+    const real = storage.engine();
+    let raced = false;
+    const racing = new Proxy(real, {
+      get(t, k) {
+        if (k === "transaction") {
+          return async (fn: (tx: Engine) => Promise<unknown>) => {
+            if (!raced) {
+              raced = true;
+              await putPage(storage, { slug: "people/alice-smith", markdown_body: "Alice" });
+              await putPage(storage, { slug: "roadmap", markdown_body: "the roadmap" });
+            }
+            return t.transaction(fn);
+          };
+        }
+        const v = Reflect.get(t, k, t);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    const racingStorage = new Proxy(storage, {
+      get(t, k) {
+        if (k === "engine") return () => racing;
+        const v = Reflect.get(t, k, t);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    await syncWikilinksForPage(racingStorage, "notes/r", "Met [[Alice Smith]] at the [[Roadmap]] review.");
+    expect(raced).toBe(true);
+    expect(await edges("notes/r")).toEqual([
+      { target: "people/alice-smith", resolution: "qualified" },
+      { target: "roadmap", resolution: "qualified" },
+    ]);
+    expect(await wantedRows()).toEqual([]);
+  });
+
+  it("restoring a deleted page answers references written while it was gone", async () => {
+    await putPage(storage, { slug: "places/delta-base", markdown_body: "delta" });
+    await deletePage(storage, "places/delta-base");
+    await write("notes/h", "Back at [[Delta Base]].");
+    expect(await edges("notes/h")).toEqual([{ target: "delta-base", resolution: "unqualified" }]);
+
+    expect((await restorePage(storage, "places/delta-base")).restored).toBe(true);
+    expect(await edges("notes/h")).toEqual([{ target: "places/delta-base", resolution: "qualified" }]);
+    expect(await wantedRows()).toEqual([]);
+  });
+
+  it("renaming a page onto a wanted name answers it, and the renamed page keeps its own references", async () => {
+    await write("notes/i", "Meet at [[Echo Base]].");
+    await write("drafts/base", "Near [[Foxtrot]].");
+    const r = await renamePage(storage, "drafts/base", "places/echo-base");
+    expect(r.renamed).toBe(true);
+    expect(await edges("notes/i")).toEqual([{ target: "places/echo-base", resolution: "qualified" }]);
+    expect(await wantedRows()).toEqual([{ from_slug: "places/echo-base", target_slug: "foxtrot" }]);
+  });
+
+  it("a deleted linking page gets no edge when its target appears", async () => {
+    await write("notes/k", "[[Golf Club]]");
+    await deletePage(storage, "notes/k");
+    await putPage(storage, { slug: "places/golf-club", markdown_body: "golf" });
+    expect((await edges("notes/k")).map((e) => e.target)).not.toContain("places/golf-club");
+  });
+
+  it("a basename with LIKE metacharacters is matched literally", async () => {
+    const e = storage.engine();
+    // Slugs written through putPage cannot carry `_`; rows from older imports can.
+    await putPage(storage, { slug: "other/axb", markdown_body: "x" });
+    await putPage(storage, { slug: "notes/m", markdown_body: "m" });
+    await e.query(
+      `INSERT INTO pages (slug, type, title, compiled_truth, markdown_body, content_hash, source_id)
+       VALUES ('people/a_b', 'note', 'a_b', '{}'::jsonb, '', 'h', 'default')`,
+    );
+    await e.query(
+      `INSERT INTO wanted_links (source_id, from_slug, target_slug, surface) VALUES ('default', 'notes/m', 'a_b', 'a_b')`,
+    );
+    expect(await reconnectWantedLinks(e, "people/a_b", "default")).toBe(1);
   });
 });

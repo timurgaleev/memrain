@@ -375,6 +375,15 @@ export async function lockPageSlugs(tx: Engine, ...slugs: string[]): Promise<voi
   }
 }
 
+/** Reconnect wanted links to `slug` with the aliases it already declares. */
+async function reconnectWithStoredAliases(tx: Engine, slug: string, sourceId: string): Promise<void> {
+  const aliases = await tx.query<{ alias_norm: string }>(
+    `SELECT alias_norm FROM page_aliases WHERE slug = $1`,
+    [slug],
+  );
+  await reconnectWantedLinks(tx, slug, sourceId, aliases.rows.map((a) => a.alias_norm));
+}
+
 export async function putPage(
   storage: Storage,
   input: PageInput,
@@ -1123,6 +1132,8 @@ export async function restorePage(
       [slug, nextN.rows[0]!.n, r.rows[0]!.content_hash, marker, writtenBy ?? null, r.rows[0]!.source_id, opts.writtenByPrincipal ?? null],
     );
     await bumpPageGeneration(tx, slug);
+    // References written while it was deleted wait in wanted_links.
+    await reconnectWithStoredAliases(tx, slug, r.rows[0]!.source_id);
     return { slug, restored: true };
   });
 }
@@ -1349,6 +1360,11 @@ export async function renamePage(
       [fromSlug, toSlug],
     );
     await move(
+      "wanted_links",
+      `UPDATE wanted_links SET from_slug = $2 WHERE from_slug = $1 RETURNING 1 AS one`,
+      [fromSlug, toSlug],
+    );
+    await move(
       "links_out",
       `UPDATE links SET source_slug = $2 WHERE source_slug = $1 RETURNING 1 AS one`,
       [fromSlug, toSlug],
@@ -1426,6 +1442,8 @@ export async function renamePage(
       [toSlug, nextN.rows[0]!.n, src.rows[0]!.content_hash, marker, writtenBy, ownerSource],
     );
     await bumpPageGeneration(tx, toSlug);
+    // The new slug may be a name other pages already link to.
+    await reconnectWithStoredAliases(tx, toSlug, ownerSource);
 
     return { from_slug: fromSlug, to_slug: toSlug, renamed: true, moved };
   });

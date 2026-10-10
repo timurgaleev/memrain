@@ -13,7 +13,8 @@
  * re-extracting a page rebuilds them.
  */
 import type { Engine } from "./engine/interface.ts";
-import { slugifyTarget, validateSlug, liveEndpointSql } from "./links.ts";
+import { slugifyTarget, validateSlug, liveEndpointSql, escapeLike } from "./links.ts";
+import { lockPageSlugs } from "./pages.ts";
 import { normalizeAlias } from "./page-aliases.ts";
 import { andSourceScope } from "./source-scope.ts";
 
@@ -101,10 +102,13 @@ export async function reconnectWantedLinks(
   const candidates = new Set<string>([slug, ...aliasBySlug.keys()]);
   if (tail !== null && tail.length >= MIN_TAIL_LEN) candidates.add(tail);
 
+  // A soft-deleted linking page keeps its rows for when it comes back, but
+  // gets no edge while it is gone.
   const found = await tx.query<WantedRow>(
-    `SELECT from_slug, target_slug, surface
-       FROM wanted_links
-      WHERE target_slug = ANY($1::text[]) AND source_id = $2`,
+    `SELECT w.from_slug, w.target_slug, w.surface
+       FROM wanted_links w
+       JOIN pages o ON o.slug = w.from_slug AND o.deleted_at IS NULL
+      WHERE w.target_slug = ANY($1::text[]) AND w.source_id = $2`,
     [[...candidates], sourceId],
   );
   const rows = found.rows.filter((r) => r.target_slug === slug || r.target_slug === tail || aliasBySlug.has(r.target_slug));
@@ -159,14 +163,62 @@ export async function reconnectWantedLinks(
   return reconnected;
 }
 
+/**
+ * Take the slug lock of every exact wanted target, first thing in the
+ * writer's transaction: a creation of one of them still in flight finishes
+ * before {@link reconnectAppearedTargets} looks. Taken before any row is
+ * written, so the creator's reconnect never waits on this transaction's rows
+ * while this one waits on its lock.
+ */
+export async function lockWantedTargets(tx: Engine, wanted: ReadonlyMap<string, string>): Promise<void> {
+  await lockPageSlugs(tx, ...[...wanted.keys()].filter(isSlug));
+}
+
+/**
+ * Reconnect the targets of rows `replaceWantedLinks` just wrote that a live
+ * page answers by now. The writer resolved its links before its transaction,
+ * so a page created in between ran its own reconnect before these rows
+ * existed and found nothing to reconnect. An exact target is covered by
+ * {@link lockWantedTargets}; a namespaced or aliased page committed before
+ * this check is found by the query.
+ */
+export async function reconnectAppearedTargets(
+  tx: Engine,
+  sourceId: string,
+  wanted: ReadonlyMap<string, string>,
+): Promise<number> {
+  const targets = [...wanted.keys()].filter(isSlug);
+  if (targets.length === 0) return 0;
+  const norms = [...new Set([...wanted.values()].map((v) => normalizeAlias(v)).filter((n) => n.length > 0))];
+  const live = await tx.query<{ slug: string }>(
+    `SELECT p.slug FROM pages p
+      WHERE p.deleted_at IS NULL AND p.source_id = $2
+        AND (p.slug = ANY($1::text[])
+             OR regexp_replace(p.slug, '^.*/', '') = ANY($1::text[])
+             OR EXISTS (SELECT 1 FROM page_aliases pa
+                         WHERE pa.slug = p.slug AND pa.source_id = $2
+                           AND pa.alias_norm = ANY($3::text[])))`,
+    [targets, sourceId, norms],
+  );
+  let reconnected = 0;
+  for (const { slug } of live.rows) {
+    const aliases = await tx.query<{ alias_norm: string }>(
+      `SELECT alias_norm FROM page_aliases WHERE slug = $1`,
+      [slug],
+    );
+    reconnected += await reconnectWantedLinks(tx, slug, sourceId, aliases.rows.map((a) => a.alias_norm));
+  }
+  return reconnected;
+}
+
 /** No other live page in the source is named `tail`, flat or namespaced. */
 async function basenameIsUnique(tx: Engine, slug: string, tail: string, sourceId: string): Promise<boolean> {
   const r = await tx.query<{ one: number }>(
     `SELECT 1 AS one FROM pages
       WHERE deleted_at IS NULL AND source_id = $3 AND slug <> $1
-        AND (slug = $2 OR slug LIKE '%/' || $2)
+        AND (slug = $2 OR slug LIKE $4 ESCAPE '\\')
       LIMIT 1`,
-    [slug, tail, sourceId],
+    [slug, tail, sourceId, `%/${escapeLike(tail)}`],
   );
   return r.rows.length === 0;
 }

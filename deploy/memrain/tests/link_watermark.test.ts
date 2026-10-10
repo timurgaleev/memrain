@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { putPage } from "../src/core/pages.ts";
 import { countStalePagesForExtraction, LINK_EXTRACTOR_VERSION_TS } from "../src/core/links.ts";
-import { linkFlagsHash, syncLinkFlagsGeneration } from "../src/core/link-watermark.ts";
+import { LINK_FLAGS_GENERATION_KEY, linkFlagsHash, syncLinkFlagsGeneration } from "../src/core/link-watermark.ts";
 import { extractStaleLinks } from "../src/core/links-stale-sweep.ts";
 
 let tmp: string;
@@ -44,17 +44,40 @@ describe("link extraction watermark", () => {
     expect(await countStalePagesForExtraction(e)).toBe(0);
 
     // First record: dated at the code watermark, nothing goes stale.
-    expect(await syncLinkFlagsGeneration(e, LINK_EXTRACTOR_VERSION_TS, OFF)).toEqual({ changed: false });
+    expect(await syncLinkFlagsGeneration(e, LINK_EXTRACTOR_VERSION_TS, OFF, true)).toEqual({ changed: false });
     expect(await countStalePagesForExtraction(e)).toBe(0);
-    expect(await syncLinkFlagsGeneration(e, LINK_EXTRACTOR_VERSION_TS, OFF)).toEqual({ changed: false });
+    expect(await syncLinkFlagsGeneration(e, LINK_EXTRACTOR_VERSION_TS, OFF, true)).toEqual({ changed: false });
 
     // Doctor passes the code constant explicitly; it must see the raise too.
-    expect(await syncLinkFlagsGeneration(e, LINK_EXTRACTOR_VERSION_TS, VERB_ON)).toEqual({ changed: true });
+    expect(await syncLinkFlagsGeneration(e, LINK_EXTRACTOR_VERSION_TS, VERB_ON, true)).toEqual({ changed: true });
     expect(await countStalePagesForExtraction(e, { versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(2);
 
     const swept = await extractStaleLinks(storage, { quiet: true });
     expect(swept.pagesProcessed).toBe(2);
     expect(swept.staleRemaining).toBe(0);
+    expect(await countStalePagesForExtraction(e)).toBe(0);
+  });
+
+  it("a process that is not the server's cycle loop compares and never moves the generation", async () => {
+    const e = storage.engine();
+    await putPage(storage, { slug: "notes/a", markdown_body: "hi" });
+    await extractStaleLinks(storage, { quiet: true });
+    expect(await syncLinkFlagsGeneration(e, LINK_EXTRACTOR_VERSION_TS, OFF, true)).toEqual({ changed: false });
+    const before = await e.query<{ value: string; updated_at: string }>(
+      `SELECT value, updated_at::text AS updated_at FROM config WHERE key = $1`,
+      [LINK_FLAGS_GENERATION_KEY],
+    );
+
+    // A shell `memrain cycle` with other switches, alternating with the loop.
+    for (let i = 0; i < 2; i++) {
+      expect(await syncLinkFlagsGeneration(e, LINK_EXTRACTOR_VERSION_TS, VERB_ON)).toEqual({ changed: false });
+      expect(await syncLinkFlagsGeneration(e, LINK_EXTRACTOR_VERSION_TS, OFF, true)).toEqual({ changed: false });
+    }
+    const after = await e.query<{ value: string; updated_at: string }>(
+      `SELECT value, updated_at::text AS updated_at FROM config WHERE key = $1`,
+      [LINK_FLAGS_GENERATION_KEY],
+    );
+    expect(after.rows).toEqual(before.rows);
     expect(await countStalePagesForExtraction(e)).toBe(0);
   });
 });

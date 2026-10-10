@@ -9,6 +9,7 @@ import { Storage } from "../core/storage.ts";
 import { startServer } from "../http/server.ts";
 import { loadConfig, selfIssuedMismatch } from "../core/config.ts";
 import { startCycleLoop, type CycleHandle } from "../recipes/cycle.ts";
+import { markLinkFlagsRecorder } from "../core/link-watermark.ts";
 import { Worker } from "../core/jobs/worker.ts";
 import { Queue } from "../core/jobs/queue.ts";
 import { registerRemediationHandlers } from "../core/jobs/remediation-handlers.ts";
@@ -479,6 +480,7 @@ export function startBackgroundWork(
     console.log(
       `[memrain] starting cycle loop: every ${cycleIntervalS}s, embed-stale at >${cycleStaleDays}d`,
     );
+    markLinkFlagsRecorder();
     cycle = deps.startCycleLoop(storage, {
       intervalMs: cycleIntervalS * 1000,
       staleDays: cycleStaleDays,

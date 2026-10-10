@@ -14,6 +14,11 @@
  * generation. The `links-stale` cycle phase rewrites the row when the hash no
  * longer matches the running process. The first record of a brain is dated at
  * the code watermark so installing this marks nothing stale on its own.
+ *
+ * Only the server's own cycle loop records: a one-shot `memrain cycle` run
+ * from a shell whose switches differ would otherwise flip the generation on
+ * every alternation with the loop and re-stale the whole corpus each time. It
+ * compares and warns instead.
  */
 import { createHash } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
@@ -23,6 +28,13 @@ import { typedLinksEnabled } from "./typed-links.ts";
 export const LINK_FLAGS_GENERATION_KEY = "links.flags_generation";
 
 type Env = Record<string, string | undefined>;
+
+let recorder = false;
+
+/** Called by `serve` when it starts the cycle loop: this process's switches are the brain's. */
+export function markLinkFlagsRecorder(): void {
+  recorder = true;
+}
 
 /** The extractor switches that change which edges a page derives. */
 export function linkFlagsHash(env: Env = process.env): string {
@@ -38,11 +50,13 @@ export function linkFlagsHash(env: Env = process.env): string {
  * Record the running switches. Returns `changed: true` when they differ from
  * the recorded ones, which moves the generation to now and makes every page
  * stale for extraction once. `codeWatermark` dates a brain's first record.
+ * With `record` false nothing is written; a differing hash is only logged.
  */
 export async function syncLinkFlagsGeneration(
   engine: Engine,
   codeWatermark: string,
   env: Env = process.env,
+  record: boolean = recorder,
 ): Promise<{ changed: boolean }> {
   const hash = linkFlagsHash(env);
   const r = await engine.query<{ value: string }>(
@@ -51,6 +65,14 @@ export async function syncLinkFlagsGeneration(
   );
   const prior = r.rows[0]?.value;
   if (prior === hash) return { changed: false };
+  if (!record) {
+    if (prior !== undefined) {
+      console.warn(
+        `[memrain] link switches (MEMRAIN_GAZETTEER / MEMRAIN_TYPED_LINKS / MEMRAIN_LINK_VERB_INFER) differ from the server's; this run extracts with its own and leaves the recorded generation alone`,
+      );
+    }
+    return { changed: false };
+  }
   if (prior === undefined) {
     await engine.query(
       `INSERT INTO config (key, value, updated_at) VALUES ($1, $2, $3::timestamptz)

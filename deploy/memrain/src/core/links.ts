@@ -22,7 +22,7 @@ import { makeSlugResolver } from "./slug-canonicalize.ts";
 import { inferLinkType, edgeContextWindow } from "./link-verb-infer.ts";
 import { linkWatermarkSql } from "./link-watermark.ts";
 import { quarantineFilterFragment } from "./quarantine.ts";
-import { replaceWantedLinks } from "./wanted-links.ts";
+import { lockWantedTargets, reconnectAppearedTargets, replaceWantedLinks } from "./wanted-links.ts";
 
 // Catalogue of well-known link types. Not a DB constraint -- extensible
 // at runtime. New types may be passed with `allowAdHocType: true`.
@@ -822,7 +822,8 @@ export function extractMarkdownLinks(body: string): string[] {
  * stamped `resolution_type = 'qualified'`; the slugify fallback is
  * `'unqualified'`. Resolution reads pages/links OUTSIDE the write
  * transaction (the targets are other pages, independent of the edge
- * rewrite); the delete + insert stay transactional.
+ * rewrite); the delete + insert stay transactional, and a dangling target
+ * whose page appeared in between is reconnected inside it.
  */
 export async function syncWikilinksForPage(
   storage: Storage,
@@ -883,6 +884,7 @@ export async function syncWikilinksForPage(
   const insCol = scope !== null ? ", source_id" : "";
   const insVal = scope !== null ? ", $4" : "";
   return engine.transaction(async (tx) => {
+    await lockWantedTargets(tx, wanted);
     const delParams: unknown[] = [sourceSlug];
     if (scope !== null) delParams.push(scope);
     const del = await tx.query<{ c: number }>(
@@ -917,6 +919,7 @@ export async function syncWikilinksForPage(
       if (ins.rows[0]?.inserted) added += 1;
     }
     await replaceWantedLinks(tx, sourceSlug, scope, wanted);
+    await reconnectAppearedTargets(tx, scope ?? "default", wanted);
     return { removed: del.rows[0]?.c ?? 0, added };
   });
 }
@@ -1066,8 +1069,25 @@ export function extractCodeRefs(body: string): CodeRef[] {
 }
 
 /** Escape LIKE metacharacters so a cited path with `_`/`%` matches literally. */
-function escapeLike(s: string): string {
+export function escapeLike(s: string): string {
   return s.replace(/[\\%_]/g, "\\$&");
+}
+
+/**
+ * Does an indexed code file answer a cited path, exactly or as its suffix?
+ * The suffix match runs on the reversed path as a prefix match, which the
+ * reverse(source_path) index (migration 138) serves; `LIKE '%/path'` scanned
+ * every document per citation. No ESCAPE clause: backslash is LIKE's default
+ * escape, and a clause would hide the pattern's prefix from the planner.
+ */
+export const CODE_REF_LOOKUP_SQL = `SELECT 1 AS one FROM documents
+        WHERE frontmatter->>'kind' = 'code'
+          AND deleted_at IS NULL
+          AND (source_path = $1 OR reverse(source_path) LIKE $2)
+        LIMIT 1`;
+
+export function codeRefLookupParams(path: string): [string, string] {
+  return [path, `${escapeLike([...`/${path}`].reverse().join(""))}%`];
 }
 
 /**
@@ -1104,15 +1124,7 @@ export async function syncCodeRefsForPage(
   // enforced: the links row is stamped with the page's source_id below.
   const resolved: string[] = [];
   for (const ref of extractCodeRefs(body)) {
-    const params: unknown[] = [ref.path, `%/${escapeLike(ref.path)}`];
-    const hit = await engine.query<{ one: number }>(
-      `SELECT 1 AS one FROM documents
-        WHERE frontmatter->>'kind' = 'code'
-          AND deleted_at IS NULL
-          AND (source_path = $1 OR source_path LIKE $2 ESCAPE '\\')
-        LIMIT 1`,
-      params,
-    );
+    const hit = await engine.query<{ one: number }>(CODE_REF_LOOKUP_SQL, codeRefLookupParams(ref.path));
     if (hit.rows.length > 0) resolved.push(ref.path);
   }
 
