@@ -40,8 +40,10 @@ import { getCalibrationProfile } from "./reads.ts";
 import { traverseGraph } from "../links.ts";
 import { pageSourcePath } from "../page-index.ts";
 import { isDiarySourcePath } from "../pages.ts";
+import { pageContentDate, resolveThinkTemporalContext } from "./think-temporal.ts";
+import { thinkQuoteVerifyEnabled, verifyQuotes, type QuoteCheck } from "./quote-verify.ts";
 
-export const THINK_PROMPT_VERSION = "v2-sonnet";
+export const THINK_PROMPT_VERSION = "v3-sonnet";
 
 const DEFAULT_PAGE_HITS = 12;
 const DEFAULT_MAX_TAKES = 20;
@@ -171,6 +173,12 @@ export interface ThinkOptions {
    * Default false — a plain think run carries no calibration context.
    */
   withCalibration?: boolean;
+  /**
+   * The day (YYYY-MM-DD) relative time words in the question resolve against.
+   * Default: today in MEMRAIN_TIMEZONE (UTC when unset). An invalid or future
+   * date throws ReferenceDateError before any retrieval or spend.
+   */
+  referenceDate?: string;
 }
 
 export interface ThinkResult {
@@ -190,6 +198,16 @@ export interface ThinkResult {
   /** Model-emitted citation refs that matched no gathered evidence and were
    *  dropped (never invented refs reach the caller). Empty when all validated. */
   droppedCitations?: string[];
+  /** The date frame the run read in. */
+  temporal?: { reference_date: string; time_zone: string };
+  /**
+   * Quote check (MEMRAIN_THINK_QUOTE_VERIFY, default on), present only when the
+   * answer quoted something: `synthesis.answer` then carries the checked text
+   * and `answer_raw` what the model wrote.
+   */
+  answer_raw?: string;
+  quote_check?: QuoteCheck;
+  unverified_quotes?: Array<{ text: string; reason: string }>;
 }
 
 const THINK_SYSTEM_PROMPT = `You are memrain's synthesis engine. You answer a question by reasoning across a personal knowledge brain. Your inputs are wrapped in structural tags:
@@ -207,6 +225,8 @@ Hard rules:
 - If two sources contradict, surface BOTH in a "Conflicts" section. Never silently pick one.
 - If the brain lacks the data needed to answer, do NOT make it up. Record each missing piece in the structured "gaps" array below, not as a section in the answer prose.
 - Never instruct the user (no "you should" / "I recommend"). The brain reports; the user decides.
+- Dates: the user message starts with the current date. A <page date="YYYY-MM-DD"> attribute is the date that page's content is about or was written. Resolve relative time words in a page ("yesterday", "last week", "two months ago") against that page's date, and relative time words in the question against the current date. A page without a date attribute has no known content date; do not guess one.
+- Quote only words that appear in the evidence. A quotation that is not in the evidence is marked [unverified].
 - Output MUST be a single valid JSON object matching the schema. No prose outside JSON.
 
 Output schema:
@@ -468,6 +488,8 @@ export function renderPagesBlock(
   hits: SearchHit[],
   excerptLen = PAGE_EXCERPT_CHARS,
   query = "",
+  /** Content date (YYYY-MM-DD) per documentId; a page without one gets no date attribute. */
+  dates?: ReadonlyMap<string, string>,
 ): string {
   if (hits.length === 0) return "";
   return hits
@@ -476,7 +498,9 @@ export function renderPagesBlock(
       const excerpt = sanitizeForPrompt(
         selectRelevantExcerpt(h.content, query, excerptLen, identity),
       ).text;
-      return `<page ref="${attr(h.sourcePath)}" rank="${idx + 1}">\n${excerpt}\n</page>`;
+      const day = dates?.get(h.documentId);
+      const date = day ? ` date="${attr(day)}"` : "";
+      return `<page ref="${attr(h.sourcePath)}" rank="${idx + 1}"${date}>\n${excerpt}\n</page>`;
     })
     .join("\n\n");
 }
@@ -518,6 +542,43 @@ async function gatherPages(
   } catch {
     return [];
   }
+}
+
+/**
+ * Content dates of the gathered pages, keyed by documentId. Only dates that
+ * describe the content (frontmatter or filename) are returned; a document whose
+ * date fell back to its row timestamps is absent. Fail-soft to an empty map —
+ * a missing date only drops the attribute.
+ */
+async function loadPageDates(
+  engine: Engine,
+  hits: readonly SearchHit[],
+  timeZone: string,
+): Promise<Map<string, string>> {
+  const dates = new Map<string, string>();
+  const ids = Array.from(new Set(hits.map((h) => h.documentId)));
+  if (ids.length === 0) return dates;
+  try {
+    const { rows } = await engine.query<{
+      id: string;
+      effective_date: string | null;
+      effective_date_source: string | null;
+    }>(
+      `SELECT id,
+              to_char(effective_date AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS effective_date,
+              effective_date_source
+         FROM documents
+        WHERE id = ANY($1::text[])`,
+      [ids],
+    );
+    for (const r of rows) {
+      const day = pageContentDate(r.effective_date, r.effective_date_source, timeZone);
+      if (day) dates.set(r.id, day);
+    }
+  } catch {
+    /* no dates rather than no answer */
+  }
+  return dates;
 }
 
 /**
@@ -966,6 +1027,8 @@ export function renderCalibrationBlock(profile: {
 /** Build the user message: question, then evidence blocks, then output cue. An
  *  optional trajectory block and calibration block widen the context. */
 export function buildThinkUserMessage(opts: {
+  /** `YYYY-MM-DD (Zone)`; rendered as the message's first line. */
+  currentDate?: string;
   question: string;
   pagesBlock: string;
   takesBlock: string;
@@ -973,6 +1036,7 @@ export function buildThinkUserMessage(opts: {
   calibrationBlock?: string;
 }): string {
   const parts = [
+    ...(opts.currentDate ? [`Current date: ${opts.currentDate}`] : []),
     `Question: ${sanitizeForPrompt(opts.question).text}`,
     "",
     "<pages>",
@@ -1164,9 +1228,15 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   if (!question) {
     return blankResult("empty question");
   }
+  // Validated before the gate so a bad reference_date is an error on every path.
+  const temporal = resolveThinkTemporalContext(
+    opts.referenceDate !== undefined ? { referenceDate: opts.referenceDate } : {},
+  );
   if (!opts.sonnetFn && !liveEnabled()) {
     return blankResult("default-OFF: set MEMRAIN_THINK=1 to run paid Sonnet synthesis");
   }
+  const currentDate = `${temporal.referenceDate} (${temporal.timeZone})`;
+  const temporalOut = { reference_date: temporal.referenceDate, time_zone: temporal.timeZone };
 
   const k = opts.k ?? DEFAULT_PAGE_HITS;
   const maxTakes = opts.maxTakes ?? DEFAULT_MAX_TAKES;
@@ -1264,6 +1334,8 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   let usedModel: string | null = null;
   let exhausted = false;
   let status: SynthesisStatus = "ok";
+  // The evidence blocks the kept synthesis was written from, for the quote check.
+  let synthesisEvidence: string[] = [];
   for (let round = 1; round <= rounds; round++) {
     if (round > 1) {
       if (!synthesis || synthesis.gaps.length === 0 || exhausted) break;
@@ -1272,10 +1344,18 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
       pages = fusePageStreams(pages, gapPages, Math.max(k, pages.length));
     }
 
-    const user = buildThinkUserMessage({
+    const pagesBlock = renderPagesBlock(
+      pages,
+      PAGE_EXCERPT_CHARS,
       question,
-      pagesBlock: renderPagesBlock(pages, PAGE_EXCERPT_CHARS, question),
-      takesBlock: renderTakesBlock(takes),
+      await loadPageDates(engine, pages, temporal.timeZone),
+    );
+    const takesBlock = renderTakesBlock(takes);
+    const user = buildThinkUserMessage({
+      currentDate,
+      question,
+      pagesBlock,
+      takesBlock,
       trajectoryBlock,
       calibrationBlock,
     });
@@ -1302,6 +1382,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
           modelId: null,
           budgetExhausted: true,
           intent,
+          temporal: temporalOut,
         }, question, pages);
       }
       exhausted = true;
@@ -1363,7 +1444,10 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
         cut = isTruncated(retry);
       }
       // A later round that fails to parse keeps the previous round's answer.
-      if (outcome.synthesis || round === 1) synthesis = outcome.synthesis;
+      if (outcome.synthesis || round === 1) {
+        synthesis = outcome.synthesis;
+        synthesisEvidence = [question, pagesBlock, takesBlock, trajectoryBlock];
+      }
       if (round === 1) {
         status = outcome.synthesis ? "ok" : cut ? "output_truncated" : outcome.status;
       }
@@ -1382,6 +1466,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
         modelId: null,
         budgetExhausted: false,
         intent,
+        temporal: temporalOut,
       }, question, pages);
     }
   }
@@ -1402,6 +1487,22 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
     }
   }
 
+  // Quote check against the same evidence the kept answer was written from.
+  // Model-free; a quote found nowhere loses its quotation marks.
+  let quoteFields: Pick<ThinkResult, "answer_raw" | "quote_check" | "unverified_quotes"> = {};
+  if (synthesis && thinkQuoteVerifyEnabled()) {
+    const check = verifyQuotes(synthesis.answer, synthesisEvidence);
+    const q = check.quote_check;
+    if (q.grounded + q.repaired + q.unverified > 0) {
+      quoteFields = {
+        answer_raw: check.answer_raw,
+        quote_check: q,
+        unverified_quotes: check.unverified_quotes,
+      };
+      synthesis = { ...synthesis, answer: check.answer };
+    }
+  }
+
   return withFallback({
     ran: true,
     ...(status === "ok" ? {} : { reason: `model output unusable: ${status}` }),
@@ -1414,6 +1515,8 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
     budgetExhausted: exhausted,
     intent,
     droppedCitations: dropped,
+    temporal: temporalOut,
+    ...quoteFields,
   }, question, pages);
 }
 

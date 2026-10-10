@@ -74,6 +74,14 @@ export function synthesisSlugFor(question: string, date: Date = new Date()): str
   return `synthesis/${safe}-${day}`;
 }
 
+/** A YAML frontmatter block listing the run's unverified quotes, or "". */
+function unverifiedQuotesFrontmatter(result: ThinkResult): string {
+  const quotes = result.unverified_quotes ?? [];
+  if (quotes.length === 0) return "";
+  const items = quotes.map((q) => `  - ${JSON.stringify(q.text.replace(/\s+/g, " "))}`);
+  return `---\nunverified_quotes:\n${items.join("\n")}\n---\n`;
+}
+
 /**
  * Persist a think result as a synthesis page + citation evidence rows.
  * An empty/missing answer is never persisted (returns slug="" + warning).
@@ -93,7 +101,9 @@ export async function persistThinkSynthesis(
   }
   const warnings: string[] = [];
   const slug = synthesisSlugFor(opts.question);
-  const body = `# ${opts.question}\n${renderAnswerWithGaps(s.answer, s.gaps)}`;
+  // `s.answer` is the quote-checked text; quotes found in no evidence are
+  // listed in frontmatter so a reviewer can find them without rereading.
+  const body = `${unverifiedQuotesFrontmatter(opts.result)}# ${opts.question}\n${renderAnswerWithGaps(s.answer, s.gaps)}`;
 
   await putPage(storage, {
     slug,

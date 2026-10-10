@@ -33,6 +33,7 @@ import { putPage } from "../pages.ts";
 import { resolveLlmFn, type LlmFn } from "../llm/haiku.ts";
 import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { parseModelJson } from "../llm/json-output.ts";
+import { isQuoteInText } from "./quote-verify.ts";
 
 /** Allowed atom_type values. A returned type outside this set falls back. */
 export const ATOM_TYPES = [
@@ -71,6 +72,8 @@ export interface ExtractAtomsResult {
   atomsWritten: number;
   /** Atom pages written via putPage (0 when no storage / gated off). */
   pagesWritten: number;
+  /** source_quote values dropped because the note does not contain them. */
+  quotesDropped: number;
   errors: string[];
 }
 
@@ -106,6 +109,9 @@ Output a JSON array of 1-3 atoms (never more than 3). Each atom is an object:
    "body": (2-4 sentences), "concepts": (array of 1-3 short lowercase topic tags),
    "source_quote": (verbatim quote from the note, <=200 chars),
    "lesson": (one sentence naming the takeaway)}
+
+The message gives the note's observation date. Relative time words in the note ("yesterday", "last week", "next month") are relative to that date: write the absolute date in the body when the note supports one, and never treat the observation date as today.
+"source_quote" must be copied word for word from the note; omit it rather than paraphrase.
 
 Output ONLY the JSON array. No prose, no markdown fences.`;
 
@@ -372,6 +378,7 @@ export async function extractAtomsPhase(
     documentsProcessed: 0,
     atomsWritten: 0,
     pagesWritten: 0,
+    quotesDropped: 0,
     errors: [],
   };
 
@@ -385,7 +392,7 @@ export async function extractAtomsPhase(
       const resp = await llm({
         system: SYSTEM_PROMPT,
         // Note body is untrusted — strip injection phrases + cap before the LLM.
-        user: `Source: ${doc.id}\n\n---\n\n${sanitizeForPrompt(doc.text, MAX_DOC_CHARS_TO_LLM).text}`,
+        user: `Source: ${doc.id}\nObservation date: ${doc.sourceDate}\n\n---\n\n${sanitizeForPrompt(doc.text, MAX_DOC_CHARS_TO_LLM).text}`,
         maxTokens: 1200,
       });
       text = resp.text;
@@ -396,7 +403,14 @@ export async function extractAtomsPhase(
       continue;
     }
 
-    const atoms = parseAtomsResponse(text);
+    // A source_quote the note does not contain is made up; drop it rather
+    // than store it as a verbatim line.
+    const atoms = parseAtomsResponse(text).map((atom): ParsedAtom => {
+      if (atom.source_quote === undefined || isQuoteInText(atom.source_quote, doc.text)) return atom;
+      result.quotesDropped += 1;
+      const { source_quote: _dropped, ...rest } = atom;
+      return rest;
+    });
     result.documentsProcessed += 1;
     if (atoms.length === 0) {
       // Only a cleanly parsed `[]` is a genuine zero-yield note.

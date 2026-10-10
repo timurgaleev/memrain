@@ -21,6 +21,7 @@ import {
   stripGapsSection,
 } from "../src/core/synthesis/think.ts";
 import { persistThinkSynthesis } from "../src/core/synthesis/think-persist.ts";
+import { ReferenceDateError } from "../src/core/synthesis/think-temporal.ts";
 import { autoThinkPhase } from "../src/core/synthesis/auto-think.ts";
 import { getPage } from "../src/core/pages.ts";
 import { runThinkCli } from "../src/commands/think.ts";
@@ -749,5 +750,121 @@ describe("buildExtractiveFallback", () => {
 
   it("returns null when no page has text to quote", () => {
     expect(buildExtractiveFallback("plan", [{ sourcePath: "a.md", content: "" }] as SearchHit[], "not_json")).toBeNull();
+  });
+});
+
+describe("think date frame", () => {
+  useStorage();
+
+  async function seedDated(id: string, iso: string, source: string): Promise<void> {
+    await engine.query(
+      `INSERT INTO documents (id, source_path, title, effective_date, effective_date_source)
+       VALUES ($1, $2, $1, $3, $4)`,
+      [id, `notes/${id}.md`, iso, source],
+    );
+  }
+
+  const spyRun = async (extra: { referenceDate?: string } = {}) => {
+    let user = "";
+    let system = "";
+    const result = await runThink(storage, {
+      question: "what happened last week?",
+      sonnetFn: async (input) => {
+        user = input.user;
+        system = input.system;
+        return { text: okResponse, modelId: "eu.anthropic.claude-sonnet-4-6", usage: { inputTokens: 10, outputTokens: 5 } };
+      },
+      pagesFn: fakePages([
+        { documentId: "dated", sourcePath: "notes/dated.md", content: "standup notes" },
+        { documentId: "undated", sourcePath: "notes/undated.md", content: "other notes" },
+      ]),
+      embedFn: null,
+      ...extra,
+    });
+    return { user, system, result };
+  };
+
+  it("opens the user message with the current date and keeps the system prompt static", async () => {
+    const { user, system, result } = await spyRun();
+    expect(user.split("\n")[0]).toMatch(/^Current date: \d{4}-\d{2}-\d{2} \(.+\)$/);
+    expect(system).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    expect(system).toContain('<page date="YYYY-MM-DD">');
+    expect(result.temporal?.reference_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("dates a page from its content date but not from a row-timestamp fallback", async () => {
+    await seedDated("dated", "2026-03-05T00:00:00Z", "date");
+    await seedDated("undated", "2026-04-01T00:00:00Z", "fallback");
+    const { user } = await spyRun();
+    expect(user).toContain('<page ref="notes/dated.md" rank="1" date="2026-03-05">');
+    expect(user).toContain('<page ref="notes/undated.md" rank="2">');
+  });
+
+  it("uses a caller's reference date and refuses a future one before any call", async () => {
+    const { user, result } = await spyRun({ referenceDate: "2025-06-01" });
+    expect(user.split("\n")[0]).toStartWith("Current date: 2025-06-01 (");
+    expect(result.temporal?.reference_date).toBe("2025-06-01");
+
+    let called = false;
+    await expect(
+      runThink(storage, {
+        question: "q",
+        referenceDate: "2999-01-01",
+        sonnetFn: async () => {
+          called = true;
+          return { text: okResponse, modelId: "m", usage: { inputTokens: 1, outputTokens: 1 } };
+        },
+        pagesFn: fakePages([]),
+        embedFn: null,
+      }),
+    ).rejects.toBeInstanceOf(ReferenceDateError);
+    expect(called).toBe(false);
+  });
+});
+
+describe("think quote check", () => {
+  useStorage();
+
+  const quoting = JSON.stringify({
+    answer: `The plan says "the plan is to migrate the billing service" and "revenue tripled in the first quarter" [notes/plan.md].`,
+    citations: [{ ref: "notes/plan.md", kind: "page" }],
+    gaps: [],
+  });
+  const pages = [{ documentId: "p1", sourcePath: "notes/plan.md", content: "Status: the plan is to migrate the billing service by June." }];
+
+  it("marks a quote found in no evidence and keeps what the model wrote", async () => {
+    const r = await runThink(storage, {
+      question: "what is the plan?",
+      sonnetFn: fakeSonnet(quoting),
+      pagesFn: fakePages(pages),
+      embedFn: null,
+    });
+    expect(r.quote_check).toEqual({ grounded: 1, repaired: 0, unverified: 1 });
+    expect(r.synthesis?.answer).toContain("revenue tripled in the first quarter [unverified]");
+    expect(r.synthesis?.answer).toContain(`"the plan is to migrate the billing service"`);
+    expect(r.answer_raw).toBe(JSON.parse(quoting).answer);
+
+    const saved = await persistThinkSynthesis(storage, { question: "what is the plan?", result: r });
+    const page = await getPage(storage, saved.slug);
+    expect(page?.markdown_body).toStartWith(`---\nunverified_quotes:\n  - "revenue tripled in the first quarter"\n---\n# what is the plan?`);
+    expect(page?.markdown_body).toContain("[unverified]");
+  });
+
+  it("is skipped when MEMRAIN_THINK_QUOTE_VERIFY=0", async () => {
+    const prev = process.env.MEMRAIN_THINK_QUOTE_VERIFY;
+    process.env.MEMRAIN_THINK_QUOTE_VERIFY = "0";
+    try {
+      const r = await runThink(storage, {
+        question: "what is the plan?",
+        sonnetFn: fakeSonnet(quoting),
+        pagesFn: fakePages(pages),
+        embedFn: null,
+      });
+      expect(r.quote_check).toBeUndefined();
+      expect(r.synthesis?.answer).toBe(JSON.parse(quoting).answer);
+    } finally {
+      if (prev === undefined) delete process.env.MEMRAIN_THINK_QUOTE_VERIFY;
+      else process.env.MEMRAIN_THINK_QUOTE_VERIFY = prev;
+    }
   });
 });

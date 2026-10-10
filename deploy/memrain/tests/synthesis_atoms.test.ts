@@ -334,6 +334,43 @@ describe("extractAtomsPhase", () => {
     expect(rows[0]?.slug).toMatch(/^atoms\/2024-03-05\/old-note-fresh-scan-[0-9a-f]{8}$/);
   });
 
+  it("tells the model the note's observation date", async () => {
+    await seedDoc("d1", "N".repeat(500), "2024-03-05");
+    let user = "";
+    let system = "";
+    await extractAtomsPhase(engine, {
+      llmFn: async (req) => {
+        user = req.user;
+        system = req.system;
+        return { text: "[]", modelId: "fake-nova" };
+      },
+    });
+    expect(user).toContain("Observation date: 2024-03-05");
+    // The rule is static so the system prompt stays cacheable across notes.
+    expect(system).not.toContain("2024-03-05");
+    expect(system).toContain("observation date");
+  });
+
+  it("drops a source_quote the note does not contain and keeps a real one", async () => {
+    const note = `${"Filler sentence about nothing. ".repeat(15)}We decided to move the launch to the spring because the supplier slipped.`;
+    await seedDoc("d1", note);
+    const r = await extractAtomsPhase(engine, {
+      llmFn: fakeLlm(JSON.stringify([
+        { title: "Real", atom_type: "insight", body: "Launch moved.", source_quote: "we decided to move the  launch to the spring." },
+        { title: "Made up", atom_type: "insight", body: "Budget doubled.", source_quote: "The board approved doubling the budget." },
+      ])),
+    });
+    expect(r.atomsWritten).toBe(2);
+    expect(r.quotesDropped).toBe(1);
+    const { rows } = await engine.query<{ title: string; source_quote: string | null }>(
+      `SELECT title, source_quote FROM synth_atoms ORDER BY title`,
+    );
+    expect(rows).toEqual([
+      { title: "Made up", source_quote: null },
+      { title: "Real", source_quote: "we decided to move the  launch to the spring." },
+    ]);
+  });
+
   it("respects maxDocs (cost guard)", async () => {
     await seedDoc("d1", "D".repeat(500));
     await seedDoc("d2", "E".repeat(500));

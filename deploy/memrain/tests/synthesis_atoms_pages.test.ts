@@ -77,7 +77,8 @@ describe("provenance parsing + flags", () => {
 
 describe("extractAtomsPhase provenance + page mirror", () => {
   it("persists source_quote/lesson and writes an atoms/<date>/<slug> page", async () => {
-    await seedDoc("d1", "X".repeat(500));
+    // The quote has to be in the note: a source_quote the note lacks is dropped.
+    await seedDoc("d1", `${"X".repeat(500)}\nWe caught it at the gate, not in prod.`);
     const r = await extractAtomsPhase(engine, { llmFn: fakeLlm(ATOM), storage });
     expect(r.atomsWritten).toBe(1);
     expect(r.pagesWritten).toBe(1);
