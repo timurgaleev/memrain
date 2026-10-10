@@ -46,6 +46,39 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ---
 
+## Follow-ups from the 1.1 batch
+
+Operator decisions:
+- **Spend caps fail open on accounting errors.** A failed reservation or a
+  missing ledger column lets the call through unheld (availability over
+  enforcement). Decide whether the brain-wide cap should fail closed.
+- **Daily cap values.** Suggested `MEMRAIN_DAILY_BUDGET_USD=1.00` and
+  `MEMRAIN_CYCLE_MAX_USD_PER_DAY=0.30`; both are off until set.
+- **`MEMRAIN_OWNER_ENTITY`** (the operator's slug) is unset; transcript facts
+  of the operator keep being dropped until it is.
+- **Stored-secret cleanup:** run `memrain secrets audit`, review, then
+  `--apply --yes`; then `memrain reindex --source code --all`.
+- Confirm `MEMRAIN_TENANT_FAIL_CLOSED=1` in production: scopeless tokens are
+  otherwise unscoped for `add_fact` batches, `replaces` and `forget_fact`.
+
+Engineering:
+- Migrations 126 and 130 build an index / validate a constraint without
+  `lock_timeout`; fine at today's table sizes, revisit if they grow.
+- A 20-item `add_fact` batch counts as one write for per-call rate limiting.
+- Transcript slugs are global, so a tenant who learns another tenant's
+  session id can claim its slugs first; prefix slugs with the source when it
+  is not `default`.
+- `agent/runner.ts` does not pass `ctx.signal` into converse yet, and jobs
+  refused by a daily cap still spend retries.
+- The deterministic-embedding eval canary and `inferSubject()` (owner mapping
+  by a unique mention) are not built.
+- Secret audit: slugs are never scanned, and a mirror failure after the page
+  rewrite is counted as a failed rewrite.
+- ~50 permanently failing chunks at the front of the embed-gaps order would
+  stall the fill; order by attempts or skip after N failures.
+
+---
+
 ## Roadmap — 2026-09-13
 
 The program makes memex safe and fast as a brain that one connector can share

@@ -373,3 +373,28 @@ pre-rename release to 1.1.0 is not supported: pass through 1.0.x. On 1.0.x,
 - scripts call `memrain`, not `memex`;
 - `/etc/stack-env` has `STACK_SUBDOMAIN`, and Terraform uses `subdomain`
   and the new output names.
+
+## From 1.0.x to 1.1
+
+1.1 is a normal deploy: `bash deploy/deploy.sh` applies migrations 122 to 132
+and 134 on start. Things to know:
+
+- **Secret allowlist format.** `MEMRAIN_SECRET_SCAN_ALLOW` entries are now
+  16 to 64 hex characters (a prefix of the value's SHA-256). Old 12-hex
+  entries are ignored with one warning; redaction markers now carry 16 hex.
+  Re-take any fingerprint you need from a fresh marker.
+- **Retired scope names.** `sources_admin` and `users_admin` granted nothing
+  and are removed from every client, token and PAT. Nothing else changes.
+- **Narrowing applies to live tokens.** `auth rescope-client --scopes`
+  rewrites the client's issued tokens at once; a token left with no scope is
+  deleted.
+- **New switches, all off or neutral by default:** the brain and cycle daily
+  caps (`MEMRAIN_DAILY_BUDGET_USD`, `MEMRAIN_CYCLE_MAX_USD_PER_DAY`),
+  `MEMRAIN_OWNER_ENTITY`, `MEMRAIN_REQUIRE_WRITE_PRECONDITION`. See
+  docs/CONFIGURATION.md.
+- **Rolling the image back past 1.1** needs the new migrations reverted first. Migration 132 replaces the `(entity_slug, fact,
+  source_chunk_id)` unique index with a speaker-aware one, so an older image
+  against a migrated database fails every chunk-sourced fact insert.
+- **After deploying,** run `memrain secrets audit` once and read the dry run
+  before deciding on `--apply --yes`, then `memrain reindex --source code
+  --all` if code sources are indexed.

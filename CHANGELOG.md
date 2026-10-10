@@ -6,6 +6,80 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-10-10
+
+### Added
+- `page_edit` changes part of a page: exact old/new text replacements at a
+  given version, all or nothing, with facts and takes fences protected and a
+  diff in the answer (redacted like any retrieval for non-operator callers);
+  it refuses a caller without its own write source. `MEMRAIN_REQUIRE_WRITE_PRECONDITION` (`off`, `warn`,
+  `refuse`) controls a `page_put` that would overwrite a page without
+  `expected_version`.
+- `add_fact` takes up to 20 facts in one call and can `replace` an older fact,
+  retiring it as superseded. `forget_fact` lists live facts that look like
+  the one withdrawn (ids and scores only).
+- Session logs can be pushed from the laptop: `POST /ingest` accepts a
+  transcript content type and `memrain transcripts push` sends one log
+  (docs/TRANSCRIPTS.md shows the SessionEnd hook). Pushes run under the
+  pushing client's spend cap, one at a time per client, up to 8 MiB.
+- Facts record who said them (`attributed_to`: user, assistant or other).
+  With `MEMRAIN_OWNER_ENTITY` set, the operator's own claims from operator
+  transcripts land on that entity instead of being dropped, and relative dates
+  resolve against the date the conversation happened.
+- `think` states the current date and each page's date, takes a
+  `reference_date`, and checks every quoted span against its evidence; a quote
+  it cannot find loses its quotation marks and is marked `[unverified]`.
+- Brain-wide daily spend caps: `MEMRAIN_DAILY_BUDGET_USD` over every paid call
+  and `MEMRAIN_CYCLE_MAX_USD_PER_DAY` over cycle phases. Both are off by
+  default. `memrain spend` breaks spend down by phase and job.
+- `memrain secrets audit` rescans stored data with the current scanner and
+  reports where credentials sit, never their values; `--apply --yes`
+  rewrites them. SECURITY.md has a runbook. Source files are scanned before
+  the code indexer reads them.
+- The secret scanner recognises Google, Hugging Face, npm, SendGrid, Twilio,
+  Supabase, DigitalOcean and Stripe webhook keys, credentials in URLs, Basic
+  auth and high-entropy values assigned to secret-looking keys, and scrubs a
+  caught value where it repeats bare in the same write.
+- The connect instructions name only tools the caller can call and point at
+  the skill catalog; `list_skills` and `get_skill` return each skill's
+  triggers and the tools it can use for this caller, and `whoami` reports the
+  caller's limits.
+- A Bedrock outage, throttle or spend refusal no longer fails a page write:
+  chunks are stored without vectors, stay keyword-searchable, and a new
+  `embed-gaps` cycle phase fills them later. Jobs defer through an outage
+  instead of burning retries.
+- Retrieval tools scan what they return to non-operator callers and replace
+  any credential with a redaction marker (`MEMRAIN_OUTPUT_REDACTION`, on by
+  default). A quarantined page comes back without its body to a tenant.
+  `purge_deleted_pages` takes a slug list and a dry-run plan hash.
+- `memrain jobs stats --by-kind`, `memrain transcripts status`, and doctor
+  checks for embedding backlog and secret exposure.
+
+### Changed
+- Narrowing an OAuth client's scopes narrows its live tokens at once, and
+  widening it later does not give old tokens their scopes back. PAT and client
+  grant changes are recorded with a revision and an audit row. The unused
+  `sources_admin` and `users_admin` scope names are retired.
+- Quarantined documents no longer feed takes, think or the contradiction
+  probe, and a cleared document stays cleared while its content is unchanged.
+- Takes and atoms back off documents whose model call keeps failing, the
+  contextual tier sends a window around each chunk, and synthesis phases run
+  at most once per UTC day.
+- Tags are scanned for credentials before they are stored.
+- Allowlist entries in `MEMRAIN_SECRET_SCAN_ALLOW` must now be 16-64 hex;
+  12-hex entries are ignored with a warning (see UPGRADING.md).
+- Migrations 122-132 and 134 run on start.
+
+### Fixed
+- A deploy no longer leaves a job running unbounded: running jobs renew their
+  lease, receive an abort signal on shutdown, timeout or a lost claim (the
+  built-in handlers stop at their next step), and malformed payloads fail once
+  instead of retrying.
+- The contradiction probe dates each claim, skips forgotten facts and retired
+  takes, and counts judge errors instead of reading them as "no conflict".
+- Chronicle extraction drops events dated only to a year or month, events
+  dated after their page, and impossible calendar dates.
+
 ## [1.0.9] — 2026-10-09
 
 ### Fixed
