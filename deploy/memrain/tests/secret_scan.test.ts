@@ -131,10 +131,12 @@ describe("scanSecrets", () => {
       headers: {
         Authorization: `Bearer [REDACTED:bearer-token:${fp}]`,
         "proxy-authorization": `bearer [REDACTED:bearer-token:${fp}]`,
-        Accept: `Bearer ${opaque}`,
+        // Not a header the bearer rule anchors on, but the same value claimed
+        // next to it: the echo pass scrubs it.
+        Accept: `Bearer [REDACTED:bearer-token-echo:${fp}]`,
       },
     });
-    expect(findings.map((f) => f.kind)).toEqual(["bearer-token", "bearer-token"]);
+    expect(findings.map((f) => f.kind)).toEqual(["bearer-token", "bearer-token", "bearer-token-echo"]);
   });
 
   it("leaves bearer prose, password-less URLs and JWT-like fragments alone", () => {
@@ -191,6 +193,14 @@ describe("a page write", () => {
     expect(audit.rows[0]!.source_ref).toBe("notes/env");
     expect(audit.rows[0]!.summary).toContain(`aws-access-key:${fingerprintSecret(AWS)}`);
     expect(audit.rows[0]!.summary).not.toContain(AWS);
+  });
+
+  it("redacts a bare echo in the body of a token claimed in the title", async () => {
+    const opaque = `tok_${"Qx7".repeat(10)}`;
+    await putPage(storage, { slug: "notes/echo", title: `Authorization: Bearer ${opaque}`, markdown_body: `the reply was ${opaque}` });
+    const page = await getPage(storage, "notes/echo");
+    expect(page!.markdown_body).toBe(`the reply was [REDACTED:bearer-token-echo:${fingerprintSecret(opaque)}]`);
+    expect(page!.title).not.toContain(opaque);
   });
 
   it("redacts an append too", async () => {
@@ -401,7 +411,7 @@ describe("the other writes", () => {
     const audit = await auditRows("secret-rejected");
     expect(audit.map((a) => a.source_ref).sort()).toEqual(["fact:people/ops", "hot:people/ops", "notes/nope", "notes/nope#http"]);
     for (const a of audit) {
-      expect(a.summary).toMatch(/^(aws-access-key|github-token):[0-9a-f]{12}$/);
+      expect(a.summary).toMatch(/^(aws-access-key|github-token):[0-9a-f]{16}$/);
       expect(a.summary).not.toContain(AWS);
     }
   });

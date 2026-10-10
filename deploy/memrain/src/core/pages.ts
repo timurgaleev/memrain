@@ -12,7 +12,7 @@
  * that step (slug + content_hash + chunkable body) without pulling
  * Bedrock into this module.
  */
-import { auditSecrets, guardSecrets, guardSecretsDeep, guardWrite, type SecretFinding } from "./secret-scan.ts";
+import { auditSecrets, guardEchoes, guardSecrets, guardSecretsDeep, guardWrite, type EchoDictionary, type SecretFinding } from "./secret-scan.ts";
 import { createHash } from "node:crypto";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
@@ -346,17 +346,20 @@ export async function putPage(
   const callerSourceForAudit = typeof input.source_id === "string" && input.source_id.trim().length > 0 ? input.source_id : null;
   const secretFindings: SecretFinding[] = [];
   const scanned = await guardWrite(storage.engine(), input.slug, callerSourceForAudit, () => {
+    // One echo dictionary for the whole write: a token claimed in the title is
+    // also redacted where the body repeats it bare, and the other way round.
+    const echo: EchoDictionary = new Map();
     const guard = (text: string): string => {
-      const r = guardSecrets(text, where);
+      const r = guardSecrets(text, where, { echo });
       secretFindings.push(...r.findings);
       return r.text;
     };
-    return {
+    return guardEchoes({
       body: guard(input.markdown_body ?? ""),
       append: input.appendContent !== undefined ? guard(input.appendContent) : undefined,
       title: typeof input.title === "string" ? guard(input.title) : (input.title ?? null),
-      truth: guardSecretsDeep(input.compiled_truth ?? {}, where, secretFindings) as Record<string, unknown>,
-    };
+      truth: guardSecretsDeep(input.compiled_truth ?? {}, where, secretFindings, echo) as Record<string, unknown>,
+    }, echo, secretFindings);
   });
   const appendContent = scanned.append;
   let body = input.markdown_body === undefined ? "" : scanned.body;
