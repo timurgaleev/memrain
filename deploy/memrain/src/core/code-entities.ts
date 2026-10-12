@@ -98,6 +98,8 @@ interface CalleeName {
   name: string;
   /** True for `obj.name()` / `pkg.Name()` — the call goes through a receiver. */
   member: boolean;
+  /** True for `this.name()` / `self.name()`: the receiver is the enclosing object. */
+  selfReceiver: boolean;
 }
 
 /**
@@ -143,6 +145,12 @@ function calleeNameFromCallNode(call: TSNode, language: CodeLanguage): CalleeNam
         ? GO_MEMBER_CHAIN_TYPES
         : MEMBER_CHAIN_TYPES;
   let member = false;
+  let selfReceiver = false;
+  if (target && chainTypes.has(target.type) && language !== "go") {
+    const object = target.childForFieldName("object");
+    selfReceiver =
+      object !== null && (object.type === "this" || (language === "python" && object.text === "self"));
+  }
   while (target && chainTypes.has(target.type)) {
     const right: TSNode | null =
       target.childForFieldName("property") ??
@@ -160,7 +168,7 @@ function calleeNameFromCallNode(call: TSNode, language: CodeLanguage): CalleeNam
     target.type === "property_identifier" ||
     target.type === "field_identifier"
   ) {
-    return { name: target.text, member };
+    return { name: target.text, member, selfReceiver };
   }
   return null;
 }
@@ -328,10 +336,10 @@ export async function extractCodeEntities(
         const call = calleeNameFromCallNode(node, language);
         if (call) {
           const callee = call.name;
-          // Skip a bare recursive call (a noise edge to itself). A member call
-          // with the same name — `this.repo.save()` inside `save` — is a call
-          // to ANOTHER object's method and is kept.
-          if (call.member || callee !== symbol.name) {
+          // Skip a recursive call (a noise edge to itself), bare or through
+          // `this`/`self`. A member call with the same name on another
+          // receiver — `this.repo.save()` inside `save` — is kept.
+          if (callee !== symbol.name || (call.member && !call.selfReceiver)) {
             push({
               type: "code-caller",
               name: callee,

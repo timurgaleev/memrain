@@ -17,6 +17,7 @@ import type { JobRow } from "../src/core/jobs/types.ts";
 import type { ConverseFn, ConverseTurnInput } from "../src/core/llm/converse.ts";
 import type { ToolCallRequest, ToolCallResult } from "../src/mcp/dispatch.ts";
 import { AgentClaimLost, INTERRUPTED_TOOL_RESULT, runAgent } from "../src/core/agent/runner.ts";
+import { DailyCapRefusal } from "../src/core/budget.ts";
 import { listMessages, listToolExecutions } from "../src/core/subagent_ledger.ts";
 import {
   AGENT_JOB_TIMEOUT_MS,
@@ -317,6 +318,21 @@ describe("runAgent", () => {
     expect(s.calls).toHaveLength(3);
     expect(d.calls).toHaveLength(3);
   });
+  it("hands a daily cap that clears at midnight to the worker, and ends on one that does not", async () => {
+    const refusing = (rollover: boolean): ConverseFn => async () => {
+      throw new DailyCapRefusal("brain", "brain daily budget exhausted", "wait", rollover);
+    };
+    const job = await claimNew();
+    await expect(runAgent({
+      storage, job, task: "t", maxUsd: 0.25, modelId: HAIKU,
+      converse: refusing(true), dispatch: counter().fn, ...ctxFor(job),
+    })).rejects.toBeInstanceOf(DailyCapRefusal);
+    const r = await runAgent({
+      storage, job, task: "t", maxUsd: 0.25, modelId: HAIKU,
+      converse: refusing(false), dispatch: counter().fn, ...ctxFor(job),
+    });
+    expect(r.stop_reason).toBe("budget_exhausted");
+  });
 });
 
 describe("runAgent after losing its claim", () => {
@@ -387,6 +403,7 @@ describe("runAgent after losing its claim", () => {
     expect(s.calls).toHaveLength(1);
     expect(d.calls).toHaveLength(0);
   });
+
 });
 
 describe("subagent handler", () => {

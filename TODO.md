@@ -52,48 +52,37 @@ Operator decisions:
 - **Spend caps fail open on accounting errors.** A failed reservation or a
   missing ledger column lets the call through unheld (availability over
   enforcement). Decide whether the brain-wide cap should fail closed.
-- **Daily cap values.** Suggested `MEMRAIN_DAILY_BUDGET_USD=1.00` and
-  `MEMRAIN_CYCLE_MAX_USD_PER_DAY=0.30`; both are off until set.
-- **`MEMRAIN_OWNER_ENTITY`** (the operator's slug) is unset; transcript facts
-  of the operator keep being dropped until it is.
-- **Stored-secret cleanup:** run `memrain secrets audit`, review, then
-  `--apply --yes`; then `memrain reindex --source code --all`.
-- Confirm `MEMRAIN_TENANT_FAIL_CLOSED=1` in production: scopeless tokens are
-  otherwise unscoped for `add_fact` batches, `replaces` and `forget_fact`.
 
 Engineering:
-- Migrations 126 and 130 build an index / validate a constraint without
-  `lock_timeout`; fine at today's table sizes, revisit if they grow.
-- A 20-item `add_fact` batch counts as one write for per-call rate limiting.
+- Migrations 126, 132, 137 and 138 add a CHECK or build an index without
+  `CONCURRENTLY`; `lock_timeout` bounds only lock acquisition, so writers wait
+  for the scan or build. Fine at today's table sizes, revisit if they grow.
 - Transcript slugs are global, so a tenant who learns another tenant's
   session id can claim its slugs first; prefix slugs with the source when it
-  is not `default`.
-- `agent/runner.ts` does not pass `ctx.signal` into converse yet, and jobs
-  refused by a daily cap still spend retries.
-- The deterministic-embedding eval canary and `inferSubject()` (owner mapping
-  by a unique mention) are not built.
-- Secret audit: slugs are never scanned, and a mirror failure after the page
-  rewrite is counted as a failed rewrite.
-- ~50 permanently failing chunks at the front of the embed-gaps order would
-  stall the fill; order by attempts or skip after N failures.
+  is not `default`. Pushes outside a client's bound prefixes are refused.
+- The deterministic-embedding eval canary is not built.
 
 ---
 
 ## Follow-ups from the 1.2 batch
 
-Operator decisions:
-- **Ranking flags.** Build private qrels (`memrain eval qrels build`, at least
-  60 scored queries with the known misses as `expected_top1`), record a
-  baseline, then A/B each `MEMRAIN_RANK_*` flag in order (METADATA_GATE,
-  ENTITY_TRUTH_SOFT, KEYWORD_OR_RETRY, PAGE_FUSION, KEYWORD_CONFIDENCE,
-  EXACT_LOOKUP) and promote only on a sealed win (docs/eval/PREREG-TEMPLATE.md).
-- **Code graph rebuild:** `memrain reindex --source code --rechunk-stale` once
-  after deploy so existing files get the new call edges.
-
 Engineering:
-- `search`/`query` snippet pointers derive the slug from the hit path; a
+- `search`/`query` snippet pointers derive the slug from the hit path; an
+  operator gets `page_get <source>/<slug>` for a tenant page, and a
   default-source slug whose first segment equals a read source name is
   stripped wrongly. Carry `source_id` on hits and build `full` from it.
+- `think` has no `outputRedaction`, so a tenant can get back a credential
+  stored under `flag` disposition (quoted evidence or the extractive
+  fallback) that `search`/`page_get` would redact.
+- `requireOwnWriteSource` guards only `page_edit` and `purge_deleted_pages`;
+  with `MEMRAIN_TENANT_FAIL_CLOSED` off, a client with no write source reaches
+  `page_delete`, `page_revert`, `page_restore`, `forget_fact`, `unlink` and
+  `remove_tag` unscoped.
+- Transcript push jobs read the client cap live; a PAT revoked between push
+  and run resolves to no cap. Carry the cap in the payload as page mirrors do.
+- `skillopt/evaluate.ts` turns a rollover `DailyCapRefusal` into
+  `budget_exhausted` the way the agent runner used to; rethrow it so the
+  worker defers.
 - `lang` on code tools has no length bound (parameterised, so no injection);
   the param schema cannot express `maxLength` yet.
 - An unresolved bare call edge counts toward every definition with that name,

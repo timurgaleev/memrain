@@ -62,6 +62,25 @@ function beta() { return alpha(); }
     expect(selfCaller).toBeUndefined();
   });
 
+  it("drops this.save() inside save but keeps this.repo.save()", async () => {
+    const callersOfSave = async (body: string, lang: "typescript" | "python", file: string) =>
+      (await entitiesFor(body, file, lang)).entities.filter(
+        (e) => e.type === "code-caller" && e.name === "save",
+      );
+    expect(await callersOfSave(
+      `class Repo { save(x: any): any { return x.id ? x : this.save({ ...x, id: 1 }); } }\n`,
+      "typescript", "src/repo.ts",
+    )).toHaveLength(0);
+    expect(await callersOfSave(
+      `class Svc { save(x: any): any { return this.repo.save(x); } }\n`,
+      "typescript", "src/svc.ts",
+    )).toHaveLength(1);
+    expect(await callersOfSave(
+      `class Repo:\n    def save(self, x):\n        return self.save(x)\n`,
+      "python", "repo.py",
+    )).toHaveLength(0);
+  });
+
   it("collapses obj.method() into bare method name (fuzzy by design)", async () => {
     const src = `function caller() { obj.bar(); }
 `;

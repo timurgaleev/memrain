@@ -49,6 +49,7 @@ import {
   chargeableUsage,
   costUsd,
   isBudgetRefusal,
+  isRolloverDailyCapRefusal,
   type ReportedUsage,
 } from "../budget.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
@@ -401,8 +402,11 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
       });
     } catch (err) {
       budget.release(hold);
-      // The spender's daily cap refused the call before it was sent: the run
-      // ends the way a spent per-job cap ends it.
+      // The brain's or cycle's cap clears at midnight: the worker defers the
+      // job and the ledger resumes it then.
+      if (isRolloverDailyCapRefusal(err)) throw err;
+      // The spender's own daily cap refused the call before it was sent: the
+      // run ends the way a spent per-job cap ends it.
       if (isBudgetRefusal(err)) return finish("budget_exhausted");
       throw err;
     }

@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- A recursive `this.save()` / `self.save()` inside `save` no longer becomes a
+  call edge that `code_flow` and `code_blast` resolve to another class's
+  `save`. Run `memrain reindex --source code --all` to drop existing ones.
+- A subagent job refused by the brain or cycle daily cap is deferred to the
+  next UTC day and resumed from its ledger, instead of finishing as
+  `budget_exhausted`.
+- docs: `MEMRAIN_SECRET_SCAN_ALLOW` takes 16-hex fingerprints, as the
+  redaction marker prints them.
+
 ## [1.2.0] — 2026-10-11
 
 ### Added
