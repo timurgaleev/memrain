@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-10-12
+
 ### Fixed
 - A recursive `this.save()` / `self.save()` inside `save` no longer becomes a
   call edge that `code_flow` and `code_blast` resolve to another class's
