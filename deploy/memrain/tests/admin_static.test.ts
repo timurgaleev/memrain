@@ -3,12 +3,26 @@
  * with an index.html SPA fallback. Relies on the dist produced by
  * `cd admin && bun run build` (run in CI/local before this test).
  */
-import { describe, expect, it } from "bun:test";
-import { existsSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serveAdminStatic } from "../src/http/admin-static.ts";
 
 const distExists = existsSync(fileURLToPath(new URL("../admin/dist/index.html", import.meta.url)));
+
+const CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; " +
+  "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
+function expectSecurityHeaders(r: Response | null): void {
+  expect(r).not.toBeNull();
+  expect(r!.headers.get("Content-Security-Policy")).toBe(CSP);
+  expect(r!.headers.get("X-Frame-Options")).toBe("DENY");
+  expect(r!.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  expect(r!.headers.get("Referrer-Policy")).toBe("no-referrer");
+}
 
 describe.if(distExists)("serveAdminStatic (dist built)", () => {
   it("serves index.html for /admin/ and the bare /admin", async () => {
@@ -44,6 +58,44 @@ describe.if(distExists)("serveAdminStatic (dist built)", () => {
     } else {
       expect(r?.status).toBe(403);
     }
+  });
+});
+
+// Runs against a throwaway dist so the headers stay covered in a checkout
+// that has never built the SPA.
+describe("serveAdminStatic security headers", () => {
+  let dist = "";
+  const serve = (path: string) => serveAdminStatic(new URL(`http://h${path}`), dist);
+
+  beforeAll(() => {
+    dist = mkdtempSync(join(tmpdir(), "admin-dist-"));
+    mkdirSync(join(dist, "assets"));
+    writeFileSync(join(dist, "index.html"), "<!doctype html><div id=\"root\"></div>");
+    writeFileSync(join(dist, "assets", "app.css"), "body{}");
+    writeFileSync(join(dist, "assets", "app.js"), "void 0;");
+  });
+  afterAll(() => rmSync(dist, { recursive: true, force: true }));
+
+  it("sets the CSP and framing headers on every response path", async () => {
+    for (const p of ["/admin", "/admin/dashboard", "/admin/assets/missing-asset.js", "/admin/assets/app.css", "/admin/assets/app.js"]) {
+      const r = await serve(p);
+      expect(r?.status).toBe(200);
+      expectSecurityHeaders(r);
+    }
+  });
+
+  it("sets the headers on the traversal refusal too", async () => {
+    const r = await serve("/admin/assets/..%2f..%2f..%2fetc%2fpasswd");
+    expectSecurityHeaders(r);
+  });
+});
+
+describe.if(distExists)("serveAdminStatic built index.html", () => {
+  it("built index.html loads no third-party fonts and no inline script", async () => {
+    const html = await (await serveAdminStatic(new URL("http://h/admin/")))!.text();
+    expect(html).not.toContain("fonts.googleapis.com");
+    expect(html).not.toContain("fonts.gstatic.com");
+    for (const tag of html.match(/<script\b[^>]*>/g) ?? []) expect(tag).toMatch(/\ssrc=/);
   });
 });
 

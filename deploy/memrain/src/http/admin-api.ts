@@ -31,11 +31,18 @@ import {
 import type { TenantMode } from "../core/oauth-provider.ts";
 import { normalizeScopesInput } from "../core/scope.ts";
 import { isSameOriginPost } from "./same-origin.ts";
+import { handleAdminTool } from "./admin-tool.ts";
+import type { RateLimiter } from "../mcp/rate_limit.ts";
+import type { SearchOptions } from "../core/search/hybrid.ts";
 
 export interface AdminApiDeps {
   storage: Storage;
   /** Session check from the AdminAuth instance (http/admin.ts). */
   requireAdmin: (req: Request) => boolean;
+  /** Bucket for the tool route's embedding calls (tests inject their own). */
+  toolLimiter?: RateLimiter;
+  /** Hermetic query-embedder seam for the tool route (tests only). */
+  embedQuery?: SearchOptions["embedQuery"];
 }
 
 const unauthorized = () => Response.json({ error: "Admin authentication required" }, { status: 401 });
@@ -46,6 +53,13 @@ function serverError(route: string, e: unknown): Response {
   console.error(`[admin-api] ${route} failed:`, e instanceof Error ? e.message : e);
   return Response.json({ error: "internal error" }, { status: 500 });
 }
+
+/**
+ * The operator's own admin-panel calls are not agent traffic. They are the
+ * rows with agent 'admin-panel' and no credential; IS DISTINCT FROM keeps rows
+ * whose agent_name is NULL.
+ */
+const NOT_PANEL_ROW = "(agent_name IS DISTINCT FROM 'admin-panel' OR token_name IS NOT NULL)";
 
 /** Per-credential MCP usage rollup shown on the Agents page. */
 export interface GrantUsage {
@@ -138,15 +152,36 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
   }
   const engine = deps.storage.engine();
 
-  // GET /admin/api/full-stats — brain health + corpus counts (Dashboard).
+  // POST /admin/api/tool — allowlisted MCP tools for the brain explorer.
+  if (p === "/admin/api/tool") {
+    return handleAdminTool(req, {
+      storage: deps.storage,
+      ...(deps.toolLimiter ? { toolLimiter: deps.toolLimiter } : {}),
+      ...(deps.embedQuery ? { embedQuery: deps.embedQuery } : {}),
+    });
+  }
+
+  // GET /admin/api/full-stats — brain health + corpus counts (Overview).
+  // `?counts=0` skips the whole-table counts for the frequent health poll.
   if (p === "/admin/api/full-stats" && req.method === "GET") {
     try {
       const health = await brainHealthMetrics(engine);
-      const counts = await engine.query<{ documents: number; pages: number; chunks: number }>(
+      if (url.searchParams.get("counts") === "0") return Response.json({ health, counts: null });
+      const counts = await engine.query<{
+        documents: number;
+        pages: number;
+        chunks: number;
+        facts: number;
+        entities: number;
+        links: number;
+      }>(
         `SELECT
            (SELECT count(*) FROM documents WHERE deleted_at IS NULL)::int AS documents,
            (SELECT count(*) FROM pages WHERE deleted_at IS NULL)::int AS pages,
-           (SELECT count(*) FROM chunks)::int AS chunks`,
+           (SELECT count(*) FROM chunks)::int AS chunks,
+           (SELECT count(*) FROM entity_facts WHERE forgotten_at IS NULL)::int AS facts,
+           (SELECT count(DISTINCT entity_slug) FROM entity_facts WHERE forgotten_at IS NULL)::int AS entities,
+           (SELECT count(*) FROM links)::int AS links`,
       );
       return Response.json({ health, counts: counts.rows[0] ?? null });
     } catch (e) {
@@ -968,7 +1003,8 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
            (SELECT count(*)::int FROM oauth_tokens WHERE token_type = 'access' AND revoked_at IS NULL
                AND expires_at > extract(epoch FROM now())) AS active_tokens,
            (SELECT count(*)::int FROM access_tokens WHERE revoked_at IS NULL) AS active_api_keys,
-           (SELECT count(*)::int FROM mcp_request_log WHERE created_at > now() - interval '24 hours') AS requests_today`,
+           (SELECT count(*)::int FROM mcp_request_log WHERE created_at > now() - interval '24 hours'
+               AND ${NOT_PANEL_ROW}) AS requests_today`,
       );
       return Response.json(r.rows[0] ?? {});
     } catch (e) {
@@ -988,9 +1024,10 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
            (SELECT count(*)::int FROM oauth_tokens WHERE token_type = 'access' AND revoked_at IS NULL
                AND expires_at > extract(epoch FROM now())
                AND expires_at <= extract(epoch FROM now() + interval '24 hours')) AS tokens_expiring_24h,
-           (SELECT count(*)::int FROM mcp_request_log WHERE created_at > now() - interval '24 hours') AS total_24h,
            (SELECT count(*)::int FROM mcp_request_log WHERE created_at > now() - interval '24 hours'
-               AND status <> 'success') AS errors_24h`,
+               AND ${NOT_PANEL_ROW}) AS total_24h,
+           (SELECT count(*)::int FROM mcp_request_log WHERE created_at > now() - interval '24 hours'
+               AND status <> 'success' AND ${NOT_PANEL_ROW}) AS errors_24h`,
       );
       const row = r.rows[0];
       const total = row?.total_24h ?? 0;

@@ -27,6 +27,17 @@ const MIME: Record<string, string> = {
   ".png": "image/png",
 };
 
+// The SPA ships its own scripts and styles and talks only to this origin.
+// React `style` props go through CSSOM, which style-src does not govern.
+const ADMIN_SECURITY_HEADERS: Record<string, string> = {
+  "Content-Security-Policy":
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; " +
+    "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  "X-Frame-Options": "DENY",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+};
+
 function mimeFor(path: string): string {
   const dot = path.lastIndexOf(".");
   return (dot >= 0 && MIME[path.slice(dot)]) || "application/octet-stream";
@@ -37,29 +48,29 @@ function mimeFor(path: string): string {
  * Returns null only when the built dist is missing (so the caller 404s rather
  * than masking a broken build). Never serves outside the dist dir.
  */
-export async function serveAdminStatic(url: URL): Promise<Response | null> {
+export async function serveAdminStatic(url: URL, distDir: string = DIST_DIR): Promise<Response | null> {
   // The asset path under dist. "/admin" or "/admin/" → index.html. A real asset
   // request is "/admin/assets/<file>"; anything else is SPA-routed → index.html.
   let rel = url.pathname.slice("/admin".length).replace(/^\/+/, ""); // strip "/admin/"
   if (rel === "" || !rel.startsWith("assets/")) rel = "index.html";
 
   // Path-traversal guard: resolve, then check the file is genuinely INSIDE
-  // DIST_DIR via a `relative()` boundary (a bare `startsWith` would admit a
+  // the dist dir via a `relative()` boundary (a bare `startsWith` would admit a
   // sibling-prefix dir like `<dist>-backup`, codex). `../foo` or an absolute
   // result means it escaped.
-  const filePath = resolve(DIST_DIR, rel);
-  const rejoined = relative(DIST_DIR, filePath);
+  const filePath = resolve(distDir, rel);
+  const rejoined = relative(distDir, filePath);
   if (rejoined.startsWith("..") || isAbsolute(rejoined)) {
-    return new Response("Forbidden", { status: 403 });
+    return new Response("Forbidden", { status: 403, headers: ADMIN_SECURITY_HEADERS });
   }
 
   const file = Bun.file(filePath);
   if (!(await file.exists())) {
     // Asset miss → SPA fallback; index miss → the build is absent.
     if (rel === "index.html") return null;
-    const index = Bun.file(resolve(DIST_DIR, "index.html"));
+    const index = Bun.file(resolve(distDir, "index.html"));
     if (!(await index.exists())) return null;
-    return new Response(index, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    return new Response(index, { headers: { ...ADMIN_SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8" } });
   }
-  return new Response(file, { headers: { "Content-Type": mimeFor(filePath) } });
+  return new Response(file, { headers: { ...ADMIN_SECURITY_HEADERS, "Content-Type": mimeFor(filePath) } });
 }
