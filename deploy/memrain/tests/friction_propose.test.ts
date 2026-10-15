@@ -112,6 +112,28 @@ describe("proposeForSkill", () => {
     expect(proposal.suggestion).toBe("s");
   });
 
+  it("asks the utility-tier model when SKILLIFY_MODEL_ID is unset", async () => {
+    const saved = { utility: process.env.MEMRAIN_UTILITY_MODEL, skillify: process.env.SKILLIFY_MODEL_ID };
+    let seen = "";
+    const client = {
+      send: async (cmd: { input: { modelId: string } }) => {
+        seen = cmd.input.modelId;
+        return { output: { message: { content: [{ text: JSON.stringify({ rationale: "r", suggestion: "s" }) }] } } };
+      },
+    } as unknown as import("@aws-sdk/client-bedrock-runtime").BedrockRuntimeClient;
+    try {
+      process.env.MEMRAIN_UTILITY_MODEL = "utility-model";
+      delete process.env.SKILLIFY_MODEL_ID;
+      await proposeForSkill("x", "/p", "b", [], 0, { client });
+    } finally {
+      for (const [k, v] of [["MEMRAIN_UTILITY_MODEL", saved.utility], ["SKILLIFY_MODEL_ID", saved.skillify]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+    expect(seen).toBe("utility-model");
+  });
+
   it("throws on empty response", async () => {
     await expect(
       proposeForSkill("x", "/p", "b", [], 0, { client: stubClient("") }),

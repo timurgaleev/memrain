@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.2] — 2026-10-15
+
+### Fixed
+- `memrain skillify` and `friction propose-fix` ask the utility-tier model
+  (`MEMRAIN_UTILITY_MODEL`) instead of a pinned Claude Haiku 4.5. An explicit
+  `SKILLIFY_MODEL_ID` still wins.
+
 ## [1.2.1] — 2026-10-12
 
 ### Fixed

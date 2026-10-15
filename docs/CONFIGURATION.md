@@ -241,7 +241,7 @@ you opt in.
 | `MEMRAIN_TAKE_EMBED` | off (`=1` on) | Embed each synthesized take so takes are semantically searchable; off leaves the take's embedding column NULL. Code-only. | cheap (embed) |
 | `MEMRAIN_DREAM_INTERVAL_S` | `21600` (6h) | Maintenance-cycle interval. | free |
 | `MEMRAIN_DREAM_STALE_DAYS` | `30` | Re-embed docs older than this many days during the cycle. | free |
-| `MEMRAIN_UTILITY_MODEL` | `eu.anthropic.claude-haiku-4-5-20251001-v1:0` | Overrides the Haiku utility-tier model id (intent classification, query expansion, rerank, synthesis, contextual blurbs). Use the per-feature keys below to move one call site. | cheap (Haiku) |
+| `MEMRAIN_UTILITY_MODEL` | `eu.anthropic.claude-haiku-4-5-20251001-v1:0` | Overrides the Haiku utility-tier model id (intent classification, query expansion, rerank, synthesis, contextual blurbs, `skillify` drafts and `friction propose-fix`; `SKILLIFY_MODEL_ID` overrides the last two for a CLI run outside the container; compose does not pass it in). Use the per-feature keys below to move one call site. | cheap (Haiku) |
 | `MEMRAIN_INTENT_LLM` | off (`=1` on) | Paid Haiku tie-break for queries the regex intent taxonomy cannot place. Off, intent classification makes no model call. Code-only. | cheap (Haiku) |
 | `MEMRAIN_QUERY_EXPANSION` | off (`=1` on) | LLM query expansion: Haiku generates query variants for extra keyword passes. Off in the default search mode. Code-only. | cheap (Haiku) |
 | `MEMRAIN_EXPANSION_MODEL` | utility model | Model id for query expansion only. Allowlisted. | cheap (Haiku) |

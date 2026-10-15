@@ -178,6 +178,30 @@ Pulls the most recent five logged workouts via memex.
     expect(r.markdown.startsWith("---\nname: foo-bar-baz")).toBe(true);
   });
 
+  it("drafts on the utility-tier model unless SKILLIFY_MODEL_ID overrides it", async () => {
+    const saved = { utility: process.env.MEMRAIN_UTILITY_MODEL, skillify: process.env.SKILLIFY_MODEL_ID };
+    const seen: string[] = [];
+    const client = {
+      send: async (cmd: { input: { modelId: string } }) => {
+        seen.push(cmd.input.modelId);
+        return { output: { message: { content: [{ text: "# Draft\n\nBody body body." }] } } };
+      },
+    } as unknown as import("@aws-sdk/client-bedrock-runtime").BedrockRuntimeClient;
+    try {
+      process.env.MEMRAIN_UTILITY_MODEL = "utility-model";
+      delete process.env.SKILLIFY_MODEL_ID;
+      await skillify("foo bar", { client });
+      process.env.SKILLIFY_MODEL_ID = "skillify-model";
+      await skillify("foo bar", { client });
+    } finally {
+      for (const [k, v] of [["MEMRAIN_UTILITY_MODEL", saved.utility], ["SKILLIFY_MODEL_ID", saved.skillify]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+    expect(seen).toEqual(["utility-model", "skillify-model"]);
+  });
+
   it("rejects an empty prompt", async () => {
     await expect(
       skillify("   ", { client: stubClient("anything") }),

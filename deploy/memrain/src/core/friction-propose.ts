@@ -26,12 +26,11 @@ import { sanitizeForPrompt } from "./llm/sanitize.ts";
 import { parseModelJson } from "./llm/json-output.ts";
 import { awsRegion, bedrockClientConfig, chatTimeoutMs, generationFields, responseText, utilityTimeoutMs } from "./llm/gateway.ts";
 import { trackedInvoke } from "./budget.ts";
+import { resolveModel } from "./llm/resolve-model.ts";
 
 /** Ledger label — the skill-rewrite suggestions behind `friction propose-fix`. */
 const SPEND_OP = "friction-propose";
 
-const DEFAULT_MODEL_ID =
-  process.env.SKILLIFY_MODEL_ID ?? "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
 const DEFAULT_REGION = awsRegion();
 const DEFAULT_SKILLS_DIR =
   process.env.SKILLIFY_SKILLS_DIR ?? "deploy/skills";
@@ -188,7 +187,7 @@ export async function proposeForSkill(
   opts: FrictionProposeOptions = {},
 ): Promise<SkillProposal> {
   const client = opts.client ?? getClient();
-  const modelId = opts.modelId ?? DEFAULT_MODEL_ID;
+  const modelId = opts.modelId || process.env.SKILLIFY_MODEL_ID || resolveModel("utility");
   // Skill text + friction queries/reasons are untrusted (search-miss content
   // can be attacker-influenced) — strip injection phrases before the LLM sees
   // them. The skill markdown the model rewrites stays structurally intact.

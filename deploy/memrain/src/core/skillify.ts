@@ -21,14 +21,13 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import { awsRegion, bedrockClientConfig, chatTimeoutMs, generationFields, responseText, utilityTimeoutMs } from "./llm/gateway.ts";
 import { trackedInvoke } from "./budget.ts";
+import { resolveModel } from "./llm/resolve-model.ts";
 import { OPERATIONS } from "../mcp/operations.ts";
 import { parseSkillFrontmatter } from "./skillpack/frontmatter.ts";
 
 /** Ledger label — the one-shot skill drafter behind `memrain skillify`. */
 const SPEND_OP = "skillify";
 
-const DEFAULT_MODEL_ID =
-  process.env.SKILLIFY_MODEL_ID ?? "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
 const DEFAULT_REGION = awsRegion();
 
 const MAX_OUTPUT_TOKENS = 1500;
@@ -139,7 +138,7 @@ export async function draftSkill(
     throw new Error("draftSkill: prompt must be a non-empty string");
   }
   const client = opts.client ?? getClient();
-  const modelId = opts.modelId ?? DEFAULT_MODEL_ID;
+  const modelId = opts.modelId || process.env.SKILLIFY_MODEL_ID || resolveModel("utility");
 
   const command = new ConverseCommand({
     modelId,
