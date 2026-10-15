@@ -241,7 +241,7 @@ you opt in.
 | `MEMRAIN_TAKE_EMBED` | off (`=1` on) | Embed each synthesized take so takes are semantically searchable; off leaves the take's embedding column NULL. Code-only. | cheap (embed) |
 | `MEMRAIN_DREAM_INTERVAL_S` | `21600` (6h) | Maintenance-cycle interval. | free |
 | `MEMRAIN_DREAM_STALE_DAYS` | `30` | Re-embed docs older than this many days during the cycle. | free |
-| `MEMRAIN_UTILITY_MODEL` | `eu.anthropic.claude-haiku-4-5-20251001-v1:0` | Overrides the Haiku utility-tier model id (intent classification, query expansion, rerank, synthesis, contextual blurbs, `skillify` drafts and `friction propose-fix`; `SKILLIFY_MODEL_ID` overrides the last two for a CLI run outside the container; compose does not pass it in). Use the per-feature keys below to move one call site. | cheap (Haiku) |
+| `MEMRAIN_UTILITY_MODEL` | `eu.anthropic.claude-haiku-5-5` | Overrides the Haiku utility-tier model id (intent classification, query expansion, rerank, synthesis, contextual blurbs, `skillify` drafts and `friction propose-fix`; `SKILLIFY_MODEL_ID` overrides the last two for a CLI run outside the container; compose does not pass it in). Use the per-feature keys below to move one call site. | cheap (Haiku) |
 | `MEMRAIN_INTENT_LLM` | off (`=1` on) | Paid Haiku tie-break for queries the regex intent taxonomy cannot place. Off, intent classification makes no model call. Code-only. | cheap (Haiku) |
 | `MEMRAIN_QUERY_EXPANSION` | off (`=1` on) | LLM query expansion: Haiku generates query variants for extra keyword passes. Off in the default search mode. Code-only. | cheap (Haiku) |
 | `MEMRAIN_EXPANSION_MODEL` | utility model | Model id for query expansion only. Allowlisted. | cheap (Haiku) |
@@ -289,7 +289,7 @@ that stops making calls once the budget is spent. All default OFF.
 | `MEMRAIN_FACTS_MAX_WINDOWS` | `1` | Extractor calls one long non-transcript page may get. `1` reads the first 12,000 characters, as before. Higher cuts the body at paragraph boundaries into 12,000-character windows, one call each under the same per-write ceiling (`MEMRAIN_FACTS_WRITE_BUDGET_USD`); the first window the ceiling refuses ends the run. Transcript pages are already split by the importer. Clamped to 20. | **paid (Sonnet)** per window |
 | `MEMRAIN_THINK_QUOTE_VERIFY` | on (`=0` off) | Checks every quoted span of four or more words in a `think` answer against the evidence it was given: an exact match stays, a near match is repaired to the evidence's wording, anything else loses its quotes and is marked `[unverified]`. Deterministic, no model call. | free |
 | `MEMRAIN_TIMEZONE` | `UTC` | IANA time zone `think` uses for "today" and for page dates (e.g. `Europe/Berlin`). An invalid name falls back to UTC. | free |
-| `MEMRAIN_FACTS_MODEL` | `eu.anthropic.claude-sonnet-4-6` | Overrides the paid-tier Sonnet model id for the slices above. | **paid (Sonnet)** |
+| `MEMRAIN_FACTS_MODEL` | `eu.anthropic.claude-sonnet-5-5` | Overrides the paid-tier Sonnet model id for the slices above. | **paid (Sonnet)** |
 | `MEMRAIN_FACTS_EXTRACT_MODEL` | `MEMRAIN_FACTS_MODEL` | Model id for fact extraction only (on write, on demand and the conversation backfill). Allowlisted. | **paid (Sonnet)** |
 | `MEMRAIN_THINK_MODEL` | `MEMRAIN_FACTS_MODEL` | Model id for `think` only. Allowlisted. | **paid (Sonnet)** |
 | `MEMRAIN_DRIFT_MODEL` | `MEMRAIN_FACTS_MODEL` | Model id for the drift judge only (the cycle phase that checks whether a take's evidence still holds). Allowlisted. | **paid (Sonnet)** |
@@ -804,7 +804,7 @@ schema in `terraform/variables.tf`.
 | `availability_zone` | `eu-west-1b` | AZ for the primary subnet. |
 | `multi_az_subnet_cidrs` | `{eu-west-1a=10.0.2.0/24, eu-west-1c=10.0.3.0/24}` | Extra subnets to satisfy the RDS multi-AZ subnet group. |
 | `bedrock_allowed_regions` | EU family + `us-east-1` | Regions where the instance role may invoke the expensive Claude models; an IAM Deny blocks `anthropic.claude-*` elsewhere. |
-| `bedrock_model_id` | `eu.anthropic.claude-haiku-4-5-20251001` | Bedrock CRIS inference-profile id for the primary model, validated against an allowed list. The **runtime** utility tier is the built-in Claude Haiku default (overridable per feature with the `MEMRAIN_<FEATURE>_MODEL` keys, or with `MEMRAIN_UTILITY_MODEL`); this terraform var is informational: it feeds only the `bedrock_model` output, and IAM does not reference it. |
+| `bedrock_model_id` | `eu.anthropic.claude-haiku-5-5` | Bedrock CRIS inference-profile id for the primary model, validated against an allowed list. The **runtime** utility tier is the built-in Claude Haiku default (overridable per feature with the `MEMRAIN_<FEATURE>_MODEL` keys, or with `MEMRAIN_UTILITY_MODEL`); this terraform var is informational: it feeds only the `bedrock_model` output, and IAM does not reference it. |
 | `alarm_email` | `""` | Email for the EC2 status-check CloudWatch alarm. Empty skips email (alarm still fires). |
 | `ssh_allowed_cidr` | `""` | CIDR allowed inbound SSH. Empty disables SSH — use SSM Session Manager. |
 | `enable_vpc_endpoints` | `false` | Enable interface VPC endpoints (Bedrock, SM, SSM, Logs). ~$43/mo — off for personal use. |

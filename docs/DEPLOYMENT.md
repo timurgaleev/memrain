@@ -40,12 +40,12 @@ Throughout, replace placeholders: `example.com` (your domain), `<subdomain>`
 
   ```bash
   aws bedrock get-foundation-model-availability \
-    --model-id anthropic.claude-haiku-4-5-20251001-v1:0 \
+    --model-id anthropic.claude-haiku-5-5 \
     --query agreementAvailability.status   # expect "AVAILABLE"
   ```
 
   The models the brain uses: **Amazon Titan Text Embeddings V2** (indexing —
-  no form needed), **Claude Haiku 4.5** (utility tier), **Claude Sonnet 4.6**
+  no form needed), **Claude Haiku 5.5** (utility tier), **Claude Sonnet 5.5**
   (only if you turn on any paid slice). See the AWS docs on
   [model access](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)
   for the current procedure.

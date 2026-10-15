@@ -149,7 +149,7 @@ flowchart TD
   B --> RS[× recency updated_at  × salience frontmatter]
   RS --> D[dedupByDocument]
   D --> RR{MEMRAIN_RERANK?}
-  RR -->|yes| TP[Haiku 4.5 two-pass rerank]
+  RR -->|yes| TP[Haiku two-pass rerank]
   RR -->|no| TK[trim to k]
   TP --> TK
   TK --> TB[token_budget cap — opt-in]
@@ -243,9 +243,9 @@ Mode `0600`. Reserved for future agent-side consumption.
 | Use | Model | Cost |
 |---|---|---|
 | Embeddings | `amazon.titan-embed-text-v2:0` | credit-eligible |
-| Query intent (internal) | `eu.anthropic.claude-haiku-4-5-20251001-v1:0` | paid (per-query; heuristic cache skips most) |
-| Query expansion (internal) | `eu.anthropic.claude-haiku-4-5-20251001-v1:0` | paid (per non-exact query) |
-| Two-pass rerank (opt-in) | `eu.anthropic.claude-haiku-4-5-20251001-v1:0` | paid (~$1-3/mo if `MEMRAIN_RERANK=1`) |
+| Query intent (internal) | `eu.anthropic.claude-haiku-5-5` | paid (per-query; heuristic cache skips most) |
+| Query expansion (internal) | `eu.anthropic.claude-haiku-5-5` | paid (per non-exact query) |
+| Two-pass rerank (opt-in) | `eu.anthropic.claude-haiku-5-5` | paid (~$1-3/mo if `MEMRAIN_RERANK=1`) |
 
 Answer synthesis is not performed by Memrain — the MCP client (Claude
 Code, Cursor, …) composes answers from the cited chunks Memrain returns.

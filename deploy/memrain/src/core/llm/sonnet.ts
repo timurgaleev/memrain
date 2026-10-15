@@ -28,10 +28,10 @@ import {
 } from "./gateway.ts";
 import { trackedInvoke } from "../budget.ts";
 
-/** EU cross-region inference profile for Claude Sonnet 4.6 — verified ACTIVE +
- *  invokable in eu-west-1 (no version suffix). Override via MEMRAIN_FACTS_MODEL
- *  (e.g. `eu.anthropic.claude-haiku-4-5-20251001-v1:0` for the cheaper tier). */
-export const DEFAULT_SONNET_MODEL = "eu.anthropic.claude-sonnet-4-6";
+/** EU cross-region inference profile for Claude Sonnet 5.5 (no version suffix).
+ *  Override via MEMRAIN_FACTS_MODEL (e.g. `eu.anthropic.claude-haiku-5-5` for
+ *  the cheaper tier). */
+export const DEFAULT_SONNET_MODEL = "eu.anthropic.claude-sonnet-5-5";
 
 export interface SonnetCallInput {
   system: string;

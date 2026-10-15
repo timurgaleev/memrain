@@ -36,7 +36,7 @@ configured region:
   rest.
 - **AWS Bedrock** is used for embeddings (Amazon Titan Text Embeddings
   v2) and lightweight retrieval helpers — intent classification and
-  query expansion (Claude Haiku 4.5 on Bedrock by default, overridable via
+  query expansion (Claude Haiku 5.5 on Bedrock by default, overridable via
   `MEMRAIN_UTILITY_MODEL` / `MEMRAIN_INTENT_MODEL` /
   `MEMRAIN_EXPANSION_MODEL`). Memrain does **not** synthesize
   answers; that is the MCP client's job. Bedrock requests stay inside

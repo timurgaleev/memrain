@@ -36,7 +36,7 @@ import {
 import { trackedInvoke } from "../budget.ts";
 
 /** Default utility model — Claude Haiku (Bedrock), identical to intent.ts / expansion.ts. */
-export const DEFAULT_HAIKU_MODEL = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
+export const DEFAULT_HAIKU_MODEL = "eu.anthropic.claude-haiku-5-5";
 
 export interface LlmUsage {
   /** Non-cached input tokens billed at the normal input rate. */

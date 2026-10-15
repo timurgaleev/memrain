@@ -1,5 +1,5 @@
 /**
- * Two-pass rerank — feed the top-K hybrid hits to Haiku 4.5 for a more
+ * Two-pass rerank — feed the top-K hybrid hits to the utility-tier model for a more
  * precise relevance score, return the new ordering.
  *
  * Opt-in via env `MEMRAIN_RERANK=1` because Haiku is paid (~$1-3/mo

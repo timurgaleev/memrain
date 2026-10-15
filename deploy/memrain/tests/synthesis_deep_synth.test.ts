@@ -146,6 +146,7 @@ describe("runDeepSynthPhase", () => {
       sonnetFn: fakeSonnet(okResponse),
       pagesFn: fakePages(),
       budget,
+      modelId: "eu.anthropic.claude-sonnet-4-6",
     });
     expect(r.syntheses).toHaveLength(1);
     expect(r.budgetExhausted).toBe(true);

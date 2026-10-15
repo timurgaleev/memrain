@@ -160,20 +160,20 @@ variable "bedrock_model_id" {
   description = <<-EOT
     Amazon Bedrock CRIS inference profile ID surfaced in the `bedrock_model`
     terraform output. Informational: Memrain's utility tier is pinned in code
-    (eu.anthropic.claude-haiku-4-5, with Titan Embed V2 for embeddings and
-    eu.anthropic.claude-sonnet-4-6 behind the paid feature flags) — this
+    (eu.anthropic.claude-haiku-5-5, with Titan Embed V2 for embeddings and
+    eu.anthropic.claude-sonnet-5-5 behind the paid feature flags) — this
     variable does not change what the brain calls. Keep it in sync with the
     deployed reality so `terraform output bedrock_model` tells the truth.
 
-    Default: Haiku 4.5 (EU profile) — what the brain actually uses.
+    Default: Haiku 5.5 (EU profile) — what the brain actually uses.
 
     Switch via: terraform apply -var='bedrock_model_id=...'
 
     === Anthropic Claude — what Memrain runs on ===
-      eu.anthropic.claude-haiku-4-5-20251001  — Haiku 4.5, utility tier (default; ~$2-3/mo)
-      eu.anthropic.claude-sonnet-4-6          — Sonnet 4.6, paid slices (~$15-25/mo)
-      eu.anthropic.claude-haiku-5-5           — Haiku 5.5, ~10x cheaper than Haiku 4.5
-      eu.anthropic.claude-sonnet-5-5          — Sonnet 5.5
+      eu.anthropic.claude-haiku-5-5           — Haiku 5.5, utility tier (default)
+      eu.anthropic.claude-sonnet-5-5          — Sonnet 5.5, paid slices (default)
+      eu.anthropic.claude-haiku-4-5-20251001  — Haiku 4.5, ~10x the Haiku 5.5 price
+      eu.anthropic.claude-sonnet-4-6          — Sonnet 4.6
 
     === Amazon Nova — credit-eligible alternates ===
       global.amazon.nova-2-lite-v1:0   — Nova 2 Lite (multi-turn-safe)
@@ -184,7 +184,7 @@ variable "bedrock_model_id" {
                                          do not use as primary for multi-turn cron jobs)
   EOT
   type        = string
-  default     = "eu.anthropic.claude-haiku-4-5-20251001"
+  default     = "eu.anthropic.claude-haiku-5-5"
 
   validation {
     condition = contains([

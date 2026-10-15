@@ -216,6 +216,7 @@ describe("runRoutingEval", () => {
       variants: [{ name: "baseline", catalog: catalog() }],
       repeats: 3,
       maxUsd: 1,
+      modelId: HAIKU,
       converse,
     });
     expect(r.stopReason).toBe("budget_exhausted");

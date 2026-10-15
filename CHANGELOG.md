@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-10-15
+
+### Changed
+- The built-in model defaults move to the 5.5 generation: the utility tier
+  runs on Claude Haiku 5.5 (`eu.anthropic.claude-haiku-5-5`) and the reasoning
+  tier on Claude Sonnet 5.5 (`eu.anthropic.claude-sonnet-5-5`). Installs that
+  set `MEMRAIN_UTILITY_MODEL` / `MEMRAIN_FACTS_MODEL` keep what they set. A
+  fresh install needs model access to both 5.5 models in its Bedrock account;
+  the IAM policy already allows them.
+
 ## [1.2.2] — 2026-10-15
 
 ### Fixed

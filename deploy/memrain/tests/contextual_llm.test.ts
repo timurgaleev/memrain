@@ -180,6 +180,7 @@ describe("contextual re-embed — LLM tier wiring", () => {
       embed: recordingEmbed,
       llmFn: fn,
       llmBudget: budget,
+      contextualModel: "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
     });
 
     expect(r.failed).toBe(0);

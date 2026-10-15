@@ -312,6 +312,7 @@ describe("every invoke site carries a label", () => {
 
   it("query expansion", async () => {
     const out = await expandQuery("memrain master plan", {
+      modelId: HAIKU,
       client: converseClient("the memrain blueprint\nmemrain roadmap"),
     });
     expect(out).toEqual(["the memrain blueprint", "memrain roadmap"]);
@@ -367,7 +368,7 @@ describe("every invoke site carries a label", () => {
       { chunkId: "a", documentId: "doc-a", score: 2, payload: { content: "x", title: "A", sourcePath: "a.md" } },
       { chunkId: "b", documentId: "doc-b", score: 1, payload: { content: "y", title: "B", sourcePath: "b.md" } },
     ];
-    const out = await rerank("q", hits, { client: converseClient("[1,0]") });
+    const out = await rerank("q", hits, { modelId: HAIKU, client: converseClient("[1,0]") });
     expect(out.map((h) => h.chunkId)).toEqual(["b", "a"]);
     const rows = await ledger();
     expect(rows).toHaveLength(1);
