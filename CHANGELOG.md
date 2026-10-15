@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-10-15
+
 ### Added
 - The admin panel opens on an Overview cockpit: brain health, request
   traffic and error rate, today's spend against caps, the job queue, corpus
