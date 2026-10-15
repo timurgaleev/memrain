@@ -1,13 +1,21 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { LoginPage } from "./pages/Login";
-import { DashboardPage } from "./pages/Dashboard";
+import { OverviewPage } from "./pages/Overview.tsx";
+import { SearchPage } from "./pages/Search.tsx";
+import { PagesPage } from "./pages/Pages.tsx";
+import { PageViewPage } from "./pages/PageView.tsx";
+import { EntityPage } from "./pages/Entity.tsx";
+import { GraphPage } from "./pages/Graph.tsx";
+import { TimelinePage } from "./pages/Timeline.tsx";
+import { SpendPage } from "./pages/Spend.tsx";
 import { AgentsPage } from "./pages/Agents";
 import { RequestLogPage } from "./pages/RequestLog";
 import { JobsWatchPage } from "./pages/JobsWatch";
 import { CalibrationPage } from "./pages/Calibration";
+import { CommandPalette } from "./components/CommandPalette.tsx";
 import { api } from "./api";
-
-type Page = "login" | "dashboard" | "agents" | "log" | "jobs" | "calibration";
+import { buildHash, parseHash } from "./lib/route.ts";
+import type { Route, RouteName } from "./lib/route.ts";
 
 interface PendingResume {
   handle?: string;
@@ -18,7 +26,34 @@ interface PendingResume {
   redirect_uri?: string | null;
   scope?: string | null;
 }
-const PAGES = ["login", "dashboard", "agents", "log", "jobs", "calibration"] as const;
+
+const NAV: { section: string; items: { name: RouteName; label: string; also?: RouteName[] }[] }[] = [
+  {
+    section: "Brain",
+    items: [
+      { name: "overview", label: "Overview" },
+      { name: "search", label: "Search" },
+      { name: "pages", label: "Pages", also: ["page", "entity"] },
+      { name: "graph", label: "Graph" },
+      { name: "timeline", label: "Timeline" },
+    ],
+  },
+  {
+    section: "Operations",
+    items: [
+      { name: "spend", label: "Spend" },
+      { name: "jobs", label: "Jobs" },
+      { name: "log", label: "Request Log" },
+      { name: "agents", label: "Agents" },
+      { name: "calibration", label: "Calibration" },
+    ],
+  },
+];
+
+function isTypingTarget(el: Element | null): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  return el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName);
+}
 
 /** The origin a callback would deliver the code to — the part worth reading. */
 function originOf(uri?: string | null): string | null {
@@ -30,21 +65,63 @@ function originOf(uri?: string | null): string | null {
   }
 }
 
-function getPage(): Page {
-  const hash = window.location.hash.replace("#", "") || "dashboard";
-  return (PAGES as readonly string[]).includes(hash) ? (hash as Page) : "dashboard";
+function currentRoute(): Route {
+  return parseHash(window.location.hash);
+}
+
+function MenuIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" className="icon">
+      <path d="M3 5.5h14M3 10h14M3 14.5h14" />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" className="icon">
+      <circle cx="8.5" cy="8.5" r="5" />
+      <path d="M12.3 12.3 17 17" />
+    </svg>
+  );
 }
 
 export function App() {
-  const [page, setPage] = useState<Page>(getPage);
+  const [route, setRoute] = useState<Route>(currentRoute);
+  const page = route.name;
   const [pending, setPending] = useState<PendingResume | null>(null);
   const [pendingError, setPendingError] = useState("");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
-    const onHash = () => setPage(getPage());
+    const onHash = () => {
+      setRoute(currentRoute());
+      setDrawerOpen(false);
+      window.scrollTo(0, 0);
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  useEffect(() => {
+    if (page === "login") return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      } else if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey && !isTypingTarget(document.activeElement)) {
+        e.preventDefault();
+        setPaletteOpen(true);
+      } else if (e.key === "Escape") {
+        setDrawerOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [page]);
+
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
 
   // An OAuth connect that bounced here for sign-in leaves its /authorize target
   // parked server-side. It is never followed automatically — a cross-site page
@@ -57,13 +134,14 @@ export function App() {
       .catch(() => { /* not signed in — the panel appears after login */ });
   }, [page]);
 
-  const navigate = (p: Page) => {
-    window.location.hash = p;
-    setPage(p);
+  const navigate = (name: RouteName) => {
+    const r: Route = { name, param: null };
+    window.location.hash = buildHash(r);
+    setRoute(r);
   };
 
   if (page === "login") {
-    return <LoginPage onLogin={() => navigate("dashboard")} />;
+    return <LoginPage onLogin={() => navigate("overview")} />;
   }
 
   // The click IS the consent: it mints a one-time approval bound to this
@@ -109,26 +187,42 @@ export function App() {
 
   return (
     <div className="app">
-      <nav className="sidebar">
-        <div className="sidebar-logo">memrain</div>
-        <div className="sidebar-nav">
-          <a className={`nav-item ${page === "dashboard" ? "active" : ""}`} onClick={() => navigate("dashboard")}>
-            Dashboard
-          </a>
-          <a className={`nav-item ${page === "agents" ? "active" : ""}`} onClick={() => navigate("agents")}>
-            Agents
-          </a>
-          <a className={`nav-item ${page === "log" ? "active" : ""}`} onClick={() => navigate("log")}>
-            Request Log
-          </a>
-          <a className={`nav-item ${page === "jobs" ? "active" : ""}`} onClick={() => navigate("jobs")}>
-            Jobs Watch
-          </a>
-          <a className={`nav-item ${page === "calibration" ? "active" : ""}`} onClick={() => navigate("calibration")}>
-            Calibration
-          </a>
+      <header className="topbar">
+        <button className="icon-btn" aria-label="Open navigation" aria-expanded={drawerOpen} aria-controls="sidebar" onClick={() => setDrawerOpen(true)}>
+          <MenuIcon />
+        </button>
+        <a className="topbar-logo" href="#overview">memrain</a>
+        <button className="icon-btn" aria-label="Search the brain" onClick={() => setPaletteOpen(true)}>
+          <SearchIcon />
+        </button>
+      </header>
+      {drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} aria-hidden="true" />}
+      <nav id="sidebar" className={`sidebar${drawerOpen ? " open" : ""}`} aria-label="Main">
+        <div className="sidebar-logo">
+          <span>memrain</span>
+          <button className="kbd-hint" onClick={() => setPaletteOpen(true)} aria-label="Open the command palette" title="Jump to a page">
+            <kbd>⌘K</kbd>
+          </button>
         </div>
-        <div style={{ marginTop: "auto", padding: "16px 12px", borderTop: "1px solid #1e1e2e" }}>
+        {NAV.map((group) => (
+          <div className="sidebar-nav" key={group.section}>
+            <div className="nav-section">{group.section}</div>
+            {group.items.map((item) => {
+              const current = page === item.name || (item.also?.includes(page) ?? false);
+              return (
+                <a
+                  key={item.name}
+                  href={buildHash({ name: item.name, param: null })}
+                  className={`nav-item ${current ? "active" : ""}`}
+                  aria-current={current ? "page" : undefined}
+                >
+                  {item.label}
+                </a>
+              );
+            })}
+          </div>
+        ))}
+        <div style={{ marginTop: "auto", padding: "16px 12px", borderTop: "1px solid var(--border)" }}>
           <button
             onClick={handleSignOutEverywhere}
             className="btn btn-secondary"
@@ -177,12 +271,20 @@ export function App() {
             </div>
           </div>
         )}
-        {page === "dashboard" && <DashboardPage />}
+        {page === "overview" && <OverviewPage />}
+        {page === "search" && <SearchPage query={route.param} />}
+        {page === "pages" && <PagesPage />}
+        {page === "page" && <PageViewPage slug={route.param} />}
+        {page === "entity" && <EntityPage slug={route.param} />}
+        {page === "graph" && <GraphPage slug={route.param} />}
+        {page === "timeline" && <TimelinePage param={route.param} />}
+        {page === "spend" && <SpendPage />}
         {page === "agents" && <AgentsPage />}
         {page === "log" && <RequestLogPage />}
         {page === "jobs" && <JobsWatchPage />}
         {page === "calibration" && <CalibrationPage />}
       </main>
+      <CommandPalette open={paletteOpen} onClose={closePalette} />
     </div>
   );
 }

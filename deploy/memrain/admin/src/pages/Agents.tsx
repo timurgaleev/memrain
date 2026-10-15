@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { CredentialsSection } from "./Credentials";
 
 // Agents page: the unified credentials view (OAuth clients + legacy API keys)
