@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- The admin panel opens on an Overview cockpit: brain health, request
+  traffic and error rate, today's spend against caps, the job queue, corpus
+  counts (documents, pages, chunks, facts, entities, links) and the live feed.
+- A brain explorer inside the admin panel: Search, Pages with a page view
+  (rendered body, tags, versions, backlinks, outgoing links, neighbor graph),
+  Entities and facts, a Graph view, a Timeline and a Spend page, plus a ⌘K
+  palette that jumps to any page.
+- `POST /admin/api/tool` serves the explorer. It accepts an allowlist of 18
+  read tools plus `add_tag` / `remove_tag`, rebuilds each call's arguments
+  from a per-tool key list with clamped limits, and runs search with every
+  paid stage off (no rerank, expansion or LLM intent; one query embedding).
+  Embedding calls share a rate limit, every call is written to the request
+  log as `admin-panel`, and panel rows stay out of the traffic and error-rate
+  indicators.
+
+### Security
+- `/admin` responses carry a strict Content-Security-Policy,
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: no-referrer`. The admin page no longer loads web fonts
+  from a third party.
+- Page bodies render through an escape-only markdown renderer; links keep
+  only `http`, `https` and `mailto` targets.
+
 ## [1.3.0] — 2026-10-15
 
 ### Changed

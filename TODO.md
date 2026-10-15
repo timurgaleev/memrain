@@ -9,6 +9,23 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ---
 
+## Follow-ups from the admin cockpit batch
+
+- ⌘K palette tracks the highlight by index, so Enter can pick a row that a
+  newer result set removed (`admin/src/components/CommandPalette.tsx`). Track
+  the highlighted slug instead.
+- Request Log filter and pagination have no abort or sequence guard; a slow
+  older response can overwrite a newer filter (`admin/src/pages/RequestLog.tsx`).
+- Search-hit highlight offsets drift when case-folding changes string length
+  (`admin/src/components/Highlight.tsx`).
+- `entity_recall` with a query does not get the panel request's abort signal
+  or the `embedQuery` test seam (`callEntityRecall` in `mcp/dispatch.ts`).
+- The static "traversal refusal" test never reaches the 403 branch
+  (`tests/admin_static.test.ts`); build a URL that resolves outside the dist.
+- The allowlist test checks the count, not the exact tool names; pin them.
+- Stale "Dashboard" mentions in `http/admin-api.ts` and `http/admin-events.ts`
+  comments after the page became Overview.
+
 ## Follow-ups from the October hardening batch
 
 - **Worker lock released before the pool closes.** On stop, an aborted job's
