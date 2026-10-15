@@ -73,6 +73,24 @@ function taxonomyToIntent(query: string): Intent {
   }
 }
 
+/** Cheap heuristics — obvious cases never reach the taxonomy or LLM. */
+function heuristicIntent(trimmed: string): Intent | null {
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) return "exact";
+  if (/\bhow (?:do|to|can|should)\b/i.test(trimmed)) return "howto";
+  if (/\b(?:when|what|who|where|which) (?:is|was|did)\b/i.test(trimmed)) return "factual";
+  return null;
+}
+
+/**
+ * The intent classifyIntent returns with MEMRAIN_INTENT_LLM off, whatever the
+ * env says. For callers that must never spend a generative call.
+ */
+export function classifyIntentZeroLlm(query: string): Intent {
+  const trimmed = query.trim();
+  if (!trimmed) return "topic";
+  return heuristicIntent(trimmed) ?? taxonomyToIntent(trimmed);
+}
+
 export async function classifyIntent(
   query: string,
   opts: ClassifyIntentOptions = {},
@@ -80,10 +98,8 @@ export async function classifyIntent(
   const trimmed = query.trim();
   if (!trimmed) return "topic";
 
-  // Cheap heuristics first — obvious cases never reach the taxonomy or LLM.
-  if (trimmed.startsWith('"') && trimmed.endsWith('"')) return "exact";
-  if (/\bhow (?:do|to|can|should)\b/i.test(trimmed)) return "howto";
-  if (/\b(?:when|what|who|where|which) (?:is|was|did)\b/i.test(trimmed)) return "factual";
+  const heuristic = heuristicIntent(trimmed);
+  if (heuristic) return heuristic;
 
   // Zero-LLM default: the regex taxonomy decides. The paid Haiku call fires
   // ONLY when the operator opted back in via MEMRAIN_INTENT_LLM=1.

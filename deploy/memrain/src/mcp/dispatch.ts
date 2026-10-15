@@ -228,6 +228,7 @@ import {
   runWithSpendClient,
 } from "../core/budget.ts";
 import { MODE_BUNDLES, isSearchMode, expansionActive } from "../core/search/mode.ts";
+import { classifyIntentZeroLlm } from "../core/search/intent.ts";
 import { looksConceptShaped } from "../core/search/query-intent.ts";
 import {
   cancelJob,
@@ -384,6 +385,13 @@ export interface DispatchOptions {
   /** This server's OAuth issuer, named in the step-up challenge a scope
    *  refusal carries so the client can find the authorization server. */
   issuer?: string;
+  /** Set ONLY by the admin panel route (/admin/api/tool). The operator's own browsing must leave no
+   *  trace in the signals the brain learns from and must spend nothing generative: no retrieval
+   *  touch on page_get, no eval capture, no hot-memory meta, and search runs with every paid stage
+   *  off and a zero-LLM intent, whatever the env enables. Transports never set it. */
+  adminPanel?: boolean;
+  /** The admin panel request's own abort signal: a search the browser dropped skips its query embed. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -424,7 +432,8 @@ export async function dispatchTool(
   const injectable =
     !result.isError &&
     !(opts.isPublic ?? false) &&
-    opts.authInfo === undefined;
+    opts.authInfo === undefined &&
+    opts.adminPanel !== true;
   if (injectable) {
     try {
       const readSources = effectiveReadSourceIdsForIngress(opts.authInfo, {
@@ -582,6 +591,8 @@ async function dispatchToolInner(
           readSources,
           isOperator,
           opts.embedQuery,
+          opts.adminPanel === true,
+          opts.signal,
         );
       case "index":
         return await callIndex(storage, args, writeSource, isOperator);
@@ -638,7 +649,7 @@ async function dispatchToolInner(
       case "page_revert":
         return await callPageRevert(storage, args, writeSource, opts.isPublic ?? false, writerPrincipal(opts));
       case "page_get":
-        return await callPageGet(storage, args, redact, readSources, remote, seesPrincipal(opts));
+        return await callPageGet(storage, args, redact, readSources, remote, seesPrincipal(opts), opts.adminPanel !== true);
       case "page_list":
         return await callPageList(storage, args, redact, readSources, remote);
       case "page_versions":
@@ -1031,6 +1042,8 @@ async function callSearch(
   readSources?: string[],
   isOperator = false,
   embedQuery?: SearchOptions["embedQuery"],
+  adminPanel = false,
+  signal?: AbortSignal,
 ): Promise<ToolCallResult> {
   const q = args["q"];
   if (typeof q !== "string" || q.length === 0) {
@@ -1071,10 +1084,12 @@ async function callSearch(
     }
     tokenBudget = tbArg as number;
   }
-  const onCapture = makeCaptureCallback(storage.engine(), storage.config(), {
-    toolName: "mcp.search",
-    remote: true,
-  });
+  const onCapture = adminPanel
+    ? undefined
+    : makeCaptureCallback(storage.engine(), storage.config(), {
+        toolName: "mcp.search",
+        remote: true,
+      });
   // Pagination: fetch offset extra hits in one ranked pass, slice below.
   const offset =
     typeof args["offset"] === "number"
@@ -1085,9 +1100,11 @@ async function callSearch(
   // the paid tokenmax bundle; its mode is silently ignored). Mapped onto
   // per-call knobs, which win over env + active bundle.
   applyPerCallMode(searchOpts, args["mode"], isOperator);
+  if (adminPanel) Object.assign(searchOpts, adminPanelSearchKnobs(q));
   if (onCapture) searchOpts.onCapture = onCapture;
   if (tokenBudget !== undefined) searchOpts.tokenBudget = tokenBudget;
   if (readSources !== undefined) searchOpts.sourceIds = readSources;
+  if (signal) searchOpts.signal = signal;
   // Optional per-call filters — strings validated by the op contract.
   if (typeof args["lang"] === "string" && args["lang"]) searchOpts.lang = args["lang"];
   if (typeof args["symbol_kind"] === "string" && args["symbol_kind"]) {
@@ -2147,6 +2164,7 @@ async function callPageGet(
   readSources?: string[],
   remote = false,
   isAdmin = false,
+  touchRetrieval = true,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string") {
     return errResult("page_get: `slug` is required");
@@ -2202,7 +2220,7 @@ async function callPageGet(
   // + best-effort; awaited because memrain is single-holder (no fire-and-forget
   // drain needed). page_get is the unambiguous page-surface op; search hits are
   // chunk/document-level and don't carry a page slug, so they don't feed it.
-  await bumpLastRetrievedAt(storage.engine(), [page.slug], page.source_id);
+  if (touchRetrieval) await bumpLastRetrievedAt(storage.engine(), [page.slug], page.source_id);
   const { version, ...row } = page;
   // A page the content-sanity gate hid from search keeps it hidden here too:
   // a non-operator gets the page without its body unless an admin asks for it.
@@ -3946,6 +3964,27 @@ function applyPerCallMode(
   if (b.tokenBudget !== undefined && searchOpts.tokenBudget === undefined) {
     searchOpts.tokenBudget = b.tokenBudget;
   }
+}
+
+/**
+ * The admin panel's search knobs: every paid stage off and a zero-LLM intent,
+ * so hybridSearch never reaches the Haiku classifier. Per-call knobs win over
+ * env and the mode bundle in resolveSearchKnobs.
+ */
+export function adminPanelSearchKnobs(q: string): Partial<SearchOptions> {
+  return {
+    rerank: false,
+    noExpansion: true,
+    expansion: false,
+    graphRerank: false,
+    graphSignals: false,
+    cosineRescore: false,
+    relationalArm: false,
+    intent: classifyIntentZeroLlm(q),
+    // A zero-LLM ranking must not be served to, or shared with, normal search.
+    noCache: true,
+    noTelemetry: true,
+  };
 }
 
 /** The paid ops refused up front once the caller's day is spent. */

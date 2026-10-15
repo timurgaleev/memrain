@@ -308,6 +308,13 @@ export interface SearchOptions {
   expandQueryFn?: (query: string, opts: { max: number }) => Promise<string[]>;
   /** Disable the exact-match query cache for this call (default: enabled). */
   noCache?: boolean;
+  /** Leave this call out of the per-day search telemetry rollup. */
+  noTelemetry?: boolean;
+  /**
+   * Caller cancellation. Once it fires the query embed is skipped or aborted
+   * and the search goes on keyword-only, so an abandoned request stops paying.
+   */
+  signal?: AbortSignal;
   /**
    * Optional cap on the total estimated tokens (chars/4) of returned
    * `content`, consumed in rank order. The first hit is always kept
@@ -826,12 +833,14 @@ export async function hybridSearch(
     }
     // Per-day rollup (migration 089) — sync bucket bump, flushed off the hot
     // path; fail-open by construction.
-    recordSearchTelemetry(
-      engine,
-      { mode: resolveSearchMode(), intent: cachedIntent, cache: "hit" },
-      hits,
-      hydrated.length - hits.length,
-    );
+    if (!opts.noTelemetry) {
+      recordSearchTelemetry(
+        engine,
+        { mode: resolveSearchMode(), intent: cachedIntent, cache: "hit" },
+        hits,
+        hydrated.length - hits.length,
+      );
+    }
     // Adaptive return-sizing (opt-in, default OFF) — the FINAL view, applied
     // after the cache read served the full stored set and after capture saw it,
     // so the cap never poisons the cache or shrinks the eval window.
@@ -897,8 +906,12 @@ export async function hybridSearch(
   //    embedding failure is non-fatal.
   let queryVector: number[] | null = null;
   const degraded: DegradedReason[] = [];
-  const dl = makeQueryEmbedDeadline();
+  const deadline = makeQueryEmbedDeadline();
+  const dl = opts.signal
+    ? { ...deadline, signal: AbortSignal.any([deadline.signal, opts.signal]) }
+    : deadline;
   try {
+    opts.signal?.throwIfAborted();
     queryVector = opts.embedQuery
       ? await raceEmbedderAgainstDeadline(opts.embedQuery, trimmed, dl)
       : await embedQueryBounded(trimmed, { embeddingModel: opts.embeddingModel }, dl);
@@ -907,8 +920,10 @@ export async function hybridSearch(
     // quietly on any embed failure EXCEPT that one, which must reach the caller
     // instead of looking like an empty brain.
     if (isOperationError(e) && e.code === "budget_exhausted") throw e;
+    // The caller is gone: skip the keyword arm and ranking it would never read.
+    if (opts.signal?.aborted) throw e;
     queryVector = null; // keyword-only fallback
-    degraded.push(isEmbedTimeout(e, dl) ? "embed_timeout" : "vector_arm_failed");
+    degraded.push(isEmbedTimeout(e, deadline) ? "embed_timeout" : "vector_arm_failed");
   }
 
   // 1b. Semantic query cache (opt-in, default OFF). On an exact-match miss, try
@@ -1702,12 +1717,14 @@ export async function hybridSearch(
 
   // 10b. Per-day telemetry rollup (migration 089) — sync bucket bump, flushed
   //      off the hot path; "miss" only when the cache was in play this call.
-  recordSearchTelemetry(
-    engine,
-    { mode: resolveSearchMode(), intent, cache: cacheState },
-    hits,
-    ranked.length - hits.length,
-  );
+  if (!opts.noTelemetry) {
+    recordSearchTelemetry(
+      engine,
+      { mode: resolveSearchMode(), intent, cache: cacheState },
+      hits,
+      ranked.length - hits.length,
+    );
+  }
 
   // 11. Adaptive return-sizing (opt-in, default OFF) — the FINAL step. Applied
   //     after the cache write (9a stored the full `ranked` set) AND after the

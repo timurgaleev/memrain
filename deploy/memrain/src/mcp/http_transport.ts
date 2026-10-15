@@ -452,7 +452,7 @@ async function handleSingle(
  * The dispatcher serializes either an OperationError envelope
  * (`{error, message?, suggestion?}`) or a sanitized message string.
  */
-function extractErrorMessage(text: string | undefined): string {
+export function extractErrorMessage(text: string | undefined): string {
   if (!text) return "op_error";
   try {
     const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
