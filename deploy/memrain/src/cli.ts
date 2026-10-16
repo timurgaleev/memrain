@@ -42,6 +42,7 @@ import {
 } from "./commands/sources.ts";
 import { runCode, type CodeSub } from "./commands/code.ts";
 import { runAuth } from "./commands/auth.ts";
+import { runAdminSetupLink } from "./commands/admin.ts";
 
 const VALID_JOB_STATUSES: ReadonlySet<JobStatus> = new Set([
   "pending",
@@ -222,6 +223,8 @@ function printUsage(): void {
   console.log("                               check every tool and memrain command the skill pack names exists");
   console.log("  migrate-engine --from X --to Y [--dry-run|--verify-only] [--allow-dropped-columns] [--tables a,b] [--pglite-path P] [--to-pglite-path P2] [--postgres-url U]");
   console.log("                               copy data between Engine adapters");
+  console.log("  admin setup-link [--ttl <hours>] [--json]");
+  console.log("                               one-time link for the panel owner to create a passkey (default 24h, max 72h)");
   console.log("  auth register-client <name> [--scopes S] [--source SRC] [--federated-read a,b]");
   console.log("                               [--tenant-mode client|enrollment]  (enrollment = one connector, many tenants)");
   console.log("                               [--token-endpoint-auth-method none|client_secret_post|client_secret_basic]");
@@ -1506,6 +1509,15 @@ async function main(argv: readonly string[]): Promise<number> {
       if (tables) opts.tables = tables.split(",").map((t) => t.trim()).filter(Boolean);
       const summary = await runMigrateEngine(opts);
       return summary.ok ? 0 : 1;
+    }
+    case "admin": {
+      // `admin setup-link` — a one-time passkey setup link for the panel owner.
+      if (positional[0] !== "setup-link" || positional.length !== 1) {
+        console.error("Usage: memrain admin setup-link [--ttl <hours>] [--json]");
+        return 1;
+      }
+      const ttl = values.get("--ttl");
+      return runAdminSetupLink({ ...(ttl !== undefined ? { ttl } : {}), json: flags.has("--json") });
     }
     case "auth": {
       // Self-issued OAuth 2.1 provider management. Re-parses its own raw flags

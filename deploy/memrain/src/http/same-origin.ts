@@ -17,8 +17,14 @@
  * A non-browser caller sends neither and is allowed through, which is fine
  * because the attack needs a browser to be useful. `Origin: null` (a sandboxed
  * frame, a redirect-originated POST) fails to parse and is refused.
+ *
+ * The scheme counts as well as the host: a page on `http://` of our own host is
+ * not us. Behind a TLS-terminating proxy the server sees plain http, so when
+ * `publicUrl` names this host its origin is the one to match exactly; without
+ * it, a request the server itself received over https must carry an https
+ * origin, and plain http behind a proxy stays host-only.
  */
-export function isSameOriginPost(req: Request, url: URL): boolean {
+export function isSameOriginPost(req: Request, url: URL, publicUrl?: string): boolean {
   const origin = req.headers.get("origin");
   if (origin !== null) {
     try {
@@ -27,11 +33,24 @@ export function isSameOriginPost(req: Request, url: URL): boolean {
       // a path (`https://evil.example@brain.example/x`) parses to our host but
       // was never written by a browser, so refuse it rather than trust `host`.
       if (parsed.origin !== origin) return false;
-      return parsed.host === url.host;
+      if (parsed.host !== url.host) return false;
+      const configured = configuredOrigin(publicUrl);
+      if (configured !== null && configured.host === url.host) return parsed.origin === configured.origin;
+      return url.protocol !== "https:" || parsed.protocol === "https:";
     } catch {
       return false;
     }
   }
   const site = req.headers.get("sec-fetch-site");
   return site === null || site === "same-origin";
+}
+
+function configuredOrigin(publicUrl: string | undefined): URL | null {
+  const raw = (publicUrl ?? "").trim();
+  if (raw.length === 0) return null;
+  try {
+    return new URL(raw);
+  } catch {
+    return null;
+  }
 }

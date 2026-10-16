@@ -61,4 +61,17 @@ describe("isSameOriginPost", () => {
   it("lets a non-browser caller through, which sends neither header", () => {
     expect(isSameOriginPost(post({}), TARGET)).toBe(true);
   });
+  it("checks the scheme too: against the configured public origin behind a proxy, against the request itself otherwise", () => {
+    // Behind a TLS-terminating proxy the server sees plain http on the same host.
+    const internal = new URL("http://brain.example/admin/api/api-keys");
+    const at = (origin: string) => new Request(internal.href, { method: "POST", headers: { origin } });
+    expect(isSameOriginPost(at("https://brain.example"), internal, "https://brain.example")).toBe(true);
+    expect(isSameOriginPost(at("http://brain.example"), internal, "https://brain.example")).toBe(false);
+    // A public URL for some other host says nothing about this request.
+    expect(isSameOriginPost(at("https://brain.example"), internal, "https://other.example")).toBe(true);
+    // Unset: host-only as before, except that a request the server itself saw
+    // over https cannot have come from an http page.
+    expect(isSameOriginPost(at("https://brain.example"), internal)).toBe(true);
+    expect(isSameOriginPost(post({ origin: "http://brain.example" }), TARGET)).toBe(false);
+  });
 });

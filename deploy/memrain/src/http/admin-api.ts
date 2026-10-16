@@ -44,6 +44,10 @@ export interface AdminApiDeps {
   storage: Storage;
   /** Session check from the AdminAuth instance (http/admin.ts). */
   requireAdmin: (req: Request) => boolean;
+  /** End of the session's post-enroll cooldown, or null (http/admin.ts). */
+  sessionCooldown?: (req: Request) => number | null;
+  /** The configured external origin (MEMRAIN_PUBLIC_URL), for the same-origin check. */
+  publicUrl?: string;
   /** Bucket for the tool route's embedding calls (tests inject their own). */
   toolLimiter?: RateLimiter;
   /** Hermetic query-embedder seam for the tool route (tests only). */
@@ -52,6 +56,19 @@ export interface AdminApiDeps {
 
 const unauthorized = () => Response.json({ error: "Admin authentication required" }, { status: 401 });
 const badRequest = (msg: string) => Response.json({ error: msg }, { status: 400 });
+/**
+ * A passkey enrolled through a setup link or recovery code spends its first day
+ * in a cooldown (http/admin-passkey.ts). These are the only mutating routes its
+ * sessions may call. Default deny: every other POST here creates, widens or
+ * revokes access, and a route added later is refused until someone decides
+ * otherwise.
+ */
+const COOLDOWN_ALLOWED = new Set<string>([
+  // Allowlisted brain reads plus reversible tag writes; no credentials.
+  "/admin/api/tool",
+]);
+const cooldownRefusal = (until: number) =>
+  Response.json({ error: "cooldown", until: new Date(until).toISOString() }, { status: 403 });
 /** Log the real cause server-side; return a generic message — don't leak
  *  internal / SQL error text to the client (even an admin one). */
 function serverError(route: string, e: unknown): Response {
@@ -145,8 +162,12 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
   if (!deps.requireAdmin(req)) return unauthorized();
   // The session cookie is SameSite=Strict, but a sibling subdomain is same-SITE,
   // so every mutating route also needs the request to come from our own origin.
-  if (req.method !== "GET" && req.method !== "HEAD" && !isSameOriginPost(req, url)) {
-    return Response.json({ error: "Cross-origin request refused" }, { status: 403 });
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    if (!isSameOriginPost(req, url, deps.publicUrl)) {
+      return Response.json({ error: "Cross-origin request refused" }, { status: 403 });
+    }
+    const cooldown = COOLDOWN_ALLOWED.has(p) ? null : deps.sessionCooldown?.(req) ?? null;
+    if (cooldown !== null) return cooldownRefusal(cooldown);
   }
   const engine = deps.storage.engine();
 

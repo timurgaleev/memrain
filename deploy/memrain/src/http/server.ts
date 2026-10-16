@@ -264,6 +264,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
     adminAuth = createAdminAuth({
       bootstrapToken: opts.adminBootstrapToken,
       ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
+      storage: opts.storage,
       // Names the client behind a parked /authorize so the operator confirms a
       // connection to something they recognize, not to an opaque client_id.
       ...(opts.oauthProvider
@@ -676,6 +677,8 @@ export function startServer(opts: ServerOptions): ServerHandle {
         const r2 = await handleAdminApi(req, url, {
           storage: opts.storage,
           requireAdmin: adminAuth.requireAdmin,
+          sessionCooldown: adminAuth.sessionCooldown,
+          ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
         });
         if (r2) return r2;
         // SSE live-activity feed (deferred #2) — requireAdmin-gated.

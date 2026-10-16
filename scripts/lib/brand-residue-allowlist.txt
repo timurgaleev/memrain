@@ -113,6 +113,8 @@ deploy/memrain/src/mcp/http_transport.ts|COMPAT|1|the memexResponseVersion wire 
 deploy/memrain/tests/add_fact_provenance.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/admin_api.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/admin_cookie_compat.test.ts|COMPAT-TEST|11|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
+deploy/memrain/tests/admin_cli_setup_link.test.ts|COMPAT-TEST|1|strips both MEMRAIN_ and legacy MEMEX_ env keys from the child process
+deploy/memrain/tests/admin_passkey_flow.test.ts|COMPAT-TEST|1|sets the legacy memex_admin cookie to prove passkey routes ignore it
 deploy/memrain/tests/advisor_collectors.test.ts|COMPAT-TEST|4|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/advisor_eval_blind.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/advisor_fix_commands.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test

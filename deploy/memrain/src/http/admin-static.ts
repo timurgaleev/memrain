@@ -36,6 +36,8 @@ const ADMIN_SECURITY_HEADERS: Record<string, string> = {
   "X-Frame-Options": "DENY",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
+  // Passkey ceremonies run only in this document, never in a frame.
+  "Permissions-Policy": "publickey-credentials-get=(self), publickey-credentials-create=(self)",
 };
 
 function mimeFor(path: string): string {

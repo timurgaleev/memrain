@@ -27,6 +27,17 @@ import { RateLimiter } from "../mcp/rate_limit.ts";
 import { resolveClientKey } from "./client-key.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 import { LEGACY_ADMIN_COOKIE, LEGACY_APPROVAL_PARAM, LEGACY_RETURN_TO_COOKIE } from "../core/brand.ts";
+import type { Storage } from "../core/storage.ts";
+import { revokeUnusedSetupLinks, recordAuthEvent } from "../core/admin-passkey-store.ts";
+import {
+  cooldownUntil,
+  createPasskeyRoutes,
+  type AdminSession,
+  type PasskeyRoutes,
+  type SessionApi,
+  type SessionCred,
+  type SessionKind,
+} from "./admin-passkey.ts";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24h for password login
 const MAGIC_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7d for magic-link
@@ -41,6 +52,9 @@ const RETURN_TTL_MS = 10 * 60 * 1000; // 10 minutes to finish signing in
 const APPROVAL_PARAM = "memrain_approval";
 const APPROVAL_PARAMS = [APPROVAL_PARAM, LEGACY_APPROVAL_PARAM] as const;
 const APPROVAL_TTL_MS = 5 * 60 * 1000; // the click and the redirect that follows it
+// An operator session counts as freshly authenticated this long after sign-in,
+// for the passkey routes that demand a step-up.
+const OPERATOR_FRESH_MS = 10 * 60 * 1000;
 
 /**
  * What an approval is bound to: the parameters that decide WHO receives the
@@ -222,6 +236,8 @@ export interface AdminAuthOptions {
    * client_id and redirect_uri alone.
    */
   describeClient?: (clientId: string) => Promise<{ client_name?: string; scope?: string } | null>;
+  /** Mounts passkey sign-in (http/admin-passkey.ts). Unset → bootstrap and magic link only. */
+  storage?: Storage;
 }
 
 export interface AdminAuth {
@@ -238,11 +254,20 @@ export interface AdminAuth {
   /** Handle an `/admin` AUTH route. Returns a Response, or null when the path is
    *  not an auth route (so a later data/SPA dispatcher can take over). */
   handleAuthRoute(req: Request, url: URL): Promise<Response | null>;
+  /**
+   * When the request's session is a passkey session still in its post-enroll
+   * cooldown, the time it ends (ms); otherwise null. Routes that mint lasting
+   * credentials refuse while it runs.
+   */
+  sessionCooldown(req: Request): number | null;
 }
+
+const cooldownRefusal = (until: number): Response =>
+  Response.json({ error: "cooldown", until: new Date(until).toISOString() }, { status: 403 });
 
 export function createAdminAuth(opts: AdminAuthOptions): AdminAuth {
   const bootstrapHash = createHash("sha256").update(opts.bootstrapToken).digest("hex");
-  const sessions = new Map<string, number>(); // sessionId → expiresAt
+  const sessions = new Map<string, AdminSession>();
   const nonces = new Map<string, number>(); // nonce → expiresAt
   const consumed = new Set<string>();
   // approval nonce → { fingerprint of the approved request, expiry }
@@ -268,9 +293,15 @@ export function createAdminAuth(opts: AdminAuthOptions): AdminAuth {
     }
   }
 
-  function newSession(ttl: number): string {
+  function newSession(ttl: number, kind: SessionKind, cred?: SessionCred): string {
     const id = randomBytes(32).toString("hex");
-    sessions.set(id, Date.now() + ttl);
+    const now = Date.now();
+    sessions.set(id, {
+      exp: now + ttl,
+      kind,
+      reauthUntil: kind === "passkey" ? 0 : now + OPERATOR_FRESH_MS,
+      ...(cred ? { cred } : {}),
+    });
     return id;
   }
 
@@ -285,19 +316,28 @@ export function createAdminAuth(opts: AdminAuthOptions): AdminAuth {
     return rec.fp === authorizeFingerprint(params);
   }
 
-  function requireAdmin(req: Request): boolean {
+  function liveSession(req: Request): { id: string; session: AdminSession } | null {
     // Any live one authorizes: a stale cookie from the old Path=/admin scope
     // is sent ahead of the live one and must not shadow it.
     for (const id of COOKIE_NAMES.flatMap((name) => readCookies(req, name))) {
-      const exp = sessions.get(id);
-      if (exp === undefined) continue;
-      if (Date.now() > exp) {
+      const session = sessions.get(id);
+      if (session === undefined) continue;
+      if (Date.now() > session.exp) {
         sessions.delete(id);
         continue;
       }
-      return true;
+      return { id, session };
     }
-    return false;
+    return null;
+  }
+
+  function requireAdmin(req: Request): boolean {
+    return liveSession(req) !== null;
+  }
+
+  function sessionCooldown(req: Request): number | null {
+    const s = liveSession(req);
+    return s ? cooldownUntil(s.session) : null;
   }
 
   function bearerOk(req: Request): boolean {
@@ -307,8 +347,48 @@ export function createAdminAuth(opts: AdminAuthOptions): AdminAuth {
     return safeHexEqual(hash, bootstrapHash);
   }
 
+  const sessionApi: SessionApi = {
+    create(req, headers, kind, ttlMs, cred) {
+      const id = newSession(ttlMs, kind, cred);
+      headers.append("Set-Cookie", buildSetCookie(req, id, ttlMs));
+      for (const clear of buildLegacyCookieClears(req)) headers.append("Set-Cookie", clear);
+      return id;
+    },
+    sessionOf: liveSession,
+    markReauth(id, untilMs) {
+      const s = sessions.get(id);
+      if (s) s.reauthUntil = untilMs;
+    },
+    deleteForCredential(credentialId) {
+      const killed: string[] = [];
+      for (const [id, s] of sessions) {
+        if (s.cred?.id === credentialId) {
+          sessions.delete(id);
+          killed.push(id);
+        }
+      }
+      return killed;
+    },
+  };
+
+  const storage = opts.storage;
+  const passkey: PasskeyRoutes | null = storage
+    ? createPasskeyRoutes({
+        engine: () => storage.engine(),
+        publicUrl: opts.publicUrl,
+        sessionApi,
+        bootstrapBearerOk: bearerOk,
+        allowBootstrapAttempt: (req) => authLimiter.allow(resolveClientKey(req)),
+      })
+    : null;
+
   async function handleAuthRoute(req: Request, url: URL): Promise<Response | null> {
     const p = url.pathname;
+
+    if (passkey) {
+      const r = await passkey.handle(req, url);
+      if (r) return r;
+    }
 
     // GET /admin/login?return_to=/authorize?… — park the flow to resume after
     // sign-in, then serve the SPA from /admin/. Without a valid target this is
@@ -341,7 +421,7 @@ export function createAdminAuth(opts: AdminAuthOptions): AdminAuth {
       if (!safeHexEqual(hash, bootstrapHash)) {
         return Response.json({ error: "Invalid token. Check your terminal output." }, { status: 401 });
       }
-      const id = newSession(SESSION_TTL_MS);
+      const id = newSession(SESSION_TTL_MS, "bootstrap");
       const headers = new Headers();
       headers.append("Set-Cookie", buildSetCookie(req, id, SESSION_TTL_MS));
       for (const clear of buildLegacyCookieClears(req)) headers.append("Set-Cookie", clear);
@@ -382,7 +462,7 @@ export function createAdminAuth(opts: AdminAuthOptions): AdminAuth {
       }
       nonces.delete(nonce);
       consumed.add(nonce);
-      const id = newSession(MAGIC_SESSION_TTL_MS);
+      const id = newSession(MAGIC_SESSION_TTL_MS, "magic");
       const headers = new Headers({ Location: "/admin/" });
       headers.append("Set-Cookie", buildSetCookie(req, id, MAGIC_SESSION_TTL_MS));
       for (const clear of buildLegacyCookieClears(req)) headers.append("Set-Cookie", clear);
@@ -429,8 +509,11 @@ export function createAdminAuth(opts: AdminAuthOptions): AdminAuth {
     // approval `/authorize` demands, bound to the parked request, and retires
     // the parked cookie so the panel does not come back.
     if (p === "/admin/api/approve-resume" && req.method === "POST") {
-      if (!isSameOriginPost(req, url)) return Response.json({ error: "Cross-origin request refused" }, { status: 403 });
+      if (!isSameOriginPost(req, url, opts.publicUrl)) return Response.json({ error: "Cross-origin request refused" }, { status: 403 });
       if (!requireAdmin(req)) return Response.json({ error: "Admin authentication required" }, { status: 401 });
+      // An approval hands an OAuth client a code it trades for lasting tokens.
+      const cooldown = sessionCooldown(req);
+      if (cooldown !== null) return cooldownRefusal(cooldown);
       const claimed = await req.json().catch(() => null) as { handle?: unknown } | null;
       const resume = readReturnTo(req);
       const clear = new Headers();
@@ -458,24 +541,49 @@ export function createAdminAuth(opts: AdminAuthOptions): AdminAuth {
     // POST /admin/api/dismiss-resume — "Not now": drop the parked request so it
     // stops being offered.
     if (p === "/admin/api/dismiss-resume" && req.method === "POST") {
-      if (!isSameOriginPost(req, url)) return Response.json({ error: "Cross-origin request refused" }, { status: 403 });
+      if (!isSameOriginPost(req, url, opts.publicUrl)) return Response.json({ error: "Cross-origin request refused" }, { status: 403 });
       if (!requireAdmin(req)) return Response.json({ error: "Admin authentication required" }, { status: 401 });
       const headers = new Headers();
       appendReturnToClears(req, headers);
       return Response.json({ dismissed: true }, { headers });
     }
 
-    // POST /admin/api/sign-out-everywhere — clear all sessions (requires a session).
+    // POST /admin/api/sign-out-everywhere — clear all sessions (requires a
+    // session), every pending passkey ceremony and every unused setup link.
     if (p === "/admin/api/sign-out-everywhere" && req.method === "POST") {
+      if (!isSameOriginPost(req, url, opts.publicUrl)) return Response.json({ error: "Cross-origin request refused" }, { status: 403 });
       if (!requireAdmin(req)) return Response.json({ error: "Admin authentication required" }, { status: 401 });
+      // Run in a loop, it would keep the owner from staying signed in long
+      // enough to remove the passkey that runs it.
+      const cooldown = sessionCooldown(req);
+      if (cooldown !== null) return cooldownRefusal(cooldown);
       const count = sessions.size;
       sessions.clear();
       approvals.clear();
+      if (passkey && storage) {
+        passkey.clearEphemeral();
+        try {
+          const revoked = await revokeUnusedSetupLinks(storage.engine());
+          if (revoked > 0) {
+            await recordAuthEvent(storage.engine(), {
+              event: "setup_link.revoked",
+              outcome: "ok",
+              reason: `count=${revoked}`,
+              clientKey: resolveClientKey(req),
+              userAgent: req.headers.get("user-agent"),
+            });
+          }
+        } catch (e) {
+          // The sessions are already gone; a storage failure here must not
+          // read as a failed sign-out.
+          console.error("[admin] revoking unused setup links failed:", e instanceof Error ? e.message : e);
+        }
+      }
       return Response.json({ revoked_sessions: count });
     }
 
     return null; // not an auth route — let a later dispatcher handle it
   }
 
-  return { requireAdmin, consumeAuthorizeApproval, handleAuthRoute };
+  return { requireAdmin, consumeAuthorizeApproval, handleAuthRoute, sessionCooldown };
 }

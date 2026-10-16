@@ -88,6 +88,16 @@ describe("serveAdminStatic security headers", () => {
     const r = await serve("/admin/assets/..%2f..%2f..%2fetc%2fpasswd");
     expectSecurityHeaders(r);
   });
+
+  it("allows passkey ceremonies in this document only, and leaves the CSP as it was", async () => {
+    for (const p of ["/admin/", "/admin/assets/app.js"]) {
+      const r = await serve(p);
+      expect(r!.headers.get("Permissions-Policy")).toBe(
+        "publickey-credentials-get=(self), publickey-credentials-create=(self)",
+      );
+      expect(r!.headers.get("Content-Security-Policy")).toBe(CSP);
+    }
+  });
 });
 
 describe.if(distExists)("serveAdminStatic built index.html", () => {

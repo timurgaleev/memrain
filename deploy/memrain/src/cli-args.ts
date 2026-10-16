@@ -285,6 +285,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--tables", "--to", "--to-pglite-path", "--verify-only",
     ]),
   ],
+  ["admin", new Set(["--json", "--ttl"])],
   [
     "auth",
     new Set([

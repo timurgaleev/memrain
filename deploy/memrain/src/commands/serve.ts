@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { Storage } from "../core/storage.ts";
 import { startServer } from "../http/server.ts";
+import { isRelyingParty, resolveRelyingParty } from "../core/webauthn-config.ts";
 import { loadConfig, selfIssuedMismatch } from "../core/config.ts";
 import { startCycleLoop, type CycleHandle } from "../recipes/cycle.ts";
 import { markLinkFlagsRecorder } from "../core/link-watermark.ts";
@@ -279,10 +280,19 @@ export async function runServe(opts: ServeOptions): Promise<void> {
   } else if (!fromEnv) {
     console.error(
       "[memrain] admin bootstrap token generated but withheld: stderr is not a TTY, so the " +
-        "value would persist in the log sink. The admin surface is unreachable this run. " +
+        "value would persist in the log sink. Bootstrap login is unavailable this run; passkey " +
+        "sign-in and setup links minted by `memrain admin setup-link` still work. " +
         "To use it headlessly, generate a token yourself and pass it in: " +
         "MEMRAIN_ADMIN_BOOTSTRAP=$(openssl rand -hex 32) — never have the " +
         "server print a generated one into the logs.",
+    );
+  }
+  const passkeyRp = resolveRelyingParty(serverOpts.publicUrl);
+  if (!isRelyingParty(passkeyRp)) {
+    console.error(
+      `[memrain] caution: passkey sign-in for /admin is unavailable (${passkeyRp.error}). ` +
+        "Set MEMRAIN_PUBLIC_URL to the external https:// origin (http://localhost:<port> " +
+        "for local use). The bootstrap token and magic links work regardless.",
     );
   }
   const server = startServer(serverOpts);
