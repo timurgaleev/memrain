@@ -6,6 +6,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- The admin Overview shows charts with 7, 30 or 90 days of history: agent
+  calls and errors, searches, spend against the daily cap, corpus growth
+  (pages, edits, facts), top tools and top agents, with a "what changed"
+  comparison against the previous period.
+- `GET /admin/api/timeseries`, `GET /admin/api/graph/hubs` and
+  `GET /admin/api/onboarding` feed the charts, the Graph home view and the
+  setup checklist. All three are admin-only aggregates and make no model calls.
+- Every admin page opens with a short explanation, every metric has a `?`
+  help button, and a Glossary page explains pages, facts, entities, chunks,
+  links and the other terms the panel uses.
+- A Setup guide and a first-run checklist walk a new admin through connecting
+  an AI agent (the instance's MCP URL plus Claude Desktop, Claude Code and
+  ChatGPT instructions), writing a first page and running a first search; each
+  step is ticked from real activity.
+- The Graph page opens on the most connected pages instead of an empty slug
+  box, and explains what a link is.
+
+### Changed
+- Traffic, error-rate and per-credential usage counts leave out `tools/list`
+  handshakes and webhook deliveries, so they agree with the new charts.
+
 ## [1.4.0] — 2026-10-15
 
 ### Added

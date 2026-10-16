@@ -9,6 +9,26 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ---
 
+## Follow-ups from the admin charts batch (1.5)
+
+- `admin-timeseries.ts` top-agents query uses unqualified `agent_name` /
+  `token_name` / `operation` inside the `oauth_clients` join; qualify with `r.`
+  before any of those columns appear on `oauth_clients`.
+- Content series scan `page_versions` and `entity_facts` by `written_at` with
+  no index on that column; add one if the Overview refresh shows up in load.
+- Hubs test does not cover archived or quarantined documents.
+- Top-agents label shows the self-chosen OAuth `client_name`; show the id next to it.
+- `AbortSignal.any` has no fallback in the setup checklist (older browsers).
+- Graph home does not say when the hub list is truncated.
+- Glossary deep link scrolls but does not move focus.
+- Help buttons sit inside headings, so heading names include "help".
+- Charts are announced three times and the cap line is missing from the text summary.
+- Overview intro promises a `?` on every number; a few have none.
+- Every Top tools row links to the same unfiltered Request Log.
+- Setup progress label is not announced, and the checklist pops in after load.
+- `mcp_request_log` has no retention; with `MEMRAIN_REQUEST_LOG_DB=1` it grows by
+  one row per call. Add a pruning job.
+
 ## Follow-ups from the admin cockpit batch
 
 - ⌘K palette tracks the highlight by index, so Enter can pick a row that a
