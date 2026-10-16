@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Passkey sign-in for the admin panel. The operator gives the panel owner a
+  one-time setup link (`memrain admin setup-link`, or `POST
+  /admin/api/setup-links` with the bootstrap token); the owner registers a
+  passkey and gets ten single-use recovery codes. A Security page lists,
+  renames and revokes passkeys, adds another, replaces recovery codes and
+  shows sign-in events. The bootstrap token and magic links keep working as
+  the operator's way in. Needs `MEMRAIN_PUBLIC_URL` set to the panel's
+  `https://` address.
+- A passkey created from a recovery code, or from a setup link while another
+  passkey exists, starts in a 24-hour cooldown that blocks creating lasting
+  access and removing the owner; the owner's first passkey from a setup link
+  has none.
+
+### Changed
+- Admin POSTs from a browser must come from the configured public origin,
+  scheme included, when `MEMRAIN_PUBLIC_URL` names the request's host.
+- `/admin` responses carry a `Permissions-Policy` that allows WebAuthn only on
+  the panel's own origin.
+
 ## [1.5.0] — 2026-10-16
 
 ### Added

@@ -306,14 +306,61 @@ request instead — on a caddy install that consent screen is directly on the
 public internet.
 
 **If anyone but the operator will connect, that flag has to come off.**
-`/admin/login` accepts exactly one credential — the operator bootstrap token —
-and there is no per-user login, so with the gate on a teammate can only finish
+The bootstrap token and the panel owner's passkeys (below) are the only admin
+credentials; there is no per-user login, so with the gate on a teammate can only finish
 a connector flow by holding an operator session for the whole brain. Use an
 enrollment-mode client instead: the one-time code IS the resource-owner
 authentication, the gate is not consulted for it, and each person is pinned to
 her own source. See "Connecting a whole team through ONE connector" in
 [CONFIGURATION.md](./CONFIGURATION.md). Keep the flag on only for a brain that
 serves one operator and nobody else.
+
+### Passkey sign-in for the panel owner
+
+The person who runs the panel (on a hosted install, the client's admin) signs
+in with a passkey: Touch ID, Face ID, Windows Hello or a hardware key. No
+password and no email are involved, and the bootstrap token stays the
+operator's emergency way in.
+
+Passkeys need `MEMRAIN_PUBLIC_URL` set to the `https://` address people open
+the panel on; the passkey is bound to that hostname. Without it the panel shows
+the bootstrap login only and `serve` logs why at boot.
+
+Give the owner a one-time setup link:
+
+```bash
+# on the host, inside the app container (or wherever the CLI reaches the DB)
+memrain admin setup-link            # valid 24 h
+memrain admin setup-link --ttl 72   # up to 72 h
+```
+
+Or, with the bootstrap token, from anywhere:
+
+```bash
+curl -X POST -H "Authorization: Bearer $MEMRAIN_ADMIN_BOOTSTRAP" \
+  https://<host>/admin/api/setup-links
+```
+
+On a PGLite install the CLI cannot open the database while the server runs;
+use the API call. Send the link over a channel only the owner reads. It works
+once; minting a new link revokes every unused one.
+
+Opening the link creates the passkey and shows ten recovery codes once. Each
+code works once and lets the owner register a new passkey after losing every
+device; keep them offline.
+
+A passkey created from a recovery code, or from a setup link while another
+passkey already exists, starts in a 24-hour cooldown: it can use the panel but cannot
+mint API keys, register or change OAuth clients, approve connector requests,
+revoke other passkeys, replace recovery codes, mint links or sign everyone out.
+That limits what a stolen link or code can do before the owner notices the
+"new passkey" warning, which only an older passkey or the operator can dismiss.
+The owner's first passkey created from a setup link has no cooldown, so a new
+client can connect agents right away. That also holds after every passkey has
+been revoked: whoever opens the next live setup link becomes the owner with no
+cooldown, so mint links only when you mean to hand them over. If a link or code may have leaked: sign in with the
+bootstrap token, revoke the unknown passkey on the Security page, mint a new
+link and replace the recovery codes.
 
 ### Scheduled units
 

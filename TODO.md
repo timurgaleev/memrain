@@ -9,6 +9,28 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ---
 
+## Follow-ups from the passkey batch (1.6)
+
+- A request with any `Authorization: Bearer` header and no `Origin` /
+  `Sec-Fetch-Site` passes the passkey origin gate (`admin-passkey.ts` origin
+  check); allow that case only for a valid bootstrap bearer.
+- Failed passkey sign-ins take less time for unknown credential ids than for
+  known ones; run a dummy verification or pad failed responses.
+- `admin_passkey_store_pg.test.ts` skips without `MEMRAIN_TEST_POSTGRES_URL`;
+  run it in CI against a Postgres service.
+- A cooldown session can rename the owner's passkeys.
+- A missing `userHandle` in an assertion skips the owner-handle check.
+- Bootstrap and magic sessions older than 10 minutes cannot step up for revoke
+  or regenerate; decide whether operators should.
+- A garbage `Authorization: Bearer` header on passkey routes may consume an
+  `authLimiter` attempt on installs without a trusted client IP.
+- `isSameOriginPost` compares scheme against the configured origin only for
+  hosts that `MEMRAIN_PUBLIC_URL` names; tighten the rest.
+- Sign-out-everywhere does not clear outstanding magic-link nonces.
+- The same pre-auth browser can re-reserve a setup link or recovery code
+  indefinitely (`OR reserved_for = $2` in `admin-passkey-store.ts`), holding it
+  away from the owner; cap re-reservations.
+
 ## Follow-ups from the admin charts batch (1.5)
 
 - `admin-timeseries.ts` top-agents query uses unqualified `agent_name` /
