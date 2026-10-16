@@ -477,6 +477,80 @@ export async function graphNeighbors(
   return r.rows;
 }
 
+export interface GraphHubs {
+  hubs: { slug: string; title: string | null; type: string; in_degree: number; out_degree: number; degree: number }[];
+  /** Visible pages with at least one link to or from another visible page. */
+  linked_pages: number;
+  /** Links between two visible pages. */
+  total_links: number;
+  /** Visible pages. */
+  total_pages: number;
+}
+
+/**
+ * The most connected pages of the whole brain, for the admin Graph home. A
+ * visible page is a live page row that `liveEndpointSql` keeps; only edges
+ * with a visible page at BOTH ends count, so a dangling target (kept by
+ * `liveEdgeSql`) adds nothing to either side. Ties go to the page with more
+ * inbound links, then to the slug.
+ */
+export async function graphHubs(engine: Engine, opts: { limit?: number } = {}): Promise<GraphHubs> {
+  const limit = Math.min(50, Math.max(1, Math.floor(opts.limit ?? 20)));
+  // The edge set is driven from `links` with PK lookups into `pages`, not by
+  // joining a visible-pages CTE to itself: without table statistics (PGLite
+  // never analyzes) the planner estimates such a CTE at one row and nests
+  // the two scans, which took seconds on a 2k-page brain.
+  const visibleEdges = `e AS (
+      SELECT l.source_slug AS s, l.target_slug AS t FROM links l
+        JOIN pages a ON a.slug = l.source_slug AND a.deleted_at IS NULL
+        JOIN pages b ON b.slug = l.target_slug AND b.deleted_at IS NULL
+       WHERE l.source_slug <> l.target_slug
+         AND ${liveEndpointSql("a.slug")} AND ${liveEndpointSql("b.slug")}
+    )`;
+  const hubs = await engine.query<{
+    slug: string;
+    title: string | null;
+    type: string;
+    in_degree: number;
+    out_degree: number;
+    degree: number;
+  }>(
+    `WITH ${visibleEdges}, deg AS (
+       SELECT slug, sum(i)::int AS in_degree, sum(o)::int AS out_degree FROM (
+         SELECT t AS slug, 1 AS i, 0 AS o FROM e
+         UNION ALL SELECT s, 0, 1 FROM e) x
+        GROUP BY slug
+     )
+     SELECT v.slug, v.title, v.type, d.in_degree, d.out_degree,
+            (d.in_degree + d.out_degree)::int AS degree
+       FROM deg d JOIN pages v ON v.slug = d.slug
+      ORDER BY degree DESC, d.in_degree DESC, v.slug ASC
+      LIMIT $1`,
+    [limit],
+  );
+  const counts = await engine.query<{ linked_pages: number; total_links: number; total_pages: number }>(
+    `WITH ${visibleEdges}
+     SELECT (SELECT count(*) FROM (SELECT s FROM e UNION SELECT t FROM e) x)::int AS linked_pages,
+            (SELECT count(*) FROM e)::int AS total_links,
+            (SELECT count(*) FROM pages p
+              WHERE p.deleted_at IS NULL AND ${liveEndpointSql("p.slug")})::int AS total_pages`,
+  );
+  const c = counts.rows[0];
+  return {
+    hubs: hubs.rows.map((h) => ({
+      slug: h.slug,
+      title: h.title,
+      type: h.type,
+      in_degree: Number(h.in_degree),
+      out_degree: Number(h.out_degree),
+      degree: Number(h.degree),
+    })),
+    linked_pages: Number(c?.linked_pages ?? 0),
+    total_links: Number(c?.total_links ?? 0),
+    total_pages: Number(c?.total_pages ?? 0),
+  };
+}
+
 export interface GraphQueryOptions {
   type: string;
   source_slug?: string;

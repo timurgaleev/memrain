@@ -20,6 +20,10 @@ import { __resetHotMemoryMetaCacheForTests } from "../src/core/hot-memory-meta.t
 import { writeDocumentTransaction } from "../src/core/indexer-tx.ts";
 import { deterministicEmbed, deterministicEmbedQuery } from "./det-embed.ts";
 import { _resetTelemetryWriterForTest, getTelemetryWriter } from "../src/core/search/telemetry.ts";
+import { adminTimeseries, type AdminTimeseries } from "../src/core/admin-timeseries.ts";
+import type { OnboardingStatus } from "../src/core/admin-onboarding.ts";
+import { addLink, type GraphHubs } from "../src/core/links.ts";
+import { deletePage, putPage, restorePage } from "../src/core/pages.ts";
 
 const BOOT = "boot-secret";
 let tmp: string;
@@ -72,6 +76,9 @@ describe("admin-api auth gating", () => {
     expect((await call("/admin/api/rescope-client", { method: "POST", body: "{}" }))?.status).toBe(401);
     expect((await call("/admin/api/grant-audit?client_id=x"))?.status).toBe(401);
     expect((await call("/admin/api/revoke-client", { method: "POST", body: "{}" }))?.status).toBe(401);
+    expect((await call("/admin/api/timeseries"))?.status).toBe(401);
+    expect((await call("/admin/api/graph/hubs"))?.status).toBe(401);
+    expect((await call("/admin/api/onboarding"))?.status).toBe(401);
   });
   it("401s an unknown /admin/api path when unauthenticated (no path disclosure)", async () => {
     expect((await call("/admin/api/nope"))?.status).toBe(401);
@@ -480,7 +487,9 @@ describe("admin-api credential management (authed)", () => {
       `INSERT INTO mcp_request_log (token_name, agent_name, operation, status, created_at) VALUES
          ($1, 'caller', 'search', 'success', now()),
          ($1, 'caller', 'search', 'success', now() - interval '2 days'),
-         ('key-d', 'caller', 'get_page', 'success', now())`,
+         ('key-d', 'caller', 'get_page', 'success', now()),
+         ($1, 'caller', 'tools/list', 'success', now() + interval '1 minute'),
+         ($1, 'caller', 'webhook_ingest', 'error', now() + interval '1 minute')`,
       [client_id],
     );
 
@@ -493,8 +502,10 @@ describe("admin-api credential management (authed)", () => {
     expect(oauth.token_ttl).toBe(60);
     expect(oauth.grant_revision).toBe(0);
     expect(key.grant_revision).toBeNull();
+    // Handshakes and webhook deliveries are not usage: counts and last-used skip them.
     expect(oauth.usage.total_requests).toBe(2);
     expect(oauth.usage.requests_today).toBe(1);
+    expect(new Date(oauth.usage.last_used_at!).getTime()).toBeLessThanOrEqual(Date.now());
     expect(key.usage.total_requests).toBe(1);
     expect(key.usage.last_used_at).not.toBeNull();
   });
@@ -934,5 +945,375 @@ describe("admin tool route", () => {
     const after = await read();
     expect(after.stats.requests_today).toBe(before.stats.requests_today);
     expect(after.hi.error_rate_24h).toBe(0);
+    // Handshakes and webhook deliveries are not agent calls either.
+    await e.query(`INSERT INTO mcp_request_log (token_name, agent_name, operation, status) VALUES ('pat-a', 'pat', 'tools/list', 'error')`);
+    await e.query(`INSERT INTO mcp_request_log (token_name, agent_name, operation, status) VALUES ('pat-a', 'pat', 'webhook_ingest', 'error')`);
+    const handshakes = await read();
+    expect(handshakes.stats.requests_today).toBe(before.stats.requests_today);
+    expect(handshakes.hi.error_rate_24h).toBe(0);
+  });
+});
+
+describe("admin overview charts, graph hubs and onboarding", () => {
+  const DAY = 86_400_000;
+  const dayKey = (daysAgo: number) => new Date(Date.now() - daysAgo * DAY).toISOString().slice(0, 10);
+  const getJson = async <T>(path: string): Promise<T> => {
+    const r = await call(path, authed());
+    expect(r?.status).toBe(200);
+    return (await r!.json()) as T;
+  };
+  const series = <T extends { day: string }>(rows: T[], daysAgo: number) => rows.find((r) => r.day === dayKey(daysAgo));
+  const withEnv = async (vars: Record<string, string | undefined>, run: () => Promise<void>) => {
+    const prev = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+    for (const [k, v] of Object.entries(vars)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    try {
+      await run();
+    } finally {
+      for (const [k, v] of Object.entries(prev)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  };
+
+  it("timeseries rejects days outside 7, 30 and 90", async () => {
+    for (const bad of ["0", "8", "367", "7.5", "abc", ""]) {
+      const r = await call(`/admin/api/timeseries?days=${bad}`, authed());
+      expect(r?.status).toBe(400);
+      expect(await r!.json()).toEqual({ error: "days must be 7, 30 or 90" });
+    }
+    const body = await getJson<AdminTimeseries>("/admin/api/timeseries");
+    expect(body.days).toBe(30);
+    expect(body.buckets).toHaveLength(30);
+  });
+
+  it("timeseries returns exactly N zero-filled UTC buckets on an empty brain", async () => {
+    const body = await getJson<AdminTimeseries>("/admin/api/timeseries?days=7");
+    expect(body.days).toBe(7);
+    expect(body.buckets).toHaveLength(7);
+    expect([...body.buckets].sort()).toEqual(body.buckets);
+    expect(body.buckets[6]).toBe(dayKey(0));
+    expect(body.buckets[0]).toBe(dayKey(6));
+    expect(body.since).toBe(`${dayKey(6)}T00:00:00.000Z`);
+    for (const arr of [body.requests, body.searches, body.spend, body.content]) {
+      expect(arr.map((r) => r.day)).toEqual(body.buckets);
+    }
+    expect(body.requests.every((r) => r.requests === 0 && r.errors === 0)).toBe(true);
+    expect(body.searches.every((r) => r.searches === 0)).toBe(true);
+    expect(body.spend.every((r) => r.usd === 0 && r.priced_calls === 0 && r.unpriced_calls === 0)).toBe(true);
+    expect(body.content.every((r) => r.pages_created === 0 && r.page_edits === 0 && r.facts_added === 0)).toBe(true);
+    const zero = { requests: 0, errors: 0, searches: 0, usd: 0, priced_calls: 0, unpriced_calls: 0, pages_created: 0, page_edits: 0, facts_added: 0 };
+    expect(body.totals).toEqual(zero);
+    expect(body.previous).toEqual(zero);
+    expect(body.spend_models).toEqual([]);
+    expect(body.top_tools).toEqual([]);
+    expect(body.top_agents).toEqual([]);
+    expect(body.request_log.rows_in_window).toBe(0);
+    expect(body.corpus_now).toEqual({ pages: 0, facts: 0 });
+  });
+
+  it("timeseries counts agent requests by day and drops panel, handshake and webhook rows", async () => {
+    const e = storage.engine();
+    const row = (token: string | null, agent: string | null, op: string, status: string, ago: string) =>
+      e.query(
+        `INSERT INTO mcp_request_log (token_name, agent_name, operation, status, created_at)
+         VALUES ($1, $2, $3, $4, now() - $5::interval)`,
+        [token, agent, op, status, ago],
+      );
+    await row("pat-a", "pat", "search", "success", "0 seconds");
+    await row("pat-a", "pat", "search", "success", "0 seconds");
+    await row("pat-a", "pat", "page_get", "error", "0 seconds");
+    await row("pat-x", "admin-panel", "page_get", "success", "0 seconds");
+    await row("pat-a", "pat", "rate_limited", "error", "0 seconds");
+    await row("pat-a", "pat", "search", "success", "2 days");
+    await row("pat-a", "pat", "search", "success", "40 days");
+    await row(null, "admin-panel", "search", "success", "0 seconds");
+    await row("pat-a", "pat", "tools/list", "success", "0 seconds");
+    await row("pat-a", "pat", "webhook_ingest", "success", "0 seconds");
+    const body = await getJson<AdminTimeseries>("/admin/api/timeseries?days=7");
+    expect(series(body.requests, 0)).toEqual({ day: dayKey(0), requests: 5, errors: 2 });
+    expect(series(body.requests, 2)).toEqual({ day: dayKey(2), requests: 1, errors: 0 });
+    expect(body.requests.reduce((s, r) => s + r.requests, 0)).toBe(6);
+    expect(body.totals.requests).toBe(6);
+    expect(body.totals.errors).toBe(2);
+    expect(body.request_log.rows_in_window).toBe(6);
+    expect(body.top_tools).toEqual([
+      { operation: "search", calls: 3, errors: 0 },
+      { operation: "page_get", calls: 2, errors: 1 },
+      { operation: "rate_limited", calls: 1, errors: 1 },
+    ]);
+    expect(body.top_tools.reduce((s, t) => s + t.calls, 0)).toBe(body.totals.requests);
+    const longer = await getJson<AdminTimeseries>("/admin/api/timeseries?days=90");
+    expect(longer.totals.requests).toBe(7);
+  });
+
+  it("timeseries spend drops refused calls, counts unpriced rows separately and folds models beyond the top four into __other", async () => {
+    const e = storage.engine();
+    const spend = (model: string, cents: number | null, outcome: string | null = "ok") =>
+      e.query(
+        `INSERT INTO mcp_spend_log (client_id, operation, spend_cents, model, outcome) VALUES ('c', 'think', $1, $2, $3)`,
+        [cents, model, outcome],
+      );
+    await spend("alpha", 600);
+    await spend("other", 500);
+    await spend("gamma", 400);
+    await spend("delta", 300);
+    await spend("eps", 200);
+    await spend("zeta", 100);
+    await spend("alpha", 9999, "refused");
+    await spend("alpha", null);
+    const body = await getJson<AdminTimeseries>("/admin/api/timeseries?days=7");
+    expect(body.spend_models).toEqual([
+      { key: "alpha", label: "alpha" },
+      { key: "other", label: "other" },
+      { key: "gamma", label: "gamma" },
+      { key: "delta", label: "delta" },
+      { key: "__other", label: "Other" },
+    ]);
+    const today = series(body.spend, 0)!;
+    expect(today.by_model.__other).toBeCloseTo(3, 9);
+    expect(today.by_model.other).toBeCloseTo(5, 9);
+    expect(today.usd).toBeCloseTo(Object.values(today.by_model).reduce((s, v) => s + v, 0), 9);
+    expect(today.usd).toBeCloseTo(21, 9);
+    expect(today.priced_calls).toBe(6);
+    expect(today.unpriced_calls).toBe(1);
+    expect(body.totals.usd).toBeCloseTo(21, 9);
+    expect(body.totals.priced_calls).toBe(6);
+    expect(body.totals.unpriced_calls).toBe(1);
+    expect(series(body.spend, 1)!.by_model).toEqual({ alpha: 0, other: 0, gamma: 0, delta: 0, __other: 0 });
+  });
+
+  it("timeseries content counts creations and edits as separate events", async () => {
+    await putPage(storage, { slug: "notes/p", type: "note", markdown_body: "first" });
+    await putPage(storage, { slug: "notes/p", type: "note", markdown_body: "second" });
+    await deletePage(storage, "notes/p");
+    await restorePage(storage, "notes/p");
+    await putPage(storage, { slug: "notes/q", type: "note", markdown_body: "only" });
+    await deletePage(storage, "notes/q");
+    const e = storage.engine();
+    await e.query(`INSERT INTO entity_facts (entity_slug, fact) VALUES ('people/alice', 'leads the launch')`);
+    await e.query(`INSERT INTO entity_facts (entity_slug, fact, forgotten_at) VALUES ('people/alice', 'old claim', now())`);
+    const body = await getJson<AdminTimeseries>("/admin/api/timeseries?days=7");
+    expect(series(body.content, 0)).toEqual({ day: dayKey(0), pages_created: 2, page_edits: 1, facts_added: 2 });
+    expect(body.totals.pages_created).toBe(2);
+    expect(body.totals.page_edits).toBe(1);
+    expect(body.totals.facts_added).toBe(2);
+    expect(body.corpus_now).toEqual({ pages: 1, facts: 1 });
+  });
+
+  it("timeseries previous window has the same length and cutoff", async () => {
+    const e = storage.engine();
+    const at = async (iso: string) => {
+      await e.query(`INSERT INTO mcp_request_log (token_name, agent_name, operation, status, created_at) VALUES ('t', 'a', 'search', 'success', $1::timestamptz)`, [iso]);
+      await e.query(`INSERT INTO mcp_spend_log (client_id, operation, spend_cents, model, outcome, created_at) VALUES ('c', 'think', 100, 'm', 'ok', $1::timestamptz)`, [iso]);
+    };
+    await at("2026-03-03T00:20:00Z");
+    await at("2026-03-03T00:40:00Z");
+    await at("2026-03-04T00:10:00Z");
+    const early = await adminTimeseries(e, { days: 7, now: new Date("2026-03-10T00:30:00Z") });
+    expect(early.since).toBe("2026-03-04T00:00:00.000Z");
+    expect(early.totals.requests).toBe(1);
+    expect(early.previous.requests).toBe(1);
+    expect(early.totals.usd).toBeCloseTo(1, 9);
+    expect(early.previous.usd).toBeCloseTo(1, 9);
+
+    await at("2026-03-03T11:50:00Z");
+    await at("2026-03-03T12:10:00Z");
+    const midday = await adminTimeseries(e, { days: 7, now: new Date("2026-03-10T12:00:00Z") });
+    expect(midday.totals.requests).toBe(1);
+    // 00:20, 00:40 and 11:50 on 03-03 fall before the 12:00 cutoff; 12:10 does not.
+    expect(midday.previous.requests).toBe(3);
+    expect(midday.previous.priced_calls).toBe(3);
+  });
+
+  it("timeseries reads searches from search_telemetry by date", async () => {
+    const e = storage.engine();
+    const tele = (date: string, mode: string, intent: string, count: number) =>
+      e.query(`INSERT INTO search_telemetry (date, mode, intent, count) VALUES ($1, $2, $3, $4)`, [date, mode, intent, count]);
+    await tele(dayKey(0), "hybrid", "general", 3);
+    await tele(dayKey(0), "keyword", "entity", 2);
+    await tele(dayKey(1), "hybrid", "general", 4);
+    await tele(dayKey(1), "keyword", "entity", 1);
+    await tele(dayKey(8), "hybrid", "general", 6);
+    await tele(dayKey(7), "hybrid", "general", 50);
+    const body = await getJson<AdminTimeseries>("/admin/api/timeseries?days=7");
+    expect(series(body.searches, 0)?.searches).toBe(5);
+    expect(series(body.searches, 1)?.searches).toBe(5);
+    expect(body.totals.searches).toBe(5);
+    // The previous period's partial day (7 days ago) is left out like today's.
+    expect(body.previous.searches).toBe(6);
+  });
+
+  it("timeseries top agents show the OAuth client name, not its id", async () => {
+    const e = storage.engine();
+    await e.query(`INSERT INTO oauth_clients (client_id, client_name) VALUES ('memrain_cl_live', 'Desk Agent')`);
+    await e.query(`INSERT INTO oauth_clients (client_id, client_name, deleted_at) VALUES ('memrain_cl_gone', 'Old Agent', now())`);
+    const row = (token: string, n: number) =>
+      e.query(
+        `INSERT INTO mcp_request_log (token_name, agent_name, operation, status)
+         SELECT $1, $1, 'search', 'success' FROM generate_series(1, $2::int)`,
+        [token, n],
+      );
+    await row("memrain_cl_live", 3);
+    await row("memrain_cl_gone", 2);
+    await row("pat-z", 1);
+    const body = await getJson<AdminTimeseries>("/admin/api/timeseries?days=7");
+    expect(body.top_agents).toEqual([
+      { id: "memrain_cl_live", agent: "Desk Agent", calls: 3 },
+      { id: "memrain_cl_gone", agent: "Old Agent", calls: 2 },
+      { id: "pat-z", agent: "pat-z", calls: 1 },
+    ]);
+  });
+
+  const page = (slug: string) => putPage(storage, { slug, type: "note", title: slug.toUpperCase(), markdown_body: "plain text" });
+  const link = (s: string, t: string) => addLink(storage, { source_slug: s, target_slug: t, type: "mentions" });
+
+  it("graph hubs counts only links between visible pages", async () => {
+    for (const s of ["notes/a", "notes/b", "notes/c", "notes/d"]) await page(s);
+    await link("notes/a", "notes/b");
+    await link("notes/c", "notes/b");
+    await link("notes/b", "notes/d");
+    await link("notes/a", "notes/x");
+    await link("notes/b", "notes/c");
+    await deletePage(storage, "notes/d");
+    const body = await getJson<GraphHubs>("/admin/api/graph/hubs");
+    expect(body.hubs.map((h) => h.slug)).toEqual(["notes/b", "notes/c", "notes/a"]);
+    expect(body.hubs[0]).toEqual({ slug: "notes/b", title: "NOTES/B", type: "note", in_degree: 2, out_degree: 1, degree: 3 });
+    expect(body.hubs[1]).toMatchObject({ in_degree: 1, out_degree: 1, degree: 2 });
+    expect(body.hubs[2]).toMatchObject({ in_degree: 0, out_degree: 1, degree: 1 });
+    expect(body.total_links).toBe(3);
+    expect(body.linked_pages).toBe(3);
+    expect(body.total_pages).toBe(3);
+
+    for (const s of ["notes/e", "notes/f"]) await page(s);
+    await link("notes/e", "notes/f");
+    const tied = await getJson<GraphHubs>("/admin/api/graph/hubs");
+    // Equal degree orders by in-degree, then by slug.
+    expect(tied.hubs.map((h) => h.slug)).toEqual(["notes/b", "notes/c", "notes/f", "notes/a", "notes/e"]);
+  });
+
+  it("graph hubs on a brain with no links", async () => {
+    await page("notes/lonely");
+    const body = await getJson<GraphHubs>("/admin/api/graph/hubs");
+    expect(body).toEqual({ hubs: [], linked_pages: 0, total_links: 0, total_pages: 1 });
+  });
+
+  it("graph hubs clamps limit and rejects a non-integer", async () => {
+    for (let i = 0; i < 60; i++) await page(`notes/n${i}`);
+    for (let i = 0; i < 59; i++) await link(`notes/n${i}`, `notes/n${i + 1}`);
+    expect((await getJson<GraphHubs>("/admin/api/graph/hubs")).hubs).toHaveLength(20);
+    expect((await getJson<GraphHubs>("/admin/api/graph/hubs?limit=500")).hubs).toHaveLength(50);
+    expect((await getJson<GraphHubs>("/admin/api/graph/hubs?limit=0")).hubs).toHaveLength(1);
+    for (const bad of ["abc", "7.5", ""]) {
+      const r = await call(`/admin/api/graph/hubs?limit=${bad}`, authed());
+      expect(r?.status).toBe(400);
+      expect(await r!.json()).toEqual({ error: "limit must be a whole number from 1 to 50" });
+    }
+  });
+
+  it("onboarding on a fresh brain reports every step undone", async () => {
+    await withEnv({ MEMRAIN_PUBLIC_URL: "https://brain.example.com" }, async () => {
+      const body = await getJson<OnboardingStatus>("/admin/api/onboarding");
+      expect(body).toEqual({
+        mcp_url: "https://brain.example.com/mcp",
+        public_url_set: true,
+        steps: {
+          credential: { done: false },
+          agent_connected: { done: false, last_seen: null },
+          first_page: { done: false, pages: 0 },
+          first_search: { done: false, source: null },
+        },
+      });
+    });
+    await withEnv({ MEMRAIN_PUBLIC_URL: undefined }, async () => {
+      const body = await getJson<OnboardingStatus>("/admin/api/onboarding");
+      expect(body.mcp_url).toBe("http://localhost:8080/mcp");
+      expect(body.public_url_set).toBe(false);
+    });
+  });
+
+  it("onboarding marks each step done from real rows", async () => {
+    const e = storage.engine();
+    await e.query(
+      `INSERT INTO access_tokens (name, token_hash, last_used_at) VALUES ('laptop', 'h1', '2026-01-02T03:04:05Z')`,
+    );
+    await page("notes/first");
+    await e.query(`INSERT INTO search_telemetry (date, mode, intent, count) VALUES ($1, 'hybrid', 'general', 1)`, [dayKey(0)]);
+    const body = await getJson<OnboardingStatus>("/admin/api/onboarding");
+    expect(body.steps).toEqual({
+      credential: { done: true },
+      agent_connected: { done: true, last_seen: "2026-01-02T03:04:05.000Z" },
+      first_page: { done: true, pages: 1 },
+      first_search: { done: true, source: "any" },
+    });
+    await e.query(
+      `INSERT INTO mcp_request_log (token_name, agent_name, operation, status, created_at)
+       VALUES ('laptop', 'pat', 'search', 'success', '2026-02-01T00:00:00Z')`,
+    );
+    const after = await getJson<OnboardingStatus>("/admin/api/onboarding");
+    expect(after.steps.first_search.source).toBe("agent");
+    expect(after.steps.agent_connected.last_seen).toBe("2026-02-01T00:00:00.000Z");
+  });
+
+  it("onboarding ignores failed calls and keeps a revoked credential's history", async () => {
+    const e = storage.engine();
+    await e.query(`INSERT INTO mcp_request_log (token_name, agent_name, operation, status) VALUES ('pat-q', 'pat', 'search', 'error')`);
+    await e.query(`INSERT INTO mcp_request_log (token_name, agent_name, operation, status) VALUES (NULL, 'admin-panel', 'search', 'success')`);
+    const failed = await getJson<OnboardingStatus>("/admin/api/onboarding");
+    expect(failed.steps.agent_connected).toEqual({ done: false, last_seen: null });
+    expect(failed.steps.first_search).toEqual({ done: false, source: null });
+
+    await e.query(
+      `INSERT INTO access_tokens (name, token_hash, last_used_at, revoked_at)
+       VALUES ('gone', 'h2', '2026-01-05T00:00:00Z', '2026-01-06T00:00:00Z')`,
+    );
+    const revoked = await getJson<OnboardingStatus>("/admin/api/onboarding");
+    expect(revoked.steps.agent_connected.done).toBe(true);
+    expect(revoked.steps.credential.done).toBe(false);
+  });
+
+  it("onboarding keeps progress after the first page is deleted and the client revoked", async () => {
+    const e = storage.engine();
+    await page("notes/only");
+    await e.query(`INSERT INTO oauth_clients (client_id, client_name) VALUES ('memrain_cl_r', 'Gone Agent')`);
+    await e.query(
+      `INSERT INTO mcp_request_log (token_name, agent_name, operation, status, created_at)
+       VALUES ('memrain_cl_r', 'memrain_cl_r', 'page_get', 'success', '2026-03-01T00:00:00Z')`,
+    );
+    await e.query(`UPDATE pages SET deleted_at = now() WHERE slug = 'notes/only'`);
+    await e.query(`UPDATE oauth_clients SET deleted_at = now() WHERE client_id = 'memrain_cl_r'`);
+    const body = await getJson<OnboardingStatus>("/admin/api/onboarding");
+    expect(body.steps.first_page).toEqual({ done: true, pages: 0 });
+    expect(body.steps.agent_connected).toEqual({ done: true, last_seen: "2026-03-01T00:00:00.000Z" });
+    expect(body.steps.credential.done).toBe(false);
+  });
+
+  it("onboarding counts a completed OAuth sign-in as a connection", async () => {
+    const e = storage.engine();
+    await e.query(`INSERT INTO oauth_clients (client_id, client_name) VALUES ('memrain_cl_o', 'Web Agent')`);
+    const before = await getJson<OnboardingStatus>("/admin/api/onboarding");
+    expect(before.steps.credential.done).toBe(true);
+    expect(before.steps.agent_connected.done).toBe(false);
+    await e.query(
+      `INSERT INTO oauth_tokens (token_hash, token_type, client_id, created_at) VALUES ('th', 'access', 'memrain_cl_o', '2026-01-09T00:00:00Z')`,
+    );
+    const after = await getJson<OnboardingStatus>("/admin/api/onboarding");
+    expect(after.steps.agent_connected).toEqual({ done: true, last_seen: "2026-01-09T00:00:00.000Z" });
+  });
+
+  it("requests response carries db_enabled", async () => {
+    await withEnv({ MEMRAIN_REQUEST_LOG_DB: undefined }, async () => {
+      const off = await getJson<{ db_enabled: boolean }>("/admin/api/requests");
+      expect(off.db_enabled).toBe(false);
+    });
+    await withEnv({ MEMRAIN_REQUEST_LOG_DB: "1" }, async () => {
+      const on = await getJson<{ db_enabled: boolean }>("/admin/api/requests");
+      expect(on.db_enabled).toBe(true);
+      const ts = await getJson<AdminTimeseries>("/admin/api/timeseries?days=7");
+      expect(ts.request_log.db_enabled).toBe(true);
+    });
   });
 });

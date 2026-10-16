@@ -12,6 +12,11 @@
  * `/admin*`, so there is no ambient protection here.
  */
 import { spendReport } from "../core/spend-report.ts";
+import { adminTimeseries, AGENT_CALL, NOT_PANEL_ROW, type TimeseriesDays } from "../core/admin-timeseries.ts";
+import { onboardingSteps, type OnboardingStatus } from "../core/admin-onboarding.ts";
+import { graphHubs } from "../core/links.ts";
+import { requestLogDbEnabled } from "../mcp/request-log-db.ts";
+import { resolveIssuer } from "./oauth-metadata.ts";
 import { patNameSpendConflict } from "../core/budget.ts";
 import { createHash, randomBytes } from "node:crypto";
 import type { Storage } from "../core/storage.ts";
@@ -54,13 +59,6 @@ function serverError(route: string, e: unknown): Response {
   return Response.json({ error: "internal error" }, { status: 500 });
 }
 
-/**
- * The operator's own admin-panel calls are not agent traffic. They are the
- * rows with agent 'admin-panel' and no credential; IS DISTINCT FROM keeps rows
- * whose agent_name is NULL.
- */
-const NOT_PANEL_ROW = "(agent_name IS DISTINCT FROM 'admin-panel' OR token_name IS NOT NULL)";
-
 /** Per-credential MCP usage rollup shown on the Agents page. */
 export interface GrantUsage {
   /** Requests since the start of today (server local `now()` day boundary). */
@@ -91,7 +89,7 @@ async function usageByTokenName(engine: Engine): Promise<Map<string, GrantUsage>
             count(*)::int AS total_requests,
             max(created_at)::text AS last_used_at
        FROM mcp_request_log
-      WHERE token_name IS NOT NULL
+      WHERE token_name IS NOT NULL AND ${AGENT_CALL}
       GROUP BY token_name`,
   );
   const map = new Map<string, GrantUsage>();
@@ -918,7 +916,13 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
         `SELECT count(*)::int AS n FROM mcp_request_log ${where}`,
         filters,
       );
-      return Response.json({ page, per_page: PER, total: total.rows[0]?.n ?? 0, rows: rows.rows });
+      return Response.json({
+        page,
+        per_page: PER,
+        total: total.rows[0]?.n ?? 0,
+        rows: rows.rows,
+        db_enabled: requestLogDbEnabled(),
+      });
     } catch (e) {
       return serverError("requests", e);
     }
@@ -994,6 +998,47 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     }
   }
 
+  // GET /admin/api/timeseries?days=7|30|90 — per-UTC-day series for the
+  // Overview charts, with totals for the equal-length previous window.
+  if (p === "/admin/api/timeseries" && req.method === "GET") {
+    const raw = url.searchParams.get("days");
+    if (raw !== null && raw !== "7" && raw !== "30" && raw !== "90") {
+      return badRequest("days must be 7, 30 or 90");
+    }
+    try {
+      return Response.json(await adminTimeseries(engine, { days: Number(raw ?? 30) as TimeseriesDays }));
+    } catch (e) {
+      return serverError("timeseries", e);
+    }
+  }
+
+  // GET /admin/api/graph/hubs?limit=N — the most connected pages (Graph home).
+  if (p === "/admin/api/graph/hubs" && req.method === "GET") {
+    const raw = url.searchParams.get("limit");
+    if (raw !== null && !/^-?\d{1,9}$/.test(raw)) {
+      return badRequest("limit must be a whole number from 1 to 50");
+    }
+    try {
+      return Response.json(await graphHubs(engine, { limit: raw === null ? 20 : Number(raw) }));
+    } catch (e) {
+      return serverError("graph-hubs", e);
+    }
+  }
+
+  // GET /admin/api/onboarding — first-run checklist state and the MCP address.
+  if (p === "/admin/api/onboarding" && req.method === "GET") {
+    try {
+      const status: OnboardingStatus = {
+        mcp_url: `${resolveIssuer(url)}/mcp`,
+        public_url_set: (process.env.MEMRAIN_PUBLIC_URL ?? "").trim().length > 0,
+        steps: await onboardingSteps(engine),
+      };
+      return Response.json(status);
+    } catch (e) {
+      return serverError("onboarding", e);
+    }
+  }
+
   // GET /admin/api/stats — dashboard rollup counts (auth surface).
   if (p === "/admin/api/stats" && req.method === "GET") {
     try {
@@ -1004,7 +1049,7 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
                AND expires_at > extract(epoch FROM now())) AS active_tokens,
            (SELECT count(*)::int FROM access_tokens WHERE revoked_at IS NULL) AS active_api_keys,
            (SELECT count(*)::int FROM mcp_request_log WHERE created_at > now() - interval '24 hours'
-               AND ${NOT_PANEL_ROW}) AS requests_today`,
+               AND ${NOT_PANEL_ROW} AND ${AGENT_CALL}) AS requests_today`,
       );
       return Response.json(r.rows[0] ?? {});
     } catch (e) {
@@ -1025,9 +1070,9 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
                AND expires_at > extract(epoch FROM now())
                AND expires_at <= extract(epoch FROM now() + interval '24 hours')) AS tokens_expiring_24h,
            (SELECT count(*)::int FROM mcp_request_log WHERE created_at > now() - interval '24 hours'
-               AND ${NOT_PANEL_ROW}) AS total_24h,
+               AND ${NOT_PANEL_ROW} AND ${AGENT_CALL}) AS total_24h,
            (SELECT count(*)::int FROM mcp_request_log WHERE created_at > now() - interval '24 hours'
-               AND status <> 'success' AND ${NOT_PANEL_ROW}) AS errors_24h`,
+               AND status <> 'success' AND ${NOT_PANEL_ROW} AND ${AGENT_CALL}) AS errors_24h`,
       );
       const row = r.rows[0];
       const total = row?.total_24h ?? 0;

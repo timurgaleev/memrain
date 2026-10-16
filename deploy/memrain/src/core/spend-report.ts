@@ -70,7 +70,7 @@ export interface SpendReport {
 }
 
 /** Rows that stand for a call that reached the provider. */
-const MADE = "outcome IS DISTINCT FROM 'refused'";
+export const MADE = "outcome IS DISTINCT FROM 'refused'";
 
 const GROUPS = {
   by_model: { column: "model", where: MADE, limit: "" },
