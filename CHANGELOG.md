@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-10-16
+
 ### Added
 - Passkey sign-in for the admin panel. The operator gives the panel owner a
   one-time setup link (`memrain admin setup-link`, or `POST
