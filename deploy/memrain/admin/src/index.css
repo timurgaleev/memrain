@@ -1204,3 +1204,36 @@ pre.copy-value {
 @media (prefers-reduced-motion: reduce) {
   .info-pop { animation: none; }
 }
+
+/* Passkeys: enroll, recovery codes, Security page */
+.enroll-box { width: 380px; max-width: calc(100vw - 32px); }
+.enroll-title { font-size: 18px; font-weight: 600; margin-bottom: 12px; }
+.enroll-explainer { line-height: 1.6; font-size: 13px; color: var(--text-secondary); }
+.enroll-explainer strong { color: var(--text-primary); font-weight: 600; }
+.recovery-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 16px;
+  list-style: none;
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.security-card { background: var(--bg-secondary); border-radius: var(--radius); padding: 16px; }
+.security-rename { display: flex; gap: 6px; align-items: center; }
+.security-rename input { width: 180px; padding: 4px 8px; }
+.security-banner {
+  background: rgba(245,158,11,0.1);
+  border: 1px solid rgba(245,158,11,0.35);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+@media (max-width: 480px) {
+  .recovery-grid { grid-template-columns: minmax(0, 1fr); }
+}

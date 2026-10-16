@@ -14,8 +14,12 @@ import { JobsWatchPage } from "./pages/JobsWatch";
 import { CalibrationPage } from "./pages/Calibration";
 import { GlossaryPage } from "./pages/Glossary.tsx";
 import { SetupPage } from "./pages/Setup.tsx";
+import { EnrollPage } from "./pages/Enroll.tsx";
+import { SecurityPage } from "./pages/Security.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
-import { api } from "./api";
+import { api, passkeyApi } from "./api";
+import type { AuthEvent } from "./api";
+import { eventLabel, isPreAuthRoute, listOf, passkeyErrorCopy } from "./lib/passkey.ts";
 import { buildHash, parseHash } from "./lib/route.ts";
 import type { Route, RouteName } from "./lib/route.ts";
 
@@ -48,6 +52,12 @@ const NAV: { section: string; items: { name: RouteName; label: string; also?: Ro
       { name: "log", label: "Request Log" },
       { name: "agents", label: "Agents" },
       { name: "calibration", label: "Calibration" },
+    ],
+  },
+  {
+    section: "Account",
+    items: [
+      { name: "security", label: "Security" },
     ],
   },
   {
@@ -102,6 +112,8 @@ export function App() {
   const [pendingError, setPendingError] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [notices, setNotices] = useState<AuthEvent[]>([]);
+  const signedIn = !isPreAuthRoute(page);
 
   useEffect(() => {
     const onHash = () => {
@@ -114,7 +126,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (page === "login") return;
+    if (isPreAuthRoute(page)) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -137,11 +149,30 @@ export function App() {
   // can plant one — so it is shown as a confirmation naming who would receive
   // the credential.
   useEffect(() => {
-    if (page === "login") return;
+    if (isPreAuthRoute(page)) return;
     api.pendingResume()
       .then((r: PendingResume) => { if (r?.redirect_to) setPending(r); })
       .catch(() => { /* not signed in — the panel appears after login */ });
   }, [page]);
+
+  // Security notices (a passkey added, removed, or a copied one refused) are
+  // read once per sign-in. passkeyFetch: a 401 or 503 here must not move the
+  // page — pendingResume above already sends an expired session to sign-in.
+  const loadNotices = useCallback(() => {
+    passkeyApi.notices()
+      .then((r) => setNotices(r.ok ? listOf<AuthEvent>(r.body, "notices") : []))
+      .catch(() => setNotices([]));
+  }, []);
+
+  useEffect(() => {
+    if (signedIn) loadNotices();
+    else setNotices([]);
+  }, [signedIn, loadNotices]);
+
+  const ackNotices = async () => {
+    await passkeyApi.ackNotices().catch(() => { /* refused rows stay listed */ });
+    loadNotices();
+  };
 
   const navigate = (name: RouteName) => {
     const r: Route = { name, param: null };
@@ -151,6 +182,9 @@ export function App() {
 
   if (page === "login") {
     return <LoginPage onLogin={() => navigate("overview")} />;
+  }
+  if (page === "enroll") {
+    return <EnrollPage onDone={() => navigate("overview")} />;
   }
 
   // The click IS the consent: it mints a one-time approval bound to this
@@ -183,13 +217,18 @@ export function App() {
   };
 
   const handleSignOutEverywhere = async () => {
-    if (!confirm("Sign out every active admin session, including other browsers and tabs? Each one will need to re-authenticate via a fresh magic link.")) {
+    if (!confirm("Sign out every active admin session, including other browsers and tabs? Each one will need to sign in again. Unused setup links are cancelled too.")) {
       return;
     }
     try {
       await api.signOutEverywhere();
-    } catch {
-      // even on failure, push to login — the cookie is likely already invalid
+    } catch (e) {
+      // A passkey in its first 24 hours is refused and stays signed in.
+      if (e instanceof Error && e.message === "cooldown") {
+        alert(passkeyErrorCopy("cooldown"));
+        return;
+      }
+      // otherwise push to login — the cookie is likely already invalid
     }
     navigate("login");
   };
@@ -280,6 +319,24 @@ export function App() {
             </div>
           </div>
         )}
+        {notices.length > 0 && (
+          <div className="security-banner" role="status">
+            {notices.map((n) => (
+              <div key={String(n.id)}>
+                {eventLabel(n.event)} on {new Date(n.at).toLocaleString()}. Not you?{" "}
+                <a href="#security">Open Security.</a>
+                {n.ackable === false && (
+                  <span className="muted"> Only another of your devices or the operator can dismiss this.</span>
+                )}
+              </div>
+            ))}
+            {notices.some((n) => n.ackable !== false) && (
+              <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={ackNotices}>
+                It was me, dismiss
+              </button>
+            )}
+          </div>
+        )}
         {page === "overview" && <OverviewPage />}
         {page === "search" && <SearchPage query={route.param} />}
         {page === "pages" && <PagesPage />}
@@ -294,6 +351,7 @@ export function App() {
         {page === "calibration" && <CalibrationPage />}
         {page === "glossary" && <GlossaryPage term={route.param} />}
         {page === "setup" && <SetupPage />}
+        {page === "security" && <SecurityPage />}
       </main>
       <CommandPalette open={paletteOpen} onClose={closePalette} />
     </div>

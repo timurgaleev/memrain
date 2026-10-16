@@ -1,4 +1,5 @@
 import { normalizeToolResponse, ToolError } from "./lib/tool-result.ts";
+import { expectOk, passkeyFetch, ApiError } from "./lib/passkey-fetch.ts";
 
 const BASE = "";
 
@@ -100,3 +101,81 @@ export const api = {
   graphHubs: (limit = 20, signal?: AbortSignal) => apiFetch(`/admin/api/graph/hubs?limit=${limit}`, signal ? { signal } : undefined),
   onboarding: (signal?: AbortSignal) => apiFetch("/admin/api/onboarding", signal ? { signal } : undefined),
 };
+
+export { ApiError, expectOk, passkeyFetch } from "./lib/passkey-fetch.ts";
+export type { PasskeyResponse } from "./lib/passkey-fetch.ts";
+
+// Security-page calls need a session: a 401 there means it ended, so they go
+// to sign-in like apiFetch does, but keep the typed code (reauth_required,
+// cooldown with its end time) instead of flattening it to a message.
+async function sessionCall<T = Record<string, unknown>>(path: string, init?: RequestInit): Promise<T> {
+  const r = await passkeyFetch<T>(path, init);
+  if (r.status === 401) {
+    window.location.hash = "#login";
+    throw new ApiError("unauthorized", 401, r.body as Record<string, unknown>);
+  }
+  return expectOk(r);
+}
+
+const post = (body: unknown = {}): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
+
+export const passkeyApi = {
+  status: () => passkeyFetch<{ available?: boolean; reason?: string }>("/admin/api/passkey/status"),
+  redeem: (token: string) => passkeyFetch("/admin/api/passkey/enroll/redeem", post({ token })),
+  recovery: (code: string) => passkeyFetch("/admin/api/passkey/recovery", post({ code })),
+  registerOptions: () => passkeyFetch<{ optionsJSON?: unknown }>("/admin/api/passkey/register/options", post()),
+  registerVerify: (response: unknown, label: string) =>
+    passkeyFetch<{ recovery_codes?: string[] }>("/admin/api/passkey/register/verify", post({ response, label })),
+  loginOptions: () => passkeyFetch<{ optionsJSON?: unknown }>("/admin/api/passkey/login/options", post()),
+  loginVerify: (response: unknown) => passkeyFetch<{ notices?: number }>("/admin/api/passkey/login/verify", post({ response })),
+  reauthOptions: () => passkeyFetch<{ optionsJSON?: unknown }>("/admin/api/passkey/reauth/options", post()),
+  reauthVerify: (response: unknown) => passkeyFetch("/admin/api/passkey/reauth/verify", post({ response })),
+  // Session-side registration ("Add another passkey") needs fresh re-auth.
+  sessionRegisterOptions: () => sessionCall<{ optionsJSON?: unknown }>("/admin/api/passkey/register/options", post()),
+
+  passkeys: () => sessionCall<PasskeyList>("/admin/api/passkeys"),
+  rename: (id: string, label: string) => sessionCall("/admin/api/passkeys/rename", post({ id, label })),
+  revoke: (id: string, confirmLast = false) =>
+    sessionCall("/admin/api/passkeys/revoke", post(confirmLast ? { id, confirm_last: true } : { id })),
+  regenerateCodes: () => sessionCall<{ recovery_codes: string[] }>("/admin/api/recovery-codes/regenerate", post()),
+  mintSetupLink: (ttl_hours?: number) =>
+    sessionCall<{ url: string; expires_at: string }>("/admin/api/setup-links", post(ttl_hours === undefined ? {} : { ttl_hours })),
+  events: (limit = 20) => sessionCall<unknown>(`/admin/api/security/events?limit=${limit}`),
+  notices: () => passkeyFetch<unknown>("/admin/api/security/notices"),
+  ackNotices: () => sessionCall<{ acknowledged?: number; refused?: number }>("/admin/api/security/notices/ack", post()),
+};
+
+export interface PasskeyRow {
+  id_hint?: string;
+  id: string;
+  label: string;
+  device_type: "singleDevice" | "multiDevice";
+  backed_up: boolean;
+  created_at: string;
+  last_used_at: string | null;
+  created_via: string;
+  in_cooldown: boolean;
+}
+
+export interface PasskeyList {
+  passkeys: PasskeyRow[];
+  recovery_codes_left: number;
+  single_device_only_warning: boolean;
+  session_in_cooldown: boolean;
+  cooldown_until?: string | null;
+}
+
+export interface AuthEvent {
+  id: number | string;
+  at: string;
+  event: string;
+  outcome: "ok" | "fail";
+  reason?: string | null;
+  via?: string | null;
+  credential?: string | null;
+  client_key?: string | null;
+  user_agent?: string | null;
+  notice?: boolean;
+  noticed_at?: string | null;
+  ackable?: boolean;
+}
