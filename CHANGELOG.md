@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-10-16
+
 ### Added
 - The admin Overview shows charts with 7, 30 or 90 days of history: agent
   calls and errors, searches, spend against the daily cap, corpus growth
