@@ -12,6 +12,8 @@ import { AgentsPage } from "./pages/Agents";
 import { RequestLogPage } from "./pages/RequestLog";
 import { JobsWatchPage } from "./pages/JobsWatch";
 import { CalibrationPage } from "./pages/Calibration";
+import { GlossaryPage } from "./pages/Glossary.tsx";
+import { SetupPage } from "./pages/Setup.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { api } from "./api";
 import { buildHash, parseHash } from "./lib/route.ts";
@@ -46,6 +48,13 @@ const NAV: { section: string; items: { name: RouteName; label: string; also?: Ro
       { name: "log", label: "Request Log" },
       { name: "agents", label: "Agents" },
       { name: "calibration", label: "Calibration" },
+    ],
+  },
+  {
+    section: "Help",
+    items: [
+      { name: "setup", label: "Setup guide" },
+      { name: "glossary", label: "Glossary" },
     ],
   },
 ];
@@ -283,6 +292,8 @@ export function App() {
         {page === "log" && <RequestLogPage />}
         {page === "jobs" && <JobsWatchPage />}
         {page === "calibration" && <CalibrationPage />}
+        {page === "glossary" && <GlossaryPage term={route.param} />}
+        {page === "setup" && <SetupPage />}
       </main>
       <CommandPalette open={paletteOpen} onClose={closePalette} />
     </div>

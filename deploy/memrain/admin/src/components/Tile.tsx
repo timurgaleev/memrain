@@ -7,6 +7,8 @@ interface Props<T> {
   title: string;
   /** Window the figures cover, e.g. "last 24h" or "today (UTC)". */
   window?: string;
+  /** A help control placed after the title. */
+  help?: React.ReactNode;
   state: AsyncState<T>;
   intervalMs: number;
   now: number;
@@ -19,7 +21,7 @@ interface Props<T> {
 // A panel section with five states: loading (skeleton), empty (says why),
 // error (inline, with retry), stale (older than two refreshes: dimmed, with
 // its age) and ok. A refresh that fails keeps the last good figures visible.
-export function Tile<T>({ title, window: win, state, intervalMs, now, isEmpty, emptyText, className, children }: Props<T>) {
+export function Tile<T>({ title, window: win, help, state, intervalMs, now, isEmpty, emptyText, className, children }: Props<T>) {
   const stale = state.updatedAt !== null && now - state.updatedAt > intervalMs * 2;
   const body = (() => {
     if (state.data === null) {
@@ -43,7 +45,7 @@ export function Tile<T>({ title, window: win, state, intervalMs, now, isEmpty, e
   return (
     <section className={`tile${stale ? " tile-stale" : ""}${className ? ` ${className}` : ""}`}>
       <header className="tile-head">
-        <h2 className="tile-title">{title}</h2>
+        <h2 className="tile-title">{title}{help && <> {help}</>}</h2>
         {win && <span className="tile-window">{win}</span>}
       </header>
       {body}

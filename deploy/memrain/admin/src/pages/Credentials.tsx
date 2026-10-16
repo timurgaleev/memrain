@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import { ClientMembers } from "./ClientMembers";
+import { copyText } from "../lib/clipboard.ts";
 
 // Credentials section of the Agents page: the unified view over OAuth
 // clients + legacy API keys (personal access tokens), with per-credential
@@ -193,12 +194,10 @@ export function CredentialsSection({ setError }: { setError: (s: string) => void
 function SecretOnce({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
+    // A blocked clipboard leaves the text on screen to select by hand.
+    if (await copyText(value)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked — the operator can still select the text manually */
     }
   };
   return (

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import { useDebounced } from "../hooks.ts";
+import { PageIntro } from "../components/PageIntro.tsx";
 
 interface Row {
   id: number;
@@ -12,7 +13,7 @@ interface Row {
   created_at: string;
 }
 
-interface Data { page: number; per_page: number; total: number; rows: Row[] }
+interface Data { page: number; per_page: number; total: number; rows: Row[]; db_enabled?: boolean }
 
 export function RequestLogPage() {
   const [data, setData] = useState<Data | null>(null);
@@ -36,6 +37,13 @@ export function RequestLogPage() {
   return (
     <>
       <h1 className="page-title">Request Log</h1>
+      <PageIntro>
+        Every tool call an agent made: who called, which tool, how long it took and whether it worked. Your own clicks in
+        this panel are not counted.
+        {data?.db_enabled === false && (
+          <> This instance logs only OAuth connections; logging every call is a server setting (<code>MEMRAIN_REQUEST_LOG_DB</code>).</>
+        )}
+      </PageIntro>
       <div className="filter-bar filter-wrap">
         <label className="field">
           <span>Agent</span>

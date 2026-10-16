@@ -4,6 +4,7 @@ import { Section } from "../components/Tile.tsx";
 import { parseChronicle } from "../lib/tool-result.ts";
 import type { ChronicleEvent } from "../lib/tool-result.ts";
 import { buildHash } from "../lib/route.ts";
+import { PageIntro } from "../components/PageIntro.tsx";
 
 // #timeline           → the last 7 days
 // #timeline/2026-10-01 → that day; "week" and "on this day" are view
@@ -45,6 +46,10 @@ export function TimelinePage({ param }: { param: string | null }) {
   return (
     <>
       <h1 className="page-title">Timeline</h1>
+      <PageIntro>
+        Dated events from across the brain, newest first: meetings, decisions, releases and anything else an agent
+        recorded with a date.
+      </PageIntro>
       <div className="filter-bar filter-wrap">
         <div className="segmented" role="group" aria-label="View">
           {([["since", "Last 7 days"], ["day", "Day"], ["week", "Week"], ["otd", "On this day"]] as const).map(([m, label]) => (

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
+import { PageIntro } from "../components/PageIntro.tsx";
 
 interface Profile {
   generated_at: string;
@@ -30,6 +31,10 @@ export function CalibrationPage() {
   return (
     <>
       <h1 className="page-title">Calibration</h1>
+      <PageIntro>
+        How well the brain's predictions held up once their outcome was known. A well-calibrated brain that says 70% is
+        right about 70% of the time.
+      </PageIntro>
       {error && <div className="warning-bar">{error}</div>}
 
       {loaded && !profile ? (

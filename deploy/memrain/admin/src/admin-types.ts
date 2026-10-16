@@ -119,3 +119,51 @@ export function capUse(row: AgentSpendRow): number | null {
   const committed = (Number(row.spent_cents_today) + Number(row.pending_cents)) / 100;
   return Number.isFinite(committed) ? committed / cap : null;
 }
+
+// GET /admin/api/timeseries (core/admin-timeseries.ts). Per-day arrays hold one
+// entry per bucket, in bucket order; days are UTC.
+export interface TsTotals {
+  requests: number; errors: number; searches: number;
+  usd: number; priced_calls: number; unpriced_calls: number;
+  pages_created: number; page_edits: number; facts_added: number;
+}
+
+export interface AdminTimeseries {
+  days: 7 | 30 | 90;
+  since: string;
+  generated_at: string;
+  buckets: string[];
+  requests: { day: string; requests: number; errors: number }[];
+  searches: { day: string; searches: number }[];
+  spend: { day: string; usd: number; priced_calls: number; unpriced_calls: number; by_model: Record<string, number> }[];
+  spend_models: { key: string; label: string }[];
+  content: { day: string; pages_created: number; page_edits: number; facts_added: number }[];
+  corpus_now: { pages: number; facts: number };
+  top_tools: { operation: string; calls: number; errors: number }[];
+  top_agents: { id: string; agent: string; calls: number }[];
+  totals: TsTotals;
+  /** The equal-length window just before; searches cover completed days only. */
+  previous: TsTotals;
+  request_log: { db_enabled: boolean; rows_in_window: number };
+  brain_cap_usd: number | null;
+}
+
+// GET /admin/api/graph/hubs (core/links.ts graphHubs)
+export interface GraphHubs {
+  hubs: { slug: string; title: string | null; type: string; in_degree: number; out_degree: number; degree: number }[];
+  linked_pages: number;
+  total_links: number;
+  total_pages: number;
+}
+
+// GET /admin/api/onboarding
+export interface OnboardingStatus {
+  mcp_url: string;
+  public_url_set: boolean;
+  steps: {
+    credential: { done: boolean };
+    agent_connected: { done: boolean; last_seen: string | null };
+    first_page: { done: boolean; pages: number };
+    first_search: { done: boolean; source: "agent" | "any" | null };
+  };
+}

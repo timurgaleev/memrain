@@ -1,22 +1,46 @@
 import React, { useEffect, useState } from "react";
 import { api, tool } from "../api.ts";
 import { useAsync, useNow } from "../hooks.ts";
+import type { AsyncState } from "../hooks.ts";
 import { Section, Tile } from "../components/Tile.tsx";
 import { fmtAgo, fmtInt, fmtUsd } from "../lib/format.ts";
 import { parsePageList } from "../lib/tool-result.ts";
 import { buildHash } from "../lib/route.ts";
 import { capUse } from "../admin-types.ts";
 import type {
-  AgentSpendRow, AgentUsageRow, FeedEvent, FullStats, HealthBody, HealthIndicators, JobsWatch, SpendReport, Stats,
+  AdminTimeseries, AgentSpendRow, AgentUsageRow, FeedEvent, FullStats, HealthBody, HealthIndicators, JobsWatch, SpendReport, Stats,
 } from "../admin-types.ts";
+import { InfoTip } from "../components/InfoTip.tsx";
+import { PageIntro } from "../components/PageIntro.tsx";
+import { RangePicker } from "../components/RangePicker.tsx";
+import { SetupChecklist } from "../components/SetupChecklist.tsx";
+import { ChartFrame } from "../components/charts/ChartFrame.tsx";
+import { LineChart } from "../components/charts/LineChart.tsx";
+import { BarChart } from "../components/charts/BarChart.tsx";
+import { Sparkline } from "../components/charts/Sparkline.tsx";
+import { HBarList } from "../components/charts/HBarList.tsx";
+import { fmtPct, partialDayTotals, pctChange } from "../lib/chart.ts";
+import { browserStorage, readRange, writeRange } from "../lib/range.ts";
+import type { RangeDays } from "../lib/range.ts";
+import type { MetricId } from "../lib/glossary.ts";
 
 const JOBS_MS = 15_000;
 const HEALTH_MS = 30_000;
 const CORPUS_MS = 300_000;
 const SPEND_MS = 60_000;
+const TRENDS_MS = 300_000;
 const PANEL_AGENT = "admin-panel";
 
 const pct = (n: number) => `${(Math.floor(n * 1000) / 10).toFixed(1)}%`;
+
+/** Dollars at the precision small model bills need: $0.0034, $0.42, $12.50. */
+function fmtUsdFine(n: number): string {
+  if (n === 0) return "$0";
+  if (Math.abs(n) >= 0.01) return `$${n.toFixed(2)}`;
+  return `$${Number(n.toPrecision(2))}`;
+}
+
+const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
 function useFeed() {
   const [events, setEvents] = useState<FeedEvent[]>([]);
@@ -56,6 +80,10 @@ export function OverviewPage() {
   }, [], { intervalMs: SPEND_MS });
   const { events, sse } = useFeed();
   const [showMine, setShowMine] = useState(false);
+  const [range, setRange] = useState<RangeDays>(() => readRange(browserStorage()));
+  const trends = useAsync<AdminTimeseries>((signal) => api.timeseries(range, signal), [range], { intervalMs: TRENDS_MS });
+  const pickRange = (d: RangeDays) => { setRange(d); writeRange(browserStorage(), d); };
+  const last7 = (xs: number[]) => xs.slice(-7);
 
   const h = brain.data?.health ?? null;
   const capRows = (caps.data?.agents ?? [])
@@ -102,10 +130,22 @@ export function OverviewPage() {
         )}
       </div>
 
-      <h1 className="page-title">Overview</h1>
+      <div className="page-head">
+        <div className="page-head-text">
+          <h1 className="page-title">Overview</h1>
+          <PageIntro>
+            What your brain is doing: whether it is healthy, how much your agents use it, what it costs and what changed.
+            Every number has a <span className="info-inline">?</span> that says what it counts and over which time window.
+            Charts use UTC days; tiles use the last 24 hours.
+          </PageIntro>
+        </div>
+        <RangePicker value={range} onChange={pickRange} />
+      </div>
+
+      <SetupChecklist />
 
       <div className="tiles">
-        <Tile title="Health" state={brain} intervalMs={HEALTH_MS} now={now} isEmpty={(d) => d.health === null} emptyText="Health metrics are unavailable on this engine.">
+        <Tile title="Health" help={<InfoTip id="tile.health" />} state={brain} intervalMs={HEALTH_MS} now={now} isEmpty={(d) => d.health === null} emptyText="Health metrics are unavailable on this engine.">
           {(d) => {
             const x = d.health;
             if (!x) return null;
@@ -114,7 +154,7 @@ export function OverviewPage() {
                 <div className="tile-figure">{pct(x.embed_coverage_pct)}<span className="tile-unit">embedded</span></div>
                 <dl className="kv">
                   <dt>Chunks</dt><dd>{fmtInt(x.embedded_chunks)} / {fmtInt(x.embeddable_chunks)}</dd>
-                  <dt>Index lag</dt><dd>{x.lag_seconds === null ? "n/a" : `${fmtInt(x.lag_seconds)}s`}</dd>
+                  <dt>Last write</dt><dd>{x.lag_seconds === null ? "n/a" : fmtAgo(new Date(now - x.lag_seconds * 1000).toISOString(), now)}</dd>
                   <dt>Queue depth</dt><dd>{fmtInt(x.queue_depth)}</dd>
                   <dt>Failed jobs 24h</dt><dd className={x.failed_jobs_24h > 0 ? "error-text" : undefined}>{fmtInt(x.failed_jobs_24h)}</dd>
                 </dl>
@@ -123,10 +163,11 @@ export function OverviewPage() {
           }}
         </Tile>
 
-        <Tile title="Traffic" window="last 24h" state={stats} intervalMs={HEALTH_MS} now={now}>
+        <Tile title="Traffic" window="last 24h" help={<InfoTip id="tile.traffic" />} state={stats} intervalMs={HEALTH_MS} now={now}>
           {(d) => (
             <>
               <div className="tile-figure">{fmtInt(d.requests_today ?? 0)}<span className="tile-unit">requests</span></div>
+              {trends.data && <><Sparkline values={last7(trends.data.requests.map((r) => r.requests))} tone={1} /><span className="tile-sub spark-caption">7-day trend</span></>}
               <dl className="kv">
                 <dt>Error rate</dt>
                 <dd className={(indicators.data?.error_rate_24h ?? 0) > 2 ? "error-text" : undefined}>
@@ -145,10 +186,11 @@ export function OverviewPage() {
           )}
         </Tile>
 
-        <Tile title="Spend" window="last 24h" state={spend1} intervalMs={SPEND_MS} now={now}>
+        <Tile title="Spend" window="last 24h" help={<InfoTip id="tile.spend" />} state={spend1} intervalMs={SPEND_MS} now={now}>
           {(d) => (
             <>
               <div className="tile-figure">{fmtUsd(d.total_usd)}<span className="tile-unit">{fmtInt(d.calls)} calls</span></div>
+              {trends.data && <><Sparkline values={last7(trends.data.spend.map((r) => r.usd))} tone={2} /><span className="tile-sub spark-caption">7-day trend</span></>}
               <dl className="kv">
                 <dt>Last 7 days</dt><dd>{spend7.data ? fmtUsd(spend7.data.total_usd) : "…"}</dd>
                 <dt>Top model (7d)</dt><dd className="mono ellipsis" title={topModel?.key ?? undefined}>{topModel ? topModel.key ?? "unknown" : "none"}</dd>
@@ -159,7 +201,7 @@ export function OverviewPage() {
           )}
         </Tile>
 
-        <Tile title="Jobs" state={jobs} intervalMs={JOBS_MS} now={now}>
+        <Tile title="Jobs" help={<InfoTip id="tile.jobs" />} state={jobs} intervalMs={JOBS_MS} now={now}>
           {(d) => {
             const lastFail = d.recent.find((j) => j.status === "failed");
             return (
@@ -169,7 +211,7 @@ export function OverviewPage() {
                   <dt>Queued</dt><dd>{fmtInt(jobCount("pending"))}</dd>
                   <dt>Failed (all time)</dt><dd className={jobCount("failed") > 0 ? "error-text" : undefined}>{fmtInt(jobCount("failed"))}</dd>
                   <dt>Last failure</dt>
-                  <dd className="mono ellipsis" title={lastFail?.last_error ?? undefined}>{lastFail ? `${lastFail.kind}, ${fmtAgo(lastFail.finished_at ?? lastFail.created_at, now)}` : "none recent"}</dd>
+                  <dd className="mono ellipsis" title={lastFail?.last_error ?? undefined}>{lastFail ? <a href="#jobs">{lastFail.kind}, {fmtAgo(lastFail.finished_at ?? lastFail.created_at, now)}</a> : "none recent"}</dd>
                 </dl>
               </>
             );
@@ -183,13 +225,15 @@ export function OverviewPage() {
             <div className="corpus-value">
               {corpus.data?.counts ? fmtInt(corpus.data.counts[k]) : corpus.status === "error" ? "—" : <span className="skeleton-inline" />}
             </div>
-            <div className="corpus-label">{k}</div>
+            <div className="corpus-label">{k} <InfoTip id={`corpus.${k}` as MetricId} /></div>
           </div>
         ))}
         {corpus.status === "error" && corpus.data === null && (
           <button className="btn-link corpus-retry" onClick={corpus.reload}>Counts failed to load. Retry</button>
         )}
       </section>
+
+      <TrendCharts trends={trends} now={now} />
 
       <div className="split">
         <section className="panel">
@@ -228,7 +272,7 @@ export function OverviewPage() {
 
         <section className="panel">
           <header className="panel-head">
-            <h2 className="panel-title">Changed in last 24h</h2>
+            <h2 className="panel-title">Changed in the last 24 hours</h2>
             <a href="#pages" className="panel-link">All pages</a>
           </header>
           <Section state={changed} isEmpty={(d) => d.length === 0} emptyText="No page changed in the last 24 hours.">
@@ -249,7 +293,7 @@ export function OverviewPage() {
         </section>
       </div>
 
-      <h2 className="section-title">Spend by model and operation, last 7 days</h2>
+      <h2 className="section-title">Spend by model and operation, last 7 days <InfoTip id="section.spend_by_feature" /></h2>
       <div className="split split-even">
         <section className="panel">
           <Section state={spend7} isEmpty={(d) => d.by_model.length === 0} emptyText="No paid calls in 7d.">
@@ -263,14 +307,14 @@ export function OverviewPage() {
         </section>
       </div>
 
-      <h2 className="section-title">Agents against their daily cap, today (UTC)</h2>
+      <h2 className="section-title">Agents against their daily cap, today (UTC) <InfoTip id="section.caps" /></h2>
       <section className="panel">
         <Section state={caps} isEmpty={(d) => d.agents.length === 0} emptyText="No OAuth clients are registered.">
           {(d) => <CapTable rows={d.agents} />}
         </Section>
       </section>
 
-      <h2 className="section-title">Build</h2>
+      <h2 className="section-title">Build <InfoTip id="section.build" /></h2>
       <section className="panel">
         <Section state={health}>
           {(d) => (
@@ -284,6 +328,161 @@ export function OverviewPage() {
           )}
         </Section>
       </section>
+    </>
+  );
+}
+
+function activityEmpty(d: AdminTimeseries): React.ReactNode {
+  return d.request_log.db_enabled
+    ? <>No agent has called the brain in this range. Connect one from the <a href="#setup">setup guide</a>.</>
+    : <>No agent calls recorded in this range. This instance logs only OAuth connections; logging every call is a server setting (<code>MEMRAIN_REQUEST_LOG_DB</code>). If someone else runs your brain, ask them.</>;
+}
+
+function oauthOnly(d: AdminTimeseries): React.ReactNode {
+  return d.request_log.db_enabled
+    ? null
+    : <>Only OAuth connections are logged on this instance; calls with a personal access token are missing (<code>MEMRAIN_REQUEST_LOG_DB</code>).</>;
+}
+
+function TrendCharts({ trends, now }: { trends: AsyncState<AdminTimeseries>; now: number }) {
+  const noCalls = (d: AdminTimeseries) => d.request_log.rows_in_window === 0;
+  const searches = (d: AdminTimeseries) => partialDayTotals(d.searches.map((r) => r.searches), d.previous.searches);
+  const frame = { state: trends, now, intervalMs: TRENDS_MS };
+  const period = (d: AdminTimeseries) => `previous ${d.days} days`;
+  return (
+    <>
+      <div className="split split-even chart-row">
+        <ChartFrame
+          {...frame}
+          title="Activity"
+          help="chart.activity"
+          isEmpty={noCalls}
+          empty={activityEmpty}
+          note={oauthOnly}
+          summary={(d) => `${fmtInt(d.totals.requests)} calls · ${fmtPct(pctChange(d.totals.requests, d.previous.requests))} vs ${period(d)} (same time of day)`}
+        >
+          {(d) => (
+            <LineChart
+              title="Agent calls per day"
+              days={d.buckets}
+              yFormat={fmtInt}
+              series={[
+                { key: "requests", label: "Calls", values: d.requests.map((r) => r.requests), tone: 1, area: true },
+                { key: "errors", label: "Failed", values: d.requests.map((r) => r.errors), tone: "error" },
+              ]}
+            />
+          )}
+        </ChartFrame>
+        <ChartFrame
+          {...frame}
+          title="Estimated model cost"
+          help="chart.spend"
+          isEmpty={(d) => d.totals.usd === 0 && d.totals.priced_calls === 0 && d.totals.unpriced_calls === 0}
+          empty="Nothing was spent in this range. Spending starts when an agent searches with paid stages on or writes text that needs embedding."
+          summary={(d) => (
+            <>
+              {fmtUsdFine(d.totals.usd)} known
+              {d.totals.priced_calls > 0 && <> · {fmtUsdFine(d.totals.usd / d.totals.priced_calls)} per priced call</>}
+              {d.totals.unpriced_calls > 0 && <> · <span className="warn-text">{fmtInt(d.totals.unpriced_calls)} calls without a price</span></>}
+              {" "}· {fmtPct(pctChange(d.totals.usd, d.previous.usd))} vs {period(d)}
+            </>
+          )}
+        >
+          {(d) => (
+            <BarChart
+              title="Estimated model cost per day"
+              days={d.buckets}
+              yFormat={fmtUsdFine}
+              series={d.spend_models.map((m, i) => ({
+                key: m.key,
+                label: m.label,
+                values: d.spend.map((r) => r.by_model[m.key] ?? 0),
+                tone: i + 1,
+              }))}
+              {...(d.brain_cap_usd !== null && d.brain_cap_usd > 0
+                ? { refLine: { value: d.brain_cap_usd, label: `Current daily cap ${fmtUsdFine(d.brain_cap_usd)}` } }
+                : {})}
+            />
+          )}
+        </ChartFrame>
+      </div>
+
+      <div className="split split-even chart-row">
+        <ChartFrame
+          {...frame}
+          title="New content"
+          help="chart.content"
+          isEmpty={(d) => d.totals.pages_created + d.totals.page_edits + d.totals.facts_added === 0}
+          empty="Nothing was written in this range. Pages appear when an agent or an import saves a note."
+          summary={(d) => `Pages now ${fmtInt(d.corpus_now.pages)} (+${fmtInt(d.totals.pages_created)} created in range) · Facts now ${fmtInt(d.corpus_now.facts)}`}
+        >
+          {(d) => (
+            <LineChart
+              title="New content per day"
+              days={d.buckets}
+              yFormat={fmtInt}
+              series={[
+                { key: "created", label: "Pages created", values: d.content.map((r) => r.pages_created), tone: 1 },
+                { key: "edits", label: "Page edits", values: d.content.map((r) => r.page_edits), tone: 5 },
+                { key: "facts", label: "Facts added", values: d.content.map((r) => r.facts_added), tone: 3 },
+              ]}
+            />
+          )}
+        </ChartFrame>
+        <ChartFrame
+          {...frame}
+          title="Searches (all sources)"
+          help="chart.searches"
+          isEmpty={(d) => searches(d).total === 0}
+          empty="No searches ran in this range. Your own searches in this panel are not counted. New searches can take a minute to appear."
+          summary={(d) => {
+            const s = searches(d);
+            return `${fmtInt(s.total)} searches · ${fmtPct(s.change)} vs previous period (completed days)`;
+          }}
+        >
+          {(d) => (
+            <LineChart
+              title="Searches per day"
+              days={d.buckets}
+              yFormat={fmtInt}
+              series={[{ key: "searches", label: "Searches", values: d.searches.map((r) => r.searches), tone: 3, area: true }]}
+            />
+          )}
+        </ChartFrame>
+      </div>
+
+      <div className="split split-even chart-row">
+        <ChartFrame {...frame} title="Top tools" help="chart.top_tools" isEmpty={(d) => noCalls(d) || d.top_tools.length === 0} empty={activityEmpty} note={oauthOnly}>
+          {(d) => (
+            <HBarList
+              label="Most called tools"
+              format={fmtInt}
+              rows={d.top_tools.map((t) => ({
+                key: t.operation,
+                label: t.operation,
+                value: t.calls,
+                href: "#log",
+                ...(t.errors > 0 ? { note: `${fmtInt(t.errors)} ${t.errors === 1 ? "error" : "errors"}` } : {}),
+              }))}
+            />
+          )}
+        </ChartFrame>
+        <ChartFrame {...frame} title="Who uses the brain" help="chart.agents" isEmpty={(d) => noCalls(d) || d.top_agents.length === 0} empty={activityEmpty} note={oauthOnly}>
+          {(d) => {
+            const rest = d.totals.requests - sum(d.top_agents.map((a) => a.calls));
+            return (
+              <>
+                <HBarList
+                  label="Calls per credential"
+                  format={fmtInt}
+                  rows={d.top_agents.map((a) => ({ key: a.id, label: a.agent, title: a.id, value: a.calls }))}
+                />
+                {rest > 0 && <p className="hint hbar-more">and {fmtInt(rest)} more calls</p>}
+              </>
+            );
+          }}
+        </ChartFrame>
+      </div>
     </>
   );
 }

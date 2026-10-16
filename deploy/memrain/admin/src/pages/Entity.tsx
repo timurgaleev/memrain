@@ -6,6 +6,7 @@ import { fmtAgo } from "../lib/format.ts";
 import { parseEntityRecall, parseFacts, parseRecall } from "../lib/tool-result.ts";
 import type { Fact } from "../lib/tool-result.ts";
 import { buildHash } from "../lib/route.ts";
+import { PageIntro } from "../components/PageIntro.tsx";
 
 export function EntityPage({ slug }: { slug: string | null }) {
   const [draft, setDraft] = useState("");
@@ -13,6 +14,10 @@ export function EntityPage({ slug }: { slug: string | null }) {
     return (
       <>
         <h1 className="page-title">Entities and facts</h1>
+        <PageIntro>
+          An entity is something the brain knows facts about: a person, company, project or topic. Facts are short claims,
+          extracted from pages or recorded directly, each with its date and, when it has one, its source page.
+        </PageIntro>
         <form
           className="search-form"
           onSubmit={(e) => { e.preventDefault(); if (draft.trim()) window.location.hash = buildHash({ name: "entity", param: draft.trim() }); }}

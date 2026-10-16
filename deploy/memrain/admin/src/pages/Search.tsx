@@ -6,6 +6,7 @@ import { Highlight } from "../components/Highlight.tsx";
 import { parseSearch } from "../lib/tool-result.ts";
 import type { SearchHit } from "../lib/tool-result.ts";
 import { buildHash } from "../lib/route.ts";
+import { PageIntro } from "../components/PageIntro.tsx";
 
 const K = 20;
 const MAX_OFFSET = 100;
@@ -46,6 +47,10 @@ export function SearchPage({ query }: { query: string | null }) {
   return (
     <>
       <h1 className="page-title">Search</h1>
+      <PageIntro>
+        Search the brain the way an agent does. Results are passages from your pages, ranked by meaning and by keywords.
+        Paid stages are off here, so each query costs one embedding.
+      </PageIntro>
       <form className="search-form" onSubmit={submit} role="search">
         <input
           type="search"
@@ -58,7 +63,6 @@ export function SearchPage({ query }: { query: string | null }) {
         />
         <button className="btn btn-primary" type="submit" disabled={draft.trim() === ""}>Search</button>
       </form>
-      <p className="hint">Hybrid search with every paid stage off. Each query spends one embedding.</p>
 
       {q === "" ? (
         <div className="empty-note">Enter a query to search the brain.</div>

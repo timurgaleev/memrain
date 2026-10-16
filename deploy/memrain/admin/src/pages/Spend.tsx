@@ -5,6 +5,7 @@ import { Section } from "../components/Tile.tsx";
 import { fmtInt, fmtUsd } from "../lib/format.ts";
 import type { AgentSpendRow, SpendReport } from "../admin-types.ts";
 import { CapTable, SpendTable } from "./Overview.tsx";
+import { PageIntro } from "../components/PageIntro.tsx";
 
 const WINDOWS = [1, 7, 30] as const;
 
@@ -17,7 +18,14 @@ export function SpendPage() {
   return (
     <>
       <div className="page-head">
-        <h1 className="page-title">Spend</h1>
+        <div className="page-head-text">
+          <h1 className="page-title">Spend</h1>
+          <PageIntro>
+            Estimated cost of AI model calls, from the spend ledger. Costs are booked from configured prices, so they can
+            differ slightly from the provider's invoice; calls with no known price are counted separately. Each row says
+            which feature made the call, and daily caps refuse paid calls once they are reached.
+          </PageIntro>
+        </div>
         <div className="segmented" role="group" aria-label="Window">
           {WINDOWS.map((d) => (
             <button key={d} className={d === days ? "active" : ""} aria-pressed={d === days} onClick={() => setDays(d)}>

@@ -5,6 +5,7 @@ import { Section } from "../components/Tile.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { parsePageList } from "../lib/tool-result.ts";
 import { buildHash } from "../lib/route.ts";
+import { PageIntro } from "../components/PageIntro.tsx";
 
 const SORTS = [
   { v: "updated_desc", label: "Recently updated" },
@@ -40,6 +41,10 @@ export function PagesPage() {
   return (
     <>
       <h1 className="page-title">Pages</h1>
+      <PageIntro>
+        Every page in the brain. A page is one note or document that an agent or an import wrote. Filter by type, tag or
+        date, or press <kbd>⌘K</kbd> / <kbd>Ctrl+K</kbd> to jump to a page by name.
+      </PageIntro>
       <div className="filter-bar filter-wrap">
         <label className="field">
           <span>Type</span>

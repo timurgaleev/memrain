@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
+import { PageIntro } from "../components/PageIntro.tsx";
 
 interface Job {
   id: string;
@@ -32,6 +33,10 @@ export function JobsWatchPage() {
   return (
     <>
       <h1 className="page-title">Jobs Watch</h1>
+      <PageIntro>
+        Background work the server runs on its own, such as indexing new text and nightly maintenance. Failed jobs are
+        listed with their error so you can see what needs attention.
+      </PageIntro>
       {error && <div className="warning-bar">{error}</div>}
 
       <div className="metrics">
