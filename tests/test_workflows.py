@@ -136,3 +136,10 @@ def test_bun_test_jobs_use_the_memrain_package(name):
         assert "memex" not in job["name"].lower()
         workdir = job.get("defaults", {}).get("run", {}).get("working-directory")
         assert workdir == "deploy/memrain", f"{name}:{job['name']} runs in {workdir!r}"
+
+
+def test_postgres_job_is_a_gate():
+    job = _load("ci.yml")["jobs"]["postgres-tests"]
+    assert job.get("continue-on-error") is not True
+    assert "advisory" not in str(job.get("name", "")).lower()
+    assert any("make test-pg" in s.get("run", "") for s in job["steps"])

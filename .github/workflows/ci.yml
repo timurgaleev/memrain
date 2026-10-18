@@ -132,12 +132,11 @@ jobs:
         run: bash scripts/test-sharded.sh
 
   postgres-tests:
-    # Advisory: the Postgres-only tests and a double migration apply against a
-    # real Postgres 16 + pgvector, where transactions really run concurrently
-    # (PGLite serializes them). A signal, not a gate, until it has a track record.
-    name: Postgres tests (advisory)
+    # The Postgres-only tests and a double migration apply against a real
+    # Postgres 16 + pgvector, where transactions really run concurrently
+    # (PGLite serializes them).
+    name: Postgres tests
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     services:
       postgres:
