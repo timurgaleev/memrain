@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-10-18
+
 ### Added
 - A logo: the memory knot, a lowercase m whose middle is tied into a loop, in
   Night, Slate and Mist. The README header, the GitHub social preview and the
