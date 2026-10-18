@@ -448,3 +448,15 @@ start. Things to know:
   with a default, so a 1.7 image runs against it (`/health` reports
   `schema_ahead`); `migrations-down/142_admin_reservation_cap.down.sql`
   removes them.
+
+## From 1.8 to 1.9
+
+1.9 is a normal deploy with no migration. One thing to know:
+
+- **Request-log rows older than 180 days are deleted.** The cycle's purge
+  phase now prunes `mcp_request_log`, at most 500,000 rows per cycle, so a
+  large backlog clears over several cycles. To keep every row, set
+  `MEMRAIN_REQUEST_LOG_RETENTION_DAYS=0` in `.env` **before** upgrading;
+  deleted rows come back only from a database backup. To see what the first
+  run will remove:
+  `SELECT count(*) FROM mcp_request_log WHERE created_at < now() - interval '180 days'`.

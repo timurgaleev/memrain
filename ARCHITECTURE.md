@@ -246,6 +246,11 @@ carries:
   `request_id`, holding an argument hash and the first call's result, so a
   retried write replays instead of writing twice. The cycle's purge phase
   drops rows after 7 days.
+- `mcp_request_log` (migration 046) — one row per MCP tool call from a caller
+  with a credential (OAuth or personal access token) and per admin-panel tool
+  call, plus every other call when `MEMRAIN_REQUEST_LOG_DB=1`. The purge phase
+  deletes rows older than `MEMRAIN_REQUEST_LOG_RETENTION_DAYS` (default 180)
+  in batches of 5000, at most 500,000 rows per cycle.
 
 ## Secrets — what goes where
 

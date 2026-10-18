@@ -6,6 +6,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-10-18
+
+### Changed
+- **`mcp_request_log` is pruned.** The cycle's purge phase deletes rows older
+  than `MEMRAIN_REQUEST_LOG_RETENTION_DAYS` (default 180; `0` keeps every
+  row; 1 to 6 are raised to 7, anything above 36500 is lowered to it). It
+  deletes in batches of 5000, checks the cycle lock between batches and stops
+  at 500,000 rows per cycle. The phase
+  result reports `purged_request_log` and `request_log_capped`, and a failed
+  run goes into `errors`, which marks the phase `warn`. See
+  [UPGRADING.md](UPGRADING.md) before upgrading if you need the old rows.
+- The Request Log page and the Overview charts say which calls are always
+  logged (OAuth and personal access tokens) and how long rows are kept. The
+  `/admin/api/requests` and `/admin/api/timeseries` responses carry
+  `retention_days` (`null` when retention is off).
+
+### Fixed
+- Docs and panel copy no longer call the request log opt-in or OAuth-only:
+  calls with an OAuth or personal access token and admin-panel tool calls are
+  logged whatever `MEMRAIN_REQUEST_LOG_DB` says.
+
 ## [1.8.0] — 2026-10-18
 
 ### Security

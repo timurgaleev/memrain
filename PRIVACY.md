@@ -72,6 +72,13 @@ The operator may delete all stored data at any time by truncating the
 `documents`, `chunks`, and `embeddings` tables in the RDS PostgreSQL
 database, or destroying the database (`make destroy`).
 
+The request log (`mcp_request_log`) records each tool call made with an OAuth
+or personal access token, and each admin-panel tool call: who called, which
+tool, how long it took, whether it worked and a redacted summary of the
+arguments. Rows older than 180 days are deleted automatically; the operator
+sets the window with `MEMRAIN_REQUEST_LOG_RETENTION_DAYS` (`0` keeps every
+row).
+
 There is no support inbox to email — the operator runs the entire
 stack.
 

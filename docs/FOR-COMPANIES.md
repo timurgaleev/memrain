@@ -91,8 +91,10 @@ Read these before you plan a rollout.
   that is a target, not an SLA.
 - **No third-party audit or compliance attestation.** No penetration test
   report and no certification. The code is open for your own review.
-- **Logs you have to manage.** The opt-in per-request log has no retention
-  limit yet. Host OS patching is yours.
+- **Logs you have to manage.** Calls with an OAuth or personal access token,
+  and admin-panel tool calls, are always written to the per-request log. Rows are kept 180 days by
+  default (`MEMRAIN_REQUEST_LOG_RETENTION_DAYS`, `0` keeps them all).
+  Host OS patching is yours.
 - **Default egress is broad.** The security group allows outbound 80, 443 and
   7844 to any address. Caddy mode exposes the instance directly, with no WAF in
   front.

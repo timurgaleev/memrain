@@ -26,8 +26,6 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 - Overview intro promises a `?` on every number; a few have none.
 - Every Top tools row links to the same unfiltered Request Log.
 - Setup progress label is not announced, and the checklist pops in after load.
-- `mcp_request_log` has no retention; with `MEMRAIN_REQUEST_LOG_DB=1` it grows by
-  one row per call. Add a pruning job.
 
 ## Follow-ups from the admin cockpit batch
 
