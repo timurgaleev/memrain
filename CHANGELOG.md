@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-10-18
+
+### Changed
+- README pictures and diagrams use the new Night, Slate and Mist palette: a new
+  hero and feature illustrations, and recoloured how-it-works, architecture and
+  demo diagrams.
+
 ## [1.7.0] — 2026-10-18
 
 ### Added
