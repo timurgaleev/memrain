@@ -143,3 +143,43 @@ def test_postgres_job_is_a_gate():
     assert job.get("continue-on-error") is not True
     assert "advisory" not in str(job.get("name", "")).lower()
     assert any("make test-pg" in s.get("run", "") for s in job["steps"])
+
+
+def test_sbom_workflow_publishes_to_releases():
+    wf = _load("sbom.yml")
+    on = _triggers(wf)
+    assert on["release"]["types"] == ["published"]
+    assert "tag" in on["workflow_dispatch"]["inputs"]
+    assert set(on) == {"release", "workflow_dispatch"}, "never run on pull_request(_target)"
+    assert wf.get("permissions") == {"contents": "read"}
+    gen, pub = wf["jobs"]["generate"], wf["jobs"]["publish"]
+    # The job that runs dependency installs keeps the read-only token.
+    assert "permissions" not in gen
+    assert pub.get("permissions") == {"contents": "write"}
+    assert pub.get("needs") == "generate"
+    gen_runs = " ".join(s.get("run", "") for s in gen["steps"])
+    pub_runs = " ".join(s.get("run", "") for s in pub["steps"])
+    assert "cyclonedx-json" in gen_runs
+    assert gen_runs.count("--frozen-lockfile --production --ignore-scripts") == 2
+    assert "-server.cdx.json" in gen_runs and "-admin.cdx.json" in gen_runs
+    assert "sha256sum" in gen_runs
+    assert "gh release upload" in pub_runs
+    # The write job never checks out or installs anything.
+    assert not any("actions/checkout" in s.get("uses", "") for s in pub["steps"])
+    assert "install" not in pub_runs
+    checkout = next(s for s in gen["steps"] if "actions/checkout" in s.get("uses", ""))
+    assert checkout.get("with", {}).get("persist-credentials") is False
+    # Only the upload step sees the token.
+    assert "GH_TOKEN" not in str(gen)
+    assert sum("GH_TOKEN" in str(s.get("env", {})) for s in pub["steps"]) == 1
+
+
+def test_sbom_tag_is_validated_and_never_interpolated_into_scripts():
+    for job in _load("sbom.yml")["jobs"].values():
+        runs = " ".join(s.get("run", "") for s in job["steps"])
+        assert "${{" not in runs, "pass event data through env, not into run:"
+        assert "v[0-9]+" in runs, "every job validates the tag before using it"
+
+
+def test_sbom_download_is_checksum_verified():
+    test_downloaded_binaries_are_checksum_verified("sbom.yml")

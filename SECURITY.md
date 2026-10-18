@@ -59,6 +59,31 @@ scope. Examples:
   refused sign-ins (401) take a fixed minimum time. Sign-out-everywhere waits
   for in-flight passkey operations, so none of them outlives it.
 
+## Software bill of materials
+
+Every GitHub release from v1.9.1 on carries two CycloneDX 1.7 JSON files,
+built by `.github/workflows/sbom.yml` from the release tag:
+
+- `memrain-vX.Y.Z-server.cdx.json`: the server's production Bun dependencies
+  (`deploy/memrain/bun.lock`).
+- `memrain-vX.Y.Z-admin.cdx.json`: the admin panel's runtime dependencies
+  (`deploy/memrain/admin/bun.lock`), which are bundled into the panel.
+
+Each lists the packages of a `bun install --frozen-lockfile --production`,
+which is what the image installs, with versions, package URLs and declared
+licences. To check a download:
+
+```bash
+gh release download vX.Y.Z --pattern 'memrain-vX.Y.Z-*'
+sha256sum -c memrain-vX.Y.Z-server.cdx.json.sha256 memrain-vX.Y.Z-admin.cdx.json.sha256
+```
+
+The checksum only shows that the file arrived intact; it comes from the same
+release. Not covered: build-only tooling (Vite, test and lint packages), the
+container base image and its OS packages (the image is built on your host and
+not published), the vendored tree-sitter WASM grammars, and Terraform
+providers. Licence texts stay in `THIRD_PARTY_NOTICES.md`.
+
 ## If a secret reached the brain
 
 Every write path redacts credential-shaped text before it is stored: vendor

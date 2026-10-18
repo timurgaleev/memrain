@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.9.1] — 2026-10-18
+
+### Added
+- **A CycloneDX SBOM with every GitHub release.** Publishing a release runs
+  `.github/workflows/sbom.yml`, which attaches
+  `memrain-<tag>-server.cdx.json` and `memrain-<tag>-admin.cdx.json` plus a
+  `.sha256` file for each. They list the production Bun dependencies of the
+  server and of the admin panel, from a frozen `--production` install of each
+  lockfile, catalogued by a checksum-pinned Syft. The job that installs
+  packages runs with a read-only token and lifecycle scripts off; only the
+  job that uploads holds `contents: write`, and it checks out and installs
+  nothing. Rerun it for an existing tag through `workflow_dispatch`. Scope
+  and verification are in SECURITY.md.
+
 ## [1.9.0] — 2026-10-18
 
 ### Changed

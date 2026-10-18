@@ -127,6 +127,11 @@ Read these before you plan a rollout.
   generates the initial database password, the public bearer and the internal
   token, so those values are also in Terraform state: keep the state bucket
   encrypted and access-restricted.
+- **Software bill of materials.** Every release from v1.9.1 on has two
+  CycloneDX SBOMs attached, one for the server's production dependencies and
+  one for the admin panel's, each with a SHA-256 file. The base image and OS
+  packages are not covered. See
+  [SECURITY.md](../SECURITY.md#software-bill-of-materials).
 - **Who processes your data.** You run the stack, so AWS, Cloudflare (in Tunnel
   mode) and your agent's model provider are your providers. The maintainer
   receives no data from your deployment.
