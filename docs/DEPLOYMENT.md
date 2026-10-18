@@ -352,7 +352,7 @@ device; keep them offline.
 A passkey created from a recovery code, or from a setup link while another
 passkey already exists, starts in a 24-hour cooldown: it can use the panel but cannot
 mint API keys, register or change OAuth clients, approve connector requests,
-revoke other passkeys, replace recovery codes, mint links or sign everyone out.
+rename or revoke passkeys, replace recovery codes, mint links or sign everyone out.
 That limits what a stolen link or code can do before the owner notices the
 "new passkey" warning, which only an older passkey or the operator can dismiss.
 The owner's first passkey created from a setup link has no cooldown, so a new
@@ -361,6 +361,18 @@ been revoked: whoever opens the next live setup link becomes the owner with no
 cooldown, so mint links only when you mean to hand them over. If a link or code may have leaked: sign in with the
 bootstrap token, revoke the unknown passkey on the Security page, mint a new
 link and replace the recovery codes.
+
+A setup link or recovery code can be reserved at most five times. A redeem
+holds it for one browser for 15 minutes; retrying in that browser within those
+15 minutes is free and does not extend them, but a redeem after they lapse, or
+from another browser, counts. The fifth reservation raises a notice on the
+Security page; after that the link or code is refused. Mint a new link if that
+happens. Sign-out-everywhere releases every reserved recovery code.
+
+Operator sessions (bootstrap token or magic link) can do sensitive actions,
+such as minting a setup link or revoking a passkey, for 10 minutes once a
+passkey exists. After that, step up with a passkey or sign in again with the
+bootstrap token.
 
 ### Scheduled units
 

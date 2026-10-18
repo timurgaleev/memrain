@@ -6,6 +6,40 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-10-18
+
+### Security
+- A passkey POST with no `Origin` and no `Sec-Fetch-Site` header is refused
+  unless it is `POST /admin/api/setup-links` with the valid bootstrap token. A
+  wrong token there now gets 403 instead of 401, and a junk `Authorization`
+  header on any other passkey route is no longer checked at all, so it cannot
+  use up the bootstrap login throttle.
+- Every 401 from passkey sign-in or step-up verification takes at least
+  250 ms, whether the credential id is known or not, and a slowed client gets
+  the same 429 for an unknown credential as for a known one.
+- A session in the 24-hour enrolment cooldown can no longer rename passkeys.
+- Passkey sign-in refuses an assertion that leaves out the owner's user
+  handle (audit reason `missing_user_handle`); a non-string handle is refused
+  as a mismatch. Step-up, which names the credentials, still accepts a
+  missing handle.
+- Sign-out-everywhere also voids magic links that were minted but not yet
+  redeemed and releases reserved recovery codes. It waits for in-flight
+  passkey operations (sign-in, enrolment, step-up, revoke, rename, recovery
+  codes, setup links, notice acknowledgement) and none starts until it is
+  done, so nothing they create outlives it. A sign-in or enrolment whose
+  challenge was issued before the sign-out is refused.
+- Behind a trusted proxy (`MEMRAIN_HTTP_TRUST_PROXY=1`), the same-origin check
+  for a host that `MEMRAIN_PUBLIC_URL` does not name takes the scheme from
+  `X-Forwarded-Proto`, so an `http://` page of that host is refused.
+- A setup link or recovery code can be reserved at most five times
+  (migration 142). A retry by the same browser inside its 15-minute lease is
+  not counted and does not extend the lease. The reservation that reaches the
+  cap writes one notice for the Security page in the same transaction; later
+  attempts are refused and logged without a notice.
+
+### Changed
+- A red `Postgres tests` CI job now fails the workflow; it was advisory.
+
 ## [1.7.1] — 2026-10-18
 
 ### Changed

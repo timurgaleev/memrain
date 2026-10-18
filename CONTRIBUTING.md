@@ -71,8 +71,8 @@ tests write to it. A new Postgres-only test needs no registration — read
 `MEMRAIN_TEST_POSTGRES_URL` in the file (`describe.skipIf(!url)`) and
 `make test-pg` picks it up.
 
-CI runs the same target in the advisory `Postgres tests` job
-(`continue-on-error`) against a service container.
+CI runs the same target in the `Postgres tests` job against a service
+container; a red run fails the workflow.
 
 ## Coding conventions
 

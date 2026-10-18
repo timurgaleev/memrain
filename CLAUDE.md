@@ -127,6 +127,8 @@ for this repo:
      `tests/` alike.
    - `make test` — bash unit tests pass
    - `python3 -m pytest tests/ -q` — all green
+   - `make test-pg` — when a migration or Postgres-backed store code changed
+     (needs docker; runs the Postgres-only tests and applies migrations twice)
    - `terraform -chdir=terraform fmt -check && terraform -chdir=terraform validate` — when `terraform/` changed
    - `docker compose --env-file .env -f deploy/docker-compose.yml config` — when compose changed (an explicit `-f` is right HERE: this validates the file in the checkout, not the host's resolved set)
    - When Memrain source changed, run the **full Bun suite locally**

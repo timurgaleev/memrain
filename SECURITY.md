@@ -52,6 +52,12 @@ scope. Examples:
   not), otherwise the token is static.
 - `MEMRAIN_PUBLIC_WRITE` defaults to `0` — a fresh clone cannot accept
   mutating MCP traffic without an explicit opt-in.
+- Admin-panel passkeys are bound to the `MEMRAIN_PUBLIC_URL` origin; every
+  passkey POST checks `Origin`, and challenges are single-use and expire after
+  5 minutes. A passkey added through a setup link or recovery code spends 24
+  hours in a cooldown, a link or code can be reserved at most five times, and
+  refused sign-ins (401) take a fixed minimum time. Sign-out-everywhere waits
+  for in-flight passkey operations, so none of them outlives it.
 
 ## If a secret reached the brain
 

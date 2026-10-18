@@ -422,3 +422,29 @@ and 140 on start. Things to know:
   column, a table and indexes, so a 1.1 image runs against them (`/health`
   reports `schema_ahead`). Links pointing at pages created after the rollback
   are not reconnected until 1.2 runs again.
+
+## From 1.7 to 1.8
+
+1.8 is a normal deploy: `bash deploy/deploy.sh` applies migration 142 on
+start. Things to know:
+
+- **Scripts that call the passkey API without `Origin`.** Only
+  `POST /admin/api/setup-links` with the valid bootstrap token is accepted
+  without an `Origin` header. A wrong token there gets 403 (it was 401); any
+  other passkey POST route answers 403 to a non-browser caller.
+- **`X-Forwarded-Proto` must be right under `MEMRAIN_HTTP_TRUST_PROXY=1`.**
+  For a host that `MEMRAIN_PUBLIC_URL` does not name, admin POSTs must come
+  from a page on the scheme the proxy reports. A proxy that omits the header
+  changes nothing; Caddy and Cloudflare Tunnel set it correctly.
+- **Passkey sign-in needs the user handle.** Every authenticator returns it
+  for the discoverable credentials the panel registers; one that does not can
+  no longer sign in.
+- **A setup link or recovery code is retired after five reservations.** Only
+  a new reservation counts (the lease lapsed, or another browser); retrying in
+  the same browser within 15 minutes does not. A burned link is replaced by
+  minting a new one; a burned recovery code is one of ten, and the Security
+  page says so.
+- **Rolling the image back past 1.8.** Migration 142 only adds two columns
+  with a default, so a 1.7 image runs against it (`/health` reports
+  `schema_ahead`); `migrations-down/142_admin_reservation_cap.down.sql`
+  removes them.
