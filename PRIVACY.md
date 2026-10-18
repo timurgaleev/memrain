@@ -39,15 +39,18 @@ configured region:
   query expansion (Claude Haiku 5.5 on Bedrock by default, overridable via
   `MEMRAIN_UTILITY_MODEL` / `MEMRAIN_INTENT_MODEL` /
   `MEMRAIN_EXPANSION_MODEL`). Memrain does **not** synthesize
-  answers; that is the MCP client's job. Bedrock requests stay inside
-  AWS; Amazon's standard Bedrock data-handling terms apply (no model
+  answers, except through the opt-in `think` tool, which writes a cited
+  answer with Claude on Bedrock; otherwise that is the MCP client's job. Bedrock requests stay inside
+  AWS, though cross-region inference profiles can route them to other
+  regions you allow (by default the EU profiles, plus `us-east-1`); Amazon's standard Bedrock data-handling terms apply (no model
   training on customer prompts).
 
 Stored data stays in your AWS account. Query results go to the MCP client you
 connect, and with the default Cloudflare Tunnel, requests pass through
 Cloudflare. There are no analytics SDKs, no advertising
-trackers, no third-party SaaS observability, and no telemetry beyond
-CloudWatch logs scoped to the operator's account.
+trackers and no third-party SaaS observability. No vendor analytics or
+third-party telemetry; Memrain's own search telemetry, request and spend logs
+stay in your account, alongside CloudWatch application logs.
 
 ## Who can access the data
 

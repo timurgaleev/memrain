@@ -8,8 +8,8 @@ its own terms.
 
 Please **do not** open a public GitHub issue for security problems.
 
-Instead, email the maintainer at the address listed on the
-[GitHub profile](https://github.com/<your-github-username>). Include:
+Instead, report it privately through GitHub's private vulnerability reporting
+(this repository's **Security** tab, then **Report a vulnerability**). Include:
 
 - A short description of the issue.
 - A minimal reproduction (steps, code snippet, or commit hash).
@@ -41,8 +41,10 @@ scope. Examples:
 
 ## Hardening defaults
 
-- All secrets live in AWS Secrets Manager, never in code or terraform
-  state.
+- All secrets live in AWS Secrets Manager, never in code. Terraform
+  generates the initial database password, the public bearer and the
+  internal token, so those values are also in Terraform state: keep the
+  state bucket encrypted and access-restricted.
 - The audit gate (`make audit`) blocks pushes that contain
   maintainer-private identifiers.
 - The public MCP bearer can rotate daily, but the timer is opt-in —

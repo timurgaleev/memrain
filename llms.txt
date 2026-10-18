@@ -11,7 +11,7 @@ Self-hosted long-term memory for AI agents, reached over MCP only:
   (callers/callees), push-context, advisor; every MCP tool is declared in
   `deploy/memrain/src/mcp/operations.ts`. Retrieval-first
   — Bedrock Titan v2 embeddings + Claude Haiku intent/expansion; answer synthesis
-  is the MCP client's job. An opt-in, off-by-default LLM step distils notes
+  is the MCP client's job, except the opt-in `think` tool. An opt-in, off-by-default LLM step distils notes
   into a separate `synth_*` store (source notes never touched). PGLite is a
   dev-only fallback.
 - **cloudflared** — public HTTPS ingress for the MCP server

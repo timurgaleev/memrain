@@ -1,15 +1,18 @@
 <div align="center">
 
-# Memrain
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo/logo-lockup-dark.svg">
+  <img src="docs/assets/logo/logo-lockup.svg" alt="Memrain" width="320">
+</picture>
 
 **Long-term memory for your AI agents.**<br>
-Your notes, decisions and code, searchable from Claude, ChatGPT and Codex, with the source attached to every answer.
+Your notes, decisions and code, searchable from Claude, ChatGPT and Codex. Every result points to the page it came from.
 
 <img src="docs/assets/hero.webp" alt="Notes, a code file, a chat bubble and a sticky note flow into one filing cabinet, which feeds answers to three laptops." width="100%">
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](./LICENSE)
-![MCP-native](https://img.shields.io/badge/works%20with-any%20MCP%20client-E8735A?style=flat-square)
-![Self-hosted](https://img.shields.io/badge/runs%20in-your%20AWS%20account-5B6770?style=flat-square)
+[![License: MIT](https://img.shields.io/badge/license-MIT-070A14?style=flat-square)](./LICENSE)
+![MCP-native](https://img.shields.io/badge/works%20with-any%20MCP%20client-5B6478?style=flat-square)
+![Self-hosted](https://img.shields.io/badge/runs%20in-your%20AWS%20account-8A93A8?style=flat-square)
 
 </div>
 
@@ -94,7 +97,7 @@ Every client uses the same `https://<your-host>/mcp` address.
 
 ## Security and privacy
 
-- **Your data stays in your AWS account.** Notes, index and database live there. Only what an agent retrieves goes to that agent's model; with the default Cloudflare Tunnel, that traffic passes through Cloudflare. No telemetry.
+- **Your data stays in your AWS account.** Notes, index and database live there. Only what an agent retrieves goes to that agent's model; with the default Cloudflare Tunnel, that traffic passes through Cloudflare. No vendor analytics or third-party telemetry; Memrain's own search telemetry, request and spend logs stay in your account.
 - **Secrets are stripped on the way in.** Pasted AWS keys, API tokens, private keys and database passwords are redacted before they are stored or embedded.
 - **Every person has their own key.** Personal tokens and OAuth sign-in, scoped per person, each with an optional daily cap. Details in [docs/TEAM-SETUP.md](./docs/TEAM-SETUP.md).
 
@@ -115,6 +118,7 @@ To report a vulnerability, see [SECURITY.md](./SECURITY.md).
 | [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Every install and update step in detail |
 | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) | Every setting, quality tiers, budgets |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | What runs where, and the security model |
+| [docs/FOR-COMPANIES.md](./docs/FOR-COMPANIES.md) | For companies: what you get, the limits, a one-week evaluation |
 | [UPGRADING.md](./UPGRADING.md) · [CHANGELOG.md](./CHANGELOG.md) | Upgrades and release history |
 
 ## Contributing
@@ -126,3 +130,5 @@ test commands are in [CONTRIBUTING.md](./CONTRIBUTING.md).
 ## License
 
 [MIT](./LICENSE)
+
+The Memrain name and logo are not covered by the MIT licence; use them only to refer to this project.

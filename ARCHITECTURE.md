@@ -45,7 +45,7 @@ external message broker — the whole runtime fits in `t4g.medium`.
 
 | Container | Image | Owns |
 |---|---|---|
-| `memrain` | built from `deploy/memrain/` (Bun + Alpine) | Knowledge brain: hybrid search (+ graph-signals ranking), entity + code call graph, code/markdown chunkers, fact extraction, push-context, advisor, MCP server (91 tools), a maintenance cycle (13 deterministic phases + 11 opt-in LLM-synthesis phases). Every route except `GET /health`, the OAuth metadata and flow endpoints (`/.well-known/*`, `/authorize`, `/token`, `/register`, `/revoke`) and the `/admin` pages (which carry their own login) needs a credential; `POST /mcp` is the agent contract and `POST /ingest` takes OAuth bearers with the `write` scope. Bedrock: Titan v2 embeddings, plus opt-in Claude Haiku (intent/expansion/rerank) and the opt-in, off-by-default Claude Sonnet note synthesis. Answer synthesis is the MCP client's job. |
+| `memrain` | built from `deploy/memrain/` (Bun + Alpine) | Knowledge brain: hybrid search (+ graph-signals ranking), entity + code call graph, code/markdown chunkers, fact extraction, push-context, advisor, MCP server (96 tools), a maintenance cycle (13 deterministic phases + 11 opt-in LLM-synthesis phases). Every route except `GET /health`, the OAuth metadata and flow endpoints (`/.well-known/*`, `/authorize`, `/token`, `/register`, `/revoke`) and the `/admin` pages (which carry their own login) needs a credential; `POST /mcp` is the agent contract and `POST /ingest` takes OAuth bearers with the `write` scope. Bedrock: Titan v2 embeddings, plus opt-in Claude Haiku (intent/expansion/rerank) and the opt-in, off-by-default Claude Sonnet note synthesis. Answer synthesis is the MCP client's job. |
 | `cloudflared` | `cloudflare/cloudflared:2025.4.0` (upstream) | Public HTTPS ingress (Cloudflare Tunnel), the default `ingress_mode`. The dashboard routes `brain.<domain>/mcp` to Memrain on the internal docker bridge. |
 | `caddy` | `caddy:2.10` (upstream) | The alternative ingress (`ingress_mode = "caddy"`): terminates TLS with Let's Encrypt on the instance's own public IP, no tunnel. Runs as a compose override, so exactly one of the two ingress containers exists per deployment. See [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md#alternative-caddy-ingress-no-cloudflare). |
 
@@ -74,13 +74,13 @@ so future contributors don't reach for them blindly.
 | `core/code-graph.ts` + `core/code-edges.ts` + `core/code-entities.ts` + `core/code-walk.ts` + `core/chunkers/code.ts` | Code intelligence: indexing + call graph. `memrain index` auto-detects source files (TS/Python), and the `code_callers` / `code_callees` / `code_def` / `code_refs` tools answer who-calls-what over `entity_mentions`, and `code_flow` / `code_blast` do a bounded transitive traversal (`walk_depth`). |
 | `core/context/*` | Push-context (deterministic, no LLM): `volunteer.ts` extracts entities from a conversation window and resolves them to pages by alias/title/slug; `volunteer-events.ts` logs what was volunteered for a feedback metric. Backs the `volunteer_context` tool + `memrain watch`. |
 | `core/advisor/*` | Read-only diagnostics: ranks pending migrations / stalled jobs / low embed coverage / setup smells into `{severity, fix_command}` findings (the `advisor` tool). Reuses the doctor/status/jobs primitives. |
-| `core/synthesis/*` + `core/llm/{haiku,sonnet}.ts` | **Opt-in, off-by-default** LLM synthesis phases: `extract-atoms → synthesize-concepts → propose-takes → grade-takes → calibration-profile`, plus `reflections`, `patterns` (theme miner), `probe-contradictions`, and `deep-synth`. `think` runs the same relational-LLM pass **CLI-only** (`memrain think`, not an MCP tool) with an entity-extract auto-anchor. Output is written ONLY to dedicated `synth_*` tables — `documents`/`chunks`/`pages` are never mutated. `haiku.ts` (utility) and `sonnet.ts` (paid slices) are the shared Bedrock helpers, each with an injectable seam so tests run with zero Bedrock calls. |
+| `core/synthesis/*` + `core/llm/{haiku,sonnet}.ts` | **Opt-in, off-by-default** LLM synthesis phases: `extract-atoms → synthesize-concepts → propose-takes → grade-takes → calibration-profile`, plus `reflections`, `patterns` (theme miner), `probe-contradictions`, and `deep-synth`. `think` runs the same relational-LLM pass as the opt-in `think` MCP tool and `memrain think` (both need `MEMRAIN_THINK=1`), with an entity-extract auto-anchor. Output is written ONLY to dedicated `synth_*` tables — `documents`/`chunks`/`pages` are never mutated. `haiku.ts` (utility) and `sonnet.ts` (paid slices) are the shared Bedrock helpers, each with an injectable seam so tests run with zero Bedrock calls. |
 | `core/facts*` (`facts-extract` · `facts-classify` · `facts-reconcile` · `facts-recall` · `facts-decay` · `facts-fence` · `facts-queue`) | Structured entity facts. On-write extraction pulls `{subject, predicate, object}` triples into `entity_facts`; `facts-fence.ts` renders the deterministic "facts fence" block appended to a page; reconcile dedups + supersedes stale facts (with a `forgotten_cause` audit) and decays confidence over time. Paid Sonnet tier, default-OFF; the `entity_facts` tool reads them back and `add_fact` / `forget_fact` mutate them. |
 | `core/content-sanity.ts` | Ingest quality gate. Scores incoming chunk text against junk/boilerplate patterns (plus an operator literal channel, `MEMRAIN_SANITY_LITERALS_FILE`) and quarantines scraper garbage before it is embedded. Fail-open. |
 | `core/contextual-reembed.ts` + `core/search/contextual-llm.ts` | **Opt-in** contextual retrieval (LLM tier): before embedding, a Haiku pass prepends a short document-situating blurb to each chunk so the vector carries whole-doc context. Tracked by `chunks.contextual_embedded` (migration 057); `memrain reindex --contextual` re-embeds the corpus. |
 | `core/search/query-cache.ts` | Semantic query cache (migration 065): a normalized-query + embedding-nearest lookup that returns a prior result set when a new query is semantically close enough, saving a full hybrid retrieval + embed round-trip. |
 | `core/embed-backfill.ts` + `core/embedding.ts` | Embed provenance. Every vector is stamped with an `embedding_signature` (model + dim + contextual flag, migration 066); the opt-in `MEMRAIN_REEMBED_ON_SIGNATURE_CHANGE` auto-invalidates + re-embeds any row whose stored signature drifts from the current one. `core/embed-skip.ts` marks oversize / junk frontmatter as keyword-only (indexed, never embedded). Re-indexing a doc reuses a chunk's stored vector when its text is unchanged, so an edit only pays to embed the chunks that actually moved. |
-| `core/scope.ts` + `core/visibility.ts` | Source scoping. Every row carries a `source_id` key; Postgres RLS (migration 049) + write-time fail-closed checks confine each remote credential (OAuth client / PAT) to its granted sources, and `scope.ts` defines the OAuth scope hierarchy (`read`/`write`/`admin`/`sources_admin`/`users_admin`/`agent`) the ingress gate enforces. |
+| `core/scope.ts` + `core/visibility.ts` | Source scoping. Every row carries a `source_id` key; application-layer scoping + write-time fail-closed checks confine each remote credential (OAuth client / PAT) to its granted sources, and `scope.ts` defines the OAuth scope hierarchy (`read`/`write`/`admin`/`sources_admin`/`users_admin`/`agent`) the ingress gate enforces. |
 | `mcp/visibility.ts` | The one predicate behind `tools/list` and `tools/call`: the ingress walls (public denylist, internal-token wall) and the per-credential gates (fail-closed write source, operator-only tools, per-op scope, slug-bound deny-by-default). `tools/list` advertises exactly the tools it finds no refusal for, so a listed tool is never refused for scope or permission. Argument-level refusals (a slug outside the bound prefixes) stay in dispatch. |
 | `core/write-requests.ts` | Retry-safe writes. A `request_id` on `page_put`, `page_append`, `add_fact` or `add_timeline_event` claims a `write_requests` row keyed by caller grant, tool and id; a retry with the same arguments replays the stored result, other arguments are refused, and a retry during the first call gets `request_in_progress`. Conditional writes (`expected_version`) are checked in `core/pages.ts` under the slug's write lock. |
 | `core/cycle/phase-context.ts` | Cycle fencing. Each phase runs with its own abort signal and a lock fence in async context: `phaseCheckpoint()` at the top of each loop iteration stops a timed-out or aborted phase, and `phaseFenceCheck()` before a shared-state write confirms the cycle lock still carries this run's tenure, so a run whose lock was taken ends as `partial/lock_stolen` instead of overlapping the new holder. |
@@ -219,8 +219,8 @@ carries:
   from the nightly `eval-probe`.
 - `query_cache` (migration 065) — the semantic query cache.
 - typed `links` — edges carry a `kind`/`verb` (NER-inferred, migration
-  053) plus a `source_id` tenant key, and every row is tenant-scoped
-  under Postgres RLS (migration 049).
+  053) plus a `source_id` tenant key, and every row is scoped by that key
+  in the application layer.
 - `oauth_codes` / `oauth_tokens` carry their own `source_id`, `federated_read`
   and `grant_bound` (migration 101). `verifyAccessToken` resolves the tenant
   TOKEN-FIRST and falls back to the client row, so one shared connector can
@@ -254,7 +254,7 @@ carries:
 | `cloudflared-tunnel-token` | cloudflared | Manual; from Cloudflare Zero Trust dashboard. |
 | `memrain-postgres-url` | Memrain | terraform — auto-populated from RDS endpoint. |
 | `memrain-public-bearer` | Memrain | terraform — `random_password` resource generates at apply. Memrain validates incoming public `/mcp` bearers against it. Static unless the optional `memrain-rotate-bearer.timer` is installed. |
-| `memrain-internal-token` | Memrain (internal MCP write tools) | Manual; gates write `tools/call` on the internal path. |
+| `memrain-internal-token` | Memrain (internal MCP write tools) | Generated by Terraform (`random_password`) at apply; gates write `tools/call` on the internal path. |
 | `github-deploy-key` | bootstrap | terraform — conditional, only when `use_ssh_deploy_key = true`. |
 
 `deploy/secrets/fetch-secrets.sh` reads these into the on-host
@@ -308,17 +308,20 @@ The boot flow (cold start from a new instance):
   nothing else — no chat surface, no bot, no bespoke API. One contract.
 - **One person's brain, scoped credentials.** A deploy is one user's
   brain on one account. The substrate is nonetheless source-isolated:
-  every row carries a `source_id` key enforced by Postgres RLS +
-  write-time fail-closed checks, so each remote credential (OAuth app,
-  PAT) sees only its granted sources — a leaked app token never exposes
-  the whole brain.
+  every row carries a `source_id` key. Enforcement is application-layer
+  `source_id` scoping plus write-time fail-closed checks; Postgres RLS is
+  not the enforcement: migration 049 enables RLS only when the migrating role has BYPASSRLS (not on a stock RDS) and adds no policies. With `MEMRAIN_TENANT_FAIL_CLOSED=1`, each remote credential
+  (OAuth app, PAT) sees only its granted sources, so a leaked app token
+  does not expose the whole brain.
 
 ## Out-of-scope (deferred — see `TODO.md`)
 
 - Multi-region failover.
-- A managed multi-tenant control plane (self-service onboarding, per-tenant
-  billing). Row-level tenant isolation (`source_id` + RLS) ships today; the
-  operator surface for running Memrain *as* a multi-tenant service does not.
+- A managed control plane for hosting many customers (self-service
+  onboarding, per-customer billing). Per-source scoping ships today,
+  enforced in the application layer (migration 049 enables RLS only when the migrating role has BYPASSRLS (not on a stock RDS) and adds no policies); the
+  operator surface for running Memrain *as* a hosted service for many
+  customers does not.
 - Read replicas / horizontal scaling.
 - ASG + spot fleet (a multi-instance variant not built today; the
   current shape is one on-demand instance with
