@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- A logo: the memory knot, a lowercase m whose middle is tied into a loop, in
+  Night, Slate and Mist. The README header, the GitHub social preview and the
+  admin panel (sidebar mark and browser-tab icon) use it; the files are in
+  `docs/assets/logo/`.
+- `docs/FOR-COMPANIES.md`: who Memrain fits inside a company, what a team gets,
+  the honest limits, a one-week evaluation plan and a security summary.
+
+### Changed
+- Docs now say what is true: search results point to their source and your
+  agent writes the answer; Memrain has no vendor analytics or third-party
+  telemetry, while its own search telemetry, request and spend logs stay in your
+  account; tenant isolation is enforced in the application (migration 049
+  enables Postgres RLS only for a BYPASSRLS role and adds no policies); Terraform state holds the generated initial
+  secrets, so keep the state bucket encrypted and restricted; the MCP server
+  registers 96 tools.
+- The Memrain name and logo are not covered by the MIT licence.
+
 ## [1.6.0] — 2026-10-16
 
 ### Added
