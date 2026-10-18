@@ -5,5 +5,6 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   base: "/admin/",
-  build: { outDir: "dist", emptyOutDir: true },
+  // assetsInlineLimit 0: the CSP (img-src 'self') rejects data: URIs, so the favicon must be a file.
+  build: { outDir: "dist", emptyOutDir: true, assetsInlineLimit: 0 },
 });

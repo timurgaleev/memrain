@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useId } from "react";
 import { LoginPage } from "./pages/Login";
 import { OverviewPage } from "./pages/Overview.tsx";
 import { SearchPage } from "./pages/Search.tsx";
@@ -86,6 +86,21 @@ function originOf(uri?: string | null): string | null {
 
 function currentRoute(): Route {
   return parseHash(window.location.hash);
+}
+
+function BrandMark() {
+  // Rendered twice (topbar + sidebar); a shared mask id breaks when the topbar copy is display:none.
+  const maskId = useId();
+  return (
+    <svg viewBox="0 0 64 64" width="22" height="22" aria-hidden="true" fill="none" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round">
+      <mask id={maskId} maskUnits="userSpaceOnUse">
+        <rect width="64" height="64" fill="#fff" />
+        <path d="M27.76 36.92 42.34 22.34" stroke="#000" strokeWidth="10" />
+      </mask>
+      <path mask={`url(#${maskId})`} stroke="#8A93A8" d="M8 50V28a8 8 0 0 1 13.66-5.66l14.58 14.58" />
+      <path stroke="#FFFFFF" d="M36.24 36.92a6 6 0 1 1-8.48 0l14.58-14.58A8 8 0 0 1 56 28v22" />
+    </svg>
+  );
 }
 
 function MenuIcon() {
@@ -239,7 +254,7 @@ export function App() {
         <button className="icon-btn" aria-label="Open navigation" aria-expanded={drawerOpen} aria-controls="sidebar" onClick={() => setDrawerOpen(true)}>
           <MenuIcon />
         </button>
-        <a className="topbar-logo" href="#overview">memrain</a>
+        <a className="topbar-logo" href="#overview"><BrandMark />memrain</a>
         <button className="icon-btn" aria-label="Search the brain" onClick={() => setPaletteOpen(true)}>
           <SearchIcon />
         </button>
@@ -247,7 +262,7 @@ export function App() {
       {drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} aria-hidden="true" />}
       <nav id="sidebar" className={`sidebar${drawerOpen ? " open" : ""}`} aria-label="Main">
         <div className="sidebar-logo">
-          <span>memrain</span>
+          <span className="brand"><BrandMark />memrain</span>
           <button className="kbd-hint" onClick={() => setPaletteOpen(true)} aria-label="Open the command palette" title="Jump to a page">
             <kbd>⌘K</kbd>
           </button>
