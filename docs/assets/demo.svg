@@ -3,37 +3,37 @@
      role="img"
      aria-label="Terminal demo: your AI agent asks 'what did I decide about the auth approach', calls memrain.search, gets 3 cited chunks from your own notes (decisions/auth-approach.md, notes/mcp-security.md), and answers: you chose a bearer token over MCP, not OAuth.">
   <!-- window -->
-  <rect x="0" y="0" width="760" height="372" rx="12" fill="#0D1117" stroke="#1E2A44" stroke-width="1"/>
-  <rect x="0" y="0" width="760" height="40" rx="12" fill="#161B22"/>
-  <rect x="0" y="28" width="760" height="12" fill="#161B22"/>
+  <rect x="0" y="0" width="760" height="372" rx="12" fill="#070A14" stroke="#1A2033" stroke-width="1"/>
+  <rect x="0" y="0" width="760" height="40" rx="12" fill="#121726"/>
+  <rect x="0" y="28" width="760" height="12" fill="#121726"/>
   <circle cx="22" cy="20" r="6" fill="#FF5F56"/>
   <circle cx="44" cy="20" r="6" fill="#FFBD2E"/>
   <circle cx="66" cy="20" r="6" fill="#27C93F"/>
-  <text x="380" y="25" text-anchor="middle" fill="#7D8DA3" font-size="13">memrain &#8212; your notes, answered by your agent</text>
+  <text x="380" y="25" text-anchor="middle" fill="#8A93A8" font-size="13">memrain - your notes, answered by your agent</text>
 
   <!-- transcript -->
   <g font-size="15">
-    <text x="24" y="78"  fill="#34D3A6">you<tspan fill="#5C6B82">&#64;</tspan>agent<tspan fill="#5C6B82">:~$</tspan> <tspan fill="#E8EEF6">ask "what did I decide about the auth approach?"</tspan></text>
+    <text x="24" y="78"  fill="#8A93A8">you<tspan fill="#5B6478">&#64;</tspan>agent<tspan fill="#5B6478">:~$</tspan> <tspan fill="#EEF0F4">ask "what did I decide about the auth approach?"</tspan></text>
 
-    <text x="24" y="116" fill="#6AA9FF">memrain.search <tspan fill="#93A7BE">{ q: </tspan><tspan fill="#E8EEF6">"auth approach decision"</tspan><tspan fill="#93A7BE"> }</tspan></text>
-    <text x="24" y="142" fill="#93A7BE">  &#8594; 3 cited chunks from your own notes</text>
+    <text x="24" y="116" fill="#FFFFFF">memrain.search <tspan fill="#8A93A8">{ q: </tspan><tspan fill="#EEF0F4">"auth approach decision"</tspan><tspan fill="#8A93A8"> }</tspan></text>
+    <text x="24" y="142" fill="#8A93A8">  &#8594; 3 cited chunks from your own notes</text>
 
-    <text x="24" y="180" fill="#5C6B82"># sources</text>
-    <text x="24" y="206" fill="#5BE3C0">  decisions/auth-approach.md</text>
-    <text x="24" y="232" fill="#5BE3C0">  notes/mcp-security.md</text>
+    <text x="24" y="180" fill="#5B6478"># sources</text>
+    <text x="24" y="206" fill="#C9CEDA">  decisions/auth-approach.md</text>
+    <text x="24" y="232" fill="#C9CEDA">  notes/mcp-security.md</text>
 
-    <text x="24" y="276" fill="#C9A6FF">answer<tspan fill="#5C6B82">&#9474;</tspan> <tspan fill="#E8EEF6">You chose a bearer token over MCP, not OAuth &#8212;</tspan></text>
-    <text x="24" y="300" fill="#E8EEF6">       "fewer moving parts for a single-user brain."</text>
-    <text x="24" y="324" fill="#5C6B82">       grounded in your own notes &#183; decided 2026-04</text>
+    <text x="24" y="276" fill="#C9CEDA">answer<tspan fill="#5B6478">&#9474;</tspan> <tspan fill="#EEF0F4">You chose a bearer token over MCP, not OAuth -</tspan></text>
+    <text x="24" y="300" fill="#EEF0F4">       "fewer moving parts for a single-user brain."</text>
+    <text x="24" y="324" fill="#5B6478">       grounded in your own notes &#183; decided 2026-04</text>
   </g>
 
   <!-- highlight pulse on the result line (subtle; harmless if animation is stripped) -->
-  <rect x="20" y="128" width="320" height="20" rx="4" fill="#6AA9FF" opacity="0">
+  <rect x="20" y="128" width="320" height="20" rx="4" fill="#FFFFFF" opacity="0">
     <animate attributeName="opacity" values="0;0.10;0" dur="2.6s" repeatCount="indefinite"/>
   </rect>
 
   <!-- blinking cursor -->
-  <rect x="24" y="342" width="10" height="16" fill="#34D3A6">
+  <rect x="24" y="342" width="10" height="16" fill="#8A93A8">
     <animate attributeName="opacity" values="1;1;0;0" dur="1.1s" repeatCount="indefinite"/>
   </rect>
 </svg>

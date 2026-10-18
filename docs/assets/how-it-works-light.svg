@@ -1,39 +1,39 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 370" width="1400" height="370" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" role="img" aria-label="How Memrain works: your notes, code and chats are read once, stored in your own Postgres, searched by meaning and keywords, and handed to your AI agent with sources.">
-<rect width="1400" height="370" rx="20" fill="#FBF6EE"/>
-<text x="40" y="56" font-size="26" font-weight="700" fill="#2F3B45">How Memrain works</text>
-<rect x="40" y="90" width="232" height="210" rx="16" fill="#FFFFFF" stroke="#E4DCCF" stroke-width="2"/>
-<circle cx="156" cy="130" r="16" fill="#E8735A"/><text x="156" y="136" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">1</text>
-<text x="156" y="182" text-anchor="middle" font-size="21" font-weight="700" fill="#2F3B45">Your notes,</text>
-<text x="156" y="208" text-anchor="middle" font-size="21" font-weight="700" fill="#2F3B45">code &amp; chats</text>
-<text x="156" y="246" text-anchor="middle" font-size="15" fill="#5B6770">Markdown, TypeScript,</text>
-<text x="156" y="270" text-anchor="middle" font-size="15" fill="#5B6770">Python, Go, SQL, chats</text>
-<path d="M278 195 h26" stroke="#E8735A" stroke-width="3" fill="none"/><path d="M302 188 l9 7 l-9 7" stroke="#E8735A" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-<rect x="312" y="90" width="232" height="210" rx="16" fill="#FFFFFF" stroke="#E4DCCF" stroke-width="2"/>
-<circle cx="428" cy="130" r="16" fill="#E8735A"/><text x="428" y="136" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">2</text>
-<text x="428" y="182" text-anchor="middle" font-size="21" font-weight="700" fill="#2F3B45">Memrain</text>
-<text x="428" y="208" text-anchor="middle" font-size="21" font-weight="700" fill="#2F3B45">reads them</text>
-<text x="428" y="246" text-anchor="middle" font-size="15" fill="#5B6770">split into passages,</text>
-<text x="428" y="270" text-anchor="middle" font-size="15" fill="#5B6770">embedded for search</text>
-<path d="M550 195 h26" stroke="#E8735A" stroke-width="3" fill="none"/><path d="M574 188 l9 7 l-9 7" stroke="#E8735A" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-<rect x="584" y="90" width="232" height="210" rx="16" fill="#FFFFFF" stroke="#E4DCCF" stroke-width="2"/>
-<circle cx="700" cy="130" r="16" fill="#E8735A"/><text x="700" y="136" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">3</text>
-<text x="700" y="182" text-anchor="middle" font-size="21" font-weight="700" fill="#2F3B45">Stored in</text>
-<text x="700" y="208" text-anchor="middle" font-size="21" font-weight="700" fill="#2F3B45">your database</text>
-<text x="700" y="246" text-anchor="middle" font-size="15" fill="#5B6770">Postgres + pgvector</text>
-<text x="700" y="270" text-anchor="middle" font-size="15" fill="#5B6770">in your AWS account</text>
-<path d="M822 195 h26" stroke="#E8735A" stroke-width="3" fill="none"/><path d="M846 188 l9 7 l-9 7" stroke="#E8735A" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-<rect x="856" y="90" width="232" height="210" rx="16" fill="#FFFFFF" stroke="#E4DCCF" stroke-width="2"/>
-<circle cx="972" cy="130" r="16" fill="#E8735A"/><text x="972" y="136" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">4</text>
-<text x="972" y="182" text-anchor="middle" font-size="21" font-weight="700" fill="#2F3B45">Search by</text>
-<text x="972" y="208" text-anchor="middle" font-size="21" font-weight="700" fill="#2F3B45">meaning + words</text>
-<text x="972" y="246" text-anchor="middle" font-size="15" fill="#5B6770">plus links between</text>
-<text x="972" y="270" text-anchor="middle" font-size="15" fill="#5B6770">people and projects</text>
-<path d="M1094 195 h26" stroke="#E8735A" stroke-width="3" fill="none"/><path d="M1118 188 l9 7 l-9 7" stroke="#E8735A" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-<rect x="1128" y="90" width="232" height="210" rx="16" fill="#FFFFFF" stroke="#E4DCCF" stroke-width="2"/>
-<circle cx="1244" cy="130" r="16" fill="#E8735A"/><text x="1244" y="136" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">5</text>
-<text x="1244" y="182" text-anchor="middle" font-size="21" font-weight="700" fill="#2F3B45">Your AI</text>
-<text x="1244" y="208" text-anchor="middle" font-size="21" font-weight="700" fill="#2F3B45">agent answers</text>
-<text x="1244" y="246" text-anchor="middle" font-size="15" fill="#5B6770">Claude, ChatGPT, Codex</text>
-<text x="1244" y="270" text-anchor="middle" font-size="15" fill="#5B6770">over MCP, with sources</text>
-<text x="40" y="342" font-size="16" fill="#7A858C">Runs in your own AWS account · only what your agent retrieves leaves it (via Cloudflare in Tunnel mode) · every result points to its source</text>
+<rect width="1400" height="370" rx="20" fill="#F4F5F8"/>
+<text x="40" y="56" font-size="26" font-weight="700" fill="#070A14">How Memrain works</text>
+<rect x="40" y="90" width="232" height="210" rx="16" fill="#FFFFFF" stroke="#D8DCE4" stroke-width="2"/>
+<circle cx="156" cy="130" r="16" fill="#070A14"/><text x="156" y="136" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">1</text>
+<text x="156" y="182" text-anchor="middle" font-size="21" font-weight="700" fill="#070A14">Your notes,</text>
+<text x="156" y="208" text-anchor="middle" font-size="21" font-weight="700" fill="#070A14">code &amp; chats</text>
+<text x="156" y="246" text-anchor="middle" font-size="15" fill="#5B6478">Markdown, TypeScript,</text>
+<text x="156" y="270" text-anchor="middle" font-size="15" fill="#5B6478">Python, Go, SQL, chats</text>
+<path d="M278 195 h26" stroke="#070A14" stroke-width="3" fill="none"/><path d="M302 188 l9 7 l-9 7" stroke="#070A14" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="312" y="90" width="232" height="210" rx="16" fill="#FFFFFF" stroke="#D8DCE4" stroke-width="2"/>
+<circle cx="428" cy="130" r="16" fill="#070A14"/><text x="428" y="136" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">2</text>
+<text x="428" y="182" text-anchor="middle" font-size="21" font-weight="700" fill="#070A14">Memrain</text>
+<text x="428" y="208" text-anchor="middle" font-size="21" font-weight="700" fill="#070A14">reads them</text>
+<text x="428" y="246" text-anchor="middle" font-size="15" fill="#5B6478">split into passages,</text>
+<text x="428" y="270" text-anchor="middle" font-size="15" fill="#5B6478">embedded for search</text>
+<path d="M550 195 h26" stroke="#070A14" stroke-width="3" fill="none"/><path d="M574 188 l9 7 l-9 7" stroke="#070A14" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="584" y="90" width="232" height="210" rx="16" fill="#FFFFFF" stroke="#D8DCE4" stroke-width="2"/>
+<circle cx="700" cy="130" r="16" fill="#070A14"/><text x="700" y="136" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">3</text>
+<text x="700" y="182" text-anchor="middle" font-size="21" font-weight="700" fill="#070A14">Stored in</text>
+<text x="700" y="208" text-anchor="middle" font-size="21" font-weight="700" fill="#070A14">your database</text>
+<text x="700" y="246" text-anchor="middle" font-size="15" fill="#5B6478">Postgres + pgvector</text>
+<text x="700" y="270" text-anchor="middle" font-size="15" fill="#5B6478">in your AWS account</text>
+<path d="M822 195 h26" stroke="#070A14" stroke-width="3" fill="none"/><path d="M846 188 l9 7 l-9 7" stroke="#070A14" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="856" y="90" width="232" height="210" rx="16" fill="#FFFFFF" stroke="#D8DCE4" stroke-width="2"/>
+<circle cx="972" cy="130" r="16" fill="#070A14"/><text x="972" y="136" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">4</text>
+<text x="972" y="182" text-anchor="middle" font-size="21" font-weight="700" fill="#070A14">Search by</text>
+<text x="972" y="208" text-anchor="middle" font-size="21" font-weight="700" fill="#070A14">meaning + words</text>
+<text x="972" y="246" text-anchor="middle" font-size="15" fill="#5B6478">plus links between</text>
+<text x="972" y="270" text-anchor="middle" font-size="15" fill="#5B6478">people and projects</text>
+<path d="M1094 195 h26" stroke="#070A14" stroke-width="3" fill="none"/><path d="M1118 188 l9 7 l-9 7" stroke="#070A14" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1128" y="90" width="232" height="210" rx="16" fill="#FFFFFF" stroke="#D8DCE4" stroke-width="2"/>
+<circle cx="1244" cy="130" r="16" fill="#070A14"/><text x="1244" y="136" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">5</text>
+<text x="1244" y="182" text-anchor="middle" font-size="21" font-weight="700" fill="#070A14">Your AI</text>
+<text x="1244" y="208" text-anchor="middle" font-size="21" font-weight="700" fill="#070A14">agent answers</text>
+<text x="1244" y="246" text-anchor="middle" font-size="15" fill="#5B6478">Claude, ChatGPT, Codex</text>
+<text x="1244" y="270" text-anchor="middle" font-size="15" fill="#5B6478">over MCP, with sources</text>
+<text x="40" y="342" font-size="16" fill="#5B6478">Runs in your own AWS account · only what your agent retrieves leaves it (via Cloudflare in Tunnel mode) · every result points to its source</text>
 </svg>

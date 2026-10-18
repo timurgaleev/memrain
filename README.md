@@ -8,7 +8,7 @@
 **Long-term memory for your AI agents.**<br>
 Your notes, decisions and code, searchable from Claude, ChatGPT and Codex. Every result points to the page it came from.
 
-<img src="docs/assets/hero.webp" alt="Notes, a code file, a chat bubble and a sticky note flow into one filing cabinet, which feeds answers to three laptops." width="100%">
+<img src="docs/assets/hero.webp" alt="A note, a code file, a chat bubble and a sticky note, each on a thin thread that runs into one small shared store." width="100%">
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-070A14?style=flat-square)](./LICENSE)
 ![MCP-native](https://img.shields.io/badge/works%20with-any%20MCP%20client-5B6478?style=flat-square)
@@ -34,9 +34,9 @@ search it. Each result points to the exact page it came from.
 
 | | |
 |---|---|
-| <img src="docs/assets/feature-memory.webp" alt="An answer card linked by a thread to the highlighted line of the note it came from." width="260"> | **Answers you can check.** Ask "what did we decide about the auth flow?" and get the passages from your own notes, each with the page it came from. Your agent writes the answer; Memrain supplies the evidence. |
-| <img src="docs/assets/feature-code.webp" alt="One highlighted function in a code file, with lines fanning out to the files that call it." width="260"> | **It understands your code.** Who calls this function, what breaks if I change it, where is it defined: for TypeScript, Python and Go. Bash and SQL files are searchable too. |
-| <img src="docs/assets/feature-team.webp" alt="One filing cabinet with three locked drawers in different colours, each with its own key." width="260"> | **One memory for the team, a private space for each person.** One connector for everybody, a separate source per person, a daily spending cap, and access you can revoke one person at a time. |
+| <img src="docs/assets/feature-memory.webp" alt="A small answer card tied by a thread to the highlighted line of the page it came from." width="260"> | **Answers you can check.** Ask "what did we decide about the auth flow?" and get the passages from your own notes, each with the page it came from. Your agent writes the answer; Memrain supplies the evidence. |
+| <img src="docs/assets/feature-code.webp" alt="One highlighted line in a code file, with threads fanning out to the files that use it." width="260"> | **It understands your code.** Who calls this function, what breaks if I change it, where is it defined: for TypeScript, Python and Go. Bash and SQL files are searchable too. |
+| <img src="docs/assets/feature-team.webp" alt="One cabinet with three drawers in different shades, each with its own key." width="260"> | **One memory for the team, a private space for each person.** One connector for everybody, a separate source per person, a daily spending cap, and access you can revoke one person at a time. |
 
 It also keeps facts and timelines, imports your ChatGPT and Claude history,
 keeps a version history for every page, and redacts API keys, tokens, private keys
