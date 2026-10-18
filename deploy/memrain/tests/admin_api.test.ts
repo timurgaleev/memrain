@@ -1316,4 +1316,19 @@ describe("admin overview charts, graph hubs and onboarding", () => {
       expect(ts.request_log.db_enabled).toBe(true);
     });
   });
+
+  it("requests and timeseries carry the request-log retention window", async () => {
+    await withEnv({ MEMRAIN_REQUEST_LOG_RETENTION_DAYS: undefined }, async () => {
+      const r = await getJson<{ retention_days: number | null }>("/admin/api/requests");
+      expect(r.retention_days).toBe(180);
+      const ts = await getJson<AdminTimeseries>("/admin/api/timeseries?days=7");
+      expect(ts.request_log.retention_days).toBe(180);
+    });
+    await withEnv({ MEMRAIN_REQUEST_LOG_RETENTION_DAYS: "0" }, async () => {
+      const r = await getJson<{ retention_days: number | null }>("/admin/api/requests");
+      expect(r.retention_days).toBeNull();
+      const ts = await getJson<AdminTimeseries>("/admin/api/timeseries?days=7");
+      expect(ts.request_log.retention_days).toBeNull();
+    });
+  });
 });

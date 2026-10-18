@@ -16,6 +16,7 @@ import { adminTimeseries, AGENT_CALL, NOT_PANEL_ROW, type TimeseriesDays } from 
 import { onboardingSteps, type OnboardingStatus } from "../core/admin-onboarding.ts";
 import { graphHubs } from "../core/links.ts";
 import { requestLogDbEnabled } from "../mcp/request-log-db.ts";
+import { requestLogRetentionDays } from "../core/request-log-retention.ts";
 import { resolveIssuer } from "./oauth-metadata.ts";
 import { patNameSpendConflict } from "../core/budget.ts";
 import { createHash, randomBytes } from "node:crypto";
@@ -943,6 +944,7 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
         total: total.rows[0]?.n ?? 0,
         rows: rows.rows,
         db_enabled: requestLogDbEnabled(),
+        retention_days: requestLogRetentionDays(),
       });
     } catch (e) {
       return serverError("requests", e);

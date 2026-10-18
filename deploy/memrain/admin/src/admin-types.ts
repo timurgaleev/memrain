@@ -144,7 +144,7 @@ export interface AdminTimeseries {
   totals: TsTotals;
   /** The equal-length window just before; searches cover completed days only. */
   previous: TsTotals;
-  request_log: { db_enabled: boolean; rows_in_window: number };
+  request_log: { db_enabled: boolean; rows_in_window: number; retention_days: number | null };
   brain_cap_usd: number | null;
 }
 

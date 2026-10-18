@@ -332,16 +332,22 @@ export function OverviewPage() {
   );
 }
 
+function retentionNote(d: AdminTimeseries): React.ReactNode {
+  return d.request_log.retention_days === null
+    ? null
+    : <> Calls older than {d.request_log.retention_days} days are deleted (<code>MEMRAIN_REQUEST_LOG_RETENTION_DAYS</code>).</>;
+}
+
 function activityEmpty(d: AdminTimeseries): React.ReactNode {
   return d.request_log.db_enabled
-    ? <>No agent has called the brain in this range. Connect one from the <a href="#setup">setup guide</a>.</>
-    : <>No agent calls recorded in this range. This instance logs only OAuth connections; logging every call is a server setting (<code>MEMRAIN_REQUEST_LOG_DB</code>). If someone else runs your brain, ask them.</>;
+    ? <>No agent has called the brain in this range. Connect one from the <a href="#setup">setup guide</a>.{retentionNote(d)}</>
+    : <>No agent calls recorded in this range. Calls with an OAuth connection or a personal access token are always logged; calls with the shared bearer are logged only with <code>MEMRAIN_REQUEST_LOG_DB</code> on.{retentionNote(d)} If someone else runs your brain, ask them.</>;
 }
 
 function oauthOnly(d: AdminTimeseries): React.ReactNode {
   return d.request_log.db_enabled
     ? null
-    : <>Only OAuth connections are logged on this instance; calls with a personal access token are missing (<code>MEMRAIN_REQUEST_LOG_DB</code>).</>;
+    : <>Calls with the shared bearer are not logged on this instance (<code>MEMRAIN_REQUEST_LOG_DB</code>); OAuth and personal-access-token calls are.</>;
 }
 
 function TrendCharts({ trends, now }: { trends: AsyncState<AdminTimeseries>; now: number }) {

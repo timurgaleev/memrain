@@ -13,7 +13,7 @@ interface Row {
   created_at: string;
 }
 
-interface Data { page: number; per_page: number; total: number; rows: Row[]; db_enabled?: boolean }
+interface Data { page: number; per_page: number; total: number; rows: Row[]; db_enabled?: boolean; retention_days?: number | null }
 
 export function RequestLogPage() {
   const [data, setData] = useState<Data | null>(null);
@@ -41,7 +41,12 @@ export function RequestLogPage() {
         Every tool call an agent made: who called, which tool, how long it took and whether it worked. Your own clicks in
         this panel are not counted.
         {data?.db_enabled === false && (
-          <> This instance logs only OAuth connections; logging every call is a server setting (<code>MEMRAIN_REQUEST_LOG_DB</code>).</>
+          <> Calls with an OAuth connection or a personal access token are always logged; calls with the shared bearer or from inside the server are logged only with <code>MEMRAIN_REQUEST_LOG_DB</code> on.</>
+        )}
+        {data && data.retention_days !== undefined && (
+          data.retention_days === null
+            ? <> Rows are kept forever (<code>MEMRAIN_REQUEST_LOG_RETENTION_DAYS=0</code>).</>
+            : <> Rows older than {data.retention_days} days are deleted (<code>MEMRAIN_REQUEST_LOG_RETENTION_DAYS</code>).</>
         )}
       </PageIntro>
       <div className="filter-bar filter-wrap">

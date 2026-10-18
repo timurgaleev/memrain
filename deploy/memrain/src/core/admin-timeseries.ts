@@ -13,6 +13,7 @@ import type { Engine } from "./engine/interface.ts";
 import { brainDailyCapUsd } from "./budget.ts";
 import { MADE } from "./spend-report.ts";
 import { requestLogDbEnabled } from "../mcp/request-log-db.ts";
+import { requestLogRetentionDays } from "./request-log-retention.ts";
 
 /**
  * The operator's own admin-panel calls are not agent traffic. They are the
@@ -62,7 +63,7 @@ export interface AdminTimeseries {
   totals: TsTotals;
   /** The equal-length previous window (searches: completed days only). */
   previous: TsTotals;
-  request_log: { db_enabled: boolean; rows_in_window: number };
+  request_log: { db_enabled: boolean; rows_in_window: number; retention_days: number | null };
   /** The current daily brain cap, for the reference line; null = none. */
   brain_cap_usd: number | null;
 }
@@ -309,7 +310,11 @@ export async function adminTimeseries(
     top_agents: agents.rows.map((r) => ({ id: r.id, agent: r.agent, calls: Number(r.calls) })),
     totals,
     previous,
-    request_log: { db_enabled: requestLogDbEnabled(), rows_in_window: totals.requests },
+    request_log: {
+      db_enabled: requestLogDbEnabled(),
+      rows_in_window: totals.requests,
+      retention_days: requestLogRetentionDays(),
+    },
     brain_cap_usd: brainDailyCapUsd(),
   };
 }

@@ -8,11 +8,12 @@
  * Two enablement paths:
  *   - `MEMRAIN_REQUEST_LOG_DB=1` turns the sink on for ALL ingress classes
  *     (opt-in, default OFF — the hot path takes no extra write).
- *   - `force: true` on an entry logs it regardless of the flag. The OAuth
- *     ingress passes this so authenticated-client traffic — including
- *     REJECTIONS (scope, public-forbidden, internal-token, rate-limit) —
- *     is fail-visible by default: the OAuth surface keeps an always-on
- *     request log.
+ *   - `force: true` on an entry logs it regardless of the flag. The MCP
+ *     transport passes this for every caller with a credential (OAuth or
+ *     personal access token), including REJECTIONS (scope, public-forbidden,
+ *     internal-token, rate-limit), and the admin panel for its own tool
+ *     calls, so those rows are written on every install. The purge phase
+ *     prunes them (core/request-log-retention.ts).
  *
  * Fire-and-forget + fully swallowed: a logging failure must never turn a
  * successful tool call into an error. Redacted: only the param SUMMARY
@@ -52,7 +53,7 @@ export interface RequestLogEntry {
   params: unknown;
   /** Short failure description for the `error_message` column. */
   errorMessage?: string;
-  /** Log even when MEMRAIN_REQUEST_LOG_DB is off (OAuth ingress fail-visibility). */
+  /** Log even when MEMRAIN_REQUEST_LOG_DB is off (credentialed callers, admin panel). */
   force?: boolean;
 }
 
