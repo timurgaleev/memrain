@@ -120,7 +120,7 @@ describe("setup links", () => {
     const t0 = Date.now();
     const link = await mintSetupLink(e(), { ttlMs: 24 * HOUR, via: "cli", nowMs: t0 });
     const r1 = await reserveSetupLink(e(), link.token, A, t0 + 15 * MIN, t0);
-    expect(r1).toEqual({ ok: true, ref: link.id });
+    expect(r1).toEqual({ ok: true, ref: link.id, capReached: false, until: t0 + 15 * MIN });
     // A retry from the same browser re-reserves; another browser is refused.
     expect((await reserveSetupLink(e(), link.token, A, t0 + 16 * MIN, t0 + MIN)).ok).toBe(true);
     expect(await reserveSetupLink(e(), link.token, B, t0 + 17 * MIN, t0 + 2 * MIN)).toEqual({ ok: false, reason: "reserved" });
@@ -164,6 +164,69 @@ describe("setup links", () => {
   });
 });
 
+describe("reservation cap", () => {
+  // Each reservation starts after the previous lease lapsed: a new reservation.
+  const at = (t0: number, i: number) => t0 + i * 16 * MIN;
+
+  it("a setup link takes five new reservations, the fifth reports the cap, and then it is exhausted for everyone", async () => {
+    const t0 = Date.now();
+    const link = await mintSetupLink(e(), { ttlMs: 24 * HOUR, via: "cli", nowMs: t0 });
+    const got = [];
+    for (let i = 0; i < 5; i++) got.push(await reserveSetupLink(e(), link.token, A, at(t0, i) + 15 * MIN, at(t0, i)));
+    expect(got.map((r) => r.ok && r.capReached)).toEqual([false, false, false, false, true]);
+    expect(await reserveSetupLink(e(), link.token, A, at(t0, 5) + 15 * MIN, at(t0, 5))).toEqual({ ok: false, reason: "exhausted" });
+    expect(await reserveSetupLink(e(), link.token, B, at(t0, 5) + 15 * MIN, at(t0, 5))).toEqual({ ok: false, reason: "exhausted" });
+  });
+
+  it("a recovery code takes five new reservations, then it is exhausted for everyone", async () => {
+    const t0 = Date.now();
+    const [code] = await replaceRecoveryCodes(e(), t0);
+    const got = [];
+    for (let i = 0; i < 5; i++) got.push(await reserveRecoveryCode(e(), code!, i % 2 ? A : B, at(t0, i) + 15 * MIN, at(t0, i)));
+    expect(got.map((r) => r.ok && r.capReached)).toEqual([false, false, false, false, true]);
+    expect(await reserveRecoveryCode(e(), code!, A, at(t0, 5) + 15 * MIN, at(t0, 5))).toEqual({ ok: false, reason: "exhausted" });
+  });
+
+  it("a retry by the same browser within its lease is not counted, does not extend the lease, and still works at the cap", async () => {
+    const t0 = Date.now();
+    const link = await mintSetupLink(e(), { ttlMs: 24 * HOUR, via: "cli", nowMs: t0 });
+    const [code] = await replaceRecoveryCodes(e(), t0);
+    for (const reserve of [
+      (h: string, u: number, n: number) => reserveSetupLink(e(), link.token, h, u, n),
+      (h: string, u: number, n: number) => reserveRecoveryCode(e(), code!, h, u, n),
+    ]) {
+      expect(await reserve(A, t0 + 15 * MIN, t0)).toMatchObject({ ok: true, capReached: false, until: t0 + 15 * MIN });
+      for (let i = 1; i <= 8; i++) {
+        expect(await reserve(A, t0 + i * MIN + 15 * MIN, t0 + i * MIN)).toMatchObject({ ok: true, capReached: false, until: t0 + 15 * MIN });
+      }
+      // Four more new reservations reach the cap; a retry inside the fifth lease still works and reports nothing.
+      for (let i = 1; i <= 4; i++) await reserve(A, at(t0, i) + 15 * MIN, at(t0, i));
+      expect(await reserve(A, at(t0, 4) + 16 * MIN, at(t0, 4) + MIN)).toMatchObject({ ok: true, capReached: false });
+    }
+    expect((await linkRow(link.id)).reservations).toBe(5);
+  });
+
+  it("the reservation that reaches the cap writes its notice itself", async () => {
+    const t0 = Date.now();
+    const link = await mintSetupLink(e(), { ttlMs: 24 * HOUR, via: "cli", nowMs: t0 });
+    const [code] = await replaceRecoveryCodes(e(), t0);
+    for (let i = 0; i < 6; i++) {
+      await reserveSetupLink(e(), link.token, A, at(t0, i) + 15 * MIN, at(t0, i), { clientKey: "198.51.100.1", userAgent: "ua" });
+      await reserveRecoveryCode(e(), code!, A, at(t0, i) + 15 * MIN, at(t0, i));
+    }
+    const notices = (await listAuthEvents(e(), 50)).filter((x) => x.notice).map((x) => [x.event, x.clientKey]);
+    expect(notices.sort()).toEqual([["recovery.cap_reached", null], ["setup_link.cap_reached", "198.51.100.1"]]);
+  });
+
+  it("a used link still reads as used, not exhausted", async () => {
+    const t0 = Date.now();
+    const link = await mintSetupLink(e(), { ttlMs: 24 * HOUR, via: "cli", nowMs: t0 });
+    for (let i = 0; i < 5; i++) await reserveSetupLink(e(), link.token, A, at(t0, i) + 15 * MIN, at(t0, i));
+    await insertPasskeyWithGrant(e(), passkey(), { source: "setup_link", ref: link.id, preauthHash: A }, at(t0, 4) + 1);
+    expect(await reserveSetupLink(e(), link.token, A, at(t0, 5) + 15 * MIN, at(t0, 5))).toEqual({ ok: false, reason: "used" });
+  });
+});
+
 describe("recovery codes", () => {
   it("reserve + consume once; reuse fails; malformed input is rejected", async () => {
     const t0 = Date.now();
@@ -174,7 +237,7 @@ describe("recovery codes", () => {
     // Lower case, spaces and the Crockford look-alikes are normalized.
     const typed = codes[0]!.toLowerCase().replace(/-/g, " ");
     const r = await reserveRecoveryCode(e(), typed, A, t0 + 15 * MIN, t0);
-    expect(r).toEqual({ ok: true, ref: sha256Hex(codes[0]!.replace(/-/g, "")) });
+    expect(r).toEqual({ ok: true, ref: sha256Hex(codes[0]!.replace(/-/g, "")), capReached: false, until: t0 + 15 * MIN });
     expect(await reserveRecoveryCode(e(), codes[0]!, B, t0 + 15 * MIN, t0)).toEqual({ ok: false, reason: "reserved" });
     await insertPasskeyWithGrant(e(), passkey({ createdVia: "recovery" }), { source: "recovery", ref: (r as { ref: string }).ref, preauthHash: A }, t0);
     expect(await reserveRecoveryCode(e(), codes[0]!, A, t0 + 15 * MIN, t0)).toEqual({ ok: false, reason: "used" });

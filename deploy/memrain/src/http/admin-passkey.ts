@@ -17,7 +17,8 @@
  *   - A setup link or recovery code is a credential to ENROLL, not to sign in.
  *     Redeeming one reserves it for this browser for 15 minutes and yields an
  *     enroll-only grant; the link or code is consumed only when the passkey is
- *     stored. A grant is not a session.
+ *     stored. A grant is not a session. One link or code can be reserved at
+ *     most five times, so a holder cannot keep it away from the owner.
  *   - Rate limits protect CPU and the database, not the secrets (those are 120
  *     and 256 bits). They are per client key only, so nobody can drain a shared
  *     bucket to lock the owner out, and the login slowdown counts only failed
@@ -26,7 +27,7 @@
  *     gets a much larger bucket and no slowdown.
  *   - A passkey created through a setup link or a recovery code spends its
  *     first 24 hours in a cooldown: its sessions can use the panel but cannot
- *     acknowledge notices, revoke passkeys, replace recovery codes, mint links,
+ *     acknowledge notices, revoke or rename passkeys, replace recovery codes, mint links,
  *     add passkeys, sign out everywhere, approve OAuth requests or change any
  *     agent's access (http/admin-api.ts refuses every data POST but one). Someone who stole a link cannot
  *     erase the warning or lock the owner out in that window.
@@ -84,6 +85,8 @@ const HOUR = 60 * MINUTE;
 export const PASSKEY_SESSION_TTL_MS = 12 * HOUR;
 export const REAUTH_WINDOW_MS = 5 * MINUTE;
 export const ENROLL_COOLDOWN_MS = 24 * HOUR;
+/** Every 401 from login or reauth verify takes at least this long, known credential or not. */
+export const FAILURE_FLOOR_MS = 250;
 const CHALLENGE_TTL_MS = 5 * MINUTE;
 const GRANT_TTL_MS = 15 * MINUTE;
 const PREAUTH_MAX_AGE_S = 900;
@@ -101,6 +104,7 @@ const PRUNE_EVERY = 100;
 const SUPPORTED_ALGS = [-7, -257];
 const COOKIE_PREAUTH_HTTPS = "__Host-memrain_preauth";
 const COOKIE_PREAUTH_HTTP = "memrain_preauth";
+const SETUP_LINKS_PATH = "/admin/api/setup-links";
 /** What resolveClientKey returns for a caller without a trustworthy IP. */
 const SHARED_KEY = "internal";
 
@@ -141,6 +145,8 @@ export interface PasskeyRouteDeps {
 
 export interface PasskeyRoutes {
   handle(req: Request, url: URL): Promise<Response | null>;
+  /** Run `fn` alone among passkey state changes; sign-out-everywhere holds it. */
+  exclusive<T>(fn: () => Promise<T>): Promise<T>;
   /** Forget every pending challenge and grant (sign-out-everywhere). */
   clearEphemeral(): void;
 }
@@ -156,6 +162,8 @@ interface Challenge {
   challenge: string;
   purpose: "register" | "login" | "reauth";
   exp: number;
+  /** The sign-out epoch the challenge was issued in. */
+  epoch: number;
 }
 
 interface Grant {
@@ -212,6 +220,16 @@ function readCookieValues(req: Request, name: string): string[] {
   return out;
 }
 
+/**
+ * Hold a failed verify until FAILURE_FLOOR_MS has passed since `started`, so an
+ * unknown credential id answers no faster than a known one. performance.now()
+ * keeps it on the real clock when tests fake Date.
+ */
+async function padFailure(started: number): Promise<void> {
+  const left = FAILURE_FLOOR_MS - (performance.now() - started);
+  if (left > 0) await Bun.sleep(left);
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -262,6 +280,19 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
   const slowdown = new Map<string, { fails: number[]; until: number }>();
   const rateAudit = new Map<string, number>();
   const volume = { windowStart: 0, count: 0, warned: false };
+  // Sign-out-everywhere bumps it. A ceremony whose challenge predates the bump
+  // may not store a credential or mint a session, even if it took the
+  // challenge before the sign-out; checked under `exclusive`.
+  let epoch = 0;
+  // ponytail: single process; needs a DB advisory lock if the server ever runs
+  // more than one replica. Every passkey write that depends on a session or an
+  // earlier ceremony, and sign-out-everywhere, run one at a time through it.
+  let tail: Promise<unknown> = Promise.resolve();
+  function exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = tail.then(() => fn());
+    tail = run.catch(() => undefined);
+    return run;
+  }
   let failuresSincePrune = 0;
 
   const now = (): number => Date.now();
@@ -299,10 +330,10 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     }
   }
 
-  function putChallenge(key: string, c: Challenge): void {
+  function putChallenge(key: string, c: Omit<Challenge, "epoch">): void {
     prune();
     challenges.delete(key);
-    challenges.set(key, c);
+    challenges.set(key, { ...c, epoch });
   }
 
   /** Take-and-delete: a challenge is gone the moment anyone presents it. */
@@ -406,9 +437,12 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     const site = ctx.req.headers.get("sec-fetch-site");
     if (site !== null) return site === "same-origin";
     // Neither header: not a browser (every browser POST carries Origin). Only
-    // a bootstrap-bearer caller may come this way; the route checks the token.
+    // the setup-links route takes a bootstrap bearer, and only a valid one gets
+    // past here. Other routes never evaluate it, so junk bearers cannot drain
+    // the bootstrap login throttle.
+    if (ctx.url.pathname !== SETUP_LINKS_PATH) return false;
     const b = ctx.bearer();
-    return b === "throttled" ? "throttled" : b !== "none";
+    return b === "throttled" ? "throttled" : b === "ok";
   }
 
   /** Origin → body cap → JSON content type → parse. */
@@ -420,9 +454,8 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     if (!read.ok) return read.response;
     const ct = (ctx.req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
     if (ct !== "application/json") {
-      // Automation with the bootstrap bearer may POST with no body at all;
-      // the route itself decides whether the token is good.
-      if (read.buf.length === 0 && ctx.bearer() !== "none") return {};
+      // Automation with the bootstrap bearer may POST with no body at all.
+      if (read.buf.length === 0 && ctx.url.pathname === SETUP_LINKS_PATH && ctx.bearer() === "ok") return {};
       return err(415, "json_required");
     }
     let body: unknown;
@@ -440,6 +473,12 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     if (s.kind === "passkey") return false;
     // An operator session before any passkey exists has nothing to step up with.
     return countPasskeys(deps.engine()).then((n) => n === 0);
+  }
+
+  /** A ceremony that outlived a sign-out-everywhere: audited, refused. */
+  async function signedOut(ctx: Ctx, event: string, via?: PasskeyCreatedVia): Promise<Response> {
+    await audit(ctx, { event, outcome: "fail", reason: "signed_out", ...(via ? { via } : {}) });
+    return err(401, "passkey_failed");
   }
 
   function cooldownResponse(until: number): Response {
@@ -482,9 +521,10 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     const preauthHash = sha256Hex(preauth);
     const until = now() + GRANT_TTL_MS;
     const e = deps.engine();
+    const meta = { clientKey: ctx.clientKey, userAgent: ctx.req.headers.get("user-agent") };
     const r = kind === "setup_link"
-      ? await reserveSetupLink(e, field, preauthHash, until, now())
-      : await reserveRecoveryCode(e, field, preauthHash, until, now());
+      ? await reserveSetupLink(e, field, preauthHash, until, now(), meta)
+      : await reserveRecoveryCode(e, field, preauthHash, until, now(), meta);
     if (!r.ok) {
       await audit(ctx, {
         event: kind === "setup_link" ? "setup_link.redeem_failed" : "recovery.failed",
@@ -493,7 +533,8 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
       });
       return err(400, generic);
     }
-    grants.set(preauth, { source: kind, ref: r.ref, preauthHash, exp: until });
+    // A retry keeps its original lease, so the grant ends with it.
+    grants.set(preauth, { source: kind, ref: r.ref, preauthHash, exp: r.until });
     prune();
     await audit(ctx, {
       event: kind === "setup_link" ? "setup_link.redeemed" : "recovery.used",
@@ -501,7 +542,7 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
       via: kind,
     });
     const headers = new Headers({ "Set-Cookie": preauthCookie(ctx.rp, preauth) });
-    return Response.json({ ok: true, expires_in: GRANT_TTL_MS / 1000 }, { headers });
+    return Response.json({ ok: true, expires_in: Math.max(0, Math.round((r.until - now()) / 1000)) }, { headers });
   }
 
   async function registerOptions(ctx: Ctx): Promise<Response> {
@@ -607,52 +648,61 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
       label,
       createdVia: via,
     };
-    const e = deps.engine();
-    const createdAt = now();
-    let result;
-    try {
-      result = grant
-        ? await insertPasskeyWithGrant(e, row, { source: grant.source, ref: grant.ref, preauthHash: grant.preauthHash } as EnrollGrantRef, createdAt)
-        : await insertPasskeyForSession(e, row, createdAt);
-    } catch (e2) {
-      if (e2 instanceof PasskeyStoreError && (e2.code === "credential_exists" || e2.code === "grant_lost")) {
-        await audit(ctx, { event: "passkey.register_failed", outcome: "fail", reason: e2.code, via });
-        if (e2.code === "grant_lost" && preauth) grants.delete(preauth);
-        return err(e2.code === "credential_exists" ? 409 : 410, e2.code);
+    const issuedIn = challenge.epoch;
+    const sessionId = session?.id ?? null;
+    return exclusive(async () => {
+      // A sign-out since the challenge was issued, or since the session was
+      // checked, ends this ceremony.
+      if (issuedIn !== epoch || (sessionId !== null && deps.sessionApi.sessionOf(ctx.req)?.id !== sessionId)) {
+        return signedOut(ctx, "passkey.register_failed", via);
       }
-      throw e2;
-    }
-    // No owner existed to warn about the very first passkey, and a passkey the
-    // signed-in owner added is not news to them.
-    const notice = via !== "session" && !(via === "setup_link" && result.first);
-    await audit(ctx, {
-      event: "passkey.registered",
-      outcome: "ok",
-      via,
-      credential: credentialHash(row.id),
-      notice,
-      at: createdAt,
-    });
-    const headers = new Headers();
-    if (grant && preauth) {
-      grants.delete(preauth);
-      challenges.delete(`p:${preauth}`);
-      headers.append("Set-Cookie", preauthCookie(ctx.rp, null));
-      deps.sessionApi.create(ctx.req, headers, "passkey", PASSKEY_SESSION_TTL_MS, {
-        id: row.id,
-        createdVia: via,
-        initial: result.initial,
-        createdAt,
+      const e = deps.engine();
+      const createdAt = now();
+      let result;
+      try {
+        result = grant
+          ? await insertPasskeyWithGrant(e, row, { source: grant.source, ref: grant.ref, preauthHash: grant.preauthHash } as EnrollGrantRef, createdAt)
+          : await insertPasskeyForSession(e, row, createdAt);
+      } catch (e2) {
+        if (e2 instanceof PasskeyStoreError && (e2.code === "credential_exists" || e2.code === "grant_lost")) {
+          await audit(ctx, { event: "passkey.register_failed", outcome: "fail", reason: e2.code, via });
+          if (e2.code === "grant_lost" && preauth) grants.delete(preauth);
+          return err(e2.code === "credential_exists" ? 409 : 410, e2.code);
+        }
+        throw e2;
+      }
+      // No owner existed to warn about the very first passkey, and a passkey the
+      // signed-in owner added is not news to them.
+      const notice = via !== "session" && !(via === "setup_link" && result.first);
+      await audit(ctx, {
+        event: "passkey.registered",
+        outcome: "ok",
+        via,
+        credential: credentialHash(row.id),
+        notice,
+        at: createdAt,
       });
-    }
-    return Response.json(
-      {
-        ok: true,
-        passkey: { id: row.id, label: row.label },
-        ...(result.recoveryCodes ? { recovery_codes: result.recoveryCodes } : {}),
-      },
-      { headers },
-    );
+      const headers = new Headers();
+      if (grant && preauth) {
+        grants.delete(preauth);
+        challenges.delete(`p:${preauth}`);
+        headers.append("Set-Cookie", preauthCookie(ctx.rp, null));
+        deps.sessionApi.create(ctx.req, headers, "passkey", PASSKEY_SESSION_TTL_MS, {
+          id: row.id,
+          createdVia: via,
+          initial: result.initial,
+          createdAt,
+        });
+      }
+      return Response.json(
+        {
+          ok: true,
+          passkey: { id: row.id, label: row.label },
+          ...(result.recoveryCodes ? { recovery_codes: result.recoveryCodes } : {}),
+        },
+        { headers },
+      );
+    });
   }
 
   async function loginOptions(ctx: Ctx): Promise<Response> {
@@ -683,7 +733,13 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     const e = deps.engine();
     const handle = await ownerHandle(e);
     const userHandle = (response.response as Record<string, unknown> | undefined)?.userHandle;
-    if (typeof userHandle === "string" && userHandle !== handle) return { ok: false, reason: "user_handle_mismatch" };
+    if (userHandle === undefined || userHandle === null) {
+      // Login asks for a discoverable credential, which always returns its user
+      // handle. Reauth names the credentials, so the handle may be left out.
+      if (challenge.purpose === "login") return { ok: false, reason: "missing_user_handle" };
+    } else if (typeof userHandle !== "string" || userHandle !== handle) {
+      return { ok: false, reason: "user_handle_mismatch" };
+    }
     let newCounter: number;
     try {
       const v = await verifyAuthenticationResponse({
@@ -709,15 +765,25 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
   }
 
   async function loginVerify(ctx: Ctx): Promise<Response> {
+    const started = performance.now();
     const body = await readPost(ctx);
     if (body instanceof Response) return body;
     const response = responseField(body);
     if (!response) return err(400, "invalid_body");
     if (!allowPasskey(ctx)) return limited(ctx, "login");
+    // Before the lookup: the slowdown is per client key, so whether the id is
+    // known must not change the answer a slowed client gets.
+    const until = slowedUntil(ctx.clientKey);
+    if (until > 0) {
+      const retry = Math.max(1, Math.ceil((until - now()) / 1000));
+      await audit(ctx, { event: "passkey.login_failed", outcome: "fail", reason: "slowed" });
+      return Response.json({ error: "slowed", retry_after: retry }, { status: 429, headers: { "Retry-After": String(retry) } });
+    }
     const preauth = readPreauth(ctx.req, ctx.rp);
     const challenge = preauth ? takeChallenge(`p:${preauth}`, "login") : null;
     if (!challenge) {
       await audit(ctx, { event: "passkey.login_failed", outcome: "fail", reason: "bad_challenge" });
+      await padFailure(started);
       return err(401, "passkey_failed");
     }
     const e = deps.engine();
@@ -725,13 +791,8 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     if (!row) {
       // Not counted toward the slowdown: junk ids must not lock out a real key.
       await audit(ctx, { event: "passkey.login_failed", outcome: "fail", reason: "unknown_credential" });
+      await padFailure(started);
       return err(401, "passkey_failed");
-    }
-    const until = slowedUntil(ctx.clientKey);
-    if (until > 0) {
-      const retry = Math.max(1, Math.ceil((until - now()) / 1000));
-      await audit(ctx, { event: "passkey.login_failed", outcome: "fail", reason: "slowed" });
-      return Response.json({ error: "slowed", retry_after: retry }, { status: 429, headers: { "Retry-After": String(retry) } });
     }
     const cred = credentialHash(row.id);
     const r = await verifyAssertion(ctx, response, challenge, row);
@@ -745,23 +806,31 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
         credential: cred,
         notice: regression,
       });
+      await padFailure(started);
       return err(401, "passkey_failed");
     }
-    const headers = new Headers();
-    if (preauth) {
-      grants.delete(preauth);
-      challenges.delete(`p:${preauth}`);
-    }
-    headers.append("Set-Cookie", preauthCookie(ctx.rp, null));
-    deps.sessionApi.create(ctx.req, headers, "passkey", PASSKEY_SESSION_TTL_MS, {
-      id: row.id,
-      createdVia: row.createdVia,
-      initial: row.initial,
-      createdAt: row.createdAt,
+    const issuedIn = challenge.epoch;
+    const done = await exclusive(async () => {
+      if (issuedIn !== epoch) return null;
+      const headers = new Headers();
+      if (preauth) {
+        grants.delete(preauth);
+        challenges.delete(`p:${preauth}`);
+      }
+      headers.append("Set-Cookie", preauthCookie(ctx.rp, null));
+      deps.sessionApi.create(ctx.req, headers, "passkey", PASSKEY_SESSION_TTL_MS, {
+        id: row.id,
+        createdVia: row.createdVia,
+        initial: row.initial,
+        createdAt: row.createdAt,
+      });
+      await audit(ctx, { event: "passkey.login", outcome: "ok", credential: cred });
+      const notices = (await pendingNotices(e)).length;
+      return Response.json({ ok: true, notices }, { headers });
     });
-    await audit(ctx, { event: "passkey.login", outcome: "ok", credential: cred });
-    const notices = (await pendingNotices(e)).length;
-    return Response.json({ ok: true, notices }, { headers });
+    if (done) return done;
+    await padFailure(started);
+    return signedOut(ctx, "passkey.login_failed");
   }
 
   async function reauthOptions(ctx: Ctx): Promise<Response> {
@@ -783,6 +852,7 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
   }
 
   async function reauthVerify(ctx: Ctx): Promise<Response> {
+    const started = performance.now();
     const body = await readPost(ctx);
     if (body instanceof Response) return body;
     const response = responseField(body);
@@ -793,11 +863,13 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     const challenge = takeChallenge(`s:${s.id}`, "reauth");
     if (!challenge) {
       await audit(ctx, { event: "passkey.reauth_failed", outcome: "fail", reason: "bad_challenge" });
+      await padFailure(started);
       return err(401, "passkey_failed");
     }
     const row = await getPasskey(deps.engine(), response.id as string);
     if (!row) {
       await audit(ctx, { event: "passkey.reauth_failed", outcome: "fail", reason: "unknown_credential" });
+      await padFailure(started);
       return err(401, "passkey_failed");
     }
     const r = await verifyAssertion(ctx, response, challenge, row);
@@ -809,11 +881,18 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
         credential: credentialHash(row.id),
         notice: r.reason === "counter_regression",
       });
+      await padFailure(started);
       return err(401, "passkey_failed");
     }
-    deps.sessionApi.markReauth(s.id, now() + REAUTH_WINDOW_MS);
-    await audit(ctx, { event: "passkey.reauth", outcome: "ok", credential: credentialHash(row.id) });
-    return Response.json({ ok: true, reauth_until: new Date(now() + REAUTH_WINDOW_MS).toISOString() });
+    const issuedIn = challenge.epoch;
+    return exclusive(async () => {
+      if (issuedIn !== epoch || deps.sessionApi.sessionOf(ctx.req)?.id !== s.id) {
+        return signedOut(ctx, "passkey.reauth_failed");
+      }
+      deps.sessionApi.markReauth(s.id, now() + REAUTH_WINDOW_MS);
+      await audit(ctx, { event: "passkey.reauth", outcome: "ok", credential: credentialHash(row.id) });
+      return Response.json({ ok: true, reauth_until: new Date(now() + REAUTH_WINDOW_MS).toISOString() });
+    });
   }
 
   async function listRoute(ctx: Ctx): Promise<Response> {
@@ -843,11 +922,13 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     });
   }
 
-  async function renameRoute(ctx: Ctx): Promise<Response> {
-    const body = await readPost(ctx);
-    if (body instanceof Response) return body;
+  async function renameRoute(ctx: Ctx, body: Record<string, unknown>): Promise<Response> {
     const s = deps.sessionApi.sessionOf(ctx.req);
     if (!s) return err(401, "Admin authentication required");
+    // A thief in the cooldown could relabel the owner's keys so the owner
+    // revokes the wrong one.
+    const cd = cooldownUntil(s.session);
+    if (cd !== null) return cooldownResponse(cd);
     const label = labelField(body.label, null);
     if (typeof body.id !== "string" || body.id.length === 0 || body.id.length > 1024 || label === null) {
       return err(400, "invalid_body");
@@ -857,7 +938,8 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     return Response.json({ ok: true });
   }
 
-  /** Session + no cooldown + fresh step-up, in that order. */
+  /** Session + no cooldown + fresh step-up, in that order. Call it inside
+   *  `exclusive` together with the write it guards. */
   async function guardSensitive(ctx: Ctx): Promise<{ id: string; session: AdminSession } | Response> {
     const s = deps.sessionApi.sessionOf(ctx.req);
     if (!s) return err(401, "Admin authentication required");
@@ -867,9 +949,7 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     return s;
   }
 
-  async function revokeRoute(ctx: Ctx): Promise<Response> {
-    const body = await readPost(ctx);
-    if (body instanceof Response) return body;
+  async function revokeRoute(ctx: Ctx, body: Record<string, unknown>): Promise<Response> {
     const s = await guardSensitive(ctx);
     if (s instanceof Response) return s;
     if (typeof body.id !== "string" || body.id.length === 0 || body.id.length > 1024) return err(400, "invalid_body");
@@ -886,9 +966,7 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     return Response.json({ ok: true });
   }
 
-  async function regenerateRoute(ctx: Ctx): Promise<Response> {
-    const body = await readPost(ctx);
-    if (body instanceof Response) return body;
+  async function regenerateRoute(ctx: Ctx, body: Record<string, unknown>): Promise<Response> {
     const s = await guardSensitive(ctx);
     if (s instanceof Response) return s;
     const codes = await replaceRecoveryCodes(deps.engine(), now());
@@ -901,9 +979,7 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     return Response.json({ recovery_codes: codes });
   }
 
-  async function setupLinkRoute(ctx: Ctx): Promise<Response> {
-    const body = await readPost(ctx);
-    if (body instanceof Response) return body;
+  async function setupLinkRoute(ctx: Ctx, body: Record<string, unknown>): Promise<Response> {
     let via: "api" | "panel";
     const b = ctx.bearer();
     if (b === "throttled") return limited(ctx, "bootstrap");
@@ -980,9 +1056,7 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     return Response.json({ notices: rows.map((r) => eventJson(r, canAck(s.session, r))) });
   }
 
-  async function ackRoute(ctx: Ctx): Promise<Response> {
-    const body = await readPost(ctx);
-    if (body instanceof Response) return body;
+  async function ackRoute(ctx: Ctx, body: Record<string, unknown>): Promise<Response> {
     const s = deps.sessionApi.sessionOf(ctx.req);
     if (!s) return err(401, "Admin authentication required");
     const cd = cooldownUntil(s.session);
@@ -997,6 +1071,16 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
   }
 
   type Handler = (ctx: Ctx) => Promise<Response>;
+  /**
+   * Read the body first, then run the session check and the write under one
+   * hold of `exclusive`, so a sign-out-everywhere cannot land between them. The
+   * body is read outside: a slow upload must not hold the lock.
+   */
+  const locked = (route: (ctx: Ctx, body: Record<string, unknown>) => Promise<Response>): Handler => async (ctx) => {
+    const body = await readPost(ctx);
+    if (body instanceof Response) return body;
+    return exclusive(() => route(ctx, body));
+  };
   const routes = new Map<string, Handler>([
     ["POST /admin/api/passkey/enroll/redeem", (c) => redeemOrRecover(c, "setup_link")],
     ["POST /admin/api/passkey/recovery", (c) => redeemOrRecover(c, "recovery")],
@@ -1007,13 +1091,13 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     ["POST /admin/api/passkey/reauth/options", reauthOptions],
     ["POST /admin/api/passkey/reauth/verify", reauthVerify],
     ["GET /admin/api/passkeys", listRoute],
-    ["POST /admin/api/passkeys/rename", renameRoute],
-    ["POST /admin/api/passkeys/revoke", revokeRoute],
-    ["POST /admin/api/recovery-codes/regenerate", regenerateRoute],
-    ["POST /admin/api/setup-links", setupLinkRoute],
+    ["POST /admin/api/passkeys/rename", locked(renameRoute)],
+    ["POST /admin/api/passkeys/revoke", locked(revokeRoute)],
+    ["POST /admin/api/recovery-codes/regenerate", locked(regenerateRoute)],
+    ["POST /admin/api/setup-links", locked(setupLinkRoute)],
     ["GET /admin/api/security/events", eventsRoute],
     ["GET /admin/api/security/notices", noticesRoute],
-    ["POST /admin/api/security/notices/ack", ackRoute],
+    ["POST /admin/api/security/notices/ack", locked(ackRoute)],
   ]);
 
   async function handle(req: Request, url: URL): Promise<Response | null> {
@@ -1043,10 +1127,11 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
   }
 
   function clearEphemeral(): void {
+    epoch++;
     challenges.clear();
     grants.clear();
   }
 
-  return { handle, clearEphemeral };
+  return { handle, clearEphemeral, exclusive };
 }
 

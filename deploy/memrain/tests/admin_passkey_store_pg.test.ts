@@ -21,6 +21,7 @@ import {
   sha256Hex,
   updateCounterCas,
   type NewPasskey,
+  type ReserveResult,
 } from "../src/core/admin-passkey-store.ts";
 
 const URL_ = process.env.MEMRAIN_TEST_POSTGRES_URL;
@@ -93,6 +94,41 @@ describe.skipIf(!URL_)("admin passkey store on Postgres", () => {
       ]);
       expect([x.ok, y.ok].filter(Boolean)).toHaveLength(1);
     }
+  });
+
+  // Four new reservations (each after the previous lease lapsed), then two
+  // browsers race for the fifth: exactly one wins and it reports the cap.
+  async function raceFifth(reserve: (eng: PostgresEngine, h: string, u: number, n: number) => Promise<ReserveResult>, tag: string): Promise<void> {
+    const t = Date.now();
+    for (let n = 0; n < 4; n++) {
+      const now = t + n * 16 * MIN;
+      expect((await reserve(a, sha256Hex(`${tag}h${n}`), now + 15 * MIN, now)).ok).toBe(true);
+    }
+    const now = t + 4 * 16 * MIN;
+    const [x, y] = await Promise.all([
+      reserve(a, sha256Hex(`${tag}x`), now + 15 * MIN, now),
+      reserve(b, sha256Hex(`${tag}y`), now + 15 * MIN, now),
+    ]);
+    const won = [x, y].filter((r) => r.ok);
+    expect(won).toHaveLength(1);
+    expect(won[0]).toMatchObject({ capReached: true });
+    expect([x, y].find((r) => !r.ok)).toMatchObject({ ok: false });
+  }
+
+  it("two browsers racing for a link's fifth reservation: exactly one wins and it reports the cap", async () => {
+    for (let i = 0; i < ROUNDS; i++) {
+      const link = await mintSetupLink(a, { ttlMs: 3_600_000 * 3, via: "cli" });
+      await raceFifth((eng, h, u, n) => reserveSetupLink(eng, link.token, h, u, n), `l${i}`);
+    }
+    const notices = await a.query(`SELECT count(*)::int AS n FROM admin_auth_events WHERE event = 'setup_link.cap_reached' AND notice`);
+    expect(Number((notices.rows[0] as { n: number }).n)).toBe(ROUNDS);
+  });
+
+  it("two browsers racing for a recovery code's fifth reservation: exactly one wins and it reports the cap", async () => {
+    const codes = await replaceRecoveryCodes(a);
+    for (const code of codes) await raceFifth((eng, h, u, n) => reserveRecoveryCode(eng, code, h, u, n), code);
+    const notices = await a.query(`SELECT count(*)::int AS n FROM admin_auth_events WHERE event = 'recovery.cap_reached' AND notice`);
+    expect(Number((notices.rows[0] as { n: number }).n)).toBe(codes.length);
   });
 
   it("concurrent mints leave exactly one live link", async () => {

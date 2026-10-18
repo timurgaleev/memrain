@@ -1,5 +1,5 @@
 /**
- * Storage for admin passkey sign-in (migration 141).
+ * Storage for admin passkey sign-in (migrations 141 and 142).
  *
  * One owner, so every mutation that has to see a consistent picture of the
  * owner's credentials (insert, last-passkey revoke, minting a setup link,
@@ -82,8 +82,24 @@ export interface InsertResult {
   initial: boolean;
 }
 
-export type ReserveFailure = "unknown" | "used" | "expired" | "revoked" | "reserved" | "malformed";
-export type ReserveResult = { ok: true; ref: string } | { ok: false; reason: ReserveFailure };
+export type ReserveFailure = "unknown" | "used" | "expired" | "revoked" | "exhausted" | "reserved" | "malformed";
+/**
+ * `until` is when the reservation lapses. `capReached` is true only for the one
+ * reservation that used up the last of MAX_RESERVATIONS; that reservation also
+ * wrote the `*.cap_reached` notice in its own transaction.
+ */
+export type ReserveResult =
+  | { ok: true; ref: string; capReached: boolean; until: number }
+  | { ok: false; reason: ReserveFailure };
+
+/** Who asked, for the cap notice a reservation may write. */
+export interface ReserveMeta {
+  clientKey?: string | null;
+  userAgent?: string | null;
+}
+
+/** How often one setup link or recovery code can be reserved (migration 142). */
+export const MAX_RESERVATIONS = 5;
 
 export interface AuthEventInput {
   event: string;
@@ -403,13 +419,78 @@ interface ReservableRow {
   used_at: unknown;
   revoked_at?: unknown;
   expires_at?: unknown;
+  reservations: number;
+}
+
+/**
+ * Take or retry a reservation in one statement. A retry is the same browser
+ * inside its live lease: it is not counted and does not extend the lease, so
+ * retrying neither burns the row nor holds it past one lease. Anything else is
+ * a new reservation: it needs a lapsed (or no) lease and a count below
+ * MAX_RESERVATIONS, and it counts. The row lock taken by the CTE makes two
+ * racing reservations see each other's result.
+ */
+function reserveSql(table: "admin_setup_links" | "admin_recovery_codes"): string {
+  const [key, ref, live] = table === "admin_setup_links"
+    ? ["nonce_hash", "id", "AND l.revoked_at IS NULL AND l.expires_at > $4::timestamptz"]
+    : ["code_hash", "code_hash", ""];
+  return `WITH cur AS (
+      SELECT ${key} AS k, COALESCE(reserved_for = $2 AND reserved_until >= $4::timestamptz, false) AS retry
+        FROM ${table} WHERE ${key} = $1 FOR UPDATE
+    )
+    UPDATE ${table} l
+       SET reserved_for = $2,
+           reserved_until = CASE WHEN cur.retry THEN l.reserved_until ELSE $3::timestamptz END,
+           reservations = l.reservations + CASE WHEN cur.retry THEN 0 ELSE 1 END
+      FROM cur
+     WHERE l.${key} = cur.k AND l.used_at IS NULL ${live}
+       AND (cur.retry OR ((l.reserved_until IS NULL OR l.reserved_until < $4::timestamptz) AND l.reservations < $5))
+    RETURNING l.${ref} AS ref, l.reservations, l.reserved_until, NOT cur.retry AS fresh`;
+}
+
+interface ReservedRow {
+  ref: string;
+  reservations: number;
+  reserved_until: unknown;
+  fresh: boolean;
+}
+
+async function reserveRow(
+  e: Engine,
+  table: "admin_setup_links" | "admin_recovery_codes",
+  hash: string,
+  preauthHash: string,
+  untilMs: number,
+  nowMs: number,
+  meta: ReserveMeta,
+): Promise<{ ok: true; ref: string; capReached: boolean; until: number } | null> {
+  return e.transaction(async (tx) => {
+    const row = (await tx.query<ReservedRow>(reserveSql(table), [hash, preauthHash, iso(untilMs), iso(nowMs), MAX_RESERVATIONS])).rows[0];
+    if (!row) return null;
+    const capReached = row.fresh && Number(row.reservations) === MAX_RESERVATIONS;
+    if (capReached) {
+      // Same transaction as the reservation: the link cannot be exhausted
+      // without the owner being told.
+      await insertEvent(tx, {
+        event: table === "admin_setup_links" ? "setup_link.cap_reached" : "recovery.cap_reached",
+        outcome: "ok",
+        via: table === "admin_setup_links" ? "setup_link" : "recovery",
+        clientKey: meta.clientKey ?? null,
+        userAgent: meta.userAgent ?? null,
+        notice: true,
+        at: nowMs,
+      });
+    }
+    return { ok: true as const, ref: row.ref, capReached, until: toMs(row.reserved_until) };
+  });
 }
 
 /**
  * Reserve a setup link for the pre-auth browser `preauthHash` until `untilMs`.
- * A link already reserved by the same browser is re-reserved (a retry after a
- * cancelled ceremony); one reserved by another browser is refused until the
- * reservation lapses. The failure reason is for the audit log only.
+ * A retry from the browser that holds it succeeds within its lease; another
+ * browser is refused until the lease lapses. After MAX_RESERVATIONS new
+ * reservations the link is exhausted for everyone. The failure reason is for
+ * the audit log only.
  */
 export async function reserveSetupLink(
   e: Engine,
@@ -417,25 +498,21 @@ export async function reserveSetupLink(
   preauthHash: string,
   untilMs: number,
   nowMs: number = Date.now(),
+  meta: ReserveMeta = {},
 ): Promise<ReserveResult> {
   if (!SETUP_TOKEN_RE.test(token)) return { ok: false, reason: "malformed" };
   const hash = sha256Hex(token);
-  const r = await e.query<{ id: string }>(
-    `UPDATE admin_setup_links SET reserved_for = $2, reserved_until = $3::timestamptz
-      WHERE nonce_hash = $1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > $4::timestamptz
-        AND (reserved_until IS NULL OR reserved_until < $4::timestamptz OR reserved_for = $2)
-      RETURNING id`,
-    [hash, preauthHash, iso(untilMs), iso(nowMs)],
-  );
-  if (r.rows[0]) return { ok: true, ref: r.rows[0].id };
+  const ok = await reserveRow(e, "admin_setup_links", hash, preauthHash, untilMs, nowMs, meta);
+  if (ok) return ok;
   const row = (await e.query<ReservableRow>(
-    `SELECT used_at, revoked_at, expires_at FROM admin_setup_links WHERE nonce_hash = $1`,
+    `SELECT used_at, revoked_at, expires_at, reservations FROM admin_setup_links WHERE nonce_hash = $1`,
     [hash],
   )).rows[0];
   if (!row) return { ok: false, reason: "unknown" };
   if (row.used_at !== null) return { ok: false, reason: "used" };
   if (row.revoked_at !== null) return { ok: false, reason: "revoked" };
   if (toMs(row.expires_at) <= nowMs) return { ok: false, reason: "expired" };
+  if (Number(row.reservations) >= MAX_RESERVATIONS) return { ok: false, reason: "exhausted" };
   return { ok: false, reason: "reserved" };
 }
 
@@ -447,25 +524,30 @@ export async function reserveRecoveryCode(
   preauthHash: string,
   untilMs: number,
   nowMs: number = Date.now(),
+  meta: ReserveMeta = {},
 ): Promise<ReserveResult> {
   const normalized = normalizeRecoveryCode(code);
   if (!normalized) return { ok: false, reason: "malformed" };
   const hash = sha256Hex(normalized);
-  const r = await e.query<{ code_hash: string }>(
-    `UPDATE admin_recovery_codes SET reserved_for = $2, reserved_until = $3::timestamptz
-      WHERE code_hash = $1 AND used_at IS NULL
-        AND (reserved_until IS NULL OR reserved_until < $4::timestamptz OR reserved_for = $2)
-      RETURNING code_hash`,
-    [hash, preauthHash, iso(untilMs), iso(nowMs)],
-  );
-  if (r.rows[0]) return { ok: true, ref: r.rows[0].code_hash };
+  const ok = await reserveRow(e, "admin_recovery_codes", hash, preauthHash, untilMs, nowMs, meta);
+  if (ok) return ok;
   const row = (await e.query<ReservableRow>(
-    `SELECT used_at FROM admin_recovery_codes WHERE code_hash = $1`,
+    `SELECT used_at, reservations FROM admin_recovery_codes WHERE code_hash = $1`,
     [hash],
   )).rows[0];
   if (!row) return { ok: false, reason: "unknown" };
   if (row.used_at !== null) return { ok: false, reason: "used" };
+  if (Number(row.reservations) >= MAX_RESERVATIONS) return { ok: false, reason: "exhausted" };
   return { ok: false, reason: "reserved" };
+}
+
+/** Drop every live recovery-code reservation (sign-out-everywhere). Returns how many. */
+export async function releaseRecoveryReservations(e: Engine): Promise<number> {
+  const r = await e.query(
+    `UPDATE admin_recovery_codes SET reserved_for = NULL, reserved_until = NULL
+      WHERE used_at IS NULL AND reserved_for IS NOT NULL RETURNING code_hash`,
+  );
+  return r.rows.length;
 }
 
 /** Replace the whole recovery set; the old codes stop working at once. */

@@ -20,10 +20,14 @@
  *
  * The scheme counts as well as the host: a page on `http://` of our own host is
  * not us. Behind a TLS-terminating proxy the server sees plain http, so when
- * `publicUrl` names this host its origin is the one to match exactly; without
- * it, a request the server itself received over https must carry an https
- * origin, and plain http behind a proxy stays host-only.
+ * `publicUrl` names this host its origin is the one to match exactly. For any
+ * other host, a trusted proxy's `X-Forwarded-Proto` (MEMRAIN_HTTP_TRUST_PROXY)
+ * gives the scheme the browser used, and the origin must carry it. Without
+ * that header, a request the server itself received over https must carry an
+ * https origin, and plain http behind a proxy stays host-only.
  */
+import { trustProxyHeaders } from "./client-key.ts";
+
 export function isSameOriginPost(req: Request, url: URL, publicUrl?: string): boolean {
   const origin = req.headers.get("origin");
   if (origin !== null) {
@@ -36,6 +40,8 @@ export function isSameOriginPost(req: Request, url: URL, publicUrl?: string): bo
       if (parsed.host !== url.host) return false;
       const configured = configuredOrigin(publicUrl);
       if (configured !== null && configured.host === url.host) return parsed.origin === configured.origin;
+      const forwarded = trustedForwardedScheme(req);
+      if (forwarded !== null) return parsed.protocol === forwarded;
       return url.protocol !== "https:" || parsed.protocol === "https:";
     } catch {
       return false;
@@ -43,6 +49,13 @@ export function isSameOriginPost(req: Request, url: URL, publicUrl?: string): bo
   }
   const site = req.headers.get("sec-fetch-site");
   return site === null || site === "same-origin";
+}
+
+/** The scheme a trusted proxy says the browser used, or null when unknown. */
+function trustedForwardedScheme(req: Request): "https:" | "http:" | null {
+  if (!trustProxyHeaders()) return null;
+  const p = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  return p === "https" || p === "http" ? `${p}:` : null;
 }
 
 function configuredOrigin(publicUrl: string | undefined): URL | null {

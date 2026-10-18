@@ -14,7 +14,8 @@ import type { PublicKeyCredentialCreationOptionsJSON, PublicKeyCredentialRequest
 import { Storage } from "../src/core/storage.ts";
 import { createAdminAuth, type AdminAuth } from "../src/http/admin.ts";
 import { handleAdminApi } from "../src/http/admin-api.ts";
-import { credentialHash, listAuthEvents } from "../src/core/admin-passkey-store.ts";
+import { FAILURE_FLOOR_MS } from "../src/http/admin-passkey.ts";
+import { credentialHash, getPasskey, listAuthEvents, listPasskeys } from "../src/core/admin-passkey-store.ts";
 import { SoftAuthenticator } from "./helpers/soft-authenticator.ts";
 
 const BOOT = "boot-secret-token-for-passkey-tests";
@@ -179,6 +180,77 @@ async function settledOwner(): Promise<{ b: Browser; soft: SoftAuthenticator; co
   const fresh = new Browser();
   expect((await login(fresh, soft)).status).toBe(200);
   return { b: fresh, soft, codes: body.recovery_codes as string[] };
+}
+
+/**
+ * Pause the first query matching `pattern` (also inside a transaction) until
+ * `release()`; `hit` resolves once it is paused. `restore()` undoes the hook.
+ */
+function gateQuery(pattern: RegExp, fail = false): { hit: Promise<void>; release: () => void; restore: () => void } {
+  const real = storage.engine.bind(storage);
+  let onHit!: () => void;
+  let release!: () => void;
+  const hit = new Promise<void>((r) => (onHit = r));
+  const open = new Promise<void>((r) => (release = r));
+  let armed = true;
+  const wrap = (eng: ReturnType<Storage["engine"]>): ReturnType<Storage["engine"]> =>
+    new Proxy(eng, {
+      get(t, prop) {
+        if (prop === "query") {
+          return async (sql: string, params?: unknown[]) => {
+            if (armed && pattern.test(sql)) {
+              armed = false;
+              onHit();
+              if (fail) throw new Error("injected failure");
+              await open;
+            }
+            return t.query(sql, params as never);
+          };
+        }
+        if (prop === "transaction") {
+          return (fn: (tx: typeof t) => Promise<unknown>) => t.transaction((tx) => fn(wrap(tx)));
+        }
+        const v = (t as unknown as Record<string | symbol, unknown>)[prop];
+        return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+  storage.engine = () => wrap(real());
+  return { hit, release, restore: () => { storage.engine = real; } };
+}
+
+/** Sign out everywhere from `b` while another request is paused, then let it go. */
+async function signOutDuring(b: Browser, gate: ReturnType<typeof gateQuery>, paused: Promise<Response>): Promise<Response> {
+  await gate.hit;
+  const out = b.post("/admin/api/sign-out-everywhere");
+  while (b.signedIn()) await Bun.sleep(1);
+  gate.release();
+  expect((await out).status).toBe(200);
+  return paused;
+}
+
+/**
+ * With `paused` stopped at the gate (inside the passkey lock), sign out
+ * everywhere from `b`, check whether the sign-out had to wait, then let both
+ * finish.
+ */
+async function signOutWhilePaused(b: Browser, gate: ReturnType<typeof gateQuery>, paused: Promise<Response>): Promise<{ res: Response; waited: boolean }> {
+  await gate.hit;
+  const out = b.post("/admin/api/sign-out-everywhere");
+  await Bun.sleep(30);
+  const waited = b.signedIn();
+  gate.release();
+  const [res, done] = await Promise.all([paused, out]);
+  expect(done.status).toBe(200);
+  expect(b.signedIn()).toBe(false);
+  return { res, waited };
+}
+
+/** A settled owner signed in (and stepped up) in a second browser. */
+async function steppedUpSession(soft: SoftAuthenticator, ip: string): Promise<Browser> {
+  const a = new Browser(ip);
+  expect((await login(a, soft)).status).toBe(200);
+  expect((await reauth(a, soft)).status).toBe(200);
+  return a;
 }
 
 async function events(): Promise<{ event: string; outcome: string; reason: string | null; notice: boolean; credential: string | null }[]> {
@@ -407,6 +479,57 @@ describe("ceremony checks", () => {
     expect((await login(new Browser("198.51.100.45"), counted, { counter: 7 })).status).toBe(200);
   });
 
+  it("a discoverable login without the owner's user handle is refused", async () => {
+    const { soft } = await enroll(new Browser(), await bearerLink());
+    soft.userHandle = null;
+    const b = new Browser("198.51.100.50");
+    expect((await login(b, soft)).status).toBe(401);
+    expect(b.signedIn()).toBe(false);
+    expect((await events()).some((x) => x.event === "passkey.login_failed" && x.reason === "missing_user_handle")).toBe(true);
+  });
+
+  it("reauth accepts an assertion without a user handle, since it names the credentials", async () => {
+    const { b, soft } = await settledOwner();
+    soft.userHandle = null;
+    expect((await reauth(b, soft)).status).toBe(200);
+  });
+
+  it("a non-string user handle is refused as a mismatch", async () => {
+    const { soft } = await enroll(new Browser(), await bearerLink());
+    const b = new Browser("198.51.100.51");
+    const response = soft.assert(await loginOptions(b));
+    (response.response as unknown as Record<string, unknown>).userHandle = 123;
+    expect((await b.post("/admin/api/passkey/login/verify", { response })).status).toBe(401);
+    expect((await events()).some((x) => x.event === "passkey.login_failed" && x.reason === "user_handle_mismatch")).toBe(true);
+  });
+
+  it("unknown and known-but-wrong credentials both take at least the failure floor, on login and reauth", async () => {
+    const { soft } = await enroll(new Browser(), await bearerLink());
+    const stranger = new SoftAuthenticator(ORIGIN, RP_ID);
+    stranger.userHandle = soft.userHandle;
+    const cases = [
+      [new Browser("198.51.100.62"), stranger, {}],
+      [new Browser("198.51.100.63"), soft, { origin: "https://evil.example" }],
+    ] as const;
+    for (const [b, s, over] of cases) {
+      const opts = await loginOptions(b);
+      const t0 = performance.now();
+      const res = await b.post("/admin/api/passkey/login/verify", { response: s.assert(opts, over) });
+      expect(res.status).toBe(401);
+      expect(performance.now() - t0).toBeGreaterThanOrEqual(FAILURE_FLOOR_MS - 5);
+    }
+    const owner = new Browser("198.51.100.64");
+    expect((await login(owner, soft)).status).toBe(200);
+    const ro = ((await (await owner.post("/admin/api/passkey/reauth/options")).json()) as { optionsJSON: PublicKeyCredentialRequestOptionsJSON }).optionsJSON;
+    const t0 = performance.now();
+    expect((await owner.post("/admin/api/passkey/reauth/verify", { response: stranger.assert(ro) })).status).toBe(401);
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(FAILURE_FLOOR_MS - 5);
+    const ro2 = ((await (await owner.post("/admin/api/passkey/reauth/options")).json()) as { optionsJSON: PublicKeyCredentialRequestOptionsJSON }).optionsJSON;
+    const t1 = performance.now();
+    expect((await owner.post("/admin/api/passkey/reauth/verify", { response: soft.assert(ro2, { origin: "https://evil.example" }) })).status).toBe(401);
+    expect(performance.now() - t1).toBeGreaterThanOrEqual(FAILURE_FLOOR_MS - 5);
+  });
+
   it("an unknown credential gets the same body as any other failure", async () => {
     const { soft } = await enroll(new Browser(), await bearerLink());
     const stranger = new SoftAuthenticator(ORIGIN, RP_ID);
@@ -483,6 +606,41 @@ describe("setup links and grants", () => {
     expect((await g.call("/admin/api/security/events")).status).toBe(401);
   });
 
+  it("a link or code is retired after 5 reservations, with exactly one notice", async () => {
+    const { codes } = await settledOwner();
+    for (const [kind, path, body, failed, cap] of [
+      ["setup_link", "/admin/api/passkey/enroll/redeem", { token: await bearerLink() }, "setup_link.redeem_failed", "setup_link.cap_reached"],
+      ["recovery", "/admin/api/passkey/recovery", { code: codes[4] }, "recovery.failed", "recovery.cap_reached"],
+    ] as const) {
+      const b = new Browser(kind === "setup_link" ? "198.51.100.97" : "198.51.100.98");
+      const statuses: number[] = [];
+      for (let i = 0; i < 8; i++) {
+        statuses.push((await b.post(path, body)).status);
+        tick(15 * MIN + 1000); // the lease lapses, so the next redeem is a new reservation
+      }
+      expect({ kind, statuses }).toEqual({ kind, statuses: [200, 200, 200, 200, 200, 400, 400, 400] });
+      const all = await events();
+      expect(all.filter((x) => x.event === cap).map((x) => x.notice)).toEqual([true]);
+      expect(all.filter((x) => x.event === failed).map((x) => [x.reason, x.notice])).toEqual([
+        ["exhausted", false], ["exhausted", false], ["exhausted", false],
+      ]);
+      // Another browser is refused too.
+      expect((await new Browser("198.51.100.99").post(path, body)).status).toBe(400);
+    }
+  });
+
+  it("retrying within a live reservation never burns a link or code", async () => {
+    const { codes } = await settledOwner();
+    for (const [path, body] of [
+      ["/admin/api/passkey/enroll/redeem", { token: await bearerLink() }],
+      ["/admin/api/passkey/recovery", { code: codes[5] }],
+    ] as const) {
+      const b = new Browser(path.endsWith("recovery") ? "198.51.100.88" : "198.51.100.87");
+      for (let i = 0; i < 8; i++) expect({ path, i, s: (await b.post(path, body)).status }).toEqual({ path, i, s: 200 });
+    }
+    expect((await events()).filter((x) => x.event.endsWith(".cap_reached"))).toEqual([]);
+  });
+
   it("recovery: a code yields an enroll grant, not a session, and is spent only by the new passkey", async () => {
     const { codes } = await settledOwner();
     const b = new Browser("198.51.100.93");
@@ -532,6 +690,29 @@ describe("request gate", () => {
     expect((await noOrigin.post("/admin/api/passkey/login/options", {}, { "sec-fetch-site": "same-origin" })).status).toBe(200);
     expect((await noOrigin.post("/admin/api/passkey/login/options", {}, { "sec-fetch-site": "cross-site" })).status).toBe(403);
     expect((await noOrigin.post("/admin/api/passkey/login/options")).status).toBe(403);
+  });
+
+  it("a junk bearer without Origin is refused on every passkey POST and leaves the login throttle alone", async () => {
+    for (const p of POSTS.filter((x) => x !== "/admin/api/setup-links")) {
+      const req = new Request(`${INTERNAL}${p}`, {
+        method: "POST",
+        headers: { authorization: "Bearer junk", "content-type": "application/json" },
+        body: "{}",
+      });
+      expect({ p, s: (await auth.handleAuthRoute(req, new URL(req.url)))!.status }).toEqual({ p, s: 403 });
+    }
+    // The 12 junk requests above came from the shared key; the owner can still log in.
+    const login = await auth.handleAuthRoute(
+      new Request(`${INTERNAL}/admin/login`, { method: "POST", body: JSON.stringify({ token: BOOT }) }),
+      new URL(`${INTERNAL}/admin/login`),
+    );
+    expect(login!.status).toBe(200);
+  });
+
+  it("setup-links without Origin: a valid bearer mints, a wrong one is refused at the gate", async () => {
+    expect(await bearerLink()).toMatch(/^[\w-]{43}$/);
+    const wrong = new Request(`${INTERNAL}/admin/api/setup-links`, { method: "POST", headers: { authorization: "Bearer nope" } });
+    expect((await auth.handleAuthRoute(wrong, new URL(wrong.url)))!.status).toBe(403);
   });
 
   it("refuses a non-JSON body (415), except an empty body carrying the bootstrap bearer", async () => {
@@ -595,11 +776,11 @@ describe("request gate", () => {
 });
 
 describe("setup-links route", () => {
-  it("bootstrap bearer mints (via=api); wrong bearer 401; a session needs step-up; bearer wins over a session", async () => {
+  it("bootstrap bearer mints (via=api); wrong bearer without Origin is refused at the gate; a session needs step-up; bearer wins over a session", async () => {
     const ok = await bearerLink();
     expect(ok).toMatch(/^[\w-]{43}$/);
     const wrong = new Request(`${INTERNAL}/admin/api/setup-links`, { method: "POST", headers: { authorization: "Bearer nope" } });
-    expect((await auth.handleAuthRoute(wrong, new URL(wrong.url)))!.status).toBe(401);
+    expect((await auth.handleAuthRoute(wrong, new URL(wrong.url)))!.status).toBe(403);
 
     const { b } = await settledOwner();
     const res = await b.post("/admin/api/setup-links", {});
@@ -791,6 +972,31 @@ describe("step-up, revoke and cooldown", () => {
     expect(await res.json()).toEqual({ error: "reauth_required" });
   });
 
+  it("a cooldown session cannot rename a passkey; after the cooldown it can", async () => {
+    const { soft: owner } = await settledOwner();
+    const thief = new Browser("198.51.100.146");
+    const { soft } = await enroll(thief, await bearerLink());
+    const r = await thief.post("/admin/api/passkeys/rename", { id: owner.credentialId, label: "Old phone" });
+    expect(r.status).toBe(403);
+    expect(await r.json()).toMatchObject({ error: "cooldown" });
+    expect((await listPasskeys(storage.engine())).find((x) => x.id === owner.credentialId)!.label).toBe("Laptop");
+    tick(25 * HOUR);
+    const later = new Browser("198.51.100.147");
+    expect((await login(later, soft)).status).toBe(200);
+    expect((await later.post("/admin/api/passkeys/rename", { id: owner.credentialId, label: "Old phone" })).status).toBe(200);
+  });
+
+  it("an operator session past 10 minutes steps up with a passkey, or signs in again with the token", async () => {
+    const { soft } = await settledOwner();
+    const op = await operator();
+    tick(11 * MIN);
+    expect(await (await op.post("/admin/api/setup-links", {})).json()).toEqual({ error: "reauth_required" });
+    expect((await reauth(op, soft)).status).toBe(200);
+    expect((await op.post("/admin/api/setup-links", {})).status).toBe(200);
+    const op2 = await operator();
+    expect((await op2.post("/admin/api/setup-links", {})).status).toBe(200);
+  });
+
   it("a recovery-code passkey is in cooldown too", async () => {
     const { codes } = await settledOwner();
     const b = new Browser("198.51.100.150");
@@ -851,9 +1057,9 @@ describe("rate limits", () => {
     const { soft } = await enroll(new Browser(), await bearerLink());
     const stranger = new SoftAuthenticator(ORIGIN, RP_ID);
     const a = new Browser("198.51.100.180");
-    for (let i = 0; i < 1000; i++) {
-      // Spread over time so the 30/min bucket is not what is being measured.
-      if (i % 10 === 0) tick(MIN);
+    // Well past the 5-failure threshold and inside the 30/min bucket; every
+    // refusal also waits out the failure floor.
+    for (let i = 0; i < 12; i++) {
       const opts = await loginOptions(a);
       expect((await a.post("/admin/api/passkey/login/verify", { response: stranger.assert(opts) })).status).toBe(401);
     }
@@ -873,6 +1079,19 @@ describe("rate limits", () => {
     tick(3 * MIN + 1000);
     expect((await login(bad, soft)).status).toBe(200);
   }, 120_000);
+
+  it("a slowed client gets the same 429 for an unknown credential as for a known one", async () => {
+    const { soft } = await enroll(new Browser(), await bearerLink());
+    const stranger = new SoftAuthenticator(ORIGIN, RP_ID);
+    stranger.userHandle = soft.userHandle;
+    const bad = new Browser("198.51.100.183");
+    for (let i = 0; i < 5; i++) expect((await login(bad, soft, { origin: "https://evil.example" })).status).toBe(401);
+    const known = await login(bad, soft);
+    const unknown = await login(bad, stranger);
+    expect(unknown.status).toBe(429);
+    expect(await unknown.json()).toMatchObject({ error: "slowed" });
+    expect((await known.json() as { error: string }).error).toBe("slowed");
+  }, 30_000);
 
   it("redeem buckets are per client key and hold for a full hour; 429s write one row per window", async () => {
     const a = new Browser("198.51.100.190");
@@ -943,5 +1162,134 @@ describe("sign-out-everywhere", () => {
     expect((await loginB.post("/admin/api/passkey/login/verify", { response: soft.assert(lo) })).status).toBe(401);
     expect((await new Browser("198.51.100.203").post("/admin/api/passkey/enroll/redeem", { token: unused })).status).toBe(400);
     expect((await events()).some((x) => x.event === "setup_link.revoked")).toBe(true);
+  });
+
+  it("a login paused after its challenge was taken cannot create a session after it", async () => {
+    const { b, soft } = await settledOwner();
+    const late = new Browser("198.51.100.204");
+    const opts = await loginOptions(late);
+    const gate = gateQuery(/UPDATE admin_passkeys SET counter/);
+    try {
+      const res = await signOutDuring(b, gate, late.post("/admin/api/passkey/login/verify", { response: soft.assert(opts) }));
+      expect(res.status).toBe(401);
+      expect(late.signedIn()).toBe(false);
+      expect((await events()).some((x) => x.event === "passkey.login_failed" && x.reason === "signed_out")).toBe(true);
+    } finally {
+      gate.restore();
+    }
+  });
+
+  it("waits for an enrolment in its insert, then ends the session it minted", async () => {
+    await settledOwner();
+    const op = await operator();
+    const late = new Browser("198.51.100.205");
+    expect((await late.post("/admin/api/passkey/enroll/redeem", { token: await bearerLink() })).status).toBe(200);
+    const opts = await registerOptions(late);
+    const gate = gateQuery(/SELECT count\(\*\)::int AS n FROM admin_recovery_codes WHERE used_at IS NULL/);
+    try {
+      const { res, waited } = await signOutWhilePaused(op, gate, late.post("/admin/api/passkey/register/verify", { response: new SoftAuthenticator(ORIGIN, RP_ID).register(opts) }));
+      expect(waited).toBe(true);
+      expect(res.status).toBe(200);
+      expect(late.signedIn()).toBe(false);
+    } finally {
+      gate.restore();
+    }
+  });
+
+  it("waits for a recovery-code replacement; the old session gets 401 afterwards", async () => {
+    const { soft } = await settledOwner();
+    const op = await operator();
+    const a = await steppedUpSession(soft, "198.51.100.208");
+    const gate = gateQuery(/DELETE FROM admin_recovery_codes/);
+    try {
+      const { res, waited } = await signOutWhilePaused(op, gate, a.post("/admin/api/recovery-codes/regenerate"));
+      expect(waited).toBe(true);
+      expect(res.status).toBe(200);
+    } finally {
+      gate.restore();
+    }
+    expect(a.signedIn()).toBe(false);
+    expect((await a.post("/admin/api/recovery-codes/regenerate")).status).toBe(401);
+  });
+
+  it("waits for a panel setup-link mint, then revokes that link; the old session gets 401 afterwards", async () => {
+    const { soft } = await settledOwner();
+    const op = await operator();
+    const a = await steppedUpSession(soft, "198.51.100.209");
+    const gate = gateQuery(/INSERT INTO admin_setup_links/);
+    try {
+      const { res, waited } = await signOutWhilePaused(op, gate, a.post("/admin/api/setup-links", {}));
+      expect(waited).toBe(true);
+      expect(res.status).toBe(200);
+    } finally {
+      gate.restore();
+    }
+    const live = await storage.engine().query(`SELECT id FROM admin_setup_links WHERE used_at IS NULL AND revoked_at IS NULL`);
+    expect(live.rows).toEqual([]);
+    expect((await a.post("/admin/api/setup-links", {})).status).toBe(401);
+  });
+
+  it("waits for a passkey revoke; the old session gets 401 afterwards", async () => {
+    const { soft } = await settledOwner();
+    const op = await operator();
+    const a = await steppedUpSession(soft, "198.51.100.212");
+    const gate = gateQuery(/DELETE FROM admin_passkeys/);
+    try {
+      const { res, waited } = await signOutWhilePaused(op, gate, a.post("/admin/api/passkeys/revoke", { id: soft.credentialId, confirm_last: true }));
+      expect(waited).toBe(true);
+      expect(res.status).toBe(200);
+    } finally {
+      gate.restore();
+    }
+    expect((await a.post("/admin/api/passkeys/revoke", { id: "x" })).status).toBe(401);
+  });
+
+  it("waits for a step-up; the session it marked is gone afterwards", async () => {
+    const { soft } = await settledOwner();
+    const op = await operator();
+    const a = new Browser("198.51.100.213");
+    expect((await login(a, soft)).status).toBe(200);
+    const opts = ((await (await a.post("/admin/api/passkey/reauth/options")).json()) as { optionsJSON: PublicKeyCredentialRequestOptionsJSON }).optionsJSON;
+    const gate = gateQuery(/INSERT INTO admin_auth_events/);
+    try {
+      const { res, waited } = await signOutWhilePaused(op, gate, a.post("/admin/api/passkey/reauth/verify", { response: soft.assert(opts) }));
+      expect(waited).toBe(true);
+      expect(res.status).toBe(200);
+    } finally {
+      gate.restore();
+    }
+    expect(a.signedIn()).toBe(false);
+  });
+
+  it("releases recovery codes even when revoking setup links fails", async () => {
+    const { b, codes } = await settledOwner();
+    expect((await new Browser("198.51.100.210").post("/admin/api/passkey/recovery", { code: codes[7] })).status).toBe(200);
+    const gate = gateQuery(/UPDATE admin_setup_links SET revoked_at/, true);
+    try {
+      expect((await b.post("/admin/api/sign-out-everywhere")).status).toBe(200);
+    } finally {
+      gate.restore();
+    }
+    expect((await new Browser("198.51.100.211").post("/admin/api/passkey/recovery", { code: codes[7] })).status).toBe(200);
+  });
+
+  it("releases recovery codes reserved before it", async () => {
+    const { b, codes } = await settledOwner();
+    expect((await new Browser("198.51.100.206").post("/admin/api/passkey/recovery", { code: codes[6] })).status).toBe(200);
+    expect((await b.post("/admin/api/sign-out-everywhere")).status).toBe(200);
+    expect((await new Browser("198.51.100.207").post("/admin/api/passkey/recovery", { code: codes[6] })).status).toBe(200);
+  });
+
+  it("voids magic links minted before it", async () => {
+    const { b } = await settledOwner();
+    const mint = await auth.handleAuthRoute(
+      new Request(`${INTERNAL}/admin/api/issue-magic-link`, { method: "POST", headers: { authorization: `Bearer ${BOOT}` } }),
+      new URL(`${INTERNAL}/admin/api/issue-magic-link`),
+    );
+    const link = new URL(((await mint!.json()) as { url: string }).url);
+    expect((await b.post("/admin/api/sign-out-everywhere")).status).toBe(200);
+    const redeemed = await auth.handleAuthRoute(new Request(`${INTERNAL}${link.pathname}`), link);
+    expect(redeemed!.status).toBe(401);
+    expect(redeemed!.headers.getSetCookie()).toEqual([]);
   });
 });

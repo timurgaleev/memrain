@@ -28,7 +28,7 @@ import { resolveClientKey } from "./client-key.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 import { LEGACY_ADMIN_COOKIE, LEGACY_APPROVAL_PARAM, LEGACY_RETURN_TO_COOKIE } from "../core/brand.ts";
 import type { Storage } from "../core/storage.ts";
-import { revokeUnusedSetupLinks, recordAuthEvent } from "../core/admin-passkey-store.ts";
+import { releaseRecoveryReservations, revokeUnusedSetupLinks, recordAuthEvent } from "../core/admin-passkey-store.ts";
 import {
   cooldownUntil,
   createPasskeyRoutes,
@@ -549,37 +549,51 @@ export function createAdminAuth(opts: AdminAuthOptions): AdminAuth {
     }
 
     // POST /admin/api/sign-out-everywhere — clear all sessions (requires a
-    // session), every pending passkey ceremony and every unused setup link.
+    // session), every unredeemed magic link, every pending passkey ceremony,
+    // every unused setup link and every recovery-code reservation.
     if (p === "/admin/api/sign-out-everywhere" && req.method === "POST") {
-      if (!isSameOriginPost(req, url, opts.publicUrl)) return Response.json({ error: "Cross-origin request refused" }, { status: 403 });
-      if (!requireAdmin(req)) return Response.json({ error: "Admin authentication required" }, { status: 401 });
-      // Run in a loop, it would keep the owner from staying signed in long
-      // enough to remove the passkey that runs it.
-      const cooldown = sessionCooldown(req);
-      if (cooldown !== null) return cooldownRefusal(cooldown);
-      const count = sessions.size;
-      sessions.clear();
-      approvals.clear();
-      if (passkey && storage) {
-        passkey.clearEphemeral();
-        try {
-          const revoked = await revokeUnusedSetupLinks(storage.engine());
-          if (revoked > 0) {
-            await recordAuthEvent(storage.engine(), {
-              event: "setup_link.revoked",
-              outcome: "ok",
-              reason: `count=${revoked}`,
-              clientKey: resolveClientKey(req),
-              userAgent: req.headers.get("user-agent"),
-            });
+      // Waits for every passkey operation already holding the lock, and none
+      // starts until the sessions, ceremonies, links and reservations are gone.
+      const signOut = async (): Promise<Response> => {
+        if (!isSameOriginPost(req, url, opts.publicUrl)) return Response.json({ error: "Cross-origin request refused" }, { status: 403 });
+        if (!requireAdmin(req)) return Response.json({ error: "Admin authentication required" }, { status: 401 });
+        // Run in a loop, it would keep the owner from staying signed in long
+        // enough to remove the passkey that runs it.
+        const cooldown = sessionCooldown(req);
+        if (cooldown !== null) return cooldownRefusal(cooldown);
+        const count = sessions.size;
+        sessions.clear();
+        approvals.clear();
+        // An unredeemed magic link would otherwise mint a fresh session.
+        nonces.clear();
+        if (passkey && storage) {
+          passkey.clearEphemeral();
+          try {
+            // A code someone reserved must not stay held from the owner.
+            await releaseRecoveryReservations(storage.engine());
+          } catch (e) {
+            console.error("[admin] releasing recovery-code reservations failed:", e instanceof Error ? e.message : e);
           }
-        } catch (e) {
-          // The sessions are already gone; a storage failure here must not
-          // read as a failed sign-out.
-          console.error("[admin] revoking unused setup links failed:", e instanceof Error ? e.message : e);
+          try {
+            const revoked = await revokeUnusedSetupLinks(storage.engine());
+            if (revoked > 0) {
+              await recordAuthEvent(storage.engine(), {
+                event: "setup_link.revoked",
+                outcome: "ok",
+                reason: `count=${revoked}`,
+                clientKey: resolveClientKey(req),
+                userAgent: req.headers.get("user-agent"),
+              });
+            }
+          } catch (e) {
+            // The sessions are already gone; a storage failure here must not
+            // read as a failed sign-out.
+            console.error("[admin] revoking unused setup links failed:", e instanceof Error ? e.message : e);
+          }
         }
-      }
-      return Response.json({ revoked_sessions: count });
+        return Response.json({ revoked_sessions: count });
+      };
+      return passkey ? passkey.exclusive(signOut) : signOut();
     }
 
     return null; // not an auth route — let a later dispatcher handle it
