@@ -18,7 +18,11 @@ import {
   checkDuplicatePages,
   checkQuarantinedPages,
   checkJunkEntityHubs,
+  checkFenceRowsWithoutMarkers,
 } from "../src/core/doctor-ops.ts";
+import { putPage } from "../src/core/pages.ts";
+import { renderFactsFence } from "../src/core/facts-fence.ts";
+import { reconcileFactsForPage } from "../src/core/facts-reconcile.ts";
 import { buildRemediationEnvelope, runDoctor } from "../src/commands/doctor.ts";
 import { buildRemediationPlan } from "../src/core/remediation.ts";
 import { diffMigrationIds } from "../src/core/migrate.ts";
@@ -299,6 +303,64 @@ describe("checkDuplicatePages", () => {
   });
 });
 
+describe("checkFenceRowsWithoutMarkers", () => {
+  const savedMirror = process.env.MEMRAIN_PAGE_MIRROR_SYNC;
+  beforeEach(() => {
+    // Queue the search mirror instead of embedding through Bedrock.
+    process.env.MEMRAIN_PAGE_MIRROR_SYNC = "0";
+  });
+  afterEach(() => {
+    if (savedMirror === undefined) delete process.env.MEMRAIN_PAGE_MIRROR_SYNC;
+    else process.env.MEMRAIN_PAGE_MIRROR_SYNC = savedMirror;
+  });
+
+  const fenced = `# A\n\n## Facts\n${renderFactsFence([
+    { rowNum: 1, claim: "Likes tea.", confidence: 1, active: true },
+    { rowNum: 2, claim: "Born 1990.", confidence: 1, active: true },
+  ])}\n`;
+  const putAndReconcile = async (slug: string, body: string) => {
+    const r = await putPage(storage, { slug, type: "person", markdown_body: body });
+    await reconcileFactsForPage(storage, slug, r.content_hash);
+  };
+
+  it("reports none on a clean store", async () => {
+    const r = await checkFenceRowsWithoutMarkers(storage.engine());
+    expect(r.status).toBe("ok");
+    expect(r.ok).toBe(true);
+  });
+
+  it("ignores a page whose fence is still there", async () => {
+    await putAndReconcile("people/kept", fenced);
+    const r = await checkFenceRowsWithoutMarkers(storage.engine());
+    expect(r.status).toBe("ok");
+  });
+
+  it("lists a page whose fence was dropped while its facts stayed", async () => {
+    await putAndReconcile("people/kept", fenced);
+    await putAndReconcile("people/dropped", fenced);
+    await putAndReconcile("people/dropped", "Just prose now.");
+    const r = await checkFenceRowsWithoutMarkers(storage.engine());
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("warn");
+    expect(r.detail).toStartWith("1 page(s)");
+    expect(r.detail).toContain("people/dropped (2 facts)");
+    expect(r.detail).not.toContain("people/kept");
+    expect(r.detail).not.toContain("scanned");
+  });
+
+  it("says when the candidate scan hit its limit", async () => {
+    await storage.engine().exec(
+      `INSERT INTO pages (slug, type, content_hash, markdown_body)
+         SELECT 'people/p' || g, 'person', 'h' || g, 'prose' FROM generate_series(1, 5001) g;
+       INSERT INTO entity_facts (entity_slug, fact, source_markdown_slug)
+         SELECT 'people/p' || g, 'f', 'people/p' || g FROM generate_series(1, 5001) g;`,
+    );
+    const r = await checkFenceRowsWithoutMarkers(storage.engine());
+    expect(r.status).toBe("warn");
+    expect(r.detail).toContain("first 5000 scanned");
+  });
+});
+
 describe("ops probe exit-code invariant", () => {
   // Every ops probe reports both fields; `ok` is only the exit-code view of
   // `status`, so the two can never disagree about what fails the process.
@@ -311,6 +373,7 @@ describe("ops probe exit-code invariant", () => {
       checkEmbeddingWidth,
       checkInvalidIndexes,
       checkDuplicatePages,
+      checkFenceRowsWithoutMarkers,
     ]) {
       const r = await probe(e);
       expect(r.ok).toBe(r.status !== "fail");

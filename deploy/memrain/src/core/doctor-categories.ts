@@ -111,6 +111,7 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   "duplicate-pages",
   "quarantined-pages",
   "junk-entity-hubs",
+  "fence-rows-without-markers",
   "embed-backlog",
 ]);
 

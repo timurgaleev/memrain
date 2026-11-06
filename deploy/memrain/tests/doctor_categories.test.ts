@@ -49,6 +49,7 @@ describe("doctor categorize", () => {
       "embedding-width",
       "eval-trend",
       "federation-health",
+      "fence-rows-without-markers",
       "index-spread",
       "invalid-indexes",
       "junk-entity-hubs",

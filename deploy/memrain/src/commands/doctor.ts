@@ -53,6 +53,7 @@ import {
   checkDuplicatePages,
   checkQuarantinedPages,
   checkJunkEntityHubs,
+  checkFenceRowsWithoutMarkers,
 } from "../core/doctor-ops.ts";
 import { checkConnectorHealth } from "../core/connectors/health.ts";
 import { checkEmbedBacklog } from "../core/doctor-embed.ts";
@@ -424,6 +425,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["duplicate-pages", checkDuplicatePages],
       ["quarantined-pages", checkQuarantinedPages],
       ["junk-entity-hubs", checkJunkEntityHubs],
+      ["fence-rows-without-markers", checkFenceRowsWithoutMarkers],
       ["code-grammars", checkGrammars],
       ["code-graph", checkCodeGraph],
       ["connector-health", checkConnectorHealth],

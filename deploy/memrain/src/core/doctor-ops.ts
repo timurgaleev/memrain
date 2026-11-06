@@ -15,6 +15,7 @@ import { grammarSelfCheck } from "./chunkers/parsers.ts";
 import { isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
 import { Queue } from "./jobs/queue.ts";
 import { bucketJobErrors } from "./jobs/error-classify.ts";
+import { hasFenceMarker } from "./fence-shared.ts";
 
 export interface OpsCheckResult {
   /** Exit-code driver — false only on `status:"fail"`. */
@@ -251,6 +252,46 @@ export async function checkDuplicatePages(
     ok: true,
     status: "warn",
     detail: `${total} duplicate page group(s) — same source + content under multiple slugs, e.g. ${sample}`,
+  };
+}
+
+/** Bound on the pages whose bodies the fence test loads. */
+const FENCE_ROWS_SCAN_LIMIT = 5_000;
+
+/**
+ * Pages that still own live fence-projected facts although their body has no
+ * facts fence markers. An absent fence keeps its facts (a prose rewrite or a
+ * bad merge must not delete them), so these rows are now edited only through
+ * `forget_fact` — the operator decides whether to restore the fence or forget
+ * them. Read-only; warn, never fail.
+ */
+export async function checkFenceRowsWithoutMarkers(
+  engine: Engine,
+): Promise<OpsCheckResult> {
+  // ponytail: scans the first FENCE_ROWS_SCAN_LIMIT pages with fence facts;
+  // push the marker test into SQL if a brain ever outgrows that.
+  const r = await engine.query<{ slug: string; markdown_body: string; n: number }>(
+    `SELECT p.slug, p.markdown_body, f.n
+       FROM (SELECT source_markdown_slug AS slug, count(*)::int AS n
+               FROM entity_facts
+              WHERE source_markdown_slug IS NOT NULL AND forgotten_at IS NULL
+              GROUP BY source_markdown_slug) f
+       JOIN pages p ON p.slug = f.slug AND p.deleted_at IS NULL
+      ORDER BY p.slug
+      LIMIT ${FENCE_ROWS_SCAN_LIMIT}`,
+  );
+  const bare = r.rows.filter((p) => !hasFenceMarker(p.markdown_body, "facts"));
+  const capped = r.rows.length === FENCE_ROWS_SCAN_LIMIT ? ` (first ${FENCE_ROWS_SCAN_LIMIT} scanned)` : "";
+  if (bare.length === 0) {
+    return { ok: true, status: "ok", detail: `every page with fence facts still has its fence${capped}` };
+  }
+  const sample = bare.slice(0, 3).map((p) => `${p.slug} (${p.n} facts)`).join(", ");
+  return {
+    ok: true,
+    status: "warn",
+    detail:
+      `${bare.length} page(s) keep fence facts but no facts fence${capped}, e.g. ${sample}` +
+      " — restore the fence or `forget_fact` the rows",
   };
 }
 
