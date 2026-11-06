@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { NO_SKILL, gate, judge, median3, parseAnswer } from "../src/core/skillopt/judge.ts";
+import { linearityRatio } from "./helpers/cpu-time.ts";
 
 const CATALOG = new Set(["query", "brain-ops", "enrich"]);
 const CASE = { expected_skill: "query", ambiguous_with: ["brain-ops"] };
@@ -74,20 +75,15 @@ describe("median3 and gate", () => {
 });
 
 describe("parser linearity", () => {
-  function timeParse(answer: string): number {
-    const start = performance.now();
+  function parse(answer: string): void {
     for (let i = 0; i < 20; i++) parseAnswer(answer, CATALOG);
-    return performance.now() - start;
   }
 
   it("stays linear on large adversarial answers", () => {
     for (const unit of ["a-", "`", "x", " a"]) {
       const small = unit.repeat(25_000);
       const large = unit.repeat(50_000);
-      timeParse(small);
-      const t1 = Math.max(timeParse(small), 0.05);
-      const t2 = timeParse(large);
-      expect(t2 / t1).toBeLessThanOrEqual(3);
+      expect(linearityRatio(() => parse(small), () => parse(large))).toBeLessThanOrEqual(3);
     }
   });
 });
