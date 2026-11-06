@@ -130,7 +130,7 @@ describe("purgeDeletedPages", () => {
   it("hard-deletes a page aged past the cutoff and returns its slug", async () => {
     await putPage(storage, { slug: "notes/old", type: "note", markdown_body: "x" });
     await deletePage(storage, "notes/old");
-    await ageDeletedBy("notes/old", 100); // older than the 72h default
+    await ageDeletedBy("notes/old", 100); // older than the 72h cutoff
 
     const r = await purgeDeletedPages(storage.engine(), 72);
     expect(r.count).toBe(1);
@@ -169,10 +169,10 @@ describe("purgeDeletedPages", () => {
     expect((await purgeDeletedPages(storage.engine(), 1)).count).toBe(1);
   });
 
-  it("defaults to the 72h soft-delete TTL when no cutoff is passed", async () => {
+  it("defaults to the 720h page TTL when no cutoff is passed", async () => {
     await putPage(storage, { slug: "notes/a", type: "note", markdown_body: "x" });
     await deletePage(storage, "notes/a");
-    await ageDeletedBy("notes/a", 100);
+    await ageDeletedBy("notes/a", 721);
     const r = await purgeDeletedPages(storage.engine());
     expect(r.count).toBe(1);
   });

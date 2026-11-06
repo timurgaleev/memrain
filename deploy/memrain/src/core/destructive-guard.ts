@@ -13,6 +13,9 @@ import { bumpDocumentClock } from "./generation.ts";
 /** Hours a soft-deleted / archived document survives before hard purge. */
 export const SOFT_DELETE_TTL_HOURS = 72;
 
+/** Hours a soft-deleted page survives before hard purge (30 days). */
+export const PAGE_SOFT_DELETE_TTL_HOURS = 720;
+
 export interface DestructiveImpact {
   /** documents that would be affected (live, not already deleted/archived). */
   documents: number;

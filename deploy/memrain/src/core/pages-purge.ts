@@ -9,14 +9,15 @@
  * migrations 015 / 016 / 034.
  *
  * The autopilot `purge` cycle phase (core/cycle/purge.ts) runs the same helper
- * unscoped; an operator can also trigger it on demand and see WHICH slugs were
+ * unscoped with the page TTL (PAGE_SOFT_DELETE_TTL_HOURS, 30 days — longer than
+ * the 72h document TTL because a page is canonical, not re-ingestable); an operator can also trigger it on demand and see WHICH slugs were
  * reaped. The
  * page search mirror (page://<slug>) was already dropped at soft-delete time, so
  * this only removes the canonical row + its history.
  */
 import { createHash } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
-import { SOFT_DELETE_TTL_HOURS } from "./destructive-guard.ts";
+import { PAGE_SOFT_DELETE_TTL_HOURS } from "./destructive-guard.ts";
 import { OperationError } from "./operation-error.ts";
 import { andSourceScope } from "./source-scope.ts";
 
@@ -27,6 +28,8 @@ export interface PurgeDeletedPagesResult {
   slugs: string[];
   /** Expired pages still referenced by a row that does not cascade; left in place. */
   blocked: Array<{ slug: string; reason: string }>;
+  /** The age cutoff in hours this run applied (the default or the caller's). */
+  ttl_hours: number;
   /** Set on a dry run: nothing was deleted, `planned` is what a real run would reap now. */
   dry_run?: true;
   planned?: string[];
@@ -58,7 +61,7 @@ const FOREIGN_KEY_VIOLATION = "23503";
 /**
  * Hard-delete pages whose `deleted_at` is older than `olderThanHours`.
  * Idempotent: a run with nothing expired returns count 0. Defaults to the
- * shared soft-delete TTL (72h) when no cutoff is given.
+ * page soft-delete TTL (720h) when no cutoff is given.
  *
  * A set-based DELETE aborts the whole sweep when any one page is still
  * referenced, so on a foreign-key violation it falls back to one DELETE per page:
@@ -66,7 +69,7 @@ const FOREIGN_KEY_VIOLATION = "23503";
  */
 export async function purgeDeletedPages(
   engine: Engine,
-  olderThanHours: number = SOFT_DELETE_TTL_HOURS,
+  olderThanHours: number = PAGE_SOFT_DELETE_TTL_HOURS,
   sourceIds?: string[],
   opts: PurgeDeletedPagesOptions = {},
 ): Promise<PurgeDeletedPagesResult> {
@@ -89,7 +92,7 @@ export async function purgeDeletedPages(
     );
     const planned = plan.rows.map((r) => r.slug);
     const planHash = purgePlanHash(plan.rows);
-    if (opts.dryRun) return { count: 0, slugs: [], blocked: [], dry_run: true, planned, plan_hash: planHash };
+    if (opts.dryRun) return { count: 0, slugs: [], blocked: [], ttl_hours: olderThanHours, dry_run: true, planned, plan_hash: planHash };
     if (planHash !== opts.expectedPlanHash) {
       throw new OperationError(
         "conflict",
@@ -109,7 +112,7 @@ export async function purgeDeletedPages(
       `DELETE FROM pages WHERE ${expiredWhere} RETURNING slug`,
       params,
     );
-    return { count: r.rows.length, slugs: r.rows.map((row) => row.slug).sort(), blocked: [] };
+    return { count: r.rows.length, slugs: r.rows.map((row) => row.slug).sort(), blocked: [], ttl_hours: olderThanHours };
   } catch (err) {
     if ((err as { code?: string })?.code !== FOREIGN_KEY_VIOLATION) throw err;
   }
@@ -144,5 +147,5 @@ export async function purgeDeletedPages(
       blocked.push({ slug, reason: "still referenced by a row that does not cascade" });
     }
   }
-  return { count: slugs.length, slugs, blocked };
+  return { count: slugs.length, slugs, blocked, ttl_hours: olderThanHours };
 }

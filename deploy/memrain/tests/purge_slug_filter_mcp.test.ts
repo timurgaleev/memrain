@@ -28,7 +28,7 @@ afterEach(async () => {
 async function deletedPage(slug: string): Promise<void> {
   await putPage(storage, { slug, type: "note", markdown_body: `body of ${slug}` });
   await deletePage(storage, slug);
-  await storage.engine().query(`UPDATE pages SET deleted_at = NOW() - interval '100 hours' WHERE slug = $1`, [slug]);
+  await storage.engine().query(`UPDATE pages SET deleted_at = NOW() - interval '1000 hours' WHERE slug = $1`, [slug]);
 }
 
 async function remaining(): Promise<string[]> {

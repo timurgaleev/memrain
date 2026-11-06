@@ -1063,11 +1063,11 @@ export const OPERATIONS: readonly Operation[] = [
     name: "purge_deleted_pages",
     scope: "admin",
     description:
-      "Admin escape hatch: HARD-delete pages whose deleted_at is older than `older_than_hours` (default 72). Cascades to page_versions / page_aliases / links via FK. The manual counterpart to the autopilot purge cycle phase. Returns the count + reaped slugs. WRITE — requires the `admin` scope (source-scoped) or the internal token; never reachable from the static public bearer. Scope split: delete_page = write, purge = admin.",
+      "Admin escape hatch: HARD-delete pages whose deleted_at is older than `older_than_hours` (default 720 = 30 days for pages; the purge cycle phase keeps 72 for documents). Cascades to page_versions / page_aliases / links via FK. The manual counterpart to the autopilot purge cycle phase. Returns the count + reaped slugs and `ttl_hours`, the cutoff it applied. WRITE — requires the `admin` scope (source-scoped) or the internal token; never reachable from the static public bearer. Scope split: delete_page = write, purge = admin.",
     params: {
       older_than_hours: num({
         minimum: 0,
-        description: "Age cutoff in hours. Pages soft-deleted longer ago than this are reaped. Default 72.",
+        description: "Age cutoff in hours. Pages soft-deleted longer ago than this are reaped. Default 720 (30 days).",
       }),
       slugs: arr({
         items: { type: "string" },

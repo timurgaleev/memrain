@@ -3388,7 +3388,7 @@ async function callPurgeDeletedPages(
     olderThanHours = v;
   }
   // Scope the reaper to the caller's write source when scoped. Passing
-  // `olderThanHours` undefined still triggers the fn's default TTL (72h).
+  // `olderThanHours` undefined still triggers the fn's default TTL.
   const scope = writeSource ? [writeSource] : undefined;
   const slugs = args["slugs"];
   if (slugs !== undefined && (!Array.isArray(slugs) || slugs.some((s) => typeof s !== "string"))) {

@@ -4,7 +4,8 @@
  *
  * Soft-delete (documents + pages) and archive (documents) are reversible column
  * flips; this phase is the reaper that finally frees the row once it's older
- * than `SOFT_DELETE_TTL_HOURS`. Set-based, cascades to chunks/embeddings/links
+ * than its TTL: `SOFT_DELETE_TTL_HOURS` for documents,
+ * `PAGE_SOFT_DELETE_TTL_HOURS` for pages. Set-based, cascades to chunks/embeddings/links
  * via FK. Idempotent: a run with nothing expired is a no-op.
  */
 import type { Engine } from "../engine/interface.ts";
@@ -42,11 +43,12 @@ export async function purgePhase(
   const ttlHours = opts.ttlHours ?? SOFT_DELETE_TTL_HOURS;
   await phaseFenceCheck();
   const docs = await purgeExpiredDocuments(engine, ttlHours);
-  // Pages purge: a page soft-deleted past the TTL is hard-removed. Its search
-  // mirror (page://<slug> document) was already dropped on soft-delete, so this
-  // only reaps the canonical row + its version chain (FK cascade).
+  // Pages purge: a page soft-deleted past the page TTL is hard-removed. Its
+  // search mirror (page://<slug> document) was already dropped on soft-delete,
+  // so this only reaps the canonical row + its version chain (FK cascade).
+  // `ttlHours` is the document TTL; pages keep their own longer default.
   await phaseFenceCheck();
-  const p = await purgeDeletedPages(engine, ttlHours);
+  const p = await purgeDeletedPages(engine);
   // Telemetry GC: prune volunteer-context feedback events past their TTL.
   // Best-effort (the helper swallows its own errors), never blocks the reaper.
   await phaseFenceCheck();
