@@ -164,3 +164,107 @@ describe("reindex deletion-reconcile", () => {
     }
   });
 });
+
+describe("reconcile safety guards", () => {
+  async function countDeleted(): Promise<number> {
+    const r = await storage.raw().query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM documents WHERE deleted_at IS NOT NULL`,
+    );
+    return r.rows[0]?.n ?? 0;
+  }
+
+  /** Seed `total` docs under `root` with their files on disk, then remove the
+   *  first `missing` files. */
+  async function seedVault(root: string, total: number, missing: number): Promise<void> {
+    mkdirSync(root, { recursive: true });
+    for (let i = 0; i < total; i++) {
+      const p = join(root, `n${i}.md`);
+      writeFileSync(p, `# n${i}`);
+      await seedDoc(p, `n${i}`);
+    }
+    for (let i = 0; i < missing; i++) rmSync(join(root, `n${i}.md`));
+  }
+
+  it("refuses when the root does not exist and deletes nothing", async () => {
+    // An unmounted vault: every doc under it looks "missing on disk".
+    const doc = join(tmp, "gone", "a.md");
+    await seedDoc(doc, "a");
+    await expect(
+      reconcileDeletedDocuments(storage.raw(), join(tmp, "gone")),
+    ).rejects.toMatchObject({ code: "root_missing" });
+    expect(await deletedAt(doc)).toBeNull();
+  });
+
+  it("refuses 60 of 100 missing documents without the flag", async () => {
+    const root = join(tmp, "vault");
+    await seedVault(root, 100, 60);
+    await expect(
+      reconcileDeletedDocuments(storage.raw(), root),
+    ).rejects.toMatchObject({
+      code: "mass_delete_refused",
+      message: expect.stringMatching(/^60 of 100 documents under .* are missing; pass --allow-mass-delete/),
+    });
+    expect(await countDeleted()).toBe(0);
+    const r = await reconcileDeletedDocuments(storage.raw(), root, { allowMassDelete: true });
+    expect(r.reconciled).toBe(60);
+    expect(await countDeleted()).toBe(60);
+  });
+
+  it("retires 2 of 100 missing documents without the flag", async () => {
+    const root = join(tmp, "vault");
+    await seedVault(root, 100, 2);
+    const r = await reconcileDeletedDocuments(storage.raw(), root);
+    expect(r.reconciled).toBe(2);
+  });
+
+  it("refuses 49 of 50 missing documents in a small vault", async () => {
+    const root = join(tmp, "vault");
+    await seedVault(root, 50, 49);
+    await expect(
+      reconcileDeletedDocuments(storage.raw(), root),
+    ).rejects.toMatchObject({
+      code: "mass_delete_refused",
+      message: expect.stringMatching(/^49 of 50 documents under .* are missing; pass --allow-mass-delete.*; e\.g\. .*n0\.md/),
+    });
+    expect(await countDeleted()).toBe(0);
+  });
+
+  it("retires the one missing document of two without the flag", async () => {
+    const root = join(tmp, "vault");
+    await seedVault(root, 2, 1);
+    const r = await reconcileDeletedDocuments(storage.raw(), root);
+    expect(r.reconciled).toBe(1);
+  });
+
+  it("sweepVault with a missing root reports an error instead of a clean empty walk", async () => {
+    await seedDoc(join(tmp, "gone", "a.md"), "a");
+    const r = await sweepVault(storage, { vault: join(tmp, "gone"), reconcileDeletes: true });
+    expect(r.errors.map((e) => e.message)).toContainEqual(
+      expect.stringMatching(/not a readable directory/),
+    );
+    expect(r.reconciled ?? 0).toBe(0);
+    expect(await countDeleted()).toBe(0);
+  });
+
+  it("sweepVault skips reconcile when the walk found no files at all", async () => {
+    const root = join(tmp, "vault");
+    await seedVault(root, 3, 3);
+    const r = await sweepVault(storage, { vault: root, reconcileDeletes: true });
+    expect(r.scanned).toBe(0);
+    expect(r.errors.map((e) => e.message)).toContainEqual(
+      expect.stringMatching(/no files/),
+    );
+    expect(r.reconciled ?? 0).toBe(0);
+    expect(await countDeleted()).toBe(0);
+  });
+
+  it("sweepVault passes allowMassDelete through to the reconcile", async () => {
+    const root = join(tmp, "vault");
+    await seedVault(root, 100, 60);
+    await expect(
+      sweepVault(storage, { vault: root, reconcileDeletes: true }),
+    ).rejects.toMatchObject({ code: "mass_delete_refused" });
+    const r = await sweepVault(storage, { vault: root, reconcileDeletes: true, allowMassDelete: true });
+    expect(r.reconciled).toBe(60);
+  });
+});

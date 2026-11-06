@@ -16,15 +16,22 @@
  *   2. `existsSync(source_path)` is false — the file is genuinely gone, not
  *      merely unwalked (this mirrors orphans-purge's missing-on-disk probe).
  *
+ * Two refusals guard against a root that only LOOKS empty (an unmounted volume,
+ * a typo'd path): a root that is not an existing directory throws
+ * `root_missing`, and more than 50 documents missing at once, or more than one
+ * that is also more than 25% of the live documents under the root, throws
+ * `mass_delete_refused` unless `allowMassDelete` is set.
+ *
  * Deletion is the SAME soft-delete primitive the destructive-guard path uses
  * (`softDeleteDocuments` → `deleted_at = NOW()`), so chunks/embeddings/links are
  * retired and hard-purged identically after the shared 72h TTL. No new deletion
  * path is introduced here.
  */
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { sep } from "node:path";
 import type { Engine } from "./engine/interface.ts";
 import { softDeleteDocuments } from "./destructive-guard.ts";
+import { OperationError } from "./operation-error.ts";
 
 export interface ReconcileDeletesResult {
   /** Number of documents soft-deleted because their file vanished from disk. */
@@ -54,9 +61,16 @@ function underRoot(p: string, root: string): boolean {
 export async function reconcileDeletedDocuments(
   engine: Engine,
   rootPrefix: string,
+  opts: { allowMassDelete?: boolean } = {},
 ): Promise<ReconcileDeletesResult> {
   if (!rootPrefix) {
     throw new Error("reconcileDeletedDocuments: rootPrefix is required");
+  }
+  if (!existsSync(rootPrefix) || !statSync(rootPrefix).isDirectory()) {
+    throw new OperationError(
+      "root_missing",
+      `${rootPrefix} is not an existing directory; refusing to reconcile deletions against it`,
+    );
   }
 
   // Pull live docs once; scope + existence are filtered in-process (robust
@@ -65,9 +79,18 @@ export async function reconcileDeletedDocuments(
     `SELECT id, source_path FROM documents WHERE deleted_at IS NULL`,
   );
 
-  const missing = rows.rows.filter(
-    (r) => underRoot(r.source_path, rootPrefix) && !existsSync(r.source_path),
-  );
+  const live = rows.rows.filter((r) => underRoot(r.source_path, rootPrefix));
+  const missing = live.filter((r) => !existsSync(r.source_path));
+
+  const n = missing.length;
+  const mass = n > 50 || (n > 1 && n > live.length * 0.25);
+  if (mass && !opts.allowMassDelete) {
+    const sample = missing.slice(0, 5).map((r) => r.source_path).join(", ");
+    throw new OperationError(
+      "mass_delete_refused",
+      `${missing.length} of ${live.length} documents under ${rootPrefix} are missing; pass --allow-mass-delete to retire them; e.g. ${sample}`,
+    );
+  }
 
   const reconciledPaths: string[] = [];
   for (const doc of missing) {

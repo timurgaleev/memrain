@@ -106,11 +106,12 @@ function printUsage(): void {
   console.log("                               ranking recommendations from the stats; --apply writes via `config`");
   console.log("  search diagnose <query> --target <slug> [--source ID] [--json]");
   console.log("                               arm-by-arm probe: where does the target surface (keyword/vector/alias/hybrid)?");
-  console.log("  reindex [--all] [--vault P] [--source vault|code|all] [--paths CSV] [--rechunk-stale] [--reconcile-deletes]");
+  console.log("  reindex [--all] [--vault P] [--source vault|code|all] [--paths CSV] [--rechunk-stale] [--reconcile-deletes] [--allow-mass-delete]");
   console.log("  reindex --contextual [--force] [--dry-run] [--limit N]");
   console.log("                               whole-corpus from-DB re-embed under the contextual-retrieval wrapper");
   console.log("                               walk the vault and/or code roots, index changed (or all) files");
   console.log("                               (--reconcile-deletes soft-deletes vault docs whose file is gone)");
+  console.log("                               (--allow-mass-delete lets it retire more than 50, or 25%, of them)");
   console.log("  code-def <name> [--json]     definition sites for <name>");
   console.log("  code-refs <name> [--json]    non-defining identifier references for <name>");
   console.log("  code-callers <name> [--json] symbols whose body calls <name>");
@@ -383,6 +384,7 @@ async function main(argv: readonly string[]): Promise<number> {
       if (paths) opts.codePaths = paths;
       if (flags.has("--rechunk-stale")) opts.rechunkStale = true;
       if (flags.has("--reconcile-deletes")) opts.reconcileDeletes = true;
+      if (flags.has("--allow-mass-delete")) opts.allowMassDelete = true;
       if (flags.has("--contextual")) opts.contextual = true;
       if (flags.has("--force")) opts.force = true;
       if (flags.has("--dry-run")) opts.dryRun = true;

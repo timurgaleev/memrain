@@ -35,6 +35,7 @@ import { nearest } from "./core/did-you-mean.ts";
 export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--all",
   "--allow-dropped-columns",
+  "--allow-mass-delete",
   "--allow-errors",
   "--apply",
   "--by-kind",
@@ -159,7 +160,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   [
     "reindex",
     new Set([
-      "--all", "--contextual", "--dry-run", "--force", "--limit", "--paths",
+      "--all", "--allow-mass-delete", "--contextual", "--dry-run", "--force", "--limit", "--paths",
       "--rechunk-stale", "--reconcile-deletes", "--source", "--vault",
     ]),
   ],

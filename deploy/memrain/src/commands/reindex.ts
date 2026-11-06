@@ -64,6 +64,8 @@ export interface ReindexCommandOptions {
    * "missing on disk" would wrongly retire everything outside the subset.
    */
   reconcileDeletes?: boolean;
+  /** Let `--reconcile-deletes` retire more than 50 documents, or more than 25% of the vault. */
+  allowMassDelete?: boolean;
   /**
    * Run the whole-corpus contextual re-embed instead of a file sweep
    * (`core/contextual-reembed.ts`). Mutually exclusive with the sweep modes —
@@ -150,6 +152,7 @@ export async function runReindex(
           force: opts.all ?? false,
           forceStaleChunker: opts.rechunkStale ?? false,
           reconcileDeletes: opts.reconcileDeletes ?? false,
+          allowMassDelete: opts.allowMassDelete ?? false,
         });
         out.push({ kind: "vault", vault, result });
       }

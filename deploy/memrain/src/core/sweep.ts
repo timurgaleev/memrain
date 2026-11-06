@@ -8,6 +8,7 @@
  * for negligible parallelism gains given the embed roundtrips dominate.
  */
 import { createHash } from "node:crypto";
+import { existsSync, statSync } from "node:fs";
 import type { Storage } from "./storage.ts";
 import { indexFile, normalizeSourcePath } from "./indexer.ts";
 import { walkFiles } from "./walk.ts";
@@ -56,6 +57,8 @@ export interface SweepOptions {
    * break, which leaves later files unwalked and would look "missing").
    */
   reconcileDeletes?: boolean;
+  /** Let the reconcile retire more than 50, or more than 25%, of the live documents. */
+  allowMassDelete?: boolean;
 }
 
 export interface SweepResult {
@@ -123,6 +126,13 @@ export async function sweepVault(
     errors: [],
     refused: [],
   };
+
+  // walkFiles yields nothing for a missing root, which would read as a clean
+  // empty sweep — and to a reconcile, as "every document was deleted".
+  if (!existsSync(opts.vault) || !statSync(opts.vault).isDirectory()) {
+    result.errors.push({ path: opts.vault, message: "vault root is not a readable directory" });
+    return result;
+  }
 
   // Pull all known last_indexed_mtime in one shot — vault is small enough
   // that this is much cheaper than per-file SELECT.
@@ -225,7 +235,12 @@ export async function sweepVault(
   // truncated run must not run it (a not-yet-walked file still exists on disk
   // and would survive anyway, but skipping keeps the "partial ⇒ no reconcile"
   // rule explicit and single-sourced).
-  if (opts.reconcileDeletes && !budgetBroke) {
+  if (opts.reconcileDeletes && !budgetBroke && result.scanned === 0) {
+    result.errors.push({
+      path: opts.vault,
+      message: "walk found no files; skipping the deletion reconcile",
+    });
+  } else if (opts.reconcileDeletes && !budgetBroke) {
     // The root must be canonicalized the same way the rows were: documents now
     // store an absolute source_path, and reconcile decides membership with a
     // prefix test. Handing it the raw `notes` while the rows say
@@ -234,6 +249,7 @@ export async function sweepVault(
     const rec = await reconcileDeletedDocuments(
       storage.raw(),
       normalizeSourcePath(opts.vault),
+      { allowMassDelete: opts.allowMassDelete ?? false },
     );
     result.reconciled = rec.reconciled;
     result.reconciledPaths = rec.reconciledPaths;
