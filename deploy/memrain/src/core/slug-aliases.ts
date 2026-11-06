@@ -31,8 +31,9 @@ function isUndefinedTableError(e: unknown): boolean {
 
 /**
  * Resolve `slug` through the redirect registry to its canonical slug. Returns
- * the input slug UNCHANGED on a miss (no redirect), a self/loop guard, an empty
- * scope, or a pre-067 brain. A single hop only.
+ * the input slug UNCHANGED on a miss (no redirect), a redirect whose target is
+ * missing or soft-deleted, a self/loop guard, an empty scope, or a pre-067
+ * brain. A single hop only.
  *
  * `sourceIds` scopes the lookup (mig047): a redirect resolves only when it is
  * owned by one of these sources, ordered by the caller's source preference so a
@@ -48,17 +49,18 @@ export async function resolveSlugWithAlias(
   try {
     const params: unknown[] = [slug];
     let scope = "";
-    let order = "id";
+    let order = "a.id";
     if (sourceIds !== undefined) {
       params.push([...sourceIds]);
-      scope = ` AND source_id = ANY($${params.length}::text[])`;
+      scope = ` AND a.source_id = ANY($${params.length}::text[])`;
       // Prefer the caller's earlier-listed sources on a cross-tenant collision.
-      order = `array_position($${params.length}::text[], source_id), id`;
+      order = `array_position($${params.length}::text[], a.source_id), a.id`;
     }
     const r = await storage.engine().query<{ canonical_slug: string }>(
-      `SELECT canonical_slug
-         FROM slug_aliases
-        WHERE alias_slug = $1${scope}
+      `SELECT a.canonical_slug
+         FROM slug_aliases a
+         JOIN pages p ON p.slug = a.canonical_slug AND p.deleted_at IS NULL
+        WHERE a.alias_slug = $1${scope}
         ORDER BY ${order}
         LIMIT 1`,
       params,

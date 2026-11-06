@@ -374,7 +374,7 @@
     "call": "backlinks {\"name\":\"Alice\"}",
     "sql": [
       {
-        "text": "SELECT canonical_slug FROM slug_aliases WHERE alias_slug = $1 ORDER BY id LIMIT 1",
+        "text": "SELECT a.canonical_slug FROM slug_aliases a JOIN pages p ON p.slug = a.canonical_slug AND p.deleted_at IS NULL WHERE a.alias_slug = $1 ORDER BY a.id LIMIT 1",
         "params": [
           "alice"
         ]

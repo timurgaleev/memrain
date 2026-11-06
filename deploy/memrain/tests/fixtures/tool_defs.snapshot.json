@@ -1701,7 +1701,7 @@
   },
   {
     "name": "purge_deleted_pages",
-    "description": "Admin escape hatch: HARD-delete pages whose deleted_at is older than `older_than_hours` (default 720 = 30 days for pages; the purge cycle phase keeps 72 for documents). Cascades to page_versions / page_aliases / links via FK, and also removes the raw_data and tags rows on each purged slug (reported as raw_data_rows / tags_rows). The manual counterpart to the autopilot purge cycle phase. Returns the count + reaped slugs and `ttl_hours`, the cutoff it applied. WRITE — requires the `admin` scope (source-scoped) or the internal token; never reachable from the static public bearer. Scope split: delete_page = write, purge = admin.",
+    "description": "Admin escape hatch: HARD-delete pages whose deleted_at is older than `older_than_hours` (default 720 = 30 days for pages; the purge cycle phase keeps 72 for documents). Cascades to page_versions / page_aliases / links via FK, and also removes the raw_data and tags rows on each purged slug and the slug redirects pointing at it (reported as raw_data_rows / tags_rows / slug_aliases_rows). The manual counterpart to the autopilot purge cycle phase. Returns the count + reaped slugs and `ttl_hours`, the cutoff it applied. WRITE — requires the `admin` scope (source-scoped) or the internal token; never reachable from the static public bearer. Scope split: delete_page = write, purge = admin.",
     "inputSchema": {
       "type": "object",
       "properties": {

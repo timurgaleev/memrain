@@ -35,6 +35,7 @@ describe("resolveSlugWithAlias", () => {
   });
 
   it("forwards a registered redirect to its canonical slug", async () => {
+    await putPage(storage, { slug: "people/robert", type: "person" });
     await setSlugAlias(storage.engine(), {
       alias_slug: "people/bob",
       canonical_slug: "people/robert",
@@ -45,6 +46,7 @@ describe("resolveSlugWithAlias", () => {
   });
 
   it("scopes resolution to the caller's sources", async () => {
+    await putPage(storage, { slug: "companies/acme", type: "company" });
     await setSlugAlias(storage.engine(), {
       alias_slug: "acme",
       canonical_slug: "companies/acme",
@@ -62,6 +64,7 @@ describe("resolveSlugWithAlias", () => {
 
   it("collapses a chain so a single hop always suffices", async () => {
     // a -> b, then rename b -> c should re-point a -> c.
+    await putPage(storage, { slug: "c", type: "note" });
     await setSlugAlias(storage.engine(), { alias_slug: "a", canonical_slug: "b" });
     await setSlugAlias(storage.engine(), { alias_slug: "b", canonical_slug: "c" });
     expect(await resolveSlugWithAlias(storage, "a")).toBe("c");
