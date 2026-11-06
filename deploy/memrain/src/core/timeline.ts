@@ -18,7 +18,8 @@
 import type { Storage } from "./storage.ts";
 import { validateSlug } from "./pages.ts";
 import { guardFields } from "./secret-scan.ts";
-import { PageNotFoundError } from "./operation-error.ts";
+import { OperationError, PageNotFoundError } from "./operation-error.ts";
+import { isCalendarDate } from "./effective-date.ts";
 
 export interface AddTimelineEventInput {
   slug: string;
@@ -73,6 +74,9 @@ function normaliseOccurredAt(v: string | Date): string {
   }
   if (typeof v !== "string" || v.length === 0) {
     throw new Error("occurred_at must be a non-empty ISO string or Date");
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(v) && !isCalendarDate(v)) {
+    throw new OperationError("invalid_params", `occurred_at: ${v.slice(0, 10)} is not a calendar date`);
   }
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) {

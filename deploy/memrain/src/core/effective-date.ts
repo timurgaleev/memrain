@@ -12,6 +12,18 @@
 const FM_DATE_KEYS = ["date", "event_date", "published"] as const;
 const FILENAME_DATE_RE = /(\d{4})-(\d{2})-(\d{2})/;
 
+/**
+ * True when a string starting `YYYY-MM-DD` names a real calendar day. The
+ * Date parser rolls 2026-02-30 over to March 2 instead of failing.
+ */
+export function isCalendarDate(s: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return false;
+  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  return dt.getUTCFullYear() === year && dt.getUTCMonth() === month - 1 && dt.getUTCDate() === day;
+}
+
 /** Coerce an arbitrary frontmatter value to an ISO date string, or null. */
 function toIso(value: unknown): string | null {
   if (value == null) return null;
@@ -27,6 +39,7 @@ function toIso(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const s = value.trim();
   if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}/.test(s) && !isCalendarDate(s)) return null;
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();

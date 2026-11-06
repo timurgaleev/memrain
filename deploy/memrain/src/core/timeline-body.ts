@@ -24,6 +24,7 @@ import { Storage } from "./storage.ts";
 import { lockPageSlugs } from "./pages.ts";
 import { stripCodeBlocks } from "./links.ts";
 import { addTimelineEvent } from "./timeline.ts";
+import { isCalendarDate } from "./effective-date.ts";
 
 export type BodyTimelineKind = "bullet" | "header" | "citation";
 
@@ -79,18 +80,10 @@ function isDiaryPage(type: string | undefined, slug: string): boolean {
 }
 
 /** A real calendar day in 1900-2099; rejects 2026-02-30 instead of rolling it over. */
-function isValidDate(iso: string): boolean {
+export function isValidDate(iso: string): boolean {
   if (!ISO_DATE_RE.test(iso)) return false;
   const year = Number(iso.slice(0, 4));
-  if (year < 1900 || year > 2099) return false;
-  const month = Number(iso.slice(5, 7));
-  const day = Number(iso.slice(8, 10));
-  const dt = new Date(Date.UTC(year, month - 1, day));
-  return (
-    dt.getUTCFullYear() === year &&
-    dt.getUTCMonth() === month - 1 &&
-    dt.getUTCDate() === day
-  );
+  return year >= 1900 && year <= 2099 && isCalendarDate(iso);
 }
 
 /** Heading level (1-6) of a line, or 0. Counts leading '#' without a regex. */
