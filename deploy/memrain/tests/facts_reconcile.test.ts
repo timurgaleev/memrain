@@ -136,15 +136,14 @@ describe("reconcileFactsForPage", () => {
     expect(facts.some((f) => f.fact === "fence fact v2")).toBe(true);
   });
 
-  it("a body with no fence clears the page's fence facts only", async () => {
+  it("a body with no fence keeps the page's fence facts and reports them", async () => {
     await putAndReconcile(
       "people/alice",
       fenceBody([{ rowNum: 1, claim: "fence fact", confidence: 1, active: true }]),
     );
     const r = await putAndReconcile("people/alice", "# Alice\n\nno fence now\n");
-    expect(r.removed).toBe(1);
-    expect(r.added).toBe(0);
-    expect(await factsFor("people/alice")).toEqual([]);
+    expect(r).toEqual({ removed: 0, added: 0, fenceAbsent: true, retained: 1 });
+    expect((await factsFor("people/alice")).map((f) => f.fact)).toEqual(["fence fact"]);
   });
 
   it("a malformed fence (markers present, 0 rows) does NOT wipe prior facts", async () => {

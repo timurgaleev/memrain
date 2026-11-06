@@ -23,11 +23,13 @@
  * `add_fact`) is INVISIBLE to it and survives — the column scoping is the
  * empty-fence guard.
  *
- * A page whose fence is genuinely ABSENT (no fence markers) wipes its own
- * fence rows (operator removed the fence). But a fence whose markers are
- * PRESENT yet parse to zero rows (a hand-edit syntax typo, or an emptied
- * table) does NOT wipe — a malformed fence must never silently destroy the
- * prior projection. The same holds for a PARTIALLY malformed fence (some rows
+ * A page whose fence is genuinely ABSENT (no fence markers) KEEPS its fence
+ * rows and reports `fenceAbsent` with the count retained: a body rewritten as
+ * prose, or a merge that dropped the markers, must not silently delete facts.
+ * A fact leaves the index through a struck (`~~…~~`) fence row or
+ * `forget_fact`. Likewise a fence whose markers are PRESENT yet parse to zero
+ * rows (a hand-edit syntax typo, or an emptied table) does NOT wipe — a
+ * malformed fence must never silently destroy the prior projection. The same holds for a PARTIALLY malformed fence (some rows
  * parse, some are claimless/broken): wiping would delete the broken rows'
  * prior projections, so the reconcile is refused until the fence is fixed.
  *
@@ -96,7 +98,13 @@ export async function reconcileFactsForPage(
   pageSlug: string,
   expectedContentHash: string,
   sourceId?: string,
-): Promise<{ removed: number; added: number; skipped?: "malformed_rows" | "mixed_fence_brands" }> {
+): Promise<{
+  removed: number;
+  added: number;
+  skipped?: "malformed_rows" | "mixed_fence_brands";
+  fenceAbsent?: true;
+  retained?: number;
+}> {
   if (!factsFenceEnabled()) return { removed: 0, added: 0 };
   validateSlug(pageSlug);
   // Tenant scope (mig047): stamp source_id on fence-derived facts only when
@@ -121,12 +129,22 @@ export async function reconcileFactsForPage(
     );
     return { removed: 0, added: 0, skipped: "mixed_fence_brands" };
   }
+  // Absent fence: keep the prior projection untouched and say how much of it
+  // there is, so the caller can surface facts that outlive their fence.
+  if (bounds === null) {
+    const params: unknown[] = [pageSlug];
+    if (scope !== null) params.push(scope);
+    const live = await storage.engine().query<{ c: number }>(
+      `SELECT COUNT(*)::int AS c FROM entity_facts
+        WHERE source_markdown_slug = $1 AND forgotten_at IS NULL${scope !== null ? " AND source_id = $2" : ""}`,
+      params,
+    );
+    return { removed: 0, added: 0, fenceAbsent: true, retained: live.rows[0]?.c ?? 0 };
+  }
   // Malformed-fence guard: markers present but nothing parses → do NOT wipe.
-  // Only a genuinely ABSENT fence (no markers) clears the prior projection.
-  const hasFenceMarkers = bounds !== null;
   const parseWarnings: string[] = [];
   const parsed = parseFactsFence(body, parseWarnings);
-  if (hasFenceMarkers && parsed.length === 0) {
+  if (parsed.length === 0) {
     return { removed: 0, added: 0 };
   }
   // Partial-parse guard: some data rows were claimless/malformed and got

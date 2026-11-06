@@ -1683,7 +1683,7 @@ async function afterPageWrite(
   // unscoped operator must not re-home another source's facts to `default`.
   const factsSource =
     writeSource ?? (await getPage(storage, r.slug))?.source_id ?? undefined;
-  await reconcileFactsForPage(storage, r.slug, r.content_hash, factsSource);
+  const facts = await reconcileFactsForPage(storage, r.slug, r.content_hash, factsSource);
   // Takes-fence canon sync (mig 090): the page fence is the operator-authored
   // source of truth for takes — parse + upsert/supersede rows on every put.
   // Best-effort: a malformed fence must never fail the page write.
@@ -1701,6 +1701,8 @@ async function afterPageWrite(
     ...(bodyTimeline && (bodyTimeline.derived > 0 || bodyTimeline.removed > 0)
       ? { body_timeline: bodyTimeline }
       : {}),
+    // The body has no facts fence but facts it once projected are still live.
+    ...(facts.retained ? { facts_fence_absent: facts.retained } : {}),
   };
 }
 
