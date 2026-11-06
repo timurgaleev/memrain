@@ -88,10 +88,37 @@ export function validateSlug(slug: string): void {
  * like `people/alice-smith` round-trip identically. Falls back to
  * `unknown` for empty / all-stripped inputs so we never produce an
  * invalid slug.
+ *
+ * A `/` segment that is written only in a non-Latin script (`people/` followed by a Cyrillic name)
+ * would vanish under the ASCII fold and collapse the target onto its
+ * namespace, so when any segment is like that, each segment is folded on its
+ * own and keeps its script. Every other input takes the whole-string path
+ * unchanged, so slugs already stored from Latin or mixed names stay stable.
  */
 export function slugifyTarget(name: string): string {
   if (typeof name !== "string") return "unknown";
-  const normalised = name
+  const segments = name.split("/");
+  if (!segments.some((seg) => asciiFold(seg) === "" && /\p{L}/u.test(seg))) {
+    return foldName(name) || "unknown";
+  }
+  const joined = segments
+    .map(foldName)
+    .filter((seg) => seg.length > 0)
+    .join("/")
+    .slice(0, MAX_SLUG_LEN)
+    // Same lone-high-surrogate guard as the Unicode pass.
+    .replace(/[\uD800-\uDBFF]$/, "");
+  return joined || "unknown";
+}
+
+/** The ASCII fold, falling back to the Unicode pass when it strips everything. */
+function foldName(s: string): string {
+  const ascii = asciiFold(s);
+  return ascii.length > 0 ? ascii : unicodeFold(s);
+}
+
+function asciiFold(s: string): string {
+  return s
     .toLowerCase()
     // Compose-y unicode (accented letters, ligatures) -> NFKD pieces.
     .normalize("NFKD")
@@ -114,13 +141,15 @@ export function slugifyTarget(name: string): string {
     // matched the maximal trailing run, verified over 400 K random strings.
     .replace(/^[-/]+|(?<![-/])[-/]+$/g, "")
     .slice(0, MAX_SLUG_LEN);
-  if (normalised.length > 0) return normalised;
-  // The ASCII fold stripped everything — an all-non-Latin name (Cyrillic,
-  // CJK, …). Keep the script instead of collapsing every such mention onto
-  // the shared `unknown` target, which made those wikilinks permanently
-  // unresolvable. NFKC (not NFKD) so letters stay composed and stable as
-  // stored slugs; the char class mirrors SLUG_RE above.
-  const unicode = name
+}
+
+// The ASCII fold stripped everything — an all-non-Latin name (Cyrillic,
+// CJK, …). Keep the script instead of collapsing every such mention onto
+// the shared `unknown` target, which made those wikilinks permanently
+// unresolvable. NFKC (not NFKD) so letters stay composed and stable as
+// stored slugs; the char class mirrors SLUG_RE above.
+function unicodeFold(s: string): string {
+  return s
     .toLowerCase()
     .normalize("NFKC")
     // Variation selectors (emoji VS15/VS16, ideographic IVS) are \p{M} and
@@ -140,7 +169,6 @@ export function slugifyTarget(name: string): string {
     // The UTF-16 slice can cut an astral-plane pair in half; a trailing lone
     // high surrogate would abort the Postgres TEXT write downstream.
     .replace(/[\uD800-\uDBFF]$/, "");
-  return unicode.length > 0 ? unicode : "unknown";
 }
 
 function normaliseType(

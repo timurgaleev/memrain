@@ -79,6 +79,26 @@ describe("slugifyTarget", () => {
     expect(slugifyTarget("-alice-")).toBe("alice");
     expect(slugifyTarget("/alice/")).toBe("alice");
   });
+
+  it.each([
+    ["people/иван-петров", "people/иван-петров"],
+    ["people/Иван", "people/иван"],
+    ["a/б/c", "a/б/c"],
+    ["東京/支店", "東京/支店"],
+    ["Иван Smith", "smith"],
+    ["Анна (CTO)", "cto"],
+    ["Alice Smith", "alice-smith"],
+    ["people/alice-smith", "people/alice-smith"],
+    ["people /alice", "people-/alice"], // Latin input stays byte-for-byte as before
+  ])("keeps non-Latin path segments: %s → %s", (input, want) => {
+    expect(slugifyTarget(input)).toBe(want);
+  });
+
+  it("is idempotent on every valid unicode slug it produces", () => {
+    for (const s of ["people/иван-петров", "東京/支店", "projects/мост-2026", "a/б/c"]) {
+      expect(slugifyTarget(slugifyTarget(s))).toBe(slugifyTarget(s));
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
