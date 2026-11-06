@@ -11,7 +11,7 @@
  */
 import { auditSecrets, guardSecretsDeep, guardWrite, type SecretFinding } from "./secret-scan.ts";
 import type { Storage } from "./storage.ts";
-import { validateSlug } from "./pages.ts";
+import { lockPageSlugs, validateSlug } from "./pages.ts";
 import { wellFormJsonbValue } from "./well-form.ts";
 import { PageNotFoundError } from "./operation-error.ts";
 
@@ -34,9 +34,9 @@ function normaliseSource(source: string): string {
 }
 
 /**
- * Upsert one raw payload for (slug, source). A scoped caller (`sourceId` set)
- * may only attach data to a page its own source owns — same ownership guard
- * as addTimelineEvent. Returns whether the row was created (vs replaced).
+ * Upsert one raw payload for (slug, source) on a live page. A scoped caller
+ * (`sourceId` set) may only attach data to a page its own source owns — same
+ * ownership guard as addTimelineEvent. Returns whether the row was created (vs replaced).
  */
 export async function putRawData(
   storage: Storage,
@@ -60,26 +60,33 @@ export async function putRawData(
   if (json.length > MAX_RAW_DATA_BYTES) {
     throw new Error(`raw_data payload exceeds ${MAX_RAW_DATA_BYTES} bytes`);
   }
-  if (scope !== null) {
-    const owns = await storage
-      .engine()
-      .query(`SELECT 1 FROM pages WHERE slug = $1 AND source_id = $2`, [
-        slug,
-        scope,
-      ]);
+  // raw_data has no foreign key to pages: a row on a missing or soft-deleted
+  // page would be inherited by the next page created on that slug. FOR KEY
+  // SHARE holds the page until the insert commits, so a purge's DELETE waits
+  // and its leftover sweep sees this row.
+  const ownerParams: unknown[] = [slug];
+  if (scope !== null) ownerParams.push(scope);
+  const r = await storage.engine().transaction(async (tx) => {
+    // The slug lock first, as every page writer takes it (rename, merge).
+    await lockPageSlugs(tx, slug);
+    const owns = await tx.query(
+      `SELECT 1 FROM pages WHERE slug = $1 AND deleted_at IS NULL${scope !== null ? " AND source_id = $2" : ""}
+        FOR KEY SHARE`,
+      ownerParams,
+    );
     if (owns.rows.length === 0) {
       throw new PageNotFoundError(slug);
     }
-  }
-  const r = await storage.engine().query<{ inserted: boolean }>(
-    `INSERT INTO raw_data (slug, source, data)
-     VALUES ($1, $2, $3::text::jsonb)
-     ON CONFLICT (slug, source) DO UPDATE
-       SET data = EXCLUDED.data,
-           created_at = NOW()
-     RETURNING (xmax = 0) AS inserted`,
-    [slug, src, json],
-  );
+    return tx.query<{ inserted: boolean }>(
+      `INSERT INTO raw_data (slug, source, data)
+       VALUES ($1, $2, $3::text::jsonb)
+       ON CONFLICT (slug, source) DO UPDATE
+         SET data = EXCLUDED.data,
+             created_at = NOW()
+       RETURNING (xmax = 0) AS inserted`,
+      [slug, src, json],
+    );
+  });
   await auditSecrets(storage.engine(), findings, `${slug}#${src}`, scope);
   return { slug, source: src, created: r.rows[0]?.inserted ?? false };
 }

@@ -1063,7 +1063,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "purge_deleted_pages",
     scope: "admin",
     description:
-      "Admin escape hatch: HARD-delete pages whose deleted_at is older than `older_than_hours` (default 720 = 30 days for pages; the purge cycle phase keeps 72 for documents). Cascades to page_versions / page_aliases / links via FK. The manual counterpart to the autopilot purge cycle phase. Returns the count + reaped slugs and `ttl_hours`, the cutoff it applied. WRITE — requires the `admin` scope (source-scoped) or the internal token; never reachable from the static public bearer. Scope split: delete_page = write, purge = admin.",
+      "Admin escape hatch: HARD-delete pages whose deleted_at is older than `older_than_hours` (default 720 = 30 days for pages; the purge cycle phase keeps 72 for documents). Cascades to page_versions / page_aliases / links via FK, and also removes the raw_data and tags rows on each purged slug (reported as raw_data_rows / tags_rows). The manual counterpart to the autopilot purge cycle phase. Returns the count + reaped slugs and `ttl_hours`, the cutoff it applied. WRITE — requires the `admin` scope (source-scoped) or the internal token; never reachable from the static public bearer. Scope split: delete_page = write, purge = admin.",
     params: {
       older_than_hours: num({
         minimum: 0,
@@ -1389,9 +1389,9 @@ export const OPERATIONS: readonly Operation[] = [
     name: "put_raw_data",
     scope: "write",
     description:
-      "Attach a raw payload (API response, headers, importer sidecar) to a page, keyed (slug, source). Newest-wins upsert: re-putting the same key REPLACES the payload (a cache of the latest fetch, not a history). `source` is the DATA-source label ('crustdata', an importer name), NOT the tenant axis; a scoped caller may only attach to a page its own source owns. Payload capped at 1 MB. WRITE — refused on public ingress.",
+      "Attach a raw payload (API response, headers, importer sidecar) to a page, keyed (slug, source). Newest-wins upsert: re-putting the same key REPLACES the payload (a cache of the latest fetch, not a history). `source` is the DATA-source label ('crustdata', an importer name), NOT the tenant axis; the slug must name a live (not soft-deleted) page, else the call fails with PageNotFound (`not_found`), and a scoped caller may only attach to a page its own source owns. Payload capped at 1 MB. WRITE — refused on public ingress.",
     params: {
-      slug: str({ ...req, description: "The owning page slug (must exist for scoped callers)." }),
+      slug: str({ ...req, description: "The owning page slug; must be a live page." }),
       source: str({ ...req, description: "Data-source label, e.g. an importer name." }),
       data: obj({ ...req, description: "The raw payload (plain JSON object, <= 1 MB serialized)." }),
     },

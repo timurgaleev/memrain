@@ -8,8 +8,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { putPage } from "../src/core/pages.ts";
+import { deletePage, putPage } from "../src/core/pages.ts";
 import { getRawData, putRawData } from "../src/core/raw-data.ts";
+import { purgeDeletedPages } from "../src/core/pages-purge.ts";
+import { PageNotFoundError } from "../src/core/operation-error.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -56,6 +58,22 @@ describe("putRawData / getRawData", () => {
     expect(
       await getRawData(storage, "people/alice", { sourceIds: ["tenant-b"] }),
     ).toHaveLength(0);
+  });
+
+  it("a new owner of a purged slug does not inherit the old payload", async () => {
+    await putRawData(storage, "people/alice", "crustdata", { secret: 1 });
+    await deletePage(storage, "people/alice");
+    await purgeDeletedPages(storage.engine(), 0);
+    await storage.engine().query(`INSERT INTO sources (id, kind, path_prefix) VALUES ('tenant-b', 'other', '/tenant-b')`);
+    await putPage(storage, { slug: "people/alice", type: "person", source_id: "tenant-b" });
+    expect(await getRawData(storage, "people/alice")).toEqual([]);
+  });
+
+  it("putRawData refuses a slug with no live page", async () => {
+    await expect(putRawData(storage, "people/nobody", "crm", { v: 1 })).rejects.toBeInstanceOf(PageNotFoundError);
+    await deletePage(storage, "people/alice");
+    await expect(putRawData(storage, "people/alice", "crm", { v: 1 })).rejects.toBeInstanceOf(PageNotFoundError);
+    await expect(putRawData(storage, "people/alice", "crm", { v: 1 }, "default")).rejects.toBeInstanceOf(PageNotFoundError);
   });
 
   it("rejects a non-object payload", async () => {

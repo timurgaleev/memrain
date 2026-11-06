@@ -11,6 +11,8 @@
  * Two classes we REPORT but DO NOT delete (need human eyeballs):
  *   - documents whose source_path no longer exists on disk
  *     (file might have been renamed, not deleted)
+ *   - raw_data / tags rows whose slug has no page (left by a purge before the
+ *     purge removed them; counts only)
  *   - documents with zero chunks (corrupt index — re-run indexer), EXCEPT the
  *     ones the code indexer marked as a blank source: an empty tracked file
  *     re-indexes to zero chunks every time, so flagging it is a permanent
@@ -49,6 +51,9 @@ export interface OrphansPurgeResult {
      * the operator to re-index by absolute path and drop the stale row.
      */
     docs_with_relative_source_path: { id: string; sourcePath: string }[];
+    /** raw_data / tags rows whose slug has no page row at all. Report only. */
+    raw_data_without_page: number;
+    tags_without_page: number;
   };
 }
 
@@ -137,6 +142,12 @@ export async function orphansPurgePhase(
       ORDER BY source_path`,
   );
 
+  const pageless = await engine.query<{ raw: number; tags: number }>(
+    `SELECT
+       (SELECT count(*)::int FROM raw_data r WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.slug = r.slug)) AS raw,
+       (SELECT count(*)::int FROM tags t WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.slug = t.slug)) AS tags`,
+  );
+
   return {
     deleted: { embeddings, entity_mentions, entities },
     flagged: {
@@ -149,6 +160,8 @@ export async function orphansPurgePhase(
         id: r.id,
         sourcePath: r.source_path,
       })),
+      raw_data_without_page: pageless.rows[0]?.raw ?? 0,
+      tags_without_page: pageless.rows[0]?.tags ?? 0,
     },
   };
 }

@@ -6,7 +6,9 @@
  * delete is reversible (page_restore). This module is the reaper that finally
  * frees a row once it has aged past `older_than_hours`, cascading to
  * page_versions / page_aliases / links via the FK ON DELETE CASCADE declared in
- * migrations 015 / 016 / 034.
+ * migrations 015 / 016 / 034. `raw_data` and `tags` have no foreign key to
+ * pages, so their rows are deleted by slug in the same transaction as the page
+ * — otherwise a later page on the same slug would inherit them.
  *
  * The autopilot `purge` cycle phase (core/cycle/purge.ts) runs the same helper
  * unscoped with the page TTL (PAGE_SOFT_DELETE_TTL_HOURS, 30 days — longer than
@@ -30,6 +32,9 @@ export interface PurgeDeletedPagesResult {
   blocked: Array<{ slug: string; reason: string }>;
   /** The age cutoff in hours this run applied (the default or the caller's). */
   ttl_hours: number;
+  /** raw_data / tags rows removed with the pages (on a dry run: that would be). */
+  raw_data_rows: number;
+  tags_rows: number;
   /** Set on a dry run: nothing was deleted, `planned` is what a real run would reap now. */
   dry_run?: true;
   planned?: string[];
@@ -57,6 +62,34 @@ export function purgePlanHash(entries: ReadonlyArray<{ slug: string; deleted_at:
 }
 
 const FOREIGN_KEY_VIOLATION = "23503";
+
+type Leftovers = Pick<PurgeDeletedPagesResult, "raw_data_rows" | "tags_rows">;
+
+/** Tables keyed by page slug with no foreign key to pages. */
+const LEFTOVER_TABLES: ReadonlyArray<[keyof Leftovers, string]> = [
+  ["raw_data_rows", "raw_data"],
+  ["tags_rows", "tags"],
+];
+
+/**
+ * Count (or, with `remove`, delete) the rows that would outlive the given
+ * pages. `pages.slug` is the primary key, so a purged slug has no owner left
+ * and every row on it goes, whatever its source_id.
+ */
+async function leftovers(engine: Engine, slugs: string[], remove: boolean): Promise<Leftovers> {
+  const out: Leftovers = { raw_data_rows: 0, tags_rows: 0 };
+  if (slugs.length === 0) return out;
+  for (const [key, table] of LEFTOVER_TABLES) {
+    const r = await engine.query<{ n: number }>(
+      remove
+        ? `WITH d AS (DELETE FROM ${table} WHERE slug = ANY($1::text[]) RETURNING 1) SELECT count(*)::int AS n FROM d`
+        : `SELECT count(*)::int AS n FROM ${table} WHERE slug = ANY($1::text[])`,
+      [slugs],
+    );
+    out[key] = r.rows[0]?.n ?? 0;
+  }
+  return out;
+}
 
 /**
  * Hard-delete pages whose `deleted_at` is older than `olderThanHours`.
@@ -92,7 +125,13 @@ export async function purgeDeletedPages(
     );
     const planned = plan.rows.map((r) => r.slug);
     const planHash = purgePlanHash(plan.rows);
-    if (opts.dryRun) return { count: 0, slugs: [], blocked: [], ttl_hours: olderThanHours, dry_run: true, planned, plan_hash: planHash };
+    if (opts.dryRun) {
+      return {
+        count: 0, slugs: [], blocked: [], ttl_hours: olderThanHours,
+        ...(await leftovers(engine, planned, false)),
+        dry_run: true, planned, plan_hash: planHash,
+      };
+    }
     if (planHash !== opts.expectedPlanHash) {
       throw new OperationError(
         "conflict",
@@ -105,27 +144,32 @@ export async function purgeDeletedPages(
     params.push(planned, plan.rows.map((r) => r.deleted_at));
     expiredWhere += ` AND (slug, deleted_at::text) IN (SELECT * FROM unnest($${params.length - 1}::text[], $${params.length}::text[]))`;
   }
-  // Fast path: one set-based DELETE. Every table referencing pages cascades
-  // today, so this almost always succeeds.
+  // Fast path: one set-based DELETE plus the leftovers, in one transaction.
+  // Every table referencing pages cascades today, so this almost always
+  // succeeds; a violation rolls the whole transaction back.
   try {
-    const r = await engine.query<{ slug: string }>(
-      `DELETE FROM pages WHERE ${expiredWhere} RETURNING slug`,
-      params,
-    );
-    return { count: r.rows.length, slugs: r.rows.map((row) => row.slug).sort(), blocked: [], ttl_hours: olderThanHours };
+    return await engine.transaction(async (tx) => {
+      const r = await tx.query<{ slug: string }>(
+        `DELETE FROM pages WHERE ${expiredWhere} RETURNING slug`,
+        params,
+      );
+      const slugs = r.rows.map((row) => row.slug).sort();
+      return { count: slugs.length, slugs, blocked: [], ttl_hours: olderThanHours, ...(await leftovers(tx, slugs, true)) };
+    });
   } catch (err) {
     if ((err as { code?: string })?.code !== FOREIGN_KEY_VIOLATION) throw err;
   }
   // Slow path, reached only when some expired page is still referenced by a
-  // row that does not cascade: one DELETE per page so the stuck ones are
-  // reported and the rest still go. Each statement commits on its own — this
-  // must not run inside a transaction, where the first violation aborts it.
+  // row that does not cascade: one transaction per page so the stuck ones are
+  // reported and the rest still go. Never one transaction around the loop,
+  // where the first violation aborts it.
   const expired = await engine.query<{ slug: string; deleted_at: string }>(
     `SELECT slug, deleted_at::text AS deleted_at FROM pages WHERE ${expiredWhere} ORDER BY slug`,
     params,
   );
   const slugs: string[] = [];
   const blocked: Array<{ slug: string; reason: string }> = [];
+  const removed: Leftovers = { raw_data_rows: 0, tags_rows: 0 };
   for (const { slug, deleted_at: deletedAt } of expired.rows) {
     try {
       // Same predicate again, pinned to the deletion the scan saw (and so to
@@ -133,19 +177,25 @@ export async function purgeDeletedPages(
       // between the scan and this row keeps the page.
       const rowParams: unknown[] = [String(olderThanHours), slug, deletedAt];
       const rowFilter = andSourceScope("source_id", sourceIds, rowParams);
-      const r = await engine.query<{ slug: string }>(
-        `DELETE FROM pages
-          WHERE slug = $2 AND deleted_at IS NOT NULL
-            AND deleted_at::text = $3
-            AND deleted_at < NOW() - ($1 || ' hours')::interval${rowFilter}
-          RETURNING slug`,
-        rowParams,
-      );
-      if (r.rows.length > 0) slugs.push(slug);
+      const gone = await engine.transaction(async (tx) => {
+        const r = await tx.query<{ slug: string }>(
+          `DELETE FROM pages
+            WHERE slug = $2 AND deleted_at IS NOT NULL
+              AND deleted_at::text = $3
+              AND deleted_at < NOW() - ($1 || ' hours')::interval${rowFilter}
+            RETURNING slug`,
+          rowParams,
+        );
+        return r.rows.length > 0 ? leftovers(tx, [slug], true) : null;
+      });
+      if (gone) {
+        slugs.push(slug);
+        for (const [key] of LEFTOVER_TABLES) removed[key] += gone[key];
+      }
     } catch (err) {
       if ((err as { code?: string })?.code !== FOREIGN_KEY_VIOLATION) throw err;
       blocked.push({ slug, reason: "still referenced by a row that does not cascade" });
     }
   }
-  return { count: slugs.length, slugs, blocked, ttl_hours: olderThanHours };
+  return { count: slugs.length, slugs, blocked, ttl_hours: olderThanHours, ...removed };
 }

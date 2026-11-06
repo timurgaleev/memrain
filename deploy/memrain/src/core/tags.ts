@@ -19,6 +19,7 @@ import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { PageNotFoundError } from "./operation-error.ts";
 import { guardFields } from "./secret-scan.ts";
+import { lockPageSlugs } from "./pages.ts";
 
 /** Upper bound on a single normalized tag (defence vs unbounded writes).
  *  An over-limit tag is REJECTED, not truncated — truncating would collapse
@@ -64,12 +65,6 @@ export async function addTag(
   // a page it owns.
   const scope =
     typeof sourceId === "string" && sourceId.length > 0 ? sourceId : null;
-  // ponytail: check-then-act TOCTOU — a concurrent page_delete between this
-  // check and the insert could tag a just-deleted page. The tags table has no
-  // FK (migration 023 is standalone), so the DB can't enforce it. Harmless +
-  // accepted: soft-delete is reversible, an orphan tag is inert and cleaned on
-  // restore, and tag writes are single-operator/internal-only. Add an FK if
-  // tags ever go multi-writer.
   // One lookup answers both questions: the page exists (in the caller's source
   // when scoped), and which source owns it. An unscoped tag lands under that
   // owner; stamping `default` would hide it from the owner's scoped read.
@@ -87,13 +82,27 @@ export async function addTag(
   // Scanned before normalizing: lowercasing hides case-sensitive key shapes.
   const guarded = await guardFields(storage.engine(), slug, owner, `tag on page '${slug}'`, { tag });
   const params: unknown[] = [slug, requireTag(guarded.tag), owner];
+  // No foreign key to pages: FOR KEY SHARE holds the page until the insert
+  // commits, so a purge's DELETE waits and its leftover sweep sees this row.
   // The conflict target folds in source_id (migration 059), so each tenant owns
   // its own (slug, tag, source_id) row.
-  await storage.engine().query(
-    `INSERT INTO tags (slug, tag, source_id) VALUES ($1, $2, $3)
-     ON CONFLICT (slug, tag, source_id) DO NOTHING`,
-    params,
-  );
+  await storage.engine().transaction(async (tx) => {
+    // The slug lock first, as every page writer takes it: rename and merge move
+    // tags under it, so a tag cannot land on a slug that is being moved away.
+    await lockPageSlugs(tx, slug);
+    const live = await tx.query(
+      `SELECT 1 FROM pages WHERE slug = $1 AND deleted_at IS NULL AND source_id = $2 FOR KEY SHARE`,
+      [slug, owner],
+    );
+    if (live.rows.length === 0) {
+      throw new PageNotFoundError(slug);
+    }
+    await tx.query(
+      `INSERT INTO tags (slug, tag, source_id) VALUES ($1, $2, $3)
+       ON CONFLICT (slug, tag, source_id) DO NOTHING`,
+      params,
+    );
+  });
 }
 
 /**
