@@ -763,7 +763,7 @@ export async function addFact(
   // (NULL chunk) always insert.
   const conflict =
     chunkId !== null
-      ? `ON CONFLICT (entity_slug, fact, source_chunk_id, (COALESCE(attributed_to, '')))
+      ? `ON CONFLICT (entity_slug, md5(fact), source_chunk_id, (COALESCE(attributed_to, '')))
            WHERE source_chunk_id IS NOT NULL
            DO NOTHING`
       : "";

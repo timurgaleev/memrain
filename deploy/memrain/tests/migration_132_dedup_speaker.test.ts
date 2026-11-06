@@ -36,7 +36,7 @@ const base = { entity_slug: "people/a", fact: "Ship on Friday.", source_chunk_id
 describe("migration 132", () => {
   it("swaps the speaker-blind index for one with the speaker, reverts and re-applies", async () => {
     const e = storage.engine();
-    expect(await indexes()).toEqual(["entity_facts_dedup_speaker_idx"]);
+    expect(await indexes()).toEqual(["entity_facts_dedup_speaker_md5_idx"]);
     await addFact(storage, { ...base, attributed_to: "user" });
 
     const later = discoverMigrations().map((m) => m.id).filter((id) => id > 132).sort((a, b) => b - a);
@@ -46,7 +46,7 @@ describe("migration 132", () => {
 
     const again = await runMigrations(e);
     expect(again.applied.map((m) => m.id)).toEqual([132, ...later.reverse()]);
-    expect(await indexes()).toEqual(["entity_facts_dedup_speaker_idx"]);
+    expect(await indexes()).toEqual(["entity_facts_dedup_speaker_md5_idx"]);
   });
 
   it("refuses its down while two speakers hold the same chunk claim", async () => {

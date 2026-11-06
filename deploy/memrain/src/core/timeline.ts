@@ -161,7 +161,8 @@ export async function addTimelineEvent(
     { event: input.event, detail: rawDetail },
   );
 
-  // Manual/API events (no chunk id) dedup on the mig079 key: a retried write
+  // Manual/API events (no chunk id) dedup on the mig079 key (the wording
+  // hashed since mig143, so a long event fits the index): a retried write
   // with identical (slug, time, wording, label, tenant) is a no-op. Distinct
   // provenance (source_label) still coexists — the key was widened for exactly
   // that.
@@ -172,7 +173,7 @@ export async function addTimelineEvent(
       `INSERT INTO timeline_events
          (slug, occurred_at, event, detail, source_label, source_chunk_id${extra.cols})
        VALUES ($1, $2::timestamptz, $3, $4, $5, NULL${extra.values})
-       ON CONFLICT (slug, occurred_at, event, source_label, source_id)
+       ON CONFLICT (slug, occurred_at, md5(event), source_label, source_id)
          WHERE source_chunk_id IS NULL
          DO NOTHING
        RETURNING id`,
