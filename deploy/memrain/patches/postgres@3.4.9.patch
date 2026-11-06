@@ -2,7 +2,7 @@ diff --git a/node_modules/postgres/.bun-tag-3da444990da2dd18 b/.bun-tag-3da44499
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/cjs/src/connection.js b/cjs/src/connection.js
-index 07f6716702ac888215c86ad6e0071aaf55ae519c..318d48a6a05d65e317640eb780731d74ed94c19e 100644
+index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e981cb8fec 100644
 --- a/cjs/src/connection.js
 +++ b/cjs/src/connection.js
 @@ -78,6 +78,9 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -118,7 +118,16 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..318d48a6a05d65e317640eb780731d74
      if (query) {
        if (errorResponse) {
          query.retried
-@@ -564,10 +594,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -549,6 +579,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+ 
+     query = results = errorResponse = null
+     result = new Result()
++    // A query that failed after DataRow left the counter past its rows; the next result would open with holes.
++    rows = 0
+     connectTimer.cancel()
+ 
+     if (initial) {
+@@ -564,10 +596,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          return fetchArrayTypes()
        }
  
@@ -133,7 +142,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..318d48a6a05d65e317640eb780731d74
      }
  
      while (sent.length && (query = sent.shift()) && (query.active = true, query.cancelled))
-@@ -580,7 +612,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -580,7 +614,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
        ? !connection.reserved.release && x[5] === 73 // I
          ? ending
            ? terminate()
@@ -142,7 +151,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..318d48a6a05d65e317640eb780731d74
          : connection.reserved()
        : ending
          ? terminate()
-@@ -767,14 +799,21 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -767,14 +801,21 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
  
    async function fetchArrayTypes() {
      needsTypes = false
@@ -547,7 +556,7 @@ index 8438f5da92cf7637d98a33491d75c75b1c817c25..c444310ff87b0ac81fd19cd3170a0ba6
        const out = xs[index++]
  
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..858b502073f8d932970516d1a44daf075a38e523 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375fbdc58ce 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -78,6 +78,9 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -663,7 +672,16 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..858b502073f8d932970516d1a44daf07
      if (query) {
        if (errorResponse) {
          query.retried
-@@ -564,10 +594,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -549,6 +579,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+ 
+     query = results = errorResponse = null
+     result = new Result()
++    // A query that failed after DataRow left the counter past its rows; the next result would open with holes.
++    rows = 0
+     connectTimer.cancel()
+ 
+     if (initial) {
+@@ -564,10 +596,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          return fetchArrayTypes()
        }
  
@@ -678,7 +696,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..858b502073f8d932970516d1a44daf07
      }
  
      while (sent.length && (query = sent.shift()) && (query.active = true, query.cancelled))
-@@ -580,7 +612,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -580,7 +614,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
        ? !connection.reserved.release && x[5] === 73 // I
          ? ending
            ? terminate()
@@ -687,7 +705,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..858b502073f8d932970516d1a44daf07
          : connection.reserved()
        : ending
          ? terminate()
-@@ -767,14 +799,21 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -767,14 +801,21 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
  
    async function fetchArrayTypes() {
      needsTypes = false
