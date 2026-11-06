@@ -2,7 +2,7 @@ diff --git a/node_modules/postgres/.bun-tag-3da444990da2dd18 b/.bun-tag-3da44499
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/cjs/src/connection.js b/cjs/src/connection.js
-index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e981cb8fec 100644
+index 07f6716702ac888215c86ad6e0071aaf55ae519c..e169fd6574ed758559d80d54ee347ecab5393fdd 100644
 --- a/cjs/src/connection.js
 +++ b/cjs/src/connection.js
 @@ -78,6 +78,9 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -31,7 +31,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e9
      } catch (error) {
        reject(error)
      }
-@@ -170,11 +175,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -170,12 +175,19 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          : (query = q, query.active = true)
  
        build(q)
@@ -43,9 +43,16 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e9
 -        && (!q.options.onexecute || q.options.onexecute(connection))
 +        && mayPipeline
      } catch (error) {
++      // Nothing of q reached the socket, but the replies of the queries ahead of it will.
++      // Fail q alone and keep it out of the reply order, or each reply lands on the wrong query.
++      if (query !== q && sent.remove(q)) {
++        queryError(q, error)
++        return true
++      }
        sent.length === 0 && write(Sync)
        errored(error)
-@@ -295,7 +301,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+       return true
+@@ -295,7 +307,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
  
    /* c8 ignore next 3 */
    function drain() {
@@ -54,7 +61,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e9
    }
  
    function data(x) {
-@@ -379,6 +385,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -379,6 +391,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
    }
  
    function error(err) {
@@ -63,7 +70,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e9
      if (connection.queue === queues.connecting && options.host[retries + 1])
        return
  
-@@ -388,6 +396,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -388,6 +402,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
    }
  
    function errored(err) {
@@ -72,7 +79,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e9
      stream && (stream.destroy(err), stream = null)
      query && queryError(query, err)
      initial && (queryError(initial, err), initial = null)
-@@ -438,6 +448,10 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -438,6 +454,10 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      remaining = 0
      incomings = null
      clearImmediate(nextWriteTimer)
@@ -83,7 +90,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e9
      socket.removeListener('data', data)
      socket.removeListener('connect', connected)
      idleTimer.cancel()
-@@ -447,10 +461,25 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -447,10 +467,25 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      socket.removeAllListeners()
      socket = null
  
@@ -110,7 +117,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e9
      closedTime = performance.now()
      hadError && options.shared.retries++
      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
-@@ -533,6 +562,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -533,6 +568,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
    }
  
    function ReadyForQuery(x) {
@@ -118,7 +125,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e9
      if (query) {
        if (errorResponse) {
          query.retried
-@@ -549,6 +579,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -549,6 +585,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
  
      query = results = errorResponse = null
      result = new Result()
@@ -127,7 +134,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e9
      connectTimer.cancel()
  
      if (initial) {
-@@ -564,10 +596,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -564,10 +602,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          return fetchArrayTypes()
        }
  
@@ -142,7 +149,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e9
      }
  
      while (sent.length && (query = sent.shift()) && (query.active = true, query.cancelled))
-@@ -580,7 +614,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -580,7 +620,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
        ? !connection.reserved.release && x[5] === 73 // I
          ? ending
            ? terminate()
@@ -151,7 +158,7 @@ index 07f6716702ac888215c86ad6e0071aaf55ae519c..bf7c87503a7167bdffdff0b1ff9175e9
          : connection.reserved()
        : ending
          ? terminate()
-@@ -767,14 +801,21 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -767,14 +807,21 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
  
    async function fetchArrayTypes() {
      needsTypes = false
@@ -556,7 +563,7 @@ index 8438f5da92cf7637d98a33491d75c75b1c817c25..c444310ff87b0ac81fd19cd3170a0ba6
        const out = xs[index++]
  
 diff --git a/src/connection.js b/src/connection.js
-index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375fbdc58ce 100644
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..eeaf21efba4b7733f710fb24a6914a3e872904fb 100644
 --- a/src/connection.js
 +++ b/src/connection.js
 @@ -78,6 +78,9 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
@@ -585,7 +592,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375
      } catch (error) {
        reject(error)
      }
-@@ -170,11 +175,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -170,12 +175,19 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          : (query = q, query.active = true)
  
        build(q)
@@ -597,9 +604,16 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375
 -        && (!q.options.onexecute || q.options.onexecute(connection))
 +        && mayPipeline
      } catch (error) {
++      // Nothing of q reached the socket, but the replies of the queries ahead of it will.
++      // Fail q alone and keep it out of the reply order, or each reply lands on the wrong query.
++      if (query !== q && sent.remove(q)) {
++        queryError(q, error)
++        return true
++      }
        sent.length === 0 && write(Sync)
        errored(error)
-@@ -295,7 +301,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+       return true
+@@ -295,7 +307,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
  
    /* c8 ignore next 3 */
    function drain() {
@@ -608,7 +622,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375
    }
  
    function data(x) {
-@@ -379,6 +385,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -379,6 +391,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
    }
  
    function error(err) {
@@ -617,7 +631,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375
      if (connection.queue === queues.connecting && options.host[retries + 1])
        return
  
-@@ -388,6 +396,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -388,6 +402,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
    }
  
    function errored(err) {
@@ -626,7 +640,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375
      stream && (stream.destroy(err), stream = null)
      query && queryError(query, err)
      initial && (queryError(initial, err), initial = null)
-@@ -438,6 +448,10 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -438,6 +454,10 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      remaining = 0
      incomings = null
      clearImmediate(nextWriteTimer)
@@ -637,7 +651,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375
      socket.removeListener('data', data)
      socket.removeListener('connect', connected)
      idleTimer.cancel()
-@@ -447,10 +461,25 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -447,10 +467,25 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
      socket.removeAllListeners()
      socket = null
  
@@ -664,7 +678,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375
      closedTime = performance.now()
      hadError && options.shared.retries++
      delay = (typeof backoff === 'function' ? backoff(options.shared.retries) : backoff) * 1000
-@@ -533,6 +562,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -533,6 +568,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
    }
  
    function ReadyForQuery(x) {
@@ -672,7 +686,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375
      if (query) {
        if (errorResponse) {
          query.retried
-@@ -549,6 +579,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -549,6 +585,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
  
      query = results = errorResponse = null
      result = new Result()
@@ -681,7 +695,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375
      connectTimer.cancel()
  
      if (initial) {
-@@ -564,10 +596,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -564,10 +602,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
          return fetchArrayTypes()
        }
  
@@ -696,7 +710,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375
      }
  
      while (sent.length && (query = sent.shift()) && (query.active = true, query.cancelled))
-@@ -580,7 +614,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -580,7 +620,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
        ? !connection.reserved.release && x[5] === 73 // I
          ? ending
            ? terminate()
@@ -705,7 +719,7 @@ index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..f5cf1519e78825cecedea869c2c7c375
          : connection.reserved()
        : ending
          ? terminate()
-@@ -767,14 +801,21 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+@@ -767,14 +807,21 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
  
    async function fetchArrayTypes() {
      needsTypes = false

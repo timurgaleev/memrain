@@ -17,6 +17,11 @@ const FIXES: Record<string, string> = {
     "    result = new Result()\n" +
     "    // A query that failed after DataRow left the counter past its rows; the next result would open with holes.\n" +
     "    rows = 0\n",
+  "unbuilt pipelined query kept out of the reply order":
+    "      if (query !== q && sent.remove(q)) {\n" +
+    "        queryError(q, error)\n" +
+    "        return true\n" +
+    "      }\n",
 };
 
 describe("postgres driver patch", () => {
