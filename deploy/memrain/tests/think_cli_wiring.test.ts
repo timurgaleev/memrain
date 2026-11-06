@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { runThinkCli } from "../src/commands/think.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
 import type { SearchHit } from "../src/core/search/hybrid.ts";
+import { restoreExitCode } from "./helpers/exit-code.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "memrain-think-cli-"));
 const cfgDir = join(tmp, ".memex");
@@ -87,7 +88,7 @@ describe("think CLI persistence wiring", () => {
       expect(process.exitCode).toBe(1);
     } finally {
       cap.restore();
-      process.exitCode = prevExit;
+      restoreExitCode(prevExit);
     }
   });
 

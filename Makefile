@@ -38,8 +38,9 @@ typecheck: ## Typecheck the whole package — src/ and tests/ alike
 lint-ts: ## Lint the daemon TypeScript (correctness rules only; eslint.config.js says what is off and why)
 	@cd deploy/memrain && bun run lint
 
-test: ## Run bash unit tests under tests/*.test.sh + the search_path guard
+test: ## Run bash unit tests under tests/*.test.sh + the search_path and test-hygiene guards
 	@bash scripts/check-search-path.sh
+	@bash scripts/check-test-hygiene.sh
 	@status=0; \
 	for f in tests/*.test.sh; do \
 	  [ -e "$$f" ] || { echo "(no bash tests found)"; break; }; \

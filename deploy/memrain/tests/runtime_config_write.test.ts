@@ -23,6 +23,7 @@ import {
   unsetRuntimeConfigKeys,
 } from "../src/core/runtime-config.ts";
 import { putRuntimeConfigRow } from "./helpers/runtime-config-row.ts";
+import { restoreExitCode } from "./helpers/exit-code.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "memrain-rc-write-"));
 const cfgDir = join(tmp, ".memex");
@@ -311,7 +312,7 @@ describe("doctor, names only", () => {
       await runDoctor({ configPath: cfgPath, argv: [] });
     } finally {
       c.restore();
-      process.exitCode = prevExit;
+      restoreExitCode(prevExit);
     }
     const out = c.out.join("\n");
     const report = JSON.parse(out) as {

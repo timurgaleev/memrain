@@ -11,6 +11,7 @@ import { indexCodeFile } from "../src/core/indexer-code.ts";
 import { runCode } from "../src/commands/code.ts";
 import { loadConfig } from "../src/core/config.ts";
 import { _resetParsersForTests } from "../src/core/chunkers/parsers.ts";
+import { restoreExitCode } from "./helpers/exit-code.ts";
 
 const dbDir = mkdtempSync(join(tmpdir(), "tb-code-cmd-db-"));
 const repoDir = mkdtempSync(join(tmpdir(), "tb-code-cmd-repo-"));
@@ -94,7 +95,7 @@ async function runAndCapture(
     // not JSON, that's fine
   }
   // restore
-  process.exitCode = origExitCode;
+  restoreExitCode(origExitCode);
   return { stdout: captured, parsed };
 }
 

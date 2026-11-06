@@ -22,6 +22,7 @@ import {
 import { buildRemediationEnvelope, runDoctor } from "../src/commands/doctor.ts";
 import { buildRemediationPlan } from "../src/core/remediation.ts";
 import { diffMigrationIds } from "../src/core/migrate.ts";
+import { restoreExitCode } from "./helpers/exit-code.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -417,7 +418,7 @@ async function runRemediate(dir: string, breakVault: boolean): Promise<Remediate
     exitCode = process.exitCode;
   } finally {
     console.log = origLog;
-    process.exitCode = prevExit;
+    restoreExitCode(prevExit);
     if (prevVault !== undefined) process.env.MEMRAIN_VAULT_PATH = prevVault;
   }
   return { emitted: JSON.parse(captured.join("\n")), exitCode };

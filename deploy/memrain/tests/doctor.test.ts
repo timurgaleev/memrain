@@ -12,6 +12,7 @@ import { KNOWN_CHECK_NAMES } from "../src/core/doctor-categories.ts";
 import { Storage } from "../src/core/storage.ts";
 import { VERSION } from "../src/version.ts";
 import packageJson from "../package.json" with { type: "json" };
+import { restoreExitCode } from "./helpers/exit-code.ts";
 
 /** One check as the report renders it. */
 interface ReportedCheck {
@@ -48,7 +49,7 @@ async function report(cfg: string): Promise<{ parsed: Report; exitCode: number |
     exitCode = process.exitCode;
   } finally {
     console.log = origLog;
-    process.exitCode = prevExit;
+    restoreExitCode(prevExit);
   }
   return { parsed: JSON.parse(captured.join("\n")) as Report, exitCode };
 }

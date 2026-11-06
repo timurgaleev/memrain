@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { runInit } from "../src/commands/init.ts";
 
-const TEMPLATES_DIR = resolve(dirname(new URL(import.meta.url).pathname), "..", "templates");
+const TEMPLATES_DIR = resolve(import.meta.dir, "..", "templates");
 
 const EXISTING = {
   database: { type: "postgres" },

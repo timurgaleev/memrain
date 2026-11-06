@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runJobs } from "../src/commands/jobs.ts";
+import { restoreExitCode } from "./helpers/exit-code.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "memrain-jobs-cli-"));
 const cfgDir = join(tmp, ".memex");
@@ -46,7 +47,7 @@ async function run(opts: Parameters<typeof runJobs>[0]): Promise<Record<string, 
     await runJobs({ ...opts, configPath: cfgPath });
   } finally {
     cap.restore();
-    process.exitCode = prevExit;
+    restoreExitCode(prevExit);
   }
   return JSON.parse(cap.lines.join("\n")) as Record<string, unknown>;
 }
