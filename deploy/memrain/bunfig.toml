@@ -4,3 +4,4 @@ frozenLockfile = true
 
 [test]
 coverage = false
+preload = ["./tests/setup/hermetic-env.ts"]

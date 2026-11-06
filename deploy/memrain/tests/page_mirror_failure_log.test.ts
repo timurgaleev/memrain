@@ -60,15 +60,19 @@ describe("page mirror failure", () => {
   });
 
   it("records one row per failed put, not one per page ever written", async () => {
-    // Hermetic runs have no Bedrock credentials, so the mirror's embed step
-    // fails for every page here — which makes this the wrong place to assert
-    // the success path. What IS assertable: the row count tracks the number of
-    // failing writes, so the log stays readable instead of one row per retry.
-    for (const slug of ["notes/a", "notes/b"]) {
-      await dispatchTool(storage, {
-        name: "page_put",
-        arguments: { slug, markdown_body: "body text" },
-      });
+    // The mirror is broken the same way as above, so the assertion holds
+    // whether or not embedding would succeed. The row count tracks the number
+    // of failing writes, so the log stays readable instead of one row per retry.
+    await storage.engine().exec("ALTER TABLE chunks RENAME TO chunks_hidden");
+    try {
+      for (const slug of ["notes/a", "notes/b"]) {
+        await dispatchTool(storage, {
+          name: "page_put",
+          arguments: { slug, markdown_body: "body text" },
+        });
+      }
+    } finally {
+      await storage.engine().exec("ALTER TABLE chunks_hidden RENAME TO chunks");
     }
     const log = await getIngestLog(storage.engine(), { limit: 50 });
     const rows = log.filter((e) => e.source_type === "page-mirror-failed");
