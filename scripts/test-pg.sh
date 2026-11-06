@@ -34,9 +34,11 @@ READY_TIMEOUT="${TEST_PG_TIMEOUT:-60}"
 TEST_TIMEOUT="${TEST_TIMEOUT:-30000}"
 
 CONTAINER=""
+OUT=""
 
 cleanup() {
   local status=$?
+  [ -z "$OUT" ] || rm -f "$OUT"
   if [ -n "$CONTAINER" ]; then
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
     echo "[test-pg] removed container $CONTAINER"
@@ -115,8 +117,24 @@ run_pg_tests() {
   done < <(grep -l MEMRAIN_TEST_POSTGRES_URL "$PKG"/tests/*.test.ts | sort)
   [ "${#files[@]}" -gt 0 ] || die "no test file reads MEMRAIN_TEST_POSTGRES_URL"
   log "running ${#files[@]} test file(s): ${files[*]}"
-  (cd "$PKG" && bun test --timeout "$TEST_TIMEOUT" "${files[@]}")
+  OUT="$(mktemp -t test-pg-out.XXXXXX)"
+  # pipefail (set above) keeps bun's exit status through tee.
+  (cd "$PKG" && bun test --timeout "$TEST_TIMEOUT" "${files[@]}") 2>&1 | tee "$OUT"
+  assert_no_skips "$OUT"
 }
+
+# With a Postgres URL set nothing in these files has a reason to skip, so a
+# skip is a case that silently did not run.
+assert_no_skips() {
+  local skipped
+  # bun colors the summary when FORCE_COLOR is set; strip ANSI codes first.
+  # A todo test never runs either, so it counts as a skip.
+  skipped="$(sed $'s/\x1b\\[[0-9;]*m//g' "$1" | awk '/^ *[0-9]+ (skip|todo)/{n += $1} END{print n + 0}')"
+  [ "$skipped" -eq 0 ] || die "$skipped test(s) skipped — a Postgres run must skip nothing"
+}
+
+# Sourced by tests/test-pg-summary.test.sh for its functions only.
+if [ -n "${TEST_PG_SOURCE_ONLY:-}" ]; then return 0; fi
 
 command -v bun >/dev/null 2>&1 || die "bun not found"
 

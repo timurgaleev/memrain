@@ -129,33 +129,35 @@ for (const { name, open } of ENGINES) {
         expect(await db.manifest()).toBe(before);
       });
 
-      it.skipIf(name !== "Postgres")("refuses while another client is connected", async () => {
-        await migrateTo120(db.engine);
-        const before = await db.manifest();
-        const other = postgres((db as Db & { url: string }).url, { max: 1, onnotice: () => {} });
-        try {
-          await other`SELECT 1`;
-          await expect(db.runDownFile()).rejects.toThrow(/other client sessions/);
-          await expect(down(db)).rejects.toThrow(/other client sessions/);
-          expect(await db.manifest()).toBe(before);
-        } finally {
-          await other.end({ timeout: 5 });
-        }
-        // The command's own engine is a pool (default size); it must not count
-        // as a second session against itself.
-        await db.engine.close();
-        const cli = new Storage(new PostgresEngine({ url: (db as Db & { url: string }).url }));
-        const log = console.log;
-        console.log = () => {};
-        try {
-          await runApplyMigrations({ down: 120, yes: true, storage: cli });
-        } finally {
-          console.log = log;
-          await cli.close();
-        }
-        await db.reopen();
-        expect(await topId(db)).toBe(119);
-      });
+      if (name === "Postgres") {
+        it("refuses while another client is connected", async () => {
+          await migrateTo120(db.engine);
+          const before = await db.manifest();
+          const other = postgres((db as Db & { url: string }).url, { max: 1, onnotice: () => {} });
+          try {
+            await other`SELECT 1`;
+            await expect(db.runDownFile()).rejects.toThrow(/other client sessions/);
+            await expect(down(db)).rejects.toThrow(/other client sessions/);
+            expect(await db.manifest()).toBe(before);
+          } finally {
+            await other.end({ timeout: 5 });
+          }
+          // The command's own engine is a pool (default size); it must not count
+          // as a second session against itself.
+          await db.engine.close();
+          const cli = new Storage(new PostgresEngine({ url: (db as Db & { url: string }).url }));
+          const log = console.log;
+          console.log = () => {};
+          try {
+            await runApplyMigrations({ down: 120, yes: true, storage: cli });
+          } finally {
+            console.log = log;
+            await cli.close();
+          }
+          await db.reopen();
+          expect(await topId(db)).toBe(119);
+        });
+      }
     });
   });
 }
