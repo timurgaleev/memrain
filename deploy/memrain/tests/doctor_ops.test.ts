@@ -20,6 +20,7 @@ import {
   checkJunkEntityHubs,
   checkFenceRowsWithoutMarkers,
   checkNamespaceOnlyTargets,
+  checkDanglingSlugRedirects,
 } from "../src/core/doctor-ops.ts";
 import { putPage } from "../src/core/pages.ts";
 import { renderFactsFence } from "../src/core/facts-fence.ts";
@@ -445,6 +446,38 @@ describe("checkNamespaceOnlyTargets", () => {
   });
 });
 
+describe("checkDanglingSlugRedirects", () => {
+  const sql = (q: string) => storage.engine().exec(q);
+  const alias = (from: string, to: string) =>
+    sql(`INSERT INTO slug_aliases (alias_slug, canonical_slug) VALUES ('${from}', '${to}')`);
+
+  it("reports none on a clean store", async () => {
+    const r = await checkDanglingSlugRedirects(storage.engine());
+    expect(r.status).toBe("ok");
+    expect(r.ok).toBe(true);
+  });
+
+  it("ignores a redirect to a live page", async () => {
+    await sql(`INSERT INTO pages (slug, type, content_hash) VALUES ('people/new', 'note', 'h1')`);
+    await alias("people/old", "people/new");
+    const r = await checkDanglingSlugRedirects(storage.engine());
+    expect(r.status).toBe("ok");
+  });
+
+  it("lists redirects to a missing or soft-deleted page", async () => {
+    await sql(`INSERT INTO pages (slug, type, content_hash) VALUES ('people/gone', 'note', 'h2')`);
+    await sql(`UPDATE pages SET deleted_at = NOW() WHERE slug = 'people/gone'`);
+    await alias("people/a", "people/nowhere");
+    await alias("people/b", "people/gone");
+    const r = await checkDanglingSlugRedirects(storage.engine());
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("warn");
+    expect(r.detail).toStartWith("2 slug redirect(s)");
+    expect(r.detail).toContain("people/a -> people/nowhere");
+    expect(r.detail).toContain("people/b -> people/gone");
+  });
+});
+
 describe("ops probe exit-code invariant", () => {
   // Every ops probe reports both fields; `ok` is only the exit-code view of
   // `status`, so the two can never disagree about what fails the process.
@@ -459,6 +492,7 @@ describe("ops probe exit-code invariant", () => {
       checkDuplicatePages,
       checkFenceRowsWithoutMarkers,
       checkNamespaceOnlyTargets,
+      checkDanglingSlugRedirects,
     ]) {
       const r = await probe(e);
       expect(r.ok).toBe(r.status !== "fail");

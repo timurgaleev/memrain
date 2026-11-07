@@ -114,6 +114,7 @@ describe("doctor", () => {
       "connector-health",
       "contradiction-trend",
       "cycle-freshness",
+      "dangling-slug-redirects",
       "document-id-drift",
       "duplicate-pages",
       "embed-backlog",

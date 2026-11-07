@@ -55,6 +55,7 @@ import {
   checkJunkEntityHubs,
   checkFenceRowsWithoutMarkers,
   checkNamespaceOnlyTargets,
+  checkDanglingSlugRedirects,
 } from "../core/doctor-ops.ts";
 import { checkConnectorHealth } from "../core/connectors/health.ts";
 import { checkEmbedBacklog } from "../core/doctor-embed.ts";
@@ -428,6 +429,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["junk-entity-hubs", checkJunkEntityHubs],
       ["fence-rows-without-markers", checkFenceRowsWithoutMarkers],
       ["namespace-only-targets", checkNamespaceOnlyTargets],
+      ["dangling-slug-redirects", checkDanglingSlugRedirects],
       ["code-grammars", checkGrammars],
       ["code-graph", checkCodeGraph],
       ["connector-health", checkConnectorHealth],

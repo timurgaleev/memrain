@@ -113,6 +113,7 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   "junk-entity-hubs",
   "fence-rows-without-markers",
   "namespace-only-targets",
+  "dangling-slug-redirects",
   "embed-backlog",
 ]);
 

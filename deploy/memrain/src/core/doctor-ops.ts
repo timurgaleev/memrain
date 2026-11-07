@@ -346,6 +346,36 @@ export async function checkNamespaceOnlyTargets(
   };
 }
 
+/**
+ * Slug redirects whose target is not a live page. slug_aliases has no foreign
+ * key to pages, and the resolver now forwards only to live pages, so such a
+ * row is dead weight that hides why an old name stopped resolving (rows left
+ * from before the purge cleaned redirects, or a target that was only
+ * soft-deleted). Read-only; warn, never fail.
+ */
+export async function checkDanglingSlugRedirects(
+  engine: Engine,
+): Promise<OpsCheckResult> {
+  const r = await engine.query<{ alias_slug: string; canonical_slug: string; total: number }>(
+    `SELECT a.alias_slug, a.canonical_slug, count(*) OVER ()::int AS total
+       FROM slug_aliases a
+       LEFT JOIN pages p ON p.slug = a.canonical_slug AND p.deleted_at IS NULL
+      WHERE p.slug IS NULL
+      ORDER BY a.alias_slug
+      LIMIT 3`,
+  );
+  const total = r.rows[0]?.total ?? 0;
+  if (total === 0) {
+    return { ok: true, status: "ok", detail: "every slug redirect points at a live page" };
+  }
+  const sample = r.rows.map((x) => `${x.alias_slug} -> ${x.canonical_slug}`).join(", ");
+  return {
+    ok: true,
+    status: "warn",
+    detail: `${total} slug redirect(s) point at no live page, e.g. ${sample} — delete them or restore the target`,
+  };
+}
+
 /** Entity page types a junk name can accrete edges on. */
 const JUNK_HUB_TYPES = ["person", "company", "concept"] as const;
 /** Bound on the entity pages loaded for the name test — a doctor probe must
