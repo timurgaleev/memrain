@@ -483,9 +483,9 @@ describe("checkOutsideContentFences", () => {
   // Assembled from fragments so this file never carries a live marker.
   const marker = ["<!", "--- ", "memrain", ":facts:begin -->"].join("");
   const legacy = ["<!", "--- ", "memex", ":takes:begin -->"].join("");
-  const page = (slug: string, type: string, body: string) =>
+  const page = (slug: string, type: string, body: string, truth = "{}") =>
     storage.engine().exec(
-      `INSERT INTO pages (slug, type, content_hash, markdown_body) VALUES ('${slug}', '${type}', '${slug}', '${body}')`,
+      `INSERT INTO pages (slug, type, content_hash, markdown_body, compiled_truth) VALUES ('${slug}', '${type}', '${slug}', '${body}', '${truth}'::jsonb)`,
     );
 
   it("reports none on a clean store", async () => {
@@ -511,6 +511,16 @@ describe("checkOutsideContentFences", () => {
     expect(r.detail).not.toContain("synthesis/q1");
     expect(r.detail).not.toContain("notes/gone");
     expect(r.detail).toContain("synthesis");
+  });
+
+  it("skips a page an outside-text writer marked, and still lists an unmarked one", async () => {
+    await page("github/o/r/issues/1", "github-issue", `body\n${marker}\n`, '{"outside_neutralized": 1}');
+    await page("notes/planted", "note", `x\n${marker}\n`);
+    const r = await checkOutsideContentFences(storage.engine());
+    expect(r.status).toBe("warn");
+    expect(r.detail).toStartWith("1 page(s)");
+    expect(r.detail).toContain("notes/planted");
+    expect(r.detail).not.toContain("github/o/r/issues/1");
   });
 });
 

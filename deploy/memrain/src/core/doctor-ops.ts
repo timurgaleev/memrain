@@ -381,7 +381,9 @@ export async function checkDanglingSlugRedirects(
  * `<!--- memex:`). Before 1.11.0 an imported transcript, GitHub item or any
  * pasted text could plant one and have its lines projected as facts or takes;
  * a brain-added fence looks the same, so this lists and never rewrites.
- * Synthesis pages are skipped: the brain writes those itself.
+ * Synthesis pages are skipped: the brain writes those itself. So are pages a
+ * 1.11 outside-text writer marked `outside_neutralized`: their outside text is
+ * neutralized, so a live fence on one is the brain's, carried on purpose.
  * Read-only; warn, never fail.
  */
 export async function checkOutsideContentFences(
@@ -392,20 +394,21 @@ export async function checkOutsideContentFences(
        FROM pages
       WHERE deleted_at IS NULL
         AND type <> 'synthesis'
+        AND compiled_truth->'outside_neutralized' IS DISTINCT FROM '1'::jsonb
         AND (markdown_body LIKE '%<!--- memrain:%' OR markdown_body LIKE '%<!--- memex:%')
       ORDER BY slug
       LIMIT 3`,
   );
   const total = r.rows[0]?.total ?? 0;
   if (total === 0) {
-    return { ok: true, status: "ok", detail: "no page carries a fence marker (synthesis pages skipped)" };
+    return { ok: true, status: "ok", detail: "no page carries a fence marker (synthesis and 1.11 outside-text pages skipped)" };
   }
   const sample = r.rows.map((x) => `${x.slug} (${x.type})`).join(", ");
   return {
     ok: true,
     status: "warn",
     detail:
-      `${total} page(s) carry a fence marker (synthesis pages skipped), e.g. ${sample}` +
+      `${total} page(s) carry a fence marker (synthesis and 1.11 outside-text pages skipped), e.g. ${sample}` +
       " — planted by outside text before 1.11.0 or added by the brain on purpose; review each," +
       " remove a planted fence with page_edit (its projected facts stay; withdraw them with forget_fact)",
   };
