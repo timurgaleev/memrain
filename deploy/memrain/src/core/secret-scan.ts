@@ -186,7 +186,11 @@ const glued = (kind: string, body: string): Pattern => ({
 const VENDOR_PATTERNS: Pattern[] = [
   // AKIA/ASIA only: AIDA, AROA and the rest are IAM unique ids, not secrets.
   left("aws-access-key", String.raw`(?:AKIA|ASIA)[0-9A-Z]{16}\b`, FIXED_ECHO),
-  { kind: "aws-secret-key", regex: /\b(?:aws_secret_access_key|AWS_SECRET_ACCESS_KEY)\s{0,8}[:=]\s{0,8}["']?[A-Za-z0-9/+]{40}/g },
+  // Glued (`my_aws_secret_access_key`) too, its quotes and separator escaped as in ASSIGNMENT_KEY.
+  left(
+    "aws-secret-key",
+    String.raw`(?:aws_secret_access_key|AWS_SECRET_ACCESS_KEY)(?:\\|\\u[0-9A-Fa-f]{4}|%[0-9A-Fa-f]{2}){0,2}["']?\s{0,8}(?:[:=]|\\u003[aAdD]|%3[aAdD])\s{0,8}(?:\\|\\u[0-9A-Fa-f]{4}|%[0-9A-Fa-f]{2}){0,2}["']?[A-Za-z0-9/+]{40}`,
+  ),
   left("github-token", String.raw`gh[pousr]_[A-Za-z0-9]{36,255}\b`, FIXED_ECHO),
   left("github-token", String.raw`github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}\b`, FIXED_ECHO),
   { kind: "slack-token", regex: /\bxox[abeprs]-[A-Za-z0-9-]{10,200}/g },
@@ -207,7 +211,8 @@ const VENDOR_PATTERNS: Pattern[] = [
   // otherwise consume a real key later in the same kebab run.
   { kind: "openai-key", regex: /\bsk-(?:proj|svcacct|admin)-[\w-]{20,300}/g },
   left("openai-key", String.raw`sk-(?:proj|svcacct|admin)-[\w-]{20,300}`),
-  { kind: "slack-webhook", regex: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,200}/g },
+  // Some JSON encoders write `/` as `\/`.
+  { kind: "slack-webhook", regex: /https:(?:\\?\/){2}hooks\.slack\.com\\?\/services\\?\/(?:[A-Za-z0-9/]|\\\/){20,200}/g },
   { kind: "anthropic-key", regex: /\bsk-ant-[\w-]{20,300}/g },
   left("anthropic-key", String.raw`sk-ant-[\w-]{20,300}`),
   // After the prefixed forms, so those keep their whole key. The right edge
@@ -219,9 +224,12 @@ const VENDOR_PATTERNS: Pattern[] = [
   glued("huggingface-token", "hf_[A-Za-z0-9]{30,200}"),
   left("npm-token", "npm_[A-Za-z0-9]{36}(?![A-Za-z0-9])", FIXED_ECHO),
   { kind: "sendgrid-key", regex: /\bSG\.[\w-]{16,200}\.[\w-]{16,200}/g },
+  // Only the documented 22.43 shape may start after an escape or a `_`: a
+  // fixed shape cannot run on into a real key and swallow it.
+  left("sendgrid-key", String.raw`SG\.[\w-]{22}\.[\w-]{43}(?![\w-])`),
   // Account and API-key SIDs: 32 hex with a hard right edge, so a longer
   // digest that happens to start with AC or SK is not cut into a "key".
-  { kind: "twilio-key", regex: /\b(?:AC|SK)[0-9a-fA-F]{32}(?![0-9A-Za-z])/g, echo: FIXED_ECHO },
+  left("twilio-key", "(?:AC|SK)[0-9a-fA-F]{32}(?![0-9A-Za-z])", FIXED_ECHO),
   // `sb_publishable_` is public by design and stays.
   { kind: "supabase-key", regex: /\bsb_secret_[\w-]{20,200}/g },
   glued("supabase-key", String.raw`sb_secret_[\w-]{20,200}`),
@@ -306,7 +314,8 @@ const ASSIGNMENT_PATTERNS: Pattern[] = [
 // rewrite stored text for good.
 const BEARER_PATTERN: Pattern = {
   kind: "bearer-token",
-  regex: /(?<=\bAuthorization\\?["']?[ \t]{0,4}[:=][ \t]{0,4}\\?["']?Bearer[ \t]{1,8})[\w.~+/=-]{20,}/gi,
+  // The quotes and separator may be escaped as in ASSIGNMENT_KEY (JSON, `\u003a`, `%3D%22`).
+  regex: /(?<=\bAuthorization(?:\\|\\u[0-9a-f]{4}|%[0-9a-f]{2}){0,2}["']?[ \t]{0,4}(?:[:=]|\\u003[ad]|%3[ad])[ \t]{0,4}(?:\\|\\u[0-9a-f]{4}|%[0-9a-f]{2}){0,2}["']?Bearer(?:[ \t]|%20){1,8})[\w.~+/=-]{20,}/gi,
   echo: { min: 20 },
 };
 

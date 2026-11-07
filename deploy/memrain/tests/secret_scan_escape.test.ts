@@ -85,6 +85,73 @@ describe("escaped and glued starts", () => {
   });
 });
 
+describe("a bearer token after an escaped separator or quote", () => {
+  const t = rnd(32, 37);
+  it.each([
+    ["escaped quote after :", String.raw`Authorization:\"Bearer ${t}`],
+    ["escaped JSON on both sides", String.raw`{\"Authorization\":\"Bearer ${t}\"}`],
+    ["plain JSON", `{"Authorization":"Bearer ${t}"}`],
+    ["%3D%22", `Authorization%3D%22Bearer ${t}`],
+    ["%3A%20 and %20", `Authorization%3A%20Bearer%20${t}`],
+    ["\\u003a\\u0022", `Authorization\\u003a\\u0022Bearer ${t}`],
+    ["\\u003A", `Authorization\\u003ABearer ${t}`],
+  ])("%s", (_name, text) => {
+    const r = scanSecrets(text);
+    expect(r.findings.map((f) => f.kind)).toEqual(["bearer-token"]);
+    expect(r.text).not.toContain(t);
+  });
+});
+
+describe("fixed-shape keys whose rule was word-anchored", () => {
+  const sg = `${"SG"}.${rnd(22, 71, B64URL)}.${rnd(43, 72, B64URL)}`;
+  const ac = `${"AC"}${rnd(32, 73, HEX)}`;
+  const sk = `${"SK"}${rnd(32, 74, HEX)}`;
+  describe.each([["twilio-key", ac], ["twilio-key", sk], ["sendgrid-key", sg]])("%s", (kind, key) => {
+    it.each([
+      ["json \\n", `"\\n${key}"`],
+      ["percent", `q=%22${key}%22`],
+      ["glued _", `sid_${key}`],
+    ])("%s", (_name, text) => {
+      const r = scanSecrets(text);
+      expect(r.findings.map((f) => f.kind)).toEqual([kind]);
+      expect(r.text).not.toContain(key);
+    });
+  });
+
+  const aws = rnd(40, 75, `${ALNUM}/+`);
+  it.each([
+    ["escaped JSON", String.raw`{\"aws_secret_access_key\":\"${aws}\"}`],
+    ["\\n before the key", `"\\naws_secret_access_key=${aws}"`],
+    ["%3D%22", `aws_secret_access_key%3D%22${aws}`],
+    ["\\u003a", `AWS_SECRET_ACCESS_KEY\\u003a${aws}`],
+    ["glued _", `my_aws_secret_access_key=${aws}`],
+  ])("aws-secret-key: %s", (_name, text) => {
+    const r = scanSecrets(text);
+    expect(r.findings.map((f) => f.kind)).toEqual(["aws-secret-key"]);
+    expect(r.text).not.toContain(aws);
+  });
+
+  it("slack-webhook: a JSON-escaped URL", () => {
+    const path = `T${rnd(10, 76, HEX)}\\/B${rnd(10, 77, HEX)}\\/${rnd(24, 78)}`;
+    const r = scanSecrets(`{"url":"https:\\/\\/hooks.slack.com\\/services\\/${path}"}`);
+    expect(r.findings.map((f) => f.kind)).toEqual(["slack-webhook"]);
+    expect(r.text).toMatch(/^\{"url":"\[REDACTED:slack-webhook:[0-9a-f]{16}\]"\}$/);
+  });
+
+  it.each([
+    ["lowercase ac in snake_case", `task_ac${rnd(32, 79, HEX)}`],
+    ["SK and 31 hex in snake_case", `risk_SK${rnd(31, 80, HEX)}_total`],
+    ["AC and 33 hex", `track_AC${rnd(33, 81, HEX)}`],
+    ["40-hex git hash starting AC", `commit_AC${rnd(38, 82, HEX)}`],
+    ["40-hex git hash after \\n", `"\\nSK${rnd(38, 83, HEX)}"`],
+    ["SG.1.2 version glued", "release_SG.1.2.3"],
+    ["SG.1.2 version after \\n", `"\\nSG.1.2"`],
+    ["SG.1.2 version after %22", "%22SG.1.2%22"],
+  ])("near miss: %s", (_name, text) => {
+    expect(scanSecrets(text)).toEqual({ text, findings: [] });
+  });
+});
+
 describe("a rejected start inside a kebab run does not hide a later key", () => {
   it.each([
     ["task-proj- before sk-proj-", `task-proj-cleanup-script-${"sk"}-proj-${rnd(40, 34)}`, "openai-key"],
@@ -158,7 +225,11 @@ describe("linear time", () => {
     "glued open-length prefixes": (n) => "_hf_-xoxb-_glpat-_sb_secret_-sk-".repeat(n / 32),
     "escaped assignment keys": (n) => String.raw`\"password\":\"\u003a%3D\ntoken%3D`.repeat(n / 36),
     "escaped bearer headers": (n) => String.raw`Authorization\":\"Bearer `.repeat(n / 24),
+    "encoded bearer headers": (n) => `Authorization%3D%22Bearer%20\\u003a%20`.repeat(n / 38),
     "five vendor prefixes": (n) => "sk-or-v1-gsk_xai-pplx-r8_".repeat(n / 25),
+    "glued and escaped SG. AC SK": (n) => String.raw`_SG.\nAC%22SK_AC`.repeat(n / 18),
+    "escaped aws assignments": (n) => String.raw`\naws_secret_access_key\":\"%3D`.repeat(n / 31),
+    "escaped slack webhooks": (n) => String.raw`https:\/\/hooks.slack.com\/services\/`.repeat(n / 38),
   };
   for (const [name, make] of Object.entries(cases)) {
     it(`grows linearly: ${name}`, () => {
