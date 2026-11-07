@@ -8,7 +8,7 @@
  *
  * Markers are assembled at run time so no fixture carries a live fence.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,7 +35,7 @@ const TAKES_BEGIN = ["<!--- memrain", ":takes:begin -->"].join("");
 const TAKES_END = ["<!--- memrain", ":takes:end -->"].join("");
 
 /** An old page a 1.11+ outside-text writer produced. */
-const marked = (markdown_body: string) => ({ markdown_body, compiled_truth: { [OUTSIDE_NEUTRALIZED]: 1 } });
+const marked = (markdown_body: string) => ({ slug: "x", markdown_body, compiled_truth: { [OUTSIDE_NEUTRALIZED]: 1 } });
 const factsFence = (claim: string, begin = BEGIN, end = END) =>
   `${begin}\n| # | claim | confidence |\n|---|---|---|\n| 1 | ${claim} | 1 |\n${end}`;
 
@@ -81,8 +81,28 @@ async function transcriptCarry(storage: Storage, id: string): Promise<void> {
 }
 
 describe("carryForwardFences", () => {
-  it("carries nothing from a page no neutralizing writer produced", () => {
-    expect(carryForwardFences({ markdown_body: withFacts("old\n", "planted"), compiled_truth: {} }, "fresh\n")).toBe("fresh\n");
+  it("carries nothing from a page no neutralizing writer produced, and says how many fences it dropped", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const old = withFacts(withFacts("old\n", "first"), "second");
+      expect(carryForwardFences({ slug: "github/o/r/issues/1", markdown_body: old, compiled_truth: {} }, "fresh\n")).toBe("fresh\n");
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0]![0]);
+      expect(line).toContain("github/o/r/issues/1");
+      expect(line).toContain("2 fence");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("says nothing when a pre-1.11 page has no fence", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(carryForwardFences({ slug: "x", markdown_body: "old\n", compiled_truth: null }, "fresh\n")).toBe("fresh\n");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("keeps fences of both marker brands as they were", () => {

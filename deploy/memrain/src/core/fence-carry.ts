@@ -9,7 +9,9 @@
  * outside text was neutralized may hold a live fence that came from the
  * outside text itself, so nothing is carried from it: that is exactly what the
  * writers did before, and a write that replaces the truth without the marker
- * (a `page_put` that omits `compiled_truth`) falls back to it too.
+ * (a `page_put` that omits `compiled_truth`) falls back to it too. One warning
+ * line names the slug and how many fence spans were dropped, so the operator
+ * can restore brain-written ones from `page_versions`.
  *
  * Every fence span of the old body, of either kind and brand, is found by the
  * widest rule a parser uses (a line containing the begin marker through the
@@ -63,11 +65,20 @@ function fenceSpans(lines: readonly string[], kind: FenceKind, heading: string):
 }
 
 export function carryForwardFences(
-  old: { markdown_body: string; compiled_truth: Record<string, unknown> | null } | null,
+  old: { slug: string; markdown_body: string; compiled_truth: Record<string, unknown> | null } | null,
   newBody: string,
 ): string {
-  if (old === null || old.compiled_truth?.[OUTSIDE_NEUTRALIZED] !== 1) return newBody;
+  if (old === null) return newBody;
   const lines = old.markdown_body.split(/\r?\n/);
+  if (old.compiled_truth?.[OUTSIDE_NEUTRALIZED] !== 1) {
+    const dropped = KINDS.flatMap(({ kind, heading }) => fenceSpans(lines, kind, heading)).length;
+    if (dropped > 0) {
+      console.warn(
+        `[fence-carry] ${old.slug}: page predates 1.11, ${dropped} fence span(s) not carried; restore them from page_versions if the brain wrote them`,
+      );
+    }
+    return newBody;
+  }
   const text = (s: Span) => lines.slice(s.start, s.end + 1).join("\n");
   const spans = KINDS.filter(({ kind }) => fenceBounds(newBody, kind) === null)
     .flatMap(({ kind, heading }) => fenceSpans(lines, kind, heading))
