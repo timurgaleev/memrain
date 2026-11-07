@@ -23,6 +23,7 @@
  */
 import { auditRejection, auditSecrets, guardSecrets, SecretRejectedError, type SecretFinding } from "../core/secret-scan.ts";
 import { looksBinary } from "../core/binary-guard.ts";
+import { wellFormJsonbValue } from "../core/well-form.ts";
 import { createHash } from "node:crypto";
 import type { Storage } from "../core/storage.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
@@ -297,6 +298,12 @@ export async function handleIngestRoute(
   if (looksBinary(read.buf)) {
     return err(415, "binary_content", "POST /ingest takes text; the body is a binary file");
   }
+  // The binary probe reads only the head; a NUL further on would fail the
+  // job insert (jsonb refuses U+0000) as a 500.
+  const text = new TextDecoder().decode(read.buf);
+  if (text.includes("\u0000")) {
+    return err(400, "invalid_content", "the body carries U+0000; send text");
+  }
   const sourceUri = (
     headers["source-uri"] ||
     `mcp-webhook:${auth.clientId}:${Date.now()}`
@@ -348,7 +355,7 @@ export async function handleIngestRoute(
   let content: string;
   let secretFindings: SecretFinding[];
   try {
-    const scanned = guardSecrets(new TextDecoder().decode(read.buf), "POST /ingest body");
+    const scanned = guardSecrets(text, "POST /ingest body");
     content = scanned.text;
     secretFindings = scanned.findings;
   } catch (e) {
@@ -513,6 +520,11 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
       void auditRejection(deps.storage.engine(), e, `transcript-push:${auth.clientId}`, sourceId).catch(() => {});
     }
     return err(400, "secret_in_content", e instanceof Error ? e.message : "credential in content");
+  }
+  // A `\ud800` or `\u0000` escape in a JSON line becomes a lone surrogate or
+  // a NUL only once parsed, so the raw body cannot show it; jsonb refuses both.
+  if (prepared.some((p) => JSON.stringify(p.session) !== JSON.stringify(wellFormJsonbValue(p.session)))) {
+    return err(400, "invalid_content", "a session carries U+0000 or an unpaired surrogate; nothing was queued");
   }
 
   const contentHash = createHash("sha256").update(buf).digest("hex");

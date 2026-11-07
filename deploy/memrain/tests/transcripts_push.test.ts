@@ -183,6 +183,16 @@ describe("POST /ingest transcript push", () => {
     expect(await jobs()).toHaveLength(0);
   });
 
+  it("refuses a log whose text decodes to a lone surrogate, queueing nothing", async () => {
+    const userLine = claudeRaw.split("\n").find((l) => l.includes('"type":"user"') && l.includes("What do we know"))!;
+    const bad = claudeRaw.replace(userLine, userLine.replace("What do we know", "What \\ud800 do we know"));
+    expect(bad).not.toBe(claudeRaw);
+    const res = await handleIngestRoute(pushReq(bad), deps(writeAuth));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_content");
+    expect(await jobs()).toHaveLength(0);
+  });
+
   it("holds a bound client to its prefixes", async () => {
     const outside = await handleIngestRoute(pushReq(claudeRaw), deps({ ...writeAuth, boundSlugPrefixes: ["notes"] }));
     expect(outside.status).toBe(403);

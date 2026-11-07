@@ -8,6 +8,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { Engine } from "../engine/interface.ts";
+import { wellFormJsonbValue } from "../well-form.ts";
 import { backoffMs } from "./backoff.ts";
 import { inQuietHours, type QuietWindow } from "./quiet-hours.ts";
 import type { EnqueueInput, JobRow, JobStatus, JobUsageDelta } from "./types.ts";
@@ -263,7 +264,7 @@ export class Queue {
       [
         id,
         input.kind,
-        JSON.stringify(input.payload ?? {}),
+        JSON.stringify(wellFormJsonbValue(input.payload ?? {})),
         priority,
         maxRetries,
         input.runAt ?? null,
@@ -448,7 +449,7 @@ export class Queue {
               lock_until = NULL
         WHERE id = $1 AND status = 'running' AND claim_generation = $3
         RETURNING ${SELECT_COLS}`,
-      [id, JSON.stringify(result ?? {}), gen],
+      [id, JSON.stringify(wellFormJsonbValue(result ?? {})), gen],
     );
     return r.rows[0] ? rowToJob(r.rows[0]) : null;
   }
@@ -650,7 +651,7 @@ export class Queue {
       `UPDATE jobs SET progress = $2::text::jsonb, updated_at = NOW()
         WHERE id = $1 AND status = 'running' AND claim_generation = $3
         RETURNING id`,
-      [id, JSON.stringify(progress), gen],
+      [id, JSON.stringify(wellFormJsonbValue(progress)), gen],
     );
     return r.rows.length > 0;
   }

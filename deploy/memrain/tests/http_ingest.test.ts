@@ -100,6 +100,13 @@ describe("POST /ingest route", () => {
     expect(res.status).toBe(429);
   });
 
+  it("answers 400 invalid_content, not 500, on a NUL past the binary probe", async () => {
+    const res = await handleIngestRoute(ingestReq(`${"a".repeat(9_000)}\u0000tail`), deps(writeAuth));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_content");
+    expect(await jobRows()).toHaveLength(0);
+  });
+
   it("rejects binary content types with 415", async () => {
     const res = await handleIngestRoute(
       ingestReq("...", { "content-type": "image/png" }),

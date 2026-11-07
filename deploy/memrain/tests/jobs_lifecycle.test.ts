@@ -3,11 +3,13 @@
  * accounting, kind-filtered claims, the validated submit helper, and the
  * end-to-end smoke self-test.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
+import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { Engine } from "../src/core/engine/interface.ts";
 import { Queue } from "../src/core/jobs/queue.ts";
 import { Worker } from "../src/core/jobs/worker.ts";
 import {
@@ -244,4 +246,54 @@ describe("runJobsSmoke", () => {
     expect(r.ok).toBe(true);
     expect((await queue.get("u1"))?.status).toBe("pending");
   });
+});
+
+const PG_URL = process.env.MEMRAIN_TEST_POSTGRES_URL;
+
+/** NUL and a lone surrogate are refused by a jsonb cast; the queue well-forms them. */
+function wellFormedJobCases(engine: () => Engine, tag: string): void {
+  const fresh = () => `jb07-${tag}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  it(`stores an enqueued payload carrying NUL or a lone surrogate as well-formed jsonb (${tag})`, async () => {
+    const q = new Queue(engine());
+    const id = fresh();
+    try {
+      await q.enqueue({ kind: id, id, payload: { text: "p\u0000q", bad: "r\ud800s" } });
+      expect((await q.get(id))!.payload).toEqual({ text: "pq", bad: "r\uFFFDs" });
+    } finally {
+      await engine().query(`DELETE FROM jobs WHERE id = $1`, [id]);
+    }
+  });
+
+  it(`stores a result and progress carrying NUL or a lone surrogate as well-formed jsonb (${tag})`, async () => {
+    const q = new Queue(engine());
+    const id = fresh();
+    try {
+      await q.enqueue({ kind: id, id });
+      const claimed = await q.claim({ kinds: [id] });
+      const gen = claimed!.claimGeneration;
+      expect(await q.updateProgress(id, gen, { note: "a\u0000b", bad: "x\ud800y" })).toBe(true);
+      const done = await q.complete(id, gen, { note: "c\u0000d" });
+      expect(done!.result).toEqual({ note: "cd" });
+      expect((await q.get(id))!.progress).toEqual({ note: "ab", bad: "x\uFFFDy" });
+    } finally {
+      await engine().query(`DELETE FROM jobs WHERE id = $1`, [id]);
+    }
+  });
+}
+
+describe("jsonb well-forming on PGLite", () => {
+  wellFormedJobCases(() => storage.engine(), "pglite");
+});
+
+describe.skipIf(!PG_URL)("jsonb well-forming on Postgres", () => {
+  let pg: PostgresEngine;
+  beforeAll(async () => {
+    pg = new PostgresEngine({ url: PG_URL! });
+    await new Storage(pg).init();
+  });
+  afterAll(async () => {
+    await pg.close();
+  });
+  wellFormedJobCases(() => pg, "postgres");
 });
