@@ -526,3 +526,5 @@ tests/test_skills_brand.py|COMPAT-TEST|17|covers legacy names or legacy data (ma
 tests/test_terraform_rename_guards.py|COMPAT-TEST|20|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_upgrading_doc.py|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_workflows.py|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
+deploy/memrain/src/core/neutralize-outside-text.ts|COMPAT|1|legacy fence markers defused in outside text
+deploy/memrain/tests/neutralize_outside_text.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)

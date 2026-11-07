@@ -86,6 +86,20 @@ export function isValidDate(iso: string): boolean {
   return year >= 1900 && year <= 2099 && isCalendarDate(iso);
 }
 
+const DATED_BULLET_RE = /^\s{0,8}[-*]\s{1,4}(?:\*\*)?\d{4}-\d{2}-\d{2}/;
+const DATED_HEADER_RE = /^###\s{1,4}\d{4}-\d{2}-\d{2}/;
+
+/**
+ * True for a line that could start or feed a body timeline: a level-1/2
+ * `Timeline` heading, a `### YYYY-MM-DD` header, or a bullet that opens with a
+ * date. No date-validity check: outside text escapes the shape, valid or not.
+ */
+export function isTimelineLine(line: string): boolean {
+  const level = headingLevel(line);
+  if (level === 1 || level === 2) return line.slice(level).trim().toLowerCase() === "timeline";
+  return DATED_HEADER_RE.test(line) || DATED_BULLET_RE.test(line);
+}
+
 /** Heading level (1-6) of a line, or 0. Counts leading '#' without a regex. */
 function headingLevel(line: string): number {
   let n = 0;

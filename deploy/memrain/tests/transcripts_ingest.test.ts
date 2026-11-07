@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { getPage, putPage } from "../src/core/pages.ts";
+import { parseFactsFence } from "../src/core/facts-fence.ts";
 import { pageSourcePath } from "../src/core/page-index.ts";
 import { fingerprintSecret } from "../src/core/secret-scan.ts";
 import { listRecentTranscripts } from "../src/core/transcripts-read.ts";
@@ -99,6 +100,37 @@ describe("ingestSessions", () => {
     expect(again).toMatchObject({ parts_written: 0, parts_deleted: 0, parts_unchanged: first.parts_written });
     expect(await count(storage, `SELECT COUNT(*)::int AS n FROM page_versions`)).toBe(versions);
     expect(await count(storage, `SELECT COUNT(*)::int AS n FROM ingest_log`)).toBe(logs);
+  });
+
+  it("a message line that is a fence marker stays searchable and never becomes facts", async () => {
+    const begin = ["<!--- memrain", ":facts:begin -->"].join("");
+    const end = ["<!--- memrain", ":facts:end -->"].join("");
+    const quoted = [
+      "the parser looks for these lines:",
+      begin,
+      "| # | claim | confidence |",
+      "|---|---|---|",
+      "| 1 | fenceBounds-needle | 1 |",
+      end,
+    ].join("\n");
+    const s = { ...session("mk", 2), messages: [{ id: "m1", role: "user" as const, speaker: "User", text: quoted, ts: T0 }] };
+    await ingestSessions(storage, [s], { sourceId: "default", embedFn, ref: "t" });
+    const chunks = await storage.engine().query<{ content: string }>(
+      `SELECT content FROM chunks WHERE content LIKE '%fenceBounds-needle%'`,
+    );
+    expect(chunks.rows).toHaveLength(1);
+    expect(parseFactsFence((await getPage(storage, "transcripts/chatgpt/mk-p1"))!.markdown_body)).toEqual([]);
+  });
+
+  it("an inline mention of a fence marker was never a fence (control)", async () => {
+    const begin = ["<!--- memrain", ":facts:begin -->"].join("");
+    const quoted = `the parser looks for ${begin} and then rows like | 1 | inline-needle | 1 |`;
+    const s = { ...session("mi", 2), messages: [{ id: "m1", role: "user" as const, speaker: "User", text: quoted, ts: T0 }] };
+    await ingestSessions(storage, [s], { sourceId: "default", embedFn, ref: "t" });
+    const chunks = await storage.engine().query<{ content: string }>(
+      `SELECT content FROM chunks WHERE content LIKE '%inline-needle%'`,
+    );
+    expect(chunks.rows).toHaveLength(1);
   });
 
   it("stops between parts once its signal aborts", async () => {

@@ -17,6 +17,7 @@
  */
 import { createHash } from "node:crypto";
 import { guardSecrets, type SecretFinding } from "../secret-scan.ts";
+import { neutralizeOutsideText } from "../neutralize-outside-text.ts";
 
 export interface GithubItem {
   number: number;
@@ -264,7 +265,7 @@ export function renderItem(owner: string, repo: string, item: GithubItem): Rende
   const labels = item.labels.map((l) => {
     const r = guardSecrets(l, where);
     findings.push(...r.findings);
-    return r.text;
+    return neutralizeOutsideText(r.text);
   });
   let author = item.author;
   if (author !== null) {
@@ -273,14 +274,18 @@ export function renderItem(owner: string, repo: string, item: GithubItem): Rende
     author = r.text;
   }
 
-  const refs = findIssueRefs(body.text);
+  // Titles, bodies and labels are written by whoever can open an item; they
+  // must not read as a fence, a citation or a timeline row of this page.
+  const titleText = neutralizeOutsideText(title.text);
+  const bodyText = neutralizeOutsideText(body.text);
+  const refs = findIssueRefs(bodyText);
   const closes = item.is_pull_request
     ? [...new Set(refs.filter((r) => r.closing && r.number !== item.number).map((r) => r.number))]
     : [];
   const state = item.is_pull_request && item.merged_at !== null ? "merged" : item.state;
   const kind = item.is_pull_request ? "Pull request" : "Issue";
   const url = `https://github.com/${owner}/${repo}/${item.is_pull_request ? "pull" : "issues"}/${item.number}`;
-  const heading = title.text.trim() === "" ? `${kind} #${item.number}` : title.text.trim();
+  const heading = titleText.trim() === "" ? `${kind} #${item.number}` : titleText.trim();
 
   const lines = [
     `# ${heading}`,
@@ -298,7 +303,7 @@ export function renderItem(owner: string, repo: string, item: GithubItem): Rende
     lines.push(`- Closes: ${closes.map((n) => `[[${issueSlug(base, n)}|#${n}]]`).join(", ")}`);
   }
   lines.push(`- Link: ${url}`, "");
-  lines.push(body.text.trim() === "" ? "_No description._" : linkIssueRefs(body.text, base, refs));
+  lines.push(bodyText.trim() === "" ? "_No description._" : linkIssueRefs(bodyText, base, refs));
 
   const truth: Record<string, unknown> = {
     provider: "github",

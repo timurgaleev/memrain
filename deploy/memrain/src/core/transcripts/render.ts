@@ -16,6 +16,7 @@
  */
 import { createHash } from "node:crypto";
 import type { TranscriptMessage, TranscriptSession } from "./types.ts";
+import { neutralizeOutsideText } from "../neutralize-outside-text.ts";
 
 /**
  * Fact extraction reads a page body through a 12,000-character window, so a
@@ -123,8 +124,9 @@ function sliceByBytes(line: string, max: number): string[] {
   return pieces;
 }
 
+/** Message text is outside text: it must not read as a fence, citation or timeline row. */
 function textLines(text: string): string[] {
-  return text.replace(/\r\n?/g, "\n").split("\n");
+  return neutralizeOutsideText(text).split("\n");
 }
 
 /**
