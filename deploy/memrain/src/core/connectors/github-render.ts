@@ -18,6 +18,7 @@
 import { createHash } from "node:crypto";
 import { guardSecrets, type SecretFinding } from "../secret-scan.ts";
 import { neutralizeOutsideText } from "../neutralize-outside-text.ts";
+import { OUTSIDE_NEUTRALIZED } from "../fence-carry.ts";
 
 export interface GithubItem {
   number: number;
@@ -321,6 +322,7 @@ export function renderItem(owner: string, repo: string, item: GithubItem): Rende
     closes,
   };
   if (item.is_pull_request) truth["aliases"] = [issueSlug(base, item.number)];
+  truth[OUTSIDE_NEUTRALIZED] = 1;
 
   return {
     slug,

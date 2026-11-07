@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 import type { TranscriptMessage, TranscriptSession } from "./types.ts";
 import { neutralizeOutsideText } from "../neutralize-outside-text.ts";
+import { OUTSIDE_NEUTRALIZED } from "../fence-carry.ts";
 
 /**
  * Fact extraction reads a page body through a 12,000-character window, so a
@@ -225,6 +226,7 @@ export function renderSession(session: TranscriptSession, budget: number = PART_
       last_message_id: part[part.length - 1]!.messageId,
     };
     if (session.startedAt !== null) truth.date = utcDate(session.startedAt);
+    truth[OUTSIDE_NEUTRALIZED] = 1;
     return {
       slug: `${base}-p${i + 1}`,
       index: i + 1,

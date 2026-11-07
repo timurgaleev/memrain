@@ -30,7 +30,8 @@
  */
 import type { Storage } from "../storage.ts";
 import type { EmbedFn } from "../indexer.ts";
-import { putPage } from "../pages.ts";
+import { getPageExact, putPage } from "../pages.ts";
+import { carryForwardFences } from "../fence-carry.ts";
 import { mirrorPage } from "../page-index.ts";
 import { syncWikilinksForPage } from "../links.ts";
 import { logIngest } from "../ingest-log.ts";
@@ -283,12 +284,14 @@ async function writeItem(
   result: GithubSyncResult,
   changed: RenderedItem[],
 ): Promise<void> {
+  const old = await getPageExact(storage, rendered.slug, [sourceId]);
+  const body = carryForwardFences(old, rendered.body);
   const put = await putPage(storage, {
     slug: rendered.slug,
     type: rendered.type,
     allowAdHocType: true,
     title: rendered.title,
-    markdown_body: rendered.body,
+    markdown_body: body,
     compiled_truth: rendered.truth,
     written_by: WRITTEN_BY,
     source_id: sourceId,
@@ -298,14 +301,14 @@ async function writeItem(
     return;
   }
   result.counts.pages_written++;
-  changed.push(rendered);
+  changed.push({ ...rendered, body });
   // Under `flag` the credential is still in the text and putPage audited it.
   if (secretDisposition() !== "flag") await auditSecrets(storage.engine(), rendered.findings, rendered.slug, sourceId);
   // Issue and PR text is written by whoever can open one, so it is indexed as
   // untrusted: gate-owned frontmatter markers are stripped, never honoured.
   const ok = await mirrorPage(
     storage,
-    { slug: rendered.slug, title: rendered.title, markdown_body: rendered.body, content_hash: put.content_hash, source_id: sourceId },
+    { slug: rendered.slug, title: rendered.title, markdown_body: body, content_hash: put.content_hash, source_id: sourceId },
     { remote: true, timingLabel: "connector_github", ...(opts.embedFn ? { embedFn: opts.embedFn } : {}) },
   );
   if (!ok) result.mirror_failures++;

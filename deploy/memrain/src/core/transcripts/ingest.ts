@@ -15,7 +15,8 @@
  */
 import type { Storage } from "../storage.ts";
 import type { EmbedFn } from "../indexer.ts";
-import { deletePage, putPage } from "../pages.ts";
+import { deletePage, getPageExact, putPage } from "../pages.ts";
+import { carryForwardFences } from "../fence-carry.ts";
 import { mirrorPage, removePageFromSearch } from "../page-index.ts";
 import { logIngest } from "../ingest-log.ts";
 import { OperationError } from "../operation-error.ts";
@@ -174,12 +175,14 @@ async function writeSession(
   try {
     for (const part of prepared.parts) {
       opts.signal?.throwIfAborted();
+      const old = await getPageExact(storage, part.slug, [sourceId]);
+      const body = carryForwardFences(old, part.body);
       const put = await putPage(storage, {
         slug: part.slug,
         type: TRANSCRIPT_PAGE_TYPE,
         allowAdHocType: true,
         title: part.title,
-        markdown_body: part.body,
+        markdown_body: body,
         compiled_truth: part.truth,
         written_by: WRITTEN_BY,
         source_id: sourceId,
@@ -191,7 +194,7 @@ async function writeSession(
       sessionChanged = true;
       result.parts_written++;
       touched.push(part.slug);
-      opts.onPartWritten?.({ slug: part.slug, body: part.body, sourceId });
+      opts.onPartWritten?.({ slug: part.slug, body, sourceId });
       if (opts.deferMirror) {
         result.mirror_deferred++;
         continue;
@@ -201,7 +204,7 @@ async function writeSession(
         {
           slug: part.slug,
           title: part.title,
-          markdown_body: part.body,
+          markdown_body: body,
           content_hash: put.content_hash,
           source_id: sourceId,
         },
