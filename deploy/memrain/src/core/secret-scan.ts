@@ -195,6 +195,12 @@ const VENDOR_PATTERNS: Pattern[] = [
   glued("gitlab-token", String.raw`glpat-[\w-]{20,100}`),
   left("stripe-key", "(?:sk|rk)_live_[A-Za-z0-9]{20,200}"),
   left("stripe-key", "whsec_[A-Za-z0-9]{24,200}"),
+  // Exact lengths with a hard right edge: a longer run is not one of these keys.
+  left("openrouter-key", "sk-or-v1-[a-f0-9]{64}(?![A-Za-z0-9])"),
+  left("groq-key", "gsk_[A-Za-z0-9]{52}(?![A-Za-z0-9])"),
+  left("xai-key", String.raw`xai-[A-Za-z0-9_]{80}(?!\w)`),
+  left("perplexity-key", "pplx-[A-Za-z0-9]{48}(?![A-Za-z0-9])"),
+  left("replicate-key", String.raw`r8_[A-Za-z0-9_-]{37}(?![\w-])`),
   // The `\b` twin first: a rejected start inside `task-proj-...` would
   // otherwise consume a real key later in the same kebab run.
   { kind: "openai-key", regex: /\bsk-(?:proj|svcacct|admin)-[\w-]{20,300}/g },

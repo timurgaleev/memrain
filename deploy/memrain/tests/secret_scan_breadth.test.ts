@@ -290,6 +290,7 @@ describe("linear time", () => {
     "escape-assignment": (n) => fill(String.raw`\"password\":\"\u003a%3D\ntoken%3D`, n),
     "glue-open": (n) => fill("_hf_-xoxb-", n),
     "glue-jwt": (n) => fill("_eyJ", n),
+    "vendors-2": (n) => fill("sk-or-v1-gsk_xai-pplx-r8_", n),
     echo: (n) => {
       const claims = Array.from({ length: 64 }, (_, i) => `Authorization: Bearer ${"A".repeat(400 + i)}${i}`).join("\n");
       return `${claims}\n${"A".repeat(n)}`;

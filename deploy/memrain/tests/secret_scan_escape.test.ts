@@ -114,6 +114,24 @@ describe("near misses survive byte-identical", () => {
   });
 });
 
+describe("five more vendors", () => {
+  // kind, exact key, one character longer (must not match)
+  const vendors: Array<[string, string, string]> = [
+    ["openrouter-key", `${"sk"}-or-v1-${rnd(64, 41, HEX)}`, `${"sk"}-or-v1-${rnd(65, 41, HEX)}`],
+    ["groq-key", `${"g"}sk_${rnd(52, 42)}`, `${"g"}sk_${rnd(53, 42)}`],
+    ["xai-key", `${"x"}ai-${rnd(80, 43)}`, `${"x"}ai-${rnd(81, 43)}`],
+    ["perplexity-key", `${"pp"}lx-${rnd(48, 44)}`, `${"pp"}lx-${rnd(49, 44)}`],
+    ["replicate-key", `${"r"}8_${rnd(37, 45)}`, `${"r"}8_${rnd(38, 45)}`],
+  ];
+  it.each(vendors)("%s: exact length only, escaped and glued too", (kind, key, longer) => {
+    expect(kinds(`key: ${key}`)).toEqual([kind]);
+    expect(kinds(`token_${key}`)).toEqual([kind]);
+    expect(kinds(`"\\n${key}"`)).toEqual([kind]);
+    expect(kinds(`key: ${longer}`)).toEqual([]);
+    expect(kinds(`key: ${key.slice(0, -1)}`)).toEqual([]);
+  });
+});
+
 describe("linear time", () => {
   const cases: Record<string, (n: number) => string> = {
     "_eyJ repeats": (n) => "_eyJ".repeat(n / 4),
@@ -121,6 +139,7 @@ describe("linear time", () => {
     "glued open-length prefixes": (n) => "_hf_-xoxb-_glpat-_sb_secret_-sk-".repeat(n / 32),
     "escaped assignment keys": (n) => String.raw`\"password\":\"\u003a%3D\ntoken%3D`.repeat(n / 36),
     "escaped bearer headers": (n) => String.raw`Authorization\":\"Bearer `.repeat(n / 24),
+    "five vendor prefixes": (n) => "sk-or-v1-gsk_xai-pplx-r8_".repeat(n / 25),
   };
   for (const [name, make] of Object.entries(cases)) {
     it(`grows linearly: ${name}`, () => {
