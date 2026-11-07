@@ -43,9 +43,24 @@ or when a session log has assistant turns but no user turn
 records user turns, so the session is skipped rather than imported half
 empty. The other logs in a directory are still imported.
 
+A log with a session id but no text turn (a session opened and closed without
+a word, or one whose every turn was harness traffic) is empty, not drift:
+`transcripts ingest` lists it as skipped with `empty_session`, and
+`transcripts push` exits 0 and prints `<path>: empty session, nothing sent`.
+A log whose turns the importer cannot read (an unknown content block or event
+kind) is still reported as a format change.
+
 A Claude Code turn that is only pasted content (`<pasted_content>` blocks)
 stays in the transcript, but it does not name the session and is not counted
 as something the user typed.
+
+Claude Code also records, as user turns, messages the harness delivered rather
+than the person typed. User records whose `origin.kind` is
+`task-notification`, `peer` (another agent's message) or `auto-continuation`
+are skipped, as are `queue-operation` records. Records with `origin.kind`
+`human` or `channel`, an unknown kind, or no `origin` at all (older logs) are
+kept. An AskUserQuestion answer is imported as a user turn, one
+`header → answer` line per answered question.
 
 ## Status
 
@@ -78,14 +93,16 @@ The server checks the log the same way `transcripts ingest` does, against the
 token's own write source and slug-prefix grant, and scans it for credentials
 before anything is queued. It answers `202` with a job id. The
 `transcripts_ingest` job then writes the pages. Pushing the same file twice
-reuses the same job. Refusals give an error code and counts, never the log's
-text:
+reuses the same job. No answer carries the log's
+text; refusals give an error code and counts:
 
 | Status | `error` | Meaning |
 |---|---|---|
+| 200 | | `{"ok": true, "queued": false, "reason": "empty_session", "format": …}`: the log has a session id but no text turn; nothing was queued. |
 | 400 | `transcript_unreadable` | No session could be read from the body. |
 | 400 | `user_turns_missing` | Assistant turns but no user turn. |
 | 400 | `secret_in_content` | A credential, under the `reject` disposition. |
+| 400 | `invalid_content` | U+0000 in the body, or U+0000 or an unpaired surrogate in a session once parsed (a `\u0000` or lone `\ud800` escape); nothing was queued. Every `POST /ingest` body is refused the same way for U+0000. |
 | 403 | `permission_denied` | No write source, or the session is outside the token's bound prefixes. |
 | 413 | | Over `MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES`. |
 | 415 | `unsupported_transcript` | A log that is not from Codex or Claude Code. |
