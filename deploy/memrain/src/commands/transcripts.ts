@@ -198,6 +198,7 @@ function readTranscriptDir(dir: string, override: TranscriptFormat | undefined):
     format_drift: false,
     user_turns: 0,
     user_turns_missing: 0,
+    empty_sessions: 0,
     files: files.length,
   };
   for (const [index, path] of files.entries()) {
@@ -210,6 +211,7 @@ function readTranscriptDir(dir: string, override: TranscriptFormat | undefined):
     diag.skippedMessages += d.skippedMessages;
     diag.user_turns += d.user_turns;
     diag.user_turns_missing += d.user_turns_missing;
+    diag.empty_sessions += d.empty_sessions;
     malformed += d.malformed_lines ?? 0;
     if (d.format) formats.add(d.format);
     if (r.sessions.length === 0) {
@@ -224,7 +226,9 @@ function readTranscriptDir(dir: string, override: TranscriptFormat | undefined):
   }
   diag.sessions = sessions.length;
   diag.malformed_lines = malformed;
-  diag.format_drift = sessions.length === 0 && diag.bytes > 0;
+  // A directory of nothing but empty logs is empty; any other file that
+  // yielded nothing makes it drift.
+  diag.format_drift = sessions.length === 0 && diag.bytes > 0 && diag.empty_sessions < diag.skipped.length;
   return { sessions, diagnostics: diag };
 }
 
@@ -613,6 +617,9 @@ async function runPush(opts: TranscriptsCmdOptions): Promise<number> {
   const d = parsed.diagnostics;
   if (d.user_turns_missing > 0) {
     return refuse(`${resolved.path}: assistant turns but no user turn (user_turns_missing); nothing was sent`, { diagnostics: d });
+  }
+  if (parsed.sessions.length === 0 && d.empty_sessions > 0 && !d.format_drift) {
+    return done(0, { empty_session: true, path: resolved.path, format: d.format }, `${resolved.path}: empty session, nothing sent`);
   }
   if (parsed.sessions.length === 0) {
     return refuse(`${resolved.path}: ${d.skipped[0]?.reason ?? "no session"}; nothing was sent`, { diagnostics: d });

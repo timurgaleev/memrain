@@ -15,6 +15,7 @@
 import { titleFromText } from "./jsonl.ts";
 import {
   asRecord,
+  EMPTY_SESSION,
   toEpochMs,
   USER_TURNS_MISSING,
   type AdapterResult,
@@ -62,10 +63,17 @@ export function parseCodexRollout(records: readonly unknown[]): AdapterResult {
   let sawMeta = false;
   const messages: TranscriptMessage[] = [];
   let skippedMessages = 0;
+  // A conversation record the adapter could not read (an unknown event kind,
+  // a turn without text); with no kept turn, that is a format change, not an
+  // empty session. Injected context is understood, not unread.
+  let sawUnreadable = false;
 
   for (const raw of records) {
     const rec = asRecord(raw);
-    if (!rec) continue;
+    if (!rec) {
+      sawUnreadable = true;
+      continue;
+    }
     const payload = asRecord(rec["payload"]) ?? {};
     const ts = toEpochMs(rec["timestamp"]);
     const type = rec["type"];
@@ -90,12 +98,16 @@ export function parseCodexRollout(records: readonly unknown[]): AdapterResult {
       const item = asRecord(payload["item"]);
       // Other completed items (agent messages, commands) repeat the response
       // items or are not text.
-      if (payload["type"] === "item_completed" && item?.["type"] !== "UserMessage") continue;
+      if (payload["type"] === "item_completed" && item?.["type"] !== "UserMessage") {
+        sawUnreadable = true;
+        continue;
+      }
       const text =
         payload["type"] === "user_message"
           ? typeof payload["message"] === "string" ? payload["message"].trim() : ""
           : userItemText(item);
       if (!text) {
+        sawUnreadable = true;
         skippedMessages++;
         continue;
       }
@@ -110,18 +122,21 @@ export function parseCodexRollout(records: readonly unknown[]): AdapterResult {
       }
       const text = outputText(payload["content"]);
       if (!text) {
+        sawUnreadable = true;
         skippedMessages++;
         continue;
       }
       messages.push({ id: nonEmpty(payload["id"]) ?? "", role: "assistant", speaker: "Codex", text, ts });
+      continue;
     }
+    if (type === "event_msg" || type === "response_item") sawUnreadable = true;
   }
 
   if (id === null) {
     return { sessions: [], skipped: [{ index: 0, reason: "no session_meta id" }], skippedMessages };
   }
   if (messages.length === 0) {
-    return { sessions: [], skipped: [{ index: 0, id, reason: "no user or assistant text" }], skippedMessages };
+    return { sessions: [], skipped: [{ index: 0, id, reason: sawUnreadable ? "no user or assistant text" : EMPTY_SESSION }], skippedMessages };
   }
   if (!messages.some((m) => m.role === "user")) {
     return { sessions: [], skipped: [{ index: 0, id, reason: USER_TURNS_MISSING }], skippedMessages };

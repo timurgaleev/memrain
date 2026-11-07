@@ -15,6 +15,7 @@ import { isPasteOnly } from "./pasted-content.ts";
 import {
   asRecord,
   USER_TURNS_MISSING,
+  EMPTY_SESSION,
   type TranscriptAdapter,
   type TranscriptDiagnostics,
   type TranscriptFormat,
@@ -96,6 +97,8 @@ export function parseTranscriptExport(
   const adapter = TRANSCRIPT_ADAPTERS.find((a) => a.format === format);
   const result = adapter ? adapter.parse(items) : { sessions: [], skipped: [], skippedMessages: 0 };
   const userTurnsMissing = result.skipped.filter((s) => s.reason === USER_TURNS_MISSING).length;
+  const emptySessions = result.skipped.filter((s) => s.reason === EMPTY_SESSION).length;
+  const onlyEmpty = emptySessions > 0 && emptySessions === result.skipped.length;
   return {
     sessions: result.sessions,
     diagnostics: {
@@ -106,13 +109,18 @@ export function parseTranscriptExport(
       sessions: result.sessions.length,
       skipped: result.skipped,
       skippedMessages: result.skippedMessages,
-      // An export with no conversations at all is empty, not drifted; content
-      // that no adapter could read is, and so is a session with no user turn.
+      // An export with no conversations at all is empty, not drifted, and so
+      // is a session log with no text turn; content that no adapter could
+      // read is drift, and so is a session with no user turn.
       format_drift:
         userTurnsMissing > 0 ||
-        (result.sessions.length === 0 && bytes > 0 && (items.length > 0 || (found === null && !isEmptyValue(data)))),
+        (result.sessions.length === 0 &&
+          !onlyEmpty &&
+          bytes > 0 &&
+          (items.length > 0 || (found === null && !isEmptyValue(data)))),
       user_turns: countUserTurns(result.sessions),
       user_turns_missing: userTurnsMissing,
+      empty_sessions: emptySessions,
     },
   };
 }
@@ -121,7 +129,8 @@ export function parseTranscriptExport(
  * One session log (Codex rollout, Claude Code session): a JSON record per
  * line. Detection reads every record, since a Claude Code log can open with
  * any number of bookkeeping lines before its first turn. A file of nothing
- * but broken lines is drift, not an empty log.
+ * but broken lines is drift, not an empty log, and so is an empty log with a
+ * broken line: something in it was left unread.
  */
 export function parseTranscriptJsonl(raw: string, bytes: number, override?: TranscriptFormat): ParsedExport {
   const { records, malformed } = parseJsonlRecords(raw);
@@ -130,6 +139,12 @@ export function parseTranscriptJsonl(raw: string, bytes: number, override?: Tran
     sessions: parsed.sessions,
     diagnostics: {
       ...parsed.diagnostics,
+      ...(malformed > 0
+        ? {
+            empty_sessions: 0,
+            skipped: parsed.diagnostics.skipped.map((s) => (s.reason === EMPTY_SESSION ? { ...s, reason: "malformed lines" } : s)),
+          }
+        : {}),
       format_drift: parsed.diagnostics.format_drift || (parsed.sessions.length === 0 && malformed > 0),
       malformed_lines: malformed,
     },

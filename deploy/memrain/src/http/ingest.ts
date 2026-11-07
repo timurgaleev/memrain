@@ -479,6 +479,9 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
       `read as ${diagnostics.format ?? "unknown"}: assistant turns but no user turn; the session log format may have changed, nothing was queued`,
     );
   }
+  if (sessions.length === 0 && diagnostics.empty_sessions > 0 && !diagnostics.format_drift) {
+    return Response.json({ ok: true, queued: false, reason: "empty_session", format: diagnostics.format }, { status: 200 });
+  }
   if (sessions.length === 0) {
     const reasons = [...new Set(diagnostics.skipped.map((s) => s.reason))].join("; ");
     return err(

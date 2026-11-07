@@ -42,6 +42,16 @@ export interface TranscriptSession {
  */
 export const USER_TURNS_MISSING = "user_turns_missing";
 
+/**
+ * Skip reason for a session log that has an id but no text turn: a session
+ * opened and closed without a word, or one whose every turn was harness
+ * traffic. Empty, not drift. A turn record the adapter could not read (an
+ * unknown content block, an unknown Codex event kind) keeps the log drift. A
+ * log whose user AND assistant record types were both renamed still looks
+ * empty; {@link USER_TURNS_MISSING} catches the common partial rename.
+ */
+export const EMPTY_SESSION = "empty_session";
+
 export interface SkippedSession {
   index: number;
   id?: string;
@@ -78,6 +88,8 @@ export interface TranscriptDiagnostics {
   user_turns: number;
   /** Sessions skipped as {@link USER_TURNS_MISSING}; any is drift. */
   user_turns_missing: number;
+  /** Sessions skipped as {@link EMPTY_SESSION}; never drift on their own. */
+  empty_sessions: number;
   /** JSONL input only: lines that were not valid JSON. */
   malformed_lines?: number;
   /** Directory input only: session files read. */

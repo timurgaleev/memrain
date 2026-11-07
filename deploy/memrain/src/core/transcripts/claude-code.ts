@@ -21,6 +21,7 @@ import { titleFromText } from "./jsonl.ts";
 import { isPasteOnly } from "./pasted-content.ts";
 import {
   asRecord,
+  EMPTY_SESSION,
   toEpochMs,
   USER_TURNS_MISSING,
   type AdapterResult,
@@ -39,6 +40,25 @@ const INJECTED_BLOCK_RE =
  */
 const HARNESS_ORIGINS: ReadonlySet<unknown> = new Set(["task-notification", "peer", "auto-continuation"]);
 const INTERRUPTED_RE = /^\[Request interrupted by user[^\]]*\]$/;
+/** Content block types the adapter understands, text or not. */
+const KNOWN_BLOCKS: ReadonlySet<unknown> = new Set([
+  "text",
+  "tool_use",
+  "tool_result",
+  "thinking",
+  "redacted_thinking",
+  "image",
+  "document",
+  "tool_addition",
+  "tool_removal",
+]);
+
+/** Content in a shape the adapter does not know: a renamed block type or a non-list, non-string body. */
+function isUnreadable(content: unknown): boolean {
+  if (typeof content === "string") return false;
+  if (!Array.isArray(content)) return true;
+  return content.some((b) => !KNOWN_BLOCKS.has(asRecord(b)?.["type"]));
+}
 
 export function cleanClaudeCodeText(text: string): string {
   const t = text.replace(INJECTED_BLOCK_RE, "").trim();
@@ -90,10 +110,16 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
   // bookkeeping arrive as user records, so a log with those and no kept user
   // turn is understood. One with none is the shape a renamed record leaves.
   let sawUserRecord = false;
+  // A turn record whose content the adapter could not read: with no kept
+  // turn, that is a format change, not an empty session.
+  let sawUnreadable = false;
 
   for (const raw of records) {
     const rec = asRecord(raw);
-    if (!rec) continue;
+    if (!rec) {
+      sawUnreadable = true;
+      continue;
+    }
     id ??= nonEmpty(rec["sessionId"]);
     const uuid = nonEmpty(rec["uuid"]);
     if (uuid) uuids.add(uuid);
@@ -114,9 +140,13 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
       rec["isSidechain"] === true ||
       rec["isMeta"] === true ||
       rec["isCompactSummary"] === true ||
-      (type === "user" && HARNESS_ORIGINS.has(asRecord(rec["origin"])?.["kind"])) ||
-      !text
+      (type === "user" && HARNESS_ORIGINS.has(asRecord(rec["origin"])?.["kind"]))
     ) {
+      skippedMessages++;
+      continue;
+    }
+    if (!text) {
+      if (isUnreadable(message?.["content"])) sawUnreadable = true;
       skippedMessages++;
       continue;
     }
@@ -140,7 +170,7 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
     return { sessions: [], skipped: [{ index: 0, reason: "no sessionId" }], skippedMessages };
   }
   if (messages.length === 0) {
-    return { sessions: [], skipped: [{ index: 0, id, reason: "no user or assistant text" }], skippedMessages };
+    return { sessions: [], skipped: [{ index: 0, id, reason: sawUnreadable ? "no user or assistant text" : EMPTY_SESSION }], skippedMessages };
   }
   if (!sawUserRecord) {
     return { sessions: [], skipped: [{ index: 0, id, reason: USER_TURNS_MISSING }], skippedMessages };

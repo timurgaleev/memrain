@@ -1,10 +1,17 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   checkTranscriptFileSize,
   detectFormat,
   parseTranscriptExport,
+  parseTranscriptJsonl,
   transcriptMaxFileBytes,
 } from "../src/core/transcripts/detect.ts";
+
+const FIXTURES = join(import.meta.dir, "fixtures", "transcripts");
+const emptyClaude = readFileSync(join(FIXTURES, "claude-code-empty.jsonl"), "utf-8");
+const emptyCodex = readFileSync(join(FIXTURES, "codex-rollout-empty.jsonl"), "utf-8");
 
 const chatgpt = {
   id: "g1",
@@ -53,6 +60,46 @@ describe("format drift", () => {
   it("does not call an empty export drift", () => {
     expect(parseTranscriptExport([], 2).diagnostics.format_drift).toBe(false);
     expect(parseTranscriptExport({ conversations: [] }, 20).diagnostics.format_drift).toBe(false);
+  });
+
+  it("calls a session log with an id but no text empty, not drift", () => {
+    const r = parseTranscriptJsonl(emptyClaude, emptyClaude.length);
+    expect(r.diagnostics).toMatchObject({ format: "claude-code", sessions: 0, format_drift: false, empty_sessions: 1 });
+    expect(r.diagnostics.skipped[0]).toMatchObject({ id: "cc-empty-session-1", reason: "empty_session" });
+    const codex = parseTranscriptJsonl(emptyCodex, emptyCodex.length);
+    expect(codex.diagnostics).toMatchObject({ format: "codex", sessions: 0, format_drift: false, empty_sessions: 1 });
+  });
+
+  it("calls a log whose only user turns the harness wrote empty", () => {
+    const peer = JSON.stringify({ type: "user", origin: { kind: "peer" }, sessionId: "p", uuid: "u", message: { role: "user", content: "teammate" } });
+    const r = parseTranscriptJsonl(peer, peer.length);
+    expect(r.diagnostics).toMatchObject({ format_drift: false, empty_sessions: 1, skippedMessages: 1 });
+  });
+
+  it("calls an empty log with a broken or non-record line drift, not empty", () => {
+    const harness = emptyClaude.trimEnd();
+    const codex = emptyCodex.trimEnd();
+    for (const raw of [`${harness}\n{"type":"user","sessionId":"cc-em`, `${harness}\n42`, `${codex}\n{"type":"event_ms`, `${codex}\n"x"`]) {
+      const r = parseTranscriptJsonl(raw, raw.length);
+      expect(r.diagnostics).toMatchObject({ sessions: 0, format_drift: true, empty_sessions: 0 });
+    }
+  });
+
+  it("still calls a log with turns it could not read drift, not empty", () => {
+    const jsonl = (recs: unknown[]) => recs.map((r) => JSON.stringify(r)).join("\n");
+    const renamedBlocks = jsonl([
+      { type: "user", sessionId: "rb", uuid: "u1", message: { role: "user", content: [{ type: "input_text", text: "hi" }] } },
+      { type: "assistant", sessionId: "rb", uuid: "a1", message: { role: "assistant", content: [{ type: "output_text", text: "hello" }] } },
+    ]);
+    const renamedEvent = jsonl([
+      { type: "session_meta", payload: { id: "re", source: "cli" } },
+      { type: "event_msg", payload: { type: "user_input", message: "hi" } },
+    ]);
+    for (const raw of [renamedBlocks, renamedEvent]) {
+      const r = parseTranscriptJsonl(raw, raw.length);
+      expect(r.diagnostics).toMatchObject({ sessions: 0, format_drift: true, empty_sessions: 0 });
+      expect(r.diagnostics.skipped[0]?.reason).toBe("no user or assistant text");
+    }
   });
 });
 

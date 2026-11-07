@@ -210,7 +210,7 @@ describe("claude code session adapter", () => {
 
   it("reports a log of only sub-agent traffic as having no text", () => {
     const side = { type: "user", isSidechain: true, sessionId: "s", message: { role: "user", content: "x" } };
-    expect(parseClaudeCodeSession([side]).skipped[0]).toMatchObject({ id: "s", reason: "no user or assistant text" });
+    expect(parseClaudeCodeSession([side]).skipped[0]).toMatchObject({ id: "s", reason: "empty_session" });
   });
 });
 
@@ -310,7 +310,7 @@ describe("memrain transcripts ingest (session logs)", () => {
     expect(await runTranscripts({ sub: "ingest", file: logsDir, dryRun: true, json: true, configPath: cfgPath })).toBe(0);
     const dry = lastJson();
     expect(dry.diagnostics).toMatchObject({ files: 3, sessions: 2, format: null, detected_by: "detection", format_drift: false });
-    expect(dry.diagnostics.skipped).toEqual([{ index: 2, id: join("proj", "sub", "agent-1.jsonl"), reason: "no user or assistant text" }]);
+    expect(dry.diagnostics.skipped).toEqual([{ index: 2, id: join("proj", "sub", "agent-1.jsonl"), reason: "empty_session" }]);
 
     const run = () => runTranscripts({ sub: "ingest", file: logsDir, json: true, configPath: cfgPath, embedFn });
     expect(await run()).toBe(0);
@@ -346,6 +346,23 @@ describe("memrain transcripts ingest (session logs)", () => {
     expect(dry.diagnostics).toMatchObject({ files: 2, sessions: 1 });
     expect(dry.diagnostics.skipped).toEqual([expect.objectContaining({ reason: "subagent rollout" })]);
     expect(JSON.stringify(dry)).not.toContain("DELEGATED-PROMPT-ONLY");
+  });
+
+  it("lists a directory of only empty logs as skipped, without drift", async () => {
+    const dir = join(cliTmp, "only-empty");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "cc-empty-session-1.jsonl"), readFileSync(join(FIXTURES, "claude-code-empty.jsonl"), "utf-8"));
+    expect(await runTranscripts({ sub: "ingest", file: dir, dryRun: true, json: true, configPath: cfgPath })).toBe(0);
+    expect(lastJson().diagnostics).toMatchObject({ files: 1, sessions: 0, format_drift: false, empty_sessions: 1 });
+  });
+
+  it("calls a directory whose only log is empty but has a truncated line drift", async () => {
+    const dir = join(cliTmp, "empty-broken");
+    mkdirSync(dir, { recursive: true });
+    const raw = readFileSync(join(FIXTURES, "claude-code-empty.jsonl"), "utf-8").trimEnd();
+    writeFileSync(join(dir, "cc-empty-session-1.jsonl"), `${raw}\n{"type":"user","sessionId":"cc-em`);
+    expect(await runTranscripts({ sub: "ingest", file: dir, dryRun: true, json: true, configPath: cfgPath })).toBe(1);
+    expect(lastJson().diagnostics).toMatchObject({ sessions: 0, format_drift: true, malformed_lines: 1 });
   });
 
   it("calls a directory whose logs yield nothing drift", async () => {

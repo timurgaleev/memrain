@@ -21,6 +21,7 @@ import { handleIngestRoute, registerIngestCaptureHandler, TRANSCRIPTS_INGEST_JOB
 const FIXTURES = join(import.meta.dir, "fixtures", "transcripts");
 const claudeRaw = readFileSync(join(FIXTURES, "claude-code-session.jsonl"), "utf-8");
 const assistantOnly = readFileSync(join(FIXTURES, "claude-code-assistant-only.jsonl"), "utf-8");
+const emptyClaude = readFileSync(join(FIXTURES, "claude-code-empty.jsonl"), "utf-8");
 const PAT = `memex_${"ef56".repeat(16)}`;
 const CT = "application/x-memrain-transcript+jsonl";
 
@@ -169,6 +170,19 @@ describe("POST /ingest transcript push", () => {
     expect(text).not.toContain("plan you asked for");
   });
 
+  it("refuses an empty session log with a truncated line as unreadable", async () => {
+    const res = await handleIngestRoute(pushReq(`${emptyClaude.trimEnd()}\n{"type":"user","sessionId":"cc-em`), deps(writeAuth));
+    expect(res.status).toBe(400);
+    expect(await jobs()).toHaveLength(0);
+  });
+
+  it("answers 200 and queues nothing for an empty session log", async () => {
+    const res = await handleIngestRoute(pushReq(emptyClaude), deps(writeAuth));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, queued: false, reason: "empty_session", format: "claude-code" });
+    expect(await jobs()).toHaveLength(0);
+  });
+
   it("holds a bound client to its prefixes", async () => {
     const outside = await handleIngestRoute(pushReq(claudeRaw), deps({ ...writeAuth, boundSlugPrefixes: ["notes"] }));
     expect(outside.status).toBe(403);
@@ -300,6 +314,25 @@ describe("memrain transcripts push", () => {
     expect(await hook("not json")).toBe(0);
     expect(await hook(JSON.stringify({ transcript_path: logPath }))).toBe(0);
     expect(String(errLog.mock.calls.at(-1)![0])).toContain("network down");
+  });
+
+  it("exits 0 on an empty log, sending nothing, with or without --hook-stdin", async () => {
+    const emptyPath = join(roots[0]!, "proj", "cc-empty-session-1.jsonl");
+    writeFileSync(emptyPath, emptyClaude);
+    const fetchFn = async () => {
+      throw new Error("must not send");
+    };
+    expect(await runTranscripts({ sub: "push", file: emptyPath, url: "https://b.example.com", tokenFile, pushRoots: roots, fetchFn })).toBe(0);
+    expect(String(log.mock.calls.at(-1)![0])).toContain("empty session");
+    expect(await runTranscripts({ sub: "push", file: emptyPath, json: true, dryRun: true, pushRoots: roots })).toBe(0);
+    expect(lastJson()).toMatchObject({ ok: true, empty_session: true, format: "claude-code" });
+  });
+
+  it("exits 1 on an empty log with a truncated line", async () => {
+    const brokenPath = join(roots[0]!, "proj", "cc-empty-broken.jsonl");
+    writeFileSync(brokenPath, `${emptyClaude.trimEnd()}\n{"type":"user","sessionId":"cc-em`);
+    expect(await runTranscripts({ sub: "push", file: brokenPath, json: true, dryRun: true, pushRoots: roots })).toBe(1);
+    expect(lastJson()).not.toMatchObject({ empty_session: true });
   });
 
   it("previews on --dry-run without sending", async () => {
