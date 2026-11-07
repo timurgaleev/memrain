@@ -295,6 +295,57 @@ export async function checkFenceRowsWithoutMarkers(
   };
 }
 
+/**
+ * Links and live facts whose target is a bare namespace (`people`) that live
+ * slugs use as a prefix (`people/x`) — the shape a link or fact entity takes
+ * when the old whole-string slugify dropped a non-Latin last segment. A bare
+ * slug that is itself a live page (a real `projects` hub) is no collapse.
+ * Stored rows are never rewritten automatically; the samples tell the
+ * operator which pages to re-link and which facts to re-file.
+ * Read-only; warn, never fail.
+ */
+export async function checkNamespaceOnlyTargets(
+  engine: Engine,
+): Promise<OpsCheckResult> {
+  const collapsed = (col: string) => `position('/' in ${col}) = 0
+        AND ${col} IN (SELECT DISTINCT split_part(slug, '/', 1) FROM pages
+                        WHERE slug LIKE '%/%' AND deleted_at IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.slug = ${col} AND p.deleted_at IS NULL)`;
+  const links = await engine.query<{ source_slug: string; target_slug: string; total: number }>(
+    `SELECT l.source_slug, l.target_slug, count(*) OVER ()::int AS total
+       FROM links l
+      WHERE ${collapsed("l.target_slug")}
+      ORDER BY l.target_slug, l.source_slug
+      LIMIT 3`,
+  );
+  const facts = await engine.query<{ id: number; entity_slug: string; total: number }>(
+    `SELECT f.id::int AS id, f.entity_slug, count(*) OVER ()::int AS total
+       FROM entity_facts f
+      WHERE f.forgotten_at IS NULL AND ${collapsed("f.entity_slug")}
+      ORDER BY f.entity_slug, f.id
+      LIMIT 3`,
+  );
+  const linkTotal = links.rows[0]?.total ?? 0;
+  const factTotal = facts.rows[0]?.total ?? 0;
+  if (linkTotal === 0 && factTotal === 0) {
+    return { ok: true, status: "ok", detail: "no links or facts target a bare namespace" };
+  }
+  const samples: string[] = [];
+  if (linkTotal > 0) {
+    samples.push(`links e.g. ${links.rows.map((x) => `${x.source_slug} -> ${x.target_slug}`).join(", ")}`);
+  }
+  if (factTotal > 0) {
+    samples.push(`facts e.g. ${facts.rows.map((x) => `${x.entity_slug} (fact #${x.id})`).join(", ")}`);
+  }
+  return {
+    ok: true,
+    status: "warn",
+    detail:
+      `${linkTotal} link(s) and ${factTotal} fact(s) target a bare namespace; ${samples.join("; ")}` +
+      " — re-link or re-file them under the full page slug",
+  };
+}
+
 /** Entity page types a junk name can accrete edges on. */
 const JUNK_HUB_TYPES = ["person", "company", "concept"] as const;
 /** Bound on the entity pages loaded for the name test — a doctor probe must

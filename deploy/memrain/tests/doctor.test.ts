@@ -127,6 +127,7 @@ describe("doctor", () => {
       "legacy-config-dir",
       "legacy-env-names",
       "links-extraction-lag",
+      "namespace-only-targets",
       "oauth-client-health",
       "oauth-client-hygiene",
       "oauth-self-issued-config",

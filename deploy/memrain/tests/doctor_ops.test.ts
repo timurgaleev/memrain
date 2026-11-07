@@ -19,6 +19,7 @@ import {
   checkQuarantinedPages,
   checkJunkEntityHubs,
   checkFenceRowsWithoutMarkers,
+  checkNamespaceOnlyTargets,
 } from "../src/core/doctor-ops.ts";
 import { putPage } from "../src/core/pages.ts";
 import { renderFactsFence } from "../src/core/facts-fence.ts";
@@ -361,6 +362,89 @@ describe("checkFenceRowsWithoutMarkers", () => {
   });
 });
 
+describe("checkNamespaceOnlyTargets", () => {
+  const sql = (q: string) => storage.engine().exec(q);
+  const livePage = (slug: string) =>
+    sql(`INSERT INTO pages (slug, type, content_hash) VALUES ('${slug}', 'note', 'h-${slug}')`);
+  const link = (from: string, to: string) =>
+    sql(`INSERT INTO links (source_slug, target_slug, type) VALUES ('${from}', '${to}', 'mentions')`);
+
+  it("reports none on a clean store", async () => {
+    const r = await checkNamespaceOnlyTargets(storage.engine());
+    expect(r.status).toBe("ok");
+    expect(r.ok).toBe(true);
+  });
+
+  it("ignores full slugs and bare targets that are no namespace", async () => {
+    await livePage("people/x");
+    await livePage("notes/a");
+    await link("notes/a", "people/x");
+    await link("notes/a", "inbox");
+    const r = await checkNamespaceOnlyTargets(storage.engine());
+    expect(r.status).toBe("ok");
+  });
+
+  it("lists a link that collapsed onto a namespace live slugs use", async () => {
+    await livePage("people/x");
+    await livePage("notes/a");
+    await link("notes/a", "people");
+    const r = await checkNamespaceOnlyTargets(storage.engine());
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("warn");
+    expect(r.detail).toStartWith("1 link(s)");
+    expect(r.detail).toContain("notes/a -> people");
+  });
+
+  it("ignores a bare target that is itself a live page", async () => {
+    await livePage("projects");
+    await livePage("projects/x");
+    await livePage("notes/a");
+    await link("notes/a", "projects");
+    const r = await checkNamespaceOnlyTargets(storage.engine());
+    expect(r.status).toBe("ok");
+  });
+
+  const fact = (entity: string, forgotten = false) =>
+    sql(`INSERT INTO entity_facts (entity_slug, fact${forgotten ? ", forgotten_at" : ""})
+         VALUES ('${entity}', 'f-${entity}'${forgotten ? ", NOW()" : ""})`);
+
+  it("counts live facts filed under a bare namespace, apart from links", async () => {
+    await livePage("people/x");
+    await livePage("notes/a");
+    await link("notes/a", "people");
+    await fact("people");
+    await fact("people");
+    await fact("people", true);
+    await fact("people/x");
+    const r = await checkNamespaceOnlyTargets(storage.engine());
+    expect(r.status).toBe("warn");
+    expect(r.detail).toStartWith("1 link(s) and 2 fact(s)");
+    expect(r.detail).toContain("notes/a -> people");
+    expect(r.detail).toMatch(/facts e\.g\. people \(fact #\d+\), people \(fact #\d+\)/);
+  });
+
+  it("warns on facts alone and skips facts on a live bare page", async () => {
+    await livePage("people/x");
+    await livePage("projects");
+    await livePage("projects/y");
+    await fact("people");
+    await fact("projects");
+    const r = await checkNamespaceOnlyTargets(storage.engine());
+    expect(r.status).toBe("warn");
+    expect(r.detail).toStartWith("0 link(s) and 1 fact(s)");
+    expect(r.detail).not.toContain("projects");
+  });
+
+  it("ignores a namespace only soft-deleted pages use", async () => {
+    await livePage("people/x");
+    await livePage("notes/a");
+    await sql(`UPDATE pages SET deleted_at = NOW() WHERE slug = 'people/x'`);
+    await link("notes/a", "people");
+    const r = await checkNamespaceOnlyTargets(storage.engine());
+    expect(r.status).toBe("ok");
+  });
+});
+
 describe("ops probe exit-code invariant", () => {
   // Every ops probe reports both fields; `ok` is only the exit-code view of
   // `status`, so the two can never disagree about what fails the process.
@@ -374,6 +458,7 @@ describe("ops probe exit-code invariant", () => {
       checkInvalidIndexes,
       checkDuplicatePages,
       checkFenceRowsWithoutMarkers,
+      checkNamespaceOnlyTargets,
     ]) {
       const r = await probe(e);
       expect(r.ok).toBe(r.status !== "fail");

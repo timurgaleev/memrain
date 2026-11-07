@@ -112,6 +112,7 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   "quarantined-pages",
   "junk-entity-hubs",
   "fence-rows-without-markers",
+  "namespace-only-targets",
   "embed-backlog",
 ]);
 
