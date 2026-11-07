@@ -237,7 +237,7 @@ describe("echoes", () => {
 describe("format and options", () => {
   it("fingerprints with 16 hex and names the scanner version", () => {
     expect(fingerprintSecret("x")).toMatch(/^[0-9a-f]{16}$/);
-    expect(SECRET_SCAN_VERSION).toBe(2);
+    expect(SECRET_SCAN_VERSION).toBe(3);
   });
 
   it("allows a 16-to-64 hex prefix of the SHA-256 and ignores a 12-hex entry", () => {
@@ -286,6 +286,10 @@ describe("linear time", () => {
     "assignment-run": (n) => fill(`token=${"!".repeat(5000)} `, n),
     "assignment-long": (n) => `password=${"a1".repeat(n / 2)}`,
     "assignment-spaces": (n) => fill(`secret${" ".repeat(40)}`, n),
+    "escape-vendor": (n) => fill(String.raw`\nghp_\tAKIA%22sk-ant-`, n),
+    "escape-assignment": (n) => fill(String.raw`\"password\":\"\u003a%3D\ntoken%3D`, n),
+    "glue-open": (n) => fill("_hf_-xoxb-", n),
+    "glue-jwt": (n) => fill("_eyJ", n),
     echo: (n) => {
       const claims = Array.from({ length: 64 }, (_, i) => `Authorization: Bearer ${"A".repeat(400 + i)}${i}`).join("\n");
       return `${claims}\n${"A".repeat(n)}`;

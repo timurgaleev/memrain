@@ -101,7 +101,7 @@ deploy/memrain/src/core/migrations/113_sources_kind_github.sql|HISTORY|2|applied
 deploy/memrain/src/core/migrations/116_fact_withdrawn_trigger_search_path.sql|HISTORY|4|applied migration; its text never changes
 deploy/memrain/src/core/migrations/120_memrain_rename.sql|HISTORY|3|applied migration; its text never changes
 deploy/memrain/src/core/runtime-config.ts|COMPAT|16|runtime_config rows under either prefix
-deploy/memrain/src/core/secret-scan.ts|COMPAT|2|legacy token and PAT shapes
+deploy/memrain/src/core/secret-scan.ts|COMPAT|3|legacy token and PAT shapes
 deploy/memrain/src/core/skillpack/lint.ts|COMPAT|1|stored skill pages that say memex <cmd>
 deploy/memrain/src/core/sweep-code.ts|COMPAT|1|the legacy dotted data dir stays ignored
 deploy/memrain/src/core/synthesis/takes-canon.ts|COMPAT|1|mixed-brand takes fence guard

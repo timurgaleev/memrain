@@ -15,6 +15,8 @@
  *
  * Every pattern starts with a literal prefix or keyword and bounds its tail,
  * so a scan is linear in the text (tests/secret_scan*.test.ts measure it).
+ * The lookbehinds that let a key start after an escape or a `_` are bounded
+ * (six characters at most), so they keep it linear.
  */
 import { createHash } from "node:crypto";
 import { OperationError } from "./operation-error.ts";
@@ -25,7 +27,7 @@ import { logIngest } from "./ingest-log.ts";
  * Bumped whenever the rules change what is caught, so text stored under an
  * older version can be found and scanned again.
  */
-export const SECRET_SCAN_VERSION = 2;
+export const SECRET_SCAN_VERSION = 3;
 
 export interface SecretFinding {
   kind: string;
@@ -65,6 +67,8 @@ interface Pattern {
   validate?: (value: string) => boolean;
   /** The value must carry a digit and a non-digit and clear the entropy floor. */
   entropyGated?: boolean;
+  /** Where the match may start; see startAllowed. Default: wherever the regex matched. */
+  start?: "left" | "glued";
   /** Which part of a claimed value joins the echo dictionary, and its length floor. */
   echo?: { min: number; pick?: (value: string) => string };
 }
@@ -98,7 +102,10 @@ function decodesToUserPass(value: string): boolean {
  * constant work per start.
  */
 const ASSIGNMENT_KEY =
-  String.raw`(?:^|[^A-Za-z0-9])(?:secret|token|passwd|password|passphrase|credential|api[_-]?key|apikey)[\w-]{0,64}["']?[ \t]{0,16}[:=][ \t]{0,16}`;
+  String.raw`(?:^|[^A-Za-z0-9]|\\(?:[bfnrt]|u[0-9a-f]{4})|%[0-9a-f]{2})(?:secret|token|passwd|password|passphrase|credential|api[_-]?key|apikey)[\w-]{0,64}` +
+  // A quote escaped up to two levels (`\"`, `\u0022`, `%22`), and `:`/`=` escaped too. The
+  // lookahead fails a non-separator fast, before the escape alternatives are tried.
+  String.raw`(?=[\\%"' \t:=])(?:\\|\\u[0-9a-f]{4}|%[0-9a-f]{2}){0,2}["']?[ \t]{0,16}(?:[:=]|\\u003[ad]|%3[ad])[ \t]{0,16}`;
 /** A dotted member path in code (`process.env.DB_PASSWORD_2`). */
 const DOTTED_IDENTIFIER = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
 /** The unquoted value class before password punctuation was admitted: a pure base64-ish run. */
@@ -143,45 +150,93 @@ function clearsEntropyGate(value: string): boolean {
   return /\d/.test(value) && /\D/.test(value) && correctedEntropy(value) >= ENTROPY_FLOOR;
 }
 
+/** A JSON escape (`\n`, `\t`, `\u001b`) or a percent escape (`%22`) ending the text. */
+const ESCAPE_TAIL = /(?:\\(?:[bfnrt]|u[0-9A-Fa-f]{4})|%[0-9A-Fa-f]{2})$/;
+
+/**
+ * Whether a key may start at `offset`. `left` (fixed shapes): anywhere but
+ * inside an alphanumeric run, so after `_` (`token_<key>`) too; the shape
+ * itself keeps a snake_case name out. `glued` (the open-length twins of a
+ * `\b` rule): only after `_` or `-`. Either way an escape right before the
+ * key counts. Checked on the match rather than as a regex lookbehind: a
+ * leading assertion costs the engine its fast literal search, a ~25x slower
+ * scan of every text.
+ */
+function startAllowed(start: "left" | "glued", text: string, offset: number): boolean {
+  const prev = text[offset - 1] ?? "";
+  if (start === "left" ? !/[a-z0-9]/i.test(prev) : prev === "_" || prev === "-") return true;
+  return ESCAPE_TAIL.test(text.slice(Math.max(0, offset - 6), offset));
+}
+
+const left = (kind: string, body: string): Pattern => ({ kind, regex: new RegExp(body, "g"), start: "left" });
+/**
+ * An open-length key glued to a name or an escape counts only when it clears
+ * the entropy gate and ends the run, so `_hf_` inside a base64url blob or a
+ * snake_case name is not cut into a "key".
+ */
+const glued = (kind: string, body: string): Pattern => ({
+  kind,
+  regex: new RegExp(String.raw`${body}(?![\w-])`, "g"),
+  start: "glued",
+  entropyGated: true,
+});
+
 const VENDOR_PATTERNS: Pattern[] = [
   // AKIA/ASIA only: AIDA, AROA and the rest are IAM unique ids, not secrets.
-  { kind: "aws-access-key", regex: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
+  left("aws-access-key", String.raw`(?:AKIA|ASIA)[0-9A-Z]{16}\b`),
   { kind: "aws-secret-key", regex: /\b(?:aws_secret_access_key|AWS_SECRET_ACCESS_KEY)\s{0,8}[:=]\s{0,8}["']?[A-Za-z0-9/+]{40}/g },
-  { kind: "github-token", regex: /\bgh[pousr]_[A-Za-z0-9]{36,255}\b/g },
-  { kind: "github-token", regex: /\bgithub_pat_\w{22,255}\b/g },
+  left("github-token", String.raw`gh[pousr]_[A-Za-z0-9]{36,255}\b`),
+  left("github-token", String.raw`github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}\b`),
   { kind: "slack-token", regex: /\bxox[abeprs]-[A-Za-z0-9-]{10,200}/g },
+  glued("slack-token", "xox[abeprs]-[A-Za-z0-9-]{10,200}"),
   { kind: "slack-token", regex: /\bxapp-[A-Za-z0-9-]{10,200}/g },
+  glued("slack-token", "xapp-[A-Za-z0-9-]{10,200}"),
   { kind: "gitlab-token", regex: /\bglpat-[\w-]{20,100}/g },
-  { kind: "stripe-key", regex: /\b(?:sk|rk)_live_[A-Za-z0-9]{20,200}/g },
-  { kind: "stripe-key", regex: /\bwhsec_[A-Za-z0-9]{24,200}/g },
+  glued("gitlab-token", String.raw`glpat-[\w-]{20,100}`),
+  left("stripe-key", "(?:sk|rk)_live_[A-Za-z0-9]{20,200}"),
+  left("stripe-key", "whsec_[A-Za-z0-9]{24,200}"),
+  // The `\b` twin first: a rejected start inside `task-proj-...` would
+  // otherwise consume a real key later in the same kebab run.
   { kind: "openai-key", regex: /\bsk-(?:proj|svcacct|admin)-[\w-]{20,300}/g },
+  left("openai-key", String.raw`sk-(?:proj|svcacct|admin)-[\w-]{20,300}`),
   { kind: "slack-webhook", regex: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,200}/g },
   { kind: "anthropic-key", regex: /\bsk-ant-[\w-]{20,300}/g },
+  left("anthropic-key", String.raw`sk-ant-[\w-]{20,300}`),
   // After the prefixed forms, so those keep their whole key. The right edge
   // keeps `sk-` inside a kebab-case name from reading as a key.
   { kind: "openai-key", regex: /\bsk-[A-Za-z0-9]{20,300}(?![\w-])/g },
-  { kind: "google-api-key", regex: /\bAIza[\w-]{35}(?![\w-])/g },
+  glued("openai-key", "sk-[A-Za-z0-9]{20,300}"),
+  left("google-api-key", String.raw`AIza[\w-]{35}(?![\w-])`),
   { kind: "huggingface-token", regex: /\bhf_[A-Za-z0-9]{30,200}/g },
-  { kind: "npm-token", regex: /\bnpm_[A-Za-z0-9]{36}(?![A-Za-z0-9])/g },
+  glued("huggingface-token", "hf_[A-Za-z0-9]{30,200}"),
+  left("npm-token", "npm_[A-Za-z0-9]{36}(?![A-Za-z0-9])"),
   { kind: "sendgrid-key", regex: /\bSG\.[\w-]{16,200}\.[\w-]{16,200}/g },
   // Account and API-key SIDs: 32 hex with a hard right edge, so a longer
   // digest that happens to start with AC or SK is not cut into a "key".
   { kind: "twilio-key", regex: /\b(?:AC|SK)[0-9a-fA-F]{32}(?![0-9A-Za-z])/g },
   // `sb_publishable_` is public by design and stays.
   { kind: "supabase-key", regex: /\bsb_secret_[\w-]{20,200}/g },
-  { kind: "supabase-key", regex: /\bsbp_[a-f0-9]{40}(?![0-9A-Za-z])/g },
-  { kind: "digitalocean-token", regex: /\bdo[opr]_v1_[a-f0-9]{64}(?![A-Za-z0-9])/g },
+  glued("supabase-key", String.raw`sb_secret_[\w-]{20,200}`),
+  left("supabase-key", "sbp_[a-f0-9]{40}(?![0-9A-Za-z])"),
+  left("digitalocean-token", "do[opr]_v1_[a-f0-9]{64}(?![A-Za-z0-9])"),
   // Our own: OAuth access/refresh tokens, client secrets, authorization and
   // enrollment codes, and PATs, under the current and the pre-rename prefix
   // (tokens minted before the rename keep working).
   // Client ids (`*_cl_`) and enrollment ids (`*_enr_`) are not secrets.
+  // A glued or escaped start needs the minted shape (64 hex), so a snake_case
+  // name such as `revoke_memrain_rt_tokens_on_logout` stays.
   { kind: "memex-token", regex: /\bmemex_(?:at|rt|cs|code|en)_[\w-]{16,200}/g },
-  { kind: "memex-pat", regex: /\bmemex_[0-9a-f]{64}\b/g },
+  left("memex-token", String.raw`memex_(?:at|rt|cs|code|en)_[0-9a-f]{64}\b`),
+  left("memex-pat", String.raw`memex_[0-9a-f]{64}\b`),
   { kind: "memrain-token", regex: /\bmemrain_(?:at|rt|cs|code|en)_[\w-]{16,200}/g },
-  { kind: "memrain-pat", regex: /\bmemrain_[0-9a-f]{64}\b/g },
+  left("memrain-token", String.raw`memrain_(?:at|rt|cs|code|en)_[0-9a-f]{64}\b`),
+  left("memrain-pat", String.raw`memrain_[0-9a-f]{64}\b`),
   // The lookbehind keeps a start from landing mid-run, so a long `-`/`_` run
   // is scanned once, not once per `eyJ` in it.
   { kind: "jwt", regex: /(?<![\w-])eyJ[\w-]{8,4096}\.[\w-]{2,4096}\.[\w-]{8,4096}/g },
+  // After an escape. The lookbehind follows the literal, so the engine still
+  // searches for `eyJ` fast.
+  { kind: "jwt", regex: /eyJ(?<=(?:\\(?:[bfnrt]|u[0-9A-Fa-f]{4})|%[0-9A-Fa-f]{2})eyJ)[\w-]{8,4096}\.[\w-]{2,4096}\.[\w-]{8,4096}/g },
 ];
 
 /** Catch-alls run after every named prefix, so a vendor key or a JWT keeps its own kind. */
@@ -226,9 +281,13 @@ const SHAPE_PATTERNS: Pattern[] = [
  * `.?!` is not part of the value.
  */
 const ASSIGNMENT_PATTERNS: Pattern[] = [
-  { kind: "high-entropy-assignment", regex: new RegExp(`(${ASSIGNMENT_KEY}["'])([^"'\\s]{12,4096})`, "gi") },
+  // A backslash right before the closing (escaped) quote belongs to the quote.
+  // The fast-fail lookahead in ASSIGNMENT_KEY is redundant by design:
+  // eslint-disable-next-line regexp/no-useless-assertions
+  { kind: "high-entropy-assignment", regex: new RegExp(String.raw`(${ASSIGNMENT_KEY}\\?["'])((?:[^"'\s\\]|\\(?!\\{0,2}["'])){12,4096})`, "gi") },
   {
     kind: "high-entropy-assignment",
+    // eslint-disable-next-line regexp/no-useless-assertions
     regex: new RegExp(`(${ASSIGNMENT_KEY})([\\w+/=\\-!#$%*@^~.?<>]{11,4095}[\\w+/=\\-#$%*@^~<>])`, "gi"),
   },
 ].map((p) => ({ ...p, split: true, entropyGated: true, validate: assignmentHoldsValue, echo: { min: 12 } }));
@@ -239,7 +298,7 @@ const ASSIGNMENT_PATTERNS: Pattern[] = [
 // rewrite stored text for good.
 const BEARER_PATTERN: Pattern = {
   kind: "bearer-token",
-  regex: /(?<=\bAuthorization["']?[ \t]{0,4}[:=][ \t]{0,4}["']?Bearer[ \t]{1,8})[\w.~+/=-]{20,}/gi,
+  regex: /(?<=\bAuthorization\\?["']?[ \t]{0,4}[:=][ \t]{0,4}\\?["']?Bearer[ \t]{1,8})[\w.~+/=-]{20,}/gi,
   echo: { min: 20 },
 };
 
@@ -416,6 +475,7 @@ export function scanSecrets(text: string, allow: ReadonlySet<string> = new Set()
       if (p.entropyGated && (!clearsEntropyGate(value) || insideMarker(groups.at(-1) as string, groups.at(-2) as number, match.length))) {
         return match;
       }
+      if (p.start && !startAllowed(p.start, groups.at(-1) as string, groups.at(-2) as number)) return match;
       if (p.validate && !p.validate(value)) return match;
       const marker = claim(p.kind, value, p.echo);
       return marker === null ? match : head + marker;
