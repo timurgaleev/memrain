@@ -33,14 +33,16 @@ Call the `log_friction` tool:
 
 ```json
 {
-  "kind": "friction",
+  "kind": "other",
   "severity": "confused",
   "query": "<which-phase-or-tool>",
   "reason": "<one-line-what-happened; optionally: what could be better>"
 }
 ```
 
-For delight, set `"kind": "delight"` and pick any severity.
+Use a narrower kind when one fits: `search-miss`, `wrong-answer`,
+`tool-error`, `low-confidence`. For delight, set `"kind": "delight"` and pick
+any severity.
 
 The server stamps the timestamp and context automatically, so you can call
 this anywhere — mid-skill, during normal use, or from a scripted test. From
