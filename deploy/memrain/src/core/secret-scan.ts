@@ -42,10 +42,10 @@ export interface SecretScanResult {
 
 /**
  * Values claimed by a keyword-anchored rule (bearer, assignment, URL password,
- * Basic), mapped to the kind that claimed them. A transcript echoes such a
- * value bare — the header in a tool call, the token alone in the reply — so
- * every other occurrence is redacted too. One map per write, shared by its
- * fields.
+ * Basic) and fixed-length vendor keys, mapped to the kind that claimed them.
+ * A transcript echoes such a value bare — the header in a tool call, the token
+ * alone in the reply, `<key>_old` — so every other occurrence is redacted too.
+ * One map per write, shared by its fields.
  */
 export type EchoDictionary = Map<string, string>;
 
@@ -168,7 +168,9 @@ function startAllowed(start: "left" | "glued", text: string, offset: number): bo
   return ESCAPE_TAIL.test(text.slice(Math.max(0, offset - 6), offset));
 }
 
-const left = (kind: string, body: string): Pattern => ({ kind, regex: new RegExp(body, "g"), start: "left" });
+const left = (kind: string, body: string, echo?: Pattern["echo"]): Pattern => ({ kind, regex: new RegExp(body, "g"), start: "left", echo });
+/** A fixed-length key claimed once is redacted where a `_old` or a digit glued to its end defeats the rule. */
+const FIXED_ECHO = { min: 20 };
 /**
  * An open-length key glued to a name or an escape counts only when it clears
  * the entropy gate and ends the run, so `_hf_` inside a base64url blob or a
@@ -183,10 +185,10 @@ const glued = (kind: string, body: string): Pattern => ({
 
 const VENDOR_PATTERNS: Pattern[] = [
   // AKIA/ASIA only: AIDA, AROA and the rest are IAM unique ids, not secrets.
-  left("aws-access-key", String.raw`(?:AKIA|ASIA)[0-9A-Z]{16}\b`),
+  left("aws-access-key", String.raw`(?:AKIA|ASIA)[0-9A-Z]{16}\b`, FIXED_ECHO),
   { kind: "aws-secret-key", regex: /\b(?:aws_secret_access_key|AWS_SECRET_ACCESS_KEY)\s{0,8}[:=]\s{0,8}["']?[A-Za-z0-9/+]{40}/g },
-  left("github-token", String.raw`gh[pousr]_[A-Za-z0-9]{36,255}\b`),
-  left("github-token", String.raw`github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}\b`),
+  left("github-token", String.raw`gh[pousr]_[A-Za-z0-9]{36,255}\b`, FIXED_ECHO),
+  left("github-token", String.raw`github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}\b`, FIXED_ECHO),
   { kind: "slack-token", regex: /\bxox[abeprs]-[A-Za-z0-9-]{10,200}/g },
   glued("slack-token", "xox[abeprs]-[A-Za-z0-9-]{10,200}"),
   { kind: "slack-token", regex: /\bxapp-[A-Za-z0-9-]{10,200}/g },
@@ -196,11 +198,11 @@ const VENDOR_PATTERNS: Pattern[] = [
   left("stripe-key", "(?:sk|rk)_live_[A-Za-z0-9]{20,200}"),
   left("stripe-key", "whsec_[A-Za-z0-9]{24,200}"),
   // Exact lengths with a hard right edge: a longer run is not one of these keys.
-  left("openrouter-key", "sk-or-v1-[a-f0-9]{64}(?![A-Za-z0-9])"),
-  left("groq-key", "gsk_[A-Za-z0-9]{52}(?![A-Za-z0-9])"),
-  left("xai-key", String.raw`xai-[A-Za-z0-9_]{80}(?!\w)`),
-  left("perplexity-key", "pplx-[A-Za-z0-9]{48}(?![A-Za-z0-9])"),
-  left("replicate-key", String.raw`r8_[A-Za-z0-9_-]{37}(?![\w-])`),
+  left("openrouter-key", "sk-or-v1-[a-f0-9]{64}(?![A-Za-z0-9])", FIXED_ECHO),
+  left("groq-key", "gsk_[A-Za-z0-9]{52}(?![A-Za-z0-9])", FIXED_ECHO),
+  left("xai-key", String.raw`xai-[A-Za-z0-9_]{80}(?!\w)`, FIXED_ECHO),
+  left("perplexity-key", "pplx-[A-Za-z0-9]{48}(?![A-Za-z0-9])", FIXED_ECHO),
+  left("replicate-key", String.raw`r8_[A-Za-z0-9_-]{37}(?![\w-])`, FIXED_ECHO),
   // The `\b` twin first: a rejected start inside `task-proj-...` would
   // otherwise consume a real key later in the same kebab run.
   { kind: "openai-key", regex: /\bsk-(?:proj|svcacct|admin)-[\w-]{20,300}/g },
@@ -212,19 +214,19 @@ const VENDOR_PATTERNS: Pattern[] = [
   // keeps `sk-` inside a kebab-case name from reading as a key.
   { kind: "openai-key", regex: /\bsk-[A-Za-z0-9]{20,300}(?![\w-])/g },
   glued("openai-key", "sk-[A-Za-z0-9]{20,300}"),
-  left("google-api-key", String.raw`AIza[\w-]{35}(?![\w-])`),
+  left("google-api-key", String.raw`AIza[\w-]{35}(?![\w-])`, FIXED_ECHO),
   { kind: "huggingface-token", regex: /\bhf_[A-Za-z0-9]{30,200}/g },
   glued("huggingface-token", "hf_[A-Za-z0-9]{30,200}"),
-  left("npm-token", "npm_[A-Za-z0-9]{36}(?![A-Za-z0-9])"),
+  left("npm-token", "npm_[A-Za-z0-9]{36}(?![A-Za-z0-9])", FIXED_ECHO),
   { kind: "sendgrid-key", regex: /\bSG\.[\w-]{16,200}\.[\w-]{16,200}/g },
   // Account and API-key SIDs: 32 hex with a hard right edge, so a longer
   // digest that happens to start with AC or SK is not cut into a "key".
-  { kind: "twilio-key", regex: /\b(?:AC|SK)[0-9a-fA-F]{32}(?![0-9A-Za-z])/g },
+  { kind: "twilio-key", regex: /\b(?:AC|SK)[0-9a-fA-F]{32}(?![0-9A-Za-z])/g, echo: FIXED_ECHO },
   // `sb_publishable_` is public by design and stays.
   { kind: "supabase-key", regex: /\bsb_secret_[\w-]{20,200}/g },
   glued("supabase-key", String.raw`sb_secret_[\w-]{20,200}`),
-  left("supabase-key", "sbp_[a-f0-9]{40}(?![0-9A-Za-z])"),
-  left("digitalocean-token", "do[opr]_v1_[a-f0-9]{64}(?![A-Za-z0-9])"),
+  left("supabase-key", "sbp_[a-f0-9]{40}(?![0-9A-Za-z])", FIXED_ECHO),
+  left("digitalocean-token", "do[opr]_v1_[a-f0-9]{64}(?![A-Za-z0-9])", FIXED_ECHO),
   // Our own: OAuth access/refresh tokens, client secrets, authorization and
   // enrollment codes, and PATs, under the current and the pre-rename prefix
   // (tokens minted before the rename keep working).
@@ -233,10 +235,10 @@ const VENDOR_PATTERNS: Pattern[] = [
   // name such as `revoke_memrain_rt_tokens_on_logout` stays.
   { kind: "memex-token", regex: /\bmemex_(?:at|rt|cs|code|en)_[\w-]{16,200}/g },
   left("memex-token", String.raw`memex_(?:at|rt|cs|code|en)_[0-9a-f]{64}\b`),
-  left("memex-pat", String.raw`memex_[0-9a-f]{64}\b`),
+  left("memex-pat", String.raw`memex_[0-9a-f]{64}\b`, FIXED_ECHO),
   { kind: "memrain-token", regex: /\bmemrain_(?:at|rt|cs|code|en)_[\w-]{16,200}/g },
   left("memrain-token", String.raw`memrain_(?:at|rt|cs|code|en)_[0-9a-f]{64}\b`),
-  left("memrain-pat", String.raw`memrain_[0-9a-f]{64}\b`),
+  left("memrain-pat", String.raw`memrain_[0-9a-f]{64}\b`, FIXED_ECHO),
   // The lookbehind keeps a start from landing mid-run, so a long `-`/`_` run
   // is scanned once, not once per `eyJ` in it.
   { kind: "jwt", regex: /(?<![\w-])eyJ[\w-]{8,4096}\.[\w-]{2,4096}\.[\w-]{8,4096}/g },

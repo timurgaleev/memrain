@@ -132,6 +132,25 @@ describe("five more vendors", () => {
   });
 });
 
+describe("echoes of fixed-length vendor keys", () => {
+  it("redacts a claimed key where its right edge breaks the rule", () => {
+    const key = `${"AK"}IA${rnd(16, 51, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")}`;
+    const r = scanSecrets(`${key} rotated to ${key}_old and ${key}123`);
+    expect(r.text).not.toContain(key);
+    expect(r.findings.map((f) => f.kind)).toEqual(["aws-access-key", "aws-access-key-echo", "aws-access-key-echo"]);
+  });
+
+  it("covers the five newer vendors too", () => {
+    const key = `${"pp"}lx-${rnd(48, 53)}`;
+    expect(kinds(`${key} then ${key}x`)).toEqual(["perplexity-key", "perplexity-key-echo"]);
+  });
+
+  it("leaves open-length keys out of the dictionary", () => {
+    const hf = `${"h"}f_${rnd(34, 52)}`;
+    expect(kinds(`${hf}\n${hf}x_y`)).toEqual(["huggingface-token", "huggingface-token"]);
+  });
+});
+
 describe("linear time", () => {
   const cases: Record<string, (n: number) => string> = {
     "_eyJ repeats": (n) => "_eyJ".repeat(n / 4),
