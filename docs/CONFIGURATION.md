@@ -521,6 +521,20 @@ What a scoped client can reach, and what it cannot:
 | `sources_list` | only the sources its grant covers |
 | `purge_deleted_pages` | needs the `admin` scope, recorded deliberately |
 
+A deleted page stays restorable for 30 days (720 hours) before the cycle's
+purge phase removes it for good, with its versions, aliases, links, timeline
+rows, `raw_data`, `tags` and the redirects that pointed at it. Indexed
+documents, which can be re-read from their files, keep a 72-hour window.
+`purge_deleted_pages` without `older_than_hours` uses the same 720 hours and
+reports the cutoff it applied as `ttl_hours`; pass `older_than_hours` to purge
+sooner, for example after a leaked secret.
+
+`reindex --reconcile-deletes` soft-deletes documents whose file is gone. It
+refuses when the vault root is missing or not a directory, and when more than
+50 documents, or more than a quarter of the live documents under the root
+(and more than one), would go; pass
+`--allow-mass-delete` after checking the count and the sample paths in the refusal.
+
 ### Connecting a whole team through ONE connector
 
 > Task-oriented walkthrough, day-2 operations and troubleshooting:

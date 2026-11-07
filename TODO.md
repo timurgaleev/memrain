@@ -9,6 +9,34 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ---
 
+## Follow-ups from the 1.10 batch
+
+- **Rename does not carry `raw_data`** (`pages.ts` rename path re-points
+  slug-keyed rows but not `raw_data`). After a rename the payload is hidden
+  behind the old slug and comes back if a page is created there again. Move
+  it inside the rename transaction (newest wins on a `(slug, source)` clash)
+  and test it on Postgres. Live had no `raw_data` rows on 2026-11-07. Planned
+  for W3.
+- `putPage`/`deletePage`/`restorePage` hold the slug lock, but the purge takes
+  none: a purge that deletes a long-deleted row between their SELECT and
+  UPDATE leaves a version row on a purged slug. Check the UPDATE row count
+  (W3).
+- Two concurrent `purgeDeletedPages` runs can deadlock (40P01 is not
+  retried); wrap the purge in the deadlock-safe transaction helper (W3).
+- `scripts/check-test-hygiene.sh` matches only saved exit codes named
+  `orig*`/`prev*`; flag any `process.exitCode = <identifier>;` that is not
+  `?? 0` or inside `restoreExitCode`.
+- The Postgres twins of `pages_purge_leftovers` and `slug_aliases_dangling`
+  use fixed slugs; add a per-run suffix so an aborted run cannot leave rows
+  for the next one on a reused database.
+- The Postgres block of `facts_fence_absent` does not set
+  `MEMRAIN_PAGE_MIRROR_SYNC=0` like its PGLite block; it passes only because
+  the preload strips AWS credentials.
+- `effective-date.ts` builds dates with `Date.UTC`, which maps years 0000-0099
+  to 19xx, so those ISO years are now refused; use `setUTCFullYear`.
+- No fixture covers a `raw_data` row left without a page by a purge older
+  than 1.10 (live had none on 2026-11-07).
+
 ## Follow-ups from the admin charts batch (1.5)
 
 - `admin-timeseries.ts` top-agents query uses unqualified `agent_name` /
@@ -125,8 +153,6 @@ Engineering:
   are known.
 - `RET-02` (`return_unit` window/page evidence delivery) is not built; measure
   the snippet cap's token savings first.
-- `skillopt_judge` linearity test flakes under full-suite load (ratio 20 vs
-  3); it passes alone.
 
 ---
 

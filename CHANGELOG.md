@@ -6,6 +6,63 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.10.0] — 2026-11-07
+
+### Fixed
+- **No phantom rows after a failed query.** When a query that had already
+  streamed some rows failed (a statement timeout, a division by zero), the
+  next query on the same pooled Postgres connection got empty rows in front
+  of its real ones. The bundled driver patch now resets its row counter when
+  the server reports the end of the failed query, and keeps the connection's
+  request queue aligned when a query fails before it is sent.
+- **Long timeline events and facts can be stored.** The duplicate check
+  indexed the raw text, so an event or fact over about 2,700 bytes (fewer
+  characters in Cyrillic) failed with a B-tree size error. Migration 143
+  moves both unique indexes to an md5 of the text; no row is rewritten.
+  This migration is forward-only once a longer row has been written: the
+  down migration refuses rather than drop data.
+- **Impossible dates are refused.** A timeline line or `effective_date` such
+  as 2024-02-30 no longer rolls over into March.
+- **A page rewritten without its `## Facts` section keeps its facts.** Before,
+  every fact the section had produced was deleted. `page_put` and `page_edit`
+  now report `facts_fence_absent` with the number of facts kept; remove a
+  fact by striking its row or with `forget_fact`.
+- **Links to non-Latin names keep the name.** A link to `people/<Cyrillic
+  name>` was stored as `people`, so the link and the facts drawn from it
+  landed on the wrong page. Each `/` segment is now folded on its own when
+  one of them is non-Latin only; Latin and mixed names are unchanged.
+  Links and body-derived timeline rows are rebuilt from the page text on the
+  page's next write, so an old collapsed link (or an impossible date) is
+  replaced then; nothing is rewritten in bulk. `doctor` lists the links and
+  fact keys that collapsed before this release.
+- **Purged pages leave nothing behind.** The hard purge now removes the
+  page's `raw_data` and `tags` rows and the redirects that pointed at it, so
+  a new page on the same slug no longer inherits them. `put_raw_data` needs
+  a live page, and a redirect resolves only to a live page.
+
+### Changed
+- **Deleted pages stay restorable for 30 days.** Pages are purged 720 hours
+  after deletion instead of 72; indexed documents keep 72 hours.
+  `purge_deleted_pages` reports the cutoff it used as `ttl_hours` and still
+  accepts `older_than_hours` for an earlier purge.
+- **`reindex --reconcile-deletes` refuses a mass delete.** A missing vault
+  root, or more than 50 (or more than a quarter) of the live documents
+  missing under it, is refused with the count and sample paths; `--allow-mass-delete` overrides
+  the second case.
+
+### Added
+- Three read-only `doctor` checks: `fence-rows-without-markers` (pages whose
+  fence facts outlived their fence), `namespace-only-targets` (links that
+  collapsed onto a bare namespace before this release) and
+  `dangling-slug-redirects` (redirects whose target page is gone).
+
+### Tests
+- The test preload removes ambient AWS credentials, so no test can reach
+  Bedrock with the developer's profile. `make test-pg` fails when any test
+  is skipped. Linearity tests measure CPU time. `make test` checks that tests
+  restore `process.exitCode`. An upgrade test seeds data on the previous
+  release and reads it back after every migration.
+
 ## [1.9.1] — 2026-10-18
 
 ### Added

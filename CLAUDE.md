@@ -190,6 +190,9 @@ for this repo:
    - Move the `[Unreleased]` CHANGELOG entries under a new
      `## [X.Y.Z] — <date>` heading (SemVer), leaving an empty
      `[Unreleased]` on top.
+   - In the same release commit, bump `PREVIOUS_RELEASE` in
+     `deploy/memrain/tests/helpers/previous-release.ts` to the tag being
+     cut and the last migration it ships.
    - Tag the shipped commit and push the tag:
      `git tag vX.Y.Z && git push origin vX.Y.Z`.
    - Publish the GitHub release from that changelog section:
