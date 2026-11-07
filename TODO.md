@@ -9,6 +9,26 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ---
 
+## Follow-ups from the 1.11 batch
+
+- `secrets audit` does not scan `jobs.payload`, and terminal job rows are
+  pruned only by `memrain jobs prune`; a secret in an old job payload is not
+  covered by `--apply`. Scan job payloads or prune terminal jobs in the cycle.
+- Key bodies that are themselves `\uXXXX`-escaped or base64-encoded, and keys
+  with zero-width characters pasted inside, are not caught.
+- Slack webhook URLs percent-encoded with `%2F` are not caught.
+- No check on the operator's machine that the SessionEnd hook command starts
+  with `cd / && exec /`.
+- The `outside_neutralized` marker lives in `compiled_truth`; a `page_put` that
+  replaces `compiled_truth` drops it, and the next re-import of that page
+  falls back to the pre-1.11 rebuild (brain fence not carried, facts kept).
+- GitHub and transcript writers read the old page scoped to their source; a
+  page first written under another source is rebuilt without carrying fences.
+- A fresh body ending in a bare `## Facts` / `## Takes` heading can make the
+  carried fence repeat that heading once.
+- The Twilio and SendGrid escape twins are unanchored inside longer hex or
+  base64 runs; fixed shapes and right edges bound it.
+
 ## Follow-ups from the 1.10 batch
 
 - **Rename does not carry `raw_data`** (`pages.ts` rename path re-points

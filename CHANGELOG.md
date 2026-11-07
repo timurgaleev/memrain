@@ -6,6 +6,57 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-11-07
+
+### Action needed
+- **Change the transcript hook command.** The documented SessionEnd hook ran
+  `memrain` in the session's directory, where Bun reads that directory's
+  `bunfig.toml` preload and `.env`; a session that ended inside a cloned repo
+  ran its code with your push token in reach. Use
+  `cd / && exec /absolute/path/to/bun /absolute/path/to/deploy/memrain/src/cli.ts transcripts push --hook-stdin …`
+  as shown in docs/TRANSCRIPTS.md.
+
+### Security
+- **The secret scanner catches keys it used to miss** (scan version 3). A
+  key right after a JSON or percent escape (`\n`, `\t`, `\u0022`, `%22`),
+  glued on with `_`, or inside escaped JSON such as
+  `{\"password\":\"…\"}`, and a Bearer header after an escaped separator,
+  are now redacted at write time. New rules cover OpenRouter, Groq, xAI,
+  Perplexity and Replicate keys, and escaped starts of AWS secret, Twilio,
+  SendGrid and Slack webhook values. A fixed-length key found once is also
+  redacted where it is repeated without its prefix boundary. Hashes, UUIDs,
+  base64 blobs, Windows paths and snake_case names are left alone. Stored
+  content is not rewritten by this release; run `memrain secrets audit` to see
+  what the new rules would change.
+- **Imported text cannot forge brain structure.** Fence markers, `[Source:`
+  citations and dated timeline rows inside GitHub issues, pull requests,
+  comments and transcript turns are escaped before the page is written, so
+  they no longer become facts, takes or timeline events, and no longer hide
+  transcript text from search. Ordinary text, including bare mentions of
+  `memrain:`, is unchanged.
+- `/ingest` refuses a body with U+0000 or a lone surrogate with 400, and job
+  payloads are stored as well-formed jsonb.
+
+### Fixed
+- Re-importing a GitHub item or a transcript keeps the fences the brain added
+  to that page. Pages written before this release are rebuilt as before, and
+  the server logs how many fences it did not carry.
+- Claude Code imports skip turns the harness delivered (task notifications,
+  other agents' messages, auto-continuations) and keep everything a person
+  wrote, including messages sent through a channel. A log whose only user
+  records are such turns is refused as missing user turns.
+- AskUserQuestion answers are imported as user turns.
+- A session log with an id and no turn is reported as an empty session
+  (`reason: "empty_session"`, push exits 0) instead of format drift; a log with
+  unreadable or malformed lines is still format drift.
+
+### Added
+- `doctor` check `outside-content-fences`: pages written before this release
+  that still carry fence markers from imported text, for a one-time review.
+- An untrusted-content convention in the skill pack: every skill that fetches
+  or ingests outside text treats it as data and logs suspicious instructions
+  through `log_friction`.
+
 ## [1.10.0] — 2026-11-07
 
 ### Fixed
