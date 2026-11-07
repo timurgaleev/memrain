@@ -5,7 +5,8 @@
  * timestamp, isSidechain?, isMeta?}` with `content` a string or a block list.
  *
  * Only what was said is kept: `text` blocks. Tool calls, tool results (which
- * arrive as `user` records), thinking and images are dropped, as are sub-agent
+ * arrive as `user` records; an AskUserQuestion answer is the exception, it is
+ * the person's decision and becomes a user turn), thinking and images are dropped, as are sub-agent
  * traffic (`isSidechain`), harness notes (`isMeta`), the compaction summary,
  * the context the harness injects into a prompt (`<system-reminder>`
  * blocks, slash-command bookkeeping), and whole user records the harness
@@ -55,6 +56,25 @@ function contentText(content: unknown): string {
     .join("\n\n");
 }
 
+/**
+ * An AskUserQuestion result as one line per answered question,
+ * `header → answer`; "" when nothing was answered (a cancelled question).
+ */
+function answersText(result: Record<string, unknown> | null): string {
+  const answers = asRecord(result?.["answers"]);
+  if (!answers) return "";
+  const questions = Array.isArray(result?.["questions"]) ? result["questions"].map(asRecord) : [];
+  return Object.entries(answers)
+    .map(([question, answer]) => {
+      const text = Array.isArray(answer) ? answer.join(", ") : typeof answer === "string" ? answer : "";
+      if (!text.trim()) return "";
+      const header = nonEmpty(questions.find((q) => q?.["question"] === question)?.["header"]);
+      return `${header ?? question} → ${text.trim()}`;
+    })
+    .filter((line) => line.length > 0)
+    .join("\n");
+}
+
 function nonEmpty(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
@@ -87,7 +107,9 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
     if (type !== "user" && type !== "assistant") continue;
     if (type === "user") sawUserRecord = true;
     const message = asRecord(rec["message"]);
-    const text = message ? contentText(message["content"]) : "";
+    const text =
+      (message ? contentText(message["content"]) : "") ||
+      (type === "user" ? answersText(asRecord(rec["toolUseResult"])) : "");
     if (
       rec["isSidechain"] === true ||
       rec["isMeta"] === true ||

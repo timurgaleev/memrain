@@ -169,6 +169,45 @@ describe("claude code session adapter", () => {
     });
   });
 
+  describe("AskUserQuestion answers", () => {
+    const ask = { type: "assistant", uuid: "a1", sessionId: "s", message: { id: "m1", role: "assistant", content: [{ type: "text", text: "Two questions." }] } };
+    const questions = [
+      { question: "Which DB?", header: "Database", options: [{ label: "Postgres" }, { label: "SQLite" }], multiSelect: false },
+      { question: "Keep the archive?", header: "Archive", options: [{ label: "Yes" }, { label: "No" }], multiSelect: false },
+    ];
+    const answered = (answers: Record<string, unknown>, uuid = "u1") => ({
+      type: "user",
+      uuid,
+      sessionId: "s",
+      timestamp: "2026-08-01T10:01:00Z",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "Your questions have been answered: …" }] },
+      toolUseResult: { questions, answers },
+    });
+
+    it("imports the answers as a user turn, one line per question, and nothing for a cancelled one", () => {
+      const r = parseClaudeCodeSession([ask, answered({ "Which DB?": "Postgres", "Keep the archive?": "No" }), answered({}, "u2")]);
+      expect(r.sessions[0]!.messages.map((m) => [m.role, m.text])).toEqual([
+        ["assistant", "Two questions."],
+        ["user", "Database → Postgres\nArchive → No"],
+      ]);
+      expect(r.sessions[0]!.messages[1]!.id).toBe("u1");
+      expect(r.sessions[0]!.messages[1]!.speaker).toBe("User");
+    });
+
+    it("falls back to the question text when no header names it", () => {
+      const r = parseClaudeCodeSession([ask, answered({ "Unlisted?": "Sure" })]);
+      expect(r.sessions[0]!.messages[1]!.text).toBe("Unlisted? → Sure");
+    });
+
+    it("redacts a credential pasted as an answer", () => {
+      const token = `${"gh"}p_${"a1".repeat(18)}`;
+      const s = parseClaudeCodeSession([ask, answered({ "Which DB?": token })]).sessions[0]!;
+      const body = prepareSession(s).parts.map((p) => p.body).join("");
+      expect(body).not.toContain(token);
+      expect(body).toContain("[REDACTED:github-token:");
+    });
+  });
+
   it("reports a log of only sub-agent traffic as having no text", () => {
     const side = { type: "user", isSidechain: true, sessionId: "s", message: { role: "user", content: "x" } };
     expect(parseClaudeCodeSession([side]).skipped[0]).toMatchObject({ id: "s", reason: "no user or assistant text" });
