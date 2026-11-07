@@ -167,6 +167,14 @@ describe("claude code session adapter", () => {
       expect(userTexts(user("new kind", { kind: "some-new-kind" }))).toEqual(["What did we decide?", "new kind"]);
       expect(userTexts(user("older log"))).toEqual(["What did we decide?", "older log"]);
     });
+
+    it("calls assistant turns whose only user records the harness wrote user_turns_missing", () => {
+      for (const kind of ["task-notification", "peer", "auto-continuation"]) {
+        expect(parseClaudeCodeSession([user("ping", { kind }), asst]).skipped[0]).toMatchObject({ id: "s", reason: "user_turns_missing" });
+      }
+      const toolResult = { type: "user", uuid: "u2", sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } };
+      expect(parseClaudeCodeSession([toolResult, asst]).sessions).toHaveLength(1);
+    });
   });
 
   describe("AskUserQuestion answers", () => {

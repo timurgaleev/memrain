@@ -106,9 +106,10 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
   let skippedMessages = 0;
   const uuids = new Set<string>();
   const summaries: Array<{ leaf: string; text: string }> = [];
-  // Any `user` record at all, kept or not: tool results and slash-command
-  // bookkeeping arrive as user records, so a log with those and no kept user
-  // turn is understood. One with none is the shape a renamed record leaves.
+  // Any `user` record past the sidechain, meta, compaction and harness-origin
+  // filters, kept or not: tool results and slash-command bookkeeping arrive as
+  // user records, so a log with those and no kept user turn is understood.
+  // One with none is the shape a renamed record leaves.
   let sawUserRecord = false;
   // A turn record whose content the adapter could not read: with no kept
   // turn, that is a format change, not an empty session.
@@ -131,7 +132,6 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
       continue;
     }
     if (type !== "user" && type !== "assistant") continue;
-    if (type === "user") sawUserRecord = true;
     const message = asRecord(rec["message"]);
     const text =
       (message ? contentText(message["content"]) : "") ||
@@ -145,6 +145,7 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
       skippedMessages++;
       continue;
     }
+    if (type === "user") sawUserRecord = true;
     if (!text) {
       if (isUnreadable(message?.["content"])) sawUnreadable = true;
       skippedMessages++;
