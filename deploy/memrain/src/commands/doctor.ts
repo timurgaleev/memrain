@@ -56,6 +56,7 @@ import {
   checkFenceRowsWithoutMarkers,
   checkNamespaceOnlyTargets,
   checkDanglingSlugRedirects,
+  checkOutsideContentFences,
 } from "../core/doctor-ops.ts";
 import { checkConnectorHealth } from "../core/connectors/health.ts";
 import { checkEmbedBacklog } from "../core/doctor-embed.ts";
@@ -430,6 +431,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["fence-rows-without-markers", checkFenceRowsWithoutMarkers],
       ["namespace-only-targets", checkNamespaceOnlyTargets],
       ["dangling-slug-redirects", checkDanglingSlugRedirects],
+      ["outside-content-fences", checkOutsideContentFences],
       ["code-grammars", checkGrammars],
       ["code-graph", checkCodeGraph],
       ["connector-health", checkConnectorHealth],

@@ -61,6 +61,7 @@ describe("doctor categorize", () => {
       "oauth-client-health",
       "oauth-client-hygiene",
       "oauth-self-issued-config",
+      "outside-content-fences",
       "pat-scopes-recorded",
       "per-source-embed-coverage",
       "pglite",

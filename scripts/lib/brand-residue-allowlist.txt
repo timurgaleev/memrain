@@ -40,6 +40,7 @@ deploy/memrain/src/core/brand.ts|COMPAT|14|the legacy literals, defined once
 deploy/memrain/src/core/budget.ts|COMPAT|1|reserved legacy client and enrollment id prefixes
 deploy/memrain/src/core/config.ts|COMPAT|5|legacy config dir and yml fallback
 deploy/memrain/src/core/db-lock.ts|COMPAT|1|legacy cycle rows are never reaped
+deploy/memrain/src/core/doctor-ops.ts|COMPAT|2|legacy fence markers in outside-content-fences
 deploy/memrain/src/core/engine/pglite-lock.ts|COMPAT|1|the legacy PGLite lock file
 deploy/memrain/src/core/env-compat.ts|COMPAT|5|the MEMEX_ env shim
 deploy/memrain/src/core/facts-fence.ts|COMPAT|5|legacy facts fence markers
@@ -182,7 +183,7 @@ deploy/memrain/tests/doctor.test.ts|COMPAT-TEST|2|covers legacy names or legacy 
 deploy/memrain/tests/doctor_code_grammars.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/doctor_connectors.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/doctor_mcp_status.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/doctor_ops.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
+deploy/memrain/tests/doctor_ops.test.ts|COMPAT-TEST|1|covers legacy names or legacy data (a legacy fence marker in outside-content-fences)
 deploy/memrain/tests/doctor_tenancy.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/document_clock.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/document_id_heal.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test

@@ -132,6 +132,7 @@ describe("doctor", () => {
       "oauth-client-health",
       "oauth-client-hygiene",
       "oauth-self-issued-config",
+      "outside-content-fences",
       "pat-scopes-recorded",
       "pglite",
       "quarantined-pages",

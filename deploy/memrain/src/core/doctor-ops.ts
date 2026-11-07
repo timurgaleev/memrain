@@ -376,6 +376,41 @@ export async function checkDanglingSlugRedirects(
   };
 }
 
+/**
+ * Live pages whose body carries a fence marker (`<!--- memrain:` or the legacy
+ * `<!--- memex:`). Before 1.11.0 an imported transcript, GitHub item or any
+ * pasted text could plant one and have its lines projected as facts or takes;
+ * a brain-added fence looks the same, so this lists and never rewrites.
+ * Synthesis pages are skipped: the brain writes those itself.
+ * Read-only; warn, never fail.
+ */
+export async function checkOutsideContentFences(
+  engine: Engine,
+): Promise<OpsCheckResult> {
+  const r = await engine.query<{ slug: string; type: string; total: number }>(
+    `SELECT slug, type, count(*) OVER ()::int AS total
+       FROM pages
+      WHERE deleted_at IS NULL
+        AND type <> 'synthesis'
+        AND (markdown_body LIKE '%<!--- memrain:%' OR markdown_body LIKE '%<!--- memex:%')
+      ORDER BY slug
+      LIMIT 3`,
+  );
+  const total = r.rows[0]?.total ?? 0;
+  if (total === 0) {
+    return { ok: true, status: "ok", detail: "no page carries a fence marker (synthesis pages skipped)" };
+  }
+  const sample = r.rows.map((x) => `${x.slug} (${x.type})`).join(", ");
+  return {
+    ok: true,
+    status: "warn",
+    detail:
+      `${total} page(s) carry a fence marker (synthesis pages skipped), e.g. ${sample}` +
+      " — planted by outside text before 1.11.0 or added by the brain on purpose; review each," +
+      " remove a planted fence with page_edit (its projected facts stay; withdraw them with forget_fact)",
+  };
+}
+
 /** Entity page types a junk name can accrete edges on. */
 const JUNK_HUB_TYPES = ["person", "company", "concept"] as const;
 /** Bound on the entity pages loaded for the name test — a doctor probe must

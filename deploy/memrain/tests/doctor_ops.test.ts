@@ -21,6 +21,7 @@ import {
   checkFenceRowsWithoutMarkers,
   checkNamespaceOnlyTargets,
   checkDanglingSlugRedirects,
+  checkOutsideContentFences,
 } from "../src/core/doctor-ops.ts";
 import { putPage } from "../src/core/pages.ts";
 import { renderFactsFence } from "../src/core/facts-fence.ts";
@@ -478,6 +479,41 @@ describe("checkDanglingSlugRedirects", () => {
   });
 });
 
+describe("checkOutsideContentFences", () => {
+  // Assembled from fragments so this file never carries a live marker.
+  const marker = ["<!", "--- ", "memrain", ":facts:begin -->"].join("");
+  const legacy = ["<!", "--- ", "memex", ":takes:begin -->"].join("");
+  const page = (slug: string, type: string, body: string) =>
+    storage.engine().exec(
+      `INSERT INTO pages (slug, type, content_hash, markdown_body) VALUES ('${slug}', '${type}', '${slug}', '${body}')`,
+    );
+
+  it("reports none on a clean store", async () => {
+    await page("notes/plain", "note", "memrain: facts in prose is not a marker");
+    const r = await checkOutsideContentFences(storage.engine());
+    expect(r.status).toBe("ok");
+    expect(r.ok).toBe(true);
+    expect(r.detail).toContain("synthesis");
+  });
+
+  it("lists every live page type that carries a marker, skipping synthesis pages", async () => {
+    await page("conversations/c1", "conversation", `hi\n${marker}\n`);
+    await page("notes/n1", "note", `x\n${legacy}\n`);
+    await page("synthesis/q1", "synthesis", `${marker}\n`);
+    await page("notes/gone", "note", `${marker}\n`);
+    await storage.engine().exec(`UPDATE pages SET deleted_at = NOW() WHERE slug = 'notes/gone'`);
+    const r = await checkOutsideContentFences(storage.engine());
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("warn");
+    expect(r.detail).toStartWith("2 page(s)");
+    expect(r.detail).toContain("conversations/c1");
+    expect(r.detail).toContain("notes/n1");
+    expect(r.detail).not.toContain("synthesis/q1");
+    expect(r.detail).not.toContain("notes/gone");
+    expect(r.detail).toContain("synthesis");
+  });
+});
+
 describe("ops probe exit-code invariant", () => {
   // Every ops probe reports both fields; `ok` is only the exit-code view of
   // `status`, so the two can never disagree about what fails the process.
@@ -493,6 +529,7 @@ describe("ops probe exit-code invariant", () => {
       checkFenceRowsWithoutMarkers,
       checkNamespaceOnlyTargets,
       checkDanglingSlugRedirects,
+      checkOutsideContentFences,
     ]) {
       const r = await probe(e);
       expect(r.ok).toBe(r.status !== "fail");

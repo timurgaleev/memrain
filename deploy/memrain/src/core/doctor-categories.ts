@@ -114,6 +114,7 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   "fence-rows-without-markers",
   "namespace-only-targets",
   "dangling-slug-redirects",
+  "outside-content-fences",
   "embed-backlog",
 ]);
 
