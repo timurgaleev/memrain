@@ -138,7 +138,9 @@ claude mcp add --transport http memrain http://127.0.0.1:18790/mcp \
 ```
 
 The CLI runs as `bun run src/cli.ts`; a `memrain` command is on your PATH only
-after you link it yourself (for example with `bun link`).
+after you link it yourself (for example with `bun link`). A hook must not rely
+on that link: it runs `bun` and `cli.ts` by absolute path from `/` (see
+[TRANSCRIPTS.md](TRANSCRIPTS.md#claude-code-session-hook)).
 
 - `init` creates `~/.memrain` with an embedded PGLite database, a `config.json`
   and a `memrain.yml` that turns on `auth.selfIssued`, which the server needs to

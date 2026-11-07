@@ -104,7 +104,7 @@ add a `SessionEnd` hook to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "memrain transcripts push --hook-stdin --url https://brain.example.com --token-file ~/.config/memrain/push-token"
+            "command": "cd / && exec /absolute/path/to/bun /absolute/path/to/memrain/deploy/memrain/src/cli.ts transcripts push --hook-stdin --url https://brain.example.com --token-file ~/.config/memrain/push-token"
           }
         ]
       }
@@ -112,6 +112,12 @@ add a `SessionEnd` hook to `~/.claude/settings.json`:
   }
 }
 ```
+
+Bun loads `bunfig.toml` preloads and `.env` from the current directory, and a
+hook starts in the directory where the session ended, so a plain `memrain` or
+`bun` there would run a cloned repository's code with your push token. `cd /`
+and absolute paths to `bun` and `cli.ts` (no `PATH` lookup, no shebang) keep
+the hook out of its reach.
 
 With `--hook-stdin`, push reads `transcript_path` from the JSON that Claude
 Code passes to the hook. It reports any failure on stderr and still exits 0,
