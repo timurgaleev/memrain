@@ -132,6 +132,43 @@ describe("claude code session adapter", () => {
     }
   });
 
+  describe("turns the harness wrote, told apart by origin.kind", () => {
+    const asst = { type: "assistant", uuid: "a1", sessionId: "s", message: { id: "m1", role: "assistant", content: [{ type: "text", text: "We decided X." }] } };
+    const user = (text: string, origin?: unknown) => ({
+      type: "user",
+      uuid: "u1",
+      sessionId: "s",
+      timestamp: "2026-08-01T10:00:00Z",
+      ...(origin === undefined ? {} : { origin }),
+      message: { role: "user", content: text },
+    });
+    const real = { ...user("What did we decide?"), uuid: "u0" };
+    const userTexts = (rec: unknown) =>
+      parseClaudeCodeSession([real, rec, asst]).sessions[0]!.messages.filter((m) => m.role === "user").map((m) => m.text);
+
+    for (const kind of ["task-notification", "peer", "auto-continuation"]) {
+      it(`drops a user record of origin.kind ${kind} and counts it`, () => {
+        const r = parseClaudeCodeSession([user(`<task-notification>\n<task-id>abc</task-id>\n</task-notification>`, { kind }), real, asst]);
+        expect(r.sessions[0]!.messages.map((m) => m.text)).toEqual(["What did we decide?", "We decided X."]);
+        expect(r.sessions[0]!.title).toBe("What did we decide?");
+        expect(r.skippedMessages).toBe(1);
+      });
+    }
+
+    it("never turns a queue-operation record into a turn", () => {
+      const queued = { type: "queue-operation", operation: "enqueue", sessionId: "s", content: "<task-notification>x</task-notification>" };
+      expect(userTexts(queued)).toEqual(["What did we decide?"]);
+    });
+
+    it("keeps a human turn that quotes a notification, a channel turn, an unknown kind and a log without origin", () => {
+      const quoted = "Why did this fail?\n<task-notification>\n<status>failed</status>\n</task-notification>";
+      expect(userTexts(user(quoted, { kind: "human" }))).toEqual(["What did we decide?", quoted]);
+      expect(userTexts(user("sent from my phone", { kind: "channel" }))).toEqual(["What did we decide?", "sent from my phone"]);
+      expect(userTexts(user("new kind", { kind: "some-new-kind" }))).toEqual(["What did we decide?", "new kind"]);
+      expect(userTexts(user("older log"))).toEqual(["What did we decide?", "older log"]);
+    });
+  });
+
   it("reports a log of only sub-agent traffic as having no text", () => {
     const side = { type: "user", isSidechain: true, sessionId: "s", message: { role: "user", content: "x" } };
     expect(parseClaudeCodeSession([side]).skipped[0]).toMatchObject({ id: "s", reason: "no user or assistant text" });

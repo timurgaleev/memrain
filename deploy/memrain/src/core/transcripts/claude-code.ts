@@ -7,8 +7,9 @@
  * Only what was said is kept: `text` blocks. Tool calls, tool results (which
  * arrive as `user` records), thinking and images are dropped, as are sub-agent
  * traffic (`isSidechain`), harness notes (`isMeta`), the compaction summary,
- * and the context the harness injects into a prompt (`<system-reminder>`
- * blocks, slash-command bookkeeping). One reply is often written as several
+ * the context the harness injects into a prompt (`<system-reminder>`
+ * blocks, slash-command bookkeeping), and whole user records the harness
+ * delivered rather than the person typed (see {@link HARNESS_ORIGINS}). One reply is often written as several
  * records sharing an API message id; those are joined back into one turn.
  *
  * A turn that is only pasted content (`<pasted_content>` blocks) is kept as
@@ -28,6 +29,14 @@ import {
 
 const INJECTED_BLOCK_RE =
   /<(system-reminder|local-command-stdout|local-command-stderr|local-command-caveat|command-name|command-message|command-args)>[\s\S]*?<\/\1>/g;
+/**
+ * `origin.kind` of a user record that is not the person: a background task's
+ * notification, another agent's message, an automatic continuation. `human`,
+ * `channel` (the person writing through a channel), an unknown kind and a
+ * record with no `origin` (older logs) are all kept: dropping someone's words
+ * is data loss, keeping a stray notification is not.
+ */
+const HARNESS_ORIGINS: ReadonlySet<unknown> = new Set(["task-notification", "peer", "auto-continuation"]);
 const INTERRUPTED_RE = /^\[Request interrupted by user[^\]]*\]$/;
 
 export function cleanClaudeCodeText(text: string): string {
@@ -79,7 +88,13 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
     if (type === "user") sawUserRecord = true;
     const message = asRecord(rec["message"]);
     const text = message ? contentText(message["content"]) : "";
-    if (rec["isSidechain"] === true || rec["isMeta"] === true || rec["isCompactSummary"] === true || !text) {
+    if (
+      rec["isSidechain"] === true ||
+      rec["isMeta"] === true ||
+      rec["isCompactSummary"] === true ||
+      (type === "user" && HARNESS_ORIGINS.has(asRecord(rec["origin"])?.["kind"])) ||
+      !text
+    ) {
       skippedMessages++;
       continue;
     }
