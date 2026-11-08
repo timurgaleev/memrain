@@ -199,7 +199,7 @@ import {
   type EntityRecallOptions,
 } from "../core/facts.ts";
 import { putRawData, getRawData } from "../core/raw-data.ts";
-import { logIngest, getIngestLog } from "../core/ingest-log.ts";
+import { logIngest, getIngestLog, classifyFactsAbsorbError, writeFactsAbsorbLog } from "../core/ingest-log.ts";
 import { Queue } from "../core/jobs/queue.ts";
 import { spendPayload } from "../core/jobs/types.ts";
 import { PAGE_MIRROR_JOB_KIND } from "../core/jobs/page-mirror-handler.ts";
@@ -1912,6 +1912,8 @@ function maybeEnqueueFactExtraction(
         ...(page.source_id ? { sourceId: page.source_id } : {}),
       }).then(() => undefined),
     sessionId,
+    err => writeFactsAbsorbLog(storage.engine(), page.slug, classifyFactsAbsorbError(err), "queued extraction failed", sessionId),
+    reason => writeFactsAbsorbLog(storage.engine(), page.slug, reason, "on-write extraction interrupted; backfill can recover this page", sessionId),
   );
 }
 

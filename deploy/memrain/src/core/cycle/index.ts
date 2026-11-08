@@ -145,7 +145,7 @@ export type PhaseName =
   | "drift"
   // Facts-maintenance phases — opt-in, default-OFF (NOT in ALL_PHASES).
   // consolidate-facts is deterministic + free; conversation-facts-backfill is
-  // paid (Sonnet) and additionally gated by MEMRAIN_FACTS_BACKFILL.
+  // paid (Sonnet), follows extraction opt-in and can be overridden by MEMRAIN_FACTS_BACKFILL.
   | "consolidate-facts"
   | "conversation-facts-backfill"
   // Chunker-maintenance sweep — opt-in, default-OFF (NOT in ALL_PHASES). Spends
@@ -197,9 +197,9 @@ export const SYNTHESIS_PHASES: readonly PhaseName[] = [
 
 /**
  * Opt-in facts-maintenance phases. Like SYNTHESIS_PHASES, deliberately NOT in
- * ALL_PHASES — they run only when explicitly requested. `consolidate-facts` is
- * deterministic + free; `conversation-facts-backfill` spends Bedrock and is
- * additionally gated by the MEMRAIN_FACTS_BACKFILL env flag.
+ * ALL_PHASES. `consolidate-facts` is explicit, deterministic and free. The daemon
+ * schedules paid `conversation-facts-backfill` when extraction is enabled;
+ * MEMRAIN_FACTS_BACKFILL overrides that default.
  */
 export const FACTS_MAINT_PHASES: readonly PhaseName[] = [
   "consolidate-facts",

@@ -19,6 +19,7 @@ import {
 import { consoleProgress } from "../core/output/progress.ts";
 import { phasesRunTodayUtc } from "../core/cycle/phase-runs.ts";
 import { runDeepSynthPhase } from "../core/synthesis/deep-synth.ts";
+import { backfillEnabled } from "../core/cycle/conversation-facts-backfill.ts";
 import {
   tryAcquireDbLock,
   reapDeadHolderLocks,
@@ -149,6 +150,7 @@ export function synthesisOncePerDay(env: NodeJS.ProcessEnv = process.env): boole
 export function selectTickPhases(opts: {
   inQuiet: boolean;
   synthEnabled: boolean;
+  factsBackfillEnabled?: boolean;
   skipPhases: Set<string>;
   ranTodayUtc?: ReadonlySet<string>;
 }): PhaseName[] {
@@ -157,6 +159,9 @@ export function selectTickPhases(opts: {
     : [...ALL_PHASES];
   if (opts.synthEnabled && opts.inQuiet) {
     base.push(...SYNTHESIS_PHASES.filter((p) => !opts.ranTodayUtc?.has(p)));
+  }
+  if (opts.factsBackfillEnabled && !opts.inQuiet && !opts.ranTodayUtc?.has("conversation-facts-backfill")) {
+    base.push("conversation-facts-backfill");
   }
   return base.filter((p) => !opts.skipPhases.has(p));
 }
@@ -246,9 +251,11 @@ export function startCycleLoop(
     } else {
       currentLock = lock;
       // Read under the lock: a holder that just finished has recorded its runs.
+      const factsBackfillEnabled = backfillEnabled();
       const ranTodayUtc =
-        synthEnabled && inQuiet && synthOnce ? await phasesRunTodayUtc(storage.engine(), now) : undefined;
-      const phases = selectTickPhases({ inQuiet, synthEnabled, skipPhases, ...(ranTodayUtc ? { ranTodayUtc } : {}) });
+        (synthEnabled && inQuiet && synthOnce) || (factsBackfillEnabled && !inQuiet)
+          ? await phasesRunTodayUtc(storage.engine(), now) : undefined;
+      const phases = selectTickPhases({ inQuiet, synthEnabled, factsBackfillEnabled, skipPhases, ...(ranTodayUtc ? { ranTodayUtc } : {}) });
       const opts: CycleOptions = {
         phases,
         staleDays,

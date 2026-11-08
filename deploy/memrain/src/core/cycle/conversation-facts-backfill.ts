@@ -4,10 +4,9 @@
  * transcript imported outside the MCP write path (bulk import, sync) still gets
  * its facts unattended, mapped onto memrain's per-page extractor.
  *
- * PAID (Bedrock Sonnet) and default-OFF on TWO independent guards:
- *   1. it is NOT in ALL_PHASES — a normal cycle never runs it; it runs only via
- *      `--phases conversation-facts-backfill`, and
- *   2. even when requested it no-ops unless MEMRAIN_FACTS_BACKFILL is truthy.
+ * PAID (Bedrock Sonnet): follows MEMRAIN_FACTS_EXTRACTION unless overridden
+ * by MEMRAIN_FACTS_BACKFILL (0 disables, 1 enables independently). The daemon
+ * schedules it once per UTC day outside quiet hours; CLI can request it too.
  * A brain-wide USD budget (MEMRAIN_FACTS_BACKFILL_BUDGET_USD, default $1) and a
  * per-run page cap bound the spend; the phase stops cleanly when either is hit.
  *
@@ -32,6 +31,7 @@ import {
   FACTS_EXTRACT_VERSION,
   ON_WRITE_WRITER,
   extractFactsForPage,
+  factsExtractionEnabled,
 } from "../facts-extract.ts";
 import { resolveFactsModel } from "../llm/sonnet.ts";
 import type { SonnetFn } from "../llm/sonnet.ts";
@@ -78,7 +78,9 @@ const DEFAULT_MAX_PAGES = 50;
 
 export function backfillEnabled(
   env: string | undefined = process.env["MEMRAIN_FACTS_BACKFILL"],
+  extractionEnv: string | undefined = process.env["MEMRAIN_FACTS_EXTRACTION"],
 ): boolean {
+  if (env === undefined || env.trim() === "") return factsExtractionEnabled(extractionEnv);
   const v = (env ?? "").trim().toLowerCase();
   return v === "1" || v === "true";
 }
@@ -113,12 +115,11 @@ export async function conversationFactsBackfillPhase(
     errors: [],
   };
 
-  // Default-OFF: a live (paid) run requires the explicit gate. Tests inject a
-  // sonnetFn, which bypasses the gate and avoids any spend.
+  // Tests inject a sonnetFn; live runs require extraction or backfill opt-in.
   if (!opts.sonnetFn && !backfillEnabled()) {
     return {
       ...empty,
-      reason: "default-OFF: set MEMRAIN_FACTS_BACKFILL=1 to run paid backfill",
+      reason: "backfill disabled: enable MEMRAIN_FACTS_EXTRACTION or set MEMRAIN_FACTS_BACKFILL=1",
     };
   }
 
