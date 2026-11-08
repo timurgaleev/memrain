@@ -147,13 +147,26 @@ export async function readQuarantineVerdict(
   slug: string,
   ownerSourceId: string | null | undefined,
 ): Promise<QuarantineVerdict | null> {
-  const path =
-    ownerSourceId && ownerSourceId !== "default" ? `page://${ownerSourceId}/${slug}` : `page://${slug}`;
-  const r = await engine.query<{ frontmatter: Record<string, unknown> | null }>(
-    `SELECT frontmatter FROM documents WHERE source_path = $1 LIMIT 1`,
-    [path],
+  return (await readQuarantineVerdicts(engine, [{ slug, source_id: ownerSourceId }]))[0] ?? null;
+}
+
+/** One source-scoped lookup for already-authorized page identities. */
+export async function readQuarantineVerdicts(
+  engine: Engine,
+  pages: readonly { slug: string; source_id?: string | null }[],
+): Promise<(QuarantineVerdict | null)[]> {
+  if (pages.length === 0) return [];
+  const sources = pages.map((p) => p.source_id || "default");
+  const paths = pages.map((p, i) => sources[i] === "default" ? `page://${p.slug}` : `page://${sources[i]}/${p.slug}`);
+  const r = await engine.query<{ source_path: string; source_id: string; frontmatter: Record<string, unknown> | null }>(
+    `SELECT d.source_path, COALESCE(d.source_id, 'default') AS source_id, d.frontmatter
+       FROM documents d
+       JOIN unnest($1::text[], $2::text[]) AS requested(path, source_id)
+         ON d.source_path = requested.path AND COALESCE(d.source_id, 'default') = requested.source_id`,
+    [paths, sources],
   );
-  return quarantineVerdictOf(r.rows[0]?.frontmatter);
+  const verdicts = new Map(r.rows.map((row) => [JSON.stringify([row.source_path, row.source_id]), quarantineVerdictOf(row.frontmatter)]));
+  return paths.map((path, i) => verdicts.get(JSON.stringify([path, sources[i]])) ?? null);
 }
 
 /**

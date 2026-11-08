@@ -84,6 +84,7 @@ import {
   removePageFromSearch,
   isPageSourcePath,
 } from "../core/page-index.ts";
+import { applyQuarantineVisibility, quarantineContent, redactQuarantinePage } from "./quarantine-read.ts";
 import { type QuarantineVerdict, readQuarantineVerdict } from "../core/quarantine.ts";
 import { outputRedactionEnabled, redactToolResult } from "../core/output-redaction.ts";
 import { capHitSnippets, searchSnippetChars } from "../core/search/snippet-cap.ts";
@@ -2233,11 +2234,7 @@ async function callPageGet(
   const quarantined = await readQuarantineVerdict(storage.engine(), page.slug, page.source_id);
   const withheld =
     quarantined !== null && remote && !(args["include_quarantined"] === true && isAdmin);
-  let out: Record<string, unknown> = row as unknown as Record<string, unknown>;
-  if (withheld) {
-    const { markdown_body: _body, compiled_truth: _truth, ...meta } = row;
-    out = meta;
-  }
+  const out = quarantineContent(row as unknown as Record<string, unknown>, withheld);
   return jsonResult({
     ok: true,
     page: redact ? redactBody(out) : out,
@@ -2274,9 +2271,8 @@ async function callPageList(
   let pages = await listPages(storage, opts);
   // Diary fence: a non-operator caller never sees diary pages in the listing.
   if (remote) pages = pages.filter((p) => !isDiaryPage(p.type, p.slug));
-  const out = redact
-    ? pages.map((p) => redactBody(p as unknown as Record<string, unknown>))
-    : pages;
+  const visible = await applyQuarantineVisibility(storage.engine(), pages, remote);
+  const out = redact ? visible.map(redactQuarantinePage) : visible;
   return jsonResult({ ok: true, pages: out });
 }
 
@@ -2302,9 +2298,8 @@ async function callPageVersions(
   const versions = await pageVersions(storage, args["slug"], limit, sourceIds, { withPrincipal });
   // Version rows carry body snapshots; redact each through the same
   // page allowlist so public callers see metadata only.
-  const out = redact
-    ? versions.map((v) => redactBody(v as unknown as Record<string, unknown>))
-    : versions;
+  const visible = await applyQuarantineVisibility(storage.engine(), versions, remote);
+  const out = redact ? visible.map(redactQuarantinePage) : visible;
   return jsonResult({ ok: true, versions: out });
 }
 
@@ -2929,7 +2924,10 @@ async function callEntityRecall(
   // reads entity_facts too, so without this a non-operator caller could read a
   // private fact through the aggregator that entity_facts refuses to show it.
   if (remote) opts.visibility = ["world"];
-  const r = await entityRecall(storage, args["slug"], opts);
+  const recalled = await entityRecall(storage, args["slug"], opts);
+  const r = { ...recalled, page: recalled.page
+    ? (await applyQuarantineVisibility(storage.engine(), [recalled.page], remote))[0]!
+    : null };
   // `redact_body` only strips the page body; the facts + timeline arrays
   // carry note-derived `fact`/`event` text and must be redacted on public
   // ingress too (mirrors callEntityFacts / callEntityTimeline).
@@ -2943,7 +2941,7 @@ async function callEntityRecall(
       // PageRow field would leak by default here. redactBody keeps recall
       // consistent with page_get/page_list (e.g. drops deleted_at too).
       page: r.page
-        ? redactBody(r.page as unknown as Record<string, unknown>)
+        ? redactQuarantinePage(r.page as unknown as Record<string, unknown>)
         : r.page,
       facts: redactFacts(r.facts as unknown as Record<string, unknown>[]),
       timeline: redactTimeline(

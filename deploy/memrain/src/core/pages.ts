@@ -305,6 +305,7 @@ export interface PutResult {
 
 export interface PageVersionRow {
   slug: string;
+  source_id: string | null;
   version_n: number;
   hash_prev: string | null;
   hash_new: string;
@@ -991,7 +992,7 @@ export async function pageVersions(
   const params: unknown[] = [slug, cap];
   const sourceFilter = andSourceScope("source_id", sourceIds, params);
   const r = await storage.engine().query<PageVersionRow>(
-    `SELECT slug, version_n, hash_prev, hash_new,
+    `SELECT slug, source_id, version_n, hash_prev, hash_new,
             body_snapshot, compiled_truth_snapshot,
             written_by, written_at::text AS written_at${opts.withPrincipal === true ? ", written_by_principal" : ""}
        FROM page_versions
