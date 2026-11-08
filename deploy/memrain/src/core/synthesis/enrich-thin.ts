@@ -23,6 +23,7 @@
 import type { Engine } from "./../engine/interface.ts";
 import type { Storage } from "../storage.ts";
 import { putPage, VersionConflictError } from "../pages.ts";
+import { verifyQuotes, unverifiedQuotesFrontmatter } from "./quote-verify.ts";
 import { resolveSonnetFn, resolveFactsModel, type SonnetFn, type SonnetUsage } from "../llm/sonnet.ts";
 import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { BudgetTracker, BudgetExhausted } from "../budget.ts";
@@ -370,12 +371,13 @@ export async function enrichThinPhase(
       continue;
     }
 
+    const quotes = verifyQuotes(draft.markdown, [page.body, ...evidence.map(e => e.body)]);
     try {
       await putPage(storage, {
         slug: page.slug,
         type: page.type,
         title: draft.title ?? page.title ?? undefined,
-        markdown_body: draft.markdown,
+        markdown_body: unverifiedQuotesFrontmatter(quotes.unverified_quotes) + quotes.answer,
         source_id: sourceId,
         written_by: "enrichment",
         expectedVersion: page.version_n,

@@ -68,7 +68,7 @@ describe("patternsPhase", () => {
       {
         topic_slug: "deadline-anxiety",
         title: "Recurring deadline anxiety",
-        body: "You return to deadline stress across several entries.",
+        body: 'You return to deadline stress across several entries. "I will launch a secret moon project".',
         evidence: slugs,
       },
     ]);
@@ -84,6 +84,8 @@ describe("patternsPhase", () => {
     const page = await getPage(storage, "patterns/deadline-anxiety");
     expect(page).not.toBeNull();
     expect(page!.title).toBe("Recurring deadline anxiety");
+    expect(page!.markdown_body).toStartWith("---\nunverified_quotes:");
+    expect(page!.markdown_body).toContain("I will launch a secret moon project [unverified]");
     // Evidence wikilinks are appended.
     expect(page!.markdown_body).toContain(`[[${slugs[0]}]]`);
     await putPage(storage, { slug: "patterns/deadline-anxiety", markdown_body: "human edit", written_by: "operator" });

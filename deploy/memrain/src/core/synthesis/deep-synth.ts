@@ -23,7 +23,7 @@ import type { SearchHit } from "../search/hybrid.ts";
 import { resolveSonnetFn, type SonnetFn, type SonnetUsage } from "../llm/sonnet.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
 import { BudgetTracker, BudgetExhausted, type BudgetHold } from "../budget.ts";
-import { runThink, type ThinkSynthesis } from "./think.ts";
+import { runThink, type ThinkSynthesis, type ThinkResult } from "./think.ts";
 import { listConcepts } from "./reads.ts";
 
 export const DEEP_SYNTH_PROMPT_VERSION = "v1-sonnet";
@@ -44,6 +44,8 @@ export interface DeepSynthItem {
   synthesis: ThinkSynthesis;
   pagesGathered: number;
   takesGathered: number;
+  unverified_quotes?: ThinkResult["unverified_quotes"];
+  quote_check?: ThinkResult["quote_check"];
 }
 
 export interface DeepSynthOptions {
@@ -210,6 +212,8 @@ export async function runDeepSynthPhase(
         synthesis: res.synthesis,
         pagesGathered: res.pagesGathered,
         takesGathered: res.takesGathered,
+        ...(res.unverified_quotes !== undefined ? { unverified_quotes: res.unverified_quotes } : {}),
+        ...(res.quote_check !== undefined ? { quote_check: res.quote_check } : {}),
       });
     }
     // The wrapper tipped the shared ceiling on this question — its synthesis is

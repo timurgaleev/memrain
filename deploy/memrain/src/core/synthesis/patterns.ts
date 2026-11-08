@@ -26,6 +26,7 @@
 import type { Engine } from "./../engine/interface.ts";
 import type { Storage } from "../storage.ts";
 import { putPage } from "../pages.ts";
+import { verifyQuotes, unverifiedQuotesFrontmatter } from "./quote-verify.ts";
 import { resolveSonnetFn, resolveFactsModel, type SonnetFn, type SonnetUsage } from "../llm/sonnet.ts";
 import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { BudgetTracker, BudgetExhausted } from "../budget.ts";
@@ -257,7 +258,8 @@ export async function patternsPhase(
   for (const d of drafts) {
     const slug = `patterns/${d.topic_slug}`;
     const evidenceMd = d.evidence.map((s) => `- [[${s}]]`).join("\n");
-    const body = `${d.body}\n\n## Evidence\n${evidenceMd}\n`;
+    const quotes = verifyQuotes(d.body, reflections.filter(r => d.evidence.includes(r.slug)).map(r => r.excerpt));
+    const body = `${unverifiedQuotesFrontmatter(quotes.unverified_quotes)}${quotes.answer}\n\n## Evidence\n${evidenceMd}\n`;
     try {
       const pageWrite = await putPage(storage, {
         slug,

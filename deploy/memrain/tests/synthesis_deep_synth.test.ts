@@ -56,6 +56,16 @@ const fakePages =
     hits as SearchHit[];
 
 describe("runDeepSynthPhase", () => {
+  it("retains quote diagnostics from the shared think path", async () => {
+    const result = await runDeepSynthPhase(storage, {
+      questions: ["What is the project?"],
+      sonnetFn: fakeSonnet(JSON.stringify({ answer: '"I will launch a secret moon project".', citations: [], gaps: [] })),
+      pagesFn: fakePages([{ sourcePath: "notes/plan.md", content: "The project improves warehouse logistics." }]),
+    });
+    expect(result.syntheses).toHaveLength(1);
+    expect(result.syntheses[0]!.synthesis.answer).toContain("[unverified]");
+    expect(result.syntheses[0]!.unverified_quotes).toEqual([{ text: "I will launch a secret moon project", reason: "quote_not_in_evidence" }]);
+  });
   it("is default-OFF without MEMRAIN_DEEP_SYNTH and no injected sonnetFn", async () => {
     const prev = process.env.MEMRAIN_DEEP_SYNTH;
     delete process.env.MEMRAIN_DEEP_SYNTH;

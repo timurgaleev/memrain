@@ -15,6 +15,7 @@
  * Both refuse empty input and never throw for a per-row failure (warnings
  * carry the misses). No LLM calls — persistence is free.
  */
+import { unverifiedQuotesFrontmatter } from "./quote-verify.ts";
 import type { Storage } from "../storage.ts";
 import type { Engine } from "../engine/interface.ts";
 import { putPage } from "../pages.ts";
@@ -75,13 +76,6 @@ export function synthesisSlugFor(question: string, date: Date = new Date()): str
   return `synthesis/${safe}-${day}`;
 }
 
-/** A YAML frontmatter block listing the run's unverified quotes, or "". */
-function unverifiedQuotesFrontmatter(result: ThinkResult): string {
-  const quotes = result.unverified_quotes ?? [];
-  if (quotes.length === 0) return "";
-  const items = quotes.map((q) => `  - ${JSON.stringify(q.text.replace(/\s+/g, " "))}`);
-  return `---\nunverified_quotes:\n${items.join("\n")}\n---\n`;
-}
 
 /**
  * Persist a think result as a synthesis page + citation evidence rows.
@@ -104,7 +98,7 @@ export async function persistThinkSynthesis(
   const slug = synthesisSlugFor(opts.question);
   // `s.answer` is the quote-checked text; quotes found in no evidence are
   // listed in frontmatter so a reviewer can find them without rereading.
-  const body = `${unverifiedQuotesFrontmatter(opts.result)}# ${opts.question}\n${renderAnswerWithGaps(s.answer, s.gaps)}`;
+  const body = `${unverifiedQuotesFrontmatter(opts.result.unverified_quotes)}# ${opts.question}\n${renderAnswerWithGaps(s.answer, s.gaps)}`;
 
   const pageWrite = await putPage(storage, {
     slug,

@@ -90,7 +90,7 @@ describe("reflectionsPhase", () => {
       {
         topic_slug: "deadline-anxiety",
         title: "Recurring deadline anxiety",
-        body: `The deadline keeps pulling my focus, see [[${slugs[0]}]].`,
+        body: `The deadline keeps pulling my focus, see [[${slugs[0]}]]. "I will launch a secret moon project".`,
         evidence: slugs,
       },
     ]);
@@ -106,6 +106,8 @@ describe("reflectionsPhase", () => {
     const page = await getPage(storage, "reflections/deadline-anxiety");
     expect(page).not.toBeNull();
     expect(page!.title).toBe("Recurring deadline anxiety");
+    expect(page!.markdown_body).toStartWith("---\nunverified_quotes:");
+    expect(page!.markdown_body).toContain("I will launch a secret moon project [unverified]");
     expect(page!.markdown_body).toContain(`[[${slugs[0]}]]`);
     await putPage(storage, { slug: "reflections/deadline-anxiety", markdown_body: "human edit", written_by: "operator" });
     const held = await reflectionsPhase(storage, { sonnetFn: fakeSonnet(payload) });

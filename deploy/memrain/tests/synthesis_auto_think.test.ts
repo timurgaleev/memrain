@@ -62,7 +62,7 @@ describe("autoThinkPhase", () => {
   });
 
   it("runs a question and persists the answer as a draft page", async () => {
-    const answer = JSON.stringify({ answer: "The roadmap defers auth to Q3.", citations: [], gaps: ["No dated milestone"] });
+    const answer = JSON.stringify({ answer: 'The roadmap defers auth to Q3. "I will launch a secret moon project".', citations: [], gaps: ["No dated milestone"] });
     const r = await autoThinkPhase(storage, {
       sonnetFn: fakeSonnet(answer),
       pagesFn: fakePages("Auth is planned but not yet scheduled on the roadmap."),
@@ -80,6 +80,8 @@ describe("autoThinkPhase", () => {
     const page = await getPage(storage, "drafts/think/what-is-the-status-of-auth");
     expect(page).not.toBeNull();
     expect(page!.type).toBe("draft");
+    expect(page!.markdown_body).toStartWith("---\nunverified_quotes:");
+    expect(page!.markdown_body).toContain("I will launch a secret moon project [unverified]");
     expect(page!.markdown_body).toContain("defers auth to Q3");
     expect(page!.markdown_body).toContain("What is the status of auth?");
   });
