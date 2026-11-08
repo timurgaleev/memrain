@@ -37,7 +37,7 @@
   },
   {
     "name": "search",
-    "description": "Hybrid (vector + keyword) search over the indexed corpus. Returns ranked chunks with their parent document path and title. Optional filters (lang / symbol_kind / since / until) are applied post-ranking and bypass the query cache. Has no `expand` knob, and LLM query expansion is off in the default mode bundles — for a concept or landscape question ('everything about X', 'who works on Y'), escalate to `query` with `expand:true`, which widens the keyword arm with generated variants. A nonzero hit count here is not proof that the corpus was exhausted. The response carries `meta`: `vectorEnabled` plus `degraded[]` reason codes (embed_timeout, vector_arm_failed, keyword_zero, budget_truncated, vector_candidates_incomplete) that tell an empty brain from a degraded run; non-public callers also get intent, mode, cache, retrieved and returned.",
+    "description": "Hybrid vector + keyword search returning ranked chunks, paths and titles. Language, symbol, date, page-type and slug-prefix filters apply before retrieval limits and bypass cache. No expand knob: for broad concept/set questions use query with expand:true (paid; off by default). Hits do not prove exhaustive coverage. meta reports vectorEnabled and degraded reason codes; only the operator sees intent, mode, cache and counts. Empty results include a recovery hint.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -66,7 +66,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 200000,
-          "description": "Optional cap on total returned content size (~chars/4 tokens). Hits are kept in rank order; the overflowing tail hit is truncated. Unset = no cap."
+          "description": "Cap returned title + content (~chars/4 tokens), including trust frames. Keep whole hits in rank order; stop before the first that overflows. Omitted: mode default."
         },
         "lang": {
           "type": "string",
@@ -262,7 +262,7 @@
   },
   {
     "name": "page_put",
-    "description": "Create or update a page in the DB-canonical store. Idempotent: re-putting identical content is a no-op. Each real change appends a row to page_versions. Search sees the page once its search mirror is written: by default before this returns (`search_indexed`). When the operator has moved the mirror to a background job, the response carries `search_pending: true` and `search_job_id` instead, and search sees the page once that job runs, normally within seconds. Pass `wait_for_index: true` when you need to search for the page straight away. To change part of a page, prefer page_edit. When the operator sets MEMRAIN_REQUIRE_WRITE_PRECONDITION, overwriting a live page without `expected_version` (or `force: true`) either adds a `warnings` entry or is refused with `precondition_required` and the page's `current_version`. WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
+    "description": "Create or replace a DB-canonical page; identical content is a no-op, changes append history. Prefer page_edit for partial changes. Normally the search mirror is ready on return (search_indexed); queued mirrors return search_pending + search_job_id. wait_for_index:true waits. With MEMRAIN_REQUIRE_WRITE_PRECONDITION, a live overwrite needs expected_version or force:true; missing preconditions warn or return precondition_required + current_version. Public writes require MEMRAIN_PUBLIC_WRITE=1.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -367,7 +367,7 @@
   },
   {
     "name": "page_edit",
-    "description": "Change part of an existing page without resending it: apply 1 to 50 exact-text replacements `{old_text, new_text}` to its markdown_body, in order, each to the text the previous one left. Each old_text must occur exactly once in the page (copy it from page_get, whitespace included); otherwise nothing is written and the error says which edit failed (`edit_no_match`, `edit_ambiguous_match`). The facts and takes fences are protected: an edit that touches one, or writes a fence marker, is refused (`edit_protected_span`) — use add_fact / forget_fact and the takes tools for those. `expected_version` is required (`version` from page_get); a page that changed since is refused with `version_conflict` and its current version. Title and frontmatter are kept. Returns the new version and a unified diff of the change (cut at 8 KB, `diff_truncated`). Search sees the change as for page_put (`search_indexed`, or `search_pending` + `search_job_id`; `wait_for_index: true` to wait). WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
+    "description": "Apply 1..50 ordered exact-text replacements to an existing body, atomically. Copy each unique old_text from page_get; misses/duplicates return edit_no_match/edit_ambiguous_match. Facts/takes fences and marker edits are refused (edit_protected_span); use their write tools. Requires expected_version; a mismatch returns version_conflict + current_version. Keeps title/frontmatter. Returns new version and diff (8 KB cap, diff_truncated). Search indexing follows page_put; wait_for_index:true waits. Public writes require MEMRAIN_PUBLIC_WRITE=1.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -880,7 +880,7 @@
   },
   {
     "name": "add_fact",
-    "description": "Append a fact about an entity to the entity_facts ledger. Corrections are new facts, never edits — but restating a claim you already wrote does NOT mint a duplicate: an identical claim about the same entity, from the same source and the same writer, refreshes the row on file and returns its id with `inserted: false`. A claim that differs in any of those is a new row. A claim forgotten with `forget_fact` stays forgotten: re-adding it for the same entity, source and visibility (whitespace and case do not matter) writes nothing and returns `withdrawn: true` with `id: null`. `visibility` decides who can read the fact back: it defaults to `private`, which only the operator can read, so a tenant-scoped caller that wants to recall its own write must pass `visibility: 'world'`. Provenance is recorded on every fact: name `source_slug`, `source_chunk_id` or `written_by` to say where the claim came from, and if you name none the fact is credited to your own caller identity — an unattributed fact cannot be audited or aged against its origin; a public caller cannot set `written_by` at all, since that is the audit field. Pass `replaces: <fact_id>` to retire one of your live facts in favour of this one (it is marked superseded, not withdrawn; the response says `replaced: true|false`). To save several facts in one call pass `items` instead of `fact`: up to 20 objects `{fact, entity_slug?, confidence?, visibility?, replaces?}`, with the top-level `entity_slug`, `confidence`, `visibility`, `source_slug`, `source_chunk_id` and `written_by` as defaults; every item is checked before any is written, and the response lists each item's outcome with `saved`, `failed` and `partial`. `items` and `replaces` are refused on the public ingress. WRITE — internal by default, and reachable from the public ingress only when `MEMRAIN_PUBLIC_WRITE=1` is set.",
+    "description": "Record an entity claim. Corrections create new facts; an identical claim for the same entity/source/writer refreshes its row (inserted:false). Withdrawn claims in the same entity/source/visibility stay withdrawn despite case/whitespace differences (withdrawn:true, id:null). visibility defaults private (operator-only); tenants need world to recall their own writes. Provenance uses source_slug, source_chunk_id or written_by, defaulting to caller identity; public callers cannot set written_by. replaces retires a live fact as superseded and returns replaced. For batches, pass up to 20 items instead of fact; top-level entity/provenance/metadata fields are defaults. All items are validated before writes; results include saved/failed/partial and each outcome. All-failed batches are tool errors; mixed results have status:partial. Public ingress refuses items/replaces. Public writes require MEMRAIN_PUBLIC_WRITE=1.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1816,7 +1816,7 @@
   },
   {
     "name": "forget_fact",
-    "description": "Forget (soft-delete) a fact by id — stamps forgotten_at so the fact stops surfacing in recall; the row is retained for audit. The forget is durable: the claim is withdrawn for that entity, source and visibility, every other live copy of it is retired too (`withdrawn_duplicates` counts them), and a later re-add, re-extraction or transcript import of the same claim lands forgotten. There is no undo. Idempotent: a second forget is a no-op (forgotten=false), an unknown id reports found=false. Optional `reason` is stored on the tombstoned row. A forget that flipped a fact also returns `similar_active`: up to 5 other live facts about the same entity that read close to the withdrawn claim (fact ids and similarity scores only, no text) — rewordings the forget did not retire, worth confirming with the user before forgetting them too. WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
+    "description": "Soft-delete and durably withdraw a claim by id for its entity/source/visibility, retiring identical live copies (withdrawn_duplicates). Re-add, extraction and import cannot revive it. No undo; retained for audit. Repeated forget is a no-op; unknown id gives found:false. Optional reason is stored. Returns up to 5 similar_active fact ids/scores for distinct rewordings; confirm those separately before forgetting them. Static public bearer forbidden; write scope required in the owning source.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1857,7 +1857,7 @@
   },
   {
     "name": "whoami",
-    "description": "Introspect the CALLING identity: the client_id, granted OAuth scopes, the write source, and the read sources this token may see. Returns {client_id, scopes, write_source, read_sources, is_public, operator, bound_slug_prefixes, takes_holders, budget_usd_per_day, spent_today_usd, spend_id, callable_tools}. `read_sources` is null when the caller is unscoped (local CLI / internal token = whole-brain); the per-grant fields are null without a grant. `callable_tools` is exactly the set of tools this caller can call. Reveals only the caller's own auth context — no corpus. Cheap; no Bedrock. Useful for debugging the client_credentials multi-client setup.",
+    "description": "Show the calling identity and grant: client_id, scopes, write_source, read_sources, is_public, operator, bound_slug_prefixes, takes_holders, budget_usd_per_day, spent_today_usd, spend_id and callable_tools. Unscoped read_sources is null; absent grant fields are null. callable_tools matches tools/list. Reveals only the caller's auth context, no corpus or Bedrock call.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -1870,7 +1870,7 @@
   },
   {
     "name": "purge_deleted_pages",
-    "description": "Admin escape hatch: HARD-delete pages whose deleted_at is older than `older_than_hours` (default 720 = 30 days for pages; the purge cycle phase keeps 72 for documents). Cascades to page_versions / page_aliases / links via FK, and also removes the raw_data and tags rows on each purged slug and the slug redirects pointing at it (reported as raw_data_rows / tags_rows / slug_aliases_rows). The manual counterpart to the autopilot purge cycle phase. Returns the count + reaped slugs and `ttl_hours`, the cutoff it applied. WRITE — requires the `admin` scope (source-scoped) or the internal token; never reachable from the static public bearer. Scope split: delete_page = write, purge = admin.",
+    "description": "HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days; document cycle TTL stays 72). Cascades page versions, aliases and links; also deletes raw_data, tags and redirects to purged slugs, with per-table counts. Returns reaped slugs, count and ttl_hours. Admin scope in the owning source or internal token required; static public bearer forbidden. page_delete needs write scope; purge needs admin.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1905,7 +1905,7 @@
   },
   {
     "name": "query",
-    "description": "Flagship full-control retrieval: hybrid search over the corpus with every per-call knob exposed — `detail` result granularity (low = 1 chunk/page, medium = default dedup, high = all chunks + temporal treatment), `salience`/`recency` ranking bias (off|on|strong; omit = auto-detected from the query), `since`/`until` content-date window, `offset` pagination, `expand` LLM query expansion (paid; default follows the mode bundle), `mode` bundle override (operator-only), `adaptive_return` intent-sized tight result sets, plus the code filters (lang / symbol_kind / near_symbol / walk_depth). Legacy refinement: pass `refine` (+weights) for the deterministic weighted-RRF two-query blend instead. Without `refine` the response carries the same `meta` block as `search` (vector arm state, degraded reason codes, cache, retrieved/returned).",
+    "description": "Hybrid retrieval with detail, salience/recency, date and code filters, offset and adaptive_return. expand enables paid LLM query expansion (default follows the mode bundle); mode overrides are operator-only. refine + weights selects the legacy deterministic two-query RRF blend. Otherwise returns search's meta (vector/degradation state, operator-only counts). token_budget without k considers up to 100 hits; explicit k wins. Empty results include a recovery hint.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2073,7 +2073,7 @@
   },
   {
     "name": "code_callees",
-    "description": "Call-graph: what a symbol calls. `target` is `<path>:<line>` (resolves the innermost code-def covering that line, then returns its `code-callee` mentions) or a symbol name; a qualified name (`Repo::save`) narrows to that definition's own call sites. `resolved_symbol` reports which symbol was matched (null = no definition covers that line). Deterministic, no LLM. An empty result carries `readiness: {state, code_documents, symbols}` for your sources, where state is `not_built` | `indexing` | `no_symbols` | `ready` (`ready` means the symbol really is absent). Each mention carries `language`, `kind`, `start_line`/`end_line` and, for a caller allowed unredacted bodies, a `snippet` of the chunk's opening text. Optional `limit` (1..1000, default 200) and `lang`.",
+    "description": "What a symbol calls. target is path:line (innermost covering definition) or a symbol; qualified names restrict call sites. resolved_symbol names the matched definition or null. Results carry language, kind, line bounds and an authorized opening snippet. Empty reads carry scoped readiness: not_built, indexing, no_symbols or ready. Only ready proves absence. Deterministic, no LLM; limit defaults 200 (max 1000), optional lang.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2103,7 +2103,7 @@
   },
   {
     "name": "code_def",
-    "description": "Where is the symbol `name` defined. Returns the `code-def` mentions (surface form + chunk + source path) for a bare symbol name across the indexed code corpus. Deterministic, no LLM. Complements `code_callers`/`code_callees` with 'where is X defined'. An empty result carries `readiness: {state, code_documents, symbols}` for your sources, where state is `not_built` | `indexing` | `no_symbols` | `ready` (`ready` means the symbol really is absent). Each mention carries `language`, `kind`, `start_line`/`end_line` and, for a caller allowed unredacted bodies, a `snippet` of the chunk's opening text. Optional `limit` (1..1000, default 200) and `lang`.",
+    "description": "Find code-def mentions for symbol name across indexed code: surface form, chunk, source path, language, kind, line bounds and an authorized opening snippet. Empty reads carry scoped readiness: not_built, indexing, no_symbols or ready. Only ready proves absence. Deterministic, no LLM; limit defaults 200 (max 1000), optional lang.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2163,7 +2163,7 @@
   },
   {
     "name": "code_blast",
-    "description": "Blast radius: every transitive CALLER of `symbol`, grouped by hop depth (direct → 2-hop → 3-hop). Run before editing a function to size the change. BFS over the resolved code edge graph, bounded by `depth` (default 5, max 8) and `max_nodes` (default 200). Deterministic, no LLM. Returns {result, depth_groups?, cycles_detected?, truncation?, did_you_mean?, candidates?}. `result` is 'ok' | 'not_found' | 'ambiguous'. Each node is {symbol, chunk_id?, def_chunk_id?, resolved?}: `def_chunk_id` is the symbol's definition chunk when the edge is tied to one, and `resolved: true` means it is (resolved by the indexer, or the only definition of that name in the language); `false` means a by-name match. 'not_found', and 'ok' with empty `depth_groups`, carry `readiness: {state, code_documents, symbols}` for your sources, where state is `not_built` | `indexing` | `no_symbols` | `ready` (`ready` means the symbol really is absent).",
+    "description": "Transitive CALLERS of symbol, grouped by BFS hop depth; use before editing. depth defaults 5 (max 8), max_nodes defaults 200. Returns result (ok/not_found/ambiguous), depth_groups, cycles_detected, truncation and optional candidates/did_you_mean. Nodes carry symbol, chunk_id, def_chunk_id and resolved: true identifies a definition-backed edge, false a by-name match. Empty/not_found reads carry scoped readiness: not_built, indexing, no_symbols or ready; only ready proves absence. No LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2204,7 +2204,7 @@
   },
   {
     "name": "code_flow",
-    "description": "Execution flow: every transitive CALLEE reachable from the entry-point `symbol`, grouped by hop depth, with terminal side-effect tagging. Run to trace how a request flows to a DB write / HTTP call / file I/O. BFS over the resolved code edge graph, bounded by `depth` (default 8, max 12) and `max_nodes` (default 200). Deterministic, no LLM. Same envelope as `code_blast` plus `terminal_nodes: [{symbol, sink_kind}]` where sink_kind ∈ db_call|http_call|file_io|process_exec, matched per language on the callee's last name segment. Bare verbs a map or cache also answers to (get, put, read, write, open, delete, update, query, request) are not sinks. 'not_found' and an empty 'ok' carry `readiness` like `code_blast`.",
+    "description": "Transitive CALLEES of symbol grouped by BFS depth, with terminal side effects. depth defaults 8 (max 12), max_nodes defaults 200. code_blast envelope plus terminal_nodes [{symbol,sink_kind}], where sink_kind is db_call/http_call/file_io/process_exec. Detection uses language-specific callee names; ambiguous generic verbs such as get, put, read and write are not sinks. Empty reads carry code_blast readiness; only ready proves absence. No LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2570,7 +2570,7 @@
   },
   {
     "name": "extract_facts",
-    "description": "Extract personal-knowledge facts (events, preferences, commitments, beliefs) from conversation text on demand. Default is a PREVIEW (facts returned, nothing persisted); `persist:true` also writes them to the entity_facts ledger (requires a write grant; the caller's write source owns the rows). Pass `text` (raw turn/transcript) OR `source_ref` (an existing page slug whose body is read, tenant-scoped). `entity_hints` (comma/space-separated canonical slugs) steer the extractor; `session_id` + `visibility` stamp persisted facts (mig085). Sanitizes + DATA-fences the input, then calls the paid Bedrock extractor. PAID + default-OFF: returns {enabled:false} unless MEMRAIN_FACTS_EXTRACTION=1. Budget-guarded. Internal-only.",
+    "description": "Extract events, preferences, commitments and beliefs from text OR a source_ref page in your grant. Preview by default; persist:true needs write scope and stores rows in your source. entity_hints steer extraction; session_id and visibility stamp stored facts. Input is sanitized and DATA-fenced. Paid, budget-guarded Bedrock; returns enabled:false unless MEMRAIN_FACTS_EXTRACTION=1. Internal-only.",
     "inputSchema": {
       "type": "object",
       "properties": {
