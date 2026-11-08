@@ -3922,7 +3922,8 @@ async function callAdvisor(
     // leaves it unset and those collectors fail closed (silent, no leak).
     ...(readSources !== undefined ? { sourceIds: readSources } : {}),
   });
-  return jsonResult({ ok: true, ...report });
+  const failed = report.findings.some(f => f.id.startsWith("collector_failed:"));
+  return { ...jsonResult({ ok: !failed, ...report }), ...(failed ? { isError: true } : {}) };
 }
 
 async function callListBrainSkillpack(callable: (tool: string) => boolean): Promise<ToolCallResult> {

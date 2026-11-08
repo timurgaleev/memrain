@@ -81,7 +81,7 @@ function worstSeverity(findings: AdvisorFinding[]): AdvisorSeverity | null {
 
 /**
  * Run every collector and return a ranked report. Resilient: a collector that
- * throws contributes nothing and never aborts the others.
+ * throws contributes a static failure finding and never aborts the others.
  */
 export async function runAdvisor(ctx: AdvisorContext): Promise<AdvisorReport> {
   const all: AdvisorFinding[] = [];
@@ -89,8 +89,12 @@ export async function runAdvisor(ctx: AdvisorContext): Promise<AdvisorReport> {
     try {
       const found = await c.collect(ctx);
       for (const f of found) all.push(f);
-    } catch {
-      // one collector failing must not kill the report
+    } catch (error) {
+      console.error(`[advisor] collector_failed:${c.id}`, error);
+      all.push({ id: `collector_failed:${c.id}`, collector: c.id, severity: "medium",
+        title: "A diagnostic collector could not complete",
+        detail: "This report is incomplete. Inspect server logs for the failed collector and retry.",
+      });
     }
   }
   const ranked = rankFindings(all);
