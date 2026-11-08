@@ -99,6 +99,7 @@ describe("SearchMeta helpers", () => {
       "vector_arm_failed",
       "keyword_timeout",
       "keyword_arm_failed",
+      "keyword_candidates_incomplete",
       "title_arm_failed",
       "keyword_zero",
       "expansion_failed",

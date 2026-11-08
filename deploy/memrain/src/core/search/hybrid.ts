@@ -28,7 +28,7 @@ import { reciprocalRankFusion } from "../rrf.ts";
 import { isStatementTimeoutError } from "../retry.ts";
 import { DEGRADED_REASONS } from "./search-meta.ts";
 import { vectorSearch } from "./vector.ts";
-import { keywordSearch, keywordSearchRelaxed, keywordSearchScored } from "./keyword.ts";
+import { keywordSearch, keywordSearchRelaxed, keywordSearchScored, keywordIdentifierSearch } from "./keyword.ts";
 import { resolveDateBoundary } from "./filters.ts";
 import { visibilityClause } from "../visibility.ts";
 import { andSourceScope, isNoGrant } from "../source-scope.ts";
@@ -908,10 +908,10 @@ export async function hybridSearch(
   //    embedding failure is non-fatal.
   let queryVector: number[] | null = null;
   const degraded: DegradedReason[] = [];
-  const failArm = (error: unknown, arm: "keyword" | "vector" | "title" | "expansion"): void => {
+  const failArm = (error: unknown, arm: "keyword" | "vector" | "title" | "expansion" | "identifier"): void => {
     opts.signal?.throwIfAborted();
     if (isOperationError(error) && error.code === "budget_exhausted") throw error;
-    const reason = arm === "keyword"
+    const reason = arm === "identifier" ? "keyword_candidates_incomplete" : arm === "keyword"
       ? isStatementTimeoutError(error) ? "keyword_timeout" : "keyword_arm_failed"
       : arm === "expansion" ? "expansion_failed" : `${arm}_arm_failed` as DegradedReason;
     degraded.push(reason);
@@ -933,9 +933,14 @@ export async function hybridSearch(
 
   // Settle eagerly: no arm rejection is left unobserved while embedding runs.
   const lexical = Promise.allSettled([
-    keywordArm(() => keywordSearchScored(engine, trimmed, fanout, {
-      sourceIds: opts.sourceIds, filters: chunkFilters, maxPool: maxPoolOn, sourceBoost: armSourceBoost,
-    })),
+    (async () => {
+      const keywordOpts = { sourceIds: opts.sourceIds, filters: chunkFilters, maxPool: maxPoolOn, sourceBoost: armSourceBoost };
+      const primary = await keywordArm(() => keywordSearchScored(engine, trimmed, fanout, keywordOpts));
+      const probe = await keywordIdentifierSearch(engine, trimmed, fanout, keywordOpts)
+        .catch(error => { failArm(error, "identifier"); return []; });
+      const primaryIds = new Set(primary.map(row => row.id));
+      return [...primary, ...probe.filter(row => !primaryIds.has(row.id))];
+    })(),
     titleArmOn ? titleArmChunkIds(engine, trimmed, {
       onError: error => failArm(error, "title"), sourceIds: opts.sourceIds, limit: fanout,
     }) : Promise.resolve<string[]>([]),
@@ -1016,7 +1021,7 @@ export async function hybridSearch(
   const titleIds = titleResult.value;
   const relationalIds = relationalResult.value;
   const primaryKeywordIds = primaryKeywordRows.map((r) => r.id);
-  if (primaryKeywordIds.length === 0 && !degraded.some(r => r === "keyword_timeout" || r === "keyword_arm_failed")) degraded.push("keyword_zero");
+  if (primaryKeywordIds.length === 0 && !degraded.some(r => r === "keyword_timeout" || r === "keyword_arm_failed" || r === "keyword_candidates_incomplete")) degraded.push("keyword_zero");
 
   // 3. Expansion (default OFF — see SearchOptions.expansion; skipped for
   //    exact intent regardless).

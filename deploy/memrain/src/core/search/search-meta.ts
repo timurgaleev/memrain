@@ -17,6 +17,7 @@ export const DEGRADED_REASONS = [
   "vector_arm_failed",
   "keyword_timeout",
   "keyword_arm_failed",
+  "keyword_candidates_incomplete",
   "title_arm_failed",
   "keyword_zero",
   "expansion_failed",
@@ -56,6 +57,7 @@ const CORPUS_INDEPENDENT_REASONS: ReadonlySet<DegradedReason> = new Set([
   "vector_arm_failed",
   "keyword_timeout",
   "keyword_arm_failed",
+  "keyword_candidates_incomplete",
   "title_arm_failed",
 ]);
 
@@ -72,6 +74,7 @@ const REASON_TEXT: Record<DegradedReason, string> = {
   vector_arm_failed: "vector arm unavailable (vector_arm_failed)",
   keyword_timeout: "keyword arm timed out",
   keyword_arm_failed: "keyword arm unavailable",
+  keyword_candidates_incomplete: "identifier keyword probe unavailable",
   title_arm_failed: "title arm unavailable",
   keyword_zero: "keyword search found nothing",
   expansion_failed: "query expansion failed",
