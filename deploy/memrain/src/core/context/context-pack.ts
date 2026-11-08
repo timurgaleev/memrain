@@ -267,7 +267,7 @@ async function buildCard(
           ? { fact: frameExternal(packFactText(f)), trust: "external" as const } : {}) },
     ),
     recent: r.timeline.map((e) =>
-      opts.redact ? { date: toDate(e.occurred_at) } : { date: toDate(e.occurred_at), ...(external?.events.has(e.id)
+      opts.redact ? { date: toDate(e.occurred_at) } : { date: toDate(e.occurred_at), ...(external?.events.has(Number(e.id))
         ? { event: frameExternal(e.event), trust: "external" as const } : { event: e.event }) },
     ),
     ...(newer.length > 0
