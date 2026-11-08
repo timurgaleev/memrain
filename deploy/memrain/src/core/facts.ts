@@ -15,6 +15,7 @@
  * (entity_slug, fact, source_chunk_id, speaker) on top of it (migration 132).
  */
 import { factSourceEligibleSql } from "./quarantine.ts";
+import { supersededValidUntilSql } from "./fact-validity.ts";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
@@ -831,9 +832,10 @@ export async function addFact(
       await tx.query(
         `UPDATE entity_facts
             SET forgotten_at = NOW(), forgotten_reason = $2,
-                forgotten_cause = 'supersede', superseded_by = $3
+                forgotten_cause = 'supersede', superseded_by = $3,
+                valid_until = ${supersededValidUntilSql(4)}
           WHERE id = $1 AND forgotten_at IS NULL`,
-        [supersededId, `superseded by fact ${newId}`, newId],
+        [supersededId, `superseded by fact ${newId}`, newId, validFrom],
       );
     }
     return { id: newId, inserted };

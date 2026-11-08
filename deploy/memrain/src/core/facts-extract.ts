@@ -966,11 +966,13 @@ export async function pageObservationDate(
   sourceId: string | undefined,
 ): Promise<string | null> {
   try {
-    const r = await storage.engine().query<{ truth_date: string | null; doc_date: string | null }>(
+    const r = await storage.engine().query<{ truth_date: string | null; published: string | null; doc_date: string | null }>(
       `SELECT p.compiled_truth->>'date' AS truth_date,
+              p.compiled_truth->>'published' AS published,
               (SELECT to_char(d.effective_date AT TIME ZONE 'UTC', 'YYYY-MM-DD')
                  FROM documents d
                 WHERE d.source_path = ${PAGE_MIRROR_PATH_SQL}
+                  AND COALESCE(d.source_id, 'default') = p.source_id
                   AND d.effective_date IS NOT NULL
                   AND d.effective_date_source IN ('date', 'filename', 'published')
                 LIMIT 1) AS doc_date
@@ -981,7 +983,7 @@ export async function pageObservationDate(
     );
     const row = r.rows[0];
     if (!row) return null;
-    return calendarDay(row.truth_date ?? undefined) ?? calendarDay(row.doc_date ?? undefined);
+    return calendarDay(row.truth_date ?? undefined) ?? calendarDay(row.published ?? undefined) ?? calendarDay(row.doc_date ?? undefined);
   } catch {
     return null;
   }

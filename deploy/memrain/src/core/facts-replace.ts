@@ -20,6 +20,7 @@
  */
 import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
+import { supersededValidUntilSql } from "./fact-validity.ts";
 
 export type ReplaceSkipReason = "not_live_or_out_of_scope" | "not_written" | "same_fact" | "entity_mismatch";
 
@@ -59,14 +60,17 @@ export async function replaceFact(
     const row = locked.rows[0];
     if (!row || (allowEntity && !allowEntity(row.entity_slug))) return "not_live_or_out_of_scope";
     // Compared with the stored row, so both sides carry the same canonical slug.
-    const fresh = await tx.query<{ entity_slug: string }>(`SELECT entity_slug FROM entity_facts WHERE id = $1`, [newId]);
+    const fresh = await tx.query<{ entity_slug: string; valid_from: string | null }>(
+      `SELECT entity_slug, valid_from::text AS valid_from FROM entity_facts WHERE id = $1`, [newId],
+    );
     if (fresh.rows[0]?.entity_slug !== row.entity_slug) return "entity_mismatch";
     await tx.query(
       `UPDATE entity_facts
           SET forgotten_at = NOW(), forgotten_reason = $2,
-              forgotten_cause = 'supersede', superseded_by = $3
+              forgotten_cause = 'supersede', superseded_by = $3,
+              valid_until = ${supersededValidUntilSql(4)}
         WHERE id = $1 AND forgotten_at IS NULL`,
-      [oldId, `replaced by fact ${newId}`, newId],
+      [oldId, `replaced by fact ${newId}`, newId, fresh.rows[0]!.valid_from],
     );
     return null;
   });
