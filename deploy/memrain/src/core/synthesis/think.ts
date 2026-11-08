@@ -32,7 +32,7 @@ import { callWithTruncationRetry, isTruncated } from "../llm/truncation.ts";
 import { parseModelJson } from "../llm/json-output.ts";
 import { clampOutputTokens, outputTokensFromEnv } from "../llm/output-limits.ts";
 import { BudgetTracker, BudgetExhausted, isBudgetRefusal, priceFor, type BudgetHold } from "../budget.ts";
-import { BedrockHalted, classifyBedrockError } from "../llm/bedrock-errors.ts";
+import { BedrockHalted, classifyBedrockError, bedrockFixHint } from "../llm/bedrock-errors.ts";
 import { embedText } from "../embedding.ts";
 import { classifyIntent, type Intent } from "./intent.ts";
 import { extractCandidateEntities } from "./entity-extract.ts";
@@ -1416,7 +1416,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
         ...diagnostics.fields(),
           ran: true,
           reason: unpriced
-            ? `model ${modelId} has no price; refusing to spend against it`
+            ? `model ${modelId} has no price; refusing to spend against it; inspect the price entry with memrain models`
             : "budget exhausted before synthesis",
           synthesis: null,
           synthesisStatus: unpriced ? "model_unusable" : "no_llm",
@@ -1505,7 +1505,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
       return withFallback({
         ...diagnostics.fields(),
         ran: true,
-        reason: `synthesis call failed: ${e instanceof Error ? e.message : String(e)}`,
+        reason: `synthesis call failed: ${e instanceof Error ? e.message : String(e)}; ${bedrockFixHint(classifyBedrockError(e), modelId, "reasoning")}`,
         synthesis: null,
         synthesisStatus: thinkFailureStatus(e),
         pagesGathered: pages.length,

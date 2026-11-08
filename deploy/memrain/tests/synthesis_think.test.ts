@@ -588,6 +588,7 @@ describe("think synthesis status and extractive fallback", () => {
       embedFn: null,
     });
     expect(r.synthesisStatus).toBe("model_unusable");
+    expect(r.reason).toContain("bedrock:InvokeModel");
     expect(r.fallback?.kind).toBe("extractive");
   });
 
