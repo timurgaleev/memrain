@@ -20,6 +20,8 @@
  */
 import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
+import { normalizeAlias } from "./page-aliases.ts";
+import { liveEdgeSql } from "./links.ts";
 
 /** One resolved candidate, ordered by descending `score` by the caller. */
 export interface SlugResolution {
@@ -30,6 +32,10 @@ export interface SlugResolution {
 }
 
 export interface ResolveSlugsOptions {
+  exact?: boolean;
+  excludeDiary?: boolean;
+  /** Public body-redacted callers cannot confirm a private email field. */
+  matchEmail?: boolean;
   /** Max candidates to return. Default 5; clamped to [1, 100]. */
   limit?: number;
   /** Minimum similarity to keep a fuzzy candidate. Default 0.3. */
@@ -44,6 +50,28 @@ export interface ResolveSlugsOptions {
 
 const DEFAULT_LIMIT = 5;
 const DEFAULT_THRESHOLD = 0.3;
+
+function diaryFilter(alias: string, params: unknown[], exclude?: boolean): string {
+  if (!exclude) return "";
+  params.push(" \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff");
+  return ` AND ${alias}.slug NOT LIKE 'life/diary/%' AND lower(btrim(${alias}.type, $${params.length})) NOT IN ('diary', 'journal')`;
+}
+
+export async function slugReferenceCounts(
+  storage: Storage, slugs: string[], opts: Pick<ResolveSlugsOptions, "sourceIds" | "excludeDiary"> = {},
+): Promise<Map<string, number>> {
+  if (!slugs.length) return new Map();
+  const params: unknown[] = [slugs];
+  const scope = andSourceScope("l.source_id", opts.sourceIds, params);
+  const diary = diaryFilter("p", params, opts.excludeDiary);
+  const rows = await storage.engine().query<{ slug: string; n: number }>(
+    `SELECT l.target_slug AS slug, count(DISTINCT l.source_slug)::int AS n FROM links l
+      JOIN pages p ON p.slug = l.source_slug AND p.source_id = l.source_id AND p.deleted_at IS NULL
+      WHERE l.target_slug = ANY($1::text[])${scope}${diary} AND ${liveEdgeSql("l")}
+      GROUP BY l.target_slug`, params,
+  );
+  return new Map(rows.rows.map(r => [r.slug, Number(r.n)]));
+}
 
 /**
  * Resolve `query` to canonical page slugs, best-first.
@@ -75,13 +103,30 @@ export async function resolveSlugs(
 
   const db = storage.engine();
 
+  if (opts.exact) {
+    const params: unknown[] = [q, normalizeAlias(q), limit];
+    const scope = andSourceScope("p.source_id", opts.sourceIds, params);
+    const diary = diaryFilter("p", params, opts.excludeDiary);
+    const email = opts.matchEmail === false ? "" : ` OR lower(btrim(p.compiled_truth->>'email')) = lower($1)
+      OR lower(btrim(p.compiled_truth#>>'{identity,email}')) = lower($1)`;
+    const rows = await db.query<{ slug: string; title: string | null }>(
+      `SELECT p.slug, p.title FROM pages p WHERE p.deleted_at IS NULL${scope}${diary}
+        AND (p.slug = $1 OR lower(btrim(p.title)) = lower($1)
+          OR regexp_replace(p.slug, '^.*/', '') = lower($1)
+          OR EXISTS (SELECT 1 FROM page_aliases pa WHERE pa.slug = p.slug AND pa.source_id = p.source_id AND pa.alias_norm = $2)
+          ${email}) ORDER BY p.slug COLLATE "C" LIMIT $3`, params,
+    );
+    return rows.rows.map(r => ({ ...r, score: 1 }));
+  }
+
   // Exact slug match wins outright — an informal query that IS a live slug
   // resolves to itself at full confidence, never diluted by a fuzzy runner-up.
   const exactParams: unknown[] = [q];
-  const exactScope = andSourceScope("source_id", opts.sourceIds, exactParams);
+  const exactScope = andSourceScope("p.source_id", opts.sourceIds, exactParams);
+  const exactDiary = diaryFilter("p", exactParams, opts.excludeDiary);
   const exact = await db.query<{ slug: string; title: string | null }>(
-    `SELECT slug, title FROM pages
-      WHERE slug = $1 AND deleted_at IS NULL${exactScope}
+    `SELECT slug, title FROM pages p
+      WHERE slug = $1 AND deleted_at IS NULL${exactScope}${exactDiary}
       LIMIT 1`,
     exactParams,
   );
@@ -91,7 +136,8 @@ export async function resolveSlugs(
 
   // Fuzzy: better of title- vs slug-similarity per page, threshold-gated.
   const fuzzyParams: unknown[] = [q, threshold, limit];
-  const fuzzyScope = andSourceScope("source_id", opts.sourceIds, fuzzyParams);
+  const fuzzyScope = andSourceScope("p.source_id", opts.sourceIds, fuzzyParams);
+  const fuzzyDiary = diaryFilter("p", fuzzyParams, opts.excludeDiary);
   const fuzzy = await db.query<{
     slug: string;
     title: string | null;
@@ -102,8 +148,8 @@ export async function resolveSlugs(
               similarity(lower(COALESCE(title, '')), lower($1)),
               similarity(slug, lower($1))
             ) AS score
-       FROM pages
-      WHERE deleted_at IS NULL${fuzzyScope}
+       FROM pages p
+      WHERE deleted_at IS NULL${fuzzyScope}${fuzzyDiary}
         AND GREATEST(
               similarity(lower(COALESCE(title, '')), lower($1)),
               similarity(slug, lower($1))

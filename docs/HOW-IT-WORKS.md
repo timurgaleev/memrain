@@ -255,6 +255,11 @@ A few that are easy to miss:
   truth (including version snapshots). Operators can inspect the content;
   admin-scoped readers can request it explicitly through `page_get`.
 
+- `resolve_slugs {query, exact:true}` uses equality on slug, title, basename,
+  declared aliases and structured email fields. It reports ambiguity even with
+  `limit:1`; typo matching remains the default when `exact` is omitted.
+  `referenced_by_count` counts distinct visible referring pages in the caller's
+  source scope, without counting duplicate edge types or hidden diaries.
 - `list_skills {query, limit}` selects skills by task, matching slug,
   description and triggers. An exact slug ranks first; ties keep catalog
   order. With a query it returns up to five skills by default. Without

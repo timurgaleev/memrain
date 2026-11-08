@@ -96,7 +96,7 @@ import { outputRedactionEnabled, redactToolResult } from "../core/output-redacti
 import { capHitSnippets, searchSnippetChars } from "../core/search/snippet-cap.ts";
 import { allowedFingerprints } from "../core/secret-scan.ts";
 import { getChunksForPage, getChunksForSource } from "../core/chunks-read.ts";
-import { resolveSlugs } from "../core/slug-resolve.ts";
+import { resolveSlugs, slugReferenceCounts } from "../core/slug-resolve.ts";
 import { addTag, removeTag, getTags } from "../core/tags.ts";
 import { relationalRecall } from "../core/search/relational-recall.ts";
 import { relationalRecallLlm } from "../core/search/relational-llm.ts";
@@ -684,7 +684,7 @@ async function dispatchToolInner(
       case "get_chunks":
         return await callGetChunks(storage, args, readSources, remote);
       case "resolve_slugs":
-        return await callResolveSlugs(storage, args, readSources, remote);
+        return await callResolveSlugs(storage, args, readSources, remote, redact);
       case "add_tag":
         return await callAddTag(storage, args, writeSource);
       case "remove_tag":
@@ -2568,17 +2568,22 @@ async function callResolveSlugs(
   args: Record<string, unknown>,
   readSources?: string[],
   remote = false,
+  redact = false,
 ): Promise<ToolCallResult> {
   if (typeof args["query"] !== "string" || args["query"].length === 0) {
     return errResult("resolve_slugs: `query` is required");
   }
-  const opts: Parameters<typeof resolveSlugs>[2] = {};
-  if (typeof args["limit"] === "number") opts.limit = args["limit"];
+  const exact = args["exact"] === true;
+  const limit = typeof args["limit"] === "number" ? args["limit"] : 5;
+  const opts: Parameters<typeof resolveSlugs>[2] = { exact, excludeDiary: remote, matchEmail: !redact,
+    limit: exact ? Math.max(2, limit) : limit,
+  };
   if (readSources !== undefined) opts.sourceIds = readSources;
-  let hits = await resolveSlugs(storage, args["query"], opts);
-  // Diary fence: never resolve a query to a diary slug for a non-operator caller.
-  if (remote) hits = hits.filter((h) => !isDiarySlug(h.slug));
-  return jsonResult({ ok: true, query: args["query"], hits });
+  const matches = await resolveSlugs(storage, args["query"], opts);
+  const selected = matches.slice(0, limit);
+  const references = await slugReferenceCounts(storage, selected.map(h => h.slug), opts);
+  const hits = selected.map(h => ({ ...h, referenced_by_count: references.get(h.slug) ?? 0 }));
+  return jsonResult({ ok: true, query: args["query"], hits, ...(exact ? { ambiguous: matches.length > 1 } : {}) });
 }
 
 async function callAddTag(

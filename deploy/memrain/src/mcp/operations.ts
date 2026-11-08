@@ -908,10 +908,11 @@ export const OPERATIONS: readonly Operation[] = [
   {
     name: "resolve_slugs",
     description:
-      "Fuzzy-resolve a partial/informal string to canonical page slugs, ranked best-first (exact live-slug → score 1; else pg_trgm similarity over title + slug, soft-deleted excluded). Returns [{slug, title, score}].",
+      "Resolve a name to live page slugs. Default: exact slug first, otherwise fuzzy title/slug matches. exact:true uses equality only on slug, title, basename, declared alias or email (compiled_truth.email or identity.email; email matching requires body access). Reports ambiguous even at limit:1. Each hit has slug, title, score and referenced_by_count (distinct visible referring pages in your source scope).",
     argAliases: { slugs: "query" },
     params: {
       query: str(req),
+      exact: bool(),
       limit: int({ minimum: 1, maximum: 100 }),
     },
   },
