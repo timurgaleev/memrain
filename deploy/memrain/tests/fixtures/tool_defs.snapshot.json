@@ -773,7 +773,7 @@
   },
   {
     "name": "traverse_graph",
-    "description": "Recursive N-hop graph walk from a start slug over the link graph — the multi-hop counterpart to graph_neighbors. Returns each reachable node once at its shortest `depth`. `direction` (outbound|inbound|both, default outbound), optional `type` edge filter, `max_depth` (1..10, default 3), `limit` (1..1000, default 100). Example: {start_slug:'people/alice', direction:'both', max_depth:2} → everyone within 2 hops of Alice.",
+    "description": "Walk the link graph by levels. Returns each reachable node once at its shortest depth; truncated:true means more eligible nodes exist within max_depth than fit the limit. Narrow type or reduce max_depth then. Direction: outbound (default), inbound or both; max_depth: 1..10 (default 3); limit: 1..1000 (default 100). Example: {start_slug:'people/alice', direction:'both', max_depth:2}.",
     "inputSchema": {
       "type": "object",
       "properties": {

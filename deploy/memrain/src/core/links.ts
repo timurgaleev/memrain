@@ -669,6 +669,8 @@ export interface TraverseGraphOptions {
    * `source_id = ANY(...)` are traversed. Omitted -> unscoped; `[]` -> nothing.
    */
   sourceIds?: string[];
+  /** Remote reads exclude diary endpoints before walking and limiting. */
+  excludeDiary?: boolean;
 }
 
 export interface TraverseHit {
@@ -680,8 +682,7 @@ export interface TraverseHit {
 /**
  * Recursive N-hop graph walk from `startSlug` over the `links` edge table —
  * the multi-hop counterpart to single-hop `graphNeighbors`/`graphQuery`.
- * Depth-capped, cycle-safe (a node already on the current path is never
- * re-entered), returns each reachable node once at its shortest depth.
+ * Deduplicates each (node, depth), returning the shortest depth per node.
  *
  * `direction` selects which way edges are followed; `both` treats the graph as
  * undirected. Bounded by `maxDepth` AND `limit`. Deterministic, no LLM. The SQL
@@ -692,6 +693,14 @@ export async function traverseGraph(
   startSlug: string,
   opts: TraverseGraphOptions = {},
 ): Promise<TraverseHit[]> {
+  return (await traverseGraphPage(storage, startSlug, opts)).hits;
+}
+
+export async function traverseGraphPage(
+  storage: Storage,
+  startSlug: string,
+  opts: TraverseGraphOptions = {},
+): Promise<{ hits: TraverseHit[]; truncated: boolean }> {
   validateSlug(startSlug);
   const direction = opts.direction ?? "outbound";
   if (!["outbound", "inbound", "both"].includes(direction)) {
@@ -732,35 +741,40 @@ export async function traverseGraph(
   }
   // Tenant scope (mig047): confine the walk to edges in the given sources.
   const scopeFilter = andSourceScope("l.source_id", opts.sourceIds, params);
-  params.push(limit);
+  let diaryFilter = "";
+  if (opts.excludeDiary) {
+    params.push(" \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff");
+    diaryFilter = ` AND l.source_slug NOT LIKE 'life/diary/%' AND l.target_slug NOT LIKE 'life/diary/%'
+      AND NOT EXISTS (SELECT 1 FROM pages dp WHERE dp.slug IN (l.source_slug, l.target_slug)
+        AND lower(btrim(dp.type, $${params.length})) IN ('diary', 'journal'))`;
+  }
+  params.push(limit + 1);
   const limitParam = `$${params.length}`;
 
-  // ponytail: `limit` bounds the OUTPUT (distinct nodes), not the CTE's work —
-  // path-based pruning materializes every simple path up to maxDepth, so a
-  // DENSE graph at high maxDepth (esp. `both`) can fan out super-linearly
-  // before the final GROUP BY. maxDepth (cap 10) is the real cost guard; fine
-  // for memrain's small, sparse wiki-link graph. If the graph ever grows dense,
-  // switch to a per-iteration visited-set cap or lower the `both` ceiling.
+  // ponytail: output limit does not bound traversal work. UNION limits walk
+  // states to nodes × depth, instead of enumerating every simple path. Visible
+  // edges are materialized once so endpoint checks do not repeat at each level.
   const r = await storage.engine().query<{ slug: string; depth: number }>(
-    `WITH RECURSIVE walk(slug, depth, path) AS (
-       SELECT $1::text, 0, ARRAY[$1::text]
-       UNION ALL
-       SELECT ${nextExpr}, w.depth + 1, w.path || ${nextExpr}
+    `WITH RECURSIVE edges AS MATERIALIZED (
+       SELECT DISTINCT l.source_slug, l.target_slug FROM links l
+        WHERE ${liveEdgeSql("l")}${typeFilter}${scopeFilter}${diaryFilter}
+     ), walk(slug, depth) AS (
+       SELECT $1::text, 0
+       UNION
+       SELECT ${nextExpr}, w.depth + 1
        FROM walk w
-       JOIN links l ON ${joinCond}
+       JOIN edges l ON ${joinCond}
        WHERE w.depth < $2
-         AND NOT (${nextExpr} = ANY(w.path))${typeFilter}${scopeFilter}
-         AND ${liveEdgeSql("l")}
      )
      SELECT slug, MIN(depth) AS depth
        FROM walk
-      WHERE depth > 0
+      WHERE depth > 0 AND slug <> $1
       GROUP BY slug
       ORDER BY MIN(depth) ASC, slug ASC
       LIMIT ${limitParam}`,
     params,
   );
-  return r.rows.map((x) => ({ slug: x.slug, depth: Number(x.depth) }));
+  return { hits: r.rows.slice(0, limit).map((x) => ({ slug: x.slug, depth: Number(x.depth) })), truncated: r.rows.length > limit };
 }
 
 // ---------------------------------------------------------------------------

@@ -71,7 +71,7 @@ import {
   removeLink,
   graphNeighbors,
   graphQuery,
-  traverseGraph,
+  traverseGraphPage,
   syncWikilinksForPage,
   syncVerbLinksForPage,
   slugifyTarget,
@@ -2511,10 +2511,10 @@ async function callTraverseGraph(
     return errResult("traverse_graph: `start_slug` is required");
   }
   // Diary fence: a diary start node yields nothing for a non-operator caller.
-  if (remote && isDiarySlug(args["start_slug"])) {
-    return jsonResult({ ok: true, start: args["start_slug"], hits: [] });
+  if (remote && await isRemoteDiaryFenced(storage, args["start_slug"], readSources)) {
+    return jsonResult({ ok: true, start: args["start_slug"], hits: [], truncated: false });
   }
-  const opts: TraverseGraphOptions = {};
+  const opts: TraverseGraphOptions = { excludeDiary: remote };
   if (typeof args["direction"] === "string")
     opts.direction = args["direction"] as TraverseGraphOptions["direction"];
   if (typeof args["type"] === "string") opts.type = args["type"];
@@ -2522,11 +2522,10 @@ async function callTraverseGraph(
   if (Number.isInteger(args["limit"])) opts.limit = args["limit"] as number;
   if (readSources !== undefined) opts.sourceIds = readSources;
   try {
-    // Returns only {slug, depth}. Drop any diary node reached along the walk
-    // for a non-operator caller.
-    let hits = await traverseGraph(storage, args["start_slug"], opts);
-    if (remote) hits = hits.filter((h) => !isDiarySlug(h.slug));
-    return jsonResult({ ok: true, start: args["start_slug"], hits });
+    const result = await traverseGraphPage(storage, args["start_slug"], opts);
+    return jsonResult({ ok: true, start: args["start_slug"], ...result,
+      ...(result.truncated ? { hint: "Reduce max_depth or narrow type to inspect this graph within the result limit." } : {}),
+    });
   } catch (e) {
     return errResult(
       `traverse_graph: ${e instanceof Error ? e.message : String(e)}`,
