@@ -1249,6 +1249,9 @@ async function callSearch(
   // bodies are opted in.
   const metaOut = responseSearchMeta(meta, out as ReadonlyArray<{ evidence?: Evidence }>, isOperator);
   const metaField = metaOut ? { meta: metaOut } : {};
+  if (out.length === 0) {
+    return jsonResult({ ok: true, hits: out, ...emptyRetrievalHint(readSources, metaOut), ...metaField, ...typeNotice });
+  }
   // A set-shaped question ("all the companies that…", "what are the different
   // approaches to…") is exactly the shape `search` answers badly when query
   // expansion is off: it returns a plausible non-empty list the caller has no
@@ -1306,6 +1309,15 @@ function responseSearchMeta(
       ? gradeConfidence(returnedHits)
       : meta.confidence;
   return { ...meta, returned: returnedHits.length, ...(confidence ? { confidence } : {}) };
+}
+
+/** Receives only caller-visible meta; hidden matches must not change the hint. */
+function emptyRetrievalHint(readSources?: string[], meta?: Pick<SearchMeta, "degraded">): Record<string, unknown> {
+  if (readSources?.length === 0) return { hint: { status: "grant_sources_empty", try: ["Ask the operator to grant a readable source."] } };
+  const reasons = meta?.degraded.filter(r => r !== "keyword_zero") ?? [];
+  return { hint: reasons.length > 0
+    ? { status: "retrieval_degraded", reasons, try: ["Retry the query; check server health if this persists."] }
+    : { status: "retrieval_healthy", try: ["Use fewer or different terms.", "Broaden the date, type or slug filters."] } };
 }
 
 const URI_SCHEME = /^[a-z][a-z0-9+.-]+:\/\//i;
@@ -3561,16 +3573,21 @@ async function callQuery(
     if (typeof args["primary_weight"] === "number") opts.primaryWeight = args["primary_weight"];
     if (typeof args["refine_weight"] === "number") opts.refineWeight = args["refine_weight"];
     if (readSources !== undefined) opts.sourceIds = readSources;
-    opts.search = { ...pageFilters, ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}) };
+    const reasons = new Set<SearchMeta["degraded"][number]>();
+    opts.search = { ...pageFilters, ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}),
+      onMeta: m => { for (const reason of (isOperator ? m : publicSearchMeta(m)).degraded) reasons.add(reason); },
+    };
     const hits = await queryRefine(storage, q, refine, opts);
+    const visible = capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources);
     return jsonResult({
       ok: true,
       ...typeNotice,
-      hits: capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources),
+      hits: visible,
+      ...(visible.length === 0 ? emptyRetrievalHint(readSources, { degraded: [...reasons] }) : {}),
     });
   }
 
-  const k = typeof args["k"] === "number" ? (args["k"] as number) : 20;
+  const k = typeof args["k"] === "number" ? args["k"] : typeof args["token_budget"] === "number" ? 100 : 20;
   const offset =
     typeof args["offset"] === "number"
       ? Math.max(0, Math.floor(args["offset"] as number))
@@ -3622,7 +3639,9 @@ async function callQuery(
   // Diary fence for the non-operator caller (mirrors callSearch).
   const hits = capHitSnippets(fenceDiaryHits(hitsOffset, isOperator), searchSnippetChars(), readSources);
   const metaOut = responseSearchMeta(meta, hits, isOperator);
-  return jsonResult({ ok: true, hits, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}) });
+  return jsonResult({ ok: true, hits, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}),
+    ...(hits.length === 0 ? emptyRetrievalHint(readSources, metaOut) : {}),
+  });
 }
 
 /** The optional `lang` filter of the code graph tools; empty means none. */

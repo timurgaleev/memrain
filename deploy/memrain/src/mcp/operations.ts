@@ -1157,7 +1157,7 @@ export const OPERATIONS: readonly Operation[] = [
       types: arr({ items: { type: "string" }, description: "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter." }),
       slug_prefix: str({ description: "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits." }),
       q: str({ ...req, description: "Natural-language query." }),
-      k: int({ minimum: 1, maximum: 100, description: "Number of hits to return. Default 20." }),
+      k: int({ minimum: 1, maximum: 100, description: "Number of hits to return. Default 20; without refine, token_budget and no k uses up to 100 candidates." }),
       offset: int({ minimum: 0, maximum: 1000, description: "Skip the first N ranked hits (pagination)." }),
       expand: bool({
         description:

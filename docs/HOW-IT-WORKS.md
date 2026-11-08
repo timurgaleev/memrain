@@ -262,6 +262,12 @@ A few that are easy to miss:
   truth (including version snapshots). Operators can inspect the content;
   admin-scoped readers can request it explicitly through `page_get`.
 
+- Empty `search` and `query` results include a `hint`: `retrieval_healthy`
+  suggests broader terms or filters, `retrieval_degraded` names pipeline
+  failures, and `grant_sources_empty` means the caller has no readable source.
+  Hints reveal no sources outside the caller's grant. Normal `query` with a
+  `token_budget` and no explicit `k` considers up to 100 hits; without a budget
+  it keeps the default 20. Explicit `k` and legacy `refine` keep their widths.
 - `search_exact {phrase, case_sensitive?, slug_prefix?, type?, limit?}` finds
   literal text in live page bodies and compiled truth. Each match has one
   bounded snippet. `complete:true` means every match was returned; `false`
