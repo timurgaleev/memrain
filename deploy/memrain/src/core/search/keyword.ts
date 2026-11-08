@@ -109,7 +109,7 @@ const MIN_RELAXED_LEXEME_LENGTH = 3;
  * enter the retry. English and German, the brain's two languages; words under
  * {@link MIN_RELAXED_LEXEME_LENGTH} are dropped anyway and are not listed.
  */
-const RELAXED_STOPWORDS: ReadonlySet<string> = new Set([
+export const RELAXED_STOPWORDS: ReadonlySet<string> = new Set([
   "the", "and", "for", "are", "but", "not", "was", "were", "with", "from",
   "this", "that", "these", "those", "there", "their", "they", "them", "then",
   "than", "what", "when", "where", "which", "who", "whom", "why", "how",

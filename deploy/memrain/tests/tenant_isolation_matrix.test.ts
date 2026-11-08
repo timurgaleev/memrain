@@ -104,6 +104,7 @@ async function seedMatrixExtras(): Promise<void> {
     );
     // Token callers read world facts only; give each tenant one on the shared entity.
     await addFact(storage, { entity_slug: ENTITY_SLUG, fact: `${tag}_FACT_world`, source_id: who, visibility: "world" });
+    await addFact(storage, { entity_slug: ENTITY_SLUG, fact: `${KEYWORD} ${tag}_QUERY_FACT`, source_id: who, visibility: "world" });
   }
   await call("chronicle_backfill", {});
 }

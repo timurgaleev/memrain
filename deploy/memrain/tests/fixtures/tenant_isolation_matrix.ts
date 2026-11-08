@@ -101,7 +101,7 @@ export const MATRIX: MatrixRow[] = [
   wide("get_brain_identity", "brain-level identity card, no tenant content"),
   wide("whoami", "echoes the caller's own grant"),
   write("purge_deleted_pages"),
-  iso("query", { q: KEYWORD }),
+  iso("query", { q: KEYWORD }, "AAA_QUERY_FACT"),
   iso("code_callers", { name: CODE_SYM }, "callerAAA"),
   iso("code_callees", { target: `${SHARED_PATH}:2` }, "chargeCardAAA"),
   iso("code_def", { name: CODE_SYM }),

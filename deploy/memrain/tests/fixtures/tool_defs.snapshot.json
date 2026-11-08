@@ -1909,7 +1909,7 @@
   },
   {
     "name": "query",
-    "description": "Hybrid retrieval with detail, salience/recency, date and code filters, offset and adaptive_return. expand enables paid LLM query expansion (default follows the mode bundle); mode overrides are operator-only. refine + weights selects the legacy deterministic two-query RRF blend. Otherwise returns search's meta (vector/degradation state, operator-only counts). token_budget without k considers up to 100 hits; explicit k wins. Empty results include a recovery hint.",
+    "description": "Hybrid retrieval with detail, salience/recency, date and code filters, offset and adaptive_return. expand enables paid LLM query expansion (default follows the mode bundle); mode overrides are operator-only. refine + weights selects the legacy deterministic two-query RRF blend. Otherwise returns search's meta (vector/degradation state, operator-only counts). token_budget without k considers up to 100 hits; explicit k wins. Adds up to 3 lexical ledger matches in facts, separately from chunks, within the response budget. Fact reads respect source, visibility and diary restrictions; chunk filters apply to hits. Empty results include a recovery hint.",
     "inputSchema": {
       "type": "object",
       "properties": {

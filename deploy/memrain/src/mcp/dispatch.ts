@@ -26,8 +26,9 @@ import {
 } from "../core/auth-info.ts";
 import { hybridSearch, type SearchOptions } from "../core/search/index.ts";
 import { resolveSearchKnobs } from "../core/search/hybrid.ts";
-import { applyTokenBudget } from "../core/search/token-budget.ts";
-import { frameMarkedContent, markExternalChunks } from "../core/trust-frame.ts";
+import { applyTokenBudget, estTokens } from "../core/search/token-budget.ts";
+import { matchQueryFacts } from "../core/facts-query-match.ts";
+import { frameExternal, frameMarkedContent, markExternalChunks, readExternalTrust } from "../core/trust-frame.ts";
 import { publicSearchMeta, type SearchMeta } from "../core/search/search-meta.ts";
 import { gradeConfidence } from "../core/search/confidence-grade.ts";
 import { listWantedPages, type ListWantedPagesOptions } from "../core/wanted-links.ts";
@@ -3618,11 +3619,15 @@ async function callQuery(
     const visible = await frameSearchHits(storage,
       capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources), readSources,
       typeof args["token_budget"] === "number" ? args["token_budget"] : undefined);
+    const ledger = await queryFactsForResult(storage, q, visible, readSources, !isOperator,
+      typeof args["token_budget"] === "number" ? args["token_budget"] : undefined);
     return jsonResult({
       ok: true,
       ...typeNotice,
       hits: visible,
-      ...(visible.length === 0 ? emptyRetrievalHint(readSources, { degraded: [...reasons] }) : {}),
+      facts: ledger.facts,
+      ...(ledger.truncated ? { facts_truncated: true } : {}),
+      ...(visible.length === 0 && ledger.facts.length === 0 ? emptyRetrievalHint(readSources, { degraded: [...reasons] }) : {}),
     });
   }
 
@@ -3678,11 +3683,32 @@ async function callQuery(
   // Diary fence for the non-operator caller (mirrors callSearch).
   const snippets = capHitSnippets(fenceDiaryHits(hitsOffset, isOperator), searchSnippetChars(), readSources);
   const hits = await frameSearchHits(storage, snippets, readSources, resolveSearchKnobs(searchOpts).tokenBudget);
-  if (meta && hits.length < snippets.length) meta = { ...meta, degraded: [...new Set([...meta.degraded, "budget_truncated" as const])] };
+  const ledger = await queryFactsForResult(storage, q, hits, readSources, !isOperator, resolveSearchKnobs(searchOpts).tokenBudget);
+  if (meta && (hits.length < snippets.length || ledger.truncated)) meta = { ...meta, degraded: [...new Set([...meta.degraded, "budget_truncated" as const])] };
   const metaOut = responseSearchMeta(meta, hits, isOperator);
-  return jsonResult({ ok: true, hits, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}),
-    ...(hits.length === 0 ? emptyRetrievalHint(readSources, metaOut) : {}),
+  return jsonResult({ ok: true, hits, facts: ledger.facts, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}),
+    ...(ledger.truncated ? { facts_truncated: true } : {}),
+    ...(hits.length === 0 && ledger.facts.length === 0 ? emptyRetrievalHint(readSources, metaOut) : {}),
   });
+}
+
+async function queryFactsForResult(
+  storage: Storage, q: string, hits: readonly { content: string; title?: string | null }[],
+  readSources: string[] | undefined, remote: boolean, tokenBudget?: number,
+) {
+  const rows = await matchQueryFacts(storage.engine(), q, readSources, remote);
+  const external = await readExternalTrust(storage.engine(), { facts: rows.map(f => f.fact_id) }, readSources);
+  const framed = rows.map(f => external.facts.has(f.fact_id) ? { ...f, fact: frameExternal(f.fact), trust: "external" as const } : f);
+  if (tokenBudget === undefined || tokenBudget <= 0) return { facts: framed, truncated: false };
+  let used = hits.reduce((n, h) => n + estTokens(h.content) + estTokens(h.title ?? ""), 0);
+  const facts: typeof framed = [];
+  for (const fact of framed) {
+    const cost = estTokens(fact.fact) + estTokens(fact.entity_slug);
+    if (used + cost > tokenBudget) break;
+    facts.push(fact);
+    used += cost;
+  }
+  return { facts, truncated: facts.length < framed.length };
 }
 
 /** The optional `lang` filter of the code graph tools; empty means none. */

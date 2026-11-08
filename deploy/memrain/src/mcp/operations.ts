@@ -1153,7 +1153,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "query",
     outputRedaction: "retrieval",
     description:
-      "Hybrid retrieval with detail, salience/recency, date and code filters, offset and adaptive_return. expand enables paid LLM query expansion (default follows the mode bundle); mode overrides are operator-only. refine + weights selects the legacy deterministic two-query RRF blend. Otherwise returns search's meta (vector/degradation state, operator-only counts). token_budget without k considers up to 100 hits; explicit k wins. Empty results include a recovery hint.",
+      "Hybrid retrieval with detail, salience/recency, date and code filters, offset and adaptive_return. expand enables paid LLM query expansion (default follows the mode bundle); mode overrides are operator-only. refine + weights selects the legacy deterministic two-query RRF blend. Otherwise returns search's meta (vector/degradation state, operator-only counts). token_budget without k considers up to 100 hits; explicit k wins. Adds up to 3 lexical ledger matches in facts, separately from chunks, within the response budget. Fact reads respect source, visibility and diary restrictions; chunk filters apply to hits. Empty results include a recovery hint.",
     params: {
       types: arr({ items: { type: "string" }, description: "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter." }),
       slug_prefix: str({ description: "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits." }),
