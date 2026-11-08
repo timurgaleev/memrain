@@ -1406,6 +1406,20 @@ export async function renamePage(
 
     // Non-FK data tables keyed by the slug.
     await move(
+      "raw_data_replaced",
+      `DELETE FROM raw_data r WHERE r.slug IN ($1, $2) AND EXISTS (
+         SELECT 1 FROM raw_data o WHERE o.slug IN ($1, $2)
+           AND o.slug <> r.slug AND o.source = r.source
+           AND (o.created_at, o.id) > (r.created_at, r.id)
+       ) RETURNING 1 AS one`,
+      [fromSlug, toSlug],
+    );
+    await move(
+      "raw_data",
+      `UPDATE raw_data SET slug = $2 WHERE slug = $1 RETURNING 1 AS one`,
+      [fromSlug, toSlug],
+    );
+    await move(
       "tags",
       `UPDATE tags SET slug = $2 WHERE slug = $1 RETURNING 1 AS one`,
       [fromSlug, toSlug],
