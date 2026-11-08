@@ -85,6 +85,7 @@ async function chunksForSymbol(
     `SELECT c.id, c.symbol_name_qualified
        FROM chunks c${join}
       WHERE c.symbol_name_qualified = $1${filter}
+      ORDER BY c.id
       LIMIT ${NEIGHBOR_CAP_PER_HOP}`,
     params,
   );
@@ -133,6 +134,7 @@ async function frontierNeighbors(
       WHERE e.to_symbol_qualified = ANY($1::text[])
         AND e.from_symbol_qualified IS NOT NULL
         AND e.from_chunk_id IS NOT NULL${callerScope}
+      ORDER BY target, chunk_id, resolved
       LIMIT ${cap}`,
     callerParams,
   );
@@ -161,6 +163,7 @@ async function frontierNeighbors(
        FROM code_edges_symbol e
       WHERE e.from_symbol_qualified = ANY($1::text[])
         AND e.edge_metadata ? 'resolved_chunk_id'${edgeScope}
+      ORDER BY parent, chunk_id
       LIMIT ${cap}`,
     params,
   );
@@ -178,6 +181,7 @@ async function frontierNeighbors(
         AND e.to_symbol_qualified IS NOT NULL
         AND NOT (e.edge_metadata ? 'resolved_chunk_id')
         AND c.symbol_name_qualified IS NOT NULL${edgeScope}${chunkScope}
+      ORDER BY parent, chunk_id
       LIMIT ${cap}`,
     unresolvedParams,
   );
