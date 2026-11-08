@@ -116,6 +116,7 @@ describe("doctor", () => {
       "cycle-freshness",
       "cycle-phase-health",
       "dangling-slug-redirects",
+      "db-backends",
       "document-id-drift",
       "duplicate-pages",
       "embed-backlog",
@@ -127,6 +128,7 @@ describe("doctor", () => {
       "fence-rows-without-markers",
       "index-spread",
       "invalid-indexes",
+      "jsonb-integrity",
       "junk-entity-hubs",
       "legacy-config-dir",
       "legacy-env-names",
@@ -137,6 +139,7 @@ describe("doctor", () => {
       "oauth-client-hygiene",
       "oauth-self-issued-config",
       "outside-content-fences",
+      "page-version-storage",
       "pat-scopes-recorded",
       "pglite",
       "quarantined-pages",
@@ -443,4 +446,25 @@ it("reports failed maintenance phases and held model inputs without their conten
   expect(held?.detail).toContain("chunks=1");
   expect(JSON.stringify([phases, held])).not.toContain("private-");
   expect(JSON.stringify([phases, held])).not.toContain("PRIVATE BODY");
+});
+
+it("reports suspected JSON encoding and version storage without source text", async () => {
+  const storage = new Storage({ dbPath });
+  await storage.init();
+  try {
+    await storage.engine().query(`INSERT INTO pages (slug, type, title, markdown_body, content_hash, compiled_truth)
+      VALUES ('notes/json-candidate', 'note', 'Candidate', 'PRIVATE PAGE TEXT', 'h', $1::text::jsonb)`,
+      [JSON.stringify(JSON.stringify({ value: "PRIVATE VALUE" }))]);
+    await storage.engine().query(`INSERT INTO page_versions (slug, version_n, hash_new, body_snapshot, compiled_truth_snapshot)
+      VALUES ('notes/json-candidate', 1, 'h', 'PRIVATE OLD TEXT', '{}')`);
+  } finally { await storage.close(); }
+  const { parsed } = await report(cfgPath);
+  const json = parsed.checks.find(c => c.name === "jsonb-integrity");
+  const versions = parsed.checks.find(c => c.name === "page-version-storage");
+  expect(json).toMatchObject({ ok: true, status: "warn" });
+  expect(json?.detail).toContain("pages.compiled_truth=1");
+  expect(versions).toMatchObject({ ok: true, status: "ok" });
+  expect(versions?.detail).toContain("notes/json-candidate");
+  expect(JSON.stringify([json, versions])).not.toContain("PRIVATE");
+  expect(parsed.checks.find(c => c.name === "db-backends")).toMatchObject({ ok: true, status: "ok" });
 });

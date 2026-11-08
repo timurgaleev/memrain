@@ -63,6 +63,7 @@ import {
   checkOutsideContentFences,
 } from "../core/doctor-ops.ts";
 import { checkConnectorHealth } from "../core/connectors/health.ts";
+import { checkDbBackends, checkJsonbIntegrity, checkPageVersionStorage } from "../core/doctor-storage.ts";
 import { checkCyclePhaseHealth, checkMaintenanceHeld } from "../core/doctor-maintenance.ts";
 import { checkEmbedBacklog } from "../core/doctor-embed.ts";
 import { checkSecretExposure } from "../core/doctor-secrets.ts";
@@ -423,6 +424,9 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["queue-health", checkQueueHealth],
       ["cycle-phase-health", checkCyclePhaseHealth],
       ["maintenance-held", checkMaintenanceHeld],
+      ["db-backends", checkDbBackends],
+      ["jsonb-integrity", checkJsonbIntegrity],
+      ["page-version-storage", checkPageVersionStorage],
       ["runtime-config-overlay", checkRuntimeConfigOverlay],
       ["schema-version", checkSchemaVersion],
       ["embedding-width", checkEmbeddingWidth],
