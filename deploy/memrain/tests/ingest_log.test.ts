@@ -17,6 +17,7 @@ import {
   writeFactsAbsorbLog,
 } from "../src/core/ingest-log.ts";
 import { extractFactsForPage } from "../src/core/facts-extract.ts";
+import { putPage } from "../src/core/pages.ts";
 import { FactsQueue } from "../src/core/facts-queue.ts";
 
 let tmp: string;
@@ -107,6 +108,7 @@ describe("FactsQueue onError hook", () => {
 
 describe("extractFactsForPage absorb path (durable)", () => {
   it("files a row when the model call fails, instead of losing the failure", async () => {
+    await putPage(storage, { slug: "notes/failing", markdown_body: "long enough body ".repeat(10) });
     const r = await extractFactsForPage(storage, {
       slug: "notes/failing",
       type: "note",

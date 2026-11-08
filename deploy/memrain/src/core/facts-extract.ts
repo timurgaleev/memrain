@@ -8,6 +8,7 @@
  * fenced in <turn>…</turn> before the model sees it.
  */
 import type { Storage } from "./storage.ts";
+import { createHash } from "node:crypto";
 import { addFact } from "./facts.ts";
 import { DEFAULT_FACT_KIND } from "./facts-decay.ts";
 import { sanitizeForPrompt } from "./llm/sanitize.ts";
@@ -848,6 +849,8 @@ export interface ExtractForPageOptions {
   slug: string;
   type: string;
   body: string;
+  /** Full stored body hash when body contains only an append window. */
+  expectedContentHash?: string;
   sourceId?: string;
   /** Test seam — inject a fake model; bypasses nothing (caller gates enabled). */
   sonnetFn?: SonnetFn;
@@ -861,6 +864,8 @@ export interface ExtractForPageOptions {
 }
 
 export interface ExtractForPageResult {
+  /** Input characters beyond the last window actually processed. */
+  truncated_chars: number;
   factsWritten: number;
   factsSkipped: number;
   /** Facts the model returned that failed to write (a subset of factsSkipped). */
@@ -903,29 +908,21 @@ export function extractionWindows(slug: string, body: string, maxWindows: number
     return [body];
   }
   const windows: string[] = [];
-  let cur = "";
-  const flush = () => {
-    if (cur.trim().length > 0) windows.push(cur);
-    cur = "";
-  };
-  for (const para of body.split(/\n{2,}/)) {
-    let rest = para;
-    while (rest.length > EXTRACT_WINDOW_CHARS) {
-      flush();
-      windows.push(rest.slice(0, EXTRACT_WINDOW_CHARS));
-      rest = rest.slice(EXTRACT_WINDOW_CHARS);
+  let start = 0;
+  while (start < body.length && windows.length < maxWindows) {
+    let end = Math.min(start + EXTRACT_WINDOW_CHARS, body.length);
+    let next = end;
+    if (end < body.length) {
+      const boundary = body.lastIndexOf("\n\n", end);
+      if (boundary > start) {
+        end = boundary;
+        next = boundary + 2;
+      }
     }
-    const joined = cur.length > 0 ? `${cur}\n\n${rest}` : rest;
-    if (joined.length > EXTRACT_WINDOW_CHARS) {
-      flush();
-      cur = rest;
-    } else {
-      cur = joined;
-    }
-    if (windows.length >= maxWindows) break;
+    windows.push(body.slice(start, end));
+    start = next;
   }
-  flush();
-  return windows.slice(0, maxWindows);
+  return windows;
 }
 
 /**
@@ -1004,30 +1001,32 @@ async function isQuarantinedPage(
   storage: Storage,
   slug: string,
   sourceId: string,
-  body: string,
+  expectedHash: string,
 ): Promise<boolean> {
-  let row: { title: string | null; fresh: boolean; quarantined: boolean } | undefined;
+  let row: { title: string | null; markdown_body: string; fresh: boolean; quarantined: boolean } | undefined;
   try {
-    const r = await storage.engine().query<{ title: string | null; fresh: boolean; quarantined: boolean }>(
-      `SELECT p.title,
+    const r = await storage.engine().query<{ title: string | null; markdown_body: string; fresh: boolean; quarantined: boolean }>(
+      `SELECT p.title, p.markdown_body,
               COALESCE(d.frontmatter->>'page_content_hash' = p.content_hash
                        AND COALESCE(d.frontmatter->>'page_title', '') = COALESCE(p.title, ''), false) AS fresh,
               COALESCE(NOT (${quarantineFilterFragment("d")}), false) AS quarantined
          FROM pages p
          LEFT JOIN documents d ON d.source_path = ${PAGE_MIRROR_PATH_SQL} AND d.deleted_at IS NULL
-        WHERE p.slug = $1 AND p.source_id = $2 AND p.deleted_at IS NULL
+          AND COALESCE(d.source_id, 'default') = p.source_id
+        WHERE p.slug = $1 AND p.source_id = $2 AND p.deleted_at IS NULL AND p.content_hash = $3
         LIMIT 1`,
-      [slug, sourceId],
+      [slug, sourceId, expectedHash],
     );
     row = r.rows[0];
   } catch (e) {
     console.error(`[facts-extract] quarantine state unreadable, ${slug} held: ${errorClass(e)}`);
     return true;
   }
+  if (!row) return true;
   if (row?.fresh === true) return row.quarantined === true;
   if (!sanityGateEnabled()) return false;
   return assessContentSanity({
-    body,
+    body: row.markdown_body,
     title: row?.title ?? "",
     extra_literals: resolveOperatorLiterals(),
     disabled_patterns: resolveDisabledPatterns(),
@@ -1067,8 +1066,11 @@ export async function extractFactsForPage(
   const budget = new BudgetTracker(cap, "facts-extract:on-write");
   const windows = extractionWindows(opts.slug, opts.body, factsMaxWindows());
   const sourceId = opts.sourceId ?? "default";
-  if (await isQuarantinedPage(storage, opts.slug, sourceId, opts.body)) {
+  const expectedHash = opts.expectedContentHash ?? createHash("sha256").update(opts.body, "utf8").digest("hex");
+  const held = () => isQuarantinedPage(storage, opts.slug, sourceId, expectedHash);
+  if (await held()) {
     return {
+      truncated_chars: 0,
       factsWritten: 0,
       factsSkipped: 0,
       factsFailed: 0,
@@ -1087,7 +1089,9 @@ export async function extractFactsForPage(
   let windowsRun = 0;
   let junkSkipped = 0;
   let absorbed: FactsAbsorbReason | null = null;
+  let readThrough = 0;
   for (const window of windows) {
+    if (windowsRun > 0 && await held()) break;
     const hold = budget.reserve(modelId, WORST_CASE_USAGE);
     if (hold === null) {
       await writeFactsAbsorbLog(
@@ -1101,6 +1105,7 @@ export async function extractFactsForPage(
       );
       if (windowsRun === 0) {
         return {
+          truncated_chars: opts.body.length,
           factsWritten: 0,
           factsSkipped: 0,
           factsFailed: 0,
@@ -1135,6 +1140,7 @@ export async function extractFactsForPage(
       );
       if (windowsRun === 0) {
         return {
+          truncated_chars: opts.body.length,
           factsWritten: 0,
           factsSkipped: 0,
           factsFailed: 0,
@@ -1154,6 +1160,8 @@ export async function extractFactsForPage(
       // Over budget after the (already-paid) call — still persist what we got.
     }
     windowsRun += 1;
+    const start = opts.body.indexOf(window, readThrough);
+    readThrough = (start < 0 ? readThrough : start) + Math.min(window.length, EXTRACT_WINDOW_CHARS);
     junkSkipped += result.junkSkipped;
     facts.push(...result.facts);
     // An unreadable answer is a DURABLE failure, not a quiet page. Without this
@@ -1171,6 +1179,11 @@ export async function extractFactsForPage(
       );
     }
   }
+  if (await held()) {
+    return { factsWritten: 0, factsSkipped: facts.length, factsFailed: 0,
+      spentUsd: Number(budget.totalSpent().toFixed(6)), absorbed, windowsRun, junkSkipped,
+      truncated_chars: Math.max(0, opts.body.length - readThrough) };
+  }
   const w = await writeExtractedFacts(storage, facts, {
     sourceSlug: opts.slug,
     writtenBy: ON_WRITE_WRITER,
@@ -1185,6 +1198,7 @@ export async function extractFactsForPage(
     absorbed,
     windowsRun,
     junkSkipped,
+    truncated_chars: Math.max(0, opts.body.length - readThrough),
   };
 }
 

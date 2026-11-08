@@ -229,6 +229,7 @@ describe("the callers decide what is first-party", () => {
       observationDate: null,
     });
     expect(transcript.factsWritten).toBe(1);
+    await putPage(storage, { slug: "notes/someone-elses-chat", markdown_body: body });
     const note = await extractFactsForPage(storage, {
       slug: "notes/someone-elses-chat",
       type: "note",

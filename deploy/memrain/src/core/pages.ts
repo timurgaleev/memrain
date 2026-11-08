@@ -323,6 +323,8 @@ export interface PutResult {
   warnings?: string[];
   /** For an `edits` write: the body before and after, for the caller's diff. */
   edited?: { before: string; after: string };
+  /** Append boundary from the locked original body; internal extraction context. */
+  append_start?: number;
 }
 
 export interface PageVersionRow {
@@ -454,6 +456,7 @@ export async function putPage(
   const edits = input.edits?.map((e, i) => ({ old_text: e.old_text, new_text: scanned.newTexts![i]! }));
   const writtenByPrincipal = input.written_by_principal ?? null;
   let edited: PutResult["edited"];
+  let appendStart: number | undefined;
   const warnings: string[] = [];
   let body = input.markdown_body === undefined ? "" : scanned.body;
   const truth = scanned.truth;
@@ -588,6 +591,7 @@ export async function putPage(
       }
       const sep =
         current.markdown_body.length > 0 && !current.markdown_body.endsWith("\n") ? "\n" : "";
+      appendStart = current.markdown_body.length;
       body = `${current.markdown_body}${sep}${appendContent}`;
       hashNew = hashBody(body);
       // An append changes the body only. Title and truth come from the row read
@@ -806,6 +810,7 @@ export async function putPage(
   const extras = {
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(edited !== undefined ? { edited } : {}),
+    ...(result.changed && appendStart !== undefined ? { append_start: appendStart } : {}),
   };
   // A no-op stored nothing, so there is nothing new to audit; under `flag` the
   // credential sits in the unchanged body and would otherwise be re-audited on

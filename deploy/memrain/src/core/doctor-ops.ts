@@ -16,6 +16,7 @@ import { isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
 import { Queue } from "./jobs/queue.ts";
 import { bucketJobErrors } from "./jobs/error-classify.ts";
 import { hasFenceMarker } from "./fence-shared.ts";
+import { EXTRACT_WINDOW_CHARS } from "./facts-extract.ts";
 
 export interface OpsCheckResult {
   /** Exit-code driver — false only on `status:"fail"`. */
@@ -23,6 +24,16 @@ export interface OpsCheckResult {
   /** Three-state verdict; a `warn` is a real signal that must not gate. */
   status: CheckStatus;
   detail: string;
+}
+
+export async function checkFactsInputWindows(engine: Engine): Promise<OpsCheckResult> {
+  const r = await engine.query<{ n: number; chars: number; largest: number }>(
+    `SELECT count(*)::int AS n, COALESCE(sum(length(markdown_body)), 0)::float8 AS chars,
+            COALESCE(max(length(markdown_body)), 0)::int AS largest
+       FROM pages WHERE deleted_at IS NULL AND length(markdown_body) > $1`, [EXTRACT_WINDOW_CHARS],
+  );
+  const row = r.rows[0]!;
+  return { ok: true, status: "ok", detail: `${row.n} live page(s) longer than the ${EXTRACT_WINDOW_CHARS}-character extraction window; ${row.chars} characters total, largest ${row.largest}; appends read the new tail; MEMRAIN_FACTS_MAX_WINDOWS bounds full-page extraction` };
 }
 
 export async function checkRedactionMarkers(engine: Engine): Promise<OpsCheckResult> {

@@ -1887,8 +1887,9 @@ async function callPageEdit(
  */
 function maybeEnqueueFactExtraction(
   storage: Storage,
-  page: { slug: string; type: string; markdown_body: string; source_id?: string },
+  page: { slug: string; type: string; markdown_body: string; source_id?: string; content_hash: string },
   writeSource?: string,
+  extractionBody = page.markdown_body,
 ): void {
   if (!factsExtractionEnabled()) return;
   // Diary interiority is never mined for facts — a hard privacy invariant that
@@ -1906,7 +1907,8 @@ function maybeEnqueueFactExtraction(
       extractFactsForPage(storage, {
         slug: page.slug,
         type: page.type,
-        body: page.markdown_body,
+        body: extractionBody,
+        expectedContentHash: page.content_hash,
         ...(page.source_id ? { sourceId: page.source_id } : {}),
       }).then(() => undefined),
     sessionId,
@@ -2123,7 +2125,9 @@ async function callPageAppend(
     await stampLinksExtracted(storage.engine(), r.slug, derivedSource); // watermark (mig 051)
     if (fresh) {
       mirror = await mirrorOrQueue(storage, fresh, isPublic || writeSource !== undefined, "page_append", args["wait_for_index"] === true);
-      maybeEnqueueFactExtraction(storage, fresh, writeSource);
+      if (fresh.content_hash === r.content_hash && r.append_start !== undefined) {
+        maybeEnqueueFactExtraction(storage, fresh, writeSource, fresh.markdown_body.slice(Math.max(0, r.append_start - 500)));
+      }
       chronicleBackstop = await maybeEnqueueChronicleExtract(
         storage,
         fresh,
@@ -2134,9 +2138,10 @@ async function callPageAppend(
   }
   const factsSource = writeSource ?? (await getPage(storage, r.slug))?.source_id;
   await reconcileFactsForPage(storage, r.slug, r.content_hash, factsSource);
+  const { append_start: _appendStart, ...response } = r;
   return jsonResult({
     ok: true,
-    ...r,
+    ...response,
     ...mirror,
     ...(chronicleBackstop ? { chronicle_backstop: true } : {}),
   });

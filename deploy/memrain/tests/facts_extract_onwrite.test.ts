@@ -243,6 +243,7 @@ describe("extractFactsForPage", () => {
         "INSERT INTO sources (id, kind, path_prefix) VALUES ($1, 'other', $2) ON CONFLICT (id) DO NOTHING",
         ["tenant-a", "tenant-a/"],
       );
+    await putPage(storage, { slug: "notes/alice-sync", markdown_body: LONG_BODY, source_id: "tenant-a" });
     const { fn, calls } = fakeSonnet();
     const r = await extractFactsForPage(storage, {
       slug: "notes/alice-sync",
@@ -270,6 +271,7 @@ describe("extractFactsForPage", () => {
   });
 
   it("returns zero writes when the budget cap is below one call", async () => {
+    await putPage(storage, { slug: "notes/x", markdown_body: LONG_BODY });
     const { fn, calls } = fakeSonnet();
     const r = await extractFactsForPage(storage, {
       slug: "notes/x",
@@ -301,6 +303,7 @@ describe("extractFactsForPage", () => {
     };
     const saved = process.env["MEMRAIN_FACTS_WRITE_BUDGET_USD"];
     delete process.env["MEMRAIN_FACTS_WRITE_BUDGET_USD"];
+    await putPage(storage, { slug: "notes/long", markdown_body: LONG_BODY });
     let r;
     try {
       r = await extractFactsForPage(storage, {

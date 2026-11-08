@@ -49,6 +49,7 @@ describe("doctor categorize", () => {
       "embed-backlog",
       "embedding-width",
       "eval-trend",
+      "facts-input-windows",
       "facts-without-entity-pages",
       "federation-health",
       "fence-rows-without-markers",
