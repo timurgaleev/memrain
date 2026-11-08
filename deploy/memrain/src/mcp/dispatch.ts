@@ -712,7 +712,7 @@ async function dispatchToolInner(
         );
       case "add_timeline_event":
         return await withWriteRequest(storage, req.name, args, writeRequestPrincipal(opts, writeSource), () =>
-          callAddTimelineEvent(storage, args, writeSource, writerPrincipal(opts)),
+          callAddTimelineEvent(storage, args, writeSource, writerPrincipal(opts), redact, remote),
         );
       case "entity_facts":
         return await callEntityFacts(storage, args, redact, readSources, remote);
@@ -2849,6 +2849,8 @@ async function callAddTimelineEvent(
   args: Record<string, unknown>,
   writeSource?: string,
   principal?: string,
+  redact = false,
+  remote = false,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string")
     return errResult("add_timeline_event: `slug` is required");
@@ -2862,13 +2864,18 @@ async function callAddTimelineEvent(
     slug: args["slug"],
     occurred_at: args["occurred_at"],
     event: args["event"],
+    includeRow: true,
   };
   if (typeof args["source_chunk_id"] === "string")
     input.source_chunk_id = args["source_chunk_id"];
   if (writeSource) input.source_id = writeSource;
   if (principal !== undefined) input.written_by_principal = principal;
   const r = await addTimelineEvent(storage, input);
-  return jsonResult({ ok: true, ...r });
+  const hidden = remote && await isRemoteDiaryFenced(storage, input.slug, writeSource ? [writeSource] : undefined);
+  const row = hidden ? null : redact && r.row ? redactTimeline([{ ...r.row }])[0] : r.row;
+  return jsonResult({ ok: true, ...r, row,
+    correction_hint: "Append a new event describing the correction; the original event remains in the timeline.",
+  });
 }
 
 async function callEntityFacts(

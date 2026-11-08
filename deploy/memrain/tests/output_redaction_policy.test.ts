@@ -50,11 +50,11 @@ describe("outputRedaction policy", () => {
   });
 
   it("no mutating tool is tagged unless its response echoes stored text", () => {
-    // page_edit's diff quotes the stored lines around the edit.
+    // page_edit quotes stored lines; timeline retries return the original row.
     const tagged = OPERATIONS.filter((op) => !operationAnnotations(op).readOnlyHint && op.outputRedaction).map(
       (op) => op.name,
     );
-    expect(tagged).toEqual(["page_edit"]);
+    expect(tagged).toEqual(["page_edit", "add_timeline_event"]);
   });
 });
 

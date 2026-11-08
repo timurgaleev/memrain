@@ -40,6 +40,8 @@ export interface AddTimelineEventInput {
   source_id?: string;
   /** The authenticated principal behind the write (migration 134); audit-only. */
   written_by_principal?: string;
+  /** Return the stored row, including the original row on an idempotent retry. */
+  includeRow?: boolean;
 }
 
 export interface TimelineEventRow {
@@ -59,6 +61,33 @@ export interface AddTimelineEventResult {
   occurred_at: string;
   /** False when the (slug, occurred_at, source_chunk_id) tuple already existed. */
   inserted: boolean;
+  row?: TimelineEventRow | null;
+}
+
+const TIMELINE_ROW_COLUMNS = `id, slug, occurred_at::text AS occurred_at, event,
+  detail, source_label, source_chunk_id, written_at::text AS written_at`;
+
+async function timelineWriteResult(
+  storage: Storage, input: AddTimelineEventInput, occurred: string,
+  event: string, sourceLabel: string, insertedRow?: TimelineEventRow,
+): Promise<AddTimelineEventResult> {
+  const result = { id: insertedRow?.id ?? null, slug: input.slug, occurred_at: occurred, inserted: !!insertedRow };
+  if (!input.includeRow) return result;
+  let row = insertedRow;
+  if (!row) {
+    const params: unknown[] = [input.slug, occurred, input.source_id || "default"];
+    const key = input.source_chunk_id === undefined
+      ? "source_chunk_id IS NULL AND md5(event) = md5($4) AND source_label = $5"
+      : "source_chunk_id = $4";
+    params.push(...(input.source_chunk_id === undefined ? [event, sourceLabel] : [input.source_chunk_id]));
+    row = (await storage.engine().query<TimelineEventRow>(
+      `SELECT ${TIMELINE_ROW_COLUMNS} FROM timeline_events
+       WHERE slug = $1 AND occurred_at = $2::timestamptz AND source_id = $3 AND ${key}`, params,
+    )).rows[0];
+  }
+  return { ...result, row: row ? { ...row,
+    occurred_at: new Date(row.occurred_at).toISOString(), written_at: new Date(row.written_at).toISOString(),
+  } : null };
 }
 
 function normaliseOccurredAt(v: string | Date): string {
@@ -173,41 +202,31 @@ export async function addTimelineEvent(
   if (chunkId === null) {
     const params: unknown[] = [input.slug, occurred, event, detail, sourceLabel];
     const extra = optionalCols(params, sourceId, principal);
-    const r = await storage.engine().query<{ id: number }>(
+    const r = await storage.engine().query<TimelineEventRow>(
       `INSERT INTO timeline_events
          (slug, occurred_at, event, detail, source_label, source_chunk_id${extra.cols})
        VALUES ($1, $2::timestamptz, $3, $4, $5, NULL${extra.values})
        ON CONFLICT (slug, occurred_at, md5(event), source_label, source_id)
          WHERE source_chunk_id IS NULL
          DO NOTHING
-       RETURNING id`,
+       RETURNING ${input.includeRow ? TIMELINE_ROW_COLUMNS : "id"}`,
       params,
     );
-    return {
-      id: r.rows[0]?.id ?? null,
-      slug: input.slug,
-      occurred_at: occurred,
-      inserted: r.rows.length > 0,
-    };
+    return timelineWriteResult(storage, input, occurred, event!, sourceLabel, r.rows[0]);
   }
   const params: unknown[] = [input.slug, occurred, event, detail, sourceLabel, chunkId];
   const extra = optionalCols(params, sourceId, principal);
-  const r = await storage.engine().query<{ id: number }>(
+  const r = await storage.engine().query<TimelineEventRow>(
     `INSERT INTO timeline_events
        (slug, occurred_at, event, detail, source_label, source_chunk_id${extra.cols})
      VALUES ($1, $2::timestamptz, $3, $4, $5, $6${extra.values})
      ON CONFLICT (slug, occurred_at, source_chunk_id)
        WHERE source_chunk_id IS NOT NULL
        DO NOTHING
-     RETURNING id`,
+     RETURNING ${input.includeRow ? TIMELINE_ROW_COLUMNS : "id"}`,
     params,
   );
-  return {
-    id: r.rows[0]?.id ?? null,
-    slug: input.slug,
-    occurred_at: occurred,
-    inserted: r.rows.length > 0,
-  };
+  return timelineWriteResult(storage, input, occurred, event!, sourceLabel, r.rows[0]);
 }
 
 export interface ListTimelineOptions {

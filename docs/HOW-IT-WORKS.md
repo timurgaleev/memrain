@@ -262,6 +262,12 @@ A few that are easy to miss:
 - `get_recent_transcripts` lists recently ingested meeting, email, journal and
   note pages, newest first, with a short summary or the capped body. It is not
   on the public ingress.
+- `add_timeline_event` returns the stored `row` with UTC timestamps, including
+  the original row when a retry is deduplicated. The top-level `id` remains
+  `null` on a duplicate. Read restrictions still apply to the row; diary or
+  out-of-source rows are withheld. Corrections are new events, as explained
+  by `correction_hint`; existing timeline rows are not overwritten.
+
 - Writes are safe to retry and to race. `page_put`, `page_append`, `add_fact`
   and `add_timeline_event` take an optional `request_id`: a retry with the same
   id and arguments returns the first result with `replayed: true` and writes

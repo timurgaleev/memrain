@@ -721,10 +721,11 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "add_timeline_event",
+    outputRedaction: "retrieval",
     callShape: "{slug, occurred_at, event}",
     scope: "write",
     description:
-      "Append a timeline event to an existing page. Append-only. Idempotent on (slug, occurred_at, source_chunk_id) when source_chunk_id is provided. WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
+      "Append a timeline event to an existing page. Returns the stored row, including the original on a duplicate, subject to read redaction. Correct a mistake by appending a new event describing the correction; the original remains. Idempotent on (slug, occurred_at, source_chunk_id) when source_chunk_id is provided. WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
     argAliases: { date: "occurred_at", summary: "event" },
     params: {
       slug: str({
