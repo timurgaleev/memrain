@@ -30,6 +30,7 @@ import type { Engine } from "../engine/interface.ts";
 import { findLiveClaim, type ClaimIdentity } from "../facts.ts";
 import { DEFAULT_FACT_KIND } from "../facts-decay.ts";
 import { phaseFenceCheck } from "./phase-context.ts";
+import { factSourceEligibleSql } from "../quarantine.ts";
 
 /** Author stamped on a promoted take — also half its claim identity. */
 const CONSOLIDATE_WRITER = "facts-consolidate";
@@ -158,6 +159,7 @@ export async function consolidateFactsPhase(
        FROM entity_facts
       WHERE consolidated = false
         AND forgotten_at IS NULL
+        AND ${factSourceEligibleSql()}
         AND embedding IS NOT NULL
         AND btrim(fact) <> ''
         -- dimensional ontology rows have their own read path, not consolidation.
@@ -231,6 +233,7 @@ async function consolidateBucket(
       WHERE source_id = $1 AND entity_slug = $2
         AND consolidated = false
         AND forgotten_at IS NULL
+        AND ${factSourceEligibleSql()}
         AND embedding IS NOT NULL
         AND btrim(fact) <> ''
         -- dimensional ontology rows have their own read path, not consolidation.

@@ -19,6 +19,7 @@
  */
 import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
+import { factSourceEligibleSql } from "./quarantine.ts";
 
 const DEFAULT_TTL_MS = 30_000;
 const DEFAULT_TOP_K = 10;
@@ -30,7 +31,11 @@ const MAX_AGE_HOURS = 72;
 
 interface CacheEntry {
   expiresAt: number;
-  payload: Record<string, unknown> | undefined;
+  payload: HotMemoryPayload | undefined;
+}
+
+interface HotMemoryPayload {
+  brain_hot_memory: { facts: { id: number; entity_slug: string; fact: string; written_at: string; confidence: number }[] };
 }
 
 const _cache = new Map<string, CacheEntry>();
@@ -66,7 +71,18 @@ export async function getBrainHotMemoryMeta(
   const cacheKey = `k${topK}|${scopeKey}`;
 
   const cached = _cache.get(cacheKey);
-  if (cached && cached.expiresAt > now) return cached.payload;
+  if (cached && cached.expiresAt > now) {
+    if (!cached.payload) return undefined;
+    const params: unknown[] = [cached.payload.brain_hot_memory.facts.map(f => f.id)];
+    const scope = andSourceScope("source_id", opts.sourceIds, params);
+    const live = await storage.engine().query<{ id: number | string }>(
+      `SELECT id FROM entity_facts WHERE id = ANY($1::bigint[])
+         AND forgotten_at IS NULL AND ${factSourceEligibleSql()}${scope}`, params,
+    );
+    const ids = new Set(live.rows.map(r => Number(r.id)));
+    const facts = cached.payload.brain_hot_memory.facts.filter(f => ids.has(f.id));
+    return facts.length ? { brain_hot_memory: { facts } } : undefined;
+  }
 
   const nowIso = new Date(now).toISOString();
   const params: unknown[] = [nowIso, MAX_AGE_HOURS, DECAY_HALF_LIFE_HOURS, topK];
@@ -84,6 +100,7 @@ export async function getBrainHotMemoryMeta(
             ))::float8 AS score
        FROM entity_facts
       WHERE forgotten_at IS NULL
+        AND ${factSourceEligibleSql()}
         AND dimension IS NULL
         AND written_at >= $1::timestamptz - make_interval(hours => $2::int)${scope}
       ORDER BY score DESC, written_at DESC, id DESC

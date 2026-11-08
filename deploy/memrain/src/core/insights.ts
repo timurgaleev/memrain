@@ -17,6 +17,7 @@
  * Tables: pages (015), links (016), timeline_events (017), entity_facts (018 +
  * 037 metadata). No schema change — all columns queried already exist.
  */
+import { factSourceEligibleSql } from "./quarantine.ts";
 import type { Storage } from "./storage.ts";
 import { orphanExclusionSql } from "./orphan-policy.ts";
 import { hybridSearch, type SearchHit, type SearchOptions } from "./search/hybrid.ts";
@@ -625,7 +626,7 @@ export async function findTrajectory(
   const params: unknown[] = [entitySlug];
   // Dimensional ontology rows (mig097) have their own read path (getOntology);
   // keep them out of the free-text fact-trajectory arm.
-  let factBounds = " AND f.dimension IS NULL";
+  let factBounds = ` AND f.dimension IS NULL AND ${factSourceEligibleSql("f")}`;
   let eventBounds = "";
   if (opts.since !== undefined) {
     if (typeof opts.since !== "string" || opts.since.length === 0) {

@@ -14,6 +14,7 @@
  * under). Chunk-sourced facts keep their narrower index-backed idempotency on
  * (entity_slug, fact, source_chunk_id, speaker) on top of it (migration 132).
  */
+import { factSourceEligibleSql } from "./quarantine.ts";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
@@ -975,6 +976,7 @@ export async function listFacts(
   // surfaces opt in explicitly.
   if (opts.include_forgotten !== true) {
     where.push("forgotten_at IS NULL");
+    where.push(factSourceEligibleSql());
   }
   // Dimensional ontology rows (mig097) are read through getOntology, not the
   // free-text fact list — keep them out of every recall/list result.

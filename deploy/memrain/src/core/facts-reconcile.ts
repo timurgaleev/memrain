@@ -46,6 +46,7 @@ import { parseFactsFence } from "./facts-fence.ts";
 import { fenceBounds } from "./fence-shared.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { LEGACY_FENCE_WRITER } from "./brand.ts";
+import { readQuarantineVerdict } from "./quarantine.ts";
 
 /** Marks a fence-derived fact row's author (parallels the gazetteer's link_kind). */
 const FENCE_WRITER = "memrain:facts-fence";
@@ -101,7 +102,7 @@ export async function reconcileFactsForPage(
   removed: number;
   added: number;
   unchanged?: number;
-  skipped?: "malformed_rows" | "mixed_fence_brands";
+  skipped?: "malformed_rows" | "mixed_fence_brands" | "quarantined";
   fenceAbsent?: true;
   retained?: number;
 }> {
@@ -117,6 +118,9 @@ export async function reconcileFactsForPage(
   const page = await getPage(storage, pageSlug);
   if (!page || page.content_hash !== expectedContentHash) {
     return { removed: 0, added: 0 };
+  }
+  if (await readQuarantineVerdict(storage.engine(), pageSlug, page.source_id)) {
+    return { removed: 0, added: 0, skipped: "quarantined" };
   }
   const body = page.markdown_body;
 
