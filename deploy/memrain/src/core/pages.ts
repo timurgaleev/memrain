@@ -1015,6 +1015,7 @@ export async function listPages(
 interface PageVersionOptions {
   withPrincipal?: boolean;
   includeBody?: boolean;
+  version?: number;
 }
 
 export function pageVersions(storage: Storage, slug: string, limit: number | undefined, sourceIds: readonly string[] | undefined, opts: PageVersionOptions & { includeBody: false }): Promise<PageVersionMetadata[]>;
@@ -1036,11 +1037,12 @@ export async function pageVersions(
   // own source(s). No-op when unset — the full version chain, as today.
   const params: unknown[] = [slug, cap];
   const sourceFilter = andSourceScope("source_id", sourceIds, params);
+  const versionFilter = opts.version === undefined ? "" : ` AND version_n = $${params.push(opts.version)}`;
   const r = await storage.engine().query<PageVersionRow | PageVersionMetadata>(
     `SELECT slug, source_id, version_n, hash_prev, hash_new,${opts.includeBody === false ? "" : " body_snapshot, compiled_truth_snapshot,"}
             written_by, written_at::text AS written_at${opts.withPrincipal === true ? ", written_by_principal" : ""}
        FROM page_versions
-       WHERE slug = $1${sourceFilter}
+       WHERE slug = $1${sourceFilter}${versionFilter}
        ORDER BY version_n DESC
        LIMIT $2`,
     params,

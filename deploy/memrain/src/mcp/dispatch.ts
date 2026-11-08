@@ -2228,6 +2228,18 @@ async function callPageGet(
   if (remote && isDiaryPage(page.type, page.slug)) {
     throw new PageNotFoundError(args["slug"]);
   }
+  const currentVersion = Number(page.version ?? 0);
+  let snapshotWrittenAt: string | undefined;
+  if (typeof args["version"] === "number") {
+    const [snapshot] = await pageVersions(storage, page.slug, 1, scopeIds, { version: args["version"] });
+    if (!snapshot) throw new OperationError(
+      "version_not_found", `page version ${args["version"]} was not found`,
+      "List available versions with page_versions, then pass one of their version_n values.",
+    );
+    page = { ...page, markdown_body: snapshot.body_snapshot, compiled_truth: snapshot.compiled_truth_snapshot,
+      content_hash: snapshot.hash_new, version: Number(snapshot.version_n) };
+    snapshotWrittenAt = snapshot.written_at;
+  }
   // Retrieval write-back (mig 024): a user just surfaced this page — bump the
   // last_retrieved_at signal the context-volunteer "used" stat reads. Throttled
   // + best-effort; awaited because memrain is single-holder (no fire-and-forget
@@ -2254,6 +2266,7 @@ async function callPageGet(
     page: window ? { ...metadata, body_window: windowBody } : visible,
     ...windowMeta,
     version: Number(version ?? 0),
+    ...(snapshotWrittenAt !== undefined ? { written_at: snapshotWrittenAt, current_version: currentVersion } : {}),
     ...(resolvedSlug ? { resolved_slug: resolvedSlug } : {}),
     ...(quarantined ? { quarantined } : {}),
     ...(withheld ? { notice: "page_quarantined" } : {}),

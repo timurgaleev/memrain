@@ -546,6 +546,7 @@ export const OPERATIONS: readonly Operation[] = [
     params: {
       slug: str(req),
       source_id: str({ description: "Owning source from a search result; narrows the caller's read grant, never expands it." }),
+      version: int({ minimum: 1, maximum: 2147483647, description: "Read this stored version's body, compiled_truth and content hash. The response distinguishes the requested version from current_version and includes written_at; page identity/title metadata remain current. Missing versions return version_not_found." }),
       offset: int({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "UTF-8 byte offset for a body window; use the returned next_offset to continue." }),
       max_bytes: int({ minimum: 4, maximum: 262144, description: "Body window size in UTF-8 bytes (default 256 KiB). Windows return body_window instead of markdown_body; use page_edit or page_append to change a page." }),
       fuzzy: bool({ description: "Fuzzy slug resolution on a miss (default false)." }),

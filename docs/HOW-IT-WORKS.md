@@ -213,6 +213,10 @@ A few that are easy to miss:
   `markdown_body`, with byte offsets, `total_bytes`, `partial`, `next_offset`
   and a bounded heading list. Follow `next_offset` until it is null. Windows
   never split a UTF-8 character; use `page_edit` or `page_append` for changes.
+- `page_get` with `version` reads that stored body, compiled truth and hash,
+  with `written_at` and `current_version` identifying the snapshot. Page title
+  and identity metadata remain current; current access and quarantine rules
+  still apply. A missing snapshot returns `version_not_found`.
 - `page_versions` returns version metadata by default; `include_body:true`
   adds authorized snapshots. `page_list` keeps its full-body default and
   accepts `include_body:false` for metadata only. `get_chunks` returns at most
