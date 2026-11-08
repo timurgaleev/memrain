@@ -66,6 +66,15 @@ describe("budget pricing", () => {
 });
 
 describe("parseFactsResponse", () => {
+  it("drops prompt-sanitizer artifacts even with the junk gate off, preserving secret markers", () => {
+    const result = parseFactsResponse(JSON.stringify({ facts: [
+      { fact: "Works for [redacted](RDS)", kind: "fact", entity: "people/alice" },
+      { fact: "Uses [REDACTED:api-key:abc123] in a vault", kind: "fact", entity: "people/alice" },
+      { fact: "Works for Royal Dutch Shell (RDS)", kind: "fact", entity: "people/alice" },
+    ] }), { junkFilter: false });
+    expect(result.facts.map(f => f.fact)).toEqual(["Uses [REDACTED:api-key:abc123] in a vault", "Works for Royal Dutch Shell (RDS)"]);
+    expect(result.junk_skipped).toBe(1);
+  });
   it("parses a valid facts object and clamps confidence", () => {
     const { facts } = parseFactsResponse(
       '{"facts":[{"fact":"Alice loves coffee","kind":"preference","entity":"Alice","confidence":1.4,"notability":"high"}]}',

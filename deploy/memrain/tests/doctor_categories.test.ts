@@ -68,6 +68,7 @@ describe("doctor categorize", () => {
       "pglite",
       "quarantined-pages",
       "queue-health",
+      "redaction-markers",
       "runtime-config-legacy-rows",
       "schema-version",
       "secret-exposure",

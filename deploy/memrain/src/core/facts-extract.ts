@@ -228,7 +228,7 @@ export interface FactsParseResult {
   status: FactsParseStatus;
   /** Terse, content-free reason. Set only when `status` is "malformed". */
   detail?: string;
-  /** Elements the junk gate dropped (see `isJunkFact`). */
+  /** Elements dropped as junk or contaminated by a prompt-sanitizer marker. */
   junk_skipped: number;
 }
 
@@ -337,6 +337,10 @@ export function parseFactsResponse(
     const fact =
       typeof o["fact"] === "string" ? o["fact"].trim().slice(0, 500) : "";
     if (!fact) continue;
+    if (fact.includes("[redacted")) {
+      junkSkipped += 1;
+      continue;
+    }
     // A kind we cannot read is floored, never promoted — see normalizeFactKind.
     const kind = normalizeFactKind(o["kind"]);
     if (junkFilter && isJunkFact(fact, kind)) {

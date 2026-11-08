@@ -138,6 +138,7 @@ describe("doctor", () => {
       "pglite",
       "quarantined-pages",
       "queue-health",
+      "redaction-markers",
       "runtime-config-legacy-rows",
       "schema-version",
       "secret-exposure",

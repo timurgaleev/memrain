@@ -25,6 +25,32 @@ export interface OpsCheckResult {
   detail: string;
 }
 
+export async function checkRedactionMarkers(engine: Engine): Promise<OpsCheckResult> {
+  const r = await engine.query<{ table_name: string; source_id: string; n: number }>(
+    `WITH marked AS (
+       SELECT 'entity_facts' AS table_name, source_id FROM entity_facts WHERE strpos(fact, '[redacted') > 0
+       UNION ALL
+       SELECT 'timeline_events', source_id FROM timeline_events
+        WHERE strpos(concat_ws(' ', event, detail), '[redacted') > 0
+       UNION ALL
+       SELECT 'synth_atoms', COALESCE(
+         (SELECT d.source_id FROM documents d WHERE d.id = a.source_ref AND a.source_kind = 'document'),
+         (SELECT p.source_id FROM pages p WHERE p.slug = a.source_ref AND a.source_kind = 'page'), 'unresolved')
+         FROM synth_atoms a WHERE strpos(concat_ws(' ', title, body), '[redacted') > 0
+       UNION ALL
+       SELECT 'synth_takes', COALESCE(
+         (SELECT d.source_id FROM documents d WHERE d.id = t.source_ref),
+         (SELECT p.source_id FROM pages p WHERE p.slug = t.source_ref), 'unresolved')
+         FROM synth_takes t WHERE strpos(claim_text, '[redacted') > 0
+     ) SELECT table_name, COALESCE(source_id, 'default') AS source_id, count(*)::int AS n
+         FROM marked GROUP BY table_name, COALESCE(source_id, 'default') ORDER BY table_name, source_id`,
+  );
+  const count = r.rows.reduce((n, row) => n + row.n, 0);
+  return { ok: true, status: count ? "warn" : "ok", detail: count
+    ? `${count} row(s) with prompt-sanitizer markers: ${r.rows.map(row => `${row.table_name}/${row.source_id}=${row.n}`).join(', ')}; review before re-extracting or superseding; never rewrite fact text in place`
+    : "no prompt-sanitizer markers in facts, timeline, atoms or takes" };
+}
+
 export async function checkFactsWithoutEntityPages(engine: Engine): Promise<OpsCheckResult> {
   const r = await engine.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM entity_facts f
