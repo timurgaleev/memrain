@@ -225,14 +225,19 @@ export async function resolveEntitiesToPointers(
   };
   const ordered = [...resolved].sort((a, b) => priority(a) - priority(b)
     || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
-  const names = new Set<string>();
+  const preferred = new Map<string, string>();
+  for (const hit of ordered) {
+    const row = rowBySlug.get(hit.slug);
+    if (!row) continue;
+    const key = JSON.stringify([hit.matchedNorm, row.source_id]);
+    if (!preferred.has(key)) preferred.set(key, hit.slug);
+  }
   const pointers: ReflexPointer[] = [];
-  for (const { slug, arm, matchedNorm } of ordered) {
+  for (const { slug, arm, matchedNorm } of resolved) {
     const row = rowBySlug.get(slug);
     if (!row) continue;
     const nameKey = JSON.stringify([matchedNorm, row.source_id]);
-    if (names.has(nameKey)) continue;
-    names.add(nameKey);
+    if (preferred.get(nameKey) !== slug) continue;
     const display = displayForRow(row, displayByNorm);
     pointers.push({
       slug,
