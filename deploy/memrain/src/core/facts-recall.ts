@@ -122,6 +122,8 @@ export interface ForgetFactInput {
 }
 
 export interface ForgetFactResult {
+  withdrawn?: true;
+  reason?: "already_retired";
   id: number;
   /** False when no row matched the id. */
   found: boolean;
@@ -188,9 +190,21 @@ export async function forgetFact(
                   memrain_fact_claim_key(fact) AS claim_key`,
       updParams,
     );
-    const hit = upd.rows[0];
+    const retiredParams: unknown[] = [factId];
+    const retiredFilter = andSourceScope("source_id", sourceIds, retiredParams) + world;
+    const retired = !upd.rows[0] && cause === "forget"
+      ? await tx.query<{
+        source_id: string; visibility: string; entity_slug: string; dimension: string | null; claim_key: string;
+      }>(
+        `SELECT source_id, visibility, entity_slug, dimension, memrain_fact_claim_key(fact) AS claim_key
+           FROM entity_facts WHERE id = $1 AND forgotten_at IS NOT NULL
+             AND forgotten_cause IN ('supersede', 'consolidate') AND dimension IS NULL${retiredFilter}
+           FOR UPDATE`, retiredParams,
+      )
+      : null;
+    const hit = upd.rows[0] ?? retired?.rows[0];
     if (!hit) return null;
-    if (cause !== "forget" || hit.dimension !== null) return { duplicates: 0 };
+    if (cause !== "forget" || hit.dimension !== null) return { duplicates: 0, retired: false };
     await tx.query(
       `INSERT INTO fact_withdrawals
          (source_id, visibility, entity_slug, claim_key, first_fact_id, reason)
@@ -226,13 +240,14 @@ export async function forgetFact(
     // exclusive lock is granted, the second sweep (a new statement) sees it.
     const early = await sweep();
     await lockWithdrawals(tx, [hit.source_id]);
-    return { duplicates: early + (await sweep()) };
+    return { duplicates: early + (await sweep()), retired: !upd.rows[0] };
   });
   if (flipped !== null) {
     return {
       id: factId,
       found: true,
-      forgotten: true,
+      forgotten: !flipped.retired,
+      ...(flipped.retired ? { withdrawn: true as const, reason: "already_retired" as const } : {}),
       withdrawn_duplicates: flipped.duplicates,
     };
   }
