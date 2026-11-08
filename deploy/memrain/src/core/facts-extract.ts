@@ -9,6 +9,7 @@
  */
 import type { Storage } from "./storage.ts";
 import { createHash } from "node:crypto";
+import { pageEntityHints } from "./facts-extract-hints.ts";
 import { addFact } from "./facts.ts";
 import { DEFAULT_FACT_KIND } from "./facts-decay.ts";
 import { sanitizeForPrompt } from "./llm/sanitize.ts";
@@ -117,6 +118,9 @@ const EXTRACTOR_BASE = [
   '  ("Acme raised $5M") still names its real entity.',
   "- metric/value/unit/period: fill ONLY for a quantitative claim (a number with",
   "  a named measure). Otherwise set all four to null. Do not invent numbers.",
+  "- Preserve the stated currency and amount; never convert EUR or CHF to USD or infer an exchange rate.",
+  '  "EUR 1.234,56 monthly" means value=1234.56, unit=EUR, period=monthly;',
+  '  "CHF 25,50" means value=25.50, unit=CHF. Preserve the original amount spelling in fact text.',
 ].join("\n");
 
 /** Who said it — never whether it is true or accepted. Static, cache-stable. */
@@ -471,7 +475,7 @@ export function sanitizeEntityHints(hints: unknown): string[] {
       continue;
     seen.add(s);
     out.push(s);
-    if (out.length >= 20) break;
+    if (out.length >= 40) break;
   }
   return out;
 }
@@ -1084,6 +1088,7 @@ export async function extractFactsForPage(
     opts.observationDate !== undefined
       ? opts.observationDate
       : await pageObservationDate(storage, opts.slug, opts.sourceId);
+  const entityHints = await pageEntityHints(storage, opts.slug, sourceId);
 
   const facts: ExtractedFact[] = [];
   let windowsRun = 0;
@@ -1124,6 +1129,7 @@ export async function extractFactsForPage(
         ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
         modelId,
         observationDate,
+        entityHints,
         // The truncation retry widens the SAME hold taken above — nothing
         // here bills past `cap`.
         canAffordRetry: (projected) => budget.widen(hold, modelId, projected),
