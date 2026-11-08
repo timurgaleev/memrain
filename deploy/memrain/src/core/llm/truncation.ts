@@ -32,7 +32,7 @@ export interface TruncationRetryResult {
   truncated: boolean;
 }
 
-export function isTruncated(resp: SonnetCallResult): boolean {
+export function isTruncated(resp: Pick<SonnetCallResult, "stopReason">): boolean {
   return resp.stopReason === STOP_REASON_MAX_TOKENS;
 }
 

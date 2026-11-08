@@ -66,6 +66,9 @@ export const TERMINAL_STOP_REASONS: ReadonlySet<string> = new Set([
   "max_tokens",
   "guardrail_intervened",
   "content_filtered",
+  "model_context_window_exceeded",
+  "malformed_model_output",
+  "malformed_tool_use",
 ]);
 
 const _clients = new Map<string, BedrockRuntimeClient>();

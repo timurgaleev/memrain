@@ -36,6 +36,16 @@ function fakeLlm(text: string, seen: LlmCallInput[] = []): { fn: LlmFn; seen: Ll
 }
 
 describe("generateChunkContext (unit)", () => {
+  for (const stopReason of ["max_tokens", "model_context_window_exceeded", "guardrail_intervened", "content_filtered", "malformed_model_output", "malformed_tool_use"]) {
+    it(`returns no durable context after ${stopReason}`, async () => {
+      const budget = new BudgetTracker(1, "test-incomplete-context");
+      const ctx = await generateChunkContext("The original document.", "Original chunk.", {
+        budget, llmFn: async () => ({ text: "UNUSABLE_PARTIAL_CONTEXT", stopReason, modelId: "test", usage: { inputTokens: 100, outputTokens: 10 } }),
+      });
+      expect(ctx).toBeNull();
+      expect(budget.totalSpent()).toBeGreaterThan(0);
+    });
+  }
   it("builds a prompt containing both the document and the chunk, returns the model context", async () => {
     const { fn, seen } = fakeLlm("This chunk defines RRF fusion within the retrieval doc.");
     const ctx = await generateChunkContext(

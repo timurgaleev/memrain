@@ -32,6 +32,8 @@ import {
 } from "../llm/haiku.ts";
 import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { BudgetTracker, BudgetExhausted } from "../budget.ts";
+import { isTruncated } from "../llm/truncation.ts";
+import { TERMINAL_STOP_REASONS } from "../llm/converse.ts";
 import type { SonnetUsage } from "../llm/sonnet.ts";
 import type { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 
@@ -291,6 +293,7 @@ export async function generateChunkContext(
       // response. Only a non-budget error rethrows into the fail-open catch.
       if (!(e instanceof BudgetExhausted)) throw e;
     }
+    if (isTruncated(resp) || TERMINAL_STOP_REASONS.has(resp.stopReason ?? "")) return null;
     const ctx = (resp.text ?? "").trim();
     if (!ctx) return null;
     return ctx.slice(0, MAX_CONTEXT_CHARS);
