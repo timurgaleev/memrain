@@ -19,6 +19,7 @@
  * needs no backfill: declared aliases are a NEW convention introduced with
  * migration 034, so no pre-existing page carries one to index.
  */
+import { pageRowFilterClauses } from "./search/filters.ts";
 import type { Engine } from "./engine/interface.ts";
 import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
@@ -180,6 +181,7 @@ export async function resolveAliasCandidates(
   storage: Storage,
   aliasNorm: string,
   sourceIds?: string[],
+  filters?: import("./search/filters.ts").PageFilters,
 ): Promise<Array<{ slug: string; source_id: string }>> {
   if (!isIndexableAlias(aliasNorm)) return [];
   try {
@@ -197,7 +199,7 @@ export async function resolveAliasCandidates(
          JOIN pages p ON p.slug = pa.slug
                      AND p.source_id = pa.source_id
                      AND p.deleted_at IS NULL
-        WHERE pa.alias_norm = $1${scopeFilter}
+        WHERE pa.alias_norm = $1${scopeFilter}${pageRowFilterClauses(params, filters)}
         ORDER BY source_id, pa.slug`,
       params,
     );

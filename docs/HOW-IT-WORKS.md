@@ -208,6 +208,13 @@ A few that are easy to miss:
   `date_source` (`effective` or the `updated` fallback). When snippet capping
   is enabled, the `full` pointer supplies both `slug` and `source_id` to
   `page_get`; the requested source only narrows your existing read grant.
+- `search` and `query` accept `types` (up to 20 page types) and `slug_prefix`.
+  These filters match live canonical pages and their body, truth and relative
+  markdown-file mirrors in the same source. Unmapped files and code documents
+  are excluded when page filters are requested. Filtering runs before each
+  retrieval limit and also applies to alias injection and query refinement.
+  An unknown type produces `unknown_page_types` with available types in the
+  caller's scope. Omit both filters to search the whole accessible corpus.
 - `page_get` returns small bodies whole. A body over 256 KiB, or an explicit
   `offset`/`max_bytes` request, returns `page.body_window` instead of
   `markdown_body`, with byte offsets, `total_bytes`, `partial`, `next_offset`

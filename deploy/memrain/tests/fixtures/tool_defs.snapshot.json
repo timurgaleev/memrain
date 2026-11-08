@@ -5,6 +5,17 @@
     "inputSchema": {
       "type": "object",
       "properties": {
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter."
+        },
+        "slug_prefix": {
+          "type": "string",
+          "description": "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits."
+        },
         "q": {
           "type": "string",
           "description": "Natural-language query."
@@ -1793,6 +1804,17 @@
     "inputSchema": {
       "type": "object",
       "properties": {
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter."
+        },
+        "slug_prefix": {
+          "type": "string",
+          "description": "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits."
+        },
         "q": {
           "type": "string",
           "description": "Natural-language query."

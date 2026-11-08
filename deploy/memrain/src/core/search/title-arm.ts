@@ -29,6 +29,7 @@
  * Deterministic, zero-LLM, fail-open: any error drops the arm rather than
  * breaking search.
  */
+import { pageFilterClauses } from "./filters.ts";
 import type { Engine } from "../engine/interface.ts";
 import { visibilityClause } from "../visibility.ts";
 import { tokenizeTitle } from "./title-match.ts";
@@ -70,6 +71,7 @@ export function titleArmEnabled(
 }
 
 export interface TitleArmOptions {
+  filters?: import("./filters.ts").PageFilters;
   onError?: (error: unknown) => void;
   /** Tenant scope — only documents of these sources are eligible. */
   sourceIds?: readonly string[];
@@ -140,6 +142,7 @@ export async function titleArmChunkIds(
     // un-indexable expression match never drags the chunk table through it.
     const params: unknown[] = [candidates];
     const scopeFilter = andSourceScope("d.source_id", opts.sourceIds, params);
+    const pageFilter = pageFilterClauses(params, opts.filters);
     // Slug leaf: scheme-stripped path → last segment → extension dropped.
     const leafExpr = `regexp_replace(regexp_replace(${normalizedPathSql("d.source_path")}, '^.*/', ''), '\\.(md|markdown)$', '')`;
     const titleIdent = normalizeIdentifierSql("COALESCE(d.title, '')");
@@ -150,7 +153,7 @@ export async function titleArmChunkIds(
               ${leafIdent}  AS ident_leaf
          FROM documents d
         WHERE (${titleIdent} = ANY($1::text[]) OR ${leafIdent} = ANY($1::text[]))
-          AND ${visibilityClause("d")}${scopeFilter}${buildHardExcludeClauseSql("d.source_path")}`,
+          AND ${visibilityClause("d")}${scopeFilter}${pageFilter}${buildHardExcludeClauseSql("d.source_path")}`,
       params,
     );
     if (docs.rows.length === 0) return [];

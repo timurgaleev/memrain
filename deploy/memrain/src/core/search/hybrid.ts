@@ -30,7 +30,7 @@ import { isStatementTimeoutError } from "../retry.ts";
 import { DEGRADED_REASONS } from "./search-meta.ts";
 import { vectorSearch } from "./vector.ts";
 import { keywordSearch, keywordSearchRelaxed, keywordSearchScored, keywordIdentifierSearch } from "./keyword.ts";
-import { resolveDateBoundary } from "./filters.ts";
+import { resolveDateBoundary, pageFilterClauses, validatePageFilters } from "./filters.ts";
 import { visibilityClause } from "../visibility.ts";
 import { andSourceScope, isNoGrant } from "../source-scope.ts";
 import {
@@ -380,6 +380,8 @@ export interface SearchOptions {
    */
   cosineRescore?: boolean;
   /** Filter to chunks of a given source language (chunks.language, e.g. "typescript"). */
+  types?: readonly string[];
+  slugPrefix?: string;
   lang?: string;
   /** Filter to chunks of a given symbol kind (chunks.symbol_type, e.g. "function"). */
   symbolKind?: string;
@@ -757,8 +759,9 @@ export async function hybridSearch(
   // Per-call post-hydrate filters (lang / symbol_kind / since / until) are NOT
   // part of the cache key, so a filtered query bypasses the query cache
   // entirely — it never reads a cached unfiltered set nor writes a filtered one.
+  validatePageFilters(opts);
   const hasFilters = Boolean(
-    opts.lang || opts.symbolKind || opts.since || opts.until,
+    opts.lang || opts.symbolKind || opts.since || opts.until || opts.types?.length || opts.slugPrefix,
   );
   // Pushed-down filter set (lang / symbol_kind / since / until). Threaded into
   // BOTH retrieval arms so the per-arm LIMIT budget is spent on already-matching
@@ -771,6 +774,8 @@ export async function hybridSearch(
         ...(opts.symbolKind ? { symbolKind: opts.symbolKind } : {}),
         ...(opts.since ? { since: opts.since } : {}),
         ...(opts.until ? { until: opts.until } : {}),
+        ...(opts.types?.length ? { types: opts.types } : {}),
+        ...(opts.slugPrefix ? { slugPrefix: opts.slugPrefix } : {}),
       }
     : undefined;
   // Structural expansion (near_symbol / walk_depth) widens the candidate set
@@ -953,10 +958,10 @@ export async function hybridSearch(
       return [...primary, ...probe.filter(row => !primaryIds.has(row.id))];
     })(),
     titleArmOn ? titleArmChunkIds(engine, trimmed, {
-      onError: error => failArm(error, "title"), sourceIds: opts.sourceIds, limit: fanout,
+      onError: error => failArm(error, "title"), sourceIds: opts.sourceIds, limit: fanout, filters: chunkFilters,
     }) : Promise.resolve<string[]>([]),
     relationalArmOn ? relationalArmChunkIds(storage, trimmed, {
-      ...(opts.sourceIds !== undefined ? { sourceIds: [...opts.sourceIds] } : {}), limit: fanout,
+      ...(opts.sourceIds !== undefined ? { sourceIds: [...opts.sourceIds] } : {}), limit: fanout, filters: chunkFilters,
     }) : Promise.resolve<string[]>([]),
   ]);
   const deadline = makeQueryEmbedDeadline();
@@ -1221,6 +1226,7 @@ export async function hybridSearch(
   // re-asserts the scope as the single choke point. No-op when unscoped.
   const hydrateParams: unknown[] = [ids];
   const hydrateSourceFilter = andSourceScope("d.source_id", opts.sourceIds, hydrateParams);
+  const hydratePageFilter = pageFilterClauses(hydrateParams, chunkFilters);
   const rows = await engine.query<{
     id: string;
     document_id: string;
@@ -1248,7 +1254,7 @@ export async function hybridSearch(
      JOIN documents d ON d.id = c.document_id
      LEFT JOIN sources s ON s.id = d.source_id
      WHERE c.id = ANY($1::text[])
-       AND ${visibilityClause("d")}${hydrateSourceFilter}`,
+       AND ${visibilityClause("d")}${hydrateSourceFilter}${hydratePageFilter}`,
     hydrateParams,
   );
   opts.signal?.throwIfAborted();
@@ -1655,7 +1661,7 @@ export async function hybridSearch(
     intent,
   }));
   if (aliasHopEnabled()) {
-    organic = await applyAliasHop(organic, storage, trimmed, intent, opts.sourceIds);
+    organic = await applyAliasHop(organic, storage, trimmed, intent, opts.sourceIds, { filters: chunkFilters });
   }
 
   // 8d. Graph-aware Sonnet rerank (opt-in, default OFF) — reorder the top hits

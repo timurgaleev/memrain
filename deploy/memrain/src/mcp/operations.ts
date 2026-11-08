@@ -291,6 +291,8 @@ export const OPERATIONS: readonly Operation[] = [
       "Hybrid (vector + keyword) search over the indexed corpus. Returns ranked chunks with their parent document path and title. Optional filters (lang / symbol_kind / since / until) are applied post-ranking and bypass the query cache. Has no `expand` knob, and LLM query expansion is off in the default mode bundles — for a concept or landscape question ('everything about X', 'who works on Y'), escalate to `query` with `expand:true`, which widens the keyword arm with generated variants. A nonzero hit count here is not proof that the corpus was exhausted. The response carries `meta`: `vectorEnabled` plus `degraded[]` reason codes (embed_timeout, vector_arm_failed, keyword_zero, budget_truncated, vector_candidates_incomplete) that tell an empty brain from a degraded run; non-public callers also get intent, mode, cache, retrieved and returned.",
     argAliases: { query: "q", limit: "k" },
     params: {
+      types: arr({ items: { type: "string" }, description: "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter." }),
+      slug_prefix: str({ description: "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits." }),
       q: str({ ...req, description: "Natural-language query." }),
       k: int({ minimum: 1, maximum: 100, description: "Number of hits to return. Default 20." }),
       token_budget: int({
@@ -1102,6 +1104,8 @@ export const OPERATIONS: readonly Operation[] = [
     description:
       "Flagship full-control retrieval: hybrid search over the corpus with every per-call knob exposed — `detail` result granularity (low = 1 chunk/page, medium = default dedup, high = all chunks + temporal treatment), `salience`/`recency` ranking bias (off|on|strong; omit = auto-detected from the query), `since`/`until` content-date window, `offset` pagination, `expand` LLM query expansion (paid; default follows the mode bundle), `mode` bundle override (operator-only), `adaptive_return` intent-sized tight result sets, plus the code filters (lang / symbol_kind / near_symbol / walk_depth). Legacy refinement: pass `refine` (+weights) for the deterministic weighted-RRF two-query blend instead. Without `refine` the response carries the same `meta` block as `search` (vector arm state, degraded reason codes, cache, retrieved/returned).",
     params: {
+      types: arr({ items: { type: "string" }, description: "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter." }),
+      slug_prefix: str({ description: "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits." }),
       q: str({ ...req, description: "Natural-language query." }),
       k: int({ minimum: 1, maximum: 100, description: "Number of hits to return. Default 20." }),
       offset: int({ minimum: 0, maximum: 1000, description: "Skip the first N ranked hits (pagination)." }),

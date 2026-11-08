@@ -29,6 +29,7 @@
  *
  * Tested in tests/relational_recall.test.ts.
  */
+import { pageFilterClauses, pageRowFilterClauses, type PageFilters } from "./filters.ts";
 import type { Storage } from "../storage.ts";
 import { KNOWN_LINK_TYPES, graphNeighbors, traverseGraph } from "../links.ts";
 import { makeSlugResolver } from "../slug-canonicalize.ts";
@@ -61,6 +62,7 @@ export interface RelationalRecallResult {
 }
 
 export interface RelationalRecallOptions {
+  filters?: PageFilters;
   /** Max candidates returned (1..200). Default 20. */
   limit?: number;
   /** Max hops for the type-agnostic `connects`/`intro` walk (1..6). Default 3. */
@@ -318,6 +320,7 @@ function otherEnd(
 }
 
 export interface FanoutOptions {
+  filters?: PageFilters;
   /** Max candidates returned (1..200). Default 20. */
   limit?: number;
   /** Max hops for the type-agnostic `connects`/`intro` walk (1..6). Default 3. */
@@ -326,6 +329,18 @@ export interface FanoutOptions {
   sourceIds?: string[];
   /** Receives how many seeds resolved to a real page (telemetry). */
   onSeedsResolved?: (n: number) => void;
+}
+
+async function eligibleRelationalSlugs(storage: Storage, slugs: string[], opts: FanoutOptions): Promise<Set<string>> {
+  if (!opts.filters?.types?.length && !opts.filters?.slugPrefix) return new Set(slugs);
+  if (slugs.length === 0) return new Set();
+  const params: unknown[] = [slugs];
+  const scope = andSourceScope("p.source_id", opts.sourceIds, params);
+  const filter = pageRowFilterClauses(params, opts.filters);
+  const r = await storage.engine().query<{ slug: string }>(
+    `SELECT p.slug FROM pages p WHERE p.slug = ANY($1::text[]) AND p.deleted_at IS NULL${scope}${filter}`, params,
+  );
+  return new Set(r.rows.map(r => r.slug));
 }
 
 /**
@@ -361,8 +376,9 @@ export async function fanoutRelational(
     ]);
     const depthB = new Map(fromB.map((h) => [h.slug, h.depth]));
     const endpoints = new Set([a, b]);
+    const eligible = await eligibleRelationalSlugs(storage, fromA.map(h => h.slug), opts);
     return fromA
-      .filter((h) => depthB.has(h.slug) && !endpoints.has(h.slug))
+      .filter((h) => eligible.has(h.slug) && depthB.has(h.slug) && !endpoints.has(h.slug))
       .map((h) => ({ slug: h.slug, combined: h.depth + (depthB.get(h.slug) ?? 0) }))
       .sort((x, y) => x.combined - y.combined || x.slug.localeCompare(y.slug))
       .slice(0, limit)
@@ -379,10 +395,11 @@ export async function fanoutRelational(
     const hits = await traverseGraph(storage, seedSlug, {
       direction: parsed.direction,
       maxDepth: depth,
-      limit,
+      limit: opts.filters?.types?.length || opts.filters?.slugPrefix ? 1000 : limit,
       sourceIds,
     });
-    return hits.map((h) => ({ slug: h.slug, relation: "related_to", depth: h.depth }));
+    const eligible = await eligibleRelationalSlugs(storage, hits.map(h => h.slug), opts);
+    return hits.filter(h => eligible.has(h.slug)).slice(0, limit).map((h) => ({ slug: h.slug, relation: "related_to", depth: h.depth }));
   }
 
   // Typed single-hop: union the matched link types, dedup by the other-end
@@ -396,10 +413,11 @@ export async function fanoutRelational(
       limit: 1000,
       sourceIds,
     });
+    const eligible = await eligibleRelationalSlugs(storage, rows.map(row => otherEnd(row, seedSlug)), opts);
     for (const row of rows) {
       if (!wantedTypes.has(row.type)) continue; // defensive: type filter is exact
       const slug = otherEnd(row, seedSlug);
-      if (slug === seedSlug || seen.has(slug)) continue;
+      if (slug === seedSlug || seen.has(slug) || !eligible.has(slug)) continue;
       seen.set(slug, { slug, relation: row.type, depth: 1 });
       if (seen.size >= limit) break;
     }
@@ -436,6 +454,7 @@ export async function relationalRecall(
       limit: opts.limit,
       depth: opts.depth,
       sourceIds: opts.sourceIds,
+      filters: opts.filters,
       onSeedsResolved: (n) => {
         meta.seeds_resolved = n;
       },
@@ -488,12 +507,13 @@ export async function relationalArmChunkIds(
     const engine = storage.engine();
     const params: unknown[] = [sourcePaths];
     const scopeFilter = andSourceScope("d.source_id", opts.sourceIds, params);
+    const pageFilter = pageFilterClauses(params, opts.filters);
     // Head chunk (lowest id) per page, matching fetchPageHeadHit's choice.
     const rows = await engine.query<{ id: string; source_path: string }>(
       `SELECT DISTINCT ON (d.source_path) c.id, d.source_path
          FROM chunks c
          JOIN documents d ON d.id = c.document_id
-        WHERE d.source_path = ANY($1::text[])${scopeFilter}
+        WHERE d.source_path = ANY($1::text[])${scopeFilter}${pageFilter}
           AND ${visibilityClause("d")}
         ORDER BY d.source_path, c.id COLLATE "C" ASC`,
       params,

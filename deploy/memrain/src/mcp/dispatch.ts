@@ -7,6 +7,7 @@
  * (per MCP spec) instead of a JSON-RPC error envelope. JSON-RPC errors
  * are reserved for protocol-level failures (malformed request etc.).
  */
+import { andSourceScope } from "../core/source-scope.ts";
 import { gatherDiagnostics } from "../core/gather-degraded.ts";
 import { pageBodyWindow } from "../core/page-window.ts";
 import { oversizedResultError } from "../core/result-size.ts";
@@ -27,7 +28,7 @@ import { publicSearchMeta, type SearchMeta } from "../core/search/search-meta.ts
 import { gradeConfidence } from "../core/search/confidence-grade.ts";
 import { listWantedPages, type ListWantedPagesOptions } from "../core/wanted-links.ts";
 import type { Evidence } from "../core/search/evidence.ts";
-import { resolveDateBoundary } from "../core/search/filters.ts";
+import { resolveDateBoundary, validatePageFilters, type PageFilters } from "../core/search/filters.ts";
 import { indexDocument, indexFile } from "../core/indexer.ts";
 import { findBacklinks } from "../core/backlinks.ts";
 import {
@@ -1050,6 +1051,27 @@ function jsonResult(payload: unknown): ToolCallResult {
   };
 }
 
+function searchPageFilters(args: Record<string, unknown>): PageFilters {
+  const filters: PageFilters = {
+    ...(args["types"] !== undefined ? { types: args["types"] as string[] } : {}),
+    ...(typeof args["slug_prefix"] === "string" ? { slugPrefix: args["slug_prefix"] } : {}),
+  };
+  validatePageFilters(filters);
+  return filters;
+}
+
+async function pageTypeNotice(storage: Storage, filters: PageFilters, sources: string[] | undefined, remote: boolean): Promise<Record<string, unknown>> {
+  if (!filters.types?.length) return {};
+  const params: unknown[] = [];
+  const scope = andSourceScope("source_id", sources, params);
+  const rows = await storage.engine().query<{ type: string }>(
+    `SELECT DISTINCT type FROM pages WHERE deleted_at IS NULL${scope}${remote ? " AND slug NOT LIKE 'life/diary/%'" : ""} ORDER BY type`, params,
+  );
+  const available = rows.rows.map(r => r.type).filter(t => !remote || !isDiaryPage(t, ""));
+  const unknown = filters.types.filter(t => !available.includes(t));
+  return unknown.length ? { notice: "unknown_page_types", unknown_types: unknown, available_types: available } : {};
+}
+
 async function callSearch(
   storage: Storage,
   args: Record<string, unknown>,
@@ -1140,6 +1162,9 @@ async function callSearch(
     // inside the resolver instead of silently dropping the bound.
     return resolveDateBoundary(v, name);
   };
+  const pageFilters = searchPageFilters(args);
+  Object.assign(searchOpts, pageFilters);
+  const typeNotice = await pageTypeNotice(storage, pageFilters, readSources, !isOperator);
   const since = dateBound("since");
   const until = dateBound("until");
   if (since) searchOpts.since = since;
@@ -1225,9 +1250,9 @@ async function callSearch(
             "expands the question first; `query` alone inherits the same " +
             "expansion setting and would not change the outcome.",
         };
-    return jsonResult({ ok: true, hits: out, hint, ...metaField });
+    return jsonResult({ ok: true, hits: out, hint, ...metaField, ...typeNotice });
   }
-  return jsonResult({ ok: true, hits: out, ...metaField });
+  return jsonResult({ ok: true, hits: out, ...metaField, ...typeNotice });
 }
 
 /**
@@ -3474,6 +3499,8 @@ async function callQuery(
     toolName: "mcp.query",
     remote: true,
   });
+  const pageFilters = searchPageFilters(args);
+  const typeNotice = await pageTypeNotice(storage, pageFilters, readSources, !isOperator);
   const refine = typeof args["refine"] === "string" ? args["refine"] : "";
   if (refine) {
     const opts: Parameters<typeof queryRefine>[3] = {};
@@ -3481,10 +3508,11 @@ async function callQuery(
     if (typeof args["primary_weight"] === "number") opts.primaryWeight = args["primary_weight"];
     if (typeof args["refine_weight"] === "number") opts.refineWeight = args["refine_weight"];
     if (readSources !== undefined) opts.sourceIds = readSources;
-    opts.search = { ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}) };
+    opts.search = { ...pageFilters, ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}) };
     const hits = await queryRefine(storage, q, refine, opts);
     return jsonResult({
       ok: true,
+      ...typeNotice,
       hits: capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources),
     });
   }
@@ -3494,7 +3522,7 @@ async function callQuery(
     typeof args["offset"] === "number"
       ? Math.max(0, Math.floor(args["offset"] as number))
       : 0;
-  const searchOpts: SearchOptions = { k: k + offset, ...(signal ? { signal } : {}) };
+  const searchOpts: SearchOptions = { ...pageFilters, k: k + offset, ...(signal ? { signal } : {}) };
   if (onCapture) searchOpts.onCapture = onCapture;
   if (readSources !== undefined) searchOpts.sourceIds = readSources;
   // Paid LLM expansion: explicit per-call value wins; omitted follows the
@@ -3541,7 +3569,7 @@ async function callQuery(
   // Diary fence for the non-operator caller (mirrors callSearch).
   const hits = capHitSnippets(fenceDiaryHits(hitsOffset, isOperator), searchSnippetChars(), readSources);
   const metaOut = responseSearchMeta(meta, hits, isOperator);
-  return jsonResult({ ok: true, hits, ...(metaOut ? { meta: metaOut } : {}) });
+  return jsonResult({ ok: true, hits, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}) });
 }
 
 /** The optional `lang` filter of the code graph tools; empty means none. */

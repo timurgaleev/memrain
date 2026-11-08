@@ -12,8 +12,43 @@
  * temporal, never a lexical string compare across the "…T…" vs "… …+00" gap.
  */
 import { OperationError } from "../operation-error.ts";
+import { validateSlugPrefix } from "../pages.ts";
+import { PAGE_MIRROR_PATH_SQL, PAGE_TRUTH_PATH_SQL } from "../page-index.ts";
 
-export interface ChunkFilters {
+export interface PageFilters {
+  types?: readonly string[];
+  slugPrefix?: string;
+}
+
+export function validatePageFilters(f: PageFilters): void {
+  if (f.types !== undefined && (!Array.isArray(f.types) || f.types.length > 20 ||
+      f.types.some(t => typeof t !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(t)))) {
+    throw new OperationError("invalid_params", "types must contain at most 20 lower-case page type names.",
+      "Use names such as person, note or meeting; each name must have at most 64 characters.");
+  }
+  validateSlugPrefix(f.slugPrefix);
+}
+
+/** Match canonical live pages, never a similarly named page in another source. */
+export function pageFilterClauses(params: unknown[], f: PageFilters | undefined): string {
+  if (!f || (!f.types?.length && !f.slugPrefix)) return "";
+  validatePageFilters(f);
+  const where = ["p.deleted_at IS NULL", "p.source_id = d.source_id",
+    `(d.source_path = (${PAGE_MIRROR_PATH_SQL}) OR d.source_path = (${PAGE_TRUTH_PATH_SQL}) OR d.source_path IN (p.slug, p.slug || '.md', p.slug || '.markdown'))`];
+  return ` AND EXISTS (SELECT 1 FROM pages p WHERE ${where.join(" AND ")}${pageRowFilterClauses(params, f)})`;
+}
+
+/** Predicate for an existing pages alias p, including alias candidate lookup. */
+export function pageRowFilterClauses(params: unknown[], f: PageFilters | undefined): string {
+  if (!f) return "";
+  validatePageFilters(f);
+  let sql = "";
+  if (f.types?.length) sql += ` AND p.type = ANY($${params.push([...f.types])}::text[])`;
+  if (f.slugPrefix) sql += ` AND p.slug LIKE $${params.push(f.slugPrefix.replace(/([\\%_])/g, "\\$1") + "%")} ESCAPE '\\'`;
+  return sql;
+}
+
+export interface ChunkFilters extends PageFilters {
   /** chunks.language (e.g. "typescript"). */
   lang?: string;
   /** chunks.symbol_type (e.g. "function"). */
@@ -26,7 +61,7 @@ export interface ChunkFilters {
 
 /** True when at least one filter axis is set. */
 export function hasChunkFilters(f: ChunkFilters | undefined): boolean {
-  return Boolean(f && (f.lang || f.symbolKind || f.since || f.until));
+  return Boolean(f && (f.lang || f.symbolKind || f.since || f.until || f.types?.length || f.slugPrefix));
 }
 
 const RELATIVE_DURATION = /^(\d+)([dwmy])$/;
@@ -90,5 +125,5 @@ export function chunkFilterClauses(params: unknown[], f: ChunkFilters | undefine
     params.push(resolveDateBoundary(f.until, "until"));
     sql += ` AND COALESCE(d.effective_date, d.updated_at) <= $${params.length}::timestamptz`;
   }
-  return sql;
+  return sql + pageFilterClauses(params, f);
 }
