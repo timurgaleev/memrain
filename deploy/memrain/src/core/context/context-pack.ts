@@ -20,6 +20,7 @@
  * pack cannot be used to probe whether a slug exists.
  */
 
+import { packFactText } from "../fact-text.ts";
 import { gatherDiagnostics, type GatherFailure, type OnGatherFailure } from "../gather-degraded.ts";
 import type { Storage } from "../storage.ts";
 import { entityRecall, listFacts, type FactRow } from "../facts.ts";
@@ -210,12 +211,6 @@ export async function selectPackEntities(
     take(s);
   }
   return out;
-}
-
-/** An assistant's claim reads as one, so the caller never takes a suggestion
- *  for something the operator said (mig130 `attributed_to`). */
-function packFactText(f: FactRow): string {
-  return f.attributed_to === "assistant" ? `(assistant said) ${f.fact}` : f.fact;
 }
 
 /** The operator's own claims first; assistant claims after, order otherwise kept. */

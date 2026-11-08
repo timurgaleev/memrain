@@ -20,6 +20,7 @@
 import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { factSourceEligibleSql } from "./quarantine.ts";
+import { packFactText } from "./fact-text.ts";
 
 const DEFAULT_TTL_MS = 30_000;
 const DEFAULT_TOP_K = 10;
@@ -87,22 +88,31 @@ export async function getBrainHotMemoryMeta(
   const nowIso = new Date(now).toISOString();
   const params: unknown[] = [nowIso, MAX_AGE_HOURS, DECAY_HALF_LIFE_HOURS, topK];
   const scope = andSourceScope("source_id", opts.sourceIds, params);
+  const collapseKey = "entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact)";
   const r = await storage.engine().query<{
     id: number | string;
     entity_slug: string;
     fact: string;
+    attributed_to: string | null;
+    collapsed_count: number;
     written_at: string | Date;
     score: number | string;
   }>(
-    `SELECT id, entity_slug, fact, written_at,
+    `WITH eligible AS (
+       SELECT * FROM entity_facts
+        WHERE forgotten_at IS NULL AND ${factSourceEligibleSql()}
+          AND dimension IS NULL
+          AND written_at >= $1::timestamptz - make_interval(hours => $2::int)${scope}
+     ), collapsed AS (
+       SELECT DISTINCT ON (${collapseKey}) *,
+              (count(*) OVER (PARTITION BY ${collapseKey}))::int AS collapsed_count
+         FROM eligible ORDER BY ${collapseKey}, written_at DESC, id DESC
+     )
+     SELECT id, entity_slug, fact, attributed_to, collapsed_count, written_at,
             (confidence * power(0.5,
               GREATEST(0, EXTRACT(EPOCH FROM ($1::timestamptz - written_at)) / 3600.0) / $3
             ))::float8 AS score
-       FROM entity_facts
-      WHERE forgotten_at IS NULL
-        AND ${factSourceEligibleSql()}
-        AND dimension IS NULL
-        AND written_at >= $1::timestamptz - make_interval(hours => $2::int)${scope}
+       FROM collapsed
       ORDER BY score DESC, written_at DESC, id DESC
       LIMIT $4`,
     params,
@@ -117,7 +127,8 @@ export async function getBrainHotMemoryMeta(
       facts: r.rows.map((row) => ({
         id: Number(row.id),
         entity_slug: row.entity_slug,
-        fact: row.fact,
+        fact: packFactText(row),
+        collapsed_count: row.collapsed_count,
         written_at: row.written_at instanceof Date ? row.written_at.toISOString() : row.written_at,
         confidence: Number(Number(row.score).toFixed(3)),
       })),

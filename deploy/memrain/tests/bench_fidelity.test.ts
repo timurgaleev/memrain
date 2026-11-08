@@ -473,6 +473,7 @@ describe("harness", () => {
 
 describe("scoreFidelity arithmetic", () => {
   const row = (over: Partial<FactRow>): FactRow => ({
+    source_id: "default",
     id: 1,
     entity_slug: "people/a",
     fact: "a claim",

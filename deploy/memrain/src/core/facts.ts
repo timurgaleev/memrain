@@ -455,6 +455,9 @@ export async function adoptUnattributedClaim(
 
 export interface FactRow {
   id: number;
+  source_id: string;
+  /** Number of visible copies represented by this row; absent on audit reads. */
+  collapsed_count?: number;
   entity_slug: string;
   fact: string;
   confidence: number;
@@ -1040,8 +1043,15 @@ export async function listFacts(
   // below the confidence-DESC window could be missed.
   const sqlLimit = wantDecay ? DECAY_FETCH_CAP : limit;
   params.push(sqlLimit);
+  const collapseKey = "entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact)";
+  const eligible = `SELECT * FROM entity_facts WHERE ${where.join(" AND ")}`;
+  const readSet = opts.include_forgotten === true ? eligible :
+    `SELECT DISTINCT ON (${collapseKey}) *,
+            (count(*) OVER (PARTITION BY ${collapseKey}))::int AS collapsed_count
+       FROM (${eligible}) eligible
+       ORDER BY ${collapseKey}, written_at DESC, id DESC`;
   const r = await storage.engine().query<FactRow>(
-    `SELECT id, entity_slug, fact, confidence,
+    `SELECT id, source_id, entity_slug, fact, confidence,
             source_slug, source_chunk_id, written_by,
             written_at::text AS written_at,
             kind, notability,
@@ -1049,9 +1059,8 @@ export async function listFacts(
             valid_until::text AS valid_until,
             visibility, superseded_by, consolidated_into,
             context, source_session, attributed_to,
-            forgotten_at::text AS forgotten_at
-       FROM entity_facts
-       WHERE ${where.length > 0 ? where.join(" AND ") : "1=1"}
+            forgotten_at::text AS forgotten_at${opts.include_forgotten === true ? "" : ", collapsed_count"}
+       FROM (${readSet}) facts
        ORDER BY ${order}
        LIMIT $${params.length}`,
     params,
@@ -1135,7 +1144,7 @@ export async function listSupersessions(
       : 50;
   params.push(limit);
   const r = await storage.engine().query<FactRow>(
-    `SELECT id, entity_slug, fact, confidence,
+    `SELECT id, source_id, entity_slug, fact, confidence,
             source_slug, source_chunk_id, written_by,
             written_at::text AS written_at,
             kind, notability,
