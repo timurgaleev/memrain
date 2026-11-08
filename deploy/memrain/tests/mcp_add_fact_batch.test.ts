@@ -68,6 +68,23 @@ async function row(id: number) {
 }
 
 describe("add_fact items", () => {
+  it("marks an entirely failed batch as an error and keeps item errors", async () => {
+    await storage.engine().query("ALTER TABLE entity_facts ADD CONSTRAINT test_rejected_claim CHECK (fact NOT LIKE 'reject%')");
+    const result = await call({ entity_slug: "people/alice", items: [{ fact: "reject one" }, { fact: "reject two" }] });
+    expect(result.isError).toBe(true);
+    expect(body(result)).toMatchObject({ ok: false, error: "write_failed", saved: 0, failed: 2, partial: true,
+      message: "none of the 2 item(s) was saved", items: [{ index: 0, error: { code: "write_failed" } }, { index: 1, error: { code: "write_failed" } }] });
+    expect(await factCount()).toBe(0);
+  });
+
+  it("reports mixed success without hiding the first error or the saved item", async () => {
+    await storage.engine().query("ALTER TABLE entity_facts ADD CONSTRAINT test_rejected_claim CHECK (fact NOT LIKE 'reject%')");
+    const result = await call({ entity_slug: "people/alice", items: [{ fact: "reject one" }, { fact: "keep this" }] });
+    expect(result.isError).toBeFalsy();
+    expect(body(result)).toMatchObject({ ok: true, status: "partial", first_error_code: "write_failed", saved: 1, failed: 1, partial: true });
+    expect(await factCount()).toBe(1);
+  });
+
   it("saves every item, folding in the top-level defaults", async () => {
     const r = await call({
       entity_slug: "people/alice",

@@ -2747,7 +2747,14 @@ async function callAddFact(
     // The dispatch-level fence judged only the top-level slug; every item is
     // held to it before anything is written.
     if (bound) for (const item of items) enforceSlugPrefixFence("add_fact", item, bound);
-    body = { ...(await runAddFactBatch(items, writeOne)) };
+    const batch = await runAddFactBatch(items, writeOne);
+    const firstError = batch.items.find(item => item.error)?.error?.code ?? "write_failed";
+    if (batch.failed === batch.items.length) {
+      return { ...jsonResult({ ok: false, ...batch, partial: true, error: firstError,
+        message: `none of the ${batch.items.length} item(s) was saved`,
+      }), isError: true };
+    }
+    body = { ...batch, ...(batch.failed > 0 ? { status: "partial", first_error_code: firstError } : {}) };
   } else {
     body = { ...(await writeOne(args)) };
   }
