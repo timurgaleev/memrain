@@ -15,7 +15,7 @@
  * Diesel migrations.
  */
 import type { Engine } from "./engine/interface.ts";
-import { isRetryableConnError, isStatementTimeoutError } from "./retry.ts";
+import { isDeadlockError, isRetryableConnError, isStatementTimeoutError } from "./retry.ts";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -237,7 +237,7 @@ function migrationBackoffs(): number[] {
 
 /**
  * Apply one migration's SQL + bookkeeping INSERT in a single transaction, with
- * a 3-attempt retry on a transient statement_timeout (57014) or connection
+ * a 3-attempt retry on a transient statement_timeout (57014), deadlock or connection
  * reset. The whole transaction rolls back on failure, so a retry re-runs it
  * atomically — nothing is half-recorded. A lock_timeout (55P03) stays
  * fail-fast (not retryable): a held lock won't clear by re-waiting. Wraps
@@ -255,7 +255,7 @@ async function applyOneWithRetry(
   let lastBlockers: IdleBlocker[] = [];
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) {
+    if (attempt > 0 && !isDeadlockError(lastErr)) {
       lastBlockers = await getIdleBlockers(engine);
       if (lastBlockers.length > 0) {
         console.warn(
@@ -300,10 +300,10 @@ async function applyOneWithRetry(
       // then errors (non-idempotent DDL, or a duplicate-PK 23505 on the
       // bookkeeping INSERT) — a non-retryable failure that surfaces loudly.
       // The next deploy skips the already-recorded id, so the state is clean.
-      const retryable = isStatementTimeoutError(err) || isRetryableConnError(err);
+      const retryable = isStatementTimeoutError(err) || isRetryableConnError(err) || isDeadlockError(err);
       if (!retryable || attempt === 2) {
         if (retryable) {
-          lastBlockers = await getIdleBlockers(engine);
+          lastBlockers = isDeadlockError(err) ? [] : await getIdleBlockers(engine);
           throw new MigrationRetryExhausted(
             f.id,
             f.name,
