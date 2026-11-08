@@ -284,6 +284,7 @@ function printUsage(): void {
   console.log("  capture [<text>] [--stdin] [--file P] [--slug S] [--type T] [--source ID] [--title T]");
   console.log("                               one-command note capture → page + search mirror");
   console.log("  transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code] [--source ID] [--since ISO|auto] [--no-embed] [--facts --max-cost-usd N] [--dry-run] [--json]");
+  console.log("  transcripts repair-origin <path> [--source ID] [--format auto|codex|claude-code] [--apply] [--json]");
   console.log("  transcripts status [--source ID] [--json]");
   console.log("  transcripts push <path> --url URL --token-file F [--hook-stdin] [--dry-run] [--json]");
   console.log("                               import a ChatGPT / Claude.ai export or Codex / Claude Code session logs");
@@ -1673,6 +1674,7 @@ async function main(argv: readonly string[]): Promise<number> {
       if (flags.has("--no-embed")) opts.noEmbed = true;
       if (flags.has("--facts")) opts.facts = true;
       if (flags.has("--hook-stdin")) opts.hookStdin = true;
+      if (flags.has("--apply")) opts.apply = true;
       if (flags.has("--dry-run")) opts.dryRun = true;
       if (flags.has("--json")) opts.json = true;
       return await runTranscripts(opts);

@@ -98,7 +98,8 @@ export function parseTranscriptExport(
   const result = adapter ? adapter.parse(items) : { sessions: [], skipped: [], skippedMessages: 0 };
   const userTurnsMissing = result.skipped.filter((s) => s.reason === USER_TURNS_MISSING).length;
   const emptySessions = result.skipped.filter((s) => s.reason === EMPTY_SESSION).length;
-  const onlyEmpty = emptySessions > 0 && emptySessions === result.skipped.length;
+  const onlyEmpty = result.skipped.length > 0 && result.skipped.every(s =>
+    s.reason === EMPTY_SESSION || s.reason === "exec rollout" || s.reason === "subagent rollout");
   return {
     sessions: result.sessions,
     diagnostics: {

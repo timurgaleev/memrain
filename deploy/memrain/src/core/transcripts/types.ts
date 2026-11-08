@@ -33,6 +33,7 @@ export interface TranscriptSession {
   /** Epoch ms of the conversation start from the source, or null. */
   startedAt: number | null;
   messages: TranscriptMessage[];
+  origin?: "agent";
 }
 
 /**

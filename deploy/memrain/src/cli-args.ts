@@ -319,7 +319,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   [
     "transcripts",
     new Set([
-      "--dry-run", "--facts", "--format", "--hook-stdin", "--json", "--max-cost-usd", "--no-embed", "--since",
+      "--apply", "--dry-run", "--facts", "--format", "--hook-stdin", "--json", "--max-cost-usd", "--no-embed", "--since",
       "--source", "--token-file", "--url",
     ]),
   ],
@@ -345,7 +345,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
       "connectors", "migrate-engine", "reindex", "skillify", "transcripts",
     ]),
   ],
-  ["--apply", new Set(["eval-prune", "page-retype", "quarantine", "search", "secrets"])],
+  ["--apply", new Set(["eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts"])],
   ["--fix", new Set(["lint"])],
 ]);
 

@@ -953,17 +953,15 @@ function errorClass(e: unknown): string {
  * `writeExtractedFacts`). The conversation-command path decides per turn
  * instead, from the turn's speaker label (`isOwnerSpeaker`).
  */
-async function isOperatorTranscript(storage: Storage, slug: string): Promise<boolean> {
-  if (!slug.startsWith("transcripts/")) return false;
-  try {
-    const r = await storage.engine().query<{ source_id: string }>(
-      `SELECT source_id FROM pages WHERE slug = $1 AND deleted_at IS NULL`,
-      [slug],
-    );
-    return r.rows[0]?.source_id === "default";
-  } catch {
-    return false;
-  }
+async function transcriptAttribution(storage: Storage, slug: string, sourceId: string): Promise<{ firstParty: boolean; agent: boolean }> {
+  if (!slug.startsWith("transcripts/")) return { firstParty: false, agent: false };
+  const r = await storage.engine().query<{ source_id: string; origin: string | null }>(
+    `SELECT source_id, compiled_truth->>'transcript_origin' AS origin
+       FROM pages WHERE slug = $1 AND source_id = $2 AND deleted_at IS NULL`,
+    [slug, sourceId],
+  );
+  const page = r.rows[0];
+  return { firstParty: page?.source_id === "default" && page.origin !== "agent", agent: page?.origin === "agent" };
 }
 
 export async function pageObservationDate(
@@ -1192,10 +1190,14 @@ export async function extractFactsForPage(
       spentUsd: Number(budget.totalSpent().toFixed(6)), absorbed, windowsRun, junkSkipped,
       truncated_chars: Math.max(0, opts.body.length - readThrough) };
   }
-  const w = await writeExtractedFacts(storage, facts, {
+  const attribution = await transcriptAttribution(storage, opts.slug, sourceId);
+  const attributedFacts = attribution.agent
+    ? facts.map(f => ({ ...f, attributed_to: f.attributed_to === "assistant" ? "assistant" as const : "other" as const }))
+    : facts;
+  const w = await writeExtractedFacts(storage, attributedFacts, {
     sourceSlug: opts.slug,
     writtenBy: ON_WRITE_WRITER,
-    firstParty: await isOperatorTranscript(storage, opts.slug),
+    firstParty: attribution.firstParty,
     ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
   });
   return {
