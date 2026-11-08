@@ -7,6 +7,7 @@
  * (per MCP spec) instead of a JSON-RPC error envelope. JSON-RPC errors
  * are reserved for protocol-level failures (malformed request etc.).
  */
+import { gatherDiagnostics } from "../core/gather-degraded.ts";
 import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import type { Storage } from "../core/storage.ts";
@@ -3634,7 +3635,8 @@ async function callVolunteerContext(
   const turns = parseWindow(args["window"]);
   if (!turns.length) return jsonResult({ ok: true, pages: [] });
 
-  const opts: Parameters<typeof volunteerContext>[1] = { window: turns };
+  const diagnostics = gatherDiagnostics();
+  const opts: Parameters<typeof volunteerContext>[1] = { window: turns, onDegraded: diagnostics.note };
   if (typeof args["max_pages"] === "number") opts.maxPages = args["max_pages"];
   if (typeof args["min_confidence"] === "number") opts.minConfidence = args["min_confidence"];
   if (typeof args["prior_context"] === "string" && args["prior_context"])
@@ -3654,7 +3656,7 @@ async function callVolunteerContext(
     volunteerEventRowsFrom(pages, { channel: "op", session_id: sessionId, turn }),
   );
 
-  return jsonResult({ ok: true, pages });
+  return jsonResult({ ok: true, pages, ...diagnostics.fields() });
 }
 
 async function callContextPack(

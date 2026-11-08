@@ -24,6 +24,7 @@
  *     the ambient synopsis.
  */
 
+import type { OnGatherFailure } from "../gather-degraded.ts";
 import type { Engine } from "../engine/interface.ts";
 import type { Storage } from "../storage.ts";
 import { normalizeAlias, resolveAliasUnique } from "../page-aliases.ts";
@@ -72,6 +73,7 @@ export interface ReflexPointer {
 }
 
 export interface ResolvePointersOpts {
+  onDegraded?: OnGatherFailure;
   maxPointers?: number;
   /**
    * Tenant read scope. Every arm (alias index + the two page lookups) filters on
@@ -147,8 +149,12 @@ export async function resolveEntitiesToPointers(
   // single-slug rule and degrades to null on a pre-034 brain. excludeSlug is a
   // sentinel that matches no real page (so nothing is excluded).
   for (const norm of aliasNorms) {
-    const slug = await resolveAliasUnique(storage, norm, "", scope);
-    if (slug) push(slug, "alias", norm);
+    try {
+      const slug = await resolveAliasUnique(storage, norm, "", scope);
+      if (slug) push(slug, "alias", norm);
+    } catch {
+      opts.onDegraded?.("alias_lookup_failed");
+    }
   }
 
   // Arm 2 — exact title OR slug / slug-suffix. A bare "Alice" slugifies to
@@ -170,6 +176,7 @@ export async function resolveEntitiesToPointers(
     );
     rows = r.rows;
   } catch {
+    opts.onDegraded?.("entity_lookup_failed");
     rows = [];
   }
 
@@ -190,7 +197,7 @@ export async function resolveEntitiesToPointers(
       );
       for (const r of extra.rows) rowBySlug.set(r.slug, r);
     } catch {
-      /* alias slug may be stale — ignore */
+      opts.onDegraded?.("alias_lookup_failed");
     }
   }
 

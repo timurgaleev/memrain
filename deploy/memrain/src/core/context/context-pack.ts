@@ -20,6 +20,7 @@
  * pack cannot be used to probe whether a slug exists.
  */
 
+import { gatherDiagnostics, type GatherFailure, type OnGatherFailure } from "../gather-degraded.ts";
 import type { Storage } from "../storage.ts";
 import { entityRecall, listFacts, type FactRow } from "../facts.ts";
 import { validateSlug } from "../pages.ts";
@@ -87,12 +88,14 @@ export interface ContextPackBudget {
 }
 
 export interface ContextPack {
+  gather_degraded?: GatherFailure[];
   cards: PackCard[];
   facts: PackFact[];
   budget: ContextPackBudget;
 }
 
 export interface ContextPackOpts {
+  onDegraded?: OnGatherFailure;
   slugs?: readonly unknown[];
   window?: string;
   maxEntities?: number;
@@ -166,12 +169,14 @@ async function windowEntities(
   window: string | undefined,
   room: number,
   sourceIds: string[] | undefined,
+  onDegraded?: OnGatherFailure,
 ): Promise<string[]> {
   if (room <= 0 || typeof window !== "string" || !window.trim()) return [];
   const candidates = extractCandidatesFromWindow(parseWindow(window));
   if (!candidates.length) return [];
   const pointers = await resolveEntitiesToPointers(storage, candidates, {
     maxPointers: CONTEXT_PACK_MAX_ENTITIES * 2,
+    onDegraded,
     ...(sourceIds !== undefined ? { sourceIds } : {}),
   });
   return pointers
@@ -182,7 +187,7 @@ async function windowEntities(
 /** Explicit slugs first, then window-resolved ones, deduped and capped. */
 export async function selectPackEntities(
   storage: Storage,
-  opts: Pick<ContextPackOpts, "slugs" | "window" | "maxEntities" | "sourceIds">,
+  opts: Pick<ContextPackOpts, "slugs" | "window" | "maxEntities" | "sourceIds" | "onDegraded">,
   isFenced: ((slug: string) => Promise<boolean>) | null = null,
 ): Promise<string[]> {
   const max = clampInt(opts.maxEntities, CONTEXT_PACK_DEFAULT_ENTITIES, 1, CONTEXT_PACK_MAX_ENTITIES);
@@ -198,7 +203,7 @@ export async function selectPackEntities(
   // A missing explicit slug takes a slot too, so fencing it later reveals
   // nothing. A window name that matches nothing never resolves, though, so a
   // fenced window match must not take a slot either.
-  for (const s of await windowEntities(storage, opts.window, max - out.length, opts.sourceIds)) {
+  for (const s of await windowEntities(storage, opts.window, max - out.length, opts.sourceIds, opts.onDegraded)) {
     if (out.length >= max) break;
     if (isFenced && (await isFenced(s))) continue;
     take(s);
@@ -332,7 +337,11 @@ export async function buildContextPack(
   const factsLimit = clampInt(opts.factsLimit, CONTEXT_PACK_DEFAULT_FACTS, 1, CONTEXT_PACK_MAX_FACTS);
 
   const isFenced = fenceOf(opts);
-  const slugs = await selectPackEntities(storage, opts, isFenced);
+  const diagnostics = gatherDiagnostics();
+  const slugs = await selectPackEntities(storage, { ...opts, onDegraded: (reason) => {
+    diagnostics.note(reason);
+    opts.onDegraded?.(reason);
+  } }, isFenced);
   const built: PackCard[] = [];
   for (const slug of slugs) {
     const card = await buildCard(storage, slug, opts, isFenced);
@@ -394,6 +403,7 @@ export async function buildContextPack(
   }
 
   return {
+    ...diagnostics.fields(),
     cards,
     facts,
     budget: {
