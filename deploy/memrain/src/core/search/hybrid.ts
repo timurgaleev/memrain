@@ -20,6 +20,7 @@
  * with existing callers (commands/search.ts, mcp/dispatch.ts).
  * Internal rewiring only.
  */
+import { hitProvenance, type SearchProvenance } from "./hit-provenance.ts";
 import type { Storage } from "../storage.ts";
 import { isOperationError } from "../operation-error.ts";
 import type { SourceKind } from "../sources.ts";
@@ -461,7 +462,7 @@ export interface SearchCaptureInfo {
   expansion: boolean;
 }
 
-export interface SearchHit {
+export interface SearchHit extends Partial<SearchProvenance> {
   chunkId: string;
   documentId: string;
   sourcePath: string;
@@ -598,6 +599,7 @@ async function raceEmbedderAgainstDeadline(
 }
 
 interface HitPayload extends BoostablePayload, ChunkPayloadForRerank {
+  provenance?: SearchProvenance;
   /** Live-model content freshness (documents.updated_at), for recency. */
   updated_at?: string | null;
   /** Document frontmatter (documents.frontmatter), for salience. */
@@ -636,13 +638,17 @@ async function hydrateByIds(
     content: string;
     source_path: string;
     title: string | null;
+    source_id: string | null;
+    effective_date: string | null;
+    updated_at: string | null;
   }>(
     // Visibility filter here too (belt-and-suspenders): a cached query can
     // re-hydrate ids captured before a doc was soft-deleted/archived/
     // quarantined. The column-flip ops bump per-doc generation to invalidate
     // Layer-2, but filtering at hydrate guarantees a hidden doc never surfaces
     // even if an invalidation is ever missed.
-    `SELECT c.id, c.document_id, c.content, d.source_path, d.title
+    `SELECT c.id, c.document_id, c.content, d.source_path, d.title, d.source_id,
+            d.effective_date::text AS effective_date, d.updated_at::text AS updated_at
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
       WHERE c.id = ANY($1::text[])
@@ -659,6 +665,7 @@ async function hydrateByIds(
       continue;
     }
     out.push({
+      ...hitProvenance(row),
       chunkId: row.id,
       documentId: row.document_id,
       sourcePath: row.source_path,
@@ -1230,7 +1237,7 @@ export async function hybridSearch(
             d.frontmatter,
             c.language,
             c.symbol_type,
-            COALESCE(d.effective_date, d.updated_at)::text AS effective_date
+            d.effective_date::text AS effective_date
      FROM chunks c
      JOIN documents d ON d.id = c.document_id
      LEFT JOIN sources s ON s.id = d.source_id
@@ -1258,7 +1265,8 @@ export async function hybridSearch(
         frontmatter: row.frontmatter,
         language: row.language,
         symbol_type: row.symbol_type,
-        effective_date: row.effective_date,
+        effective_date: row.effective_date ?? row.updated_at,
+        provenance: hitProvenance(row),
       },
     });
   }
@@ -1629,6 +1637,7 @@ export async function hybridSearch(
   //     (before the trim) so an injected page can't be trimmed out. A normal
   //     (non-alias) query is a no-op.
   let organic: SearchHit[] = final.map((h) => ({
+    ...h.payload?.provenance,
     chunkId: h.chunkId,
     documentId: h.documentId,
     sourcePath: h.payload?.sourcePath ?? "",

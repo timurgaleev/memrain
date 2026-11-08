@@ -20,6 +20,7 @@
  * re-slices. Default ON; MEMRAIN_ALIAS_HOP=0 disables (folded into the
  * query-cache ranking signature).
  */
+import { hitProvenance } from "./hit-provenance.ts";
 import type { Engine } from "../engine/interface.ts";
 import type { Storage } from "../storage.ts";
 import type { Intent } from "./intent.ts";
@@ -170,8 +171,12 @@ async function fetchPageHeadHit(
     content: string;
     source_path: string;
     title: string | null;
+    source_id: string | null;
+    effective_date: string | null;
+    updated_at: string | null;
   }>(
-    `SELECT c.id, c.document_id, c.content, d.source_path, d.title
+    `SELECT c.id, c.document_id, c.content, d.source_path, d.title, d.source_id,
+            d.effective_date::text AS effective_date, d.updated_at::text AS updated_at
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
       WHERE d.source_path = ANY($1::text[])
@@ -183,6 +188,7 @@ async function fetchPageHeadHit(
   const row = r.rows[0];
   if (!row) return null;
   return {
+    ...hitProvenance(row),
     chunkId: row.id,
     documentId: row.document_id,
     sourcePath: row.source_path,
