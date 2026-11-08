@@ -517,6 +517,7 @@ async function dispatchToolInner(
   // undefined for the operator path and knobless credentials.
   const takesHolders = effectiveTakesHolders(opts.authInfo);
   try {
+    if (req.name === "search" || req.name === "query") opts.signal?.throwIfAborted();
     // Tool-level gates, in order: the fail-closed write gate (a scopeless
     // authenticated principal on a write op, default-OFF unless
     // MEMRAIN_TENANT_FAIL_CLOSED=1), operator-only tools for any authenticated
@@ -755,7 +756,7 @@ async function dispatchToolInner(
         requireOwnWriteSource(req.name, opts.authInfo, writeSource);
         return await callPurgeDeletedPages(storage, args, writeSource);
       case "query":
-        return await callQuery(storage, args, readSources, isOperator, opts.embedQuery);
+        return await callQuery(storage, args, readSources, isOperator, opts.embedQuery, opts.signal);
       case "code_callers":
         return await callCodeCallers(storage, args, readSources, redact);
       case "code_callees":
@@ -3415,6 +3416,7 @@ async function callQuery(
   readSources?: string[],
   isOperator = false,
   embedQuery?: SearchOptions["embedQuery"],
+  signal?: AbortSignal,
 ): Promise<ToolCallResult> {
   const q = args["q"];
   if (typeof q !== "string" || q.length === 0) {
@@ -3435,7 +3437,7 @@ async function callQuery(
     if (typeof args["primary_weight"] === "number") opts.primaryWeight = args["primary_weight"];
     if (typeof args["refine_weight"] === "number") opts.refineWeight = args["refine_weight"];
     if (readSources !== undefined) opts.sourceIds = readSources;
-    if (onCapture) opts.search = { onCapture };
+    opts.search = { ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}) };
     const hits = await queryRefine(storage, q, refine, opts);
     return jsonResult({
       ok: true,
@@ -3448,7 +3450,7 @@ async function callQuery(
     typeof args["offset"] === "number"
       ? Math.max(0, Math.floor(args["offset"] as number))
       : 0;
-  const searchOpts: SearchOptions = { k: k + offset };
+  const searchOpts: SearchOptions = { k: k + offset, ...(signal ? { signal } : {}) };
   if (onCapture) searchOpts.onCapture = onCapture;
   if (readSources !== undefined) searchOpts.sourceIds = readSources;
   // Paid LLM expansion: explicit per-call value wins; omitted follows the

@@ -270,7 +270,7 @@ export function makeMcpHandler(opts: McpHandlerOptions) {
     if (Array.isArray(raw)) {
       const responses = await Promise.all(
         raw.map((r) =>
-          handleSingle(opts.storage, r as JsonRpcRequest, ctx, forbidPublic),
+          handleSingle(opts.storage, r as JsonRpcRequest, ctx, forbidPublic, req.signal),
         ),
       );
       return Response.json(responses);
@@ -280,6 +280,7 @@ export function makeMcpHandler(opts: McpHandlerOptions) {
       raw as JsonRpcRequest,
       ctx,
       forbidPublic,
+      req.signal,
     );
     return Response.json(single);
   };
@@ -302,6 +303,7 @@ async function handleSingle(
   req: JsonRpcRequest,
   ctx: McpRequestContext,
   forbidPublic: (name: string) => boolean,
+  signal?: AbortSignal,
 ): Promise<JsonRpcResponse> {
   const id = req?.id ?? null;
   if (!req || req.jsonrpc !== "2.0" || typeof req.method !== "string") {
@@ -409,6 +411,7 @@ async function handleSingle(
           {
             isPublic: ctx.isPublic,
             authInfo: ctx.authInfo,
+            signal,
             ...(ctx.issuer !== undefined ? { issuer: ctx.issuer } : {}),
           },
         );

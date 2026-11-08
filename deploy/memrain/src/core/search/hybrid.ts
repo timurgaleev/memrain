@@ -685,6 +685,7 @@ export async function hybridSearch(
 ): Promise<SearchHit[]> {
   const opts: SearchOptions =
     typeof optsOrK === "number" ? { k: optsOrK } : optsOrK;
+  opts.signal?.throwIfAborted();
   const trimmed = (query ?? "").trim();
   if (!trimmed) {
     throw new Error("hybridSearch: query must be non-empty");
@@ -813,6 +814,7 @@ export async function hybridSearch(
   const serveCachedRanking = async (cached: CachedQuery): Promise<SearchHit[]> => {
     const cachedIntent = (cached.intent as Intent) ?? "topic";
     const hydrated = await hydrateByIds(engine, cached.resultIds, cachedIntent, opts.sourceIds);
+    opts.signal?.throwIfAborted();
     const hits =
       tokenBudget !== undefined
         ? applyTokenBudget(hydrated, tokenBudget)
@@ -827,7 +829,7 @@ export async function hybridSearch(
     await stampContentFlags(engine, hits);
     if (opts.onCapture) {
       try {
-        await opts.onCapture({
+        void Promise.resolve(opts.onCapture({
           query: trimmed,
           k,
           resultDocIds: hits.map((h) => h.documentId),
@@ -835,7 +837,7 @@ export async function hybridSearch(
           latencyMs: Date.now() - startedAt,
           rerank: rerankWanted,
           expansion: false,
-        });
+        })).catch(() => {});
       } catch {
         // capture failures never surface
       }
@@ -893,6 +895,7 @@ export async function hybridSearch(
       cacheReady = true;
       if (cached) return await serveCachedRanking(cached);
     } catch {
+      opts.signal?.throwIfAborted();
       cacheReady = false; // fall through to a normal search
       cacheErrored = true;
     }
@@ -1000,6 +1003,7 @@ export async function hybridSearch(
           return await serveCachedRanking(sem);
         }
       } catch {
+        opts.signal?.throwIfAborted();
         // semantic cache is a pure optimization — fall through to full search
       }
     }
@@ -1017,6 +1021,7 @@ export async function hybridSearch(
       : Promise.resolve<string[]>([]),
     lexical,
   ]);
+  opts.signal?.throwIfAborted();
   if (vectorResult.status === "rejected") throw vectorResult.reason;
   if (lexicalResult.status === "rejected") throw lexicalResult.reason;
   const [keywordResult, titleResult, relationalResult] = lexicalResult.value;
@@ -1245,6 +1250,7 @@ export async function hybridSearch(
        AND ${visibilityClause("d")}${hydrateSourceFilter}`,
     hydrateParams,
   );
+  opts.signal?.throwIfAborted();
   const byId = new Map(rows.rows.map((r) => [r.id, r]));
 
   let scored: ChunkScore<HitPayload>[] = [];
@@ -1636,6 +1642,7 @@ export async function hybridSearch(
   //     inject it at the head when absent. Runs on the FULL post-rerank list
   //     (before the trim) so an injected page can't be trimmed out. A normal
   //     (non-alias) query is a no-op.
+  opts.signal?.throwIfAborted();
   let organic: SearchHit[] = final.map((h) => ({
     ...h.payload?.provenance,
     chunkId: h.chunkId,
@@ -1664,6 +1671,7 @@ export async function hybridSearch(
   }
 
   // 9. Trim to k (the ranked result, pre-token-budget).
+  opts.signal?.throwIfAborted();
   const ranked: SearchHit[] = organic.slice(0, k);
 
   // 9·explain — stamp per-signal attribution on the FINAL ranked hits (opt-in).
@@ -1692,6 +1700,7 @@ export async function hybridSearch(
   // 9·content_flag — stamp the WARN marker on any flagged page (best-effort,
   //     post-fusion). Pure-additive; never reorders or breaks search.
   await stampContentFlags(engine, ranked);
+  opts.signal?.throwIfAborted();
 
   // 9a. Populate the query cache (fire-and-forget) with the ranked chunk
   //     ids at the clock value read on entry. A clock that advanced mid-
@@ -1738,11 +1747,11 @@ export async function hybridSearch(
   }
 
   // 10. Side-channel: optional capture hook for eval-capture wiring.
-  // Errors here never affect the user-visible result — wrapped in a
-  // try/catch so a failed INSERT can't poison search.
+  // Do not wait for capture I/O; both synchronous throws and rejections are
+  // observational and must not delay or poison the search result.
   if (opts.onCapture) {
     try {
-      await opts.onCapture({
+      void Promise.resolve(opts.onCapture({
         query: trimmed,
         k,
         resultDocIds: hits.map((h) => h.documentId),
@@ -1750,7 +1759,7 @@ export async function hybridSearch(
         latencyMs: Date.now() - startedAt,
         rerank: rerankWanted,
         expansion: intent !== "exact" && expansionEnabled,
-      });
+      })).catch(() => {});
     } catch {
       // Capture failures must not surface; classifier in eval-capture
       // already categorises them for the caller's logging.
