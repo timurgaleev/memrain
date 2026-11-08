@@ -131,6 +131,8 @@ export const OPS_CHECK_NAMES: ReadonlySet<string> = new Set([
   "pat-scopes-recorded",
   "stale-locks",
   "queue-health",
+  "cycle-phase-health",
+  "maintenance-held",
   "schema-version",
   "invalid-indexes",
   "code-grammars",

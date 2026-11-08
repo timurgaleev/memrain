@@ -63,6 +63,7 @@ import {
   checkOutsideContentFences,
 } from "../core/doctor-ops.ts";
 import { checkConnectorHealth } from "../core/connectors/health.ts";
+import { checkCyclePhaseHealth, checkMaintenanceHeld } from "../core/doctor-maintenance.ts";
 import { checkEmbedBacklog } from "../core/doctor-embed.ts";
 import { checkSecretExposure } from "../core/doctor-secrets.ts";
 import {
@@ -335,25 +336,19 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       );
     }
 
-    // 3b. brain health metrics (embed coverage / lag / queue / failed jobs).
-    // Informational by design: a failed job in the last 24h is the only
-    // unambiguous "broken" signal, so that alone gates ok. Coverage / lag /
-    // queue are surfaced in the detail for the operator to judge — a brain can
-    // legitimately run with partial embedding coverage (graph-only sources, a
-    // pending backfill), so the doctor reports it rather than declaring it bad.
+    // Coverage and recent job failures are operational signals. A past refusal
+    // does not make a currently serving source unhealthy.
     try {
       const h = await brainHealthMetrics(storage.raw());
-      checks.push(
-        verdict(
-          "source-health",
-          h.failed_jobs_24h === 0,
-          `embed_coverage=${(h.embed_coverage_pct * 100).toFixed(1)}% ` +
-            `(${h.embedded_chunks}/${h.embeddable_chunks} embeddable` +
-            `${h.code_chunks > 0 ? `, ${h.code_chunks} code graph-only` : ""}) ` +
-            `lag=${h.lag_seconds === null ? "n/a" : `${h.lag_seconds}s`} ` +
-            `queue=${h.queue_depth} failed_24h=${h.failed_jobs_24h}`,
-        ),
-      );
+      checks.push({
+        name: "source-health", ok: true, status: h.failed_jobs_24h > 0 ? "warn" : "ok",
+        detail: `embed_coverage=${(h.embed_coverage_pct * 100).toFixed(1)}% ` +
+          `(${h.embedded_chunks}/${h.embeddable_chunks} embeddable` +
+          `${h.code_chunks > 0 ? `, ${h.code_chunks} code graph-only` : ""}) ` +
+          `lag=${h.lag_seconds === null ? "n/a" : `${h.lag_seconds}s`} ` +
+          `queue=${h.queue_depth} failed_24h=${h.failed_jobs_24h}` +
+          (h.failed_jobs_24h > 0 ? "; inspect failed jobs and their causes before memrain jobs retry <id>" : ""),
+      });
     } catch (e) {
       // Same substrate as `stats` — if this cannot answer, the brain is broken.
       checks.push(
@@ -426,6 +421,8 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
     for (const [name, probe] of [
       ["stale-locks", checkStaleLocks],
       ["queue-health", checkQueueHealth],
+      ["cycle-phase-health", checkCyclePhaseHealth],
+      ["maintenance-held", checkMaintenanceHeld],
       ["runtime-config-overlay", checkRuntimeConfigOverlay],
       ["schema-version", checkSchemaVersion],
       ["embedding-width", checkEmbeddingWidth],

@@ -114,6 +114,7 @@ describe("doctor", () => {
       "connector-health",
       "contradiction-trend",
       "cycle-freshness",
+      "cycle-phase-health",
       "dangling-slug-redirects",
       "document-id-drift",
       "duplicate-pages",
@@ -130,6 +131,7 @@ describe("doctor", () => {
       "legacy-config-dir",
       "legacy-env-names",
       "links-extraction-lag",
+      "maintenance-held",
       "namespace-only-targets",
       "oauth-client-health",
       "oauth-client-hygiene",
@@ -141,6 +143,7 @@ describe("doctor", () => {
       "queue-health",
       "redaction-markers",
       "runtime-config-legacy-rows",
+      "runtime-config-overlay",
       "schema-version",
       "secret-exposure",
       "source-health",
@@ -225,6 +228,8 @@ describe("doctor checks that could not run", () => {
   it("reports every unreadable probe as a warn — and still exits 0", async () => {
     const { parsed, exitCode } = await brokenBrainReport(join(tmp, "hidden-soft"), [
       hideTable("cycle_snapshots"),
+      hideTable("cycle_phase_runs"),
+      hideTable("synth_failures"),
       hideTable("synth_contradiction_runs"),
       hideTable("timeline_events"),
       hideTable("cycle_locks"),
@@ -237,11 +242,13 @@ describe("doctor checks that could not run", () => {
     ]);
     for (const name of [
       "cycle-freshness",
+      "cycle-phase-health",
       "eval-trend",
       "contradiction-trend",
       "chronicle-projection-health",
       "stale-locks",
       "links-extraction-lag",
+      "maintenance-held",
       "duplicate-pages",
     ]) {
       const c = parsed.checks.find((x) => x.name === name)!;
@@ -399,4 +406,41 @@ describe("doctor engine check detail", () => {
       engineCheckDetail({ type: "postgres", url: "postgres://host/db" }),
     ).toBe("engine=postgres");
   });
+});
+
+it("warns about failed jobs without marking source health as failed", async () => {
+  const storage = new Storage({ dbPath });
+  await storage.init();
+  try {
+    await storage.engine().query(`INSERT INTO jobs (id, kind, status, last_error, finished_at)
+      VALUES ('doctor-refused', 'ingest_capture', 'failed', 'unrecoverable: refused: invalid_params', NOW())`);
+  } finally { await storage.close(); }
+  const { parsed } = await report(cfgPath);
+  const check = parsed.checks.find(c => c.name === "source-health")!;
+  expect(check).toMatchObject({ ok: true, status: "warn" });
+  expect(check.detail).toContain("failed_24h=1");
+  expect(check.detail).toContain("memrain jobs retry");
+});
+
+it("reports failed maintenance phases and held model inputs without their content", async () => {
+  const storage = new Storage({ dbPath });
+  await storage.init();
+  try {
+    await storage.engine().query(`INSERT INTO cycle_phase_runs (phase, last_status) VALUES ('extract-atoms', 'fail'), ('lint', 'ok')`);
+    await storage.engine().query(`INSERT INTO synth_failures (doc_id, phase, content_hash, model, attempts, kind, next_eligible_at)
+      VALUES ('private-document', 'atoms', 'private-hash', 'private-model', 3, 'unparseable', NOW() + INTERVAL '1 day')`);
+    await storage.engine().query(`INSERT INTO documents (id, source_path) VALUES ('held-doc', 'notes/held.md')`);
+    await storage.engine().query(`INSERT INTO chunks (id, document_id, chunk_index, content, embed_failures)
+      VALUES ('held-chunk', 'held-doc', 0, 'PRIVATE BODY', 3)`);
+  } finally { await storage.close(); }
+  const { parsed } = await report(cfgPath);
+  const phases = parsed.checks.find(c => c.name === "cycle-phase-health");
+  const held = parsed.checks.find(c => c.name === "maintenance-held");
+  expect(phases).toMatchObject({ ok: true, status: "warn" });
+  expect(phases?.detail).toContain("extract-atoms");
+  expect(held).toMatchObject({ ok: true, status: "warn" });
+  expect(held?.detail).toContain("atoms=1");
+  expect(held?.detail).toContain("chunks=1");
+  expect(JSON.stringify([phases, held])).not.toContain("private-");
+  expect(JSON.stringify([phases, held])).not.toContain("PRIVATE BODY");
 });
