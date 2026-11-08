@@ -112,23 +112,63 @@ export function fenceMarkers(kind: FenceKind, brand: FenceBrand): { begin: strin
   return { begin: `<!--- ${brand}:${kind}:begin -->`, end: `<!--- ${brand}:${kind}:end -->` };
 }
 
-/**
- * Pick the brand of a body's `kind` fence by testing for each brand's begin
- * marker. Returns that brand's markers, `{ brand: "both" }` when begin markers
- * of both brands are present (callers refuse to project or rewrite such a
- * page — an asymmetric match there could wipe derived rows), or `null` when no
- * begin marker is present. Each call site keeps its own matching rule (line
- * trim equality or `indexOf`) with the returned markers.
- */
+interface FenceLocation {
+  brand: FenceBrand;
+  begin: string;
+  end: string;
+  beginLine: number;
+  endLine: number;
+  beginIdx: number;
+  endIdx: number;
+}
+
+/** Markers count only on their own line, outside fenced code examples. */
+export function locateFenceMarkers(
+  body: string,
+  kind: FenceKind,
+  includeOrphanEnd = false,
+): FenceLocation | { brand: "both" } | null {
+  const locations: FenceLocation[] = FENCE_BRANDS.map(brand => ({
+    brand, ...fenceMarkers(kind, brand), beginLine: -1, endLine: -1, beginIdx: -1, endIdx: -1,
+  }));
+  let code: { char: string; length: number } | null = null;
+  let offset = 0;
+  const lines = body.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line.replace(/\r$/, ""));
+    if (code !== null) {
+      if (fence && fence[1]![0] === code.char && fence[1]!.length >= code.length && fence[2]!.trim() === "") {
+        code = null;
+      }
+    } else if (fence && !(fence[1]![0] === "`" && fence[2]!.includes("`"))) {
+      code = { char: fence[1]![0]!, length: fence[1]!.length };
+    } else {
+      const trimmed = line.trim();
+      for (let j = 0; j < locations.length; j++) {
+        const loc = locations[j]!;
+        if (trimmed === loc.begin && loc.beginLine === -1) {
+          locations[j] = { ...loc, beginLine: i, beginIdx: offset + line.indexOf(loc.begin), endLine: -1, endIdx: -1 };
+        } else if (trimmed === loc.end && loc.endLine === -1) {
+          locations[j] = { ...loc, endLine: i, endIdx: offset + line.indexOf(loc.end) };
+        }
+      }
+    }
+    offset += line.length + 1;
+  }
+  const present = locations.filter(loc => loc.beginLine !== -1);
+  if (present.length > 1) return { brand: "both" };
+  return present[0] ?? (includeOrphanEnd ? locations.find(loc => loc.endLine !== -1) : null) ?? null;
+}
+
+/** Mixed brands refuse projection; a quoted marker does not choose a brand. */
 export function fenceBounds(
   body: string,
   kind: FenceKind,
 ): { brand: FenceBrand; begin: string; end: string } | { brand: "both" } | null {
-  const present = FENCE_BRANDS.filter((b) => body.includes(fenceMarkers(kind, b).begin));
-  const brand = present[0];
-  if (brand === undefined) return null;
-  if (present.length > 1) return { brand: "both" };
-  return { brand, ...fenceMarkers(kind, brand) };
+  const loc = locateFenceMarkers(body, kind);
+  if (loc === null || loc.brand === "both") return loc;
+  return { brand: loc.brand, begin: loc.begin, end: loc.end };
 }
 
 /** True when the body carries a `kind` begin marker of any brand. */

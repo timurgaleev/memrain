@@ -46,7 +46,7 @@
  * TAKES_FENCE_MIXED warning, never rewritten).
  */
 
-import { fenceBounds, fenceMarkers, FENCE_BRANDS, type FenceBrand } from "../fence-shared.ts";
+import { locateFenceMarkers, fenceMarkers, FENCE_BRANDS, type FenceBrand } from "../fence-shared.ts";
 
 export type FenceTakeKind = string;
 
@@ -107,18 +107,9 @@ interface TakesFenceSpan {
  * warns TAKES_FENCE_UNBALANCED on it). `"mixed"` when both brands are present.
  */
 function locateTakesFence(body: string): TakesFenceSpan | "mixed" {
-  const bounds = fenceBounds(body, "takes");
+  const bounds = locateFenceMarkers(body, "takes", true);
   if (bounds?.brand === "both") return "mixed";
-  if (bounds !== null) {
-    const beginIdx = body.indexOf(bounds.begin);
-    const endIdx = body.indexOf(bounds.end, beginIdx + bounds.begin.length);
-    return { ...bounds, beginIdx, endIdx };
-  }
-  for (const brand of FENCE_BRANDS) {
-    const m = fenceMarkers("takes", brand);
-    const endIdx = body.indexOf(m.end, m.begin.length - 1);
-    if (endIdx !== -1) return { brand, ...m, beginIdx: -1, endIdx };
-  }
+  if (bounds !== null) return bounds;
   return { brand: "memex", ...fenceMarkers("takes", "memex"), beginIdx: -1, endIdx: -1 };
 }
 
