@@ -20,7 +20,7 @@
  * pack cannot be used to probe whether a slug exists.
  */
 
-import { packFactText } from "../fact-text.ts";
+import { contextFactText, factProvenance } from "./fact-provenance.ts";
 import { gatherDiagnostics, type GatherFailure, type OnGatherFailure } from "../gather-degraded.ts";
 import type { Storage } from "../storage.ts";
 import { entityRecall, listFacts, type FactRow } from "../facts.ts";
@@ -249,6 +249,7 @@ async function buildCard(
   const external = opts.redact ? null : await readExternalTrust(storage.engine(), {
     pages: [r.page.slug, ...newer.map(m => m.slug)], facts: r.facts.map(f => f.id), events: r.timeline.map(e => e.id),
   }, opts.sourceIds);
+  const origins = opts.redact ? new Map() : await factProvenance(storage.engine(), r.facts.map(f => f.id), opts.sourceIds);
   const pageExternal = external?.pages.has(r.page.slug) ?? false;
   return {
     slug,
@@ -258,8 +259,8 @@ async function buildCard(
     facts: speakerOrdered(r.facts).map((f) =>
       opts.redact
         ? { id: f.id, confidence: f.confidence }
-        : { id: f.id, fact: packFactText(f), confidence: f.confidence, ...(external?.facts.has(f.id)
-          ? { fact: frameExternal(packFactText(f)), trust: "external" as const } : {}) },
+        : { id: f.id, fact: contextFactText(f, origins), confidence: f.confidence, ...(external?.facts.has(f.id)
+          ? { fact: frameExternal(contextFactText(f, origins)), trust: "external" as const } : {}) },
     ),
     recent: r.timeline.map((e) =>
       opts.redact ? { date: toDate(e.occurred_at) } : { date: toDate(e.occurred_at), ...(external?.events.has(Number(e.id))
@@ -375,11 +376,12 @@ export async function buildContextPack(
     if (kept.length >= factsLimit || rows.length < limit || limit >= FACT_FETCH_CAP) break;
   }
   const external = opts.redact ? null : await readExternalTrust(storage.engine(), { facts: kept.map(f => f.id) }, opts.sourceIds);
+  const origins = opts.redact ? new Map() : await factProvenance(storage.engine(), kept.map(f => f.id), opts.sourceIds);
   const brainFacts: PackFact[] = speakerOrdered(kept).map((f) =>
     opts.redact
       ? { id: f.id, entity_slug: f.entity_slug, confidence: f.confidence }
-      : { id: f.id, entity_slug: f.entity_slug, fact: packFactText(f), confidence: f.confidence, ...(external?.facts.has(f.id)
-        ? { fact: frameExternal(packFactText(f)), trust: "external" as const } : {}) },
+      : { id: f.id, entity_slug: f.entity_slug, fact: contextFactText(f, origins), confidence: f.confidence, ...(external?.facts.has(f.id)
+        ? { fact: frameExternal(contextFactText(f, origins)), trust: "external" as const } : {}) },
   );
 
   // Charged on what the caller is allowed to see, so the dropped counts say
