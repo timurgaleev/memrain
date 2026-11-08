@@ -137,8 +137,21 @@ describe("runSearchDiagnose", () => {
     expect(report.verdict).toContain("ABSENT");
   });
 
-  it("rejects a missing target/query with usage exit 2", async () => {
-    const code = await runSearchDiagnose({ query: "", target: "x", configPath: cfgPath });
+  it("rejects a missing target with usage exit 2", async () => {
+    const code = await runSearchDiagnose({ query: "x", target: "", configPath: cfgPath });
     expect(code).toBe(2);
   });
+});
+
+it("diagnoses a missing page without a query or an embedding call", async () => {
+  const cap = capture();
+  try {
+    const code = await runSearchDiagnose({ query: "", target: "notes/nonexistent", configPath: cfgPath, json: true,
+      embedQueryFn: async () => { throw new Error("unexpected paid call"); } });
+    expect(code).toBe(0);
+    const result = JSON.parse(cap.lines.join("\n"));
+    expect(result.verdict).toBe("missing");
+    expect(result.hint).toContain("slug");
+    expect(result).not.toHaveProperty("vector");
+  } finally { cap.restore(); }
 });

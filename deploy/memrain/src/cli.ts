@@ -1571,7 +1571,7 @@ async function main(argv: readonly string[]): Promise<number> {
         const target = values.get("--target");
         if (!target) {
           console.error(
-            'memrain search diagnose: --target <slug> is required (usage: search diagnose "<query>" --target <slug>)',
+            'memrain search diagnose: --target <slug> is required (usage: search diagnose ["<query>"] --target <slug>)',
           );
           return 2;
         }

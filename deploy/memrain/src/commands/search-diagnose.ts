@@ -1,5 +1,5 @@
 /**
- * `memrain search diagnose "<query>" --target <slug> [--source <id>] [--json]`
+ * `memrain search diagnose ["<query>"] --target <slug> [--source <id>] [--json]`
  * — arm-by-arm retrieval debugger.
  *
  * Traces WHERE a target page surfaces (or fails to) across the pipeline so an
@@ -23,6 +23,7 @@ import { vectorSearch } from "../core/search/vector.ts";
 import { hybridSearch } from "../core/search/hybrid.ts";
 import { slugCandidatesForPath } from "../core/search/page-slug.ts";
 import { normalizeAlias, resolveAliasCandidates } from "../core/page-aliases.ts";
+import { diagnosePageIndex } from "../core/page-index-state.ts";
 import { embedText } from "../core/embedding.ts";
 
 const PROBE_LIMIT = 50;
@@ -96,15 +97,22 @@ export interface SearchDiagnoseOptions {
 export async function runSearchDiagnose(
   opts: SearchDiagnoseOptions,
 ): Promise<number> {
-  if (!opts.query || !opts.target) {
+  if (!opts.target) {
     console.error(
-      'Usage: memrain search diagnose "<query>" --target <slug> [--source <id>] [--json]',
+      'Usage: memrain search diagnose ["<query>"] --target <slug> [--source <id>] [--json]',
     );
     return 2;
   }
   const storage = new Storage(loadConfig(opts.configPath));
   return withStorage(storage, async () => {
     const engine = storage.engine();
+    if (!opts.query.trim()) {
+      const report = await diagnosePageIndex(engine, opts.target, opts.sourceId);
+      console.log(opts.json ? JSON.stringify(report, null, 2) :
+        `${opts.target}: ${report.verdict} — ${report.hint}\n` + report.sources.map(s =>
+          `  ${s.source_id}: ${s.verdict}, chunks_without_vector=${s.chunks_without_vector}, last_mirror_failure=${s.last_mirror_failure_at ?? "none"}`).join("\n"));
+      return 0;
+    }
     const scope = opts.sourceId ? { sourceIds: [opts.sourceId] } : {};
     // Keyword arm.
     let keyword: LayerProbe;
