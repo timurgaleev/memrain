@@ -10,6 +10,7 @@
 import type { CheckStatus } from "./doctor-categories.ts";
 import type { Engine } from "./engine/interface.ts";
 import { embeddableChunkFragment } from "./embed-skip.ts";
+import { factSourceEligibleSql } from "./quarantine.ts";
 import { embedGapsEnabled } from "./cycle/embed-gaps.ts";
 
 export interface EmbedBacklogCheck {
@@ -46,22 +47,33 @@ export async function checkEmbedBacklog(engine: Engine): Promise<EmbedBacklogChe
        LEFT JOIN embeddings em ON em.chunk_id = c.id
       WHERE ${embeddableChunkFragment("d", "c")}`,
   );
-  const row = r.rows[0];
-  const gaps = Number(row?.gaps ?? 0);
-  const total = Number(row?.total ?? 0);
-  if (gaps === 0) return { ok: true, status: "ok", detail: "every embeddable chunk has a vector" };
-  const ageHours = row?.oldest_age_s === null || row?.oldest_age_s === undefined ? 0 : Number(row.oldest_age_s) / 3600;
-  const threshold = Math.max(EMBED_BACKLOG_MIN, Math.ceil(total * EMBED_BACKLOG_SHARE));
-  const summary = `${gaps} of ${total} embeddable chunk(s) have no vector; oldest waiting ${ageHours.toFixed(1)}h`;
-  if (gaps <= threshold || ageHours <= EMBED_BACKLOG_MAX_AGE_HOURS) {
-    return { ok: true, status: "ok", detail: `${summary} (warns above ${threshold} and ${EMBED_BACKLOG_MAX_AGE_HOURS}h)` };
-  }
+  const facts = await engine.query<BacklogRow>(
+    `SELECT count(*) FILTER (WHERE embedding IS NULL)::int AS gaps,
+            count(*)::int AS total,
+            EXTRACT(EPOCH FROM now() - min(written_at) FILTER (WHERE embedding IS NULL))::float8 AS oldest_age_s
+       FROM entity_facts WHERE forgotten_at IS NULL AND ${factSourceEligibleSql()}`,
+  );
+  const chunks = describeBacklog(r.rows[0], "embeddable chunk(s)");
+  const factBacklog = describeBacklog(facts.rows[0], "eligible live fact(s)");
   const fill = embedGapsEnabled()
-    ? "the cycle's embed-gaps phase is not keeping up — check its tick lines, or raise MEMRAIN_EMBED_GAPS_MAX_PER_CYCLE"
+    ? "check the cycle's embed-gaps phase or MEMRAIN_EMBED_GAPS_MAX_PER_CYCLE"
     : "MEMRAIN_EMBED_GAPS=0 turns the cycle's fill off";
   return {
     ok: true,
-    status: "warn",
-    detail: `${summary}; ${fill}, or run \`memrain embed\``,
+    status: chunks.warn || factBacklog.warn ? "warn" : "ok",
+    detail: `${chunks.detail}; ${factBacklog.detail}` +
+      (chunks.warn ? `; ${fill}, or run \`memrain embed\`` : "") +
+      (factBacklog.warn ? "; inspect or run `memrain cycle --phases embed-facts` within the normal embedding budget" : ""),
+  };
+}
+
+function describeBacklog(row: BacklogRow | undefined, kind: string): { warn: boolean; detail: string } {
+  const gaps = Number(row?.gaps ?? 0);
+  const total = Number(row?.total ?? 0);
+  const ageHours = Number(row?.oldest_age_s ?? 0) / 3600;
+  const threshold = Math.max(EMBED_BACKLOG_MIN, Math.ceil(total * EMBED_BACKLOG_SHARE));
+  return {
+    warn: gaps > threshold && ageHours > EMBED_BACKLOG_MAX_AGE_HOURS,
+    detail: `${gaps} of ${total} ${kind} have no vector; oldest waiting ${ageHours.toFixed(1)}h (warns above ${threshold} and ${EMBED_BACKLOG_MAX_AGE_HOURS}h)`,
   };
 }

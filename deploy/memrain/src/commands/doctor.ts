@@ -115,6 +115,10 @@ interface Check {
   detail?: string;
 }
 
+function probeStaleDetail(ranAt: string): string {
+  return Date.now() - Date.parse(ranAt) > 7 * 86_400_000 ? "; stale: last probe is over 7 days old" : "";
+}
+
 function snapshotCi(detail: Record<string, unknown>, key: string): string {
   const ci = detail[key] as { lo?: unknown; hi?: unknown } | undefined;
   if (!ci || typeof ci.lo !== "number" || typeof ci.hi !== "number") return "";
@@ -605,15 +609,12 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
   if (storage) {
     try {
       const snap = await latestEvalSnapshot(storage.engine());
-      checks.push(
-        verdict(
-          "eval-trend",
-          true,
-          !snap
-            ? "retrieval-quality probe has not run yet (memrain eval-probe / systemd timer)"
-            : evalTrendDetail(snap),
-        ),
-      );
+      const stale = snap ? probeStaleDetail(snap.ran_at) : "";
+      checks.push({ name: "eval-trend", ok: true,
+        status: snap && (snap.status === "error" || stale) ? "warn" : "ok",
+        detail: snap ? evalTrendDetail(snap) + stale
+          : "retrieval-quality probe has not run yet (memrain eval-probe / systemd timer)",
+      });
     } catch (e) {
       checks.push(couldNotCheck("eval-trend", e));
     }
@@ -626,17 +627,15 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
   if (storage) {
     try {
       const run = await latestContradictionRun(storage.engine());
-      checks.push(
-        verdict(
-          "contradiction-trend",
-          true,
-          run
-            ? `last run ${run.ran_at}: rate=${run.found}/${run.judged} ` +
-              `(95% CI ${run.wilson_ci_lower.toFixed(3)}–${run.wilson_ci_upper.toFixed(3)}), ` +
-              `$${run.cost_usd.toFixed(4)}`
-            : "contradiction probe has not run yet (memrain cycle --phases probe-contradictions)",
-        ),
-      );
+      const stale = run ? probeStaleDetail(run.ran_at) : "";
+      checks.push({ name: "contradiction-trend", ok: true,
+        status: run && (run.judge_failed || run.judge_errors > 0 || run.parse_failures > 0 || stale) ? "warn" : "ok",
+        detail: run
+          ? `last run ${run.ran_at}: rate=${run.found}/${run.judged} ` +
+            `(95% CI ${run.wilson_ci_lower.toFixed(3)}–${run.wilson_ci_upper.toFixed(3)}), ` +
+            `$${run.cost_usd.toFixed(4)}; judge_errors=${run.judge_errors}, parse_failures=${run.parse_failures}` + stale
+          : "contradiction probe has not run yet (memrain cycle --phases probe-contradictions)",
+      });
     } catch (e) {
       checks.push(couldNotCheck("contradiction-trend", e));
     }

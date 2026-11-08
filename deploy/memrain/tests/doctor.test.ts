@@ -468,3 +468,30 @@ it("reports suspected JSON encoding and version storage without source text", as
   expect(JSON.stringify([json, versions])).not.toContain("PRIVATE");
   expect(parsed.checks.find(c => c.name === "db-backends")).toMatchObject({ ok: true, status: "ok" });
 });
+
+it("warns on failed or stale quality probes and clears after a fresh successful run", async () => {
+  async function seed(status: string, age: number, judgeFailed: boolean) {
+    const storage = new Storage({ dbPath });
+    await storage.init();
+    try {
+      await storage.engine().query(`DELETE FROM eval_snapshots`);
+      await storage.engine().query(`DELETE FROM synth_contradiction_runs`);
+      await storage.engine().query(`INSERT INTO eval_snapshots (ran_at, status)
+        VALUES (now() - ($1 || ' days')::interval, $2)`, [String(age), status]);
+      await storage.engine().query(`INSERT INTO synth_contradiction_runs (run_id, model_id, prompt_version, ran_at, judge_failed, judge_errors)
+        VALUES ('doctor-trend', 'test-model', '1', now() - ($1 || ' days')::interval, $2, $3)`, [String(age), judgeFailed, judgeFailed ? 2 : 0]);
+    } finally { await storage.close(); }
+  }
+  for (const [status, age, judgeFailed, expected] of [
+    ["error", 0, true, "warn"], ["ok", 8, false, "warn"], ["ok", 0, false, "ok"],
+  ] as const) {
+    await seed(status, age, judgeFailed);
+    const { parsed } = await report(cfgPath);
+    for (const name of ["eval-trend", "contradiction-trend"]) {
+      const check = parsed.checks.find(c => c.name === name)!;
+      expect(check).toMatchObject({ ok: true, status: expected });
+      if (age > 7) expect(check.detail).toContain("stale");
+      if (name === "contradiction-trend" && judgeFailed) expect(check.detail).toContain("judge_errors=2");
+    }
+  }
+});
