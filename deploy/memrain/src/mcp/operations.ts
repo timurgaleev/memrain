@@ -434,6 +434,10 @@ export const OPERATIONS: readonly Operation[] = [
         description:
           "Clear the page's body on purpose. Without it an empty markdown_body over a page that has one is refused; an OMITTED markdown_body keeps the current body.",
       }),
+      allow_shrink: bool({
+        description:
+          "Allow an intentional replacement smaller than half of a body over 32 KiB when the write-precondition policy is enabled. Prefer page_edit for partial changes.",
+      }),
       wait_for_index: bool({
         description:
           "Write the search mirror before returning even when mirrors are queued, so the page is searchable the moment this call returns. Slower.",

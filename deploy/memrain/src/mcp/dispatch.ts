@@ -1602,6 +1602,7 @@ async function callPagePut(
   if (principal !== undefined) input.written_by_principal = principal;
   const policy = writePreconditionPolicy();
   if (policy !== undefined && args["force"] !== true) input.preconditionPolicy = policy;
+  if (args["allow_shrink"] === true) input.allowShrink = true;
   const r = await putPage(storage, input);
   const derived = await afterPageWrite(storage, r, writeSource, isPublic, "page_put", args["wait_for_index"] === true);
   return jsonResult({ ok: true, ...r, ...derived });

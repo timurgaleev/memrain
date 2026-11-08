@@ -118,6 +118,7 @@ const SLUG_RE = new RegExp(
   "u",
 );
 const MAX_SLUG_LEN = 256;
+const LARGE_PAGE_BYTES = 32 * 1024;
 
 /** Static hint for an append whose target page is missing. */
 const CREATE_IT_FIRST = "Create the page with page_put first.";
@@ -153,6 +154,8 @@ export interface PageInput {
    * intent to wipe the page. (An OMITTED body keeps the page's current body.)
    */
   allowEmptyBody?: boolean;
+  /** Permit a deliberate large replacement under the MCP precondition policy. */
+  allowShrink?: boolean;
   /**
    * Append this to the page's CURRENT body instead of replacing it. The body is
    * read under the slug's write lock, so concurrent appends each land after the
@@ -217,6 +220,21 @@ export class PreconditionRequiredError extends OperationError {
 
   override toEnvelope(isPublic: boolean): PublicErrorEnvelope & { current_version: number } {
     return { ...super.toEnvelope(isPublic), current_version: this.currentVersion };
+  }
+}
+
+export class PageShrinkRefusedError extends OperationError {
+  constructor(public readonly storedBytes: number, public readonly contentBytes: number) {
+    super(
+      "page_shrink_refused",
+      `refusing to replace a ${storedBytes}-byte page body with ${contentBytes} bytes`,
+      "Use page_edit or page_append for partial changes, or pass allow_shrink: true to replace the body on purpose.",
+    );
+    this.name = "PageShrinkRefusedError";
+  }
+
+  override toEnvelope(isPublic: boolean): PublicErrorEnvelope & { stored_bytes: number; content_bytes: number } {
+    return { ...super.toEnvelope(isPublic), stored_bytes: this.storedBytes, content_bytes: this.contentBytes };
   }
 }
 
@@ -585,6 +603,18 @@ export async function putPage(
         `refusing to replace the body of '${input.slug}' with an empty one`,
         "Pass allowEmptyBody (allow_empty_body) to clear a page on purpose, or omit markdown_body to keep it.",
       );
+    }
+
+    if (
+      input.preconditionPolicy !== undefined && input.allowShrink !== true &&
+      current?.deleted_at === null && input.markdown_body !== undefined &&
+      edits === undefined && appendContent === undefined
+    ) {
+      const storedBytes = Buffer.byteLength(current.markdown_body, "utf8");
+      const contentBytes = Buffer.byteLength(body, "utf8");
+      if (storedBytes > LARGE_PAGE_BYTES && contentBytes < storedBytes / 2) {
+        throw new PageShrinkRefusedError(storedBytes, contentBytes);
+      }
     }
 
     // Merge/rename fence — layered on top of the plain upsert below.
