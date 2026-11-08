@@ -71,6 +71,7 @@ describe("doctor categorize", () => {
       "queue-health",
       "redaction-markers",
       "runtime-config-legacy-rows",
+      "runtime-config-overlay",
       "schema-version",
       "secret-exposure",
       "source-health",

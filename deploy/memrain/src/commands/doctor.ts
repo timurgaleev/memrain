@@ -47,6 +47,7 @@ import {
   checkCodeGraph,
   checkStaleLocks,
   checkQueueHealth,
+  checkRuntimeConfigOverlay,
   checkSchemaVersion,
   checkEmbeddingWidth,
   checkInvalidIndexes,
@@ -425,6 +426,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
     for (const [name, probe] of [
       ["stale-locks", checkStaleLocks],
       ["queue-health", checkQueueHealth],
+      ["runtime-config-overlay", checkRuntimeConfigOverlay],
       ["schema-version", checkSchemaVersion],
       ["embedding-width", checkEmbeddingWidth],
       ["invalid-indexes", checkInvalidIndexes],

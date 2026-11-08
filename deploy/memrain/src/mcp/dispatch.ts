@@ -230,6 +230,7 @@ import { couldNotCheck, worstStatus } from "../core/doctor-categories.ts";
 import {
   checkStaleLocks,
   checkQueueHealth,
+  checkRuntimeConfigOverlay,
   checkSchemaVersion,
   checkEmbeddingWidth,
   checkInvalidIndexes,
@@ -4650,6 +4651,7 @@ async function callRunDoctor(storage: Storage): Promise<ToolCallResult> {
   for (const [name, probe] of [
     ["stale-locks", checkStaleLocks],
     ["queue-health", checkQueueHealth],
+    ["runtime-config-overlay", checkRuntimeConfigOverlay],
     ["schema-version", checkSchemaVersion],
     ["embedding-width", checkEmbeddingWidth],
     ["invalid-indexes", checkInvalidIndexes],

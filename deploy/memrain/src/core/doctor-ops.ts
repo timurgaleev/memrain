@@ -16,6 +16,7 @@ import { isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
 import { Queue } from "./jobs/queue.ts";
 import { bucketJobErrors } from "./jobs/error-classify.ts";
 import { hasFenceMarker } from "./fence-shared.ts";
+import { runtimeOverlayState } from "./runtime-config.ts";
 import { EXTRACT_WINDOW_CHARS } from "./facts-extract.ts";
 
 export interface OpsCheckResult {
@@ -24,6 +25,11 @@ export interface OpsCheckResult {
   /** Three-state verdict; a `warn` is a real signal that must not gate. */
   status: CheckStatus;
   detail: string;
+}
+
+export async function checkRuntimeConfigOverlay(engine: Engine): Promise<OpsCheckResult> {
+  const state = runtimeOverlayState(engine);
+  return { ok: true, status: state === "unavailable" ? "warn" : "ok", detail: `runtime config overlay: ${state}${state === "unavailable" ? "; DB overrides could not be loaded; inspect connection and SQLSTATE log, then restart" : ""}` };
 }
 
 export async function checkFactsInputWindows(engine: Engine): Promise<OpsCheckResult> {
