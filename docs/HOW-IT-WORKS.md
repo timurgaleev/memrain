@@ -255,6 +255,11 @@ A few that are easy to miss:
   truth (including version snapshots). Operators can inspect the content;
   admin-scoped readers can request it explicitly through `page_get`.
 
+- `list_skills {query, limit}` selects skills by task, matching slug,
+  description and triggers. An exact slug ranks first; ties keep catalog
+  order. With a query it returns up to five skills by default. Without
+  arguments the complete catalog is unchanged. Tool availability in each
+  entry still reflects the caller's grant.
 - `context_pack` builds a "what matters now" pack for the start of a turn:
   entity cards (title, type, top facts, recent events) for the slugs you name or
   the entities a conversation window mentions, then the top facts across your

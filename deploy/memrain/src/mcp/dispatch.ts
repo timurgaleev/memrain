@@ -851,7 +851,7 @@ async function dispatchToolInner(
       case "run_doctor":
         return await callRunDoctor(storage);
       case "list_skills":
-        return callListSkills(callerCanCall(opts));
+        return callListSkills(args, callerCanCall(opts));
       case "get_skill":
         return callGetSkill(args, callerCanCall(opts));
       case "get_recent_transcripts":
@@ -3981,8 +3981,11 @@ async function callExtractFacts(
   return jsonResult({ ok: true, ...result });
 }
 
-function callListSkills(callable: (tool: string) => boolean): ToolCallResult {
-  return jsonResult({ ok: true, ...listSkillCatalog({ callable }) });
+function callListSkills(args: Record<string, unknown>, callable: (tool: string) => boolean): ToolCallResult {
+  return jsonResult({ ok: true, ...listSkillCatalog({ callable,
+    query: typeof args["query"] === "string" ? args["query"] : undefined,
+    limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+  }) });
 }
 
 function callGetSkill(args: Record<string, unknown>, callable: (tool: string) => boolean): ToolCallResult {

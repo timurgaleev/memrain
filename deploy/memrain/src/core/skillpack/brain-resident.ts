@@ -20,6 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OPERATIONS } from "../../mcp/operations.ts";
 import { parseSkillFrontmatter, type SkillFrontmatter } from "./frontmatter.ts";
+import { OperationError } from "../operation-error.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /**
@@ -55,6 +56,8 @@ export interface ListBrainSkillpacksOptions {
 }
 
 export interface SkillCatalogOptions extends ListBrainSkillpacksOptions {
+  query?: string;
+  limit?: number;
   /**
    * Whether this caller may call a tool — the `tools/list` predicate. Omitted
    * = every tool the server has. A tool the server does not have is
@@ -220,6 +223,12 @@ export function listBrainSkillpacks(
  * enumeration and fail-open behaviour as `listBrainSkillpacks`.
  */
 export function listSkillCatalog(opts: SkillCatalogOptions = {}): SkillCatalog {
+  if (opts.query !== undefined && (typeof opts.query !== "string" || opts.query.length > 200)) {
+    throw new OperationError("invalid_params", "list_skills: query must be at most 200 characters");
+  }
+  if (opts.limit !== undefined && (!Number.isInteger(opts.limit) || opts.limit < 1 || opts.limit > 50)) {
+    throw new OperationError("invalid_params", "list_skills: limit must be an integer from 1 to 50");
+  }
   const callable = opts.callable ?? ALL_CALLABLE;
   const skills: SkillCatalogEntry[] = enumerateSkillFiles(opts.skillsDir ?? DEFAULT_SKILLS_DIR).map((e) => {
     const fm = readSkillFrontmatter(e.file);
@@ -235,13 +244,27 @@ export function listSkillCatalog(opts: SkillCatalogOptions = {}): SkillCatalog {
       writes_to: fm?.writes_to ?? [],
     };
   });
+  const selected = selectSkills(skills, opts.query?.trim().toLowerCase(), opts.limit);
   return {
     pack: PACK_NAME,
-    count: skills.length,
+    count: selected.length,
     schema_version: 1,
-    skills,
+    skills: selected,
     instructions: CATALOG_INSTRUCTIONS,
   };
+}
+
+function selectSkills(skills: SkillCatalogEntry[], query: string | undefined, limit?: number): SkillCatalogEntry[] {
+  if (!query) return limit === undefined ? skills : skills.slice(0, limit);
+  const tokens = (s: string) => new Set(s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+  const wanted = tokens(query);
+  return skills.map((skill, index) => {
+    const words = tokens([skill.slug, skill.description, ...skill.triggers].join(" "));
+    const score = [...wanted].filter(t => words.has(t)).length;
+    return { skill, index, score, exact: skill.slug.toLowerCase() === query };
+  }).filter(s => s.exact || s.score > 0)
+    .sort((a, b) => Number(b.exact) - Number(a.exact) || b.score - a.score || a.index - b.index)
+    .slice(0, limit ?? 5).map(s => s.skill);
 }
 
 export interface BrainSkillDetail {

@@ -1386,8 +1386,11 @@ export const OPERATIONS: readonly Operation[] = [
   {
     name: "list_skills",
     description:
-      "Enumerate the brain-resident skillpack this brain ships (the local deploy/skills pack), byte-ordered: each skill's slug, description, `triggers`, declared `tools` split into `usable_tools` (callable by you) and `unavailable_tools`, `mutating`, `requires` and `writes_to`, plus routing `instructions`. Match the task against the triggers, then fetch the skill with get_skill. Read-only; no LLM.",
-    params: {},
+      "Find skills in this brain's local pack by task. With query, rank by slug, description and triggers (exact slug first), returning up to 5 by default. Without arguments, return the full byte-ordered catalog. Each entry includes triggers, tools split into usable_tools/unavailable_tools for your grant, mutating, requires and writes_to. Fetch a match with get_skill. Read-only; no LLM.",
+    params: {
+      query: str({ description: "Task or skill name, at most 200 characters." }),
+      limit: int({ minimum: 1, maximum: 50, description: "Maximum skills; default 5 with query, otherwise all." }),
+    },
   },
   {
     name: "get_skill",
