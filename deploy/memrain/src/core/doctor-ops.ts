@@ -25,6 +25,18 @@ export interface OpsCheckResult {
   detail: string;
 }
 
+export async function checkFactsWithoutEntityPages(engine: Engine): Promise<OpsCheckResult> {
+  const r = await engine.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM entity_facts f
+      WHERE f.forgotten_at IS NULL AND NOT EXISTS (
+        SELECT 1 FROM pages p WHERE p.slug = f.entity_slug AND p.source_id = f.source_id AND p.deleted_at IS NULL
+      )`,
+  );
+  const n = r.rows[0]?.n ?? 0;
+  return { ok: true, status: n ? "warn" : "ok",
+    detail: `${n} live fact(s) without a live entity page in the same source; review entity names before creating pages or superseding facts` };
+}
+
 /**
  * Cycle locks whose TTL has elapsed but whose row is still present — an
  * orphaned holder (a crashed cycle). Reclaimed on the next acquire via the TTL

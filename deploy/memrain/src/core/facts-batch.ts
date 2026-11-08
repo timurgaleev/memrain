@@ -16,6 +16,7 @@ import { OperationError } from "./operation-error.ts";
 import { validateSlug } from "./pages.ts";
 import { isCalendarDate } from "./effective-date.ts";
 import type { AddFactInput } from "./facts.ts";
+import type { EntityResolutionFeedback } from "./entity-resolve.ts";
 
 export const FACT_METADATA_KEYS = ["valid_from", "kind", "notability", "claim_metric", "claim_value", "claim_unit", "claim_period"] as const;
 type FactMetadata = Pick<AddFactInput, typeof FACT_METADATA_KEYS[number]>;
@@ -129,7 +130,7 @@ export function normalizeAddFactItems(args: Record<string, unknown>): Record<str
   });
 }
 
-export interface BatchItemOutcome {
+export interface BatchItemOutcome extends EntityResolutionFeedback {
   index: number;
   id?: number | null;
   inserted?: boolean;
@@ -147,7 +148,7 @@ export interface AddFactBatchResult {
 }
 
 /** The fields of a single-fact result a batch item reports. */
-interface SingleOutcome {
+interface SingleOutcome extends EntityResolutionFeedback {
   id: number | null;
   inserted: boolean;
   withdrawn?: true;
@@ -175,6 +176,9 @@ export async function runAddFactBatch(
         ...(r.withdrawn ? { withdrawn: r.withdrawn } : {}),
         ...(r.replaced !== undefined ? { replaced: r.replaced } : {}),
         ...(r.replace_reason !== undefined ? { replace_reason: r.replace_reason } : {}),
+        ...(r.entity_slug !== undefined ? { entity_slug: r.entity_slug } : {}),
+        ...(r.entity_resolved_from !== undefined ? { entity_resolved_from: r.entity_resolved_from } : {}),
+        ...(r.notice !== undefined ? { notice: r.notice, candidates: r.candidates } : {}),
       });
     } catch (e) {
       // Only an OperationError's message goes back to the caller; anything else

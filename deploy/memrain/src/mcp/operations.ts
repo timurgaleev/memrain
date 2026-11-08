@@ -695,7 +695,7 @@ export const OPERATIONS: readonly Operation[] = [
       claim_period: str(),
       entity_slug: str({
         description:
-          "The entity the fact is about (e.g. `people/alice`). Soft reference — the entity's page need not exist yet. Required unless every `items` entry names its own.",
+          "The entity the fact is about (e.g. `people/alice`). A bare slug resolves to one existing page in your write source and reports entity_resolved_from. Otherwise it stays unchanged with entity_unresolved and up to five candidates. Qualified slugs are soft references; the page need not exist yet. Required unless every items entry names its own.",
       }),
       fact: str({ description: "Short claim, one sentence. Required unless `items` is given." }),
       confidence: num({ minimum: 0, maximum: 1 }),

@@ -111,6 +111,7 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   "duplicate-pages",
   "quarantined-pages",
   "junk-entity-hubs",
+  "facts-without-entity-pages",
   "fence-rows-without-markers",
   "namespace-only-targets",
   "dangling-slug-redirects",

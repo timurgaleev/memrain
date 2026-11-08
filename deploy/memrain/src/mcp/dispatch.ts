@@ -10,6 +10,7 @@
 import { andSourceScope } from "../core/source-scope.ts";
 import { gatherDiagnostics } from "../core/gather-degraded.ts";
 import { pageBodyWindow } from "../core/page-window.ts";
+import { resolveFactEntity, type EntityResolutionFeedback } from "../core/entity-resolve.ts";
 import { oversizedResultError } from "../core/result-size.ts";
 import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
@@ -2764,14 +2765,18 @@ async function addOneFact(
   boundPrefixes: readonly string[] | undefined,
   remote: boolean,
   principal?: string,
-): Promise<Awaited<ReturnType<typeof addFact>> & { replaced?: boolean; replace_reason?: string }> {
+): Promise<Awaited<ReturnType<typeof addFact>> & EntityResolutionFeedback & { replaced?: boolean; replace_reason?: string }> {
   if (typeof args["entity_slug"] !== "string" || args["entity_slug"].length === 0)
     throw new OperationError("invalid_params", "add_fact: `entity_slug` is required", "Pass the entity the fact is about, e.g. `people/alice`.");
   if (typeof args["fact"] !== "string" || args["fact"].length === 0)
     throw new OperationError("invalid_params", "add_fact: `fact` is required", "Pass a short claim, or several in `items`.");
+  const resolution = await resolveFactEntity(storage, args["entity_slug"], {
+    sourceIds: writeSource ? [writeSource] : undefined, remote,
+    ...(boundPrefixes ? { allowed: (slug: string) => slugUnderPrefixes(slug, boundPrefixes) } : {}),
+  });
   const input: Parameters<typeof addFact>[1] = {
     ...factInputMetadata(args),
-    entity_slug: args["entity_slug"],
+    entity_slug: resolution.slug,
     fact: args["fact"],
   };
   if (typeof args["confidence"] === "number")
@@ -2819,7 +2824,7 @@ async function addOneFact(
     input.written_by = fallbackWrittenBy;
   }
   if (principal !== undefined) input.written_by_principal = principal;
-  const r = await addFact(storage, input);
+  const r = { ...await addFact(storage, input), ...resolution.feedback };
   const replaces = args["replaces"];
   if (typeof replaces !== "number") return r;
   // The new fact is already committed; a failed retirement must not hide that.

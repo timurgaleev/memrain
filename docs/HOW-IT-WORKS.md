@@ -239,6 +239,12 @@ A few that are easy to miss:
   these top-level defaults and each item may override them. Metadata is
   validated for the whole batch before any item is written. `valid_from`
   timestamps become UTC dates; attribution and expiry are not caller-settable.
+- A bare `add_fact.entity_slug` resolves to one existing page in the caller's
+  write source and reports `entity_resolved_from`. An unresolved or ambiguous
+  name remains unchanged with `entity_unresolved` and up to five candidates;
+  qualified slugs remain explicit soft references. Doctor's
+  `facts-without-entity-pages` check reports live facts whose entity has no live
+  page in the same source. It does not create pages or rewrite facts.
 - A failed retrieval stage is reported alongside surviving results. `search`
   and `query` expose `meta.degraded`; `think`, `context_pack` and
   `volunteer_context` expose `gather_degraded` when a collector fails. Direct
