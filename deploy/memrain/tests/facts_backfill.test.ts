@@ -190,7 +190,7 @@ describe("zero-yield memo (facts_backfill_scans)", () => {
     expect(m.calls()).toBe(2);
   });
 
-  it("never memoizes an unreadable answer, so it is retried", async () => {
+  it("never memoizes an unreadable answer, and retries after its hold expires", async () => {
     await putPage(storage, { slug: "notes/garbled", type: "note", markdown_body: LONG_BODY });
     const m = countingSonnet(() => "I could not find any structured facts here, sorry.");
 
@@ -200,6 +200,9 @@ describe("zero-yield memo (facts_backfill_scans)", () => {
     expect(await scanRows()).toEqual([]);
 
     const callsAfterFirst = m.calls();
+    await conversationFactsBackfillPhase(storage, { sonnetFn: m.fn });
+    expect(m.calls()).toBe(callsAfterFirst);
+    await storage.engine().query("UPDATE synth_failures SET next_eligible_at = now() - interval '1 second' WHERE phase = 'facts-backfill'");
     await conversationFactsBackfillPhase(storage, { sonnetFn: m.fn });
     expect(m.calls()).toBeGreaterThan(callsAfterFirst);
   });

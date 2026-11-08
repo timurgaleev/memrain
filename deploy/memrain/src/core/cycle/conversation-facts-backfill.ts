@@ -39,7 +39,8 @@ import type { LlmFn } from "../llm/haiku.ts";
 import { filterWorthwhile, worthGateEnabled } from "../synthesis/worth-gate.ts";
 import { phaseFenceCheck } from "./phase-context.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
-import { PAGE_MIRROR_PATH_SQL, notSynthesizedPageSql } from "../page-index.ts";
+import { PAGE_MIRROR_PATH_SQL, notSynthesizedPageSql, pageSourcePath } from "../page-index.ts";
+import { recordSynthFailure, clearSynthFailure } from "../synthesis/synth-failures.ts";
 
 export interface ConversationFactsBackfillOptions {
   /** Cap on pages processed per run. Default 50. */
@@ -125,6 +126,7 @@ export async function conversationFactsBackfillPhase(
 
   const maxPages = opts.maxPages ?? DEFAULT_MAX_PAGES;
   const cap = opts.maxBudgetUsd ?? defaultBudgetUsd();
+  const model = resolveFactsModel(opts.modelId, "facts_extract");
 
   const rows = await storage.engine().query<PageRow>(
     `SELECT p.slug, p.type, p.markdown_body, p.source_id, p.content_hash
@@ -170,9 +172,15 @@ export async function conversationFactsBackfillPhase(
              AND s.content_hash = p.content_hash
              AND s.extractor_version = $4
         )
+        AND NOT EXISTS (
+          SELECT 1 FROM synth_failures f
+           WHERE f.doc_id = ${PAGE_MIRROR_PATH_SQL} AND f.phase = 'facts-backfill'
+             AND f.content_hash = p.content_hash AND f.model = $5
+             AND f.next_eligible_at > now()
+        )
       ORDER BY p.updated_at DESC
       LIMIT $3`,
-    [[...EXTRACTION_ELIGIBLE_TYPES], ON_WRITE_WRITER, maxPages, FACTS_EXTRACT_VERSION],
+    [[...EXTRACTION_ELIGIBLE_TYPES], ON_WRITE_WRITER, maxPages, FACTS_EXTRACT_VERSION, model],
   );
 
   const result: ConversationFactsBackfillResult = { ...empty, ran: true };
@@ -226,11 +234,17 @@ export async function conversationFactsBackfillPhase(
       // for it again. Surface it (the cycle marks the phase `warn`) instead of
       // letting that loop bill silently forever.
       if (r.absorbed === "parse_failure" || r.absorbed === "output_truncated") {
+        await recordSynthFailure(storage.engine(), {
+          docId: pageSourcePath(page.slug, page.source_id), phase: "facts-backfill",
+          contentHash: page.content_hash, model,
+          kind: r.absorbed === "output_truncated" ? "truncated" : "unparseable",
+        });
         result.errors.push({
           slug: page.slug,
           message: `extraction absorbed: ${r.absorbed}`,
         });
       }
+      if (r.absorbed === null) await clearSynthFailure(storage.engine(), pageSourcePath(page.slug, page.source_id), "facts-backfill");
       // Facts that failed to write were never persisted: the page is not
       // empty, so it must stay open for the next run rather than be memoized.
       if (r.factsFailed > 0) {
