@@ -20,6 +20,7 @@
  * same way. `plainto_tsquery` lowercases / strips operators so callers
  * can pass user input verbatim.
  */
+import { scanIdentifierProbe } from "./identifier-probe.ts";
 import type { Engine } from "../engine/interface.ts";
 import { visibilityClause } from "../visibility.ts";
 import { chunkFilterClauses, type ChunkFilters } from "./filters.ts";
@@ -80,6 +81,20 @@ export async function keywordSearchScored(
   opts: KeywordSearchOptions = {},
 ): Promise<KeywordRow[]> {
   return runKeywordQuery(engine, [query], "plainto_tsquery('simple', $1)", limit, opts);
+}
+
+/** The same keyword query, restricted to identifiers when prose makes the full AND too narrow. */
+export async function keywordIdentifierSearch(
+  engine: Engine,
+  query: string,
+  limit: number,
+  opts: KeywordSearchOptions = {},
+): Promise<KeywordRow[]> {
+  const { tokens, hasProse, incomplete } = scanIdentifierProbe(query);
+  if (incomplete) throw new Error("identifier probe limit exceeded");
+  if (tokens.length === 0 || !hasProse) return [];
+  const tsquery = `(${tokens.map((_, i) => `plainto_tsquery('simple', $${i + 1})`).join(" && ")})`;
+  return runKeywordQuery(engine, tokens, tsquery, limit, opts);
 }
 
 /** Lexemes past this many are dropped from the OR retry: a long query already found its AND rows or it is prose. */

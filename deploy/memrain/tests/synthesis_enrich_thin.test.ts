@@ -55,6 +55,23 @@ afterEach(async () => {
 });
 
 describe("enrichThinPhase", () => {
+  it("keeps an operator edit made while the model is generating", async () => {
+    await putPage(storage, { slug: "people/carol", markdown_body: "stub" });
+    await putPage(storage, { slug: "notes/context", markdown_body: "Carol leads the engineering team and owns the deployment process." });
+    await link("people/carol", "notes/context");
+    const r = await enrichThinPhase(storage, {
+      types: ["person"],
+      sonnetFn: async (input) => {
+        await putPage(storage, { slug: "people/carol", markdown_body: "operator edit", written_by: "operator" });
+        return fakeSonnet(JSON.stringify({ markdown: "A generated expansion from [[notes/context]] about Carol." }))(input);
+      },
+    });
+    expect(r.pagesEnriched).toBe(0);
+    expect(r.pagesSkippedChanged).toBe(1);
+    expect(r.errors).toEqual([]);
+    expect((await getPage(storage, "people/carol"))?.markdown_body).toBe("operator edit");
+  });
+
   it("takes no evidence from a neighbour the content gate quarantined", async () => {
     await putPage(storage, { slug: "people/dave", type: "person", title: "Dave", markdown_body: "stub", source_id: "default" });
     await putPage(storage, {

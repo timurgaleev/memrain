@@ -20,13 +20,16 @@
  * with existing callers (commands/search.ts, mcp/dispatch.ts).
  * Internal rewiring only.
  */
+import { hitProvenance, type SearchProvenance } from "./hit-provenance.ts";
 import type { Storage } from "../storage.ts";
 import { isOperationError } from "../operation-error.ts";
 import type { SourceKind } from "../sources.ts";
 import { embedText } from "../embedding.ts";
 import { reciprocalRankFusion } from "../rrf.ts";
+import { isStatementTimeoutError } from "../retry.ts";
+import { DEGRADED_REASONS } from "./search-meta.ts";
 import { vectorSearch } from "./vector.ts";
-import { keywordSearch, keywordSearchRelaxed, keywordSearchScored } from "./keyword.ts";
+import { keywordSearch, keywordSearchRelaxed, keywordSearchScored, keywordIdentifierSearch } from "./keyword.ts";
 import { resolveDateBoundary } from "./filters.ts";
 import { visibilityClause } from "../visibility.ts";
 import { andSourceScope, isNoGrant } from "../source-scope.ts";
@@ -459,7 +462,7 @@ export interface SearchCaptureInfo {
   expansion: boolean;
 }
 
-export interface SearchHit {
+export interface SearchHit extends Partial<SearchProvenance> {
   chunkId: string;
   documentId: string;
   sourcePath: string;
@@ -522,7 +525,7 @@ function isEmbedTimeout(e: unknown, dl: QueryEmbedDeadline): boolean {
 function reportMeta(opts: SearchOptions, meta: SearchMeta): void {
   if (!opts.onMeta) return;
   try {
-    opts.onMeta(meta);
+    opts.onMeta({ ...meta, degraded: DEGRADED_REASONS.filter(reason => meta.degraded.includes(reason)) });
   } catch {
     // The meta channel is observational; a broken listener never fails a search.
   }
@@ -596,6 +599,7 @@ async function raceEmbedderAgainstDeadline(
 }
 
 interface HitPayload extends BoostablePayload, ChunkPayloadForRerank {
+  provenance?: SearchProvenance;
   /** Live-model content freshness (documents.updated_at), for recency. */
   updated_at?: string | null;
   /** Document frontmatter (documents.frontmatter), for salience. */
@@ -634,13 +638,17 @@ async function hydrateByIds(
     content: string;
     source_path: string;
     title: string | null;
+    source_id: string | null;
+    effective_date: string | null;
+    updated_at: string | null;
   }>(
     // Visibility filter here too (belt-and-suspenders): a cached query can
     // re-hydrate ids captured before a doc was soft-deleted/archived/
     // quarantined. The column-flip ops bump per-doc generation to invalidate
     // Layer-2, but filtering at hydrate guarantees a hidden doc never surfaces
     // even if an invalidation is ever missed.
-    `SELECT c.id, c.document_id, c.content, d.source_path, d.title
+    `SELECT c.id, c.document_id, c.content, d.source_path, d.title, d.source_id,
+            d.effective_date::text AS effective_date, d.updated_at::text AS updated_at
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
       WHERE c.id = ANY($1::text[])
@@ -657,6 +665,7 @@ async function hydrateByIds(
       continue;
     }
     out.push({
+      ...hitProvenance(row),
       chunkId: row.id,
       documentId: row.document_id,
       sourcePath: row.source_path,
@@ -676,6 +685,7 @@ export async function hybridSearch(
 ): Promise<SearchHit[]> {
   const opts: SearchOptions =
     typeof optsOrK === "number" ? { k: optsOrK } : optsOrK;
+  opts.signal?.throwIfAborted();
   const trimmed = (query ?? "").trim();
   if (!trimmed) {
     throw new Error("hybridSearch: query must be non-empty");
@@ -804,6 +814,7 @@ export async function hybridSearch(
   const serveCachedRanking = async (cached: CachedQuery): Promise<SearchHit[]> => {
     const cachedIntent = (cached.intent as Intent) ?? "topic";
     const hydrated = await hydrateByIds(engine, cached.resultIds, cachedIntent, opts.sourceIds);
+    opts.signal?.throwIfAborted();
     const hits =
       tokenBudget !== undefined
         ? applyTokenBudget(hydrated, tokenBudget)
@@ -816,9 +827,10 @@ export async function hybridSearch(
     stampDefaultEvidence(hits, trimmed);
     // Same WARN channel on the cache-hit path so the flag is uniform.
     await stampContentFlags(engine, hits);
+    opts.signal?.throwIfAborted();
     if (opts.onCapture) {
       try {
-        await opts.onCapture({
+        void Promise.resolve(opts.onCapture({
           query: trimmed,
           k,
           resultDocIds: hits.map((h) => h.documentId),
@@ -826,7 +838,7 @@ export async function hybridSearch(
           latencyMs: Date.now() - startedAt,
           rerank: rerankWanted,
           expansion: false,
-        });
+        })).catch(() => {});
       } catch {
         // capture failures never surface
       }
@@ -884,6 +896,7 @@ export async function hybridSearch(
       cacheReady = true;
       if (cached) return await serveCachedRanking(cached);
     } catch {
+      opts.signal?.throwIfAborted();
       cacheReady = false; // fall through to a normal search
       cacheErrored = true;
     }
@@ -906,6 +919,46 @@ export async function hybridSearch(
   //    embedding failure is non-fatal.
   let queryVector: number[] | null = null;
   const degraded: DegradedReason[] = [];
+  const failArm = (error: unknown, arm: "keyword" | "vector" | "title" | "expansion" | "identifier"): void => {
+    opts.signal?.throwIfAborted();
+    if (isOperationError(error) && error.code === "budget_exhausted") throw error;
+    const reason = arm === "identifier" ? "keyword_candidates_incomplete" : arm === "keyword"
+      ? isStatementTimeoutError(error) ? "keyword_timeout" : "keyword_arm_failed"
+      : arm === "expansion" ? "expansion_failed" : `${arm}_arm_failed` as DegradedReason;
+    degraded.push(reason);
+  };
+  const keywordArm = async <T>(run: () => Promise<T[]>): Promise<T[]> => {
+    try { return await run(); }
+    catch (error) { failArm(error, "keyword"); return []; }
+  };
+  opts.signal?.throwIfAborted();
+  // Per-page max-pool (opt-in) — make each arm return its best chunk per page.
+  // Auto-disabled for `exact` intent and structural walks, both of which
+  // deliberately want multiple chunks per page (the collapse would fight them).
+  const maxPoolOn = maxPoolRequested && intent !== "exact" && !structural;
+
+  // Curation prefix boost inside the arm SQL: shapes which
+  // rows survive the per-arm LIMIT. Bypassed for temporal queries — freshness
+  // queries must not be steered toward evergreen curated tiers.
+  const armSourceBoost = !temporalQuery;
+
+  // Settle eagerly: no arm rejection is left unobserved while embedding runs.
+  const lexical = Promise.allSettled([
+    (async () => {
+      const keywordOpts = { sourceIds: opts.sourceIds, filters: chunkFilters, maxPool: maxPoolOn, sourceBoost: armSourceBoost };
+      const primary = await keywordArm(() => keywordSearchScored(engine, trimmed, fanout, keywordOpts));
+      const probe = await keywordIdentifierSearch(engine, trimmed, fanout, keywordOpts)
+        .catch(error => { failArm(error, "identifier"); return []; });
+      const primaryIds = new Set(primary.map(row => row.id));
+      return [...primary, ...probe.filter(row => !primaryIds.has(row.id))];
+    })(),
+    titleArmOn ? titleArmChunkIds(engine, trimmed, {
+      onError: error => failArm(error, "title"), sourceIds: opts.sourceIds, limit: fanout,
+    }) : Promise.resolve<string[]>([]),
+    relationalArmOn ? relationalArmChunkIds(storage, trimmed, {
+      ...(opts.sourceIds !== undefined ? { sourceIds: [...opts.sourceIds] } : {}), limit: fanout,
+    }) : Promise.resolve<string[]>([]),
+  ]);
   const deadline = makeQueryEmbedDeadline();
   const dl = opts.signal
     ? { ...deadline, signal: AbortSignal.any([deadline.signal, opts.signal]) }
@@ -919,9 +972,10 @@ export async function hybridSearch(
     // A budget refusal is the operator's policy, not a flaky embedder: degrade
     // quietly on any embed failure EXCEPT that one, which must reach the caller
     // instead of looking like an empty brain.
-    if (isOperationError(e) && e.code === "budget_exhausted") throw e;
-    // The caller is gone: skip the keyword arm and ranking it would never read.
-    if (opts.signal?.aborted) throw e;
+    if ((isOperationError(e) && e.code === "budget_exhausted") || opts.signal?.aborted) {
+      await lexical;
+      throw e;
+    }
     queryVector = null; // keyword-only fallback
     degraded.push(isEmbedTimeout(e, deadline) ? "embed_timeout" : "vector_arm_failed");
   }
@@ -944,24 +998,19 @@ export async function hybridSearch(
           cacheClock,
           semCfg,
         );
-        if (sem) return await serveCachedRanking(sem);
+        if (sem) {
+          await lexical;
+          opts.signal?.throwIfAborted();
+          return await serveCachedRanking(sem);
+        }
       } catch {
+        opts.signal?.throwIfAborted();
         // semantic cache is a pure optimization — fall through to full search
       }
     }
   }
 
-  // Per-page max-pool (opt-in) — make each arm return its best chunk per page.
-  // Auto-disabled for `exact` intent and structural walks, both of which
-  // deliberately want multiple chunks per page (the collapse would fight them).
-  const maxPoolOn = maxPoolRequested && intent !== "exact" && !structural;
-
-  // Curation prefix boost inside the arm SQL: shapes which
-  // rows survive the per-arm LIMIT. Bypassed for temporal queries — freshness
-  // queries must not be steered toward evergreen curated tiers.
-  const armSourceBoost = !temporalQuery;
-
-  const [vectorIds, primaryKeywordRows] = await Promise.all([
+  const [vectorResult, lexicalResult] = await Promise.allSettled([
     queryVector
       ? vectorSearch(engine, queryVector, fanout, {
           sourceIds: opts.sourceIds,
@@ -969,17 +1018,23 @@ export async function hybridSearch(
           maxPool: maxPoolOn,
           sourceBoost: armSourceBoost,
           onCandidatesIncomplete: () => degraded.push("vector_candidates_incomplete"),
-        })
+        }).catch(error => { failArm(error, "vector"); queryVector = null; return []; })
       : Promise.resolve<string[]>([]),
-    keywordSearchScored(engine, trimmed, fanout, {
-      sourceIds: opts.sourceIds,
-      filters: chunkFilters,
-      maxPool: maxPoolOn,
-      sourceBoost: armSourceBoost,
-    }),
+    lexical,
   ]);
+  opts.signal?.throwIfAborted();
+  if (vectorResult.status === "rejected") throw vectorResult.reason;
+  if (lexicalResult.status === "rejected") throw lexicalResult.reason;
+  const [keywordResult, titleResult, relationalResult] = lexicalResult.value;
+  if (keywordResult.status === "rejected") throw keywordResult.reason;
+  if (titleResult.status === "rejected") throw titleResult.reason;
+  if (relationalResult.status === "rejected") throw relationalResult.reason;
+  const vectorIds = vectorResult.value;
+  const primaryKeywordRows = keywordResult.value;
+  const titleIds = titleResult.value;
+  const relationalIds = relationalResult.value;
   const primaryKeywordIds = primaryKeywordRows.map((r) => r.id);
-  if (primaryKeywordIds.length === 0) degraded.push("keyword_zero");
+  if (primaryKeywordIds.length === 0 && !degraded.some(r => r === "keyword_timeout" || r === "keyword_arm_failed" || r === "keyword_candidates_incomplete")) degraded.push("keyword_zero");
 
   // 3. Expansion (default OFF — see SearchOptions.expansion; skipped for
   //    exact intent regardless).
@@ -987,16 +1042,17 @@ export async function hybridSearch(
   // Arm name per list, for the page-fusion vote attribution in explain.
   const listArms: string[] = ["vector", "keyword"];
   if (intent !== "exact" && expansionEnabled) {
-    const variants = await (opts.expandQueryFn ?? expandQuery)(trimmed, { max: 3 });
+    const variants = await (opts.expandQueryFn ?? expandQuery)(trimmed, { max: 3 })
+      .catch(error => { failArm(error, "expansion"); return []; });
     if (variants.length > 0) {
       const extra = await Promise.all(
         variants.map((v) =>
-          keywordSearch(engine, v, fanout, {
+          keywordArm(() => keywordSearch(engine, v, fanout, {
             sourceIds: opts.sourceIds,
             filters: chunkFilters,
             maxPool: maxPoolOn,
             sourceBoost: armSourceBoost,
-          }),
+          })),
         ),
       );
       lists.push(...extra);
@@ -1013,13 +1069,8 @@ export async function hybridSearch(
   //     the ORIGINAL query, never an expansion variant: a page's name is the
   //     user's own word for it. Empty for a query that names nothing, which is
   //     the common case — a pure no-op on the fused result.
-  let titleIds: string[] = [];
   let titleListIdx = -1;
   if (titleArmOn) {
-    titleIds = await titleArmChunkIds(engine, trimmed, {
-      ...(opts.sourceIds ? { sourceIds: opts.sourceIds } : {}),
-      limit: fanout,
-    });
     if (titleIds.length > 0) {
       titleListIdx = lists.length;
       lists.push(titleIds);
@@ -1030,12 +1081,7 @@ export async function hybridSearch(
   // 3b. Relational recall arm (opt-in, default OFF) — a deterministic 4th arm.
   //     Built from the ORIGINAL query (never an expansion variant); empty for
   //     non-relational queries → pure no-op. Fail-open inside the helper.
-  let relationalIds: string[] = [];
   if (relationalArmOn) {
-    relationalIds = await relationalArmChunkIds(storage, trimmed, {
-      ...(opts.sourceIds ? { sourceIds: [...opts.sourceIds] } : {}),
-      limit: fanout,
-    });
     if (relationalIds.length > 0) {
       lists.push(relationalIds);
       listArms.push("relational");
@@ -1057,12 +1103,12 @@ export async function hybridSearch(
     primaryKeywordIds.length < KEYWORD_RELAX_MIN_ROWS
   ) {
     const strict = new Set(primaryKeywordIds);
-    const relaxed = await keywordSearchRelaxed(engine, trimmed, fanout, {
+    const relaxed = await keywordArm(() => keywordSearchRelaxed(engine, trimmed, fanout, {
       sourceIds: opts.sourceIds,
       filters: chunkFilters,
       maxPool: maxPoolOn,
       sourceBoost: armSourceBoost,
-    });
+    }));
     const relaxedIds = relaxed.map((r) => r.id).filter((id) => !strict.has(id));
     if (relaxedIds.length > 0) {
       lists.push(relaxedIds);
@@ -1197,7 +1243,7 @@ export async function hybridSearch(
             d.frontmatter,
             c.language,
             c.symbol_type,
-            COALESCE(d.effective_date, d.updated_at)::text AS effective_date
+            d.effective_date::text AS effective_date
      FROM chunks c
      JOIN documents d ON d.id = c.document_id
      LEFT JOIN sources s ON s.id = d.source_id
@@ -1205,6 +1251,7 @@ export async function hybridSearch(
        AND ${visibilityClause("d")}${hydrateSourceFilter}`,
     hydrateParams,
   );
+  opts.signal?.throwIfAborted();
   const byId = new Map(rows.rows.map((r) => [r.id, r]));
 
   let scored: ChunkScore<HitPayload>[] = [];
@@ -1225,7 +1272,8 @@ export async function hybridSearch(
         frontmatter: row.frontmatter,
         language: row.language,
         symbol_type: row.symbol_type,
-        effective_date: row.effective_date,
+        effective_date: row.effective_date ?? row.updated_at,
+        provenance: hitProvenance(row),
       },
     });
   }
@@ -1595,7 +1643,9 @@ export async function hybridSearch(
   //     inject it at the head when absent. Runs on the FULL post-rerank list
   //     (before the trim) so an injected page can't be trimmed out. A normal
   //     (non-alias) query is a no-op.
+  opts.signal?.throwIfAborted();
   let organic: SearchHit[] = final.map((h) => ({
+    ...h.payload?.provenance,
     chunkId: h.chunkId,
     documentId: h.documentId,
     sourcePath: h.payload?.sourcePath ?? "",
@@ -1622,6 +1672,7 @@ export async function hybridSearch(
   }
 
   // 9. Trim to k (the ranked result, pre-token-budget).
+  opts.signal?.throwIfAborted();
   const ranked: SearchHit[] = organic.slice(0, k);
 
   // 9·explain — stamp per-signal attribution on the FINAL ranked hits (opt-in).
@@ -1650,6 +1701,7 @@ export async function hybridSearch(
   // 9·content_flag — stamp the WARN marker on any flagged page (best-effort,
   //     post-fusion). Pure-additive; never reorders or breaks search.
   await stampContentFlags(engine, ranked);
+  opts.signal?.throwIfAborted();
 
   // 9a. Populate the query cache (fire-and-forget) with the ranked chunk
   //     ids at the clock value read on entry. A clock that advanced mid-
@@ -1696,11 +1748,11 @@ export async function hybridSearch(
   }
 
   // 10. Side-channel: optional capture hook for eval-capture wiring.
-  // Errors here never affect the user-visible result — wrapped in a
-  // try/catch so a failed INSERT can't poison search.
+  // Do not wait for capture I/O; both synchronous throws and rejections are
+  // observational and must not delay or poison the search result.
   if (opts.onCapture) {
     try {
-      await opts.onCapture({
+      void Promise.resolve(opts.onCapture({
         query: trimmed,
         k,
         resultDocIds: hits.map((h) => h.documentId),
@@ -1708,7 +1760,7 @@ export async function hybridSearch(
         latencyMs: Date.now() - startedAt,
         rerank: rerankWanted,
         expansion: intent !== "exact" && expansionEnabled,
-      });
+      })).catch(() => {});
     } catch {
       // Capture failures must not surface; classifier in eval-capture
       // already categorises them for the caller's logging.

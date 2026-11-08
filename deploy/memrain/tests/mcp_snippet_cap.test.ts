@@ -102,7 +102,7 @@ describe("search and query results", () => {
       expect(hit.content.length).toBeLessThanOrEqual(60);
       expect(hit.content.endsWith(" ")).toBe(false);
       expect(hit.truncated).toBe(true);
-      expect(hit.full).toBe(`page_get ${SLUG}`);
+      expect(hit.full).toBe(`page_get ${JSON.stringify({ slug: SLUG, source_id: "default" })}`);
     });
   }
 });

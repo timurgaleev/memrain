@@ -130,11 +130,13 @@ describe("carryForwardFences", () => {
     expect(out).toContain("| second |");
   });
 
-  it("keeps a takes fence whose markers share a line with other text, as the takes parser reads it", () => {
+  it("preserves legacy inline markers as text without treating them as a takes fence", () => {
     const { body } = upsertTakeRow("old\n", { claim: "Ships late.", kind: "take", holder: "brain", weight: 0.6, active: true });
     const variant = body.replace(TAKES_BEGIN, `note: ${TAKES_BEGIN}`).replace(TAKES_END, `${TAKES_END} trailing`);
-    expect(parseTakesFence(variant).takes.map((t) => t.claim)).toEqual(["Ships late."]);
-    expect(parseTakesFence(carryForwardFences(marked(variant), "fresh\n")).takes.map((t) => t.claim)).toEqual(["Ships late."]);
+    expect(parseTakesFence(variant).takes).toEqual([]);
+    const carried = carryForwardFences(marked(variant), "fresh\n");
+    expect(carried).toContain(variant.slice(variant.indexOf("## Takes")));
+    expect(parseTakesFence(carried).takes).toEqual([]);
   });
 
   it("keeps an indented facts fence the facts parser reads", () => {

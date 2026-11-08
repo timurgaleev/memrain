@@ -204,6 +204,20 @@ what its scopes allow.
 
 A few that are easy to miss:
 
+- Search hits include `source_id`, a `date` (YYYY-MM-DD when known), and
+  `date_source` (`effective` or the `updated` fallback). When snippet capping
+  is enabled, the `full` pointer supplies both `slug` and `source_id` to
+  `page_get`; the requested source only narrows your existing read grant.
+- A failed retrieval stage is reported alongside surviving results. `search`
+  and `query` expose `meta.degraded`; `think`, `context_pack` and
+  `volunteer_context` expose `gather_degraded` when a collector fails. Direct
+  database reads return retryable `db_timeout` or `db_busy` errors instead of
+  reporting an empty collection after a transient database failure.
+- Quarantined pages retain their metadata and a verdict. Remote page reads,
+  listings, version history and entity recall withhold their body and compiled
+  truth (including version snapshots). Operators can inspect the content;
+  admin-scoped readers can request it explicitly through `page_get`.
+
 - `context_pack` builds a "what matters now" pack for the start of a turn:
   entity cards (title, type, top facts, recent events) for the slugs you name or
   the entities a conversation window mentions, then the top facts across your

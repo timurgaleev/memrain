@@ -40,6 +40,7 @@ export interface ReflectionsPhaseResult {
   worthSkipped: number;
   spentUsd: number;
   budgetExhausted: boolean;
+  pagesHeld: number;
   errors: string[];
 }
 
@@ -226,6 +227,7 @@ export async function reflectionsPhase(
     worthSkipped: 0,
     spentUsd: 0,
     budgetExhausted: false,
+    pagesHeld: 0,
     errors: [],
   };
 
@@ -314,15 +316,17 @@ export async function reflectionsPhase(
     const sourcesMd = d.evidence.map((s) => `- [[${s}]]`).join("\n");
     const body = `${d.body}\n\n## Sources\n${sourcesMd}\n`;
     try {
-      await putPage(storage, {
+      const pageWrite = await putPage(storage, {
         slug,
         type: "note",
         title: d.title,
         markdown_body: body,
         source_id: sourceId,
         written_by: "reflection",
+        onlyOverwriteWriter: "reflection",
       });
-      written += 1;
+      if (pageWrite.held) base.pagesHeld += 1;
+      else written += 1;
     } catch (e) {
       base.errors.push(`${slug}: ${String(e instanceof Error ? e.message : e)}`);
     }

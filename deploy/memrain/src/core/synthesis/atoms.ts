@@ -77,6 +77,7 @@ export interface ExtractAtomsResult {
   pagesWritten: number;
   /** source_quote values dropped because the note does not contain them. */
   quotesDropped: number;
+  pagesHeld: number;
   errors: string[];
 }
 
@@ -386,6 +387,7 @@ export async function extractAtomsPhase(
     atomsWritten: 0,
     pagesWritten: 0,
     quotesDropped: 0,
+    pagesHeld: 0,
     errors: [],
   };
 
@@ -496,7 +498,7 @@ export async function extractAtomsPhase(
           `\n---\nSource: ${doc.id} (${doc.contentHash16})`,
         ].filter(Boolean);
         try {
-          await putPage(opts.storage, {
+          const pageWrite = await putPage(opts.storage, {
             slug,
             type: "atom",
             allowAdHocType: true,
@@ -504,8 +506,10 @@ export async function extractAtomsPhase(
             markdown_body: bodyParts.join("\n"),
             source_id: doc.sourceId ?? "default",
             written_by: "extract-atoms",
+            onlyOverwriteWriter: "extract-atoms",
           });
-          result.pagesWritten += 1;
+          if (pageWrite.held) result.pagesHeld += 1;
+          else result.pagesWritten += 1;
         } catch (e) {
           result.errors.push(`${doc.id} atom page: ${e instanceof Error ? e.message : String(e)}`);
         }

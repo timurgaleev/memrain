@@ -231,6 +231,7 @@ export async function vectorSearch(
   const ids =
     names.length > 0
       ? await engine.transaction(async (tx) => {
+          await tx.exec("SET TRANSACTION READ ONLY");
           await tx.query(
             "SELECT set_config(name, value, true) FROM unnest($1::text[], $2::text[]) AS s(name, value)",
             [names, names.map((n) => settings[n])],

@@ -67,6 +67,7 @@ export interface ChronicleExtractResult {
   slug: string;
   status: "extracted" | "no_events" | "skipped";
   events_written: number;
+  pagesHeld?: number;
   /** On `no_events` after proposals were made: the dominant drop reason when
    *  every proposed event was refused by the date screen. */
   reason?: string;
@@ -337,6 +338,7 @@ export async function runChronicleExtract(
   }
 
   let written = 0;
+  let pagesHeld = 0;
   // Cap per page AFTER the barrier: the whole batch had to validate, but only
   // the first N are written (a bound on fan-out from one page).
   for (const ev of kept.slice(0, MAX_EVENTS_PER_PAGE)) {
@@ -352,8 +354,10 @@ export async function runChronicleExtract(
     const occurredAt = new Date(when).toISOString();
     const hash = eventHash8(rawWho, ev.what, opts.slug, sourceId);
     const eventSlug = `life/events/${day}-${hash}`;
-    await putPage(storage, {
+    const pageWrite = await putPage(storage, {
       slug: eventSlug,
+      written_by: "life-chronicle",
+      onlyOverwriteWriter: "life-chronicle",
       type: "event",
       title: ev.what.slice(0, 120),
       compiled_truth: {
@@ -367,6 +371,10 @@ export async function runChronicleExtract(
       markdown_body: `${ev.what} — see [[${opts.slug}]].`,
       source_id: sourceId,
     });
+    if (pageWrite.held) {
+      pagesHeld += 1;
+      continue;
+    }
     await upsertEventProjection(storage, {
       depthSlug: opts.slug,
       eventSlug,
@@ -377,7 +385,7 @@ export async function runChronicleExtract(
     });
     written++;
   }
-  return { slug: opts.slug, status: "extracted", events_written: written, ...droppedField };
+  return { slug: opts.slug, status: "extracted", events_written: written, pagesHeld, ...droppedField };
 }
 
 const JUDGE_SYSTEM = [

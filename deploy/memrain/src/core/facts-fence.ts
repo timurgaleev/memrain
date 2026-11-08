@@ -36,7 +36,7 @@ import {
   stripStrikethrough,
   parseStringCell,
   escapeFenceCell,
-  fenceBounds,
+  locateFenceMarkers,
   fenceMarkers,
   FENCE_BRANDS,
   type FenceBrand,
@@ -290,15 +290,15 @@ function cellAt(cells: readonly string[], idx: number | undefined): string | und
  * `[]` plus a warning: neither fence is authoritative over the other.
  */
 export function parseFactsFence(markdown: string, warnings?: string[]): ParsedFact[] {
-  const bounds = fenceBounds(markdown, "facts");
+  const bounds = locateFenceMarkers(markdown, "facts");
   if (bounds === null) return [];
   if (bounds.brand === "both") {
     warnings?.push("FACTS_FENCE_MIXED: both memrain: and memex: facts fences present");
     return [];
   }
   const lines = markdown.split(/\r?\n/);
-  const begin = lines.findIndex((l) => l.trim() === bounds.begin);
-  const end = lines.findIndex((l) => l.trim() === bounds.end);
+  const begin = bounds.beginLine;
+  const end = bounds.endLine;
   if (begin === -1 || end === -1 || end <= begin) return [];
 
   // First pass: locate the header row (the first row carrying a `claim` column)

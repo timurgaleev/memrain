@@ -6,6 +6,46 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-11-08
+
+### Added
+- Search hits carry their owning source and content date, with an explicit
+  updated-date fallback. Capped page snippets include source-qualified
+  `page_get` arguments that stay within the caller's read grant.
+- Partial synthesis and context results report `gather_degraded` stage codes.
+  Transient database failures return retryable `db_timeout` or `db_busy`
+  errors instead of successful empty lists.
+
+### Fixed
+- Synthesis and chronicle mirrors preserve pages edited or deleted by another
+  writer. Thin-page enrichment skips a page changed after it was read.
+  Legacy chronicle pages without a writer stamp are held for inspection.
+- Unchanged facts retain their IDs, timestamps and derived metadata when
+  surrounding prose changes. Reconciliation rechecks the page under its write
+  lock. Quoted fence markers and markers inside fenced code blocks do not
+  become structural delimiters.
+- Re-putting an unchanged take keeps its recorded resolution. Forgetting a
+  superseded or consolidated claim still records a withdrawal and removes
+  live duplicates. Entity merges retain fence and ontology collisions as
+  supersession tombstones.
+- Concepts skip deleted pages and unchanged member groups. Migration 145 adds
+  the member hash; migration 144 makes a removed supersession target clear
+  its reference rather than block fact replacement.
+- Page rename moves raw payloads and retains the newest payload on a legacy
+  destination collision. Vanished-row writes report conflicts, and page
+  purge and migration application retry transaction deadlocks.
+- Identifier questions retrieve numbered items even when the surrounding
+  question words are absent. Lexical retrieval overlaps query embedding;
+  failed search arms preserve surviving results and report degradation.
+  Identifier probing is bounded to 8,192 query characters, 16 identifiers
+  and 256 characters per identifier; excess input skips the probe and reports
+  incomplete keyword candidates.
+- Cancelled searches stop before downstream work, and eval capture no longer
+  delays search responses. Entity pointers prefer canonical entity pages for
+  the same candidate and source; capped structural reads have stable ordering.
+- Page lists, version histories and entity recall apply the same quarantine
+  content withholding as page_get, with one batched source-scoped lookup.
+
 ## [1.11.0] — 2026-11-07
 
 ### Action needed

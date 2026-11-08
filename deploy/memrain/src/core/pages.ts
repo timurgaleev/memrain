@@ -161,6 +161,8 @@ export interface PageInput {
   appendContent?: string;
   /** Caller identifier for the audit trail. */
   written_by?: string;
+  /** Internal mirrors may replace only their own latest version. */
+  onlyOverwriteWriter?: string;
   /** Allow a type that isn't in KNOWN_PAGE_TYPES. Default false. */
   allowAdHocType?: boolean;
   /**
@@ -283,6 +285,7 @@ export interface PageRow {
 }
 
 export interface PutResult {
+  held?: "authored_edit";
   slug: string;
   /** New version number assigned to this write (>=1). */
   version_n: number;
@@ -302,6 +305,7 @@ export interface PutResult {
 
 export interface PageVersionRow {
   slug: string;
+  source_id: string | null;
   version_n: number;
   hash_prev: string | null;
   hash_new: string;
@@ -507,6 +511,18 @@ export async function putPage(
     checkExpectedVersion(input.slug, Number(existing.rows[0]?.version_n ?? 0), input.expectedVersion);
 
     const current = existing.rows[0];
+    if (input.onlyOverwriteWriter !== undefined && current !== undefined) {
+      const latest = await tx.query<{ written_by: string | null }>(
+        "SELECT written_by FROM page_versions WHERE slug = $1 ORDER BY version_n DESC LIMIT 1",
+        [input.slug],
+      );
+      if (latest.rows[0]?.written_by !== input.onlyOverwriteWriter) {
+        return {
+          slug: input.slug, version_n: Number(current.version_n), content_hash: current.content_hash,
+          changed: false, created: false, held: "authored_edit",
+        };
+      }
+    }
     if (
       input.preconditionPolicy !== undefined &&
       input.expectedVersion === undefined &&
@@ -681,12 +697,9 @@ export async function putPage(
     }
 
     const nextVersion = prev.version_n + 1;
-    // `deleted_at = NULL` is unconditional.
-    // The tradeoff is deliberate: any later write to the slug — a
-    // synthesis phase, an importer — undoes an operator's `page_delete` and
-    // brings the page back in place. A delete that must stick needs the slug
-    // to stop being written, or a purge.
-    await tx.query(
+    // An explicit re-put restores the page; guarded mirrors have already
+    // refused a deletion or edit by another writer above.
+    const updated = await tx.query(
       `UPDATE pages
          SET type = $2,
              title = $3,
@@ -695,9 +708,12 @@ export async function putPage(
              content_hash = $6,
              updated_at = NOW(),
              deleted_at = NULL
-       WHERE slug = $1`,
+       WHERE slug = $1 RETURNING slug`,
       [input.slug, type, title, truthJson, body, hashNew],
     );
+    if (updated.rows.length !== 1) {
+      throw new OperationError("conflict", `page '${input.slug}' vanished during the write`, "Retry the write.");
+    }
     await tx.query(
       `INSERT INTO page_versions
          (slug, version_n, hash_prev, hash_new,
@@ -976,7 +992,7 @@ export async function pageVersions(
   const params: unknown[] = [slug, cap];
   const sourceFilter = andSourceScope("source_id", sourceIds, params);
   const r = await storage.engine().query<PageVersionRow>(
-    `SELECT slug, version_n, hash_prev, hash_new,
+    `SELECT slug, source_id, version_n, hash_prev, hash_new,
             body_snapshot, compiled_truth_snapshot,
             written_by, written_at::text AS written_at${opts.withPrincipal === true ? ", written_by_principal" : ""}
        FROM page_versions
@@ -1038,11 +1054,14 @@ export async function deletePage(
       return { slug, already_deleted: true };
     }
     const ts = new Date().toISOString();
-    await tx.query(
+    const updated = await tx.query(
       `UPDATE pages SET deleted_at = NOW(), updated_at = NOW()
-        WHERE slug = $1${sourceFilter}`,
+        WHERE slug = $1${sourceFilter} RETURNING slug`,
       params,
     );
+    if (updated.rows.length !== 1) {
+      throw new OperationError("conflict", `page '${slug}' vanished during the write`, "Retry the write.");
+    }
     // Append a tombstone version so the history shows the deletion event.
     const nextN = await tx.query<{ n: number }>(
       `SELECT COALESCE(MAX(version_n), 0)::int + 1 AS n
@@ -1114,10 +1133,13 @@ export async function restorePage(
     if (r.rows.length === 0 || r.rows[0]!.deleted_at === null) {
       return { slug, restored: false };
     }
-    await tx.query(
-      `UPDATE pages SET deleted_at = NULL, updated_at = NOW() WHERE slug = $1${sourceFilter}`,
+    const updated = await tx.query(
+      `UPDATE pages SET deleted_at = NULL, updated_at = NOW() WHERE slug = $1${sourceFilter} RETURNING slug`,
       params,
     );
+    if (updated.rows.length !== 1) {
+      throw new OperationError("conflict", `page '${slug}' vanished during the write`, "Retry the write.");
+    }
     const nextN = await tx.query<{ n: number }>(
       `SELECT COALESCE(MAX(version_n), 0)::int + 1 AS n
          FROM page_versions WHERE slug = $1`,
@@ -1390,6 +1412,20 @@ export async function renamePage(
     );
 
     // Non-FK data tables keyed by the slug.
+    await move(
+      "raw_data_replaced",
+      `DELETE FROM raw_data r WHERE r.slug IN ($1, $2) AND EXISTS (
+         SELECT 1 FROM raw_data o WHERE o.slug IN ($1, $2)
+           AND o.slug <> r.slug AND o.source = r.source
+           AND (o.created_at, o.id) > (r.created_at, r.id)
+       ) RETURNING 1 AS one`,
+      [fromSlug, toSlug],
+    );
+    await move(
+      "raw_data",
+      `UPDATE raw_data SET slug = $2 WHERE slug = $1 RETURNING 1 AS one`,
+      [fromSlug, toSlug],
+    );
     await move(
       "tags",
       `UPDATE tags SET slug = $2 WHERE slug = $1 RETURNING 1 AS one`,

@@ -7,6 +7,7 @@
  * (per MCP spec) instead of a JSON-RPC error envelope. JSON-RPC errors
  * are reserved for protocol-level failures (malformed request etc.).
  */
+import { gatherDiagnostics } from "../core/gather-degraded.ts";
 import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import type { Storage } from "../core/storage.ts";
@@ -84,6 +85,7 @@ import {
   removePageFromSearch,
   isPageSourcePath,
 } from "../core/page-index.ts";
+import { applyQuarantineVisibility, quarantineContent, redactQuarantinePage } from "./quarantine-read.ts";
 import { type QuarantineVerdict, readQuarantineVerdict } from "../core/quarantine.ts";
 import { outputRedactionEnabled, redactToolResult } from "../core/output-redaction.ts";
 import { capHitSnippets, searchSnippetChars } from "../core/search/snippet-cap.ts";
@@ -252,6 +254,7 @@ import {
   publicReadBodiesAllowed,
   publicSafeErrorMessage,
 } from "../core/public_redaction.ts";
+import { databaseOperationError } from "../core/database-error.ts";
 import { OperationError, PageNotFoundError, isOperationError } from "../core/operation-error.ts";
 import { suggestSlugs } from "../core/slug-suggest.ts";
 import { getBrainHotMemoryMeta, invalidateHotMemoryMeta } from "../core/hot-memory-meta.ts";
@@ -517,6 +520,7 @@ async function dispatchToolInner(
   // undefined for the operator path and knobless credentials.
   const takesHolders = effectiveTakesHolders(opts.authInfo);
   try {
+    if (req.name === "search" || req.name === "query") opts.signal?.throwIfAborted();
     // Tool-level gates, in order: the fail-closed write gate (a scopeless
     // authenticated principal on a write op, default-OFF unless
     // MEMRAIN_TENANT_FAIL_CLOSED=1), operator-only tools for any authenticated
@@ -755,7 +759,7 @@ async function dispatchToolInner(
         requireOwnWriteSource(req.name, opts.authInfo, writeSource);
         return await callPurgeDeletedPages(storage, args, writeSource);
       case "query":
-        return await callQuery(storage, args, readSources, isOperator, opts.embedQuery);
+        return await callQuery(storage, args, readSources, isOperator, opts.embedQuery, opts.signal);
       case "code_callers":
         return await callCodeCallers(storage, args, readSources, redact);
       case "code_callees":
@@ -884,6 +888,8 @@ async function dispatchToolInner(
     if (isOperationError(e)) {
       return errResult(JSON.stringify(e.toEnvelope(opts.isPublic ?? false)));
     }
+    const databaseError = databaseOperationError(e);
+    if (databaseError) return errResult(JSON.stringify(databaseError.toEnvelope(opts.isPublic ?? false)));
     // A raw exception (Postgres schema, DSN host, stack internals) must NOT
     // leak across the public boundary; fully redact it there, log server-side.
     return errResult(publicSafeErrorMessage(e, opts.isPublic ?? false));
@@ -2171,7 +2177,10 @@ async function callPageGet(
   if (typeof args["slug"] !== "string") {
     return errResult("page_get: `slug` is required");
   }
-  const scopeIds = readSources;
+  const requestedSource = args["source_id"];
+  const scopeIds = typeof requestedSource === "string"
+    ? readSources === undefined || readSources.includes(requestedSource) ? [requestedSource] : []
+    : readSources;
   const fuzzy = args["fuzzy"] === true;
   const includeDeleted = args["include_deleted"] === true && !redact;
   const getOpts = { withVersion: true, ...(includeDeleted ? { includeDeleted: true } : {}) };
@@ -2229,11 +2238,7 @@ async function callPageGet(
   const quarantined = await readQuarantineVerdict(storage.engine(), page.slug, page.source_id);
   const withheld =
     quarantined !== null && remote && !(args["include_quarantined"] === true && isAdmin);
-  let out: Record<string, unknown> = row as unknown as Record<string, unknown>;
-  if (withheld) {
-    const { markdown_body: _body, compiled_truth: _truth, ...meta } = row;
-    out = meta;
-  }
+  const out = quarantineContent(row as unknown as Record<string, unknown>, withheld);
   return jsonResult({
     ok: true,
     page: redact ? redactBody(out) : out,
@@ -2270,9 +2275,8 @@ async function callPageList(
   let pages = await listPages(storage, opts);
   // Diary fence: a non-operator caller never sees diary pages in the listing.
   if (remote) pages = pages.filter((p) => !isDiaryPage(p.type, p.slug));
-  const out = redact
-    ? pages.map((p) => redactBody(p as unknown as Record<string, unknown>))
-    : pages;
+  const visible = await applyQuarantineVisibility(storage.engine(), pages, remote);
+  const out = redact ? visible.map(redactQuarantinePage) : visible;
   return jsonResult({ ok: true, pages: out });
 }
 
@@ -2298,9 +2302,8 @@ async function callPageVersions(
   const versions = await pageVersions(storage, args["slug"], limit, sourceIds, { withPrincipal });
   // Version rows carry body snapshots; redact each through the same
   // page allowlist so public callers see metadata only.
-  const out = redact
-    ? versions.map((v) => redactBody(v as unknown as Record<string, unknown>))
-    : versions;
+  const visible = await applyQuarantineVisibility(storage.engine(), versions, remote);
+  const out = redact ? visible.map(redactQuarantinePage) : visible;
   return jsonResult({ ok: true, versions: out });
 }
 
@@ -2925,7 +2928,10 @@ async function callEntityRecall(
   // reads entity_facts too, so without this a non-operator caller could read a
   // private fact through the aggregator that entity_facts refuses to show it.
   if (remote) opts.visibility = ["world"];
-  const r = await entityRecall(storage, args["slug"], opts);
+  const recalled = await entityRecall(storage, args["slug"], opts);
+  const r = { ...recalled, page: recalled.page
+    ? (await applyQuarantineVisibility(storage.engine(), [recalled.page], remote))[0]!
+    : null };
   // `redact_body` only strips the page body; the facts + timeline arrays
   // carry note-derived `fact`/`event` text and must be redacted on public
   // ingress too (mirrors callEntityFacts / callEntityTimeline).
@@ -2939,7 +2945,7 @@ async function callEntityRecall(
       // PageRow field would leak by default here. redactBody keeps recall
       // consistent with page_get/page_list (e.g. drops deleted_at too).
       page: r.page
-        ? redactBody(r.page as unknown as Record<string, unknown>)
+        ? redactQuarantinePage(r.page as unknown as Record<string, unknown>)
         : r.page,
       facts: redactFacts(r.facts as unknown as Record<string, unknown>[]),
       timeline: redactTimeline(
@@ -3197,8 +3203,8 @@ async function callFindContradictions(
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   if (readSources !== undefined) opts.sourceIds = readSources;
   // Asserted `contradicts` edges (deterministic graph) + LLM-suspected findings
-  // cached by the probe-contradictions phase (migration 064; [] on a pre-064
-  // brain or when the probe has never run). Same tenant scope for both.
+  // cached by the probe-contradictions phase (empty when the probe has never
+  // run). Same tenant scope for both; database errors remain errors.
   const probedOpts: {
     limit?: number;
     sourceIds?: string[];
@@ -3415,6 +3421,7 @@ async function callQuery(
   readSources?: string[],
   isOperator = false,
   embedQuery?: SearchOptions["embedQuery"],
+  signal?: AbortSignal,
 ): Promise<ToolCallResult> {
   const q = args["q"];
   if (typeof q !== "string" || q.length === 0) {
@@ -3435,7 +3442,7 @@ async function callQuery(
     if (typeof args["primary_weight"] === "number") opts.primaryWeight = args["primary_weight"];
     if (typeof args["refine_weight"] === "number") opts.refineWeight = args["refine_weight"];
     if (readSources !== undefined) opts.sourceIds = readSources;
-    if (onCapture) opts.search = { onCapture };
+    opts.search = { ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}) };
     const hits = await queryRefine(storage, q, refine, opts);
     return jsonResult({
       ok: true,
@@ -3448,7 +3455,7 @@ async function callQuery(
     typeof args["offset"] === "number"
       ? Math.max(0, Math.floor(args["offset"] as number))
       : 0;
-  const searchOpts: SearchOptions = { k: k + offset };
+  const searchOpts: SearchOptions = { k: k + offset, ...(signal ? { signal } : {}) };
   if (onCapture) searchOpts.onCapture = onCapture;
   if (readSources !== undefined) searchOpts.sourceIds = readSources;
   // Paid LLM expansion: explicit per-call value wins; omitted follows the
@@ -3631,7 +3638,8 @@ async function callVolunteerContext(
   const turns = parseWindow(args["window"]);
   if (!turns.length) return jsonResult({ ok: true, pages: [] });
 
-  const opts: Parameters<typeof volunteerContext>[1] = { window: turns };
+  const diagnostics = gatherDiagnostics();
+  const opts: Parameters<typeof volunteerContext>[1] = { window: turns, onDegraded: diagnostics.note };
   if (typeof args["max_pages"] === "number") opts.maxPages = args["max_pages"];
   if (typeof args["min_confidence"] === "number") opts.minConfidence = args["min_confidence"];
   if (typeof args["prior_context"] === "string" && args["prior_context"])
@@ -3651,7 +3659,7 @@ async function callVolunteerContext(
     volunteerEventRowsFrom(pages, { channel: "op", session_id: sessionId, turn }),
   );
 
-  return jsonResult({ ok: true, pages });
+  return jsonResult({ ok: true, pages, ...diagnostics.fields() });
 }
 
 async function callContextPack(

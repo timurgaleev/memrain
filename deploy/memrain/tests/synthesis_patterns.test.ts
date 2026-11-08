@@ -86,6 +86,11 @@ describe("patternsPhase", () => {
     expect(page!.title).toBe("Recurring deadline anxiety");
     // Evidence wikilinks are appended.
     expect(page!.markdown_body).toContain(`[[${slugs[0]}]]`);
+    await putPage(storage, { slug: "patterns/deadline-anxiety", markdown_body: "human edit", written_by: "operator" });
+    const held = await patternsPhase(storage, { sonnetFn: fakeSonnet(payload) });
+    expect(held.pagesHeld).toBe(1);
+    expect(held.patternsWritten).toBe(0);
+    expect((await getPage(storage, "patterns/deadline-anxiety"))?.markdown_body).toBe("human edit");
   });
 
   it("drops a pattern that cites too few DISTINCT valid reflections", async () => {

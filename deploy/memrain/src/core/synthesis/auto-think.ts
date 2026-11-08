@@ -36,6 +36,7 @@ export interface AutoThinkPhaseResult {
   draftsWritten: number;
   spentUsd: number;
   budgetExhausted: boolean;
+  pagesHeld: number;
   errors: string[];
 }
 
@@ -167,6 +168,7 @@ export async function autoThinkPhase(
     draftsWritten: 0,
     spentUsd: 0,
     budgetExhausted: false,
+    pagesHeld: 0,
     errors: [],
   };
 
@@ -242,16 +244,18 @@ export async function autoThinkPhase(
 
     const slug = `drafts/think/${questionSlug(q)}`;
     try {
-      await putPage(storage, {
+      const pageWrite = await putPage(storage, {
         slug,
         type: "draft",
         title: `Auto-think: ${q}`.slice(0, 200),
         markdown_body: renderDraftBody(q, result),
         source_id: sourceId,
         written_by: "auto-think",
+        onlyOverwriteWriter: "auto-think",
         allowAdHocType: true,
       });
-      base.draftsWritten += 1;
+      if (pageWrite.held) base.pagesHeld += 1;
+      else base.draftsWritten += 1;
     } catch (e) {
       base.errors.push(`${slug}: ${String(e instanceof Error ? e.message : e)}`);
     }

@@ -34,7 +34,8 @@ function pinMeta(meta: SearchMeta | undefined): Record<string, unknown> | null {
 }
 
 function pinHits(hits: SearchHit[]): unknown[] {
-  return JSON.parse(JSON.stringify(hits));
+  // Pin every original ranking field; provenance has its own cold/cache contract tests.
+  return JSON.parse(JSON.stringify(hits.map(({ date, date_source, source_id, ...ranking }) => ranking)));
 }
 
 let fx: RankFixture;

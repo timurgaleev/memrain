@@ -24,6 +24,7 @@ import type { Engine } from "./engine/interface.ts";
 import { PAGE_SOFT_DELETE_TTL_HOURS } from "./destructive-guard.ts";
 import { OperationError } from "./operation-error.ts";
 import { andSourceScope } from "./source-scope.ts";
+import { deadlockSafeTransaction } from "./retry.ts";
 
 export interface PurgeDeletedPagesResult {
   /** Number of pages hard-deleted. */
@@ -154,7 +155,7 @@ export async function purgeDeletedPages(
   // Every table referencing pages cascades today, so this almost always
   // succeeds; a violation rolls the whole transaction back.
   try {
-    return await engine.transaction(async (tx) => {
+    return await deadlockSafeTransaction(engine, async (tx) => {
       const r = await tx.query<{ slug: string }>(
         `DELETE FROM pages WHERE ${expiredWhere} RETURNING slug`,
         params,
@@ -183,7 +184,7 @@ export async function purgeDeletedPages(
       // between the scan and this row keeps the page.
       const rowParams: unknown[] = [String(olderThanHours), slug, deletedAt];
       const rowFilter = andSourceScope("source_id", sourceIds, rowParams);
-      const gone = await engine.transaction(async (tx) => {
+      const gone = await deadlockSafeTransaction(engine, async (tx) => {
         const r = await tx.query<{ slug: string }>(
           `DELETE FROM pages
             WHERE slug = $2 AND deleted_at IS NOT NULL

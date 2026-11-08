@@ -138,7 +138,7 @@ export async function mergePage(
     };
 
     // ── entity_facts ──────────────────────────────────────────────────────
-    // Dedup key (mig018): (entity_slug, fact, source_chunk_id) WHERE chunk NOT
+    // Dedup key (mig143): entity, claim hash, chunk and speaker WHERE chunk NOT
     // NULL. Drop stub rows that would collide with an existing canonical fact
     // before re-pointing, so the UPDATE can't trip the unique index.
     await tx.query(
@@ -149,9 +149,37 @@ export async function mergePage(
             SELECT 1 FROM entity_facts x
              WHERE x.entity_slug = $2 AND x.source_id = $3
                AND x.fact = s.fact
+               AND COALESCE(x.attributed_to, '') = COALESCE(s.attributed_to, '')
                AND x.source_chunk_id = s.source_chunk_id)`,
       [fromSlug, toSlug, owner],
     );
+    const fenceCollisions = await tx.query<{ id: number }>(
+      `UPDATE entity_facts s
+          SET forgotten_at = NOW(), forgotten_cause = 'supersede',
+              forgotten_reason = 'merged into ' || $2, superseded_by = x.id
+         FROM entity_facts x
+        WHERE s.source_markdown_slug = $1 AND s.source_id = $3
+          AND s.forgotten_at IS NULL AND s.row_num IS NOT NULL
+          AND x.source_markdown_slug = $2 AND x.source_id = s.source_id
+          AND x.row_num = s.row_num AND x.forgotten_at IS NULL
+        RETURNING s.id`,
+      [fromSlug, toSlug, owner],
+    );
+    const dimensionCollisions = await tx.query<{ id: number }>(
+      `UPDATE entity_facts s
+          SET forgotten_at = NOW(), forgotten_cause = 'supersede',
+              forgotten_reason = 'merged into ' || $2, superseded_by = x.id
+         FROM entity_facts x
+        WHERE s.entity_slug = $1 AND s.source_id = $3
+          AND s.dimension IS NOT NULL AND s.valid_until IS NULL AND s.forgotten_at IS NULL
+          AND x.entity_slug = $2 AND x.source_id = s.source_id
+          AND x.dimension = s.dimension AND x.value_hash IS NOT DISTINCT FROM s.value_hash
+          AND x.source_slug IS NOT DISTINCT FROM s.source_slug
+          AND x.valid_until IS NULL AND x.forgotten_at IS NULL
+        RETURNING s.id`,
+      [fromSlug, toSlug, owner],
+    );
+    moved.facts_retired = fenceCollisions.rows.length + dimensionCollisions.rows.length;
     await move(
       "entity_facts",
       `UPDATE entity_facts SET entity_slug = $2

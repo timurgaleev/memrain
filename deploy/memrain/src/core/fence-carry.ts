@@ -13,10 +13,9 @@
  * line names the slug and how many fence spans were dropped, so the operator
  * can restore brain-written ones from `page_versions`.
  *
- * Every fence span of the old body, of either kind and brand, is found by the
- * widest rule a parser uses (a line containing the begin marker through the
- * next line containing that brand's end marker; the takes parser matches by
- * `indexOf`, the facts parser by the trimmed line). A span whose neutralized
+ * Every fence span of the old body, of either kind and brand, is preserved
+ * conservatively, including legacy inline markers the parsers no longer read
+ * as a fence. The carried text is unchanged. A span whose neutralized
  * text is in the fresh body came from the outside text and is skipped; the
  * rest, each with a `## Facts` / `## Takes` heading directly above it, are
  * appended after the fresh body in the layout the brain's own fence writer

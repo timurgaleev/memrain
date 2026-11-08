@@ -25,6 +25,7 @@
  * from `pages.last_retrieved_at` (migration 024) and is APPROXIMATE by design.
  */
 
+import type { OnGatherFailure } from "../gather-degraded.ts";
 import type { Storage } from "../storage.ts";
 import { normalizeAlias } from "../page-aliases.ts";
 import {
@@ -57,6 +58,7 @@ export interface VolunteeredPage {
 }
 
 export interface VolunteerOpts {
+  onDegraded?: OnGatherFailure;
   /** Rolling conversation window (oldest -> newest). */
   window: WindowTurn[];
   maxPages?: number;
@@ -174,6 +176,7 @@ export async function volunteerContext(
   // gated-out alias hit must not shadow a passing title hit behind it.
   const pointers = await resolveEntitiesToPointers(storage, candidates, {
     maxPointers: VOLUNTEER_MAX_PAGES_CAP * 2,
+    onDegraded: opts.onDegraded,
     ...(opts.sourceIds !== undefined ? { sourceIds: opts.sourceIds } : {}),
   });
   if (!pointers.length) return [];

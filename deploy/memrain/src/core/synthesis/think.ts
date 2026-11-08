@@ -20,6 +20,8 @@
  * rounds are wired; persistence (--save/--take) lives in think-persist.ts.
  * Sonnet injected via `sonnetFn`; NO live Bedrock in tests.
  */
+import { gatherDiagnostics, type GatherFailure, type OnGatherFailure } from "../gather-degraded.ts";
+import { publicSearchMeta } from "../search/search-meta.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
 import type { Storage } from "../storage.ts";
 import type { Engine } from "../engine/interface.ts";
@@ -183,6 +185,7 @@ export interface ThinkOptions {
 }
 
 export interface ThinkResult {
+  gather_degraded?: GatherFailure[];
   ran: boolean;
   reason?: string;
   synthesis: ThinkSynthesis | null;
@@ -531,16 +534,19 @@ async function gatherPages(
   sourceIds?: readonly string[],
   window?: { since?: string; until?: string },
   embedQuery?: (text: string) => Promise<number[]>,
+  onDegraded?: OnGatherFailure,
 ): Promise<SearchHit[]> {
   try {
     return await hybridSearch(storage, question, {
       k,
+      onMeta: (meta) => { for (const reason of publicSearchMeta(meta).degraded) onDegraded?.(reason); },
       ...(embedQuery ? { embedQuery } : {}),
       ...(sourceIds !== undefined ? { sourceIds } : {}),
       ...(window?.since ? { since: window.since } : {}),
       ...(window?.until ? { until: window.until } : {}),
     });
   } catch {
+    onDegraded?.("pages_failed");
     return [];
   }
 }
@@ -555,6 +561,7 @@ async function loadPageDates(
   engine: Engine,
   hits: readonly SearchHit[],
   timeZone: string,
+  onDegraded?: OnGatherFailure,
 ): Promise<Map<string, string>> {
   const dates = new Map<string, string>();
   const ids = Array.from(new Set(hits.map((h) => h.documentId)));
@@ -577,6 +584,7 @@ async function loadPageDates(
       if (day) dates.set(r.id, day);
     }
   } catch {
+    onDegraded?.("page_dates_failed");
     /* no dates rather than no answer */
   }
   return dates;
@@ -593,6 +601,7 @@ export async function gatherGraphPages(
   anchors: readonly string[],
   limit: number,
   sourceIds?: readonly string[],
+  onDegraded?: OnGatherFailure,
 ): Promise<SearchHit[]> {
   const engine = storage.engine();
   const slugDepth = new Map<string, number>();
@@ -611,6 +620,7 @@ export async function gatherGraphPages(
         if (prev === undefined || h.depth < prev) slugDepth.set(h.slug, h.depth);
       }
     } catch {
+      onDegraded?.("graph_failed");
       /* skip a bad anchor (invalid slug / no graph) */
     }
   }
@@ -658,6 +668,7 @@ export async function gatherGraphPages(
     hits.sort((a, b) => b.score - a.score || (a.sourcePath < b.sourcePath ? -1 : 1));
     return hits.slice(0, limit);
   } catch {
+    onDegraded?.("graph_failed");
     return [];
   }
 }
@@ -712,7 +723,7 @@ const TAKE_LIFECYCLE_FILTER = ` AND active
 
 /**
  * Gather take evidence — a keyword scan of synth_takes whose claim matches the
- * question. Deterministic, no LLM. Fail-soft to [] (pre-045 brain / no takes).
+ * question. Deterministic, no LLM. Failures are reported through the gather diagnostics.
  * LIKE wildcards in the question are escaped so a `%`/`_` can't match-everything.
  */
 async function gatherTakes(
@@ -720,6 +731,7 @@ async function gatherTakes(
   question: string,
   maxTakes: number,
   sourceIds?: readonly string[],
+  onDegraded?: OnGatherFailure,
 ): Promise<TakeGatherRow[]> {
   const needle = question.slice(0, 80).replace(/[\\%_]/g, "\\$&");
   const params: unknown[] = [needle, maxTakes];
@@ -741,6 +753,7 @@ async function gatherTakes(
     );
     return rows;
   } catch {
+    onDegraded?.("takes_keyword_failed");
     return [];
   }
 }
@@ -755,6 +768,7 @@ async function gatherTakesVector(
   embedding: number[],
   maxTakes: number,
   sourceIds?: readonly string[],
+  onDegraded?: OnGatherFailure,
 ): Promise<TakeGatherRow[]> {
   const params: unknown[] = [JSON.stringify(embedding), maxTakes];
   let scope = "";
@@ -773,6 +787,7 @@ async function gatherTakesVector(
     );
     return rows;
   } catch {
+    onDegraded?.("takes_vector_failed");
     return [];
   }
 }
@@ -835,9 +850,9 @@ export function renderTrajectoryBlock(
 
 /** Race a promise against a timeout, resolving to `fallback` on timeout or
  *  rejection — trajectory enrichment must never block or fail the run. */
-async function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+async function withTimeout<T>(p: Promise<T>, ms: number, fallback: T, onTimeout?: () => void): Promise<T> {
   return new Promise<T>((resolve) => {
-    const timer = setTimeout(resolve, ms, fallback);
+    const timer = setTimeout(() => { onTimeout?.(); resolve(fallback); }, ms);
     (timer as unknown as { unref?: () => void }).unref?.();
     p.then(
       (v) => {
@@ -874,6 +889,7 @@ async function autoAnchors(
   storage: Storage,
   question: string,
   pages: SearchHit[],
+  onDegraded?: OnGatherFailure,
 ): Promise<string[]> {
   try {
     const retrieved = pages
@@ -888,11 +904,13 @@ async function autoAnchors(
         const r = await resolver.resolve(c.raw);
         if (r.resolved) resolved.push(r.slug);
       } catch {
+        onDegraded?.("anchors_failed");
         /* skip a single unresolvable candidate */
       }
     }
     return Array.from(new Set(resolved));
   } catch {
+    onDegraded?.("anchors_failed");
     return [];
   }
 }
@@ -906,6 +924,7 @@ async function gatherTrajectories(
   storage: Storage,
   anchors: string[],
   sourceIds?: readonly string[],
+  onDegraded?: OnGatherFailure,
 ): Promise<Array<{ slug: string; points: TrajectoryPoint[] }>> {
   const slugs = Array.from(new Set(anchors.filter((s) => typeof s === "string" && s.length > 0))).slice(
     0,
@@ -925,11 +944,12 @@ async function gatherTrajectories(
         });
         return { slug, points };
       } catch {
+        onDegraded?.("trajectory_failed");
         return { slug, points: [] as TrajectoryPoint[] };
       }
     }),
   );
-  return withTimeout(work, TRAJECTORY_TIMEOUT_MS, []);
+  return withTimeout(work, TRAJECTORY_TIMEOUT_MS, [], () => onDegraded?.("trajectory_timeout"));
 }
 
 /**
@@ -1250,6 +1270,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   // Price the pre-flight and the live call on the same model (test seam ignores).
   const sonnetFn = resolveSonnetFn(opts.sonnetFn, { modelId });
 
+  const diagnostics = gatherDiagnostics();
   const intent = classifyIntent(question);
   const engine = storage.engine();
   // Default embedder: the real Titan path ONLY on the live route (no injected
@@ -1265,7 +1286,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
 
   // Embed the question for the take VECTOR stream (fail-soft → no vector stream).
   const questionEmbedding = embedFn
-    ? await embedFn(question).catch(() => null)
+    ? await embedFn(question).catch(() => { diagnostics.note("take_embedding_failed"); return null; })
     : null;
 
   const scopeIds = opts.sourceIds;
@@ -1275,13 +1296,13 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
       : undefined;
   const fence = (hits: SearchHit[]): SearchHit[] =>
     opts.fenceDiary ? hits.filter((h) => !isDiarySourcePath(h.sourcePath)) : hits;
-  const rawPagesFn = opts.pagesFn ?? ((q, kk) => gatherPages(storage, q, kk, scopeIds, window, opts.embedQuery));
+  const rawPagesFn = opts.pagesFn ?? ((q, kk) => gatherPages(storage, q, kk, scopeIds, window, opts.embedQuery, diagnostics.note));
   const pagesFn = async (q: string, kk: number): Promise<SearchHit[]> => fence(await rawPagesFn(q, kk));
   const [hybridPages, takesKw, takesVec] = await Promise.all([
     pagesFn(question, k),
-    gatherTakes(engine, question, maxTakes, scopeIds),
+    gatherTakes(engine, question, maxTakes, scopeIds, diagnostics.note),
     questionEmbedding
-      ? gatherTakesVector(engine, questionEmbedding, maxTakes, scopeIds)
+      ? gatherTakesVector(engine, questionEmbedding, maxTakes, scopeIds, diagnostics.note)
       : Promise.resolve<TakeGatherRow[]>([]),
   ]);
   // Fuse the keyword + vector take streams (RRF, dedup by take_key).
@@ -1293,12 +1314,12 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   // Best-effort + timeout-guarded; never blocks the run.
   let anchors: string[] = opts.anchors && opts.anchors.length > 0 ? opts.anchors : [];
   if (intent !== "other" && anchors.length === 0 && autoAnchorEnabled()) {
-    anchors = await autoAnchors(storage, question, hybridPages);
+    anchors = await autoAnchors(storage, question, hybridPages, diagnostics.note);
   }
   const trajectoryBlock =
     intent !== "other" && anchors.length > 0
       ? renderTrajectoryBlock(
-          await gatherTrajectories(storage, anchors, opts.sourceIds),
+          await gatherTrajectories(storage, anchors, opts.sourceIds, diagnostics.note),
         )
       : "";
 
@@ -1308,7 +1329,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   // WITHOUT anchors (hermetic paths stay hermetic).
   let pages = hybridPages;
   if (anchors.length > 0) {
-    const graphPages = fence(await gatherGraphPages(storage, anchors, k, scopeIds));
+    const graphPages = fence(await gatherGraphPages(storage, anchors, k, scopeIds, diagnostics.note));
     if (graphPages.length > 0) pages = fusePageStreams(hybridPages, graphPages, Math.max(k, hybridPages.length));
   }
 
@@ -1324,7 +1345,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
           // Same rule as every other gather: only `undefined` is unscoped, so
           // a caller granted nothing does not read another tenant's profile.
           scopeIds !== undefined ? [...scopeIds] : undefined,
-        ),
+        ).catch(() => { diagnostics.note("calibration_failed"); return null; }),
       )
     : "";
 
@@ -1350,7 +1371,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
       pages,
       PAGE_EXCERPT_CHARS,
       question,
-      await loadPageDates(engine, pages, temporal.timeZone),
+      await loadPageDates(engine, pages, temporal.timeZone, diagnostics.note),
     );
     const takesBlock = renderTakesBlock(takes);
     const user = buildThinkUserMessage({
@@ -1372,6 +1393,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
         // would not help it.
         const unpriced = priceFor(modelId) === null;
         return withFallback({
+        ...diagnostics.fields(),
           ran: true,
           reason: unpriced
             ? `model ${modelId} has no price; refusing to spend against it`
@@ -1459,6 +1481,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
       if (retryHold) budget.release(retryHold);
       if (round > 1) break; // keep the earlier round's synthesis
       return withFallback({
+        ...diagnostics.fields(),
         ran: true,
         reason: `synthesis call failed: ${e instanceof Error ? e.message : String(e)}`,
         synthesis: null,
@@ -1507,6 +1530,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   }
 
   return withFallback({
+    ...diagnostics.fields(),
     ran: true,
     ...(status === "ok" ? {} : { reason: `model output unusable: ${status}` }),
     synthesis,

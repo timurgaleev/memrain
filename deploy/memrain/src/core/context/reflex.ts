@@ -13,7 +13,7 @@
  *      (real slugs are namespaced people/alice; a bare slugify misses).
  *
  * memrain specifics:
- *   - SINGLE-source flat vault: NO source_id federation. One engine, one scope.
+ *   - One pointer per candidate name and source; entity pages win ambiguous names.
  *   - DB access via `engine.query` (-> {rows}).
  *   - Alias arm uses memrain's `resolveAliasUnique` (page-aliases.ts), which
  *     already enforces the unambiguous-single-slug rule and degrades on a
@@ -24,6 +24,7 @@
  *     the ambient synopsis.
  */
 
+import type { OnGatherFailure } from "../gather-degraded.ts";
 import type { Engine } from "../engine/interface.ts";
 import type { Storage } from "../storage.ts";
 import { normalizeAlias, resolveAliasUnique } from "../page-aliases.ts";
@@ -52,7 +53,7 @@ export const ARM_CONFIDENCE: Record<ResolveArm, number> = {
 export interface ReflexPointer {
   slug: string;
   title: string;
-  /** Optional provenance source identifier — always null in memrain (flat vault). */
+  /** Owning source of the resolved page. */
   source_id?: string | null;
   /** Resolution provenance. */
   arm: ResolveArm;
@@ -72,6 +73,7 @@ export interface ReflexPointer {
 }
 
 export interface ResolvePointersOpts {
+  onDegraded?: OnGatherFailure;
   maxPointers?: number;
   /**
    * Tenant read scope. Every arm (alias index + the two page lookups) filters on
@@ -83,6 +85,7 @@ export interface ResolvePointersOpts {
 
 interface PageRow {
   slug: string;
+  source_id: string;
   title: string | null;
   type: string | null;
   compiled_truth: Record<string, unknown> | null;
@@ -146,8 +149,12 @@ export async function resolveEntitiesToPointers(
   // single-slug rule and degrades to null on a pre-034 brain. excludeSlug is a
   // sentinel that matches no real page (so nothing is excluded).
   for (const norm of aliasNorms) {
-    const slug = await resolveAliasUnique(storage, norm, "", scope);
-    if (slug) push(slug, "alias", norm);
+    try {
+      const slug = await resolveAliasUnique(storage, norm, "", scope);
+      if (slug) push(slug, "alias", norm);
+    } catch {
+      opts.onDegraded?.("alias_lookup_failed");
+    }
   }
 
   // Arm 2 — exact title OR slug / slug-suffix. A bare "Alice" slugifies to
@@ -158,16 +165,18 @@ export async function resolveEntitiesToPointers(
     const params: unknown[] = [titlesLc, exactSlugs, slugSuffixes];
     const scopeFilter = andSourceScope("source_id", scope, params);
     const r = await engine.query<PageRow>(
-      `SELECT slug, title, type, compiled_truth, markdown_body
+      `SELECT slug, source_id, title, type, compiled_truth, markdown_body
          FROM pages
         WHERE deleted_at IS NULL
           AND ( lower(title) = ANY($1::text[])
              OR slug = ANY($2::text[])
-             OR slug LIKE ANY($3::text[]) )${scopeFilter}`,
+             OR slug LIKE ANY($3::text[]) )${scopeFilter}
+        ORDER BY slug`,
       params,
     );
     rows = r.rows;
   } catch {
+    opts.onDegraded?.("entity_lookup_failed");
     rows = [];
   }
 
@@ -180,14 +189,15 @@ export async function resolveEntitiesToPointers(
       const params: unknown[] = [aliasOnly.map((p) => p.slug)];
       const scopeFilter = andSourceScope("source_id", scope, params);
       const extra = await engine.query<PageRow>(
-        `SELECT slug, title, type, compiled_truth, markdown_body
+        `SELECT slug, source_id, title, type, compiled_truth, markdown_body
            FROM pages
-          WHERE deleted_at IS NULL AND slug = ANY($1::text[])${scopeFilter}`,
+          WHERE deleted_at IS NULL AND slug = ANY($1::text[])${scopeFilter}
+          ORDER BY slug`,
         params,
       );
       for (const r of extra.rows) rowBySlug.set(r.slug, r);
     } catch {
-      /* alias slug may be stale — ignore */
+      opts.onDegraded?.("alias_lookup_failed");
     }
   }
 
@@ -208,16 +218,31 @@ export async function resolveEntitiesToPointers(
     }
   }
 
-  // Build pointers in confidence order, applying the cap.
+  const priority = (hit: typeof resolved[number]): number => {
+    if (slugToNorm.get(hit.slug) === hit.matchedNorm) return 0;
+    const row = rowBySlug.get(hit.slug);
+    return /^(people|companies|projects)\//.test(hit.slug) || row?.type === "person" || row?.type === "company" ? 1 : 2;
+  };
+  const ordered = [...resolved].sort((a, b) => priority(a) - priority(b)
+    || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const preferred = new Map<string, string>();
+  for (const hit of ordered) {
+    const row = rowBySlug.get(hit.slug);
+    if (!row) continue;
+    const key = JSON.stringify([hit.matchedNorm, row.source_id]);
+    if (!preferred.has(key)) preferred.set(key, hit.slug);
+  }
   const pointers: ReflexPointer[] = [];
   for (const { slug, arm, matchedNorm } of resolved) {
     const row = rowBySlug.get(slug);
     if (!row) continue;
+    const nameKey = JSON.stringify([matchedNorm, row.source_id]);
+    if (preferred.get(nameKey) !== slug) continue;
     const display = displayForRow(row, displayByNorm);
     pointers.push({
       slug,
       title: row.title ?? slug,
-      source_id: null,
+      source_id: row.source_id,
       arm,
       confidence: ARM_CONFIDENCE[arm],
       matchedNorm,

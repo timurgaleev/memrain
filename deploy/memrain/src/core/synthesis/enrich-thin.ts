@@ -22,7 +22,7 @@
 
 import type { Engine } from "./../engine/interface.ts";
 import type { Storage } from "../storage.ts";
-import { putPage } from "../pages.ts";
+import { putPage, VersionConflictError } from "../pages.ts";
 import { resolveSonnetFn, resolveFactsModel, type SonnetFn, type SonnetUsage } from "../llm/sonnet.ts";
 import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { BudgetTracker, BudgetExhausted } from "../budget.ts";
@@ -36,6 +36,7 @@ export interface EnrichThinPhaseResult {
   reason?: string;
   thinPagesConsidered: number;
   pagesEnriched: number;
+  pagesSkippedChanged: number;
   pagesSkippedInsufficient: number;
   spentUsd: number;
   budgetExhausted: boolean;
@@ -129,6 +130,7 @@ function estimateUsage(chars: number, maxOutputTokens: number): SonnetUsage {
 }
 
 interface ThinPage {
+  version_n: number;
   slug: string;
   type: string;
   title: string | null;
@@ -148,8 +150,9 @@ async function gatherThinPages(
   threshold: number,
   limit: number,
 ): Promise<ThinPage[]> {
-  const { rows } = await engine.query<{ slug: string; type: string; title: string | null; markdown_body: string | null }>(
-    `SELECT slug, type, title, markdown_body
+  const { rows } = await engine.query<{ slug: string; type: string; title: string | null; markdown_body: string | null; version_n: number }>(
+    `SELECT slug, type, title, markdown_body,
+            COALESCE((SELECT max(v.version_n) FROM page_versions v WHERE v.slug = pages.slug), 0) AS version_n
        FROM pages
       WHERE deleted_at IS NULL
         AND source_id = $1
@@ -169,6 +172,7 @@ async function gatherThinPages(
     type: r.type,
     title: r.title,
     body: r.markdown_body ?? "",
+    version_n: Number(r.version_n),
   }));
 }
 
@@ -261,6 +265,7 @@ export async function enrichThinPhase(
     ran: false,
     thinPagesConsidered: 0,
     pagesEnriched: 0,
+    pagesSkippedChanged: 0,
     pagesSkippedInsufficient: 0,
     spentUsd: 0,
     budgetExhausted: false,
@@ -373,11 +378,13 @@ export async function enrichThinPhase(
         markdown_body: draft.markdown,
         source_id: sourceId,
         written_by: "enrichment",
+        expectedVersion: page.version_n,
         allowAdHocType: true,
       });
       base.pagesEnriched += 1;
     } catch (e) {
-      base.errors.push(`${page.slug} write: ${String(e instanceof Error ? e.message : e)}`);
+      if (e instanceof VersionConflictError) base.pagesSkippedChanged += 1;
+      else base.errors.push(`${page.slug} write: ${String(e instanceof Error ? e.message : e)}`);
     }
     if (base.budgetExhausted) break;
   }

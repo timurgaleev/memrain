@@ -185,6 +185,7 @@ describe("reconcileFactsForPage", () => {
       "good fact",
       "second fact",
     ]);
+    const kept = (await storage.engine().query("SELECT id, written_at FROM entity_facts WHERE entity_slug='people/alice' AND row_num=1")).rows;
     // fixing the fence (all rows parse again) reconciles normally
     const fixed = await putAndReconcile(
       "people/alice",
@@ -193,7 +194,8 @@ describe("reconcileFactsForPage", () => {
         { rowNum: 2, claim: "repaired fact", confidence: 1, active: true },
       ]),
     );
-    expect(fixed).toEqual({ removed: 2, added: 2 });
+    expect(fixed).toEqual({ removed: 1, added: 1, unchanged: 1 });
+    expect((await storage.engine().query("SELECT id, written_at FROM entity_facts WHERE entity_slug='people/alice' AND row_num=1")).rows).toEqual(kept);
     expect((await factsFor("people/alice")).map((f) => f.fact)).toEqual([
       "good fact",
       "repaired fact",

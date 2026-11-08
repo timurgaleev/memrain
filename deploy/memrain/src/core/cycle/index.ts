@@ -1060,6 +1060,7 @@ async function runPhases(
             storage
               ? reflectionsPhase(storage, {})
               : Promise.resolve<ReflectionsPhaseResult>({
+                  pagesHeld: 0,
                   ran: false,
                   reason: "no storage handle",
                   transcriptsConsidered: 0,
@@ -1085,6 +1086,7 @@ async function runPhases(
             storage
               ? patternsPhase(storage, {})
               : Promise.resolve<PatternsPhaseResult>({
+                  pagesHeld: 0,
                   ran: false,
                   reason: "no storage handle",
                   reflectionsConsidered: 0,
@@ -1113,6 +1115,7 @@ async function runPhases(
                   reason: "no storage handle",
                   thinPagesConsidered: 0,
                   pagesEnriched: 0,
+                  pagesSkippedChanged: 0,
                   pagesSkippedInsufficient: 0,
                   spentUsd: 0,
                   budgetExhausted: false,
@@ -1133,6 +1136,7 @@ async function runPhases(
             storage
               ? autoThinkPhase(storage, {})
               : Promise.resolve<AutoThinkPhaseResult>({
+                  pagesHeld: 0,
                   ran: false,
                   reason: "no storage handle",
                   questionsConsidered: 0,
@@ -1156,6 +1160,7 @@ async function runPhases(
             storage
               ? driftPhase(storage, {})
               : Promise.resolve<DriftPhaseResult>({
+                  pagesHeld: 0,
                   ran: false,
                   reason: "no storage handle",
                   candidatesConsidered: 0,

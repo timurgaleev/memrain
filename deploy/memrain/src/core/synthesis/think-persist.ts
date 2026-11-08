@@ -29,6 +29,7 @@ export interface PersistSynthesisResult {
   /** The saved page slug; "" when nothing was persisted. */
   slug: string;
   evidenceInserted: number;
+  pagesHeld: number;
   warnings: string[];
 }
 
@@ -97,7 +98,7 @@ export async function persistThinkSynthesis(
 ): Promise<PersistSynthesisResult> {
   const s = opts.result.synthesis;
   if (!s || s.answer.trim().length === 0) {
-    return { slug: "", evidenceInserted: 0, warnings: ["SYNTHESIS_EMPTY_NOT_PERSISTED"] };
+    return { slug: "", evidenceInserted: 0, pagesHeld: 0, warnings: ["SYNTHESIS_EMPTY_NOT_PERSISTED"] };
   }
   const warnings: string[] = [];
   const slug = synthesisSlugFor(opts.question);
@@ -105,7 +106,7 @@ export async function persistThinkSynthesis(
   // listed in frontmatter so a reviewer can find them without rereading.
   const body = `${unverifiedQuotesFrontmatter(opts.result)}# ${opts.question}\n${renderAnswerWithGaps(s.answer, s.gaps)}`;
 
-  await putPage(storage, {
+  const pageWrite = await putPage(storage, {
     slug,
     type: "synthesis",
     allowAdHocType: true,
@@ -113,7 +114,12 @@ export async function persistThinkSynthesis(
     markdown_body: body,
     source_id: opts.sourceId ?? "default",
     written_by: "think",
+    onlyOverwriteWriter: "think",
   });
+
+  if (pageWrite.held) {
+    return { slug: "", evidenceInserted: 0, pagesHeld: 1, warnings: ["SYNTHESIS_AUTHORED_EDIT_HELD"] };
+  }
 
   const engine = storage.engine();
   let inserted = 0;
@@ -132,7 +138,7 @@ export async function persistThinkSynthesis(
       warnings.push(`evidence ${c.kind}:${c.ref}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  return { slug, evidenceInserted: inserted, warnings };
+  return { slug, evidenceInserted: inserted, pagesHeld: 0, warnings };
 }
 
 export interface SaveThinkTakeResult {

@@ -235,7 +235,7 @@ deploy/memrain/tests/facts_recall.test.ts|COMPAT-TEST|1|incidental: pre-rename t
 deploy/memrain/tests/facts_reconcile.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/facts_withdrawal.test.ts|COMPAT-TEST|5|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/fence_brand.test.ts|COMPAT-TEST|43|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/fence_writer.test.ts|COMPAT-TEST|10|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
+deploy/memrain/tests/fence_writer.test.ts|COMPAT-TEST|12|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/fenced_code.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/fixtures/github/issues-page-2.json|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/fixtures/tenant_isolation_matrix.ts|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
@@ -530,3 +530,4 @@ tests/test_workflows.py|COMPAT-TEST|1|incidental: pre-rename name in comments, t
 deploy/memrain/src/core/neutralize-outside-text.ts|COMPAT|1|legacy fence markers defused in outside text
 deploy/memrain/tests/neutralize_outside_text.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/outside_text_rerender.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
+deploy/memrain/tests/fence_location.test.ts|COMPAT-TEST|2|Quoted legacy fence markers must not override a real fence.
