@@ -24,6 +24,7 @@
  */
 import { callHaiku, DEFAULT_HAIKU_MODEL, type LlmFn } from "./llm/haiku.ts";
 import { sanitizeForPrompt } from "./llm/sanitize.ts";
+import { claimsDiverge } from "./fact-divergence.ts";
 import type { BudgetTracker } from "./budget.ts";
 
 /** Default cosine for the free fast-path — a near-identical paraphrase. */
@@ -65,7 +66,7 @@ export type ClassifyDecision =
   | { decision: "supersede"; supersededId: number; reason: "classifier" }
   | {
       decision: "independent";
-      reason: "no_candidates" | "classifier" | "cosine_fallback";
+      reason: "no_candidates" | "classifier" | "cosine_fallback" | "claim_divergence";
     };
 
 export interface ClassifyFactOptions {
@@ -202,7 +203,7 @@ export async function classifyFact(
 
   // Free deterministic fast-path — a near-identical paraphrase collapses without
   // ever paying for the classifier.
-  if (top.cos >= cheap) {
+  if (top.cos >= cheap && !claimsDiverge(newFact.fact, top.fact)) {
     return { decision: "duplicate", matchedId: top.id, reason: "cheap_fast_path" };
   }
 
@@ -211,12 +212,12 @@ export async function classifyFact(
   // concurrent classifications sharing one budget cannot all pass the check.
   const modelId = opts.modelId ?? DEFAULT_HAIKU_MODEL;
   if (opts.llmFn === undefined) {
-    return cosineFallback(top, fallback);
+    return cosineFallback(newFact.fact, top, fallback);
   }
   const budget = opts.budget;
   const hold = budget ? budget.reserve(modelId, WORST_CASE_USAGE) : null;
   if (budget && hold === null) {
-    return cosineFallback(top, fallback);
+    return cosineFallback(newFact.fact, top, fallback);
   }
 
   try {
@@ -238,6 +239,8 @@ export async function classifyFact(
     const parsed = parseClassifierJson(resp.text, ids);
     if (parsed) {
       if (parsed.decision === "duplicate") {
+        const matched = candidates.find(candidate => candidate.id === parsed.matchedId)!;
+        if (claimsDiverge(newFact.fact, matched.fact)) return { decision: "independent", reason: "claim_divergence" };
         return { decision: "duplicate", matchedId: parsed.matchedId!, reason: "classifier" };
       }
       if (parsed.decision === "supersede") {
@@ -246,15 +249,16 @@ export async function classifyFact(
       return { decision: "independent", reason: "classifier" };
     }
     // Malformed output — treat as a classifier failure.
-    return cosineFallback(top, fallback);
+    return cosineFallback(newFact.fact, top, fallback);
   } catch {
     // Model / network error — deterministic fallback.
     if (budget && hold) budget.release(hold);
-    return cosineFallback(top, fallback);
+    return cosineFallback(newFact.fact, top, fallback);
   }
 }
 
-function cosineFallback(top: FactCandidate, fallback: number): ClassifyDecision {
+function cosineFallback(fact: string, top: FactCandidate, fallback: number): ClassifyDecision {
+  if (claimsDiverge(fact, top.fact)) return { decision: "independent", reason: "claim_divergence" };
   if (top.cos >= fallback) {
     return { decision: "duplicate", matchedId: top.id, reason: "cosine_fallback" };
   }
