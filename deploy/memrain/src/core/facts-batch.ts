@@ -14,10 +14,31 @@
  */
 import { OperationError } from "./operation-error.ts";
 import { validateSlug } from "./pages.ts";
+import { isCalendarDate } from "./effective-date.ts";
+import type { AddFactInput } from "./facts.ts";
+
+export const FACT_METADATA_KEYS = ["valid_from", "kind", "notability", "claim_metric", "claim_value", "claim_unit", "claim_period"] as const;
+type FactMetadata = Pick<AddFactInput, typeof FACT_METADATA_KEYS[number]>;
+
+export function factInputMetadata(args: Record<string, unknown>): FactMetadata {
+  for (const key of FACT_METADATA_KEYS) {
+    const v = args[key];
+    if (v === undefined) continue;
+    if (key === "claim_value") {
+      if (typeof v !== "number" || !Number.isFinite(v)) refuse("claim_value must be a finite number", "Pass a numeric value, without its unit.");
+    } else if (typeof v !== "string") refuse(`${key} must be a string`, "Pass the field as a string, or omit it.");
+    if (key === "kind" && !["event", "preference", "commitment", "belief", "fact"].includes(v as string)) refuse("invalid kind", "Use event, preference, commitment, belief or fact.");
+    if (key === "notability" && !["high", "medium", "low"].includes(v as string)) refuse("invalid notability", "Use high, medium or low.");
+    if (key === "valid_from" && (!isCalendarDate(v as string) || !Number.isFinite(Date.parse(v as string)))) {
+      refuse("valid_from must be a real calendar date or ISO timestamp", "Use YYYY-MM-DD or an ISO timestamp; timestamps are anchored to their UTC date.");
+    }
+  }
+  return Object.fromEntries(FACT_METADATA_KEYS.filter(k => args[k] !== undefined).map(k => [k, args[k]])) as FactMetadata;
+}
 
 export const ADD_FACT_BATCH_MAX = 20;
 
-const ITEM_KEYS = new Set(["entity_slug", "fact", "confidence", "visibility", "replaces"]);
+const ITEM_KEYS = new Set(["entity_slug", "fact", "confidence", "visibility", "replaces", ...FACT_METADATA_KEYS]);
 const SHARED_KEYS = [
   "entity_slug",
   "confidence",
@@ -25,11 +46,12 @@ const SHARED_KEYS = [
   "source_slug",
   "source_chunk_id",
   "written_by",
+  ...FACT_METADATA_KEYS,
 ] as const;
 const VISIBILITIES = new Set(["private", "world"]);
 
 const ITEM_SHAPE =
-  "Each item is { fact, optional entity_slug, confidence, visibility, replaces }; entity_slug may instead be given once at the top level.";
+  "Each item is { fact, optional entity_slug, confidence, visibility, replaces, valid_from, kind, notability, claim_metric, claim_value, claim_unit, claim_period }; entity_slug and metadata may instead be given once at the top level.";
 
 function refuse(message: string, suggestion: string): never {
   throw new OperationError("invalid_params", `add_fact: ${message}`, suggestion);
@@ -74,6 +96,7 @@ export function normalizeAddFactItems(args: Record<string, unknown>): Record<str
       );
     }
     const merged: Record<string, unknown> = { ...shared, ...item };
+    factInputMetadata(merged);
     const fact = merged["fact"];
     if (typeof fact !== "string" || fact.trim().length === 0) {
       refuse(`${at}.fact must be a non-empty string`, ITEM_SHAPE);

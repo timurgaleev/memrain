@@ -234,6 +234,11 @@ A few that are easy to miss:
   accepts `include_body:false` for metadata only. `get_chunks` returns at most
   200 chunks; when `truncated` is true, increase `from_index` by the number
   returned to read the next portion.
+- `add_fact` accepts `valid_from`, `kind`, `notability` and
+  `claim_metric`/`claim_value`/`claim_unit`/`claim_period`. A batch inherits
+  these top-level defaults and each item may override them. Metadata is
+  validated for the whole batch before any item is written. `valid_from`
+  timestamps become UTC dates; attribution and expiry are not caller-settable.
 - A failed retrieval stage is reported alongside surviving results. `search`
   and `query` expose `meta.degraded`; `think`, `context_pack` and
   `volunteer_context` expose `gather_degraded` when a collector fails. Direct

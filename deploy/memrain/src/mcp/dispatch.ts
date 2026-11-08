@@ -262,7 +262,7 @@ import { databaseOperationError } from "../core/database-error.ts";
 import { OperationError, PageNotFoundError, isOperationError } from "../core/operation-error.ts";
 import { suggestSlugs } from "../core/slug-suggest.ts";
 import { getBrainHotMemoryMeta, invalidateHotMemoryMeta } from "../core/hot-memory-meta.ts";
-import { normalizeAddFactItems, runAddFactBatch } from "../core/facts-batch.ts";
+import { factInputMetadata, normalizeAddFactItems, runAddFactBatch } from "../core/facts-batch.ts";
 import { replaceFact } from "../core/facts-replace.ts";
 import { similarActiveAfterForget } from "../core/facts-similar-active.ts";
 import { ReferenceDateError, resolveThinkTemporalContext } from "../core/synthesis/think-temporal.ts";
@@ -2770,6 +2770,7 @@ async function addOneFact(
   if (typeof args["fact"] !== "string" || args["fact"].length === 0)
     throw new OperationError("invalid_params", "add_fact: `fact` is required", "Pass a short claim, or several in `items`.");
   const input: Parameters<typeof addFact>[1] = {
+    ...factInputMetadata(args),
     entity_slug: args["entity_slug"],
     fact: args["fact"],
   };

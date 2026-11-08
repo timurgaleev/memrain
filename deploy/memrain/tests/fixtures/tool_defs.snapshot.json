@@ -818,6 +818,42 @@
     "inputSchema": {
       "type": "object",
       "properties": {
+        "valid_from": {
+          "type": "string",
+          "description": "Date the claim became true (YYYY-MM-DD or ISO timestamp, stored as its UTC date)."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "event",
+            "preference",
+            "commitment",
+            "belief",
+            "fact"
+          ]
+        },
+        "notability": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "claim_metric": {
+          "type": "string",
+          "description": "Metric name; normalized to lower-case snake_case."
+        },
+        "claim_value": {
+          "type": "number",
+          "description": "Finite numeric value; put the unit in claim_unit."
+        },
+        "claim_unit": {
+          "type": "string"
+        },
+        "claim_period": {
+          "type": "string"
+        },
         "entity_slug": {
           "type": "string",
           "description": "The entity the fact is about (e.g. `people/alice`). Soft reference — the entity's page need not exist yet. Required unless every `items` entry names its own."
@@ -860,7 +896,7 @@
         },
         "items": {
           "type": "array",
-          "description": "Several facts in one call, 1 to 20 objects `{fact, entity_slug?, confidence?, visibility?, replaces?}`. Replaces `fact`."
+          "description": "Several facts in one call, 1 to 20 objects `{fact, entity_slug?, confidence?, visibility?, replaces?}`. Each may override valid_from, kind, notability and claim_metric/value/unit/period defaults from the top level. Replaces `fact`."
         }
       },
       "additionalProperties": false

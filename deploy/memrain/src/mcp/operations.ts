@@ -44,6 +44,7 @@ export interface ParamDef {
 
 export interface Operation {
   name: string;
+  callShape?: string;
   description: string;
   /**
    * Authorization scope, co-located with the op. A `"write"` op needs a write
@@ -215,6 +216,7 @@ function rejectMissingRequired(op: Operation, params: Record<string, unknown>): 
   const optional = entries.filter(([, d]) => !d.required).map(([k, d]) => describeArg(k, d));
   const suggestion = [
     `Required: ${required.join("; ")}.`,
+    ...(op.callShape ? [`Call shape: ${op.callShape}`] : []),
     ...(optional.length > 0 ? [`Optional: ${optional.join("; ")}.`] : []),
   ].join(" ");
   throw new OperationError(
@@ -253,7 +255,7 @@ function rejectUnknownParams(op: Operation, params: Record<string, unknown>): vo
   throw new OperationError(
     "invalid_params",
     `${op.name}: ${unknown.length} unknown argument(s)`,
-    `${named.join(" ")}${more} ${accepted}`,
+    `${named.join(" ")}${more} ${accepted}${op.callShape ? ` Call shape: ${op.callShape}` : ""}`,
   );
 }
 
@@ -408,6 +410,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "page_put",
+    callShape: "{slug, markdown_body, expected_version?}",
     scope: "write",
     description:
       "Create or update a page in the DB-canonical store. Idempotent: re-putting identical content is a no-op. Each real change appends a row to page_versions. Search sees the page once its search mirror is written: by default before this returns (`search_indexed`). When the operator has moved the mirror to a background job, the response carries `search_pending: true` and `search_job_id` instead, and search sees the page once that job runs, normally within seconds. Pass `wait_for_index: true` when you need to search for the page straight away. To change part of a page, prefer page_edit. When the operator sets MEMRAIN_REQUIRE_WRITE_PRECONDITION, overwriting a live page without `expected_version` (or `force: true`) either adds a `warnings` entry or is refused with `precondition_required` and the page's `current_version`. WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
@@ -468,6 +471,7 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "page_edit",
+    callShape: "{slug, expected_version, edits:[{old_text, new_text}]}",
     scope: "write",
     // The diff quotes the stored lines around the edit.
     outputRedaction: "retrieval",
@@ -676,10 +680,19 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "add_fact",
+    callShape: "{entity_slug, fact} or {entity_slug, items:[{fact}]}",
     scope: "write",
     description:
       "Append a fact about an entity to the entity_facts ledger. Corrections are new facts, never edits — but restating a claim you already wrote does NOT mint a duplicate: an identical claim about the same entity, from the same source and the same writer, refreshes the row on file and returns its id with `inserted: false`. A claim that differs in any of those is a new row. A claim forgotten with `forget_fact` stays forgotten: re-adding it for the same entity, source and visibility (whitespace and case do not matter) writes nothing and returns `withdrawn: true` with `id: null`. `visibility` decides who can read the fact back: it defaults to `private`, which only the operator can read, so a tenant-scoped caller that wants to recall its own write must pass `visibility: 'world'`. Provenance is recorded on every fact: name `source_slug`, `source_chunk_id` or `written_by` to say where the claim came from, and if you name none the fact is credited to your own caller identity — an unattributed fact cannot be audited or aged against its origin; a public caller cannot set `written_by` at all, since that is the audit field. Pass `replaces: <fact_id>` to retire one of your live facts in favour of this one (it is marked superseded, not withdrawn; the response says `replaced: true|false`). To save several facts in one call pass `items` instead of `fact`: up to 20 objects `{fact, entity_slug?, confidence?, visibility?, replaces?}`, with the top-level `entity_slug`, `confidence`, `visibility`, `source_slug`, `source_chunk_id` and `written_by` as defaults; every item is checked before any is written, and the response lists each item's outcome with `saved`, `failed` and `partial`. `items` and `replaces` are refused on the public ingress. WRITE — internal by default, and reachable from the public ingress only when `MEMRAIN_PUBLIC_WRITE=1` is set.",
+    argAliases: { facts: "items", memories: "items", text: "fact", content: "fact", claim: "fact", entity: "entity_slug", subject: "entity_slug" },
     params: {
+      valid_from: str({ description: "Date the claim became true (YYYY-MM-DD or ISO timestamp, stored as its UTC date)." }),
+      kind: str({ enum: ["event", "preference", "commitment", "belief", "fact"] }),
+      notability: str({ enum: ["high", "medium", "low"] }),
+      claim_metric: str({ description: "Metric name; normalized to lower-case snake_case." }),
+      claim_value: num({ description: "Finite numeric value; put the unit in claim_unit." }),
+      claim_unit: str(),
+      claim_period: str(),
       entity_slug: str({
         description:
           "The entity the fact is about (e.g. `people/alice`). Soft reference — the entity's page need not exist yet. Required unless every `items` entry names its own.",
@@ -702,12 +715,13 @@ export const OPERATIONS: readonly Operation[] = [
       }),
       items: arr({
         description:
-          "Several facts in one call, 1 to 20 objects `{fact, entity_slug?, confidence?, visibility?, replaces?}`. Replaces `fact`.",
+          "Several facts in one call, 1 to 20 objects `{fact, entity_slug?, confidence?, visibility?, replaces?}`. Each may override valid_from, kind, notability and claim_metric/value/unit/period defaults from the top level. Replaces `fact`.",
       }),
     },
   },
   {
     name: "add_timeline_event",
+    callShape: "{slug, occurred_at, event}",
     scope: "write",
     description:
       "Append a timeline event to an existing page. Append-only. Idempotent on (slug, occurred_at, source_chunk_id) when source_chunk_id is provided. WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
