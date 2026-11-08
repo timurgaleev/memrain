@@ -642,7 +642,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "unlink",
     scope: "write",
     description:
-      "Remove a typed link. Idempotent — returns removed=0 if no row matched. WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
+      "Remove a manually created typed link. Returns removed and derived_from_text for edges still supplied by markdown/frontmatter/mentions; edit the source page with page_edit to remove those. Idempotent. WRITE — static public bearer: forbidden; authenticated token: requires write scope in its source; internal token: allowed.",
     params: {
       source_slug: str(req),
       target_slug: str(req),

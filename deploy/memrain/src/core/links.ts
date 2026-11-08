@@ -373,7 +373,7 @@ export interface RemoveLinkInput {
 export async function removeLink(
   storage: Storage,
   input: RemoveLinkInput,
-): Promise<{ removed: number }> {
+): Promise<{ removed: number; derived_from_text: { type: string; link_source: string }[]; message?: string }> {
   validateSlug(input.source_slug);
   const target = slugifyTarget(input.target_slug);
   const type = normaliseType(input.type, true);
@@ -390,13 +390,20 @@ export async function removeLink(
   const r = await storage.engine().query<{ removed: number }>(
     `WITH d AS (
        DELETE FROM links
-        WHERE source_slug = $1 AND target_slug = $2 AND type = $3${sourceFilter}
+        WHERE source_slug = $1 AND target_slug = $2 AND type = $3${sourceFilter} AND link_source = 'manual'
         RETURNING 1
      )
      SELECT COUNT(*)::int AS removed FROM d`,
     params,
   );
-  return { removed: r.rows[0]?.removed ?? 0 };
+  const derived = await storage.engine().query<{ type: string; link_source: string }>(
+    `SELECT DISTINCT type, link_source FROM links
+      WHERE source_slug = $1 AND target_slug = $2 AND type = $3${sourceFilter} AND link_source <> 'manual'
+      ORDER BY type, link_source`, params,
+  );
+  return { removed: r.rows[0]?.removed ?? 0, derived_from_text: derived.rows,
+    ...(derived.rows.length ? { message: `Edit the text of ${input.source_slug} with page_edit to remove derived links.` } : {}),
+  };
 }
 
 /**
@@ -992,7 +999,7 @@ export async function syncWikilinksForPage(
     const del = await tx.query<{ c: number }>(
       `WITH d AS (
          DELETE FROM links
-          WHERE source_slug = $1 AND type = 'wikilink'${delScope}
+          WHERE source_slug = $1 AND type = 'wikilink' AND link_source = 'markdown'${delScope}
           RETURNING 1
        )
        SELECT COUNT(*)::int AS c FROM d`,

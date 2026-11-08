@@ -674,7 +674,7 @@
   },
   {
     "name": "unlink",
-    "description": "Remove a typed link. Idempotent — returns removed=0 if no row matched. WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
+    "description": "Remove a manually created typed link. Returns removed and derived_from_text for edges still supplied by markdown/frontmatter/mentions; edit the source page with page_edit to remove those. Idempotent. WRITE — static public bearer: forbidden; authenticated token: requires write scope in its source; internal token: allowed.",
     "inputSchema": {
       "type": "object",
       "properties": {
