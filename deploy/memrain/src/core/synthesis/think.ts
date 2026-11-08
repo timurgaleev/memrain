@@ -42,7 +42,7 @@ import { getCalibrationProfile } from "./reads.ts";
 import { traverseGraph } from "../links.ts";
 import { pageSourcePath } from "../page-index.ts";
 import { isDiarySourcePath } from "../pages.ts";
-import { pageContentDate, resolveThinkTemporalContext } from "./think-temporal.ts";
+import { pageContentDate, questionDateWindow, resolveThinkTemporalContext } from "./think-temporal.ts";
 import { thinkQuoteVerifyEnabled, verifyQuotes, type QuoteCheck } from "./quote-verify.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
 import { frameExternal, markExternalChunks } from "../trust-frame.ts";
@@ -188,6 +188,10 @@ export interface ThinkOptions {
 
 export interface ThinkResult {
   gather_degraded?: GatherFailure[];
+  window_source?: "explicit" | "question";
+  window?: { since?: string; until?: string };
+  /** A gathered passage was shortened before synthesis; not a corpus completeness claim. */
+  evidence_truncated?: boolean;
   ran: boolean;
   reason?: string;
   synthesis: ThinkSynthesis | null;
@@ -606,6 +610,7 @@ export async function gatherGraphPages(
   limit: number,
   sourceIds?: readonly string[],
   onDegraded?: OnGatherFailure,
+  questionDay?: string,
 ): Promise<SearchHit[]> {
   const engine = storage.engine();
   const slugDepth = new Map<string, number>();
@@ -641,6 +646,10 @@ export async function gatherGraphPages(
       params.push(sourceIds);
       scope = ` AND source_id = ANY($${params.length}::text[])`;
     }
+    if (questionDay) {
+      params.push(questionDay);
+      scope += ` AND left(COALESCE(compiled_truth->>'date', compiled_truth->>'event_date', compiled_truth->>'published'), 10) = $${params.length}`;
+    }
     const { rows } = await engine.query<{
       slug: string;
       title: string | null;
@@ -663,6 +672,7 @@ export async function gatherGraphPages(
         sourcePath: pageSourcePath(r.slug, r.source_id),
         title: r.title,
         content: body.slice(0, PAGE_EXCERPT_CHARS),
+        ...(body.length > PAGE_EXCERPT_CHARS ? { truncated: true } : {}),
         score: 1 / (1 + depth),
         // Graph-gathered hits have no classified query intent; "topic" is the
         // neutral member of the SearchHit union (nothing branches on it here).
@@ -1295,10 +1305,12 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
     : null;
 
   const scopeIds = opts.sourceIds;
+  const questionWindow = opts.since || opts.until ? undefined : questionDateWindow(question);
   const window =
     opts.since || opts.until
       ? { ...(opts.since ? { since: opts.since } : {}), ...(opts.until ? { until: opts.until } : {}) }
-      : undefined;
+      : questionWindow;
+  const windowFields = window ? { window_source: questionWindow ? "question" as const : "explicit" as const, window } : {};
   const fence = (hits: SearchHit[]): SearchHit[] =>
     opts.fenceDiary ? hits.filter((h) => !isDiarySourcePath(h.sourcePath)) : hits;
   const rawPagesFn = opts.pagesFn ?? ((q, kk) => gatherPages(storage, q, kk, scopeIds, window, opts.embedQuery, diagnostics.note));
@@ -1335,7 +1347,9 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   // WITHOUT anchors (hermetic paths stay hermetic).
   let pages = hybridPages;
   if (anchors.length > 0) {
-    const graphPages = await markExternalChunks(engine, fence(await gatherGraphPages(storage, anchors, k, scopeIds, diagnostics.note)), scopeIds);
+    const graphPages = await markExternalChunks(engine, fence(await gatherGraphPages(
+      storage, anchors, k, scopeIds, diagnostics.note, questionWindow?.since,
+    )), scopeIds);
     if (graphPages.length > 0) pages = fusePageStreams(hybridPages, graphPages, Math.max(k, hybridPages.length));
   }
 
@@ -1413,6 +1427,8 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
           budgetExhausted: true,
           intent,
           temporal: temporalOut,
+          ...windowFields,
+          evidence_truncated: pages.some(p => p.truncated === true || p.content.length > PAGE_EXCERPT_CHARS),
         }, question, pages);
       }
       exhausted = true;
@@ -1499,6 +1515,8 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
         budgetExhausted: false,
         intent,
         temporal: temporalOut,
+    ...windowFields,
+    evidence_truncated: pages.some(p => p.truncated === true || p.content.length > PAGE_EXCERPT_CHARS),
       }, question, pages);
     }
   }
@@ -1549,6 +1567,8 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
     intent,
     droppedCitations: dropped,
     temporal: temporalOut,
+    ...windowFields,
+    evidence_truncated: pages.some(p => p.truncated === true || p.content.length > PAGE_EXCERPT_CHARS),
     ...quoteFields,
   }, question, pages);
 }
