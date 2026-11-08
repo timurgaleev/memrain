@@ -2283,6 +2283,7 @@ async function callPageList(
   if (args["include_deleted"] === true && !redact) opts.includeDeleted = true;
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   if (readSources !== undefined) opts.sourceIds = readSources;
+  opts.includeBody = args["include_body"] !== false;
   let pages = await listPages(storage, opts);
   // Diary fence: a non-operator caller never sees diary pages in the listing.
   if (remote) pages = pages.filter((p) => !isDiaryPage(p.type, p.slug));
@@ -2310,7 +2311,7 @@ async function callPageVersions(
   }
   const limit = typeof args["limit"] === "number" ? args["limit"] : 20;
   const sourceIds = readSources;
-  const versions = await pageVersions(storage, args["slug"], limit, sourceIds, { withPrincipal });
+  const versions = await pageVersions(storage, args["slug"], limit, sourceIds, { withPrincipal, includeBody: args["include_body"] === true });
   // Version rows carry body snapshots; redact each through the same
   // page allowlist so public callers see metadata only.
   const visible = await applyQuarantineVisibility(storage.engine(), versions, remote);
@@ -2499,13 +2500,16 @@ async function callGetChunks(
     const fenced = hasSlug
       ? await isRemoteDiaryFenced(storage, args["slug"] as string, readSources)
       : isDiarySourcePath(args["source_path"] as string);
-    if (fenced) return jsonResult({ ok: true, chunks: [] });
+    if (fenced) return jsonResult({ ok: true, chunks: [], truncated: false });
   }
   const sourceIds = readSources;
+  const limit = typeof args["limit"] === "number" ? args["limit"] : 200;
+  const fromIndex = typeof args["from_index"] === "number" ? args["from_index"] : 0;
+  const options = { fromIndex, limit: limit + 1 };
   const chunks = hasSlug
-    ? await getChunksForPage(storage, args["slug"] as string, sourceIds)
-    : await getChunksForSource(storage, args["source_path"] as string, sourceIds);
-  return jsonResult({ ok: true, chunks });
+    ? await getChunksForPage(storage, args["slug"] as string, sourceIds, options)
+    : await getChunksForSource(storage, args["source_path"] as string, sourceIds, options);
+  return jsonResult({ ok: true, chunks: chunks.slice(0, limit), truncated: chunks.length > limit });
 }
 
 async function callResolveSlugs(
@@ -4781,7 +4785,7 @@ async function callChronicleBackfill(
   const perPageBudgetUsd = chronicleWriteBudgetUsd();
   const listOpts: Parameters<typeof listPages>[1] = { limit };
   if (readSources !== undefined) listOpts.sourceIds = readSources;
-  const pages = await listPages(storage, listOpts);
+  const pages = await listPages(storage, { ...listOpts, includeBody: true });
   const eligible = pages.filter(
     (p) =>
       isChronicleEligible({

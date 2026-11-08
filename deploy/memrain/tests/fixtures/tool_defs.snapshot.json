@@ -556,6 +556,10 @@
           "type": "boolean",
           "description": "Include soft-deleted pages (default false)."
         },
+        "include_body": {
+          "type": "boolean",
+          "description": "Include markdown_body and compiled_truth (default true). Set false for metadata-only listing."
+        },
         "limit": {
           "type": "integer",
           "minimum": 1,
@@ -571,7 +575,7 @@
   },
   {
     "name": "page_versions",
-    "description": "Read the edit history of a page, newest-first. Includes body snapshots and compiled_truth snapshots at every revision. The operator and admin-scoped callers also see `written_by_principal`, the credential each version was written with (null for internal writes and versions older than the column).",
+    "description": "Read the edit history of a page, newest-first. Returns metadata by default; include_body:true adds body and compiled_truth snapshots within the caller's existing access. The operator and admin-scoped callers also see `written_by_principal`, the credential each version was written with (null for internal writes and versions older than the column).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -582,6 +586,10 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 200
+        },
+        "include_body": {
+          "type": "boolean",
+          "description": "Include body_snapshot and compiled_truth_snapshot (default false). Quarantine and public redaction still apply."
         }
       },
       "required": [
@@ -1231,7 +1239,7 @@
   },
   {
     "name": "get_chunks",
-    "description": "Return a page's (or document's) content chunks in order. Pass `slug` (resolved through the page's page://<slug> search mirror) or `source_path` (a raw document). At least one is required; chunks come back ordered by chunk_index.",
+    "description": "Return a page's (or document's) content chunks in order. Pass `slug` (resolved through the page's page://<slug> search mirror) or `source_path` (a raw document). At least one is required. Returns at most limit chunks (default 200), ordered by chunk_index with an id tie-break; truncated:true means more remain. Continue with from_index increased by the number returned.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1240,6 +1248,17 @@
         },
         "source_path": {
           "type": "string"
+        },
+        "from_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Zero-based position in the ordered, source-filtered result (default 0)."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
         }
       },
       "additionalProperties": false

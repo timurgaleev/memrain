@@ -117,7 +117,7 @@ describe("dispatchTool output redaction", () => {
 
   it("redacts page_versions and page_list for a tenant", async () => {
     for (const [name, args] of [
-      ["page_versions", { slug: SLUG }],
+      ["page_versions", { slug: SLUG, include_body: true }],
       ["page_list", {}],
     ] as const) {
       const r = await dispatchTool(storage, { name, arguments: args }, { authInfo: tenant });

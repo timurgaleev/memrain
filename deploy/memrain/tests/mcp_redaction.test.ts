@@ -169,7 +169,7 @@ describe("dispatchTool page_versions redaction", () => {
   it("public ingress strips body_snapshot from version rows", async () => {
     const res = await dispatchTool(
       storage,
-      { name: "page_versions", arguments: { slug: SLUG } },
+      { name: "page_versions", arguments: { slug: SLUG, include_body: true } },
       { isPublic: true },
     );
     const out = payload(res);
@@ -182,7 +182,7 @@ describe("dispatchTool page_versions redaction", () => {
     const out = payload(
       await dispatchTool(storage, {
         name: "page_versions",
-        arguments: { slug: SLUG },
+        arguments: { slug: SLUG, include_body: true },
       }),
     );
     expect(out.versions[0].body_snapshot).toBe(SECRET_BODY);

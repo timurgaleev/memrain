@@ -335,6 +335,9 @@ export interface PageVersionRow {
   written_by_principal?: string | null;
 }
 
+export type PageMetadata = Omit<PageRow, "markdown_body" | "compiled_truth">;
+export type PageVersionMetadata = Omit<PageVersionRow, "body_snapshot" | "compiled_truth_snapshot">;
+
 /** JSON with every object's keys sorted, for an order-free comparison. */
 function sortedKeysJson(value: unknown): string {
   return JSON.stringify(value, (_key, v: unknown) =>
@@ -945,6 +948,7 @@ const PAGE_SORT_SQL: Record<ListPagesSort, string> = {
 };
 
 export interface ListPagesOptions {
+  includeBody?: boolean;
   type?: string;
   since?: string;
   limit?: number;
@@ -958,10 +962,13 @@ export interface ListPagesOptions {
   sourceIds?: readonly string[];
 }
 
+export function listPages(storage: Storage, opts: ListPagesOptions & { includeBody: false }): Promise<PageMetadata[]>;
+export function listPages(storage: Storage, opts?: ListPagesOptions & { includeBody?: true }): Promise<PageRow[]>;
+export function listPages(storage: Storage, opts: ListPagesOptions): Promise<Array<PageRow | PageMetadata>>;
 export async function listPages(
   storage: Storage,
   opts: ListPagesOptions = {},
-): Promise<PageRow[]> {
+): Promise<Array<PageRow | PageMetadata>> {
   const limit =
     typeof opts.limit === "number" && opts.limit >= 1 && opts.limit <= 1000
       ? Math.floor(opts.limit)
@@ -992,8 +999,8 @@ export async function listPages(
     PAGE_SORT_SQL[opts.sort ?? "updated_desc"] ?? PAGE_SORT_SQL.updated_desc;
   params.push(limit);
   const sql = `
-    SELECT slug, type, title, compiled_truth,
-           markdown_body, content_hash, source_id,
+    SELECT slug, type, title,${opts.includeBody === false ? "" : " compiled_truth, markdown_body,"}
+           content_hash, source_id,
            created_at::text AS created_at,
            updated_at::text AS updated_at,
            deleted_at::text AS deleted_at
@@ -1001,17 +1008,25 @@ export async function listPages(
       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY ${order}
       LIMIT $${params.length}`;
-  const r = await storage.engine().query<PageRow>(sql, params);
+  const r = await storage.engine().query<PageRow | PageMetadata>(sql, params);
   return r.rows;
 }
 
+interface PageVersionOptions {
+  withPrincipal?: boolean;
+  includeBody?: boolean;
+}
+
+export function pageVersions(storage: Storage, slug: string, limit: number | undefined, sourceIds: readonly string[] | undefined, opts: PageVersionOptions & { includeBody: false }): Promise<PageVersionMetadata[]>;
+export function pageVersions(storage: Storage, slug: string, limit?: number, sourceIds?: readonly string[], opts?: PageVersionOptions & { includeBody?: true }): Promise<PageVersionRow[]>;
+export function pageVersions(storage: Storage, slug: string, limit: number | undefined, sourceIds: readonly string[] | undefined, opts: PageVersionOptions): Promise<Array<PageVersionRow | PageVersionMetadata>>;
 export async function pageVersions(
   storage: Storage,
   slug: string,
   limit = 20,
   sourceIds?: readonly string[],
-  opts: { withPrincipal?: boolean } = {},
-): Promise<PageVersionRow[]> {
+  opts: PageVersionOptions = {},
+): Promise<Array<PageVersionRow | PageVersionMetadata>> {
   validateSlug(slug);
   const cap =
     typeof limit === "number" && limit >= 1 && limit <= 200
@@ -1021,9 +1036,8 @@ export async function pageVersions(
   // own source(s). No-op when unset — the full version chain, as today.
   const params: unknown[] = [slug, cap];
   const sourceFilter = andSourceScope("source_id", sourceIds, params);
-  const r = await storage.engine().query<PageVersionRow>(
-    `SELECT slug, source_id, version_n, hash_prev, hash_new,
-            body_snapshot, compiled_truth_snapshot,
+  const r = await storage.engine().query<PageVersionRow | PageVersionMetadata>(
+    `SELECT slug, source_id, version_n, hash_prev, hash_new,${opts.includeBody === false ? "" : " body_snapshot, compiled_truth_snapshot,"}
             written_by, written_at::text AS written_at${opts.withPrincipal === true ? ", written_by_principal" : ""}
        FROM page_versions
        WHERE slug = $1${sourceFilter}

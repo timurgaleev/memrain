@@ -570,6 +570,7 @@ export const OPERATIONS: readonly Operation[] = [
       tag: str({ description: "Filter to pages carrying this tag." }),
       sort: str({ enum: ["updated_desc", "updated_asc", "created_desc", "slug"] }),
       include_deleted: bool({ description: "Include soft-deleted pages (default false)." }),
+      include_body: bool({ description: "Include markdown_body and compiled_truth (default true). Set false for metadata-only listing." }),
       // Clamp: list_pages caps at 100 (default 50) — a 1000-row
       // window is a needless enumeration amplifier for scoped tokens.
       limit: int({ minimum: 1, maximum: 100 }),
@@ -579,10 +580,11 @@ export const OPERATIONS: readonly Operation[] = [
     name: "page_versions",
     outputRedaction: "retrieval",
     description:
-      "Read the edit history of a page, newest-first. Includes body snapshots and compiled_truth snapshots at every revision. The operator and admin-scoped callers also see `written_by_principal`, the credential each version was written with (null for internal writes and versions older than the column).",
+      "Read the edit history of a page, newest-first. Returns metadata by default; include_body:true adds body and compiled_truth snapshots within the caller's existing access. The operator and admin-scoped callers also see `written_by_principal`, the credential each version was written with (null for internal writes and versions older than the column).",
     params: {
       slug: str(req),
       limit: int({ minimum: 1, maximum: 200 }),
+      include_body: bool({ description: "Include body_snapshot and compiled_truth_snapshot (default false). Quarantine and public redaction still apply." }),
     },
   },
   {
@@ -864,10 +866,12 @@ export const OPERATIONS: readonly Operation[] = [
     name: "get_chunks",
     outputRedaction: "retrieval",
     description:
-      "Return a page's (or document's) content chunks in order. Pass `slug` (resolved through the page's page://<slug> search mirror) or `source_path` (a raw document). At least one is required; chunks come back ordered by chunk_index.",
+      "Return a page's (or document's) content chunks in order. Pass `slug` (resolved through the page's page://<slug> search mirror) or `source_path` (a raw document). At least one is required. Returns at most limit chunks (default 200), ordered by chunk_index with an id tie-break; truncated:true means more remain. Continue with from_index increased by the number returned.",
     params: {
       slug: str(),
       source_path: str(),
+      from_index: int({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Zero-based position in the ordered, source-filtered result (default 0)." }),
+      limit: int({ minimum: 1, maximum: 200 }),
     },
   },
   {

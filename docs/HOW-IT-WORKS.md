@@ -213,6 +213,11 @@ A few that are easy to miss:
   `markdown_body`, with byte offsets, `total_bytes`, `partial`, `next_offset`
   and a bounded heading list. Follow `next_offset` until it is null. Windows
   never split a UTF-8 character; use `page_edit` or `page_append` for changes.
+- `page_versions` returns version metadata by default; `include_body:true`
+  adds authorized snapshots. `page_list` keeps its full-body default and
+  accepts `include_body:false` for metadata only. `get_chunks` returns at most
+  200 chunks; when `truncated` is true, increase `from_index` by the number
+  returned to read the next portion.
 - A failed retrieval stage is reported alongside surviving results. `search`
   and `query` expose `meta.degraded`; `think`, `context_pack` and
   `volunteer_context` expose `gather_degraded` when a collector fails. Direct

@@ -26,6 +26,8 @@ export interface ChunkRow {
 export interface ChunkReadOptions {
   /** Also return the chunks of a quarantined document. Operator reads only. */
   includeQuarantined?: boolean;
+  fromIndex?: number;
+  limit?: number;
 }
 
 /**
@@ -50,6 +52,18 @@ export async function getChunksForSource(
   // Undefined => unscoped (back-compat); `[]` => nothing.
   const scopeFilter = andSourceScope("d.source_id", sourceIds, params);
   const quarantineFilter = opts.includeQuarantined === true ? "" : ` AND ${quarantineFilterFragment("d")}`;
+  let limitSql = "";
+  let offsetSql = "";
+  if (opts.limit !== undefined) {
+    if (!Number.isSafeInteger(opts.limit) || opts.limit < 1) throw new Error("chunk limit must be a positive integer");
+    params.push(opts.limit);
+    limitSql = ` LIMIT $${params.length}`;
+  }
+  if (opts.fromIndex !== undefined) {
+    if (!Number.isSafeInteger(opts.fromIndex) || opts.fromIndex < 0) throw new Error("chunk fromIndex must be a non-negative integer");
+    params.push(opts.fromIndex);
+    offsetSql = ` OFFSET $${params.length}`;
+  }
   const result = await db.query<{
     id: string;
     chunk_index: number;
@@ -60,7 +74,7 @@ export async function getChunksForSource(
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
       WHERE d.source_path = $1${scopeFilter}${quarantineFilter}
-      ORDER BY c.chunk_index`,
+      ORDER BY c.chunk_index, c.id${limitSql}${offsetSql}`,
     params,
   );
 
