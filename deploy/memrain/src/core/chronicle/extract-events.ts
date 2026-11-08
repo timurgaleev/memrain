@@ -11,6 +11,7 @@
  */
 import { createHash } from "node:crypto";
 import type { Storage } from "../storage.ts";
+import { isSynthesizedPageSlug } from "../page-index.ts";
 import { getPage, putPage } from "../pages.ts";
 import { upsertEventProjection } from "../chronicle.ts";
 import { sanitizeForPrompt } from "../llm/sanitize.ts";
@@ -260,6 +261,7 @@ export async function runChronicleExtract(
 ): Promise<ChronicleExtractResult> {
   const sourceId = opts.sourceId ?? "default";
   const tz = opts.tz ?? "UTC";
+  if (isSynthesizedPageSlug(opts.slug)) return { slug: opts.slug, status: "skipped", events_written: 0, reason: "synthesized_page" };
   const page = await getPage(storage, opts.slug, [sourceId]);
   if (!page) return { slug: opts.slug, status: "skipped", events_written: 0, reason: "page_not_found" };
 

@@ -23,7 +23,7 @@ import {
 import { stripPastedContent } from "./transcripts/pasted-content.ts";
 import { inferSubject, resolveOwnerEntity } from "./facts-owner.ts";
 import { buildGazetteer, type GazetteerEntry } from "./gazetteer.ts";
-import { PAGE_MIRROR_PATH_SQL } from "./page-index.ts";
+import { PAGE_MIRROR_PATH_SQL, isSynthesizedPageSlug } from "./page-index.ts";
 import { quarantineFilterFragment } from "./quarantine.ts";
 import {
   assessContentSanity,
@@ -811,6 +811,7 @@ export function isFactsExtractionEligible(
   body: string | undefined,
   slug?: string,
 ): EligibilityResult {
+  if (slug && isSynthesizedPageSlug(slug)) return { ok: false, reason: "synthesized_page" };
   if (slug && slug.startsWith("wiki/agents/")) {
     return { ok: false, reason: "subagent_namespace" };
   }
@@ -1007,6 +1008,7 @@ async function isQuarantinedPage(
   sourceId: string,
   expectedHash: string,
 ): Promise<boolean> {
+  if (isSynthesizedPageSlug(slug)) return true;
   let row: { title: string | null; markdown_body: string; fresh: boolean; quarantined: boolean } | undefined;
   try {
     const r = await storage.engine().query<{ title: string | null; markdown_body: string; fresh: boolean; quarantined: boolean }>(

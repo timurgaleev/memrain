@@ -32,6 +32,28 @@ import type { Storage } from "./storage.ts";
 import { logIngest } from "./ingest-log.ts";
 import type { QuarantineVerdict } from "./quarantine.ts";
 
+const SYNTHESIZED_SLUG_PATTERN = "^(atoms|concepts|patterns|reflections|synthesis|drafts/think|drift-reports)/";
+const SYNTHESIZED_SLUG = new RegExp(SYNTHESIZED_SLUG_PATTERN);
+
+export function isSynthesizedPageSlug(slug: string): boolean {
+  return SYNTHESIZED_SLUG.test(slug);
+}
+
+export function notSynthesizedPageSql(alias: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) throw new Error("invalid page SQL alias");
+  return `${alias}.slug !~ '${SYNTHESIZED_SLUG_PATTERN}'`;
+}
+
+/** Exclude generated page mirrors, including tenant-qualified truth mirrors. */
+export function notSynthesizedDocSql(alias: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) throw new Error("invalid document SQL alias");
+  const path = `regexp_replace(${alias}.source_path, '^page(-truth)?://', '')`;
+  const slug = `CASE WHEN COALESCE(${alias}.source_id, 'default') <> 'default'
+    AND left(${path}, length(${alias}.source_id) + 1) = ${alias}.source_id || '/'
+    THEN substring(${path} FROM length(${alias}.source_id) + 2) ELSE ${path} END`;
+  return `NOT (${alias}.source_path ~ '^page(-truth)?://' AND (${slug}) ~ '${SYNTHESIZED_SLUG_PATTERN}')`;
+}
+
 /**
  * Reserved source_path namespace for page-derived search documents, keyed by
  * the page's `(source_id, slug)` identity.

@@ -39,7 +39,7 @@ import type { LlmFn } from "../llm/haiku.ts";
 import { filterWorthwhile, worthGateEnabled } from "../synthesis/worth-gate.ts";
 import { phaseFenceCheck } from "./phase-context.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
-import { PAGE_MIRROR_PATH_SQL } from "../page-index.ts";
+import { PAGE_MIRROR_PATH_SQL, notSynthesizedPageSql } from "../page-index.ts";
 
 export interface ConversationFactsBackfillOptions {
   /** Cap on pages processed per run. Default 50. */
@@ -133,10 +133,7 @@ export async function conversationFactsBackfillPhase(
         AND p.type = ANY($1::text[])
         AND length(btrim(p.markdown_body)) >= 80
         AND p.slug NOT LIKE 'wiki/agents/%'
-        -- Synthesis-written pages are not transcripts; extracting facts from
-        -- them would pay to re-derive our own output on every run.
-        AND p.slug NOT LIKE 'reflections/%'
-        AND p.slug NOT LIKE 'patterns/%'
+        AND ${notSynthesizedPageSql("p")}
         -- A page the gate quarantined in search is not mined for facts either.
         AND NOT EXISTS (
           SELECT 1 FROM documents qd

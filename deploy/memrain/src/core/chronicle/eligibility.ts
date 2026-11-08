@@ -6,6 +6,8 @@
  * event pages are already the output, so re-mining them would loop.
  */
 
+import { isSynthesizedPageSlug } from "../page-index.ts";
+
 export type ChronicleEligibility = { ok: true } | { ok: false; reason: string };
 
 const ELIGIBLE_TYPES = ["meeting", "conversation", "calendar-event"];
@@ -26,6 +28,7 @@ export function isChronicleEligible(input: {
   dreamGenerated?: boolean;
 }): ChronicleEligibility {
   const { type, slug } = input;
+  if (isSynthesizedPageSlug(slug)) return { ok: false, reason: "synthesized_page" };
   if (input.dreamGenerated === true) return { ok: false, reason: "dream_generated" };
   // Diary: never extract events from private interiority. Event: anti-loop.
   if (type === "diary" || type === "journal" || slug.startsWith("life/diary/")) {
