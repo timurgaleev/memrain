@@ -298,6 +298,18 @@ const requestIdParam = str({
 
 export const OPERATIONS: readonly Operation[] = [
   {
+    name: "search_exact",
+    outputRedaction: "retrieval",
+    description: "Find literal substrings in live page bodies and compiled truth, without ranking or embeddings. Returns slug, title, source_id and one snippet per matching page. complete:true means every match was returned; false means limit or a 2-second timeout. scanned counts eligible pages examined (null on timeout). Scoped to your sources; excludes hidden pages. Internal-only.",
+    params: {
+      phrase: str({ ...req, description: "Literal phrase, 1 to 500 characters. %, _ and backslash have no special meaning." }),
+      case_sensitive: bool(),
+      slug_prefix: str(),
+      type: str(),
+      limit: int({ minimum: 1, maximum: 200, description: "Maximum matching pages; default 100." }),
+    },
+  },
+  {
     name: "search",
     outputRedaction: "retrieval",
     description:

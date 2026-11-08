@@ -1,5 +1,41 @@
 [
   {
+    "name": "search_exact",
+    "description": "Find literal substrings in live page bodies and compiled truth, without ranking or embeddings. Returns slug, title, source_id and one snippet per matching page. complete:true means every match was returned; false means limit or a 2-second timeout. scanned counts eligible pages examined (null on timeout). Scoped to your sources; excludes hidden pages. Internal-only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "phrase": {
+          "type": "string",
+          "description": "Literal phrase, 1 to 500 characters. %, _ and backslash have no special meaning."
+        },
+        "case_sensitive": {
+          "type": "boolean"
+        },
+        "slug_prefix": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum matching pages; default 100."
+        }
+      },
+      "required": [
+        "phrase"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "search",
     "description": "Hybrid (vector + keyword) search over the indexed corpus. Returns ranked chunks with their parent document path and title. Optional filters (lang / symbol_kind / since / until) are applied post-ranking and bypass the query cache. Has no `expand` knob, and LLM query expansion is off in the default mode bundles — for a concept or landscape question ('everything about X', 'who works on Y'), escalate to `query` with `expand:true`, which widens the keyword arm with generated variants. A nonzero hit count here is not proof that the corpus was exhausted. The response carries `meta`: `vectorEnabled` plus `degraded[]` reason codes (embed_timeout, vector_arm_failed, keyword_zero, budget_truncated, vector_candidates_incomplete) that tell an empty brain from a degraded run; non-public callers also get intent, mode, cache, retrieved and returned.",
     "inputSchema": {

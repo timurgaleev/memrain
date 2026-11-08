@@ -46,6 +46,7 @@ export const TENANT_A_TOKENS = [
 ];
 
 export const MATRIX: MatrixRow[] = [
+  iso("search_exact", { phrase: "SECRET_NOTES_BODY" }, "AAA_SECRET_NOTES_BODY"),
   iso("search", { q: KEYWORD }),
   write("index"),
   iso("backlinks", { name: WIKI_NAME }),

@@ -255,6 +255,13 @@ A few that are easy to miss:
   truth (including version snapshots). Operators can inspect the content;
   admin-scoped readers can request it explicitly through `page_get`.
 
+- `search_exact {phrase, case_sensitive?, slug_prefix?, type?, limit?}` finds
+  literal text in live page bodies and compiled truth. Each match has one
+  bounded snippet. `complete:true` means every match was returned; `false`
+  identifies a result limit or timeout. `scanned` counts eligible pages,
+  excluding out-of-scope, deleted, quarantined and remote diary pages. It is
+  `null` after a timeout because the completed scan count is unknown. The
+  database scan has a two-second deadline and uses no embeddings.
 - `resolve_slugs {query, exact:true}` uses equality on slug, title, basename,
   declared aliases and structured email fields. It reports ambiguity even with
   `limit:1`; typo matching remains the default when `exact` is omitted.

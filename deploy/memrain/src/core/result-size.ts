@@ -1,7 +1,7 @@
 import { OperationError } from "./operation-error.ts";
 
 const DEFAULT_MAX_RESULT_BYTES = 4 * 1024 * 1024;
-const BOUNDED_TOOLS = new Set(["page_list", "page_versions", "get_chunks", "find_orphans"]);
+const BOUNDED_TOOLS = new Set(["page_list", "page_versions", "get_chunks", "find_orphans", "search_exact"]);
 
 export function mcpMaxResultBytes(): number {
   const raw = (process.env.MEMRAIN_MCP_MAX_RESULT_BYTES ?? "").trim();

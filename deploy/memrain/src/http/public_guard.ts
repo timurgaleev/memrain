@@ -118,6 +118,7 @@ const FORBIDDEN_MCP_TOOLS_FROM_PUBLIC: ReadonlySet<string> = new Set([
   // get_chunks returns raw chunk CONTENT — the public ingress redacts content
   // everywhere else, so it must be internal-only (a read, but a content read).
   "get_chunks",
+  "search_exact",
   // get_tags returns author-authored tag labels (can encode private terms, e.g.
   // a client name) — a new free-text class on the public path; internal-only,
   // consistent with the privacy-max redaction posture.

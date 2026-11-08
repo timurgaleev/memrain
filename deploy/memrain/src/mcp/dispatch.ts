@@ -97,6 +97,7 @@ import { capHitSnippets, searchSnippetChars } from "../core/search/snippet-cap.t
 import { allowedFingerprints } from "../core/secret-scan.ts";
 import { getChunksForPage, getChunksForSource } from "../core/chunks-read.ts";
 import { resolveSlugs, slugReferenceCounts } from "../core/slug-resolve.ts";
+import { searchExact } from "../core/search/exact.ts";
 import { addTag, removeTag, getTags } from "../core/tags.ts";
 import { relationalRecall } from "../core/search/relational-recall.ts";
 import { relationalRecallLlm } from "../core/search/relational-llm.ts";
@@ -600,6 +601,19 @@ async function dispatchToolInner(
       enforceSlugPrefixFence(req.name, args, boundPrefixes);
     }
     switch (req.name) {
+      case "search_exact": {
+        const result = await searchExact(storage, args["phrase"] as string, {
+          caseSensitive: args["case_sensitive"] === true,
+          slugPrefix: typeof args["slug_prefix"] === "string" ? args["slug_prefix"] : undefined,
+          type: typeof args["type"] === "string" ? args["type"] : undefined,
+          limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+          sourceIds: readSources, excludeDiary: remote,
+        });
+        const hits = redact ? result.hits.map(({ snippet: _snippet, ...hit }) => hit) : result.hits;
+        return jsonResult({ ok: true, ...result, hits,
+          ...(!result.complete ? { hint: "Narrow slug_prefix or type, or increase limit (up to 200), before claiming all matches were returned." } : {}),
+        });
+      }
       case "search":
         return await callSearch(
           storage,
