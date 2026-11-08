@@ -56,6 +56,7 @@ export const MATRIX: MatrixRow[] = [
   write("page_put"),
   write("page_append"),
   write("page_edit"),
+  write("page_rename"),
   write("page_delete"),
   write("page_restore"),
   write("page_revert"),

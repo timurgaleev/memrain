@@ -92,6 +92,7 @@ export const SLUG_PARAMS_BY_WRITE_TOOL: Readonly<Record<string, readonly string[
   page_put: ["slug"],
   page_append: ["slug"],
   page_edit: ["slug"],
+  page_rename: ["from", "to"],
   page_delete: ["slug"],
   page_restore: ["slug"],
   page_revert: ["slug"],

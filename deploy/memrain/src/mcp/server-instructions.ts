@@ -67,6 +67,7 @@ function contractClauses(c: (name: string) => boolean): string[] {
   if (c("page_edit")) {
     out.push("- Prefer `page_edit` for a small change to an existing page.");
   }
+  if (c("page_rename")) out.push("- Rename with `page_rename` to preserve history and references.");
   if (writes) {
     out.push("- Write only under the slugs and sources your grant covers. Out-of-scope writes are refused.");
   }

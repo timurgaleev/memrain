@@ -53,6 +53,7 @@ const VALID_JOB_STATUSES: ReadonlySet<JobStatus> = new Set([
 ]);
 import { runOrphans } from "./commands/orphans.ts";
 import { runPageRetype } from "./commands/page-retype.ts";
+import { runRename } from "./commands/rename.ts";
 import { runPages } from "./commands/pages.ts";
 import { runLint } from "./commands/lint.ts";
 import { runReports } from "./commands/reports.ts";
@@ -209,6 +210,8 @@ function printUsage(): void {
   console.log("  friction propose-fix [--skill S | --top-skills N] [--since H] [--example-limit N]");
   console.log("                               Claude Haiku suggests skill-text edits to reduce friction");
   console.log("  orphans                      DB hygiene report + safe deletions");
+  console.log("  rename <from> <to> --expected-version N [--source ID]");
+  console.log("                               move a page and its history; refuses importer-managed pages");
   console.log("  pages [--limit N] [--filter S] catalogue of known wikilink targets");
   console.log("  lint [<dir|file.md>] [--fix] [--dry-run]");
   console.log("                               DB frontmatter conformance (no target) or file lint with auto-repair");
@@ -1363,6 +1366,13 @@ async function main(argv: readonly string[]): Promise<number> {
     case "orphans": {
       await runOrphans();
       return 0;
+    }
+    case "rename": {
+      const expectedVersion = Number(values.get("--expected-version"));
+      if (positional.length !== 2 || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+        throw new Error("memrain rename: <from> <to> --expected-version <positive integer> is required");
+      }
+      return runRename({ from: positional[0]!, to: positional[1]!, expectedVersion, sourceId: values.get("--source") });
     }
     case "page-retype": {
       const to = values.get("--to");

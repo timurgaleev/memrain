@@ -110,6 +110,7 @@ const PUBLIC_WRITE_TOOLS: ReadonlySet<string> = new Set([
 const FORBIDDEN_MCP_TOOLS_FROM_PUBLIC: ReadonlySet<string> = new Set([
   // Destructive writes — never reachable from public, even with the write flag.
   "log_friction",
+  "page_rename",
   "page_delete",
   "page_restore",
   "page_revert",

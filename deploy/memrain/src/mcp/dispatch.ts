@@ -53,6 +53,7 @@ import {
   listPagesPage,
   appendPage,
   deletePage,
+  renamePage,
   restorePage,
   revertPage,
   getPage,
@@ -673,6 +674,18 @@ async function dispatchToolInner(
             receipt,
           }),
         );
+      case "page_rename": {
+        requireOwnWriteSource(req.name, opts.authInfo, writeSource);
+        const result = await renamePage(storage, args["from"] as string, args["to"] as string, {
+          expectedVersion: args["expected_version"] as number,
+          source_id: writeSource,
+          written_by: remoteWriterIdentity(opts) ?? "page_rename",
+          writtenByPrincipal: writerPrincipal(opts),
+          manual: true,
+          excludeDiary: remote,
+        });
+        return jsonResult({ ok: result.renamed, ...result });
+      }
       case "page_delete":
         return await callPageDelete(storage, args, writeSource, writerPrincipal(opts));
       case "page_restore":

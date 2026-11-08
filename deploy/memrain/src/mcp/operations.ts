@@ -533,6 +533,17 @@ export const OPERATIONS: readonly Operation[] = [
     },
   },
   {
+    name: "page_rename",
+    scope: "write",
+    description:
+      "Rename a page, carrying its history, facts, links and timeline and redirecting the old slug. Requires expected_version from page_get. Refuses imported pages; rename them upstream. Old search mirrors are removed immediately; the next cycle indexes the new slug. Both slugs must be within your write grant. Static public bearer: forbidden.",
+    params: {
+      from: str(req),
+      to: str(req),
+      expected_version: int({ ...req, minimum: 1 }),
+    },
+  },
+  {
     name: "page_delete",
     scope: "write",
     description:
@@ -1681,6 +1692,7 @@ const MUTATING_OUTSIDE_WRITE_SCOPE: ReadonlySet<string> = new Set([
 
 /** Mutating tools that delete or overwrite, as opposed to purely adding. */
 const DESTRUCTIVE_TOOLS: ReadonlySet<string> = new Set([
+  "page_rename",
   "index",
   "page_put",
   "page_edit",

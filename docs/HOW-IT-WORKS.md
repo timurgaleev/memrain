@@ -229,6 +229,13 @@ A few that are easy to miss:
   `complete:true`. The cursor preserves timestamp precision and breaks ties
   by slug; hidden diary rows do not consume the visible limit. It is a live
   listing, so edits between requests can change the remaining results.
+- `page_rename {from, to, expected_version}` moves a page with its history,
+  facts, links, tags and timeline, and redirects the old slug. The version is
+  checked under the write lock. Imported pages are refused, including a page
+  edited manually after import: rename it upstream. The old search mirror is
+  removed atomically; the next cycle indexes the new slug. Both names must be
+  within your write grant. CLI: `memrain rename <from> <to> --expected-version N
+  [--source ID]`.
 - `page_versions` returns version metadata by default; `include_body:true`
   adds authorized snapshots. `page_list` keeps its full-body default and
   accepts `include_body:false` for metadata only. `get_chunks` returns at most

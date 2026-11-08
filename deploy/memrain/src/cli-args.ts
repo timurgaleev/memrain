@@ -111,7 +111,7 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--config-b", "--corpus",
   "--date-context", "--days", "--dedup-type-ratio", "--depth", "--description", "--epsilon",
   "--dir", "--down", "--example-limit", "--expect-source", "--expect-version",
-  "--expected-doc", "--expected-revision", "--expected-top1", "--family",
+  "--expected-doc", "--expected-revision", "--expected-top1", "--expected-version", "--family",
   "--federated-read", "--file", "--format",
   "--filter", "--from", "--grant", "--grant-types", "--host", "--id", "--indexed-policy",
   "--input", "--k", "--keep-days", "--kind", "--kinds", "--label", "--limit", "--max-drop",
@@ -262,6 +262,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["skillify", new Set(["--dry-run", "--out", "--slug", "--strict"])],
   ["check-resolvable", new Set(["--limit", "--strict", "--threshold"])],
   ["orphans", new Set<string>()],
+  ["rename", new Set(["--expected-version", "--source"])],
   [
     "page-retype",
     new Set([

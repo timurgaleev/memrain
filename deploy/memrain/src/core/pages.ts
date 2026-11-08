@@ -16,7 +16,8 @@ import { auditSecrets, guardEchoes, guardSecrets, guardSecretsDeep, guardWrite, 
 import { createHash } from "node:crypto";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
-import { bumpPageGeneration } from "./generation.ts";
+import { bumpDocumentClock, bumpPageGeneration } from "./generation.ts";
+import { pageSourcePath, pageTruthSourcePath } from "./page-index.ts";
 import { wellFormJsonbValue } from "./well-form.ts";
 import { extractAliasNorms, setPageAliases } from "./page-aliases.ts";
 import { reconnectWantedLinks } from "./wanted-links.ts";
@@ -1383,6 +1384,11 @@ export interface RenameResult {
 
 export interface RenameOptions {
   written_by?: string;
+  writtenByPrincipal?: string;
+  expectedVersion?: number;
+  /** Interactive rename: refuse imported pages and remove the old search mirror atomically. */
+  manual?: boolean;
+  excludeDiary?: boolean;
   /** Owning source (tenant). When set, the rename resolves + carries ONLY within
    *  this source — a page owned by another tenant reads as "not found". */
   source_id?: string;
@@ -1406,7 +1412,7 @@ export interface RenameOptions {
  * place would fight the FK graph. Instead the existing cycle backstop
  * (`reconcilePageMirrors`) re-mirrors the new slug and drops the old orphan on
  * its next pass — the same self-healing path a normal page_put relies on. The
- * caller may drop the old mirror eagerly (removePageFromSearch) for immediacy.
+ * manual rename removes the old mirror in this transaction instead.
  *
  * No-op results (renamed:false): source page missing/deleted, target slug
  * already taken (live OR soft-deleted — the global PK forbids a second row), or
@@ -1441,8 +1447,8 @@ export async function renamePage(
       srcParams.push(scope);
       srcFilter = ` AND source_id = $${srcParams.length}`;
     }
-    const src = await tx.query<{ source_id: string; content_hash: string }>(
-      `SELECT source_id, content_hash FROM pages
+    const src = await tx.query<{ source_id: string; content_hash: string; type: string }>(
+      `SELECT source_id, content_hash, type FROM pages
         WHERE slug = $1 AND deleted_at IS NULL${srcFilter}`,
       srcParams,
     );
@@ -1450,6 +1456,30 @@ export async function renamePage(
       return { from_slug: fromSlug, to_slug: toSlug, renamed: false, reason: "source page not found or deleted" };
     }
     const ownerSource = src.rows[0]!.source_id;
+    if (opts.excludeDiary && (fromSlug.startsWith("life/diary/") || ["diary", "journal"].includes(src.rows[0]!.type.trim().toLowerCase()))) {
+      throw new PageNotFoundError(fromSlug);
+    }
+    if (opts.expectedVersion !== undefined) {
+      checkExpectedVersion(fromSlug, await currentPageVersion(tx, fromSlug), opts.expectedVersion);
+    }
+    if (opts.manual) {
+      if (/--|-(?:\/|$)/.test(toSlug)) {
+        throw new OperationError("invalid_params", "New page slugs cannot have repeated or trailing hyphens.");
+      }
+      const imported = await tx.query<{ managed: boolean }>(
+        `SELECT (s.kind IN ('github', 'transcript', 'mailbox', 'calendar', 'code', 'webhook')
+          OR p.compiled_truth->>'provider' = 'github'
+          OR (p.compiled_truth ? 'conversation_id' AND p.compiled_truth ? 'format')
+          OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug
+            AND v.written_by IN ('connector-github', 'transcripts-ingest'))) AS managed
+         FROM pages p JOIN sources s ON s.id = p.source_id WHERE p.slug = $1`,
+        [fromSlug],
+      );
+      if (imported.rows[0]?.managed === true) {
+        throw new OperationError("importer_managed", "An importer manages this page's slug.",
+          "Rename it in the upstream source so the next import cannot recreate the old slug.");
+      }
+    }
 
     // Target slug must be globally free — the `pages.slug` PK forbids a second
     // row for it, even a soft-deleted one.
@@ -1507,7 +1537,7 @@ export async function renamePage(
       [fromSlug, toSlug],
     );
     // Inbound edges: drop rows that would collide with an existing (source,
-    // to, type, source_id) edge before re-pointing, so the UPDATE can't trip
+    // to, type, source_id, link_source) edge before re-pointing, so the UPDATE can't trip
     // the tenant-aware unique key.
     await tx.query(
       `DELETE FROM links l
@@ -1517,7 +1547,8 @@ export async function renamePage(
              WHERE x.source_slug = l.source_slug
                AND x.target_slug = $2
                AND x.type = l.type
-               AND x.source_id = l.source_id)`,
+               AND x.source_id = l.source_id
+               AND x.link_source = l.link_source)`,
       [fromSlug, toSlug],
     );
     await move(
@@ -1568,6 +1599,16 @@ export async function renamePage(
       [fromSlug, toSlug],
     );
 
+    if (opts.manual) {
+      const mirrors = await tx.query(
+        `DELETE FROM documents WHERE source_path = ANY($1::text[])
+           AND (source_id = $2 OR (source_id IS NULL AND $2 = 'default')) RETURNING id`,
+        [[pageSourcePath(fromSlug, ownerSource), pageTruthSourcePath(fromSlug, ownerSource),
+          pageSourcePath(fromSlug), pageTruthSourcePath(fromSlug)], ownerSource],
+      );
+      if (mirrors.rows.length > 0) await bumpDocumentClock(tx);
+    }
+
     // Drop the old row — its FK children are already moved, so nothing cascades.
     await tx.query(`DELETE FROM pages WHERE slug = $1`, [fromSlug]);
 
@@ -1588,9 +1629,9 @@ export async function renamePage(
     await tx.query(
       `INSERT INTO page_versions
          (slug, version_n, hash_prev, hash_new,
-          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id)
-       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6)`,
-      [toSlug, nextN.rows[0]!.n, src.rows[0]!.content_hash, marker, writtenBy, ownerSource],
+          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id, written_by_principal)
+       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6, $7)`,
+      [toSlug, nextN.rows[0]!.n, src.rows[0]!.content_hash, marker, writtenBy, ownerSource, opts.writtenByPrincipal ?? null],
     );
     await bumpPageGeneration(tx, toSlug);
     // The new slug may be a name other pages already link to.

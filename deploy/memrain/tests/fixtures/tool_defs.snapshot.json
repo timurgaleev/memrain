@@ -430,6 +430,36 @@
     }
   },
   {
+    "name": "page_rename",
+    "description": "Rename a page, carrying its history, facts, links and timeline and redirecting the old slug. Requires expected_version from page_get. Refuses imported pages; rename them upstream. Old search mirrors are removed immediately; the next cycle indexes the new slug. Both slugs must be within your write grant. Static public bearer: forbidden.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "expected_version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "expected_version"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "page_delete",
     "description": "Soft-delete a page (sets deleted_at; the row + page_versions chain stays for audit). Idempotent. WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
     "inputSchema": {
