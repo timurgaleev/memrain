@@ -566,6 +566,14 @@
           "type": "boolean",
           "description": "Include markdown_body and compiled_truth (default true). Set false for metadata-only listing."
         },
+        "slug_prefix": {
+          "type": "string",
+          "description": "Literal slug prefix, e.g. projects/x/ for a subtree. No wildcards or relative paths."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Opaque next_cursor from a previous page with the same filters, sort and source access. Limit and include_body may change. complete:true means no more rows at read time."
+        },
         "limit": {
           "type": "integer",
           "minimum": 1,

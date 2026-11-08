@@ -217,6 +217,11 @@ A few that are easy to miss:
   with `written_at` and `current_version` identifying the snapshot. Page title
   and identity metadata remain current; current access and quarantine rules
   still apply. A missing snapshot returns `version_not_found`.
+- `page_list` accepts a literal `slug_prefix` (`projects/x/` for that subtree).
+  Follow `next_cursor` with the same filters, sort and source access until
+  `complete:true`. The cursor preserves timestamp precision and breaks ties
+  by slug; hidden diary rows do not consume the visible limit. It is a live
+  listing, so edits between requests can change the remaining results.
 - `page_versions` returns version metadata by default; `include_body:true`
   adds authorized snapshots. `page_list` keeps its full-body default and
   accepts `include_body:false` for metadata only. `get_chunks` returns at most

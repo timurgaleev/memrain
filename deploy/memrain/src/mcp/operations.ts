@@ -563,7 +563,7 @@ export const OPERATIONS: readonly Operation[] = [
     description:
       "List pages, newest-first by default. Optional filters: `type`, `tag` (normalized), `since` (ISO timestamp), `limit` (1..100, default 50). `sort` picks the order (updated_desc default | updated_asc | created_desc | slug); `include_deleted:true` adds soft-deleted pages with deleted_at populated.",
     argAliases: {
-      prefix: { hint: "page_list has no prefix filter; filter by `tag`, or find pages with `search`." },
+      prefix: "slug_prefix",
     },
     params: {
       type: str(),
@@ -572,6 +572,8 @@ export const OPERATIONS: readonly Operation[] = [
       sort: str({ enum: ["updated_desc", "updated_asc", "created_desc", "slug"] }),
       include_deleted: bool({ description: "Include soft-deleted pages (default false)." }),
       include_body: bool({ description: "Include markdown_body and compiled_truth (default true). Set false for metadata-only listing." }),
+      slug_prefix: str({ description: "Literal slug prefix, e.g. projects/x/ for a subtree. No wildcards or relative paths." }),
+      cursor: str({ description: "Opaque next_cursor from a previous page with the same filters, sort and source access. Limit and include_body may change. complete:true means no more rows at read time." }),
       // Clamp: list_pages caps at 100 (default 50) — a 1000-row
       // window is a needless enumeration amplifier for scoped tokens.
       limit: int({ minimum: 1, maximum: 100 }),

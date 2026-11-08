@@ -149,9 +149,9 @@ describe("validateParams — unit", () => {
     }
   });
 
-  it("points page_list `prefix` at the filters that exist", () => {
+  it("points page_list `prefix` at slug_prefix", () => {
     const e = caught(() => validateParams(opByName("page_list"), { prefix: "people/" }));
-    expect(e.suggestion).toContain("`prefix`: page_list has no prefix filter");
+    expect(e.suggestion).toContain("slug_prefix");
   });
 
   it("lists the accepted arguments with the required ones marked", () => {

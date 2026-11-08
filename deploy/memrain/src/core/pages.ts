@@ -27,6 +27,7 @@ import { carryFactWithdrawals } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { recordWriteRequest, type WriteRequestKey } from "./write-requests.ts";
 import { applyPageEdits, assertScanKeptFences, pageEditResponse, type PageEdit } from "./page-edit.ts";
+import { decodePageListCursor, encodePageListCursor, type PageListPosition } from "./page-list-cursor.ts";
 
 // Catalogue of well-known page types. Not enforced at the DB level (see
 // migration 015 comment); kept here so application code can normalise +
@@ -941,14 +942,16 @@ export type ListPagesSort = (typeof LIST_PAGES_SORTS)[number];
 // Whitelisted ORDER BY per sort key — the enum is validated at the boundary
 // AND mapped through this table so an unsupported string can never reach SQL.
 const PAGE_SORT_SQL: Record<ListPagesSort, string> = {
-  updated_desc: "updated_at DESC",
-  updated_asc: "updated_at ASC",
-  created_desc: "created_at DESC",
+  updated_desc: `pages.updated_at DESC, slug COLLATE "C" ASC`,
+  updated_asc: `pages.updated_at ASC, slug COLLATE "C" ASC`,
+  created_desc: `pages.created_at DESC, slug COLLATE "C" ASC`,
   slug: `slug COLLATE "C" ASC`,
 };
 
 export interface ListPagesOptions {
   includeBody?: boolean;
+  slugPrefix?: string;
+  excludeDiary?: boolean;
   type?: string;
   since?: string;
   limit?: number;
@@ -973,9 +976,58 @@ export async function listPages(
     typeof opts.limit === "number" && opts.limit >= 1 && opts.limit <= 1000
       ? Math.floor(opts.limit)
       : 50;
+  validateSlugPrefix(opts.slugPrefix);
+  return queryPageList(storage, opts, limit);
+}
+
+export function validateSlugPrefix(prefix: string | undefined): void {
+  if (prefix === undefined || prefix === "") return;
+  try {
+    if (prefix.length > MAX_SLUG_LEN) throw new Error("prefix too long");
+    validateSlug(prefix.endsWith("/") ? prefix.slice(0, -1) : prefix);
+  } catch {
+    throw new OperationError("invalid_params", "Invalid slug_prefix.",
+      "Use a page slug prefix, optionally ending in /; wildcards and relative paths are not supported.");
+  }
+}
+
+export async function listPagesPage(storage: Storage, opts: ListPagesOptions & { cursor?: string } = {}): Promise<{
+  pages: Array<PageRow | PageMetadata>; next_cursor: string | null; complete: boolean;
+}> {
+  validateSlugPrefix(opts.slugPrefix);
+  const sort = opts.sort ?? "updated_desc";
+  const context = createHash("sha256").update(JSON.stringify({
+    sort, prefix: opts.slugPrefix ?? "", type: opts.type?.toLowerCase() ?? "",
+    since: opts.since ?? "", tag: opts.tag?.replace(/\s+/g, " ").trim().toLowerCase() ?? "",
+    includeDeleted: opts.includeDeleted === true, excludeDiary: opts.excludeDiary === true,
+    sourceIds: opts.sourceIds === undefined ? null : [...new Set(opts.sourceIds)].sort(),
+  })).digest("hex");
+  const position = opts.cursor === undefined ? undefined : decodePageListCursor(opts.cursor, context, sort !== "slug");
+  const limit = typeof opts.limit === "number" && opts.limit >= 1 && opts.limit <= 1000 ? Math.floor(opts.limit) : 50;
+  const rows = await queryPageList(storage, opts, limit + 1, position);
+  const pages = rows.slice(0, limit);
+  const complete = rows.length <= limit;
+  const last = pages.at(-1);
+  return { pages, complete, next_cursor: complete || !last ? null : encodePageListCursor(context, {
+    slug: last.slug, key: sort === "slug" ? null : sort === "created_desc" ? last.created_at : last.updated_at,
+  }) };
+}
+
+async function queryPageList(
+  storage: Storage, opts: ListPagesOptions, limit: number, position?: PageListPosition,
+): Promise<Array<PageRow | PageMetadata>> {
   const params: unknown[] = [];
   const where: string[] = [];
   if (opts.includeDeleted !== true) where.push("deleted_at IS NULL");
+  if (opts.slugPrefix) {
+    params.push(opts.slugPrefix.replace(/([\\%_])/g, "\\$1") + "%");
+    where.push(`slug LIKE $${params.length} ESCAPE '\\'`);
+  }
+  if (opts.excludeDiary) {
+    // Match String.trim() in the dispatcher, including legacy whitespace around types.
+    params.push(" \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff");
+    where.push(`lower(btrim(COALESCE(type, ''), $${params.length})) NOT IN ('diary', 'journal') AND slug NOT LIKE 'life/diary/%'`);
+  }
   if (opts.type) {
     params.push(opts.type.toLowerCase());
     where.push(`type = $${params.length}`);
@@ -997,6 +1049,17 @@ export async function listPages(
   }
   const order =
     PAGE_SORT_SQL[opts.sort ?? "updated_desc"] ?? PAGE_SORT_SQL.updated_desc;
+  if (position) {
+    const slug = `$${params.push(position.slug)}`;
+    if (opts.sort === "slug") where.push(`slug COLLATE "C" > ${slug} COLLATE "C"`);
+    else {
+      const column = opts.sort === "created_desc" ? "created_at" : "updated_at";
+      const direction = opts.sort === "updated_asc" ? ">" : "<";
+      // Bind as text so postgres-js does not round the cursor to JS milliseconds.
+      const key = `$${params.push(position.key)}::text::timestamptz`;
+      where.push(`(${column} ${direction} ${key} OR (${column} = ${key} AND slug COLLATE "C" > ${slug} COLLATE "C"))`);
+    }
+  }
   params.push(limit);
   const sql = `
     SELECT slug, type, title,${opts.includeBody === false ? "" : " compiled_truth, markdown_body,"}

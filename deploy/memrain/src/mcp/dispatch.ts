@@ -48,6 +48,7 @@ import type { EntityType } from "../core/entities.ts";
 import { makeCaptureCallback } from "../core/eval-capture.ts";
 import {
   putPage,
+  listPagesPage,
   appendPage,
   deletePage,
   restorePage,
@@ -2304,12 +2305,14 @@ async function callPageList(
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   if (readSources !== undefined) opts.sourceIds = readSources;
   opts.includeBody = args["include_body"] !== false;
-  let pages = await listPages(storage, opts);
-  // Diary fence: a non-operator caller never sees diary pages in the listing.
-  if (remote) pages = pages.filter((p) => !isDiaryPage(p.type, p.slug));
+  if (typeof args["slug_prefix"] === "string") opts.slugPrefix = args["slug_prefix"];
+  const { pages, next_cursor, complete } = await listPagesPage(storage, {
+    ...opts, excludeDiary: remote,
+    ...(typeof args["cursor"] === "string" ? { cursor: args["cursor"] } : {}),
+  });
   const visible = await applyQuarantineVisibility(storage.engine(), pages, remote);
   const out = redact ? visible.map(redactQuarantinePage) : visible;
-  return jsonResult({ ok: true, pages: out });
+  return jsonResult({ ok: true, pages: out, next_cursor, complete });
 }
 
 async function callPageVersions(
