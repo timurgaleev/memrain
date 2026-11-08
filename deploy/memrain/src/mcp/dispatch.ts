@@ -747,7 +747,7 @@ async function dispatchToolInner(
           callAddTimelineEvent(storage, args, writeSource, writerPrincipal(opts), redact, remote),
         );
       case "entity_facts":
-        return await callEntityFacts(storage, args, redact, readSources, remote);
+        return await callEntityFacts(storage, args, redact, readSources, remote, opts);
       case "entity_timeline":
         return await callEntityTimeline(storage, args, redact, readSources);
       case "entity_recall":
@@ -2949,6 +2949,7 @@ async function callEntityFacts(
   redact = false,
   readSources?: string[],
   remote = false,
+  dispatchOpts: DispatchOptions = {},
 ): Promise<ToolCallResult> {
   // entity_slug is optional: omit for a cross-entity recall. When present it
   // must be a string.
@@ -2994,13 +2995,33 @@ async function callEntityFacts(
   // public; internal callers get it via the `MEMRAIN_FACT_DECAY` env default.
   if (redact) opts.decay = false;
   if (readSources !== undefined) opts.sourceIds = readSources;
+  if (remote) opts.excludeDiary = true;
+  const query = !dispatchOpts.isPublic && !dispatchOpts.adminPanel && !redact && typeof args["query"] === "string"
+    ? args["query"].trim().slice(0, 512) : "";
+  let hint: { status: string } | undefined;
+  if (query && (readSources === undefined || readSources.length > 0)) {
+    try {
+      const embed = dispatchOpts.embedQuery ?? (await import("../core/embedding.ts")).embedText;
+      opts.queryVector = await embed(query);
+      opts.minSimilarity = 0.35;
+    } catch {
+      hint = { status: "embedding_unavailable" };
+    }
+  }
   const facts = await listFacts(storage, entitySlug, opts);
   // Public ingress: `fact` is note-derived private content — strip it,
   // mirroring the search/page body redaction policy.
   const out = redact
     ? redactFacts(facts as unknown as Record<string, unknown>[])
     : facts;
-  return jsonResult({ ok: true, entity_slug: entitySlug ?? null, facts: out });
+  const groups = new Map<string, typeof facts>();
+  if (query && !entitySlug) for (const fact of facts) {
+    groups.set(fact.entity_slug, [...(groups.get(fact.entity_slug) ?? []), fact]);
+  }
+  return jsonResult({ ok: true, entity_slug: entitySlug ?? null, facts: out,
+    ...(query && !entitySlug ? { facts_groups: [...groups].map(([entity_slug, facts]) => ({ entity_slug, facts })) } : {}),
+    ...(hint ? { hint } : {}),
+  });
 }
 
 async function callEntityTimeline(

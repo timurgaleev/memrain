@@ -1021,6 +1021,10 @@
           "type": "string",
           "description": "Entity to scope to. Omit for a cross-entity recall."
         },
+        "query": {
+          "type": "string",
+          "description": "Optional semantic focus (one Titan embedding, first 512 characters; cosine >=0.35). Without entity_slug also returns facts_groups. Ignored for the public bearer. Falls back to the normal order with a hint if embedding is unavailable."
+        },
         "since": {
           "type": "string"
         },

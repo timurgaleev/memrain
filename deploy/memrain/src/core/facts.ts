@@ -16,6 +16,7 @@
  */
 import { factSourceEligibleSql } from "./quarantine.ts";
 import { supersededValidUntilSql } from "./fact-validity.ts";
+import { factRemoteEligibleSql } from "./fact-visibility.ts";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
@@ -890,6 +891,9 @@ export interface ListFactsOptions {
    * `order`. The caller embeds the query (entityRecall does, falls-open).
    */
   queryVector?: number[];
+  /** Optional cosine floor for a focused semantic read; unembedded rows are omitted. */
+  minSimilarity?: number;
+  excludeDiary?: boolean;
   limit?: number;
   /**
    * Apply confidence decay (migration 037 `kind`/`valid_until` consumer):
@@ -952,6 +956,7 @@ export async function listFacts(
 ): Promise<FactRow[]> {
   const params: unknown[] = [];
   const where: string[] = [];
+  if (opts.excludeDiary) where.push(factRemoteEligibleSql());
   // entity_slug is OPTIONAL: omit it for a cross-entity "what did I learn"
   // recall (an entity-less filtered recall). The visibility floor
   // + source scoping applied by the caller still gate an entity-less scan.
@@ -1027,6 +1032,11 @@ export async function listFacts(
   if (hasQueryVector) {
     params.push(JSON.stringify(opts.queryVector));
     order = `embedding <=> $${params.length}::vector ASC NULLS LAST, confidence DESC, written_at DESC, id DESC`;
+    if (opts.minSimilarity !== undefined) {
+      const vectorParam = params.length;
+      params.push(opts.minSimilarity);
+      where.push(`1 - (embedding <=> $${vectorParam}::vector) >= $${params.length}`);
+    }
   } else {
     order =
       opts.order === "recency"

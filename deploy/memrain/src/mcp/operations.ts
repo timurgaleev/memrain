@@ -784,6 +784,7 @@ export const OPERATIONS: readonly Operation[] = [
       "List facts about an entity, ordered by confidence (default) or recency. `entity_slug` is OPTIONAL: omit it for a cross-entity recall (\"what did I learn recently / this session\") across all entities. Optional `since` filter on written_at and `source_slug` filter to narrow to facts derived from a single page. Lifecycle filters (mig085): `session` (capture-session id), `grep` (case-insensitive substring on the fact text), `visibility` (private|world), `include_forgotten` (surface tombstoned rows for audit; internal callers only — forced off on public ingress).",
     params: {
       entity_slug: str({ description: "Entity to scope to. Omit for a cross-entity recall." }),
+      query: str({ description: "Optional semantic focus (one Titan embedding, first 512 characters; cosine >=0.35). Without entity_slug also returns facts_groups. Ignored for the public bearer. Falls back to the normal order with a hint if embedding is unavailable." }),
       since: str(),
       source_slug: str(),
       order: str({ enum: ["confidence", "recency"] }),
