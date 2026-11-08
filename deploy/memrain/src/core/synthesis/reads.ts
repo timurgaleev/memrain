@@ -10,6 +10,7 @@ import type { Engine } from "../engine/interface.ts";
 import { excludeEmptyExtractionTombstone } from "./takes.ts";
 import { normalizeScope } from "../source-scope.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
+import { takeHorizonSql } from "./take-horizon.ts";
 
 function clampLimit(limit: number | undefined, max: number, dflt: number): number {
   return typeof limit === "number" && limit >= 1 && limit <= max
@@ -234,7 +235,19 @@ export async function searchTakes(
   return r.rows;
 }
 
+export interface TakeJournal {
+  active: number;
+  /** Active takes with an explicit resolution, independent of advisory grades. */
+  resolved: number;
+  unresolved: number;
+  overdue: number;
+  upcoming: number;
+  undated: number;
+  unparseable_horizon: number;
+}
+
 export interface TakesScorecard {
+  journal: TakeJournal;
   /** Every take matching the filter (graded or not). */
   total_takes: number;
   /** Takes that carry at least one grade. */
@@ -255,6 +268,7 @@ export interface TakesScorecard {
 }
 
 const EMPTY_SCORECARD: TakesScorecard = {
+  journal: { active: 0, resolved: 0, unresolved: 0, overdue: 0, upcoming: 0, undated: 0, unparseable_horizon: 0 },
   total_takes: 0,
   graded: 0,
   resolved: 0,
@@ -331,6 +345,7 @@ export async function getTakesScorecard(
     excludeQuarantinedSource("t.source_ref");
   const r = await engine.query<{
     total_takes: number;
+    journal: TakeJournal;
     graded: number;
     resolved: number;
     correct: number;
@@ -345,7 +360,9 @@ export async function getTakesScorecard(
         ORDER BY take_id, generated_at DESC
      ),
      scored AS (
-       SELECT t.weight,
+       SELECT t.weight, t.active, t.resolved_quality IS NOT NULL AS journal_resolved,
+              NULLIF(btrim(t.until_date), '') AS horizon_raw,
+              ${takeHorizonSql("t.until_date")} AS horizon_date,
               lg.verdict AS grade_verdict,
               COALESCE(t.resolved_quality, lg.verdict) AS verdict
          FROM synth_takes t
@@ -353,6 +370,15 @@ export async function getTakesScorecard(
         WHERE 1=1 ${where}
      )
      SELECT
+       json_build_object(
+         'active', COUNT(*) FILTER (WHERE active)::int,
+         'resolved', COUNT(*) FILTER (WHERE active AND journal_resolved)::int,
+         'unresolved', COUNT(*) FILTER (WHERE active AND NOT journal_resolved)::int,
+         'overdue', COUNT(*) FILTER (WHERE active AND NOT journal_resolved AND horizon_date < CURRENT_DATE)::int,
+         'upcoming', COUNT(*) FILTER (WHERE active AND NOT journal_resolved AND horizon_date >= CURRENT_DATE)::int,
+         'undated', COUNT(*) FILTER (WHERE active AND NOT journal_resolved AND horizon_raw IS NULL)::int,
+         'unparseable_horizon', COUNT(*) FILTER (WHERE active AND NOT journal_resolved AND horizon_raw IS NOT NULL AND horizon_date IS NULL)::int
+       ) AS journal,
        COUNT(*)::int                                                            AS total_takes,
        COUNT(grade_verdict)::int                                                AS graded,
        COUNT(*) FILTER (WHERE verdict IN ('correct','incorrect','partial'))::int AS resolved,
@@ -371,6 +397,7 @@ export async function getTakesScorecard(
   const decided = row.correct + row.incorrect;
   return {
     total_takes: row.total_takes,
+    journal: row.journal,
     graded: row.graded,
     resolved: row.resolved,
     correct: row.correct,
