@@ -827,6 +827,7 @@ export async function hybridSearch(
     stampDefaultEvidence(hits, trimmed);
     // Same WARN channel on the cache-hit path so the flag is uniform.
     await stampContentFlags(engine, hits);
+    opts.signal?.throwIfAborted();
     if (opts.onCapture) {
       try {
         void Promise.resolve(opts.onCapture({
