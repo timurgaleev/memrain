@@ -154,7 +154,8 @@ describe("restating a claim", () => {
       written_by: "facts-extract",
     });
     expect(other.inserted).toBe(true);
-    expect(await listFacts(storage, E)).toHaveLength(2);
+    expect(await ledger()).toHaveLength(2);
+    expect((await listFacts(storage, E))[0]!.collapsed_count).toBe(2);
   });
 
   it("keeps a second tenant's row: identity includes the source", async () => {
@@ -167,13 +168,15 @@ describe("restating a claim", () => {
       source_id: "tenant-b",
     });
     expect(other.inserted).toBe(true);
-    expect(await listFacts(storage, E)).toHaveLength(2);
+    expect(await ledger()).toHaveLength(2);
+    expect((await listFacts(storage, E))[0]!.collapsed_count).toBe(2);
   });
 
   it("still inserts a different claim about the same subject", async () => {
     await addFact(storage, { entity_slug: E, fact: "runs the office" });
     const other = await addFact(storage, { entity_slug: E, fact: "runs the Berlin office" });
     expect(other.inserted).toBe(true);
+    expect(await ledger()).toHaveLength(2);
     expect(await listFacts(storage, E)).toHaveLength(2);
   });
 

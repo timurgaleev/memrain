@@ -20,6 +20,29 @@
 import type { Engine } from "./engine/interface.ts";
 import { FACT_WITHDRAW_LOCK_NS } from "./brand.ts";
 
+export interface WithdrawalDetail {
+  source_id: string;
+  visibility: string;
+  entity_slug: string;
+  withdrawn_at: string;
+  scope: "normalized_claim";
+}
+
+/** Metadata only: the reason and original claim may contain private free text. */
+export async function getWithdrawalDetail(
+  engine: Pick<Engine, "query">,
+  key: { source_id: string; visibility: string; entity_slug: string; fact: string },
+): Promise<WithdrawalDetail | undefined> {
+  const r = await engine.query<WithdrawalDetail>(
+    `SELECT source_id, visibility, entity_slug, created_at::text AS withdrawn_at,
+            'normalized_claim'::text AS scope
+       FROM fact_withdrawals WHERE source_id = $1 AND visibility = $2
+        AND entity_slug = $3 AND claim_key = memrain_fact_claim_key($4)`,
+    [key.source_id, key.visibility, key.entity_slug, key.fact],
+  );
+  return r.rows[0];
+}
+
 /** Advisory-lock key serializing a source's withdrawals against its fact
  *  inserts (the insert trigger, migrations 112 and 120, takes the same key
  *  shared). */

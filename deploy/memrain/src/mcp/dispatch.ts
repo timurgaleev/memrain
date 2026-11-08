@@ -2889,7 +2889,10 @@ async function addOneFact(
     input.written_by = fallbackWrittenBy;
   }
   if (principal !== undefined) input.written_by_principal = principal;
-  const r = { ...await addFact(storage, input), ...resolution.feedback };
+  const { withdrawn_detail, ...saved } = await addFact(storage, input);
+  const r = { ...saved, ...resolution.feedback,
+    ...(withdrawn_detail && !isPublic && (!remote || withdrawn_detail.visibility === "world") ? { withdrawn_detail } : {}),
+  };
   const replaces = args["replaces"];
   if (typeof replaces !== "number") return r;
   // The new fact is already committed; a failed retirement must not hide that.

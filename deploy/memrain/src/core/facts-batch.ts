@@ -135,6 +135,7 @@ export interface BatchItemOutcome extends EntityResolutionFeedback {
   id?: number | null;
   inserted?: boolean;
   withdrawn?: true;
+  withdrawn_detail?: import("./fact-withdrawals.ts").WithdrawalDetail;
   replaced?: boolean;
   replace_reason?: string;
   error?: { code: string; message: string };
@@ -152,6 +153,7 @@ interface SingleOutcome extends EntityResolutionFeedback {
   id: number | null;
   inserted: boolean;
   withdrawn?: true;
+  withdrawn_detail?: import("./fact-withdrawals.ts").WithdrawalDetail;
   replaced?: boolean;
   replace_reason?: string;
 }
@@ -174,6 +176,7 @@ export async function runAddFactBatch(
         id: r.id,
         inserted: r.inserted,
         ...(r.withdrawn ? { withdrawn: r.withdrawn } : {}),
+        ...(r.withdrawn_detail ? { withdrawn_detail: r.withdrawn_detail } : {}),
         ...(r.replaced !== undefined ? { replaced: r.replaced } : {}),
         ...(r.replace_reason !== undefined ? { replace_reason: r.replace_reason } : {}),
         ...(r.entity_slug !== undefined ? { entity_slug: r.entity_slug } : {}),

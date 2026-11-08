@@ -17,6 +17,7 @@
 import { factSourceEligibleSql } from "./quarantine.ts";
 import { supersededValidUntilSql } from "./fact-validity.ts";
 import { factRemoteEligibleSql } from "./fact-visibility.ts";
+import { getWithdrawalDetail, type WithdrawalDetail } from "./fact-withdrawals.ts";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
@@ -494,6 +495,7 @@ export interface AddFactResult {
   /** Set when the claim was withdrawn by an earlier forget (migration 112):
    *  nothing was written and `id` is null. */
   withdrawn?: true;
+  withdrawn_detail?: WithdrawalDetail;
 }
 
 /**
@@ -589,19 +591,15 @@ export async function addFact(
   // and the paid embed/classify path: a withdrawn claim costs nothing and
   // writes nothing. The insert trigger enforces the same rule for every other
   // write path; this only spares the tombstone and the Bedrock call.
-  if (
-    await isClaimWithdrawn(storage.engine(), {
-      source_id: effectiveSource,
-      visibility: visibility ?? "private",
-      entity_slug: input.entity_slug,
-      fact,
-    })
-  ) {
+  const withdrawalKey = { source_id: effectiveSource, visibility: visibility ?? "private", entity_slug: input.entity_slug, fact };
+  const withdrawnDetail = await getWithdrawalDetail(storage.engine(), withdrawalKey);
+  if (withdrawnDetail) {
     return {
       id: null,
       entity_slug: input.entity_slug,
       inserted: false,
       withdrawn: true,
+      withdrawn_detail: withdrawnDetail,
     };
   }
 
@@ -847,6 +845,7 @@ export async function addFact(
       entity_slug: input.entity_slug,
       inserted: false,
       withdrawn: true,
+      withdrawn_detail: await getWithdrawalDetail(storage.engine(), withdrawalKey),
     };
   }
   return { id: landed.id, entity_slug: input.entity_slug, inserted: landed.inserted };
