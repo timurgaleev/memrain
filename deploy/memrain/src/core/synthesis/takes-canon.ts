@@ -212,13 +212,37 @@ export async function syncTakesFromFence(
          active           = EXCLUDED.active,
          since_date       = EXCLUDED.since_date,
          until_date       = EXCLUDED.until_date,
-         resolved_at      = EXCLUDED.resolved_at,
-         resolved_quality = EXCLUDED.resolved_quality,
-         resolved_outcome = EXCLUDED.resolved_outcome,
-         resolved_value   = EXCLUDED.resolved_value,
-         resolved_unit    = EXCLUDED.resolved_unit,
-         resolved_source  = EXCLUDED.resolved_source,
-         resolved_by      = EXCLUDED.resolved_by`,
+         resolved_at = CASE
+           WHEN EXCLUDED.resolved_quality IS NOT NULL THEN EXCLUDED.resolved_at
+           WHEN synth_takes.claim_text IS DISTINCT FROM EXCLUDED.claim_text THEN NULL
+           ELSE synth_takes.resolved_at END,
+         resolved_quality = CASE
+           WHEN EXCLUDED.resolved_quality IS NOT NULL THEN EXCLUDED.resolved_quality
+           WHEN synth_takes.claim_text IS DISTINCT FROM EXCLUDED.claim_text THEN NULL
+           ELSE synth_takes.resolved_quality END,
+         resolved_outcome = CASE
+           WHEN EXCLUDED.resolved_quality IS NOT NULL THEN EXCLUDED.resolved_outcome
+           WHEN synth_takes.claim_text IS DISTINCT FROM EXCLUDED.claim_text THEN NULL
+           ELSE synth_takes.resolved_outcome END,
+         resolved_value = CASE
+           WHEN EXCLUDED.resolved_quality IS NOT NULL THEN EXCLUDED.resolved_value
+           WHEN synth_takes.claim_text IS DISTINCT FROM EXCLUDED.claim_text THEN NULL
+           ELSE synth_takes.resolved_value END,
+         resolved_unit = CASE
+           WHEN EXCLUDED.resolved_quality IS NOT NULL THEN EXCLUDED.resolved_unit
+           WHEN synth_takes.claim_text IS DISTINCT FROM EXCLUDED.claim_text THEN NULL
+           ELSE synth_takes.resolved_unit END,
+         resolved_source = CASE
+           WHEN EXCLUDED.resolved_quality IS NOT NULL THEN EXCLUDED.resolved_source
+           WHEN synth_takes.claim_text IS DISTINCT FROM EXCLUDED.claim_text THEN NULL
+           ELSE synth_takes.resolved_source END,
+         resolved_by = CASE
+           WHEN EXCLUDED.resolved_quality IS NOT NULL THEN EXCLUDED.resolved_by
+           WHEN synth_takes.claim_text IS DISTINCT FROM EXCLUDED.claim_text THEN NULL
+           ELSE synth_takes.resolved_by END,
+         status = CASE
+           WHEN synth_takes.claim_text IS DISTINCT FROM EXCLUDED.claim_text AND synth_takes.status = 'graded'
+           THEN 'accepted' ELSE synth_takes.status END`,
       [
         fenceTakeKey(sourceRef, t.rowNum),
         sourceRef,
