@@ -161,6 +161,8 @@ export interface PageInput {
   appendContent?: string;
   /** Caller identifier for the audit trail. */
   written_by?: string;
+  /** Internal mirrors may replace only their own latest version. */
+  onlyOverwriteWriter?: string;
   /** Allow a type that isn't in KNOWN_PAGE_TYPES. Default false. */
   allowAdHocType?: boolean;
   /**
@@ -283,6 +285,7 @@ export interface PageRow {
 }
 
 export interface PutResult {
+  held?: "authored_edit";
   slug: string;
   /** New version number assigned to this write (>=1). */
   version_n: number;
@@ -507,6 +510,18 @@ export async function putPage(
     checkExpectedVersion(input.slug, Number(existing.rows[0]?.version_n ?? 0), input.expectedVersion);
 
     const current = existing.rows[0];
+    if (input.onlyOverwriteWriter !== undefined && current !== undefined) {
+      const latest = await tx.query<{ written_by: string | null }>(
+        "SELECT written_by FROM page_versions WHERE slug = $1 ORDER BY version_n DESC LIMIT 1",
+        [input.slug],
+      );
+      if (latest.rows[0]?.written_by !== input.onlyOverwriteWriter) {
+        return {
+          slug: input.slug, version_n: Number(current.version_n), content_hash: current.content_hash,
+          changed: false, created: false, held: "authored_edit",
+        };
+      }
+    }
     if (
       input.preconditionPolicy !== undefined &&
       input.expectedVersion === undefined &&

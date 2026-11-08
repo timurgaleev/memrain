@@ -99,6 +99,7 @@ export interface SynthesizeConceptsResult {
   /** True when a USD ceiling stopped at least one call. The run still
    *  completes — the affected concepts keep their deterministic narrative. */
   budgetHit: boolean;
+  pagesHeld: number;
   errors: string[];
 }
 
@@ -170,6 +171,7 @@ export async function synthesizeConceptsPhase(
     pagesWritten: 0,
     tierCounts: { T1: 0, T2: 0, T3: 0 },
     budgetHit: false,
+    pagesHeld: 0,
     errors: [],
   };
 
@@ -299,14 +301,16 @@ export async function synthesizeConceptsPhase(
       const pageSlug = `concepts/${slugifyTitle(group.slug)}`;
       const mentions = group.titles.slice(0, 10).map((t) => `- ${t}`).join("\n");
       try {
-        await putPage(opts.storage, {
+        const pageWrite = await putPage(opts.storage, {
           slug: pageSlug,
           type: "concept",
           title,
           markdown_body: `${narrative}\n\n## Atoms (${group.titles.length})\n${mentions}\n`,
           written_by: "synthesize-concepts",
+          onlyOverwriteWriter: "synthesize-concepts",
         });
-        result.pagesWritten += 1;
+        if (pageWrite.held) result.pagesHeld += 1;
+        else result.pagesWritten += 1;
       } catch (e) {
         result.errors.push(`${group.slug} page: ${e instanceof Error ? e.message : String(e)}`);
       }

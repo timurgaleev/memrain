@@ -107,6 +107,11 @@ describe("reflectionsPhase", () => {
     expect(page).not.toBeNull();
     expect(page!.title).toBe("Recurring deadline anxiety");
     expect(page!.markdown_body).toContain(`[[${slugs[0]}]]`);
+    await putPage(storage, { slug: "reflections/deadline-anxiety", markdown_body: "human edit", written_by: "operator" });
+    const held = await reflectionsPhase(storage, { sonnetFn: fakeSonnet(payload) });
+    expect(held.pagesHeld).toBe(1);
+    expect(held.reflectionsWritten).toBe(0);
+    expect((await getPage(storage, "reflections/deadline-anxiety"))?.markdown_body).toBe("human edit");
   });
 
   it("drops a reflection that cites no valid transcript slug", async () => {

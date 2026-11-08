@@ -46,6 +46,7 @@ export interface DriftPhaseResult {
   reportSlug?: string;
   spentUsd: number;
   budgetExhausted: boolean;
+  pagesHeld: number;
   errors: string[];
 }
 
@@ -252,6 +253,7 @@ export async function driftPhase(
     driftedFlagged: 0,
     spentUsd: 0,
     budgetExhausted: false,
+    pagesHeld: 0,
     errors: [],
   };
 
@@ -337,16 +339,18 @@ export async function driftPhase(
 
   const slug = reportSlugFor();
   try {
-    await putPage(storage, {
+    const pageWrite = await putPage(storage, {
       slug,
       type: "drift-report",
       title: `Drift report ${new Date().toISOString().slice(0, 10)}`,
       markdown_body: renderReport(drifted),
       source_id: sourceId,
       written_by: "drift",
+      onlyOverwriteWriter: "drift",
       allowAdHocType: true,
     });
-    base.reportSlug = slug;
+    if (pageWrite.held) base.pagesHeld += 1;
+    else base.reportSlug = slug;
   } catch (e) {
     base.errors.push(`${slug}: ${String(e instanceof Error ? e.message : e)}`);
   }
