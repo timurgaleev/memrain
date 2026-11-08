@@ -42,6 +42,7 @@ import { readBodyWithCap } from "./body_limit.ts";
 import { logIngest } from "../core/ingest-log.ts";
 import { runWithSpendClient } from "../core/budget.ts";
 
+import { UnrecoverableJobError } from "../core/jobs/types.ts";
 import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "../core/jobs/kinds.ts";
 import { parseTranscriptJsonl } from "../core/transcripts/detect.ts";
 import { ingestSessions, prepareSession, type PreparedSession } from "../core/transcripts/ingest.ts";
@@ -574,6 +575,11 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
   }
 }
 
+const INGEST_TERMINAL_CODES: ReadonlySet<string> = new Set([
+  "permission_denied", "insufficient_scope", "invalid_params", "secret_detected", "secret_rejected",
+  "quarantined", "page_quarantined", "page_shrink_refused",
+]);
+
 /**
  * Register the `ingest_capture` worker handler. The capture lands through the
  * SAME `page_put` dispatch path MCP writes use — link sync, search mirror,
@@ -583,9 +589,9 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
 export function registerIngestCaptureHandler(storage: Storage): void {
   registerHandler(INGEST_CAPTURE_JOB_KIND, async (payload, ctx) => {
     const event = payload.event as IngestionEvent | undefined;
-    if (!event) throw new Error("ingest_capture: payload.event is required");
+    if (!event) throw new UnrecoverableJobError("refused: ingest_capture: payload.event is required");
     const invalid = validateIngestionEvent(event);
-    if (invalid) throw new Error(`ingest_capture: invalid event: ${invalid}`);
+    if (invalid) throw new UnrecoverableJobError(`refused: ingest_capture: invalid event: ${invalid}`);
 
     const metaSlug =
       typeof event.metadata?.slug === "string" ? (event.metadata.slug as string) : undefined;
@@ -635,6 +641,11 @@ export function registerIngestCaptureHandler(storage: Storage): void {
     );
     const text = result.content?.[0]?.text ?? "{}";
     if (result.isError) {
+      let code: unknown;
+      try { code = (JSON.parse(text) as { error?: unknown })?.error; } catch { /* Unknown failures remain retryable. */ }
+      if (typeof code === "string" && INGEST_TERMINAL_CODES.has(code)) {
+        throw new UnrecoverableJobError(`refused: ingest_capture: page_put ${code}`);
+      }
       throw new Error(`ingest_capture: page_put failed: ${text.slice(0, 300)}`);
     }
     let put: Record<string, unknown> = {};
@@ -657,16 +668,16 @@ export function registerIngestCaptureHandler(storage: Storage): void {
   // through the queue.
   registerHandler(TRANSCRIPTS_INGEST_JOB_KIND, async (payload, ctx) => {
     const sourceId = payload.source_id;
-    if (typeof sourceId !== "string" || sourceId === "") throw new Error("transcripts_ingest: payload.source_id is required");
+    if (typeof sourceId !== "string" || sourceId === "") throw new UnrecoverableJobError("refused: transcripts_ingest: payload.source_id is required");
     const sessions = sessionsFromPayload(payload.sessions);
-    if (typeof sessions === "string") throw new Error(`transcripts_ingest: ${sessions}`);
+    if (typeof sessions === "string") throw new UnrecoverableJobError(`refused: transcripts_ingest: ${sessions}`);
     const boundRaw = payload.bound_slug_prefixes;
     if (boundRaw !== undefined) {
       if (!Array.isArray(boundRaw) || !boundRaw.every((p) => typeof p === "string")) {
-        throw new Error("transcripts_ingest: bound_slug_prefixes must be strings");
+        throw new UnrecoverableJobError("refused: transcripts_ingest: bound_slug_prefixes must be strings");
       }
       if (boundRaw.length > 0 && sessions.some((s) => !sessionUnderPrefixes(sessionBaseSlug(s), boundRaw as string[]))) {
-        throw new Error("transcripts_ingest: a session falls outside the client's bound prefixes");
+        throw new UnrecoverableJobError("refused: transcripts_ingest: a session falls outside the client's bound prefixes");
       }
     }
     const ref = typeof payload.ref === "string" ? payload.ref : "push";
