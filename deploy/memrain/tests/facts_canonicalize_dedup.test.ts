@@ -232,6 +232,7 @@ describe("forget survives a fence rebuild (2c)", () => {
     expect(f.forgotten).toBe(true);
     expect(await recallFact(storage, secretId)).toBeNull();
 
+    const kept = (await storage.engine().query("SELECT id, written_at FROM entity_facts WHERE entity_slug='people/carol' AND fact='kept fact'")).rows;
     // Re-put the identical page — the fence still lists "secret fact".
     const r = await putAndReconcile("people/carol", body);
 
@@ -239,9 +240,8 @@ describe("forget survives a fence rebuild (2c)", () => {
     expect(await liveCount("people/carol", "secret fact")).toBe(0);
     expect(await recallFact(storage, secretId)).toBeNull();
     expect(await liveCount("people/carol", "kept fact")).toBe(1);
-    // The rebuild re-adds only the live "kept fact"; the forgotten claim is
-    // skipped (its tombstone was spared, not deleted + re-inserted).
-    expect(r.added).toBe(1);
+    expect(r).toEqual({ removed: 0, added: 0, unchanged: 1 });
+    expect((await storage.engine().query("SELECT id, written_at FROM entity_facts WHERE entity_slug='people/carol' AND fact='kept fact'")).rows).toEqual(kept);
   });
 });
 

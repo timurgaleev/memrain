@@ -332,8 +332,10 @@ describe("fence reconcile", () => {
     await forgetFact(storage, target.id);
     // Row 1 stays retired by its own tombstone; the claim resurfacing on row 3
     // is what the withdrawal has to catch.
+    const kept = await liveRows();
     const r = await putAndReconcile(fenceBody(["Plays chess", "speaks portuguese"], 2));
-    expect(r.added).toBe(1);
+    expect(r).toEqual({ removed: 0, added: 0, unchanged: 1 });
+    expect(await liveRows()).toEqual(kept);
     expect((await liveRows()).map((x) => x.fact)).toEqual(["Plays chess"]);
   });
 });
