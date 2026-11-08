@@ -25,6 +25,8 @@ import { isOperationError } from "../operation-error.ts";
 import type { SourceKind } from "../sources.ts";
 import { embedText } from "../embedding.ts";
 import { reciprocalRankFusion } from "../rrf.ts";
+import { isStatementTimeoutError } from "../retry.ts";
+import { DEGRADED_REASONS } from "./search-meta.ts";
 import { vectorSearch } from "./vector.ts";
 import { keywordSearch, keywordSearchRelaxed, keywordSearchScored } from "./keyword.ts";
 import { resolveDateBoundary } from "./filters.ts";
@@ -522,7 +524,7 @@ function isEmbedTimeout(e: unknown, dl: QueryEmbedDeadline): boolean {
 function reportMeta(opts: SearchOptions, meta: SearchMeta): void {
   if (!opts.onMeta) return;
   try {
-    opts.onMeta(meta);
+    opts.onMeta({ ...meta, degraded: DEGRADED_REASONS.filter(reason => meta.degraded.includes(reason)) });
   } catch {
     // The meta channel is observational; a broken listener never fails a search.
   }
@@ -906,6 +908,18 @@ export async function hybridSearch(
   //    embedding failure is non-fatal.
   let queryVector: number[] | null = null;
   const degraded: DegradedReason[] = [];
+  const failArm = (error: unknown, arm: "keyword" | "vector" | "title" | "expansion"): void => {
+    opts.signal?.throwIfAborted();
+    if (isOperationError(error) && error.code === "budget_exhausted") throw error;
+    const reason = arm === "keyword"
+      ? isStatementTimeoutError(error) ? "keyword_timeout" : "keyword_arm_failed"
+      : arm === "expansion" ? "expansion_failed" : `${arm}_arm_failed` as DegradedReason;
+    degraded.push(reason);
+  };
+  const keywordArm = async <T>(run: () => Promise<T[]>): Promise<T[]> => {
+    try { return await run(); }
+    catch (error) { failArm(error, "keyword"); return []; }
+  };
   const deadline = makeQueryEmbedDeadline();
   const dl = opts.signal
     ? { ...deadline, signal: AbortSignal.any([deadline.signal, opts.signal]) }
@@ -969,17 +983,17 @@ export async function hybridSearch(
           maxPool: maxPoolOn,
           sourceBoost: armSourceBoost,
           onCandidatesIncomplete: () => degraded.push("vector_candidates_incomplete"),
-        })
+        }).catch(error => { failArm(error, "vector"); queryVector = null; return []; })
       : Promise.resolve<string[]>([]),
-    keywordSearchScored(engine, trimmed, fanout, {
+    keywordArm(() => keywordSearchScored(engine, trimmed, fanout, {
       sourceIds: opts.sourceIds,
       filters: chunkFilters,
       maxPool: maxPoolOn,
       sourceBoost: armSourceBoost,
-    }),
+    })),
   ]);
   const primaryKeywordIds = primaryKeywordRows.map((r) => r.id);
-  if (primaryKeywordIds.length === 0) degraded.push("keyword_zero");
+  if (primaryKeywordIds.length === 0 && !degraded.some(r => r === "keyword_timeout" || r === "keyword_arm_failed")) degraded.push("keyword_zero");
 
   // 3. Expansion (default OFF — see SearchOptions.expansion; skipped for
   //    exact intent regardless).
@@ -987,16 +1001,17 @@ export async function hybridSearch(
   // Arm name per list, for the page-fusion vote attribution in explain.
   const listArms: string[] = ["vector", "keyword"];
   if (intent !== "exact" && expansionEnabled) {
-    const variants = await (opts.expandQueryFn ?? expandQuery)(trimmed, { max: 3 });
+    const variants = await (opts.expandQueryFn ?? expandQuery)(trimmed, { max: 3 })
+      .catch(error => { failArm(error, "expansion"); return []; });
     if (variants.length > 0) {
       const extra = await Promise.all(
         variants.map((v) =>
-          keywordSearch(engine, v, fanout, {
+          keywordArm(() => keywordSearch(engine, v, fanout, {
             sourceIds: opts.sourceIds,
             filters: chunkFilters,
             maxPool: maxPoolOn,
             sourceBoost: armSourceBoost,
-          }),
+          })),
         ),
       );
       lists.push(...extra);
@@ -1017,6 +1032,7 @@ export async function hybridSearch(
   let titleListIdx = -1;
   if (titleArmOn) {
     titleIds = await titleArmChunkIds(engine, trimmed, {
+      onError: error => failArm(error, "title"),
       ...(opts.sourceIds ? { sourceIds: opts.sourceIds } : {}),
       limit: fanout,
     });
@@ -1057,12 +1073,12 @@ export async function hybridSearch(
     primaryKeywordIds.length < KEYWORD_RELAX_MIN_ROWS
   ) {
     const strict = new Set(primaryKeywordIds);
-    const relaxed = await keywordSearchRelaxed(engine, trimmed, fanout, {
+    const relaxed = await keywordArm(() => keywordSearchRelaxed(engine, trimmed, fanout, {
       sourceIds: opts.sourceIds,
       filters: chunkFilters,
       maxPool: maxPoolOn,
       sourceBoost: armSourceBoost,
-    });
+    }));
     const relaxedIds = relaxed.map((r) => r.id).filter((id) => !strict.has(id));
     if (relaxedIds.length > 0) {
       lists.push(relaxedIds);

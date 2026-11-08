@@ -70,6 +70,7 @@ export function titleArmEnabled(
 }
 
 export interface TitleArmOptions {
+  onError?: (error: unknown) => void;
   /** Tenant scope — only documents of these sources are eligible. */
   sourceIds?: readonly string[];
   /** Max chunk ids returned. Default 20. */
@@ -194,6 +195,7 @@ export async function titleArmChunkIds(
     }
     return out;
   } catch (err) {
+    opts.onError?.(err);
     // Fail-open: the arm is additive recall, never a dependency of search.
     console.error(
       "[title-arm] identifier lookup failed, dropping arm:",

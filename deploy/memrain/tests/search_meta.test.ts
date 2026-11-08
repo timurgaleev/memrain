@@ -93,10 +93,13 @@ describe("SearchMeta helpers", () => {
     expect(pub).toEqual({ vectorEnabled: false, degraded: ["embed_timeout"] });
   });
 
-  it("the vocabulary is the closed seven-code set", () => {
+  it("the vocabulary is a closed set of failure and result codes", () => {
     expect([...DEGRADED_REASONS]).toEqual([
       "embed_timeout",
       "vector_arm_failed",
+      "keyword_timeout",
+      "keyword_arm_failed",
+      "title_arm_failed",
       "keyword_zero",
       "expansion_failed",
       "budget_truncated",

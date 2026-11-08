@@ -15,6 +15,9 @@ import type { SearchConfidence } from "./confidence-grade.ts";
 export const DEGRADED_REASONS = [
   "embed_timeout",
   "vector_arm_failed",
+  "keyword_timeout",
+  "keyword_arm_failed",
+  "title_arm_failed",
   "keyword_zero",
   "expansion_failed",
   "budget_truncated",
@@ -51,6 +54,9 @@ export interface PublicSearchMeta {
 const CORPUS_INDEPENDENT_REASONS: ReadonlySet<DegradedReason> = new Set([
   "embed_timeout",
   "vector_arm_failed",
+  "keyword_timeout",
+  "keyword_arm_failed",
+  "title_arm_failed",
 ]);
 
 /** The meta a non-operator caller (public ingress or an OAuth tenant) sees. */
@@ -64,6 +70,9 @@ export function publicSearchMeta(meta: SearchMeta): PublicSearchMeta {
 const REASON_TEXT: Record<DegradedReason, string> = {
   embed_timeout: "vector arm unavailable (embed_timeout)",
   vector_arm_failed: "vector arm unavailable (vector_arm_failed)",
+  keyword_timeout: "keyword arm timed out",
+  keyword_arm_failed: "keyword arm unavailable",
+  title_arm_failed: "title arm unavailable",
   keyword_zero: "keyword search found nothing",
   expansion_failed: "query expansion failed",
   budget_truncated: "token budget dropped hits",
