@@ -465,6 +465,8 @@ export interface SearchCaptureInfo {
 }
 
 export interface SearchHit extends Partial<SearchProvenance> {
+  /** Read-side provenance label; never changes stored content or ranking. */
+  trust?: "external";
   chunkId: string;
   documentId: string;
   sourcePath: string;

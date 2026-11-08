@@ -262,6 +262,13 @@ A few that are easy to miss:
   truth (including version snapshots). Operators can inspect the content;
   admin-scoped readers can request it explicitly through `page_get`.
 
+- `search`, `query`, `get_chunks`, `think` evidence and `context_pack` label
+  external source text with `trust: "external"` and an escaped
+  `<external_content>` frame. GitHub/mailbox/calendar/webhook sources and
+  recorded non-operator contributors mark text external; facts inherit their
+  origin's provenance. A later edit does not erase earlier provenance. Frame
+  characters count toward the response budget. Stored bodies, `page_get` and
+  operator transcripts keep their original text.
 - Empty `search` and `query` results include a `hint`: `retrieval_healthy`
   suggests broader terms or filters, `retrieval_degraded` names pipeline
   failures, and `grant_sources_empty` means the caller has no readable source.

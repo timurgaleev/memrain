@@ -29,6 +29,7 @@ import { extractCandidatesFromWindow } from "./entity-salience.ts";
 import { resolveEntitiesToPointers } from "./reflex.ts";
 import { parseWindow, VOLUNTEER_DEFAULT_MIN_CONFIDENCE } from "./volunteer.ts";
 import { newerMentionsEnabled, readNewerMentions } from "./newer-mentions.ts";
+import { frameExternal, readExternalTrust, type ExternalTrust } from "../trust-frame.ts";
 
 export const CONTEXT_PACK_DEFAULT_ENTITIES = 5;
 export const CONTEXT_PACK_MAX_ENTITIES = 8;
@@ -42,25 +43,25 @@ export const CONTEXT_PACK_CARD_EVENTS = 3;
 /** listFacts' own row cap; the fenced over-fetch never asks for more. */
 const FACT_FETCH_CAP = 1000;
 
-export interface PackCardFact {
+export interface PackCardFact extends ExternalTrust {
   id: number;
   fact?: string;
   confidence: number;
 }
 
-export interface PackCardEvent {
+export interface PackCardEvent extends ExternalTrust {
   date: string;
   event?: string;
 }
 
 /** A page dated after the entity's own that links to it. Redacted: date only. */
-export interface PackCardNewer {
+export interface PackCardNewer extends ExternalTrust {
   date: string;
   slug?: string;
   title?: string | null;
 }
 
-export interface PackCard {
+export interface PackCard extends ExternalTrust {
   slug: string;
   title: string | null;
   type: string | null;
@@ -70,7 +71,7 @@ export interface PackCard {
   newer?: PackCardNewer[];
 }
 
-export interface PackFact {
+export interface PackFact extends ExternalTrust {
   id: number;
   entity_slug: string;
   fact?: string;
@@ -250,20 +251,28 @@ async function buildCard(
         includeDocuments: !opts.remote,
       })
     : [];
+  const external = opts.redact ? null : await readExternalTrust(storage.engine(), {
+    pages: [r.page.slug, ...newer.map(m => m.slug)], facts: r.facts.map(f => f.id), events: r.timeline.map(e => e.id),
+  }, opts.sourceIds);
+  const pageExternal = external?.pages.has(r.page.slug) ?? false;
   return {
     slug,
-    title: r.page.title ?? null,
+    title: pageExternal && r.page.title ? frameExternal(r.page.title) : r.page.title ?? null,
     type: r.page.type ?? null,
+    ...(pageExternal ? { trust: "external" as const } : {}),
     facts: speakerOrdered(r.facts).map((f) =>
       opts.redact
         ? { id: f.id, confidence: f.confidence }
-        : { id: f.id, fact: packFactText(f), confidence: f.confidence },
+        : { id: f.id, fact: packFactText(f), confidence: f.confidence, ...(external?.facts.has(f.id)
+          ? { fact: frameExternal(packFactText(f)), trust: "external" as const } : {}) },
     ),
     recent: r.timeline.map((e) =>
-      opts.redact ? { date: toDate(e.occurred_at) } : { date: toDate(e.occurred_at), event: e.event },
+      opts.redact ? { date: toDate(e.occurred_at) } : { date: toDate(e.occurred_at), ...(external?.events.has(e.id)
+        ? { event: frameExternal(e.event), trust: "external" as const } : { event: e.event }) },
     ),
     ...(newer.length > 0
-      ? { newer: newer.map((m) => (opts.redact ? { date: m.date } : { date: m.date, slug: m.slug, title: m.title })) }
+      ? { newer: newer.map((m) => (opts.redact ? { date: m.date } : { date: m.date, slug: m.slug, title: m.title,
+        ...(external?.pages.has(m.slug) ? { title: m.title ? frameExternal(m.title) : m.title, trust: "external" as const } : {}) })) }
       : {}),
   };
 }
@@ -370,10 +379,12 @@ export async function buildContextPack(
     }
     if (kept.length >= factsLimit || rows.length < limit || limit >= FACT_FETCH_CAP) break;
   }
+  const external = opts.redact ? null : await readExternalTrust(storage.engine(), { facts: kept.map(f => f.id) }, opts.sourceIds);
   const brainFacts: PackFact[] = speakerOrdered(kept).map((f) =>
     opts.redact
       ? { id: f.id, entity_slug: f.entity_slug, confidence: f.confidence }
-      : { id: f.id, entity_slug: f.entity_slug, fact: packFactText(f), confidence: f.confidence },
+      : { id: f.id, entity_slug: f.entity_slug, fact: packFactText(f), confidence: f.confidence, ...(external?.facts.has(f.id)
+        ? { fact: frameExternal(packFactText(f)), trust: "external" as const } : {}) },
   );
 
   // Charged on what the caller is allowed to see, so the dropped counts say

@@ -25,6 +25,9 @@ import {
   NO_SOURCE_SENTINEL,
 } from "../core/auth-info.ts";
 import { hybridSearch, type SearchOptions } from "../core/search/index.ts";
+import { resolveSearchKnobs } from "../core/search/hybrid.ts";
+import { applyTokenBudget } from "../core/search/token-budget.ts";
+import { frameMarkedContent, markExternalChunks } from "../core/trust-frame.ts";
 import { publicSearchMeta, type SearchMeta } from "../core/search/search-meta.ts";
 import { gradeConfidence } from "../core/search/confidence-grade.ts";
 import { listWantedPages, type ListWantedPagesOptions } from "../core/wanted-links.ts";
@@ -1237,13 +1240,15 @@ async function callSearch(
           ),
       )
     : hits;
-  const out = capHitSnippets(
+  const snippets = capHitSnippets(
     (redact
       ? redactBodies(visible as unknown as Record<string, unknown>[])
-      : visible) as Array<{ content: string; sourcePath: string }>,
+      : visible) as Array<{ chunkId: string; content: string; sourcePath: string }>,
     searchSnippetChars(),
     readSources,
   );
+  const out = redact ? snippets : await frameSearchHits(storage, snippets, readSources, resolveSearchKnobs(searchOpts).tokenBudget);
+  if (meta && out.length < snippets.length) meta = { ...meta, degraded: [...new Set([...meta.degraded, "budget_truncated" as const])] };
   // Non-operators see corpus-independent reason codes only, keyed on the caller
   // rather than on body redaction: counts are an existence oracle even when
   // bodies are opted in.
@@ -1318,6 +1323,13 @@ function emptyRetrievalHint(readSources?: string[], meta?: Pick<SearchMeta, "deg
   return { hint: reasons.length > 0
     ? { status: "retrieval_degraded", reasons, try: ["Retry the query; check server health if this persists."] }
     : { status: "retrieval_healthy", try: ["Use fewer or different terms.", "Broaden the date, type or slug filters."] } };
+}
+
+async function frameSearchHits<T extends { chunkId: string; content: string; title?: string | null }>(
+  storage: Storage, hits: readonly T[], readSources?: string[], tokenBudget?: number,
+) {
+  const framed = (await markExternalChunks(storage.engine(), hits, readSources)).map(frameMarkedContent);
+  return tokenBudget === undefined ? framed : applyTokenBudget(framed, tokenBudget);
 }
 
 const URI_SCHEME = /^[a-z][a-z0-9+.-]+:\/\//i;
@@ -2599,7 +2611,8 @@ async function callGetChunks(
   const chunks = hasSlug
     ? await getChunksForPage(storage, args["slug"] as string, sourceIds, options)
     : await getChunksForSource(storage, args["source_path"] as string, sourceIds, options);
-  return jsonResult({ ok: true, chunks: chunks.slice(0, limit), truncated: chunks.length > limit });
+  const marked = await markExternalChunks(storage.engine(), chunks.slice(0, limit), readSources);
+  return jsonResult({ ok: true, chunks: marked.map(frameMarkedContent), truncated: chunks.length > limit });
 }
 
 async function callResolveSlugs(
@@ -3578,7 +3591,9 @@ async function callQuery(
       onMeta: m => { for (const reason of (isOperator ? m : publicSearchMeta(m)).degraded) reasons.add(reason); },
     };
     const hits = await queryRefine(storage, q, refine, opts);
-    const visible = capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources);
+    const visible = await frameSearchHits(storage,
+      capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources), readSources,
+      typeof args["token_budget"] === "number" ? args["token_budget"] : undefined);
     return jsonResult({
       ok: true,
       ...typeNotice,
@@ -3637,7 +3652,9 @@ async function callQuery(
   const hitsAll = await hybridSearch(storage, q, searchOpts);
   const hitsOffset = offset > 0 ? hitsAll.slice(offset) : hitsAll;
   // Diary fence for the non-operator caller (mirrors callSearch).
-  const hits = capHitSnippets(fenceDiaryHits(hitsOffset, isOperator), searchSnippetChars(), readSources);
+  const snippets = capHitSnippets(fenceDiaryHits(hitsOffset, isOperator), searchSnippetChars(), readSources);
+  const hits = await frameSearchHits(storage, snippets, readSources, resolveSearchKnobs(searchOpts).tokenBudget);
+  if (meta && hits.length < snippets.length) meta = { ...meta, degraded: [...new Set([...meta.degraded, "budget_truncated" as const])] };
   const metaOut = responseSearchMeta(meta, hits, isOperator);
   return jsonResult({ ok: true, hits, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}),
     ...(hits.length === 0 ? emptyRetrievalHint(readSources, metaOut) : {}),
