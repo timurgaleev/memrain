@@ -29,13 +29,15 @@ import type { Engine } from "../engine/interface.ts";
 import { registerHandler } from "./handlers.ts";
 import { REMEDIATION_JOB_KIND } from "../remediation.ts";
 import { runEmbedBackfill } from "../embed-backfill.ts";
+import { runCycleOnce, type CycleResult } from "../cycle/index.ts";
+import { CYCLE_LOCK_ID, tryAcquireDbLock, startLockHeartbeat } from "../db-lock.ts";
 
 /** Injectable runners so the handler never hard-couples to cycle/embed code. */
 export interface RemediationDeps {
   /** Re-embed a source that is stuck at 0% coverage. */
   reembedSource?: (sourceId: string, signal?: AbortSignal) => Promise<Record<string, unknown> | void>;
   /** Re-run one maintenance-cycle phase. */
-  runCyclePhase?: (phase: string) => Promise<Record<string, unknown> | void>;
+  runCyclePhase?: (phase: string, signal?: AbortSignal) => Promise<CycleResult>;
   /** Embedder seam for the default re-embed runner; production uses Titan. */
   embed?: (text: string) => Promise<number[]>;
 }
@@ -83,11 +85,16 @@ export function makeRemediationHandler(deps: RemediationDeps = {}): JobHandler {
         if (phase.length === 0) {
           throw new UnrecoverableJobError("remediation cycle-phase: missing phase");
         }
-        const run = deps.runCyclePhase ?? defaultRunCyclePhase;
+        const run = deps.runCyclePhase;
+        if (!run) throw new UnrecoverableJobError("remediation cycle-phase: no runner (register the handler with storage)");
         signal?.throwIfAborted();
-        const out = await run(phase);
+        const out = await run(phase, signal);
         signal?.throwIfAborted();
-        return { action, phase, ...(out ?? {}) };
+        if (out.outcome !== "complete") throw new Error(`remediation cycle-phase: ${out.reason ?? out.outcome}`);
+        const result = out.phases.find(p => p.phase === phase);
+        if (!result) throw new UnrecoverableJobError(`remediation cycle-phase: no result for ${phase}`);
+        if (result.status === "fail") throw new UnrecoverableJobError(`remediation cycle-phase: ${result.error ?? phase + " failed"}`);
+        return { action, phase, ...out };
       }
       default:
         throw new UnrecoverableJobError(`remediation: unknown action '${action}'`);
@@ -106,7 +113,8 @@ export function registerRemediationHandlers(
 ): void {
   const reembedSource =
     deps.reembedSource ?? makeBackfillReembed(storage.engine(), deps.embed);
-  registerHandler(REMEDIATION_JOB_KIND, makeRemediationHandler({ ...deps, reembedSource }));
+  const runCyclePhase = deps.runCyclePhase ?? ((phase, signal) => defaultRunCyclePhase(storage, phase, signal));
+  registerHandler(REMEDIATION_JOB_KIND, makeRemediationHandler({ ...deps, reembedSource, runCyclePhase }));
 }
 
 function makeBackfillReembed(
@@ -152,21 +160,27 @@ function makeBackfillReembed(
   };
 }
 
-/**
- * Default cycle-phase runner. Lazily imports the cycle command and runs the
- * single named phase. Best-effort: throws (→ job retry) if unavailable.
- */
-async function defaultRunCyclePhase(
-  phase: string,
-): Promise<Record<string, unknown> | void> {
-  const mod = (await import("../../commands/cycle.ts")) as Record<string, unknown>;
-  const fn = mod["runCycle"];
-  if (typeof fn !== "function") {
-    throw new UnrecoverableJobError(
-      "remediation cycle-phase: no cycle runner available (inject deps.runCyclePhase)",
-    );
+/** Run on the worker's storage under the same lock and write fence as the daemon. */
+async function defaultRunCyclePhase(storage: Storage, phase: string, signal?: AbortSignal): Promise<CycleResult> {
+  const { parsePhasesArg } = await import("../../commands/cycle.ts");
+  let phases: ReturnType<typeof parsePhasesArg>;
+  try {
+    phases = parsePhasesArg(phase);
+    if (phases.length !== 1 || phases[0] !== phase) throw new Error("exactly one phase is required");
+  } catch (e) {
+    throw new UnrecoverableJobError(`remediation cycle-phase: ${e instanceof Error ? e.message : String(e)}`);
   }
-  return (await (fn as (o: { phases: string[] }) => Promise<Record<string, unknown> | void>)(
-    { phases: [phase] },
-  )) as Record<string, unknown> | void;
+  signal?.throwIfAborted();
+  const lock = await tryAcquireDbLock(storage.engine(), CYCLE_LOCK_ID, 5);
+  if (!lock) throw new Error("remediation cycle-phase: cycle_already_running");
+  const heartbeat = startLockHeartbeat(lock);
+  try {
+    return await runCycleOnce(storage.engine(), {
+      storage, phases, fence: lock.isHeld,
+      signal: signal ? AbortSignal.any([signal, heartbeat.signal]) : heartbeat.signal,
+    });
+  } finally {
+    heartbeat.stop();
+    await lock.release();
+  }
 }
