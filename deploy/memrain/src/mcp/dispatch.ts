@@ -252,6 +252,7 @@ import {
   publicReadBodiesAllowed,
   publicSafeErrorMessage,
 } from "../core/public_redaction.ts";
+import { databaseOperationError } from "../core/database-error.ts";
 import { OperationError, PageNotFoundError, isOperationError } from "../core/operation-error.ts";
 import { suggestSlugs } from "../core/slug-suggest.ts";
 import { getBrainHotMemoryMeta, invalidateHotMemoryMeta } from "../core/hot-memory-meta.ts";
@@ -885,6 +886,8 @@ async function dispatchToolInner(
     if (isOperationError(e)) {
       return errResult(JSON.stringify(e.toEnvelope(opts.isPublic ?? false)));
     }
+    const databaseError = databaseOperationError(e);
+    if (databaseError) return errResult(JSON.stringify(databaseError.toEnvelope(opts.isPublic ?? false)));
     // A raw exception (Postgres schema, DSN host, stack internals) must NOT
     // leak across the public boundary; fully redact it there, log server-side.
     return errResult(publicSafeErrorMessage(e, opts.isPublic ?? false));
@@ -3198,8 +3201,8 @@ async function callFindContradictions(
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   if (readSources !== undefined) opts.sourceIds = readSources;
   // Asserted `contradicts` edges (deterministic graph) + LLM-suspected findings
-  // cached by the probe-contradictions phase (migration 064; [] on a pre-064
-  // brain or when the probe has never run). Same tenant scope for both.
+  // cached by the probe-contradictions phase (empty when the probe has never
+  // run). Same tenant scope for both; database errors remain errors.
   const probedOpts: {
     limit?: number;
     sourceIds?: string[];

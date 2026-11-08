@@ -59,19 +59,15 @@ export async function listConcepts(
   _sourceIds?: string[],
 ): Promise<ConceptRow[]> {
   const n = clampLimit(limit, 200, 50);
-  try {
-    const r = await engine.query<ConceptRow>(
-      `SELECT concept_slug, title, tier, atom_count, narrative,
-              generated_at::text AS generated_at
-         FROM synth_concepts
-        ORDER BY atom_count DESC, concept_slug ASC
-        LIMIT $1`,
-      [n],
-    );
-    return r.rows;
-  } catch {
-    return []; // pre-045 brain — synth tables don't exist yet
-  }
+  const r = await engine.query<ConceptRow>(
+    `SELECT concept_slug, title, tier, atom_count, narrative,
+            generated_at::text AS generated_at
+       FROM synth_concepts
+      ORDER BY atom_count DESC, concept_slug ASC
+      LIMIT $1`,
+    [n],
+  );
+  return r.rows;
 }
 
 export interface TakeRow {
@@ -169,21 +165,17 @@ export async function listTakes(
     opts.sort === "weight"
       ? "weight DESC, generated_at DESC, take_key ASC"
       : "generated_at DESC, take_key ASC";
-  try {
-    const r = await engine.query<TakeRow>(
-      `SELECT take_key, claim_text, kind, holder, weight, domain, status, active,
-              resolved_quality, resolved_at::text AS resolved_at,
-              generated_at::text AS generated_at
-         FROM synth_takes
-        WHERE ($1::text IS NULL OR status = $1)${extraFilter}
-        ORDER BY ${order}
-        LIMIT $2 OFFSET $3`,
-      params,
-    );
-    return r.rows;
-  } catch {
-    return [];
-  }
+  const r = await engine.query<TakeRow>(
+    `SELECT take_key, claim_text, kind, holder, weight, domain, status, active,
+            resolved_quality, resolved_at::text AS resolved_at,
+            generated_at::text AS generated_at
+       FROM synth_takes
+      WHERE ($1::text IS NULL OR status = $1)${extraFilter}
+      ORDER BY ${order}
+      LIMIT $2 OFFSET $3`,
+    params,
+  );
+  return r.rows;
 }
 
 export interface TakeSearchRow {
@@ -231,19 +223,15 @@ export async function searchTakes(
   // The sentinel is ordinary prose to a trigram match — fence it by claim text.
   sourceFilter += excludeEmptyExtractionTombstone("claim_text", params);
   sourceFilter += excludeQuarantinedSource("synth_takes.source_ref");
-  try {
-    const r = await engine.query<TakeSearchRow>(
-      `SELECT take_key, claim_text, kind, holder, weight, domain, status
-         FROM synth_takes
-        WHERE (similarity(claim_text, $1) >= 0.3 OR claim_text ILIKE '%' || $1 || '%')${sourceFilter}
-        ORDER BY similarity(claim_text, $1) DESC, take_key ASC
-        LIMIT $2`,
-      params,
-    );
-    return r.rows;
-  } catch {
-    return [];
-  }
+  const r = await engine.query<TakeSearchRow>(
+    `SELECT take_key, claim_text, kind, holder, weight, domain, status
+       FROM synth_takes
+      WHERE (similarity(claim_text, $1) >= 0.3 OR claim_text ILIKE '%' || $1 || '%')${sourceFilter}
+      ORDER BY similarity(claim_text, $1) DESC, take_key ASC
+      LIMIT $2`,
+    params,
+  );
+  return r.rows;
 }
 
 export interface TakesScorecard {
@@ -341,62 +329,58 @@ export async function getTakesScorecard(
     clauses.join(" ") +
     excludeEmptyExtractionTombstone("t.claim_text", params) +
     excludeQuarantinedSource("t.source_ref");
-  try {
-    const r = await engine.query<{
-      total_takes: number;
-      graded: number;
-      resolved: number;
-      correct: number;
-      incorrect: number;
-      partial: number;
-      unresolvable: number;
-      brier: number | null;
-    }>(
-      `WITH latest_grade AS (
-         SELECT DISTINCT ON (take_id) take_id, verdict
-           FROM synth_take_grades
-          ORDER BY take_id, generated_at DESC
-       ),
-       scored AS (
-         SELECT t.weight,
-                lg.verdict AS grade_verdict,
-                COALESCE(t.resolved_quality, lg.verdict) AS verdict
-           FROM synth_takes t
-           LEFT JOIN latest_grade lg ON lg.take_id = t.id
-          WHERE 1=1 ${where}
-       )
-       SELECT
-         COUNT(*)::int                                                            AS total_takes,
-         COUNT(grade_verdict)::int                                                AS graded,
-         COUNT(*) FILTER (WHERE verdict IN ('correct','incorrect','partial'))::int AS resolved,
-         COUNT(*) FILTER (WHERE verdict = 'correct')::int                         AS correct,
-         COUNT(*) FILTER (WHERE verdict = 'incorrect')::int                       AS incorrect,
-         COUNT(*) FILTER (WHERE verdict = 'partial')::int                         AS partial,
-         COUNT(*) FILTER (WHERE verdict = 'unresolvable')::int                    AS unresolvable,
-         AVG(CASE WHEN verdict IN ('correct','incorrect')
-                  THEN POWER(weight - (CASE verdict WHEN 'correct' THEN 1 ELSE 0 END), 2)
-             END)::float                                                          AS brier
-         FROM scored`,
-      params,
-    );
-    const row = r.rows[0];
-    if (!row) return { ...EMPTY_SCORECARD };
-    const decided = row.correct + row.incorrect;
-    return {
-      total_takes: row.total_takes,
-      graded: row.graded,
-      resolved: row.resolved,
-      correct: row.correct,
-      incorrect: row.incorrect,
-      partial: row.partial,
-      unresolvable: row.unresolvable,
-      accuracy: decided > 0 ? row.correct / decided : null,
-      partial_rate: row.resolved > 0 ? row.partial / row.resolved : null,
-      brier: row.brier,
-    };
-  } catch {
-    return { ...EMPTY_SCORECARD };
-  }
+  const r = await engine.query<{
+    total_takes: number;
+    graded: number;
+    resolved: number;
+    correct: number;
+    incorrect: number;
+    partial: number;
+    unresolvable: number;
+    brier: number | null;
+  }>(
+    `WITH latest_grade AS (
+       SELECT DISTINCT ON (take_id) take_id, verdict
+         FROM synth_take_grades
+        ORDER BY take_id, generated_at DESC
+     ),
+     scored AS (
+       SELECT t.weight,
+              lg.verdict AS grade_verdict,
+              COALESCE(t.resolved_quality, lg.verdict) AS verdict
+         FROM synth_takes t
+         LEFT JOIN latest_grade lg ON lg.take_id = t.id
+        WHERE 1=1 ${where}
+     )
+     SELECT
+       COUNT(*)::int                                                            AS total_takes,
+       COUNT(grade_verdict)::int                                                AS graded,
+       COUNT(*) FILTER (WHERE verdict IN ('correct','incorrect','partial'))::int AS resolved,
+       COUNT(*) FILTER (WHERE verdict = 'correct')::int                         AS correct,
+       COUNT(*) FILTER (WHERE verdict = 'incorrect')::int                       AS incorrect,
+       COUNT(*) FILTER (WHERE verdict = 'partial')::int                         AS partial,
+       COUNT(*) FILTER (WHERE verdict = 'unresolvable')::int                    AS unresolvable,
+       AVG(CASE WHEN verdict IN ('correct','incorrect')
+                THEN POWER(weight - (CASE verdict WHEN 'correct' THEN 1 ELSE 0 END), 2)
+           END)::float                                                          AS brier
+       FROM scored`,
+    params,
+  );
+  const row = r.rows[0];
+  if (!row) return { ...EMPTY_SCORECARD };
+  const decided = row.correct + row.incorrect;
+  return {
+    total_takes: row.total_takes,
+    graded: row.graded,
+    resolved: row.resolved,
+    correct: row.correct,
+    incorrect: row.incorrect,
+    partial: row.partial,
+    unresolvable: row.unresolvable,
+    accuracy: decided > 0 ? row.correct / decided : null,
+    partial_rate: row.resolved > 0 ? row.partial / row.resolved : null,
+    brier: row.brier,
+  };
 }
 
 export interface CalibrationBucket {
@@ -456,47 +440,43 @@ export async function getTakesCalibration(
     );
   }
   const where = clauses.join(" ") + excludeQuarantinedSource("t.source_ref");
-  try {
-    const r = await engine.query<{
-      bucket_lo: number;
-      bucket_hi: number;
-      n: number;
-      observed: number | null;
-      predicted: number | null;
-    }>(
-      `WITH latest_grade AS (
-         SELECT DISTINCT ON (take_id) take_id, verdict
-           FROM synth_take_grades
-          ORDER BY take_id, generated_at DESC
-       ),
-       binned AS (
-         SELECT LEAST(FLOOR(t.weight::numeric / $1::numeric)::int, $2::int)::int AS bucket_idx,
-                t.weight,
-                (COALESCE(t.resolved_quality, lg.verdict) = 'correct')::int AS hit
-           FROM synth_takes t
-           LEFT JOIN latest_grade lg ON lg.take_id = t.id
-          WHERE COALESCE(t.resolved_quality, lg.verdict) IN ('correct','incorrect') ${where}
-       )
-       SELECT (bucket_idx::numeric * $1::numeric)::float        AS bucket_lo,
-              ((bucket_idx + 1)::numeric * $1::numeric)::float  AS bucket_hi,
-              COUNT(*)::int                                     AS n,
-              AVG(hit)::float                                   AS observed,
-              AVG(weight)::float                                AS predicted
-         FROM binned
-        GROUP BY bucket_idx
-        ORDER BY bucket_idx`,
-      params,
-    );
-    return r.rows.map((b) => ({
-      bucket_lo: b.bucket_lo,
-      bucket_hi: b.bucket_hi,
-      n: b.n,
-      observed: b.n > 0 ? b.observed : null,
-      predicted: b.n > 0 ? b.predicted : null,
-    }));
-  } catch {
-    return [];
-  }
+  const r = await engine.query<{
+    bucket_lo: number;
+    bucket_hi: number;
+    n: number;
+    observed: number | null;
+    predicted: number | null;
+  }>(
+    `WITH latest_grade AS (
+       SELECT DISTINCT ON (take_id) take_id, verdict
+         FROM synth_take_grades
+        ORDER BY take_id, generated_at DESC
+     ),
+     binned AS (
+       SELECT LEAST(FLOOR(t.weight::numeric / $1::numeric)::int, $2::int)::int AS bucket_idx,
+              t.weight,
+              (COALESCE(t.resolved_quality, lg.verdict) = 'correct')::int AS hit
+         FROM synth_takes t
+         LEFT JOIN latest_grade lg ON lg.take_id = t.id
+        WHERE COALESCE(t.resolved_quality, lg.verdict) IN ('correct','incorrect') ${where}
+     )
+     SELECT (bucket_idx::numeric * $1::numeric)::float        AS bucket_lo,
+            ((bucket_idx + 1)::numeric * $1::numeric)::float  AS bucket_hi,
+            COUNT(*)::int                                     AS n,
+            AVG(hit)::float                                   AS observed,
+            AVG(weight)::float                                AS predicted
+       FROM binned
+      GROUP BY bucket_idx
+      ORDER BY bucket_idx`,
+    params,
+  );
+  return r.rows.map((b) => ({
+    bucket_lo: b.bucket_lo,
+    bucket_hi: b.bucket_hi,
+    n: b.n,
+    observed: b.n > 0 ? b.observed : null,
+    predicted: b.n > 0 ? b.predicted : null,
+  }));
 }
 
 export interface CalibrationProfileRow {
@@ -540,19 +520,15 @@ export async function getCalibrationProfile(
     params.push(sources);
     sourceFilter = ` WHERE source_id = ANY($${params.length}::text[])`;
   }
-  try {
-    const r = await engine.query<CalibrationProfileRow>(
-      `SELECT generated_at::text AS generated_at, source_id, total_graded, correct,
-              incorrect, partial, unresolvable, accuracy,
-              brier, partial_rate, grade_completion, domain_scorecards,
-              pattern_statements, bias_tags, model_id
-         FROM synth_calibration_profile${sourceFilter}
-        ORDER BY generated_at DESC
-        LIMIT 1`,
-      params,
-    );
-    return r.rows[0] ?? null;
-  } catch {
-    return null;
-  }
+  const r = await engine.query<CalibrationProfileRow>(
+    `SELECT generated_at::text AS generated_at, source_id, total_graded, correct,
+            incorrect, partial, unresolvable, accuracy,
+            brier, partial_rate, grade_completion, domain_scorecards,
+            pattern_statements, bias_tags, model_id
+       FROM synth_calibration_profile${sourceFilter}
+      ORDER BY generated_at DESC
+      LIMIT 1`,
+    params,
+  );
+  return r.rows[0] ?? null;
 }

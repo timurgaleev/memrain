@@ -88,36 +88,32 @@ export async function listRecentTranscripts(
   params.push(limit);
   const limitIdx = params.length;
 
-  try {
-    const r = await engine.query<{
-      slug: string;
-      type: string;
-      title: string | null;
-      updated_at: string;
-      length: number;
-      markdown_body: string;
-    }>(
-      `SELECT slug, type, title, updated_at::text AS updated_at,
-              length(markdown_body) AS length, markdown_body
-         FROM pages
-        WHERE deleted_at IS NULL
-          AND type = ANY($1::text[])
-          AND updated_at >= $2::timestamptz${sourceFilter}
-        ORDER BY updated_at DESC
-        LIMIT $${limitIdx}`,
-      params,
-    );
-    return r.rows.map((row) => ({
-      slug: row.slug,
-      type: row.type,
-      title: row.title,
-      updated_at: row.updated_at,
-      length: row.length,
-      content: summary
-        ? summarize(row.markdown_body)
-        : row.markdown_body.slice(0, FULL_BODY_CAP),
-    }));
-  } catch {
-    return [];
-  }
+  const r = await engine.query<{
+    slug: string;
+    type: string;
+    title: string | null;
+    updated_at: string;
+    length: number;
+    markdown_body: string;
+  }>(
+    `SELECT slug, type, title, updated_at::text AS updated_at,
+            length(markdown_body) AS length, markdown_body
+       FROM pages
+      WHERE deleted_at IS NULL
+        AND type = ANY($1::text[])
+        AND updated_at >= $2::timestamptz${sourceFilter}
+      ORDER BY updated_at DESC
+      LIMIT $${limitIdx}`,
+    params,
+  );
+  return r.rows.map((row) => ({
+    slug: row.slug,
+    type: row.type,
+    title: row.title,
+    updated_at: row.updated_at,
+    length: row.length,
+    content: summary
+      ? summarize(row.markdown_body)
+      : row.markdown_body.slice(0, FULL_BODY_CAP),
+  }));
 }
