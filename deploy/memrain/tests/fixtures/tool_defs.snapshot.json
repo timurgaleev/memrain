@@ -484,6 +484,10 @@
         "slug": {
           "type": "string"
         },
+        "source_id": {
+          "type": "string",
+          "description": "Owning source from a search result; narrows the caller's read grant, never expands it."
+        },
         "fuzzy": {
           "type": "boolean",
           "description": "Fuzzy slug resolution on a miss (default false)."

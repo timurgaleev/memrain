@@ -2177,7 +2177,10 @@ async function callPageGet(
   if (typeof args["slug"] !== "string") {
     return errResult("page_get: `slug` is required");
   }
-  const scopeIds = readSources;
+  const requestedSource = args["source_id"];
+  const scopeIds = typeof requestedSource === "string"
+    ? readSources === undefined || readSources.includes(requestedSource) ? [requestedSource] : []
+    : readSources;
   const fuzzy = args["fuzzy"] === true;
   const includeDeleted = args["include_deleted"] === true && !redact;
   const getOpts = { withVersion: true, ...(includeDeleted ? { includeDeleted: true } : {}) };

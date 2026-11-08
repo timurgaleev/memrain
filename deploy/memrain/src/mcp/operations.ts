@@ -541,6 +541,7 @@ export const OPERATIONS: readonly Operation[] = [
       "Read a page by slug. Returns an error if the page does not exist. `fuzzy:true` falls back to fuzzy slug resolution on a miss (a unique candidate is auto-read; multiple candidates return `ambiguous_slug` + the list). `include_deleted:true` surfaces a soft-deleted page with deleted_at populated (restore workflows). The response carries `version`, the page's current version number — pass it as `expected_version` to a later page_put, page_revert or page_delete to write only if nobody changed the page in between.",
     params: {
       slug: str(req),
+      source_id: str({ description: "Owning source from a search result; narrows the caller's read grant, never expands it." }),
       fuzzy: bool({ description: "Fuzzy slug resolution on a miss (default false)." }),
       include_deleted: bool({ description: "Surface soft-deleted pages (default false)." }),
       include_quarantined: bool({
