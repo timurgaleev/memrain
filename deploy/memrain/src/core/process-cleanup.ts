@@ -78,11 +78,9 @@ async function runCleanupPass(): Promise<void> {
   const entries = Array.from(registry.values());
   if (entries.length === 0) return;
 
+  let timer: ReturnType<typeof setTimeout>;
   const deadline = new Promise<"deadline">((resolve) => {
-    const t = setTimeout(resolve, CLEANUP_DEADLINE_MS, "deadline");
-    if (typeof (t as { unref?: () => void }).unref === "function") {
-      (t as { unref: () => void }).unref();
-    }
+    timer = setTimeout(resolve, CLEANUP_DEADLINE_MS, "deadline");
   });
 
   const cleanupAll = Promise.allSettled(
@@ -101,7 +99,11 @@ async function runCleanupPass(): Promise<void> {
     }),
   );
 
-  await Promise.race([cleanupAll, deadline]);
+  try {
+    await Promise.race([cleanupAll, deadline]);
+  } finally {
+    clearTimeout(timer!);
+  }
 }
 
 /**
