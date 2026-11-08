@@ -100,4 +100,26 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     for (const source_slug of ["people/match", "notes/noise"]) await addLink(db.storage, { source_slug, target_slug: "companies/acme", type: "works_at" });
     expect(await relationalArmChunkIds(db.storage, "who works at acme", { limit: 1, filters: { types: ["person"] } })).toEqual(["b_c0"]);
   });
+
+  it("hydrates tenant-qualified relational mirrors without accepting mismatched page ownership", async () => {
+    await putPage(db.storage, { slug: "companies/tenantco", title: "Tenantco", source_id: "filters-b" });
+    await addLink(db.storage, { source_slug: "people/foreign", target_slug: "companies/tenantco", type: "works_at", source_id: "filters-b" });
+    await db.storage.engine().query("INSERT INTO links (source_slug, target_slug, type, source_id) VALUES ('notes/noise', 'companies/tenantco', 'works_at', 'filters-b')");
+    await writeDocumentTransaction(db.storage, { documentId: "bad-tenant-mirror", sourcePath: "page://filters-b/notes/noise", sourceId: "filters-b",
+      title: "Wrong owner", frontmatter: {}, embeddingModel: "deterministic-test" },
+    [{ text: "foreign mirror", entities: [], embedding: deterministicEmbed("foreign mirror") }]);
+    expect(await relationalArmChunkIds(db.storage, "who works at tenantco", { sourceIds: ["filters-b"] })).toEqual(["c_c0"]);
+    expect(await relationalArmChunkIds(db.storage, "who works at tenantco", { sourceIds: ["default"] })).toEqual([]);
+  });
+
+  it("keeps legacy unowned mirrors available only to an unscoped caller", async () => {
+    await putPage(db.storage, { slug: "companies/legacyco", title: "Legacyco" });
+    await putPage(db.storage, { slug: "people/legacy" });
+    await addLink(db.storage, { source_slug: "people/legacy", target_slug: "companies/legacyco", type: "works_at" });
+    await writeDocumentTransaction(db.storage, { documentId: "legacy-mirror", sourcePath: "page://people/legacy",
+      title: "Legacy", frontmatter: {}, embeddingModel: "deterministic-test" },
+    [{ text: "legacy mirror", entities: [], embedding: deterministicEmbed("legacy mirror") }]);
+    expect(await relationalArmChunkIds(db.storage, "who works at legacyco")).toEqual(["legacy-mirror_c0"]);
+    expect(await relationalArmChunkIds(db.storage, "who works at legacyco", { sourceIds: ["default"] })).toEqual([]);
+  });
 });

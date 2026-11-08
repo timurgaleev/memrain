@@ -29,7 +29,8 @@
  *
  * Tested in tests/relational_recall.test.ts.
  */
-import { pageFilterClauses, pageRowFilterClauses, type PageFilters } from "./filters.ts";
+import { pageRowFilterClauses, type PageFilters } from "./filters.ts";
+import { PAGE_MIRROR_PATH_SQL } from "../page-index.ts";
 import type { Storage } from "../storage.ts";
 import { KNOWN_LINK_TYPES, graphNeighbors, traverseGraph } from "../links.ts";
 import { makeSlugResolver } from "../slug-canonicalize.ts";
@@ -474,7 +475,7 @@ export async function relationalRecall(
 /**
  * Resolve a relational-recall run into a ranked list of CHUNK IDs, ready to fuse
  * as a fourth RRF arm inside hybridSearch. Each edge-derived page slug maps to
- * its page's HEAD chunk (lowest chunk id) via the `page://<slug>` bridge — the
+ * its page's HEAD chunk (lowest chunk id) via the source-qualified mirror — the
  * same representative chunk `applyAliasHop` injects — so a typed-edge answer
  * competes in the same candidate space as the keyword/vector arms.
  *
@@ -501,27 +502,28 @@ export async function relationalArmChunkIds(
     seenSlug.add(r.slug);
     slugOrder.push(r.slug);
   }
-  const sourcePaths = slugOrder.map((s) => `page://${s}`);
-
   try {
     const engine = storage.engine();
-    const params: unknown[] = [sourcePaths];
+    const params: unknown[] = [slugOrder];
     const scopeFilter = andSourceScope("d.source_id", opts.sourceIds, params);
-    const pageFilter = pageFilterClauses(params, opts.filters);
+    const pageFilter = pageRowFilterClauses(params, opts.filters);
     // Head chunk (lowest id) per page, matching fetchPageHeadHit's choice.
-    const rows = await engine.query<{ id: string; source_path: string }>(
-      `SELECT DISTINCT ON (d.source_path) c.id, d.source_path
+    // Legacy unowned mirrors belong to default pages on the unscoped path;
+    // the document source predicate still excludes NULL from every tenant grant.
+    const rows = await engine.query<{ id: string; slug: string }>(
+      `SELECT DISTINCT ON (p.slug) c.id, p.slug
          FROM chunks c
          JOIN documents d ON d.id = c.document_id
-        WHERE d.source_path = ANY($1::text[])${scopeFilter}${pageFilter}
+         JOIN pages p ON p.source_id = COALESCE(d.source_id, 'default') AND d.source_path = (${PAGE_MIRROR_PATH_SQL})
+        WHERE p.slug = ANY($1::text[]) AND p.deleted_at IS NULL${scopeFilter}${pageFilter}
           AND ${visibilityClause("d")}
-        ORDER BY d.source_path, c.id COLLATE "C" ASC`,
+        ORDER BY p.slug, c.id COLLATE "C" ASC`,
       params,
     );
-    const chunkByPath = new Map(rows.rows.map((r) => [r.source_path, r.id]));
+    const chunkBySlug = new Map(rows.rows.map((r) => [r.slug, r.id]));
     const out: string[] = [];
-    for (const sp of sourcePaths) {
-      const id = chunkByPath.get(sp);
+    for (const slug of slugOrder) {
+      const id = chunkBySlug.get(slug);
       if (id) out.push(id);
     }
     return out;
