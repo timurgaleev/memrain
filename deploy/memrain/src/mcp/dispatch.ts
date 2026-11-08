@@ -1612,6 +1612,7 @@ async function callPagePut(
   const policy = writePreconditionPolicy();
   if (policy !== undefined && args["force"] !== true) input.preconditionPolicy = policy;
   if (args["allow_shrink"] === true) input.allowShrink = true;
+  input.requireCleanNewSlug = true;
   const r = await putPage(storage, input);
   const derived = await afterPageWrite(storage, r, writeSource, isPublic, "page_put", args["wait_for_index"] === true);
   return jsonResult({ ok: true, ...r, ...derived });

@@ -413,7 +413,7 @@ export const OPERATIONS: readonly Operation[] = [
       slug: str({
         ...req,
         description:
-          "kebab-case identifier with optional `/` namespaces (e.g. people/alice, journal/2026/05/2026-05-18).",
+          "kebab-case identifier with optional `/` namespaces (e.g. people/alice, journal/2026/05/2026-05-18). New slugs cannot have repeated or trailing hyphens in any segment; existing slugs remain writable.",
       }),
       type: str({
         description:

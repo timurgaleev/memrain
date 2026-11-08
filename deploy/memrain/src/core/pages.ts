@@ -197,6 +197,8 @@ export interface PageInput {
    * writes nothing. Unset = no check. Only MCP page_put sets it.
    */
   preconditionPolicy?: "warn" | "refuse";
+  /** MCP page_put refuses repeated/trailing hyphens only when creating a slug. */
+  requireCleanNewSlug?: boolean;
   /** The authenticated principal behind the write (page_versions.written_by_principal). */
   written_by_principal?: string;
 }
@@ -533,6 +535,10 @@ export async function putPage(
     checkExpectedVersion(input.slug, Number(existing.rows[0]?.version_n ?? 0), input.expectedVersion);
 
     const current = existing.rows[0];
+    if (input.requireCleanNewSlug && current === undefined && /--|-(?:\/|$)/.test(input.slug)) {
+      throw new OperationError("invalid_params", "New page slugs cannot have repeated or trailing hyphens.",
+        "Use single hyphens between words in each slug segment. Existing slugs remain writable.");
+    }
     if (input.onlyOverwriteWriter !== undefined && current !== undefined) {
       const latest = await tx.query<{ written_by: string | null }>(
         "SELECT written_by FROM page_versions WHERE slug = $1 ORDER BY version_n DESC LIMIT 1",
