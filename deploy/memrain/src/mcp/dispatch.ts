@@ -267,7 +267,7 @@ import { factInputMetadata, normalizeAddFactItems, runAddFactBatch } from "../co
 import { replaceFact } from "../core/facts-replace.ts";
 import { similarActiveAfterForget } from "../core/facts-similar-active.ts";
 import { ReferenceDateError, resolveThinkTemporalContext } from "../core/synthesis/think-temporal.ts";
-import { MAX_REQUEST_ID_LEN, OPERATIONS, validateParams } from "./operations.ts";
+import { MAX_REQUEST_ID_LEN, OPERATIONS, normalizeOptionalArgs, validateParams } from "./operations.ts";
 import {
   claimWriteRequest,
   completeWriteRequest,
@@ -492,7 +492,9 @@ async function dispatchToolInner(
   req: ToolCallRequest,
   opts: DispatchOptions = {},
 ): Promise<ToolCallResult> {
-  const args = coerceFactIdArg(req.name, req.arguments ?? {});
+  const originalArgs = coerceFactIdArg(req.name, req.arguments ?? {});
+  const operation = OP_BY_NAME.get(req.name);
+  const args = operation ? normalizeOptionalArgs(operation, originalArgs) : originalArgs;
   // Mirror the REST layer's public-read policy exactly: redact bodies on
   // public ingress unless the operator opted into MEMRAIN_PUBLIC_READ_BODIES.
   const redact =

@@ -197,6 +197,17 @@ export function validateParams(
   }
 }
 
+/** Empty optional read filters mean omission; writes retain their exact values. */
+export function normalizeOptionalArgs(op: Operation, params: Record<string, unknown>): Record<string, unknown> {
+  if (!operationAnnotations(op).readOnlyHint) return params;
+  return Object.fromEntries(Object.entries(params).filter(([key, value]) => {
+    const def = Object.hasOwn(op.params, key) ? op.params[key] : undefined;
+    if (!def || def.required) return true;
+    return !(value === null || value === "" || (Array.isArray(value) && value.length === 0) ||
+      (value === 0 && def.minimum !== undefined && def.minimum >= 1));
+  }));
+}
+
 /** One line per argument for a refusal's suggestion: first sentence of its description. */
 const MAX_ARG_HINT_CHARS = 120;
 
