@@ -920,6 +920,29 @@ export async function hybridSearch(
     try { return await run(); }
     catch (error) { failArm(error, "keyword"); return []; }
   };
+  opts.signal?.throwIfAborted();
+  // Per-page max-pool (opt-in) — make each arm return its best chunk per page.
+  // Auto-disabled for `exact` intent and structural walks, both of which
+  // deliberately want multiple chunks per page (the collapse would fight them).
+  const maxPoolOn = maxPoolRequested && intent !== "exact" && !structural;
+
+  // Curation prefix boost inside the arm SQL: shapes which
+  // rows survive the per-arm LIMIT. Bypassed for temporal queries — freshness
+  // queries must not be steered toward evergreen curated tiers.
+  const armSourceBoost = !temporalQuery;
+
+  // Settle eagerly: no arm rejection is left unobserved while embedding runs.
+  const lexical = Promise.allSettled([
+    keywordArm(() => keywordSearchScored(engine, trimmed, fanout, {
+      sourceIds: opts.sourceIds, filters: chunkFilters, maxPool: maxPoolOn, sourceBoost: armSourceBoost,
+    })),
+    titleArmOn ? titleArmChunkIds(engine, trimmed, {
+      onError: error => failArm(error, "title"), sourceIds: opts.sourceIds, limit: fanout,
+    }) : Promise.resolve<string[]>([]),
+    relationalArmOn ? relationalArmChunkIds(storage, trimmed, {
+      ...(opts.sourceIds !== undefined ? { sourceIds: [...opts.sourceIds] } : {}), limit: fanout,
+    }) : Promise.resolve<string[]>([]),
+  ]);
   const deadline = makeQueryEmbedDeadline();
   const dl = opts.signal
     ? { ...deadline, signal: AbortSignal.any([deadline.signal, opts.signal]) }
@@ -933,9 +956,10 @@ export async function hybridSearch(
     // A budget refusal is the operator's policy, not a flaky embedder: degrade
     // quietly on any embed failure EXCEPT that one, which must reach the caller
     // instead of looking like an empty brain.
-    if (isOperationError(e) && e.code === "budget_exhausted") throw e;
-    // The caller is gone: skip the keyword arm and ranking it would never read.
-    if (opts.signal?.aborted) throw e;
+    if ((isOperationError(e) && e.code === "budget_exhausted") || opts.signal?.aborted) {
+      await lexical;
+      throw e;
+    }
     queryVector = null; // keyword-only fallback
     degraded.push(isEmbedTimeout(e, deadline) ? "embed_timeout" : "vector_arm_failed");
   }
@@ -958,24 +982,18 @@ export async function hybridSearch(
           cacheClock,
           semCfg,
         );
-        if (sem) return await serveCachedRanking(sem);
+        if (sem) {
+          await lexical;
+          opts.signal?.throwIfAborted();
+          return await serveCachedRanking(sem);
+        }
       } catch {
         // semantic cache is a pure optimization — fall through to full search
       }
     }
   }
 
-  // Per-page max-pool (opt-in) — make each arm return its best chunk per page.
-  // Auto-disabled for `exact` intent and structural walks, both of which
-  // deliberately want multiple chunks per page (the collapse would fight them).
-  const maxPoolOn = maxPoolRequested && intent !== "exact" && !structural;
-
-  // Curation prefix boost inside the arm SQL: shapes which
-  // rows survive the per-arm LIMIT. Bypassed for temporal queries — freshness
-  // queries must not be steered toward evergreen curated tiers.
-  const armSourceBoost = !temporalQuery;
-
-  const [vectorIds, primaryKeywordRows] = await Promise.all([
+  const [vectorResult, lexicalResult] = await Promise.allSettled([
     queryVector
       ? vectorSearch(engine, queryVector, fanout, {
           sourceIds: opts.sourceIds,
@@ -985,13 +1003,18 @@ export async function hybridSearch(
           onCandidatesIncomplete: () => degraded.push("vector_candidates_incomplete"),
         }).catch(error => { failArm(error, "vector"); queryVector = null; return []; })
       : Promise.resolve<string[]>([]),
-    keywordArm(() => keywordSearchScored(engine, trimmed, fanout, {
-      sourceIds: opts.sourceIds,
-      filters: chunkFilters,
-      maxPool: maxPoolOn,
-      sourceBoost: armSourceBoost,
-    })),
+    lexical,
   ]);
+  if (vectorResult.status === "rejected") throw vectorResult.reason;
+  if (lexicalResult.status === "rejected") throw lexicalResult.reason;
+  const [keywordResult, titleResult, relationalResult] = lexicalResult.value;
+  if (keywordResult.status === "rejected") throw keywordResult.reason;
+  if (titleResult.status === "rejected") throw titleResult.reason;
+  if (relationalResult.status === "rejected") throw relationalResult.reason;
+  const vectorIds = vectorResult.value;
+  const primaryKeywordRows = keywordResult.value;
+  const titleIds = titleResult.value;
+  const relationalIds = relationalResult.value;
   const primaryKeywordIds = primaryKeywordRows.map((r) => r.id);
   if (primaryKeywordIds.length === 0 && !degraded.some(r => r === "keyword_timeout" || r === "keyword_arm_failed")) degraded.push("keyword_zero");
 
@@ -1028,14 +1051,8 @@ export async function hybridSearch(
   //     the ORIGINAL query, never an expansion variant: a page's name is the
   //     user's own word for it. Empty for a query that names nothing, which is
   //     the common case — a pure no-op on the fused result.
-  let titleIds: string[] = [];
   let titleListIdx = -1;
   if (titleArmOn) {
-    titleIds = await titleArmChunkIds(engine, trimmed, {
-      onError: error => failArm(error, "title"),
-      ...(opts.sourceIds ? { sourceIds: opts.sourceIds } : {}),
-      limit: fanout,
-    });
     if (titleIds.length > 0) {
       titleListIdx = lists.length;
       lists.push(titleIds);
@@ -1046,12 +1063,7 @@ export async function hybridSearch(
   // 3b. Relational recall arm (opt-in, default OFF) — a deterministic 4th arm.
   //     Built from the ORIGINAL query (never an expansion variant); empty for
   //     non-relational queries → pure no-op. Fail-open inside the helper.
-  let relationalIds: string[] = [];
   if (relationalArmOn) {
-    relationalIds = await relationalArmChunkIds(storage, trimmed, {
-      ...(opts.sourceIds ? { sourceIds: [...opts.sourceIds] } : {}),
-      limit: fanout,
-    });
     if (relationalIds.length > 0) {
       lists.push(relationalIds);
       listArms.push("relational");
