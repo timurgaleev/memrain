@@ -208,6 +208,11 @@ A few that are easy to miss:
   `date_source` (`effective` or the `updated` fallback). When snippet capping
   is enabled, the `full` pointer supplies both `slug` and `source_id` to
   `page_get`; the requested source only narrows your existing read grant.
+- `page_get` returns small bodies whole. A body over 256 KiB, or an explicit
+  `offset`/`max_bytes` request, returns `page.body_window` instead of
+  `markdown_body`, with byte offsets, `total_bytes`, `partial`, `next_offset`
+  and a bounded heading list. Follow `next_offset` until it is null. Windows
+  never split a UTF-8 character; use `page_edit` or `page_append` for changes.
 - A failed retrieval stage is reported alongside surviving results. `search`
   and `query` expose `meta.degraded`; `think`, `context_pack` and
   `volunteer_context` expose `gather_degraded` when a collector fails. Direct

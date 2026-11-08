@@ -8,6 +8,7 @@
  * are reserved for protocol-level failures (malformed request etc.).
  */
 import { gatherDiagnostics } from "../core/gather-degraded.ts";
+import { pageBodyWindow } from "../core/page-window.ts";
 import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import type { Storage } from "../core/storage.ts";
@@ -2240,9 +2241,18 @@ async function callPageGet(
   const withheld =
     quarantined !== null && remote && !(args["include_quarantined"] === true && isAdmin);
   const out = quarantineContent(row as unknown as Record<string, unknown>, withheld);
+  const visible = redact ? redactBody(out) : out;
+  const window = typeof visible.markdown_body === "string"
+    ? pageBodyWindow(visible.markdown_body, {
+      ...(typeof args["offset"] === "number" ? { offset: args["offset"] } : {}),
+      ...(typeof args["max_bytes"] === "number" ? { maxBytes: args["max_bytes"] } : {}),
+    }) : null;
+  const { markdown_body: _body, ...metadata } = visible;
+  const { body_window: windowBody, ...windowMeta } = window ?? {};
   return jsonResult({
     ok: true,
-    page: redact ? redactBody(out) : out,
+    page: window ? { ...metadata, body_window: windowBody } : visible,
+    ...windowMeta,
     version: Number(version ?? 0),
     ...(resolvedSlug ? { resolved_slug: resolvedSlug } : {}),
     ...(quarantined ? { quarantined } : {}),

@@ -492,6 +492,18 @@
           "type": "string",
           "description": "Owning source from a search result; narrows the caller's read grant, never expands it."
         },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "UTF-8 byte offset for a body window; use the returned next_offset to continue."
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 262144,
+          "description": "Body window size in UTF-8 bytes (default 256 KiB). Windows return body_window instead of markdown_body; use page_edit or page_append to change a page."
+        },
         "fuzzy": {
           "type": "boolean",
           "description": "Fuzzy slug resolution on a miss (default false)."
