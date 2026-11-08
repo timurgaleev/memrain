@@ -147,9 +147,9 @@ function parseConcepts(raw: unknown): string[] {
     }
   }
   if (!Array.isArray(v)) return [];
-  return v
+  return [...new Set(v
     .filter((c): c is string => typeof c === "string" && c.trim().length > 0)
-    .map((c) => c.trim().toLowerCase());
+    .map((c) => slugifyTitle(c)))];
 }
 
 /** Deterministic narrative for T3 groups (and LLM-failure fallback). */
