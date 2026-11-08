@@ -31,18 +31,6 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ## Follow-ups from the 1.10 batch
 
-- **Rename does not carry `raw_data`** (`pages.ts` rename path re-points
-  slug-keyed rows but not `raw_data`). After a rename the payload is hidden
-  behind the old slug and comes back if a page is created there again. Move
-  it inside the rename transaction (newest wins on a `(slug, source)` clash)
-  and test it on Postgres. Live had no `raw_data` rows on 2026-11-07. Planned
-  for W3.
-- `putPage`/`deletePage`/`restorePage` hold the slug lock, but the purge takes
-  none: a purge that deletes a long-deleted row between their SELECT and
-  UPDATE leaves a version row on a purged slug. Check the UPDATE row count
-  (W3).
-- Two concurrent `purgeDeletedPages` runs can deadlock (40P01 is not
-  retried); wrap the purge in the deadlock-safe transaction helper (W3).
 - `scripts/check-test-hygiene.sh` matches only saved exit codes named
   `orig*`/`prev*`; flag any `process.exitCode = <identifier>;` that is not
   `?? 0` or inside `restoreExitCode`.
@@ -150,10 +138,6 @@ Engineering:
 ## Follow-ups from the 1.2 batch
 
 Engineering:
-- `search`/`query` snippet pointers derive the slug from the hit path; an
-  operator gets `page_get <source>/<slug>` for a tenant page, and a
-  default-source slug whose first segment equals a read source name is
-  stripped wrongly. Carry `source_id` on hits and build `full` from it.
 - `think` has no `outputRedaction`, so a tenant can get back a credential
   stored under `flag` disposition (quoted evidence or the extractive
   fallback) that `search`/`page_get` would redact.
@@ -3881,10 +3865,6 @@ Value-1 items intentionally left unbuilt (zero consumer on a text-only brain):
 
 ## LOW backlog (v1.81 cycle-3 verify, 2026-07-06)
 
-- **mig 085 entity_facts_superseded_by_fkey has no ON DELETE action** — a
-  hard-delete that removes a fact still referenced by a tombstoned row's
-  superseded_by now FK-violates where it succeeded pre-085. Add ON DELETE SET
-  NULL (or CASCADE) when a purge path exercises it.
 - **postgres.ts onnotice is a no-op** — migration NOTICEs (082 RLS trigger
   skipped, 092 repaired/skipped counts) are invisible on live RDS deploys.
   Route NOTICE to the migrate log so the operator can confirm 082/092 outcomes.
