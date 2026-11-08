@@ -15,6 +15,7 @@
  * ON CONFLICT DO NOTHING); fail-open (an LLM error falls back to the
  * deterministic narrative, never aborts).
  */
+import { createHash } from "node:crypto";
 import type { Engine } from "../engine/interface.ts";
 import type { Storage } from "../storage.ts";
 import { putPage } from "../pages.ts";
@@ -25,6 +26,13 @@ import { BudgetTracker } from "../budget.ts";
 import { synthPagesEnabled, slugifyTitle } from "./atoms.ts";
 
 const DEFAULT_MAX_CONCEPTS = 30;
+export const CONCEPT_PROMPT_VERSION = 1;
+
+function memberHash(atomIds: number[], modelId: string): string {
+  return createHash("sha256")
+    .update(`${[...atomIds].sort((a, b) => a - b).join(",")}|${CONCEPT_PROMPT_VERSION}|${modelId}`)
+    .digest("hex");
+}
 /** Output side of the pre-call estimate: exactly the maxTokens this phase asks
  *  for, so it cannot be an under-estimate. The INPUT side is measured from the
  *  prompt actually built (see estimateUsage) rather than guessed — a fixed
@@ -90,6 +98,8 @@ export interface SynthesizeConceptsOptions {
 }
 
 export interface SynthesizeConceptsResult {
+  skippedDeleted: number;
+  groupsUnchanged: number;
   atomsSeen: number;
   groupsFound: number;
   conceptsWritten: number;
@@ -165,6 +175,8 @@ export async function synthesizeConceptsPhase(
   const llm = resolveLlmFn(opts.llmFn, { modelId: budgetModel });
   const writePages = opts.storage !== undefined && synthPagesEnabled();
   const result: SynthesizeConceptsResult = {
+    skippedDeleted: 0,
+    groupsUnchanged: 0,
     atomsSeen: 0,
     groupsFound: 0,
     conceptsWritten: 0,
@@ -207,9 +219,26 @@ export async function synthesizeConceptsPhase(
 
   let llmCalls = 0;
   for (const group of eligible) {
+    const pageSlug = `concepts/${slugifyTitle(group.slug)}`;
+    const page = await engine.query<{ deleted_at: string | null }>(
+      "SELECT deleted_at FROM pages WHERE slug = $1", [pageSlug],
+    );
+    if (page.rows[0]?.deleted_at != null) {
+      result.skippedDeleted += 1;
+      continue;
+    }
     let narrative = deterministicNarrative(group);
-    let modelId = opts.modelId ?? "deterministic";
+    let modelId = "deterministic";
     const wantLlm = group.tier === "T1" || group.tier === "T2";
+    const plannedModel = wantLlm && !paidCallsStopped && llmCalls < maxConcepts ? budgetModel : "deterministic";
+    const previous = await engine.query<{ member_hash: string | null }>(
+      "SELECT member_hash FROM synth_concepts WHERE concept_slug = $1", [group.slug],
+    );
+    if (previous.rows[0]?.member_hash === memberHash(group.atomIds, plannedModel) &&
+        (!writePages || page.rows.length > 0)) {
+      result.groupsUnchanged += 1;
+      continue;
+    }
     if (wantLlm && !paidCallsStopped && llmCalls < maxConcepts) {
       // Build the prompt FIRST so the pre-call estimate is measured from the
       // bytes actually sent, not from a guess about their upper bound.
@@ -268,16 +297,18 @@ export async function synthesizeConceptsPhase(
       ({ title, narrative } = await guardFields(engine, group.slug, null, "concept", { title, narrative }));
       await engine.transaction(async (tx) => {
         await tx.query(
-          `INSERT INTO synth_concepts (concept_slug, title, narrative, tier, atom_count, generated_at, model_id)
-           VALUES ($1, $2, $3, $4, $5, now(), $6)
+          `INSERT INTO synth_concepts (concept_slug, title, narrative, tier, atom_count, generated_at, model_id, member_hash)
+           VALUES ($1, $2, $3, $4, $5, now(), $6, $7)
            ON CONFLICT (concept_slug) DO UPDATE SET
              title = EXCLUDED.title,
              narrative = EXCLUDED.narrative,
              tier = EXCLUDED.tier,
              atom_count = EXCLUDED.atom_count,
              generated_at = EXCLUDED.generated_at,
-             model_id = EXCLUDED.model_id`,
-          [group.slug, title, narrative, group.tier, group.titles.length, modelId],
+             model_id = EXCLUDED.model_id,
+             member_hash = EXCLUDED.member_hash`,
+          [group.slug, title, narrative, group.tier, group.titles.length, modelId,
+            writePages ? null : memberHash(group.atomIds, modelId)],
         );
         for (const atomId of group.atomIds) {
           await tx.query(
@@ -298,7 +329,6 @@ export async function synthesizeConceptsPhase(
     // cycle's mirror phase indexes pages). Idempotent putPage upsert; a page
     // failure never loses the synth_concepts row.
     if (writePages && opts.storage) {
-      const pageSlug = `concepts/${slugifyTitle(group.slug)}`;
       const mentions = group.titles.slice(0, 10).map((t) => `- ${t}`).join("\n");
       try {
         const pageWrite = await putPage(opts.storage, {
@@ -311,6 +341,8 @@ export async function synthesizeConceptsPhase(
         });
         if (pageWrite.held) result.pagesHeld += 1;
         else result.pagesWritten += 1;
+        await engine.query("UPDATE synth_concepts SET member_hash = $2 WHERE concept_slug = $1",
+          [group.slug, memberHash(group.atomIds, modelId)]);
       } catch (e) {
         result.errors.push(`${group.slug} page: ${e instanceof Error ? e.message : String(e)}`);
       }
