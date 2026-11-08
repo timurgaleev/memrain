@@ -9,6 +9,7 @@
  */
 import { gatherDiagnostics } from "../core/gather-degraded.ts";
 import { pageBodyWindow } from "../core/page-window.ts";
+import { oversizedResultError } from "../core/result-size.ts";
 import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import type { Storage } from "../core/storage.ts";
@@ -444,12 +445,18 @@ export async function dispatchTool(
         failClosed: tenantFailClosedEnabled(),
       });
       const meta = await getBrainHotMemoryMeta(storage, readSources !== undefined ? { sourceIds: readSources } : {});
-      if (meta) return { ...result, _meta: meta };
+      if (meta) return boundedResult(req.name, { ...result, _meta: meta }, opts.isPublic ?? false);
     } catch {
       // Best-effort: never let the meta hook fail the underlying tool call.
     }
   }
-  return result;
+  return boundedResult(req.name, result, opts.isPublic ?? false);
+}
+
+function boundedResult(tool: string, result: ToolCallResult, isPublic: boolean): ToolCallResult {
+  if (result.isError) return result;
+  const error = oversizedResultError(tool, result);
+  return error ? errResult(JSON.stringify(error.toEnvelope(isPublic))) : result;
 }
 
 /** Tools whose `id` is an entity_facts id a client may hold as a string. */
