@@ -20,7 +20,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(r).toMatchObject({ found: true, forgotten: false, withdrawn: true, reason: "already_retired", withdrawn_duplicates: 1 });
       const e = db.storage.engine();
       expect((await e.query("SELECT forgotten_cause FROM entity_facts WHERE id=$1", [b.id!])).rows).toEqual([{ forgotten_cause: "forget" }]);
-      expect((await e.query("SELECT first_fact_id FROM fact_withdrawals")).rows).toEqual([{ first_fact_id: a.id! }]);
+      expect((await e.query("SELECT first_fact_id::int FROM fact_withdrawals")).rows).toEqual([{ first_fact_id: a.id! }]);
       const body = renderFactsFence([{ rowNum: 1, claim: "Plays chess", confidence: 1, active: true }]);
       const page = await putPage(db.storage, { slug: "people/alice", markdown_body: body });
       await reconcileFactsForPage(db.storage, "people/alice", page.content_hash);

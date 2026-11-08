@@ -11,9 +11,8 @@
  *      moved on since the triggering write (a newer write's own reconcile will
  *      project the newer body) — this is the concurrency guard,
  *   2. parses the `## Facts` fence (core/facts-fence.ts),
- *   3. WIPES that page's fence-owned fact rows
- *      (`DELETE … WHERE source_markdown_slug = <page>`),
- *   4. re-inserts the ACTIVE (non-struck) fence rows, keyed by
+ *   3. keeps unchanged fence rows, preserving identity and derived metadata,
+ *   4. replaces changed rows and inserts new ACTIVE (non-struck) rows, keyed by
  *      `source_markdown_slug` + `row_num` (migration 035).
  *
  * It runs on EVERY page write (not just content changes) so an idempotent
@@ -42,7 +41,7 @@
  */
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
-import { validateSlug, getPage } from "./pages.ts";
+import { validateSlug, getPage, lockPageSlugs } from "./pages.ts";
 import { parseFactsFence } from "./facts-fence.ts";
 import { fenceBounds } from "./fence-shared.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
@@ -101,6 +100,7 @@ export async function reconcileFactsForPage(
 ): Promise<{
   removed: number;
   added: number;
+  unchanged?: number;
   skipped?: "malformed_rows" | "mixed_fence_brands";
   fenceAbsent?: true;
   retained?: number;
@@ -221,6 +221,12 @@ export async function reconcileFactsForPage(
   // withdraw lock shared through its trigger, so a concurrent forget can make
   // this the deadlock victim (see retry.ts).
   return deadlockSafeTransaction(engine, async (tx) => {
+    await lockPageSlugs(tx, pageSlug);
+    const current = await tx.query<{ content_hash: string }>(
+      `SELECT content_hash FROM pages WHERE slug = $1 AND deleted_at IS NULL${delScope}`,
+      scope !== null ? [pageSlug, scope] : [pageSlug],
+    );
+    if (current.rows[0]?.content_hash !== expectedContentHash) return { removed: 0, added: 0 };
     // Preserve forget tombstones (mig043) across the rebuild: a fact the
     // operator explicitly forgot must not be resurrected by the next page
     // re-put. Two parts — (1) the wipe below spares tombstoned rows
@@ -274,13 +280,44 @@ export async function reconcileFactsForPage(
       for (const r of w.rows) withdrawnClaims.add(r.claim);
     }
 
+    const live = await tx.query<Record<string, unknown> & { id: number; row_num: number }>(
+      `SELECT id, row_num, entity_slug, source_id, fact, confidence::float8 AS confidence,
+              source_slug, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until,
+              claim_metric, claim_value::float8 AS claim_value, claim_unit, claim_period, event_type
+         FROM entity_facts WHERE source_markdown_slug = $1 AND forgotten_at IS NULL${delScope}
+         FOR UPDATE`, tombParams,
+    );
+    const liveByRow = new Map(live.rows
+      .filter(r => r.source_id === (scope ?? "default") && r.entity_slug === pageSlug)
+      .map(r => [r.row_num, r]));
+    const keepIds: number[] = [];
+    const keepRows = new Set<number>();
+    for (const f of facts) {
+      if (forgottenRows.has(f.rowNum) || forgottenLegacyText.has(f.claim) || withdrawnClaims.has(f.claim)) continue;
+      const old = liveByRow.get(f.rowNum);
+      if (!old) continue;
+      const projected = {
+        fact: f.claim, confidence: Math.fround(f.confidence), source_slug: safeSourceSlug(f.source),
+        kind: f.kind ?? null, notability: f.notability ?? null,
+        valid_from: f.validFrom ?? null, valid_until: f.validUntil ?? null,
+        claim_metric: f.claimMetric ?? null, claim_value: f.claimValue ?? null,
+        claim_unit: f.claimUnit ?? null, claim_period: f.claimPeriod ?? null, event_type: f.eventType ?? null,
+      };
+      if (Object.entries(projected).every(([key, value]) => old[key] === value)) {
+        keepIds.push(old.id);
+        keepRows.add(f.rowNum);
+      }
+    }
+
     const delParams: unknown[] = [pageSlug];
     if (scope !== null) delParams.push(scope);
+    delParams.push(keepIds);
     const del = await tx.query<{ c: number }>(
       `WITH d AS (
          DELETE FROM entity_facts
           WHERE source_markdown_slug = $1
             AND forgotten_at IS NULL${delScope}
+            AND NOT (id = ANY($${delParams.length}::bigint[]))
           RETURNING 1
        )
        SELECT COUNT(*)::int AS c FROM d`,
@@ -291,7 +328,7 @@ export async function reconcileFactsForPage(
       // A forgotten row stays forgotten across a fence rebuild (by row_num; legacy
       // NULL-row tombstones by text).
       if (forgottenRows.has(f.rowNum) || forgottenLegacyText.has(f.claim)) continue;
-      if (withdrawnClaims.has(f.claim)) continue;
+      if (withdrawnClaims.has(f.claim) || keepRows.has(f.rowNum)) continue;
       const insParams: unknown[] = [
         pageSlug,
         f.claim,
@@ -323,7 +360,7 @@ export async function reconcileFactsForPage(
       );
       added += 1;
     }
-    return { removed: del.rows[0]?.c ?? 0, added };
+    return { removed: del.rows[0]?.c ?? 0, added, ...(keepRows.size > 0 ? { unchanged: keepRows.size } : {}) };
   });
 }
 

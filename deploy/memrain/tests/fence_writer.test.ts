@@ -53,7 +53,7 @@ describe("the fence writer stamp", () => {
   });
 
   for (const brand of ["memex", "memrain"] as const) {
-    it(`rewriting a ${brand}: fence page whose rows carry the legacy stamp leaves exactly N rows, all new`, async () => {
+    it(`a prose edit keeps legacy stamps and a changed ${brand}: fence row gets the current stamp`, async () => {
       const slug = `people/writer-${brand}`;
       const body = `# Alice\n\n## Facts\n${renderFactsFence(FACTS, brand)}\n`;
       await putAndReconcile(slug, body);
@@ -65,8 +65,10 @@ describe("the fence writer stamp", () => {
       expect(await writers(slug)).toEqual(FACTS.map(() => "memex:facts-fence"));
 
       const r = await putAndReconcile(slug, `${body}\nAn unrelated prose edit.\n`);
-      expect(r).toEqual({ removed: FACTS.length, added: FACTS.length });
-      expect(await writers(slug)).toEqual(FACTS.map(() => "memrain:facts-fence"));
+      expect(r).toEqual({ removed: 0, added: 0, unchanged: FACTS.length });
+      expect(await writers(slug)).toEqual(FACTS.map(() => "memex:facts-fence"));
+      await putAndReconcile(slug, renderFactsFence(FACTS.map(f => f.rowNum === 1 ? { ...f, claim: "Founded another company" } : f), brand));
+      expect(await writers(slug)).toEqual(["memrain:facts-fence", "memex:facts-fence", "memex:facts-fence"]);
     });
   }
 });
