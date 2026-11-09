@@ -62,3 +62,16 @@ memrain eval --qrels <path> --split sealed --k 5 \
 - Result per metric (delta, 95% interval, p, Holm p, wins/losses/ties):
 - Latency (p50, p95, ratios), errors, expected_top1 misses:
 - Decision: promoted | inconclusive | rejected, and why, against the rule.
+
+## Retrieval surface
+
+Record whether the run uses direct hybrid retrieval (the default),
+`memrain eval --via search`, or `memrain eval --via query`. The latter two
+exercise the real MCP dispatcher as the operator, including response filtering
+and token budgets. They bypass the query cache; the surface is included in the
+run configuration hash and report. Compare runs on the same surface.
+
+MCP runs preserve supported ranking knobs via their environment settings and
+`token_budget`; `rrfK` has no MCP equivalent and is refused instead of ignored.
+`k` must be 1–100; page overfetch is capped at the MCP limit of 100 hits.
+Queries remain billable under the configured model and budget gates.

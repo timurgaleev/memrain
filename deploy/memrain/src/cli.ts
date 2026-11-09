@@ -130,7 +130,7 @@ function printUsage(): void {
   console.log("  doctor --remediate [--execute|--yes] [--max-jobs N] [--max-usd X]");
   console.log("                               enqueue the safe subset; dry-run unless --execute/--yes");
   console.log("  integrity [--vault P]        vault-vs-index drift report");
-  console.log("  eval [--k N] [--qrels P] [--rrf-k N] [--expand|--no-expand] [--rerank] [--max-pool]");
+  console.log("  eval [--via search|query] [--k N] [--qrels P] [--rrf-k N] [--expand|--no-expand] [--rerank] [--max-pool]");
   console.log("       [--graph-signals] [--cosine-rescore] [--relational-arm] [--dedup-type-ratio X]");
   console.log("       [--config-a <json|path>] [--config-b <json|path>] [--split dev|sealed|all]");
   console.log("       [--prereg P] [--record]");
@@ -612,6 +612,11 @@ async function main(argv: readonly string[]): Promise<number> {
         cfg.dedupTypeRatio = n;
       }
       const evalOpts: Parameters<typeof runEval>[0] = {};
+      const via = values.get("--via");
+      if (via !== undefined) {
+        if (via !== "search" && via !== "query") throw new Error("memrain eval: --via must be search or query");
+        evalOpts.via = via;
+      }
       if (k !== undefined) evalOpts.k = k;
       const qrels = values.get("--qrels");
       if (qrels) evalOpts.qrelsPath = qrels;
