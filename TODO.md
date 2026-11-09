@@ -11,10 +11,6 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ## Remaining comparison program
 
-- Complete the accepted write-reason history, canonical takes writes,
-  mixed-script slug compatibility, exact supersession precedence, typed
-  conflicts, atom lifecycle, temporal links, explicit erasure capability,
-  opt-in watchdog and bounded MCP read surfaces in the next release.
 - Run the pinned attribution, mirror-adoption and rechunk previews on the
   deployment. Apply only reviewed, unambiguous selections with preservation
   receipts. These operations are separate from deploying their commands.
@@ -22,7 +18,7 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
   page content only; full database recovery requires a database backup.
 - Observe extraction recovery and model spend for seven complete days after
   deployment; code tests do not establish model-quality or cost improvements.
-- Keep auto-think and the future event-loop watchdog disabled until their
+- Keep auto-think and the event-loop watchdog disabled until their
   deployment-specific acceptance criteria have been met.
 - Inspect and verify the operator's SessionEnd hook: absolute paths, command
   beginning `cd / && exec /`, protected token file, preserved existing hooks,
@@ -32,8 +28,13 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
   policy is off, and explicit `force` retains the existing bypass.
 - Keep PAT/OAuth contributions externally framed. Any explicit trusted-client
   exemption needs its own policy; admin scopes alone do not imply trust.
-- Measure ledger-fact query p95 on production-sized data before adding an
-  index, and count duplicate query embeddings before adding a cache.
+- Optimize repeated ledger-fact FTS computation for long queries. A bounded
+  restored-corpus experiment supports reducing repeated vector construction;
+  blanket materialization also slows short remote queries and can spill.
+  Verify equivalent results and bounded memory before changing the query.
+  Current aggregate telemetry cannot measure duplicate query embeddings;
+  collect query-specific aggregate evidence before adding a cache. No global
+  JIT toggle or speculative index is justified by the measurements.
 - Run the updated secret audit in preview mode. Job payload hits are reported
   as aggregate counts and remain withheld under `--apply`; payload authority
   and spend metadata must not be rewritten or automatically pruned.
