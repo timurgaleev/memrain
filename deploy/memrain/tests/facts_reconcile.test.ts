@@ -246,18 +246,18 @@ describe("reconcile honors forget vs supersede tombstones (mig062)", () => {
     return Number(r.rows[0]!.n);
   }
 
-  it("a superseded fence claim RE-ENTERS on re-put (cause='supersede' excluded from skip-set)", async () => {
+  it("an identical superseded fence claim stays retired on re-put", async () => {
     const body = fenceBody([{ rowNum: 1, claim: "title is CFO", confidence: 1, active: true }]);
     await putAndReconcile("people/alice", body);
     const id = await tombstoneId("people/alice", "title is CFO");
     // A supersede (not an operator forget) tombstones the fence-owned claim.
     await forgetFact(storage, id, { cause: "supersede", reason: "superseded by newer" });
     expect(await liveCount("people/alice", "title is CFO")).toBe(0);
-    // Re-put the identical page — the fence still declares the claim, so it must
-    // re-enter (the operator never forgot it).
+    // The canonical page stays intact, but this exact projected row is retired.
     const r = await putAndReconcile("people/alice", body);
-    expect(await liveCount("people/alice", "title is CFO")).toBe(1);
-    expect(r.added).toBe(1);
+    expect(await liveCount("people/alice", "title is CFO")).toBe(0);
+    expect(r.added).toBe(0);
+    expect(r.superseded_rows).toEqual([1]);
   });
 
   it("a genuinely forgotten fence claim STAYS suppressed on re-put (cause='forget')", async () => {

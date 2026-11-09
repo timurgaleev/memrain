@@ -106,6 +106,7 @@ export async function reconcileFactsForPage(
   skipped?: "malformed_rows" | "mixed_fence_brands" | "quarantined";
   fenceAbsent?: true;
   retained?: number;
+  superseded_rows?: number[];
 }> {
   if (!factsFenceEnabled()) return { removed: 0, added: 0 };
   validateSlug(pageSlug);
@@ -242,19 +243,16 @@ export async function reconcileFactsForPage(
     // page. A fence fact's identity here is its claim text (every fence row on
     // a page shares entity_slug = the page). Fetched BEFORE the wipe.
     //
-    // The skip-set honors GENUINE forgets only — `forgotten_cause` (mig062)
-    // discriminates. A `forget_fact` stamps 'forget'; the insert-time dedup
-    // supersede path (facts.ts, MEMRAIN_FACTS_DEDUP) stamps 'supersede'. We exclude
-    // 'supersede' rows so a superseded fence claim can legitimately re-enter from
-    // its canonical fence, while 'forget' (and legacy NULL rows retired before
-    // mig062, all of which were forget_fact tombstones) stay suppressed.
+    // Supersession applies only to the exact source/page/row/claim identity;
+    // a corrected claim or another row remains eligible. Forget keeps its
+    // broader existing withdrawal semantics.
     const tombParams: unknown[] = [pageSlug];
     if (scope !== null) tombParams.push(scope);
-    const tomb = await tx.query<{ fact: string; row_num: number | null }>(
-      `SELECT DISTINCT fact, row_num FROM entity_facts
+    const tomb = await tx.query<{ fact: string; row_num: number | null; source_id: string; forgotten_cause: string | null }>(
+      `SELECT DISTINCT fact, row_num, source_id, forgotten_cause FROM entity_facts
         WHERE source_markdown_slug = $1
           AND forgotten_at IS NOT NULL
-          AND forgotten_cause IS DISTINCT FROM 'supersede'${delScope}`,
+          ${delScope}`,
       tombParams,
     );
     // Key the tombstone skip-set on row_num — the fence's stable identity used
@@ -263,7 +261,12 @@ export async function reconcileFactsForPage(
     // NULL row_num (retired pre-mig062) fall back to claim-text matching.
     const forgottenRows = new Set<number>();
     const forgottenLegacyText = new Set<string>();
+    const superseded = new Set<string>();
     for (const r of tomb.rows) {
+      if (r.forgotten_cause === "supersede") {
+        if (r.source_id === (scope ?? "default") && r.row_num !== null) superseded.add(JSON.stringify([r.row_num, r.fact]));
+        continue;
+      }
       if (typeof r.row_num === "number") forgottenRows.add(r.row_num);
       else forgottenLegacyText.add(r.fact);
     }
@@ -299,7 +302,9 @@ export async function reconcileFactsForPage(
       .map(r => [r.row_num, r]));
     const keepIds: number[] = [];
     const keepRows = new Set<number>();
+    const supersededRows = facts.filter(f => superseded.has(JSON.stringify([f.rowNum, f.claim]))).map(f => f.rowNum);
     for (const f of facts) {
+      if (superseded.has(JSON.stringify([f.rowNum, f.claim]))) continue;
       if (forgottenRows.has(f.rowNum) || forgottenLegacyText.has(f.claim) || withdrawnClaims.has(f.claim)) continue;
       const old = liveByRow.get(f.rowNum);
       if (!old) continue;
@@ -332,6 +337,7 @@ export async function reconcileFactsForPage(
     );
     let added = 0;
     for (const f of facts) {
+      if (superseded.has(JSON.stringify([f.rowNum, f.claim]))) continue;
       // A forgotten row stays forgotten across a fence rebuild (by row_num; legacy
       // NULL-row tombstones by text).
       if (forgottenRows.has(f.rowNum) || forgottenLegacyText.has(f.claim)) continue;
@@ -367,7 +373,8 @@ export async function reconcileFactsForPage(
       );
       added += 1;
     }
-    return { removed: del.rows[0]?.c ?? 0, added, ...(keepRows.size > 0 ? { unchanged: keepRows.size } : {}) };
+    return { removed: del.rows[0]?.c ?? 0, added, ...(keepRows.size > 0 ? { unchanged: keepRows.size } : {}),
+      ...(supersededRows.length > 0 ? { superseded_rows: supersededRows } : {}) };
   });
 }
 
