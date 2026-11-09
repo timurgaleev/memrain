@@ -106,7 +106,7 @@ import { searchExact } from "../core/search/exact.ts";
 import { addTag, removeTag, getTags } from "../core/tags.ts";
 import { relationalRecall } from "../core/search/relational-recall.ts";
 import { relationalRecallLlm } from "../core/search/relational-llm.ts";
-import { getLinks, listLinkSources } from "../core/links-read.ts";
+import { getLinksPage, listLinkSources } from "../core/links-read.ts";
 import {
   findOrphans,
   findExperts,
@@ -1477,19 +1477,23 @@ async function callBacklinks(
     opts.limit = limit as number;
   }
   if (readSources !== undefined) opts.sourceIds = readSources;
-  if (remote) opts.excludeTarget = isDiarySlug;
+  if (remote) { opts.excludeTarget = isDiarySlug; opts.excludeDiary = true; }
+  opts.includeOverflow = true;
   let hits = await findBacklinks(storage, name, opts);
   // Diary fence: drop backlinks originating from a diary page (its mirror
   // source_path carries the life/diary/* slug) for a non-operator caller.
   // Edges into a diary target are dropped by `excludeTarget` above; this
   // drops edges out of a diary page.
   if (remote) hits = hits.filter((h) => !isDiarySourcePath(h.sourcePath));
+  const requested = opts.limit ?? 50;
+  const truncated = hits.length > requested;
+  hits = hits.slice(0, requested);
   // Public ingress: `surfaceForm` is note-authored free text — strip it,
   // mirroring the search/page/fact body redaction policy.
   const out = redact
     ? redactBacklinks(hits as unknown as Record<string, unknown>[])
     : hits;
-  return jsonResult({ ok: true, name, hits: out });
+  return jsonResult({ ok: true, name, hits: out, truncated });
 }
 
 async function callStats(storage: Storage): Promise<ToolCallResult> {
@@ -3295,19 +3299,20 @@ async function callGetLinks(
   }
   // Diary fence: a diary node's edge set is hidden from a non-operator caller.
   if (remote && isDiarySlug(args["slug"])) {
-    return jsonResult({ ok: true, slug: args["slug"], groups: [] });
+    return jsonResult({ ok: true, slug: args["slug"], groups: [], truncated: false });
   }
-  const opts: Parameters<typeof getLinks>[2] = {};
+  const opts: Parameters<typeof getLinksPage>[2] = {};
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   if (readSources !== undefined) opts.sourceIds = readSources;
-  let groups = await getLinks(storage, args["slug"], opts);
+  if (remote) opts.excludeDiary = true;
+  let { groups, truncated } = await getLinksPage(storage, args["slug"], opts);
   // Drop edges to a diary page, then any group left empty.
   if (remote) {
     groups = groups
       .map((g) => ({ ...g, links: g.links.filter((l) => !isDiaryLink(l)) }))
       .filter((g) => g.links.length > 0);
   }
-  return jsonResult({ ok: true, slug: args["slug"], groups });
+  return jsonResult({ ok: true, slug: args["slug"], groups, truncated });
 }
 
 async function callListLinkSources(storage: Storage, readSources?: string[]): Promise<ToolCallResult> {

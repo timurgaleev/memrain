@@ -36,6 +36,7 @@ export interface GetLinksOptions {
    * to `source_id = ANY(...)`. Omitted -> unscoped (whole-brain); `[]` -> nothing.
    */
   sourceIds?: string[];
+  excludeDiary?: boolean;
 }
 
 function normaliseLimit(limit: number | undefined): number {
@@ -55,11 +56,16 @@ export async function getLinks(
   slug: string,
   opts: GetLinksOptions = {},
 ): Promise<LinkGroup[]> {
+  return (await getLinksPage(storage, slug, opts)).groups;
+}
+
+export async function getLinksPage(storage: Storage, slug: string, opts: GetLinksOptions = {}): Promise<{ groups: LinkGroup[]; truncated: boolean }> {
   validateSlug(slug);
   const limit = normaliseLimit(opts.limit);
-  const params: unknown[] = [slug, limit];
+  const params: unknown[] = [slug, limit + 1];
   // Tenant scope (mig047): same filter string in both UNION arms.
   const scopeFilter = andSourceScope("source_id", opts.sourceIds, params);
+  const diaryFilter = opts.excludeDiary ? " AND source_slug NOT LIKE 'life/diary/%' AND target_slug NOT LIKE 'life/diary/%'" : "";
   const r = await storage.engine().query<
     LinkRow & { direction: "outbound" | "inbound" }
   >(
@@ -67,24 +73,27 @@ export async function getLinks(
              source_chunk_id, written_at::text AS written_at,
              'outbound' AS direction
         FROM links
-       WHERE source_slug = $1${scopeFilter}
+       WHERE source_slug = $1${scopeFilter}${diaryFilter}
          AND ${liveEdgeSql("links")}
-       ORDER BY written_at DESC
+       ORDER BY written_at DESC, id DESC
        LIMIT $2)
      UNION ALL
      (SELECT id, source_slug, target_slug, type, inferred_confidence,
              source_chunk_id, written_at::text AS written_at,
              'inbound' AS direction
         FROM links
-       WHERE target_slug = $1${scopeFilter}
+       WHERE target_slug = $1${scopeFilter}${diaryFilter}
          AND ${liveEdgeSql("links")}
-       ORDER BY written_at DESC
+       ORDER BY written_at DESC, id DESC
        LIMIT $2)`,
     params,
   );
 
   const groups = new Map<string, LinkGroup>();
+  const counts = { inbound: 0, outbound: 0 };
   for (const row of r.rows) {
+    counts[row.direction]++;
+    if (counts[row.direction] > limit) continue;
     const key = `${row.type}${row.direction}`;
     let group = groups.get(key);
     if (!group) {
@@ -94,12 +103,13 @@ export async function getLinks(
     const { direction: _direction, ...link } = row;
     group.links.push(link);
   }
-  return [...groups.values()].sort(
+  const sorted = [...groups.values()].sort(
     (a, b) =>
       a.type.localeCompare(b.type) ||
       // outbound before inbound
       a.direction.localeCompare(b.direction),
   );
+  return { groups: sorted, truncated: counts.inbound > limit || counts.outbound > limit };
 }
 
 /** A known link type annotated with its live edge count. */

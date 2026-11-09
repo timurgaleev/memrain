@@ -507,7 +507,7 @@ export async function graphNeighbors(
   }
   params.push(limit);
   const sql = `${queries.join("\nUNION ALL\n")}
-    ORDER BY written_at DESC
+    ORDER BY written_at DESC, id DESC
     LIMIT $${params.length}`;
   const r = await storage.engine().query<NeighborRow>(sql, params);
   return r.rows;
