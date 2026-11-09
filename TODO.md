@@ -23,6 +23,22 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
   line-aligned markdown rechunking with a corpus/spend preview first.
 - Observe extraction recovery and model spend for seven days after deployment;
   code tests do not establish model-quality or cost improvements.
+- Decide whether any explicitly trusted client principals should be exempt
+  from retrieval framing. PAT/OAuth writes currently remain external even
+  with admin scopes; no automatic operator-client allowlist is inferred.
+- Choose the deployment's `MEMRAIN_REQUIRE_WRITE_PRECONDITION` policy before
+  relying on the large-shrink guard. The guard is inactive when this policy
+  is off, and explicit `force` retains the existing bypass.
+- Measure ledger-fact query p95 on production-sized data before adding an
+  index: the current `to_tsvector` predicate can scan all eligible facts even
+  though only three matches are returned.
+- Skip whitespace-only extraction windows without changing append offsets
+  or coverage; they can currently consume a model call.
+- Inspect legacy mirrors with NULL `documents.source_id` before repairing
+  source assignments; source-qualified type/prefix filters omit them.
+- Check client use of `page_versions` now that bodies are omitted by default.
+  Code callers with no visible starting definition also no longer recover a
+  resolved edge by name; preserve the stricter identity boundary.
 
 ## Follow-ups from the 1.11 batch
 

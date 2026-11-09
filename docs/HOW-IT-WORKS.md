@@ -272,6 +272,9 @@ A few that are easy to miss:
   origin's provenance. A later edit does not erase earlier provenance. Frame
   characters count toward the response budget. Stored bodies, `page_get` and
   operator transcripts keep their original text.
+  PAT and OAuth writes record a client principal, including an operator's
+  client credential, so their retrieved evidence receives this frame too.
+  Admin scopes do not certify client-supplied content as operator-authored.
 - Empty `search` and `query` results include a `hint`: `retrieval_healthy`
   suggests broader terms or filters, `retrieval_degraded` names pipeline
   failures, and `grant_sources_empty` means the caller has no readable source.

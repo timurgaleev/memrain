@@ -32,7 +32,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   review and connection setup; client guides document brain-first hooks.
 
 ### Fixed
-- Page writes guard accidental large shrink and reject malformed new slugs.
+- Page writes guard accidental large shrink when write preconditions are
+  enabled, and reject malformed new slugs.
   Create-only version checks also protect legacy pages without version rows.
   Batch failures become tool errors; timeline writes return their stored event.
   Read limits, result-size checks and public-content canaries cover the expanded
@@ -53,9 +54,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   visible instead of appearing healthy.
 - Skill file reads are size-bounded and cannot escape the skill root.
   Markdown export quotes multiline titles for import round trips.
+- Fact provenance labels prioritize the authenticated client or public
+  principal over caller-supplied writer labels.
 
 ### Changed
 - Runtime images use Bun 1.4.4 and container logs rotate with bounded retention.
+- PAT/OAuth-written evidence, including operator client writes, receives an
+  escaped external-content frame in retrieval results. Stored content and
+  `page_get` remain unchanged. Version listings omit bodies by default;
+  request a version through `page_get` for its content.
+- With `MEMRAIN_FACTS_EXTRACTION=1`, daily recovery can make paid model calls
+  unless `MEMRAIN_FACTS_BACKFILL=0`. It is capped by default at $1 and 50 pages
+  per run. Observe actual spend after deployment; extraction being enabled
+  now also enables scheduled recovery by default.
 - No new database migration. Existing transcript attribution repair, code
   rechunking and bulk imports require a separate reviewed operator apply;
   deployment does not run them. Markdown import restores page content only,
