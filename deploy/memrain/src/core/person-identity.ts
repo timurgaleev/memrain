@@ -70,7 +70,7 @@ export async function suggestAliases(engine: Engine, opts: { sourceIds?: string[
     partial ||= row.clipped;
     const seen = new Set([normalizeAlias(person.title), ...extractAliasNorms(row.compiled_truth)]);
     const title = person.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`(?:^|[\\n.!?]\\s*)${title}\\s*[,;(]?\\s*(?:aka|a\\.k\\.a\\.|он же|она же)\\s+["«“]?([\\p{L}][\\p{L} '-]{1,199})(?=["»”.,;:!?)\\n]|$)`, "gimu");
+    const pattern = new RegExp(`(?:^|[\\n.!?]\\s*)${title}\\s*[,;(]?\\s*(?:aka|a\\.k\\.a\\.|\u043e\u043d \u0436\u0435|\u043e\u043d\u0430 \u0436\u0435)\\s+["«“]?([\\p{L}][\\p{L} '-]{1,199})(?=["»”.,;:!?)\\n]|$)`, "gimu");
     for (const match of stripCodeBlocks(row.body).matchAll(pattern)) {
       const alias = match[1]!.trim();
       const norm = normalizeAlias(alias);

@@ -17,9 +17,8 @@ mutating: false
 
 ## Contract
 
-Use the guide matching the client at
-https://github.com/timurgaleev/memrain/tree/main/docs/clients (or `docs/clients/`
-in the checkout). It covers Claude Code, Codex, ChatGPT, and team enrollment.
+Use the guide matching the client under `docs/clients/` in the Memrain checkout
+or its published repository. It covers Claude Code, Codex, ChatGPT, and team enrollment.
 Follow that guide's current PAT or OAuth flow; never invent a callback, copy
 another person's credential, or put a token into the conversation.
 

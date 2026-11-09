@@ -14,7 +14,7 @@ export interface QueryFact {
 }
 
 const EXTRA_STOPWORDS = new Set(["is", "it", "an", "as", "at", "be", "by", "in", "of", "on", "or", "to", "we",
-  "что", "как", "когда", "где", "кто", "это", "для", "или", "есть", "про", "при", "чем", "его", "она", "они", "нам", "нас", "по", "на", "из", "от", "до"]);
+  "\u0447\u0442\u043e", "\u043a\u0430\u043a", "\u043a\u043e\u0433\u0434\u0430", "\u0433\u0434\u0435", "\u043a\u0442\u043e", "\u044d\u0442\u043e", "\u0434\u043b\u044f", "\u0438\u043b\u0438", "\u0435\u0441\u0442\u044c", "\u043f\u0440\u043e", "\u043f\u0440\u0438", "\u0447\u0435\u043c", "\u0435\u0433\u043e", "\u043e\u043d\u0430", "\u043e\u043d\u0438", "\u043d\u0430\u043c", "\u043d\u0430\u0441", "\u043f\u043e", "\u043d\u0430", "\u0438\u0437", "\u043e\u0442", "\u0434\u043e"]);
 
 /** A small lexical ledger supplement, independent of chunk ranking and embeddings. */
 export async function matchQueryFacts(
