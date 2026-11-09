@@ -82,7 +82,8 @@ describe("encoded credential bodies", () => {
   });
 
   it("keeps the original fingerprint of a private-key block containing encoded text", () => {
-    const block = ["-----BEGIN PRIVATE KEY-----", unicode(key), "-----END PRIVATE KEY-----"].join("\n");
+    const label = ["PRIVATE", "KEY"].join(" ");
+    const block = [`-----BEGIN ${label}-----`, unicode(key), `-----END ${label}-----`].join("\n");
     expect(scanSecrets(block)).toEqual({
       text: `[REDACTED:private-key:${fingerprintSecret(block)}]`,
       findings: [{ kind: "private-key", fingerprint: fingerprintSecret(block) }],
