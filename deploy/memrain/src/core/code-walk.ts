@@ -75,7 +75,7 @@ export type WalkResult =
       did_you_mean: { symbol_qualified: string }[];
       readiness: CodeIndexReadiness;
     }
-  | { result: "ambiguous"; candidates: { symbol_qualified: string }[] };
+  | { result: "ambiguous"; candidates: { symbol_qualified: string; def_chunk_id: string }[] };
 
 export interface WalkOpts {
   direction: WalkDirection;
@@ -258,8 +258,12 @@ async function defsByBare(
   return out;
 }
 
+interface FrontierNode { symbol: string; def_chunk_id?: string }
+const nodeKey = (node: FrontierNode): string => node.def_chunk_id ?? `unresolved:${node.symbol}`;
+
 interface HopNode {
   parent: string;
+  expand?: boolean;
   node: WalkNode;
   /** Language of the calling chunk — the sink classifier's table. */
   language: string | null;
@@ -287,16 +291,15 @@ function edgeMeta(raw: unknown): { resolved_chunk_id?: string; candidates?: stri
 /** Callers of every frontier symbol in one edge read. */
 async function callersHop(
   engine: Engine,
-  frontier: string[],
+  frontier: FrontierNode[],
   limit: number,
   scope: WalkScope,
 ): Promise<HopNode[]> {
-  const keys = Array.from(new Set(frontier.flatMap((s) => [s, lastSegment(s)])));
-  const defs = await defsByQualified(engine, frontier, scope);
-  const params: unknown[] = [keys];
+  const keys = Array.from(new Set(frontier.flatMap(n => [n.symbol, lastSegment(n.symbol)])));
+  const params: unknown[] = [keys, frontier.flatMap(n => n.def_chunk_id ? [n.def_chunk_id] : [])];
   const lang = andLanguage("c.language", scope.lang, params);
   const src = andSourceScope("e.source_id", scope.sources, params);
-  params.push(frontier);
+  params.push(frontier.map(n => n.symbol));
   const exactParam = params.length;
   params.push(limit);
   // Edges naming the exact symbol, then edges the resolve phase tied to a
@@ -313,7 +316,8 @@ async function callersHop(
        FROM code_edges_symbol e
        JOIN chunks c ON c.id = e.from_chunk_id
        JOIN documents d ON d.id = c.document_id
-      WHERE e.to_symbol_qualified = ANY($1::text[])
+      WHERE (e.edge_metadata->>'resolved_chunk_id' = ANY($2::text[])
+          OR (NOT (e.edge_metadata ? 'resolved_chunk_id') AND e.to_symbol_qualified = ANY($1::text[])))
         AND e.from_symbol_qualified IS NOT NULL
         AND ${visibilityClause("d")}${lang}${src}
       ORDER BY rank, e.from_chunk_id, e.to_symbol_qualified
@@ -322,19 +326,17 @@ async function callersHop(
   );
   const out: HopNode[] = [];
   for (const parent of frontier) {
-    const defIds = new Set((defs.get(parent) ?? []).map((d) => d.id));
-    const bare = lastSegment(parent);
+    const bare = lastSegment(parent.symbol);
     for (const row of r.rows) {
-      if (row.target !== parent && row.target !== bare) continue;
       const meta = edgeMeta(row.edge_metadata);
       if (meta.resolved_chunk_id !== undefined) {
-        // With no known definition only the exact name can vouch for the edge.
-        if (defIds.size > 0 ? !defIds.has(meta.resolved_chunk_id) : row.target !== parent) continue;
-      } else if (meta.candidates !== undefined && defIds.size > 0) {
-        if (!meta.candidates.some((c) => defIds.has(c))) continue;
+        if (parent.def_chunk_id !== meta.resolved_chunk_id) continue;
+      } else {
+        if (row.target !== parent.symbol && row.target !== bare) continue;
+        if (meta.candidates && parent.def_chunk_id && !meta.candidates.includes(parent.def_chunk_id)) continue;
       }
       out.push({
-        parent,
+        parent: nodeKey(parent),
         language: null,
         node: {
           symbol: row.next_symbol,
@@ -360,13 +362,15 @@ interface CalleeRow {
 /** Callees of every frontier symbol in one edge read. */
 async function calleesHop(
   engine: Engine,
-  frontier: string[],
+  frontier: FrontierNode[],
   limit: number,
   scope: WalkScope,
 ): Promise<HopNode[]> {
-  const params: unknown[] = [frontier];
+  const params: unknown[] = [frontier.filter(n => !n.def_chunk_id).map(n => n.symbol),
+    frontier.flatMap(n => n.def_chunk_id ? [n.def_chunk_id] : [])];
   const lang = andLanguage("c.language", scope.lang, params);
   const src = andSourceScope("e.source_id", scope.sources, params);
+  const targetSource = andSourceScope("rd.source_id", scope.sources, params);
   params.push(limit);
   const r = await engine.query<CalleeRow>(
     `SELECT DISTINCT e.from_symbol_qualified AS parent,
@@ -379,7 +383,10 @@ async function calleesHop(
        JOIN chunks c ON c.id = e.from_chunk_id
        JOIN documents d ON d.id = c.document_id
        LEFT JOIN chunks rc ON rc.id = e.edge_metadata->>'resolved_chunk_id'
-      WHERE e.from_symbol_qualified = ANY($1::text[])
+         AND rc.language IS NOT DISTINCT FROM c.language
+         AND EXISTS (SELECT 1 FROM documents rd WHERE rd.id = rc.document_id AND ${visibilityClause("rd")}${targetSource})
+      WHERE (e.from_chunk_id = ANY($2::text[]) OR e.from_symbol_qualified = ANY($1::text[]))
+        AND (NOT (e.edge_metadata ? 'resolved_chunk_id') OR rc.id IS NOT NULL)
         AND ${visibilityClause("d")}${lang}${src}
       ORDER BY e.from_chunk_id, e.to_symbol_qualified
       LIMIT $${params.length}`,
@@ -393,10 +400,10 @@ async function calleesHop(
   const out: HopNode[] = [];
   for (const parent of frontier) {
     for (const row of r.rows) {
-      if (row.parent !== parent) continue;
+      if (parent.def_chunk_id ? row.chunk_id !== parent.def_chunk_id : row.parent !== parent.symbol) continue;
       if (row.resolved_symbol && row.resolved_chunk_id) {
         out.push({
-          parent,
+          parent: nodeKey(parent),
           language: row.language,
           node: {
             symbol: row.resolved_symbol,
@@ -412,8 +419,9 @@ async function calleesHop(
       );
       const unique = defs.length === 1 ? defs[0]! : null;
       out.push({
-        parent,
+        parent: nodeKey(parent),
         language: row.language,
+        expand: defs.length <= 1,
         node: unique
           ? { symbol: unique.symbol_name_qualified, chunk_id: row.chunk_id, def_chunk_id: unique.id, resolved: true }
           : { symbol: row.target, chunk_id: row.chunk_id, resolved: false },
@@ -425,7 +433,7 @@ async function calleesHop(
 
 function hop(
   engine: Engine,
-  frontier: string[],
+  frontier: FrontierNode[],
   direction: WalkDirection,
   limit: number,
   scope: WalkScope,
@@ -435,26 +443,37 @@ function hop(
     : calleesHop(engine, frontier, limit, scope);
 }
 
-/** Resolve a bare name to qualified candidate symbols via live `chunks`. */
+/** Definitions remain distinct even when they have the same qualified name. */
 async function disambiguate(
   engine: Engine,
-  bare: string,
+  name: string,
   scope: WalkScope,
-): Promise<string[]> {
-  const params: unknown[] = [bare];
+  exact: boolean,
+  path?: string,
+): Promise<(DefChunk & { source_path: string })[]> {
+  const params: unknown[] = [name];
   const lang = andLanguage("c.language", scope.lang, params);
   const src = andSourceScope("d.source_id", scope.sources, params);
-  const r = await engine.query<{ symbol_name_qualified: string }>(
-    `SELECT DISTINCT c.symbol_name_qualified
+  const pathFilter = path === undefined ? "" : ` AND d.source_path = $${params.push(path)}`;
+  const r = await engine.query<DefChunk & { source_path: string }>(
+    `SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language, d.source_path
        FROM chunks c JOIN documents d ON d.id = c.document_id
       WHERE c.symbol_name_qualified IS NOT NULL
-        AND (c.symbol_name = $1 OR c.symbol_name_qualified = $1)
-        AND ${visibilityClause("d")}${lang}${src}
-      ORDER BY c.symbol_name_qualified
-      LIMIT 25`,
-    params,
+        AND (c.symbol_name_qualified = $1${exact ? "" : " OR c.symbol_name = $1"})
+        AND ${visibilityClause("d")}${lang}${src}${pathFilter}
+      ORDER BY d.source_path COLLATE "C", c.symbol_name_qualified, c.id
+      LIMIT 25`, params,
   );
-  return r.rows.map((row) => row.symbol_name_qualified);
+  return r.rows;
+}
+
+function splitPathSymbol(value: string): { name: string; path?: string } {
+  for (let i = 1; i < value.length - 1; i++) {
+    if (value[i] !== ":" || value[i - 1] === ":" || value[i + 1] === ":") continue;
+    const path = value.slice(0, i);
+    if (path.includes("/") || path.includes(".")) return { path, name: value.slice(i + 1) };
+  }
+  return { name: value };
 }
 
 const SUGGESTION_CAP = 5;
@@ -525,32 +544,26 @@ export async function runRecursiveWalk(
   const sources = normalizeScope(opts.sourceIds);
   const lookupScope: WalkScope = { sources, lang: opts.lang ?? null };
 
-  let start = symbol;
-  if (!opts.exact && !symbol.includes("::")) {
-    const matches = await disambiguate(engine, symbol, lookupScope);
-    if (matches.length === 0) {
-      // No qualified def — fall back to the bare name as-is (edges may be
-      // written bare at top level) rather than a hard not_found.
-      const bareHop = await hop(engine, [symbol], opts.direction, 1, lookupScope);
-      if (bareHop.length === 0) {
-        return {
-          result: "not_found",
-          did_you_mean: await suggestSymbols(engine, symbol, lookupScope),
-          readiness: await codeIndexReadiness(engine, opts.sourceIds, "edges"),
-        };
-      }
-    } else if (matches.length > 1) {
-      return {
-        result: "ambiguous",
-        candidates: matches.map((m) => ({ symbol_qualified: m })),
-      };
-    } else {
-      start = matches[0]!;
-    }
+  const input = splitPathSymbol(symbol);
+  const matches = await disambiguate(engine, input.name, lookupScope, !!opts.exact, input.path);
+  if (matches.length > 1) return { result: "ambiguous", candidates: matches.map(m => ({
+    symbol_qualified: `${m.source_path}:${m.symbol_name_qualified}`, def_chunk_id: m.id,
+  })) };
+  const definition = matches[0];
+  const start: FrontierNode = definition
+    ? { symbol: definition.symbol_name_qualified, def_chunk_id: definition.id }
+    : { symbol: input.name };
+  if (!definition && (input.path || (!opts.exact && !symbol.includes("::")))) {
+    const bareHop = input.path ? [] : await hop(engine, [start], opts.direction, 1, lookupScope);
+    if (bareHop.length === 0) return {
+      result: "not_found",
+      did_you_mean: input.path ? [] : await suggestSymbols(engine, input.name, lookupScope),
+      readiness: await codeIndexReadiness(engine, opts.sourceIds, "edges"),
+    };
   }
-  const scope: WalkScope = { sources, lang: await walkLanguage(engine, start, opts, sources) };
+  const scope: WalkScope = { sources, lang: definition?.language ?? await walkLanguage(engine, start.symbol, opts, sources) };
 
-  const visited = new Set<string>([start]);
+  const visited = new Set<string>([nodeKey(start)]);
   const depthGroups: DepthGroup[] = [];
   let cyclesDetected = false;
   let truncation: "none" | "max_nodes" | "depth_cap" | "both" = "none";
@@ -559,7 +572,7 @@ export async function runRecursiveWalk(
 
   let frontier = [start];
   for (let d = 1; d <= depthCap; d++) {
-    const nextFrontier: string[] = [];
+    const nextFrontier: FrontierNode[] = [];
     const nodesThisDepth: WalkNode[] = [];
 
     // Rows are filtered per parent after the read, so over-fetch the remaining
@@ -569,8 +582,9 @@ export async function runRecursiveWalk(
     const edges = await hop(engine, frontier, opts.direction, limit, scope);
     for (const e of edges) {
       const next = e.node.symbol;
-      if (!next || next === e.parent) continue;
-      if (visited.has(next)) {
+      const key = nodeKey(e.node);
+      if (!next || key === e.parent) continue;
+      if (visited.has(key)) {
         cyclesDetected = true;
         continue;
       }
@@ -578,7 +592,7 @@ export async function runRecursiveWalk(
         truncation = truncation === "depth_cap" ? "both" : "max_nodes";
         break;
       }
-      visited.add(next);
+      visited.add(key);
       totalNodes += 1;
       const node: WalkNode = { ...e.node };
       // A callee tied to a definition is the project's own code and the walk
@@ -591,7 +605,7 @@ export async function runRecursiveWalk(
         }
       }
       nodesThisDepth.push(node);
-      nextFrontier.push(next);
+      if (e.expand !== false) nextFrontier.push({ symbol: next, def_chunk_id: node.def_chunk_id });
     }
 
     if (nodesThisDepth.length > 0) {
