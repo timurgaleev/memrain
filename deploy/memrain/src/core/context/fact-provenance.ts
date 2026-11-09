@@ -12,9 +12,10 @@ export async function factProvenance(engine: Engine, ids: readonly number[], sou
   const scope = andSourceScope("source_id", sourceIds, params);
   const { rows } = await engine.query<{ id: number | string; origin: Origin | null }>(
     `SELECT id, CASE
+       WHEN written_by_principal LIKE 'client:%' OR written_by_principal = 'public' THEN 'agent'
        WHEN written_by IN ('facts-extract', 'extract-facts', 'extract-conversation-facts') THEN 'extractor'
        WHEN written_by = ANY($2::text[]) OR written_by = 'ingest' OR written_by LIKE 'ingest:%' THEN 'ingest'
-       WHEN written_by_principal LIKE 'client:%' OR written_by LIKE 'client:%' OR written_by = 'public' THEN 'agent'
+       WHEN written_by LIKE 'client:%' OR written_by = 'public' THEN 'agent'
        WHEN written_by_principal = 'operator' OR written_by = 'operator' THEN 'operator'
        ELSE NULL END AS origin
        FROM entity_facts WHERE id = ANY($1::bigint[])${scope}`, params);
