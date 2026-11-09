@@ -44,5 +44,9 @@
   },
   "patchedDependencies": {
     "postgres@3.4.9": "patches/postgres@3.4.9.patch"
+  },
+  "overrides": {
+    "katex": "0.18.2",
+    "minimatch": "11.0.1"
   }
 }
