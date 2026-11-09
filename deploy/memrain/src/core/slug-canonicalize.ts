@@ -50,6 +50,7 @@ import { slugifyTarget } from "./links.ts";
 import { normalizeAlias, resolveAliasUnique } from "./page-aliases.ts";
 import { resolveSlugWithAlias } from "./slug-aliases.ts";
 import { andSourceScope } from "./source-scope.ts";
+import { canMatchPersonName, nameVariantMatch, readPersonNames } from "./name-variants.ts";
 
 /** Resolution outcome — `slug` is never null (stage 6 always yields one). */
 export interface CanonicalizeResult {
@@ -62,6 +63,7 @@ export interface CanonicalizeResult {
     | "redirect"
     | "exact"
     | "alias"
+    | "name_variant"
     | "exact_tail"
     | "prefix"
     | "trgm"
@@ -255,6 +257,7 @@ export function makeSlugResolver(
   const enabled = canonicalizeEnabled();
   const threshold = resolveTrgmThreshold();
   const sourceIds = opts.sourceIds;
+  let people: ReturnType<typeof readPersonNames> | undefined;
 
   return {
     async resolve(name: string): Promise<CanonicalizeResult> {
@@ -305,6 +308,19 @@ export function makeSlugResolver(
       // Stage 3 — unique exact-tail match.
       const tail = await exactTailUnique(storage, fallbackSlug, sourceSlug, sourceIds);
       if (tail) return finish({ slug: tail, resolved: true, stage: "exact_tail" });
+
+      if (canMatchPersonName(trimmed)) {
+        const candidates = await (people ??= readPersonNames(storage.engine(), sourceIds));
+        if (candidates.truncated) return fallback();
+        const matches = candidates.people.filter(p => nameVariantMatch(trimmed, p.title));
+        if (matches.length > 0) {
+          const only = matches.length === 1 ? matches[0]! : undefined;
+          if (only && only.slug !== sourceSlug && nameVariantMatch(trimmed, only.title) === "strong") {
+            return finish({ slug: only.slug, resolved: true, stage: "name_variant" });
+          }
+          return fallback();
+        }
+      }
 
       // Stage 4 — unique prefix expansion.
       const prefix = await prefixExpansionUnique(storage, fallbackSlug, sourceSlug, sourceIds);

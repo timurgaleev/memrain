@@ -22,6 +22,7 @@ import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { normalizeAlias } from "./page-aliases.ts";
 import { liveEdgeSql } from "./links.ts";
+import { canMatchPersonName, nameVariantMatch, readPersonNames } from "./name-variants.ts";
 
 /** One resolved candidate, ordered by descending `score` by the caller. */
 export interface SlugResolution {
@@ -29,6 +30,7 @@ export interface SlugResolution {
   title: string | null;
   /** pg_trgm similarity in [0, 1]; 1 for an exact slug match. */
   score: number;
+  variant?: true;
 }
 
 export interface ResolveSlugsOptions {
@@ -159,9 +161,19 @@ export async function resolveSlugs(
     fuzzyParams,
   );
 
-  return fuzzy.rows.map((r) => ({
+  const hits: SlugResolution[] = fuzzy.rows.map((r) => ({
     slug: r.slug,
     title: r.title,
     score: Number(r.score),
   }));
+  if (canMatchPersonName(q)) {
+    const { people } = await readPersonNames(db, opts.sourceIds);
+    for (const p of people) {
+      const match = nameVariantMatch(q, p.title);
+      if (match && !hits.some(h => h.slug === p.slug)) {
+        hits.push({ slug: p.slug, title: p.title, score: match === "strong" ? 0.9 : 0.5, variant: true });
+      }
+    }
+  }
+  return hits.sort((a, b) => b.score - a.score || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)).slice(0, limit);
 }
