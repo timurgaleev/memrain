@@ -471,6 +471,7 @@ describe("take read surfaces — zero-yield tombstone fence", () => {
 
   it("does not drag grade_completion down with an ungradeable memo", async () => {
     await seedDoc("d1", "C".repeat(500));
+    await engine.query("UPDATE documents SET source_id = 'default' WHERE id = 'd1'");
     await proposeTakesPhase(engine, { llmFn: countingLlm("[]").fn });
     const { rows } = await engine.query<{ id: number }>(
       `INSERT INTO synth_takes

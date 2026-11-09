@@ -202,7 +202,7 @@ export function normalizeOptionalArgs(op: Operation, params: Record<string, unkn
   if (!operationAnnotations(op).readOnlyHint) return params;
   return Object.fromEntries(Object.entries(params).filter(([key, value]) => {
     const def = Object.hasOwn(op.params, key) ? op.params[key] : undefined;
-    if (!def || def.required) return true;
+    if (!def || def.required || key === "source_ids") return true;
     return !(value === null || value === "" || (Array.isArray(value) && value.length === 0) ||
       (value === 0 && def.minimum !== undefined && def.minimum >= 1));
   }));
@@ -278,6 +278,22 @@ const bool = (o: Omit<ParamDef, "type"> = {}): ParamDef => ({ type: "boolean", .
 const obj = (o: Omit<ParamDef, "type"> = {}): ParamDef => ({ type: "object", ...o });
 const arr = (o: Omit<ParamDef, "type"> = {}): ParamDef => ({ type: "array", ...o });
 const req = { required: true } as const;
+const takeWriteParams = {
+  slug: str({ ...req, description: "Owning live page slug." }),
+  expected_version: int({ ...req, minimum: 1, description: "Required current page version." }),
+  dry_run: bool({ description: "Preview the bounded row diff without writes or model calls." }),
+  plan_hash: str({ description: "Optional SHA-256 from the matching preview." }),
+  reason: str({ description: "Optional version reason, up to 500 Unicode code points." }),
+  wait_for_index: bool({ description: "Wait for the search mirror after applying." }),
+};
+const takeFields = {
+  claim: str({ description: "Single-line claim, up to 4000 Unicode code points." }),
+  kind: str({ enum: ["fact", "take", "bet", "hunch", "prediction", "judgment"] }),
+  weight: num({ minimum: 0, maximum: 1 }),
+  since: str({ description: "Start date, YYYY-MM-DD." }),
+  until: str({ description: "End date, YYYY-MM-DD; requires since." }),
+  source: str({ description: "Single-line citation, up to 4000 Unicode code points." }),
+};
 
 /** Upper bound on `request_id` length (checked by the dispatch handler). */
 export const MAX_REQUEST_ID_LEN = 128;
@@ -285,7 +301,7 @@ export const MAX_REQUEST_ID_LEN = 128;
 const expectedVersionParam = int({
   minimum: 0,
   description:
-    "Write only if the page is still at this version (`version` from page_get, or the top version_n from page_versions); 0 = the page must not exist yet. A deleted page keeps its version counter, so to write over one pass the current_version a 0 attempt reports. On a mismatch nothing is written and the error names the current version. Omit for an unconditional write.",
+    "Require this page_get version/page_versions version_n; 0 requires absence. Deleted pages retain versions: use current_version from a failed 0 attempt. Mismatch writes nothing and returns current_version. Omit for an unconditional write, subject to precondition policy.",
 });
 const forceParam = bool({
   description:
@@ -293,7 +309,7 @@ const forceParam = bool({
 });
 const requestIdParam = str({
   description:
-    `Optional caller-chosen id for this write (1-${MAX_REQUEST_ID_LEN} chars). Retrying with the same id and the same arguments returns the first call's result with \`replayed: true\` and writes nothing; the same id with different arguments is refused. Remembered for 7 days.`,
+    `Optional retry id (1-${MAX_REQUEST_ID_LEN} chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused.`,
 });
 
 export const OPERATIONS: readonly Operation[] = [
@@ -313,9 +329,10 @@ export const OPERATIONS: readonly Operation[] = [
     name: "search",
     outputRedaction: "retrieval",
     description:
-      "Hybrid vector + keyword search returning ranked chunks, paths and titles. Language, symbol, date, page-type and slug-prefix filters apply before retrieval limits and bypass cache. No expand knob: for broad concept/set questions use query with expand:true (paid; off by default). Hits do not prove exhaustive coverage. meta reports vectorEnabled and degraded reason codes; only the operator sees intent, mode, cache and counts. Empty results include a recovery hint.",
+      "Ranked vector+keyword chunks, paths and titles. Language/symbol/date/type/slug-prefix filters precede limits and bypass cache. Broad concept/set questions can use query expand:true (paid, default-off); search has no expand. Hits are not exhaustive. meta exposes vectorEnabled/degraded; intent/mode/cache/counts are operator-only. Empty results include a recovery hint.",
     argAliases: { query: "q", limit: "k" },
     params: {
+      source_ids: arr({ items: { type: "string" }, description: "Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call." }),
       types: arr({ items: { type: "string" }, description: "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter." }),
       slug_prefix: str({ description: "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits." }),
       q: str({ ...req, description: "Natural-language query." }),
@@ -340,7 +357,7 @@ export const OPERATIONS: readonly Operation[] = [
       }),
       until: str({
         description:
-          "Keep only hits whose content date COALESCE(effective_date, updated_at) is <= this bound: an ISO-8601 date/datetime (a plain YYYY-MM-DD includes that whole day), or a relative duration like '7d' / '2w' / '6m' / '1y' (back from now).",
+          "Upper bound on COALESCE(effective_date,updated_at): ISO date/time (YYYY-MM-DD includes the whole day), or duration back from now: 7d/2w/6m/1y.",
       }),
       near_symbol: str({
         description:
@@ -400,7 +417,7 @@ export const OPERATIONS: readonly Operation[] = [
   {
     name: "source_health",
     description:
-      "Per-source (per-tenant) operational health: for each source_id it returns document_count, chunk_count, embed coverage (embedded/embeddable chunks, code excluded), and staleness lag. Answers 'which source is broken?' when one tenant's ingestion/embedding stalls. A scoped caller sees only its granted sources' rows (the NULL-source '(unclassified)' bucket is visible to a local/unscoped caller only); an unscoped local caller also gets the whole-brain `health` roll-up. Read-only; cheap; no Bedrock.",
+      "Source-scoped document/chunk counts, embeddable coverage (excluding code), and staleness lag. Only local/unscoped callers see the NULL-source (unclassified) bucket and whole-brain health roll-up. Read-only, cheap, no Bedrock.",
     params: {},
   },
   {
@@ -436,8 +453,9 @@ export const OPERATIONS: readonly Operation[] = [
     callShape: "{slug, markdown_body, expected_version?}",
     scope: "write",
     description:
-      "Create or replace a DB-canonical page; identical content is a no-op, changes append history. Prefer page_edit for partial changes. Normally the search mirror is ready on return (search_indexed); queued mirrors return search_pending + search_job_id. wait_for_index:true waits. With MEMRAIN_REQUIRE_WRITE_PRECONDITION, a live overwrite needs expected_version or force:true; missing preconditions warn or return precondition_required + current_version. Public writes require MEMRAIN_PUBLIC_WRITE=1.",
+      "Create/replace a DB-canonical page; identical content is a no-op, changes append history. Prefer page_edit for partial changes. Mirrors normally return search_indexed; queued ones return search_pending + search_job_id; wait_for_index waits. MEMRAIN_REQUIRE_WRITE_PRECONDITION makes missing expected_version/force warn or refuse with precondition_required + current_version. Public writes need MEMRAIN_PUBLIC_WRITE=1.",
     params: {
+      reason: str({ description: "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version." }),
       slug: str({
         ...req,
         description:
@@ -445,7 +463,7 @@ export const OPERATIONS: readonly Operation[] = [
       }),
       type: str({
         description:
-          "One of: concept, person, company, meeting, idea, journal, note, email, event, decision, task, source. OPTIONAL — inferred from the slug's first segment (people/… → person) when omitted, defaulting to note. Pass allowAdHocType=true to accept other types.",
+          "Optional: concept/person/company/meeting/idea/journal/note/email/event/decision/task/source. Inferred from slug prefix (people/→person), else note. Other types require allowAdHocType:true.",
       }),
       title: str(),
       compiled_truth: obj({
@@ -479,7 +497,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "page_append",
     scope: "write",
     description:
-      "Append text to an existing page's markdown_body. Creates a new page_versions row. Requires the page to exist (use page_put for first write). Search sees the page once its search mirror is written: by default before this returns (`search_indexed`). When the operator has moved the mirror to a background job, the response carries `search_pending: true` and `search_job_id` instead, and search sees the page once that job runs, normally within seconds. Pass `wait_for_index: true` when you need to search for the page straight away. WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
+      "Append to an existing page body and add a version; use page_put to create. Search readiness returns search_indexed, or search_pending + search_job_id for queued mirrors (normally seconds). wait_for_index:true waits for search readiness. Public writes require MEMRAIN_PUBLIC_WRITE=1.",
     argAliases: { markdown: "content" },
     params: {
       slug: str(req),
@@ -499,8 +517,9 @@ export const OPERATIONS: readonly Operation[] = [
     // The diff quotes the stored lines around the edit.
     outputRedaction: "retrieval",
     description:
-      "Apply 1..50 ordered exact-text replacements to an existing body, atomically. Copy each unique old_text from page_get; misses/duplicates return edit_no_match/edit_ambiguous_match. Facts/takes fences and marker edits are refused (edit_protected_span); use their write tools. Requires expected_version; a mismatch returns version_conflict + current_version. Keeps title/frontmatter. Returns new version and diff (8 KB cap, diff_truncated). Search indexing follows page_put; wait_for_index:true waits. Public writes require MEMRAIN_PUBLIC_WRITE=1.",
+      "Atomically apply 1..50 ordered exact-text body replacements, preserving title/frontmatter. Copy unique old_text from page_get; misses/duplicates give edit_no_match/edit_ambiguous_match. Facts/takes fences and markers are protected (edit_protected_span); use their writers. Requires expected_version; conflict returns current_version. Returns version and diff capped at 8 KB (diff_truncated). Indexing follows page_put; wait_for_index waits. Public writes need MEMRAIN_PUBLIC_WRITE=1.",
     params: {
+      reason: str({ description: "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version." }),
       slug: str({ ...req, description: "The page to edit; it must exist." }),
       expected_version: int({
         ...req,
@@ -547,8 +566,9 @@ export const OPERATIONS: readonly Operation[] = [
     name: "page_delete",
     scope: "write",
     description:
-      "Soft-delete a page (sets deleted_at; the row + page_versions chain stays for audit). Idempotent. WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
+      "Idempotent soft-delete: sets deleted_at, retains page and version history. Requires source-scoped write or internal token; static public bearer forbidden.",
     params: {
+      reason: str({ description: "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version." }),
       slug: str(req),
       written_by: str(),
       expected_version: expectedVersionParam,
@@ -569,8 +589,9 @@ export const OPERATIONS: readonly Operation[] = [
     name: "page_revert",
     scope: "write",
     description:
-      "Roll a page's body back to a prior page_versions snapshot. Creates a NEW version with the old content (history is append-only). `version` is the target version_n (see page_versions). WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
+      "Restore a prior body snapshot as a NEW version, retaining history. version names the target version_n from page_versions. Requires source-scoped write or internal token; static public bearer forbidden.",
     params: {
+      reason: str({ description: "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version." }),
       slug: str(req),
       version: int({ ...req, minimum: 1 }),
       written_by: str(),
@@ -582,18 +603,18 @@ export const OPERATIONS: readonly Operation[] = [
     name: "page_get",
     outputRedaction: "retrieval",
     description:
-      "Read a page by slug. Returns an error if the page does not exist. `fuzzy:true` falls back to fuzzy slug resolution on a miss (a unique candidate is auto-read; multiple candidates return `ambiguous_slug` + the list). `include_deleted:true` surfaces a soft-deleted page with deleted_at populated (restore workflows). The response carries `version`, the page's current version number — pass it as `expected_version` to a later page_put, page_revert or page_delete to write only if nobody changed the page in between.",
+      "Read a page or error on absence. fuzzy:true resolves a unique fuzzy miss; multiple candidates return ambiguous_slug + candidates. include_deleted:true exposes soft-deleted pages with deleted_at for restoration. Pass returned version as expected_version on later writes to guard races.",
     params: {
       slug: str(req),
       source_id: str({ description: "Owning source from a search result; narrows the caller's read grant, never expands it." }),
-      version: int({ minimum: 1, maximum: 2147483647, description: "Read this stored version's body, compiled_truth and content hash. The response distinguishes the requested version from current_version and includes written_at; page identity/title metadata remain current. Missing versions return version_not_found." }),
+      version: int({ minimum: 1, maximum: 2147483647, description: "Read stored body/truth/hash plus written_at; version differs from current_version. Identity/title stay current. Missing snapshot: version_not_found." }),
       offset: int({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "UTF-8 byte offset for a body window; use the returned next_offset to continue." }),
       max_bytes: int({ minimum: 4, maximum: 262144, description: "Body window size in UTF-8 bytes (default 256 KiB). Windows return body_window instead of markdown_body; use page_edit or page_append to change a page." }),
       fuzzy: bool({ description: "Fuzzy slug resolution on a miss (default false)." }),
       include_deleted: bool({ description: "Surface soft-deleted pages (default false)." }),
       include_quarantined: bool({
         description:
-          "Return the body of a page the content-sanity gate quarantined. Honored for admin-scoped callers only; anyone else gets the page without its body, `quarantined`, and notice `page_quarantined`.",
+          "Admin-only quarantined body access. Others receive metadata, quarantined and notice:page_quarantined, without body.",
       }),
     },
   },
@@ -606,6 +627,7 @@ export const OPERATIONS: readonly Operation[] = [
       prefix: "slug_prefix",
     },
     params: {
+      source_ids: arr({ items: { type: "string" }, description: "Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call." }),
       type: str(),
       since: str(),
       tag: str({ description: "Filter to pages carrying this tag." }),
@@ -623,7 +645,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "page_versions",
     outputRedaction: "retrieval",
     description:
-      "Read the edit history of a page, newest-first. Returns metadata by default; include_body:true adds body and compiled_truth snapshots within the caller's existing access. The operator and admin-scoped callers also see `written_by_principal`, the credential each version was written with (null for internal writes and versions older than the column).",
+      "Version history, newest first. Metadata by default; include_body:true adds authorized body/truth snapshots. Operator/admin callers also receive written_by_principal (null for legacy/internal versions).",
     params: {
       slug: str(req),
       limit: int({ minimum: 1, maximum: 200 }),
@@ -634,8 +656,10 @@ export const OPERATIONS: readonly Operation[] = [
     name: "link",
     scope: "write",
     description:
-      "Assert a typed link from source_slug to target_slug. Idempotent on (source, target, type) — re-asserting updates confidence + chunk_id. Default confidence 1.0. WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
+      "Assert a typed source→target link; repeating (source,target,type) updates confidence/chunk_id. Confidence defaults 1. Public writes require MEMRAIN_PUBLIC_WRITE=1.",
     params: {
+      valid_from: str({ description: "Optional inclusive start YYYY-MM-DD. Omission preserves the stored bound; an existing bound cannot change." }),
+      valid_until: str({ description: "Optional exclusive end YYYY-MM-DD. Must follow valid_from; an existing bound cannot change." }),
       source_slug: str({
         ...req,
         description:
@@ -676,8 +700,10 @@ export const OPERATIONS: readonly Operation[] = [
     name: "graph_neighbors",
     outputRedaction: "retrieval",
     description:
-      "All links touching `slug` (outbound, inbound, or both), newest-first. Optional `type` filter. Returns the link rows with a per-row `direction` annotation.",
+      "Links touching slug, newest first, with direction per row. Select outbound, inbound or both and optional type.",
     params: {
+      status: str({ enum: ["all", "active", "expired", "future"], description: "Filter manual link validity; default all. Half-open end date." }),
+      as_of: str({ description: "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC." }),
       slug: str(req),
       type: str({ description: "Filter to a single link type." }),
       direction: str({
@@ -691,8 +717,10 @@ export const OPERATIONS: readonly Operation[] = [
     name: "graph_query",
     outputRedaction: "retrieval",
     description:
-      "Typed-relationship query. Requires `type` plus at least one of `source_slug` or `target_slug`. Examples: { type:'works_at', source_slug:'people/alice' } → companies Alice works at; { type:'works_at', target_slug:'companies/acme' } → people who work at Acme.",
+      "Typed links matching type and at least one of source_slug/target_slug; e.g. works_at + a person source finds their companies, or a company target finds its people.",
     params: {
+      status: str({ enum: ["all", "active", "expired", "future"], description: "Filter manual link validity; default all. Half-open end date." }),
+      as_of: str({ description: "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC." }),
       type: str(req),
       source_slug: str(),
       target_slug: str(),
@@ -703,8 +731,10 @@ export const OPERATIONS: readonly Operation[] = [
     name: "traverse_graph",
     outputRedaction: "retrieval",
     description:
-      "Walk the link graph by levels. Returns each reachable node once at its shortest depth; truncated:true means more eligible nodes exist within max_depth than fit the limit. Narrow type or reduce max_depth then. Direction: outbound (default), inbound or both; max_depth: 1..10 (default 3); limit: 1..1000 (default 100). Example: {start_slug:'people/alice', direction:'both', max_depth:2}.",
+      "Breadth-first graph walk; each node appears once at shortest depth. truncated means eligible nodes within max_depth exceeded limit: narrow type/depth. Direction defaults outbound (also inbound/both); depth default 3, range 1..10; limit default 100, range 1..1000.",
     params: {
+      status: str({ enum: ["all", "active", "expired", "future"], description: "Filter manual link validity; default all. Half-open end date." }),
+      as_of: str({ description: "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC." }),
       start_slug: str(req),
       direction: str({ enum: ["outbound", "inbound", "both"] }),
       type: str(),
@@ -717,7 +747,7 @@ export const OPERATIONS: readonly Operation[] = [
     callShape: "{entity_slug, fact} or {entity_slug, items:[{fact}]}",
     scope: "write",
     description:
-      "Record an entity claim. Corrections create new facts; an identical claim for the same entity/source/writer refreshes its row (inserted:false). Withdrawn claims in the same entity/source/visibility stay withdrawn despite case/whitespace differences (withdrawn:true, id:null). visibility defaults private (operator-only); tenants need world to recall their own writes. Provenance uses source_slug, source_chunk_id or written_by, defaulting to caller identity; public callers cannot set written_by. replaces retires a live fact as superseded and returns replaced. For batches, pass up to 20 items instead of fact; top-level entity/provenance/metadata fields are defaults. All items are validated before writes; results include saved/failed/partial and each outcome. All-failed batches are tool errors; mixed results have status:partial. Public ingress refuses items/replaces. Public writes require MEMRAIN_PUBLIC_WRITE=1.",
+      "Record an entity claim; corrections create new facts. Identical entity/source/writer claims refresh (inserted:false). Withdrawn entity/source/visibility claims stay withdrawn across case/whitespace changes (withdrawn:true,id:null). Default private is operator-only; tenants use world to recall writes. Provenance: source_slug/source_chunk_id/written_by, else caller; public cannot set written_by. replaces supersedes a live fact, returning replaced. Batch ≤20 items inherits top-level defaults; all validate before writing. Results include saved/failed/partial and outcomes; all-failed is a tool error, mixed status:partial. Public forbids items/replaces; writes need MEMRAIN_PUBLIC_WRITE=1.",
     argAliases: { facts: "items", memories: "items", text: "fact", content: "fact", claim: "fact", entity: "entity_slug", subject: "entity_slug" },
     params: {
       valid_from: str({ description: "Date the claim became true (YYYY-MM-DD or ISO timestamp, stored as its UTC date)." }),
@@ -729,7 +759,7 @@ export const OPERATIONS: readonly Operation[] = [
       claim_period: str(),
       entity_slug: str({
         description:
-          "The entity the fact is about (e.g. `people/alice`). A bare slug resolves to one existing page in your write source and reports entity_resolved_from. Otherwise it stays unchanged with entity_unresolved and up to five candidates. Qualified slugs are soft references; the page need not exist yet. Required unless every items entry names its own.",
+          "Entity (e.g. people/alice); required unless every batch item names one. A bare name resolves uniquely within your write source (entity_resolved_from), else stays unchanged with entity_unresolved and ≤5 candidates. Qualified slugs need not exist.",
       }),
       fact: str({ description: "Short claim, one sentence. Required unless `items` is given." }),
       confidence: num({ minimum: 0, maximum: 1 }),
@@ -749,7 +779,7 @@ export const OPERATIONS: readonly Operation[] = [
       }),
       items: arr({
         description:
-          "Several facts in one call, 1 to 20 objects `{fact, entity_slug?, confidence?, visibility?, replaces?}`. Each may override valid_from, kind, notability and claim_metric/value/unit/period defaults from the top level. Replaces `fact`.",
+          "Batch 1..20 {fact,entity_slug?,confidence?,visibility?,replaces?}, instead of fact. Items override top-level valid_from/kind/notability/claim_metric/value/unit/period defaults.",
       }),
     },
   },
@@ -781,10 +811,10 @@ export const OPERATIONS: readonly Operation[] = [
     name: "entity_facts",
     outputRedaction: "retrieval",
     description:
-      "List facts about an entity, ordered by confidence (default) or recency. `entity_slug` is OPTIONAL: omit it for a cross-entity recall (\"what did I learn recently / this session\") across all entities. Optional `since` filter on written_at and `source_slug` filter to narrow to facts derived from a single page. Lifecycle filters (mig085): `session` (capture-session id), `grep` (case-insensitive substring on the fact text), `visibility` (private|world), `include_forgotten` (surface tombstoned rows for audit; internal callers only — forced off on public ingress).",
+      "Entity facts ordered by confidence (default) or recency; omit entity_slug for cross-entity recall. Filter by written_at since, originating source_slug, capture session, case-insensitive grep or private/world visibility. include_forgotten adds audit tombstones for internal callers; public forces it off.",
     params: {
       entity_slug: str({ description: "Entity to scope to. Omit for a cross-entity recall." }),
-      query: str({ description: "Optional semantic focus (one Titan embedding, first 512 characters; cosine >=0.35). Without entity_slug also returns facts_groups. Ignored for the public bearer. Falls back to the normal order with a hint if embedding is unavailable." }),
+      query: str({ description: "Semantic focus: one Titan embedding of first 512 characters, cosine ≥0.35; also facts_groups without entity_slug. Public ignores it; unavailable embedding returns normal order + hint." }),
       since: str(),
       source_slug: str(),
       order: str({ enum: ["confidence", "recency"] }),
@@ -828,7 +858,7 @@ export const OPERATIONS: readonly Operation[] = [
       slug: str(req),
       query: str({
         description:
-          "Optional topic to focus the recalled facts on (e.g. 'funding history'). When set, the entity's facts are ranked by semantic similarity to it instead of by confidence. Falls-open: reverts to confidence order when embedding is unavailable.",
+          "Optional semantic fact focus (e.g. funding history), replacing confidence order; falls back to confidence when embedding is unavailable.",
       }),
       fact_limit: int({ minimum: 1, maximum: 200 }),
       timeline_limit: int({ minimum: 1, maximum: 200 }),
@@ -839,7 +869,7 @@ export const OPERATIONS: readonly Operation[] = [
       token_budget: int({
         minimum: 1,
         description:
-          "Cap the whole response — page, facts and timeline together — at roughly this many tokens, counting each row as it is serialized rather than its headline text alone. The split is decided server-side and unused allocation flows to the arms that have content, so an all-facts entity spends the budget on facts instead of stranding the page share. The page body is cut to fit rather than emitted whole. The response then carries a `budget` object — `facts_dropped`, `timeline_dropped`, `page_truncated`, and `page_dropped` (the page did not fit at all, so `page: null` here means 'did not fit', not 'no page exists') — so a partial view is never mistaken for a complete one. Applied after redaction, so the counts describe what you can see.",
+          "Approximate whole-response token cap, measured on serialized visible rows after redaction. Server reallocates unused page/facts/timeline shares and truncates the body. budget reports facts_dropped, timeline_dropped, page_truncated and page_dropped; page:null with page_dropped means it did not fit, not that it is absent.",
       }),
       include_pending: bool({
         description:
@@ -932,7 +962,7 @@ export const OPERATIONS: readonly Operation[] = [
   {
     name: "resolve_slugs",
     description:
-      "Resolve a name to live page slugs. Default: exact slug first, otherwise fuzzy title/slug matches. exact:true uses equality only on slug, title, basename, declared alias or email (compiled_truth.email or identity.email; email matching requires body access). Reports ambiguous even at limit:1. Each hit has slug, title, score and referenced_by_count (distinct visible referring pages in your source scope).",
+      "Resolve names to live slugs: exact slug, then fuzzy title/slug. exact:true matches only slug/title/basename/declared alias/email (compiled_truth.email or identity.email; email needs body access). Reports ambiguity even at limit:1. Hits: slug,title,score,referenced_by_count (distinct visible referring pages in scope).",
     argAliases: { slugs: "query" },
     params: {
       query: str(req),
@@ -982,8 +1012,10 @@ export const OPERATIONS: readonly Operation[] = [
     name: "get_links",
     outputRedaction: "retrieval",
     description:
-      "All typed edges touching `slug`, grouped by type and direction. An `outbound` group holds edges where the slug is the source; `inbound` where it is the target. Groups are ordered by type then outbound-before-inbound; edges within a group are newest-first. Optional `limit` (1..1000, default 1000) caps the edges scanned per direction.",
+      "Edges touching slug, grouped by type and outbound/inbound direction (source/target respectively). Groups sort by type, outbound first; edges newest first. limit caps each direction: default/max 1000, minimum 1.",
     params: {
+      status: str({ enum: ["all", "active", "expired", "future"], description: "Filter manual link validity; default all. Half-open end date." }),
+      as_of: str({ description: "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC." }),
       slug: str(req),
       limit: int({ minimum: 1, maximum: 1000 }),
     },
@@ -1008,7 +1040,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "wanted_pages",
     outputRedaction: "retrieval",
     description:
-      "Link targets nothing answers yet: slugs that live pages link to but no page exists for, most-referenced first. Each row is {target_slug, referenced_by, sample_from (up to 3 linking slugs), surface (one way the link was written), first_seen}. Counts only linking pages in your sources; hidden pages never count. The natural pages to write next. Optional `limit` (1..200, default 50). Deterministic, no LLM.",
+      "Unresolved targets linked by live visible pages in your sources, most-referenced first. Returns target_slug,referenced_by,sample_from (≤3 slugs),surface,first_seen. Hidden pages never count. Limit default 50, range 1..200. Deterministic, no LLM.",
     params: {
       limit: int({ minimum: 1, maximum: 200 }),
     },
@@ -1017,7 +1049,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "find_experts",
     outputRedaction: "retrieval",
     description:
-      "Who knows about a topic — or the graph's hubs. With `topic`: person/company pages ranked by expertise (how strongly their body relates to the topic, via hybrid search) × relationship recency (6-month half-life) × salience. Without `topic`: pages ranked by graph link-degree (distinct live in+out neighbours; unresolved [[wikilink]] stubs don't inflate it). Optional `type` overrides the default person/company candidate set in topic mode, or filters the hub ranking; `limit` (1..200, default 5). Deterministic, no LLM.",
+      "With topic: person/company expertise from hybrid search × relationship recency (6-month half-life) × salience. Without topic: graph hubs by distinct live in/out neighbours, excluding unresolved stubs. type overrides topic candidates or filters hubs. Limit default 5, range 1..200; deterministic, no LLM.",
     params: {
       topic: str({
         description:
@@ -1035,8 +1067,10 @@ export const OPERATIONS: readonly Operation[] = [
     name: "find_contradictions",
     outputRedaction: "retrieval",
     description:
-      "Conflicts in the brain, two ways. `contradictions`: page pairs joined by an explicit `contradicts` edge (markers already asserted in the graph). `probed`: LLM-suspected fact conflicts cached by the opt-in probe-contradictions cycle phase (severity/axis/confidence/resolution_command; empty until that phase has run). This tool only READS caches — it never calls an LLM itself. Optional `slug` substring filter (edges only, matches either side); `limit` (1..200, default 20).",
+      "Read conflicts without an LLM call. Default returns explicit contradicts page edges and cached opt-in probe findings (severity/axis/confidence/resolution_command; empty before probing). slug filters either edge endpoint; limit default 20, max 200. mode:typed finds overlapping numeric disagreements; use entity_slug, not slug/severity.",
     params: {
+      mode: str({ enum: ["typed"], description: "typed: deterministic overlapping numeric conflicts in the same unit/period/month/source. Omit for asserted/probed findings." }),
+      entity_slug: str({ description: "Exact entity filter for typed mode only." }),
       slug: str({ description: "Substring filter; matches either side of the pair (case-insensitive)." }),
       severity: str({
         enum: ["low", "medium", "high"],
@@ -1087,7 +1121,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "find_anomalies",
     outputRedaction: "retrieval",
     description:
-      "Deterministic structural OUTLIERS over the live page graph. memrain has no retrieval/access counters, so this keys on the signals it does have: `degree_outlier` (a connectivity hub — link-degree at/above mean + sigma·stddev across live pages) and `stale_salient` (a high-salience page whose updated_at is older than staleDays — important memory gone cold). No LLM. Surfaces page slugs/titles — hidden from public ingress.",
+      "Live-graph outliers: degree_outlier (degree ≥ mean + sigma·stddev) and stale_salient (high salience, updated_at older than staleDays). Uses structural signals, not retrieval/access counters. No LLM; public forbidden (page slugs/titles).",
     params: {
       sigma: num({ minimum: 0, description: "Std-devs above the mean degree to flag a hub (default 2)." }),
       staleDays: int({ minimum: 1, description: "Days an updated_at must lag to count a salient page stale (default 90)." }),
@@ -1099,7 +1133,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "recall",
     outputRedaction: "retrieval",
     description:
-      "Read ONE fact by its numeric id from the entity_facts ledger. Returns the fact row (claim, confidence, source, mig037 metadata). Returns an error if the id is unknown or the fact has been forgotten (tombstoned via forget_fact). NOT a search and not a list read — you need an id you already have. To find facts about an entity use `entity_facts`, to ask \"what do I know about X\" use `entity_recall`, and to search the corpus use `search`.",
+      "Read ONE known numeric fact id: claim, confidence, source and metadata. Unknown/forgotten ids error. For discovery use entity_facts (entity facts), entity_recall (entity context) or search (corpus); this is neither search nor listing.",
     params: {
       id: int({ ...req, minimum: 1, description: "Fact id (entity_facts.id)." }),
     },
@@ -1108,7 +1142,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "forget_fact",
     scope: "write",
     description:
-      "Soft-delete and durably withdraw a claim by id for its entity/source/visibility, retiring identical live copies (withdrawn_duplicates). Re-add, extraction and import cannot revive it. No undo; retained for audit. Repeated forget is a no-op; unknown id gives found:false. Optional reason is stored. Returns up to 5 similar_active fact ids/scores for distinct rewordings; confirm those separately before forgetting them. Static public bearer forbidden; write scope required in the owning source.",
+      "Durably withdraw by id within entity/source/visibility, retiring identical live copies (withdrawn_duplicates). Re-add/extraction/import cannot revive it; no undo, audit retained. Repeats no-op; unknown id gives found:false. Stores optional reason. Returns ≤5 similar_active ids/scores for distinct rewordings: confirm separately. Requires owning-source write; static public forbidden.",
     params: {
       id: int({ ...req, minimum: 1, description: "Fact id to forget (entity_facts.id)." }),
       reason: str({ description: "Optional audit note stored on the forgotten row." }),
@@ -1153,8 +1187,9 @@ export const OPERATIONS: readonly Operation[] = [
     name: "query",
     outputRedaction: "retrieval",
     description:
-      "Hybrid retrieval with detail, salience/recency, date and code filters, offset and adaptive_return. expand enables paid LLM query expansion (default follows the mode bundle); mode overrides are operator-only. refine + weights selects the legacy deterministic two-query RRF blend. Otherwise returns search's meta (vector/degradation state, operator-only counts). token_budget without k considers up to 100 hits; explicit k wins. Adds up to 3 lexical ledger matches in facts, separately from chunks, within the response budget. Fact reads respect source, visibility and diary restrictions; chunk filters apply to hits. Empty results include a recovery hint.",
+      "Hybrid retrieval with detail, salience/recency, date/code filters, offset and adaptive_return. expand is paid (mode default); mode overrides are operator-only. refine+weights uses deterministic two-query RRF. Otherwise returns search meta; counts are operator-only. token_budget without k considers 100 hits; explicit k wins. Adds ≤3 lexical ledger facts within budget, respecting source/visibility/diary fences; chunk filters affect hits. Empty results include a recovery hint.",
     params: {
+      source_ids: arr({ items: { type: "string" }, description: "Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call." }),
       types: arr({ items: { type: "string" }, description: "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter." }),
       slug_prefix: str({ description: "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits." }),
       q: str({ ...req, description: "Natural-language query." }),
@@ -1204,7 +1239,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "code_callers",
     outputRedaction: "retrieval",
     description:
-      "Call-graph: who calls the symbol `name`. Returns the `code-caller` mentions (surface form + chunk + source path) over the indexed code corpus. Deterministic, no LLM. An empty result carries `readiness: {state, code_documents, symbols}` for your sources, where state is `not_built` | `indexing` | `no_symbols` | `ready` (`ready` means the symbol really is absent). Each mention carries `language`, `kind`, `start_line`/`end_line` and, for a caller allowed unredacted bodies, a `snippet` of the chunk's opening text. Optional `limit` (1..1000, default 200) and `lang`.",
+      "Call sites for symbol name (surface,chunk,path), with language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200, range 1..1000; optional lang. Deterministic, no LLM.",
     params: {
       name: str({ ...req, description: "Bare symbol name to find callers of (e.g. `hybridSearch`)." }),
       limit: int({ minimum: 1, maximum: 1000 }),
@@ -1215,7 +1250,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "code_callees",
     outputRedaction: "retrieval",
     description:
-      "What a symbol calls. target is path:line (innermost covering definition) or a symbol; qualified names restrict call sites. resolved_symbol names the matched definition or null. Results carry language, kind, line bounds and an authorized opening snippet. Empty reads carry scoped readiness: not_built, indexing, no_symbols or ready. Only ready proves absence. Deterministic, no LLM; limit defaults 200 (max 1000), optional lang.",
+      "Callees of target path:line (innermost definition) or symbol; qualified names restrict sites. resolved_symbol is definition or null. Returns language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness; only ready proves absence. Limit default 200/max 1000; optional lang. Deterministic, no LLM.",
     params: {
       target: str({
         ...req,
@@ -1241,7 +1276,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "code_refs",
     outputRedaction: "retrieval",
     description:
-      "All references to the symbol `name` — the `code-ref` mentions (imports, type uses, non-call references) over the indexed code corpus. Deterministic, no LLM. Complements `code_callers` (call sites) for proof-grade symbol tracing. An empty result carries `readiness: {state, code_documents, symbols}` for your sources, where state is `not_built` | `indexing` | `no_symbols` | `ready` (`ready` means the symbol really is absent). Each mention carries `language`, `kind`, `start_line`/`end_line` and, for a caller allowed unredacted bodies, a `snippet` of the chunk's opening text. Optional `limit` (1..1000, default 200) and `lang`.",
+      "Non-call code-ref mentions for symbol name (imports/type uses/other references); complements code_callers. Includes language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200, range 1..1000; optional lang. Deterministic, no LLM.",
     params: {
       name: str({ ...req, description: "Bare symbol name to find references to (e.g. `hybridSearch`)." }),
       limit: int({ minimum: 1, maximum: 1000 }),
@@ -1252,7 +1287,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "code_blast",
     outputRedaction: "retrieval",
     description:
-      "Transitive CALLERS of symbol, grouped by BFS hop depth; use before editing. depth defaults 5 (max 8), max_nodes defaults 200. Returns result (ok/not_found/ambiguous), depth_groups, cycles_detected, truncation and optional candidates/did_you_mean. Nodes carry symbol, chunk_id, def_chunk_id and resolved: true identifies a definition-backed edge, false a by-name match. Empty/not_found reads carry scoped readiness: not_built, indexing, no_symbols or ready; only ready proves absence. No LLM.",
+      "Transitive callers by BFS depth for change-impact checks. depth default 5/max 8; max_nodes default 200. Returns result (ok/not_found/ambiguous), depth_groups, cycles_detected, truncation and optional candidates/did_you_mean. Nodes: symbol,chunk_id,def_chunk_id,resolved (definition-backed vs by-name). Empty reads carry scoped readiness; only ready proves absence. No LLM.",
     params: {
       symbol: str({ ...req, description: "Bare or qualified symbol name (e.g. `performSync` or `Foo::performSync`)." }),
       depth: int({ minimum: 1, maximum: 8, description: "Hop cap. Default 5, max 8." }),
@@ -1265,7 +1300,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "code_flow",
     outputRedaction: "retrieval",
     description:
-      "Transitive CALLEES of symbol grouped by BFS depth, with terminal side effects. depth defaults 8 (max 12), max_nodes defaults 200. code_blast envelope plus terminal_nodes [{symbol,sink_kind}], where sink_kind is db_call/http_call/file_io/process_exec. Detection uses language-specific callee names; ambiguous generic verbs such as get, put, read and write are not sinks. Empty reads carry code_blast readiness; only ready proves absence. No LLM.",
+      "Transitive callees by BFS depth; code_blast envelope plus terminal_nodes [{symbol,sink_kind:db_call/http_call/file_io/process_exec}]. depth default 8/max 12; max_nodes default 200. Language-specific names detect sinks; generic get/put/read/write do not. Empty reads carry readiness; only ready proves absence. No LLM.",
     params: {
       symbol: str({ ...req, description: "Entry-point symbol name (bare or qualified)." }),
       depth: int({ minimum: 1, maximum: 12, description: "Hop cap. Default 8, max 12." }),
@@ -1278,7 +1313,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "volunteer_context",
     outputRedaction: "retrieval",
     description:
-      "Push-based context: given a rolling conversation window, deterministically extract entity candidates, resolve them to existing page pointers (alias 0.9 / title 0.8 / slug-suffix 0.6, + a 0.05 boost for newest-turn or >=2-turn mentions), gate by confidence, cap to N, and return volunteered pages [{slug,title,display,confidence,arm,rationale,synopsis}]. No LLM, no Bedrock. Surfaces page slugs/titles + synopses — hidden from public ingress. Set `stats:true` for the per-arm used/volunteered precision feedback (approximate, derived from last_retrieved_at).",
+      "Resolve rolling-window entity mentions to page pointers: alias .9/title .8/slug-suffix .6, +.05 for newest-turn or ≥2-turn mentions; confidence gate and cap N. Returns [{slug,title,display,confidence,arm,rationale,synopsis}]. Deterministic, no Bedrock. Public forbidden (slugs/titles/synopses). stats:true gives approximate per-arm used/volunteered precision from last_retrieved_at.",
     params: {
       window: str({ description: "Conversation window text. 'user:'/'assistant:' line prefixes set the role; unprefixed input is one user turn. Required unless stats:true." }),
       prior_context: str({
@@ -1294,10 +1329,38 @@ export const OPERATIONS: readonly Operation[] = [
     },
   },
   {
+    name: "context_delta",
+    outputRedaction: "retrieval",
+    description: "Bounded recent pages (metadata), facts and events since a date/UTC timestamp; each section has truncated and time_basis. Not a complete change log/snapshot. Read-only, no retrieval touch/inference; internal-only.",
+    params: {
+      since: str({ ...req, description: "YYYY-MM-DD or UTC ISO timestamp." }),
+      limit: int({ minimum: 1, maximum: 100, description: "Maximum items per section; default 20." }),
+      source_ids: arr({ items: { type: "string" }, description: "Narrow within your source grant; [] reads nothing." }),
+    },
+  },
+  {
+    name: "quarantine_list",
+    scope: "admin",
+    description: "Operator-only, read-only quarantined IDs/sources/paths/fixed reason codes. No titles, bodies or free-form details. Default 20, max 100.",
+    params: {
+      limit: int({ minimum: 1, maximum: 100 }),
+      source_ids: arr({ items: { type: "string" }, description: "Narrow to exact sources; [] reads nothing." }),
+    },
+  },
+  {
+    name: "extraction_review",
+    scope: "admin",
+    description: "Operator-only metadata candidates: missing same-source entity pages and similar facts from at most 200 recent eligible rows; scanned/scan_truncated report bounds. No queues, merges, deletes or models.",
+    params: {
+      limit: int({ minimum: 1, maximum: 100 }),
+      source_ids: arr({ items: { type: "string" }, description: "Narrow to exact sources; [] reads nothing." }),
+    },
+  },
+  {
     name: "context_pack",
     outputRedaction: "retrieval",
     description:
-      "Budgeted \"what matters now\" pack for the start of a turn: entity cards (title, type, top facts, recent events; no page body) for up to 8 standing entities — explicit `slugs` first, then entities resolved from an optional conversation `window` by the volunteer resolver at its default gate — followed by the top decayed facts across your grant, minus facts already on a card. Trimmed to `token_budget`, cards before facts; `budget` reports what was dropped. A slug you cannot see gives no card, exactly like a missing one. Read-only, stateless, no LLM. Internal-only.",
+      "Budgeted entity cards (title,type,facts,events; no body), up to 8: explicit slugs first, then window entities at the volunteer default gate. Adds top decayed facts across the grant, excluding card duplicates. token_budget prioritizes cards; budget reports drops. Hidden/missing slugs both yield no card. Stateless read, no LLM; internal-only.",
     params: {
       slugs: arr({ description: "Entity page slugs to build cards for, in priority order (array of strings)." }),
       window: str({ description: "Conversation window text; entities it names fill the card slots left after `slugs`. 'user:'/'assistant:' line prefixes set the role." }),
@@ -1317,7 +1380,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "list_brain_skillpack",
     outputRedaction: "retrieval",
     description:
-      "List the brain-resident skillpack this brain ships (the local deploy/skills pack) — the same catalog as list_skills: each skill's slug, description, triggers, declared tools split into `usable_tools` (callable by you) and `unavailable_tools`, and whether it mutates. Read-only. The skills are served, not installed: read one with get_skill (list_skills is the flat listing). On the host, `memrain skillpack` builds a tarball with a sha256 manifest for verification and `memrain skillpack lint` checks the pack against the real tools and commands.",
+      "Read the served deploy/skills catalog (also list_skills): slug, description, triggers, mutating flag, usable_tools/unavailable_tools for your grant. Retrieve with get_skill; listing does not install skills. Host CLI: memrain skillpack builds a tarball + SHA-256 manifest; skillpack lint checks actual tools/commands.",
     params: {},
   },
   {
@@ -1355,6 +1418,32 @@ export const OPERATIONS: readonly Operation[] = [
     },
   },
   {
+    name: "takes_add",
+    scope: "write",
+    outputRedaction: "retrieval",
+    description: "Append a canonical takes-fence row; retain other rows/history. Requires owned page, current version and permitted holder; records authenticated actor. dry_run previews; optional plan_hash pins it. Static public forbidden.",
+    params: { ...takeWriteParams, ...takeFields, claim: { ...takeFields.claim, ...req },
+      kind: { ...takeFields.kind, ...req }, holder: str({ ...req, description: "world, brain, people/<slug> or companies/<slug>; constrained by the credential." }) },
+  },
+  {
+    name: "takes_update",
+    scope: "write",
+    outputRedaction: "retrieval",
+    description: "Patch a canonical takes row at the required page version; retain unrelated bytes/rows and holder. Changed claims clear old resolution. dry_run previews; plan_hash pins it. Static public forbidden.",
+    params: { ...takeWriteParams, row_num: int({ ...req, minimum: 1, maximum: 2147483647 }),
+      ...takeFields, active: bool({ description: "False retracts the row using strikethrough; true reactivates it." }) },
+  },
+  {
+    name: "takes_resolve",
+    scope: "write",
+    outputRedaction: "retrieval",
+    description: "Resolve an active take atomically in its page/ledger. Requires current version and holder permission; actor/time are server-set. dry_run previews; plan_hash pins the request, but apply's timestamp may change after_hash. Static public forbidden.",
+    params: { ...takeWriteParams, row_num: int({ ...req, minimum: 1, maximum: 2147483647 }),
+      quality: str({ ...req, enum: ["correct", "incorrect", "partial", "unresolvable"] }),
+      evidence: str({ description: "Single-line evidence, up to 4000 Unicode code points." }),
+      value: num({ description: "Finite numeric result, preserved without display rounding." }), unit: str() },
+  },
+  {
     name: "takes_search",
     outputRedaction: "retrieval",
     description:
@@ -1375,7 +1464,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "takes_scorecard",
     outputRedaction: "retrieval",
     description:
-      "Calibration scorecard for synthesized takes graded by the opt-in take-grading phase: total/graded/resolved counts, per-verdict tallies (correct/incorrect/partial/unresolvable), accuracy (correct/(correct+incorrect)), partial_rate, and a Brier score over decided correct∨incorrect bets (stated weight vs outcome). Reads synth_takes × each take's LATEST synth_take_grades row — never calls an LLM. Zero scorecard until takes have been graded. Optional `domain` / `holder` filter and a `since`/`until` generated-date window; tenant-scoped via each take's source document, and a scoped token stays confined to its allowed holders. Read-only; internal-only.",
+      "Read latest grades of synthesized takes: total/graded/resolved, verdict counts, accuracy=correct/(correct+incorrect), partial_rate, Brier score over correct/incorrect bets versus stated weight. Zero before opt-in grading. Filter domain/holder and generated since/until; source and holder grants apply. Internal-only, no LLM.",
     params: {
       domain: str({ description: "Filter to takes tagged with this domain." }),
       holder: str({ description: "Filter to this holder (world|brain|<slug>). Still gated by the token's takes-holder allow-list." }),
@@ -1387,7 +1476,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "takes_calibration",
     outputRedaction: "retrieval",
     description:
-      "Reliability-diagram data for graded takes: decided (correct∨incorrect) bets binned by their stated weight, with observed hit-rate vs predicted (mean weight) per bucket — the curve behind the scorecard's Brier. `bucket_size` sets the bin width in (0,1] (default 0.1). Reads synth_takes × latest synth_take_grades; no LLM. Empty until takes are graded. Optional `domain` / `holder` filter; tenant-scoped. Read-only; internal-only.",
+      "Reliability buckets for latest correct/incorrect take grades: observed hit-rate vs mean stated weight. bucket_size in (0,1], default .1. Empty before grading. Filter domain/holder within source/holder grants. Internal-only, read-only, no LLM.",
     params: {
       bucket_size: num({ minimum: 0, maximum: 1, description: "Bucket width in (0,1]. Default 0.1." }),
       domain: str({ description: "Filter to takes tagged with this domain." }),
@@ -1441,7 +1530,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "think",
     scope: "write",
     description:
-      "Multi-hop synthesis across pages + takes + the entity graph: gathers evidence (hybrid search, take streams, anchor subgraph, trajectories) and produces a cited answer with conflict + gap analysis. PAID + default-OFF: returns {ran:false} unless MEMRAIN_THINK=1 (budget-guarded Sonnet). `save` persists a synthesis/<slug> page + evidence rows and `take` queues the headline claim as a synth_take pinned to `anchor` — both OPERATOR-ONLY (silently ignored for tenant/public callers). `rounds` (1..3) feeds each round's gaps back into retrieval. Tenant-scoped retrieval for scoped callers. Every result carries `synthesis_status` (ok, empty_answer, not_json, output_truncated, no_llm, model_unusable, llm_error), and a failed compose over gathered pages adds `fallback`, a cited extractive digest of those pages (kind:\"extractive\", no model call, never saved) while `synthesis` stays null.",
+      "Multi-hop cited synthesis from pages, takes, graph and trajectories, with conflicts/gaps. Paid, budget-guarded Sonnet; default-off (ran:false unless MEMRAIN_THINK=1). save writes synthesis/<slug> + evidence; take queues its anchor-pinned headline. Both are operator-only, silently ignored otherwise. rounds 1..3 feeds gaps into scoped retrieval. synthesis_status: ok/empty_answer/not_json/output_truncated/no_llm/model_unusable/llm_error. Failed composition over gathered pages keeps synthesis:null and adds a cited extractive fallback (kind:extractive, no model call, never saved).",
     params: {
       question: str({ ...req, description: "The question to think about." }),
       anchor: str({ description: "Pull the entity subgraph + trajectory around this slug (required for take:true)." }),
@@ -1461,7 +1550,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "put_raw_data",
     scope: "write",
     description:
-      "Attach a raw payload (API response, headers, importer sidecar) to a page, keyed (slug, source). Newest-wins upsert: re-putting the same key REPLACES the payload (a cache of the latest fetch, not a history). `source` is the DATA-source label ('crustdata', an importer name), NOT the tenant axis; the slug must name a live (not soft-deleted) page, else the call fails with PageNotFound (`not_found`), and a scoped caller may only attach to a page its own source owns. Payload capped at 1 MB. WRITE — refused on public ingress.",
+      "Upsert a page payload keyed by (slug,source), REPLACING the prior payload, not keeping history; max 1 MB. source is a data-provider/importer label, not tenant ownership. Requires a live page (else not_found) in the caller’s write source. Write; public forbidden.",
     params: {
       slug: str({ ...req, description: "The owning page slug; must be a live page." }),
       source: str({ ...req, description: "Data-source label, e.g. an importer name." }),
@@ -1654,7 +1743,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "chronicle_backfill",
     scope: "write",
     description:
-      "Sweep conversation-shape pages in scope and enqueue a chronicle-extract job per eligible page (diary/event pages are skipped). Each enqueued page costs one paid extraction — the response reports `pages_enqueued` and the per-page USD budget (MEMRAIN_CHRONICLE_WRITE_BUDGET_USD) so worst-case spend is computable before a real run. `dry_run:true` returns counts only. Operator-only. WRITE — refused on public ingress.",
+      "Enqueue one paid chronicle-extract job per eligible scoped conversation page, excluding diary/events. Returns pages_enqueued and per-page MEMRAIN_CHRONICLE_WRITE_BUDGET_USD for worst-case spend. dry_run:true counts only. Operator-only write; public forbidden.",
     params: {
       dry_run: bool({ description: "Count eligible pages without enqueuing (default false)." }),
       limit: int({ minimum: 1, maximum: 500, description: "Max pages to sweep (default 100, hard cap 500)." }),
@@ -1693,6 +1782,8 @@ const MUTATING_OUTSIDE_WRITE_SCOPE: ReadonlySet<string> = new Set([
 
 /** Mutating tools that delete or overwrite, as opposed to purely adding. */
 const DESTRUCTIVE_TOOLS: ReadonlySet<string> = new Set([
+  "takes_update",
+  "takes_resolve",
   "page_rename",
   "index",
   "page_put",

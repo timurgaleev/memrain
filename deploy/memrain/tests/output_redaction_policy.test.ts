@@ -54,7 +54,7 @@ describe("outputRedaction policy", () => {
     const tagged = OPERATIONS.filter((op) => !operationAnnotations(op).readOnlyHint && op.outputRedaction).map(
       (op) => op.name,
     );
-    expect(tagged).toEqual(["page_edit", "add_timeline_event"]);
+    expect(tagged).toEqual(["page_edit", "add_timeline_event", "takes_add", "takes_update", "takes_resolve"]);
   });
 });
 

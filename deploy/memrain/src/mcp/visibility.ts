@@ -41,6 +41,8 @@ const OP_BY_NAME = new Map(OPERATIONS.map((o) => [o.name, o]));
  * here: it is the per-source (tenant-safe) health view.
  */
 export const OPERATOR_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "quarantine_list",
+  "extraction_review",
   "stats",
   "advisor",
   "jobs_submit",
@@ -92,6 +94,9 @@ export const SLUG_PARAMS_BY_WRITE_TOOL: Readonly<Record<string, readonly string[
   page_put: ["slug"],
   page_append: ["slug"],
   page_edit: ["slug"],
+  takes_add: ["slug"],
+  takes_update: ["slug"],
+  takes_resolve: ["slug"],
   page_rename: ["from", "to"],
   page_delete: ["slug"],
   page_restore: ["slug"],

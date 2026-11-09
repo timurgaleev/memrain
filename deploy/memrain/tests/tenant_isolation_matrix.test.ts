@@ -200,7 +200,7 @@ describe("brainwide operations answer scoped callers", () => {
 });
 
 describe("operator-only operations refuse token callers", () => {
-  for (const row of byMode("operator_only")) {
+  for (const row of MATRIX.filter(r => OPERATOR_ONLY_TOOLS.has(r.name))) {
     it(row.name, async () => {
       for (const authInfo of [auth(A), federatedA]) {
         const res = await call(row.name, { id: 1, kind: "noop" }, authInfo);

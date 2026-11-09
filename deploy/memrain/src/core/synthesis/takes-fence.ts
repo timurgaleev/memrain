@@ -46,7 +46,7 @@
  * TAKES_FENCE_MIXED warning, never rewritten).
  */
 
-import { locateFenceMarkers, fenceMarkers, FENCE_BRANDS, type FenceBrand } from "../fence-shared.ts";
+import { locateFenceMarkers, fenceMarkers, FENCE_BRANDS, parseRowCells, escapeFenceCell, type FenceBrand } from "../fence-shared.ts";
 
 export type FenceTakeKind = string;
 
@@ -164,14 +164,7 @@ type ResolutionColumn = (typeof RESOLUTION_HEADER_TOKENS)[number];
 
 // --- shared pipe-table primitives -------------------------------------------
 
-/** Split a markdown table row into trimmed cells (outer pipes stripped), or
- *  null when the line is not a table row. Does NOT unescape `\|`. */
-export function parseRowCells(line: string): string[] | null {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("|") || !trimmed.includes("|", 1)) return null;
-  const inner = trimmed.replace(/^\|/, "").replace(/\|$/, "");
-  return inner.split("|").map((c) => c.trim());
-}
+export { parseRowCells, escapeFenceCell } from "../fence-shared.ts";
 
 /** True for a `|---|:--:|` header-separator row. */
 export function isSeparatorRow(cells: string[]): boolean {
@@ -183,11 +176,6 @@ export function stripStrikethrough(s: string): { text: string; struck: boolean }
   const m = s.match(/^~~(.+?)~~$/);
   if (m && m[1] !== undefined) return { text: m[1].trim(), struck: true };
   return { text: s, struck: false };
-}
-
-/** Escape literal pipes so a cell can't break the table layout. */
-export function escapeFenceCell(s: string): string {
-  return s.replace(/\|/g, "\\|");
 }
 
 // --- cell parsers ------------------------------------------------------------
@@ -453,7 +441,7 @@ export function renderTakesFence(takes: ParsedFenceTake[], brand: FenceBrand = "
     const resolved = t.resolvedAt ? safe(t.resolvedAt) : "";
     const quality = t.resolvedQuality ?? "";
     const evidence = t.resolvedEvidence ? safe(t.resolvedEvidence) : "";
-    const value = t.resolvedValue !== undefined ? formatWeight(t.resolvedValue) : "";
+    const value = t.resolvedValue !== undefined ? String(t.resolvedValue) : "";
     const unit = t.resolvedUnit ? safe(t.resolvedUnit) : "";
     const by = t.resolvedBy ? safe(t.resolvedBy) : "";
     return `${baseCells} ${resolved} | ${quality} | ${evidence} | ${value} | ${unit} | ${by} |`;

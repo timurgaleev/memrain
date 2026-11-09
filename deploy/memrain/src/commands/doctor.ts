@@ -67,6 +67,7 @@ import {
   checkOutsideContentFences,
 } from "../core/doctor-ops.ts";
 import { checkConnectorHealth } from "../core/connectors/health.ts";
+import { checkMixedScriptTargets } from "../core/mixed-script-targets.ts";
 import { checkDbBackends, checkJsonbIntegrity, checkPageVersionStorage } from "../core/doctor-storage.ts";
 import { checkCyclePhaseHealth, checkMaintenanceHeld } from "../core/doctor-maintenance.ts";
 import { checkEmbedBacklog } from "../core/doctor-embed.ts";
@@ -459,6 +460,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["facts-input-windows", checkFactsInputWindows],
       ["fence-rows-without-markers", checkFenceRowsWithoutMarkers],
       ["namespace-only-targets", checkNamespaceOnlyTargets],
+      ["mixed-script-targets", checkMixedScriptTargets],
       ["dangling-slug-redirects", checkDanglingSlugRedirects],
       ["outside-content-fences", checkOutsideContentFences],
       ["code-grammars", checkGrammars],

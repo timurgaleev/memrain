@@ -97,6 +97,8 @@ describe("persistThinkSynthesis", () => {
     });
     expect(r.slug.startsWith("synthesis/what-changed-")).toBe(true);
     expect(r.evidenceInserted).toBe(2);
+    expect((await engine.query<{ written_by_principal: string }>(
+      "SELECT written_by_principal FROM page_versions WHERE slug=$1 ORDER BY version_n DESC LIMIT 1", [r.slug])).rows[0]?.written_by_principal).toBe("operator");
 
     const { rows: pages } = await engine.query<{ slug: string; type: string; markdown_body: string }>(
       `SELECT slug, type, markdown_body FROM pages WHERE slug = $1`,

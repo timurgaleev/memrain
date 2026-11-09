@@ -107,6 +107,7 @@ const FALSE_LITERALS: ReadonlySet<string> = new Set(["false", "0", "no"]);
  * typo, so adding a new value-taking flag means adding it here too.
  */
 export const VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "--fact-ids", "--deleted-pages", "--source-ref", "--completed-hash",
   "--access-ttl", "--anchor", "--args", "--baseline", "--batch-size", "--boost-weight", "--candidate",
   "--bound-slug-prefixes", "--budget", "--client", "--client-file", "--config-a",
   "--config-b", "--corpus", "--rds-instance", "--efs-id", "--copy-report",
@@ -161,6 +162,8 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["backup", new Set(["--rds-instance", "--efs-id", "--copy-report"])],
   ["import", new Set(["--dir", "--source", "--apply", "--dry-run", "--plan-hash"])],
   ["mirror-adopt", new Set(["--source", "--limit", "--apply", "--plan-hash"])],
+  ["atoms-retire", new Set(["--source-ref", "--completed-hash", "--apply", "--plan-hash"])],
+  ["erase", new Set(["--source", "--fact-ids", "--deleted-pages", "--apply", "--plan-hash"])],
   ["init", new Set(["--pglite", "--postgres"])],
   ["serve", new Set(["--host", "--http", "--port"])],
   ["index", new Set<string>()],
@@ -352,7 +355,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
       "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts",
     ]),
   ],
-  ["--apply", new Set(["import", "mirror-adopt", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts"])],
+  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts"])],
   ["--fix", new Set(["lint"])],
 ]);
 

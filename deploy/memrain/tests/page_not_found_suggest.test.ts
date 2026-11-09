@@ -154,7 +154,7 @@ describe("missing required arguments", () => {
     expect(env.error).toBe("invalid_params");
     expect(env.message).toBe("page_append: `content` is required");
     expect(env.suggestion).toMatch(/^Required: `slug` \(string\); `content` \(string\)\. Optional: /);
-    expect(env.suggestion).toContain("`request_id` (string): Optional caller-chosen id for this write (1-128 chars).");
+    expect(env.suggestion).toContain("`request_id` (string): Optional retry id (1-128 chars), retained 7 days.");
     expect(env.suggestion).not.toContain("..");
   });
 

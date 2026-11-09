@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { putPage } from "../src/core/pages.ts";
-import { pageSourcePath, pageTruthSourcePath } from "../src/core/page-index.ts";
+import { pageSourcePath, pageTruthSourcePath, compiledTruthHash, serializeCompiledTruth } from "../src/core/page-index.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { extractAtomsPhase } from "../src/core/synthesis/atoms.ts";
 import { proposeTakesPhase } from "../src/core/synthesis/takes.ts";
@@ -19,10 +19,14 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     await registerSource(db.storage.engine(), { id: "synth-tenant", kind: "vault", pathPrefix: "/synth-tenant" });
     for (const source of ["default", "synth-tenant"]) for (const prefix of [...PREFIXES, "notes"]) {
       const slug = `${prefix}/${source}`;
-      await putPage(db.storage, { slug, type: "note", markdown_body: BODY, source_id: source });
+      const page = await putPage(db.storage, { slug, type: "note", markdown_body: BODY, source_id: source, compiled_truth: { context: BODY } });
       for (const path of [pageSourcePath(slug, source), pageTruthSourcePath(slug, source)]) {
-        await db.storage.engine().query("INSERT INTO documents (id, source_path, source_id) VALUES ($1, $1, $2)", [path, source]);
-        await db.storage.engine().query("INSERT INTO chunks (id, document_id, chunk_index, content) VALUES ($1, $1, 0, $2)", [path, BODY]);
+        const text = path.startsWith("page-truth://") ? serializeCompiledTruth(null, slug, { context: BODY }) : BODY;
+        const frontmatter = path.startsWith("page-truth://") ? { page_truth_hash: compiledTruthHash(text) } :
+          { page_content_hash: page.content_hash, page_title: "" };
+        await db.storage.engine().query("INSERT INTO documents (id, source_path, source_id, frontmatter) VALUES ($1, $1, $2, $3::text::jsonb)",
+          [path, source, JSON.stringify(frontmatter)]);
+        await db.storage.engine().query("INSERT INTO chunks (id, document_id, chunk_index, content) VALUES ($1, $1, 0, $2)", [path, text]);
       }
     }
   });

@@ -26,6 +26,7 @@ beforeEach(async () => {
   storage = new Storage({ dbPath: join(tmp, "db") });
   await storage.init();
   engine = storage.engine();
+  await engine.query("INSERT INTO documents (id,source_path,source_id) VALUES ('d1','/vault/d1.md','default')");
 });
 
 afterEach(async () => {

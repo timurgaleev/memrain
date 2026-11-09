@@ -213,7 +213,8 @@ export async function writeDocumentTransaction(
 
     const upserted = await tx.query<{ id: string }>(
       `INSERT INTO documents (id, source_id, source_path, title, frontmatter, last_indexed_mtime, chunker_version, effective_date, effective_date_source, import_filename, updated_at)
-       VALUES ($1, COALESCE($6, $14::text), $2, $3, $4::text::jsonb, $5, COALESCE($7, 1), $8, $9, $10, NOW())
+       VALUES ($1, COALESCE($6, $14::text), $2, $3,
+         $4::text::jsonb - 'atoms_completed_hash' - 'atoms_completed_pages', $5, COALESCE($7, 1), $8, $9, $10, NOW())
        ON CONFLICT (id) DO UPDATE SET
          -- Keep the existing source on reindex unless the caller passes one
          -- explicitly. A null write leaves classification to the path-prefix
@@ -221,7 +222,9 @@ export async function writeDocumentTransaction(
          source_id          = COALESCE($6, documents.source_id),
          source_path        = EXCLUDED.source_path,
          title              = EXCLUDED.title,
-         frontmatter        = EXCLUDED.frontmatter,
+         frontmatter        = EXCLUDED.frontmatter || jsonb_strip_nulls(jsonb_build_object(
+           'atoms_completed_hash', documents.frontmatter->'atoms_completed_hash',
+           'atoms_completed_pages', documents.frontmatter->'atoms_completed_pages')),
          last_indexed_mtime = EXCLUDED.last_indexed_mtime,
          -- Content date re-parsed from the fresh frontmatter on every re-index;
          -- the mig080 provenance pair moves with it.

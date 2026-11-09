@@ -63,6 +63,7 @@ describe("doctor categorize", () => {
       "legacy-env-names",
       "links-extraction-lag",
       "maintenance-held",
+      "mixed-script-targets",
       "namespace-only-targets",
       "oauth-client-health",
       "oauth-client-hygiene",

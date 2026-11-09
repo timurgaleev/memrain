@@ -158,6 +158,7 @@ describe("gradeTakesPhase", () => {
   // Seed a take dated a year back so it clears the default 6-month grade age
   // gate (grading targets claims old enough to have resolved).
   async function seedTake(id: number, claim: string): Promise<void> {
+    await engine.query("INSERT INTO documents (id,source_path,source_id) VALUES ('d1','/vault/d1.md','default') ON CONFLICT (id) DO NOTHING");
     await engine.query(
       `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, status, model_id, generated_at)
        VALUES ($1, 'd1', 'h', 'v1-nova', $2, 'prediction', 0.7, 'queued', 'm', now() - interval '365 days')`,
@@ -227,6 +228,7 @@ describe("gradeTakesPhase", () => {
 
 describe("gradeTakesPhase — judge prompt carries real content (regression: [object Object])", () => {
   async function seedTake(id: number, claim: string): Promise<void> {
+    await engine.query("INSERT INTO documents (id,source_path,source_id) VALUES ('d1','/vault/d1.md','default') ON CONFLICT (id) DO NOTHING");
     await engine.query(
       `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, status, model_id, generated_at)
        VALUES ($1, 'd1', 'h', 'v1-nova', $2, 'prediction', 0.7, 'queued', 'm', now() - interval '365 days')`,
@@ -300,6 +302,7 @@ describe("gradeTakesPhase — Sonnet ensemble (S1)", () => {
   // Seed a take dated a year back so it clears the default 6-month grade age
   // gate (grading targets claims old enough to have resolved).
   async function seedTake(id: number, claim: string): Promise<void> {
+    await engine.query("INSERT INTO documents (id,source_path,source_id) VALUES ('d1','/vault/d1.md','default') ON CONFLICT (id) DO NOTHING");
     await engine.query(
       `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, status, model_id, generated_at)
        VALUES ($1, 'd1', 'h', 'v1-nova', $2, 'prediction', 0.7, 'queued', 'm', now() - interval '365 days')`,
@@ -473,6 +476,7 @@ describe("propose_takes — truncated extraction", () => {
 
 describe("grade_takes — truncated single judge", () => {
   async function seedTake(claim: string): Promise<void> {
+    await engine.query("INSERT INTO documents (id,source_path,source_id) VALUES ('d1','/vault/d1.md','default') ON CONFLICT (id) DO NOTHING");
     await engine.query(
       `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, status, model_id, generated_at)
        VALUES ('tk-1', 'd1', 'h', 'v1-nova', $1, 'prediction', 0.7, 'queued', 'm', now() - interval '365 days')`,

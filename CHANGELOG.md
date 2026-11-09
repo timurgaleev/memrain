@@ -6,6 +6,49 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.15.0] — 2026-11-09
+
+### Added
+- Optional reasons on page put, edit, delete and revert, retained with each
+  new version under the existing secret policy. No-op writes keep history
+  unchanged; public and remote quarantined history omit reasons.
+- Canonical take add, update and resolution tools with required page versions,
+  scoped holder checks and read-only previews. Page edits and targeted ledger
+  projection commit together; optional plan hashes pin reviewed operations.
+- An opt-in event-loop watchdog with a validated minimum 15-second stall
+  threshold, process termination and graceful-shutdown cleanup. It is off by
+  default and requires startup environment configuration.
+- Opt-in skill prompts over MCP, filtered by the caller's tool access and
+  unavailable to public callers. Prompt retrieval returns literal text and
+  runs no tools or models.
+- Bounded recent context through `context_delta`, plus operator-only
+  `quarantine_list` and `extraction_review` metadata helpers. These reads do
+  not modify content, queue work or invoke models; truncation is explicit.
+- Explicit validity dates for manual links and optional temporal filters on
+  graph reads. Typed numeric contradiction reads compare exact decimal values
+  within matching units, periods and overlapping validity intervals.
+- Per-call source narrowing, proven generated-content markers, operator
+  retrieval timings and pending-embedding counts, and request-local metered
+  cost metadata that keeps unknown costs explicit.
+- Preview-first atom-page retirement and narrowly selected database erasure
+  with exact plan hashes and conservative dependency checks. Neither runs on
+  deployment. Erasure does not remove WAL, backups, external files or copies.
+
+### Fixed
+- Canonical take grades bind to the exact claim text. A revised claim can be
+  graded again without inheriting a previous verdict or deleting grade history.
+  Legacy canonical grades with no claim binding remain stored and do not count
+  toward current scorecards or calibration.
+- Mixed-script link formation preserves non-Latin letters without renaming
+  stored slugs. Fact-fence reconciliation keeps exact superseded rows retired
+  and reports their row numbers without changing the page text.
+- Atom completion requires a complete validated response and publication;
+  stale automatic pages retire only with proven source and page ownership.
+  Authored pages, ambiguous legacy content and historical versions remain.
+- Tool-result JSON omits formatting whitespace while preserving values and
+  numeric precision. Tool descriptions fit the existing context budget while
+  retaining parameter schemas and access constraints.
+
 ## [1.14.0] — 2026-11-09
 
 ### Added

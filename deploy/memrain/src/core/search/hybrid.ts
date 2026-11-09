@@ -32,6 +32,7 @@ import { vectorSearch } from "./vector.ts";
 import { keywordSearch, keywordSearchRelaxed, keywordSearchScored, keywordIdentifierSearch } from "./keyword.ts";
 import { resolveDateBoundary, pageFilterClauses, validatePageFilters } from "./filters.ts";
 import { visibilityClause } from "../visibility.ts";
+import { searchDiagnostics } from "./diagnostics.ts";
 import { andSourceScope, isNoGrant } from "../source-scope.ts";
 import {
   dedupByDocument,
@@ -348,6 +349,7 @@ export interface SearchOptions {
    * the returned hits, and a throwing callback is swallowed. See search-meta.ts.
    */
   onMeta?: (meta: SearchMeta) => void;
+  diagnostics?: boolean;
   /**
    * Opt-in graph-signals stage (default OFF): adjacency hub boost + session
    * diversification over the link graph. Falls back to MEMRAIN_GRAPH_SIGNALS=1.
@@ -689,6 +691,8 @@ export async function hybridSearch(
 ): Promise<SearchHit[]> {
   const opts: SearchOptions =
     typeof optsOrK === "number" ? { k: optsOrK } : optsOrK;
+  const diagnostic = opts.diagnostics ? searchDiagnostics(storage, opts.sourceIds, opts) : undefined;
+  const report = async (meta: SearchMeta) => reportMeta(opts, { ...meta, ...(diagnostic ? await diagnostic.finish() : {}) });
   opts.signal?.throwIfAborted();
   const trimmed = (query ?? "").trim();
   if (!trimmed) {
@@ -697,7 +701,7 @@ export async function hybridSearch(
   // A caller granted no source reads nothing: return before the cache, any arm
   // or a paid embedding call can touch the brain.
   if (isNoGrant(opts.sourceIds)) {
-    reportMeta(opts, {
+    await report({
       vectorEnabled: false,
       intent: opts.intent ?? "topic",
       mode: resolveSearchMode(),
@@ -866,7 +870,7 @@ export async function hybridSearch(
     const kept = applyAdaptiveReturn(hits, cachedIntent, adaptiveCfg).kept;
     // Only healthy rankings are ever cached (see 9a), so a hit is served with the
     // vector arm on and nothing degraded except what this call's budget cut.
-    reportMeta(opts, {
+    await report({
       vectorEnabled: true,
       intent: cachedIntent,
       mode: resolveSearchMode(),
@@ -950,6 +954,7 @@ export async function hybridSearch(
   const armSourceBoost = !temporalQuery;
 
   // Settle eagerly: no arm rejection is left unobserved while embedding runs.
+  diagnostic?.mark("prepare_cache");
   const lexical = Promise.allSettled([
     (async () => {
       const keywordOpts = { sourceIds: opts.sourceIds, filters: chunkFilters, maxPool: maxPoolOn, sourceBoost: armSourceBoost };
@@ -1183,6 +1188,7 @@ export async function hybridSearch(
     }
   }
 
+  diagnostic?.mark("retrieval");
   if (fused.length === 0) {
     // Zero-result broadened retry (once). The only lever that can turn an empty
     // set non-empty is query expansion (different terms) — a bigger fanout can't
@@ -1207,7 +1213,7 @@ export async function hybridSearch(
         _zeroRetried: true,
       });
     }
-    reportMeta(opts, {
+    await report({
       vectorEnabled: queryVector !== null,
       intent,
       mode: resolveSearchMode(),
@@ -1792,7 +1798,8 @@ export async function hybridSearch(
   //     the cap is a pure view on the returned value: it never poisons the
   //     cache and never shrinks the eval window. Default OFF → `hits` unchanged.
   const kept = applyAdaptiveReturn(hits, intent, adaptiveCfg).kept;
-  reportMeta(opts, {
+  diagnostic?.mark("ranking");
+  await report({
     vectorEnabled: queryVector !== null,
     intent,
     mode: resolveSearchMode(),

@@ -44,6 +44,9 @@ export interface SearchMeta {
   returned: number;
   /** How sure the answer is, from the returned hits' evidence (operator-only); "unknown" on a cache hit. */
   confidence?: SearchConfidence;
+  /** Operator explain only. Stage intervals use a monotonic clock. */
+  timings_ms?: Record<string, number>;
+  pending_embeddings?: number | null;
 }
 
 export interface PublicSearchMeta {

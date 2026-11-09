@@ -1,30 +1,9 @@
 /**
- * extract_atoms synthesis phase — per-source distillation of corpus documents
- * into atomic claims ("atoms"), written ONLY to `synth_atoms`.
- *
- * Architecture guard: this phase READS from `documents` + `chunks` (the
- * authored vault) and WRITES to `synth_atoms`, plus an
- * `atoms/<source-date>/<slug>` page mirror per atom (via putPage) so atoms are
- * retrievable through normal search. The page write needs a Storage handle and
- * can be disabled with MEMRAIN_SYNTH_PAGES=0. Source notes remain sacrosanct:
- * the only thing this phase writes back to `documents` is the zero-yield
- * `atoms_scan_hash` frontmatter stamp; chunk text is never touched.
- *
- * Safety properties:
- *   - opt-in: only runs when the cycle requests the "extract-atoms" phase.
- *   - budget-capped: at most `maxDocs` documents per run (cost guard).
- *   - idempotent: each atom keys on hash(source_ref + source_hash + body); an
- *     unchanged document re-runs to a no-op via ON CONFLICT DO NOTHING, and the
- *     per-doc discovery skips documents that already have an atom — or a
- *     zero-yield `atoms_scan_hash` stamp — for the current content hash.
- *   - fail-open: an LLM error on one document logs + skips that document; the
- *     phase continues and never corrupts the brain.
- *
- * The LLM is injected via `opts.llmFn` (see core/llm/haiku.ts). Tests pass a
- * fake; production resolves `callHaiku`. NO live Bedrock in tests.
- *
- * Written for memrain's flat single-source vault (no source_id) and
- * own-namespace tables.
+ * Bounded single-source extraction into synth_atoms and optional atom pages.
+ * A complete, validated source run publishes its rows and completion manifest
+ * atomically. Partial page versions remain auditable; old atoms are retained.
+ * Legacy same-hash rows keep their no-replay behavior until a real source edit.
+ * Only proven automatic pages from the previous completed manifest may retire.
  */
 import { createHash } from "node:crypto";
 import type { Engine } from "../engine/interface.ts";
@@ -38,6 +17,12 @@ import { isQuoteInText } from "./quote-verify.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
 import { clearSynthFailure, filterBackedOff, recordSynthFailure } from "./synth-failures.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
+import { isTruncated } from "../llm/truncation.ts";
+import { TERMINAL_STOP_REASONS } from "../llm/converse.ts";
+import { phaseFenceCheck, PhaseStoppedError } from "../cycle/phase-context.ts";
+import { lockAtomSource } from "./atoms-source.ts";
+import { readAtomCompletion, readCurrentAtomPage, retireCompletedAtomPages, validateCompletedPages,
+  type AtomPageSnapshot } from "./atoms-lifecycle.ts";
 
 /** Allowed atom_type values. A returned type outside this set falls back. */
 export const ATOM_TYPES = [
@@ -79,6 +64,8 @@ export interface ExtractAtomsResult {
   /** source_quote values dropped because the note does not contain them. */
   quotesDropped: number;
   pagesHeld: number;
+  pagesRetired: number;
+  heldPages: { slug: string; reason: string }[];
   errors: string[];
 }
 
@@ -100,6 +87,7 @@ interface SourceDoc {
   sourceId: string | null;
   /** The note's own date (effective_date, else ingest date) — YYYY-MM-DD. */
   sourceDate: string;
+  frontmatter: Record<string, unknown>;
 }
 
 const SYSTEM_PROMPT = `You extract atomic knowledge nuggets from a note.
@@ -258,27 +246,38 @@ export function parseAtomsResponse(raw: string): ParsedAtom[] {
  * frontmatter and never scanned again. Prose around the array is a parse
  * failure, and a parse failure must stay retryable.
  */
-export function isWellFormedEmptyExtraction(raw: string): boolean {
+function parseCompleteAtoms(raw: string): ParsedAtom[] | null {
   let cleaned = raw.trim();
-  if (cleaned.length === 0) return false;
-  // No `\s*` after the language tag: the capture is trimmed on the next line,
-  // and with it the two quantifiers trade characters on an unclosed fence —
-  // measured 1.2 ms at 2 K to 60.8 ms at 16 K, ratio ~4.0 per doubling.
-  const fence = cleaned.match(/```(?:json)?([\s\S]*?)```/);
-  if (fence && fence[1] !== undefined) cleaned = fence[1].trim();
-  try {
-    const parsed: unknown = JSON.parse(cleaned);
-    return Array.isArray(parsed) && parsed.length === 0;
-  } catch {
-    return false;
+  if (cleaned.startsWith("```")) {
+    const fence = cleaned.match(/^```(?:json)?([\s\S]*)```$/);
+    if (!fence) return null;
+    cleaned = fence[1]!.trim();
   }
+  let value: unknown;
+  try { value = JSON.parse(cleaned); } catch { return null; }
+  if (!Array.isArray(value) || value.length > 3) return null;
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const atom = item as Record<string, unknown>;
+    if (typeof atom.title !== "string" || !atom.title.trim() || atom.title.length > 200 ||
+        typeof atom.body !== "string" || !atom.body.trim()) return null;
+    if (atom.atom_type !== undefined && !(ATOM_TYPES as readonly unknown[]).includes(atom.atom_type)) return null;
+    if (atom.concepts !== undefined && (!Array.isArray(atom.concepts) || atom.concepts.length > 5 ||
+        atom.concepts.some((concept: unknown) => typeof concept !== "string" || !concept.trim()))) return null;
+    if (atom.source_quote !== undefined && (typeof atom.source_quote !== "string" || atom.source_quote.length > 200)) return null;
+    if (atom.lesson !== undefined && (typeof atom.lesson !== "string" || atom.lesson.length > 300)) return null;
+  }
+  return parseAtomsResponse(JSON.stringify(value));
+}
+
+export function isWellFormedEmptyExtraction(raw: string): boolean {
+  return parseCompleteAtoms(raw)?.length === 0;
 }
 
 /**
  * Discover documents that still need atom extraction: live documents with
- * enough body text whose current content hash has NO atom row and NO zero-yield
- * scan stamp yet. One SQL round-trip; the EXISTS pair is the idempotency
- * filter.
+ * enough body text without completion for their current hash. Legacy sources
+ * without a completion manifest retain their atom-row/zero-yield skip.
  *
  * memrain stores body text in `chunks`, not on `documents`, so the per-document
  * text is the concatenation of its chunks (ordered). Soft-deleted documents
@@ -295,8 +294,9 @@ async function discoverDocuments(
     text: string;
     source_id: string | null;
     source_date: string;
+    frontmatter: Record<string, unknown> | null;
   }>(
-    `SELECT d.id, d.source_id,
+    `SELECT d.id, d.source_id, d.frontmatter,
             COALESCE(d.effective_date, d.ingested_at)::date::text AS source_date,
             string_agg(c.content, E'\n\n' ORDER BY c.chunk_index) AS text
        FROM documents d
@@ -318,6 +318,7 @@ async function discoverDocuments(
       contentHash16: contentHash16(text),
       sourceId: r.source_id,
       sourceDate: r.source_date,
+      frontmatter: r.frontmatter ?? {},
     });
   }
   if (candidates.length === 0) return [];
@@ -349,31 +350,89 @@ async function discoverDocuments(
   );
   const done = new Set(existing.map((e) => `${e.source_ref} ${e.source_hash}`));
 
-  const fresh = candidates.filter((c) => !done.has(`${c.id} ${c.contentHash16}`));
+  const fresh = candidates.filter((c) => {
+    const completion = readAtomCompletion(c.frontmatter);
+    return completion ? completion.hash !== c.contentHash16 : !done.has(`${c.id} ${c.contentHash16}`);
+  });
   // Before the slice, so a document parked after a failed call gives up its slot.
   return (await filterBackedOff(engine, "extract_atoms", fresh, model)).slice(0, maxDocs);
 }
 
-/**
- * Stamp "this exact content was scanned and produced nothing" into the source
- * document's frontmatter so it stops re-entering the discovery window. Only
- * called for a CLEAN empty extraction — an LLM error takes the catch path and
- * malformed output fails `isWellFormedEmptyExtraction`; both stay retryable.
- *
- * The stamp holds the hash of the text we scanned and discovery skips the
- * document only while that still matches, so editing the note re-eligibilizes
- * it; that mirrors how a content change invalidates the atom rows. Merging into
- * the existing jsonb keeps the authored frontmatter intact; unlike the pages
- * analogue the column is nullable here, hence the COALESCE.
- */
-async function stampZeroYieldScan(engine: Engine, doc: SourceDoc): Promise<void> {
-  await engine.query(
-    `UPDATE documents
-        SET frontmatter = COALESCE(frontmatter, '{}'::jsonb)
-                          || jsonb_build_object('atoms_scan_hash', $1::text)
-      WHERE id = $2 AND deleted_at IS NULL`,
-    [doc.contentHash16, doc.id],
+interface StagedAtom extends ParsedAtom {
+  key: string;
+  slug: string;
+}
+
+function stageAtoms(atoms: ParsedAtom[], doc: SourceDoc): StagedAtom[] {
+  const occurrences = new Map<string, number>();
+  return atoms.map((atom) => {
+    const occurrence = occurrences.get(atom.title) ?? 0;
+    occurrences.set(atom.title, occurrence + 1);
+    return { ...atom, key: atomKey(doc.id, doc.contentHash16, atom.body),
+      slug: atomPageSlug(doc.id, doc.sourceDate, atom.title, occurrence) };
+  });
+}
+
+async function previousAtomCount(engine: Engine, doc: SourceDoc): Promise<number> {
+  const previous = readAtomCompletion(doc.frontmatter);
+  const { rows } = await engine.query<{ count: number }>(
+    `SELECT COALESCE(max(n), 0)::int AS count FROM (
+       SELECT count(*) AS n FROM synth_atoms WHERE source_ref = $1 AND source_kind = 'document'
+         AND ($2::text IS NULL OR source_hash = $2) GROUP BY source_hash
+     ) counts`, [doc.id, previous?.hash ?? null],
   );
+  return Number(rows[0]!.count);
+}
+
+async function writeAtomPage(storage: Storage, doc: SourceDoc, atom: StagedAtom): Promise<AtomPageSnapshot | { held: string }> {
+  const current = await readCurrentAtomPage(storage.engine(), atom.slug);
+  if (current && (current.deleted || current.source_id !== doc.sourceId || !current.automatic ||
+      current.origin?.source_ref !== doc.id || current.origin.source_id !== doc.sourceId ||
+      !current.origin.source_hash || !current.origin.atom_key)) return { held: current.legacy ? "held_legacy" : "authored_edit" };
+  const origin = { source_ref: doc.id, source_hash: doc.contentHash16, source_id: doc.sourceId, atom_key: atom.key };
+  const body = [atom.body, atom.source_quote ? `\n> ${atom.source_quote}` : "",
+    atom.lesson ? `\n**Lesson:** ${atom.lesson}` : "", `\n---\nSource: ${doc.id} (${doc.contentHash16})`].filter(Boolean).join("\n");
+  await phaseFenceCheck();
+  const result = await putPage(storage, {
+    slug: atom.slug, type: "atom", allowAdHocType: true, title: atom.title, markdown_body: body,
+    compiled_truth: { atom_origin: origin }, source_id: doc.sourceId!, written_by: "extract-atoms",
+    written_by_principal: "operator",
+    onlyOverwriteWriter: "extract-atoms", expectedVersion: current?.version ?? 0,
+    expectedOriginDocument: { id: doc.id, sourceId: doc.sourceId, contentHash: doc.contentHash16 },
+    ...(current ? { expectedAtomPage: { sourceRef: doc.id, sourceHash: current.origin!.source_hash!,
+      atomKey: current.origin!.atom_key!, contentHash: current.hash } } : {}),
+  });
+  if (result.held === "source_busy") throw new Error("atom page publication held: source_busy");
+  if (result.held) return { held: result.held };
+  return { slug: atom.slug, version: result.version_n, hash: result.content_hash, atom_key: atom.key, source_hash: doc.contentHash16 };
+}
+
+async function publishAtoms(engine: Engine, doc: SourceDoc, atoms: StagedAtom[], modelId: string,
+  pages: AtomPageSnapshot[]): Promise<void> {
+  await phaseFenceCheck();
+  await engine.transaction(async (tx) => {
+    const source = { id: doc.id, sourceId: doc.sourceId, contentHash: doc.contentHash16 };
+    const current = await lockAtomSource(tx, source);
+    if (readAtomCompletion(current)?.hash !== readAtomCompletion(doc.frontmatter)?.hash) {
+      throw new Error("atom completion changed during extraction");
+    }
+    await validateCompletedPages(tx, source, pages);
+    for (const atom of atoms) {
+      await tx.query(
+        `INSERT INTO synth_atoms
+           (atom_key, source_ref, source_kind, source_hash, title, body, atom_type, concepts, source_quote, lesson, model_id)
+         VALUES ($1, $2, 'document', $3, $4, $5, $6, $7::text::jsonb, $8, $9, $10)
+         ON CONFLICT (atom_key) DO NOTHING`,
+        [atom.key, doc.id, doc.contentHash16, atom.title, atom.body, atom.atom_type,
+          JSON.stringify(atom.concepts), atom.source_quote ?? null, atom.lesson ?? null, modelId],
+      );
+    }
+    await tx.query(
+      `UPDATE documents SET frontmatter = COALESCE(frontmatter, '{}'::jsonb) || $2::text::jsonb WHERE id = $1`,
+      [doc.id, JSON.stringify({ atoms_completed_hash: doc.contentHash16, atoms_completed_pages: pages,
+        ...(atoms.length === 0 ? { atoms_scan_hash: doc.contentHash16 } : {}) })],
+    );
+  });
 }
 
 export async function extractAtomsPhase(
@@ -384,140 +443,84 @@ export async function extractAtomsPhase(
   const llm = resolveLlmFn(opts.llmFn, opts.modelId ? { modelId: opts.modelId } : {});
   const writePages = opts.storage !== undefined && synthPagesEnabled();
   const result: ExtractAtomsResult = {
-    documentsScanned: 0,
-    documentsProcessed: 0,
-    atomsWritten: 0,
-    pagesWritten: 0,
-    quotesDropped: 0,
-    pagesHeld: 0,
-    errors: [],
+    documentsScanned: 0, documentsProcessed: 0, atomsWritten: 0, pagesWritten: 0,
+    quotesDropped: 0, pagesHeld: 0, pagesRetired: 0, heldPages: [], errors: [],
   };
-
-  // The model the backoff is keyed on — the one `llm` will call.
   const backoffModel = resolveModel("utility", opts.modelId);
   const docs = await discoverDocuments(engine, maxDocs, backoffModel);
   result.documentsScanned = docs.length;
+  let retirementTargets = 0;
 
   for (const doc of docs) {
-    let text: string;
-    let modelId: string;
+    await phaseFenceCheck();
+    let failureKind: "llm_error" | "unparseable" | "truncated" = "llm_error";
     try {
-      const resp = await llm({
-        system: SYSTEM_PROMPT,
-        // Note body is untrusted — strip injection phrases + cap before the LLM.
-        user: `Source: ${doc.id}\nObservation date: ${doc.sourceDate}\n\n---\n\n${sanitizeForPrompt(doc.text, MAX_DOC_CHARS_TO_LLM).text}`,
-        maxTokens: 1200,
+      if (writePages && doc.sourceId === null) throw new Error("atom page publication held: unknown_source");
+      const prompt = sanitizeForPrompt(doc.text, MAX_DOC_CHARS_TO_LLM);
+      if (doc.text.length > MAX_DOC_CHARS_TO_LLM || prompt.matched.includes("length-cap")) {
+        failureKind = "truncated";
+        throw new Error("atom extraction held: truncated_input");
+      }
+      const resp = await llm({ system: SYSTEM_PROMPT,
+        user: `Source: ${doc.id}\nObservation date: ${doc.sourceDate}\n\n---\n\n${prompt.text}`, maxTokens: 1200 });
+      result.documentsProcessed++;
+      failureKind = isTruncated(resp) ? "truncated" : "unparseable";
+      const parsed = !isTruncated(resp) && !TERMINAL_STOP_REASONS.has(resp.stopReason ?? "") ? parseCompleteAtoms(resp.text) : null;
+      if (parsed === null) throw new Error("extractor output not parseable as complete atoms; retried after backoff");
+      const previousCount = await previousAtomCount(engine, doc);
+      if (previousCount > 0 && (parsed.length === 0 || parsed.length * 2 < previousCount)) {
+        throw new Error("atom extraction held: held_shrink");
+      }
+      const atoms = stageAtoms(parsed.map((atom): ParsedAtom => {
+        if (atom.source_quote === undefined || isQuoteInText(atom.source_quote, doc.text)) return atom;
+        result.quotesDropped++;
+        const { source_quote: _dropped, ...rest } = atom;
+        return rest;
+      }), doc);
+      if (new Set(atoms.map((atom) => atom.key)).size !== atoms.length) {
+        throw new Error("atom extraction held: duplicate_identity");
+      }
+      await engine.transaction(async (tx) => {
+        await lockAtomSource(tx, { id: doc.id, sourceId: doc.sourceId, contentHash: doc.contentHash16 });
       });
-      text = resp.text;
-      modelId = resp.modelId;
-    } catch (e) {
-      // Fail-open: log + skip this document, never abort the phase.
-      result.errors.push(`${doc.id}: ${e instanceof Error ? e.message : String(e)}`);
-      await recordSynthFailure(engine, {
-        docId: doc.id, phase: "extract_atoms", contentHash: doc.contentHash16, model: backoffModel, kind: "llm_error",
-      });
-      continue;
-    }
-
-    // A source_quote the note does not contain is made up; drop it rather
-    // than store it as a verbatim line.
-    const atoms = parseAtomsResponse(text).map((atom): ParsedAtom => {
-      if (atom.source_quote === undefined || isQuoteInText(atom.source_quote, doc.text)) return atom;
-      result.quotesDropped += 1;
-      const { source_quote: _dropped, ...rest } = atom;
-      return rest;
-    });
-    result.documentsProcessed += 1;
-    if (atoms.length > 0 || isWellFormedEmptyExtraction(text)) {
-      await clearSynthFailure(engine, doc.id, "extract_atoms");
-    }
-    if (atoms.length === 0) {
-      // Only a cleanly parsed `[]` is a genuine zero-yield note.
-      // parseAtomsResponse also returns [] for malformed or truncated output,
-      // and tombstoning that would permanently suppress a document that does
-      // carry atoms, so that case is logged and retried after a backoff.
-      if (!isWellFormedEmptyExtraction(text)) {
-        result.errors.push(
-          `${doc.id}: extractor output not parseable as atoms; not memoized, retried after backoff`,
-        );
-        await recordSynthFailure(engine, {
-          docId: doc.id, phase: "extract_atoms", contentHash: doc.contentHash16, model: backoffModel, kind: "unparseable",
-        });
-        continue;
-      }
-      try {
-        await stampZeroYieldScan(engine, doc);
-      } catch (e) {
-        // Fail-soft: the worst case is the pre-fix behaviour — the document
-        // stays rediscoverable and costs one more call next run.
-        result.errors.push(
-          `${doc.id} zero-yield stamp: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-      continue;
-    }
-
-    // Ordinal per title within this extraction — see atomPageSlug. Assigned
-    // before the row write so a transient insert failure can't shift the next
-    // same-titled atom onto its neighbour's page.
-    const titleOccurrences = new Map<string, number>();
-
-    for (const atom of atoms) {
-      const occurrence = titleOccurrences.get(atom.title) ?? 0;
-      titleOccurrences.set(atom.title, occurrence + 1);
-      const key = atomKey(doc.id, doc.contentHash16, atom.body);
-      try {
-        await engine.query(
-          `INSERT INTO synth_atoms
-             (atom_key, source_ref, source_kind, source_hash, title, body, atom_type, concepts, source_quote, lesson, model_id)
-           VALUES ($1, $2, 'document', $3, $4, $5, $6, $7::text::jsonb, $8, $9, $10)
-           ON CONFLICT (atom_key) DO NOTHING`,
-          [
-            key, doc.id, doc.contentHash16, atom.title, atom.body, atom.atom_type,
-            JSON.stringify(atom.concepts), atom.source_quote ?? null, atom.lesson ?? null, modelId,
-          ],
-        );
-        result.atomsWritten += 1;
-      } catch (e) {
-        result.errors.push(`${doc.id} atom write: ${e instanceof Error ? e.message : String(e)}`);
-        continue;
-      }
-
-      // Page mirror — storing every atom as a page is what
-      // makes atoms retrievable via normal search (the cycle's mirror phase
-      // indexes pages into documents/chunks). Idempotent via putPage; a page
-      // failure never loses the synth_atoms row.
+      const pages: AtomPageSnapshot[] = [];
       if (writePages && opts.storage) {
-        // Stable identity only — see atomPageSlug. The old slug folded in the
-        // run date and the atom_key (which carries the document's content
-        // hash), so editing a source note stranded its atom pages and minted
-        // near-duplicates beside them.
-        const slug = atomPageSlug(doc.id, doc.sourceDate, atom.title, occurrence);
-        const bodyParts = [
-          atom.body,
-          atom.source_quote ? `\n> ${atom.source_quote}` : "",
-          atom.lesson ? `\n**Lesson:** ${atom.lesson}` : "",
-          `\n---\nSource: ${doc.id} (${doc.contentHash16})`,
-        ].filter(Boolean);
-        try {
-          const pageWrite = await putPage(opts.storage, {
-            slug,
-            type: "atom",
-            allowAdHocType: true,
-            title: atom.title,
-            markdown_body: bodyParts.join("\n"),
-            source_id: doc.sourceId ?? "default",
-            written_by: "extract-atoms",
-            onlyOverwriteWriter: "extract-atoms",
-          });
-          if (pageWrite.held) result.pagesHeld += 1;
-          else result.pagesWritten += 1;
-        } catch (e) {
-          result.errors.push(`${doc.id} atom page: ${e instanceof Error ? e.message : String(e)}`);
+        for (const atom of atoms) {
+          const page = await writeAtomPage(opts.storage, doc, atom);
+          if ("held" in page) {
+            result.pagesHeld++;
+            if (result.heldPages.length < 100) result.heldPages.push({ slug: atom.slug, reason: page.held });
+          } else { pages.push(page); result.pagesWritten++; }
         }
       }
+      await publishAtoms(engine, doc, atoms, resp.modelId, pages);
+      result.atomsWritten += atoms.length;
+      await phaseFenceCheck();
+      await clearSynthFailure(engine, doc.id, "extract_atoms");
+      if (writePages && opts.storage) {
+        const keep = new Set(atoms.map((atom) => atom.slug));
+        const obsolete = (readAtomCompletion(doc.frontmatter)?.pages ?? []).filter((page) => !keep.has(page.slug));
+        const selected = obsolete.slice(0, 100 - retirementTargets);
+        retirementTargets += selected.length;
+        const capped = obsolete.slice(selected.length);
+        result.pagesHeld += capped.length;
+        result.heldPages.push(...capped.map((page) => ({ slug: page.slug, reason: "retirement_limit" }))
+          .slice(0, 100 - result.heldPages.length));
+        const retirement = await retireCompletedAtomPages(opts.storage,
+          { id: doc.id, sourceId: doc.sourceId, contentHash: doc.contentHash16 },
+          selected, keep);
+        result.pagesRetired += retirement.retired;
+        result.pagesHeld += retirement.held;
+        result.heldPages.push(...retirement.targets.filter((page) => page.status === "held")
+          .map((page) => ({ slug: page.slug, reason: page.reason! })).slice(0, 100 - result.heldPages.length));
+      }
+    } catch (error) {
+      if (error instanceof PhaseStoppedError) throw error;
+      result.errors.push(`${doc.id}: ${error instanceof Error ? error.message : String(error)}`);
+      await phaseFenceCheck();
+      await recordSynthFailure(engine, { docId: doc.id, phase: "extract_atoms", contentHash: doc.contentHash16,
+        model: backoffModel, kind: failureKind });
     }
   }
-
   return result;
 }

@@ -64,7 +64,8 @@ describe("validateParams — unit", () => {
         expect(isOperationError(e)).toBe(true);
         expect((e as { code: string }).code).toBe("invalid_params");
         expect((e as Error).message).toBe("search: `q` is required");
-        expect((e as { suggestion: string }).suggestion).toMatch(/^Required: `q` \(string\): Natural-language query\. Optional: `types` \(array\)/);
+        expect((e as { suggestion: string }).suggestion).toMatch(/^Required: `q` \(string\): Natural-language query\. Optional: `source_ids` \(array\)/);
+        expect((e as { suggestion: string }).suggestion).toContain("`types` (array)");
         expect((e as { suggestion: string }).suggestion).toContain("`k` (integer)");
       }
     }
@@ -163,7 +164,7 @@ describe("validateParams — unit", () => {
     expect(e.suggestion).toContain("`slug` (required)");
     expect(e.suggestion).toContain("markdown_body");
     const s = caught(() => validateParams(search, { query: "x" }));
-    expect(s.suggestion).toContain("Accepted arguments: `types`, `slug_prefix`, `q` (required), `k`,");
+    expect(s.suggestion).toContain("Accepted arguments: `source_ids`, `types`, `slug_prefix`, `q` (required), `k`,");
   });
 
   it("reports at most 5 unknown keys, each truncated to 64 characters", () => {

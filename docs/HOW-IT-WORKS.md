@@ -175,6 +175,13 @@ not the whole document, and it won't turn its own reflections and patterns back
 into raw input for another pass. You don't schedule anything; Memrain keeps
 itself current.
 
+Atom extraction replaces its active generation only after a complete response
+and successful publication. It retires only unchanged, proven automatic pages
+from the prior completed generation, keeping their history. Manual edits,
+ambiguous legacy pages and partial model responses remain held. The explicit
+`atoms-retire` preview can inspect historical candidates; deploying does not
+apply it. See [maintenance previews](CONFIGURATION.md#explicit-maintenance-previews).
+
 And it can check its own work. An opt-in nightly **eval probe** (runs only
 after you install and enable `memrain-eval-probe.timer` from `deploy/systemd`)
 runs a fixed set of questions against the brain and records how good the
@@ -193,14 +200,14 @@ what its scopes allow.
 
 | Group | Tools |
 |-------|-------|
-| **Search & pages** | `search`, `query`, `think`, `recall`, `volunteer_context`, `context_pack`, `advisor`, `index`, `get_chunks`, `resolve_slugs`, `page_put`, `page_append`, `page_get`, `page_list`, `page_versions`, `page_revert`, `page_delete`, `page_restore`, `purge_deleted_pages`, `add_tag`, `remove_tag`, `get_tags`, `put_raw_data`, `get_raw_data`, `get_recent_transcripts` |
+| **Search & pages** | `search`, `query`, `think`, `recall`, `volunteer_context`, `context_pack`, `context_delta`, `advisor`, `index`, `get_chunks`, `resolve_slugs`, `page_put`, `page_append`, `page_get`, `page_list`, `page_versions`, `page_revert`, `page_delete`, `page_restore`, `purge_deleted_pages`, `add_tag`, `remove_tag`, `get_tags`, `put_raw_data`, `get_raw_data`, `get_recent_transcripts` |
 | **Code** | `code_def`, `code_refs`, `code_callers`, `code_callees`, `code_blast`, `code_flow` |
 | **Facts, timeline & chronicle** | `add_fact`, `forget_fact`, `extract_facts`, `fact_supersessions`, `add_timeline_event`, `chronicle_day`, `chronicle_since`, `chronicle_on_this_day`, `chronicle_last_seen`, `chronicle_backfill`, `volunteer_chronicle`, `ontology_get`, `ontology_propose`, `ontology_dimensions`, `ontology_conflicts` |
 | **Graph & entities** | `backlinks`, `link`, `unlink`, `get_links`, `list_link_sources`, `graph_neighbors`, `graph_query`, `traverse_graph`, `relational_recall`, `entity_facts`, `entity_timeline`, `entity_recall`, `find_orphans`, `wanted_pages`, `find_experts`, `find_contradictions`, `find_trajectory`, `find_anomalies`, `get_recent_salience`, `list_concepts` |
-| **Takes** | `list_takes`, `takes_search`, `set_take_status`, `takes_scorecard`, `takes_calibration`, `get_calibration_profile` |
+| **Takes** | `list_takes`, `takes_search`, `takes_add`, `takes_update`, `takes_resolve`, `set_take_status`, `takes_scorecard`, `takes_calibration`, `get_calibration_profile` |
 | **Jobs & agents** | `jobs_submit`, `jobs_cancel`, `jobs_list`, `jobs_get`, `jobs_logs`, `retry_job`, `get_job_progress`, `submit_agent`, `get_agent_job` |
 | **Skills** | `list_skills`, `get_skill`, `list_brain_skillpack` |
-| **Admin & diagnostics** | `stats`, `whoami`, `get_brain_identity`, `get_status_snapshot`, `run_doctor`, `source_health`, `sources_list`, `sources_status`, `log_friction`, `log_ingest`, `get_ingest_log` |
+| **Admin & diagnostics** | `stats`, `whoami`, `get_brain_identity`, `get_status_snapshot`, `run_doctor`, `source_health`, `sources_list`, `sources_status`, `log_friction`, `log_ingest`, `get_ingest_log`, `quarantine_list`, `extraction_review` |
 
 A few that are easy to miss:
 
@@ -215,6 +222,11 @@ A few that are easy to miss:
   retrieval limit and also applies to alias injection and query refinement.
   An unknown type produces `unknown_page_types` with available types in the
   caller's scope. Omit both filters to search the whole accessible corpus.
+- `search`, `query` and `page_list` accept `source_ids` to narrow the caller's
+  source grant for that call. Omitting it keeps the full grant; `[]` reads
+  nothing, `null` is invalid, and any forbidden source rejects the request
+  before retrieval or inference. Cached results, refinement, supplementary
+  facts and response metadata use the same narrowed scope.
 - Successful page writes return `admin_url` for operators and credentials with
   admin scope when the issuer is configured. The link opens the resulting page
   in the admin panel; tenant and public responses omit it.
@@ -244,6 +256,30 @@ A few that are easy to miss:
   accepts `include_body:false` for metadata only. `get_chunks` returns at most
   200 chunks; when `truncated` is true, increase `from_index` by the number
   returned to read the next portion.
+- `page_put`, `page_edit`, `page_delete` and `page_revert` accept an optional
+  one-line `reason` of at most 500 Unicode code points after trimming whitespace.
+  Longer input is refused, not truncated; blank input becomes `null`. It follows the same
+  secret policy as page content and appears as `change_reason` in authorized
+  version history. A reason alone does not create a version. Reverting records
+  the reason for the new operation rather than copying the old reason. Public
+  history and remote quarantined history omit this field.
+- `page_put`, `page_edit`, `page_append` and successful `page_restore`/
+  `page_revert` can return `superseded_rows`:
+  bounded fact-fence row numbers whose exact claims remain superseded. The
+  page text and history are retained. Suppression requires the same source,
+  page, non-null row number and exact claim; a corrected number or a claim
+  deliberately moved to a different row is not suppressed by that match.
+- `takes_add`, `takes_update` and `takes_resolve` change one canonical takes
+  row in its owning page and project it to the ledger in the same transaction.
+  They require `expected_version`, source/prefix access and holder permission;
+  the static public bearer cannot call them. `dry_run:true` previews the bounded
+  row diff without writing or calling a model. Repeat the inputs with the
+  preview's `plan_hash` to pin an apply. A resolution's server timestamp may
+  change its applied `after_hash`; the plan still pins the requested operation.
+  Claim edits clear the previous resolution and require a grade for the new
+  claim text; earlier grades, other rows and history remain stored.
+  External preview text retains its trust frame. See the
+  [take-write API](../deploy/memrain/docs/API.md#canonical-take-writes).
 - `add_fact` accepts `valid_from`, `kind`, `notability` and
   `claim_metric`/`claim_value`/`claim_unit`/`claim_period`. A batch inherits
   these top-level defaults and each item may override them. Metadata is
@@ -255,6 +291,23 @@ A few that are easy to miss:
   qualified slugs remain explicit soft references. Doctor's
   `facts-without-entity-pages` check reports live facts whose entity has no live
   page in the same source. It does not create pages or rewrite facts.
+- `find_contradictions {mode:"typed"}` finds different numeric values for
+  the same entity, speaker, metric, unit, period, source and start month when
+  their validity intervals overlap. Values remain exact decimal strings.
+  It requires explicit dates and typed claim fields, infers no dates or unit
+  conversions, and calls no model. Omitting `mode` keeps the existing asserted
+  edges and cached probe findings.
+- Manual `link` writes accept inclusive `valid_from` and exclusive
+  `valid_until` dates. Omission preserves a stored bound; a bound can first be
+  assigned or repeated, but cannot be changed or cleared. `graph_neighbors`,
+  `graph_query`, `traverse_graph` and `get_links` accept `status` (`all`,
+  `active`, `expired`, `future`) and, for a filtered status, optional `as_of`.
+  Without a status they keep all links as before. Filters apply before limits
+  and every traversal hop, using one UTC day throughout the request.
+- New link-target formation preserves non-Latin letters in mixed-script
+  segments while retaining the existing Latin-only behavior. Stored slugs are
+  not renamed. Doctor's `mixed-script-targets` check reports bounded old/new
+  examples and ambiguity; exact legacy keys still resolve.
 - A failed retrieval stage is reported alongside surviving results. `search`
   and `query` expose `meta.degraded`; `think`, `context_pack` and
   `volunteer_context` expose `gather_degraded` when a collector fails. Direct
@@ -275,6 +328,11 @@ A few that are easy to miss:
   PAT and OAuth writes record a client principal, including an operator's
   client credential, so their retrieved evidence receives this frame too.
   Admin scopes do not certify client-supplied content as operator-authored.
+- Search and query hits carry `generated:true` only when their current
+  same-source canonical version proves an internal generator and operator
+  principal, matching snapshots, hash and chunk content. Unknown legacy or
+  spoofed provenance gets no generated marker. This metadata does not alter
+  ranking or the external-content trust rules.
 - Empty `search` and `query` results include a `hint`: `retrieval_healthy`
   suggests broader terms or filters, `retrieval_degraded` names pipeline
   failures, and `grant_sources_empty` means the caller has no readable source.
@@ -298,10 +356,29 @@ A few that are easy to miss:
   order. With a query it returns up to five skills by default. Without
   arguments the complete catalog is unchanged. Tool availability in each
   entry still reflects the caller's grant.
+- A skill with `prompt: true` frontmatter can appear in MCP `prompts/list`
+  when all its declared tools are available to the caller. `prompts/get`
+  returns its literal Markdown without arguments or execution. No bundled
+  skill opts in by default, and public callers receive no prompt access.
 - `context_pack` builds a "what matters now" pack for the start of a turn:
   entity cards (title, type, top facts, recent events) for the slugs you name or
   the entities a conversation window mentions, then the top facts across your
   grant, trimmed to a token budget. No LLM, read-only.
+- `context_delta {since, limit?, source_ids?}` returns recent page metadata,
+  facts and events within your read grant. Each section has its own limit
+  (default 20, maximum 100), `truncated` flag and `time_basis`. Pages use their
+  update time, facts their write time, and events their UTC event date, which
+  can include earlier hours of the requested day. It is bounded recent
+  context, not a complete change log or snapshot. It preserves source,
+  quarantine and remote diary restrictions, with no retrieval touches or LLM
+  calls; the static public bearer cannot call it.
+- Operators can use `quarantine_list` to inspect held document IDs, sources,
+  paths and fixed reason codes without receiving bodies or free-form details.
+  `extraction_review` proposes missing entity pages and similar fact pairs
+  from at most 200 recent eligible facts, returning only IDs, slugs and
+  similarity metadata. Both default to 20 results (maximum 100), can narrow
+  by `source_ids`, and report truncation. Neither writes data, queues work,
+  merges facts or calls a model; an admin scope alone does not grant access.
 - `get_recent_transcripts` lists recently ingested meeting, email, journal and
   note pages, newest first, with a short summary or the capped body. It is not
   on the public ingress.
@@ -333,3 +410,21 @@ independent of the `hot_memory` tool. Clients decide whether to use it.
 Public, tenant-scoped, and admin-panel calls never receive this payload.
 It is disabled by default, cached briefly, and best-effort: a metadata failure
 does not fail the underlying tool call. No recent facts means no payload.
+
+Operator calls that actually start metered inference requests also carry
+`_meta.cost`: `calls`, `known_usd`, `unknown_calls` and `usd`. The total is
+`null` while any cost remains unknown, including pending, timed-out or unpriced
+calls; known amounts remain visible separately. Parallel requests stay
+separate, and calls with no metered request omit the field. Tenant and public
+responses do not expose it.
+
+For operators, `search` and `query` with `explain:true` add
+`meta.timings_ms` and `meta.pending_embeddings`. Timings are monotonic stage
+intervals for that request. A query with `refine` measures its two searches and
+fusion together as `refinement`, then response preparation as `projection`,
+and counts pending embeddings once. Pending embeddings count eligible visible chunks
+within the source/filter scope, excluding code, intentionally skipped,
+quarantined, deleted and archived content; `null` means the count was
+unavailable. These diagnostics are omitted for tenant and public callers.
+Tool-result JSON uses compact whitespace; field values and numeric precision
+are unchanged by serialization.

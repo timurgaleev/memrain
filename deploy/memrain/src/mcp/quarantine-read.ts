@@ -5,7 +5,7 @@ import { readQuarantineVerdicts } from "../core/quarantine.ts";
 export function quarantineContent(row: Record<string, unknown>, withheld: boolean): Record<string, unknown> {
   if (!withheld) return row;
   const { markdown_body: _body, compiled_truth: _truth,
-    body_snapshot: _snapshot, compiled_truth_snapshot: _snapshotTruth, ...metadata } = row;
+    body_snapshot: _snapshot, compiled_truth_snapshot: _snapshotTruth, change_reason: _reason, ...metadata } = row;
   return metadata;
 }
 

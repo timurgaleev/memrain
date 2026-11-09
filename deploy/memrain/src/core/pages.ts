@@ -30,6 +30,11 @@ import { recordWriteRequest, type WriteRequestKey } from "./write-requests.ts";
 import { applyPageEdits, assertScanKeptFences, pageEditResponse, type PageEdit } from "./page-edit.ts";
 import { decodePageListCursor, encodePageListCursor, type PageListPosition } from "./page-list-cursor.ts";
 import { carryForwardFences, FenceCarryHeldError, OUTSIDE_NEUTRALIZED, preservesOutsideText } from "./fence-carry.ts";
+import { prepareTakeMutation, takeMutationSummary, type PreparedTakeMutation, type TakePageMutation } from "./synthesis/takes-write-plan.ts";
+import { assertTakeMutationHolder } from "./synthesis/takes-write.ts";
+import { syncTakesFromFence } from "./synthesis/takes-canon.ts";
+import { takePageEligibleSql } from "./synthesis/takes-owner.ts";
+import { atomPageMatches, lockAtomSource, tryLockAtomSlugs, type AtomPageExpectation, type AtomSourceExpectation } from "./synthesis/atoms-source.ts";
 
 // Catalogue of well-known page types. Not enforced at the DB level (see
 // migration 015 comment); kept here so application code can normalise +
@@ -169,8 +174,13 @@ export interface PageInput {
   appendContent?: string;
   /** Caller identifier for the audit trail. */
   written_by?: string;
+  /** Optional explanation recorded only when this write creates a version. */
+  change_reason?: string;
   /** Internal mirrors may replace only their own latest version. */
   onlyOverwriteWriter?: string;
+  /** Internal atom publication guards; the source is locked before trying the slug. */
+  expectedOriginDocument?: AtomSourceExpectation;
+  expectedAtomPage?: AtomPageExpectation;
   /** Allow a type that isn't in KNOWN_PAGE_TYPES. Default false. */
   allowAdHocType?: boolean;
   /**
@@ -195,6 +205,8 @@ export interface PageInput {
    * the version check; `markdown_body` is ignored when it is set.
    */
   edits?: PageEdit[];
+  /** Internal canonical takes mutation, projected within this page transaction. */
+  takeMutation?: TakePageMutation;
   /**
    * What to do when this write would overwrite a live page without naming the
    * version it read (`expectedVersion`): `warn` writes and reports it, `refuse`
@@ -310,7 +322,8 @@ export interface PageRow {
 }
 
 export interface PutResult {
-  held?: "authored_edit" | "unproven_fences";
+  take_mutation?: ReturnType<typeof takeMutationSummary>;
+  held?: "authored_edit" | "unproven_fences" | "source_busy";
   slug: string;
   /** New version number assigned to this write (>=1). */
   version_n: number;
@@ -341,6 +354,7 @@ export interface PageVersionRow {
   body_snapshot: string;
   compiled_truth_snapshot: Record<string, unknown>;
   written_by: string | null;
+  change_reason: string | null;
   written_at: string;
   /** Only when read with `withPrincipal` (operator/admin views). */
   written_by_principal?: string | null;
@@ -348,6 +362,18 @@ export interface PageVersionRow {
 
 export type PageMetadata = Omit<PageRow, "markdown_body" | "compiled_truth">;
 export type PageVersionMetadata = Omit<PageVersionRow, "body_snapshot" | "compiled_truth_snapshot">;
+
+export function normalizeChangeReason(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string") throw new OperationError("invalid_params", "reason must be a string");
+  const reason = value.trim();
+  if (!reason) return null;
+  if (/[\r\n\u2028\u2029]/u.test(value) || value.includes("\0") || /[\uD800-\uDFFF]/u.test(value)) {
+    throw new OperationError("invalid_params", "reason must be one line of valid Unicode text");
+  }
+  if ([...reason].length > 500) throw new OperationError("invalid_params", "reason must contain at most 500 Unicode code points");
+  return reason;
+}
 
 /** JSON with every object's keys sorted, for an order-free comparison. */
 function sortedKeysJson(value: unknown): string {
@@ -425,6 +451,13 @@ export async function putPage(
   input: PageInput,
 ): Promise<PutResult> {
   validateSlug(input.slug);
+  const changeReason = normalizeChangeReason(input.change_reason);
+  if (input.takeMutation && (input.expectedVersion === undefined || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 1 ||
+      input.markdown_body !== undefined || input.appendContent !== undefined || input.edits !== undefined || input.outsideText !== undefined ||
+      input.compiled_truth !== undefined || input.title !== undefined || input.type !== undefined ||
+      input.written_by_principal !== input.takeMutation.actor.principal)) {
+    throw new OperationError("invalid_params", "Take mutation requires an existing version, authenticated principal and no other page edits");
+  }
   // An explicit (non-blank) type always wins; a blank/omitted type is resolved
   // INSIDE the transaction (below), where the existing row is known — so an
   // omitted-type re-put PRESERVES the page's current type rather than
@@ -439,10 +472,10 @@ export async function putPage(
   const where = `page '${input.slug}'`;
   const callerSourceForAudit = typeof input.source_id === "string" && input.source_id.trim().length > 0 ? input.source_id : null;
   const secretFindings: SecretFinding[] = [];
+  const echo: EchoDictionary = new Map();
   const scanned = await guardWrite(storage.engine(), input.slug, callerSourceForAudit, () => {
     // One echo dictionary for the whole write: a token claimed in the title is
     // also redacted where the body repeats it bare, and the other way round.
-    const echo: EchoDictionary = new Map();
     const guard = (text: string): string => {
       const r = guardSecrets(text, where, { echo });
       secretFindings.push(...r.findings);
@@ -455,12 +488,14 @@ export async function putPage(
       newTexts: input.edits?.map((e) => guard(e.new_text)),
       title: typeof input.title === "string" ? guard(input.title) : (input.title ?? null),
       truth: guardSecretsDeep(input.compiled_truth ?? {}, where, secretFindings, echo) as Record<string, unknown>,
+      changeReason: changeReason === null || input.takeMutation ? null : guard(changeReason),
     }, echo, secretFindings);
   });
   const appendContent = scanned.append;
   const edits = input.edits?.map((e, i) => ({ old_text: e.old_text, new_text: scanned.newTexts![i]! }));
   const writtenByPrincipal = input.written_by_principal ?? null;
   let edited: PutResult["edited"];
+  let takePrepared: PreparedTakeMutation | undefined;
   let appendStart: number | undefined;
   const warnings: string[] = [];
   let body = input.markdown_body === undefined ? "" : scanned.body;
@@ -497,7 +532,17 @@ export async function putPage(
 
   const engine = storage.engine();
   const writeLocked = async (tx: Engine): Promise<PutResult> => {
-    await lockPageSlugs(tx, input.slug);
+    if (input.expectedOriginDocument) {
+      if (input.expectedOriginDocument.sourceId === null || input.expectedOriginDocument.sourceId !== sourceId) {
+        throw new OperationError("conflict", "Atom publication requires the source's explicit owner.");
+      }
+      await lockAtomSource(tx, input.expectedOriginDocument);
+      if (!await tryLockAtomSlugs(tx, input.slug)) {
+        return { slug: input.slug, version_n: 0, content_hash: "", changed: false, created: false, held: "source_busy" };
+      }
+    } else {
+      await lockPageSlugs(tx, input.slug);
+    }
     const existing = await tx.query<{
       content_hash: string;
       markdown_body: string;
@@ -541,6 +586,14 @@ export async function putPage(
         "Use a slug within your own source, or request access.",
       );
     }
+    if (input.takeMutation) {
+      const scope = input.takeMutation.sourceIds;
+      const eligible = await tx.query(`SELECT slug FROM pages p WHERE p.slug = $1 AND ${takePageEligibleSql("p", input.takeMutation.excludeDiary)}`, [input.slug]);
+      if (owner === undefined || (scope !== undefined && !scope.includes(owner)) || eligible.rows.length !== 1) {
+        throw new OperationError("permission_denied", "Take page is outside the permitted scope");
+      }
+      assertTakeMutationHolder(existing.rows[0]!.markdown_body, input.takeMutation.mutation, input.takeMutation.actor);
+    }
     const currentVersion = Number(existing.rows[0]?.version_n ?? 0);
     if (input.expectedVersion === 0 && existing.rows.length > 0) {
       throw new VersionConflictError(input.slug, currentVersion, 0);
@@ -548,6 +601,10 @@ export async function putPage(
     checkExpectedVersion(input.slug, currentVersion, input.expectedVersion);
 
     const current = existing.rows[0];
+    if (input.expectedAtomPage && !await atomPageMatches(tx, input.slug, input.expectedAtomPage, sourceId)) {
+      return { slug: input.slug, version_n: currentVersion, content_hash: current?.content_hash ?? "",
+        changed: false, created: false, held: "authored_edit" };
+    }
     if (input.requireCleanNewSlug && current === undefined && /--|-(?:\/|$)/.test(input.slug)) {
       throw new OperationError("invalid_params", "New page slugs cannot have repeated or trailing hyphens.",
         "Use single hyphens between words in each slug segment. Existing slugs remain writable.");
@@ -575,14 +632,25 @@ export async function putPage(
       }
       warnings.push(PRECONDITION_WARNING);
     }
-    if (edits !== undefined) {
+    if (input.takeMutation) {
+      if (!current || current.deleted_at !== null) throw new PageNotFoundError(input.slug, CREATE_IT_FIRST);
+      takePrepared = prepareTakeMutation(current.markdown_body, input.slug, currentVersion, current.source_id,
+        input.takeMutation, changeReason, input.source_id);
+      body = takePrepared.body;
+      hashNew = takePrepared.after_hash;
+      secretFindings.push(...takePrepared.findings);
+      title = current.title;
+      const lockedTruth = wellFormJsonbValue(current.compiled_truth ?? {}) as Record<string, unknown>;
+      aliasNorms = extractAliasNorms(lockedTruth);
+      truthJson = JSON.stringify(lockedTruth);
+    } else if (edits !== undefined) {
       if (current === undefined || current.deleted_at !== null) {
         throw new PageNotFoundError(input.slug, CREATE_IT_FIRST);
       }
       // Each new_text was scanned alone; a credential split across edits, or
       // completed by text already on the page, only exists in the result.
       const applied = applyPageEdits(current.markdown_body, edits);
-      const guarded = guardSecrets(applied, where);
+      const guarded = guardSecrets(applied, where, changeReason === null ? {} : { echo });
       assertScanKeptFences(applied, guarded.text);
       secretFindings.push(...guarded.findings);
       body = guarded.text;
@@ -640,7 +708,7 @@ export async function putPage(
         return { slug: input.slug, version_n: currentVersion, content_hash: current.content_hash,
           changed: false, created: false, held: error.reason };
       }
-      const guarded = guardSecrets(body, where);
+      const guarded = guardSecrets(body, where, changeReason === null ? {} : { echo });
       assertScanKeptFences(body, guarded.text);
       secretFindings.push(...guarded.findings);
       body = guarded.text;
@@ -720,6 +788,7 @@ export async function putPage(
       explicitType ??
       prevType ??
       normaliseType(inferPageType(input.slug) ?? "note", input.allowAdHocType);
+    const versionReason = takePrepared ? takePrepared.reason : guardEchoes(scanned.changeReason, echo, secretFindings);
 
     if (existing.rows.length === 0) {
       // Brand new page.
@@ -732,9 +801,9 @@ export async function putPage(
       await tx.query(
         `INSERT INTO page_versions
            (slug, version_n, hash_prev, hash_new,
-            body_snapshot, compiled_truth_snapshot, written_by, source_id, written_by_principal)
-         VALUES ($1, 1, NULL, $2, $3, $4::text::jsonb, $5, $6, $7)`,
-        [input.slug, hashNew, body, truthJson, writtenBy, sourceId, writtenByPrincipal],
+            body_snapshot, compiled_truth_snapshot, written_by, source_id, written_by_principal, change_reason)
+         VALUES ($1, 1, NULL, $2, $3, $4::text::jsonb, $5, $6, $7, $8)`,
+        [input.slug, hashNew, body, truthJson, writtenBy, sourceId, writtenByPrincipal, versionReason],
       );
       await bumpPageGeneration(tx, input.slug);
       await setPageAliases(tx, input.slug, aliasNorms, sourceId);
@@ -796,8 +865,8 @@ export async function putPage(
     await tx.query(
       `INSERT INTO page_versions
          (slug, version_n, hash_prev, hash_new,
-          body_snapshot, compiled_truth_snapshot, written_by, source_id, written_by_principal)
-       VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, $7, $8, $9)`,
+          body_snapshot, compiled_truth_snapshot, written_by, source_id, written_by_principal, change_reason)
+       VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, $7, $8, $9, $10)`,
       [
         input.slug,
         nextVersion,
@@ -808,6 +877,7 @@ export async function putPage(
         writtenBy,
         prev.source_id ?? sourceId,
         writtenByPrincipal,
+        versionReason,
       ],
     );
     await bumpPageGeneration(tx, input.slug);
@@ -830,6 +900,10 @@ export async function putPage(
   };
   const result = await engine.transaction(async (tx) => {
     const r = await writeLocked(tx);
+    if (takePrepared && r.changed) {
+      const projected = await syncTakesFromFence(tx, input.slug, body, { changedRowNums: takePrepared.changedRowNums, deactivateMissing: false });
+      if (projected.rowsUpserted !== takePrepared.changedRowNums.length) throw new OperationError("conflict", "Take mutation could not be projected");
+    }
     if (r.changed && secretFindings.length > 0) await auditSecrets(tx, secretFindings, input.slug, callerSource);
     if (input.receipt !== undefined) {
       // A retry replays this receipt when the derived work after the commit
@@ -843,6 +917,7 @@ export async function putPage(
     return r;
   });
   const extras = {
+    ...(takePrepared ? { take_mutation: takeMutationSummary(takePrepared) } : {}),
     ...(input.outsideText === true && result.held === undefined ? { outside_body: body } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(edited !== undefined ? { edited } : {}),
@@ -1150,7 +1225,7 @@ export async function pageVersions(
   const versionFilter = opts.version === undefined ? "" : ` AND version_n = $${params.push(opts.version)}`;
   const r = await storage.engine().query<PageVersionRow | PageVersionMetadata>(
     `SELECT slug, source_id, version_n, hash_prev, hash_new,${opts.includeBody === false ? "" : " body_snapshot, compiled_truth_snapshot,"}
-            written_by, written_at::text AS written_at${opts.withPrincipal === true ? ", written_by_principal" : ""}
+            written_by, change_reason, written_at::text AS written_at${opts.withPrincipal === true ? ", written_by_principal" : ""}
        FROM page_versions
        WHERE slug = $1${sourceFilter}${versionFilter}
        ORDER BY version_n DESC
@@ -1164,6 +1239,7 @@ export interface DeleteResult {
   slug: string;
   /** True if the row was already soft-deleted (or absent) — call is idempotent. */
   already_deleted: boolean;
+  held?: "source_busy" | "authored_edit";
 }
 
 /**
@@ -1177,9 +1253,11 @@ export async function deletePage(
   slug: string,
   writtenBy?: string,
   writeSource?: string,
-  opts: { expectedVersion?: number; writtenByPrincipal?: string; expectedOriginVersion?: { slug: string; version: number } } = {},
+  opts: { expectedVersion?: number; writtenByPrincipal?: string; changeReason?: string; expectedOriginVersion?: { slug: string; version: number };
+    expectedOriginDocument?: AtomSourceExpectation; expectedAtomPage?: AtomPageExpectation } = {},
 ): Promise<DeleteResult> {
   validateSlug(slug);
+  const reason = normalizeChangeReason(opts.changeReason);
   // Tenant write scope (mig047): when a scoped caller supplies its write source,
   // a slug owned by another source reads as "not found" (no-op / already_deleted)
   // — a scoped delete can never soft-delete a sibling tenant's page. Unset
@@ -1187,8 +1265,21 @@ export async function deletePage(
   const scope =
     typeof writeSource === "string" && writeSource.length > 0 ? writeSource : null;
   const engine = storage.engine();
+  const guardedReason = await guardWrite(engine, slug, scope, () => guardSecrets(reason ?? "", `page '${slug}'`));
   return engine.transaction(async (tx) => {
-    await lockPageSlugs(tx, slug, ...(opts.expectedOriginVersion ? [opts.expectedOriginVersion.slug] : []));
+    const slugs = [slug, ...(opts.expectedOriginVersion ? [opts.expectedOriginVersion.slug] : [])];
+    if (opts.expectedOriginDocument) {
+      if (opts.expectedOriginDocument.sourceId === null || opts.expectedOriginDocument.sourceId !== scope) {
+        throw new OperationError("conflict", "Atom retirement requires the source's explicit owner.");
+      }
+      await lockAtomSource(tx, opts.expectedOriginDocument);
+      if (!await tryLockAtomSlugs(tx, ...slugs)) return { slug, already_deleted: false, held: "source_busy" };
+    } else {
+      await lockPageSlugs(tx, ...slugs);
+    }
+    if (opts.expectedAtomPage && (scope === null || !await atomPageMatches(tx, slug, opts.expectedAtomPage, scope))) {
+      return { slug, already_deleted: false, held: "authored_edit" };
+    }
     if (opts.expectedOriginVersion) {
       const origin = opts.expectedOriginVersion;
       const owns = await tx.query(`SELECT 1 FROM pages WHERE slug = $1 AND ($2::text IS NULL OR source_id = $2)`, [origin.slug, scope]);
@@ -1236,8 +1327,8 @@ export async function deletePage(
     await tx.query(
       `INSERT INTO page_versions
          (slug, version_n, hash_prev, hash_new,
-          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id, written_by_principal)
-       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6, $7)`,
+          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id, written_by_principal, change_reason)
+       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6, $7, $8)`,
       [
         slug,
         nextN.rows[0]!.n,
@@ -1246,9 +1337,11 @@ export async function deletePage(
         writtenBy ?? null,
         r.rows[0]!.source_id,
         opts.writtenByPrincipal ?? null,
+        reason === null ? null : guardedReason.text,
       ],
     );
     await bumpPageGeneration(tx, slug);
+    await auditSecrets(tx, guardedReason.findings, slug, scope);
     return { slug, already_deleted: false };
   });
 }
@@ -1347,9 +1440,10 @@ export async function revertPage(
   targetVersion: number,
   writtenBy?: string,
   writeSource?: string,
-  opts: { expectedVersion?: number; writtenByPrincipal?: string } = {},
+  opts: { expectedVersion?: number; writtenByPrincipal?: string; changeReason?: string } = {},
 ): Promise<RevertResult> {
   validateSlug(slug);
+  normalizeChangeReason(opts.changeReason);
   // Tenant write scope (mig047): confine the page fetch, the version snapshot
   // read, and the re-put to the caller's write source. A slug owned by another
   // tenant resolves to "page not found" here — a scoped revert can never roll
@@ -1400,6 +1494,7 @@ export async function revertPage(
     // Reverting to a version whose body was empty is a deliberate clear.
     allowEmptyBody: true,
     compiled_truth: truth,
+    ...(opts.changeReason !== undefined ? { change_reason: opts.changeReason } : {}),
     ...(page.title != null ? { title: page.title } : {}),
     ...(writtenBy ? { written_by: writtenBy } : {}),
     // Stamp the re-put with the caller's write source so putPage's cross-tenant

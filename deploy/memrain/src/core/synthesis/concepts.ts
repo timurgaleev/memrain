@@ -26,6 +26,7 @@ import { resolveLlmFn, type LlmFn } from "../llm/haiku.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
 import { BudgetTracker } from "../budget.ts";
 import { synthPagesEnabled, slugifyTitle } from "./atoms.ts";
+import { readAtomCompletion } from "./atoms-lifecycle.ts";
 
 const DEFAULT_MAX_CONCEPTS = 30;
 export const CONCEPT_PROMPT_VERSION = 1;
@@ -120,6 +121,8 @@ interface AtomRow {
   title: string;
   body: string;
   concepts: unknown;
+  source_hash: string;
+  source_frontmatter: Record<string, unknown> | null;
 }
 
 interface ConceptGroup {
@@ -190,13 +193,18 @@ export async function synthesizeConceptsPhase(
   };
 
   const { rows } = await engine.query<AtomRow>(
-    `SELECT id, title, body, concepts FROM synth_atoms`,
+    `SELECT a.id, a.title, a.body, a.concepts, a.source_hash, d.frontmatter AS source_frontmatter FROM synth_atoms a
+       LEFT JOIN documents d ON a.source_kind = 'document' AND d.id = a.source_ref`,
   );
-  result.atomsSeen = rows.length;
-  if (rows.length === 0) return result;
+  const currentRows = rows.filter((row) => {
+    const completion = readAtomCompletion(row.source_frontmatter ?? {});
+    return !completion || row.source_hash === completion.hash;
+  });
+  result.atomsSeen = currentRows.length;
+  if (currentRows.length === 0) return result;
 
   const groups = new Map<string, { atomIds: number[]; titles: string[]; bodies: string[] }>();
-  for (const r of rows) {
+  for (const r of currentRows) {
     for (const slug of parseConcepts(r.concepts)) {
       const g = groups.get(slug) ?? { atomIds: [], titles: [], bodies: [] };
       g.atomIds.push(Number(r.id));
@@ -339,6 +347,7 @@ export async function synthesizeConceptsPhase(
           title,
           markdown_body: `${narrative}\n\n## Atoms (${group.titles.length})\n${mentions}\n`,
           written_by: "synthesize-concepts",
+          written_by_principal: "operator",
           onlyOverwriteWriter: "synthesize-concepts",
         });
         if (pageWrite.held) result.pagesHeld += 1;

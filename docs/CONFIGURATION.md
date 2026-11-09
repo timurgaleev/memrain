@@ -266,12 +266,22 @@ you opt in.
 | `MEMRAIN_RERANK_MODEL` | utility model | Model id for the `MEMRAIN_RERANK` two-pass rerank only. Allowlisted. | cheap (Haiku) |
 | `MEMRAIN_CONCEPTS_MODEL` | utility model | Model id for concept synthesis only; `MEMRAIN_CONCEPTS_BUDGET_USD` prices the same model. Allowlisted. | cheap (Haiku) |
 | `MEMRAIN_WORTH_GATE` | off (`=1` on) | A cached Haiku verdict ("is this transcript worth synthesizing?") in front of the paid transcript consumers (reflections, conversation-facts backfill). Fail-open: a judge error lets the transcript through. Code-only. | cheap (Haiku) |
-| `MEMRAIN_SYNTH_PAGES` | on (`=0` off) | Mirrors synthesis atoms and concepts into pages. `0` keeps them in the `synth_*` tables only. Code-only. | free |
+| `MEMRAIN_SYNTH_PAGES` | on (`=0` off) | Mirrors synthesis atoms and concepts into pages. `0` keeps them in the `synth_*` tables only and disables atom-page retirement. Code-only. | free |
 | `MEMRAIN_LLM_MAX_INFLIGHT` | `4` | Bedrock chat calls one process runs at once; the rest wait. Code-only. | — |
 
 Model ids resolve in `core/llm/resolve-model.ts`, in this order: the feature's
 own key (`MEMRAIN_<FEATURE>_MODEL`), then the tier key (`MEMRAIN_UTILITY_MODEL` or
 `MEMRAIN_FACTS_MODEL`), then the built-in default. An empty value falls through.
+
+Atom extraction publishes a new completed source manifest only after the whole
+response and required page writes have passed validation. Capped input/output,
+malformed or duplicate atoms, and empty or below-half replacements of a prior
+nonempty extraction are held. Only proven automatic pages from the previous
+completed manifest can retire, with at most 100 attempts per phase. Source and
+page versions are rechecked at each retirement; authored or ambiguous legacy
+pages remain held. Retired pages keep their tombstones and version history,
+and old `synth_atoms` rows remain stored. Concept synthesis filters older atoms
+only when an authoritative completed manifest exists.
 
 ---
 
@@ -412,6 +422,14 @@ Both are off unless switched on, and both run under a per-run dollar ceiling.
 | `MEMRAIN_SKILLOPT_ENABLED` | off (`=1` on) | Enables `memrain skillopt eval`, which scores skill routing on the pack benchmark. Allowlisted. | **paid (Haiku)** |
 | `MEMRAIN_SKILLOPT_MAX_USD` | `0.25` | Per-run ceiling; `--max-usd` can lower it, not raise it. Allowlisted. | — |
 | `MEMRAIN_SKILLS_DIR` | `deploy/skills` (compose: `/skills`) | Skill pack served by `list_skills` / `get_skill` and linted by `memrain skillpack lint`. Allowlisted. | free |
+
+Skills in this directory can also opt into MCP prompts with top-level
+`prompt: true` frontmatter. None of the bundled skills opt in by default.
+The caller must be able to use `list_skills`, `get_skill` and every tool the
+skill declares. Public callers cannot list or retrieve prompts. The existing
+path containment, symlink and 256 KiB file-size checks apply. A prompt returns
+literal Markdown; it accepts no arguments and runs no tools or models.
+See [the prompt API](../deploy/memrain/docs/API.md#promptslist-and-promptsget).
 
 ### Source scope contract
 
@@ -694,6 +712,7 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_CODE_SWEEP_DELAY_MS` | `20` (compose) / `0` | Delay between files during the code-index sweep. | free |
 | `MEMRAIN_PARSE_TIMEOUT_MS` | `5000` (5s) | Per-file chunker parse cap; `0` disables the cap. | free |
 | `MEMRAIN_JOB_TIMEOUT_MS` | off | Per-job wall-clock cap. Off unless set. | free |
+| `MEMRAIN_EVENT_LOOP_WATCHDOG_MS` | off (unset or blank) | Process event-loop stall threshold in milliseconds. Must be a digits-only safe integer of at least `15000`; invalid values, including `0`, abort startup. Environment-only, read at `serve` startup; restart required. Code-only, not compose-allowlisted. | free |
 | `MEMRAIN_JOB_STALL_GRACE_MS` | `30000` | How long past a job's lease the stall sweep waits before requeueing it. Digits only. Allowlisted. | free |
 | `MEMRAIN_JOB_LLM_HALT` | on | A Bedrock outage, throttle or missing model defers jobs (without spending a retry) for a cooling-off period. `0`, `false` or `off` restores plain retries. Allowlisted. | free |
 | `MEMRAIN_EMBED_GAPS` | on | Cycle phase that embeds chunks stored without a vector (after an outage or spend refusal). `0` turns it off. Allowlisted. | **paid (Titan)** |
@@ -760,6 +779,17 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_PGLITE_NO_LOCK` | off (`=1` on) | Skips the lock file that stops two processes opening one PGLite directory. Only for a filesystem that cannot hold it. | free |
 | `MEMRAIN_TEST_PGLITE_TEMPLATE` | unset | Test-only. A new PGLite directory starts as a copy of this already-migrated one; `scripts/test-sharded.sh` sets it. Never set it in `.env` or compose. | free |
 
+When the event-loop watchdog is enabled, an independent worker watches a
+one-second main-thread heartbeat. Two observed heartbeats arm it; a delay in
+the observer itself resets the stall window, so a suspended process does not
+immediately trip on resume. An armed, continuous stall prints a fixed
+diagnostic and sends the process `SIGTERM`, followed by `SIGKILL` after five
+seconds if graceful shutdown has not stopped the observer. Normal shutdown
+stops the watchdog first. Asynchronous network waits keep the heartbeat alive;
+this setting does not replace a job timeout. It makes no database probes or
+lease changes and adds no inference cost. To disable it, unset or blank the
+environment variable and restart; `0` is not an off value.
+
 ### Maintenance mode
 
 Four switches control the work `serve` starts on its own at boot. They are
@@ -802,6 +832,56 @@ diff before.txt after.txt   # exit 0: identical
 Every line counts; explain any difference from the diff lines themselves.
 psql cannot open a PGLite data directory: for a PGLite install, keep a copy
 of the stopped data directory instead.
+
+### Explicit maintenance previews
+
+These commands default to read-only previews, do not run as deployment steps,
+and do not invoke models. The syntax below uses placeholders; review the actual
+preview before choosing an apply operation.
+
+```text
+memrain atoms-retire --source-ref DOC --completed-hash HASH16
+memrain atoms-retire --source-ref DOC --completed-hash HASH16 --apply --plan-hash HASH64
+```
+
+`DOC` is the exact source document ID. `HASH16` is its authoritative completed
+atom hash; `HASH64` is the exact hash returned by the preview. The preview lists
+eligible and held pages plus `truncated`. Apply rechecks the source and each
+page and soft-deletes only proven stale automatic pages. Manual edits and
+ambiguous legacy pages are held, not guessed from titles or footers. Page
+history remains intact. Apply exits 1 when any targets are held or the plan is
+truncated; a stale plan requires a fresh preview.
+
+```text
+memrain erase forgotten --source SOURCE [--fact-ids ID1,ID2] [--deleted-pages SLUG1,SLUG2]
+memrain erase forgotten --source SOURCE [--fact-ids ID1,ID2] [--deleted-pages SLUG1,SLUG2] --apply --plan-hash HASH64
+```
+
+Erasure requires one exact source and 1–100 explicit unique fact IDs and/or
+deleted page slugs. Facts must already be forgotten or provably withdrawn;
+supersession alone is insufficient. Facts with dimension metadata are held
+because their reinsertion guard is not supported. Live pages are refused.
+Preview reports IDs, slugs, per-table counts and hashes, and blockers without
+printing stored content. A blocked preview exits 2. Apply requires the exact
+preview hash and rechecks the complete dependency snapshot under locks;
+stale, busy or blocked operations delete nothing. Withdrawal guards retain
+non-text claim keys to prevent reinserting erased facts.
+
+Run erasure in a planned quiet period with jobs and cycle workers stopped.
+Active jobs or worker/cycle locks, replay receipts, unselected references or
+copies, unknown dependencies, and unproven ownership block the operation.
+The command does not stop workers itself. Its census is capped at 50,000 rows
+and 32 MiB of JSON; exceeding either cap refuses erasure. Apply locks the
+public-schema tables while checking dependencies and can briefly block other
+writers. Lock waits are capped at two seconds; statements at 30 seconds, with
+60-second work checks.
+
+Erasure permanently removes selected SQL rows and modeled dependencies,
+including selected deleted-page history and mirrors. It does **not** erase
+PostgreSQL dead tuples or WAL, backups, external files, exports, client copies,
+external logs, paraphrases or unlinked fragments. Reverting the program cannot
+restore erased rows. It creates no automatic backup and is never applied
+automatically by deployment, a maintenance cycle or an MCP tool.
 
 ---
 

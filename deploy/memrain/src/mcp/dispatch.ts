@@ -29,6 +29,8 @@ import { resolveSearchKnobs } from "../core/search/hybrid.ts";
 import { applyTokenBudget, estTokens } from "../core/search/token-budget.ts";
 import { matchQueryFacts } from "../core/facts-query-match.ts";
 import { frameExternal, frameMarkedContent, markExternalChunks, readExternalTrust } from "../core/trust-frame.ts";
+import { runTakeMutation } from "../core/synthesis/takes-write-page.ts";
+import type { TakeFenceMutation } from "../core/synthesis/takes-write.ts";
 import { publicSearchMeta, type SearchMeta } from "../core/search/search-meta.ts";
 import { gradeConfidence } from "../core/search/confidence-grade.ts";
 import { listWantedPages, type ListWantedPagesOptions } from "../core/wanted-links.ts";
@@ -284,6 +286,13 @@ import {
 import { hasScope } from "../core/scope.ts";
 import { insufficientScopeChallenge } from "../http/oauth-metadata.ts";
 import { dispatchRefusal, SLUG_PARAMS_BY_WRITE_TOOL } from "./visibility.ts";
+import { narrowReadSources } from "./read-source-filter.ts";
+import { withRequestCost } from "../core/request-cost.ts";
+import { readContextDelta } from "../core/context-delta.ts";
+import { listQuarantined } from "../core/quarantine-list.ts";
+import { extractionReview } from "../core/extraction-review.ts";
+import { findTypedConflicts } from "../core/typed-conflicts.ts";
+import { markGeneratedChunks } from "../core/search/generated-provenance.ts";
 
 export { OPERATOR_ONLY_TOOLS } from "./visibility.ts";
 
@@ -433,13 +442,14 @@ export async function dispatchTool(
         ...(auth.budgetUsdPerDay !== undefined ? { capUsd: auth.budgetUsdPerDay } : {}),
       }
     : null;
-  const dispatched = await runWithSpendClient(spendClient, () =>
+  const { result: dispatched, cost } = await withRequestCost(() => runWithSpendClient(spendClient, () =>
     dispatchToolInner(storage, req, opts),
-  );
-  const raw = withPageAdminUrl(req, dispatched, opts);
+  ));
+  const enriched = withPageAdminUrl(req, dispatched, opts);
   // The operator reads stored text as it is; everyone else gets retrieval
   // results scanned for credentials that predate (or slipped past) the write scan.
   const isOperator = opts.authInfo === undefined && !(opts.isPublic ?? false);
+  const raw = isOperator && cost.calls > 0 ? { ...enriched, _meta: { ...enriched._meta, cost } } : enriched;
   const result =
     !isOperator && OP_BY_NAME.get(req.name)?.outputRedaction === "retrieval" && outputRedactionEnabled()
       ? redactToolResult(raw, allowedFingerprints())
@@ -448,14 +458,16 @@ export async function dispatchTool(
     !result.isError &&
     !(opts.isPublic ?? false) &&
     opts.authInfo === undefined &&
+    !["context_delta", "quarantine_list", "extraction_review"].includes(req.name) &&
     opts.adminPanel !== true;
   if (injectable) {
     try {
-      const readSources = effectiveReadSourceIdsForIngress(opts.authInfo, {
+      const grant = effectiveReadSourceIdsForIngress(opts.authInfo, {
         failClosed: tenantFailClosedEnabled(),
       });
+      const readSources = narrowReadSources(req.name, req.arguments ?? {}, grant);
       const meta = await getBrainHotMemoryMeta(storage, readSources !== undefined ? { sourceIds: readSources } : {});
-      if (meta) return boundedResult(req.name, { ...result, _meta: meta }, opts.isPublic ?? false);
+      if (meta) return boundedResult(req.name, { ...result, _meta: { ...result._meta, ...meta } }, opts.isPublic ?? false);
     } catch {
       // Best-effort: never let the meta hook fail the underlying tool call.
     }
@@ -534,7 +546,7 @@ async function dispatchToolInner(
   // The caller's tenant grant: read scope (union of allowed sources) + the
   // single write source. Undefined when no authInfo → unscoped whole-brain
   // (local CLI / internal token), preserving single-tenant behavior.
-  const readSources = effectiveReadSourceIdsForIngress(opts.authInfo, {
+  const grantedReadSources = effectiveReadSourceIdsForIngress(opts.authInfo, {
     failClosed: tenantFailClosedEnabled(),
   });
   // The write source, with the same fail-closed floor as reads: an
@@ -612,6 +624,7 @@ async function dispatchToolInner(
     // by the catch below.
     const op = OP_BY_NAME.get(req.name);
     if (op) validateParams(op, args);
+    const readSources = narrowReadSources(req.name, args, grantedReadSources);
     // Per-client slug-prefix write fence (oauth_clients.bound_slug_prefixes):
     // a bound principal may mutate only slugs under its prefixes. Deny-by-
     // default — a write/admin op that names no slug (index, extract_facts,
@@ -626,6 +639,18 @@ async function dispatchToolInner(
       enforceSlugPrefixFence(req.name, args, boundPrefixes);
     }
     switch (req.name) {
+      case "context_delta":
+        return jsonResult({ ok: true, ...await readContextDelta(storage, {
+          since: args.since as string, limit: args.limit as number | undefined, sourceIds: readSources, remote,
+        }) });
+      case "quarantine_list":
+        return jsonResult({ ok: true, ...await listQuarantined(storage.engine(), {
+          limit: args.limit as number | undefined, sourceIds: readSources,
+        }) });
+      case "extraction_review":
+        return jsonResult({ ok: true, ...await extractionReview(storage.engine(), {
+          limit: args.limit as number | undefined, sourceIds: readSources,
+        }) });
       case "search_exact": {
         const result = await searchExact(storage, args["phrase"] as string, {
           caseSensitive: args["case_sensitive"] === true,
@@ -722,7 +747,7 @@ async function dispatchToolInner(
       case "page_list":
         return await callPageList(storage, args, redact, readSources, remote);
       case "page_versions":
-        return await callPageVersions(storage, args, redact, readSources, remote, seesPrincipal(opts));
+        return await callPageVersions(storage, args, redact, readSources, remote, seesPrincipal(opts), opts.isPublic === true);
       case "link":
         return await callLink(storage, args, writeSource);
       case "unlink":
@@ -848,17 +873,21 @@ async function dispatchToolInner(
       case "list_concepts":
         return await callListConcepts(storage, args, readSources);
       case "list_takes":
-        return await callListTakes(storage, args, readSources, takesHolders);
+        return await callListTakes(storage, args, readSources, takesHolders, remote, seesPrincipal(opts));
       case "set_take_status":
-        return await callSetTakeStatus(storage, args, writeSource);
+        return await callSetTakeStatus(storage, args, writeSource, takesHolders, remote);
+      case "takes_add":
+      case "takes_update":
+      case "takes_resolve":
+        return await callTakeMutation(storage, req.name, args, opts, readSources, writeSource, takesHolders, remote);
       case "takes_search":
-        return await callSearchTakes(storage, args, readSources, takesHolders);
+        return await callSearchTakes(storage, args, readSources, takesHolders, remote, seesPrincipal(opts));
       case "get_calibration_profile":
         return await callGetCalibrationProfile(storage, readSources);
       case "takes_scorecard":
-        return await callTakesScorecard(storage, args, readSources, takesHolders);
+        return await callTakesScorecard(storage, args, readSources, takesHolders, remote);
       case "takes_calibration":
-        return await callTakesCalibration(storage, args, readSources, takesHolders);
+        return await callTakesCalibration(storage, args, readSources, takesHolders, remote);
       case "extract_facts": {
         const canPersist =
           !writeDenied &&
@@ -944,7 +973,7 @@ async function dispatchToolInner(
     if (e instanceof PageNotFoundError) {
       const withHint = await withSlugSuggestions(storage, e, {
         isPublic: opts.isPublic ?? false,
-        readSources,
+        readSources: grantedReadSources,
         writeSource,
         remote,
       });
@@ -1102,7 +1131,7 @@ function errResult(msg: string): ToolCallResult {
 
 function jsonResult(payload: unknown): ToolCallResult {
   return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(payload) }],
   };
 }
 
@@ -1234,7 +1263,7 @@ async function callSearch(
   }
   // Per-signal ranking attribution (search --explain). Validated as a
   // boolean by the op contract; only an explicit true opts in.
-  if (args["explain"] === true) searchOpts.explain = true;
+  if (args["explain"] === true) { searchOpts.explain = true; searchOpts.diagnostics = isOperator; }
   if (embedQuery) searchOpts.embedQuery = embedQuery;
   let meta: SearchMeta | undefined;
   searchOpts.onMeta = (m) => {
@@ -1350,7 +1379,8 @@ function emptyRetrievalHint(readSources?: string[], meta?: Pick<SearchMeta, "deg
 async function frameSearchHits<T extends { chunkId: string; content: string; title?: string | null }>(
   storage: Storage, hits: readonly T[], readSources?: string[], tokenBudget?: number,
 ) {
-  const framed = (await markExternalChunks(storage.engine(), hits, readSources)).map(frameMarkedContent);
+  const generated = await markGeneratedChunks(storage.engine(), hits, readSources);
+  const framed = (await markExternalChunks(storage.engine(), generated, readSources)).map(frameMarkedContent);
   return tokenBudget === undefined ? framed : applyTokenBudget(framed, tokenBudget);
 }
 
@@ -1662,6 +1692,7 @@ function asPageInput(
   // `type` is OPTIONAL: when omitted, putPage infers it from the slug's first
   // segment (people/… → person), defaulting to `note`.
   const input: PageInput = { slug: args["slug"] };
+  if (typeof args.reason === "string") input.change_reason = args.reason;
   if (typeof args["type"] === "string") input.type = args["type"];
   if (typeof args["title"] === "string") input.title = args["title"];
   if (
@@ -1734,8 +1765,9 @@ async function afterPageWrite(
   r: { slug: string; changed: boolean; content_hash: string },
   writeSource: string | undefined,
   isPublic: boolean,
-  op: "page_put" | "page_edit",
+  op: "page_put" | "page_edit" | "takes_add" | "takes_update" | "takes_resolve",
   waitForIndex: boolean,
+  skipTakesSync = false,
 ): Promise<Record<string, unknown>> {
   let mirror: Awaited<ReturnType<typeof mirrorOrQueue>> = {};
   let chronicleBackstop = false;
@@ -1811,7 +1843,7 @@ async function afterPageWrite(
   // Best-effort: a malformed fence must never fail the page write.
   try {
     const fenceBody = (await getPage(storage, r.slug))?.markdown_body ?? "";
-    if (hasFenceMarker(fenceBody, "takes")) {
+    if (!skipTakesSync && hasFenceMarker(fenceBody, "takes")) {
       await syncTakesFromFence(storage.engine(), r.slug, fenceBody);
     }
   } catch (e) {
@@ -1825,6 +1857,7 @@ async function afterPageWrite(
       : {}),
     // The body has no facts fence but facts it once projected are still live.
     ...(facts.retained ? { facts_fence_absent: facts.retained } : {}),
+    ...(facts.superseded_rows?.length ? { superseded_rows: facts.superseded_rows } : {}),
   };
 }
 
@@ -1887,6 +1920,7 @@ async function callPageEdit(
   const r = await putPage(storage, {
     slug,
     edits,
+    change_reason: args.reason as string | undefined,
     expectedVersion: expected,
     allowAdHocType: true, // the page's own type
     written_by_principal: ctx.principal,
@@ -2062,7 +2096,7 @@ async function mirrorOrQueue(
   storage: Storage,
   page: { slug: string; title: string | null; markdown_body: string; content_hash?: string; source_id?: string | null },
   remote: boolean,
-  op: "page_put" | "page_append" | "page_edit",
+  op: "page_put" | "page_append" | "page_edit" | "takes_add" | "takes_update" | "takes_resolve",
   waitForIndex: boolean,
 ): Promise<{
   search_indexed?: boolean;
@@ -2164,12 +2198,13 @@ async function callPageAppend(
     }
   }
   const factsSource = writeSource ?? (await getPage(storage, r.slug))?.source_id;
-  await reconcileFactsForPage(storage, r.slug, r.content_hash, factsSource);
+  const facts = await reconcileFactsForPage(storage, r.slug, r.content_hash, factsSource);
   const { append_start: _appendStart, ...response } = r;
   return jsonResult({
     ok: true,
     ...response,
     ...mirror,
+    ...(facts.superseded_rows?.length ? { superseded_rows: facts.superseded_rows } : {}),
     ...(chronicleBackstop ? { chronicle_backstop: true } : {}),
   });
 }
@@ -2186,6 +2221,7 @@ async function callPageDelete(
   const writtenBy =
     typeof args["written_by"] === "string" ? args["written_by"] : undefined;
   const r = await deletePage(storage, args["slug"], writtenBy, writeSource, {
+    changeReason: args.reason as string | undefined,
     ...writePrecondition("page_delete", args),
     ...(principal !== undefined ? { writtenByPrincipal: principal } : {}),
   });
@@ -2231,6 +2267,7 @@ async function callPageRestore(
   const writtenBy =
     typeof args["written_by"] === "string" ? args["written_by"] : undefined;
   const r = await restorePage(storage, args["slug"], writtenBy, writeSource, principal !== undefined ? { writtenByPrincipal: principal } : {});
+  let supersededRows: number[] = [];
   if (r.restored) {
     // Re-derive ONLY what delete tore down: facts (purged on delete) and the
     // search mirror (dropped on delete). Links/mentions/typed-links are NOT
@@ -2238,11 +2275,12 @@ async function callPageRestore(
     // (this is why restore is narrower than revert, which changes the body).
     const page = await getPage(storage, r.slug);
     if (page) {
-      await reconcileFactsForPage(storage, r.slug, page.content_hash, page.source_id);
+      const facts = await reconcileFactsForPage(storage, r.slug, page.content_hash, page.source_id);
+      supersededRows = facts.superseded_rows ?? [];
       await mirrorPage(storage, page, { remote: isPublic || writeSource !== undefined, timingLabel: "page_restore" });
     }
   }
-  return jsonResult({ ok: true, ...r });
+  return jsonResult({ ok: true, ...r, ...(supersededRows.length ? { superseded_rows: supersededRows } : {}) });
 }
 
 async function callPageRevert(
@@ -2262,9 +2300,11 @@ async function callPageRevert(
   const writtenBy =
     typeof args["written_by"] === "string" ? args["written_by"] : undefined;
   const r = await revertPage(storage, args["slug"], v as number, writtenBy, writeSource, {
+    changeReason: args.reason as string | undefined,
     ...writePrecondition("page_revert", args),
     ...(principal !== undefined ? { writtenByPrincipal: principal } : {}),
   });
+  let supersededRows: number[] = [];
   if (r.reverted) {
     // The body changed — refresh links, mentions, facts, and the search mirror,
     // exactly as a normal page_put would.
@@ -2281,11 +2321,12 @@ async function callPageRevert(
       }
       await syncBodyTimelineForPage(storage, r.slug, derivedSource);
       await stampLinksExtracted(storage.engine(), r.slug, derivedSource); // watermark (mig 051)
-      await reconcileFactsForPage(storage, r.slug, page.content_hash, derivedSource);
+      const facts = await reconcileFactsForPage(storage, r.slug, page.content_hash, derivedSource);
+      supersededRows = facts.superseded_rows ?? [];
       await mirrorPage(storage, page, { remote: isPublic || writeSource !== undefined, timingLabel: "page_revert" });
     }
   }
-  return jsonResult({ ok: true, ...r });
+  return jsonResult({ ok: true, ...r, ...(supersededRows.length ? { superseded_rows: supersededRows } : {}) });
 }
 
 async function callPageGet(
@@ -2438,6 +2479,7 @@ async function callPageVersions(
   readSources?: string[],
   remote = false,
   withPrincipal = false,
+  publicIngress = false,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string") {
     return errResult("page_versions: `slug` is required");
@@ -2454,7 +2496,8 @@ async function callPageVersions(
   // Version rows carry body snapshots; redact each through the same
   // page allowlist so public callers see metadata only.
   const visible = await applyQuarantineVisibility(storage.engine(), versions, remote);
-  const out = redact ? visible.map(redactQuarantinePage) : visible;
+  const filtered = publicIngress ? visible.map(({ change_reason: _reason, ...row }) => row) : visible;
+  const out = redact ? filtered.map(redactQuarantinePage) : filtered;
   return jsonResult({ ok: true, versions: out });
 }
 
@@ -2488,6 +2531,8 @@ async function callLink(
     input.source_chunk_id = args["source_chunk_id"];
   if (typeof args["allowAdHocType"] === "boolean")
     input.allowAdHocType = args["allowAdHocType"];
+  if (typeof args.valid_from === "string") input.valid_from = args.valid_from;
+  if (typeof args.valid_until === "string") input.valid_until = args.valid_until;
   if (writeSource) input.source_id = writeSource;
   const r = await addLink(storage, input);
   return jsonResult({ ok: true, ...r });
@@ -2527,6 +2572,9 @@ async function callGraphNeighbors(
     return jsonResult({ ok: true, slug: args["slug"], links: [] });
   }
   const opts: GraphNeighborsOptions = {};
+  opts.excludeDiary = remote;
+  opts.status = args.status as "all" | "active" | "expired" | "future" | undefined;
+  opts.asOf = args.as_of as string | undefined;
   if (typeof args["type"] === "string") opts.type = args["type"];
   if (
     args["direction"] === "outbound" ||
@@ -2563,6 +2611,9 @@ async function callGraphQuery(
   if (typeof args["type"] !== "string")
     return errResult("graph_query: `type` is required");
   const opts: GraphQueryOptions = { type: args["type"] };
+  opts.excludeDiary = remote;
+  opts.status = args.status as "all" | "active" | "expired" | "future" | undefined;
+  opts.asOf = args.as_of as string | undefined;
   if (typeof args["source_slug"] === "string")
     opts.source_slug = args["source_slug"];
   if (typeof args["target_slug"] === "string")
@@ -2602,6 +2653,8 @@ async function callTraverseGraph(
     return jsonResult({ ok: true, start: args["start_slug"], hits: [], truncated: false });
   }
   const opts: TraverseGraphOptions = { excludeDiary: remote };
+  opts.status = args.status as "all" | "active" | "expired" | "future" | undefined;
+  opts.asOf = args.as_of as string | undefined;
   if (typeof args["direction"] === "string")
     opts.direction = args["direction"] as TraverseGraphOptions["direction"];
   if (typeof args["type"] === "string") opts.type = args["type"];
@@ -3327,6 +3380,8 @@ async function callGetLinks(
     return jsonResult({ ok: true, slug: args["slug"], groups: [], truncated: false });
   }
   const opts: Parameters<typeof getLinksPage>[2] = {};
+  opts.status = args.status as "all" | "active" | "expired" | "future" | undefined;
+  opts.asOf = args.as_of as string | undefined;
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   if (readSources !== undefined) opts.sourceIds = readSources;
   if (remote) opts.excludeDiary = true;
@@ -3403,6 +3458,19 @@ async function callFindContradictions(
   readSources?: string[],
   remote = false,
 ): Promise<ToolCallResult> {
+  if (args.mode === "typed") {
+    if (args.slug !== undefined || args.severity !== undefined) {
+      throw new OperationError("invalid_params", "typed mode accepts entity_slug, not slug or severity");
+    }
+    const result = await findTypedConflicts(storage.engine(), {
+      sourceIds: readSources, remote, entitySlug: args.entity_slug as string | undefined, limit: args.limit as number | undefined,
+    });
+    const trust = await readExternalTrust(storage.engine(), { facts: result.groups.flatMap(group => group.claims.map(claim => claim.id)) }, readSources);
+    return jsonResult({ ok: true, mode: "typed", typed: result.groups.map(group => ({ ...group,
+      claims: group.claims.map(claim => trust.facts.has(Number(claim.id)) ? { ...claim, fact: frameExternal(claim.fact), trust: "external" } : claim),
+    })), truncated: result.truncated });
+  }
+  if (args.entity_slug !== undefined) throw new OperationError("invalid_params", "entity_slug requires typed mode");
   const opts: FindContradictionsOptions = {};
   if (typeof args["slug"] === "string") opts.slug = args["slug"];
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
@@ -3644,6 +3712,9 @@ async function callQuery(
   const typeNotice = await pageTypeNotice(storage, pageFilters, readSources, !isOperator);
   const refine = typeof args["refine"] === "string" ? args["refine"] : "";
   if (refine) {
+    const diagnostic = isOperator && args["explain"] === true
+      ? (await import("../core/search/diagnostics.ts")).searchDiagnostics(storage, readSources, pageFilters, ["refinement", "projection"])
+      : undefined;
     const opts: Parameters<typeof queryRefine>[3] = {};
     if (typeof args["k"] === "number") opts.k = args["k"];
     if (typeof args["primary_weight"] === "number") opts.primaryWeight = args["primary_weight"];
@@ -3654,16 +3725,19 @@ async function callQuery(
       onMeta: m => { for (const reason of (isOperator ? m : publicSearchMeta(m)).degraded) reasons.add(reason); },
     };
     const hits = await queryRefine(storage, q, refine, opts);
+    diagnostic?.mark("refinement");
     const visible = await frameSearchHits(storage,
       capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources), readSources,
       typeof args["token_budget"] === "number" ? args["token_budget"] : undefined);
     const ledger = await queryFactsForResult(storage, q, visible, readSources, !isOperator,
       typeof args["token_budget"] === "number" ? args["token_budget"] : undefined);
+    diagnostic?.mark("projection");
     return jsonResult({
       ok: true,
       ...typeNotice,
       hits: visible,
       facts: ledger.facts,
+      ...(diagnostic ? { meta: { degraded: [...reasons], ...await diagnostic.finish() } } : {}),
       ...(ledger.truncated ? { facts_truncated: true } : {}),
       ...(visible.length === 0 && ledger.facts.length === 0 ? emptyRetrievalHint(readSources, { degraded: [...reasons] }) : {}),
     });
@@ -3709,7 +3783,7 @@ async function callQuery(
     searchOpts.tokenBudget = args["token_budget"] as number;
   }
   if (args["adaptive_return"] === true) searchOpts.adaptiveReturn = true;
-  if (args["explain"] === true) searchOpts.explain = true;
+  if (args["explain"] === true) { searchOpts.explain = true; searchOpts.diagnostics = isOperator; }
   applyPerCallMode(searchOpts, args["mode"], isOperator);
   if (embedQuery) searchOpts.embedQuery = embedQuery;
   let meta: SearchMeta | undefined;
@@ -3971,13 +4045,63 @@ async function callListConcepts(
   return jsonResult({ ok: true, concepts });
 }
 
+async function callTakeMutation(
+  storage: Storage,
+  tool: "takes_add" | "takes_update" | "takes_resolve",
+  args: Record<string, unknown>,
+  options: DispatchOptions,
+  sourceIds: string[] | undefined,
+  writeSource: string | undefined,
+  holderAllowList: string[] | undefined,
+  remote: boolean,
+): Promise<ToolCallResult> {
+  if (options.isPublic) throw new OperationError("permission_denied", "Canonical take writes are unavailable to the static public bearer");
+  const fields = tool === "takes_resolve" ? ["quality", "evidence", "value", "unit"]
+    : ["claim", "kind", "weight", "since", "until", "source", ...(tool === "takes_add" ? ["holder"] : ["active"])];
+  const mutation = { op: tool.slice("takes_".length),
+    ...(tool !== "takes_add" ? { rowNum: args.row_num } : {}),
+    ...Object.fromEntries(fields.filter(key => args[key] !== undefined).map(key => [key, args[key]])),
+  } as TakeFenceMutation;
+  const result = await runTakeMutation(storage, {
+    slug: args.slug as string, expectedVersion: args.expected_version as number, mutation,
+    actor: { principal: writerPrincipal(options), holderAllowList }, sourceIds, writeSource,
+    excludeDiary: remote, dryRun: args.dry_run === true,
+    planHash: args.plan_hash as string | undefined, reason: args.reason as string | undefined,
+  });
+  const derived = result.dry_run ? {} : await afterPageWrite(storage, result, writeSource,
+    options.isPublic ?? false, tool, args.wait_for_index === true, true);
+  const trust = await readExternalTrust(storage.engine(), { pages: [result.slug] }, sourceIds);
+  const external = remote || trust.pages.has(result.slug);
+  const rowDiff = external ? { ...result.row_diff,
+    before: result.row_diff.before === null ? null : frameExternal(result.row_diff.before),
+    after: result.row_diff.after === null ? null : frameExternal(result.row_diff.after),
+  } : result.row_diff;
+  return jsonResult({ ...result, row_diff: rowDiff, ...(external ? { trust: "external" } : {}), ...derived });
+}
+
+async function frameTakeRows<T extends { source_ref: string; row_num: number | null; written_by_principal: string | null; claim_text: string }>(
+  storage: Storage, rows: readonly T[], sourceIds: string[] | undefined, showPrincipal: boolean,
+) {
+  const trust = await readExternalTrust(storage.engine(), {
+    pages: rows.filter(row => row.row_num !== null).map(row => row.source_ref),
+  }, sourceIds);
+  return rows.map(({ source_ref, row_num, written_by_principal, ...row }) => {
+    const external = (row_num !== null && trust.pages.has(source_ref)) ||
+      (written_by_principal !== null && written_by_principal !== "" && written_by_principal !== "operator");
+    return { ...row, ...(external ? { claim_text: frameExternal(row.claim_text), trust: "external" } : {}),
+      ...(showPrincipal ? { written_by_principal } : {}) };
+  });
+}
+
 async function callListTakes(
   storage: Storage,
   args: Record<string, unknown>,
   readSources?: string[],
   takesHolders?: string[],
+  excludeDiary = false,
+  showPrincipal = false,
 ): Promise<ToolCallResult> {
-  const opts: Parameters<typeof listTakes>[1] = {};
+  const opts: Parameters<typeof listTakes>[1] = { excludeDiary };
   if (typeof args["status"] === "string") opts.status = args["status"];
   if (typeof args["kind"] === "string" && args["kind"]) opts.kind = args["kind"];
   if (typeof args["domain"] === "string" && args["domain"])
@@ -3991,20 +4115,22 @@ async function callListTakes(
   if (readSources !== undefined) opts.sourceIds = readSources;
   if (takesHolders) opts.holderAllowList = takesHolders;
   const takes = await listTakes(storage.engine(), opts);
-  return jsonResult({ ok: true, takes });
+  return jsonResult({ ok: true, takes: await frameTakeRows(storage, takes, readSources, showPrincipal) });
 }
 
 async function callSetTakeStatus(
   storage: Storage,
   args: Record<string, unknown>,
   writeSource?: string,
+  holderAllowList?: string[],
+  excludeDiary = false,
 ): Promise<ToolCallResult> {
   if (typeof args["take_key"] !== "string" || args["take_key"].length === 0)
     return errResult("set_take_status: `take_key` is required");
   if (args["status"] !== "accepted" && args["status"] !== "rejected")
     return errResult("set_take_status: `status` must be 'accepted' or 'rejected'");
   const sourceIds = writeSource ? [writeSource] : undefined;
-  const r = await setTakeStatus(storage.engine(), args["take_key"], args["status"], sourceIds);
+  const r = await setTakeStatus(storage.engine(), args["take_key"], args["status"], sourceIds, { holderAllowList, excludeDiary });
   return jsonResult({ ok: true, ...r });
 }
 
@@ -4013,15 +4139,17 @@ async function callSearchTakes(
   args: Record<string, unknown>,
   readSources?: string[],
   takesHolders?: string[],
+  excludeDiary = false,
+  showPrincipal = false,
 ): Promise<ToolCallResult> {
   if (typeof args["q"] !== "string" || args["q"].length === 0)
     return errResult("takes_search: `q` is required");
-  const opts: Parameters<typeof searchTakes>[1] = { q: args["q"] };
+  const opts: Parameters<typeof searchTakes>[1] = { q: args["q"], excludeDiary };
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   if (readSources !== undefined) opts.sourceIds = readSources;
   if (takesHolders) opts.holderAllowList = takesHolders;
   const takes = await searchTakes(storage.engine(), opts);
-  return jsonResult({ ok: true, takes });
+  return jsonResult({ ok: true, takes: await frameTakeRows(storage, takes, readSources, showPrincipal) });
 }
 
 async function callGetCalibrationProfile(
@@ -4038,8 +4166,9 @@ async function callTakesScorecard(
   args: Record<string, unknown>,
   readSources?: string[],
   takesHolders?: string[],
+  excludeDiary = false,
 ): Promise<ToolCallResult> {
-  const opts: Parameters<typeof getTakesScorecard>[1] = {};
+  const opts: Parameters<typeof getTakesScorecard>[1] = { excludeDiary };
   if (typeof args["domain"] === "string" && args["domain"]) opts.domain = args["domain"];
   if (typeof args["holder"] === "string" && args["holder"]) opts.holder = args["holder"];
   if (typeof args["since"] === "string" && args["since"]) opts.since = args["since"];
@@ -4055,8 +4184,9 @@ async function callTakesCalibration(
   args: Record<string, unknown>,
   readSources?: string[],
   takesHolders?: string[],
+  excludeDiary = false,
 ): Promise<ToolCallResult> {
-  const opts: Parameters<typeof getTakesCalibration>[1] = {};
+  const opts: Parameters<typeof getTakesCalibration>[1] = { excludeDiary };
   if (typeof args["bucket_size"] === "number") opts.bucketSize = args["bucket_size"];
   if (typeof args["domain"] === "string" && args["domain"]) opts.domain = args["domain"];
   if (typeof args["holder"] === "string" && args["holder"]) opts.holder = args["holder"];

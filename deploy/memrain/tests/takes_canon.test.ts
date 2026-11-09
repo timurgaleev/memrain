@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { putPage } from "../src/core/pages.ts";
 import { Storage } from "../src/core/storage.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import {
@@ -62,6 +63,7 @@ function fenceBody(rows: string[]): string {
 }
 
 async function seedLlmTake(key: string, opts: { holder?: string; ageDays?: number; weight?: number } = {}): Promise<void> {
+  await engine.query("INSERT INTO documents (id,source_path,source_id) VALUES ('doc-x','/vault/doc-x.md','default') ON CONFLICT (id) DO NOTHING");
   await engine.query(
     `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, status, model_id, holder, generated_at)
      VALUES ($1, 'doc-x', 'h', 'v', $2, 'prediction', $3, 'queued', 'm', $4, now() - ($5 * interval '1 day'))`,
@@ -93,6 +95,7 @@ describe("syncTakesFromFence", () => {
       "| 1 | Alpha will win | bet | people/alex-chen | 0.85 | 2026-01 | memo |",
       "| 2 | ~~Beta is dead~~ | take | world | 0.6 | 2025-01 → 2026-01 | |",
     ]);
+    await putPage(storage, { slug: "page-canon", markdown_body: body });
     const r = await syncTakesFromFence(engine, "page-canon", body);
     expect(r.rowsUpserted).toBe(2);
     expect(r.warnings).toEqual([]);

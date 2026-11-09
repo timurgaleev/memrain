@@ -4,7 +4,7 @@
  * touches authored notes.
  *
  * Grades are grouped by the owning tenant (`source_id`, derived from the take's
- * source document) and each tenant with enough graded takes gets its OWN
+ * source page or document) and each tenant with enough graded takes gets its OWN
  * scorecard + profile row — a source-scoped caller never sees a figure blended
  * from another tenant's track record. Each per-source scorecard (counts +
  * accuracy) is turned into 2-4 plain-language pattern statements + a few
@@ -19,6 +19,7 @@
  * back to a deterministic template, never aborts).
  */
 import type { Engine } from "../engine/interface.ts";
+import { takeOwnerSourceSql, currentTakeGradeSql } from "./takes-owner.ts";
 import { resolveLlmFn, type LlmFn } from "../llm/haiku.ts";
 import { parseModelJson } from "../llm/json-output.ts";
 import { gateVoice } from "./voice-gate.ts";
@@ -28,15 +29,6 @@ export const CALIBRATION_PROMPT_VERSION = "v1-nova";
 
 /** Minimum graded takes before a profile is meaningful. */
 const MIN_GRADED = 5;
-
-/**
- * Legacy tenant bucket. Grades whose take resolves to an unclassified (NULL
- * source_id) or vanished source document land here — the same 'default' legacy
- * tenant migration 047 backfills content rows to. A source-scoped remote tenant
- * never has 'default' in its allowed set, so this bucket stays private to the
- * default holder.
- */
-const DEFAULT_SOURCE_ID = "default";
 
 export interface CalibrationProfileOptions {
   llmFn?: LlmFn;
@@ -283,30 +275,26 @@ function templatePatterns(s: Scorecard): string[] {
 
 /**
  * Count all takes (graded or not) per owning tenant — the grade_completion
- * denominator. Same tenant-bucketing as the grade query: a take with no
- * matching source document coalesces to the default tenant. Zero-yield memos
+ * denominator. Unknown or held origins have no eligible owner. Zero-yield memos
  * are excluded: they are ungradeable by construction, so counting them would
  * push grade_completion down for good, one point per claim-free document.
  */
 async function loadTotalTakesBySource(
   engine: Engine,
 ): Promise<Map<string, number>> {
-  const params: unknown[] = [DEFAULT_SOURCE_ID];
+  const params: unknown[] = [];
   const noTombstone = excludeEmptyExtractionTombstone("t.claim_text", params);
   const { rows } = await engine.query<{ source_id: string | null; total: number }>(
-    `SELECT COALESCE(d.source_id, $1) AS source_id, COUNT(*)::int AS total
+    `SELECT ${takeOwnerSourceSql("t")} AS source_id, COUNT(*)::int AS total
        FROM synth_takes t
-       LEFT JOIN documents d ON d.id = t.source_ref
-      WHERE 1=1${noTombstone}
+      WHERE ${takeOwnerSourceSql("t")} IS NOT NULL${noTombstone}
       GROUP BY 1`,
     params,
   );
   const out = new Map<string, number>();
   for (const r of rows) {
-    const key =
-      typeof r.source_id === "string" && r.source_id.length > 0
-        ? r.source_id
-        : DEFAULT_SOURCE_ID;
+    if (!r.source_id) continue;
+    const key = r.source_id;
     out.set(key, (out.get(key) ?? 0) + Number(r.total));
   }
   return out;
@@ -324,10 +312,8 @@ function groupGradesBySource(
 ): Map<string, GradedTake[]> {
   const groups = new Map<string, GradedTake[]>();
   for (const r of rows) {
-    const key =
-      typeof r.source_id === "string" && r.source_id.length > 0
-        ? r.source_id
-        : DEFAULT_SOURCE_ID;
+    if (!r.source_id) continue;
+    const key = r.source_id;
     let bucket = groups.get(key);
     if (!bucket) {
       bucket = [];
@@ -501,11 +487,7 @@ export async function calibrationProfilePhase(
     errors: [],
   };
 
-  // Latest grade per take (highest grade id wins on re-grade), carrying the
-  // owning tenant via the take's source document. A take whose source_ref has
-  // no matching document (unclassified / deleted) coalesces to the default
-  // tenant so it is still counted for the default holder — the same fail-open
-  // bucket the phase used before the source_id axis existed.
+  // Unknown and held origins cannot contribute to a tenant's calibration.
   const { rows } = await engine.query<{
     take_id: number;
     verdict: string;
@@ -515,17 +497,14 @@ export async function calibrationProfilePhase(
   }>(
     `SELECT DISTINCT ON (g.take_id)
             g.take_id, g.verdict, t.weight, t.domain,
-            COALESCE(d.source_id, $1) AS source_id
+            ${takeOwnerSourceSql("t")} AS source_id
        FROM synth_take_grades g
        JOIN synth_takes t ON t.id = g.take_id
-       LEFT JOIN documents d ON d.id = t.source_ref
+      WHERE ${takeOwnerSourceSql("t")} IS NOT NULL AND ${currentTakeGradeSql("g", "t")}
       ORDER BY g.take_id, g.id DESC`,
-    [DEFAULT_SOURCE_ID],
+    [],
   );
 
-  // Total takes per tenant (graded or not) — the denominator for
-  // grade_completion. A take whose source_ref isn't a document coalesces to
-  // the default tenant, mirroring the grade query's bucketing exactly.
   const totalsBySource = await loadTotalTakesBySource(engine);
 
   const groups = groupGradesBySource(rows);

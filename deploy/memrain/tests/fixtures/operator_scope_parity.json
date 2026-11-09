@@ -98,6 +98,24 @@
         ]
       },
       {
+        "text": "SELECT c.id,c.content,d.source_path,p.slug,p.title,p.markdown_body,p.compiled_truth,p.content_hash FROM chunks c JOIN documents d ON d.id=c.document_id JOIN pages p ON p.source_id=d.source_id AND p.deleted_at IS NULL AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END,CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END) JOIN LATERAL (SELECT * FROM page_versions pv WHERE pv.slug=p.slug AND pv.source_id=p.source_id ORDER BY pv.version_n DESC LIMIT 1) v ON TRUE WHERE c.id=ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') AND v.written_by=ANY($2::text[]) AND v.written_by_principal='operator' AND v.hash_new=p.content_hash AND v.body_snapshot=p.markdown_body AND v.compiled_truth_snapshot IS NOT DISTINCT FROM p.compiled_truth",
+        "params": [
+          [
+            "doc_591b77a7c7fd5f22_c0",
+            "doc_9a6d8dae4a32247f_c0"
+          ],
+          [
+            "extract-atoms",
+            "synthesize-concepts",
+            "patterns",
+            "reflection",
+            "think",
+            "auto-think",
+            "life-chronicle"
+          ]
+        ]
+      },
+      {
         "text": "SELECT 'chunks' AS kind, c.id::text AS id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ANY($1::text[]) AND ((EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook')) OR EXISTS (SELECT 1 FROM pages p WHERE p.source_id = COALESCE(d.source_id, 'default') AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END, CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END, p.slug, p.slug || '.md', p.slug || '.markdown') AND (EXISTS (SELECT 1 FROM sources s WHERE s.id = p.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook')) OR p.compiled_truth->>'provider' = 'github' OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug AND v.source_id = p.source_id AND ((v.written_by_principal IS NOT NULL AND v.written_by_principal NOT IN ('', 'operator')) OR v.written_by = 'connector-github'))))))",
         "params": [
           [
@@ -111,9 +129,17 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"hits\": [\n    {\n      \"source_id\": \"tenantA\",\n      \"date\": \"<date>\",\n      \"date_source\": \"updated\",\n      \"chunkId\": \"doc_591b77a7c7fd5f22_c0\",\n      \"documentId\": \"doc_591b77a7c7fd5f22\",\n      \"sourcePath\": \"page://tenantA/search-a/kanga\",\n      \"title\": \"Kanga A\",\n      \"content\": \"# Kanga A\\n\\nkangaroo KANGA_SECRET_AAA\",\n      \"score\": 0.016393,\n      \"intent\": \"topic\",\n      \"evidence\": \"keyword_exact\",\n      \"create_safety\": \"probable\"\n    },\n    {\n      \"source_id\": \"tenantB\",\n      \"date\": \"<date>\",\n      \"date_source\": \"updated\",\n      \"chunkId\": \"doc_9a6d8dae4a32247f_c0\",\n      \"documentId\": \"doc_9a6d8dae4a32247f\",\n      \"sourcePath\": \"page://tenantB/search-b/kanga\",\n      \"title\": \"Kanga B\",\n      \"content\": \"# Kanga B\\n\\nkangaroo KANGA_SECRET_BBB\",\n      \"score\": 0.016129,\n      \"intent\": \"topic\",\n      \"evidence\": \"keyword_exact\",\n      \"create_safety\": \"probable\"\n    }\n  ],\n  \"meta\": {\n    \"vectorEnabled\": false,\n    \"intent\": \"topic\",\n    \"mode\": \"conservative\",\n    \"cache\": \"miss\",\n    \"degraded\": [\n      \"vector_arm_failed\"\n    ],\n    \"retrieved\": 2,\n    \"returned\": 2,\n    \"confidence\": {\n      \"grade\": \"moderate\",\n      \"reason\": \"top hit: keyword_exact\"\n    }\n  }\n}"
+          "text": "{\"ok\":true,\"hits\":[{\"source_id\":\"tenantA\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_591b77a7c7fd5f22_c0\",\"documentId\":\"doc_591b77a7c7fd5f22\",\"sourcePath\":\"page://tenantA/search-a/kanga\",\"title\":\"Kanga A\",\"content\":\"# Kanga A\\n\\nkangaroo KANGA_SECRET_AAA\",\"score\":0.016393,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\"},{\"source_id\":\"tenantB\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_9a6d8dae4a32247f_c0\",\"documentId\":\"doc_9a6d8dae4a32247f\",\"sourcePath\":\"page://tenantB/search-b/kanga\",\"title\":\"Kanga B\",\"content\":\"# Kanga B\\n\\nkangaroo KANGA_SECRET_BBB\",\"score\":0.016129,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\"}],\"meta\":{\"vectorEnabled\":false,\"intent\":\"topic\",\"mode\":\"conservative\",\"cache\":\"miss\",\"degraded\":[\"vector_arm_failed\"],\"retrieved\":2,\"returned\":2,\"confidence\":{\"grade\":\"moderate\",\"reason\":\"top hit: keyword_exact\"}}}"
         }
-      ]
+      ],
+      "_meta": {
+        "cost": {
+          "calls": 1,
+          "known_usd": 0,
+          "unknown_calls": 0,
+          "usd": 0
+        }
+      }
     }
   },
   {
@@ -174,9 +200,17 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"hits\": [],\n  \"hint\": {\n    \"status\": \"retrieval_degraded\",\n    \"reasons\": [\n      \"vector_arm_failed\"\n    ],\n    \"try\": [\n      \"Retry the query; check server health if this persists.\"\n    ]\n  },\n  \"meta\": {\n    \"vectorEnabled\": false,\n    \"intent\": \"topic\",\n    \"mode\": \"conservative\",\n    \"cache\": \"miss\",\n    \"degraded\": [\n      \"vector_arm_failed\",\n      \"keyword_zero\"\n    ],\n    \"retrieved\": 0,\n    \"returned\": 0,\n    \"confidence\": {\n      \"grade\": \"weak\",\n      \"reason\": \"no hits\"\n    }\n  }\n}"
+          "text": "{\"ok\":true,\"hits\":[],\"hint\":{\"status\":\"retrieval_degraded\",\"reasons\":[\"vector_arm_failed\"],\"try\":[\"Retry the query; check server health if this persists.\"]},\"meta\":{\"vectorEnabled\":false,\"intent\":\"topic\",\"mode\":\"conservative\",\"cache\":\"miss\",\"degraded\":[\"vector_arm_failed\",\"keyword_zero\"],\"retrieved\":0,\"returned\":0,\"confidence\":{\"grade\":\"weak\",\"reason\":\"no hits\"}}}"
         }
-      ]
+      ],
+      "_meta": {
+        "cost": {
+          "calls": 1,
+          "known_usd": 0,
+          "unknown_calls": 0,
+          "usd": 0
+        }
+      }
     }
   },
   {
@@ -278,6 +312,24 @@
         ]
       },
       {
+        "text": "SELECT c.id,c.content,d.source_path,p.slug,p.title,p.markdown_body,p.compiled_truth,p.content_hash FROM chunks c JOIN documents d ON d.id=c.document_id JOIN pages p ON p.source_id=d.source_id AND p.deleted_at IS NULL AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END,CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END) JOIN LATERAL (SELECT * FROM page_versions pv WHERE pv.slug=p.slug AND pv.source_id=p.source_id ORDER BY pv.version_n DESC LIMIT 1) v ON TRUE WHERE c.id=ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') AND v.written_by=ANY($2::text[]) AND v.written_by_principal='operator' AND v.hash_new=p.content_hash AND v.body_snapshot=p.markdown_body AND v.compiled_truth_snapshot IS NOT DISTINCT FROM p.compiled_truth",
+        "params": [
+          [
+            "doc_591b77a7c7fd5f22_c0",
+            "doc_9a6d8dae4a32247f_c0"
+          ],
+          [
+            "extract-atoms",
+            "synthesize-concepts",
+            "patterns",
+            "reflection",
+            "think",
+            "auto-think",
+            "life-chronicle"
+          ]
+        ]
+      },
+      {
         "text": "SELECT 'chunks' AS kind, c.id::text AS id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ANY($1::text[]) AND ((EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook')) OR EXISTS (SELECT 1 FROM pages p WHERE p.source_id = COALESCE(d.source_id, 'default') AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END, CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END, p.slug, p.slug || '.md', p.slug || '.markdown') AND (EXISTS (SELECT 1 FROM sources s WHERE s.id = p.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook')) OR p.compiled_truth->>'provider' = 'github' OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug AND v.source_id = p.source_id AND ((v.written_by_principal IS NOT NULL AND v.written_by_principal NOT IN ('', 'operator')) OR v.written_by = 'connector-github'))))))",
         "params": [
           [
@@ -306,9 +358,17 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"hits\": [\n    {\n      \"source_id\": \"tenantA\",\n      \"date\": \"<date>\",\n      \"date_source\": \"updated\",\n      \"chunkId\": \"doc_591b77a7c7fd5f22_c0\",\n      \"documentId\": \"doc_591b77a7c7fd5f22\",\n      \"sourcePath\": \"page://tenantA/search-a/kanga\",\n      \"title\": \"Kanga A\",\n      \"content\": \"# Kanga A\\n\\nkangaroo KANGA_SECRET_AAA\",\n      \"score\": 0.016393,\n      \"intent\": \"topic\",\n      \"evidence\": \"keyword_exact\",\n      \"create_safety\": \"probable\"\n    },\n    {\n      \"source_id\": \"tenantB\",\n      \"date\": \"<date>\",\n      \"date_source\": \"updated\",\n      \"chunkId\": \"doc_9a6d8dae4a32247f_c0\",\n      \"documentId\": \"doc_9a6d8dae4a32247f\",\n      \"sourcePath\": \"page://tenantB/search-b/kanga\",\n      \"title\": \"Kanga B\",\n      \"content\": \"# Kanga B\\n\\nkangaroo KANGA_SECRET_BBB\",\n      \"score\": 0.016129,\n      \"intent\": \"topic\",\n      \"evidence\": \"keyword_exact\",\n      \"create_safety\": \"probable\"\n    }\n  ],\n  \"facts\": [],\n  \"meta\": {\n    \"vectorEnabled\": false,\n    \"intent\": \"topic\",\n    \"mode\": \"conservative\",\n    \"cache\": \"miss\",\n    \"degraded\": [\n      \"vector_arm_failed\"\n    ],\n    \"retrieved\": 2,\n    \"returned\": 2,\n    \"confidence\": {\n      \"grade\": \"moderate\",\n      \"reason\": \"top hit: keyword_exact\"\n    }\n  }\n}"
+          "text": "{\"ok\":true,\"hits\":[{\"source_id\":\"tenantA\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_591b77a7c7fd5f22_c0\",\"documentId\":\"doc_591b77a7c7fd5f22\",\"sourcePath\":\"page://tenantA/search-a/kanga\",\"title\":\"Kanga A\",\"content\":\"# Kanga A\\n\\nkangaroo KANGA_SECRET_AAA\",\"score\":0.016393,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\"},{\"source_id\":\"tenantB\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_9a6d8dae4a32247f_c0\",\"documentId\":\"doc_9a6d8dae4a32247f\",\"sourcePath\":\"page://tenantB/search-b/kanga\",\"title\":\"Kanga B\",\"content\":\"# Kanga B\\n\\nkangaroo KANGA_SECRET_BBB\",\"score\":0.016129,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\"}],\"facts\":[],\"meta\":{\"vectorEnabled\":false,\"intent\":\"topic\",\"mode\":\"conservative\",\"cache\":\"miss\",\"degraded\":[\"vector_arm_failed\"],\"retrieved\":2,\"returned\":2,\"confidence\":{\"grade\":\"moderate\",\"reason\":\"top hit: keyword_exact\"}}}"
         }
-      ]
+      ],
+      "_meta": {
+        "cost": {
+          "calls": 1,
+          "known_usd": 0,
+          "unknown_calls": 0,
+          "usd": 0
+        }
+      }
     }
   },
   {
@@ -338,7 +398,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"chunks\": [\n    {\n      \"chunkId\": \"ch-a-pay\",\n      \"chunkIndex\": 0,\n      \"content\": \"processPayment calls chargeCardAAA\",\n      \"symbolName\": null\n    },\n    {\n      \"chunkId\": \"ch-b-pay\",\n      \"chunkIndex\": 0,\n      \"content\": \"processPayment calls chargeCardBBB\",\n      \"symbolName\": null\n    },\n    {\n      \"chunkId\": \"ch-a-caller\",\n      \"chunkIndex\": 1,\n      \"content\": \"callerAAA calls processPayment\",\n      \"symbolName\": null\n    },\n    {\n      \"chunkId\": \"ch-b-caller\",\n      \"chunkIndex\": 1,\n      \"content\": \"callerBBB calls processPayment\",\n      \"symbolName\": null\n    }\n  ],\n  \"truncated\": false\n}"
+          "text": "{\"ok\":true,\"chunks\":[{\"chunkId\":\"ch-a-pay\",\"chunkIndex\":0,\"content\":\"processPayment calls chargeCardAAA\",\"symbolName\":null},{\"chunkId\":\"ch-b-pay\",\"chunkIndex\":0,\"content\":\"processPayment calls chargeCardBBB\",\"symbolName\":null},{\"chunkId\":\"ch-a-caller\",\"chunkIndex\":1,\"content\":\"callerAAA calls processPayment\",\"symbolName\":null},{\"chunkId\":\"ch-b-caller\",\"chunkIndex\":1,\"content\":\"callerBBB calls processPayment\",\"symbolName\":null}],\"truncated\":false}"
         }
       ]
     }
@@ -402,7 +462,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"pages\": [\n    {\n      \"slug\": \"team-b/alice\",\n      \"type\": \"person\",\n      \"title\": \"Aardvark Shared Title\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"BBB_SECRET_NOTES_BODY\\nBBB_APPENDED\",\n      \"content_hash\": \"a593938132fcd000f2b001d45cb7c7b72abd4587b74a320c0409f0c117436023\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"team-a/alice\",\n      \"type\": \"person\",\n      \"title\": \"Aardvark Shared Title\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"AAA_SECRET_NOTES_BODY\\nAAA_APPENDED\",\n      \"content_hash\": \"f0830b0ff0b967f82a9976c3592c9c83e69449b1096aa46b03b743fa6c082629\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-b2\",\n      \"type\": \"note\",\n      \"title\": \"claim-b2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-b1\",\n      \"type\": \"note\",\n      \"title\": \"claim-b1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-a2\",\n      \"type\": \"note\",\n      \"title\": \"claim-a2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-a1\",\n      \"type\": \"note\",\n      \"title\": \"claim-a1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-b3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b3\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-b2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-b1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"hub-b\",\n      \"type\": \"note\",\n      \"title\": \"hub-b\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"hub\",\n      \"content_hash\": \"08d33503ee27d4c13055d0cefec5e730be4ef2e41cd6cfce434936ec1e7c9d4b\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-a3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a3\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-a2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-a1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"hub-a\",\n      \"type\": \"note\",\n      \"title\": \"hub-a\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"hub\",\n      \"content_hash\": \"08d33503ee27d4c13055d0cefec5e730be4ef2e41cd6cfce434936ec1e7c9d4b\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"vault-b/target\",\n      \"type\": \"note\",\n      \"title\": \"Target B\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"tb\",\n      \"content_hash\": \"7aa5ae9ecf82f6fc5208ecd0940fd71d50cd4ac596fccac2ede05af806a87b6e\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"vault-a/target\",\n      \"type\": \"note\",\n      \"title\": \"Target A\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"ta\",\n      \"content_hash\": \"76592b9de6d38238a52a3651867871e5c670e6320a8ef46a84b5590f8933f33e\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"shared/gateway\",\n      \"type\": \"note\",\n      \"title\": \"Gateway\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"g\",\n      \"content_hash\": \"cd0aa9856147b6c5b4ff2b7dfee5da20aa38253099ef1b4a64aced233c9afe29\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"people/alice\",\n      \"type\": \"person\",\n      \"title\": \"Alice Entity\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"\",\n      \"content_hash\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n      \"source_id\": \"default\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    }\n  ],\n  \"next_cursor\": null,\n  \"complete\": true\n}"
+          "text": "{\"ok\":true,\"pages\":[{\"slug\":\"team-b/alice\",\"type\":\"person\",\"title\":\"Aardvark Shared Title\",\"compiled_truth\":{},\"markdown_body\":\"BBB_SECRET_NOTES_BODY\\nBBB_APPENDED\",\"content_hash\":\"a593938132fcd000f2b001d45cb7c7b72abd4587b74a320c0409f0c117436023\",\"source_id\":\"tenantB\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"team-a/alice\",\"type\":\"person\",\"title\":\"Aardvark Shared Title\",\"compiled_truth\":{},\"markdown_body\":\"AAA_SECRET_NOTES_BODY\\nAAA_APPENDED\",\"content_hash\":\"f0830b0ff0b967f82a9976c3592c9c83e69449b1096aa46b03b743fa6c082629\",\"source_id\":\"tenantA\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"claim-b2\",\"type\":\"note\",\"title\":\"claim-b2\",\"compiled_truth\":{},\"markdown_body\":\"c\",\"content_hash\":\"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\"source_id\":\"tenantB\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"claim-b1\",\"type\":\"note\",\"title\":\"claim-b1\",\"compiled_truth\":{},\"markdown_body\":\"c\",\"content_hash\":\"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\"source_id\":\"tenantB\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"claim-a2\",\"type\":\"note\",\"title\":\"claim-a2\",\"compiled_truth\":{},\"markdown_body\":\"c\",\"content_hash\":\"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\"source_id\":\"tenantA\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"claim-a1\",\"type\":\"note\",\"title\":\"claim-a1\",\"compiled_truth\":{},\"markdown_body\":\"c\",\"content_hash\":\"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\"source_id\":\"tenantA\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"spoke-b3\",\"type\":\"note\",\"title\":\"spoke-b3\",\"compiled_truth\":{},\"markdown_body\":\"spoke\",\"content_hash\":\"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\"source_id\":\"tenantB\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"spoke-b2\",\"type\":\"note\",\"title\":\"spoke-b2\",\"compiled_truth\":{},\"markdown_body\":\"spoke\",\"content_hash\":\"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\"source_id\":\"tenantB\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"spoke-b1\",\"type\":\"note\",\"title\":\"spoke-b1\",\"compiled_truth\":{},\"markdown_body\":\"spoke\",\"content_hash\":\"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\"source_id\":\"tenantB\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"hub-b\",\"type\":\"note\",\"title\":\"hub-b\",\"compiled_truth\":{},\"markdown_body\":\"hub\",\"content_hash\":\"08d33503ee27d4c13055d0cefec5e730be4ef2e41cd6cfce434936ec1e7c9d4b\",\"source_id\":\"tenantB\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"spoke-a3\",\"type\":\"note\",\"title\":\"spoke-a3\",\"compiled_truth\":{},\"markdown_body\":\"spoke\",\"content_hash\":\"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\"source_id\":\"tenantA\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"spoke-a2\",\"type\":\"note\",\"title\":\"spoke-a2\",\"compiled_truth\":{},\"markdown_body\":\"spoke\",\"content_hash\":\"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\"source_id\":\"tenantA\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"spoke-a1\",\"type\":\"note\",\"title\":\"spoke-a1\",\"compiled_truth\":{},\"markdown_body\":\"spoke\",\"content_hash\":\"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\"source_id\":\"tenantA\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"hub-a\",\"type\":\"note\",\"title\":\"hub-a\",\"compiled_truth\":{},\"markdown_body\":\"hub\",\"content_hash\":\"08d33503ee27d4c13055d0cefec5e730be4ef2e41cd6cfce434936ec1e7c9d4b\",\"source_id\":\"tenantA\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"vault-b/target\",\"type\":\"note\",\"title\":\"Target B\",\"compiled_truth\":{},\"markdown_body\":\"tb\",\"content_hash\":\"7aa5ae9ecf82f6fc5208ecd0940fd71d50cd4ac596fccac2ede05af806a87b6e\",\"source_id\":\"tenantB\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"vault-a/target\",\"type\":\"note\",\"title\":\"Target A\",\"compiled_truth\":{},\"markdown_body\":\"ta\",\"content_hash\":\"76592b9de6d38238a52a3651867871e5c670e6320a8ef46a84b5590f8933f33e\",\"source_id\":\"tenantA\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"shared/gateway\",\"type\":\"note\",\"title\":\"Gateway\",\"compiled_truth\":{},\"markdown_body\":\"g\",\"content_hash\":\"cd0aa9856147b6c5b4ff2b7dfee5da20aa38253099ef1b4a64aced233c9afe29\",\"source_id\":\"tenantA\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},{\"slug\":\"people/alice\",\"type\":\"person\",\"title\":\"Alice Entity\",\"compiled_truth\":{},\"markdown_body\":\"\",\"content_hash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"source_id\":\"default\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null}],\"next_cursor\":null,\"complete\":true}"
         }
       ]
     }
@@ -441,7 +501,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"page\": {\n    \"slug\": \"shared/gateway\",\n    \"type\": \"note\",\n    \"title\": \"Gateway\",\n    \"compiled_truth\": {},\n    \"markdown_body\": \"g\",\n    \"content_hash\": \"cd0aa9856147b6c5b4ff2b7dfee5da20aa38253099ef1b4a64aced233c9afe29\",\n    \"source_id\": \"tenantA\",\n    \"created_at\": \"<ts>\",\n    \"updated_at\": \"<ts>\",\n    \"deleted_at\": null\n  },\n  \"version\": 1\n}"
+          "text": "{\"ok\":true,\"page\":{\"slug\":\"shared/gateway\",\"type\":\"note\",\"title\":\"Gateway\",\"compiled_truth\":{},\"markdown_body\":\"g\",\"content_hash\":\"cd0aa9856147b6c5b4ff2b7dfee5da20aa38253099ef1b4a64aced233c9afe29\",\"source_id\":\"tenantA\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},\"version\":1}"
         }
       ]
     }
@@ -461,7 +521,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"slug\": \"shared/gateway\",\n  \"groups\": [\n    {\n      \"type\": \"mentions\",\n      \"direction\": \"outbound\",\n      \"links\": [\n        {\n          \"id\": 2,\n          \"source_slug\": \"shared/gateway\",\n          \"target_slug\": \"vault-b/target\",\n          \"type\": \"mentions\",\n          \"inferred_confidence\": 1,\n          \"source_chunk_id\": null,\n          \"written_at\": \"<ts>\"\n        },\n        {\n          \"id\": 1,\n          \"source_slug\": \"shared/gateway\",\n          \"target_slug\": \"vault-a/target\",\n          \"type\": \"mentions\",\n          \"inferred_confidence\": 1,\n          \"source_chunk_id\": null,\n          \"written_at\": \"<ts>\"\n        }\n      ]\n    }\n  ],\n  \"truncated\": false\n}"
+          "text": "{\"ok\":true,\"slug\":\"shared/gateway\",\"groups\":[{\"type\":\"mentions\",\"direction\":\"outbound\",\"links\":[{\"id\":2,\"source_slug\":\"shared/gateway\",\"target_slug\":\"vault-b/target\",\"type\":\"mentions\",\"inferred_confidence\":1,\"source_chunk_id\":null,\"written_at\":\"<ts>\"},{\"id\":1,\"source_slug\":\"shared/gateway\",\"target_slug\":\"vault-a/target\",\"type\":\"mentions\",\"inferred_confidence\":1,\"source_chunk_id\":null,\"written_at\":\"<ts>\"}]}],\"truncated\":false}"
         }
       ]
     }
@@ -539,7 +599,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"name\": \"Alice\",\n  \"hits\": [\n    {\n      \"documentId\": \"page://tenantB/vault-b/target\",\n      \"sourcePath\": \"page://tenantB/vault-b/target\",\n      \"title\": \"Target B\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    },\n    {\n      \"documentId\": \"page://tenantA/vault-a/target\",\n      \"sourcePath\": \"page://tenantA/vault-a/target\",\n      \"title\": \"Target A\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    },\n    {\n      \"documentId\": \"doc-a-notes\",\n      \"sourcePath\": \"/tenant-a/notes.md\",\n      \"title\": \"AAA Notes\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"Alice\"\n    },\n    {\n      \"documentId\": \"doc-b-notes\",\n      \"sourcePath\": \"/tenant-b/notes.md\",\n      \"title\": \"BBB Notes\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"Alice\"\n    }\n  ],\n  \"truncated\": false\n}"
+          "text": "{\"ok\":true,\"name\":\"Alice\",\"hits\":[{\"documentId\":\"page://tenantB/vault-b/target\",\"sourcePath\":\"page://tenantB/vault-b/target\",\"title\":\"Target B\",\"mentionCount\":1,\"surfaceForm\":\"alice\"},{\"documentId\":\"page://tenantA/vault-a/target\",\"sourcePath\":\"page://tenantA/vault-a/target\",\"title\":\"Target A\",\"mentionCount\":1,\"surfaceForm\":\"alice\"},{\"documentId\":\"doc-a-notes\",\"sourcePath\":\"/tenant-a/notes.md\",\"title\":\"AAA Notes\",\"mentionCount\":1,\"surfaceForm\":\"Alice\"},{\"documentId\":\"doc-b-notes\",\"sourcePath\":\"/tenant-b/notes.md\",\"title\":\"BBB Notes\",\"mentionCount\":1,\"surfaceForm\":\"Alice\"}],\"truncated\":false}"
         }
       ]
     }
@@ -558,7 +618,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"slug\": \"shared/gateway\",\n  \"tags\": []\n}"
+          "text": "{\"ok\":true,\"slug\":\"shared/gateway\",\"tags\":[]}"
         }
       ]
     }
@@ -578,7 +638,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"slug\": \"shared/gateway\",\n  \"links\": [\n    {\n      \"id\": 2,\n      \"source_slug\": \"shared/gateway\",\n      \"target_slug\": \"vault-b/target\",\n      \"type\": \"mentions\",\n      \"inferred_confidence\": 1,\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\",\n      \"direction\": \"outbound\"\n    },\n    {\n      \"id\": 1,\n      \"source_slug\": \"shared/gateway\",\n      \"target_slug\": \"vault-a/target\",\n      \"type\": \"mentions\",\n      \"inferred_confidence\": 1,\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\",\n      \"direction\": \"outbound\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"slug\":\"shared/gateway\",\"links\":[{\"id\":2,\"source_slug\":\"shared/gateway\",\"target_slug\":\"vault-b/target\",\"type\":\"mentions\",\"inferred_confidence\":1,\"source_chunk_id\":null,\"written_at\":\"<ts>\",\"direction\":\"outbound\"},{\"id\":1,\"source_slug\":\"shared/gateway\",\"target_slug\":\"vault-a/target\",\"type\":\"mentions\",\"inferred_confidence\":1,\"source_chunk_id\":null,\"written_at\":\"<ts>\",\"direction\":\"outbound\"}]}"
         }
       ]
     }
@@ -599,7 +659,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"links\": [\n    {\n      \"id\": 2,\n      \"source_slug\": \"shared/gateway\",\n      \"target_slug\": \"vault-b/target\",\n      \"type\": \"mentions\",\n      \"inferred_confidence\": 1,\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    },\n    {\n      \"id\": 1,\n      \"source_slug\": \"shared/gateway\",\n      \"target_slug\": \"vault-a/target\",\n      \"type\": \"mentions\",\n      \"inferred_confidence\": 1,\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"links\":[{\"id\":2,\"source_slug\":\"shared/gateway\",\"target_slug\":\"vault-b/target\",\"type\":\"mentions\",\"inferred_confidence\":1,\"source_chunk_id\":null,\"written_at\":\"<ts>\"},{\"id\":1,\"source_slug\":\"shared/gateway\",\"target_slug\":\"vault-a/target\",\"type\":\"mentions\",\"inferred_confidence\":1,\"source_chunk_id\":null,\"written_at\":\"<ts>\"}]}"
         }
       ]
     }
@@ -620,7 +680,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"start\": \"shared/gateway\",\n  \"hits\": [\n    {\n      \"slug\": \"vault-a/target\",\n      \"depth\": 1\n    },\n    {\n      \"slug\": \"vault-b/target\",\n      \"depth\": 1\n    },\n    {\n      \"slug\": \"alice\",\n      \"depth\": 2\n    }\n  ],\n  \"truncated\": false\n}"
+          "text": "{\"ok\":true,\"start\":\"shared/gateway\",\"hits\":[{\"slug\":\"vault-a/target\",\"depth\":1},{\"slug\":\"vault-b/target\",\"depth\":1},{\"slug\":\"alice\",\"depth\":2}],\"truncated\":false}"
         }
       ]
     }
@@ -637,7 +697,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"sources\": [\n    {\n      \"type\": \"mentions\",\n      \"count\": 8,\n      \"known\": true\n    },\n    {\n      \"type\": \"contradicts\",\n      \"count\": 2,\n      \"known\": true\n    },\n    {\n      \"type\": \"wikilink\",\n      \"count\": 2,\n      \"known\": true\n    },\n    {\n      \"type\": \"advises\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"attended\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"documents\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"founded\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"invested_in\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"knows\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"located_at\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"met\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"related_to\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"supersedes\",\n      \"count\": 0,\n      \"known\": true\n    },\n    {\n      \"type\": \"works_at\",\n      \"count\": 0,\n      \"known\": true\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"sources\":[{\"type\":\"mentions\",\"count\":8,\"known\":true},{\"type\":\"contradicts\",\"count\":2,\"known\":true},{\"type\":\"wikilink\",\"count\":2,\"known\":true},{\"type\":\"advises\",\"count\":0,\"known\":true},{\"type\":\"attended\",\"count\":0,\"known\":true},{\"type\":\"documents\",\"count\":0,\"known\":true},{\"type\":\"founded\",\"count\":0,\"known\":true},{\"type\":\"invested_in\",\"count\":0,\"known\":true},{\"type\":\"knows\",\"count\":0,\"known\":true},{\"type\":\"located_at\",\"count\":0,\"known\":true},{\"type\":\"met\",\"count\":0,\"known\":true},{\"type\":\"related_to\",\"count\":0,\"known\":true},{\"type\":\"supersedes\",\"count\":0,\"known\":true},{\"type\":\"works_at\",\"count\":0,\"known\":true}]}"
         }
       ]
     }
@@ -656,7 +716,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"experts\": [\n    {\n      \"slug\": \"hub-b\",\n      \"type\": \"note\",\n      \"title\": \"hub-b\",\n      \"degree\": 3\n    },\n    {\n      \"slug\": \"hub-a\",\n      \"type\": \"note\",\n      \"title\": \"hub-a\",\n      \"degree\": 3\n    },\n    {\n      \"slug\": \"shared/gateway\",\n      \"type\": \"note\",\n      \"title\": \"Gateway\",\n      \"degree\": 2\n    },\n    {\n      \"slug\": \"claim-b2\",\n      \"type\": \"note\",\n      \"title\": \"claim-b2\",\n      \"degree\": 1\n    },\n    {\n      \"slug\": \"claim-b1\",\n      \"type\": \"note\",\n      \"title\": \"claim-b1\",\n      \"degree\": 1\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"experts\":[{\"slug\":\"hub-b\",\"type\":\"note\",\"title\":\"hub-b\",\"degree\":3},{\"slug\":\"hub-a\",\"type\":\"note\",\"title\":\"hub-a\",\"degree\":3},{\"slug\":\"shared/gateway\",\"type\":\"note\",\"title\":\"Gateway\",\"degree\":2},{\"slug\":\"claim-b2\",\"type\":\"note\",\"title\":\"claim-b2\",\"degree\":1},{\"slug\":\"claim-b1\",\"type\":\"note\",\"title\":\"claim-b1\",\"degree\":1}]}"
         }
       ]
     }
@@ -681,7 +741,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"contradictions\": [\n    {\n      \"source_slug\": \"claim-b1\",\n      \"target_slug\": \"claim-b2\",\n      \"source_title\": \"claim-b1\",\n      \"target_title\": \"claim-b2\",\n      \"confidence\": 1,\n      \"written_at\": \"<ts>\"\n    },\n    {\n      \"source_slug\": \"claim-a1\",\n      \"target_slug\": \"claim-a2\",\n      \"source_title\": \"claim-a1\",\n      \"target_title\": \"claim-a2\",\n      \"confidence\": 1,\n      \"written_at\": \"<ts>\"\n    }\n  ],\n  \"probed\": []\n}"
+          "text": "{\"ok\":true,\"contradictions\":[{\"source_slug\":\"claim-b1\",\"target_slug\":\"claim-b2\",\"source_title\":\"claim-b1\",\"target_title\":\"claim-b2\",\"confidence\":1,\"written_at\":\"<ts>\"},{\"source_slug\":\"claim-a1\",\"target_slug\":\"claim-a2\",\"source_title\":\"claim-a1\",\"target_title\":\"claim-a2\",\"confidence\":1,\"written_at\":\"<ts>\"}],\"probed\":[]}"
         }
       ]
     }
@@ -701,7 +761,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"entity_slug\": \"people/alice\",\n  \"points\": [\n    {\n      \"source\": \"event\",\n      \"at\": \"<ts>\",\n      \"text\": \"AAA_EVENT_TRAJECTORY_launch\",\n      \"kind\": null,\n      \"id\": 1,\n      \"metric\": null,\n      \"value\": null,\n      \"unit\": null,\n      \"period\": null,\n      \"event_type\": null,\n      \"embedding\": null\n    },\n    {\n      \"source\": \"event\",\n      \"at\": \"<ts>\",\n      \"text\": \"BBB_EVENT_TRAJECTORY_launch\",\n      \"kind\": null,\n      \"id\": 2,\n      \"metric\": null,\n      \"value\": null,\n      \"unit\": null,\n      \"period\": null,\n      \"event_type\": null,\n      \"embedding\": null\n    },\n    {\n      \"source\": \"fact\",\n      \"at\": \"<ts>\",\n      \"text\": \"AAA_FACT_TRAJECTORY_seed\",\n      \"kind\": \"belief\",\n      \"id\": 1,\n      \"metric\": null,\n      \"value\": null,\n      \"unit\": null,\n      \"period\": null,\n      \"event_type\": null,\n      \"embedding\": null\n    },\n    {\n      \"source\": \"fact\",\n      \"at\": \"<ts>\",\n      \"text\": \"BBB_FACT_TRAJECTORY_seed\",\n      \"kind\": \"belief\",\n      \"id\": 2,\n      \"metric\": null,\n      \"value\": null,\n      \"unit\": null,\n      \"period\": null,\n      \"event_type\": null,\n      \"embedding\": null\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"entity_slug\":\"people/alice\",\"points\":[{\"source\":\"event\",\"at\":\"<ts>\",\"text\":\"AAA_EVENT_TRAJECTORY_launch\",\"kind\":null,\"id\":1,\"metric\":null,\"value\":null,\"unit\":null,\"period\":null,\"event_type\":null,\"embedding\":null},{\"source\":\"event\",\"at\":\"<ts>\",\"text\":\"BBB_EVENT_TRAJECTORY_launch\",\"kind\":null,\"id\":2,\"metric\":null,\"value\":null,\"unit\":null,\"period\":null,\"event_type\":null,\"embedding\":null},{\"source\":\"fact\",\"at\":\"<ts>\",\"text\":\"AAA_FACT_TRAJECTORY_seed\",\"kind\":\"belief\",\"id\":1,\"metric\":null,\"value\":null,\"unit\":null,\"period\":null,\"event_type\":null,\"embedding\":null},{\"source\":\"fact\",\"at\":\"<ts>\",\"text\":\"BBB_FACT_TRAJECTORY_seed\",\"kind\":\"belief\",\"id\":2,\"metric\":null,\"value\":null,\"unit\":null,\"period\":null,\"event_type\":null,\"embedding\":null}]}"
         }
       ]
     }
@@ -718,7 +778,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"anomalies\": [\n    {\n      \"kind\": \"degree_outlier\",\n      \"slug\": \"hub-a\",\n      \"type\": \"note\",\n      \"title\": \"hub-a\",\n      \"salience\": 0,\n      \"degree\": 3,\n      \"updated_at\": \"<ts>\",\n      \"metric\": 2.335129\n    },\n    {\n      \"kind\": \"degree_outlier\",\n      \"slug\": \"hub-b\",\n      \"type\": \"note\",\n      \"title\": \"hub-b\",\n      \"salience\": 0,\n      \"degree\": 3,\n      \"updated_at\": \"<ts>\",\n      \"metric\": 2.335129\n    },\n    {\n      \"kind\": \"degree_outlier\",\n      \"slug\": \"shared/gateway\",\n      \"type\": \"note\",\n      \"title\": \"Gateway\",\n      \"salience\": 0,\n      \"degree\": 2,\n      \"updated_at\": \"<ts>\",\n      \"metric\": 1.098884\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"anomalies\":[{\"kind\":\"degree_outlier\",\"slug\":\"hub-a\",\"type\":\"note\",\"title\":\"hub-a\",\"salience\":0,\"degree\":3,\"updated_at\":\"<ts>\",\"metric\":2.335129},{\"kind\":\"degree_outlier\",\"slug\":\"hub-b\",\"type\":\"note\",\"title\":\"hub-b\",\"salience\":0,\"degree\":3,\"updated_at\":\"<ts>\",\"metric\":2.335129},{\"kind\":\"degree_outlier\",\"slug\":\"shared/gateway\",\"type\":\"note\",\"title\":\"Gateway\",\"salience\":0,\"degree\":2,\"updated_at\":\"<ts>\",\"metric\":1.098884}]}"
         }
       ]
     }
@@ -745,7 +805,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"pages\": [\n    {\n      \"slug\": \"team-b/alice\",\n      \"type\": \"person\",\n      \"title\": \"Aardvark Shared Title\",\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"team-a/alice\",\n      \"type\": \"person\",\n      \"title\": \"Aardvark Shared Title\",\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"claim-b1\",\n      \"type\": \"note\",\n      \"title\": \"claim-b1\",\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"claim-a1\",\n      \"type\": \"note\",\n      \"title\": \"claim-a1\",\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-b3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b3\",\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-b2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b2\",\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-b1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b1\",\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-a3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a3\",\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-a2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a2\",\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-a1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a1\",\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"shared/gateway\",\n      \"type\": \"note\",\n      \"title\": \"Gateway\",\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"people/alice\",\n      \"type\": \"person\",\n      \"title\": \"Alice Entity\",\n      \"updated_at\": \"<ts>\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"pages\":[{\"slug\":\"team-b/alice\",\"type\":\"person\",\"title\":\"Aardvark Shared Title\",\"updated_at\":\"<ts>\"},{\"slug\":\"team-a/alice\",\"type\":\"person\",\"title\":\"Aardvark Shared Title\",\"updated_at\":\"<ts>\"},{\"slug\":\"claim-b1\",\"type\":\"note\",\"title\":\"claim-b1\",\"updated_at\":\"<ts>\"},{\"slug\":\"claim-a1\",\"type\":\"note\",\"title\":\"claim-a1\",\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-b3\",\"type\":\"note\",\"title\":\"spoke-b3\",\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-b2\",\"type\":\"note\",\"title\":\"spoke-b2\",\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-b1\",\"type\":\"note\",\"title\":\"spoke-b1\",\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-a3\",\"type\":\"note\",\"title\":\"spoke-a3\",\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-a2\",\"type\":\"note\",\"title\":\"spoke-a2\",\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-a1\",\"type\":\"note\",\"title\":\"spoke-a1\",\"updated_at\":\"<ts>\"},{\"slug\":\"shared/gateway\",\"type\":\"note\",\"title\":\"Gateway\",\"updated_at\":\"<ts>\"},{\"slug\":\"people/alice\",\"type\":\"person\",\"title\":\"Alice Entity\",\"updated_at\":\"<ts>\"}]}"
         }
       ]
     }
@@ -764,7 +824,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"pages\": []\n}"
+          "text": "{\"ok\":true,\"pages\":[]}"
         }
       ]
     }
@@ -783,7 +843,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"pages\": [\n    {\n      \"slug\": \"team-b/alice\",\n      \"type\": \"person\",\n      \"title\": \"Aardvark Shared Title\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"team-a/alice\",\n      \"type\": \"person\",\n      \"title\": \"Aardvark Shared Title\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"claim-b2\",\n      \"type\": \"note\",\n      \"title\": \"claim-b2\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"claim-b1\",\n      \"type\": \"note\",\n      \"title\": \"claim-b1\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"claim-a2\",\n      \"type\": \"note\",\n      \"title\": \"claim-a2\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"claim-a1\",\n      \"type\": \"note\",\n      \"title\": \"claim-a1\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-b3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b3\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-b2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b2\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-b1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b1\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"hub-b\",\n      \"type\": \"note\",\n      \"title\": \"hub-b\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-a3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a3\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-a2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a2\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"spoke-a1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a1\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"hub-a\",\n      \"type\": \"note\",\n      \"title\": \"hub-a\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"vault-b/target\",\n      \"type\": \"note\",\n      \"title\": \"Target B\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"vault-a/target\",\n      \"type\": \"note\",\n      \"title\": \"Target A\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"shared/gateway\",\n      \"type\": \"note\",\n      \"title\": \"Gateway\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    },\n    {\n      \"slug\": \"people/alice\",\n      \"type\": \"person\",\n      \"title\": \"Alice Entity\",\n      \"salience\": 0,\n      \"updated_at\": \"<ts>\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"pages\":[{\"slug\":\"team-b/alice\",\"type\":\"person\",\"title\":\"Aardvark Shared Title\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"team-a/alice\",\"type\":\"person\",\"title\":\"Aardvark Shared Title\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"claim-b2\",\"type\":\"note\",\"title\":\"claim-b2\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"claim-b1\",\"type\":\"note\",\"title\":\"claim-b1\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"claim-a2\",\"type\":\"note\",\"title\":\"claim-a2\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"claim-a1\",\"type\":\"note\",\"title\":\"claim-a1\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-b3\",\"type\":\"note\",\"title\":\"spoke-b3\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-b2\",\"type\":\"note\",\"title\":\"spoke-b2\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-b1\",\"type\":\"note\",\"title\":\"spoke-b1\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"hub-b\",\"type\":\"note\",\"title\":\"hub-b\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-a3\",\"type\":\"note\",\"title\":\"spoke-a3\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-a2\",\"type\":\"note\",\"title\":\"spoke-a2\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"spoke-a1\",\"type\":\"note\",\"title\":\"spoke-a1\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"hub-a\",\"type\":\"note\",\"title\":\"hub-a\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"vault-b/target\",\"type\":\"note\",\"title\":\"Target B\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"vault-a/target\",\"type\":\"note\",\"title\":\"Target A\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"shared/gateway\",\"type\":\"note\",\"title\":\"Gateway\",\"salience\":0,\"updated_at\":\"<ts>\"},{\"slug\":\"people/alice\",\"type\":\"person\",\"title\":\"Alice Entity\",\"salience\":0,\"updated_at\":\"<ts>\"}]}"
         }
       ]
     }
@@ -842,7 +902,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"slug\": \"people/alice\",\n  \"page\": {\n    \"slug\": \"people/alice\",\n    \"type\": \"person\",\n    \"title\": \"Alice Entity\",\n    \"compiled_truth\": {},\n    \"markdown_body\": \"\",\n    \"content_hash\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n    \"source_id\": \"default\",\n    \"created_at\": \"<ts>\",\n    \"updated_at\": \"<ts>\",\n    \"deleted_at\": null\n  },\n  \"facts\": [\n    {\n      \"id\": 2,\n      \"source_id\": \"tenantB\",\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null,\n      \"collapsed_count\": 1\n    },\n    {\n      \"id\": 1,\n      \"source_id\": \"tenantA\",\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"AAA_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null,\n      \"collapsed_count\": 1\n    }\n  ],\n  \"timeline\": [\n    {\n      \"id\": 2,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"BBB_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    },\n    {\n      \"id\": 1,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"AAA_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    }\n  ],\n  \"identity\": {\n    \"aliases\": [],\n    \"redirected_from\": [],\n    \"possible_duplicates\": [],\n    \"truncated\": false\n  }\n}"
+          "text": "{\"ok\":true,\"slug\":\"people/alice\",\"page\":{\"slug\":\"people/alice\",\"type\":\"person\",\"title\":\"Alice Entity\",\"compiled_truth\":{},\"markdown_body\":\"\",\"content_hash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"source_id\":\"default\",\"created_at\":\"<ts>\",\"updated_at\":\"<ts>\",\"deleted_at\":null},\"facts\":[{\"id\":2,\"source_id\":\"tenantB\",\"entity_slug\":\"people/alice\",\"fact\":\"BBB_FACT_TRAJECTORY_seed\",\"confidence\":1,\"source_slug\":null,\"source_chunk_id\":null,\"written_by\":\"unattributed\",\"written_at\":\"<ts>\",\"kind\":\"belief\",\"notability\":null,\"valid_from\":null,\"valid_until\":null,\"visibility\":\"private\",\"superseded_by\":null,\"consolidated_into\":null,\"context\":null,\"source_session\":null,\"attributed_to\":null,\"forgotten_at\":null,\"collapsed_count\":1},{\"id\":1,\"source_id\":\"tenantA\",\"entity_slug\":\"people/alice\",\"fact\":\"AAA_FACT_TRAJECTORY_seed\",\"confidence\":1,\"source_slug\":null,\"source_chunk_id\":null,\"written_by\":\"unattributed\",\"written_at\":\"<ts>\",\"kind\":\"belief\",\"notability\":null,\"valid_from\":null,\"valid_until\":null,\"visibility\":\"private\",\"superseded_by\":null,\"consolidated_into\":null,\"context\":null,\"source_session\":null,\"attributed_to\":null,\"forgotten_at\":null,\"collapsed_count\":1}],\"timeline\":[{\"id\":2,\"slug\":\"people/alice\",\"occurred_at\":\"<ts>\",\"event\":\"BBB_EVENT_TRAJECTORY_launch\",\"detail\":\"\",\"source_label\":\"\",\"source_chunk_id\":null,\"written_at\":\"<ts>\"},{\"id\":1,\"slug\":\"people/alice\",\"occurred_at\":\"<ts>\",\"event\":\"AAA_EVENT_TRAJECTORY_launch\",\"detail\":\"\",\"source_label\":\"\",\"source_chunk_id\":null,\"written_at\":\"<ts>\"}],\"identity\":{\"aliases\":[],\"redirected_from\":[],\"possible_duplicates\":[],\"truncated\":false}}"
         }
       ]
     }
@@ -862,7 +922,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"entity_slug\": \"people/alice\",\n  \"facts\": [\n    {\n      \"id\": 2,\n      \"source_id\": \"tenantB\",\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null,\n      \"collapsed_count\": 1\n    },\n    {\n      \"id\": 1,\n      \"source_id\": \"tenantA\",\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"AAA_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null,\n      \"collapsed_count\": 1\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"entity_slug\":\"people/alice\",\"facts\":[{\"id\":2,\"source_id\":\"tenantB\",\"entity_slug\":\"people/alice\",\"fact\":\"BBB_FACT_TRAJECTORY_seed\",\"confidence\":1,\"source_slug\":null,\"source_chunk_id\":null,\"written_by\":\"unattributed\",\"written_at\":\"<ts>\",\"kind\":\"belief\",\"notability\":null,\"valid_from\":null,\"valid_until\":null,\"visibility\":\"private\",\"superseded_by\":null,\"consolidated_into\":null,\"context\":null,\"source_session\":null,\"attributed_to\":null,\"forgotten_at\":null,\"collapsed_count\":1},{\"id\":1,\"source_id\":\"tenantA\",\"entity_slug\":\"people/alice\",\"fact\":\"AAA_FACT_TRAJECTORY_seed\",\"confidence\":1,\"source_slug\":null,\"source_chunk_id\":null,\"written_by\":\"unattributed\",\"written_at\":\"<ts>\",\"kind\":\"belief\",\"notability\":null,\"valid_from\":null,\"valid_until\":null,\"visibility\":\"private\",\"superseded_by\":null,\"consolidated_into\":null,\"context\":null,\"source_session\":null,\"attributed_to\":null,\"forgotten_at\":null,\"collapsed_count\":1}]}"
         }
       ]
     }
@@ -882,7 +942,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"slug\": \"people/alice\",\n  \"timeline\": [\n    {\n      \"id\": 2,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"BBB_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    },\n    {\n      \"id\": 1,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"AAA_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"slug\":\"people/alice\",\"timeline\":[{\"id\":2,\"slug\":\"people/alice\",\"occurred_at\":\"<ts>\",\"event\":\"BBB_EVENT_TRAJECTORY_launch\",\"detail\":\"\",\"source_label\":\"\",\"source_chunk_id\":null,\"written_at\":\"<ts>\"},{\"id\":1,\"slug\":\"people/alice\",\"occurred_at\":\"<ts>\",\"event\":\"AAA_EVENT_TRAJECTORY_launch\",\"detail\":\"\",\"source_label\":\"\",\"source_chunk_id\":null,\"written_at\":\"<ts>\"}]}"
         }
       ]
     }
@@ -922,7 +982,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"query\": \"Aardvark Shared Title\",\n  \"hits\": [\n    {\n      \"slug\": \"team-a/alice\",\n      \"title\": \"Aardvark Shared Title\",\n      \"score\": 1,\n      \"referenced_by_count\": 0\n    },\n    {\n      \"slug\": \"team-b/alice\",\n      \"title\": \"Aardvark Shared Title\",\n      \"score\": 1,\n      \"referenced_by_count\": 0\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"query\":\"Aardvark Shared Title\",\"hits\":[{\"slug\":\"team-a/alice\",\"title\":\"Aardvark Shared Title\",\"score\":1,\"referenced_by_count\":0},{\"slug\":\"team-b/alice\",\"title\":\"Aardvark Shared Title\",\"score\":1,\"referenced_by_count\":0}]}"
         }
       ]
     }
@@ -943,7 +1003,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-def\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardAAA\"\n    },\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardBBB\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"query\":{\"type\":\"code-def\",\"name\":\"processPayment\"},\"count\":2,\"mentions\":[{\"surface_form\":\"processPayment\",\"chunk_id\":\"ch-a-pay\",\"document_id\":\"doc-a-code\",\"source_path\":\"/shared/pay.ts\",\"language\":null,\"kind\":null,\"start_line\":1,\"end_line\":5,\"snippet\":\"processPayment calls chargeCardAAA\"},{\"surface_form\":\"processPayment\",\"chunk_id\":\"ch-b-pay\",\"document_id\":\"doc-b-code\",\"source_path\":\"/shared/pay.ts\",\"language\":null,\"kind\":null,\"start_line\":1,\"end_line\":5,\"snippet\":\"processPayment calls chargeCardBBB\"}]}"
         }
       ]
     }
@@ -964,7 +1024,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-ref\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardAAA\"\n    },\n    {\n      \"surface_form\": \"processPayment\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardBBB\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"query\":{\"type\":\"code-ref\",\"name\":\"processPayment\"},\"count\":2,\"mentions\":[{\"surface_form\":\"processPayment\",\"chunk_id\":\"ch-a-pay\",\"document_id\":\"doc-a-code\",\"source_path\":\"/shared/pay.ts\",\"language\":null,\"kind\":null,\"start_line\":1,\"end_line\":5,\"snippet\":\"processPayment calls chargeCardAAA\"},{\"surface_form\":\"processPayment\",\"chunk_id\":\"ch-b-pay\",\"document_id\":\"doc-b-code\",\"source_path\":\"/shared/pay.ts\",\"language\":null,\"kind\":null,\"start_line\":1,\"end_line\":5,\"snippet\":\"processPayment calls chargeCardBBB\"}]}"
         }
       ]
     }
@@ -985,7 +1045,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-caller\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"callerAAA\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardAAA\"\n    },\n    {\n      \"surface_form\": \"callerBBB\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardBBB\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"query\":{\"type\":\"code-caller\",\"name\":\"processPayment\"},\"count\":2,\"mentions\":[{\"surface_form\":\"callerAAA\",\"chunk_id\":\"ch-a-pay\",\"document_id\":\"doc-a-code\",\"source_path\":\"/shared/pay.ts\",\"language\":null,\"kind\":null,\"start_line\":1,\"end_line\":5,\"snippet\":\"processPayment calls chargeCardAAA\"},{\"surface_form\":\"callerBBB\",\"chunk_id\":\"ch-b-pay\",\"document_id\":\"doc-b-code\",\"source_path\":\"/shared/pay.ts\",\"language\":null,\"kind\":null,\"start_line\":1,\"end_line\":5,\"snippet\":\"processPayment calls chargeCardBBB\"}]}"
         }
       ]
     }
@@ -1013,7 +1073,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"query\": {\n    \"type\": \"code-callee\",\n    \"name\": \"processPayment\"\n  },\n  \"count\": 2,\n  \"mentions\": [\n    {\n      \"surface_form\": \"chargeCardAAA\",\n      \"chunk_id\": \"ch-a-pay\",\n      \"document_id\": \"doc-a-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardAAA\"\n    },\n    {\n      \"surface_form\": \"chargeCardBBB\",\n      \"chunk_id\": \"ch-b-pay\",\n      \"document_id\": \"doc-b-code\",\n      \"source_path\": \"/shared/pay.ts\",\n      \"language\": null,\n      \"kind\": null,\n      \"start_line\": 1,\n      \"end_line\": 5,\n      \"snippet\": \"processPayment calls chargeCardBBB\"\n    }\n  ],\n  \"resolved_symbol\": \"processPayment\"\n}"
+          "text": "{\"ok\":true,\"query\":{\"type\":\"code-callee\",\"name\":\"processPayment\"},\"count\":2,\"mentions\":[{\"surface_form\":\"chargeCardAAA\",\"chunk_id\":\"ch-a-pay\",\"document_id\":\"doc-a-code\",\"source_path\":\"/shared/pay.ts\",\"language\":null,\"kind\":null,\"start_line\":1,\"end_line\":5,\"snippet\":\"processPayment calls chargeCardAAA\"},{\"surface_form\":\"chargeCardBBB\",\"chunk_id\":\"ch-b-pay\",\"document_id\":\"doc-b-code\",\"source_path\":\"/shared/pay.ts\",\"language\":null,\"kind\":null,\"start_line\":1,\"end_line\":5,\"snippet\":\"processPayment calls chargeCardBBB\"}],\"resolved_symbol\":\"processPayment\"}"
         }
       ]
     }
@@ -1032,7 +1092,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"result\": \"ambiguous\",\n  \"candidates\": [\n    {\n      \"symbol_qualified\": \"/shared/pay.ts:processPayment\",\n      \"def_chunk_id\": \"ch-a-pay\"\n    },\n    {\n      \"symbol_qualified\": \"/shared/pay.ts:processPayment\",\n      \"def_chunk_id\": \"ch-b-pay\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"result\":\"ambiguous\",\"candidates\":[{\"symbol_qualified\":\"/shared/pay.ts:processPayment\",\"def_chunk_id\":\"ch-a-pay\"},{\"symbol_qualified\":\"/shared/pay.ts:processPayment\",\"def_chunk_id\":\"ch-b-pay\"}]}"
         }
       ]
     }
@@ -1051,7 +1111,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"result\": \"ambiguous\",\n  \"candidates\": [\n    {\n      \"symbol_qualified\": \"/shared/pay.ts:processPayment\",\n      \"def_chunk_id\": \"ch-a-pay\"\n    },\n    {\n      \"symbol_qualified\": \"/shared/pay.ts:processPayment\",\n      \"def_chunk_id\": \"ch-b-pay\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"result\":\"ambiguous\",\"candidates\":[{\"symbol_qualified\":\"/shared/pay.ts:processPayment\",\"def_chunk_id\":\"ch-a-pay\"},{\"symbol_qualified\":\"/shared/pay.ts:processPayment\",\"def_chunk_id\":\"ch-b-pay\"}]}"
         }
       ]
     }
@@ -1060,7 +1120,7 @@
     "call": "list_takes {}",
     "sql": [
       {
-        "text": "SELECT take_key, claim_text, kind, holder, weight, domain, status, active, resolved_quality, resolved_at::text AS resolved_at, generated_at::text AS generated_at FROM synth_takes WHERE ($1::text IS NULL OR status = $1) AND claim_text <> $4 AND NOT EXISTS (SELECT 1 FROM documents qd WHERE qd.id = synth_takes.source_ref AND NOT (NOT (COALESCE(qd.frontmatter, '{}'::jsonb) ? 'quarantine'))) ORDER BY generated_at DESC, take_key ASC LIMIT $2 OFFSET $3",
+        "text": "SELECT (CASE WHEN synth_takes.row_num IS NOT NULL THEN ( SELECT pv.written_by_principal FROM page_versions pv JOIN pages pp ON pp.slug = pv.slug AND pp.source_id = pv.source_id WHERE pp.slug = synth_takes.source_ref AND pp.deleted_at IS NULL ORDER BY pv.version_n DESC LIMIT 1 ) ELSE NULL END) AS written_by_principal, source_ref, row_num, take_key, claim_text, kind, holder, weight, domain, status, active, resolved_quality, resolved_at::text AS resolved_at, generated_at::text AS generated_at FROM synth_takes WHERE ($1::text IS NULL OR status = $1) AND ((CASE WHEN synth_takes.row_num IS NOT NULL THEN ( SELECT take_page.source_id FROM pages take_page WHERE take_page.slug = synth_takes.source_ref AND take_page.deleted_at IS NULL AND NOT EXISTS ( SELECT 1 FROM documents take_mirror WHERE take_mirror.source_id = take_page.source_id AND take_mirror.source_path IN ('page://' || CASE WHEN take_page.source_id = 'default' THEN take_page.slug ELSE take_page.source_id || '/' || take_page.slug END, 'page-truth://' || CASE WHEN take_page.source_id = 'default' THEN take_page.slug ELSE take_page.source_id || '/' || take_page.slug END) AND (take_mirror.deleted_at IS NOT NULL OR NOT (NOT (COALESCE(take_mirror.frontmatter, '{}'::jsonb) ? 'quarantine'))) ) ) ELSE ( SELECT take_doc.source_id FROM documents take_doc WHERE take_doc.id = synth_takes.source_ref AND take_doc.deleted_at IS NULL AND NOT (COALESCE(take_doc.frontmatter, '{}'::jsonb) ? 'quarantine') AND NOT EXISTS ( SELECT 1 FROM pages take_mirrored_page WHERE take_mirrored_page.source_id = take_doc.source_id AND take_doc.source_path IN ( 'page://' || CASE WHEN take_doc.source_id = 'default' THEN take_mirrored_page.slug ELSE take_doc.source_id || '/' || take_mirrored_page.slug END, 'page-truth://' || CASE WHEN take_doc.source_id = 'default' THEN take_mirrored_page.slug ELSE take_doc.source_id || '/' || take_mirrored_page.slug END) AND (take_mirrored_page.deleted_at IS NOT NULL ) ) ) END) IS NOT NULL OR (synth_takes.row_num IS NULL AND NOT EXISTS ( SELECT 1 FROM documents take_origin WHERE take_origin.id = synth_takes.source_ref AND (take_origin.source_id IS NOT NULL OR take_origin.deleted_at IS NOT NULL OR NOT (NOT (COALESCE(take_origin.frontmatter, '{}'::jsonb) ? 'quarantine')))))) AND claim_text <> $4 ORDER BY generated_at DESC, take_key ASC LIMIT $2 OFFSET $3",
         "params": [
           null,
           50,
@@ -1073,7 +1133,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"takes\": [\n    {\n      \"take_key\": \"take-b\",\n      \"claim_text\": \"BBB_TAKE_SECRET_claim\",\n      \"kind\": \"judgment\",\n      \"holder\": \"world\",\n      \"weight\": 0.5,\n      \"domain\": null,\n      \"status\": \"queued\",\n      \"active\": true,\n      \"resolved_quality\": null,\n      \"resolved_at\": null,\n      \"generated_at\": \"<ts>\"\n    },\n    {\n      \"take_key\": \"take-a\",\n      \"claim_text\": \"AAA_TAKE_SECRET_claim\",\n      \"kind\": \"judgment\",\n      \"holder\": \"world\",\n      \"weight\": 0.5,\n      \"domain\": null,\n      \"status\": \"queued\",\n      \"active\": true,\n      \"resolved_quality\": null,\n      \"resolved_at\": null,\n      \"generated_at\": \"<ts>\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"takes\":[{\"take_key\":\"take-b\",\"claim_text\":\"BBB_TAKE_SECRET_claim\",\"kind\":\"judgment\",\"holder\":\"world\",\"weight\":0.5,\"domain\":null,\"status\":\"queued\",\"active\":true,\"resolved_quality\":null,\"resolved_at\":null,\"generated_at\":\"<ts>\",\"written_by_principal\":null},{\"take_key\":\"take-a\",\"claim_text\":\"AAA_TAKE_SECRET_claim\",\"kind\":\"judgment\",\"holder\":\"world\",\"weight\":0.5,\"domain\":null,\"status\":\"queued\",\"active\":true,\"resolved_quality\":null,\"resolved_at\":null,\"generated_at\":\"<ts>\",\"written_by_principal\":null}]}"
         }
       ]
     }
@@ -1082,7 +1142,7 @@
     "call": "takes_search {\"q\":\"claim\"}",
     "sql": [
       {
-        "text": "SELECT take_key, claim_text, kind, holder, weight, domain, status FROM synth_takes WHERE (similarity(claim_text, $1) >= 0.3 OR claim_text ILIKE '%' || $1 || '%') AND claim_text <> $3 AND NOT EXISTS (SELECT 1 FROM documents qd WHERE qd.id = synth_takes.source_ref AND NOT (NOT (COALESCE(qd.frontmatter, '{}'::jsonb) ? 'quarantine'))) ORDER BY similarity(claim_text, $1) DESC, take_key ASC LIMIT $2",
+        "text": "SELECT (CASE WHEN synth_takes.row_num IS NOT NULL THEN ( SELECT pv.written_by_principal FROM page_versions pv JOIN pages pp ON pp.slug = pv.slug AND pp.source_id = pv.source_id WHERE pp.slug = synth_takes.source_ref AND pp.deleted_at IS NULL ORDER BY pv.version_n DESC LIMIT 1 ) ELSE NULL END) AS written_by_principal, source_ref, row_num, take_key, claim_text, kind, holder, weight, domain, status FROM synth_takes WHERE (similarity(claim_text, $1) >= 0.3 OR claim_text ILIKE '%' || $1 || '%') AND ((CASE WHEN synth_takes.row_num IS NOT NULL THEN ( SELECT take_page.source_id FROM pages take_page WHERE take_page.slug = synth_takes.source_ref AND take_page.deleted_at IS NULL AND NOT EXISTS ( SELECT 1 FROM documents take_mirror WHERE take_mirror.source_id = take_page.source_id AND take_mirror.source_path IN ('page://' || CASE WHEN take_page.source_id = 'default' THEN take_page.slug ELSE take_page.source_id || '/' || take_page.slug END, 'page-truth://' || CASE WHEN take_page.source_id = 'default' THEN take_page.slug ELSE take_page.source_id || '/' || take_page.slug END) AND (take_mirror.deleted_at IS NOT NULL OR NOT (NOT (COALESCE(take_mirror.frontmatter, '{}'::jsonb) ? 'quarantine'))) ) ) ELSE ( SELECT take_doc.source_id FROM documents take_doc WHERE take_doc.id = synth_takes.source_ref AND take_doc.deleted_at IS NULL AND NOT (COALESCE(take_doc.frontmatter, '{}'::jsonb) ? 'quarantine') AND NOT EXISTS ( SELECT 1 FROM pages take_mirrored_page WHERE take_mirrored_page.source_id = take_doc.source_id AND take_doc.source_path IN ( 'page://' || CASE WHEN take_doc.source_id = 'default' THEN take_mirrored_page.slug ELSE take_doc.source_id || '/' || take_mirrored_page.slug END, 'page-truth://' || CASE WHEN take_doc.source_id = 'default' THEN take_mirrored_page.slug ELSE take_doc.source_id || '/' || take_mirrored_page.slug END) AND (take_mirrored_page.deleted_at IS NOT NULL ) ) ) END) IS NOT NULL OR (synth_takes.row_num IS NULL AND NOT EXISTS ( SELECT 1 FROM documents take_origin WHERE take_origin.id = synth_takes.source_ref AND (take_origin.source_id IS NOT NULL OR take_origin.deleted_at IS NOT NULL OR NOT (NOT (COALESCE(take_origin.frontmatter, '{}'::jsonb) ? 'quarantine')))))) AND claim_text <> $3 ORDER BY similarity(claim_text, $1) DESC, take_key ASC LIMIT $2",
         "params": [
           "claim",
           50,
@@ -1094,7 +1154,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"takes\": [\n    {\n      \"take_key\": \"take-a\",\n      \"claim_text\": \"AAA_TAKE_SECRET_claim\",\n      \"kind\": \"judgment\",\n      \"holder\": \"world\",\n      \"weight\": 0.5,\n      \"domain\": null,\n      \"status\": \"queued\"\n    },\n    {\n      \"take_key\": \"take-b\",\n      \"claim_text\": \"BBB_TAKE_SECRET_claim\",\n      \"kind\": \"judgment\",\n      \"holder\": \"world\",\n      \"weight\": 0.5,\n      \"domain\": null,\n      \"status\": \"queued\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"takes\":[{\"take_key\":\"take-a\",\"claim_text\":\"AAA_TAKE_SECRET_claim\",\"kind\":\"judgment\",\"holder\":\"world\",\"weight\":0.5,\"domain\":null,\"status\":\"queued\",\"written_by_principal\":null},{\"take_key\":\"take-b\",\"claim_text\":\"BBB_TAKE_SECRET_claim\",\"kind\":\"judgment\",\"holder\":\"world\",\"weight\":0.5,\"domain\":null,\"status\":\"queued\",\"written_by_principal\":null}]}"
         }
       ]
     }
@@ -1113,7 +1173,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"concepts\": [\n    {\n      \"concept_slug\": \"concept-aaa\",\n      \"title\": \"concept-aaa\",\n      \"tier\": \"T3\",\n      \"atom_count\": 1,\n      \"narrative\": \"AAA_CONCEPT_narrative\",\n      \"generated_at\": \"<ts>\"\n    },\n    {\n      \"concept_slug\": \"concept-bbb\",\n      \"title\": \"concept-bbb\",\n      \"tier\": \"T3\",\n      \"atom_count\": 1,\n      \"narrative\": \"BBB_CONCEPT_narrative\",\n      \"generated_at\": \"<ts>\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"concepts\":[{\"concept_slug\":\"concept-aaa\",\"title\":\"concept-aaa\",\"tier\":\"T3\",\"atom_count\":1,\"narrative\":\"AAA_CONCEPT_narrative\",\"generated_at\":\"<ts>\"},{\"concept_slug\":\"concept-bbb\",\"title\":\"concept-bbb\",\"tier\":\"T3\",\"atom_count\":1,\"narrative\":\"BBB_CONCEPT_narrative\",\"generated_at\":\"<ts>\"}]}"
         }
       ]
     }
@@ -1142,7 +1202,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"since\": \"<date>\",\n  \"events\": [\n    {\n      \"date\": \"2026-01-02\",\n      \"summary\": \"AAA_EVENT_fixed\",\n      \"detail\": \"\",\n      \"slug\": \"team-a/alice\",\n      \"event_slug\": null,\n      \"kind\": null\n    },\n    {\n      \"date\": \"2026-01-02\",\n      \"summary\": \"BBB_EVENT_fixed\",\n      \"detail\": \"\",\n      \"slug\": \"team-b/alice\",\n      \"event_slug\": null,\n      \"kind\": null\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"since\":\"<date>\",\"events\":[{\"date\":\"2026-01-02\",\"summary\":\"AAA_EVENT_fixed\",\"detail\":\"\",\"slug\":\"team-a/alice\",\"event_slug\":null,\"kind\":null},{\"date\":\"2026-01-02\",\"summary\":\"BBB_EVENT_fixed\",\"detail\":\"\",\"slug\":\"team-b/alice\",\"event_slug\":null,\"kind\":null}]}"
         }
       ]
     }
@@ -1154,7 +1214,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"pages\": []\n}"
+          "text": "{\"ok\":true,\"pages\":[]}"
         }
       ]
     }
@@ -1171,7 +1231,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"count\": 3,\n  \"sources\": [\n    {\n      \"id\": \"tenantA\",\n      \"kind\": \"vault\",\n      \"path_prefix\": \"/tenant-a\",\n      \"sync_policy\": \"synced\",\n      \"indexed_policy\": \"verbatim\",\n      \"rate_limit_per_minute\": 60,\n      \"respect_quiet_hours\": false,\n      \"boost_weight\": 1,\n      \"description\": null\n    },\n    {\n      \"id\": \"tenantB\",\n      \"kind\": \"vault\",\n      \"path_prefix\": \"/tenant-b\",\n      \"sync_policy\": \"synced\",\n      \"indexed_policy\": \"verbatim\",\n      \"rate_limit_per_minute\": 60,\n      \"respect_quiet_hours\": false,\n      \"boost_weight\": 1,\n      \"description\": null\n    },\n    {\n      \"id\": \"default\",\n      \"kind\": \"other\",\n      \"path_prefix\": \"__default__\",\n      \"sync_policy\": \"synced\",\n      \"indexed_policy\": \"verbatim\",\n      \"rate_limit_per_minute\": 60,\n      \"respect_quiet_hours\": false,\n      \"boost_weight\": 1,\n      \"description\": null\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"count\":3,\"sources\":[{\"id\":\"tenantA\",\"kind\":\"vault\",\"path_prefix\":\"/tenant-a\",\"sync_policy\":\"synced\",\"indexed_policy\":\"verbatim\",\"rate_limit_per_minute\":60,\"respect_quiet_hours\":false,\"boost_weight\":1,\"description\":null},{\"id\":\"tenantB\",\"kind\":\"vault\",\"path_prefix\":\"/tenant-b\",\"sync_policy\":\"synced\",\"indexed_policy\":\"verbatim\",\"rate_limit_per_minute\":60,\"respect_quiet_hours\":false,\"boost_weight\":1,\"description\":null},{\"id\":\"default\",\"kind\":\"other\",\"path_prefix\":\"__default__\",\"sync_policy\":\"synced\",\"indexed_policy\":\"verbatim\",\"rate_limit_per_minute\":60,\"respect_quiet_hours\":false,\"boost_weight\":1,\"description\":null}]}"
         }
       ]
     }
@@ -1183,7 +1243,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"client_id\": null,\n  \"scopes\": [],\n  \"write_source\": null,\n  \"read_sources\": null,\n  \"is_public\": false,\n  \"operator\": true,\n  \"bound_slug_prefixes\": null,\n  \"takes_holders\": null,\n  \"budget_usd_per_day\": null,\n  \"spent_today_usd\": null,\n  \"spend_id\": null,\n  \"callable_tools\": [\n    \"search_exact\",\n    \"search\",\n    \"index\",\n    \"backlinks\",\n    \"stats\",\n    \"source_health\",\n    \"log_friction\",\n    \"page_put\",\n    \"page_append\",\n    \"page_edit\",\n    \"page_rename\",\n    \"page_delete\",\n    \"page_restore\",\n    \"page_revert\",\n    \"page_get\",\n    \"page_list\",\n    \"page_versions\",\n    \"link\",\n    \"unlink\",\n    \"graph_neighbors\",\n    \"graph_query\",\n    \"traverse_graph\",\n    \"add_fact\",\n    \"add_timeline_event\",\n    \"entity_facts\",\n    \"fact_supersessions\",\n    \"entity_timeline\",\n    \"entity_recall\",\n    \"jobs_submit\",\n    \"jobs_cancel\",\n    \"jobs_list\",\n    \"jobs_get\",\n    \"jobs_logs\",\n    \"submit_agent\",\n    \"get_agent_job\",\n    \"get_chunks\",\n    \"resolve_slugs\",\n    \"add_tag\",\n    \"remove_tag\",\n    \"get_tags\",\n    \"relational_recall\",\n    \"get_links\",\n    \"list_link_sources\",\n    \"find_orphans\",\n    \"wanted_pages\",\n    \"find_experts\",\n    \"find_contradictions\",\n    \"find_trajectory\",\n    \"get_recent_salience\",\n    \"find_anomalies\",\n    \"recall\",\n    \"forget_fact\",\n    \"get_brain_identity\",\n    \"whoami\",\n    \"purge_deleted_pages\",\n    \"query\",\n    \"code_callers\",\n    \"code_callees\",\n    \"code_def\",\n    \"code_refs\",\n    \"code_blast\",\n    \"code_flow\",\n    \"volunteer_context\",\n    \"context_pack\",\n    \"advisor\",\n    \"list_brain_skillpack\",\n    \"list_concepts\",\n    \"list_takes\",\n    \"set_take_status\",\n    \"takes_search\",\n    \"get_calibration_profile\",\n    \"takes_scorecard\",\n    \"takes_calibration\",\n    \"extract_facts\",\n    \"list_skills\",\n    \"get_skill\",\n    \"get_recent_transcripts\",\n    \"think\",\n    \"put_raw_data\",\n    \"get_raw_data\",\n    \"log_ingest\",\n    \"get_ingest_log\",\n    \"retry_job\",\n    \"get_job_progress\",\n    \"sources_list\",\n    \"sources_status\",\n    \"get_status_snapshot\",\n    \"run_doctor\",\n    \"chronicle_day\",\n    \"chronicle_since\",\n    \"chronicle_on_this_day\",\n    \"chronicle_last_seen\",\n    \"ontology_get\",\n    \"ontology_propose\",\n    \"ontology_dimensions\",\n    \"ontology_conflicts\",\n    \"volunteer_chronicle\",\n    \"chronicle_backfill\"\n  ]\n}"
+          "text": "{\"ok\":true,\"client_id\":null,\"scopes\":[],\"write_source\":null,\"read_sources\":null,\"is_public\":false,\"operator\":true,\"bound_slug_prefixes\":null,\"takes_holders\":null,\"budget_usd_per_day\":null,\"spent_today_usd\":null,\"spend_id\":null,\"callable_tools\":[\"search_exact\",\"search\",\"index\",\"backlinks\",\"stats\",\"source_health\",\"log_friction\",\"page_put\",\"page_append\",\"page_edit\",\"page_rename\",\"page_delete\",\"page_restore\",\"page_revert\",\"page_get\",\"page_list\",\"page_versions\",\"link\",\"unlink\",\"graph_neighbors\",\"graph_query\",\"traverse_graph\",\"add_fact\",\"add_timeline_event\",\"entity_facts\",\"fact_supersessions\",\"entity_timeline\",\"entity_recall\",\"jobs_submit\",\"jobs_cancel\",\"jobs_list\",\"jobs_get\",\"jobs_logs\",\"submit_agent\",\"get_agent_job\",\"get_chunks\",\"resolve_slugs\",\"add_tag\",\"remove_tag\",\"get_tags\",\"relational_recall\",\"get_links\",\"list_link_sources\",\"find_orphans\",\"wanted_pages\",\"find_experts\",\"find_contradictions\",\"find_trajectory\",\"get_recent_salience\",\"find_anomalies\",\"recall\",\"forget_fact\",\"get_brain_identity\",\"whoami\",\"purge_deleted_pages\",\"query\",\"code_callers\",\"code_callees\",\"code_def\",\"code_refs\",\"code_blast\",\"code_flow\",\"volunteer_context\",\"context_delta\",\"quarantine_list\",\"extraction_review\",\"context_pack\",\"advisor\",\"list_brain_skillpack\",\"list_concepts\",\"list_takes\",\"set_take_status\",\"takes_add\",\"takes_update\",\"takes_resolve\",\"takes_search\",\"get_calibration_profile\",\"takes_scorecard\",\"takes_calibration\",\"extract_facts\",\"list_skills\",\"get_skill\",\"get_recent_transcripts\",\"think\",\"put_raw_data\",\"get_raw_data\",\"log_ingest\",\"get_ingest_log\",\"retry_job\",\"get_job_progress\",\"sources_list\",\"sources_status\",\"get_status_snapshot\",\"run_doctor\",\"chronicle_day\",\"chronicle_since\",\"chronicle_on_this_day\",\"chronicle_last_seen\",\"ontology_get\",\"ontology_propose\",\"ontology_dimensions\",\"ontology_conflicts\",\"volunteer_chronicle\",\"chronicle_backfill\"]}"
         }
       ]
     }
@@ -1192,7 +1252,7 @@
     "call": "page_versions {\"slug\":\"team-b/alice\"}",
     "sql": [
       {
-        "text": "SELECT slug, source_id, version_n, hash_prev, hash_new, written_by, written_at::text AS written_at, written_by_principal FROM page_versions WHERE slug = $1 ORDER BY version_n DESC LIMIT $2",
+        "text": "SELECT slug, source_id, version_n, hash_prev, hash_new, written_by, change_reason, written_at::text AS written_at, written_by_principal FROM page_versions WHERE slug = $1 ORDER BY version_n DESC LIMIT $2",
         "params": [
           "team-b/alice",
           20
@@ -1216,7 +1276,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"versions\": [\n    {\n      \"slug\": \"team-b/alice\",\n      \"source_id\": \"tenantB\",\n      \"version_n\": 2,\n      \"hash_prev\": \"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\n      \"hash_new\": \"a593938132fcd000f2b001d45cb7c7b72abd4587b74a320c0409f0c117436023\",\n      \"written_by\": null,\n      \"written_at\": \"<ts>\",\n      \"written_by_principal\": \"client:client-tenantB\"\n    },\n    {\n      \"slug\": \"team-b/alice\",\n      \"source_id\": \"tenantB\",\n      \"version_n\": 1,\n      \"hash_prev\": null,\n      \"hash_new\": \"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\n      \"written_by\": null,\n      \"written_at\": \"<ts>\",\n      \"written_by_principal\": null\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"versions\":[{\"slug\":\"team-b/alice\",\"source_id\":\"tenantB\",\"version_n\":2,\"hash_prev\":\"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\"hash_new\":\"a593938132fcd000f2b001d45cb7c7b72abd4587b74a320c0409f0c117436023\",\"written_by\":null,\"change_reason\":null,\"written_at\":\"<ts>\",\"written_by_principal\":\"client:client-tenantB\"},{\"slug\":\"team-b/alice\",\"source_id\":\"tenantB\",\"version_n\":1,\"hash_prev\":null,\"hash_new\":\"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\"written_by\":null,\"change_reason\":null,\"written_at\":\"<ts>\",\"written_by_principal\":null}]}"
         }
       ]
     }
@@ -1236,7 +1296,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"slug\": \"team-b/alice\",\n  \"raw_data\": [\n    {\n      \"id\": 2,\n      \"slug\": \"team-b/alice\",\n      \"source\": \"parity\",\n      \"data\": {\n        \"note\": \"BBB_RAW_note\"\n      },\n      \"created_at\": \"<ts>\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"slug\":\"team-b/alice\",\"raw_data\":[{\"id\":2,\"slug\":\"team-b/alice\",\"source\":\"parity\",\"data\":{\"note\":\"BBB_RAW_note\"},\"created_at\":\"<ts>\"}]}"
         }
       ]
     }
@@ -1255,7 +1315,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"entries\": [\n    {\n      \"id\": 4,\n      \"source_id\": \"tenantB\",\n      \"source_type\": \"page-mirror-failed\",\n      \"source_ref\": \"team-b/alice\",\n      \"pages_updated\": [\n        \"team-b/alice\"\n      ],\n      \"summary\": \"Could not load credentials from any providers\",\n      \"created_at\": \"<ts>\"\n    },\n    {\n      \"id\": 3,\n      \"source_id\": \"tenantB\",\n      \"source_type\": \"parity\",\n      \"source_ref\": \"BBB_INGEST_ref\",\n      \"pages_updated\": [],\n      \"summary\": null,\n      \"created_at\": \"<ts>\"\n    },\n    {\n      \"id\": 2,\n      \"source_id\": \"tenantA\",\n      \"source_type\": \"page-mirror-failed\",\n      \"source_ref\": \"team-a/alice\",\n      \"pages_updated\": [\n        \"team-a/alice\"\n      ],\n      \"summary\": \"Could not load credentials from any providers\",\n      \"created_at\": \"<ts>\"\n    },\n    {\n      \"id\": 1,\n      \"source_id\": \"tenantA\",\n      \"source_type\": \"parity\",\n      \"source_ref\": \"AAA_INGEST_ref\",\n      \"pages_updated\": [],\n      \"summary\": null,\n      \"created_at\": \"<ts>\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"entries\":[{\"id\":4,\"source_id\":\"tenantB\",\"source_type\":\"page-mirror-failed\",\"source_ref\":\"team-b/alice\",\"pages_updated\":[\"team-b/alice\"],\"summary\":\"Could not load credentials from any providers\",\"created_at\":\"<ts>\"},{\"id\":3,\"source_id\":\"tenantB\",\"source_type\":\"parity\",\"source_ref\":\"BBB_INGEST_ref\",\"pages_updated\":[],\"summary\":null,\"created_at\":\"<ts>\"},{\"id\":2,\"source_id\":\"tenantA\",\"source_type\":\"page-mirror-failed\",\"source_ref\":\"team-a/alice\",\"pages_updated\":[\"team-a/alice\"],\"summary\":\"Could not load credentials from any providers\",\"created_at\":\"<ts>\"},{\"id\":1,\"source_id\":\"tenantA\",\"source_type\":\"parity\",\"source_ref\":\"AAA_INGEST_ref\",\"pages_updated\":[],\"summary\":null,\"created_at\":\"<ts>\"}]}"
         }
       ]
     }
@@ -1274,7 +1334,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"supersessions\": []\n}"
+          "text": "{\"ok\":true,\"supersessions\":[]}"
         }
       ]
     }
@@ -1293,7 +1353,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"fact\": {\n    \"id\": 2,\n    \"entity_slug\": \"people/alice\",\n    \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n    \"confidence\": 1,\n    \"source_slug\": null,\n    \"source_chunk_id\": null,\n    \"written_by\": \"unattributed\",\n    \"written_at\": \"<ts>\",\n    \"kind\": \"belief\",\n    \"notability\": null,\n    \"valid_from\": null,\n    \"valid_until\": null,\n    \"visibility\": \"private\",\n    \"superseded_by\": null,\n    \"consolidated_into\": null,\n    \"context\": null,\n    \"source_session\": null,\n    \"attributed_to\": null,\n    \"forgotten_at\": null\n  }\n}"
+          "text": "{\"ok\":true,\"fact\":{\"id\":2,\"entity_slug\":\"people/alice\",\"fact\":\"BBB_FACT_TRAJECTORY_seed\",\"confidence\":1,\"source_slug\":null,\"source_chunk_id\":null,\"written_by\":\"unattributed\",\"written_at\":\"<ts>\",\"kind\":\"belief\",\"notability\":null,\"valid_from\":null,\"valid_until\":null,\"visibility\":\"private\",\"superseded_by\":null,\"consolidated_into\":null,\"context\":null,\"source_session\":null,\"attributed_to\":null,\"forgotten_at\":null}}"
         }
       ]
     }
@@ -1320,7 +1380,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"transcripts\": [\n    {\n      \"slug\": \"claim-b2\",\n      \"type\": \"note\",\n      \"title\": \"claim-b2\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 1,\n      \"content\": \"c\"\n    },\n    {\n      \"slug\": \"claim-b1\",\n      \"type\": \"note\",\n      \"title\": \"claim-b1\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 1,\n      \"content\": \"c\"\n    },\n    {\n      \"slug\": \"claim-a2\",\n      \"type\": \"note\",\n      \"title\": \"claim-a2\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 1,\n      \"content\": \"c\"\n    },\n    {\n      \"slug\": \"claim-a1\",\n      \"type\": \"note\",\n      \"title\": \"claim-a1\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 1,\n      \"content\": \"c\"\n    },\n    {\n      \"slug\": \"spoke-b3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b3\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 5,\n      \"content\": \"spoke\"\n    },\n    {\n      \"slug\": \"spoke-b2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b2\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 5,\n      \"content\": \"spoke\"\n    },\n    {\n      \"slug\": \"spoke-b1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b1\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 5,\n      \"content\": \"spoke\"\n    },\n    {\n      \"slug\": \"hub-b\",\n      \"type\": \"note\",\n      \"title\": \"hub-b\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 3,\n      \"content\": \"hub\"\n    },\n    {\n      \"slug\": \"spoke-a3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a3\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 5,\n      \"content\": \"spoke\"\n    },\n    {\n      \"slug\": \"spoke-a2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a2\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 5,\n      \"content\": \"spoke\"\n    },\n    {\n      \"slug\": \"spoke-a1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a1\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 5,\n      \"content\": \"spoke\"\n    },\n    {\n      \"slug\": \"hub-a\",\n      \"type\": \"note\",\n      \"title\": \"hub-a\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 3,\n      \"content\": \"hub\"\n    },\n    {\n      \"slug\": \"vault-b/target\",\n      \"type\": \"note\",\n      \"title\": \"Target B\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 2,\n      \"content\": \"tb\"\n    },\n    {\n      \"slug\": \"vault-a/target\",\n      \"type\": \"note\",\n      \"title\": \"Target A\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 2,\n      \"content\": \"ta\"\n    },\n    {\n      \"slug\": \"shared/gateway\",\n      \"type\": \"note\",\n      \"title\": \"Gateway\",\n      \"updated_at\": \"<ts>\",\n      \"length\": 1,\n      \"content\": \"g\"\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"transcripts\":[{\"slug\":\"claim-b2\",\"type\":\"note\",\"title\":\"claim-b2\",\"updated_at\":\"<ts>\",\"length\":1,\"content\":\"c\"},{\"slug\":\"claim-b1\",\"type\":\"note\",\"title\":\"claim-b1\",\"updated_at\":\"<ts>\",\"length\":1,\"content\":\"c\"},{\"slug\":\"claim-a2\",\"type\":\"note\",\"title\":\"claim-a2\",\"updated_at\":\"<ts>\",\"length\":1,\"content\":\"c\"},{\"slug\":\"claim-a1\",\"type\":\"note\",\"title\":\"claim-a1\",\"updated_at\":\"<ts>\",\"length\":1,\"content\":\"c\"},{\"slug\":\"spoke-b3\",\"type\":\"note\",\"title\":\"spoke-b3\",\"updated_at\":\"<ts>\",\"length\":5,\"content\":\"spoke\"},{\"slug\":\"spoke-b2\",\"type\":\"note\",\"title\":\"spoke-b2\",\"updated_at\":\"<ts>\",\"length\":5,\"content\":\"spoke\"},{\"slug\":\"spoke-b1\",\"type\":\"note\",\"title\":\"spoke-b1\",\"updated_at\":\"<ts>\",\"length\":5,\"content\":\"spoke\"},{\"slug\":\"hub-b\",\"type\":\"note\",\"title\":\"hub-b\",\"updated_at\":\"<ts>\",\"length\":3,\"content\":\"hub\"},{\"slug\":\"spoke-a3\",\"type\":\"note\",\"title\":\"spoke-a3\",\"updated_at\":\"<ts>\",\"length\":5,\"content\":\"spoke\"},{\"slug\":\"spoke-a2\",\"type\":\"note\",\"title\":\"spoke-a2\",\"updated_at\":\"<ts>\",\"length\":5,\"content\":\"spoke\"},{\"slug\":\"spoke-a1\",\"type\":\"note\",\"title\":\"spoke-a1\",\"updated_at\":\"<ts>\",\"length\":5,\"content\":\"spoke\"},{\"slug\":\"hub-a\",\"type\":\"note\",\"title\":\"hub-a\",\"updated_at\":\"<ts>\",\"length\":3,\"content\":\"hub\"},{\"slug\":\"vault-b/target\",\"type\":\"note\",\"title\":\"Target B\",\"updated_at\":\"<ts>\",\"length\":2,\"content\":\"tb\"},{\"slug\":\"vault-a/target\",\"type\":\"note\",\"title\":\"Target A\",\"updated_at\":\"<ts>\",\"length\":2,\"content\":\"ta\"},{\"slug\":\"shared/gateway\",\"type\":\"note\",\"title\":\"Gateway\",\"updated_at\":\"<ts>\",\"length\":1,\"content\":\"g\"}]}"
         }
       ]
     }
@@ -1353,7 +1413,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"perSource\": [\n    {\n      \"source_id\": \"tenantA\",\n      \"document_count\": 3,\n      \"chunk_count\": 4,\n      \"embeddable_chunks\": 4,\n      \"embedded_chunks\": 1,\n      \"embed_coverage_pct\": 0.25,\n      \"code_chunks\": 0,\n      \"lag_seconds\":0\n    },\n    {\n      \"source_id\": \"tenantB\",\n      \"document_count\": 3,\n      \"chunk_count\": 4,\n      \"embeddable_chunks\": 4,\n      \"embedded_chunks\": 1,\n      \"embed_coverage_pct\": 0.25,\n      \"code_chunks\": 0,\n      \"lag_seconds\":0\n    }\n  ],\n  \"health\": {\n    \"embeddable_chunks\": 8,\n    \"embedded_chunks\": 2,\n    \"embed_coverage_pct\": 0.25,\n    \"code_chunks\": 0,\n    \"lag_seconds\":0,\n    \"queue_depth\": 0,\n    \"failed_jobs_24h\": 0\n  }\n}"
+          "text": "{\"ok\":true,\"perSource\":[{\"source_id\":\"tenantA\",\"document_count\":3,\"chunk_count\":4,\"embeddable_chunks\":4,\"embedded_chunks\":1,\"embed_coverage_pct\":0.25,\"code_chunks\":0,\"lag_seconds\":0},{\"source_id\":\"tenantB\",\"document_count\":3,\"chunk_count\":4,\"embeddable_chunks\":4,\"embedded_chunks\":1,\"embed_coverage_pct\":0.25,\"code_chunks\":0,\"lag_seconds\":0}],\"health\":{\"embeddable_chunks\":8,\"embedded_chunks\":2,\"embed_coverage_pct\":0.25,\"code_chunks\":0,\"lag_seconds\":0,\"queue_depth\":0,\"failed_jobs_24h\":0}}"
         }
       ]
     }
@@ -1382,7 +1442,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"date\": \"2026-01-02\",\n  \"events\": [\n    {\n      \"date\": \"2026-01-02\",\n      \"summary\": \"AAA_EVENT_fixed\",\n      \"detail\": \"\",\n      \"slug\": \"team-a/alice\",\n      \"event_slug\": null,\n      \"kind\": null\n    },\n    {\n      \"date\": \"2026-01-02\",\n      \"summary\": \"BBB_EVENT_fixed\",\n      \"detail\": \"\",\n      \"slug\": \"team-b/alice\",\n      \"event_slug\": null,\n      \"kind\": null\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"date\":\"2026-01-02\",\"events\":[{\"date\":\"2026-01-02\",\"summary\":\"AAA_EVENT_fixed\",\"detail\":\"\",\"slug\":\"team-a/alice\",\"event_slug\":null,\"kind\":null},{\"date\":\"2026-01-02\",\"summary\":\"BBB_EVENT_fixed\",\"detail\":\"\",\"slug\":\"team-b/alice\",\"event_slug\":null,\"kind\":null}]}"
         }
       ]
     }
@@ -1411,7 +1471,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"date\": \"<date>\",\n  \"events\": [\n    {\n      \"date\": \"2026-01-02\",\n      \"summary\": \"AAA_EVENT_fixed\",\n      \"detail\": \"\",\n      \"slug\": \"team-a/alice\",\n      \"event_slug\": null,\n      \"kind\": null\n    },\n    {\n      \"date\": \"2026-01-02\",\n      \"summary\": \"BBB_EVENT_fixed\",\n      \"detail\": \"\",\n      \"slug\": \"team-b/alice\",\n      \"event_slug\": null,\n      \"kind\": null\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"date\":\"<date>\",\"events\":[{\"date\":\"2026-01-02\",\"summary\":\"AAA_EVENT_fixed\",\"detail\":\"\",\"slug\":\"team-a/alice\",\"event_slug\":null,\"kind\":null},{\"date\":\"2026-01-02\",\"summary\":\"BBB_EVENT_fixed\",\"detail\":\"\",\"slug\":\"team-b/alice\",\"event_slug\":null,\"kind\":null}]}"
         }
       ]
     }
@@ -1443,7 +1503,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"entity\": \"people/alice\",\n  \"ontology\": [\n    {\n      \"dimension\": \"role\",\n      \"value\": \"BBB_ONTO\",\n      \"confidence\": 0.7,\n      \"source_slug\": null,\n      \"valid_from\": \"<date>\",\n      \"valid_to\": null,\n      \"status\": \"active\",\n      \"fact_id\": 4\n    }\n  ]\n}"
+          "text": "{\"ok\":true,\"entity\":\"people/alice\",\"ontology\":[{\"dimension\":\"role\",\"value\":\"BBB_ONTO\",\"confidence\":0.7,\"source_slug\":null,\"valid_from\":\"<date>\",\"valid_to\":null,\"status\":\"active\",\"fact_id\":4}]}"
         }
       ]
     }

@@ -26,7 +26,7 @@ const EXTERNAL_DOCUMENT = `(EXISTS (SELECT 1 FROM sources s WHERE s.id = d.sourc
 export interface TrustSelection {
   chunks?: readonly string[];
   pages?: readonly string[];
-  facts?: readonly number[];
+  facts?: readonly (number | string)[];
   events?: readonly number[];
 }
 

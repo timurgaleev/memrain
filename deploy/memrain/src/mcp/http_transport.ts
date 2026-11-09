@@ -6,6 +6,7 @@
  *                                version and the memrain operating contract
  *   - `tools/list`               the tools this caller can call (mcp/visibility.ts)
  *   - `tools/call`               { name, arguments } → tool result
+ *   - `prompts/list`, `prompts/get`  explicitly opted-in skill text, scoped by tool access
  *   - `ping`                     health probe (returns {})
  *
  * Anything else returns -32601 (method not found). Malformed JSON gets
@@ -27,12 +28,13 @@ import { publicSafeErrorMessage } from "../core/public_redaction.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
 import { resolveClientKey } from "../http/client-key.ts";
 import { resolveServerInfo, resolveServerInstructions } from "./server-instructions.ts";
+import { getSkillPrompt, listSkillPrompts } from "../core/skillpack/prompts.ts";
 
 /**
  * The MCP revisions this server speaks, oldest first. Each one's required
  * server behaviour is met: 2025-06-18 adds only optional result fields
  * (structured output, resource links, `title`) plus the protocol-version
- * header checked below, and 2025-11-25's additions for a tools-only HTTP server
+ * header checked below, and 2025-11-25's additions for this HTTP server
  * are optional too (icons, tasks, incremental consent). The JSON Schema dialect
  * change to 2020-12 is harmless: the generated inputSchemas use only keywords
  * both drafts read the same way.
@@ -320,16 +322,24 @@ async function handleSingle(
     ...(ctx.authInfo ? { tokenName: ctx.authInfo.clientId } : {}),
     force: ctx.authInfo !== undefined,
   };
+  const promptOptions = () => {
+    if (ctx.isPublic || ctx.authInfo?.isPublic) return null;
+    const visible = new Set(visibleToolDefs(ctx, forbidPublic).map(tool => tool.name));
+    if (!visible.has("list_skills") || !visible.has("get_skill")) return null;
+    return { callable: (name: string) => visible.has(name),
+      ...(process.env.MEMRAIN_SKILLS_DIR?.trim() ? { skillsDir: process.env.MEMRAIN_SKILLS_DIR } : {}) };
+  };
 
   switch (req.method) {
     case "initialize": {
       // The contract names only tools this caller can call, judged by the
       // same predicate tools/list uses.
       const visible = new Set(visibleToolDefs(ctx, forbidPublic).map((t) => t.name));
+      const promptConfig = promptOptions();
       return rpcOk(id, {
         protocolVersion: negotiateProtocolVersion(req.params?.protocolVersion),
         serverInfo: SERVER_INFO,
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, ...(promptConfig && listSkillPrompts(promptConfig).prompts.length ? { prompts: {} } : {}) },
         instructions: resolveServerInstructions(process.env, { callable: (name) => visible.has(name) }),
         // memrain's own response-shape version, distinct from the MCP protocol
         // version above: that pins the transport, this pins what memrain puts
@@ -337,6 +347,26 @@ async function handleSingle(
         // does not know instead of discovering the change in production.
         _meta: { memexResponseVersion: MEMRAIN_RESPONSE_VERSION },
       });
+    }
+    case "prompts/list": {
+      const options = promptOptions();
+      if (!options) return rpcError(id, ERR_METHOD_NOT_FOUND, "method not found");
+      const cursor = req.params?.cursor;
+      if (cursor !== undefined && (typeof cursor !== "string" || !/^[a-z0-9][\w-]{0,127}$/i.test(cursor))) {
+        return rpcError(id, -32602, "Invalid prompt cursor");
+      }
+      return rpcOk(id, listSkillPrompts(options, cursor as string | undefined));
+    }
+    case "prompts/get": {
+      const options = promptOptions();
+      if (!options) return rpcError(id, ERR_METHOD_NOT_FOUND, "method not found");
+      const args = req.params?.arguments;
+      if (args !== undefined && (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length)) {
+        return rpcError(id, -32602, "This prompt takes no arguments");
+      }
+      const name = req.params?.name;
+      const prompt = typeof name === "string" ? getSkillPrompt(name, options) : null;
+      return prompt ? rpcOk(id, prompt) : rpcError(id, -32602, "Prompt not found");
     }
     case "tools/list":
       // Log tools/list too — a client that only ever lists tools should

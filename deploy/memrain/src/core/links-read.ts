@@ -19,6 +19,8 @@
 import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { validateSlug, KNOWN_LINK_TYPES, liveEdgeSql, type LinkRow } from "./links.ts";
+import { linkDiarySql } from "./links-privacy.ts";
+import { linkValiditySql, linkValidityProjection, type LinkTemporalOptions } from "./link-validity.ts";
 
 /** One typed-edge bucket for a slug — same type, one direction. */
 export interface LinkGroup {
@@ -28,7 +30,7 @@ export interface LinkGroup {
   links: LinkRow[];
 }
 
-export interface GetLinksOptions {
+export interface GetLinksOptions extends LinkTemporalOptions {
   /** Max edges scanned per direction (1..1000). Default 1000. */
   limit?: number;
   /**
@@ -65,24 +67,26 @@ export async function getLinksPage(storage: Storage, slug: string, opts: GetLink
   const params: unknown[] = [slug, limit + 1];
   // Tenant scope (mig047): same filter string in both UNION arms.
   const scopeFilter = andSourceScope("source_id", opts.sourceIds, params);
-  const diaryFilter = opts.excludeDiary ? " AND source_slug NOT LIKE 'life/diary/%' AND target_slug NOT LIKE 'life/diary/%'" : "";
+  const validity = linkValiditySql("links", opts, params);
+  const validityColumns = linkValidityProjection(opts);
+  const diaryFilter = linkDiarySql("links", opts.excludeDiary, params);
   const r = await storage.engine().query<
     LinkRow & { direction: "outbound" | "inbound" }
   >(
     `(SELECT id, source_slug, target_slug, type, inferred_confidence,
-             source_chunk_id, written_at::text AS written_at,
+             source_chunk_id, written_at::text AS written_at${validityColumns},
              'outbound' AS direction
         FROM links
-       WHERE source_slug = $1${scopeFilter}${diaryFilter}
+       WHERE source_slug = $1${scopeFilter}${diaryFilter}${validity}
          AND ${liveEdgeSql("links")}
        ORDER BY written_at DESC, id DESC
        LIMIT $2)
      UNION ALL
      (SELECT id, source_slug, target_slug, type, inferred_confidence,
-             source_chunk_id, written_at::text AS written_at,
+             source_chunk_id, written_at::text AS written_at${validityColumns},
              'inbound' AS direction
         FROM links
-       WHERE target_slug = $1${scopeFilter}${diaryFilter}
+       WHERE target_slug = $1${scopeFilter}${diaryFilter}${validity}
          AND ${liveEdgeSql("links")}
        ORDER BY written_at DESC, id DESC
        LIMIT $2)`,

@@ -108,6 +108,9 @@ const PUBLIC_WRITE_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 const FORBIDDEN_MCP_TOOLS_FROM_PUBLIC: ReadonlySet<string> = new Set([
+  "context_delta",
+  "quarantine_list",
+  "extraction_review",
   // Destructive writes — never reachable from public, even with the write flag.
   "log_friction",
   "page_rename",
@@ -180,6 +183,9 @@ const FORBIDDEN_MCP_TOOLS_FROM_PUBLIC: ReadonlySet<string> = new Set([
   // unscoped WRITE ("Internal-only" by its own description) that could flip any
   // take's review status brain-wide from the public bearer. Both internal-only.
   "takes_search",
+  "takes_add",
+  "takes_update",
+  "takes_resolve",
   "set_take_status",
   "get_calibration_profile",
   // Take aggregates + on-demand fact extraction expose the same private-note-

@@ -118,6 +118,7 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   "facts-input-windows",
   "fence-rows-without-markers",
   "namespace-only-targets",
+  "mixed-script-targets",
   "dangling-slug-redirects",
   "outside-content-fences",
   "embed-backlog",

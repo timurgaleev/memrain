@@ -268,6 +268,7 @@ export async function patternsPhase(
         markdown_body: body,
         source_id: sourceId,
         written_by: "patterns",
+        written_by_principal: "operator",
         onlyOverwriteWriter: "patterns",
       });
       if (pageWrite.held) base.pagesHeld += 1;
