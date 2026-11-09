@@ -15,6 +15,7 @@
  * For now the agent writes those types via the explicit `link` MCP
  * tool.
  */
+import { posix } from "node:path";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
@@ -827,7 +828,7 @@ const MARKDOWN_LINK_RE = /\[[^\]\n]{1,512}\]\(([^)\s]+)\)/g;
 const MAX_SCAN_LEN = 1_000_000;
 
 /**
- * Mask fenced (```...```) and inline (`...`) code spans with equal-length
+ * Mask HTML comments, fenced (```...```) and inline (`...`) code spans with equal-length
  * whitespace. Length-preserving on purpose: the gazetteer scans by offset, so a
  * collapsing strip would shift every later match. A `[[foo]]` or `[Name](foo)`
  * inside code is a sample, not a real reference — blanking the span keeps it out
@@ -837,6 +838,13 @@ export function stripCodeBlocks(content: string): string {
   let out = "";
   let i = 0;
   while (i < content.length) {
+    if (content.startsWith("<!--", i)) {
+      const close = content.indexOf("-->", i + 4);
+      const end = close < 0 ? content.length : close + 3;
+      out += " ".repeat(end - i);
+      i = end;
+      continue;
+    }
     if (content.startsWith("```", i)) {
       const end = content.indexOf("```", i + 3);
       if (end === -1) {
@@ -897,14 +905,15 @@ export function extractWikilinks(body: string): string[] {
 
 /**
  * Extract distinct `[Name](path)` markdown-link targets from a body. External
- * URLs are skipped; a leading `../` and a trailing `.md` are peeled so both
- * `[A](../people/alice.md)` and `[A](people/alice)` yield `people/alice`. A
- * heading anchor is dropped. Code spans are masked as in extractWikilinks.
+ * URLs are skipped. Explicit ./ and ../ paths resolve relative to sourceSlug's
+ * directory; other paths keep the repository's root-slug convention. Without a
+ * sourceSlug the legacy leading-../ stripping remains. Percent escapes are
+ * decoded, and an unescaped heading anchor and trailing .md are dropped.
  * Unlike a bare wikilink, a markdown link only becomes an edge when it resolves
  * to a real page (see syncWikilinksForPage) — memrain has no dir whitelist to
  * pre-filter these.
  */
-export function extractMarkdownLinks(body: string): string[] {
+export function extractMarkdownLinks(body: string, sourceSlug?: string): string[] {
   if (typeof body !== "string" || body.length === 0) return [];
   const scannable = stripCodeBlocks(body.slice(0, MAX_SCAN_LEN));
   const seen = new Set<string>();
@@ -915,18 +924,18 @@ export function extractMarkdownLinks(body: string): string[] {
     match = MARKDOWN_LINK_RE.exec(scannable)
   ) {
     const captured = match[1];
-    if (!captured || captured.includes("://")) continue;
-    const target = captured
-      .replace(/^(?:\.\.\/)+/, "")
-      // Measured linear through extractMarkdownLinks: 5.2 ms at a 500 K-char
-      // `#` target, ratio 2.0 on a doubling. MARKDOWN_LINK_RE's group 1 is
-      // `[^)\s]+`, which excludes every whitespace char — with no newline in
-      // the string `.*` always reaches the end and `$` succeeds at the first
-      // `#`, so there is no failing suffix to backtrack over.
-      // eslint-disable-next-line regexp/no-super-linear-move
-      .replace(/#.*$/, "")
-      .replace(/\.md$/, "")
-      .trim();
+    if (!captured) continue;
+    let target: string;
+    try { target = decodeURIComponent(captured.split("#", 1)[0]!).trim(); }
+    catch { continue; }
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) continue;
+    if (target.startsWith("./") || target.startsWith("../")) {
+      target = sourceSlug === undefined
+        ? target.replace(/^(?:\.\.?\/)+/, "")
+        : posix.normalize(posix.join(posix.dirname(sourceSlug), target));
+    }
+    if (target === ".." || target.startsWith("../")) continue;
+    target = target.replace(/\.md$/, "");
     if (target.length > 0) seen.add(target);
   }
   return [...seen];
@@ -991,7 +1000,7 @@ export async function syncWikilinksForPage(
   // dir whitelist to pre-filter it, so the resolver's existence check is the
   // gate. An unresolved path makes no edge; when it could still name a page
   // it is recorded as wanted, so the edge appears once that page exists.
-  for (const path of extractMarkdownLinks(body)) {
+  for (const path of extractMarkdownLinks(body, sourceSlug)) {
     const r = await resolver.resolve(path);
     if (r.slug === sourceSlug || r.slug === "unknown") continue;
     if (r.resolved) byTarget.set(r.slug, true);
@@ -1299,7 +1308,7 @@ export async function syncCodeRefsForPage(
  * the capped `links-stale` cycle phase and by `memrain extract --stale`
  * (links-stale-sweep.ts); a page write re-extracts its own page inline.
  */
-export const LINK_EXTRACTOR_VERSION_TS = "2026-10-10T00:00:00Z";
+export const LINK_EXTRACTOR_VERSION_TS = "2026-11-09T00:00:00Z";
 
 /**
  * Stamp a page as freshly link-extracted. Called AFTER the full link-sync set

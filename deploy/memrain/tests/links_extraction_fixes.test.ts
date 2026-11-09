@@ -260,3 +260,31 @@ describe("syncCodeRefsForPage", () => {
     expect(gone.removed).toBe(1);
   });
 });
+
+describe("encoded, relative and commented links", () => {
+  it("decodes spaces and anchors relative paths to the source page directory", async () => {
+    await putPage(storage, { slug: "projects/alpha/people/alice-smith", type: "person", title: "Alice Smith" });
+    await putPage(storage, { slug: "projects/alpha/notes/sibling", type: "note" });
+    await putPage(storage, { slug: "projects/alpha/notes/today", type: "note" });
+    await syncWikilinksForPage(storage, "projects/alpha/notes/today",
+      "[Alice](../people/Alice%20Smith.md#bio) and [Sibling](./sibling.md)");
+    const links = await graphNeighbors(storage, "projects/alpha/notes/today", { direction: "outbound" });
+    expect(links.map(l => l.target_slug).sort()).toEqual(["projects/alpha/notes/sibling", "projects/alpha/people/alice-smith"]);
+  });
+  it("masks HTML comments across scanners while preserving offsets and visible text", () => {
+    const body = "visible <!-- [[hidden]] [Secret](people/secret) src/secret.ts:4 --> [[shown]]";
+    expect(stripCodeBlocks(body).length).toBe(body.length);
+    expect(extractWikilinks(body)).toEqual(["shown"]);
+    expect(extractMarkdownLinks(body)).toEqual([]);
+    expect(extractCodeRefs(body)).toEqual([]);
+    expect(extractWikilinks("[[shown]] <!-- [[hidden]]")).toEqual(["shown"]);
+  });
+  it("masks a long unclosed comment in one bounded scan", () => {
+    const body = "before <!-- " + "<!-- [[hidden]] ".repeat(60_000);
+    const start = performance.now();
+    const masked = stripCodeBlocks(body);
+    expect(masked.length).toBe(body.length);
+    expect(masked.trim()).toBe("before");
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+});
