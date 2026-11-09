@@ -37,6 +37,7 @@ import { runFriction } from "./commands/friction.ts";
 import { runEvalExport } from "./commands/eval-export.ts";
 import { runExport } from "./commands/export.ts";
 import { runImport } from "./commands/import.ts";
+import { runMirrorAdopt } from "./commands/mirror-adopt.ts";
 import { runBackupStatus } from "./commands/backup.ts";
 import { runEvalPrune } from "./commands/eval-prune.ts";
 import { runApplyMigrations } from "./commands/apply-migrations.ts";
@@ -102,7 +103,8 @@ function printUsage(): void {
   console.log("Commands:");
   console.log("  backup status [--rds-instance ID] [--efs-id ID] [--copy-report FILE]  inspect backup evidence");
   console.log("  export [--dir DIR] [--source ID]  export live pages as markdown");
-  console.log("  import --dir DIR --source ID [--apply]  preview create-only page import; indexing deferred");
+  console.log("  import --dir DIR --source ID [--apply --plan-hash HASH]  preview create-only page import; indexing deferred");
+  console.log("  mirror-adopt --source ID [--limit N] [--apply --plan-hash HASH]  preview proven mirror ownership repair");
   console.log("  aliases suggest [--source ID] [--limit N] [--json]  preview undeclared name aliases");
   console.log("  models [--probe] [--max-cost-usd N] [--json]  resolved chat models and registered prices");
   console.log("  engine status [--probe] [--json]  inspect engine config; optionally test one connection");
@@ -121,6 +123,7 @@ function printUsage(): void {
   console.log("                               arm-by-arm probe: where does the target surface (keyword/vector/alias/hybrid)?");
   console.log("  reindex [--all] [--vault P] [--source vault|code|all] [--paths CSV] [--rechunk-stale] [--reconcile-deletes] [--allow-mass-delete]");
   console.log("  reindex --contextual [--force] [--dry-run] [--limit N]");
+  console.log("  reindex --rechunk-stale [--dry-run] [--limit N] [--plan-hash HASH --max-cost-usd N]");
   console.log("                               whole-corpus from-DB re-embed under the contextual-retrieval wrapper");
   console.log("                               walk the vault and/or code roots, index changed (or all) files");
   console.log("                               (--reconcile-deletes soft-deletes vault docs whose file is gone)");
@@ -297,7 +300,7 @@ function printUsage(): void {
   console.log("  capture [<text>] [--stdin] [--file P] [--slug S] [--type T] [--source ID] [--title T]");
   console.log("                               one-command note capture → page + search mirror");
   console.log("  transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code] [--source ID] [--since ISO|7d|auto] [--no-embed] [--facts --max-cost-usd N] [--dry-run] [--json]");
-  console.log("  transcripts repair-origin <path> [--source ID] [--format auto|codex|claude-code] [--apply] [--json]");
+  console.log("  transcripts repair-origin <path> [--source ID] [--format auto|codex|claude-code] [--apply --plan-hash HASH] [--json]");
   console.log("  transcripts status [--source ID] [--json]");
   console.log("  transcripts push <path> --url URL --token-file F [--hook-stdin] [--dry-run] [--json]");
   console.log("                               import a ChatGPT / Claude.ai export or Codex / Claude Code session logs");
@@ -405,6 +408,21 @@ async function main(argv: readonly string[]): Promise<number> {
       if (flags.has("--contextual")) opts.contextual = true;
       if (flags.has("--force")) opts.force = true;
       if (flags.has("--dry-run")) opts.dryRun = true;
+      const planHash = values.get("--plan-hash");
+      if (planHash !== undefined) {
+        if (!/^[a-f0-9]{64}$/.test(planHash)) {
+          throw new Error("memrain reindex: --plan-hash must be the 64-character hash from a preview");
+        }
+        opts.planHash = planHash;
+      }
+      const maxCostStr = values.get("--max-cost-usd");
+      if (maxCostStr !== undefined) {
+        const n = Number(maxCostStr);
+        if (maxCostStr.trim() === "" || !Number.isFinite(n) || n < 0) {
+          throw new Error("memrain reindex: --max-cost-usd must be a finite non-negative number");
+        }
+        opts.maxCostUsd = n;
+      }
       const ctxLimitStr = values.get("--limit");
       if (ctxLimitStr !== undefined) {
         const n = Number(ctxLimitStr);
@@ -1016,7 +1034,16 @@ async function main(argv: readonly string[]): Promise<number> {
     case "import": {
       if (positional.length) throw new Error("import: use --dir and --source");
       if (flags.has("--apply") && flags.has("--dry-run")) throw new Error("import: choose --apply or --dry-run");
-      return runImport({ dir: values.get("--dir") ?? "", source: values.get("--source") ?? "", apply: flags.has("--apply") });
+      return runImport({ dir: values.get("--dir") ?? "", source: values.get("--source") ?? "", apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
+    }
+    case "mirror-adopt": {
+      if (positional.length) throw new Error("mirror-adopt: use --source and --limit");
+      const limit = values.get("--limit");
+      if (limit !== undefined && (!/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > 200)) {
+        throw new Error("mirror-adopt: --limit must be an integer from 1 to 200");
+      }
+      return runMirrorAdopt({ source: values.get("--source") ?? "", limit: limit === undefined ? undefined : Number(limit),
+        apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
     }
     case "export": {
       const opts: Parameters<typeof runExport>[0] = {};
@@ -1705,6 +1732,11 @@ async function main(argv: readonly string[]): Promise<number> {
       if (flags.has("--apply")) opts.apply = true;
       if (flags.has("--dry-run")) opts.dryRun = true;
       if (flags.has("--json")) opts.json = true;
+      const planHash = values.get("--plan-hash");
+      if (planHash !== undefined) {
+        if (opts.sub !== "repair-origin") throw new Error("transcripts: --plan-hash is only valid for repair-origin");
+        opts.planHash = planHash;
+      }
       return await runTranscripts(opts);
     }
     case "connectors": {

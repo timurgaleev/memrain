@@ -66,6 +66,10 @@ describe("page → search bridge", () => {
 
     const docId = await docIdForSlug(slug);
     expect(docId).not.toBeNull();
+    expect((await storage.engine().query("SELECT source_id FROM documents WHERE id = $1", [docId])).rows)
+      .toEqual([{ source_id: "default" }]);
+    expect((await storage.engine().query("SELECT DISTINCT source_id FROM chunks WHERE document_id = $1", [docId])).rows)
+      .toEqual([{ source_id: "default" }]);
 
     const hits = await keywordSearch(storage.engine(), "zorblax", 10);
     expect(hits.some((id) => id.startsWith(docId!))).toBe(true);

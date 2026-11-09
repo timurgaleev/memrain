@@ -43,6 +43,29 @@ function oldParseArgs(raw: readonly string[]) {
 }
 
 describe("boolean flags never consume a positional (CLI-2)", () => {
+  it("retains pinned repair and import plans alongside apply", () => {
+    const hash = "b".repeat(64);
+    for (const argv of [
+      ["import", "--dir", "/export", "--source", "team", "--apply", "--plan-hash", hash],
+      ["transcripts", "repair-origin", "/session.jsonl", "--source", "team", "--apply", "--plan-hash", hash],
+      ["mirror-adopt", "--source", "team", "--limit", "1", "--apply", "--plan-hash", hash],
+    ]) {
+      const parsed = parseArgs(argv);
+      expect(parsed.values.get("--plan-hash")).toBe(hash);
+      expect(parsed.values.get("--source")).toBe("team");
+      expect(parsed.flags.has("--apply")).toBe(true);
+    }
+  });
+
+  it("retains the exact rechunk plan and zero-dollar code budget", () => {
+    const hash = "a".repeat(64);
+    const parsed = parseArgs(["reindex", "--rechunk-stale", "--source", "code", "--plan-hash", hash, "--max-cost-usd", "0"]);
+    expect(parsed.flags.has("--rechunk-stale")).toBe(true);
+    expect(parsed.values.get("--plan-hash")).toBe(hash);
+    expect(parsed.values.get("--max-cost-usd")).toBe("0");
+    expect(parsed.positional).toEqual([]);
+  });
+
   it("keeps the slug AND the dry-run for `embed --dry-run <slug>`", () => {
     // The old parser turned this into values={'--dry-run': 'notes/x'} with an
     // EMPTY flag set, so embed ran a real, paid, whole-corpus backfill.

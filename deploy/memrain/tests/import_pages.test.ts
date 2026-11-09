@@ -24,7 +24,9 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     const root = file("conflict", "notes/live"); file("conflict", "notes/deleted"); file("conflict", "notes/new");
     const log = spyOn(console, "log").mockImplementation(() => {});
     try {
-      expect(await runImport({ dir: root, source: "default", apply: true, storage: s })).toBe(1);
+      expect(await runImport({ dir: root, source: "default", storage: s })).toBe(1);
+      const planHash = JSON.parse(String(log.mock.calls.at(-1)![0])).plan_hash;
+      expect(await runImport({ dir: root, source: "default", apply: true, planHash, storage: s })).toBe(1);
       expect((await s.engine().query("SELECT slug FROM pages WHERE slug = 'notes/new'")).rows).toHaveLength(0);
       expect((await s.engine().query<{ markdown_body: string }>("SELECT markdown_body FROM pages WHERE slug = 'notes/deleted'")).rows[0]?.markdown_body).toBe("Keep this");
     } finally { log.mockRestore(); }
@@ -39,7 +41,9 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
       // Restrict the fixture to the two new pages; exports retain the slugs.
       rmSync(join(root, "notes/live.md"));
       await s.engine().query("DELETE FROM pages WHERE slug IN ('notes/quoted', 'notes/literal', 'notes/multiline')");
-      expect(await runImport({ dir: root, source: "copy", apply: true, storage: s })).toBe(0);
+      expect(await runImport({ dir: root, source: "copy", storage: s })).toBe(0);
+      const planHash = JSON.parse(String(log.mock.calls.at(-1)![0])).plan_hash;
+      expect(await runImport({ dir: root, source: "copy", apply: true, planHash, storage: s })).toBe(0);
       const rows = (await s.engine().query("SELECT title, markdown_body, source_id FROM pages WHERE source_id = 'copy' ORDER BY slug")).rows;
       expect(rows).toEqual([{ title: "true", markdown_body: "\nBody\n\n", source_id: "copy" }, { title: "Line one\nLine two", markdown_body: "\nBody\n\n", source_id: "copy" }, { title: 'A: "quoted" title', markdown_body: "\nBody\n\n", source_id: "copy" }]);
     } finally { log.mockRestore(); }

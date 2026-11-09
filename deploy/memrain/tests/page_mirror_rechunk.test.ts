@@ -16,7 +16,7 @@ import {
   indexPageIntoSearch,
   reconcilePageMirrors,
 } from "../src/core/page-index.ts";
-import { MARKDOWN_CHUNKER_VERSION } from "../src/core/chunkers/recursive.ts";
+import { AUTO_MARKDOWN_RECHUNK_VERSION, MARKDOWN_CHUNKER_VERSION } from "../src/core/chunkers/recursive.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
 const embedFn = (t: string) => Promise.resolve(deterministicEmbed(t));
@@ -64,11 +64,11 @@ describe("reconcilePageMirrors chunker-version staleness", () => {
     );
     expect(await chunkerVersionOf("page://note-x")).toBe(MARKDOWN_CHUNKER_VERSION);
 
-    // Simulate a pre-bump mirror: stamp it one version behind.
+    // Simulate a mirror below the automatically approved upgrade floor.
     await storage
       .engine()
       .exec(
-        `UPDATE documents SET chunker_version = ${MARKDOWN_CHUNKER_VERSION - 1} WHERE source_path = 'page://note-x'`,
+        `UPDATE documents SET chunker_version = ${AUTO_MARKDOWN_RECHUNK_VERSION - 1} WHERE source_path = 'page://note-x'`,
       );
 
     const r = await reconcilePageMirrors(storage, { embedFn });
@@ -87,12 +87,12 @@ describe("reconcilePageMirrors chunker-version staleness", () => {
       MARKDOWN_CHUNKER_VERSION,
     );
 
-    // Simulate a pre-bump truth mirror: stamp one version behind. The hash
+    // Simulate a truth mirror below the automatic floor. The hash
     // stamp is still fresh, so ONLY the version arm can trigger the re-mirror.
     await storage
       .engine()
       .exec(
-        `UPDATE documents SET chunker_version = ${MARKDOWN_CHUNKER_VERSION - 1} WHERE source_path = 'page-truth://note-t'`,
+        `UPDATE documents SET chunker_version = ${AUTO_MARKDOWN_RECHUNK_VERSION - 1} WHERE source_path = 'page-truth://note-t'`,
       );
     const r = await reconcilePageMirrors(storage, { embedFn });
     expect(r.mirrored).toBeGreaterThanOrEqual(1);

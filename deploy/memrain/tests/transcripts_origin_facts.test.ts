@@ -43,10 +43,11 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     const preview = await repairTranscriptOrigin(db.storage, evidence, "default");
     expect(preview).toMatchObject({ applied: false, facts: 2, changed: 0, pages: [{ slug: "transcripts/codex/proven-p1", facts: 2 }] });
     expect((await db.storage.engine().query<Record<string, unknown>>(`SELECT * FROM entity_facts WHERE entity_slug = 'projects/repair' ORDER BY id`)).rows).toEqual(before);
-    expect(await repairTranscriptOrigin(db.storage, evidence, "default", true)).toMatchObject({ applied: true, changed: 2 });
+    expect(await repairTranscriptOrigin(db.storage, evidence, "default", true, preview.plan_hash)).toMatchObject({ applied: true, changed: 2 });
     const after = (await db.storage.engine().query<Record<string, unknown>>(`SELECT * FROM entity_facts WHERE entity_slug = 'projects/repair' ORDER BY id`)).rows;
     expect(after).toEqual(before.map(r => r.source_slug === "transcripts/codex/proven-p1" && (r.attributed_to === "user" || r.attributed_to === null) ? { ...r, attributed_to: "other" } : r));
-    expect((await repairTranscriptOrigin(db.storage, evidence, "default", true)).changed).toBe(0);
+    const again = await repairTranscriptOrigin(db.storage, evidence, "default");
+    expect((await repairTranscriptOrigin(db.storage, evidence, "default", true, again.plan_hash)).changed).toBe(0);
   });
   it("rolls back a conflicting relabel instead of deleting either claim", async () => {
     const slug = "transcripts/codex/collision-p1";
@@ -55,7 +56,9 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
       entity_slug: "projects/collision", fact: "Same claim from two speakers", source_slug: slug, source_chunk_id: "origin-collision", attributed_to,
     });
     const before = (await db.storage.engine().query("SELECT * FROM entity_facts WHERE source_slug = $1 ORDER BY id", [slug])).rows;
-    await expect(repairTranscriptOrigin(db.storage, [{ format: "codex", id: "collision" }], "default", true)).rejects.toThrow(/duplicate key/);
+    const evidence = [{ format: "codex", id: "collision" }];
+    const plan = await repairTranscriptOrigin(db.storage, evidence, "default");
+    await expect(repairTranscriptOrigin(db.storage, evidence, "default", true, plan.plan_hash)).rejects.toThrow(/duplicate key/);
     expect((await db.storage.engine().query("SELECT * FROM entity_facts WHERE source_slug = $1 ORDER BY id", [slug])).rows).toEqual(before);
   });
 

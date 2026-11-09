@@ -11,11 +11,10 @@
  * code) corpus — if a third doc kind is ever indexed it would fall into the
  * markdown comparison; split the predicate then.
  *
- * DETECT-ONLY (same as the LINK_EXTRACTOR_VERSION watermark): this only COUNTS
- * stale docs — there is no post-upgrade re-embed sweep, so a bumped chunker
- * constant raises the doctor count but performs no work — a stale doc re-chunks
- * lazily on its next natural reindex. A batch re-chunk sweep is a follow-up
- * (TODO).
+ * Detection compares against the current versions. Automatic maintenance uses
+ * its separately approved Markdown floor; a new version alone does not opt an
+ * unchanged corpus into paid work. `reindex --rechunk-stale` previews the exact
+ * current-version targets before a bounded, hash-pinned apply.
  */
 import type { Engine } from "./engine/interface.ts";
 import { MARKDOWN_CHUNKER_VERSION } from "./chunkers/recursive.ts";

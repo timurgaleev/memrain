@@ -67,6 +67,7 @@ import { guardLocalIndex, type RereadGuard } from "./sources.ts";
 import { newWriteTiming, noteWriteTiming, runWithWriteTiming } from "./write-timing.ts";
 import { acquireWriteEmbedSlot, writeEmbedWidth } from "./concurrency.ts";
 import type { Storage } from "./storage.ts";
+import type { Engine } from "./engine/interface.ts";
 import {
   checkLocalWriteOwner,
   writeDocumentTransaction,
@@ -141,6 +142,9 @@ export interface IndexFileOptions {
   timingLabel?: string;
   /** `indexFile` only: a guard the caller already loaded, in place of one over the configured roots. */
   rereadGuard?: RereadGuard;
+  /** Reviewed repairs retain old chunks if any requested embedding fails. */
+  requireCompleteEmbeddings?: boolean;
+  beforeCommit?: (tx: Engine) => Promise<void>;
 }
 
 type ContextualTier = NonNullable<ChunkWrite["contextualTier"]>;
@@ -524,7 +528,7 @@ async function indexDocumentBody(
       // or `memrain embed`. A failure that would repeat (credentials, access, an
       // unknown model, an oversize input) still aborts before the DB is touched
       // (the half-write guard below).
-      if (!(isBudgetRefusal(e) || isTransientBedrockError(e))) throw e;
+      if (opts.requireCompleteEmbeddings || !(isBudgetRefusal(e) || isTransientBedrockError(e))) throw e;
       deferredChunks++;
       deferReason ??= e instanceof Error ? e.message.slice(0, 200) : String(e);
       // No vector yet: the gap fill embeds with the deterministic prefix at
@@ -617,7 +621,7 @@ async function indexDocumentBody(
           try {
             vec = await embed(sym.body, { modelId: model });
           } catch (e) {
-            if (!(isBudgetRefusal(e) || isTransientBedrockError(e))) throw e;
+            if (opts.requireCompleteEmbeddings || !(isBudgetRefusal(e) || isTransientBedrockError(e))) throw e;
             deferredChunks++;
             deferReason ??= e instanceof Error ? e.message.slice(0, 200) : String(e);
           } finally {
@@ -677,6 +681,7 @@ async function indexDocumentBody(
       sourceId: input.sourceId ?? null,
       ...(input.claimUnowned === true ? { claimUnowned: true } : {}),
       ...(input.expectOwner !== undefined ? { expectOwner: input.expectOwner } : {}),
+      ...(opts.beforeCommit ? { beforeCommit: opts.beforeCommit } : {}),
     },
     chunkWrites,
   );

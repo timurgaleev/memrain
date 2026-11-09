@@ -120,6 +120,8 @@ export interface DocumentWrite {
    * keep its ownership through the COALESCE below and receive the file.
    */
   expectOwner?: string | null;
+  /** Validate a reviewed repair snapshot under this transaction before replacing rows. */
+  beforeCommit?: (tx: Engine) => Promise<void>;
 }
 
 export interface IndexTxResult {
@@ -163,6 +165,8 @@ export async function writeDocumentTransaction(
   await withRetry(() => engine.transaction(async (tx) => {
     embeddingsWritten = 0;
     entitiesWritten = 0;
+
+    await doc.beforeCommit?.(tx);
 
     const healed = await adoptLegacyDocuments(tx, doc);
     const healedOwner = healed?.owner;

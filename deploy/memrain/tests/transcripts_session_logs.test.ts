@@ -353,6 +353,7 @@ describe("memrain transcripts ingest (session logs)", () => {
     } finally { await storage.close(); }
     expect(await runTranscripts({ sub: "repair-origin", file, json: true, configPath: cfgPath })).toBe(0);
     expect(lastJson()).toMatchObject({ ok: true, applied: false, facts: 1, pages: [{ slug: "transcripts/claude-code/repair-p1", facts: 1 }] });
+    const planHash = lastJson().plan_hash as string;
     const checked = new Storage(JSON.parse(readFileSync(cfgPath, "utf-8")));
     await checked.init();
     try {
@@ -363,7 +364,7 @@ describe("memrain transcripts ingest (session logs)", () => {
     expect(await runTranscripts({ sub: "repair-origin", file, apply: true, json: true, configPath: cfgPath })).toBe(1);
     expect(lastJson().error).toContain("origin repair refused");
     writeFileSync(file, valid);
-    expect(await runTranscripts({ sub: "repair-origin", file, apply: true, json: true, configPath: cfgPath })).toBe(0);
+    expect(await runTranscripts({ sub: "repair-origin", file, apply: true, planHash, json: true, configPath: cfgPath })).toBe(0);
     expect(lastJson()).toMatchObject({ applied: true, changed: 1 });
 
   });

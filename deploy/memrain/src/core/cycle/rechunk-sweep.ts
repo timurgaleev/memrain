@@ -5,8 +5,8 @@
  * memrain already TRACKS chunker staleness (`documents.chunker_version` vs
  * MARKDOWN_CHUNKER_VERSION — see chunker-version.ts) and exposes a MANUAL
  * `reindex --rechunk-stale` that walks the whole vault. What it lacked is the
- * AUTOMATIC drain: when the markdown chunker constant bumps, every markdown doc is stale
- * and needs a re-chunk + re-embed, but doing that all at once is a surprise
+ * AUTOMATIC drain below the approved upgrade floor. A new markdown chunker
+ * version alone must not start a corpus re-chunk + re-embed: that is a surprise
  * Bedrock bill and a long wall-clock stall. This phase spreads the work across
  * ticks under a hard per-tick cap.
  *
@@ -40,7 +40,7 @@ import type { Engine } from "../engine/interface.ts";
 import type { EmbedFn } from "../indexer.ts";
 import { Storage } from "../storage.ts";
 import { indexDocument } from "../indexer.ts";
-import { MARKDOWN_CHUNKER_VERSION } from "../chunkers/recursive.ts";
+import { AUTO_MARKDOWN_RECHUNK_VERSION } from "../chunkers/recursive.ts";
 import { loadAllowedRootSpellings } from "../path_guard.ts";
 import { loadRereadGuard, readGuardedFile, REREAD_SCAN_FACTOR, rereadCandidateWhere } from "../sources.ts";
 import { OperationError } from "../operation-error.ts";
@@ -116,7 +116,7 @@ export async function findChunkerStaleDocs(
         AND ($4::text IS NULL OR d.source_path > $4::text)
       ORDER BY d.source_path
       LIMIT $2`,
-    [MARKDOWN_CHUNKER_VERSION, limit, roots as string[], after],
+    [AUTO_MARKDOWN_RECHUNK_VERSION, limit, roots as string[], after],
   );
   return r.rows;
 }

@@ -17,6 +17,7 @@
  *     that tells an operator what actually broke.
  */
 import type { Storage } from "../core/storage.ts";
+import { applyRuntimeEnvOverlay } from "../core/runtime-config.ts";
 
 export interface WithStorageOptions {
   /**
@@ -24,6 +25,8 @@ export interface WithStorageOptions {
    * injection seam). Init and close are then the owner's business.
    */
   owned?: boolean;
+  /** Pinned operator operations use an existing schema without migration or seed writes. */
+  migrate?: boolean;
 }
 
 export async function withStorage<T>(
@@ -34,7 +37,10 @@ export async function withStorage<T>(
   if (opts.owned === false) return body();
   let failed = false;
   try {
-    await storage.init();
+    if (opts.migrate === false) {
+      await storage.engine().ready();
+      await applyRuntimeEnvOverlay(storage.engine());
+    } else await storage.init();
     return await body();
   } catch (e) {
     failed = true;

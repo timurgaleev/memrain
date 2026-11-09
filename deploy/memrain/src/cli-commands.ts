@@ -56,6 +56,7 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "eval-export": bare,
   "export": bare,
   "import": bare,
+  "mirror-adopt": bare,
   "backup": subs("status"),
   "eval-prune": bare,
   "apply-migrations": bare,
