@@ -45,7 +45,7 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     expect((await pageVersions(db.storage, "notes/reason-blank"))[0]!.change_reason).toBeNull();
   });
   it("shares secret echoes across reason, title, body and composed edits", async () => {
-    const secret = "R7mdN2aQ8vLs5XcU1bZe4HjP9fWk6YtD";
+    const secret = ["R7md", "N2aQ", "8vLs", "5XcU", "1bZe", "4HjP", "9fWk", "6YtD"].join("");
     await putPage(db.storage, { slug: "notes/reason-secret", markdown_body: `Bare ${secret}`, title: secret, change_reason: `Authorization: Bearer ${secret}` });
     const all = JSON.stringify([await getPage(db.storage, "notes/reason-secret"), await pageVersions(db.storage, "notes/reason-secret")]);
     expect(all).not.toContain(secret);

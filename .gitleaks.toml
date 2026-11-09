@@ -81,3 +81,10 @@ condition = "AND"
 commits = ["ba532405cda25618abc1417d839c9566cb1498d6"]
 paths = ['''^deploy/memrain/tests/fixtures/rank_flags_off_golden\.json$''']
 regexes = ['''^8ad4c127a2a8323b0004ade36aa1730194986d5238ccef38c6cc5f87f7dec08b$''']
+
+[[allowlists]]
+description = "synthetic bearer echo in page write reason tests"
+condition = "AND"
+commits = ["3d2362070a6f92d527f4682f1a5fefda97835096"]
+paths = ['''^deploy/memrain/tests/page_write_reason\.test\.ts$''']
+regexes = ['''^R7mdN2aQ8vLs5XcU1bZe4HjP9fWk6YtD$''']
