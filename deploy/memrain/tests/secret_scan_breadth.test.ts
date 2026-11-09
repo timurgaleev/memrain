@@ -237,7 +237,7 @@ describe("echoes", () => {
 describe("format and options", () => {
   it("fingerprints with 16 hex and names the scanner version", () => {
     expect(fingerprintSecret("x")).toMatch(/^[0-9a-f]{16}$/);
-    expect(SECRET_SCAN_VERSION).toBe(3);
+    expect(SECRET_SCAN_VERSION).toBe(4);
   });
 
   it("allows a 16-to-64 hex prefix of the SHA-256 and ignores a 12-hex entry", () => {

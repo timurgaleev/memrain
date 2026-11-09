@@ -22,12 +22,13 @@ import { createHash } from "node:crypto";
 import { OperationError } from "./operation-error.ts";
 import type { Engine } from "./engine/interface.ts";
 import { logIngest } from "./ingest-log.ts";
+import { encodedCandidates, protectEncodedAllowlist } from "./secret-scan-encoded.ts";
 
 /**
  * Bumped whenever the rules change what is caught, so text stored under an
  * older version can be found and scanned again.
  */
-export const SECRET_SCAN_VERSION = 3;
+export const SECRET_SCAN_VERSION = 4;
 
 export interface SecretFinding {
   kind: string;
@@ -459,6 +460,45 @@ function isAllowed(hex: string, allow: ReadonlySet<string>): boolean {
   return false;
 }
 
+function redactEncoded(
+  text: string, allow: ReadonlySet<string>, highEntropy: boolean,
+  claim: (kind: string, value: string, echoRule?: Pattern["echo"]) => string | null,
+  keepAllowed: (raw: string) => string,
+): string {
+  const spans: Array<{ start: number; end: number; replacement: string }> = [];
+  const claimed = new Uint8Array(text.length);
+  const patterns = highEntropy ? PATTERNS : PATTERNS_WITHOUT_ASSIGNMENTS;
+  for (const candidate of encodedCandidates(text, ASSIGNMENT_PATTERNS.map(p => p.regex))) {
+    for (const p of candidate.base64 ? VENDOR_PATTERNS : patterns) {
+      for (const match of candidate.value.matchAll(p.regex)) {
+        const value = p.split ? match[2]! : match[0];
+        const from = match.index + (p.split ? match[1]!.length : 0);
+        const to = from + value.length;
+        if (candidate.base64 && (from !== 0 || to !== candidate.value.length)) continue;
+        if (p.start && !startAllowed(p.start, candidate.value, match.index)) continue;
+        if (p.entropyGated && (!clearsEntropyGate(value) || insideMarker(candidate.value, match.index, match[0].length))) continue;
+        if (p.validate && !p.validate(value)) continue;
+        const start = candidate.base64?.start ?? candidate.starts[from]!;
+        const end = candidate.base64?.end ?? candidate.ends[to - 1]!;
+        if (candidate.bounds && (start < candidate.bounds.start || end > candidate.bounds.end)) continue;
+        const raw = text.slice(start, end);
+        if (raw === value || claimed.subarray(start, end).includes(1)) continue;
+        const replacement = isAllowed(sha256Hex(raw), allow) ? null : claim(p.kind, value, p.echo);
+        claimed.fill(1, start, end);
+        spans.push({ start, end, replacement: replacement ?? keepAllowed(raw) });
+      }
+    }
+  }
+  const parts: string[] = [];
+  let at = 0;
+  for (const span of spans.sort((a, b) => a.start - b.start)) {
+    parts.push(text.slice(at, span.start), span.replacement);
+    at = span.end;
+  }
+  parts.push(text.slice(at));
+  return parts.join("");
+}
+
 /**
  * Find credentials in `text` and replace each with a marker naming its kind
  * and fingerprint, then replace bare echoes of the keyword-anchored values.
@@ -479,12 +519,14 @@ export function scanSecrets(text: string, allow: ReadonlySet<string> = new Set()
   };
   let out = text;
   if (text.includes(PEM_OPEN)) {
-    out = replacePemBlocks(text, (block) => {
+    out = replacePemBlocks(out, (block) => {
       const marker = claim("private-key", block);
       if (marker === null) return block;
       return opts.preserveLines ? marker + "\n".repeat(block.split("\n").length - 1) : marker;
     });
   }
+  const protectedValues = protectEncodedAllowlist(text);
+  out = redactEncoded(out, allow, opts.highEntropy !== false, claim, protectedValues.keep);
   for (const p of opts.highEntropy === false ? PATTERNS_WITHOUT_ASSIGNMENTS : PATTERNS) {
     out = out.replace(p.regex, (match: string, ...groups: unknown[]) => {
       const head = p.split ? (groups[0] as string) : "";
@@ -499,7 +541,7 @@ export function scanSecrets(text: string, allow: ReadonlySet<string> = new Set()
     });
   }
   if (echo && echo.size > 0) out = sweepEchoes(out, echo, findings);
-  return { text: out, findings };
+  return { text: protectedValues.restore(out), findings };
 }
 
 export type SecretDisposition = "redact" | "flag" | "reject";

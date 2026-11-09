@@ -7,7 +7,8 @@
  *         line. Never prints a value or a preview.
  *   secrets audit --apply --yes [--source ID] [--kinds …]
  *         rewrites what it finds (pages through a new version and a re-mirror,
- *         everything else in place). `--apply` without `--yes` refuses.
+ *         other supported stores in place). Job payloads are count-only and
+ *         never rewritten. `--apply` without `--yes` refuses.
  *
  * Exit status: 0 when nothing was found (or everything found was rewritten),
  * 1 when hits remain, 2 on a usage error.
@@ -39,6 +40,11 @@ function printHuman(r: SecretAuditResult): void {
     console.log(`  not scanned under --source (no source column): ${r.skipped_kinds.join(", ")}`);
   }
   for (const [kind, n] of Object.entries(r.by_kind)) console.log(`  ${kind}: ${n}`);
+  if (r.kinds.includes("jobs")) {
+    console.log(`  jobs: count-only; ${r.jobs.rows_scanned} payload(s) scanned, ${r.jobs.hits_total} hit(s); no payloads rewritten`);
+    for (const [status, n] of Object.entries(r.jobs.by_status)) console.log(`    ${status}: ${n} hit(s)`);
+    for (const [kind, n] of Object.entries(r.jobs.by_secret_kind)) console.log(`    ${kind}: ${n} hit(s)`);
+  }
   if (r.code_chunks_affected > 0) {
     console.log(`  code chunks with a hit: ${r.code_chunks_affected} (reindex the code source after --apply)`);
   }
@@ -55,7 +61,7 @@ function printHuman(r: SecretAuditResult): void {
     console.log(`  ${c.kind} ${c.ref} ${c.field}: a redacted key matched an existing key; kept both (suffix ~n)`);
   }
   if (!r.applied && r.hits_total > 0) {
-    console.log("Rotate every credential listed here first, then re-run with --apply --yes to redact the stored copies.");
+    console.log("Rotate exposed credentials first. --apply --yes redacts supported stores; job payloads remain count-only.");
   }
 }
 
