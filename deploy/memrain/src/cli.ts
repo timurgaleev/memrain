@@ -38,6 +38,8 @@ import { runEvalExport } from "./commands/eval-export.ts";
 import { runExport } from "./commands/export.ts";
 import { runImport } from "./commands/import.ts";
 import { runMirrorAdopt } from "./commands/mirror-adopt.ts";
+import { runErase } from "./commands/erase.ts";
+import { runAtomsRetire } from "./commands/atoms-retire.ts";
 import { runBackupStatus } from "./commands/backup.ts";
 import { runEvalPrune } from "./commands/eval-prune.ts";
 import { runApplyMigrations } from "./commands/apply-migrations.ts";
@@ -105,6 +107,9 @@ function printUsage(): void {
   console.log("  export [--dir DIR] [--source ID]  export live pages as markdown");
   console.log("  import --dir DIR --source ID [--apply --plan-hash HASH]  preview create-only page import; indexing deferred");
   console.log("  mirror-adopt --source ID [--limit N] [--apply --plan-hash HASH]  preview proven mirror ownership repair");
+  console.log("  atoms-retire --source-ref DOC --completed-hash HASH16 [--apply --plan-hash HASH64]  preview proven stale atom pages");
+  console.log("  erase forgotten --source ID [--fact-ids CSV] [--deleted-pages CSV] [--apply --plan-hash HASH]");
+  console.log("                               preview explicit database erasure of forgotten facts/deleted pages");
   console.log("  aliases suggest [--source ID] [--limit N] [--json]  preview undeclared name aliases");
   console.log("  models [--probe] [--max-cost-usd N] [--json]  resolved chat models and registered prices");
   console.log("  engine status [--probe] [--json]  inspect engine config; optionally test one connection");
@@ -1035,6 +1040,21 @@ async function main(argv: readonly string[]): Promise<number> {
       if (positional.length) throw new Error("import: use --dir and --source");
       if (flags.has("--apply") && flags.has("--dry-run")) throw new Error("import: choose --apply or --dry-run");
       return runImport({ dir: values.get("--dir") ?? "", source: values.get("--source") ?? "", apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
+    }
+    case "atoms-retire": {
+      if (positional.length) throw new Error("atoms-retire: use --source-ref and --completed-hash");
+      return runAtomsRetire({ sourceRef: values.get("--source-ref") ?? "", completedHash: values.get("--completed-hash") ?? "",
+        apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
+    }
+    case "erase": {
+      if (positional.length !== 1 || positional[0] !== "forgotten") throw new Error("erase: use erase forgotten with explicit targets");
+      const rawIds = values.get("--fact-ids");
+      const factIds = rawIds === undefined ? undefined : rawIds.split(",").map(value => {
+        if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("erase: --fact-ids must be comma-separated positive safe integers");
+        return Number(value);
+      });
+      return runErase({ sub: "forgotten", source: values.get("--source") ?? "", factIds,
+        deletedPages: values.get("--deleted-pages")?.split(","), apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
     }
     case "mirror-adopt": {
       if (positional.length) throw new Error("mirror-adopt: use --source and --limit");
