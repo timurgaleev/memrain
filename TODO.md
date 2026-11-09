@@ -9,6 +9,21 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ---
 
+## Operator decisions deferred from 1.13
+
+- Review exact targets before applying transcript attribution repair, importing
+  a markdown export, or rechunking code for module definitions. These commands
+  are not part of deployment.
+- Mixed-script slug changes, tombstone precedence over source fences, hard
+  erasure of forgotten content, and a worker-thread watchdog need separate
+  approval and acceptance criteria.
+- Takes write tools and write-reason history remain separate work. Their
+  migrations are not included in 1.13.
+- Revisit auto-think scheduling only for an enabled deployment. Evaluate
+  line-aligned markdown rechunking with a corpus/spend preview first.
+- Observe extraction recovery and model spend for seven days after deployment;
+  code tests do not establish model-quality or cost improvements.
+
 ## Follow-ups from the 1.11 batch
 
 - `secrets audit` does not scan `jobs.payload`, and terminal job rows are
