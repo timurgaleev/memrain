@@ -394,6 +394,7 @@ export async function runChronicleExtract(
     const pageWrite = await putPage(storage, {
       slug: eventSlug,
       written_by: "life-chronicle",
+      written_by_principal: "operator",
       onlyOverwriteWriter: "life-chronicle",
       type: "event",
       title: ev.what.slice(0, 120),

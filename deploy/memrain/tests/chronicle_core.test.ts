@@ -163,6 +163,8 @@ describe("runChronicleExtract", () => {
     const ev = await getPage(storage, rows[0]!.event_slug!, ["default"]);
     expect(ev).not.toBeNull();
     expect(ev!.type).toBe("event");
+    expect((await storage.engine().query<{ written_by_principal: string }>(
+      "SELECT written_by_principal FROM page_versions WHERE slug=$1 ORDER BY version_n DESC LIMIT 1", [ev!.slug])).rows[0]?.written_by_principal).toBe("operator");
   });
 
   it("drops placeholder participants from the stored who", async () => {

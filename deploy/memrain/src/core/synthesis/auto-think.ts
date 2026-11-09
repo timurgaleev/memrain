@@ -252,6 +252,7 @@ export async function autoThinkPhase(
         markdown_body: renderDraftBody(q, result),
         source_id: sourceId,
         written_by: "auto-think",
+        written_by_principal: "operator",
         onlyOverwriteWriter: "auto-think",
         allowAdHocType: true,
       });

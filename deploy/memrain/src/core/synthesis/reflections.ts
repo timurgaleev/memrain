@@ -325,6 +325,7 @@ export async function reflectionsPhase(
         markdown_body: body,
         source_id: sourceId,
         written_by: "reflection",
+        written_by_principal: "operator",
         onlyOverwriteWriter: "reflection",
       });
       if (pageWrite.held) base.pagesHeld += 1;

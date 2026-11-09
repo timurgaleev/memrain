@@ -108,6 +108,7 @@ export async function persistThinkSynthesis(
     markdown_body: body,
     source_id: opts.sourceId ?? "default",
     written_by: "think",
+        written_by_principal: "operator",
     onlyOverwriteWriter: "think",
   });
 

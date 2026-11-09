@@ -18,6 +18,7 @@ export const SKILL_CONTRACT_KEYS: ReadonlySet<string> = new Set([
   "mutating",
   "requires",
   "writes_to",
+  "prompt",
 ]);
 
 export interface SkillFrontmatter {

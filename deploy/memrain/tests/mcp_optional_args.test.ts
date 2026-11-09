@@ -9,7 +9,7 @@ it("normalizes only declared optional read arguments across the whole contract",
     for (const [key, def] of Object.entries(op.params)) {
       for (const value of [null, "", [], 0, false, "kept", ["kept"]]) {
         const input = { [key]: value, undeclared: null };
-        const drop = operationAnnotations(op).readOnlyHint && !def.required &&
+        const drop = operationAnnotations(op).readOnlyHint && !def.required && key !== "source_ids" &&
           (value === null || value === "" || (Array.isArray(value) && value.length === 0) ||
             (value === 0 && def.minimum !== undefined && def.minimum >= 1));
         expect({ name: op.name, key, output: normalizeOptionalArgs(op, input) }).toEqual({ name: op.name, key,
@@ -38,6 +38,7 @@ for (const { name, open } of storageEngines(undefined)) describe(`optional read 
     for (const request of [
       { name: "page_get", arguments: { slug: null } },
       { name: "page_list", arguments: { unknown: null } },
+      { name: "page_list", arguments: { source_ids: null } },
       { name: "page_put", arguments: { slug: "notes/args", markdown_body: null } },
     ]) {
       const result = await dispatchTool(db.storage, request);

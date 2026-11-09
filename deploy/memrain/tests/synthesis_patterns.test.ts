@@ -81,6 +81,8 @@ describe("patternsPhase", () => {
     expect(lastPrompt).toContain("deadline");
     expect(lastPrompt).not.toContain("[object Object]");
 
+    expect((await storage.engine().query<{ written_by_principal: string }>(
+      "SELECT written_by_principal FROM page_versions WHERE slug=$1 ORDER BY version_n DESC LIMIT 1", ["patterns/deadline-anxiety"])).rows[0]?.written_by_principal).toBe("operator");
     const page = await getPage(storage, "patterns/deadline-anxiety");
     expect(page).not.toBeNull();
     expect(page!.title).toBe("Recurring deadline anxiety");

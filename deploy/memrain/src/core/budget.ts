@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { OperationError } from "./operation-error.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { noteWriteTiming } from "./write-timing.ts";
+import { beginRequestCost } from "./request-cost.ts";
 import { BedrockHalted, assertBedrockOpen, noteBedrockFailure, noteBedrockSuccess } from "./llm/bedrock-errors.ts";
 import { appendAudit, auditDir } from "./audit-week-file.ts";
 import type { Engine } from "./engine/interface.ts";
@@ -877,6 +878,7 @@ export async function trackedInvoke<T>(
     noteWriteTiming("ledgerMs", performance.now() - refuseStart);
   }
   const sendStart = performance.now();
+  const settleRequestCost = beginRequestCost();
   let failure: unknown;
   let outcome: SpendOutcome = "ok";
   try {
@@ -895,6 +897,9 @@ export async function trackedInvoke<T>(
     // and billed it: its hold keeps counting the worst case for the day rather
     // than settling at $0.
     const keepHold = usage === undefined && failure !== undefined && mayHaveBilled(failure);
+    settleRequestCost(usage
+      ? priceFor(call.model) ? costUsd(call.model, chargeableUsage(usage)) : null
+      : failure !== undefined && !keepHold ? 0 : null);
     await bookSpend(call, usage, keepHold ? null : holdId, { outcome, latencyMs: bookStart - sendStart });
     noteWriteTiming("ledgerMs", performance.now() - bookStart);
   }
