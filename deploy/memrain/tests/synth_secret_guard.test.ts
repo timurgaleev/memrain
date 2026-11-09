@@ -63,6 +63,7 @@ describe("synthesis INSERT guards", () => {
   });
 
   it("redacts a credential the judge quoted into a grade's reasoning", async () => {
+    await engine.query("INSERT INTO documents (id,source_path,source_id) VALUES ('d1','/vault/d1.md','default')");
     await engine.query(
       `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, status, model_id, generated_at)
        VALUES ('tk-1', 'd1', 'h', 'v1', 'a claim', 'prediction', 0.7, 'queued', 'm', now() - interval '365 days')`,

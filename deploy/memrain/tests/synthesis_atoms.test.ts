@@ -36,7 +36,7 @@ afterEach(async () => {
 
 async function seedDoc(id: string, body: string, effectiveDate?: string): Promise<void> {
   await engine.query(
-    `INSERT INTO documents (id, source_path, title, effective_date) VALUES ($1, $2, $3, $4)`,
+    `INSERT INTO documents (id, source_path, title, effective_date, source_id) VALUES ($1, $2, $3, $4, 'default')`,
     [id, `/vault/${id}.md`, id, effectiveDate ?? null],
   );
   await engine.query(
