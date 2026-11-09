@@ -11,6 +11,8 @@ import { runIndex } from "./commands/index.ts";
 import { runSearch } from "./commands/search.ts";
 import { runReindex } from "./commands/reindex.ts";
 import { runHnsw } from "./commands/hnsw.ts";
+import { runEngineStatus } from "./commands/engine-status.ts";
+import { runModels } from "./commands/models.ts";
 import { runDoctor } from "./commands/doctor.ts";
 import { runIntegrity } from "./commands/integrity.ts";
 import { runEval } from "./commands/eval.ts";
@@ -94,6 +96,8 @@ function printUsage(): void {
   console.log("Usage: memrain <command> [options]");
   console.log("");
   console.log("Commands:");
+  console.log("  models [--probe] [--max-cost-usd N] [--json]  resolved chat models and registered prices");
+  console.log("  engine status [--probe] [--json]  inspect engine config; optionally test one connection");
   console.log("  init --pglite                initialize ~/.memrain/ + PGLite db");
   console.log("  serve --http --host H --port N");
   console.log("                               start HTTP server (loopback only)");
@@ -425,6 +429,14 @@ async function main(argv: readonly string[]): Promise<number> {
       }
       await runCode(opts);
       return 0;
+    }
+    case "models": {
+      return await runModels({ probe: flags.has("--probe"), json: flags.has("--json"),
+        ...(values.has("--max-cost-usd") ? { maxCostUsd: Number(values.get("--max-cost-usd")) } : {}) });
+    }
+    case "engine": {
+      if (positional.length !== 1 || positional[0] !== "status") { console.error("Usage: memrain engine status [--probe] [--json]"); return 2; }
+      return await runEngineStatus({ probe: flags.has("--probe"), json: flags.has("--json") });
     }
     case "doctor": {
       await runDoctor();
