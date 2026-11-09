@@ -136,12 +136,15 @@ export function locateFenceMarkers(
   const lines = body.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line.replace(/\r$/, ""));
+    const normalized = line.replace(/\r$/, "");
+    const run = /^ {0,3}(`{3,}|~{3,})/.exec(normalized);
+    const info = run ? normalized.slice(run[0].length) : "";
+    const fence = run && !/[\r\u2028\u2029]/.test(info) ? run : null;
     if (code !== null) {
-      if (fence && fence[1]![0] === code.char && fence[1]!.length >= code.length && fence[2]!.trim() === "") {
+      if (fence && fence[1]![0] === code.char && fence[1]!.length >= code.length && info.trim() === "") {
         code = null;
       }
-    } else if (fence && !(fence[1]![0] === "`" && fence[2]!.includes("`"))) {
+    } else if (fence && !(fence[1]![0] === "`" && info.includes("`"))) {
       code = { char: fence[1]![0]!, length: fence[1]!.length };
     } else {
       const trimmed = line.trim();
