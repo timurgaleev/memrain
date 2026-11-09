@@ -42,9 +42,13 @@ environment provides.
 Never skip to external lookups without completing steps 1-2. The brain has
 hundreds of pages and thousands of chunks. The answer is almost always there.
 
+Before asking the user “who is this person?”, search the brain and inspect
+`entity_timeline` / `get_links` for the candidate. Identity requires exact
+corroboration, never the top search result or a name variant alone.
+
 ## Rules
 
-- **A strong-scoring hit = use it.** Don't reach for external APIs when the
+- **A strong-scoring hit is relevant evidence.** Don't reach for external APIs when the
   brain answered.
 - **User's direct statements are highest-authority data.** The brain captures
   what the user said in meetings, conversations, and notes. External sources

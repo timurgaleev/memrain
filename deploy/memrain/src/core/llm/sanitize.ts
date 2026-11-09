@@ -47,10 +47,10 @@ export const INJECTION_PATTERNS: Array<{ name: string; rx: RegExp; replacement: 
   { name: "open-system", rx: /<\s*system\b[^>]*>/gi, replacement: "&lt;system&gt;" },
   { name: "open-instructions", rx: /<\s*instructions?\b[^>]*>/gi, replacement: "&lt;instructions&gt;" },
   // Output exfiltration.
-  { name: "print-system", rx: /(?:print|output|reveal|show)\s+(?:your\s+)?(?:system\s+prompt|instructions?|hidden)/gi, replacement: "[redacted]" },
-  { name: "verbatim", rx: /(?:repeat|echo)\s+(?:back|verbatim)/gi, replacement: "[redacted]" },
+  { name: "print-system", rx: /(?:print|output|reveal|show)\s+(?:your\s+)?(?:system\s+prompt|instructions?|hidden)\b/gi, replacement: "[redacted]" },
+  { name: "verbatim", rx: /(?:repeat|echo)\s+(?:back|verbatim)\b/gi, replacement: "[redacted]" },
   // Code-execution-style hooks.
-  { name: "eval-shell", rx: /\b(?:eval|exec|system|shell)\s*\(/gi, replacement: "[redacted](" },
+  { name: "eval-shell", rx: /\b(?:eval|exec|system|shell)\((?=\s*(?:['"`)]|[A-Za-z_$]))/gi, replacement: "[redacted](" },
 ];
 
 /** Default cap on untrusted text length before it reaches the model. */

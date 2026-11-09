@@ -15,11 +15,13 @@
  * `listSkillCatalog` adds the routing contract (triggers, tools, mutating)
  * and splits each skill's tools into what the caller can and cannot call.
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OPERATIONS } from "../../mcp/operations.ts";
-import { parseSkillFrontmatter, type SkillFrontmatter } from "./frontmatter.ts";
+import { parseSkillFrontmatter } from "./frontmatter.ts";
+import { readSkillText } from "./read-text.ts";
+import { OperationError } from "../operation-error.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /**
@@ -55,6 +57,8 @@ export interface ListBrainSkillpacksOptions {
 }
 
 export interface SkillCatalogOptions extends ListBrainSkillpacksOptions {
+  query?: string;
+  limit?: number;
   /**
    * Whether this caller may call a tool — the `tools/list` predicate. Omitted
    * = every tool the server has. A tool the server does not have is
@@ -130,21 +134,12 @@ interface SkillFile {
   file: string;
 }
 
-function readText(file: string): string | null {
+function readText(file: string, skillsDir: string): string | null {
   try {
-    return readFileSync(file, "utf8");
+    return readSkillText(file, skillsDir);
   } catch {
     return null;
   }
-}
-
-/**
- * Read and parse a skill file. A file that cannot be read or has no
- * frontmatter parses to null, so a malformed skill never aborts the listing.
- */
-function readSkillFrontmatter(skillFile: string): SkillFrontmatter | null {
-  const text = readText(skillFile);
-  return text === null ? null : parseSkillFrontmatter(text);
 }
 
 /**
@@ -207,10 +202,11 @@ const ALL_CALLABLE = (): boolean => true;
 export function listBrainSkillpacks(
   opts: ListBrainSkillpacksOptions = {},
 ): BrainSkillpackResult {
-  const skills: BrainSkill[] = enumerateSkillFiles(opts.skillsDir ?? DEFAULT_SKILLS_DIR).map((e) => ({
-    slug: e.slug,
-    description: readSkillFrontmatter(e.file)?.description ?? NO_DESCRIPTION,
-  }));
+  const dir = opts.skillsDir ?? DEFAULT_SKILLS_DIR;
+  const skills: BrainSkill[] = enumerateSkillFiles(dir).flatMap((e) => {
+    const text = readText(e.file, dir);
+    return text === null ? [] : [{ slug: e.slug, description: parseSkillFrontmatter(text)?.description ?? NO_DESCRIPTION }];
+  });
   return { pack: PACK_NAME, count: skills.length, skills };
 }
 
@@ -220,11 +216,20 @@ export function listBrainSkillpacks(
  * enumeration and fail-open behaviour as `listBrainSkillpacks`.
  */
 export function listSkillCatalog(opts: SkillCatalogOptions = {}): SkillCatalog {
+  if (opts.query !== undefined && (typeof opts.query !== "string" || opts.query.length > 200)) {
+    throw new OperationError("invalid_params", "list_skills: query must be at most 200 characters");
+  }
+  if (opts.limit !== undefined && (!Number.isInteger(opts.limit) || opts.limit < 1 || opts.limit > 50)) {
+    throw new OperationError("invalid_params", "list_skills: limit must be an integer from 1 to 50");
+  }
   const callable = opts.callable ?? ALL_CALLABLE;
-  const skills: SkillCatalogEntry[] = enumerateSkillFiles(opts.skillsDir ?? DEFAULT_SKILLS_DIR).map((e) => {
-    const fm = readSkillFrontmatter(e.file);
+  const dir = opts.skillsDir ?? DEFAULT_SKILLS_DIR;
+  const skills: SkillCatalogEntry[] = enumerateSkillFiles(dir).flatMap((e): SkillCatalogEntry[] => {
+    const text = readText(e.file, dir);
+    if (text === null) return [];
+    const fm = parseSkillFrontmatter(text);
     const tools = fm?.tools ?? [];
-    return {
+    return [{
       slug: e.slug,
       description: fm?.description ?? NO_DESCRIPTION,
       triggers: fm?.triggers ?? [],
@@ -233,15 +238,29 @@ export function listSkillCatalog(opts: SkillCatalogOptions = {}): SkillCatalog {
       mutating: fm?.mutating ?? false,
       requires: fm?.requires ?? [],
       writes_to: fm?.writes_to ?? [],
-    };
+    }];
   });
+  const selected = selectSkills(skills, opts.query?.trim().toLowerCase(), opts.limit);
   return {
     pack: PACK_NAME,
-    count: skills.length,
+    count: selected.length,
     schema_version: 1,
-    skills,
+    skills: selected,
     instructions: CATALOG_INSTRUCTIONS,
   };
+}
+
+function selectSkills(skills: SkillCatalogEntry[], query: string | undefined, limit?: number): SkillCatalogEntry[] {
+  if (!query) return limit === undefined ? skills : skills.slice(0, limit);
+  const tokens = (s: string) => new Set(s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+  const wanted = tokens(query);
+  return skills.map((skill, index) => {
+    const words = tokens([skill.slug, skill.description, ...skill.triggers].join(" "));
+    const score = [...wanted].filter(t => words.has(t)).length;
+    return { skill, index, score, exact: skill.slug.toLowerCase() === query };
+  }).filter(s => s.exact || s.score > 0)
+    .sort((a, b) => Number(b.exact) - Number(a.exact) || b.score - a.score || a.index - b.index)
+    .slice(0, limit ?? 5).map(s => s.skill);
 }
 
 export interface BrainSkillDetail {
@@ -275,7 +294,7 @@ function resolveSkillText(slug: unknown, skillsDir: string): { file: string; tex
   }
   for (const file of candidates) {
     if (!existsSync(file)) continue;
-    const text = readText(file);
+    const text = readText(file, skillsDir);
     if (text !== null) return { file, text };
   }
   return null;

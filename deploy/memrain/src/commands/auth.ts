@@ -83,6 +83,7 @@
  *              Client-side end-to-end check of a deployed brain (see
  *              remote-doctor.ts). Credentials come from a 0600 file only.
  */
+import { inspectPageReaders } from "../core/reader-audit.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { Storage } from "../core/storage.ts";
 import { withStorage } from "./with-storage.ts";
@@ -123,6 +124,7 @@ const KNOWN_TOKEN_SCOPES = [
 export type AuthSub =
   | "register-client"
   | "list-clients"
+  | "who-can-read"
   | "revoke-client"
   | "set-redirect-uris"
   | "rescope-client"
@@ -1082,6 +1084,11 @@ export async function runAuth(args: string[]): Promise<void> {
       return registerClient(rest[0]!, rest.slice(1));
     case "list-clients":
       return listClients();
+    case "who-can-read":
+      if (rest.length !== 1 || !rest[0]) throw new Error("Usage: memrain auth who-can-read <slug>");
+      return withProvider(async (_provider, storage) => {
+        console.log(JSON.stringify(await inspectPageReaders(storage, rest[0]!), null, 2));
+      });
     case "revoke-client":
       return revokeClient(rest[0]!, rest.slice(1));
     case "set-redirect-uris":
@@ -1118,7 +1125,7 @@ export async function runAuth(args: string[]): Promise<void> {
       return doctorCommand(rest);
     default:
       console.error(
-        "Usage: memrain auth <register-client|list-clients|revoke-client|set-redirect-uris|rescope-client|grant-history|set-budget|enroll|enrollments|revoke-enrollment|revoke-grant|invalidate-tokens|grant-token|create|list|revoke|permissions|test|doctor>",
+        "Usage: memrain auth <register-client|list-clients|who-can-read|revoke-client|set-redirect-uris|rescope-client|grant-history|set-budget|enroll|enrollments|revoke-enrollment|revoke-grant|invalidate-tokens|grant-token|create|list|revoke|permissions|test|doctor>",
       );
       process.exitCode = 1;
   }

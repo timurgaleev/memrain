@@ -44,6 +44,8 @@ export interface BacklinksOptions {
    * are filtered to `source_id = ANY(...)`. Omitted -> unscoped; `[]` -> nothing.
    */
   sourceIds?: string[];
+  includeOverflow?: boolean;
+  excludeDiary?: boolean;
   /**
    * `wikilink` only: return nothing when the name resolves to, or slugifies
    * as, a target this predicate rejects. Checked against every target the
@@ -58,14 +60,15 @@ export async function findBacklinks(
   opts: BacklinksOptions = {},
 ): Promise<BacklinkHit[]> {
   const type = opts.type ?? "wikilink";
-  const limit = opts.limit ?? 50;
-  if (limit < 1 || limit > 1000) {
+  const requested = opts.limit ?? 50;
+  const limit = requested + (opts.includeOverflow ? 1 : 0);
+  if (requested < 1 || requested > 1000) {
     throw new Error(`backlinks: limit must be in [1, 1000] (got ${limit})`);
   }
   if (type !== "wikilink") {
-    return findMentionBacklinks(storage, type, name, limit, opts.sourceIds);
+    return findMentionBacklinks(storage, type, name, limit, opts.sourceIds, opts.excludeDiary);
   }
-  const pages = await findPageBacklinks(storage, name, limit, opts.sourceIds, opts.excludeTarget);
+  const pages = await findPageBacklinks(storage, name, limit, opts.sourceIds, opts.excludeTarget, opts.excludeDiary);
   if (pages === null) return [];
   // Vault documents carry their [[links]] only as entity mentions; page
   // links cover pages and non-Latin names. Merge both, page edges first.
@@ -73,7 +76,7 @@ export async function findBacklinks(
   // their mention ids would match unrelated pages.
   const mentionsReliable = /^[\x20-\x7E]*$/.test(name) && name.length <= 60;
   const mentions = mentionsReliable
-    ? await findMentionBacklinks(storage, type, name, limit, opts.sourceIds)
+    ? await findMentionBacklinks(storage, type, name, limit, opts.sourceIds, opts.excludeDiary)
     : [];
   const seen = new Set(pages.map((h) => h.sourcePath));
   return [...pages, ...mentions.filter((h) => !seen.has(h.sourcePath))]
@@ -87,6 +90,7 @@ async function findMentionBacklinks(
   name: string,
   limit: number,
   sourceIds: string[] | undefined,
+  excludeDiary?: boolean,
 ): Promise<BacklinkHit[]> {
   const eid = entityId(type, name);
 
@@ -112,7 +116,7 @@ async function findMentionBacklinks(
      FROM entity_mentions em
      JOIN chunks c   ON c.id = em.chunk_id
      JOIN documents d ON d.id = c.document_id
-     WHERE em.entity_id = $1${scopeFilter}
+     WHERE em.entity_id = $1${scopeFilter}${excludeDiary ? " AND d.source_path NOT LIKE '%/life/diary/%'" : ''}
      GROUP BY d.id, d.source_path, d.title
      ORDER BY mention_count DESC, d.title NULLS LAST, d.source_path
      LIMIT $2`,
@@ -139,6 +143,7 @@ async function findPageBacklinks(
   limit: number,
   sourceIds: string[] | undefined,
   excludeTarget: ((slug: string) => boolean) | undefined,
+  excludeDiary?: boolean,
 ): Promise<BacklinkHit[] | null> {
   const trimmed = name.trim();
   const fallback = slugifyTarget(trimmed);
@@ -170,10 +175,10 @@ async function findPageBacklinks(
        COUNT(*)::int  AS mention_count,
        MIN(l.target_slug) AS target_slug
      FROM links l
-     JOIN pages p ON p.slug = l.source_slug AND p.deleted_at IS NULL
-     WHERE l.target_slug = ANY($1::text[])${linkScope}${pageScope}
+     JOIN pages p ON p.slug = l.source_slug AND p.source_id = l.source_id AND p.deleted_at IS NULL
+     WHERE l.target_slug = ANY($1::text[])${linkScope}${pageScope}${excludeDiary ? " AND p.slug NOT LIKE 'life/diary/%'" : ''}
      GROUP BY p.slug, p.source_id, p.title
-     ORDER BY mention_count DESC, p.title NULLS LAST, p.slug
+     ORDER BY mention_count DESC, max(l.id) DESC, p.slug, p.source_id
      LIMIT $2`,
     params,
   );

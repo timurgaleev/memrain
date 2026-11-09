@@ -137,14 +137,32 @@ describe("worker shutdown during a claim", () => {
     await claimStarted;
     await worker.stop();
 
-    // The job either ran to completion inside stop() or was never started;
-    // it must not begin after stop() has returned.
-    const ranAtStop = ran;
-    // Longer than the delayed claim, so a late start would have happened.
-    await new Promise((r) => setTimeout(r, 400));
-    expect(ran).toBe(ranAtStop);
-    expect((await queue.get("l"))?.status).not.toBe("running");
+    expect(ran).toBe(0);
+    expect((await queue.get("l"))?.status).toBe("pending");
+    expect((await queue.get("l"))?.retryCount).toBe(0);
     expect(await lockRows()).toBe(0);
+  });
+});
+
+describe("drainOnce shutdown during claim", () => {
+  it("releases the late claim without running the handler", async () => {
+    let ran = 0;
+    registerHandler("drain-late", async () => { ran++; return {}; });
+    await queue.enqueue({ kind: "drain-late", id: "drain-late" });
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(r => { enter = r; });
+    const gate = new Promise<void>(r => { release = r; });
+    const claim = queue.claim.bind(queue);
+    queue.claim = async opts => { enter(); await gate; return claim(opts); };
+    const worker = newWorker(100);
+    const draining = worker.drainOnce();
+    await entered;
+    await worker.stop();
+    release();
+    expect(await draining).toBe(0);
+    expect(ran).toBe(0);
+    expect((await queue.get("drain-late"))?.status).toBe("pending");
   });
 });
 

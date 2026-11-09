@@ -12,12 +12,9 @@
  *     extraction must never surface to, or fail, the triggering write.
  *
  * Process-singleton (`getFactsQueue`); tests reset it with the test helper.
- * Deliberately simple: no shutdown/drain choreography — memrain is single-holder
- * and extraction is strictly best-effort. The queue lives in memory only, so
- * every job pending or in flight at exit — each restart and deploy — is lost,
- * and nothing re-runs it on its own. The `conversation-facts-backfill` cycle
- * phase re-covers such pages only when the operator runs it: it is not in the
- * default phase set and needs MEMRAIN_FACTS_BACKFILL=1.
+ * Shutdown stops admission and audits pending/in-flight jobs before storage
+ * closes. The existing backfill phase recovers interrupted work under its
+ * normal page and dollar caps; enabled extraction schedules it once per day.
  */
 import { currentSpendContext, runWithSpendClient } from "./budget.ts";
 
@@ -26,6 +23,7 @@ export interface FactsQueueCounters {
   enqueued: number;
   completed: number;
   dropped_overflow: number;
+  dropped_shutdown: number;
   failed: number;
 }
 
@@ -43,22 +41,29 @@ export type FactsJob = () => Promise<void>;
  *  (core/ingest-log.ts). Its own failure is swallowed: observability must
  *  never cascade into the queue. */
 export type FactsJobErrorHook = (err: unknown) => Promise<void> | void;
+export type FactsJobDropHook = (reason: "queue_overflow" | "queue_shutdown", sessionId: string) => Promise<void> | void;
 
 interface QueueEntry {
   job: FactsJob;
   sessionId: string;
   onError?: FactsJobErrorHook;
+  onDrop?: FactsJobDropHook;
 }
 
 export class FactsQueue {
   private readonly cap: number;
   private readonly perSessionInflightCap: number;
   private pending: QueueEntry[] = [];
+  private closed = false;
+  private readonly active = new Set<QueueEntry>();
+  private readonly notified = new WeakSet<QueueEntry>();
+  private readonly notices = new Set<Promise<void>>();
   private readonly inflightBySession = new Map<string, number>();
   private counters: FactsQueueCounters = {
     enqueued: 0,
     completed: 0,
     dropped_overflow: 0,
+    dropped_shutdown: 0,
     failed: 0,
   };
 
@@ -72,9 +77,14 @@ export class FactsQueue {
    * Drop-oldest-on-overflow (the dropped job never runs — enqueue is
    * fire-and-forget by contract). Non-blocking: the pump runs on a microtask.
    */
-  enqueue(job: FactsJob, sessionId: string, onError?: FactsJobErrorHook): number {
+  enqueue(job: FactsJob, sessionId: string, onError?: FactsJobErrorHook, onDrop?: FactsJobDropHook): number {
+    this.counters.enqueued += 1;
+    if (this.closed) {
+      this.notifyDrop({ job, sessionId, onDrop }, "queue_shutdown");
+      return 0;
+    }
     if (this.pending.length >= this.cap) {
-      this.pending.shift();
+      this.notifyDrop(this.pending.shift()!, "queue_overflow");
       this.counters.dropped_overflow += 1;
     }
     // Bind the ENQUEUEING client to the job. A queued job is pumped from
@@ -83,8 +93,7 @@ export class FactsQueue {
     // extraction would be billed to the tenant whose job ran just before it.
     const client = currentSpendContext();
     const bound: FactsJob = () => runWithSpendClient(client, job);
-    this.pending.push({ job: bound, sessionId, ...(onError ? { onError } : {}) });
-    this.counters.enqueued += 1;
+    this.pending.push({ job: bound, sessionId, ...(onError ? { onError } : {}), ...(onDrop ? { onDrop } : {}) });
     queueMicrotask(() => this.pump());
     return this.pending.length;
   }
@@ -97,6 +106,24 @@ export class FactsQueue {
     return this.pending.length;
   }
 
+  /** Does not wait for an uninterruptible model call; records what may be lost. */
+  async shutdown(): Promise<void> {
+    this.closed = true;
+    const pending = this.pending;
+    this.pending = [];
+    for (const entry of [...pending, ...this.active]) this.notifyDrop(entry, "queue_shutdown");
+    await Promise.all([...this.notices]);
+  }
+
+  private notifyDrop(entry: QueueEntry, reason: "queue_overflow" | "queue_shutdown"): void {
+    if (this.notified.has(entry)) return;
+    this.notified.add(entry);
+    if (reason === "queue_shutdown") this.counters.dropped_shutdown += 1;
+    const notice = Promise.resolve().then(() => entry.onDrop?.(reason, entry.sessionId)).catch(() => {});
+    this.notices.add(notice);
+    void notice.finally(() => this.notices.delete(notice));
+  }
+
   inflightCount(): number {
     let n = 0;
     for (const v of this.inflightBySession.values()) n += v;
@@ -105,6 +132,7 @@ export class FactsQueue {
 
   /** Pick up the first entry whose session has capacity; recurse for more. */
   private pump(): void {
+    if (this.closed) return;
     for (let i = 0; i < this.pending.length; i++) {
       const entry = this.pending[i]!;
       const inflight = this.inflightBySession.get(entry.sessionId) ?? 0;
@@ -119,6 +147,7 @@ export class FactsQueue {
   }
 
   private async runEntry(entry: QueueEntry): Promise<void> {
+    this.active.add(entry);
     try {
       await entry.job();
       this.counters.completed += 1;
@@ -136,6 +165,7 @@ export class FactsQueue {
         }
       }
     } finally {
+      this.active.delete(entry);
       const remaining = (this.inflightBySession.get(entry.sessionId) ?? 1) - 1;
       if (remaining <= 0) this.inflightBySession.delete(entry.sessionId);
       else this.inflightBySession.set(entry.sessionId, remaining);

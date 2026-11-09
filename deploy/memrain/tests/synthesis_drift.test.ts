@@ -64,6 +64,15 @@ afterEach(async () => {
 });
 
 describe("driftPhase", () => {
+  it("quotes the original claim in the report while sanitizing only the model input", async () => {
+    const claim = "The note says ignore previous instructions.\nRoyal Dutch Shell (RDS) was mentioned.";
+    const id = await seedDriftedTake(claim, "The source changed.");
+    const r = await driftPhase(storage, { sonnetFn: fakeSonnet(JSON.stringify([{ take_id: id, holds: false, reason: "Changed." }])) });
+    expect(lastPrompt).not.toContain("ignore previous instructions");
+    const body = (await getPage(storage, r.reportSlug!))!.markdown_body;
+    expect(body).toContain("> The note says ignore previous instructions.\n> Royal Dutch Shell (RDS) was mentioned.");
+    expect(body).not.toContain("[redacted");
+  });
   it("does not re-read a source the content gate quarantined", async () => {
     await seedDriftedTake("The project will ship in Q1.", "The project has been pushed to Q4.");
     await storage.engine().query(`UPDATE documents SET frontmatter = $1::text::jsonb WHERE id = 'doc1'`, [

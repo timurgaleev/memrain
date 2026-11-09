@@ -8,6 +8,8 @@
  * fenced in <turn>…</turn> before the model sees it.
  */
 import type { Storage } from "./storage.ts";
+import { createHash } from "node:crypto";
+import { pageEntityHints } from "./facts-extract-hints.ts";
 import { addFact } from "./facts.ts";
 import { DEFAULT_FACT_KIND } from "./facts-decay.ts";
 import { sanitizeForPrompt } from "./llm/sanitize.ts";
@@ -21,7 +23,7 @@ import {
 import { stripPastedContent } from "./transcripts/pasted-content.ts";
 import { inferSubject, resolveOwnerEntity } from "./facts-owner.ts";
 import { buildGazetteer, type GazetteerEntry } from "./gazetteer.ts";
-import { PAGE_MIRROR_PATH_SQL } from "./page-index.ts";
+import { PAGE_MIRROR_PATH_SQL, isSynthesizedPageSlug } from "./page-index.ts";
 import { quarantineFilterFragment } from "./quarantine.ts";
 import {
   assessContentSanity,
@@ -116,6 +118,9 @@ const EXTRACTOR_BASE = [
   '  ("Acme raised $5M") still names its real entity.',
   "- metric/value/unit/period: fill ONLY for a quantitative claim (a number with",
   "  a named measure). Otherwise set all four to null. Do not invent numbers.",
+  "- Preserve the stated currency and amount; never convert EUR or CHF to USD or infer an exchange rate.",
+  '  "EUR 1.234,56 monthly" means value=1234.56, unit=EUR, period=monthly;',
+  '  "CHF 25,50" means value=25.50, unit=CHF. Preserve the original amount spelling in fact text.',
 ].join("\n");
 
 /** Who said it — never whether it is true or accepted. Static, cache-stable. */
@@ -228,7 +233,7 @@ export interface FactsParseResult {
   status: FactsParseStatus;
   /** Terse, content-free reason. Set only when `status` is "malformed". */
   detail?: string;
-  /** Elements the junk gate dropped (see `isJunkFact`). */
+  /** Elements dropped as junk or contaminated by a prompt-sanitizer marker. */
   junk_skipped: number;
 }
 
@@ -337,6 +342,10 @@ export function parseFactsResponse(
     const fact =
       typeof o["fact"] === "string" ? o["fact"].trim().slice(0, 500) : "";
     if (!fact) continue;
+    if (fact.includes("[redacted")) {
+      junkSkipped += 1;
+      continue;
+    }
     // A kind we cannot read is floored, never promoted — see normalizeFactKind.
     const kind = normalizeFactKind(o["kind"]);
     if (junkFilter && isJunkFact(fact, kind)) {
@@ -466,7 +475,7 @@ export function sanitizeEntityHints(hints: unknown): string[] {
       continue;
     seen.add(s);
     out.push(s);
-    if (out.length >= 20) break;
+    if (out.length >= 40) break;
   }
   return out;
 }
@@ -802,6 +811,7 @@ export function isFactsExtractionEligible(
   body: string | undefined,
   slug?: string,
 ): EligibilityResult {
+  if (slug && isSynthesizedPageSlug(slug)) return { ok: false, reason: "synthesized_page" };
   if (slug && slug.startsWith("wiki/agents/")) {
     return { ok: false, reason: "subagent_namespace" };
   }
@@ -844,6 +854,8 @@ export interface ExtractForPageOptions {
   slug: string;
   type: string;
   body: string;
+  /** Full stored body hash when body contains only an append window. */
+  expectedContentHash?: string;
   sourceId?: string;
   /** Test seam — inject a fake model; bypasses nothing (caller gates enabled). */
   sonnetFn?: SonnetFn;
@@ -857,6 +869,8 @@ export interface ExtractForPageOptions {
 }
 
 export interface ExtractForPageResult {
+  /** Input characters beyond the last window actually processed. */
+  truncated_chars: number;
   factsWritten: number;
   factsSkipped: number;
   /** Facts the model returned that failed to write (a subset of factsSkipped). */
@@ -899,29 +913,21 @@ export function extractionWindows(slug: string, body: string, maxWindows: number
     return [body];
   }
   const windows: string[] = [];
-  let cur = "";
-  const flush = () => {
-    if (cur.trim().length > 0) windows.push(cur);
-    cur = "";
-  };
-  for (const para of body.split(/\n{2,}/)) {
-    let rest = para;
-    while (rest.length > EXTRACT_WINDOW_CHARS) {
-      flush();
-      windows.push(rest.slice(0, EXTRACT_WINDOW_CHARS));
-      rest = rest.slice(EXTRACT_WINDOW_CHARS);
+  let start = 0;
+  while (start < body.length && windows.length < maxWindows) {
+    let end = Math.min(start + EXTRACT_WINDOW_CHARS, body.length);
+    let next = end;
+    if (end < body.length) {
+      const boundary = body.lastIndexOf("\n\n", end);
+      if (boundary > start) {
+        end = boundary;
+        next = boundary + 2;
+      }
     }
-    const joined = cur.length > 0 ? `${cur}\n\n${rest}` : rest;
-    if (joined.length > EXTRACT_WINDOW_CHARS) {
-      flush();
-      cur = rest;
-    } else {
-      cur = joined;
-    }
-    if (windows.length >= maxWindows) break;
+    windows.push(body.slice(start, end));
+    start = next;
   }
-  flush();
-  return windows.slice(0, maxWindows);
+  return windows;
 }
 
 /**
@@ -947,17 +953,15 @@ function errorClass(e: unknown): string {
  * `writeExtractedFacts`). The conversation-command path decides per turn
  * instead, from the turn's speaker label (`isOwnerSpeaker`).
  */
-async function isOperatorTranscript(storage: Storage, slug: string): Promise<boolean> {
-  if (!slug.startsWith("transcripts/")) return false;
-  try {
-    const r = await storage.engine().query<{ source_id: string }>(
-      `SELECT source_id FROM pages WHERE slug = $1 AND deleted_at IS NULL`,
-      [slug],
-    );
-    return r.rows[0]?.source_id === "default";
-  } catch {
-    return false;
-  }
+async function transcriptAttribution(storage: Storage, slug: string, sourceId: string): Promise<{ firstParty: boolean; agent: boolean }> {
+  if (!slug.startsWith("transcripts/")) return { firstParty: false, agent: false };
+  const r = await storage.engine().query<{ source_id: string; origin: string | null }>(
+    `SELECT source_id, compiled_truth->>'transcript_origin' AS origin
+       FROM pages WHERE slug = $1 AND source_id = $2 AND deleted_at IS NULL`,
+    [slug, sourceId],
+  );
+  const page = r.rows[0];
+  return { firstParty: page?.source_id === "default" && page.origin !== "agent", agent: page?.origin === "agent" };
 }
 
 export async function pageObservationDate(
@@ -966,11 +970,13 @@ export async function pageObservationDate(
   sourceId: string | undefined,
 ): Promise<string | null> {
   try {
-    const r = await storage.engine().query<{ truth_date: string | null; doc_date: string | null }>(
+    const r = await storage.engine().query<{ truth_date: string | null; published: string | null; doc_date: string | null }>(
       `SELECT p.compiled_truth->>'date' AS truth_date,
+              p.compiled_truth->>'published' AS published,
               (SELECT to_char(d.effective_date AT TIME ZONE 'UTC', 'YYYY-MM-DD')
                  FROM documents d
                 WHERE d.source_path = ${PAGE_MIRROR_PATH_SQL}
+                  AND COALESCE(d.source_id, 'default') = p.source_id
                   AND d.effective_date IS NOT NULL
                   AND d.effective_date_source IN ('date', 'filename', 'published')
                 LIMIT 1) AS doc_date
@@ -981,7 +987,7 @@ export async function pageObservationDate(
     );
     const row = r.rows[0];
     if (!row) return null;
-    return calendarDay(row.truth_date ?? undefined) ?? calendarDay(row.doc_date ?? undefined);
+    return calendarDay(row.truth_date ?? undefined) ?? calendarDay(row.published ?? undefined) ?? calendarDay(row.doc_date ?? undefined);
   } catch {
     return null;
   }
@@ -998,30 +1004,33 @@ async function isQuarantinedPage(
   storage: Storage,
   slug: string,
   sourceId: string,
-  body: string,
+  expectedHash: string,
 ): Promise<boolean> {
-  let row: { title: string | null; fresh: boolean; quarantined: boolean } | undefined;
+  if (isSynthesizedPageSlug(slug)) return true;
+  let row: { title: string | null; markdown_body: string; fresh: boolean; quarantined: boolean } | undefined;
   try {
-    const r = await storage.engine().query<{ title: string | null; fresh: boolean; quarantined: boolean }>(
-      `SELECT p.title,
+    const r = await storage.engine().query<{ title: string | null; markdown_body: string; fresh: boolean; quarantined: boolean }>(
+      `SELECT p.title, p.markdown_body,
               COALESCE(d.frontmatter->>'page_content_hash' = p.content_hash
                        AND COALESCE(d.frontmatter->>'page_title', '') = COALESCE(p.title, ''), false) AS fresh,
               COALESCE(NOT (${quarantineFilterFragment("d")}), false) AS quarantined
          FROM pages p
          LEFT JOIN documents d ON d.source_path = ${PAGE_MIRROR_PATH_SQL} AND d.deleted_at IS NULL
-        WHERE p.slug = $1 AND p.source_id = $2 AND p.deleted_at IS NULL
+          AND COALESCE(d.source_id, 'default') = p.source_id
+        WHERE p.slug = $1 AND p.source_id = $2 AND p.deleted_at IS NULL AND p.content_hash = $3
         LIMIT 1`,
-      [slug, sourceId],
+      [slug, sourceId, expectedHash],
     );
     row = r.rows[0];
   } catch (e) {
     console.error(`[facts-extract] quarantine state unreadable, ${slug} held: ${errorClass(e)}`);
     return true;
   }
+  if (!row) return true;
   if (row?.fresh === true) return row.quarantined === true;
   if (!sanityGateEnabled()) return false;
   return assessContentSanity({
-    body,
+    body: row.markdown_body,
     title: row?.title ?? "",
     extra_literals: resolveOperatorLiterals(),
     disabled_patterns: resolveDisabledPatterns(),
@@ -1061,8 +1070,11 @@ export async function extractFactsForPage(
   const budget = new BudgetTracker(cap, "facts-extract:on-write");
   const windows = extractionWindows(opts.slug, opts.body, factsMaxWindows());
   const sourceId = opts.sourceId ?? "default";
-  if (await isQuarantinedPage(storage, opts.slug, sourceId, opts.body)) {
+  const expectedHash = opts.expectedContentHash ?? createHash("sha256").update(opts.body, "utf8").digest("hex");
+  const held = () => isQuarantinedPage(storage, opts.slug, sourceId, expectedHash);
+  if (await held()) {
     return {
+      truncated_chars: 0,
       factsWritten: 0,
       factsSkipped: 0,
       factsFailed: 0,
@@ -1076,12 +1088,15 @@ export async function extractFactsForPage(
     opts.observationDate !== undefined
       ? opts.observationDate
       : await pageObservationDate(storage, opts.slug, opts.sourceId);
+  const entityHints = await pageEntityHints(storage, opts.slug, sourceId);
 
   const facts: ExtractedFact[] = [];
   let windowsRun = 0;
   let junkSkipped = 0;
   let absorbed: FactsAbsorbReason | null = null;
+  let readThrough = 0;
   for (const window of windows) {
+    if (windowsRun > 0 && await held()) break;
     const hold = budget.reserve(modelId, WORST_CASE_USAGE);
     if (hold === null) {
       await writeFactsAbsorbLog(
@@ -1095,6 +1110,7 @@ export async function extractFactsForPage(
       );
       if (windowsRun === 0) {
         return {
+          truncated_chars: opts.body.length,
           factsWritten: 0,
           factsSkipped: 0,
           factsFailed: 0,
@@ -1113,6 +1129,7 @@ export async function extractFactsForPage(
         ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
         modelId,
         observationDate,
+        entityHints,
         // The truncation retry widens the SAME hold taken above — nothing
         // here bills past `cap`.
         canAffordRetry: (projected) => budget.widen(hold, modelId, projected),
@@ -1129,6 +1146,7 @@ export async function extractFactsForPage(
       );
       if (windowsRun === 0) {
         return {
+          truncated_chars: opts.body.length,
           factsWritten: 0,
           factsSkipped: 0,
           factsFailed: 0,
@@ -1148,6 +1166,8 @@ export async function extractFactsForPage(
       // Over budget after the (already-paid) call — still persist what we got.
     }
     windowsRun += 1;
+    const start = opts.body.indexOf(window, readThrough);
+    readThrough = (start < 0 ? readThrough : start) + Math.min(window.length, EXTRACT_WINDOW_CHARS);
     junkSkipped += result.junkSkipped;
     facts.push(...result.facts);
     // An unreadable answer is a DURABLE failure, not a quiet page. Without this
@@ -1165,10 +1185,19 @@ export async function extractFactsForPage(
       );
     }
   }
-  const w = await writeExtractedFacts(storage, facts, {
+  if (await held()) {
+    return { factsWritten: 0, factsSkipped: facts.length, factsFailed: 0,
+      spentUsd: Number(budget.totalSpent().toFixed(6)), absorbed, windowsRun, junkSkipped,
+      truncated_chars: Math.max(0, opts.body.length - readThrough) };
+  }
+  const attribution = await transcriptAttribution(storage, opts.slug, sourceId);
+  const attributedFacts = attribution.agent
+    ? facts.map(f => ({ ...f, attributed_to: f.attributed_to === "assistant" ? "assistant" as const : "other" as const }))
+    : facts;
+  const w = await writeExtractedFacts(storage, attributedFacts, {
     sourceSlug: opts.slug,
     writtenBy: ON_WRITE_WRITER,
-    firstParty: await isOperatorTranscript(storage, opts.slug),
+    firstParty: attribution.firstParty,
     ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
   });
   return {
@@ -1179,6 +1208,7 @@ export async function extractFactsForPage(
     absorbed,
     windowsRun,
     junkSkipped,
+    truncated_chars: Math.max(0, opts.body.length - readThrough),
   };
 }
 

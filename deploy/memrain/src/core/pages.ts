@@ -16,7 +16,8 @@ import { auditSecrets, guardEchoes, guardSecrets, guardSecretsDeep, guardWrite, 
 import { createHash } from "node:crypto";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
-import { bumpPageGeneration } from "./generation.ts";
+import { bumpDocumentClock, bumpPageGeneration } from "./generation.ts";
+import { pageSourcePath, pageTruthSourcePath } from "./page-index.ts";
 import { wellFormJsonbValue } from "./well-form.ts";
 import { extractAliasNorms, setPageAliases } from "./page-aliases.ts";
 import { reconnectWantedLinks } from "./wanted-links.ts";
@@ -27,6 +28,7 @@ import { carryFactWithdrawals } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { recordWriteRequest, type WriteRequestKey } from "./write-requests.ts";
 import { applyPageEdits, assertScanKeptFences, pageEditResponse, type PageEdit } from "./page-edit.ts";
+import { decodePageListCursor, encodePageListCursor, type PageListPosition } from "./page-list-cursor.ts";
 
 // Catalogue of well-known page types. Not enforced at the DB level (see
 // migration 015 comment); kept here so application code can normalise +
@@ -118,6 +120,7 @@ const SLUG_RE = new RegExp(
   "u",
 );
 const MAX_SLUG_LEN = 256;
+const LARGE_PAGE_BYTES = 32 * 1024;
 
 /** Static hint for an append whose target page is missing. */
 const CREATE_IT_FIRST = "Create the page with page_put first.";
@@ -153,6 +156,8 @@ export interface PageInput {
    * intent to wipe the page. (An OMITTED body keeps the page's current body.)
    */
   allowEmptyBody?: boolean;
+  /** Permit a deliberate large replacement under the MCP precondition policy. */
+  allowShrink?: boolean;
   /**
    * Append this to the page's CURRENT body instead of replacing it. The body is
    * read under the slug's write lock, so concurrent appends each land after the
@@ -193,6 +198,8 @@ export interface PageInput {
    * writes nothing. Unset = no check. Only MCP page_put sets it.
    */
   preconditionPolicy?: "warn" | "refuse";
+  /** MCP page_put refuses repeated/trailing hyphens only when creating a slug. */
+  requireCleanNewSlug?: boolean;
   /** The authenticated principal behind the write (page_versions.written_by_principal). */
   written_by_principal?: string;
 }
@@ -217,6 +224,21 @@ export class PreconditionRequiredError extends OperationError {
 
   override toEnvelope(isPublic: boolean): PublicErrorEnvelope & { current_version: number } {
     return { ...super.toEnvelope(isPublic), current_version: this.currentVersion };
+  }
+}
+
+export class PageShrinkRefusedError extends OperationError {
+  constructor(public readonly storedBytes: number, public readonly contentBytes: number) {
+    super(
+      "page_shrink_refused",
+      `refusing to replace a ${storedBytes}-byte page body with ${contentBytes} bytes`,
+      "Use page_edit or page_append for partial changes, or pass allow_shrink: true to replace the body on purpose.",
+    );
+    this.name = "PageShrinkRefusedError";
+  }
+
+  override toEnvelope(isPublic: boolean): PublicErrorEnvelope & { stored_bytes: number; content_bytes: number } {
+    return { ...super.toEnvelope(isPublic), stored_bytes: this.storedBytes, content_bytes: this.contentBytes };
   }
 }
 
@@ -301,6 +323,8 @@ export interface PutResult {
   warnings?: string[];
   /** For an `edits` write: the body before and after, for the caller's diff. */
   edited?: { before: string; after: string };
+  /** Append boundary from the locked original body; internal extraction context. */
+  append_start?: number;
 }
 
 export interface PageVersionRow {
@@ -316,6 +340,9 @@ export interface PageVersionRow {
   /** Only when read with `withPrincipal` (operator/admin views). */
   written_by_principal?: string | null;
 }
+
+export type PageMetadata = Omit<PageRow, "markdown_body" | "compiled_truth">;
+export type PageVersionMetadata = Omit<PageVersionRow, "body_snapshot" | "compiled_truth_snapshot">;
 
 /** JSON with every object's keys sorted, for an order-free comparison. */
 function sortedKeysJson(value: unknown): string {
@@ -429,6 +456,7 @@ export async function putPage(
   const edits = input.edits?.map((e, i) => ({ old_text: e.old_text, new_text: scanned.newTexts![i]! }));
   const writtenByPrincipal = input.written_by_principal ?? null;
   let edited: PutResult["edited"];
+  let appendStart: number | undefined;
   const warnings: string[] = [];
   let body = input.markdown_body === undefined ? "" : scanned.body;
   const truth = scanned.truth;
@@ -508,9 +536,17 @@ export async function putPage(
         "Use a slug within your own source, or request access.",
       );
     }
-    checkExpectedVersion(input.slug, Number(existing.rows[0]?.version_n ?? 0), input.expectedVersion);
+    const currentVersion = Number(existing.rows[0]?.version_n ?? 0);
+    if (input.expectedVersion === 0 && existing.rows.length > 0) {
+      throw new VersionConflictError(input.slug, currentVersion, 0);
+    }
+    checkExpectedVersion(input.slug, currentVersion, input.expectedVersion);
 
     const current = existing.rows[0];
+    if (input.requireCleanNewSlug && current === undefined && /--|-(?:\/|$)/.test(input.slug)) {
+      throw new OperationError("invalid_params", "New page slugs cannot have repeated or trailing hyphens.",
+        "Use single hyphens between words in each slug segment. Existing slugs remain writable.");
+    }
     if (input.onlyOverwriteWriter !== undefined && current !== undefined) {
       const latest = await tx.query<{ written_by: string | null }>(
         "SELECT written_by FROM page_versions WHERE slug = $1 ORDER BY version_n DESC LIMIT 1",
@@ -559,6 +595,7 @@ export async function putPage(
       }
       const sep =
         current.markdown_body.length > 0 && !current.markdown_body.endsWith("\n") ? "\n" : "";
+      appendStart = current.markdown_body.length;
       body = `${current.markdown_body}${sep}${appendContent}`;
       hashNew = hashBody(body);
       // An append changes the body only. Title and truth come from the row read
@@ -585,6 +622,18 @@ export async function putPage(
         `refusing to replace the body of '${input.slug}' with an empty one`,
         "Pass allowEmptyBody (allow_empty_body) to clear a page on purpose, or omit markdown_body to keep it.",
       );
+    }
+
+    if (
+      input.preconditionPolicy !== undefined && input.allowShrink !== true &&
+      current?.deleted_at === null && input.markdown_body !== undefined &&
+      edits === undefined && appendContent === undefined
+    ) {
+      const storedBytes = Buffer.byteLength(current.markdown_body, "utf8");
+      const contentBytes = Buffer.byteLength(body, "utf8");
+      if (storedBytes > LARGE_PAGE_BYTES && contentBytes < storedBytes / 2) {
+        throw new PageShrinkRefusedError(storedBytes, contentBytes);
+      }
     }
 
     // Merge/rename fence — layered on top of the plain upsert below.
@@ -765,6 +814,7 @@ export async function putPage(
   const extras = {
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(edited !== undefined ? { edited } : {}),
+    ...(result.changed && appendStart !== undefined ? { append_start: appendStart } : {}),
   };
   // A no-op stored nothing, so there is nothing new to audit; under `flag` the
   // credential sits in the unchanged body and would otherwise be re-audited on
@@ -908,13 +958,16 @@ export type ListPagesSort = (typeof LIST_PAGES_SORTS)[number];
 // Whitelisted ORDER BY per sort key — the enum is validated at the boundary
 // AND mapped through this table so an unsupported string can never reach SQL.
 const PAGE_SORT_SQL: Record<ListPagesSort, string> = {
-  updated_desc: "updated_at DESC",
-  updated_asc: "updated_at ASC",
-  created_desc: "created_at DESC",
+  updated_desc: `pages.updated_at DESC, slug COLLATE "C" ASC`,
+  updated_asc: `pages.updated_at ASC, slug COLLATE "C" ASC`,
+  created_desc: `pages.created_at DESC, slug COLLATE "C" ASC`,
   slug: `slug COLLATE "C" ASC`,
 };
 
 export interface ListPagesOptions {
+  includeBody?: boolean;
+  slugPrefix?: string;
+  excludeDiary?: boolean;
   type?: string;
   since?: string;
   limit?: number;
@@ -928,17 +981,69 @@ export interface ListPagesOptions {
   sourceIds?: readonly string[];
 }
 
+export function listPages(storage: Storage, opts: ListPagesOptions & { includeBody: false }): Promise<PageMetadata[]>;
+export function listPages(storage: Storage, opts?: ListPagesOptions & { includeBody?: true }): Promise<PageRow[]>;
+export function listPages(storage: Storage, opts: ListPagesOptions): Promise<Array<PageRow | PageMetadata>>;
 export async function listPages(
   storage: Storage,
   opts: ListPagesOptions = {},
-): Promise<PageRow[]> {
+): Promise<Array<PageRow | PageMetadata>> {
   const limit =
     typeof opts.limit === "number" && opts.limit >= 1 && opts.limit <= 1000
       ? Math.floor(opts.limit)
       : 50;
+  validateSlugPrefix(opts.slugPrefix);
+  return queryPageList(storage, opts, limit);
+}
+
+export function validateSlugPrefix(prefix: string | undefined): void {
+  if (prefix === undefined || prefix === "") return;
+  try {
+    if (prefix.length > MAX_SLUG_LEN) throw new Error("prefix too long");
+    validateSlug(prefix.endsWith("/") ? prefix.slice(0, -1) : prefix);
+  } catch {
+    throw new OperationError("invalid_params", "Invalid slug_prefix.",
+      "Use a page slug prefix, optionally ending in /; wildcards and relative paths are not supported.");
+  }
+}
+
+export async function listPagesPage(storage: Storage, opts: ListPagesOptions & { cursor?: string } = {}): Promise<{
+  pages: Array<PageRow | PageMetadata>; next_cursor: string | null; complete: boolean;
+}> {
+  validateSlugPrefix(opts.slugPrefix);
+  const sort = opts.sort ?? "updated_desc";
+  const context = createHash("sha256").update(JSON.stringify({
+    sort, prefix: opts.slugPrefix ?? "", type: opts.type?.toLowerCase() ?? "",
+    since: opts.since ?? "", tag: opts.tag?.replace(/\s+/g, " ").trim().toLowerCase() ?? "",
+    includeDeleted: opts.includeDeleted === true, excludeDiary: opts.excludeDiary === true,
+    sourceIds: opts.sourceIds === undefined ? null : [...new Set(opts.sourceIds)].sort(),
+  })).digest("hex");
+  const position = opts.cursor === undefined ? undefined : decodePageListCursor(opts.cursor, context, sort !== "slug");
+  const limit = typeof opts.limit === "number" && opts.limit >= 1 && opts.limit <= 1000 ? Math.floor(opts.limit) : 50;
+  const rows = await queryPageList(storage, opts, limit + 1, position);
+  const pages = rows.slice(0, limit);
+  const complete = rows.length <= limit;
+  const last = pages.at(-1);
+  return { pages, complete, next_cursor: complete || !last ? null : encodePageListCursor(context, {
+    slug: last.slug, key: sort === "slug" ? null : sort === "created_desc" ? last.created_at : last.updated_at,
+  }) };
+}
+
+async function queryPageList(
+  storage: Storage, opts: ListPagesOptions, limit: number, position?: PageListPosition,
+): Promise<Array<PageRow | PageMetadata>> {
   const params: unknown[] = [];
   const where: string[] = [];
   if (opts.includeDeleted !== true) where.push("deleted_at IS NULL");
+  if (opts.slugPrefix) {
+    params.push(opts.slugPrefix.replace(/([\\%_])/g, "\\$1") + "%");
+    where.push(`slug LIKE $${params.length} ESCAPE '\\'`);
+  }
+  if (opts.excludeDiary) {
+    // Match String.trim() in the dispatcher, including legacy whitespace around types.
+    params.push(" \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff");
+    where.push(`lower(btrim(COALESCE(type, ''), $${params.length})) NOT IN ('diary', 'journal') AND slug NOT LIKE 'life/diary/%'`);
+  }
   if (opts.type) {
     params.push(opts.type.toLowerCase());
     where.push(`type = $${params.length}`);
@@ -960,10 +1065,21 @@ export async function listPages(
   }
   const order =
     PAGE_SORT_SQL[opts.sort ?? "updated_desc"] ?? PAGE_SORT_SQL.updated_desc;
+  if (position) {
+    const slug = `$${params.push(position.slug)}`;
+    if (opts.sort === "slug") where.push(`slug COLLATE "C" > ${slug} COLLATE "C"`);
+    else {
+      const column = opts.sort === "created_desc" ? "created_at" : "updated_at";
+      const direction = opts.sort === "updated_asc" ? ">" : "<";
+      // Bind as text so postgres-js does not round the cursor to JS milliseconds.
+      const key = `$${params.push(position.key)}::text::timestamptz`;
+      where.push(`(${column} ${direction} ${key} OR (${column} = ${key} AND slug COLLATE "C" > ${slug} COLLATE "C"))`);
+    }
+  }
   params.push(limit);
   const sql = `
-    SELECT slug, type, title, compiled_truth,
-           markdown_body, content_hash, source_id,
+    SELECT slug, type, title,${opts.includeBody === false ? "" : " compiled_truth, markdown_body,"}
+           content_hash, source_id,
            created_at::text AS created_at,
            updated_at::text AS updated_at,
            deleted_at::text AS deleted_at
@@ -971,17 +1087,26 @@ export async function listPages(
       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY ${order}
       LIMIT $${params.length}`;
-  const r = await storage.engine().query<PageRow>(sql, params);
+  const r = await storage.engine().query<PageRow | PageMetadata>(sql, params);
   return r.rows;
 }
 
+interface PageVersionOptions {
+  withPrincipal?: boolean;
+  includeBody?: boolean;
+  version?: number;
+}
+
+export function pageVersions(storage: Storage, slug: string, limit: number | undefined, sourceIds: readonly string[] | undefined, opts: PageVersionOptions & { includeBody: false }): Promise<PageVersionMetadata[]>;
+export function pageVersions(storage: Storage, slug: string, limit?: number, sourceIds?: readonly string[], opts?: PageVersionOptions & { includeBody?: true }): Promise<PageVersionRow[]>;
+export function pageVersions(storage: Storage, slug: string, limit: number | undefined, sourceIds: readonly string[] | undefined, opts: PageVersionOptions): Promise<Array<PageVersionRow | PageVersionMetadata>>;
 export async function pageVersions(
   storage: Storage,
   slug: string,
   limit = 20,
   sourceIds?: readonly string[],
-  opts: { withPrincipal?: boolean } = {},
-): Promise<PageVersionRow[]> {
+  opts: PageVersionOptions = {},
+): Promise<Array<PageVersionRow | PageVersionMetadata>> {
   validateSlug(slug);
   const cap =
     typeof limit === "number" && limit >= 1 && limit <= 200
@@ -991,12 +1116,12 @@ export async function pageVersions(
   // own source(s). No-op when unset — the full version chain, as today.
   const params: unknown[] = [slug, cap];
   const sourceFilter = andSourceScope("source_id", sourceIds, params);
-  const r = await storage.engine().query<PageVersionRow>(
-    `SELECT slug, source_id, version_n, hash_prev, hash_new,
-            body_snapshot, compiled_truth_snapshot,
+  const versionFilter = opts.version === undefined ? "" : ` AND version_n = $${params.push(opts.version)}`;
+  const r = await storage.engine().query<PageVersionRow | PageVersionMetadata>(
+    `SELECT slug, source_id, version_n, hash_prev, hash_new,${opts.includeBody === false ? "" : " body_snapshot, compiled_truth_snapshot,"}
             written_by, written_at::text AS written_at${opts.withPrincipal === true ? ", written_by_principal" : ""}
        FROM page_versions
-       WHERE slug = $1${sourceFilter}
+       WHERE slug = $1${sourceFilter}${versionFilter}
        ORDER BY version_n DESC
        LIMIT $2`,
     params,
@@ -1021,7 +1146,7 @@ export async function deletePage(
   slug: string,
   writtenBy?: string,
   writeSource?: string,
-  opts: { expectedVersion?: number; writtenByPrincipal?: string } = {},
+  opts: { expectedVersion?: number; writtenByPrincipal?: string; expectedOriginVersion?: { slug: string; version: number } } = {},
 ): Promise<DeleteResult> {
   validateSlug(slug);
   // Tenant write scope (mig047): when a scoped caller supplies its write source,
@@ -1032,7 +1157,13 @@ export async function deletePage(
     typeof writeSource === "string" && writeSource.length > 0 ? writeSource : null;
   const engine = storage.engine();
   return engine.transaction(async (tx) => {
-    await lockPageSlugs(tx, slug);
+    await lockPageSlugs(tx, slug, ...(opts.expectedOriginVersion ? [opts.expectedOriginVersion.slug] : []));
+    if (opts.expectedOriginVersion) {
+      const origin = opts.expectedOriginVersion;
+      const owns = await tx.query(`SELECT 1 FROM pages WHERE slug = $1 AND ($2::text IS NULL OR source_id = $2)`, [origin.slug, scope]);
+      const version = owns.rows.length ? await currentPageVersion(tx, origin.slug) : 0;
+      checkExpectedVersion(origin.slug, version, origin.version);
+    }
     const params: unknown[] = [slug];
     let sourceFilter = "";
     if (scope !== null) {
@@ -1268,6 +1399,11 @@ export interface RenameResult {
 
 export interface RenameOptions {
   written_by?: string;
+  writtenByPrincipal?: string;
+  expectedVersion?: number;
+  /** Interactive rename: refuse imported pages and remove the old search mirror atomically. */
+  manual?: boolean;
+  excludeDiary?: boolean;
   /** Owning source (tenant). When set, the rename resolves + carries ONLY within
    *  this source — a page owned by another tenant reads as "not found". */
   source_id?: string;
@@ -1291,7 +1427,7 @@ export interface RenameOptions {
  * place would fight the FK graph. Instead the existing cycle backstop
  * (`reconcilePageMirrors`) re-mirrors the new slug and drops the old orphan on
  * its next pass — the same self-healing path a normal page_put relies on. The
- * caller may drop the old mirror eagerly (removePageFromSearch) for immediacy.
+ * manual rename removes the old mirror in this transaction instead.
  *
  * No-op results (renamed:false): source page missing/deleted, target slug
  * already taken (live OR soft-deleted — the global PK forbids a second row), or
@@ -1326,8 +1462,8 @@ export async function renamePage(
       srcParams.push(scope);
       srcFilter = ` AND source_id = $${srcParams.length}`;
     }
-    const src = await tx.query<{ source_id: string; content_hash: string }>(
-      `SELECT source_id, content_hash FROM pages
+    const src = await tx.query<{ source_id: string; content_hash: string; type: string }>(
+      `SELECT source_id, content_hash, type FROM pages
         WHERE slug = $1 AND deleted_at IS NULL${srcFilter}`,
       srcParams,
     );
@@ -1335,6 +1471,30 @@ export async function renamePage(
       return { from_slug: fromSlug, to_slug: toSlug, renamed: false, reason: "source page not found or deleted" };
     }
     const ownerSource = src.rows[0]!.source_id;
+    if (opts.excludeDiary && (fromSlug.startsWith("life/diary/") || ["diary", "journal"].includes(src.rows[0]!.type.trim().toLowerCase()))) {
+      throw new PageNotFoundError(fromSlug);
+    }
+    if (opts.expectedVersion !== undefined) {
+      checkExpectedVersion(fromSlug, await currentPageVersion(tx, fromSlug), opts.expectedVersion);
+    }
+    if (opts.manual) {
+      if (/--|-(?:\/|$)/.test(toSlug)) {
+        throw new OperationError("invalid_params", "New page slugs cannot have repeated or trailing hyphens.");
+      }
+      const imported = await tx.query<{ managed: boolean }>(
+        `SELECT (s.kind IN ('github', 'transcript', 'mailbox', 'calendar', 'code', 'webhook')
+          OR p.compiled_truth->>'provider' = 'github'
+          OR (p.compiled_truth ? 'conversation_id' AND p.compiled_truth ? 'format')
+          OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug
+            AND v.written_by IN ('connector-github', 'transcripts-ingest'))) AS managed
+         FROM pages p JOIN sources s ON s.id = p.source_id WHERE p.slug = $1`,
+        [fromSlug],
+      );
+      if (imported.rows[0]?.managed === true) {
+        throw new OperationError("importer_managed", "An importer manages this page's slug.",
+          "Rename it in the upstream source so the next import cannot recreate the old slug.");
+      }
+    }
 
     // Target slug must be globally free — the `pages.slug` PK forbids a second
     // row for it, even a soft-deleted one.
@@ -1392,7 +1552,7 @@ export async function renamePage(
       [fromSlug, toSlug],
     );
     // Inbound edges: drop rows that would collide with an existing (source,
-    // to, type, source_id) edge before re-pointing, so the UPDATE can't trip
+    // to, type, source_id, link_source) edge before re-pointing, so the UPDATE can't trip
     // the tenant-aware unique key.
     await tx.query(
       `DELETE FROM links l
@@ -1402,7 +1562,8 @@ export async function renamePage(
              WHERE x.source_slug = l.source_slug
                AND x.target_slug = $2
                AND x.type = l.type
-               AND x.source_id = l.source_id)`,
+               AND x.source_id = l.source_id
+               AND x.link_source = l.link_source)`,
       [fromSlug, toSlug],
     );
     await move(
@@ -1453,6 +1614,16 @@ export async function renamePage(
       [fromSlug, toSlug],
     );
 
+    if (opts.manual) {
+      const mirrors = await tx.query(
+        `DELETE FROM documents WHERE source_path = ANY($1::text[])
+           AND (source_id = $2 OR (source_id IS NULL AND $2 = 'default')) RETURNING id`,
+        [[pageSourcePath(fromSlug, ownerSource), pageTruthSourcePath(fromSlug, ownerSource),
+          pageSourcePath(fromSlug), pageTruthSourcePath(fromSlug)], ownerSource],
+      );
+      if (mirrors.rows.length > 0) await bumpDocumentClock(tx);
+    }
+
     // Drop the old row — its FK children are already moved, so nothing cascades.
     await tx.query(`DELETE FROM pages WHERE slug = $1`, [fromSlug]);
 
@@ -1473,9 +1644,9 @@ export async function renamePage(
     await tx.query(
       `INSERT INTO page_versions
          (slug, version_n, hash_prev, hash_new,
-          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id)
-       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6)`,
-      [toSlug, nextN.rows[0]!.n, src.rows[0]!.content_hash, marker, writtenBy, ownerSource],
+          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id, written_by_principal)
+       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6, $7)`,
+      [toSlug, nextN.rows[0]!.n, src.rows[0]!.content_hash, marker, writtenBy, ownerSource, opts.writtenByPrincipal ?? null],
     );
     await bumpPageGeneration(tx, toSlug);
     // The new slug may be a name other pages already link to.

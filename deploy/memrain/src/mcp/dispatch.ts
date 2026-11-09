@@ -7,7 +7,11 @@
  * (per MCP spec) instead of a JSON-RPC error envelope. JSON-RPC errors
  * are reserved for protocol-level failures (malformed request etc.).
  */
+import { andSourceScope } from "../core/source-scope.ts";
 import { gatherDiagnostics } from "../core/gather-degraded.ts";
+import { pageBodyWindow } from "../core/page-window.ts";
+import { resolveFactEntity, type EntityResolutionFeedback } from "../core/entity-resolve.ts";
+import { oversizedResultError } from "../core/result-size.ts";
 import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import type { Storage } from "../core/storage.ts";
@@ -21,11 +25,15 @@ import {
   NO_SOURCE_SENTINEL,
 } from "../core/auth-info.ts";
 import { hybridSearch, type SearchOptions } from "../core/search/index.ts";
+import { resolveSearchKnobs } from "../core/search/hybrid.ts";
+import { applyTokenBudget, estTokens } from "../core/search/token-budget.ts";
+import { matchQueryFacts } from "../core/facts-query-match.ts";
+import { frameExternal, frameMarkedContent, markExternalChunks, readExternalTrust } from "../core/trust-frame.ts";
 import { publicSearchMeta, type SearchMeta } from "../core/search/search-meta.ts";
 import { gradeConfidence } from "../core/search/confidence-grade.ts";
 import { listWantedPages, type ListWantedPagesOptions } from "../core/wanted-links.ts";
 import type { Evidence } from "../core/search/evidence.ts";
-import { resolveDateBoundary } from "../core/search/filters.ts";
+import { resolveDateBoundary, validatePageFilters, type PageFilters } from "../core/search/filters.ts";
 import { indexDocument, indexFile } from "../core/indexer.ts";
 import { findBacklinks } from "../core/backlinks.ts";
 import {
@@ -46,8 +54,10 @@ import type { EntityType } from "../core/entities.ts";
 import { makeCaptureCallback } from "../core/eval-capture.ts";
 import {
   putPage,
+  listPagesPage,
   appendPage,
   deletePage,
+  renamePage,
   restorePage,
   revertPage,
   getPage,
@@ -66,7 +76,7 @@ import {
   removeLink,
   graphNeighbors,
   graphQuery,
-  traverseGraph,
+  traverseGraphPage,
   syncWikilinksForPage,
   syncVerbLinksForPage,
   slugifyTarget,
@@ -91,11 +101,12 @@ import { outputRedactionEnabled, redactToolResult } from "../core/output-redacti
 import { capHitSnippets, searchSnippetChars } from "../core/search/snippet-cap.ts";
 import { allowedFingerprints } from "../core/secret-scan.ts";
 import { getChunksForPage, getChunksForSource } from "../core/chunks-read.ts";
-import { resolveSlugs } from "../core/slug-resolve.ts";
+import { resolveSlugs, slugReferenceCounts } from "../core/slug-resolve.ts";
+import { searchExact } from "../core/search/exact.ts";
 import { addTag, removeTag, getTags } from "../core/tags.ts";
 import { relationalRecall } from "../core/search/relational-recall.ts";
 import { relationalRecallLlm } from "../core/search/relational-llm.ts";
-import { getLinks, listLinkSources } from "../core/links-read.ts";
+import { getLinksPage, listLinkSources } from "../core/links-read.ts";
 import {
   findOrphans,
   findExperts,
@@ -188,7 +199,7 @@ import {
   type EntityRecallOptions,
 } from "../core/facts.ts";
 import { putRawData, getRawData } from "../core/raw-data.ts";
-import { logIngest, getIngestLog } from "../core/ingest-log.ts";
+import { logIngest, getIngestLog, classifyFactsAbsorbError, writeFactsAbsorbLog } from "../core/ingest-log.ts";
 import { Queue } from "../core/jobs/queue.ts";
 import { spendPayload } from "../core/jobs/types.ts";
 import { PAGE_MIRROR_JOB_KIND } from "../core/jobs/page-mirror-handler.ts";
@@ -219,6 +230,7 @@ import { couldNotCheck, worstStatus } from "../core/doctor-categories.ts";
 import {
   checkStaleLocks,
   checkQueueHealth,
+  checkRuntimeConfigOverlay,
   checkSchemaVersion,
   checkEmbeddingWidth,
   checkInvalidIndexes,
@@ -258,11 +270,11 @@ import { databaseOperationError } from "../core/database-error.ts";
 import { OperationError, PageNotFoundError, isOperationError } from "../core/operation-error.ts";
 import { suggestSlugs } from "../core/slug-suggest.ts";
 import { getBrainHotMemoryMeta, invalidateHotMemoryMeta } from "../core/hot-memory-meta.ts";
-import { normalizeAddFactItems, runAddFactBatch } from "../core/facts-batch.ts";
+import { factInputMetadata, normalizeAddFactItems, runAddFactBatch } from "../core/facts-batch.ts";
 import { replaceFact } from "../core/facts-replace.ts";
 import { similarActiveAfterForget } from "../core/facts-similar-active.ts";
 import { ReferenceDateError, resolveThinkTemporalContext } from "../core/synthesis/think-temporal.ts";
-import { MAX_REQUEST_ID_LEN, OPERATIONS, validateParams } from "./operations.ts";
+import { MAX_REQUEST_ID_LEN, OPERATIONS, normalizeOptionalArgs, validateParams } from "./operations.ts";
 import {
   claimWriteRequest,
   completeWriteRequest,
@@ -388,7 +400,7 @@ export interface DispatchOptions {
   /** This server's OAuth issuer, named in the step-up challenge a scope
    *  refusal carries so the client can find the authorization server. */
   issuer?: string;
-  /** Set ONLY by the admin panel route (/admin/api/tool). The operator's own browsing must leave no
+  /** Set by the admin panel route (/admin/api/tool) and the read-only access audit. The operator's own browsing must leave no
    *  trace in the signals the brain learns from and must spend nothing generative: no retrieval
    *  touch on page_get, no eval capture, no hot-memory meta, and search runs with every paid stage
    *  off and a zero-LLM intent, whatever the env enables. Transports never set it. */
@@ -422,9 +434,10 @@ export async function dispatchTool(
         ...(auth.budgetUsdPerDay !== undefined ? { capUsd: auth.budgetUsdPerDay } : {}),
       }
     : null;
-  const raw = await runWithSpendClient(spendClient, () =>
+  const dispatched = await runWithSpendClient(spendClient, () =>
     dispatchToolInner(storage, req, opts),
   );
+  const raw = withPageAdminUrl(req, dispatched, opts);
   // The operator reads stored text as it is; everyone else gets retrieval
   // results scanned for credentials that predate (or slipped past) the write scan.
   const isOperator = opts.authInfo === undefined && !(opts.isPublic ?? false);
@@ -443,12 +456,34 @@ export async function dispatchTool(
         failClosed: tenantFailClosedEnabled(),
       });
       const meta = await getBrainHotMemoryMeta(storage, readSources !== undefined ? { sourceIds: readSources } : {});
-      if (meta) return { ...result, _meta: meta };
+      if (meta) return boundedResult(req.name, { ...result, _meta: meta }, opts.isPublic ?? false);
     } catch {
       // Best-effort: never let the meta hook fail the underlying tool call.
     }
   }
-  return result;
+  return boundedResult(req.name, result, opts.isPublic ?? false);
+}
+
+function withPageAdminUrl(req: ToolCallRequest, result: ToolCallResult, opts: DispatchOptions): ToolCallResult {
+  if (result.isError || !req.name.startsWith("page_") || OP_BY_NAME.get(req.name)?.scope !== "write" ||
+      opts.isPublic || opts.authInfo?.isPublic || (opts.authInfo && !hasScope(opts.authInfo.scopes, "admin"))) return result;
+  const issuer = opts.issuer ?? process.env.MEMRAIN_PUBLIC_URL;
+  if (!issuer) return result;
+  let base: URL;
+  try { base = new URL(issuer); } catch { return result; }
+  if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) return result;
+  const payload = JSON.parse(result.content[0]!.text);
+  const slug = req.name === "page_rename" ? payload.to_slug : payload.slug;
+  if (payload.ok !== true || typeof slug !== "string") return result;
+  const adminUrl = `${base.toString().replace(/\/+$/, "")}/admin/#page/${encodeURIComponent(slug)}`;
+  return { ...result, content: result.content.map((block, index) => index === 0
+    ? { ...block, text: JSON.stringify({ ...payload, admin_url: adminUrl }) } : block) };
+}
+
+function boundedResult(tool: string, result: ToolCallResult, isPublic: boolean): ToolCallResult {
+  if (result.isError) return result;
+  const error = oversizedResultError(tool, result);
+  return error ? errResult(JSON.stringify(error.toEnvelope(isPublic))) : result;
 }
 
 /** Tools whose `id` is an entity_facts id a client may hold as a string. */
@@ -481,7 +516,9 @@ async function dispatchToolInner(
   req: ToolCallRequest,
   opts: DispatchOptions = {},
 ): Promise<ToolCallResult> {
-  const args = coerceFactIdArg(req.name, req.arguments ?? {});
+  const originalArgs = coerceFactIdArg(req.name, req.arguments ?? {});
+  const operation = OP_BY_NAME.get(req.name);
+  const args = operation ? normalizeOptionalArgs(operation, originalArgs) : originalArgs;
   // Mirror the REST layer's public-read policy exactly: redact bodies on
   // public ingress unless the operator opted into MEMRAIN_PUBLIC_READ_BODIES.
   const redact =
@@ -587,6 +624,19 @@ async function dispatchToolInner(
       enforceSlugPrefixFence(req.name, args, boundPrefixes);
     }
     switch (req.name) {
+      case "search_exact": {
+        const result = await searchExact(storage, args["phrase"] as string, {
+          caseSensitive: args["case_sensitive"] === true,
+          slugPrefix: typeof args["slug_prefix"] === "string" ? args["slug_prefix"] : undefined,
+          type: typeof args["type"] === "string" ? args["type"] : undefined,
+          limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+          sourceIds: readSources, excludeDiary: remote,
+        });
+        const hits = redact ? result.hits.map(({ snippet: _snippet, ...hit }) => hit) : result.hits;
+        return jsonResult({ ok: true, ...result, hits,
+          ...(!result.complete ? { hint: "Narrow slug_prefix or type, or increase limit (up to 200), before claiming all matches were returned." } : {}),
+        });
+      }
       case "search":
         return await callSearch(
           storage,
@@ -646,6 +696,18 @@ async function dispatchToolInner(
             receipt,
           }),
         );
+      case "page_rename": {
+        requireOwnWriteSource(req.name, opts.authInfo, writeSource);
+        const result = await renamePage(storage, args["from"] as string, args["to"] as string, {
+          expectedVersion: args["expected_version"] as number,
+          source_id: writeSource,
+          written_by: remoteWriterIdentity(opts) ?? "page_rename",
+          writtenByPrincipal: writerPrincipal(opts),
+          manual: true,
+          excludeDiary: remote,
+        });
+        return jsonResult({ ok: result.renamed, ...result });
+      }
       case "page_delete":
         return await callPageDelete(storage, args, writeSource, writerPrincipal(opts));
       case "page_restore":
@@ -653,7 +715,8 @@ async function dispatchToolInner(
       case "page_revert":
         return await callPageRevert(storage, args, writeSource, opts.isPublic ?? false, writerPrincipal(opts));
       case "page_get":
-        return await callPageGet(storage, args, redact, readSources, remote, seesPrincipal(opts), opts.adminPanel !== true);
+        return await callPageGet(storage, args, redact, readSources, remote, seesPrincipal(opts), opts.adminPanel !== true,
+          !(opts.adminPanel === true && isOperator));
       case "page_list":
         return await callPageList(storage, args, redact, readSources, remote);
       case "page_versions":
@@ -671,7 +734,7 @@ async function dispatchToolInner(
       case "get_chunks":
         return await callGetChunks(storage, args, readSources, remote);
       case "resolve_slugs":
-        return await callResolveSlugs(storage, args, readSources, remote);
+        return await callResolveSlugs(storage, args, readSources, remote, redact);
       case "add_tag":
         return await callAddTag(storage, args, writeSource);
       case "remove_tag":
@@ -701,10 +764,10 @@ async function dispatchToolInner(
         );
       case "add_timeline_event":
         return await withWriteRequest(storage, req.name, args, writeRequestPrincipal(opts, writeSource), () =>
-          callAddTimelineEvent(storage, args, writeSource, writerPrincipal(opts)),
+          callAddTimelineEvent(storage, args, writeSource, writerPrincipal(opts), redact, remote),
         );
       case "entity_facts":
-        return await callEntityFacts(storage, args, redact, readSources, remote);
+        return await callEntityFacts(storage, args, redact, readSources, remote, opts);
       case "entity_timeline":
         return await callEntityTimeline(storage, args, redact, readSources);
       case "entity_recall":
@@ -838,7 +901,7 @@ async function dispatchToolInner(
       case "run_doctor":
         return await callRunDoctor(storage);
       case "list_skills":
-        return callListSkills(callerCanCall(opts));
+        return callListSkills(args, callerCanCall(opts));
       case "get_skill":
         return callGetSkill(args, callerCanCall(opts));
       case "get_recent_transcripts":
@@ -1041,6 +1104,27 @@ function jsonResult(payload: unknown): ToolCallResult {
   };
 }
 
+function searchPageFilters(args: Record<string, unknown>): PageFilters {
+  const filters: PageFilters = {
+    ...(args["types"] !== undefined ? { types: args["types"] as string[] } : {}),
+    ...(typeof args["slug_prefix"] === "string" ? { slugPrefix: args["slug_prefix"] } : {}),
+  };
+  validatePageFilters(filters);
+  return filters;
+}
+
+async function pageTypeNotice(storage: Storage, filters: PageFilters, sources: string[] | undefined, remote: boolean): Promise<Record<string, unknown>> {
+  if (!filters.types?.length) return {};
+  const params: unknown[] = [];
+  const scope = andSourceScope("source_id", sources, params);
+  const rows = await storage.engine().query<{ type: string }>(
+    `SELECT DISTINCT type FROM pages WHERE deleted_at IS NULL${scope}${remote ? " AND slug NOT LIKE 'life/diary/%'" : ""} ORDER BY type`, params,
+  );
+  const available = rows.rows.map(r => r.type).filter(t => !remote || !isDiaryPage(t, ""));
+  const unknown = filters.types.filter(t => !available.includes(t));
+  return unknown.length ? { notice: "unknown_page_types", unknown_types: unknown, available_types: available } : {};
+}
+
 async function callSearch(
   storage: Storage,
   args: Record<string, unknown>,
@@ -1131,6 +1215,9 @@ async function callSearch(
     // inside the resolver instead of silently dropping the bound.
     return resolveDateBoundary(v, name);
   };
+  const pageFilters = searchPageFilters(args);
+  Object.assign(searchOpts, pageFilters);
+  const typeNotice = await pageTypeNotice(storage, pageFilters, readSources, !isOperator);
   const since = dateBound("since");
   const until = dateBound("until");
   if (since) searchOpts.since = since;
@@ -1173,18 +1260,23 @@ async function callSearch(
           ),
       )
     : hits;
-  const out = capHitSnippets(
+  const snippets = capHitSnippets(
     (redact
       ? redactBodies(visible as unknown as Record<string, unknown>[])
-      : visible) as Array<{ content: string; sourcePath: string }>,
+      : visible) as Array<{ chunkId: string; content: string; sourcePath: string }>,
     searchSnippetChars(),
     readSources,
   );
+  const out = redact ? snippets : await frameSearchHits(storage, snippets, readSources, resolveSearchKnobs(searchOpts).tokenBudget);
+  if (meta && out.length < snippets.length) meta = { ...meta, degraded: [...new Set([...meta.degraded, "budget_truncated" as const])] };
   // Non-operators see corpus-independent reason codes only, keyed on the caller
   // rather than on body redaction: counts are an existence oracle even when
   // bodies are opted in.
   const metaOut = responseSearchMeta(meta, out as ReadonlyArray<{ evidence?: Evidence }>, isOperator);
   const metaField = metaOut ? { meta: metaOut } : {};
+  if (out.length === 0) {
+    return jsonResult({ ok: true, hits: out, ...emptyRetrievalHint(readSources, metaOut), ...metaField, ...typeNotice });
+  }
   // A set-shaped question ("all the companies that…", "what are the different
   // approaches to…") is exactly the shape `search` answers badly when query
   // expansion is off: it returns a plausible non-empty list the caller has no
@@ -1216,9 +1308,9 @@ async function callSearch(
             "expands the question first; `query` alone inherits the same " +
             "expansion setting and would not change the outcome.",
         };
-    return jsonResult({ ok: true, hits: out, hint, ...metaField });
+    return jsonResult({ ok: true, hits: out, hint, ...metaField, ...typeNotice });
   }
-  return jsonResult({ ok: true, hits: out, ...metaField });
+  return jsonResult({ ok: true, hits: out, ...metaField, ...typeNotice });
 }
 
 /**
@@ -1242,6 +1334,22 @@ function responseSearchMeta(
       ? gradeConfidence(returnedHits)
       : meta.confidence;
   return { ...meta, returned: returnedHits.length, ...(confidence ? { confidence } : {}) };
+}
+
+/** Receives only caller-visible meta; hidden matches must not change the hint. */
+function emptyRetrievalHint(readSources?: string[], meta?: Pick<SearchMeta, "degraded">): Record<string, unknown> {
+  if (readSources?.length === 0) return { hint: { status: "grant_sources_empty", try: ["Ask the operator to grant a readable source."] } };
+  const reasons = meta?.degraded.filter(r => r !== "keyword_zero") ?? [];
+  return { hint: reasons.length > 0
+    ? { status: "retrieval_degraded", reasons, try: ["Retry the query; check server health if this persists."] }
+    : { status: "retrieval_healthy", try: ["Use fewer or different terms.", "Broaden the date, type or slug filters."] } };
+}
+
+async function frameSearchHits<T extends { chunkId: string; content: string; title?: string | null }>(
+  storage: Storage, hits: readonly T[], readSources?: string[], tokenBudget?: number,
+) {
+  const framed = (await markExternalChunks(storage.engine(), hits, readSources)).map(frameMarkedContent);
+  return tokenBudget === undefined ? framed : applyTokenBudget(framed, tokenBudget);
 }
 
 const URI_SCHEME = /^[a-z][a-z0-9+.-]+:\/\//i;
@@ -1387,19 +1495,23 @@ async function callBacklinks(
     opts.limit = limit as number;
   }
   if (readSources !== undefined) opts.sourceIds = readSources;
-  if (remote) opts.excludeTarget = isDiarySlug;
+  if (remote) { opts.excludeTarget = isDiarySlug; opts.excludeDiary = true; }
+  opts.includeOverflow = true;
   let hits = await findBacklinks(storage, name, opts);
   // Diary fence: drop backlinks originating from a diary page (its mirror
   // source_path carries the life/diary/* slug) for a non-operator caller.
   // Edges into a diary target are dropped by `excludeTarget` above; this
   // drops edges out of a diary page.
   if (remote) hits = hits.filter((h) => !isDiarySourcePath(h.sourcePath));
+  const requested = opts.limit ?? 50;
+  const truncated = hits.length > requested;
+  hits = hits.slice(0, requested);
   // Public ingress: `surfaceForm` is note-authored free text — strip it,
   // mirroring the search/page/fact body redaction policy.
   const out = redact
     ? redactBacklinks(hits as unknown as Record<string, unknown>[])
     : hits;
-  return jsonResult({ ok: true, name, hits: out });
+  return jsonResult({ ok: true, name, hits: out, truncated });
 }
 
 async function callStats(storage: Storage): Promise<ToolCallResult> {
@@ -1602,6 +1714,8 @@ async function callPagePut(
   if (principal !== undefined) input.written_by_principal = principal;
   const policy = writePreconditionPolicy();
   if (policy !== undefined && args["force"] !== true) input.preconditionPolicy = policy;
+  if (args["allow_shrink"] === true) input.allowShrink = true;
+  input.requireCleanNewSlug = true;
   const r = await putPage(storage, input);
   const derived = await afterPageWrite(storage, r, writeSource, isPublic, "page_put", args["wait_for_index"] === true);
   return jsonResult({ ok: true, ...r, ...derived });
@@ -1796,8 +1910,9 @@ async function callPageEdit(
  */
 function maybeEnqueueFactExtraction(
   storage: Storage,
-  page: { slug: string; type: string; markdown_body: string; source_id?: string },
+  page: { slug: string; type: string; markdown_body: string; source_id?: string; content_hash: string },
   writeSource?: string,
+  extractionBody = page.markdown_body,
 ): void {
   if (!factsExtractionEnabled()) return;
   // Diary interiority is never mined for facts — a hard privacy invariant that
@@ -1815,17 +1930,20 @@ function maybeEnqueueFactExtraction(
       extractFactsForPage(storage, {
         slug: page.slug,
         type: page.type,
-        body: page.markdown_body,
+        body: extractionBody,
+        expectedContentHash: page.content_hash,
         ...(page.source_id ? { sourceId: page.source_id } : {}),
       }).then(() => undefined),
     sessionId,
+    err => writeFactsAbsorbLog(storage.engine(), page.slug, classifyFactsAbsorbError(err), "queued extraction failed", sessionId),
+    reason => writeFactsAbsorbLog(storage.engine(), page.slug, reason, "on-write extraction interrupted; backfill can recover this page", sessionId),
   );
 }
 
 /** A diary/journal page. Its interiority is kept verbatim and never re-derived
  *  into facts OR chronicle events — a privacy invariant above the generic gates
  *  (facts admits type 'journal'; this refuses it). */
-function isDiaryPage(type: string | undefined, slug: string): boolean {
+export function isDiaryPage(type: string | undefined, slug: string): boolean {
   const t = (type ?? "").trim().toLowerCase();
   return t === "diary" || t === "journal" || slug.startsWith("life/diary/");
 }
@@ -2032,7 +2150,9 @@ async function callPageAppend(
     await stampLinksExtracted(storage.engine(), r.slug, derivedSource); // watermark (mig 051)
     if (fresh) {
       mirror = await mirrorOrQueue(storage, fresh, isPublic || writeSource !== undefined, "page_append", args["wait_for_index"] === true);
-      maybeEnqueueFactExtraction(storage, fresh, writeSource);
+      if (fresh.content_hash === r.content_hash && r.append_start !== undefined) {
+        maybeEnqueueFactExtraction(storage, fresh, writeSource, fresh.markdown_body.slice(Math.max(0, r.append_start - 500)));
+      }
       chronicleBackstop = await maybeEnqueueChronicleExtract(
         storage,
         fresh,
@@ -2043,9 +2163,10 @@ async function callPageAppend(
   }
   const factsSource = writeSource ?? (await getPage(storage, r.slug))?.source_id;
   await reconcileFactsForPage(storage, r.slug, r.content_hash, factsSource);
+  const { append_start: _appendStart, ...response } = r;
   return jsonResult({
     ok: true,
-    ...r,
+    ...response,
     ...mirror,
     ...(chronicleBackstop ? { chronicle_backstop: true } : {}),
   });
@@ -2173,6 +2294,7 @@ async function callPageGet(
   remote = false,
   isAdmin = false,
   touchRetrieval = true,
+  windowBodyEnabled = true,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string") {
     return errResult("page_get: `slug` is required");
@@ -2226,6 +2348,18 @@ async function callPageGet(
   if (remote && isDiaryPage(page.type, page.slug)) {
     throw new PageNotFoundError(args["slug"]);
   }
+  const currentVersion = Number(page.version ?? 0);
+  let snapshotWrittenAt: string | undefined;
+  if (typeof args["version"] === "number") {
+    const [snapshot] = await pageVersions(storage, page.slug, 1, scopeIds, { version: args["version"] });
+    if (!snapshot) throw new OperationError(
+      "version_not_found", `page version ${args["version"]} was not found`,
+      "List available versions with page_versions, then pass one of their version_n values.",
+    );
+    page = { ...page, markdown_body: snapshot.body_snapshot, compiled_truth: snapshot.compiled_truth_snapshot,
+      content_hash: snapshot.hash_new, version: Number(snapshot.version_n) };
+    snapshotWrittenAt = snapshot.written_at;
+  }
   // Retrieval write-back (mig 024): a user just surfaced this page — bump the
   // last_retrieved_at signal the context-volunteer "used" stat reads. Throttled
   // + best-effort; awaited because memrain is single-holder (no fire-and-forget
@@ -2239,10 +2373,22 @@ async function callPageGet(
   const withheld =
     quarantined !== null && remote && !(args["include_quarantined"] === true && isAdmin);
   const out = quarantineContent(row as unknown as Record<string, unknown>, withheld);
+  const visible = redact ? redactBody(out) : out;
+  // The admin API preserves its page-view contract and enforces its own
+  // response cap; MCP and credential-audit reads keep byte windows.
+  const window = windowBodyEnabled && typeof visible.markdown_body === "string"
+    ? pageBodyWindow(visible.markdown_body, {
+      ...(typeof args["offset"] === "number" ? { offset: args["offset"] } : {}),
+      ...(typeof args["max_bytes"] === "number" ? { maxBytes: args["max_bytes"] } : {}),
+    }) : null;
+  const { markdown_body: _body, ...metadata } = visible;
+  const { body_window: windowBody, ...windowMeta } = window ?? {};
   return jsonResult({
     ok: true,
-    page: redact ? redactBody(out) : out,
+    page: window ? { ...metadata, body_window: windowBody } : visible,
+    ...windowMeta,
     version: Number(version ?? 0),
+    ...(snapshotWrittenAt !== undefined ? { written_at: snapshotWrittenAt, current_version: currentVersion } : {}),
     ...(resolvedSlug ? { resolved_slug: resolvedSlug } : {}),
     ...(quarantined ? { quarantined } : {}),
     ...(withheld ? { notice: "page_quarantined" } : {}),
@@ -2272,12 +2418,15 @@ async function callPageList(
   if (args["include_deleted"] === true && !redact) opts.includeDeleted = true;
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   if (readSources !== undefined) opts.sourceIds = readSources;
-  let pages = await listPages(storage, opts);
-  // Diary fence: a non-operator caller never sees diary pages in the listing.
-  if (remote) pages = pages.filter((p) => !isDiaryPage(p.type, p.slug));
+  opts.includeBody = args["include_body"] !== false;
+  if (typeof args["slug_prefix"] === "string") opts.slugPrefix = args["slug_prefix"];
+  const { pages, next_cursor, complete } = await listPagesPage(storage, {
+    ...opts, excludeDiary: remote,
+    ...(typeof args["cursor"] === "string" ? { cursor: args["cursor"] } : {}),
+  });
   const visible = await applyQuarantineVisibility(storage.engine(), pages, remote);
   const out = redact ? visible.map(redactQuarantinePage) : visible;
-  return jsonResult({ ok: true, pages: out });
+  return jsonResult({ ok: true, pages: out, next_cursor, complete });
 }
 
 async function callPageVersions(
@@ -2299,7 +2448,7 @@ async function callPageVersions(
   }
   const limit = typeof args["limit"] === "number" ? args["limit"] : 20;
   const sourceIds = readSources;
-  const versions = await pageVersions(storage, args["slug"], limit, sourceIds, { withPrincipal });
+  const versions = await pageVersions(storage, args["slug"], limit, sourceIds, { withPrincipal, includeBody: args["include_body"] === true });
   // Version rows carry body snapshots; redact each through the same
   // page allowlist so public callers see metadata only.
   const visible = await applyQuarantineVisibility(storage.engine(), versions, remote);
@@ -2447,10 +2596,10 @@ async function callTraverseGraph(
     return errResult("traverse_graph: `start_slug` is required");
   }
   // Diary fence: a diary start node yields nothing for a non-operator caller.
-  if (remote && isDiarySlug(args["start_slug"])) {
-    return jsonResult({ ok: true, start: args["start_slug"], hits: [] });
+  if (remote && await isRemoteDiaryFenced(storage, args["start_slug"], readSources)) {
+    return jsonResult({ ok: true, start: args["start_slug"], hits: [], truncated: false });
   }
-  const opts: TraverseGraphOptions = {};
+  const opts: TraverseGraphOptions = { excludeDiary: remote };
   if (typeof args["direction"] === "string")
     opts.direction = args["direction"] as TraverseGraphOptions["direction"];
   if (typeof args["type"] === "string") opts.type = args["type"];
@@ -2458,11 +2607,10 @@ async function callTraverseGraph(
   if (Number.isInteger(args["limit"])) opts.limit = args["limit"] as number;
   if (readSources !== undefined) opts.sourceIds = readSources;
   try {
-    // Returns only {slug, depth}. Drop any diary node reached along the walk
-    // for a non-operator caller.
-    let hits = await traverseGraph(storage, args["start_slug"], opts);
-    if (remote) hits = hits.filter((h) => !isDiarySlug(h.slug));
-    return jsonResult({ ok: true, start: args["start_slug"], hits });
+    const result = await traverseGraphPage(storage, args["start_slug"], opts);
+    return jsonResult({ ok: true, start: args["start_slug"], ...result,
+      ...(result.truncated ? { hint: "Reduce max_depth or narrow type to inspect this graph within the result limit." } : {}),
+    });
   } catch (e) {
     return errResult(
       `traverse_graph: ${e instanceof Error ? e.message : String(e)}`,
@@ -2488,13 +2636,17 @@ async function callGetChunks(
     const fenced = hasSlug
       ? await isRemoteDiaryFenced(storage, args["slug"] as string, readSources)
       : isDiarySourcePath(args["source_path"] as string);
-    if (fenced) return jsonResult({ ok: true, chunks: [] });
+    if (fenced) return jsonResult({ ok: true, chunks: [], truncated: false });
   }
   const sourceIds = readSources;
+  const limit = typeof args["limit"] === "number" ? args["limit"] : 200;
+  const fromIndex = typeof args["from_index"] === "number" ? args["from_index"] : 0;
+  const options = { fromIndex, limit: limit + 1 };
   const chunks = hasSlug
-    ? await getChunksForPage(storage, args["slug"] as string, sourceIds)
-    : await getChunksForSource(storage, args["source_path"] as string, sourceIds);
-  return jsonResult({ ok: true, chunks });
+    ? await getChunksForPage(storage, args["slug"] as string, sourceIds, options)
+    : await getChunksForSource(storage, args["source_path"] as string, sourceIds, options);
+  const marked = await markExternalChunks(storage.engine(), chunks.slice(0, limit), readSources);
+  return jsonResult({ ok: true, chunks: marked.map(frameMarkedContent), truncated: chunks.length > limit });
 }
 
 async function callResolveSlugs(
@@ -2502,17 +2654,22 @@ async function callResolveSlugs(
   args: Record<string, unknown>,
   readSources?: string[],
   remote = false,
+  redact = false,
 ): Promise<ToolCallResult> {
   if (typeof args["query"] !== "string" || args["query"].length === 0) {
     return errResult("resolve_slugs: `query` is required");
   }
-  const opts: Parameters<typeof resolveSlugs>[2] = {};
-  if (typeof args["limit"] === "number") opts.limit = args["limit"];
+  const exact = args["exact"] === true;
+  const limit = typeof args["limit"] === "number" ? args["limit"] : 5;
+  const opts: Parameters<typeof resolveSlugs>[2] = { exact, excludeDiary: remote, matchEmail: !redact,
+    limit: exact ? Math.max(2, limit) : limit,
+  };
   if (readSources !== undefined) opts.sourceIds = readSources;
-  let hits = await resolveSlugs(storage, args["query"], opts);
-  // Diary fence: never resolve a query to a diary slug for a non-operator caller.
-  if (remote) hits = hits.filter((h) => !isDiarySlug(h.slug));
-  return jsonResult({ ok: true, query: args["query"], hits });
+  const matches = await resolveSlugs(storage, args["query"], opts);
+  const selected = matches.slice(0, limit);
+  const references = await slugReferenceCounts(storage, selected.map(h => h.slug), opts);
+  const hits = selected.map(h => ({ ...h, referenced_by_count: references.get(h.slug) ?? 0 }));
+  return jsonResult({ ok: true, query: args["query"], hits, ...(exact ? { ambiguous: matches.length > 1 } : {}) });
 }
 
 async function callAddTag(
@@ -2682,7 +2839,14 @@ async function callAddFact(
     // The dispatch-level fence judged only the top-level slug; every item is
     // held to it before anything is written.
     if (bound) for (const item of items) enforceSlugPrefixFence("add_fact", item, bound);
-    body = { ...(await runAddFactBatch(items, writeOne)) };
+    const batch = await runAddFactBatch(items, writeOne);
+    const firstError = batch.items.find(item => item.error)?.error?.code ?? "write_failed";
+    if (batch.failed === batch.items.length) {
+      return { ...jsonResult({ ok: false, ...batch, partial: true, error: firstError,
+        message: `none of the ${batch.items.length} item(s) was saved`,
+      }), isError: true };
+    }
+    body = { ...batch, ...(batch.failed > 0 ? { status: "partial", first_error_code: firstError } : {}) };
   } else {
     body = { ...(await writeOne(args)) };
   }
@@ -2700,13 +2864,18 @@ async function addOneFact(
   boundPrefixes: readonly string[] | undefined,
   remote: boolean,
   principal?: string,
-): Promise<Awaited<ReturnType<typeof addFact>> & { replaced?: boolean; replace_reason?: string }> {
+): Promise<Awaited<ReturnType<typeof addFact>> & EntityResolutionFeedback & { replaced?: boolean; replace_reason?: string }> {
   if (typeof args["entity_slug"] !== "string" || args["entity_slug"].length === 0)
     throw new OperationError("invalid_params", "add_fact: `entity_slug` is required", "Pass the entity the fact is about, e.g. `people/alice`.");
   if (typeof args["fact"] !== "string" || args["fact"].length === 0)
     throw new OperationError("invalid_params", "add_fact: `fact` is required", "Pass a short claim, or several in `items`.");
+  const resolution = await resolveFactEntity(storage, args["entity_slug"], {
+    sourceIds: writeSource ? [writeSource] : undefined, remote,
+    ...(boundPrefixes ? { allowed: (slug: string) => slugUnderPrefixes(slug, boundPrefixes) } : {}),
+  });
   const input: Parameters<typeof addFact>[1] = {
-    entity_slug: args["entity_slug"],
+    ...factInputMetadata(args),
+    entity_slug: resolution.slug,
     fact: args["fact"],
   };
   if (typeof args["confidence"] === "number")
@@ -2754,7 +2923,10 @@ async function addOneFact(
     input.written_by = fallbackWrittenBy;
   }
   if (principal !== undefined) input.written_by_principal = principal;
-  const r = await addFact(storage, input);
+  const { withdrawn_detail, ...saved } = await addFact(storage, input);
+  const r = { ...saved, ...resolution.feedback,
+    ...(withdrawn_detail && !isPublic && (!remote || withdrawn_detail.visibility === "world") ? { withdrawn_detail } : {}),
+  };
   const replaces = args["replaces"];
   if (typeof replaces !== "number") return r;
   // The new fact is already committed; a failed retirement must not hide that.
@@ -2779,6 +2951,8 @@ async function callAddTimelineEvent(
   args: Record<string, unknown>,
   writeSource?: string,
   principal?: string,
+  redact = false,
+  remote = false,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string")
     return errResult("add_timeline_event: `slug` is required");
@@ -2792,13 +2966,18 @@ async function callAddTimelineEvent(
     slug: args["slug"],
     occurred_at: args["occurred_at"],
     event: args["event"],
+    includeRow: true,
   };
   if (typeof args["source_chunk_id"] === "string")
     input.source_chunk_id = args["source_chunk_id"];
   if (writeSource) input.source_id = writeSource;
   if (principal !== undefined) input.written_by_principal = principal;
   const r = await addTimelineEvent(storage, input);
-  return jsonResult({ ok: true, ...r });
+  const hidden = remote && await isRemoteDiaryFenced(storage, input.slug, writeSource ? [writeSource] : undefined);
+  const row = hidden ? null : redact && r.row ? redactTimeline([{ ...r.row }])[0] : r.row;
+  return jsonResult({ ok: true, ...r, row,
+    correction_hint: "Append a new event describing the correction; the original event remains in the timeline.",
+  });
 }
 
 async function callEntityFacts(
@@ -2807,6 +2986,7 @@ async function callEntityFacts(
   redact = false,
   readSources?: string[],
   remote = false,
+  dispatchOpts: DispatchOptions = {},
 ): Promise<ToolCallResult> {
   // entity_slug is optional: omit for a cross-entity recall. When present it
   // must be a string.
@@ -2852,13 +3032,33 @@ async function callEntityFacts(
   // public; internal callers get it via the `MEMRAIN_FACT_DECAY` env default.
   if (redact) opts.decay = false;
   if (readSources !== undefined) opts.sourceIds = readSources;
+  if (remote) opts.excludeDiary = true;
+  const query = !dispatchOpts.isPublic && !dispatchOpts.adminPanel && !redact && typeof args["query"] === "string"
+    ? args["query"].trim().slice(0, 512) : "";
+  let hint: { status: string } | undefined;
+  if (query && (readSources === undefined || readSources.length > 0)) {
+    try {
+      const embed = dispatchOpts.embedQuery ?? (await import("../core/embedding.ts")).embedText;
+      opts.queryVector = await embed(query);
+      opts.minSimilarity = 0.35;
+    } catch {
+      hint = { status: "embedding_unavailable" };
+    }
+  }
   const facts = await listFacts(storage, entitySlug, opts);
   // Public ingress: `fact` is note-derived private content — strip it,
   // mirroring the search/page body redaction policy.
   const out = redact
     ? redactFacts(facts as unknown as Record<string, unknown>[])
     : facts;
-  return jsonResult({ ok: true, entity_slug: entitySlug ?? null, facts: out });
+  const groups = new Map<string, typeof facts>();
+  if (query && !entitySlug) for (const fact of facts) {
+    groups.set(fact.entity_slug, [...(groups.get(fact.entity_slug) ?? []), fact]);
+  }
+  return jsonResult({ ok: true, entity_slug: entitySlug ?? null, facts: out,
+    ...(query && !entitySlug ? { facts_groups: [...groups].map(([entity_slug, facts]) => ({ entity_slug, facts })) } : {}),
+    ...(hint ? { hint } : {}),
+  });
 }
 
 async function callEntityTimeline(
@@ -2932,12 +3132,14 @@ async function callEntityRecall(
   const r = { ...recalled, page: recalled.page
     ? (await applyQuarantineVisibility(storage.engine(), [recalled.page], remote))[0]!
     : null };
+  const { identity: _identity, ...withoutIdentity } = r;
+  const visibleRecall = redact || r.page?.notice === "page_quarantined" ? withoutIdentity : r;
   // `redact_body` only strips the page body; the facts + timeline arrays
   // carry note-derived `fact`/`event` text and must be redacted on public
   // ingress too (mirrors callEntityFacts / callEntityTimeline).
   if (redact) {
     const visible = {
-      ...r,
+      ...visibleRecall,
       ok: true,
       // Run the page through the same PUBLIC_SAFE_PAGE_FIELDS allowlist the
       // other page tools use. The recall layer's redact_body only strips
@@ -2954,7 +3156,7 @@ async function callEntityRecall(
     };
     return jsonResult(budgeted(visible));
   }
-  return jsonResult(budgeted({ ok: true, ...r }));
+  return jsonResult(budgeted({ ok: true, ...visibleRecall }));
 
   /**
    * One budget across all three arms. Without it a caller under a context
@@ -3120,19 +3322,20 @@ async function callGetLinks(
   }
   // Diary fence: a diary node's edge set is hidden from a non-operator caller.
   if (remote && isDiarySlug(args["slug"])) {
-    return jsonResult({ ok: true, slug: args["slug"], groups: [] });
+    return jsonResult({ ok: true, slug: args["slug"], groups: [], truncated: false });
   }
-  const opts: Parameters<typeof getLinks>[2] = {};
+  const opts: Parameters<typeof getLinksPage>[2] = {};
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   if (readSources !== undefined) opts.sourceIds = readSources;
-  let groups = await getLinks(storage, args["slug"], opts);
+  if (remote) opts.excludeDiary = true;
+  let { groups, truncated } = await getLinksPage(storage, args["slug"], opts);
   // Drop edges to a diary page, then any group left empty.
   if (remote) {
     groups = groups
       .map((g) => ({ ...g, links: g.links.filter((l) => !isDiaryLink(l)) }))
       .filter((g) => g.links.length > 0);
   }
-  return jsonResult({ ok: true, slug: args["slug"], groups });
+  return jsonResult({ ok: true, slug: args["slug"], groups, truncated });
 }
 
 async function callListLinkSources(storage: Storage, readSources?: string[]): Promise<ToolCallResult> {
@@ -3435,6 +3638,8 @@ async function callQuery(
     toolName: "mcp.query",
     remote: true,
   });
+  const pageFilters = searchPageFilters(args);
+  const typeNotice = await pageTypeNotice(storage, pageFilters, readSources, !isOperator);
   const refine = typeof args["refine"] === "string" ? args["refine"] : "";
   if (refine) {
     const opts: Parameters<typeof queryRefine>[3] = {};
@@ -3442,20 +3647,32 @@ async function callQuery(
     if (typeof args["primary_weight"] === "number") opts.primaryWeight = args["primary_weight"];
     if (typeof args["refine_weight"] === "number") opts.refineWeight = args["refine_weight"];
     if (readSources !== undefined) opts.sourceIds = readSources;
-    opts.search = { ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}) };
+    const reasons = new Set<SearchMeta["degraded"][number]>();
+    opts.search = { ...pageFilters, ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}),
+      onMeta: m => { for (const reason of (isOperator ? m : publicSearchMeta(m)).degraded) reasons.add(reason); },
+    };
     const hits = await queryRefine(storage, q, refine, opts);
+    const visible = await frameSearchHits(storage,
+      capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources), readSources,
+      typeof args["token_budget"] === "number" ? args["token_budget"] : undefined);
+    const ledger = await queryFactsForResult(storage, q, visible, readSources, !isOperator,
+      typeof args["token_budget"] === "number" ? args["token_budget"] : undefined);
     return jsonResult({
       ok: true,
-      hits: capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources),
+      ...typeNotice,
+      hits: visible,
+      facts: ledger.facts,
+      ...(ledger.truncated ? { facts_truncated: true } : {}),
+      ...(visible.length === 0 && ledger.facts.length === 0 ? emptyRetrievalHint(readSources, { degraded: [...reasons] }) : {}),
     });
   }
 
-  const k = typeof args["k"] === "number" ? (args["k"] as number) : 20;
+  const k = typeof args["k"] === "number" ? args["k"] : typeof args["token_budget"] === "number" ? 100 : 20;
   const offset =
     typeof args["offset"] === "number"
       ? Math.max(0, Math.floor(args["offset"] as number))
       : 0;
-  const searchOpts: SearchOptions = { k: k + offset, ...(signal ? { signal } : {}) };
+  const searchOpts: SearchOptions = { ...pageFilters, k: k + offset, ...(signal ? { signal } : {}) };
   if (onCapture) searchOpts.onCapture = onCapture;
   if (readSources !== undefined) searchOpts.sourceIds = readSources;
   // Paid LLM expansion: explicit per-call value wins; omitted follows the
@@ -3500,9 +3717,34 @@ async function callQuery(
   const hitsAll = await hybridSearch(storage, q, searchOpts);
   const hitsOffset = offset > 0 ? hitsAll.slice(offset) : hitsAll;
   // Diary fence for the non-operator caller (mirrors callSearch).
-  const hits = capHitSnippets(fenceDiaryHits(hitsOffset, isOperator), searchSnippetChars(), readSources);
+  const snippets = capHitSnippets(fenceDiaryHits(hitsOffset, isOperator), searchSnippetChars(), readSources);
+  const hits = await frameSearchHits(storage, snippets, readSources, resolveSearchKnobs(searchOpts).tokenBudget);
+  const ledger = await queryFactsForResult(storage, q, hits, readSources, !isOperator, resolveSearchKnobs(searchOpts).tokenBudget);
+  if (meta && (hits.length < snippets.length || ledger.truncated)) meta = { ...meta, degraded: [...new Set([...meta.degraded, "budget_truncated" as const])] };
   const metaOut = responseSearchMeta(meta, hits, isOperator);
-  return jsonResult({ ok: true, hits, ...(metaOut ? { meta: metaOut } : {}) });
+  return jsonResult({ ok: true, hits, facts: ledger.facts, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}),
+    ...(ledger.truncated ? { facts_truncated: true } : {}),
+    ...(hits.length === 0 && ledger.facts.length === 0 ? emptyRetrievalHint(readSources, metaOut) : {}),
+  });
+}
+
+async function queryFactsForResult(
+  storage: Storage, q: string, hits: readonly { content: string; title?: string | null }[],
+  readSources: string[] | undefined, remote: boolean, tokenBudget?: number,
+) {
+  const rows = await matchQueryFacts(storage.engine(), q, readSources, remote);
+  const external = await readExternalTrust(storage.engine(), { facts: rows.map(f => f.fact_id) }, readSources);
+  const framed = rows.map(f => external.facts.has(f.fact_id) ? { ...f, fact: frameExternal(f.fact), trust: "external" as const } : f);
+  if (tokenBudget === undefined || tokenBudget <= 0) return { facts: framed, truncated: false };
+  let used = hits.reduce((n, h) => n + estTokens(h.content) + estTokens(h.title ?? ""), 0);
+  const facts: typeof framed = [];
+  for (const fact of framed) {
+    const cost = estTokens(fact.fact) + estTokens(fact.entity_slug);
+    if (used + cost > tokenBudget) break;
+    facts.push(fact);
+    used += cost;
+  }
+  return { facts, truncated: facts.length < framed.length };
 }
 
 /** The optional `lang` filter of the code graph tools; empty means none. */
@@ -3708,7 +3950,8 @@ async function callAdvisor(
     // leaves it unset and those collectors fail closed (silent, no leak).
     ...(readSources !== undefined ? { sourceIds: readSources } : {}),
   });
-  return jsonResult({ ok: true, ...report });
+  const failed = report.findings.some(f => f.id.startsWith("collector_failed:"));
+  return { ...jsonResult({ ok: !failed, ...report }), ...(failed ? { isError: true } : {}) };
 }
 
 async function callListBrainSkillpack(callable: (tool: string) => boolean): Promise<ToolCallResult> {
@@ -3892,8 +4135,11 @@ async function callExtractFacts(
   return jsonResult({ ok: true, ...result });
 }
 
-function callListSkills(callable: (tool: string) => boolean): ToolCallResult {
-  return jsonResult({ ok: true, ...listSkillCatalog({ callable }) });
+function callListSkills(args: Record<string, unknown>, callable: (tool: string) => boolean): ToolCallResult {
+  return jsonResult({ ok: true, ...listSkillCatalog({ callable,
+    query: typeof args["query"] === "string" ? args["query"] : undefined,
+    limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+  }) });
 }
 
 function callGetSkill(args: Record<string, unknown>, callable: (tool: string) => boolean): ToolCallResult {
@@ -4434,6 +4680,7 @@ async function callRunDoctor(storage: Storage): Promise<ToolCallResult> {
   for (const [name, probe] of [
     ["stale-locks", checkStaleLocks],
     ["queue-health", checkQueueHealth],
+    ["runtime-config-overlay", checkRuntimeConfigOverlay],
     ["schema-version", checkSchemaVersion],
     ["embedding-width", checkEmbeddingWidth],
     ["invalid-indexes", checkInvalidIndexes],
@@ -4770,7 +5017,7 @@ async function callChronicleBackfill(
   const perPageBudgetUsd = chronicleWriteBudgetUsd();
   const listOpts: Parameters<typeof listPages>[1] = { limit };
   if (readSources !== undefined) listOpts.sourceIds = readSources;
-  const pages = await listPages(storage, listOpts);
+  const pages = await listPages(storage, { ...listOpts, includeBody: true });
   const eligible = pages.filter(
     (p) =>
       isChronicleEligible({

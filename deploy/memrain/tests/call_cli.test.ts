@@ -3,10 +3,11 @@
  * PGLite + a temp config (no Bedrock, no live brain). Exercises a read tool
  * (`stats`), argument validation, and the error exit code.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { COLLECTORS } from "../src/core/advisor/run.ts";
 import { runCall } from "../src/commands/call.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "memrain-call-test-"));
@@ -88,4 +89,22 @@ describe("memrain call", () => {
     }
     expect(code).toBe(1);
   });
+});
+
+
+it("reports a failed advisor collector safely and exits nonzero with partial findings", async () => {
+  const collector = COLLECTORS[0]!;
+  const broken = spyOn(collector, "collect").mockRejectedValue(new Error("PRIVATE failure payload"));
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  const cap = capture();
+  try {
+    const code = await runCall({ tool: "advisor", configPath: cfgPath });
+    expect(code).toBe(1);
+    const out = cap.lines.join("\n");
+    const report = JSON.parse(out);
+    expect(report.ok).toBe(false);
+    expect(report.findings.some((f: { id: string }) => f.id === `collector_failed:${collector.id}`)).toBe(true);
+    expect(out).not.toContain("PRIVATE");
+    expect(log).toHaveBeenCalled();
+  } finally { cap.restore(); broken.mockRestore(); log.mockRestore(); }
 });

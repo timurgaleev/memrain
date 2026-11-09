@@ -17,6 +17,8 @@
  */
 import { createHash } from "node:crypto";
 import type { Engine } from "../engine/interface.ts";
+import { isTruncated } from "../llm/truncation.ts";
+import { TERMINAL_STOP_REASONS } from "../llm/converse.ts";
 import type { Storage } from "../storage.ts";
 import { putPage } from "../pages.ts";
 import { guardFields } from "../secret-scan.ts";
@@ -145,9 +147,9 @@ function parseConcepts(raw: unknown): string[] {
     }
   }
   if (!Array.isArray(v)) return [];
-  return v
+  return [...new Set(v
     .filter((c): c is string => typeof c === "string" && c.trim().length > 0)
-    .map((c) => c.trim().toLowerCase());
+    .map((c) => slugifyTitle(c)))];
 }
 
 /** Deterministic narrative for T3 groups (and LLM-failure fallback). */
@@ -263,7 +265,7 @@ export async function synthesizeConceptsPhase(
             maxTokens: CONCEPT_MAX_OUTPUT_TOKENS,
           });
           const txt = resp.text.trim();
-          if (txt.length > 0) {
+          if (txt.length > 0 && !isTruncated(resp) && !TERMINAL_STOP_REASONS.has(resp.stopReason ?? "")) {
             narrative = txt;
             modelId = resp.modelId;
           }

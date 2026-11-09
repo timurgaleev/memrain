@@ -21,7 +21,7 @@
  */
 import type { Engine } from "../engine/interface.ts";
 
-export type SynthPhase = "propose_takes" | "extract_atoms";
+export type SynthPhase = "propose_takes" | "extract_atoms" | "facts-backfill";
 
 export type SynthFailureKind = "llm_error" | "unparseable" | "truncated";
 

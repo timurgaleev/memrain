@@ -34,7 +34,7 @@
   },
   "devDependencies": {
     "@antfu/eslint-config": "9.3.0",
-    "@types/bun": "1.3.13",
+    "@types/bun": "1.4.4",
     "eslint": "10.8.1",
     "tree-sitter-bash": "0.25.1",
     "tree-sitter-go": "0.25.0",
@@ -44,5 +44,9 @@
   },
   "patchedDependencies": {
     "postgres@3.4.9": "patches/postgres@3.4.9.patch"
+  },
+  "overrides": {
+    "katex": "0.18.2",
+    "minimatch": "11.0.1"
   }
 }

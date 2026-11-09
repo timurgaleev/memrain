@@ -208,6 +208,53 @@ A few that are easy to miss:
   `date_source` (`effective` or the `updated` fallback). When snippet capping
   is enabled, the `full` pointer supplies both `slug` and `source_id` to
   `page_get`; the requested source only narrows your existing read grant.
+- `search` and `query` accept `types` (up to 20 page types) and `slug_prefix`.
+  These filters match live canonical pages and their body, truth and relative
+  markdown-file mirrors in the same source. Unmapped files and code documents
+  are excluded when page filters are requested. Filtering runs before each
+  retrieval limit and also applies to alias injection and query refinement.
+  An unknown type produces `unknown_page_types` with available types in the
+  caller's scope. Omit both filters to search the whole accessible corpus.
+- Successful page writes return `admin_url` for operators and credentials with
+  admin scope when the issuer is configured. The link opens the resulting page
+  in the admin panel; tenant and public responses omit it.
+- `page_get` returns small bodies whole. A body over 256 KiB, or an explicit
+  `offset`/`max_bytes` request, returns `page.body_window` instead of
+  `markdown_body`, with byte offsets, `total_bytes`, `partial`, `next_offset`
+  and a bounded heading list. Follow `next_offset` until it is null. Windows
+  never split a UTF-8 character; use `page_edit` or `page_append` for changes.
+- `page_get` with `version` reads that stored body, compiled truth and hash,
+  with `written_at` and `current_version` identifying the snapshot. Page title
+  and identity metadata remain current; current access and quarantine rules
+  still apply. A missing snapshot returns `version_not_found`.
+- `page_list` accepts a literal `slug_prefix` (`projects/x/` for that subtree).
+  Follow `next_cursor` with the same filters, sort and source access until
+  `complete:true`. The cursor preserves timestamp precision and breaks ties
+  by slug; hidden diary rows do not consume the visible limit. It is a live
+  listing, so edits between requests can change the remaining results.
+- `page_rename {from, to, expected_version}` moves a page with its history,
+  facts, links, tags and timeline, and redirects the old slug. The version is
+  checked under the write lock. Imported pages are refused, including a page
+  edited manually after import: rename it upstream. The old search mirror is
+  removed atomically; the next cycle indexes the new slug. Both names must be
+  within your write grant. CLI: `memrain rename <from> <to> --expected-version N
+  [--source ID]`.
+- `page_versions` returns version metadata by default; `include_body:true`
+  adds authorized snapshots. `page_list` keeps its full-body default and
+  accepts `include_body:false` for metadata only. `get_chunks` returns at most
+  200 chunks; when `truncated` is true, increase `from_index` by the number
+  returned to read the next portion.
+- `add_fact` accepts `valid_from`, `kind`, `notability` and
+  `claim_metric`/`claim_value`/`claim_unit`/`claim_period`. A batch inherits
+  these top-level defaults and each item may override them. Metadata is
+  validated for the whole batch before any item is written. `valid_from`
+  timestamps become UTC dates; attribution and expiry are not caller-settable.
+- A bare `add_fact.entity_slug` resolves to one existing page in the caller's
+  write source and reports `entity_resolved_from`. An unresolved or ambiguous
+  name remains unchanged with `entity_unresolved` and up to five candidates;
+  qualified slugs remain explicit soft references. Doctor's
+  `facts-without-entity-pages` check reports live facts whose entity has no live
+  page in the same source. It does not create pages or rewrite facts.
 - A failed retrieval stage is reported alongside surviving results. `search`
   and `query` expose `meta.degraded`; `think`, `context_pack` and
   `volunteer_context` expose `gather_degraded` when a collector fails. Direct
@@ -218,6 +265,39 @@ A few that are easy to miss:
   truth (including version snapshots). Operators can inspect the content;
   admin-scoped readers can request it explicitly through `page_get`.
 
+- `search`, `query`, `get_chunks`, `think` evidence and `context_pack` label
+  external source text with `trust: "external"` and an escaped
+  `<external_content>` frame. GitHub/mailbox/calendar/webhook sources and
+  recorded non-operator contributors mark text external; facts inherit their
+  origin's provenance. A later edit does not erase earlier provenance. Frame
+  characters count toward the response budget. Stored bodies, `page_get` and
+  operator transcripts keep their original text.
+  PAT and OAuth writes record a client principal, including an operator's
+  client credential, so their retrieved evidence receives this frame too.
+  Admin scopes do not certify client-supplied content as operator-authored.
+- Empty `search` and `query` results include a `hint`: `retrieval_healthy`
+  suggests broader terms or filters, `retrieval_degraded` names pipeline
+  failures, and `grant_sources_empty` means the caller has no readable source.
+  Hints reveal no sources outside the caller's grant. Normal `query` with a
+  `token_budget` and no explicit `k` considers up to 100 hits; without a budget
+  it keeps the default 20. Explicit `k` and legacy `refine` keep their widths.
+- `search_exact {phrase, case_sensitive?, slug_prefix?, type?, limit?}` finds
+  literal text in live page bodies and compiled truth. Each match has one
+  bounded snippet. `complete:true` means every match was returned; `false`
+  identifies a result limit or timeout. `scanned` counts eligible pages,
+  excluding out-of-scope, deleted, quarantined and remote diary pages. It is
+  `null` after a timeout because the completed scan count is unknown. The
+  database scan has a two-second deadline and uses no embeddings.
+- `resolve_slugs {query, exact:true}` uses equality on slug, title, basename,
+  declared aliases and structured email fields. It reports ambiguity even with
+  `limit:1`; typo matching remains the default when `exact` is omitted.
+  `referenced_by_count` counts distinct visible referring pages in the caller's
+  source scope, without counting duplicate edge types or hidden diaries.
+- `list_skills {query, limit}` selects skills by task, matching slug,
+  description and triggers. An exact slug ranks first; ties keep catalog
+  order. With a query it returns up to five skills by default. Without
+  arguments the complete catalog is unchanged. Tool availability in each
+  entry still reflects the caller's grant.
 - `context_pack` builds a "what matters now" pack for the start of a turn:
   entity cards (title, type, top facts, recent events) for the slugs you name or
   the entities a conversation window mentions, then the top facts across your
@@ -225,6 +305,12 @@ A few that are easy to miss:
 - `get_recent_transcripts` lists recently ingested meeting, email, journal and
   note pages, newest first, with a short summary or the capped body. It is not
   on the public ingress.
+- `add_timeline_event` returns the stored `row` with UTC timestamps, including
+  the original row when a retry is deduplicated. The top-level `id` remains
+  `null` on a duplicate. Read restrictions still apply to the row; diary or
+  out-of-source rows are withheld. Corrections are new events, as explained
+  by `correction_hint`; existing timeline rows are not overwritten.
+
 - Writes are safe to retry and to race. `page_put`, `page_append`, `add_fact`
   and `add_timeline_event` take an optional `request_id`: a retry with the same
   id and arguments returns the first result with `replayed: true` and writes
@@ -237,3 +323,13 @@ A few that are easy to miss:
   grant, sources and daily budget, and `get_agent_job` returns its status and
   answer. Both need the `agent` scope, a daily budget on the client, and
   `MEMRAIN_AGENT_ENABLED=1` plus `MEMRAIN_AGENT_TENANT_ENABLED=1` on the host.
+
+## MCP response metadata
+
+With `MEMRAIN_HOT_MEMORY_META=1`, successful unscoped operator tool calls can
+carry `_meta.brain_hot_memory`: up to ten recent live facts from the last
+72 hours, ranked by confidence and age. This is out-of-band MCP metadata,
+independent of the `hot_memory` tool. Clients decide whether to use it.
+Public, tenant-scoped, and admin-panel calls never receive this payload.
+It is disabled by default, cached briefly, and best-effort: a metadata failure
+does not fail the underlying tool call. No recent facts means no payload.

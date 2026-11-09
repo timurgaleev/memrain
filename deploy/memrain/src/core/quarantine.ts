@@ -205,6 +205,24 @@ export function quarantineFilterFragment(docAlias = "d"): string {
   return `NOT (COALESCE(${docAlias}.frontmatter, '{}'::jsonb) ? '${QUARANTINE_KEY}')`;
 }
 
+/** Missing origins are legacy facts; only a known, same-source hold excludes them. */
+export function factSourceEligibleSql(alias = "entity_facts"): string {
+  assertSqlAlias(alias);
+  const slug = `COALESCE(${alias}.source_markdown_slug, ${alias}.source_slug)`;
+  const source = `COALESCE(${alias}.source_id, 'default')`;
+  const path = `CASE WHEN ${source} = 'default' THEN 'page://' || ${slug} ELSE 'page://' || ${source} || '/' || ${slug} END`;
+  return `(NOT EXISTS (
+    SELECT 1 FROM pages fact_origin
+     WHERE fact_origin.slug = ${slug} AND fact_origin.source_id = ${source}
+       AND fact_origin.deleted_at IS NOT NULL
+  ) AND NOT EXISTS (
+    SELECT 1 FROM documents fact_mirror
+     WHERE fact_mirror.source_path = ${path}
+       AND COALESCE(fact_mirror.source_id, 'default') = ${source}
+       AND (fact_mirror.deleted_at IS NOT NULL OR NOT ${quarantineFilterFragment("fact_mirror")})
+  ))`;
+}
+
 /**
  * True when `result` quarantines a page whose stored frontmatter did not
  * already carry the same verdict. Re-indexing a held page (a page mirror, a

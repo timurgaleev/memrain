@@ -44,6 +44,17 @@ const fakeLlm = (text: string): LlmFn => async () => ({ text, modelId: "fake-nov
 const HAIKU = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
 
 describe("synthesizeConceptsPhase", () => {
+  for (const stopReason of ["max_tokens", "model_context_window_exceeded", "guardrail_intervened", "content_filtered", "malformed_model_output", "malformed_tool_use"]) {
+    it(`keeps deterministic narrative when the model stops with ${stopReason}`, async () => {
+      for (let i = 0; i < 5; i++) await seedAtom(["incomplete"]);
+      const budget = new BudgetTracker(1, "test-incomplete-concept");
+      await synthesizeConceptsPhase(engine, { budget, modelId: HAIKU, llmFn: async () => ({ text: "UNUSABLE_PARTIAL_NARRATIVE", stopReason, modelId: HAIKU, usage: { inputTokens: 100, outputTokens: 10 } }) });
+      const rows = await engine.query<{ narrative: string }>("SELECT narrative FROM synth_concepts WHERE concept_slug = 'incomplete'");
+      expect(rows.rows[0]!.narrative).toContain("T2 concept");
+      expect(rows.rows[0]!.narrative).not.toContain("UNUSABLE_PARTIAL_NARRATIVE");
+      expect(budget.totalSpent()).toBeGreaterThan(0);
+    });
+  }
   it("groups atoms, tiers by count, writes concept + provenance", async () => {
     const a1 = await seedAtom(["alpha"]);
     const a2 = await seedAtom(["alpha"]);

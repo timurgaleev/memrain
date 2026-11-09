@@ -95,6 +95,15 @@ function token(scopes: string[]): AuthInfo {
 const FIELD_NAMES = new Set(["version", "expected_version", "version_conflict", "current_version", "triggers", "usable_tools", "error", "suggestion"]);
 
 describe("the contract per caller", () => {
+  it("asks both readers and writers to recall before answering and to use the effective date", () => {
+    for (const scopes of [["read"], ["read", "write"]]) {
+      const out = resolveServerInstructions({}, callerTools({ isPublic: false, authInfo: token(scopes) }));
+      expect(out).toContain("prior work, people, projects or decisions");
+      expect(out).toContain("before answering");
+      expect(out).toContain("in force on the date");
+      expect(out).toContain("`list_skills` with `query`");
+    }
+  });
   it("fits the 2,048 characters capped harnesses read, with every tool callable", () => {
     expect(MAX_CONTRACT_CHARS).toBe(2048);
     expect(MEMRAIN_OPERATING_CONTRACT.length).toBeLessThanOrEqual(MAX_CONTRACT_CHARS);

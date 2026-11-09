@@ -29,6 +29,7 @@ import {
   type Quiescence,
 } from "../core/quiescence.ts";
 import { basename } from "node:path";
+import { getFactsQueue } from "../core/facts-queue.ts";
 
 export interface ServeOptions {
   http: boolean;
@@ -304,9 +305,11 @@ export async function runServe(opts: ServeOptions): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[memrain] received ${signal}, shutting down`);
+    await getFactsQueue().shutdown();
     await worker.stop();
     if (cycle) await cycle.stop();
     await server.stop();
+    await getFactsQueue().shutdown();
     await storage.close();
     process.exit(0);
   };

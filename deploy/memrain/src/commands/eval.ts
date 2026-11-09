@@ -45,6 +45,7 @@ import { fileURLToPath } from "node:url";
 import { Storage } from "../core/storage.ts";
 import { withStorage } from "./with-storage.ts";
 import { loadConfig } from "../core/config.ts";
+import { dispatchTool } from "../mcp/dispatch.ts";
 import { hybridSearch } from "../core/search/index.ts";
 import { resolveSearchKnobs } from "../core/search/hybrid.ts";
 import { DEFAULT_RRF_K } from "../core/rrf.ts";
@@ -127,8 +128,11 @@ export interface LatencySummary {
   p95Ms: number;
 }
 
+export type EvalVia = "search" | "query";
+
 export interface EvalReport {
   ok: boolean;
+  via?: EvalVia;
   k: number;
   configName: string;
   meanRecall: number;
@@ -239,6 +243,8 @@ function applyEnv(overrides: Record<string, string>): () => void {
 }
 
 export interface EvalOptions {
+  /** Omitted keeps direct hybrid retrieval; set to measure the operator MCP surface. */
+  via?: EvalVia;
   /** Override path to the qrels file. Defaults to tests/eval/qrels.json. */
   qrelsPath?: string;
   /** k for Recall@k. Default 5. */
@@ -360,10 +366,11 @@ export function runConfigHash(
   k: number,
   qrelsSha256: string,
   split: EvalSplit = "all",
+  via?: EvalVia,
 ): string {
-  const restore = applyEnv(knobEnv(cfg));
+  const restore = applyEnv(via ? mcpKnobEnv(cfg) : knobEnv(cfg));
   try {
-    return hashUnderCurrentEnv(cfg, k, qrelsSha256, split);
+    return hashUnderCurrentEnv(cfg, k, qrelsSha256, split, via);
   } finally {
     restore();
   }
@@ -374,6 +381,7 @@ function hashUnderCurrentEnv(
   k: number,
   qrelsSha256: string,
   split: EvalSplit,
+  via?: EvalVia,
 ): string {
   const env = process.env;
   const resolved = resolveSearchKnobs({
@@ -403,6 +411,7 @@ function hashUnderCurrentEnv(
       embedding: embeddingSignature(),
       k,
       qrels_sha256: qrelsSha256,
+      ...(via ? { via } : {}),
       ...(split !== "all" ? { split } : {}),
     }),
   );
@@ -482,6 +491,38 @@ async function defaultSearchFn(
     ...(cfg.tokenBudget !== undefined ? { tokenBudget: cfg.tokenBudget } : {}),
   });
   return distinctInOrder(hits.map((h) => h.sourcePath)).slice(0, k);
+}
+
+function mcpKnobEnv(cfg: EvalKnobConfig): Record<string, string> {
+  const keys = { expansion: "MEMRAIN_QUERY_EXPANSION", rerank: "MEMRAIN_RERANK", maxPool: "MEMRAIN_MAXPOOL",
+    graphSignals: "MEMRAIN_GRAPH_SIGNALS", cosineRescore: "MEMRAIN_COSINE_RESCORE",
+    relationalArm: "MEMRAIN_RELATIONAL_ARM", backlinkBoost: "MEMRAIN_BACKLINK_BOOST" } as const;
+  return { ...knobEnv(cfg), ...Object.fromEntries(Object.entries(keys).flatMap(([knob, key]) => {
+    const value = cfg[knob as keyof typeof keys];
+    return value === undefined ? [] : [[key, value ? "1" : "0"]];
+  })), MEMRAIN_QUERY_CACHE: "0" };
+}
+
+function validateMcpConfig(cfg: EvalKnobConfig, via: EvalVia | undefined, k: number): void {
+  if (!via) return;
+  if (cfg.rrfK !== undefined) throw new Error("memrain eval: --via does not expose rrfK; omit it or use direct evaluation");
+  if (!Number.isInteger(k) || k < 1 || k > 100) throw new Error("memrain eval: --via requires k between 1 and 100");
+}
+
+function mcpSearchFn(via: EvalVia): SearchFn {
+  return async (storage, query, cfg, k) => {
+    const restore = applyEnv(mcpKnobEnv(cfg));
+    try {
+      const result = await dispatchTool(storage, { name: via, arguments: {
+        q: query, k: Math.min(100, k * PAGE_OVERFETCH),
+        ...(cfg.tokenBudget !== undefined ? { token_budget: cfg.tokenBudget } : {}),
+      } });
+      const data = JSON.parse(result.content[0]!.text);
+      if (result.isError || data.ok === false) throw new Error(`MCP ${via}: ${data.error ?? "tool failed"}`);
+      if (!Array.isArray(data.hits)) throw new Error(`MCP ${via}: missing hits`);
+      return distinctInOrder(data.hits.map((h: { sourcePath: string }) => h.sourcePath)).slice(0, k);
+    } finally { restore(); }
+  };
 }
 
 type SearchFn = NonNullable<EvalOptions["searchFn"]>;
@@ -564,6 +605,7 @@ function summarize(
   cfg: EvalKnobConfig,
   k: number,
   split: EvalSplit,
+  via?: EvalVia,
 ): EvalReport {
   // Abstention queries have nothing to recall; averaging them in at any fixed
   // score would move the means without measuring retrieval.
@@ -604,7 +646,8 @@ function summarize(
     meanPrecision,
     recallCi95: ci95(scored.map((q) => q.recallAtK)),
     mrrCi95: ci95(scored.map((q) => q.mrr)),
-    run_config_hash: runConfigHash(cfg, k, qrelsSha256, split),
+    run_config_hash: runConfigHash(cfg, k, qrelsSha256, split, via),
+    ...(via ? { via } : {}),
     qrels_sha256: qrelsSha256,
     hitRate,
     wilsonCi95,
@@ -632,13 +675,14 @@ export async function evalRun(
   storage: Storage,
   qrels: Qrels,
   cfg: EvalKnobConfig,
-  opts: { k?: number; searchFn?: EvalOptions["searchFn"]; split?: EvalSplit } = {},
+  opts: { k?: number; searchFn?: EvalOptions["searchFn"]; split?: EvalSplit; via?: EvalVia } = {},
 ): Promise<EvalReport> {
   const k = opts.k ?? cfg.k ?? 5;
-  const searchFn = opts.searchFn ?? defaultSearchFn;
+  const searchFn = opts.searchFn ?? (opts.via ? mcpSearchFn(opts.via) : defaultSearchFn);
+  validateMcpConfig(cfg, opts.via, k);
   const perQuery: QueryReport[] = [];
   for (const q of qrels.queries) perQuery.push(await scoreQuery(storage, q, cfg, k, searchFn));
-  return summarize(perQuery, qrels, cfg, k, opts.split ?? "all");
+  return summarize(perQuery, qrels, cfg, k, opts.split ?? "all", opts.via);
 }
 
 /**
@@ -651,10 +695,12 @@ export async function evalAB(
   qrels: Qrels,
   cfgA: EvalKnobConfig,
   cfgB: EvalKnobConfig,
-  opts: { k?: number; searchFn?: EvalOptions["searchFn"]; split?: EvalSplit } = {},
+  opts: { k?: number; searchFn?: EvalOptions["searchFn"]; split?: EvalSplit; via?: EvalVia } = {},
 ): Promise<{ a: EvalReport; b: EvalReport }> {
   const k = opts.k ?? 5;
-  const searchFn = opts.searchFn ?? defaultSearchFn;
+  const searchFn = opts.searchFn ?? (opts.via ? mcpSearchFn(opts.via) : defaultSearchFn);
+  validateMcpConfig(cfgA, opts.via, k);
+  validateMcpConfig(cfgB, opts.via, k);
   const perA: QueryReport[] = [];
   const perB: QueryReport[] = [];
   for (const [i, q] of qrels.queries.entries()) {
@@ -668,8 +714,8 @@ export async function evalAB(
   }
   const split = opts.split ?? "all";
   return {
-    a: summarize(perA, qrels, cfgA, k, split),
-    b: summarize(perB, qrels, cfgB, k, split),
+    a: summarize(perA, qrels, cfgA, k, split, opts.via),
+    b: summarize(perB, qrels, cfgB, k, split, opts.via),
   };
 }
 
@@ -792,6 +838,7 @@ export async function runEval(opts: EvalOptions = {}): Promise<void> {
         k,
         split,
         ...(opts.searchFn ? { searchFn: opts.searchFn } : {}),
+        ...(opts.via ? { via: opts.via } : {}),
       });
       const delta = {
         meanRecall: b.meanRecall - a.meanRecall,
@@ -878,6 +925,7 @@ export async function runEval(opts: EvalOptions = {}): Promise<void> {
       k,
       split,
       ...(opts.searchFn ? { searchFn: opts.searchFn } : {}),
+      ...(opts.via ? { via: opts.via } : {}),
     });
     const ok = report.meanRecall >= minRecall;
     console.log(JSON.stringify({ ...report, ok, glossary: METRIC_GLOSSARY }, null, 2));

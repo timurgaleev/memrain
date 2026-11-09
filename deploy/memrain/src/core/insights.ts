@@ -17,11 +17,13 @@
  * Tables: pages (015), links (016), timeline_events (017), entity_facts (018 +
  * 037 metadata). No schema change — all columns queried already exist.
  */
+import { factSourceEligibleSql } from "./quarantine.ts";
 import type { Storage } from "./storage.ts";
 import { orphanExclusionSql } from "./orphan-policy.ts";
 import { hybridSearch, type SearchHit, type SearchOptions } from "./search/hybrid.ts";
 import { PAGE_MIRROR_PATH_SQL, isPageSourcePath } from "./page-index.ts";
 import { normalizeScope } from "./source-scope.ts";
+import { liveEndpointSql } from "./links.ts";
 
 // Shared kebab-case slug grammar (matches links.ts / pages.ts — keep the three
 // copies in sync). Word chars cover lowercase/caseless letters of any script
@@ -205,13 +207,13 @@ export async function findExperts(
     typeFilter = ` AND p.type = $${params.length}`;
   }
   const sources = normalizeScope(opts.sourceIds);
-  let edgeSourceFilter = "";
+  let edgeSourceFilter = ` WHERE source_slug <> target_slug AND ${liveEndpointSql("source_slug")} AND ${liveEndpointSql("target_slug")}`;
   let pageSourceFilter = "";
   if (sources !== undefined) {
     params.push(sources);
     const idx = params.length;
     // Count only the tenant's own edges and rank only the tenant's pages.
-    edgeSourceFilter = ` WHERE source_id = ANY($${idx}::text[])`;
+    edgeSourceFilter += ` AND source_id = ANY($${idx}::text[])`;
     pageSourceFilter = ` AND p.source_id = ANY($${idx}::text[])`;
   }
   params.push(limit);
@@ -235,7 +237,7 @@ export async function findExperts(
      SELECT p.slug, p.type, p.title, COALESCE(d.degree, 0) AS degree
        FROM pages p
        LEFT JOIN degrees d ON d.slug = p.slug
-       WHERE p.deleted_at IS NULL${typeFilter}${pageSourceFilter}
+       WHERE p.deleted_at IS NULL AND ${liveEndpointSql("p.slug")}${typeFilter}${pageSourceFilter}
        ORDER BY COALESCE(d.degree, 0) DESC, p.updated_at DESC, p.slug COLLATE "C" ASC
        LIMIT $${params.length}`,
     params,
@@ -625,7 +627,7 @@ export async function findTrajectory(
   const params: unknown[] = [entitySlug];
   // Dimensional ontology rows (mig097) have their own read path (getOntology);
   // keep them out of the free-text fact-trajectory arm.
-  let factBounds = " AND f.dimension IS NULL";
+  let factBounds = ` AND f.dimension IS NULL AND ${factSourceEligibleSql("f")}`;
   let eventBounds = "";
   if (opts.since !== undefined) {
     if (typeof opts.since !== "string" || opts.since.length === 0) {
@@ -683,7 +685,8 @@ export async function findTrajectory(
               NULL::text AS event_type,
               NULL::text AS embedding
          FROM timeline_events ev
-         WHERE ev.slug = $1${eventBounds}`
+         WHERE ev.slug = $1${eventBounds}
+           AND (ev.event_slug IS NULL OR EXISTS (SELECT 1 FROM pages ep WHERE ep.slug = ev.event_slug AND ep.deleted_at IS NULL AND ep.source_id = ev.source_id))`
     : "";
   const r = await storage.engine().query<{
     source: "fact" | "event";

@@ -21,6 +21,7 @@
 import type { Engine } from "./../engine/interface.ts";
 import type { Storage } from "../storage.ts";
 import { putPage } from "../pages.ts";
+import { verifyQuotes, unverifiedQuotesFrontmatter } from "./quote-verify.ts";
 import { EXTRACTION_ELIGIBLE_TYPES } from "../facts-extract.ts";
 import { resolveSonnetFn, resolveFactsModel, type SonnetFn, type SonnetUsage } from "../llm/sonnet.ts";
 import type { LlmFn } from "../llm/haiku.ts";
@@ -314,7 +315,8 @@ export async function reflectionsPhase(
   for (const d of drafts) {
     const slug = `${prefix}${d.topic_slug}`;
     const sourcesMd = d.evidence.map((s) => `- [[${s}]]`).join("\n");
-    const body = `${d.body}\n\n## Sources\n${sourcesMd}\n`;
+    const quotes = verifyQuotes(d.body, transcripts.filter(t => d.evidence.includes(t.slug)).map(t => t.body));
+    const body = `${unverifiedQuotesFrontmatter(quotes.unverified_quotes)}${quotes.answer}\n\n## Sources\n${sourcesMd}\n`;
     try {
       const pageWrite = await putPage(storage, {
         slug,

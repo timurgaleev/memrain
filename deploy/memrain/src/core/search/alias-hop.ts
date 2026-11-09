@@ -20,6 +20,7 @@
  * re-slices. Default ON; MEMRAIN_ALIAS_HOP=0 disables (folded into the
  * query-cache ranking signature).
  */
+import { pageFilterClauses, type PageFilters } from "./filters.ts";
 import { hitProvenance } from "./hit-provenance.ts";
 import type { Engine } from "../engine/interface.ts";
 import type { Storage } from "../storage.ts";
@@ -45,6 +46,7 @@ export function aliasHopEnabled(): boolean {
 
 /** Test seams: replace the alias-candidate lookup / page-head fetch (no DB). */
 export interface AliasHopOpts {
+  filters?: PageFilters;
   resolveCandidates?: (
     norm: string,
   ) => Promise<Array<{ slug: string; source_id: string }>>;
@@ -73,7 +75,7 @@ export async function applyAliasHop(
   try {
     refs = opts.resolveCandidates
       ? await opts.resolveCandidates(qNorm)
-      : await resolveAliasCandidates(storage, qNorm, scope);
+      : await resolveAliasCandidates(storage, qNorm, scope, opts.filters);
   } catch {
     return hits; // pre-034 table-missing OR transient error → fail-open
   }
@@ -131,6 +133,7 @@ export async function applyAliasHop(
           ref.slug,
           intent,
           headSources,
+          opts.filters,
         );
     if (!injected) continue;
     injectScore += 1e-6;
@@ -154,6 +157,7 @@ async function fetchPageHeadHit(
   slug: string,
   intent: Intent,
   scope: string[] | undefined,
+  filters?: PageFilters,
 ): Promise<SearchHit | null> {
   // Candidate mirror paths: one per scoped source (tenant-aware), plus the
   // bare default form when scope is absent (operator/local path). Matching the
@@ -165,6 +169,7 @@ async function fetchPageHeadHit(
       ? [pageSourcePath(slug, null)]
       : scope.map((s) => pageSourcePath(slug, s));
   const params: unknown[] = [candidatePaths];
+  const pageFilter = pageFilterClauses(params, filters);
   const r = await engine.query<{
     id: string;
     document_id: string;
@@ -180,7 +185,7 @@ async function fetchPageHeadHit(
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
       WHERE d.source_path = ANY($1::text[])
-        AND ${visibilityClause("d")}
+        AND ${visibilityClause("d")}${pageFilter}
       ORDER BY c.id
       LIMIT 1`,
     params,

@@ -225,6 +225,7 @@ export function renderSession(session: TranscriptSession, budget: number = PART_
       first_message_id: part[0]!.messageId,
       last_message_id: part[part.length - 1]!.messageId,
     };
+    if (session.origin) truth.transcript_origin = session.origin;
     if (session.startedAt !== null) truth.date = utcDate(session.startedAt);
     truth[OUTSIDE_NEUTRALIZED] = 1;
     return {

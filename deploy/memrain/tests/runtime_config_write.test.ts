@@ -130,7 +130,7 @@ describe("set stores the MEMRAIN_ name only", () => {
   });
 
   it("CLI: a legacy-spelled set is stored as MEMRAIN_X, with a note, and creates no MEMEX_ row", async () => {
-    const r = await config({ sub: "set", key: "MEMEX_RCW_SET_B", value: "v" });
+    const r = await config({ sub: "set", key: "MEMEX_RCW_SET_B", value: "v", force: true });
     expect(r.code).toBe(0);
     expect(r.out).toBe("Set MEMRAIN_RCW_SET_B = v");
     expect(r.err).toContain("MEMEX_RCW_SET_B is the pre-rename spelling; stored as MEMRAIN_RCW_SET_B");
@@ -138,7 +138,7 @@ describe("set stores the MEMRAIN_ name only", () => {
   });
 
   it("CLI: a new-spelled set prints no note", async () => {
-    const r = await config({ sub: "set", key: "MEMRAIN_RCW_SET_C", value: "v" });
+    const r = await config({ sub: "set", key: "MEMRAIN_RCW_SET_C", value: "v", force: true });
     expect(r.code).toBe(0);
     expect(r.out).toBe("Set MEMRAIN_RCW_SET_C = v");
     expect(r.err).not.toContain("pre-rename spelling");

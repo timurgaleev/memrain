@@ -274,9 +274,18 @@ export function isOverlayProjected(name: string): boolean {
  * dependency. Kill switch: MEMRAIN_NO_DB_CONFIG=1 or MEMEX_NO_DB_CONFIG=1
  * skips entirely.
  */
+type OverlayState = "not_loaded" | "disabled" | "missing" | "ready" | "unavailable";
+const overlayStates = new WeakMap<Engine, OverlayState>();
+
+export function runtimeOverlayState(engine: Engine): OverlayState {
+  return overlayStates.get(engine) ?? "not_loaded";
+}
+
 export async function applyRuntimeEnvOverlay(engine: Engine): Promise<string[]> {
-  if (process.env["MEMRAIN_NO_DB_CONFIG"] === "1") return [];
-  if (process.env["MEMEX_NO_DB_CONFIG"] === "1") return [];
+  if (process.env["MEMRAIN_NO_DB_CONFIG"] === "1" || process.env["MEMEX_NO_DB_CONFIG"] === "1") {
+    overlayStates.set(engine, "disabled");
+    return [];
+  }
   try {
     const rows = [
       ...(await listRuntimeConfig(engine, "MEMRAIN_")),
@@ -310,8 +319,13 @@ export async function applyRuntimeEnvOverlay(engine: Engine): Promise<string[]> 
       projected.set(legacy, row.value);
       applied.push(row.key);
     }
+    overlayStates.set(engine, "ready");
     return applied;
-  } catch {
+  } catch (e) {
+    const raw = e && typeof e === "object" && "code" in e ? String(e.code) : "";
+    const code = /^[0-9A-Z]{5}$/.test(raw) ? raw : "unknown";
+    overlayStates.set(engine, code === "42P01" ? "missing" : "unavailable");
+    if (code !== "42P01") console.error(`[memrain] runtime_config overlay unavailable (SQLSTATE ${code}); continuing with environment/defaults`);
     return [];
   }
 }

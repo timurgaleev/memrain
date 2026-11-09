@@ -82,6 +82,14 @@ Use the per-dimension walk below when:
 - You're investigating why doctor keeps reporting the same finding
 - A specific dimension needs manual judgment that the automatic path skips
 
+### When operator tools are unavailable
+
+Check the skill's `usable_tools` first. Without `run_doctor`, `stats`, or
+`jobs_submit`, use `source_health` and `find_orphans` within your grant. Spend
+at most ten read calls, report source-scoped findings and missing coverage,
+and hand operator-only repairs to the operator. Do not loop on permission
+errors or claim that this narrower report is a full brain audit.
+
 ### Manual path
 
 1. **Run health check.** Call `run_doctor` and `stats` to get the dashboard.

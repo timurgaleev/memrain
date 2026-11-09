@@ -1,12 +1,12 @@
 # memrain — Bun runtime, multi-stage build
-# Base image: oven/bun:1.3.13-alpine (preferred).
-# Fallback: oven/bun:1.3.13 (non-alpine) if the alpine tag is unavailable.
+# Base image: oven/bun:1.4.4-alpine (preferred).
+# Fallback: oven/bun:1.4.4 (non-alpine) if the alpine tag is unavailable.
 
 # --- admin SPA builder ----------------------------------------------------
 # Builds the Vite/React admin dashboard (admin/) into static assets. Kept in a
 # separate stage so React/Vite + node_modules never reach the runtime image —
 # only the built dist/ is copied across.
-FROM oven/bun:1.3.13-alpine AS admin-builder
+FROM oven/bun:1.4.4-alpine AS admin-builder
 WORKDIR /admin
 COPY admin/package.json admin/bun.lock ./
 RUN bun install --frozen-lockfile
@@ -15,7 +15,7 @@ COPY admin/src ./src
 RUN bun run build
 
 # --- runtime --------------------------------------------------------------
-FROM oven/bun:1.3.13-alpine
+FROM oven/bun:1.4.4-alpine
 
 WORKDIR /app
 

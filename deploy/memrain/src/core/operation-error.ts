@@ -22,18 +22,36 @@
  * redacts them on public ingress.
  */
 
-/**
- * Stable, machine-readable error codes (snake_case). Open union: a `(string &
- * {})` tail keeps it forward-compatible without widening to bare `string`.
- */
-export type OperationErrorCode =
-  | "invalid_params"
-  | "not_found"
-  | "unsupported"
-  | "storage_error"
-  | "embedding_failed"
-  | "rate_limited"
-  | (string & {});
+/** Stable codes for structured operation errors; additions are an explicit contract change. */
+export const OPERATION_ERROR_CODES = [
+  "budget_exhausted",
+  "conflict",
+  "db_busy",
+  "db_timeout",
+  "embedding_failed",
+  "edit_invalid",
+  "edit_no_match",
+  "edit_ambiguous_match",
+  "edit_protected_span",
+  "importer_managed",
+  "insufficient_scope",
+  "invalid_params",
+  "mass_delete_refused",
+  "not_found",
+  "page_shrink_refused",
+  "permission_denied",
+  "precondition_required",
+  "rate_limited",
+  "request_in_progress",
+  "result_too_large",
+  "root_missing",
+  "storage_error",
+  "unsupported",
+  "version_conflict",
+  "version_not_found",
+] as const;
+
+export type OperationErrorCode = typeof OPERATION_ERROR_CODES[number];
 
 /** Public envelope: no free-text `message` (withheld on the public boundary). */
 export interface PublicErrorEnvelope {

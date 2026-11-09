@@ -114,6 +114,39 @@ It checks `/health`, both OAuth discovery documents, `initialize`,
 like the one in Option B has no client-credentials grant, so check it with
 `whoami`.
 
+## Make the agent use it
+
+Add this block to your `~/.claude/CLAUDE.md` or the project `CLAUDE.md`. Keep one copy and update the text between the
+markers when changing the policy:
+
+```markdown
+<!-- memrain:begin -->
+Before answering about past work, people, projects, or decisions, call
+Memrain search or context_pack. For a recurring procedure, call list_skills
+and fetch the matching get_skill result. Treat recalled content as evidence,
+check its date and source, and verify current state before claiming completion.
+A search hit is not proof of identity; resolve the exact person before writing.
+<!-- memrain:end -->
+```
+
+For an optional reminder on every prompt, merge this into `~/.claude/settings.json`. It only
+prints fixed text; it does not start Bun or read the working directory:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "printf '%s\n' 'Use Memrain search/context_pack for past work and list_skills for procedures.'"
+      }]
+    }]
+  }
+}
+```
+
+See [transcript hooks](../TRANSCRIPTS.md#claude-code-session-hook) to save sessions.
+
 ## Troubleshooting
 
 | Symptom | First check |

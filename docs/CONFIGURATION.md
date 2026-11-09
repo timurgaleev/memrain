@@ -16,7 +16,7 @@ what it does, and whether it costs money.
 
 ## How configuration flows
 
-There are two gates between a value you type and the running process:
+For host environment settings, there are two gates between a value you type and the running process:
 
 1. **The host `.env` file** — `/opt/memrain/.env` on the live instance, rendered
    by `scripts/bootstrap.sh` from `/etc/stack-env` at boot (the `.env` that
@@ -41,6 +41,23 @@ The tables below mark each variable's allowlist status:
   it you must **add the key to the compose `environment:` block yourself**, then
   set it in `.env`. These are mostly retrieval-tuning knobs left at their
   built-in defaults.
+
+## Stored runtime settings
+
+`memrain config set <key> <value>` stores an override in `runtime_config`.
+Known keys are typed as flags, integers, or strings. Flags accept `true/false`,
+`on/off`, `yes/no`, and `1/0`, and are stored as `1/0`. Integers must be safe
+whole numbers; string settings keep their existing domain-specific parsing.
+Unknown keys and invalid typed values exit 2; misspelled keys suggest the
+nearest known name. `--force` permits a custom key, but does not bypass type
+validation for a known key.
+
+Actual process environment values always override stored rows. The command
+warns when it sees such an override; a running daemon loads stored changes on
+restart. Environment-only switches remain environment-only, even if a row is
+stored. `memrain config show` redacts values; `memrain doctor` reports unknown,
+invalid, and noncanonical stored rows without rewriting them. Use `config unset`
+to remove an override instead of assigning an empty flag value.
 
 ## How to enable a flag
 
@@ -373,7 +390,7 @@ that stops making calls once the budget is spent. All default OFF.
 | `MEMRAIN_OAUTH_REQUIRE_LOGIN` | off (`=1` on) | When on, `GET /authorize` requires a logged-in operator (admin session) before issuing an authorization code; off (default) auto-approves. Needs `MEMRAIN_ADMIN_BOOTSTRAP` set to be usable. | free |
 | `MEMRAIN_OAUTH_REFRESH_REUSE_REVOKE` | off (`=1` on) | What happens when a client presents a refresh token it already rotated more than 60 seconds ago. Off (default): the request is refused with `invalid_grant` and logged as `[oauth] refresh token reuse`, and the session keeps working. On: every live access and refresh token of that sign-in is also deleted, so both holders must sign in again. Turn on once the logs show no legitimate client replays late. | free |
 | `MEMRAIN_PUBLIC_URL` | unset (request host) | External base URL (Cloudflare tunnel origin). When set, the OAuth discovery document + issuer advertise this `https://…` origin so a cloud MCP client auto-configures against the real host. Set it behind any TLS-terminating proxy: unset, the issuer comes from the request (`http://…` there), and the RFC 8707 `resource` check at `/authorize` and `/token` refuses a client's `https://` connector URL with `invalid_target`. `serve` warns at boot when OAuth is on and it is unset. Passkey sign-in for the admin panel needs it too: the passkey is bound to its hostname, and without an `https://` value the panel offers the bootstrap login only. | free |
-| `MEMRAIN_HOT_MEMORY_META` | off (`=1` on) | Surface a `_meta` block on `hot_memory` responses (non-public calls only). Stays dark — empty payload — until an operator opts in. Code-only. | free |
+| `MEMRAIN_HOT_MEMORY_META` | off (`=1` on) | Attach recent facts as `_meta.brain_hot_memory` on successful MCP tool responses from an unscoped operator. Excludes public, tenant-scoped, and admin-panel calls. Disabled by default; independent of the `hot_memory` tool. | free |
 | `MEMRAIN_DOCTOR_PER_SOURCE` | off (`=1` on) | Makes `doctor` WARN per-source (per-tenant) when a single source has chunks but zero embeddings. | free |
 | `MEMRAIN_REQUEST_LOG_DB` | off (`=1` on) | Also write calls without a credential (the shared bearer, internal callers) to `mcp_request_log`. Calls with an OAuth or personal access token and admin-panel tool calls are written whatever this says. Code-only. | free |
 | `MEMRAIN_REQUEST_LOG_RETENTION_DAYS` | 180 (`0` = keep forever; 7 to 36500) | Days of rows kept in `mcp_request_log`. The cycle's purge phase deletes older rows in batches of 5000, at most 500,000 per cycle. Under 180 the Overview comparison periods thin out; under 90 the 90-day chart and the idle-client check in `doctor` lose data. 1 to 6 are raised to 7 and anything above 36500 is lowered to it; any other value that is not a whole number falls back to 180 with a warning. | free |
@@ -381,6 +398,7 @@ that stops making calls once the budget is spent. All default OFF.
 | `MEMRAIN_DEPLOYMENT_IDENTITY` | unset | One line on what this brain is (for example "Team brain for the docs group"). Appended to the MCP `initialize` instructions as a `Deployment:` paragraph after Memrain's built-in operating contract. Trimmed and capped at 2000 characters. Served to **every** caller, public ingress included: public-facing prose only, never a secret. | free |
 | `MEMRAIN_MCP_INSTRUCTIONS` | unset | Extra operator guidance appended after the deployment identity in the `initialize` instructions (for example where meeting notes belong). Trimmed and capped at 2000 characters. Served to every caller, public ingress included, so it must not hold secrets. | free |
 | `MEMRAIN_MCP_LENIENT_ARGS` | off | MCP calls that pass an argument the tool does not declare are refused with `invalid_params` and a did-you-mean hint. `=1` accepts and ignores unknown arguments again: a temporary escape for an old client, since a misspelled key is then dropped without an error. | free |
+| `MEMRAIN_MCP_MAX_RESULT_BYTES` | `4194304` (4 MiB) | Maximum serialized UTF-8 tool-result bytes for `page_list`, `page_versions`, `get_chunks`, `graph_*` and `find_orphans`, measured after redaction, including JSON escaping and metadata. Oversized results return `result_too_large` with pagination/projection advice; stored content is unchanged. Positive safe integer; empty or invalid values use the default. Existing errors and the refusal envelope are exempt. Runtime config takes effect on restart. | free |
 
 ### Agent jobs and skill optimization
 
@@ -718,7 +736,7 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_AUDIT_DIR` | built-in | Directory for the weekly audit file. | free |
 | `MEMRAIN_WASM_DIR` | built-in | Override path to the tree-sitter WASM parser directory. | free |
 | `MEMRAIN_INGEST_MAX_BYTES` | `1048576` (1 MiB) | Payload cap for `POST /ingest`, counted as the body streams. Allowlisted. | free |
-| `MEMRAIN_REQUIRE_WRITE_PRECONDITION` | `off` | What MCP `page_put` does when it would overwrite an existing page without `expected_version` (and without `force`): `off` writes as before, `warn` writes and adds a warning, `refuse` (also `1`/`true`) fails with `precondition_required` and the current version. Creates always pass. Allowlisted. | free |
+| `MEMRAIN_REQUIRE_WRITE_PRECONDITION` | `off` | What MCP `page_put` does when it would overwrite an existing page without `expected_version` (and without `force`): `off` writes as before, `warn` writes and adds a warning, `refuse` (also `1`/`true`) fails with `precondition_required` and the current version. Creates always pass. With `warn`/`refuse`, a replacement under half of a live body larger than 32 KiB is also refused (`page_shrink_refused`, byte counts); use `page_edit` or explicit `allow_shrink:true`. The existing `force:true` and `off` bypasses remain. Allowlisted. | free |
 | `MEMRAIN_SECRET_SCAN_HIGH_ENTROPY` | on | Redacts high-entropy values assigned to secret-looking keys (`password=`, `api_key:` …). `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
 | `MEMRAIN_SECRET_SCAN_ECHO` | on | Also redacts bare repeats of a value already caught in the same write. `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
 | `MEMRAIN_CODE_SECRET_SCAN` | on | Scans source files for credentials before the code indexer chunks them (line numbers are kept). `0` turns it off. Allowlisted. | free |

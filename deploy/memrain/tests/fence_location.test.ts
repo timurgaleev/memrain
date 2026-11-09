@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { fenceBounds, fenceMarkers } from "../src/core/fence-shared.ts";
 import { parseFactsFence, renderFactsFence } from "../src/core/facts-fence.ts";
 import { parseTakesFence, upsertTakeRow } from "../src/core/synthesis/takes-fence.ts";
+import { linearityRatio } from "./helpers/cpu-time.ts";
 
 const fact = (claim: string, brand: "memrain" | "memex" = "memrain") => renderFactsFence([
   { rowNum: 1, claim, confidence: 1, active: true },
@@ -54,5 +55,14 @@ describe("fence marker locations", () => {
     const start = performance.now();
     expect(parseFactsFence(body).map(f => f.claim)).toEqual(["real"]);
     expect(performance.now() - start).toBeLessThan(1500);
+  });
+
+  for (const char of ["`", "~"]) it(`scans ${char} runs followed by embedded line separators in linear time`, () => {
+    for (const suffix of ["\u2028", "\u2029", "\rX"]) {
+      const small = char.repeat(5000) + suffix;
+      const large = char.repeat(10000) + suffix;
+      expect(parseFactsFence(`${large}\n${fact("real")}`).map(f => f.claim)).toEqual(["real"]);
+      expect(linearityRatio(() => fenceBounds(small, "facts"), () => fenceBounds(large, "facts"))).toBeLessThan(3);
+    }
   });
 });

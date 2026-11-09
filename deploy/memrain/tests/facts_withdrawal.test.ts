@@ -101,7 +101,10 @@ describe("addFact after a forget", () => {
         },
       },
     });
-    expect(r).toEqual({ id: null, entity_slug: ENTITY, inserted: false, withdrawn: true });
+    expect(r).toEqual({ id: null, entity_slug: ENTITY, inserted: false, withdrawn: true,
+      withdrawn_detail: { source_id: "default", visibility: "private", entity_slug: ENTITY,
+        withdrawn_at: expect.any(String), scope: "normalized_claim" },
+    });
     expect(embedCalls).toBe(0);
     expect(await liveRows()).toHaveLength(0);
     expect(await rows()).toHaveLength(1);
@@ -151,7 +154,10 @@ describe("addFact against a forget that lands during the paid window", () => {
         },
       },
     });
-    expect(r).toEqual({ id: null, entity_slug: ENTITY, inserted: false, withdrawn: true });
+    expect(r).toEqual({ id: null, entity_slug: ENTITY, inserted: false, withdrawn: true,
+      withdrawn_detail: { source_id: "default", visibility: "private", entity_slug: ENTITY,
+        withdrawn_at: expect.any(String), scope: "normalized_claim" },
+    });
     expect(await rows()).toHaveLength(1);
   });
 

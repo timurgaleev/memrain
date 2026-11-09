@@ -4,10 +4,9 @@
  * transcript imported outside the MCP write path (bulk import, sync) still gets
  * its facts unattended, mapped onto memrain's per-page extractor.
  *
- * PAID (Bedrock Sonnet) and default-OFF on TWO independent guards:
- *   1. it is NOT in ALL_PHASES — a normal cycle never runs it; it runs only via
- *      `--phases conversation-facts-backfill`, and
- *   2. even when requested it no-ops unless MEMRAIN_FACTS_BACKFILL is truthy.
+ * PAID (Bedrock Sonnet): follows MEMRAIN_FACTS_EXTRACTION unless overridden
+ * by MEMRAIN_FACTS_BACKFILL (0 disables, 1 enables independently). The daemon
+ * schedules it once per UTC day outside quiet hours; CLI can request it too.
  * A brain-wide USD budget (MEMRAIN_FACTS_BACKFILL_BUDGET_USD, default $1) and a
  * per-run page cap bound the spend; the phase stops cleanly when either is hit.
  *
@@ -32,6 +31,7 @@ import {
   FACTS_EXTRACT_VERSION,
   ON_WRITE_WRITER,
   extractFactsForPage,
+  factsExtractionEnabled,
 } from "../facts-extract.ts";
 import { resolveFactsModel } from "../llm/sonnet.ts";
 import type { SonnetFn } from "../llm/sonnet.ts";
@@ -39,7 +39,8 @@ import type { LlmFn } from "../llm/haiku.ts";
 import { filterWorthwhile, worthGateEnabled } from "../synthesis/worth-gate.ts";
 import { phaseFenceCheck } from "./phase-context.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
-import { PAGE_MIRROR_PATH_SQL } from "../page-index.ts";
+import { PAGE_MIRROR_PATH_SQL, notSynthesizedPageSql, pageSourcePath } from "../page-index.ts";
+import { recordSynthFailure, clearSynthFailure } from "../synthesis/synth-failures.ts";
 
 export interface ConversationFactsBackfillOptions {
   /** Cap on pages processed per run. Default 50. */
@@ -78,7 +79,9 @@ const DEFAULT_MAX_PAGES = 50;
 
 export function backfillEnabled(
   env: string | undefined = process.env["MEMRAIN_FACTS_BACKFILL"],
+  extractionEnv: string | undefined = process.env["MEMRAIN_FACTS_EXTRACTION"],
 ): boolean {
+  if (env === undefined || env.trim() === "") return factsExtractionEnabled(extractionEnv);
   const v = (env ?? "").trim().toLowerCase();
   return v === "1" || v === "true";
 }
@@ -113,17 +116,17 @@ export async function conversationFactsBackfillPhase(
     errors: [],
   };
 
-  // Default-OFF: a live (paid) run requires the explicit gate. Tests inject a
-  // sonnetFn, which bypasses the gate and avoids any spend.
+  // Tests inject a sonnetFn; live runs require extraction or backfill opt-in.
   if (!opts.sonnetFn && !backfillEnabled()) {
     return {
       ...empty,
-      reason: "default-OFF: set MEMRAIN_FACTS_BACKFILL=1 to run paid backfill",
+      reason: "backfill disabled: enable MEMRAIN_FACTS_EXTRACTION or set MEMRAIN_FACTS_BACKFILL=1",
     };
   }
 
   const maxPages = opts.maxPages ?? DEFAULT_MAX_PAGES;
   const cap = opts.maxBudgetUsd ?? defaultBudgetUsd();
+  const model = resolveFactsModel(opts.modelId, "facts_extract");
 
   const rows = await storage.engine().query<PageRow>(
     `SELECT p.slug, p.type, p.markdown_body, p.source_id, p.content_hash
@@ -132,10 +135,7 @@ export async function conversationFactsBackfillPhase(
         AND p.type = ANY($1::text[])
         AND length(btrim(p.markdown_body)) >= 80
         AND p.slug NOT LIKE 'wiki/agents/%'
-        -- Synthesis-written pages are not transcripts; extracting facts from
-        -- them would pay to re-derive our own output on every run.
-        AND p.slug NOT LIKE 'reflections/%'
-        AND p.slug NOT LIKE 'patterns/%'
+        AND ${notSynthesizedPageSql("p")}
         -- A page the gate quarantined in search is not mined for facts either.
         AND NOT EXISTS (
           SELECT 1 FROM documents qd
@@ -172,9 +172,15 @@ export async function conversationFactsBackfillPhase(
              AND s.content_hash = p.content_hash
              AND s.extractor_version = $4
         )
+        AND NOT EXISTS (
+          SELECT 1 FROM synth_failures f
+           WHERE f.doc_id = ${PAGE_MIRROR_PATH_SQL} AND f.phase = 'facts-backfill'
+             AND f.content_hash = p.content_hash AND f.model = $5
+             AND f.next_eligible_at > now()
+        )
       ORDER BY p.updated_at DESC
       LIMIT $3`,
-    [[...EXTRACTION_ELIGIBLE_TYPES], ON_WRITE_WRITER, maxPages, FACTS_EXTRACT_VERSION],
+    [[...EXTRACTION_ELIGIBLE_TYPES], ON_WRITE_WRITER, maxPages, FACTS_EXTRACT_VERSION, model],
   );
 
   const result: ConversationFactsBackfillResult = { ...empty, ran: true };
@@ -228,11 +234,17 @@ export async function conversationFactsBackfillPhase(
       // for it again. Surface it (the cycle marks the phase `warn`) instead of
       // letting that loop bill silently forever.
       if (r.absorbed === "parse_failure" || r.absorbed === "output_truncated") {
+        await recordSynthFailure(storage.engine(), {
+          docId: pageSourcePath(page.slug, page.source_id), phase: "facts-backfill",
+          contentHash: page.content_hash, model,
+          kind: r.absorbed === "output_truncated" ? "truncated" : "unparseable",
+        });
         result.errors.push({
           slug: page.slug,
           message: `extraction absorbed: ${r.absorbed}`,
         });
       }
+      if (r.absorbed === null) await clearSynthFailure(storage.engine(), pageSourcePath(page.slug, page.source_id), "facts-backfill");
       // Facts that failed to write were never persisted: the page is not
       // empty, so it must stay open for the next run rather than be memoized.
       if (r.factsFailed > 0) {

@@ -39,6 +39,7 @@ const INJECTED_BLOCK_RE =
  * is data loss, keeping a stray notification is not.
  */
 const HARNESS_ORIGINS: ReadonlySet<unknown> = new Set(["task-notification", "peer", "auto-continuation"]);
+const AGENT_ENTRYPOINTS: ReadonlySet<unknown> = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
 const INTERRUPTED_RE = /^\[Request interrupted by user[^\]]*\]$/;
 /** Content block types the adapter understands, text or not. */
 const KNOWN_BLOCKS: ReadonlySet<unknown> = new Set([
@@ -161,7 +162,7 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
     messages.push({
       id: uuid ?? "",
       role: type,
-      speaker: type === "user" ? "User" : "Claude",
+      speaker: type === "user" ? (AGENT_ENTRYPOINTS.has(rec["entrypoint"]) ? "Agent" : "User") : "Claude",
       text,
       ts: toEpochMs(rec["timestamp"]),
     });
@@ -187,6 +188,7 @@ export function parseClaudeCodeSession(records: readonly unknown[]): AdapterResu
         title: own?.text ?? titleFromText(messages.find((m) => m.role === "user" && !isPasteOnly(m.text))?.text),
         startedAt: messages.find((m) => m.ts !== null)?.ts ?? null,
         messages,
+        ...(messages.some(m => m.role === "user") && messages.filter(m => m.role === "user").every(m => m.speaker === "Agent") ? { origin: "agent" as const } : {}),
       },
     ],
     skipped: [],

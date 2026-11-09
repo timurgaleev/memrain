@@ -44,7 +44,7 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
   });
 
   it("withholds every revision snapshot and leaves version metadata", async () => {
-    const r = await call("page_versions", { slug: "notes/held-one" });
+    const r = await call("page_versions", { slug: "notes/held-one", include_body: true });
     expect(r.versions).toHaveLength(2);
     for (const v of r.versions) {
       expect(v.notice).toBe("page_quarantined");
@@ -53,7 +53,7 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
       expect(v.compiled_truth_snapshot).toBeUndefined();
       expect(Number(v.version_n)).toBeGreaterThan(0);
     }
-    expect((await call("page_versions", { slug: "notes/foreign" })).versions).toEqual([]);
+    expect((await call("page_versions", { slug: "notes/foreign", include_body: true })).versions).toEqual([]);
   });
 
   it("withholds recalled page content without leaking foreign pages", async () => {
@@ -62,6 +62,7 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     expect(r.page.quarantined.reason).toBe("junk_pattern");
     expect(r.page.markdown_body).toBeUndefined();
     expect(r.page.compiled_truth).toBeUndefined();
+    expect(r.identity).toBeUndefined();
     expect((await call("entity_recall", { slug: "notes/foreign" })).page).toBeNull();
   });
 
@@ -78,7 +79,7 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     expect(page.markdown_body).toContain(junk);
     expect(page.quarantined.reason).toBe("junk_pattern");
     expect(page.notice).toBeUndefined();
-    const versions = (await call("page_versions", { slug: page.slug }, false)).versions;
+    const versions = (await call("page_versions", { slug: page.slug, include_body: true }, false)).versions;
     expect(versions[0].body_snapshot).toContain(junk);
     expect(versions[0].quarantined.reason).toBe("junk_pattern");
     const recall = await call("entity_recall", { slug: page.slug }, false);

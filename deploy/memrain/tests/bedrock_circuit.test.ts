@@ -7,7 +7,7 @@
  * model for access, everywhere for credentials — while interactive calls keep
  * sending; a job that timed out cannot keep paying from its orphaned handler.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import { Storage } from "../src/core/storage.ts";
 import { setSpendLedgerEngine, trackedInvoke } from "../src/core/budget.ts";
 import {
   classifyBedrockError,
+  noteBedrockFailure,
   resetBedrockCircuitForTests,
   runInBatchScope,
 } from "../src/core/llm/bedrock-errors.ts";
@@ -201,4 +202,13 @@ describe("a job that timed out", () => {
     await done;
     expect(sentAfterTimeout).toBe(0);
   });
+});
+
+it("includes a static repair hint when a batch pauses for model access", async () => {
+  resetBedrockCircuitForTests();
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await runInBatchScope({ stopped: false, circuit: true }, async () => noteBedrockFailure(HAIKU, ACCESS));
+    expect(warn.mock.calls.flat().join(" ")).toContain("Check bedrock:InvokeModel");
+  } finally { warn.mockRestore(); resetBedrockCircuitForTests(); }
 });

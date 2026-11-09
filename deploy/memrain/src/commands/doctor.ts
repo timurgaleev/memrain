@@ -1,3 +1,4 @@
+import { checkPersonNameDuplicates } from "../core/person-identity.ts";
 /**
  * `memrain doctor` — self-diagnostics. Prints a structured report and
  * exits 0 on healthy / 1 on any failure. Intended to run in seconds —
@@ -11,6 +12,9 @@
  *   - vault path exists and is readable (when configured)
  *   - reports last_indexed_mtime spread (oldest / newest / count)
  */
+import { checkRuntimeConfigValues } from "../core/runtime-config-schema.ts";
+import { lintSkillpack } from "../core/skillpack/lint.ts";
+import { DEFAULT_SKILLS_DIR } from "../core/skillpack/brain-resident.ts";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -47,18 +51,24 @@ import {
   checkCodeGraph,
   checkStaleLocks,
   checkQueueHealth,
+  checkRuntimeConfigOverlay,
   checkSchemaVersion,
   checkEmbeddingWidth,
   checkInvalidIndexes,
   checkDuplicatePages,
   checkQuarantinedPages,
   checkJunkEntityHubs,
+  checkFactsWithoutEntityPages,
+  checkRedactionMarkers,
+  checkFactsInputWindows,
   checkFenceRowsWithoutMarkers,
   checkNamespaceOnlyTargets,
   checkDanglingSlugRedirects,
   checkOutsideContentFences,
 } from "../core/doctor-ops.ts";
 import { checkConnectorHealth } from "../core/connectors/health.ts";
+import { checkDbBackends, checkJsonbIntegrity, checkPageVersionStorage } from "../core/doctor-storage.ts";
+import { checkCyclePhaseHealth, checkMaintenanceHeld } from "../core/doctor-maintenance.ts";
 import { checkEmbedBacklog } from "../core/doctor-embed.ts";
 import { checkSecretExposure } from "../core/doctor-secrets.ts";
 import {
@@ -107,6 +117,10 @@ interface Check {
   /** The honest verdict — see CheckStatus. Invariant: ok === (status !== "fail"). */
   status: CheckStatus;
   detail?: string;
+}
+
+function probeStaleDetail(ranAt: string): string {
+  return Date.now() - Date.parse(ranAt) > 7 * 86_400_000 ? "; stale: last probe is over 7 days old" : "";
 }
 
 function snapshotCi(detail: Record<string, unknown>, key: string): string {
@@ -238,6 +252,16 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
   const checks: Check[] = [];
   let config: ReturnType<typeof loadConfig> | null = null;
 
+  try {
+    const pack = lintSkillpack(process.env.MEMRAIN_SKILLS_DIR || DEFAULT_SKILLS_DIR);
+    const errors = pack.issues.filter(i => i.severity !== "warn");
+    checks.push({ name: "skillpack", ok: true, status: pack.ok ? "ok" : "warn",
+      detail: `${pack.skills} skills; ${errors.length} errors; ${pack.issues.length - errors.length} advisory warnings` +
+        (errors.length ? `: ${errors.slice(0, 10).map(i => `${i.slug}:${i.rule}`).join(", ")}` : "") });
+  } catch (e) {
+    checks.push(couldNotCheck("skillpack", e, "check MEMRAIN_SKILLS_DIR and run memrain skillpack lint"));
+  }
+
   // 1. config file
   const cfgPath = opts.configPath ?? defaultConfigPath();
   if (!existsSync(cfgPath)) {
@@ -331,25 +355,19 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       );
     }
 
-    // 3b. brain health metrics (embed coverage / lag / queue / failed jobs).
-    // Informational by design: a failed job in the last 24h is the only
-    // unambiguous "broken" signal, so that alone gates ok. Coverage / lag /
-    // queue are surfaced in the detail for the operator to judge — a brain can
-    // legitimately run with partial embedding coverage (graph-only sources, a
-    // pending backfill), so the doctor reports it rather than declaring it bad.
+    // Coverage and recent job failures are operational signals. A past refusal
+    // does not make a currently serving source unhealthy.
     try {
       const h = await brainHealthMetrics(storage.raw());
-      checks.push(
-        verdict(
-          "source-health",
-          h.failed_jobs_24h === 0,
-          `embed_coverage=${(h.embed_coverage_pct * 100).toFixed(1)}% ` +
-            `(${h.embedded_chunks}/${h.embeddable_chunks} embeddable` +
-            `${h.code_chunks > 0 ? `, ${h.code_chunks} code graph-only` : ""}) ` +
-            `lag=${h.lag_seconds === null ? "n/a" : `${h.lag_seconds}s`} ` +
-            `queue=${h.queue_depth} failed_24h=${h.failed_jobs_24h}`,
-        ),
-      );
+      checks.push({
+        name: "source-health", ok: true, status: h.failed_jobs_24h > 0 ? "warn" : "ok",
+        detail: `embed_coverage=${(h.embed_coverage_pct * 100).toFixed(1)}% ` +
+          `(${h.embedded_chunks}/${h.embeddable_chunks} embeddable` +
+          `${h.code_chunks > 0 ? `, ${h.code_chunks} code graph-only` : ""}) ` +
+          `lag=${h.lag_seconds === null ? "n/a" : `${h.lag_seconds}s`} ` +
+          `queue=${h.queue_depth} failed_24h=${h.failed_jobs_24h}` +
+          (h.failed_jobs_24h > 0 ? "; inspect failed jobs and their causes before memrain jobs retry <id>" : ""),
+      });
     } catch (e) {
       // Same substrate as `stats` — if this cannot answer, the brain is broken.
       checks.push(
@@ -422,12 +440,23 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
     for (const [name, probe] of [
       ["stale-locks", checkStaleLocks],
       ["queue-health", checkQueueHealth],
+      ["cycle-phase-health", checkCyclePhaseHealth],
+      ["maintenance-held", checkMaintenanceHeld],
+      ["db-backends", checkDbBackends],
+      ["jsonb-integrity", checkJsonbIntegrity],
+      ["page-version-storage", checkPageVersionStorage],
+      ["runtime-config-overlay", checkRuntimeConfigOverlay],
+      ["runtime-config-values", checkRuntimeConfigValues],
       ["schema-version", checkSchemaVersion],
       ["embedding-width", checkEmbeddingWidth],
       ["invalid-indexes", checkInvalidIndexes],
       ["duplicate-pages", checkDuplicatePages],
+      ["person-name-duplicates", checkPersonNameDuplicates],
       ["quarantined-pages", checkQuarantinedPages],
       ["junk-entity-hubs", checkJunkEntityHubs],
+      ["facts-without-entity-pages", checkFactsWithoutEntityPages],
+      ["redaction-markers", checkRedactionMarkers],
+      ["facts-input-windows", checkFactsInputWindows],
       ["fence-rows-without-markers", checkFenceRowsWithoutMarkers],
       ["namespace-only-targets", checkNamespaceOnlyTargets],
       ["dangling-slug-redirects", checkDanglingSlugRedirects],
@@ -596,15 +625,12 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
   if (storage) {
     try {
       const snap = await latestEvalSnapshot(storage.engine());
-      checks.push(
-        verdict(
-          "eval-trend",
-          true,
-          !snap
-            ? "retrieval-quality probe has not run yet (memrain eval-probe / systemd timer)"
-            : evalTrendDetail(snap),
-        ),
-      );
+      const stale = snap ? probeStaleDetail(snap.ran_at) : "";
+      checks.push({ name: "eval-trend", ok: true,
+        status: snap && (snap.status === "error" || stale) ? "warn" : "ok",
+        detail: snap ? evalTrendDetail(snap) + stale
+          : "retrieval-quality probe has not run yet (memrain eval-probe / systemd timer)",
+      });
     } catch (e) {
       checks.push(couldNotCheck("eval-trend", e));
     }
@@ -617,17 +643,15 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
   if (storage) {
     try {
       const run = await latestContradictionRun(storage.engine());
-      checks.push(
-        verdict(
-          "contradiction-trend",
-          true,
-          run
-            ? `last run ${run.ran_at}: rate=${run.found}/${run.judged} ` +
-              `(95% CI ${run.wilson_ci_lower.toFixed(3)}–${run.wilson_ci_upper.toFixed(3)}), ` +
-              `$${run.cost_usd.toFixed(4)}`
-            : "contradiction probe has not run yet (memrain cycle --phases probe-contradictions)",
-        ),
-      );
+      const stale = run ? probeStaleDetail(run.ran_at) : "";
+      checks.push({ name: "contradiction-trend", ok: true,
+        status: run && (run.judge_failed || run.judge_errors > 0 || run.parse_failures > 0 || stale) ? "warn" : "ok",
+        detail: run
+          ? `last run ${run.ran_at}: rate=${run.found}/${run.judged} ` +
+            `(95% CI ${run.wilson_ci_lower.toFixed(3)}–${run.wilson_ci_upper.toFixed(3)}), ` +
+            `$${run.cost_usd.toFixed(4)}; judge_errors=${run.judge_errors}, parse_failures=${run.parse_failures}` + stale
+          : "contradiction probe has not run yet (memrain cycle --phases probe-contradictions)",
+      });
     } catch (e) {
       checks.push(couldNotCheck("contradiction-trend", e));
     }
@@ -688,7 +712,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
   const pass = checks.every((c) => c.ok);
   const status = worstStatus(checks.map((c) => c.status));
 
-  // Categorize each check (brain / ops / meta) and roll up per-category
+  // Categorize each check (brain / ops / skills / meta) and roll up per-category
   // pass/fail counts so the report shows signal-to-noise on the question the
   // operator is asking, not one flat equal-weight list.
   const categorized: CategorizedCheck[] = checks.map((c) => ({
@@ -699,6 +723,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
     brain: { ok: 0, fail: 0 },
     ops: { ok: 0, fail: 0 },
     meta: { ok: 0, fail: 0 },
+    skills: { ok: 0, fail: 0 },
   };
   for (const c of categorized) {
     byCategory[c.category][c.ok ? "ok" : "fail"]++;

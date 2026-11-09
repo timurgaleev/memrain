@@ -115,7 +115,7 @@ describe("enrichThinPhase", () => {
 
     const payload = JSON.stringify({
       title: "Carol",
-      markdown: "Carol is a lead engineer at [[companies/acme]], a robotics company. Her work centres on autonomy.",
+      markdown: 'Carol is a lead engineer at [[companies/acme]], a robotics company. "Carol leads the autonomy team". "I will launch a secret moon project".',
     });
     const r = await enrichThinPhase(storage, { sonnetFn: fakeSonnet(payload) });
     expect(r.ran).toBe(true);
@@ -128,6 +128,9 @@ describe("enrichThinPhase", () => {
 
     const page = await getPage(storage, "people/carol");
     expect(page).not.toBeNull();
+    expect(page!.markdown_body).toStartWith("---\nunverified_quotes:");
+    expect(page!.markdown_body).toContain("I will launch a secret moon project [unverified]");
+    expect(page!.markdown_body).toContain('"Carol leads the autonomy team"');
     expect(page!.markdown_body).toContain("[[companies/acme]]");
     expect(page!.markdown_body.length).toBeGreaterThan("stub".length);
   });

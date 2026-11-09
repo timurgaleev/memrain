@@ -33,6 +33,23 @@ export type BedrockErrorClass =
   | "server"
   | "other";
 
+/** Static operational advice; never includes the provider's error payload. */
+export function bedrockFixHint(cls: BedrockErrorClass, model: string, tier?: "utility" | "reasoning" | "deep"): string {
+  const modelEnv = tier === "deep" ? "MEMRAIN_DEEP_MODEL" : tier === "utility" || model.includes("haiku")
+    ? "MEMRAIN_UTILITY_MODEL" : "MEMRAIN_FACTS_MODEL";
+  switch (cls) {
+    case "credential": return "Refresh the AWS credentials used by this process, then retry.";
+    case "access": return "Check bedrock:InvokeModel permission and regional inference-profile access for this model.";
+    case "model_not_found": return `Check the model id, region and feature override with memrain models; tier default: ${modelEnv}.`;
+    case "quota": return "Inspect the Bedrock quota for this model and region before resuming the batch.";
+    case "throttle": return "Reduce concurrent calls or retry with backoff after the rate limit clears.";
+    case "input_too_long": return "Reduce the input window before retrying; the same input will be refused again.";
+    case "timeout": return "Check network reachability and the request deadline before retrying.";
+    case "server": return "Check Bedrock service availability and retry with backoff.";
+    case "other": return "Inspect server logs and the model configuration with memrain models.";
+  }
+}
+
 // Only failures that stay failed. A credentials-provider error (an instance
 // metadata hiccup) or a bad signature (clock skew) often clears on its own and
 // must not pause every model.
@@ -141,7 +158,7 @@ export function noteBedrockFailure(model: string, err: unknown, now = Date.now()
   const message = err instanceof Error ? err.message : String(err);
   console.warn(
     `[memrain] bedrock: ${cls} failure on ${key === "*" ? "every model" : model} — ` +
-      `batch work pauses these calls for ${COOLDOWN_MS / 60_000} min: ${message.slice(0, 200)}`,
+      `batch work pauses these calls for ${COOLDOWN_MS / 60_000} min: ${message.slice(0, 200)}; ${bedrockFixHint(cls, model)}`,
   );
   _open.set(key, { until: now + COOLDOWN_MS, cause: cls, message });
 }

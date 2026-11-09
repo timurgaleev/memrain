@@ -35,3 +35,11 @@ describe("registerCleanup", () => {
     expect(_registeredCleanupCountForTests()).toBe(1);
   });
 });
+
+
+it("keeps the process alive until a stuck cleanup reaches its deadline", async () => {
+  const modulePath = `${import.meta.dir}/../src/core/process-cleanup.ts`;
+  const code = `import { registerCleanup, triggerCleanupAndExit } from ${JSON.stringify(modulePath)}; registerCleanup("stuck", () => new Promise(() => {})); void triggerCleanupAndExit(42);`;
+  const child = Bun.spawn([process.execPath, "-e", code], { stdout: "pipe", stderr: "pipe" });
+  expect(await child.exited).toBe(42);
+}, 6000);

@@ -14,7 +14,7 @@ import type { Storage } from "../storage.ts";
 import type { Engine } from "../engine/interface.ts";
 import { effectiveReadSourceIds, type AuthInfo } from "../auth-info.ts";
 import { hasScope, parseScopeString } from "../scope.ts";
-import { OperationError } from "../operation-error.ts";
+import { OperationError, type OperationErrorCode } from "../operation-error.ts";
 import { Queue } from "../jobs/queue.ts";
 import {
   AGENT_JOB_TIMEOUT_MS,
@@ -29,7 +29,7 @@ import { intersectBoundTools, parseAuthority, snapshotAuthority, type AgentAutho
 /** Statuses that hold one of the client's concurrent slots. */
 const ACTIVE_STATUSES = ["pending", "running"];
 
-function refuse(code: string, message: string, suggestion?: string): never {
+function refuse(code: OperationErrorCode, message: string, suggestion?: string): never {
   throw new OperationError(code, message, suggestion);
 }
 

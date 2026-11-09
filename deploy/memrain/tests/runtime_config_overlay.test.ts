@@ -4,13 +4,14 @@
  * both names while readers still use the legacy one, the kill switches, the
  * key alphabet and the env-only knobs.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import {
   applyRuntimeEnvOverlay,
+  runtimeOverlayState,
   canonicalKey,
   isRuntimeConfigKey,
   legacyKey,
@@ -18,6 +19,7 @@ import {
   setRuntimeConfig,
   unsetRuntimeConfig,
 } from "../src/core/runtime-config.ts";
+import { checkRuntimeConfigOverlay } from "../src/core/doctor-ops.ts";
 import { putRuntimeConfigRow } from "./helpers/runtime-config-row.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "memrain-rc-overlay-"));
@@ -185,4 +187,29 @@ describe("applyRuntimeEnvOverlay, both prefixes", () => {
     expect(errs.join("\n")).toContain("MEMRAIN_MAINTENANCE");
     expect(errs.join("\n")).not.toContain("=1");
   });
+});
+
+
+it("reports unavailable config overlays without logging driver text", async () => {
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  const query = spyOn(storage.engine(), "query").mockRejectedValue(Object.assign(new Error("secret DSN and SQL text"), { code: "08006" }));
+  try {
+    expect(await applyRuntimeEnvOverlay(storage.engine())).toEqual([]);
+    expect(runtimeOverlayState(storage.engine())).toBe("unavailable");
+    expect(await checkRuntimeConfigOverlay(storage.engine())).toMatchObject({ ok: true, status: "warn" });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0]![0]).toContain("08006");
+    expect(log.mock.calls[0]![0]).not.toContain("secret");
+  } finally { query.mockRestore(); log.mockRestore(); }
+  await applyRuntimeEnvOverlay(storage.engine());
+  expect(runtimeOverlayState(storage.engine())).toBe("ready");
+});
+
+it("keeps missing pre-migration tables quiet", async () => {
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  const query = spyOn(storage.engine(), "query").mockRejectedValue({ code: "42P01" });
+  try {
+    expect(await applyRuntimeEnvOverlay(storage.engine())).toEqual([]);
+    expect(log).not.toHaveBeenCalled();
+  } finally { query.mockRestore(); log.mockRestore(); }
 });

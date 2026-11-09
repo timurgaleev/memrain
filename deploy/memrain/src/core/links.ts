@@ -15,6 +15,7 @@
  * For now the agent writes those types via the explicit `link` MCP
  * tool.
  */
+import { posix } from "node:path";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
@@ -373,7 +374,7 @@ export interface RemoveLinkInput {
 export async function removeLink(
   storage: Storage,
   input: RemoveLinkInput,
-): Promise<{ removed: number }> {
+): Promise<{ removed: number; derived_from_text: { type: string; link_source: string }[]; message?: string }> {
   validateSlug(input.source_slug);
   const target = slugifyTarget(input.target_slug);
   const type = normaliseType(input.type, true);
@@ -390,13 +391,20 @@ export async function removeLink(
   const r = await storage.engine().query<{ removed: number }>(
     `WITH d AS (
        DELETE FROM links
-        WHERE source_slug = $1 AND target_slug = $2 AND type = $3${sourceFilter}
+        WHERE source_slug = $1 AND target_slug = $2 AND type = $3${sourceFilter} AND link_source = 'manual'
         RETURNING 1
      )
      SELECT COUNT(*)::int AS removed FROM d`,
     params,
   );
-  return { removed: r.rows[0]?.removed ?? 0 };
+  const derived = await storage.engine().query<{ type: string; link_source: string }>(
+    `SELECT DISTINCT type, link_source FROM links
+      WHERE source_slug = $1 AND target_slug = $2 AND type = $3${sourceFilter} AND link_source <> 'manual'
+      ORDER BY type, link_source`, params,
+  );
+  return { removed: r.rows[0]?.removed ?? 0, derived_from_text: derived.rows,
+    ...(derived.rows.length ? { message: `Edit the text of ${input.source_slug} with page_edit to remove derived links.` } : {}),
+  };
 }
 
 /**
@@ -499,7 +507,7 @@ export async function graphNeighbors(
   }
   params.push(limit);
   const sql = `${queries.join("\nUNION ALL\n")}
-    ORDER BY written_at DESC
+    ORDER BY written_at DESC, id DESC
     LIMIT $${params.length}`;
   const r = await storage.engine().query<NeighborRow>(sql, params);
   return r.rows;
@@ -662,6 +670,8 @@ export interface TraverseGraphOptions {
    * `source_id = ANY(...)` are traversed. Omitted -> unscoped; `[]` -> nothing.
    */
   sourceIds?: string[];
+  /** Remote reads exclude diary endpoints before walking and limiting. */
+  excludeDiary?: boolean;
 }
 
 export interface TraverseHit {
@@ -673,8 +683,7 @@ export interface TraverseHit {
 /**
  * Recursive N-hop graph walk from `startSlug` over the `links` edge table —
  * the multi-hop counterpart to single-hop `graphNeighbors`/`graphQuery`.
- * Depth-capped, cycle-safe (a node already on the current path is never
- * re-entered), returns each reachable node once at its shortest depth.
+ * Deduplicates each (node, depth), returning the shortest depth per node.
  *
  * `direction` selects which way edges are followed; `both` treats the graph as
  * undirected. Bounded by `maxDepth` AND `limit`. Deterministic, no LLM. The SQL
@@ -685,6 +694,14 @@ export async function traverseGraph(
   startSlug: string,
   opts: TraverseGraphOptions = {},
 ): Promise<TraverseHit[]> {
+  return (await traverseGraphPage(storage, startSlug, opts)).hits;
+}
+
+export async function traverseGraphPage(
+  storage: Storage,
+  startSlug: string,
+  opts: TraverseGraphOptions = {},
+): Promise<{ hits: TraverseHit[]; truncated: boolean }> {
   validateSlug(startSlug);
   const direction = opts.direction ?? "outbound";
   if (!["outbound", "inbound", "both"].includes(direction)) {
@@ -725,35 +742,40 @@ export async function traverseGraph(
   }
   // Tenant scope (mig047): confine the walk to edges in the given sources.
   const scopeFilter = andSourceScope("l.source_id", opts.sourceIds, params);
-  params.push(limit);
+  let diaryFilter = "";
+  if (opts.excludeDiary) {
+    params.push(" \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff");
+    diaryFilter = ` AND l.source_slug NOT LIKE 'life/diary/%' AND l.target_slug NOT LIKE 'life/diary/%'
+      AND NOT EXISTS (SELECT 1 FROM pages dp WHERE dp.slug IN (l.source_slug, l.target_slug)
+        AND lower(btrim(dp.type, $${params.length})) IN ('diary', 'journal'))`;
+  }
+  params.push(limit + 1);
   const limitParam = `$${params.length}`;
 
-  // ponytail: `limit` bounds the OUTPUT (distinct nodes), not the CTE's work —
-  // path-based pruning materializes every simple path up to maxDepth, so a
-  // DENSE graph at high maxDepth (esp. `both`) can fan out super-linearly
-  // before the final GROUP BY. maxDepth (cap 10) is the real cost guard; fine
-  // for memrain's small, sparse wiki-link graph. If the graph ever grows dense,
-  // switch to a per-iteration visited-set cap or lower the `both` ceiling.
+  // ponytail: output limit does not bound traversal work. UNION limits walk
+  // states to nodes × depth, instead of enumerating every simple path. Visible
+  // edges are materialized once so endpoint checks do not repeat at each level.
   const r = await storage.engine().query<{ slug: string; depth: number }>(
-    `WITH RECURSIVE walk(slug, depth, path) AS (
-       SELECT $1::text, 0, ARRAY[$1::text]
-       UNION ALL
-       SELECT ${nextExpr}, w.depth + 1, w.path || ${nextExpr}
+    `WITH RECURSIVE edges AS MATERIALIZED (
+       SELECT DISTINCT l.source_slug, l.target_slug FROM links l
+        WHERE ${liveEdgeSql("l")}${typeFilter}${scopeFilter}${diaryFilter}
+     ), walk(slug, depth) AS (
+       SELECT $1::text, 0
+       UNION
+       SELECT ${nextExpr}, w.depth + 1
        FROM walk w
-       JOIN links l ON ${joinCond}
+       JOIN edges l ON ${joinCond}
        WHERE w.depth < $2
-         AND NOT (${nextExpr} = ANY(w.path))${typeFilter}${scopeFilter}
-         AND ${liveEdgeSql("l")}
      )
      SELECT slug, MIN(depth) AS depth
        FROM walk
-      WHERE depth > 0
+      WHERE depth > 0 AND slug <> $1
       GROUP BY slug
       ORDER BY MIN(depth) ASC, slug ASC
       LIMIT ${limitParam}`,
     params,
   );
-  return r.rows.map((x) => ({ slug: x.slug, depth: Number(x.depth) }));
+  return { hits: r.rows.slice(0, limit).map((x) => ({ slug: x.slug, depth: Number(x.depth) })), truncated: r.rows.length > limit };
 }
 
 // ---------------------------------------------------------------------------
@@ -806,7 +828,7 @@ const MARKDOWN_LINK_RE = /\[[^\]\n]{1,512}\]\(([^)\s]+)\)/g;
 const MAX_SCAN_LEN = 1_000_000;
 
 /**
- * Mask fenced (```...```) and inline (`...`) code spans with equal-length
+ * Mask HTML comments, fenced (```...```) and inline (`...`) code spans with equal-length
  * whitespace. Length-preserving on purpose: the gazetteer scans by offset, so a
  * collapsing strip would shift every later match. A `[[foo]]` or `[Name](foo)`
  * inside code is a sample, not a real reference — blanking the span keeps it out
@@ -816,6 +838,13 @@ export function stripCodeBlocks(content: string): string {
   let out = "";
   let i = 0;
   while (i < content.length) {
+    if (content.startsWith("<!--", i)) {
+      const close = content.indexOf("-->", i + 4);
+      const end = close < 0 ? content.length : close + 3;
+      out += " ".repeat(end - i);
+      i = end;
+      continue;
+    }
     if (content.startsWith("```", i)) {
       const end = content.indexOf("```", i + 3);
       if (end === -1) {
@@ -876,14 +905,15 @@ export function extractWikilinks(body: string): string[] {
 
 /**
  * Extract distinct `[Name](path)` markdown-link targets from a body. External
- * URLs are skipped; a leading `../` and a trailing `.md` are peeled so both
- * `[A](../people/alice.md)` and `[A](people/alice)` yield `people/alice`. A
- * heading anchor is dropped. Code spans are masked as in extractWikilinks.
+ * URLs are skipped. Explicit ./ and ../ paths resolve relative to sourceSlug's
+ * directory; other paths keep the repository's root-slug convention. Without a
+ * sourceSlug the legacy leading-../ stripping remains. Percent escapes are
+ * decoded, and an unescaped heading anchor and trailing .md are dropped.
  * Unlike a bare wikilink, a markdown link only becomes an edge when it resolves
  * to a real page (see syncWikilinksForPage) — memrain has no dir whitelist to
  * pre-filter these.
  */
-export function extractMarkdownLinks(body: string): string[] {
+export function extractMarkdownLinks(body: string, sourceSlug?: string): string[] {
   if (typeof body !== "string" || body.length === 0) return [];
   const scannable = stripCodeBlocks(body.slice(0, MAX_SCAN_LEN));
   const seen = new Set<string>();
@@ -894,18 +924,18 @@ export function extractMarkdownLinks(body: string): string[] {
     match = MARKDOWN_LINK_RE.exec(scannable)
   ) {
     const captured = match[1];
-    if (!captured || captured.includes("://")) continue;
-    const target = captured
-      .replace(/^(?:\.\.\/)+/, "")
-      // Measured linear through extractMarkdownLinks: 5.2 ms at a 500 K-char
-      // `#` target, ratio 2.0 on a doubling. MARKDOWN_LINK_RE's group 1 is
-      // `[^)\s]+`, which excludes every whitespace char — with no newline in
-      // the string `.*` always reaches the end and `$` succeeds at the first
-      // `#`, so there is no failing suffix to backtrack over.
-      // eslint-disable-next-line regexp/no-super-linear-move
-      .replace(/#.*$/, "")
-      .replace(/\.md$/, "")
-      .trim();
+    if (!captured) continue;
+    let target: string;
+    try { target = decodeURIComponent(captured.split("#", 1)[0]!).trim(); }
+    catch { continue; }
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) continue;
+    if (target.startsWith("./") || target.startsWith("../")) {
+      target = sourceSlug === undefined
+        ? target.replace(/^(?:\.\.?\/)+/, "")
+        : posix.normalize(posix.join(posix.dirname(sourceSlug), target));
+    }
+    if (target === ".." || target.startsWith("../")) continue;
+    target = target.replace(/\.md$/, "");
     if (target.length > 0) seen.add(target);
   }
   return [...seen];
@@ -970,7 +1000,7 @@ export async function syncWikilinksForPage(
   // dir whitelist to pre-filter it, so the resolver's existence check is the
   // gate. An unresolved path makes no edge; when it could still name a page
   // it is recorded as wanted, so the edge appears once that page exists.
-  for (const path of extractMarkdownLinks(body)) {
+  for (const path of extractMarkdownLinks(body, sourceSlug)) {
     const r = await resolver.resolve(path);
     if (r.slug === sourceSlug || r.slug === "unknown") continue;
     if (r.resolved) byTarget.set(r.slug, true);
@@ -992,7 +1022,7 @@ export async function syncWikilinksForPage(
     const del = await tx.query<{ c: number }>(
       `WITH d AS (
          DELETE FROM links
-          WHERE source_slug = $1 AND type = 'wikilink'${delScope}
+          WHERE source_slug = $1 AND type = 'wikilink' AND link_source = 'markdown'${delScope}
           RETURNING 1
        )
        SELECT COUNT(*)::int AS c FROM d`,
@@ -1278,7 +1308,7 @@ export async function syncCodeRefsForPage(
  * the capped `links-stale` cycle phase and by `memrain extract --stale`
  * (links-stale-sweep.ts); a page write re-extracts its own page inline.
  */
-export const LINK_EXTRACTOR_VERSION_TS = "2026-10-10T00:00:00Z";
+export const LINK_EXTRACTOR_VERSION_TS = "2026-11-09T00:00:00Z";
 
 /**
  * Stamp a page as freshly link-extracted. Called AFTER the full link-sync set

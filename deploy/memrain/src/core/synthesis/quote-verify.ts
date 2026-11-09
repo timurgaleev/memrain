@@ -53,6 +53,12 @@ export interface QuoteVerification {
   unverified_quotes: Array<{ text: string; reason: "quote_not_in_evidence" }>;
 }
 
+export function unverifiedQuotesFrontmatter(quotes: readonly { text: string }[] = []): string {
+  if (quotes.length === 0) return "";
+  const items = quotes.map(q => `  - ${JSON.stringify(q.text.replace(/\s+/g, " "))}`);
+  return `---\nunverified_quotes:\n${items.join("\n")}\n---\n`;
+}
+
 interface Folded {
   /** Lowercased, whitespace-collapsed, typography-folded text. */
   norm: string;

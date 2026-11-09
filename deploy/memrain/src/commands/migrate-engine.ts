@@ -140,7 +140,7 @@ export async function runMigrateEngine(opts: MigrateEngineOptions): Promise<Copy
       allowDroppedColumns: opts.allowDroppedColumns,
       log: (line) => console.error(line),
     });
-    console.log(JSON.stringify(summary, null, 2));
+    console.log(JSON.stringify({ ...summary, completedAt: new Date().toISOString() }, null, 2));
     return summary;
   } finally {
     await src.close();

@@ -9,12 +9,13 @@
  * engine-only harness, mirroring how `extract-timeline` degrades.
  */
 import type { Storage } from "../storage.ts";
+import { retireDeletedSourceEvents } from "../chronicle/retire-events.ts";
 import {
   reconcilePageMirrors,
   type ReconcilePageMirrorsResult,
 } from "../page-index.ts";
 
-export type MirrorPagesResult = ReconcilePageMirrorsResult;
+export type MirrorPagesResult = ReconcilePageMirrorsResult & { retired_events?: number };
 
 export interface MirrorPagesOptions {
   /** Cap pages reconciled per run (drains a backlog over several cycles). */
@@ -27,5 +28,7 @@ export async function mirrorPagesPhase(
 ): Promise<MirrorPagesResult> {
   const o: Parameters<typeof reconcilePageMirrors>[1] = {};
   if (opts.maxPerRun !== undefined) o.maxPerRun = opts.maxPerRun;
-  return reconcilePageMirrors(storage, o);
+  const retired = await retireDeletedSourceEvents(storage);
+  const result = await reconcilePageMirrors(storage, o);
+  return { ...result, ...(retired ? { retired_events: retired } : {}) };
 }

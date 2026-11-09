@@ -66,6 +66,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--per-source",
   "--pglite",
   "--postgres",
+  "--probe",
   "--promote",
   "--purge",
   "--quiescent",
@@ -108,10 +109,10 @@ const FALSE_LITERALS: ReadonlySet<string> = new Set(["false", "0", "no"]);
 export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--access-ttl", "--anchor", "--args", "--baseline", "--batch-size", "--boost-weight", "--candidate",
   "--bound-slug-prefixes", "--budget", "--client", "--client-file", "--config-a",
-  "--config-b", "--corpus",
+  "--config-b", "--corpus", "--rds-instance", "--efs-id", "--copy-report",
   "--date-context", "--days", "--dedup-type-ratio", "--depth", "--description", "--epsilon",
   "--dir", "--down", "--example-limit", "--expect-source", "--expect-version",
-  "--expected-doc", "--expected-revision", "--expected-top1", "--family",
+  "--expected-doc", "--expected-revision", "--expected-top1", "--expected-version", "--family",
   "--federated-read", "--file", "--format",
   "--filter", "--from", "--grant", "--grant-types", "--host", "--id", "--indexed-policy",
   "--input", "--k", "--keep-days", "--kind", "--kinds", "--label", "--limit", "--max-drop",
@@ -121,7 +122,7 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--payload", "--pglite-path", "--phases", "--port", "--postgres-url",
   "--prereg", "--priority", "--qrels", "--query", "--question", "--rate-limit-per-minute",
   "--reason", "--redirect-uris", "--refresh-ttl", "--repeats", "--replaces", "--rounds", "--rrf-k", "--scopes",
-  "--sealed-fraction", "--search-mode", "--seed", "--severity", "--since", "--skill", "--slug", "--slugs", "--split",
+  "--via", "--sealed-fraction", "--search-mode", "--seed", "--severity", "--since", "--skill", "--slug", "--slugs", "--split",
   "--source", "--source-id", "--source-path", "--source-slug", "--stale-days",
   "--status", "--sync-policy", "--tag", "--take", "--takes-holders",
   "--tables", "--target", "--tenant-mode", "--threshold", "--title", "--to",
@@ -154,6 +155,11 @@ const UNIVERSAL_FLAGS: ReadonlySet<string> = new Set(["--help"]);
  * rows come from those modules, and the test reads them from there.
  */
 export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["aliases", new Set(["--source", "--limit", "--json"])],
+  ["models", new Set(["--probe", "--json", "--max-cost-usd"])],
+  ["engine", new Set(["--probe", "--json"])],
+  ["backup", new Set(["--rds-instance", "--efs-id", "--copy-report"])],
+  ["import", new Set(["--dir", "--source", "--apply", "--dry-run"])],
   ["init", new Set(["--pglite", "--postgres"])],
   ["serve", new Set(["--host", "--http", "--port"])],
   ["index", new Set<string>()],
@@ -186,7 +192,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--json", "--k", "--max-drop", "--max-latency-x", "--max-pool", "--min-recall",
       "--modes", "--no-expand", "--out", "--prereg", "--qrels", "--record",
       "--relational-arm", "--rerank", "--rrf-k", "--sealed-fraction", "--seed",
-      "--split", "--write-baseline",
+      "--split", "--via", "--write-baseline",
     ]),
   ],
   ["eval-probe", new Set(["--limit", "--max-usd"])],
@@ -262,6 +268,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["skillify", new Set(["--dry-run", "--out", "--slug", "--strict"])],
   ["check-resolvable", new Set(["--limit", "--strict", "--threshold"])],
   ["orphans", new Set<string>()],
+  ["rename", new Set(["--expected-version", "--source"])],
   [
     "page-retype",
     new Set([
@@ -318,7 +325,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   [
     "transcripts",
     new Set([
-      "--dry-run", "--facts", "--format", "--hook-stdin", "--json", "--max-cost-usd", "--no-embed", "--since",
+      "--apply", "--dry-run", "--facts", "--format", "--hook-stdin", "--json", "--max-cost-usd", "--no-embed", "--since",
       "--source", "--token-file", "--url",
     ]),
   ],
@@ -341,10 +348,10 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
     "--dry-run",
     new Set([
       "apply-migrations", "auth", "embed", "extract", "jobs", "lint",
-      "connectors", "migrate-engine", "reindex", "skillify", "transcripts",
+      "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts",
     ]),
   ],
-  ["--apply", new Set(["eval-prune", "page-retype", "quarantine", "search", "secrets"])],
+  ["--apply", new Set(["import", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts"])],
   ["--fix", new Set(["lint"])],
 ]);
 

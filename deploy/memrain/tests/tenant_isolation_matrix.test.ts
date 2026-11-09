@@ -104,6 +104,7 @@ async function seedMatrixExtras(): Promise<void> {
     );
     // Token callers read world facts only; give each tenant one on the shared entity.
     await addFact(storage, { entity_slug: ENTITY_SLUG, fact: `${tag}_FACT_world`, source_id: who, visibility: "world" });
+    await addFact(storage, { entity_slug: ENTITY_SLUG, fact: `${KEYWORD} ${tag}_QUERY_FACT`, source_id: who, visibility: "world" });
   }
   await call("chronicle_backfill", {});
 }
@@ -159,7 +160,12 @@ describe("isolated operations never cross the source boundary", () => {
       const ownArgs = ownArgsFor(row);
       const sees = async (rowArgs: Record<string, unknown>, tokens: readonly string[], authInfo?: AuthInfo) =>
         leakedToken(await call(row.name, rowArgs, authInfo), rowArgs, tokens) !== undefined;
-      if (!(await sees(args, TENANT_B_TOKENS))) {
+      if (row.name === "code_blast" || row.name === "code_flow") {
+        const operator = await call(row.name, args);
+        const data = JSON.parse(operator.content[0]!.text);
+        expect(data.result).toBe("ambiguous");
+        expect(data.candidates.map((c: { def_chunk_id: string }) => c.def_chunk_id).sort()).toEqual(["ch-a-pay", "ch-b-pay"]);
+      } else if (!(await sees(args, TENANT_B_TOKENS))) {
         throw new Error(`VACUOUS: the operator sees no tenant-B data through ${row.name}; fix the seed or the row`);
       }
       if (!(await sees(ownArgs, row.own ? [row.own] : TENANT_A_TOKENS, auth(A))) || !(await sees(args, TENANT_B_TOKENS, auth(B)))) {

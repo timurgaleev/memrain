@@ -28,6 +28,7 @@
  */
 import { createHash } from "node:crypto";
 import type { Engine } from "../engine/interface.ts";
+import { notSynthesizedDocSql } from "../page-index.ts";
 import type { Storage } from "../storage.ts";
 import { putPage } from "../pages.ts";
 import { resolveLlmFn, type LlmFn } from "../llm/haiku.ts";
@@ -302,6 +303,7 @@ async function discoverDocuments(
        JOIN chunks c ON c.document_id = d.id
       WHERE d.deleted_at IS NULL
         AND ${quarantineFilterFragment("d")}
+        AND ${notSynthesizedDocSql("d")}
       GROUP BY d.id, d.source_id, d.effective_date, d.ingested_at
       ORDER BY MAX(d.updated_at) DESC`,
   );

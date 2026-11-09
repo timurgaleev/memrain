@@ -174,6 +174,14 @@ describe("memrain transcripts ingest run controls", () => {
     expect(await runTranscripts({ sub: "ingest", file: logs, since: "yesterday-ish", json: true, configPath: cfgPath })).toBe(1);
   });
 
+  it("relative --since uses the same boundary as search without opening a database in preview", async () => {
+    const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-03T00:00:00Z"));
+    try {
+      expect(await runTranscripts({ sub: "ingest", file: logs, since: "1d", dryRun: true, json: true })).toBe(0);
+      expect(lastJson().since).toEqual({ since: "2026-10-02T00:00:00.000Z", sessions_before: 2 });
+    } finally { clock.mockRestore(); }
+  });
+
   it("status reports sessions per source and format, and the watermark", async () => {
     expect(await runTranscripts({ sub: "status", json: true, configPath: cfgPath })).toBe(0);
     const out = lastJson();

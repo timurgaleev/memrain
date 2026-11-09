@@ -21,6 +21,7 @@ import {
   type RemediationInput,
 } from "../src/core/remediation.ts";
 import { makeRemediationHandler } from "../src/core/jobs/remediation-handlers.ts";
+import { skippedCycleResult } from "../src/core/cycle/index.ts";
 import { UnrecoverableJobError } from "../src/core/jobs/types.ts";
 
 describe("classifyRemediation", () => {
@@ -226,6 +227,7 @@ describe("remediation job handler dispatch", () => {
     const handler = makeRemediationHandler({
       runCyclePhase: async (p) => {
         calls.push(`phase:${p}`);
+        return { ...skippedCycleResult("aborted", ["embed-stale"]), outcome: "complete", ok: true, status: "ok", phases: [{ phase: "embed-stale", ok: true, status: "ok", durationMs: 1 }] };
       },
     });
     await handler({ action: "cycle-phase", phase: "embed-stale" }, { job: {} as never });
@@ -240,6 +242,7 @@ describe("remediation job handler dispatch", () => {
       },
       runCyclePhase: async (p) => {
         calls.push(p);
+        return skippedCycleResult("aborted", ["embed-stale"]);
       },
     });
     const abort = new AbortController();

@@ -54,7 +54,14 @@ export type ModelFeature =
  *  back to the reasoning model (Sonnet), so enabling the tier is a deliberate,
  *  cost-guarded opt-in and disabling it never regresses. */
 export function resolveModel(tier: ModelTier, override?: string, feature?: ModelFeature): string {
-  const featureEnv = feature ? process.env[`MEMRAIN_${feature.toUpperCase()}_MODEL`] : undefined;
-  const v = override || featureEnv || process.env[TIER_ENV[tier]] || tierDefault(tier);
-  return tier === "deep" && !v ? tierDefault("reasoning") : v;
+  return resolveModelWithSource(tier, override, feature).model;
+}
+
+export function resolveModelWithSource(tier: ModelTier, override?: string, feature?: ModelFeature) {
+  const featureKey = feature ? `MEMRAIN_${feature.toUpperCase()}_MODEL` : undefined;
+  if (override) return { model: override, source: "override" as const, key: null };
+  if (featureKey && process.env[featureKey]) return { model: process.env[featureKey]!, source: "feature_env" as const, key: featureKey };
+  const key = TIER_ENV[tier];
+  if (process.env[key]) return { model: process.env[key]!, source: "tier_env" as const, key };
+  return { model: tierDefault(tier) || tierDefault("reasoning"), source: "default" as const, key: null };
 }

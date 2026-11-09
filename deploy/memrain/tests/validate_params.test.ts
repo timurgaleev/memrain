@@ -64,7 +64,8 @@ describe("validateParams — unit", () => {
         expect(isOperationError(e)).toBe(true);
         expect((e as { code: string }).code).toBe("invalid_params");
         expect((e as Error).message).toBe("search: `q` is required");
-        expect((e as { suggestion: string }).suggestion).toMatch(/^Required: `q` \(string\): Natural-language query\. Optional: `k` \(integer\)/);
+        expect((e as { suggestion: string }).suggestion).toMatch(/^Required: `q` \(string\): Natural-language query\. Optional: `types` \(array\)/);
+        expect((e as { suggestion: string }).suggestion).toContain("`k` (integer)");
       }
     }
     // Whitespace is left to the handler: several tools accept it.
@@ -149,9 +150,9 @@ describe("validateParams — unit", () => {
     }
   });
 
-  it("points page_list `prefix` at the filters that exist", () => {
+  it("points page_list `prefix` at slug_prefix", () => {
     const e = caught(() => validateParams(opByName("page_list"), { prefix: "people/" }));
-    expect(e.suggestion).toContain("`prefix`: page_list has no prefix filter");
+    expect(e.suggestion).toContain("slug_prefix");
   });
 
   it("lists the accepted arguments with the required ones marked", () => {
@@ -162,7 +163,7 @@ describe("validateParams — unit", () => {
     expect(e.suggestion).toContain("`slug` (required)");
     expect(e.suggestion).toContain("markdown_body");
     const s = caught(() => validateParams(search, { query: "x" }));
-    expect(s.suggestion).toContain("Accepted arguments: `q` (required), `k`,");
+    expect(s.suggestion).toContain("Accepted arguments: `types`, `slug_prefix`, `q` (required), `k`,");
   });
 
   it("reports at most 5 unknown keys, each truncated to 64 characters", () => {

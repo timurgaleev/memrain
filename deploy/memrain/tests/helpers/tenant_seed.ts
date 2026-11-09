@@ -206,8 +206,11 @@ export async function seedTenantContract(storage: Storage): Promise<{ factIdA: n
   // code_edges_symbol for the recursive walks (code_blast / code_flow).
   await seedCodeEdge("ch-a-pay", CODE_SYM, A_CALLEE, A); // flow a
   await seedCodeEdge("ch-b-pay", CODE_SYM, B_CALLEE, B); // flow b
-  await seedCodeEdge("ch-a-pay", A_CALLER, CODE_SYM, A); // blast a
-  await seedCodeEdge("ch-b-pay", B_CALLER, CODE_SYM, B); // blast b
+  // Each caller has its own definition chunk, as the code indexer produces.
+  await seedChunk("ch-a-caller", DOC_A_CODE, 1, `${A_CALLER} calls ${CODE_SYM}`, 6, 8, A_CALLER);
+  await seedChunk("ch-b-caller", DOC_B_CODE, 1, `${B_CALLER} calls ${CODE_SYM}`, 6, 8, B_CALLER);
+  await seedCodeEdge("ch-a-caller", A_CALLER, CODE_SYM, A); // blast a
+  await seedCodeEdge("ch-b-caller", B_CALLER, CODE_SYM, B); // blast b
 
   // --- synth_takes (list_takes) — scoped via source_ref → documents.source_id ---
   // Fixed, distinct generation times: two inserts in a row can share a

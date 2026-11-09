@@ -30,12 +30,14 @@ import type { Engine } from "../engine/interface.ts";
 import { findLiveClaim, type ClaimIdentity } from "../facts.ts";
 import { DEFAULT_FACT_KIND } from "../facts-decay.ts";
 import { phaseFenceCheck } from "./phase-context.ts";
+import { factSourceEligibleSql } from "../quarantine.ts";
+import { claimsDiverge } from "../fact-divergence.ts";
 
 /** Author stamped on a promoted take — also half its claim identity. */
 const CONSOLIDATE_WRITER = "facts-consolidate";
 
 export interface ConsolidateFactsOptions {
-  /** Greedy cosine cluster threshold. Default 0.85. */
+  /** Greedy cosine threshold. Default 0.85; untyped claims have a 0.95 floor. */
   clusterThreshold?: number;
   /** Minimum unconsolidated facts in a bucket before it consolidates. Default 3. */
   minFactsPerBucket?: number;
@@ -72,6 +74,7 @@ interface FactCandidate {
   kind: string | null;
   embedding: number[];
   written_at: string;
+  claim_metric?: string | null;
 }
 
 const DEFAULT_THRESHOLD = 0.85;
@@ -111,7 +114,8 @@ export function clusterFacts(
   for (const f of facts) {
     let placed = false;
     for (const c of clusters) {
-      if (cosineSimilarity(f.embedding, c[0]!.embedding) >= threshold) {
+      const floor = f.claim_metric && c[0]!.claim_metric ? threshold : Math.max(0.95, threshold);
+      if (cosineSimilarity(f.embedding, c[0]!.embedding) >= floor && c.every(member => !claimsDiverge(f.fact, member.fact))) {
         c.push(f);
         placed = true;
         break;
@@ -158,6 +162,7 @@ export async function consolidateFactsPhase(
        FROM entity_facts
       WHERE consolidated = false
         AND forgotten_at IS NULL
+        AND ${factSourceEligibleSql()}
         AND embedding IS NOT NULL
         AND btrim(fact) <> ''
         -- dimensional ontology rows have their own read path, not consolidation.
@@ -224,13 +229,15 @@ async function consolidateBucket(
     kind: string | null;
     embedding: string;
     written_at: string;
+    claim_metric: string | null;
   }>(
-    `SELECT id, fact, confidence, kind, embedding::text AS embedding,
+    `SELECT id, fact, confidence, kind, claim_metric, embedding::text AS embedding,
             written_at::text AS written_at
        FROM entity_facts
       WHERE source_id = $1 AND entity_slug = $2
         AND consolidated = false
         AND forgotten_at IS NULL
+        AND ${factSourceEligibleSql()}
         AND embedding IS NOT NULL
         AND btrim(fact) <> ''
         -- dimensional ontology rows have their own read path, not consolidation.
@@ -252,6 +259,7 @@ async function consolidateBucket(
       kind: r.kind,
       embedding,
       written_at: r.written_at,
+      claim_metric: r.claim_metric,
     });
   }
   if (candidates.length < cfg.minPerBucket) {

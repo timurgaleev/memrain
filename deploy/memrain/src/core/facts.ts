@@ -14,6 +14,10 @@
  * under). Chunk-sourced facts keep their narrower index-backed idempotency on
  * (entity_slug, fact, source_chunk_id, speaker) on top of it (migration 132).
  */
+import { factSourceEligibleSql } from "./quarantine.ts";
+import { supersededValidUntilSql } from "./fact-validity.ts";
+import { factRemoteEligibleSql } from "./fact-visibility.ts";
+import { getWithdrawalDetail, type WithdrawalDetail } from "./fact-withdrawals.ts";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
@@ -40,6 +44,7 @@ import type { BudgetTracker } from "./budget.ts";
 import { guardFields } from "./secret-scan.ts";
 import { withdrawLockKey } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
+import { readEntityIdentity, type EntityIdentity } from "./person-identity.ts";
 
 /**
  * Insert-time dedup / supersede knobs (migration 038 fact embedding + the
@@ -454,6 +459,9 @@ export async function adoptUnattributedClaim(
 
 export interface FactRow {
   id: number;
+  source_id: string;
+  /** Number of visible copies represented by this row; absent on audit reads. */
+  collapsed_count?: number;
   entity_slug: string;
   fact: string;
   confidence: number;
@@ -488,6 +496,7 @@ export interface AddFactResult {
   /** Set when the claim was withdrawn by an earlier forget (migration 112):
    *  nothing was written and `id` is null. */
   withdrawn?: true;
+  withdrawn_detail?: WithdrawalDetail;
 }
 
 /**
@@ -583,19 +592,15 @@ export async function addFact(
   // and the paid embed/classify path: a withdrawn claim costs nothing and
   // writes nothing. The insert trigger enforces the same rule for every other
   // write path; this only spares the tombstone and the Bedrock call.
-  if (
-    await isClaimWithdrawn(storage.engine(), {
-      source_id: effectiveSource,
-      visibility: visibility ?? "private",
-      entity_slug: input.entity_slug,
-      fact,
-    })
-  ) {
+  const withdrawalKey = { source_id: effectiveSource, visibility: visibility ?? "private", entity_slug: input.entity_slug, fact };
+  const withdrawnDetail = await getWithdrawalDetail(storage.engine(), withdrawalKey);
+  if (withdrawnDetail) {
     return {
       id: null,
       entity_slug: input.entity_slug,
       inserted: false,
       withdrawn: true,
+      withdrawn_detail: withdrawnDetail,
     };
   }
 
@@ -827,9 +832,10 @@ export async function addFact(
       await tx.query(
         `UPDATE entity_facts
             SET forgotten_at = NOW(), forgotten_reason = $2,
-                forgotten_cause = 'supersede', superseded_by = $3
+                forgotten_cause = 'supersede', superseded_by = $3,
+                valid_until = ${supersededValidUntilSql(4)}
           WHERE id = $1 AND forgotten_at IS NULL`,
-        [supersededId, `superseded by fact ${newId}`, newId],
+        [supersededId, `superseded by fact ${newId}`, newId, validFrom],
       );
     }
     return { id: newId, inserted };
@@ -840,6 +846,7 @@ export async function addFact(
       entity_slug: input.entity_slug,
       inserted: false,
       withdrawn: true,
+      withdrawn_detail: await getWithdrawalDetail(storage.engine(), withdrawalKey),
     };
   }
   return { id: landed.id, entity_slug: input.entity_slug, inserted: landed.inserted };
@@ -884,6 +891,9 @@ export interface ListFactsOptions {
    * `order`. The caller embeds the query (entityRecall does, falls-open).
    */
   queryVector?: number[];
+  /** Optional cosine floor for a focused semantic read; unembedded rows are omitted. */
+  minSimilarity?: number;
+  excludeDiary?: boolean;
   limit?: number;
   /**
    * Apply confidence decay (migration 037 `kind`/`valid_until` consumer):
@@ -946,6 +956,7 @@ export async function listFacts(
 ): Promise<FactRow[]> {
   const params: unknown[] = [];
   const where: string[] = [];
+  if (opts.excludeDiary) where.push(factRemoteEligibleSql());
   // entity_slug is OPTIONAL: omit it for a cross-entity "what did I learn"
   // recall (an entity-less filtered recall). The visibility floor
   // + source scoping applied by the caller still gate an entity-less scan.
@@ -975,6 +986,7 @@ export async function listFacts(
   // surfaces opt in explicitly.
   if (opts.include_forgotten !== true) {
     where.push("forgotten_at IS NULL");
+    where.push(factSourceEligibleSql());
   }
   // Dimensional ontology rows (mig097) are read through getOntology, not the
   // free-text fact list — keep them out of every recall/list result.
@@ -1020,6 +1032,11 @@ export async function listFacts(
   if (hasQueryVector) {
     params.push(JSON.stringify(opts.queryVector));
     order = `embedding <=> $${params.length}::vector ASC NULLS LAST, confidence DESC, written_at DESC, id DESC`;
+    if (opts.minSimilarity !== undefined) {
+      const vectorParam = params.length;
+      params.push(opts.minSimilarity);
+      where.push(`1 - (embedding <=> $${vectorParam}::vector) >= $${params.length}`);
+    }
   } else {
     order =
       opts.order === "recency"
@@ -1038,8 +1055,15 @@ export async function listFacts(
   // below the confidence-DESC window could be missed.
   const sqlLimit = wantDecay ? DECAY_FETCH_CAP : limit;
   params.push(sqlLimit);
+  const collapseKey = "entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact)";
+  const eligible = `SELECT * FROM entity_facts WHERE ${where.join(" AND ")}`;
+  const readSet = opts.include_forgotten === true ? eligible :
+    `SELECT DISTINCT ON (${collapseKey}) *,
+            (count(*) OVER (PARTITION BY ${collapseKey}))::int AS collapsed_count
+       FROM (${eligible}) eligible
+       ORDER BY ${collapseKey}, written_at DESC, id DESC`;
   const r = await storage.engine().query<FactRow>(
-    `SELECT id, entity_slug, fact, confidence,
+    `SELECT id, source_id, entity_slug, fact, confidence,
             source_slug, source_chunk_id, written_by,
             written_at::text AS written_at,
             kind, notability,
@@ -1047,9 +1071,8 @@ export async function listFacts(
             valid_until::text AS valid_until,
             visibility, superseded_by, consolidated_into,
             context, source_session, attributed_to,
-            forgotten_at::text AS forgotten_at
-       FROM entity_facts
-       WHERE ${where.length > 0 ? where.join(" AND ") : "1=1"}
+            forgotten_at::text AS forgotten_at${opts.include_forgotten === true ? "" : ", collapsed_count"}
+       FROM (${readSet}) facts
        ORDER BY ${order}
        LIMIT $${params.length}`,
     params,
@@ -1133,7 +1156,7 @@ export async function listSupersessions(
       : 50;
   params.push(limit);
   const r = await storage.engine().query<FactRow>(
-    `SELECT id, entity_slug, fact, confidence,
+    `SELECT id, source_id, entity_slug, fact, confidence,
             source_slug, source_chunk_id, written_by,
             written_at::text AS written_at,
             kind, notability,
@@ -1221,6 +1244,7 @@ export interface EntityRecallOptions {
 
 export interface EntityRecallResult {
   slug: string;
+  identity?: EntityIdentity;
   /** null when the entity has no page row yet (soft-stub case). */
   page: PageRow | null;
   facts: FactRow[];
@@ -1290,6 +1314,7 @@ export async function entityRecall(
     outPage = rest as PageRow;
   }
   const out: EntityRecallResult = { slug, page: outPage, facts, timeline };
+  if (page && !opts.redact_body) out.identity = await readEntityIdentity(storage.engine(), page);
   if (opts.include_pending === true) {
     try {
       out.pending_consolidation_count = await countUnconsolidatedFacts(

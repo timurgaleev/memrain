@@ -1,6 +1,7 @@
+import { resolveDateBoundary } from "../core/search/filters.ts";
 /**
  * `memrain transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code]
- *                           [--source ID] [--since ISO|auto] [--no-embed]
+ *                           [--source ID] [--since ISO|7d|auto] [--no-embed]
  *                           [--facts --max-cost-usd N] [--dry-run] [--json]`
  * `memrain transcripts status [--source ID] [--json]`
  * `memrain transcripts push <path> --url URL --token-file F [--hook-stdin] [--dry-run] [--json]`
@@ -72,6 +73,7 @@ import {
   type TranscriptFormat,
   type TranscriptSession,
 } from "../core/transcripts/types.ts";
+import { repairTranscriptOrigin, type AgentSessionOrigin } from "../core/transcripts/origin-repair.ts";
 import { withStorage } from "./with-storage.ts";
 
 export interface TranscriptsCmdOptions {
@@ -81,6 +83,7 @@ export interface TranscriptsCmdOptions {
   format?: string;
   sourceId?: string;
   dryRun?: boolean;
+  apply?: boolean;
   json?: boolean;
   configPath?: string;
   /** Test seam — deterministic embedder for the search mirror (no Bedrock). */
@@ -228,7 +231,8 @@ function readTranscriptDir(dir: string, override: TranscriptFormat | undefined):
   diag.malformed_lines = malformed;
   // A directory of nothing but empty logs is empty; any other file that
   // yielded nothing makes it drift.
-  diag.format_drift = sessions.length === 0 && diag.bytes > 0 && diag.empty_sessions < diag.skipped.length;
+  diag.format_drift = sessions.length === 0 && diag.bytes > 0 && diag.skipped.some(s =>
+    !["empty_session", "exec rollout", "subagent rollout"].includes(s.reason));
   return { sessions, diagnostics: diag };
 }
 
@@ -308,6 +312,40 @@ async function extractFactsForParts(
   return run;
 }
 
+async function runOriginRepair(opts: TranscriptsCmdOptions): Promise<number> {
+  if (!opts.file) return fail("repair-origin: <path> is required", opts.json);
+  if (opts.apply && opts.dryRun) return fail("--apply and --dry-run cannot be combined", opts.json);
+  const format = opts.format ?? "auto";
+  if (format !== "auto" && !isTranscriptFormat(format)) return fail("unknown transcript format", opts.json);
+  const override = format === "auto" ? undefined : format as TranscriptFormat;
+  const sessions: AgentSessionOrigin[] = [];
+  try {
+    const files = statSync(opts.file).isDirectory() ? sessionLogFiles(opts.file, override) : [opts.file];
+    for (const file of files) {
+      const parsed = readTranscriptFile(file, override);
+      if (typeof parsed === "string") return fail(parsed, opts.json);
+      if (parsed.diagnostics.format_drift || parsed.diagnostics.malformed_lines) {
+        return fail(`${basename(file)}: incomplete or unrecognized log; origin repair refused`, opts.json);
+      }
+      sessions.push(...parsed.sessions.filter(s => s.origin === "agent").map(s => ({ format: s.format, id: s.id })));
+      if (parsed.diagnostics.format === "codex") {
+        sessions.push(...parsed.diagnostics.skipped.filter(s => s.reason === "exec rollout" && s.id)
+          .map(s => ({ format: "codex", id: s.id! })));
+      }
+    }
+    const storage = new Storage(loadConfig(opts.configPath));
+    const result = await withStorage(storage, () => repairTranscriptOrigin(storage, sessions, opts.sourceId ?? "default", opts.apply === true));
+    if (opts.json) console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+    else {
+      for (const page of result.pages) console.log(`${page.slug}: ${page.facts} fact(s)`);
+      console.log(`${result.applied ? "Applied" : "Preview"}: ${result.facts} fact(s); ${result.changed} changed.`);
+    }
+    return 0;
+  } catch (e) {
+    return fail(`origin repair failed: ${e instanceof Error ? e.message : String(e)}`, opts.json);
+  }
+}
+
 interface IngestContext {
   file: string;
   formatLabel: string;
@@ -317,10 +355,12 @@ interface IngestContext {
 }
 
 export async function runTranscripts(opts: TranscriptsCmdOptions): Promise<number> {
+  if (opts.apply && opts.sub !== "repair-origin") return fail("--apply is only valid for repair-origin", opts.json);
+  if (opts.sub === "repair-origin") return runOriginRepair(opts);
   if (opts.sub === "status") return runStatus(opts);
   if (opts.sub === "push") return runPush(opts);
   if (opts.sub !== "ingest") {
-    console.error("memrain transcripts: subcommand required (ingest <path> | status | push <path>)");
+    console.error("memrain transcripts: subcommand required (ingest <path> | status | push <path> | repair-origin <path>)");
     return 1;
   }
   if (!opts.file) return fail("ingest: <path> is required", opts.json);
@@ -332,8 +372,11 @@ export async function runTranscripts(opts: TranscriptsCmdOptions): Promise<numbe
   const since = opts.since?.trim();
   let sinceMs: number | null = null;
   if (since !== undefined && since !== "auto") {
-    sinceMs = Date.parse(since);
-    if (!Number.isFinite(sinceMs)) return fail(`--since must be an ISO time or auto (got ${JSON.stringify(opts.since)})`, opts.json);
+    try {
+      sinceMs = Date.parse(resolveDateBoundary(since, "since"));
+    } catch {
+      return fail(`--since must be an ISO time, duration (7d/2w/6m/1y), or auto (got ${JSON.stringify(opts.since)})`, opts.json);
+    }
   }
   if (opts.maxCostUsd !== undefined && !opts.facts) return fail("--max-cost-usd applies only with --facts", opts.json);
   let factsCap: number | null = null;

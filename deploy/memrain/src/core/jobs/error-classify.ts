@@ -8,6 +8,7 @@
 export type JobErrorBucket =
   /** The handler said no retry can fix it (`unrecoverable: …`). */
   | "unrecoverable"
+  | "refused"
   /** No handler is registered for the kind in the worker process. */
   | "no_handler"
   /** The job's wall-clock cap, or an LLM call's own deadline, ran out. */
@@ -30,6 +31,7 @@ export type JobErrorBucket =
   | "unknown";
 
 const RULES: ReadonlyArray<[JobErrorBucket, RegExp]> = [
+  ["refused", /^(?:unrecoverable: )?refused: /],
   ["unrecoverable", /^unrecoverable: /],
   ["deferred", /^deferred: /],
   ["no_handler", /^no handler registered for kind/],

@@ -212,6 +212,10 @@ export class Worker {
     while (!this.stopping) {
       const job = await this.queue.claim(this.claimOpts());
       if (!job) break;
+      if (this.stopping) {
+        await this.queue.releaseForShutdown(job.id, job.claimGeneration);
+        break;
+      }
       await this.runJob(job);
       processed++;
     }
@@ -302,6 +306,10 @@ export class Worker {
       while (this.inflight < concurrency && !this.stopping) {
         const job = await this.queue.claim(this.claimOpts());
         if (!job) break;
+        if (this.stopping) {
+          await this.queue.releaseForShutdown(job.id, job.claimGeneration);
+          break;
+        }
         this.inflight++;
         // Fire-and-forget; runJob updates inflight on completion. runJob never
         // throws (it guards its own bookkeeping), but keep a catch as a final

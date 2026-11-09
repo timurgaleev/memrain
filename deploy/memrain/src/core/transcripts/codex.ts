@@ -92,6 +92,9 @@ export function parseCodexRollout(records: readonly unknown[]): AdapterResult {
       if (source !== null && "subagent" in source) {
         return { sessions: [], skipped: [{ index: 0, ...(id !== null ? { id } : {}), reason: "subagent rollout" }], skippedMessages: 0 };
       }
+      if (payload["originator"] === "codex_exec") {
+        return { sessions: [], skipped: [{ index: 0, ...(id !== null ? { id } : {}), reason: "exec rollout" }], skippedMessages: 0 };
+      }
       continue;
     }
     if (type === "event_msg" && (payload["type"] === "user_message" || payload["type"] === "item_completed")) {

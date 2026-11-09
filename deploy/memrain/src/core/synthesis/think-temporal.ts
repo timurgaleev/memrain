@@ -118,3 +118,16 @@ export function pageContentDate(
   }
   return dayInZone(instant, timeZone);
 }
+
+/** A single ISO day is an exact-day question only when it is not a range bound. */
+export function questionDateWindow(question: string): { since: string; until: string } | undefined {
+  const dates = [...question.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)];
+  if (dates.length !== 1) return undefined;
+  const match = dates[0]!;
+  const before = question.slice(0, match.index);
+  if (/\b(?:since|after|before|until|from|by|between)\b[^.!?\n]*$/i.test(before)) return undefined;
+  const day = match[0];
+  const parsed = new Date(`${day}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) return undefined;
+  return { since: day, until: day };
+}

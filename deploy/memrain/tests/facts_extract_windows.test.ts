@@ -13,6 +13,7 @@ import {
   extractionWindows,
   factsMaxWindows,
 } from "../src/core/facts-extract.ts";
+import { putPage } from "../src/core/pages.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
 
 let tmp: string;
@@ -86,6 +87,7 @@ describe("extractionWindows", () => {
 });
 
 describe("extractFactsForPage over windows", () => {
+  beforeEach(async () => { await putPage(storage, { slug: "notes/long", markdown_body: LONG }); });
   it("makes one call at the default", async () => {
     const { fn, users } = counting();
     const r = await extractFactsForPage(storage, {
@@ -93,6 +95,7 @@ describe("extractFactsForPage over windows", () => {
     });
     expect(users).toHaveLength(1);
     expect(r.windowsRun).toBe(1);
+    expect(r.truncated_chars).toBe(LONG.length - EXTRACT_WINDOW_CHARS);
   });
 
   it("makes one call per window when raised, and writes every window's facts", async () => {
@@ -103,6 +106,7 @@ describe("extractFactsForPage over windows", () => {
     });
     expect(users.length).toBeGreaterThan(1);
     expect(r.windowsRun).toBe(users.length);
+    expect(r.truncated_chars).toBe(0);
     expect(r.factsWritten).toBe(users.length);
     expect(users[1]).toContain("Paragraph ");
     expect(users[1]).not.toContain("Paragraph 0:");
@@ -118,6 +122,7 @@ describe("extractFactsForPage over windows", () => {
     });
     expect(users).toHaveLength(1);
     expect(r.windowsRun).toBe(1);
+    expect(r.truncated_chars).toBeGreaterThan(0);
     expect(r.factsWritten).toBe(1);
     expect(r.absorbed).toBe("budget_exhausted");
   });

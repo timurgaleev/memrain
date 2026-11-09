@@ -339,6 +339,35 @@ describe("memrain transcripts ingest (session logs)", () => {
     }
   });
 
+  it("previews an agent-origin repair without changing stored fact attribution", async () => {
+    const file = join(cliTmp, "repair-origin.jsonl");
+    writeFileSync(file, JSON.stringify({ type: "user", uuid: "u", sessionId: "repair-origin", entrypoint: "sdk-cli", message: { content: "Check the billing project." } }));
+    const storage = new Storage(JSON.parse(readFileSync(cfgPath, "utf-8")));
+    await storage.init();
+    try {
+      await storage.engine().query(`INSERT INTO pages (slug, source_id, type, title, markdown_body, content_hash, compiled_truth)
+        VALUES ('transcripts/claude-code/repair-p1', 'default', 'conversation', 'Review', 'Agent task', 'hash', $1::jsonb)`,
+        [JSON.stringify({ format: "claude-code", conversation_id: "repair-origin" })]);
+      await storage.engine().query(`INSERT INTO entity_facts (entity_slug, fact, source_slug, attributed_to)
+        VALUES ('projects/billing', 'Billing accepts Euro payments.', 'transcripts/claude-code/repair-p1', 'user')`);
+    } finally { await storage.close(); }
+    expect(await runTranscripts({ sub: "repair-origin", file, json: true, configPath: cfgPath })).toBe(0);
+    expect(lastJson()).toMatchObject({ ok: true, applied: false, facts: 1, pages: [{ slug: "transcripts/claude-code/repair-p1", facts: 1 }] });
+    const checked = new Storage(JSON.parse(readFileSync(cfgPath, "utf-8")));
+    await checked.init();
+    try {
+      expect((await checked.engine().query(`SELECT attributed_to FROM entity_facts WHERE source_slug = 'transcripts/claude-code/repair-p1'`)).rows).toEqual([{ attributed_to: "user" }]);
+    } finally { await checked.close(); }
+    const valid = readFileSync(file, "utf-8");
+    writeFileSync(file, `${valid}\n{truncated`);
+    expect(await runTranscripts({ sub: "repair-origin", file, apply: true, json: true, configPath: cfgPath })).toBe(1);
+    expect(lastJson().error).toContain("origin repair refused");
+    writeFileSync(file, valid);
+    expect(await runTranscripts({ sub: "repair-origin", file, apply: true, json: true, configPath: cfgPath })).toBe(0);
+    expect(lastJson()).toMatchObject({ applied: true, changed: 1 });
+
+  });
+
   it("limits a codex directory walk to rollout files", async () => {
     expect(await runTranscripts({ sub: "ingest", file: logsDir, format: "codex", dryRun: true, json: true, configPath: cfgPath })).toBe(0);
     expect(lastJson().diagnostics).toMatchObject({ files: 1, sessions: 1 });
@@ -380,4 +409,33 @@ describe("memrain transcripts ingest (session logs)", () => {
     expect(await runTranscripts({ sub: "ingest", file: empty, json: true, configPath: cfgPath })).toBe(1);
     expect(lastJson()).toMatchObject({ ok: false, diagnostics: { format_drift: true, sessions: 0 } });
   });
+});
+
+describe("agent-origin session logs", () => {
+  it("skips codex_exec by its own first header without reporting drift", () => {
+    const raw = [
+      { type: "session_meta", payload: { id: "worker", originator: "codex_exec", source: "exec" } },
+      { type: "session_meta", payload: { id: "parent", originator: "codex_cli_rs", source: "cli" } },
+      { type: "event_msg", payload: { type: "user_message", message: "Implement the delegated task." } },
+    ].map(r => JSON.stringify(r)).join("\n");
+    const parsed = parseTranscriptJsonl(raw, raw.length);
+    expect(parsed.sessions).toEqual([]);
+    expect(parsed.diagnostics.skipped).toEqual([{ index: 0, id: "worker", reason: "exec rollout" }]);
+    expect(parsed.diagnostics.format_drift).toBe(false);
+  });
+  for (const entrypoint of ["sdk-cli", "sdk-ts", "sdk-py", "cli", "t3-code", "future-sdk", undefined]) {
+    it(`keeps ${entrypoint ?? "legacy"} content with its known speaker provenance`, () => {
+      const agent = entrypoint?.startsWith("sdk-") ?? false;
+      const records = [
+        { type: "user", uuid: "u", sessionId: "origin-session", entrypoint, message: { content: "Review the changes to the billing service." } },
+        { type: "assistant", uuid: "a", sessionId: "origin-session", entrypoint, message: { content: "The billing service accepts Euro payments." } },
+      ];
+      const session = parseClaudeCodeSession(records).sessions[0]!;
+      expect(session.messages.map(m => m.speaker)).toEqual([agent ? "Agent" : "User", "Claude"]);
+      expect(session.messages[0]!.text).toBe(records[0]!.message.content);
+      const part = prepareSession(session).parts[0]!;
+      expect(part.truth.transcript_origin).toBe(agent ? "agent" : undefined);
+      expect(part.body).toContain(agent ? "Agent" : "User");
+    });
+  }
 });

@@ -59,6 +59,7 @@ export function registerChronicleHandler(
       slug: res.slug,
       status: res.status,
       events_written: res.events_written,
+      ...(res.events_retired !== undefined ? { events_retired: res.events_retired } : {}),
       ...(res.reason ? { reason: res.reason } : {}),
     };
   });

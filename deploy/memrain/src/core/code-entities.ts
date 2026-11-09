@@ -259,14 +259,14 @@ const NESTED_SCOPE_TYPES: Record<CodeLanguage, ReadonlySet<string>> = {
  * We always yield the node itself before deciding whether to descend,
  * so the symbol's own declaration is visible to the caller.
  */
-function* walk(root: TSNode, language: CodeLanguage): Generator<TSNode> {
+function* walk(root: TSNode, language: CodeLanguage, moduleScope = false): Generator<TSNode> {
   const scopeTypes = NESTED_SCOPE_TYPES[language];
   const stack: { node: TSNode; depth: number }[] = [{ node: root, depth: 0 }];
   while (stack.length > 0) {
     const frame = stack.pop();
     if (!frame) break;
     yield frame.node;
-    const isScope = scopeTypes.has(frame.node.type);
+    const isScope = !moduleScope && scopeTypes.has(frame.node.type);
     // Skip descent only if we're ABOUT to enter the SECOND scope (or deeper).
     // depth counts scopes entered so far on the path from root.
     if (isScope && frame.depth >= 1) continue;
@@ -329,7 +329,7 @@ export async function extractCodeEntities(
   // leaking these is what makes the leak grow with the corpus rather than with
   // the file count. Every entity below is a plain string, never a Node.
   withParsedTree(parser, symbol.body, (subTree) => {
-    for (const node of walk(subTree.rootNode, language)) {
+    for (const node of walk(subTree.rootNode, language, symbol.kind === "module")) {
       const lineInFile = symbol.startLine + node.startPosition.row;
 
       if (callTypes.has(node.type)) {

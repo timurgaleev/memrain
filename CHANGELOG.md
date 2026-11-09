@@ -6,6 +6,75 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-11-09
+
+### Added
+- Bounded page body windows, historical version reads, cursor-based page lists,
+  literal text search, page-type and slug-prefix retrieval filters, and
+  version-guarded page rename. Successful operator/admin page writes include
+  a link to the page in the admin panel.
+- Query results can include scoped ledger facts. Entity fact reads support a
+  semantic focus, collapse visible copies, and explain visible withdrawals.
+  Context packs identify stored fact provenance; external evidence is framed
+  at retrieval boundaries.
+- Entity identity inspection, conservative person-name variants, alias
+  suggestions, and module-level code symbols. Graph, backlink and link reads
+  report truncation; recursive code walks retain definition identity.
+- Read-only model, engine, page-index, storage, maintenance and backup
+  diagnostics. `auth who-can-read` checks current issued access credentials
+  through the real page-read path without exposing content or touching reads.
+- Preview-first, create-only markdown import into a registered source. It
+  refuses existing and deleted slugs, invokes no fact extraction, and defers
+  search indexing to reconciliation. Full database restore remains separate.
+- Typed runtime configuration validation, shared relative/ISO date parsing,
+  structured error-code checks, and eval runs through operator MCP search or
+  query. Five client skills cover safe import, correction, deletion, sharing
+  review and connection setup; client guides document brain-first hooks.
+
+### Fixed
+- Page writes guard accidental large shrink when write preconditions are
+  enabled, and reject malformed new slugs.
+  Create-only version checks also protect legacy pages without version rows.
+  Batch failures become tool errors; timeline writes return their stored event.
+  Read limits, result-size checks and public-content canaries cover the expanded
+  MCP surface without widening tenant grants.
+- Held or deleted fact origins are excluded from normal recall and synthesis.
+  Supersession does not extend validity; deduplication preserves divergent
+  numbers, dates, currencies and negations. Extraction rechecks page freshness,
+  uses append tails and local entity hints, and excludes synthesized inputs.
+- Interrupted extraction is audited; bounded recovery runs at most once daily
+  when extraction is enabled. Unreadable model outputs back off. Incomplete
+  synthesis is refused, and draft quote verification remains visible.
+- Confirmed SDK-origin transcript claims remain separate from user claims.
+  Obsolete automatic chronicle events retire without deleting history or
+  manual events. Relative links stay source-scoped and ignore HTML comments.
+- Worker shutdown releases late claims, cleanup deadlines remain active, and
+  remediation reports lock contention and failed phases. Deterministic ingest
+  refusals stop retrying; failed advisor collectors and runtime overlays are
+  visible instead of appearing healthy.
+- Skill file reads are size-bounded and cannot escape the skill root.
+  Markdown export quotes multiline titles for import round trips.
+- Fact provenance labels prioritize the authenticated client or public
+  principal over caller-supplied writer labels.
+- Markdown fence detection stays linear on delimiter runs followed by Unicode
+  line separators. Transitive lint dependencies use patched versions.
+
+### Changed
+- Runtime images use Bun 1.4.4 and container logs rotate with bounded retention.
+- PAT/OAuth-written evidence, including operator client writes, receives an
+  escaped external-content frame in retrieval results. Stored content and
+  `page_get` remain unchanged. Version listings omit bodies by default;
+  request a version through `page_get` for its content.
+- With `MEMRAIN_FACTS_EXTRACTION=1`, daily recovery can make paid model calls
+  unless `MEMRAIN_FACTS_BACKFILL=0`. It is capped by default at $1 and 50 pages
+  per run. Observe actual spend after deployment; extraction being enabled
+  now also enables scheduled recovery by default.
+- No new database migration. Existing transcript attribution repair, code
+  rechunking and bulk imports require a separate reviewed operator apply;
+  deployment does not run them. Markdown import restores page content only,
+  not grants, facts or version history. Model-quality and spend improvements
+  still require observation on the deployed workload.
+
 ## [1.12.0] — 2026-11-08
 
 ### Added

@@ -51,6 +51,7 @@ PRE_RENAME_SUFFIXES = {
 }
 QUIESCENCE_SWITCHES = {"MAINTENANCE", "BOOT_CODE_SWEEP", "JOBS_WORKER", "CYCLE"}
 ADDED_SUFFIXES = {
+    "MCP_MAX_RESULT_BYTES",
     "OUTPUT_REDACTION",
     "REQUIRE_WRITE_PRECONDITION",
     "CODE_SECRET_SCAN",
@@ -371,3 +372,10 @@ def test_compose_config_legacy_env(tmp_path):
     assert cfg["services"]["memrain"]["build"]["args"]["MEMRAIN_VERSION"] == "legacy-stamp"
     vols = {v["target"]: v["source"] for v in cfg["services"]["memrain"]["volumes"]}
     assert vols["/home/bun/.memrain"] == vols["/home/bun/.memex"] == "/mnt/fixture-efs/stack/memrain"
+
+
+def test_service_logs_are_bounded(compose):
+    for name in ("memrain", "cloudflared"):
+        assert compose["services"][name]["logging"] == {
+            "driver": "json-file", "options": {"max-size": "10m", "max-file": "5"},
+        }

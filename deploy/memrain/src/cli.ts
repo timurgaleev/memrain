@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { resolveSinceHours } from "./core/search/filters.ts";
+import { runAliasesSuggest } from "./commands/aliases.ts";
 /**
  * memrain CLI entrypoint.
  */
@@ -11,6 +13,8 @@ import { runIndex } from "./commands/index.ts";
 import { runSearch } from "./commands/search.ts";
 import { runReindex } from "./commands/reindex.ts";
 import { runHnsw } from "./commands/hnsw.ts";
+import { runEngineStatus } from "./commands/engine-status.ts";
+import { runModels } from "./commands/models.ts";
 import { runDoctor } from "./commands/doctor.ts";
 import { runIntegrity } from "./commands/integrity.ts";
 import { runEval } from "./commands/eval.ts";
@@ -32,6 +36,8 @@ import type { EvalTag } from "./core/eval-replay.ts";
 import { runFriction } from "./commands/friction.ts";
 import { runEvalExport } from "./commands/eval-export.ts";
 import { runExport } from "./commands/export.ts";
+import { runImport } from "./commands/import.ts";
+import { runBackupStatus } from "./commands/backup.ts";
 import { runEvalPrune } from "./commands/eval-prune.ts";
 import { runApplyMigrations } from "./commands/apply-migrations.ts";
 import {
@@ -53,6 +59,7 @@ const VALID_JOB_STATUSES: ReadonlySet<JobStatus> = new Set([
 ]);
 import { runOrphans } from "./commands/orphans.ts";
 import { runPageRetype } from "./commands/page-retype.ts";
+import { runRename } from "./commands/rename.ts";
 import { runPages } from "./commands/pages.ts";
 import { runLint } from "./commands/lint.ts";
 import { runReports } from "./commands/reports.ts";
@@ -93,6 +100,12 @@ function printUsage(): void {
   console.log("Usage: memrain <command> [options]");
   console.log("");
   console.log("Commands:");
+  console.log("  backup status [--rds-instance ID] [--efs-id ID] [--copy-report FILE]  inspect backup evidence");
+  console.log("  export [--dir DIR] [--source ID]  export live pages as markdown");
+  console.log("  import --dir DIR --source ID [--apply]  preview create-only page import; indexing deferred");
+  console.log("  aliases suggest [--source ID] [--limit N] [--json]  preview undeclared name aliases");
+  console.log("  models [--probe] [--max-cost-usd N] [--json]  resolved chat models and registered prices");
+  console.log("  engine status [--probe] [--json]  inspect engine config; optionally test one connection");
   console.log("  init --pglite                initialize ~/.memrain/ + PGLite db");
   console.log("  serve --http --host H --port N");
   console.log("                               start HTTP server (loopback only)");
@@ -122,7 +135,7 @@ function printUsage(): void {
   console.log("  doctor --remediate [--execute|--yes] [--max-jobs N] [--max-usd X]");
   console.log("                               enqueue the safe subset; dry-run unless --execute/--yes");
   console.log("  integrity [--vault P]        vault-vs-index drift report");
-  console.log("  eval [--k N] [--qrels P] [--rrf-k N] [--expand|--no-expand] [--rerank] [--max-pool]");
+  console.log("  eval [--via search|query] [--k N] [--qrels P] [--rrf-k N] [--expand|--no-expand] [--rerank] [--max-pool]");
   console.log("       [--graph-signals] [--cosine-rescore] [--relational-arm] [--dedup-type-ratio X]");
   console.log("       [--config-a <json|path>] [--config-b <json|path>] [--split dev|sealed|all]");
   console.log("       [--prereg P] [--record]");
@@ -182,7 +195,7 @@ function printUsage(): void {
   console.log("  eval-replay run [--tag T] [--limit N] [--promote]");
   console.log("                               capture / replay real queries; --promote sets new baseline");
   console.log("  eval-replay delete <id>      remove a captured query");
-  console.log("  eval-export [--source firehose|curated] [--since H] [--limit N] [--out PATH]");
+  console.log("  eval-export [--source firehose|curated] [--since H|ISO|7d] [--limit N] [--out PATH]");
   console.log("                               JSONL dump of eval_candidates (default) or eval_queries");
   console.log("  eval-prune [--keep-days N] [--apply] [--tool-name T]");
   console.log("                               trim old rows from eval_candidates; --apply to actually delete");
@@ -198,21 +211,23 @@ function printUsage(): void {
   console.log("  sources update <id> [...same flags as register, all optional...]");
   console.log("                               [--no-respect-quiet-hours] to clear the flag");
   console.log("  sources delete <id>          refuses if any document still references it");
-  console.log("  friction analyze [--since H] [--limit N]");
+  console.log("  friction analyze [--since H|ISO|7d] [--limit N]");
   console.log("                               counts + recent + top-repeats from friction_events");
-  console.log("  friction list [--kind K] [--skill S] [--since H] [--limit N]");
+  console.log("  friction list [--kind K] [--skill S] [--since H|ISO|7d] [--limit N]");
   console.log("                               flat JSON list of recent events");
-  console.log("  friction render [--kind K] [--skill S] [--since H] [--limit N] [--no-redact]");
+  console.log("  friction render [--kind K] [--skill S] [--since H|ISO|7d] [--limit N] [--no-redact]");
   console.log("                               markdown table; redacts query/reason by default");
   console.log("  friction log --kind K [--query Q] [--reason R] [--source-path P] [--skill S] [--severity confused|error|blocker|nit]");
   console.log("                               record a friction event; kinds: search-miss|wrong-answer|tool-error|low-confidence|other|delight|phase-marker|interrupted");
-  console.log("  friction propose-fix [--skill S | --top-skills N] [--since H] [--example-limit N]");
+  console.log("  friction propose-fix [--skill S | --top-skills N] [--since H|ISO|7d] [--example-limit N]");
   console.log("                               Claude Haiku suggests skill-text edits to reduce friction");
   console.log("  orphans                      DB hygiene report + safe deletions");
+  console.log("  rename <from> <to> --expected-version N [--source ID]");
+  console.log("                               move a page and its history; refuses importer-managed pages");
   console.log("  pages [--limit N] [--filter S] catalogue of known wikilink targets");
   console.log("  lint [<dir|file.md>] [--fix] [--dry-run]");
   console.log("                               DB frontmatter conformance (no target) or file lint with auto-repair");
-  console.log("  reports [--since H]          trend report from cycle_snapshots");
+  console.log("  reports [--since H|ISO|7d]          trend report from cycle_snapshots");
   console.log("  spend [--days N]             LLM spend by model, feature and spender");
   console.log("  agent run <task> [--max-usd X] [--wait]");
   console.log("                               queue a read-only agent job (needs MEMRAIN_AGENT_ENABLED=1); prints its id");
@@ -226,6 +241,7 @@ function printUsage(): void {
   console.log("                               copy data between Engine adapters");
   console.log("  admin setup-link [--ttl <hours>] [--json]");
   console.log("                               one-time link for the panel owner to create a passkey (default 24h, max 72h)");
+  console.log("  auth who-can-read <slug>     check issued credentials through page_get, without recording reads");
   console.log("  auth register-client <name> [--scopes S] [--source SRC] [--federated-read a,b]");
   console.log("                               [--tenant-mode client|enrollment]  (enrollment = one connector, many tenants)");
   console.log("                               [--token-endpoint-auth-method none|client_secret_post|client_secret_basic]");
@@ -280,7 +296,8 @@ function printUsage(): void {
   console.log("  config unset --pattern <pfx> bulk-delete keys by prefix");
   console.log("  capture [<text>] [--stdin] [--file P] [--slug S] [--type T] [--source ID] [--title T]");
   console.log("                               one-command note capture → page + search mirror");
-  console.log("  transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code] [--source ID] [--since ISO|auto] [--no-embed] [--facts --max-cost-usd N] [--dry-run] [--json]");
+  console.log("  transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code] [--source ID] [--since ISO|7d|auto] [--no-embed] [--facts --max-cost-usd N] [--dry-run] [--json]");
+  console.log("  transcripts repair-origin <path> [--source ID] [--format auto|codex|claude-code] [--apply] [--json]");
   console.log("  transcripts status [--source ID] [--json]");
   console.log("  transcripts push <path> --url URL --token-file F [--hook-stdin] [--dry-run] [--json]");
   console.log("                               import a ChatGPT / Claude.ai export or Codex / Claude Code session logs");
@@ -421,6 +438,19 @@ async function main(argv: readonly string[]): Promise<number> {
       }
       await runCode(opts);
       return 0;
+    }
+    case "aliases": {
+      if (positional.length !== 1 || positional[0] !== "suggest") { console.error("Usage: memrain aliases suggest [--source ID] [--limit N] [--json]"); return 2; }
+      return await runAliasesSuggest({ source: values.get("--source"), json: flags.has("--json"),
+        ...(values.has("--limit") ? { limit: Number(values.get("--limit")) } : {}) });
+    }
+    case "models": {
+      return await runModels({ probe: flags.has("--probe"), json: flags.has("--json"),
+        ...(values.has("--max-cost-usd") ? { maxCostUsd: Number(values.get("--max-cost-usd")) } : {}) });
+    }
+    case "engine": {
+      if (positional.length !== 1 || positional[0] !== "status") { console.error("Usage: memrain engine status [--probe] [--json]"); return 2; }
+      return await runEngineStatus({ probe: flags.has("--probe"), json: flags.has("--json") });
     }
     case "doctor": {
       await runDoctor();
@@ -588,6 +618,11 @@ async function main(argv: readonly string[]): Promise<number> {
         cfg.dedupTypeRatio = n;
       }
       const evalOpts: Parameters<typeof runEval>[0] = {};
+      const via = values.get("--via");
+      if (via !== undefined) {
+        if (via !== "search" && via !== "query") throw new Error("memrain eval: --via must be search or query");
+        evalOpts.via = via;
+      }
       if (k !== undefined) evalOpts.k = k;
       const qrels = values.get("--qrels");
       if (qrels) evalOpts.qrelsPath = qrels;
@@ -878,11 +913,7 @@ async function main(argv: readonly string[]): Promise<number> {
       const opts: Parameters<typeof runFriction>[0] = { sub };
       const sinceStr = values.get("--since");
       if (sinceStr !== undefined) {
-        const n = Number(sinceStr);
-        if (!Number.isFinite(n) || n < 1 || n > 24 * 365) {
-          throw new Error(`memrain friction: invalid --since ${sinceStr}`);
-        }
-        opts.sinceHours = n;
+        opts.sinceHours = resolveSinceHours(sinceStr, 24 * 365);
       }
       const limitStr = values.get("--limit");
       if (limitStr !== undefined) {
@@ -963,11 +994,7 @@ async function main(argv: readonly string[]): Promise<number> {
       }
       const since = values.get("--since");
       if (since !== undefined) {
-        const n = Number(since);
-        if (!Number.isFinite(n) || n < 1 || n > 24 * 365) {
-          throw new Error(`memrain eval-export: invalid --since ${since}`);
-        }
-        opts.sinceHours = n;
+        opts.sinceHours = resolveSinceHours(since, 24 * 365);
       }
       const limit = values.get("--limit");
       if (limit !== undefined) {
@@ -981,6 +1008,15 @@ async function main(argv: readonly string[]): Promise<number> {
       if (out) opts.out = out;
       await runEvalExport(opts);
       return 0;
+    }
+    case "backup": {
+      if (positional.length !== 1 || positional[0] !== "status") throw new Error("backup: use status");
+      return runBackupStatus({ rdsInstance: values.get("--rds-instance"), efsId: values.get("--efs-id"), copyReport: values.get("--copy-report") });
+    }
+    case "import": {
+      if (positional.length) throw new Error("import: use --dir and --source");
+      if (flags.has("--apply") && flags.has("--dry-run")) throw new Error("import: choose --apply or --dry-run");
+      return runImport({ dir: values.get("--dir") ?? "", source: values.get("--source") ?? "", apply: flags.has("--apply") });
     }
     case "export": {
       const opts: Parameters<typeof runExport>[0] = {};
@@ -1364,6 +1400,13 @@ async function main(argv: readonly string[]): Promise<number> {
       await runOrphans();
       return 0;
     }
+    case "rename": {
+      const expectedVersion = Number(values.get("--expected-version"));
+      if (positional.length !== 2 || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+        throw new Error("memrain rename: <from> <to> --expected-version <positive integer> is required");
+      }
+      return runRename({ from: positional[0]!, to: positional[1]!, expectedVersion, sourceId: values.get("--source") });
+    }
     case "page-retype": {
       const to = values.get("--to");
       if (!to) throw new Error("memrain page-retype: --to <type> is required");
@@ -1410,11 +1453,7 @@ async function main(argv: readonly string[]): Promise<number> {
       const sinceStr = values.get("--since");
       const opts: Parameters<typeof runReports>[0] = {};
       if (sinceStr !== undefined) {
-        const n = Number(sinceStr);
-        if (!Number.isFinite(n) || n < 1 || n > 24 * 30) {
-          throw new Error(`memrain reports: invalid --since ${sinceStr}`);
-        }
-        opts.sinceHours = n;
+        opts.sinceHours = resolveSinceHours(sinceStr, 24 * 30);
       }
       await runReports(opts);
       return 0;
@@ -1560,7 +1599,7 @@ async function main(argv: readonly string[]): Promise<number> {
         const target = values.get("--target");
         if (!target) {
           console.error(
-            'memrain search diagnose: --target <slug> is required (usage: search diagnose "<query>" --target <slug>)',
+            'memrain search diagnose: --target <slug> is required (usage: search diagnose ["<query>"] --target <slug>)',
           );
           return 2;
         }
@@ -1663,6 +1702,7 @@ async function main(argv: readonly string[]): Promise<number> {
       if (flags.has("--no-embed")) opts.noEmbed = true;
       if (flags.has("--facts")) opts.facts = true;
       if (flags.has("--hook-stdin")) opts.hookStdin = true;
+      if (flags.has("--apply")) opts.apply = true;
       if (flags.has("--dry-run")) opts.dryRun = true;
       if (flags.has("--json")) opts.json = true;
       return await runTranscripts(opts);
