@@ -182,9 +182,8 @@ export async function indexCodeDocument(
   );
   const id = docId(input.sourcePath);
 
-  // File-level imports become code-ref entities attached to chunk 0
-  // (mirrors how the markdown indexer attaches frontmatter tags only
-  // to chunk 0 — they're document-level signals, not symbol-level).
+  // File-level imports belong to the module chunk when present, otherwise
+  // the first symbol or fallback chunk retains the document-level references.
   const fileImportRefs: ExtractedEntity[] = parsed.fileImports.map((imp) => ({
     type: "code-ref",
     name: imp.name,
@@ -194,6 +193,7 @@ export async function indexCodeDocument(
   // Build per-symbol entity sets. Each chunk corresponds to one symbol.
   const chunkWrites: ChunkWrite[] = [];
   const codeEdges: CodeEdgeInput[] = [];
+  const importOwner = Math.max(0, parsed.symbols.findIndex(symbol => symbol.kind === "module"));
   for (let i = 0; i < parsed.symbols.length; i++) {
     const symbol = parsed.symbols[i]!;
     const entities = await extractCodeEntities({
@@ -201,9 +201,8 @@ export async function indexCodeDocument(
       file: input.sourcePath,
       language,
     });
-    // Prepend the file-level imports onto the FIRST symbol chunk so
-    // `code-refs <name>` finds them.
-    const merged = i === 0 ? [...fileImportRefs, ...entities] : entities;
+    // Keep one owner for file-level imports so references are not duplicated.
+    const merged = i === importOwner ? [...fileImportRefs, ...entities] : entities;
     const qualified = qualifiedSymbolName(symbol.parentSymbolPath, symbol.name);
     chunkWrites.push({
       text: symbol.body,

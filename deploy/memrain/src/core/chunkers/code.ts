@@ -28,15 +28,10 @@ import { getParser, withParsedTree, type CodeLanguage } from "./parsers.ts";
  * MARKDOWN_CHUNKER_VERSION — the stale check branches on document kind. Starts at
  * 1 (the grandfather DEFAULT).
  *
- * v2: symbol-less files (re-export barrels, DML-only SQL) now emit windowed
- * fallback chunks instead of a zero-chunk document — bump re-chunks the code
- * corpus so existing zero-chunk docs gain their chunks.
- *
- * v3: call edges now include Go `pkg.Fn()` / receiver calls and member calls
- * that share the enclosing symbol's name (`this.repo.save()` inside `save`);
- * the bump re-extracts the edges of every code document.
+ * Module symbols capture calls outside named declarations. Their bodies mask
+ * declarations already indexed separately, preserving call-site line numbers.
  */
-export const CODE_CHUNKER_VERSION = 3;
+export const CODE_CHUNKER_VERSION = 4;
 import type { Node as TSNode } from "web-tree-sitter";
 
 export type SymbolKind =
@@ -45,6 +40,7 @@ export type SymbolKind =
   | "method"
   | "arrow"
   | "const"
+  | "module"
   | "module-import";
 
 export interface CodeSymbol {
@@ -425,6 +421,41 @@ const IMPORT_NODE_TYPES_PER_LANG: Record<CodeLanguage, ReadonlySet<string>> = {
   sql: new Set<string>(),
 };
 
+/** Preserve offsets while removing separately indexed declarations and imports. */
+function moduleSymbol(root: TSNode, source: string, filename: string, lang: CodeLanguage): CodeSymbol | null {
+  const calls = lang === "python" ? new Set(["call"]) :
+    ["typescript", "tsx", "go"].includes(lang) ? new Set(["call_expression", "new_expression"]) : new Set<string>();
+  const ranges: { start: number; end: number }[] = [];
+  const stack = [root];
+  let hasCall = false;
+  while (stack.length) {
+    const node = stack.pop()!;
+    const declaration = SYMBOL_NODE_TYPES[lang].has(node.type) && symbolName(node, lang);
+    const arrow = (lang === "typescript" || lang === "tsx") && arrowBindingFromLexicalDecl(node);
+    if (declaration || arrow || IMPORT_NODE_TYPES_PER_LANG[lang].has(node.type)) {
+      const wrapper = node.parent?.type === "export_statement" ? node.parent : node;
+      ranges.push({ start: wrapper.startIndex, end: wrapper.endIndex });
+      continue;
+    }
+    if (calls.has(node.type)) hasCall = true;
+    for (let i = node.namedChildCount - 1; i >= 0; i--) {
+      const child = node.namedChild(i);
+      if (child) stack.push(child);
+    }
+  }
+  if (!hasCall) return null;
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const range of ranges.sort((a, b) => a.start - b.start)) {
+    parts.push(source.slice(cursor, range.start), source.slice(range.start, range.end).replace(/[^\r\n]/g, " "));
+    cursor = range.end;
+  }
+  parts.push(source.slice(cursor));
+  const basename = filename.slice(filename.lastIndexOf("/") + 1);
+  return { name: "__module__", kind: "module", body: parts.join(""), startLine: 1,
+    endLine: root.endPosition.row + 1, enclosing: basename, parentSymbolPath: [basename], docComment: null };
+}
+
 /**
  * Walk only the immediate children of root and return file-level
  * imports. Nested imports inside functions are intentionally ignored
@@ -495,11 +526,14 @@ export async function chunkCode(
   const { symbols, fileImports, hasParseError } = withParsedTree(
     parser,
     source,
-    (tree) => ({
-      symbols: Array.from(visitSymbols(tree.rootNode, language, source)),
-      fileImports: Array.from(visitFileImports(tree.rootNode, language)),
-      hasParseError: tree.rootNode.hasError,
-    }),
+    (tree) => {
+      const module = moduleSymbol(tree.rootNode, source, filename, language);
+      return {
+        symbols: [...visitSymbols(tree.rootNode, language, source), ...(module ? [module] : [])],
+        fileImports: Array.from(visitFileImports(tree.rootNode, language)),
+        hasParseError: tree.rootNode.hasError,
+      };
+    },
   );
   // Dedup imports by (name, line).
   const seen = new Set<string>();

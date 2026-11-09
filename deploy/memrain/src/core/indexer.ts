@@ -605,6 +605,7 @@ async function indexDocumentBody(
         continue;
       }
       for (const sym of parsedCode.symbols) {
+        if (sym.kind === "module") continue; // the prose chunk already embeds these top-level calls
         let vec: number[] | null = priorFence.get(sym.body) ?? null;
         if (vec) {
           if (stats) stats.reused++;
