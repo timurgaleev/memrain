@@ -140,8 +140,22 @@ With `--hook-stdin`, push reads `transcript_path` from the JSON that Claude
 Code passes to the hook. It reports any failure on stderr and still exits 0,
 so a brain that is unreachable never breaks the session.
 
-Codex has no session-end hook. Push its rollouts by hand or from a scheduled
-job, one file at a time:
+### Codex session hook
+
+Codex supports `SessionEnd` (local CLI checked at 0.167.0). Merge the same
+`hooks.SessionEnd` object above into `~/.codex/hooks.json`, adding `"timeout": 3`
+next to `"type": "command"`. Keep `cd /` and both absolute executable paths.
+Codex supplies `transcript_path`, which `--hook-stdin` accepts. Review and trust
+the definition in `/hooks` before it can run.
+
+Session-end hooks have a three-second maximum and run synchronously. A slow
+upload may be interrupted; check stderr and retry manually. Closing a session
+triggers the hook, switching conversations does not. See the
+[official hook contract](https://learn.chatgpt.com/docs/hooks#sessionend).
+Do not install this upload on every `Stop`: a growing transcript has a new
+content hash, so successive turns can create successive imported pages.
+
+For manual capture or a scheduled job, push one rollout at a time:
 
 ```bash
 memrain transcripts push ~/.codex/sessions/2026/10/01/rollout-<id>.jsonl \

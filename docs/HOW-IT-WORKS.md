@@ -317,3 +317,13 @@ A few that are easy to miss:
   grant, sources and daily budget, and `get_agent_job` returns its status and
   answer. Both need the `agent` scope, a daily budget on the client, and
   `MEMRAIN_AGENT_ENABLED=1` plus `MEMRAIN_AGENT_TENANT_ENABLED=1` on the host.
+
+## MCP response metadata
+
+With `MEMRAIN_HOT_MEMORY_META=1`, successful unscoped operator tool calls can
+carry `_meta.brain_hot_memory`: up to ten recent live facts from the last
+72 hours, ranked by confidence and age. This is out-of-band MCP metadata,
+independent of the `hot_memory` tool. Clients decide whether to use it.
+Public, tenant-scoped, and admin-panel calls never receive this payload.
+It is disabled by default, cached briefly, and best-effort: a metadata failure
+does not fail the underlying tool call. No recent facts means no payload.

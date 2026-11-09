@@ -93,8 +93,8 @@ describe("the shipped pack", () => {
     expect(bench.errors).toEqual([]);
     const s = scoreBenchmark(bench.cases, skills);
     expect(s.failures).toEqual([]);
-    expect(s.total).toBe(93);
-    expect(s.correct).toBe(93);
+    expect(s.total).toBe(108);
+    expect(s.correct).toBe(108);
   });
 
   it("sends a specific request past the general skill whose trigger it contains", () => {

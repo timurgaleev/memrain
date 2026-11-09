@@ -522,6 +522,8 @@ bearer is static unless you install the optional `memrain-rotate-bearer` timer
 
 ---
 
+Before relying on recall, add the [brain-first instruction block](clients/CLAUDE_CODE.md#make-the-agent-use-it) to `CLAUDE.md`, or the [Codex block](clients/CODEX.md#make-the-agent-use-it) to `AGENTS.md`. Both guides include an optional fixed-text prompt reminder.
+
 ## 9. Verify
 
 ```bash

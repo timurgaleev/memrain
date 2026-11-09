@@ -1,0 +1,3 @@
+{"intent": "review data loss", "expected_skill": "data-loss-gate"}
+{"intent": "confirm bulk deletion", "expected_skill": "data-loss-gate"}
+{"intent": "show tomorrow weather forecast", "expected_skill": null, "ambiguous_with": []}
