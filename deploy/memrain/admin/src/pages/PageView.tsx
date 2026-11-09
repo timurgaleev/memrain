@@ -99,13 +99,13 @@ function PageView({ slug }: { slug: string }) {
                         <span className="mono muted">{v.written_by ?? "unknown"}</span>
                         <span className="muted" title={v.written_at ?? undefined}>{fmtAgo(v.written_at, now)}</span>
                         <span className="spacer" />
-                        <button className="btn-link" aria-expanded={openVersion === i} onClick={() => setOpenVersion(openVersion === i ? null : i)}>
+                        <button className="btn-link" disabled={v.version_n === null} aria-expanded={openVersion === i} onClick={() => setOpenVersion(openVersion === i ? null : i)}>
                           {openVersion === i ? "Hide" : "View"}
                         </button>
                       </div>
-                      {openVersion === i && (
+                      {openVersion === i && v.version_n !== null && (
                         <div className="version-body">
-                          <Markdown source={v.body_snapshot} />
+                          <VersionBody slug={slug} version={v.version_n} />
                         </div>
                       )}
                     </li>
@@ -140,6 +140,15 @@ function PageView({ slug }: { slug: string }) {
       </div>
     </>
   );
+}
+
+function VersionBody({ slug, version }: { slug: string; version: number }) {
+  const state = useAsync(async (signal) => {
+    const result = parsePageGet(await tool("page_get", { slug, version }, signal));
+    if (result.kind !== "page") throw new Error("The requested version could not be loaded.");
+    return result;
+  }, [slug, version]);
+  return <Section state={state}>{(result) => <Markdown source={result.page.markdown_body} />}</Section>;
 }
 
 function LinkGroups({ slug, groups }: { slug: string; groups: LinkGroup[] }) {

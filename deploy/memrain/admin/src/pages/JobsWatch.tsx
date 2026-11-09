@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
 import { api } from "../api";
+import { describeError, useAsync } from "../hooks.ts";
 import { PageIntro } from "../components/PageIntro.tsx";
 
 interface Job {
@@ -16,19 +16,12 @@ const statusBadge = (s: string) =>
   s === "succeeded" ? "success" : s === "failed" ? "error" : s === "running" ? "write" : "read";
 
 export function JobsWatchPage() {
-  const [counts, setCounts] = useState<{ status: string; n: number }[]>([]);
-  const [recent, setRecent] = useState<Job[]>([]);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    const load = () =>
-      api.jobsWatch()
-        .then((r: { counts: { status: string; n: number }[]; recent: Job[] }) => { setCounts(r.counts); setRecent(r.recent); })
-        .catch((e) => setError(String(e.message ?? e)));
-    load();
-    const interval = setInterval(load, 15000); // poll every 15s
-    return () => clearInterval(interval);
-  }, []);
+  const state = useAsync<{ counts: { status: string; n: number }[]; recent: Job[] }>(
+    (signal) => api.jobsWatch(signal), [], { intervalMs: 15000 },
+  );
+  const counts = state.data?.counts ?? [];
+  const recent = state.data?.recent ?? [];
+  const error = state.status === "error" ? describeError(state.error) : "";
 
   return (
     <>
