@@ -106,13 +106,17 @@ describe.skipIf(!URL_)("facts fence absent (Postgres)", () => {
   let storage: Storage;
   const run = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   let n = 0;
+  const savedMirror = process.env.MEMRAIN_PAGE_MIRROR_SYNC;
 
   beforeAll(async () => {
+    process.env.MEMRAIN_PAGE_MIRROR_SYNC = "0";
     pg = new PostgresEngine({ url: URL_! });
     storage = new Storage(pg);
     await storage.init();
   });
   afterAll(async () => {
+    if (savedMirror === undefined) delete process.env.MEMRAIN_PAGE_MIRROR_SYNC;
+    else process.env.MEMRAIN_PAGE_MIRROR_SYNC = savedMirror;
     await pg.close();
   });
 

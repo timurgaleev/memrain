@@ -80,8 +80,9 @@ describe("purge leftovers (PGLite)", () => {
 describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
   let pg: PostgresEngine;
   let storage: Storage;
-  const slug = "people/purge-leftovers-pg";
-  const raceSlug = "people/purge-race-pg";
+  const run = crypto.randomUUID();
+  const slug = `people/purge-leftovers-pg-${run}`;
+  const raceSlug = `people/purge-race-pg-${run}`;
 
   beforeAll(async () => {
     pg = new PostgresEngine({ url: PG_URL! });

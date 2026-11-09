@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check-test-hygiene.sh — CI guard over deploy/memrain/tests/**/*.test.ts.
 #
-# 1. `process.exitCode = prev…;` restores a saved exit code that was usually
+# 1. `process.exitCode = saved;` restores a saved exit code that was usually
 #    `undefined`. Bun ignores an `undefined` assignment, so a 1 set by the code
 #    under test leaks out and fails the whole run. Use restoreExitCode() from
 #    tests/helpers/exit-code.ts (or `?? 0`).
@@ -37,7 +37,7 @@ check() {
   done <<< "$hits"
 }
 
-check 'process\.exitCode = (orig|prev)[A-Za-z]*;' 'restore with restoreExitCode(prev) (tests/helpers/exit-code.ts)'
+check 'process\.exitCode[[:space:]]*=[[:space:]]*[A-Za-z_$][A-Za-z0-9_$]*[[:space:]]*;' 'restore with restoreExitCode(prev) (tests/helpers/exit-code.ts)'
 check 'new URL\(import\.meta\.url\)\.pathname' 'use import.meta.dir'
 
 if [ "$violations" -gt 0 ]; then
