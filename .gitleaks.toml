@@ -16,7 +16,7 @@ commits = [
   "947e7f31589a943f3db98039ebdb27fd30844362",
   "d6dcc47734be0d4557b8000830fa4902b2655004",
 ]
-paths = ['''^deploy/memrain/tests/token_destructive_scope\.test\.ts$''']
+paths = ['''^deploy/memex/tests/token_destructive_scope\.test\.ts$''']
 
 [[allowlists]]
 description = "public-bearer placeholder in oauth_provider_ingress tests"
@@ -25,19 +25,19 @@ commits = [
   "e0691afb79eb2d02d249a3577812adb4edd6be1b",
   "f9568d8f0f6189a2a0fd90b51183c84ce6bda878",
 ]
-paths = ['''^deploy/memrain/tests/oauth_provider_ingress\.test\.ts$''']
+paths = ['''^deploy/memex/tests/oauth_provider_ingress\.test\.ts$''']
 
 [[allowlists]]
 description = "public-bearer placeholder in mcp_internal_token tests"
 condition = "AND"
 commits = ["56e199807508f85e2eeb2619eb4f2f84181be915"]
-paths = ['''^deploy/memrain/tests/mcp_internal_token\.test\.ts$''']
+paths = ['''^deploy/memex/tests/mcp_internal_token\.test\.ts$''']
 
 [[allowlists]]
 description = "public-bearer placeholder in internal_auth_and_redaction tests"
 condition = "AND"
 commits = ["bddc65390fd930a6d56d63cbc460f9fc2556503b"]
-paths = ['''^deploy/memrain/tests/internal_auth_and_redaction\.test\.ts$''']
+paths = ['''^deploy/memex/tests/internal_auth_and_redaction\.test\.ts$''']
 
 # The widely published sample JWT, used to prove the eval-capture scrubber
 # redacts JWT shapes.
@@ -48,7 +48,7 @@ commits = [
   "0db51b703400c141bb5f8583ef36f7cd03a76901",
   "a23b2700f4b66518f2c4e4093e5c945b85c9283d",
 ]
-paths = ['''^deploy/memrain/tests/eval_capture\.test\.ts$''']
+paths = ['''^deploy/memex/tests/eval_capture\.test\.ts$''']
 
 # A marker string that must never leak across tenants; the name says "secret",
 # the value is a nonsense word pair.
@@ -59,4 +59,25 @@ commits = [
   "8902dbf0a757a78be1d6d1fcee4127fb1f13499c",
   "b764fddd7d6406429eca209c0f81cee3a300e9e8",
 ]
-paths = ['''^deploy/memrain/tests/tenant_isolation\.test\.ts$''']
+paths = ['''^deploy/memex/tests/tenant_isolation\.test\.ts$''']
+
+[[allowlists]]
+description = "synthetic enrollment token in admin route tests"
+condition = "AND"
+commits = ["1658edfaaefa2bbab319bf94331bf9704a0bd4df"]
+paths = ['''^deploy/memrain/tests/admin_spa_v16\.test\.ts$''']
+regexes = ['''^Abc_def-0123456789abcdefghijklmnopqrstuvwxy$''']
+
+[[allowlists]]
+description = "synthetic bearer echo in transcript redaction tests"
+condition = "AND"
+commits = ["d0ab6990accc7bd6c47a9c41ac244289ca84b486"]
+paths = ['''^deploy/memrain/tests/transcripts_ingest\.test\.ts$''']
+regexes = ['''^Zx9Kq2Lm7Np4Rt8Vw3Yb6Hd1Fg5$''']
+
+[[allowlists]]
+description = "search cache hash in ranking golden fixture"
+condition = "AND"
+commits = ["ba532405cda25618abc1417d839c9566cb1498d6"]
+paths = ['''^deploy/memrain/tests/fixtures/rank_flags_off_golden\.json$''']
+regexes = ['''^8ad4c127a2a8323b0004ade36aa1730194986d5238ccef38c6cc5f87f7dec08b$''']
