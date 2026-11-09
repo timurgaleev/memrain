@@ -12,8 +12,7 @@
  *             (config present + parses, DB engine opens, vault path readable)
  *   - meta  : the doctor / runtime itself; the fallthrough bucket.
  *
- * memrain is brain-only, so there is no fourth `skill` category (agent skill
- * dispatcher) — there is no skill layer to diagnose.
+ *   - skills: integrity of the procedures served to clients.
  *
  * Drift contract: every check name that ships in `commands/doctor.ts` MUST
  * appear in exactly one set below. `tests/doctor_categories.test.ts` enforces
@@ -22,7 +21,7 @@
  * stderr warning so a missing addition surfaces in dev runs before CI.
  */
 
-export type CheckCategory = "brain" | "ops" | "meta";
+export type CheckCategory = "brain" | "ops" | "meta" | "skills";
 
 /**
  * Three-state check outcome — the same vocabulary the maintenance cycle
@@ -158,11 +157,14 @@ export const OPS_CHECK_NAMES: ReadonlySet<string> = new Set([
 /** The doctor / runtime itself. Empty today; the fallthrough bucket. */
 export const META_CHECK_NAMES: ReadonlySet<string> = new Set<string>([]);
 
+export const SKILLS_CHECK_NAMES: ReadonlySet<string> = new Set(["skillpack"]);
+
 /** Union of every categorized name — the drift-guard comparison set. */
 export const KNOWN_CHECK_NAMES: ReadonlySet<string> = new Set<string>([
   ...BRAIN_CHECK_NAMES,
   ...OPS_CHECK_NAMES,
   ...META_CHECK_NAMES,
+  ...SKILLS_CHECK_NAMES,
 ]);
 
 // Once-per-process guard so an uncategorized check warns once, not per call.
@@ -175,6 +177,7 @@ const warned = new Set<string>();
 export function categorize(name: string): CheckCategory {
   if (BRAIN_CHECK_NAMES.has(name)) return "brain";
   if (OPS_CHECK_NAMES.has(name)) return "ops";
+  if (SKILLS_CHECK_NAMES.has(name)) return "skills";
   if (META_CHECK_NAMES.has(name)) return "meta";
   if (!warned.has(name)) {
     warned.add(name);

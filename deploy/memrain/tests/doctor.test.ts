@@ -150,6 +150,7 @@ describe("doctor", () => {
       "runtime-config-overlay",
       "schema-version",
       "secret-exposure",
+      "skillpack",
       "source-health",
       "source-routing-health",
       "stale-locks",
@@ -176,7 +177,7 @@ describe("doctor", () => {
     // doctor actually emits is in the categorization single-source-of-truth
     // (so a future check added without categorizing it fails here).
     for (const c of parsed.checks) {
-      expect(["brain", "ops", "meta"]).toContain(c.category);
+      expect(["brain", "ops", "meta", "skills"]).toContain(c.category);
       expect(KNOWN_CHECK_NAMES.has(c.name)).toBe(true);
       // Every check carries a verdict, and `ok` is only its exit-code view.
       expect(["ok", "warn", "fail"]).toContain(c.status);
@@ -495,4 +496,26 @@ it("warns on failed or stale quality probes and clears after a fresh successful 
       if (name === "contradiction-trend" && judgeFailed) expect(check.detail).toContain("judge_errors=2");
     }
   }
+});
+
+
+describe("skillpack doctor", () => {
+  it("reports a broken served pack as skills without claiming the brain is unavailable", async () => {
+    const dir = join(tmp, "broken-skills");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "broken.md"), "---\nname: broken\ntools: [invented_tool]\n---\n");
+    const prior = process.env.MEMRAIN_SKILLS_DIR;
+    process.env.MEMRAIN_SKILLS_DIR = dir;
+    try {
+      const { parsed, exitCode } = await report(cfgPath);
+      const check = parsed.checks.find(c => c.name === "skillpack");
+      expect(check).toMatchObject({ category: "skills", status: "warn", ok: true });
+      expect(check?.detail).toContain("unknown-tool");
+      expect(parsed.summary.by_category.skills?.ok).toBe(1);
+      expect(exitCode).toBe(0);
+    } finally {
+      if (prior === undefined) delete process.env.MEMRAIN_SKILLS_DIR;
+      else process.env.MEMRAIN_SKILLS_DIR = prior;
+    }
+  });
 });

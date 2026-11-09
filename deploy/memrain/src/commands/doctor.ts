@@ -12,6 +12,8 @@ import { checkPersonNameDuplicates } from "../core/person-identity.ts";
  *   - vault path exists and is readable (when configured)
  *   - reports last_indexed_mtime spread (oldest / newest / count)
  */
+import { lintSkillpack } from "../core/skillpack/lint.ts";
+import { DEFAULT_SKILLS_DIR } from "../core/skillpack/brain-resident.ts";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -248,6 +250,16 @@ export interface DoctorOptions {
 export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
   const checks: Check[] = [];
   let config: ReturnType<typeof loadConfig> | null = null;
+
+  try {
+    const pack = lintSkillpack(process.env.MEMRAIN_SKILLS_DIR || DEFAULT_SKILLS_DIR);
+    const errors = pack.issues.filter(i => i.severity !== "warn");
+    checks.push({ name: "skillpack", ok: true, status: pack.ok ? "ok" : "warn",
+      detail: `${pack.skills} skills; ${errors.length} errors; ${pack.issues.length - errors.length} advisory warnings` +
+        (errors.length ? `: ${errors.slice(0, 10).map(i => `${i.slug}:${i.rule}`).join(", ")}` : "") });
+  } catch (e) {
+    checks.push(couldNotCheck("skillpack", e, "check MEMRAIN_SKILLS_DIR and run memrain skillpack lint"));
+  }
 
   // 1. config file
   const cfgPath = opts.configPath ?? defaultConfigPath();
@@ -698,7 +710,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
   const pass = checks.every((c) => c.ok);
   const status = worstStatus(checks.map((c) => c.status));
 
-  // Categorize each check (brain / ops / meta) and roll up per-category
+  // Categorize each check (brain / ops / skills / meta) and roll up per-category
   // pass/fail counts so the report shows signal-to-noise on the question the
   // operator is asking, not one flat equal-weight list.
   const categorized: CategorizedCheck[] = checks.map((c) => ({
@@ -709,6 +721,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
     brain: { ok: 0, fail: 0 },
     ops: { ok: 0, fail: 0 },
     meta: { ok: 0, fail: 0 },
+    skills: { ok: 0, fail: 0 },
   };
   for (const c of categorized) {
     byCategory[c.category][c.ok ? "ok" : "fail"]++;

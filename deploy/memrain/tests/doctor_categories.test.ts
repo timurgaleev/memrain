@@ -80,6 +80,7 @@ describe("doctor categorize", () => {
       "runtime-config-overlay",
       "schema-version",
       "secret-exposure",
+      "skillpack",
       "source-health",
       "source-routing-health",
       "stale-locks",

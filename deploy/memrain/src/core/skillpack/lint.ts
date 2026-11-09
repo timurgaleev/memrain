@@ -15,8 +15,9 @@
  * A skill that declares an operator-only tool is a warning: tenants are
  * served the skill but refused the tool.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { readSkillText } from "./read-text.ts";
 import { CLI_COMMANDS, type CliCommandSpec } from "../../cli-commands.ts";
 import { OPERATIONS } from "../../mcp/operations.ts";
 import { OPERATOR_ONLY_TOOLS } from "../../mcp/visibility.ts";
@@ -504,9 +505,9 @@ function checkTriggerOverlap(skills: readonly SkillTriggerLines[], issues: Skill
  * skip: the server would fail to serve it, and a silently skipped skill would
  * let the lint pass on a pack it never checked.
  */
-function readText(file: string, slug: string, issues: SkillLintIssue[]): string | null {
+function readText(file: string, slug: string, issues: SkillLintIssue[], skillsDir: string): string | null {
   try {
-    return readFileSync(file, "utf8");
+    return readSkillText(file, skillsDir);
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
     issues.push({ slug, rule: "unreadable", detail: code ?? String(e), line: 1 });
@@ -545,14 +546,14 @@ export function lintSkillpack(skillsDir: string, opts: SkillLintOptions = {}): S
       for (const doc of readdirSync(full).sort()) {
         if (!doc.endsWith(".md")) continue;
         const slug = `conventions/${doc}`;
-        const text = readText(join(full, doc), slug, issues);
+        const text = readText(join(full, doc), slug, issues, skillsDir);
         if (text !== null) checkBody(slug, text, surfaces, issues);
       }
       continue;
     }
     if (name.startsWith("_")) {
       if (!name.endsWith(".md")) continue;
-      const text = readText(full, name, issues);
+      const text = readText(full, name, issues, skillsDir);
       if (text !== null) checkBody(name, text, surfaces, issues);
       continue;
     }
@@ -567,7 +568,7 @@ export function lintSkillpack(skillsDir: string, opts: SkillLintOptions = {}): S
       if (!existsSync(file)) continue;
     }
     skills++;
-    const text = readText(file, slug, issues);
+    const text = readText(file, slug, issues, skillsDir);
     if (text === null) continue;
     const triggers = lintSkillFile(slug, text, surfaces, issues);
     if (triggers !== null) triggerLines.push(triggers);
