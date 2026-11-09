@@ -50,7 +50,7 @@ else
   die "import.meta.url pathname (exit $ec)"; cat "$OUT"
 fi
 
-for assignment in 'process.exitCode = savedStatus;' 'process.exitCode= saved_status_2 ;' 'process.exitCode = $saved;' 'process.exitCode = undefined;'; do
+for assignment in 'process.exitCode = savedStatus;' 'process.exitCode= saved_status_2 ;' "process.exitCode = \$saved;" 'process.exitCode = undefined;'; do
   root="$(fixture arbitrary_restore "$assignment")"
   ec=0; run "$root" || ec=$?
   if [ "$ec" -eq 1 ] && grep -q 'sub/arbitrary_restore.test.ts:1' "$OUT"; then
