@@ -81,23 +81,35 @@ const UNIT_DAYS: Record<string, number> = { d: 1, w: 7, m: 30, y: 365 };
 export function resolveDateBoundary(value: string, which: "since" | "until"): string {
   const v = value.trim();
   const rel = RELATIVE_DURATION.exec(v);
+  const invalid = () => new OperationError(
+    "invalid_params", `Invalid ${which} value "${value}"`,
+    "Use ISO-8601 (e.g. 2026-01-15) or a relative duration (7d / 2w / 6m / 1y).",
+  );
   if (rel) {
     const days = Number(rel[1]) * UNIT_DAYS[rel[2] as string]!;
-    return new Date(Date.now() - days * DAY_MS).toISOString();
+    const date = new Date(Date.now() - days * DAY_MS);
+    if (!Number.isFinite(date.getTime())) throw invalid();
+    return date.toISOString();
   }
-  if (which === "until" && PLAIN_DATE.test(v)) return `${v}T23:59:59.999Z`;
-  // Pin a plain-date `since` to UTC midnight too — a raw date would be cast in
-  // the server's session TZ by Postgres while the post-hydrate path parses it
-  // as UTC; the two must agree regardless of server TZ.
-  if (PLAIN_DATE.test(v)) return `${v}T00:00:00.000Z`;
-  if (Number.isNaN(Date.parse(v))) {
-    throw new OperationError(
-      "invalid_params",
-      `Invalid ${which} value "${value}"`,
-      "Use ISO-8601 (e.g. 2026-01-15) or a relative duration (7d / 2w / 6m / 1y).",
-    );
+  const parsed = Date.parse(v);
+  if (!Number.isFinite(parsed)) throw invalid();
+  if (PLAIN_DATE.test(v)) {
+    if (new Date(parsed).toISOString().slice(0, 10) !== v) throw invalid();
+    return `${v}T${which === "until" ? "23:59:59.999" : "00:00:00.000"}Z`;
   }
   return v;
+}
+
+/** Legacy numeric hours and the same date/duration syntax as retrieval. */
+export function resolveSinceHours(value: string, maxHours: number): number {
+  const text = value.trim();
+  const numeric = Number(text);
+  const hours = text && Number.isFinite(numeric) ? numeric
+    : (Date.now() - Date.parse(resolveDateBoundary(text, "since"))) / 3_600_000;
+  if (!Number.isFinite(hours) || hours < 1 || hours > maxHours) {
+    throw new OperationError("invalid_params", `Invalid since value "${value}"; expected a lookback between 1 and ${maxHours} hours`);
+  }
+  return hours;
 }
 
 /**

@@ -161,3 +161,9 @@ For manual capture or a scheduled job, push one rollout at a time:
 memrain transcripts push ~/.codex/sessions/2026/10/01/rollout-<id>.jsonl \
   --url https://brain.example.com --token-file ~/.config/memrain/push-token
 ```
+
+`--since` also accepts a relative lookback (`7d`, `2w`, `6m`, `1y`), using the
+same parser as retrieval. Months mean 30 days and years 365 days. `auto` keeps
+its transcript-watermark meaning. The `friction`, `eval-export`, and `reports`
+commands accept the same date/duration forms alongside their existing numeric
+hour values; their existing maximum lookback limits still apply.

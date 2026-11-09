@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { resolveSinceHours } from "./core/search/filters.ts";
 import { runAliasesSuggest } from "./commands/aliases.ts";
 /**
  * memrain CLI entrypoint.
@@ -189,7 +190,7 @@ function printUsage(): void {
   console.log("  eval-replay run [--tag T] [--limit N] [--promote]");
   console.log("                               capture / replay real queries; --promote sets new baseline");
   console.log("  eval-replay delete <id>      remove a captured query");
-  console.log("  eval-export [--source firehose|curated] [--since H] [--limit N] [--out PATH]");
+  console.log("  eval-export [--source firehose|curated] [--since H|ISO|7d] [--limit N] [--out PATH]");
   console.log("                               JSONL dump of eval_candidates (default) or eval_queries");
   console.log("  eval-prune [--keep-days N] [--apply] [--tool-name T]");
   console.log("                               trim old rows from eval_candidates; --apply to actually delete");
@@ -205,15 +206,15 @@ function printUsage(): void {
   console.log("  sources update <id> [...same flags as register, all optional...]");
   console.log("                               [--no-respect-quiet-hours] to clear the flag");
   console.log("  sources delete <id>          refuses if any document still references it");
-  console.log("  friction analyze [--since H] [--limit N]");
+  console.log("  friction analyze [--since H|ISO|7d] [--limit N]");
   console.log("                               counts + recent + top-repeats from friction_events");
-  console.log("  friction list [--kind K] [--skill S] [--since H] [--limit N]");
+  console.log("  friction list [--kind K] [--skill S] [--since H|ISO|7d] [--limit N]");
   console.log("                               flat JSON list of recent events");
-  console.log("  friction render [--kind K] [--skill S] [--since H] [--limit N] [--no-redact]");
+  console.log("  friction render [--kind K] [--skill S] [--since H|ISO|7d] [--limit N] [--no-redact]");
   console.log("                               markdown table; redacts query/reason by default");
   console.log("  friction log --kind K [--query Q] [--reason R] [--source-path P] [--skill S] [--severity confused|error|blocker|nit]");
   console.log("                               record a friction event; kinds: search-miss|wrong-answer|tool-error|low-confidence|other|delight|phase-marker|interrupted");
-  console.log("  friction propose-fix [--skill S | --top-skills N] [--since H] [--example-limit N]");
+  console.log("  friction propose-fix [--skill S | --top-skills N] [--since H|ISO|7d] [--example-limit N]");
   console.log("                               Claude Haiku suggests skill-text edits to reduce friction");
   console.log("  orphans                      DB hygiene report + safe deletions");
   console.log("  rename <from> <to> --expected-version N [--source ID]");
@@ -221,7 +222,7 @@ function printUsage(): void {
   console.log("  pages [--limit N] [--filter S] catalogue of known wikilink targets");
   console.log("  lint [<dir|file.md>] [--fix] [--dry-run]");
   console.log("                               DB frontmatter conformance (no target) or file lint with auto-repair");
-  console.log("  reports [--since H]          trend report from cycle_snapshots");
+  console.log("  reports [--since H|ISO|7d]          trend report from cycle_snapshots");
   console.log("  spend [--days N]             LLM spend by model, feature and spender");
   console.log("  agent run <task> [--max-usd X] [--wait]");
   console.log("                               queue a read-only agent job (needs MEMRAIN_AGENT_ENABLED=1); prints its id");
@@ -289,7 +290,7 @@ function printUsage(): void {
   console.log("  config unset --pattern <pfx> bulk-delete keys by prefix");
   console.log("  capture [<text>] [--stdin] [--file P] [--slug S] [--type T] [--source ID] [--title T]");
   console.log("                               one-command note capture → page + search mirror");
-  console.log("  transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code] [--source ID] [--since ISO|auto] [--no-embed] [--facts --max-cost-usd N] [--dry-run] [--json]");
+  console.log("  transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code] [--source ID] [--since ISO|7d|auto] [--no-embed] [--facts --max-cost-usd N] [--dry-run] [--json]");
   console.log("  transcripts repair-origin <path> [--source ID] [--format auto|codex|claude-code] [--apply] [--json]");
   console.log("  transcripts status [--source ID] [--json]");
   console.log("  transcripts push <path> --url URL --token-file F [--hook-stdin] [--dry-run] [--json]");
@@ -901,11 +902,7 @@ async function main(argv: readonly string[]): Promise<number> {
       const opts: Parameters<typeof runFriction>[0] = { sub };
       const sinceStr = values.get("--since");
       if (sinceStr !== undefined) {
-        const n = Number(sinceStr);
-        if (!Number.isFinite(n) || n < 1 || n > 24 * 365) {
-          throw new Error(`memrain friction: invalid --since ${sinceStr}`);
-        }
-        opts.sinceHours = n;
+        opts.sinceHours = resolveSinceHours(sinceStr, 24 * 365);
       }
       const limitStr = values.get("--limit");
       if (limitStr !== undefined) {
@@ -986,11 +983,7 @@ async function main(argv: readonly string[]): Promise<number> {
       }
       const since = values.get("--since");
       if (since !== undefined) {
-        const n = Number(since);
-        if (!Number.isFinite(n) || n < 1 || n > 24 * 365) {
-          throw new Error(`memrain eval-export: invalid --since ${since}`);
-        }
-        opts.sinceHours = n;
+        opts.sinceHours = resolveSinceHours(since, 24 * 365);
       }
       const limit = values.get("--limit");
       if (limit !== undefined) {
@@ -1440,11 +1433,7 @@ async function main(argv: readonly string[]): Promise<number> {
       const sinceStr = values.get("--since");
       const opts: Parameters<typeof runReports>[0] = {};
       if (sinceStr !== undefined) {
-        const n = Number(sinceStr);
-        if (!Number.isFinite(n) || n < 1 || n > 24 * 30) {
-          throw new Error(`memrain reports: invalid --since ${sinceStr}`);
-        }
-        opts.sinceHours = n;
+        opts.sinceHours = resolveSinceHours(sinceStr, 24 * 30);
       }
       await runReports(opts);
       return 0;

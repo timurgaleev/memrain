@@ -1,6 +1,7 @@
+import { resolveDateBoundary } from "../core/search/filters.ts";
 /**
  * `memrain transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code]
- *                           [--source ID] [--since ISO|auto] [--no-embed]
+ *                           [--source ID] [--since ISO|7d|auto] [--no-embed]
  *                           [--facts --max-cost-usd N] [--dry-run] [--json]`
  * `memrain transcripts status [--source ID] [--json]`
  * `memrain transcripts push <path> --url URL --token-file F [--hook-stdin] [--dry-run] [--json]`
@@ -371,8 +372,11 @@ export async function runTranscripts(opts: TranscriptsCmdOptions): Promise<numbe
   const since = opts.since?.trim();
   let sinceMs: number | null = null;
   if (since !== undefined && since !== "auto") {
-    sinceMs = Date.parse(since);
-    if (!Number.isFinite(sinceMs)) return fail(`--since must be an ISO time or auto (got ${JSON.stringify(opts.since)})`, opts.json);
+    try {
+      sinceMs = Date.parse(resolveDateBoundary(since, "since"));
+    } catch {
+      return fail(`--since must be an ISO time, duration (7d/2w/6m/1y), or auto (got ${JSON.stringify(opts.since)})`, opts.json);
+    }
   }
   if (opts.maxCostUsd !== undefined && !opts.facts) return fail("--max-cost-usd applies only with --facts", opts.json);
   let factsCap: number | null = null;
