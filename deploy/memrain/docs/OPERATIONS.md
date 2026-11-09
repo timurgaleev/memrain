@@ -25,6 +25,12 @@ sudo docker compose --env-file .env logs --tail 25 memrain
 
 First boot pulls + builds; subsequent rebuilds are ~30 s warm.
 
+Migration 146 pins six existing SQL functions to
+`search_path = pg_catalog, public, pg_temp`. A missing function or insufficient
+ownership produces a NOTICE and leaves that signature unchanged. Record any
+such skip and inspect the deployed catalog; a successful migration command
+alone does not prove every signature was hardened.
+
 ## Health probes
 
 ```bash
@@ -55,6 +61,12 @@ bun install --frozen-lockfile
 bun run test:sharded   # never a bare `bun test`: PGLite runs out of WASM heap
 bun run src/cli.ts --help
 ```
+
+Admin interaction checks use a separate development-only Playwright runner;
+see [Admin browser tests](../../../CONTRIBUTING.md#admin-browser-tests).
+History View fetches only the selected version through `page_get(version)`;
+existing body access and redaction rules still apply. Jobs Watch pauses while
+the tab is hidden, refreshes on return and aborts on unmount.
 
 To run against a fresh local PGLite (dev only — production uses RDS):
 
@@ -109,47 +121,95 @@ docker exec deploy-memrain-1 bun run src/cli.ts eval
 
 ## Re-build the index from scratch
 
-If something goes catastrophically wrong with the search index but
-the underlying data (vault + memory) is intact:
-
-```bash
-# wipe the corpus tables in RDS
-docker exec deploy-memrain-1 bun -e "
-  import postgres from 'postgres';
-  const sql = postgres(process.env.MEMRAIN_POSTGRES_URL, { ssl: 'require' });
-  await sql.unsafe('TRUNCATE entity_mentions, embeddings, chunks, entities, documents CASCADE').simple();
-  console.log('truncated');
-  await sql.end();
-"
-
-# trigger a full re-sweep
-docker exec deploy-memrain-1 bun run src/cli.ts reindex --all --vault /memory
-```
-
-Cost: re-embed of ~115 files ≈ a few cents (Titan v2, credit-eligible).
-Time: ~5-10 min on t4g.medium.
+Only the derived search index can be rebuilt from intact source files and
+canonical database pages. Preserve the existing database and backup before
+repairing it; truncating tables with cascades can remove related data that
+file ingestion cannot recreate. Use `integrity` and `doctor` to establish
+which inputs or mirrors need work, then review a bounded repair below.
+`reindex --rechunk-stale` upgrades existing stale documents; it is not a full
+restore and does not discover missing canonical data.
 
 ## Re-build the index after RDS loss
 
-Production storage is **RDS Postgres**. The index is fully derivable
-from the source content under `/memory`, so an RDS wipe / restore is
-recoverable in ~5-10 minutes:
+RDS holds canonical pages, facts, versions and other history that may have no
+file copy. Restore that database from PITR/snapshots or a complete verified
+database copy first. A `/memory` sweep or Markdown page import cannot recover
+those records. Follow [Backup evidence and page import](../../../docs/DEPLOYMENT.md#backup-evidence-and-page-import)
+and the [database copy and verification workflow](#migrate-to-a-fresh-rds-in-another-account).
+Verify table counts and content hashes on the restored target before resuming
+workers. A documented command or installed release is not evidence that a
+restore has run successfully.
+
+## Bounded chunker upgrade
+
+On the operator host, preview the exact scope and budget:
 
 ```bash
-# wipe the corpus tables in RDS (TRUNCATE cascades to embeddings + mentions)
-docker exec deploy-memrain-1 bun -e "
-  import postgres from 'postgres';
-  const sql = postgres(process.env.MEMRAIN_POSTGRES_URL, { ssl: 'require' });
-  await sql.unsafe('TRUNCATE entity_mentions, embeddings, chunks, entities, documents CASCADE').simple();
-  await sql.end();
-"
-
-# trigger a full re-sweep
-docker exec deploy-memrain-1 bun run src/cli.ts reindex --all --vault /memory
+docker exec deploy-memrain-1 bun run src/cli.ts reindex --rechunk-stale \
+  --source all --vault /memory --paths /repo-source --limit 10 --max-cost-usd 1 --dry-run
+# Replace <reviewed-hash> with plan_hash from that preview; keep other options identical:
+docker exec deploy-memrain-1 bun run src/cli.ts reindex --rechunk-stale \
+  --source all --vault /memory --paths /repo-source --limit 10 --max-cost-usd 1 \
+  --plan-hash <reviewed-hash>
 ```
 
-Cost: ~few cents (Titan v2 is credit-eligible). Time: ~5-10 min on
-t4g.medium.
+Without a hash this command only previews, even if `--dry-run` is omitted.
+Preview does not run migrations, write database rows or call models. The
+default document limit is 25 (maximum 1000), and the default dollar ceiling
+is zero. `vault` includes only files; `code` uses configured code roots;
+`all` also includes canonical `page://` and `page-truth://` mirrors. Held
+candidates and `truncated` must be reviewed; a completed batch is not a claim
+that the whole corpus was upgraded. The census stops at 10000 stale rows.
+
+The hash pins selected inputs, ownership, stored chunks/vectors, options,
+versions and relevant model/configuration/pricing. Changed input refuses an
+old hash before work starts. Each target is checked again before its write;
+an incomplete code parse, embedding failure or concurrent change retains
+that target's old chunks. A later failure can leave earlier targets completed: inspect the
+`completed`, `skipped`, `remaining` and `held` fields before previewing again.
+Keep the receipt with the before/after data manifest.
+
+Markdown work reserves its upper-bound embedding cost before each call;
+unknown embedding prices refuse the plan, and failed calls retain their
+reservation. This bounded path allows one SDK attempt per call, so hidden
+retries cannot multiply the ceiling. Code-only work is graph-only and accepts
+`--max-cost-usd 0`. With `MEMRAIN_CONTEXTUAL_LLM=1`, bounded Markdown rechunk
+refuses the plan; the paid contextual tier has its separate
+`reindex --contextual` workflow. Deterministic contextual prefixes are priced
+within the rechunk ceiling.
+
+Do not combine rechunk with `--all`, `--force`, `--contextual` or deletion
+reconciliation. Ordinary incremental reindex rejects `--dry-run`/`--limit`;
+those options require rechunk or contextual mode.
+
+Markdown version 3 prefers complete lines at hard cuts and preserves Unicode
+surrogate pairs. Manual stale counts compare against version 3, but automatic
+file/body/truth maintenance retains upgrade floor 2. Unchanged version-2
+documents do not incur a corpus re-embedding merely because this release was
+deployed. New or changed content uses version 3.
+
+## Repair unowned page mirrors
+
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts mirror-adopt --source <source-id> --limit 100
+docker exec deploy-memrain-1 bun run src/cli.ts mirror-adopt --source <source-id> --limit 100 \
+  --apply --plan-hash <reviewed-hash>
+```
+
+The source must exist. Preview is the default; the limit defaults to 100 and
+cannot exceed 200. Only a uniquely owned, current canonical body/truth mirror
+with proven chunk content can be adopted. Ambiguous, stale, retired or
+foreign-owned candidates are held. Apply revalidates the hash under locks,
+then changes only previously NULL source ownership and cache generations;
+content, IDs, embeddings, canonical pages and history remain intact. No model
+is called. The receipt includes old/new ownership and generations, plus
+content fingerprints.
+
+The normal mirror reconciler uses the same proof. For an upgrade whose data
+delta is being audited, keep workers paused through deployment, record the
+separate pinned adoption and its before/after manifest, then resume them.
+Installing this command does not establish that any production mirror has
+been adopted or validated.
 
 ## Migrate to a fresh RDS in another account
 

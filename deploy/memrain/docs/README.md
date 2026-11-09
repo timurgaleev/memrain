@@ -59,6 +59,11 @@ tsvector. Embeddings: Bedrock Titan v2 (1024-dim).
 | `serve --http --port 18790` | start the daemon |
 | `index <path>` / `search <q>` | one-shot indexing / retrieval |
 | `reindex [--all] [--vault P]` | walk a vault, re-ingest changed files |
+| `reindex --rechunk-stale [--source vault\|code\|all] [--limit N] [--max-cost-usd N]` | preview a bounded chunker upgrade; apply by repeating the options with `--plan-hash HASH` |
+| `import --dir DIR --source ID [--apply --plan-hash HASH]` | preview/create new pages from an export; never overwrite existing or deleted slugs |
+| `transcripts repair-origin PATH [--source ID] [--apply --plan-hash HASH]` | preview/correct agent-session fact attribution from explicit local logs |
+| `mirror-adopt --source ID [--limit N] [--apply --plan-hash HASH]` | preview/repair proven unowned page mirrors without re-embedding |
+| `secrets audit [--kinds jobs] [--json]` | inspect stored credentials; jobs are aggregate-only and never rewritten |
 | `extract` | re-run the regex entity extractor over all chunks (no Bedrock) |
 | `backlinks <name>` | docs that mention this wikilink target |
 | `reconcile-links [--limit N]` | broken `[[wikilinks]]` |

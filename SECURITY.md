@@ -89,7 +89,11 @@ providers. Licence texts stay in `THIRD_PARTY_NOTICES.md`.
 Every write path redacts credential-shaped text before it is stored: vendor
 key prefixes, Memrain's own tokens, JWTs, PEM private keys, passwords inside
 URLs, HTTP Basic and Bearer credentials, and high-entropy `KEY=`/`TOKEN=`/
-`PASSWORD=` assignments. Source code is scanned the same way when it is
+`PASSWORD=` assignments. The scanner also recognizes bounded, single-layer
+Unicode escapes and selected zero-width inserts, percent-encoded URL
+separators, and base64 credential assignments that decode to a complete
+recognized vendor key. It does not normalize arbitrary prose or decode
+arbitrary blobs recursively. Source code is scanned the same way when it is
 indexed. No pattern set is complete, and text stored before a rule existed
 keeps what it carried. If you find a live credential in the brain:
 
@@ -105,6 +109,11 @@ keeps what it carried. If you find a live credential in the brain:
    chunks and raw data with the current rules and lists each hit by store,
    row, field, kind, fingerprint and line. It never prints the value. The
    fingerprint is the one in the `[REDACTED:<kind>:<fingerprint>]` marker.
+   Jobs are also scanned, including JSON keys, but reported only as aggregate
+   counts by status and secret kind: no payloads, job IDs or per-job
+   fingerprints. `--kinds jobs` selects that audit alone. Under `--source`,
+   jobs are explicitly skipped because payload metadata is not authoritative
+   ownership.
    It does not read slugs, document titles and frontmatter, the query cache
    or the ingest log; check those by hand if the value could be there.
 3. **Redact them:**
@@ -116,10 +125,15 @@ keeps what it carried. If you find a live credential in the brain:
    A live page gets a new version written by `secrets-audit` and is mirrored
    into search again. Older versions are rewritten in place and stamped
    `scrubbed_at`, so their `hash_new` no longer matches their body. Every
-   other row is rewritten in place, and only if it still holds the text that
-   was scanned; a row that changed in between is reported, so run the audit
-   again. Each rewrite leaves a `secret-audit-redacted` ingest-log row with
+   other supported row is rewritten in place, and only if it still holds the
+   text that was scanned; a row that changed in between is reported, so run
+   the audit again. Each rewrite leaves a `secret-audit-redacted` ingest-log row with
    kinds and fingerprints only.
+   Jobs remain read-only even with `--apply --yes`: active and terminal
+   payloads, keys, authority and status are never rewritten or pruned. Hits
+   are reported as withheld, keep the audit unclean and return exit status 1.
+   Deploying new scanner rules does not scrub stored data; run a fresh dry
+   audit before choosing any corrective action.
 4. **Rebuild what the audit cannot rewrite.** If code chunks were listed,
    run `memrain reindex --source code --all`. A rewritten chunk keeps the
    embedding computed from its old text until it is embedded again.
