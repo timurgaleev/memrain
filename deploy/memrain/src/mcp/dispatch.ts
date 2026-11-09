@@ -715,7 +715,8 @@ async function dispatchToolInner(
       case "page_revert":
         return await callPageRevert(storage, args, writeSource, opts.isPublic ?? false, writerPrincipal(opts));
       case "page_get":
-        return await callPageGet(storage, args, redact, readSources, remote, seesPrincipal(opts), opts.adminPanel !== true);
+        return await callPageGet(storage, args, redact, readSources, remote, seesPrincipal(opts), opts.adminPanel !== true,
+          !(opts.adminPanel === true && isOperator));
       case "page_list":
         return await callPageList(storage, args, redact, readSources, remote);
       case "page_versions":
@@ -2293,6 +2294,7 @@ async function callPageGet(
   remote = false,
   isAdmin = false,
   touchRetrieval = true,
+  windowBodyEnabled = true,
 ): Promise<ToolCallResult> {
   if (typeof args["slug"] !== "string") {
     return errResult("page_get: `slug` is required");
@@ -2372,7 +2374,9 @@ async function callPageGet(
     quarantined !== null && remote && !(args["include_quarantined"] === true && isAdmin);
   const out = quarantineContent(row as unknown as Record<string, unknown>, withheld);
   const visible = redact ? redactBody(out) : out;
-  const window = typeof visible.markdown_body === "string"
+  // The admin API preserves its page-view contract and enforces its own
+  // response cap; MCP and credential-audit reads keep byte windows.
+  const window = windowBodyEnabled && typeof visible.markdown_body === "string"
     ? pageBodyWindow(visible.markdown_body, {
       ...(typeof args["offset"] === "number" ? { offset: args["offset"] } : {}),
       ...(typeof args["max_bytes"] === "number" ? { maxBytes: args["max_bytes"] } : {}),

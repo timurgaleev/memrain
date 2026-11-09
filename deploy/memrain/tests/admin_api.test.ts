@@ -815,6 +815,16 @@ describe("admin tool route", () => {
     }
   });
 
+  it("B-T13d keeps the admin page-view body contract below its response cap", async () => {
+    const body = "ordinary prose ".repeat(22_000);
+    await putPage(storage, { slug: "notes/window-sized", markdown_body: body });
+    const response = await tool("page_get", { slug: "notes/window-sized" });
+    expect(response?.status).toBe(200);
+    const { data } = await response!.json() as { data: { page: { markdown_body?: string; body_window?: string } } };
+    expect(data.page.markdown_body).toBe(body);
+    expect(data.page.body_window).toBeUndefined();
+  });
+
   it("B-T14 rate-limits only the embedding calls", async () => {
     await seedPage("people/alice");
     const toolLimiter = new RateLimiter({ capacity: 1, refillPerSecond: 0 });
