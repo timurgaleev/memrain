@@ -190,9 +190,19 @@ memrain auth revoke-grant <id>           # cut off one person who already redeem
 memrain auth enroll --replaces <id>      # new code for the same person; keeps source, spend key and cap
 memrain auth enroll alice --label alice --client <client_id> --ttl 30d # a code for someone new
 memrain auth list-clients                # who exists, in which mode, on which source
+memrain auth who-can-read notes/example  # read-only access verdicts; no page body or credentials
 memrain auth set-budget <client_id|token_name|enrollment_id> 2.00 # daily USD ceiling; 'none' removes it
 memrain auth revoke-client <client_id>   # cut a connector off entirely
 ```
+
+`who-can-read` checks current PATs and issued OAuth access tokens through
+`page_get`, including source, scope, diary and quarantine rules. It groups
+tokens by client or enrollment and reports the strongest current verdict.
+Unredeemed invitations and clients without access tokens appear separately;
+refresh tokens, future grants and static public/internal bearers are outside
+this inventory. Set `MEMRAIN_PUBLIC_URL` to check resource-bound audiences.
+The report flags truncation above 1,000 rows per credential category and does
+not update credential-use or page-retrieval timestamps.
 
 The admin panel does the same without an SSM session: **Agents** →
 **Credentials** → **Members** on a browser connector's row lists each person (label, source,

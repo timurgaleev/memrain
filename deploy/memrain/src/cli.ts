@@ -236,6 +236,7 @@ function printUsage(): void {
   console.log("                               copy data between Engine adapters");
   console.log("  admin setup-link [--ttl <hours>] [--json]");
   console.log("                               one-time link for the panel owner to create a passkey (default 24h, max 72h)");
+  console.log("  auth who-can-read <slug>     check issued credentials through page_get, without recording reads");
   console.log("  auth register-client <name> [--scopes S] [--source SRC] [--federated-read a,b]");
   console.log("                               [--tenant-mode client|enrollment]  (enrollment = one connector, many tenants)");
   console.log("                               [--token-endpoint-auth-method none|client_secret_post|client_secret_basic]");

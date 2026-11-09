@@ -2670,7 +2670,16 @@ export class OAuthProvider {
   // -------------------------------------------------------------------------
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const tokenHash = hashToken(token);
+    return this.resolveAccessToken(hashToken(token), token, true);
+  }
+
+  /** Operator audit: resolve a stored hash through the verifier without recording use. */
+  async inspectAccessTokenHash(tokenHash: string): Promise<Omit<AuthInfo, "token">> {
+    const { token: _token, ...grant } = await this.resolveAccessToken(tokenHash, "", false);
+    return grant;
+  }
+
+  private async resolveAccessToken(tokenHash: string, token: string, recordUse: boolean): Promise<AuthInfo> {
     const now = Math.floor(Date.now() / 1000);
 
     // OAuth tokens first. JOIN oauth_clients so the source_id (write scope)
@@ -2793,7 +2802,7 @@ export class OAuthProvider {
 
     if (legacyRows.length > 0) {
       const row = legacyRows[0]!;
-      await this.engine.query(
+      if (recordUse) await this.engine.query(
         // Once a minute is enough for "last used"; writing on every request
         // turns each authenticated read into a row update.
         `UPDATE access_tokens SET last_used_at = now()

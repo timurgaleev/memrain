@@ -400,7 +400,7 @@ export interface DispatchOptions {
   /** This server's OAuth issuer, named in the step-up challenge a scope
    *  refusal carries so the client can find the authorization server. */
   issuer?: string;
-  /** Set ONLY by the admin panel route (/admin/api/tool). The operator's own browsing must leave no
+  /** Set by the admin panel route (/admin/api/tool) and the read-only access audit. The operator's own browsing must leave no
    *  trace in the signals the brain learns from and must spend nothing generative: no retrieval
    *  touch on page_get, no eval capture, no hot-memory meta, and search runs with every paid stage
    *  off and a zero-LLM intent, whatever the env enables. Transports never set it. */
@@ -1925,7 +1925,7 @@ function maybeEnqueueFactExtraction(
 /** A diary/journal page. Its interiority is kept verbatim and never re-derived
  *  into facts OR chronicle events — a privacy invariant above the generic gates
  *  (facts admits type 'journal'; this refuses it). */
-function isDiaryPage(type: string | undefined, slug: string): boolean {
+export function isDiaryPage(type: string | undefined, slug: string): boolean {
   const t = (type ?? "").trim().toLowerCase();
   return t === "diary" || t === "journal" || slug.startsWith("life/diary/");
 }

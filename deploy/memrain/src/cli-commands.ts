@@ -41,6 +41,10 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "bench": bare,
   "backlinks": free,
   "merge": free,
+  "rename": free,
+  "aliases": subs("suggest"),
+  "models": bare,
+  "engine": subs("status"),
   "salience": bare,
   "watch": bare,
   "cycle": bare,
@@ -89,6 +93,7 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "auth": subs(
     "register-client",
     "list-clients",
+    "who-can-read",
     "revoke-client",
     "set-redirect-uris",
     "rescope-client",
