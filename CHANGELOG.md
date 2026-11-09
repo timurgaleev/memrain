@@ -56,6 +56,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Markdown export quotes multiline titles for import round trips.
 - Fact provenance labels prioritize the authenticated client or public
   principal over caller-supplied writer labels.
+- Markdown fence detection stays linear on delimiter runs followed by Unicode
+  line separators. Transitive lint dependencies use patched versions.
 
 ### Changed
 - Runtime images use Bun 1.4.4 and container logs rotate with bounded retention.
