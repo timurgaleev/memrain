@@ -27,12 +27,13 @@ import {
   type IndexFileOptions,
   type IndexResult,
 } from "./indexer.ts";
-import { MARKDOWN_CHUNKER_VERSION } from "./chunkers/recursive.ts";
+import { AUTO_MARKDOWN_RECHUNK_VERSION } from "./chunkers/recursive.ts";
 import type { Storage } from "./storage.ts";
 import { logIngest } from "./ingest-log.ts";
 import type { QuarantineVerdict } from "./quarantine.ts";
+import { reconcileUnownedMirrors } from "./page-mirror-adoption.ts";
 
-const SYNTHESIZED_SLUG_PATTERN = "^(atoms|concepts|patterns|reflections|synthesis|drafts/think|drift-reports)/";
+const SYNTHESIZED_SLUG_PATTERN = "^(?:atoms|concepts|patterns|reflections|synthesis|drafts/think|drift-reports)/";
 const SYNTHESIZED_SLUG = new RegExp(SYNTHESIZED_SLUG_PATTERN);
 
 export function isSynthesizedPageSlug(slug: string): boolean {
@@ -40,13 +41,13 @@ export function isSynthesizedPageSlug(slug: string): boolean {
 }
 
 export function notSynthesizedPageSql(alias: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) throw new Error("invalid page SQL alias");
+  if (!/^[a-z_]\w*$/i.test(alias)) throw new Error("invalid page SQL alias");
   return `${alias}.slug !~ '${SYNTHESIZED_SLUG_PATTERN}'`;
 }
 
 /** Exclude generated page mirrors, including tenant-qualified truth mirrors. */
 export function notSynthesizedDocSql(alias: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) throw new Error("invalid document SQL alias");
+  if (!/^[a-z_]\w*$/i.test(alias)) throw new Error("invalid document SQL alias");
   const path = `regexp_replace(${alias}.source_path, '^page(-truth)?://', '')`;
   const slug = `CASE WHEN COALESCE(${alias}.source_id, 'default') <> 'default'
     AND left(${path}, length(${alias}.source_id) + 1) = ${alias}.source_id || '/'
@@ -145,7 +146,7 @@ export const PAGE_MIRROR_PATH_SQL =
  * is searchable and feeds the title-phrase boost) followed by the body. The
  * H1 is only prepended when the body doesn't already open with one.
  */
-function pageText(title: string | null, body: string): string {
+export function pageText(title: string | null, body: string): string {
   const b = body ?? "";
   if (title && !/^\s*#\s/.test(b)) {
     return `# ${title}\n\n${b}`;
@@ -214,10 +215,7 @@ export async function indexPageIntoSearch(
     {
       sourcePath: pageSourcePath(page.slug, page.source_id),
       text,
-      sourceId: page.source_id ?? null,
-      // The mirror belongs to this page: adopt an unowned row rather than
-      // leaving it permanently unreconcilable (see DocumentWrite.claimUnowned).
-      claimUnowned: true,
+      sourceId: page.source_id ?? "default",
       // Stamp the body hash AND the title: `pages.content_hash` is body-only,
       // so a title-only edit leaves it unchanged. Stamping the title too lets
       // the backstop detect a stale mirror after a title-only edit whose
@@ -262,10 +260,7 @@ export async function indexPageTruthIntoSearch(
     {
       sourcePath: path,
       text: serialized,
-      sourceId: page.source_id ?? null,
-      // The mirror belongs to this page: adopt an unowned row rather than
-      // leaving it permanently unreconcilable (see DocumentWrite.claimUnowned).
-      claimUnowned: true,
+      sourceId: page.source_id ?? "default",
       extraFrontmatter: {
         page_truth_hash: compiledTruthHash(serialized),
       },
@@ -275,6 +270,8 @@ export async function indexPageTruthIntoSearch(
 }
 
 export interface ReconcilePageMirrorsResult {
+  /** Current unowned mirrors whose ownership metadata was proved and adopted. */
+  adopted?: number;
   /** Pages examined whose mirror was missing or stale. */
   scanned: number;
   /** Pages (re)mirrored into the search store. */
@@ -310,8 +307,11 @@ export async function reconcilePageMirrors(
     removed: 0,
     errors: [],
   };
+  const adoption = await reconcileUnownedMirrors(storage, limit);
+  result.adopted = adoption.adopted;
+  result.errors.push(...adoption.held);
 
-  // Pass 1 — missing or stale mirrors. Staleness = missing doc, tenant drift,
+  // Pass 1 — missing or stale mirrors with an established owner. Staleness = missing doc,
   // content/title drift, OR a chunker-version below the current markdown chunker
   // ($2). The chunker-version arm is the ONLY way a page mirror re-chunks on a
   // chunking-behavior change: the vault rechunk-sweep reads `source_path` off
@@ -328,14 +328,14 @@ export async function reconcilePageMirrors(
        FROM pages p
        LEFT JOIN documents d ON d.source_path = ${PAGE_MIRROR_PATH_SQL}
       WHERE p.deleted_at IS NULL
+        AND (d.id IS NULL OR d.source_id = p.source_id)
         AND (d.id IS NULL
-             OR d.source_id <> p.source_id
              OR COALESCE(d.frontmatter->>'page_content_hash', '') <> p.content_hash
              OR COALESCE(d.frontmatter->>'page_title', '') <> COALESCE(p.title, '')
              OR COALESCE(d.chunker_version, 0) < $2)
       ORDER BY p.updated_at DESC
       LIMIT $1`,
-    [limit, MARKDOWN_CHUNKER_VERSION],
+    [limit, AUTO_MARKDOWN_RECHUNK_VERSION],
   );
   for (const p of stale.rows) {
     result.scanned++;
@@ -372,10 +372,11 @@ export async function reconcilePageMirrors(
     compiled_truth: unknown;
     source_id: string;
     doc_source_id: string | null;
+    doc_id: string | null;
     stamp: string | null;
     doc_chunker_version: number | null;
   }>(
-    `SELECT p.slug, p.title, p.compiled_truth, p.source_id,
+    `SELECT p.slug, p.title, p.compiled_truth, p.source_id, d.id AS doc_id,
             d.source_id AS doc_source_id,
             d.frontmatter->>'page_truth_hash' AS stamp,
             d.chunker_version AS doc_chunker_version
@@ -389,6 +390,7 @@ export async function reconcilePageMirrors(
   let truthBudget = limit;
   for (const p of truthRows.rows) {
     if (truthBudget <= 0) break;
+    if (p.doc_id !== null && p.doc_source_id !== p.source_id) continue;
     let truth: unknown = p.compiled_truth;
     if (typeof truth === "string") {
       try {
@@ -410,7 +412,7 @@ export async function reconcilePageMirrors(
       serialized.length > 0 &&
       p.stamp === compiledTruthHash(serialized) &&
       p.doc_source_id === p.source_id &&
-      (p.doc_chunker_version ?? 0) >= MARKDOWN_CHUNKER_VERSION;
+      (p.doc_chunker_version ?? 0) >= AUTO_MARKDOWN_RECHUNK_VERSION;
     if (fresh) continue;
     truthBudget--;
     result.scanned++;
@@ -442,7 +444,7 @@ export async function reconcilePageMirrors(
        FROM documents d
        LEFT JOIN pages p
          ON ${PAGE_MIRROR_PATH_SQL} = d.source_path AND p.deleted_at IS NULL
-      WHERE d.source_path LIKE 'page://%' AND p.slug IS NULL
+      WHERE d.source_path LIKE 'page://%' AND p.slug IS NULL AND d.source_id IS NOT NULL
       LIMIT $1`,
     [limit],
   );
@@ -454,7 +456,7 @@ export async function reconcilePageMirrors(
         AND p.deleted_at IS NULL
         AND p.compiled_truth IS NOT NULL
         AND p.compiled_truth <> '{}'::jsonb
-      WHERE d.source_path LIKE 'page-truth://%' AND p.slug IS NULL
+      WHERE d.source_path LIKE 'page-truth://%' AND p.slug IS NULL AND d.source_id IS NOT NULL
       LIMIT $1`,
     [limit],
   );

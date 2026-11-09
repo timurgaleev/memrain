@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parseDocument } from "yaml";
@@ -6,10 +7,11 @@ import { loadConfig } from "../core/config.ts";
 import { putPage, validateSlug } from "../core/pages.ts";
 import { withStorage } from "./with-storage.ts";
 
-interface ImportOptions { dir: string; source: string; apply?: boolean; storage?: Storage }
-interface ImportPage { slug: string; title: string; type: string; markdown_body: string }
+interface ImportOptions { dir: string; source: string; apply?: boolean; planHash?: string; storage?: Storage }
+interface ImportPage { slug: string; title: string; type: string; markdown_body: string; file_hash: string }
 const MAX_FILE = 1024 * 1024;
 const MAX_TOTAL = 100 * 1024 * 1024;
+const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 
 function readExport(dir: string): ImportPage[] {
   const root = realpathSync(resolve(dir));
@@ -37,7 +39,7 @@ function readExport(dir: string): ImportPage[] {
       if (!meta || typeof meta.title !== "string" || typeof meta.type !== "string") throw new Error(`import: ${slug} requires string title and type`);
       // export adds one separator and one trailing newline outside the body.
       const body = text.slice(header[0].length).replace(/^\r?\n/, "").replace(/\r?\n$/, "");
-      pages.push({ slug, title: meta.title, type: meta.type, markdown_body: body });
+      pages.push({ slug, title: meta.title, type: meta.type, markdown_body: body, file_hash: hash(text) });
     }
   }
   walk(root, 0);
@@ -48,28 +50,34 @@ function readExport(dir: string): ImportPage[] {
 export async function runImport(opts: ImportOptions): Promise<number> {
   if (!opts.dir || !opts.source) throw new Error("import: --dir and --source are required");
   const pages = readExport(opts.dir);
+  const manifest = pages.map(p => ({ slug: p.slug, title: p.title, type: p.type,
+    body_hash: hash(p.markdown_body), file_hash: p.file_hash }));
+  const planHash = hash(JSON.stringify({ version: 1, source: opts.source, manifest }));
+  if (opts.apply && !opts.planHash) throw new Error("import: plan hash is required for apply");
+  if (opts.apply && opts.planHash !== planHash) throw new Error("import: stale plan hash; preview again");
   const storage = opts.storage ?? new Storage(loadConfig());
   return withStorage(storage, async () => {
     const e = storage.engine();
     if (!(await e.query("SELECT id FROM sources WHERE id = $1", [opts.source])).rows.length) throw new Error("import: register the target source first");
     const existing = await e.query<{ slug: string }>("SELECT slug FROM pages WHERE slug = ANY($1::text[])", [pages.map(p => p.slug)]);
-    const report = { ok: existing.rows.length === 0, dry_run: !opts.apply, source: opts.source,
+    const report = { ok: existing.rows.length === 0, dry_run: !opts.apply, source: opts.source, plan_hash: planHash, manifest,
       candidates: pages.length, created: 0, conflicts: existing.rows.map(r => r.slug), facts_extraction: false,
       indexing: "deferred_to_reconcile", note: "Page content only; versions, facts, grants and other database state are not restored." };
     if (!report.ok || !opts.apply) { console.log(JSON.stringify(report, null, 2)); return report.ok ? 0 : 1; }
-    let created = 0;
+    const created: string[] = [];
     try {
       for (const page of pages) {
         // Core writes have no MCP extraction side effects. The version check is
         // under the slug lock, so a writer racing the preview wins safely.
-        await putPage(storage, { ...page, source_id: opts.source, expectedVersion: 0, allowAdHocType: true, written_by: "import" });
-        created += 1;
+        const { file_hash, ...input } = page;
+        await putPage(storage, { ...input, source_id: opts.source, expectedVersion: 0, allowAdHocType: true, written_by: "import" });
+        created.push(page.slug);
       }
     } catch (error) {
-      console.log(JSON.stringify({ ...report, ok: false, created, error: "import_stopped", note: "Earlier creates remain; inspect conflicts before retrying." }, null, 2));
+      console.log(JSON.stringify({ ...report, ok: false, created: created.length, created_slugs: created, error: "import_stopped", note: "Earlier creates remain; inspect conflicts before retrying." }, null, 2));
       throw error;
     }
-    console.log(JSON.stringify({ ...report, created }, null, 2));
+    console.log(JSON.stringify({ ...report, created: created.length, created_slugs: created }, null, 2));
     return 0;
-  }, { owned: !opts.storage });
+  }, { owned: !opts.storage, migrate: false });
 }

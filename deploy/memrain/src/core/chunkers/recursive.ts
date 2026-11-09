@@ -29,7 +29,9 @@ export { parseFrontmatter };
 // v2 (2026-07-06): the indexer now strips the `## Takes` fence before chunking
 // (alongside `## Facts`), so any page/doc chunked under v1 may carry fenced
 // takes content that must be re-chunked out of the search index.
-export const MARKDOWN_CHUNKER_VERSION = 2;
+export const MARKDOWN_CHUNKER_VERSION = 3;
+/** Automatic maintenance retains the last approved corpus-wide upgrade floor. */
+export const AUTO_MARKDOWN_RECHUNK_VERSION = 2;
 
 export interface ChunkerOptions {
   /** Soft upper bound per chunk in characters. Default ≈ 4000 chars (~1000 tokens). */
@@ -197,7 +199,7 @@ function sectionsByHeading(body: string): string[] {
  * keep units coherent, then hard-slice any remaining run that is still too
  * long. ASCII terminators only (covers the en/de/ru corpus; keeps this source
  * file byte-clean for the audit gate). The hard slice is the floor that
- * guarantees every returned unit is <= maxChars regardless of punctuation.
+ * bounds each returned unit, except that a surrogate pair stays atomic.
  */
 function splitOversizedUnit(text: string, maxChars: number): string[] {
   // A non-positive budget would make the hard-slice loop below never advance
@@ -213,11 +215,17 @@ function splitOversizedUnit(text: string, maxChars: number): string[] {
     }
     for (let i = 0; i < s.length; ) {
       let end = Math.min(i + maxChars, s.length);
-      // Don't slice through a UTF-16 surrogate pair (emoji etc.) -- back the
-      // cut off the high surrogate so neither piece carries a lone half-char.
+      if (end < s.length) {
+        const newline = s.lastIndexOf("\n", end - 1);
+        if (newline > i) end = newline + 1;
+      }
+      // A surrogate pair stays whole even when the budget is one code unit.
       if (end < s.length) {
         const code = s.charCodeAt(end - 1);
-        if (code >= 0xd800 && code <= 0xdbff && end - 1 > i) end -= 1;
+        const next = s.charCodeAt(end);
+        if (code >= 0xd800 && code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+          end += end - i > 1 ? -1 : 1;
+        }
       }
       out.push(s.slice(i, end));
       i = end;

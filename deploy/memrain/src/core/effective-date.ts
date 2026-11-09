@@ -20,7 +20,10 @@ export function isCalendarDate(s: string): boolean {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
   if (!m) return false;
   const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const dt = new Date(Date.UTC(year, month - 1, day));
+  // PostgreSQL dates have no year zero; JS accepts it as astronomical notation.
+  if (year === 0) return false;
+  const dt = new Date(0);
+  dt.setUTCFullYear(year, month - 1, day);
   return dt.getUTCFullYear() === year && dt.getUTCMonth() === month - 1 && dt.getUTCDate() === day;
 }
 

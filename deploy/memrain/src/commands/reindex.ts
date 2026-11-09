@@ -36,6 +36,9 @@ import { withStorage } from "./with-storage.ts";
 import { sweepVault, type SweepResult } from "../core/sweep.ts";
 import { sweepCodeRoots, type SweepCodeResult } from "../core/sweep-code.ts";
 import { loadConfig } from "../core/config.ts";
+import { buildRechunkPlan } from "../core/rechunk-plan.ts";
+import { applyRechunkPlan } from "../core/rechunk-apply.ts";
+import { setSpendLedgerEngine } from "../core/budget.ts";
 import {
   contextualReembed,
   type ContextualReembedResult,
@@ -48,13 +51,10 @@ export interface ReindexCommandOptions {
   /** CSV of code roots; overrides MEMRAIN_CODE_PATHS env var. */
   codePaths?: string;
   /**
-   * Also re-index documents whose chunker_version is below current (mig 052),
-   * re-chunking + re-embedding the stale set on top of the normal mtime-due
-   * sweep. Auto-remediates a chunker constant bump without the full-corpus
-   * re-embed `--all` triggers. Applies to BOTH sweeps, each against its own
-   * chunker namespace: the vault sweep drains MARKDOWN_CHUNKER_VERSION stale
-   * docs (re-chunk + re-embed), the code sweep drains CODE_CHUNKER_VERSION
-   * stale docs (re-chunk only — the code path is graph-only, no Titan).
+   * Preview only documents below their current chunker version. A planHash
+   * applies that exact bounded selection; it does not run an incremental sweep
+   * alongside it. Source all includes canonical body/truth mirrors. Code stays
+   * graph-only; Markdown embedding calls share maxCostUsd.
    */
   rechunkStale?: boolean;
   /**
@@ -74,10 +74,14 @@ export interface ReindexCommandOptions {
   contextual?: boolean;
   /** Contextual re-embed: re-embed even chunks already marked. Default OFF. */
   force?: boolean;
-  /** Contextual re-embed: count the workload only, never write. Default OFF. */
+  /** Preview contextual work or a selected rechunk batch without writes. */
   dryRun?: boolean;
-  /** Contextual re-embed: cap chunks re-embedded this run (document-atomic). */
+  /** Rechunk document cap, or contextual chunk cap (document-atomic). */
   limit?: number;
+  /** Required to apply an exact reviewed rechunk selection; omitted means preview. */
+  planHash?: string;
+  /** Whole rechunk-run ceiling, including failed embedding calls. Defaults to zero. */
+  maxCostUsd?: number;
 }
 
 interface VaultReindexResult {
@@ -121,9 +125,39 @@ interface ContextualReindexResult {
 export async function runReindex(
   opts: ReindexCommandOptions,
 ): Promise<void> {
+  if (opts.rechunkStale && (opts.contextual || opts.all || opts.force || opts.reconcileDeletes || opts.allowMassDelete)) {
+    throw new Error("--rechunk-stale cannot combine with --contextual, --all, --force or deletion reconciliation");
+  }
+  if (!opts.rechunkStale && (opts.planHash !== undefined || opts.maxCostUsd !== undefined ||
+    (!opts.contextual && (opts.dryRun || opts.limit !== undefined)))) {
+    throw new Error("--dry-run/--limit require --rechunk-stale or --contextual; --plan-hash/--max-cost-usd require --rechunk-stale");
+  }
+  if (opts.planHash !== undefined && (!/^[a-f0-9]{64}$/.test(opts.planHash) || opts.dryRun)) {
+    throw new Error("--plan-hash must be a reviewed 64-character hash and cannot combine with --dry-run");
+  }
   const config = loadConfig();
   const source = opts.source ?? "vault";
   const storage = new Storage(config);
+  if (opts.rechunkStale) {
+    return withStorage(storage, async () => {
+      const vault = resolveVaultPath(config, opts.vault);
+      const codePaths = parseCodePaths(opts);
+      if (source === "vault" && !vault) throw new Error("rechunk --source vault requires --vault or a configured vault");
+      if (source === "code" && codePaths.length === 0) throw new Error("rechunk --source code requires --paths or configured code roots");
+      const selection = { source, ...(vault ? { vault } : {}), codePaths,
+        ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+        ...(opts.maxCostUsd !== undefined ? { maxCostUsd: opts.maxCostUsd } : {}) };
+      if (!opts.planHash) {
+        const plan = await buildRechunkPlan(storage, selection);
+        console.log(JSON.stringify({ ok: true, dry_run: true, ...plan }, null, 2));
+      } else {
+        setSpendLedgerEngine(storage.engine());
+        const result = await applyRechunkPlan(storage, selection, opts.planHash);
+        console.log(JSON.stringify({ dry_run: false, ...result }, null, 2));
+        if (!result.ok) process.exitCode = 1;
+      }
+    }, { migrate: false });
+  }
   return withStorage(storage, async () => {
     // Contextual re-embed is a standalone job — no file sweep runs alongside it.
     if (opts.contextual) {

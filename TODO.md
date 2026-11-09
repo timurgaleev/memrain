@@ -9,72 +9,38 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ---
 
-## Operator decisions deferred from 1.13
+## Remaining comparison program
 
-- Review exact targets before applying transcript attribution repair, importing
-  a markdown export, or rechunking code for module definitions. These commands
-  are not part of deployment.
-- Mixed-script slug changes, tombstone precedence over source fences, hard
-  erasure of forgotten content, and a worker-thread watchdog need separate
-  approval and acceptance criteria.
-- Takes write tools and write-reason history remain separate work. Their
-  migrations are not included in 1.13.
-- Revisit auto-think scheduling only for an enabled deployment. Evaluate
-  line-aligned markdown rechunking with a corpus/spend preview first.
-- Observe extraction recovery and model spend for seven days after deployment;
-  code tests do not establish model-quality or cost improvements.
-- Decide whether any explicitly trusted client principals should be exempt
-  from retrieval framing. PAT/OAuth writes currently remain external even
-  with admin scopes; no automatic operator-client allowlist is inferred.
-- Choose the deployment's `MEMRAIN_REQUIRE_WRITE_PRECONDITION` policy before
-  relying on the large-shrink guard. The guard is inactive when this policy
-  is off, and explicit `force` retains the existing bypass.
+- Complete the accepted write-reason history, canonical takes writes,
+  mixed-script slug compatibility, exact supersession precedence, typed
+  conflicts, atom lifecycle, temporal links, explicit erasure capability,
+  opt-in watchdog and bounded MCP read surfaces in the next release.
+- Run the pinned attribution, mirror-adoption and rechunk previews on the
+  deployment. Apply only reviewed, unambiguous selections with preservation
+  receipts. These operations are separate from deploying their commands.
+- Perform a scratch export/import restore drill. A markdown export restores
+  page content only; full database recovery requires a database backup.
+- Observe extraction recovery and model spend for seven complete days after
+  deployment; code tests do not establish model-quality or cost improvements.
+- Keep auto-think and the future event-loop watchdog disabled until their
+  deployment-specific acceptance criteria have been met.
+- Inspect and verify the operator's SessionEnd hook: absolute paths, command
+  beginning `cd / && exec /`, protected token file, preserved existing hooks,
+  hostile working-directory test and synthetic once-only ingestion.
+- Choose the deployment's `MEMRAIN_REQUIRE_WRITE_PRECONDITION` policy after
+  checking actual clients. The large-shrink guard is inactive when this
+  policy is off, and explicit `force` retains the existing bypass.
+- Keep PAT/OAuth contributions externally framed. Any explicit trusted-client
+  exemption needs its own policy; admin scopes alone do not imply trust.
 - Measure ledger-fact query p95 on production-sized data before adding an
-  index: the current `to_tsvector` predicate can scan all eligible facts even
-  though only three matches are returned.
-- Skip whitespace-only extraction windows without changing append offsets
-  or coverage; they can currently consume a model call.
-- Inspect legacy mirrors with NULL `documents.source_id` before repairing
-  source assignments; source-qualified type/prefix filters omit them.
-- Check client use of `page_versions` now that bodies are omitted by default.
-  Code callers with no visible starting definition also no longer recover a
-  resolved edge by name; preserve the stricter identity boundary.
-
-## Follow-ups from the 1.11 batch
-
-- `secrets audit` does not scan `jobs.payload`, and terminal job rows are
-  pruned only by `memrain jobs prune`; a secret in an old job payload is not
-  covered by `--apply`. Scan job payloads or prune terminal jobs in the cycle.
-- Key bodies that are themselves `\uXXXX`-escaped or base64-encoded, and keys
-  with zero-width characters pasted inside, are not caught.
-- Slack webhook URLs percent-encoded with `%2F` are not caught.
-- No check on the operator's machine that the SessionEnd hook command starts
-  with `cd / && exec /`.
-- The `outside_neutralized` marker lives in `compiled_truth`; a `page_put` that
-  replaces `compiled_truth` drops it, and the next re-import of that page
-  falls back to the pre-1.11 rebuild (brain fence not carried, facts kept).
-- GitHub and transcript writers read the old page scoped to their source; a
-  page first written under another source is rebuilt without carrying fences.
-- A fresh body ending in a bare `## Facts` / `## Takes` heading can make the
-  carried fence repeat that heading once.
-- The Twilio and SendGrid escape twins are unanchored inside longer hex or
-  base64 runs; fixed shapes and right edges bound it.
-
-## Follow-ups from the 1.10 batch
-
-- `scripts/check-test-hygiene.sh` matches only saved exit codes named
-  `orig*`/`prev*`; flag any `process.exitCode = <identifier>;` that is not
-  `?? 0` or inside `restoreExitCode`.
-- The Postgres twins of `pages_purge_leftovers` and `slug_aliases_dangling`
-  use fixed slugs; add a per-run suffix so an aborted run cannot leave rows
-  for the next one on a reused database.
-- The Postgres block of `facts_fence_absent` does not set
-  `MEMRAIN_PAGE_MIRROR_SYNC=0` like its PGLite block; it passes only because
-  the preload strips AWS credentials.
-- `effective-date.ts` builds dates with `Date.UTC`, which maps years 0000-0099
-  to 19xx, so those ISO years are now refused; use `setUTCFullYear`.
-- No fixture covers a `raw_data` row left without a page by a purge older
-  than 1.10 (live had none on 2026-11-07).
+  index, and count duplicate query embeddings before adding a cache.
+- Run the updated secret audit in preview mode. Job payload hits are reported
+  as aggregate counts and remain withheld under `--apply`; payload authority
+  and spend metadata must not be rewritten or automatically pruned.
+- Check remaining clients that request `page_versions`: bodies are omitted
+  by default, and a selected historical body is read with `page_get(version)`.
+  Code callers without a visible starting definition retain the stricter
+  identity boundary.
 
 ## Follow-ups from the admin charts batch (1.5)
 

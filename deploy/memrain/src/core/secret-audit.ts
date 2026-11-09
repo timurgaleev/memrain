@@ -12,8 +12,9 @@
  * through putPage (a new version, written by `secrets-audit`) and is mirrored
  * again; a version snapshot is rewritten in place and stamped `scrubbed_at`
  * (its hash_new then no longer matches its body); every other row is updated
- * in place, only if it still holds the text that was scanned. Each run leaves
- * one `secret_audit_runs` row, counts only, which the `secret-exposure` doctor
+ * in place, only if it still holds the text that was scanned. Jobs are the
+ * exception: payloads are counted without row details and are never rewritten.
+ * Each run leaves one `secret_audit_runs` row, counts only, which the `secret-exposure` doctor
  * check reads.
  */
 import { createHash } from "node:crypto";
@@ -42,6 +43,7 @@ export const AUDIT_STORES = [
   "synth_contradictions",
   "chunks",
   "raw_data",
+  "jobs",
 ] as const;
 export type AuditStore = (typeof AUDIT_STORES)[number];
 
@@ -93,6 +95,11 @@ export interface SecretAuditResult {
    * had. Both values are kept: the redacted one moves to a `~2`, `~3`... suffix.
    */
   key_collisions: Array<{ kind: AuditStore; ref: string; field: string }>;
+  /** Job payloads are counted only: neither row details nor rewrites are permitted. */
+  jobs: {
+    rows_scanned: number; rows_affected: number; hits_total: number; hits_withheld: number;
+    by_status: Record<string, number>; by_secret_kind: Record<string, number>;
+  };
 }
 
 export interface SecretAuditOptions {
@@ -154,6 +161,7 @@ const SPECS: Record<AuditStore, StoreSpec> = {
     extra: `COALESCE(d.frontmatter->>'kind' = 'code', false) AS is_code`,
   },
   raw_data: { store: "raw_data", from: "raw_data t", keys: ["id"], text: [], json: ["data"], sourceCol: null },
+  jobs: { store: "jobs", from: "jobs t", keys: ["id"], text: [], json: ["payload"], sourceCol: null, extra: "t.status" },
 };
 
 export function isAuditStore(value: string): value is AuditStore {
@@ -439,6 +447,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
     hits_truncated: false,
     errors: [],
     key_collisions: [],
+    jobs: { rows_scanned: 0, rows_affected: 0, hits_total: 0, hits_withheld: 0, by_status: {}, by_secret_kind: {} },
   };
 
   for (const store of kinds) {
@@ -450,6 +459,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
       for (const row of rows) {
         cursor = spec.keys.map((k) => row[k]);
         result.rows_scanned += 1;
+        if (store === "jobs") result.jobs.rows_scanned += 1;
         // One echo dictionary per row, shared by its fields, as on the write path.
         const echo: EchoDictionary | false = echoOn ? new Map() : false;
         const next: Record<string, unknown> = {};
@@ -511,6 +521,18 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
         result.rows_affected += 1;
         result.hits_total += hits.length;
         result.by_kind[store] = (result.by_kind[store] ?? 0) + hits.length;
+        if (store === "jobs") {
+          result.jobs.rows_affected += 1;
+          result.jobs.hits_total += hits.length;
+          const status = String(row.status);
+          result.jobs.by_status[status] = (result.jobs.by_status[status] ?? 0) + hits.length;
+          for (const h of hits) {
+            result.by_secret_kind[h.secret_kind] = (result.by_secret_kind[h.secret_kind] ?? 0) + 1;
+            result.jobs.by_secret_kind[h.secret_kind] = (result.jobs.by_secret_kind[h.secret_kind] ?? 0) + 1;
+          }
+          if (opts.apply) result.jobs.hits_withheld += hits.length;
+          continue;
+        }
         if (store === "chunks" && row.is_code === true) result.code_chunks_affected += 1;
         for (const field of collidedFields) result.key_collisions.push({ kind: store, ref, field });
         for (const h of hits) {
@@ -544,6 +566,9 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
   }
 
   result.finished_at = now().toISOString();
+  if (result.jobs.hits_withheld > 0) {
+    result.errors.push(`jobs: ${result.jobs.hits_withheld} hit(s) withheld; payload audit is count-only and never rewrites jobs`);
+  }
   if (runId !== null) {
     await engine.query(
       `UPDATE secret_audit_runs

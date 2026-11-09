@@ -80,8 +80,9 @@ describe("dangling slug redirects (PGLite)", () => {
 describe.skipIf(!PG_URL)("dangling slug redirects (Postgres)", () => {
   let pg: PostgresEngine;
   let storage: Storage;
-  const target = "people/alias-dangling-pg-b";
-  const alias = "people/alias-dangling-pg-a";
+  const run = crypto.randomUUID();
+  const target = `people/alias-dangling-pg-b-${run}`;
+  const alias = `people/alias-dangling-pg-a-${run}`;
 
   beforeAll(async () => {
     pg = new PostgresEngine({ url: PG_URL! });

@@ -50,6 +50,16 @@ else
   die "import.meta.url pathname (exit $ec)"; cat "$OUT"
 fi
 
-root="$(fixture clean "$(printf '%s\n' '  restoreExitCode(prevExit);' '  process.exitCode = prevExit ?? 0;' 'const d = import.meta.dir;')")"
+for assignment in 'process.exitCode = savedStatus;' 'process.exitCode= saved_status_2 ;' "process.exitCode = \$saved;" 'process.exitCode = undefined;'; do
+  root="$(fixture arbitrary_restore "$assignment")"
+  ec=0; run "$root" || ec=$?
+  if [ "$ec" -eq 1 ] && grep -q 'sub/arbitrary_restore.test.ts:1' "$OUT"; then
+    pass "arbitrary bare identifier restore refused"
+  else
+    die "arbitrary restore (exit $ec): $assignment"; cat "$OUT"
+  fi
+done
+
+root="$(fixture clean "$(printf '%s\n' '  restoreExitCode(prevExit);' '  process.exitCode = savedStatus ?? 0;' 'process.exitCode = 0;' 'process.exitCode = 1;' 'const d = import.meta.dir;')")"
 ec=0; run "$root" || ec=$?
 if [ "$ec" -eq 0 ]; then pass "clean file → exit 0"; else die "clean file (exit $ec)"; cat "$OUT"; fi

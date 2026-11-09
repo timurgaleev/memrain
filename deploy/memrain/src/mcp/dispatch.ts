@@ -7,7 +7,7 @@
  * (per MCP spec) instead of a JSON-RPC error envelope. JSON-RPC errors
  * are reserved for protocol-level failures (malformed request etc.).
  */
-import { andSourceScope } from "../core/source-scope.ts";
+import { andSourceScope, isNoGrant } from "../core/source-scope.ts";
 import { gatherDiagnostics } from "../core/gather-degraded.ts";
 import { pageBodyWindow } from "../core/page-window.ts";
 import { resolveFactEntity, type EntityResolutionFeedback } from "../core/entity-resolve.ts";
@@ -206,7 +206,6 @@ import { PAGE_MIRROR_JOB_KIND } from "../core/jobs/page-mirror-handler.ts";
 import { isKnownJobKind, knownJobKinds } from "../core/jobs/handlers.ts";
 import { getJobProgress } from "../core/jobs/lifecycle.ts";
 import { runThink, type ThinkOptions, type ThinkResult } from "../core/synthesis/think.ts";
-import { isNoGrant } from "../core/source-scope.ts";
 import {
   persistThinkSynthesis,
   saveThinkTake,
@@ -475,7 +474,10 @@ function withPageAdminUrl(req: ToolCallRequest, result: ToolCallResult, opts: Di
   const payload = JSON.parse(result.content[0]!.text);
   const slug = req.name === "page_rename" ? payload.to_slug : payload.slug;
   if (payload.ok !== true || typeof slug !== "string") return result;
-  const adminUrl = `${base.toString().replace(/\/+$/, "")}/admin/#page/${encodeURIComponent(slug)}`;
+  const baseUrl = base.toString();
+  let end = baseUrl.length;
+  while (end > 0 && baseUrl[end - 1] === "/") end--;
+  const adminUrl = `${baseUrl.slice(0, end)}/admin/#page/${encodeURIComponent(slug)}`;
   return { ...result, content: result.content.map((block, index) => index === 0
     ? { ...block, text: JSON.stringify({ ...payload, admin_url: adminUrl }) } : block) };
 }

@@ -4,6 +4,10 @@ Memrain stores chat history as `conversation` pages under
 `transcripts/<format>/<session>-p<n>`. Each session is redacted for
 credentials, split into parts small enough to embed and extract from, and
 written idempotently: re-importing an unchanged session writes nothing.
+Re-import keeps established managed Facts/Takes fences while replacing the
+imported text outside them. If an older page's fence provenance cannot be
+proven, the importer reports `unproven_fences` and leaves its body, versions
+and facts intact for review.
 
 There are two ways in:
 
@@ -70,6 +74,28 @@ memrain transcripts status [--source ID] [--json]
 
 Shows sessions and parts per source and format, pushed logs by job status, and
 the `--since auto` watermark for each path.
+
+## Repair agent-session attribution
+
+When a local Codex or Claude Code log proves that a stored transcript came
+from an agent session, preview its fact-attribution repair on the operator
+host:
+
+```bash
+memrain transcripts repair-origin /private/session-logs --source <source-id> --json
+# Repeat the same source and logs with the preview's exact plan_hash:
+memrain transcripts repair-origin /private/session-logs --source <source-id> \
+  --apply --plan-hash <reviewed-hash> --json
+```
+
+The preview connects without migrations or writes. The hash covers local
+log digests, matching page versions/content and fact IDs/attribution. Apply
+rechecks the targets under locks and changes only eligible attribution from
+unset/`user` to `other`; text, IDs and page history remain intact. Changed
+evidence or a uniqueness collision refuses the entire repair. Incomplete or
+unrecognized logs are refused. Keep the apply receipt private: it includes
+the old attribution needed to review or reverse the metadata change.
+Deployment does not run this repair or establish that any sessions were fixed.
 
 ## Push from a laptop
 

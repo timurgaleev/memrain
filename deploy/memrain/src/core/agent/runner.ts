@@ -94,6 +94,7 @@ export const AGENT_SYSTEM_PREAMBLE = agentSystemPreamble(AGENT_READ_TOOLS);
 
 export type AgentStopReason =
   | "end_turn"
+  | "empty_answer"
   | "stop_sequence"
   | "max_tokens"
   | "guardrail_intervened"
@@ -351,11 +352,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
 
   const finish = (stop: AgentStopReason): AgentRunResult => {
     const lastAssistant = [...rows].reverse().find((r) => r.role === "assistant");
+    const finalText = lastAssistant ? textOf(asMessage(lastAssistant)) : "";
     return {
-      final_text: lastAssistant ? textOf(asMessage(lastAssistant)) : "",
+      final_text: finalText,
       turns: rows.filter((r) => r.role === "assistant").length,
       cost_usd: budget.totalSpent(),
-      stop_reason: stop,
+      stop_reason: stop === "end_turn" && finalText.trim() === "" ? "empty_answer" : stop,
     };
   };
 

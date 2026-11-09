@@ -84,6 +84,7 @@ export interface TranscriptsCmdOptions {
   sourceId?: string;
   dryRun?: boolean;
   apply?: boolean;
+  planHash?: string;
   json?: boolean;
   configPath?: string;
   /** Test seam — deterministic embedder for the search mirror (no Bedrock). */
@@ -322,23 +323,31 @@ async function runOriginRepair(opts: TranscriptsCmdOptions): Promise<number> {
   try {
     const files = statSync(opts.file).isDirectory() ? sessionLogFiles(opts.file, override) : [opts.file];
     for (const file of files) {
+      const digest = () => {
+        const tooBig = checkTranscriptFileSize(statSync(file).size);
+        if (tooBig) throw new Error(`${basename(file)}: ${tooBig}`);
+        return createHash("sha256").update(readFileSync(file)).digest("hex");
+      };
+      const evidenceHash = digest();
       const parsed = readTranscriptFile(file, override);
       if (typeof parsed === "string") return fail(parsed, opts.json);
       if (parsed.diagnostics.format_drift || parsed.diagnostics.malformed_lines) {
         return fail(`${basename(file)}: incomplete or unrecognized log; origin repair refused`, opts.json);
       }
-      sessions.push(...parsed.sessions.filter(s => s.origin === "agent").map(s => ({ format: s.format, id: s.id })));
+      if (digest() !== evidenceHash) return fail(`${basename(file)}: log changed during read; origin repair refused`, opts.json);
+      sessions.push(...parsed.sessions.filter(s => s.origin === "agent").map(s => ({ format: s.format, id: s.id, evidence_hash: evidenceHash })));
       if (parsed.diagnostics.format === "codex") {
         sessions.push(...parsed.diagnostics.skipped.filter(s => s.reason === "exec rollout" && s.id)
-          .map(s => ({ format: "codex", id: s.id! })));
+          .map(s => ({ format: "codex", id: s.id!, evidence_hash: evidenceHash })));
       }
     }
     const storage = new Storage(loadConfig(opts.configPath));
-    const result = await withStorage(storage, () => repairTranscriptOrigin(storage, sessions, opts.sourceId ?? "default", opts.apply === true));
+    const result = await withStorage(storage, () => repairTranscriptOrigin(storage, sessions, opts.sourceId ?? "default", opts.apply === true, opts.planHash), { migrate: false });
     if (opts.json) console.log(JSON.stringify({ ok: true, ...result }, null, 2));
     else {
       for (const page of result.pages) console.log(`${page.slug}: ${page.facts} fact(s)`);
       console.log(`${result.applied ? "Applied" : "Preview"}: ${result.facts} fact(s); ${result.changed} changed.`);
+      console.log(`Plan hash: ${result.plan_hash}`);
     }
     return 0;
   } catch (e) {

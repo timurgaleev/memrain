@@ -28,6 +28,7 @@ import { extractCodeEntities } from "./code-entities.ts";
 import { EMPTY_SOURCE_KEY } from "./empty-source.ts";
 import { qualifiedSymbolName, type CodeEdgeInput } from "./code-edges.ts";
 import type { ExtractedEntity } from "./entities.ts";
+import type { Engine } from "./engine/interface.ts";
 import {
   writeDocumentTransaction,
   type ChunkWrite,
@@ -59,6 +60,8 @@ export interface IndexCodeInput {
   sourceId?: string | null;
   /** See DocumentWrite.expectOwner — the code sweep only. */
   expectOwner?: string | null;
+  beforeCommit?: (tx: Engine) => Promise<void>;
+  requireCompleteParse?: boolean;
 }
 
 /** `MEMRAIN_CODE_SECRET_SCAN=0` indexes source text unscanned. On by default. */
@@ -180,6 +183,9 @@ export async function indexCodeDocument(
     input.sourcePath,
     language,
   );
+  if (input.requireCompleteParse && parsed.hasParseError) {
+    throw new Error("reviewed rechunk requires a complete code parse");
+  }
   const id = docId(input.sourcePath);
 
   // File-level imports belong to the module chunk when present, otherwise
@@ -285,6 +291,7 @@ export async function indexCodeDocument(
       chunkerVersion: CODE_CHUNKER_VERSION,
       sourceId: input.sourceId ?? null,
       ...(input.expectOwner !== undefined ? { expectOwner: input.expectOwner } : {}),
+      ...(input.beforeCommit ? { beforeCommit: input.beforeCommit } : {}),
     },
     chunkWrites,
     { codeEdges },

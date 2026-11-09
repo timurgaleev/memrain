@@ -966,7 +966,7 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     return Response.json({ ok: true });
   }
 
-  async function regenerateRoute(ctx: Ctx, body: Record<string, unknown>): Promise<Response> {
+  async function regenerateRoute(ctx: Ctx, _body: Record<string, unknown>): Promise<Response> {
     const s = await guardSensitive(ctx);
     if (s instanceof Response) return s;
     const codes = await replaceRecoveryCodes(deps.engine(), now());
@@ -1056,7 +1056,7 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     return Response.json({ notices: rows.map((r) => eventJson(r, canAck(s.session, r))) });
   }
 
-  async function ackRoute(ctx: Ctx, body: Record<string, unknown>): Promise<Response> {
+  async function ackRoute(ctx: Ctx, _body: Record<string, unknown>): Promise<Response> {
     const s = deps.sessionApi.sessionOf(ctx.req);
     if (!s) return err(401, "Admin authentication required");
     const cd = cooldownUntil(s.session);

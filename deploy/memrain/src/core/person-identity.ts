@@ -35,20 +35,23 @@ export async function checkPersonNameDuplicates(engine: Engine): Promise<OpsChec
   const buckets = new Map<string, PersonName[]>();
   const seen = new Set<string>();
   // A diagnostic never spends unbounded time on a common-surname corpus.
-  scan: for (const person of people) {
-    for (const key of personNameBucketKeys(person.title)) {
-      const scopedKey = `${person.source_id}\0${key}`;
-      const prior = buckets.get(scopedKey) ?? [];
-      for (const other of prior) {
-        const pair = `${other.slug}\0${person.slug}`;
-        if (seen.has(pair)) continue;
-        seen.add(pair);
-        if (++comparisons > 20000 || pairs.length >= 20) break scan;
-        if (sameName(other.title, person.title)) pairs.push(`${person.source_id}:${other.slug} ~ ${person.slug}`);
+  const scan = () => {
+    for (const person of people) {
+      for (const key of personNameBucketKeys(person.title)) {
+        const scopedKey = `${person.source_id}\0${key}`;
+        const prior = buckets.get(scopedKey) ?? [];
+        for (const other of prior) {
+          const pair = `${other.slug}\0${person.slug}`;
+          if (seen.has(pair)) continue;
+          seen.add(pair);
+          if (++comparisons > 20000 || pairs.length >= 20) return;
+          if (sameName(other.title, person.title)) pairs.push(`${person.source_id}:${other.slug} ~ ${person.slug}`);
+        }
+        buckets.set(scopedKey, [...prior, person]);
       }
-      buckets.set(scopedKey, [...prior, person]);
     }
-  }
+  };
+  scan();
   const partial = truncated || comparisons > 20000 || pairs.length >= 20;
   return { ok: true, status: pairs.length || partial ? "warn" : "ok", detail:
     `${pairs.length} possible duplicate person pair(s)${partial ? ' (scan truncated)' : ''}: ${pairs.join('; ') || 'none'}; review identities before merging; no changes made` };
@@ -70,7 +73,7 @@ export async function suggestAliases(engine: Engine, opts: { sourceIds?: string[
     partial ||= row.clipped;
     const seen = new Set([normalizeAlias(person.title), ...extractAliasNorms(row.compiled_truth)]);
     const title = person.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`(?:^|[\\n.!?]\\s*)${title}\\s*[,;(]?\\s*(?:aka|a\\.k\\.a\\.|\u043e\u043d \u0436\u0435|\u043e\u043d\u0430 \u0436\u0435)\\s+["«“]?([\\p{L}][\\p{L} '-]{1,199})(?=["»”.,;:!?)\\n]|$)`, "gimu");
+    const pattern = new RegExp(`(?:^|[\\n.!?]\\s*)${title}\\s*[,;(]?\\s*(?:aka|a\\.k\\.a\\.|\u043E\u043D \u0436\u0435|\u043E\u043D\u0430 \u0436\u0435)\\s+["«“]?([\\p{L}][\\p{L} '-]{1,199})(?=["»”.,;:!?)\\n]|$)`, "gimu");
     for (const match of stripCodeBlocks(row.body).matchAll(pattern)) {
       const alias = match[1]!.trim();
       const norm = normalizeAlias(alias);

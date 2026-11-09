@@ -177,16 +177,20 @@ restore test or proof that the receipt belongs to this database.
 ```bash
 memrain export --dir /private/page-export --source <source-id>
 memrain import --dir /private/page-export --source <target-source-id>
-# After reviewing the preview and approving this specific import:
-memrain import --dir /private/page-export --source <target-source-id> --apply
+# Repeat the same inputs with the exact plan_hash returned by the preview:
+memrain import --dir /private/page-export --source <target-source-id> \
+  --apply --plan-hash <reviewed-hash>
 ```
 
 Import creates pages only in an already registered source. It rejects any
 existing slug, including soft-deleted pages and pages owned by another source.
-The default preview writes no pages; a conflict found during preflight refuses
-the entire batch. A concurrent write or later failure stops apply, reports how
-many pages were already created, and leaves those creates intact. Review before
-retrying. Symlinks are refused; limits are 1 MiB per file, 100 MiB and 10,000
+The default preview performs no database writes or migrations. Its manifest
+pins the source, slugs, titles, types, bodies and file digests; changed input
+invalidates the hash before any page is created. A conflict found during
+preflight refuses the entire batch, including legacy pages with no versions.
+A concurrent write or later failure stops apply, reports the exact already
+created slugs, and leaves those creates intact. Review before retrying.
+Symlinks are refused; limits are 1 MiB per file, 100 MiB and 10,000
 pages per import. Ordinary write validation and credential redaction still apply.
 
 Import does not invoke fact extraction or paid indexing. Search mirrors are
@@ -196,6 +200,8 @@ resuming it can run normal backfills and embedding work. Markdown export covers
 page title, type and body, not facts, versions, grants or the rest of the database.
 A full restore uses RDS PITR/snapshots or the verified `migrate-engine` command
 (the internal `engine-copy` implementation), followed by a restore drill.
+Installing the import command does not perform a restore: keep a separate
+receipt for the actual source, target, created pages and verification.
 
 ### Deletion protection
 
@@ -511,6 +517,13 @@ It is incremental (unchanged files are skipped); add `--all` to force a full
 pass and `--reconcile-deletes` to drop pages whose files were removed. Code
 roots (`MEMRAIN_CODE_PATHS`) are swept at serve boot; `reindex --source code`
 re-sweeps them after a `git pull`.
+
+For a bounded chunker upgrade, use
+[`reindex --rechunk-stale`](../deploy/memrain/docs/OPERATIONS.md#bounded-chunker-upgrade).
+It previews by default and requires a reviewed hash to apply; it does not
+combine an incremental sweep or deletion reconciliation with the upgrade.
+Unchanged Markdown version-2 mirrors stay out of automatic rechunking even
+though new writes use version 3.
 
 To rebuild the code graph (definitions, references, callers, callees) in
 place, force a full code pass:

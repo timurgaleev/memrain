@@ -95,7 +95,7 @@ export const api = {
   healthIndicators: () => apiFetch("/admin/api/health-indicators"),
   spendReport: (days: number) => apiFetch(`/admin/api/spend/report?days=${days}`),
   agentsSpend: () => apiFetch("/admin/api/agents/spend"),
-  jobsWatch: () => apiFetch("/admin/api/jobs/watch"),
+  jobsWatch: (signal?: AbortSignal) => apiFetch("/admin/api/jobs/watch", signal ? { signal } : undefined),
   calibrationProfile: () => apiFetch("/admin/api/calibration/profile"),
   timeseries: (days: number, signal?: AbortSignal) => apiFetch(`/admin/api/timeseries?days=${days}`, signal ? { signal } : undefined),
   graphHubs: (limit = 20, signal?: AbortSignal) => apiFetch(`/admin/api/graph/hubs?limit=${limit}`, signal ? { signal } : undefined),

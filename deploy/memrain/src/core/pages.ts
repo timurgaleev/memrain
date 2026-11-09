@@ -29,6 +29,7 @@ import { deadlockSafeTransaction } from "./retry.ts";
 import { recordWriteRequest, type WriteRequestKey } from "./write-requests.ts";
 import { applyPageEdits, assertScanKeptFences, pageEditResponse, type PageEdit } from "./page-edit.ts";
 import { decodePageListCursor, encodePageListCursor, type PageListPosition } from "./page-list-cursor.ts";
+import { carryForwardFences, FenceCarryHeldError, OUTSIDE_NEUTRALIZED, preservesOutsideText } from "./fence-carry.ts";
 
 // Catalogue of well-known page types. Not enforced at the DB level (see
 // migration 015 comment); kept here so application code can normalise +
@@ -150,6 +151,8 @@ export interface PageInput {
   title?: string;
   compiled_truth?: Record<string, unknown>;
   markdown_body?: string;
+  /** Internal neutralizing importers only; never accepted from page-tool arguments. */
+  outsideText?: true;
   /**
    * An explicit empty `markdown_body` over a page that has a body is refused
    * unless this is set: an empty string is far more often a caller bug than an
@@ -307,7 +310,7 @@ export interface PageRow {
 }
 
 export interface PutResult {
-  held?: "authored_edit";
+  held?: "authored_edit" | "unproven_fences";
   slug: string;
   /** New version number assigned to this write (>=1). */
   version_n: number;
@@ -325,6 +328,8 @@ export interface PutResult {
   edited?: { before: string; after: string };
   /** Append boundary from the locked original body; internal extraction context. */
   append_start?: number;
+  /** Exact locked importer result for its deferred mirror, including carried fences. */
+  outside_body?: string;
 }
 
 export interface PageVersionRow {
@@ -624,6 +629,31 @@ export async function putPage(
       );
     }
 
+    if (input.outsideText === true) {
+      try {
+        body = carryForwardFences(current === undefined ? null : {
+          slug: input.slug, markdown_body: current.markdown_body,
+          compiled_truth: wellFormJsonbValue(current.compiled_truth ?? {}) as Record<string, unknown>,
+        }, body);
+      } catch (error) {
+        if (!(error instanceof FenceCarryHeldError) || current === undefined) throw error;
+        return { slug: input.slug, version_n: currentVersion, content_hash: current.content_hash,
+          changed: false, created: false, held: error.reason };
+      }
+      const guarded = guardSecrets(body, where);
+      assertScanKeptFences(body, guarded.text);
+      secretFindings.push(...guarded.findings);
+      body = guarded.text;
+      hashNew = hashBody(body);
+    }
+    const requestedTruth = JSON.parse(truthJson) as Record<string, unknown>;
+    const { [OUTSIDE_NEUTRALIZED]: _untrustedMarker, ...unmarkedTruth } = requestedTruth;
+    const oldTruth = current?.compiled_truth as Record<string, unknown> | undefined;
+    const proven = input.outsideText === true || (current?.deleted_at === null &&
+      oldTruth?.[OUTSIDE_NEUTRALIZED] === 1 &&
+      (body === current.markdown_body || preservesOutsideText(current.markdown_body, body)));
+    truthJson = JSON.stringify(proven ? { ...unmarkedTruth, [OUTSIDE_NEUTRALIZED]: 1 } : unmarkedTruth);
+
     if (
       input.preconditionPolicy !== undefined && input.allowShrink !== true &&
       current?.deleted_at === null && input.markdown_body !== undefined &&
@@ -800,6 +830,7 @@ export async function putPage(
   };
   const result = await engine.transaction(async (tx) => {
     const r = await writeLocked(tx);
+    if (r.changed && secretFindings.length > 0) await auditSecrets(tx, secretFindings, input.slug, callerSource);
     if (input.receipt !== undefined) {
       // A retry replays this receipt when the derived work after the commit
       // failed, so an edit stores page_edit's response shape, not the row's.
@@ -812,6 +843,7 @@ export async function putPage(
     return r;
   });
   const extras = {
+    ...(input.outsideText === true && result.held === undefined ? { outside_body: body } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(edited !== undefined ? { edited } : {}),
     ...(result.changed && appendStart !== undefined ? { append_start: appendStart } : {}),
@@ -820,7 +852,6 @@ export async function putPage(
   // credential sits in the unchanged body and would otherwise be re-audited on
   // every identical re-put.
   if (secretFindings.length === 0) return { ...result, ...extras };
-  if (result.changed) await auditSecrets(engine, secretFindings, input.slug, callerSource);
   return { ...result, ...extras, secrets_found: secretFindings.length };
 }
 
@@ -1041,7 +1072,7 @@ async function queryPageList(
   }
   if (opts.excludeDiary) {
     // Match String.trim() in the dispatcher, including legacy whitespace around types.
-    params.push(" \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff");
+    params.push(" \t\n\r\v\f\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF");
     where.push(`lower(btrim(COALESCE(type, ''), $${params.length})) NOT IN ('diary', 'journal') AND slug NOT LIKE 'life/diary/%'`);
   }
   if (opts.type) {

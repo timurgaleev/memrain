@@ -6,7 +6,7 @@ Solo-maintained project — contributions land slowly. PRs welcome anyway.
 
 Prerequisites:
 - Bash 3.2+ (macOS default works)
-- Bun 1.3.10+ (the Bun and Postgres tests, typecheck)
+- Bun 1.4.4 (matches the container)
 - Docker Compose v2
 - Terraform 1.6+
 - `aws` CLI (for AWS Secrets Manager / Bedrock / S3)
@@ -48,6 +48,23 @@ whole run. `test:changed` is for the edit loop only.
 CI splits the suite across three runners by the per-file seconds in
 `deploy/memrain/tests/.timings.tsv`. A new file counts as the median until it
 is listed; refresh the file when the groups drift apart.
+
+### Admin browser tests
+
+From the repository root:
+
+```bash
+cd deploy/memrain/admin
+bun install --frozen-lockfile
+bunx playwright install chromium
+bun run test:ui
+```
+
+Playwright is a pinned development dependency; it is not part of the runtime
+bundle. The runner starts a loopback fixture with synthetic responses and
+needs no AWS credentials or production login. It checks historical-page
+View, hidden-tab polling, error recovery and request cancellation on unmount.
+Run it when changing those interactions; `test:sharded` does not run it.
 
 ### Postgres tests
 

@@ -47,7 +47,7 @@ export function inspectPostgresUrl(raw: string): { ok: boolean; endpoint?: strin
     const parsed = new URL(raw);
     if (!/^postgres(?:ql)?:$/.test(parsed.protocol) || !parsed.hostname || parsed.hash) return { ok: false };
     const ssl = parsed.searchParams.get("sslmode");
-    const suffix = ssl && /^(disable|allow|prefer|require|verify-ca|verify-full)$/.test(ssl) ? `?sslmode=${ssl}` : "";
+    const suffix = ssl && /^(?:disable|allow|prefer|require|verify-ca|verify-full)$/.test(ssl) ? `?sslmode=${ssl}` : "";
     return { ok: true, endpoint: `${parsed.protocol}//${parsed.hostname}${parsed.port ? ':' + parsed.port : ''}${parsed.pathname}${suffix}` };
   } catch { return { ok: false }; }
 }

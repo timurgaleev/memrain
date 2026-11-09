@@ -88,6 +88,49 @@ describe("extractionWindows", () => {
 
 describe("extractFactsForPage over windows", () => {
   beforeEach(async () => { await putPage(storage, { slug: "notes/long", markdown_body: LONG }); });
+  it("accounts for a blank window without reserving or calling a model", async () => {
+    const body = " \t\n".repeat(40);
+    await putPage(storage, { slug: "notes/long", markdown_body: body });
+    const { fn, users } = counting();
+    const result = await extractFactsForPage(storage, {
+      slug: "notes/long", type: "note", body, sonnetFn: fn, observationDate: null, maxBudgetUsd: 0,
+    });
+    expect(result).toMatchObject({ windowsRun: 0, spentUsd: 0, truncated_chars: 0, absorbed: null });
+    expect(users).toHaveLength(0);
+  });
+
+  for (const blocked of ["budget", "gateway"] as const) it(`keeps blank-window coverage when the first paid window stops at ${blocked}`, async () => {
+    process.env["MEMRAIN_FACTS_MAX_WINDOWS"] = "2";
+    const body = " ".repeat(EXTRACT_WINDOW_CHARS) + "Actual content.";
+    await putPage(storage, { slug: "notes/long", markdown_body: body });
+    let calls = 0;
+    const sonnetFn: SonnetFn = async () => { calls++; throw new Error("gateway unavailable"); };
+    const result = await extractFactsForPage(storage, {
+      slug: "notes/long", type: "note", body, sonnetFn, observationDate: null,
+      maxBudgetUsd: blocked === "budget" ? 0 : 1,
+    });
+    expect(result.truncated_chars).toBe("Actual content.".length);
+    expect(result.windowsRun).toBe(0);
+    expect(result.factsWritten).toBe(0);
+    expect(result.absorbed).not.toBeNull();
+    expect(calls).toBe(blocked === "budget" ? 0 : 1);
+  });
+
+  it("skips blank windows without trimming text or expanding the selected range", async () => {
+    process.env["MEMRAIN_FACTS_MAX_WINDOWS"] = "3";
+    const body = " ".repeat(EXTRACT_WINDOW_CHARS) + "x".repeat(EXTRACT_WINDOW_CHARS)
+      + "\t".repeat(EXTRACT_WINDOW_CHARS) + "unread tail";
+    await putPage(storage, { slug: "notes/long", markdown_body: body });
+    const { fn, users } = counting();
+    const result = await extractFactsForPage(storage, {
+      slug: "notes/long", type: "note", body, sonnetFn: fn, observationDate: null,
+    });
+    expect(users).toHaveLength(1);
+    expect(users[0]).toContain("x".repeat(EXTRACT_WINDOW_CHARS));
+    expect(result.windowsRun).toBe(1);
+    expect(result.truncated_chars).toBe("unread tail".length);
+  });
+
   it("makes one call at the default", async () => {
     const { fn, users } = counting();
     const r = await extractFactsForPage(storage, {

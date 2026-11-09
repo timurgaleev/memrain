@@ -56,7 +56,7 @@ const DENIED_BASENAMES = new Set([
   "id_ed25519",
 ]);
 
-function isDeniedPath(canonical: string): boolean {
+export function isDeniedPath(canonical: string): boolean {
   // Walk every path component; reject anything that lands under a
   // .git/ subtree (any depth) or matches a denied basename.
   const parts = canonical.split(sep);
