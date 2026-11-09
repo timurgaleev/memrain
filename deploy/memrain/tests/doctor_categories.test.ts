@@ -71,6 +71,7 @@ describe("doctor categorize", () => {
       "page-version-storage",
       "pat-scopes-recorded",
       "per-source-embed-coverage",
+      "person-name-duplicates",
       "pglite",
       "quarantined-pages",
       "queue-health",

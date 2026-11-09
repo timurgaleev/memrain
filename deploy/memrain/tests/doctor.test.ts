@@ -141,6 +141,7 @@ describe("doctor", () => {
       "outside-content-fences",
       "page-version-storage",
       "pat-scopes-recorded",
+      "person-name-duplicates",
       "pglite",
       "quarantined-pages",
       "queue-health",

@@ -111,6 +111,7 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   "duplicate-pages",
   "jsonb-integrity",
   "page-version-storage",
+  "person-name-duplicates",
   "quarantined-pages",
   "junk-entity-hubs",
   "facts-without-entity-pages",

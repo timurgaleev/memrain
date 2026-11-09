@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runAliasesSuggest } from "./commands/aliases.ts";
 /**
  * memrain CLI entrypoint.
  */
@@ -96,6 +97,7 @@ function printUsage(): void {
   console.log("Usage: memrain <command> [options]");
   console.log("");
   console.log("Commands:");
+  console.log("  aliases suggest [--source ID] [--limit N] [--json]  preview undeclared name aliases");
   console.log("  models [--probe] [--max-cost-usd N] [--json]  resolved chat models and registered prices");
   console.log("  engine status [--probe] [--json]  inspect engine config; optionally test one connection");
   console.log("  init --pglite                initialize ~/.memrain/ + PGLite db");
@@ -429,6 +431,11 @@ async function main(argv: readonly string[]): Promise<number> {
       }
       await runCode(opts);
       return 0;
+    }
+    case "aliases": {
+      if (positional.length !== 1 || positional[0] !== "suggest") { console.error("Usage: memrain aliases suggest [--source ID] [--limit N] [--json]"); return 2; }
+      return await runAliasesSuggest({ source: values.get("--source"), json: flags.has("--json"),
+        ...(values.has("--limit") ? { limit: Number(values.get("--limit")) } : {}) });
     }
     case "models": {
       return await runModels({ probe: flags.has("--probe"), json: flags.has("--json"),

@@ -62,6 +62,7 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     expect(r.page.quarantined.reason).toBe("junk_pattern");
     expect(r.page.markdown_body).toBeUndefined();
     expect(r.page.compiled_truth).toBeUndefined();
+    expect(r.identity).toBeUndefined();
     expect((await call("entity_recall", { slug: "notes/foreign" })).page).toBeNull();
   });
 

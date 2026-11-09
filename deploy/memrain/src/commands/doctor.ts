@@ -1,3 +1,4 @@
+import { checkPersonNameDuplicates } from "../core/person-identity.ts";
 /**
  * `memrain doctor` — self-diagnostics. Prints a structured report and
  * exits 0 on healthy / 1 on any failure. Intended to run in seconds —
@@ -436,6 +437,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["embedding-width", checkEmbeddingWidth],
       ["invalid-indexes", checkInvalidIndexes],
       ["duplicate-pages", checkDuplicatePages],
+      ["person-name-duplicates", checkPersonNameDuplicates],
       ["quarantined-pages", checkQuarantinedPages],
       ["junk-entity-hubs", checkJunkEntityHubs],
       ["facts-without-entity-pages", checkFactsWithoutEntityPages],

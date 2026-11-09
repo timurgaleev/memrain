@@ -3111,12 +3111,14 @@ async function callEntityRecall(
   const r = { ...recalled, page: recalled.page
     ? (await applyQuarantineVisibility(storage.engine(), [recalled.page], remote))[0]!
     : null };
+  const { identity: _identity, ...withoutIdentity } = r;
+  const visibleRecall = redact || r.page?.notice === "page_quarantined" ? withoutIdentity : r;
   // `redact_body` only strips the page body; the facts + timeline arrays
   // carry note-derived `fact`/`event` text and must be redacted on public
   // ingress too (mirrors callEntityFacts / callEntityTimeline).
   if (redact) {
     const visible = {
-      ...r,
+      ...visibleRecall,
       ok: true,
       // Run the page through the same PUBLIC_SAFE_PAGE_FIELDS allowlist the
       // other page tools use. The recall layer's redact_body only strips
@@ -3133,7 +3135,7 @@ async function callEntityRecall(
     };
     return jsonResult(budgeted(visible));
   }
-  return jsonResult(budgeted({ ok: true, ...r }));
+  return jsonResult(budgeted({ ok: true, ...visibleRecall }));
 
   /**
    * One budget across all three arms. Without it a caller under a context

@@ -155,6 +155,7 @@ const UNIVERSAL_FLAGS: ReadonlySet<string> = new Set(["--help"]);
  * rows come from those modules, and the test reads them from there.
  */
 export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["aliases", new Set(["--source", "--limit", "--json"])],
   ["models", new Set(["--probe", "--json", "--max-cost-usd"])],
   ["engine", new Set(["--probe", "--json"])],
   ["init", new Set(["--pglite", "--postgres"])],

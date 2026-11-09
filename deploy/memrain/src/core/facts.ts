@@ -44,6 +44,7 @@ import type { BudgetTracker } from "./budget.ts";
 import { guardFields } from "./secret-scan.ts";
 import { withdrawLockKey } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
+import { readEntityIdentity, type EntityIdentity } from "./person-identity.ts";
 
 /**
  * Insert-time dedup / supersede knobs (migration 038 fact embedding + the
@@ -1243,6 +1244,7 @@ export interface EntityRecallOptions {
 
 export interface EntityRecallResult {
   slug: string;
+  identity?: EntityIdentity;
   /** null when the entity has no page row yet (soft-stub case). */
   page: PageRow | null;
   facts: FactRow[];
@@ -1312,6 +1314,7 @@ export async function entityRecall(
     outPage = rest as PageRow;
   }
   const out: EntityRecallResult = { slug, page: outPage, facts, timeline };
+  if (page && !opts.redact_body) out.identity = await readEntityIdentity(storage.engine(), page);
   if (opts.include_pending === true) {
     try {
       out.pending_consolidation_count = await countUnconsolidatedFacts(
