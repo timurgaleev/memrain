@@ -26,16 +26,15 @@ function decodeLine(raw: string, offset: number): EncodedCandidate {
       i++;
       continue;
     }
-    const escape = raw.slice(start, start + 6);
-    if (/^\\u[\dA-Fa-f]{4}$/.test(escape)) {
-      const code = Number.parseInt(escape.slice(2), 16);
+    if (char === "\\" && raw[i] === "u" && /^\\u[\dA-Fa-f]{4}$/.test(raw.slice(start, start + 6))) {
+      const code = Number.parseInt(raw.slice(start + 2, start + 6), 16);
       const decoded = String.fromCharCode(code);
       if ((code >= 0x20 && code <= 0x7E) || ZERO_WIDTH.test(decoded)) { char = decoded; i = start + 6; }
-    } else if (/^%(?:2f|3a)$/i.test(raw.slice(start, start + 3))) {
+    } else if (char === "%" && /^%(?:2f|3a)$/i.test(raw.slice(start, start + 3))) {
       char = String.fromCharCode(Number.parseInt(raw.slice(start + 1, start + 3), 16));
       i = start + 3;
     }
-    if (ZERO_WIDTH.test(char)) continue;
+    if (char >= "\u200B" && ZERO_WIDTH.test(char)) continue;
     chars.push(char); starts.push(offset + start); ends.push(offset + i);
   }
   return { value: chars.join(""), starts, ends };

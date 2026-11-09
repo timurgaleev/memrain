@@ -475,14 +475,14 @@ function redactEncoded(
         const from = match.index + (p.split ? match[1]!.length : 0);
         const to = from + value.length;
         if (candidate.base64 && (from !== 0 || to !== candidate.value.length)) continue;
-        if (p.start && !startAllowed(p.start, candidate.value, match.index)) continue;
-        if (p.entropyGated && (!clearsEntropyGate(value) || insideMarker(candidate.value, match.index, match[0].length))) continue;
-        if (p.validate && !p.validate(value)) continue;
         const start = candidate.base64?.start ?? candidate.starts[from]!;
         const end = candidate.base64?.end ?? candidate.ends[to - 1]!;
         if (candidate.bounds && (start < candidate.bounds.start || end > candidate.bounds.end)) continue;
         const raw = text.slice(start, end);
         if (raw === value || claimed.subarray(start, end).includes(1)) continue;
+        if (p.start && !startAllowed(p.start, candidate.value, match.index)) continue;
+        if (p.entropyGated && (!clearsEntropyGate(value) || insideMarker(candidate.value, match.index, match[0].length))) continue;
+        if (p.validate && !p.validate(value)) continue;
         const replacement = isAllowed(sha256Hex(raw), allow) ? null : claim(p.kind, value, p.echo);
         claimed.fill(1, start, end);
         spans.push({ start, end, replacement: replacement ?? keepAllowed(raw) });
