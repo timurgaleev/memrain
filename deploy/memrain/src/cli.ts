@@ -36,6 +36,8 @@ import type { EvalTag } from "./core/eval-replay.ts";
 import { runFriction } from "./commands/friction.ts";
 import { runEvalExport } from "./commands/eval-export.ts";
 import { runExport } from "./commands/export.ts";
+import { runImport } from "./commands/import.ts";
+import { runBackupStatus } from "./commands/backup.ts";
 import { runEvalPrune } from "./commands/eval-prune.ts";
 import { runApplyMigrations } from "./commands/apply-migrations.ts";
 import {
@@ -98,6 +100,9 @@ function printUsage(): void {
   console.log("Usage: memrain <command> [options]");
   console.log("");
   console.log("Commands:");
+  console.log("  backup status [--rds-instance ID] [--efs-id ID] [--copy-report FILE]  inspect backup evidence");
+  console.log("  export [--dir DIR] [--source ID]  export live pages as markdown");
+  console.log("  import --dir DIR --source ID [--apply]  preview create-only page import; indexing deferred");
   console.log("  aliases suggest [--source ID] [--limit N] [--json]  preview undeclared name aliases");
   console.log("  models [--probe] [--max-cost-usd N] [--json]  resolved chat models and registered prices");
   console.log("  engine status [--probe] [--json]  inspect engine config; optionally test one connection");
@@ -1003,6 +1008,15 @@ async function main(argv: readonly string[]): Promise<number> {
       if (out) opts.out = out;
       await runEvalExport(opts);
       return 0;
+    }
+    case "backup": {
+      if (positional.length !== 1 || positional[0] !== "status") throw new Error("backup: use status");
+      return runBackupStatus({ rdsInstance: values.get("--rds-instance"), efsId: values.get("--efs-id"), copyReport: values.get("--copy-report") });
+    }
+    case "import": {
+      if (positional.length) throw new Error("import: use --dir and --source");
+      if (flags.has("--apply") && flags.has("--dry-run")) throw new Error("import: choose --apply or --dry-run");
+      return runImport({ dir: values.get("--dir") ?? "", source: values.get("--source") ?? "", apply: flags.has("--apply") });
     }
     case "export": {
       const opts: Parameters<typeof runExport>[0] = {};

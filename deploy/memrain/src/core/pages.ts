@@ -536,7 +536,11 @@ export async function putPage(
         "Use a slug within your own source, or request access.",
       );
     }
-    checkExpectedVersion(input.slug, Number(existing.rows[0]?.version_n ?? 0), input.expectedVersion);
+    const currentVersion = Number(existing.rows[0]?.version_n ?? 0);
+    if (input.expectedVersion === 0 && existing.rows.length > 0) {
+      throw new VersionConflictError(input.slug, currentVersion, 0);
+    }
+    checkExpectedVersion(input.slug, currentVersion, input.expectedVersion);
 
     const current = existing.rows[0];
     if (input.requireCleanNewSlug && current === undefined && /--|-(?:\/|$)/.test(input.slug)) {

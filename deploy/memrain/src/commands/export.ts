@@ -33,7 +33,7 @@ interface PageRow {
  *  with structural characters are JSON-quoted so the header stays valid. */
 function frontmatterBlock(row: PageRow): string {
   const title = row.title ?? row.slug;
-  const needsQuote = /[:"'#[\]{}|>&*!?,]/.test(title);
+  const needsQuote = /[\n\r:"'#[\]{}|>&*!?,]/.test(title);
   return (
     `---\n` +
     `title: ${needsQuote ? JSON.stringify(title) : title}\n` +

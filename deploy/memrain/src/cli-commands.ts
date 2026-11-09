@@ -55,6 +55,8 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "friction": subs("analyze", "propose-fix", "list", "render", "log"),
   "eval-export": bare,
   "export": bare,
+  "import": bare,
+  "backup": subs("status"),
   "eval-prune": bare,
   "apply-migrations": bare,
   "cache": subs("stats", "prune", "clear"),

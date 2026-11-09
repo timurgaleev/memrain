@@ -148,6 +148,55 @@ terraform -chdir=terraform output -raw ssm_command
 The RDS instance has `deletion_protection = true` and takes a final snapshot —
 `terraform destroy` will not silently drop your index.
 
+### Backup evidence and page import
+
+From an operator host with AWS CLI, the selected profile and region:
+
+```bash
+memrain backup status --rds-instance <db-id> --efs-id <fs-id>
+memrain backup status --copy-report /private/restore-check.json
+```
+
+The first command reads RDS retention, the latest available automated snapshot
+and its age, and EFS backup policy. It uses only AWS
+[`describe-db-instances`](https://docs.aws.amazon.com/cli/latest/reference/rds/describe-db-instances.html),
+[`describe-db-snapshots`](https://docs.aws.amazon.com/cli/latest/reference/rds/describe-db-snapshots.html)
+and [`describe-backup-policy`](https://docs.aws.amazon.com/cli/latest/reference/efs/describe-backup-policy.html).
+Missing read permissions are reported; this command never changes IAM or backup
+settings. A policy being enabled does not prove a completed recovery point.
+Snapshot results are capped at 1,000 and flag truncation. Exit zero means the
+requested inspection succeeded, not that its retention or age meets your policy.
+
+`--copy-report` reads the JSON stdout saved from `memrain migrate-engine`
+(copy or `--verify-only`), including its completion time and per-table counts
+and hashes. A dry-run report cannot pass. Older receipts without a completion
+time report it as unknown; the file's modification time is shown separately.
+Only the listed tables were checked. This is supplied evidence, not a new
+restore test or proof that the receipt belongs to this database.
+
+```bash
+memrain export --dir /private/page-export --source <source-id>
+memrain import --dir /private/page-export --source <target-source-id>
+# After reviewing the preview and approving this specific import:
+memrain import --dir /private/page-export --source <target-source-id> --apply
+```
+
+Import creates pages only in an already registered source. It rejects any
+existing slug, including soft-deleted pages and pages owned by another source.
+The default preview writes no pages; a conflict found during preflight refuses
+the entire batch. A concurrent write or later failure stops apply, reports how
+many pages were already created, and leaves those creates intact. Review before
+retrying. Symlinks are refused; limits are 1 MiB per file, 100 MiB and 10,000
+pages per import. Ordinary write validation and credential redaction still apply.
+
+Import does not invoke fact extraction or paid indexing. Search mirrors are
+deferred to reconciliation. For a controlled restore, keep the daemon's
+maintenance/extraction loop paused until the imported pages are reviewed;
+resuming it can run normal backfills and embedding work. Markdown export covers
+page title, type and body, not facts, versions, grants or the rest of the database.
+A full restore uses RDS PITR/snapshots or the verified `migrate-engine` command
+(the internal `engine-copy` implementation), followed by a restore drill.
+
 ### Deletion protection
 
 Terraform sets `lifecycle { prevent_destroy = true }` on every resource that

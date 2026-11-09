@@ -109,7 +109,7 @@ const FALSE_LITERALS: ReadonlySet<string> = new Set(["false", "0", "no"]);
 export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--access-ttl", "--anchor", "--args", "--baseline", "--batch-size", "--boost-weight", "--candidate",
   "--bound-slug-prefixes", "--budget", "--client", "--client-file", "--config-a",
-  "--config-b", "--corpus",
+  "--config-b", "--corpus", "--rds-instance", "--efs-id", "--copy-report",
   "--date-context", "--days", "--dedup-type-ratio", "--depth", "--description", "--epsilon",
   "--dir", "--down", "--example-limit", "--expect-source", "--expect-version",
   "--expected-doc", "--expected-revision", "--expected-top1", "--expected-version", "--family",
@@ -158,6 +158,8 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["aliases", new Set(["--source", "--limit", "--json"])],
   ["models", new Set(["--probe", "--json", "--max-cost-usd"])],
   ["engine", new Set(["--probe", "--json"])],
+  ["backup", new Set(["--rds-instance", "--efs-id", "--copy-report"])],
+  ["import", new Set(["--dir", "--source", "--apply", "--dry-run"])],
   ["init", new Set(["--pglite", "--postgres"])],
   ["serve", new Set(["--host", "--http", "--port"])],
   ["index", new Set<string>()],
@@ -346,10 +348,10 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
     "--dry-run",
     new Set([
       "apply-migrations", "auth", "embed", "extract", "jobs", "lint",
-      "connectors", "migrate-engine", "reindex", "skillify", "transcripts",
+      "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts",
     ]),
   ],
-  ["--apply", new Set(["eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts"])],
+  ["--apply", new Set(["import", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts"])],
   ["--fix", new Set(["lint"])],
 ]);
 
