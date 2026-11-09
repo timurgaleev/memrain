@@ -191,10 +191,25 @@ describe("runChronicleExtract", () => {
     });
     expect(res.status).toBe("skipped");
     expect(res.reason).toBe("malformed_proposal");
+    expect(res).toMatchObject({ diagnostic: { code: "invalid_date", field: "when", found_type: "string" } });
+    expect(JSON.stringify(res)).not.toContain("not-a-date");
     expect(res.events_written).toBe(0);
     // No partial writes: nothing projected.
     const rows = await getTimelineForDate(storage, "2026-01-10", { sourceIds: ["default"] });
     expect(rows.length).toBe(0);
+  });
+
+  it("reports malformed proposal types without copying their values", async () => {
+    const slug = await seedDepth();
+    const res = await runChronicleExtract(storage, {
+      slug,
+      judge: async () => ({ events: [{ when: "2026-01-10", who: "private participant", what: "confidential note", kind: "call" }] as unknown as ChronicleEventProposal[] }),
+    });
+    expect(res).toMatchObject({ status: "skipped", events_written: 0, reason: "malformed_proposal",
+      diagnostic: { code: "invalid_type", field: "who", found_type: "string" } });
+    expect(JSON.stringify(res)).not.toContain("private participant");
+    expect(JSON.stringify(res)).not.toContain("confidential note");
+    expect(await getTimelineForDate(storage, "2026-01-10", { sourceIds: ["default"] })).toEqual([]);
   });
 
   it("returns no_events on an empty judge result", async () => {

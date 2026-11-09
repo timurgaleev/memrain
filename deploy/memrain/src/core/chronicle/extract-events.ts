@@ -75,6 +75,7 @@ export interface ChronicleExtractResult {
   /** On `no_events` after proposals were made: the dominant drop reason when
    *  every proposed event was refused by the date screen. */
   reason?: string;
+  diagnostic?: ProposalDiagnostic;
   /** Proposals refused by the date screen, by reason; never written. Omitted
    *  when nothing was dropped. */
   events_dropped?: ChronicleDropCounts;
@@ -154,17 +155,33 @@ function isRealCalendarDay(when: string): boolean {
  * that is not a real parseable date is rejected — otherwise the isoDay()/::date
  * projection would write a garbage event page then throw on the cast.
  */
-export function isValidProposal(e: unknown): e is ChronicleEventProposal {
-  if (!e || typeof e !== "object") return false;
+interface ProposalDiagnostic {
+  code: "invalid_type" | "invalid_date" | "empty_string";
+  field: "proposal" | "when" | "what" | "who" | "who[]" | "kind";
+  found_type: string;
+}
+
+function invalidProposal(code: ProposalDiagnostic["code"], field: ProposalDiagnostic["field"], value: unknown): ProposalDiagnostic {
+  return { code, field, found_type: value === null ? "null" : Array.isArray(value) ? "array" : typeof value };
+}
+
+function proposalDiagnostic(e: unknown): ProposalDiagnostic | undefined {
+  if (!e || typeof e !== "object" || Array.isArray(e)) return invalidProposal("invalid_type", "proposal", e);
   const o = e as Record<string, unknown>;
-  return (
-    typeof o.when === "string" && o.when.length >= 4 &&
-    !Number.isNaN(new Date(o.when).getTime()) &&
-    isRealCalendarDay(o.when) &&
-    typeof o.what === "string" && o.what.trim().length > 0 &&
-    Array.isArray(o.who) && o.who.every((w) => typeof w === "string") &&
-    typeof o.kind === "string"
-  );
+  if (typeof o.when !== "string") return invalidProposal("invalid_type", "when", o.when);
+  if (o.when.length < 4 || Number.isNaN(new Date(o.when).getTime()) || !isRealCalendarDay(o.when)) {
+    return invalidProposal("invalid_date", "when", o.when);
+  }
+  if (typeof o.what !== "string") return invalidProposal("invalid_type", "what", o.what);
+  if (o.what.trim().length === 0) return invalidProposal("empty_string", "what", o.what);
+  if (!Array.isArray(o.who)) return invalidProposal("invalid_type", "who", o.who);
+  for (const who of o.who) if (typeof who !== "string") return invalidProposal("invalid_type", "who[]", who);
+  if (typeof o.kind !== "string") return invalidProposal("invalid_type", "kind", o.kind);
+  return undefined;
+}
+
+export function isValidProposal(e: unknown): e is ChronicleEventProposal {
+  return proposalDiagnostic(e) === undefined;
 }
 
 /** A `when` that names a day: YYYY-MM-DD alone or followed by a time. */
@@ -328,8 +345,11 @@ export async function runChronicleExtract(
   const proposals = Array.isArray(result?.events) ? result.events : [];
   if (proposals.length === 0) return { slug: opts.slug, status: "no_events", events_written: 0 };
   // PARSE BARRIER — reject the WHOLE batch on any malformed proposal; no partial writes.
-  if (!proposals.every(isValidProposal)) {
-    return { slug: opts.slug, status: "skipped", events_written: 0, reason: "malformed_proposal" };
+  for (const proposal of proposals) {
+    const diagnostic = proposalDiagnostic(proposal);
+    if (diagnostic) {
+      return { slug: opts.slug, status: "skipped", events_written: 0, reason: "malformed_proposal", diagnostic };
+    }
   }
 
   const todayDay = isoDay(new Date(opts.now ?? Date.now()).toISOString(), tz);

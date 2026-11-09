@@ -1096,7 +1096,13 @@ export async function extractFactsForPage(
   let absorbed: FactsAbsorbReason | null = null;
   let readThrough = 0;
   for (const window of windows) {
-    if (windowsRun > 0 && await held()) break;
+    if (readThrough > 0 && await held()) break;
+    const start = opts.body.indexOf(window, readThrough);
+    const windowEnd = (start < 0 ? readThrough : start) + Math.min(window.length, EXTRACT_WINDOW_CHARS);
+    if (window.slice(0, EXTRACT_WINDOW_CHARS).trim() === "") {
+      readThrough = windowEnd;
+      continue;
+    }
     const hold = budget.reserve(modelId, WORST_CASE_USAGE);
     if (hold === null) {
       await writeFactsAbsorbLog(
@@ -1110,7 +1116,7 @@ export async function extractFactsForPage(
       );
       if (windowsRun === 0) {
         return {
-          truncated_chars: opts.body.length,
+          truncated_chars: Math.max(0, opts.body.length - readThrough),
           factsWritten: 0,
           factsSkipped: 0,
           factsFailed: 0,
@@ -1146,7 +1152,7 @@ export async function extractFactsForPage(
       );
       if (windowsRun === 0) {
         return {
-          truncated_chars: opts.body.length,
+          truncated_chars: Math.max(0, opts.body.length - readThrough),
           factsWritten: 0,
           factsSkipped: 0,
           factsFailed: 0,
@@ -1166,8 +1172,7 @@ export async function extractFactsForPage(
       // Over budget after the (already-paid) call — still persist what we got.
     }
     windowsRun += 1;
-    const start = opts.body.indexOf(window, readThrough);
-    readThrough = (start < 0 ? readThrough : start) + Math.min(window.length, EXTRACT_WINDOW_CHARS);
+    readThrough = windowEnd;
     junkSkipped += result.junkSkipped;
     facts.push(...result.facts);
     // An unreadable answer is a DURABLE failure, not a quiet page. Without this

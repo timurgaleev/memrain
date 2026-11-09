@@ -113,6 +113,27 @@ async function jobCost(id: string): Promise<number> {
 }
 
 describe("runAgent", () => {
+  it("reports a blank final turn as empty_answer, including after a resume", async () => {
+    const job = await claimNew();
+    const s = script([{ content: [{ text: " \n\t" }, use("must-not-run")], stopReason: "end_turn" }]);
+    const d = counter();
+    const result = await runAgent({
+      storage, job, task: "t", maxUsd: 0.25, modelId: HAIKU,
+      converse: s.fn, dispatch: d.fn, ...ctxFor(job),
+    });
+    expect(result.stop_reason).toBe("empty_answer");
+    expect(result.final_text.trim()).toBe("");
+    expect(d.calls).toEqual([]);
+    const resumed = await reclaim(job);
+    const replay = await runAgent({
+      storage, job: resumed, task: "t", maxUsd: 0.25, modelId: HAIKU,
+      converse: s.fn, dispatch: d.fn, ...ctxFor(resumed),
+    });
+    expect(replay.stop_reason).toBe("empty_answer");
+    expect(s.calls).toHaveLength(1);
+    expect(d.calls).toEqual([]);
+  });
+
   it("runs tool turns to an end_turn answer and records every turn", async () => {
     const job = await claimNew();
     const s = script([
