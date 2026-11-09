@@ -4,6 +4,17 @@ import { fileURLToPath } from "node:url";
 import { identifierTokens } from "../src/core/search/identifier-probe.ts";
 import { keywordIdentifierSearch } from "../src/core/search/keyword.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
+import { linearityRatio } from "./helpers/cpu-time.ts";
+
+it("scans punctuation before a rejecting URL suffix in linear time", () => {
+  const run = (size: number) => {
+    const query = `https://example.com/${".".repeat(size)}x`;
+    for (let i = 0; i < 16; i++) expect(identifierTokens(query)).toEqual([]);
+  };
+  run(2000);
+  run(8000);
+  expect(linearityRatio(() => run(2000), () => run(8000))).toBeLessThan(9);
+});
 
 it("does not block the process on a large punctuation run", async () => {
   const script = `import { identifierTokens } from ${JSON.stringify(fileURLToPath(new URL("../src/core/search/identifier-probe.ts", import.meta.url)))}; process.stdout.write(JSON.stringify(identifierTokens('%'.repeat(262144))));`;

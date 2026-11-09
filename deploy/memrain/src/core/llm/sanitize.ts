@@ -50,7 +50,7 @@ export const INJECTION_PATTERNS: Array<{ name: string; rx: RegExp; replacement: 
   { name: "print-system", rx: /(?:print|output|reveal|show)\s+(?:your\s+)?(?:system\s+prompt|instructions?|hidden)\b/gi, replacement: "[redacted]" },
   { name: "verbatim", rx: /(?:repeat|echo)\s+(?:back|verbatim)\b/gi, replacement: "[redacted]" },
   // Code-execution-style hooks.
-  { name: "eval-shell", rx: /\b(?:eval|exec|system|shell)\((?=\s*(?:['"`)]|[A-Za-z_$]))/gi, replacement: "[redacted](" },
+  { name: "eval-shell", rx: /\b(?:eval|exec|system|shell)\((?=\s*['"`)A-Z_$])/gi, replacement: "[redacted](" },
 ];
 
 /** Default cap on untrusted text length before it reaches the model. */

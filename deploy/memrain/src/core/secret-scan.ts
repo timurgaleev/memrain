@@ -75,7 +75,7 @@ interface Pattern {
 }
 
 /** Documentation passwords: `<password>`, `${VAR}`, `$VAR`, all `*`, all `x`. */
-const PLACEHOLDER = /^(?:<[^<>]*>|\$\{[^{}]*\}|\$[A-Za-z_]\w*|\*+|[xX]+)$/;
+const PLACEHOLDER = /^(?:<[^<>]*>|\$\{[^{}]*\}|\$[A-Z_]\w*|\*+|x+)$/i;
 
 /** The password of a `scheme://user:password@` span (the user never holds a `:`). */
 function urlPassword(span: string): string {
@@ -103,18 +103,18 @@ function decodesToUserPass(value: string): boolean {
  * constant work per start.
  */
 const ASSIGNMENT_KEY =
-  String.raw`(?:^|[^A-Za-z0-9]|\\(?:[bfnrt]|u[0-9a-f]{4})|%[0-9a-f]{2})(?:secret|token|passwd|password|passphrase|credential|api[_-]?key|apikey)[\w-]{0,64}` +
+  String.raw`(?:^|[^A-Z0-9]|\\(?:[bfnrt]|u[0-9a-f]{4})|%[0-9a-f]{2})(?:secret|token|passwd|password|passphrase|credential|api[_-]?key)[\w-]{0,64}` +
   // A quote escaped up to two levels (`\"`, `\u0022`, `%22`), and `:`/`=` escaped too. The
   // lookahead fails a non-separator fast, before the escape alternatives are tried.
   String.raw`(?=[\\%"' \t:=])(?:\\|\\u[0-9a-f]{4}|%[0-9a-f]{2}){0,2}["']?[ \t]{0,16}(?:[:=]|\\u003[ad]|%3[ad])[ \t]{0,16}`;
 /** A dotted member path in code (`process.env.DB_PASSWORD_2`). */
-const DOTTED_IDENTIFIER = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
+const DOTTED_IDENTIFIER = /^[A-Z_$][\w$]*(?:\.[A-Z_$][\w$]*)+$/i;
 /** The unquoted value class before password punctuation was admitted: a pure base64-ish run. */
 const PLAIN_VALUE = /^[\w+/=-]+$/;
 
 /** An assignment value that names a secret rather than holding one is left alone. */
 function assignmentHoldsValue(value: string): boolean {
-  if (/^[A-Za-z][\w+.-]{0,31}:\/\//.test(value)) return false;
+  if (/^[A-Z][\w+.-]{0,31}:\/\//i.test(value)) return false;
   if (value.startsWith("./") || value.startsWith("~/") || value.startsWith("${") || value.startsWith("$(")) return false;
   if (value.startsWith("[REDACTED:") || DOTTED_IDENTIFIER.test(value)) return false;
   // An absolute file path; a base64 secret that happens to start with `/` still counts.
@@ -277,14 +277,14 @@ const SHAPE_PATTERNS: Pattern[] = [
   // printable `user:pass`, and a longer base64 run is not a credential.
   {
     kind: "basic-auth",
-    regex: /(\bauthorization["']?[ \t]{0,16}[:=][ \t]{0,16}["']?basic[ \t]{1,16})([A-Za-z0-9+/=]{4,2048})(?![A-Za-z0-9+/=])/gi,
+    regex: /(\bauthorization["']?[ \t]{0,16}[:=][ \t]{0,16}["']?basic[ \t]{1,16})([A-Z0-9+/=]{4,2048})(?![A-Z0-9+/=])/gi,
     split: true,
     validate: decodesToUserPass,
     echo: { min: 12 },
   },
   {
     kind: "basic-auth",
-    regex: /(\bbasic[ \t]{1,16})([A-Za-z0-9+/=]{16,2048})(?![A-Za-z0-9+/=])/gi,
+    regex: /(\bbasic[ \t]{1,16})([A-Z0-9+/=]{16,2048})(?![A-Z0-9+/=])/gi,
     split: true,
     validate: decodesToUserPass,
     echo: { min: 12 },

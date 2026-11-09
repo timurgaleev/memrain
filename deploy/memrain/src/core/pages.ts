@@ -1072,7 +1072,7 @@ async function queryPageList(
   }
   if (opts.excludeDiary) {
     // Match String.trim() in the dispatcher, including legacy whitespace around types.
-    params.push(" \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff");
+    params.push(" \t\n\r\v\f\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF");
     where.push(`lower(btrim(COALESCE(type, ''), $${params.length})) NOT IN ('diary', 'journal') AND slug NOT LIKE 'life/diary/%'`);
   }
   if (opts.type) {

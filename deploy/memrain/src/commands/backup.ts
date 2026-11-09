@@ -42,7 +42,7 @@ function inspectCopy(path: string): Check {
 
 export function runBackupStatus(opts: BackupOptions): number {
   if (!opts.rdsInstance && !opts.efsId && !opts.copyReport) throw new Error("backup status: provide --rds-instance, --efs-id or --copy-report");
-  if (opts.rdsInstance && !/^[a-zA-Z][a-zA-Z0-9-]{0,62}$/.test(opts.rdsInstance)) throw new Error("backup status: invalid RDS instance identifier");
+  if (opts.rdsInstance && !/^[a-z][a-z0-9-]{0,62}$/i.test(opts.rdsInstance)) throw new Error("backup status: invalid RDS instance identifier");
   if (opts.efsId && !/^fs-[a-f0-9]{8,40}$/.test(opts.efsId)) throw new Error("backup status: invalid EFS file system id");
   const rds = opts.rdsInstance ? inspect(() => {
     const db = describe(["rds", "describe-db-instances", "--db-instance-identifier", opts.rdsInstance!]).DBInstances?.[0];

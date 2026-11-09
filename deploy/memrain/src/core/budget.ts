@@ -23,6 +23,17 @@ import { appendAudit, auditDir } from "./audit-week-file.ts";
 import type { Engine } from "./engine/interface.ts";
 import type { SonnetUsage } from "./llm/sonnet.ts";
 
+/**
+ * Ledger key of the brain's own held calls (cycle, jobs, CLI) when a
+ * brain-wide or cycle cap is on. Their ledger rows keep client_id NULL; only
+ * the hold needs a key, since `mcp_spend_reservations.client_id` is NOT NULL.
+ * No PAT may take this name (`patNameSpendConflict`).
+ */
+export const BRAIN_SPEND_ID = "memrain_brain";
+
+/** The advisory lock every brain-wide and cycle cap check runs under. */
+const BRAIN_SPEND_LOCK = "memrain_spend:brain";
+
 export interface ModelPricing {
   /** USD per 1,000,000 input tokens. */
   inputPer1M: number;
@@ -762,14 +773,6 @@ export function currentSpendTags(): SpendTags {
   return { ..._spendTags.getStore() };
 }
 
-/**
- * Ledger key of the brain's own held calls (cycle, jobs, CLI) when a
- * brain-wide or cycle cap is on. Their ledger rows keep client_id NULL; only
- * the hold needs a key, since `mcp_spend_reservations.client_id` is NOT NULL.
- * No PAT may take this name (`patNameSpendConflict`).
- */
-export const BRAIN_SPEND_ID = "memrain_brain";
-
 /** Why a brain-wide or cycle daily cap refused a call; the prefix of its message. */
 export const DAILY_CAP_REASON = "daily_cap";
 
@@ -1025,9 +1028,6 @@ async function holdForCall(call: TrackedCall): Promise<string | null> {
     "Wait for the UTC day to roll over, or raise the client's budget_usd_per_day.",
   );
 }
-
-/** The advisory lock every brain-wide and cycle cap check runs under. */
-const BRAIN_SPEND_LOCK = "memrain_spend:brain";
 
 /** Book a refused call as a $0 `refused` row, best-effort: the refusal is
  *  attributable, and a failed write never replaces the refusal itself. */

@@ -139,6 +139,9 @@ describe("fixed-shape keys whose rule was word-anchored", () => {
   });
 
   it.each([
+    ["AC inside an alphanumeric identifier", `record7${ac}`],
+    ["SK inside an alphanumeric identifier", `record7${sk}`],
+    ["SendGrid inside an alphanumeric identifier", `record7${sg}`],
     ["lowercase ac in snake_case", `task_ac${rnd(32, 79, HEX)}`],
     ["SK and 31 hex in snake_case", `risk_SK${rnd(31, 80, HEX)}_total`],
     ["AC and 33 hex", `track_AC${rnd(33, 81, HEX)}`],

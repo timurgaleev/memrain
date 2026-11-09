@@ -221,7 +221,7 @@ export async function resolveEntitiesToPointers(
   const priority = (hit: typeof resolved[number]): number => {
     if (slugToNorm.get(hit.slug) === hit.matchedNorm) return 0;
     const row = rowBySlug.get(hit.slug);
-    return /^(people|companies|projects)\//.test(hit.slug) || row?.type === "person" || row?.type === "company" ? 1 : 2;
+    return /^(?:people|companies|projects)\//.test(hit.slug) || row?.type === "person" || row?.type === "company" ? 1 : 2;
   };
   const ordered = [...resolved].sort((a, b) => priority(a) - priority(b)
     || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));

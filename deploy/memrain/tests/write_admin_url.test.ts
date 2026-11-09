@@ -25,3 +25,12 @@ it("tenant, public and failed writes carry no admin link", async () => {
   expect(failed.isError).toBe(true);
   expect(failed.admin_url).toBeUndefined();
 });
+
+it("preserves internal slashes without a quadratic issuer suffix scan", async () => {
+  const issuer = `https://brain.example.com/${"/".repeat(64000)}keep///`;
+  const before = process.cpuUsage();
+  const result = await put("notes/issuer-slashes", { issuer });
+  const { user, system } = process.cpuUsage(before);
+  expect(result.admin_url).toBe(`${issuer.slice(0, -3)}/admin/#page/notes%2Fissuer-slashes`);
+  expect((user + system) / 1000).toBeLessThan(500);
+}, 10000);
