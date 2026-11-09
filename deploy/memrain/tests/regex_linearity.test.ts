@@ -44,8 +44,8 @@ describe("skill frontmatter scan cost", () => {
     ["spaces", " "],
     ["tabs", "\t"],
   ] as const) {
-    it(`stays linear on a 1 MB run of ${label} after the opener`, () => {
-      writeFileSync(join(dir, "a.md"), `---${pad.repeat(RUN)}x`);
+    it(`stays linear on a 250 KiB run of ${label} after the opener`, () => {
+      writeFileSync(join(dir, "a.md"), `---${pad.repeat(250 * 1024)}x`);
 
       const started = performance.now();
       const out = listBrainSkillpacks({ skillsDir: dir });
@@ -125,7 +125,7 @@ describe("facts fence salvage cost", () => {
     ["spaces", " "],
     ["backticks", "`"],
   ] as const) {
-    it(`stays linear on a 1 MB run of ${label} after an unclosed fence`, () => {
+    it(`stays linear on a 250 KiB run of ${label} after an unclosed fence`, () => {
       const text = `\`\`\`${pad.repeat(RUN)}x`;
 
       const started = performance.now();

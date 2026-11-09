@@ -79,7 +79,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const pack = await call("context_pack", { slugs: ["notes/remote", "transcripts/operator"], token_budget: 8000 });
     expect(pack.cards[0].facts[0].trust).toBe("external");
     expect(pack.cards[0].facts[0].fact).toContain("&lt;/external_content&gt;");
-    expect(pack.cards[1].facts[0].fact).toBe("Operator's own fact");
+    expect(pack.cards[1].facts[0].fact).toBe("[operator] Operator's own fact");
     const small = await call("context_pack", { slugs: ["notes/remote", "transcripts/operator"], token_budget: 200 });
     expect(estTokens(JSON.stringify({ cards: small.cards, facts: small.facts }))).toBeLessThanOrEqual(200);
     expect(small.budget.used_tokens).toBeLessThanOrEqual(200);

@@ -96,6 +96,15 @@
             "doc_9a6d8dae4a32247f"
           ]
         ]
+      },
+      {
+        "text": "SELECT 'chunks' AS kind, c.id::text AS id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ANY($1::text[]) AND ((EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook')) OR EXISTS (SELECT 1 FROM pages p WHERE p.source_id = COALESCE(d.source_id, 'default') AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END, CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END, p.slug, p.slug || '.md', p.slug || '.markdown') AND (EXISTS (SELECT 1 FROM sources s WHERE s.id = p.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook')) OR p.compiled_truth->>'provider' = 'github' OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug AND v.source_id = p.source_id AND ((v.written_by_principal IS NOT NULL AND v.written_by_principal NOT IN ('', 'operator')) OR v.written_by = 'connector-github'))))))",
+        "params": [
+          [
+            "doc_591b77a7c7fd5f22_c0",
+            "doc_9a6d8dae4a32247f_c0"
+          ]
+        ]
       }
     ],
     "result": {
@@ -165,7 +174,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"hits\": [],\n  \"meta\": {\n    \"vectorEnabled\": false,\n    \"intent\": \"topic\",\n    \"mode\": \"conservative\",\n    \"cache\": \"miss\",\n    \"degraded\": [\n      \"vector_arm_failed\",\n      \"keyword_zero\"\n    ],\n    \"retrieved\": 0,\n    \"returned\": 0,\n    \"confidence\": {\n      \"grade\": \"weak\",\n      \"reason\": \"no hits\"\n    }\n  }\n}"
+          "text": "{\n  \"ok\": true,\n  \"hits\": [],\n  \"hint\": {\n    \"status\": \"retrieval_degraded\",\n    \"reasons\": [\n      \"vector_arm_failed\"\n    ],\n    \"try\": [\n      \"Retry the query; check server health if this persists.\"\n    ]\n  },\n  \"meta\": {\n    \"vectorEnabled\": false,\n    \"intent\": \"topic\",\n    \"mode\": \"conservative\",\n    \"cache\": \"miss\",\n    \"degraded\": [\n      \"vector_arm_failed\",\n      \"keyword_zero\"\n    ],\n    \"retrieved\": 0,\n    \"returned\": 0,\n    \"confidence\": {\n      \"grade\": \"weak\",\n      \"reason\": \"no hits\"\n    }\n  }\n}"
         }
       ]
     }
@@ -267,13 +276,37 @@
             "doc_9a6d8dae4a32247f"
           ]
         ]
+      },
+      {
+        "text": "SELECT 'chunks' AS kind, c.id::text AS id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ANY($1::text[]) AND ((EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook')) OR EXISTS (SELECT 1 FROM pages p WHERE p.source_id = COALESCE(d.source_id, 'default') AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END, CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END, p.slug, p.slug || '.md', p.slug || '.markdown') AND (EXISTS (SELECT 1 FROM sources s WHERE s.id = p.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook')) OR p.compiled_truth->>'provider' = 'github' OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug AND v.source_id = p.source_id AND ((v.written_by_principal IS NOT NULL AND v.written_by_principal NOT IN ('', 'operator')) OR v.written_by = 'connector-github'))))))",
+        "params": [
+          [
+            "doc_591b77a7c7fd5f22_c0",
+            "doc_9a6d8dae4a32247f_c0"
+          ]
+        ]
+      },
+      {
+        "text": "SELECT lexeme FROM unnest(to_tsvector('simple', $1)) ORDER BY positions[1], lexeme",
+        "params": [
+          "kangaroo"
+        ]
+      },
+      {
+        "text": "WITH eligible AS ( SELECT f.*, to_tsvector('simple', f.fact) AS terms FROM entity_facts f WHERE f.forgotten_at IS NULL AND f.dimension IS NULL AND (NOT EXISTS ( SELECT 1 FROM pages fact_origin WHERE fact_origin.slug = COALESCE(f.source_markdown_slug, f.source_slug) AND fact_origin.source_id = COALESCE(f.source_id, 'default') AND fact_origin.deleted_at IS NOT NULL ) AND NOT EXISTS ( SELECT 1 FROM documents fact_mirror WHERE fact_mirror.source_path = CASE WHEN COALESCE(f.source_id, 'default') = 'default' THEN 'page://' || COALESCE(f.source_markdown_slug, f.source_slug) ELSE 'page://' || COALESCE(f.source_id, 'default') || '/' || COALESCE(f.source_markdown_slug, f.source_slug) END AND COALESCE(fact_mirror.source_id, 'default') = COALESCE(f.source_id, 'default') AND (fact_mirror.deleted_at IS NOT NULL OR NOT NOT (COALESCE(fact_mirror.frontmatter, '{}'::jsonb) ? 'quarantine')) )) ), matching AS ( SELECT *, (SELECT count(*)::int FROM unnest($1::text[]) word WHERE terms @@ plainto_tsquery('simple', word)) AS matched FROM eligible WHERE terms @@ (plainto_tsquery('simple', ($1::text[])[1])) ), collapsed AS ( SELECT DISTINCT ON (entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact)) * FROM matching WHERE matched >= $2 ORDER BY entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact), written_at DESC, id DESC ) SELECT id AS fact_id, entity_slug, fact, valid_from::text AS valid_from, 'entity_facts'::text AS follow_up FROM collapsed ORDER BY matched DESC, written_at DESC, id DESC LIMIT 3",
+        "params": [
+          [
+            "kangaroo"
+          ],
+          1
+        ]
       }
     ],
     "result": {
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"hits\": [\n    {\n      \"source_id\": \"tenantA\",\n      \"date\": \"<date>\",\n      \"date_source\": \"updated\",\n      \"chunkId\": \"doc_591b77a7c7fd5f22_c0\",\n      \"documentId\": \"doc_591b77a7c7fd5f22\",\n      \"sourcePath\": \"page://tenantA/search-a/kanga\",\n      \"title\": \"Kanga A\",\n      \"content\": \"# Kanga A\\n\\nkangaroo KANGA_SECRET_AAA\",\n      \"score\": 0.016393,\n      \"intent\": \"topic\",\n      \"evidence\": \"keyword_exact\",\n      \"create_safety\": \"probable\"\n    },\n    {\n      \"source_id\": \"tenantB\",\n      \"date\": \"<date>\",\n      \"date_source\": \"updated\",\n      \"chunkId\": \"doc_9a6d8dae4a32247f_c0\",\n      \"documentId\": \"doc_9a6d8dae4a32247f\",\n      \"sourcePath\": \"page://tenantB/search-b/kanga\",\n      \"title\": \"Kanga B\",\n      \"content\": \"# Kanga B\\n\\nkangaroo KANGA_SECRET_BBB\",\n      \"score\": 0.016129,\n      \"intent\": \"topic\",\n      \"evidence\": \"keyword_exact\",\n      \"create_safety\": \"probable\"\n    }\n  ],\n  \"meta\": {\n    \"vectorEnabled\": false,\n    \"intent\": \"topic\",\n    \"mode\": \"conservative\",\n    \"cache\": \"miss\",\n    \"degraded\": [\n      \"vector_arm_failed\"\n    ],\n    \"retrieved\": 2,\n    \"returned\": 2,\n    \"confidence\": {\n      \"grade\": \"moderate\",\n      \"reason\": \"top hit: keyword_exact\"\n    }\n  }\n}"
+          "text": "{\n  \"ok\": true,\n  \"hits\": [\n    {\n      \"source_id\": \"tenantA\",\n      \"date\": \"<date>\",\n      \"date_source\": \"updated\",\n      \"chunkId\": \"doc_591b77a7c7fd5f22_c0\",\n      \"documentId\": \"doc_591b77a7c7fd5f22\",\n      \"sourcePath\": \"page://tenantA/search-a/kanga\",\n      \"title\": \"Kanga A\",\n      \"content\": \"# Kanga A\\n\\nkangaroo KANGA_SECRET_AAA\",\n      \"score\": 0.016393,\n      \"intent\": \"topic\",\n      \"evidence\": \"keyword_exact\",\n      \"create_safety\": \"probable\"\n    },\n    {\n      \"source_id\": \"tenantB\",\n      \"date\": \"<date>\",\n      \"date_source\": \"updated\",\n      \"chunkId\": \"doc_9a6d8dae4a32247f_c0\",\n      \"documentId\": \"doc_9a6d8dae4a32247f\",\n      \"sourcePath\": \"page://tenantB/search-b/kanga\",\n      \"title\": \"Kanga B\",\n      \"content\": \"# Kanga B\\n\\nkangaroo KANGA_SECRET_BBB\",\n      \"score\": 0.016129,\n      \"intent\": \"topic\",\n      \"evidence\": \"keyword_exact\",\n      \"create_safety\": \"probable\"\n    }\n  ],\n  \"facts\": [],\n  \"meta\": {\n    \"vectorEnabled\": false,\n    \"intent\": \"topic\",\n    \"mode\": \"conservative\",\n    \"cache\": \"miss\",\n    \"degraded\": [\n      \"vector_arm_failed\"\n    ],\n    \"retrieved\": 2,\n    \"returned\": 2,\n    \"confidence\": {\n      \"grade\": \"moderate\",\n      \"reason\": \"top hit: keyword_exact\"\n    }\n  }\n}"
         }
       ]
     }
@@ -282,9 +315,22 @@
     "call": "get_chunks {\"source_path\":\"/shared/pay.ts\"}",
     "sql": [
       {
-        "text": "SELECT c.id, c.chunk_index, c.content, c.symbol_name FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.source_path = $1 AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.chunk_index",
+        "text": "SELECT c.id, c.chunk_index, c.content, c.symbol_name FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.source_path = $1 AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.chunk_index, c.id LIMIT $2 OFFSET $3",
         "params": [
-          "/shared/pay.ts"
+          "/shared/pay.ts",
+          201,
+          0
+        ]
+      },
+      {
+        "text": "SELECT 'chunks' AS kind, c.id::text AS id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ANY($1::text[]) AND ((EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook')) OR EXISTS (SELECT 1 FROM pages p WHERE p.source_id = COALESCE(d.source_id, 'default') AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END, CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END, p.slug, p.slug || '.md', p.slug || '.markdown') AND (EXISTS (SELECT 1 FROM sources s WHERE s.id = p.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook')) OR p.compiled_truth->>'provider' = 'github' OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug AND v.source_id = p.source_id AND ((v.written_by_principal IS NOT NULL AND v.written_by_principal NOT IN ('', 'operator')) OR v.written_by = 'connector-github'))))))",
+        "params": [
+          [
+            "ch-a-pay",
+            "ch-b-pay",
+            "ch-a-caller",
+            "ch-b-caller"
+          ]
         ]
       }
     ],
@@ -292,7 +338,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"chunks\": [\n    {\n      \"chunkId\": \"ch-a-pay\",\n      \"chunkIndex\": 0,\n      \"content\": \"processPayment calls chargeCardAAA\",\n      \"symbolName\": null\n    },\n    {\n      \"chunkId\": \"ch-b-pay\",\n      \"chunkIndex\": 0,\n      \"content\": \"processPayment calls chargeCardBBB\",\n      \"symbolName\": null\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"chunks\": [\n    {\n      \"chunkId\": \"ch-a-pay\",\n      \"chunkIndex\": 0,\n      \"content\": \"processPayment calls chargeCardAAA\",\n      \"symbolName\": null\n    },\n    {\n      \"chunkId\": \"ch-b-pay\",\n      \"chunkIndex\": 0,\n      \"content\": \"processPayment calls chargeCardBBB\",\n      \"symbolName\": null\n    },\n    {\n      \"chunkId\": \"ch-a-caller\",\n      \"chunkIndex\": 1,\n      \"content\": \"callerAAA calls processPayment\",\n      \"symbolName\": null\n    },\n    {\n      \"chunkId\": \"ch-b-caller\",\n      \"chunkIndex\": 1,\n      \"content\": \"callerBBB calls processPayment\",\n      \"symbolName\": null\n    }\n  ],\n  \"truncated\": false\n}"
         }
       ]
     }
@@ -301,9 +347,9 @@
     "call": "page_list {}",
     "sql": [
       {
-        "text": "SELECT slug, type, title, compiled_truth, markdown_body, content_hash, source_id, created_at::text AS created_at, updated_at::text AS updated_at, deleted_at::text AS deleted_at FROM pages WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT $1",
+        "text": "SELECT slug, type, title, compiled_truth, markdown_body, content_hash, source_id, created_at::text AS created_at, updated_at::text AS updated_at, deleted_at::text AS deleted_at FROM pages WHERE deleted_at IS NULL ORDER BY pages.updated_at DESC, slug COLLATE \"C\" ASC LIMIT $1",
         "params": [
-          50
+          51
         ]
       },
       {
@@ -356,7 +402,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"pages\": [\n    {\n      \"slug\": \"team-b/alice\",\n      \"type\": \"person\",\n      \"title\": \"Aardvark Shared Title\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"BBB_SECRET_NOTES_BODY\\nBBB_APPENDED\",\n      \"content_hash\": \"a593938132fcd000f2b001d45cb7c7b72abd4587b74a320c0409f0c117436023\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"team-a/alice\",\n      \"type\": \"person\",\n      \"title\": \"Aardvark Shared Title\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"AAA_SECRET_NOTES_BODY\\nAAA_APPENDED\",\n      \"content_hash\": \"f0830b0ff0b967f82a9976c3592c9c83e69449b1096aa46b03b743fa6c082629\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-b2\",\n      \"type\": \"note\",\n      \"title\": \"claim-b2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-b1\",\n      \"type\": \"note\",\n      \"title\": \"claim-b1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-a2\",\n      \"type\": \"note\",\n      \"title\": \"claim-a2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-a1\",\n      \"type\": \"note\",\n      \"title\": \"claim-a1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-b3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b3\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-b2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-b1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"hub-b\",\n      \"type\": \"note\",\n      \"title\": \"hub-b\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"hub\",\n      \"content_hash\": \"08d33503ee27d4c13055d0cefec5e730be4ef2e41cd6cfce434936ec1e7c9d4b\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-a3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a3\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-a2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-a1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"hub-a\",\n      \"type\": \"note\",\n      \"title\": \"hub-a\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"hub\",\n      \"content_hash\": \"08d33503ee27d4c13055d0cefec5e730be4ef2e41cd6cfce434936ec1e7c9d4b\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"vault-b/target\",\n      \"type\": \"note\",\n      \"title\": \"Target B\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"tb\",\n      \"content_hash\": \"7aa5ae9ecf82f6fc5208ecd0940fd71d50cd4ac596fccac2ede05af806a87b6e\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"vault-a/target\",\n      \"type\": \"note\",\n      \"title\": \"Target A\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"ta\",\n      \"content_hash\": \"76592b9de6d38238a52a3651867871e5c670e6320a8ef46a84b5590f8933f33e\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"shared/gateway\",\n      \"type\": \"note\",\n      \"title\": \"Gateway\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"g\",\n      \"content_hash\": \"cd0aa9856147b6c5b4ff2b7dfee5da20aa38253099ef1b4a64aced233c9afe29\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"people/alice\",\n      \"type\": \"person\",\n      \"title\": \"Alice Entity\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"\",\n      \"content_hash\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n      \"source_id\": \"default\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"pages\": [\n    {\n      \"slug\": \"team-b/alice\",\n      \"type\": \"person\",\n      \"title\": \"Aardvark Shared Title\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"BBB_SECRET_NOTES_BODY\\nBBB_APPENDED\",\n      \"content_hash\": \"a593938132fcd000f2b001d45cb7c7b72abd4587b74a320c0409f0c117436023\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"team-a/alice\",\n      \"type\": \"person\",\n      \"title\": \"Aardvark Shared Title\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"AAA_SECRET_NOTES_BODY\\nAAA_APPENDED\",\n      \"content_hash\": \"f0830b0ff0b967f82a9976c3592c9c83e69449b1096aa46b03b743fa6c082629\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-b2\",\n      \"type\": \"note\",\n      \"title\": \"claim-b2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-b1\",\n      \"type\": \"note\",\n      \"title\": \"claim-b1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-a2\",\n      \"type\": \"note\",\n      \"title\": \"claim-a2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"claim-a1\",\n      \"type\": \"note\",\n      \"title\": \"claim-a1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"c\",\n      \"content_hash\": \"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-b3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b3\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-b2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-b1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-b1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"hub-b\",\n      \"type\": \"note\",\n      \"title\": \"hub-b\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"hub\",\n      \"content_hash\": \"08d33503ee27d4c13055d0cefec5e730be4ef2e41cd6cfce434936ec1e7c9d4b\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-a3\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a3\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-a2\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a2\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"spoke-a1\",\n      \"type\": \"note\",\n      \"title\": \"spoke-a1\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"spoke\",\n      \"content_hash\": \"5a6df92ae8c424224ef1810084e6fcc8b5669206af94b096080880ff120f30b5\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"hub-a\",\n      \"type\": \"note\",\n      \"title\": \"hub-a\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"hub\",\n      \"content_hash\": \"08d33503ee27d4c13055d0cefec5e730be4ef2e41cd6cfce434936ec1e7c9d4b\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"vault-b/target\",\n      \"type\": \"note\",\n      \"title\": \"Target B\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"tb\",\n      \"content_hash\": \"7aa5ae9ecf82f6fc5208ecd0940fd71d50cd4ac596fccac2ede05af806a87b6e\",\n      \"source_id\": \"tenantB\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"vault-a/target\",\n      \"type\": \"note\",\n      \"title\": \"Target A\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"ta\",\n      \"content_hash\": \"76592b9de6d38238a52a3651867871e5c670e6320a8ef46a84b5590f8933f33e\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"shared/gateway\",\n      \"type\": \"note\",\n      \"title\": \"Gateway\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"g\",\n      \"content_hash\": \"cd0aa9856147b6c5b4ff2b7dfee5da20aa38253099ef1b4a64aced233c9afe29\",\n      \"source_id\": \"tenantA\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    },\n    {\n      \"slug\": \"people/alice\",\n      \"type\": \"person\",\n      \"title\": \"Alice Entity\",\n      \"compiled_truth\": {},\n      \"markdown_body\": \"\",\n      \"content_hash\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n      \"source_id\": \"default\",\n      \"created_at\": \"<ts>\",\n      \"updated_at\": \"<ts>\",\n      \"deleted_at\": null\n    }\n  ],\n  \"next_cursor\": null,\n  \"complete\": true\n}"
         }
       ]
     }
@@ -404,10 +450,10 @@
     "call": "get_links {\"slug\":\"shared/gateway\"}",
     "sql": [
       {
-        "text": "(SELECT id, source_slug, target_slug, type, inferred_confidence, source_chunk_id, written_at::text AS written_at, 'outbound' AS direction FROM links WHERE source_slug = $1 AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ORDER BY written_at DESC LIMIT $2) UNION ALL (SELECT id, source_slug, target_slug, type, inferred_confidence, source_chunk_id, written_at::text AS written_at, 'inbound' AS direction FROM links WHERE target_slug = $1 AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ORDER BY written_at DESC LIMIT $2)",
+        "text": "(SELECT id, source_slug, target_slug, type, inferred_confidence, source_chunk_id, written_at::text AS written_at, 'outbound' AS direction FROM links WHERE source_slug = $1 AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ORDER BY written_at DESC, id DESC LIMIT $2) UNION ALL (SELECT id, source_slug, target_slug, type, inferred_confidence, source_chunk_id, written_at::text AS written_at, 'inbound' AS direction FROM links WHERE target_slug = $1 AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ORDER BY written_at DESC, id DESC LIMIT $2)",
         "params": [
           "shared/gateway",
-          1000
+          1001
         ]
       }
     ],
@@ -415,7 +461,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"slug\": \"shared/gateway\",\n  \"groups\": [\n    {\n      \"type\": \"mentions\",\n      \"direction\": \"outbound\",\n      \"links\": [\n        {\n          \"id\": 2,\n          \"source_slug\": \"shared/gateway\",\n          \"target_slug\": \"vault-b/target\",\n          \"type\": \"mentions\",\n          \"inferred_confidence\": 1,\n          \"source_chunk_id\": null,\n          \"written_at\": \"<ts>\"\n        },\n        {\n          \"id\": 1,\n          \"source_slug\": \"shared/gateway\",\n          \"target_slug\": \"vault-a/target\",\n          \"type\": \"mentions\",\n          \"inferred_confidence\": 1,\n          \"source_chunk_id\": null,\n          \"written_at\": \"<ts>\"\n        }\n      ]\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"slug\": \"shared/gateway\",\n  \"groups\": [\n    {\n      \"type\": \"mentions\",\n      \"direction\": \"outbound\",\n      \"links\": [\n        {\n          \"id\": 2,\n          \"source_slug\": \"shared/gateway\",\n          \"target_slug\": \"vault-b/target\",\n          \"type\": \"mentions\",\n          \"inferred_confidence\": 1,\n          \"source_chunk_id\": null,\n          \"written_at\": \"<ts>\"\n        },\n        {\n          \"id\": 1,\n          \"source_slug\": \"shared/gateway\",\n          \"target_slug\": \"vault-a/target\",\n          \"type\": \"mentions\",\n          \"inferred_confidence\": 1,\n          \"source_chunk_id\": null,\n          \"written_at\": \"<ts>\"\n        }\n      ]\n    }\n  ],\n  \"truncated\": false\n}"
         }
       ]
     }
@@ -464,20 +510,20 @@
         ]
       },
       {
-        "text": "SELECT p.slug AS slug, p.source_id AS source_id, p.title AS title, COUNT(*)::int AS mention_count, MIN(l.target_slug) AS target_slug FROM links l JOIN pages p ON p.slug = l.source_slug AND p.deleted_at IS NULL WHERE l.target_slug = ANY($1::text[]) GROUP BY p.slug, p.source_id, p.title ORDER BY mention_count DESC, p.title NULLS LAST, p.slug LIMIT $2",
+        "text": "SELECT p.slug AS slug, p.source_id AS source_id, p.title AS title, COUNT(*)::int AS mention_count, MIN(l.target_slug) AS target_slug FROM links l JOIN pages p ON p.slug = l.source_slug AND p.source_id = l.source_id AND p.deleted_at IS NULL WHERE l.target_slug = ANY($1::text[]) GROUP BY p.slug, p.source_id, p.title ORDER BY mention_count DESC, max(l.id) DESC, p.slug, p.source_id LIMIT $2",
         "params": [
           [
             "alice"
           ],
-          50
+          51
         ]
       },
       {
         "text": "SELECT id, source_path FROM documents WHERE source_path = ANY($1::text[]) ORDER BY id",
         "params": [
           [
-            "page://tenantA/vault-a/target",
-            "page://tenantB/vault-b/target"
+            "page://tenantB/vault-b/target",
+            "page://tenantA/vault-a/target"
           ]
         ]
       },
@@ -485,7 +531,7 @@
         "text": "SELECT d.id AS document_id, d.source_path AS source_path, d.title AS title, COUNT(*)::int AS mention_count, MIN(em.surface_form) AS surface_form FROM entity_mentions em JOIN chunks c ON c.id = em.chunk_id JOIN documents d ON d.id = c.document_id WHERE em.entity_id = $1 GROUP BY d.id, d.source_path, d.title ORDER BY mention_count DESC, d.title NULLS LAST, d.source_path LIMIT $2",
         "params": [
           "ent_wikilink_alice",
-          50
+          51
         ]
       }
     ],
@@ -493,7 +539,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"name\": \"Alice\",\n  \"hits\": [\n    {\n      \"documentId\": \"page://tenantA/vault-a/target\",\n      \"sourcePath\": \"page://tenantA/vault-a/target\",\n      \"title\": \"Target A\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    },\n    {\n      \"documentId\": \"page://tenantB/vault-b/target\",\n      \"sourcePath\": \"page://tenantB/vault-b/target\",\n      \"title\": \"Target B\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    },\n    {\n      \"documentId\": \"doc-a-notes\",\n      \"sourcePath\": \"/tenant-a/notes.md\",\n      \"title\": \"AAA Notes\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"Alice\"\n    },\n    {\n      \"documentId\": \"doc-b-notes\",\n      \"sourcePath\": \"/tenant-b/notes.md\",\n      \"title\": \"BBB Notes\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"Alice\"\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"name\": \"Alice\",\n  \"hits\": [\n    {\n      \"documentId\": \"page://tenantB/vault-b/target\",\n      \"sourcePath\": \"page://tenantB/vault-b/target\",\n      \"title\": \"Target B\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    },\n    {\n      \"documentId\": \"page://tenantA/vault-a/target\",\n      \"sourcePath\": \"page://tenantA/vault-a/target\",\n      \"title\": \"Target A\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"alice\"\n    },\n    {\n      \"documentId\": \"doc-a-notes\",\n      \"sourcePath\": \"/tenant-a/notes.md\",\n      \"title\": \"AAA Notes\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"Alice\"\n    },\n    {\n      \"documentId\": \"doc-b-notes\",\n      \"sourcePath\": \"/tenant-b/notes.md\",\n      \"title\": \"BBB Notes\",\n      \"mentionCount\": 1,\n      \"surfaceForm\": \"Alice\"\n    }\n  ],\n  \"truncated\": false\n}"
         }
       ]
     }
@@ -521,7 +567,7 @@
     "call": "graph_neighbors {\"slug\":\"shared/gateway\"}",
     "sql": [
       {
-        "text": "SELECT id, source_slug, target_slug, type, inferred_confidence, source_chunk_id, written_at::text AS written_at, 'outbound' AS direction FROM links WHERE source_slug = $1 AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) UNION ALL SELECT id, source_slug, target_slug, type, inferred_confidence, source_chunk_id, written_at::text AS written_at, 'inbound' AS direction FROM links WHERE target_slug = $1 AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ORDER BY written_at DESC LIMIT $2",
+        "text": "SELECT id, source_slug, target_slug, type, inferred_confidence, source_chunk_id, written_at::text AS written_at, 'outbound' AS direction FROM links WHERE source_slug = $1 AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) UNION ALL SELECT id, source_slug, target_slug, type, inferred_confidence, source_chunk_id, written_at::text AS written_at, 'inbound' AS direction FROM links WHERE target_slug = $1 AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = links.target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ORDER BY written_at DESC, id DESC LIMIT $2",
         "params": [
           "shared/gateway",
           100
@@ -562,11 +608,11 @@
     "call": "traverse_graph {\"start_slug\":\"shared/gateway\",\"direction\":\"outbound\",\"max_depth\":3}",
     "sql": [
       {
-        "text": "WITH RECURSIVE walk(slug, depth, path) AS ( SELECT $1::text, 0, ARRAY[$1::text] UNION ALL SELECT l.target_slug, w.depth + 1, w.path || l.target_slug FROM walk w JOIN links l ON l.source_slug = w.slug WHERE w.depth < $2 AND NOT (l.target_slug = ANY(w.path)) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = l.source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = l.target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ) SELECT slug, MIN(depth) AS depth FROM walk WHERE depth > 0 GROUP BY slug ORDER BY MIN(depth) ASC, slug ASC LIMIT $3",
+        "text": "WITH RECURSIVE edges AS MATERIALIZED ( SELECT DISTINCT l.source_slug, l.target_slug FROM links l WHERE NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = l.source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = l.target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ), walk(slug, depth) AS ( SELECT $1::text, 0 UNION SELECT l.target_slug, w.depth + 1 FROM walk w JOIN edges l ON l.source_slug = w.slug WHERE w.depth < $2 ) SELECT slug, MIN(depth) AS depth FROM walk WHERE depth > 0 AND slug <> $1 GROUP BY slug ORDER BY MIN(depth) ASC, slug ASC LIMIT $3",
         "params": [
           "shared/gateway",
           3,
-          100
+          101
         ]
       }
     ],
@@ -574,7 +620,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"start\": \"shared/gateway\",\n  \"hits\": [\n    {\n      \"slug\": \"vault-a/target\",\n      \"depth\": 1\n    },\n    {\n      \"slug\": \"vault-b/target\",\n      \"depth\": 1\n    },\n    {\n      \"slug\": \"alice\",\n      \"depth\": 2\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"start\": \"shared/gateway\",\n  \"hits\": [\n    {\n      \"slug\": \"vault-a/target\",\n      \"depth\": 1\n    },\n    {\n      \"slug\": \"vault-b/target\",\n      \"depth\": 1\n    },\n    {\n      \"slug\": \"alice\",\n      \"depth\": 2\n    }\n  ],\n  \"truncated\": false\n}"
         }
       ]
     }
@@ -600,7 +646,7 @@
     "call": "find_experts {\"limit\":5}",
     "sql": [
       {
-        "text": "WITH edges AS ( SELECT source_slug AS slug, target_slug AS neighbour FROM links UNION ALL SELECT target_slug AS slug, source_slug AS neighbour FROM links ), degrees AS ( SELECT e.slug, COUNT(DISTINCT e.neighbour) AS degree FROM edges e JOIN pages np ON np.slug = e.neighbour AND np.deleted_at IS NULL GROUP BY e.slug ) SELECT p.slug, p.type, p.title, COALESCE(d.degree, 0) AS degree FROM pages p LEFT JOIN degrees d ON d.slug = p.slug WHERE p.deleted_at IS NULL ORDER BY COALESCE(d.degree, 0) DESC, p.updated_at DESC, p.slug COLLATE \"C\" ASC LIMIT $1",
+        "text": "WITH edges AS ( SELECT source_slug AS slug, target_slug AS neighbour FROM links WHERE source_slug <> target_slug AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) UNION ALL SELECT target_slug AS slug, source_slug AS neighbour FROM links WHERE source_slug <> target_slug AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ), degrees AS ( SELECT e.slug, COUNT(DISTINCT e.neighbour) AS degree FROM edges e JOIN pages np ON np.slug = e.neighbour AND np.deleted_at IS NULL GROUP BY e.slug ) SELECT p.slug, p.type, p.title, COALESCE(d.degree, 0) AS degree FROM pages p LEFT JOIN degrees d ON d.slug = p.slug WHERE p.deleted_at IS NULL AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = p.slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ORDER BY COALESCE(d.degree, 0) DESC, p.updated_at DESC, p.slug COLLATE \"C\" ASC LIMIT $1",
         "params": [
           5
         ]
@@ -644,7 +690,7 @@
     "call": "find_trajectory {\"entity_slug\":\"people/alice\"}",
     "sql": [
       {
-        "text": "SELECT * FROM ( SELECT 'fact'::text AS source, COALESCE(f.valid_from::timestamptz, f.written_at)::text AS at, f.fact AS text, f.kind AS kind, f.id AS id, f.claim_metric AS metric, f.claim_value AS value, f.claim_unit AS unit, f.claim_period AS period, f.event_type AS event_type, NULL::text AS embedding FROM entity_facts f WHERE f.entity_slug = $1 AND f.dimension IS NULL UNION ALL SELECT 'event'::text AS source, ev.occurred_at::text AS at, ev.event AS text, NULL::text AS kind, ev.id AS id, NULL::text AS metric, NULL::numeric AS value, NULL::text AS unit, NULL::text AS period, NULL::text AS event_type, NULL::text AS embedding FROM timeline_events ev WHERE ev.slug = $1 ) merged ORDER BY merged.at ASC, merged.source ASC, merged.id ASC LIMIT $2",
+        "text": "SELECT * FROM ( SELECT 'fact'::text AS source, COALESCE(f.valid_from::timestamptz, f.written_at)::text AS at, f.fact AS text, f.kind AS kind, f.id AS id, f.claim_metric AS metric, f.claim_value AS value, f.claim_unit AS unit, f.claim_period AS period, f.event_type AS event_type, NULL::text AS embedding FROM entity_facts f WHERE f.entity_slug = $1 AND f.dimension IS NULL AND (NOT EXISTS ( SELECT 1 FROM pages fact_origin WHERE fact_origin.slug = COALESCE(f.source_markdown_slug, f.source_slug) AND fact_origin.source_id = COALESCE(f.source_id, 'default') AND fact_origin.deleted_at IS NOT NULL ) AND NOT EXISTS ( SELECT 1 FROM documents fact_mirror WHERE fact_mirror.source_path = CASE WHEN COALESCE(f.source_id, 'default') = 'default' THEN 'page://' || COALESCE(f.source_markdown_slug, f.source_slug) ELSE 'page://' || COALESCE(f.source_id, 'default') || '/' || COALESCE(f.source_markdown_slug, f.source_slug) END AND COALESCE(fact_mirror.source_id, 'default') = COALESCE(f.source_id, 'default') AND (fact_mirror.deleted_at IS NOT NULL OR NOT NOT (COALESCE(fact_mirror.frontmatter, '{}'::jsonb) ? 'quarantine')) )) UNION ALL SELECT 'event'::text AS source, ev.occurred_at::text AS at, ev.event AS text, NULL::text AS kind, ev.id AS id, NULL::text AS metric, NULL::numeric AS value, NULL::text AS unit, NULL::text AS period, NULL::text AS event_type, NULL::text AS embedding FROM timeline_events ev WHERE ev.slug = $1 AND (ev.event_slug IS NULL OR EXISTS (SELECT 1 FROM pages ep WHERE ep.slug = ev.event_slug AND ep.deleted_at IS NULL AND ep.source_id = ev.source_id)) ) merged ORDER BY merged.at ASC, merged.source ASC, merged.id ASC LIMIT $2",
         "params": [
           "people/alice",
           100
@@ -752,17 +798,32 @@
         ]
       },
       {
-        "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, attributed_to, forgotten_at::text AS forgotten_at FROM entity_facts WHERE entity_slug = $1 AND forgotten_at IS NULL AND dimension IS NULL AND (valid_until IS NULL OR valid_until >= CURRENT_DATE) ORDER BY confidence DESC, written_at DESC, id DESC LIMIT $2",
+        "text": "SELECT id, source_id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, attributed_to, forgotten_at::text AS forgotten_at, collapsed_count FROM (SELECT DISTINCT ON (entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact)) *, (count(*) OVER (PARTITION BY entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact)))::int AS collapsed_count FROM (SELECT * FROM entity_facts WHERE entity_slug = $1 AND forgotten_at IS NULL AND (NOT EXISTS ( SELECT 1 FROM pages fact_origin WHERE fact_origin.slug = COALESCE(entity_facts.source_markdown_slug, entity_facts.source_slug) AND fact_origin.source_id = COALESCE(entity_facts.source_id, 'default') AND fact_origin.deleted_at IS NOT NULL ) AND NOT EXISTS ( SELECT 1 FROM documents fact_mirror WHERE fact_mirror.source_path = CASE WHEN COALESCE(entity_facts.source_id, 'default') = 'default' THEN 'page://' || COALESCE(entity_facts.source_markdown_slug, entity_facts.source_slug) ELSE 'page://' || COALESCE(entity_facts.source_id, 'default') || '/' || COALESCE(entity_facts.source_markdown_slug, entity_facts.source_slug) END AND COALESCE(fact_mirror.source_id, 'default') = COALESCE(entity_facts.source_id, 'default') AND (fact_mirror.deleted_at IS NOT NULL OR NOT NOT (COALESCE(fact_mirror.frontmatter, '{}'::jsonb) ? 'quarantine')) )) AND dimension IS NULL AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)) eligible ORDER BY entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact), written_at DESC, id DESC) facts ORDER BY confidence DESC, written_at DESC, id DESC LIMIT $2",
         "params": [
           "people/alice",
           1000
         ]
       },
       {
-        "text": "SELECT id, slug, occurred_at::text AS occurred_at, event, detail, source_label, source_chunk_id, written_at::text AS written_at FROM timeline_events WHERE slug = $1 ORDER BY occurred_at DESC LIMIT $2",
+        "text": "SELECT id, slug, occurred_at::text AS occurred_at, event, detail, source_label, source_chunk_id, written_at::text AS written_at FROM timeline_events te WHERE slug = $1 AND (event_slug IS NULL OR EXISTS (SELECT 1 FROM pages ep WHERE ep.slug = te.event_slug AND ep.deleted_at IS NULL AND ep.source_id = te.source_id)) ORDER BY occurred_at DESC LIMIT $2",
         "params": [
           "people/alice",
           25
+        ]
+      },
+      {
+        "text": "SELECT alias_slug FROM slug_aliases WHERE canonical_slug = $1 AND source_id = $2 ORDER BY alias_slug COLLATE \"C\" LIMIT 101",
+        "params": [
+          "people/alice",
+          "default"
+        ]
+      },
+      {
+        "text": "SELECT p.slug, p.title, p.source_id FROM pages p WHERE p.deleted_at IS NULL AND lower(btrim(p.type)) = 'person' AND p.title IS NOT NULL AND p.slug NOT LIKE 'life/diary/%' AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = p.slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND p.source_id = ANY($1::text[]) ORDER BY p.slug COLLATE \"C\" LIMIT 2001",
+        "params": [
+          [
+            "default"
+          ]
         ]
       },
       {
@@ -781,7 +842,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"slug\": \"people/alice\",\n  \"page\": {\n    \"slug\": \"people/alice\",\n    \"type\": \"person\",\n    \"title\": \"Alice Entity\",\n    \"compiled_truth\": {},\n    \"markdown_body\": \"\",\n    \"content_hash\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n    \"source_id\": \"default\",\n    \"created_at\": \"<ts>\",\n    \"updated_at\": \"<ts>\",\n    \"deleted_at\": null\n  },\n  \"facts\": [\n    {\n      \"id\": 2,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null\n    },\n    {\n      \"id\": 1,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"AAA_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null\n    }\n  ],\n  \"timeline\": [\n    {\n      \"id\": 2,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"BBB_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    },\n    {\n      \"id\": 1,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"AAA_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"slug\": \"people/alice\",\n  \"page\": {\n    \"slug\": \"people/alice\",\n    \"type\": \"person\",\n    \"title\": \"Alice Entity\",\n    \"compiled_truth\": {},\n    \"markdown_body\": \"\",\n    \"content_hash\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n    \"source_id\": \"default\",\n    \"created_at\": \"<ts>\",\n    \"updated_at\": \"<ts>\",\n    \"deleted_at\": null\n  },\n  \"facts\": [\n    {\n      \"id\": 2,\n      \"source_id\": \"tenantB\",\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null,\n      \"collapsed_count\": 1\n    },\n    {\n      \"id\": 1,\n      \"source_id\": \"tenantA\",\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"AAA_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null,\n      \"collapsed_count\": 1\n    }\n  ],\n  \"timeline\": [\n    {\n      \"id\": 2,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"BBB_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    },\n    {\n      \"id\": 1,\n      \"slug\": \"people/alice\",\n      \"occurred_at\": \"<ts>\",\n      \"event\": \"AAA_EVENT_TRAJECTORY_launch\",\n      \"detail\": \"\",\n      \"source_label\": \"\",\n      \"source_chunk_id\": null,\n      \"written_at\": \"<ts>\"\n    }\n  ],\n  \"identity\": {\n    \"aliases\": [],\n    \"redirected_from\": [],\n    \"possible_duplicates\": [],\n    \"truncated\": false\n  }\n}"
         }
       ]
     }
@@ -790,7 +851,7 @@
     "call": "entity_facts {\"entity_slug\":\"people/alice\"}",
     "sql": [
       {
-        "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, attributed_to, forgotten_at::text AS forgotten_at FROM entity_facts WHERE entity_slug = $1 AND forgotten_at IS NULL AND dimension IS NULL AND (valid_until IS NULL OR valid_until >= CURRENT_DATE) ORDER BY confidence DESC, written_at DESC, id DESC LIMIT $2",
+        "text": "SELECT id, source_id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, attributed_to, forgotten_at::text AS forgotten_at, collapsed_count FROM (SELECT DISTINCT ON (entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact)) *, (count(*) OVER (PARTITION BY entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact)))::int AS collapsed_count FROM (SELECT * FROM entity_facts WHERE entity_slug = $1 AND forgotten_at IS NULL AND (NOT EXISTS ( SELECT 1 FROM pages fact_origin WHERE fact_origin.slug = COALESCE(entity_facts.source_markdown_slug, entity_facts.source_slug) AND fact_origin.source_id = COALESCE(entity_facts.source_id, 'default') AND fact_origin.deleted_at IS NOT NULL ) AND NOT EXISTS ( SELECT 1 FROM documents fact_mirror WHERE fact_mirror.source_path = CASE WHEN COALESCE(entity_facts.source_id, 'default') = 'default' THEN 'page://' || COALESCE(entity_facts.source_markdown_slug, entity_facts.source_slug) ELSE 'page://' || COALESCE(entity_facts.source_id, 'default') || '/' || COALESCE(entity_facts.source_markdown_slug, entity_facts.source_slug) END AND COALESCE(fact_mirror.source_id, 'default') = COALESCE(entity_facts.source_id, 'default') AND (fact_mirror.deleted_at IS NOT NULL OR NOT NOT (COALESCE(fact_mirror.frontmatter, '{}'::jsonb) ? 'quarantine')) )) AND dimension IS NULL AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)) eligible ORDER BY entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact), written_at DESC, id DESC) facts ORDER BY confidence DESC, written_at DESC, id DESC LIMIT $2",
         "params": [
           "people/alice",
           1000
@@ -801,7 +862,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"entity_slug\": \"people/alice\",\n  \"facts\": [\n    {\n      \"id\": 2,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null\n    },\n    {\n      \"id\": 1,\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"AAA_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"entity_slug\": \"people/alice\",\n  \"facts\": [\n    {\n      \"id\": 2,\n      \"source_id\": \"tenantB\",\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"BBB_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null,\n      \"collapsed_count\": 1\n    },\n    {\n      \"id\": 1,\n      \"source_id\": \"tenantA\",\n      \"entity_slug\": \"people/alice\",\n      \"fact\": \"AAA_FACT_TRAJECTORY_seed\",\n      \"confidence\": 1,\n      \"source_slug\": null,\n      \"source_chunk_id\": null,\n      \"written_by\": \"unattributed\",\n      \"written_at\": \"<ts>\",\n      \"kind\": \"belief\",\n      \"notability\": null,\n      \"valid_from\": null,\n      \"valid_until\": null,\n      \"visibility\": \"private\",\n      \"superseded_by\": null,\n      \"consolidated_into\": null,\n      \"context\": null,\n      \"source_session\": null,\n      \"attributed_to\": null,\n      \"forgotten_at\": null,\n      \"collapsed_count\": 1\n    }\n  ]\n}"
         }
       ]
     }
@@ -810,7 +871,7 @@
     "call": "entity_timeline {\"slug\":\"people/alice\"}",
     "sql": [
       {
-        "text": "SELECT id, slug, occurred_at::text AS occurred_at, event, detail, source_label, source_chunk_id, written_at::text AS written_at FROM timeline_events WHERE slug = $1 ORDER BY occurred_at DESC LIMIT $2",
+        "text": "SELECT id, slug, occurred_at::text AS occurred_at, event, detail, source_label, source_chunk_id, written_at::text AS written_at FROM timeline_events te WHERE slug = $1 AND (event_slug IS NULL OR EXISTS (SELECT 1 FROM pages ep WHERE ep.slug = te.event_slug AND ep.deleted_at IS NULL AND ep.source_id = te.source_id)) ORDER BY occurred_at DESC LIMIT $2",
         "params": [
           "people/alice",
           100
@@ -830,17 +891,30 @@
     "call": "resolve_slugs {\"query\":\"Aardvark Shared Title\"}",
     "sql": [
       {
-        "text": "SELECT slug, title FROM pages WHERE slug = $1 AND deleted_at IS NULL LIMIT 1",
+        "text": "SELECT slug, title FROM pages p WHERE slug = $1 AND deleted_at IS NULL LIMIT 1",
         "params": [
           "Aardvark Shared Title"
         ]
       },
       {
-        "text": "SELECT slug, title, GREATEST( similarity(lower(COALESCE(title, '')), lower($1)), similarity(slug, lower($1)) ) AS score FROM pages WHERE deleted_at IS NULL AND GREATEST( similarity(lower(COALESCE(title, '')), lower($1)), similarity(slug, lower($1)) ) >= $2 ORDER BY score DESC, slug ASC LIMIT $3",
+        "text": "SELECT slug, title, GREATEST( similarity(lower(COALESCE(title, '')), lower($1)), similarity(slug, lower($1)) ) AS score FROM pages p WHERE deleted_at IS NULL AND GREATEST( similarity(lower(COALESCE(title, '')), lower($1)), similarity(slug, lower($1)) ) >= $2 ORDER BY score DESC, slug ASC LIMIT $3",
         "params": [
           "Aardvark Shared Title",
           0.3,
           5
+        ]
+      },
+      {
+        "text": "SELECT p.slug, p.title, p.source_id FROM pages p WHERE p.deleted_at IS NULL AND lower(btrim(p.type)) = 'person' AND p.title IS NOT NULL AND p.slug NOT LIKE 'life/diary/%' AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = p.slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ORDER BY p.slug COLLATE \"C\" LIMIT 2001",
+        "params": []
+      },
+      {
+        "text": "SELECT l.target_slug AS slug, count(DISTINCT l.source_slug)::int AS n FROM links l JOIN pages p ON p.slug = l.source_slug AND p.source_id = l.source_id AND p.deleted_at IS NULL WHERE l.target_slug = ANY($1::text[]) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = l.source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = l.target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) GROUP BY l.target_slug",
+        "params": [
+          [
+            "team-a/alice",
+            "team-b/alice"
+          ]
         ]
       }
     ],
@@ -848,7 +922,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"query\": \"Aardvark Shared Title\",\n  \"hits\": [\n    {\n      \"slug\": \"team-a/alice\",\n      \"title\": \"Aardvark Shared Title\",\n      \"score\": 1\n    },\n    {\n      \"slug\": \"team-b/alice\",\n      \"title\": \"Aardvark Shared Title\",\n      \"score\": 1\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"query\": \"Aardvark Shared Title\",\n  \"hits\": [\n    {\n      \"slug\": \"team-a/alice\",\n      \"title\": \"Aardvark Shared Title\",\n      \"score\": 1,\n      \"referenced_by_count\": 0\n    },\n    {\n      \"slug\": \"team-b/alice\",\n      \"title\": \"Aardvark Shared Title\",\n      \"score\": 1,\n      \"referenced_by_count\": 0\n    }\n  ]\n}"
         }
       ]
     }
@@ -948,39 +1022,9 @@
     "call": "code_flow {\"symbol\":\"processPayment\",\"exact\":true}",
     "sql": [
       {
-        "text": "SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.id",
+        "text": "SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language, d.source_path FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name_qualified IS NOT NULL AND (c.symbol_name_qualified = $1) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY d.source_path COLLATE \"C\", c.symbol_name_qualified, c.id LIMIT 25",
         "params": [
-          [
-            "processPayment"
-          ]
-        ]
-      },
-      {
-        "text": "SELECT DISTINCT e.from_symbol_qualified AS parent, e.to_symbol_qualified AS target, e.from_chunk_id AS chunk_id, c.language, rc.id AS resolved_chunk_id, rc.symbol_name_qualified AS resolved_symbol FROM code_edges_symbol e JOIN chunks c ON c.id = e.from_chunk_id JOIN documents d ON d.id = c.document_id LEFT JOIN chunks rc ON rc.id = e.edge_metadata->>'resolved_chunk_id' WHERE e.from_symbol_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY e.from_chunk_id, e.to_symbol_qualified LIMIT $2",
-        "params": [
-          [
-            "processPayment"
-          ],
-          400
-        ]
-      },
-      {
-        "text": "SELECT id, symbol_name, symbol_name_qualified, language FROM ( SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language, row_number() OVER (PARTITION BY c.symbol_name, c.language ORDER BY c.id) AS rn FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name = ANY($1::text[]) AND c.symbol_name_qualified IS NOT NULL AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ) ranked WHERE rn <= 3 ORDER BY id",
-        "params": [
-          [
-            "chargeCardAAA",
-            "chargeCardBBB"
-          ]
-        ]
-      },
-      {
-        "text": "SELECT DISTINCT e.from_symbol_qualified AS parent, e.to_symbol_qualified AS target, e.from_chunk_id AS chunk_id, c.language, rc.id AS resolved_chunk_id, rc.symbol_name_qualified AS resolved_symbol FROM code_edges_symbol e JOIN chunks c ON c.id = e.from_chunk_id JOIN documents d ON d.id = c.document_id LEFT JOIN chunks rc ON rc.id = e.edge_metadata->>'resolved_chunk_id' WHERE e.from_symbol_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY e.from_chunk_id, e.to_symbol_qualified LIMIT $2",
-        "params": [
-          [
-            "chargeCardAAA",
-            "chargeCardBBB"
-          ],
-          792
+          "processPayment"
         ]
       }
     ],
@@ -988,7 +1032,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"result\": \"ok\",\n  \"depth_groups\": [\n    {\n      \"depth\": 1,\n      \"nodes\": [\n        {\n          \"symbol\": \"chargeCardAAA\",\n          \"chunk_id\": \"ch-a-pay\",\n          \"resolved\": false\n        },\n        {\n          \"symbol\": \"chargeCardBBB\",\n          \"chunk_id\": \"ch-b-pay\",\n          \"resolved\": false\n        }\n      ],\n      \"confidence\": 0.769230\n    }\n  ],\n  \"cycles_detected\": false,\n  \"truncation\": \"none\"\n}"
+          "text": "{\n  \"ok\": true,\n  \"result\": \"ambiguous\",\n  \"candidates\": [\n    {\n      \"symbol_qualified\": \"/shared/pay.ts:processPayment\",\n      \"def_chunk_id\": \"ch-a-pay\"\n    },\n    {\n      \"symbol_qualified\": \"/shared/pay.ts:processPayment\",\n      \"def_chunk_id\": \"ch-b-pay\"\n    }\n  ]\n}"
         }
       ]
     }
@@ -997,54 +1041,9 @@
     "call": "code_blast {\"symbol\":\"processPayment\",\"exact\":true}",
     "sql": [
       {
-        "text": "SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.id",
+        "text": "SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language, d.source_path FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name_qualified IS NOT NULL AND (c.symbol_name_qualified = $1) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY d.source_path COLLATE \"C\", c.symbol_name_qualified, c.id LIMIT 25",
         "params": [
-          [
-            "processPayment"
-          ]
-        ]
-      },
-      {
-        "text": "SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.id",
-        "params": [
-          [
-            "processPayment"
-          ]
-        ]
-      },
-      {
-        "text": "SELECT DISTINCT e.to_symbol_qualified AS target, e.from_symbol_qualified AS next_symbol, e.from_chunk_id AS chunk_id, e.edge_metadata, CASE WHEN e.to_symbol_qualified = ANY($2::text[]) THEN 0 WHEN e.edge_metadata ? 'resolved_chunk_id' THEN 1 ELSE 2 END AS rank FROM code_edges_symbol e JOIN chunks c ON c.id = e.from_chunk_id JOIN documents d ON d.id = c.document_id WHERE e.to_symbol_qualified = ANY($1::text[]) AND e.from_symbol_qualified IS NOT NULL AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY rank, e.from_chunk_id, e.to_symbol_qualified LIMIT $3",
-        "params": [
-          [
-            "processPayment"
-          ],
-          [
-            "processPayment"
-          ],
-          400
-        ]
-      },
-      {
-        "text": "SELECT c.id, c.symbol_name, c.symbol_name_qualified, c.language FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.symbol_name_qualified = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY c.id",
-        "params": [
-          [
-            "callerAAA",
-            "callerBBB"
-          ]
-        ]
-      },
-      {
-        "text": "SELECT DISTINCT e.to_symbol_qualified AS target, e.from_symbol_qualified AS next_symbol, e.from_chunk_id AS chunk_id, e.edge_metadata, CASE WHEN e.to_symbol_qualified = ANY($2::text[]) THEN 0 WHEN e.edge_metadata ? 'resolved_chunk_id' THEN 1 ELSE 2 END AS rank FROM code_edges_symbol e JOIN chunks c ON c.id = e.from_chunk_id JOIN documents d ON d.id = c.document_id WHERE e.to_symbol_qualified = ANY($1::text[]) AND e.from_symbol_qualified IS NOT NULL AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') ORDER BY rank, e.from_chunk_id, e.to_symbol_qualified LIMIT $3",
-        "params": [
-          [
-            "callerAAA",
-            "callerBBB"
-          ],
-          [
-            "callerAAA",
-            "callerBBB"
-          ],
-          792
+          "processPayment"
         ]
       }
     ],
@@ -1052,7 +1051,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"result\": \"ok\",\n  \"depth_groups\": [\n    {\n      \"depth\": 1,\n      \"nodes\": [\n        {\n          \"symbol\": \"callerAAA\",\n          \"chunk_id\": \"ch-a-pay\",\n          \"def_chunk_id\": \"ch-a-pay\",\n          \"resolved\": false\n        },\n        {\n          \"symbol\": \"callerBBB\",\n          \"chunk_id\": \"ch-b-pay\",\n          \"def_chunk_id\": \"ch-b-pay\",\n          \"resolved\": false\n        }\n      ],\n      \"confidence\": 0.769230\n    }\n  ],\n  \"cycles_detected\": false,\n  \"truncation\": \"none\"\n}"
+          "text": "{\n  \"ok\": true,\n  \"result\": \"ambiguous\",\n  \"candidates\": [\n    {\n      \"symbol_qualified\": \"/shared/pay.ts:processPayment\",\n      \"def_chunk_id\": \"ch-a-pay\"\n    },\n    {\n      \"symbol_qualified\": \"/shared/pay.ts:processPayment\",\n      \"def_chunk_id\": \"ch-b-pay\"\n    }\n  ]\n}"
         }
       ]
     }
@@ -1184,7 +1183,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"client_id\": null,\n  \"scopes\": [],\n  \"write_source\": null,\n  \"read_sources\": null,\n  \"is_public\": false,\n  \"operator\": true,\n  \"bound_slug_prefixes\": null,\n  \"takes_holders\": null,\n  \"budget_usd_per_day\": null,\n  \"spent_today_usd\": null,\n  \"spend_id\": null,\n  \"callable_tools\": [\n    \"search\",\n    \"index\",\n    \"backlinks\",\n    \"stats\",\n    \"source_health\",\n    \"log_friction\",\n    \"page_put\",\n    \"page_append\",\n    \"page_edit\",\n    \"page_delete\",\n    \"page_restore\",\n    \"page_revert\",\n    \"page_get\",\n    \"page_list\",\n    \"page_versions\",\n    \"link\",\n    \"unlink\",\n    \"graph_neighbors\",\n    \"graph_query\",\n    \"traverse_graph\",\n    \"add_fact\",\n    \"add_timeline_event\",\n    \"entity_facts\",\n    \"fact_supersessions\",\n    \"entity_timeline\",\n    \"entity_recall\",\n    \"jobs_submit\",\n    \"jobs_cancel\",\n    \"jobs_list\",\n    \"jobs_get\",\n    \"jobs_logs\",\n    \"submit_agent\",\n    \"get_agent_job\",\n    \"get_chunks\",\n    \"resolve_slugs\",\n    \"add_tag\",\n    \"remove_tag\",\n    \"get_tags\",\n    \"relational_recall\",\n    \"get_links\",\n    \"list_link_sources\",\n    \"find_orphans\",\n    \"wanted_pages\",\n    \"find_experts\",\n    \"find_contradictions\",\n    \"find_trajectory\",\n    \"get_recent_salience\",\n    \"find_anomalies\",\n    \"recall\",\n    \"forget_fact\",\n    \"get_brain_identity\",\n    \"whoami\",\n    \"purge_deleted_pages\",\n    \"query\",\n    \"code_callers\",\n    \"code_callees\",\n    \"code_def\",\n    \"code_refs\",\n    \"code_blast\",\n    \"code_flow\",\n    \"volunteer_context\",\n    \"context_pack\",\n    \"advisor\",\n    \"list_brain_skillpack\",\n    \"list_concepts\",\n    \"list_takes\",\n    \"set_take_status\",\n    \"takes_search\",\n    \"get_calibration_profile\",\n    \"takes_scorecard\",\n    \"takes_calibration\",\n    \"extract_facts\",\n    \"list_skills\",\n    \"get_skill\",\n    \"get_recent_transcripts\",\n    \"think\",\n    \"put_raw_data\",\n    \"get_raw_data\",\n    \"log_ingest\",\n    \"get_ingest_log\",\n    \"retry_job\",\n    \"get_job_progress\",\n    \"sources_list\",\n    \"sources_status\",\n    \"get_status_snapshot\",\n    \"run_doctor\",\n    \"chronicle_day\",\n    \"chronicle_since\",\n    \"chronicle_on_this_day\",\n    \"chronicle_last_seen\",\n    \"ontology_get\",\n    \"ontology_propose\",\n    \"ontology_dimensions\",\n    \"ontology_conflicts\",\n    \"volunteer_chronicle\",\n    \"chronicle_backfill\"\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"client_id\": null,\n  \"scopes\": [],\n  \"write_source\": null,\n  \"read_sources\": null,\n  \"is_public\": false,\n  \"operator\": true,\n  \"bound_slug_prefixes\": null,\n  \"takes_holders\": null,\n  \"budget_usd_per_day\": null,\n  \"spent_today_usd\": null,\n  \"spend_id\": null,\n  \"callable_tools\": [\n    \"search_exact\",\n    \"search\",\n    \"index\",\n    \"backlinks\",\n    \"stats\",\n    \"source_health\",\n    \"log_friction\",\n    \"page_put\",\n    \"page_append\",\n    \"page_edit\",\n    \"page_rename\",\n    \"page_delete\",\n    \"page_restore\",\n    \"page_revert\",\n    \"page_get\",\n    \"page_list\",\n    \"page_versions\",\n    \"link\",\n    \"unlink\",\n    \"graph_neighbors\",\n    \"graph_query\",\n    \"traverse_graph\",\n    \"add_fact\",\n    \"add_timeline_event\",\n    \"entity_facts\",\n    \"fact_supersessions\",\n    \"entity_timeline\",\n    \"entity_recall\",\n    \"jobs_submit\",\n    \"jobs_cancel\",\n    \"jobs_list\",\n    \"jobs_get\",\n    \"jobs_logs\",\n    \"submit_agent\",\n    \"get_agent_job\",\n    \"get_chunks\",\n    \"resolve_slugs\",\n    \"add_tag\",\n    \"remove_tag\",\n    \"get_tags\",\n    \"relational_recall\",\n    \"get_links\",\n    \"list_link_sources\",\n    \"find_orphans\",\n    \"wanted_pages\",\n    \"find_experts\",\n    \"find_contradictions\",\n    \"find_trajectory\",\n    \"get_recent_salience\",\n    \"find_anomalies\",\n    \"recall\",\n    \"forget_fact\",\n    \"get_brain_identity\",\n    \"whoami\",\n    \"purge_deleted_pages\",\n    \"query\",\n    \"code_callers\",\n    \"code_callees\",\n    \"code_def\",\n    \"code_refs\",\n    \"code_blast\",\n    \"code_flow\",\n    \"volunteer_context\",\n    \"context_pack\",\n    \"advisor\",\n    \"list_brain_skillpack\",\n    \"list_concepts\",\n    \"list_takes\",\n    \"set_take_status\",\n    \"takes_search\",\n    \"get_calibration_profile\",\n    \"takes_scorecard\",\n    \"takes_calibration\",\n    \"extract_facts\",\n    \"list_skills\",\n    \"get_skill\",\n    \"get_recent_transcripts\",\n    \"think\",\n    \"put_raw_data\",\n    \"get_raw_data\",\n    \"log_ingest\",\n    \"get_ingest_log\",\n    \"retry_job\",\n    \"get_job_progress\",\n    \"sources_list\",\n    \"sources_status\",\n    \"get_status_snapshot\",\n    \"run_doctor\",\n    \"chronicle_day\",\n    \"chronicle_since\",\n    \"chronicle_on_this_day\",\n    \"chronicle_last_seen\",\n    \"ontology_get\",\n    \"ontology_propose\",\n    \"ontology_dimensions\",\n    \"ontology_conflicts\",\n    \"volunteer_chronicle\",\n    \"chronicle_backfill\"\n  ]\n}"
         }
       ]
     }
@@ -1193,7 +1192,7 @@
     "call": "page_versions {\"slug\":\"team-b/alice\"}",
     "sql": [
       {
-        "text": "SELECT slug, source_id, version_n, hash_prev, hash_new, body_snapshot, compiled_truth_snapshot, written_by, written_at::text AS written_at, written_by_principal FROM page_versions WHERE slug = $1 ORDER BY version_n DESC LIMIT $2",
+        "text": "SELECT slug, source_id, version_n, hash_prev, hash_new, written_by, written_at::text AS written_at, written_by_principal FROM page_versions WHERE slug = $1 ORDER BY version_n DESC LIMIT $2",
         "params": [
           "team-b/alice",
           20
@@ -1217,7 +1216,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"versions\": [\n    {\n      \"slug\": \"team-b/alice\",\n      \"source_id\": \"tenantB\",\n      \"version_n\": 2,\n      \"hash_prev\": \"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\n      \"hash_new\": \"a593938132fcd000f2b001d45cb7c7b72abd4587b74a320c0409f0c117436023\",\n      \"body_snapshot\": \"BBB_SECRET_NOTES_BODY\\nBBB_APPENDED\",\n      \"compiled_truth_snapshot\": {},\n      \"written_by\": null,\n      \"written_at\": \"<ts>\",\n      \"written_by_principal\": \"client:client-tenantB\"\n    },\n    {\n      \"slug\": \"team-b/alice\",\n      \"source_id\": \"tenantB\",\n      \"version_n\": 1,\n      \"hash_prev\": null,\n      \"hash_new\": \"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\n      \"body_snapshot\": \"BBB_SECRET_NOTES_BODY\",\n      \"compiled_truth_snapshot\": {},\n      \"written_by\": null,\n      \"written_at\": \"<ts>\",\n      \"written_by_principal\": null\n    }\n  ]\n}"
+          "text": "{\n  \"ok\": true,\n  \"versions\": [\n    {\n      \"slug\": \"team-b/alice\",\n      \"source_id\": \"tenantB\",\n      \"version_n\": 2,\n      \"hash_prev\": \"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\n      \"hash_new\": \"a593938132fcd000f2b001d45cb7c7b72abd4587b74a320c0409f0c117436023\",\n      \"written_by\": null,\n      \"written_at\": \"<ts>\",\n      \"written_by_principal\": \"client:client-tenantB\"\n    },\n    {\n      \"slug\": \"team-b/alice\",\n      \"source_id\": \"tenantB\",\n      \"version_n\": 1,\n      \"hash_prev\": null,\n      \"hash_new\": \"e13eeaff73f97bb26fc0f6fb58680405d62549dd577ff7b44d290ecf03d238bb\",\n      \"written_by\": null,\n      \"written_at\": \"<ts>\",\n      \"written_by_principal\": null\n    }\n  ]\n}"
         }
       ]
     }
@@ -1265,7 +1264,7 @@
     "call": "fact_supersessions {\"limit\":500}",
     "sql": [
       {
-        "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, attributed_to, forgotten_at::text AS forgotten_at FROM entity_facts WHERE forgotten_at IS NOT NULL AND superseded_by IS NOT NULL AND dimension IS NULL ORDER BY forgotten_at DESC LIMIT $1",
+        "text": "SELECT id, source_id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, attributed_to, forgotten_at::text AS forgotten_at FROM entity_facts WHERE forgotten_at IS NOT NULL AND superseded_by IS NOT NULL AND dimension IS NULL ORDER BY forgotten_at DESC LIMIT $1",
         "params": [
           500
         ]
@@ -1354,7 +1353,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\n  \"ok\": true,\n  \"perSource\": [\n    {\n      \"source_id\": \"tenantA\",\n      \"document_count\": 3,\n      \"chunk_count\": 3,\n      \"embeddable_chunks\": 3,\n      \"embedded_chunks\": 1,\n      \"embed_coverage_pct\": 0.333333,\n      \"code_chunks\": 0,\n      \"lag_seconds\":0\n    },\n    {\n      \"source_id\": \"tenantB\",\n      \"document_count\": 3,\n      \"chunk_count\": 3,\n      \"embeddable_chunks\": 3,\n      \"embedded_chunks\": 1,\n      \"embed_coverage_pct\": 0.333333,\n      \"code_chunks\": 0,\n      \"lag_seconds\":0\n    }\n  ],\n  \"health\": {\n    \"embeddable_chunks\": 6,\n    \"embedded_chunks\": 2,\n    \"embed_coverage_pct\": 0.333333,\n    \"code_chunks\": 0,\n    \"lag_seconds\":0,\n    \"queue_depth\": 0,\n    \"failed_jobs_24h\": 0\n  }\n}"
+          "text": "{\n  \"ok\": true,\n  \"perSource\": [\n    {\n      \"source_id\": \"tenantA\",\n      \"document_count\": 3,\n      \"chunk_count\": 4,\n      \"embeddable_chunks\": 4,\n      \"embedded_chunks\": 1,\n      \"embed_coverage_pct\": 0.25,\n      \"code_chunks\": 0,\n      \"lag_seconds\":0\n    },\n    {\n      \"source_id\": \"tenantB\",\n      \"document_count\": 3,\n      \"chunk_count\": 4,\n      \"embeddable_chunks\": 4,\n      \"embedded_chunks\": 1,\n      \"embed_coverage_pct\": 0.25,\n      \"code_chunks\": 0,\n      \"lag_seconds\":0\n    }\n  ],\n  \"health\": {\n    \"embeddable_chunks\": 8,\n    \"embedded_chunks\": 2,\n    \"embed_coverage_pct\": 0.25,\n    \"code_chunks\": 0,\n    \"lag_seconds\":0,\n    \"queue_depth\": 0,\n    \"failed_jobs_24h\": 0\n  }\n}"
         }
       ]
     }

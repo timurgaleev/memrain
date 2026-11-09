@@ -175,9 +175,9 @@ describe("the shipped pack", () => {
   it("loads every routing-eval file with zero errors and a held-out case per file", () => {
     const r = loadPackBenchmark(PACK);
     expect(r.errors).toEqual([]);
-    expect(r.files).toHaveLength(16);
-    // 143 lines across the 16 files, of which these are cases (the rest are comments).
-    expect(r.cases).toHaveLength(93);
+    expect(r.files).toHaveLength(21);
+    // Every shipped case is counted; comments are not benchmark rows.
+    expect(r.cases).toHaveLength(108);
     for (const slug of r.files) {
       expect(r.cases.some((c) => c.skill === slug && c.split === "heldout")).toBe(true);
     }

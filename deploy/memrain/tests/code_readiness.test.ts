@@ -155,12 +155,13 @@ describe("codeIndexReadiness", () => {
         .toBe("no_symbols");
     });
 
-    it("counts the entity type the lookup reads", async () => {
-      // tenant-c holds an import (code-ref) and no definition.
+    it("counts module definitions as well as references in top-level scripts", async () => {
+      // tenant-c holds an import and its enclosing module definition.
       expect((await codeRefs(engine, "zzNoSuchSymbol", undefined, ["tenant-c"])).readiness?.state)
         .toBe("ready");
       expect((await codeDefs(engine, "zzNoSuchSymbol", undefined, ["tenant-c"])).readiness?.state)
-        .toBe("no_symbols");
+        .toBe("ready");
+      expect((await codeDefs(engine, "zzNoSuchSymbol", undefined, ["tenant-c"])).readiness?.symbols).toBe(1);
     });
 
     it("ignores soft-deleted documents in both the lookup and the readiness", async () => {
@@ -177,7 +178,7 @@ describe("codeIndexReadiness", () => {
       try {
         expect((await codeIndexReadiness(engine, ["tenant-a"])).state).toBe("indexing");
         expect((await codeIndexReadiness(engine, ["tenant-b", "tenant-a"])).state).toBe("indexing");
-        expect((await codeIndexReadiness(engine, ["tenant-c"])).state).toBe("no_symbols");
+        expect((await codeIndexReadiness(engine, ["tenant-c"])).state).toBe("ready");
         expect((await codeIndexReadiness(engine)).state).toBe("indexing");
       } finally {
         release(false);
@@ -194,8 +195,8 @@ describe("codeIndexReadiness", () => {
       expect(r.readiness?.symbols).toBeGreaterThanOrEqual(2);
     });
 
-    it("reports no_symbols for code that yields no definitions", async () => {
-      const r = await codeDefs(engine, "alpha", undefined, ["tenant-c"]);
+    it("reports no_symbols when the indexed document has no definition mentions", async () => {
+      const r = await codeDefs(engine, "alpha", undefined, ["tenant-d"]);
       expect(r.count).toBe(0);
       expect(r.readiness).toEqual({ state: "no_symbols", code_documents: 1, symbols: 0 });
     });

@@ -1,5 +1,6 @@
 import type { Engine } from "../engine/interface.ts";
 import { andSourceScope } from "../source-scope.ts";
+import { FENCE_WRITERS } from "../facts-reconcile.ts";
 import { packFactText } from "../fact-text.ts";
 
 type Origin = "operator" | "agent" | "extractor" | "ingest";
@@ -7,12 +8,12 @@ type Origin = "operator" | "agent" | "extractor" | "ingest";
 /** Read only a category, never the credential carried in the audit column. */
 export async function factProvenance(engine: Engine, ids: readonly number[], sourceIds?: readonly string[]): Promise<Map<number, Origin>> {
   if (ids.length === 0) return new Map();
-  const params: unknown[] = [ids];
+  const params: unknown[] = [ids, FENCE_WRITERS];
   const scope = andSourceScope("source_id", sourceIds, params);
   const { rows } = await engine.query<{ id: number | string; origin: Origin | null }>(
     `SELECT id, CASE
        WHEN written_by IN ('facts-extract', 'extract-facts', 'extract-conversation-facts') THEN 'extractor'
-       WHEN written_by IN ('memrain:facts-fence', 'memex:facts-fence', 'ingest') OR written_by LIKE 'ingest:%' THEN 'ingest'
+       WHEN written_by = ANY($2::text[]) OR written_by = 'ingest' OR written_by LIKE 'ingest:%' THEN 'ingest'
        WHEN written_by_principal LIKE 'client:%' OR written_by LIKE 'client:%' OR written_by = 'public' THEN 'agent'
        WHEN written_by_principal = 'operator' OR written_by = 'operator' THEN 'operator'
        ELSE NULL END AS origin
