@@ -58,8 +58,8 @@ describe("slugifyTarget", () => {
     expect(slugifyTarget("alice--smith")).toBe("alice-smith");
   });
 
-  it("strips non-ascii cleanly", () => {
-    expect(slugifyTarget("Алиса Smith")).toBe("smith");
+  it("keeps both scripts in a mixed name", () => {
+    expect(slugifyTarget("Алиса Smith")).toBe("алиса-smith");
   });
 
   it("falls back to 'unknown' on empty / all-stripped input", () => {
@@ -70,9 +70,7 @@ describe("slugifyTarget", () => {
   it("keeps an all-non-Latin name instead of collapsing to 'unknown'", () => {
     expect(slugifyTarget("Тимур Галеев")).toBe("тимур-галеев");
     expect(slugifyTarget("Люди/Тимур Галеев")).toBe("люди/тимур-галеев");
-    // Mixed input keeps the historical ASCII fold, so existing stored slugs
-    // made from mixed-script names stay stable.
-    expect(slugifyTarget("Алиса Smith")).toBe("smith");
+    expect(slugifyTarget("Алиса Smith")).toBe("алиса-smith");
   });
 
   it("strips edge separators", () => {
@@ -85,8 +83,8 @@ describe("slugifyTarget", () => {
     ["people/Иван", "people/иван"],
     ["a/б/c", "a/б/c"],
     ["東京/支店", "東京/支店"],
-    ["Иван Smith", "smith"],
-    ["Анна (CTO)", "cto"],
+    ["Иван Smith", "иван-smith"],
+    ["Анна (CTO)", "анна-cto"],
     ["Alice Smith", "alice-smith"],
     ["people/alice-smith", "people/alice-smith"],
     ["people /alice", "people-/alice"], // Latin input stays byte-for-byte as before

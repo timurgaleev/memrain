@@ -24,6 +24,10 @@ import { inferLinkType, edgeContextWindow } from "./link-verb-infer.ts";
 import { linkWatermarkSql } from "./link-watermark.ts";
 import { quarantineFilterFragment } from "./quarantine.ts";
 import { lockWantedTargets, reconnectAppearedTargets, replaceWantedLinks } from "./wanted-links.ts";
+import { linkDate, linkValiditySql, linkValidityProjection, type LinkTemporalOptions } from "./link-validity.ts";
+import { linkDiarySql } from "./links-privacy.ts";
+import { OperationError } from "./operation-error.ts";
+export type { LinkTemporalOptions } from "./link-validity.ts";
 
 // Catalogue of well-known link types. Not a DB constraint -- extensible
 // at runtime. New types may be passed with `allowAdHocType: true`.
@@ -90,13 +94,20 @@ export function validateSlug(slug: string): void {
  * `unknown` for empty / all-stripped inputs so we never produce an
  * invalid slug.
  *
- * A `/` segment that is written only in a non-Latin script (`people/` followed by a Cyrillic name)
- * would vanish under the ASCII fold and collapse the target onto its
- * namespace, so when any segment is like that, each segment is folded on its
- * own and keeps its script. Every other input takes the whole-string path
- * unchanged, so slugs already stored from Latin or mixed names stay stable.
+ * Segments containing non-Latin letters retain their script, including mixed
+ * names. Latin-only input keeps its historical formation. Stored keys are
+ * never renamed by this normalizer.
  */
 export function slugifyTarget(name: string): string {
+  if (typeof name !== "string") return "unknown";
+  const nonLatin = /(?=\p{L})\P{Script=Latin}/u;
+  if (!nonLatin.test(name)) return legacySlugifyTarget(name);
+  return name.split("/").map(s => nonLatin.test(s) ? unicodeFold(s) : foldName(s))
+    .filter(Boolean).join("/").slice(0, MAX_SLUG_LEN).replace(/[\uD800-\uDBFF]$/, "") || "unknown";
+}
+
+/** Historical formation, retained for read-only diagnostics of existing keys. */
+export function legacySlugifyTarget(name: string): string {
   if (typeof name !== "string") return "unknown";
   const segments = name.split("/");
   if (!segments.some((seg) => asciiFold(seg) === "" && /\p{L}/u.test(seg))) {
@@ -219,6 +230,8 @@ export interface LinkRow {
   inferred_confidence: number;
   source_chunk_id: string | null;
   written_at: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
   // Provenance (migration 029) — populated by enrichment passes, NULL/empty
   // for explicit `link` calls and pre-029 edges. Optional on the type because
   // the graph-read projections (graphNeighbors / graphQuery) deliberately do
@@ -250,6 +263,8 @@ export interface AddLinkInput {
    * 'default' applies, preserving whole-brain behavior.
    */
   source_id?: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
 }
 
 /** Upper bound on the stored mention-context window (defence vs unbounded writes). */
@@ -299,6 +314,9 @@ export async function addLink(
   validateSlug(target);
   const type = normaliseType(input.type, input.allowAdHocType);
   const conf = normaliseConfidence(input.confidence);
+  const validFrom = linkDate(input.valid_from);
+  const validUntil = linkDate(input.valid_until);
+  if (validFrom !== null && validUntil !== null && validFrom >= validUntil) throw new OperationError("invalid_params", "link validity requires valid_from before valid_until");
   const chunkId = input.source_chunk_id ?? null;
   // Provenance (migration 029). Validate at the boundary so a bad caller
   // can't poison the enum/origin columns.
@@ -327,6 +345,10 @@ export async function addLink(
     context, linkKind, originSlug, originField, resolutionType,
   ];
   if (sourceId !== null) params.push(sourceId);
+  const fromParam = `$${params.push(validFrom)}::date`;
+  const untilParam = `$${params.push(validUntil)}::date`;
+  const fromSet = `$${params.push(input.valid_from !== undefined)}::boolean`;
+  const untilSet = `$${params.push(input.valid_until !== undefined)}::boolean`;
   // On an idempotent re-add, provenance is STICKY: an omitted field (empty
   // context / NULL enum) preserves the prior value so a bare `link` re-call
   // never wipes enrichment-written provenance. `link_source='manual'` (mig086):
@@ -337,8 +359,8 @@ export async function addLink(
     `INSERT INTO links
        (source_slug, target_slug, type, inferred_confidence, source_chunk_id,
         context, link_kind, origin_slug, origin_field, resolution_type,
-        link_source${sourceCol})
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual'${sourceVal})
+        link_source${sourceCol}, valid_from, valid_until)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual'${sourceVal}, ${fromParam}, ${untilParam})
      ON CONFLICT (source_slug, target_slug, type, source_id, link_source) DO UPDATE
        SET inferred_confidence = EXCLUDED.inferred_confidence,
            source_chunk_id     = EXCLUDED.source_chunk_id,
@@ -347,10 +369,18 @@ export async function addLink(
            link_kind           = COALESCE(EXCLUDED.link_kind, links.link_kind),
            origin_slug         = COALESCE(EXCLUDED.origin_slug, links.origin_slug),
            origin_field        = COALESCE(EXCLUDED.origin_field, links.origin_field),
-           resolution_type     = COALESCE(EXCLUDED.resolution_type, links.resolution_type)
+           resolution_type     = COALESCE(EXCLUDED.resolution_type, links.resolution_type),
+           valid_from          = COALESCE(links.valid_from, EXCLUDED.valid_from),
+           valid_until         = COALESCE(links.valid_until, EXCLUDED.valid_until)
+     WHERE (NOT ${fromSet} OR links.valid_from IS NULL OR links.valid_from IS NOT DISTINCT FROM EXCLUDED.valid_from)
+       AND (NOT ${untilSet} OR links.valid_until IS NULL OR links.valid_until IS NOT DISTINCT FROM EXCLUDED.valid_until)
+       AND (COALESCE(links.valid_from, EXCLUDED.valid_from) IS NULL
+         OR COALESCE(links.valid_until, EXCLUDED.valid_until) IS NULL
+         OR COALESCE(links.valid_from, EXCLUDED.valid_from) < COALESCE(links.valid_until, EXCLUDED.valid_until))
      RETURNING (xmax = 0) AS inserted`,
     params,
   );
+  if (r.rows.length === 0) throw new OperationError("conflict", "Recorded link validity cannot be changed or cleared", "Use ontology for multiple historical intervals.");
   return {
     source_slug: input.source_slug,
     target_slug: target,
@@ -439,7 +469,7 @@ export function liveEdgeSql(alias: string): string {
   return `${liveEndpointSql(`${alias}.source_slug`)} AND ${liveEndpointSql(`${alias}.target_slug`)}`;
 }
 
-export interface GraphNeighborsOptions {
+export interface GraphNeighborsOptions extends LinkTemporalOptions {
   type?: string;
   direction?: "outbound" | "inbound" | "both";
   limit?: number;
@@ -448,6 +478,7 @@ export interface GraphNeighborsOptions {
    * to `source_id = ANY(...)`. Omitted -> unscoped (whole-brain); `[]` -> nothing.
    */
   sourceIds?: string[];
+  excludeDiary?: boolean;
 }
 
 export interface NeighborRow extends LinkRow {
@@ -484,24 +515,27 @@ export async function graphNeighbors(
   }
   // Tenant scope (mig047): same filter string applied to both UNION arms.
   const scopeFilter = andSourceScope("source_id", opts.sourceIds, params);
+  const validity = linkValiditySql("links", opts, params);
+  const validityColumns = linkValidityProjection(opts);
+  const diaryFilter = linkDiarySql("links", opts.excludeDiary, params);
   const queries: string[] = [];
   if (direction === "outbound" || direction === "both") {
     queries.push(
       `SELECT id, source_slug, target_slug, type, inferred_confidence,
-              source_chunk_id, written_at::text AS written_at,
+              source_chunk_id, written_at::text AS written_at${validityColumns},
               'outbound' AS direction
        FROM links
-       WHERE source_slug = $1${typeFilter}${scopeFilter}
+       WHERE source_slug = $1${typeFilter}${scopeFilter}${validity}${diaryFilter}
          AND ${liveEdgeSql("links")}`,
     );
   }
   if (direction === "inbound" || direction === "both") {
     queries.push(
       `SELECT id, source_slug, target_slug, type, inferred_confidence,
-              source_chunk_id, written_at::text AS written_at,
+              source_chunk_id, written_at::text AS written_at${validityColumns},
               'inbound' AS direction
        FROM links
-       WHERE target_slug = $1${typeFilter}${scopeFilter}
+       WHERE target_slug = $1${typeFilter}${scopeFilter}${validity}${diaryFilter}
          AND ${liveEdgeSql("links")}`,
     );
   }
@@ -587,7 +621,7 @@ export async function graphHubs(engine: Engine, opts: { limit?: number } = {}): 
   };
 }
 
-export interface GraphQueryOptions {
+export interface GraphQueryOptions extends LinkTemporalOptions {
   type: string;
   source_slug?: string;
   target_slug?: string;
@@ -597,6 +631,7 @@ export interface GraphQueryOptions {
    * to `source_id = ANY(...)`. Omitted -> unscoped (whole-brain); `[]` -> nothing.
    */
   sourceIds?: string[];
+  excludeDiary?: boolean;
 }
 
 /**
@@ -638,6 +673,8 @@ export async function graphQuery(
     params.push(opts.sourceIds);
     where.push(`source_id = ANY($${params.length}::text[])`);
   }
+  const validity = linkValiditySql("links", opts, params);
+  const diaryFilter = linkDiarySql("links", opts.excludeDiary, params);
   const limit =
     typeof opts.limit === "number" && opts.limit >= 1 && opts.limit <= 1000
       ? Math.floor(opts.limit)
@@ -646,9 +683,9 @@ export async function graphQuery(
   where.push(liveEdgeSql("links"));
   const r = await storage.engine().query<LinkRow>(
     `SELECT id, source_slug, target_slug, type, inferred_confidence,
-            source_chunk_id, written_at::text AS written_at
+            source_chunk_id, written_at::text AS written_at${linkValidityProjection(opts)}
        FROM links
-       WHERE ${where.join(" AND ")}
+       WHERE ${where.join(" AND ")}${validity}${diaryFilter}
        ORDER BY inferred_confidence DESC, written_at DESC
        LIMIT $${params.length}`,
     params,
@@ -656,7 +693,7 @@ export async function graphQuery(
   return r.rows;
 }
 
-export interface TraverseGraphOptions {
+export interface TraverseGraphOptions extends LinkTemporalOptions {
   /** Max hops from the start (1..10). Default 3. */
   maxDepth?: number;
   /** Edge direction to follow. Default `outbound`. */
@@ -742,13 +779,8 @@ export async function traverseGraphPage(
   }
   // Tenant scope (mig047): confine the walk to edges in the given sources.
   const scopeFilter = andSourceScope("l.source_id", opts.sourceIds, params);
-  let diaryFilter = "";
-  if (opts.excludeDiary) {
-    params.push(" \t\n\r\v\f\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF");
-    diaryFilter = ` AND l.source_slug NOT LIKE 'life/diary/%' AND l.target_slug NOT LIKE 'life/diary/%'
-      AND NOT EXISTS (SELECT 1 FROM pages dp WHERE dp.slug IN (l.source_slug, l.target_slug)
-        AND lower(btrim(dp.type, $${params.length})) IN ('diary', 'journal'))`;
-  }
+  const validity = linkValiditySql("l", opts, params);
+  const diaryFilter = linkDiarySql("l", opts.excludeDiary, params);
   params.push(limit + 1);
   const limitParam = `$${params.length}`;
 
@@ -758,7 +790,7 @@ export async function traverseGraphPage(
   const r = await storage.engine().query<{ slug: string; depth: number }>(
     `WITH RECURSIVE edges AS MATERIALIZED (
        SELECT DISTINCT l.source_slug, l.target_slug FROM links l
-        WHERE ${liveEdgeSql("l")}${typeFilter}${scopeFilter}${diaryFilter}
+        WHERE ${liveEdgeSql("l")}${typeFilter}${scopeFilter}${diaryFilter}${validity}
      ), walk(slug, depth) AS (
        SELECT $1::text, 0
        UNION
