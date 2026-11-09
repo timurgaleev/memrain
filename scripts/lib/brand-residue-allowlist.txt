@@ -535,3 +535,4 @@ deploy/memrain/tests/fence_location.test.ts|COMPAT-TEST|2|Quoted legacy fence ma
 deploy/memrain/src/core/migrations/146_function_search_path.sql|COMPAT|2|Pins search paths on the two retained legacy SQL functions.
 deploy/memrain/src/core/migrations-down/146_function_search_path.down.sql|COMPAT|3|Restores the exact prior search paths of retained legacy SQL functions.
 deploy/memrain/tests/migration_146_search_path.test.ts|COMPAT-TEST|4|Verifies both legacy and current SQL functions, including rollback and shadow tables.
+deploy/memrain/tests/outside_text_provenance.test.ts|COMPAT-TEST|1|Preserves carried fences and CRLF bytes for both marker brands.

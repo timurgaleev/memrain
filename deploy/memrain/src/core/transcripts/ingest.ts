@@ -15,8 +15,7 @@
  */
 import type { Storage } from "../storage.ts";
 import type { EmbedFn } from "../indexer.ts";
-import { deletePage, getPageExact, putPage } from "../pages.ts";
-import { carryForwardFences } from "../fence-carry.ts";
+import { deletePage, putPage } from "../pages.ts";
 import { mirrorPage, removePageFromSearch } from "../page-index.ts";
 import { logIngest } from "../ingest-log.ts";
 import { OperationError } from "../operation-error.ts";
@@ -175,18 +174,19 @@ async function writeSession(
   try {
     for (const part of prepared.parts) {
       opts.signal?.throwIfAborted();
-      const old = await getPageExact(storage, part.slug, [sourceId]);
-      const body = carryForwardFences(old, part.body);
       const put = await putPage(storage, {
         slug: part.slug,
         type: TRANSCRIPT_PAGE_TYPE,
         allowAdHocType: true,
         title: part.title,
-        markdown_body: body,
+        markdown_body: part.body,
         compiled_truth: part.truth,
         written_by: WRITTEN_BY,
         source_id: sourceId,
+        outsideText: true,
       });
+      if (put.held) throw new OperationError("conflict", `Import held: ${put.held}`);
+      const body = put.outside_body!;
       if (!put.changed && !put.created) {
         result.parts_unchanged++;
         continue;

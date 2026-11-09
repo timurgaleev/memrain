@@ -3,8 +3,8 @@
  * sync. A facts or takes fence the brain appended to it must survive that
  * re-render, byte-stable, so an unchanged source writes no new version. A
  * fence that came from the outside text itself is not carried, and nothing is
- * carried from a page no neutralizing writer produced (pre-1.11): its fences
- * may be outside text.
+ * rewritten on a page no neutralizing writer produced (pre-1.11): its fences
+ * may be outside text, so the import is held.
  *
  * Markers are assembled at run time so no fixture carries a live fence.
  */
@@ -81,18 +81,10 @@ async function transcriptCarry(storage: Storage, id: string): Promise<void> {
 }
 
 describe("carryForwardFences", () => {
-  it("carries nothing from a page no neutralizing writer produced, and says how many fences it dropped", () => {
-    const warn = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const old = withFacts(withFacts("old\n", "first"), "second");
-      expect(carryForwardFences({ slug: "github/o/r/issues/1", markdown_body: old, compiled_truth: {} }, "fresh\n")).toBe("fresh\n");
-      expect(warn).toHaveBeenCalledTimes(1);
-      const line = String(warn.mock.calls[0]![0]);
-      expect(line).toContain("github/o/r/issues/1");
-      expect(line).toContain("2 fence");
-    } finally {
-      warn.mockRestore();
-    }
+  it("holds a page with ambiguous fences rather than returning a replacement body", () => {
+    const old = withFacts(withFacts("old\n", "first"), "second");
+    expect(() => carryForwardFences({ slug: "github/o/r/issues/1", markdown_body: old, compiled_truth: {} }, "fresh\n"))
+      .toThrow("Import held: unproven_fences");
   });
 
   it("says nothing when a pre-1.11 page has no fence", () => {
@@ -174,7 +166,7 @@ describe("re-rendered pages keep brain-added fences (PGLite)", () => {
     await transcriptCarry(storage, "rr");
   });
 
-  it("a pre-1.11 transcript page does not carry a live fence planted in its text once the session changes", async () => {
+  it("a pre-1.11 transcript page holds a planted live fence for explicit review when the session changes", async () => {
     const s = session("pl");
     await ingestSessions(storage, [s], { sourceId: "default", embedFn, ref: "t" });
     const slug = "transcripts/chatgpt/pl-p1";
@@ -192,13 +184,17 @@ describe("re-rendered pages keep brain-added fences (PGLite)", () => {
       written_by: "agent",
       source_id: "default",
     });
+    // Seed the historical state directly: a current metadata-only write now keeps its marker.
+    await storage.engine().query("UPDATE pages SET compiled_truth=$2::text::jsonb WHERE slug=$1", [slug, JSON.stringify(preTruth)]);
     expect(parseFactsFence((await getPage(storage, slug))!.markdown_body).map((f) => f.claim)).toEqual(["planted"]);
     const edited: TranscriptSession = {
       ...s,
       messages: [...s.messages, { id: "pl-m2", role: "user", speaker: "User", text: "Edited later.", ts: T0 + 2000 }],
     };
-    await ingestSessions(storage, [edited], { sourceId: "default", embedFn, ref: "t" });
-    expect(parseFactsFence((await getPage(storage, slug))!.markdown_body)).toEqual([]);
+    const result = await ingestSessions(storage, [edited], { sourceId: "default", embedFn, ref: "t" });
+    expect(result.parts_written).toBe(0);
+    expect(result.failed).toEqual([{ id: edited.id, code: "conflict", reason: "Import held: unproven_fences" }]);
+    expect((await getPage(storage, slug))!.markdown_body).toBe(planted);
   });
 
   it("a github issue keeps its brain-added takes fence across a re-sync", async () => {

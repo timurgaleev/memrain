@@ -30,8 +30,7 @@
  */
 import type { Storage } from "../storage.ts";
 import type { EmbedFn } from "../indexer.ts";
-import { getPageExact, putPage } from "../pages.ts";
-import { carryForwardFences } from "../fence-carry.ts";
+import { putPage } from "../pages.ts";
 import { mirrorPage } from "../page-index.ts";
 import { syncWikilinksForPage } from "../links.ts";
 import { logIngest } from "../ingest-log.ts";
@@ -284,18 +283,19 @@ async function writeItem(
   result: GithubSyncResult,
   changed: RenderedItem[],
 ): Promise<void> {
-  const old = await getPageExact(storage, rendered.slug, [sourceId]);
-  const body = carryForwardFences(old, rendered.body);
   const put = await putPage(storage, {
     slug: rendered.slug,
     type: rendered.type,
     allowAdHocType: true,
     title: rendered.title,
-    markdown_body: body,
+    markdown_body: rendered.body,
     compiled_truth: rendered.truth,
     written_by: WRITTEN_BY,
     source_id: sourceId,
+    outsideText: true,
   });
+  if (put.held) throw new OperationError("conflict", `Import held: ${put.held}`);
+  const body = put.outside_body!;
   if (!put.changed && !put.created) {
     result.counts.pages_unchanged++;
     return;
