@@ -32,6 +32,7 @@ const correct = fakeLlm(`{"verdict":"correct","confidence":0.9,"reasoning":"ok"}
 
 /** Seed a take at a chosen age (days old). */
 async function seedTake(key: string, ageDays: number): Promise<void> {
+  await engine.query("INSERT INTO documents (id,source_path,source_id) VALUES ('d','/vault/d.md','default') ON CONFLICT (id) DO NOTHING");
   await engine.query(
     `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, status, model_id, generated_at)
      VALUES ($1, 'd', 'h', 'v', 'claim', 'prediction', 0.7, 'queued', 'm', now() - ($2 * interval '1 day'))`,

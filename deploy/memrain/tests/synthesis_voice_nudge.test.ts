@@ -120,6 +120,7 @@ describe("gateVoice", () => {
 
 describe("calibration voice-gate audit fields", () => {
   async function seedGraded(n: number): Promise<void> {
+    await engine.query("INSERT INTO documents (id,source_path,source_id) VALUES ('d1','/vault/d1.md','default')");
     for (let i = 0; i < n; i++) {
       const { rows } = await engine.query<{ id: number }>(
         `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, model_id)

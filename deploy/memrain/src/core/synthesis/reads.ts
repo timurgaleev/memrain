@@ -9,7 +9,7 @@
 import type { Engine } from "../engine/interface.ts";
 import { excludeEmptyExtractionTombstone } from "./takes.ts";
 import { normalizeScope } from "../source-scope.ts";
-import { quarantineFilterFragment } from "../quarantine.ts";
+import { takeOwnerFilterSql, takePrincipalSql, currentTakeGradeSql } from "./takes-owner.ts";
 import { takeHorizonSql } from "./take-horizon.ts";
 
 function clampLimit(limit: number | undefined, max: number, dflt: number): number {
@@ -28,15 +28,6 @@ function normalizeHolderAllowList(holders: string[] | undefined): string[] | und
   const cleaned = holders.filter((s) => typeof s === "string" && s.length > 0);
   if (cleaned.length === 0 || cleaned.includes("*")) return undefined;
   return Array.from(new Set(cleaned));
-}
-
-/**
- * `AND` clause dropping a take distilled from a quarantined document: content
- * the gate hid from search must not resurface as a claim. A take whose
- * `source_ref` is not a document is unaffected.
- */
-function excludeQuarantinedSource(sourceRef: string): string {
-  return ` AND NOT EXISTS (SELECT 1 FROM documents qd WHERE qd.id = ${sourceRef} AND NOT (${quarantineFilterFragment("qd")}))`;
 }
 
 export interface ConceptRow {
@@ -72,6 +63,9 @@ export async function listConcepts(
 }
 
 export interface TakeRow {
+  source_ref: string;
+  row_num: number | null;
+  written_by_principal: string | null;
   take_key: string;
   claim_text: string;
   kind: string;
@@ -107,6 +101,7 @@ export interface ListTakesOptions {
   /** Skip the first N rows (pagination). */
   offset?: number;
   sourceIds?: string[];
+  excludeDiary?: boolean;
   /** Token-level holder allow-list (mig 072); rows outside it are invisible. */
   holderAllowList?: string[];
 }
@@ -117,11 +112,6 @@ export async function listTakes(
 ): Promise<TakeRow[]> {
   const n = clampLimit(opts.limit, 200, 50);
   const status = typeof opts.status === "string" ? opts.status : null;
-  // Takes carry only `source_ref` (the document id they were distilled from,
-  // when source_kind='document'); scope by joining that to documents.source_id.
-  // A take whose source_ref isn't a document of a listed tenant is excluded
-  // fail-closed — the same posture mig 047 takes for unclassified rows.
-  const sources = normalizeScope(opts.sourceIds);
   const offset =
     typeof opts.offset === "number" && opts.offset > 0
       ? Math.floor(opts.offset)
@@ -149,25 +139,17 @@ export async function listTakes(
     params.push(holderAllowList);
     extraFilter += ` AND holder = ANY($${params.length}::text[])`;
   }
-  if (sources !== undefined) {
-    params.push(sources);
-    extraFilter += ` AND EXISTS (
-          SELECT 1 FROM documents d
-           WHERE d.id = synth_takes.source_ref
-             AND d.source_id = ANY($${params.length}::text[])
-        )`;
-  }
+  extraFilter += takeOwnerFilterSql("synth_takes", params, opts);
   // Unconditional: the zero-yield memo is not a claim, and this listing spans
   // every lifecycle state, so nothing else keeps it out of an unfiltered read.
   extraFilter += excludeEmptyExtractionTombstone("claim_text", params);
-  extraFilter += excludeQuarantinedSource("synth_takes.source_ref");
   // Whitelisted ORDER BY — the enum is the only path into the SQL.
   const order =
     opts.sort === "weight"
       ? "weight DESC, generated_at DESC, take_key ASC"
       : "generated_at DESC, take_key ASC";
   const r = await engine.query<TakeRow>(
-    `SELECT take_key, claim_text, kind, holder, weight, domain, status, active,
+    `SELECT ${takePrincipalSql("synth_takes")} AS written_by_principal, source_ref, row_num, take_key, claim_text, kind, holder, weight, domain, status, active,
             resolved_quality, resolved_at::text AS resolved_at,
             generated_at::text AS generated_at
        FROM synth_takes
@@ -180,6 +162,9 @@ export async function listTakes(
 }
 
 export interface TakeSearchRow {
+  source_ref: string;
+  row_num: number | null;
+  written_by_principal: string | null;
   take_key: string;
   claim_text: string;
   kind: string;
@@ -195,17 +180,16 @@ export interface TakeSearchRow {
  * phrase. Uses the `similarity()` FUNCTION with an explicit threshold rather
  * than the `%` operator, since there is no trigram GIN index to back the
  * operator (same choice as slug resolution). Tenant scope mirrors `listTakes`:
- * a scoped caller only sees takes whose source document is one of theirs,
+ * a scoped caller only sees takes whose owner is one of theirs,
  * fail-closed. Fail-open to empty on a pre-045 brain.
  */
 export async function searchTakes(
   engine: Engine,
-  opts: { q: string; limit?: number; sourceIds?: string[]; holderAllowList?: string[] },
+  opts: { q: string; limit?: number; sourceIds?: string[]; excludeDiary?: boolean; holderAllowList?: string[] },
 ): Promise<TakeSearchRow[]> {
   const q = typeof opts.q === "string" ? opts.q.trim() : "";
   if (q.length === 0) return [];
   const n = clampLimit(opts.limit, 200, 50);
-  const sources = normalizeScope(opts.sourceIds);
   const params: unknown[] = [q, n];
   let sourceFilter = "";
   const holderAllowList = normalizeHolderAllowList(opts.holderAllowList);
@@ -213,19 +197,11 @@ export async function searchTakes(
     params.push(holderAllowList);
     sourceFilter += ` AND holder = ANY($${params.length}::text[])`;
   }
-  if (sources !== undefined) {
-    params.push(sources);
-    sourceFilter += ` AND EXISTS (
-          SELECT 1 FROM documents d
-           WHERE d.id = synth_takes.source_ref
-             AND d.source_id = ANY($${params.length}::text[])
-        )`;
-  }
+  sourceFilter += takeOwnerFilterSql("synth_takes", params, opts);
   // The sentinel is ordinary prose to a trigram match — fence it by claim text.
   sourceFilter += excludeEmptyExtractionTombstone("claim_text", params);
-  sourceFilter += excludeQuarantinedSource("synth_takes.source_ref");
   const r = await engine.query<TakeSearchRow>(
-    `SELECT take_key, claim_text, kind, holder, weight, domain, status
+    `SELECT ${takePrincipalSql("synth_takes")} AS written_by_principal, source_ref, row_num, take_key, claim_text, kind, holder, weight, domain, status
        FROM synth_takes
       WHERE (similarity(claim_text, $1) >= 0.3 OR claim_text ILIKE '%' || $1 || '%')${sourceFilter}
       ORDER BY similarity(claim_text, $1) DESC, take_key ASC
@@ -288,8 +264,8 @@ const EMPTY_SCORECARD: TakesScorecard = {
  * (mig 090): once a human (or gated auto-resolve) resolves a take, calibration
  * measures that verdict, and the judge grade stays advisory. Counts, accuracy,
  * partial-rate, and Brier are all pure SQL — no LLM. Tenant scope mirrors
- * `listTakes`: a scoped caller only sees takes whose source document is one of
- * theirs (fail-closed via the documents join). Fail-open to a zero scorecard
+ * `listTakes`: a scoped caller only sees takes whose owner is one of
+ * theirs (fail-closed via the discriminated owner lookup). Fail-open to a zero scorecard
  * on a pre-045 brain.
  */
 export async function getTakesScorecard(
@@ -300,10 +276,10 @@ export async function getTakesScorecard(
     since?: string;
     until?: string;
     sourceIds?: string[];
+    excludeDiary?: boolean;
     holderAllowList?: string[];
   } = {},
 ): Promise<TakesScorecard> {
-  const sources = normalizeScope(opts.sourceIds);
   const params: unknown[] = [];
   const clauses: string[] = [];
   if (typeof opts.domain === "string" && opts.domain.length > 0) {
@@ -331,18 +307,12 @@ export async function getTakesScorecard(
     params.push(holderAllowList);
     clauses.push(`AND t.holder = ANY($${params.length}::text[])`);
   }
-  if (sources !== undefined) {
-    params.push(sources);
-    clauses.push(
-      `AND EXISTS (SELECT 1 FROM documents d WHERE d.id = t.source_ref AND d.source_id = ANY($${params.length}::text[]))`,
-    );
-  }
+  clauses.push(takeOwnerFilterSql("t", params, opts));
   // total_takes counts every take regardless of lifecycle, so the memo would
   // otherwise inflate the denominator behind accuracy and grade completion.
   const where =
     clauses.join(" ") +
-    excludeEmptyExtractionTombstone("t.claim_text", params) +
-    excludeQuarantinedSource("t.source_ref");
+    excludeEmptyExtractionTombstone("t.claim_text", params);
   const r = await engine.query<{
     total_takes: number;
     journal: TakeJournal;
@@ -355,9 +325,10 @@ export async function getTakesScorecard(
     brier: number | null;
   }>(
     `WITH latest_grade AS (
-       SELECT DISTINCT ON (take_id) take_id, verdict
-         FROM synth_take_grades
-        ORDER BY take_id, generated_at DESC
+       SELECT DISTINCT ON (g.take_id) g.take_id, g.verdict
+         FROM synth_take_grades g JOIN synth_takes graded_take ON graded_take.id = g.take_id
+        WHERE ${currentTakeGradeSql("g", "graded_take")}
+        ORDER BY g.take_id, g.generated_at DESC, g.id DESC
      ),
      scored AS (
        SELECT t.weight, t.active, t.resolved_quality IS NOT NULL AS journal_resolved,
@@ -435,6 +406,7 @@ export async function getTakesCalibration(
     domain?: string;
     holder?: string;
     sourceIds?: string[];
+    excludeDiary?: boolean;
     holderAllowList?: string[];
   } = {},
 ): Promise<CalibrationBucket[]> {
@@ -443,7 +415,6 @@ export async function getTakesCalibration(
       ? opts.bucketSize
       : 0.1;
   const maxIdx = Math.floor(1 / bucketSize) - 1;
-  const sources = normalizeScope(opts.sourceIds);
   const params: unknown[] = [bucketSize, maxIdx];
   const clauses: string[] = [];
   if (typeof opts.domain === "string" && opts.domain.length > 0) {
@@ -460,13 +431,8 @@ export async function getTakesCalibration(
     params.push(holderAllowList);
     clauses.push(`AND t.holder = ANY($${params.length}::text[])`);
   }
-  if (sources !== undefined) {
-    params.push(sources);
-    clauses.push(
-      `AND EXISTS (SELECT 1 FROM documents d WHERE d.id = t.source_ref AND d.source_id = ANY($${params.length}::text[]))`,
-    );
-  }
-  const where = clauses.join(" ") + excludeQuarantinedSource("t.source_ref");
+  clauses.push(takeOwnerFilterSql("t", params, opts));
+  const where = clauses.join(" ");
   const r = await engine.query<{
     bucket_lo: number;
     bucket_hi: number;
@@ -475,9 +441,10 @@ export async function getTakesCalibration(
     predicted: number | null;
   }>(
     `WITH latest_grade AS (
-       SELECT DISTINCT ON (take_id) take_id, verdict
-         FROM synth_take_grades
-        ORDER BY take_id, generated_at DESC
+       SELECT DISTINCT ON (g.take_id) g.take_id, g.verdict
+         FROM synth_take_grades g JOIN synth_takes graded_take ON graded_take.id = g.take_id
+        WHERE ${currentTakeGradeSql("g", "graded_take")}
+        ORDER BY g.take_id, g.generated_at DESC, g.id DESC
      ),
      binned AS (
        SELECT LEAST(FLOOR(t.weight::numeric / $1::numeric)::int, $2::int)::int AS bucket_idx,

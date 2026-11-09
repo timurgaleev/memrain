@@ -26,7 +26,7 @@ import {
 } from "./takes-fence.ts";
 import { contentHash16 } from "./atoms.ts";
 import { fenceBounds, hasFenceMarker } from "../fence-shared.ts";
-import { normalizeScope } from "../source-scope.ts";
+import { takeOwnerFilterSql } from "./takes-owner.ts";
 
 /** Prompt-version marker for fence-derived rows — they never came from an LLM
  *  prompt, but the column is NOT NULL and doubles as provenance. */
@@ -86,12 +86,16 @@ export function deriveResolutionTuple(resolution: TakeResolution): {
 
 export interface ResolveTakeOptions {
   /** Tenant scope, mirroring setTakeStatus: when supplied, the update only
-   *  lands if the take's source document belongs to one of these tenants;
+   *  lands if the take's source page or document belongs to one of these tenants;
    *  an empty scope updates nothing. */
   sourceIds?: string[];
+  holderAllowList?: string[];
+  excludeDiary?: boolean;
   /** When true, an already-resolved take is left untouched (the auto-resolve
    *  posture: a machine verdict never overwrites a human resolution). */
   onlyIfUnresolved?: boolean;
+  /** Internal in-flight grading pin; never resolve a revised claim. */
+  expectedClaim?: string;
 }
 
 /**
@@ -117,16 +121,14 @@ export async function resolveTake(
   ];
   let guard = "";
   if (opts.onlyIfUnresolved) guard += " AND resolved_at IS NULL";
-  const scoped = normalizeScope(opts.sourceIds);
-  if (scoped !== undefined && scoped.length === 0) {
-    guard += " AND FALSE";
-  } else if (scoped !== undefined) {
-    params.push(scoped);
-    guard += ` AND EXISTS (
-        SELECT 1 FROM documents d
-         WHERE d.id = synth_takes.source_ref
-           AND d.source_id = ANY($${params.length}::text[])
-      )`;
+  if (opts.expectedClaim !== undefined) {
+    params.push(opts.expectedClaim);
+    guard += ` AND claim_text = $${params.length}`;
+  }
+  guard += takeOwnerFilterSql("synth_takes", params, opts);
+  if (opts.holderAllowList !== undefined && !opts.holderAllowList.includes("*")) {
+    params.push(opts.holderAllowList);
+    guard += ` AND holder = ANY($${params.length}::text[])`;
   }
   const { rows } = await engine.query<{ id: number }>(
     `UPDATE synth_takes
@@ -180,6 +182,7 @@ export async function syncTakesFromFence(
   engine: Engine,
   sourceRef: string,
   body: string,
+  options: { changedRowNums?: readonly number[]; deactivateMissing?: boolean } = {},
 ): Promise<SyncTakesFenceResult> {
   const { takes, warnings } = parseTakesFence(body);
   const result: SyncTakesFenceResult = {
@@ -192,6 +195,7 @@ export async function syncTakesFromFence(
   if (takes.length === 0 && !hasFenceMarker(body, "takes")) return result;
 
   for (const t of takes) {
+    if (options.changedRowNums !== undefined && !options.changedRowNums.includes(t.rowNum)) continue;
     const { weight, clamped } = normalizeWeightForStorage(t.weight);
     if (clamped) result.weightsClamped += 1;
     const resolution = t.resolvedQuality !== undefined ? fenceResolution(t) : null;
@@ -268,6 +272,8 @@ export async function syncTakesFromFence(
     );
     result.rowsUpserted += 1;
   }
+
+  if (options.deactivateMissing === false) return result;
 
   // Deactivate previously-synced fence rows that vanished from the fence.
   const liveRowNums = takes.map((t) => t.rowNum);

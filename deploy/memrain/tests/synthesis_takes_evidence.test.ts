@@ -91,6 +91,7 @@ describe("propose feeds existing takes back for dedup", () => {
 
 describe("grade evidence window + tenancy", () => {
   it("passes the take's generated_at date to the evidence retriever", async () => {
+    await engine.query("INSERT INTO documents (id,source_path,source_id) VALUES ('d1','/vault/d1.md','default')");
     await engine.query(
       `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, model_id, generated_at)
        VALUES ('tk1', 'd1', 'h', 'vX', 'old claim', 'm', '2024-03-15T12:00:00Z')`,

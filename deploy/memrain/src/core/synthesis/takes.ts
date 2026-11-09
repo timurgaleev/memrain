@@ -19,6 +19,7 @@
  */
 import { createHash } from "node:crypto";
 import type { Engine } from "../engine/interface.ts";
+import { takeOwnerSourceSql, takeOwnerFilterSql, currentTakeGradeSql } from "./takes-owner.ts";
 import { notSynthesizedDocSql } from "../page-index.ts";
 import { Storage } from "../storage.ts";
 import { hybridSearch } from "../search/hybrid.ts";
@@ -37,7 +38,6 @@ import { BudgetTracker, BudgetExhausted } from "../budget.ts";
 import { contentHash16 } from "./atoms.ts";
 import { embedText } from "../embedding.ts";
 import { resolveTake } from "./takes-canon.ts";
-import { normalizeScope } from "../source-scope.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
 import { clearSynthFailure, filterBackedOff, recordSynthFailure } from "./synth-failures.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
@@ -985,26 +985,25 @@ export async function gradeTakesPhase(
     id: number;
     take_key: string;
     claim_text: string;
-    source_id: string | null;
+    source_id: string;
     generated_at: string | Date;
   }>(
-    // The take's own source (via source_ref -> documents) scopes its evidence, so
+    // The take's discriminated page/document owner scopes its evidence, so
     // a take is never graded against another tenant's chunks. generated_at feeds
     // the evidence retriever's newer-than-the-take date restriction.
     // Pool (unresolved ACTIVE takes): 'accepted' joins the
     // eligible statuses because operator-authored fence rows enter as
     // 'accepted' and are exactly the takes calibration wants judged; only
     // 'rejected' stays out. A resolved or superseded take is never re-graded.
-    `SELECT t.id, t.take_key, t.claim_text, d.source_id, t.generated_at
+    `SELECT t.id, t.take_key, t.claim_text, ${takeOwnerSourceSql("t")} AS source_id, t.generated_at
        FROM synth_takes t
-       LEFT JOIN documents d ON d.id = t.source_ref
-      WHERE t.status IN ('queued', 'graded', 'accepted')
+      WHERE ${takeOwnerSourceSql("t")} IS NOT NULL AND t.status IN ('queued', 'graded', 'accepted')
         AND t.active
         AND t.resolved_at IS NULL
         AND t.generated_at <= now() - ($2 * interval '1 day')
         AND NOT EXISTS (
           SELECT 1 FROM synth_take_grades g
-           WHERE g.take_id = t.id AND g.prompt_version = $1
+           WHERE g.take_id = t.id AND g.prompt_version = $1 AND ${currentTakeGradeSql("g", "t")}
         )
       ORDER BY t.id ASC
       LIMIT $3`,
@@ -1021,7 +1020,7 @@ export async function gradeTakesPhase(
       return Number.isNaN(d.getTime()) ? undefined : d.toISOString().slice(0, 10);
     })();
     try {
-      evidence = await evidenceFn(take.claim_text, take.source_id ?? undefined, sinceIso);
+      evidence = await evidenceFn(take.claim_text, take.source_id, sinceIso);
     } catch (e) {
       result.errors.push(`take ${take.id} evidence: ${e instanceof Error ? e.message : String(e)}`);
       continue;
@@ -1107,17 +1106,20 @@ export async function gradeTakesPhase(
       reasoning: "judge_output_parse_failed",
     };
 
-    const sig = evidenceSignature(evidence, modelId);
+    const claimHash = createHash("sha256").update(take.claim_text).digest("hex");
+    const sig = `claim:${claimHash}:${evidenceSignature(evidence, modelId)}`;
     try {
       // The judge quotes its evidence, and evidence is corpus text.
       const { reasoning } = await guardFields(engine, `take:${take.id}`, null, "take grade", { reasoning: v.reasoning });
       const { rows: written } = await engine.query<{ id: number }>(
         `INSERT INTO synth_take_grades
            (take_id, prompt_version, evidence_signature, verdict, confidence, reasoning, model_id, grader_model, judge_count)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9 FROM synth_takes t
+          WHERE t.id = $1 AND t.claim_text = $10 AND t.active AND t.resolved_at IS NULL
+            AND ${takeOwnerSourceSql("t")} = $11
          ON CONFLICT (take_id, prompt_version, evidence_signature) DO NOTHING
          RETURNING id`,
-        [take.id, promptVersion, sig, v.verdict, v.confidence, reasoning, modelId, graderModel, judgeCount],
+        [take.id, promptVersion, sig, v.verdict, v.confidence, reasoning, modelId, graderModel, judgeCount, take.claim_text, take.source_id],
       );
       if (written.length > 0) result.gradesWritten += 1;
       else result.cacheHits += 1;
@@ -1126,8 +1128,9 @@ export async function gradeTakesPhase(
       // (WHERE status='queued'); 'accepted'/'rejected' are operator-terminal
       // and never downgraded here.
       await engine.query(
-        `UPDATE synth_takes SET status = 'graded' WHERE id = $1 AND status = 'queued'`,
-        [take.id],
+        `UPDATE synth_takes SET status = 'graded' WHERE id = $1 AND status = 'queued' AND active AND resolved_at IS NULL
+           AND claim_text = $2 AND ${takeOwnerSourceSql("synth_takes")} = $3`,
+        [take.id, take.claim_text, take.source_id],
       );
       // Gated auto-resolve: apply the verdict to the take's resolution tuple.
       // Eligibility: the gate is ON, a NEW grade row was
@@ -1149,7 +1152,7 @@ export async function gradeTakesPhase(
                 resolvedBy: autoResolveLabel,
                 source: `grade_takes:${promptVersion}`,
               },
-              { onlyIfUnresolved: true },
+              { onlyIfUnresolved: true, sourceIds: [take.source_id], expectedClaim: take.claim_text },
             );
             if (applied.resolved) result.autoApplied += 1;
           } catch (e) {
@@ -1176,7 +1179,7 @@ export async function gradeTakesPhase(
 /**
  * Operator review action: flip a take's review status (accepted/rejected).
  * Tenant-scoped exactly like `listTakes` — when `sourceIds` is supplied the
- * update only lands if the take's source document belongs to one of those
+ * update only lands if the take's source page or document belongs to one of those
  * tenants, so a caller can never touch a take that isn't theirs (a cross-tenant
  * take_key is a silent no-op). An empty scope updates nothing; `undefined`
  * leaves it unscoped (admin/internal). Returns whether a row was actually updated.
@@ -1189,6 +1192,7 @@ export async function setTakeStatus(
   take_key: string,
   status: string,
   sourceIds?: string[],
+  opts: { holderAllowList?: string[]; excludeDiary?: boolean } = {},
 ): Promise<{ updated: boolean }> {
   // Validate at the function boundary too, not just the dispatch handler — any
   // non-MCP caller (CLI, a future internal path) gets the same guarantee that
@@ -1198,18 +1202,11 @@ export async function setTakeStatus(
       `setTakeStatus: status must be one of ${TAKE_REVIEW_STATUSES.join("|")}, got ${JSON.stringify(status)}`,
     );
   }
-  const scoped = normalizeScope(sourceIds);
   const params: unknown[] = [status, take_key];
-  let sourceFilter = "";
-  if (scoped !== undefined && scoped.length === 0) {
-    sourceFilter = " AND FALSE";
-  } else if (scoped !== undefined) {
-    params.push(scoped);
-    sourceFilter = ` AND EXISTS (
-          SELECT 1 FROM documents d
-           WHERE d.id = synth_takes.source_ref
-             AND d.source_id = ANY($${params.length}::text[])
-        )`;
+  let sourceFilter = takeOwnerFilterSql("synth_takes", params, { sourceIds, excludeDiary: opts.excludeDiary });
+  if (opts.holderAllowList !== undefined && !opts.holderAllowList.includes("*")) {
+    params.push(opts.holderAllowList);
+    sourceFilter += ` AND holder = ANY($${params.length}::text[])`;
   }
   const { rows } = await engine.query<{ take_key: string }>(
     `UPDATE synth_takes SET status = $1

@@ -2,7 +2,7 @@
  * Data a brain on the previous release holds survives every migration since:
  * a database migrated through PREVIOUS_RELEASE.lastMigration is seeded with
  * plain SQL (the current writers may target indexes the old schema lacks), read
- * through the current APIs, migrated to the head, and read again. PGLite
+ * through the old columns, migrated to the head, and read with current APIs. PGLite
  * always; Postgres on a scratch database of its own when
  * MEMRAIN_TEST_POSTGRES_URL is set.
  */
@@ -33,8 +33,8 @@ interface Opened {
   close: () => Promise<void>;
 }
 
-async function migrateToPrevious(e: Engine): Promise<void> {
-  const through = migrationsThrough(PREVIOUS_RELEASE.lastMigration);
+async function migrateToPrevious(e: Engine, lastMigration: number): Promise<void> {
+  const through = migrationsThrough(lastMigration);
   try {
     await runMigrations(e, through.dir);
   } finally {
@@ -42,7 +42,7 @@ async function migrateToPrevious(e: Engine): Promise<void> {
   }
 }
 
-async function openPglite(): Promise<Opened> {
+async function openPglite(lastMigration: number): Promise<Opened> {
   const tmp = mkdtempSync(join(tmpdir(), "upgrade-prev-"));
   // The sharded runner's template is migrated through the head; this database
   // must stop at the previous release.
@@ -54,7 +54,7 @@ async function openPglite(): Promise<Opened> {
   } finally {
     if (template !== undefined) process.env.MEMRAIN_TEST_PGLITE_TEMPLATE = template;
   }
-  await migrateToPrevious(engine);
+  await migrateToPrevious(engine, lastMigration);
   return {
     engine,
     close: async () => {
@@ -64,7 +64,7 @@ async function openPglite(): Promise<Opened> {
   };
 }
 
-async function openPostgres(baseUrl: string): Promise<Opened> {
+async function openPostgres(baseUrl: string, lastMigration: number): Promise<Opened> {
   const name = `upgrade_prev_${process.pid}_${Math.floor(Math.random() * 1e9)}`;
   const admin = new PostgresEngine({ url: baseUrl, max: 1 });
   await admin.exec(`CREATE DATABASE ${name}`);
@@ -73,7 +73,7 @@ async function openPostgres(baseUrl: string): Promise<Opened> {
   u.pathname = `/${name}`;
   const engine = new PostgresEngine({ url: u.toString(), max: 2 });
   await engine.ready();
-  await migrateToPrevious(engine);
+  await migrateToPrevious(engine, lastMigration);
   return {
     engine,
     close: async () => {
@@ -88,9 +88,9 @@ async function openPostgres(baseUrl: string): Promise<Opened> {
   };
 }
 
-const ENGINES: Array<{ name: string; open: () => Promise<Opened> }> = [
+const ENGINES: Array<{ name: string; open: (lastMigration: number) => Promise<Opened> }> = [
   { name: "PGLite", open: openPglite },
-  ...(PG_URL ? [{ name: "Postgres", open: () => openPostgres(PG_URL) }] : []),
+  ...(PG_URL ? [{ name: "Postgres", open: (lastMigration: number) => openPostgres(PG_URL, lastMigration) }] : []),
 ];
 
 const PAT = "memrain_pat_upgrade_fixture";
@@ -118,12 +118,19 @@ async function seed(e: Engine): Promise<void> {
   `);
 }
 
-async function read(e: Engine) {
+async function read(e: Engine, legacyVersions = false) {
   const storage = new Storage(e);
   const auth = await new OAuthProvider({ engine: e }).verifyAccessToken(PAT);
+  const versions = legacyVersions
+    ? (await e.query<Awaited<ReturnType<typeof pageVersions>>[number]>(
+      `SELECT slug, source_id, version_n, hash_prev, hash_new, body_snapshot, compiled_truth_snapshot,
+              written_by, NULL::text AS change_reason, written_at::text AS written_at
+         FROM page_versions WHERE slug = $1 ORDER BY version_n DESC LIMIT 20`, ["people/alice"],
+    )).rows
+    : await pageVersions(storage, "people/alice");
   return {
     page: (await getPage(storage, "people/alice"))?.markdown_body,
-    versions: await pageVersions(storage, "people/alice"),
+    versions,
     facts: (await listFacts(storage, "people/alice"))
       .map((f) => [f.fact, f.source_chunk_id, f.attributed_to])
       .sort(),
@@ -135,13 +142,18 @@ async function read(e: Engine) {
   };
 }
 
-for (const { name, open } of ENGINES) {
-  describe(`upgrade from ${PREVIOUS_RELEASE.tag} (${name})`, () => {
+// Keep the pre-reason schema covered after the release pointer advances.
+const BASELINES = [...new Map([
+  { tag: "v1.14.0", lastMigration: 146 }, PREVIOUS_RELEASE,
+].map(release => [release.lastMigration, release])).values()];
+
+for (const baseline of BASELINES) for (const { name, open } of ENGINES) {
+  describe(`upgrade from ${baseline.tag} (${name})`, () => {
     it("keeps every seeded row readable through the migrations since", async () => {
-      const db = await open();
+      const db = await open(baseline.lastMigration);
       try {
         await seed(db.engine);
-        const before = await read(db.engine);
+        const before = await read(db.engine, baseline.lastMigration < 147);
         expect(before.page).toContain("Second body.");
         expect(before.versions.map((v) => v.version_n)).toEqual([2, 1]);
         expect(before.facts).toEqual([["Lives in Paris", "c1", "user"], ["Plays chess", null, null]]);
@@ -153,7 +165,7 @@ for (const { name, open } of ENGINES) {
 
         const pending = discoverMigrations()
           .map((m) => m.id)
-          .filter((id) => id > PREVIOUS_RELEASE.lastMigration);
+          .filter((id) => id > baseline.lastMigration);
         const result = await runMigrations(db.engine);
         expect(result.applied.map((m) => m.id)).toEqual(pending);
 

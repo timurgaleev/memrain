@@ -107,6 +107,7 @@ deploy/memrain/src/core/skillpack/lint.ts|COMPAT|1|stored skill pages that say m
 deploy/memrain/src/core/sweep-code.ts|COMPAT|1|the legacy dotted data dir stays ignored
 deploy/memrain/src/core/synthesis/takes-canon.ts|COMPAT|1|mixed-brand takes fence guard
 deploy/memrain/src/core/synthesis/takes-fence.ts|COMPAT|7|legacy takes fence markers
+deploy/memrain/src/core/synthesis/takes-write.ts|COMPAT|1|reject injection of both current and legacy fence markers
 deploy/memrain/src/http/admin.ts|COMPAT|1|the legacy approval parameter
 deploy/memrain/src/http/ingest.ts|COMPAT|3|legacy x-memex-* ingest headers
 deploy/memrain/src/http/server.ts|COMPAT|2|legacy PAT prefix and internal-token secret hint
@@ -445,6 +446,7 @@ deploy/memrain/tests/tags.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir 
 deploy/memrain/tests/takes_canon.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/takes_fence.test.ts|COMPAT-TEST|1|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/takes_phase.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
+deploy/memrain/tests/takes_write_patch.test.ts|COMPAT-TEST|6|preserve legacy fence bytes and refuse ambiguous mixed-brand mutations
 deploy/memrain/tests/templates.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/tenant_derived_write_owner.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/tenant_fail_closed.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
