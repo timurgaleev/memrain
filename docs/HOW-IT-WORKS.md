@@ -215,6 +215,9 @@ A few that are easy to miss:
   retrieval limit and also applies to alias injection and query refinement.
   An unknown type produces `unknown_page_types` with available types in the
   caller's scope. Omit both filters to search the whole accessible corpus.
+- Successful page writes return `admin_url` for operators and credentials with
+  admin scope when the issuer is configured. The link opens the resulting page
+  in the admin panel; tenant and public responses omit it.
 - `page_get` returns small bodies whole. A body over 256 KiB, or an explicit
   `offset`/`max_bytes` request, returns `page.body_window` instead of
   `markdown_body`, with byte offsets, `total_bytes`, `partial`, `next_offset`

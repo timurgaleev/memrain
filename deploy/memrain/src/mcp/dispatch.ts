@@ -434,9 +434,10 @@ export async function dispatchTool(
         ...(auth.budgetUsdPerDay !== undefined ? { capUsd: auth.budgetUsdPerDay } : {}),
       }
     : null;
-  const raw = await runWithSpendClient(spendClient, () =>
+  const dispatched = await runWithSpendClient(spendClient, () =>
     dispatchToolInner(storage, req, opts),
   );
+  const raw = withPageAdminUrl(req, dispatched, opts);
   // The operator reads stored text as it is; everyone else gets retrieval
   // results scanned for credentials that predate (or slipped past) the write scan.
   const isOperator = opts.authInfo === undefined && !(opts.isPublic ?? false);
@@ -461,6 +462,22 @@ export async function dispatchTool(
     }
   }
   return boundedResult(req.name, result, opts.isPublic ?? false);
+}
+
+function withPageAdminUrl(req: ToolCallRequest, result: ToolCallResult, opts: DispatchOptions): ToolCallResult {
+  if (result.isError || !req.name.startsWith("page_") || OP_BY_NAME.get(req.name)?.scope !== "write" ||
+      opts.isPublic || opts.authInfo?.isPublic || (opts.authInfo && !hasScope(opts.authInfo.scopes, "admin"))) return result;
+  const issuer = opts.issuer ?? process.env.MEMRAIN_PUBLIC_URL;
+  if (!issuer) return result;
+  let base: URL;
+  try { base = new URL(issuer); } catch { return result; }
+  if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) return result;
+  const payload = JSON.parse(result.content[0]!.text);
+  const slug = req.name === "page_rename" ? payload.to_slug : payload.slug;
+  if (payload.ok !== true || typeof slug !== "string") return result;
+  const adminUrl = `${base.toString().replace(/\/+$/, "")}/admin/#page/${encodeURIComponent(slug)}`;
+  return { ...result, content: result.content.map((block, index) => index === 0
+    ? { ...block, text: JSON.stringify({ ...payload, admin_url: adminUrl }) } : block) };
 }
 
 function boundedResult(tool: string, result: ToolCallResult, isPublic: boolean): ToolCallResult {
