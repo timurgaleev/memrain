@@ -148,6 +148,7 @@ describe("doctor", () => {
       "redaction-markers",
       "runtime-config-legacy-rows",
       "runtime-config-overlay",
+      "runtime-config-values",
       "schema-version",
       "secret-exposure",
       "skillpack",

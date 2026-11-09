@@ -49,7 +49,7 @@ afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
   // The Storage.init overlay may have projected the stored keys onto this
   // process's env — scrub so later test files never see them.
-  for (const k of ["SEARCH_MODE", "ADMIN_TOKEN"]) {
+  for (const k of ["SEARCH_MODE", "INTERNAL_TOKEN"]) {
     delete process.env["MEMEX_" + k];
     delete process.env[`MEMRAIN_${k}`];
   }
@@ -93,7 +93,7 @@ describe("memrain config CLI", () => {
     } finally {
       c.restore();
     }
-    expect(code).toBe(1);
+    expect(code).toBe(2);
     expect(c.err.join("\n")).toContain("knob alphabet");
   });
 
@@ -102,7 +102,7 @@ describe("memrain config CLI", () => {
     try {
       await runConfig({
         sub: "set",
-        key: "MEMRAIN_ADMIN_TOKEN",
+        key: "MEMRAIN_INTERNAL_TOKEN",
         value: "supersecret",
         configPath: cfgPath,
       });
@@ -118,8 +118,34 @@ describe("memrain config CLI", () => {
       c2.restore();
     }
     const shown = JSON.parse(c2.out.join("\n"));
-    const row = shown.entries.find((e: { key: string }) => e.key === "MEMRAIN_ADMIN_TOKEN");
+    const row = shown.entries.find((e: { key: string }) => e.key === "MEMRAIN_INTERNAL_TOKEN");
     expect(row.value).toBe("***");
+  });
+
+  it("rejects typos, canonicalizes flags, and warns when actual env wins", async () => {
+    const c = capture();
+    const previous = process.env.MEMRAIN_GRAPH_SIGNALS;
+    process.env.MEMRAIN_GRAPH_SIGNALS = "0";
+    try {
+      expect(await runConfig({ sub: "set", key: "MEMRAIN_GRAPH_SIGNAL", value: "true", configPath: cfgPath })).toBe(2);
+      expect(c.err.join("\n")).toContain("did you mean MEMRAIN_GRAPH_SIGNALS");
+      expect(await runConfig({ sub: "set", key: "MEMRAIN_GRAPH_SIGNALS", value: "true", configPath: cfgPath })).toBe(0);
+      expect(c.out.join("\n")).toContain("MEMRAIN_GRAPH_SIGNALS = 1");
+      expect(c.err.join("\n")).toContain("environment");
+      expect(c.err.join("\n")).toContain("restart");
+      expect(await runConfig({ sub: "set", key: "MEMRAIN_GRAPH_SIGNALS", value: "perhaps", force: true, configPath: cfgPath })).toBe(2);
+      expect(await runConfig({ sub: "set", key: "MEMRAIN_PG_POOL_MAX", value: "2.5", configPath: cfgPath })).toBe(2);
+      expect(await runConfig({ sub: "set", key: "MEMRAIN_FUTURE_KNOB", value: "custom", force: true, configPath: cfgPath })).toBe(0);
+      await runConfig({ sub: "show", configPath: cfgPath });
+      const rows = JSON.parse(c.out.at(-1)!).entries;
+      expect(rows.find((r: { key: string }) => r.key === "MEMRAIN_GRAPH_SIGNAL")).toBeUndefined();
+      expect(rows.find((r: { key: string }) => r.key === "MEMRAIN_GRAPH_SIGNALS").value).toBe("1");
+    } finally {
+      c.restore();
+      if (previous === undefined) delete process.env.MEMRAIN_GRAPH_SIGNALS;
+      else process.env.MEMRAIN_GRAPH_SIGNALS = previous;
+      delete process.env.MEMRAIN_FUTURE_KNOB;
+    }
   });
 
   it("unset --pattern bulk-deletes by prefix; get on a gone key exits 1", async () => {

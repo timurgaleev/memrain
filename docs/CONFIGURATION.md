@@ -16,7 +16,7 @@ what it does, and whether it costs money.
 
 ## How configuration flows
 
-There are two gates between a value you type and the running process:
+For host environment settings, there are two gates between a value you type and the running process:
 
 1. **The host `.env` file** — `/opt/memrain/.env` on the live instance, rendered
    by `scripts/bootstrap.sh` from `/etc/stack-env` at boot (the `.env` that
@@ -41,6 +41,23 @@ The tables below mark each variable's allowlist status:
   it you must **add the key to the compose `environment:` block yourself**, then
   set it in `.env`. These are mostly retrieval-tuning knobs left at their
   built-in defaults.
+
+## Stored runtime settings
+
+`memrain config set <key> <value>` stores an override in `runtime_config`.
+Known keys are typed as flags, integers, or strings. Flags accept `true/false`,
+`on/off`, `yes/no`, and `1/0`, and are stored as `1/0`. Integers must be safe
+whole numbers; string settings keep their existing domain-specific parsing.
+Unknown keys and invalid typed values exit 2; misspelled keys suggest the
+nearest known name. `--force` permits a custom key, but does not bypass type
+validation for a known key.
+
+Actual process environment values always override stored rows. The command
+warns when it sees such an override; a running daemon loads stored changes on
+restart. Environment-only switches remain environment-only, even if a row is
+stored. `memrain config show` redacts values; `memrain doctor` reports unknown,
+invalid, and noncanonical stored rows without rewriting them. Use `config unset`
+to remove an override instead of assigning an empty flag value.
 
 ## How to enable a flag
 

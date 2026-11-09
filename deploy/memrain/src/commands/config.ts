@@ -8,19 +8,20 @@
  *   get <key>                  print the effective value (exit 1 when missing);
  *                              stderr names the env var or row it came from
  *   set <key> <value> [--force]
- *                              upsert; keys must match ^(MEMRAIN|MEMEX)_[A-Z0-9_]+$
- *                              unless --force (forward-compat escape hatch);
+ *                              upsert a known typed key; --force permits custom keys;
  *                              a MEMEX_ key is stored as MEMRAIN_
  *   unset <key>                delete one knob (MEMRAIN_X and MEMEX_X alike)
  *   unset --pattern <prefix>   delete every key with this prefix; a
  *                              MEMRAIN_/MEMEX_ prefix covers both spellings
  */
+import { validateConfigValue, CONFIG_KEY_TYPES } from "../core/runtime-config-schema.ts";
 import { Storage } from "../core/storage.ts";
 import { withStorage } from "./with-storage.ts";
 import { loadConfig } from "../core/config.ts";
 import { legacyEnv } from "../core/env-compat.ts";
 import {
   canonicalKey,
+  ENV_ONLY_KEYS,
   getRuntimeConfig,
   isOverlayProjected,
   legacyKey,
@@ -41,13 +42,19 @@ export interface ConfigCmdOptions {
   value?: string;
   /** `unset --pattern <prefix>` bulk delete. */
   pattern?: string;
-  /** Allow a key outside the MEMRAIN_* alphabet on `set`. */
+  /** Allow an unknown key on `set`; known values remain type-checked. */
   force?: boolean;
   /** Test seam — config file path (same idiom as runCall). */
   configPath?: string;
 }
 
 export async function runConfig(opts: ConfigCmdOptions): Promise<number> {
+  const validated = opts.sub === "set" && opts.key && opts.value !== undefined
+    ? validateConfigValue(opts.key, opts.value, opts.force) : undefined;
+  if (validated && !validated.ok) {
+    console.error(`memrain config: ${validated.error}`);
+    return 2;
+  }
   const storage = new Storage(loadConfig(opts.configPath));
   return withStorage(storage, async () => {
     const engine = storage.engine();
@@ -100,25 +107,21 @@ export async function runConfig(opts: ConfigCmdOptions): Promise<number> {
           console.error("memrain config set: <key> <value> are required");
           return 1;
         }
-        if (!isRuntimeConfigKey(opts.key)) {
-          if (!opts.force) {
-            console.error(
-              `memrain config: key '${opts.key}' is outside the (MEMRAIN|MEMEX)_[A-Z0-9_]+ knob alphabet.\n` +
-                `Nothing in memrain reads a non-MEMRAIN_*/MEMEX_* key from the DB plane. ` +
-                `Re-run with --force if this is deliberate (downstream tooling).`,
-            );
-            return 1;
-          }
-          console.error(
-            `memrain config: WARN — writing non-standard key '${opts.key}' with --force; ` +
-              `it will NOT be overlaid onto the environment.`,
-          );
-        }
-        const stored = await setRuntimeConfig(engine, opts.key, opts.value);
+        const value = validated?.ok ? validated.value : opts.value;
+        const stored = await setRuntimeConfig(engine, opts.key, value);
         if (stored !== opts.key) {
           console.error(`memrain config: ${opts.key} is the pre-rename spelling; stored as ${stored}`);
         }
-        console.log(`Set ${stored} = ${redactConfigValue(stored, opts.value)}`);
+        if (!Object.hasOwn(CONFIG_KEY_TYPES, stored)) {
+          console.error(`memrain config: WARN — custom key '${stored}' stored with --force` +
+            (!isRuntimeConfigKey(stored) ? "; outside the knob alphabet, so it is not overlaid" : ""));
+        }
+        const env = realEnv(stored);
+        const overriding = [stored, legacyKey(stored)].find(name => env[name] !== undefined);
+        if (overriding) console.error(`memrain config: WARN — environment ${overriding} overrides this stored value`);
+        if (ENV_ONLY_KEYS.has(stored)) console.error("memrain config: WARN — this knob is environment-only; the stored row is ignored");
+        console.error("memrain config: serve reads stored settings on restart; actual environment values still take precedence");
+        console.log(`Set ${stored} = ${redactConfigValue(stored, value)}`);
         return 0;
       }
       case "unset": {

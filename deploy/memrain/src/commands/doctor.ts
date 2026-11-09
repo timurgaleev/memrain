@@ -12,6 +12,7 @@ import { checkPersonNameDuplicates } from "../core/person-identity.ts";
  *   - vault path exists and is readable (when configured)
  *   - reports last_indexed_mtime spread (oldest / newest / count)
  */
+import { checkRuntimeConfigValues } from "../core/runtime-config-schema.ts";
 import { lintSkillpack } from "../core/skillpack/lint.ts";
 import { DEFAULT_SKILLS_DIR } from "../core/skillpack/brain-resident.ts";
 import { existsSync, statSync } from "node:fs";
@@ -445,6 +446,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["jsonb-integrity", checkJsonbIntegrity],
       ["page-version-storage", checkPageVersionStorage],
       ["runtime-config-overlay", checkRuntimeConfigOverlay],
+      ["runtime-config-values", checkRuntimeConfigValues],
       ["schema-version", checkSchemaVersion],
       ["embedding-width", checkEmbeddingWidth],
       ["invalid-indexes", checkInvalidIndexes],

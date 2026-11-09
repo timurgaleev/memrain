@@ -66,7 +66,8 @@ def split_at_legacy_section() -> tuple[str, str]:
 def source_vars() -> set[str]:
     found: set[str] = set()
     for path in SRC_DIR.rglob("*.ts"):
-        found.update(VAR_RE.findall(path.read_text(encoding="utf-8")))
+        if path.name != "runtime-config-schema.ts":
+            found.update(VAR_RE.findall(path.read_text(encoding="utf-8")))
     return found - NOT_ENV
 
 
@@ -121,3 +122,9 @@ def test_quiescence_switches_are_env_only():
     assert "`runtime_config` row can never set them" in section
     for name in QUIESCENCE_SWITCHES:
         assert f"| `{name}` |" in section, f"{name} has no row in Maintenance mode"
+
+
+def test_typed_config_keys_match_documented_variables():
+    registry = (SRC_DIR / "core" / "runtime-config-schema.ts").read_text(encoding="utf-8")
+    keys = set(re.findall(r'^  (MEMRAIN_[A-Z0-9_]+): "(?:flag|int|string)",', registry, re.MULTILINE))
+    assert keys == documented_vars(), f"missing={documented_vars() - keys}, stale={keys - documented_vars()}"

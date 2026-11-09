@@ -145,6 +145,7 @@ export const OPS_CHECK_NAMES: ReadonlySet<string> = new Set([
   "legacy-config-dir",
   "runtime-config-legacy-rows",
   "runtime-config-overlay",
+  "runtime-config-values",
   "config-yml",
   "oauth-self-issued-config",
   "secret-exposure",
