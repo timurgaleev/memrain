@@ -59,6 +59,7 @@ export const ENV_ONLY_KEYS: ReadonlySet<string> = new Set([
   JOBS_WORKER_ENV,
   CYCLE_ENV,
   "MEMRAIN_REQUIRE_POSTGRES",
+  "MEMRAIN_EVENT_LOOP_WATCHDOG_MS",
 ]);
 
 /**

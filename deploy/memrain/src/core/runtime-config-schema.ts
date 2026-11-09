@@ -78,6 +78,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_EMBED_DIM: "int",
   MEMRAIN_EMBED_GAPS: "flag",
   MEMRAIN_EMBED_GAPS_MAX_PER_CYCLE: "int",
+  MEMRAIN_EVENT_LOOP_WATCHDOG_MS: "int",
   MEMRAIN_EMBED_MAX_INFLIGHT: "int",
   MEMRAIN_EMBED_TIMEOUT_MS: "int",
   MEMRAIN_ENABLE_DCR: "flag",

@@ -30,6 +30,7 @@ import {
 } from "../core/quiescence.ts";
 import { basename } from "node:path";
 import { getFactsQueue } from "../core/facts-queue.ts";
+import { eventLoopWatchdogMs, startEventLoopWatchdog } from "../core/event-loop-watchdog.ts";
 
 export interface ServeOptions {
   http: boolean;
@@ -106,6 +107,7 @@ export async function bootTokenSweep(
 }
 
 export async function runServe(opts: ServeOptions): Promise<void> {
+  const watchdogMs = eventLoopWatchdogMs();
   if (!opts.http) {
     throw new Error(
       "memrain serve: --http is required. (stdio MCP not yet supported.)",
@@ -300,10 +302,12 @@ export async function runServe(opts: ServeOptions): Promise<void> {
   const { worker, cycle } = startBackgroundWork(storage, config, quiescence);
 
   // Graceful shutdown on SIGINT / SIGTERM.
+  const watchdog = startEventLoopWatchdog(watchdogMs);
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    watchdog.stop();
     console.log(`[memrain] received ${signal}, shutting down`);
     await getFactsQueue().shutdown();
     await worker.stop();
