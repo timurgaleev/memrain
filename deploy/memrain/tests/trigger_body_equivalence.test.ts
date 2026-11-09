@@ -7,8 +7,7 @@
  * MEMRAIN_TEST_POSTGRES_URL is set.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { runMigrations } from "../src/core/migrate.ts";
-import { ENGINES, type Db } from "./helpers/migration-120.ts";
+import { ENGINES, migrateTo120, type Db } from "./helpers/migration-120.ts";
 
 interface ProcRow {
   def: string;
@@ -35,7 +34,7 @@ for (const { name, open } of ENGINES) {
 
     beforeAll(async () => {
       db = await open();
-      await runMigrations(db.engine);
+      await migrateTo120(db.engine);
     });
     afterAll(async () => {
       await db.close();
