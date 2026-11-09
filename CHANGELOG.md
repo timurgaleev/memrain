@@ -6,6 +6,37 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.14.0] — 2026-11-09
+
+### Added
+- Preview-first, bounded stale rechunking with exact plan hashes, per-run
+  embedding cost limits, input rechecks and partial-completion receipts.
+  Markdown chunking prefers line boundaries; existing version-2 documents
+  are not automatically re-embedded solely for the new version.
+- Pinned mirror ownership repair for proven canonical content. Uncertain,
+  stale and foreign-owned mirrors are held without changing their content.
+- Encoded credential detection and aggregate-only auditing of stored job
+  payloads. Job payloads remain unchanged, including during audit apply.
+
+### Fixed
+- Admin history loads the selected historical body on demand. Jobs Watch
+  pauses polling in hidden tabs, aborts on unmount and recovers from errors
+  while preserving its last successful data.
+- Imported pages retain proven managed fences through metadata updates.
+  Ambiguous legacy fences hold the import; repeated adjacent headings and
+  CRLF fence content are preserved correctly.
+- Blank extraction windows no longer consume model calls. Invalid event
+  proposals report safe field diagnostics, and empty agent answers have a
+  distinct durable terminal outcome.
+- Import and transcript-origin repair require the exact preview hash before
+  applying. Repair previews open the existing schema without migration or
+  seed writes; imports remain create-only. Page writes and their required
+  secret audit commit together, keeping partial-import receipts accurate.
+- Migration 146 pins six SQL function search paths without changing their
+  bodies, owners or grants. Early CE years, parallel PostgreSQL fixtures,
+  exit-code restoration checks and retained lint findings are corrected.
+
+
 ## [1.13.0] — 2026-11-09
 
 ### Added
