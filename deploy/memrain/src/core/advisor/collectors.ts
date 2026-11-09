@@ -395,6 +395,7 @@ export const collectChronicle: AdvisorCollector = {
             AND p.slug NOT LIKE 'life/diary/%' AND p.slug NOT LIKE 'life/events/%'
             AND NOT EXISTS (
               SELECT 1 FROM timeline_events te
+               JOIN pages ep ON ep.slug = te.event_slug AND ep.source_id = te.source_id AND ep.deleted_at IS NULL
                WHERE te.slug = p.slug AND te.event_slug IS NOT NULL
                  AND te.source_id = ANY($1::text[])
             )`,

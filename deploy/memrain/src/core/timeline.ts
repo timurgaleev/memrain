@@ -249,7 +249,7 @@ export async function getEntityTimeline(
 ): Promise<TimelineEventRow[]> {
   validateSlug(slug);
   const params: unknown[] = [slug];
-  const where: string[] = ["slug = $1"];
+  const where: string[] = ["slug = $1", "(event_slug IS NULL OR EXISTS (SELECT 1 FROM pages ep WHERE ep.slug = te.event_slug AND ep.deleted_at IS NULL AND ep.source_id = te.source_id))"];
   if (opts.since !== undefined) {
     params.push(normaliseOccurredAt(opts.since));
     where.push(`occurred_at >= $${params.length}::timestamptz`);
@@ -271,7 +271,7 @@ export async function getEntityTimeline(
     `SELECT id, slug, occurred_at::text AS occurred_at, event,
             detail, source_label,
             source_chunk_id, written_at::text AS written_at
-       FROM timeline_events
+       FROM timeline_events te
        WHERE ${where.join(" AND ")}
        ORDER BY occurred_at DESC
        LIMIT $${params.length}`,

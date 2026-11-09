@@ -1142,7 +1142,7 @@ export async function deletePage(
   slug: string,
   writtenBy?: string,
   writeSource?: string,
-  opts: { expectedVersion?: number; writtenByPrincipal?: string } = {},
+  opts: { expectedVersion?: number; writtenByPrincipal?: string; expectedOriginVersion?: { slug: string; version: number } } = {},
 ): Promise<DeleteResult> {
   validateSlug(slug);
   // Tenant write scope (mig047): when a scoped caller supplies its write source,
@@ -1153,7 +1153,13 @@ export async function deletePage(
     typeof writeSource === "string" && writeSource.length > 0 ? writeSource : null;
   const engine = storage.engine();
   return engine.transaction(async (tx) => {
-    await lockPageSlugs(tx, slug);
+    await lockPageSlugs(tx, slug, ...(opts.expectedOriginVersion ? [opts.expectedOriginVersion.slug] : []));
+    if (opts.expectedOriginVersion) {
+      const origin = opts.expectedOriginVersion;
+      const owns = await tx.query(`SELECT 1 FROM pages WHERE slug = $1 AND ($2::text IS NULL OR source_id = $2)`, [origin.slug, scope]);
+      const version = owns.rows.length ? await currentPageVersion(tx, origin.slug) : 0;
+      checkExpectedVersion(origin.slug, version, origin.version);
+    }
     const params: unknown[] = [slug];
     let sourceFilter = "";
     if (scope !== null) {

@@ -684,7 +684,8 @@ export async function findTrajectory(
               NULL::text AS event_type,
               NULL::text AS embedding
          FROM timeline_events ev
-         WHERE ev.slug = $1${eventBounds}`
+         WHERE ev.slug = $1${eventBounds}
+           AND (ev.event_slug IS NULL OR EXISTS (SELECT 1 FROM pages ep WHERE ep.slug = ev.event_slug AND ep.deleted_at IS NULL AND ep.source_id = ev.source_id))`
     : "";
   const r = await storage.engine().query<{
     source: "fact" | "event";

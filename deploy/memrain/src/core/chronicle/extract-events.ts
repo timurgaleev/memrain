@@ -28,6 +28,7 @@ import { isJunkEntityName } from "../entity-junk.ts";
 import { BudgetTracker, BudgetExhausted } from "../budget.ts";
 import { classifyFactsAbsorbError } from "../ingest-log.ts";
 import type { ChronicleDropCounts, ChronicleDropReason } from "./types.ts";
+import { readAutoEvents, retireAutoEvents } from "./retire-events.ts";
 
 export type { ChronicleDropCounts, ChronicleDropReason } from "./types.ts";
 
@@ -61,13 +62,15 @@ export interface ChronicleJudgeResult {
    * as a finished extraction. Omitted by stub judges, which never truncate.
    */
   truncated?: boolean;
+  inputTruncated?: boolean;
 }
 export type ChronicleJudge = (input: ChronicleJudgeInput) => Promise<ChronicleJudgeResult>;
 
 export interface ChronicleExtractResult {
   slug: string;
-  status: "extracted" | "no_events" | "skipped";
+  status: "extracted" | "no_events" | "skipped" | "held_shrink";
   events_written: number;
+  events_retired?: number;
   pagesHeld?: number;
   /** On `no_events` after proposals were made: the dominant drop reason when
    *  every proposed event was refused by the date screen. */
@@ -262,7 +265,7 @@ export async function runChronicleExtract(
   const sourceId = opts.sourceId ?? "default";
   const tz = opts.tz ?? "UTC";
   if (isSynthesizedPageSlug(opts.slug)) return { slug: opts.slug, status: "skipped", events_written: 0, reason: "synthesized_page" };
-  const page = await getPage(storage, opts.slug, [sourceId]);
+  const page = await getPage(storage, opts.slug, [sourceId], { withVersion: true });
   if (!page) return { slug: opts.slug, status: "skipped", events_written: 0, reason: "page_not_found" };
 
   const truth = (page.compiled_truth ?? {}) as Record<string, unknown>;
@@ -341,6 +344,18 @@ export async function runChronicleExtract(
 
   let written = 0;
   let pagesHeld = 0;
+  const current = await getPage(storage, opts.slug, [sourceId], { withVersion: true });
+  if (!current || current.slug !== page.slug || current.version !== page.version) {
+    return { slug: opts.slug, status: "skipped", events_written: 0, reason: "source_changed" };
+  }
+  const prior = await readAutoEvents(storage, opts.slug, sourceId);
+  const keepSlugs = new Set(kept.slice(0, MAX_EVENTS_PER_PAGE).map(ev =>
+    `life/events/${isoDay(ev.when, tz)}-${eventHash8(ev.who.length ? ev.who : attendees, ev.what, opts.slug, sourceId)}`));
+  const complete = !result.inputTruncated && proposals.length <= MAX_EVENTS_PER_PAGE &&
+    Object.keys(dropped).length === 0 && !prior.truncated;
+  if (complete && keepSlugs.size < prior.events.length / 2) {
+    return { slug: opts.slug, status: "held_shrink", events_written: 0, reason: "event_count_below_half" };
+  }
   // Cap per page AFTER the barrier: the whole batch had to validate, but only
   // the first N are written (a bound on fan-out from one page).
   for (const ev of kept.slice(0, MAX_EVENTS_PER_PAGE)) {
@@ -387,7 +402,10 @@ export async function runChronicleExtract(
     });
     written++;
   }
-  return { slug: opts.slug, status: "extracted", events_written: written, pagesHeld, ...droppedField };
+  const retired = complete ? await retireAutoEvents(storage, prior.events, keepSlugs,
+    { slug: page.slug, version: page.version! }) : 0;
+  return { slug: opts.slug, status: "extracted", events_written: written, events_retired: retired, pagesHeld, ...droppedField,
+    ...(!complete ? { reason: "incomplete_extraction" } : {}) };
 }
 
 const JUDGE_SYSTEM = [
@@ -441,6 +459,7 @@ function defaultJudge(
       usage: call.usage,
       modelId: call.resp.modelId,
       truncated: call.truncated,
+      inputTruncated: input.body.length > 12_000,
     };
   };
 }
