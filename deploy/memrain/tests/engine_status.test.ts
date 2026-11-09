@@ -9,7 +9,7 @@ const dir = mkdtempSync(join(tmpdir(), "memrain-engine-status-"));
 const configPath = join(dir, "config.json");
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 it("redacts credentials and query values and rejects unescaped credential delimiters", () => {
-  const parsed = inspectPostgresUrl("postgres://person:PRIVATE%40password@localhost/brain?sslmode=require&password=PRIVATE");
+  const parsed = inspectPostgresUrl("postgres://person:p%40ss@localhost/brain?sslmode=require&password=PRIVATE");
   expect(parsed).toEqual({ ok: true, endpoint: "postgres://localhost/brain?sslmode=require" });
   for (const password of ["a@b", "a/b", "a?b", "a#b", "a:b", "a%b"]) {
     expect(inspectPostgresUrl(`postgres://user:${password}@localhost/brain`)).toEqual({ ok: false });
