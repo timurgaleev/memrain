@@ -9,6 +9,12 @@
 #
 # Update flow: `git pull --ff-only && bash deploy/deploy.sh`
 
+x-logging: &bounded-logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   # No container_name and no top-level `name:`: the project stays `deploy`,
@@ -20,6 +26,7 @@ services:
       args:
         MEMRAIN_VERSION: "${MEMRAIN_VERSION:-${MEMEX_VERSION:-dev}}"
     restart: unless-stopped
+    logging: *bounded-logs
     # init: a real PID 1 forwards SIGTERM to bun and reaps children.
     # stop_grace_period: room for the jobs worker to drain and hand back its
     # running job (MEMRAIN_WORKER_DRAIN_MS) before Docker sends SIGKILL.
@@ -366,6 +373,7 @@ services:
     # Tag pinned; bump intentionally after a smoke test.
     image: cloudflare/cloudflared:2025.4.0
     restart: unless-stopped
+    logging: *bounded-logs
     security_opt:
       - no-new-privileges:true
     cap_drop:
