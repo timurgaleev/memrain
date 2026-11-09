@@ -41,6 +41,7 @@ import { isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
 const PRECISE_STAGES: ReadonlySet<string> = new Set([
   "exact",
   "alias",
+  "name_variant",
   "exact_tail",
   "prefix",
 ]);
@@ -68,6 +69,7 @@ export function meetingTimelineEnabled(
 
 interface MeetingRow {
   slug: string;
+  source_id: string;
   title: string | null;
   compiled_truth: Record<string, unknown> | null;
 }
@@ -140,7 +142,7 @@ export async function extractMeetingTimelinePhase(
   if (!meetingTimelineEnabled()) return result;
 
   const rows = await storage.engine().query<MeetingRow>(
-    `SELECT slug, title, compiled_truth
+    `SELECT slug, title, compiled_truth, source_id
        FROM pages
       WHERE type = 'meeting' AND deleted_at IS NULL
       ORDER BY updated_at DESC
@@ -157,12 +159,12 @@ export async function extractMeetingTimelinePhase(
     // stale row. Scoped to OUR synthetic source_chunk_id -- user/recipe events
     // (different or NULL source_chunk_id) are untouched.
     await storage.engine().query(
-      `DELETE FROM timeline_events WHERE source_chunk_id = $1`,
-      [sourceKey],
+      `DELETE FROM timeline_events WHERE source_chunk_id = $1 AND source_id IN ($2, 'default')`,
+      [sourceKey, m.source_id],
     );
 
     const date = resolveMeetingDate(m.compiled_truth, m.slug);
-    if (!date) continue; // no resolvable date -> nothing to (re)write
+    if (!date || date > new Date().toISOString().slice(0, 10)) continue;
     const title = ((m.title && m.title.trim()) || m.slug).slice(0, MAX_TITLE_LEN);
 
     // 1. The meeting's own occurrence, on the meeting page.
@@ -171,11 +173,12 @@ export async function extractMeetingTimelinePhase(
       occurred_at: date,
       event: `Meeting: ${title}`,
       source_chunk_id: sourceKey,
+      source_id: m.source_id,
     });
     result.entries_written += 1;
 
     // 2. One "Attended" event per resolved attendee, on the attendee's page.
-    const resolver = makeSlugResolver(storage, m.slug);
+    const resolver = makeSlugResolver(storage, m.slug, { sourceIds: [m.source_id] });
     const seen = new Set<string>();
     let processed = 0;
     for (const name of attendeeNames(m.compiled_truth)) {
@@ -191,6 +194,7 @@ export async function extractMeetingTimelinePhase(
         occurred_at: date,
         event: `Attended ${title}`,
         source_chunk_id: sourceKey,
+        source_id: m.source_id,
       });
       result.entries_written += 1;
       touched.add(attendee);

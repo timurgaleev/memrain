@@ -23,6 +23,7 @@ import { orphanExclusionSql } from "./orphan-policy.ts";
 import { hybridSearch, type SearchHit, type SearchOptions } from "./search/hybrid.ts";
 import { PAGE_MIRROR_PATH_SQL, isPageSourcePath } from "./page-index.ts";
 import { normalizeScope } from "./source-scope.ts";
+import { liveEndpointSql } from "./links.ts";
 
 // Shared kebab-case slug grammar (matches links.ts / pages.ts — keep the three
 // copies in sync). Word chars cover lowercase/caseless letters of any script
@@ -206,13 +207,13 @@ export async function findExperts(
     typeFilter = ` AND p.type = $${params.length}`;
   }
   const sources = normalizeScope(opts.sourceIds);
-  let edgeSourceFilter = "";
+  let edgeSourceFilter = ` WHERE source_slug <> target_slug AND ${liveEndpointSql("source_slug")} AND ${liveEndpointSql("target_slug")}`;
   let pageSourceFilter = "";
   if (sources !== undefined) {
     params.push(sources);
     const idx = params.length;
     // Count only the tenant's own edges and rank only the tenant's pages.
-    edgeSourceFilter = ` WHERE source_id = ANY($${idx}::text[])`;
+    edgeSourceFilter += ` AND source_id = ANY($${idx}::text[])`;
     pageSourceFilter = ` AND p.source_id = ANY($${idx}::text[])`;
   }
   params.push(limit);
@@ -236,7 +237,7 @@ export async function findExperts(
      SELECT p.slug, p.type, p.title, COALESCE(d.degree, 0) AS degree
        FROM pages p
        LEFT JOIN degrees d ON d.slug = p.slug
-       WHERE p.deleted_at IS NULL${typeFilter}${pageSourceFilter}
+       WHERE p.deleted_at IS NULL AND ${liveEndpointSql("p.slug")}${typeFilter}${pageSourceFilter}
        ORDER BY COALESCE(d.degree, 0) DESC, p.updated_at DESC, p.slug COLLATE "C" ASC
        LIMIT $${params.length}`,
     params,
