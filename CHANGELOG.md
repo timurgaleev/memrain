@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.15.1] — 2026-11-12
+
+### Fixed
+- Scheduled deep-synth honours a pinned reasoning model. With
+  `MEMRAIN_DEEP_MODEL` unset, the deep tier now resolves through
+  `MEMRAIN_FACTS_MODEL` as documented, instead of the built-in Sonnet default;
+  an install pinned to an older model because its account lacks the default
+  no longer has deep-synth call a model it cannot use. `memrain models` shows
+  the deep tier's source as `MEMRAIN_FACTS_MODEL`.
+- Where `MEMRAIN_DEEP_MODEL` is set (a code-only key: the compose file does not
+  pass it into the container, so this applies to CLI runs outside it),
+  deep-synth now invokes that model. It budgeted for the deep model but called
+  the facts model, so the reserved and the actual cost could differ.
+
 ## [1.15.0] — 2026-11-09
 
 ### Added
