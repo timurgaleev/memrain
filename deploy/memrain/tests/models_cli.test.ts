@@ -40,7 +40,7 @@ it("keeps override, feature, tier and default provenance aligned with resolution
     expect(resolveModelWithSource("reasoning", "explicit-sonnet", "think").source).toBe("override");
     expect(resolveModelWithSource("reasoning", undefined, "think")).toMatchObject({ source: "feature_env", model: "feature-sonnet" });
     expect(resolveModelWithSource("reasoning").source).toBe("tier_env");
-    expect(resolveModelWithSource("deep").source).toBe("default");
+    expect(resolveModelWithSource("deep")).toMatchObject({ source: "tier_env", key: "MEMRAIN_FACTS_MODEL", model: "tier-sonnet" });
   } finally { delete process.env.MEMRAIN_FACTS_MODEL; delete process.env.MEMRAIN_THINK_MODEL; }
 });
 it("probes each unique model once with maxTokens=1 and uses normal spend accounting", async () => {

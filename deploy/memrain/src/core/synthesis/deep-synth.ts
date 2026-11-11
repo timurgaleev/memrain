@@ -165,7 +165,7 @@ export async function runDeepSynthPhase(
   // returned and the loop stops cleanly on the next iteration.
   let budgetHit = false;
   let questionHold: BudgetHold | null = null;
-  const baseSonnet = resolveSonnetFn(opts.sonnetFn);
+  const baseSonnet = resolveSonnetFn(opts.sonnetFn, { modelId });
   const recordingSonnet: SonnetFn = async (input) => {
     const resp = await baseSonnet(input);
     try {

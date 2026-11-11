@@ -24,6 +24,11 @@ describe("resolveModel", () => {
     expect(resolveModel("deep")).toBe(DEFAULT_SONNET_MODEL);
   });
 
+  it("deep tier follows MEMRAIN_FACTS_MODEL when MEMRAIN_DEEP_MODEL is unset", () => {
+    process.env.MEMRAIN_FACTS_MODEL = "eu.anthropic.claude-sonnet-4-6";
+    expect(resolveModel("deep")).toBe("eu.anthropic.claude-sonnet-4-6");
+  });
+
   it("deep tier uses MEMRAIN_DEEP_MODEL when set", () => {
     process.env.MEMRAIN_DEEP_MODEL = "eu.anthropic.claude-opus-x";
     expect(resolveModel("deep")).toBe("eu.anthropic.claude-opus-x");

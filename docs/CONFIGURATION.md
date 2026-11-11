@@ -320,7 +320,7 @@ that stops making calls once the budget is spent. All default OFF.
 | `MEMRAIN_FACTS_EXTRACT_MODEL` | `MEMRAIN_FACTS_MODEL` | Model id for fact extraction only (on write, on demand and the conversation backfill). Allowlisted. | **paid (Sonnet)** |
 | `MEMRAIN_THINK_MODEL` | `MEMRAIN_FACTS_MODEL` | Model id for `think` only. Allowlisted. | **paid (Sonnet)** |
 | `MEMRAIN_DRIFT_MODEL` | `MEMRAIN_FACTS_MODEL` | Model id for the drift judge only (the cycle phase that checks whether a take's evidence still holds). Allowlisted. | **paid (Sonnet)** |
-| `MEMRAIN_DEEP_MODEL` | unset (falls back to Sonnet) | Opt-in deeper model for scheduled deep-synth. Unset, deep-synth runs on the `MEMRAIN_FACTS_MODEL` model. Code-only. | **paid** |
+| `MEMRAIN_DEEP_MODEL` | unset (falls back to `MEMRAIN_FACTS_MODEL`) | Opt-in deeper model for scheduled deep-synth. Unset, deep-synth runs on the `MEMRAIN_FACTS_MODEL` model. Code-only. | **paid** |
 | `MEMRAIN_CONCEPTS_BUDGET_USD` | `0.5` | USD ceiling for one `synthesize_concepts` run. Unlike the caps above this one is ALWAYS on — `maxConcepts` bounds the call count, not the spend, and the cycle passes no tracker of its own. Concepts refused by the ceiling keep their deterministic narrative. Code-only. | — |
 | `MEMRAIN_REFLECTIONS` | off | `reflections` cycle phase: one budget-capped Sonnet pass over recent un-reflected transcripts writes cited `reflections/<topic-slug>` pages, giving the `patterns` phase a source to mine. Runs before `patterns`. Code-only. | **paid (Sonnet)** |
 | `MEMRAIN_REFLECTIONS_BUDGET_USD` | `1.0` | USD ceiling for the reflections pass. Code-only. | — |

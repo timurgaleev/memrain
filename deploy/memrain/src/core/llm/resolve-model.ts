@@ -63,5 +63,6 @@ export function resolveModelWithSource(tier: ModelTier, override?: string, featu
   if (featureKey && process.env[featureKey]) return { model: process.env[featureKey]!, source: "feature_env" as const, key: featureKey };
   const key = TIER_ENV[tier];
   if (process.env[key]) return { model: process.env[key]!, source: "tier_env" as const, key };
-  return { model: tierDefault(tier) || tierDefault("reasoning"), source: "default" as const, key: null };
+  if (tier === "deep") return resolveModelWithSource("reasoning");
+  return { model: tierDefault(tier), source: "default" as const, key: null };
 }

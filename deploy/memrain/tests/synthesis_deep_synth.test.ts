@@ -206,3 +206,32 @@ describe("runDeepSynthPhase", () => {
     expect(r.questionsAsked).toBe(1);
   });
 });
+
+// Value: protects=deep-synth invokes the model it budgets for (MEMRAIN_DEEP_MODEL); fails_when=the live Sonnet call drops the resolved deep model and falls to MEMRAIN_FACTS_MODEL; why_new=every other case injects sonnetFn, so the live call path was never exercised; seam=none
+// no_claim=Bedrock is a prototype spy; real model access is not exercised
+describe("runDeepSynthPhase live call", () => {
+  it("calls Bedrock with MEMRAIN_DEEP_MODEL, not MEMRAIN_FACTS_MODEL", async () => {
+    const { BedrockRuntimeClient } = await import("@aws-sdk/client-bedrock-runtime");
+    const { spyOn } = await import("bun:test");
+    const prev = { synth: process.env.MEMRAIN_DEEP_SYNTH, deep: process.env.MEMRAIN_DEEP_MODEL, facts: process.env.MEMRAIN_FACTS_MODEL };
+    process.env.MEMRAIN_DEEP_SYNTH = "1";
+    process.env.MEMRAIN_DEEP_MODEL = "eu.anthropic.claude-sonnet-5-5";
+    process.env.MEMRAIN_FACTS_MODEL = "eu.anthropic.claude-sonnet-4-6";
+    const send = spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation((async () => ({
+      output: { message: { role: "assistant", content: [{ text: okResponse }] } },
+      usage: { inputTokens: 10, outputTokens: 5 },
+      stopReason: "end_turn",
+    })) as never);
+    try {
+      await runDeepSynthPhase(storage, { questions: ["what is the plan?"], pagesFn: fakePages() });
+      const models = send.mock.calls.map(([cmd]) => (cmd as { input: { modelId?: string } }).input.modelId);
+      expect(models.length).toBeGreaterThan(0);
+      expect(new Set(models)).toEqual(new Set(["eu.anthropic.claude-sonnet-5-5"]));
+    } finally {
+      send.mockRestore();
+      for (const [k, v] of [["MEMRAIN_DEEP_SYNTH", prev.synth], ["MEMRAIN_DEEP_MODEL", prev.deep], ["MEMRAIN_FACTS_MODEL", prev.facts]] as const) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+  });
+});
