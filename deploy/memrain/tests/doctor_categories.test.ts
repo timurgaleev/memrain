@@ -41,6 +41,7 @@ describe("doctor categorize", () => {
       "config",
       "config-yml",
       "connector-health",
+      "contextual-coverage",
       "contradiction-trend",
       "cycle-freshness",
       "cycle-phase-health",

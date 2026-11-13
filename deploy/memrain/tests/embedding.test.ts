@@ -20,6 +20,17 @@ test("embedText returns a 1024-dim vector from Titan", async () => {
   expect(result[1023]).toBeCloseTo(1023 / 1024);
 });
 
+test("embedText hands the billed input tokens to onUsage", async () => {
+  const client = {
+    send: mock(async () => ({
+      body: new TextEncoder().encode(JSON.stringify({ embedding: Array.from({ length: 1024 }).fill(0), inputTextTokenCount: 7 })),
+    })),
+  } as unknown as BedrockRuntimeClient;
+  const seen: number[] = [];
+  await embedText("hello world", { client, onUsage: (u) => seen.push(u.inputTokens) });
+  expect(seen).toEqual([7]);
+});
+
 test("embedText throws on empty input", async () => {
   const client = mockBedrockClient(new Array(1024).fill(0));
   await expect(embedText("", { client })).rejects.toThrow();

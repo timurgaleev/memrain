@@ -123,6 +123,7 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   "single-value-link-overlaps",
   "outside-content-fences",
   "embed-backlog",
+  "contextual-coverage",
 ]);
 
 /** Infrastructure / setup — "can the brain run here at all?" */

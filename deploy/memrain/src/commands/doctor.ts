@@ -71,7 +71,7 @@ import { checkConnectorHealth } from "../core/connectors/health.ts";
 import { checkMixedScriptTargets } from "../core/mixed-script-targets.ts";
 import { checkDbBackends, checkJsonbIntegrity, checkPageVersionStorage } from "../core/doctor-storage.ts";
 import { checkCyclePhaseHealth, checkMaintenanceHeld } from "../core/doctor-maintenance.ts";
-import { checkEmbedBacklog } from "../core/doctor-embed.ts";
+import { checkContextualCoverage, checkEmbedBacklog } from "../core/doctor-embed.ts";
 import { checkSecretExposure } from "../core/doctor-secrets.ts";
 import {
   checkFederationHealth,
@@ -469,6 +469,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["code-graph", checkCodeGraph],
       ["connector-health", checkConnectorHealth],
       ["embed-backlog", checkEmbedBacklog],
+      ["contextual-coverage", checkContextualCoverage],
       ["secret-exposure", checkSecretExposure],
     ] as const) {
       try {
