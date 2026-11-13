@@ -53,9 +53,65 @@ export const OPERATION_ERROR_CODES = [
 
 export type OperationErrorCode = typeof OPERATION_ERROR_CODES[number];
 
+/**
+ * What kind of failure a code is, so a caller can decide without knowing every
+ * code: fix the request, get access, re-read state, wait, or report a bug.
+ */
+export type OperationErrorClass =
+  | "invalid_request"
+  | "permission"
+  | "not_found"
+  | "conflict"
+  | "refused"
+  | "limit"
+  | "transient";
+
+export interface OperationErrorTraits {
+  errorClass: OperationErrorClass;
+  /** True when sending the SAME request again later can succeed. */
+  retryable: boolean;
+}
+
+// A Record over the code union, so adding a code without classifying it fails
+// the typecheck. `version_conflict` and `budget_exhausted` are not retryable:
+// the same request fails again until the caller re-reads or the cap resets.
+const OPERATION_ERROR_TRAITS: Record<OperationErrorCode, OperationErrorTraits> = {
+  budget_exhausted: { errorClass: "limit", retryable: false },
+  conflict: { errorClass: "conflict", retryable: false },
+  db_busy: { errorClass: "transient", retryable: true },
+  db_timeout: { errorClass: "transient", retryable: true },
+  embedding_failed: { errorClass: "transient", retryable: true },
+  edit_invalid: { errorClass: "invalid_request", retryable: false },
+  edit_no_match: { errorClass: "invalid_request", retryable: false },
+  edit_ambiguous_match: { errorClass: "invalid_request", retryable: false },
+  edit_protected_span: { errorClass: "invalid_request", retryable: false },
+  importer_managed: { errorClass: "refused", retryable: false },
+  insufficient_scope: { errorClass: "permission", retryable: false },
+  invalid_params: { errorClass: "invalid_request", retryable: false },
+  mass_delete_refused: { errorClass: "refused", retryable: false },
+  not_found: { errorClass: "not_found", retryable: false },
+  page_shrink_refused: { errorClass: "refused", retryable: false },
+  permission_denied: { errorClass: "permission", retryable: false },
+  precondition_required: { errorClass: "invalid_request", retryable: false },
+  rate_limited: { errorClass: "limit", retryable: true },
+  request_in_progress: { errorClass: "conflict", retryable: true },
+  result_too_large: { errorClass: "invalid_request", retryable: false },
+  root_missing: { errorClass: "not_found", retryable: false },
+  storage_error: { errorClass: "transient", retryable: true },
+  unsupported: { errorClass: "invalid_request", retryable: false },
+  version_conflict: { errorClass: "conflict", retryable: false },
+  version_not_found: { errorClass: "not_found", retryable: false },
+};
+
+export function operationErrorTraits(code: OperationErrorCode): OperationErrorTraits {
+  return OPERATION_ERROR_TRAITS[code];
+}
+
 /** Public envelope: no free-text `message` (withheld on the public boundary). */
 export interface PublicErrorEnvelope {
   error: OperationErrorCode;
+  error_class: OperationErrorClass;
+  retryable: boolean;
   suggestion?: string;
   docs?: string;
 }
@@ -82,7 +138,8 @@ export class OperationError extends Error {
    * fields are omitted so the JSON stays tight.
    */
   toEnvelope(isPublic: boolean): PublicErrorEnvelope | InternalErrorEnvelope {
-    const base: PublicErrorEnvelope = { error: this.code };
+    const { errorClass, retryable } = operationErrorTraits(this.code);
+    const base: PublicErrorEnvelope = { error: this.code, error_class: errorClass, retryable };
     if (this.suggestion !== undefined) base.suggestion = this.suggestion;
     if (this.docs !== undefined) base.docs = this.docs;
     if (isPublic) return base;
