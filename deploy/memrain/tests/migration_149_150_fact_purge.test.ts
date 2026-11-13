@@ -11,7 +11,7 @@ const causeCheck = async (e: Engine) => (await e.query<{ def: string }>(
     WHERE conname = 'entity_facts_forgotten_cause_chk' AND conrelid = 'entity_facts'::regclass`)).rows[0]?.def;
 const receiptsTable = async (e: Engine) => (await e.query<{ t: string | null }>(
   `SELECT to_regclass('fact_purge_receipts')::text AS t`)).rows[0]!.t;
-const purgeTombstone = (e: Engine) => e.query(
+const purgeTombstone = (e: Engine) => e.query<{ id: number }>(
   `INSERT INTO entity_facts (entity_slug, fact, forgotten_at, forgotten_cause) VALUES ('people/x', 'Purged.', NOW(), 'purge') RETURNING id`);
 
 for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`migrations 149 and 150 (${name})`, () => {
@@ -23,7 +23,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const db = await open();
     const e = db.storage.engine();
     try {
-      const fact = Number((await purgeTombstone(e)).rows[0]!.id as number);
+      const fact = Number((await purgeTombstone(e)).rows[0]!.id);
       await e.query(`INSERT INTO fact_purge_receipts (purge_id, page_slug, source_id, fact_ids) VALUES ($1, 'people/x', 'default', ARRAY[$2]::bigint[])`,
         [crypto.randomUUID(), fact]);
 

@@ -245,13 +245,15 @@ export async function reconcileFactsForPage(
     //
     // Supersession applies only to the exact source/page/row/claim identity;
     // a corrected claim or another row remains eligible. Forget keeps its
-    // broader existing withdrawal semantics.
+    // broader existing withdrawal semantics. A purge tombstone belongs to the
+    // page that was purged, never to a later page on the same slug.
     const tombParams: unknown[] = [pageSlug];
     if (scope !== null) tombParams.push(scope);
     const tomb = await tx.query<{ fact: string; row_num: number | null; source_id: string; forgotten_cause: string | null }>(
       `SELECT DISTINCT fact, row_num, source_id, forgotten_cause FROM entity_facts
         WHERE source_markdown_slug = $1
           AND forgotten_at IS NOT NULL
+          AND forgotten_cause IS DISTINCT FROM 'purge'
           ${delScope}`,
       tombParams,
     );
