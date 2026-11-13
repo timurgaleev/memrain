@@ -78,6 +78,7 @@ import { runEmbed } from "./commands/embed.ts";
 import { runSearchModes } from "./commands/search-modes.ts";
 import { runSearchStats, runSearchTune } from "./commands/search-stats.ts";
 import { runSearchDiagnose } from "./commands/search-diagnose.ts";
+import { runSearchInvisible } from "./commands/search-invisible.ts";
 import { runConfig, type ConfigSub } from "./commands/config.ts";
 import { runCapture } from "./commands/capture.ts";
 import { runTranscripts } from "./commands/transcripts.ts";
@@ -126,6 +127,8 @@ function printUsage(): void {
   console.log("                               ranking recommendations from the stats; --apply writes via `config`");
   console.log("  search diagnose <query> --target <slug> [--source ID] [--json]");
   console.log("                               arm-by-arm probe: where does the target surface (keyword/vector/alias/hybrid)?");
+  console.log("  search invisible [--source ID] [--limit N] [--json]");
+  console.log("                               read-only list of pages vector search cannot return, with state and reason");
   console.log("  reindex [--all] [--vault P] [--source vault|code|all] [--paths CSV] [--rechunk-stale] [--reconcile-deletes] [--allow-mass-delete]");
   console.log("  reindex --contextual [--force] [--dry-run] [--limit N]");
   console.log("  reindex --rechunk-stale [--dry-run] [--limit N] [--plan-hash HASH --max-cost-usd N]");
@@ -1658,6 +1661,15 @@ async function main(argv: readonly string[]): Promise<number> {
         if (src) diagOpts.sourceId = src;
         if (flags.has("--json")) diagOpts.json = true;
         return await runSearchDiagnose(diagOpts);
+      }
+      if (positional.length === 1 && positional[0] === "invisible") {
+        const invOpts: Parameters<typeof runSearchInvisible>[0] = {};
+        const src = values.get("--source");
+        if (src) invOpts.sourceId = src;
+        const limitStr = values.get("--limit");
+        if (limitStr !== undefined) invOpts.limit = Number(limitStr);
+        if (flags.has("--json")) invOpts.json = true;
+        return await runSearchInvisible(invOpts);
       }
       const query = positional.join(" ");
       if (!query) {

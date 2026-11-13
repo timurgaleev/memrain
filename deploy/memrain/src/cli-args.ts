@@ -311,7 +311,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ],
   [
     "search",
-    new Set(["--apply", "--days", "--explain", "--json", "--k", "--source", "--target"]),
+    new Set(["--apply", "--days", "--explain", "--json", "--k", "--limit", "--source", "--target"]),
   ],
   ["config", new Set(["--force", "--pattern"])],
   [
