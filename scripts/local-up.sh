@@ -50,10 +50,11 @@ EOF
     ;;
   token)
     name="${2:?usage: scripts/local-up.sh token <name>}"
-    # PGLite admits one process: the server steps aside while the CLI writes.
+    # PGLite admits one process: the server steps aside while the CLI writes,
+    # and comes back whether or not the token was created.
+    trap 'compose up -d --wait' EXIT
     compose stop memrain
     compose run --rm --no-deps --entrypoint bun memrain run src/cli.ts auth create "$name"
-    compose up -d --wait
     ;;
   down)
     compose down
