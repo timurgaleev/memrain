@@ -79,6 +79,7 @@ export interface OperationErrorTraits {
 const OPERATION_ERROR_TRAITS: Record<OperationErrorCode, OperationErrorTraits> = {
   budget_exhausted: { errorClass: "limit", retryable: false },
   conflict: { errorClass: "conflict", retryable: false },
+  link_interval_conflict: { errorClass: "conflict", retryable: false },
   db_busy: { errorClass: "transient", retryable: true },
   db_timeout: { errorClass: "transient", retryable: true },
   embedding_failed: { errorClass: "transient", retryable: true },
