@@ -19,6 +19,7 @@ tools:
   - query
   - page_get
 mutating: false
+prompt: true
 ---
 
 # Cross-Modal Review

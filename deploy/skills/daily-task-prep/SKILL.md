@@ -16,6 +16,7 @@ tools:
   - page_list
   - entity_timeline
 mutating: false
+prompt: true
 ---
 
 # Daily Task Prep

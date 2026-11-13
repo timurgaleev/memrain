@@ -1,9 +1,15 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync, unlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeMcpHandler, type McpRequestContext } from "../src/mcp/http_transport.ts";
 import type { Storage } from "../src/core/storage.ts";
+import { getSkillPrompt, listSkillPrompts } from "../src/core/skillpack/prompts.ts";
+import { parseSkillFrontmatter } from "../src/core/skillpack/frontmatter.ts";
+
+const PACK = join(import.meta.dir, "..", "..", "skills");
+const PACK_PROMPTS = ["connect-client", "cross-modal-review", "daily-task-prep", "query"];
+const WRITE_TOOLS = /`(page_put|page_append|page_edit|page_delete|page_rename|page_revert|page_restore|link|unlink|add_tag|remove_tag|add_fact|forget_fact|add_timeline_event|put_raw_data|takes_add|takes_update|takes_resolve|jobs_submit|log_ingest|extract_facts|ontology_propose)`/;
 
 const dir = mkdtempSync(join(tmpdir(), "memrain-prompts-"));
 const previous = process.env.MEMRAIN_SKILLS_DIR;
@@ -66,4 +72,32 @@ it("paginates eligible prompts after filtering and stays off for an empty opt-in
   process.env.MEMRAIN_SKILLS_DIR = join(dir, "absent");
   try { expect((await rpc("initialize")).result.capabilities.prompts).toBeUndefined(); }
   finally { process.env.MEMRAIN_SKILLS_DIR = prior!; }
+});
+it("offers the shipped read-only skills as prompts to a reader", async () => {
+  const prior = process.env.MEMRAIN_SKILLS_DIR;
+  process.env.MEMRAIN_SKILLS_DIR = PACK;
+  try {
+    expect((await rpc("initialize")).result.capabilities.prompts).toEqual({});
+    const names = (await rpc("prompts/list")).result.prompts.map((p: { name: string }) => p.name);
+    expect(names).toEqual(PACK_PROMPTS);
+    for (const name of PACK_PROMPTS) {
+      const text = (await rpc("prompts/get", { name })).result?.messages?.[0]?.content?.text as string;
+      expect(text.length).toBeGreaterThan(100);
+    }
+  } finally { process.env.MEMRAIN_SKILLS_DIR = prior!; }
+});
+it("opts in only pack skills that neither declare nor describe a write", () => {
+  for (const name of PACK_PROMPTS) {
+    const fm = parseSkillFrontmatter(readFileSync(join(PACK, name, "SKILL.md"), "utf8"))!;
+    expect(fm.scalars.prompt).toBe("true");
+    expect(fm.scalars.mutating).toBe("false");
+    expect(fm.body).not.toMatch(WRITE_TOOLS);
+  }
+});
+it("hides a pack prompt from a caller that cannot call one of its tools", () => {
+  const options = { skillsDir: PACK, callable: (tool: string) => tool !== "entity_timeline" };
+  expect(listSkillPrompts(options).prompts.map(p => p.name)).toEqual(["connect-client", "cross-modal-review"]);
+  expect(getSkillPrompt("query", options)).toBeNull();
+  expect(getSkillPrompt("daily-task-prep", options)).toBeNull();
+  expect(getSkillPrompt("query", { skillsDir: PACK, callable: () => true })).not.toBeNull();
 });

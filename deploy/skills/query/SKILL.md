@@ -28,6 +28,7 @@ tools:
   - traverse_graph
   - entity_timeline
 mutating: false
+prompt: true
 ---
 
 # Query Skill
