@@ -565,6 +565,26 @@ documents, which can be re-read from their files, keep a 72-hour window.
 reports the cutoff it applied as `ttl_hours`; pass `older_than_hours` to purge
 sooner, for example after a leaked secret.
 
+The purge also retires the facts written on each page it removes: the page's
+own `## Facts` rows, and facts in the page's source that name it as their
+source page. A fact stays live when another live, visible page of the same
+source states the same claim about the same entity. Retired facts keep their
+row with `forgotten_cause = 'purge'` and drop out of every read, so a later
+page on the same slug starts without them. The result reports the count as
+`facts_retired`; a dry run reports how many would go. Each purged page that
+retired facts leaves a row in `fact_purge_receipts` with the retired
+`fact_ids`. To undo one, clear the tombstone on exactly those ids:
+
+```sql
+UPDATE entity_facts
+   SET forgotten_at = NULL, forgotten_cause = NULL, forgotten_reason = NULL
+ WHERE forgotten_cause = 'purge'
+   AND id IN (SELECT unnest(fact_ids) FROM fact_purge_receipts WHERE id = <receipt id>);
+```
+
+Restored facts show in recall again at once, still naming the purged page as
+their source.
+
 `reindex --reconcile-deletes` soft-deletes documents whose file is gone. It
 refuses when the vault root is missing or not a directory, and when more than
 50 documents, or more than a quarter of the live documents under the root
