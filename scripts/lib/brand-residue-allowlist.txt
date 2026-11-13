@@ -525,6 +525,7 @@ tests/test_deploy_sh.py|COMPAT-TEST|4|covers legacy names or legacy data (may al
 tests/test_dockerfiles.py|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_fetch_secrets_sh.py|COMPAT-TEST|6|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_memrain_skeleton.py|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
+tests/test_plugin_manifests.py|COMPAT-TEST|1|covers legacy names: the credential scan also rejects tokens with the legacy prefix the server still accepts
 tests/test_rotate_bearer_sh.py|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_skills_brand.py|COMPAT-TEST|17|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_terraform_rename_guards.py|COMPAT-TEST|20|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
