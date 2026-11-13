@@ -17,10 +17,12 @@
  * While maintenance mode is on the body also carries `maintenance: true`, so a
  * deploy script or an operator's curl can see that ingress must stay shut
  * without credentials. The key is absent otherwise, and no switch detail or
- * count is ever exposed here.
+ * count is ever exposed here. `keyword_only: true` marks a brain running
+ * without embeddings or model calls (`MEMRAIN_KEYWORD_ONLY`), on the same terms.
  */
 import type { Storage } from "../core/storage.ts";
 import { VERSION } from "../version.ts";
+import { keywordOnlyMode } from "../core/llm/gateway.ts";
 
 /** 3 s leaves headroom under the usual 5 s orchestrator health deadline. */
 export const HEALTH_TIMEOUT_MS = 3000;
@@ -63,6 +65,7 @@ export async function probeLiveness(
         // under a newer schema still serves, so this never turns /health red.
         schema_ahead: storage.schemaAhead(),
         ...(maintenance ? { maintenance: true } : {}),
+        ...(keywordOnlyMode() ? { keyword_only: true } : {}),
       },
     };
   } catch (e) {

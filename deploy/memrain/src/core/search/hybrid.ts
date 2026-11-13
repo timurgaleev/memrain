@@ -46,6 +46,7 @@ import {
   type BoostablePayload,
 } from "./source-boost.ts";
 import { classifyIntent, type Intent } from "./intent.ts";
+import { keywordOnlyMode } from "../llm/gateway.ts";
 import {
   rrfWeightsForLists,
   exactMatchBoostForTaxonomy,
@@ -977,7 +978,8 @@ export async function hybridSearch(
     : deadline;
   try {
     opts.signal?.throwIfAborted();
-    queryVector = opts.embedQuery
+    // Keyword-only mode has no vector arm to degrade: `vectorEnabled: false` says so.
+    queryVector = keywordOnlyMode() ? null : opts.embedQuery
       ? await raceEmbedderAgainstDeadline(opts.embedQuery, trimmed, dl)
       : await embedQueryBounded(trimmed, { embeddingModel: opts.embeddingModel }, dl);
   } catch (e) {

@@ -126,6 +126,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_JOB_LLM_HALT: "flag",
   MEMRAIN_JOB_STALL_GRACE_MS: "int",
   MEMRAIN_JOB_TIMEOUT_MS: "int",
+  MEMRAIN_KEYWORD_ONLY: "flag",
   MEMRAIN_LINKS_STALE_MAX_PER_CYCLE: "int",
   MEMRAIN_LINK_VERB_INFER: "flag",
   MEMRAIN_LLM_MAX_INFLIGHT: "int",

@@ -24,6 +24,7 @@ import { stripFactsFence } from "./facts-fence.ts";
 import { stripTakesFence } from "./synthesis/takes-fence.ts";
 import { embedText, EMBED_DIMENSIONS } from "./embedding.ts";
 import { isEmbedSkipped } from "./embed-skip.ts";
+import { keywordOnlyMode } from "./llm/gateway.ts";
 import {
   GATE_OWNED_KEYS,
   QUARANTINE_OVERRIDE_KEY,
@@ -389,8 +390,9 @@ async function indexDocumentBody(
 
   // Embed BEFORE we touch the DB — if Bedrock fails, we don't half-write. A page
   // marked `embed_skip` is indexed + keyword-searchable but never embedded: its
-  // chunks land with a null vector so the vector arm skips them.
-  const skipEmbed = isEmbedSkipped(frontmatter);
+  // chunks land with a null vector so the vector arm skips them. Keyword-only
+  // mode treats every page that way, fenced-code symbols included.
+  const skipEmbed = isEmbedSkipped(frontmatter) || keywordOnlyMode();
   // Contextual-retrieval wrapper (opt-in, default-OFF): prepend a document-level
   // <context>{title}\n{synopsis}</context> header to each chunk's EMBEDDING INPUT
   // only — the canonical chunk text written below is untouched. Code docs bypass
