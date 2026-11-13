@@ -393,7 +393,7 @@ export async function addLink(
     }).then((created) => ({
       source_slug: input.source_slug, target_slug: target, type, created, ...(closed ? { closed } : {}),
     }));
-  if (validFrom === null || !SINGLE_VALUE_LINK_TYPES.has(type)) return write(storage.engine(), validUntil);
+  if (!SINGLE_VALUE_LINK_TYPES.has(type)) return write(storage.engine(), validUntil);
   const owner = sourceId ?? "default";
   return storage.engine().transaction(async (tx) => {
     // One lock per call and nothing else taken under it, so writers of one
@@ -406,6 +406,14 @@ export async function addLink(
     );
     // Re-adding the recorded target keeps the idempotent validity rules.
     if (rows.some((r) => r.target_slug === target)) return write(tx, validUntil);
+    // An undated value would span every recorded interval. Undated-only
+    // histories keep the old behaviour; once dates exist, a start is required.
+    if (validFrom === null) {
+      if (rows.every((r) => r.valid_from === null && r.valid_until === null)) return write(tx, validUntil);
+      throw new OperationError("link_interval_conflict",
+        `${type} for ${input.source_slug} has dated values; a new value needs valid_from`,
+        "List the recorded intervals with get_links, then pass a valid_from that does not overlap them.");
+    }
     const plan = planSingleValue(rows, validFrom, validUntil);
     if (plan === null) {
       throw new OperationError("link_interval_conflict",

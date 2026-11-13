@@ -55,6 +55,18 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect((await intervals(p))[0]).toEqual({ target_slug: "orgs/acme", valid_from: null, valid_until: "2023-06-01" });
   });
 
+  it("asks for a start date once the value has a dated history", async () => {
+    const p = await person();
+    await works(p, "orgs/acme", "2020-01-01");
+    expect(await refusal(works(p, "orgs/globex"))).toBe("link_interval_conflict");
+    expect(await intervals(p)).toEqual([{ target_slug: "orgs/acme", valid_from: "2020-01-01", valid_until: null }]);
+    await works(p, "orgs/acme");
+    const undated = await person();
+    await works(undated, "orgs/acme");
+    await works(undated, "orgs/globex");
+    expect(await intervals(undated)).toHaveLength(2);
+  });
+
   it("leaves multi-value types open", async () => {
     const p = await person();
     for (const [target, from] of [["people/a", "2020-01-01"], ["people/b", "2023-01-01"]] as const) {
