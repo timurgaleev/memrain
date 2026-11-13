@@ -883,6 +883,23 @@ external logs, paraphrases or unlinked fragments. Reverting the program cannot
 restore erased rows. It creates no automatic backup and is never applied
 automatically by deployment, a maintenance cycle or an MCP tool.
 
+### CLI exit codes
+
+When a `memrain` command stops on a structured error, the exit code says what
+kind of failure it was, so a cron job or CI step can decide whether to retry:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success. |
+| `1` | Any other failure (a refusal, a permission or version conflict, an unexpected error). |
+| `2` | Usage error or invalid input (`error_class: invalid_request`). Fix the command before running it again. |
+| `75` | Retryable failure (`retryable: true`, such as a busy or timed-out database). The same command may succeed later. |
+
+Commands that document their own codes keep them: `memrain eval` exits `2`
+before scoring when the qrels are stale, and `memrain status --quiescent`
+exits `3` while maintenance is not quiescent. Argument checks inside a command
+return their documented code directly.
+
 ---
 
 ## 7. Terraform infrastructure variables
