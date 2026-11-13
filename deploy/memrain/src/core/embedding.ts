@@ -111,6 +111,8 @@ export interface EmbedOptions {
    * the SDK to retry inside that budget.
    */
   requestTimeoutMs?: number;
+  /** Receives the input tokens Titan billed, as soon as the response reports them. */
+  onUsage?: (usage: { inputTokens: number }) => void;
 }
 
 interface TitanResponseV2 {
@@ -158,6 +160,7 @@ export async function embedText(
     // Report BEFORE the shape checks below: Titan billed those input tokens
     // whether or not the vector it sent back is one we can store.
     meter.report({ inputTokens: parsed.inputTextTokenCount ?? 0, outputTokens: 0 });
+    opts.onUsage?.({ inputTokens: parsed.inputTextTokenCount ?? 0 });
     if (!Array.isArray(parsed.embedding)) {
       throw new TypeError("embedText: response missing 'embedding' array");
     }
