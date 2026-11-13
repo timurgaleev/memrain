@@ -45,6 +45,7 @@ import { guardFields } from "./secret-scan.ts";
 import { withdrawLockKey } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { readEntityIdentity, type EntityIdentity } from "./person-identity.ts";
+import { contestedWith } from "./typed-conflicts.ts";
 
 /**
  * Insert-time dedup / supersede knobs (migration 038 fact embedding + the
@@ -485,6 +486,8 @@ export interface FactRow {
   attributed_to: string | null;
   /** mig043 tombstone; NULL on every live row (the default read set). */
   forgotten_at: string | null;
+  /** Ids of visible typed claims this one conflicts with (recall only; absent when none). */
+  contested_with?: number[];
 }
 
 export interface AddFactResult {
@@ -1240,6 +1243,8 @@ export interface EntityRecallOptions {
    * failure leaves the field undefined rather than failing the recall.
    */
   include_pending?: boolean;
+  /** Untrusted caller: conflict peers must also be world-visible and diary-free. */
+  remote?: boolean;
 }
 
 export interface EntityRecallResult {
@@ -1313,7 +1318,16 @@ export async function entityRecall(
     const { markdown_body: _omit, ...rest } = page;
     outPage = rest as PageRow;
   }
-  const out: EntityRecallResult = { slug, page: outPage, facts, timeline };
+  const peers = await contestedWith(storage.engine(), facts.map((f) => f.id), {
+    ...(scoped !== undefined ? { sourceIds: scoped } : {}),
+    remote: opts.remote === true,
+  });
+  const out: EntityRecallResult = {
+    slug,
+    page: outPage,
+    facts: facts.map((f) => (peers.has(f.id) ? { ...f, contested_with: peers.get(f.id)! } : f)),
+    timeline,
+  };
   if (page && !opts.redact_body) out.identity = await readEntityIdentity(storage.engine(), page);
   if (opts.include_pending === true) {
     try {

@@ -31,6 +31,7 @@ import { resolveEntitiesToPointers } from "./reflex.ts";
 import { parseWindow, VOLUNTEER_DEFAULT_MIN_CONFIDENCE } from "./volunteer.ts";
 import { newerMentionsEnabled, readNewerMentions } from "./newer-mentions.ts";
 import { frameExternal, readExternalTrust, type ExternalTrust } from "../trust-frame.ts";
+import { contestedWith } from "../typed-conflicts.ts";
 
 export const CONTEXT_PACK_DEFAULT_ENTITIES = 5;
 export const CONTEXT_PACK_MAX_ENTITIES = 8;
@@ -48,6 +49,7 @@ export interface PackCardFact extends ExternalTrust {
   id: number;
   fact?: string;
   confidence: number;
+  contested_with?: number[];
 }
 
 export interface PackCardEvent extends ExternalTrust {
@@ -77,6 +79,7 @@ export interface PackFact extends ExternalTrust {
   entity_slug: string;
   fact?: string;
   confidence: number;
+  contested_with?: number[];
 }
 
 export interface ContextPackBudget {
@@ -235,6 +238,7 @@ async function buildCard(
     ...(opts.decay !== undefined ? { decay: opts.decay } : {}),
     ...(opts.sourceIds !== undefined ? { sourceIds: opts.sourceIds } : {}),
     ...(opts.visibility?.length ? { visibility: opts.visibility } : {}),
+    ...(opts.remote ? { remote: true } : {}),
   });
   // A soft-stub (facts without a page) and an out-of-grant page both read as
   // null here; neither gets a card.
@@ -260,7 +264,8 @@ async function buildCard(
       opts.redact
         ? { id: f.id, confidence: f.confidence }
         : { id: f.id, fact: contextFactText(f, origins), confidence: f.confidence, ...(external?.facts.has(f.id)
-          ? { fact: frameExternal(contextFactText(f, origins)), trust: "external" as const } : {}) },
+          ? { fact: frameExternal(contextFactText(f, origins)), trust: "external" as const } : {}),
+        ...(f.contested_with ? { contested_with: f.contested_with } : {}) },
     ),
     recent: r.timeline.map((e) =>
       opts.redact ? { date: toDate(e.occurred_at) } : { date: toDate(e.occurred_at), ...(external?.events.has(Number(e.id))
@@ -377,11 +382,16 @@ export async function buildContextPack(
   }
   const external = opts.redact ? null : await readExternalTrust(storage.engine(), { facts: kept.map(f => f.id) }, opts.sourceIds);
   const origins = opts.redact ? new Map() : await factProvenance(storage.engine(), kept.map(f => f.id), opts.sourceIds);
+  const peers = opts.redact ? new Map<number, number[]>() : await contestedWith(storage.engine(), kept.map(f => f.id), {
+    ...(opts.sourceIds !== undefined ? { sourceIds: opts.sourceIds } : {}),
+    remote: opts.remote === true,
+  });
   const brainFacts: PackFact[] = speakerOrdered(kept).map((f) =>
     opts.redact
       ? { id: f.id, entity_slug: f.entity_slug, confidence: f.confidence }
       : { id: f.id, entity_slug: f.entity_slug, fact: contextFactText(f, origins), confidence: f.confidence, ...(external?.facts.has(f.id)
-        ? { fact: frameExternal(contextFactText(f, origins)), trust: "external" as const } : {}) },
+        ? { fact: frameExternal(contextFactText(f, origins)), trust: "external" as const } : {}),
+      ...(peers.has(f.id) ? { contested_with: peers.get(f.id)! } : {}) },
   );
 
   // Charged on what the caller is allowed to see, so the dropped counts say

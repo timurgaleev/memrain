@@ -3184,7 +3184,10 @@ async function callEntityRecall(
   // Same mig-085 floor callEntityFacts applies, on the same ledger: recall
   // reads entity_facts too, so without this a non-operator caller could read a
   // private fact through the aggregator that entity_facts refuses to show it.
-  if (remote) opts.visibility = ["world"];
+  if (remote) {
+    opts.visibility = ["world"];
+    opts.remote = true;
+  }
   const recalled = await entityRecall(storage, args["slug"], opts);
   const r = { ...recalled, page: recalled.page
     ? (await applyQuarantineVisibility(storage.engine(), [recalled.page], remote))[0]!
