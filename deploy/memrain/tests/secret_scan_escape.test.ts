@@ -43,6 +43,12 @@ describe.each(fixed)("%s after an escape or glue", (kind, key) => {
     ["json \\u", `"\\u001b${key}"`],
     ["percent", `q=%22${key}%22`],
     ["glued _", `token_${key}`],
+    ["ansi raw ESC[32m", `\x1b[32m${key}\x1b[0m`],
+    ["ansi raw ESC[1;32m", `out: \x1b[1;32m${key}`],
+    ["ansi written \\e[32m", String.raw`\e[32m` + key],
+    ["ansi written \\033[32m", String.raw`\033[32m` + key],
+    ["ansi written \\x1b[32m", String.raw`\x1b[32m` + key],
+    ["ansi json \\u001b[32m", String.raw`"\u001b[32m` + `${key}"`],
   ])("%s", (_name, text) => {
     const r = scanSecrets(text);
     expect(r.findings.map((f) => f.kind)).toEqual([kind]);
