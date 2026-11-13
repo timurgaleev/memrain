@@ -22,6 +22,7 @@ import {
   INGEST_CAPTURE_JOB_KIND,
   type IngestionEvent,
 } from "../src/http/ingest.ts";
+import { mintIngestPat } from "./helpers/ingest-principal.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -255,7 +256,8 @@ describe("ingest_capture job handler", () => {
     const handler = getHandler(INGEST_CAPTURE_JOB_KIND);
     expect(handler).toBeDefined();
     const event = eventFor("# hello from a webhook");
-    const result = (await handler!({ event }, { job: {} as JobRow })) as Record<string, unknown>;
+    const { auth } = await mintIngestPat(storage.engine());
+    const result = (await handler!({ event, principal: auth.principal }, { job: {} as JobRow })) as Record<string, unknown>;
     const slug = defaultSlugForEvent(event);
     expect(result.slug).toBe(slug);
     expect(result.untrusted_payload).toBe(true);
@@ -268,7 +270,8 @@ describe("ingest_capture job handler", () => {
     registerIngestCaptureHandler(storage);
     const handler = getHandler(INGEST_CAPTURE_JOB_KIND)!;
     const event = eventFor("captured with a slug");
-    await handler({ event, slug: "notes/from-webhook" }, { job: {} as JobRow });
+    const { auth } = await mintIngestPat(storage.engine());
+    await handler({ event, slug: "notes/from-webhook", principal: auth.principal }, { job: {} as JobRow });
     const page = await getPage(storage, "notes/from-webhook");
     expect(page?.markdown_body).toBe("captured with a slug");
   });
@@ -278,8 +281,9 @@ describe("ingest_capture job handler", () => {
     const handler = getHandler(INGEST_CAPTURE_JOB_KIND)!;
     const abort = new AbortController();
     abort.abort(new Error("lost its claim"));
+    const { auth } = await mintIngestPat(storage.engine());
     await expect(
-      handler({ event: eventFor("abandoned capture"), slug: "notes/abandoned" }, { job: {} as JobRow, signal: abort.signal }),
+      handler({ event: eventFor("abandoned capture"), slug: "notes/abandoned", principal: auth.principal }, { job: {} as JobRow, signal: abort.signal }),
     ).rejects.toThrow("lost its claim");
     expect(await getPage(storage, "notes/abandoned")).toBeNull();
   });

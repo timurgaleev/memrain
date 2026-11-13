@@ -22,6 +22,31 @@
 import { OperationError } from "./operation-error.ts";
 import { LEGACY_NO_SOURCE_SENTINEL } from "./brand.ts";
 
+/**
+ * Which credential a principal presented, by a reference that is not a bearer:
+ * a queued job stores it and re-reads the live grant before it writes. A PAT is
+ * its `access_tokens.id`; an OAuth session is its refresh family, which
+ * survives rotation and dies with the family; a token minted without a family
+ * (client credentials, or one issued before families) is its own row, keyed by
+ * the stored hash. The client id rides along only to narrow the lookup: it
+ * never selects a credential on its own.
+ */
+export type PrincipalRef =
+  | { kind: "pat"; id: string }
+  | { kind: "oauth_family"; id: string; client_id: string }
+  | { kind: "oauth_token"; id: string; client_id: string };
+
+/** The reference stored on a queued job, or null when it is absent or malformed. */
+export function parsePrincipalRef(raw: unknown): PrincipalRef | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.kind === "pat") return typeof r.id === "string" && /^\d{1,19}$/.test(r.id) ? { kind: "pat", id: r.id } : null;
+  if (r.kind !== "oauth_family" && r.kind !== "oauth_token") return null;
+  if (typeof r.id !== "string" || r.id.length === 0 || r.id.length > 200) return null;
+  if (typeof r.client_id !== "string" || r.client_id.length === 0) return null;
+  return { kind: r.kind, id: r.id, client_id: r.client_id };
+}
+
 export interface AuthInfo {
   /** The raw bearer/OAuth token presented by the caller. */
   token: string;
@@ -76,6 +101,8 @@ export interface AuthInfo {
    * the people on one shared connector each have their own daily budget.
    */
   spendId?: string;
+  /** The credential behind this principal; absent for callers no token resolved. */
+  principal?: PrincipalRef;
 }
 
 /**

@@ -15,7 +15,9 @@ Routes:
   metadata (no auth).
 - `/authorize`, `/token`, `/register`, `/revoke` — the OAuth flow; each
   handler authenticates the client itself.
-- `POST /ingest` — webhook capture (needs the `write` scope).
+- `POST /ingest` — webhook capture (needs the `write` scope). The capture is
+  queued; before the job writes it re-checks the token that queued it, and a
+  token revoked or narrowed in the meantime refuses the job for good.
 - `/admin` — the admin panel, behind its own sign-in.
 
 ## `GET /health`
