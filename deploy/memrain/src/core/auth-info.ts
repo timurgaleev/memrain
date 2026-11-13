@@ -36,7 +36,7 @@ export type PrincipalRef =
   | { kind: "oauth_family"; id: string; client_id: string }
   | { kind: "oauth_token"; id: string; client_id: string };
 
-/** The reference stored on a queued job, or null when it is absent or malformed. */
+/** The principal a queued job names, or null when it is absent or malformed. */
 export function parsePrincipalRef(raw: unknown): PrincipalRef | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
