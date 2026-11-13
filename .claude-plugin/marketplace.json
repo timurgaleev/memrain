@@ -1,0 +1,13 @@
+{
+  "name": "memrain",
+  "description": "Memrain: shared, persistent memory for coding agents over MCP.",
+  "owner": { "name": "Timur Galeev" },
+  "plugins": [
+    {
+      "name": "memrain",
+      "source": "./",
+      "description": "Connect Claude Code to your Memrain server over MCP, with skills for searching, capturing and correcting memory.",
+      "category": "productivity"
+    }
+  ]
+}

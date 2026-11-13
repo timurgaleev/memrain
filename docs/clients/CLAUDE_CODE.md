@@ -92,6 +92,30 @@ the operator can pass. For anyone else, use Option A, or give them an
 enrollment-mode client and a code as described in
 [CLAUDE_TEAM.md](./CLAUDE_TEAM.md).
 
+## Option C: install the plugin
+
+The repository is also a Claude Code plugin. It adds the same `memrain` MCP
+server plus six skills (`query`, `brain-ops`, `capture`, `briefing`,
+`correction-pipeline`, `connect-client`) that teach the agent how to use it.
+
+1. Mint a token as in Option A, step 1 (or take the one `make local-up`
+   printed for a local brain).
+2. Install from your fork:
+
+   ```bash
+   claude plugin marketplace add <your-github-username>/memrain
+   claude plugin install memrain@memrain
+   ```
+
+3. Claude Code asks for two values: the MCP URL (`<issuer>/mcp`; the default,
+   `http://127.0.0.1:18790/mcp`, is the local quickstart) and the token. The
+   token is marked sensitive, so Claude Code stores it as a secret (in the
+   system keychain where one is available), not in a settings file. Change either later with
+   `claude plugin configure memrain`.
+
+Use the plugin or a hand-added server, not both: two entries named `memrain`
+mean every tool appears twice.
+
 ## Verify
 
 Ask Claude Code to call the `whoami` tool. It returns `write_source` and
