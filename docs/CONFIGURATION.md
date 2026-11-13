@@ -569,8 +569,9 @@ sooner, for example after a leaked secret.
 The purge also retires the facts written on each page it removes: facts in
 the page's source that name it as their source page, and any of the page's
 own `## Facts` rows still on file (`page_delete` already removes those when
-the page is deleted, so they are not in a receipt). A fact stays live when another live, visible page of the same
-source states the same claim about the same entity. Retired facts keep their
+the page is deleted, so they are not in a receipt). Every such fact is
+retired, even when another page states the same claim: that page holds its
+own fact row, which stays live. Retired facts keep their
 row with `forgotten_cause = 'purge'` and drop out of every read, so a later
 page on the same slug starts without them. The result reports the count as
 `facts_retired`; a dry run reports how many would go. Each purged page that

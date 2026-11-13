@@ -25,7 +25,6 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import { PAGE_SOFT_DELETE_TTL_HOURS } from "./destructive-guard.ts";
 import { OperationError } from "./operation-error.ts";
-import { factSourceEligibleSql } from "./quarantine.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 
@@ -113,9 +112,9 @@ type PurgedPage = { slug: string; source_id: string };
  * it, or, with no fence origin, when it names the page as its source, in the
  * page's own source. While the page was soft-deleted those facts were hidden
  * by `factSourceEligibleSql`; once its row is gone nothing hides them, and a
- * later page on the slug would inherit them. A fact whose claim another live,
- * visible page of the same source still states is kept. Each page's retired
- * ids go into one receipt row, so the retirement can be undone by id.
+ * later page on the slug would inherit them. Another page stating the same
+ * claim holds its own fact row, so nothing it supports is lost. Each page's
+ * retired ids go into one receipt row, so the retirement can be undone by id.
  */
 async function retireFacts(engine: Engine, pages: ReadonlyArray<PurgedPage>, purgeId: string | null): Promise<number> {
   if (pages.length === 0) return 0;
@@ -127,16 +126,7 @@ async function retireFacts(engine: Engine, pages: ReadonlyArray<PurgedPage>, pur
         JOIN gone g
           ON (f.source_markdown_slug = g.slug OR (f.source_markdown_slug IS NULL AND f.source_slug = g.slug))
          AND COALESCE(f.source_id, 'default') = g.source_id
-       WHERE f.forgotten_at IS NULL
-         AND NOT EXISTS (
-           SELECT 1 FROM entity_facts s
-             JOIN pages sp ON sp.slug = COALESCE(s.source_markdown_slug, s.source_slug)
-            WHERE s.id <> f.id AND s.forgotten_at IS NULL
-              AND COALESCE(s.source_id, 'default') = g.source_id
-              AND sp.source_id = g.source_id AND sp.deleted_at IS NULL
-              AND s.entity_slug = f.entity_slug
-              AND memrain_fact_claim_key(s.fact) = memrain_fact_claim_key(f.fact)
-              AND ${factSourceEligibleSql("s")}))`;
+       WHERE f.forgotten_at IS NULL)`;
   const params: unknown[] = [pages.map((p) => p.slug), pages.map((p) => p.source_id)];
   if (purgeId === null) {
     const r = await engine.query<{ n: number }>(`${doomed} SELECT count(*)::int AS n FROM doomed`, params);

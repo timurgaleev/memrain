@@ -185,8 +185,8 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
 
 // A fact is written on a page when its fence row came from it, or, for a row
 // with no fence origin, when it names the page as its source. Once the page row
-// is gone nothing hides those facts any more, so the purge retires them, unless
-// the same claim still stands on another live page.
+// is gone nothing hides those facts any more, so the purge retires them. A
+// page that states the same claim holds its own fact row, which stays.
 for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires facts written on the page (${name})`, () => {
   let db: Awaited<ReturnType<typeof open>>;
   beforeEach(async () => { db = await open(); });
@@ -251,18 +251,33 @@ for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires fac
     expect(await recalled("notes/gone")).toEqual(["Was a draft."]);
   });
 
-  it("keeps a fact whose claim another live, eligible page of the same source still supports", async () => {
+  it("retires the purged page's copy of a claim and keeps the supporting page's own fact", async () => {
     await putPage(db.storage, { slug: "notes/gone", markdown_body: "gone" });
     await putPage(db.storage, { slug: "notes/kept", markdown_body: "kept" });
     const onGone = (await addFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/gone", written_by: "w1" })).id!;
     const onKept = (await addFact(db.storage, { entity_slug: "people/x", fact: "speaks  dutch.", source_slug: "notes/kept", written_by: "w2" })).id!;
     await expire("notes/gone");
-    expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ count: 1, facts_retired: 0 });
-    expect(await state(onGone)).toEqual(LIVE);
+    expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ count: 1, facts_retired: 1 });
+    expect(await state(onGone)).toMatchObject({ forgotten_cause: "purge" });
     expect(await state(onKept)).toEqual(LIVE);
+    expect(await recalled("people/x")).toEqual(["speaks  dutch."]);
   });
 
-  it("support from a quarantined, soft-deleted or other-source page does not count", async () => {
+  it("purging both pages that state a claim, one after the other, leaves no visible copy", async () => {
+    await putPage(db.storage, { slug: "notes/first", markdown_body: "first" });
+    await putPage(db.storage, { slug: "notes/second", markdown_body: "second" });
+    await addFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/first", written_by: "w1" });
+    await addFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/second", written_by: "w2" });
+    await expire("notes/first");
+    expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ slugs: ["notes/first"], facts_retired: 1 });
+    await expire("notes/second");
+    expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ slugs: ["notes/second"], facts_retired: 1 });
+    expect(await recalled("people/x")).toEqual([]);
+    const live = await db.storage.engine().query(`SELECT id FROM entity_facts WHERE entity_slug = 'people/x' AND forgotten_at IS NULL`);
+    expect(live.rows).toEqual([]);
+  });
+
+  it("the same claim on a quarantined, soft-deleted or other-source page does not keep it either", async () => {
     await addSource("other");
     await putPage(db.storage, { slug: "notes/gone", markdown_body: "gone" });
     await putPage(db.storage, { slug: "notes/held", markdown_body: "held" });
