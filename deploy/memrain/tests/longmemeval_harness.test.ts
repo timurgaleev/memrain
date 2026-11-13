@@ -264,11 +264,17 @@ describe("run directory ownership", () => {
     expect(existsSync(join(out, "run.lock"))).toBe(false);
   });
 
-  it("takes over a lock left by a process that no longer exists", async () => {
-    writeFileSync(join(out, "run.lock"), "2147483646\n");
-    const r = await runLongMemEval({ questions: QUESTIONS.slice(0, 1), dataset: DATASET, outDir: out, maxUsd: 5,
-      bedrock: stubBedrock({ embeds: [], converse: [] }) });
-    expect(r.outcome).toBe("complete");
+  it("never removes a lock it does not own, even one that looks stale or half-written", async () => {
+    for (const content of ["", "2147483646\n"]) {
+      writeFileSync(join(out, "run.lock"), content);
+      const calls: Calls = { embeds: [], converse: [] };
+      const err = await runLongMemEval({ questions: QUESTIONS.slice(0, 1), dataset: DATASET, outDir: out, maxUsd: 5,
+        bedrock: stubBedrock(calls) }).catch((e) => e);
+      expect(err).toBeInstanceOf(RunLocked);
+      expect(String(err.message)).toContain("remove");
+      expect(readFileSync(join(out, "run.lock"), "utf8")).toBe(content);
+      expect(calls.embeds.length + calls.converse.length).toBe(0);
+    }
   });
 });
 

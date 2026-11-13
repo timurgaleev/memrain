@@ -89,8 +89,9 @@ memrain eval longmemeval --out DIR --max-usd 40 [--limit 50]
 
 ### Crashes and resume
 
-Only one process can use a run directory at a time. It holds `DIR/run.lock`,
-and a lock left by a process that has exited is taken over. Running the same
+Only one process can use a run directory at a time. It holds `DIR/run.lock`.
+A lock left behind by a run that crashed is reported, not taken over: remove
+the file once you are sure no run is using the directory. Running the same
 command again with the same `--out` resumes. A finished
 question is never re-run. If a question has a reserved call but no result, the
 process died or a call failed while it was running. That question is recorded

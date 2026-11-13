@@ -22,7 +22,8 @@
  * The score is labelled "Bedrock-Claude-judged": it is not comparable with
  * figures produced by another judge model or other prompts.
  */
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../../core/storage.ts";
@@ -140,30 +141,28 @@ function pidAlive(pid: number): boolean {
 
 /**
  * One process per run directory: two runs sharing a ledger would each check
- * the cap against their own snapshot of it. A lock whose process is gone is
- * taken over.
+ * the cap against their own snapshot of it. The lock file is written under a
+ * private name and hard-linked into place, so it never exists without its
+ * PID, and it is never removed by anyone but its owner: a lock left by a
+ * crashed run is reported, and the operator removes it.
  */
 function acquireRunLock(outDir: string): () => void {
   const path = join(outDir, "run.lock");
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const fd = openSync(path, "wx", 0o600);
-      try {
-        writeSync(fd, `${process.pid}\n`);
-      } finally {
-        closeSync(fd);
-      }
-      return () => rmSync(path, { force: true });
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-    }
+  const mine = join(outDir, `.run.lock.${process.pid}.${randomBytes(4).toString("hex")}`);
+  writeFileSync(mine, `${process.pid}\n`, { mode: 0o600, flag: "wx" });
+  try {
+    linkSync(mine, path);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
     const holder = Number.parseInt(readFileSync(path, "utf8"), 10);
-    if (Number.isInteger(holder) && holder > 0 && pidAlive(holder)) {
-      throw new RunLocked(`${outDir} is in use by process ${holder}`);
-    }
-    rmSync(path, { force: true });
+    const state = Number.isInteger(holder) && holder > 0 && pidAlive(holder)
+      ? `is in use by process ${holder}`
+      : `holds a lock from process ${Number.isNaN(holder) ? "unknown" : holder}, which is not running`;
+    throw new RunLocked(`${outDir} ${state}; remove ${path} only if no run is using the directory`);
+  } finally {
+    rmSync(mine, { force: true });
   }
-  throw new RunLocked(`could not take ${path}`);
+  return () => rmSync(path, { force: true });
 }
 class PaidCallFailed extends Error {
   override name = "PaidCallFailed";
