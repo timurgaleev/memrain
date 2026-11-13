@@ -148,6 +148,24 @@ Returns:
 }
 ```
 
+### Tool errors
+
+A known failure returns `isError: true` with a JSON envelope:
+
+```jsonc
+{
+  "error": "version_conflict",        // stable machine code
+  "error_class": "conflict",          // invalid_request | permission | not_found | conflict | refused | limit | transient
+  "retryable": false,                 // true when the same request may succeed later
+  "message": "…",                     // internal ingress only
+  "suggestion": "…"                   // optional recovery hint
+}
+```
+
+Public ingress omits `message`. An unexpected failure on public ingress
+returns the text `internal error (incident <16 hex>)`; the server log line
+for that failure carries the same incident id.
+
 ### Page write reasons
 
 `page_put`, `page_edit`, `page_delete` and `page_revert` accept optional
