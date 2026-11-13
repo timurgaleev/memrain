@@ -23,7 +23,7 @@ test("embedText returns a 1024-dim vector from Titan", async () => {
 test("embedText hands the billed input tokens to onUsage", async () => {
   const client = {
     send: mock(async () => ({
-      body: new TextEncoder().encode(JSON.stringify({ embedding: new Array(1024).fill(0), inputTextTokenCount: 7 })),
+      body: new TextEncoder().encode(JSON.stringify({ embedding: Array.from({ length: 1024 }).fill(0), inputTextTokenCount: 7 })),
     })),
   } as unknown as BedrockRuntimeClient;
   const seen: number[] = [];
