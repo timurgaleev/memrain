@@ -152,6 +152,7 @@ describe("doctor", () => {
       "runtime-config-values",
       "schema-version",
       "secret-exposure",
+      "single-value-link-overlaps",
       "skillpack",
       "source-health",
       "source-routing-health",

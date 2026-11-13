@@ -65,6 +65,7 @@ import {
   checkNamespaceOnlyTargets,
   checkDanglingSlugRedirects,
   checkOutsideContentFences,
+  checkSingleValueLinkOverlaps,
 } from "../core/doctor-ops.ts";
 import { checkConnectorHealth } from "../core/connectors/health.ts";
 import { checkMixedScriptTargets } from "../core/mixed-script-targets.ts";
@@ -462,6 +463,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["namespace-only-targets", checkNamespaceOnlyTargets],
       ["mixed-script-targets", checkMixedScriptTargets],
       ["dangling-slug-redirects", checkDanglingSlugRedirects],
+      ["single-value-link-overlaps", checkSingleValueLinkOverlaps],
       ["outside-content-fences", checkOutsideContentFences],
       ["code-grammars", checkGrammars],
       ["code-graph", checkCodeGraph],

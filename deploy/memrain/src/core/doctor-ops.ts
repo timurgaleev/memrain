@@ -18,6 +18,7 @@ import { bucketJobErrors } from "./jobs/error-classify.ts";
 import { hasFenceMarker } from "./fence-shared.ts";
 import { runtimeOverlayState } from "./runtime-config.ts";
 import { EXTRACT_WINDOW_CHARS } from "./facts-extract.ts";
+import { SINGLE_VALUE_LINK_TYPES } from "./links.ts";
 
 export interface OpsCheckResult {
   /** Exit-code driver — false only on `status:"fail"`. */
@@ -670,4 +671,32 @@ export async function checkCodeGraph(
     return { ok: true, status: "ok", detail: `${docs} code document(s); graph labelled and resolved` };
   }
   return { ok: true, status: "warn", detail: problems.join("; ") };
+}
+
+/**
+ * Manual single-value links (one employer, one location at a time) whose
+ * intervals for different targets overlap. New writes refuse that; rows from
+ * before the rule are reported for review, never rewritten.
+ */
+export async function checkSingleValueLinkOverlaps(engine: Engine): Promise<OpsCheckResult> {
+  const { rows } = await engine.query<{ source_slug: string; type: string; total: number }>(
+    `SELECT a.source_slug, a.type, count(*) OVER ()::int AS total
+       FROM links a JOIN links b
+         ON b.source_slug = a.source_slug AND b.type = a.type AND b.source_id = a.source_id
+        AND b.link_source = 'manual' AND b.target_slug > a.target_slug
+      WHERE a.link_source = 'manual' AND a.type = ANY($1::text[])
+        AND (a.valid_from IS NULL OR b.valid_until IS NULL OR a.valid_from < b.valid_until)
+        AND (b.valid_from IS NULL OR a.valid_until IS NULL OR b.valid_from < a.valid_until)
+      GROUP BY a.source_slug, a.type
+      ORDER BY a.source_slug, a.type
+      LIMIT 3`,
+    [[...SINGLE_VALUE_LINK_TYPES]],
+  );
+  const total = rows[0]?.total ?? 0;
+  if (total === 0) return { ok: true, status: "ok", detail: "no overlapping single-value links" };
+  return {
+    ok: true,
+    status: "warn",
+    detail: `${total} entity/type pair(s) hold overlapping values, e.g. ${rows.map((r) => `${r.source_slug} ${r.type}`).join(", ")}; review and correct with link/unlink`,
+  };
 }

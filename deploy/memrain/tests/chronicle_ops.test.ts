@@ -17,6 +17,9 @@ import { putPage } from "../src/core/pages.ts";
 import { upsertEventProjection } from "../src/core/chronicle.ts";
 import { valueHash } from "../src/core/chronicle/ontology.ts";
 import type { AuthInfo } from "../src/core/auth-info.ts";
+import { Queue } from "../src/core/jobs/queue.ts";
+import { Worker } from "../src/core/jobs/worker.ts";
+import { registerChronicleHandler } from "../src/core/jobs/chronicle-handler.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -607,5 +610,68 @@ describe("fuzzy page_get ambiguity diary fence", () => {
     expect(t.isError).toBe(true);
     expect(t.content[0]!.text).toContain("not found");
     expect(t.content[0]!.text).not.toContain("life/diary/");
+  });
+});
+
+describe("chronicle job key follows the judged input", () => {
+  const SLUG = "meetings/judged-prefix";
+  // Longer than the 12,000 characters the judge reads, so an append lands past it.
+  const LONG = `Weekly sync with the team. ${"Discussed the roadmap, owners and risks for each workstream. ".repeat(220)}`;
+  let judgeCalls = 0;
+
+  async function jobsFor(slug: string): Promise<number> {
+    const r = await storage.engine().query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM jobs WHERE kind = 'chronicle_extract' AND payload->>'slug' = $1`,
+      [slug],
+    );
+    return r.rows[0]!.n;
+  }
+
+  async function drain(): Promise<void> {
+    await new Worker(new Queue(storage.engine()), { logger: () => {}, kinds: ["chronicle_extract"] }).drainOnce();
+  }
+
+  beforeAll(() => {
+    registerChronicleHandler(storage, {
+      judge: async (input) => {
+        if (input.slug === SLUG) judgeCalls++;
+        return { events: [] };
+      },
+    });
+  });
+
+  it("an append past the judged prefix makes no second paid extraction", async () => {
+    expect(LONG.length).toBeGreaterThan(12_000);
+    process.env["MEMRAIN_AUTO_CHRONICLE"] = "1";
+    try {
+      await call("page_put", { slug: SLUG, type: "meeting", markdown_body: LONG });
+      await drain();
+      expect(judgeCalls).toBe(1);
+
+      await call("page_append", { slug: SLUG, content: "Late addendum: one more note after the meeting." });
+      await drain();
+      expect(await jobsFor(SLUG)).toBe(1);
+      expect(judgeCalls).toBe(1);
+
+      // The manual sweep keys the page the same way.
+      await call("chronicle_backfill", { limit: 500 });
+      await drain();
+      expect(await jobsFor(SLUG)).toBe(1);
+      expect(judgeCalls).toBe(1);
+    } finally {
+      delete process.env["MEMRAIN_AUTO_CHRONICLE"];
+    }
+  });
+
+  it("a change inside the judged prefix extracts again", async () => {
+    process.env["MEMRAIN_AUTO_CHRONICLE"] = "1";
+    try {
+      await call("page_put", { slug: SLUG, type: "meeting", markdown_body: `Monthly${LONG.slice("Weekly".length)}` });
+      await drain();
+      expect(await jobsFor(SLUG)).toBe(2);
+      expect(judgeCalls).toBe(2);
+    } finally {
+      delete process.env["MEMRAIN_AUTO_CHRONICLE"];
+    }
   });
 });

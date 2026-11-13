@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
-import { findTypedConflicts } from "../src/core/typed-conflicts.ts";
+import { contestedWith, findTypedConflicts } from "../src/core/typed-conflicts.ts";
 import { putPage } from "../src/core/pages.ts";
+import { entityRecall } from "../src/core/facts.ts";
+import { dispatchTool } from "../src/mcp/dispatch.ts";
 
 for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`typed conflicts ${spec.name}`, () => {
   let db: Awaited<ReturnType<typeof spec.open>>;
@@ -120,6 +122,62 @@ for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) descri
       await tx.exec("SET LOCAL TIME ZONE 'Pacific/Honolulu'");
       expect((await findTypedConflicts(tx)).groups).toMatchObject([{ metric: "revenue_total", month: "2026-11" }]);
     });
+  });
+
+  it("marks each live claim with the conflicting claims it overlaps", async () => {
+    const a = await claim("100");
+    const b = await claim("120", { valid_from: "2026-11-02" });
+    const same = await claim("100.0", { valid_from: "2026-11-03" });
+    const peers = await contestedWith(db.storage.engine(), [a, b, same].map(Number));
+    expect(peers.get(Number(a))).toEqual([Number(b)]);
+    expect(peers.get(Number(b))).toEqual([Number(a), Number(same)]);
+    expect(peers.get(Number(same))).toEqual([Number(b)]);
+  });
+
+  it("leaves out expired, hidden and differently scoped claims", async () => {
+    await db.storage.engine().query("INSERT INTO sources (id, kind, path_prefix) VALUES ('foreign', 'other', '/foreign/') ON CONFLICT DO NOTHING");
+    const live = await claim("100", { valid_from: "2026-11-10" });
+    await claim("120", { valid_until: "2026-11-05" });
+    await claim("130", { visibility: "private" });
+    await claim("140", { source_id: "foreign" });
+    await claim("150", { forgotten_at: new Date().toISOString() });
+    await claim("160", { source_slug: "life/diary/2026-11-01" });
+    const remote = await contestedWith(db.storage.engine(), [Number(live)], { sourceIds: ["default"], remote: true });
+    expect(remote.get(Number(live))).toBeUndefined();
+    const operator = await contestedWith(db.storage.engine(), [Number(live)]);
+    expect(operator.get(Number(live))).toHaveLength(2);
+    expect(await contestedWith(db.storage.engine(), [Number(live)], { sourceIds: [] })).toEqual(new Map());
+  });
+
+  it("caps the peers at five, smallest ids first", async () => {
+    const first = await claim("0");
+    const others: number[] = [];
+    for (let i = 1; i <= 7; i++) others.push(Number(await claim(String(i))));
+    expect((await contestedWith(db.storage.engine(), [Number(first)])).get(Number(first))).toEqual(others.slice(0, 5));
+  });
+
+  it("carries the peers on entity_recall facts and nowhere else", async () => {
+    const a = await claim("100");
+    const b = await claim("120");
+    await db.storage.engine().query(
+      `INSERT INTO entity_facts (entity_slug, fact, source_id, visibility) VALUES ('projects/acme', 'Acme is in Berlin', 'default', 'world')`,
+    );
+    const r = await entityRecall(db.storage, "projects/acme", { decay: false });
+    const byId = new Map(r.facts.map((f) => [String(f.id), f]));
+    expect(byId.get(a)!.contested_with).toEqual([Number(b)]);
+    expect(byId.get(b)!.contested_with).toEqual([Number(a)]);
+    expect(r.facts.find((f) => f.fact === "Acme is in Berlin")!.contested_with).toBeUndefined();
+  });
+
+  it("names only world-visible peers to a tenant calling entity_recall", async () => {
+    const a = await claim("100");
+    const b = await claim("120");
+    await claim("130", { visibility: "private" });
+    const res = await dispatchTool(db.storage, { name: "entity_recall", arguments: { slug: "projects/acme" } }, {
+      authInfo: { token: "tok", clientId: "client", scopes: ["read"], sourceId: "default", allowedSources: ["default"], isPublic: false },
+    });
+    const facts = JSON.parse(res.content[0]!.text).facts as { id: number; contested_with?: number[] }[];
+    expect(facts.find((f) => String(f.id) === a)!.contested_with).toEqual([Number(b)]);
   });
 
   it("applies the default and maximum group bounds after eligibility", async () => {

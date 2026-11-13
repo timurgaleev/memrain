@@ -20,6 +20,7 @@ import {
   A, A_FACT, auth, B, B_FACT, ENTITY_SLUG, seedTenantContract,
 } from "./helpers/tenant_seed.ts";
 import { TENANT_A_TOKENS, TENANT_B_TOKENS } from "./fixtures/tenant_isolation_matrix.ts";
+import { storageEngines } from "./helpers/storage-engines.ts";
 
 setDefaultTimeout(60000);
 
@@ -320,5 +321,117 @@ describe("context_pack marks what the assistant said", () => {
   it("still orders them on the redacted shape, which carries no text", async () => {
     const p = await buildContextPack(storage, { slugs: ["projects/numbat"], decay: false, redact: true });
     expect(p.cards[0]!.facts.map((f) => Math.round(f.confidence * 100) / 100)).toEqual([0.6, 0.95]);
+  });
+});
+
+for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`context_pack contested facts ${spec.name}`, () => {
+  let db: Awaited<ReturnType<typeof spec.open>>;
+  const ids: Record<string, number> = {};
+
+  async function claim(key: string, entity: string, value: string, extra: Record<string, unknown> = {}) {
+    const values = {
+      entity_slug: entity, fact: `${entity} revenue ${value}`, claim_metric: "revenue", claim_value: value,
+      claim_unit: "USD", claim_period: "monthly", valid_from: "2026-11-01", source_id: "default",
+      visibility: "world", confidence: 0.9, ...extra,
+    };
+    const keys = Object.keys(values);
+    ids[key] = Number((await db.storage.engine().query<{ id: string }>(
+      `INSERT INTO entity_facts (${keys.join(",")}) VALUES (${keys.map((_, i) => `$${i + 1}`).join(",")}) RETURNING id::text`,
+      Object.values(values),
+    )).rows[0]!.id);
+  }
+
+  beforeAll(async () => {
+    db = await spec.open();
+    await putPage(db.storage, { slug: "projects/acme", type: "note", title: "Acme", markdown_body: "a" });
+    await claim("cardA", "projects/acme", "100");
+    await claim("cardB", "projects/acme", "120");
+    await claim("cardPrivate", "projects/acme", "130", { visibility: "private" });
+    await claim("brainA", "projects/beta", "5");
+    await claim("brainB", "projects/beta", "7");
+  });
+  afterAll(async () => {
+    await db.close();
+  });
+
+  it("flags conflicting claims on cards and in brain facts", async () => {
+    const p = await buildContextPack(db.storage, { slugs: ["projects/acme"], decay: false, tokenBudget: 8000 });
+    const card = new Map(p.cards[0]!.facts.map((f) => [f.id, f.contested_with]));
+    expect(card.get(ids.cardA!)).toEqual([ids.cardB!, ids.cardPrivate!]);
+    const brain = new Map(p.facts.map((f) => [f.id, f.contested_with]));
+    expect(brain.get(ids.brainA!)).toEqual([ids.brainB!]);
+  });
+
+  it("never names a peer the remote caller cannot see", async () => {
+    const p = await buildContextPack(db.storage, {
+      slugs: ["projects/acme"], decay: false, tokenBudget: 8000, visibility: ["world"], remote: true, sourceIds: ["default"],
+    });
+    const card = new Map(p.cards[0]!.facts.map((f) => [f.id, f.contested_with]));
+    expect(card.get(ids.cardA!)).toEqual([ids.cardB!]);
+    expect(card.get(ids.cardB!)).toEqual([ids.cardA!]);
+  });
+
+  it("drops the peers on the redacted shape", async () => {
+    const p = await buildContextPack(db.storage, { slugs: ["projects/acme"], decay: false, tokenBudget: 8000, redact: true });
+    expect(JSON.stringify(p)).not.toContain("contested_with");
+  });
+});
+
+for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`context_pack core memory ${spec.name}`, () => {
+  let db: Awaited<ReturnType<typeof spec.open>>;
+  const LONG = "Prefers short answers. ".repeat(200);
+
+  beforeAll(async () => {
+    db = await spec.open();
+    await db.storage.engine().query("INSERT INTO sources (id, kind, path_prefix) VALUES ('other', 'other', '/other/') ON CONFLICT DO NOTHING");
+    await putPage(db.storage, { slug: "me/profile", type: "note", title: "About me", markdown_body: "Operator works on Memrain." });
+    await putPage(db.storage, { slug: "me/style", type: "note", title: "Style", markdown_body: LONG });
+    await putPage(db.storage, { slug: "me/gone", type: "note", title: "Gone", markdown_body: "GONE_BODY" });
+    await db.storage.engine().query("UPDATE pages SET deleted_at = now() WHERE slug = 'me/gone'");
+    await putPage(db.storage, { slug: "other/secret", type: "note", title: "Other", markdown_body: "OTHER_BODY", source_id: "other" });
+    await putPage(db.storage, { slug: "life/diary/2026-11-01", type: "journal", title: "Diary", markdown_body: "DIARY_BODY", allowAdHocType: true });
+    await putPage(db.storage, { slug: "projects/acme", type: "note", title: "Acme", markdown_body: "a" });
+  });
+  afterAll(async () => {
+    await db.close();
+  });
+  afterEach(() => {
+    delete process.env["MEMRAIN_CONTEXT_CORE_SLUGS"];
+    delete process.env["MEMRAIN_CONTEXT_CORE_MAX_CHARS"];
+  });
+
+  const pack = (opts: Parameters<typeof buildContextPack>[1] = {}) =>
+    buildContextPack(db.storage, { slugs: ["projects/acme"], decay: false, ...opts });
+
+  it("is off unless core slugs are configured", async () => {
+    expect(await pack()).not.toHaveProperty("core");
+  });
+
+  it("puts live core pages before the cards, capped at 2,000 characters", async () => {
+    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/profile, me/style";
+    process.env["MEMRAIN_CONTEXT_CORE_MAX_CHARS"] = "5000";
+    const p = await pack({ tokenBudget: 8000 });
+    expect(Object.keys(p).indexOf("core")).toBeLessThan(Object.keys(p).indexOf("cards"));
+    expect(p.core!.pages.map((c) => c.slug)).toEqual(["me/profile", "me/style"]);
+    expect(p.core!.pages[0]).toEqual({ slug: "me/profile", title: "About me", text: "Operator works on Memrain." });
+    expect(p.core!.pages.reduce((n, c) => n + c.text.length, 0)).toBe(2000);
+    expect(p.core!.truncated).toBe(true);
+    expect(p.cards.map((c) => c.slug)).toEqual(["projects/acme"]);
+  });
+
+  it("leaves no trace of deleted, out-of-scope, fenced or redacted core pages", async () => {
+    const plain = await pack({ sourceIds: ["default"], remote: true, visibility: ["world"] });
+    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/gone,other/secret,life/diary/2026-11-01,not/a-page";
+    expect(await pack({ sourceIds: ["default"], remote: true, visibility: ["world"] })).toEqual(plain);
+    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/profile";
+    expect(await pack({ redact: true })).not.toHaveProperty("core");
+  });
+
+  it("stays inside a tiny token budget and says it was cut", async () => {
+    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/style";
+    const p = await pack({ tokenBudget: 200 });
+    expect(p.core!.truncated).toBe(true);
+    expect(estTokens(JSON.stringify({ core: p.core, cards: p.cards, facts: p.facts }))).toBeLessThanOrEqual(200);
+    expect(p.budget.used_tokens).toBeLessThanOrEqual(200);
   });
 });
