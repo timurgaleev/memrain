@@ -22,12 +22,14 @@
  * The score is labelled "Bedrock-Claude-judged": it is not comparable with
  * figures produced by another judge model or other prompts.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../../core/storage.ts";
 import { indexDocument } from "../../core/indexer.ts";
-import { hybridSearch, type SearchHit } from "../../core/search/hybrid.ts";
+import { hybridSearch, type SearchHit, type SearchOptions } from "../../core/search/hybrid.ts";
+import type { SearchMeta } from "../../core/search/search-meta.ts";
+import { classifyIntentZeroLlm } from "../../core/search/intent.ts";
 import { chunkMarkdown } from "../../core/chunkers/recursive.ts";
 import { extractFencedCode } from "../../core/chunkers/fenced-code.ts";
 import { costUsd, worstCaseUsd } from "../../core/budget.ts";
@@ -99,6 +101,70 @@ export class UnsafeConfig extends Error {
 export class ResumeMismatch extends Error {
   override name = "ResumeMismatch";
 }
+export class RunLocked extends Error {
+  override name = "RunLocked";
+}
+
+/**
+ * Search exactly as production ranks, minus every stage that could make a paid
+ * call the ledger cannot see: the intent comes from the zero-LLM classifier
+ * (MEMRAIN_INTENT_LLM would otherwise spend), and rerank and expansion are off.
+ */
+export function lmeSearchOptions(
+  question: string,
+  embedQuery: (text: string) => Promise<number[]>,
+  onMeta: (meta: SearchMeta) => void,
+): SearchOptions {
+  return {
+    k: RETRIEVAL_K,
+    intent: classifyIntentZeroLlm(question),
+    embedQuery,
+    noCache: true,
+    noTelemetry: true,
+    rerank: false,
+    graphRerank: false,
+    expansion: false,
+    noExpansion: true,
+    onMeta,
+  };
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * One process per run directory: two runs sharing a ledger would each check
+ * the cap against their own snapshot of it. A lock whose process is gone is
+ * taken over.
+ */
+function acquireRunLock(outDir: string): () => void {
+  const path = join(outDir, "run.lock");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(path, "wx", 0o600);
+      try {
+        writeSync(fd, `${process.pid}\n`);
+      } finally {
+        closeSync(fd);
+      }
+      return () => rmSync(path, { force: true });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+    const holder = Number.parseInt(readFileSync(path, "utf8"), 10);
+    if (Number.isInteger(holder) && holder > 0 && pidAlive(holder)) {
+      throw new RunLocked(`${outDir} is in use by process ${holder}`);
+    }
+    rmSync(path, { force: true });
+  }
+  throw new RunLocked(`could not take ${path}`);
+}
 class PaidCallFailed extends Error {
   override name = "PaidCallFailed";
 }
@@ -109,7 +175,8 @@ class UnboundedInput extends Error {
   override name = "UnboundedInput";
 }
 
-export type RunOutcome = "complete" | "cap_exceeded" | "call_failed" | "ceiling_breached" | "refused";
+/** "incomplete": every question was tried, but some were interrupted and cannot be scored. */
+export type RunOutcome = "complete" | "incomplete" | "cap_exceeded" | "call_failed" | "ceiling_breached" | "refused";
 
 export interface LongMemEvalSummary {
   label: string;
@@ -392,16 +459,8 @@ async function runQuestion(
     }
     let degraded: string[] = [];
     const hits = await hybridSearch(storage, q.question, {
-      k: RETRIEVAL_K,
+      ...lmeSearchOptions(q.question, (text) => calls.embed("query_embed", text), (m) => { degraded = [...m.degraded]; }),
       embeddingModel: models.embed,
-      embedQuery: (text) => calls.embed("query_embed", text),
-      noCache: true,
-      noTelemetry: true,
-      rerank: false,
-      graphRerank: false,
-      expansion: false,
-      noExpansion: true,
-      onMeta: (m) => { degraded = [...m.degraded]; },
     });
     await calls.drain();
     calls.check();
@@ -518,6 +577,20 @@ export async function runLongMemEval(opts: LongMemEvalRunOptions): Promise<LongM
   const log = opts.log ?? (() => {});
   const selected = opts.questions.slice(0, opts.limit ?? opts.questions.length);
   mkdirSync(opts.outDir, { recursive: true, mode: 0o700 });
+  const release = acquireRunLock(opts.outDir);
+  try {
+    return await runLocked(opts, models, selected, log);
+  } finally {
+    release();
+  }
+}
+
+async function runLocked(
+  opts: LongMemEvalRunOptions,
+  models: LmeModels,
+  selected: readonly LmeQuestion[],
+  log: (line: string) => void,
+): Promise<LongMemEvalRunResult> {
   const ledger = SpendLedger.open(ledgerPath(opts.outDir));
   const header = runHeader(opts.dataset, models);
   const existing = ledger.header();
@@ -568,11 +641,20 @@ export async function runLongMemEval(opts: LongMemEvalRunOptions): Promise<LongM
   }
 
   const summary = summarize(ledger, header, selected);
+  if (outcome === "complete" && summary.interrupted.length > 0) {
+    outcome = "incomplete";
+    message = `${summary.interrupted.length} question(s) were interrupted and are not scored: ${summary.interrupted.join(", ")}`;
+  }
   writeFileSync(join(opts.outDir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
   return { outcome, ...(message ? { message } : {}), summary };
 }
 
 /** Record what the provider billed for a call the run reserved but never settled. */
 export function settleReservation(outDir: string, id: string, usd: number): void {
-  SpendLedger.open(ledgerPath(outDir)).operatorSettle(id, usd);
+  const release = acquireRunLock(outDir);
+  try {
+    SpendLedger.open(ledgerPath(outDir)).operatorSettle(id, usd);
+  } finally {
+    release();
+  }
 }

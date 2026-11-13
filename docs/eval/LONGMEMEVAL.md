@@ -89,7 +89,9 @@ memrain eval longmemeval --out DIR --max-usd 40 [--limit 50]
 
 ### Crashes and resume
 
-Running the same command again with the same `--out` resumes. A finished
+Only one process can use a run directory at a time. It holds `DIR/run.lock`,
+and a lock left by a process that has exited is taken over. Running the same
+command again with the same `--out` resumes. A finished
 question is never re-run. If a question has a reserved call but no result, the
 process died or a call failed while it was running. That question is recorded
 as `interrupted` and is never re-run, because repeating it could pay twice.
@@ -106,10 +108,12 @@ instead.
 
 ### Exit codes
 
-`0` every selected question finished. `1` the run was refused or stopped
-(cap, unknown price, oversized input, unsafe setting, bad dataset). `2` usage
-error or a ledger that does not match. `75` a download or paid call failed;
-try again later. The question that was running is not repeated.
+`0` every selected question was scored. `1` the run was refused or stopped
+(cap, unknown price, oversized input, unsafe setting, bad dataset), or some
+questions were interrupted and can never be scored in this run directory. `2`
+usage error, a ledger that does not match, or a run directory another process
+is using. `75` a download or paid call failed; try again later. The question
+that was running is not repeated.
 
 ## Output
 

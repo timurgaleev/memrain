@@ -9,9 +9,10 @@
  *   --out DIR --settle RESERVATION --usd N    record the billed amount of a call
  *                                             a crashed run never settled
  *
- * Exit: 0 every selected question finished; 1 refused or stopped (cap, price,
- * unsafe setting, bad dataset); 2 usage; 75 a download or paid call failed —
- * try again later (the failed question is not repeated).
+ * Exit: 0 every selected question was scored; 1 refused, stopped (cap, price,
+ * unsafe setting, bad dataset) or some questions were interrupted; 2 usage, a
+ * mismatched ledger or a run directory in use; 75 a download or paid call
+ * failed — try again later (the failed question is not repeated).
  */
 import { readFileSync } from "node:fs";
 import {
@@ -24,6 +25,7 @@ import {
 } from "../eval/longmemeval/dataset.ts";
 import {
   ResumeMismatch,
+  RunLocked,
   estimateLongMemEval,
   runLongMemEval,
   settleReservation,
@@ -122,7 +124,7 @@ export async function runEvalLongMemEval(opts: EvalLongMemEvalOptions): Promise<
     return result.outcome === "call_failed" ? EX_TEMPFAIL : 1;
   } catch (e) {
     console.error(`memrain eval longmemeval: ${e instanceof Error ? e.message : String(e)}`);
-    return e instanceof ResumeMismatch ? 2 : 1;
+    return e instanceof ResumeMismatch || e instanceof RunLocked ? 2 : 1;
   }
 }
 

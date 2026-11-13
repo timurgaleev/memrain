@@ -14,7 +14,9 @@ import { join } from "node:path";
 import type { LmeQuestion } from "../src/eval/longmemeval/dataset.ts";
 import {
   ANSWER_SYSTEM,
+  RunLocked,
   estimateLongMemEval,
+  lmeSearchOptions,
   parseJudgeVerdict,
   runLongMemEval,
   settleReservation,
@@ -205,7 +207,7 @@ describe("runLongMemEval", () => {
 
     const again: Calls = { embeds: [], converse: [] };
     const second = await runLongMemEval({ questions: QUESTIONS, dataset: DATASET, outDir: out, maxUsd: 5, bedrock: stubBedrock(again) });
-    expect(second.outcome).toBe("complete");
+    expect(second.outcome).toBe("incomplete");
     expect(again.converse.some((c) => c.user.includes("level 3"))).toBe(false);
     expect(again.embeds.some((t) => t.includes("level 3"))).toBe(false);
     const s = second.summary;
@@ -226,6 +228,47 @@ describe("runLongMemEval", () => {
     await expect(runLongMemEval({
       questions: QUESTIONS, dataset: { ...DATASET, sha256: "b".repeat(64) }, outDir: out, maxUsd: 5, bedrock: stubBedrock(calls),
     })).rejects.toThrow(/different/);
+  });
+});
+
+describe("lmeSearchOptions", () => {
+  it("fixes every knob that could make a paid call outside the ledger", () => {
+    const embedQuery = async () => [];
+    const o = lmeSearchOptions("When did I move to Lisbon?", embedQuery, () => {});
+    expect(o.intent).toBe("factual");
+    expect(o.rerank).toBe(false);
+    expect(o.graphRerank).toBe(false);
+    expect(o.expansion).toBe(false);
+    expect(o.noExpansion).toBe(true);
+    expect(o.embedQuery).toBe(embedQuery);
+    expect(o.noCache).toBe(true);
+  });
+});
+
+describe("run directory ownership", () => {
+  let out: string;
+  beforeEach(() => { out = mkdtempSync(join(tmpdir(), "memrain-lme-lock-")); });
+  afterEach(() => { rmSync(out, { recursive: true, force: true }); });
+
+  it("refuses a second run on the same directory while the first holds it", async () => {
+    const a: Calls = { embeds: [], converse: [] };
+    const b: Calls = { embeds: [], converse: [] };
+    const [first, second] = await Promise.allSettled([
+      runLongMemEval({ questions: QUESTIONS, dataset: DATASET, outDir: out, maxUsd: 5, bedrock: stubBedrock(a) }),
+      runLongMemEval({ questions: QUESTIONS, dataset: DATASET, outDir: out, maxUsd: 5, bedrock: stubBedrock(b) }),
+    ]);
+    expect(first.status).toBe("fulfilled");
+    expect(second.status).toBe("rejected");
+    expect((second as PromiseRejectedResult).reason).toBeInstanceOf(RunLocked);
+    expect(b.embeds.length + b.converse.length).toBe(0);
+    expect(existsSync(join(out, "run.lock"))).toBe(false);
+  });
+
+  it("takes over a lock left by a process that no longer exists", async () => {
+    writeFileSync(join(out, "run.lock"), "2147483646\n");
+    const r = await runLongMemEval({ questions: QUESTIONS.slice(0, 1), dataset: DATASET, outDir: out, maxUsd: 5,
+      bedrock: stubBedrock({ embeds: [], converse: [] }) });
+    expect(r.outcome).toBe("complete");
   });
 });
 
