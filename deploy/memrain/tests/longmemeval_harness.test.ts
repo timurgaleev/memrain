@@ -131,6 +131,48 @@ describe("runLongMemEval", () => {
     expect(ledgerLines(out).filter((l) => l.t === "reserve")).toEqual([]);
   });
 
+  it("sends no further paid call once one has failed", async () => {
+    const paragraphs = Array.from({ length: 40 }, (_, i) =>
+      `Paragraph ${i} about the allotment: ${"we planted beans and squash along the fence ".repeat(30)}`);
+    const long = q("q_long", "single-session-user", "What did we plant?", "beans", [[paragraphs.join("\n\n"), "ok"]], [0]);
+    let sent = 0;
+    const failing: LmeBedrock = {
+      embed: async (text) => {
+        sent++;
+        if (sent === 1) throw new Error("bedrock: throttled");
+        await new Promise((r) => setTimeout(r, 20));
+        return { vector: deterministicEmbed(text), inputTokens: 5 };
+      },
+      converse: async () => { throw new Error("unreachable"); },
+    };
+    const r = await runLongMemEval({ questions: [long], dataset: DATASET, outDir: out, maxUsd: 5, bedrock: failing });
+    expect(r.outcome).toBe("call_failed");
+    const atReturn = sent;
+    await new Promise((res) => setTimeout(res, 500));
+    expect(sent).toBe(atReturn);
+    const lines = ledgerLines(out);
+    const settledIds = new Set(lines.filter((l) => l.t === "settle").map((l) => l.id));
+    expect(lines.filter((l) => l.t === "reserve").every((l) => settledIds.has(l.id))).toBe(true);
+  });
+
+  it("does not let a search retry a query embedding that already failed", async () => {
+    const lonely = q("q_lonely", "single-session-user", "zebra xylophone quokka?", "none", [["Nothing in common here.", "ok"]], []);
+    const queryCalls: string[] = [];
+    const failingQuery: LmeBedrock = {
+      embed: async (text) => {
+        if (text.includes("zebra")) {
+          queryCalls.push(text);
+          throw new Error("bedrock: throttled");
+        }
+        return { vector: deterministicEmbed(text), inputTokens: 5 };
+      },
+      converse: async () => { throw new Error("unreachable"); },
+    };
+    const r = await runLongMemEval({ questions: [lonely], dataset: DATASET, outDir: out, maxUsd: 5, bedrock: failingQuery });
+    expect(r.outcome).toBe("call_failed");
+    expect(queryCalls).toHaveLength(1);
+  });
+
   it("refuses an input over its bound instead of pricing it", async () => {
     const huge = { ...QUESTIONS[2]!, question_id: "q_huge", question: `${"what breed is my dog ".repeat(3000)}?` };
     const r = await runLongMemEval({ questions: [huge], dataset: DATASET, outDir: out, maxUsd: 5, bedrock: stubBedrock(calls) });
