@@ -1,9 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
-import { revertMigration, runMigrations } from "../src/core/migrate.ts";
+import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 import { putPage } from "../src/core/pages.ts";
 import { addLink } from "../src/core/links.ts";
 import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { Engine } from "../src/core/engine/interface.ts";
+
+/** Only the latest migration can be reverted, so later ones go first. */
+async function revertLaterThan148(e: Engine): Promise<void> {
+  for (const id of discoverMigrations().map(m => m.id).filter(id => id > 148).sort((a, b) => b - a)) await revertMigration(e, id);
+}
 
 for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`migration 148 (${name})`, () => {
   if (name === "Postgres") it("retains validity committed by a writer while rollback waits for its table lock", async () => {
@@ -19,6 +25,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     try {
       await putPage(db.storage, { slug: "notes/validity-race", markdown_body: "Preserved fixture." });
       await addLink(db.storage, { source_slug: "notes/validity-race", target_slug: "notes/target", type: "related_to" });
+      await revertLaterThan148(e);
       writer = e.transaction(async tx => {
         await tx.exec("UPDATE links SET valid_from='2026-11-01'");
         ready.resolve();
@@ -55,11 +62,13 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await putPage(db.storage, { slug: "notes/migration148", markdown_body: "Preserved body." });
       await addLink(db.storage, { source_slug: "notes/migration148", target_slug: "notes/target", type: "related_to" });
       const before = (await e.query("SELECT to_jsonb(l)-'valid_from'-'valid_until' AS row FROM links l ORDER BY id")).rows;
+      await revertLaterThan148(e);
       await revertMigration(e, 148);
       expect((await e.query("SELECT to_jsonb(l) AS row FROM links l ORDER BY id")).rows).toEqual(before);
       await runMigrations(e);
       expect((await e.query("SELECT to_jsonb(l)-'valid_from'-'valid_until' AS row FROM links l ORDER BY id")).rows).toEqual(before);
       await e.exec("UPDATE links SET valid_from='2026-11-01'");
+      await revertLaterThan148(e);
       await expect(revertMigration(e, 148)).rejects.toThrow("populated");
       expect((await e.query("SELECT valid_from::text AS valid_from FROM links")).rows).toEqual([{ valid_from: "2026-11-01" }]);
     } finally { await db.close(); }

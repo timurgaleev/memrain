@@ -133,7 +133,7 @@ describe("pages", () => {
     await putPage(storage, { slug: PURGE_SLUG, type: "note", markdown_body: "p", source_id: B });
     await deletePage(storage, PURGE_SLUG, undefined, B);
     const none = await purgeDeletedPages(storage.engine(), 0, NONE);
-    expect(none).toEqual({ count: 0, slugs: [], blocked: [], ttl_hours: 0, raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0, volunteer_event_rows: 0 });
+    expect(none).toEqual({ count: 0, slugs: [], blocked: [], ttl_hours: 0, raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0, volunteer_event_rows: 0, facts_retired: 0 });
     const rows = await storage.engine().query(`SELECT 1 FROM pages WHERE slug = $1`, [PURGE_SLUG]);
     expect(rows.rows.length).toBe(1);
     const all = await purgeDeletedPages(storage.engine(), 0);

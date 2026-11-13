@@ -10,7 +10,9 @@
  * foreign key to pages, so their rows are deleted by slug in the same
  * transaction as the page — otherwise a later page on the same slug would
  * inherit them. Only redirects pointing AT a purged page go; a redirect FROM a
- * purged old name to a live page is the rename redirect and stays.
+ * purged old name to a live page is the rename redirect and stays. Facts
+ * written on a purged page are retired (cause 'purge') in that transaction
+ * too, before the row goes, with a receipt naming the retired ids.
  *
  * The autopilot `purge` cycle phase (core/cycle/purge.ts) runs the same helper
  * unscoped with the page TTL (PAGE_SOFT_DELETE_TTL_HOURS, 30 days — longer than
@@ -19,10 +21,11 @@
  * page search mirror (page://<slug>) was already dropped at soft-delete time, so
  * this only removes the canonical row + its history.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import { PAGE_SOFT_DELETE_TTL_HOURS } from "./destructive-guard.ts";
 import { OperationError } from "./operation-error.ts";
+import { factSourceEligibleSql } from "./quarantine.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 
@@ -40,6 +43,8 @@ export interface PurgeDeletedPagesResult {
   tags_rows: number;
   slug_aliases_rows: number;
   volunteer_event_rows: number;
+  /** Live facts written on the purged pages, retired with cause 'purge' (on a dry run: that would be). */
+  facts_retired: number;
   /** Set on a dry run: nothing was deleted, `planned` is what a real run would reap now. */
   dry_run?: true;
   planned?: string[];
@@ -100,6 +105,62 @@ async function leftovers(engine: Engine, slugs: string[], remove: boolean): Prom
   return out;
 }
 
+type PurgedPage = { slug: string; source_id: string };
+
+/**
+ * Retire the live facts written on the given pages, or with no `purgeId`
+ * only count them. A fact is written on a page when its fence row came from
+ * it, or, with no fence origin, when it names the page as its source, in the
+ * page's own source. While the page was soft-deleted those facts were hidden
+ * by `factSourceEligibleSql`; once its row is gone nothing hides them, and a
+ * later page on the slug would inherit them. A fact whose claim another live,
+ * visible page of the same source still states is kept. Each page's retired
+ * ids go into one receipt row, so the retirement can be undone by id.
+ */
+async function retireFacts(engine: Engine, pages: ReadonlyArray<PurgedPage>, purgeId: string | null): Promise<number> {
+  if (pages.length === 0) return 0;
+  const doomed = `WITH gone AS (
+      SELECT * FROM unnest($1::text[], $2::text[]) AS g(slug, source_id)
+    ), doomed AS (
+      SELECT f.id, g.slug, g.source_id
+        FROM entity_facts f
+        JOIN gone g
+          ON (f.source_markdown_slug = g.slug OR (f.source_markdown_slug IS NULL AND f.source_slug = g.slug))
+         AND COALESCE(f.source_id, 'default') = g.source_id
+       WHERE f.forgotten_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM entity_facts s
+             JOIN pages sp ON sp.slug = COALESCE(s.source_markdown_slug, s.source_slug)
+            WHERE s.id <> f.id AND s.forgotten_at IS NULL
+              AND COALESCE(s.source_id, 'default') = g.source_id
+              AND sp.source_id = g.source_id AND sp.deleted_at IS NULL
+              AND s.entity_slug = f.entity_slug
+              AND memrain_fact_claim_key(s.fact) = memrain_fact_claim_key(f.fact)
+              AND ${factSourceEligibleSql("s")}))`;
+  const params: unknown[] = [pages.map((p) => p.slug), pages.map((p) => p.source_id)];
+  if (purgeId === null) {
+    const r = await engine.query<{ n: number }>(`${doomed} SELECT count(*)::int AS n FROM doomed`, params);
+    return r.rows[0]?.n ?? 0;
+  }
+  params.push(purgeId);
+  const r = await engine.query<{ n: number }>(
+    `${doomed}, retired AS (
+       UPDATE entity_facts f
+          SET forgotten_at = NOW(), forgotten_cause = 'purge', forgotten_reason = 'page purged: ' || d.slug
+         FROM doomed d
+        WHERE f.id = d.id
+       RETURNING f.id, d.slug, d.source_id
+     ), receipts AS (
+       INSERT INTO fact_purge_receipts (purge_id, page_slug, source_id, fact_ids)
+       SELECT $3::uuid, slug, source_id, array_agg(id ORDER BY id) FROM retired GROUP BY slug, source_id
+       RETURNING 1
+     )
+     SELECT count(*)::int AS n FROM retired`,
+    params,
+  );
+  return r.rows[0]?.n ?? 0;
+}
+
 /**
  * Hard-delete pages whose `deleted_at` is older than `olderThanHours`.
  * Idempotent: a run with nothing expired returns count 0. Defaults to the
@@ -128,8 +189,8 @@ export async function purgeDeletedPages(
   let expiredWhere = `deleted_at IS NOT NULL
         AND deleted_at < NOW() - ($1 || ' hours')::interval${sourceFilter}${slugFilter}`;
   if (opts.dryRun || opts.expectedPlanHash !== undefined) {
-    const plan = await engine.query<{ slug: string; deleted_at: string }>(
-      `SELECT slug, deleted_at::text AS deleted_at FROM pages WHERE ${expiredWhere} ORDER BY slug`,
+    const plan = await engine.query<{ slug: string; deleted_at: string; source_id: string }>(
+      `SELECT slug, deleted_at::text AS deleted_at, source_id FROM pages WHERE ${expiredWhere} ORDER BY slug`,
       params,
     );
     const planned = plan.rows.map((r) => r.slug);
@@ -138,6 +199,7 @@ export async function purgeDeletedPages(
       return {
         count: 0, slugs: [], blocked: [], ttl_hours: olderThanHours,
         ...(await leftovers(engine, planned, false)),
+        facts_retired: await retireFacts(engine, plan.rows, null),
         dry_run: true, planned, plan_hash: planHash,
       };
     }
@@ -153,17 +215,28 @@ export async function purgeDeletedPages(
     params.push(planned, plan.rows.map((r) => r.deleted_at));
     expiredWhere += ` AND (slug, deleted_at::text) IN (SELECT * FROM unnest($${params.length - 1}::text[], $${params.length}::text[]))`;
   }
+  const purgeId = randomUUID();
   // Fast path: one set-based DELETE plus the leftovers, in one transaction.
   // Every table referencing pages cascades today, so this almost always
-  // succeeds; a violation rolls the whole transaction back.
+  // succeeds; a violation rolls the whole transaction back, fact retirement
+  // included. The pages are locked first so their facts are retired before
+  // the rows go, and the DELETE takes exactly the locked set.
   try {
     return await deadlockSafeTransaction(engine, async (tx) => {
-      const r = await tx.query<{ slug: string }>(
-        `DELETE FROM pages WHERE ${expiredWhere} RETURNING slug`,
+      const locked = await tx.query<PurgedPage>(
+        `SELECT slug, source_id FROM pages WHERE ${expiredWhere} ORDER BY slug FOR UPDATE`,
         params,
       );
+      const factsRetired = await retireFacts(tx, locked.rows, purgeId);
+      const r = await tx.query<{ slug: string }>(
+        `DELETE FROM pages WHERE slug = ANY($1::text[]) RETURNING slug`,
+        [locked.rows.map((row) => row.slug)],
+      );
       const slugs = r.rows.map((row) => row.slug).sort();
-      return { count: slugs.length, slugs, blocked: [], ttl_hours: olderThanHours, ...(await leftovers(tx, slugs, true)) };
+      return {
+        count: slugs.length, slugs, blocked: [], ttl_hours: olderThanHours,
+        ...(await leftovers(tx, slugs, true)), facts_retired: factsRetired,
+      };
     });
   } catch (err) {
     if ((err as { code?: string })?.code !== FOREIGN_KEY_VIOLATION) throw err;
@@ -179,6 +252,7 @@ export async function purgeDeletedPages(
   const slugs: string[] = [];
   const blocked: Array<{ slug: string; reason: string }> = [];
   const removed: Leftovers = { ...NO_LEFTOVERS };
+  let factsRetired = 0;
   for (const { slug, deleted_at: deletedAt } of expired.rows) {
     try {
       // Same predicate again, pinned to the deletion the scan saw (and so to
@@ -187,24 +261,28 @@ export async function purgeDeletedPages(
       const rowParams: unknown[] = [String(olderThanHours), slug, deletedAt];
       const rowFilter = andSourceScope("source_id", sourceIds, rowParams);
       const gone = await deadlockSafeTransaction(engine, async (tx) => {
-        const r = await tx.query<{ slug: string }>(
-          `DELETE FROM pages
+        const locked = await tx.query<PurgedPage>(
+          `SELECT slug, source_id FROM pages
             WHERE slug = $2 AND deleted_at IS NOT NULL
               AND deleted_at::text = $3
               AND deleted_at < NOW() - ($1 || ' hours')::interval${rowFilter}
-            RETURNING slug`,
+            FOR UPDATE`,
           rowParams,
         );
-        return r.rows.length > 0 ? leftovers(tx, [slug], true) : null;
+        if (locked.rows.length === 0) return null;
+        const retired = await retireFacts(tx, locked.rows, purgeId);
+        await tx.query(`DELETE FROM pages WHERE slug = $1`, [slug]);
+        return { ...(await leftovers(tx, [slug], true)), facts_retired: retired };
       });
       if (gone) {
         slugs.push(slug);
         for (const [key] of LEFTOVER_TABLES) removed[key] += gone[key];
+        factsRetired += gone.facts_retired;
       }
     } catch (err) {
       if ((err as { code?: string })?.code !== FOREIGN_KEY_VIOLATION) throw err;
       blocked.push({ slug, reason: "still referenced by a row that does not cascade" });
     }
   }
-  return { count: slugs.length, slugs, blocked, ttl_hours: olderThanHours, ...removed };
+  return { count: slugs.length, slugs, blocked, ttl_hours: olderThanHours, ...removed, facts_retired: factsRetired };
 }
