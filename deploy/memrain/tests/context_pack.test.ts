@@ -376,3 +376,62 @@ for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) descri
     expect(JSON.stringify(p)).not.toContain("contested_with");
   });
 });
+
+for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`context_pack core memory ${spec.name}`, () => {
+  let db: Awaited<ReturnType<typeof spec.open>>;
+  const LONG = "Prefers short answers. ".repeat(200);
+
+  beforeAll(async () => {
+    db = await spec.open();
+    await db.storage.engine().query("INSERT INTO sources (id, kind, path_prefix) VALUES ('other', 'other', '/other/') ON CONFLICT DO NOTHING");
+    await putPage(db.storage, { slug: "me/profile", type: "note", title: "About me", markdown_body: "Operator works on Memrain." });
+    await putPage(db.storage, { slug: "me/style", type: "note", title: "Style", markdown_body: LONG });
+    await putPage(db.storage, { slug: "me/gone", type: "note", title: "Gone", markdown_body: "GONE_BODY" });
+    await db.storage.engine().query("UPDATE pages SET deleted_at = now() WHERE slug = 'me/gone'");
+    await putPage(db.storage, { slug: "other/secret", type: "note", title: "Other", markdown_body: "OTHER_BODY", source_id: "other" });
+    await putPage(db.storage, { slug: "life/diary/2026-11-01", type: "journal", title: "Diary", markdown_body: "DIARY_BODY", allowAdHocType: true });
+    await putPage(db.storage, { slug: "projects/acme", type: "note", title: "Acme", markdown_body: "a" });
+  });
+  afterAll(async () => {
+    await db.close();
+  });
+  afterEach(() => {
+    delete process.env["MEMRAIN_CONTEXT_CORE_SLUGS"];
+    delete process.env["MEMRAIN_CONTEXT_CORE_MAX_CHARS"];
+  });
+
+  const pack = (opts: Parameters<typeof buildContextPack>[1] = {}) =>
+    buildContextPack(db.storage, { slugs: ["projects/acme"], decay: false, ...opts });
+
+  it("is off unless core slugs are configured", async () => {
+    expect(await pack()).not.toHaveProperty("core");
+  });
+
+  it("puts live core pages before the cards, capped at 2,000 characters", async () => {
+    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/profile, me/style";
+    process.env["MEMRAIN_CONTEXT_CORE_MAX_CHARS"] = "5000";
+    const p = await pack({ tokenBudget: 8000 });
+    expect(Object.keys(p).indexOf("core")).toBeLessThan(Object.keys(p).indexOf("cards"));
+    expect(p.core!.pages.map((c) => c.slug)).toEqual(["me/profile", "me/style"]);
+    expect(p.core!.pages[0]).toEqual({ slug: "me/profile", title: "About me", text: "Operator works on Memrain." });
+    expect(p.core!.pages.reduce((n, c) => n + c.text.length, 0)).toBe(2000);
+    expect(p.core!.truncated).toBe(true);
+    expect(p.cards.map((c) => c.slug)).toEqual(["projects/acme"]);
+  });
+
+  it("leaves no trace of deleted, out-of-scope, fenced or redacted core pages", async () => {
+    const plain = await pack({ sourceIds: ["default"], remote: true, visibility: ["world"] });
+    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/gone,other/secret,life/diary/2026-11-01,not/a-page";
+    expect(await pack({ sourceIds: ["default"], remote: true, visibility: ["world"] })).toEqual(plain);
+    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/profile";
+    expect(await pack({ redact: true })).not.toHaveProperty("core");
+  });
+
+  it("stays inside a tiny token budget and says it was cut", async () => {
+    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/style";
+    const p = await pack({ tokenBudget: 200 });
+    expect(p.core!.truncated).toBe(true);
+    expect(estTokens(JSON.stringify({ core: p.core, cards: p.cards, facts: p.facts }))).toBeLessThanOrEqual(200);
+    expect(p.budget.used_tokens).toBeLessThanOrEqual(200);
+  });
+});

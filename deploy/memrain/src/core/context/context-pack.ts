@@ -24,7 +24,8 @@ import { contextFactText, factProvenance } from "./fact-provenance.ts";
 import { gatherDiagnostics, type GatherFailure, type OnGatherFailure } from "../gather-degraded.ts";
 import type { Storage } from "../storage.ts";
 import { entityRecall, listFacts, type FactRow } from "../facts.ts";
-import { validateSlug } from "../pages.ts";
+import { getPageExact, validateSlug, type PageRow } from "../pages.ts";
+import { readQuarantineVerdicts } from "../quarantine.ts";
 import { estTokens } from "../search/token-budget.ts";
 import { extractCandidatesFromWindow } from "./entity-salience.ts";
 import { resolveEntitiesToPointers } from "./reflex.ts";
@@ -92,8 +93,23 @@ export interface ContextPackBudget {
   card_newer_dropped: number;
 }
 
+/** An operator-pinned page whose text rides at the top of every pack. */
+export interface PackCorePage extends ExternalTrust {
+  slug: string;
+  title: string | null;
+  text: string;
+}
+
+export interface PackCore {
+  pages: PackCorePage[];
+  /** Some page text was cut, by the character cap or the token budget. */
+  truncated: boolean;
+}
+
 export interface ContextPack {
   gather_degraded?: GatherFailure[];
+  /** Present only when core pages are configured and the caller may see one. */
+  core?: PackCore;
   cards: PackCard[];
   facts: PackFact[];
   budget: ContextPackBudget;
@@ -278,6 +294,102 @@ async function buildCard(
   };
 }
 
+/** Hard ceiling on core page text, whatever MEMRAIN_CONTEXT_CORE_MAX_CHARS says. */
+export const CONTEXT_CORE_MAX_CHARS = 2000;
+
+/**
+ * Core memory is off until MEMRAIN_CONTEXT_CORE_SLUGS names pages
+ * (comma-separated, in order). MEMRAIN_CONTEXT_CORE_MAX_CHARS lowers the
+ * text cap below the 2,000-character ceiling.
+ */
+export function coreMemoryConfig(env: NodeJS.ProcessEnv = process.env): { slugs: string[]; maxChars: number } {
+  const slugs = [...new Set((env.MEMRAIN_CONTEXT_CORE_SLUGS ?? "").split(",").map((s) => s.trim()).filter(validSlug))];
+  const raw = env.MEMRAIN_CONTEXT_CORE_MAX_CHARS?.trim();
+  const n = raw ? Number(raw) : Number.NaN;
+  const maxChars = Number.isFinite(n) && n >= 0 ? Math.min(Math.floor(n), CONTEXT_CORE_MAX_CHARS) : CONTEXT_CORE_MAX_CHARS;
+  return { slugs, maxChars };
+}
+
+interface CoreDraft {
+  slug: string;
+  title: string | null;
+  text: string;
+  external: boolean;
+}
+
+/**
+ * Live core pages the caller may read, cut to the character cap. A page that
+ * is deleted, outside the grant, fenced or quarantined is skipped without a
+ * trace, and so is the whole block on the redacted (text-free) shape.
+ */
+async function readCore(
+  storage: Storage,
+  opts: ContextPackOpts,
+  isFenced: ((slug: string) => Promise<boolean>) | null,
+): Promise<{ drafts: CoreDraft[]; truncated: boolean } | null> {
+  if (opts.redact) return null;
+  const { slugs, maxChars } = coreMemoryConfig();
+  if (slugs.length === 0) return null;
+  const rows: PageRow[] = [];
+  for (const slug of slugs) {
+    if (isFenced && (await isFenced(slug))) continue;
+    const page = await getPageExact(storage, slug, opts.sourceIds);
+    if (page) rows.push(page);
+  }
+  const verdicts = await readQuarantineVerdicts(storage.engine(), rows);
+  const live = rows.filter((_, i) => !verdicts[i]);
+  if (live.length === 0) return null;
+  const external = await readExternalTrust(storage.engine(), { pages: live.map((p) => p.slug) }, opts.sourceIds);
+  let left = maxChars;
+  let truncated = false;
+  const drafts: CoreDraft[] = [];
+  for (const p of live) {
+    const body = (p.markdown_body ?? "").trim();
+    const text = body.slice(0, left);
+    if (text.length < body.length) truncated = true;
+    if (body.length > 0 && text.length === 0) continue;
+    left -= text.length;
+    drafts.push({ slug: p.slug, title: p.title ?? null, text, external: external.pages.has(p.slug) });
+  }
+  return { drafts, truncated };
+}
+
+function renderCore(drafts: readonly CoreDraft[], truncated: boolean): PackCore {
+  return {
+    pages: drafts.map((d) => d.external
+      ? { slug: d.slug, title: d.title ? frameExternal(d.title) : d.title, text: frameExternal(d.text), trust: "external" as const }
+      : { slug: d.slug, title: d.title, text: d.text }),
+    truncated,
+  };
+}
+
+const coreCost = (core: PackCore): number => estTokens(`"core":${JSON.stringify(core)},`);
+
+/** Fit the core block into `room` tokens, cutting the last page that fits only in part. */
+function fitCore(drafts: readonly CoreDraft[], truncated: boolean, room: number): { core: PackCore; cost: number } | null {
+  const full = renderCore(drafts, truncated);
+  if (coreCost(full) <= room) return { core: full, cost: coreCost(full) };
+  if (coreCost(renderCore([], true)) > room) return null;
+  const kept: CoreDraft[] = [];
+  for (const d of drafts) {
+    if (coreCost(renderCore([...kept, d], true)) <= room) {
+      kept.push(d);
+      continue;
+    }
+    let lo = 0;
+    let hi = d.text.length - 1;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (coreCost(renderCore([...kept, { ...d, text: d.text.slice(0, mid) }], true)) <= room) lo = mid;
+      else hi = mid - 1;
+    }
+    if (lo > 0) kept.push({ ...d, text: d.text.slice(0, lo) });
+    break;
+  }
+  const core = renderCore(kept, true);
+  return { core, cost: coreCost(core) };
+}
+
 interface FittedCard {
   card: PackCard;
   cost: number;
@@ -397,6 +509,10 @@ export async function buildContextPack(
   // Charged on what the caller is allowed to see, so the dropped counts say
   // nothing about rows behind the grant or the visibility floor.
   let used = PACK_OVERHEAD;
+  // Pinned core pages are charged first: the operator chose them for every turn.
+  const coreRead = await readCore(storage, opts, isFenced);
+  const core = coreRead && fitCore(coreRead.drafts, coreRead.truncated, tokenBudget - used);
+  if (core) used += core.cost;
   const cards: PackCard[] = [];
   let cardFactsDropped = 0;
   let cardEventsDropped = 0;
@@ -422,6 +538,7 @@ export async function buildContextPack(
 
   return {
     ...diagnostics.fields(),
+    ...(core ? { core: core.core } : {}),
     cards,
     facts,
     budget: {
