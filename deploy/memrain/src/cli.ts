@@ -20,6 +20,7 @@ import { runIntegrity } from "./commands/integrity.ts";
 import { runEval } from "./commands/eval.ts";
 import { runEvalChronicle } from "./commands/eval-chronicle.ts";
 import { runEvalCode } from "./commands/eval-code.ts";
+import { runEvalLongMemEval } from "./commands/eval-longmemeval.ts";
 import { runEvalProbe } from "./commands/eval-probe.ts";
 import { runBenchCli, isBenchFamilySelector } from "./commands/bench.ts";
 import { runBacklinks } from "./commands/backlinks.ts";
@@ -163,6 +164,10 @@ function printUsage(): void {
   console.log("                               regression gate vs a stored baseline (exit 1 on drop)");
   console.log("  eval chronicle [--json]      deterministic Life Chronicle feature eval (own DB, no LLM)");
   console.log("  eval code [--json]           fixed code-retrieval eval: hit@5 and top-1 stability over this repo's own code");
+  console.log("  eval longmemeval --dry-run [--max-usd N] [--limit N]");
+  console.log("  eval longmemeval --out DIR --max-usd N [--limit N] [--answer-model ID] [--judge-model ID] [--dir CACHE]");
+  console.log("  eval longmemeval --out DIR --settle RESERVATION --usd N");
+  console.log("                               LongMemEval-S answered from retrieval, Bedrock-Claude-judged; budgeted, resumable");
   console.log("  eval-probe [--limit N]       replay eval set, append a row to eval_snapshots (nightly probe)");
   console.log("  bench [--family push|continuity|fidelity|all] [--corpus DIR] [--json]");
   console.log("                               agent-facing behaviour bench (push / continuity / write-back");
@@ -508,6 +513,32 @@ async function main(argv: readonly string[]): Promise<number> {
       }
       if (positional.length === 1 && positional[0] === "code") {
         return await runEvalCode(flags.has("--json") ? { json: true } : {});
+      }
+      if (positional.length === 1 && positional[0] === "longmemeval") {
+        const lmeOpts: Parameters<typeof runEvalLongMemEval>[0] = {};
+        const lmeOut = values.get("--out");
+        if (lmeOut) lmeOpts.out = lmeOut;
+        const lmeMaxUsd = values.get("--max-usd");
+        if (lmeMaxUsd !== undefined) lmeOpts.maxUsd = Number(lmeMaxUsd);
+        if (flags.has("--dry-run")) lmeOpts.dryRun = true;
+        const lmeLimit = values.get("--limit");
+        if (lmeLimit !== undefined) lmeOpts.limit = Number(lmeLimit);
+        const settle = values.get("--settle");
+        if (settle) lmeOpts.settle = settle;
+        const usd = values.get("--usd");
+        if (usd !== undefined) lmeOpts.usd = Number(usd);
+        const cacheDir = values.get("--dir");
+        if (cacheDir) lmeOpts.cacheDir = cacheDir;
+        const answerModel = values.get("--answer-model");
+        if (answerModel) lmeOpts.answerModel = answerModel;
+        const judgeModel = values.get("--judge-model");
+        if (judgeModel) lmeOpts.judgeModel = judgeModel;
+        return await runEvalLongMemEval(lmeOpts);
+      }
+      if (flags.has("--dry-run")) {
+        // Only the LongMemEval run has a free preview; any other eval would
+        // ignore the flag and spend.
+        throw new Error("memrain eval: --dry-run is supported only by 'eval longmemeval'");
       }
       // Sub-subcommands: run-all / compare / gate (aggregate instruments).
       if (positional[0] === "run-all") {
