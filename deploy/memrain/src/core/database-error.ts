@@ -8,8 +8,7 @@ class DatabaseOperationError extends OperationError {
   }
 
   override toEnvelope(isPublic: boolean) {
-    return { ...super.toEnvelope(isPublic), retryable: true,
-      ...(this.sqlstate ? { sqlstate: this.sqlstate } : {}) };
+    return { ...super.toEnvelope(isPublic), ...(this.sqlstate ? { sqlstate: this.sqlstate } : {}) };
   }
 }
 

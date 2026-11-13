@@ -94,7 +94,7 @@ import { runEvalQrelsBuild } from "./commands/eval-qrels.ts";
 import { runSalience } from "./commands/salience.ts";
 import { runWatch } from "./commands/watch.ts";
 import { runCycle, parsePhasesArg } from "./commands/cycle.ts";
-import { resolveExitCode } from "./cli-exit.ts";
+import { exitCodeForError, resolveExitCode } from "./cli-exit.ts";
 import { parseArgs, validateFlags } from "./cli-args.ts";
 import { aliasDeprecationLine } from "./cli-alias.ts";
 import type { EntityType } from "./core/entities.ts";
@@ -1853,6 +1853,6 @@ main(process.argv.slice(2)).then(
   (code) => process.exit(resolveExitCode(code, process.exitCode ?? undefined)),
   (err) => {
     console.error(`[memrain] error:`, err instanceof Error ? err.message : err);
-    process.exit(1);
+    process.exit(exitCodeForError(err));
   },
 );

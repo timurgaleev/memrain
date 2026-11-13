@@ -119,7 +119,14 @@ The server checks the log the same way `transcripts ingest` does, against the
 token's own write source and slug-prefix grant, and scans it for credentials
 before anything is queued. It answers `202` with a job id. The
 `transcripts_ingest` job then writes the pages. Pushing the same file twice
-reuses the same job. No answer carries the log's
+reuses the same job. The job records which token queued it (a reference,
+never the token) and, just before writing, checks that token again as it
+stands then: if it was revoked, its client deleted, or its grant no longer
+covers the `write` scope, the source or the session's slug prefix, the job is
+refused for good and the reason is kept on the job. A token that only reached
+its expiry while the job waited still counts, as long as its session was not
+revoked. Jobs queued before this check existed name no token and are refused
+the same way; push the log again. No answer carries the log's
 text; refusals give an error code and counts:
 
 | Status | `error` | Meaning |

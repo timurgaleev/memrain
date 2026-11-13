@@ -27,12 +27,14 @@ afterEach(() => {
   console.error = originalError;
 });
 
+const INCIDENT_REPLY = new RegExp(`^${PUBLIC_ERROR_MESSAGE} \\(incident ([0-9a-f]{16})\\)$`);
+
 describe("publicSafeErrorMessage", () => {
   const leaky = new Error('relation "pages" does not exist at db.internal:5432');
 
   it("returns a generic message on public ingress and never the detail", () => {
     const out = publicSafeErrorMessage(leaky, true);
-    expect(out).toBe(PUBLIC_ERROR_MESSAGE);
+    expect(out).toMatch(INCIDENT_REPLY);
     expect(out).not.toContain("pages");
     expect(out).not.toContain("db.internal");
   });
@@ -44,6 +46,17 @@ describe("publicSafeErrorMessage", () => {
     expect(logged).toContain('relation "pages" does not exist');
   });
 
+  it("gives each suppressed error an incident id the operator log carries too", () => {
+    const first = publicSafeErrorMessage(leaky, true);
+    const second = publicSafeErrorMessage(leaky, true);
+    const id1 = INCIDENT_REPLY.exec(first)?.[1];
+    const id2 = INCIDENT_REPLY.exec(second)?.[1];
+    expect(id1).toBeDefined();
+    expect(id1).not.toBe(id2);
+    expect(errSpy.mock.calls[0]!.join(" ")).toContain(`incident ${id1}`);
+    expect(errSpy.mock.calls[1]!.join(" ")).toContain(`incident ${id2}`);
+  });
+
   it("returns the full detail on the internal path and does not log", () => {
     const out = publicSafeErrorMessage(leaky, false);
     expect(out).toBe(leaky.message);
@@ -51,9 +64,9 @@ describe("publicSafeErrorMessage", () => {
   });
 
   it("coerces non-Error throwables (string) without leaking them publicly", () => {
-    expect(publicSafeErrorMessage("ECONNREFUSED 10.0.0.5:5432", true)).toBe(
-      PUBLIC_ERROR_MESSAGE,
-    );
+    const out = publicSafeErrorMessage("ECONNREFUSED 10.0.0.5:5432", true);
+    expect(out).toMatch(INCIDENT_REPLY);
+    expect(out).not.toContain("10.0.0.5");
     expect(publicSafeErrorMessage("plain string", false)).toBe("plain string");
   });
 

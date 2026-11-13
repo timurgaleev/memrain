@@ -10,6 +10,7 @@
  * unless the operator opts in with `MEMRAIN_PUBLIC_READ_BODIES=1`.
  * Allowlists are fail-safe: a new body-ish field is stripped by default.
  */
+import { randomBytes } from "node:crypto";
 import { redactConnectionInfo } from "./url-redact.ts";
 
 /** True when the operator opted into returning full bodies publicly. */
@@ -62,16 +63,20 @@ function logSafeDetail(detail: string): string {
  * host, or stack internals — none of which a public-bearer (or the
  * unauthenticated `/health`) caller should see. On public ingress we log
  * the real detail server-side for the operator and return a generic
- * string; the internal path keeps the detail so debugging is unaffected.
+ * string carrying an incident id that the log line also carries; the
+ * internal path keeps the detail so debugging is unaffected.
  */
 export function publicSafeErrorMessage(e: unknown, isPublic: boolean): string {
   const detail = e instanceof Error ? e.message : String(e);
   if (isPublic) {
+    // A random id, not a counter or a hash of the detail: it must tell the
+    // caller nothing, yet let the operator find this line from their report.
+    const incident = randomBytes(8).toString("hex");
     console.error(
-      "[memrain] suppressed error on public ingress:",
+      `[memrain] suppressed error on public ingress (incident ${incident}):`,
       logSafeDetail(detail),
     );
-    return PUBLIC_ERROR_MESSAGE;
+    return `${PUBLIC_ERROR_MESSAGE} (incident ${incident})`;
   }
   return detail;
 }

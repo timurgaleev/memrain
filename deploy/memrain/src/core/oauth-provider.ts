@@ -22,6 +22,7 @@
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
+import type { PrincipalRef } from "./auth-info.ts";
 import { validateSlug as validatePageSlug } from "./pages.ts";
 import {
   hasScope,
@@ -409,7 +410,12 @@ export interface AuthInfo {
   budgetUsdPerDay: number | null;
   /** Who the session spends as, when not `clientId`: an enrollment id. */
   spendId?: string;
+  /** The credential, by a non-bearer reference a queued job can re-check. */
+  principal?: PrincipalRef;
 }
+
+/** A live grant read back from a principal reference: no bearer, no expiry. */
+export type PrincipalGrant = Omit<AuthInfo, "token" | "expiresAt" | "resource" | "principal">;
 
 export interface TokenRevocationRequest {
   token: string;
@@ -978,6 +984,160 @@ async function revokeGrantIn(
     wasRevoked: enr.revoked_at != null,
     used: enr.used_at != null,
     tokens: t.rows.length,
+  };
+}
+
+/**
+ * The SELECT that resolves an oauth_tokens row `t` to its grant. Tenancy is
+ * resolved TOKEN-FIRST: a grant-bound token carries the source the operator
+ * approved for that one person, so a single shared connector can serve several
+ * people in separate tenants. `grant_bound` decides which side wins: an unbound
+ * row (every token issued before grants, and every client_credentials token)
+ * still takes the client row.
+ */
+function oauthGrantSelect(): string {
+  return `SELECT t.client_id, t.scopes, t.expires_at, t.resource, t.family_id, t.revoked_at, c.client_name,
+              CASE WHEN t.grant_bound THEN t.source_id      ELSE c.source_id      END AS source_id,
+              CASE WHEN t.grant_bound THEN t.federated_read ELSE c.federated_read END AS federated_read,
+              t.grant_bound,
+              c.bound_slug_prefixes,
+              c.budget_usd_per_day,
+              CASE WHEN t.grant_bound THEN t.grant_id END AS grant_id,
+              COALESCE(e.spend_id, e.id) AS grant_spend_id,
+              e.budget_usd_per_day AS grant_budget_usd_per_day,
+              e.revoked_at AS grant_revoked_at,
+              ${legacyGrantRevoked("t")} AS legacy_grant_revoked,
+              c.deleted_at AS client_deleted_at,
+              c.scope AS current_scope
+       FROM oauth_tokens t
+       LEFT JOIN oauth_clients c ON c.client_id = t.client_id
+       LEFT JOIN oauth_enrollments e ON t.grant_bound AND e.id = t.grant_id`;
+}
+
+/**
+ * The grant an oauth_tokens row carries, or InvalidTokenError when its client,
+ * its enrollment or its scopes no longer allow it. `expiryNow` null skips the
+ * expiry check (a queued job re-checking a session, not a live bearer).
+ */
+function oauthGrantFromRow(
+  row: Record<string, unknown>,
+  expiryNow: number | null,
+): PrincipalGrant & { expiresAt: number | undefined; resource: URL | undefined } {
+  // Revoking a client soft-deletes its row; a token it issued must stop
+  // working even if the token row itself was never touched.
+  if (row.client_deleted_at != null) {
+    throw new InvalidTokenError("Client revoked");
+  }
+  // Same for one person cut off a shared connector: her tokens are deleted
+  // at revoke, and this stops any that were minted while it ran.
+  if (
+    row.grant_bound === true &&
+    (row.grant_revoked_at != null || row.legacy_grant_revoked === true)
+  ) {
+    throw new InvalidTokenError("Grant revoked");
+  }
+  // NULL expires_at is treated as expired (fail-closed).
+  const expiresAt = coerceTimestamp(row.expires_at);
+  if (expiryNow !== null && (expiresAt === undefined || expiresAt < expiryNow)) {
+    throw new InvalidTokenError("Token expired");
+  }
+  // Distinguish empty array (explicit no-federated-read) from undefined.
+  const federatedRaw = row.federated_read;
+  const allowedSources = Array.isArray(federatedRaw)
+    ? (federatedRaw as string[])
+    : undefined;
+  const boundRaw = row.bound_slug_prefixes;
+  // Fail CLOSED on a corrupt fence column: an unparseable value must never
+  // silently widen a bound client to unbounded.
+  if (boundRaw != null && !Array.isArray(boundRaw)) {
+    throw new InvalidTokenError("Corrupt bound_slug_prefixes on client row");
+  }
+  const boundSlugPrefixes =
+    Array.isArray(boundRaw) && boundRaw.length > 0
+      ? (boundRaw as string[])
+      : undefined;
+  // The token holds what it was issued AND its client still holds, so a
+  // rescope that narrows the client binds tokens already handed out.
+  const scopes = intersectGrantedScopes(
+    (row.scopes as string[]) || [],
+    parseScopeString(typeof row.current_scope === "string" ? row.current_scope : null),
+  );
+  if (scopes.length === 0) {
+    throw new InvalidTokenError("Token holds no scope its client is still granted");
+  }
+  return {
+    clientId: row.client_id as string,
+    clientName: (row.client_name as string | null) ?? undefined,
+    scopes,
+    expiresAt,
+    resource: row.resource ? new URL(row.resource as string) : undefined,
+    sourceId: (row.source_id as string | null) ?? undefined,
+    allowedSources,
+    ...(boundSlugPrefixes ? { boundSlugPrefixes } : {}),
+    // A person enrolled on a shared connector spends under their own
+    // enrollment, capped by it, else by the connector's cap on their own.
+    // A replacement enrollment spends under its predecessor's key.
+    ...(typeof row.grant_id === "string"
+      ? { spendId: typeof row.grant_spend_id === "string" ? row.grant_spend_id : row.grant_id }
+      : {}),
+    budgetUsdPerDay:
+      typeof row.grant_id === "string" && row.grant_budget_usd_per_day != null
+        ? toCapUsd(row.grant_budget_usd_per_day)
+        : toCapUsd(row.budget_usd_per_day),
+  };
+}
+
+/** The grant a legacy access_tokens (PAT) row carries. */
+function legacyGrantFromRow(row: Record<string, unknown>): PrincipalGrant {
+  const name = row.name as string;
+  // Absent on the pre-`permissions` fallback query, and NULL on rows
+  // written before the column existed — both fall through to the default.
+  const rawScopes = row.scopes;
+  let permissions: unknown = row.permissions;
+  if (typeof permissions === "string") {
+    try {
+      permissions = JSON.parse(permissions);
+    } catch {
+      permissions = undefined;
+    }
+  }
+  const sourceGrant =
+    permissions && typeof permissions === "object"
+      ? (permissions as Record<string, unknown>).source_id
+      : undefined;
+  const { sourceId, allowedSources } = parseLegacyTokenScope(sourceGrant);
+  // The mig-072 takes-holder knob: enforce what the token actually stores.
+  // Absent/malformed → no holder scope (holder reads stay unscoped).
+  const holdersRaw =
+    permissions && typeof permissions === "object"
+      ? (permissions as Record<string, unknown>).takes_holders
+      : undefined;
+  const takesHolders = Array.isArray(holdersRaw)
+    ? holdersRaw.filter((s): s is string => typeof s === "string" && s.length > 0)
+    : undefined;
+  // Enforce what the row actually stores. This used to hand every
+  // access_tokens row ["read","write","admin"] regardless of its `scopes`
+  // column — so a token both mint paths create as ["read","write"]
+  // (admin-api.ts, commands/auth.ts) satisfied the admin gate in
+  // mcp/dispatch.ts and could reach `purge_deleted_pages`, which hard
+  // deletes. A row with no scopes recorded falls back to the same
+  // ["read","write"] those mint paths write — never admin.
+  // A row that RECORDS an empty array is a token deliberately stripped of
+  // every scope — treat it as such. Only a row with NO scopes recorded at
+  // all (NULL / malformed, i.e. written before the column existed) takes
+  // the legacy fallback. Folding the two together turned "revoke this
+  // token's access" into "give it read+write".
+  const storedScopes = Array.isArray(rawScopes)
+    ? rawScopes.filter((x): x is string => typeof x === "string" && x.length > 0)
+    : null;
+  return {
+    clientId: name,
+    clientName: name,
+    scopes: storedScopes ?? ["read", "write"],
+    sourceId,
+    allowedSources,
+    ...(takesHolders && takesHolders.length > 0 ? { takesHolders } : {}),
+    budgetUsdPerDay: toCapUsd(row.budget_usd_per_day),
   };
 }
 
@@ -2685,27 +2845,7 @@ export class OAuthProvider {
     // OAuth tokens first. JOIN oauth_clients so the source_id (write scope)
     // and federated_read (read set) arrive on the same query — no N+1 lookup.
     const oauthRows = await this.rows(
-      // Tenancy is resolved TOKEN-FIRST. A grant-bound token carries the source
-      // the operator approved for that one person, so a single shared connector
-      // can serve several people in separate tenants. `grant_bound` decides
-      // which side wins: an unbound row (every token issued before this, and
-      // every client_credentials token) still takes the client row.
-      `SELECT t.client_id, t.scopes, t.expires_at, t.resource, c.client_name,
-              CASE WHEN t.grant_bound THEN t.source_id      ELSE c.source_id      END AS source_id,
-              CASE WHEN t.grant_bound THEN t.federated_read ELSE c.federated_read END AS federated_read,
-              t.grant_bound,
-              c.bound_slug_prefixes,
-              c.budget_usd_per_day,
-              CASE WHEN t.grant_bound THEN t.grant_id END AS grant_id,
-              COALESCE(e.spend_id, e.id) AS grant_spend_id,
-              e.budget_usd_per_day AS grant_budget_usd_per_day,
-              e.revoked_at AS grant_revoked_at,
-              ${legacyGrantRevoked("t")} AS legacy_grant_revoked,
-              c.deleted_at AS client_deleted_at,
-              c.scope AS current_scope
-       FROM oauth_tokens t
-       LEFT JOIN oauth_clients c ON c.client_id = t.client_id
-       LEFT JOIN oauth_enrollments e ON t.grant_bound AND e.id = t.grant_id
+      `${oauthGrantSelect()}
        WHERE t.token_hash = $1 AND t.token_type = 'access'
          AND t.revoked_at IS NULL`,
       [tokenHash],
@@ -2713,68 +2853,16 @@ export class OAuthProvider {
 
     if (oauthRows.length > 0) {
       const row = oauthRows[0] as Record<string, unknown>;
-      // Revoking a client soft-deletes its row; a token it issued must stop
-      // working even if the token row itself was never touched.
-      if (row.client_deleted_at != null) {
-        throw new InvalidTokenError("Client revoked");
-      }
-      // Same for one person cut off a shared connector: her tokens are deleted
-      // at revoke, and this stops any that were minted while it ran.
-      if (
-        row.grant_bound === true &&
-        (row.grant_revoked_at != null || row.legacy_grant_revoked === true)
-      ) {
-        throw new InvalidTokenError("Grant revoked");
-      }
-      // NULL expires_at is treated as expired (fail-closed).
-      const expiresAt = coerceTimestamp(row.expires_at);
-      if (expiresAt === undefined || expiresAt < now) {
-        throw new InvalidTokenError("Token expired");
-      }
-      // Distinguish empty array (explicit no-federated-read) from undefined.
-      const federatedRaw = row.federated_read;
-      const allowedSources = Array.isArray(federatedRaw)
-        ? (federatedRaw as string[])
-        : undefined;
-      const boundRaw = row.bound_slug_prefixes;
-      // Fail CLOSED on a corrupt fence column: an unparseable value must never
-      // silently widen a bound client to unbounded.
-      if (boundRaw != null && !Array.isArray(boundRaw)) {
-        throw new InvalidTokenError("Corrupt bound_slug_prefixes on client row");
-      }
-      const boundSlugPrefixes =
-        Array.isArray(boundRaw) && boundRaw.length > 0
-          ? (boundRaw as string[])
-          : undefined;
-      // The token holds what it was issued AND its client still holds, so a
-      // rescope that narrows the client binds tokens already handed out.
-      const scopes = intersectGrantedScopes(
-        (row.scopes as string[]) || [],
-        parseScopeString(typeof row.current_scope === "string" ? row.current_scope : null),
-      );
-      if (scopes.length === 0) {
-        throw new InvalidTokenError("Token holds no scope its client is still granted");
-      }
+      const { expiresAt, resource, ...grant } = oauthGrantFromRow(row, now);
+      const clientId = grant.clientId;
       return {
         token,
-        clientId: row.client_id as string,
-        clientName: (row.client_name as string | null) ?? undefined,
-        scopes,
-        expiresAt,
-        resource: row.resource ? new URL(row.resource as string) : undefined,
-        sourceId: (row.source_id as string | null) ?? undefined,
-        allowedSources,
-        ...(boundSlugPrefixes ? { boundSlugPrefixes } : {}),
-        // A person enrolled on a shared connector spends under their own
-        // enrollment, capped by it, else by the connector's cap on their own.
-        // A replacement enrollment spends under its predecessor's key.
-        ...(typeof row.grant_id === "string"
-          ? { spendId: typeof row.grant_spend_id === "string" ? row.grant_spend_id : row.grant_id }
-          : {}),
-        budgetUsdPerDay:
-          typeof row.grant_id === "string" && row.grant_budget_usd_per_day != null
-            ? toCapUsd(row.grant_budget_usd_per_day)
-            : toCapUsd(row.budget_usd_per_day),
+        ...grant,
+        expiresAt: expiresAt!,
+        resource,
+        principal: typeof row.family_id === "string" && row.family_id !== ""
+          ? { kind: "oauth_family", id: row.family_id, client_id: clientId }
+          : { kind: "oauth_token", id: tokenHash, client_id: clientId },
       };
     }
 
@@ -2784,14 +2872,14 @@ export class OAuthProvider {
     let legacyRows: Record<string, unknown>[];
     try {
       legacyRows = await this.rows(
-        `SELECT name, permissions, scopes, budget_usd_per_day FROM access_tokens
+        `SELECT id, name, permissions, scopes, budget_usd_per_day FROM access_tokens
          WHERE token_hash = $1 AND revoked_at IS NULL`,
         [tokenHash],
       );
     } catch (err) {
       if (isUndefinedColumnError(err, "permissions")) {
         legacyRows = await this.rows(
-          `SELECT name FROM access_tokens
+          `SELECT id, name FROM access_tokens
            WHERE token_hash = $1 AND revoked_at IS NULL`,
           [tokenHash],
         );
@@ -2809,62 +2897,55 @@ export class OAuthProvider {
           WHERE token_hash = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '60 seconds')`,
         [tokenHash],
       );
-      const name = row.name as string;
-      // Absent on the pre-`permissions` fallback query below, and NULL on rows
-      // written before the column existed — both fall through to the default.
-      const rawScopes = row.scopes;
-      let permissions: unknown = row.permissions;
-      if (typeof permissions === "string") {
-        try {
-          permissions = JSON.parse(permissions);
-        } catch {
-          permissions = undefined;
-        }
-      }
-      const sourceGrant =
-        permissions && typeof permissions === "object"
-          ? (permissions as Record<string, unknown>).source_id
-          : undefined;
-      const { sourceId, allowedSources } = parseLegacyTokenScope(sourceGrant);
-      // The mig-072 takes-holder knob: enforce what the token actually stores.
-      // Absent/malformed → no holder scope (holder reads stay unscoped).
-      const holdersRaw =
-        permissions && typeof permissions === "object"
-          ? (permissions as Record<string, unknown>).takes_holders
-          : undefined;
-      const takesHolders = Array.isArray(holdersRaw)
-        ? holdersRaw.filter((s): s is string => typeof s === "string" && s.length > 0)
-        : undefined;
-      // Enforce what the row actually stores. This used to hand every
-      // access_tokens row ["read","write","admin"] regardless of its `scopes`
-      // column — so a token both mint paths create as ["read","write"]
-      // (admin-api.ts, commands/auth.ts) satisfied the admin gate in
-      // mcp/dispatch.ts and could reach `purge_deleted_pages`, which hard
-      // deletes. A row with no scopes recorded falls back to the same
-      // ["read","write"] those mint paths write — never admin.
-      // A row that RECORDS an empty array is a token deliberately stripped of
-      // every scope — treat it as such. Only a row with NO scopes recorded at
-      // all (NULL / malformed, i.e. written before the column existed) takes
-      // the legacy fallback. Folding the two together turned "revoke this
-      // token's access" into "give it read+write".
-      const storedScopes = Array.isArray(rawScopes)
-        ? rawScopes.filter((x): x is string => typeof x === "string" && x.length > 0)
-        : null;
       return {
         token,
-        clientId: name,
-        clientName: name,
-        scopes: storedScopes ?? ["read", "write"],
+        ...legacyGrantFromRow(row),
         // Legacy tokens never expire — set a year out so the number check passes.
         expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 3600,
-        sourceId,
-        allowedSources,
-        ...(takesHolders && takesHolders.length > 0 ? { takesHolders } : {}),
-        budgetUsdPerDay: toCapUsd(row.budget_usd_per_day),
+        principal: { kind: "pat", id: String(row.id) },
       };
     }
 
     throw new InvalidTokenError("Invalid token");
+  }
+
+  /**
+   * Re-read the live grant behind a principal reference, for a job queued
+   * under it. Expiry is not checked: an access token reaching its TTL while a
+   * capture waits in the queue is not a revocation. Everything else the
+   * verifier refuses is refused here too, and so is any revoked token of the
+   * session: the holder or the operator killed part of it. Every live token
+   * of a session must agree on the tenant, and the job keeps only the scopes
+   * all of them hold, so a narrowing on any of them binds it.
+   */
+  async resolvePrincipal(ref: PrincipalRef): Promise<PrincipalGrant> {
+    if (ref.kind === "pat") {
+      const rows = await this.rows(
+        `SELECT id, name, permissions, scopes, budget_usd_per_day, revoked_at FROM access_tokens WHERE id = $1`,
+        [ref.id],
+      );
+      const row = rows[0];
+      if (!row) throw new InvalidTokenError("Credential revoked or no longer exists");
+      if (row.revoked_at != null) throw new InvalidTokenError("Credential revoked");
+      return legacyGrantFromRow(row);
+    }
+    const match = ref.kind === "oauth_family" ? "t.family_id = $1" : "t.token_hash = $1 AND t.family_id IS NULL";
+    const rows = await this.rows(`${oauthGrantSelect()} WHERE ${match} AND t.client_id = $2`, [ref.id, ref.client_id]);
+    if (rows.length === 0) throw new InvalidTokenError("Credential revoked or no longer exists");
+    if (rows.some((r) => r.revoked_at != null)) throw new InvalidTokenError("Credential revoked");
+    const grants = rows.map((r) => {
+      const { expiresAt: _expiresAt, resource: _resource, ...grant } = oauthGrantFromRow(r, null);
+      return grant;
+    });
+    const tenant = (g: PrincipalGrant) =>
+      JSON.stringify([g.sourceId ?? null, g.allowedSources ?? null, g.boundSlugPrefixes ?? null, g.spendId ?? null]);
+    const first = grants[0]!;
+    if (grants.some((g) => tenant(g) !== tenant(first))) {
+      throw new InvalidTokenError("Credential tokens disagree on their grant");
+    }
+    const scopes = first.scopes.filter((s) => grants.every((g) => hasScope(g.scopes, s)));
+    if (scopes.length === 0) throw new InvalidTokenError("Token holds no scope its client is still granted");
+    return { ...first, scopes };
   }
 
   // -------------------------------------------------------------------------
