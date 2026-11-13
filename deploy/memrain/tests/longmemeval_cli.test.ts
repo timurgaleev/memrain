@@ -101,9 +101,11 @@ describe("the eval command line", () => {
   }
 
   it("refuses --dry-run on an eval that would ignore it and spend", () => {
-    const r = cli("eval", "--dry-run");
-    expect(r.code).not.toBe(0);
-    expect(r.err).toContain("--dry-run is supported only by 'eval longmemeval'");
+    for (const argv of [["eval", "--dry-run"], ["eval", "code", "--dry-run"], ["eval", "chronicle", "--dry-run"]]) {
+      const r = cli(...argv);
+      expect(r.code).not.toBe(0);
+      expect(`${argv.join(" ")}: ${r.err}`).toContain("--dry-run is supported only by 'eval longmemeval'");
+    }
   });
 
   it("refuses a paid LongMemEval run without --out as a usage error", () => {

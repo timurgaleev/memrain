@@ -506,6 +506,11 @@ async function main(argv: readonly string[]): Promise<number> {
       return 0;
     }
     case "eval": {
+      if (flags.has("--dry-run") && positional[0] !== "longmemeval") {
+        // Only the LongMemEval run has a free preview; any other eval would
+        // ignore the flag and spend.
+        throw new Error("memrain eval: --dry-run is supported only by 'eval longmemeval'");
+      }
       // `eval chronicle` brings its own in-memory DB — run it BEFORE any engine
       // connect (it needs no config and no gateway).
       if (positional[0] === "chronicle") {
@@ -534,11 +539,6 @@ async function main(argv: readonly string[]): Promise<number> {
         const judgeModel = values.get("--judge-model");
         if (judgeModel) lmeOpts.judgeModel = judgeModel;
         return await runEvalLongMemEval(lmeOpts);
-      }
-      if (flags.has("--dry-run")) {
-        // Only the LongMemEval run has a free preview; any other eval would
-        // ignore the flag and spend.
-        throw new Error("memrain eval: --dry-run is supported only by 'eval longmemeval'");
       }
       // Sub-subcommands: run-all / compare / gate (aggregate instruments).
       if (positional[0] === "run-all") {
