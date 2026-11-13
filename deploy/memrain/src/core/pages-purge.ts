@@ -6,7 +6,7 @@
  * delete is reversible (page_restore). This module is the reaper that finally
  * frees a row once it has aged past `older_than_hours`, cascading to
  * page_versions / page_aliases / links via the FK ON DELETE CASCADE declared in
- * migrations 015 / 016 / 034. `raw_data`, `tags` and `slug_aliases` have no
+ * migrations 015 / 016 / 034. `raw_data`, `tags`, `slug_aliases` and `context_volunteer_events` have no
  * foreign key to pages, so their rows are deleted by slug in the same
  * transaction as the page — otherwise a later page on the same slug would
  * inherit them. Only redirects pointing AT a purged page go; a redirect FROM a
@@ -35,10 +35,11 @@ export interface PurgeDeletedPagesResult {
   blocked: Array<{ slug: string; reason: string }>;
   /** The age cutoff in hours this run applied (the default or the caller's). */
   ttl_hours: number;
-  /** raw_data / tags / slug_aliases rows removed with the pages (on a dry run: that would be). */
+  /** raw_data / tags / slug_aliases / volunteer-event rows removed with the pages (on a dry run: that would be). */
   raw_data_rows: number;
   tags_rows: number;
   slug_aliases_rows: number;
+  volunteer_event_rows: number;
   /** Set on a dry run: nothing was deleted, `planned` is what a real run would reap now. */
   dry_run?: true;
   planned?: string[];
@@ -67,16 +68,17 @@ export function purgePlanHash(entries: ReadonlyArray<{ slug: string; deleted_at:
 
 const FOREIGN_KEY_VIOLATION = "23503";
 
-type Leftovers = Pick<PurgeDeletedPagesResult, "raw_data_rows" | "tags_rows" | "slug_aliases_rows">;
+type Leftovers = Pick<PurgeDeletedPagesResult, "raw_data_rows" | "tags_rows" | "slug_aliases_rows" | "volunteer_event_rows">;
 
 /** Tables that name a page by slug with no foreign key to pages: [result key, table, slug column]. */
 const LEFTOVER_TABLES: ReadonlyArray<[keyof Leftovers, string, string]> = [
   ["raw_data_rows", "raw_data", "slug"],
   ["tags_rows", "tags", "slug"],
   ["slug_aliases_rows", "slug_aliases", "canonical_slug"],
+  ["volunteer_event_rows", "context_volunteer_events", "slug"],
 ];
 
-const NO_LEFTOVERS: Leftovers = { raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0 };
+const NO_LEFTOVERS: Leftovers = { raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0, volunteer_event_rows: 0 };
 
 /**
  * Count (or, with `remove`, delete) the rows that would outlive the given

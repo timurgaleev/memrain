@@ -60,6 +60,17 @@ describe("purge leftovers (PGLite)", () => {
     expect(await leftovers(storage, "people/a")).toEqual({ raw: 0, tags: 0 });
   });
 
+  it("a purged page takes the volunteer events that name it, and only those", async () => {
+    await seedPurgeable(storage, "people/a");
+    await storage.engine().query(`INSERT INTO context_volunteer_events (slug, rationale) VALUES ('people/a', 'about a'), ('people/keep', 'other')`);
+    const dry = await purgeDeletedPages(storage.engine(), undefined, undefined, { dryRun: true });
+    expect(dry).toMatchObject({ volunteer_event_rows: 1 });
+    const r = await purgeDeletedPages(storage.engine());
+    expect(r).toMatchObject({ count: 1, volunteer_event_rows: 1 });
+    const left = await storage.engine().query<{ slug: string }>(`SELECT slug FROM context_volunteer_events ORDER BY slug`);
+    expect(left.rows.map((row) => row.slug)).toEqual(["people/keep"]);
+  });
+
   it("dry-run reports the leftovers it would remove without touching them", async () => {
     await seedPurgeable(storage, "people/a");
     const r = await purgeDeletedPages(storage.engine(), undefined, undefined, { dryRun: true });
