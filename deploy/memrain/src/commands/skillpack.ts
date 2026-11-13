@@ -6,8 +6,10 @@
  * Looks at deploy/skills/ in the repo (resolved relative to the
  * memrain package). Writes a tarball with an embedded manifest.json
  * naming each skill + a sha256 of its contents (so the receiver can
- * verify). Today the stack ships no skills under deploy/skills/;
- * this command stays available for future re-introduction.
+ * verify). Every file under the directory is packed: both skill
+ * layouts (flat `<slug>.md` and `<slug>/SKILL.md` with its siblings),
+ * the underscore shared-rules files and `conventions/`. `skillpack
+ * lint` checks the same directory separately.
  *
  * Implementation uses Bun's child_process spawn of `tar` so we don't
  * pull a tar npm dep; tar is in alpine + AL2023 base image, container
