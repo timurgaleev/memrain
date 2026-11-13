@@ -138,7 +138,7 @@ async function retireFacts(engine: Engine, pages: ReadonlyArray<PurgedPage>, pur
        UPDATE entity_facts f
           SET forgotten_at = NOW(), forgotten_cause = 'purge', forgotten_reason = 'page purged: ' || d.slug
          FROM doomed d
-        WHERE f.id = d.id
+        WHERE f.id = d.id AND f.forgotten_at IS NULL
        RETURNING f.id, d.slug, d.source_id
      ), receipts AS (
        INSERT INTO fact_purge_receipts (purge_id, page_slug, source_id, fact_ids)

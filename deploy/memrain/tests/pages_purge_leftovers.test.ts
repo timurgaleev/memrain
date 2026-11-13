@@ -121,6 +121,44 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
     expect(await leftovers(storage, slug)).toEqual({ raw: 0, tags: 0 });
   });
 
+  // The purge reads its doomed facts before it takes their row locks. A fact
+  // forgotten by a transaction that commits while the purge waits on the row
+  // must keep its own tombstone and stay out of the receipt.
+  it("a fact forgotten while the purge waits on its row keeps the forget", async () => {
+    const page = `notes/purge-forget-race-${run}`;
+    await putPage(storage, { slug: page, markdown_body: "gone" });
+    const id = (await addFact(storage, { entity_slug: `people/purge-forget-race-${run}`, fact: "Likes tea.", source_slug: page })).id!;
+    await deletePage(storage, page);
+    await pg.query(`UPDATE pages SET deleted_at = NOW() - interval '1000 hours' WHERE slug = $1`, [page]);
+    const forgetter = new PostgresEngine({ url: PG_URL!, max: 2 });
+    try {
+      let purge!: Promise<Awaited<ReturnType<typeof purgeDeletedPages>>>;
+      await forgetter.transaction(async (tx) => {
+        await tx.query(
+          `UPDATE entity_facts SET forgotten_at = NOW(), forgotten_cause = 'forget', forgotten_reason = 'user' WHERE id = $1`, [id]);
+        purge = purgeDeletedPages(pg, undefined, undefined, { slugs: [page] });
+        const deadline = Date.now() + 5_000;
+        let waiting = false;
+        while (!waiting && Date.now() < deadline) {
+          await Bun.sleep(25);
+          waiting = (await forgetter.query(
+            `SELECT 1 FROM pg_stat_activity
+              WHERE datname = current_database() AND pid <> pg_backend_pid()
+                AND wait_event_type = 'Lock' AND query ILIKE '%fact_purge_receipts%'`,
+          )).rows.length > 0;
+        }
+        expect(waiting).toBe(true);
+      });
+      expect(await purge).toMatchObject({ slugs: [page], facts_retired: 0 });
+      const row = await pg.query<{ forgotten_cause: string }>(`SELECT forgotten_cause FROM entity_facts WHERE id = $1`, [id]);
+      expect(row.rows).toEqual([{ forgotten_cause: "forget" }]);
+      expect((await pg.query(`SELECT 1 FROM fact_purge_receipts WHERE page_slug = $1`, [page])).rows).toEqual([]);
+    } finally {
+      await forgetter.close();
+      await pg.query(`DELETE FROM entity_facts WHERE id = $1`, [id]);
+    }
+  });
+
   // The purge's transaction holds the page row from its DELETE to its COMMIT,
   // and its leftover DELETE has already run by then. A write that checked the
   // page without locking it would insert in that window and outlive the purge.
