@@ -13,9 +13,11 @@
 #   make apply     terraform apply (depends on audit + plan)
 #   make deploy    rebuild and restart the docker-compose stack (depends on audit)
 #   make destroy   terraform destroy (NO automatic safeguards — answer carefully)
+#   make local-up  run Memrain locally in Docker without AWS (keyword-only)
+#   make local-smoke  no-AWS smoke test of the local quickstart (needs docker)
 #   make help      show this list
 
-.PHONY: help init audit scrub-audit typecheck lint-ts test test-pg plan apply deploy destroy lint
+.PHONY: help init audit scrub-audit typecheck lint-ts test test-pg local-up local-smoke plan apply deploy destroy lint
 
 # Default target — print help.
 help:
@@ -51,6 +53,12 @@ test: ## Run bash unit tests under tests/*.test.sh + the search_path and test-hy
 
 test-pg: ## Postgres-only tests + migrations (twice) against a throwaway pgvector container (needs docker)
 	@bash scripts/test-pg.sh
+
+local-up: ## Run Memrain locally in Docker without AWS: keyword-only, PGLite volume, MCP on 127.0.0.1
+	@bash scripts/local-up.sh
+
+local-smoke: ## No-AWS smoke test of the local quickstart on a network with no egress (needs docker)
+	@bash scripts/local-smoke.sh
 
 lint: ## Static check of bash scripts (shellcheck if available)
 	@if command -v shellcheck >/dev/null 2>&1; then \
