@@ -391,8 +391,10 @@ async function indexDocumentBody(
   // Embed BEFORE we touch the DB — if Bedrock fails, we don't half-write. A page
   // marked `embed_skip` is indexed + keyword-searchable but never embedded: its
   // chunks land with a null vector so the vector arm skips them. Keyword-only
-  // mode treats every page that way, fenced-code symbols included.
-  const skipEmbed = isEmbedSkipped(frontmatter) || keywordOnlyMode();
+  // mode pays for nothing either, but keeps the vectors of unchanged chunks so
+  // a brain switched into it does not lose what it already embedded.
+  const skipEmbed = isEmbedSkipped(frontmatter);
+  const keywordOnly = keywordOnlyMode();
   // Contextual-retrieval wrapper (opt-in, default-OFF): prepend a document-level
   // <context>{title}\n{synopsis}</context> header to each chunk's EMBEDDING INPUT
   // only — the canonical chunk text written below is untouched. Code docs bypass
@@ -408,7 +410,7 @@ async function indexDocumentBody(
   // superset that upgrades the synopsis, so it must build the deterministic
   // prefix too (its fallback path).
   const llmActive =
-    (contextualLlmEnabled() || opts.contextualLlmFn !== undefined) && !isCode && !skipEmbed;
+    (contextualLlmEnabled() || opts.contextualLlmFn !== undefined) && !isCode && !skipEmbed && !keywordOnly;
   const wrapActive =
     (contextualRetrievalEnabled() || llmActive) && !isCode;
   const deterministicPrefix = wrapActive
@@ -557,6 +559,10 @@ async function indexDocumentBody(
         if (stats) stats.reused++;
         continue;
       }
+      if (keywordOnly) {
+        tiers[i] = baseTier;
+        continue;
+      }
       const slotStart = performance.now();
       const release = await acquireWriteEmbedSlot();
       noteWriteTiming("slotMs", performance.now() - slotStart);
@@ -615,6 +621,8 @@ async function indexDocumentBody(
         let vec: number[] | null = priorFence.get(sym.body) ?? null;
         if (vec) {
           if (stats) stats.reused++;
+        } else if (keywordOnly) {
+          // Stored without a vector: keyword search still finds the symbol.
         } else if (deferReason !== null) {
           deferredChunks++;
         } else {

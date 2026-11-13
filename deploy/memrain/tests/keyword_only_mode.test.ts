@@ -12,6 +12,8 @@ import type { Storage } from "../src/core/storage.ts";
 import { trackedInvoke } from "../src/core/budget.ts";
 import { isLlmAvailable } from "../src/core/llm/gateway.ts";
 import { storageEngines } from "./helpers/storage-engines.ts";
+import { indexDocument } from "../src/core/indexer.ts";
+import { deterministicEmbed } from "./det-embed.ts";
 
 const AWS_KEYS = ["AWS_REGION", "AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"];
 const saved: Record<string, string | undefined> = {};
@@ -98,6 +100,45 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) {
       expect(JSON.stringify(page)).toContain("zanzibarquokka migration");
 
       expect(sendSpy).not.toHaveBeenCalled();
+    });
+  });
+}
+
+for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) {
+  describe(`keyword-only indexing ${engine.name}`, () => {
+    let storage: Storage;
+    let close: () => Promise<void>;
+    beforeEach(async () => ({ storage, close } = await engine.open()));
+    afterEach(async () => close());
+
+    const counts = async () => (await storage.engine().query<{ vectors: number; symbols: number }>(
+      `SELECT count(e.chunk_id)::int AS vectors,
+              count(*) FILTER (WHERE c.chunk_source = 'fenced_code')::int AS symbols
+         FROM chunks c LEFT JOIN embeddings e ON e.chunk_id = c.id
+        WHERE c.document_id = (SELECT id FROM documents WHERE source_path = '/notes/kept.md')`,
+    )).rows[0]!;
+
+    it("keeps the vectors an earlier embedded write stored", async () => {
+      delete process.env.MEMRAIN_KEYWORD_ONLY;
+      try {
+        await indexDocument(storage, { sourcePath: "/notes/kept.md", text: BODY }, { embedFn: async t => deterministicEmbed(t) });
+      } finally {
+        process.env.MEMRAIN_KEYWORD_ONLY = "1";
+      }
+      const before = await counts();
+      expect(before.vectors).toBeGreaterThan(0);
+
+      await indexDocument(storage, { sourcePath: "/notes/kept.md", text: BODY }, {
+        embedFn: async () => { throw new Error("keyword-only must not embed"); },
+      });
+      expect(await counts()).toEqual(before);
+    });
+
+    it("stores fenced-code symbols without vectors", async () => {
+      await indexDocument(storage, { sourcePath: "/notes/kept.md", text: BODY }, {
+        embedFn: async () => { throw new Error("keyword-only must not embed"); },
+      });
+      expect(await counts()).toEqual({ vectors: 0, symbols: 1 });
     });
   });
 }
