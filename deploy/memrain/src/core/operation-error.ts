@@ -36,6 +36,7 @@ export const OPERATION_ERROR_CODES = [
   "importer_managed",
   "insufficient_scope",
   "invalid_params",
+  "link_interval_conflict",
   "mass_delete_refused",
   "not_found",
   "page_shrink_refused",
