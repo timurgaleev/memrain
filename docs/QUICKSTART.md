@@ -2,8 +2,8 @@
 
 This page takes you from an empty AWS account to an AI agent that searches your
 notes.
-It also covers running Memrain on your laptop, choosing a credential, and
-day-to-day operation. For what Memrain is and why you would use it, start with the
+It also covers running Memrain on your laptop (with Docker alone, no AWS
+account needed), choosing a credential, and day-to-day operation. For what Memrain is and why you would use it, start with the
 [README](../README.md).
 
 ## Install with Terraform (recommended)
@@ -111,6 +111,46 @@ Use this token, not the auto-generated public bearer: the public bearer is
 read-only and, by default, hides note bodies, so searches through it return no
 passages. For other people and other clients, see the credential table below
 and [clients/](./clients/).
+
+## Try it locally without AWS
+
+You need Docker and nothing else: no AWS account, no Bun.
+
+```bash
+git clone https://github.com/<your-github-username>/memrain.git && cd memrain
+make local-up
+```
+
+The first run builds the image (a few minutes), then prints the MCP URL, an
+access token and the command that connects Claude Code:
+
+```bash
+claude mcp add --transport http memrain http://127.0.0.1:18790/mcp \
+  --header "Authorization: Bearer <token from make local-up>"
+```
+
+Ask your agent to save a note with `page_put`, then `search` for a word in it.
+
+- **Keyword-only.** The container runs with `MEMRAIN_KEYWORD_ONLY=1`: notes
+  are stored without embeddings and search matches words, not meaning.
+  Features that need a model (`think`, `query` synthesis, fact extraction)
+  are unavailable: every model call is refused with `unsupported` before it is
+  sent, so no request leaves for AWS. `/health` reports
+  `"keyword_only":true`. For semantic search, use the AWS install above or
+  the Bun setup below.
+- **Your data.** Pages live in the Docker volume `memrain-local_memrain-data`
+  and survive restarts and `scripts/local-up.sh down`. `docker volume rm
+  memrain-local_memrain-data` deletes them.
+- **The token** printed by `make local-up` is the operator credential for
+  this brain. It is stored in `deploy/local.env` (git-ignored, mode 0600) and
+  reused on every start. The server listens on `127.0.0.1` only.
+- **A token per client.** `scripts/local-up.sh token my-laptop` mints a
+  personal access token with read and write scope. PGLite admits one process,
+  so the command stops the server for a few seconds while it writes.
+- **Another port.** `MEMRAIN_LOCAL_PORT=18800 make local-up`.
+- **Check it.** `make local-smoke` builds the same stack on a Docker network
+  with no route out, writes, searches and reads a page, restarts, reads it
+  again, and confirms no model call was made.
 
 ## Try it locally
 

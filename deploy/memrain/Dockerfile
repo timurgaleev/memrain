@@ -46,6 +46,9 @@ RUN chmod +x /app/entrypoint.sh
 # kernel bug or a host-mount oversight cannot escalate to the host
 # AWS profile dir or IMDS without an additional privilege exploit.
 RUN chown -R bun:bun /app
+# An empty named volume mounted here takes this directory's owner; without it
+# the local quickstart's volume comes up root-owned and `init` cannot write.
+RUN mkdir -p /home/bun/.memrain && chown bun:bun /home/bun/.memrain
 
 # Build-time version stamp — the deploy host passes `git describe` via compose;
 # a plain `docker build` falls back to 'dev'. Read at runtime by src/version.ts.

@@ -1,0 +1,40 @@
+# Local trial without AWS: one container, an embedded PGLite brain in a named
+# volume, keyword-only search. Start it with `make local-up`
+# (scripts/local-up.sh), which writes deploy/local.env with the access token.
+# The EC2 stack is deploy/docker-compose.yml; nothing here touches it.
+name: memrain-local
+
+services:
+  memrain:
+    build:
+      context: ./memrain
+      dockerfile: Dockerfile
+      args:
+        MEMRAIN_VERSION: local
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Loopback only: the brain answers this machine, never the network.
+    ports:
+      - "127.0.0.1:${MEMRAIN_LOCAL_PORT:-18790}:18790"
+    environment:
+      - MEMRAIN_KEYWORD_ONLY=1
+      - MEMRAIN_INTERNAL_TOKEN=${MEMRAIN_INTERNAL_TOKEN:?run scripts/local-up.sh, which creates deploy/local.env}
+      - MEMRAIN_SKILLS_DIR=/skills
+      # The image defaults these for the EC2 role; a local trial has no AWS.
+      - AWS_REGION=
+      - AWS_PROFILE=
+    volumes:
+      - type: volume
+        source: memrain-data
+        target: /home/bun/.memrain
+      - type: bind
+        source: ./skills
+        target: /skills
+        read_only: true
+
+volumes:
+  memrain-data:
