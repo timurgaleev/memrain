@@ -19,6 +19,7 @@ import { runDoctor } from "./commands/doctor.ts";
 import { runIntegrity } from "./commands/integrity.ts";
 import { runEval } from "./commands/eval.ts";
 import { runEvalChronicle } from "./commands/eval-chronicle.ts";
+import { runEvalCode } from "./commands/eval-code.ts";
 import { runEvalProbe } from "./commands/eval-probe.ts";
 import { runBenchCli, isBenchFamilySelector } from "./commands/bench.ts";
 import { runBacklinks } from "./commands/backlinks.ts";
@@ -161,6 +162,7 @@ function printUsage(): void {
   console.log("            [--split dev|all] [--allow-errors] [--max-latency-x X]");
   console.log("                               regression gate vs a stored baseline (exit 1 on drop)");
   console.log("  eval chronicle [--json]      deterministic Life Chronicle feature eval (own DB, no LLM)");
+  console.log("  eval code [--json]           fixed code-retrieval eval: hit@5 and top-1 stability over this repo's own code");
   console.log("  eval-probe [--limit N]       replay eval set, append a row to eval_snapshots (nightly probe)");
   console.log("  bench [--family push|continuity|fidelity|all] [--corpus DIR] [--json]");
   console.log("                               agent-facing behaviour bench (push / continuity / write-back");
@@ -503,6 +505,9 @@ async function main(argv: readonly string[]): Promise<number> {
       // connect (it needs no config and no gateway).
       if (positional[0] === "chronicle") {
         return await runEvalChronicle(positional.slice(1));
+      }
+      if (positional.length === 1 && positional[0] === "code") {
+        return await runEvalCode(flags.has("--json") ? { json: true } : {});
       }
       // Sub-subcommands: run-all / compare / gate (aggregate instruments).
       if (positional[0] === "run-all") {
