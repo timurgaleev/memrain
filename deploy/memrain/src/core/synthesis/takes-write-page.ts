@@ -3,7 +3,7 @@ import { normalizeChangeReason, putPage, VersionConflictError, validateSlug } fr
 import { OperationError } from "../operation-error.ts";
 import { andSourceScope } from "../source-scope.ts";
 import { takePageEligibleSql } from "./takes-owner.ts";
-import { fenceTakeKey } from "./takes-canon.ts";
+import { fenceTakeKey, storedTakeRowMax } from "./takes-canon.ts";
 import { prepareTakeMutation, takeMutationSummary, type TakePageMutation } from "./takes-write-plan.ts";
 import { validateTakeMutation, assertTakeMutationHolder } from "./takes-write.ts";
 
@@ -31,7 +31,8 @@ export async function runTakeMutation(storage: Storage, input: RunTakeMutationIn
     if (!current) throw new OperationError("permission_denied", "Take page is outside the permitted scope");
     assertTakeMutationHolder(current.markdown_body, input.mutation, input.actor);
     if (current.version_n !== input.expectedVersion) throw new VersionConflictError(input.slug, current.version_n, input.expectedVersion);
-    const prepared = prepareTakeMutation(current.markdown_body, input.slug, current.version_n, current.source_id, input, reason, input.writeSource);
+    const storedMaxRow = await storedTakeRowMax(storage.engine(), input.slug);
+    const prepared = prepareTakeMutation(current.markdown_body, input.slug, current.version_n, current.source_id, input, reason, input.writeSource, storedMaxRow);
     return { ok: true as const, dry_run: true, slug: input.slug, version_n: current.version_n,
       content_hash: prepared.after_hash, changed: prepared.body !== current.markdown_body,
       take_key: fenceTakeKey(input.slug, prepared.rowNum), ...takeMutationSummary(prepared) };

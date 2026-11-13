@@ -32,7 +32,7 @@ import { decodePageListCursor, encodePageListCursor, type PageListPosition } fro
 import { carryForwardFences, FenceCarryHeldError, OUTSIDE_NEUTRALIZED, preservesOutsideText } from "./fence-carry.ts";
 import { prepareTakeMutation, takeMutationSummary, type PreparedTakeMutation, type TakePageMutation } from "./synthesis/takes-write-plan.ts";
 import { assertTakeMutationHolder } from "./synthesis/takes-write.ts";
-import { syncTakesFromFence } from "./synthesis/takes-canon.ts";
+import { storedTakeRowMax, syncTakesFromFence } from "./synthesis/takes-canon.ts";
 import { takePageEligibleSql } from "./synthesis/takes-owner.ts";
 import { atomPageMatches, lockAtomSource, tryLockAtomSlugs, type AtomPageExpectation, type AtomSourceExpectation } from "./synthesis/atoms-source.ts";
 
@@ -635,7 +635,7 @@ export async function putPage(
     if (input.takeMutation) {
       if (!current || current.deleted_at !== null) throw new PageNotFoundError(input.slug, CREATE_IT_FIRST);
       takePrepared = prepareTakeMutation(current.markdown_body, input.slug, currentVersion, current.source_id,
-        input.takeMutation, changeReason, input.source_id);
+        input.takeMutation, changeReason, input.source_id, await storedTakeRowMax(tx, input.slug));
       body = takePrepared.body;
       hashNew = takePrepared.after_hash;
       secretFindings.push(...takePrepared.findings);

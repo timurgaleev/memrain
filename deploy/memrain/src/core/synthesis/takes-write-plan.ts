@@ -37,8 +37,8 @@ const rowPreview = (body: string, rowNum: number): string | null => {
   return [...safe].slice(0, 2000).join("");
 };
 export function prepareTakeMutation(body: string, slug: string, version: number, owner: string,
-  input: TakePageMutation, reason: string | null, writeSource?: string) {
-  const patch = patchTakeFence(body, input.mutation, input.actor);
+  input: TakePageMutation, reason: string | null, writeSource: string | undefined, storedMaxRow: number) {
+  const patch = patchTakeFence(body, input.mutation, input.actor, storedMaxRow);
   const findings: SecretFinding[] = [];
   const echo = new Map<string, string>();
   const scan = (text: string) => {
@@ -50,7 +50,7 @@ export function prepareTakeMutation(body: string, slug: string, version: number,
   if (withoutTarget(patch.body, patch.rowNum) !== withoutTarget(guarded.body, patch.rowNum)) {
     throw new OperationError("conflict", "Secret scanning would change unrelated page content; repair the page before editing this take");
   }
-  const planHash = hash(canonical({ slug, version, owner, before: hash(body), mutation: input.mutation, reason,
+  const planHash = hash(canonical({ slug, version, owner, before: hash(body), storedMaxRow, mutation: input.mutation, reason,
     principal: input.actor.principal, holders: input.actor.holderAllowList === undefined ? null : [...input.actor.holderAllowList].sort(),
     sources: input.sourceIds === undefined ? null : [...input.sourceIds].sort(), writeSource: writeSource ?? null,
     excludeDiary: input.excludeDiary === true,

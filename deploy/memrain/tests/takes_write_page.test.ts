@@ -46,6 +46,17 @@ for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) descri
     expect(result.content_hash).toBe(result.after_hash);
   });
 
+  it("numbers a new take after the stored rows when the page lost its takes fence", async () => {
+    await putPage(db.storage, { slug: "notes/takes", markdown_body: "Prose rewritten without the ledger", source_id: "a", written_by_principal: "operator" });
+    const before = (await engine().query<{ claim: string }>("SELECT claim_text AS claim FROM synth_takes ORDER BY id")).rows;
+    const result = await run({ expectedVersion: 2 });
+    expect(result).toMatchObject({ ok: true, changed: true, version_n: 3, row_num: 8 });
+    const claims = (await engine().query<{ claim: string }>("SELECT claim_text AS claim FROM synth_takes ORDER BY id")).rows.map((r) => r.claim);
+    expect(claims.slice(0, before.length)).toEqual(before.map((r) => r.claim));
+    expect(claims).toContain("First claim");
+    expect(claims).toContain("Added claim");
+  });
+
   it("previews without any writes and applies only the pinned hash and version", async () => {
     const before = await state();
     const preview = await run({ dryRun: true, reason: "Add verified claim" });
