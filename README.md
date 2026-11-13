@@ -77,8 +77,10 @@ make plan && make apply
 The full walkthrough, from the tunnel token to your first search, is in
 [docs/QUICKSTART.md](./docs/QUICKSTART.md).
 
-**Try it on your laptop.** No servers, one embedded database. You still need AWS
-credentials for the embeddings. See
+**Try it on your laptop.** No servers, one embedded database. With Docker
+alone, `make local-up` runs a keyword-only brain that needs no AWS account (see
+[Try it locally without AWS](./docs/QUICKSTART.md#try-it-locally-without-aws)).
+Semantic search needs AWS credentials for the embeddings; see
 [Try it locally](./docs/QUICKSTART.md#try-it-locally).
 
 **Hosted.** A hosted version, so you do not have to run AWS yourself, is planned. It is not available yet.
