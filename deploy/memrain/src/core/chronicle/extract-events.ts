@@ -270,6 +270,48 @@ export interface RunChronicleExtractOpts {
   maxBudgetUsd?: number;
 }
 
+/** The judge's view of a page: frontmatter date and attendees plus its text. */
+export function chronicleJudgeInputFor(page: {
+  slug: string;
+  type: string;
+  title: string | null;
+  compiled_truth: Record<string, unknown> | null;
+  markdown_body: string | null;
+}): ChronicleJudgeInput {
+  const truth = (page.compiled_truth ?? {}) as Record<string, unknown>;
+  const edRaw = truth.effective_date ?? truth.date;
+  return {
+    slug: page.slug,
+    type: page.type,
+    title: page.title ?? "",
+    body: page.markdown_body ?? "",
+    effectiveDate: typeof edRaw === "string" && edRaw ? edRaw : null,
+    attendees: collectAttendees(truth),
+  };
+}
+
+const JUDGE_BODY_CHARS = 12_000;
+
+/** The exact user message the judge is sent for this input. */
+export function chronicleJudgePrompt(input: ChronicleJudgeInput): string {
+  const { text: body } = sanitizeForPrompt((input.body || "").slice(0, JUDGE_BODY_CHARS));
+  return (
+    `<page slug="${input.slug}" type="${input.type}" date="${input.effectiveDate ?? ""}">\n` +
+    `${input.title}\n\n${body}\n</page>\n\n` +
+    `Known attendees: ${input.attendees.slice(0, 10).join(", ") || "(none)"}.\nExtract the events.`
+  );
+}
+
+/**
+ * Content key for an extraction job. It hashes what the judge reads, not the
+ * whole page: text appended past the judged prefix changes nothing the judge
+ * sees, so it must not buy another paid call. That text also stays unread by
+ * extraction — a limit of the 12,000-character window, not of this key.
+ */
+export function chronicleJudgeKey(page: Parameters<typeof chronicleJudgeInputFor>[0]): string {
+  return createHash("sha256").update(chronicleJudgePrompt(chronicleJudgeInputFor(page)), "utf8").digest("hex");
+}
+
 /**
  * Run the extractor for one depth page. Idempotent: event slugs are
  * content-addressed (re-run upserts the same pages) and the projection upserts
@@ -285,10 +327,8 @@ export async function runChronicleExtract(
   const page = await getPage(storage, opts.slug, [sourceId], { withVersion: true });
   if (!page) return { slug: opts.slug, status: "skipped", events_written: 0, reason: "page_not_found" };
 
-  const truth = (page.compiled_truth ?? {}) as Record<string, unknown>;
-  const edRaw = truth.effective_date ?? truth.date;
-  const effectiveDate = typeof edRaw === "string" && edRaw ? edRaw : null;
-  const attendees = collectAttendees(truth);
+  const judgeInput = chronicleJudgeInputFor({ ...page, slug: opts.slug });
+  const { effectiveDate, attendees } = judgeInput;
 
   // Price-guard the paid judge call. A stub judge reports no usage and never
   // spends, but the pre-flight is cheap and mirrors the facts on-write path.
@@ -305,14 +345,7 @@ export async function runChronicleExtract(
     defaultJudge(opts.sonnetFn, modelId, (projected) => budget.widen(hold, modelId, projected));
   let result: ChronicleJudgeResult;
   try {
-    result = await judge({
-      slug: opts.slug,
-      type: page.type,
-      title: page.title ?? "",
-      body: page.markdown_body ?? "",
-      effectiveDate,
-      attendees,
-    });
+    result = await judge(judgeInput);
   } catch (err) {
     budget.release(hold);
     // Transient gateway errors propagate so the queue retries with backoff; a
@@ -459,12 +492,8 @@ function defaultJudge(
     // The credentials gate only guards the REAL transport; an injected seam
     // needs none, and gating it would make the default judge untestable.
     if (!sonnetFn && !isLlmAvailable()) return { events: [] };
-    const { text: body } = sanitizeForPrompt((input.body || "").slice(0, 12_000));
     const send = resolveSonnetFn(sonnetFn, modelId ? { modelId } : {});
-    const user =
-      `<page slug="${input.slug}" type="${input.type}" date="${input.effectiveDate ?? ""}">\n` +
-      `${input.title}\n\n${body}\n</page>\n\n` +
-      `Known attendees: ${input.attendees.slice(0, 10).join(", ") || "(none)"}.\nExtract the events.`;
+    const user = chronicleJudgePrompt(input);
     // No catch here: a Bedrock error propagates to runChronicleExtract, which
     // classifies transient (retry) vs permanent (zero events). An empty/refusal
     // response is a successful call whose text parses to zero events.
@@ -480,7 +509,7 @@ function defaultJudge(
       usage: call.usage,
       modelId: call.resp.modelId,
       truncated: call.truncated,
-      inputTruncated: input.body.length > 12_000,
+      inputTruncated: input.body.length > JUDGE_BODY_CHARS,
     };
   };
 }

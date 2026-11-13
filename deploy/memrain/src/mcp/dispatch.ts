@@ -178,6 +178,7 @@ import { loadChronicleContext } from "../core/context/chronicle-context.ts";
 import { renderTimelineNarrative } from "../core/chronicle/narrative.ts";
 import { chronicleEnabled } from "../core/chronicle/config.ts";
 import { isChronicleEligible } from "../core/chronicle/eligibility.ts";
+import { chronicleJudgeKey } from "../core/chronicle/extract-events.ts";
 import type {
   ChronicleTimelineOpts,
   OntologyConflict,
@@ -2023,21 +2024,22 @@ async function isRemoteDiaryFenced(
  * backstop can never break the triggering write. Returns whether it enqueued.
  */
 /**
- * Dedup id for a chronicle-extract job. Includes an 8-char content-hash prefix
- * so the id is CONTENT-addressed: re-extracting the SAME body collapses onto the
- * prior job (idempotent), but an EDIT changes the hash → a fresh id → a new job.
+ * Dedup id for a chronicle-extract job, addressed by the input the judge
+ * actually reads: the same judged input collapses onto the prior job
+ * (idempotent), while an edit inside it yields a fresh id and a new job.
  * Without the hash the id would collide with a long-finished succeeded/failed
  * row forever (Queue.enqueue is ON CONFLICT DO NOTHING), so edits would never
  * re-extract and a backfill would falsely report work enqueued.
  */
-function chronicleJobId(sourceId: string, slug: string, contentHash: string | undefined): string {
-  const h = (contentHash ?? "").slice(0, 8) || "nohash";
-  return `chronicle_extract:${sourceId}:${slug}:${h}`;
+function chronicleJobId(sourceId: string, page: ChronicleKeyPage): string {
+  return `chronicle_extract:${sourceId}:${page.slug}:${chronicleJudgeKey(page).slice(0, 16)}`;
 }
+
+type ChronicleKeyPage = Parameters<typeof chronicleJudgeKey>[0];
 
 async function maybeEnqueueChronicleExtract(
   storage: Storage,
-  page: { slug: string; type: string; markdown_body: string; source_id?: string; content_hash?: string },
+  page: ChronicleKeyPage & { markdown_body: string; source_id?: string },
   writeSource: string | undefined,
   isPublic: boolean,
 ): Promise<boolean> {
@@ -2056,7 +2058,7 @@ async function maybeEnqueueChronicleExtract(
     await new Queue(storage.engine()).enqueueOrRevive({
       kind: "chronicle_extract",
       payload: { slug: page.slug, sourceId },
-      id: chronicleJobId(sourceId, page.slug, page.content_hash),
+      id: chronicleJobId(sourceId, page),
       timeoutMs: 600_000,
     });
     return true;
@@ -5182,7 +5184,7 @@ async function callChronicleBackfill(
       await queue.enqueueOrRevive({
         kind: "chronicle_extract",
         payload: { slug: p.slug, sourceId },
-        id: chronicleJobId(sourceId, p.slug, p.content_hash),
+        id: chronicleJobId(sourceId, p),
         timeoutMs: 600_000,
       });
       pagesEnqueued++;
