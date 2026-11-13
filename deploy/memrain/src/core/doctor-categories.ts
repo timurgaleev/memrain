@@ -122,6 +122,7 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   "dangling-slug-redirects",
   "outside-content-fences",
   "embed-backlog",
+  "contextual-coverage",
 ]);
 
 /** Infrastructure / setup — "can the brain run here at all?" */
