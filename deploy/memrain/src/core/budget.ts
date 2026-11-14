@@ -20,6 +20,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { noteWriteTiming } from "./write-timing.ts";
 import { beginRequestCost } from "./request-cost.ts";
 import { BedrockHalted, assertBedrockOpen, noteBedrockFailure, noteBedrockSuccess } from "./llm/bedrock-errors.ts";
+import { keywordOnlyMode } from "./llm/gateway.ts";
 import { appendAudit, auditDir } from "./audit-week-file.ts";
 import type { Engine } from "./engine/interface.ts";
 import type { SonnetUsage } from "./llm/sonnet.ts";
@@ -866,6 +867,13 @@ export async function trackedInvoke<T>(
     // attempt that actually reached the model consumed.
     report: (u) => void (usage = { ...u }),
   };
+  if (keywordOnlyMode()) {
+    throw new OperationError(
+      "unsupported",
+      `keyword-only mode (MEMRAIN_KEYWORD_ONLY) makes no model calls: ${call.operation} on ${call.model} was not sent`,
+      "Semantic search, embeddings and synthesis need AWS Bedrock: unset MEMRAIN_KEYWORD_ONLY and provide AWS credentials.",
+    );
+  }
   // Batch work stops at a failure that would only repeat (expired credentials,
   // a model the account may not use, a spent quota) instead of paying for it
   // once per item. Nothing was sent, so nothing is held or booked.

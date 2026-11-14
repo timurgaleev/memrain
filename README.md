@@ -42,6 +42,11 @@ It also keeps facts and timelines, imports your ChatGPT and Claude history,
 keeps a version history for every page, and redacts API keys, tokens, private keys
 and database passwords before anything is stored.
 
+**You stay in control of what it remembers.** Correct a fact and the old one is
+marked superseded, not silently overwritten; forget one and it stops showing up
+in answers while the record of the change stays. Facts that contradict each other
+are flagged, so your agent does not repeat one of them as settled truth.
+
 ## See it work
 
 <div align="center">
@@ -77,8 +82,10 @@ make plan && make apply
 The full walkthrough, from the tunnel token to your first search, is in
 [docs/QUICKSTART.md](./docs/QUICKSTART.md).
 
-**Try it on your laptop.** No servers, one embedded database. You still need AWS
-credentials for the embeddings. See
+**Try it on your laptop.** No servers, one embedded database. With Docker
+alone, `make local-up` runs a keyword-only brain that needs no AWS account (see
+[Try it locally without AWS](./docs/QUICKSTART.md#try-it-locally-without-aws)).
+Semantic search needs AWS credentials for the embeddings; see
 [Try it locally](./docs/QUICKSTART.md#try-it-locally).
 
 **Hosted.** A hosted version, so you do not have to run AWS yourself, is planned. It is not available yet.

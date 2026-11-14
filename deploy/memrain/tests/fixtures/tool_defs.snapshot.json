@@ -725,7 +725,7 @@
   },
   {
     "name": "link",
-    "description": "Assert a typed source→target link; repeating (source,target,type) updates confidence/chunk_id. Confidence defaults 1. Public writes require MEMRAIN_PUBLIC_WRITE=1.",
+    "description": "Assert a typed source→target link; repeating (source,target,type) updates confidence/chunk_id. Confidence defaults 1. works_at/located_at hold one value at a time: a new dated value closes the open one; an overlap, or no valid_from once dated, is refused (link_interval_conflict). Public writes require MEMRAIN_PUBLIC_WRITE=1.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1211,7 +1211,7 @@
   },
   {
     "name": "entity_recall",
-    "description": "One-shot 'what do I know about X?' aggregator. Returns the entity's page (compiled_truth + body) plus top-confidence facts plus most-recent timeline events in a single call. The page may be null when the entity exists only as a soft-stub (facts + timeline allowed, page not yet promoted).",
+    "description": "One-shot 'what do I know about X?' aggregator. Returns the entity's page (compiled_truth + body) plus top-confidence facts plus most-recent timeline events in a single call. The page may be null when the entity exists only as a soft-stub (facts + timeline allowed, page not yet promoted). A fact that conflicts with another visible typed claim lists the peer ids in contested_with.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2502,7 +2502,7 @@
   },
   {
     "name": "context_pack",
-    "description": "Budgeted entity cards (title,type,facts,events; no body), up to 8: explicit slugs first, then window entities at the volunteer default gate. Adds top decayed facts across the grant, excluding card duplicates. token_budget prioritizes cards; budget reports drops. Hidden/missing slugs both yield no card. Stateless read, no LLM; internal-only.",
+    "description": "Budgeted entity cards (title,type,facts,events; no body), up to 8: explicit slugs first, then window entities at the volunteer default gate. Adds top decayed facts across the grant, excluding card duplicates. token_budget prioritizes cards; budget reports drops. Hidden/missing slugs both yield no card. Conflicting facts carry contested_with. Operator-pinned pages (MEMRAIN_CONTEXT_CORE_SLUGS) come first as core, charged before cards. Stateless read, no LLM; internal-only.",
     "inputSchema": {
       "type": "object",
       "properties": {

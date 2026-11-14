@@ -12,6 +12,8 @@ import type { Engine } from "./engine/interface.ts";
 import { embeddableChunkFragment } from "./embed-skip.ts";
 import { factSourceEligibleSql } from "./quarantine.ts";
 import { embedGapsEnabled } from "./cycle/embed-gaps.ts";
+import { CONTEXTUAL_RETRIEVAL_FLAG, contextualRetrievalEnabled } from "./search/contextual-embed.ts";
+import { CONTEXTUAL_LLM_FLAG, contextualLlmEnabled } from "./search/contextual-llm.ts";
 
 export interface EmbedBacklogCheck {
   ok: boolean;
@@ -64,6 +66,47 @@ export async function checkEmbedBacklog(engine: Engine): Promise<EmbedBacklogChe
     detail: `${chunks.detail}; ${factBacklog.detail}` +
       (chunks.warn ? `; ${fill}, or run \`memrain embed\`` : "") +
       (factBacklog.warn ? "; inspect or run `memrain cycle --phases embed-facts` within the normal embedding budget" : ""),
+  };
+}
+
+/** Under contextual retrieval, the share of prose vectors that must carry their document context. */
+export const CONTEXTUAL_COVERAGE_MIN = 0.5;
+
+/**
+ * Under contextual retrieval, how many stored prose vectors were embedded with
+ * their document context. Code documents and fenced-code symbols are embedded
+ * raw by design and stay out of the count; a chunk with no tier recorded
+ * predates the tier column and counts as uncovered. Off, the share means
+ * nothing — every vector is raw on purpose.
+ */
+export async function checkContextualCoverage(
+  engine: Engine,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<EmbedBacklogCheck> {
+  if (!contextualRetrievalEnabled(env[CONTEXTUAL_RETRIEVAL_FLAG]) && !contextualLlmEnabled(env[CONTEXTUAL_LLM_FLAG])) {
+    return { ok: true, status: "ok", detail: `${CONTEXTUAL_RETRIEVAL_FLAG} is off; contextual coverage is not measured` };
+  }
+  const r = await engine.query<{ covered: number | string; total: number | string; unknown: number | string }>(
+    `SELECT count(*) FILTER (WHERE c.contextual_tier IN ('deterministic', 'llm') OR c.contextual_embedded)::int AS covered,
+            count(*)::int AS total,
+            count(*) FILTER (WHERE c.contextual_tier IS NULL AND NOT c.contextual_embedded)::int AS unknown
+       FROM chunks c
+       JOIN documents d ON d.id = c.document_id
+       JOIN embeddings em ON em.chunk_id = c.id
+      WHERE ${embeddableChunkFragment("d", "c")}
+        AND c.chunk_source IS DISTINCT FROM 'fenced_code'`,
+  );
+  const covered = Number(r.rows[0]?.covered ?? 0);
+  const total = Number(r.rows[0]?.total ?? 0);
+  const unknown = Number(r.rows[0]?.unknown ?? 0);
+  const share = total === 0 ? 1 : covered / total;
+  const warn = share < CONTEXTUAL_COVERAGE_MIN;
+  return {
+    ok: true,
+    status: warn ? "warn" : "ok",
+    detail: `${covered} of ${total} prose vector(s) carry document context (${Math.floor(share * 100)}%; ` +
+      `warns below ${CONTEXTUAL_COVERAGE_MIN * 100}%); ${unknown} predate the tier record` +
+      (warn ? "; `memrain reindex --contextual --dry-run` prices the re-embed" : ""),
   };
 }
 

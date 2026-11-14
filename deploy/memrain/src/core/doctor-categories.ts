@@ -120,8 +120,10 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   "namespace-only-targets",
   "mixed-script-targets",
   "dangling-slug-redirects",
+  "link-interval-overlaps",
   "outside-content-fences",
   "embed-backlog",
+  "contextual-coverage",
 ]);
 
 /** Infrastructure / setup — "can the brain run here at all?" */

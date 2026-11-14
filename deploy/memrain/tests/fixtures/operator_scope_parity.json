@@ -872,6 +872,15 @@
         ]
       },
       {
+        "text": "WITH eligible AS MATERIALIZED ( SELECT f.id, f.fact, f.source_id, f.entity_slug, f.attributed_to, trim(both '_' from regexp_replace(lower(btrim(f.claim_metric)), '[^a-z0-9]+', '_', 'g')) AS metric, lower(btrim(f.claim_unit)) AS unit, lower(btrim(f.claim_period)) AS period, to_char(f.valid_from::timestamp, 'YYYY-MM') AS month, f.claim_value, f.valid_from, f.valid_until, f.source_slug, f.source_markdown_slug FROM entity_facts f WHERE f.forgotten_at IS NULL AND f.superseded_by IS NULL AND NOT f.consolidated AND f.consolidated_into IS NULL AND f.dimension IS NULL AND f.claim_value IS NOT NULL AND f.claim_value::text NOT IN ('NaN', 'Infinity', '-Infinity') AND btrim(f.claim_metric) <> '' AND btrim(f.claim_unit) <> '' AND btrim(f.claim_period) <> '' AND f.valid_from IS NOT NULL AND isfinite(f.valid_from) AND (f.valid_until IS NULL OR (isfinite(f.valid_until) AND f.valid_until > f.valid_from)) AND (NOT EXISTS ( SELECT 1 FROM pages fact_origin WHERE fact_origin.slug = COALESCE(f.source_markdown_slug, f.source_slug) AND fact_origin.source_id = COALESCE(f.source_id, 'default') AND fact_origin.deleted_at IS NOT NULL ) AND NOT EXISTS ( SELECT 1 FROM documents fact_mirror WHERE fact_mirror.source_path = CASE WHEN COALESCE(f.source_id, 'default') = 'default' THEN 'page://' || COALESCE(f.source_markdown_slug, f.source_slug) ELSE 'page://' || COALESCE(f.source_id, 'default') || '/' || COALESCE(f.source_markdown_slug, f.source_slug) END AND COALESCE(fact_mirror.source_id, 'default') = COALESCE(f.source_id, 'default') AND (fact_mirror.deleted_at IS NOT NULL OR NOT NOT (COALESCE(fact_mirror.frontmatter, '{}'::jsonb) ? 'quarantine')) )) AND f.entity_slug IN (SELECT t.entity_slug FROM entity_facts t WHERE t.id = ANY($1::bigint[])) ) SELECT a.id::text AS id, peers.ids AS peers FROM eligible a CROSS JOIN LATERAL ( SELECT array_agg(p.id::text ORDER BY p.id) AS ids FROM ( SELECT b.id FROM eligible b WHERE a.entity_slug IS NOT DISTINCT FROM b.entity_slug AND a.source_id IS NOT DISTINCT FROM b.source_id AND a.attributed_to IS NOT DISTINCT FROM b.attributed_to AND a.metric IS NOT DISTINCT FROM b.metric AND a.unit IS NOT DISTINCT FROM b.unit AND a.period IS NOT DISTINCT FROM b.period AND a.month IS NOT DISTINCT FROM b.month AND a.claim_value <> b.claim_value AND (a.valid_until IS NULL OR b.valid_from < a.valid_until) AND (b.valid_until IS NULL OR a.valid_from < b.valid_until) ORDER BY b.id LIMIT 5 ) p ) peers WHERE a.id = ANY($1::bigint[]) AND a.metric <> '' AND peers.ids IS NOT NULL",
+        "params": [
+          [
+            2,
+            1
+          ]
+        ]
+      },
+      {
         "text": "SELECT alias_slug FROM slug_aliases WHERE canonical_slug = $1 AND source_id = $2 ORDER BY alias_slug COLLATE \"C\" LIMIT 101",
         "params": [
           "people/alice",

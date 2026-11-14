@@ -27,6 +27,7 @@ const SKILLS = [
   "data-research",
   "perplexity-research",
   "strategic-reading",
+  "conversation-archive",
 ];
 
 describe("untrusted-content convention", () => {

@@ -289,12 +289,54 @@ function normaliseResolutionType(v: string | undefined): ResolutionType | null {
   return v;
 }
 
+/**
+ * Link types where an entity holds one target at a time. Deliberately not
+ * `KNOWN_LINK_TYPES`: most relations there (knows, attended, invested_in) are
+ * many-valued, and closing one of those on a new write would lose data.
+ */
+export const SINGLE_VALUE_LINK_TYPES: ReadonlySet<string> = new Set(["works_at", "located_at"]);
+
+interface LinkInterval {
+  valid_from: string | null;
+  valid_until: string | null;
+}
+
+const overlaps = (a: LinkInterval, b: LinkInterval): boolean =>
+  (a.valid_from === null || b.valid_until === null || a.valid_from < b.valid_until)
+  && (b.valid_from === null || a.valid_until === null || b.valid_from < a.valid_until);
+
+/**
+ * Where a new dated value of a single-value link fits among the other
+ * targets' intervals (a null start or end is unbounded). An open-ended new
+ * value ends where the next recorded value starts; one open earlier value is
+ * closed at the new start; any other overlap, or a tie on the start date, is a
+ * conflict (null). Nothing is ever deleted.
+ */
+export function planSingleValue(
+  others: readonly (LinkInterval & { target_slug: string })[],
+  from: string,
+  until: string | null,
+): { until: string | null; close?: string } | null {
+  if (others.some((r) => r.valid_from === from)) return null;
+  const next = others.map((r) => r.valid_from).filter((d): d is string => d !== null && d > from).sort()[0];
+  const fresh = { valid_from: from, valid_until: until ?? next ?? null };
+  const hit = others.filter((r) => overlaps(r, fresh));
+  if (hit.length === 0) return { until: fresh.valid_until };
+  const [only] = hit;
+  if (hit.length === 1 && only!.valid_until === null && (only!.valid_from === null || only!.valid_from < from)) {
+    return { until: fresh.valid_until, close: only!.target_slug };
+  }
+  return null;
+}
+
 export interface AddLinkResult {
   source_slug: string;
   target_slug: string;
   type: string;
   /** True when the (source, target, type) tuple did not exist before. */
   created: boolean;
+  /** Single-value types: the prior target whose open interval this write closed. */
+  closed?: string;
 }
 
 /**
@@ -345,17 +387,88 @@ export async function addLink(
     context, linkKind, originSlug, originField, resolutionType,
   ];
   if (sourceId !== null) params.push(sourceId);
-  const fromParam = `$${params.push(validFrom)}::date`;
-  const untilParam = `$${params.push(validUntil)}::date`;
-  const fromSet = `$${params.push(input.valid_from !== undefined)}::boolean`;
-  const untilSet = `$${params.push(input.valid_until !== undefined)}::boolean`;
+  const write = (db: Engine, until: string | null, closed?: string) =>
+    upsertManualLink(db, params, sourceCol, sourceVal, {
+      from: validFrom, until, fromSet: input.valid_from !== undefined, untilSet: until !== null || input.valid_until !== undefined,
+    }).then((created) => ({
+      source_slug: input.source_slug, target_slug: target, type, created, ...(closed ? { closed } : {}),
+    }));
+  if (!SINGLE_VALUE_LINK_TYPES.has(type)) return write(storage.engine(), validUntil);
+  const owner = sourceId ?? "default";
+  return storage.engine().transaction(async (tx) => {
+    // One lock per call and nothing else taken under it, so writers of one
+    // entity's value queue up instead of each closing the same open row.
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`memrain:link-value:${owner}|${input.source_slug}|${type}`]);
+    const { rows } = await tx.query<LinkInterval & { target_slug: string }>(
+      `SELECT target_slug, valid_from::text AS valid_from, valid_until::text AS valid_until
+         FROM links WHERE source_slug = $1 AND type = $2 AND source_id = $3 AND link_source = 'manual'`,
+      [input.source_slug, type, owner],
+    );
+    // Re-adding the recorded target keeps the idempotent validity rules. New
+    // dates on it must still fit around the other targets: one row per target
+    // holds one period, so an overlap here is refused, never closed.
+    const mine = rows.find((r) => r.target_slug === target);
+    if (mine) {
+      const changed = (validFrom !== null && validFrom !== mine.valid_from)
+        || (validUntil !== null && validUntil !== mine.valid_until);
+      if (!changed) return write(tx, validUntil);
+      const others = rows.filter((r) => r !== mine);
+      const from = validFrom ?? mine.valid_from;
+      const plan = from === null
+        ? (others.some((r) => overlaps(r, { valid_from: null, valid_until: validUntil })) ? null : { until: validUntil })
+        : planSingleValue(others, from, validUntil);
+      if (plan === null || plan.close !== undefined) {
+        throw new OperationError("link_interval_conflict",
+          `${type} for ${input.source_slug} already records ${target} for one period, and the new dates overlap another value`,
+          "List the recorded intervals with get_links; a target holds one period, so pick dates that fit it or link a different target.");
+      }
+      return write(tx, plan.until);
+    }
+    // An undated value would span every recorded interval. Undated-only
+    // histories keep the old behaviour; once dates exist, a start is required.
+    if (validFrom === null) {
+      if (rows.every((r) => r.valid_from === null && r.valid_until === null)) return write(tx, validUntil);
+      throw new OperationError("link_interval_conflict",
+        `${type} for ${input.source_slug} has dated values; a new value needs valid_from`,
+        "List the recorded intervals with get_links, then pass a valid_from that does not overlap them.");
+    }
+    const plan = planSingleValue(rows, validFrom, validUntil);
+    if (plan === null) {
+      throw new OperationError("link_interval_conflict",
+        `${type} for ${input.source_slug} already has a different value over that period`,
+        "List the recorded intervals with get_links, then choose dates that do not overlap them.");
+    }
+    if (plan.close !== undefined) {
+      await tx.query(
+        `UPDATE links SET valid_until = $5::date
+          WHERE source_slug = $1 AND type = $2 AND source_id = $3 AND link_source = 'manual'
+            AND target_slug = $4 AND valid_until IS NULL`,
+        [input.source_slug, type, owner, plan.close, validFrom],
+      );
+    }
+    return write(tx, plan.until, plan.close);
+  });
+}
+
+async function upsertManualLink(
+  db: Engine,
+  baseParams: readonly unknown[],
+  sourceCol: string,
+  sourceVal: string,
+  validity: { from: string | null; until: string | null; fromSet: boolean; untilSet: boolean },
+): Promise<boolean> {
+  const params = [...baseParams];
+  const fromParam = `$${params.push(validity.from)}::date`;
+  const untilParam = `$${params.push(validity.until)}::date`;
+  const fromSet = `$${params.push(validity.fromSet)}::boolean`;
+  const untilSet = `$${params.push(validity.untilSet)}::boolean`;
   // On an idempotent re-add, provenance is STICKY: an omitted field (empty
   // context / NULL enum) preserves the prior value so a bare `link` re-call
   // never wipes enrichment-written provenance. `link_source='manual'` (mig086):
   // an explicit call owns the manual edge row; a same-triple edge from a
   // derived writer (markdown / frontmatter / mentions) is a SEPARATE row under
   // the widened key, so re-adding never tampers with a derived writer's edge.
-  const r = await storage.engine().query<{ inserted: boolean }>(
+  const r = await db.query<{ inserted: boolean }>(
     `INSERT INTO links
        (source_slug, target_slug, type, inferred_confidence, source_chunk_id,
         context, link_kind, origin_slug, origin_field, resolution_type,
@@ -381,12 +494,7 @@ export async function addLink(
     params,
   );
   if (r.rows.length === 0) throw new OperationError("conflict", "Recorded link validity cannot be changed or cleared", "Use ontology for multiple historical intervals.");
-  return {
-    source_slug: input.source_slug,
-    target_slug: target,
-    type,
-    created: r.rows[0]?.inserted ?? false,
-  };
+  return r.rows[0]?.inserted ?? false;
 }
 
 export interface RemoveLinkInput {

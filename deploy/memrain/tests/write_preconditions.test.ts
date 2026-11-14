@@ -115,6 +115,8 @@ describe("expected_version", () => {
     const env = new VersionConflictError("notes/v", 2, 1).toEnvelope(true);
     expect(env).toEqual({
       error: "version_conflict",
+      error_class: "conflict",
+      retryable: false,
       suggestion: expect.any(String),
       current_version: 2,
       expected_version: 1,

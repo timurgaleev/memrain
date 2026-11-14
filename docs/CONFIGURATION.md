@@ -136,6 +136,7 @@ Secrets Manager (via `fetch-secrets.sh`), not the compose allowlist.
 | `MEMRAIN_INTERNAL_TOKEN` | *(none)* | Shared bearer authenticating peer containers on the internal docker bridge to Memrain's mutating routes. From `<prefix>/memrain-internal-token`. | free |
 | `MEMRAIN_HOST` | `127.0.0.1` | Bind address of the HTTP server. The image sets `0.0.0.0` inside the container; the CLI `--host` flag overrides. It is not the public hostname. | free |
 | `SUBDOMAIN` | `brain` | The public MCP subdomain. `init.sh` and `bootstrap.sh` write it into `.env` together with `PUBLIC_HOST=<subdomain>.<domain>`; the server does not read it (the terraform var `subdomain` is the source of truth). | free |
+| `MEMRAIN_KEYWORD_ONLY` | off (`=1` on) | Runs the brain without AWS: nothing is embedded, no model is invoked, and search is keyword-only. Every paid call is refused before it is sent with error `unsupported`, so semantic search, `think`, `query` synthesis and fact extraction are unavailable. `/health` reports `keyword_only: true`. The local Docker quickstart turns it on. Chunks written in this mode have no vectors (an unchanged chunk keeps the one it had); after turning it off, `memrain embed` adds them. | free |
 | `MEMRAIN_REQUIRE_POSTGRES` | off (`=1` on) | For a host that must run on Postgres. With it on, a PGLite `config.json` or a missing Postgres URL stops the server and the container entrypoint instead of starting an empty local brain, `init --pglite` refuses, and `fetch-secrets.sh` fails when the URL secret is missing. `bootstrap.sh` writes it on new installs. Env-only: a `runtime_config` row cannot set it. | free |
 | `MEMRAIN_VAULT_PATHS` | `/memory` (compose) | CSV of directory roots the indexer may sweep and the path-guard treats as in-bounds. Mounted read-only into the container. | free |
 | `MEMRAIN_CODE_PATHS` | `/repo-source` (compose) | CSV of repo checkouts the code-chunkers index (call/def/ref graph). Empty → boot warns "0 indexable files" and continues. | free |
@@ -565,6 +566,28 @@ documents, which can be re-read from their files, keep a 72-hour window.
 reports the cutoff it applied as `ttl_hours`; pass `older_than_hours` to purge
 sooner, for example after a leaked secret.
 
+The purge also retires the facts written on each page it removes: facts in
+the page's source that name it as their source page, and any of the page's
+own `## Facts` rows still on file (`page_delete` already removes those when
+the page is deleted, so they are not in a receipt). Every such fact is
+retired, even when another page states the same claim: that page holds its
+own fact row, which stays live. Retired facts keep their
+row with `forgotten_cause = 'purge'` and drop out of every read, so a later
+page on the same slug starts without them. The result reports the count as
+`facts_retired`; a dry run reports how many would go. Each purged page that
+retired facts leaves a row in `fact_purge_receipts` with the retired
+`fact_ids`. To undo one, clear the tombstone on exactly those ids:
+
+```sql
+UPDATE entity_facts
+   SET forgotten_at = NULL, forgotten_cause = NULL, forgotten_reason = NULL
+ WHERE forgotten_cause = 'purge'
+   AND id IN (SELECT unnest(fact_ids) FROM fact_purge_receipts WHERE id = <receipt id>);
+```
+
+Restored facts show in recall again at once, still naming the purged page as
+their source.
+
 `reindex --reconcile-deletes` soft-deletes documents whose file is gone. It
 refuses when the vault root is missing or not a directory, and when more than
 50 documents, or more than a quarter of the live documents under the root
@@ -718,6 +741,8 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_EMBED_GAPS` | on | Cycle phase that embeds chunks stored without a vector (after an outage or spend refusal). `0` turns it off. Allowlisted. | **paid (Titan)** |
 | `MEMRAIN_EMBED_GAPS_MAX_PER_CYCLE` | `200` | Most chunks the embed-gaps phase embeds per cycle. Allowlisted. | — |
 | `MEMRAIN_LINKS_STALE_MAX_PER_CYCLE` | `200` | Most pages the links-stale cycle phase re-extracts per cycle when the link extractor version or the link switches (gazetteer, typed links, verb inference) changed. `0` turns the phase off. Allowlisted. | free |
+| `MEMRAIN_CONTEXT_CORE_SLUGS` | off (unset) | Comma-separated page slugs whose text `context_pack` puts in a `core` block ahead of the entity cards, inside the token budget. Each caller sees only the live, unquarantined pages its grant can read; a remote caller never gets a diary page, and the redacted public shape has no block. Set with `memrain config set`; not compose-allowlisted. | free |
+| `MEMRAIN_CONTEXT_CORE_MAX_CHARS` | `2000` | Characters of core page text per pack, across all core pages. Values above `2000` are capped at `2000`; `core.truncated` says when text was cut. Set with `memrain config set`; not compose-allowlisted. | free |
 | `MEMRAIN_CONTEXT_NEWER_MENTIONS` | on (`=0` off) | `context_pack` entity cards list up to 8 pages that mention the entity after its page was last written; trimmed first under the token budget. Allowlisted. | free |
 | `MEMRAIN_SYNTHESIS_ONCE_PER_DAY` | on | Runs each synthesis phase at most once per UTC day. `0` turns it off. Allowlisted. | free |
 | `MEMRAIN_WORKER_DRAIN_MS` | `8000` (8s) | On shutdown, how long the jobs worker lets a running job finish. A job still running after it is aborted and handed back to `pending` (`last_error = 'worker_shutdown'`) without spending its retry or stall budget, and the worker lock is released at once. `0` hands back immediately. Keep it under the compose `stop_grace_period` (30s). | free |
@@ -882,6 +907,23 @@ PostgreSQL dead tuples or WAL, backups, external files, exports, client copies,
 external logs, paraphrases or unlinked fragments. Reverting the program cannot
 restore erased rows. It creates no automatic backup and is never applied
 automatically by deployment, a maintenance cycle or an MCP tool.
+
+### CLI exit codes
+
+When a `memrain` command stops on a structured error, the exit code says what
+kind of failure it was, so a cron job or CI step can decide whether to retry:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success. |
+| `1` | Any other failure (a refusal, a permission or version conflict, an unexpected error). |
+| `2` | Usage error or invalid input (`error_class: invalid_request`). Fix the command before running it again. |
+| `75` | Retryable failure (`retryable: true`, such as a busy or timed-out database). The same command may succeed later. |
+
+Commands that document their own codes keep them: `memrain eval` exits `2`
+before scoring when the qrels are stale, and `memrain status --quiescent`
+exits `3` while maintenance is not quiescent. Argument checks inside a command
+return their documented code directly.
 
 ---
 

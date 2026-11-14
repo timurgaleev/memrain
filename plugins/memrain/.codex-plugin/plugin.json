@@ -1,0 +1,19 @@
+{
+  "name": "memrain",
+  "version": "1.16.0",
+  "description": "Connect Codex to your Memrain memory over MCP: search, read and write pages, facts and timelines shared across sessions, plus a small set of skills for working with it.",
+  "author": { "name": "Timur Galeev" },
+  "license": "MIT",
+  "keywords": ["memory", "mcp", "knowledge-base", "search"],
+  "skills": "./skills/",
+  "mcpServers": "./.codex-plugin/mcp.json",
+  "interface": {
+    "displayName": "Memrain",
+    "shortDescription": "Shared memory for your agents over MCP",
+    "longDescription": "Connects Codex to a Memrain server: search, pages, facts, timelines and the entity graph, kept across sessions and shared with your other agents. The server runs on your own AWS account or on this machine (`make local-up`, keyword-only, no AWS). Export BRAIN_MCP_TOKEN with a personal access token before starting Codex. The plugin points at the local quickstart (http://127.0.0.1:18790/mcp); for a deployed server, set its URL under [mcp_servers.memrain] in ~/.codex/config.toml.",
+    "developerName": "Timur Galeev",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": ["Search my Memrain memory for what we know about this project"]
+  }
+}

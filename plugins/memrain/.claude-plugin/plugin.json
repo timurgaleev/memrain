@@ -1,0 +1,29 @@
+{
+  "name": "memrain",
+  "version": "1.16.0",
+  "description": "Connect Claude Code to your Memrain memory over MCP: search, read and write pages, facts and timelines shared across sessions, plus a small set of skills for working with it.",
+  "author": { "name": "Timur Galeev" },
+  "license": "MIT",
+  "keywords": ["memory", "mcp", "knowledge-base", "search"],
+  "userConfig": {
+    "mcp_url": {
+      "type": "string",
+      "title": "Memrain MCP URL",
+      "description": "Your server's /mcp endpoint, for example https://brain.example.com/mcp. The local quickstart serves http://127.0.0.1:18790/mcp.",
+      "default": "http://127.0.0.1:18790/mcp"
+    },
+    "token": {
+      "type": "string",
+      "title": "Memrain token",
+      "description": "A personal access token from `memrain auth create`, or the token `make local-up` printed.",
+      "sensitive": true
+    }
+  },
+  "mcpServers": {
+    "memrain": {
+      "type": "http",
+      "url": "${user_config.mcp_url}",
+      "headers": { "Authorization": "Bearer ${user_config.token}" }
+    }
+  }
+}

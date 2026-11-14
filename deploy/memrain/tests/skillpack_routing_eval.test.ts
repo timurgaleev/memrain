@@ -4,7 +4,8 @@
  * steals or loses a case moves it, and the test names the case.
  */
 import { describe, expect, it } from "bun:test";
-import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { listSkillCatalog } from "../src/core/skillpack/brain-resident.ts";
 import {
   judgeRoute,
@@ -93,8 +94,8 @@ describe("the shipped pack", () => {
     expect(bench.errors).toEqual([]);
     const s = scoreBenchmark(bench.cases, skills);
     expect(s.failures).toEqual([]);
-    expect(s.total).toBe(108);
-    expect(s.correct).toBe(108);
+    expect(s.total).toBe(115);
+    expect(s.correct).toBe(115);
   });
 
   it("sends a specific request past the general skill whose trigger it contains", () => {
@@ -107,5 +108,28 @@ describe("the shipped pack", () => {
     expect(route("save this")).toBe("idea-ingest");
     expect(route("process this meeting from today")).toBe("meeting-ingestion");
     expect(route("quick health check please")).toBe("skillpack-check");
+  });
+
+  it("routes each kind of conversation request to conversation-archive", () => {
+    const route = (q: string): string => {
+      const r = routeByTriggers(q, skills);
+      return r.kind === "match" ? r.slug : r.kind;
+    };
+    for (const q of [
+      "import my chat export",
+      "archive this agent session",
+      "did I already import this conversation",
+      "my conversation import failed",
+    ]) expect(route(q)).toBe("conversation-archive");
+  });
+
+  it("conversation-archive gives each case its own route and promises no automatic import", () => {
+    const text = readFileSync(join(PACK_DIR, "conversation-archive", "SKILL.md"), "utf8");
+    for (const route of ["### Exported chat", "### Agent-session transcript", "### Already imported", "### Failed parse"]) {
+      expect(text).toContain(route);
+    }
+    expect(text).not.toMatch(/automatic|on its own|in the background/i);
+    // Writes go through the importer, never a hand-built page.
+    expect(text).not.toMatch(/`(page_put|page_append|page_edit)`/);
   });
 });

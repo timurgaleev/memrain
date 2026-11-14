@@ -10,8 +10,8 @@
  *   - byte cap: `MEMRAIN_INGEST_MAX_BYTES` (default 1 MiB), stream-counted
  *   - content types: text-shaped only (markdown / plain / html / json);
  *     unknown `text/*` degrades to text/plain, binary is 415 in v1
- *   - idempotency: same content from the same client is the SAME durable
- *     job (job id embeds the SHA-256 content hash)
+ *   - idempotency: same content from the same credential into the same
+ *     source is the SAME durable job (job id embeds the SHA-256 content hash)
  *   - response: 202 + job_id — capture is queued, not synchronous
  *
  * The heavy lifting happens in the `ingest_capture` job: the worker lands
@@ -30,8 +30,10 @@ import type { AuthInfo } from "../core/auth-info.ts";
 import {
   effectiveWriteSourceIdForIngress,
   isNoSourceSentinel,
+  parsePrincipalRef,
   tenantFailClosedEnabled,
 } from "../core/auth-info.ts";
+import { InvalidTokenError, OAuthProvider, type PrincipalGrant } from "../core/oauth-provider.ts";
 import { LEGACY_HEADER_PREFIX } from "../core/brand.ts";
 import { hasScope } from "../core/scope.ts";
 import { validateSlug } from "../core/pages.ts";
@@ -395,12 +397,17 @@ export async function handleIngestRoute(
 
   try {
     const queue = new Queue(deps.storage.engine());
-    // Idempotency: same content from the same client is a single durable
-    // job — the deterministic id makes retries and double-submits collapse.
+    // Idempotency: same content from the same credential into the same source
+    // is a single durable job — retries and double-submits collapse.
     const job = await queue.enqueue({
       kind: INGEST_CAPTURE_JOB_KIND,
-      id: `ingest:webhook:${auth.clientId}:${contentHash}`,
-      payload: { event, ...(callerSlug ? { slug: callerSlug } : {}) },
+      id: `ingest:webhook:${auth.clientId}:${ingestSubmitterKey(event.source_id, auth)}:${contentHash}`,
+      payload: {
+        event,
+        ...(callerSlug ? { slug: callerSlug } : {}),
+        // Which credential queued this, so the worker can re-check it live.
+        ...(auth.principal ? { principal: auth.principal } : {}),
+      },
     });
 
     // Ingestion audit trail (mig 087): one ingest_log row per ACCEPTED event,
@@ -454,6 +461,19 @@ export async function handleIngestRoute(
     );
     return err(500, "queue_submission_failed", "could not queue the event");
   }
+}
+
+/**
+ * The submitter half of a queued ingest job id: the write source and the
+ * credential reference the job runs under. One OAuth client can front several
+ * people, so the client id alone would fold a second tenant's identical bytes
+ * into the first tenant's job. Hashed so the id carries no token hash and no
+ * caller-chosen separator.
+ */
+function ingestSubmitterKey(sourceId: string, auth: AuthInfo): string {
+  const p = auth.principal;
+  const identity = JSON.stringify([sourceId, p?.kind ?? null, p?.id ?? null, p && p.kind !== "pat" ? p.client_id : null]);
+  return createHash("sha256").update(identity, "utf8").digest("hex").slice(0, 32);
 }
 
 /** True when every part of a session at `base` (`<base>-p<n>`) falls under
@@ -533,16 +553,14 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
   try {
     const job = await new Queue(deps.storage.engine()).enqueue({
       kind: TRANSCRIPTS_INGEST_JOB_KIND,
-      id: `ingest:transcript:${auth.clientId}:${contentHash}`,
+      id: `ingest:transcript:${auth.clientId}:${ingestSubmitterKey(sourceId, auth)}:${contentHash}`,
       payload: {
         source_id: sourceId,
         client_id: auth.clientId,
-        // The job runs later, outside this request: it carries who the paid
-        // calls are for, so the push is capped like a call (the cap is read live).
-        spend_id: auth.spendId ?? auth.clientId,
         ref,
         sessions: prepared.map((p) => p.session),
         ...(boundPrefixes && boundPrefixes.length > 0 ? { bound_slug_prefixes: boundPrefixes } : {}),
+        ...(auth.principal ? { principal: auth.principal } : {}),
       },
     });
     const parts = prepared.reduce((n, p) => n + p.parts.length, 0);
@@ -581,6 +599,39 @@ const INGEST_TERMINAL_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The write authority a queued job runs under, read from the credential that
+ * queued it as it stands now. The payload says WHICH credential (a non-bearer
+ * reference), never what it may do: a token revoked, a client deleted, or a
+ * grant narrowed away from the write scope or the job's source while the job
+ * waited refuses the job for good. A job with no reference predates this and
+ * cannot be tied to one credential, so it is refused too; the raw capture
+ * stays on the job row.
+ */
+async function liveWriteAuth(storage: Storage, rawPrincipal: unknown, sourceId: string, job: string): Promise<AuthInfo> {
+  const ref = parsePrincipalRef(rawPrincipal);
+  if (!ref) throw new UnrecoverableJobError(`refused: ${job}: the job names no principal to re-check`);
+  let grant: PrincipalGrant;
+  try {
+    grant = await new OAuthProvider({ engine: storage.engine() }).resolvePrincipal(ref);
+  } catch (e) {
+    if (e instanceof InvalidTokenError) throw new UnrecoverableJobError(`refused: ${job}: ${e.message.toLowerCase()}`);
+    throw e;
+  }
+  const { clientName: _clientName, ...live } = grant;
+  const auth: AuthInfo = { token: "", ...live, principal: ref, isPublic: false };
+  if (!hasScope(auth.scopes, "write")) {
+    throw new UnrecoverableJobError(`refused: ${job}: the credential no longer holds the write scope`);
+  }
+  const writeSource = effectiveWriteSourceIdForIngress(auth, { failClosed: tenantFailClosedEnabled() });
+  if (isNoSourceSentinel(writeSource) || (writeSource ?? "default") !== sourceId) {
+    throw new UnrecoverableJobError(`refused: ${job}: the credential no longer writes to the job's source`);
+  }
+  const source = await storage.engine().query(`SELECT 1 FROM sources WHERE id = $1`, [sourceId]);
+  if (source.rows.length === 0) throw new UnrecoverableJobError(`refused: ${job}: the job's source no longer exists`);
+  return auth;
+}
+
+/**
  * Register the `ingest_capture` worker handler. The capture lands through the
  * SAME `page_put` dispatch path MCP writes use — link sync, search mirror,
  * and on-write extraction all apply — with a synthetic AuthInfo carrying the
@@ -600,19 +651,12 @@ export function registerIngestCaptureHandler(storage: Storage): void {
         ? payload.slug
         : metaSlug ?? defaultSlugForEvent(event);
 
-    const clientId =
-      typeof event.metadata?.client_id === "string"
-        ? (event.metadata.client_id as string)
-        : "webhook";
-    // The submitting client's slug-prefix fence rides the event metadata so
-    // the re-dispatch below stays as bounded as the original caller — the
-    // ingress already refused out-of-prefix slugs, this keeps a payload-side
-    // slug override from widening the write.
-    const boundRaw = event.metadata?.bound_slug_prefixes;
-    const boundSlugPrefixes =
-      Array.isArray(boundRaw) && boundRaw.every((p) => typeof p === "string")
-        ? (boundRaw as string[])
-        : undefined;
+    // The live grant, not the prefixes or client recorded at admission, fences
+    // the write: dispatch confines it to the credential's current prefixes.
+    const auth = await liveWriteAuth(storage, payload.principal, event.source_id, "ingest_capture");
+    if (auth.boundSlugPrefixes && auth.boundSlugPrefixes.length > 0 && !slugUnderPrefixes(slug, auth.boundSlugPrefixes)) {
+      throw new UnrecoverableJobError("refused: ingest_capture: the slug is outside the credential's bound prefixes");
+    }
     // An abandoned attempt must not write: the one that re-claimed the row will.
     ctx.signal?.throwIfAborted();
     const result = await dispatchTool(
@@ -622,22 +666,10 @@ export function registerIngestCaptureHandler(storage: Storage): void {
         arguments: {
           slug,
           markdown_body: event.content,
-          written_by: `webhook:${clientId}`,
+          written_by: `webhook:${auth.clientId}`,
         },
       },
-      {
-        isPublic: false,
-        authInfo: {
-          token: "",
-          clientId,
-          scopes: ["write"],
-          sourceId: event.source_id,
-          isPublic: false,
-          ...(boundSlugPrefixes && boundSlugPrefixes.length > 0
-            ? { boundSlugPrefixes }
-            : {}),
-        },
-      },
+      { isPublic: false, authInfo: auth },
     );
     const text = result.content?.[0]?.text ?? "{}";
     if (result.isError) {
@@ -680,16 +712,17 @@ export function registerIngestCaptureHandler(storage: Storage): void {
         throw new UnrecoverableJobError("refused: transcripts_ingest: a session falls outside the client's bound prefixes");
       }
     }
+    const auth = await liveWriteAuth(storage, payload.principal, sourceId, "transcripts_ingest");
+    const live = auth.boundSlugPrefixes;
+    if (live && live.length > 0 && sessions.some((s) => !sessionUnderPrefixes(sessionBaseSlug(s), live))) {
+      throw new UnrecoverableJobError("refused: transcripts_ingest: a session falls outside the credential's bound prefixes");
+    }
     const ref = typeof payload.ref === "string" ? payload.ref : "push";
     const run = () =>
       ingestSessions(storage, sessions, { sourceId, ref, remote: true, ...(ctx.signal ? { signal: ctx.signal } : {}) });
-    const spendId = payload.spend_id;
-    // The cap is looked up when each paid call books, not taken from the
-    // payload: a cap lowered (or set) after the push must bind the job.
-    const result =
-      typeof spendId === "string" && spendId !== ""
-        ? await runWithSpendClient({ clientId: spendId }, run)
-        : await run();
+    // Paid calls book under who the credential spends as now; the cap is looked
+    // up when each call books, so a cap lowered after the push binds the job.
+    const result = await runWithSpendClient({ clientId: auth.spendId ?? auth.clientId }, run);
     return { ...result };
   });
 }

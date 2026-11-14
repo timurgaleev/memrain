@@ -119,6 +119,38 @@ docker exec deploy-memrain-1 bun run src/cli.ts eval
 # computes recall@5 + MRR; exits 1 if mean recall@5 < 0.6
 ```
 
+Code retrieval over this repository's own source (needs the repo indexed as a
+code root; one Titan query embedding per question per run):
+
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts eval code [--json]
+# hit@5 over 19 fixed questions and top-1 stability across 3 runs;
+# exits 1 without a score unless the code index reports ready
+```
+
+The LongMemEval benchmark is budgeted and resumable; see
+[docs/eval/LONGMEMEVAL.md](../../../docs/eval/LONGMEMEVAL.md). Price it with
+`eval longmemeval --dry-run` before any paid run.
+
+## Pages vector search cannot return
+
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts search invisible [--source ID] [--limit N] [--json]
+```
+
+Read-only. It lists up to `--limit` pages (default 100, at most 1000) that
+have no embedded chunk, and gives each one a state:
+
+- `empty`: no prose outside the facts/takes fences.
+- `skip`: an `embed_skip` or quarantine marker.
+- `failed`: a mirror failure newer than the mirror.
+- `chunkless_healable`: no mirror yet, or chunks still waiting for vectors.
+
+Only `failed` and `chunkless_healable` need work; the page-mirror and
+embed-gaps cycle phases repair them. When `MEMRAIN_CONTEXTUAL_RETRIEVAL` is on,
+`doctor`'s `contextual-coverage` check warns if fewer than half of the prose
+vectors were embedded with their document context.
+
 ## Re-build the index from scratch
 
 Only the derived search index can be rebuilt from intact source files and

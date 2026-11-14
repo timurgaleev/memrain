@@ -105,14 +105,19 @@ function assertOneFence(body: string): ReturnType<typeof locateFenceMarkers> {
   return span;
 }
 
-export function patchTakeFence(body: string, mutation: TakeFenceMutation, actor: TakeMutationActor): TakeFencePatch {
+/**
+ * `storedMaxRow` is the highest row number the brain already holds for the
+ * page. A page rewritten without its takes fence still has those rows, and
+ * numbering from the fence alone would reuse #1 and overwrite the stored take.
+ */
+export function patchTakeFence(body: string, mutation: TakeFenceMutation, actor: TakeMutationActor, storedMaxRow = 0): TakeFencePatch {
   validateTakeMutation(mutation, actor);
   const span = assertOneFence(body);
   if (span === null) {
     if (mutation.op !== "add") invalid("takes fence not found");
     const markers = fenceMarkers("takes", "memrain");
     const separator = body.length > 0 && !body.endsWith("\n") ? "\n\n" : "\n";
-    return patchTakeFence(`${body}${separator}${markers.begin}\n${render(BASE)}\n${render(BASE.map(() => "---"))}\n${markers.end}\n`, mutation, actor);
+    return patchTakeFence(`${body}${separator}${markers.begin}\n${render(BASE)}\n${render(BASE.map(() => "---"))}\n${markers.end}\n`, mutation, actor, storedMaxRow);
   }
   if (span.brand === "both") invalid("mixed takes fences");
   const innerStart = span.beginIdx + span.begin.length;
@@ -136,7 +141,7 @@ export function patchTakeFence(body: string, mutation: TakeFenceMutation, actor:
     if (ids.has(id)) invalid("duplicate numeric row identifier");
     ids.set(id, { index: entry.index, cells: entry.cells! });
   }
-  const rowNum = mutation.op === "add" ? [...ids.keys()].reduce((max, id) => Math.max(max, id), 0) + 1 : mutation.rowNum;
+  const rowNum = mutation.op === "add" ? [...ids.keys()].reduce((max, id) => Math.max(max, id), storedMaxRow) + 1 : mutation.rowNum;
   if (rowNum > MAX_ROW) invalid("row number limit reached");
   const parsed = parseTakesFence(body);
   const existing = parsed.takes.find((take) => take.rowNum === rowNum);

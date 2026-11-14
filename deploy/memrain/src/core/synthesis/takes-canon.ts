@@ -146,6 +146,13 @@ export async function resolveTake(
   return { resolved: rows.length > 0 };
 }
 
+/** Highest fence row number stored for a page, active or not; 0 when none. */
+export async function storedTakeRowMax(engine: Pick<Engine, "query">, sourceRef: string): Promise<number> {
+  const { rows } = await engine.query<{ n: number | null }>(
+    "SELECT MAX(row_num)::int AS n FROM synth_takes WHERE source_ref = $1 AND row_num IS NOT NULL", [sourceRef]);
+  return rows[0]?.n ?? 0;
+}
+
 /** Stable take_key for a fence row — a function of the page + row number, NOT
  *  the claim text, so an in-place claim edit updates the same row. */
 export function fenceTakeKey(sourceRef: string, rowNum: number): string {

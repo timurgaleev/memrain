@@ -24,7 +24,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       for (const row of after) expect(row.config).toEqual(["search_path=pg_catalog, public, pg_temp"]);
       await e.query("INSERT INTO entity_facts(entity_slug,fact) VALUES('people/migration-probe','Retained fact')");
       const data = (await e.query("SELECT * FROM entity_facts ORDER BY id")).rows;
-      const rls = (await e.query("SELECT oid::text, relrowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace ORDER BY oid")).rows;
+      // By name: a later migration that creates a table gets new oids when it is reverted and reapplied.
+      const rls = (await e.query("SELECT relname, relrowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace ORDER BY relname")).rows;
       for (const id of discoverMigrations().map(m => m.id).filter(id => id > 146).sort((a,b) => b-a)) await revertMigration(e, id);
       await revertMigration(e, 146);
       const before = await functions(e);
@@ -33,7 +34,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await runMigrations(e);
       expect(await functions(e)).toEqual(after);
       expect((await e.query("SELECT * FROM entity_facts ORDER BY id")).rows).toEqual(data);
-      expect((await e.query("SELECT oid::text, relrowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace ORDER BY oid")).rows).toEqual(rls);
+      expect((await e.query("SELECT relname, relrowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace ORDER BY relname")).rows).toEqual(rls);
     } finally { await db.close(); }
   });
 

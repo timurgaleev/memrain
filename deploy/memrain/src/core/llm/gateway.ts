@@ -42,9 +42,22 @@ export async function withInflightCap<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Keyword-only mode (`MEMRAIN_KEYWORD_ONLY=1`): the brain runs without AWS.
+ * Nothing is embedded and no model is invoked; search is keyword-only, and every
+ * paid call is refused at `trackedInvoke` before it is sent.
+ */
+export function keywordOnlyMode(
+  raw: string | undefined = process.env.MEMRAIN_KEYWORD_ONLY,
+): boolean {
+  const v = (raw ?? "").trim().toLowerCase();
+  return v === "1" || v === "true";
+}
+
 /** Cheap probe that a Bedrock call could plausibly authenticate (region/creds
  *  present). Not a live reachability check. */
 export function isLlmAvailable(): boolean {
+  if (keywordOnlyMode()) return false;
   return !!(
     process.env.AWS_REGION ||
     process.env.AWS_PROFILE ||

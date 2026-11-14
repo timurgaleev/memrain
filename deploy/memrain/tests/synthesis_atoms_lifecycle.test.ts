@@ -330,7 +330,7 @@ for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) descri
     expect(result.pagesHeld).toBe(2);
     expect((await engine().query("SELECT slug FROM pages WHERE deleted_at IS NOT NULL")).rows).toHaveLength(100);
     expect((await state()).atoms).toHaveLength(204);
-  });
+  }, 30_000);
 
   it("defaults the operator command to a write-free preview and requires its exact hash to apply", async () => {
     await run(["A", "B"]);

@@ -17,6 +17,7 @@ import * as pageIndex from "../src/core/page-index.ts";
 import { currentSpendContext } from "../src/core/budget.ts";
 import { runTranscripts } from "../src/commands/transcripts.ts";
 import { handleIngestRoute, registerIngestCaptureHandler, TRANSCRIPTS_INGEST_JOB_KIND } from "../src/http/ingest.ts";
+import { mintIngestPat } from "./helpers/ingest-principal.ts";
 
 const FIXTURES = join(import.meta.dir, "fixtures", "transcripts");
 const claudeRaw = readFileSync(join(FIXTURES, "claude-code-session.jsonl"), "utf-8");
@@ -66,13 +67,14 @@ describe("POST /ingest transcript push", () => {
   }
 
   it("queues one idempotent job and the worker writes conversation pages under the caller's source", async () => {
-    const res = await handleIngestRoute(pushReq(claudeRaw), deps(writeAuth));
+    const { auth: laptop } = await mintIngestPat(storage.engine(), { name: "laptop-1" });
+    const res = await handleIngestRoute(pushReq(claudeRaw), deps(laptop));
     expect(res.status).toBe(202);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).toMatchObject({ source_id: "default", format: "claude-code", sessions: 1, parts: 1 });
-    expect(String(body.job_id)).toMatch(/^ingest:transcript:laptop-1:[0-9a-f]{64}$/);
+    expect(String(body.job_id)).toMatch(/^ingest:transcript:laptop-1:[0-9a-f]{32}:[0-9a-f]{64}$/);
 
-    const again = await handleIngestRoute(pushReq(claudeRaw), deps(writeAuth));
+    const again = await handleIngestRoute(pushReq(claudeRaw), deps(laptop));
     expect(((await again.json()) as Record<string, unknown>).job_id).toBe(body.job_id);
     expect(await jobs()).toHaveLength(1);
 
@@ -120,8 +122,11 @@ describe("POST /ingest transcript push", () => {
     expect((await handleIngestRoute(pushReq(claudeRaw), deps(writeAuth))).status).toBe(202);
   });
 
-  it("runs the job under the pushing client's spend id, mirrored as a remote write, with the cap read live", async () => {
-    const res = await handleIngestRoute(pushReq(claudeRaw), deps({ ...writeAuth, spendId: "grant-9", budgetUsdPerDay: 0.25 }));
+  it("runs the job under the pushing credential's live spend id, mirrored as a remote write, with the cap read live", async () => {
+    const { auth: laptop } = await mintIngestPat(storage.engine(), { name: "laptop-1" });
+    // A spend id recorded at admission is not authority: the job spends as
+    // the credential spends when it runs.
+    const res = await handleIngestRoute(pushReq(claudeRaw), deps({ ...laptop, spendId: "grant-9", budgetUsdPerDay: 0.25 }));
     const jobId = String(((await res.json()) as Record<string, unknown>).job_id);
     const seen: Array<{ spend: unknown; remote: boolean }> = [];
     const spy = spyOn(pageIndex, "mirrorPage").mockImplementation(async (_s, _p, opts) => {
@@ -135,13 +140,15 @@ describe("POST /ingest transcript push", () => {
     }
     // No cap rides the job: a cap changed after the push must bind it, so the
     // paid calls look it up when they book.
-    expect(seen).toEqual([{ spend: { clientId: "grant-9" }, remote: true }]);
+    expect(seen).toEqual([{ spend: { clientId: "laptop-1" }, remote: true }]);
     const payload = JSON.parse(String((await jobs())[0]!.payload)) as Record<string, unknown>;
     expect("budget_usd_per_day" in payload).toBe(false);
+    expect("spend_id" in payload).toBe(false);
   });
 
   it("an aborted transcripts_ingest attempt writes no page", async () => {
-    const res = await handleIngestRoute(pushReq(claudeRaw), deps(writeAuth));
+    const { auth: laptop } = await mintIngestPat(storage.engine(), { name: "laptop-1" });
+    const res = await handleIngestRoute(pushReq(claudeRaw), deps(laptop));
     const jobId = String(((await res.json()) as Record<string, unknown>).job_id);
     registerIngestCaptureHandler(storage);
     const row = await storage.engine().query<JobRow>(`SELECT * FROM jobs WHERE id = $1`, [jobId]);

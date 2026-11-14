@@ -9,6 +9,7 @@ tools:
   - whoami
   - list_skills
 mutating: false
+prompt: true
 ---
 
 # Connect Client

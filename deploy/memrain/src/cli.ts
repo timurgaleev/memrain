@@ -19,6 +19,8 @@ import { runDoctor } from "./commands/doctor.ts";
 import { runIntegrity } from "./commands/integrity.ts";
 import { runEval } from "./commands/eval.ts";
 import { runEvalChronicle } from "./commands/eval-chronicle.ts";
+import { runEvalCode } from "./commands/eval-code.ts";
+import { runEvalLongMemEval } from "./commands/eval-longmemeval.ts";
 import { runEvalProbe } from "./commands/eval-probe.ts";
 import { runBenchCli, isBenchFamilySelector } from "./commands/bench.ts";
 import { runBacklinks } from "./commands/backlinks.ts";
@@ -78,6 +80,7 @@ import { runEmbed } from "./commands/embed.ts";
 import { runSearchModes } from "./commands/search-modes.ts";
 import { runSearchStats, runSearchTune } from "./commands/search-stats.ts";
 import { runSearchDiagnose } from "./commands/search-diagnose.ts";
+import { runSearchInvisible } from "./commands/search-invisible.ts";
 import { runConfig, type ConfigSub } from "./commands/config.ts";
 import { runCapture } from "./commands/capture.ts";
 import { runTranscripts } from "./commands/transcripts.ts";
@@ -94,7 +97,7 @@ import { runEvalQrelsBuild } from "./commands/eval-qrels.ts";
 import { runSalience } from "./commands/salience.ts";
 import { runWatch } from "./commands/watch.ts";
 import { runCycle, parsePhasesArg } from "./commands/cycle.ts";
-import { resolveExitCode } from "./cli-exit.ts";
+import { exitCodeForError, resolveExitCode } from "./cli-exit.ts";
 import { parseArgs, validateFlags } from "./cli-args.ts";
 import { aliasDeprecationLine } from "./cli-alias.ts";
 import type { EntityType } from "./core/entities.ts";
@@ -126,6 +129,8 @@ function printUsage(): void {
   console.log("                               ranking recommendations from the stats; --apply writes via `config`");
   console.log("  search diagnose <query> --target <slug> [--source ID] [--json]");
   console.log("                               arm-by-arm probe: where does the target surface (keyword/vector/alias/hybrid)?");
+  console.log("  search invisible [--source ID] [--limit N] [--json]");
+  console.log("                               read-only list of pages vector search cannot return, with state and reason");
   console.log("  reindex [--all] [--vault P] [--source vault|code|all] [--paths CSV] [--rechunk-stale] [--reconcile-deletes] [--allow-mass-delete]");
   console.log("  reindex --contextual [--force] [--dry-run] [--limit N]");
   console.log("  reindex --rechunk-stale [--dry-run] [--limit N] [--plan-hash HASH --max-cost-usd N]");
@@ -158,6 +163,12 @@ function printUsage(): void {
   console.log("            [--split dev|all] [--allow-errors] [--max-latency-x X]");
   console.log("                               regression gate vs a stored baseline (exit 1 on drop)");
   console.log("  eval chronicle [--json]      deterministic Life Chronicle feature eval (own DB, no LLM)");
+  console.log("  eval code [--json]           fixed code-retrieval eval: hit@5 and top-1 stability over this repo's own code");
+  console.log("  eval longmemeval --dry-run [--max-usd N] [--limit N]");
+  console.log("  eval longmemeval --out DIR --max-usd N [--limit N] [--answer-model ID] [--judge-model ID] [--dir CACHE]");
+  console.log("  eval longmemeval --out DIR --settle RESERVATION --usd N");
+  console.log("                               LongMemEval-S answered from retrieval, Bedrock-Claude-judged; budgeted, resumable;");
+  console.log("                               --limit N runs the first N questions in dataset order");
   console.log("  eval-probe [--limit N]       replay eval set, append a row to eval_snapshots (nightly probe)");
   console.log("  bench [--family push|continuity|fidelity|all] [--corpus DIR] [--json]");
   console.log("                               agent-facing behaviour bench (push / continuity / write-back");
@@ -496,10 +507,39 @@ async function main(argv: readonly string[]): Promise<number> {
       return 0;
     }
     case "eval": {
+      if (flags.has("--dry-run") && positional[0] !== "longmemeval") {
+        // Only the LongMemEval run has a free preview; any other eval would
+        // ignore the flag and spend.
+        throw new Error("memrain eval: --dry-run is supported only by 'eval longmemeval'");
+      }
       // `eval chronicle` brings its own in-memory DB — run it BEFORE any engine
       // connect (it needs no config and no gateway).
       if (positional[0] === "chronicle") {
         return await runEvalChronicle(positional.slice(1));
+      }
+      if (positional.length === 1 && positional[0] === "code") {
+        return await runEvalCode(flags.has("--json") ? { json: true } : {});
+      }
+      if (positional.length === 1 && positional[0] === "longmemeval") {
+        const lmeOpts: Parameters<typeof runEvalLongMemEval>[0] = {};
+        const lmeOut = values.get("--out");
+        if (lmeOut) lmeOpts.out = lmeOut;
+        const lmeMaxUsd = values.get("--max-usd");
+        if (lmeMaxUsd !== undefined) lmeOpts.maxUsd = Number(lmeMaxUsd);
+        if (flags.has("--dry-run")) lmeOpts.dryRun = true;
+        const lmeLimit = values.get("--limit");
+        if (lmeLimit !== undefined) lmeOpts.limit = Number(lmeLimit);
+        const settle = values.get("--settle");
+        if (settle) lmeOpts.settle = settle;
+        const usd = values.get("--usd");
+        if (usd !== undefined) lmeOpts.usd = Number(usd);
+        const cacheDir = values.get("--dir");
+        if (cacheDir) lmeOpts.cacheDir = cacheDir;
+        const answerModel = values.get("--answer-model");
+        if (answerModel) lmeOpts.answerModel = answerModel;
+        const judgeModel = values.get("--judge-model");
+        if (judgeModel) lmeOpts.judgeModel = judgeModel;
+        return await runEvalLongMemEval(lmeOpts);
       }
       // Sub-subcommands: run-all / compare / gate (aggregate instruments).
       if (positional[0] === "run-all") {
@@ -1659,6 +1699,15 @@ async function main(argv: readonly string[]): Promise<number> {
         if (flags.has("--json")) diagOpts.json = true;
         return await runSearchDiagnose(diagOpts);
       }
+      if (positional.length === 1 && positional[0] === "invisible") {
+        const invOpts: Parameters<typeof runSearchInvisible>[0] = {};
+        const src = values.get("--source");
+        if (src) invOpts.sourceId = src;
+        const limitStr = values.get("--limit");
+        if (limitStr !== undefined) invOpts.limit = Number(limitStr);
+        if (flags.has("--json")) invOpts.json = true;
+        return await runSearchInvisible(invOpts);
+      }
       const query = positional.join(" ");
       if (!query) {
         console.error("memrain search: <query> is required");
@@ -1853,6 +1902,6 @@ main(process.argv.slice(2)).then(
   (code) => process.exit(resolveExitCode(code, process.exitCode ?? undefined)),
   (err) => {
     console.error(`[memrain] error:`, err instanceof Error ? err.message : err);
-    process.exit(1);
+    process.exit(exitCodeForError(err));
   },
 );

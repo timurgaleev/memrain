@@ -109,6 +109,31 @@ are with a one-time code instead.
    form; paste the code. `mcp_oauth_callback_port` in `config.toml` pins the
    port if a firewall needs it.
 
+## Option C: install the plugin
+
+The repository is also a Codex plugin marketplace. Its one plugin lives in
+`plugins/memrain`, so an install copies only that folder: the `memrain` MCP
+server plus six skills (`query`, `brain-ops`, `capture`, `briefing`,
+`correction-pipeline`, `connect-client`).
+
+```bash
+codex plugin marketplace add <your-github-username>/memrain
+codex plugin add memrain@memrain
+export BRAIN_MCP_TOKEN='<PAT>'
+```
+
+The plugin's server points at the local quickstart, `http://127.0.0.1:18790/mcp`
+(`make local-up`), and reads the token from `BRAIN_MCP_TOKEN`. For a deployed
+server, override the URL in `~/.codex/config.toml` under the same name:
+
+```toml
+[mcp_servers.memrain]
+url = "https://brain.<domain>/mcp"
+bearer_token_env_var = "BRAIN_MCP_TOKEN"
+```
+
+Codex uses your entry in place of the plugin's and keeps the plugin's skills.
+
 ## Verify
 
 Ask Codex to call the `whoami` tool: `write_source` should be `alice` and

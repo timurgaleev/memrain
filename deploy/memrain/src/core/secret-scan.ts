@@ -28,7 +28,7 @@ import { encodedCandidates, protectEncodedAllowlist } from "./secret-scan-encode
  * Bumped whenever the rules change what is caught, so text stored under an
  * older version can be found and scanned again.
  */
-export const SECRET_SCAN_VERSION = 4;
+export const SECRET_SCAN_VERSION = 5;
 
 export interface SecretFinding {
   kind: string;
@@ -151,8 +151,15 @@ function clearsEntropyGate(value: string): boolean {
   return /\d/.test(value) && /\D/.test(value) && correctedEntropy(value) >= ENTROPY_FLOOR;
 }
 
-/** A JSON escape (`\n`, `\t`, `\u001b`) or a percent escape (`%22`) ending the text. */
-const ESCAPE_TAIL = /(?:\\(?:[bfnrt]|u[0-9A-Fa-f]{4})|%[0-9A-Fa-f]{2})$/;
+/**
+ * A JSON escape (`\n`, `\t`, `\u001b`), a percent escape (`%22`) or a
+ * terminal colour code (raw `ESC[32m`, or written as `\e[`, `\033[`, `\x1b[`,
+ * `\u001b[`) ending the text. Coloured CLI output glues the key to the `m`.
+ */
+const ESC = String.fromCharCode(0x1b);
+const ESCAPE_TAIL = new RegExp(String.raw`(?:\\(?:[bfnrt]|u[0-9A-Fa-f]{4})|%[0-9A-Fa-f]{2}|(?:${ESC}|\\(?:e|033|x1[Bb]|u001[Bb]))\[[0-9;]{0,16}m)$`);
+/** Longest ESCAPE_TAIL match: `\u001b[` plus 16 parameter characters and `m`. */
+const ESCAPE_TAIL_MAX = 24;
 
 /**
  * Whether a key may start at `offset`. `left` (fixed shapes): anywhere but
@@ -166,7 +173,7 @@ const ESCAPE_TAIL = /(?:\\(?:[bfnrt]|u[0-9A-Fa-f]{4})|%[0-9A-Fa-f]{2})$/;
 function startAllowed(start: "left" | "glued", text: string, offset: number): boolean {
   const prev = text[offset - 1] ?? "";
   if (start === "left" ? !/[a-z0-9]/i.test(prev) : prev === "_" || prev === "-") return true;
-  return ESCAPE_TAIL.test(text.slice(Math.max(0, offset - 6), offset));
+  return ESCAPE_TAIL.test(text.slice(Math.max(0, offset - ESCAPE_TAIL_MAX), offset));
 }
 
 const left = (kind: string, body: string, echo?: Pattern["echo"]): Pattern => ({ kind, regex: new RegExp(body, "g"), start: "left", echo });

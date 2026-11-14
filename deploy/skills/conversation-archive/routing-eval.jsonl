@@ -1,0 +1,10 @@
+// Routing eval fixtures for skills/conversation-archive.
+// Each line: {intent, expected_skill, ambiguous_with?}.
+// Rule: intent must paraphrase the trigger, not copy it.
+{"intent": "please import my chat export that I downloaded from ChatGPT last week", "expected_skill": "conversation-archive"}
+{"intent": "I want to import my claude conversations from the zip I just got", "expected_skill": "conversation-archive"}
+{"intent": "archive this agent session before I close the terminal", "expected_skill": "conversation-archive"}
+{"intent": "how do I push my session log up to the hosted brain", "expected_skill": "conversation-archive"}
+{"intent": "did I already import this conversation into the brain", "expected_skill": "conversation-archive"}
+{"intent": "the conversation import failed with transcript_unreadable, what now", "expected_skill": "conversation-archive"}
+{"intent": "how long should a sourdough starter rest", "expected_skill": null, "ambiguous_with": []}
