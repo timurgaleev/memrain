@@ -13,6 +13,7 @@ import type { FetchFn } from "./client.ts";
 import type { SourceKind } from "../sources.ts";
 import type { SyncAccount, SyncAdapter } from "./sync-engine.ts";
 import { assertConnectorName } from "./accounts.ts";
+import { googleProvider } from "./google/provider.ts";
 
 export interface ProviderService {
   /** Read-only scopes this service needs. */
@@ -100,5 +101,7 @@ export class ProviderRegistry {
 
 /** Providers that ship with Memrain. Each arrives with its connector. */
 export function builtinProviders(): ProviderRegistry {
-  return new ProviderRegistry();
+  const registry = new ProviderRegistry();
+  registry.register(googleProvider());
+  return registry;
 }
