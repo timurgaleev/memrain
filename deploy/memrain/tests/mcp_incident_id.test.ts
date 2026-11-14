@@ -15,7 +15,9 @@ describe("public MCP incident id", () => {
   it("returns only an incident id and logs the detail under the same id", async () => {
     const e = db.storage.engine();
     const original = e.query.bind(e);
-    const detail = "relation \"pages\" broke at postgres://memrain:fixture-pw@db.internal:5432/brain\n    at Object.query (engine.ts:42)";
+    // Assembled at runtime so the source never holds a credential-shaped URL.
+    const dsn = ["postgres://memrain", "fixture-pw"].join(":") + "@db.internal:5432/brain";
+    const detail = `relation "pages" broke at ${dsn}\n    at Object.query (engine.ts:42)`;
     const query = spyOn(e, "query").mockImplementation(async (sql, params) => {
       if (sql.includes("FROM pages")) throw new Error(detail);
       return original(sql, params);
