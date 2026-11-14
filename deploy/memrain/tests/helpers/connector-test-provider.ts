@@ -44,6 +44,7 @@ export interface FakeProviderOptions {
   tokenStatus?: number;
   identity?: string;
   refreshToken?: string | null;
+  revokeStatus?: number;
 }
 
 export function fakeProvider(opts: FakeProviderOptions = {}): { fetch: FetchFn; calls: RecordedCall[] } {
@@ -68,7 +69,7 @@ export function fakeProvider(opts: FakeProviderOptions = {}): { fetch: FetchFn; 
       if (headers.authorization !== `Bearer ${TEST_ACCESS_TOKEN}`) return new Response("no", { status: 401 });
       return Response.json({ email: opts.identity ?? "owner@example.test" });
     }
-    if (url === "https://auth.provider.test/revoke") return new Response(null, { status: 200 });
+    if (url === "https://auth.provider.test/revoke") return new Response(null, { status: opts.revokeStatus ?? 200 });
     return new Response("not found", { status: 404 });
   };
   return { fetch, calls };

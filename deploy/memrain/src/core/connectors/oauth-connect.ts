@@ -432,27 +432,40 @@ async function persistGrant(
 }
 
 /**
- * Disconnect an account: revoke its token upstream when the provider allows,
- * drop the credential and park the account as revoked and disabled. Its pages
- * stay; deleting them is a separate, explicit step.
+ * Disconnect an account: revoke its token upstream, then drop the credential
+ * and park the account as revoked and disabled. When the provider can revoke
+ * but the revocation fails (or the credential cannot be opened), the sealed
+ * credential is kept and the account parked as `error`/`revoke_failed`, so a
+ * later retry can still revoke it; `force` drops it anyway. A provider with no
+ * revocation endpoint has nothing to retry. Pages stay either way; deleting
+ * them is a separate, explicit step.
  */
-export async function disconnectAccount(deps: ConnectDeps, accountId: string): Promise<{ revoked: boolean }> {
+export async function disconnectAccount(
+  deps: ConnectDeps,
+  accountId: string,
+  opts: { force?: boolean } = {},
+): Promise<{ revoked: boolean; credentialKept: boolean }> {
   const r = await deps.engine.query<{ provider: string }>(`SELECT provider FROM connector_accounts WHERE id = $1`, [accountId]);
   const row = r.rows[0];
   if (!row) throw new ConnectError("account_not_found");
-  let revoked = false;
   const provider = deps.providers.get(row.provider);
-  if (deps.kek && provider) {
+  const hasCredential = (await deps.engine.query(`SELECT 1 FROM connector_credentials WHERE account_id = $1`, [accountId])).rows.length > 0;
+  const canRevoke = provider !== null && (provider.revoke !== undefined || provider.revokeUrl !== undefined);
+  let revoked = false;
+  if (hasCredential && canRevoke && deps.kek) {
     const cred = await readCredential(deps.engine, deps.kek, accountId).catch(() => null);
     const client = cred ? await resolveClient(deps, deps.kek, provider.id).catch(() => null) : null;
     if (cred && client) {
       revoked = await revokeToken(provider, deps.fetch ?? (globalThis.fetch as FetchFn), cred.tokens.refresh_token ?? cred.tokens.access_token, client);
     }
   }
+  // Unknown provider: we cannot tell whether a revoke is owed, so keep it too.
+  const owesRevoke = hasCredential && (canRevoke || provider === null) && !revoked;
+  const keep = owesRevoke && opts.force !== true;
   await deps.engine.transaction(async (tx) => {
-    await tx.query(`DELETE FROM connector_credentials WHERE account_id = $1`, [accountId]);
+    if (!keep) await tx.query(`DELETE FROM connector_credentials WHERE account_id = $1`, [accountId]);
     await tx.query(`UPDATE connector_accounts SET enabled = FALSE, updated_at = NOW() WHERE id = $1`, [accountId]);
-    await setAccountStatus(tx, accountId, "revoked", null);
+    await setAccountStatus(tx, accountId, keep ? "error" : "revoked", keep ? "revoke_failed" : null);
   });
-  return { revoked };
+  return { revoked, credentialKept: keep };
 }

@@ -299,8 +299,31 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const { state } = await begin(e, d);
       const done = await completeConnect(d, { provider: "test", state, code: "c", adminSessionId: SESSION });
       await setAccountEnabled(e, done.account.id, true);
-      expect(await disconnectAccount(d, done.account.id)).toEqual({ revoked: true });
+      expect(await disconnectAccount(d, done.account.id)).toEqual({ revoked: true, credentialKept: false });
       expect(fake.calls.filter((c) => c.url.endsWith("/revoke")).map((c) => c.body?.get("token"))).toEqual([TEST_REFRESH_TOKEN]);
+      expect(await credentialMeta(e, done.account.id)).toBeNull();
+      expect(await getAccount(e, done.account.id)).toMatchObject({ status: "revoked", enabled: false });
+    } finally { await db.close(); }
+  });
+
+  it("keeps the sealed credential when upstream revocation fails, unless forced", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "/inbox" });
+      const fake = fakeProvider({ revokeStatus: 503 });
+      const d = deps(e, fake.fetch);
+      const { state } = await begin(e, d);
+      const done = await completeConnect(d, { provider: "test", state, code: "c", adminSessionId: SESSION });
+      await setAccountEnabled(e, done.account.id, true);
+      expect(await disconnectAccount(d, done.account.id)).toEqual({ revoked: false, credentialKept: true });
+      expect(await credentialMeta(e, done.account.id)).not.toBeNull();
+      expect(await getAccount(e, done.account.id)).toMatchObject({ status: "error", status_reason: "revoke_failed", enabled: false });
+
+      const noKey = deps(e, fake.fetch, { kek: null });
+      expect(await disconnectAccount(noKey, done.account.id)).toEqual({ revoked: false, credentialKept: true });
+
+      expect(await disconnectAccount(d, done.account.id, { force: true })).toEqual({ revoked: false, credentialKept: false });
       expect(await credentialMeta(e, done.account.id)).toBeNull();
       expect(await getAccount(e, done.account.id)).toMatchObject({ status: "revoked", enabled: false });
     } finally { await db.close(); }
