@@ -82,6 +82,7 @@ import {
   checkSourceRoutingHealth,
   checkDocumentIdDrift,
 } from "../core/doctor-tenancy.ts";
+import { checkPlannerStats } from "../core/planner-stats.ts";
 import { latestEvalSnapshot, type EvalSnapshotRow } from "../core/eval-snapshot.ts";
 import { latestContradictionRun } from "../core/synthesis/contradictions.ts";
 import { Queue } from "../core/jobs/queue.ts";
@@ -497,6 +498,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
     }
     checks.push(await checkPatScopesRecorded(storage.raw()));
     checks.push(await checkTenancyIsolationConfig(storage.raw()));
+    checks.push(await checkPlannerStats(storage.raw()));
     checks.push(await checkSourceRoutingHealth(storage.raw()));
     checks.push(await checkDocumentIdDrift(storage.raw()));
 

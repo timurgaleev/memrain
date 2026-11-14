@@ -802,6 +802,7 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_MIGRATE_BACKOFF_MS` | unset (5s/15s/45s) | Replaces the migration retry backoff with one fixed delay. For tests. | free |
 | `MEMRAIN_BULK_MAX_RETRIES` | built-in | Retries for a transient database error in bulk work. `0` disables retries. | free |
 | `MEMRAIN_NO_DB_CONFIG` | off (`=1` on) | Skips the `memrain config set` overlay: stored `MEMRAIN_*` values are normally applied at boot where the real environment leaves a key unset. | free |
+| `MEMRAIN_PGLITE_AUTO_ANALYZE` | off (`=1` on) | PGLite only (it has no autovacuum). After each maintenance cycle and each `memrain import --apply`, runs `ANALYZE` on the hot tables (`pages`, `chunks`, `embeddings`, `entity_facts`, `links`) whose live row count has drifted from the planner estimate by more than max(500, 10%). Postgres is left to autovacuum; doctor `planner-stats` reports stale statistics on both engines. | free |
 | `MEMRAIN_PGLITE_NO_LOCK` | off (`=1` on) | Skips the lock file that stops two processes opening one PGLite directory. Only for a filesystem that cannot hold it. | free |
 | `MEMRAIN_TEST_PGLITE_TEMPLATE` | unset | Test-only. A new PGLite directory starts as a copy of this already-migrated one; `scripts/test-sharded.sh` sets it. Never set it in `.env` or compose. | free |
 

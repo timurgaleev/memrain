@@ -146,6 +146,7 @@ describe("doctor", () => {
       "pat-scopes-recorded",
       "person-name-duplicates",
       "pglite",
+      "planner-stats",
       "quarantined-pages",
       "queue-health",
       "redaction-markers",

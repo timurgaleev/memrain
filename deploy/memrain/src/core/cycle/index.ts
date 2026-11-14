@@ -3,6 +3,7 @@
  * per-phase envelope. Phases are independent: one failing doesn't stop others.
  */
 import { type BatchScope, runInBatchScope } from "../llm/bedrock-errors.ts";
+import { maybeAnalyzeHotTables } from "../planner-stats.ts";
 import type { Engine } from "../engine/interface.ts";
 import type { Storage } from "../storage.ts";
 import { type ProgressSink, NOOP_PROGRESS } from "../output/progress.ts";
@@ -823,7 +824,11 @@ export async function runCycleOnce(
       }
     : undefined;
   try {
-    return await runPhases(engine, options, progress, requested, startedAt, signal, fence);
+    const result = await runPhases(engine, options, progress, requested, startedAt, signal, fence);
+    // PGLite has no autovacuum; refresh the hot tables' statistics after the
+    // write phases (opt-in, MEMRAIN_PGLITE_AUTO_ANALYZE).
+    if (!signal.aborted) await maybeAnalyzeHotTables(engine);
+    return result;
   } finally {
     outer?.removeEventListener("abort", follow);
   }

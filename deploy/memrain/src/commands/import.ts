@@ -5,6 +5,7 @@ import { parseDocument } from "yaml";
 import { Storage } from "../core/storage.ts";
 import { loadConfig } from "../core/config.ts";
 import { putPage, validateSlug } from "../core/pages.ts";
+import { maybeAnalyzeHotTables } from "../core/planner-stats.ts";
 import { withStorage } from "./with-storage.ts";
 
 interface ImportOptions { dir: string; source: string; apply?: boolean; planHash?: string; storage?: Storage }
@@ -77,6 +78,7 @@ export async function runImport(opts: ImportOptions): Promise<number> {
       console.log(JSON.stringify({ ...report, ok: false, created: created.length, created_slugs: created, error: "import_stopped", note: "Earlier creates remain; inspect conflicts before retrying." }, null, 2));
       throw error;
     }
+    await maybeAnalyzeHotTables(e);
     console.log(JSON.stringify({ ...report, created: created.length, created_slugs: created }, null, 2));
     return 0;
   }, { owned: !opts.storage, migrate: false });

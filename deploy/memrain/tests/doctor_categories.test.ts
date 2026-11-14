@@ -76,6 +76,7 @@ describe("doctor categorize", () => {
       "per-source-embed-coverage",
       "person-name-duplicates",
       "pglite",
+      "planner-stats",
       "quarantined-pages",
       "queue-health",
       "redaction-markers",
