@@ -478,8 +478,8 @@ export async function disconnectAccount(
     await new Promise((resolve) => setTimeout(resolve, DISCONNECT_POLL_MS));
   }
   let lost = false;
-  const stillHeld = async (): Promise<boolean> => {
-    if (!lost && !(await heartbeatWorkerLock(deps.engine, lockId, holder))) lost = true;
+  const stillHeld = async (via: Engine = deps.engine): Promise<boolean> => {
+    if (!lost && !(await heartbeatWorkerLock(via, lockId, holder))) lost = true;
     return !lost;
   };
   const beat = setInterval(() => void stillHeld().catch(() => { lost = true; }), DISCONNECT_HEARTBEAT_MS);
@@ -497,7 +497,8 @@ async function disconnectLocked(
   accountId: string,
   providerId: string,
   force: boolean,
-  stillHeld: () => Promise<boolean>,
+  /** Renews the lock through `via`; false once it was lost. */
+  stillHeld: (via?: Engine) => Promise<boolean>,
 ): Promise<{ revoked: boolean; credentialKept: boolean }> {
   const provider = deps.providers.get(providerId);
   const hasCredential = (await deps.engine.query(`SELECT 1 FROM connector_credentials WHERE account_id = $1`, [accountId])).rows.length > 0;
@@ -508,17 +509,19 @@ async function disconnectLocked(
     const client = cred ? await resolveClient(deps, deps.kek, provider.id).catch(() => null) : null;
     if (cred && client) {
       revoked = await revokeToken(provider, deps.fetch ?? (globalThis.fetch as FetchFn), cred.tokens.refresh_token ?? cred.tokens.access_token, client);
-      // Without the lock the revoked token may already have been rotated away.
-      if (revoked && !(await stillHeld())) revoked = false;
     }
   }
-  // Unknown provider: we cannot tell whether a revoke is owed, so keep it too.
-  const owesRevoke = hasCredential && (canRevoke || provider === null) && !revoked;
-  const keep = owesRevoke && !force;
-  await deps.engine.transaction(async (tx) => {
+  return deps.engine.transaction(async (tx) => {
+    // Renewed inside the transaction, the lock row stays locked until the
+    // credential is gone. Lost, the revoked token may already have been
+    // rotated away, so the revoke is not trusted.
+    if (revoked && !(await stillHeld(tx))) revoked = false;
+    // Unknown provider: we cannot tell whether a revoke is owed, so keep it too.
+    const owesRevoke = hasCredential && (canRevoke || provider === null) && !revoked;
+    const keep = owesRevoke && !force;
     if (!keep) await tx.query(`DELETE FROM connector_credentials WHERE account_id = $1`, [accountId]);
     await tx.query(`UPDATE connector_accounts SET enabled = FALSE, updated_at = NOW() WHERE id = $1`, [accountId]);
     await setAccountStatus(tx, accountId, keep ? "error" : "revoked", keep ? "revoke_failed" : null);
+    return { revoked, credentialKept: keep };
   });
-  return { revoked, credentialKept: keep };
 }
