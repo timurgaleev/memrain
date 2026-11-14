@@ -7,6 +7,8 @@ tries to reach Bedrock.
 """
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -69,3 +71,36 @@ def test_scripts_are_executable():
     for path in (SCRIPT, SMOKE):
         assert path.is_file(), f"{path} missing"
         assert path.stat().st_mode & 0o111, f"{path} not executable"
+
+
+def _run_smoke_with_compose(tmp_path: Path, version: str) -> tuple[subprocess.CompletedProcess, str]:
+    """Run the smoke script against a fake docker that reports `version` and refuses everything else."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "docker.log"
+    fake = bin_dir / "docker"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "$*" >> "{log}"\n'
+        'if [ "$1 $2" = "compose version" ]; then echo "' + version + '"; exit 0; fi\n'
+        "exit 1\n"
+    )
+    fake.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    proc = subprocess.run(["bash", str(SMOKE)], env=env, capture_output=True, text=True, timeout=60)
+    return proc, log.read_text() if log.exists() else ""
+
+
+@pytest.mark.parametrize("version", ["2.23.3", "1.29.2", "", "garbage"])
+def test_smoke_refuses_a_compose_without_reset_support(tmp_path, version):
+    proc, calls = _run_smoke_with_compose(tmp_path, version)
+    assert proc.returncode != 0
+    assert "2.24" in proc.stderr
+    assert " up " not in f" {calls} ", "the script started containers before checking the compose version"
+
+
+@pytest.mark.parametrize("version", ["2.24.0", "v2.29.1", "5.6.1"])
+def test_smoke_accepts_a_compose_with_reset_support(tmp_path, version):
+    proc, calls = _run_smoke_with_compose(tmp_path, version)
+    assert "2.24" not in proc.stderr
+    assert "compose" in calls and " up " in f" {calls} ", calls
