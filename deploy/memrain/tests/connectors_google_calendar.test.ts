@@ -26,7 +26,7 @@ import { runConnectorSync, type SyncAccount } from "../src/core/connectors/sync-
 import { connectorRuntime } from "../src/core/connectors/runtime.ts";
 import { accountRef, shortHash } from "../src/core/connectors/model.ts";
 import { GOOGLE_CALENDAR_READONLY, googleProvider } from "../src/core/connectors/google/provider.ts";
-import { calendarStream, googleCalendarAdapter, listGoogleCalendars, parsePassCursor } from "../src/core/connectors/google/calendar.ts";
+import { calendarStream, googleCalendarAdapter, listGoogleCalendars, parsePassCursor, seriesEndedBefore } from "../src/core/connectors/google/calendar.ts";
 import { _resetLimitersForTesting } from "../src/core/connectors/limiter.ts";import type { Engine } from "../src/core/engine/interface.ts";
 import type { Storage } from "../src/core/storage.ts";
 import { deterministicEmbed } from "./det-embed.ts";
@@ -59,6 +59,12 @@ function firstSyncWorld(): GoogleWorld {
     instances: () => "instancesS1",
     event: (_cal, id) => (id === "s1weekly0001" ? "eventS1Master" : { status: 404, body: { error: { code: 404 } } }),
   };
+}
+
+/** The sync token a stream rests on between passes, or null mid-pass. */
+async function storedToken(e: Engine, accountId: string, calendarId: string): Promise<string | null> {
+  const pass = parsePassCursor(await readCursor(e, accountId, calendarStream(calendarId)));
+  return pass !== null && pass.mode === "delta" && pass.pageToken === null ? pass.token : null;
 }
 
 const eventKey = (eventId: string) => `${shortHash("gcal:primary")}:${eventId}`;
@@ -106,7 +112,7 @@ describe("google provider", () => {
 
   it("reads a stored cursor as a sync token or a pass, and anything malformed as no cursor", () => {
     expect(parsePassCursor("CPDAlvWDx70CEPDAlvWDx70CGAU=")).toMatchObject({ mode: "delta", token: "CPDAlvWDx70CEPDAlvWDx70CGAU=", pageToken: null });
-    const pass = { v: 1, mode: "full", timeMin: "2026-08-18T10:00:00.000Z", token: null, pageToken: "p2", since: null };
+    const pass = { v: 1, mode: "full", timeMin: "2026-08-18T10:00:00.000Z", token: null, pageToken: "p2", since: null, listedAt: null };
     expect(parsePassCursor(JSON.stringify(pass))).toEqual(pass as never);
     for (const bad of [
       "{not json", JSON.stringify({ ...pass, v: 2 }), JSON.stringify({ ...pass, mode: "other" }),
@@ -115,6 +121,20 @@ describe("google provider", () => {
       JSON.stringify({ ...pass, mode: "delta", token: null }), JSON.stringify({ pass }),
     ]) expect(parsePassCursor(bad)).toBeNull();
     expect(parsePassCursor(null)).toBeNull();
+  });
+
+  it("knows a series ended before the window only from an UNTIL, and assumes nothing otherwise", () => {
+    const lo = Date.parse("2026-01-01T00:00:00Z");
+    expect(seriesEndedBefore(["RRULE:FREQ=DAILY;UNTIL=20251231T090000Z"], lo)).toBe(true);
+    expect(seriesEndedBefore(["RRULE:FREQ=WEEKLY;UNTIL=20251230", "EXDATE:20251223T090000Z"], lo)).toBe(true);
+    // A date-only UNTIL still allows that day's occurrence.
+    expect(seriesEndedBefore(["RRULE:FREQ=DAILY;UNTIL=20251231"], lo)).toBe(false);
+    expect(seriesEndedBefore(["RRULE:FREQ=DAILY;UNTIL=20260105T090000Z"], lo)).toBe(false);
+    expect(seriesEndedBefore(["RRULE:FREQ=WEEKLY;COUNT=3"], lo)).toBe(false);
+    expect(seriesEndedBefore(["RRULE:FREQ=WEEKLY"], lo)).toBe(false);
+    expect(seriesEndedBefore(["RRULE:FREQ=DAILY;UNTIL=20240101T000000Z", "RDATE:20260301T090000Z"], lo)).toBe(false);
+    expect(seriesEndedBefore(["RRULE:FREQ=DAILY;UNTIL=20240101T000000Z", "RRULE:FREQ=MONTHLY"], lo)).toBe(false);
+    expect(seriesEndedBefore([], lo)).toBe(false);
   });
 
   it("syncs nothing for an account without the calendar service", () => {
@@ -251,17 +271,18 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
 
       const result = await run(db.storage, world, account.id);
       expect(result.status).toBe("success");
-      expect(await readCursor(e, account.id, calendarStream("primary"))).toBe(FULL_TOKEN);
+      expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
 
       const lists = eventListCalls(world);
       expect(lists).toHaveLength(2);
       expect(lists[0]!.get("syncToken")).toBeNull();
-      expect(Date.parse(lists[0]!.get("timeMin")!)).toBe(T0 - 90 * DAY);
+      // The window is applied here, not by Google: see the full-listing case below.
+      expect(lists[0]!.get("timeMin")).toBeNull();
       expect(lists[0]!.get("timeMax")).toBeNull();
       expect(lists[0]!.get("showDeleted")).toBe("true");
       expect(lists[0]!.get("singleEvents")).toBe("false");
       expect(lists[1]!.get("pageToken")).toBe(PAGE_TOKEN);
-      expect(lists[1]!.get("timeMin")).toBe(lists[0]!.get("timeMin"));
+      expect(lists[1]!.get("timeMin")).toBeNull();
 
       const single = (await e.query<{ title: string; markdown_body: string; compiled_truth: Record<string, unknown> }>(
         `SELECT title, markdown_body, compiled_truth FROM pages WHERE slug = $1 AND source_id = $2`, [pageSlug("e1single0001@google.com"), SOURCE])).rows[0]!;
@@ -334,9 +355,77 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const lists = eventListCalls(world);
       expect(lists).toHaveLength(1);
       expect(lists[0]!.get("pageToken")).toBe(PAGE_TOKEN);
-      expect(lists[0]!.get("timeMin")).toBe(String(mid.timeMin));
-      expect(await readCursor(e, account.id, calendarStream("primary"))).toBe(FULL_TOKEN);
+      expect(Date.parse(String(mid.timeMin))).toBe(T0 - 90 * DAY);
+      expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(1);
+    } finally { await db.close(); }
+  });
+
+  it("a full pass lists the whole calendar and keeps only what touches the window, so an old series still running is never missed", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const account = await connect(db.storage, world);
+      const oldSingle = {
+        id: "old0001", iCalUID: "old0001@google.com", status: "confirmed", etag: "\"9\"", summary: "Old review",
+        start: { dateTime: "2024-03-01T10:00:00Z" }, end: { dateTime: "2024-03-01T11:00:00Z" },
+      };
+      const endedSeries = {
+        id: "dead0001", iCalUID: "dead0001@google.com", status: "confirmed", etag: "\"8\"", summary: "Old standup",
+        recurrence: ["RRULE:FREQ=DAILY;UNTIL=20240301T000000Z"], start: { dateTime: "2024-01-01T09:00:00Z" }, end: { dateTime: "2024-01-01T09:15:00Z" },
+      };
+      const countedSeries = {
+        id: "cnt0001", iCalUID: "cnt0001@google.com", status: "confirmed", etag: "\"7\"", summary: "Three-week course",
+        recurrence: ["RRULE:FREQ=WEEKLY;COUNT=3"], start: { dateTime: "2024-05-01T09:00:00Z" }, end: { dateTime: "2024-05-01T10:00:00Z" },
+      };
+      const page2 = { ...GOOGLE_FIXTURES.eventsFullPage2!, items: [...(GOOGLE_FIXTURES.eventsFullPage2!.items as unknown[]), oldSingle, endedSeries, countedSeries] };
+      world.events = (_cal, q) => (q.get("pageToken") === PAGE_TOKEN ? { status: 200, body: page2 } : "eventsFullPage1");
+      world.instances = (_cal, id) => (id === "cnt0001" ? { status: 200, body: { kind: "calendar#events", items: [] } } : "instancesS1");
+      world.calls.length = 0;
+      const result = await run(db.storage, world, account.id);
+      expect(result.status).toBe("success");
+      expect(eventListCalls(world).every(q => q.get("timeMin") === null && q.get("timeMax") === null)).toBe(true);
+      // The weekly series began in January 2025, long before the window, and still runs.
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("s1weekly0001@google.com")])).toBe(1);
+      for (const uid of ["old0001@google.com", "dead0001@google.com", "cnt0001@google.com"]) {
+        expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug(uid)])).toBe(0);
+      }
+      // A series whose rule ended before the window is not even expanded.
+      expect(world.calls.some(c => c.url.pathname.includes("/dead0001/"))).toBe(false);
+      expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
+    } finally { await db.close(); }
+  });
+
+  it("relists the retention window once a week, refreshing series occurrences and deleting what is gone", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const account = await connect(db.storage, world);
+      await run(db.storage, world, account.id);
+
+      // A day later the stored token is used as usual.
+      world.calls.length = 0;
+      world.events = () => ({ status: 200, body: { kind: "calendar#events", nextSyncToken: "quiet-day", items: [] } });
+      await run(db.storage, world, account.id, ENV, T1);
+      expect(eventListCalls(world).map(q => q.get("syncToken"))).toEqual([FULL_TOKEN]);
+
+      // Eight days on, the token is set aside for a relist: the series is
+      // expanded afresh and the all-day event, deleted without a trace, goes.
+      const T8 = T0 + 8 * DAY;
+      world.calls.length = 0;
+      const page2 = { ...GOOGLE_FIXTURES.eventsFullPage2!, items: [] };
+      world.events = (_cal, q) => (q.get("pageToken") === PAGE_TOKEN ? { status: 200, body: page2 } : "eventsFullPage1");
+      const result = await run(db.storage, world, account.id, ENV, T8);
+      expect(result.status).toBe("success");
+      expect(eventListCalls(world).map(q => q.get("syncToken"))).toEqual([null, null]);
+      const inst = world.calls.find(c => c.url.pathname.endsWith("/instances"))!;
+      expect(Date.parse(inst.url.searchParams.get("timeMax")!)).toBe(T8 + 90 * DAY);
+      expect(result.counts.deletions_applied).toBe(1);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("s1weekly0001@google.com")])).toBe(1);
+      expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
     } finally { await db.close(); }
   });
 
@@ -356,7 +445,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const result = await run(db.storage, world, account.id);
       expect(result.status).toBe("success");
       expect(eventListCalls(world).map(q => q.get("pageToken"))).toEqual(["stale-page-token", null, PAGE_TOKEN]);
-      expect(await readCursor(e, account.id, calendarStream("primary"))).toBe(FULL_TOKEN);
+      expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
     } finally { await db.close(); }
   });
 
@@ -380,7 +469,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(lists).toHaveLength(1);
       expect(lists[0]!.get("syncToken")).toBe(FULL_TOKEN);
       expect(lists[0]!.get("timeMin")).toBeNull();
-      expect(await readCursor(e, account.id, calendarStream("primary"))).toBe(DELTA_TOKEN);
+      expect(await storedToken(e, account.id, "primary")).toBe(DELTA_TOKEN);
 
       const moved = (await e.query<{ title: string }>(`SELECT title FROM pages WHERE slug = $1`, [pageSlug("e1single0001@google.com")])).rows[0]!;
       expect(moved.title).toBe("Roadmap review (moved)");
@@ -483,12 +572,10 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const result = await run(db.storage, world, account.id, ENV, T1);
       expect(result.status).toBe("success");
       const lists = eventListCalls(world);
-      expect(lists.map(q => [q.get("syncToken"), q.get("timeMin") !== null])).toEqual([
-        ["expired-sync-token", false], [null, true], [null, true],
+      expect(lists.map(q => [q.get("syncToken"), q.get("pageToken")])).toEqual([
+        ["expired-sync-token", null], [null, null], [null, PAGE_TOKEN],
       ]);
-      // The relist covers everything retention keeps, not just the first-sync window.
-      expect(Date.parse(lists[1]!.get("timeMin")!)).toBe(T1 - 365 * DAY);
-      expect(await readCursor(e, account.id, calendarStream("primary"))).toBe(FULL_TOKEN);
+      expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
       expect(result.counts.deletions_applied).toBe(1);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e1single0001@google.com")])).toBe(1);
@@ -551,7 +638,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(eventListCalls(world)).toHaveLength(0);
       expect(world.calls.map(c => c.url.toString())).toEqual(["https://oauth2.googleapis.com/token"]);
       expect((await getAccount(e, account.id))?.status).toBe("needs_reconnect");
-      expect(await readCursor(e, account.id, calendarStream("primary"))).toBe(FULL_TOKEN);
+      expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE source_id = $1`, [SOURCE])).toBeGreaterThan(0);
     } finally { await db.close(); }
   });
@@ -573,7 +660,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const result = await run(db.storage, world, account.id);
       expect(result.status).toBe("success");
       expect([...new Set(seen)]).toEqual(["primary", "team0abc123@group.calendar.google.com"]);
-      expect(await readCursor(e, account.id, calendarStream("team0abc123@group.calendar.google.com"))).toBe(String(GOOGLE_FIXTURES.eventsSeriesCancelled!.nextSyncToken));
+      expect(await storedToken(e, account.id, "team0abc123@group.calendar.google.com")).toBe(String(GOOGLE_FIXTURES.eventsSeriesCancelled!.nextSyncToken));
     } finally { await db.close(); }
   });
 
@@ -600,7 +687,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       // The cancellation on primary still went through.
       expect(result.counts.deletions_applied).toBe(1);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
-      expect(await readCursor(e, account.id, calendarStream("team0abc123@group.calendar.google.com"))).toBe(String(GOOGLE_FIXTURES.eventsSeriesCancelled!.nextSyncToken));
+      expect(await storedToken(e, account.id, "team0abc123@group.calendar.google.com")).toBe(String(GOOGLE_FIXTURES.eventsSeriesCancelled!.nextSyncToken));
       expect(await readCursor(e, account.id, calendarStream("left0abc@group.calendar.google.com"))).toBeNull();
       const failed = (await e.query<{ external_id: string; last_error: string }>(
         `SELECT external_id, last_error FROM connector_items WHERE account_id = $1 AND fail_count > 0`, [account.id])).rows;

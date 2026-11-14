@@ -3,25 +3,31 @@
  * in the account's `config.calendars`) is one stream, synced with the Calendar
  * v3 incremental protocol.
  *
- *   - First pass: `events.list` with `timeMin` = now minus the history window
- *     (`config.history_days`, default 90, never past the calendar retention
- *     window), `showDeleted=true`, `singleEvents=false`, paged by
- *     `nextPageToken`. Only the last page carries `nextSyncToken`.
- *   - Later passes send the stored token as `syncToken` with the same query
- *     minus `timeMin`: Google refuses `timeMin`, `timeMax` and `updatedMin`
- *     next to a sync token.
+ *   - A full pass lists the whole calendar (`showDeleted=true`,
+ *     `singleEvents=false`, paged by `nextPageToken`) and applies the window
+ *     itself: a single event that ended before it is skipped, and so is a
+ *     series with no occurrence inside it. Google's `timeMin` is not used,
+ *     because it filters on an event's end and a series' end is its first
+ *     occurrence's, which would drop a series that began long ago and still
+ *     runs. The first pass's window is the history window
+ *     (`config.history_days`, default 90, never past retention). Only the last
+ *     page carries `nextSyncToken`.
+ *   - Later passes send the stored token as `syncToken` (Google refuses
+ *     `timeMin`, `timeMax` and `updatedMin` next to it).
  *   - Between pages, and between runs when a run stops on its item cap, the
  *     cursor is the pass itself (mode, window, page token), so a calendar
  *     larger than one run finishes over several runs instead of starting over
  *     each time. A stored page token Google no longer takes (400/410) restarts
  *     that pass.
- *   - 410 GONE on a sync token means Google wants the local copy wiped and a
- *     full sync. Instead of wiping, the calendar is listed again over the
- *     whole retention window (`timeMin` filters on an event's end, the same
- *     time retention keys on), and once the relisting is through, every stored
- *     event of this calendar it did not touch is deleted as gone upstream,
- *     under the same mass-delete guard. Pages that are still there match by
- *     content, so nothing is duplicated.
+ *   - A relist covers the whole retention window, and once it is through,
+ *     every stored event of the calendar it did not touch is deleted as gone
+ *     upstream, under the same mass-delete guard; pages still there match by
+ *     content, so nothing is duplicated. It runs when Google answers 410 on a
+ *     sync token (it wants the local copy wiped and a full sync, and deletions
+ *     made while the token was dead are never reported), and once a week:
+ *     occurrences of an unchanged series never show up in the change feed,
+ *     so without it a series' listed occurrences and last activity would go
+ *     stale and retention would sweep a meeting that still happens.
  *     (developers.google.com/workspace/calendar/api/guides/sync)
  *   - `status: cancelled` reports an event deleted upstream; the engine routes
  *     it through the hard-delete path and its mass-delete guard.
@@ -117,9 +123,13 @@ function configInt(account: SyncAccount, key: string, min: number, max: number):
  * own sync tokens are opaque strings that never start with `{`, so a stored
  * cursor is one or the other.
  *
- *   full  — listing a window from `timeMin`; `since` is set on a relisting
- *           after a 410 and is when it began, for the reconcile at its end;
+ *   full  — listing everything and keeping what touches the window from
+ *           `timeMin`; `since` is set on a relist and is when it began, for
+ *           the reconcile at its end;
  *   delta — reading the changes after sync token `token`.
+ *
+ * `listedAt` is when the last full pass finished, carried along by delta
+ * passes so the weekly relist knows when it is due; unknown for a bare token.
  */
 interface PassState {
   v: 1;
@@ -128,10 +138,12 @@ interface PassState {
   token: string | null;
   pageToken: string | null;
   since: string | null;
+  listedAt: string | null;
 }
 
 const MAX_CURSOR_FIELD = 4096;
 const RECONCILE_CLOCK_MARGIN_MS = 5 * 60_000;
+const RELIST_EVERY_MS = 7 * DAY_MS;
 
 function cursorField(v: unknown): string | null | undefined {
   if (v === null) return null;
@@ -141,7 +153,7 @@ function cursorField(v: unknown): string | null | undefined {
 /** The stored cursor as a pass; null for none, or for one this version cannot read. */
 export function parsePassCursor(cursor: string | null): PassState | null {
   if (cursor === null || cursor === "") return null;
-  if (!cursor.startsWith("{")) return { v: 1, mode: "delta", timeMin: null, token: cursor, pageToken: null, since: null };
+  if (!cursor.startsWith("{")) return { v: 1, mode: "delta", timeMin: null, token: cursor, pageToken: null, since: null, listedAt: null };
   let raw: unknown;
   try {
     raw = JSON.parse(cursor);
@@ -153,10 +165,38 @@ export function parsePassCursor(cursor: string | null): PassState | null {
   const token = cursorField(raw.token);
   const pageToken = cursorField(raw.pageToken);
   const since = cursorField(raw.since);
-  if (timeMin === undefined || token === undefined || pageToken === undefined || since === undefined) return null;
+  const listedAt = raw.listedAt === undefined ? null : cursorField(raw.listedAt);
+  if (timeMin === undefined || token === undefined || pageToken === undefined || since === undefined || listedAt === undefined) return null;
   if (raw.mode === "full" ? timeMin === null || Number.isNaN(Date.parse(timeMin)) : token === null) return null;
-  if (since !== null && Number.isNaN(Date.parse(since))) return null;
-  return { v: 1, mode: raw.mode, timeMin, token, pageToken, since };
+  if ((since !== null && Number.isNaN(Date.parse(since))) || (listedAt !== null && Number.isNaN(Date.parse(listedAt)))) return null;
+  return { v: 1, mode: raw.mode, timeMin, token, pageToken, since, listedAt };
+}
+
+const UNTIL_RE = /(?:^|;)UNTIL=(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})Z?)?(?:;|$)/;
+
+/**
+ * Whether a series' rule ended before `lo` (ms), read from its RRULE UNTIL.
+ * Anything it cannot be sure of (no UNTIL, a COUNT, an RDATE, a rule it
+ * cannot read) is false: the series is then expanded and judged by its
+ * occurrences instead.
+ */
+export function seriesEndedBefore(recurrence: readonly string[], lo: number): boolean {
+  let rules = 0;
+  for (const line of recurrence) {
+    if (line.length > 2048) return false;
+    const upper = line.toUpperCase();
+    if (upper.startsWith("EXRULE:") || upper.startsWith("EXDATE")) continue;
+    if (!upper.startsWith("RRULE:")) return false;
+    const m = UNTIL_RE.exec(upper.slice("RRULE:".length));
+    if (m === null) return false;
+    const [, y, mo, d, h = "00", mi = "00", s = "00"] = m;
+    const until = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+    // A date-only UNTIL still allows an occurrence that day.
+    const last = m[4] === undefined ? until + DAY_MS : until;
+    if (!Number.isFinite(last) || last >= lo) return false;
+    rules++;
+  }
+  return rules > 0;
 }
 
 interface Window {
@@ -174,6 +214,13 @@ function when(v: unknown): { at: string; allDay: boolean } | null {
   if (dateTime !== null) return { at: dateTime, allDay: false };
   const date = str(v.date);
   return date === null ? null : { at: date, allDay: true };
+}
+
+/** Whether an event (or a series' first occurrence) ended before `lo` (ms); unknown times are kept. */
+function endsBefore(ev: Json, lo: number): boolean {
+  const t = when(ev.end) ?? when(ev.start);
+  const at = t === null ? Number.NaN : Date.parse(t.at);
+  return Number.isFinite(at) && at < lo;
 }
 
 function status(v: unknown): CalendarEvent["status"] {
@@ -253,14 +300,13 @@ class Adapter implements SyncAdapter {
   /** A new full pass over the first-sync window. */
   private firstPass(): PassState {
     const timeMin = new Date(this.now() - this.historyDays() * DAY_MS).toISOString();
-    return { v: 1, mode: "full", timeMin, token: null, pageToken: null, since: null };
+    return { v: 1, mode: "full", timeMin, token: null, pageToken: null, since: null, listedAt: null };
   }
 
   /**
-   * The relisting a 410 asks for: the whole retention window, so whatever it
-   * does not touch is gone upstream. With retention off nothing bounds what is
-   * stored, so nothing can be reconciled and the first-sync window is listed
-   * again instead.
+   * A relist: the whole retention window, so whatever it does not touch is
+   * gone upstream. With retention off nothing bounds what is stored, so
+   * nothing can be reconciled and the first-sync window is listed again.
    */
   private relist(): PassState {
     const keep = this.retention();
@@ -269,13 +315,16 @@ class Adapter implements SyncAdapter {
     // Set early so a touch stamped after a small clock step back still reads
     // as seen; runs are much further apart than the margin.
     const since = new Date(now - RECONCILE_CLOCK_MARGIN_MS).toISOString();
-    return { v: 1, mode: "full", timeMin: new Date(now - keep * DAY_MS).toISOString(), token: null, pageToken: null, since };
+    return { v: 1, mode: "full", timeMin: new Date(now - keep * DAY_MS).toISOString(), token: null, pageToken: null, since, listedAt: null };
+  }
+
+  private relistDue(st: PassState): boolean {
+    return st.mode === "delta" && st.pageToken === null && st.listedAt !== null && this.now() - Date.parse(st.listedAt) >= RELIST_EVERY_MS;
   }
 
   private listPath(calendarId: string, st: PassState): string {
     const q = new URLSearchParams({ maxResults: PAGE_SIZE, showDeleted: "true", singleEvents: "false" });
-    if (st.mode === "full") q.set("timeMin", st.timeMin!);
-    else q.set("syncToken", st.token!);
+    if (st.mode === "delta") q.set("syncToken", st.token!);
     if (st.pageToken !== null) q.set("pageToken", st.pageToken);
     return `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${q.toString()}`;
   }
@@ -294,6 +343,7 @@ class Adapter implements SyncAdapter {
     const calendarId = this.calendars.get(stream);
     if (calendarId === undefined) throw new Error(`google calendar adapter has no stream ${stream}`);
     let st = parsePassCursor(cursor) ?? this.firstPass();
+    if (this.relistDue(st)) st = this.relist();
     let res = await client.get(this.listPath(calendarId, st));
     if (st.pageToken !== null && (res.status === 400 || res.status === 410)) {
       // A page token Google no longer takes: that pass starts over.
@@ -308,6 +358,9 @@ class Adapter implements SyncAdapter {
     if (res.class !== "ok") return { ok: false, response: res };
     if (!isRecord(res.body) || (res.body.items !== undefined && !Array.isArray(res.body.items))) return invalid(res, "events");
     const events = ((res.body.items ?? []) as unknown[]).filter(isRecord);
+    const full = st.mode === "full";
+    // A full pass keeps what touches its window; a delta keeps what retention would.
+    const lo = full ? Date.parse(st.timeMin!) : Date.parse(this.occurrenceWindow().timeMin);
 
     const items: SyncItem[] = [];
     const deletions = new Set<string>();
@@ -318,7 +371,8 @@ class Adapter implements SyncAdapter {
       if (id === null) continue;
       const seriesId = str(ev.recurringEventId);
       if (seriesId !== null) {
-        touchedSeries.add(seriesId);
+        // A full listing carries every live series itself.
+        if (!full) touchedSeries.add(seriesId);
         continue;
       }
       if (ev.status === "cancelled") {
@@ -328,16 +382,19 @@ class Adapter implements SyncAdapter {
       if (typeof ev.eventType === "string" && SKIPPED_EVENT_TYPES.has(ev.eventType)) continue;
       if (Array.isArray(ev.recurrence) && ev.recurrence.length > 0) {
         rendered.add(id);
-        const item = await this.seriesItem(client, calendarId, ev);
+        if (seriesEndedBefore(ev.recurrence.filter((r): r is string => typeof r === "string"), lo)) continue;
+        const item = await this.seriesItem(client, calendarId, ev, lo);
+        if (item === null) continue;
         if ("response" in item) return { ok: false, response: item.response };
         items.push(item);
         continue;
       }
+      if (full && endsBefore(ev, lo)) continue;
       items.push(this.renderItem(calendarId, ev, typeof ev.etag === "string" ? ev.etag : null));
     }
     for (const seriesId of touchedSeries) {
       if (rendered.has(seriesId) || deletions.has(itemKey(calendarId, seriesId))) continue;
-      const out = await this.reloadSeries(client, calendarId, seriesId);
+      const out = await this.reloadSeries(client, calendarId, seriesId, lo);
       if (out === null) continue;
       if ("response" in out) return { ok: false, response: out.response };
       if ("deleted" in out) deletions.add(out.deleted);
@@ -351,9 +408,13 @@ class Adapter implements SyncAdapter {
     }
     const syncToken = str(res.body.nextSyncToken);
     // Without it the next run could only read this last page again.
-    if (syncToken === null || syncToken.startsWith("{")) return invalid(res, "events (no sync token on the last page)");
-    const reconcile = st.mode === "full" && st.since !== null ? { prefix: `${calendarKey(calendarId)}:`, unseenSince: st.since } : null;
-    return { ok: true, items, deletions: [...deletions], checkpoint: syncToken, done: true, ...(reconcile ? { reconcile } : {}) };
+    if (syncToken === null || syncToken.length > MAX_CURSOR_FIELD) return invalid(res, "events (no usable sync token on the last page)");
+    const next: PassState = {
+      v: 1, mode: "delta", timeMin: null, token: syncToken, pageToken: null, since: null,
+      listedAt: full ? new Date(this.now()).toISOString() : st.listedAt,
+    };
+    const reconcile = full && st.since !== null ? { prefix: `${calendarKey(calendarId)}:`, unseenSince: st.since } : null;
+    return { ok: true, items, deletions: [...deletions], checkpoint: JSON.stringify(next), done: true, ...(reconcile ? { reconcile } : {}) };
   }
 
   private renderItem(calendarId: string, ev: Json, version: string | null, occurrences?: { list: CalendarOccurrence[]; truncated: boolean }): SyncItem {
@@ -369,14 +430,18 @@ class Adapter implements SyncAdapter {
     }
   }
 
-  /** A series master rendered with its occurrences inside the window. */
-  private async seriesItem(client: ConnectorClient, calendarId: string, master: Json): Promise<SyncItem | { response: ConnectorResponse }> {
+  /**
+   * A series master rendered with its occurrences inside the window; null
+   * for a series that began before `lo` and has no occurrence in the window.
+   */
+  private async seriesItem(client: ConnectorClient, calendarId: string, master: Json, lo: number): Promise<SyncItem | { response: ConnectorResponse } | null> {
     const id = str(master.id)!;
     const occ = await this.occurrences(client, calendarId, id);
     if ("response" in occ) {
       if (occ.response.class !== "forbidden") return occ;
       return { externalId: itemKey(calendarId, id), version: null, failure: { code: "instances_unavailable", message: occ.response.error ?? "instances unavailable" } };
     }
+    if (occ.list.length === 0 && !occ.truncated && endsBefore(master, lo)) return null;
     const version = shortHash([typeof master.etag === "string" ? master.etag : "", ...occ.versions, occ.truncated ? "+" : ""].join("|"));
     return this.renderItem(calendarId, master, version, { list: occ.list, truncated: occ.truncated });
   }
@@ -386,6 +451,7 @@ class Adapter implements SyncAdapter {
     client: ConnectorClient,
     calendarId: string,
     seriesId: string,
+    lo: number,
   ): Promise<SyncItem | { deleted: string } | { response: ConnectorResponse } | null> {
     const res = await client.get(`/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(seriesId)}`);
     if (res.status === 404 || res.status === 410) return { deleted: itemKey(calendarId, seriesId) };
@@ -396,7 +462,7 @@ class Adapter implements SyncAdapter {
     if (!isRecord(res.body)) return { response: { ...res, class: "challenge", body: null, error: "unexpected event response" } };
     if (res.body.status === "cancelled") return { deleted: itemKey(calendarId, seriesId) };
     if (typeof res.body.eventType === "string" && SKIPPED_EVENT_TYPES.has(res.body.eventType)) return null;
-    return this.seriesItem(client, calendarId, res.body);
+    return this.seriesItem(client, calendarId, res.body, lo);
   }
 
   private async occurrences(
