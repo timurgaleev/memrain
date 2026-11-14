@@ -12,6 +12,7 @@ function writes(text: string): Record<string, number> {
 }
 
 const audited = {
+  "core/connectors/retention.ts": { pages: 1, entity_facts: 1, reason: "Hard delete of one account's connector page under slug locks, with its facts and a text-free receipt" },
   "core/cycle/consolidate-facts.ts": { entity_facts: 2, reason: "Consolidation state and retirement" },
   "core/cycle/embed-facts.ts": { entity_facts: 1, reason: "Deferred embedding only" },
   "core/cycle/recompute-salience.ts": { pages: 1, reason: "Derived salience only" },
