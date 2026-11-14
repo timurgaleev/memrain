@@ -315,16 +315,29 @@ export const WRITE_GATE_OWNED_KEYS: readonly string[] = Object.freeze([WRITE_GAT
 // Keys the indexer itself stamps, which carry no writer-controlled text.
 const SYSTEM_FRONTMATTER = new Set(["page_content_hash", "page_truth_hash", "page_title"]);
 
-/** The writer-controlled text of a document: title, body, and frontmatter strings. */
+/** Every string under `value` (nested keys included), depth first, one per line. */
+function nestedStrings(value: unknown): string {
+  const out: string[] = [];
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (typeof v === "string") out.push(v);
+    else if (Array.isArray(v)) for (let i = v.length - 1; i >= 0; i--) stack.push(v[i]);
+    else if (v && typeof v === "object") {
+      const entries = Object.entries(v as Record<string, unknown>);
+      for (let i = entries.length - 1; i >= 0; i--) stack.push(entries[i]![1], entries[i]![0]);
+    }
+  }
+  return out.join("\n");
+}
+
+/** The writer-controlled text of a document: title, body, and every frontmatter string. */
 export function writeGateFields(title: string, body: string, frontmatter: Record<string, unknown>, gateOwned: readonly string[]): GateField[] {
   const fields: GateField[] = [{ field: "title", text: title }, { field: "body", text: body }];
   for (const [key, value] of Object.entries(frontmatter)) {
     if (SYSTEM_FRONTMATTER.has(key) || gateOwned.includes(key)) continue;
-    if (typeof value === "string") fields.push({ field: `frontmatter.${key}`, text: value });
-    else if (Array.isArray(value)) {
-      const strings = value.filter((v): v is string => typeof v === "string");
-      if (strings.length > 0) fields.push({ field: `frontmatter.${key}`, text: strings.join("\n") });
-    }
+    const text = nestedStrings(value);
+    if (text) fields.push({ field: `frontmatter.${key}`, text });
   }
   return fields;
 }
