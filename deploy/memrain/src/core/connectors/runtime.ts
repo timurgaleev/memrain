@@ -14,12 +14,11 @@ import type { Storage } from "../storage.ts";
 import type { Engine } from "../engine/interface.ts";
 import type { EmbedFn } from "../indexer.ts";
 import {
-  credentialMeta,
   getAccount,
   listAccounts,
   markNeedsReconnect,
   readCredential,
-  storeCredential,
+  renewCredential,
   type ConnectorAccount,
 } from "./accounts.ts";
 import { ConnectorClient, type FetchFn } from "./client.ts";
@@ -88,12 +87,13 @@ export function vaultCredentialStore(engine: Engine, kek: Kek): CredentialStore 
     },
     async write(accountId, credential) {
       const account = await getAccount(engine, accountId);
-      if (account === null) throw new Error("the connector account no longer exists");
-      const meta = await credentialMeta(engine, accountId);
-      await storeCredential(engine, kek, account, {
+      const stored = account !== null && await renewCredential(engine, kek, account, {
         access_token: credential.accessToken,
         ...(credential.refreshToken ? { refresh_token: credential.refreshToken } : {}),
-      }, { scopes: meta?.scopes ?? [], expiresAt: credential.expiresAt });
+      }, { expiresAt: credential.expiresAt });
+      // Not a reconnect case: the owner or operator stopped the account while
+      // the token was being renewed, and the run ends without storing it.
+      if (!stored) throw new Error("the account was disconnected or paused while its token was renewed; the new token was not stored");
     },
   };
 }

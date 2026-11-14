@@ -171,10 +171,19 @@ export async function setAccountStatus(
 
 /**
  * A refused or revoked token parks the account: sync skips it until the owner
- * reconnects. Its pages, cursors and settings stay where they are.
+ * reconnects. Its pages, cursors and settings stay where they are. Only an
+ * active account is parked: a sync that loses a race with a disconnect or a
+ * pause must not turn a revoked or paused account back into one waiting for
+ * a reconnect. False when nothing changed.
  */
-export function markNeedsReconnect(engine: Engine, id: string, reason: string): Promise<boolean> {
-  return setAccountStatus(engine, id, "needs_reconnect", reason);
+export async function markNeedsReconnect(engine: Engine, id: string, reason: string): Promise<boolean> {
+  const why = cleanLabel(reason, "status reason", MAX_REASON);
+  const r = await engine.query(
+    `UPDATE connector_accounts SET status = 'needs_reconnect', status_reason = $2, updated_at = NOW()
+      WHERE id = $1 AND status = 'active' RETURNING id`,
+    [id, why],
+  );
+  return r.rows.length > 0;
 }
 
 /** Delete an account and, by cascade, its credential. Pages are never touched. */
@@ -230,6 +239,39 @@ export async function storeCredential(
        scopes = EXCLUDED.scopes, expires_at = EXCLUDED.expires_at, updated_at = NOW()`,
     [account.id, sealed.kek_id, sealed.nonce, sealed.ciphertext, [...opts.scopes], opts.expiresAt?.toISOString() ?? null],
   );
+}
+
+/**
+ * Replace the tokens of a credential a refresh just renewed, keeping its
+ * scopes. Only an existing credential of an active account is updated, never
+ * created: a refresh that finishes after a disconnect deleted the credential
+ * (or after a pause) cannot bring it back. False when nothing was stored.
+ */
+export async function renewCredential(
+  engine: Engine,
+  kek: Kek,
+  account: Pick<ConnectorAccount, "id" | "provider">,
+  tokens: TokenSet,
+  opts: { expiresAt: Date | null },
+): Promise<boolean> {
+  if (typeof tokens.access_token !== "string" || tokens.access_token === "") {
+    throw new ConnectorAccountError("credential has no access token");
+  }
+  const body = JSON.stringify({
+    access_token: tokens.access_token,
+    ...(tokens.refresh_token ? { refresh_token: tokens.refresh_token } : {}),
+    ...(tokens.token_type ? { token_type: tokens.token_type } : {}),
+  });
+  const sealed = seal(kek, body, credentialAad(account.id, account.provider, kek.id));
+  const r = await engine.query(
+    // scope: operator-only the sync worker renews the credential of the account it is running
+    `UPDATE connector_credentials SET kek_id = $2, nonce = $3, ciphertext = $4, expires_at = $5, updated_at = NOW()
+      WHERE account_id = $1
+        AND EXISTS (SELECT 1 FROM connector_accounts a WHERE a.id = $1 AND a.provider = $6 AND a.status = 'active')
+      RETURNING account_id`,
+    [account.id, sealed.kek_id, sealed.nonce, sealed.ciphertext, opts.expiresAt?.toISOString() ?? null, account.provider],
+  );
+  return r.rows.length > 0;
 }
 
 /**
