@@ -28,6 +28,8 @@ export const CONNECTOR_SYNC_DAEMON: DaemonSpec = {
   schedule: { cron: "*/15 * * * *" },
   lane: "long",
   paid: true,
+  // Every account together; each account also has its own daily cap.
+  defaultCapUsdPerDay: 5,
   defaultEnabled: false,
   targets: connectorSyncTargets,
   timeoutMs: 30 * 60_000,

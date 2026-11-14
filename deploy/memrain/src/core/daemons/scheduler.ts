@@ -14,7 +14,8 @@
  * once, not once per missed window. The scheduler spends nothing itself.
  */
 import type { Engine } from "../engine/interface.ts";
-import { brainDailyCapUsd } from "../budget.ts";
+import { brainDailyCapUsd, runInWallet } from "../budget.ts";
+import { daemonWalletPath } from "./caps.ts";
 import { tryAcquireDbLock, type DbLockHandle } from "../db-lock.ts";
 import { getHandler, registerHandler } from "../jobs/handlers.ts";
 import { Queue } from "../jobs/queue.ts";
@@ -202,7 +203,9 @@ export function registerDaemonHandler(
     const ctl = resolveControl(await readControlsFor(engine, spec.name, sourceId), spec.name, sourceId);
     if (ctl.pausedBy) return { skipped: "paused" };
     if (!(ctl.enabled ?? spec.defaultEnabled)) return { skipped: "disabled" };
-    return handler(payload, ctx);
+    if (!spec.paid) return handler(payload, ctx);
+    if (brainDailyCapUsd(opts.env ?? process.env) === null) return { skipped: "no_brain_cap" };
+    return runInWallet(await daemonWalletPath(engine, spec, sourceId, opts.env ?? process.env), () => handler(payload, ctx));
   });
 }
 
