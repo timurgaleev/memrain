@@ -157,6 +157,7 @@ const CONNECT_ERRORS: Record<string, string> = {
   key_invalid: "That does not look like an API key. Copy the whole key from the provider and paste it again.",
   key_rejected: "The provider refused the key. Copy the current key from the provider and try again.",
   provider_unavailable: "The provider could not be reached to check the key. Nothing was saved; try again in a minute.",
+  delete_incomplete: "Deleting stopped part-way. Preview again and delete what is left.",
 };
 
 /** Copy for an error code the connector routes answer; unknown codes get the fallback, never the code itself. */

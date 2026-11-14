@@ -337,8 +337,24 @@ async function accountAction(req: Request, id: string, action: string, deps: Adm
           return json({ error: "still_connected", message: "Disconnect the account first, so a sync cannot bring the pages back." }, 409);
         }
         if (await sharesOwner(engine, account, scope.accountRef)) return json(SHARED_OWNER, 409);
-        const r = await deleteAllConnectorData(deps.storage, scope, { expectedPlanHash: body.plan_hash });
-        await forgetSyncState(engine, id);
+        // The pages go one transaction each, so a run can stop part-way. The
+        // sync state is cleared first, in one transaction, while the pages it
+        // describes still exist: a failure at any point leaves either every
+        // page and its state, or state already gone with the remaining pages
+        // still listed by a new preview, so deleting again finishes the job.
+        // A disconnected account syncs nothing, so nothing reads the state.
+        if ((await previewConnectorData(deps.storage, scope)).plan_hash !== body.plan_hash) {
+          return json({ error: "conflict", message: "The account's data changed since the preview." }, 409);
+        }
+        let r: Awaited<ReturnType<typeof deleteAllConnectorData>>;
+        try {
+          await forgetSyncState(engine, id);
+          r = await deleteAllConnectorData(deps.storage, scope, { expectedPlanHash: body.plan_hash });
+        } catch (e) {
+          if (e instanceof OperationError) throw e;
+          console.error("[admin-connectors] delete-data stopped part-way:", e instanceof Error ? e.name : "error");
+          return json({ error: "delete_incomplete", message: "Deleting stopped part-way. Preview again and delete what is left." }, 500);
+        }
         return json({ ok: true, deleted: r.deleted.length, changed: r.changed.length });
       }
       default:

@@ -102,6 +102,10 @@ describe("connectOutcome", () => {
     expect(connectorErrorCopy("provider_unavailable")).toContain("could not be reached");
   });
 
+  it("tells the owner a delete-all that stopped part-way can be finished", () => {
+    expect(connectorErrorCopy("delete_incomplete")).toContain("Preview again");
+  });
+
   it("never echoes an unknown code back as text", () => {
     const r = connectOutcome("?connector_error=%3Cscript%3E");
     expect(r).toEqual({ ok: false, message: "The connect did not finish. Start again." });

@@ -269,6 +269,59 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("leave a failed delete-all retryable: sync state never outlives the pages it would block a retry for", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const account = await connected(e);
+      await connectorPage(db.storage, "mail/2026-11/one");
+      await e.query(`INSERT INTO connector_items (account_id, external_id, page_slug, external_version) VALUES ($1, 'one', 'mail/2026-11/one', 'v1')`, [account.id]);
+      await e.query(`INSERT INTO connector_cursors (account_id, stream, cursor) VALUES ($1, 'mail', 'history-42')`, [account.id]);
+      await openNotice(e, account.id, "mass_delete_held", "held");
+      const d = deps(db.storage);
+      await call(post(`/admin/api/connectors/accounts/${account.id}/disconnect`, { confirm_label: OWNER }), d);
+      const preview = async (dd: AdminConnectorDeps) =>
+        await (await call(get(`/admin/api/connectors/accounts/${account.id}/preview`), dd)).json() as { pages: number; plan_hash: string };
+      const syncState = async () => Number((await e.query<{ n: number }>(
+        `SELECT (SELECT count(*) FROM connector_items WHERE account_id = $1) + (SELECT count(*) FROM connector_cursors WHERE account_id = $1)
+              + (SELECT count(*) FROM connector_notices WHERE account_id = $1) AS n`, [account.id])).rows[0]!.n);
+
+      // Clearing the sync state fails once.
+      let failOnce = true;
+      const failing = new Proxy(e, {
+        get(target, prop, receiver) {
+          if (prop === "transaction") {
+            return async <T>(fn: (tx: Engine) => Promise<T>) => target.transaction(async (tx) => fn(new Proxy(tx, {
+              get(t, p2, r2) {
+                if (p2 !== "query") return Reflect.get(t, p2, r2);
+                return async (sql: string, params?: unknown[]) => {
+                  if (failOnce && sql.includes("DELETE FROM connector_cursors")) {
+                    failOnce = false;
+                    throw new Error("connection reset");
+                  }
+                  return t.query(sql, params);
+                };
+              },
+            })));
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      const flaky = { ...d, storage: new Proxy(db.storage, { get: (t, p2, r2) => (p2 === "engine" ? () => failing : Reflect.get(t, p2, r2)) }) };
+      const first = await call(post(`/admin/api/connectors/accounts/${account.id}/delete-data`, { confirm_label: OWNER, plan_hash: (await preview(d)).plan_hash }), flaky);
+      expect(first.status).toBe(500);
+      expect(await first.json()).toMatchObject({ error: "delete_incomplete" });
+      // What is left can still be previewed and deleted: either pages remain, or nothing does at all.
+      const left = await preview(d);
+      if (left.pages === 0) expect(await syncState()).toBe(0);
+
+      const retry = await call(post(`/admin/api/connectors/accounts/${account.id}/delete-data`, { confirm_label: OWNER, plan_hash: left.plan_hash }), d);
+      expect(retry.status).toBe(200);
+      expect((await preview(d)).pages).toBe(0);
+      expect(await syncState()).toBe(0);
+    } finally { await db.close(); }
+  });
+
   it("refuse to switch sync on for a disconnected account, while switching it off still works", async () => {
     const db = await open();
     try {
