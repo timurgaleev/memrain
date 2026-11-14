@@ -119,7 +119,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
 
       await expect(handler({}, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
       await expect(handler({ accountId: "not-a-uuid" }, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
-      await expect(handler({ accountId: "11111111-2222-4333-8444-555555555555" }, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
+      await expect(handler({ accountId: "11111111-2222-4333-8444-5555555555ab" }, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
     } finally { await db.close(); }
   });
 });

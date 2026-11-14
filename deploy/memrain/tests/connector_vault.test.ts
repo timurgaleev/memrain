@@ -62,7 +62,7 @@ describe("connector vault", () => {
 
   it("refuses a row moved to another account (AAD mismatch)", () => {
     const sealed = seal(kek, SECRET, credentialAad(ACCOUNT, "test", kek.id));
-    const moved = credentialAad("9e2f5b1c-0000-4000-8000-000000000000", "test", kek.id);
+    const moved = credentialAad("9e2f5b1c-0000-4000-8000-0000000000ab", "test", kek.id);
     expect(codeOf(() => unseal(kek, sealed, moved))).toBe("vault_tamper");
     expect(codeOf(() => unseal(kek, sealed, credentialAad(ACCOUNT, "other", kek.id)))).toBe("vault_tamper");
   });
