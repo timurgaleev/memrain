@@ -16,6 +16,9 @@ import { GlossaryPage } from "./pages/Glossary.tsx";
 import { SetupPage } from "./pages/Setup.tsx";
 import { EnrollPage } from "./pages/Enroll.tsx";
 import { SecurityPage } from "./pages/Security.tsx";
+import { ConnectionsPage } from "./pages/Connections.tsx";
+import { AutonomyPage } from "./pages/Autonomy.tsx";
+import { ApprovalsPage } from "./pages/Approvals.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { api, passkeyApi } from "./api";
 import type { AuthEvent } from "./api";
@@ -52,6 +55,14 @@ const NAV: { section: string; items: { name: RouteName; label: string; also?: Ro
       { name: "log", label: "Request Log" },
       { name: "agents", label: "Agents" },
       { name: "calibration", label: "Calibration" },
+    ],
+  },
+  {
+    section: "Automation",
+    items: [
+      { name: "connections", label: "Connections" },
+      { name: "autonomy", label: "Autonomy" },
+      { name: "approvals", label: "Approvals" },
     ],
   },
   {
@@ -367,6 +378,9 @@ export function App() {
         {page === "glossary" && <GlossaryPage term={route.param} />}
         {page === "setup" && <SetupPage />}
         {page === "security" && <SecurityPage />}
+        {page === "connections" && <ConnectionsPage />}
+        {page === "autonomy" && <AutonomyPage />}
+        {page === "approvals" && <ApprovalsPage />}
       </main>
       <CommandPalette open={paletteOpen} onClose={closePalette} />
     </div>
