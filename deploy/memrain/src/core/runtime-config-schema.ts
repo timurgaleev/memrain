@@ -162,6 +162,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_OUTPUT_REDACTION: "flag",
   MEMRAIN_OWNER_ENTITY: "string",
   MEMRAIN_PAGE_BLOCK_BYTES: "int",
+  MEMRAIN_PAGE_MAX_BYTES: "int",
   MEMRAIN_PAGE_MIRROR_SYNC: "flag",
   MEMRAIN_PAGE_WARN_BYTES: "int",
   MEMRAIN_PARSE_TIMEOUT_MS: "int",

@@ -23,6 +23,7 @@ import { extractAliasNorms, setPageAliases } from "./page-aliases.ts";
 import { reconnectWantedLinks } from "./wanted-links.ts";
 import { resolveSlugWithAlias, setSlugAlias } from "./slug-aliases.ts";
 import { OperationError, PageNotFoundError, type PublicErrorEnvelope } from "./operation-error.ts";
+import { assertPageBodyWithinCap } from "./page-size.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { carryFactWithdrawals } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
@@ -451,6 +452,8 @@ export async function putPage(
   input: PageInput,
 ): Promise<PutResult> {
   validateSlug(input.slug);
+  // Refuse an oversized replacement before scanning it; appends and edits are measured once assembled.
+  if (input.markdown_body !== undefined) assertPageBodyWithinCap(input.slug, input.markdown_body);
   const changeReason = normalizeChangeReason(input.change_reason);
   if (input.takeMutation && (input.expectedVersion === undefined || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 1 ||
       input.markdown_body !== undefined || input.appendContent !== undefined || input.edits !== undefined || input.outsideText !== undefined ||
@@ -714,6 +717,9 @@ export async function putPage(
       body = guarded.text;
       hashNew = hashBody(body);
     }
+    // Only a body this write changes is measured, so a page already over the
+    // cap can still have its title or truth edited.
+    if (current === undefined || body !== current.markdown_body) assertPageBodyWithinCap(input.slug, body);
     const requestedTruth = JSON.parse(truthJson) as Record<string, unknown>;
     const { [OUTSIDE_NEUTRALIZED]: _untrustedMarker, ...unmarkedTruth } = requestedTruth;
     const oldTruth = current?.compiled_truth as Record<string, unknown> | undefined;

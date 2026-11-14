@@ -30,7 +30,7 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     ] as const;
     for (const [kind, payload] of cases) await expect(getHandler(kind)!(payload, ctx)).rejects.toThrow(UnrecoverableJobError);
   });
-  for (const code of ["permission_denied", "insufficient_scope", "invalid_params", "secret_detected", "quarantined", "page_shrink_refused", "version_conflict", "db_busy", "db_timeout", "storage_error"]) {
+  for (const code of ["permission_denied", "insufficient_scope", "invalid_params", "secret_detected", "quarantined", "page_shrink_refused", "page_too_large", "version_conflict", "db_busy", "db_timeout", "storage_error"]) {
     it(`classifies page_put ${code}`, async () => {
       const terminal = !["version_conflict", "db_busy", "db_timeout", "storage_error"].includes(code);
       const spy = spyOn(dispatch, "dispatchTool").mockResolvedValue({ isError: true, content: [{ type: "text", text: JSON.stringify({ error: code, message: "fixture detail" }) }] });
