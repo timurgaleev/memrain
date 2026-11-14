@@ -107,7 +107,7 @@ export async function currentProblems(engine: Engine): Promise<Problem[]> {
      UNION ALL
      SELECT 'daemon_auto_paused', c.daemon || ':' || c.source_id, COALESCE(s.id, 'default')
        FROM daemon_controls c LEFT JOIN sources s ON s.id = c.source_id
-      WHERE c.paused AND c.paused_by = 'auto'
+      WHERE c.paused AND c.paused_by = 'auto' AND (c.source_id = '*' OR s.id IS NOT NULL)
      UNION ALL
      SELECT 'write_gate_hold', h.source_id, h.source_id
        FROM write_gate_holds h WHERE h.decision IS NULL GROUP BY h.source_id

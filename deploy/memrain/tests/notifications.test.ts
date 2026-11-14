@@ -88,6 +88,18 @@ for (const { name, open: openDb } of storageEngines(process.env.MEMRAIN_TEST_POS
     } finally { await db.close(); }
   });
 
+  it("ignores an auto-pause left behind by a source that no longer exists, but keeps a brain-wide one", async () => {
+    const db = await openDb();
+    const e = db.storage.engine();
+    try {
+      // daemon_controls has no foreign key to sources, so a deleted source leaves its row.
+      await autoPause(e, "connector_sync", "gone", 5);
+      await autoPause(e, "cycle", "*", 5);
+      const problems = await currentProblems(e);
+      expect(problems.filter(p => p.kind === "daemon_auto_paused").map(p => [p.ref, p.source_id])).toEqual([["cycle:*", "default"]]);
+    } finally { await db.close(); }
+  });
+
   it("keeps one notification per problem across repeated and concurrent syncs", async () => {
     const db = await openDb();
     const e = db.storage.engine();
