@@ -131,6 +131,7 @@ interface PassState {
 }
 
 const MAX_CURSOR_FIELD = 4096;
+const RECONCILE_CLOCK_MARGIN_MS = 5 * 60_000;
 
 function cursorField(v: unknown): string | null | undefined {
   if (v === null) return null;
@@ -265,7 +266,10 @@ class Adapter implements SyncAdapter {
     const keep = this.retention();
     if (keep === null) return this.firstPass();
     const now = this.now();
-    return { v: 1, mode: "full", timeMin: new Date(now - keep * DAY_MS).toISOString(), token: null, pageToken: null, since: new Date(now).toISOString() };
+    // Set early so a touch stamped after a small clock step back still reads
+    // as seen; runs are much further apart than the margin.
+    const since = new Date(now - RECONCILE_CLOCK_MARGIN_MS).toISOString();
+    return { v: 1, mode: "full", timeMin: new Date(now - keep * DAY_MS).toISOString(), token: null, pageToken: null, since };
   }
 
   private listPath(calendarId: string, st: PassState): string {

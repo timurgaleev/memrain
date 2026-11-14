@@ -496,6 +496,26 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("410 GONE: an interrupted relist resumes with the start it recorded, set a little early against clock steps", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const account = await connect(db.storage, world);
+      await writeCursor(e, account.id, calendarStream("primary"), "expired-sync-token", new Date(T1));
+      world.events = (_cal, q) => {
+        if (q.get("syncToken") !== null) return { status: 410, body: GOOGLE_FIXTURES.error410FullSyncRequired! };
+        return q.get("pageToken") === PAGE_TOKEN ? { status: 429, retryAfter: "3600", body: GOOGLE_FIXTURES.error403UserRateLimit! } : "eventsFullPage1";
+      };
+      const result = await run(db.storage, world, account.id, ENV, T1);
+      expect(result.status).toBe("partial");
+      const pass = JSON.parse((await readCursor(e, account.id, calendarStream("primary")))!) as Record<string, unknown>;
+      // A touch stamped by a clock that stepped back a little must still count as seen.
+      expect(pass).toMatchObject({ mode: "full", pageToken: PAGE_TOKEN, since: new Date(T1 - 5 * 60_000).toISOString() });
+      expect(Date.parse(String(pass.timeMin))).toBe(T1 - 365 * DAY);
+    } finally { await db.close(); }
+  });
+
   it("410 GONE: a relist that would remove most of the calendar is held, not applied", async () => {
     const db = await open();
     try {
