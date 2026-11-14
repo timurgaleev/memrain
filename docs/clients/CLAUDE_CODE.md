@@ -94,8 +94,9 @@ enrollment-mode client and a code as described in
 
 ## Option C: install the plugin
 
-The repository is also a Claude Code plugin. It adds the same `memrain` MCP
-server plus six skills (`query`, `brain-ops`, `capture`, `briefing`,
+The repository is also a Claude Code plugin marketplace. Its one plugin lives
+in `plugins/memrain`, so an install copies only that folder: the same `memrain`
+MCP server plus six skills (`query`, `brain-ops`, `capture`, `briefing`,
 `correction-pipeline`, `connect-client`) that teach the agent how to use it.
 
 1. Mint a token as in Option A, step 1 (or take the one `make local-up`

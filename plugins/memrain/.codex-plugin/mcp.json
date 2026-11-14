@@ -1,6 +1,7 @@
 {
   "mcpServers": {
     "memrain": {
+      "type": "http",
       "url": "http://127.0.0.1:18790/mcp",
       "bearer_token_env_var": "BRAIN_MCP_TOKEN"
     }
