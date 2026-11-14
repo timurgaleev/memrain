@@ -70,6 +70,12 @@ export interface ConnectorResponse {
   error: string | null;
   /** Set on `auth_required` when the credential cannot be renewed: the owner has to reconnect. */
   reauth?: boolean;
+  /**
+   * The parsed JSON body of a response that did not end `ok`, when it had one.
+   * GraphQL providers put their error code there; it is provider text, never
+   * printed, and read only for that code.
+   */
+  errorBody?: unknown;
 }
 
 /** A path or pagination link the client refuses to request. */
@@ -221,6 +227,15 @@ export class ConnectorClient {
   }
 
   async get(path: string): Promise<ConnectorResponse> {
+    return this.request("GET", path, undefined);
+  }
+
+  /** POST a JSON body to a path on the origin. */
+  async post(path: string, body: unknown): Promise<ConnectorResponse> {
+    return this.request("POST", path, JSON.stringify(body));
+  }
+
+  private async request(method: "GET" | "POST", path: string, body: string | undefined): Promise<ConnectorResponse> {
     const url = this.urlFor(path);
     let refreshed = false;
     let pending = await this.currentToken();
@@ -235,9 +250,14 @@ export class ConnectorClient {
       let text: string;
       try {
         res = await this.fetchFn(url, {
-          method: "GET",
+          method,
           redirect: "manual",
-          headers: { ...this.headers, Authorization: `Bearer ${token}` },
+          headers: {
+            ...this.headers,
+            ...(body === undefined ? {} : { "content-type": "application/json" }),
+            Authorization: `Bearer ${token}`,
+          },
+          ...(body === undefined ? {} : { body }),
         });
         text = await res.text();
       } catch (e) {
@@ -298,7 +318,23 @@ export class ConnectorClient {
         await this.sleep(Math.min(BASE_BACKOFF_MS * 2 ** attempt, this.maxWaitMs));
         continue;
       }
-      return { class: cls, status: res.status, body: null, next: null, error: `HTTP ${res.status} (${cls})` };
+      const errorBody = parseJson(text);
+      return {
+        class: cls,
+        status: res.status,
+        body: null,
+        next: null,
+        error: `HTTP ${res.status} (${cls})`,
+        ...(errorBody === undefined ? {} : { errorBody }),
+      };
     }
+  }
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
   }
 }
