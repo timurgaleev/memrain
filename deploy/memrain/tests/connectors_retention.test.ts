@@ -34,7 +34,7 @@ import { deterministicEmbed } from "./det-embed.ts";
 const OWNER = "owner@example.org";
 const OTHER = "second@example.org";
 /** An account id with no account row: these sweeps stay under the guard, so nothing is recorded against it. */
-const NO_ACCOUNT = "00000000-0000-4000-8000-000000000000";
+const NO_ACCOUNT = "0a0b0c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d";
 const embedFn = async (t: string) => deterministicEmbed(t);
 
 const thread = (id: string, canary: string, date = "2026-11-01T08:00:00.000Z"): MailThread => ({
