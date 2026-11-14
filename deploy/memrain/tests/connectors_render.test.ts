@@ -82,6 +82,12 @@ describe("mail", () => {
 
   it("strips an unclosed script to the end and stays linear on hostile markup", () => {
     expect(htmlToText("before<script>never closed")).toBe("before");
+    expect(htmlToText("Read <scripture> today")).toBe("Read <scripture> today");
+    expect(htmlToText("İİİ <b>x</b> <script>y</script>z")).toBe("İİİ x z");
+    const interleaved = "<style>a</style>".repeat(20_000) + "<noscript";
+    const t0 = performance.now();
+    expect(htmlToText(interleaved)).toBe("");
+    expect(performance.now() - t0).toBeLessThan(500);
     const big = "<script>".repeat(20_000) + "x";
     const start = performance.now();
     htmlToText(big);

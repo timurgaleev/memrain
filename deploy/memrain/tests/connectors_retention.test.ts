@@ -125,6 +125,15 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       `INSERT INTO synth_atoms (atom_key, source_ref, source_kind, source_hash, title, body, model_id)
        VALUES ($1, $2, 'document', 'abcdabcdabcdabcd', $3, $3, 'test-model')`,
       ["a".repeat(64), doc, `Atom about ${canary}`]);
+    // A concept narrated over that atom and an unrelated one, each with its page.
+    await e.query(`INSERT INTO synth_atoms (atom_key, source_ref, source_kind, source_hash, title, body, model_id)
+       VALUES ($1, 'doc_unrelated', 'document', 'abcdabcdabcdabcd', 'Other atom', 'Other atom', 'test-model')`, ["c".repeat(64)]);
+    for (const [concept, narrative, key] of [["Pricing", `Narrative ${canary}`, "a"], ["Hiring", "Unrelated narrative", "c"]] as const) {
+      await e.query(`INSERT INTO synth_concepts (concept_slug, title, narrative, model_id) VALUES ($1, $1, $2, 'test-model')`, [concept, narrative]);
+      await e.query(`INSERT INTO synth_concept_atoms (concept_slug, atom_id) SELECT $1, id FROM synth_atoms WHERE atom_key = $2`, [concept, key.repeat(64)]);
+      await putPage(db.storage, { slug: `concepts/${concept.toLowerCase()}`, type: "concept", allowAdHocType: true, title: concept,
+        markdown_body: narrative, written_by: "synthesize-concepts", written_by_principal: "operator" });
+    }
     const atom = await putPage(db.storage, { slug: "atoms/connector-derived", type: "atom", allowAdHocType: true, title: "Atom",
       markdown_body: `Distilled ${canary}`, source_id: "inbox", written_by: "extract-atoms",
       compiled_truth: { atom_origin: { source_ref: doc, source_hash: "abcdabcdabcdabcd", source_id: "inbox", atom_key: "a".repeat(64) } } });
@@ -150,7 +159,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(result.counts.atom_pages).toBe(1);
     expect(result.counts.takes).toBe(1);
     expect(result.counts.contradictions).toBe(1);
+    expect(result.counts.concepts).toBe(1);
+    expect(result.counts.concept_pages).toBe(1);
     expect(await rowsContaining(e, canary)).toEqual([]);
+    expect((await e.query("SELECT concept_slug FROM synth_concepts")).rows).toEqual([{ concept_slug: "Hiring" }]);
+    expect((await e.query("SELECT 1 FROM pages WHERE slug = 'concepts/hiring'")).rows).toHaveLength(1);
     expect((await e.query("SELECT 1 FROM pages WHERE slug = 'atoms/connector-derived'")).rows).toHaveLength(0);
   });
 

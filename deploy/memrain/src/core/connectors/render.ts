@@ -70,25 +70,50 @@ const HTML_TAGS = new Set([
   "title", "label", "button", "input", "form", "select", "option", "textarea", "wbr", "abbr", "cite", "q", "mark",
   "del", "ins", "figure", "figcaption", "picture", "source", "svg", "path", "style", "script", "head", "noscript", "template",
 ]);
-const ENTITIES: Record<string, string> ={ amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " " };
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " " };
+
+/** ASCII-only lowercase, so every index into it is an index into the original. */
+function asciiLower(text: string): string {
+  return text.replace(/[A-Z]/g, c => c.toLowerCase());
+}
+
+/** A tag name ends at whitespace, `>` or `/`: `<scripture>` is not `<script`. */
+function endsTagName(text: string, at: number): boolean {
+  const c = text[at];
+  return c === undefined || c === ">" || c === "/" || c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f";
+}
+
+/** Next `<tag` at or after `from` whose name ends there, or -1. */
+function findOpen(lower: string, tag: string, from: number): number {
+  let at = lower.indexOf(`<${tag}`, from);
+  while (at !== -1 && !endsTagName(lower, at + tag.length + 1)) at = lower.indexOf(`<${tag}`, at + 1);
+  return at;
+}
 
 function dropBlocks(html: string): string {
-  const lower = html.toLowerCase();
+  const lower = asciiLower(html);
+  // Each tag's next opening, recomputed only once the scan has passed it, so
+  // the whole pass stays linear however the blocks interleave.
+  const next = new Map(DROPPED_BLOCKS.map(t => [t, findOpen(lower, t, 0)]));
   let out = "";
   let from = 0;
-  while (from < html.length) {
-    let next = -1;
+  for (;;) {
+    let at = -1;
     let tag = "";
     for (const t of DROPPED_BLOCKS) {
-      const at = lower.indexOf(`<${t}`, from);
-      if (at !== -1 && (next === -1 || at < next)) {
-        next = at;
+      let pos = next.get(t)!;
+      if (pos !== -1 && pos < from) {
+        pos = findOpen(lower, t, from);
+        next.set(t, pos);
+      }
+      if (pos !== -1 && (at === -1 || pos < at)) {
+        at = pos;
         tag = t;
       }
     }
-    if (next === -1) break;
-    out += html.slice(from, next);
-    const close = lower.indexOf(`</${tag}`, next);
+    if (at === -1) break;
+    out += html.slice(from, at);
+    const close = lower.indexOf(`</${tag}`, at);
     if (close === -1) return out;
     const end = lower.indexOf(">", close);
     from = end === -1 ? html.length : end + 1;

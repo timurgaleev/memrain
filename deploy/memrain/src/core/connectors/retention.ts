@@ -8,8 +8,10 @@
  * their embeddings, facts written from the page or its chunks, chronicle
  * events drawn from its chunks, links it is the provenance of, the
  * slug-keyed leftovers a purge also clears, and what synthesis distilled from
- * it: atoms, the atom pages the atoms phase published, takes, and the
- * contradiction rows that snapshot a deleted claim. Facts are deleted, not retired:
+ * it: atoms, the atom pages the atoms phase published, takes, concepts
+ * narrated over a deleted atom and their pages, and the contradiction rows
+ * that snapshot a deleted claim. A synthesized page someone edited is kept
+ * and counted in the receipt, so human-written text is never destroyed. Facts are deleted, not retired:
  * a retired fact still holds the text.
  *
  * Each page goes in its own transaction, which also writes a receipt to the
@@ -36,6 +38,7 @@ import { bumpClock, bumpDocumentClock } from "../generation.ts";
 import { logIngest } from "../ingest-log.ts";
 import { OperationError } from "../operation-error.ts";
 import { deadlockSafeTransaction } from "../retry.ts";
+import { slugifyTitle } from "../synthesis/atoms.ts";
 import { shortHash, SOURCE_KIND_FOR, type ConnectorDataKind } from "./model.ts";
 
 export const CONNECTOR_DELETE_SOURCE_TYPE = "connector-delete";
@@ -64,6 +67,10 @@ export interface DeleteCounts {
   atom_pages_kept: number;
   takes: number;
   contradictions: number;
+  /** Concepts narrated over a deleted atom (rebuilt by the next concepts run), and their pages. */
+  concepts: number;
+  concept_pages: number;
+  concept_pages_kept: number;
 }
 
 export interface HardDeleteResult {
@@ -78,6 +85,7 @@ const CONNECTOR_SOURCE_KINDS = new Set(Object.values(SOURCE_KIND_FOR));
 const EMPTY_COUNTS: DeleteCounts = {
   versions: 0, documents: 0, chunks: 0, embeddings: 0, facts: 0, timeline_events: 0, links: 0, leftovers: 0,
   atoms: 0, atom_pages: 0, atom_pages_kept: 0, takes: 0, contradictions: 0,
+  concepts: 0, concept_pages: 0, concept_pages_kept: 0,
 };
 
 /** The page predicate every delete shares: this source, a connector page, this account. */
@@ -107,7 +115,7 @@ async function count(tx: Engine, sql: string, params: unknown[]): Promise<number
  * Delete one page and everything derived from it, inside `tx`, adding to
  * `counts`. Returns the ids of the page's search documents.
  */
-async function deletePageDerived(tx: Engine, slug: string, sourceId: string, counts: DeleteCounts): Promise<string[]> {
+async function deletePageDerived(tx: Engine, slug: string, sourceId: string, counts: DeleteCounts): Promise<{ docIds: string[]; concepts: string[] }> {
   const paths = [pageSourcePath(slug, sourceId), pageTruthSourcePath(slug, sourceId)];
   const docIds = (await tx.query<{ id: string }>(
     `SELECT id FROM documents WHERE source_path = ANY($1::text[]) AND COALESCE(source_id, 'default') = $2`,
@@ -137,7 +145,16 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
      SELECT count(*)::int AS n FROM d`,
     [slug]);
   // Synthesis keeps what it distils from a document or page by reference, with
-  // no foreign key, and snapshots claim text into contradiction rows.
+  // no foreign key, and snapshots claim text into contradiction rows. A concept
+  // narrated over one of the doomed atoms goes too; the next concepts run
+  // rebuilds it from the atoms that remain.
+  const concepts = (await tx.query<{ concept_slug: string }>(
+    `DELETE FROM synth_concepts WHERE concept_slug IN (
+       SELECT ca.concept_slug FROM synth_concept_atoms ca JOIN synth_atoms a ON a.id = ca.atom_id
+        WHERE a.source_kind = 'document' AND a.source_ref = ANY($1::text[]))
+     RETURNING concept_slug`,
+    [docIds])).rows.map(r => r.concept_slug);
+  counts.concepts += concepts.length;
   counts.atoms += await count(tx,
     `WITH d AS (DELETE FROM synth_atoms WHERE source_kind = 'document' AND source_ref = ANY($1::text[]) RETURNING 1)
      SELECT count(*)::int AS n FROM d`,
@@ -161,7 +178,24 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
   const rest = await leftovers(tx, [slug], true);
   counts.leftovers += rest.raw_data_rows + rest.tags_rows + rest.slug_aliases_rows + rest.volunteer_event_rows;
   await tx.query(`DELETE FROM pages WHERE slug = $1`, [slug]);
-  return docIds;
+  return { docIds, concepts };
+}
+
+/**
+ * Pages a synthesis phase wrote and nobody edited: every version by `writer`.
+ * Returns the deletable ones with their sources and how many were kept.
+ */
+async function automaticPages(tx: Engine, where: string, params: unknown[], type: string, prefix: string, writer: string): Promise<{ pages: Array<{ slug: string; source_id: string }>; kept: number }> {
+  const rows = (await tx.query<{ slug: string; source_id: string; automatic: boolean }>(
+    `SELECT p.slug, p.source_id,
+            (p.type = '${type}' AND p.slug LIKE '${prefix}%'
+             AND NOT EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug
+                              AND v.written_by IS DISTINCT FROM '${writer}')) AS automatic
+       FROM pages p WHERE ${where} ORDER BY p.slug`,
+    params,
+  )).rows;
+  const pages = rows.filter(r => r.automatic).map(r => ({ slug: r.slug, source_id: r.source_id }));
+  return { pages, kept: rows.length - pages.length };
 }
 
 /**
@@ -178,24 +212,26 @@ async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string):
   );
   if (page.rows.length === 0) return null;
   const counts: DeleteCounts = { ...EMPTY_COUNTS };
-  const docIds = await deletePageDerived(tx, slug, scope.sourceId, counts);
+  const { docIds, concepts } = await deletePageDerived(tx, slug, scope.sourceId, counts);
   if (docIds.length > 0) {
-    const claimants = (await tx.query<{ slug: string; automatic: boolean }>(
-      `SELECT p.slug,
-              (p.type = 'atom' AND p.slug LIKE 'atoms/%'
-               AND NOT EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug
-                                AND v.written_by IS DISTINCT FROM 'extract-atoms')) AS automatic
-         FROM pages p
-        WHERE p.source_id = $1 AND p.compiled_truth->'atom_origin'->>'source_ref' = ANY($2::text[])
-        ORDER BY p.slug`,
-      [scope.sourceId, docIds],
-    )).rows;
-    const atomPages = claimants.filter(r => r.automatic).map(r => r.slug);
-    counts.atom_pages_kept = claimants.length - atomPages.length;
-    if (atomPages.length > 0) await lockPageSlugs(tx, ...atomPages);
-    for (const atomSlug of atomPages) {
-      await deletePageDerived(tx, atomSlug, scope.sourceId, counts);
+    const atoms = await automaticPages(tx,
+      `p.source_id = $1 AND p.compiled_truth->'atom_origin'->>'source_ref' = ANY($2::text[])`,
+      [scope.sourceId, docIds], "atom", "atoms/", "extract-atoms");
+    counts.atom_pages_kept += atoms.kept;
+    if (atoms.pages.length > 0) await lockPageSlugs(tx, ...atoms.pages.map(p => p.slug));
+    for (const atom of atoms.pages) {
+      await deletePageDerived(tx, atom.slug, atom.source_id, counts);
       counts.atom_pages++;
+    }
+  }
+  if (concepts.length > 0) {
+    const pageSlugs = concepts.map(c => `concepts/${slugifyTitle(c)}`);
+    const conceptPages = await automaticPages(tx, `p.slug = ANY($1::text[])`, [pageSlugs], "concept", "concepts/", "synthesize-concepts");
+    counts.concept_pages_kept += conceptPages.kept;
+    if (conceptPages.pages.length > 0) await lockPageSlugs(tx, ...conceptPages.pages.map(p => p.slug));
+    for (const concept of conceptPages.pages) {
+      await deletePageDerived(tx, concept.slug, concept.source_id, counts);
+      counts.concept_pages++;
     }
   }
   if (counts.documents > 0) await bumpDocumentClock(tx);
