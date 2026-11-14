@@ -69,6 +69,7 @@ import { newWriteTiming, noteWriteTiming, runWithWriteTiming } from "./write-tim
 import { acquireWriteEmbedSlot, writeEmbedWidth } from "./concurrency.ts";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
+import { isConnectorPageMirror } from "./connectors/page-kind.ts";
 import {
   checkLocalWriteOwner,
   writeDocumentTransaction,
@@ -409,8 +410,11 @@ async function indexDocumentBody(
   // Either flag (or an injected llmFn) turns wrapping on; the LLM tier is a
   // superset that upgrades the synopsis, so it must build the deterministic
   // prefix too (its fallback path).
+  // A connector page never takes the paid tier: its text is outside text the
+  // connector pipeline handles under its own caps.
   const llmActive =
-    (contextualLlmEnabled() || opts.contextualLlmFn !== undefined) && !isCode && !skipEmbed && !keywordOnly;
+    (contextualLlmEnabled() || opts.contextualLlmFn !== undefined) && !isCode && !skipEmbed && !keywordOnly &&
+    !(await isConnectorPageMirror(storage.engine(), input.sourcePath));
   const wrapActive =
     (contextualRetrievalEnabled() || llmActive) && !isCode;
   const deterministicPrefix = wrapActive

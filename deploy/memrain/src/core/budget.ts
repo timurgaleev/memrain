@@ -1024,6 +1024,24 @@ export function currentWalletPath(): WalletPath | null {
   return frames.length > 0 ? frames[frames.length - 1]!.path : null;
 }
 
+/**
+ * The wallet path of a paid path that predates the wallet (facts extraction,
+ * the facts backfill, the contextual-LLM tier, deep synthesis). It adds no cap
+ * by default and does not wait for a brain cap: the path's own run cap (a
+ * BudgetTracker at the value it always had) stays the one that binds. An
+ * operator may add a day cap with MEMRAIN_SPEND_PATH_<ROLE>_MAX_USD_PER_DAY.
+ */
+export function paidPathWallet(role: string, env: NodeJS.ProcessEnv = process.env): WalletPath {
+  const dayCap = envCapUsd(`MEMRAIN_SPEND_PATH_${role.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_MAX_USD_PER_DAY`, env);
+  return { role, ...(dayCap !== null ? { dayCapUsd: dayCap } : {}) };
+}
+
+/** Run `fn` as the existing paid path `role`, unless a wallet path is already
+ *  in scope: then the enclosing path keeps naming (and capping) the spend. */
+export function runAsPath<T>(role: string, fn: () => Promise<T>): Promise<T> {
+  return walletFrames().length > 0 ? fn() : runInWallet(paidPathWallet(role), fn);
+}
+
 /** The path, daemon and daemon source a call in scope is booked under. */
 function walletTags(): { role: string | null; daemon: string | null; daemonSource: string | null } {
   const frames = walletFrames();

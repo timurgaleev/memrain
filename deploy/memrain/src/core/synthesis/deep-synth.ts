@@ -22,7 +22,7 @@ import type { Storage } from "../storage.ts";
 import type { SearchHit } from "../search/hybrid.ts";
 import { resolveSonnetFn, type SonnetFn, type SonnetUsage } from "../llm/sonnet.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
-import { BudgetTracker, BudgetExhausted, type BudgetHold } from "../budget.ts";
+import { BudgetTracker, BudgetExhausted, runAsPath, type BudgetHold } from "../budget.ts";
 import { runThink, type ThinkSynthesis, type ThinkResult } from "./think.ts";
 import { listConcepts } from "./reads.ts";
 
@@ -135,9 +135,16 @@ async function deriveStandingQuestions(
  * Fail-open: a question whose synthesis is empty or whose model call errors is
  * skipped, not thrown.
  */
-export async function runDeepSynthPhase(
+export function runDeepSynthPhase(
   storage: Storage,
   opts: DeepSynthOptions = {},
+): Promise<DeepSynthResult> {
+  return runAsPath("deep-synth", () => deepSynthRun(storage, opts));
+}
+
+async function deepSynthRun(
+  storage: Storage,
+  opts: DeepSynthOptions,
 ): Promise<DeepSynthResult> {
   if (!opts.sonnetFn && !liveEnabled()) {
     return blank("default-OFF: set MEMRAIN_DEEP_SYNTH=1 to run paid Sonnet deep synthesis");

@@ -56,7 +56,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     try {
       const spec = paidProbe();
       registerDaemon(spec);
-      let seen: WalletPath | null = null;
+      let seen = null as WalletPath | null;
       registerDaemonHandler(e, spec, async () => { seen = currentWalletPath(); return {}; },
         { env: { ...ON, MEMRAIN_DAILY_BUDGET_USD: "10" } });
       await getHandler(spec.kind)!({ sourceId: "src-a" }, { job: JOB });
