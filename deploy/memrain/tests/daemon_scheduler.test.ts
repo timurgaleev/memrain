@@ -25,6 +25,9 @@ const probe = (over: Partial<DaemonSpec> = {}): DaemonSpec => ({
   ...over,
 });
 
+/** The probe's outcome; built-in daemons (connector_sync) report alongside it. */
+const probeOutcome = (results: Array<{ daemon: string; outcome: string }>) => results.find(r => r.daemon === "probe")?.outcome;
+
 const jobIds = async (e: Engine) =>
   (await e.query<{ id: string }>(`SELECT id FROM jobs WHERE kind = 'daemon_probe' ORDER BY id`)).rows.map(r => r.id);
 
@@ -106,7 +109,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     try {
       registerDaemon(probe());
       const late = new Date("2026-11-15T13:30:00Z"); // 14:30 Berlin, 7.5 h after the window
-      expect((await enqueueDueDaemons(e, late, { env: ON }))[0]?.outcome).toBe("window_too_old");
+      expect(probeOutcome(await enqueueDueDaemons(e, late, { env: ON }))).toBe("window_too_old");
       expect(await jobIds(e)).toEqual([]);
       await enqueueDueDaemons(e, MORNING, { env: ON });
       expect(await jobIds(e)).toEqual([WINDOW_ID]);
@@ -126,8 +129,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       }
       const lines: string[] = [];
       const log = (_level: string, msg: string) => void lines.push(msg);
-      expect((await enqueueDueDaemons(e, MORNING, { env: ON, log }))[0]?.outcome).toBe("auto_paused");
-      expect((await enqueueDueDaemons(e, MORNING, { env: ON, log }))[0]?.outcome).toBe("paused");
+      expect(probeOutcome(await enqueueDueDaemons(e, MORNING, { env: ON, log }))).toBe("auto_paused");
+      expect(probeOutcome(await enqueueDueDaemons(e, MORNING, { env: ON, log }))).toBe("paused");
       expect(lines.filter(l => l.includes("auto-paused"))).toHaveLength(1);
       const row = (await readControls(e)).find(r => r.daemon === "probe")!;
       expect(row.paused).toBe(true);
@@ -135,7 +138,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await jobIds(e)).not.toContain(WINDOW_ID);
 
       await resumeDaemon(e, { daemon: "probe", by: "cli" });
-      expect((await enqueueDueDaemons(e, MORNING, { env: ON, log }))[0]?.outcome).toBe("queued");
+      expect(probeOutcome(await enqueueDueDaemons(e, MORNING, { env: ON, log }))).toBe("queued");
       expect(await jobIds(e)).toContain(WINDOW_ID);
     } finally { await db.close(); }
   });
@@ -149,7 +152,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await e.query(`INSERT INTO daemon_controls (daemon, source_id, timezone) VALUES ('probe', '*', 'Mars/Olympus')`);
       await e.query(`INSERT INTO daemon_controls (daemon, source_id, cron) VALUES ('other', '*', '61 * * * *')`);
       const r = await enqueueDueDaemons(e, MORNING, { env: ON });
-      expect(Object.fromEntries(r.map(x => [x.daemon, x.outcome]))).toEqual({ other: "bad_schedule", probe: "bad_schedule" });
+      expect(Object.fromEntries(r.filter(x => x.daemon !== "connector_sync").map(x => [x.daemon, x.outcome]))).toEqual({ other: "bad_schedule", probe: "bad_schedule" });
     } finally { await db.close(); }
   });
 
@@ -182,8 +185,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const e = db.storage.engine();
     try {
       registerDaemon(probe({ paid: true }));
-      expect((await enqueueDueDaemons(e, MORNING, { env: ON }))[0]?.outcome).toBe("no_brain_cap");
-      expect((await enqueueDueDaemons(e, MORNING, { env: { ...ON, MEMRAIN_DAILY_BUDGET_USD: "2" } }))[0]?.outcome).toBe("queued");
+      expect(probeOutcome(await enqueueDueDaemons(e, MORNING, { env: ON }))).toBe("no_brain_cap");
+      expect(probeOutcome(await enqueueDueDaemons(e, MORNING, { env: { ...ON, MEMRAIN_DAILY_BUDGET_USD: "2" } }))).toBe("queued");
     } finally { await db.close(); }
   });
 
@@ -194,7 +197,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       registerDaemon(probe());
       registerDaemon(probe({ name: "orphan", kind: "daemon_unregistered" }));
       const r = await enqueueDueDaemons(e, MORNING, { env: { ...ON, MEMRAIN_DAEMONS_DISABLED: "probe" } });
-      expect(Object.fromEntries(r.map(x => [x.daemon, x.outcome]))).toEqual({ probe: "env_disabled", orphan: "no_handler" });
+      expect(Object.fromEntries(r.filter(x => x.daemon !== "connector_sync").map(x => [x.daemon, x.outcome]))).toEqual({ probe: "env_disabled", orphan: "no_handler" });
       expect(await jobIds(e)).toEqual([]);
     } finally { await db.close(); }
   });

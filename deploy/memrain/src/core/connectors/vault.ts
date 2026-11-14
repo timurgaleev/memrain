@@ -100,6 +100,14 @@ function flagOn(v: string | undefined): boolean {
   return ["1", "true", "on", "yes"].includes((v ?? "").trim().toLowerCase());
 }
 
+/**
+ * The one MEMRAIN_CONNECTORS_ENABLED switch, read the same way everywhere. On
+ * its own it opens nothing: connectorsStatus also needs a usable key.
+ */
+export function connectorsSwitchOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  return flagOn(env.MEMRAIN_CONNECTORS_ENABLED);
+}
+
 export interface ConnectorsStatus {
   enabled: boolean;
   kekId: string | null;
@@ -114,7 +122,7 @@ export interface ConnectorsStatus {
 export function connectorsStatus(env: NodeJS.ProcessEnv = process.env): ConnectorsStatus {
   const load = loadKek(env);
   const kekId = load.kek?.id ?? null;
-  if (!flagOn(env.MEMRAIN_CONNECTORS_ENABLED)) {
+  if (!connectorsSwitchOn(env)) {
     return { enabled: false, kekId, reason: "connectors are off (MEMRAIN_CONNECTORS_ENABLED is not set)" };
   }
   if (load.kek === null) return { enabled: false, kekId: null, reason: load.reason };

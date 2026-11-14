@@ -2,8 +2,9 @@
  * The `connector_sync` job kind and its daemon spec on both engines: the kind
  * is accepted only once registered, one job per account per interval slot
  * (re-enqueueing the same slot is a no-op), nothing is enqueued while the
- * global switch is off or the account is not runnable, and the handler runs
- * the sync engine for the account the payload names.
+ * global switch is off or the account is not runnable, the handler runs the
+ * sync engine for the account the payload names, and nothing runs while the
+ * daemon is disabled.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
@@ -16,6 +17,7 @@ import { registerSource } from "../src/core/sources.ts";
 import { getPage } from "../src/core/pages.ts";
 import { ConnectorClient } from "../src/core/connectors/client.ts";
 import { createAccount } from "../src/core/connectors/accounts.ts";
+import { getDaemon } from "../src/core/daemons/registry.ts";
 import type { SyncAccount, SyncAdapter } from "../src/core/connectors/sync-engine.ts";
 import {
   CONNECTOR_SYNC_DAEMON,
@@ -45,11 +47,14 @@ const account = (over: Partial<SyncAccount> = {}): SyncAccount => ({
   id: ACCOUNT_ID, sourceId: "conn-job", provider: "test", enabled: true, status: "active", itemCapDaily: 100, spendCapUsdDaily: 1, ...over,
 });
 
-function runtime(acct: SyncAccount | null, env: Record<string, string> = { MEMRAIN_CONNECTORS_ENABLED: "1" }): ConnectorSyncRuntime {
+const ON = { MEMRAIN_CONNECTORS_ENABLED: "1", MEMRAIN_DAEMONS: "1" };
+
+function runtime(acct: SyncAccount | null, env: Record<string, string> = ON): ConnectorSyncRuntime {
   const clock = fakeClock();
   return {
     env,
     loadAccount: async (id) => (acct !== null && id === acct.id ? acct : null),
+    runnableAccounts: async (sourceId) => (acct !== null && acct.sourceId === sourceId ? [acct] : []),
     depsFor: () => {
       const fake = replay([{ status: 200, headers: { "content-type": "application/json" }, body: {} }]);
       return {
@@ -67,8 +72,13 @@ function runtime(acct: SyncAccount | null, env: Record<string, string> = { MEMRA
 afterEach(() => _resetHandlersForTesting());
 
 describe("connector_sync daemon spec", () => {
-  it("is off by default, long-lane, per tenant and paid, with a wall-clock cap for its kind", () => {
-    expect(CONNECTOR_SYNC_DAEMON).toMatchObject({ name: "connector_sync", kind: CONNECTOR_SYNC_JOB_KIND, defaultEnabled: false, paid: true, lane: "long", perTenant: true });
+  it("is a registered daemon: off by default, long-lane and paid, run per source every 15 minutes", () => {
+    expect(CONNECTOR_SYNC_DAEMON).toMatchObject({
+      name: "connector_sync", kind: CONNECTOR_SYNC_JOB_KIND, defaultEnabled: false, paid: true, lane: "long",
+      schedule: { cron: "*/15 * * * *" }, maxRetries: 0,
+    });
+    expect(typeof CONNECTOR_SYNC_DAEMON.targets).toBe("function");
+    expect(getDaemon("connector_sync")).toBe(CONNECTOR_SYNC_DAEMON);
     expect(kindDefaultTimeoutMs(CONNECTOR_SYNC_JOB_KIND)).toBe(30 * 60_000);
   });
 });
@@ -88,7 +98,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(first?.outcome).toBe("created");
       expect(again?.outcome).toBe("existing");
       expect(first?.job.id).toBe(connectorSyncJobId(ACCOUNT_ID, NOW, 15));
-      expect(first?.job).toMatchObject({ kind: CONNECTOR_SYNC_JOB_KIND, payload: { accountId: ACCOUNT_ID }, quietHoursSkip: true });
+      expect(first?.job).toMatchObject({ kind: CONNECTOR_SYNC_JOB_KIND, payload: { accountId: ACCOUNT_ID, sourceId: "conn-job" }, quietHoursSkip: true });
       const next = await enqueueConnectorSync(queue, account(), { now: NOW + 15 * 60_000, intervalMinutes: 15, env: rt.env });
       expect(next?.outcome).toBe("created");
     } finally { await db.close(); }
@@ -115,6 +125,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       registerConnectorSync(db.storage, runtime(account({ id: row.id })));
       const handler = getHandler(CONNECTOR_SYNC_JOB_KIND)!;
       const job = { id: "j" } as JobRow;
+      // The daemon is off by default: a queued run is skipped before anything opens.
+      expect(await handler({ accountId: row.id, sourceId: "conn-job" }, { job })).toEqual({ skipped: "disabled" });
+      await db.storage.engine().query(`INSERT INTO daemon_controls (daemon, source_id, enabled) VALUES ('connector_sync', '*', true)`);
       const result = await handler({ accountId: row.id }, { job });
       expect(result).toMatchObject({ account_id: row.id, status: "success" });
       expect(JSON.stringify(result)).not.toContain(TOKEN);
@@ -123,6 +136,10 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await expect(handler({}, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
       await expect(handler({ accountId: "not-a-uuid" }, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
       await expect(handler({ accountId: "11111111-2222-4333-8444-5555555555ab" }, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
+      await expect(handler({ accountId: row.id, sourceId: "other-source" }, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
+
+      const bySource = await handler({ daemon: "connector_sync", sourceId: "conn-job", window: "w" }, { job });
+      expect(bySource).toMatchObject({ source_id: "conn-job", accounts: [{ account_id: row.id }] });
     } finally { await db.close(); }
   });
 });

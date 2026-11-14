@@ -35,6 +35,7 @@ import { REMEDIATION_JOB_KIND, SUBAGENT_JOB_KIND } from "../core/jobs/kinds.ts";
 import { longDaemonKinds } from "../core/daemons/registry.ts";
 import { envSwitches } from "../core/daemons/controls.ts";
 import { startDaemonScheduler, stopDaemonScheduler } from "../core/daemons/scheduler.ts";
+import { registerConnectorRuntimeIfEnabled } from "../core/connectors/runtime.ts";
 
 const MAX_JOB_CONCURRENCY = 8;
 
@@ -488,6 +489,11 @@ export function startBackgroundWork(
   // Register the `page_mirror` handler: with MEMRAIN_PAGE_MIRROR_SYNC=0 the write
   // path queues the search mirror instead of running it inline.
   registerPageMirrorHandler(storage);
+  // Connector sync runs only with MEMRAIN_CONNECTORS_ENABLED on and a usable
+  // connector key; without the handler the scheduler queues no connector_sync.
+  if (registerConnectorRuntimeIfEnabled(storage)) {
+    console.log("[memrain] connector sync enabled (connector_sync jobs; the daemon stays off until enabled)");
+  }
   // The operator's agent loop runs only when opted in: without the handler a
   // `subagent` submit is refused as an unknown kind.
   if (registerSubagentHandlerIfEnabled(storage)) {

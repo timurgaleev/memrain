@@ -52,7 +52,9 @@ import { daySpendUsd, runWithSpendClient, utcDayStart } from "../budget.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import type { ConnectorClient, ConnectorResponse, TokenSource } from "./client.ts";
 import { isDeterministicRefusal } from "./github.ts";
+import type { ConnectorAccountStatus } from "./accounts.ts";
 import { massDeleteVerdict } from "./retention.ts";
+import { connectorsSwitchOn } from "./vault.ts";
 import { ReauthRequiredError, type ConnectorRunStatus, type ResponseClass } from "./types.ts";
 import {
   DELETE_CONFIRMED,
@@ -84,9 +86,11 @@ export interface SyncAccount {
   provider: string;
   enabled: boolean;
   /** Only `active` runs; `paused`, `needs_reconnect`, `revoked` and the rest are skipped. */
-  status: string;
+  status: ConnectorAccountStatus;
   itemCapDaily: number;
   spendCapUsdDaily: number;
+  /** The provider-side identity; adapters render with it and deletion matches its hash. */
+  accountLabel?: string;
 }
 
 /** One provider item, rendered and ready to store. */
@@ -139,8 +143,8 @@ export interface UpstreamDeletion {
 }
 
 export interface AccountGateway {
-  /** Pause the account until its owner reconnects it. */
-  markNeedsReconnect(accountId: string): Promise<void>;
+  /** Pause the account (status `needs_reconnect`) until its owner reconnects it. */
+  markNeedsReconnect(accountId: string, reason: string): Promise<void>;
   /** Optional: remember the run on the account row. */
   recordRun?(accountId: string, result: SyncRunResult): Promise<void>;
 }
@@ -237,10 +241,6 @@ export function connectorSpendClient(accountId: string): string {
 
 type Env = Record<string, string | undefined>;
 
-export function connectorsSyncEnabled(env: Env = process.env): boolean {
-  return (env.MEMRAIN_CONNECTORS_ENABLED ?? "").trim() === "1";
-}
-
 function positiveInt(env: Env, name: string, fallback: number): number {
   const n = Number((env[name] ?? "").trim());
   return Number.isInteger(n) && n > 0 ? n : fallback;
@@ -305,7 +305,7 @@ export async function runConnectorSync(storage: Storage, account: SyncAccount, d
     return result;
   };
 
-  if (!connectorsSyncEnabled(env)) return skip("connectors_disabled");
+  if (!connectorsSwitchOn(env)) return skip("connectors_disabled");
   if (!account.enabled) return skip("account_disabled");
   if (account.status !== "active") return skip("account_inactive");
   if ((await getSource(engine, account.sourceId)) === null) {
@@ -359,7 +359,7 @@ async function needsReconnect(
   result.error_class = "auth_required";
   result.http_status = httpStatus;
   result.error ??= "the provider will not renew the credential; reconnect the account";
-  await deps.accounts.markNeedsReconnect(account.id);
+  await deps.accounts.markNeedsReconnect(account.id, result.error);
   await openNotice(
     storage.engine(),
     account.id,

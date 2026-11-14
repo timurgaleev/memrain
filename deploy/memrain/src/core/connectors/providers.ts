@@ -1,6 +1,7 @@
 /**
  * The connector provider registry: what the OAuth connect flow needs to know
- * about one provider (Google, Microsoft, Slack, …) and nothing more.
+ * about one provider (Google, Microsoft, Slack, …), and, for a provider that
+ * syncs, the API origin its adapter reads from.
  *
  * A provider declares its endpoints, the read-only scopes each service needs
  * and the source kinds each service may feed. The connect flow requests
@@ -10,6 +11,7 @@
  */
 import type { FetchFn } from "./client.ts";
 import type { SourceKind } from "../sources.ts";
+import type { SyncAccount, SyncAdapter } from "./sync-engine.ts";
 import { assertConnectorName } from "./accounts.ts";
 
 export interface ProviderService {
@@ -46,6 +48,12 @@ export interface ConnectorProvider {
   identify: (ctx: { fetch: FetchFn; accessToken: string; tokenResponse: Record<string, unknown> }) => Promise<string>;
   /** Provider-specific revocation; the default posts RFC 7009 to `revokeUrl`. */
   revoke?: (ctx: RevokeContext) => Promise<boolean>;
+  /** How an account of this provider syncs; a provider without it can connect but not sync. */
+  sync?: {
+    /** The one https origin the sync client may call. */
+    apiOrigin: string;
+    adapter: (account: SyncAccount) => SyncAdapter;
+  };
 }
 
 function assertHttps(url: string, what: string, id: string): void {
@@ -68,6 +76,7 @@ export class ProviderRegistry {
     assertHttps(provider.authorizeUrl, "authorizeUrl", provider.id);
     assertHttps(provider.tokenUrl, "tokenUrl", provider.id);
     if (provider.revokeUrl !== undefined) assertHttps(provider.revokeUrl, "revokeUrl", provider.id);
+    if (provider.sync !== undefined) assertHttps(provider.sync.apiOrigin, "sync.apiOrigin", provider.id);
     const services = Object.keys(provider.services);
     if (services.length === 0) throw new Error(`provider ${provider.id} declares no services`);
     for (const s of services) assertConnectorName(s, "service");

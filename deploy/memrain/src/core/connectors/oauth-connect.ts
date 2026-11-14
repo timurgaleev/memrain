@@ -162,7 +162,8 @@ function requestedScopes(provider: ConnectorProvider, services: readonly string[
   return out;
 }
 
-async function resolveClient(deps: ConnectDeps, kek: Kek, provider: string): Promise<{ clientId: string; clientSecret: string }> {
+/** The provider's OAuth client: the stored bring-your-own one, else the environment's. */
+export async function resolveClient(deps: ConnectDeps, kek: Kek, provider: string): Promise<{ clientId: string; clientSecret: string }> {
   const stored = await getOAuthClient(deps.engine, kek, provider);
   if (stored) return stored;
   const env = deps.env ?? process.env;
