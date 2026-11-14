@@ -68,6 +68,7 @@ import {
   itemsPresent,
   itemsSeenSince,
   markDeletesPending,
+  markUnseenDeletesPending,
   openNotice,
   pageForDedupeKey,
   pageSharedByLiveItem,
@@ -143,6 +144,13 @@ export type PageResult =
     checkpoint: string | null;
     /** No more pages in this run. */
     done: boolean;
+    /**
+     * On the last page of a full relisting: every stored item whose external
+     * id starts with `prefix` and that this listing did not touch since
+     * `unseenSince` (ISO) is gone upstream and is deleted like a reported one.
+     * Only honoured when the whole page settled and `done` is set.
+     */
+    reconcile?: { prefix: string; unseenSince: string };
   }
   | { ok: false; response: ConnectorResponse };
 
@@ -481,6 +489,11 @@ class Run {
         s.cursor_after = cursor;
       }
       if (res.done) {
+        if (res.reconcile !== undefined) {
+          this.result.counts.deletions_seen += await markUnseenDeletesPending(
+            this.engine, this.account.id, res.reconcile.prefix, new Date(res.reconcile.unseenSince), this.date(),
+          );
+        }
         s.clean = true;
         return;
       }

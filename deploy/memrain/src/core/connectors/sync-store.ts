@@ -221,6 +221,24 @@ export async function markDeletesPending(engine: Engine, accountId: string, exte
   return r.rows.length;
 }
 
+/**
+ * After a full relisting of one stream: record as pending deletions the
+ * stored items under `prefix` that the listing did not touch since `since`.
+ * A held or failing item may simply not have been processed, so it is never
+ * taken for gone; neither is an item that never made a page.
+ */
+export async function markUnseenDeletesPending(engine: Engine, accountId: string, prefix: string, since: Date, now: Date): Promise<number> {
+  if (prefix === "" || Number.isNaN(since.getTime())) throw new Error("reconcile needs a prefix and a valid start time");
+  const r = await engine.query<{ external_id: string }>(
+    `UPDATE connector_items SET deleted_upstream_at = $4, held_reason = '${DELETE_PENDING}', held_until = NULL
+      WHERE account_id = $1 AND left(external_id, length($2::text)) = $2::text AND last_seen_at < $3
+        AND deleted_upstream_at IS NULL AND page_slug IS NOT NULL AND held_reason IS NULL AND fail_count = 0
+      RETURNING external_id`,
+    [accountId, prefix, since.toISOString(), now.toISOString()],
+  );
+  return r.rows.length;
+}
+
 /** Items still in the brain: not deleted upstream, or deleted but not applied yet. */
 export async function itemsPresent(engine: Engine, accountId: string): Promise<number> {
   const r = await engine.query<{ n: number | string }>(
