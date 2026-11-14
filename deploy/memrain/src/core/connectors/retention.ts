@@ -6,8 +6,9 @@
  * owner deletes everything a connector brought in, the page goes with
  * everything derived from it — page history, search documents, chunks and
  * their embeddings, facts written from the page or its chunks, chronicle
- * events drawn from its chunks, links it is the provenance of, and the
- * slug-keyed leftovers a purge also clears. Facts are deleted, not retired:
+ * events drawn from its chunks, links it is the provenance of, the
+ * slug-keyed leftovers a purge also clears, and the synthesis atoms and atom
+ * pages distilled from its documents. Facts are deleted, not retired:
  * a retired fact still holds the text.
  *
  * Each page goes in its own transaction, which also writes a receipt to the
@@ -55,6 +56,9 @@ export interface DeleteCounts {
   timeline_events: number;
   links: number;
   leftovers: number;
+  /** Synthesis atoms distilled from the page's documents, and the atom pages published from them. */
+  atoms: number;
+  atom_pages: number;
 }
 
 export interface HardDeleteResult {
@@ -68,6 +72,7 @@ const CONNECTOR_SOURCE_KINDS = new Set(Object.values(SOURCE_KIND_FOR));
 
 const EMPTY_COUNTS: DeleteCounts = {
   versions: 0, documents: 0, chunks: 0, embeddings: 0, facts: 0, timeline_events: 0, links: 0, leftovers: 0,
+  atoms: 0, atom_pages: 0,
 };
 
 /** The page predicate every delete shares: this source, a connector page, this account. */
@@ -93,28 +98,24 @@ async function count(tx: Engine, sql: string, params: unknown[]): Promise<number
   return (await tx.query<{ n: number }>(sql, params)).rows[0]?.n ?? 0;
 }
 
-/** Delete one page and everything derived from it, inside `tx`. */
-async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string): Promise<DeleteCounts | null> {
-  await lockPageSlugs(tx, slug);
-  const page = await tx.query<{ slug: string }>(
-    `SELECT p.slug FROM pages p WHERE p.slug = $3 AND ${OWNED_PAGE} FOR UPDATE`,
-    [scope.sourceId, scope.accountRef, slug],
-  );
-  if (page.rows.length === 0) return null;
-  const paths = [pageSourcePath(slug, scope.sourceId), pageTruthSourcePath(slug, scope.sourceId)];
+/**
+ * Delete one page and everything derived from it, inside `tx`, adding to
+ * `counts`. Returns the ids of the page's search documents.
+ */
+async function deletePageDerived(tx: Engine, slug: string, sourceId: string, counts: DeleteCounts): Promise<string[]> {
+  const paths = [pageSourcePath(slug, sourceId), pageTruthSourcePath(slug, sourceId)];
   const docIds = (await tx.query<{ id: string }>(
     `SELECT id FROM documents WHERE source_path = ANY($1::text[]) AND COALESCE(source_id, 'default') = $2`,
-    [paths, scope.sourceId],
+    [paths, sourceId],
   )).rows.map(r => r.id);
   const chunkIds = (await tx.query<{ id: string }>(
     `SELECT id FROM chunks WHERE document_id = ANY($1::text[])`, [docIds],
   )).rows.map(r => r.id);
 
-  const counts: DeleteCounts = { ...EMPTY_COUNTS };
-  counts.versions = await count(tx, `SELECT count(*)::int AS n FROM page_versions WHERE slug = $1`, [slug]);
-  counts.embeddings = await count(tx, `SELECT count(*)::int AS n FROM embeddings WHERE chunk_id = ANY($1::text[])`, [chunkIds]);
-  counts.chunks = chunkIds.length;
-  counts.facts = await count(tx,
+  counts.versions += await count(tx, `SELECT count(*)::int AS n FROM page_versions WHERE slug = $1`, [slug]);
+  counts.embeddings += await count(tx, `SELECT count(*)::int AS n FROM embeddings WHERE chunk_id = ANY($1::text[])`, [chunkIds]);
+  counts.chunks += chunkIds.length;
+  counts.facts += await count(tx,
     `WITH d AS (
        DELETE FROM entity_facts f
         WHERE ((f.source_markdown_slug = $1 OR (f.source_markdown_slug IS NULL AND f.source_slug = $1))
@@ -122,21 +123,52 @@ async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string):
            OR f.source_chunk_id = ANY($3::text[])
        RETURNING 1)
      SELECT count(*)::int AS n FROM d`,
-    [slug, scope.sourceId, chunkIds]);
-  counts.timeline_events = await count(tx,
+    [slug, sourceId, chunkIds]);
+  counts.timeline_events += await count(tx,
     `WITH d AS (DELETE FROM timeline_events WHERE slug = $1 OR source_chunk_id = ANY($2::text[]) RETURNING 1)
      SELECT count(*)::int AS n FROM d`,
     [slug, chunkIds]);
-  counts.links = await count(tx,
+  counts.links += await count(tx,
     `WITH d AS (DELETE FROM links WHERE source_slug = $1 OR origin_slug = $1 RETURNING 1)
      SELECT count(*)::int AS n FROM d`,
     [slug]);
-  counts.documents = await count(tx,
+  counts.documents += await count(tx,
     `WITH d AS (DELETE FROM documents WHERE id = ANY($1::text[]) RETURNING 1) SELECT count(*)::int AS n FROM d`,
     [docIds]);
   const rest = await leftovers(tx, [slug], true);
-  counts.leftovers = rest.raw_data_rows + rest.tags_rows + rest.slug_aliases_rows + rest.volunteer_event_rows;
+  counts.leftovers += rest.raw_data_rows + rest.tags_rows + rest.slug_aliases_rows + rest.volunteer_event_rows;
   await tx.query(`DELETE FROM pages WHERE slug = $1`, [slug]);
+  return docIds;
+}
+
+/**
+ * Delete one owned connector page, the synthesis atoms distilled from its
+ * documents and the atom pages published from them, inside `tx`.
+ */
+async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string): Promise<DeleteCounts | null> {
+  await lockPageSlugs(tx, slug);
+  const page = await tx.query<{ slug: string }>(
+    `SELECT p.slug FROM pages p WHERE p.slug = $3 AND ${OWNED_PAGE} FOR UPDATE`,
+    [scope.sourceId, scope.accountRef, slug],
+  );
+  if (page.rows.length === 0) return null;
+  const counts: DeleteCounts = { ...EMPTY_COUNTS };
+  const docIds = await deletePageDerived(tx, slug, scope.sourceId, counts);
+  if (docIds.length > 0) {
+    counts.atoms = await count(tx,
+      `WITH d AS (DELETE FROM synth_atoms WHERE source_kind = 'document' AND source_ref = ANY($1::text[]) RETURNING 1)
+       SELECT count(*)::int AS n FROM d`,
+      [docIds]);
+    const atomPages = (await tx.query<{ slug: string }>(
+      `SELECT slug FROM pages WHERE source_id = $1 AND compiled_truth->'atom_origin'->>'source_ref' = ANY($2::text[]) ORDER BY slug`,
+      [scope.sourceId, docIds],
+    )).rows.map(r => r.slug);
+    if (atomPages.length > 0) await lockPageSlugs(tx, ...atomPages);
+    for (const atomSlug of atomPages) {
+      await deletePageDerived(tx, atomSlug, scope.sourceId, counts);
+      counts.atom_pages++;
+    }
+  }
   if (counts.documents > 0) await bumpDocumentClock(tx);
   await bumpClock(tx);
   return counts;

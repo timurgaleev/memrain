@@ -114,6 +114,31 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(receiptText).not.toContain("t1\"");
   });
 
+  it("removes synthesis atoms and atom pages distilled from the deleted page", async () => {
+    const e = db.storage.engine();
+    const canary = "atomcanary9931";
+    const page = await ingest(mailPage("t2", "plainwords"));
+    const doc = (await e.query<{ id: string }>(
+      `SELECT id FROM documents WHERE source_id = 'inbox' AND source_path LIKE 'page://%' LIMIT 1`)).rows[0]!.id;
+    // What the atoms phase leaves behind for a document (its model call is not needed to prove the cleanup).
+    await e.query(
+      `INSERT INTO synth_atoms (atom_key, source_ref, source_kind, source_hash, title, body, model_id)
+       VALUES ($1, $2, 'document', 'abcdabcdabcdabcd', $3, $3, 'test-model')`,
+      ["a".repeat(64), doc, `Atom about ${canary}`]);
+    const atom = await putPage(db.storage, { slug: "atoms/connector-derived", type: "atom", allowAdHocType: true, title: "Atom",
+      markdown_body: `Distilled ${canary}`, source_id: "inbox", written_by: "extract-atoms",
+      compiled_truth: { atom_origin: { source_ref: doc, source_hash: "abcdabcdabcdabcd", source_id: "inbox", atom_key: "a".repeat(64) } } });
+    await mirrorPage(db.storage, { slug: "atoms/connector-derived", title: "Atom", markdown_body: `Distilled ${canary}`, content_hash: atom.content_hash, source_id: "inbox" },
+      { remote: false, embedFn });
+    expect((await rowsContaining(e, canary)).length).toBeGreaterThan(0);
+
+    const result = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "provider_deleted" });
+    expect(result.counts.atoms).toBe(1);
+    expect(result.counts.atom_pages).toBe(1);
+    expect(await rowsContaining(e, canary)).toEqual([]);
+    expect((await e.query("SELECT 1 FROM pages WHERE slug = 'atoms/connector-derived'")).rows).toHaveLength(0);
+  });
+
   it("refuses a page that is not this account's connector page", async () => {
     const e = db.storage.engine();
     await putPage(db.storage, { slug: "mail/handwritten", markdown_body: "my own note", source_id: "inbox" });
