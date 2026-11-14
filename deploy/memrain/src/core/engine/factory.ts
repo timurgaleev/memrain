@@ -24,6 +24,7 @@ import type { Config } from "../config.ts";
 import type { Engine } from "./interface.ts";
 import { PGliteEngine } from "./pglite.ts";
 import { PostgresEngine, type PostgresEngineOptions } from "./postgres.ts";
+import { applicationName } from "../pool-budget.ts";
 
 /** Parse a positive-int env override; undefined when unset/invalid (fail-soft). */
 function positiveIntEnv(name: string): number | undefined {
@@ -68,6 +69,8 @@ export function makeEngine(config: Config, opts: MakeEngineOptions = {}): Engine
     if (poolMax !== undefined) opts.max = poolMax;
     const stmtTimeout = positiveIntEnv("MEMRAIN_PG_STATEMENT_TIMEOUT_MS");
     if (stmtTimeout !== undefined) opts.statementTimeoutMs = stmtTimeout;
+    const appName = applicationName();
+    if (appName !== undefined) opts.applicationName = appName;
     return new PostgresEngine(opts);
   }
   throw new Error(

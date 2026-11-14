@@ -136,6 +136,7 @@ export const OPS_CHECK_NAMES: ReadonlySet<string> = new Set([
   "pat-scopes-recorded",
   "tenancy-isolation-config",
   "planner-stats",
+  "db-connection-budget",
   "stale-locks",
   "queue-health",
   "cycle-phase-health",

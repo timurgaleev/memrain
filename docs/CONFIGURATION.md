@@ -797,6 +797,10 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_DOCTOR_JOB_WEDGE_SEC` | `3600` | Seconds a running job may go without progress before `doctor` calls it wedged. | free |
 | `MEMRAIN_HNSW_ZOMBIE_SWEEP` | off (`=1` on) | Drops invalid (half-built) vector indexes at boot. Postgres only, best-effort. `doctor` reports them either way. Allowlisted. | free |
 | `MEMRAIN_PG_POOL_MAX` | `10` | Postgres connection pool size. | free |
+| `MEMRAIN_PG_POOL_RESERVE` | off (`=1` on) | Keeps one pool connection free: the maintenance cycle, the embed backfill and the contextual re-embed share at most `MEMRAIN_PG_POOL_MAX` − 1 slots, so `/health`, job claims and lock renewals never queue behind them. A job started inside another takes no second slot. | free |
+| `MEMRAIN_SEARCH_MAX_CONCURRENT` | unset (unbounded) | Upper bound on searches running at once in one process; further searches wait their turn. A malformed value is ignored. | free |
+| `MEMRAIN_PG_APPLICATION_NAME` | unset | `application_name` on every Postgres connection, shown in `pg_stat_activity` (for example `memrain:<tenant>:serve`). Characters outside `A-Z a-z 0-9 : . _ -` are dropped; at most 63. No personal data belongs here. | free |
+| `MEMRAIN_PG_POOL_PROCESSES` | `1` | How many processes open a `MEMRAIN_PG_POOL_MAX` pool against this database (serve, worker, other containers). Read only by doctor `db-connection-budget`, which warns when the planned pools or the open connections pass 80% of `max_connections` minus the superuser reserve. | free |
 | `MEMRAIN_PG_STATEMENT_TIMEOUT_MS` | `30000` | `statement_timeout` for the engine's sessions. Migrations use their own. | free |
 | `MEMRAIN_MIGRATION_STATEMENT_TIMEOUT` | `30min` | Statement timeout for one migration (`600s`, `30min`, milliseconds). Fail-loud on a malformed value. | free |
 | `MEMRAIN_MIGRATE_BACKOFF_MS` | unset (5s/15s/45s) | Replaces the migration retry backoff with one fixed delay. For tests. | free |

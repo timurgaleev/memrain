@@ -47,6 +47,7 @@ describe("doctor categorize", () => {
       "cycle-phase-health",
       "dangling-slug-redirects",
       "db-backends",
+      "db-connection-budget",
       "document-id-drift",
       "duplicate-pages",
       "embed-backlog",
