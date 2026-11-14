@@ -483,17 +483,19 @@ class Run {
       const settled = await this.processPage(res.items);
       this.result.counts.deletions_seen += await markDeletesPending(this.engine, this.account.id, res.deletions ?? [], this.date());
       if (!settled) return;
+      // Before the cursor moves past the relisting: if this fails, the next
+      // run reads the last page again and reconciles then.
+      if (res.done && res.reconcile !== undefined) {
+        this.result.counts.deletions_seen += await markUnseenDeletesPending(
+          this.engine, this.account.id, res.reconcile.prefix, new Date(res.reconcile.unseenSince), this.date(),
+        );
+      }
       if (res.checkpoint !== null && res.checkpoint !== cursor) {
         await writeCursor(this.engine, this.account.id, stream, res.checkpoint, this.date());
         cursor = res.checkpoint;
         s.cursor_after = cursor;
       }
       if (res.done) {
-        if (res.reconcile !== undefined) {
-          this.result.counts.deletions_seen += await markUnseenDeletesPending(
-            this.engine, this.account.id, res.reconcile.prefix, new Date(res.reconcile.unseenSince), this.date(),
-          );
-        }
         s.clean = true;
         return;
       }

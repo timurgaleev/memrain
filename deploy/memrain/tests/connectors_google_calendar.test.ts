@@ -4,10 +4,10 @@
  * connect with a bring-your-own client and a read-only grant, a windowed
  * first sync whose sync token is committed only after the last page and that
  * resumes across runs from its page token, a delta that updates, moves an
- * occurrence and hard-deletes a cancelled event, a 410 that relists the
- * retention window and deletes what Google no longer has, the mass-delete
- * hold, a vanished secondary calendar, and a refused refresh that parks the
- * account.
+ * occurrence and hard-deletes a cancelled event, a 410 and a weekly relist of
+ * the retention window that delete what Google no longer has (and survive a
+ * failed reconcile), the mass-delete hold, a vanished secondary calendar,
+ * and a refused refresh that parks the account.
  */
 import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { randomBytes } from "node:crypto";
@@ -425,6 +425,48 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(result.counts.deletions_applied).toBe(1);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("s1weekly0001@google.com")])).toBe(1);
+      expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
+    } finally { await db.close(); }
+  });
+
+  it("keeps the relist's cursor when its reconcile fails, so the next run finishes it", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const account = await connect(db.storage, world);
+      await run(db.storage, world, account.id);
+      await writeCursor(e, account.id, calendarStream("primary"), "expired-sync-token", new Date(T1));
+      const page2 = { ...GOOGLE_FIXTURES.eventsFullPage2!, items: [] };
+      world.events = (_cal, q) => {
+        if (q.get("syncToken") !== null) return { status: 410, body: GOOGLE_FIXTURES.error410FullSyncRequired! };
+        return q.get("pageToken") === PAGE_TOKEN ? { status: 200, body: page2 } : "eventsFullPage1";
+      };
+      let failOnce = true;
+      const failing = new Proxy(e, {
+        get(target, prop, receiver) {
+          if (prop !== "query") return Reflect.get(target, prop, receiver);
+          return async (sql: string, params?: unknown[]) => {
+            if (failOnce && sql.includes("last_seen_at <")) {
+              failOnce = false;
+              throw new Error("connection reset");
+            }
+            return target.query(sql, params);
+          };
+        },
+      });
+      const flaky = new Proxy(db.storage, {
+        get(target, prop, receiver) {
+          if (prop === "engine") return () => failing;
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      await expect(run(flaky, world, account.id, ENV, T1)).rejects.toThrow("connection reset");
+      expect(await storedToken(e, account.id, "primary")).toBeNull();
+
+      const result = await run(db.storage, world, account.id, ENV, T1 + 60_000);
+      expect(result.counts.deletions_applied).toBe(1);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
       expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
     } finally { await db.close(); }
   });
