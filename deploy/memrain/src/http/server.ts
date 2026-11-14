@@ -58,6 +58,7 @@ import { RateLimiter, type RateLimiterOptions } from "../mcp/rate_limit.ts";
 import { resolveClientIp } from "./client-key.ts";
 import { createAdminAuth, type AdminAuth } from "./admin.ts";
 import { handleAdminApi } from "./admin-api.ts";
+import { handleConnectorCallbackPage } from "./admin-connectors.ts";
 import { serveAdminStatic } from "./admin-static.ts";
 import { handleAdminEventsRoute } from "./admin-events.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
@@ -680,9 +681,12 @@ export function startServer(opts: ServerOptions): ServerHandle {
           storage: opts.storage,
           requireAdmin: adminAuth.requireAdmin,
           sessionCooldown: adminAuth.sessionCooldown,
+          adminSessionId: adminAuth.adminSessionId,
           ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
         });
         if (r2) return r2;
+        const rcb = handleConnectorCallbackPage(req, url);
+        if (rcb) return rcb;
         // SSE live-activity feed (deferred #2) — requireAdmin-gated.
         const rsse = handleAdminEventsRoute(req, adminAuth.requireAdmin);
         if (rsse) return rsse;
