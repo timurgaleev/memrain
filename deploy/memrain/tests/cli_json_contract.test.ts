@@ -17,7 +17,7 @@ import { JSON_GUARDED_COMMANDS } from "../src/cli-args.ts";
 import { PostgresEngine } from "../src/core/engine/postgres.ts";
 
 const root = join(import.meta.dir, "..");
-const pgUrl = process.env.MEMRAIN_TEST_POSTGRES_URL ?? process.env.MEMEX_TEST_POSTGRES_URL;
+const pgUrl = process.env.MEMRAIN_TEST_POSTGRES_URL;
 
 interface Run { code: number; out: string; err: string }
 
