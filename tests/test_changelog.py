@@ -14,7 +14,6 @@ DIVIDER = "## Memex (pre-rename)"
 PRE_RENAME_RELEASES = 252
 
 HEADING_RE = re.compile(r"^## .*$", re.MULTILINE)
-KEEP_A_CHANGELOG_SECTIONS = {f"### {name}" for name in ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")}
 ARCHIVED_RE = re.compile(r"^## \[memex-v\d+\.\d+\.\d+\] — \d{4}-\d{2}-\d{2}$", re.MULTILINE)
 # The same shape the restructure rewrote: a v1.x reference not already part of
 # a longer token such as memex-v1.2.3.
@@ -54,17 +53,12 @@ def test_one_divider():
     assert text().count(f"\n{DIVIDER}\n") == 1
 
 
-def test_unreleased_is_first_and_holds_only_change_sections():
+def test_unreleased_is_first_and_empty():
     above, _ = split()
     headings = HEADING_RE.findall(above)
     assert headings[0] == "## [Unreleased]"
     assert re.match(r"^## \[\d+\.\d+\.\d+\] — \d{4}-\d{2}-\d{2}$", headings[1]), headings[1]
-    # Entries wait here until a release moves them under its own heading
-    # (CLAUDE.md, ship step 5); they sit under Keep a Changelog sections only.
-    body = section(above, "## [Unreleased]").removeprefix("## [Unreleased]").strip()
-    subheadings = re.findall(r"^#{3,}.*$", body, re.MULTILINE)
-    assert all(h in KEEP_A_CHANGELOG_SECTIONS for h in subheadings), subheadings
-    assert not body or body.startswith("### "), body[:80]
+    assert section(above, "## [Unreleased]").strip() == "## [Unreleased]"
 
 
 def test_release_1_0_0_holds_the_rename():
