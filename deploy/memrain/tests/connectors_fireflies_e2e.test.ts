@@ -236,6 +236,36 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE source_id = $1`, [SOURCE])).toBe(2);
   });
 
+  it("works through more unlisted transcripts than one run may probe instead of re-probing the first ones", async () => {
+    const stored = Array.from({ length: 55 }, (_, i) => `ff-p${String(i).padStart(2, "0")}`);
+    const goneUpstream = new Set(stored.slice(50));
+    let listedNow = true;
+    const page = (vars: Record<string, unknown>) => (listedNow ? stored : []).slice(Number(vars.skip), Number(vars.skip) + Number(vars.limit));
+    const fake = firefliesFetch({
+      user: () => "user",
+      list: (vars) => listing(page(vars).map(id => listed(id))),
+      ids: (vars) => listing(page(vars).map(id => ({ id }))),
+      transcript: (id) => transcript(id, [{ speaker_name: "Ana Lee", text: `Notes for ${id}.` }]),
+      exists: (id) => goneUpstream.has(id) ? "not-found" : { ...ff("probe-found-t1"), body: { data: { transcript: { id } } } },
+    });
+    const account = await connect(fake.fetch);
+    expect((await sync(db.storage, account.id, fake.fetch, T0)).counts.pages_written).toBe(55);
+    // The listing now misses every transcript, but only the last five are really gone.
+    listedNow = false;
+    const first = await sync(db.storage, account.id, fake.fetch, T0 + 25 * HOUR);
+    expect(first.counts.deletions_seen).toBe(0);
+    fake.requests.length = 0;
+    const second = await sync(db.storage, account.id, fake.fetch, T0 + 26 * HOUR);
+    const probed = fake.requests.filter(r => r.operation === "FirefliesTranscriptExists").map(r => String(r.variables.id));
+    expect(probed).toEqual(stored.slice(50));
+    expect(second.counts.deletions_applied).toBe(5);
+    expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE source_id = $1`, [SOURCE])).toBe(50);
+    // The cycle is complete: the next reconcile waits a day again.
+    fake.requests.length = 0;
+    await sync(db.storage, account.id, fake.fetch, T0 + 27 * HOUR);
+    expect(fake.requests.map(r => r.operation)).toEqual(["FirefliesTranscripts"]);
+  });
+
   it("holds a mass deletion for the owner instead of deleting", async () => {
     const many = Array.from({ length: 12 }, (_, i) => `ff-m${i}`);
     let gone = false;

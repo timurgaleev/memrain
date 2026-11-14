@@ -411,6 +411,25 @@ function timeOf(value: string | null): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
+/**
+ * The reconcile cursor: the time of the last complete reconcile, or, while a
+ * cycle has more unlisted transcripts than one run may probe, that time plus
+ * the last id probed (`{"at":…,"probe_after":…}`), which keeps it due.
+ */
+function reconcileState(cursor: string | null): { at: number | null; probeAfter: string | null } {
+  if (cursor === null) return { at: null, probeAfter: null };
+  if (!cursor.startsWith("{")) return { at: timeOf(cursor), probeAfter: null };
+  try {
+    const v = JSON.parse(cursor) as { at?: unknown; probe_after?: unknown };
+    return {
+      at: typeof v.at === "string" ? timeOf(v.at) : null,
+      probeAfter: typeof v.probe_after === "string" && v.probe_after !== "" ? v.probe_after : null,
+    };
+  } catch {
+    return { at: null, probeAfter: null };
+  }
+}
+
 function rowsOf(data: { transcripts?: unknown }): unknown[] {
   return Array.isArray(data.transcripts) ? data.transcripts : [];
 }
@@ -483,8 +502,10 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
   }
 
   async function reconcilePage(client: ConnectorClient, cursor: string | null, page: number): Promise<PageResult> {
-    const last = timeOf(cursor);
-    if (last !== null && runAt - last < RECONCILE_EVERY_MS) return { ok: true, items: [], checkpoint: cursor, done: true };
+    const state = reconcileState(cursor);
+    if (state.probeAfter === null && state.at !== null && runAt - state.at < RECONCILE_EVERY_MS) {
+      return { ok: true, items: [], checkpoint: cursor, done: true };
+    }
     const res = await firefliesQuery<{ transcripts?: unknown }>(client, IDS_QUERY, { limit: ID_PAGE_SIZE, skip: page * ID_PAGE_SIZE });
     if (!res.ok) return { ok: false, response: res.response };
     const rows = rowsOf(res.data);
@@ -494,17 +515,24 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
     }
     if (rows.length >= ID_PAGE_SIZE) return { ok: true, items: [], checkpoint: null, done: false };
 
-    const missing = (await liveItemIds(ctx.engine, account.id)).filter(id => !seenIds.has(id));
+    // A cycle that needs several runs resumes after the last id it probed. Sorted
+    // here, not by the database, whose collation need not agree with `>`.
+    const after = state.probeAfter;
+    const missing = (await liveItemIds(ctx.engine, account.id))
+      .filter(id => !seenIds.has(id) && (after === null || id > after))
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const batch = missing.slice(0, MAX_DELETE_PROBES);
     const deletions: string[] = [];
-    for (const id of missing.slice(0, MAX_DELETE_PROBES)) {
+    for (const id of batch) {
       const probe = await firefliesQuery<{ transcript: unknown }>(client, EXISTS_QUERY, { id });
       if (probe.ok) continue;
       if (probe.code !== "object_not_found") return { ok: false, response: probe.response };
       deletions.push(id);
     }
-    // Probes left over keep the reconcile due, so the next run picks them up.
-    const complete = missing.length <= MAX_DELETE_PROBES;
-    return { ok: true, items: [], deletions, checkpoint: complete ? new Date(runAt).toISOString() : null, done: true };
+    const checkpoint = missing.length <= MAX_DELETE_PROBES
+      ? new Date(runAt).toISOString()
+      : JSON.stringify({ at: state.at === null ? null : new Date(state.at).toISOString(), probe_after: batch.at(-1)! });
+    return { ok: true, items: [], deletions, checkpoint, done: true };
   }
 
   return {
