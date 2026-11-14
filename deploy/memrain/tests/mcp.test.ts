@@ -85,7 +85,8 @@ describe("MCP HTTP transport", () => {
     expect(Object.keys(r.result).sort()).toEqual(
       ["_meta", "capabilities", "instructions", "protocolVersion", "serverInfo"],
     );
-    expect(r.result.capabilities).toEqual({ tools: {} });
+    // The shipped pack offers read-only skills as prompts, so the handshake advertises them.
+    expect(r.result.capabilities).toEqual({ prompts: {}, tools: {} });
   });
 
   it("refuses an unsupported MCP-Protocol-Version header after initialize, accepts a supported or absent one", async () => {

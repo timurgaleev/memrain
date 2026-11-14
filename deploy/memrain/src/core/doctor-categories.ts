@@ -120,7 +120,7 @@ export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
   "namespace-only-targets",
   "mixed-script-targets",
   "dangling-slug-redirects",
-  "single-value-link-overlaps",
+  "link-interval-overlaps",
   "outside-content-fences",
   "embed-backlog",
   "contextual-coverage",

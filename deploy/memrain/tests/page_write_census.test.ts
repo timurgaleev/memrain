@@ -26,7 +26,7 @@ const audited = {
   "core/links.ts": { pages: 2, reason: "Inbound link count only" },
   "core/ontology-facts.ts": { entity_facts: 5, reason: "Validated dimensional writes and supersession" },
   "core/page-retype.ts": { pages: 1, reason: "Explicit type change" },
-  "core/pages-purge.ts": { pages: 2, reason: "Expired soft-delete purge with transaction retry" },
+  "core/pages-purge.ts": { pages: 2, entity_facts: 1, reason: "Expired soft-delete purge with transaction retry; retires the purged page's facts with a receipt" },
   "core/pages.ts": { pages: 6, page_versions: 6, entity_facts: 2, reason: "Canonical page mutations under slug locks" },
   "core/transcripts/origin-repair.ts": { entity_facts: 1, reason: "Operator-gated attribution repair by exact source/session evidence; collisions roll back" },
   "eval/chronicle-harness.ts": { entity_facts: 1, reason: "Eval fixture seeding" },

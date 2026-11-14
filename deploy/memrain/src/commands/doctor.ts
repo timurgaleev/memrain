@@ -463,7 +463,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["namespace-only-targets", checkNamespaceOnlyTargets],
       ["mixed-script-targets", checkMixedScriptTargets],
       ["dangling-slug-redirects", checkDanglingSlugRedirects],
-      ["single-value-link-overlaps", checkSingleValueLinkOverlaps],
+      ["link-interval-overlaps", checkSingleValueLinkOverlaps],
       ["outside-content-fences", checkOutsideContentFences],
       ["code-grammars", checkGrammars],
       ["code-graph", checkCodeGraph],
