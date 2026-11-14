@@ -156,7 +156,8 @@ function clearsEntropyGate(value: string): boolean {
  * terminal colour code (raw `ESC[32m`, or written as `\e[`, `\033[`, `\x1b[`,
  * `\u001b[`) ending the text. Coloured CLI output glues the key to the `m`.
  */
-const ESCAPE_TAIL = /(?:\\(?:[bfnrt]|u[0-9A-Fa-f]{4})|%[0-9A-Fa-f]{2}|(?:\x1B|\\(?:e|033|x1[Bb]|u001[Bb]))\[[0-9;]{0,16}m)$/;
+const ESC = String.fromCharCode(0x1b);
+const ESCAPE_TAIL = new RegExp(String.raw`(?:\\(?:[bfnrt]|u[0-9A-Fa-f]{4})|%[0-9A-Fa-f]{2}|(?:${ESC}|\\(?:e|033|x1[Bb]|u001[Bb]))\[[0-9;]{0,16}m)$`);
 /** Longest ESCAPE_TAIL match: `\u001b[` plus 16 parameter characters and `m`. */
 const ESCAPE_TAIL_MAX = 24;
 
