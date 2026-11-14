@@ -32,6 +32,8 @@ locals {
   internal_token_secret_name = coalesce(var.internal_token_secret_name, "${var.secrets_prefix}/memrain-internal-token")
   tunnel_token_secret_name   = coalesce(var.tunnel_token_secret_name, "${var.secrets_prefix}/cloudflared-tunnel-token")
   deploy_key_secret_name     = coalesce(var.deploy_key_secret_name, "${var.secrets_prefix}/github-deploy-key")
+  connector_kek_secret_name  = "${var.secrets_prefix}/memrain-connector-kek"
+  notify_webhook_secret_name = "${var.secrets_prefix}/memrain-notify-webhook"
 
   # Secret prefixes the instance role may read. Defaults to the one prefix
   # this stack writes; list a second one while secrets move between prefixes.
