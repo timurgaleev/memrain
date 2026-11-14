@@ -11,6 +11,7 @@ import {
   accountView,
   confirmMatches,
   connectOutcome,
+  connectorErrorCopy,
   daemonView,
   decisionMessage,
   providerLabel,
@@ -93,6 +94,12 @@ describe("connectOutcome", () => {
     expect(connectOutcome("?connector_error=scope_mismatch")?.message).toContain("different access");
     expect(connectOutcome("")).toBeNull();
     expect(connectOutcome("?other=1")).toBeNull();
+  });
+
+  it("explains why a pasted API key was not saved", () => {
+    expect(connectorErrorCopy("key_rejected")).toContain("refused the key");
+    expect(connectorErrorCopy("key_invalid")).toContain("does not look like an API key");
+    expect(connectorErrorCopy("provider_unavailable")).toContain("could not be reached");
   });
 
   it("never echoes an unknown code back as text", () => {

@@ -154,6 +154,9 @@ const CONNECT_ERRORS: Record<string, string> = {
   conflict: "The account's data changed since the preview. Review the new counts.",
   shared_owner: "Another account in this source writes pages under the same name, so they cannot be told apart. Remove that account first.",
   not_connected: "Reconnect the account before switching its sync on.",
+  key_invalid: "That does not look like an API key. Copy the whole key from the provider and paste it again.",
+  key_rejected: "The provider refused the key. Copy the current key from the provider and try again.",
+  provider_unavailable: "The provider could not be reached to check the key. Nothing was saved; try again in a minute.",
 };
 
 /** Copy for an error code the connector routes answer; unknown codes get the fallback, never the code itself. */
