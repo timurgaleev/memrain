@@ -452,8 +452,6 @@ export async function putPage(
   input: PageInput,
 ): Promise<PutResult> {
   validateSlug(input.slug);
-  // Refuse an oversized replacement before scanning it; appends and edits are measured once assembled.
-  if (input.markdown_body !== undefined) assertPageBodyWithinCap(input.slug, input.markdown_body);
   const changeReason = normalizeChangeReason(input.change_reason);
   if (input.takeMutation && (input.expectedVersion === undefined || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 1 ||
       input.markdown_body !== undefined || input.appendContent !== undefined || input.edits !== undefined || input.outsideText !== undefined ||

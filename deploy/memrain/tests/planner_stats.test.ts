@@ -8,7 +8,9 @@
 import { afterEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import type { putPage } from "../src/core/pages.ts";
 import { runCycleOnce } from "../src/core/cycle/index.ts";
+import type { Engine } from "../src/core/engine/interface.ts";
 import {
+  analyzeQuietly,
   analyzeThreshold,
   checkPlannerStats,
   maybeAnalyzeHotTables,
@@ -83,6 +85,27 @@ describe("PGLite auto-analyze", () => {
       await seedPages(storage, 600);
       await runCycleOnce(storage.engine(), { phases: ["snapshot"] });
       expect(await statRows(storage.engine(), "pages")).toBeGreaterThan(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("analyzeQuietly", () => {
+  it("reports a failed analyze instead of throwing, so a finished write is not reported as failed", async () => {
+    process.env[FLAG] = "1";
+    const broken = {
+      kind: "pglite",
+      query: async () => { throw new Error("relation is locked"); },
+      exec: async () => { throw new Error("relation is locked"); },
+    } as unknown as Engine;
+    expect(await analyzeQuietly(broken)).toEqual({ analyze_error: "relation is locked" });
+  });
+
+  it("stays silent when nothing was analyzed", async () => {
+    const { storage, close } = await pglite!.open();
+    try {
+      expect(await analyzeQuietly(storage.engine())).toBeUndefined();
     } finally {
       await close();
     }

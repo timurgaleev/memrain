@@ -107,6 +107,19 @@ for (const engine of storageEngines(process.env["MEMRAIN_TEST_POSTGRES_URL"])) {
       }
     });
 
+    it("does not refuse a re-put that leaves an oversized body unchanged", async () => {
+      const { storage, close } = await engine.open();
+      try {
+        const body = "r".repeat(5000);
+        await putPage(storage, { slug: "notes/same", markdown_body: body });
+        process.env[ENV] = "1024";
+        const r = await putPage(storage, { slug: "notes/same", markdown_body: body, title: "Same body" });
+        expect(r.version_n).toBeGreaterThan(1);
+      } finally {
+        await close();
+      }
+    });
+
     it("refuses over MCP page_put with the structured code", async () => {
       const { storage, close } = await engine.open();
       try {

@@ -114,3 +114,18 @@ export async function checkPlannerStats(engine: Engine): Promise<TenancyCheck> {
     return couldNotCheck(name, e);
   }
 }
+
+/**
+ * maybeAnalyzeHotTables after a write that has already finished (a cycle, an
+ * import). Statistics are maintenance, not part of the write: a failure comes
+ * back as `analyze_error` instead of turning the finished write into an error.
+ * Undefined when nothing was analyzed, so a caller's report is unchanged.
+ */
+export async function analyzeQuietly(engine: Engine): Promise<{ analyzed: string[] } | { analyze_error: string } | undefined> {
+  try {
+    const r = await maybeAnalyzeHotTables(engine);
+    return r.analyzed.length > 0 ? { analyzed: r.analyzed } : undefined;
+  } catch (e) {
+    return { analyze_error: e instanceof Error ? e.message : String(e) };
+  }
+}
