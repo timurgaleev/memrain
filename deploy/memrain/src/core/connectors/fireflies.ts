@@ -76,6 +76,7 @@ const VERIFY_TIMEOUT_MS = 15_000;
 const MAX_VERIFY_BODY = 64 * 1024;
 const CODE_RE = /^[a-z_]{1,64}$/;
 const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+$/;
+const UNNAMED_SPEAKER_RE = /^speaker(?: \d{1,4})?$/i;
 
 export const STREAM_TRANSCRIPTS = "transcripts";
 export const STREAM_RECONCILE = "transcripts.reconcile";
@@ -325,7 +326,10 @@ function participants(t: Raw): Person[] {
   const organizer = email(t.organizer_email);
   if (organizer !== null) add(null, organizer);
   for (const s of Array.isArray(t.speakers) ? t.speakers : []) {
-    if (s !== null && typeof s === "object") add(str((s as Raw).name), null);
+    if (s === null || typeof s !== "object") continue;
+    const name = str((s as Raw).name);
+    // "Speaker 2" names nobody; as a participant it would only seed a wanted people/ entry.
+    if (name !== null && !UNNAMED_SPEAKER_RE.test(name)) add(name, null);
   }
   return out;
 }

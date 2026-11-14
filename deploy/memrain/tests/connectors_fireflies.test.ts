@@ -139,6 +139,12 @@ describe("normalizeTranscript", () => {
     ]);
   });
 
+  it("does not count an unnamed speaker label as a participant", () => {
+    const raw = transcriptOf("transcript-t2") as Record<string, unknown>;
+    const m = normalizeTranscript({ ...raw, speakers: [{ id: 0, name: "Speaker 2" }, { id: 1, name: "speaker" }, { id: 2, name: "Vendor Rep" }] });
+    expect(m.participants.map(p => p.name)).toEqual([null, null, "Vendor Rep"]);
+  });
+
   it("keeps summary fields when present and splits action items", () => {
     const m = normalizeTranscript(transcriptOf("transcript-t1"));
     expect(m.summary).toBe("The team reviewed the roadmap.\n\nTopics: Roadmap, Hiring\n\nKeywords: roadmap, planning");
