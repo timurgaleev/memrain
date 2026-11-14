@@ -14,7 +14,7 @@ import { registerSource } from "../src/core/sources.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "memrain-write-gate-cli-"));
-const cfgDir = join(tmp, ".memex");
+const cfgDir = join(tmp, ".memrain");
 const cfgPath = join(cfgDir, "config.json");
 const dbPath = join(cfgDir, "brain.pglite");
 const embedFn = (t: string) => Promise.resolve(deterministicEmbed(t));
