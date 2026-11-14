@@ -212,18 +212,26 @@ async function automaticPages(tx: Engine, where: string, params: unknown[], type
  * of which the atoms phase wrote goes; one someone edited, or any other page
  * claiming the same origin, is kept and counted.
  */
-async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string, expectedContentHash?: string): Promise<DeleteCounts | "changed" | null> {
-  const parts = (await tx.query<{ slug: string }>(
-    `SELECT p.slug FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' = $3 ORDER BY p.slug`,
-    [scope.sourceId, scope.accountRef, slug],
-  )).rows.map(r => r.slug);
-  await lockPageSlugs(tx, slug, ...parts);
+async function deleteOwnedPage(
+  tx: Engine,
+  scope: ConnectorScope,
+  slug: string,
+  expected: { contentHash?: string; partHashes?: ReadonlyMap<string, string> } = {},
+): Promise<DeleteCounts | "changed" | null> {
+  const partsSql = `SELECT p.slug, p.content_hash FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' = $3 ORDER BY p.slug`;
+  await lockPageSlugs(tx, slug, ...(await tx.query<{ slug: string }>(partsSql, [scope.sourceId, scope.accountRef, slug])).rows.map(r => r.slug));
   const page = await tx.query<{ content_hash: string }>(
     `SELECT p.content_hash FROM pages p WHERE p.slug = $3 AND ${ownedPageScope} FOR UPDATE`,
     [scope.sourceId, scope.accountRef, slug],
   );
   if (page.rows.length === 0) return null;
-  if (expectedContentHash !== undefined && page.rows[0]!.content_hash !== expectedContentHash) return "changed";
+  if (expected.contentHash !== undefined && page.rows[0]!.content_hash !== expected.contentHash) return "changed";
+  // Read under the locks: these are the parts that go, and each must still
+  // be what the caller saw when it pinned them.
+  const partRows = (await tx.query<{ slug: string; content_hash: string }>(partsSql, [scope.sourceId, scope.accountRef, slug])).rows;
+  if (expected.partHashes !== undefined && (partRows.length !== expected.partHashes.size
+    || partRows.some(r => expected.partHashes!.get(r.slug) !== r.content_hash))) return "changed";
+  const parts = partRows.map(r => r.slug);
   const counts: DeleteCounts = { ...EMPTY_COUNTS };
   const { docIds, concepts } = await deletePageDerived(tx, slug, scope.sourceId, counts);
   for (const part of parts) {
@@ -264,12 +272,22 @@ async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string, 
 export async function hardDeleteConnectorPage(
   storage: Storage,
   scope: ConnectorScope,
-  item: { slug: string; reason: DeleteReason; externalId?: string; expectedContentHash?: string },
+  item: {
+    slug: string;
+    reason: DeleteReason;
+    externalId?: string;
+    expectedContentHash?: string;
+    /** The page's parts by slug, as the caller saw them; any difference refuses the delete. */
+    expectedPartHashes?: ReadonlyMap<string, string>;
+  },
 ): Promise<HardDeleteResult> {
   const engine = storage.engine();
   await assertConnectorSource(engine, scope.sourceId);
   return deadlockSafeTransaction(engine, async (tx) => {
-    const counts = await deleteOwnedPage(tx, scope, item.slug, item.expectedContentHash);
+    const counts = await deleteOwnedPage(tx, scope, item.slug, {
+      ...(item.expectedContentHash === undefined ? {} : { contentHash: item.expectedContentHash }),
+      ...(item.expectedPartHashes === undefined ? {} : { partHashes: item.expectedPartHashes }),
+    });
     if (counts === null) return { deleted: false, refused: "not_connector_page", counts: { ...EMPTY_COUNTS } };
     if (counts === "changed") return { deleted: false, refused: "changed", counts: { ...EMPTY_COUNTS } };
     await logIngest(tx, {
@@ -445,9 +463,9 @@ export interface ConnectorDataPreview {
   plan_hash: string;
 }
 
-async function planSlugs(engine: Engine, scope: ConnectorScope): Promise<Array<{ slug: string; content_hash: string }>> {
-  return (await engine.query<{ slug: string; content_hash: string }>(
-    `SELECT p.slug, p.content_hash FROM pages p WHERE ${ownedPageScope} ORDER BY p.slug`,
+async function planSlugs(engine: Engine, scope: ConnectorScope): Promise<Array<{ slug: string; content_hash: string; part_of: string | null }>> {
+  return (await engine.query<{ slug: string; content_hash: string; part_of: string | null }>(
+    `SELECT p.slug, p.content_hash, p.compiled_truth->>'part_of' AS part_of FROM pages p WHERE ${ownedPageScope} ORDER BY p.slug`,
     [scope.sourceId, scope.accountRef],
   )).rows;
 }
@@ -503,12 +521,14 @@ export async function deleteAllConnectorData(
       "Preview again, review the counts, and pass the new plan_hash.",
     );
   }
-  // Each page is pinned to the content the preview saw: one edited after the
-  // check above is refused, not deleted, and reported back.
+  // Each page and its parts are pinned to the content the preview saw: one
+  // edited after the check above is refused, not deleted, and reported back.
+  // A part goes with its page, never on its own.
   const deleted: string[] = [];
   const changed: string[] = [];
-  for (const { slug, content_hash: expectedContentHash } of rows) {
-    const r = await hardDeleteConnectorPage(storage, scope, { slug, reason: "disconnect", expectedContentHash });
+  for (const { slug, content_hash: expectedContentHash } of rows.filter(r => r.part_of === null)) {
+    const expectedPartHashes = new Map(rows.filter(r => r.part_of === slug).map(r => [r.slug, r.content_hash]));
+    const r = await hardDeleteConnectorPage(storage, scope, { slug, reason: "disconnect", expectedContentHash, expectedPartHashes });
     if (r.deleted) deleted.push(slug);
     else if (r.refused === "changed") changed.push(slug);
   }

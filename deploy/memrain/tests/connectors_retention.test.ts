@@ -134,6 +134,25 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(left).toEqual(["page_versions", "pages"]);
   });
 
+  it("refuses to delete a split page whose part changed since the caller looked", async () => {
+    const e = db.storage.engine();
+    const page = await ingest(mailPage("t11", "plainwords"));
+    const part = await ingest({ ...page, slug: `${page.slug}/part-001`, body: "Tail as previewed.\n", truth: { ...page.truth, part_of: page.slug, part: 1 } });
+    const seen = (await e.query<{ content_hash: string }>("SELECT content_hash FROM pages WHERE slug = $1", [part.slug])).rows[0]!.content_hash;
+    await putPage(db.storage, { slug: part.slug, markdown_body: "Tail someone edited by hand.\n", source_id: "inbox", written_by: "operator" });
+
+    const r = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "disconnect", expectedPartHashes: new Map([[part.slug, seen]]) });
+    expect(r).toMatchObject({ deleted: false, refused: "changed" });
+    expect((await e.query("SELECT 1 FROM pages WHERE slug = ANY($1::text[])", [[page.slug, part.slug]])).rows).toHaveLength(2);
+
+    // A fresh preview deletes the connector page; the hand-edited part is no
+    // longer connector text, so it stays.
+    const preview = await previewConnectorData(db.storage, scope);
+    const done = await deleteAllConnectorData(db.storage, scope, { expectedPlanHash: preview.plan_hash });
+    expect(done.deleted).toEqual([page.slug]);
+    expect((await e.query<{ slug: string }>("SELECT slug FROM pages WHERE slug = ANY($1::text[])", [[page.slug, part.slug]])).rows).toEqual([{ slug: part.slug }]);
+  });
+
   it("removes synthesis atoms and atom pages distilled from the deleted page", async () => {
     const e = db.storage.engine();
     const canary = "atomcanary9931";
