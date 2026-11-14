@@ -99,7 +99,8 @@ import { runSalience } from "./commands/salience.ts";
 import { runWatch } from "./commands/watch.ts";
 import { runCycle, parsePhasesArg } from "./commands/cycle.ts";
 import { exitCodeForError, resolveExitCode } from "./cli-exit.ts";
-import { parseArgs, validateFlags } from "./cli-args.ts";
+import { JSON_GUARDED_COMMANDS, parseArgs, validateFlags, type ParsedArgs } from "./cli-args.ts";
+import { runJsonGuarded } from "./cli-json.ts";
 import { aliasDeprecationLine } from "./cli-alias.ts";
 import type { EntityType } from "./core/entities.ts";
 
@@ -363,7 +364,7 @@ async function printCommandHelp(
 
 async function main(argv: readonly string[]): Promise<number> {
   const parsed = parseArgs(argv, { strict: false });
-  const { cmd, flags, values, positional } = parsed;
+  const { cmd, flags, positional } = parsed;
 
   // `memrain <cmd> --help` used to fall into the command case and die on a
   // missing required argument — asking for help is not a malformed invocation.
@@ -374,8 +375,19 @@ async function main(argv: readonly string[]): Promise<number> {
     if (!(await printCommandHelp(cmd, positional))) printUsage();
     return 0;
   }
-  validateFlags(parsed);
+  const run = async (): Promise<number> => {
+    validateFlags(parsed);
+    return dispatch(parsed, argv);
+  };
+  // Validation runs inside the guard so a refused flag is a JSON error too.
+  if (cmd !== undefined && JSON_GUARDED_COMMANDS.has(cmd) && flags.has("--json")) {
+    return runJsonGuarded(run);
+  }
+  return run();
+}
 
+async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<number> {
+  const { cmd, flags, values, positional } = parsed;
   switch (cmd) {
     case "init": {
       const pglite = flags.has("--pglite");
@@ -519,7 +531,8 @@ async function main(argv: readonly string[]): Promise<number> {
       // `eval chronicle` brings its own in-memory DB — run it BEFORE any engine
       // connect (it needs no config and no gateway).
       if (positional[0] === "chronicle") {
-        return await runEvalChronicle(positional.slice(1));
+        // The parser lifts --json out of the positionals; chronicle reads its own argv.
+        return await runEvalChronicle([...positional.slice(1), ...(flags.has("--json") ? ["--json"] : [])]);
       }
       if (positional.length === 1 && positional[0] === "code") {
         return await runEvalCode(flags.has("--json") ? { json: true } : {});
@@ -1898,7 +1911,7 @@ async function main(argv: readonly string[]): Promise<number> {
     }
     case "version":
     case "--version":
-      console.log(`memrain ${VERSION}`);
+      console.log(flags.has("--json") ? JSON.stringify({ ok: true, version: VERSION }) : `memrain ${VERSION}`);
       return 0;
     case undefined:
     case "--help":

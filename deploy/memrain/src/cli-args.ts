@@ -141,6 +141,18 @@ export const KNOWN_FLAGS: ReadonlySet<string> = new Set([
   ...VALUE_FLAGS,
 ]);
 
+/**
+ * Commands whose `--json` output is guarded (cli-json.ts): stdout is exactly
+ * one JSON object whatever the command prints, errors included. They accept
+ * `--json` even when their case never reads it, because main() reads it for
+ * them. Streaming commands (`watch`, `serve`) must never join: the guard holds
+ * stdout until the command returns.
+ */
+export const JSON_GUARDED_COMMANDS: ReadonlySet<string> = new Set([
+  "call", "connectors", "daemons", "doctor", "engine", "eval", "export", "models",
+  "pages", "search", "secrets", "sources", "spend", "status", "version",
+]);
+
 /** Answered by every command, so no command lists it. */
 const UNIVERSAL_FLAGS: ReadonlySet<string> = new Set(["--help"]);
 
@@ -336,7 +348,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ],
   ["connectors", new Set(["--dry-run", "--full", "--json", "--new-file", "--old-file", "--source", "--token-file"])],
   ["daemons", new Set(["--json", "--reason", "--source"])],
-  ["version", new Set<string>()],
+  ["version", new Set(["--json"])],
   ["help", new Set<string>()],
 ]);
 
@@ -408,6 +420,7 @@ export function validateFlags(parsed: ParsedArgs): void {
   const seen = [...parsed.flags, ...parsed.values.keys()];
   for (const flag of seen) {
     if (UNIVERSAL_FLAGS.has(flag)) continue;
+    if (flag === "--json" && cmd !== undefined && JSON_GUARDED_COMMANDS.has(cmd)) continue;
     if (accepted === undefined ? KNOWN_FLAGS.has(flag) : accepted.has(flag)) continue;
     // Suggest only flags the CURRENT command accepts: suggesting a flag that
     // would itself be refused is worse than suggesting nothing.
