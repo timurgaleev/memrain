@@ -136,11 +136,12 @@ async function syncWanted(storage: Storage, input: EnrichInput, wanted: Map<stri
     `WITH ins AS (
        INSERT INTO wanted_links (source_id, from_slug, target_slug, surface)
        SELECT $1, $2, t.slug, t.surface FROM unnest($3::text[], $4::text[]) AS t(slug, surface)
-        WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.slug = t.slug AND p.deleted_at IS NULL)
+        WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.slug = t.slug AND p.deleted_at IS NULL
+                           AND p.source_id = ANY($5::text[]))
        ON CONFLICT (source_id, from_slug, target_slug) DO NOTHING
        RETURNING 1)
      SELECT count(*)::int AS n FROM ins`,
-    [input.sourceId, input.page.slug, [...wanted.keys()], [...wanted.values()]],
+    [input.sourceId, input.page.slug, [...wanted.keys()], [...wanted.values()], [...input.peopleSourceIds]],
   );
   return r.rows[0]?.n ?? 0;
 }

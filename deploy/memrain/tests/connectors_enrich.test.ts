@@ -125,6 +125,17 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(result.linked).toEqual([]);
   });
 
+  it("records a stranger as wanted even when a page with that slug exists outside its scope", async () => {
+    // A people page in a source the caller may not read must not decide what
+    // this source sees: its existence would otherwise show through the wanted list.
+    const page = renderMailThread({ service: "gmail", accountLabel: OWNER }, mail());
+    await write(page, "inbox");
+    const result = await enrichConnectorPage(db.storage, { page, sourceId: "inbox", ownAddresses: [OWNER], peopleSourceIds: ["inbox"] });
+    expect(result.linked).toEqual([]);
+    const wanted = (await db.storage.engine().query<{ target_slug: string }>("SELECT target_slug FROM wanted_links WHERE from_slug = $1", [page.slug])).rows;
+    expect(wanted).toEqual([{ target_slug: "people/bob-stone" }]);
+  });
+
   it("refuses to enrich a page its source does not own", async () => {
     const page = renderMailThread({ service: "gmail", accountLabel: OWNER }, mail());
     await write(page, "inbox");
