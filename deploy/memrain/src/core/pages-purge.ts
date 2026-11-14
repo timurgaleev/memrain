@@ -89,7 +89,7 @@ const NO_LEFTOVERS: Leftovers = { raw_data_rows: 0, tags_rows: 0, slug_aliases_r
  * pages. `pages.slug` is the primary key, so a purged slug has no owner left
  * and every row on it goes, whatever its source_id.
  */
-async function leftovers(engine: Engine, slugs: string[], remove: boolean): Promise<Leftovers> {
+export async function leftovers(engine: Engine, slugs: string[], remove: boolean): Promise<Leftovers> {
   const out: Leftovers = { ...NO_LEFTOVERS };
   if (slugs.length === 0) return out;
   for (const [key, table, column] of LEFTOVER_TABLES) {

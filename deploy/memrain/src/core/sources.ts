@@ -32,6 +32,8 @@ export type SourceKind =
   | "transcript"
   | "code"
   | "github"
+  | "chat"
+  | "meeting"
   | "other";
 
 export const SOURCE_KINDS: readonly SourceKind[] = [
@@ -43,6 +45,8 @@ export const SOURCE_KINDS: readonly SourceKind[] = [
   "transcript",
   "code",
   "github",
+  "chat",
+  "meeting",
   "other",
 ];
 

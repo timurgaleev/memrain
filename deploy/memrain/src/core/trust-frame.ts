@@ -9,7 +9,7 @@ export function frameExternal(text: string): string {
   return `<external_content trust="external">\n${text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}\n</external_content>`;
 }
 
-const EXTERNAL_KINDS = "('github', 'mailbox', 'calendar', 'webhook')";
+const EXTERNAL_KINDS = "('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')";
 const externalPrincipal = (column: string): string => `${column} IS NOT NULL AND ${column} NOT IN ('', 'operator')`;
 
 // A manual edit does not certify every earlier contributor's text as trusted.
