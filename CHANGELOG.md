@@ -6,6 +6,62 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.16.0] — 2026-11-14
+
+### Added
+- Try Memrain on a laptop without AWS: `make local-up` builds and starts a
+  local server on PGLite, bound to `127.0.0.1`, with a named volume and a
+  printed MCP URL and token command. It runs in the new keyword-only mode
+  (`MEMRAIN_KEYWORD_ONLY=1`): no embedding or model call is attempted, stored
+  vectors are kept, and `/health` reports the reduced capability.
+  `make local-smoke` proves a write, search and read with a minted token.
+- Claude Code and Codex plugins under `plugins/memrain`: one install connects
+  the client to your Memrain URL and adds the curated skills. No credential is
+  stored in the repository.
+- LongMemEval harness (`memrain eval longmemeval`) with an LLM judge: pinned,
+  checksum-verified dataset; an isolated brain per question; retrieval through
+  the normal search path; a durable reserve-invoke-settle spend ledger with a
+  required `--max-usd` that fails closed, one attempt per paid call, a dry run
+  with zero paid calls, safe resume and an operator `--settle`. Results are
+  labelled as judged by Bedrock Claude and report interrupted and truncated
+  answers next to the score.
+- Code retrieval evaluation (`memrain eval code`) and
+  `memrain search invisible`, which lists pages vector search cannot return
+  and why. Doctor reports contextual-retrieval coverage when that layer is on.
+- Facts that contradict each other carry `contested_with` in `entity_recall`
+  and `context_pack`, from one bounded query.
+- Optional core memory in `context_pack`: up to 2,000 characters from pages
+  you name (`MEMRAIN_CONTEXT_CORE_SLUGS`, `MEMRAIN_CONTEXT_CORE_MAX_CHARS`),
+  visible only to callers who can read them.
+- Single-value link types (`works_at`, `located_at`): a later dated link
+  closes the previous one; an overlapping or same-day different target is
+  refused with `link_interval_conflict`. Doctor reports legacy overlaps.
+- Four read-only skills are offered as MCP prompts, and a new
+  conversation-archive skill.
+- Error envelopes carry an error class and `retryable`; unexpected internal
+  errors return an incident id that matches the server log. The CLI exits 2
+  for usage errors and 75 for retryable failures.
+
+### Changed
+- A purge retires every live fact written on the purged page, with a receipt
+  (migrations 149, 150) that lists the fact ids so the retirement can be
+  undone. A purge never overwrites a fact forgotten while it waited. Purge also
+  removes the volunteer events that name the page.
+- Queued captures and transcript pushes record which credential queued them
+  and check it again before writing: a revoked credential, a deleted client or
+  a narrowed grant stops the write, while the raw capture is kept. Jobs are
+  keyed by source and credential, so two people on one shared client no
+  longer share a job. Jobs queued before this release are refused once and
+  must be resent.
+- Chronicle extraction jobs are keyed to the text the model reads, so an
+  append past the judged window no longer pays for the same extraction again.
+
+### Fixed
+- A key printed right after a terminal colour code is now redacted (secret
+  scanner version 5; stored text is rescanned by the next audit).
+- A take added after a page lost its takes section no longer overwrites stored
+  take #1.
+
 ## [1.15.1] — 2026-11-12
 
 ### Fixed
