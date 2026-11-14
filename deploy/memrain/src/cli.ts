@@ -325,6 +325,7 @@ function printUsage(): void {
   console.log("                               mirror a repository's issues and pull requests into a github source");
   console.log("                               (token: MEMRAIN_GITHUB_TOKEN or --token-file; exit 1 partial, 2 re-auth)");
   console.log("  connectors status [--json]   watermark and last run of every connector");
+  console.log("  connectors rotate-kek --old-file F --new-file F [--json]   re-seal connector secrets under a new key");
   console.log("  quarantine list [--include-flagged] [--json]");
   console.log("  quarantine clear <slug|path> [--force]");
   console.log("  quarantine scan [--limit N] [--apply]");
@@ -1818,6 +1819,10 @@ async function main(argv: readonly string[]): Promise<number> {
       if (src) opts.sourceId = src;
       const tokenFile = values.get("--token-file");
       if (tokenFile) opts.tokenFile = tokenFile;
+      const oldKekFile = values.get("--old-file");
+      if (oldKekFile) opts.oldKekFile = oldKekFile;
+      const newKekFile = values.get("--new-file");
+      if (newKekFile) opts.newKekFile = newKekFile;
       if (flags.has("--full")) opts.full = true;
       if (flags.has("--dry-run")) opts.dryRun = true;
       if (flags.has("--json")) opts.json = true;

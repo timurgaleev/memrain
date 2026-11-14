@@ -117,6 +117,7 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--federated-read", "--file", "--format",
   "--filter", "--from", "--grant", "--grant-types", "--host", "--id", "--indexed-policy",
   "--input", "--judge-model", "--k", "--keep-days", "--kind", "--kinds", "--label", "--limit", "--max-drop",
+  "--new-file", "--old-file",
   "--max-cost-usd", "--max-jobs", "--max-latency-x", "--max-pages", "--max-retries", "--max-usd",
   "--min-confidence", "--min-recall", "--model", "--modes", "--notes",
   "--older-than-days", "--out", "--path-prefix", "--paths", "--pattern",
@@ -333,7 +334,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--source", "--token-file", "--url", "--plan-hash",
     ]),
   ],
-  ["connectors", new Set(["--dry-run", "--full", "--json", "--source", "--token-file"])],
+  ["connectors", new Set(["--dry-run", "--full", "--json", "--new-file", "--old-file", "--source", "--token-file"])],
   ["version", new Set<string>()],
   ["help", new Set<string>()],
 ]);
