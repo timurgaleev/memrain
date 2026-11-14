@@ -114,6 +114,26 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(receiptText).not.toContain("t1\"");
   });
 
+  it("deletes a split page's parts with it, and a retention sweep never takes a part alone", async () => {
+    const e = db.storage.engine();
+    const canary = "partcanary5150";
+    const page = await ingest(mailPage("t9", "plainwords", OWNER, "2025-01-01T08:00:00.000Z"));
+    const part = { ...page, slug: `${page.slug}/part-001`, body: `Tail of the thread ${canary}.\n`, truth: { ...page.truth, part_of: page.slug, part: 1 } };
+    await ingest(part);
+    const other = await ingest(mailPage("t10", "otherwords", OTHER, "2025-01-01T08:00:00.000Z"));
+    await putPage(db.storage, { slug: `${other.slug}/part-001`, type: other.type, allowAdHocType: true, title: other.title,
+      markdown_body: `Other account ${canary}.`, compiled_truth: { ...other.truth, part_of: page.slug }, written_by: "connector-gmail", source_id: "inbox", outsideText: true });
+
+    // The sweep picks whole items: the part's own last activity does not select it.
+    const swept = await sweepRetention(db.storage, scope, { kind: "mail", now: () => Date.parse("2026-11-14T00:00:00Z") });
+    expect(swept.deleted).toEqual([page.slug]);
+    expect((await e.query("SELECT 1 FROM pages WHERE slug = $1", [part.slug])).rows).toHaveLength(0);
+    // Another account's page claiming the same parent is not this account's to delete.
+    expect((await e.query("SELECT 1 FROM pages WHERE slug = $1", [`${other.slug}/part-001`])).rows).toHaveLength(1);
+    const left = await rowsContaining(e, canary);
+    expect(left).toEqual(["page_versions", "pages"]);
+  });
+
   it("removes synthesis atoms and atom pages distilled from the deleted page", async () => {
     const e = db.storage.engine();
     const canary = "atomcanary9931";

@@ -14,7 +14,8 @@
  * and counted in the receipt, so human-written text is never destroyed. Facts are deleted, not retired:
  * a retired fact still holds the text.
  *
- * Each page goes in its own transaction, which also writes a receipt to the
+ * A page split into parts (`compiled_truth.part_of` names it) goes together
+ * with its parts. Each page goes in its own transaction, which also writes a receipt to the
  * ingest log (`connector-delete`) that holds counts and hashes only — no
  * slug, title, address or text — so the deletion is provable without keeping
  * what was deleted.
@@ -212,7 +213,11 @@ async function automaticPages(tx: Engine, where: string, params: unknown[], type
  * claiming the same origin, is kept and counted.
  */
 async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string, expectedContentHash?: string): Promise<DeleteCounts | "changed" | null> {
-  await lockPageSlugs(tx, slug);
+  const parts = (await tx.query<{ slug: string }>(
+    `SELECT p.slug FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' = $3 ORDER BY p.slug`,
+    [scope.sourceId, scope.accountRef, slug],
+  )).rows.map(r => r.slug);
+  await lockPageSlugs(tx, slug, ...parts);
   const page = await tx.query<{ content_hash: string }>(
     `SELECT p.content_hash FROM pages p WHERE p.slug = $3 AND ${ownedPageScope} FOR UPDATE`,
     [scope.sourceId, scope.accountRef, slug],
@@ -221,6 +226,11 @@ async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string, 
   if (expectedContentHash !== undefined && page.rows[0]!.content_hash !== expectedContentHash) return "changed";
   const counts: DeleteCounts = { ...EMPTY_COUNTS };
   const { docIds, concepts } = await deletePageDerived(tx, slug, scope.sourceId, counts);
+  for (const part of parts) {
+    const derived = await deletePageDerived(tx, part, scope.sourceId, counts);
+    docIds.push(...derived.docIds);
+    concepts.push(...derived.concepts);
+  }
   if (docIds.length > 0) {
     const atoms = await automaticPages(tx,
       `p.source_id = $1 AND p.compiled_truth->'atom_origin'->>'source_ref' = ANY($2::text[])`,
@@ -409,6 +419,7 @@ export async function sweepRetention(
   const due = (await engine.query<{ slug: string }>(
     `SELECT p.slug FROM pages p
       WHERE ${ownedPageScope} AND p.compiled_truth->>'kind' = $3
+        AND p.compiled_truth->>'part_of' IS NULL
         AND p.compiled_truth->>'last_activity_at' < $4
       ORDER BY p.compiled_truth->>'last_activity_at', p.slug
       LIMIT $5`,

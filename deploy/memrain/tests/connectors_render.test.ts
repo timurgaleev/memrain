@@ -9,7 +9,7 @@ import { GATE_OWNED_KEYS } from "../src/core/quarantine.ts";
 import { OUTSIDE_NEUTRALIZED } from "../src/core/fence-carry.ts";
 import { SecretRejectedError } from "../src/core/secret-scan.ts";
 import { accountRef, type CalendarEvent, type ChatDay, type MailThread, type MeetingTranscript } from "../src/core/connectors/model.ts";
-import { htmlToText, renderCalendarEvent, renderChatDay, renderMailThread, renderMeeting } from "../src/core/connectors/render.ts";
+import { htmlToText, MAX_TRANSCRIPT_BYTES, renderCalendarEvent, renderChatDay, renderMailThread, renderMeeting } from "../src/core/connectors/render.ts";
 
 const savedDisposition = process.env.MEMRAIN_SECRET_SCAN_DISPOSITION;
 afterEach(() => {
@@ -173,20 +173,30 @@ describe("chat", () => {
 });
 
 describe("meeting", () => {
-  it("renders summary, action items and the transcript, bounded in size", () => {
-    const meeting: MeetingTranscript = {
-      id: "ff-9", title: "Pricing sync", start: "2026-11-11T15:00:00.000Z", end: "2026-11-11T15:30:00.000Z",
-      participants: [{ name: "Bob Stone", email: "bob@example.net" }],
-      summary: "Agreed on tiers.", actionItems: ["Bob sends the sheet"],
-      sentences: Array.from({ length: 20_000 }, (_, i) => ({ speaker: "Bob Stone", text: `sentence number ${i} with some words` })),
-    };
-    const page = renderMeeting({ service: "fireflies", accountLabel: ACCOUNT }, meeting);
+  const longMeeting = (sentences: MeetingTranscript["sentences"]): MeetingTranscript => ({
+    id: "ff-9", title: "Pricing sync", start: "2026-11-11T15:00:00.000Z", end: "2026-11-11T15:30:00.000Z",
+    participants: [{ name: "Bob Stone", email: "bob@example.net" }],
+    summary: "Agreed on tiers.", actionItems: ["Bob sends the sheet"],
+    sentences,
+  });
+
+  it("renders summary, action items and the whole transcript, leaving the size to the splitter", () => {
+    const page = renderMeeting({ service: "fireflies", accountLabel: ACCOUNT },
+      longMeeting(Array.from({ length: 20_000 }, (_, i) => ({ speaker: "Bob Stone", text: `sentence number ${i} with some words` }))));
     expect(page.slug).toMatch(/^meeting\/[0-9a-f]{16}\/2026-11-11-[0-9a-f]{16}$/);
     expect(page.body).toContain("Agreed on tiers.");
     expect(page.body).toContain("- Bob sends the sheet");
     expect(page.body).toContain("Bob Stone: sentence number 0");
-    expect(Buffer.byteLength(page.body)).toBeLessThan(300 * 1024);
-    expect(page.body).toContain("transcript truncated");
+    expect(page.body).toContain("Bob Stone: sentence number 19999 with some words");
+    expect(page.body).not.toContain("transcript truncated");
     expect(page.truth).toMatchObject({ kind: "meeting", trust: "untrusted", occurred_at: "2026-11-11T15:00:00.000Z" });
+  });
+
+  it("still cuts a transcript past its hard ceiling, with a marker", () => {
+    const line = "w".repeat(3990);
+    const page = renderMeeting({ service: "fireflies", accountLabel: ACCOUNT },
+      longMeeting(Array.from({ length: Math.ceil(MAX_TRANSCRIPT_BYTES / 4000) + 10 }, () => ({ speaker: "Bob Stone", text: line }))));
+    expect(page.body).toContain("transcript truncated");
+    expect(Buffer.byteLength(page.body)).toBeLessThan(MAX_TRANSCRIPT_BYTES + 64 * 1024);
   });
 });

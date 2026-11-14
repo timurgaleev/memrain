@@ -52,8 +52,13 @@ export const CONNECTOR_PAGE_TYPES: Readonly<Record<ConnectorDataKind, string>> =
   meeting: "connector-meeting",
 };
 
-/** A meeting transcript past this many bytes is cut, with a marker saying so. */
-export const MAX_TRANSCRIPT_BYTES = 256 * 1024;
+/**
+ * A transcript is rendered whole; the sync engine splits a long one into part
+ * pages (splitLargeDocument), so nothing is lost to a page size limit. Past this
+ * ceiling a provider is sending something no meeting produces, and the rest is
+ * cut with a marker saying so.
+ */
+export const MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
 
 const BULK_CATEGORIES = new Set(["promotions", "social"]);
 const BULK_LOCAL_PART = /^(?:no-?reply|do-?not-?reply|mailer-daemon|notifications?|bounces?)(?:[+.-]|$)/i;

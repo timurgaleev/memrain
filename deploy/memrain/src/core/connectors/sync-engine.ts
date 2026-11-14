@@ -28,6 +28,10 @@
  *     otherwise each is handed to the deletion handler one by one; with no
  *     handler wired they stay pending, and a page a live duplicate still
  *     points at is never handed over;
+ *   - size: a body past the part size (2 MiB, or MEMRAIN_PAGE_MAX_BYTES when
+ *     lower) is written as a contents page at the item's slug plus
+ *     `<slug>/part-NNN` pages carrying the item's truth and `part_of`, so a
+ *     long transcript is stored whole and deleted whole;
  *   - a page whose mirror into search failed is not settled: it counts as an
  *     item failure, holds the cursor, and is mirrored again next run;
  *   - a credential the provider will not renew pauses the account
@@ -42,6 +46,7 @@ import { syncWikilinksForPage } from "../links.ts";
 import { logIngest } from "../ingest-log.ts";
 import { OperationError } from "../operation-error.ts";
 import { getSource } from "../sources.ts";
+import { DEFAULT_SPLIT_PART_BYTES, pageMaxBytes, splitLargeDocument, type PageDraft } from "../page-size.ts";
 import { sweepEchoes, type SecretFinding } from "../secret-scan.ts";
 import { daySpendUsd, runWithSpendClient, utcDayStart } from "../budget.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
@@ -94,6 +99,8 @@ export interface RenderedSyncItem {
   body: string;
   /** Stable across providers (Message-ID, iCalUID), so one thread seen twice is stored once. */
   dedupeKey?: string | null;
+  /** Compiled truth from the renderer (`origin: connector`, the account's ref); deletion is fenced by it. */
+  truth?: Record<string, unknown>;
   failure?: undefined;
 }
 
@@ -154,6 +161,8 @@ export interface SyncDeps {
   env?: Record<string, string | undefined>;
   /** This worker's name in the run lock. */
   holder?: string;
+  /** Largest page body before an item is split into parts; defaults as described above. */
+  maxPartBytes?: number;
 }
 
 export type SyncStopReason =
@@ -576,12 +585,29 @@ class Run {
     const findings: SecretFinding[] = [];
     const body = this.tokens.size > 0 ? sweepEchoes(item.body, this.tokens, findings) : item.body;
     const title = this.tokens.size > 0 ? sweepEchoes(item.title, this.tokens, findings) : item.title;
+    const doc = splitLargeDocument({ slug: item.slug, title, body, maxPartBytes: this.partBytes() });
+    // Parts first: the contents page is what settles the item, so it is only
+    // written once every part it links to is stored and searchable.
+    for (const [i, part] of doc.parts.entries()) {
+      const truth = item.truth === undefined ? undefined : { ...item.truth, part_of: item.slug, part: i + 1 };
+      if ((await this.writeOne(part, item.type, truth, null)) === null) return null;
+    }
+    return this.writeOne(doc.parent, item.type, item.truth, settledHash);
+  }
+
+  private partBytes(): number {
+    return this.deps.maxPartBytes ?? Math.min(DEFAULT_SPLIT_PART_BYTES, pageMaxBytes() ?? DEFAULT_SPLIT_PART_BYTES);
+  }
+
+  private async writeOne(draft: PageDraft, type: string, truth: Record<string, unknown> | undefined, settledHash: string | null): Promise<string | null> {
+    const { slug, title, body } = draft;
     const put = await putPage(this.storage, {
-      slug: item.slug,
-      type: item.type,
+      slug,
+      type,
       allowAdHocType: true,
       title,
       markdown_body: body,
+      ...(truth === undefined ? {} : { compiled_truth: truth }),
       written_by: `${WRITTEN_BY_PREFIX}${this.account.provider}`,
       source_id: this.account.sourceId,
       outsideText: true,
@@ -593,11 +619,11 @@ class Run {
       if (put.content_hash === settledHash) return put.content_hash;
     } else {
       this.result.counts.pages_written++;
-      this.changed.push({ slug: item.slug, body: stored });
+      this.changed.push({ slug, body: stored });
     }
     const ok = await mirrorPage(
       this.storage,
-      { slug: item.slug, title, markdown_body: stored, content_hash: put.content_hash, source_id: this.account.sourceId },
+      { slug, title, markdown_body: stored, content_hash: put.content_hash, source_id: this.account.sourceId },
       { remote: true, timingLabel: `connector_${this.account.provider}`, ...(this.deps.embedFn ? { embedFn: this.deps.embedFn } : {}) },
     );
     if (ok) return put.content_hash;
