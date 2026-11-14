@@ -60,12 +60,14 @@ export async function readExternalTrust(engine: Engine, selected: TrustSelection
  * Search hits carry both fields: `trust_tier` always, and the legacy framing
  * flag `trust: "external"` exactly when the tier is below owner, which is also
  * when frameMarkedContent wraps the content. A chunk the lookup cannot see
- * (out of scope, gone since retrieval) is labelled external and framed.
+ * (deleted since retrieval) keeps the shape markExternalChunks gave it: no
+ * label and no frame.
  */
-export async function markChunkTrust<T extends { chunkId: string }>(engine: Engine, hits: readonly T[], sourceIds?: readonly string[]): Promise<Array<T & ExternalTrust & { trust_tier: TrustTier }>> {
+export async function markChunkTrust<T extends { chunkId: string }>(engine: Engine, hits: readonly T[], sourceIds?: readonly string[]): Promise<Array<T & ExternalTrust & { trust_tier?: TrustTier }>> {
   const tiers = await readTrustTiers(engine, { chunks: hits.map(h => h.chunkId) }, sourceIds);
   return hits.map((h) => {
-    const tier = tiers.chunks.get(h.chunkId) ?? "external";
+    const tier = tiers.chunks.get(h.chunkId);
+    if (tier === undefined) return h;
     return tier === "owner" ? { ...h, trust_tier: tier } : { ...h, trust: "external" as const, trust_tier: tier };
   });
 }
