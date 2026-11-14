@@ -15,7 +15,7 @@ const TOKENS = { access_token: "cli-live-access-token", refresh_token: "cli-live
 
 describe("memrain connectors rotate-kek", () => {
   const dir = mkdtempSync(join(tmpdir(), "memrain-rotate-kek-"));
-  const cfgPath = join(dir, ".memex", "config.json");
+  const cfgPath = join(dir, ".memrain", "config.json");
   const oldFile = join(dir, "old.kek");
   const newFile = join(dir, "new.kek");
   let accountId = "";
@@ -25,9 +25,9 @@ describe("memrain connectors rotate-kek", () => {
   const open = () => new Storage(JSON.parse(readFileSync(cfgPath, "utf-8")));
 
   beforeAll(async () => {
-    mkdirSync(join(dir, ".memex"), { recursive: true });
+    mkdirSync(join(dir, ".memrain"), { recursive: true });
     writeFileSync(cfgPath, JSON.stringify({
-      database: { type: "pglite", path: join(dir, ".memex", "brain.pglite") },
+      database: { type: "pglite", path: join(dir, ".memrain", "brain.pglite") },
       embedding: { provider: "bedrock-titan", model: "amazon.titan-embed-text-v2:0", region: "eu-west-1" },
       storage: {},
     }));

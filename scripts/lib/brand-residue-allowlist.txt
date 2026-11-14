@@ -163,6 +163,7 @@ deploy/memrain/tests/composite_pk_precursor.test.ts|COMPAT-TEST|1|incidental: pr
 deploy/memrain/tests/config.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/config_cli.test.ts|COMPAT-TEST|7|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/config_paths.test.ts|COMPAT-TEST|27|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
+deploy/memrain/tests/connector_kek_not_in_db.test.ts|COMPAT-TEST|1|clears both the MEMRAIN_ and the legacy MEMEX_ connector key variables before asserting none is set
 deploy/memrain/tests/connectors_github.test.ts|COMPAT-TEST|6|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/content_flag.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/content_sanity.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
