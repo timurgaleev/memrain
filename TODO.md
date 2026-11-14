@@ -9,6 +9,28 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ---
 
+## Reversed decisions (2026-11-14)
+
+The 2026-11-14 platform program reverses these earlier refusals. Entries
+further down that still state the old position are kept for history and are
+marked; this section is the one that stands.
+
+- **Live connectors are in scope.** Mail, calendar, meeting and chat sources
+  (Gmail, Google Calendar, Microsoft 365, Slack, Teams, meeting transcripts),
+  an outbound credential vault with OAuth, and open loops derived from them
+  ("who is waiting for a reply") are built behind default-off flags. This
+  replaces "life integrations stay removed", "Gmail/Calendar stay out" and the
+  "Not planned" entry for the credential vault, Google OAuth and email-derived
+  loops.
+- **An operator chat surface is in scope.** Answer synthesis stays the MCP
+  client's job for agents; the admin app gains its own chat for the operator.
+- **The skill pack gets an integrity lockfile.** It will ship to hosted
+  clients, so the earlier reasoning that it never leaves the repository no
+  longer holds.
+- **Skills declined earlier may be adapted.** The one exclusion that stands is
+  git- or markdown-canonical storage; skills declined as redundant or out of
+  scope are open again.
+
 ## Remaining comparison program
 
 - Run the pinned attribution, mirror-adoption and rechunk previews on the
@@ -2929,7 +2951,7 @@ composite identity itself; a CI Postgres lane.
 **Why.** RM-14 imports exports and sessions the operator pushes. Continuous
 capture of ChatGPT/Claude.ai history, and of project history (issues, PRs,
 reviews) next to the code graph, is the remaining connector gap; neither was
-part of the removed life integrations.
+part of the removed life integrations (reversed 2026-11-14, see "Reversed decisions").
 
 **Scope.**
 
@@ -2963,7 +2985,7 @@ watermark does not advance on a partial run; a GitHub fixture repo mirrors
 issues/PRs with links and a webhook refresh updates one item; doctor flags an
 expired credential.
 
-**Needs operator go.** Yes (Gmail/Calendar stay out; see open decisions).
+**Needs operator go.** Yes (Gmail/Calendar stay out; see open decisions). Reversed 2026-11-14: see "Reversed decisions".
 
 **Progress.** R1 (1.151.0): the provider seam and the GitHub connector as a
 one-shot operator CLI. `core/connectors/`: a pure response classifier (ok,
@@ -3077,6 +3099,7 @@ Not in any roadmap item, with the reason:
   add it with the first feature that does.
 - **Outbound credential vault, Google OAuth, Google source, open-loop detection
   and email-derived loops** — life integrations were removed on purpose.
+  Reversed 2026-11-14: see "Reversed decisions".
 - **Keyless capability probe and a local IPC listener** — one provider,
   HTTP-only serving.
 - **Cross-source identity groups** — overlaps the deferred federation decision.
@@ -3196,7 +3219,7 @@ Closed operator decisions this roadmap does not re-raise:
    `resolve_slugs` + `entity_recall` exposes nothing a caller cannot already reach
    in two calls, and the RM-01 matrix supplies the proof. Reopen inside RM-12?
 7. **Life integrations stay removed** (Gmail/Calendar). Recommended default:
-   yes. Remnants remain (`src/core/recipe-state.ts`, `mailbox`/`calendar` source
+   yes. Reversed 2026-11-14: see "Reversed decisions". Remnants remain (`src/core/recipe-state.ts`, `mailbox`/`calendar` source
    kinds in migration 004).
 8. **Page/timeline FTS arm.** "Deferred real gap (2026-07-07) — page/timeline
    FTS" below calls it high value, while an earlier worklog marked it skipped
@@ -4301,6 +4324,8 @@ the capability back.
 
 _None currently — the Telegram/chat and life-integration capabilities
 were intentionally removed; memex is a brain reached over MCP only._
+Connectors and an operator chat come back as new work, not as revivals; see
+"Reversed decisions" at the top.
 
 ---
 
