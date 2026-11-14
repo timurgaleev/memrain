@@ -36,6 +36,8 @@ import {
   type TokenSet,
 } from "./accounts.ts";
 import { getOAuthClient } from "./oauth-clients.ts";
+import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
+import { refreshLockId } from "./token-provider.ts";
 import type { ConnectorProvider, ProviderRegistry } from "./providers.ts";
 import { oauthStateAad, seal, unseal, type Kek } from "./vault.ts";
 
@@ -66,7 +68,8 @@ export type ConnectErrorCode =
   | "token_exchange"
   | "scope_mismatch"
   | "identity"
-  | "account_not_found";
+  | "account_not_found"
+  | "refresh_in_progress";
 
 const MESSAGES: Record<ConnectErrorCode, string> = {
   connectors_disabled: "connectors are off or the connector key is missing",
@@ -87,6 +90,7 @@ const MESSAGES: Record<ConnectErrorCode, string> = {
   scope_mismatch: "the provider granted different scopes than requested; the grant was refused",
   identity: "could not read the connected account's identity",
   account_not_found: "connector account not found",
+  refresh_in_progress: "a worker is renewing this account's token; try the disconnect again shortly",
 };
 
 export class ConnectError extends Error {
@@ -433,6 +437,12 @@ async function persistGrant(
   });
 }
 
+/** How long a disconnect waits for a token refresh in flight; the refresh lock outlives a provider call. */
+const DISCONNECT_WAIT_MS = 30_000;
+const DISCONNECT_LOCK_TTL_SEC = 60;
+const DISCONNECT_POLL_MS = 250;
+const DISCONNECT_HEARTBEAT_MS = 15_000;
+
 /**
  * Disconnect an account: revoke its token upstream, then drop the credential
  * and park the account as revoked and disabled. When the provider can revoke
@@ -441,17 +451,56 @@ async function persistGrant(
  * later retry can still revoke it; `force` drops it anyway. A provider with no
  * revocation endpoint has nothing to retry. Pages stay either way; deleting
  * them is a separate, explicit step.
+ *
+ * The whole disconnect holds the account's refresh lock. A provider that
+ * rotates refresh tokens retires the old one on every renewal, so a revoke
+ * sent while a refresh is in flight would revoke the dead token and leave the
+ * rotated one live at the provider. Waiting for the refresh lets the
+ * disconnect read, and revoke, whatever the refresh stored. The lock is
+ * renewed while the revoke runs; if it was lost all the same, a refresh may
+ * have rotated the token after it was read, so the revoke is not trusted and
+ * the credential is kept for a retry.
  */
 export async function disconnectAccount(
   deps: ConnectDeps,
   accountId: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; waitMs?: number } = {},
 ): Promise<{ revoked: boolean; credentialKept: boolean }> {
   // scope: operator-only disconnect is an operator action on a named account
   const r = await deps.engine.query<{ provider: string }>(`SELECT provider FROM connector_accounts WHERE id = $1`, [accountId]);
   const row = r.rows[0];
   if (!row) throw new ConnectError("account_not_found");
-  const provider = deps.providers.get(row.provider);
+  const lockId = refreshLockId(accountId);
+  const holder = `disconnect:${crypto.randomUUID()}`;
+  const waitMs = opts.waitMs ?? DISCONNECT_WAIT_MS;
+  for (let waited = 0; !(await acquireWorkerLock(deps.engine, lockId, holder, DISCONNECT_LOCK_TTL_SEC)); waited += DISCONNECT_POLL_MS) {
+    if (waited >= waitMs) throw new ConnectError("refresh_in_progress");
+    await new Promise((resolve) => setTimeout(resolve, DISCONNECT_POLL_MS));
+  }
+  let lost = false;
+  const stillHeld = async (via: Engine = deps.engine): Promise<boolean> => {
+    if (!lost && !(await heartbeatWorkerLock(via, lockId, holder))) lost = true;
+    return !lost;
+  };
+  const beat = setInterval(() => void stillHeld().catch(() => { lost = true; }), DISCONNECT_HEARTBEAT_MS);
+  beat.unref?.();
+  try {
+    return await disconnectLocked(deps, accountId, row.provider, opts.force === true, stillHeld);
+  } finally {
+    clearInterval(beat);
+    await releaseWorkerLock(deps.engine, lockId, holder);
+  }
+}
+
+async function disconnectLocked(
+  deps: ConnectDeps,
+  accountId: string,
+  providerId: string,
+  force: boolean,
+  /** Renews the lock through `via`; false once it was lost. */
+  stillHeld: (via?: Engine) => Promise<boolean>,
+): Promise<{ revoked: boolean; credentialKept: boolean }> {
+  const provider = deps.providers.get(providerId);
   const hasCredential = (await deps.engine.query(`SELECT 1 FROM connector_credentials WHERE account_id = $1`, [accountId])).rows.length > 0;
   const canRevoke = provider !== null && (provider.revoke !== undefined || provider.revokeUrl !== undefined);
   let revoked = false;
@@ -462,13 +511,17 @@ export async function disconnectAccount(
       revoked = await revokeToken(provider, deps.fetch ?? (globalThis.fetch as FetchFn), cred.tokens.refresh_token ?? cred.tokens.access_token, client);
     }
   }
-  // Unknown provider: we cannot tell whether a revoke is owed, so keep it too.
-  const owesRevoke = hasCredential && (canRevoke || provider === null) && !revoked;
-  const keep = owesRevoke && opts.force !== true;
-  await deps.engine.transaction(async (tx) => {
+  return deps.engine.transaction(async (tx) => {
+    // Renewed inside the transaction, the lock row stays locked until the
+    // credential is gone. Lost, the revoked token may already have been
+    // rotated away, so the revoke is not trusted.
+    if (revoked && !(await stillHeld(tx))) revoked = false;
+    // Unknown provider: we cannot tell whether a revoke is owed, so keep it too.
+    const owesRevoke = hasCredential && (canRevoke || provider === null) && !revoked;
+    const keep = owesRevoke && !force;
     if (!keep) await tx.query(`DELETE FROM connector_credentials WHERE account_id = $1`, [accountId]);
     await tx.query(`UPDATE connector_accounts SET enabled = FALSE, updated_at = NOW() WHERE id = $1`, [accountId]);
     await setAccountStatus(tx, accountId, keep ? "error" : "revoked", keep ? "revoke_failed" : null);
+    return { revoked, credentialKept: keep };
   });
-  return { revoked, credentialKept: keep };
 }

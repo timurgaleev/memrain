@@ -30,6 +30,7 @@ import { hardDeleteConnectorPage } from "./retention.ts";
 import type { RenderedSyncItem, SyncAccount, SyncDeps } from "./sync-engine.ts";
 import { registerConnectorSync, type ConnectorSyncRuntime } from "./sync-job.ts";
 import { createTokenProvider, tokenEndpointRefresh, type CredentialStore } from "./token-provider.ts";
+import { ProviderCannotSyncError } from "./types.ts";
 import { connectorsStatus, loadKek, type Kek } from "./vault.ts";
 
 const MAX_REASON = 200;
@@ -113,12 +114,12 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
     depsFor: (account): SyncDeps => {
       const provider = opts.providers.get(account.provider);
       const sync = provider?.sync;
-      if (!provider || !sync) throw new Error(`connector provider '${account.provider}' cannot sync`);
+      if (!provider || !sync) throw new ProviderCannotSyncError(account.provider);
       if (!account.accountLabel) throw new Error(`connector account ${account.id} has no label`);
       const scope = { sourceId: account.sourceId, accountRef: accountRef(account.accountLabel) };
       return {
         adapter: sync.adapter(account),
-        tokenSource: async () => {
+        tokenSource: async (_account, secret) => {
           const client = await resolveClient({ engine, kek: opts.kek, providers: opts.providers, fetch: fetchFn, env }, opts.kek, provider.id);
           const token = new URL(provider.tokenUrl);
           return createTokenProvider({
@@ -126,6 +127,7 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
             accountId: account.id,
             store: vaultCredentialStore(engine, opts.kek),
             refresh: tokenEndpointRefresh({ origin: token.origin, path: `${token.pathname}${token.search}`, ...client, fetch: fetchFn }),
+            onSecret: secret,
             ...(opts.now ? { now: opts.now } : {}),
           });
         },

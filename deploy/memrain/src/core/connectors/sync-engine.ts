@@ -31,7 +31,8 @@
  *   - size: a body past the part size (2 MiB, or MEMRAIN_PAGE_MAX_BYTES when
  *     lower) is written as a contents page at the item's slug plus
  *     `<slug>/part-NNN` pages carrying the item's truth and `part_of`, so a
- *     long transcript is stored whole and deleted whole;
+ *     long transcript is stored whole and deleted whole; when it shrinks,
+ *     the parts the new split lacks are deleted with their derived rows;
  *   - a page whose mirror into search failed is not settled: it counts as an
  *     item failure, holds the cursor, and is mirrored again next run;
  *   - a credential the provider will not renew pauses the account
@@ -53,7 +54,8 @@ import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jo
 import type { ConnectorClient, ConnectorResponse, TokenSource } from "./client.ts";
 import { isDeterministicRefusal } from "./github.ts";
 import type { ConnectorAccountStatus } from "./accounts.ts";
-import { massDeleteVerdict } from "./retention.ts";
+import { deleteStaleParts, massDeleteVerdict } from "./retention.ts";
+import { accountRef } from "./model.ts";
 import { connectorsSwitchOn } from "./vault.ts";
 import { ReauthRequiredError, type ConnectorRunStatus, type ResponseClass } from "./types.ts";
 import {
@@ -151,8 +153,13 @@ export interface AccountGateway {
 
 export interface SyncDeps {
   adapter: SyncAdapter;
-  /** Open the account's credential. Throws when it cannot (no key, no row). */
-  tokenSource(account: SyncAccount): Promise<TokenSource>;
+  /**
+   * Open the account's credential. Throws when it cannot (no key, no row).
+   * Every token the credential holds, refresh tokens included, is handed to
+   * `secret` as soon as it is read or renewed, so a synced item quoting one
+   * is redacted before it is written.
+   */
+  tokenSource(account: SyncAccount, secret: (value: string) => void): Promise<TokenSource>;
   client(account: SyncAccount, tokenSource: TokenSource): ConnectorClient;
   accounts: AccountGateway;
   /**
@@ -255,9 +262,9 @@ function emptyCounts(): SyncCounts {
 }
 
 /** A token source that remembers every token it handed out, so none can be written into a page. */
-function recordingSource(inner: TokenSource, seen: Map<string, string>): TokenSource {
+function recordingSource(inner: TokenSource, secret: (value: string) => void): TokenSource {
   const keep = (t: string): string => {
-    if (t.length > 0) seen.set(t, "connector-token");
+    secret(t);
     return t;
   };
   return {
@@ -325,17 +332,20 @@ export async function runConnectorSync(storage: Storage, account: SyncAccount, d
   const lockId = syncLockId(account.id);
   if (!(await acquireWorkerLock(engine, lockId, holder, RUN_LOCK_TTL_SEC))) return skip("locked");
   try {
+    const tokens = new Map<string, string>();
+    const secret = (value: string): void => {
+      if (value.length > 0) tokens.set(value, "connector-token");
+    };
     let source: TokenSource;
     try {
-      source = await deps.tokenSource(account);
+      source = await deps.tokenSource(account, secret);
     } catch (e) {
       if (e instanceof ReauthRequiredError) return await needsReconnect(storage, account, deps, result, null, now);
       // A missing key or credential row is the operator's to fix, not the owner's: no pause.
       result.error = `credentials unavailable (${e instanceof Error ? e.name : "error"})`;
       return skip("credentials_unavailable", "partial");
     }
-    const tokens = new Map<string, string>();
-    const client = deps.client(account, recordingSource(source, tokens));
+    const client = deps.client(account, recordingSource(source, secret));
     const run = new Run(storage, account, deps, env, now, result, tokens, seenToday, spentUsd, () => heartbeatWorkerLock(engine, lockId, holder));
     await runWithSpendClient({ clientId: spendClient, capUsd: account.spendCapUsdDaily }, () => run.execute(client));
     if (result.stop_reason === "needs_reconnect") return await needsReconnect(storage, account, deps, result, result.http_status, now);
@@ -592,7 +602,14 @@ class Run {
       const truth = item.truth === undefined ? undefined : { ...item.truth, part_of: item.slug, part: i + 1 };
       if ((await this.writeOne(part, item.type, truth, null)) === null) return null;
     }
-    return this.writeOne(doc.parent, item.type, item.truth, settledHash);
+    const hash = await this.writeOne(doc.parent, item.type, item.truth, settledHash);
+    // Parts an earlier, longer version had: once the contents page no longer
+    // links to them they would linger in search with text the item dropped.
+    if (hash !== null && this.account.accountLabel) {
+      await deleteStaleParts(this.storage, { sourceId: this.account.sourceId, accountRef: accountRef(this.account.accountLabel) },
+        item.slug, doc.parts.map(p => p.slug));
+    }
+    return hash;
   }
 
   private partBytes(): number {

@@ -15,7 +15,8 @@
  * a retired fact still holds the text.
  *
  * A page split into parts (`compiled_truth.part_of` names it) goes together
- * with its parts. Each page goes in its own transaction, which also writes a receipt to the
+ * with its parts. When a long item shrinks, the parts its new split no longer
+ * has go the same way, all in one transaction (deleteStaleParts). Each page goes in its own transaction, which also writes a receipt to the
  * ingest log (`connector-delete`) that holds counts and hashes only — no
  * slug, title, address or text — so the deletion is provable without keeping
  * what was deleted.
@@ -44,7 +45,7 @@ import { shortHash, SOURCE_KIND_FOR, type ConnectorDataKind } from "./model.ts";
 
 export const CONNECTOR_DELETE_SOURCE_TYPE = "connector-delete";
 
-export type DeleteReason = "provider_deleted" | "retention" | "disconnect";
+export type DeleteReason = "provider_deleted" | "retention" | "disconnect" | "part_superseded";
 
 export interface ConnectorScope {
   sourceId: string;
@@ -304,6 +305,50 @@ export async function hardDeleteConnectorPage(
       }),
     });
     return { deleted: true, counts };
+  });
+}
+
+/**
+ * Delete the parts of `parentSlug` that its latest split no longer has, with
+ * everything derived from them, in one transaction and with one text-free
+ * receipt. Called after the item's new parts and contents page are written,
+ * so nothing still links to what goes. Fenced like every connector delete:
+ * only this account's connector pages in a connector source; on any other
+ * source it does nothing.
+ */
+export async function deleteStaleParts(
+  storage: Storage,
+  scope: ConnectorScope,
+  parentSlug: string,
+  keep: readonly string[],
+): Promise<{ parts: number; counts: DeleteCounts }> {
+  const engine = storage.engine();
+  const none = { parts: 0, counts: { ...EMPTY_COUNTS } };
+  const kind = (await engine.query<{ kind: string }>(`SELECT kind FROM sources WHERE id = $1`, [scope.sourceId])).rows[0]?.kind;
+  if (kind === undefined || !CONNECTOR_SOURCE_KINDS.has(kind)) return none;
+  const staleSql = `SELECT p.slug FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' = $3
+                     AND NOT (p.slug = ANY($4::text[])) ORDER BY p.slug`;
+  const params = [scope.sourceId, scope.accountRef, parentSlug, [...keep]];
+  // Most writes have nothing stale: check before opening a transaction.
+  if ((await engine.query(staleSql, params)).rows.length === 0) return none;
+  return deadlockSafeTransaction(engine, async (tx) => {
+    const counts: DeleteCounts = { ...EMPTY_COUNTS };
+    let parts = 0;
+    for (const { slug } of (await tx.query<{ slug: string }>(staleSql, params)).rows) {
+      const deleted = await deleteOwnedPage(tx, scope, slug);
+      if (deleted === null || deleted === "changed") continue;
+      for (const k of Object.keys(counts) as Array<keyof DeleteCounts>) counts[k] += deleted[k];
+      parts++;
+    }
+    if (parts === 0) return none;
+    await logIngest(tx, {
+      source_type: CONNECTOR_DELETE_SOURCE_TYPE,
+      source_id: scope.sourceId,
+      source_ref: `part_superseded:${scope.accountRef}:${hash(`slug:${parentSlug}`)}`,
+      pages_updated: [],
+      summary: JSON.stringify({ reason: "part_superseded", account: scope.accountRef, page: hash(`slug:${parentSlug}`), parts, counts }),
+    });
+    return { parts, counts };
   });
 }
 

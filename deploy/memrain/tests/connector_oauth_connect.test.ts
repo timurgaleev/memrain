@@ -15,6 +15,9 @@ import {
   startConnect,
   type ConnectDeps,
 } from "../src/core/connectors/oauth-connect.ts";
+import { createTokenProvider, refreshLockId } from "../src/core/connectors/token-provider.ts";
+import { vaultCredentialStore } from "../src/core/connectors/runtime.ts";
+import { acquireWorkerLock } from "../src/core/jobs/worker-lock.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import type { FetchFn } from "../src/core/connectors/client.ts";
 
@@ -326,6 +329,88 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await disconnectAccount(d, done.account.id, { force: true })).toEqual({ revoked: false, credentialKept: false });
       expect(await credentialMeta(e, done.account.id)).toBeNull();
       expect(await getAccount(e, done.account.id)).toMatchObject({ status: "revoked", enabled: false });
+    } finally { await db.close(); }
+  });
+
+  it("waits for a refresh in flight and revokes the refresh token it rotated to", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "/inbox" });
+      const fake = fakeProvider();
+      const d = deps(e, fake.fetch);
+      const { state } = await begin(e, d);
+      const done = await completeConnect(d, { provider: "test", state, code: "c", adminSessionId: SESSION });
+      await setAccountEnabled(e, done.account.id, true);
+
+      // Assembled at run time: a token shape must not sit in the source.
+      const rotated = ["rotated", "refresh", "token", "value"].join("-");
+      let entered!: () => void;
+      const inside = new Promise<void>((r) => { entered = r; });
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const tokens = createTokenProvider({
+        engine: e,
+        accountId: done.account.id,
+        store: vaultCredentialStore(e, kek),
+        refresh: async () => {
+          entered();
+          await gate;
+          return { accessToken: "rotated-access", refreshToken: rotated, expiresInSec: 3600 };
+        },
+      });
+      const refreshing = tokens.refresh(TEST_ACCESS_TOKEN);
+      await inside;
+      const disconnecting = disconnectAccount(d, done.account.id);
+      await new Promise((r) => setTimeout(r, 50));
+      release();
+      await Promise.allSettled([refreshing]);
+      expect(await disconnecting).toEqual({ revoked: true, credentialKept: false });
+      // The token the provider holds now is the rotated one; revoking the old one would leave it live.
+      expect(fake.calls.filter((c) => c.url.endsWith("/revoke")).map((c) => c.body?.get("token"))).toEqual([rotated]);
+      expect(await credentialMeta(e, done.account.id)).toBeNull();
+    } finally { await db.close(); }
+  });
+
+  it("keeps the credential when its refresh lock was lost while the revoke ran", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "/inbox" });
+      const fake = fakeProvider();
+      const providers = new ProviderRegistry();
+      let accountId = "";
+      providers.register({
+        ...testProvider("test"),
+        // A revoke slow enough that the lock lapsed and a refresh took it over.
+        revoke: async () => {
+          await e.query(`UPDATE worker_lock SET holder = 'refresh-worker' WHERE id = $1`, [refreshLockId(accountId)]);
+          return true;
+        },
+      });
+      const d = deps(e, fake.fetch, { providers });
+      const { state } = await begin(e, d);
+      const done = await completeConnect(d, { provider: "test", state, code: "c", adminSessionId: SESSION });
+      accountId = done.account.id;
+      expect(await disconnectAccount(d, done.account.id)).toEqual({ revoked: false, credentialKept: true });
+      expect(await credentialMeta(e, done.account.id)).not.toBeNull();
+      expect(await getAccount(e, done.account.id)).toMatchObject({ status: "error", status_reason: "revoke_failed", enabled: false });
+    } finally { await db.close(); }
+  });
+
+  it("refuses to disconnect while another worker keeps refreshing past the wait", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "/inbox" });
+      const fake = fakeProvider();
+      const d = deps(e, fake.fetch);
+      const { state } = await begin(e, d);
+      const done = await completeConnect(d, { provider: "test", state, code: "c", adminSessionId: SESSION });
+      expect(await acquireWorkerLock(e, refreshLockId(done.account.id), "other-worker", 60)).toBe(true);
+      expect(await code(disconnectAccount(d, done.account.id, { waitMs: 0 }))).toBe("refresh_in_progress");
+      expect(fake.calls.filter((c) => c.url.endsWith("/revoke"))).toEqual([]);
+      expect(await credentialMeta(e, done.account.id)).not.toBeNull();
     } finally { await db.close(); }
   });
 });

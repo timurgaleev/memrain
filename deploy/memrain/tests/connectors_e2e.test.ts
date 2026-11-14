@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
-import { fakeProvider, TEST_ACCESS_TOKEN, testProvider } from "./helpers/connector-test-provider.ts";
+import { fakeProvider, TEST_ACCESS_TOKEN, TEST_REFRESH_TOKEN, testProvider } from "./helpers/connector-test-provider.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { putPage } from "../src/core/pages.ts";
 import { addFact } from "../src/core/facts.ts";
@@ -250,6 +250,27 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
 
       // A paused account gives the scheduler nothing to queue.
       expect((await tick(db.storage, new Date(T0.getTime() + 2 * WINDOW_MS))).queued).toEqual([]);
+    } finally { await db.close(); }
+  });
+
+  it("redacts the account's refresh and access tokens from synced text", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      const quoted = meeting();
+      quoted.sentences = [
+        { speaker: "Ana Lee", text: `Someone pasted ${TEST_REFRESH_TOKEN} into the chat.` },
+        { speaker: "Ana Lee", text: `And the access token ${TEST_ACCESS_TOKEN} too.` },
+      ];
+      const world: World = { meetings: [quoted], deleted: [], cursor: "c1", refuseRefresh: false, apiCalls: 0 };
+      const account = await connect(db.storage, world);
+      const out = await tick(db.storage, T0);
+      expect((out.results[0]!.accounts as Array<{ status: string }>)[0]!.status).toBe("success");
+      const slug = renderMeeting({ service: "fireflies", accountLabel: account.account_label }, quoted).slug;
+      const body = (await e.query<{ markdown_body: string }>(`SELECT markdown_body FROM pages WHERE slug = $1`, [slug])).rows[0]!.markdown_body;
+      expect(body).toContain("Someone pasted");
+      expect(await rowsContaining(e, TEST_REFRESH_TOKEN)).toEqual([]);
+      expect(await rowsContaining(e, TEST_ACCESS_TOKEN)).toEqual([]);
     } finally { await db.close(); }
   });
 });

@@ -3,7 +3,7 @@
  * `memrain daemons` CLI, and the operator-only MCP tools.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
@@ -81,6 +81,39 @@ describe("daemonsStatus / controlDaemon", () => {
     expect(s.daemons.find(d => d.name === "probe")!.next_window).toBeNull();
   });
 
+  it("enables and disables a daemon for every source or one source, and audits each change", async () => {
+    const e = storage.engine();
+    const auditTo = mkdtempSync(join(tmpdir(), "memrain-daemons-audit-"));
+    const prev = process.env.MEMRAIN_AUDIT_DIR;
+    process.env.MEMRAIN_AUDIT_DIR = auditTo;
+    try {
+      registerDaemon({ name: "probe", kind: "daemon_probe", schedule: { cron: "0 7 * * *" }, lane: "short", paid: false, defaultEnabled: false });
+      expect(await controlDaemon(e, { action: "enable", daemon: "probe" }, "cli")).toEqual({ ok: true, action: "enable", daemon: "probe", source_id: "*" });
+      expect((await daemonsStatus(e)).daemons.find(d => d.name === "probe")!.enabled).toBe(true);
+      await controlDaemon(e, { action: "disable", daemon: "probe", source_id: "acme" }, "admin");
+      const probe = (await daemonsStatus(e)).daemons.find(d => d.name === "probe")!;
+      expect(probe.enabled).toBe(true);
+      expect(probe.sources).toEqual([expect.objectContaining({ source_id: "acme", enabled: false })]);
+      const rows = (await e.query<{ source_id: string; enabled: boolean }>(
+        `SELECT source_id, enabled FROM daemon_controls WHERE daemon = 'probe' ORDER BY source_id`)).rows;
+      expect(rows).toEqual([{ source_id: "*", enabled: true }, { source_id: "acme", enabled: false }]);
+      const audit = readdirSync(auditTo).map(f => readFileSync(join(auditTo, f), "utf8")).join("");
+      const records = audit.trim().split("\n").map(l => JSON.parse(l) as Record<string, unknown>);
+      expect(records).toEqual([
+        expect.objectContaining({ kind: "daemon_control", action: "enable", daemon: "probe", source_id: "*", by: "cli" }),
+        expect.objectContaining({ kind: "daemon_control", action: "disable", daemon: "probe", source_id: "acme", by: "admin" }),
+      ]);
+    } finally {
+      if (prev === undefined) delete process.env.MEMRAIN_AUDIT_DIR;
+      else process.env.MEMRAIN_AUDIT_DIR = prev;
+      rmSync(auditTo, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to enable or disable every daemon at once", async () => {
+    await expect(controlDaemon(storage.engine(), { action: "enable", daemon: "all" }, "cli")).rejects.toThrow("named daemon");
+  });
+
   it("refuses an unknown daemon, a bad source id and an unknown action", async () => {
     const e = storage.engine();
     await expect(controlDaemon(e, { action: "pause", daemon: "nope" }, "cli")).rejects.toBeInstanceOf(OperationError);
@@ -101,6 +134,17 @@ describe("memrain daemons", () => {
     expect((await daemonsStatus(storage.engine())).daemons.find(d => d.name === "cycle")!.paused).not.toBeNull();
     expect((await captured(() => runDaemons({ sub: "resume", name: "cycle", storage }))).code).toBe(0);
     expect((await daemonsStatus(storage.engine())).daemons.find(d => d.name === "cycle")!.paused).toBeNull();
+  });
+
+  it("enable and disable set the daemon's switch for a source", async () => {
+    const { code, out } = await captured(() => runDaemons({ sub: "enable", name: "connector_sync", sourceId: "acme", json: true, storage }));
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toEqual({ ok: true, action: "enable", daemon: "connector_sync", source_id: "acme" });
+    const row = async () => (await storage.engine().query<{ enabled: boolean | null }>(
+      `SELECT enabled FROM daemon_controls WHERE daemon = 'connector_sync' AND source_id = 'acme'`)).rows[0]?.enabled;
+    expect(await row()).toBe(true);
+    expect((await captured(() => runDaemons({ sub: "disable", name: "connector_sync", sourceId: "acme", storage }))).code).toBe(0);
+    expect(await row()).toBe(false);
   });
 
   it("an unknown subcommand or daemon exits 1", async () => {

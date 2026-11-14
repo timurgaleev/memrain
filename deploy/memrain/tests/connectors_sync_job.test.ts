@@ -6,7 +6,8 @@
  * sync engine for the account the payload names, and nothing runs while the
  * daemon is disabled.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { Queue } from "../src/core/jobs/queue.ts";
 import { _resetHandlersForTesting, getHandler, isKnownJobKind } from "../src/core/jobs/handlers.ts";
@@ -26,6 +27,10 @@ import {
   registerConnectorSync,
   type ConnectorSyncRuntime,
 } from "../src/core/connectors/sync-job.ts";
+import { connectorRuntime } from "../src/core/connectors/runtime.ts";
+import { ProviderRegistry } from "../src/core/connectors/providers.ts";
+import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { testProvider } from "./helpers/connector-test-provider.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 import { fakeClock, replay } from "./github-recorded.ts";
 
@@ -146,6 +151,44 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
 
       const bySource = await handler({ daemon: "connector_sync", sourceId: "conn-job", window: "w" }, { job });
       expect(bySource).toMatchObject({ source_id: "conn-job", accounts: [{ account_id: row.id }] });
+    } finally { await db.close(); }
+  });
+
+  it("skips an account whose provider has no sync adapter and still syncs the source's other accounts", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: "conn-job", kind: "other", pathPrefix: "test/job/" });
+      const row = await createAccount(e, { sourceId: "conn-job", provider: "test", services: ["items"], principalRef: "admin:test", accountLabel: "job@test" });
+      const noSync = await createAccount(e, { sourceId: "conn-job", provider: "nosync", services: ["items"], principalRef: "admin:test", accountLabel: "plain@test" });
+      // The real runtime decides whether a provider can sync; this one is registered without an adapter.
+      const providers = new ProviderRegistry();
+      providers.register(testProvider("nosync"));
+      const real = connectorRuntime(db.storage, { kek: kekFromBytes(randomBytes(32)), providers, env: ON });
+      const stub = runtime(account({ id: row.id }));
+      const synced = account({ id: row.id });
+      const skipped = account({ id: noSync.id, provider: "nosync", accountLabel: "plain@test" });
+      registerConnectorSync(db.storage, {
+        ...stub,
+        runnableAccounts: async () => [skipped, synced],
+        depsFor: (a) => (a.provider === "nosync" ? real.depsFor(a) : stub.depsFor(a)),
+      });
+      await e.query(`INSERT INTO daemon_controls (daemon, source_id, enabled) VALUES ('connector_sync', '*', true)`);
+      const warnings: string[] = [];
+      const warn = spyOn(console, "warn").mockImplementation((...a: unknown[]) => void warnings.push(a.map(String).join(" ")));
+      let out: unknown;
+      try {
+        out = await getHandler(CONNECTOR_SYNC_JOB_KIND)!({ daemon: "connector_sync", sourceId: "conn-job", window: "w" }, { job: { id: "j" } as JobRow });
+      } finally { warn.mockRestore(); }
+      expect(out).toMatchObject({
+        source_id: "conn-job",
+        accounts: [
+          { account_id: noSync.id, status: "skipped", stop_reason: "provider_cannot_sync" },
+          { account_id: row.id, status: "success" },
+        ],
+      });
+      expect(warnings.some(w => w.includes(noSync.id) && w.includes("nosync"))).toBe(true);
+      expect((await getPage(db.storage, "test/job/j1"))?.markdown_body).toContain("Written by the job.");
     } finally { await db.close(); }
   });
 });

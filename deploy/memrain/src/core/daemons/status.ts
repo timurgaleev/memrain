@@ -13,6 +13,7 @@ import {
   readControls,
   resolveControl,
   resumeDaemon,
+  setDaemonEnabled,
   type DaemonControlRow,
 } from "./controls.ts";
 import { CronError, assertTimeZone, nextFire, parseCron, windowKey } from "./cron.ts";
@@ -27,6 +28,8 @@ export interface PauseInfo {
 
 export interface DaemonSourceStatus {
   source_id: string;
+  /** This source's own switch; null follows the daemon-wide one. */
+  enabled: boolean | null;
   paused: PauseInfo | null;
   last_window: string | null;
   last_run_at: string | null;
@@ -104,6 +107,7 @@ export async function daemonsStatus(engine: Engine, env: NodeJS.ProcessEnv = pro
       consecutive_failures: wide?.consecutive_failures ?? 0,
       sources: rows.filter(r => r.daemon === spec.name && r.source_id !== ALL).map(r => ({
         source_id: r.source_id,
+        enabled: r.enabled,
         paused: pauseOf(r),
         last_window: r.last_window,
         last_run_at: r.last_run_at,
@@ -138,11 +142,16 @@ export interface ControlArgs {
   reason?: unknown;
 }
 
-/** Pause or resume. `all` (or `*`) as the daemon means every daemon. */
+const ACTIONS = ["pause", "resume", "enable", "disable"] as const;
+
+/**
+ * Pause, resume, enable or disable. `all` (or `*`) as the daemon means every
+ * daemon for a pause or resume; enabling or disabling needs a named daemon.
+ */
 export async function controlDaemon(engine: Engine, args: ControlArgs, by: string): Promise<{ ok: true; action: string; daemon: string; source_id: string }> {
   const action = args.action;
-  if (action !== "pause" && action !== "resume") {
-    throw new OperationError("invalid_params", "daemons: `action` must be pause or resume", "Pass action: \"pause\" or \"resume\".");
+  if (typeof action !== "string" || !(ACTIONS as readonly string[]).includes(action)) {
+    throw new OperationError("invalid_params", "daemons: `action` must be pause, resume, enable or disable", "Pass action: \"pause\", \"resume\", \"enable\" or \"disable\".");
   }
   const raw = typeof args.daemon === "string" ? args.daemon.trim() : "";
   const daemon = raw === "all" ? ALL : raw;
@@ -152,6 +161,9 @@ export async function controlDaemon(engine: Engine, args: ControlArgs, by: strin
       `daemons: unknown daemon '${raw}'`,
       `Pass one of: all, ${listDaemons().map(d => d.name).join(", ")}.`,
     );
+  }
+  if (daemon === ALL && (action === "enable" || action === "disable")) {
+    throw new OperationError("invalid_params", `daemons: ${action} needs a named daemon`, "Name the daemon to switch; `all` is only for pause and resume.");
   }
   let sourceId: string | undefined;
   if (args.source_id !== undefined && args.source_id !== null) {
@@ -166,8 +178,10 @@ export async function controlDaemon(engine: Engine, args: ControlArgs, by: strin
   const target = { daemon, by, ...(sourceId ? { sourceId } : {}) };
   if (action === "pause") {
     await pauseDaemon(engine, { ...target, ...(typeof args.reason === "string" ? { reason: args.reason.slice(0, MAX_REASON) } : {}) });
-  } else {
+  } else if (action === "resume") {
     await resumeDaemon(engine, target);
+  } else {
+    await setDaemonEnabled(engine, { ...target, enabled: action === "enable" });
   }
   return { ok: true, action, daemon: daemon === ALL ? "all" : daemon, source_id: sourceId ?? ALL };
 }

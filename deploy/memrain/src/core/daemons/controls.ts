@@ -146,6 +146,21 @@ export async function resumeDaemon(engine: Engine, t: ControlTarget): Promise<vo
   audit({ action: "resume", daemon: t.daemon, source_id: t.sourceId ?? ALL, by: t.by });
 }
 
+/**
+ * Switch a daemon on or off for every source, or for one source, which
+ * overrides the daemon-wide switch there. Unlike a pause it is the daemon's
+ * configured state, not an interruption: resume does not lift it.
+ */
+export async function setDaemonEnabled(engine: Engine, t: ControlTarget & { enabled: boolean }): Promise<void> {
+  await engine.query(
+    `INSERT INTO daemon_controls (daemon, source_id, enabled, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (daemon, source_id) DO UPDATE SET enabled = $3, updated_at = NOW()`,
+    [t.daemon, t.sourceId ?? ALL, t.enabled],
+  );
+  audit({ action: t.enabled ? "enable" : "disable", daemon: t.daemon, source_id: t.sourceId ?? ALL, by: t.by });
+}
+
 /** Pause after repeated failures. True only for the call that paused it. */
 export async function autoPause(engine: Engine, daemon: string, sourceId: string, failures: number): Promise<boolean> {
   const r = await engine.query<{ daemon: string }>(
