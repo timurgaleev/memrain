@@ -68,7 +68,7 @@ describe("GET /admin/api/notifications", () => {
     expect(body.webhook.state).toBe("off");
     expect(body.notifications).toHaveLength(1);
     expect(body.notifications[0]).toMatchObject({ kind: "needs_reconnect", ref: ACCOUNT, source_id: "acme" });
-    expect(body.notifications[0]!.hint.length).toBeGreaterThan(0);
+    expect(body.notifications[0]!.hint).toContain("Connections page");
     const text = JSON.stringify(body);
     expect(text).not.toContain("invalid_grant");
     expect(text).not.toContain("owner@example.test");

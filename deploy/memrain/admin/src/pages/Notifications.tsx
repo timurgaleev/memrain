@@ -4,7 +4,8 @@ import { useAsync } from "../hooks.ts";
 import { Section } from "../components/Tile.tsx";
 import { PageIntro } from "../components/PageIntro.tsx";
 import { fmtAgo } from "../lib/format.ts";
-import { kindLabel, linkedNotificationId } from "../lib/notifications.ts";
+import { actionPage, kindLabel, linkedNotificationId } from "../lib/notifications.ts";
+import { buildHash } from "../lib/route.ts";
 import type { NotificationList } from "../admin-types.ts";
 
 const WEBHOOK_COPY: Record<NotificationList["webhook"]["state"], string> = {
@@ -12,6 +13,8 @@ const WEBHOOK_COPY: Record<NotificationList["webhook"]["state"], string> = {
   refused: "Webhook set but refused; memrain doctor (notifications) says why.",
   on: "Webhook on: each new notification is also sent, as a signed pointer, to the configured URL.",
 };
+
+const pageTitle = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
 
 export function NotificationsPage({ param, onChange }: { param: string | null; onChange: () => void }) {
   const [all, setAll] = useState(false);
@@ -79,7 +82,12 @@ export function NotificationsPage({ param, onChange }: { param: string | null; o
                             {fmtAgo(n.reopened_at ?? n.created_at, now)}
                             {n.resolved_at !== null && <div className="muted">resolved {fmtAgo(n.resolved_at, now)}</div>}
                           </td>
-                          <td>{n.hint}</td>
+                          <td>
+                            {n.hint}
+                            {n.resolved_at === null && actionPage(n.kind) !== null && (
+                              <div><a href={buildHash({ name: actionPage(n.kind)!, param: null })}>Open {pageTitle(actionPage(n.kind)!)}</a></div>
+                            )}
+                          </td>
                           <td>
                             {n.read_at === null && n.resolved_at === null && (
                               <button className="btn-link" onClick={() => markRead([n.id])}>Mark read</button>

@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { buildHash, parseHash } from "../admin/src/lib/route.ts";
-import { badgeText, kindLabel, linkedNotificationId } from "../admin/src/lib/notifications.ts";
+import { actionPage, badgeText, kindLabel, linkedNotificationId } from "../admin/src/lib/notifications.ts";
 import { NOTIFICATION_KINDS, notificationLink } from "../src/core/notifications/store.ts";
 
 describe("notifications route", () => {
@@ -43,5 +43,24 @@ describe("kindLabel", () => {
 
   it("falls back to the raw kind for one it does not know", () => {
     expect(kindLabel("something_new")).toBe("something_new");
+  });
+});
+
+describe("actionPage", () => {
+  it("sends each kind to the admin page where its action lives", () => {
+    expect(actionPage("needs_reconnect")).toBe("connections");
+    expect(actionPage("deletions_held")).toBe("connections");
+    expect(actionPage("items_held")).toBe("connections");
+    expect(actionPage("write_gate_hold")).toBe("approvals");
+    expect(actionPage("spend_path_paused")).toBe("autonomy");
+    expect(actionPage("daemon_auto_paused")).toBe("autonomy");
+    for (const k of NOTIFICATION_KINDS) {
+      const page = actionPage(k)!;
+      expect(parseHash(buildHash({ name: page, param: null })).name).toBe(page);
+    }
+  });
+
+  it("has no page for a kind it does not know", () => {
+    expect(actionPage("something_new")).toBeNull();
   });
 });

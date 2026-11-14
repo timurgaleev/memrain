@@ -1,6 +1,8 @@
-// Owner notifications in the panel: the sidebar badge, the kind labels and
-// the id a `#notifications/<id>` link points at. Kept free of DOM and React so
-// the root test runner can load it.
+// Owner notifications in the panel: the sidebar badge, the kind labels, the
+// page where each kind is acted on and the id a `#notifications/<id>` link
+// points at. Kept free of DOM and React so the root test runner can load it.
+
+import type { RouteName } from "./route.ts";
 
 const LABELS: Record<string, string> = {
   needs_reconnect: "Connector needs a reconnect",
@@ -13,6 +15,20 @@ const LABELS: Record<string, string> = {
 
 export function kindLabel(kind: string): string {
   return LABELS[kind] ?? kind;
+}
+
+const ACTION_PAGES: Record<string, RouteName> = {
+  needs_reconnect: "connections",
+  deletions_held: "connections",
+  items_held: "connections",
+  spend_path_paused: "autonomy",
+  daemon_auto_paused: "autonomy",
+  write_gate_hold: "approvals",
+};
+
+/** The admin page that holds the action for a kind: reconnect, confirm or retry, resume, approve. */
+export function actionPage(kind: string): RouteName | null {
+  return Object.hasOwn(ACTION_PAGES, kind) ? ACTION_PAGES[kind]! : null;
 }
 
 /** Unread open notifications for the sidebar badge; empty when there are none. */

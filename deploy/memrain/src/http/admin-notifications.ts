@@ -23,14 +23,14 @@ import { loadWebhookConfig } from "../core/notifications/webhook.ts";
 const MAX_IDS = 500;
 const MAX_BODY = 16 * 1024;
 
-/** What the owner can do about each kind; the detail lives in `memrain doctor`. */
+/** What the owner can do about each kind, and where; the detail lives in `memrain doctor`. */
 const HINTS: Record<NotificationKind, string> = {
-  needs_reconnect: "The connector account lost its authorization. Reconnect it; stored data is kept and sync resumes from its cursor.",
-  deletions_held: "A sync run wants to delete more than the mass-delete guard allows. Confirm or reject the held deletions; nothing is deleted until then.",
-  items_held: "Some connector items failed repeatedly and are held. See memrain doctor (connector-health) for the cause, then retry them.",
-  spend_path_paused: "A paid call cost more than its hold, so its spend path is paused. Check the price table in memrain doctor, then run: memrain spend resume <path>.",
-  daemon_auto_paused: "The daemon failed five runs in a row and was paused. Check its failed jobs, then run: memrain daemons resume <daemon>.",
-  write_gate_hold: "Writes from this source read as instructions to an AI and are held out of search. Review them with: memrain write-gate list.",
+  needs_reconnect: "The connector account lost its authorization. Reconnect it on the Connections page; stored data is kept and sync resumes from its cursor.",
+  deletions_held: "A sync run wants to delete more than the mass-delete guard allows. Confirm the held deletions or keep the pages on the Connections page; nothing is deleted until then.",
+  items_held: "Some connector items failed repeatedly and are held. See memrain doctor (connector-health) for the cause, then retry them on the Connections page.",
+  spend_path_paused: "A paid call cost more than its hold, so its spend path is paused. Check the price table in memrain doctor, then resume the path on the Autonomy page (or: memrain spend resume <path>).",
+  daemon_auto_paused: "The daemon failed five runs in a row and was paused. Check its failed jobs, then resume it on the Autonomy page (or: memrain daemons resume <daemon>).",
+  write_gate_hold: "Writes from this source read as instructions to an AI and are held out of search. Approve or reject them on the Approvals page (or: memrain write-gate list).",
 };
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "cache-control": "no-store" } });
