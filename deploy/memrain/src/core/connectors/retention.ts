@@ -429,6 +429,8 @@ export async function applyProviderDeletions(
 // ---------------------------------------------------------------------------
 // Retention windows.
 
+export const MIN_ENV_RETENTION_DAYS = 30;
+
 export const DEFAULT_RETENTION_DAYS: Readonly<Record<ConnectorDataKind, number>> = {
   mail: 180,
   chat: 180,
@@ -439,7 +441,8 @@ export const DEFAULT_RETENTION_DAYS: Readonly<Record<ConnectorDataKind, number>>
 /**
  * Days a page of this kind is kept after its last activity: the account's own
  * setting, else MEMRAIN_CONNECTOR_RETENTION_DAYS_<KIND>, else the default.
- * `0` or `off` keeps pages indefinitely (null). A malformed value throws.
+ * `0` or `off` keeps pages indefinitely (null). A malformed value, or an
+ * environment window under MIN_ENV_RETENTION_DAYS, throws.
  */
 export function retentionDays(kind: ConnectorDataKind, accountDays?: number | null, env: NodeJS.ProcessEnv = process.env): number | null {
   if (accountDays !== undefined && accountDays !== null) {
@@ -452,6 +455,9 @@ export function retentionDays(kind: ConnectorDataKind, accountDays?: number | nu
   if (raw === "off" || raw === "0") return null;
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 0) throw new Error(`${name} must be a whole number of days, 0 or off`);
+  // The sweep hard-deletes, so a window this short is far likelier a typo
+  // (1 for 180) than a wish; refusing it fails the run loudly instead.
+  if (n < MIN_ENV_RETENTION_DAYS) throw new Error(`${name} must be at least ${MIN_ENV_RETENTION_DAYS} days, 0 or off`);
   return n;
 }
 

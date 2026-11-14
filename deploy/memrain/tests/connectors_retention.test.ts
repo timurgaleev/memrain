@@ -278,6 +278,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(retentionDays("mail", undefined, { MEMRAIN_CONNECTOR_RETENTION_DAYS_MAIL: "off" })).toBeNull();
     expect(retentionDays("mail", 7, { MEMRAIN_CONNECTOR_RETENTION_DAYS_MAIL: "30" })).toBe(7);
     expect(() => retentionDays("mail", undefined, { MEMRAIN_CONNECTOR_RETENTION_DAYS_MAIL: "soon" })).toThrow();
+    // A window under 30 days from the environment reads as a typo (1 for 180) and is refused, not applied.
+    for (const v of ["1", "18", "29"]) expect(() => retentionDays("mail", undefined, { MEMRAIN_CONNECTOR_RETENTION_DAYS_MAIL: v })).toThrow();
 
     const old = await ingest(mailPage("old", "oldcanary", OWNER, "2026-01-01T00:00:00.000Z"));
     const fresh = await ingest(mailPage("new", "freshcanary", OWNER, "2026-11-01T00:00:00.000Z"));
