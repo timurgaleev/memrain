@@ -55,7 +55,7 @@ export type KekLoad = { kek: Kek } | { kek: null; reason: string };
 function parseKey(raw: string, where: string): KekLoad {
   const text = raw.trim();
   if (text === "") return { kek: null, reason: `${where} is empty` };
-  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(text)) return { kek: null, reason: `${where} is not base64` };
+  if (!/^[\w+/-]+={0,2}$/.test(text)) return { kek: null, reason: `${where} is not base64` };
   const key = Buffer.from(text, "base64");
   if (key.length !== KEK_BYTES) return { kek: null, reason: `${where} must decode to ${KEK_BYTES} bytes` };
   return { kek: kekFromBytes(key) };
