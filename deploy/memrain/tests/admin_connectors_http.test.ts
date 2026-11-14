@@ -156,7 +156,8 @@ describe("connector routes behind handleAdminApi", () => {
       expect(res?.status).toBe(403);
       expect(await res?.json()).toMatchObject({ error: "connectors_disabled" });
       const st = await handleAdminApi(new Request(statusUrl.toString()), statusUrl, { ...base, requireAdmin: () => true });
-      expect(await st?.json()).toMatchObject({ enabled: false, providers: [] });
+      // The shipped providers are listed (no secrets in them) while nothing can connect.
+      expect(await st?.json()).toMatchObject({ enabled: false, accounts: [], providers: [{ id: "google", services: ["calendar"] }] });
     } finally {
       for (const [k, v] of saved) {
         if (v === undefined) delete process.env[k];

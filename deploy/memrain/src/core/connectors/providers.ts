@@ -13,6 +13,7 @@ import type { FetchFn } from "./client.ts";
 import type { SourceKind } from "../sources.ts";
 import type { SyncAccount, SyncAdapter } from "./sync-engine.ts";
 import { assertConnectorName } from "./accounts.ts";
+import { googleProvider } from "./google/provider.ts";
 
 export interface ProviderService {
   /** Read-only scopes this service needs. */
@@ -25,6 +26,12 @@ export interface RevokeContext {
   fetch: FetchFn;
   token: string;
   client: { clientId: string; clientSecret: string };
+}
+
+/** What a sync run hands its adapter: the run's environment and clock. */
+export interface AdapterContext {
+  env: NodeJS.ProcessEnv;
+  now?: () => number;
 }
 
 export interface ConnectorProvider {
@@ -52,7 +59,7 @@ export interface ConnectorProvider {
   sync?: {
     /** The one https origin the sync client may call. */
     apiOrigin: string;
-    adapter: (account: SyncAccount) => SyncAdapter;
+    adapter: (account: SyncAccount, ctx: AdapterContext) => SyncAdapter;
   };
 }
 
@@ -94,5 +101,7 @@ export class ProviderRegistry {
 
 /** Providers that ship with Memrain. Each arrives with its connector. */
 export function builtinProviders(): ProviderRegistry {
-  return new ProviderRegistry();
+  const registry = new ProviderRegistry();
+  registry.register(googleProvider());
+  return registry;
 }
