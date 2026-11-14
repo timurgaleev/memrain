@@ -175,7 +175,7 @@ describe("google provider", () => {
 
 function syncAccount(config: Record<string, unknown>, services: string[] = ["calendar"]): SyncAccount {
   return {
-    id: "00000000-0000-4000-8000-000000000001", sourceId: SOURCE, provider: "google", enabled: true, status: "active",
+    id: "00000000-0000-4000-8000-00000000000a", sourceId: SOURCE, provider: "google", enabled: true, status: "active",
     itemCapDaily: 5000, spendCapUsdDaily: 1, accountLabel: OWNER, services, config,
   };
 }

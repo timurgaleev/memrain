@@ -9,7 +9,7 @@ import type { Engine } from "../src/core/engine/interface.ts";
 
 setDefaultTimeout(60000);
 
-const ACCOUNT = "66666666-6666-4666-8666-666666666666";
+const ACCOUNT = "66666666-6666-4666-8666-66666666666a";
 const SECRET = "y".repeat(40);
 const WEBHOOK = { MEMRAIN_NOTIFY_WEBHOOK_URL: "https://hooks.example.test/x", MEMRAIN_NOTIFY_WEBHOOK_SECRET: SECRET };
 const count = async (e: Engine) => (await e.query<{ n: number }>(`SELECT count(*)::int AS n FROM notifications`)).rows[0]!.n;

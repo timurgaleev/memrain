@@ -135,7 +135,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await off.json()).toEqual({ ok: true, enabled: false });
       expect((await getAccount(e, account.id))!.enabled).toBe(false);
 
-      const missing = await call(post("/admin/api/connectors/accounts/00000000-0000-4000-8000-000000000000/enable"), deps(db.storage));
+      const missing = await call(post("/admin/api/connectors/accounts/00000000-0000-4000-8000-00000000000a/enable"), deps(db.storage));
       expect(missing.status).toBe(404);
       expect(await missing.json()).toEqual({ error: "account_not_found" });
       const malformed = await call(post("/admin/api/connectors/accounts/not-a-uuid/enable"), deps(db.storage));

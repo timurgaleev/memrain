@@ -28,7 +28,7 @@ setDefaultTimeout(60000);
 
 const SECRET = "s".repeat(24) + "0123456789abcdef";
 const URL_OK = "https://hooks.example.test/memrain";
-const ACCOUNT = "33333333-3333-4333-8333-333333333333";
+const ACCOUNT = "33333333-3333-4333-8333-33333333333a";
 const ALLOWED_KEYS = ["created_at", "id", "kind", "link", "version"];
 
 let dir: string;
@@ -243,7 +243,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     try {
       const now = new Date("2026-11-14T10:00:00Z");
       await seedPending(e, now);
-      const second = "66666666-6666-4666-8666-666666666666";
+      const second = "66666666-6666-4666-8666-66666666666a";
       await e.query(
         `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES ($1, 'acme', 'test', 'admin:operator', 'second@example.test')`,
         [second],
@@ -275,7 +275,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     try {
       const now = new Date("2026-11-14T10:00:00Z");
       await seedPending(e, now);
-      const second = "77777777-7777-4777-8777-777777777777";
+      const second = "77777777-7777-4777-8777-77777777777a";
       await e.query(
         `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES ($1, 'acme', 'test', 'admin:operator', 'third@example.test')`,
         [second],

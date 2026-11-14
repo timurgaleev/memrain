@@ -10,7 +10,7 @@ import { registerSource } from "../src/core/sources.ts";
 import { openNotice } from "../src/core/connectors/sync-store.ts";
 
 const BOOT = "boot-secret";
-const ACCOUNT = "55555555-5555-4555-8555-555555555555";
+const ACCOUNT = "55555555-5555-4555-8555-55555555555a";
 let tmp: string;
 let storage: Storage;
 let auth: ReturnType<typeof createAdminAuth>;

@@ -21,8 +21,8 @@ import type { Engine } from "../src/core/engine/interface.ts";
 
 setDefaultTimeout(60000);
 
-const ACCOUNT = "11111111-1111-4111-8111-111111111111";
-const OTHER_ACCOUNT = "22222222-2222-4222-8222-222222222222";
+const ACCOUNT = "11111111-1111-4111-8111-11111111111a";
+const OTHER_ACCOUNT = "22222222-2222-4222-8222-22222222222a";
 
 async function seedAccounts(e: Engine): Promise<void> {
   await registerSource(e, { id: "acme", kind: "other", pathPrefix: "acme/" });
