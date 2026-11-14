@@ -280,7 +280,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
-  it("mirrors a page again on the next run when its first mirror failed", async () => {
+  it("keeps the cursor before a page whose mirror into search failed, and mirrors it on the next run", async () => {
     const db = await open();
     const spy = spyOn(pageIndex, "mirrorPage");
     try {
@@ -288,16 +288,32 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       spy.mockResolvedValueOnce(false);
       const r1 = await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "m" }], "c1")]).deps);
       expect(r1.counts.mirror_failures).toBe(1);
+      expect(r1.status).toBe("partial");
+      expect(await readCursor(db.storage.engine(), ACCOUNT_ID, STREAM)).toBeNull();
       expect(spy).toHaveBeenCalledTimes(1);
 
-      await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "m" }], "c1")]).deps);
+      // The cursor did not move, so the provider hands the item back; the
+      // page is unchanged by now, and is mirrored anyway.
+      const r2 = await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "m" }], "c1")]).deps);
+      expect(r2.status).toBe("success");
       expect(spy).toHaveBeenCalledTimes(2);
+      expect(await readCursor(db.storage.engine(), ACCOUNT_ID, STREAM)).toBe("c1");
       await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "m" }], "c1")]).deps);
       expect(spy).toHaveBeenCalledTimes(2);
     } finally {
       spy.mockRestore();
       await db.close();
     }
+  });
+
+  it("lets only one of two concurrent runs through even when both name the same worker", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      const deps = () => harness([wirePage([{ id: "a" }], "c1"), wirePage([{ id: "a" }], "c1")]).deps;
+      const [x, y] = await Promise.all([runConnectorSync(db.storage, account(), deps()), runConnectorSync(db.storage, account(), deps())]);
+      expect([x.stop_reason, y.stop_reason].filter((s) => s === "locked")).toHaveLength(1);
+    } finally { await db.close(); }
   });
 
   it("lets only one of two concurrent runs of an account in one process through", async () => {

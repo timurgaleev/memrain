@@ -27,7 +27,8 @@
  *     otherwise each is handed to the deletion handler one by one; with no
  *     handler wired they stay pending, and a page a live duplicate still
  *     points at is never handed over;
- *   - a page whose mirror into search failed is mirrored again next run;
+ *   - a page whose mirror into search failed is not settled: it counts as an
+ *     item failure, holds the cursor, and is mirrored again next run;
  *   - a credential the provider will not renew pauses the account
  *     (`markNeedsReconnect`), opens a notice and leaves every cursor where it
  *     was, so reconnecting resumes from the same place.
@@ -322,9 +323,9 @@ export async function runConnectorSync(storage: Storage, account: SyncAccount, d
   const spentUsd = async (): Promise<number> => daySpendUsd(engine, spendClient, new Date(now()));
   if (account.spendCapUsdDaily <= 0 || (await spentUsd()) >= account.spendCapUsdDaily) return skip("cap_reached", "partial");
 
-  // Per run, not per process: the worker runs jobs concurrently, and the lock
-  // lets its own holder back in.
-  const holder = deps.holder ?? `pid-${process.pid}-${crypto.randomUUID()}`;
+  // Unique per run, whatever worker name is given: the worker runs jobs
+  // concurrently, and the lock lets its own holder back in.
+  const holder = `${deps.holder ?? `pid-${process.pid}`}:${crypto.randomUUID()}`;
   const lockId = syncLockId(account.id);
   if (!(await acquireWorkerLock(engine, lockId, holder, RUN_LOCK_TTL_SEC))) return skip("locked");
   try {
@@ -537,10 +538,8 @@ class Run {
       accountId: this.account.id, externalId: item.externalId, version: item.version, pageSlug,
       contentHash, dedupeKey: item.dedupeKey ?? null, now: this.date(),
     });
-    const known = row !== null && sameVersion && row.fail_count === 0 && row.held_reason === null
-      && row.deleted_upstream_at === null && row.page_slug === item.slug;
-    // A null hash on a known item means its last mirror into search failed.
-    if (known && row?.content_hash != null) {
+    if (row !== null && sameVersion && row.fail_count === 0 && row.held_reason === null
+      && row.deleted_upstream_at === null && row.page_slug === item.slug) {
       await touchItem(this.engine, this.account.id, item.externalId, this.date());
       this.result.counts.pages_unchanged++;
       return null;
@@ -553,23 +552,29 @@ class Run {
         return null;
       }
     }
+    let hash: string | null;
     try {
-      const hash = await this.write(item, known);
-      await settle(item.slug, hash);
-      return null;
+      hash = await this.write(item);
     } catch (e) {
       if (!(e instanceof OperationError)) throw e;
       return { externalId: item.externalId, version: item.version, code: e.code, message: e.message, deterministic: isDeterministicRefusal(e) };
     }
+    // A page that is not searchable is not settled: the cursor stays before
+    // it, and the next run, finding the page unchanged, mirrors it again.
+    if (hash === null) {
+      return { externalId: item.externalId, version: item.version, code: "mirror_failed", message: "the page was written but its mirror into search failed", deterministic: false };
+    }
+    await settle(item.slug, hash);
+    return null;
   }
 
   /**
    * Write the page and mirror it into search. Returns the stored content hash,
-   * or null when the mirror failed, so the next run mirrors it again even
-   * though the page itself is unchanged by then. `remirror` mirrors an
-   * unchanged page whose earlier mirror failed.
+   * or null when the mirror failed. An unchanged page is mirrored too: an item
+   * reaches here only when it is not already settled on this version, which
+   * includes a page whose earlier mirror failed.
    */
-  private async write(item: RenderedSyncItem, remirror: boolean): Promise<string | null> {
+  private async write(item: RenderedSyncItem): Promise<string | null> {
     // A live connector token must never reach a page, whatever the scan disposition.
     const findings: SecretFinding[] = [];
     const body = this.tokens.size > 0 ? sweepEchoes(item.body, this.tokens, findings) : item.body;
@@ -588,7 +593,6 @@ class Run {
     const stored = put.outside_body ?? body;
     if (!put.changed && !put.created) {
       this.result.counts.pages_unchanged++;
-      if (!remirror) return put.content_hash;
     } else {
       this.result.counts.pages_written++;
       this.changed.push({ slug: item.slug, body: stored });
