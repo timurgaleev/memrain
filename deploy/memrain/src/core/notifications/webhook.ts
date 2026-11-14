@@ -233,6 +233,11 @@ export async function deliverPendingWebhooks(engine: Engine, config: WebhookConf
   const result: DeliveryResult = { delivered: 0, retried: 0, failed: 0 };
   for (const row of claimed) {
     const id = Number(row.id);
+    // An earlier POST in this batch can take seconds; a sync may have resolved
+    // this one meanwhile, and a resolved problem is not worth a message.
+    // scope: operator-only the operator's webhook outbox covers every source
+    const still = await engine.query(`SELECT 1 FROM notifications WHERE id = $1 AND webhook_state = 'pending'`, [id]);
+    if (still.rows.length === 0) continue;
     const body = JSON.stringify({
       version: 1,
       id: String(id),

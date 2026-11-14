@@ -269,6 +269,36 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("does not send a claimed notification whose problem resolves while the drain is busy", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      const now = new Date("2026-11-14T10:00:00Z");
+      await seedPending(e, now);
+      const second = "77777777-7777-4777-8777-777777777777";
+      await e.query(
+        `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES ($1, 'acme', 'test', 'admin:operator', 'third@example.test')`,
+        [second],
+      );
+      await openNotice(e, second, "needs_reconnect", "invalid_grant");
+      await syncNotifications(e, { webhook: true, now });
+      const rec = recorder([204]);
+      // While the first POST is in flight, the other account is reconnected and a sync resolves it.
+      const resolving: FetchFn = async (url, init) => {
+        if (rec.sent.length === 0) {
+          await resolveNotice(e, second, "needs_reconnect");
+          await syncNotifications(e, { webhook: true, now });
+        }
+        return rec.fetch(url, init);
+      };
+      const r = await deliverPendingWebhooks(e, config, { fetch: resolving, now });
+      expect(r.delivered).toBe(1);
+      expect(rec.sent.length).toBe(1);
+      const states = (await e.query<{ webhook_state: string }>(`SELECT webhook_state FROM notifications ORDER BY id`)).rows.map(x => x.webhook_state);
+      expect(states).toEqual(["delivered", "cancelled"]);
+    } finally { await db.close(); }
+  });
+
   it("two drains at once send each notification once", async () => {
     const db = await open();
     const e = db.storage.engine();
