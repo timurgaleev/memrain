@@ -78,6 +78,13 @@ export async function tryAcquireLease(engine: Engine, key: string, limit: number
   });
 }
 
+export async function renewLease(engine: Engine, id: string, ttlMs: number): Promise<void> {
+  await engine.query(
+    `UPDATE provider_leases SET expires_at = NOW() + $2 * INTERVAL '1 millisecond' WHERE id = $1`,
+    [id, ttlMs],
+  );
+}
+
 export async function releaseLease(engine: Engine, id: string): Promise<void> {
   await engine.query(`DELETE FROM provider_leases WHERE id = $1`, [id]);
 }
@@ -114,7 +121,7 @@ export async function withProviderLease<T>(
   const key = leaseKeyForModel(provider, model);
   const limit = parseLeaseLimits(env.MEMRAIN_PROVIDER_LEASES).get(key);
   if (limit === undefined) return fn();
-  const ttlMs = envMs(env.MEMRAIN_PROVIDER_LEASE_TTL_S, DEFAULT_TTL_MS / 1000) * 1000;
+  const ttlMs = Math.max(1, envMs(env.MEMRAIN_PROVIDER_LEASE_TTL_S, DEFAULT_TTL_MS / 1000)) * 1000;
   const deadline = Date.now() + (opts.waitMs ?? envMs(env.MEMRAIN_PROVIDER_LEASE_WAIT_MS, DEFAULT_WAIT_MS));
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
   let id: string | null = null;
@@ -129,10 +136,20 @@ export async function withProviderLease<T>(
     return fn();
   }
   if (!id) throw new ProviderLeaseBusy(key);
+  const leaseId = id;
+  // A call can outlive the TTL (a long reasoning call): renew every third of
+  // it so the slot stays counted until the call ends. Expiry only frees the
+  // slot of a holder that died and stopped renewing.
+  const renew = setInterval(() => {
+    renewLease(engine, leaseId, ttlMs).catch((e: unknown) =>
+      console.warn(`[leases] renewal of ${key} failed: ${e instanceof Error ? e.message : String(e)}`));
+  }, Math.max(100, Math.floor(ttlMs / 3)));
+  (renew as { unref?: () => void }).unref?.();
   try {
     return await fn();
   } finally {
-    await releaseLease(engine, id).catch((e: unknown) =>
+    clearInterval(renew);
+    await releaseLease(engine, leaseId).catch((e: unknown) =>
       console.warn(`[leases] release of ${key} failed (expires on its own): ${e instanceof Error ? e.message : String(e)}`));
   }
 }

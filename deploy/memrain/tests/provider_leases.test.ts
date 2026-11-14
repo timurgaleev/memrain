@@ -85,6 +85,21 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("a call that outlives the lease TTL keeps its slot", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    const env = { MEMRAIN_PROVIDER_LEASES: "bedrock:haiku=1", MEMRAIN_PROVIDER_LEASE_TTL_S: "1" };
+    try {
+      let second: string | null = "unset";
+      await withProviderLease(e, "bedrock", HAIKU, async () => {
+        await Bun.sleep(2500);
+        second = await tryAcquireLease(e, "bedrock:haiku", 1, OWNER);
+      }, { env, waitMs: 0 });
+      expect(second).toBeNull();
+      expect(await leaseRows(e)).toBe(0);
+    } finally { await db.close(); }
+  }, 20_000);
+
   it("trackedInvoke holds a lease for the call and refuses when none is free", async () => {
     const db = await open();
     const e = db.storage.engine();
