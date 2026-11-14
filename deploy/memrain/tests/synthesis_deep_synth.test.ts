@@ -14,6 +14,9 @@ import { runDeepSynthPhase } from "../src/core/synthesis/deep-synth.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
 import type { SearchHit } from "../src/core/search/hybrid.ts";
 import { BudgetTracker } from "../src/core/budget.ts";
+import { indexDocument } from "../src/core/indexer.ts";
+import { registerSource } from "../src/core/sources.ts";
+import { deterministicEmbed } from "./det-embed.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -56,6 +59,27 @@ const fakePages =
     hits as SearchHit[];
 
 describe("runDeepSynthPhase", () => {
+  it("leaves outside text out of the pages it gathers", async () => {
+    const embedFn = (t: string) => Promise.resolve(deterministicEmbed(t));
+    await registerSource(engine, { id: "mail", kind: "mailbox", pathPrefix: "/mail" });
+    await indexDocument(storage, { sourcePath: "mail://1", text: "# Mail\n\nThe warehouse moves to Leeds.", sourceId: "mail" }, { embedFn });
+    await indexDocument(storage, { sourcePath: "notes/plan.md", text: "# Plan\n\nThe warehouse moves to York." }, { embedFn });
+    const hits = (await engine.query<{ chunkId: string; documentId: string; sourcePath: string; content: string }>(
+      `SELECT c.id::text AS "chunkId", d.id AS "documentId", d.source_path AS "sourcePath", c.content
+         FROM chunks c JOIN documents d ON d.id = c.document_id ORDER BY d.source_path`,
+    )).rows.map(r => ({ ...r, title: null, score: 1, intent: "topic" }) as SearchHit);
+    expect(hits.map(h => h.sourcePath)).toEqual(["mail://1", "notes/plan.md"]);
+    const prompts: string[] = [];
+    const sonnet: SonnetFn = async (input) => {
+      prompts.push(JSON.stringify(input));
+      return { text: okResponse, modelId: "eu.anthropic.claude-sonnet-4-6", usage: { inputTokens: 100, outputTokens: 50 } };
+    };
+    const r = await runDeepSynthPhase(storage, { questions: ["Where does the warehouse move?"], sonnetFn: sonnet, pagesFn: async () => hits });
+    expect(r.syntheses[0]!.pagesGathered).toBe(1);
+    expect(prompts.join("\n")).toContain("York");
+    expect(prompts.join("\n")).not.toContain("Leeds");
+  });
+
   it("retains quote diagnostics from the shared think path", async () => {
     const result = await runDeepSynthPhase(storage, {
       questions: ["What is the project?"],

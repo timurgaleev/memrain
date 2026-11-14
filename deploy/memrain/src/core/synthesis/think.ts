@@ -45,7 +45,8 @@ import { isDiarySourcePath } from "../pages.ts";
 import { pageContentDate, questionDateWindow, resolveThinkTemporalContext } from "./think-temporal.ts";
 import { thinkQuoteVerifyEnabled, verifyQuotes, type QuoteCheck } from "./quote-verify.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
-import { frameForRead, markExternalChunks } from "../trust-frame.ts";
+import { frameForRead, markExternalChunks, readTrustTiers } from "../trust-frame.ts";
+import { meetsMinTrust, type TrustTier } from "../trust-tier.ts";
 
 export const THINK_PROMPT_VERSION = "v3-sonnet";
 
@@ -161,6 +162,12 @@ export interface ThinkOptions {
    * the diary fence on `search`.
    */
   fenceDiary?: boolean;
+  /**
+   * Drop pages below this trust tier (core/trust-tier.ts) from every page
+   * stream. Set by the background synthesis no reader asked for, so outside
+   * text never reaches a paid prompt on its own.
+   */
+  minTrust?: TrustTier;
   /** Only gather pages whose content date is >= this ISO date (temporal focus). */
   since?: string;
   /** Only gather pages whose content date is <= this ISO date. */
@@ -543,10 +550,12 @@ async function gatherPages(
   window?: { since?: string; until?: string },
   embedQuery?: (text: string) => Promise<number[]>,
   onDegraded?: OnGatherFailure,
+  minTrust?: TrustTier,
 ): Promise<SearchHit[]> {
   try {
     return await hybridSearch(storage, question, {
       k,
+      ...(minTrust ? { minTrust } : {}),
       onMeta: (meta) => { for (const reason of publicSearchMeta(meta).degraded) onDegraded?.(reason); },
       ...(embedQuery ? { embedQuery } : {}),
       ...(sourceIds !== undefined ? { sourceIds } : {}),
@@ -557,6 +566,30 @@ async function gatherPages(
     onDegraded?.("pages_failed");
     return [];
   }
+}
+
+/**
+ * The hits at or above `minTrust`. A graph hit is judged by its page, any
+ * other by its chunk; a hit the lookup cannot see (an injected retriever's)
+ * is kept, since the default retriever already applied the floor.
+ */
+async function keepMinTrust(
+  engine: Engine,
+  hits: SearchHit[],
+  minTrust: TrustTier | undefined,
+  sourceIds?: readonly string[],
+): Promise<SearchHit[]> {
+  if (minTrust === undefined || hits.length === 0) return hits;
+  const graphSlug = (h: SearchHit) => (typeof h.chunkId === "string" && h.chunkId.startsWith("graph:") ? h.chunkId.slice(6) : null);
+  const tiers = await readTrustTiers(engine, {
+    chunks: hits.filter(h => typeof h.chunkId === "string" && graphSlug(h) === null).map(h => h.chunkId),
+    pages: hits.map(graphSlug).filter((s): s is string => s !== null),
+  }, sourceIds);
+  return hits.filter((h) => {
+    const slug = graphSlug(h);
+    const tier = slug !== null ? tiers.pages.get(slug) : tiers.chunks.get(h.chunkId);
+    return tier === undefined || meetsMinTrust(tier, minTrust);
+  });
 }
 
 /**
@@ -1313,9 +1346,9 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   const windowFields = window ? { window_source: questionWindow ? "question" as const : "explicit" as const, window } : {};
   const fence = (hits: SearchHit[]): SearchHit[] =>
     opts.fenceDiary ? hits.filter((h) => !isDiarySourcePath(h.sourcePath)) : hits;
-  const rawPagesFn = opts.pagesFn ?? ((q, kk) => gatherPages(storage, q, kk, scopeIds, window, opts.embedQuery, diagnostics.note));
+  const rawPagesFn = opts.pagesFn ?? ((q, kk) => gatherPages(storage, q, kk, scopeIds, window, opts.embedQuery, diagnostics.note, opts.minTrust));
   const pagesFn = async (q: string, kk: number): Promise<SearchHit[]> =>
-    markExternalChunks(engine, fence(await rawPagesFn(q, kk)), scopeIds);
+    markExternalChunks(engine, await keepMinTrust(engine, fence(await rawPagesFn(q, kk)), opts.minTrust, scopeIds), scopeIds);
   const [hybridPages, takesKw, takesVec] = await Promise.all([
     pagesFn(question, k),
     gatherTakes(engine, question, maxTakes, scopeIds, diagnostics.note),
@@ -1347,9 +1380,9 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   // WITHOUT anchors (hermetic paths stay hermetic).
   let pages = hybridPages;
   if (anchors.length > 0) {
-    const graphPages = await markExternalChunks(engine, fence(await gatherGraphPages(
+    const graphPages = await markExternalChunks(engine, await keepMinTrust(engine, fence(await gatherGraphPages(
       storage, anchors, k, scopeIds, diagnostics.note, questionWindow?.since,
-    )), scopeIds);
+    )), opts.minTrust, scopeIds), scopeIds);
     if (graphPages.length > 0) pages = fusePageStreams(hybridPages, graphPages, Math.max(k, hybridPages.length));
   }
 

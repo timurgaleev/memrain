@@ -206,6 +206,9 @@ async function deepSynthRun(
         question,
         sonnetFn: recordingSonnet,
         modelId,
+        // No reader asked these questions: outside text (connector, GitHub,
+        // webhook pages) stays out of an unattended paid prompt.
+        minTrust: "agent",
         ...(opts.k !== undefined ? { k: opts.k } : {}),
         ...(opts.pagesFn ? { pagesFn: opts.pagesFn } : {}),
       });
