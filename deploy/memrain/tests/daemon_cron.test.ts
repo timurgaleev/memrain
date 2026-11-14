@@ -70,6 +70,17 @@ describe("cron windows in an IANA zone", () => {
       .toEqual(["2026-10-25T02:30@Europe/Berlin=2026-10-25T00:30:00.000Z"]);
   });
 
+  it("a gap time and a real time opening at the same instant are one window, always the same one", () => {
+    // 02:30 does not exist on 2026-03-29 and opens at 03:30 CEST, the instant
+    // 03:30 itself opens: one run at that instant, keyed by the earlier wall time.
+    const fires = firesBetween("30 2,3 * * *", BERLIN, "2026-03-28T23:00:00Z", "2026-03-29T23:00:00Z");
+    expect(fires).toEqual(["2026-03-29T02:30@Europe/Berlin=2026-03-29T01:30:00.000Z"]);
+    const cron = parseCron("30 2,3 * * *");
+    for (const now of ["2026-03-29T01:30:00Z", "2026-03-29T01:45:00Z", "2026-03-29T02:59:00Z"]) {
+      expect(windowKey(previousFire(cron, new Date(now), BERLIN)!, BERLIN)).toBe("2026-03-29T02:30@Europe/Berlin");
+    }
+  });
+
   it("*/15 gives four windows an hour", () => {
     expect(firesBetween("*/15 * * * *", "UTC", "2026-11-15T10:00:00Z", "2026-11-15T11:00:00Z")).toHaveLength(4);
   });

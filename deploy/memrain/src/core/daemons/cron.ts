@@ -12,7 +12,9 @@
  *     the gap ends (02:30 becomes 03:30 local);
  *   - a wall time repeated by a fall-back fires once, at its first occurrence.
  * The window key is the wall time plus the zone, so both cases yield exactly
- * one key per scheduled wall time.
+ * one key per scheduled wall time. When a shifted gap time lands on the same
+ * instant as a real one (02:30 and 03:30 on a spring-forward day), they are a
+ * single run at that instant, always keyed by the earlier wall time.
  */
 
 export class CronError extends Error {
