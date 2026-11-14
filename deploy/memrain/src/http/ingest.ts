@@ -595,7 +595,7 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
 
 const INGEST_TERMINAL_CODES: ReadonlySet<string> = new Set([
   "permission_denied", "insufficient_scope", "invalid_params", "secret_detected", "secret_rejected",
-  "quarantined", "page_quarantined", "page_shrink_refused",
+  "quarantined", "page_quarantined", "page_shrink_refused", "page_too_large",
 ]);
 
 /**

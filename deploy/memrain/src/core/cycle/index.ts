@@ -3,6 +3,8 @@
  * per-phase envelope. Phases are independent: one failing doesn't stop others.
  */
 import { type BatchScope, runInBatchScope } from "../llm/bedrock-errors.ts";
+import { analyzeQuietly } from "../planner-stats.ts";
+import { withLongHold } from "../pool-budget.ts";
 import type { Engine } from "../engine/interface.ts";
 import type { Storage } from "../storage.ts";
 import { type ProgressSink, NOOP_PROGRESS } from "../output/progress.ts";
@@ -823,7 +825,14 @@ export async function runCycleOnce(
       }
     : undefined;
   try {
-    return await runPhases(engine, options, progress, requested, startedAt, signal, fence);
+    const result = await withLongHold(() => runPhases(engine, options, progress, requested, startedAt, signal, fence));
+    // PGLite has no autovacuum; refresh the hot tables' statistics after the
+    // write phases (opt-in, MEMRAIN_PGLITE_AUTO_ANALYZE).
+    if (!signal.aborted) {
+      const stats = await analyzeQuietly(engine);
+      if (stats && "analyze_error" in stats) console.error(`cycle: planner statistics refresh failed: ${stats.analyze_error}`);
+    }
+    return result;
   } finally {
     outer?.removeEventListener("abort", follow);
   }

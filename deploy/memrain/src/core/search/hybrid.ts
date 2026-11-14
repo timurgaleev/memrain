@@ -21,6 +21,7 @@
  * Internal rewiring only.
  */
 import { hitProvenance, type SearchProvenance } from "./hit-provenance.ts";
+import { withSearchSlot } from "../pool-budget.ts";
 import type { Storage } from "../storage.ts";
 import { isOperationError } from "../operation-error.ts";
 import type { SourceKind } from "../sources.ts";
@@ -685,10 +686,19 @@ async function hydrateByIds(
   return out;
 }
 
-export async function hybridSearch(
+/** Bounded by MEMRAIN_SEARCH_MAX_CONCURRENT when set (core/pool-budget.ts). */
+export function hybridSearch(
   storage: Storage,
   query: string,
   optsOrK: SearchOptions | number = {},
+): Promise<SearchHit[]> {
+  return withSearchSlot(() => hybridSearchUnbounded(storage, query, optsOrK));
+}
+
+async function hybridSearchUnbounded(
+  storage: Storage,
+  query: string,
+  optsOrK: SearchOptions | number,
 ): Promise<SearchHit[]> {
   const opts: SearchOptions =
     typeof optsOrK === "number" ? { k: optsOrK } : optsOrK;

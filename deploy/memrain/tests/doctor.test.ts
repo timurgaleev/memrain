@@ -119,6 +119,7 @@ describe("doctor", () => {
       "cycle-phase-health",
       "dangling-slug-redirects",
       "db-backends",
+      "db-connection-budget",
       "document-id-drift",
       "duplicate-pages",
       "embed-backlog",
@@ -147,6 +148,7 @@ describe("doctor", () => {
       "pat-scopes-recorded",
       "person-name-duplicates",
       "pglite",
+      "planner-stats",
       "quarantined-pages",
       "queue-health",
       "redaction-markers",
@@ -160,6 +162,7 @@ describe("doctor", () => {
       "source-routing-health",
       "stale-locks",
       "stats",
+      "tenancy-isolation-config",
       "vault",
     ]);
     // The eval-trend check is informational (ok) and reports the not-yet-run

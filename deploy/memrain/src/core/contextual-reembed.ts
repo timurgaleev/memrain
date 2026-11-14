@@ -42,6 +42,7 @@
  * marked chunks (for a title/synopsis change or a chunker bump).
  */
 import { runInBatchScope } from "./llm/bedrock-errors.ts";
+import { withLongHold } from "./pool-budget.ts";
 import type { Engine } from "./engine/interface.ts";
 import type { Storage } from "./storage.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
@@ -243,7 +244,7 @@ export async function runContextualReembed(
   engine: Engine,
   opts: ContextualReembedOptions = {},
 ): Promise<ContextualReembedResult> {
-  return runInBatchScope({ stopped: false, circuit: true }, () => runContextualReembedBody(engine, opts));
+  return withLongHold(() => runInBatchScope({ stopped: false, circuit: true }, () => runContextualReembedBody(engine, opts)));
 }
 
 async function runContextualReembedBody(

@@ -793,6 +793,7 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_AUDIT_DIR` | built-in | Directory for the weekly audit file. | free |
 | `MEMRAIN_WASM_DIR` | built-in | Override path to the tree-sitter WASM parser directory. | free |
 | `MEMRAIN_INGEST_MAX_BYTES` | `1048576` (1 MiB) | Payload cap for `POST /ingest`, counted as the body streams. Allowlisted. | free |
+| `MEMRAIN_PAGE_MAX_BYTES` | unset (off) | Upper bound, in UTF-8 bytes, on a page body written through `page_put` / `page_append` / `page_edit`, the CLI and importers. Unset: no limit beyond the HTTP request cap. Set (for example `2097152` for 2 MiB): a write whose resulting body exceeds it fails with `page_too_large`; a page already over the limit can still change its title or truth. A malformed value fails the write rather than running uncapped. | free |
 | `MEMRAIN_REQUIRE_WRITE_PRECONDITION` | `off` | What MCP `page_put` does when it would overwrite an existing page without `expected_version` (and without `force`): `off` writes as before, `warn` writes and adds a warning, `refuse` (also `1`/`true`) fails with `precondition_required` and the current version. Creates always pass. With `warn`/`refuse`, a replacement under half of a live body larger than 32 KiB is also refused (`page_shrink_refused`, byte counts); use `page_edit` or explicit `allow_shrink:true`. The existing `force:true` and `off` bypasses remain. Allowlisted. | free |
 | `MEMRAIN_SECRET_SCAN_HIGH_ENTROPY` | on | Redacts high-entropy values assigned to secret-looking keys (`password=`, `api_key:` …). `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
 | `MEMRAIN_SECRET_SCAN_ECHO` | on | Also redacts bare repeats of a value already caught in the same write. `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
@@ -809,11 +810,16 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_DOCTOR_JOB_WEDGE_SEC` | `3600` | Seconds a running job may go without progress before `doctor` calls it wedged. | free |
 | `MEMRAIN_HNSW_ZOMBIE_SWEEP` | off (`=1` on) | Drops invalid (half-built) vector indexes at boot. Postgres only, best-effort. `doctor` reports them either way. Allowlisted. | free |
 | `MEMRAIN_PG_POOL_MAX` | `10` | Postgres connection pool size. | free |
+| `MEMRAIN_PG_POOL_RESERVE` | off (`=1` on) | Keeps one pool connection free: the maintenance cycle, the embed backfill and the contextual re-embed share at most `MEMRAIN_PG_POOL_MAX` − 1 slots, so `/health`, job claims and lock renewals never queue behind them. A job started inside another takes no second slot. | free |
+| `MEMRAIN_SEARCH_MAX_CONCURRENT` | unset (unbounded) | Upper bound on searches running at once in one process; further searches wait their turn. A malformed value is ignored. | free |
+| `MEMRAIN_PG_APPLICATION_NAME` | unset | `application_name` on every Postgres connection, shown in `pg_stat_activity` (for example `memrain:<tenant>:serve`). Characters outside `A-Z a-z 0-9 : . _ -` are dropped; at most 63. No personal data belongs here. | free |
+| `MEMRAIN_PG_POOL_PROCESSES` | `1` | How many processes open a `MEMRAIN_PG_POOL_MAX` pool against this database (serve, worker, other containers). Read only by doctor `db-connection-budget`, which warns when the planned pools or the open connections pass 80% of `max_connections` minus the superuser reserve. | free |
 | `MEMRAIN_PG_STATEMENT_TIMEOUT_MS` | `30000` | `statement_timeout` for the engine's sessions. Migrations use their own. | free |
 | `MEMRAIN_MIGRATION_STATEMENT_TIMEOUT` | `30min` | Statement timeout for one migration (`600s`, `30min`, milliseconds). Fail-loud on a malformed value. | free |
 | `MEMRAIN_MIGRATE_BACKOFF_MS` | unset (5s/15s/45s) | Replaces the migration retry backoff with one fixed delay. For tests. | free |
 | `MEMRAIN_BULK_MAX_RETRIES` | built-in | Retries for a transient database error in bulk work. `0` disables retries. | free |
 | `MEMRAIN_NO_DB_CONFIG` | off (`=1` on) | Skips the `memrain config set` overlay: stored `MEMRAIN_*` values are normally applied at boot where the real environment leaves a key unset. | free |
+| `MEMRAIN_PGLITE_AUTO_ANALYZE` | off (`=1` on) | PGLite only (it has no autovacuum). After each maintenance cycle and each `memrain import --apply`, runs `ANALYZE` on the hot tables (`pages`, `chunks`, `embeddings`, `entity_facts`, `links`) whose live row count has drifted from the planner estimate by more than max(500, 10%). Postgres is left to autovacuum; doctor `planner-stats` reports stale statistics on both engines. | free |
 | `MEMRAIN_PGLITE_NO_LOCK` | off (`=1` on) | Skips the lock file that stops two processes opening one PGLite directory. Only for a filesystem that cannot hold it. | free |
 | `MEMRAIN_TEST_PGLITE_TEMPLATE` | unset | Test-only. A new PGLite directory starts as a copy of this already-migrated one; `scripts/test-sharded.sh` sets it. Never set it in `.env` or compose. | free |
 

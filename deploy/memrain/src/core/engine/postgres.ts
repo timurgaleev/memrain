@@ -21,6 +21,8 @@ export interface PostgresEngineOptions {
   max?: number;
   /** Per-statement timeout, ms. Default 30s. */
   statementTimeoutMs?: number;
+  /** `application_name` shown in pg_stat_activity; postgres-js's default when unset. */
+  applicationName?: string;
 }
 
 export class PostgresEngine implements Engine {
@@ -49,6 +51,7 @@ export class PostgresEngine implements Engine {
         // Page writes hold a per-slug advisory lock for their transaction, so
         // that would freeze every write to the slug. End such a session.
         idle_in_transaction_session_timeout: 60_000,
+        ...(opts.applicationName ? { application_name: opts.applicationName } : {}),
       },
       // Suppress the default debug logger; we route via the cycle / progress
       // channels instead.
