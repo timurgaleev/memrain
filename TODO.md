@@ -43,6 +43,27 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
   Code callers without a visible starting definition retain the stricter
   identity boundary.
 
+## Follow-ups from the 1.16 batch
+
+- OAuth callers on `/mcp` are treated as non-public, so an unexpected error
+  returns its raw message to a shared-connector tenant instead of the generic
+  message with an incident id. Redact whenever the caller is not the operator.
+- `page_delete` over MCP hard-deletes the page's fence facts at soft-delete
+  time (`purgeFenceFactsForPage`), so restore and purge receipts cannot see
+  them. Retire instead of delete, or move the removal to purge.
+- A capture job id leaves out the requested slug: the same credential sending
+  the same bytes to two slugs writes only the first.
+- The default capture slug depends only on the content, so two tenants sending
+  identical bytes without a slug aim at the same page.
+- Restating a claim on a second page with the same writer collapses onto the
+  first page's fact row; purging the first page then retires the claim the
+  second page still states. Record per-page support for collapsed claims.
+- Curated skill text: `brain-ops` writes back on every message naming a person
+  or company without being asked; `briefing` calls `chronicle_last_seen`
+  without an entity; `capture` points plugin users at a CLI they do not have.
+- A single-value link target cannot hold two separate periods (A, then B, then
+  A again); the re-add is refused.
+
 ## Follow-ups from the admin charts batch (1.5)
 
 - `admin-timeseries.ts` top-agents query uses unqualified `agent_name` /

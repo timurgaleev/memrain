@@ -42,6 +42,11 @@ It also keeps facts and timelines, imports your ChatGPT and Claude history,
 keeps a version history for every page, and redacts API keys, tokens, private keys
 and database passwords before anything is stored.
 
+**You stay in control of what it remembers.** Correct a fact and the old one is
+marked superseded, not silently overwritten; forget one and it stops showing up
+in answers while the record of the change stays. Facts that contradict each other
+are flagged, so your agent does not repeat one of them as settled truth.
+
 ## See it work
 
 <div align="center">
