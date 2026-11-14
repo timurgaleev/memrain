@@ -5,7 +5,9 @@ import type { Engine } from "../src/core/engine/interface.ts";
 import { _resetHandlersForTesting, registerHandler } from "../src/core/jobs/handlers.ts";
 import { _resetDaemonsForTesting, registerDaemon, type DaemonSpec } from "../src/core/daemons/registry.ts";
 import { readControls, resumeDaemon, pauseDaemon } from "../src/core/daemons/controls.ts";
-import { DaemonScheduler, enqueueDueDaemons } from "../src/core/daemons/scheduler.ts";
+import { DaemonScheduler, enqueueDueDaemons, registerDaemonHandler } from "../src/core/daemons/scheduler.ts";
+import { Queue } from "../src/core/jobs/queue.ts";
+import { Worker } from "../src/core/jobs/worker.ts";
 
 const ON = { MEMRAIN_DAEMONS: "1" } as NodeJS.ProcessEnv;
 const BERLIN = "Europe/Berlin";
@@ -148,6 +150,30 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await e.query(`INSERT INTO daemon_controls (daemon, source_id, cron) VALUES ('other', '*', '61 * * * *')`);
       const r = await enqueueDueDaemons(e, MORNING, { env: ON });
       expect(Object.fromEntries(r.map(x => [x.daemon, x.outcome]))).toEqual({ other: "bad_schedule", probe: "bad_schedule" });
+    } finally { await db.close(); }
+  });
+
+  it("a run already queued when the daemon is paused is skipped, not run", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      const spec = probe({ kind: "daemon_probe_wrapped" });
+      registerDaemon(spec);
+      let ran = 0;
+      registerDaemonHandler(e, spec, async () => { ran++; return {}; }, { env: ON });
+      await enqueueDueDaemons(e, MORNING, { env: ON });
+      await pauseDaemon(e, { daemon: "probe", by: "cli" });
+      const queue = new Queue(e);
+      await new Worker(queue, { logger: () => {} }).drainOnce();
+      expect(ran).toBe(0);
+      const job = (await queue.get(WINDOW_ID))!;
+      expect(job.status).toBe("succeeded");
+      expect(job.result).toEqual({ skipped: "paused" });
+
+      await resumeDaemon(e, { daemon: "probe", by: "cli" });
+      await e.query(`UPDATE jobs SET status = 'pending' WHERE id = $1`, [WINDOW_ID]);
+      await new Worker(queue, { logger: () => {} }).drainOnce();
+      expect(ran).toBe(1);
     } finally { await db.close(); }
   });
 

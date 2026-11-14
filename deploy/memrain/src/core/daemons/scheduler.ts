@@ -16,13 +16,15 @@
 import type { Engine } from "../engine/interface.ts";
 import { brainDailyCapUsd } from "../budget.ts";
 import { tryAcquireDbLock, type DbLockHandle } from "../db-lock.ts";
-import { getHandler } from "../jobs/handlers.ts";
+import { getHandler, registerHandler } from "../jobs/handlers.ts";
 import { Queue } from "../jobs/queue.ts";
+import type { JobHandler } from "../jobs/types.ts";
 import {
   AUTO_PAUSE_AFTER_FAILURES,
   autoPause,
   envSwitches,
   readControls,
+  readControlsFor,
   recordWindow,
   resolveControl,
 } from "./controls.ts";
@@ -179,6 +181,29 @@ async function enqueueTarget(
   });
   await recordWindow(engine, spec.name, t.sourceId, window, failures);
   return { ...base, outcome: created ? "queued" : "already_queued", window, jobId: id };
+}
+
+/**
+ * Register the job handler of a scheduled daemon. A run queued before a pause
+ * or a kill switch is checked again when the worker claims it, and skipped:
+ * the job succeeds with `{ skipped }` and the handler never runs. A run that
+ * has already started finishes, or stops at its own checkpoints.
+ */
+export function registerDaemonHandler(
+  engine: Engine,
+  spec: DaemonSpec,
+  handler: JobHandler,
+  opts: { env?: NodeJS.ProcessEnv } = {},
+): void {
+  registerHandler(spec.kind, async (payload, ctx) => {
+    const switches = envSwitches(opts.env ?? process.env);
+    if (!switches.on || switches.disabled.has(spec.name)) return { skipped: "disabled" };
+    const sourceId = typeof payload.sourceId === "string" ? payload.sourceId : DEFAULT_DAEMON_SOURCE;
+    const ctl = resolveControl(await readControlsFor(engine, spec.name, sourceId), spec.name, sourceId);
+    if (ctl.pausedBy) return { skipped: "paused" };
+    if (!(ctl.enabled ?? spec.defaultEnabled)) return { skipped: "disabled" };
+    return handler(payload, ctx);
+  });
 }
 
 export type TickReport =
