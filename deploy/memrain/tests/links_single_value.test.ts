@@ -113,6 +113,37 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(overlapping(await intervals(p))).toBe(false);
   });
 
+  it("refuses new dates on a recorded target that would overlap another value", async () => {
+    const p = await person();
+    await works(p, "orgs/acme");
+    await works(p, "orgs/globex");
+    expect(await refusal(works(p, "orgs/acme", "2024-01-01"))).toBe("link_interval_conflict");
+    expect(await intervals(p)).toEqual([
+      { target_slug: "orgs/acme", valid_from: null, valid_until: null },
+      { target_slug: "orgs/globex", valid_from: null, valid_until: null },
+    ]);
+  });
+
+  it("refuses a second period for a target that already has one (A, B, A)", async () => {
+    const p = await person();
+    await works(p, "orgs/acme", "2020-01-01");
+    await works(p, "orgs/globex", "2022-01-01");
+    const before = await intervals(p);
+    expect(await refusal(works(p, "orgs/acme", "2024-01-01"))).toBe("link_interval_conflict");
+    expect(await intervals(p)).toEqual(before);
+  });
+
+  it("still lets the recorded target fill its own open end", async () => {
+    const p = await person();
+    await works(p, "orgs/hooli", "2015-01-01", "2016-01-01");
+    await works(p, "orgs/acme", "2020-01-01");
+    await works(p, "orgs/acme", "2020-01-01", "2023-01-01");
+    expect(await intervals(p)).toEqual([
+      { target_slug: "orgs/hooli", valid_from: "2015-01-01", valid_until: "2016-01-01" },
+      { target_slug: "orgs/acme", valid_from: "2020-01-01", valid_until: "2023-01-01" },
+    ]);
+  });
+
   it("ignores rows written by derived writers", async () => {
     const p = await person();
     await db.storage.engine().query(

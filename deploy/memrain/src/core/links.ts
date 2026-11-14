@@ -404,8 +404,26 @@ export async function addLink(
          FROM links WHERE source_slug = $1 AND type = $2 AND source_id = $3 AND link_source = 'manual'`,
       [input.source_slug, type, owner],
     );
-    // Re-adding the recorded target keeps the idempotent validity rules.
-    if (rows.some((r) => r.target_slug === target)) return write(tx, validUntil);
+    // Re-adding the recorded target keeps the idempotent validity rules. New
+    // dates on it must still fit around the other targets: one row per target
+    // holds one period, so an overlap here is refused, never closed.
+    const mine = rows.find((r) => r.target_slug === target);
+    if (mine) {
+      const changed = (validFrom !== null && validFrom !== mine.valid_from)
+        || (validUntil !== null && validUntil !== mine.valid_until);
+      if (!changed) return write(tx, validUntil);
+      const others = rows.filter((r) => r !== mine);
+      const from = validFrom ?? mine.valid_from;
+      const plan = from === null
+        ? (others.some((r) => overlaps(r, { valid_from: null, valid_until: validUntil })) ? null : { until: validUntil })
+        : planSingleValue(others, from, validUntil);
+      if (plan === null || plan.close !== undefined) {
+        throw new OperationError("link_interval_conflict",
+          `${type} for ${input.source_slug} already records ${target} for one period, and the new dates overlap another value`,
+          "List the recorded intervals with get_links; a target holds one period, so pick dates that fit it or link a different target.");
+      }
+      return write(tx, plan.until);
+    }
     // An undated value would span every recorded interval. Undated-only
     // histories keep the old behaviour; once dates exist, a start is required.
     if (validFrom === null) {
