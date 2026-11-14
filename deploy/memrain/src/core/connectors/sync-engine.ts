@@ -190,9 +190,10 @@ export interface SyncDeps {
    */
   onUpstreamDelete?(storage: Storage, item: UpstreamDeletion): Promise<void>;
   /**
-   * Called once per stored item that carries `enrich`, after the run's
-   * wikilink sync (which replaces a page's wanted rows wholesale). A
-   * PageNotFoundError is skipped: the page went away in the same run.
+   * Called once per stored item that carries `enrich`, after its page's
+   * wikilink sync (which replaces a page's wanted rows wholesale) and before
+   * the page's checkpoint commits. A PageNotFoundError is skipped; any other
+   * failure marks the item as failing, so the next run enriches it again.
    */
   onItemWritten?(storage: Storage, item: RenderedSyncItem & { enrich: ItemEnrichment }): Promise<void>;
   embedFn?: EmbedFn;
@@ -413,6 +414,9 @@ async function needsReconnect(
 class Run {
   private readonly changed: Array<{ slug: string; body: string }> = [];
   private readonly written: Array<RenderedSyncItem & { enrich: ItemEnrichment }> = [];
+  /** How many of `changed` and `written` linkStored has handled. */
+  private linkedPages = 0;
+  private enrichedItems = 0;
   private itemsThisRun = 0;
   private fetchStopped = false;
 
@@ -446,10 +450,8 @@ class Run {
     if (this.result.stop_reason !== "needs_reconnect" && this.result.stop_reason !== "forbidden") {
       await this.settleDeletions();
     }
-    for (const page of this.changed) {
-      await syncWikilinksForPage(this.storage, page.slug, page.body, this.account.sourceId);
-    }
-    await this.enrichWritten();
+    // What pages that never reached a checkpoint stored; they are read again next run.
+    await this.linkStored();
     await this.updateHeldNotice();
     this.finishStatus();
     // A clean run proves the credential works again.
@@ -483,6 +485,7 @@ class Run {
       const settled = await this.processPage(res.items);
       this.result.counts.deletions_seen += await markDeletesPending(this.engine, this.account.id, res.deletions ?? [], this.date());
       if (!settled) return;
+      if (!(await this.linkStored())) return;
       // Before the cursor moves past the relisting: if this fails, the next
       // run reads the last page again and reconciles then.
       if (res.done && res.reconcile !== undefined) {
@@ -622,16 +625,40 @@ class Run {
     return null;
   }
 
-  private async enrichWritten(): Promise<void> {
+  /**
+   * Sync the wikilinks of the pages written since the last call, then enrich
+   * their items (after the wikilinks, which replace a page's wanted rows
+   * wholesale). Runs before a page's checkpoint commits: an item whose
+   * enrichment fails is recorded as failing, so it is not settled and the
+   * next run, reading that page again, writes and enriches it again. False
+   * when such an item blocks the checkpoint.
+   */
+  private async linkStored(): Promise<boolean> {
+    for (; this.linkedPages < this.changed.length; this.linkedPages++) {
+      const page = this.changed[this.linkedPages]!;
+      await syncWikilinksForPage(this.storage, page.slug, page.body, this.account.sourceId);
+    }
     const hook = this.deps.onItemWritten;
-    if (hook === undefined) return;
-    for (const item of this.written) {
+    let blocking = 0;
+    while (this.enrichedItems < this.written.length) {
+      const item = this.written[this.enrichedItems++]!;
+      if (hook === undefined) continue;
       try {
         await hook(this.storage, item);
       } catch (e) {
-        if (!(e instanceof PageNotFoundError)) throw e;
+        if (e instanceof PageNotFoundError) continue;
+        const outcome = await recordItemFailure(this.engine, {
+          accountId: this.account.id, externalId: item.externalId, version: item.version, code: "enrich_failed",
+          message: `linking the stored page failed (${e instanceof Error ? e.name : "error"})`, now: this.date(),
+        });
+        if (!(e instanceof OperationError)) throw e;
+        this.result.counts.items_failed++;
+        if (outcome.held) this.result.counts.items_held++;
+        else blocking++;
       }
     }
+    if (blocking > 0) this.stop("items_failed");
+    return blocking === 0;
   }
 
   /**

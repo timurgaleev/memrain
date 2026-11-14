@@ -479,6 +479,44 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("links people and the chronicle before the cursor moves, so a failed link is retried", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const account = await connect(db.storage, world);
+      await putPage(db.storage, { slug: "people/ana-lee", markdown_body: "Ana.", compiled_truth: { aliases: ["ana@example.net"] } });
+      let failOnce = true;
+      const failing = new Proxy(e, {
+        get(target, prop, receiver) {
+          if (prop !== "query") return Reflect.get(target, prop, receiver);
+          return async (sql: string, params?: unknown[]) => {
+            if (failOnce && sql.includes("DELETE FROM timeline_events") && sql.includes("source_chunk_id")) {
+              failOnce = false;
+              throw new Error("connection reset");
+            }
+            return target.query(sql, params);
+          };
+        },
+      });
+      const flaky = new Proxy(db.storage, {
+        get(target, prop, receiver) {
+          if (prop === "engine") return () => failing;
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      await expect(run(flaky, world, account.id)).rejects.toThrow("connection reset");
+      expect(await storedToken(e, account.id, "primary")).toBeNull();
+
+      const result = await run(db.storage, world, account.id, ENV, T0 + 60_000);
+      expect(result.status).toBe("success");
+      const slug = pageSlug("e1single0001@google.com");
+      expect((await e.query(`SELECT target_slug FROM links WHERE source_slug = $1`, [slug])).rows).toEqual([{ target_slug: "people/ana-lee" }]);
+      expect(await count(e, `SELECT count(*)::int AS n FROM timeline_events WHERE slug = $1`, [slug])).toBe(1);
+      expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
+    } finally { await db.close(); }
+  });
+
   it("keeps the relist's cursor when its reconcile fails, so the next run finishes it", async () => {
     const db = await open();
     try {
