@@ -225,7 +225,7 @@ async function windowEntities(
 /** Explicit slugs first, then window-resolved ones, deduped and capped. */
 export async function selectPackEntities(
   storage: Storage,
-  opts: Pick<ContextPackOpts, "slugs" | "window" | "maxEntities" | "sourceIds" | "onDegraded">,
+  opts: Pick<ContextPackOpts, "slugs" | "window" | "maxEntities" | "sourceIds" | "onDegraded" | "minTrust">,
   isFenced: ((slug: string) => Promise<boolean>) | null = null,
 ): Promise<string[]> {
   const max = clampInt(opts.maxEntities, CONTEXT_PACK_DEFAULT_ENTITIES, 1, CONTEXT_PACK_MAX_ENTITIES);
@@ -241,9 +241,15 @@ export async function selectPackEntities(
   // A missing explicit slug takes a slot too, so fencing it later reveals
   // nothing. A window name that matches nothing never resolves, though, so a
   // fenced window match must not take a slot either.
-  for (const s of await windowEntities(storage, opts.window, max - out.length, opts.sourceIds, opts.onDegraded)) {
+  const fromWindow = await windowEntities(storage, opts.window, max - out.length, opts.sourceIds, opts.onDegraded);
+  // Like a fenced match, a window match below min_trust never gets a card, so
+  // it must not take a slot either. An explicit slug keeps its slot (above).
+  const windowTiers = opts.minTrust === undefined || fromWindow.length === 0 ? undefined
+    : (await readTrustTiers(storage.engine(), { pages: fromWindow }, opts.sourceIds)).pages;
+  for (const s of fromWindow) {
     if (out.length >= max) break;
     if (isFenced && (await isFenced(s))) continue;
+    if (!keptAt(opts.minTrust, windowTiers, s)) continue;
     take(s);
   }
   return out;

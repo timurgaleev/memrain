@@ -35,6 +35,10 @@ export function isTrustTier(value: unknown): value is TrustTier {
   return typeof value === "string" && (TRUST_TIERS as readonly string[]).includes(value);
 }
 
+export function trustRank(tier: TrustTier): number {
+  return RANK[tier];
+}
+
 export function tierOfRank(rank: number): TrustTier {
   return TRUST_TIERS.find(t => RANK[t] === rank) ?? "external";
 }

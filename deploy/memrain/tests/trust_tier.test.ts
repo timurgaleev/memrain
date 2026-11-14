@@ -147,6 +147,24 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await paths()).toEqual(all);
   });
 
+  it("keeps a small k full when lower-tier hits outrank the eligible ones in every arm", async () => {
+    const hits = await hybridSearch(db.storage, "notes/agent", {
+      k: 1, embedQuery: deterministicEmbedQuery, minTrust: "owner",
+    });
+    expect(hits.map(h => h.sourcePath)).toEqual(["page://notes/own"]);
+  });
+
+  it("context_pack does not spend window slots on entities below min_trust", async () => {
+    await putPage(db.storage, { slug: "projects/medlar", type: "note", title: "Medlar Grove", markdown_body: "m", written_by_principal: "client:bot" });
+    await putPage(db.storage, { slug: "projects/quince", type: "note", title: "Quince Orchard", markdown_body: "q", written_by_principal: "operator" });
+    const window = "user: Quince Orchard and Medlar Grove";
+    // The agent's entity resolves first, so without the floor it would take the only slot.
+    const first = await ok("context_pack", { window, max_entities: 1, token_budget: 8000 });
+    expect(first.cards.map((c: { slug: string }) => c.slug)).toEqual(["projects/medlar"]);
+    const pack = await ok("context_pack", { window, max_entities: 1, token_budget: 8000, min_trust: "owner" });
+    expect(pack.cards.map((c: { slug: string }) => c.slug)).toEqual(["projects/quince"]);
+  });
+
   for (const tool of ["search", "query"]) it(`${tool} reports trust_tier on every hit and honours min_trust`, async () => {
     const result = await ok(tool, { q: "orchard ledger" });
     expect(result.hits.length).toBeGreaterThan(2);
