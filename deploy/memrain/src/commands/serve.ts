@@ -31,6 +31,25 @@ import {
 import { basename } from "node:path";
 import { getFactsQueue } from "../core/facts-queue.ts";
 import { eventLoopWatchdogMs, startEventLoopWatchdog } from "../core/event-loop-watchdog.ts";
+import { REMEDIATION_JOB_KIND, SUBAGENT_JOB_KIND } from "../core/jobs/kinds.ts";
+import { longDaemonKinds } from "../core/daemons/registry.ts";
+import { envSwitches } from "../core/daemons/controls.ts";
+import { startDaemonScheduler, stopDaemonScheduler } from "../core/daemons/scheduler.ts";
+
+const MAX_JOB_CONCURRENCY = 8;
+
+/**
+ * Worker concurrency and lanes. MEMRAIN_JOB_CONCURRENCY (1-8, default 1) sets
+ * the slots; at 2 or more the long kinds leave one slot for short jobs.
+ */
+export function workerLaneOptions(env: NodeJS.ProcessEnv = process.env): { concurrency: number; longKinds: string[] } {
+  const raw = env.MEMRAIN_JOB_CONCURRENCY?.trim();
+  const n = raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : 1;
+  return {
+    concurrency: n >= 1 && n <= MAX_JOB_CONCURRENCY ? n : 1,
+    longKinds: [REMEDIATION_JOB_KIND, SUBAGENT_JOB_KIND, ...longDaemonKinds()],
+  };
+}
 
 export interface ServeOptions {
   http: boolean;
@@ -310,6 +329,7 @@ export async function runServe(opts: ServeOptions): Promise<void> {
     watchdog.stop();
     console.log(`[memrain] received ${signal}, shutting down`);
     await getFactsQueue().shutdown();
+    await stopDaemonScheduler();
     await worker.stop();
     if (cycle) await cycle.stop();
     await server.stop();
@@ -441,6 +461,7 @@ export function startBackgroundWork(
     // overlap elects ONE active worker via the worker_lock row; the rest idle
     // until the holder's heartbeat lapses (migration 042).
     engine: storage.engine(),
+    ...workerLaneOptions(),
   };
   const jobTimeoutRaw = process.env.MEMRAIN_JOB_TIMEOUT_MS?.trim();
   // Strict: digits only (reject "100abc" -> 100, "1e9" -> 1, negatives, blanks),
@@ -478,8 +499,14 @@ export function startBackgroundWork(
     console.log(
       `[memrain] jobs worker started (intervalMs=${deps.workerIntervalMs}${
         workerOpts.jobTimeoutMs ? `, jobTimeoutMs=${workerOpts.jobTimeoutMs}` : ""
-      })`,
+      }${(workerOpts.concurrency ?? 1) > 1 ? `, concurrency=${workerOpts.concurrency}` : ""})`,
     );
+    // The daemon scheduler only queues work for the worker, so it runs where
+    // the worker does, and only when opted in.
+    if (envSwitches().on) {
+      startDaemonScheduler(storage.engine());
+      console.log("[memrain] daemon scheduler started (MEMRAIN_DAEMONS=1)");
+    }
   }
 
   // Cycle loop. Off by default; opt in via env or memrain.yml. The
