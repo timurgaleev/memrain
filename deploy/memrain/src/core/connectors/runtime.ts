@@ -25,9 +25,8 @@ import { ConnectorClient, type FetchFn } from "./client.ts";
 import { accountRef } from "./model.ts";
 import { resolveClient } from "./oauth-connect.ts";
 import { builtinProviders, type ProviderRegistry } from "./providers.ts";
-import type { RenderedConnectorPage } from "./render.ts";
 import { hardDeleteConnectorPage } from "./retention.ts";
-import type { RenderedSyncItem, SyncAccount, SyncDeps } from "./sync-engine.ts";
+import type { SyncAccount, SyncDeps } from "./sync-engine.ts";
 import { registerConnectorSync, type ConnectorSyncRuntime } from "./sync-job.ts";
 import { createTokenProvider, tokenEndpointRefresh, type CredentialStore } from "./token-provider.ts";
 import { ProviderCannotSyncError } from "./types.ts";
@@ -46,20 +45,7 @@ export interface ConnectorRuntimeOptions {
   maxPartBytes?: number;
 }
 
-/** A rendered connector page as a sync item; `version` is the provider's item version. */
-export function syncItemFromPage(page: RenderedConnectorPage, version: string | null): RenderedSyncItem {
-  const dedupe = page.truth["dedupe_key"];
-  return {
-    externalId: page.externalId,
-    version,
-    slug: page.slug,
-    type: page.type,
-    title: page.title,
-    body: page.body,
-    truth: page.truth,
-    dedupeKey: typeof dedupe === "string" ? dedupe : null,
-  };
-}
+export { syncItemFromPage } from "./sync-item.ts";
 
 export function toSyncAccount(a: ConnectorAccount): SyncAccount {
   return {

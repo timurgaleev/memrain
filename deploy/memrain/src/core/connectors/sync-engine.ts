@@ -33,6 +33,9 @@
  *     `<slug>/part-NNN` pages carrying the item's truth and `part_of`, so a
  *     long transcript is stored whole and deleted whole; when it shrinks,
  *     the parts the new split lacks are deleted with their derived rows;
+ *   - enrichment: an item that carries its participants (enrich) gets links
+ *     to the people pages the brain already has and, for an event or meeting,
+ *     one chronicle row (enrich-deterministic.ts), once its page is written;
  *   - a page whose mirror into search failed is not settled: it counts as an
  *     item failure, holds the cursor, and is mirrored again next run;
  *   - a credential the provider will not renew pauses the account
@@ -55,6 +58,8 @@ import type { ConnectorClient, ConnectorResponse, TokenSource } from "./client.t
 import { isDeterministicRefusal } from "./github.ts";
 import type { ConnectorAccountStatus } from "./accounts.ts";
 import { deleteStaleParts, massDeleteVerdict } from "./retention.ts";
+import { enrichConnectorPage } from "./enrich-deterministic.ts";
+import type { RenderedConnectorPage } from "./render.ts";
 import { accountRef } from "./model.ts";
 import { connectorsSwitchOn } from "./vault.ts";
 import { ReauthRequiredError, type ConnectorRunStatus, type ResponseClass } from "./types.ts";
@@ -107,6 +112,8 @@ export interface RenderedSyncItem {
   dedupeKey?: string | null;
   /** Compiled truth from the renderer (`origin: connector`, the account's ref); deletion is fenced by it. */
   truth?: Record<string, unknown>;
+  /** What deterministic enrichment reads: people become links, an event or meeting a chronicle row. */
+  enrich?: Pick<RenderedConnectorPage, "kind" | "occurredAt" | "participants" | "bulk">;
   failure?: undefined;
 }
 
@@ -236,6 +243,8 @@ export const SOURCE_OUTAGE_MIN = 5;
 const RUN_LOCK_TTL_SEC = 900;
 const LOG_SLUG_CAP = 500;
 const WRITTEN_BY_PREFIX = "connector-";
+/** Where people pages live when nothing says otherwise. */
+const DEFAULT_PEOPLE_SOURCE = "default";
 
 export function syncLockId(accountId: string): string {
   return `connector-sync:${accountId}`;
@@ -384,6 +393,7 @@ async function needsReconnect(
 /** One run's mutable state, split out so each step stays small. */
 class Run {
   private readonly changed: Array<{ slug: string; body: string }> = [];
+  private readonly toEnrich = new Map<string, RenderedSyncItem>();
   private itemsThisRun = 0;
   private fetchStopped = false;
 
@@ -420,6 +430,7 @@ class Run {
     for (const page of this.changed) {
       await syncWikilinksForPage(this.storage, page.slug, page.body, this.account.sourceId);
     }
+    await this.enrichChanged();
     await this.updateHeldNotice();
     this.finishStatus();
     // A clean run proves the credential works again.
@@ -581,7 +592,30 @@ class Run {
       return { externalId: item.externalId, version: item.version, code: "mirror_failed", message: "the page was written but its mirror into search failed", deterministic: false };
     }
     await settle(item.slug, hash);
+    if (item.enrich !== undefined) this.toEnrich.set(item.slug, item);
     return null;
+  }
+
+  /**
+   * Link the people of every item whose page this run wrote, and give an event
+   * or meeting its chronicle row. After the wikilink sync, which replaces a
+   * page's wanted rows wholesale. People pages may come from the account's own
+   * source or the default one; the account's own address is never linked.
+   */
+  private async enrichChanged(): Promise<void> {
+    if (this.toEnrich.size === 0) return;
+    const written = new Set(this.changed.map(p => p.slug));
+    const peopleSourceIds = [...new Set([this.account.sourceId, DEFAULT_PEOPLE_SOURCE])];
+    const ownAddresses = this.account.accountLabel ? [this.account.accountLabel] : [];
+    for (const [slug, item] of this.toEnrich) {
+      if (!written.has(slug) || item.enrich === undefined) continue;
+      await enrichConnectorPage(this.storage, {
+        page: { slug, title: item.title, externalId: item.externalId, truth: item.truth ?? {}, ...item.enrich },
+        sourceId: this.account.sourceId,
+        ownAddresses,
+        peopleSourceIds,
+      });
+    }
   }
 
   /**
