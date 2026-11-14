@@ -8,8 +8,10 @@
  */
 import { describe, expect, it, spyOn } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
-import { getPage } from "../src/core/pages.ts";
+import { getPage, putPage } from "../src/core/pages.ts";
 import * as pageIndex from "../src/core/page-index.ts";
+import { pageSourcePath } from "../src/core/page-index.ts";
+import { accountRef } from "../src/core/connectors/model.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { ConnectorClient, type TokenSource } from "../src/core/connectors/client.ts";
 import { checkConnectorHealth } from "../src/core/connectors/health.ts";
@@ -349,6 +351,66 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const r = await runConnectorSync(db.storage, account(), { ...harness([]).deps, adapter: unversioned("Second text.") });
       expect(r.counts.pages_written).toBe(1);
       expect((await getPage(db.storage, "test/acct/u"))?.markdown_body).toContain("Second text.");
+    } finally { await db.close(); }
+  });
+
+  it("removes the parts a shrunken item no longer has, with their search documents, chunks and embeddings", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const label = "owner@example.test";
+      await registerSource(e, { id: "conn-meet", kind: "meeting", pathPrefix: "test/acct/" });
+      await e.query(
+        `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES ($1, 'conn-meet', 'test', 'admin:operator', $2)`,
+        [ACCOUNT_ID, label],
+      );
+      const truth = { origin: "connector", trust: "untrusted", account: accountRef(label) };
+      const long = (version: string, body: string): SyncAdapter => ({
+        streams: () => [STREAM],
+        page: async () => ({ ok: true, items: [{ externalId: "m", version, slug: "test/acct/m", type: "note", title: "M", body, truth }], checkpoint: "c1", done: true }),
+      });
+      const line = (i: number) => `Line ${i} of a meeting that goes on for quite a while.\n\n`;
+      const acct = account({ sourceId: "conn-meet", accountLabel: label });
+      const deps = { ...harness([]).deps, maxPartBytes: 200 };
+      await runConnectorSync(db.storage, acct, { ...deps, adapter: long("1", Array.from({ length: 12 }, (_, i) => line(i)).join("")) });
+      const parts = async () => (await e.query<{ slug: string }>(
+        `SELECT slug FROM pages WHERE compiled_truth->>'part_of' = 'test/acct/m' ORDER BY slug`)).rows.map(r => r.slug);
+      const before = await parts();
+      expect(before.length).toBeGreaterThan(3);
+      const docsOf = (slugs: string[]) => e.query<{ id: string }>(
+        `SELECT id FROM documents WHERE source_path = ANY($1::text[])`, [slugs.map(s => pageSourcePath(s, "conn-meet"))]);
+      const stale = before.slice(2);
+      const staleDocs = (await docsOf(stale)).rows.map(r => r.id);
+      expect(staleDocs.length).toBe(stale.length);
+
+      // Another account's page claiming to be a part of this item is not this account's to delete.
+      await putPage(db.storage, {
+        slug: "test/acct/m/part-099", title: "Not ours", markdown_body: "Another account's text.", source_id: "conn-meet",
+        compiled_truth: { origin: "connector", account: accountRef("someone@example.test"), part_of: "test/acct/m" },
+      });
+
+      const r = await runConnectorSync(db.storage, acct, { ...deps, adapter: long("2", Array.from({ length: 4 }, (_, i) => line(i)).join("")) });
+      expect(r.status).toBe("success");
+      expect((await getPage(db.storage, "test/acct/m/part-099"))?.markdown_body).toContain("Another account's text.");
+      await e.query(`DELETE FROM pages WHERE slug = 'test/acct/m/part-099'`);
+      const after = await parts();
+      expect(after).toEqual(before.slice(0, after.length));
+      expect(after.length).toBeLessThan(before.length);
+      const gone = before.filter(s => !after.includes(s));
+      expect(await e.query(`SELECT slug FROM pages WHERE slug = ANY($1::text[])`, [gone]).then(q => q.rows)).toEqual([]);
+      expect((await docsOf(gone)).rows).toEqual([]);
+      const chunkCount = await e.query<{ n: number }>(`SELECT count(*)::int AS n FROM chunks WHERE document_id = ANY($1::text[])`, [staleDocs]);
+      expect(Number(chunkCount.rows[0]!.n)).toBe(0);
+      const embedCount = await e.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ANY($1::text[]))`, [staleDocs]);
+      expect(Number(embedCount.rows[0]!.n)).toBe(0);
+      const parent = await getPage(db.storage, "test/acct/m");
+      for (const s of gone) expect(parent?.markdown_body).not.toContain(s);
+
+      // Shrunk below one part: the item is a single page and no part is left.
+      await runConnectorSync(db.storage, acct, { ...deps, adapter: long("3", "Short now.") });
+      expect(await parts()).toEqual([]);
+      expect((await getPage(db.storage, "test/acct/m"))?.markdown_body).toContain("Short now.");
     } finally { await db.close(); }
   });
 
