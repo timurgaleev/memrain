@@ -71,3 +71,16 @@ export interface ConnectorRunRecord {
   /** ISO time of the most recent clean run, carried forward across failed runs. */
   last_success_at: string | null;
 }
+
+/**
+ * The provider refused to renew the credential (`invalid_grant`, a revoked
+ * refresh token): only the owner reconnecting the account fixes it. A token
+ * source throws it; the client reports the request `auth_required` with
+ * `reauth`, and the sync engine pauses the account as needing a reconnect.
+ */
+export class ReauthRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReauthRequiredError";
+  }
+}
