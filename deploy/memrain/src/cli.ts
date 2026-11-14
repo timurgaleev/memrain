@@ -371,15 +371,16 @@ async function main(argv: readonly string[]): Promise<number> {
   // For the same reason it answers BEFORE validation: the moment you reach for
   // the manual is the moment the rest of the line is likely half-typed, and a
   // command's own help was unreachable while validation went first.
-  if (cmd !== undefined && flags.has("--help")) {
-    if (!(await printCommandHelp(cmd, positional))) printUsage();
-    return 0;
-  }
   const run = async (): Promise<number> => {
+    if (cmd !== undefined && flags.has("--help")) {
+      if (!(await printCommandHelp(cmd, positional))) printUsage();
+      return 0;
+    }
     validateFlags(parsed);
     return dispatch(parsed, argv);
   };
-  // Validation runs inside the guard so a refused flag is a JSON error too.
+  // Help and validation run inside the guard, so `--json --help` and a
+  // refused flag still leave one JSON object on stdout.
   if (cmd !== undefined && JSON_GUARDED_COMMANDS.has(cmd) && flags.has("--json")) {
     return runJsonGuarded(run);
   }

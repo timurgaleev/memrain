@@ -182,6 +182,16 @@ for (const engine of engines) {
   });
 }
 
+describe("--json --help", () => {
+  it("wraps the manual as text instead of printing prose", () => {
+    const p = Bun.spawnSync(["bun", "src/cli.ts", "version", "--json", "--help"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    expect(p.exitCode).toBe(0);
+    const doc = parseOne({ code: p.exitCode, out: new TextDecoder().decode(p.stdout), err: "" });
+    expect(doc.ok).toBe(true);
+    expect((doc.data as { text: string }).text).toContain("Usage: memrain <command>");
+  });
+});
+
 describe("human output is unchanged without --json", () => {
   it("version still prints its one line", () => {
     const p = Bun.spawnSync(["bun", "src/cli.ts", "version"], { cwd: root, stdout: "pipe", stderr: "pipe" });

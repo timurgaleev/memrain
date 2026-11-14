@@ -5,8 +5,9 @@
 
 Every structured error Memrain returns carries one of these codes. An MCP tool
 error has it in `error`, next to `error_class`, `retryable` and often a
-`suggestion`. A CLI command run with `--json` reports it as `error.code`, with a
-`docs` link to the entry below.
+`suggestion`; `memrain call` prints that envelope as it is. Any other CLI
+command run with `--json` reports it as `error.code`, with a `docs` link to
+the entry below.
 
 - **Class** says what kind of failure it is, so a caller can act without
   knowing every code.

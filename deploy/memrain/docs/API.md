@@ -437,11 +437,13 @@ internal ingress.
 `JSON.parse(stdout)` is enough. Progress and warnings stay on stderr; exit
 codes are the same as without the flag.
 
-- A command that has its own JSON report prints it unchanged.
+- A command that has its own JSON report prints it unchanged, on success and
+  on failure — `memrain call` passes a tool's error envelope through, with the
+  code in `error`. The exit code says which it was.
 - Other output is wrapped: `{"ok": true, "data": {"text": "…"}}`.
-- A failure is `{"ok": false, "error": {…}, "exit_code": N}`. A structured
-  error adds `code`, `error_class`, `retryable` and a `docs` link into
-  ERRORS.md.
+- A failure with no JSON report of its own is
+  `{"ok": false, "error": {…}, "exit_code": N}`. A structured error adds
+  `code`, `error_class`, `retryable` and a `docs` link into ERRORS.md.
 
 ```bash
 memrain status --json | jq .stats
