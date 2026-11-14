@@ -11,6 +11,7 @@
 import type { Engine } from "../engine/interface.ts";
 import { parseCron, assertTimeZone } from "./cron.ts";
 import { CONNECTOR_SYNC_DAEMON } from "../connectors/sync-daemon.ts";
+import { NOTIFICATIONS_DAEMON } from "../notifications/daemon.ts";
 
 export type DaemonLane = "short" | "long";
 
@@ -58,7 +59,7 @@ export const CYCLE_DAEMON: DaemonSpec = {
   defaultEnabled: true,
 };
 
-const BUILTIN: readonly DaemonSpec[] = [CYCLE_DAEMON, CONNECTOR_SYNC_DAEMON];
+const BUILTIN: readonly DaemonSpec[] = [CYCLE_DAEMON, CONNECTOR_SYNC_DAEMON, NOTIFICATIONS_DAEMON];
 const registry = new Map<string, DaemonSpec>(BUILTIN.map(d => [d.name, d]));
 
 /** Add a daemon. Throws on a malformed name, cron or zone, or a duplicate. */

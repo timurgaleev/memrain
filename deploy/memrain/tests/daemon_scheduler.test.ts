@@ -25,8 +25,9 @@ const probe = (over: Partial<DaemonSpec> = {}): DaemonSpec => ({
   ...over,
 });
 
-/** The probe's outcome; built-in daemons (connector_sync) report alongside it. */
+/** The probe's outcome; built-in daemons (connector_sync, notifications) report alongside it. */
 const probeOutcome = (results: Array<{ daemon: string; outcome: string }>) => results.find(r => r.daemon === "probe")?.outcome;
+const BUILTIN_REPORTERS: ReadonlySet<string> = new Set(["connector_sync", "notifications"]);
 
 const jobIds = async (e: Engine) =>
   (await e.query<{ id: string }>(`SELECT id FROM jobs WHERE kind = 'daemon_probe' ORDER BY id`)).rows.map(r => r.id);
@@ -152,7 +153,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await e.query(`INSERT INTO daemon_controls (daemon, source_id, timezone) VALUES ('probe', '*', 'Mars/Olympus')`);
       await e.query(`INSERT INTO daemon_controls (daemon, source_id, cron) VALUES ('other', '*', '61 * * * *')`);
       const r = await enqueueDueDaemons(e, MORNING, { env: ON });
-      expect(Object.fromEntries(r.filter(x => x.daemon !== "connector_sync").map(x => [x.daemon, x.outcome]))).toEqual({ other: "bad_schedule", probe: "bad_schedule" });
+      expect(Object.fromEntries(r.filter(x => !BUILTIN_REPORTERS.has(x.daemon)).map(x => [x.daemon, x.outcome]))).toEqual({ other: "bad_schedule", probe: "bad_schedule" });
     } finally { await db.close(); }
   });
 
@@ -197,7 +198,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       registerDaemon(probe());
       registerDaemon(probe({ name: "orphan", kind: "daemon_unregistered" }));
       const r = await enqueueDueDaemons(e, MORNING, { env: { ...ON, MEMRAIN_DAEMONS_DISABLED: "probe" } });
-      expect(Object.fromEntries(r.filter(x => x.daemon !== "connector_sync").map(x => [x.daemon, x.outcome]))).toEqual({ probe: "env_disabled", orphan: "no_handler" });
+      expect(Object.fromEntries(r.filter(x => !BUILTIN_REPORTERS.has(x.daemon)).map(x => [x.daemon, x.outcome]))).toEqual({ probe: "env_disabled", orphan: "no_handler" });
       expect(await jobIds(e)).toEqual([]);
     } finally { await db.close(); }
   });

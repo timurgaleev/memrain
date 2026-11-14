@@ -16,9 +16,13 @@ import { GlossaryPage } from "./pages/Glossary.tsx";
 import { SetupPage } from "./pages/Setup.tsx";
 import { EnrollPage } from "./pages/Enroll.tsx";
 import { SecurityPage } from "./pages/Security.tsx";
+import { NotificationsPage } from "./pages/Notifications.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { api, passkeyApi } from "./api";
 import type { AuthEvent } from "./api";
+import type { NotificationSummary } from "./admin-types.ts";
+import { useAsync } from "./hooks.ts";
+import { badgeText } from "./lib/notifications.ts";
 import { eventLabel, isPreAuthRoute, listOf, passkeyErrorCopy } from "./lib/passkey.ts";
 import { buildHash, parseHash } from "./lib/route.ts";
 import type { Route, RouteName } from "./lib/route.ts";
@@ -47,6 +51,7 @@ const NAV: { section: string; items: { name: RouteName; label: string; also?: Ro
   {
     section: "Operations",
     items: [
+      { name: "notifications", label: "Notifications" },
       { name: "spend", label: "Spend" },
       { name: "jobs", label: "Jobs" },
       { name: "log", label: "Request Log" },
@@ -129,6 +134,10 @@ export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [notices, setNotices] = useState<AuthEvent[]>([]);
   const signedIn = !isPreAuthRoute(page);
+  const notificationSummary = useAsync<NotificationSummary>(
+    (signal) => api.notificationSummary(signal), [], { intervalMs: 60_000, enabled: signedIn },
+  );
+  const unreadBadge = badgeText(notificationSummary.data);
 
   useEffect(() => {
     const onHash = () => {
@@ -280,6 +289,9 @@ export function App() {
                   aria-current={current ? "page" : undefined}
                 >
                   {item.label}
+                  {item.name === "notifications" && unreadBadge !== "" && (
+                    <span className="badge badge-write" style={{ marginLeft: 8 }} aria-label={`${unreadBadge} unread`}>{unreadBadge}</span>
+                  )}
                 </a>
               );
             })}
@@ -367,6 +379,7 @@ export function App() {
         {page === "glossary" && <GlossaryPage term={route.param} />}
         {page === "setup" && <SetupPage />}
         {page === "security" && <SecurityPage />}
+        {page === "notifications" && <NotificationsPage param={route.param} onChange={notificationSummary.reload} />}
       </main>
       <CommandPalette open={paletteOpen} onClose={closePalette} />
     </div>

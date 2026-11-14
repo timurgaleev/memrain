@@ -69,6 +69,7 @@ describe("doctor categorize", () => {
       "maintenance-held",
       "mixed-script-targets",
       "namespace-only-targets",
+      "notifications",
       "oauth-client-health",
       "oauth-client-hygiene",
       "oauth-self-issued-config",
