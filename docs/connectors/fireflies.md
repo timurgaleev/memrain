@@ -46,8 +46,11 @@ it stopped.
 
 - The first run lists transcripts created in the last 90 days; later runs
   list the window since the previous run, plus 48 hours, so a summary that
-  arrives after the meeting is picked up. Only transcripts whose title, time,
-  length, people or summary status changed are fetched again.
+  arrives after the meeting is picked up. Transcripts whose title, time,
+  length, people or summary status changed are fetched again, and a
+  transcript younger than 48 hours is read again once a day so an edit to its
+  text lands. Fireflies reports no edit time, so an edit made later than that
+  is not picked up.
 - About once a day every transcript id the key can see is listed. A stored
   transcript missing from that list is asked for by id, and only a
   "not found" answer deletes it: its page, parts, chunks, embeddings, links

@@ -391,10 +391,11 @@ export function normalizeTranscript(raw: unknown): MeetingTranscript {
  * tells a run to fetch the transcript again; the summary arriving after the
  * meeting moves the status.
  */
-export function transcriptVersion(listed: Raw): string {
+export function transcriptVersion(listed: Raw, refreshDay: number | null = null): string {
   const people = Array.isArray(listed.participants) ? listed.participants.filter((p): p is string => typeof p === "string").sort() : [];
   const status = (listed.meeting_info as Raw | null | undefined)?.summary_status;
-  const basis = JSON.stringify([listed.title ?? null, listed.date ?? null, listed.duration ?? null, listed.organizer_email ?? null, people, status ?? null]);
+  const fields = [listed.title ?? null, listed.date ?? null, listed.duration ?? null, listed.organizer_email ?? null, people, status ?? null];
+  const basis = JSON.stringify(refreshDay === null ? fields : [...fields, refreshDay]);
   return createHash("sha256").update(basis, "utf8").digest("hex").slice(0, 16);
 }
 
@@ -460,6 +461,17 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
   const runAt = ctx.now();
   const seenIds = new Set<string>();
 
+  /**
+   * The listing says nothing about an edited sentence or summary. While a
+   * transcript is young enough to sit in the lookback window, the UTC day joins
+   * its version, so it is read again once a day; after that only a listed
+   * field changing brings it back.
+   */
+  const refreshDayOf = (t: Raw): number | null => {
+    const created = typeof t.date === "number" ? t.date : Number.NaN;
+    return Number.isFinite(created) && runAt - created < LOOKBACK_MS ? Math.floor(runAt / 86_400_000) : null;
+  };
+
   /** The item to store, null when the transcript is gone, or the response that ends the stream. */
   async function fetchItem(client: ConnectorClient, id: string, version: string): Promise<SyncItem | ConnectorResponse | null> {
     const got = await firefliesQuery<{ transcript: unknown }>(client, TRANSCRIPT_QUERY, { id });
@@ -487,7 +499,7 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
     if (!res.ok) return { ok: false, response: res.response };
     const rows = rowsOf(res.data);
     const listed = rows.filter((t): t is ListedTranscript => idOf(t) !== null);
-    const versions = new Map(listed.map(t => [t.id, transcriptVersion(t)]));
+    const versions = new Map(listed.map(t => [t.id, transcriptVersion(t, refreshDayOf(t))]));
     const settled = await settledItemVersions(ctx.engine, account.id, [...versions.keys()]);
     const items: SyncItem[] = [];
     for (const [id, version] of versions) {

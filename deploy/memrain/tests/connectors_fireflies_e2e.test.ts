@@ -236,6 +236,29 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE source_id = $1`, [SOURCE])).toBe(2);
   });
 
+  it("re-reads a recent transcript once a day, so an edit with unchanged listing fields still lands", async () => {
+    let text = "We agreed on Tuesday.";
+    const fake = firefliesFetch({
+      user: () => "user",
+      list: () => listing([listed("ff-edit")]),
+      ids: () => listing([{ id: "ff-edit" }]),
+      transcript: (id) => transcript(id, [{ speaker_name: "Ana Lee", text }]),
+    });
+    const account = await connect(fake.fetch);
+    await sync(db.storage, account.id, fake.fetch, T0);
+    const slug = (await pageOf("ff-edit", account.id))!;
+    const body = async () => (await e.query<{ markdown_body: string }>(`SELECT markdown_body FROM pages WHERE slug = $1`, [slug])).rows[0]!.markdown_body;
+    text = "We agreed on Thursday.";
+    fake.requests.length = 0;
+    await sync(db.storage, account.id, fake.fetch, T0 + 2 * HOUR);
+    expect(ops(fake.requests)).toEqual(["FirefliesTranscripts"]);
+    // Past midnight UTC, still inside the lookback window: fetched again.
+    fake.requests.length = 0;
+    await sync(db.storage, account.id, fake.fetch, T0 + 14 * HOUR);
+    expect(ops(fake.requests)).toEqual(["FirefliesTranscripts", "FirefliesTranscript:ff-edit"]);
+    expect(await body()).toContain("We agreed on Thursday.");
+  });
+
   it("works through more unlisted transcripts than one run may probe instead of re-probing the first ones", async () => {
     const stored = Array.from({ length: 55 }, (_, i) => `ff-p${String(i).padStart(2, "0")}`);
     const goneUpstream = new Set(stored.slice(50));
