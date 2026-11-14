@@ -154,6 +154,8 @@ export interface ClaimOptions {
    * live queue. Omit for the normal any-kind claim.
    */
   kinds?: string[];
+  /** Never claim these kinds (the worker's long lane when it is full). */
+  excludeKinds?: string[];
 }
 
 export interface HandleStalledOptions {
@@ -328,6 +330,10 @@ export class Queue {
     if (opts.kinds !== undefined && opts.kinds.length > 0) {
       params.push(opts.kinds);
       kindClause = `AND kind = ANY($${params.length}::text[])`;
+    }
+    if (opts.excludeKinds !== undefined && opts.excludeKinds.length > 0) {
+      params.push(opts.excludeKinds);
+      kindClause += ` AND NOT (kind = ANY($${params.length}::text[]))`;
     }
     const r = await this.engine.query<RawJobRow>(
       `UPDATE jobs

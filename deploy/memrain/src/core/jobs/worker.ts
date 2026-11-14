@@ -47,6 +47,12 @@ export interface WorkerOptions {
   intervalMs?: number;
   /** Max concurrent in-flight jobs. Default 1 (single-thread). */
   concurrency?: number;
+  /**
+   * Kinds that run long (a daemon run, a remediation). With concurrency >= 2
+   * they may hold at most `concurrency - 1` slots, so a short job always has
+   * one; with concurrency 1 the single slot is shared as before.
+   */
+  longKinds?: readonly string[];
   /** Hook for log lines — defaults to console.log/console.error. */
   logger?: (level: "info" | "warn" | "error", msg: string) => void;
   /** Seconds the running claim is valid for. Renewed every third of it while
@@ -108,6 +114,7 @@ export interface WorkerStats {
 export class Worker {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private inflight = 0;
+  private longInflight = 0;
   private stopping = false;
   private stopped = true;
   private lastStallSweep = 0;
@@ -222,8 +229,12 @@ export class Worker {
     return processed;
   }
 
-  private claimOpts(): Parameters<Queue["claim"]>[0] {
+  private claimOpts(concurrency = 1): Parameters<Queue["claim"]>[0] {
     const claimOpts: Parameters<Queue["claim"]>[0] = {};
+    const longKinds = this.opts.longKinds ?? [];
+    if (concurrency >= 2 && longKinds.length > 0 && this.longInflight >= concurrency - 1) {
+      claimOpts.excludeKinds = [...longKinds];
+    }
     if (this.opts.lockSeconds !== undefined) {
       claimOpts.lockSeconds = this.opts.lockSeconds;
     }
@@ -304,13 +315,15 @@ export class Worker {
         }
       }
       while (this.inflight < concurrency && !this.stopping) {
-        const job = await this.queue.claim(this.claimOpts());
+        const job = await this.queue.claim(this.claimOpts(concurrency));
         if (!job) break;
         if (this.stopping) {
           await this.queue.releaseForShutdown(job.id, job.claimGeneration);
           break;
         }
         this.inflight++;
+        const long = this.opts.longKinds?.includes(job.kind) === true;
+        if (long) this.longInflight++;
         // Fire-and-forget; runJob updates inflight on completion. runJob never
         // throws (it guards its own bookkeeping), but keep a catch as a final
         // backstop so a stray rejection can never become an unhandledRejection.
@@ -318,6 +331,7 @@ export class Worker {
           .catch((e) => this.log("error", `[${job.id}] runJob: ${asMessage(e)}`))
           .finally(() => {
             this.inflight--;
+            if (long) this.longInflight--;
           })
           // Terminal backstop: even the catch's logger or finally must never
           // surface as an unhandledRejection.
