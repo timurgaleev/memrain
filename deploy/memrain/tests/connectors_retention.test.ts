@@ -341,6 +341,18 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await openNotices(account.id)).toEqual([]);
   });
 
+  it("never mass-deletes pages no sync record maps to, and raises no hold the owner could not confirm", async () => {
+    const e = db.storage.engine();
+    await aged(12);
+    const account = await trackedAccount([]);
+    const r = await sweepRetention(db.storage, scope, { accountId: account.id, kinds: ["mail"], env: {}, now: NOW });
+    expect(r.deleted).toEqual([]);
+    expect(r.held).toBe(0);
+    expect(await inboxPages()).toBe(12);
+    expect(await openNotices(account.id)).toEqual([]);
+    expect((await currentProblems(e)).map(p => p.kind)).not.toContain("deletions_held");
+  });
+
   it("keeps held retention pages the owner chose to keep, without asking again", async () => {
     const e = db.storage.engine();
     const pages = await aged(12);

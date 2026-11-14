@@ -53,6 +53,7 @@ import { deadlockSafeTransaction } from "../retry.ts";
 import { slugifyTitle } from "../synthesis/atoms.ts";
 import { shortHash, SOURCE_KIND_FOR, type ConnectorDataKind } from "./model.ts";
 import {
+  DELETION_STATES,
   heldDeleteCount,
   holdRetentionDeletes,
   openNotice,
@@ -570,7 +571,7 @@ export interface RetentionSweepOptions {
   limit?: number;
 }
 
-type DueState = "fresh" | "held" | "confirmed" | "kept";
+type DueState = "fresh" | "orphan" | "upstream" | "held" | "confirmed" | "kept";
 
 /**
  * Hard-delete this account's pages whose last activity is older than their
@@ -597,20 +598,23 @@ export async function sweepRetention(storage: Storage, scope: ConnectorScope, op
     const days = retentionDays(kind, opts.accountDays?.[kind], env);
     if (days === null) continue;
     const cutoff = new Date(now - days * 86_400_000).toISOString();
-    const itemIn = (state: string) => `EXISTS (SELECT 1 FROM connector_items i
-      WHERE i.account_id = $5 AND i.page_slug = p.slug AND i.held_reason = '${state}')`;
+    const item = (where: string) => `EXISTS (SELECT 1 FROM connector_items i
+      WHERE i.account_id = $5 AND i.page_slug = p.slug AND ${where})`;
+    // An item held for an upstream deletion belongs to that deletion, not to retention.
     due.push(...(await engine.query<{ slug: string; state: DueState }>(
       `SELECT p.slug,
-              CASE WHEN ${itemIn(RETENTION_KEPT)} THEN 'kept'
-                   WHEN ${itemIn(RETENTION_CONFIRMED)} THEN 'confirmed'
-                   WHEN ${itemIn(RETENTION_HELD)} THEN 'held'
-                   ELSE 'fresh' END AS state
+              CASE WHEN ${item(`i.held_reason = '${RETENTION_KEPT}'`)} THEN 'kept'
+                   WHEN ${item(`i.held_reason = '${RETENTION_CONFIRMED}'`)} THEN 'confirmed'
+                   WHEN ${item(`i.held_reason = '${RETENTION_HELD}'`)} THEN 'held'
+                   WHEN NOT ${item("TRUE")} THEN 'orphan'
+                   WHEN ${item("(i.held_reason IS NULL OR NOT (i.held_reason = ANY($6::text[])))")} THEN 'fresh'
+                   ELSE 'upstream' END AS state
          FROM pages p
         WHERE ${ownedPageScope} AND p.compiled_truth->>'kind' = $3
           AND p.compiled_truth->>'part_of' IS NULL
           AND p.compiled_truth->>'last_activity_at' < $4
         ORDER BY p.compiled_truth->>'last_activity_at', p.slug`,
-      [scope.sourceId, scope.accountRef, kind, cutoff, opts.accountId],
+      [scope.sourceId, scope.accountRef, kind, cutoff, opts.accountId, [...DELETION_STATES]],
     )).rows);
   }
   await engine.query(
@@ -621,18 +625,22 @@ export async function sweepRetention(storage: Storage, scope: ConnectorScope, op
   );
   const slugsIn = (state: DueState) => due.filter(d => d.state === state).map(d => d.slug);
   const fresh = slugsIn("fresh");
+  // A page no item maps to (its sync state was forgotten) cannot be held for the
+  // owner: it counts toward the guard, and past it simply stays this run.
+  const orphans = slugsIn("orphan");
   const toDelete = slugsIn("confirmed");
   let held = slugsIn("held").length;
-  const verdict = fresh.length === 0
+  const newlyDue = fresh.length + orphans.length;
+  const verdict = newlyDue === 0
     ? { held: false, reason: null }
-    : massDeleteVerdict(fresh.length, await count(engine,
+    : massDeleteVerdict(newlyDue, await count(engine,
       `SELECT count(*)::int AS n FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' IS NULL`,
       [scope.sourceId, scope.accountRef]), env);
   if (verdict.held) {
     await holdRetentionDeletes(engine, opts.accountId, fresh);
     held += fresh.length;
   } else {
-    toDelete.push(...fresh);
+    toDelete.push(...fresh, ...orphans);
   }
   if (held > 0) {
     await openNotice(engine, opts.accountId, "mass_delete_held",
