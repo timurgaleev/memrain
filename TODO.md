@@ -64,6 +64,19 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 - A single-value link target cannot hold two separate periods (A, then B, then
   A again); the re-add is refused.
 
+## Deletion inventory gaps (2026-11-14)
+
+`tests/deletion_inventory.test.ts` gives every column that names a page or a
+source a fate on purge. These rows outlive what they name; fix each, then drop
+it from the test's known-gap list.
+
+- Page purge: `hot_memory.source_slug` and `synthesis_evidence.synthesis_slug`
+  stay, so a later page on the slug inherits observations and citations.
+- Source delete: `fact_withdrawals`, `ingest_log`, `slug_aliases`,
+  `synth_contradictions` and `take_nudge_log` are neither foreign-keyed to
+  `sources` nor counted by `sourceReferences`, so a new source created with a
+  deleted source's id inherits their rows.
+
 ## Follow-ups from the admin charts batch (1.5)
 
 - `admin-timeseries.ts` top-agents query uses unqualified `agent_name` /

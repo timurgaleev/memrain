@@ -75,7 +75,7 @@ const FOREIGN_KEY_VIOLATION = "23503";
 type Leftovers = Pick<PurgeDeletedPagesResult, "raw_data_rows" | "tags_rows" | "slug_aliases_rows" | "volunteer_event_rows">;
 
 /** Tables that name a page by slug with no foreign key to pages: [result key, table, slug column]. */
-const LEFTOVER_TABLES: ReadonlyArray<[keyof Leftovers, string, string]> = [
+export const LEFTOVER_TABLES: ReadonlyArray<[keyof Leftovers, string, string]> = [
   ["raw_data_rows", "raw_data", "slug"],
   ["tags_rows", "tags", "slug"],
   ["slug_aliases_rows", "slug_aliases", "canonical_slug"],
