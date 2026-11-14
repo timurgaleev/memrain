@@ -6,24 +6,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-- Background daemons, all off by default. `MEMRAIN_DAEMONS=1` starts an
-  in-process scheduler in `serve`: one process leads through a table row
-  lock, cron schedules run in an IANA time zone (one window on each DST
-  morning), each window is queued once under a stable job id even when two
-  containers overlap, and only the latest window runs after downtime. Daemons
-  pause globally, per daemon or per source (`memrain daemons pause|resume`,
-  MCP `daemons_control`), switch off by env (`MEMRAIN_DAEMONS_DISABLED`), and
-  pause themselves after five failed runs in a row. `memrain daemons status`,
-  MCP `daemons_status` and `GET /admin/api/daemons` report them; `/health`
-  gains a `daemons` block (leader, tick age) where a scheduler runs. The
-  maintenance cycle keeps its cadence but obeys a pause and reports its runs.
-- `MEMRAIN_JOB_CONCURRENCY` (default 1): at 2 or more, long jobs leave one
-  worker slot for short ones.
-- `MEMRAIN_PROVIDER_LEASES` caps parallel model calls per provider family
-  across every process on the database; a call that finds no free slot is
-  refused unsent, and a queued job waits without spending a retry.
-
 ## [1.16.0] — 2026-11-14
 
 ### Added
