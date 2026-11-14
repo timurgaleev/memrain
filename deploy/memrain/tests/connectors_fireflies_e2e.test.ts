@@ -221,6 +221,45 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await readCursor(e, account.id, STREAM_RECONCILE)).toBe(new Date(T0 + 25 * HOUR).toISOString());
   });
 
+  it("links a transcript's people before its cursor moves, so an enrichment that fails is redone next run", async () => {
+    await putPage(db.storage, { slug: "people/ana-lee", markdown_body: "Ana.", compiled_truth: { aliases: ["ana@example.net"] } });
+    const fake = firefliesFetch({
+      user: () => "user",
+      list: () => "list-initial",
+      ids: () => listing([{ id: "ff-t1" }, { id: "ff-t2" }]),
+      transcript: (id) => ({ "ff-t1": "transcript-t1", "ff-t2": "transcript-t2" })[id] ?? "not-found",
+      exists: () => "not-found",
+    });
+    const account = await connect(fake.fetch);
+    let failOnce = true;
+    const failing = new Proxy(e, {
+      get(target, prop, receiver) {
+        if (prop !== "query") return Reflect.get(target, prop, receiver);
+        return async (sql: string, params?: unknown[]) => {
+          if (failOnce && sql.includes("DELETE FROM timeline_events") && sql.includes("source_chunk_id")) {
+            failOnce = false;
+            throw new Error("connection reset");
+          }
+          return target.query(sql, params);
+        };
+      },
+    });
+    const flaky = new Proxy(db.storage, {
+      get(target, prop, receiver) {
+        if (prop === "engine") return () => failing;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    await expect(sync(flaky, account.id, fake.fetch, T0)).rejects.toThrow("connection reset");
+    expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBeNull();
+
+    expect((await sync(db.storage, account.id, fake.fetch, T0 + 60_000)).status).toBe("success");
+    const t1 = (await pageOf("ff-t1", account.id))!;
+    expect((await e.query<{ target_slug: string }>(`SELECT target_slug FROM links WHERE source_slug = $1`, [t1])).rows).toEqual([{ target_slug: "people/ana-lee" }]);
+    expect(await count(e, `SELECT count(*)::int AS n FROM timeline_events WHERE slug = $1`, [t1])).toBe(1);
+    expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBe(new Date(T0 + 60_000).toISOString());
+  });
+
   it("deletes nothing when the listing misses a transcript the provider still has", async () => {
     const fake = firefliesFetch({
       user: () => "user",
