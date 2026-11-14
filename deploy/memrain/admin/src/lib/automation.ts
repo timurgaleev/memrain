@@ -1,5 +1,6 @@
 // Shapes and readings for the Connections, Autonomy and Approvals pages.
 // No DOM or React, so the root test runner can load it.
+import { fmtInt } from "./format.ts";
 
 export type Tone = "ok" | "warn" | "error" | "idle";
 
@@ -258,4 +259,17 @@ export function decisionMessage(status: HoldDecisionStatus): string {
     case "already_decided": return "Someone already decided this hold.";
     case "not_found": return "That hold no longer exists.";
   }
+}
+
+/**
+ * What a delete-everything did. Pages edited after the preview are kept, not
+ * deleted, so the run is not done until the owner previews them again.
+ */
+export function deleteOutcome(r: { deleted: number; changed: number }, accountLabel: string): { done: boolean; message: string } {
+  const deleted = `Deleted ${fmtInt(r.deleted)} ${r.deleted === 1 ? "page" : "pages"} from ${accountLabel}.`;
+  if (r.changed === 0) return { done: true, message: deleted };
+  const kept = r.changed === 1
+    ? "1 page changed after the preview and was kept: preview again to review it."
+    : `${fmtInt(r.changed)} pages changed after the preview and were kept: preview again to review them.`;
+  return { done: false, message: `${deleted} ${kept}` };
 }

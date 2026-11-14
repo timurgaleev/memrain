@@ -3,7 +3,7 @@ import { automationApi } from "../api-automation.ts";
 import { Dialog } from "../components/Dialog.tsx";
 import { ApiError } from "../lib/passkey-fetch.ts";
 import { fmtInt } from "../lib/format.ts";
-import { confirmMatches, providerLabel, type ConnectorAccountView, type DataPreview } from "../lib/automation.ts";
+import { confirmMatches, deleteOutcome, providerLabel, type ConnectorAccountView, type DataPreview } from "../lib/automation.ts";
 import { actionError } from "./connection-actions.ts";
 
 function NameConfirm({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
@@ -133,8 +133,14 @@ export function DeleteDataDialog({ account, initialName, lead, onClose, onDone }
     setError("");
     try {
       const r = await automationApi.deleteData(account.id, typed, preview.plan_hash);
-      onDone(`Deleted ${plural(r.deleted, "page", "pages")} from ${account.account_label}.`
-        + (r.changed > 0 ? ` ${plural(r.changed, "shared page was", "shared pages were")} edited instead.` : ""));
+      const outcome = deleteOutcome(r, account.account_label);
+      if (outcome.done) {
+        onDone(outcome.message);
+      } else {
+        // The pages edited after the preview are still there: stay open on a fresh preview of them.
+        setError(outcome.message);
+        void load();
+      }
     } catch (e) {
       setError(actionError(e));
       if (e instanceof ApiError && e.code === "conflict") void load();

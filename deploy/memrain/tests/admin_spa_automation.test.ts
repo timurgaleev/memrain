@@ -14,6 +14,7 @@ import {
   connectorErrorCopy,
   daemonView,
   decisionMessage,
+  deleteOutcome,
   providerLabel,
   safeAuthorizeUrl,
   sourcesFor,
@@ -151,5 +152,14 @@ describe("providerLabel", () => {
     expect(providerLabel("google")).toBe("Google");
     expect(providerLabel("fireflies")).toBe("Fireflies");
     expect(providerLabel("acme_mail")).toBe("acme_mail");
+  });
+});
+
+describe("deleteOutcome", () => {
+  it("says what was deleted, and that pages changed after the preview were kept and need another look", () => {
+    expect(deleteOutcome({ deleted: 3, changed: 0 }, "owner@example.test")).toEqual({ done: true, message: "Deleted 3 pages from owner@example.test." });
+    const partial = deleteOutcome({ deleted: 2, changed: 1 }, "owner@example.test");
+    expect(partial.done).toBe(false);
+    expect(partial.message).toBe("Deleted 2 pages from owner@example.test. 1 page changed after the preview and was kept: preview again to review it.");
   });
 });
