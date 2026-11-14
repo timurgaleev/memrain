@@ -78,6 +78,7 @@ import {
   checkOauthClientHealth,
   checkOauthClientHygiene,
   checkPatScopesRecorded,
+  checkTenancyIsolationConfig,
   checkSourceRoutingHealth,
   checkDocumentIdDrift,
 } from "../core/doctor-tenancy.ts";
@@ -495,6 +496,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       }
     }
     checks.push(await checkPatScopesRecorded(storage.raw()));
+    checks.push(await checkTenancyIsolationConfig(storage.raw()));
     checks.push(await checkSourceRoutingHealth(storage.raw()));
     checks.push(await checkDocumentIdDrift(storage.raw()));
 

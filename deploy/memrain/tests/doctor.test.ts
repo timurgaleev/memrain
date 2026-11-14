@@ -159,6 +159,7 @@ describe("doctor", () => {
       "source-routing-health",
       "stale-locks",
       "stats",
+      "tenancy-isolation-config",
       "vault",
     ]);
     // The eval-trend check is informational (ok) and reports the not-yet-run

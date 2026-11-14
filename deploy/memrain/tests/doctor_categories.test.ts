@@ -93,6 +93,7 @@ describe("doctor categorize", () => {
       // it is named in OPS so the categorizer does not bucket it as `meta`
       // with an "uncategorized" warning at the moment something is wrong.
       "storage-teardown",
+      "tenancy-isolation-config",
       "vault",
     ]);
   });
