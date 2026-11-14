@@ -328,6 +328,15 @@ A few that are easy to miss:
   PAT and OAuth writes record a client principal, including an operator's
   client credential, so their retrieved evidence receives this frame too.
   Admin scopes do not certify client-supplied content as operator-authored.
+- Pages, facts and documents carry a trust tier: `owner` > `member` >
+  `agent` > `external`. It is recorded when the row is written, from the
+  authenticated principal and the source kind (connector and importer sources
+  are `external`), and no later edit raises it. Rows written before the tier
+  existed get it derived at read time from the same evidence as the frame.
+  Every `search` and `query` hit reports `trust_tier`; `trust: "external"`
+  appears exactly when the tier is below `owner`. `min_trust` on `search`,
+  `query` and `context_pack` leaves out anything below the given tier; omitted,
+  every tier is returned and ranking is unchanged.
 - Search and query hits carry `generated:true` only when their current
   same-source canonical version proves an internal generator and operator
   principal, matching snapshots, hash and chunk content. Unknown legacy or

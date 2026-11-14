@@ -14,10 +14,17 @@
 import { OperationError } from "../operation-error.ts";
 import { validateSlugPrefix } from "../pages.ts";
 import { PAGE_MIRROR_PATH_SQL, PAGE_TRUTH_PATH_SQL } from "../page-index.ts";
+import { isTrustTier, minTrustClause, pageRankSql, TRUST_TIERS, trustRank, type TrustTier } from "../trust-tier.ts";
 
 export interface PageFilters {
   types?: readonly string[];
   slugPrefix?: string;
+  /**
+   * Keep rows whose effective trust tier is at least this one. Every arm that
+   * takes page filters applies it before its own LIMIT, so a lower-tier row
+   * never takes a slot an eligible row could fill.
+   */
+  minTrust?: TrustTier;
 }
 
 export function validatePageFilters(f: PageFilters): void {
@@ -27,15 +34,23 @@ export function validatePageFilters(f: PageFilters): void {
       "Use names such as person, note or meeting; each name must have at most 64 characters.");
   }
   validateSlugPrefix(f.slugPrefix);
+  if (f.minTrust !== undefined && !isTrustTier(f.minTrust)) {
+    throw new OperationError("invalid_params", `min_trust must be one of ${TRUST_TIERS.join(", ")}.`);
+  }
 }
 
 /** Match canonical live pages, never a similarly named page in another source. */
 export function pageFilterClauses(params: unknown[], f: PageFilters | undefined): string {
-  if (!f || (!f.types?.length && !f.slugPrefix)) return "";
+  if (!f) return "";
   validatePageFilters(f);
+  // A document that is no page (an inline index) is judged on its own tier,
+  // so the floor sits beside the page lookup rather than inside it.
+  const trust = minTrustClause(params, f.minTrust);
+  if (!f.types?.length && !f.slugPrefix) return trust;
   const where = ["p.deleted_at IS NULL", "p.source_id = d.source_id",
     `(d.source_path = (${PAGE_MIRROR_PATH_SQL}) OR d.source_path = (${PAGE_TRUTH_PATH_SQL}) OR d.source_path IN (p.slug, p.slug || '.md', p.slug || '.markdown'))`];
-  return ` AND EXISTS (SELECT 1 FROM pages p WHERE ${where.join(" AND ")}${pageRowFilterClauses(params, f)})`;
+  const { minTrust: _floor, ...rows } = f;
+  return `${trust} AND EXISTS (SELECT 1 FROM pages p WHERE ${where.join(" AND ")}${pageRowFilterClauses(params, rows)})`;
 }
 
 /** Predicate for an existing pages alias p, including alias candidate lookup. */
@@ -45,6 +60,9 @@ export function pageRowFilterClauses(params: unknown[], f: PageFilters | undefin
   let sql = "";
   if (f.types?.length) sql += ` AND p.type = ANY($${params.push([...f.types])}::text[])`;
   if (f.slugPrefix) sql += ` AND p.slug LIKE $${params.push(f.slugPrefix.replace(/([\\%_])/g, "\\$1") + "%")} ESCAPE '\\'`;
+  if (f.minTrust !== undefined && f.minTrust !== "external") {
+    sql += ` AND (${pageRankSql("p")}) >= $${params.push(trustRank(f.minTrust))}::int`;
+  }
   return sql;
 }
 
@@ -61,7 +79,7 @@ export interface ChunkFilters extends PageFilters {
 
 /** True when at least one filter axis is set. */
 export function hasChunkFilters(f: ChunkFilters | undefined): boolean {
-  return Boolean(f && (f.lang || f.symbolKind || f.since || f.until || f.types?.length || f.slugPrefix));
+  return Boolean(f && (f.lang || f.symbolKind || f.since || f.until || f.types?.length || f.slugPrefix || f.minTrust));
 }
 
 const RELATIVE_DURATION = /^(\d+)([dwmy])$/;
