@@ -6,9 +6,10 @@
  * the owner, caps stop the run before money or items run out, and a refused
  * credential pauses the account for a reconnect with its cursor kept.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { getPage } from "../src/core/pages.ts";
+import * as pageIndex from "../src/core/page-index.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { ConnectorClient, type TokenSource } from "../src/core/connectors/client.ts";
 import { checkConnectorHealth } from "../src/core/connectors/health.ts";
@@ -41,7 +42,7 @@ const STREAM = "items";
 const TOKEN = ["live", "access", "token", "value"].join("-");
 const ENV = { MEMRAIN_CONNECTORS_ENABLED: "1" };
 
-type Wire = { id: string; v?: string; title?: string; body?: string; broken?: string };
+type Wire = { id: string; v?: string; title?: string; body?: string; broken?: string; dk?: string };
 const wirePage = (items: Wire[], cursor: string | null, more = false, deleted: string[] = []): Recorded => ({
   status: 200,
   headers: { "content-type": "application/json" },
@@ -61,7 +62,7 @@ const adapter: SyncAdapter = {
     const body = res.body as { items: Wire[]; deleted: string[]; cursor: string | null; more: boolean };
     const items: SyncItem[] = body.items.map((w) => w.broken
       ? { externalId: w.id, version: w.v ?? "1", failure: { code: w.broken, message: `cannot read ${w.id}` } }
-      : { externalId: w.id, version: w.v ?? "1", slug: `test/acct/${w.id}`, type: "note", title: w.title ?? `Item ${w.id}`, body: w.body ?? `Body of ${w.id}.` });
+      : { externalId: w.id, version: w.v ?? "1", slug: `test/acct/${w.id}`, type: "note", title: w.title ?? `Item ${w.id}`, body: w.body ?? `Body of ${w.id}.`, dedupeKey: w.dk ?? null });
     return { ok: true, items, deletions: body.deleted, checkpoint: body.cursor, done: !body.more };
   },
 };
@@ -240,6 +241,75 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const after = harness([wirePage([], "c5")]);
       await runConnectorSync(db.storage, account(), after.deps);
       expect(after.deleted).toEqual([]);
+    } finally { await db.close(); }
+  });
+
+  it("keeps an upstream deletion pending while no deletion handler is wired", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      await runConnectorSync(db.storage, account(), harness([wirePage(Array.from({ length: 30 }, (_, i) => ({ id: `i${i}` })), "c1")]).deps);
+      const unwired = harness([wirePage([], "c2", false, ["i0"])], { deletes: false });
+      const r = await runConnectorSync(db.storage, account(), unwired.deps);
+      expect(r.counts.deletions_applied).toBe(0);
+      expect((await itemRow(db.storage, "i0"))?.held_reason).toBe("delete_pending");
+
+      const wired = harness([wirePage([], "c3")]);
+      await runConnectorSync(db.storage, account(), wired.deps);
+      expect(wired.deleted).toEqual(["i0"]);
+      expect((await itemRow(db.storage, "i0"))?.held_reason).toBeNull();
+    } finally { await db.close(); }
+  });
+
+  it("never hands over a page another live item still shares", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      const many = Array.from({ length: 40 }, (_, i) => ({ id: `x${i}` }));
+      await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "a", dk: "thread-1" }, { id: "b", dk: "thread-1" }, ...many], "c1")]).deps);
+      expect((await itemRow(db.storage, "b"))?.page_slug).toBe("test/acct/a");
+
+      const first = harness([wirePage([], "c2", false, ["a"])]);
+      await runConnectorSync(db.storage, account(), first.deps);
+      expect(first.deleted).toEqual([]);
+      expect((await itemRow(db.storage, "a"))?.held_reason).toBeNull();
+
+      const second = harness([wirePage([], "c3", false, ["b"])]);
+      await runConnectorSync(db.storage, account(), second.deps);
+      expect(second.deleted).toEqual(["b"]);
+    } finally { await db.close(); }
+  });
+
+  it("mirrors a page again on the next run when its first mirror failed", async () => {
+    const db = await open();
+    const spy = spyOn(pageIndex, "mirrorPage");
+    try {
+      await setup(db.storage);
+      spy.mockResolvedValueOnce(false);
+      const r1 = await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "m" }], "c1")]).deps);
+      expect(r1.counts.mirror_failures).toBe(1);
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "m" }], "c1")]).deps);
+      expect(spy).toHaveBeenCalledTimes(2);
+      await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "m" }], "c1")]).deps);
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      spy.mockRestore();
+      await db.close();
+    }
+  });
+
+  it("lets only one of two concurrent runs of an account in one process through", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      const deps = () => {
+        const { holder: _holder, ...rest } = harness([wirePage([{ id: "a" }], "c1"), wirePage([{ id: "a" }], "c1")]).deps;
+        return rest;
+      };
+      const [x, y] = await Promise.all([runConnectorSync(db.storage, account(), deps()), runConnectorSync(db.storage, account(), deps())]);
+      expect([x.stop_reason, y.stop_reason].filter((s) => s === "locked")).toHaveLength(1);
     } finally { await db.close(); }
   });
 

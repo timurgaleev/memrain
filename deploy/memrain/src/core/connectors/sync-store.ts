@@ -118,6 +118,17 @@ export async function pageForDedupeKey(engine: Engine, accountId: string, dedupe
   return r.rows[0]?.page_slug ?? null;
 }
 
+/** True when another item of the account, not deleted upstream, is stored as `pageSlug`. */
+export async function pageSharedByLiveItem(engine: Engine, accountId: string, pageSlug: string, externalId: string): Promise<boolean> {
+  const r = await engine.query(
+    `SELECT 1 FROM connector_items
+      WHERE account_id = $1 AND page_slug = $2 AND external_id <> $3 AND deleted_upstream_at IS NULL
+      LIMIT 1`,
+    [accountId, pageSlug, externalId],
+  );
+  return r.rows.length > 0;
+}
+
 export interface SettledItem {
   accountId: string;
   externalId: string;

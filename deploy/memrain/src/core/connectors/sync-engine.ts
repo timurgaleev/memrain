@@ -24,7 +24,10 @@
  *   - deletions: each upstream deletion is recorded as pending; at the end of
  *     the run, more than the mass-delete threshold (200 items or 5% of the
  *     account's items, both configurable) holds them all for the owner,
- *     otherwise each is handed to the deletion handler one by one;
+ *     otherwise each is handed to the deletion handler one by one; with no
+ *     handler wired they stay pending, and a page a live duplicate still
+ *     points at is never handed over;
+ *   - a page whose mirror into search failed is mirrored again next run;
  *   - a credential the provider will not renew pauses the account
  *     (`markNeedsReconnect`), opens a notice and leaves every cursor where it
  *     was, so reconnecting resumes from the same place.
@@ -55,6 +58,7 @@ import {
   markDeletesPending,
   openNotice,
   pageForDedupeKey,
+  pageSharedByLiveItem,
   readCursor,
   recordDeleteApplied,
   recordItemFailure,
@@ -318,7 +322,9 @@ export async function runConnectorSync(storage: Storage, account: SyncAccount, d
   const spentUsd = async (): Promise<number> => daySpendUsd(engine, spendClient, new Date(now()));
   if (account.spendCapUsdDaily <= 0 || (await spentUsd()) >= account.spendCapUsdDaily) return skip("cap_reached", "partial");
 
-  const holder = deps.holder ?? `pid-${process.pid}`;
+  // Per run, not per process: the worker runs jobs concurrently, and the lock
+  // lets its own holder back in.
+  const holder = deps.holder ?? `pid-${process.pid}-${crypto.randomUUID()}`;
   const lockId = syncLockId(account.id);
   if (!(await acquireWorkerLock(engine, lockId, holder, RUN_LOCK_TTL_SEC))) return skip("locked");
   try {
@@ -531,8 +537,10 @@ class Run {
       accountId: this.account.id, externalId: item.externalId, version: item.version, pageSlug,
       contentHash, dedupeKey: item.dedupeKey ?? null, now: this.date(),
     });
-    if (row !== null && sameVersion && row.fail_count === 0 && row.held_reason === null
-      && row.deleted_upstream_at === null && row.page_slug === item.slug) {
+    const known = row !== null && sameVersion && row.fail_count === 0 && row.held_reason === null
+      && row.deleted_upstream_at === null && row.page_slug === item.slug;
+    // A null hash on a known item means its last mirror into search failed.
+    if (known && row?.content_hash != null) {
       await touchItem(this.engine, this.account.id, item.externalId, this.date());
       this.result.counts.pages_unchanged++;
       return null;
@@ -546,7 +554,7 @@ class Run {
       }
     }
     try {
-      const hash = await this.write(item);
+      const hash = await this.write(item, known);
       await settle(item.slug, hash);
       return null;
     } catch (e) {
@@ -555,8 +563,13 @@ class Run {
     }
   }
 
-  /** Write the page and mirror it into search. Returns the stored content hash. */
-  private async write(item: RenderedSyncItem): Promise<string> {
+  /**
+   * Write the page and mirror it into search. Returns the stored content hash,
+   * or null when the mirror failed, so the next run mirrors it again even
+   * though the page itself is unchanged by then. `remirror` mirrors an
+   * unchanged page whose earlier mirror failed.
+   */
+  private async write(item: RenderedSyncItem, remirror: boolean): Promise<string | null> {
     // A live connector token must never reach a page, whatever the scan disposition.
     const findings: SecretFinding[] = [];
     const body = this.tokens.size > 0 ? sweepEchoes(item.body, this.tokens, findings) : item.body;
@@ -572,20 +585,22 @@ class Run {
       outsideText: true,
     });
     if (put.held) throw new OperationError("conflict", `Import held: ${put.held}`);
+    const stored = put.outside_body ?? body;
     if (!put.changed && !put.created) {
       this.result.counts.pages_unchanged++;
-      return put.content_hash;
+      if (!remirror) return put.content_hash;
+    } else {
+      this.result.counts.pages_written++;
+      this.changed.push({ slug: item.slug, body: stored });
     }
-    this.result.counts.pages_written++;
-    const stored = put.outside_body ?? body;
-    this.changed.push({ slug: item.slug, body: stored });
     const ok = await mirrorPage(
       this.storage,
       { slug: item.slug, title, markdown_body: stored, content_hash: put.content_hash, source_id: this.account.sourceId },
       { remote: true, timingLabel: `connector_${this.account.provider}`, ...(this.deps.embedFn ? { embedFn: this.deps.embedFn } : {}) },
     );
-    if (!ok) this.result.counts.mirror_failures++;
-    return put.content_hash;
+    if (ok) return put.content_hash;
+    this.result.counts.mirror_failures++;
+    return null;
   }
 
   /** Apply or hold the deletions this and earlier runs recorded. */
@@ -608,19 +623,28 @@ class Run {
   }
 
   private async apply(rows: ReadonlyArray<{ external_id: string; page_slug: string | null }>): Promise<void> {
+    const handler = this.deps.onUpstreamDelete;
+    // Without a handler nothing can be deleted: the rows stay pending, so the
+    // deletion still runs once one is wired, although the cursor has moved on.
+    if (handler === undefined) return;
     let failed = 0;
     for (const row of rows) {
-      try {
-        await this.deps.onUpstreamDelete?.(this.storage, {
-          accountId: this.account.id, sourceId: this.account.sourceId, externalId: row.external_id, pageSlug: row.page_slug,
-        });
-      } catch (e) {
-        if (!(e instanceof OperationError)) throw e;
-        failed++;
-        continue;
+      // A page a live duplicate still points at stays; only this item's claim on it ends.
+      const shared = row.page_slug !== null
+        && await pageSharedByLiveItem(this.engine, this.account.id, row.page_slug, row.external_id);
+      if (!shared) {
+        try {
+          await handler(this.storage, {
+            accountId: this.account.id, sourceId: this.account.sourceId, externalId: row.external_id, pageSlug: row.page_slug,
+          });
+        } catch (e) {
+          if (!(e instanceof OperationError)) throw e;
+          failed++;
+          continue;
+        }
+        this.result.counts.deletions_applied++;
       }
       await recordDeleteApplied(this.engine, this.account.id, row.external_id);
-      if (this.deps.onUpstreamDelete) this.result.counts.deletions_applied++;
     }
     if (failed > 0) this.stop("deletions_failed");
   }
