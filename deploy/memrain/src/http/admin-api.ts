@@ -39,6 +39,8 @@ import { normalizeScopesInput } from "../core/scope.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 import { handleAdminTool } from "./admin-tool.ts";
 import { defaultConnectorDeps, handleAdminConnectors } from "./admin-connectors.ts";
+import { handleAdminApprovals } from "./admin-approvals.ts";
+import { handleAdminAutonomy } from "./admin-autonomy.ts";
 import { controlDaemon, daemonsStatus } from "../core/daemons/status.ts";
 import { OperationError } from "../core/operation-error.ts";
 import type { RateLimiter } from "../mcp/rate_limit.ts";
@@ -188,6 +190,14 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
 
   if (p === "/admin/api/connectors" || p.startsWith("/admin/api/connectors/")) {
     const r = await handleAdminConnectors(req, url, defaultConnectorDeps(deps.storage, deps.publicUrl, deps.adminSessionId ?? (() => null)));
+    if (r) return r;
+  }
+  if (p.startsWith("/admin/api/write-gate/")) {
+    const r = await handleAdminApprovals(req, url, engine).catch((e: unknown) => serverError("write-gate", e));
+    if (r) return r;
+  }
+  if (p === "/admin/api/spend/paused" || p === "/admin/api/spend/resume") {
+    const r = await handleAdminAutonomy(req, url, engine).catch((e: unknown) => serverError("spend-paused", e));
     if (r) return r;
   }
 
