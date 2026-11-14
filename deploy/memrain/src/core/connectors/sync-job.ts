@@ -5,7 +5,8 @@
  *
  * A scheduled run names a source and syncs each of its enabled, active
  * accounts in turn; a single-account run names the account (and its source).
- * Either way the handler goes through the scheduler's daemon gate, so a
+ * A single-account payload must also name the account's source: either way
+ * the handler goes through the scheduler's daemon gate, so a
  * paused or disabled `connector_sync` (globally or for that source) and the
  * MEMRAIN_DAEMONS kill switch stop it before any credential is opened.
  *
@@ -53,9 +54,10 @@ export function connectorSyncHandler(storage: Storage, runtime: ConnectorSyncRun
       }
       const account = await runtime.loadAccount(accountId);
       if (account === null) throw new UnrecoverableJobError(`connector account ${accountId} does not exist`);
-      // The daemon gate checked this source's pause; a run for another source's account would slip past it.
-      if (sourceId !== undefined && sourceId !== account.sourceId) {
-        throw new UnrecoverableJobError(`connector account ${accountId} does not belong to the payload's source`);
+      // The daemon gate checked the payload source's pause; a run without the
+      // account's own source would slip past that source's pause.
+      if (sourceId !== account.sourceId) {
+        throw new UnrecoverableJobError(`connector_sync payload must name the source of account ${accountId}`);
       }
       return { ...await runConnectorSync(storage, account, runtime.depsFor(account)) };
     }

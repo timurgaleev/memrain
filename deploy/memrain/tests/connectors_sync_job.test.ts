@@ -128,7 +128,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       // The daemon is off by default: a queued run is skipped before anything opens.
       expect(await handler({ accountId: row.id, sourceId: "conn-job" }, { job })).toEqual({ skipped: "disabled" });
       await db.storage.engine().query(`INSERT INTO daemon_controls (daemon, source_id, enabled) VALUES ('connector_sync', '*', true)`);
-      const result = await handler({ accountId: row.id }, { job });
+      const result = await handler({ accountId: row.id, sourceId: "conn-job" }, { job });
       expect(result).toMatchObject({ account_id: row.id, status: "success" });
       expect(JSON.stringify(result)).not.toContain(TOKEN);
       expect((await getPage(db.storage, "test/job/j1"))?.markdown_body).toContain("Written by the job.");
@@ -137,6 +137,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await expect(handler({ accountId: "not-a-uuid" }, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
       await expect(handler({ accountId: "11111111-2222-4333-8444-5555555555ab" }, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
       await expect(handler({ accountId: row.id, sourceId: "other-source" }, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
+      // Without its source the daemon gate would have checked another source's pause.
+      await expect(handler({ accountId: row.id }, { job })).rejects.toBeInstanceOf(UnrecoverableJobError);
 
       const bySource = await handler({ daemon: "connector_sync", sourceId: "conn-job", window: "w" }, { job });
       expect(bySource).toMatchObject({ source_id: "conn-job", accounts: [{ account_id: row.id }] });
