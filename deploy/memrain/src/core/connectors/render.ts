@@ -108,9 +108,11 @@ export function htmlToText(html: string): string {
     if (open === -1) break;
     out += body.slice(from, open);
     const close = body.indexOf(">", open);
-    if (close === -1) {
-      from = body.length;
-      break;
+    // A `<` that does not open a tag (`Budget < $5k`) or never closes is text.
+    if (close === -1 || !/^<[a-z/!]/i.test(body.slice(open, open + 2))) {
+      out += "<";
+      from = open + 1;
+      continue;
     }
     const name = /^<\/?\s*([a-z0-9]+)/i.exec(body.slice(open, Math.min(close + 1, open + 32)))?.[1]?.toLowerCase();
     if (name !== undefined && BREAK_TAGS.has(name)) out += "\n";
@@ -252,7 +254,8 @@ export function renderCalendarEvent(ctx: ConnectorContext, event: CalendarEvent)
   const start = iso(event.start, "event start");
   const end = event.end === null ? null : iso(event.end, "event end");
   const key = shortHash(event.iCalUID ? `ical:${event.iCalUID}` : `event:${ctx.service}:${event.id}`);
-  const slug = `calendar/${accountRef(ctx.accountLabel)}/${start.slice(0, 10)}-${key}`;
+  // No date in the slug: a rescheduled event stays one page.
+  const slug = `calendar/${accountRef(ctx.accountLabel)}/${key}`;
   const g = new Guard(`connector event '${slug}'`);
   const title = headingText(g.line(event.title), "(untitled event)");
 

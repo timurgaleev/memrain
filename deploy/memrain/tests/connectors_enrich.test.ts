@@ -81,6 +81,15 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(new Date(rows[0]!.occurred_at).toISOString()).toBe("2026-11-12T14:00:00.000Z");
   });
 
+  it("rewrites the chronicle event when the title changes", async () => {
+    const page = renderCalendarEvent({ service: "google_calendar", accountLabel: OWNER }, event());
+    await write(page, "cal");
+    await enrich(page, "cal");
+    const renamed = renderCalendarEvent({ service: "google_calendar", accountLabel: OWNER }, event({ title: "Final review" }));
+    await enrich(renamed, "cal");
+    expect((await events(page.slug)).map(r => r.event)).toEqual(["Event: Final review"]);
+  });
+
   it("drops the chronicle event and the links of an attendee who left", async () => {
     const page = renderCalendarEvent({ service: "google_calendar", accountLabel: OWNER }, event());
     await write(page, "cal");

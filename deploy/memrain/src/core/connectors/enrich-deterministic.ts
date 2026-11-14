@@ -152,17 +152,19 @@ async function syncChronicle(storage: Storage, input: EnrichInput): Promise<bool
   const key = connectorEventKey(account, page.externalId);
   const cancelled = page.kind === "calendar" && page.truth["status"] === "cancelled";
   const occurred = new Date(page.occurredAt).toISOString();
+  const title = neutralizeOutsideText(page.title).replace(/\s+/g, " ").trim().slice(0, 200) || "(untitled)";
+  const event = `${page.kind === "meeting" ? "Meeting" : "Event"}: ${title}`;
+  // The key owns at most one row: a moved or renamed item replaces it.
   await storage.engine().query(
     `DELETE FROM timeline_events WHERE slug = $1 AND source_id = $2 AND source_chunk_id = $3
-        AND ($4::boolean OR occurred_at <> $5::timestamptz)`,
-    [page.slug, sourceId, key, cancelled, occurred],
+        AND ($4::boolean OR occurred_at <> $5::timestamptz OR event <> $6)`,
+    [page.slug, sourceId, key, cancelled, occurred, event],
   );
   if (cancelled) return false;
-  const title = neutralizeOutsideText(page.title).replace(/\s+/g, " ").trim().slice(0, 200) || "(untitled)";
   await addTimelineEvent(storage, {
     slug: page.slug,
     occurred_at: occurred,
-    event: `${page.kind === "meeting" ? "Meeting" : "Event"}: ${title}`,
+    event,
     source_label: `connector:${String(page.truth["connector"] ?? page.kind)}`,
     source_chunk_id: key,
     source_id: sourceId,

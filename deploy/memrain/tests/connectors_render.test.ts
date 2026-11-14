@@ -121,10 +121,25 @@ describe("calendar", () => {
     const outlook = renderCalendarEvent({ service: "outlook_calendar", accountLabel: ACCOUNT }, event({ id: "AAMk-other-id" }));
     expect(google.slug).toBe(outlook.slug);
     expect(google.body).toBe(outlook.body);
-    expect(google.slug).toMatch(/^calendar\/[0-9a-f]{16}\/2026-11-12-[0-9a-f]{16}$/);
+    expect(google.slug).toMatch(/^calendar\/[0-9a-f]{16}\/[0-9a-f]{16}$/);
     expect(google.truth).toMatchObject({ kind: "calendar", trust: "untrusted", occurred_at: "2026-11-12T10:00:00.000Z", last_activity_at: "2026-11-12T11:00:00.000Z" });
     expect(google.participants.map(p => p.email).sort()).toEqual(["bob@example.net", "carol@example.net"]);
     expect(google.body).toContain("Carol Diaz <carol@example.net> (accepted)");
+  });
+});
+
+describe("calendar changes", () => {
+  it("keeps one page when an event moves to another day", () => {
+    const before = renderCalendarEvent({ service: "google_calendar", accountLabel: ACCOUNT }, event());
+    const after = renderCalendarEvent({ service: "google_calendar", accountLabel: ACCOUNT }, event({ start: "2026-11-20T10:00:00.000Z", end: "2026-11-20T11:00:00.000Z" }));
+    expect(after.slug).toBe(before.slug);
+  });
+
+  it("keeps a plain-text description with angle brackets whole", () => {
+    const page = renderCalendarEvent({ service: "google_calendar", accountLabel: ACCOUNT }, event({ description: "Budget < $5k, due > Friday and more" }));
+    expect(page.body).toContain("Budget < $5k, due > Friday and more");
+    expect(htmlToText("a <b>bold</b> < c")).toBe("a bold < c");
+    expect(htmlToText("tail <unclosed tag text")).toBe("tail <unclosed tag text");
   });
 });
 
