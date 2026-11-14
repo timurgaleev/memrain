@@ -19,7 +19,13 @@ import {
   type SyncDeps,
   type SyncItem,
 } from "../src/core/connectors/sync-engine.ts";
-import { readCursor, writeCursor } from "../src/core/connectors/sync-store.ts";
+import {
+  confirmHeldDeletes,
+  readCursor,
+  rejectHeldDeletes,
+  retryHeldItems,
+  writeCursor,
+} from "../src/core/connectors/sync-store.ts";
 import { ReauthRequiredError } from "../src/core/connectors/types.ts";
 import { acquireWorkerLock } from "../src/core/jobs/worker-lock.ts";
 import { logSpend } from "../src/core/budget.ts";
@@ -208,6 +214,47 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await openNotices(db.storage)).toEqual(["mass_delete_held"]);
       expect(await readCursor(db.storage.engine(), ACCOUNT_ID, STREAM)).toBe("c3");
       expect(await getPage(db.storage, "test/acct/i1")).not.toBeNull();
+    } finally { await db.close(); }
+  });
+
+  it("applies a held mass delete once the owner confirms it, and keeps the pages when the owner refuses", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      const ids = Array.from({ length: 10 }, (_, i) => `i${i}`);
+      await runConnectorSync(db.storage, account(), harness([wirePage(ids.map((id) => ({ id })), "c1")]).deps);
+      await runConnectorSync(db.storage, account(), harness([wirePage([], "c2", false, ["i0", "i1", "i2"])]).deps);
+      expect((await itemRow(db.storage, "i0"))?.held_reason).toBe("mass_delete");
+
+      expect(await confirmHeldDeletes(db.storage.engine(), ACCOUNT_ID)).toBe(3);
+      expect(await openNotices(db.storage)).toEqual([]);
+      const confirmed = harness([wirePage([], "c3")]);
+      const r = await runConnectorSync(db.storage, account(), confirmed.deps);
+      expect(confirmed.deleted).toEqual(["i0", "i1", "i2"]);
+      expect(r.counts.deletions_applied).toBe(3);
+      expect((await itemRow(db.storage, "i0"))?.held_reason).toBeNull();
+
+      await runConnectorSync(db.storage, account(), harness([wirePage([], "c4", false, ["i3", "i4"])]).deps);
+      expect(await rejectHeldDeletes(db.storage.engine(), ACCOUNT_ID)).toBe(2);
+      expect(await itemRow(db.storage, "i3")).toMatchObject({ held_reason: null, deleted_upstream_at: null });
+      const after = harness([wirePage([], "c5")]);
+      await runConnectorSync(db.storage, account(), after.deps);
+      expect(after.deleted).toEqual([]);
+    } finally { await db.close(); }
+  });
+
+  it("lets the owner retry held items before their back-off ends", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      const bad = () => wirePage([{ id: "bad", broken: "parse_error" }], "c1");
+      for (let i = 0; i < 3; i++) await runConnectorSync(db.storage, account(), harness([bad()]).deps);
+      expect((await itemRow(db.storage, "bad"))?.held_reason).toBe("parse_error");
+      expect(await retryHeldItems(db.storage.engine(), ACCOUNT_ID)).toBe(1);
+      expect(await openNotices(db.storage)).toEqual([]);
+      const fixed = await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "bad" }], "c2")]).deps);
+      expect(fixed.counts.pages_written).toBe(1);
+      expect(await itemRow(db.storage, "bad")).toMatchObject({ held_reason: null, page_slug: "test/acct/bad" });
     } finally { await db.close(); }
   });
 
