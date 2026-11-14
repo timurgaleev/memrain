@@ -31,6 +31,9 @@ export interface DaemonSpec {
   lane: DaemonLane;
   /** Makes model calls; refused while no brain-wide daily cap is set. */
   paid: boolean;
+  /** A paid daemon's day cap over every source, and its per-run cap (see caps.ts). */
+  defaultCapUsdPerDay?: number;
+  defaultCapUsdPerRun?: number;
   /** Runs without an operator opting in. */
   defaultEnabled: boolean;
   /** Sources to run for; defaults to the operator's brain only. */

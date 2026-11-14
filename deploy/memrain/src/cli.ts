@@ -68,7 +68,7 @@ import { runRename } from "./commands/rename.ts";
 import { runPages } from "./commands/pages.ts";
 import { runLint } from "./commands/lint.ts";
 import { runReports } from "./commands/reports.ts";
-import { runSpend } from "./commands/spend.ts";
+import { runSpend, runSpendResume } from "./commands/spend.ts";
 import { runAgentCli } from "./commands/agent.ts";
 import { runSkilloptCli } from "./commands/skillopt.ts";
 import { runSkillpack, runSkillpackLint } from "./commands/skillpack.ts";
@@ -249,6 +249,7 @@ function printUsage(): void {
   console.log("                               DB frontmatter conformance (no target) or file lint with auto-repair");
   console.log("  reports [--since H|ISO|7d]          trend report from cycle_snapshots");
   console.log("  spend [--days N]             LLM spend by model, feature and spender");
+  console.log("  spend resume <path>          let a paid path paused after an overrun spend again");
   console.log("  agent run <task> [--max-usd X] [--wait]");
   console.log("                               queue a read-only agent job (needs MEMRAIN_AGENT_ENABLED=1); prints its id");
   console.log("  agent logs <job-id>          render an agent job's transcript and tool calls");
@@ -1550,6 +1551,12 @@ async function main(argv: readonly string[]): Promise<number> {
       return 0;
     }
     case "spend": {
+      if (positional[0] === "resume") {
+        const path = positional[1];
+        if (path === undefined || path === "") throw new Error("memrain spend resume: name the paused path");
+        await runSpendResume(path);
+        return 0;
+      }
       const daysStr = values.get("--days");
       const days = daysStr === undefined ? undefined : Number(daysStr);
       if (days !== undefined && (!Number.isInteger(days) || days < 1 || days > 366)) {

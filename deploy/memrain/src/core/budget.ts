@@ -335,6 +335,13 @@ export interface SpendLogInput {
   outcome?: SpendOutcome | null;
   /** Time spent in the provider call. */
   latencyMs?: number | null;
+  /** Wallet path the call was spent on (see `runInWallet`). */
+  role?: string | null;
+  /** Daemon, and the source its run serves, the call was spent for. */
+  daemon?: string | null;
+  daemonSource?: string | null;
+  /** Part of `costUsd` above the call's hold; left out of every cap sum. */
+  overrunUsd?: number | null;
 }
 
 /** How a booked call ended; `refused` never reached the provider. */
@@ -348,8 +355,8 @@ export async function logSpend(engine: Engine, e: SpendLogInput): Promise<void> 
   await engine.query(
     `INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model,
                                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-                                phase, job_id, outcome, latency_ms)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+                                phase, job_id, outcome, latency_ms, role, daemon, daemon_source, overrun_cents)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
     [
       e.clientId ?? null,
       e.tokenName ?? null,
@@ -365,9 +372,20 @@ export async function logSpend(engine: Engine, e: SpendLogInput): Promise<void> 
       e.jobId ?? null,
       e.outcome ?? null,
       e.latencyMs == null ? null : Math.max(0, Math.round(e.latencyMs)),
+      e.role ?? null,
+      e.daemon ?? null,
+      e.daemonSource ?? null,
+      e.overrunUsd ? usdToCents(e.overrunUsd) : null,
     ],
   );
 }
+
+/**
+ * What a settled row counts against a cap: its actual, less any overrun above
+ * the hold it was given. The hold is the call's maximum cost, so an overrun is
+ * an estimate error the wallet records and pauses on, never spend a cap let in.
+ */
+const CAPPED_SPEND_SQL = "spend_cents - COALESCE(overrun_cents, 0)";
 
 /**
  * A client's spend so far in the current UTC day: settled actuals PLUS
@@ -382,7 +400,7 @@ export async function daySpendUsd(
   const dayStart = utcDayStart(now).toISOString();
   const r = await engine.query<{ actual: string | number | null; held: string | number | null }>(
     `SELECT
-       (SELECT COALESCE(SUM(spend_cents), 0)
+       (SELECT COALESCE(SUM(${CAPPED_SPEND_SQL}), 0)
           FROM mcp_spend_log
          WHERE client_id = $1 AND created_at >= $2::timestamptz) AS actual,
        (SELECT COALESCE(SUM(estimated_cents), 0)
@@ -407,7 +425,7 @@ async function brainWideDaySpendUsd(engine: Engine, now: Date, cycleOnly: boolea
   const phaseFilter = cycleOnly ? " AND phase IS NOT NULL" : "";
   const r = await engine.query<{ actual: string | number | null; held: string | number | null }>(
     `SELECT
-       (SELECT COALESCE(SUM(spend_cents), 0)
+       (SELECT COALESCE(SUM(${CAPPED_SPEND_SQL}), 0)
           FROM mcp_spend_log
          WHERE created_at >= $1::timestamptz${phaseFilter}) AS actual,
        (SELECT COALESCE(SUM(estimated_cents), 0)
@@ -429,6 +447,59 @@ export function brainDaySpendUsd(engine: Engine, now: Date = new Date()): Promis
 /** The cycle's spend so far today: calls made under any cycle phase. */
 export function cycleDaySpendUsd(engine: Engine, now: Date = new Date()): Promise<number> {
   return brainWideDaySpendUsd(engine, now, true);
+}
+
+/** A wallet day-cap key: the ledger columns a cap sums over, and their values. */
+type WalletKey =
+  | { col: "role"; role: string }
+  | { col: "daemon"; daemon: string }
+  | { col: "daemon_source"; daemon: string; source: string };
+
+/** Today's capped spend under one wallet key, settled actuals plus pending holds. */
+async function walletKeyDaySpendUsd(engine: Engine, key: WalletKey, now: Date): Promise<number> {
+  const dayStart = utcDayStart(now).toISOString();
+  // Column names come from the closed WalletKey union, never from input. A
+  // row's role is its chain of nested paths (`outer/inner`), so a path's spend
+  // includes every path that ran inside it.
+  const where = key.col === "role" ? "$3 = ANY(string_to_array(role, '/'))"
+    : key.col === "daemon" ? "daemon = $3"
+    : "daemon = $3 AND daemon_source = $4";
+  const params: unknown[] = [dayStart, now.toISOString(),
+    key.col === "role" ? key.role : key.daemon,
+    ...(key.col === "daemon_source" ? [key.source] : [])];
+  const r = await engine.query<{ actual: string | number | null; held: string | number | null }>(
+    `SELECT
+       (SELECT COALESCE(SUM(${CAPPED_SPEND_SQL}), 0)
+          FROM mcp_spend_log
+         WHERE created_at >= $1::timestamptz AND ${where}) AS actual,
+       (SELECT COALESCE(SUM(estimated_cents), 0)
+          FROM mcp_spend_reservations
+         WHERE status = 'pending'
+           AND created_at >= $1::timestamptz
+           AND expires_at > $2::timestamptz AND ${where}) AS held`,
+    params,
+  );
+  const row = r.rows[0];
+  return (Number(row?.actual ?? 0) + Number(row?.held ?? 0)) / CENTS_PER_USD;
+}
+
+/** A wallet path's spend so far today, held calls included. */
+export function roleDaySpendUsd(engine: Engine, role: string, now: Date = new Date()): Promise<number> {
+  return walletKeyDaySpendUsd(engine, { col: "role", role }, now);
+}
+
+/** A daemon's spend so far today over every source, or for one source. */
+export function daemonDaySpendUsd(
+  engine: Engine,
+  daemon: string,
+  sourceId?: string,
+  now: Date = new Date(),
+): Promise<number> {
+  return walletKeyDaySpendUsd(
+    engine,
+    sourceId === undefined ? { col: "daemon", daemon } : { col: "daemon_source", daemon, source: sourceId },
+    now,
+  );
 }
 
 export interface ClientBudgetCheck {
@@ -498,6 +569,10 @@ export interface ReserveSpendInput {
   now?: Date;
   /** Cycle phase the hold counts against; null outside one. */
   phase?: string | null;
+  /** Wallet keys the hold counts against; null outside a wallet path. */
+  role?: string | null;
+  daemon?: string | null;
+  daemonSource?: string | null;
 }
 
 export type ReserveSpendResult =
@@ -537,8 +612,9 @@ async function reserveWithin(tx: Engine, input: ReserveSpendInput): Promise<Rese
   }
   await tx.query(
     `INSERT INTO mcp_spend_reservations
-       (reservation_id, client_id, estimated_cents, model, provider, status, created_at, expires_at, phase)
-     VALUES ($1, $2, $3, $4, $5, 'pending', $6::timestamptz, $7::timestamptz, $8)`,
+       (reservation_id, client_id, estimated_cents, model, provider, status, created_at, expires_at, phase,
+        role, daemon, daemon_source)
+     VALUES ($1, $2, $3, $4, $5, 'pending', $6::timestamptz, $7::timestamptz, $8, $9, $10, $11)`,
     [
       reservationId,
       input.clientId,
@@ -548,6 +624,9 @@ async function reserveWithin(tx: Engine, input: ReserveSpendInput): Promise<Rese
       now.toISOString(),
       new Date(now.getTime() + ttl).toISOString(),
       input.phase ?? null,
+      input.role ?? null,
+      input.daemon ?? null,
+      input.daemonSource ?? null,
     ],
   );
   return { reserved: true, reservationId };
@@ -660,10 +739,12 @@ export interface TrackedCall {
  *  template tokens): small, but it is what a short intent call is made of. */
 const WORST_CASE_OVERHEAD_TOKENS = 64;
 
-/** The most `call` can cost; null when its model has no price. */
+/** The most `call` can cost; null when its model has no price or its output
+ *  has no finite bound, since then no maximum exists to hold. */
 export function worstCaseUsd(call: TrackedCall): number | null {
   if (priceFor(call.model) === null) return null;
   const w = call.worstCase;
+  if (!Number.isFinite(w.maxOutputTokens) || w.maxOutputTokens < 0) return null;
   return costUsd(
     call.model,
     chargeableUsage({
@@ -779,13 +860,17 @@ export function currentSpendTags(): SpendTags {
 /** Why a brain-wide or cycle daily cap refused a call; the prefix of its message. */
 export const DAILY_CAP_REASON = "daily_cap";
 
-/** A brain-wide or cycle daily cap refused the call. Code `budget_exhausted`,
+/** Which cap refused a call: a day cap (brain, cycle, wallet path, daemon, one
+ *  daemon source) or a wallet limit that no rollover clears (see WalletRefusal). */
+export type SpendCapScope = "brain" | "cycle" | "role" | "daemon" | "daemon_source" | WalletRefusalScope;
+
+/** A brain-wide, cycle or wallet cap refused the call. Code `budget_exhausted`,
  *  so `isBudgetRefusal` holds too; `reason` survives the public envelope, which
  *  withholds the message. */
 export class DailyCapRefusal extends OperationError {
   readonly reason = DAILY_CAP_REASON;
   constructor(
-    readonly scope: "brain" | "cycle",
+    readonly scope: SpendCapScope,
     message: string,
     suggestion: string,
     /** False when the next UTC day refuses it the same way (an unpriced
@@ -843,6 +928,341 @@ export function cycleDailyCapUsd(env: NodeJS.ProcessEnv = process.env): number |
   return currentSpendTags().phase ? configuredCycleDailyCapUsd(env) : null;
 }
 
+// ---------------------------------------------------------------------------
+// Spend wallet — hierarchical caps over the ledger and holds above.
+//
+// A paid path runs its work inside `runInWallet`, naming itself (`role`) and,
+// for a daemon, the daemon and the source that run serves. Every call inside
+// is then held at its maximum possible cost against each cap in scope, all or
+// nothing, before it is sent:
+//
+//   per call      callCapUsd       the call's own maximum, in process
+//   per run       runCapUsd        everything this run holds or spent, in process
+//   per path/day  dayCapUsd        the path's day, durable (ledger `role`)
+//   per daemon    daemon.dayCapUsd       the daemon's day over all sources
+//   per source    daemon.sourceDayCapUsd the daemon's day for this source
+//   per client    the spend client's budget (runWithSpendClient), as before
+//   whole brain   MEMRAIN_DAILY_BUDGET_USD, as before
+//
+// A path is nested inside another, and every enclosing path's caps still bind.
+// Inside a wallet path, a call nobody can price, or whose output has no finite
+// bound, is refused even with no cap set: the wallet cannot count it. A path
+// marked `requiresBrainCap` (daemons, connectors, chat — paid paths added
+// after the wallet) refuses every call while MEMRAIN_DAILY_BUDGET_USD is unset.
+//
+// After the call a hold is settled at the reported actual. A hold is the
+// maximum the call can cost, so an actual above it is an accounting error: the
+// ledger keeps the full actual, the caps count only the hold, the path is
+// paused (spend_path_pauses) and doctor and the advisor report it until the
+// operator resumes the path.
+// ---------------------------------------------------------------------------
+
+/** One daemon run's place in the wallet. */
+export interface WalletDaemon {
+  name: string;
+  /** The source this run serves. */
+  sourceId: string;
+  /** Day cap over this daemon's calls for every source; null = none. */
+  dayCapUsd?: number | null;
+  /** Day cap over this daemon's calls for `sourceId` alone; null = none. */
+  sourceDayCapUsd?: number | null;
+}
+
+export interface WalletPath {
+  /** The path's ledger name: lowercase letters, digits and `_:.-`. */
+  role: string;
+  daemon?: WalletDaemon;
+  /** A paid path added after the wallet: no call runs until the brain has a
+   *  daily cap (MEMRAIN_DAILY_BUDGET_USD). */
+  requiresBrainCap?: boolean;
+  callCapUsd?: number | null;
+  runCapUsd?: number | null;
+  dayCapUsd?: number | null;
+}
+
+/** What one run has spent and holds against its run cap, in this process. */
+interface RunLedger {
+  capUsd: number;
+  spent: number;
+  held: number;
+}
+
+interface WalletFrame {
+  path: WalletPath;
+  run: RunLedger | null;
+}
+
+const _wallet = new AsyncLocalStorage<readonly WalletFrame[]>();
+
+const WALLET_ROLE_RE = /^[a-z0-9][a-z0-9_:.-]{0,99}$/;
+
+function assertCap(what: string, v: number | null | undefined): void {
+  if (v === null || v === undefined) return;
+  if (!Number.isFinite(v) || v < 0) throw new Error(`runInWallet: ${what} must be a non-negative USD amount (got ${v})`);
+}
+
+/** Run `fn` as the wallet path `path`: every paid call inside is held against
+ *  its caps and every enclosing path's, and booked under its name. */
+export function runInWallet<T>(path: WalletPath, fn: () => Promise<T>): Promise<T> {
+  if (!WALLET_ROLE_RE.test(path.role)) throw new Error(`runInWallet: invalid path name '${path.role}'`);
+  assertCap("callCapUsd", path.callCapUsd);
+  assertCap("runCapUsd", path.runCapUsd);
+  assertCap("dayCapUsd", path.dayCapUsd);
+  assertCap("daemon.dayCapUsd", path.daemon?.dayCapUsd);
+  assertCap("daemon.sourceDayCapUsd", path.daemon?.sourceDayCapUsd);
+  const run = path.runCapUsd === null || path.runCapUsd === undefined
+    ? null
+    : { capUsd: path.runCapUsd, spent: 0, held: 0 };
+  return _wallet.run([...(_wallet.getStore() ?? []), { path, run }], fn);
+}
+
+function walletFrames(): readonly WalletFrame[] {
+  return _wallet.getStore() ?? [];
+}
+
+/** The innermost wallet path in scope, or null outside every one. */
+export function currentWalletPath(): WalletPath | null {
+  const frames = walletFrames();
+  return frames.length > 0 ? frames[frames.length - 1]!.path : null;
+}
+
+/**
+ * The wallet path of a paid path that predates the wallet (facts extraction,
+ * the facts backfill, the contextual-LLM tier, deep synthesis). It adds no cap
+ * by default and does not wait for a brain cap: the path's own run cap (a
+ * BudgetTracker at the value it always had) stays the one that binds. An
+ * operator may add a day cap with MEMRAIN_SPEND_PATH_<ROLE>_MAX_USD_PER_DAY.
+ */
+export function paidPathWallet(role: string, env: NodeJS.ProcessEnv = process.env): WalletPath {
+  const dayCap = envCapUsd(`MEMRAIN_SPEND_PATH_${role.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_MAX_USD_PER_DAY`, env);
+  return { role, ...(dayCap !== null ? { dayCapUsd: dayCap } : {}) };
+}
+
+/** Run `fn` as the existing paid path `role`, unless a wallet path is already
+ *  in scope: then the enclosing path keeps naming (and capping) the spend. */
+export function runAsPath<T>(role: string, fn: () => Promise<T>): Promise<T> {
+  return walletFrames().length > 0 ? fn() : runInWallet(paidPathWallet(role), fn);
+}
+
+/**
+ * The path, daemon and daemon source a call in scope is booked under. The
+ * role is the chain of nested paths, outermost first (`outer/inner`), so each
+ * enclosing path's day cap counts it; path names cannot contain `/`.
+ */
+function walletTags(): { role: string | null; daemon: string | null; daemonSource: string | null } {
+  const frames = walletFrames();
+  let daemon: WalletDaemon | undefined;
+  for (const f of frames) if (f.path.daemon) daemon = f.path.daemon;
+  return {
+    role: frames.length > 0 ? frames.map((f) => f.path.role).join("/") : null,
+    daemon: daemon?.name ?? null,
+    daemonSource: daemon?.sourceId ?? null,
+  };
+}
+
+/** Wallet refusals no UTC rollover clears: a config change, a smaller call or
+ *  the operator resuming the path is what lets the next call through. */
+export type WalletRefusalScope = "call" | "run" | "unconfigured" | "paused" | "no_pricing" | "accounting";
+
+/** A wallet limit refused the call before it was sent. A non-rollover daily
+ *  cap refusal, so batch loops and the job worker stop instead of retrying. */
+export class WalletRefusal extends DailyCapRefusal {
+  constructor(
+    override readonly scope: WalletRefusalScope,
+    readonly path: string,
+    message: string,
+    suggestion: string,
+  ) {
+    super(scope, message, suggestion, false);
+  }
+}
+
+/** A pause this process could not write yet; it holds here until it is written. */
+interface PendingPause {
+  reason: string;
+  model: string;
+  heldUsd: number;
+  actualUsd: number;
+}
+
+/** Paths paused in this process whose pause row is not written yet: they stay
+ *  paused here, and every later call on the path retries the write. */
+const _pausedHere = new Map<string, PendingPause>();
+
+export interface PausedSpendPath {
+  path: string;
+  reason: string;
+  model: string | null;
+  heldUsd: number | null;
+  actualUsd: number | null;
+  pausedAt: string;
+}
+
+/** Every path paused after an overrun and not yet resumed. */
+export async function pausedSpendPaths(engine: Engine): Promise<PausedSpendPath[]> {
+  // scope: operator-only a pause is brain-wide state about a paid path, read by doctor and the operator
+  const r = await engine.query<{
+    path: string; reason: string; model: string | null;
+    held_cents: string | number | null; actual_cents: string | number | null; paused_at: string;
+  }>(
+    `SELECT path, reason, model, held_cents, actual_cents, paused_at::text AS paused_at
+       FROM spend_path_pauses WHERE resolved_at IS NULL ORDER BY paused_at, path`,
+  );
+  return r.rows.map((row) => ({
+    path: row.path,
+    reason: row.reason,
+    model: row.model,
+    heldUsd: row.held_cents === null ? null : Number(row.held_cents) / CENTS_PER_USD,
+    actualUsd: row.actual_cents === null ? null : Number(row.actual_cents) / CENTS_PER_USD,
+    pausedAt: row.paused_at,
+  }));
+}
+
+/** Resume a paused path. True when an open pause was resolved. */
+export async function resumeSpendPath(engine: Engine, path: string, by: string): Promise<boolean> {
+  _pausedHere.delete(path);
+  const r = await engine.query<{ id: string }>(
+    `UPDATE spend_path_pauses SET resolved_at = NOW(), resolved_by = $2
+      WHERE path = $1 AND resolved_at IS NULL RETURNING id::text AS id`,
+    [path, by.slice(0, 200)],
+  );
+  return r.rows.length > 0;
+}
+
+/** Write a pause row; false when the write failed. */
+async function writePause(engine: Engine, path: string, p: PendingPause): Promise<boolean> {
+  try {
+    await engine.query(
+      `INSERT INTO spend_path_pauses (path, reason, model, held_cents, actual_cents)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (path) WHERE resolved_at IS NULL DO NOTHING`,
+      [path, p.reason.slice(0, 500), p.model, usdToCents(p.heldUsd), usdToCents(p.actualUsd)],
+    );
+    return true;
+  } catch (err) {
+    console.warn(`[memrain] could not record the pause of spend path '${path}': ` +
+      (err instanceof Error ? err.message : String(err)));
+    return false;
+  }
+}
+
+/**
+ * Pause `path` in the table every process reads, so a resume from any process
+ * (CLI, admin) lifts it everywhere and a restart keeps it. While that write
+ * cannot happen, this process keeps the pause itself and retries the write on
+ * the path's next call.
+ */
+async function pausePath(engine: Engine | null, path: string, reason: string, model: string, heldUsd: number, actualUsd: number): Promise<void> {
+  console.warn(`[memrain] spend path '${path}' paused: ${reason}`);
+  const pending = { reason, model, heldUsd, actualUsd };
+  if (!engine || !(await writePause(engine, path, pending))) _pausedHere.set(path, pending);
+}
+
+/** The first path in `roles` with an open pause, or null. A pause still held
+ *  only in this process is written first, and stays paused either way. */
+async function firstPausedPath(engine: Engine | null, roles: string[]): Promise<string | null> {
+  const local = roles.find((r) => _pausedHere.has(r));
+  if (local !== undefined) {
+    if (engine && (await writePause(engine, local, _pausedHere.get(local)!))) _pausedHere.delete(local);
+    return local;
+  }
+  if (!engine) return null;
+  // scope: operator-only pauses are brain-wide state about paid paths, never tenant data
+  const r = await engine.query<{ path: string }>(
+    `SELECT path FROM spend_path_pauses WHERE resolved_at IS NULL AND path = ANY($1::text[]) ORDER BY path LIMIT 1`,
+    [roles],
+  );
+  return r.rows[0]?.path ?? null;
+}
+
+/** Wallet paths in scope fail closed on an accounting error when any of them
+ *  is a new paid path; the paths that predate the wallet keep failing open. */
+function walletFailsClosed(frames: readonly WalletFrame[]): boolean {
+  return frames.some((f) => f.path.requiresBrainCap === true);
+}
+
+/**
+ * The checks a wallet path makes before anything is held: a paused path, a new
+ * paid path with no brain cap, a call nobody can bound, a call over its
+ * per-call cap. Each refusal is booked as a `refused` row and thrown.
+ */
+async function walletPreflight(
+  call: TrackedCall,
+  frames: readonly WalletFrame[],
+  worst: number | null,
+  engine: Engine | null,
+): Promise<number> {
+  const innermost = frames[frames.length - 1]!.path.role;
+  const refuse = async (scope: WalletRefusalScope, path: string, message: string, suggestion: string): Promise<never> => {
+    await bookRefusal(call);
+    throw new WalletRefusal(scope, path, message, suggestion);
+  };
+  let paused: string | null;
+  try {
+    paused = await firstPausedPath(engine, [...new Set(frames.map((f) => f.path.role))]);
+  } catch {
+    if (walletFailsClosed(frames)) {
+      return refuse("accounting", innermost, `'${call.operation}' was not sent: the spend pause table could not be read`,
+        "Check the database, then retry.");
+    }
+    paused = null;
+  }
+  if (paused !== null) {
+    await refuse("paused", paused,
+      `spend path '${paused}' is paused after a call cost more than its hold; '${call.operation}' was not sent`,
+      `Check the price table and the overrun in memrain doctor, then run: memrain spend resume ${paused}`);
+  }
+  const gated = frames.find((f) => f.path.requiresBrainCap === true);
+  if (gated && brainDailyCapUsd() === null) {
+    await refuse("unconfigured", gated.path.role,
+      `'${gated.path.role}' is a paid path that runs only under a brain-wide daily cap, and MEMRAIN_DAILY_BUDGET_USD is unset`,
+      "Set MEMRAIN_DAILY_BUDGET_USD (for example 10) and restart.");
+  }
+  if (gated && !engine) {
+    await refuse("unconfigured", gated.path.role,
+      `'${gated.path.role}' is a paid path, and no spend ledger is open to count it against the daily cap`,
+      "Run it from a process that opened the brain (serve, the worker or the CLI).");
+  }
+  if (worst === null) {
+    return refuse("no_pricing", innermost,
+      `'${call.operation}' on model '${call.model}' has no price or no output bound, so its maximum cost is unknown`,
+      "Price the model in MODEL_PRICING/EMBEDDING_PRICING and give the call an explicit maximum output.");
+  }
+  for (const f of frames) {
+    const cap = f.path.callCapUsd;
+    if (cap !== null && cap !== undefined && worst > cap) {
+      await refuse("call", f.path.role,
+        `'${call.operation}' may cost up to $${worst.toFixed(4)}, over the $${cap.toFixed(4)} per-call cap of '${f.path.role}'`,
+        "Send less input or ask for less output, or raise the path's per-call cap.");
+    }
+  }
+  return worst;
+}
+
+/** Hold `worst` against every run cap in scope, all or none. Synchronous, so
+ *  racing calls in one process cannot both pass the same headroom. */
+function reserveRuns(call: TrackedCall, frames: readonly WalletFrame[], worst: number): RunLedger[] {
+  const runs = frames.map((f) => f.run).filter((r): r is RunLedger => r !== null);
+  const over = frames.find((f) => f.run !== null && f.run.spent + f.run.held + worst > f.run.capUsd);
+  if (over) {
+    const r = over.run!;
+    throw new WalletRefusal("run", over.path.role,
+      `run of '${over.path.role}' has $${(r.spent + r.held).toFixed(4)} of its $${r.capUsd.toFixed(2)} cap spent or held; ` +
+        `'${call.operation}' may cost up to $${worst.toFixed(4)} — refused`,
+      "The run stops here; the next run starts with a fresh run cap.");
+  }
+  for (const r of runs) r.held += worst;
+  return runs;
+}
+
+/** Settle a call's run holds: `spentUsd` is what counts against the run, never more than the hold. */
+function settleRuns(runs: RunLedger[], heldUsd: number, spentUsd: number): void {
+  for (const r of runs) {
+    r.held -= heldUsd;
+    r.spent += Math.min(spentUsd, heldUsd);
+  }
+}
+
 /** Model ids already warned about — one line per unpriced model, not per call. */
 const _unpricedWarned = new Set<string>();
 
@@ -892,9 +1312,9 @@ async function invokeTracked<T>(
   // once per item. Nothing was sent, so nothing is held or booked.
   assertBedrockOpen(call.model);
   const refuseStart = performance.now();
-  let holdId: string | null;
+  let hold: CallHold | null;
   try {
-    holdId = await holdForCall(call);
+    hold = await holdForCall(call);
   } finally {
     noteWriteTiming("ledgerMs", performance.now() - refuseStart);
   }
@@ -918,10 +1338,10 @@ async function invokeTracked<T>(
     // and billed it: its hold keeps counting the worst case for the day rather
     // than settling at $0.
     const keepHold = usage === undefined && failure !== undefined && mayHaveBilled(failure);
-    settleRequestCost(usage
-      ? priceFor(call.model) ? costUsd(call.model, chargeableUsage(usage)) : null
-      : failure !== undefined && !keepHold ? 0 : null);
-    await bookSpend(call, usage, keepHold ? null : holdId, { outcome, latencyMs: bookStart - sendStart });
+    const actualUsd = usage && priceFor(call.model) ? costUsd(call.model, chargeableUsage(usage)) : null;
+    settleRequestCost(usage ? actualUsd : failure !== undefined && !keepHold ? 0 : null);
+    if (hold) settleRuns(hold.runs, hold.usd, keepHold ? hold.usd : (actualUsd ?? 0));
+    await bookSpend(call, usage, hold, keepHold, { outcome, latencyMs: bookStart - sendStart });
     noteWriteTiming("ledgerMs", performance.now() - bookStart);
   }
 }
@@ -929,38 +1349,100 @@ async function invokeTracked<T>(
 /** A per-call hold outlives any call; it only has to outlive the day it counts in. */
 const CALL_HOLD_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** A call's holds: the durable reservation (null when no durable cap is in
+ *  scope), the run caps it counts against, and the amount held on each. */
+interface CallHold {
+  id: string | null;
+  usd: number;
+  runs: RunLedger[];
+}
+
+async function holdForCall(call: TrackedCall): Promise<CallHold | null> {
+  const frames = walletFrames();
+  if (frames.length === 0) {
+    const id = await holdDurable(call, frames, worstCaseUsd(call));
+    return id === null ? null : { id, usd: worstCaseUsd(call) ?? 0, runs: [] };
+  }
+  const worst = await walletPreflight(call, frames, worstCaseUsd(call), _ledgerEngine);
+  let runs: RunLedger[];
+  try {
+    runs = reserveRuns(call, frames, worst);
+  } catch (err) {
+    await bookRefusal(call);
+    throw err;
+  }
+  try {
+    return { id: await holdDurable(call, frames, worst), usd: worst, runs };
+  } catch (err) {
+    settleRuns(runs, worst, 0);
+    throw err;
+  }
+}
+
+/** A durable day cap a call is held against, and how to read its spend. */
+interface DurableCap {
+  scope: "brain" | "cycle" | "role" | "daemon" | "daemon_source";
+  capUsd: number;
+  spent: (tx: Engine, now: Date) => Promise<number>;
+  /** Where to raise it, for the refusal's suggestion. */
+  knob: string;
+}
+
+/** The wallet's durable day caps in scope, every enclosing path's included. */
+function walletDurableCaps(frames: readonly WalletFrame[]): DurableCap[] {
+  const caps: DurableCap[] = [];
+  for (const f of frames) {
+    const p = f.path;
+    if (p.dayCapUsd !== null && p.dayCapUsd !== undefined) {
+      caps.push({ scope: "role", capUsd: p.dayCapUsd, knob: `the day cap of '${p.role}'`,
+        spent: (tx, now) => roleDaySpendUsd(tx, p.role, now) });
+    }
+    const d = p.daemon;
+    if (d?.dayCapUsd !== null && d?.dayCapUsd !== undefined) {
+      caps.push({ scope: "daemon", capUsd: d.dayCapUsd, knob: `daemon '${d.name}' cap_usd_per_day`,
+        spent: (tx, now) => daemonDaySpendUsd(tx, d.name, undefined, now) });
+    }
+    if (d?.sourceDayCapUsd !== null && d?.sourceDayCapUsd !== undefined) {
+      caps.push({ scope: "daemon_source", capUsd: d.sourceDayCapUsd, knob: `daemon '${d.name}' cap_usd_per_day for this source`,
+        spent: (tx, now) => daemonDaySpendUsd(tx, d.name, d.sourceId, now) });
+    }
+  }
+  return caps;
+}
+
 /**
- * Hold a paid call's worst-case cost against the calling client's daily cap,
- * or refuse it when the hold would not fit. Returns the hold to settle, or null
- * when nothing is held.
+ * Hold a paid call's worst-case cost against every durable daily cap in scope —
+ * the calling client's, the wallet's path, daemon and daemon-source caps, the
+ * cycle's and the brain's — or refuse it when the hold would not fit one of
+ * them. Returns the reservation id, or null when nothing is held.
  *
- * This is the chokepoint every paid Bedrock call passes through, so the cap
- * covers all of them, not only the ops `withClientSpend` wraps. Holding the
- * worst case BEFORE sending is what keeps concurrent calls inside the cap: each
- * one sees the others' holds under the same per-client lock `reserveSpend`
- * takes, where a bare "spent < cap" check let K racing calls all pass and
- * overshoot by K calls. Near the cap this refuses a call whose actual cost
- * would still have fit — the error is on the safe side.
+ * This is the chokepoint every paid Bedrock call passes through, so the caps
+ * cover all of them, not only the ops `withClientSpend` wraps. Holding the
+ * worst case BEFORE sending is what keeps concurrent calls inside the caps:
+ * each one sees the others' holds under the same locks, where a bare
+ * "spent < cap" check let K racing calls all pass and overshoot by K calls.
+ * Near a cap this refuses a call whose actual cost would still have fit — the
+ * error is on the safe side.
  *
- * Two more caps sit above the client's, both off unless configured: the
- * brain-wide daily cap (every spender, system calls included) and the cycle
- * daily cap (calls under a cycle phase). Each is checked under ONE brain-wide
- * advisory lock, taken before the per-client one, so racing calls from any
- * spender see each other's holds. The call still takes ONE hold: under the
- * client's id when a client is in scope, else under `BRAIN_SPEND_ID`; the
- * brain-wide sums count every hold whatever its key.
+ * Every cap above the client's is checked under ONE brain-wide advisory lock,
+ * taken before the per-client one, so racing calls from any spender see each
+ * other's holds. The call still takes ONE hold: under the client's id when a
+ * client is in scope, else under `BRAIN_SPEND_ID`; every other sum counts the
+ * hold by its phase, path or daemon columns whatever its key.
  *
  * With no cap in scope (the default) nothing is held and no query runs. A
- * failure of the accounting query itself ALLOWS the call unheld: accounting
- * must never break a paid path, the same contract `bookSpend` keeps.
+ * failure of the accounting query itself ALLOWS the call unheld — accounting
+ * must never break a paid path that predates the wallet, the same contract
+ * `bookSpend` keeps — except under a new paid path, which refuses instead.
  */
-async function holdForCall(call: TrackedCall): Promise<string | null> {
+async function holdDurable(call: TrackedCall, frames: readonly WalletFrame[], worst: number | null): Promise<string | null> {
   const engine = _ledgerEngine;
   if (!engine) return null;
   const ctx = currentSpendContext();
   const brainCap = brainDailyCapUsd();
   const cycleCap = cycleDailyCapUsd();
-  if (!ctx && brainCap === null && cycleCap === null) return null;
+  const walletCaps = walletDurableCaps(frames);
+  if (!ctx && brainCap === null && cycleCap === null && walletCaps.length === 0) return null;
   let clientCap: number | null = null;
   if (ctx) {
     try {
@@ -970,11 +1452,11 @@ async function holdForCall(call: TrackedCall): Promise<string | null> {
       clientCap = null;
     }
   }
-  if (clientCap === null && brainCap === null && cycleCap === null) return null;
+  if (clientCap === null && brainCap === null && cycleCap === null && walletCaps.length === 0) return null;
   const phase = currentSpendTags().phase ?? null;
-  const worst = worstCaseUsd(call);
   // A cap cannot be charged for a call nobody can price: it would book an
-  // unknown cost and the cap would never see it.
+  // unknown cost and the cap would never see it. (A wallet path refused such
+  // a call already, in its preflight.)
   if (worst === null) {
     await bookRefusal(call);
     if (clientCap !== null) {
@@ -993,23 +1475,25 @@ async function holdForCall(call: TrackedCall): Promise<string | null> {
       false,
     );
   }
+  const caps: DurableCap[] = [
+    ...(brainCap !== null ? [{ scope: "brain" as const, capUsd: brainCap, knob: "MEMRAIN_DAILY_BUDGET_USD", spent: brainDaySpendUsd }] : []),
+    ...(cycleCap !== null ? [{ scope: "cycle" as const, capUsd: cycleCap, knob: "MEMRAIN_CYCLE_MAX_USD_PER_DAY", spent: cycleDaySpendUsd }] : []),
+    ...walletCaps,
+  ];
+  const tags = walletTags();
   type Held =
     | { held: string }
-    | { refused: "brain" | "cycle"; spentUsd: number; capUsd: number }
+    | { refused: DurableCap; spentUsd: number }
     | { refused: "client"; check: ClientBudgetCheck };
   let held: Held;
   try {
     held = await engine.transaction(async (tx): Promise<Held> => {
       const now = new Date();
-      if (brainCap !== null || cycleCap !== null) {
+      if (caps.length > 0) {
         await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [BRAIN_SPEND_LOCK]);
-        if (brainCap !== null) {
-          const spentUsd = await brainDaySpendUsd(tx, now);
-          if (spentUsd + worst > brainCap) return { refused: "brain", spentUsd, capUsd: brainCap };
-        }
-        if (cycleCap !== null) {
-          const spentUsd = await cycleDaySpendUsd(tx, now);
-          if (spentUsd + worst > cycleCap) return { refused: "cycle", spentUsd, capUsd: cycleCap };
+        for (const cap of caps) {
+          const spentUsd = await cap.spent(tx, now);
+          if (spentUsd + worst > cap.capUsd) return { refused: cap, spentUsd };
         }
       }
       const r = await reserveWithin(tx, {
@@ -1024,22 +1508,28 @@ async function holdForCall(call: TrackedCall): Promise<string | null> {
         ttlMs: CALL_HOLD_TTL_MS,
         now,
         phase,
+        ...tags,
       });
       return r.reserved ? { held: r.reservationId } : { refused: "client", check: r.check };
     });
-  } catch {
-    return null;
+  } catch (err) {
+    if (!walletFailsClosed(frames)) return null;
+    await bookRefusal(call);
+    throw new WalletRefusal("accounting", frames[frames.length - 1]!.path.role,
+      `'${call.operation}' was not sent: its hold could not be written (${err instanceof Error ? err.message : String(err)})`,
+      "Check the database, then retry.");
   }
   if ("held" in held) return held.held;
   await bookRefusal(call);
   if (held.refused !== "client") {
-    const which = held.refused === "brain" ? "MEMRAIN_DAILY_BUDGET_USD" : "MEMRAIN_CYCLE_MAX_USD_PER_DAY";
+    const cap = held.refused;
+    const label = cap.scope === "role" || cap.scope === "daemon" || cap.scope === "daemon_source" ? cap.knob : `${cap.scope} daily budget`;
     throw new DailyCapRefusal(
-      held.refused,
-      `${held.refused} daily budget exhausted (spent $${held.spentUsd.toFixed(4)} of ` +
-        `$${held.capUsd.toFixed(2)}; '${call.operation}' may cost up to $${worst.toFixed(4)}) — refused`,
-      `Wait for the UTC day to roll over, or raise ${which}.`,
-      worst <= held.capUsd,
+      cap.scope,
+      `${label} exhausted (spent $${held.spentUsd.toFixed(4)} of ` +
+        `$${cap.capUsd.toFixed(2)}; '${call.operation}' may cost up to $${worst.toFixed(4)}) — refused`,
+      `Wait for the UTC day to roll over, or raise ${cap.knob}.`,
+      worst <= cap.capUsd,
     );
   }
   // OperationError, not BudgetExhausted: the MCP layer renders this code as a
@@ -1089,6 +1579,7 @@ function spendEntry(
     jobId: tags.jobId ?? null,
     outcome: end.outcome,
     latencyMs: end.latencyMs,
+    ...walletTags(),
   };
 }
 
@@ -1101,19 +1592,28 @@ function mayHaveBilled(err: unknown): boolean {
   return /timed? ?out|socket hang up|ECONNRESET/i.test(err.message);
 }
 
+
+/** Float slack when comparing an actual with the hold priced by the same table. */
+const OVERRUN_EPSILON_USD = 1e-9;
+
 /**
  * Append one call to the durable ledger. Every failure is logged and swallowed:
  * accounting must never break a paid path, the same contract search telemetry
  * already keeps.
+ *
+ * A wallet-path call whose actual came out above its hold books the full
+ * actual and the excess as `overrun`, which no cap sum counts, and pauses its
+ * path. With `keepHold` (the call may have billed without reporting) the row is
+ * written and the hold stays pending, still counting the call's worst case.
  */
 async function bookSpend(
   call: TrackedCall,
   usage: ReportedUsage | undefined,
-  holdId: string | null,
+  hold: CallHold | null,
+  keepHold: boolean,
   end: { outcome: SpendOutcome; latencyMs: number | null },
 ): Promise<void> {
   const engine = _ledgerEngine;
-  if (!engine) return;
   const priced = priceFor(call.model) !== null;
   if (!priced && !_unpricedWarned.has(call.model)) {
     _unpricedWarned.add(call.model);
@@ -1124,7 +1624,17 @@ async function bookSpend(
   }
   // Nothing reported means nothing billed; an unpriced model's cost is unknown.
   const cost = !usage ? 0 : priced ? costUsd(call.model, chargeableUsage(usage)) : null;
-  const entry = spendEntry(call, cost, usage, end);
+  // Only a wallet path settles at most its hold: a call outside every path
+  // keeps counting its full actual, exactly as before the wallet.
+  const role = walletTags().role;
+  const overrun = role !== null && hold && cost !== null && cost > hold.usd + OVERRUN_EPSILON_USD ? cost - hold.usd : 0;
+  const entry = { ...spendEntry(call, cost, usage, end), ...(overrun > 0 ? { overrunUsd: overrun } : {}) };
+  if (overrun > 0) {
+    const reason = `'${call.operation}' on ${call.model} reported $${(cost ?? 0).toFixed(6)} against a hold of $${hold!.usd.toFixed(6)}`;
+    await pausePath(engine, currentWalletPath()!.role, `overrun: ${reason}`, call.model, hold!.usd, cost ?? 0);
+  }
+  if (!engine) return;
+  const holdId = keepHold ? null : (hold?.id ?? null);
   try {
     if (!holdId) {
       await logSpend(engine, entry);
@@ -1132,14 +1642,15 @@ async function bookSpend(
     }
     // The actual and the settled hold land in ONE commit, so the call is never
     // counted twice (row + hold) nor dropped (hold gone, row missing). If this
-    // fails the hold stays pending and keeps counting its worst case.
+    // fails the hold stays pending and keeps counting its worst case. A hold
+    // never settles above itself: the excess is the row's overrun.
     await engine.transaction(async (tx) => {
       await logSpend(tx, entry);
       await tx.query(
         `UPDATE mcp_spend_reservations
             SET status = 'settled', actual_cents = $2, settled_at = NOW()
           WHERE reservation_id = $1 AND status = 'pending'`,
-        [holdId, usdToCents(cost ?? 0)],
+        [holdId, usdToCents(overrun > 0 ? hold!.usd : (cost ?? 0))],
       );
     });
   } catch (err) {

@@ -26,6 +26,8 @@
  * throws (the cycle marks it `warn` when errors[] is non-empty).
  */
 import type { Storage } from "../storage.ts";
+import { runAsPath } from "../budget.ts";
+import { connectorPageSql } from "../connectors/page-kind.ts";
 import {
   EXTRACTION_ELIGIBLE_TYPES,
   FACTS_EXTRACT_VERSION,
@@ -100,9 +102,19 @@ interface PageRow {
   content_hash: string;
 }
 
-export async function conversationFactsBackfillPhase(
+/** The spend wallet path the backfill's extraction calls are booked under. */
+export const BACKFILL_SPEND_PATH = "conversation-facts-backfill";
+
+export function conversationFactsBackfillPhase(
   storage: Storage,
   opts: ConversationFactsBackfillOptions = {},
+): Promise<ConversationFactsBackfillResult> {
+  return runAsPath(BACKFILL_SPEND_PATH, () => backfillRun(storage, opts));
+}
+
+async function backfillRun(
+  storage: Storage,
+  opts: ConversationFactsBackfillOptions,
 ): Promise<ConversationFactsBackfillResult> {
   const empty: ConversationFactsBackfillResult = {
     ran: false,
@@ -136,6 +148,8 @@ export async function conversationFactsBackfillPhase(
         AND length(btrim(p.markdown_body)) >= 80
         AND p.slug NOT LIKE 'wiki/agents/%'
         AND ${notSynthesizedPageSql("p")}
+        -- Connector text is extracted by the connector pipeline, under its own caps.
+        AND NOT ${connectorPageSql("p")}
         -- A page the gate quarantined in search is not mined for facts either.
         AND NOT EXISTS (
           SELECT 1 FROM documents qd

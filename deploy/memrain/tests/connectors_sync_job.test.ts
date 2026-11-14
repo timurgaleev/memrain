@@ -122,12 +122,16 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await registerSource(db.storage.engine(), { id: "conn-job", kind: "other", pathPrefix: "test/job/" });
       // connector_items references connector_accounts, so the account row exists first.
       const row = await createAccount(db.storage.engine(), { sourceId: "conn-job", provider: "test", services: ["items"], principalRef: "admin:test", accountLabel: "job@test" });
-      registerConnectorSync(db.storage, runtime(account({ id: row.id })));
+      const env: Record<string, string> = { ...ON };
+      registerConnectorSync(db.storage, runtime(account({ id: row.id }), env));
       const handler = getHandler(CONNECTOR_SYNC_JOB_KIND)!;
       const job = { id: "j" } as JobRow;
       // The daemon is off by default: a queued run is skipped before anything opens.
       expect(await handler({ accountId: row.id, sourceId: "conn-job" }, { job })).toEqual({ skipped: "disabled" });
       await db.storage.engine().query(`INSERT INTO daemon_controls (daemon, source_id, enabled) VALUES ('connector_sync', '*', true)`);
+      // A paid daemon, so it also waits for a brain-wide daily cap.
+      expect(await handler({ accountId: row.id, sourceId: "conn-job" }, { job })).toEqual({ skipped: "no_brain_cap" });
+      env.MEMRAIN_DAILY_BUDGET_USD = "10";
       const result = await handler({ accountId: row.id, sourceId: "conn-job" }, { job });
       expect(result).toMatchObject({ account_id: row.id, status: "success" });
       expect(JSON.stringify(result)).not.toContain(TOKEN);
