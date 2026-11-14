@@ -167,3 +167,34 @@ export interface OnboardingStatus {
     first_search: { done: boolean; source: "agent" | "any" | null };
   };
 }
+
+// GET /admin/api/notifications/summary — the sidebar badge.
+export interface NotificationSummary {
+  open: number;
+  unread: number;
+  by_kind: Record<string, number>;
+}
+
+// One owner notification: a pointer to a problem, never its text.
+export interface AdminNotification {
+  id: number;
+  source_id: string;
+  kind: string;
+  ref: string;
+  link: string;
+  hint: string;
+  created_at: string;
+  reopened_at: string | null;
+  resolved_at: string | null;
+  read_at: string | null;
+  webhook_state: "off" | "pending" | "delivered" | "failed" | "cancelled";
+  webhook_attempts: number;
+  webhook_error: string | null;
+}
+
+// GET /admin/api/notifications
+export interface NotificationList {
+  summary: NotificationSummary;
+  webhook: { state: "off" | "refused" | "on" };
+  notifications: AdminNotification[];
+}

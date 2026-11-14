@@ -100,6 +100,11 @@ export const api = {
   timeseries: (days: number, signal?: AbortSignal) => apiFetch(`/admin/api/timeseries?days=${days}`, signal ? { signal } : undefined),
   graphHubs: (limit = 20, signal?: AbortSignal) => apiFetch(`/admin/api/graph/hubs?limit=${limit}`, signal ? { signal } : undefined),
   onboarding: (signal?: AbortSignal) => apiFetch("/admin/api/onboarding", signal ? { signal } : undefined),
+  notifications: (all: boolean, signal?: AbortSignal) =>
+    apiFetch(all ? "/admin/api/notifications?all=1" : "/admin/api/notifications", signal ? { signal } : undefined),
+  notificationSummary: (signal?: AbortSignal) => apiFetch("/admin/api/notifications/summary", signal ? { signal } : undefined),
+  markNotificationsRead: (ids: number[] | "all") =>
+    apiFetch("/admin/api/notifications/read", { method: "POST", body: JSON.stringify(ids === "all" ? { all: true } : { ids }) }),
 };
 
 export { ApiError, expectOk, passkeyFetch } from "./lib/passkey-fetch.ts";
