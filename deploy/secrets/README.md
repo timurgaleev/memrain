@@ -15,7 +15,7 @@ does NOT hold any secrets in tracked content.
 ```
 deploy/.secrets/                # dir mode 0711 (non-root descend-only)
 ├── cloudflared.env           TUNNEL_TOKEN=... + CLOUDFLARE_TUNNEL_TOKEN=...0400
-└── memrain.env               MEMRAIN_POSTGRES_URL=... + MEMRAIN_PUBLIC_BEARER + config  0400
+└── memrain.env               MEMRAIN_POSTGRES_URL=... + MEMRAIN_PUBLIC_BEARER + connector key + config  0400
 ```
 
 `cloudflared.env` and `memrain.env` are consumed via `env_file`. Memrain
@@ -43,6 +43,14 @@ without `SECRETS_PREFIX` means the prefix `memex`. The optional `*_SECRET_NAME` 
 | `<prefix>/memrain-postgres-url` | string (URL) | Memrain |
 | `<prefix>/memrain-public-bearer` | string | Memrain — validates public `/mcp` bearers |
 | `<prefix>/github-deploy-key` | OpenSSH private key | `bootstrap.sh` `git clone` (SSH deploy-key mode only) |
+| `<prefix>/memrain-connector-kek` | base64 of 32 random bytes | Memrain — `MEMRAIN_CONNECTOR_KEK`, seals connector tokens (optional; [docs/connectors/KEY.md](../../docs/connectors/KEY.md)) |
+| `<prefix>/memrain-notify-webhook` | string, 32+ characters | Memrain — `MEMRAIN_NOTIFY_WEBHOOK_SECRET`, signs notification webhooks (optional) |
+
+Terraform creates the last two only when `enable_connector_kek_secret` /
+`enable_notify_webhook_secret` is true, and creates them empty: you put the
+value in with `aws secretsmanager put-secret-value`, so it never sits in
+terraform state. Until then `fetch-secrets.sh` reports them as not provisioned
+and writes no line for them.
 
 When `use_ssh_deploy_key = true`, the deploy key lets the EC2 clone a
 private repo over SSH. It's `chmod 600` after fetch and used via

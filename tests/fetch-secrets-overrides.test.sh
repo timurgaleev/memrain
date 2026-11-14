@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/fetch-secrets-overrides.test.sh — the four optional *_SECRET_NAME
+# tests/fetch-secrets-overrides.test.sh — the optional *_SECRET_NAME
 # keys: an override replaces the new-then-old lookup exactly, a bad value is
 # refused before any AWS call, and the bearer rotation and mcp-refresh use
 # the same id fetch-secrets reads.
@@ -74,6 +74,8 @@ check_override POSTGRES_URL_SECRET_NAME legacy/memex-postgres-url "postgres://u:
 check_override PUBLIC_BEARER_SECRET_NAME legacy/memex-public-bearer "bearer-ovr" 'public-bearer' 'MEMRAIN_PUBLIC_BEARER=bearer-ovr' APP
 check_override INTERNAL_TOKEN_SECRET_NAME legacy/memex-internal-token "internal-ovr" 'internal-token' 'MEMRAIN_INTERNAL_TOKEN=internal-ovr' APP
 check_override TUNNEL_TOKEN_SECRET_NAME legacy/cloudflared-tunnel-token "tunnel-ovr" 'tunnel-token' 'TUNNEL_TOKEN=tunnel-ovr' TUN
+check_override CONNECTOR_KEK_SECRET_NAME ops/brain-kek "kek-ovr" 'kek' 'MEMRAIN_CONNECTOR_KEK=kek-ovr' APP
+check_override NOTIFY_WEBHOOK_SECRET_NAME ops/brain-webhook "webhook-ovr" 'webhook' 'MEMRAIN_NOTIFY_WEBHOOK_SECRET=webhook-ovr' APP
 
 # T2. Unset or empty keys: the default new-then-old resolution.
 ws_new
@@ -268,8 +270,11 @@ else
   die "T7e mcp-refresh explicit name"; cat "$WS/stub/claude.log"; cat "$WS/out.log"
 fi
 
-# T8. .env.example documents the four keys, commented out.
-for key in POSTGRES_URL_SECRET_NAME PUBLIC_BEARER_SECRET_NAME INTERNAL_TOKEN_SECRET_NAME TUNNEL_TOKEN_SECRET_NAME; do
+# T8. .env.example documents every override key lib.sh knows, commented out,
+# so a key added there cannot go undocumented.
+ALL_KEYS="$(sed -n 's/^SECRET_NAME_OVERRIDE_KEYS="\(.*\)"$/\1/p' "$REPO_ROOT/deploy/secrets/lib.sh")"
+[ -n "$ALL_KEYS" ] || die "T8 cannot read SECRET_NAME_OVERRIDE_KEYS from lib.sh"
+for key in $ALL_KEYS; do
   if grep -Eq "^# ${key}=" "$REPO_ROOT/.env.example" && ! grep -Eq "^${key}=" "$REPO_ROOT/.env.example"; then
     pass "T8 .env.example lists $key commented"
   else

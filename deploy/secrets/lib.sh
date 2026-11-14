@@ -17,11 +17,12 @@
 #   SECRETS_PREFIX   namespace; unset or empty means `memex`, the prefix every
 #                    stack without the key was created with
 #   POSTGRES_URL_SECRET_NAME, PUBLIC_BEARER_SECRET_NAME,
-#   INTERNAL_TOKEN_SECRET_NAME, TUNNEL_TOKEN_SECRET_NAME
+#   INTERNAL_TOKEN_SECRET_NAME, TUNNEL_TOKEN_SECRET_NAME,
+#   CONNECTOR_KEK_SECRET_NAME, NOTIFY_WEBHOOK_SECRET_NAME
 #                    optional full secret ids. A non-empty value is used
 #                    exactly: no prefix, no new-then-old fallback.
 
-SECRET_NAME_OVERRIDE_KEYS="POSTGRES_URL_SECRET_NAME PUBLIC_BEARER_SECRET_NAME INTERNAL_TOKEN_SECRET_NAME TUNNEL_TOKEN_SECRET_NAME"
+SECRET_NAME_OVERRIDE_KEYS="POSTGRES_URL_SECRET_NAME PUBLIC_BEARER_SECRET_NAME INTERNAL_TOKEN_SECRET_NAME TUNNEL_TOKEN_SECRET_NAME CONNECTOR_KEK_SECRET_NAME NOTIFY_WEBHOOK_SECRET_NAME"
 
 secrets_log() { printf '[secrets] %s\n' "$*" >&2; }
 
@@ -34,7 +35,7 @@ valid_secret_id() {
   [ "${#1}" -ge 1 ] && [ "${#1}" -le 512 ] && [[ "$1" =~ $re ]]
 }
 
-# Check all four overrides up front, so a bad one fails before any AWS call.
+# Check every override up front, so a bad one fails before any AWS call.
 validate_secret_name_overrides() {
   local key value
   for key in $SECRET_NAME_OVERRIDE_KEYS; do
@@ -114,7 +115,8 @@ resolve_secret_id() {
 }
 
 # secret_id_for KIND -> prints the id for one of
-# postgres-url | public-bearer | internal-token | tunnel-token,
+# postgres-url | public-bearer | internal-token | tunnel-token |
+# connector-kek | notify-webhook,
 # and logs (stderr) which id was chosen and where it came from.
 secret_id_for() {
   local kind="$1" key new old override id rc=0
@@ -123,6 +125,9 @@ secret_id_for() {
     public-bearer)  key=PUBLIC_BEARER_SECRET_NAME;  new=memrain-public-bearer;  old=memex-public-bearer ;;
     internal-token) key=INTERNAL_TOKEN_SECRET_NAME; new=memrain-internal-token; old=memex-internal-token ;;
     tunnel-token)   key=TUNNEL_TOKEN_SECRET_NAME;   new=cloudflared-tunnel-token; old=cloudflared-tunnel-token ;;
+    # Added after the rename, so there is no legacy name to fall back to.
+    connector-kek)  key=CONNECTOR_KEK_SECRET_NAME;  new=memrain-connector-kek;  old=memrain-connector-kek ;;
+    notify-webhook) key=NOTIFY_WEBHOOK_SECRET_NAME; new=memrain-notify-webhook; old=memrain-notify-webhook ;;
     *) secrets_log "ERROR: unknown secret kind: ${kind}"; return 1 ;;
   esac
   override="${!key:-}"

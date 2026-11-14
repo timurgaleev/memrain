@@ -154,10 +154,17 @@ Secrets Manager (via `fetch-secrets.sh`), not the compose allowlist.
 | `<prefix>/memrain-public-bearer` | `MEMRAIN_PUBLIC_BEARER` in `.secrets/memrain.env` |
 | `<prefix>/memrain-internal-token` | `MEMRAIN_INTERNAL_TOKEN` in `.secrets/memrain.env` |
 | `<prefix>/cloudflared-tunnel-token` | `TUNNEL_TOKEN` in `.secrets/cloudflared.env` |
+| `<prefix>/memrain-connector-kek` (optional) | `MEMRAIN_CONNECTOR_KEK` in `.secrets/memrain.env` |
+| `<prefix>/memrain-notify-webhook` (optional) | `MEMRAIN_NOTIFY_WEBHOOK_SECRET` in `.secrets/memrain.env` |
 
-A stack whose secrets carry other names sets any of four optional `.env` keys
+The two optional secrets have no legacy name to fall back to. Missing, or
+created without a value yet, means no line is written and the run succeeds
+([docs/connectors/KEY.md](connectors/KEY.md)).
+
+A stack whose secrets carry other names sets any of six optional `.env` keys
 to the full secret id: `POSTGRES_URL_SECRET_NAME`, `PUBLIC_BEARER_SECRET_NAME`,
-`INTERNAL_TOKEN_SECRET_NAME` and `TUNNEL_TOKEN_SECRET_NAME`. A non-empty value
+`INTERNAL_TOKEN_SECRET_NAME`, `TUNNEL_TOKEN_SECRET_NAME`,
+`CONNECTOR_KEK_SECRET_NAME` and `NOTIFY_WEBHOOK_SECRET_NAME`. A non-empty value
 is used exactly as written: no prefix is added and no other name is tried.
 Unset or empty means the default name above. A value outside the Secrets
 Manager name alphabet stops the script before any AWS call. The bearer

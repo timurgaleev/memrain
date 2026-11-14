@@ -73,7 +73,7 @@ no_tmp_left() {
 }
 
 no_values_in_output() {
-  ! grep -Eq 'postgres://u:p@|bearer-(new|old)|internal-(new|old)|tunnel-(new|old)' "$WS/out.log"
+  ! grep -Eq 'postgres://u:p@|bearer-(new|old)|internal-(new|old)|tunnel-(new|old)|kek-value|webhook-value' "$WS/out.log"
 }
 
 echo "== fetch-secrets.sh =="
@@ -236,11 +236,14 @@ fi
 # exits 1 and leaves both files byte-identical with no temp file left, even
 # though the secrets before the failing one were fetched.
 for code in AccessDeniedException ExpiredTokenException ThrottlingException; do
-  for leaf in memrain-postgres-url memrain-public-bearer memrain-internal-token cloudflared-tunnel-token; do
+  for leaf in memrain-postgres-url memrain-public-bearer memrain-internal-token cloudflared-tunnel-token \
+              memrain-connector-kek memrain-notify-webhook; do
     for how in deny denyget; do
       ws_new; export STUB_DIR="$WS/stub"
       printf 'SECRETS_PREFIX=stack\n' >> "$WS/.env"
       seed_all stack memrain new
+      stub_secret stack/memrain-connector-kek "kek-value"
+      stub_secret stack/memrain-notify-webhook "webhook-value"
       seed_previous
       "stub_$how" "stack/$leaf" "$code"
       ec=0; run_fetch "$WS" || ec=$?
@@ -356,6 +359,47 @@ if run_fetch "$WS" && grep -qx 'MEMRAIN_PUBLIC_BEARER=bearer-new' "$APP" \
 else
   die "T11 success over previous files"; cat "$WS/out.log"
 fi
+
+# T13. The connector key and the notification webhook secret land in
+# memrain.env (0400) under their MEMRAIN_ names; neither value is printed, and
+# no legacy name is probed for them (they never existed under one).
+ws_new; export STUB_DIR="$WS/stub"
+printf 'SECRETS_PREFIX=stack\n' >> "$WS/.env"
+seed_all stack memrain new
+stub_secret stack/memrain-connector-kek "kek-value"
+stub_secret stack/memrain-notify-webhook "webhook-value"
+if run_fetch "$WS" \
+   && grep -qx 'MEMRAIN_CONNECTOR_KEK=kek-value' "$APP" \
+   && grep -qx 'MEMRAIN_NOTIFY_WEBHOOK_SECRET=webhook-value' "$APP" \
+   && grep -qx 'MEMRAIN_POSTGRES_URL=postgres://u:p@db/new' "$APP" \
+   && [ "$(file_mode "$APP")" = "400" ] \
+   && ! grep -E 'connector-kek|notify-webhook' "$WS/stub/calls.log" | grep -vq 'stack/memrain-' \
+   && no_tmp_left && no_values_in_output; then
+  pass "T13 connector key + webhook secret written to memrain.env, values not printed"
+else
+  die "T13 connector key + webhook secret"; cat "$WS/out.log"
+fi
+
+# T13b. Both are optional: missing, or the empty placeholder terraform creates
+# (no version yet), means no line at all and a successful run.
+for how in missing noversion; do
+  ws_new; export STUB_DIR="$WS/stub"
+  printf 'SECRETS_PREFIX=stack\n' >> "$WS/.env"
+  seed_all stack memrain new
+  if [ "$how" = noversion ]; then
+    stub_noversion stack/memrain-connector-kek
+    stub_noversion stack/memrain-notify-webhook
+  fi
+  if run_fetch "$WS" \
+     && ! grep -q 'CONNECTOR_KEK\|NOTIFY_WEBHOOK' "$APP" \
+     && grep -qx 'MEMRAIN_PUBLIC_BEARER=bearer-new' "$APP" \
+     && grep -q 'connector key not provisioned' "$WS/out.log" \
+     && grep -q 'notification webhook secret not provisioned' "$WS/out.log"; then
+    pass "T13b connector key + webhook secret $how: skipped, exit 0"
+  else
+    die "T13b connector key + webhook secret $how"; cat "$WS/out.log"
+  fi
+done
 
 # T12. The pre-rename .secrets/memex.env is byte-identical (content and mode)
 # in every workspace above, after runs that succeeded and runs that failed.
