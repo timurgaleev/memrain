@@ -39,6 +39,7 @@ import { normalizeScopesInput } from "../core/scope.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 import { handleAdminTool } from "./admin-tool.ts";
 import { defaultConnectorDeps, handleAdminConnectors } from "./admin-connectors.ts";
+import { handleAdminNotifications } from "./admin-notifications.ts";
 import { controlDaemon, daemonsStatus } from "../core/daemons/status.ts";
 import { OperationError } from "../core/operation-error.ts";
 import type { RateLimiter } from "../mcp/rate_limit.ts";
@@ -188,6 +189,11 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
 
   if (p === "/admin/api/connectors" || p.startsWith("/admin/api/connectors/")) {
     const r = await handleAdminConnectors(req, url, defaultConnectorDeps(deps.storage, deps.publicUrl, deps.adminSessionId ?? (() => null)));
+    if (r) return r;
+  }
+
+  if (p === "/admin/api/notifications" || p.startsWith("/admin/api/notifications/")) {
+    const r = await handleAdminNotifications(req, url, engine);
     if (r) return r;
   }
 
