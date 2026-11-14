@@ -4,6 +4,7 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { createAccount, markNeedsReconnect, storeCredential } from "../src/core/connectors/accounts.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { setOAuthClient } from "../src/core/connectors/oauth-clients.ts";
 import { checkConnectorAccounts } from "../src/core/connectors/doctor.ts";
 
 const keyBytes = randomBytes(32);
@@ -19,6 +20,19 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const noKey = await checkConnectorAccounts(db.storage.engine(), { MEMRAIN_CONNECTORS_ENABLED: "1" });
       expect(noKey.status).toBe("warn");
       expect(noKey.detail).toContain("MEMRAIN_CONNECTOR_KEK");
+    } finally { await db.close(); }
+  });
+
+  it("warns about a stored OAuth client sealed by another key even with no account", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await setOAuthClient(e, kek, "test", "client-id", "client-secret");
+      expect((await checkConnectorAccounts(e, ON)).status).toBe("ok");
+      const otherKey = { ...ON, MEMRAIN_CONNECTOR_KEK: randomBytes(32).toString("base64") };
+      const r = await checkConnectorAccounts(e, otherKey);
+      expect(r.status).toBe("warn");
+      expect(r.detail).toContain("1 oauth client(s) sealed by another key");
     } finally { await db.close(); }
   });
 
