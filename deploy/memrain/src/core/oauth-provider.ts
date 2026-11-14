@@ -3069,23 +3069,24 @@ export class OAuthProvider {
   // -------------------------------------------------------------------------
 
   /** Delete expired access/refresh tokens and authorization codes. Returns
-   *  the total row count swept. A family-less access token is the only
-   *  credential a queued ingest job can name by its own row (see
-   *  resolvePrincipal), so one still named by a pending or running ingest job
-   *  stays until that job is done: reaching the TTL is not a revocation. */
+   *  the total row count swept. A queued ingest job re-reads the token rows
+   *  it names (one family-less token, or every row of a refresh family; see
+   *  resolvePrincipal), so rows still named by a pending or running ingest
+   *  job stay until that job is done: reaching the TTL is not a revocation. */
   async sweepExpiredTokens(): Promise<number> {
     const now = Math.floor(Date.now() / 1000);
     const tokens = await this.rows(
       `WITH held AS (
-         SELECT DISTINCT payload->'principal'->>'id' AS token_hash
+         SELECT DISTINCT payload->'principal'->>'kind' AS kind, payload->'principal'->>'id' AS id
            FROM jobs
           WHERE kind = ANY($2::text[])
             AND status IN ('pending', 'running')
-            AND payload->'principal'->>'kind' = 'oauth_token'
+            AND payload->'principal'->>'kind' IN ('oauth_token', 'oauth_family')
        )
        DELETE FROM oauth_tokens
         WHERE expires_at < $1
-          AND NOT (family_id IS NULL AND token_hash IN (SELECT token_hash FROM held WHERE token_hash IS NOT NULL))
+          AND NOT (family_id IS NULL AND token_hash IN (SELECT id FROM held WHERE kind = 'oauth_token' AND id IS NOT NULL))
+          AND (family_id IS NULL OR family_id NOT IN (SELECT id FROM held WHERE kind = 'oauth_family' AND id IS NOT NULL))
        RETURNING 1`,
       [now, [INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND]],
     );

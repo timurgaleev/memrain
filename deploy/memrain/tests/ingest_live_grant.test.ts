@@ -326,6 +326,26 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
       expect(await tokenRow(m2m.token)).toBe(0);
     });
 
+    it("keeps an expired session a queued capture names, and the capture writes", async () => {
+      const client = await webClient();
+      const tokens = await signIn(client);
+      const slug = `notes/sweep-family-${unique()}`;
+      const jobId = await admitCapture(tokens.access_token, slug);
+      await expire(tokens.access_token);
+      await expire(tokens.refresh_token!);
+      await provider.sweepExpiredTokens();
+      expect(await tokenRow(tokens.access_token)).toBe(1);
+      expect(await tokenRow(tokens.refresh_token!)).toBe(1);
+
+      expect(await runJob(INGEST_CAPTURE_JOB_KIND, jobId)).not.toBeInstanceOf(Error);
+      expect(await getPage(db.storage, slug)).not.toBeNull();
+
+      await db.storage.engine().query(`UPDATE jobs SET status = 'succeeded' WHERE id = $1`, [jobId]);
+      await provider.sweepExpiredTokens();
+      expect(await tokenRow(tokens.access_token)).toBe(0);
+      expect(await tokenRow(tokens.refresh_token!)).toBe(0);
+    });
+
     it("sweeps an expired family-less token no job names", async () => {
       const m2m = await machineToken();
       await expire(m2m.token);
