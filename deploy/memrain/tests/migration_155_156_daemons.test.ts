@@ -46,7 +46,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await table(e, "daemon_controls")).toBeNull();
 
       const again = await runMigrations(e);
-      expect(again.applied.map(m => m.id).filter(id => id >= 155)).toEqual([155, 156]);
+      expect(again.applied.map(m => m.id).filter(id => id >= 155 && id <= 156)).toEqual([155, 156]);
       expect(await table(e, "daemon_controls")).toBe("daemon_controls");
     } finally { await db.close(); }
   });
