@@ -45,7 +45,7 @@ import { putPage } from "../pages.ts";
 import { mirrorPage } from "../page-index.ts";
 import { syncWikilinksForPage } from "../links.ts";
 import { logIngest } from "../ingest-log.ts";
-import { OperationError } from "../operation-error.ts";
+import { OperationError, PageNotFoundError } from "../operation-error.ts";
 import { getSource } from "../sources.ts";
 import { DEFAULT_SPLIT_PART_BYTES, pageMaxBytes, splitLargeDocument, type PageDraft } from "../page-size.ts";
 import { sweepEchoes, type SecretFinding } from "../secret-scan.ts";
@@ -55,7 +55,7 @@ import type { ConnectorClient, ConnectorResponse, TokenSource } from "./client.t
 import { isDeterministicRefusal } from "./github.ts";
 import type { ConnectorAccountStatus } from "./accounts.ts";
 import { deleteStaleParts, massDeleteVerdict } from "./retention.ts";
-import { accountRef } from "./model.ts";
+import { accountRef, type ConnectorDataKind, type Person } from "./model.ts";
 import { connectorsSwitchOn } from "./vault.ts";
 import { ReauthRequiredError, type ConnectorRunStatus, type ResponseClass } from "./types.ts";
 import {
@@ -93,6 +93,18 @@ export interface SyncAccount {
   spendCapUsdDaily: number;
   /** The provider-side identity; adapters render with it and deletion matches its hash. */
   accountLabel?: string;
+  /** The provider services this account was granted (`calendar`, `gmail`, ...). */
+  services?: readonly string[];
+  /** The account's settings (selected calendars, history window, ...); adapters validate what they read. */
+  config?: Readonly<Record<string, unknown>>;
+}
+
+/** What deterministic enrichment needs from an item once its page is stored. */
+export interface ItemEnrichment {
+  kind: ConnectorDataKind;
+  occurredAt: string;
+  participants: Person[];
+  bulk: boolean;
 }
 
 /** One provider item, rendered and ready to store. */
@@ -107,6 +119,8 @@ export interface RenderedSyncItem {
   dedupeKey?: string | null;
   /** Compiled truth from the renderer (`origin: connector`, the account's ref); deletion is fenced by it. */
   truth?: Record<string, unknown>;
+  /** Set when the item's people and time should be linked once it is stored (`onItemWritten`). */
+  enrich?: ItemEnrichment;
   failure?: undefined;
 }
 
@@ -167,6 +181,12 @@ export interface SyncDeps {
    * recorded on the item row and the page stays.
    */
   onUpstreamDelete?(storage: Storage, item: UpstreamDeletion): Promise<void>;
+  /**
+   * Called once per stored item that carries `enrich`, after the run's
+   * wikilink sync (which replaces a page's wanted rows wholesale). A
+   * PageNotFoundError is skipped: the page went away in the same run.
+   */
+  onItemWritten?(storage: Storage, item: RenderedSyncItem & { enrich: ItemEnrichment }): Promise<void>;
   embedFn?: EmbedFn;
   now?: () => number;
   env?: Record<string, string | undefined>;
@@ -384,6 +404,7 @@ async function needsReconnect(
 /** One run's mutable state, split out so each step stays small. */
 class Run {
   private readonly changed: Array<{ slug: string; body: string }> = [];
+  private readonly written: Array<RenderedSyncItem & { enrich: ItemEnrichment }> = [];
   private itemsThisRun = 0;
   private fetchStopped = false;
 
@@ -420,6 +441,7 @@ class Run {
     for (const page of this.changed) {
       await syncWikilinksForPage(this.storage, page.slug, page.body, this.account.sourceId);
     }
+    await this.enrichWritten();
     await this.updateHeldNotice();
     this.finishStatus();
     // A clean run proves the credential works again.
@@ -581,7 +603,20 @@ class Run {
       return { externalId: item.externalId, version: item.version, code: "mirror_failed", message: "the page was written but its mirror into search failed", deterministic: false };
     }
     await settle(item.slug, hash);
+    if (item.enrich !== undefined) this.written.push({ ...item, enrich: item.enrich });
     return null;
+  }
+
+  private async enrichWritten(): Promise<void> {
+    const hook = this.deps.onItemWritten;
+    if (hook === undefined) return;
+    for (const item of this.written) {
+      try {
+        await hook(this.storage, item);
+      } catch (e) {
+        if (!(e instanceof PageNotFoundError)) throw e;
+      }
+    }
   }
 
   /**

@@ -22,6 +22,7 @@ import {
   type ConnectorAccount,
 } from "./accounts.ts";
 import { ConnectorClient, type FetchFn } from "./client.ts";
+import { enrichConnectorPage } from "./enrich-deterministic.ts";
 import { accountRef } from "./model.ts";
 import { resolveClient } from "./oauth-connect.ts";
 import { builtinProviders, type ProviderRegistry } from "./providers.ts";
@@ -46,8 +47,12 @@ export interface ConnectorRuntimeOptions {
   maxPartBytes?: number;
 }
 
-/** A rendered connector page as a sync item; `version` is the provider's item version. */
-export function syncItemFromPage(page: RenderedConnectorPage, version: string | null): RenderedSyncItem {
+/**
+ * A rendered connector page as a sync item; `version` is the provider's item
+ * version. With `enrich`, its participants are linked to known people and its
+ * time put on the chronicle once it is stored (enrich-deterministic.ts).
+ */
+export function syncItemFromPage(page: RenderedConnectorPage, version: string | null, opts: { enrich?: boolean } = {}): RenderedSyncItem {
   const dedupe = page.truth["dedupe_key"];
   return {
     externalId: page.externalId,
@@ -58,7 +63,13 @@ export function syncItemFromPage(page: RenderedConnectorPage, version: string | 
     body: page.body,
     truth: page.truth,
     dedupeKey: typeof dedupe === "string" ? dedupe : null,
+    ...(opts.enrich ? { enrich: { kind: page.kind, occurredAt: page.occurredAt, participants: page.participants, bulk: page.bulk } } : {}),
   };
+}
+
+/** Sources whose people pages a connector page may link: its own and the default brain. */
+function peopleSources(sourceId: string): string[] {
+  return [...new Set([sourceId, "default"])];
 }
 
 export function toSyncAccount(a: ConnectorAccount): SyncAccount {
@@ -71,6 +82,8 @@ export function toSyncAccount(a: ConnectorAccount): SyncAccount {
     itemCapDaily: a.item_cap_daily,
     spendCapUsdDaily: a.spend_cap_usd_daily,
     accountLabel: a.account_label,
+    services: a.services,
+    config: a.config,
   };
 }
 
@@ -143,6 +156,14 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
           if (item.pageSlug === null) return;
           // A page that is already gone, or was never this account's, is left alone: nothing to delete.
           await hardDeleteConnectorPage(st, scope, { slug: item.pageSlug, reason: "provider_deleted", externalId: item.externalId });
+        },
+        onItemWritten: async (st, item) => {
+          await enrichConnectorPage(st, {
+            page: { slug: item.slug, title: item.title, externalId: item.externalId, truth: item.truth ?? {}, ...item.enrich },
+            sourceId: account.sourceId,
+            ownAddresses: [account.accountLabel!],
+            peopleSourceIds: peopleSources(account.sourceId),
+          });
         },
         env,
         ...(opts.embedFn ? { embedFn: opts.embedFn } : {}),
