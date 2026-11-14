@@ -156,7 +156,9 @@ describe("connector routes behind handleAdminApi", () => {
       expect(res?.status).toBe(403);
       expect(await res?.json()).toMatchObject({ error: "connectors_disabled" });
       const st = await handleAdminApi(new Request(statusUrl.toString()), statusUrl, { ...base, requireAdmin: () => true });
-      expect(await st?.json()).toMatchObject({ enabled: false, providers: [] });
+      const status = await st?.json() as { enabled: boolean; providers: unknown[] };
+      expect(status.enabled).toBe(false);
+      expect(status.providers).toContainEqual({ id: "fireflies", services: ["fireflies"], auth: "api_key" });
     } finally {
       for (const [k, v] of saved) {
         if (v === undefined) delete process.env[k];

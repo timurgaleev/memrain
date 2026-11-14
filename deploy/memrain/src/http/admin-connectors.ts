@@ -1,6 +1,6 @@
 /**
- * Admin routes for connector accounts: status, OAuth connect and
- * bring-your-own OAuth clients.
+ * Admin routes for connector accounts: status, OAuth connect,
+ * bring-your-own OAuth clients, and saving a provider API key (Fireflies).
  *
  * `/admin/api/connectors*` is dispatched from handleAdminApi after its gates
  * (admin session, same-origin on writes, post-enroll cooldown), so this file
@@ -17,6 +17,7 @@
 import type { Storage } from "../core/storage.ts";
 import type { FetchFn } from "../core/connectors/client.ts";
 import { listAccounts } from "../core/connectors/accounts.ts";
+import { ApiKeyConnectError, connectApiKey } from "../core/connectors/api-key-connect.ts";
 import { listOAuthClients, setOAuthClient } from "../core/connectors/oauth-clients.ts";
 import { completeConnect, ConnectError, connectorCallbackUri, startConnect, type ConnectDeps } from "../core/connectors/oauth-connect.ts";
 import type { ProviderRegistry } from "../core/connectors/providers.ts";
@@ -96,13 +97,16 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
       enabled: st.enabled,
       reason: st.reason,
       kek_id: st.kekId,
-      providers: deps.providers.list().map((pr) => ({ id: pr.id, services: Object.keys(pr.services) })),
+      providers: [
+        ...deps.providers.list().map((pr) => ({ id: pr.id, services: Object.keys(pr.services) })),
+        ...deps.providers.listApiKey().map((pr) => ({ id: pr.id, services: Object.keys(pr.services), auth: "api_key" })),
+      ],
       accounts: await listAccounts(engine),
       clients: await listOAuthClients(engine),
     });
   }
 
-  const m = /^\/admin\/api\/connectors\/([^/]+)\/(start|complete|client)$/.exec(p);
+  const m = /^\/admin\/api\/connectors\/([^/]+)\/(start|complete|client|key)$/.exec(p);
   if (!m || req.method !== "POST") return null;
   const provider = m[1]!;
   const action = m[2]!;
@@ -112,6 +116,8 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
   if (!deps.status().enabled || deps.kek() === null) return disabled(deps);
   const body = await readBody(req);
   if (!body) return json({ error: "invalid body" }, 400);
+
+  if (action === "key") return saveKey(provider, body, deps);
 
   if (action === "client") {
     if (!deps.providers.get(provider)) return json({ error: "unknown_provider" }, 400);
@@ -143,6 +149,24 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
   } catch (e) {
     if (e instanceof ConnectError) return e.code === "connectors_disabled" ? disabled(deps) : json({ error: e.code }, 400);
     throw e;
+  }
+}
+
+/** Save a provider API key: verified with the provider, sealed, never echoed. */
+async function saveKey(provider: string, body: Record<string, unknown>, deps: AdminConnectorDeps): Promise<Response> {
+  try {
+    const { account, reconnected } = await connectApiKey(connectDeps(deps), {
+      provider,
+      sourceId: typeof body.source_id === "string" ? body.source_id : "",
+      apiKey: body.api_key,
+      principalRef: PRINCIPAL,
+    });
+    const { id, source_id, services, account_label, status, enabled } = account;
+    return json({ ok: true, reconnected, account: { id, source_id, provider: account.provider, services, account_label, status, enabled } });
+  } catch (e) {
+    if (!(e instanceof ApiKeyConnectError)) throw e;
+    if (e.code === "connectors_disabled") return disabled(deps);
+    return json({ error: e.code }, e.code === "provider_unavailable" ? 502 : 400);
   }
 }
 
