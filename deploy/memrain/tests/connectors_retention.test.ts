@@ -130,13 +130,47 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       compiled_truth: { atom_origin: { source_ref: doc, source_hash: "abcdabcdabcdabcd", source_id: "inbox", atom_key: "a".repeat(64) } } });
     await mirrorPage(db.storage, { slug: "atoms/connector-derived", title: "Atom", markdown_body: `Distilled ${canary}`, content_hash: atom.content_hash, source_id: "inbox" },
       { remote: false, embedFn });
+    await e.query(
+      `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, model_id)
+       VALUES ($1, $2, 'abcdabcdabcdabcd', 'v1', $3, 'test-model')`,
+      ["t".repeat(64), doc, `Take on ${canary}`]);
+    const fact = await addFact(db.storage, { entity_slug: "people/bob-stone", fact: `Fact ${canary}`, source_slug: page.slug, source_id: "inbox" });
+    await e.query(
+      `INSERT INTO synth_contradictions (pair_key, a_ref, a_kind, a_text, b_ref, b_kind, b_text, prompt_version, model_id)
+       VALUES ('pair-1', $1, 'fact', $2, 'people/bob-stone', 'page', 'Other side', 'v1', 'test-model')`,
+      [String(fact.id), `Fact ${canary}`]);
+    await e.query(
+      `INSERT INTO synth_contradiction_verdicts (pair_key, contradicts, verdict, model_id, expires_at)
+       VALUES ('pair-1', true, $1::text::jsonb, 'test-model', NOW() + interval '1 day')`,
+      [JSON.stringify({ rationale: `about ${canary}` })]);
     expect((await rowsContaining(e, canary)).length).toBeGreaterThan(0);
 
     const result = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "provider_deleted" });
     expect(result.counts.atoms).toBe(1);
     expect(result.counts.atom_pages).toBe(1);
+    expect(result.counts.takes).toBe(1);
+    expect(result.counts.contradictions).toBe(1);
     expect(await rowsContaining(e, canary)).toEqual([]);
     expect((await e.query("SELECT 1 FROM pages WHERE slug = 'atoms/connector-derived'")).rows).toHaveLength(0);
+  });
+
+  it("keeps an atom page someone edited, and says so in the counts", async () => {
+    const e = db.storage.engine();
+    const page = await ingest(mailPage("t3", "plainwords"));
+    const doc = (await e.query<{ id: string }>(
+      `SELECT id FROM documents WHERE source_id = 'inbox' AND source_path LIKE 'page://%' LIMIT 1`)).rows[0]!.id;
+    const origin = { atom_origin: { source_ref: doc, source_hash: "abcdabcdabcdabcd", source_id: "inbox", atom_key: "b".repeat(64) } };
+    await putPage(db.storage, { slug: "atoms/edited", type: "atom", allowAdHocType: true, title: "Atom", markdown_body: "Distilled",
+      source_id: "inbox", written_by: "extract-atoms", compiled_truth: origin });
+    await putPage(db.storage, { slug: "atoms/edited", type: "atom", allowAdHocType: true, title: "Atom", markdown_body: "Distilled, plus my own notes",
+      source_id: "inbox", written_by: "mcp", compiled_truth: origin });
+    await putPage(db.storage, { slug: "notes/claims-origin", markdown_body: "mine", source_id: "inbox", compiled_truth: origin });
+
+    const result = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "provider_deleted" });
+    expect(result.counts.atom_pages).toBe(0);
+    expect(result.counts.atom_pages_kept).toBe(2);
+    expect((await e.query("SELECT slug FROM pages WHERE slug IN ('atoms/edited', 'notes/claims-origin') ORDER BY slug")).rows)
+      .toEqual([{ slug: "atoms/edited" }, { slug: "notes/claims-origin" }]);
   });
 
   it("refuses a page that is not this account's connector page", async () => {

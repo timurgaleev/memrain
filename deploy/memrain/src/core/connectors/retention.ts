@@ -7,8 +7,9 @@
  * everything derived from it — page history, search documents, chunks and
  * their embeddings, facts written from the page or its chunks, chronicle
  * events drawn from its chunks, links it is the provenance of, the
- * slug-keyed leftovers a purge also clears, and the synthesis atoms and atom
- * pages distilled from its documents. Facts are deleted, not retired:
+ * slug-keyed leftovers a purge also clears, and what synthesis distilled from
+ * it: atoms, the atom pages the atoms phase published, takes, and the
+ * contradiction rows that snapshot a deleted claim. Facts are deleted, not retired:
  * a retired fact still holds the text.
  *
  * Each page goes in its own transaction, which also writes a receipt to the
@@ -59,6 +60,10 @@ export interface DeleteCounts {
   /** Synthesis atoms distilled from the page's documents, and the atom pages published from them. */
   atoms: number;
   atom_pages: number;
+  /** Atom pages claiming the origin that were edited by hand or are not atoms; left in place. */
+  atom_pages_kept: number;
+  takes: number;
+  contradictions: number;
 }
 
 export interface HardDeleteResult {
@@ -72,7 +77,7 @@ const CONNECTOR_SOURCE_KINDS = new Set(Object.values(SOURCE_KIND_FOR));
 
 const EMPTY_COUNTS: DeleteCounts = {
   versions: 0, documents: 0, chunks: 0, embeddings: 0, facts: 0, timeline_events: 0, links: 0, leftovers: 0,
-  atoms: 0, atom_pages: 0,
+  atoms: 0, atom_pages: 0, atom_pages_kept: 0, takes: 0, contradictions: 0,
 };
 
 /** The page predicate every delete shares: this source, a connector page, this account. */
@@ -115,15 +120,14 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
   counts.versions += await count(tx, `SELECT count(*)::int AS n FROM page_versions WHERE slug = $1`, [slug]);
   counts.embeddings += await count(tx, `SELECT count(*)::int AS n FROM embeddings WHERE chunk_id = ANY($1::text[])`, [chunkIds]);
   counts.chunks += chunkIds.length;
-  counts.facts += await count(tx,
-    `WITH d AS (
-       DELETE FROM entity_facts f
-        WHERE ((f.source_markdown_slug = $1 OR (f.source_markdown_slug IS NULL AND f.source_slug = $1))
-               AND COALESCE(f.source_id, 'default') = $2)
-           OR f.source_chunk_id = ANY($3::text[])
-       RETURNING 1)
-     SELECT count(*)::int AS n FROM d`,
-    [slug, sourceId, chunkIds]);
+  const factIds = (await tx.query<{ id: string }>(
+    `DELETE FROM entity_facts f
+      WHERE ((f.source_markdown_slug = $1 OR (f.source_markdown_slug IS NULL AND f.source_slug = $1))
+             AND COALESCE(f.source_id, 'default') = $2)
+         OR f.source_chunk_id = ANY($3::text[])
+     RETURNING f.id::text AS id`,
+    [slug, sourceId, chunkIds])).rows.map(r => r.id);
+  counts.facts += factIds.length;
   counts.timeline_events += await count(tx,
     `WITH d AS (DELETE FROM timeline_events WHERE slug = $1 OR source_chunk_id = ANY($2::text[]) RETURNING 1)
      SELECT count(*)::int AS n FROM d`,
@@ -132,6 +136,25 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
     `WITH d AS (DELETE FROM links WHERE source_slug = $1 OR origin_slug = $1 RETURNING 1)
      SELECT count(*)::int AS n FROM d`,
     [slug]);
+  // Synthesis keeps what it distils from a document or page by reference, with
+  // no foreign key, and snapshots claim text into contradiction rows.
+  counts.atoms += await count(tx,
+    `WITH d AS (DELETE FROM synth_atoms WHERE source_kind = 'document' AND source_ref = ANY($1::text[]) RETURNING 1)
+     SELECT count(*)::int AS n FROM d`,
+    [docIds]);
+  const takeKeys = (await tx.query<{ take_key: string }>(
+    `DELETE FROM synth_takes WHERE source_ref = ANY($1::text[]) RETURNING take_key`,
+    [[...docIds, slug]])).rows.map(r => r.take_key);
+  counts.takes += takeKeys.length;
+  const pairs = (await tx.query<{ pair_key: string }>(
+    `DELETE FROM synth_contradictions
+      WHERE (a_kind = 'fact' AND a_ref = ANY($1::text[])) OR (b_kind = 'fact' AND b_ref = ANY($1::text[]))
+         OR (a_kind = 'take' AND a_ref = ANY($2::text[])) OR (b_kind = 'take' AND b_ref = ANY($2::text[]))
+         OR (a_kind = 'page' AND a_ref = $3) OR (b_kind = 'page' AND b_ref = $3)
+     RETURNING pair_key`,
+    [factIds, takeKeys, slug])).rows.map(r => r.pair_key);
+  counts.contradictions += pairs.length;
+  if (pairs.length > 0) await tx.query(`DELETE FROM synth_contradiction_verdicts WHERE pair_key = ANY($1::text[])`, [pairs]);
   counts.documents += await count(tx,
     `WITH d AS (DELETE FROM documents WHERE id = ANY($1::text[]) RETURNING 1) SELECT count(*)::int AS n FROM d`,
     [docIds]);
@@ -142,8 +165,10 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
 }
 
 /**
- * Delete one owned connector page, the synthesis atoms distilled from its
- * documents and the atom pages published from them, inside `tx`.
+ * Delete one owned connector page and the atom pages the atoms phase
+ * published from its documents, inside `tx`. Only an atom page every version
+ * of which the atoms phase wrote goes; one someone edited, or any other page
+ * claiming the same origin, is kept and counted.
  */
 async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string): Promise<DeleteCounts | null> {
   await lockPageSlugs(tx, slug);
@@ -155,14 +180,18 @@ async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string):
   const counts: DeleteCounts = { ...EMPTY_COUNTS };
   const docIds = await deletePageDerived(tx, slug, scope.sourceId, counts);
   if (docIds.length > 0) {
-    counts.atoms = await count(tx,
-      `WITH d AS (DELETE FROM synth_atoms WHERE source_kind = 'document' AND source_ref = ANY($1::text[]) RETURNING 1)
-       SELECT count(*)::int AS n FROM d`,
-      [docIds]);
-    const atomPages = (await tx.query<{ slug: string }>(
-      `SELECT slug FROM pages WHERE source_id = $1 AND compiled_truth->'atom_origin'->>'source_ref' = ANY($2::text[]) ORDER BY slug`,
+    const claimants = (await tx.query<{ slug: string; automatic: boolean }>(
+      `SELECT p.slug,
+              (p.type = 'atom' AND p.slug LIKE 'atoms/%'
+               AND NOT EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug
+                                AND v.written_by IS DISTINCT FROM 'extract-atoms')) AS automatic
+         FROM pages p
+        WHERE p.source_id = $1 AND p.compiled_truth->'atom_origin'->>'source_ref' = ANY($2::text[])
+        ORDER BY p.slug`,
       [scope.sourceId, docIds],
-    )).rows.map(r => r.slug);
+    )).rows;
+    const atomPages = claimants.filter(r => r.automatic).map(r => r.slug);
+    counts.atom_pages_kept = claimants.length - atomPages.length;
     if (atomPages.length > 0) await lockPageSlugs(tx, ...atomPages);
     for (const atomSlug of atomPages) {
       await deletePageDerived(tx, atomSlug, scope.sourceId, counts);

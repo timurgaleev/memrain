@@ -140,6 +140,11 @@ describe("calendar changes", () => {
     expect(page.body).toContain("Budget < $5k, due > Friday and more");
     expect(htmlToText("a <b>bold</b> < c")).toBe("a bold < c");
     expect(htmlToText("tail <unclosed tag text")).toBe("tail <unclosed tag text");
+    expect(htmlToText("Compare <baseline> with target")).toBe("Compare <baseline> with target");
+    expect(htmlToText("See <https://example.org/path> for details")).toBe("See <https://example.org/path> for details");
+    expect(htmlToText("<p>Office</p><o:p></o:p>")).toBe("Office");
+    const page2 = renderCalendarEvent({ service: "google_calendar", accountLabel: ACCOUNT }, event({ description: "Compare <baseline> with target" }));
+    expect(page2.body).toContain("Compare <baseline> with target");
   });
 });
 

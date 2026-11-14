@@ -63,7 +63,14 @@ const BULK_LOCAL_PART = /^(?:no-?reply|do-?not-?reply|mailer-daemon|notification
 
 const DROPPED_BLOCKS = ["script", "style", "head", "noscript", "template"];
 const BREAK_TAGS = new Set(["br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "table"]);
-const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " " };
+const HTML_TAGS = new Set([
+  ...BREAK_TAGS, "html", "body", "span", "a", "b", "i", "u", "s", "em", "strong", "small", "big", "sub", "sup", "font",
+  "ul", "ol", "dl", "dt", "dd", "td", "th", "thead", "tbody", "tfoot", "col", "colgroup", "caption", "center",
+  "img", "hr", "pre", "code", "blockquote", "section", "article", "header", "footer", "nav", "main", "meta", "link",
+  "title", "label", "button", "input", "form", "select", "option", "textarea", "wbr", "abbr", "cite", "q", "mark",
+  "del", "ins", "figure", "figcaption", "picture", "source", "svg", "path", "style", "script", "head", "noscript", "template",
+]);
+const ENTITIES: Record<string, string> ={ amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " " };
 
 function dropBlocks(html: string): string {
   const lower = html.toLowerCase();
@@ -108,13 +115,15 @@ export function htmlToText(html: string): string {
     if (open === -1) break;
     out += body.slice(from, open);
     const close = body.indexOf(">", open);
-    // A `<` that does not open a tag (`Budget < $5k`) or never closes is text.
-    if (close === -1 || !/^<[a-z/!]/i.test(body.slice(open, open + 2))) {
+    // Only a known HTML element, a namespaced Office tag or a comment is markup;
+    // `Budget < $5k`, `<baseline>` and `<https://...>` in plain text stay text.
+    const head = /^<(!|\/?\s*([a-z][a-z0-9]*)(:[a-z])?)/i.exec(body.slice(open, Math.min(close === -1 ? body.length : close + 1, open + 40)));
+    const name = head?.[2]?.toLowerCase();
+    if (close === -1 || !head || (head[1] !== "!" && !HTML_TAGS.has(name!) && head[3] === undefined)) {
       out += "<";
       from = open + 1;
       continue;
     }
-    const name = /^<\/?\s*([a-z0-9]+)/i.exec(body.slice(open, Math.min(close + 1, open + 32)))?.[1]?.toLowerCase();
     if (name !== undefined && BREAK_TAGS.has(name)) out += "\n";
     from = close + 1;
   }
