@@ -157,7 +157,7 @@ export async function setAccountEnabled(engine: Engine, id: string, enabled: boo
 /** Merge `patch` into the account's settings; keys it does not name keep their values. */
 export async function setAccountConfig(engine: Engine, id: string, patch: Record<string, unknown>): Promise<boolean> {
   const r = await engine.query(
-    `UPDATE connector_accounts SET config = config || $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING id`,
+    `UPDATE connector_accounts SET config = config || $2::text::jsonb, updated_at = NOW() WHERE id = $1 RETURNING id`,
     [id, JSON.stringify(patch)],
   );
   return r.rows.length > 0;
