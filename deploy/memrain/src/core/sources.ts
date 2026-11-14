@@ -239,6 +239,7 @@ export async function sourceReferences(engine: Engine, id: string): Promise<Reco
        (SELECT COUNT(*) FROM tags WHERE source_id = $1)::int AS tags,
        (SELECT COUNT(*) FROM timeline_events WHERE source_id = $1)::int AS timeline_events,
        (SELECT COUNT(*) FROM synth_calibration_profile WHERE source_id = $1)::int AS calibration_profiles,
+       (SELECT COUNT(*) FROM connector_accounts WHERE source_id = $1)::int AS connector_accounts,
        -- Revoked clients count too: their row keeps a RESTRICT foreign key.
        (SELECT COUNT(*) FROM oauth_clients
          WHERE source_id = $1 OR $1 = ANY(federated_read))::int AS oauth_clients,
