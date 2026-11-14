@@ -10,6 +10,7 @@ import { Storage } from "../src/core/storage.ts";
 import { ALL_PHASES } from "../src/core/cycle/index.ts";
 import { startCycleLoop } from "../src/recipes/cycle.ts";
 import { pauseDaemon, readControls, resumeDaemon } from "../src/core/daemons/controls.ts";
+import { cycleDaemonPause } from "../src/core/daemons/cycle-daemon.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -78,6 +79,11 @@ describe("cycle daemon", () => {
       await until(async () => (await cycleRow())?.last_run_at != null);
     } finally { await again.stop(); }
   }, 30_000);
+
+  it("a pause with an empty reason still pauses", async () => {
+    await pauseDaemon(storage.engine(), { daemon: "cycle", by: "mcp", reason: "" });
+    expect(await cycleDaemonPause(storage.engine(), {})).toBeTruthy();
+  });
 
   it("a global pause stops the cycle too", async () => {
     await pauseDaemon(storage.engine(), { daemon: "*", by: "cli" });

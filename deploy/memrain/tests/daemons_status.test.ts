@@ -74,6 +74,13 @@ describe("daemonsStatus / controlDaemon", () => {
     } finally { await lock.release(); }
   });
 
+  it("a malformed zone override does not break the report", async () => {
+    registerDaemon({ name: "probe", kind: "daemon_probe", schedule: { cron: "0 7 * * *" }, lane: "short", paid: false, defaultEnabled: true });
+    await storage.engine().query(`INSERT INTO daemon_controls (daemon, source_id, timezone) VALUES ('probe', '*', 'Mars/Olympus')`);
+    const s = await daemonsStatus(storage.engine());
+    expect(s.daemons.find(d => d.name === "probe")!.next_window).toBeNull();
+  });
+
   it("refuses an unknown daemon, a bad source id and an unknown action", async () => {
     const e = storage.engine();
     await expect(controlDaemon(e, { action: "pause", daemon: "nope" }, "cli")).rejects.toBeInstanceOf(OperationError);

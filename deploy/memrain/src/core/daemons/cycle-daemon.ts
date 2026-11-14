@@ -14,7 +14,8 @@ export async function cycleDaemonPause(engine: Engine, env: NodeJS.ProcessEnv = 
   try {
     const ctl = resolveControl(await readControlsFor(engine, CYCLE_DAEMON.name), CYCLE_DAEMON.name, ALL);
     if (!ctl.pausedBy) return null;
-    return ctl.pausedBy.paused_reason ?? `paused by ${ctl.pausedBy.paused_by ?? "operator"}`;
+    // Never empty: the caller treats an empty string as "not paused".
+    return ctl.pausedBy.paused_reason || `paused by ${ctl.pausedBy.paused_by || "operator"}`;
   } catch (e) {
     console.warn(`[cycle] could not read daemon controls, running unpaused: ${e instanceof Error ? e.message : String(e)}`);
     return null;

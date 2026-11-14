@@ -112,7 +112,7 @@ export interface ControlTarget {
 }
 
 export async function pauseDaemon(engine: Engine, t: ControlTarget & { reason?: string }): Promise<void> {
-  const reason = t.reason?.slice(0, MAX_REASON_CHARS) ?? null;
+  const reason = t.reason?.trim().slice(0, MAX_REASON_CHARS) || null;
   await engine.query(
     `INSERT INTO daemon_controls (daemon, source_id, paused, paused_reason, paused_by, paused_at, updated_at)
      VALUES ($1, $2, true, $3, $4, NOW(), NOW())

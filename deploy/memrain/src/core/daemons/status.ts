@@ -15,7 +15,7 @@ import {
   resumeDaemon,
   type DaemonControlRow,
 } from "./controls.ts";
-import { CronError, nextFire, parseCron, windowKey } from "./cron.ts";
+import { CronError, assertTimeZone, nextFire, parseCron, windowKey } from "./cron.ts";
 import { getDaemon, listDaemons, type DaemonSpec } from "./registry.ts";
 import { DAEMON_LOCK_ID } from "./scheduler.ts";
 
@@ -73,7 +73,7 @@ function nextWindow(spec: DaemonSpec, row: DaemonControlRow | undefined, now: Da
   if (spec.schedule === "external") return null;
   const tz = row?.timezone ?? spec.schedule.timezone ?? "UTC";
   try {
-    const f = nextFire(parseCron(row?.cron ?? spec.schedule.cron), now, tz);
+    const f = nextFire(parseCron(row?.cron ?? spec.schedule.cron), now, assertTimeZone(tz));
     return f ? windowKey(f, tz) : null;
   } catch (e) {
     if (e instanceof CronError) return null;
