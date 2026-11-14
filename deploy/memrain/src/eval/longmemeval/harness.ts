@@ -35,8 +35,9 @@ import { chunkMarkdown } from "../../core/chunkers/recursive.ts";
 import { extractFencedCode } from "../../core/chunkers/fenced-code.ts";
 import { costUsd, worstCaseUsd } from "../../core/budget.ts";
 import { contextualLlmEnabled } from "../../core/search/contextual-llm.ts";
+import { keywordOnlyMode } from "../../core/llm/gateway.ts";
 import { DEFAULT_MODEL_ID as TITAN_EMBED_MODEL } from "../../core/embedding.ts";
-import { DEFAULT_SONNET_MODEL } from "../../core/llm/sonnet.ts";
+import { DEFAULT_SONNET_MODEL, STOP_REASON_MAX_TOKENS } from "../../core/llm/sonnet.ts";
 import { DEFAULT_HAIKU_MODEL } from "../../core/llm/haiku.ts";
 import type { LmeQuestion, LmeSession } from "./dataset.ts";
 import { CapExceeded, SpendLedger, type Stage } from "./ledger.ts";
@@ -89,6 +90,8 @@ export interface LmeBedrock {
     text: string;
     inputTokens: number;
     outputTokens: number;
+    /** Converse's stop reason; "max_tokens" means the output cap cut the reply. */
+    stopReason?: string;
   }>;
 }
 
@@ -177,6 +180,16 @@ class UnboundedInput extends Error {
 /** "incomplete": every question was tried, but some were interrupted and cannot be scored. */
 export type RunOutcome = "complete" | "incomplete" | "cap_exceeded" | "call_failed" | "ceiling_breached" | "refused";
 
+export interface TypeScore {
+  scored: number;
+  correct: number;
+  interrupted: number;
+  /** correct / scored; null when nothing of the type was scored. */
+  accuracy: number | null;
+  /** correct / (scored + interrupted): an interrupted question counts as wrong. */
+  accuracy_with_interrupted: number | null;
+}
+
 export interface LongMemEvalSummary {
   label: string;
   dataset: { url: string; sha256: string };
@@ -188,8 +201,12 @@ export interface LongMemEvalSummary {
   scored: number;
   correct: number;
   accuracy: number | null;
-  by_type: Record<string, { scored: number; correct: number; accuracy: number }>;
+  /** correct / (scored + interrupted): an interrupted question counts as wrong. */
+  accuracy_with_interrupted: number | null;
+  by_type: Record<string, TypeScore>;
   judge_unparseable: number;
+  /** Scored answers the output cap cut off (stop reason "max_tokens"). */
+  answer_truncated: number;
   evidence_recall_mean: number | null;
   interrupted: string[];
   not_run: number;
@@ -403,7 +420,7 @@ class QuestionCalls {
     return res.vector;
   }
 
-  async converse(stage: "answer" | "judge", system: string, user: string): Promise<{ text: string; usd: number }> {
+  async converse(stage: "answer" | "judge", system: string, user: string): Promise<{ text: string; usd: number; stopReason?: string }> {
     const model = stage === "answer" ? this.models.answer : this.models.judge;
     const maxTokens = stage === "answer" ? ANSWER_MAX_TOKENS : JUDGE_MAX_TOKENS;
     const maxBytes = stage === "answer" ? ANSWER_PROMPT_MAX_BYTES : JUDGE_PROMPT_MAX_BYTES;
@@ -411,7 +428,9 @@ class QuestionCalls {
     const res = await this.invoke(id, maxUsd, () => this.bedrock.converse({ modelId: model, system, user, maxTokens }));
     const reported = res.inputTokens > 0;
     this.settle(id, maxUsd, model, reported ? { inputTokens: res.inputTokens, outputTokens: res.outputTokens } : null);
-    return { text: res.text, usd: reported ? costUsd(model, res) : maxUsd };
+    return {
+      text: res.text, usd: reported ? costUsd(model, res) : maxUsd, ...(res.stopReason ? { stopReason: res.stopReason } : {}),
+    };
   }
 }
 
@@ -479,6 +498,7 @@ async function runQuestion(
       judge_verdict: verdict === null ? "unparseable" : verdict ? "yes" : "no",
       judge_raw: judge.text.slice(0, 200),
       hypothesis: answer.text.slice(0, 4000),
+      answer_stop_reason: answer.stopReason ?? null,
       retrieved_session_ids: retrieved,
       evidence_recall: evidenceRecall,
       search_degraded: degraded,
@@ -514,9 +534,14 @@ function summarize(
 ): LongMemEvalSummary {
   const results = ledger.results();
   const byType: LongMemEvalSummary["by_type"] = {};
+  const typeOf = (q: LmeQuestion): TypeScore => {
+    const type = isAbstention(q) ? "abstention" : q.question_type;
+    return (byType[type] ??= { scored: 0, correct: 0, interrupted: 0, accuracy: null, accuracy_with_interrupted: null });
+  };
   let scored = 0;
   let correct = 0;
   let unparseable = 0;
+  let truncated = 0;
   const recalls: number[] = [];
   const interrupted: string[] = [];
   let notRun = 0;
@@ -528,18 +553,22 @@ function summarize(
     }
     if (r.status === "interrupted") {
       interrupted.push(q.question_id);
+      typeOf(q).interrupted++;
       continue;
     }
     scored++;
     const ok = r.correct === true;
     if (ok) correct++;
     if (r.judge_verdict === "unparseable") unparseable++;
+    if (r.answer_stop_reason === STOP_REASON_MAX_TOKENS) truncated++;
     if (typeof r.evidence_recall === "number") recalls.push(r.evidence_recall);
-    const type = isAbstention(q) ? "abstention" : q.question_type;
-    const t = (byType[type] ??= { scored: 0, correct: 0, accuracy: 0 });
+    const t = typeOf(q);
     t.scored++;
     if (ok) t.correct++;
-    t.accuracy = t.correct / t.scored;
+  }
+  for (const t of Object.values(byType)) {
+    t.accuracy = t.scored === 0 ? null : t.correct / t.scored;
+    t.accuracy_with_interrupted = t.correct / (t.scored + t.interrupted);
   }
   return {
     label: RESULT_LABEL,
@@ -551,8 +580,10 @@ function summarize(
     scored,
     correct,
     accuracy: scored === 0 ? null : correct / scored,
+    accuracy_with_interrupted: scored + interrupted.length === 0 ? null : correct / (scored + interrupted.length),
     by_type: byType,
     judge_unparseable: unparseable,
+    answer_truncated: truncated,
     evidence_recall_mean: recalls.length === 0 ? null : recalls.reduce((a, b) => a + b, 0) / recalls.length,
     interrupted,
     not_run: notRun,
@@ -570,6 +601,11 @@ export function ledgerPath(outDir: string): string {
 export async function runLongMemEval(opts: LongMemEvalRunOptions): Promise<LongMemEvalRunResult> {
   if (!Number.isFinite(opts.maxUsd) || opts.maxUsd <= 0) throw new Error("--max-usd must be a positive number");
   const models = resolveModels(opts.models);
+  if (keywordOnlyMode()) {
+    throw new UnsafeConfig(
+      "MEMRAIN_KEYWORD_ONLY is on: nothing would be embedded and no model could answer, so the score would not measure Memrain's retrieval",
+    );
+  }
   if (contextualLlmEnabled()) {
     throw new UnsafeConfig("MEMRAIN_CONTEXTUAL_LLM is on: the indexer would make paid calls outside this run's ledger");
   }

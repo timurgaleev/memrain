@@ -167,7 +167,8 @@ function printUsage(): void {
   console.log("  eval longmemeval --dry-run [--max-usd N] [--limit N]");
   console.log("  eval longmemeval --out DIR --max-usd N [--limit N] [--answer-model ID] [--judge-model ID] [--dir CACHE]");
   console.log("  eval longmemeval --out DIR --settle RESERVATION --usd N");
-  console.log("                               LongMemEval-S answered from retrieval, Bedrock-Claude-judged; budgeted, resumable");
+  console.log("                               LongMemEval-S answered from retrieval, Bedrock-Claude-judged; budgeted, resumable;");
+  console.log("                               --limit N runs the first N questions in dataset order");
   console.log("  eval-probe [--limit N]       replay eval set, append a row to eval_snapshots (nightly probe)");
   console.log("  bench [--family push|continuity|fidelity|all] [--corpus DIR] [--json]");
   console.log("                               agent-facing behaviour bench (push / continuity / write-back");

@@ -9,6 +9,8 @@
  *   --out DIR --settle RESERVATION --usd N    record the billed amount of a call
  *                                             a crashed run never settled
  *
+ * --limit N takes the first N questions in dataset file order, not a sample.
+ *
  * Exit: 0 every selected question was scored; 1 refused, stopped (cap, price,
  * unsafe setting, bad dataset) or some questions were interrupted; 2 usage, a
  * mismatched ledger or a run directory in use; 75 a download or paid call

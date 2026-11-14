@@ -43,7 +43,10 @@ export function bedrockBoundary(calls: BoundaryCalls = {}): LmeBedrock {
     },
     converse: async ({ modelId, system, user, maxTokens }) => {
       const r = await converse({ system, user, maxTokens, temperature: 0 }, { modelId, operation: "longmemeval", client: chatClient });
-      return { text: r.text, inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens };
+      return {
+        text: r.text, inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens,
+        ...(r.stopReason ? { stopReason: r.stopReason } : {}),
+      };
     },
   };
 }

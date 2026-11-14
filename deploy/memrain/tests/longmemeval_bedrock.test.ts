@@ -20,7 +20,7 @@ describe("bedrockBoundary", () => {
       },
       converse: async (_input: SonnetCallInput, opts: CallSonnetOptions = {}): Promise<SonnetCallResult> => {
         attempts.converse = await opts.client?.config.maxAttempts();
-        return { text: "ok", modelId: opts.modelId ?? "", usage: { inputTokens: 5, outputTokens: 1 } };
+        return { text: "ok", modelId: opts.modelId ?? "", usage: { inputTokens: 5, outputTokens: 1 }, stopReason: "max_tokens" };
       },
     });
 
@@ -29,6 +29,6 @@ describe("bedrockBoundary", () => {
 
     expect(attempts).toEqual({ embed: 1, converse: 1 });
     expect(e.inputTokens).toBe(3);
-    expect(c).toMatchObject({ text: "ok", inputTokens: 5, outputTokens: 1 });
+    expect(c).toMatchObject({ text: "ok", inputTokens: 5, outputTokens: 1, stopReason: "max_tokens" });
   });
 });
