@@ -109,7 +109,7 @@ export async function createAccount(engine: Engine, input: CreateAccountInput): 
   const principal = cleanLabel(input.principalRef, "principal", MAX_PRINCIPAL);
   const r = await engine.query<RawAccount>(
     `INSERT INTO connector_accounts (id, source_id, provider, services, principal_ref, account_label, config)
-     VALUES ($1, $2, $3, $4::text[], $5, $6, $7::jsonb)
+     VALUES ($1, $2, $3, $4::text[], $5, $6, $7::text::jsonb)
      RETURNING ${ACCOUNT_COLS}`,
     [randomUUID(), input.sourceId, input.provider, [...new Set(input.services)], principal, label, JSON.stringify(input.config ?? {})],
   );
