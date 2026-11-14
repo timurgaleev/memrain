@@ -90,15 +90,39 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     return (typeof p === "string" ? JSON.parse(p) : p) as Record<string, unknown>;
   }
 
-  async function admitCapture(token: string, slug: string): Promise<string> {
+  async function admitCapture(token: string, slug: string, body = `capture ${slug}`): Promise<string> {
     const auth = ingestAuth(await provider.verifyAccessToken(token));
     const res = await handleIngestRoute(
-      new Request("http://test/ingest", { method: "POST", headers: { "content-type": "text/markdown", "x-memrain-slug": slug }, body: `capture ${slug}` }),
+      new Request("http://test/ingest", { method: "POST", headers: { "content-type": "text/markdown", "x-memrain-slug": slug }, body }),
       { storage: db.storage, authInfo: auth, allowRequest: () => true, clientIp: "1.2.3.4" },
     );
     expect(res.status).toBe(202);
     return String(((await res.json()) as { job_id: string }).job_id);
   }
+
+  /** One connector registered against `default`, with each sign-in approved
+   *  into its own source: several people behind one client_id. */
+  async function sharedClient(): Promise<OAuthClientInfo> {
+    const { clientId } = await provider.registerClientManual(
+      `shared-${unique()}`, ["authorization_code", "refresh_token"], "read write", [REDIRECT], "default",
+    );
+    return (await provider.getClient(clientId))!;
+  }
+
+  async function signInTo(client: OAuthClientInfo, sourceId: string) {
+    const verifier = randomBytes(32).toString("base64url");
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const { redirectUrl } = await provider.authorize(
+      client,
+      { codeChallenge: challenge, redirectUri: REDIRECT, scopes: ["read", "write"] },
+      { sourceId, federatedRead: [sourceId] },
+    );
+    const code = new URL(redirectUrl).searchParams.get("code")!;
+    return provider.exchangeAuthorizationCode(client, code, undefined, REDIRECT);
+  }
+
+  const jobCount = async (ids: string[]) =>
+    (await db.storage.engine().query(`SELECT 1 FROM jobs WHERE id = ANY($1::text[])`, [ids])).rows.length;
 
   async function runJob(kind: string, jobId: string): Promise<unknown> {
     const payload = await queuedPayload(jobId);
@@ -233,6 +257,103 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     expect(await getPage(db.storage, slug)).toBeNull();
   });
 
+  describe("one client, several principals", () => {
+    it("identical bytes from two principals queue two jobs, each writing to its own source", async () => {
+      const client = await sharedClient();
+      const alice = await signInTo(client, "acme");
+      const bob = await signInTo(client, "beta");
+      const body = `shared capture ${unique()}`;
+      const aliceSlug = `notes/alice-${unique()}`;
+      const bobSlug = `notes/bob-${unique()}`;
+      const aliceJob = await admitCapture(alice.access_token, aliceSlug, body);
+      const bobJob = await admitCapture(bob.access_token, bobSlug, body);
+      expect(bobJob).not.toBe(aliceJob);
+      expect(await jobCount([aliceJob, bobJob])).toBe(2);
+
+      expect(await runJob(INGEST_CAPTURE_JOB_KIND, aliceJob)).not.toBeInstanceOf(Error);
+      expect(await runJob(INGEST_CAPTURE_JOB_KIND, bobJob)).not.toBeInstanceOf(Error);
+      expect((await getPage(db.storage, aliceSlug))?.source_id).toBe("acme");
+      expect((await getPage(db.storage, bobSlug))?.source_id).toBe("beta");
+    });
+
+    it("the same principal resubmitting the same bytes is still one job", async () => {
+      const client = await sharedClient();
+      const alice = await signInTo(client, "acme");
+      const slug = `notes/again-${unique()}`;
+      const first = await admitCapture(alice.access_token, slug);
+      const second = await admitCapture(alice.access_token, slug);
+      expect(second).toBe(first);
+      expect(await jobCount([first])).toBe(1);
+    });
+
+    it("revoking one principal leaves the other's identical capture to run", async () => {
+      const client = await sharedClient();
+      const alice = await signInTo(client, "acme");
+      const bob = await signInTo(client, "beta");
+      const body = `revoked capture ${unique()}`;
+      const aliceSlug = `notes/alice-rev-${unique()}`;
+      const bobSlug = `notes/bob-rev-${unique()}`;
+      const aliceJob = await admitCapture(alice.access_token, aliceSlug, body);
+      const bobJob = await admitCapture(bob.access_token, bobSlug, body);
+      await provider.revokeToken(client, { token: alice.refresh_token! });
+
+      expectRefused(await runJob(INGEST_CAPTURE_JOB_KIND, aliceJob), /revoked/);
+      expect(await runJob(INGEST_CAPTURE_JOB_KIND, bobJob)).not.toBeInstanceOf(Error);
+      expect(await getPage(db.storage, aliceSlug)).toBeNull();
+      expect((await getPage(db.storage, bobSlug))?.source_id).toBe("beta");
+    });
+  });
+
+  describe("token sweep", () => {
+    const tokenRow = async (token: string) =>
+      (await db.storage.engine().query(`SELECT 1 FROM oauth_tokens WHERE token_hash = $1`, [sha(token)])).rows.length;
+    const expire = (token: string) =>
+      db.storage.engine().query(`UPDATE oauth_tokens SET expires_at = 1 WHERE token_hash = $1`, [sha(token)]);
+
+    it("keeps an expired family-less token a queued capture names, and the capture writes", async () => {
+      const m2m = await machineToken();
+      const slug = `notes/sweep-kept-${unique()}`;
+      const jobId = await admitCapture(m2m.token, slug);
+      await expire(m2m.token);
+      await provider.sweepExpiredTokens();
+      expect(await tokenRow(m2m.token)).toBe(1);
+
+      expect(await runJob(INGEST_CAPTURE_JOB_KIND, jobId)).not.toBeInstanceOf(Error);
+      expect(await getPage(db.storage, slug)).not.toBeNull();
+
+      await db.storage.engine().query(`UPDATE jobs SET status = 'succeeded' WHERE id = $1`, [jobId]);
+      await provider.sweepExpiredTokens();
+      expect(await tokenRow(m2m.token)).toBe(0);
+    });
+
+    it("keeps an expired session a queued capture names, and the capture writes", async () => {
+      const client = await webClient();
+      const tokens = await signIn(client);
+      const slug = `notes/sweep-family-${unique()}`;
+      const jobId = await admitCapture(tokens.access_token, slug);
+      await expire(tokens.access_token);
+      await expire(tokens.refresh_token!);
+      await provider.sweepExpiredTokens();
+      expect(await tokenRow(tokens.access_token)).toBe(1);
+      expect(await tokenRow(tokens.refresh_token!)).toBe(1);
+
+      expect(await runJob(INGEST_CAPTURE_JOB_KIND, jobId)).not.toBeInstanceOf(Error);
+      expect(await getPage(db.storage, slug)).not.toBeNull();
+
+      await db.storage.engine().query(`UPDATE jobs SET status = 'succeeded' WHERE id = $1`, [jobId]);
+      await provider.sweepExpiredTokens();
+      expect(await tokenRow(tokens.access_token)).toBe(0);
+      expect(await tokenRow(tokens.refresh_token!)).toBe(0);
+    });
+
+    it("sweeps an expired family-less token no job names", async () => {
+      const m2m = await machineToken();
+      await expire(m2m.token);
+      await provider.sweepExpiredTokens();
+      expect(await tokenRow(m2m.token)).toBe(0);
+    });
+  });
+
   it("refuses a legacy capture job that names no principal", async () => {
     const pat = await mintPat();
     const slug = `notes/legacy-${unique()}`;
@@ -268,6 +389,32 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
       const live = await mintPat("beta");
       expect(await runJob(TRANSCRIPTS_INGEST_JOB_KIND, await admitPush(live.token))).not.toBeInstanceOf(Error);
       expect((await transcriptPages("beta")).length).toBeGreaterThan(0);
+    });
+
+    it("the same log from two principals on one client queues two jobs; revoking one leaves the other", async () => {
+      const client = await sharedClient();
+      const alice = await signInTo(client, "acme");
+      const bob = await signInTo(client, "beta");
+      const aliceJob = await admitPush(alice.access_token);
+      const bobJob = await admitPush(bob.access_token);
+      expect(bobJob).not.toBe(aliceJob);
+      expect((await queuedPayload(aliceJob)).source_id).toBe("acme");
+      expect((await queuedPayload(bobJob)).source_id).toBe("beta");
+      expect(await admitPush(bob.access_token)).toBe(bobJob);
+
+      await provider.revokeToken(client, { token: alice.refresh_token! });
+      expectRefused(await runJob(TRANSCRIPTS_INGEST_JOB_KIND, aliceJob), /revoked/);
+      expect(await runJob(TRANSCRIPTS_INGEST_JOB_KIND, bobJob)).toMatchObject({ sessions: 1 });
+    });
+
+    it("keeps an expired family-less token a queued push names", async () => {
+      const m2m = await machineToken();
+      const jobId = await admitPush(m2m.token);
+      await db.storage.engine().query(`UPDATE oauth_tokens SET expires_at = 1 WHERE token_hash = $1`, [sha(m2m.token)]);
+      await provider.sweepExpiredTokens();
+      const left = await db.storage.engine().query(`SELECT 1 FROM oauth_tokens WHERE token_hash = $1`, [sha(m2m.token)]);
+      expect(left.rows.length).toBe(1);
+      expect((await queuedPayload(jobId)).principal).toMatchObject({ kind: "oauth_token" });
     });
 
     it("refuses a legacy push job that names no principal", async () => {

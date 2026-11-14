@@ -72,7 +72,7 @@ describe("POST /ingest transcript push", () => {
     expect(res.status).toBe(202);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).toMatchObject({ source_id: "default", format: "claude-code", sessions: 1, parts: 1 });
-    expect(String(body.job_id)).toMatch(/^ingest:transcript:laptop-1:[0-9a-f]{64}$/);
+    expect(String(body.job_id)).toMatch(/^ingest:transcript:laptop-1:[0-9a-f]{32}:[0-9a-f]{64}$/);
 
     const again = await handleIngestRoute(pushReq(claudeRaw), deps(laptop));
     expect(((await again.json()) as Record<string, unknown>).job_id).toBe(body.job_id);

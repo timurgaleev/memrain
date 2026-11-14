@@ -10,8 +10,8 @@
  *   - byte cap: `MEMRAIN_INGEST_MAX_BYTES` (default 1 MiB), stream-counted
  *   - content types: text-shaped only (markdown / plain / html / json);
  *     unknown `text/*` degrades to text/plain, binary is 415 in v1
- *   - idempotency: same content from the same client is the SAME durable
- *     job (job id embeds the SHA-256 content hash)
+ *   - idempotency: same content from the same credential into the same
+ *     source is the SAME durable job (job id embeds the SHA-256 content hash)
  *   - response: 202 + job_id — capture is queued, not synchronous
  *
  * The heavy lifting happens in the `ingest_capture` job: the worker lands
@@ -397,11 +397,11 @@ export async function handleIngestRoute(
 
   try {
     const queue = new Queue(deps.storage.engine());
-    // Idempotency: same content from the same client is a single durable
-    // job — the deterministic id makes retries and double-submits collapse.
+    // Idempotency: same content from the same credential into the same source
+    // is a single durable job — retries and double-submits collapse.
     const job = await queue.enqueue({
       kind: INGEST_CAPTURE_JOB_KIND,
-      id: `ingest:webhook:${auth.clientId}:${contentHash}`,
+      id: `ingest:webhook:${auth.clientId}:${ingestSubmitterKey(event.source_id, auth)}:${contentHash}`,
       payload: {
         event,
         ...(callerSlug ? { slug: callerSlug } : {}),
@@ -461,6 +461,19 @@ export async function handleIngestRoute(
     );
     return err(500, "queue_submission_failed", "could not queue the event");
   }
+}
+
+/**
+ * The submitter half of a queued ingest job id: the write source and the
+ * credential reference the job runs under. One OAuth client can front several
+ * people, so the client id alone would fold a second tenant's identical bytes
+ * into the first tenant's job. Hashed so the id carries no token hash and no
+ * caller-chosen separator.
+ */
+function ingestSubmitterKey(sourceId: string, auth: AuthInfo): string {
+  const p = auth.principal;
+  const identity = JSON.stringify([sourceId, p?.kind ?? null, p?.id ?? null, p && p.kind !== "pat" ? p.client_id : null]);
+  return createHash("sha256").update(identity, "utf8").digest("hex").slice(0, 32);
 }
 
 /** True when every part of a session at `base` (`<base>-p<n>`) falls under
@@ -540,7 +553,7 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
   try {
     const job = await new Queue(deps.storage.engine()).enqueue({
       kind: TRANSCRIPTS_INGEST_JOB_KIND,
-      id: `ingest:transcript:${auth.clientId}:${contentHash}`,
+      id: `ingest:transcript:${auth.clientId}:${ingestSubmitterKey(sourceId, auth)}:${contentHash}`,
       payload: {
         source_id: sourceId,
         client_id: auth.clientId,
