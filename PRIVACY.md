@@ -14,17 +14,30 @@ marketing list.
 
 ## What data the app touches
 
-Memrain indexes only data the operator points it at inside their own
-infrastructure:
+Memrain indexes only data the operator points it at:
 
 | Source | What we read |
 |---|---|
 | Markdown notes | Notes the operator indexes from under the configured `MEMRAIN_VAULT_PATHS`. |
 | Code corpus | Source files under the configured `MEMRAIN_CODE_PATHS` (graph-only via tree-sitter). |
+| Google Calendar (connector, off by default) | Events of the calendars the operator picks, read-only (`calendar.readonly`, plus `openid email` to name the account): title, time, location, organizer, attendees' names and addresses, description, recurrence and occurrences. |
+| Fireflies (connector, off by default) | Meeting transcripts the operator's API key can see: title, time, participants, the Fireflies summary and action items, and the transcript as speaker turns. Memrain sends Fireflies read queries only. |
 
-There is **no third-party data integration** — no Google, no email, no
-calendar, no smart-home, no OAuth to any external provider. The stack
-reads only the operator's own files.
+Connectors are off unless the operator sets a connector key, turns on
+`MEMRAIN_CONNECTORS_ENABLED`, connects an account from the admin panel and
+switches its sync on (docs/connectors/ENABLE.md). There is no email, chat,
+smart-home or other integration. A synced event or transcript is written to
+the brain as a page marked as outside text: its people are linked to people
+pages that already exist (others are only listed as wanted, never created),
+an event or meeting gets one chronicle row, and the page is chunked and
+embedded like any other. Connector pages are left out of fact extraction, the
+contextual LLM tier and deep synthesis, so their text is not sent to a model
+for those features.
+
+Connector credentials (Google refresh tokens, the Fireflies API key, an
+operator's own OAuth client secret) are stored encrypted with AES-256-GCM
+under the connector key, which lives in AWS Secrets Manager and never in the
+database (see SECURITY.md).
 
 ## Where the data goes
 
@@ -47,7 +60,11 @@ configured region:
 
 Stored data stays in your AWS account. Query results go to the MCP client you
 connect, and with the default Cloudflare Tunnel, requests pass through
-Cloudflare. There are no analytics SDKs, no advertising
+Cloudflare. A connected connector calls only its provider's API (Google's
+OAuth and Calendar endpoints, Fireflies' GraphQL endpoint) with the stored
+credential. Owner notifications, when the operator sets
+`MEMRAIN_NOTIFY_WEBHOOK_URL`, send the configured receiver a signed pointer
+(kind, id, a link into the admin panel, time) and never the problem's text. There are no analytics SDKs, no advertising
 trackers and no third-party SaaS observability. No vendor analytics or
 third-party telemetry; Memrain's own search telemetry, request and spend logs
 stay in your account, alongside CloudWatch application logs.
@@ -78,6 +95,27 @@ tool, how long it took, whether it worked and a redacted summary of the
 arguments. Rows older than 180 days are deleted automatically; the operator
 sets the window with `MEMRAIN_REQUEST_LOG_RETENTION_DAYS` (`0` keeps every
 row).
+
+Connector data has its own rules:
+
+- **Retention.** A connector page is hard-deleted once its last activity is
+  older than its window: 365 days for calendar events and meetings by default
+  (180 for mail and chat, which no shipped connector reads yet), set per kind
+  with `MEMRAIN_CONNECTOR_RETENTION_DAYS_<KIND>`; `0` or `off` keeps pages.
+  The sweep runs after each sync run.
+- **Deleted at the provider.** An event cancelled in Google or a transcript
+  Fireflies no longer has is hard-deleted from the brain with everything
+  derived from it: page history, chunks and embeddings, facts, chronicle rows
+  and links. A run that would delete more than the mass-delete guard allows is
+  held until the operator confirms it in the admin panel.
+- **Disconnecting** revokes a Google grant at Google and drops the stored
+  credential (it is kept for another try if Google does not confirm the
+  revoke); a Fireflies key is dropped and stays valid in Fireflies until the
+  operator regenerates it there. The synced pages stay. **Delete everything** on the Connections
+  page then removes every page that account brought in, after a preview and a
+  typed confirmation.
+- Every connector deletion leaves a receipt in the ingest log holding counts
+  and hashes only, never a title, address or text.
 
 There is no support inbox to email — the operator runs the entire
 stack.

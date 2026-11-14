@@ -32,6 +32,10 @@ scope. Examples:
 - MCP bearer-token bypass on `brain.<domain>`.
 - Cross-tenant data exposure in the Memrain index.
 - Cloudflare Tunnel auth bypass.
+- Reading a connector credential (a Google refresh token, a Fireflies key, an
+  OAuth client secret) out of the database, a log or a response, or using one
+  account's connector to read or delete another account's pages.
+- Making the notification webhook reach an address it should refuse.
 
 ## Out of scope
 
@@ -58,6 +62,46 @@ scope. Examples:
   hours in a cooldown, a link or code can be reserved at most five times, and
   refused sign-ins (401) take a fixed minimum time. Sign-out-everywhere waits
   for in-flight passkey operations, so none of them outlives it.
+
+## Connector credentials and notifications
+
+Connectors (Google Calendar, Fireflies) are off until the operator sets a
+connector key and `MEMRAIN_CONNECTORS_ENABLED=1`, connects an account from the
+admin panel and switches its sync on. With the switch off no credential is
+opened and nothing is synced or queued.
+
+- **Token vault.** Refresh and access tokens, Fireflies API keys and
+  bring-your-own OAuth client secrets are sealed with AES-256-GCM before they
+  reach the database. Each sealed row records only the key's id. Routes and
+  logs never return or print a credential; a token a provider echoes into
+  synced text is redacted before the page is written.
+- **The connector key (KEK)** is 32 random bytes kept in AWS Secrets Manager
+  (`<prefix>/memrain-connector-kek`, created empty by terraform so the value
+  never sits in terraform state) and fetched into `deploy/.secrets/memrain.env`
+  (mode 0400). Without AWS it is read from a file only its owner can read
+  (`MEMRAIN_CONNECTOR_KEK_FILE`). It is never stored in the database:
+  `memrain config set` refuses it, and with no usable key connectors stay
+  closed instead of storing anything in the clear. `memrain connectors
+  rotate-kek` reseals every credential under a new key
+  (docs/connectors/KEY.md). Losing the key loses the stored credentials, not
+  the synced pages: accounts are connected again.
+- **Least access.** Google is asked only for `openid email
+  calendar.readonly`, and a grant that differs is refused and revoked.
+  Fireflies keys carry the owner's full API access (Fireflies offers no scoped
+  key); Memrain only sends read queries with one.
+- **Outside text.** Everything a connector syncs is stored as untrusted
+  outside text, passes the write gate and is read back inside a trust frame;
+  nothing in it is acted on.
+- **Admin routes** for connectors, notifications, autonomy and approvals sit
+  behind the admin passkey session and its same-origin check on writes.
+  Disconnect and delete everything need the account's name typed back, and
+  delete everything also needs the hash of the preview it deletes.
+- **Notification webhook.** `MEMRAIN_NOTIFY_WEBHOOK_URL` must be https to a
+  host that is not loopback, private, link-local or `localhost`, with no
+  credentials in the URL; redirects are not followed. Each POST is signed
+  (HMAC-SHA256 over the timestamp and raw body, secret from
+  `<prefix>/memrain-notify-webhook`) and carries only a pointer: kind, id,
+  admin link and time.
 
 ## Software bill of materials
 
