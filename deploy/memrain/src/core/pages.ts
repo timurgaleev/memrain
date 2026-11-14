@@ -1608,7 +1608,7 @@ export async function renamePage(
         throw new OperationError("invalid_params", "New page slugs cannot have repeated or trailing hyphens.");
       }
       const imported = await tx.query<{ managed: boolean }>(
-        `SELECT (s.kind IN ('github', 'transcript', 'mailbox', 'calendar', 'code', 'webhook')
+        `SELECT (s.kind IN ('github', 'transcript', 'mailbox', 'calendar', 'code', 'webhook', 'chat', 'meeting')
           OR p.compiled_truth->>'provider' = 'github'
           OR (p.compiled_truth ? 'conversation_id' AND p.compiled_truth ? 'format')
           OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug
