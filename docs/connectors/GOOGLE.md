@@ -137,6 +137,23 @@ of `.env` files and shell history.)
 With `connector_sync` enabled ([ENABLE.md](./ENABLE.md) step 6), the first
 sync starts within 15 minutes.
 
+### 8. Pick calendars and the history window (optional)
+
+Memrain syncs your primary calendar and reads the last 90 days of it on the
+first sync. To add other calendars the account can read (busy-only ones are
+not offered) or change the window, use the admin API with your admin session:
+
+```
+GET  /admin/api/connectors/accounts/<account id>/calendars
+POST /admin/api/connectors/accounts/<account id>/calendars
+{"calendars": ["<calendar id>", ...], "history_days": 365}
+```
+
+The list is checked against what Google returns for the account; primary is
+always synced. Up to 19 calendars besides primary, and a window of 1 to 3,650
+days, never past the retention window. A new window applies to calendars that
+have not had their first sync yet.
+
 ## The 7-day reconnect
 
 Google limits refresh tokens for apps that are not published. From Google's

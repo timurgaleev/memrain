@@ -66,13 +66,14 @@ export const GOOGLE_CALENDAR_SERVICE = "calendar";
 
 const DAY_MS = 86_400_000;
 const PAGE_SIZE = "250";
-const DEFAULT_HISTORY_DAYS = 90;
-const MAX_HISTORY_DAYS = 3650;
+export const DEFAULT_HISTORY_DAYS = 90;
+export const MAX_HISTORY_DAYS = 3650;
 /** How far ahead a series' occurrences are listed. */
 const FORWARD_DAYS = 90;
 const MAX_OCCURRENCES = 500;
 const MAX_INSTANCE_PAGES = 10;
-const MAX_CALENDARS = 20;
+/** Calendars one account syncs, primary included. */
+export const MAX_CALENDARS = 20;
 const MAX_CALENDAR_ID = 1024;
 const MAX_LIST_PAGES = 10;
 const SKIPPED_EVENT_TYPES = new Set(["workingLocation"]);

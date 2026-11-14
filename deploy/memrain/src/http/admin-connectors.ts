@@ -24,9 +24,20 @@ import type { Engine } from "../core/engine/interface.ts";
 import { listSources } from "../core/sources.ts";
 import { OperationError } from "../core/operation-error.ts";
 import type { FetchFn } from "../core/connectors/client.ts";
-import { credentialMeta, getAccount, listAccounts, setAccountEnabled, type ConnectorAccount } from "../core/connectors/accounts.ts";
+import { credentialMeta, getAccount, listAccounts, setAccountConfig, setAccountEnabled, type ConnectorAccount } from "../core/connectors/accounts.ts";
 import { ApiKeyConnectError, connectApiKey } from "../core/connectors/api-key-connect.ts";
 import { accountRef } from "../core/connectors/model.ts";
+import {
+  DEFAULT_HISTORY_DAYS,
+  GOOGLE_CALENDAR_SERVICE,
+  listGoogleCalendars,
+  MAX_CALENDARS,
+  MAX_HISTORY_DAYS,
+  selectedCalendars,
+  type GoogleCalendarEntry,
+} from "../core/connectors/google/calendar.ts";
+import { connectorRuntime, toSyncAccount } from "../core/connectors/runtime.ts";
+import { ReauthRequiredError } from "../core/connectors/types.ts";
 import { deleteOAuthClient, listOAuthClients, setOAuthClient } from "../core/connectors/oauth-clients.ts";
 import { deleteAllConnectorData, previewConnectorData } from "../core/connectors/retention.ts";
 import {
@@ -184,6 +195,9 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
   const acct = /^\/admin\/api\/connectors\/accounts\/([^/]+)\/(enable|disable|disconnect|preview|delete-data|retry-held|deletions\/confirm|deletions\/reject)$/.exec(p);
   if (acct) return accountAction(req, acct[1]!, acct[2]!, deps);
 
+  const calendars = /^\/admin\/api\/connectors\/accounts\/([^/]+)\/calendars$/.exec(p);
+  if (calendars) return calendarsAction(req, calendars[1]!, deps);
+
   const clientDelete = /^\/admin\/api\/connectors\/([^/]+)\/client\/delete$/.exec(p);
   if (clientDelete && req.method === "POST") {
     const provider = clientDelete[1]!;
@@ -338,6 +352,84 @@ async function accountAction(req: Request, id: string, action: string, deps: Adm
     console.error(`[admin-connectors] ${action} failed:`, e instanceof Error ? e.name : "error");
     return json({ error: "internal error" }, 500);
   }
+}
+
+/** The calendars a Google account can read, fetched with its own credential. */
+async function readableCalendars(account: ConnectorAccount, deps: AdminConnectorDeps): Promise<GoogleCalendarEntry[]> {
+  const runtime = connectorRuntime(deps.storage, {
+    kek: deps.kek()!, providers: deps.providers, ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.env ? { env: deps.env } : {}),
+  });
+  const sync = toSyncAccount(account);
+  const wiring = runtime.depsFor(sync);
+  const client = wiring.client(sync, await wiring.tokenSource(sync, () => {}));
+  return listGoogleCalendars(client);
+}
+
+function historyDays(account: ConnectorAccount): number {
+  const v = account.config["history_days"];
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_HISTORY_DAYS ? v : DEFAULT_HISTORY_DAYS;
+}
+
+/**
+ * The calendar picker: GET lists what the account can read and what syncs;
+ * POST saves `calendars` (ids Google lists for the account; primary always
+ * syncs and is not stored) and `history_days` into the account's config.
+ * A new window applies to calendars that have not had their first sync.
+ */
+async function calendarsAction(req: Request, id: string, deps: AdminConnectorDeps): Promise<Response | null> {
+  if (req.method !== "GET" && req.method !== "POST") return null;
+  if (!UUID_RE.test(id)) return json({ error: "invalid account id" }, 400);
+  if (!deps.status().enabled || deps.kek() === null) return disabled(deps);
+  const engine = deps.storage.engine();
+  const account = await getAccount(engine, id);
+  if (!account) return json({ error: "account_not_found" }, 404);
+  if (account.provider !== "google" || !account.services.includes(GOOGLE_CALENDAR_SERVICE) || !deps.providers.get("google")) {
+    return json({ error: "no_calendars", message: "Only a Google Calendar account has calendars to pick." }, 400);
+  }
+  if (account.status !== "active") return json({ error: "not_connected", message: "Reconnect the account before picking its calendars." }, 409);
+
+  const body = req.method === "POST" ? await readBody(req) : null;
+  if (req.method === "POST") {
+    if (!body) return json({ error: "invalid body" }, 400);
+    if (body.calendars !== undefined && (!Array.isArray(body.calendars) || !body.calendars.every((c) => typeof c === "string"))) {
+      return json({ error: "calendars must be a list of calendar ids" }, 400);
+    }
+    const days = body.history_days;
+    if (days !== undefined && !(typeof days === "number" && Number.isInteger(days) && days >= 1 && days <= MAX_HISTORY_DAYS)) {
+      return json({ error: "invalid_history_days", message: `history_days is a whole number from 1 to ${MAX_HISTORY_DAYS}.` }, 400);
+    }
+  }
+
+  let listed: GoogleCalendarEntry[];
+  try {
+    listed = await readableCalendars(account, deps);
+  } catch (e) {
+    if (e instanceof ReauthRequiredError) return json({ error: "not_connected", message: "Google refused the account's access; reconnect it." }, 409);
+    console.error("[admin-connectors] calendar list failed:", e instanceof Error ? e.name : "error");
+    return json({ error: "provider_unavailable" }, 502);
+  }
+
+  if (req.method === "GET") {
+    const selected = new Set(selectedCalendars(toSyncAccount(account)));
+    return json({
+      calendars: listed.map((c) => ({ id: c.id, summary: c.summary, primary: c.primary, access_role: c.accessRole, selected: c.primary || selected.has(c.id) })),
+      history_days: historyDays(account),
+    });
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (Array.isArray(body!.calendars)) {
+    const readable = new Map(listed.map((c) => [c.id, c]));
+    const chosen = [...new Set(body!.calendars as string[])];
+    if (chosen.some((c) => !readable.has(c))) return json({ error: "unknown_calendar", message: "Pick calendars from the list this account can read." }, 400);
+    const secondary = chosen.filter((c) => !readable.get(c)!.primary);
+    if (secondary.length > MAX_CALENDARS - 1) return json({ error: "too_many_calendars", message: `At most ${MAX_CALENDARS - 1} calendars besides primary.` }, 400);
+    patch.calendars = secondary;
+  }
+  if (body!.history_days !== undefined) patch.history_days = body!.history_days;
+  await setAccountConfig(engine, id, patch);
+  const saved = (await getAccount(engine, id))!;
+  return json({ ok: true, calendars: Array.isArray(saved.config["calendars"]) ? saved.config["calendars"] : [], history_days: historyDays(saved) });
 }
 
 async function complete(req: Request, provider: string, deps: AdminConnectorDeps): Promise<Response> {
