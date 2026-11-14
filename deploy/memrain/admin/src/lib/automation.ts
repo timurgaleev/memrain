@@ -152,6 +152,8 @@ const CONNECT_ERRORS: Record<string, string> = {
   confirm_mismatch: "The name you typed does not match the account.",
   still_connected: "Disconnect the account first, so a sync cannot write the pages back.",
   conflict: "The account's data changed since the preview. Review the new counts.",
+  shared_owner: "Another account in this source writes pages under the same name, so they cannot be told apart. Remove that account first.",
+  not_connected: "Reconnect the account before switching its sync on.",
 };
 
 /** Copy for an error code the connector routes answer; unknown codes get the fallback, never the code itself. */

@@ -226,6 +226,65 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("refuse to preview or delete while another account in the source owns pages under the same name", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const account = await connected(e);
+      // Same mailbox through another provider, and the same address in other case: page ownership cannot tell them apart.
+      for (const [provider, label] of [["test_other", OWNER], ["test", OWNER.toUpperCase()]] as const) {
+        const twin = await createAccount(e, { sourceId: "inbox", provider, services: ["mail"], principalRef: "admin:operator", accountLabel: label });
+        await connectorPage(db.storage, "mail/2026-11/shared");
+        const d = deps(db.storage);
+        await call(post(`/admin/api/connectors/accounts/${account.id}/disconnect`, { confirm_label: OWNER }), d);
+
+        const preview = await call(get(`/admin/api/connectors/accounts/${account.id}/preview`), d);
+        expect(preview.status).toBe(409);
+        expect(await preview.json()).toMatchObject({ error: "shared_owner" });
+        const del = await call(post(`/admin/api/connectors/accounts/${account.id}/delete-data`, { confirm_label: OWNER, plan_hash: "0123456789abcdef" }), d);
+        expect(del.status).toBe(409);
+        expect(await del.json()).toMatchObject({ error: "shared_owner" });
+        expect((await e.query("SELECT 1 FROM pages WHERE slug = 'mail/2026-11/shared'")).rows).toHaveLength(1);
+        await e.query("DELETE FROM connector_accounts WHERE id = $1", [twin.id]);
+      }
+    } finally { await db.close(); }
+  });
+
+  it("forget the account's sync state with its data, so a reconnect starts over instead of skipping what was deleted", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const account = await connected(e);
+      await connectorPage(db.storage, "mail/2026-11/one");
+      await e.query(`INSERT INTO connector_items (account_id, external_id, page_slug, external_version) VALUES ($1, 'one', 'mail/2026-11/one', 'v1')`, [account.id]);
+      await e.query(`INSERT INTO connector_cursors (account_id, stream, cursor) VALUES ($1, 'mail', 'history-42')`, [account.id]);
+      const d = deps(db.storage);
+      await call(post(`/admin/api/connectors/accounts/${account.id}/disconnect`, { confirm_label: OWNER }), d);
+      const { plan_hash } = await (await call(get(`/admin/api/connectors/accounts/${account.id}/preview`), d)).json() as { plan_hash: string };
+      const done = await call(post(`/admin/api/connectors/accounts/${account.id}/delete-data`, { confirm_label: OWNER, plan_hash }), d);
+      expect(done.status).toBe(200);
+      expect((await e.query("SELECT 1 FROM connector_items WHERE account_id = $1", [account.id])).rows).toHaveLength(0);
+      expect((await e.query("SELECT 1 FROM connector_cursors WHERE account_id = $1", [account.id])).rows).toHaveLength(0);
+      expect(await getAccount(e, account.id)).toMatchObject({ status: "revoked" });
+    } finally { await db.close(); }
+  });
+
+  it("refuse to switch sync on for a disconnected account, while switching it off still works", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const account = await connected(e);
+      const d = deps(db.storage);
+      await call(post(`/admin/api/connectors/accounts/${account.id}/disconnect`, { confirm_label: OWNER }), d);
+      const on = await call(post(`/admin/api/connectors/accounts/${account.id}/enable`), d);
+      expect(on.status).toBe(409);
+      expect(await on.json()).toMatchObject({ error: "not_connected" });
+      expect((await getAccount(e, account.id))!.enabled).toBe(false);
+      const off = await call(post(`/admin/api/connectors/accounts/${account.id}/disable`), d);
+      expect(off.status).toBe(200);
+    } finally { await db.close(); }
+  });
+
   it("confirm or keep the deletions a sync run held, and retry held items", async () => {
     const db = await open();
     try {

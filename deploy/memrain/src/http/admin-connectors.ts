@@ -30,6 +30,7 @@ import { deleteOAuthClient, listOAuthClients, setOAuthClient } from "../core/con
 import { deleteAllConnectorData, previewConnectorData } from "../core/connectors/retention.ts";
 import {
   confirmHeldDeletes,
+  forgetSyncState,
   heldItemCount,
   itemsInDeletionState,
   listOpenNotices,
@@ -229,6 +230,23 @@ function isDisconnected(account: ConnectorAccount): boolean {
   return account.status === "revoked" || (account.status === "error" && account.status_reason === "revoke_failed");
 }
 
+/**
+ * Connector pages name their owner by a hash of the lowercased label, without
+ * the provider. Another account in the same source with that label (the same
+ * mailbox through another provider, or the address in other case) owns pages
+ * the scope cannot tell apart, so deleting by it would take that account's
+ * pages too.
+ */
+async function sharesOwner(engine: Engine, account: ConnectorAccount, ref: string): Promise<boolean> {
+  return (await listAccounts(engine, { sourceId: account.source_id }))
+    .some((other) => other.id !== account.id && accountRef(other.account_label) === ref);
+}
+
+const SHARED_OWNER = {
+  error: "shared_owner",
+  message: "Another account in this source writes pages under the same name, so they cannot be told apart. Remove that account first.",
+};
+
 async function accountAction(req: Request, id: string, action: string, deps: AdminConnectorDeps): Promise<Response | null> {
   if (req.method !== (action === "preview" ? "GET" : "POST")) return null;
   if (!UUID_RE.test(id)) return json({ error: "invalid account id" }, 400);
@@ -241,6 +259,10 @@ async function accountAction(req: Request, id: string, action: string, deps: Adm
     switch (action) {
       case "enable":
       case "disable":
+        // A disconnected account has no credential to sync with; switching it on would read as on while nothing runs.
+        if (action === "enable" && isDisconnected(account)) {
+          return json({ error: "not_connected", message: "Reconnect the account before switching its sync on." }, 409);
+        }
         await setAccountEnabled(engine, id, action === "enable");
         return json({ ok: true, enabled: action === "enable" });
       case "retry-held":
@@ -250,6 +272,7 @@ async function accountAction(req: Request, id: string, action: string, deps: Adm
       case "deletions/reject":
         return json({ ok: true, kept: await rejectHeldDeletes(engine, id) });
       case "preview":
+        if (await sharesOwner(engine, account, scope.accountRef)) return json(SHARED_OWNER, 409);
         return json(await previewConnectorData(deps.storage, scope));
       case "disconnect": {
         if (!confirmsAccount(await readBody(req), account)) return json({ error: "confirm_mismatch" }, 400);
@@ -264,7 +287,9 @@ async function accountAction(req: Request, id: string, action: string, deps: Adm
         if (!isDisconnected(account)) {
           return json({ error: "still_connected", message: "Disconnect the account first, so a sync cannot bring the pages back." }, 409);
         }
+        if (await sharesOwner(engine, account, scope.accountRef)) return json(SHARED_OWNER, 409);
         const r = await deleteAllConnectorData(deps.storage, scope, { expectedPlanHash: body.plan_hash });
+        await forgetSyncState(engine, id);
         return json({ ok: true, deleted: r.deleted.length, changed: r.changed.length });
       }
       default:

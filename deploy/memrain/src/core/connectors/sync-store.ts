@@ -325,6 +325,18 @@ export interface OpenNotice {
   created_at: string;
 }
 
+/**
+ * Drop an account's cursors, items and notices once its pages are gone, so a
+ * later reconnect backfills instead of skipping items it remembers storing.
+ */
+export async function forgetSyncState(engine: Engine, accountId: string): Promise<void> {
+  await engine.transaction(async (tx) => {
+    await tx.query(`DELETE FROM connector_items WHERE account_id = $1`, [accountId]);
+    await tx.query(`DELETE FROM connector_cursors WHERE account_id = $1`, [accountId]);
+    await tx.query(`DELETE FROM connector_notices WHERE account_id = $1`, [accountId]);
+  });
+}
+
 export async function listOpenNotices(engine: Engine): Promise<OpenNotice[]> {
   const r = await engine.query<OpenNotice>(
     `SELECT account_id::text AS account_id, kind, detail, created_at::text AS created_at
