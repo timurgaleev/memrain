@@ -109,6 +109,22 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("spends the refresh token once for two providers of one account that name the same worker", async () => {
+    const db = await open();
+    try {
+      const mem = memoryStore({ accessToken: tok("a1"), refreshToken: tok("r1"), expiresAt: null });
+      let calls = 0;
+      const make = () => createTokenProvider({
+        engine: db.storage.engine(), accountId: ACCOUNT, store: mem.store, holder: "worker-1",
+        refresh: async () => { calls++; await Bun.sleep(30); return { accessToken: tok("a2"), refreshToken: tok("r2") }; },
+        sleep: (ms) => Bun.sleep(Math.min(ms, 10)),
+      });
+      const [x, y] = await Promise.all([make().refresh(tok("a1")), make().refresh(tok("a1"))]);
+      expect([x, y]).toEqual([tok("a2"), tok("a2")]);
+      expect(calls).toBe(1);
+    } finally { await db.close(); }
+  });
+
   it("waits for another worker's refresh and uses its token instead of spending the refresh token again", async () => {
     const db = await open();
     const e = db.storage.engine();
@@ -153,6 +169,12 @@ describe("tokenEndpointRefresh", () => {
     expect(init.redirect).toBe("manual");
     const form = new URLSearchParams(String(init.body));
     expect(Object.fromEntries(form)).toEqual({ grant_type: "refresh_token", refresh_token: tok("r1"), client_id: "client-1", client_secret: SECRET });
+  });
+
+  it("refuses a token path that would resolve off the configured origin", () => {
+    for (const path of ["/\\evil.example/token", "//evil.example/token", "token", "/a\\b"]) {
+      expect(() => tokenEndpointRefresh({ origin: ORIGIN, path, clientId: "c", clientSecret: SECRET })).toThrow();
+    }
   });
 
   it("reads invalid_grant as a reconnect", async () => {

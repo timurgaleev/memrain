@@ -73,7 +73,9 @@ export function createTokenProvider(opts: TokenProviderOptions): TokenSource {
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? realSleep;
   const skewMs = opts.skewMs ?? DEFAULT_SKEW_MS;
-  const holder = opts.holder ?? `pid-${process.pid}-${crypto.randomUUID()}`;
+  // Unique per provider even under one worker name: the lock lets its own
+  // holder back in, and two providers must not both refresh.
+  const holder = `${opts.holder ?? `pid-${process.pid}`}:${crypto.randomUUID()}`;
   const lockId = refreshLockId(opts.accountId);
   const waitMs = opts.waitMs ?? DEFAULT_WAIT_MS;
   let inFlight: Promise<string> | null = null;
@@ -161,8 +163,14 @@ const DEFAULT_TOKEN_TIMEOUT_MS = 30_000;
 export function tokenEndpointRefresh(opts: TokenEndpointOptions): RefreshFn {
   const origin = new URL(opts.origin).origin;
   if (!origin.startsWith("https://")) throw new Error(`token endpoint must be https (got ${origin})`);
-  if (!opts.path.startsWith("/") || opts.path.startsWith("//")) throw new Error("token endpoint path must be a path");
-  const url = new URL(opts.path, origin).toString();
+  // `/\host/x` resolves to another host, so a backslash is refused outright,
+  // and the resolved URL must still be on the origin.
+  if (!opts.path.startsWith("/") || opts.path.startsWith("//") || opts.path.includes("\\")) {
+    throw new Error("token endpoint path must be a path on the token origin");
+  }
+  const resolved = new URL(opts.path, origin);
+  if (resolved.origin !== origin) throw new Error("token endpoint path left the token origin");
+  const url = resolved.toString();
   const fetchFn = opts.fetch ?? ((u, init) => fetch(u, init));
 
   return async (refreshToken) => {

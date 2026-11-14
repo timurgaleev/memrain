@@ -495,6 +495,13 @@ class Run {
         this.fetchStopped = true;
         return false;
       }
+      // A page can take longer than the lock lives; a run that lost it stops
+      // before writing anything else another run may now be writing too.
+      if (!(await this.heartbeat())) {
+        this.stop("lock_lost");
+        this.fetchStopped = true;
+        return false;
+      }
       this.itemsThisRun++;
       this.result.counts.items++;
       const failure = await this.processItem(item);
@@ -538,8 +545,11 @@ class Run {
       accountId: this.account.id, externalId: item.externalId, version: item.version, pageSlug,
       contentHash, dedupeKey: item.dedupeKey ?? null, now: this.date(),
     });
-    if (row !== null && sameVersion && row.fail_count === 0 && row.held_reason === null
-      && row.deleted_upstream_at === null && row.page_slug === item.slug) {
+    const settled = row !== null && row.fail_count === 0 && row.held_reason === null
+      && row.deleted_upstream_at === null && row.page_slug === item.slug;
+    // Without a version there is nothing to compare: the write below decides
+    // by content hash.
+    if (settled && sameVersion && item.version !== null) {
       await touchItem(this.engine, this.account.id, item.externalId, this.date());
       this.result.counts.pages_unchanged++;
       return null;
@@ -554,7 +564,7 @@ class Run {
     }
     let hash: string | null;
     try {
-      hash = await this.write(item);
+      hash = await this.write(item, settled ? row.content_hash : null);
     } catch (e) {
       if (!(e instanceof OperationError)) throw e;
       return { externalId: item.externalId, version: item.version, code: e.code, message: e.message, deterministic: isDeterministicRefusal(e) };
@@ -570,11 +580,11 @@ class Run {
 
   /**
    * Write the page and mirror it into search. Returns the stored content hash,
-   * or null when the mirror failed. An unchanged page is mirrored too: an item
-   * reaches here only when it is not already settled on this version, which
-   * includes a page whose earlier mirror failed.
+   * or null when the mirror failed. An unchanged page is mirrored again unless
+   * `settledHash` (the hash this item last settled with) says it already was:
+   * that covers a page whose earlier mirror failed.
    */
-  private async write(item: RenderedSyncItem): Promise<string | null> {
+  private async write(item: RenderedSyncItem, settledHash: string | null): Promise<string | null> {
     // A live connector token must never reach a page, whatever the scan disposition.
     const findings: SecretFinding[] = [];
     const body = this.tokens.size > 0 ? sweepEchoes(item.body, this.tokens, findings) : item.body;
@@ -593,6 +603,7 @@ class Run {
     const stored = put.outside_body ?? body;
     if (!put.changed && !put.created) {
       this.result.counts.pages_unchanged++;
+      if (put.content_hash === settledHash) return put.content_hash;
     } else {
       this.result.counts.pages_written++;
       this.changed.push({ slug: item.slug, body: stored });

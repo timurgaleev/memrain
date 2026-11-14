@@ -329,6 +329,40 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("updates an item the provider gives no version for when its text changes", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      const unversioned = (body: string): SyncAdapter => ({
+        streams: () => [STREAM],
+        page: async () => ({ ok: true, items: [{ externalId: "u", version: null, slug: "test/acct/u", type: "note", title: "U", body }], checkpoint: "c1", done: true }),
+      });
+      await runConnectorSync(db.storage, account(), { ...harness([]).deps, adapter: unversioned("First text.") });
+      const r = await runConnectorSync(db.storage, account(), { ...harness([]).deps, adapter: unversioned("Second text.") });
+      expect(r.counts.pages_written).toBe(1);
+      expect((await getPage(db.storage, "test/acct/u"))?.markdown_body).toContain("Second text.");
+    } finally { await db.close(); }
+  });
+
+  it("stops writing mid-page once another run has taken its lock", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      const stolen: SyncAdapter = {
+        streams: () => [STREAM],
+        page: async () => {
+          // Another worker takes the lock over while this run is between heartbeats.
+          await db.storage.engine().query(`UPDATE worker_lock SET holder = 'thief' WHERE id = $1`, [`connector-sync:${ACCOUNT_ID}`]);
+          return { ok: true, items: [{ externalId: "s", version: "1", slug: "test/acct/s", type: "note", title: "S", body: "Never written." }], checkpoint: "c1", done: true };
+        },
+      };
+      const r = await runConnectorSync(db.storage, account(), { ...harness([]).deps, adapter: stolen });
+      expect(r.stop_reason).toBe("lock_lost");
+      expect(await getPage(db.storage, "test/acct/s")).toBeNull();
+      expect(await readCursor(db.storage.engine(), ACCOUNT_ID, STREAM)).toBeNull();
+    } finally { await db.close(); }
+  });
+
   it("lets the owner retry held items before their back-off ends", async () => {
     const db = await open();
     try {
