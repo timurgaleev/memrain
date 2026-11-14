@@ -73,6 +73,7 @@ import { checkDbBackends, checkJsonbIntegrity, checkPageVersionStorage } from ".
 import { checkCyclePhaseHealth, checkMaintenanceHeld } from "../core/doctor-maintenance.ts";
 import { checkContextualCoverage, checkEmbedBacklog } from "../core/doctor-embed.ts";
 import { checkSecretExposure } from "../core/doctor-secrets.ts";
+import { checkConnectorAccounts } from "../core/connectors/doctor.ts";
 import {
   checkFederationHealth,
   checkOauthClientHealth,
@@ -468,6 +469,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["code-grammars", checkGrammars],
       ["code-graph", checkCodeGraph],
       ["connector-health", checkConnectorHealth],
+      ["connector-accounts", checkConnectorAccounts],
       ["embed-backlog", checkEmbedBacklog],
       ["contextual-coverage", checkContextualCoverage],
       ["secret-exposure", checkSecretExposure],
