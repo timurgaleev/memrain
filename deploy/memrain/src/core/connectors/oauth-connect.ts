@@ -36,7 +36,7 @@ import {
   type TokenSet,
 } from "./accounts.ts";
 import { getOAuthClient } from "./oauth-clients.ts";
-import { acquireWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
+import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import { refreshLockId } from "./token-provider.ts";
 import type { ConnectorProvider, ProviderRegistry } from "./providers.ts";
 import { oauthStateAad, seal, unseal, type Kek } from "./vault.ts";
@@ -441,6 +441,7 @@ async function persistGrant(
 const DISCONNECT_WAIT_MS = 30_000;
 const DISCONNECT_LOCK_TTL_SEC = 60;
 const DISCONNECT_POLL_MS = 250;
+const DISCONNECT_HEARTBEAT_MS = 15_000;
 
 /**
  * Disconnect an account: revoke its token upstream, then drop the credential
@@ -455,7 +456,10 @@ const DISCONNECT_POLL_MS = 250;
  * rotates refresh tokens retires the old one on every renewal, so a revoke
  * sent while a refresh is in flight would revoke the dead token and leave the
  * rotated one live at the provider. Waiting for the refresh lets the
- * disconnect read, and revoke, whatever the refresh stored.
+ * disconnect read, and revoke, whatever the refresh stored. The lock is
+ * renewed while the revoke runs; if it was lost all the same, a refresh may
+ * have rotated the token after it was read, so the revoke is not trusted and
+ * the credential is kept for a retry.
  */
 export async function disconnectAccount(
   deps: ConnectDeps,
@@ -473,9 +477,17 @@ export async function disconnectAccount(
     if (waited >= waitMs) throw new ConnectError("refresh_in_progress");
     await new Promise((resolve) => setTimeout(resolve, DISCONNECT_POLL_MS));
   }
+  let lost = false;
+  const stillHeld = async (): Promise<boolean> => {
+    if (!lost && !(await heartbeatWorkerLock(deps.engine, lockId, holder))) lost = true;
+    return !lost;
+  };
+  const beat = setInterval(() => void stillHeld().catch(() => { lost = true; }), DISCONNECT_HEARTBEAT_MS);
+  beat.unref?.();
   try {
-    return await disconnectLocked(deps, accountId, row.provider, opts.force === true);
+    return await disconnectLocked(deps, accountId, row.provider, opts.force === true, stillHeld);
   } finally {
+    clearInterval(beat);
     await releaseWorkerLock(deps.engine, lockId, holder);
   }
 }
@@ -485,6 +497,7 @@ async function disconnectLocked(
   accountId: string,
   providerId: string,
   force: boolean,
+  stillHeld: () => Promise<boolean>,
 ): Promise<{ revoked: boolean; credentialKept: boolean }> {
   const provider = deps.providers.get(providerId);
   const hasCredential = (await deps.engine.query(`SELECT 1 FROM connector_credentials WHERE account_id = $1`, [accountId])).rows.length > 0;
@@ -495,6 +508,8 @@ async function disconnectLocked(
     const client = cred ? await resolveClient(deps, deps.kek, provider.id).catch(() => null) : null;
     if (cred && client) {
       revoked = await revokeToken(provider, deps.fetch ?? (globalThis.fetch as FetchFn), cred.tokens.refresh_token ?? cred.tokens.access_token, client);
+      // Without the lock the revoked token may already have been rotated away.
+      if (revoked && !(await stillHeld())) revoked = false;
     }
   }
   // Unknown provider: we cannot tell whether a revoke is owed, so keep it too.

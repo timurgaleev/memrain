@@ -372,6 +372,32 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("keeps the credential when its refresh lock was lost while the revoke ran", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "/inbox" });
+      const fake = fakeProvider();
+      const providers = new ProviderRegistry();
+      let accountId = "";
+      providers.register({
+        ...testProvider("test"),
+        // A revoke slow enough that the lock lapsed and a refresh took it over.
+        revoke: async () => {
+          await e.query(`UPDATE worker_lock SET holder = 'refresh-worker' WHERE id = $1`, [refreshLockId(accountId)]);
+          return true;
+        },
+      });
+      const d = deps(e, fake.fetch, { providers });
+      const { state } = await begin(e, d);
+      const done = await completeConnect(d, { provider: "test", state, code: "c", adminSessionId: SESSION });
+      accountId = done.account.id;
+      expect(await disconnectAccount(d, done.account.id)).toEqual({ revoked: false, credentialKept: true });
+      expect(await credentialMeta(e, done.account.id)).not.toBeNull();
+      expect(await getAccount(e, done.account.id)).toMatchObject({ status: "error", status_reason: "revoke_failed", enabled: false });
+    } finally { await db.close(); }
+  });
+
   it("refuses to disconnect while another worker keeps refreshing past the wait", async () => {
     const db = await open();
     const e = db.storage.engine();
