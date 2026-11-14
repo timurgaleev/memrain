@@ -1,12 +1,14 @@
 /**
  * The write gate as the indexer runs it, once per document write.
  *
- * Who wrote the text decides whether the gate runs:
- *   - a source of an outside kind (mailbox, calendar, chat, meeting, webhook,
- *     GitHub) is `external`, on every index, so a sweep re-derives the verdict;
- *   - any other write from a remote caller is `agent`;
- *   - a trusted local re-index of the same title and body carries the stored
- *     verdict forward, and a trusted rewrite drops it.
+ * The writer's trust tier (core/trust-tier.ts) decides whether the gate runs:
+ * the lower of the tier the source's kind gives and the tier of the caller.
+ *   - `external`: a source of an outside kind (mailbox, calendar, chat,
+ *     meeting, webhook, GitHub), on every index, so a sweep re-derives the
+ *     verdict, or a write recorded at the external tier;
+ *   - `agent` (and `member`): a remote caller's write into any other source;
+ *   - `owner`: a trusted local re-index of the same title and body carries the
+ *     stored verdict forward, and a trusted rewrite drops it.
  *
  * The hold for a quarantined document is written inside the document's own
  * transaction (DocumentWrite.afterWrite), so the two land or fail together.
@@ -14,7 +16,7 @@
 import type { Engine } from "./engine/interface.ts";
 import { GATE_OWNED_KEYS } from "./quarantine.ts";
 import { logIngest } from "./ingest-log.ts";
-import { EXTERNAL_SOURCE_KINDS } from "./sources.ts";
+import { lowerTier, sourceKindTier, type TrustTier } from "./trust-tier.ts";
 import {
   WRITE_GATE_APPROVAL_KEY,
   WriteGateBlockError,
@@ -25,7 +27,7 @@ import {
   writeGateBinding,
   writeGateExcerpt,
   writeGateFields,
-  type WriteGateOrigin,
+  writeGateOrigin,
   type WriteGateVerdict,
 } from "./write-gate.ts";
 import { WRITE_GATE_AUDIT_SOURCE_TYPE, recordWriteGateHold, supersedeWriteGateHolds } from "./write-gate-holds.ts";
@@ -35,6 +37,8 @@ export interface WriteGatePlanInput {
   sourcePath: string;
   sourceId: string | null;
   remote: boolean;
+  /** The caller's tier when the dispatcher resolved one; else `agent` for a remote write, `owner` otherwise. */
+  trustTier?: TrustTier;
   title: string;
   body: string;
   /** The incoming header, already stripped of gate-owned keys for a remote writer. */
@@ -63,9 +67,8 @@ export async function planWriteGate(engine: Engine, input: WriteGatePlanInput): 
   const row = r.rows[0];
   const sourceId = row?.source_id ?? input.sourceId ?? "default";
   const stored = row?.frontmatter ?? null;
-  const origin: WriteGateOrigin | null = row?.kind && (EXTERNAL_SOURCE_KINDS as readonly string[]).includes(row.kind)
-    ? "external"
-    : input.remote ? "agent" : null;
+  const callerTier = input.trustTier ?? (input.remote ? "agent" : "owner");
+  const origin = writeGateOrigin(lowerTier(sourceKindTier(row?.kind), callerTier));
   const fields = writeGateFields(input.title, input.body, input.frontmatter, GATE_OWNED_KEYS);
   const binding = writeGateBinding(fields);
   const storedApproval = stored?.[WRITE_GATE_APPROVAL_KEY];

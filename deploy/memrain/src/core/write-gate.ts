@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { neutralizeOutsideText } from "./neutralize-outside-text.ts";
 import { wellFormForText } from "./well-form.ts";
 import { WRITE_GATE_PATTERNS, type GateFamily, type GatePattern } from "./write-gate-patterns.ts";
+import type { TrustTier } from "./trust-tier.ts";
 
 /** Bump whenever the pattern table or the normalization changes. */
 export const WRITE_GATE_DETECTOR_VERSION = "write-gate/v1";
@@ -149,8 +150,17 @@ export const WRITE_GATE_APPROVAL_KEY = "write_gate_approval";
  * `off`         do not run
  */
 export type WriteGateMode = "off" | "flag" | "quarantine" | "reject";
-/** `external`: a source of an outside kind. `agent`: any other write from a remote caller. */
-export type WriteGateOrigin = "external" | "agent";
+/**
+ * The writer's trust tier as the gate reads it (core/trust-tier.ts): `external`
+ * text and `agent` text each have a mode of their own; a member is gated as an
+ * agent, and the owner is not gated.
+ */
+export type WriteGateOrigin = Extract<TrustTier, "external" | "agent">;
+
+export function writeGateOrigin(tier: TrustTier): WriteGateOrigin | null {
+  if (tier === "owner") return null;
+  return tier === "external" ? "external" : "agent";
+}
 export type WriteGateAction = "allow" | "flag" | "quarantine" | "reject";
 
 export interface WriteGateVerdict {

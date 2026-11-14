@@ -410,6 +410,7 @@ async function indexDocumentBody(
     sourcePath: input.sourcePath,
     sourceId: input.sourceId ?? null,
     remote: opts.remote === true,
+    ...(opts.trustTier ? { trustTier: opts.trustTier } : {}),
     title: gateTitle,
     // The whole text, not just the prose chunks: the facts and takes fences
     // are stripped before chunking but still become stored rows.

@@ -29,6 +29,7 @@ import {
   WRITE_GATE_KEY,
   assessWriteGate,
   resolveWriteGateMode,
+  writeGateOrigin,
   WriteGateBlockError,
 } from "../src/core/write-gate.ts";
 import { decideWriteGateHold, listWriteGateHolds } from "../src/core/write-gate-holds.ts";
@@ -92,6 +93,15 @@ describe("write-gate mode resolution", () => {
   it("falls back to the default on a value it does not know, and never rejects agent text", () => {
     expect(resolveWriteGateMode("external", "mail", { MEMRAIN_WRITE_GATE_EXTERNAL: "quarantne" })).toBe("flag");
     expect(resolveWriteGateMode("agent", "default", { MEMRAIN_WRITE_GATE_AGENT: "reject" })).toBe("off");
+  });
+});
+
+describe("write-gate origin", () => {
+  it("is the writer's trust tier: external text is gated as external, member and agent text as agent", () => {
+    expect(writeGateOrigin("external")).toBe("external");
+    expect(writeGateOrigin("agent")).toBe("agent");
+    expect(writeGateOrigin("member")).toBe("agent");
+    expect(writeGateOrigin("owner")).toBeNull();
   });
 });
 
@@ -341,6 +351,13 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const after = await fm(s, "page://agent-note");
       expect(after["quarantine"]).toBeUndefined();
       expect(after[WRITE_GATE_KEY]).toBeUndefined();
+    });
+  });
+
+  it("gates a write recorded at the external tier as outside text, whatever its source", async () => {
+    await withDb(async (s) => {
+      await indexDocument(s, { sourcePath: "notes/imported.md", text: INJECTION, sourceId: "default" }, { embedFn, trustTier: "external" });
+      expect((await fm(s, "notes/imported.md"))[WRITE_GATE_KEY]).toMatchObject({ action: "flag", origin: "external" });
     });
   });
 

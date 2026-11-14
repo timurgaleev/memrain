@@ -22,6 +22,7 @@
  */
 import { OperationError } from "./operation-error.ts";
 import { PAGE_MIRROR_PATH_SQL, PAGE_TRUTH_PATH_SQL } from "./page-index.ts";
+import { EXTERNAL_SOURCE_KINDS } from "./sources.ts";
 
 export const TRUST_TIERS = ["owner", "member", "agent", "external"] as const;
 export type TrustTier = (typeof TRUST_TIERS)[number];
@@ -29,7 +30,6 @@ export type TrustTier = (typeof TRUST_TIERS)[number];
 const RANK: Readonly<Record<TrustTier, number>> = { owner: 3, member: 2, agent: 1, external: 0 };
 const OWNER_RANK = RANK.owner;
 
-export const EXTERNAL_SOURCE_KINDS = ["github", "mailbox", "calendar", "webhook", "chat", "meeting"] as const;
 
 export function isTrustTier(value: unknown): value is TrustTier {
   return typeof value === "string" && (TRUST_TIERS as readonly string[]).includes(value);
@@ -58,6 +58,16 @@ export function parseMinTrust(value: unknown, tool: string): TrustTier | undefin
     );
   }
   return value === "external" ? undefined : value;
+}
+
+/** The tier a source of `kind` gives the text written into it. */
+export function sourceKindTier(kind: string | null | undefined): TrustTier {
+  return kind && (EXTERNAL_SOURCE_KINDS as readonly string[]).includes(kind) ? "external" : "owner";
+}
+
+/** The less trusted of two tiers. */
+export function lowerTier(a: TrustTier, b: TrustTier): TrustTier {
+  return RANK[a] <= RANK[b] ? a : b;
 }
 
 /** The tier of a `written_by_principal` value; NULL is an internal writer. */
