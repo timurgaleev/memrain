@@ -76,7 +76,7 @@ export interface DeleteCounts {
 export interface HardDeleteResult {
   deleted: boolean;
   /** Why nothing was deleted. */
-  refused?: "not_connector_page";
+  refused?: "not_connector_page" | "changed";
   counts: DeleteCounts;
 }
 
@@ -204,13 +204,14 @@ async function automaticPages(tx: Engine, where: string, params: unknown[], type
  * of which the atoms phase wrote goes; one someone edited, or any other page
  * claiming the same origin, is kept and counted.
  */
-async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string): Promise<DeleteCounts | null> {
+async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string, expectedContentHash?: string): Promise<DeleteCounts | "changed" | null> {
   await lockPageSlugs(tx, slug);
-  const page = await tx.query<{ slug: string }>(
-    `SELECT p.slug FROM pages p WHERE p.slug = $3 AND ${OWNED_PAGE} FOR UPDATE`,
+  const page = await tx.query<{ content_hash: string }>(
+    `SELECT p.content_hash FROM pages p WHERE p.slug = $3 AND ${OWNED_PAGE} FOR UPDATE`,
     [scope.sourceId, scope.accountRef, slug],
   );
   if (page.rows.length === 0) return null;
+  if (expectedContentHash !== undefined && page.rows[0]!.content_hash !== expectedContentHash) return "changed";
   const counts: DeleteCounts = { ...EMPTY_COUNTS };
   const { docIds, concepts } = await deletePageDerived(tx, slug, scope.sourceId, counts);
   if (docIds.length > 0) {
@@ -246,13 +247,14 @@ async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string):
 export async function hardDeleteConnectorPage(
   storage: Storage,
   scope: ConnectorScope,
-  item: { slug: string; reason: DeleteReason; externalId?: string },
+  item: { slug: string; reason: DeleteReason; externalId?: string; expectedContentHash?: string },
 ): Promise<HardDeleteResult> {
   const engine = storage.engine();
   await assertConnectorSource(engine, scope.sourceId);
   return deadlockSafeTransaction(engine, async (tx) => {
-    const counts = await deleteOwnedPage(tx, scope, item.slug);
+    const counts = await deleteOwnedPage(tx, scope, item.slug, item.expectedContentHash);
     if (counts === null) return { deleted: false, refused: "not_connector_page", counts: { ...EMPTY_COUNTS } };
+    if (counts === "changed") return { deleted: false, refused: "changed", counts: { ...EMPTY_COUNTS } };
     await logIngest(tx, {
       source_type: CONNECTOR_DELETE_SOURCE_TYPE,
       source_id: scope.sourceId,
@@ -470,7 +472,7 @@ export async function deleteAllConnectorData(
   storage: Storage,
   scope: ConnectorScope,
   opts: { expectedPlanHash: string },
-): Promise<{ deleted: string[] }> {
+): Promise<{ deleted: string[]; changed: string[] }> {
   const engine = storage.engine();
   await assertConnectorSource(engine, scope.sourceId);
   const rows = await planSlugs(engine, scope);
@@ -481,10 +483,14 @@ export async function deleteAllConnectorData(
       "Preview again, review the counts, and pass the new plan_hash.",
     );
   }
+  // Each page is pinned to the content the preview saw: one edited after the
+  // check above is refused, not deleted, and reported back.
   const deleted: string[] = [];
-  for (const { slug } of rows) {
-    const r = await hardDeleteConnectorPage(storage, scope, { slug, reason: "disconnect" });
+  const changed: string[] = [];
+  for (const { slug, content_hash: expectedContentHash } of rows) {
+    const r = await hardDeleteConnectorPage(storage, scope, { slug, reason: "disconnect", expectedContentHash });
     if (r.deleted) deleted.push(slug);
+    else if (r.refused === "changed") changed.push(slug);
   }
-  return { deleted };
+  return { deleted, changed };
 }

@@ -198,6 +198,13 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect((await e.query("SELECT 1 FROM ingest_log WHERE source_type = 'connector-delete'")).rows).toHaveLength(0);
   });
 
+  it("refuses a page whose content changed after the plan that named it", async () => {
+    const page = await ingest(mailPage("t5", "pinnedcanary"));
+    const r = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "disconnect", expectedContentHash: "0".repeat(64) });
+    expect(r).toMatchObject({ deleted: false, refused: "changed" });
+    expect((await db.storage.engine().query("SELECT 1 FROM pages WHERE slug = $1", [page.slug])).rows).toHaveLength(1);
+  });
+
   it("refuses a source that is not a connector source", async () => {
     await expect(hardDeleteConnectorPage(db.storage, { sourceId: "notes", accountRef: scope.accountRef }, { slug: "people/bob-stone", reason: "provider_deleted" }))
       .rejects.toThrow("connector");
