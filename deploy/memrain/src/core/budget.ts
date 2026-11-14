@@ -1513,7 +1513,9 @@ async function holdDurable(call: TrackedCall, frames: readonly WalletFrame[], wo
       return r.reserved ? { held: r.reservationId } : { refused: "client", check: r.check };
     });
   } catch (err) {
-    if (!walletFailsClosed(frames)) return null;
+    // A cap the operator set on a wallet path, daemon or source binds even
+    // when the ledger cannot be written: the call is not sent unheld.
+    if (!walletFailsClosed(frames) && walletCaps.length === 0) return null;
     await bookRefusal(call);
     throw new WalletRefusal("accounting", frames[frames.length - 1]!.path.role,
       `'${call.operation}' was not sent: its hold could not be written (${err instanceof Error ? err.message : String(err)})`,

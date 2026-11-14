@@ -234,6 +234,21 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(sent).toBe(1);
   });
 
+  it("a path with a day cap refuses, unsent, when its hold cannot be written", async () => {
+    const broken = new Proxy(e, {
+      get: (target, prop, receiver) => prop === "transaction"
+        ? () => Promise.reject(new Error("ledger unavailable"))
+        : Reflect.get(target, prop, receiver),
+    });
+    setSpendLedgerEngine(broken);
+    let sent = 0;
+    const err = await runInWallet({ role: "capped", dayCapUsd: 1 }, () => trackedInvoke(TWO_CENTS, async (m) => { sent++; m.report({ inputTokens: 1, outputTokens: 1 }); }))
+      .catch((x: unknown) => x);
+    expect(err).toBeInstanceOf(WalletRefusal);
+    expect((err as WalletRefusal).scope).toBe("accounting");
+    expect(sent).toBe(0);
+  });
+
   it("a day cap refusal is a daily-cap refusal the day rollover clears", async () => {
     const path: WalletPath = { role: "full", dayCapUsd: 0.03 };
     await runInWallet(path, () => trackedInvoke(TWO_CENTS, billWorst));
