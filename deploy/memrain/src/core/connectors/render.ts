@@ -302,6 +302,17 @@ export function renderCalendarEvent(ctx: ConnectorContext, event: CalendarEvent)
   if (event.location) lines.push(`Where: ${g.line(event.location)}`);
   if (event.organizer) lines.push(`Organizer: ${g.person(event.organizer)}`);
   if (event.recurrence?.length) lines.push(`Repeats: ${event.recurrence.map(r => g.line(r, 200)).join("; ")}`);
+  const occurrences = [...(event.occurrences ?? [])]
+    .map(o => ({ start: iso(o.start, "occurrence start"), end: o.end === null ? null : iso(o.end, "occurrence end"), status: o.status }))
+    .sort((a, b) => a.start.localeCompare(b.start));
+  if (occurrences.length) {
+    lines.push("", "Occurrences:");
+    for (const o of occurrences) {
+      const when = event.allDay ? o.start.slice(0, 10) : o.start;
+      lines.push(`* ${when}${o.end ? ` to ${event.allDay ? o.end.slice(0, 10) : o.end}` : ""}${o.status === "confirmed" ? "" : ` (${o.status})`}`);
+    }
+    if (event.occurrencesTruncated) lines.push("_more occurrences in the window are not listed_");
+  }
   if (event.attendees.length) {
     lines.push("", "Attendees:");
     for (const a of event.attendees) lines.push(`* ${g.person(a)}${a.response ? ` (${g.line(a.response, 40)})` : ""}`);
@@ -309,7 +320,13 @@ export function renderCalendarEvent(ctx: ConnectorContext, event: CalendarEvent)
   const description = event.description === null ? "" : g.text(htmlToText(event.description)).trim();
   if (description) lines.push("", description);
 
-  const truth = baseTruth(ctx, "calendar", event.id, start, end ?? start);
+  // A series that began long ago is still active while it keeps occurring:
+  // its latest listed occurrence, not its first, keeps it inside retention.
+  const last = occurrences.reduce((max, o) => {
+    const at = o.end ?? o.start;
+    return at > max ? at : max;
+  }, end ?? start);
+  const truth = baseTruth(ctx, "calendar", event.id, start, last);
   truth["status"] = event.status;
   if (event.iCalUID) truth["dedupe_key"] = shortHash(`ical:${event.iCalUID}`);
   return {

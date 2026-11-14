@@ -89,6 +89,19 @@ export interface CalendarEvent {
   attendees: CalendarAttendee[];
   /** RRULE / EXRULE lines of a recurring series, rendered as given. */
   recurrence: string[] | null;
+  /**
+   * A series' occurrences inside the window the adapter asked for (never the
+   * whole, possibly endless, series), as the provider expanded them.
+   */
+  occurrences?: CalendarOccurrence[];
+  /** More occurrences fell inside the window than were listed. */
+  occurrencesTruncated?: boolean;
+}
+
+export interface CalendarOccurrence {
+  start: string;
+  end: string | null;
+  status: "confirmed" | "tentative" | "cancelled";
 }
 
 export interface ChatMessage {
