@@ -260,7 +260,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
-  it("first sync: windows the list, commits the sync token after the last page, renders series within the retention window and links attendees", async () => {
+  it("first sync: windows the list, commits the sync token after the last page, renders series within the window and links attendees", async () => {
     const db = await open();
     try {
       const e = db.storage.engine();
@@ -308,7 +308,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       // A long-running series stays inside the retention window by its latest occurrence.
       expect(series.compiled_truth.last_activity_at).toBe("2026-11-23T08:30:00.000Z");
       const inst = world.calls.find(c => c.url.pathname.endsWith("/instances"))!;
-      expect(Date.parse(inst.url.searchParams.get("timeMin")!)).toBe(T0 - 365 * DAY);
+      // Occurrences are listed from the history window on, never further back.
+      expect(Date.parse(inst.url.searchParams.get("timeMin")!)).toBe(T0 - 90 * DAY);
       expect(Date.parse(inst.url.searchParams.get("timeMax")!)).toBe(T0 + 90 * DAY);
 
       const allday = (await e.query<{ markdown_body: string }>(`SELECT markdown_body FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).rows[0]!;
@@ -394,6 +395,55 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       // A series whose rule ended before the window is not even expanded.
       expect(world.calls.some(c => c.url.pathname.includes("/dead0001/"))).toBe(false);
       expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
+    } finally { await db.close(); }
+  });
+
+  it("never imports a series whose only occurrences fall before the history window, even inside retention", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const account = await connect(db.storage, world);
+      const oldCourse = {
+        id: "crs0001", iCalUID: "crs0001@google.com", status: "confirmed", etag: "\"6\"", summary: "Spring course",
+        recurrence: ["RRULE:FREQ=WEEKLY;COUNT=4"], start: { dateTime: "2026-04-01T09:00:00Z" }, end: { dateTime: "2026-04-01T10:00:00Z" },
+      };
+      const page2 = { ...GOOGLE_FIXTURES.eventsFullPage2!, items: [...(GOOGLE_FIXTURES.eventsFullPage2!.items as unknown[]), oldCourse] };
+      world.events = (_cal, q) => (q.get("pageToken") === PAGE_TOKEN ? { status: 200, body: page2 } : "eventsFullPage1");
+      // Retention (365 days) would keep April; history (90 days) does not reach it.
+      world.instances = (_cal, id) => (id === "crs0001"
+        ? { status: 200, body: { kind: "calendar#events", items: [
+          { id: "crs0001_20260401T090000Z", recurringEventId: "crs0001", status: "confirmed", start: { dateTime: "2026-04-01T09:00:00Z" }, end: { dateTime: "2026-04-01T10:00:00Z" } },
+        ] } }
+        : "instancesS1");
+      const result = await run(db.storage, world, account.id);
+      expect(result.status).toBe("success");
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("crs0001@google.com")])).toBe(0);
+    } finally { await db.close(); }
+  });
+
+  it("with retention off, a relist still reconciles everything since the first sync's floor", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const env = { ...ENV, MEMRAIN_CONNECTOR_RETENTION_DAYS_CALENDAR: "off" };
+      const world = firstSyncWorld();
+      const account = await connect(db.storage, world, env);
+      await run(db.storage, world, account.id, env);
+      const page2 = { ...GOOGLE_FIXTURES.eventsFullPage2!, items: [] };
+      world.calls.length = 0;
+      world.events = (_cal, q) => {
+        if (q.get("syncToken") !== null) return { status: 410, body: GOOGLE_FIXTURES.error410FullSyncRequired! };
+        return q.get("pageToken") === PAGE_TOKEN ? { status: 200, body: page2 } : "eventsFullPage1";
+      };
+      const result = await run(db.storage, world, account.id, env, T1);
+      expect(result.status).toBe("success");
+      expect(eventListCalls(world).map(q => q.get("syncToken"))).toEqual([FULL_TOKEN, null, null]);
+      expect(result.counts.deletions_applied).toBe(1);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
+      // The floor stayed where the first sync put it.
+      const inst = world.calls.find(c => c.url.pathname.endsWith("/instances"))!;
+      expect(Date.parse(inst.url.searchParams.get("timeMin")!)).toBe(T0 - 90 * DAY);
     } finally { await db.close(); }
   });
 
@@ -641,7 +691,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const pass = JSON.parse((await readCursor(e, account.id, calendarStream("primary")))!) as Record<string, unknown>;
       // A touch stamped by a clock that stepped back a little must still count as seen.
       expect(pass).toMatchObject({ mode: "full", pageToken: PAGE_TOKEN, since: new Date(T1 - 5 * 60_000).toISOString() });
-      expect(Date.parse(String(pass.timeMin))).toBe(T1 - 365 * DAY);
+      // A bare token carries no floor: the history window stands in for it.
+      expect(Date.parse(String(pass.timeMin))).toBe(T1 - 90 * DAY);
     } finally { await db.close(); }
   });
 

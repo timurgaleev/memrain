@@ -19,7 +19,10 @@
  *     larger than one run finishes over several runs instead of starting over
  *     each time. A stored page token Google no longer takes (400/410) restarts
  *     that pass.
- *   - A relist covers the whole retention window, and once it is through,
+ *   - Every pass keeps the same window: from the first sync's floor, or from
+ *     retention's edge once that is later. Nothing older is imported, and a
+ *     delta that reports a change to an older event is skipped too.
+ *   - A relist covers that whole window, and once it is through,
  *     every stored event of the calendar it did not touch is deleted as gone
  *     upstream, under the same mass-delete guard; pages still there match by
  *     content, so nothing is duplicated. It runs when Google answers 410 on a
@@ -32,7 +35,7 @@
  *   - `status: cancelled` reports an event deleted upstream; the engine routes
  *     it through the hard-delete path and its mass-delete guard.
  *   - A recurring series is one page. Its occurrences are expanded by Google
- *     (`events.instances`) inside the retention window and a 90-day horizon
+ *     (`events.instances`) inside that window and a 90-day horizon
  *     only, never the whole, possibly endless, series. A changed or cancelled
  *     single occurrence re-renders its series page instead of making a page
  *     of its own.
@@ -123,13 +126,16 @@ function configInt(account: SyncAccount, key: string, min: number, max: number):
  * own sync tokens are opaque strings that never start with `{`, so a stored
  * cursor is one or the other.
  *
- *   full  — listing everything and keeping what touches the window from
- *           `timeMin`; `since` is set on a relist and is when it began, for
- *           the reconcile at its end;
+ *   full  — listing everything and keeping what touches the window;
+ *           `since` is set on a relist and is when it began, for the
+ *           reconcile at its end;
  *   delta — reading the changes after sync token `token`.
  *
- * `listedAt` is when the last full pass finished, carried along by delta
- * passes so the weekly relist knows when it is due; unknown for a bare token.
+ * `timeMin` is the stream's floor: where the first sync's history window
+ * began. Every later pass carries it, so the window is never widened past
+ * what the owner asked for, and retention only narrows it. `listedAt` is when
+ * the last full pass finished, so the weekly relist knows when it is due.
+ * Both are unknown for a bare token.
  */
 interface PassState {
   v: 1;
@@ -167,7 +173,8 @@ export function parsePassCursor(cursor: string | null): PassState | null {
   const since = cursorField(raw.since);
   const listedAt = raw.listedAt === undefined ? null : cursorField(raw.listedAt);
   if (timeMin === undefined || token === undefined || pageToken === undefined || since === undefined || listedAt === undefined) return null;
-  if (raw.mode === "full" ? timeMin === null || Number.isNaN(Date.parse(timeMin)) : token === null) return null;
+  if (raw.mode === "full" ? timeMin === null : token === null) return null;
+  if (timeMin !== null && Number.isNaN(Date.parse(timeMin))) return null;
   if ((since !== null && Number.isNaN(Date.parse(since))) || (listedAt !== null && Number.isNaN(Date.parse(listedAt)))) return null;
   return { v: 1, mode: raw.mode, timeMin, token, pageToken, since, listedAt };
 }
@@ -197,11 +204,6 @@ export function seriesEndedBefore(recurrence: readonly string[], lo: number): bo
     rules++;
   }
   return rules > 0;
-}
-
-interface Window {
-  timeMin: string;
-  timeMax: string;
 }
 
 function invalid(res: ConnectorResponse, what: string): PageResult {
@@ -291,31 +293,35 @@ class Adapter implements SyncAdapter {
     return keep === null ? days : Math.min(days, keep);
   }
 
-  private occurrenceWindow(): Window {
-    const past = this.retention() ?? MAX_HISTORY_DAYS;
-    const now = this.now();
-    return { timeMin: new Date(now - past * DAY_MS).toISOString(), timeMax: new Date(now + FORWARD_DAYS * DAY_MS).toISOString() };
+  private firstSyncFloor(): string {
+    return new Date(this.now() - this.historyDays() * DAY_MS).toISOString();
+  }
+
+  /**
+   * The earliest time anything of this stream is kept from (ms): the first
+   * sync's floor, which never moves, or retention's edge once that is later.
+   * Nothing older than the floor is ever imported, whatever later passes see.
+   */
+  private windowLo(st: PassState): number {
+    const floor = Date.parse(st.timeMin ?? this.firstSyncFloor());
+    const keep = this.retention();
+    return keep === null ? floor : Math.max(floor, this.now() - keep * DAY_MS);
   }
 
   /** A new full pass over the first-sync window. */
   private firstPass(): PassState {
-    const timeMin = new Date(this.now() - this.historyDays() * DAY_MS).toISOString();
-    return { v: 1, mode: "full", timeMin, token: null, pageToken: null, since: null, listedAt: null };
+    return { v: 1, mode: "full", timeMin: this.firstSyncFloor(), token: null, pageToken: null, since: null, listedAt: null };
   }
 
   /**
-   * A relist: the whole retention window, so whatever it does not touch is
-   * gone upstream. With retention off nothing bounds what is stored, so
-   * nothing can be reconciled and the first-sync window is listed again.
+   * A relist over everything this stream keeps; once it is through, whatever
+   * it did not touch is gone upstream.
    */
-  private relist(): PassState {
-    const keep = this.retention();
-    if (keep === null) return this.firstPass();
-    const now = this.now();
+  private relist(st: PassState): PassState {
     // Set early so a touch stamped after a small clock step back still reads
     // as seen; runs are much further apart than the margin.
-    const since = new Date(now - RECONCILE_CLOCK_MARGIN_MS).toISOString();
-    return { v: 1, mode: "full", timeMin: new Date(now - keep * DAY_MS).toISOString(), token: null, pageToken: null, since, listedAt: null };
+    const since = new Date(this.now() - RECONCILE_CLOCK_MARGIN_MS).toISOString();
+    return { v: 1, mode: "full", timeMin: st.timeMin ?? this.firstSyncFloor(), token: null, pageToken: null, since, listedAt: null };
   }
 
   private relistDue(st: PassState): boolean {
@@ -343,7 +349,7 @@ class Adapter implements SyncAdapter {
     const calendarId = this.calendars.get(stream);
     if (calendarId === undefined) throw new Error(`google calendar adapter has no stream ${stream}`);
     let st = parsePassCursor(cursor) ?? this.firstPass();
-    if (this.relistDue(st)) st = this.relist();
+    if (this.relistDue(st)) st = this.relist(st);
     let res = await client.get(this.listPath(calendarId, st));
     if (st.pageToken !== null && (res.status === 400 || res.status === 410)) {
       // A page token Google no longer takes: that pass starts over.
@@ -351,7 +357,7 @@ class Adapter implements SyncAdapter {
       res = await client.get(this.listPath(calendarId, st));
     }
     if (st.mode === "delta" && res.status === 410) {
-      st = this.relist();
+      st = this.relist(st);
       res = await client.get(this.listPath(calendarId, st));
     }
     if (res.status === 404 && calendarId !== "primary") return this.calendarGone(calendarId);
@@ -359,8 +365,7 @@ class Adapter implements SyncAdapter {
     if (!isRecord(res.body) || (res.body.items !== undefined && !Array.isArray(res.body.items))) return invalid(res, "events");
     const events = ((res.body.items ?? []) as unknown[]).filter(isRecord);
     const full = st.mode === "full";
-    // A full pass keeps what touches its window; a delta keeps what retention would.
-    const lo = full ? Date.parse(st.timeMin!) : Date.parse(this.occurrenceWindow().timeMin);
+    const lo = this.windowLo(st);
 
     const items: SyncItem[] = [];
     const deletions = new Set<string>();
@@ -389,7 +394,7 @@ class Adapter implements SyncAdapter {
         items.push(item);
         continue;
       }
-      if (full && endsBefore(ev, lo)) continue;
+      if (endsBefore(ev, lo)) continue;
       items.push(this.renderItem(calendarId, ev, typeof ev.etag === "string" ? ev.etag : null));
     }
     for (const seriesId of touchedSeries) {
@@ -410,7 +415,7 @@ class Adapter implements SyncAdapter {
     // Without it the next run could only read this last page again.
     if (syncToken === null || syncToken.length > MAX_CURSOR_FIELD) return invalid(res, "events (no usable sync token on the last page)");
     const next: PassState = {
-      v: 1, mode: "delta", timeMin: null, token: syncToken, pageToken: null, since: null,
+      v: 1, mode: "delta", timeMin: st.timeMin, token: syncToken, pageToken: null, since: null,
       listedAt: full ? new Date(this.now()).toISOString() : st.listedAt,
     };
     const reconcile = full && st.since !== null ? { prefix: `${calendarKey(calendarId)}:`, unseenSince: st.since } : null;
@@ -436,7 +441,7 @@ class Adapter implements SyncAdapter {
    */
   private async seriesItem(client: ConnectorClient, calendarId: string, master: Json, lo: number): Promise<SyncItem | { response: ConnectorResponse } | null> {
     const id = str(master.id)!;
-    const occ = await this.occurrences(client, calendarId, id);
+    const occ = await this.occurrences(client, calendarId, id, lo);
     if ("response" in occ) {
       if (occ.response.class !== "forbidden") return occ;
       return { externalId: itemKey(calendarId, id), version: null, failure: { code: "instances_unavailable", message: occ.response.error ?? "instances unavailable" } };
@@ -469,10 +474,10 @@ class Adapter implements SyncAdapter {
     client: ConnectorClient,
     calendarId: string,
     seriesId: string,
+    lo: number,
   ): Promise<{ list: CalendarOccurrence[]; versions: string[]; truncated: boolean } | { response: ConnectorResponse }> {
-    const window = this.occurrenceWindow();
-    const lo = Date.parse(window.timeMin);
-    const hi = Date.parse(window.timeMax);
+    const hi = this.now() + FORWARD_DAYS * DAY_MS;
+    const window = { timeMin: new Date(lo).toISOString(), timeMax: new Date(hi).toISOString() };
     const list: CalendarOccurrence[] = [];
     const versions: string[] = [];
     let pageToken: string | null = null;
