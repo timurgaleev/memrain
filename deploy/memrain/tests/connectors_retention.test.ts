@@ -369,6 +369,67 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await inboxPages()).toBe(3);
   });
 
+  /** A hand edit as page_edit leaves it: the body changes, the connector's truth stays. */
+  const editByHand = async (page: RenderedConnectorPage, note: string, writer: { written_by: string; written_by_principal: string }) => {
+    const current = (await db.storage.engine().query<{ markdown_body: string; compiled_truth: Record<string, unknown> }>(
+      "SELECT markdown_body, compiled_truth FROM pages WHERE slug = $1", [page.slug])).rows[0]!;
+    await putPage(db.storage, { slug: page.slug, type: page.type, allowAdHocType: true, title: page.title,
+      markdown_body: `${current.markdown_body}\n${note}\n`, compiled_truth: current.compiled_truth, source_id: "inbox", ...writer });
+  };
+  const truthOf = async (slug: string) => (await db.storage.engine().query<{ compiled_truth: Record<string, unknown>; markdown_body: string }>(
+    "SELECT compiled_truth, markdown_body FROM pages WHERE slug = $1", [slug])).rows[0];
+
+  it("detaches a connector page edited by hand instead of aging it out, keeping the edit", async () => {
+    const e = db.storage.engine();
+    const page = await ingest(mailPage("hand1", "handcanary", OWNER, "2025-01-01T08:00:00.000Z"));
+    await editByHand(page, "My own follow-up note.", { written_by: "mcp", written_by_principal: "member:alice" });
+    const sweep = () => sweepRetention(db.storage, scope, { accountId: NO_ACCOUNT, kinds: ["mail"], env: {}, now: NOW });
+
+    const r = await sweep();
+    expect(r.deleted).toEqual([]);
+    expect(r.detached).toEqual([page.slug]);
+    const kept = await truthOf(page.slug);
+    expect(kept?.markdown_body).toContain("My own follow-up note.");
+    expect(kept?.markdown_body).toContain("handcanary");
+    // No longer the connector's: no expiry, and neither a sweep nor an upstream deletion reaches it.
+    expect(kept?.compiled_truth.origin).not.toBe("connector");
+    expect(kept?.compiled_truth.last_activity_at).toBeUndefined();
+    expect(kept?.compiled_truth.trust).toBe("untrusted");
+    expect((await sweep()).detached).toEqual([]);
+    expect((await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "provider_deleted" })).refused).toBe("not_connector_page");
+    expect(await truthOf(page.slug)).toBeDefined();
+    expect((await e.query("SELECT 1 FROM ingest_log WHERE source_type = 'connector-delete'")).rows).toHaveLength(0);
+    // The detach is on record without text, and in the page's history.
+    const receipt = (await e.query<{ summary: string }>("SELECT summary FROM ingest_log WHERE source_type = 'connector-detach'")).rows;
+    expect(receipt).toHaveLength(1);
+    expect(receipt[0]!.summary).not.toContain(page.slug);
+    expect(receipt[0]!.summary).not.toContain("handcanary");
+    const versions = (await e.query<{ written_by: string | null }>("SELECT written_by FROM page_versions WHERE slug = $1 ORDER BY version_n", [page.slug])).rows;
+    expect(versions.map(v => v.written_by)).toEqual(["connector-gmail", "mcp", "retention-detach"]);
+  });
+
+  it("ages out a page whose hand edit the connector has since written over", async () => {
+    const page = await ingest(mailPage("hand2", "overwrittencanary", OWNER, "2025-01-01T08:00:00.000Z"));
+    await editByHand(page, "An older note.", { written_by: "mcp", written_by_principal: "member:alice" });
+    await ingest({ ...page, body: `${page.body}\nNew upstream reply.\n` });
+    const r = await sweepRetention(db.storage, scope, { accountId: NO_ACCOUNT, kinds: ["mail"], env: {}, now: NOW });
+    expect(r.deleted).toEqual([page.slug]);
+    expect(r.detached).toEqual([]);
+  });
+
+  it("detaches the whole item when a person edited only one of its parts, whatever writer name they used", async () => {
+    const page = await ingest(mailPage("hand3", "parentcanary", OWNER, "2025-01-01T08:00:00.000Z"));
+    const part = await ingest({ ...page, slug: `${page.slug}/part-001`, body: "Tail of the thread.\n", truth: { ...page.truth, part_of: page.slug, part: 1 } });
+    // A connector writer name from an authenticated caller is still a person's edit.
+    await editByHand(part, "Annotated tail.", { written_by: "connector-gmail", written_by_principal: "agent:helper" });
+    const r = await sweepRetention(db.storage, scope, { accountId: NO_ACCOUNT, kinds: ["mail"], env: {}, now: NOW });
+    expect(r.deleted).toEqual([]);
+    expect(r.detached).toEqual([page.slug]);
+    expect((await truthOf(part.slug))?.markdown_body).toContain("Annotated tail.");
+    expect((await truthOf(part.slug))?.compiled_truth.origin).not.toBe("connector");
+    expect((await truthOf(page.slug))?.compiled_truth.origin).not.toBe("connector");
+  });
+
   it("previews disconnect deletion, refuses a stale preview, and leaves other accounts alone", async () => {
     const mine = [await ingest(mailPage("a", "minecanary1")), await ingest(mailPage("b", "minecanary2"))];
     const theirs = await ingest(mailPage("c", "theircanary", OTHER));

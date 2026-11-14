@@ -14,6 +14,15 @@
  * and counted in the receipt, so human-written text is never destroyed. Facts are deleted, not retired:
  * a retired fact still holds the text.
  *
+ * Retention never deletes what a person wrote: a page whose latest connector
+ * write was followed by a version from anyone else (an authenticated caller,
+ * or any writer other than a connector) is detached instead, with its parts.
+ * Its compiled truth keeps everything but the connector's claim
+ * (`origin: connector_detached`, no `last_activity_at`), so no sweep, upstream
+ * deletion or disconnect reaches it again, and the page keeps its text, its
+ * history and its untrusted provenance. The detach is a new page version and
+ * a text-free `connector-detach` receipt.
+ *
  * A page split into parts (`compiled_truth.part_of` names it) goes together
  * with its parts. When a long item shrinks, the parts its new split no longer
  * has go the same way, all in one transaction (deleteStaleParts). Each page goes in its own transaction, which also writes a receipt to the
@@ -37,7 +46,7 @@ import type { Engine } from "../engine/interface.ts";
 import { lockPageSlugs } from "../pages.ts";
 import { leftovers } from "../pages-purge.ts";
 import { pageSourcePath, pageTruthSourcePath } from "../page-index.ts";
-import { bumpClock, bumpDocumentClock } from "../generation.ts";
+import { bumpClock, bumpDocumentClock, bumpPageGeneration } from "../generation.ts";
 import { logIngest } from "../ingest-log.ts";
 import { OperationError } from "../operation-error.ts";
 import { deadlockSafeTransaction } from "../retry.ts";
@@ -54,6 +63,10 @@ import {
 } from "./sync-store.ts";
 
 export const CONNECTOR_DELETE_SOURCE_TYPE = "connector-delete";
+export const CONNECTOR_DETACH_SOURCE_TYPE = "connector-detach";
+/** compiled_truth.origin of a connector page a person edited and retention handed over to the brain. */
+export const DETACHED_ORIGIN = "connector_detached";
+const DETACH_WRITER = "retention-detach";
 
 export type DeleteReason = "provider_deleted" | "retention" | "disconnect" | "part_superseded";
 
@@ -88,7 +101,9 @@ export interface DeleteCounts {
 export interface HardDeleteResult {
   deleted: boolean;
   /** Why nothing was deleted. */
-  refused?: "not_connector_page" | "changed";
+  refused?: "not_connector_page" | "changed" | "human_edited";
+  /** Retention found a person's edit: the page and its parts were detached from the connector instead. */
+  detached?: boolean;
   counts: DeleteCounts;
 }
 
@@ -218,6 +233,53 @@ async function automaticPages(tx: Engine, where: string, params: unknown[], type
 }
 
 /**
+ * Whether a person edited any of `slugs` since the connector last wrote it: a
+ * version newer than the page's latest connector write whose writer is not a
+ * connector, or that an authenticated principal wrote under any writer name.
+ */
+async function humanEdited(tx: Engine, slugs: readonly string[]): Promise<boolean> {
+  const connectorWrite = (v: string) => `(${v}.written_by LIKE 'connector-%' AND ${v}.written_by_principal IS NULL)`;
+  const r = await tx.query(
+    // scope: upstream slugs are the owned page and its parts, locked by the caller
+    `SELECT 1 FROM page_versions v
+      WHERE v.slug = ANY($1::text[]) AND NOT ${connectorWrite("v")}
+        AND v.version_n > COALESCE((SELECT max(c.version_n) FROM page_versions c
+                                     WHERE c.slug = v.slug AND ${connectorWrite("c")}), 0)
+      LIMIT 1`,
+    [[...slugs]],
+  );
+  return r.rows.length > 0;
+}
+
+/**
+ * Hand `slugs` over to the brain: drop the connector's claim and expiry from
+ * their compiled truth, as a new version of each, keeping text and history.
+ */
+async function detachPages(tx: Engine, slugs: readonly string[]): Promise<void> {
+  for (const slug of slugs) {
+    const page = (await tx.query<{ markdown_body: string; content_hash: string; compiled_truth: Record<string, unknown>; source_id: string; version_n: number }>(
+      // scope: upstream the slug is an owned page or part the caller locked
+      `SELECT p.markdown_body, p.content_hash, p.compiled_truth, p.source_id,
+              COALESCE((SELECT max(v.version_n) FROM page_versions v WHERE v.slug = p.slug), 0)::int AS version_n
+         FROM pages p WHERE p.slug = $1`,
+      [slug],
+    )).rows[0];
+    if (page === undefined) continue;
+    const { last_activity_at: _expiry, ...kept } = page.compiled_truth;
+    const truth = JSON.stringify({ ...kept, origin: DETACHED_ORIGIN });
+    await tx.query(`UPDATE pages SET compiled_truth = $2::text::jsonb, updated_at = NOW() WHERE slug = $1`, [slug, truth]);
+    await tx.query(
+      `INSERT INTO page_versions
+         (slug, version_n, hash_prev, hash_new, body_snapshot, compiled_truth_snapshot, written_by, source_id, written_by_principal, change_reason)
+       VALUES ($1, $2, $3, $3, $4, $5::text::jsonb, $6, $7, NULL, $8)`,
+      [slug, Number(page.version_n) + 1, page.content_hash, page.markdown_body, truth, DETACH_WRITER, page.source_id,
+        "retention kept a page edited by hand and detached it from its connector"],
+    );
+    await bumpPageGeneration(tx, slug);
+  }
+}
+
+/**
  * Delete one owned connector page and the atom pages the atoms phase
  * published from its documents, inside `tx`. Only an atom page every version
  * of which the atoms phase wrote goes; one someone edited, or any other page
@@ -228,7 +290,8 @@ async function deleteOwnedPage(
   scope: ConnectorScope,
   slug: string,
   expected: { contentHash?: string; partHashes?: ReadonlyMap<string, string> } = {},
-): Promise<DeleteCounts | "changed" | null> {
+  keepEdited = false,
+): Promise<DeleteCounts | "changed" | "detached" | null> {
   const partsSql = `SELECT p.slug, p.content_hash FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' = $3 ORDER BY p.slug`;
   await lockPageSlugs(tx, slug, ...(await tx.query<{ slug: string }>(partsSql, [scope.sourceId, scope.accountRef, slug])).rows.map(r => r.slug));
   const page = await tx.query<{ content_hash: string }>(
@@ -243,6 +306,10 @@ async function deleteOwnedPage(
   if (expected.partHashes !== undefined && (partRows.length !== expected.partHashes.size
     || partRows.some(r => expected.partHashes!.get(r.slug) !== r.content_hash))) return "changed";
   const parts = partRows.map(r => r.slug);
+  if (keepEdited && await humanEdited(tx, [slug, ...parts])) {
+    await detachPages(tx, [slug, ...parts]);
+    return "detached";
+  }
   const counts: DeleteCounts = { ...EMPTY_COUNTS };
   const { docIds, concepts } = await deletePageDerived(tx, slug, scope.sourceId, counts);
   for (const part of parts) {
@@ -278,7 +345,8 @@ async function deleteOwnedPage(
 
 /**
  * Hard-delete one connector page of this account, with a text-free receipt.
- * A page that is not this account's connector page is refused untouched.
+ * A page that is not this account's connector page is refused untouched. For
+ * retention, a page a person edited is detached instead (see the header).
  */
 export async function hardDeleteConnectorPage(
   storage: Storage,
@@ -298,9 +366,19 @@ export async function hardDeleteConnectorPage(
     const counts = await deleteOwnedPage(tx, scope, item.slug, {
       ...(item.expectedContentHash === undefined ? {} : { contentHash: item.expectedContentHash }),
       ...(item.expectedPartHashes === undefined ? {} : { partHashes: item.expectedPartHashes }),
-    });
+    }, item.reason === "retention");
     if (counts === null) return { deleted: false, refused: "not_connector_page", counts: { ...EMPTY_COUNTS } };
     if (counts === "changed") return { deleted: false, refused: "changed", counts: { ...EMPTY_COUNTS } };
+    if (counts === "detached") {
+      await logIngest(tx, {
+        source_type: CONNECTOR_DETACH_SOURCE_TYPE,
+        source_id: scope.sourceId,
+        source_ref: `${item.reason}:${scope.accountRef}:${hash(`slug:${item.slug}`)}`,
+        pages_updated: [],
+        summary: JSON.stringify({ reason: item.reason, account: scope.accountRef, page: hash(`slug:${item.slug}`) }),
+      });
+      return { deleted: false, refused: "human_edited", detached: true, counts: { ...EMPTY_COUNTS } };
+    }
     await logIngest(tx, {
       source_type: CONNECTOR_DELETE_SOURCE_TYPE,
       source_id: scope.sourceId,
@@ -346,7 +424,7 @@ export async function deleteStaleParts(
     let parts = 0;
     for (const { slug } of (await tx.query<{ slug: string }>(staleSql, params)).rows) {
       const deleted = await deleteOwnedPage(tx, scope, slug);
-      if (deleted === null || deleted === "changed") continue;
+      if (deleted === null || deleted === "changed" || deleted === "detached") continue;
       for (const k of Object.keys(counts) as Array<keyof DeleteCounts>) counts[k] += deleted[k];
       parts++;
     }
@@ -473,6 +551,8 @@ export function retentionDays(kind: ConnectorDataKind, accountDays?: number | nu
 
 export interface RetentionSweepResult {
   deleted: string[];
+  /** Pages a person edited: detached from the connector and kept, not deleted. */
+  detached: string[];
   /** Pages past the window waiting for the owner, because a sweep was past the mass-delete guard. */
   held: number;
   /** More pages could have gone than this run's limit. */
@@ -561,11 +641,13 @@ export async function sweepRetention(storage: Storage, scope: ConnectorScope, op
     await resolveNotice(engine, opts.accountId, "mass_delete_held", new Date(now));
   }
   const deleted: string[] = [];
+  const detached: string[] = [];
   for (const slug of toDelete.slice(0, limit)) {
     const r = await hardDeleteConnectorPage(storage, scope, { slug, reason: "retention" });
     if (r.deleted) deleted.push(slug);
+    else if (r.detached === true) detached.push(slug);
   }
-  return { deleted, held, more: toDelete.length > limit };
+  return { deleted, detached, held, more: toDelete.length > limit };
 }
 
 // ---------------------------------------------------------------------------
