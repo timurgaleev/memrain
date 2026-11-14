@@ -36,6 +36,7 @@ import { longDaemonKinds } from "../core/daemons/registry.ts";
 import { envSwitches } from "../core/daemons/controls.ts";
 import { startDaemonScheduler, stopDaemonScheduler } from "../core/daemons/scheduler.ts";
 import { registerConnectorRuntimeIfEnabled } from "../core/connectors/runtime.ts";
+import { registerNotificationsDaemon } from "../core/notifications/job.ts";
 
 const MAX_JOB_CONCURRENCY = 8;
 
@@ -491,6 +492,9 @@ export function startBackgroundWork(
   registerPageMirrorHandler(storage);
   // Connector sync runs only with MEMRAIN_CONNECTORS_ENABLED on and a usable
   // connector key; without the handler the scheduler queues no connector_sync.
+  // The notifications daemon is off until enabled; registering it only lets
+  // the scheduler queue it once the operator turns it on.
+  registerNotificationsDaemon(storage.engine());
   if (registerConnectorRuntimeIfEnabled(storage)) {
     console.log("[memrain] connector sync enabled (connector_sync jobs; the daemon stays off until enabled)");
   }
