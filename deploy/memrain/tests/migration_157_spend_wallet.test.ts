@@ -50,7 +50,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await columns(e, "mcp_spend_log")).not.toContain("role");
       expect((await e.query(`SELECT 1 FROM mcp_spend_log WHERE operation = 'x'`)).rows).toHaveLength(1);
       const again = await runMigrations(e);
-      expect(again.applied.map(m => m.id).filter(id => id >= 157)).toEqual([157]);
+      // The later migrations reverted above come back with it.
+      expect(again.applied.map(m => m.id).filter(id => id >= 157))
+        .toEqual(discoverMigrations().map(m => m.id).filter(id => id >= 157).sort((a, b) => a - b));
       expect(await table(e, "spend_path_pauses")).toBe("spend_path_pauses");
     } finally { await db.close(); }
   });

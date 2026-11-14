@@ -165,7 +165,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const providers = new ProviderRegistry();
       providers.register(testProvider("nosync"));
       const real = connectorRuntime(db.storage, { kek: kekFromBytes(randomBytes(32)), providers, env: ON });
-      const stub = runtime(account({ id: row.id }));
+      // A paid daemon: it runs only under a brain-wide daily cap.
+      const stub = runtime(account({ id: row.id }), { ...ON, MEMRAIN_DAILY_BUDGET_USD: "10" });
       const synced = account({ id: row.id });
       const skipped = account({ id: noSync.id, provider: "nosync", accountLabel: "plain@test" });
       registerConnectorSync(db.storage, {
