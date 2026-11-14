@@ -26,6 +26,7 @@ import { withRetry, BULK_RETRY_OPTS } from "./retry.ts";
 import { OperationError } from "./operation-error.ts";
 import { insertCodeEdges, type CodeEdgeInput } from "./code-edges.ts";
 import { wellFormForText, wellFormJsonbObject } from "./well-form.ts";
+import type { TrustTier } from "./trust-tier.ts";
 import {
   importFilename,
   resolveEffectiveDateWithSource,
@@ -122,6 +123,8 @@ export interface DocumentWrite {
   expectOwner?: string | null;
   /** Validate a reviewed repair snapshot under this transaction before replacing rows. */
   beforeCommit?: (tx: Engine) => Promise<void>;
+  /** The writer's trust tier; lowers the stored tier, never raises it. Unset keeps it. */
+  trustTier?: TrustTier;
 }
 
 export interface IndexTxResult {
@@ -212,10 +215,12 @@ export async function writeDocumentTransaction(
     }
 
     const upserted = await tx.query<{ id: string }>(
-      `INSERT INTO documents (id, source_id, source_path, title, frontmatter, last_indexed_mtime, chunker_version, effective_date, effective_date_source, import_filename, updated_at)
+      `INSERT INTO documents (id, source_id, source_path, title, frontmatter, last_indexed_mtime, chunker_version, effective_date, effective_date_source, import_filename, updated_at, trust_tier)
        VALUES ($1, COALESCE($6, $14::text), $2, $3,
-         $4::text::jsonb - 'atoms_completed_hash' - 'atoms_completed_pages', $5, COALESCE($7, 1), $8, $9, $10, NOW())
+         $4::text::jsonb - 'atoms_completed_hash' - 'atoms_completed_pages', $5, COALESCE($7, 1), $8, $9, $10, NOW(), $15::text)
        ON CONFLICT (id) DO UPDATE SET
+         trust_tier         = CASE WHEN $15::text IS NULL THEN documents.trust_tier
+                                   ELSE memrain_min_trust_tier(COALESCE(documents.trust_tier, 'owner'), $15::text) END,
          -- Keep the existing source on reindex unless the caller passes one
          -- explicitly. A null write leaves classification to the path-prefix
          -- backfill in core/sources.ts (don't freeze a doc as 'default').
@@ -273,6 +278,7 @@ export async function writeDocumentTransaction(
         expectOwner !== undefined,
         expectOwner ?? null,
         healedOwner ?? null,
+        doc.trustTier ?? null,
       ],
     );
 

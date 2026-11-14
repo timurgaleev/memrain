@@ -1641,9 +1641,9 @@ export async function renamePage(
     await tx.query(
       `INSERT INTO pages
          (slug, type, title, compiled_truth, markdown_body,
-          content_hash, source_id, created_at, updated_at)
+          content_hash, source_id, created_at, updated_at, trust_tier)
        SELECT $2, type, title, compiled_truth, markdown_body,
-              content_hash, source_id, created_at, NOW()
+              content_hash, source_id, created_at, NOW(), trust_tier
          FROM pages WHERE slug = $1`,
       [fromSlug, toSlug],
     );

@@ -69,6 +69,7 @@ import { newWriteTiming, noteWriteTiming, runWithWriteTiming } from "./write-tim
 import { acquireWriteEmbedSlot, writeEmbedWidth } from "./concurrency.ts";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
+import type { TrustTier } from "./trust-tier.ts";
 import {
   checkLocalWriteOwner,
   writeDocumentTransaction,
@@ -134,6 +135,12 @@ export interface IndexFileOptions {
    * callers (CLI reindex, sync, capture, cycle) leave it unset.
    */
   remote?: boolean;
+  /**
+   * Tier of the authenticated writer (core/trust-tier.ts), set by the MCP
+   * `index` tool. Recorded on the document, never above a tier it already
+   * holds; unset leaves the stored tier alone (sweeps, mirrors, the cycle).
+   */
+  trustTier?: TrustTier;
   /**
    * Name of the interactive write this index serves (`page_put`, …). When set,
    * one line splitting its latency is logged — chunks reused vs paid, and paid
@@ -692,6 +699,7 @@ async function indexDocumentBody(
       ...(input.claimUnowned === true ? { claimUnowned: true } : {}),
       ...(input.expectOwner !== undefined ? { expectOwner: input.expectOwner } : {}),
       ...(opts.beforeCommit ? { beforeCommit: opts.beforeCommit } : {}),
+      ...(opts.trustTier ? { trustTier: opts.trustTier } : {}),
     },
     chunkWrites,
   );
