@@ -160,12 +160,18 @@ export async function syncNotifications(engine: Engine, opts: SyncOptions = {}):
     const already = new Set(openRows.map(r => key(r.kind, r.ref)));
     for (const p of problems) {
       if (already.has(key(p.kind, p.ref))) continue;
+      // A relapse keeps a delivered webhook as sent (one problem, one message),
+      // but one the owner never received — cancelled or failed — is queued again.
       // scope: operator-only reopening is the reconciler's own bookkeeping; the row must belong to the problem's source
       const reopened = await tx.query(
         `UPDATE notifications
             SET resolved_at = NULL, reopened_at = $4, read_at = NULL,
-                webhook_state = CASE WHEN webhook_state = 'cancelled' THEN $5 ELSE webhook_state END,
-                webhook_next_at = CASE WHEN webhook_state = 'cancelled' AND $5 = 'pending' THEN $4::timestamptz ELSE webhook_next_at END
+                webhook_state = CASE WHEN webhook_state = 'cancelled' THEN $5
+                                     WHEN webhook_state = 'failed' AND $5 = 'pending' THEN 'pending'
+                                     ELSE webhook_state END,
+                webhook_next_at = CASE WHEN webhook_state IN ('cancelled', 'failed') AND $5 = 'pending' THEN $4::timestamptz ELSE webhook_next_at END,
+                webhook_attempts = CASE WHEN webhook_state = 'failed' AND $5 = 'pending' THEN 0 ELSE webhook_attempts END,
+                webhook_error = CASE WHEN webhook_state = 'failed' AND $5 = 'pending' THEN NULL ELSE webhook_error END
           WHERE id = (SELECT id FROM notifications
                        WHERE kind = $1 AND ref = $2 AND source_id = $6 AND resolved_at IS NOT NULL AND resolved_at > $3
                        ORDER BY resolved_at DESC, id DESC LIMIT 1)

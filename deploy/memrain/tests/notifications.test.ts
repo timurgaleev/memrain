@@ -187,6 +187,32 @@ for (const { name, open: openDb } of storageEngines(process.env.MEMRAIN_TEST_POS
     } finally { await db.close(); }
   });
 
+  it("requeues a failed webhook on a quick relapse but does not resend a delivered one", async () => {
+    const db = await openDb();
+    const e = db.storage.engine();
+    try {
+      await seedAccounts(e);
+      const t0 = at("2026-11-14T10:00:00Z");
+      await openNotice(e, ACCOUNT, "items_held", "1 held");
+      await openNotice(e, OTHER_ACCOUNT, "items_held", "1 held");
+      await syncNotifications(e, { webhook: true, now: t0 });
+      await e.query(`UPDATE notifications SET webhook_state = 'failed', webhook_attempts = 5, webhook_next_at = NULL, webhook_error = 'http_503' WHERE ref = $1`, [ACCOUNT]);
+      await e.query(`UPDATE notifications SET webhook_state = 'delivered', webhook_attempts = 1, webhook_next_at = NULL WHERE ref = $1`, [OTHER_ACCOUNT]);
+      for (const a of [ACCOUNT, OTHER_ACCOUNT]) await resolveNotice(e, a, "items_held");
+      await syncNotifications(e, { webhook: true, now: at("2026-11-14T10:05:00Z") });
+      for (const a of [ACCOUNT, OTHER_ACCOUNT]) await openNotice(e, a, "items_held", "1 held");
+      const t1 = at("2026-11-14T10:20:00Z");
+      expect((await syncNotifications(e, { webhook: true, now: t1 })).reopened).toBe(2);
+      const rows = await e.query<{ ref: string; webhook_state: string; webhook_attempts: number; webhook_next_at: string | null; webhook_error: string | null }>(
+        `SELECT ref, webhook_state, webhook_attempts, webhook_next_at::text AS webhook_next_at, webhook_error FROM notifications ORDER BY ref`,
+      );
+      const byRef = Object.fromEntries(rows.rows.map(r => [r.ref, r]));
+      expect(byRef[ACCOUNT]).toMatchObject({ webhook_state: "pending", webhook_attempts: 0, webhook_error: null });
+      expect(Date.parse(byRef[ACCOUNT]!.webhook_next_at!)).toBe(t1.getTime());
+      expect(byRef[OTHER_ACCOUNT]).toMatchObject({ webhook_state: "delivered", webhook_attempts: 1, webhook_next_at: null });
+    } finally { await db.close(); }
+  });
+
   it("counts unread open notifications for the badge and marks them read", async () => {
     const db = await openDb();
     const e = db.storage.engine();
