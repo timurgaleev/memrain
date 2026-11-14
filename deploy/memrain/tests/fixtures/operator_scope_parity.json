@@ -29,7 +29,7 @@
         ]
       },
       {
-        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, phase, job_id, outcome, latency_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, phase, job_id, outcome, latency_ms, role, daemon, daemon_source, overrun_cents) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
         "params": [
           null,
           null,
@@ -44,7 +44,11 @@
           null,
           null,
           "error",
-          0
+          0,
+          null,
+          null,
+          null,
+          null
         ]
       },
       {
@@ -116,7 +120,7 @@
         ]
       },
       {
-        "text": "SELECT 'chunks' AS kind, c.id::text AS id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ANY($1::text[]) AND ((EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) OR EXISTS (SELECT 1 FROM pages p WHERE p.source_id = COALESCE(d.source_id, 'default') AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END, CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END, p.slug, p.slug || '.md', p.slug || '.markdown') AND (EXISTS (SELECT 1 FROM sources s WHERE s.id = p.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) OR p.compiled_truth->>'provider' = 'github' OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug AND v.source_id = p.source_id AND ((v.written_by_principal IS NOT NULL AND v.written_by_principal NOT IN ('', 'operator')) OR v.written_by = 'connector-github'))))))",
+        "text": "SELECT 'chunks' AS kind, c.id::text AS id, (LEAST(COALESCE(CASE d.trust_tier WHEN 'owner' THEN 3 WHEN 'member' THEN 2 WHEN 'agent' THEN 1 WHEN 'external' THEN 0 END, 3), CASE WHEN EXISTS (SELECT 1 FROM sources tt_s WHERE tt_s.id = d.source_id AND tt_s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) THEN 0 ELSE 3 END, COALESCE((SELECT MIN(LEAST(COALESCE(CASE p.trust_tier WHEN 'owner' THEN 3 WHEN 'member' THEN 2 WHEN 'agent' THEN 1 WHEN 'external' THEN 0 END, 3), CASE WHEN EXISTS (SELECT 1 FROM sources tt_s WHERE tt_s.id = p.source_id AND tt_s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) THEN 0 ELSE 3 END, CASE WHEN p.compiled_truth->>'provider' = 'github' THEN 0 ELSE 3 END, COALESCE((SELECT MIN(CASE WHEN tt_v.written_by = 'connector-github' THEN 0 ELSE CASE WHEN tt_v.written_by_principal IS NULL OR tt_v.written_by_principal IN ('', 'operator') THEN 3 WHEN tt_v.written_by_principal LIKE 'member:%' THEN 2 ELSE 1 END END) FROM page_versions tt_v WHERE tt_v.slug = p.slug AND tt_v.source_id = p.source_id), 3))) FROM pages p WHERE p.source_id = COALESCE(d.source_id, 'default') AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END, CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END, p.slug, p.slug || '.md', p.slug || '.markdown')), 3)))::int AS rank FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ANY($1::text[])",
         "params": [
           [
             "doc_591b77a7c7fd5f22_c0",
@@ -129,7 +133,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\"ok\":true,\"hits\":[{\"source_id\":\"tenantA\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_591b77a7c7fd5f22_c0\",\"documentId\":\"doc_591b77a7c7fd5f22\",\"sourcePath\":\"page://tenantA/search-a/kanga\",\"title\":\"Kanga A\",\"content\":\"# Kanga A\\n\\nkangaroo KANGA_SECRET_AAA\",\"score\":0.016393,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\"},{\"source_id\":\"tenantB\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_9a6d8dae4a32247f_c0\",\"documentId\":\"doc_9a6d8dae4a32247f\",\"sourcePath\":\"page://tenantB/search-b/kanga\",\"title\":\"Kanga B\",\"content\":\"# Kanga B\\n\\nkangaroo KANGA_SECRET_BBB\",\"score\":0.016129,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\"}],\"meta\":{\"vectorEnabled\":false,\"intent\":\"topic\",\"mode\":\"conservative\",\"cache\":\"miss\",\"degraded\":[\"vector_arm_failed\"],\"retrieved\":2,\"returned\":2,\"confidence\":{\"grade\":\"moderate\",\"reason\":\"top hit: keyword_exact\"}}}"
+          "text": "{\"ok\":true,\"hits\":[{\"source_id\":\"tenantA\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_591b77a7c7fd5f22_c0\",\"documentId\":\"doc_591b77a7c7fd5f22\",\"sourcePath\":\"page://tenantA/search-a/kanga\",\"title\":\"Kanga A\",\"content\":\"# Kanga A\\n\\nkangaroo KANGA_SECRET_AAA\",\"score\":0.016393,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\",\"trust_tier\":\"owner\"},{\"source_id\":\"tenantB\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_9a6d8dae4a32247f_c0\",\"documentId\":\"doc_9a6d8dae4a32247f\",\"sourcePath\":\"page://tenantB/search-b/kanga\",\"title\":\"Kanga B\",\"content\":\"# Kanga B\\n\\nkangaroo KANGA_SECRET_BBB\",\"score\":0.016129,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\",\"trust_tier\":\"owner\"}],\"meta\":{\"vectorEnabled\":false,\"intent\":\"topic\",\"mode\":\"conservative\",\"cache\":\"miss\",\"degraded\":[\"vector_arm_failed\"],\"retrieved\":2,\"returned\":2,\"confidence\":{\"grade\":\"moderate\",\"reason\":\"top hit: keyword_exact\"}}}"
         }
       ],
       "_meta": {
@@ -177,7 +181,7 @@
         ]
       },
       {
-        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, phase, job_id, outcome, latency_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, phase, job_id, outcome, latency_ms, role, daemon, daemon_source, overrun_cents) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
         "params": [
           null,
           null,
@@ -192,7 +196,11 @@
           null,
           null,
           "error",
-          0
+          0,
+          null,
+          null,
+          null,
+          null
         ]
       }
     ],
@@ -243,7 +251,7 @@
         ]
       },
       {
-        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, phase, job_id, outcome, latency_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+        "text": "INSERT INTO mcp_spend_log (client_id, token_name, operation, spend_cents, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, phase, job_id, outcome, latency_ms, role, daemon, daemon_source, overrun_cents) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
         "params": [
           null,
           null,
@@ -258,7 +266,11 @@
           null,
           null,
           "error",
-          0
+          0,
+          null,
+          null,
+          null,
+          null
         ]
       },
       {
@@ -330,7 +342,7 @@
         ]
       },
       {
-        "text": "SELECT 'chunks' AS kind, c.id::text AS id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ANY($1::text[]) AND ((EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) OR EXISTS (SELECT 1 FROM pages p WHERE p.source_id = COALESCE(d.source_id, 'default') AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END, CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END, p.slug, p.slug || '.md', p.slug || '.markdown') AND (EXISTS (SELECT 1 FROM sources s WHERE s.id = p.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) OR p.compiled_truth->>'provider' = 'github' OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug AND v.source_id = p.source_id AND ((v.written_by_principal IS NOT NULL AND v.written_by_principal NOT IN ('', 'operator')) OR v.written_by = 'connector-github'))))))",
+        "text": "SELECT 'chunks' AS kind, c.id::text AS id, (LEAST(COALESCE(CASE d.trust_tier WHEN 'owner' THEN 3 WHEN 'member' THEN 2 WHEN 'agent' THEN 1 WHEN 'external' THEN 0 END, 3), CASE WHEN EXISTS (SELECT 1 FROM sources tt_s WHERE tt_s.id = d.source_id AND tt_s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) THEN 0 ELSE 3 END, COALESCE((SELECT MIN(LEAST(COALESCE(CASE p.trust_tier WHEN 'owner' THEN 3 WHEN 'member' THEN 2 WHEN 'agent' THEN 1 WHEN 'external' THEN 0 END, 3), CASE WHEN EXISTS (SELECT 1 FROM sources tt_s WHERE tt_s.id = p.source_id AND tt_s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) THEN 0 ELSE 3 END, CASE WHEN p.compiled_truth->>'provider' = 'github' THEN 0 ELSE 3 END, COALESCE((SELECT MIN(CASE WHEN tt_v.written_by = 'connector-github' THEN 0 ELSE CASE WHEN tt_v.written_by_principal IS NULL OR tt_v.written_by_principal IN ('', 'operator') THEN 3 WHEN tt_v.written_by_principal LIKE 'member:%' THEN 2 ELSE 1 END END) FROM page_versions tt_v WHERE tt_v.slug = p.slug AND tt_v.source_id = p.source_id), 3))) FROM pages p WHERE p.source_id = COALESCE(d.source_id, 'default') AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END, CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END, p.slug, p.slug || '.md', p.slug || '.markdown')), 3)))::int AS rank FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ANY($1::text[])",
         "params": [
           [
             "doc_591b77a7c7fd5f22_c0",
@@ -358,7 +370,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\"ok\":true,\"hits\":[{\"source_id\":\"tenantA\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_591b77a7c7fd5f22_c0\",\"documentId\":\"doc_591b77a7c7fd5f22\",\"sourcePath\":\"page://tenantA/search-a/kanga\",\"title\":\"Kanga A\",\"content\":\"# Kanga A\\n\\nkangaroo KANGA_SECRET_AAA\",\"score\":0.016393,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\"},{\"source_id\":\"tenantB\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_9a6d8dae4a32247f_c0\",\"documentId\":\"doc_9a6d8dae4a32247f\",\"sourcePath\":\"page://tenantB/search-b/kanga\",\"title\":\"Kanga B\",\"content\":\"# Kanga B\\n\\nkangaroo KANGA_SECRET_BBB\",\"score\":0.016129,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\"}],\"facts\":[],\"meta\":{\"vectorEnabled\":false,\"intent\":\"topic\",\"mode\":\"conservative\",\"cache\":\"miss\",\"degraded\":[\"vector_arm_failed\"],\"retrieved\":2,\"returned\":2,\"confidence\":{\"grade\":\"moderate\",\"reason\":\"top hit: keyword_exact\"}}}"
+          "text": "{\"ok\":true,\"hits\":[{\"source_id\":\"tenantA\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_591b77a7c7fd5f22_c0\",\"documentId\":\"doc_591b77a7c7fd5f22\",\"sourcePath\":\"page://tenantA/search-a/kanga\",\"title\":\"Kanga A\",\"content\":\"# Kanga A\\n\\nkangaroo KANGA_SECRET_AAA\",\"score\":0.016393,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\",\"trust_tier\":\"owner\"},{\"source_id\":\"tenantB\",\"date\":\"<date>\",\"date_source\":\"updated\",\"chunkId\":\"doc_9a6d8dae4a32247f_c0\",\"documentId\":\"doc_9a6d8dae4a32247f\",\"sourcePath\":\"page://tenantB/search-b/kanga\",\"title\":\"Kanga B\",\"content\":\"# Kanga B\\n\\nkangaroo KANGA_SECRET_BBB\",\"score\":0.016129,\"intent\":\"topic\",\"evidence\":\"keyword_exact\",\"create_safety\":\"probable\",\"trust_tier\":\"owner\"}],\"facts\":[],\"meta\":{\"vectorEnabled\":false,\"intent\":\"topic\",\"mode\":\"conservative\",\"cache\":\"miss\",\"degraded\":[\"vector_arm_failed\"],\"retrieved\":2,\"returned\":2,\"confidence\":{\"grade\":\"moderate\",\"reason\":\"top hit: keyword_exact\"}}}"
         }
       ],
       "_meta": {
@@ -383,7 +395,7 @@
         ]
       },
       {
-        "text": "SELECT 'chunks' AS kind, c.id::text AS id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ANY($1::text[]) AND ((EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) OR EXISTS (SELECT 1 FROM pages p WHERE p.source_id = COALESCE(d.source_id, 'default') AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END, CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END, p.slug, p.slug || '.md', p.slug || '.markdown') AND (EXISTS (SELECT 1 FROM sources s WHERE s.id = p.source_id AND s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) OR p.compiled_truth->>'provider' = 'github' OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug AND v.source_id = p.source_id AND ((v.written_by_principal IS NOT NULL AND v.written_by_principal NOT IN ('', 'operator')) OR v.written_by = 'connector-github'))))))",
+        "text": "SELECT 'chunks' AS kind, c.id::text AS id, (LEAST(COALESCE(CASE d.trust_tier WHEN 'owner' THEN 3 WHEN 'member' THEN 2 WHEN 'agent' THEN 1 WHEN 'external' THEN 0 END, 3), CASE WHEN EXISTS (SELECT 1 FROM sources tt_s WHERE tt_s.id = d.source_id AND tt_s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) THEN 0 ELSE 3 END, COALESCE((SELECT MIN(LEAST(COALESCE(CASE p.trust_tier WHEN 'owner' THEN 3 WHEN 'member' THEN 2 WHEN 'agent' THEN 1 WHEN 'external' THEN 0 END, 3), CASE WHEN EXISTS (SELECT 1 FROM sources tt_s WHERE tt_s.id = p.source_id AND tt_s.kind IN ('github', 'mailbox', 'calendar', 'webhook', 'chat', 'meeting')) THEN 0 ELSE 3 END, CASE WHEN p.compiled_truth->>'provider' = 'github' THEN 0 ELSE 3 END, COALESCE((SELECT MIN(CASE WHEN tt_v.written_by = 'connector-github' THEN 0 ELSE CASE WHEN tt_v.written_by_principal IS NULL OR tt_v.written_by_principal IN ('', 'operator') THEN 3 WHEN tt_v.written_by_principal LIKE 'member:%' THEN 2 ELSE 1 END END) FROM page_versions tt_v WHERE tt_v.slug = p.slug AND tt_v.source_id = p.source_id), 3))) FROM pages p WHERE p.source_id = COALESCE(d.source_id, 'default') AND d.source_path IN (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END, CASE WHEN p.source_id = 'default' THEN 'page-truth://' || p.slug ELSE 'page-truth://' || p.source_id || '/' || p.slug END, p.slug, p.slug || '.md', p.slug || '.markdown')), 3)))::int AS rank FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ANY($1::text[])",
         "params": [
           [
             "ch-a-pay",
@@ -391,6 +403,18 @@
             "ch-a-caller",
             "ch-b-caller"
           ]
+        ]
+      },
+      {
+        "text": "SELECT c.id::text AS id, d.frontmatter -> 'content_flag' ->> 'detail' AS detail FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id::text = ANY($1::text[]) AND d.frontmatter -> 'content_flag' ->> 'reason' = $2",
+        "params": [
+          [
+            "ch-a-pay",
+            "ch-b-pay",
+            "ch-a-caller",
+            "ch-b-caller"
+          ],
+          "instruction_like"
         ]
       }
     ],

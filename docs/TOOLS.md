@@ -162,16 +162,17 @@ Ranked vector+keyword chunks, paths and titles. Language/symbol/date/type/slug-p
 | `slug_prefix` | string | no | Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits. |
 | `q` | string | yes | Natural-language query. |
 | `k` | integer (1–100) | no | Number of hits to return. Default 20. |
+| `min_trust` | string (one of `owner`, `member`, `agent`, `external`) | no | Lowest tier kept: owner>member>agent>external. Hits report trust_tier. |
 | `token_budget` | integer (1–200000) | no | Cap returned title + content (~chars/4 tokens), including trust frames. Keep whole hits in rank order; stop before the first that overflows. Omitted: mode default. |
-| `lang` | string | no | Filter to chunks of a source language (chunks.language, e.g. 'typescript', 'python'). Code chunks only. |
-| `symbol_kind` | string | no | Filter to chunks of a symbol kind (chunks.symbol_type, e.g. 'function', 'class', 'method'). |
-| `since` | string | no | Keep only hits whose content date COALESCE(effective_date, updated_at) is >= this bound: an ISO-8601 date/datetime, or a relative duration like '7d' / '2w' / '6m' / '1y' (back from now). |
+| `lang` | string | no | Code chunks of this source language only (chunks.language, e.g. 'typescript'). |
+| `symbol_kind` | string | no | Chunks of this symbol kind (chunks.symbol_type, e.g. 'function', 'class'). |
+| `since` | string | no | Keep hits whose content date COALESCE(effective_date, updated_at) is >= this bound: ISO-8601 date/datetime or a duration back from now (7d/2w/6m/1y). |
 | `until` | string | no | Upper bound on COALESCE(effective_date,updated_at): ISO date/time (YYYY-MM-DD includes the whole day), or duration back from now: 7d/2w/6m/1y. |
-| `near_symbol` | string | no | Anchor retrieval at this qualified symbol name (e.g. 'BrainEngine::searchKeyword'). Its chunk(s) join the candidate set and seed a structural walk of the code call graph. Code corpora only. |
-| `walk_depth` | integer (0–2) | no | Structural walk depth 0-2 (default 0 = off). Expands the anchors through code_edges_symbol with 1/(1+hop) score decay. Code corpora only; bypasses the query cache. |
-| `explain` | boolean | no | Stamp each hit with a per-signal ranking attribution (`explain`: base score + the factor every boost stage contributed + reranker delta). Bypasses the query cache. |
+| `near_symbol` | string | no | Anchor retrieval at this qualified symbol (e.g. 'BrainEngine::searchKeyword'); its chunks join the candidates and seed the code-graph walk. Code corpora only. |
+| `walk_depth` | integer (0–2) | no | Structural walk depth 0-2 (default 0 = off) over code_edges_symbol, 1/(1+hop) score decay. Code corpora only; bypasses the query cache. |
+| `explain` | boolean | no | Stamp each hit with per-signal ranking attribution (`explain`: base score, each boost factor, reranker delta). Bypasses the query cache. |
 | `offset` | integer (0–1000) | no | Skip the first N ranked hits (pagination). Applied after ranking; the widened fetch bypasses nothing else. |
-| `mode` | string (one of `conservative`, `balanced`, `tokenmax`) | no | Per-call search mode bundle. Honored ONLY for the operator (local/static-bearer) caller; a tenant token's mode is silently ignored (it cannot escalate to the paid tokenmax bundle). |
+| `mode` | string (one of `conservative`, `balanced`, `tokenmax`) | no | Per-call search mode bundle. Operator only (local/static bearer); a tenant token's mode is silently ignored, so it cannot reach the paid tokenmax bundle. |
 
 ### backlinks
 
@@ -623,11 +624,12 @@ Hybrid retrieval with detail, salience/recency, date/code filters, offset and ad
 | `slug_prefix` | string | no | Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits. |
 | `q` | string | yes | Natural-language query. |
 | `k` | integer (1–100) | no | Number of hits to return. Default 20; without refine, token_budget and no k uses up to 100 candidates. |
+| `min_trust` | string (one of `owner`, `member`, `agent`, `external`) | no | Lowest tier kept, as in search; also filters ledger facts. |
 | `offset` | integer (0–1000) | no | Skip the first N ranked hits (pagination). |
-| `expand` | boolean | no | Force LLM query expansion on/off for this call (paid Haiku). Omit = mode-bundle default (OFF in conservative/balanced). |
-| `detail` | string (one of `low`, `medium`, `high`) | no | Result detail: low = compiled-truth-grade brevity (1 chunk per page), medium (default) = per-page dedup, high = all chunks + temporal source-boost bypass. |
+| `expand` | boolean | no | Force paid LLM query expansion (Haiku) on/off. Omit = mode-bundle default (OFF in conservative/balanced). |
+| `detail` | string (one of `low`, `medium`, `high`) | no | low = 1 chunk per page (compiled-truth brevity), medium (default) = per-page dedup, high = all chunks, no temporal source-boost. |
 | `mode` | string (one of `conservative`, `balanced`, `tokenmax`) | no | Search mode bundle for this call. Operator-only; a tenant token's mode is silently ignored. |
-| `salience` | string (one of `off`, `on`, `strong`) | no | Mattering bias (pages.salience: emotional weight + link degree + takes). Omit = auto-detect from the query phrasing. |
+| `salience` | string (one of `off`, `on`, `strong`) | no | Mattering bias (pages.salience: emotional weight, link degree, takes). Omit = auto-detect from phrasing. |
 | `recency` | string (one of `off`, `on`, `strong`) | no | Recency boost (per-prefix hyperbolic freshness lift). 'strong' for 'today / right now'. Omit = auto-detect. |
 | `since` | string | no | Keep only hits whose content date is >= this ISO-8601 date. |
 | `until` | string | no | Keep only hits whose content date is <= this ISO-8601 date. |
@@ -636,7 +638,7 @@ Hybrid retrieval with detail, salience/recency, date/code filters, offset and ad
 | `near_symbol` | string | no | Anchor retrieval at this qualified symbol name (code corpora). |
 | `walk_depth` | integer (0–2) | no | Structural walk depth 0-2 (code corpora). |
 | `token_budget` | integer (1–200000) | no | Cap total returned content size (~chars/4 tokens). |
-| `adaptive_return` | boolean | no | Return a TIGHT intent-sized result set instead of the full top-K (never empty when there are matches; first page only). |
+| `adaptive_return` | boolean | no | Return a TIGHT intent-sized set instead of the full top-K (never empty when matches exist; first page only). |
 | `explain` | boolean | no | Stamp per-hit ranking attribution. Bypasses the query cache. |
 | `refine` | string | no | LEGACY refinement: second term for the deterministic weighted-RRF blend. When set, only k/weights apply. |
 | `primary_weight` | number (≥ 0) | no | RRF weight for the primary query (refine mode). Default 1. |
@@ -760,6 +762,7 @@ Budgeted entity cards (title,type,facts,events; no body), up to 8: explicit slug
 | `max_entities` | integer (1–8) | no | Max entity cards (default 5, cap 8). |
 | `facts_limit` | integer (1–25) | no | Max brain facts after the cards (default 10, cap 25). |
 | `token_budget` | integer (200–8000) | no | Token budget for cards + facts (default 1500, clamped 200..8000). |
+| `min_trust` | string (one of `owner`, `member`, `agent`, `external`) | no | Lowest tier kept for cards, facts, core. |
 
 ### advisor
 
