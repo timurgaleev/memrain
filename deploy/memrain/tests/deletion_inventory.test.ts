@@ -60,6 +60,7 @@ const PAGE_COLUMNS: Record<string, Disposition> = {
   "hot_memory.entity_slug": { kind: "exempt", reason: "observation inbox keyed by entity subject, not by the page it was seen on" },
   "hot_memory.source_slug": { kind: "gap", reason: "an observation from a purged page stays in the inbox and a later page on the slug inherits it" },
   "synthesis_evidence.synthesis_slug": { kind: "gap", reason: "citations of a purged synthesis page stay and a later page on the slug inherits them" },
+  "connector_items.page_slug": { kind: "exempt", reason: "the sync's record of which provider item a page came from; it outlives a page the owner purged so the next run does not recreate it, and goes with its account by cascade" },
 };
 
 /** Tables with a `source_id` column. */
@@ -73,6 +74,8 @@ const SOURCE_TABLES: Record<string, Disposition> = {
   "synth_calibration_profile": { kind: "cascade" },
   "oauth_clients": { kind: "cascade" },
   "code_edges_symbol": { kind: "cascade" },
+  "connector_accounts": { kind: "cascade" },
+  "connector_oauth_states": { kind: "cascade" },
   "page_versions": { kind: "referenced" },
   "oauth_tokens": { kind: "referenced" },
   "oauth_codes": { kind: "referenced" },
@@ -84,6 +87,7 @@ const SOURCE_TABLES: Record<string, Disposition> = {
   "facts_backfill_scans": { kind: "exempt", reason: "a body-hash memo that never matches content written under a new source" },
   "fact_purge_receipts": { kind: "exempt", reason: "ids-only undo and audit receipts, kept after the source is gone" },
   "secret_audit_runs": { kind: "exempt", reason: "operator audit history of counts and ids, no content" },
+  "daemon_controls": { kind: "exempt", reason: "operator switches keyed by source id ('*' for all); a row for a deleted source is inert, since the scheduler only targets sources that exist, and holds no content" },
   "fact_withdrawals": { kind: "gap", reason: "withdrawals survive the source; a new source with the same id inherits them" },
   "ingest_log": { kind: "gap", reason: "the log survives the source; a new source with the same id reads it" },
   "slug_aliases": { kind: "gap", reason: "aliases survive the source; a new source with the same id inherits its redirects" },
