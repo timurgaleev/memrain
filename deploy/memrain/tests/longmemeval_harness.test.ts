@@ -21,6 +21,7 @@ import {
   runLongMemEval,
   settleReservation,
   UnknownPrice,
+  UnsafeConfig,
   type LmeBedrock,
 } from "../src/eval/longmemeval/harness.ts";
 import { deterministicEmbed } from "./det-embed.ts";
@@ -55,7 +56,7 @@ const QUESTIONS: LmeQuestion[] = [
 
 interface Calls { embeds: string[]; converse: { system: string; user: string; maxTokens: number; modelId: string }[] }
 
-function stubBedrock(calls: Calls, opts: { failJudgeFor?: string } = {}): LmeBedrock {
+function stubBedrock(calls: Calls, opts: { failJudgeFor?: string; truncateAnswerFor?: string } = {}): LmeBedrock {
   return {
     embed: async (text) => {
       calls.embeds.push(text);
@@ -66,7 +67,11 @@ function stubBedrock(calls: Calls, opts: { failJudgeFor?: string } = {}): LmeBed
       const inputTokens = Math.ceil(Buffer.byteLength(input.system + input.user) / 4);
       if (input.system === ANSWER_SYSTEM) {
         const m = /level \d|beagle/.exec(input.user.split("Question:")[0]!);
-        return { text: m ? `It was ${m[0]}.` : "I don't know.", inputTokens, outputTokens: 6 };
+        const text = m ? `It was ${m[0]}.` : "I don't know.";
+        if (opts.truncateAnswerFor && input.user.includes(opts.truncateAnswerFor)) {
+          return { text, inputTokens, outputTokens: input.maxTokens, stopReason: "max_tokens" };
+        }
+        return { text, inputTokens, outputTokens: 6, stopReason: "end_turn" };
       }
       if (opts.failJudgeFor && input.user.includes(opts.failJudgeFor)) throw new Error("bedrock: connection reset");
       const correct = /Correct answer: (.*)/.exec(input.user)![1]!.toLowerCase();
@@ -213,6 +218,14 @@ describe("runLongMemEval", () => {
     const s = second.summary;
     expect(s.interrupted).toEqual(["q1"]);
     expect(s.scored).toBe(2);
+    expect(s.accuracy).toBe(1);
+    expect(s.accuracy_with_interrupted).toBeCloseTo(2 / 3, 10);
+    expect(s.by_type["single-session-user"]).toEqual({
+      scored: 0, correct: 0, interrupted: 1, accuracy: null, accuracy_with_interrupted: 0,
+    });
+    expect(s.by_type.abstention).toEqual({
+      scored: 1, correct: 1, interrupted: 0, accuracy: 1, accuracy_with_interrupted: 1,
+    });
     expect(s.unsettled_reservations.map((u) => u.id)).toEqual([open.id]);
     expect(s.spent_usd).toBeGreaterThanOrEqual(open.max_usd);
 
@@ -221,6 +234,41 @@ describe("runLongMemEval", () => {
     const third = await runLongMemEval({ questions: QUESTIONS, dataset: DATASET, outDir: out, maxUsd: 5, bedrock: stubBedrock({ embeds: [], converse: [] }) });
     expect(third.summary.unsettled_reservations).toEqual([]);
     expect(third.summary.spent_usd).toBeCloseTo(before - open.max_usd, 10);
+  });
+
+  it("refuses keyword-only mode before any reservation", async () => {
+    const prev = process.env.MEMRAIN_KEYWORD_ONLY;
+    process.env.MEMRAIN_KEYWORD_ONLY = "1";
+    try {
+      const err = await runLongMemEval({
+        questions: QUESTIONS, dataset: DATASET, outDir: out, maxUsd: 5, bedrock: stubBedrock(calls),
+      }).catch((e) => e);
+      expect(err).toBeInstanceOf(UnsafeConfig);
+      expect(String(err.message)).toContain("MEMRAIN_KEYWORD_ONLY");
+    } finally {
+      if (prev === undefined) delete process.env.MEMRAIN_KEYWORD_ONLY;
+      else process.env.MEMRAIN_KEYWORD_ONLY = prev;
+    }
+    expect(calls.embeds.length + calls.converse.length).toBe(0);
+    expect(existsSync(join(out, "ledger.jsonl"))).toBe(false);
+  });
+
+  it("records each answer's stop reason and counts the answers the output cap cut off", async () => {
+    const r = await runLongMemEval({
+      questions: QUESTIONS, dataset: DATASET, outDir: out, maxUsd: 5, bedrock: stubBedrock(calls, { truncateAnswerFor: "dog" }),
+    });
+    const results = Object.fromEntries(ledgerLines(out).filter((l) => l.t === "result").map((l) => [l.question_id, l]));
+    expect(results.q3!.answer_stop_reason).toBe("max_tokens");
+    expect(results.q1!.answer_stop_reason).toBe("end_turn");
+    expect(r.summary.answer_truncated).toBe(1);
+  });
+
+  it("--limit takes the first N questions in dataset order", async () => {
+    const r = await runLongMemEval({ questions: QUESTIONS, dataset: DATASET, outDir: out, maxUsd: 5, limit: 2, bedrock: stubBedrock(calls) });
+    const ran = ledgerLines(out).filter((l) => l.t === "result").map((l) => l.question_id);
+    expect(ran).toEqual(["q1", "q2_abs"]);
+    expect(r.summary.selected).toBe(2);
+    expect(estimateLongMemEval({ questions: QUESTIONS, limit: 2 }).questions).toBe(2);
   });
 
   it("refuses to resume a ledger written under different prompts, models or data", async () => {
@@ -288,6 +336,14 @@ describe("estimateLongMemEval (dry run)", () => {
       expect(e.stages.answer.max_tokens).toBeGreaterThan(0);
       expect(e.stages.judge.max_tokens).toBeGreaterThan(0);
       expect(e.cap_covers).toBe(true);
+      // One attempt per call: the boundary's clients do not retry, so the
+      // estimate prices each question's answer and judge once, not per retry.
+      expect(e.stages.answer.calls).toBe(3);
+      expect(e.stages.judge.calls).toBe(3);
+      expect(e.stages.query_embed.calls).toBe(6);
+      const one = estimateLongMemEval({ questions: QUESTIONS.slice(0, 1) });
+      expect(one.stages.answer.calls).toBe(1);
+      expect(e.max_usd).toBeCloseTo(Object.values(e.stages).reduce((sum, b) => sum + b.max_usd, 0), 12);
       expect(estimateLongMemEval({ questions: QUESTIONS, maxUsd: 0.000001 }).cap_covers).toBe(false);
       expect(existsSync(join(out, "ledger.jsonl"))).toBe(false);
       expect(() => estimateLongMemEval({ questions: QUESTIONS, models: { judge: "mystery-model" } })).toThrow(UnknownPrice);

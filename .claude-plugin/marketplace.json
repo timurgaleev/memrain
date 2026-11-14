@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "memrain",
-      "source": "./",
+      "source": "./plugins/memrain",
       "description": "Connect Claude Code to your Memrain server over MCP, with skills for searching, capturing and correcting memory.",
       "category": "productivity"
     }

@@ -73,6 +73,14 @@ memrain eval longmemeval --out DIR --max-usd 40 [--limit 50]
 - `--max-usd` is required for a paid run. `--dry-run` prints the worst case for
   each stage: calls, input bytes, output tokens and dollars. It also says
   whether the cap covers that worst case.
+- `--limit N` takes the first N questions in the dataset file's order. It is
+  not a random or per-type sample, so the question types in a limited run are
+  whatever the first N happen to be; read its per-type numbers with that in
+  mind.
+- Each reserved call is sent once. The harness uses its own Bedrock clients
+  with SDK retries off, so a throttle or a 5xx fails the call instead of
+  silently sending it again outside its reservation; the run stops with exit
+  `75` and the next invocation resumes.
 - Every paid call is reserved in `DIR/ledger.jsonl` before it is sent. That
   covers each chunk embedding, the query embedding, the answer and the judge.
   The reservation is the call's worst-case price at the current Bedrock rates
@@ -85,7 +93,9 @@ memrain eval longmemeval --out DIR --max-usd 40 [--limit 50]
   question, it also checks that the cap covers that question's whole worst
   case.
 - The run also refuses when `MEMRAIN_CONTEXTUAL_LLM` is on. The indexer would
-  then make paid calls the ledger cannot see.
+  then make paid calls the ledger cannot see. It refuses when
+  `MEMRAIN_KEYWORD_ONLY` is on too: nothing would be embedded and no model
+  could answer, so the result would not measure Memrain's retrieval.
 
 ### Crashes and resume
 
@@ -122,10 +132,16 @@ that was running is not repeated.
 
 - the label, dataset URL and sha256, prompt hash, model ids and retrieval k
 - `selected`, `scored` (the accuracy denominator) and `correct`
-- `accuracy`, and accuracy by question type, with abstention questions as
-  their own type
+- `accuracy` (correct / scored) and `accuracy_with_interrupted` (correct /
+  (scored + interrupted), which counts an interrupted question as wrong)
+- `by_type`: the same two figures per question type, with abstention questions
+  as their own type, plus each type's `scored`, `correct` and `interrupted`
+  counts
 - `judge_unparseable`, `evidence_recall_mean`, the `interrupted` question ids
   and `not_run`
+- `answer_truncated`: scored answers the output cap cut off. Each result
+  records the answer's `answer_stop_reason`; `max_tokens` there means the
+  model ran out of its 400 output tokens before it finished
 - `spent_usd`, which includes open reservations at their full worst case, and
   `unsettled_reservations`
 

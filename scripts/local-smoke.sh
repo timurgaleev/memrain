@@ -4,11 +4,25 @@
 # Builds the image, then runs it in a throwaway project on a Docker network
 # with no route out, so AWS endpoints are unreachable. Over MCP it writes a
 # page, finds it with search and reads it back; restarts the container and
-# reads it again from the volume; and checks the spend ledger booked no model
-# call. Everything it creates (container, network, volume) is removed on exit.
+# reads it again from the volume; mints a personal access token and writes a
+# page with it; and checks the spend ledger booked no model call. Everything
+# it creates (container, network, volume) is removed on exit.
+#
+# Needs Docker Compose 2.24 or newer: the sealed-network override uses !reset.
 #
 #   scripts/local-smoke.sh
 set -euo pipefail
+
+# Compose before 2.24 rejects `!reset`, and older ones may ignore it and keep
+# the host port, so the sealed network would not be sealed.
+compose_version="$(docker compose version --short 2>/dev/null || true)"
+compose_version="${compose_version#v}"
+IFS=. read -r cv_major cv_minor _ <<<"$compose_version"
+if ! [[ "${cv_major:-}" =~ ^[0-9]+$ && "${cv_minor:-}" =~ ^[0-9]+$ ]] \
+  || ((cv_major < 2 || (cv_major == 2 && cv_minor < 24))); then
+  echo "[smoke] FAIL: Docker Compose 2.24 or newer is required (found: ${compose_version:-none}); upgrade Docker or the compose plugin" >&2
+  exit 1
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT="memrain-smoke-$$"
@@ -70,10 +84,18 @@ if (step === "write" || step === "read") {
   if (!JSON.stringify(page).includes("marsupialsmoke audit")) throw new Error(`page_get lost the body: ${JSON.stringify(page)}`);
   console.log(`ok search + page_get (${step})`);
 }
+if (step === "pat-write") {
+  const patSlug = "smoke/quokka-pat";
+  await call("page_put", { slug: patSlug, markdown_body: "# PAT page\n\nWritten with a personal access token: wombatsmoke.\n" });
+  const page = await call("page_get", { slug: patSlug });
+  if (!JSON.stringify(page).includes("wombatsmoke")) throw new Error(`page_get lost the PAT write: ${JSON.stringify(page)}`);
+  console.log("ok page_put + page_get with a personal access token");
+}
 '
 
+# $1 is the step; $2 the bearer, the internal token unless given.
 mcp() {
-  compose exec -T -e SMOKE_TOKEN="$TOKEN" memrain bun -e "$MCP_CLIENT" "$1"
+  compose exec -T -e SMOKE_TOKEN="${2:-$TOKEN}" memrain bun -e "$MCP_CLIENT" "$1"
 }
 
 echo "[smoke] building and starting $PROJECT on a sealed network"
@@ -93,6 +115,20 @@ echo "[smoke] restarting the container"
 compose restart memrain
 compose up -d --wait
 mcp read
+
+# The quickstart tells people to connect a client with a personal access
+# token (scripts/local-up.sh token <name>), so prove one can write. PGLite
+# admits one process: the server steps aside while the CLI mints it.
+echo "[smoke] minting a personal access token"
+compose stop memrain
+minted="$(compose run --rm --no-deps --entrypoint bun memrain run src/cli.ts auth create smoke-writer)"
+pat="$(printf '%s\n' "$minted" | sed -n 's/^  "token": "\(memrain_[0-9a-f]*\)",$/\1/p')"
+if [ -z "$pat" ]; then
+  echo "[smoke] FAIL: auth create printed no token" >&2
+  exit 1
+fi
+compose up -d --wait
+mcp pat-write "$pat"
 
 echo "[smoke] checking the spend ledger"
 compose stop memrain

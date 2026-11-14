@@ -193,6 +193,9 @@ for this repo:
    - In the same release commit, bump `PREVIOUS_RELEASE` in
      `deploy/memrain/tests/helpers/previous-release.ts` to the tag being
      cut and the last migration it ships.
+   - In the same commit, set `version` in both
+     `plugins/memrain/.claude-plugin/plugin.json` and
+     `plugins/memrain/.codex-plugin/plugin.json` to `X.Y.Z`.
    - Tag the shipped commit and push the tag:
      `git tag vX.Y.Z && git push origin vX.Y.Z`.
    - Publish the GitHub release from that changelog section:

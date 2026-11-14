@@ -111,9 +111,10 @@ are with a one-time code instead.
 
 ## Option C: install the plugin
 
-The repository is also a Codex plugin: the `memrain` MCP server plus six skills
-(`query`, `brain-ops`, `capture`, `briefing`, `correction-pipeline`,
-`connect-client`).
+The repository is also a Codex plugin marketplace. Its one plugin lives in
+`plugins/memrain`, so an install copies only that folder: the `memrain` MCP
+server plus six skills (`query`, `brain-ops`, `capture`, `briefing`,
+`correction-pipeline`, `connect-client`).
 
 ```bash
 codex plugin marketplace add <your-github-username>/memrain
@@ -123,9 +124,15 @@ export BRAIN_MCP_TOKEN='<PAT>'
 
 The plugin's server points at the local quickstart, `http://127.0.0.1:18790/mcp`
 (`make local-up`), and reads the token from `BRAIN_MCP_TOKEN`. For a deployed
-server, add the Option A block to `~/.codex/config.toml` under the same name,
-`[mcp_servers.memrain]`: Codex uses your entry in place of the plugin's and keeps
-the plugin's skills.
+server, override the URL in `~/.codex/config.toml` under the same name:
+
+```toml
+[mcp_servers.memrain]
+url = "https://brain.<domain>/mcp"
+bearer_token_env_var = "BRAIN_MCP_TOKEN"
+```
+
+Codex uses your entry in place of the plugin's and keeps the plugin's skills.
 
 ## Verify
 
