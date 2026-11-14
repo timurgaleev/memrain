@@ -260,6 +260,8 @@ export interface AdminAuth {
    * credentials refuse while it runs.
    */
   sessionCooldown(req: Request): number | null;
+  /** The id of the live admin session the request carries, or null. */
+  adminSessionId(req: Request): string | null;
 }
 
 const cooldownRefusal = (until: number): Response =>
@@ -599,5 +601,6 @@ export function createAdminAuth(opts: AdminAuthOptions): AdminAuth {
     return null; // not an auth route — let a later dispatcher handle it
   }
 
-  return { requireAdmin, consumeAuthorizeApproval, handleAuthRoute, sessionCooldown };
+  const adminSessionId = (req: Request): string | null => liveSession(req)?.id ?? null;
+  return { requireAdmin, consumeAuthorizeApproval, handleAuthRoute, sessionCooldown, adminSessionId };
 }

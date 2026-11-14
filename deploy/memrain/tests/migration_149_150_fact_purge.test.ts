@@ -15,12 +15,16 @@ const purgeTombstone = (e: Engine) => e.query<{ id: number }>(
   `INSERT INTO entity_facts (entity_slug, fact, forgotten_at, forgotten_cause) VALUES ('people/x', 'Purged.', NOW(), 'purge') RETURNING id`);
 
 for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`migrations 149 and 150 (${name})`, () => {
+  it("are consecutive, so their downs run in turn once later ones are reverted", () => {
+    expect(discoverMigrations().map((m) => m.id).filter((id) => id >= 149 && id <= 150)).toEqual([149, 150]);
+  });
+
   it("admit the purge cause and keep receipts; each down refuses while it would lose them", async () => {
     const db = await open();
     const e = db.storage.engine();
     try {
-      // Only the latest migration can be reverted, so later ones go first.
-      for (const id of discoverMigrations().map((m) => m.id).filter((id) => id > 150).sort((a, b) => b - a)) await revertMigration(e, id);
+      const later = discoverMigrations().map((m) => m.id).filter((id) => id > 150).sort((a, b) => b - a);
+      for (const id of later) await revertMigration(e, id);
       const fact = Number((await purgeTombstone(e)).rows[0]!.id);
       await e.query(`INSERT INTO fact_purge_receipts (purge_id, page_slug, source_id, fact_ids) VALUES ($1, 'people/x', 'default', ARRAY[$2]::bigint[])`,
         [crypto.randomUUID(), fact]);
@@ -39,7 +43,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await expect(purgeTombstone(e)).rejects.toThrow();
 
       const again = await runMigrations(e);
-      expect(again.applied.map((m) => m.id).slice(0, 2)).toEqual([149, 150]);
+      expect(again.applied.map((m) => m.id)).toEqual([149, 150, ...later.reverse()]);
       expect(await causeCheck(e)).toContain("purge");
       expect(await receiptsTable(e)).toBe("fact_purge_receipts");
       await purgeTombstone(e);

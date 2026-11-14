@@ -144,6 +144,7 @@ export const OPS_CHECK_NAMES: ReadonlySet<string> = new Set([
   "code-grammars",
   "code-graph",
   "connector-health",
+  "connector-accounts",
   "legacy-env-names",
   "legacy-config-dir",
   "runtime-config-legacy-rows",

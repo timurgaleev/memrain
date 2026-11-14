@@ -60,6 +60,18 @@ export const ENV_ONLY_KEYS: ReadonlySet<string> = new Set([
   CYCLE_ENV,
   "MEMRAIN_REQUIRE_POSTGRES",
   "MEMRAIN_EVENT_LOOP_WATCHDOG_MS",
+  "MEMRAIN_CONNECTOR_KEK",
+  "MEMRAIN_CONNECTOR_KEK_FILE",
+]);
+
+/**
+ * Keys `setRuntimeConfig` refuses to store at all: the connector key seals
+ * tokens kept in this same database, so a copy in runtime_config would let a
+ * dump open them.
+ */
+export const NEVER_STORED_KEYS: ReadonlySet<string> = new Set([
+  "MEMRAIN_CONNECTOR_KEK",
+  "MEMRAIN_CONNECTOR_KEK_FILE",
 ]);
 
 /**
@@ -111,6 +123,9 @@ export async function setRuntimeConfig(
   value: string,
 ): Promise<string> {
   const stored = isRuntimeConfigKey(key) ? canonicalKey(key) : key;
+  if (NEVER_STORED_KEYS.has(canonicalKey(key))) {
+    throw new Error(`${stored} protects data in this database; set it in the environment only`);
+  }
   await engine.query(
     `INSERT INTO runtime_config (key, value, updated_at)
      VALUES ($1, $2, NOW())

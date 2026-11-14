@@ -111,6 +111,7 @@ describe("doctor", () => {
       "code-graph",
       "config",
       "config-yml",
+      "connector-accounts",
       "connector-health",
       "contextual-coverage",
       "contradiction-trend",

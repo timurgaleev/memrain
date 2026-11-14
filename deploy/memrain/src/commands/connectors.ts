@@ -32,9 +32,10 @@ import {
 import type { ConnectorRunStatus } from "../core/connectors/types.ts";
 import { listConnectorStates } from "../core/connectors/watermark.ts";
 import { withStorage } from "./with-storage.ts";
+import { runRotateKek } from "./connectors-vault.ts";
 
 export interface ConnectorsCmdOptions {
-  /** `github` or `status`. */
+  /** `github`, `status` or `rotate-kek`. */
   sub: string | undefined;
   /** `sync` under `github`. */
   action?: string;
@@ -51,6 +52,9 @@ export interface ConnectorsCmdOptions {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   embedFn?: EmbedFn;
+  /** `rotate-kek`: the current and the new connector key files. */
+  oldKekFile?: string;
+  newKekFile?: string;
 }
 
 const MAX_TOKEN_FILE_BYTES = 4096;
@@ -213,6 +217,7 @@ async function runStatus(opts: ConnectorsCmdOptions): Promise<number> {
 export async function runConnectors(opts: ConnectorsCmdOptions): Promise<number> {
   if (opts.sub === "status") return runStatus(opts);
   if (opts.sub === "github") return runGithubSync(opts);
-  console.error("memrain connectors: subcommand required (github sync <owner/repo> | status)");
+  if (opts.sub === "rotate-kek") return runRotateKek(opts);
+  console.error("memrain connectors: subcommand required (github sync <owner/repo> | status | rotate-kek)");
   return 1;
 }

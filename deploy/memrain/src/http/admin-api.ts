@@ -38,6 +38,7 @@ import type { TenantMode } from "../core/oauth-provider.ts";
 import { normalizeScopesInput } from "../core/scope.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 import { handleAdminTool } from "./admin-tool.ts";
+import { defaultConnectorDeps, handleAdminConnectors } from "./admin-connectors.ts";
 import type { RateLimiter } from "../mcp/rate_limit.ts";
 import type { SearchOptions } from "../core/search/hybrid.ts";
 
@@ -53,6 +54,8 @@ export interface AdminApiDeps {
   toolLimiter?: RateLimiter;
   /** Hermetic query-embedder seam for the tool route (tests only). */
   embedQuery?: SearchOptions["embedQuery"];
+  /** The live admin session's id, which a connector OAuth state is bound to. */
+  adminSessionId?: (req: Request) => string | null;
 }
 
 const unauthorized = () => Response.json({ error: "Admin authentication required" }, { status: 401 });
@@ -179,6 +182,11 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       ...(deps.toolLimiter ? { toolLimiter: deps.toolLimiter } : {}),
       ...(deps.embedQuery ? { embedQuery: deps.embedQuery } : {}),
     });
+  }
+
+  if (p === "/admin/api/connectors" || p.startsWith("/admin/api/connectors/")) {
+    const r = await handleAdminConnectors(req, url, defaultConnectorDeps(deps.storage, deps.publicUrl, deps.adminSessionId ?? (() => null)));
+    if (r) return r;
   }
 
   // GET /admin/api/full-stats — brain health + corpus counts (Overview).
