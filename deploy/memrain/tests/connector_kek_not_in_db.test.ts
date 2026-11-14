@@ -20,6 +20,15 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("refuses to store the Google OAuth client secret, which a row would hold in the clear", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await expect(setRuntimeConfig(e, "MEMRAIN_GOOGLE_OAUTH_CLIENT_SECRET", "client-secret-value")).rejects.toThrow("environment");
+      expect((await e.query(`SELECT key FROM runtime_config WHERE key LIKE '%GOOGLE_OAUTH%'`)).rows).toEqual([]);
+    } finally { await db.close(); }
+  });
+
   it("never projects a stored key row into the environment", async () => {
     const db = await open();
     const e = db.storage.engine();

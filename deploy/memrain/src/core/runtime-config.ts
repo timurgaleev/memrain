@@ -62,16 +62,19 @@ export const ENV_ONLY_KEYS: ReadonlySet<string> = new Set([
   "MEMRAIN_EVENT_LOOP_WATCHDOG_MS",
   "MEMRAIN_CONNECTOR_KEK",
   "MEMRAIN_CONNECTOR_KEK_FILE",
+  "MEMRAIN_GOOGLE_OAUTH_CLIENT_SECRET",
 ]);
 
 /**
  * Keys `setRuntimeConfig` refuses to store at all: the connector key seals
  * tokens kept in this same database, so a copy in runtime_config would let a
- * dump open them.
+ * dump open them; an OAuth client secret there would sit in the clear, where a
+ * bring-your-own one is sealed.
  */
 export const NEVER_STORED_KEYS: ReadonlySet<string> = new Set([
   "MEMRAIN_CONNECTOR_KEK",
   "MEMRAIN_CONNECTOR_KEK_FILE",
+  "MEMRAIN_GOOGLE_OAUTH_CLIENT_SECRET",
 ]);
 
 /**
