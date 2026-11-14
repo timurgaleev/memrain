@@ -45,7 +45,7 @@ import { isDiarySourcePath } from "../pages.ts";
 import { pageContentDate, questionDateWindow, resolveThinkTemporalContext } from "./think-temporal.ts";
 import { thinkQuoteVerifyEnabled, verifyQuotes, type QuoteCheck } from "./quote-verify.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
-import { frameExternal, markExternalChunks } from "../trust-frame.ts";
+import { frameForRead, markExternalChunks } from "../trust-frame.ts";
 
 export const THINK_PROMPT_VERSION = "v3-sonnet";
 
@@ -512,7 +512,7 @@ export function renderPagesBlock(
       const day = dates?.get(h.documentId);
       const date = day ? ` date="${attr(day)}"` : "";
       const trust = h.trust === "external" ? ' trust="external"' : "";
-      return `<page ref="${attr(h.sourcePath)}" rank="${idx + 1}"${date}${trust}>\n${h.trust === "external" ? frameExternal(excerpt) : excerpt}\n</page>`;
+      return `<page ref="${attr(h.sourcePath)}" rank="${idx + 1}"${date}${trust}>\n${frameForRead(excerpt, h)}\n</page>`;
     })
     .join("\n\n");
 }
@@ -1176,7 +1176,7 @@ export function buildExtractiveFallback(
     const identity = `${p.title ?? ""} ${basenameWords(p.sourcePath)}`;
     const excerpt = selectRelevantExcerpt(p.content ?? "", question, perPage, identity).trim();
     if (!excerpt) continue;
-    const text = p.trust === "external" ? frameExternal(excerpt) : excerpt;
+    const text = frameForRead(excerpt, p);
     lines.push(`- [${p.sourcePath}] ${text.split("\n").join("\n  ")}`);
     cited.push({ ref: p.sourcePath, kind: "page", ...(p.trust === "external" ? { trust: "external" as const } : {}) });
   }

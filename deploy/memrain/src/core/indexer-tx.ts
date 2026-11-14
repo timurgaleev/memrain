@@ -125,6 +125,8 @@ export interface DocumentWrite {
   beforeCommit?: (tx: Engine) => Promise<void>;
   /** The writer's trust tier; lowers the stored tier, never raises it. Unset keeps it. */
   trustTier?: TrustTier;
+  /** Runs last inside the transaction, once the document row exists; gets its stored source. */
+  afterWrite?: (tx: Engine, sourceId: string | null) => Promise<void>;
 }
 
 export interface IndexTxResult {
@@ -404,6 +406,7 @@ export async function writeDocumentTransaction(
     if (opts.codeEdges && opts.codeEdges.length > 0) {
       await insertCodeEdges(tx, opts.codeEdges);
     }
+    await doc.afterWrite?.(tx, effSource);
   }), BULK_RETRY_OPTS);
 
   return {

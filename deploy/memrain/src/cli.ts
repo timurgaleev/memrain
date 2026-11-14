@@ -87,6 +87,7 @@ import { runTranscripts } from "./commands/transcripts.ts";
 import { runConnectors } from "./commands/connectors.ts";
 import { runDaemons } from "./commands/daemons.ts";
 import { runQuarantine, type QuarantineSub } from "./commands/quarantine.ts";
+import { runWriteGate } from "./commands/write-gate.ts";
 import { runSecretsAudit } from "./commands/secrets.ts";
 import {
   runEvalRunAll,
@@ -333,6 +334,8 @@ function printUsage(): void {
   console.log("  quarantine list [--include-flagged] [--json]");
   console.log("  quarantine clear <slug|path> [--force]");
   console.log("  quarantine scan [--limit N] [--apply]");
+  console.log("  write-gate list [--all] [--json]");
+  console.log("  write-gate approve|reject <id> [--json]");
   console.log("                               operator surface for the content-sanity gate");
   console.log("  secrets audit [--source ID] [--kinds K,K] [--limit N] [--json] [--apply --yes]");
   console.log("                               rescan stored text with the current secret rules; dry run");
@@ -1880,6 +1883,25 @@ async function main(argv: readonly string[]): Promise<number> {
       }
       if (flags.has("--json")) opts.json = true;
       return await runQuarantine(opts);
+    }
+    case "write-gate": {
+      const sub = positional[0];
+      if (sub !== "list" && sub !== "approve" && sub !== "reject") {
+        console.error("memrain write-gate: subcommand required (list|approve|reject)");
+        return 1;
+      }
+      const opts: Parameters<typeof runWriteGate>[0] = { sub };
+      if (sub === "list" && flags.has("--all")) opts.all = true;
+      if (sub !== "list") {
+        const id = Number(positional[1]);
+        if (!positional[1] || !Number.isInteger(id) || id < 1) {
+          console.error(`memrain write-gate ${sub}: <id> is required (see \`memrain write-gate list\`)`);
+          return 1;
+        }
+        opts.id = id;
+      }
+      if (flags.has("--json")) opts.json = true;
+      return await runWriteGate(opts);
     }
     case "secrets": {
       if (positional[0] !== "audit") {

@@ -50,6 +50,9 @@ export const SOURCE_KINDS: readonly SourceKind[] = [
   "other",
 ];
 
+/** Kinds whose text someone outside the brain wrote: senders, attendees, issue authors. */
+export const EXTERNAL_SOURCE_KINDS: readonly SourceKind[] = ["github", "mailbox", "calendar", "webhook", "chat", "meeting"];
+
 export type SyncPolicy = "synced" | "local-only" | "mirror";
 export type IndexedPolicy = "verbatim" | "hashed-only" | "tombstoned";
 

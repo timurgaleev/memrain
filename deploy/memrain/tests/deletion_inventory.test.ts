@@ -76,6 +76,7 @@ const SOURCE_TABLES: Record<string, Disposition> = {
   "code_edges_symbol": { kind: "cascade" },
   "connector_accounts": { kind: "cascade" },
   "connector_oauth_states": { kind: "cascade" },
+  "write_gate_holds": { kind: "cascade" },
   "page_versions": { kind: "referenced" },
   "oauth_tokens": { kind: "referenced" },
   "oauth_codes": { kind: "referenced" },
