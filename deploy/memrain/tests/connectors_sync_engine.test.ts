@@ -27,6 +27,7 @@ import {
   markUnseenDeletesPending,
   readCursor,
   rejectHeldDeletes,
+  settledItemVersions,
   retryHeldItems,
   writeCursor,
 } from "../src/core/connectors/sync-store.ts";
@@ -163,6 +164,26 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       // Gone from a full relisting, a kept item is an upstream deletion like any other.
       expect(await markUnseenDeletesPending(db.storage.engine(), ACCOUNT_ID, "a", new Date(Date.now() + 3_600_000), new Date())).toBe(1);
       expect((await itemRow(db.storage, "a"))?.held_reason).toBe("delete_pending");
+    } finally { await db.close(); }
+  });
+
+  it("never writes over a page retention detached for a person's edit, and skips refetching retention-held items", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      const e = db.storage.engine();
+      await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "a" }, { id: "b" }], "c1")]).deps);
+      await e.query(`UPDATE pages SET markdown_body = 'Kept by hand.', compiled_truth = compiled_truth || '{"origin":"connector_detached"}'::jsonb WHERE slug = 'test/acct/a'`);
+
+      const r = await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "a", v: "2", body: "Changed upstream." }], "c2")]).deps);
+      expect(r.status).toBe("success");
+      expect(r.counts.pages_written).toBe(0);
+      expect((await getPage(db.storage, "test/acct/a"))?.markdown_body).toBe("Kept by hand.");
+      expect((await itemRow(db.storage, "a"))).toMatchObject({ fail_count: 0, held_reason: null });
+
+      // An adapter that skips unchanged items must still skip one under a retention hold.
+      await e.query(`UPDATE connector_items SET held_reason = 'retention_held' WHERE account_id = $1 AND external_id = 'b'`, [ACCOUNT_ID]);
+      expect((await settledItemVersions(e, ACCOUNT_ID, ["b"])).get("b")).toBe("1");
     } finally { await db.close(); }
   });
 

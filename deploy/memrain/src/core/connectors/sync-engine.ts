@@ -39,6 +39,8 @@
  *     event or meeting, writes one chronicle row (enrich-deterministic.ts);
  *     an enrichment failure is recorded as an item failure, so the item is
  *     not settled and the next run writes and enriches it again;
+ *   - a page retention detached for a person's edit (retention.ts) is never
+ *     written again: its item settles on it unchanged;
  *   - retention: after the deletions, `sweepRetention` hard-deletes the
  *     account's pages whose last activity is older than their kind's window
  *     (retention.ts), at most 500 per run, past the same mass-delete guard:
@@ -64,7 +66,7 @@ import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jo
 import type { ConnectorClient, ConnectorResponse, TokenSource } from "./client.ts";
 import { isDeterministicRefusal } from "./github.ts";
 import type { ConnectorAccountStatus } from "./accounts.ts";
-import { deleteStaleParts, massDeleteVerdict } from "./retention.ts";
+import { deleteStaleParts, DETACHED_ORIGIN, massDeleteVerdict } from "./retention.ts";
 import { accountRef, type ConnectorDataKind, type Person } from "./model.ts";
 import { connectorsSwitchOn } from "./vault.ts";
 import { ReauthRequiredError, type ConnectorRunStatus, type ResponseClass } from "./types.ts";
@@ -630,6 +632,13 @@ class Run {
         return null;
       }
     }
+    // Retention handed this page to the brain for a person's edit: the item still
+    // maps to it, but no later version of the item writes over it.
+    if (await this.detached(item.slug)) {
+      await settle(item.slug, null);
+      this.result.counts.pages_unchanged++;
+      return null;
+    }
     let hash: string | null;
     try {
       hash = await this.write(item, settled ? row.content_hash : null);
@@ -645,6 +654,14 @@ class Run {
     await settle(item.slug, hash);
     if (item.enrich !== undefined) this.written.push({ ...item, enrich: item.enrich });
     return null;
+  }
+
+  private async detached(slug: string): Promise<boolean> {
+    const r = await this.engine.query(
+      `SELECT 1 FROM pages WHERE slug = $1 AND source_id = $2 AND compiled_truth->>'origin' = $3`,
+      [slug, this.account.sourceId, DETACHED_ORIGIN],
+    );
+    return r.rows.length > 0;
   }
 
   /**
