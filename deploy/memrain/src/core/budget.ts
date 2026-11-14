@@ -458,8 +458,10 @@ type WalletKey =
 /** Today's capped spend under one wallet key, settled actuals plus pending holds. */
 async function walletKeyDaySpendUsd(engine: Engine, key: WalletKey, now: Date): Promise<number> {
   const dayStart = utcDayStart(now).toISOString();
-  // Column names come from the closed WalletKey union, never from input.
-  const where = key.col === "role" ? "role = $3"
+  // Column names come from the closed WalletKey union, never from input. A
+  // row's role is its chain of nested paths (`outer/inner`), so a path's spend
+  // includes every path that ran inside it.
+  const where = key.col === "role" ? "$3 = ANY(string_to_array(role, '/'))"
     : key.col === "daemon" ? "daemon = $3"
     : "daemon = $3 AND daemon_source = $4";
   const params: unknown[] = [dayStart, now.toISOString(),
@@ -1042,13 +1044,17 @@ export function runAsPath<T>(role: string, fn: () => Promise<T>): Promise<T> {
   return walletFrames().length > 0 ? fn() : runInWallet(paidPathWallet(role), fn);
 }
 
-/** The path, daemon and daemon source a call in scope is booked under. */
+/**
+ * The path, daemon and daemon source a call in scope is booked under. The
+ * role is the chain of nested paths, outermost first (`outer/inner`), so each
+ * enclosing path's day cap counts it; path names cannot contain `/`.
+ */
 function walletTags(): { role: string | null; daemon: string | null; daemonSource: string | null } {
   const frames = walletFrames();
   let daemon: WalletDaemon | undefined;
   for (const f of frames) if (f.path.daemon) daemon = f.path.daemon;
   return {
-    role: frames.length > 0 ? frames[frames.length - 1]!.path.role : null,
+    role: frames.length > 0 ? frames.map((f) => f.path.role).join("/") : null,
     daemon: daemon?.name ?? null,
     daemonSource: daemon?.sourceId ?? null,
   };
@@ -1071,8 +1077,17 @@ export class WalletRefusal extends DailyCapRefusal {
   }
 }
 
-/** Paths paused in this process: holds even while the pause table is unreachable. */
-const _pausedHere = new Set<string>();
+/** A pause this process could not write yet; it holds here until it is written. */
+interface PendingPause {
+  reason: string;
+  model: string;
+  heldUsd: number;
+  actualUsd: number;
+}
+
+/** Paths paused in this process whose pause row is not written yet: they stay
+ *  paused here, and every later call on the path retries the write. */
+const _pausedHere = new Map<string, PendingPause>();
 
 export interface PausedSpendPath {
   path: string;
@@ -1114,27 +1129,43 @@ export async function resumeSpendPath(engine: Engine, path: string, by: string):
   return r.rows.length > 0;
 }
 
-async function pausePath(engine: Engine | null, path: string, reason: string, model: string, heldUsd: number, actualUsd: number): Promise<void> {
-  _pausedHere.add(path);
-  console.warn(`[memrain] spend path '${path}' paused: ${reason}`);
-  if (!engine) return;
+/** Write a pause row; false when the write failed. */
+async function writePause(engine: Engine, path: string, p: PendingPause): Promise<boolean> {
   try {
     await engine.query(
       `INSERT INTO spend_path_pauses (path, reason, model, held_cents, actual_cents)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (path) WHERE resolved_at IS NULL DO NOTHING`,
-      [path, reason.slice(0, 500), model, usdToCents(heldUsd), usdToCents(actualUsd)],
+      [path, p.reason.slice(0, 500), p.model, usdToCents(p.heldUsd), usdToCents(p.actualUsd)],
     );
+    return true;
   } catch (err) {
     console.warn(`[memrain] could not record the pause of spend path '${path}': ` +
       (err instanceof Error ? err.message : String(err)));
+    return false;
   }
 }
 
-/** The first path in `roles` with an open pause, or null. */
+/**
+ * Pause `path` in the table every process reads, so a resume from any process
+ * (CLI, admin) lifts it everywhere and a restart keeps it. While that write
+ * cannot happen, this process keeps the pause itself and retries the write on
+ * the path's next call.
+ */
+async function pausePath(engine: Engine | null, path: string, reason: string, model: string, heldUsd: number, actualUsd: number): Promise<void> {
+  console.warn(`[memrain] spend path '${path}' paused: ${reason}`);
+  const pending = { reason, model, heldUsd, actualUsd };
+  if (!engine || !(await writePause(engine, path, pending))) _pausedHere.set(path, pending);
+}
+
+/** The first path in `roles` with an open pause, or null. A pause still held
+ *  only in this process is written first, and stays paused either way. */
 async function firstPausedPath(engine: Engine | null, roles: string[]): Promise<string | null> {
   const local = roles.find((r) => _pausedHere.has(r));
-  if (local !== undefined) return local;
+  if (local !== undefined) {
+    if (engine && (await writePause(engine, local, _pausedHere.get(local)!))) _pausedHere.delete(local);
+    return local;
+  }
   if (!engine) return null;
   // scope: operator-only pauses are brain-wide state about paid paths, never tenant data
   const r = await engine.query<{ path: string }>(
@@ -1600,7 +1631,7 @@ async function bookSpend(
   const entry = { ...spendEntry(call, cost, usage, end), ...(overrun > 0 ? { overrunUsd: overrun } : {}) };
   if (overrun > 0) {
     const reason = `'${call.operation}' on ${call.model} reported $${(cost ?? 0).toFixed(6)} against a hold of $${hold!.usd.toFixed(6)}`;
-    await pausePath(engine, role!, `overrun: ${reason}`, call.model, hold!.usd, cost ?? 0);
+    await pausePath(engine, currentWalletPath()!.role, `overrun: ${reason}`, call.model, hold!.usd, cost ?? 0);
   }
   if (!engine) return;
   const holdId = keepHold ? null : (hold?.id ?? null);

@@ -137,6 +137,55 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await roleDaySpendUsd(e, "under")).toBeCloseTo(0.04, 4);
   });
 
+  it("a pause resolved by another process (admin, CLI) lets this process spend again", async () => {
+    const path: WalletPath = { role: "elsewhere" };
+    await runInWallet(path, () => trackedInvoke(TWO_CENTS, async (m) => m.report({ inputTokens: 0, outputTokens: 40_000 })));
+    expect((await pausedSpendPaths(e)).map((p) => p.path)).toEqual(["elsewhere"]);
+    await e.query(`UPDATE spend_path_pauses SET resolved_at = NOW(), resolved_by = 'other-process'`);
+    let sent = 0;
+    await runInWallet(path, () => trackedInvoke(TWO_CENTS, async (m) => { sent++; await billWorst(m); }));
+    expect(sent).toBe(1);
+  });
+
+  it("an enclosing path's day cap counts the spend of the paths nested in it", async () => {
+    await runInWallet({ role: "outer-day", dayCapUsd: 0.05 }, () =>
+      runInWallet({ role: "inner-a" }, () => trackedInvoke(TWO_CENTS, billWorst)));
+    await runInWallet({ role: "outer-day", dayCapUsd: 0.05 }, () =>
+      runInWallet({ role: "inner-b" }, () => trackedInvoke(TWO_CENTS, billWorst)));
+    const err = await runInWallet({ role: "outer-day", dayCapUsd: 0.05 }, () =>
+      runInWallet({ role: "inner-c" }, () => trackedInvoke(TWO_CENTS, billWorst))).catch((x: unknown) => x);
+    expect((err as { scope: string }).scope).toBe("role");
+    expect(await roleDaySpendUsd(e, "outer-day")).toBeCloseTo(0.04, 4);
+    expect(await roleDaySpendUsd(e, "inner-a")).toBeCloseTo(0.02, 4);
+  });
+
+  it("a pause whose write failed is kept and written on the path's next call", async () => {
+    let failPauseWrite = true;
+    const flaky = new Proxy(e, {
+      get(target, prop, recv) {
+        if (prop === "query") {
+          return (sql: string, params?: unknown[]) => {
+            if (failPauseWrite && sql.includes("INSERT INTO spend_path_pauses")) {
+              failPauseWrite = false;
+              return Promise.reject(new Error("connection reset"));
+            }
+            return target.query(sql, params);
+          };
+        }
+        const v = Reflect.get(target, prop, recv);
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    setSpendLedgerEngine(flaky);
+    const path: WalletPath = { role: "flaky-pause" };
+    await runInWallet(path, () => trackedInvoke(TWO_CENTS, async (m) => m.report({ inputTokens: 0, outputTokens: 40_000 })));
+    expect(await pausedSpendPaths(e)).toEqual([]);
+    const err = await runInWallet(path, () => trackedInvoke(TWO_CENTS, billWorst)).catch((x: unknown) => x);
+    expect((err as WalletRefusal).scope).toBe("paused");
+    expect((await pausedSpendPaths(e)).map((p) => p.path)).toEqual(["flaky-pause"]);
+    expect(await resumeSpendPath(e, "flaky-pause", "operator")).toBe(true);
+  });
+
   it("an underestimated call inside a run counts only its hold against the run cap", async () => {
     await runInWallet({ role: "run-under", runCapUsd: 0.05 }, async () => {
       await trackedInvoke(TWO_CENTS, async (m) => m.report({ inputTokens: 0, outputTokens: 400_000 }));
@@ -198,9 +247,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       runInWallet({ role: "connector_sync", daemon: { name: "connector_sync", sourceId: "src1", dayCapUsd: 1 } }, () =>
         trackedInvoke(TWO_CENTS, billWorst)));
     const log = (await e.query(`SELECT role, daemon, daemon_source FROM mcp_spend_log`)).rows;
-    expect(log).toEqual([{ role: "connector_sync", daemon: "connector_sync", daemon_source: "src1" }]);
+    expect(log).toEqual([{ role: "outer/connector_sync", daemon: "connector_sync", daemon_source: "src1" }]);
     const hold = (await e.query(`SELECT role, daemon, daemon_source, status FROM mcp_spend_reservations`)).rows;
-    expect(hold).toEqual([{ role: "connector_sync", daemon: "connector_sync", daemon_source: "src1", status: "settled" }]);
+    expect(hold).toEqual([{ role: "outer/connector_sync", daemon: "connector_sync", daemon_source: "src1", status: "settled" }]);
   });
 
   it("an enclosing path's run cap still binds a call made in a nested path", async () => {
