@@ -85,6 +85,7 @@ import { runConfig, type ConfigSub } from "./commands/config.ts";
 import { runCapture } from "./commands/capture.ts";
 import { runTranscripts } from "./commands/transcripts.ts";
 import { runConnectors } from "./commands/connectors.ts";
+import { runDaemons } from "./commands/daemons.ts";
 import { runQuarantine, type QuarantineSub } from "./commands/quarantine.ts";
 import { runSecretsAudit } from "./commands/secrets.ts";
 import {
@@ -325,6 +326,8 @@ function printUsage(): void {
   console.log("                               mirror a repository's issues and pull requests into a github source");
   console.log("                               (token: MEMRAIN_GITHUB_TOKEN or --token-file; exit 1 partial, 2 re-auth)");
   console.log("  connectors status [--json]   watermark and last run of every connector");
+  console.log("  daemons status [--json]      background daemons: schedule, pauses, last run, scheduler leader");
+  console.log("  daemons pause|resume <name|all> [--source ID] [--reason TEXT] [--json]");
   console.log("  quarantine list [--include-flagged] [--json]");
   console.log("  quarantine clear <slug|path> [--force]");
   console.log("  quarantine scan [--limit N] [--apply]");
@@ -1822,6 +1825,16 @@ async function main(argv: readonly string[]): Promise<number> {
       if (flags.has("--dry-run")) opts.dryRun = true;
       if (flags.has("--json")) opts.json = true;
       return await runConnectors(opts);
+    }
+    case "daemons": {
+      const opts: Parameters<typeof runDaemons>[0] = { sub: positional[0] };
+      if (positional[1]) opts.name = positional[1];
+      const src = values.get("--source");
+      if (src) opts.sourceId = src;
+      const reason = values.get("--reason");
+      if (reason) opts.reason = reason;
+      if (flags.has("--json")) opts.json = true;
+      return await runDaemons(opts);
     }
     case "quarantine": {
       const sub = positional[0];

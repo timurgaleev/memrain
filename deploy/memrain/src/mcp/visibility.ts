@@ -50,6 +50,10 @@ export const OPERATOR_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "jobs_get",
   "jobs_cancel",
   "jobs_logs",
+  // Daemon status names the scheduler's host and every daemon's state; the
+  // control pauses brain-wide background work.
+  "daemons_status",
+  "daemons_control",
   // list_concepts reads synth_concepts, which has no source axis — its narratives
   // are clustered across EVERY tenant's atoms. An OAuth tenant token is trusted
   // (isPublic:false) so the public denylist doesn't cover it; gate it operator-only

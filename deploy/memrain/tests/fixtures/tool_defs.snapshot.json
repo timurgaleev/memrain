@@ -1403,6 +1403,57 @@
     }
   },
   {
+    "name": "daemons_status",
+    "description": "Background daemons: each one's schedule, lane, whether it is enabled or paused (and by whom), its last window or run, failures in a row and next window; plus a global pause and which process leads the scheduler. Operator only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "daemons_control",
+    "description": "Pause or resume a background daemon (`daemon: \"all\"` for every one). A pause stops new runs; resuming a daemon lifts its pauses for every source unless source_id is given, and restarts its failure count. Operator only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "pause",
+            "resume"
+          ]
+        },
+        "daemon": {
+          "type": "string",
+          "description": "Daemon name (see daemons_status) or \"all\"."
+        },
+        "source_id": {
+          "type": "string",
+          "description": "Only this source's runs of the named daemon."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Shown in status; up to 200 characters."
+        }
+      },
+      "required": [
+        "action",
+        "daemon"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "submit_agent",
     "description": "Queue a read-only research agent that runs under your own grant: it reads only your sources, uses only the read tools your client is bound to, spends against your daily budget, and stops if your grant is revoked or changed. Returns a job_id; poll get_agent_job. Needs the 'agent' scope, a daily budget on your client, and a free slot under your client's concurrency limit. Writes nothing.",
     "inputSchema": {
