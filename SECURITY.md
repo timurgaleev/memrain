@@ -98,7 +98,10 @@ opened and nothing is synced or queued.
   delete everything also needs the hash of the preview it deletes.
 - **Notification webhook.** `MEMRAIN_NOTIFY_WEBHOOK_URL` must be https to a
   host that is not loopback, private, link-local or `localhost`, with no
-  credentials in the URL; redirects are not followed. Each POST is signed
+  credentials in the URL. A host name is resolved again before each POST and
+  refused when any address is one of those (a name that changes its answer
+  between that lookup and the connection is not caught); redirects are not
+  followed. Each POST is signed
   (HMAC-SHA256 over the timestamp and raw body, secret from
   `<prefix>/memrain-notify-webhook`) and carries only a pointer: kind, id,
   admin link and time.

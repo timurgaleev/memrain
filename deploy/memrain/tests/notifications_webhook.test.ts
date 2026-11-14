@@ -14,6 +14,7 @@ import { registerSource } from "../src/core/sources.ts";
 import { openNotice, resolveNotice } from "../src/core/connectors/sync-store.ts";
 import { listNotifications, syncNotifications } from "../src/core/notifications/store.ts";
 import {
+  publicWebhookFetch,
   WEBHOOK_BACKOFF_MS,
   WEBHOOK_MAX_ATTEMPTS,
   deliverPendingWebhooks,
@@ -130,6 +131,29 @@ async function seedPending(e: Engine, now: Date): Promise<number> {
 const row = async (e: Engine, id: number) => (await e.query<{
   webhook_state: string; webhook_attempts: number; webhook_next_at: string | null; webhook_error: string | null;
 }>(`SELECT webhook_state, webhook_attempts, webhook_next_at::text AS webhook_next_at, webhook_error FROM notifications WHERE id = $1`, [id])).rows[0]!;
+
+describe("publicWebhookFetch", () => {
+  const sent: string[] = [];
+  const inner: FetchFn = async (url) => { sent.push(url); return new Response(null, { status: 204 }); };
+  const lookupTo = (...addresses: string[]) => async () => addresses.map(address => ({ address, family: address.includes(":") ? 6 : 4 }));
+
+  it("posts to a host whose every address is public", async () => {
+    sent.length = 0;
+    const f = publicWebhookFetch(inner, lookupTo("93.184.215.14", "2606:2800:21f:cb07:6820:80da:af6b:8b2c"));
+    expect((await f("https://hooks.example.test/in", { method: "POST" })).status).toBe(204);
+    expect(sent).toEqual(["https://hooks.example.test/in"]);
+  });
+
+  it("refuses a host name that resolves to a private, loopback or link-local address, and sends nothing", async () => {
+    sent.length = 0;
+    for (const addr of ["10.0.0.5", "127.0.0.1", "169.254.169.254", "::1", "fd00::1"]) {
+      const f = publicWebhookFetch(inner, lookupTo("93.184.215.14", addr));
+      const err = await f("https://hooks.example.test/in", { method: "POST" }).then(() => null, (e: unknown) => e as Error);
+      expect(err?.name).toBe("PrivateAddressError");
+    }
+    expect(sent).toEqual([]);
+  });
+});
 
 for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`webhook delivery (${name})`, () => {
   it("posts a signed, pointer-only payload once", async () => {

@@ -23,6 +23,7 @@
  */
 import { createHmac } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { isIPv4, isIPv6 } from "node:net";
 import type { Engine } from "../engine/interface.ts";
 import type { FetchFn } from "../connectors/client.ts";
@@ -91,6 +92,33 @@ export function privateHost(hostname: string): boolean {
   if (isIPv4(host)) return ipv4Private(host);
   if (isIPv6(host)) return ipv6Private(host);
   return false;
+}
+
+export type AddressLookup = (hostname: string) => Promise<Array<{ address: string; family: number }>>;
+
+const systemLookup: AddressLookup = (hostname) => dnsLookup(hostname, { all: true, verbatim: true });
+
+/**
+ * `inner`, refusing a URL whose host name resolves to any address the webhook
+ * must never reach. The configured URL is checked as written at load time; a
+ * name can still resolve somewhere private, so it is resolved again before
+ * each POST. A name that changes its answer between this lookup and the
+ * connection is not caught; the POST carries only a signed pointer and its
+ * answer is discarded.
+ */
+export function publicWebhookFetch(inner: FetchFn, lookup: AddressLookup = systemLookup): FetchFn {
+  return async (url, init) => {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+    if (!isIPv4(host) && !isIPv6(host)) {
+      const addresses = await lookup(host);
+      if (addresses.length === 0 || addresses.some(a => privateHost(a.address))) {
+        const err = new Error("the webhook host resolves to a loopback, private or link-local address");
+        err.name = "PrivateAddressError";
+        throw err;
+      }
+    }
+    return inner(url, init);
+  };
 }
 
 function readSecretFile(file: string): { secret: string } | { reason: string } {
@@ -201,6 +229,7 @@ async function post(fetchFn: FetchFn, config: WebhookConfig, body: string, id: n
     return res.status >= 200 && res.status < 300 ? null : `http_${res.status}`;
   } catch (e) {
     const name = e instanceof Error ? e.name : "";
+    if (name === "PrivateAddressError") return "private_address";
     return name === "TimeoutError" || name === "AbortError" ? "timeout" : "network";
   }
 }
@@ -215,7 +244,7 @@ export async function deliverPendingWebhooks(engine: Engine, config: WebhookConf
   const now = opts.now ?? new Date();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const batch = opts.batch ?? DEFAULT_BATCH;
-  const fetchFn = opts.fetch ?? ((url, init) => fetch(url, init));
+  const fetchFn = opts.fetch ?? publicWebhookFetch((url, init) => fetch(url, init));
   const clock = opts.clock ?? (() => new Date());
   const publicUrl = opts.publicUrl ?? process.env.MEMRAIN_PUBLIC_URL;
   const leaseUntil = new Date(now.getTime() + batch * timeoutMs + 60_000).toISOString();
