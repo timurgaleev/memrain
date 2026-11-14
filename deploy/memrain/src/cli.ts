@@ -329,6 +329,7 @@ function printUsage(): void {
   console.log("  connectors rotate-kek --old-file F --new-file F [--json]   re-seal connector secrets under a new key");
   console.log("  daemons status [--json]      background daemons: schedule, pauses, last run, scheduler leader");
   console.log("  daemons pause|resume <name|all> [--source ID] [--reason TEXT] [--json]");
+  console.log("  daemons enable|disable <name> [--source ID] [--json]");
   console.log("  quarantine list [--include-flagged] [--json]");
   console.log("  quarantine clear <slug|path> [--force]");
   console.log("  quarantine scan [--limit N] [--apply]");

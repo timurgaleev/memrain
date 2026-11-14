@@ -93,7 +93,7 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "skillpack": subs("lint"),
   "transcripts": subs("ingest", "status", "push"),
   "connectors": subs("github"),
-  "daemons": subs("status", "pause", "resume"),
+  "daemons": subs("status", "pause", "resume", "enable", "disable"),
   "migrate-engine": bare,
   "admin": subs("setup-link"),
   "auth": subs(

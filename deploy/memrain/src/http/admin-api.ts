@@ -39,7 +39,8 @@ import { normalizeScopesInput } from "../core/scope.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 import { handleAdminTool } from "./admin-tool.ts";
 import { defaultConnectorDeps, handleAdminConnectors } from "./admin-connectors.ts";
-import { daemonsStatus } from "../core/daemons/status.ts";
+import { controlDaemon, daemonsStatus } from "../core/daemons/status.ts";
+import { OperationError } from "../core/operation-error.ts";
 import type { RateLimiter } from "../mcp/rate_limit.ts";
 import type { SearchOptions } from "../core/search/hybrid.ts";
 
@@ -1095,6 +1096,24 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       return Response.json(await daemonsStatus(engine));
     } catch (e) {
       return serverError("daemons", e);
+    }
+  }
+
+  // POST /admin/api/daemons/control — pause, resume, enable or disable a
+  // daemon, for every source or one (= `memrain daemons ...`). Audited.
+  if (p === "/admin/api/daemons/control" && req.method === "POST") {
+    let body: { action?: unknown; daemon?: unknown; source_id?: unknown; reason?: unknown };
+    try {
+      body = (await req.json()) as typeof body;
+    } catch {
+      return badRequest("invalid JSON body");
+    }
+    if (body === null || typeof body !== "object") return badRequest("invalid JSON body");
+    try {
+      return Response.json(await controlDaemon(engine, body, "admin"));
+    } catch (e) {
+      if (e instanceof OperationError) return badRequest(e.message);
+      return serverError("daemons-control", e);
     }
   }
 

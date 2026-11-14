@@ -2,6 +2,7 @@
  * `memrain daemons status [--json]`
  * `memrain daemons pause <name|all> [--source ID] [--reason TEXT] [--json]`
  * `memrain daemons resume <name|all> [--source ID] [--json]`
+ * `memrain daemons enable|disable <name> [--source ID] [--json]`
  *
  * Pausing works whether or not a scheduler runs: the maintenance cycle obeys
  * it on its next tick, and a scheduler reads it before queueing anything.
@@ -45,6 +46,7 @@ function printStatus(r: DaemonsReport): void {
     console.log(`${d.name} [${d.schedule}, ${d.lane}${d.paid ? ", paid" : ""}]: ${state}${last}${fails}${next}`);
     for (const s of d.sources) {
       console.log(`  ${s.source_id}: ${s.paused ? `paused (${s.paused.by ?? "?"}${s.paused.reason ? `: ${s.paused.reason}` : ""})` : "running"}` +
+        (s.enabled === null ? "" : s.enabled ? ", enabled here" : ", disabled here") +
         (s.last_window ? `, last window ${s.last_window}` : "") +
         (s.consecutive_failures > 0 ? `, ${s.consecutive_failures} failure(s) in a row` : ""));
     }
@@ -53,8 +55,8 @@ function printStatus(r: DaemonsReport): void {
 
 export async function runDaemons(opts: DaemonsCmdOptions): Promise<number> {
   const sub = opts.sub;
-  if (sub !== "status" && sub !== "pause" && sub !== "resume") {
-    return fail("subcommand required (status | pause <name|all> | resume <name|all>)", opts.json);
+  if (sub !== "status" && sub !== "pause" && sub !== "resume" && sub !== "enable" && sub !== "disable") {
+    return fail("subcommand required (status | pause <name|all> | resume <name|all> | enable <name> | disable <name>)", opts.json);
   }
   if (sub !== "status" && !opts.name) return fail(`${sub}: a daemon name or 'all' is required`, opts.json);
   const storage = opts.storage ?? new Storage(loadConfig(opts.configPath));
