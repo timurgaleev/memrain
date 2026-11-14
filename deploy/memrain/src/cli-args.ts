@@ -326,6 +326,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
     "quarantine",
     new Set(["--apply", "--force", "--include-flagged", "--json", "--limit"]),
   ],
+  ["write-gate", new Set(["--all", "--json"])],
   ["secrets", new Set(["--apply", "--json", "--kinds", "--limit", "--source", "--yes"])],
   [
     "transcripts",
