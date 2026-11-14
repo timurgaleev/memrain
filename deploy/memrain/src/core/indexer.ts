@@ -264,8 +264,9 @@ export async function indexDocument(
     // Logged for a failed write too — those are the ones worth decomposing.
     // The path is JSON-quoted: a source id is operator-set and not otherwise
     // screened for control characters, so it must not be able to split the line.
+    // stderr, because stdout is a command's result (`memrain call page_put --json`).
     const ms = (n: number) => Math.round(n);
-    console.log(
+    console.error(
       `[memrain] index-timing op=${opts.timingLabel} status=${status} path=${JSON.stringify(input.sourcePath)}` +
         ` chunks=${stats.chunks} reused=${stats.reused} llm_ok=${stats.llmOk}` +
         ` llm_fallback=${stats.llmFallback} embeds=${stats.embeds} fence_embeds=${stats.fenceEmbeds}` +

@@ -169,6 +169,11 @@ Public ingress omits `message`. An unexpected failure on public ingress
 returns the text `internal error (incident <16 hex>)`; the server log line
 for that failure carries the same incident id.
 
+Every code, with its class, retryability and what to do, is listed in
+[docs/ERRORS.md](../../../docs/ERRORS.md); every tool and its parameters in
+[docs/TOOLS.md](../../../docs/TOOLS.md). Both pages are generated from the code
+(`bun scripts/gen-catalogs.ts`) and a test fails when they fall behind.
+
 ### Page write reasons
 
 `page_put`, `page_edit`, `page_delete` and `page_revert` accept optional
@@ -419,6 +424,31 @@ docker exec deploy-memrain-1 sh -c '
   echo "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"stats\"}}" \
     | wget -qO- --post-file=/dev/stdin --header=Content-Type:application/json http://127.0.0.1:18790/mcp
 '
+```
+
+From a shell, `memrain call <tool> --args '<json>'` runs a tool locally on the
+internal ingress.
+
+### CLI `--json`
+
+`status`, `doctor`, `search`, `call`, `pages`, `eval`, `daemons`,
+`connectors`, `models`, `sources`, `secrets`, `export`, `spend`, `engine` and
+`version` accept `--json`, and with it stdout is exactly one JSON object —
+`JSON.parse(stdout)` is enough. Progress and warnings stay on stderr; exit
+codes are the same as without the flag.
+
+- A command that has its own JSON report prints it unchanged, on success and
+  on failure — `memrain call` passes a tool's error envelope through, with the
+  code in `error`. The exit code says which it was.
+- Other output is wrapped: `{"ok": true, "data": {"text": "…"}}`.
+- A failure with no JSON report of its own is
+  `{"ok": false, "error": {…}, "exit_code": N}`. A structured error adds
+  `code`, `error_class`, `retryable` and a `docs` link into ERRORS.md.
+
+```bash
+memrain status --json | jq .stats
+memrain search --json            # missing query
+# {"ok":false,"error":{"message":"memrain search: <query> is required"},"exit_code":1}
 ```
 
 ## Auth & exposure

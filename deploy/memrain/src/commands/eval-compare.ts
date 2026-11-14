@@ -219,6 +219,10 @@ export async function runEvalCompareCmd(opts: EvalCompareOptions = {}): Promise<
   const path = opts.input ?? defaultResultsPath();
   const records = readResults(path);
   if (records.length === 0) {
+    if (opts.json) {
+      console.log(JSON.stringify({ ok: true, input: path, grouped: {}, glossary: METRIC_GLOSSARY }, null, 2));
+      return 0;
+    }
     console.log(`No eval results found at ${path}.`);
     console.log(`Run: memrain eval run-all --modes ${SEARCH_MODES.join(",")}`);
     return 0;

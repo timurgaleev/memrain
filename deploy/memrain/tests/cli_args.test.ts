@@ -16,6 +16,7 @@ import {
   VALUELESS_FLAGS,
   VALUE_FLAGS,
   KNOWN_FLAGS,
+  JSON_GUARDED_COMMANDS,
 } from "../src/cli-args.ts";
 
 /** The parser exactly as it shipped before this file existed (cli.ts:85-106). */
@@ -217,6 +218,18 @@ describe("SAFETY_FLAG_COMMANDS is derived from cli.ts, not hand-maintained", () 
 
   it("still refuses a safety flag on a command that ignores it", () => {
     expect(() => parseArgs(["doctor", "--fix"])).toThrow(/not supported by 'doctor'/);
+  });
+});
+
+describe("--json on the guarded commands", () => {
+  it("is accepted by every guarded command, whether or not its case reads it", () => {
+    for (const cmd of JSON_GUARDED_COMMANDS) {
+      expect(() => parseArgs([cmd, "--json"])).not.toThrow();
+    }
+  });
+
+  it("is still refused by a command outside the guarded set", () => {
+    expect(() => parseArgs(["reindex", "--json"])).toThrow(/unknown flag '--json'/);
   });
 });
 

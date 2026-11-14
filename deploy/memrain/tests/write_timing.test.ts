@@ -52,7 +52,7 @@ describe("index timing line", () => {
     const opts = { embedFn, contextualLlmFn };
     await indexDocument(storage, { sourcePath: "/notes/t.md", text: docText() }, opts);
 
-    const log = spyOn(console, "log").mockImplementation(() => {});
+    const log = spyOn(console, "error").mockImplementation(() => {});
     try {
       await indexDocument(
         storage,
@@ -78,7 +78,7 @@ describe("index timing line", () => {
   });
 
   it("logs a failed write too, and quotes the path so it cannot split the line", async () => {
-    const log = spyOn(console, "log").mockImplementation(() => {});
+    const log = spyOn(console, "error").mockImplementation(() => {});
     try {
       const failingEmbed = async () => {
         throw new Error("bedrock down");
@@ -101,7 +101,7 @@ describe("index timing line", () => {
   });
 
   it("stays quiet for an unlabelled index", async () => {
-    const log = spyOn(console, "log").mockImplementation(() => {});
+    const log = spyOn(console, "error").mockImplementation(() => {});
     try {
       await indexDocument(storage, { sourcePath: "/notes/q.md", text: docText() }, { embedFn });
       expect(timingLines(log)).toHaveLength(0);
