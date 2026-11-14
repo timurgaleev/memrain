@@ -89,7 +89,7 @@ const EMPTY_COUNTS: DeleteCounts = {
 };
 
 /** The page predicate every delete shares: this source, a connector page, this account. */
-const OWNED_PAGE = `p.source_id = $1 AND p.compiled_truth->>'origin' = 'connector' AND p.compiled_truth->>'account' = $2`;
+const ownedPageScope = `p.source_id = $1 AND p.compiled_truth->>'origin' = 'connector' AND p.compiled_truth->>'account' = $2`;
 
 function hash(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
@@ -122,9 +122,11 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
     [paths, sourceId],
   )).rows.map(r => r.id);
   const chunkIds = (await tx.query<{ id: string }>(
+    // scope: upstream document ids come from the source-scoped read above
     `SELECT id FROM chunks WHERE document_id = ANY($1::text[])`, [docIds],
   )).rows.map(r => r.id);
 
+  // scope: upstream the slug is a page the caller locked as this source's own; every version of it goes
   counts.versions += await count(tx, `SELECT count(*)::int AS n FROM page_versions WHERE slug = $1`, [slug]);
   counts.embeddings += await count(tx, `SELECT count(*)::int AS n FROM embeddings WHERE chunk_id = ANY($1::text[])`, [chunkIds]);
   counts.chunks += chunkIds.length;
@@ -137,10 +139,12 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
     [slug, sourceId, chunkIds])).rows.map(r => r.id);
   counts.facts += factIds.length;
   counts.timeline_events += await count(tx,
+    // scope: upstream owned slug and its chunk ids; everything drawn from them goes
     `WITH d AS (DELETE FROM timeline_events WHERE slug = $1 OR source_chunk_id = ANY($2::text[]) RETURNING 1)
      SELECT count(*)::int AS n FROM d`,
     [slug, chunkIds]);
   counts.links += await count(tx,
+    // scope: upstream links the owned slug is the source or provenance of
     `WITH d AS (DELETE FROM links WHERE source_slug = $1 OR origin_slug = $1 RETURNING 1)
      SELECT count(*)::int AS n FROM d`,
     [slug]);
@@ -173,6 +177,7 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
   counts.contradictions += pairs.length;
   if (pairs.length > 0) await tx.query(`DELETE FROM synth_contradiction_verdicts WHERE pair_key = ANY($1::text[])`, [pairs]);
   counts.documents += await count(tx,
+    // scope: upstream document ids come from the source-scoped read above
     `WITH d AS (DELETE FROM documents WHERE id = ANY($1::text[]) RETURNING 1) SELECT count(*)::int AS n FROM d`,
     [docIds]);
   const rest = await leftovers(tx, [slug], true);
@@ -186,6 +191,8 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
  * Returns the deletable ones with their sources and how many were kept.
  */
 async function automaticPages(tx: Engine, where: string, params: unknown[], type: string, prefix: string, writer: string): Promise<{ pages: Array<{ slug: string; source_id: string }>; kept: number }> {
+  // scope: upstream callers pass the page predicate: the account's source for atom pages, and for
+  // concept pages the brain-wide synthesis output narrated over an atom this delete removed
   const rows = (await tx.query<{ slug: string; source_id: string; automatic: boolean }>(
     `SELECT p.slug, p.source_id,
             (p.type = '${type}' AND p.slug LIKE '${prefix}%'
@@ -207,7 +214,7 @@ async function automaticPages(tx: Engine, where: string, params: unknown[], type
 async function deleteOwnedPage(tx: Engine, scope: ConnectorScope, slug: string, expectedContentHash?: string): Promise<DeleteCounts | "changed" | null> {
   await lockPageSlugs(tx, slug);
   const page = await tx.query<{ content_hash: string }>(
-    `SELECT p.content_hash FROM pages p WHERE p.slug = $3 AND ${OWNED_PAGE} FOR UPDATE`,
+    `SELECT p.content_hash FROM pages p WHERE p.slug = $3 AND ${ownedPageScope} FOR UPDATE`,
     [scope.sourceId, scope.accountRef, slug],
   );
   if (page.rows.length === 0) return null;
@@ -310,7 +317,7 @@ export function massDeleteVerdict(requested: number, total: number, env: NodeJS.
 }
 
 async function accountPageCount(engine: Engine, scope: ConnectorScope): Promise<number> {
-  return count(engine, `SELECT count(*)::int AS n FROM pages p WHERE ${OWNED_PAGE}`, [scope.sourceId, scope.accountRef]);
+  return count(engine, `SELECT count(*)::int AS n FROM pages p WHERE ${ownedPageScope}`, [scope.sourceId, scope.accountRef]);
 }
 
 export interface ProviderDeletionResult {
@@ -400,7 +407,7 @@ export async function sweepRetention(
   const cutoff = new Date((opts.now ?? Date.now)() - days * 86_400_000).toISOString();
   const due = (await engine.query<{ slug: string }>(
     `SELECT p.slug FROM pages p
-      WHERE ${OWNED_PAGE} AND p.compiled_truth->>'kind' = $3
+      WHERE ${ownedPageScope} AND p.compiled_truth->>'kind' = $3
         AND p.compiled_truth->>'last_activity_at' < $4
       ORDER BY p.compiled_truth->>'last_activity_at', p.slug
       LIMIT $5`,
@@ -428,7 +435,7 @@ export interface ConnectorDataPreview {
 
 async function planSlugs(engine: Engine, scope: ConnectorScope): Promise<Array<{ slug: string; content_hash: string }>> {
   return (await engine.query<{ slug: string; content_hash: string }>(
-    `SELECT p.slug, p.content_hash FROM pages p WHERE ${OWNED_PAGE} ORDER BY p.slug`,
+    `SELECT p.slug, p.content_hash FROM pages p WHERE ${ownedPageScope} ORDER BY p.slug`,
     [scope.sourceId, scope.accountRef],
   )).rows;
 }
@@ -458,6 +465,7 @@ export async function previewConnectorData(storage: Storage, scope: ConnectorSco
            OR f.source_chunk_id = ANY($3::text[])`,
       [slugs, scope.sourceId, chunkIds]),
     timeline_events: await count(engine,
+      // scope: upstream slugs and chunk ids come from the source-scoped plan above
       `SELECT count(*)::int AS n FROM timeline_events WHERE slug = ANY($1::text[]) OR source_chunk_id = ANY($2::text[])`,
       [slugs, chunkIds]),
     plan_hash: planHash(rows),

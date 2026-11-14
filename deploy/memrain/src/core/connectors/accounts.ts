@@ -117,6 +117,7 @@ export async function createAccount(engine: Engine, input: CreateAccountInput): 
 }
 
 export async function getAccount(engine: Engine, id: string): Promise<ConnectorAccount | null> {
+  // scope: operator-only the sync worker (account id from its own job) and operator routes; a member route lists by source
   const r = await engine.query<RawAccount>(`SELECT ${ACCOUNT_COLS} FROM connector_accounts WHERE id = $1`, [id]);
   return r.rows[0] ? toAccount(r.rows[0]) : null;
 }
@@ -136,6 +137,7 @@ export async function findAccount(
 
 export async function listAccounts(engine: Engine, opts: { sourceId?: string } = {}): Promise<ConnectorAccount[]> {
   const r = opts.sourceId === undefined
+    // scope: operator-only the admin connectors page and doctor list every account; members pass sourceId
     ? await engine.query<RawAccount>(`SELECT ${ACCOUNT_COLS} FROM connector_accounts ORDER BY created_at, id`)
     : await engine.query<RawAccount>(
       `SELECT ${ACCOUNT_COLS} FROM connector_accounts WHERE source_id = $1 ORDER BY created_at, id`,
@@ -248,6 +250,7 @@ export async function readCredential(
     scopes: string[];
     expires_at: Date | string | null;
   }>(
+    // scope: operator-only the sync worker and operator disconnect open a credential; no member request reads one
     `SELECT a.provider, c.kek_id, c.nonce, c.ciphertext, c.scopes, c.expires_at
        FROM connector_credentials c JOIN connector_accounts a ON a.id = c.account_id
       WHERE c.account_id = $1`,

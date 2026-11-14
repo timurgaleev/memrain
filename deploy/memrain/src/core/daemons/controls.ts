@@ -63,6 +63,7 @@ const COLS = `daemon, source_id, enabled, paused, paused_reason, paused_by,
   consecutive_failures, last_window, last_run_at::text AS last_run_at, last_outcome`;
 
 export async function readControls(engine: Engine): Promise<DaemonControlRow[]> {
+  // scope: operator-only the scheduler tick and the operator's daemons_status read every source's controls
   const r = await engine.query<DaemonControlRow>(`SELECT ${COLS} FROM daemon_controls ORDER BY daemon, source_id`);
   return r.rows.map(row => ({ ...row, consecutive_failures: Number(row.consecutive_failures) }));
 }

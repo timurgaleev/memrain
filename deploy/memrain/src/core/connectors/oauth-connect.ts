@@ -256,6 +256,7 @@ async function consumeState(deps: ConnectDeps, state: unknown, provider: string,
   );
   const row = r.rows[0];
   if (!row) {
+    // scope: operator-only admin connect callback; the state hash is the capability and was bound to the session
     const seen = await deps.engine.query(`SELECT 1 FROM connector_oauth_states WHERE state_hash = $1`, [stateHash]);
     throw new ConnectError(seen.rows.length > 0 ? "state_used" : "state_invalid");
   }
@@ -445,6 +446,7 @@ export async function disconnectAccount(
   accountId: string,
   opts: { force?: boolean } = {},
 ): Promise<{ revoked: boolean; credentialKept: boolean }> {
+  // scope: operator-only disconnect is an operator action on a named account
   const r = await deps.engine.query<{ provider: string }>(`SELECT provider FROM connector_accounts WHERE id = $1`, [accountId]);
   const row = r.rows[0];
   if (!row) throw new ConnectError("account_not_found");

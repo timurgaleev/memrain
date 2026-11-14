@@ -25,6 +25,7 @@ export async function rotateKek(engine: Engine, oldKeys: Kek | readonly Kek[], n
   return engine.transaction(async (tx) => {
     await tx.query(`LOCK TABLE connector_credentials, connector_oauth_clients, connector_oauth_states IN SHARE ROW EXCLUSIVE MODE`);
 
+    // scope: operator-only key rotation reseals every credential in the brain
     const creds = await tx.query<SealedRow & { account_id: string; provider: string }>(
       `SELECT c.account_id, a.provider, c.kek_id, c.nonce, c.ciphertext
          FROM connector_credentials c JOIN connector_accounts a ON a.id = c.account_id
@@ -55,6 +56,7 @@ export async function rotateKek(engine: Engine, oldKeys: Kek | readonly Kek[], n
       );
     }
 
+    // scope: operator-only key rotation reseals every pending connect state
     const states = await tx.query<{ state_hash: string; provider: string; kek_id: string; nonce: string; pkce_verifier_enc: string }>(
       `SELECT state_hash, provider, kek_id, nonce, pkce_verifier_enc FROM connector_oauth_states WHERE kek_id <> $1 ORDER BY state_hash`,
       [next.id],

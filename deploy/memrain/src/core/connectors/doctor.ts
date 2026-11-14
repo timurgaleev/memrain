@@ -11,6 +11,7 @@ const NAMED = 5;
 
 export async function checkConnectorAccounts(engine: Engine, env: NodeJS.ProcessEnv = process.env): Promise<OpsCheckResult> {
   const st = connectorsStatus(env);
+  // scope: operator-only doctor reports every account (run_doctor is operator-only)
   const accounts = await engine.query<{ id: string; provider: string; status: string; status_reason: string | null }>(
     `SELECT id::text AS id, provider, status, status_reason FROM connector_accounts ORDER BY created_at, id`,
   );
@@ -18,6 +19,7 @@ export async function checkConnectorAccounts(engine: Engine, env: NodeJS.Process
   const problems: string[] = [];
 
   if (st.kekId !== null) {
+    // scope: operator-only doctor counts rows sealed under another key, brain-wide
     const foreign = await engine.query<{ credentials: number; clients: number; states: number }>(
       `SELECT (SELECT count(*) FROM connector_credentials WHERE kek_id <> $1)::int AS credentials,
               (SELECT count(*) FROM connector_oauth_clients WHERE kek_id <> $1)::int AS clients,
