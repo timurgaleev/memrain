@@ -150,6 +150,8 @@ export interface IndexFileOptions {
    * reindex leave it unset and stay quiet.
    */
   timingLabel?: string;
+  /** The path the timing line names in place of the source path, when the caller logs a redacted label. */
+  timingPath?: string;
   /** `indexFile` only: a guard the caller already loaded, in place of one over the configured roots. */
   rereadGuard?: RereadGuard;
   /** Reviewed repairs retain old chunks if any requested embedding fails. */
@@ -267,7 +269,7 @@ export async function indexDocument(
     // stderr, because stdout is a command's result (`memrain call page_put --json`).
     const ms = (n: number) => Math.round(n);
     console.error(
-      `[memrain] index-timing op=${opts.timingLabel} status=${status} path=${JSON.stringify(input.sourcePath)}` +
+      `[memrain] index-timing op=${opts.timingLabel} status=${status} path=${JSON.stringify(opts.timingPath ?? input.sourcePath)}` +
         ` chunks=${stats.chunks} reused=${stats.reused} llm_ok=${stats.llmOk}` +
         ` llm_fallback=${stats.llmFallback} embeds=${stats.embeds} fence_embeds=${stats.fenceEmbeds}` +
         ` ms_total=${ms(performance.now() - started)} ms_bedrock=${ms(timing.sendMs - timing.queueMs)}` +
