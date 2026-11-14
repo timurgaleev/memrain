@@ -36,6 +36,8 @@ import {
   type TokenSet,
 } from "./accounts.ts";
 import { getOAuthClient } from "./oauth-clients.ts";
+import { acquireWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
+import { refreshLockId } from "./token-provider.ts";
 import type { ConnectorProvider, ProviderRegistry } from "./providers.ts";
 import { oauthStateAad, seal, unseal, type Kek } from "./vault.ts";
 
@@ -66,7 +68,8 @@ export type ConnectErrorCode =
   | "token_exchange"
   | "scope_mismatch"
   | "identity"
-  | "account_not_found";
+  | "account_not_found"
+  | "refresh_in_progress";
 
 const MESSAGES: Record<ConnectErrorCode, string> = {
   connectors_disabled: "connectors are off or the connector key is missing",
@@ -87,6 +90,7 @@ const MESSAGES: Record<ConnectErrorCode, string> = {
   scope_mismatch: "the provider granted different scopes than requested; the grant was refused",
   identity: "could not read the connected account's identity",
   account_not_found: "connector account not found",
+  refresh_in_progress: "a worker is renewing this account's token; try the disconnect again shortly",
 };
 
 export class ConnectError extends Error {
@@ -433,6 +437,11 @@ async function persistGrant(
   });
 }
 
+/** How long a disconnect waits for a token refresh in flight; the refresh lock outlives a provider call. */
+const DISCONNECT_WAIT_MS = 30_000;
+const DISCONNECT_LOCK_TTL_SEC = 60;
+const DISCONNECT_POLL_MS = 250;
+
 /**
  * Disconnect an account: revoke its token upstream, then drop the credential
  * and park the account as revoked and disabled. When the provider can revoke
@@ -441,17 +450,43 @@ async function persistGrant(
  * later retry can still revoke it; `force` drops it anyway. A provider with no
  * revocation endpoint has nothing to retry. Pages stay either way; deleting
  * them is a separate, explicit step.
+ *
+ * The whole disconnect holds the account's refresh lock. A provider that
+ * rotates refresh tokens retires the old one on every renewal, so a revoke
+ * sent while a refresh is in flight would revoke the dead token and leave the
+ * rotated one live at the provider. Waiting for the refresh lets the
+ * disconnect read, and revoke, whatever the refresh stored.
  */
 export async function disconnectAccount(
   deps: ConnectDeps,
   accountId: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; waitMs?: number } = {},
 ): Promise<{ revoked: boolean; credentialKept: boolean }> {
   // scope: operator-only disconnect is an operator action on a named account
   const r = await deps.engine.query<{ provider: string }>(`SELECT provider FROM connector_accounts WHERE id = $1`, [accountId]);
   const row = r.rows[0];
   if (!row) throw new ConnectError("account_not_found");
-  const provider = deps.providers.get(row.provider);
+  const lockId = refreshLockId(accountId);
+  const holder = `disconnect:${crypto.randomUUID()}`;
+  const waitMs = opts.waitMs ?? DISCONNECT_WAIT_MS;
+  for (let waited = 0; !(await acquireWorkerLock(deps.engine, lockId, holder, DISCONNECT_LOCK_TTL_SEC)); waited += DISCONNECT_POLL_MS) {
+    if (waited >= waitMs) throw new ConnectError("refresh_in_progress");
+    await new Promise((resolve) => setTimeout(resolve, DISCONNECT_POLL_MS));
+  }
+  try {
+    return await disconnectLocked(deps, accountId, row.provider, opts.force === true);
+  } finally {
+    await releaseWorkerLock(deps.engine, lockId, holder);
+  }
+}
+
+async function disconnectLocked(
+  deps: ConnectDeps,
+  accountId: string,
+  providerId: string,
+  force: boolean,
+): Promise<{ revoked: boolean; credentialKept: boolean }> {
+  const provider = deps.providers.get(providerId);
   const hasCredential = (await deps.engine.query(`SELECT 1 FROM connector_credentials WHERE account_id = $1`, [accountId])).rows.length > 0;
   const canRevoke = provider !== null && (provider.revoke !== undefined || provider.revokeUrl !== undefined);
   let revoked = false;
@@ -464,7 +499,7 @@ export async function disconnectAccount(
   }
   // Unknown provider: we cannot tell whether a revoke is owed, so keep it too.
   const owesRevoke = hasCredential && (canRevoke || provider === null) && !revoked;
-  const keep = owesRevoke && opts.force !== true;
+  const keep = owesRevoke && !force;
   await deps.engine.transaction(async (tx) => {
     if (!keep) await tx.query(`DELETE FROM connector_credentials WHERE account_id = $1`, [accountId]);
     await tx.query(`UPDATE connector_accounts SET enabled = FALSE, updated_at = NOW() WHERE id = $1`, [accountId]);
