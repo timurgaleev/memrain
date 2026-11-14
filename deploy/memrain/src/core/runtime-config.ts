@@ -62,16 +62,21 @@ export const ENV_ONLY_KEYS: ReadonlySet<string> = new Set([
   "MEMRAIN_EVENT_LOOP_WATCHDOG_MS",
   "MEMRAIN_CONNECTOR_KEK",
   "MEMRAIN_CONNECTOR_KEK_FILE",
+  "MEMRAIN_NOTIFY_WEBHOOK_SECRET",
+  "MEMRAIN_NOTIFY_WEBHOOK_SECRET_FILE",
 ]);
 
 /**
  * Keys `setRuntimeConfig` refuses to store at all: the connector key seals
  * tokens kept in this same database, so a copy in runtime_config would let a
- * dump open them.
+ * dump open them; the notification webhook secret would let a dump sign
+ * notifications the owner's receiver trusts.
  */
 export const NEVER_STORED_KEYS: ReadonlySet<string> = new Set([
   "MEMRAIN_CONNECTOR_KEK",
   "MEMRAIN_CONNECTOR_KEK_FILE",
+  "MEMRAIN_NOTIFY_WEBHOOK_SECRET",
+  "MEMRAIN_NOTIFY_WEBHOOK_SECRET_FILE",
 ]);
 
 /**
@@ -124,7 +129,7 @@ export async function setRuntimeConfig(
 ): Promise<string> {
   const stored = isRuntimeConfigKey(key) ? canonicalKey(key) : key;
   if (NEVER_STORED_KEYS.has(canonicalKey(key))) {
-    throw new Error(`${stored} protects data in this database; set it in the environment only`);
+    throw new Error(`${stored} is a secret kept out of this database; set it in the environment only`);
   }
   await engine.query(
     `INSERT INTO runtime_config (key, value, updated_at)
