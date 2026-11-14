@@ -138,6 +138,19 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("a malformed cron or zone override skips that daemon instead of failing the tick", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      registerDaemon(probe());
+      registerDaemon(probe({ name: "other", kind: "daemon_probe" }));
+      await e.query(`INSERT INTO daemon_controls (daemon, source_id, timezone) VALUES ('probe', '*', 'Mars/Olympus')`);
+      await e.query(`INSERT INTO daemon_controls (daemon, source_id, cron) VALUES ('other', '*', '61 * * * *')`);
+      const r = await enqueueDueDaemons(e, MORNING, { env: ON });
+      expect(Object.fromEntries(r.map(x => [x.daemon, x.outcome]))).toEqual({ other: "bad_schedule", probe: "bad_schedule" });
+    } finally { await db.close(); }
+  });
+
   it("refuses a paid daemon when no brain-wide daily cap is set", async () => {
     const db = await open();
     const e = db.storage.engine();

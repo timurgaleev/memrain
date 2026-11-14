@@ -26,7 +26,7 @@ import {
   recordWindow,
   resolveControl,
 } from "./controls.ts";
-import { CronError, parseCron, previousFire, windowKey } from "./cron.ts";
+import { CronError, assertTimeZone, parseCron, previousFire, windowKey } from "./cron.ts";
 import { DEFAULT_DAEMON_SOURCE, listDaemons, type DaemonSpec, type DaemonTarget } from "./registry.ts";
 
 export const DAEMON_LOCK_ID = "memrain-daemons";
@@ -83,12 +83,12 @@ export function daemonJobPrefix(daemon: string, sourceId: string): string {
  * A run is a job row: its retries are one run, and a run deferred by an
  * outage is still pending, so neither inflates the count.
  */
-export async function consecutiveFailures(engine: Engine, daemon: string, sourceId: string, since: string | null): Promise<number> {
+export async function consecutiveFailures(engine: Engine, spec: DaemonSpec, sourceId: string, since: string | null): Promise<number> {
   const r = await engine.query<{ status: string }>(
     `SELECT status FROM jobs
-      WHERE starts_with(id, $1) AND status IN ('succeeded', 'failed') AND created_at > $2
+      WHERE kind = $4 AND starts_with(id, $1) AND status IN ('succeeded', 'failed') AND created_at > $2
       ORDER BY created_at DESC LIMIT $3`,
-    [daemonJobPrefix(daemon, sourceId), since ?? new Date(0).toISOString(), AUTO_PAUSE_AFTER_FAILURES],
+    [daemonJobPrefix(spec.name, sourceId), since ?? new Date(0).toISOString(), AUTO_PAUSE_AFTER_FAILURES, spec.kind],
   );
   let n = 0;
   for (const row of r.rows) {
@@ -147,7 +147,7 @@ async function enqueueTarget(
   const ctl = resolveControl(rows, spec.name, t.sourceId);
   if (ctl.pausedBy) return { ...base, outcome: "paused" };
   if (!(ctl.enabled ?? spec.defaultEnabled)) return { ...base, outcome: "disabled" };
-  const failures = await consecutiveFailures(engine, spec.name, t.sourceId, ctl.resumedAt);
+  const failures = await consecutiveFailures(engine, spec, t.sourceId, ctl.resumedAt);
   if (failures >= AUTO_PAUSE_AFTER_FAILURES) {
     if (await autoPause(engine, spec.name, t.sourceId, failures)) {
       log("warn", `${spec.name} (${t.sourceId}) auto-paused after ${failures} failed runs in a row; resume with \`memrain daemons resume ${spec.name}\``);
@@ -158,7 +158,7 @@ async function enqueueTarget(
   const tz = ctl.timezone ?? schedule.timezone ?? "UTC";
   let fire;
   try {
-    fire = previousFire(parseCron(ctl.cron ?? schedule.cron), now, tz);
+    fire = previousFire(parseCron(ctl.cron ?? schedule.cron), now, assertTimeZone(tz));
   } catch (e) {
     if (!(e instanceof CronError)) throw e;
     return { ...base, outcome: "bad_schedule", detail: e.message };
