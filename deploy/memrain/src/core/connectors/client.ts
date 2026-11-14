@@ -12,18 +12,39 @@
  * instead of parking the run for an hour. Server errors and network failures
  * are retried a bounded number of times with a growing back-off.
  *
- * The token lives in the Authorization header only. Error text is built from
+ * The credential is a static token (GitHub) or a token source that can renew
+ * it. With a source, a 401 earns exactly one forced refresh and one retry; a
+ * second 401, or a refresh the provider refuses, ends the request
+ * `auth_required` with `reauth` set, which the sync engine turns into a paused
+ * account waiting for its owner to reconnect.
+ *
+ * A token lives in the Authorization header only. Error text is built from
  * status codes and classes, and anything that does quote a thrown message has
- * the token scrubbed from it first.
+ * every token this client sent scrubbed from it first.
  */
 import { classifyResponse, CLASSIFY_BODY_PREFIX } from "./classify.ts";
-import type { ResponseClass } from "./types.ts";
+import type { ProviderLimiter } from "./limiter.ts";
+import { ReauthRequiredError, type ResponseClass } from "./types.ts";
 
 export type FetchFn = (url: string, init: RequestInit) => Promise<Response>;
 
+/**
+ * A credential that can be renewed. `token` returns the access token to send;
+ * `refresh` is called with the token the provider just refused and returns a
+ * fresh one. Either throws ReauthRequiredError when only a reconnect helps.
+ */
+export interface TokenSource {
+  token(): Promise<string>;
+  refresh(stale: string): Promise<string>;
+}
+
 export interface ConnectorClientOptions {
   origin: string;
-  token: string;
+  /** A static token. Exactly one of `token` and `tokenSource`. */
+  token?: string;
+  tokenSource?: TokenSource;
+  /** Shared pacing for every client of one account; replaces `minSpacingMs`. */
+  limiter?: ProviderLimiter;
   /** Extra request headers (Accept, API version, User-Agent). */
   headers?: Record<string, string>;
   fetch?: FetchFn;
@@ -47,6 +68,8 @@ export interface ConnectorResponse {
   next: string | null;
   /** Why the request did not end `ok`, safe to print. */
   error: string | null;
+  /** Set on `auth_required` when the credential cannot be renewed: the owner has to reconnect. */
+  reauth?: boolean;
 }
 
 /** A path or pagination link the client refuses to request. */
@@ -79,7 +102,12 @@ export function parseNextLink(header: string | null): string | null {
 
 export class ConnectorClient {
   private readonly origin: string;
-  private readonly token: string;
+  private readonly tokenSource: TokenSource;
+  /** False for a static token: a 401 cannot be fixed by asking again. */
+  private readonly renewable: boolean;
+  private readonly limiter: ProviderLimiter | null;
+  /** Every token this client has put on the wire, for scrubbing error text. */
+  private readonly sent = new Set<string>();
   private readonly headers: Record<string, string>;
   private readonly fetchFn: FetchFn;
   private readonly now: () => number;
@@ -92,9 +120,15 @@ export class ConnectorClient {
   constructor(opts: ConnectorClientOptions) {
     const origin = new URL(opts.origin).origin;
     if (!origin.startsWith("https://")) throw new ConnectorRequestError(`connector origin must be https (got ${origin})`);
-    if (opts.token.length === 0) throw new ConnectorRequestError("connector token is empty");
+    if ((opts.token === undefined) === (opts.tokenSource === undefined)) {
+      throw new ConnectorRequestError("connector client takes exactly one of a token and a token source");
+    }
+    if (opts.token !== undefined && opts.token.length === 0) throw new ConnectorRequestError("connector token is empty");
     this.origin = origin;
-    this.token = opts.token;
+    const fixed = opts.token;
+    this.renewable = fixed === undefined;
+    this.tokenSource = opts.tokenSource ?? { token: async () => fixed!, refresh: async () => fixed! };
+    this.limiter = opts.limiter ?? null;
     this.headers = opts.headers ?? {};
     this.fetchFn = opts.fetch ?? ((url, init) => fetch(url, init));
     this.now = opts.now ?? Date.now;
@@ -130,13 +164,46 @@ export class ConnectorClient {
   }
 
   private scrub(text: string): string {
-    return text.split(this.token).join("[token]");
+    let out = text;
+    for (const token of this.sent) out = out.split(token).join("[token]");
+    return out;
   }
 
-  private async space(): Promise<void> {
-    if (this.lastRequestAt === null) return;
+  /** Wait for this request's slot; a reason string when it may not go at all. */
+  private async space(): Promise<string | null> {
+    if (this.limiter !== null) return this.limiter.acquire();
+    if (this.lastRequestAt === null) return null;
     const wait = this.lastRequestAt + this.minSpacingMs - this.now();
     if (wait > 0) await this.sleep(wait);
+    return null;
+  }
+
+  /** The token to send, or the response that ends the request when there is none. */
+  private async currentToken(): Promise<string | ConnectorResponse> {
+    try {
+      const token = await this.tokenSource.token();
+      if (token.length === 0) throw new ReauthRequiredError("the credential holds no access token");
+      return token;
+    } catch (e) {
+      return this.tokenFailure(e, "token unavailable");
+    }
+  }
+
+  private tokenFailure(e: unknown, what: string): ConnectorResponse {
+    if (e instanceof ReauthRequiredError) {
+      return {
+        class: "auth_required",
+        status: 0,
+        body: null,
+        next: null,
+        error: `${what}: the provider will not renew the credential; reconnect the account`,
+        reauth: true,
+      };
+    }
+    // A token endpoint that is down or slow is not the owner's problem: the
+    // next run tries again.
+    const reason = this.scrub(e instanceof Error ? e.message : String(e));
+    return { class: "server_error", status: 0, body: null, next: null, error: `${what}: ${reason}` };
   }
 
   /** How long the provider asked us to wait, in ms, or the default. */
@@ -155,16 +222,22 @@ export class ConnectorClient {
 
   async get(path: string): Promise<ConnectorResponse> {
     const url = this.urlFor(path);
+    let refreshed = false;
+    let pending = await this.currentToken();
     for (let attempt = 0; ; attempt++) {
-      await this.space();
+      if (typeof pending !== "string") return pending;
+      const token = pending;
+      const refusal = await this.space();
+      if (refusal !== null) return { class: "rate_limited", status: 0, body: null, next: null, error: refusal };
       this.lastRequestAt = this.now();
+      this.sent.add(token);
       let res: Response;
       let text: string;
       try {
         res = await this.fetchFn(url, {
           method: "GET",
           redirect: "manual",
-          headers: { ...this.headers, Authorization: `Bearer ${this.token}` },
+          headers: { ...this.headers, Authorization: `Bearer ${token}` },
         });
         text = await res.text();
       } catch (e) {
@@ -177,6 +250,27 @@ export class ConnectorClient {
       }
 
       const cls = classifyResponse(res.status, res.headers, text.slice(0, CLASSIFY_BODY_PREFIX));
+      if (cls === "auth_required" && this.renewable) {
+        if (refreshed) {
+          return {
+            class: "auth_required",
+            status: res.status,
+            body: null,
+            next: null,
+            error: `HTTP ${res.status} after a token refresh; reconnect the account`,
+            reauth: true,
+          };
+        }
+        refreshed = true;
+        try {
+          pending = await this.tokenSource.refresh(token);
+        } catch (e) {
+          return this.tokenFailure(e, "token refresh failed");
+        }
+        // Asking with a renewed credential is not a retry of a flaky request.
+        attempt--;
+        continue;
+      }
       if (cls === "ok") {
         let body: unknown;
         try {

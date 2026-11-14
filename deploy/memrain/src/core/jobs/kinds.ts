@@ -15,3 +15,9 @@ export const PAGE_MIRROR_JOB_KIND = "page_mirror";
  * only when MEMRAIN_AGENT_ENABLED=1, so a disabled install refuses the submit.
  */
 export const SUBAGENT_JOB_KIND = "subagent";
+/**
+ * One sync run of one connector account. Not in BUILTIN_JOB_KINDS either: only
+ * a process that registered the connector runtime accepts it, and connectors
+ * are off unless MEMRAIN_CONNECTORS_ENABLED=1.
+ */
+export const CONNECTOR_SYNC_JOB_KIND = "connector_sync";
