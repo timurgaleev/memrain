@@ -67,6 +67,7 @@ import { bumpDocumentClock } from "./generation.ts";
 import { guardLocalIndex, type RereadGuard } from "./sources.ts";
 import { newWriteTiming, noteWriteTiming, runWithWriteTiming } from "./write-timing.ts";
 import { acquireWriteEmbedSlot, writeEmbedWidth } from "./concurrency.ts";
+import { planWriteGate } from "./write-gate-index.ts";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
 import {
@@ -388,6 +389,24 @@ async function indexDocumentBody(
     frontmatter = stampSanityMarkers(baseFrontmatter, sanity);
   }
 
+  // Write gate (deterministic, free): outside text, and agent text when the
+  // operator turns it on, that reads as instructions to an AI is flagged or
+  // held for the owner before it becomes memory; `reject` refuses it here,
+  // before any embedding is paid for. See write-gate-index.ts.
+  const gateTitle =
+    parsed.title ??
+    (typeof baseFrontmatter["title"] === "string" ? (baseFrontmatter["title"] as string) : "");
+  const gate = await planWriteGate(storage.engine(), {
+    documentId: id,
+    sourcePath: input.sourcePath,
+    sourceId: input.sourceId ?? null,
+    remote: opts.remote === true,
+    title: gateTitle,
+    body: parsed.chunks.join("\n\n"),
+    frontmatter: baseFrontmatter,
+  });
+  frontmatter = gate.stamp(frontmatter);
+
   // Embed BEFORE we touch the DB — if Bedrock fails, we don't half-write. A page
   // marked `embed_skip` is indexed + keyword-searchable but never embedded: its
   // chunks land with a null vector so the vector arm skips them. Keyword-only
@@ -692,6 +711,7 @@ async function indexDocumentBody(
       ...(input.claimUnowned === true ? { claimUnowned: true } : {}),
       ...(input.expectOwner !== undefined ? { expectOwner: input.expectOwner } : {}),
       ...(opts.beforeCommit ? { beforeCommit: opts.beforeCommit } : {}),
+      ...(gate.afterWrite ? { afterWrite: gate.afterWrite } : {}),
     },
     chunkWrites,
   );

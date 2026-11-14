@@ -10,6 +10,8 @@
  * family and the pattern, so audit rows and error messages cannot echo the
  * text that tripped it.
  */
+import { createHash } from "node:crypto";
+import { neutralizeOutsideText } from "./neutralize-outside-text.ts";
 import { wellFormForText } from "./well-form.ts";
 import { WRITE_GATE_PATTERNS, type GateFamily, type GatePattern } from "./write-gate-patterns.ts";
 
@@ -129,4 +131,209 @@ export function detectInstructionLike(fields: readonly GateField[]): DetectorRes
   }
   const families = [...new Set(found.map(m => m.family))].sort();
   return { flagged: found.length > 0, families, matches: found, detector_version: WRITE_GATE_DETECTOR_VERSION };
+}
+
+// --- Verdict: who wrote it, what the operator asked for, what to stamp ------
+
+/** `content_flag.reason` / `quarantine.reason` the gate stamps. */
+export const INSTRUCTION_LIKE_REASON = "instruction_like";
+/** Frontmatter record of the gate's verdict on the current title and body. */
+export const WRITE_GATE_KEY = "write_gate";
+/** The owner's approval of a held document, bound to its title and body. */
+export const WRITE_GATE_APPROVAL_KEY = "write_gate_approval";
+
+/**
+ * `flag`        store, mark `content_flag`, frame strongly on read (default for outside text)
+ * `quarantine`  store hidden from search and queue a hold for the owner
+ * `reject`      refuse the write (outside text only)
+ * `off`         do not run
+ */
+export type WriteGateMode = "off" | "flag" | "quarantine" | "reject";
+/** `external`: a source of an outside kind. `agent`: any other write from a remote caller. */
+export type WriteGateOrigin = "external" | "agent";
+export type WriteGateAction = "allow" | "flag" | "quarantine" | "reject";
+
+export interface WriteGateVerdict {
+  action: WriteGateAction;
+  origin: WriteGateOrigin;
+  families: GateFamily[];
+  detector_version: string;
+  binding: string;
+  /** The detector failed; the verdict fell back to quarantine. */
+  error?: true;
+  /** Held content the owner approved: released, still flagged. */
+  approved?: true;
+}
+
+/** Refused by the gate in `reject` mode. The message names families only. */
+export class WriteGateBlockError extends Error {
+  readonly code = "WRITE_GATE_INSTRUCTION_LIKE";
+  readonly verdict: WriteGateVerdict;
+  constructor(verdict: WriteGateVerdict) {
+    super(`Write refused: the text reads as instructions to an AI (${verdict.families.join(", ")})`);
+    this.name = "WriteGateBlockError";
+    this.verdict = verdict;
+  }
+}
+
+const EXTERNAL_MODES: readonly WriteGateMode[] = ["off", "flag", "quarantine", "reject"];
+const AGENT_MODES: readonly WriteGateMode[] = ["off", "flag", "quarantine"];
+const warnedValues = new Set<string>();
+
+function readMode(env: Record<string, string | undefined>, key: string, allowed: readonly WriteGateMode[], fallback: WriteGateMode): WriteGateMode {
+  const raw = env[key]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  if ((allowed as readonly string[]).includes(raw)) return raw as WriteGateMode;
+  if (!warnedValues.has(`${key}=${raw}`)) {
+    warnedValues.add(`${key}=${raw}`);
+    console.warn(`[write-gate] ${key} must be one of ${allowed.join("|")}; using ${fallback}`);
+  }
+  return fallback;
+}
+
+/**
+ * The mode for one write. Outside text defaults to `flag`; agent text to
+ * `off`, since agents legitimately write notes that quote instructions. A
+ * source listed in MEMRAIN_WRITE_GATE_QUARANTINE_SOURCES upgrades `flag` to
+ * `quarantine`; it never loosens `reject` or turns on a disabled gate.
+ */
+export function resolveWriteGateMode(
+  origin: WriteGateOrigin,
+  sourceId: string,
+  env: Record<string, string | undefined> = process.env,
+): WriteGateMode {
+  const mode = origin === "external"
+    ? readMode(env, "MEMRAIN_WRITE_GATE_EXTERNAL", EXTERNAL_MODES, "flag")
+    : readMode(env, "MEMRAIN_WRITE_GATE_AGENT", AGENT_MODES, "off");
+  if (mode !== "flag") return mode;
+  const optIn = (env["MEMRAIN_WRITE_GATE_QUARANTINE_SOURCES"] ?? "").split(",").map(s => s.trim()).filter(Boolean);
+  return optIn.includes(sourceId) ? "quarantine" : mode;
+}
+
+/** Hash binding a verdict or an approval to the title and body the gate assessed. */
+export function writeGateBinding(title: string | null | undefined, body: string): string {
+  const payload = JSON.stringify(["write_gate/v1", wellFormForText(title ?? ""), wellFormForText(body)]);
+  return createHash("sha256").update(payload, "utf8").digest("hex");
+}
+
+interface WriteGateApproval { binding: string; hold_id: number; approved_at: string }
+
+function parseApproval(value: unknown): WriteGateApproval | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { binding, hold_id, approved_at } = value as Record<string, unknown>;
+  return typeof binding === "string" && /^[0-9a-f]{64}$/.test(binding) && typeof hold_id === "number" && typeof approved_at === "string"
+    ? { binding, hold_id, approved_at }
+    : null;
+}
+
+export interface WriteGateInput {
+  origin: WriteGateOrigin;
+  mode: WriteGateMode;
+  fields: readonly GateField[];
+  binding: string;
+  /** The stored document's approval, if any; honoured only for the same binding. */
+  approval?: unknown;
+}
+
+/** Pure verdict. A detector failure quarantines (fail closed) unless the gate is off. */
+export function assessWriteGate(input: WriteGateInput, detect: typeof detectInstructionLike = detectInstructionLike): WriteGateVerdict {
+  const base = { origin: input.origin, binding: input.binding };
+  if (input.mode === "off") return { ...base, action: "allow", families: [], detector_version: WRITE_GATE_DETECTOR_VERSION };
+  let result: DetectorResult;
+  try {
+    result = detect(input.fields);
+  } catch {
+    return { ...base, action: "quarantine", families: [], detector_version: WRITE_GATE_DETECTOR_VERSION, error: true };
+  }
+  const verdict = { ...base, families: result.families, detector_version: result.detector_version };
+  if (!result.flagged) return { ...verdict, action: "allow" };
+  if (input.mode === "quarantine" && parseApproval(input.approval)?.binding === input.binding) {
+    return { ...verdict, action: "quarantine", approved: true };
+  }
+  return { ...verdict, action: input.mode };
+}
+
+/** The stored verdict, when it was made on the same title and body. */
+export function carriedWriteGate(stored: Record<string, unknown> | null | undefined, binding: string): WriteGateVerdict | null {
+  const v = stored?.[WRITE_GATE_KEY];
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const r = v as Record<string, unknown>;
+  if (r["binding"] !== binding || (r["action"] !== "flag" && r["action"] !== "quarantine")) return null;
+  if (r["origin"] !== "external" && r["origin"] !== "agent") return null;
+  const families = Array.isArray(r["families"]) ? r["families"].filter((f): f is GateFamily => typeof f === "string") : [];
+  return {
+    action: r["action"],
+    origin: r["origin"],
+    families,
+    detector_version: typeof r["detector_version"] === "string" ? r["detector_version"] : WRITE_GATE_DETECTOR_VERSION,
+    binding,
+    ...(r["error"] === true ? { error: true as const } : {}),
+    ...(r["action"] === "quarantine" && parseApproval(stored?.[WRITE_GATE_APPROVAL_KEY])?.binding === binding ? { approved: true as const } : {}),
+  };
+}
+
+/**
+ * A new frontmatter object carrying the verdict. A flag or released hold
+ * stamps `content_flag`; an unreleased hold also stamps `quarantine`, unless
+ * the content-sanity gate already holds the document for its own reason. No
+ * `embed_skip`: a held document keeps its vectors so an approval needs no
+ * re-embed, and the quarantine filter already keeps it out of both arms.
+ */
+export function stampWriteGate(
+  frontmatter: Record<string, unknown>,
+  verdict: WriteGateVerdict | null,
+  storedApproval?: unknown,
+): Record<string, unknown> {
+  if (!verdict || verdict.action === "allow" || verdict.action === "reject") return frontmatter;
+  const detail = verdict.error ? "detector_error" : verdict.families.join(", ");
+  const out: Record<string, unknown> = {
+    ...frontmatter,
+    content_flag: { reason: INSTRUCTION_LIKE_REASON, detail },
+    [WRITE_GATE_KEY]: {
+      action: verdict.action,
+      origin: verdict.origin,
+      families: verdict.families,
+      detector_version: verdict.detector_version,
+      binding: verdict.binding,
+      ...(verdict.error ? { error: true } : {}),
+    },
+  };
+  if (verdict.action === "quarantine") {
+    if (verdict.approved) out[WRITE_GATE_APPROVAL_KEY] = parseApproval(storedApproval);
+    else if (!Object.hasOwn(frontmatter, "quarantine")) out["quarantine"] = { reason: INSTRUCTION_LIKE_REASON, detail };
+  }
+  return out;
+}
+
+/** Keys the gate stamps; never taken from a remote writer's header. */
+export const WRITE_GATE_OWNED_KEYS: readonly string[] = Object.freeze([WRITE_GATE_KEY, WRITE_GATE_APPROVAL_KEY]);
+
+// Keys the indexer itself stamps, which carry no writer-controlled text.
+const SYSTEM_FRONTMATTER = new Set(["page_content_hash", "page_truth_hash", "page_title"]);
+
+/** The writer-controlled text of a document: title, body, and frontmatter strings. */
+export function writeGateFields(title: string, body: string, frontmatter: Record<string, unknown>, gateOwned: readonly string[]): GateField[] {
+  const fields: GateField[] = [{ field: "title", text: title }, { field: "body", text: body }];
+  for (const [key, value] of Object.entries(frontmatter)) {
+    if (SYSTEM_FRONTMATTER.has(key) || gateOwned.includes(key)) continue;
+    if (typeof value === "string") fields.push({ field: `frontmatter.${key}`, text: value });
+    else if (Array.isArray(value)) {
+      const strings = value.filter((v): v is string => typeof v === "string");
+      if (strings.length > 0) fields.push({ field: `frontmatter.${key}`, text: strings.join("\n") });
+    }
+  }
+  return fields;
+}
+
+/** Up to 200 characters of the first field that tripped, neutralized and on one line. */
+export function writeGateExcerpt(fields: readonly GateField[], detect: typeof detectInstructionLike = detectInstructionLike): string {
+  let first: GateField | undefined;
+  try {
+    const tripped = new Set(detect(fields).matches.map(m => m.field));
+    first = fields.find(f => tripped.has(f.field));
+  } catch {
+    first = undefined;
+  }
+  const text = neutralizeOutsideText(first?.text ?? fields.find(f => f.field === "body")?.text ?? "").replace(/\s+/g, " ").trim();
+  return Array.from(text).slice(0, 200).join("");
 }

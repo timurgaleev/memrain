@@ -42,7 +42,7 @@ describe("write-gate detector corpus", () => {
     for (const c of INJECTIONS) {
       const r = detectInstructionLike([{ field: "body", text: c.text }]);
       if (!r.flagged) missed.push(c.id);
-      else if (!r.families.includes(c.family!)) wrongFamily.push(`${c.id}: ${r.families.join(",")}`);
+      else if (!(r.families as string[]).includes(c.family!)) wrongFamily.push(`${c.id}: ${r.families.join(",")}`);
     }
     expect(missed).toEqual([]);
     expect(wrongFamily).toEqual([]);

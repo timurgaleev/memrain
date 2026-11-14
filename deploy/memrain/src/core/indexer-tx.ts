@@ -122,6 +122,8 @@ export interface DocumentWrite {
   expectOwner?: string | null;
   /** Validate a reviewed repair snapshot under this transaction before replacing rows. */
   beforeCommit?: (tx: Engine) => Promise<void>;
+  /** Runs last inside the transaction, once the document row exists; gets its stored source. */
+  afterWrite?: (tx: Engine, sourceId: string | null) => Promise<void>;
 }
 
 export interface IndexTxResult {
@@ -398,6 +400,7 @@ export async function writeDocumentTransaction(
     if (opts.codeEdges && opts.codeEdges.length > 0) {
       await insertCodeEdges(tx, opts.codeEdges);
     }
+    await doc.afterWrite?.(tx, effSource);
   }), BULK_RETRY_OPTS);
 
   return {
