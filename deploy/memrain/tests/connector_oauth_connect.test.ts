@@ -194,6 +194,25 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("revokes the fresh grant when storing the account fails, leaving nothing behind", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "/inbox" });
+      await e.exec(`
+        CREATE FUNCTION test_refuse_credential() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'storage unavailable'; END $$;
+        CREATE TRIGGER test_refuse_credential BEFORE INSERT ON connector_credentials
+          FOR EACH ROW EXECUTE FUNCTION test_refuse_credential();`);
+      const fake = fakeProvider();
+      const d = deps(e, fake.fetch);
+      const { state } = await begin(e, d);
+      await expect(completeConnect(d, { provider: "test", state, code: "c", adminSessionId: SESSION })).rejects.toThrow("storage unavailable");
+      expect(fake.calls.filter((c) => c.url.endsWith("/revoke")).map((c) => c.body?.get("token"))).toEqual([TEST_REFRESH_TOKEN]);
+      expect(await rowCount(e, "connector_accounts")).toBe(0);
+    } finally { await db.close(); }
+  });
+
   it("refuses a grant missing a requested scope, and accepts an omitted scope field as the request", async () => {
     const db = await open();
     const e = db.storage.engine();

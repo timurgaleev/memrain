@@ -180,6 +180,23 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("re-seals a straggler written under the old key by a server that had not switched yet", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      const first = await setup(e);
+      await storeCredential(e, kek, first, TOKENS, { scopes: ["read"], expiresAt: null });
+      await rotateKek(e, kek, next);
+      const late = await createAccount(e, {
+        sourceId: "inbox", provider: "test", services: ["mail"], principalRef: "admin:operator", accountLabel: "late@example.test",
+      });
+      await storeCredential(e, kek, late, TOKENS, { scopes: ["read"], expiresAt: null });
+      expect(await rotateKek(e, [kek, next], next)).toEqual({ credentials: 1, oauthClients: 0, oauthStates: 0 });
+      expect((await readCredential(e, next, late.id))?.tokens).toEqual(TOKENS);
+      expect((await readCredential(e, next, first.id))?.tokens).toEqual(TOKENS);
+    } finally { await db.close(); }
+  });
+
   it("leaves every row on the old key when a rotation is interrupted", async () => {
     const db = await open();
     const e = db.storage.engine();

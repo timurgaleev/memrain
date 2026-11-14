@@ -33,6 +33,7 @@ import {
   setAccountStatus,
   storeCredential,
   type ConnectorAccount,
+  type TokenSet,
 } from "./accounts.ts";
 import { getOAuthClient } from "./oauth-clients.ts";
 import type { ConnectorProvider, ProviderRegistry } from "./providers.ts";
@@ -383,25 +384,44 @@ export async function completeConnect(
   const now = (deps.now ?? Date.now)();
   const expiresIn = Number(body.expires_in);
   const expiresAt = Number.isFinite(expiresIn) && expiresIn > 0 ? new Date(now + expiresIn * 1000) : null;
-  const tokens = {
+  const tokens: TokenSet = {
     access_token: accessToken,
     ...(refreshToken ? { refresh_token: refreshToken } : {}),
     ...(typeof body.token_type === "string" ? { token_type: body.token_type } : {}),
   };
   const scopes = [...granted].sort();
 
-  return deps.engine.transaction(async (tx) => {
-    const existing = await findAccount(tx, st.source_id, provider.id, label);
+  try {
+    return await persistGrant(deps.engine, kek, st, provider.id, label, tokens, scopes, expiresAt);
+  } catch (e) {
+    // Nothing was stored, so nothing could disconnect this grant later.
+    await revokeToken(provider, fetch, refreshToken ?? accessToken, client);
+    throw e;
+  }
+}
+
+async function persistGrant(
+  engine: Engine,
+  kek: Kek,
+  st: StateRow,
+  providerId: string,
+  label: string,
+  tokens: TokenSet,
+  scopes: string[],
+  expiresAt: Date | null,
+): Promise<{ account: ConnectorAccount; reconnected: boolean }> {
+  return engine.transaction(async (tx) => {
+    const existing = await findAccount(tx, st.source_id, providerId, label);
     if (existing) {
       await storeCredential(tx, kek, existing, tokens, { scopes, expiresAt });
       await tx.query(`UPDATE connector_accounts SET services = $2::text[], updated_at = NOW() WHERE id = $1`, [existing.id, st.services]);
       await setAccountStatus(tx, existing.id, "active", null);
-      const account = (await findAccount(tx, st.source_id, provider.id, label))!;
+      const account = (await findAccount(tx, st.source_id, providerId, label))!;
       return { account, reconnected: true };
     }
     const created = await createAccount(tx, {
       sourceId: st.source_id,
-      provider: provider.id,
+      provider: providerId,
       services: st.services,
       principalRef: st.principal_ref,
       accountLabel: label,
