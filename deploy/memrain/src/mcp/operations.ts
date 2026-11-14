@@ -656,7 +656,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "link",
     scope: "write",
     description:
-      "Assert a typed source→target link; repeating (source,target,type) updates confidence/chunk_id. Confidence defaults 1. Public writes require MEMRAIN_PUBLIC_WRITE=1.",
+      "Assert a typed source→target link; repeating (source,target,type) updates confidence/chunk_id. Confidence defaults 1. works_at/located_at hold one value at a time: a new dated value closes the open one; an overlap, or no valid_from once dated, is refused (link_interval_conflict). Public writes require MEMRAIN_PUBLIC_WRITE=1.",
     params: {
       valid_from: str({ description: "Optional inclusive start YYYY-MM-DD. Omission preserves the stored bound; an existing bound cannot change." }),
       valid_until: str({ description: "Optional exclusive end YYYY-MM-DD. Must follow valid_from; an existing bound cannot change." }),
@@ -852,7 +852,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "entity_recall",
     outputRedaction: "retrieval",
     description:
-      "One-shot 'what do I know about X?' aggregator. Returns the entity's page (compiled_truth + body) plus top-confidence facts plus most-recent timeline events in a single call. The page may be null when the entity exists only as a soft-stub (facts + timeline allowed, page not yet promoted).",
+      "One-shot 'what do I know about X?' aggregator. Returns the entity's page (compiled_truth + body) plus top-confidence facts plus most-recent timeline events in a single call. The page may be null when the entity exists only as a soft-stub (facts + timeline allowed, page not yet promoted). A fact that conflicts with another visible typed claim lists the peer ids in contested_with.",
     argAliases: { entity: "slug" },
     params: {
       slug: str(req),
@@ -1360,7 +1360,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "context_pack",
     outputRedaction: "retrieval",
     description:
-      "Budgeted entity cards (title,type,facts,events; no body), up to 8: explicit slugs first, then window entities at the volunteer default gate. Adds top decayed facts across the grant, excluding card duplicates. token_budget prioritizes cards; budget reports drops. Hidden/missing slugs both yield no card. Stateless read, no LLM; internal-only.",
+      "Budgeted entity cards (title,type,facts,events; no body), up to 8: explicit slugs first, then window entities at the volunteer default gate. Adds top decayed facts across the grant, excluding card duplicates. token_budget prioritizes cards; budget reports drops. Hidden/missing slugs both yield no card. Conflicting facts carry contested_with. Operator-pinned pages (MEMRAIN_CONTEXT_CORE_SLUGS) come first as core, charged before cards. Stateless read, no LLM; internal-only.",
     params: {
       slugs: arr({ description: "Entity page slugs to build cards for, in priority order (array of strings)." }),
       window: str({ description: "Conversation window text; entities it names fill the card slots left after `slugs`. 'user:'/'assistant:' line prefixes set the role." }),

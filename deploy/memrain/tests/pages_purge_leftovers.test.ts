@@ -121,6 +121,44 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
     expect(await leftovers(storage, slug)).toEqual({ raw: 0, tags: 0 });
   });
 
+  // The purge reads its doomed facts before it takes their row locks. A fact
+  // forgotten by a transaction that commits while the purge waits on the row
+  // must keep its own tombstone and stay out of the receipt.
+  it("a fact forgotten while the purge waits on its row keeps the forget", async () => {
+    const page = `notes/purge-forget-race-${run}`;
+    await putPage(storage, { slug: page, markdown_body: "gone" });
+    const id = (await addFact(storage, { entity_slug: `people/purge-forget-race-${run}`, fact: "Likes tea.", source_slug: page })).id!;
+    await deletePage(storage, page);
+    await pg.query(`UPDATE pages SET deleted_at = NOW() - interval '1000 hours' WHERE slug = $1`, [page]);
+    const forgetter = new PostgresEngine({ url: PG_URL!, max: 2 });
+    try {
+      let purge!: Promise<Awaited<ReturnType<typeof purgeDeletedPages>>>;
+      await forgetter.transaction(async (tx) => {
+        await tx.query(
+          `UPDATE entity_facts SET forgotten_at = NOW(), forgotten_cause = 'forget', forgotten_reason = 'user' WHERE id = $1`, [id]);
+        purge = purgeDeletedPages(pg, undefined, undefined, { slugs: [page] });
+        const deadline = Date.now() + 5_000;
+        let waiting = false;
+        while (!waiting && Date.now() < deadline) {
+          await Bun.sleep(25);
+          waiting = (await forgetter.query(
+            `SELECT 1 FROM pg_stat_activity
+              WHERE datname = current_database() AND pid <> pg_backend_pid()
+                AND wait_event_type = 'Lock' AND query ILIKE '%fact_purge_receipts%'`,
+          )).rows.length > 0;
+        }
+        expect(waiting).toBe(true);
+      });
+      expect(await purge).toMatchObject({ slugs: [page], facts_retired: 0 });
+      const row = await pg.query<{ forgotten_cause: string }>(`SELECT forgotten_cause FROM entity_facts WHERE id = $1`, [id]);
+      expect(row.rows).toEqual([{ forgotten_cause: "forget" }]);
+      expect((await pg.query(`SELECT 1 FROM fact_purge_receipts WHERE page_slug = $1`, [page])).rows).toEqual([]);
+    } finally {
+      await forgetter.close();
+      await pg.query(`DELETE FROM entity_facts WHERE id = $1`, [id]);
+    }
+  });
+
   // The purge's transaction holds the page row from its DELETE to its COMMIT,
   // and its leftover DELETE has already run by then. A write that checked the
   // page without locking it would insert in that window and outlive the purge.
@@ -185,8 +223,8 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
 
 // A fact is written on a page when its fence row came from it, or, for a row
 // with no fence origin, when it names the page as its source. Once the page row
-// is gone nothing hides those facts any more, so the purge retires them, unless
-// the same claim still stands on another live page.
+// is gone nothing hides those facts any more, so the purge retires them. A
+// page that states the same claim holds its own fact row, which stays.
 for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires facts written on the page (${name})`, () => {
   let db: Awaited<ReturnType<typeof open>>;
   beforeEach(async () => { db = await open(); });
@@ -251,18 +289,33 @@ for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires fac
     expect(await recalled("notes/gone")).toEqual(["Was a draft."]);
   });
 
-  it("keeps a fact whose claim another live, eligible page of the same source still supports", async () => {
+  it("retires the purged page's copy of a claim and keeps the supporting page's own fact", async () => {
     await putPage(db.storage, { slug: "notes/gone", markdown_body: "gone" });
     await putPage(db.storage, { slug: "notes/kept", markdown_body: "kept" });
     const onGone = (await addFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/gone", written_by: "w1" })).id!;
     const onKept = (await addFact(db.storage, { entity_slug: "people/x", fact: "speaks  dutch.", source_slug: "notes/kept", written_by: "w2" })).id!;
     await expire("notes/gone");
-    expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ count: 1, facts_retired: 0 });
-    expect(await state(onGone)).toEqual(LIVE);
+    expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ count: 1, facts_retired: 1 });
+    expect(await state(onGone)).toMatchObject({ forgotten_cause: "purge" });
     expect(await state(onKept)).toEqual(LIVE);
+    expect(await recalled("people/x")).toEqual(["speaks  dutch."]);
   });
 
-  it("support from a quarantined, soft-deleted or other-source page does not count", async () => {
+  it("purging both pages that state a claim, one after the other, leaves no visible copy", async () => {
+    await putPage(db.storage, { slug: "notes/first", markdown_body: "first" });
+    await putPage(db.storage, { slug: "notes/second", markdown_body: "second" });
+    await addFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/first", written_by: "w1" });
+    await addFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/second", written_by: "w2" });
+    await expire("notes/first");
+    expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ slugs: ["notes/first"], facts_retired: 1 });
+    await expire("notes/second");
+    expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ slugs: ["notes/second"], facts_retired: 1 });
+    expect(await recalled("people/x")).toEqual([]);
+    const live = await db.storage.engine().query(`SELECT id FROM entity_facts WHERE entity_slug = 'people/x' AND forgotten_at IS NULL`);
+    expect(live.rows).toEqual([]);
+  });
+
+  it("the same claim on a quarantined, soft-deleted or other-source page does not keep it either", async () => {
     await addSource("other");
     await putPage(db.storage, { slug: "notes/gone", markdown_body: "gone" });
     await putPage(db.storage, { slug: "notes/held", markdown_body: "held" });
