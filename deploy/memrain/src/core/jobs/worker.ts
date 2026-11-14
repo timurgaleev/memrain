@@ -20,6 +20,7 @@ import { isDailyCapRefusal, isRolloverDailyCapRefusal, runWithSpendClient, runWi
 import { getHandler } from "./handlers.ts";
 import { kindDefaultTimeoutMs } from "./kind-defaults.ts";
 import { haltOf, llmHaltEnabled, noteHalt } from "./llm-halt.ts";
+import { isProviderLeaseBusy } from "./rate-leases.ts";
 import type { Queue } from "./queue.ts";
 import { type JobRow, UnrecoverableJobError, jobSpendClient } from "./types.ts";
 import type { Engine } from "../engine/interface.ts";
@@ -41,6 +42,8 @@ export const DEFAULT_DRAIN_MS = 8000;
 /** How long stop() waits for aborted jobs to hand their rows back. */
 const HAND_BACK_WAIT_MS = 5000;
 const DAY_MS = 86_400_000;
+/** How long a job refused a provider lease waits before its next attempt. */
+const LEASE_DEFER_MS = 30_000;
 
 export interface WorkerOptions {
   /** Polling interval when idle. Default 1000 ms. */
@@ -467,6 +470,9 @@ export class Worker {
         if (!timedOut && !unrecoverable && (await this.deferForDailyCap(job, gen, e, message))) {
           return;
         }
+        if (!timedOut && !unrecoverable && (await this.deferForLease(job, gen, e, message))) {
+          return;
+        }
         this.log(
           "warn",
           `[${job.id}] ${job.kind} ${timedOut ? "timed out" : unrecoverable ? "failed (unrecoverable)" : "failed"}: ${message}`,
@@ -598,6 +604,30 @@ export class Worker {
       "warn",
       `[${job.id}] ${job.kind} deferred until ${until.toISOString()} (daily spend cap); no retry spent`,
     );
+    return true;
+  }
+
+  /**
+   * Put the attempt back for a short while when every provider lease slot was
+   * taken: nothing was sent, so a retry would be spent on a busy pool rather
+   * than on a failure. Counts toward MAX_DEFERS.
+   */
+  private async deferForLease(
+    job: JobRow,
+    gen: number,
+    err: unknown,
+    message: string,
+  ): Promise<boolean> {
+    if (!isProviderLeaseBusy(err)) return false;
+    if (job.deferredCount >= MAX_DEFERS) {
+      this.log("warn", `[${job.id}] ${job.kind} was deferred ${job.deferredCount} times; failing it`);
+      return false;
+    }
+    const until = new Date(Date.now() + LEASE_DEFER_MS);
+    const deferred = await this.queue.defer(job.id, gen, until, message.slice(0, 300));
+    if (!deferred) return this.claimLost(job.id, gen);
+    this.stats.deferred++;
+    this.log("warn", `[${job.id}] ${job.kind} deferred until ${until.toISOString()} (${err.key} slots busy); no retry spent`);
     return true;
   }
 

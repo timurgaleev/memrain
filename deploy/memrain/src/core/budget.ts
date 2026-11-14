@@ -22,6 +22,7 @@ import { beginRequestCost } from "./request-cost.ts";
 import { BedrockHalted, assertBedrockOpen, noteBedrockFailure, noteBedrockSuccess } from "./llm/bedrock-errors.ts";
 import { keywordOnlyMode } from "./llm/gateway.ts";
 import { appendAudit, auditDir } from "./audit-week-file.ts";
+import { withProviderLease } from "./jobs/rate-leases.ts";
 import type { Engine } from "./engine/interface.ts";
 import type { SonnetUsage } from "./llm/sonnet.ts";
 
@@ -855,8 +856,20 @@ const _unpricedWarned = new Set<string>();
  * the caller got an answer out of them. A call that threw before any usage was
  * reported still writes a $0 row: the attempt is attributable even when it
  * bought nothing.
+ *
+ * Under a provider lease limit (MEMRAIN_PROVIDER_LEASES, off by default) the
+ * call first takes a slot of its model family; a call refused a slot is never
+ * held, sent or booked.
  */
 export async function trackedInvoke<T>(
+  call: TrackedCall,
+  send: (meter: SpendMeter) => Promise<T>,
+): Promise<T> {
+  return withProviderLease(_ledgerEngine, call.provider ?? DEFAULT_SPEND_PROVIDER, call.model,
+    () => invokeTracked(call, send), { ownerJob: currentSpendTags().jobId ?? null });
+}
+
+async function invokeTracked<T>(
   call: TrackedCall,
   send: (meter: SpendMeter) => Promise<T>,
 ): Promise<T> {
