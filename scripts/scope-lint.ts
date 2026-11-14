@@ -6,8 +6,8 @@
  *
  *  1. Source scope. Every SQL read in src/core and src/mcp that selects FROM or
  *     JOINs a table carrying a `source_id` column must either apply a source
- *     predicate (mention `source_id`, or interpolate a scope helper such as
- *     `andSourceScope`) or carry a marker within the three lines above it:
+ *     predicate (compare `source_id` to something, or interpolate a scope helper
+ *     such as `andSourceScope`) or carry a marker within the three lines above it:
  *
  *         // scope: operator-only <reason>
  *         // scope: upstream <reason>     (the caller already scoped the ids it passes)
@@ -23,6 +23,10 @@
  *     `pg_advisory_unlock`, the `_shared` forms), `LISTEN` / `UNLISTEN`, a bare
  *     `SET` (only `SET LOCAL`, `SET TRANSACTION` and `SET CONSTRAINTS` are
  *     transaction-scoped) and `set_config(..., false)`. No baseline: zero allowed.
+ *
+ * A join counts as scoped once any source predicate is present: a join on
+ * `a.source_id = b.source_id` carries one table's scope to the other, and
+ * mapping aliases to tables is beyond a static text check.
  *
  * Exit codes: 0 clean, 1 violations, 2 misconfiguration.
  */
@@ -137,6 +141,8 @@ export function sourceScopedTables(migrationsDir = MIGRATIONS): Set<string> {
   return tables;
 }
 
+// `source_id` compared to something (optionally inside COALESCE), not merely selected.
+const SOURCE_PREDICATE = /\b(?:\w+\.)?source_id\b(?:\s*,[^)]*\))?\s*(?:=|<>|!=|\bIN\b|\bIS\b)|(?:=|<>|!=)\s*(?:COALESCE\(\s*)?(?:\w+\.)?source_id\b/i;
 const SCOPE_INTERPOLATION = /\$\{[^}]*(?:[sS]cope|sourceFilter|sourcePredicate|sourceClause)/;
 const MARKER = /\/\/\s*scope:\s*(operator-only|upstream)\s+\S/;
 
@@ -146,7 +152,7 @@ export function isUnscopedRead(text: string, tables: ReadonlySet<string>): boole
   const touched = [...text.matchAll(/\b(?:FROM|JOIN)\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?/gi)]
     .some(m => tables.has(m[1]!.toLowerCase()));
   if (!touched) return false;
-  return !/\bsource_id\b/i.test(text) && !SCOPE_INTERPOLATION.test(text);
+  return !SOURCE_PREDICATE.test(text) && !SCOPE_INTERPOLATION.test(text);
 }
 
 export interface ScopeHit { file: string; line: number }

@@ -38,6 +38,18 @@ describe("scope-lint detection", () => {
     expect(findUnscopedReads("x.ts", helper, TABLES)).toEqual([]);
   });
 
+  it("does not take a selected source_id column for a predicate", () => {
+    const selected = "q(`SELECT source_id, slug FROM pages WHERE slug = $1`);";
+    expect(findUnscopedReads("x.ts", selected, TABLES)).toHaveLength(1);
+    for (const ok of [
+      "q(`SELECT slug FROM pages p WHERE p.source_id = $1`);",
+      "q(`SELECT slug FROM pages p WHERE COALESCE(p.source_id, 'default') = $2`);",
+      "q(`SELECT slug FROM pages WHERE deleted_at IS NULL AND source_id = ANY($1::text[])`);",
+      "q(`SELECT f.id FROM entity_facts f JOIN gone g ON f.source_id = g.source_id`);",
+      "q(`SELECT slug FROM pages WHERE source_id IN (SELECT id FROM sources)`);",
+    ]) expect({ ok, hits: findUnscopedReads("x.ts", ok, TABLES).length }).toEqual({ ok, hits: 0 });
+  });
+
   it("honours a marker with a reason on the three lines above", () => {
     const marked = "// scope: operator-only doctor runs as the operator\nq(`SELECT count(*) FROM pages`);";
     const bare = "// scope: operator-only\nq(`SELECT count(*) FROM pages`);";
