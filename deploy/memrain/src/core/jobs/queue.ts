@@ -222,6 +222,17 @@ export class Queue {
       : { job, outcome: "existing" };
   }
 
+  /**
+   * Enqueue under a stable id unless a row already holds it, in any status.
+   * Unlike `enqueueOrRevive`, a failed row stays failed: the id names one
+   * unit of work that has had its run.
+   */
+  async enqueueIfAbsent(
+    input: EnqueueInput & { id: string },
+  ): Promise<{ job: JobRow; created: boolean }> {
+    return this.insert(input);
+  }
+
   private async insert(
     input: EnqueueInput,
   ): Promise<{ job: JobRow; created: boolean }> {

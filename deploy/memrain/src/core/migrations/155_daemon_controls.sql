@@ -3,7 +3,8 @@
 -- One row per (daemon, source). daemon '*' is every daemon and source_id '*'
 -- every source, so a pause can be as broad or as narrow as needed. A NULL
 -- `enabled`, `cron`, `timezone` or cap means "use the daemon's built-in value".
--- Run history is not kept here: a daemon's runs are its rows in `jobs`.
+-- Run history is not kept here: a daemon's runs are its rows in `jobs`;
+-- `resumed_at` marks where a resumed daemon's failure count starts again.
 CREATE TABLE IF NOT EXISTS daemon_controls (
   daemon               TEXT NOT NULL,
   source_id            TEXT NOT NULL DEFAULT '*',
@@ -12,6 +13,7 @@ CREATE TABLE IF NOT EXISTS daemon_controls (
   paused_reason        TEXT,
   paused_by            TEXT,
   paused_at            TIMESTAMPTZ,
+  resumed_at           TIMESTAMPTZ,
   cron                 TEXT,
   timezone             TEXT,
   cap_usd_per_day      NUMERIC,
