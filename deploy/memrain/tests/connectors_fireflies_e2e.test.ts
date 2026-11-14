@@ -299,11 +299,13 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       ...Array.from({ length: 200 }, (_, i) => ({ speaker_name: i % 2 ? "Ana Lee" : "Bo Park", text: `Line ${i} about the roadmap and its many details.` })),
       { speaker_name: "Ana Lee", text: `Someone pasted ${FIREFLIES_KEY} here. The code word is ${canary}.` },
     ];
+    // The title reaches the chronicle through enrichment, so the key there must be swept too.
+    const title = `Standup ${FIREFLIES_KEY}`;
     const fake = firefliesFetch({
       user: () => "user",
-      list: () => listing([listed("ff-long")]),
+      list: () => listing([listed("ff-long", { title })]),
       ids: () => listing([{ id: "ff-long" }]),
-      transcript: () => transcript("ff-long", sentences),
+      transcript: () => transcript("ff-long", sentences, { title }),
     });
     const account = await connect(fake.fetch);
     const run = await sync(db.storage, account.id, fake.fetch, T0, 2048);

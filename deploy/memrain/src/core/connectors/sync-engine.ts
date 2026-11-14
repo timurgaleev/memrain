@@ -607,10 +607,17 @@ class Run {
     const written = new Set(this.changed.map(p => p.slug));
     const peopleSourceIds = [...new Set([this.account.sourceId, DEFAULT_PEOPLE_SOURCE])];
     const ownAddresses = this.account.accountLabel ? [this.account.accountLabel] : [];
+    // The title and names reach the chronicle and wanted rows from here, not
+    // from the page, so a live token is swept out of them here too.
+    const sweep = (text: string): string => this.tokens.size > 0 ? sweepEchoes(text, this.tokens, []) : text;
     for (const [slug, item] of this.toEnrich) {
       if (!written.has(slug) || item.enrich === undefined) continue;
+      const participants = item.enrich.participants.map(p => ({
+        name: p.name === null ? null : sweep(p.name),
+        email: p.email === null ? null : sweep(p.email),
+      }));
       await enrichConnectorPage(this.storage, {
-        page: { slug, title: item.title, externalId: item.externalId, truth: item.truth ?? {}, ...item.enrich },
+        page: { slug, title: sweep(item.title), externalId: item.externalId, truth: item.truth ?? {}, ...item.enrich, participants },
         sourceId: this.account.sourceId,
         ownAddresses,
         peopleSourceIds,
