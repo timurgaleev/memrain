@@ -25,9 +25,14 @@ NOT_ENV = {
 }
 
 # Documented rows the source reads without spelling the full name:
-# resolve-model.ts builds MEMRAIN_<FEATURE>_MODEL at run time, and
-# search/ranking-flags.ts builds MEMRAIN_RANK_<FLAG>.
+# resolve-model.ts builds MEMRAIN_<FEATURE>_MODEL at run time,
+# search/ranking-flags.ts builds MEMRAIN_RANK_<FLAG>, and
+# connectors/retention.ts builds MEMRAIN_CONNECTOR_RETENTION_DAYS_<KIND>.
 DOC_ONLY = {
+    "MEMRAIN_CONNECTOR_RETENTION_DAYS_MAIL",
+    "MEMRAIN_CONNECTOR_RETENTION_DAYS_CALENDAR",
+    "MEMRAIN_CONNECTOR_RETENTION_DAYS_CHAT",
+    "MEMRAIN_CONNECTOR_RETENTION_DAYS_MEETING",
     "MEMRAIN_THINK_MODEL",
     "MEMRAIN_DRIFT_MODEL",
     "MEMRAIN_CONCEPTS_MODEL",

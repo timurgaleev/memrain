@@ -39,6 +39,9 @@
  *     event or meeting, writes one chronicle row (enrich-deterministic.ts);
  *     an enrichment failure is recorded as an item failure, so the item is
  *     not settled and the next run writes and enriches it again;
+ *   - retention: after the deletions, `sweepRetention` hard-deletes the
+ *     account's pages whose last activity is older than their kind's window
+ *     (retention.ts), at most 500 per kind per run;
  *   - a page whose mirror into search failed is not settled: it counts as an
  *     item failure, holds the cursor, and is mirrored again next run;
  *   - a credential the provider will not renew pauses the account
@@ -196,6 +199,12 @@ export interface SyncDeps {
    */
   onUpstreamDelete?(storage: Storage, item: UpstreamDeletion): Promise<void>;
   /**
+   * Hard-delete the account's pages past their retention window, after the
+   * run's own deletions; returns how many went. Skipped on a run that stopped
+   * for a reconnect or a refusal, as the deletions are.
+   */
+  sweepRetention?(storage: Storage): Promise<number>;
+  /**
    * Called once per stored item that carries `enrich`, after its page's
    * wikilink sync (which replaces a page's wanted rows wholesale) and before
    * the page's checkpoint commits. A PageNotFoundError is skipped; any other
@@ -239,6 +248,8 @@ export interface SyncCounts {
   deletions_seen: number;
   deletions_applied: number;
   deletions_held: number;
+  /** Pages past their retention window that the run's sweep hard-deleted. */
+  retention_deleted: number;
   mirror_failures: number;
 }
 
@@ -292,7 +303,7 @@ function positiveInt(env: Env, name: string, fallback: number): number {
 function emptyCounts(): SyncCounts {
   return {
     items: 0, pages_written: 0, pages_unchanged: 0, duplicates: 0, items_failed: 0, items_held: 0,
-    items_skipped_held: 0, deletions_seen: 0, deletions_applied: 0, deletions_held: 0, mirror_failures: 0,
+    items_skipped_held: 0, deletions_seen: 0, deletions_applied: 0, deletions_held: 0, retention_deleted: 0, mirror_failures: 0,
   };
 }
 
@@ -455,6 +466,7 @@ class Run {
     }
     if (this.result.stop_reason !== "needs_reconnect" && this.result.stop_reason !== "forbidden") {
       await this.settleDeletions();
+      if (this.deps.sweepRetention) this.result.counts.retention_deleted += await this.deps.sweepRetention(this.storage);
     }
     // What pages that never reached a checkpoint stored; they are read again next run.
     await this.linkStored();

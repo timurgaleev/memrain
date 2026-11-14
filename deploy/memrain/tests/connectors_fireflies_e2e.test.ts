@@ -260,6 +260,35 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBe(new Date(T0 + 60_000).toISOString());
   });
 
+  it("hard-deletes transcripts past the meeting retention window, and none while the window is off", async () => {
+    const fake = firefliesFetch({
+      user: () => "user",
+      list: () => "list-initial",
+      ids: () => listing([{ id: "ff-t1" }, { id: "ff-t2" }]),
+      transcript: (id) => ({ "ff-t1": "transcript-t1", "ff-t2": "transcript-t2" })[id] ?? "not-found",
+      exists: () => "not-found",
+    });
+    const account = await connect(fake.fetch);
+    expect((await sync(db.storage, account.id, fake.fetch, T0)).status).toBe("success");
+    const t1 = (await pageOf("ff-t1", account.id))!;
+    expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [t1])).toBe(1);
+
+    // A year and a day on, with the default 365-day window for meetings.
+    const later = T0 + 366 * 24 * HOUR;
+    const runtime = connectorRuntime(db.storage, { kek, providers: providers(), fetch: fake.fetch, env: ENV, now: () => later, sleep: async () => {} });
+    const loaded = (await runtime.loadAccount(account.id))!;
+    // A window set to off keeps everything.
+    const kept = connectorRuntime(db.storage, { kek, providers: providers(), fetch: fake.fetch, env: { ...ENV, MEMRAIN_CONNECTOR_RETENTION_DAYS_MEETING: "off" }, now: () => later });
+    expect(await kept.depsFor(loaded).sweepRetention!(db.storage)).toBe(0);
+    expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [t1])).toBe(1);
+
+    expect(await runtime.depsFor(loaded).sweepRetention!(db.storage)).toBe(2);
+    expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [t1])).toBe(0);
+    expect(await rowsContaining(e, "Let us look at the roadmap")).toEqual([]);
+    const receipts = (await e.query<{ summary: string }>(`SELECT summary FROM ingest_log WHERE source_type = 'connector-delete'`)).rows;
+    expect(receipts.map(r => (JSON.parse(r.summary) as { reason: string }).reason)).toEqual(["retention", "retention"]);
+  });
+
   it("deletes nothing when the listing misses a transcript the provider still has", async () => {
     const fake = firefliesFetch({
       user: () => "user",

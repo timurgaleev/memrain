@@ -471,6 +471,25 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("sweeps the account's pages past their retention window after a run, and not after one that needs a reconnect", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      const swept: number[] = [];
+      const h = harness([wirePage([{ id: "a" }], "c1")]);
+      const r = await runConnectorSync(db.storage, account(), { ...h.deps, sweepRetention: async () => { swept.push(1); return 2; } });
+      expect(r.status).toBe("success");
+      expect(swept).toEqual([1]);
+      expect(r.counts.retention_deleted).toBe(2);
+
+      const dead: TokenSource = { token: async () => TOKEN, refresh: async () => { throw new ReauthRequiredError("invalid_grant"); } };
+      const stopped = harness([{ status: 401, headers: {}, body: { error: "invalid_token" } }], { tokenSource: dead });
+      const r2 = await runConnectorSync(db.storage, account(), { ...stopped.deps, sweepRetention: async () => { swept.push(2); return 0; } });
+      expect(r2.stop_reason).toBe("needs_reconnect");
+      expect(swept).toEqual([1]);
+    } finally { await db.close(); }
+  });
+
   it("stops at the per-run item cap without passing the unfinished page", async () => {
     const db = await open();
     try {

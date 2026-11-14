@@ -25,10 +25,10 @@ import {
 import { ConnectorClient, type FetchFn, type TokenSource } from "./client.ts";
 import { enrichConnectorPage } from "./enrich-deterministic.ts";
 import { limiterFor } from "./limiter.ts";
-import { accountRef } from "./model.ts";
+import { accountRef, type ConnectorDataKind } from "./model.ts";
 import { resolveClient } from "./oauth-connect.ts";
 import { builtinProviders, type ProviderRegistry } from "./providers.ts";
-import { hardDeleteConnectorPage } from "./retention.ts";
+import { hardDeleteConnectorPage, sweepRetention } from "./retention.ts";
 import type { SyncAccount, SyncDeps } from "./sync-engine.ts";
 import { registerConnectorSync, type ConnectorSyncRuntime } from "./sync-job.ts";
 import { createTokenProvider, tokenEndpointRefresh, type CredentialStore } from "./token-provider.ts";
@@ -36,6 +36,8 @@ import { ProviderCannotSyncError, ReauthRequiredError } from "./types.ts";
 import { connectorsStatus, loadKek, type Kek } from "./vault.ts";
 
 const MAX_REASON = 200;
+/** Every kind a connector page can be; a sweep finds nothing for kinds the account never wrote. */
+const RETENTION_KINDS: readonly ConnectorDataKind[] = ["mail", "calendar", "chat", "meeting"];
 const DEFAULT_REASON = "the provider will not renew the credential; reconnect the account";
 
 export interface ConnectorRuntimeOptions {
@@ -179,6 +181,13 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
           if (item.pageSlug === null) return;
           // A page that is already gone, or was never this account's, is left alone: nothing to delete.
           await hardDeleteConnectorPage(st, scope, { slug: item.pageSlug, reason: "provider_deleted", externalId: item.externalId });
+        },
+        sweepRetention: async (st) => {
+          let deleted = 0;
+          for (const kind of RETENTION_KINDS) {
+            deleted += (await sweepRetention(st, scope, { kind, env, ...(opts.now ? { now: opts.now } : {}) })).deleted.length;
+          }
+          return deleted;
         },
         onItemWritten: async (st, item) => {
           await enrichConnectorPage(st, {
