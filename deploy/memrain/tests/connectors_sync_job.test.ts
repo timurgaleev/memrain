@@ -15,6 +15,7 @@ import { UnrecoverableJobError, type JobRow } from "../src/core/jobs/types.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { getPage } from "../src/core/pages.ts";
 import { ConnectorClient } from "../src/core/connectors/client.ts";
+import { createAccount } from "../src/core/connectors/accounts.ts";
 import type { SyncAccount, SyncAdapter } from "../src/core/connectors/sync-engine.ts";
 import {
   CONNECTOR_SYNC_DAEMON,
@@ -109,11 +110,13 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const db = await open();
     try {
       await registerSource(db.storage.engine(), { id: "conn-job", kind: "other", pathPrefix: "test/job/" });
-      registerConnectorSync(db.storage, runtime(account()));
+      // connector_items references connector_accounts, so the account row exists first.
+      const row = await createAccount(db.storage.engine(), { sourceId: "conn-job", provider: "test", services: ["items"], principalRef: "admin:test", accountLabel: "job@test" });
+      registerConnectorSync(db.storage, runtime(account({ id: row.id })));
       const handler = getHandler(CONNECTOR_SYNC_JOB_KIND)!;
       const job = { id: "j" } as JobRow;
-      const result = await handler({ accountId: ACCOUNT_ID }, { job });
-      expect(result).toMatchObject({ account_id: ACCOUNT_ID, status: "success" });
+      const result = await handler({ accountId: row.id }, { job });
+      expect(result).toMatchObject({ account_id: row.id, status: "success" });
       expect(JSON.stringify(result)).not.toContain(TOKEN);
       expect((await getPage(db.storage, "test/job/j1"))?.markdown_body).toContain("Written by the job.");
 
