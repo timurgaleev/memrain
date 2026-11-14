@@ -6,7 +6,7 @@
 #
 # Quick reference:
 #   make init      interactive bootstrap (writes .env, tfvars, backend.hcl)
-#   make audit     fail if any PII pattern matches a tracked file
+#   make audit     fail if any PII pattern matches a tracked file (+ scope-lint)
 #   make test      run bash unit tests in tests/
 #   make test-pg   run the Postgres-only tests + migrations against a throwaway pgvector container
 #   make plan      terraform init + plan (depends on audit)
@@ -28,8 +28,10 @@ help:
 init: ## Interactive bootstrap — writes .env, terraform.tfvars, backend.hcl
 	@bash scripts/init.sh $(ARGS)
 
-audit: ## Fail if any PII pattern matches a git-tracked file
+audit: ## Fail if any PII pattern matches a git-tracked file, or a source_id read / pooler-unsafe SQL slips past scope-lint
 	@bash scripts/audit.sh
+	@command -v bun >/dev/null 2>&1 || { echo "[audit] bun is required for scripts/scope-lint.ts" >&2; exit 2; }
+	@bun scripts/scope-lint.ts
 
 scrub-audit: ## Broader pre-publication audit — categorised report, fails on HIGH hits
 	@bash scripts/scrub-audit.sh
