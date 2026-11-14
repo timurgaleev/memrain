@@ -304,6 +304,36 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     });
   });
 
+  describe("token sweep", () => {
+    const tokenRow = async (token: string) =>
+      (await db.storage.engine().query(`SELECT 1 FROM oauth_tokens WHERE token_hash = $1`, [sha(token)])).rows.length;
+    const expire = (token: string) =>
+      db.storage.engine().query(`UPDATE oauth_tokens SET expires_at = 1 WHERE token_hash = $1`, [sha(token)]);
+
+    it("keeps an expired family-less token a queued capture names, and the capture writes", async () => {
+      const m2m = await machineToken();
+      const slug = `notes/sweep-kept-${unique()}`;
+      const jobId = await admitCapture(m2m.token, slug);
+      await expire(m2m.token);
+      await provider.sweepExpiredTokens();
+      expect(await tokenRow(m2m.token)).toBe(1);
+
+      expect(await runJob(INGEST_CAPTURE_JOB_KIND, jobId)).not.toBeInstanceOf(Error);
+      expect(await getPage(db.storage, slug)).not.toBeNull();
+
+      await db.storage.engine().query(`UPDATE jobs SET status = 'succeeded' WHERE id = $1`, [jobId]);
+      await provider.sweepExpiredTokens();
+      expect(await tokenRow(m2m.token)).toBe(0);
+    });
+
+    it("sweeps an expired family-less token no job names", async () => {
+      const m2m = await machineToken();
+      await expire(m2m.token);
+      await provider.sweepExpiredTokens();
+      expect(await tokenRow(m2m.token)).toBe(0);
+    });
+  });
+
   it("refuses a legacy capture job that names no principal", async () => {
     const pat = await mintPat();
     const slug = `notes/legacy-${unique()}`;
@@ -355,6 +385,16 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
       await provider.revokeToken(client, { token: alice.refresh_token! });
       expectRefused(await runJob(TRANSCRIPTS_INGEST_JOB_KIND, aliceJob), /revoked/);
       expect(await runJob(TRANSCRIPTS_INGEST_JOB_KIND, bobJob)).toMatchObject({ sessions: 1 });
+    });
+
+    it("keeps an expired family-less token a queued push names", async () => {
+      const m2m = await machineToken();
+      const jobId = await admitPush(m2m.token);
+      await db.storage.engine().query(`UPDATE oauth_tokens SET expires_at = 1 WHERE token_hash = $1`, [sha(m2m.token)]);
+      await provider.sweepExpiredTokens();
+      const left = await db.storage.engine().query(`SELECT 1 FROM oauth_tokens WHERE token_hash = $1`, [sha(m2m.token)]);
+      expect(left.rows.length).toBe(1);
+      expect((await queuedPayload(jobId)).principal).toMatchObject({ kind: "oauth_token" });
     });
 
     it("refuses a legacy push job that names no principal", async () => {

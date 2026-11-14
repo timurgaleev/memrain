@@ -24,6 +24,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import type { PrincipalRef } from "./auth-info.ts";
 import { validateSlug as validatePageSlug } from "./pages.ts";
+import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "./jobs/kinds.ts";
 import {
   hasScope,
   intersectGrantedScopes,
@@ -3068,12 +3069,25 @@ export class OAuthProvider {
   // -------------------------------------------------------------------------
 
   /** Delete expired access/refresh tokens and authorization codes. Returns
-   *  the total row count swept. */
+   *  the total row count swept. A family-less access token is the only
+   *  credential a queued ingest job can name by its own row (see
+   *  resolvePrincipal), so one still named by a pending or running ingest job
+   *  stays until that job is done: reaching the TTL is not a revocation. */
   async sweepExpiredTokens(): Promise<number> {
     const now = Math.floor(Date.now() / 1000);
     const tokens = await this.rows(
-      `DELETE FROM oauth_tokens WHERE expires_at < $1 RETURNING 1`,
-      [now],
+      `WITH held AS (
+         SELECT DISTINCT payload->'principal'->>'id' AS token_hash
+           FROM jobs
+          WHERE kind = ANY($2::text[])
+            AND status IN ('pending', 'running')
+            AND payload->'principal'->>'kind' = 'oauth_token'
+       )
+       DELETE FROM oauth_tokens
+        WHERE expires_at < $1
+          AND NOT (family_id IS NULL AND token_hash IN (SELECT token_hash FROM held WHERE token_hash IS NOT NULL))
+       RETURNING 1`,
+      [now, [INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND]],
     );
     const codes = await this.rows(
       `DELETE FROM oauth_codes WHERE expires_at < $1 RETURNING 1`,
