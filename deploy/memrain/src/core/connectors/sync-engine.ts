@@ -151,8 +151,13 @@ export interface AccountGateway {
 
 export interface SyncDeps {
   adapter: SyncAdapter;
-  /** Open the account's credential. Throws when it cannot (no key, no row). */
-  tokenSource(account: SyncAccount): Promise<TokenSource>;
+  /**
+   * Open the account's credential. Throws when it cannot (no key, no row).
+   * Every token the credential holds, refresh tokens included, is handed to
+   * `secret` as soon as it is read or renewed, so a synced item quoting one
+   * is redacted before it is written.
+   */
+  tokenSource(account: SyncAccount, secret: (value: string) => void): Promise<TokenSource>;
   client(account: SyncAccount, tokenSource: TokenSource): ConnectorClient;
   accounts: AccountGateway;
   /**
@@ -255,9 +260,9 @@ function emptyCounts(): SyncCounts {
 }
 
 /** A token source that remembers every token it handed out, so none can be written into a page. */
-function recordingSource(inner: TokenSource, seen: Map<string, string>): TokenSource {
+function recordingSource(inner: TokenSource, secret: (value: string) => void): TokenSource {
   const keep = (t: string): string => {
-    if (t.length > 0) seen.set(t, "connector-token");
+    secret(t);
     return t;
   };
   return {
@@ -325,17 +330,20 @@ export async function runConnectorSync(storage: Storage, account: SyncAccount, d
   const lockId = syncLockId(account.id);
   if (!(await acquireWorkerLock(engine, lockId, holder, RUN_LOCK_TTL_SEC))) return skip("locked");
   try {
+    const tokens = new Map<string, string>();
+    const secret = (value: string): void => {
+      if (value.length > 0) tokens.set(value, "connector-token");
+    };
     let source: TokenSource;
     try {
-      source = await deps.tokenSource(account);
+      source = await deps.tokenSource(account, secret);
     } catch (e) {
       if (e instanceof ReauthRequiredError) return await needsReconnect(storage, account, deps, result, null, now);
       // A missing key or credential row is the operator's to fix, not the owner's: no pause.
       result.error = `credentials unavailable (${e instanceof Error ? e.name : "error"})`;
       return skip("credentials_unavailable", "partial");
     }
-    const tokens = new Map<string, string>();
-    const client = deps.client(account, recordingSource(source, tokens));
+    const client = deps.client(account, recordingSource(source, secret));
     const run = new Run(storage, account, deps, env, now, result, tokens, seenToday, spentUsd, () => heartbeatWorkerLock(engine, lockId, holder));
     await runWithSpendClient({ clientId: spendClient, capUsd: account.spendCapUsdDaily }, () => run.execute(client));
     if (result.stop_reason === "needs_reconnect") return await needsReconnect(storage, account, deps, result, result.http_status, now);

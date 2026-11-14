@@ -57,6 +57,8 @@ export interface TokenProviderOptions {
   lockTtlSec?: number;
   /** How long to wait for another worker's refresh before giving up for this run. Default 30 s. */
   waitMs?: number;
+  /** Told every token the credential holds whenever it is read or renewed, refresh tokens included. */
+  onSecret?: (value: string) => void;
 }
 
 const DEFAULT_SKEW_MS = 60_000;
@@ -82,9 +84,15 @@ export function createTokenProvider(opts: TokenProviderOptions): TokenSource {
 
   const expired = (c: StoredCredential): boolean => c.expiresAt !== null && c.expiresAt.getTime() - skewMs <= now();
 
+  const note = (value: string | null | undefined): void => {
+    if (opts.onSecret && typeof value === "string" && value.length > 0) opts.onSecret(value);
+  };
+
   const load = async (): Promise<StoredCredential> => {
     const c = await opts.store.read(opts.accountId);
     if (c === null) throw new ReauthRequiredError("no stored credential for this account");
+    note(c.accessToken);
+    note(c.refreshToken);
     return c;
   };
 
@@ -101,6 +109,8 @@ export function createTokenProvider(opts: TokenProviderOptions): TokenSource {
     if (typeof r.accessToken !== "string" || r.accessToken.length === 0) {
       throw new Error("token endpoint returned no access token");
     }
+    note(r.accessToken);
+    note(r.refreshToken);
     const secs = r.expiresInSec;
     await opts.store.write(opts.accountId, {
       accessToken: r.accessToken,

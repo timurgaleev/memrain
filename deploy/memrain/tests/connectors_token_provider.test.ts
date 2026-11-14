@@ -64,6 +64,22 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("tells its owner every token it reads or renews, refresh tokens included", async () => {
+    const db = await open();
+    try {
+      const { store } = memoryStore({ accessToken: tok("a1"), refreshToken: tok("r1"), expiresAt: null });
+      const secrets = new Set<string>();
+      const p = createTokenProvider({
+        engine: db.storage.engine(), accountId: ACCOUNT, store, onSecret: (v) => void secrets.add(v),
+        refresh: async () => ({ accessToken: tok("a2"), refreshToken: tok("r2"), expiresInSec: 3600 }),
+      });
+      expect(await p.token()).toBe(tok("a1"));
+      expect([...secrets].sort()).toEqual([tok("a1"), tok("r1")].sort());
+      await p.refresh(tok("a1"));
+      expect([...secrets].sort()).toEqual([tok("a1"), tok("a2"), tok("r1"), tok("r2")].sort());
+    } finally { await db.close(); }
+  });
+
   it("keeps the old refresh token when the provider does not rotate it", async () => {
     const db = await open();
     try {
