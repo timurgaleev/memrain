@@ -131,7 +131,7 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
       if (!account.accountLabel) throw new Error(`connector account ${account.id} has no label`);
       const scope = { sourceId: account.sourceId, accountRef: accountRef(account.accountLabel) };
       return {
-        adapter: sync.adapter(account),
+        adapter: sync.adapter(account, { env, ...(opts.now ? { now: opts.now } : {}) }),
         tokenSource: async (_account, secret) => {
           const client = await resolveClient({ engine, kek: opts.kek, providers: opts.providers, fetch: fetchFn, env }, opts.kek, provider.id);
           const token = new URL(provider.tokenUrl);

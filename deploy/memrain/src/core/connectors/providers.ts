@@ -27,6 +27,12 @@ export interface RevokeContext {
   client: { clientId: string; clientSecret: string };
 }
 
+/** What a sync run hands its adapter: the run's environment and clock. */
+export interface AdapterContext {
+  env: NodeJS.ProcessEnv;
+  now?: () => number;
+}
+
 export interface ConnectorProvider {
   id: string;
   /** Authorization endpoint the owner's browser is sent to (https). */
@@ -52,7 +58,7 @@ export interface ConnectorProvider {
   sync?: {
     /** The one https origin the sync client may call. */
     apiOrigin: string;
-    adapter: (account: SyncAccount) => SyncAdapter;
+    adapter: (account: SyncAccount, ctx: AdapterContext) => SyncAdapter;
   };
 }
 
