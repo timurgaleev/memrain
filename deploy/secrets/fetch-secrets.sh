@@ -11,7 +11,8 @@
 #                    value is skipped; both non-empty and different exits 1.
 #                    Unset or empty means `memex` (deploy/secrets/lib.sh).
 #   POSTGRES_URL_SECRET_NAME, PUBLIC_BEARER_SECRET_NAME,
-#   INTERNAL_TOKEN_SECRET_NAME, TUNNEL_TOKEN_SECRET_NAME
+#   INTERNAL_TOKEN_SECRET_NAME, TUNNEL_TOKEN_SECRET_NAME,
+#   CONNECTOR_KEK_SECRET_NAME, NOTIFY_WEBHOOK_SECRET_NAME
 #                    optional full secret ids that replace the lookup above.
 #   MEMRAIN_REQUIRE_POSTGRES (or MEMEX_REQUIRE_POSTGRES)
 #                    1 = a missing Postgres URL is an error, not a PGLite start.
@@ -128,6 +129,29 @@ case "$rc" in
      echo "[secrets] memrain internal token fetched" ;;
   2) echo "[secrets] memrain internal token not yet provisioned — internal routes stay open (legacy fallthrough)" ;;
   *) echo "[secrets] ERROR: internal token lookup failed; nothing written" >&2; exit 1 ;;
+esac
+
+# Connector key (KEK): seals every connector token and bring-your-own OAuth
+# client secret. Optional — without it connectors stay closed and doctor says
+# why. terraform creates it as an empty placeholder (no version) only when
+# enable_connector_kek_secret is true; the operator puts the value in by hand
+# (docs/connectors/KEY.md), so it never sits in terraform state.
+rc=0; fetch_kind connector-kek 1 || rc=$?
+case "$rc" in
+  0) append_env MEMRAIN_CONNECTOR_KEK
+     echo "[secrets] connector key fetched" ;;
+  2) echo "[secrets] connector key not provisioned (connectors stay closed)" ;;
+  *) echo "[secrets] ERROR: connector key lookup failed; nothing written" >&2; exit 1 ;;
+esac
+
+# HMAC secret that signs outgoing notification webhooks. Optional, same
+# placeholder rule as the connector key.
+rc=0; fetch_kind notify-webhook 1 || rc=$?
+case "$rc" in
+  0) append_env MEMRAIN_NOTIFY_WEBHOOK_SECRET
+     echo "[secrets] notification webhook secret fetched" ;;
+  2) echo "[secrets] notification webhook secret not provisioned (webhook delivery off)" ;;
+  *) echo "[secrets] ERROR: notification webhook secret lookup failed; nothing written" >&2; exit 1 ;;
 esac
 
 PUBLIC_WRITE="${MEMRAIN_PUBLIC_WRITE:-${MEMEX_PUBLIC_WRITE:-0}}"

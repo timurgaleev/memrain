@@ -52,6 +52,11 @@ ssh_allowed_cidr  = ""           # ingress 22 from this CIDR (use SSM instead!)
 
 ssh_public_key    = ""           # ssh-rsa / ssh-ed25519 key to register as the EC2 key pair
 
+# Connectors (Google Calendar, Fireflies, ...). true creates an EMPTY secret;
+# you put the value in by hand (docs/connectors/KEY.md and ENABLE.md).
+enable_connector_kek_secret  = false  # <secrets_prefix>/memrain-connector-kek
+enable_notify_webhook_secret = false  # <secrets_prefix>/memrain-notify-webhook
+
 # ---------------------------------------------------------------------------
 # Legacy — only set true while migrating from a private SSH-clone deploy.
 # Public-repo deploys leave this at false.

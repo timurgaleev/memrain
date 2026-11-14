@@ -74,6 +74,32 @@ variable "use_ssh_deploy_key" {
   default     = false
 }
 
+variable "enable_connector_kek_secret" {
+  description = <<-EOT
+    Create the empty <secrets_prefix>/memrain-connector-kek secret that holds
+    the connector key (32 random bytes, base64) and let the instance role read
+    it. Terraform never writes the value: put it in by hand afterwards
+    (docs/connectors/KEY.md). Off by default; connectors stay closed without it.
+
+    The secret is prevent_destroy: flipping this back to false fails at plan
+    until the secret is dropped from state with
+    `terraform state rm 'aws_secretsmanager_secret.connector_kek[0]'`.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "enable_notify_webhook_secret" {
+  description = <<-EOT
+    Create the empty <secrets_prefix>/memrain-notify-webhook secret holding the
+    HMAC key that signs outgoing notification webhooks, and let the instance
+    role read it. Value put in by hand, like the connector key. Off by default.
+    prevent_destroy, same retirement path as enable_connector_kek_secret.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "ssh_public_key" {
   description = <<-EOT
     Public key (ssh-rsa / ssh-ed25519) to register as the EC2 key pair.

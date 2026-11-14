@@ -133,6 +133,25 @@ data "aws_iam_policy_document" "memrain_custom" {
     ]
   }
 
+  # Secrets Manager: read the connector key and the notification webhook
+  # secret by exact ARN. SecretsRead above already covers them while
+  # secrets_read_prefixes includes secrets_prefix; this grant keeps connectors
+  # working when it does not (a prefix move), without widening that list. Only
+  # present once one of the two secrets exists: a statement with no Resource
+  # is a malformed policy.
+  dynamic "statement" {
+    for_each = length(local.connector_secret_arns) > 0 ? [1] : []
+    content {
+      sid    = "SecretsReadConnectors"
+      effect = "Allow"
+      actions = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+      ]
+      resources = local.connector_secret_arns
+    }
+  }
+
   # Secrets Manager: write only the public-bearer secret, used by the
   # daily rotation timer (deploy/systemd/memrain-rotate-bearer.timer).
   # Scoped to this single ARN — every other secret stays read-only.
@@ -172,6 +191,13 @@ data "aws_iam_policy_document" "memrain_custom" {
       "${aws_cloudwatch_log_group.memrain.arn}:*",
     ]
   }
+}
+
+locals {
+  connector_secret_arns = concat(
+    aws_secretsmanager_secret.connector_kek[*].arn,
+    aws_secretsmanager_secret.notify_webhook[*].arn,
+  )
 }
 
 resource "aws_iam_role_policy" "memrain_custom" {

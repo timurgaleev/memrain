@@ -320,7 +320,7 @@ def test_env_key_set_is_the_pre_rename_set_plus_additions(compose):
 def test_no_secret_or_host_in_environment(compose):
     """An empty `environment:` entry blanks the env_file value of the same
     name, so the secret-bearing keys and the bind host never appear here."""
-    forbidden = re.compile(r"_(POSTGRES_URL|PUBLIC_BEARER|INTERNAL_TOKEN|HOST)$")
+    forbidden = re.compile(r"_(POSTGRES_URL|PUBLIC_BEARER|INTERNAL_TOKEN|HOST|CONNECTOR_KEK|SECRET)$")
     bad = sorted(k for k in _env_keys(compose) if forbidden.search(k))
     assert not bad, bad
 
