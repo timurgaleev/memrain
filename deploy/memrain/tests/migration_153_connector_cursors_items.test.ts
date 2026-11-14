@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
+import { registerSource } from "../src/core/sources.ts";
 
 const ACCOUNT = "4f1c2a8e-6b0d-4c55-9a77-0d3e5f6a7b81";
 const TABLES = ["connector_cursors", "connector_items", "connector_notices"] as const;
@@ -9,6 +10,15 @@ const TABLES = ["connector_cursors", "connector_items", "connector_notices"] as 
 /** Only the latest migration can be reverted, so later ones go first. */
 async function revertLaterThan153(e: Engine): Promise<void> {
   for (const id of discoverMigrations().map(m => m.id).filter(id => id > 153).sort((a, b) => b - a)) await revertMigration(e, id);
+}
+
+/** Migration 152 makes connector_accounts the parent of every row here. */
+async function seedAccount(e: Engine): Promise<void> {
+  await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "mail/" });
+  await e.query(
+    `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES ($1, 'inbox', 'test', 'admin:operator', 'owner@example.test')`,
+    [ACCOUNT],
+  );
 }
 
 const present = async (e: Engine) => (await e.query<{ t: string | null }>(
@@ -21,6 +31,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const e = db.storage.engine();
     try {
       expect(await present(e)).toEqual([...TABLES]);
+      await seedAccount(e);
       await e.query(`INSERT INTO connector_cursors (account_id, stream, cursor) VALUES ($1, 'gmail.history', '42')`, [ACCOUNT]);
       await expect(e.query(`INSERT INTO connector_cursors (account_id, stream, cursor) VALUES ($1, 'gmail.history', '43')`, [ACCOUNT]))
         .rejects.toThrow();
@@ -44,6 +55,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const e = db.storage.engine();
     try {
       await revertLaterThan153(e);
+      await seedAccount(e);
       await e.query(`INSERT INTO connector_items (account_id, external_id) VALUES ($1, 'm1')`, [ACCOUNT]);
       await expect(revertMigration(e, 153)).rejects.toThrow("sync state");
       expect(await present(e)).toEqual([...TABLES]);

@@ -101,6 +101,11 @@ function harness(responses: Array<Recorded | Error>, opts: { tokenSource?: Token
 
 async function setup(storage: Storage): Promise<void> {
   await registerSource(storage.engine(), { id: SOURCE, kind: "other", pathPrefix: "test/acct/" });
+  // Cursors, items and notices reference connector_accounts (migration 152).
+  await storage.engine().query(
+    `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES ($1, $2, 'test', 'admin:operator', 'owner@example.test')`,
+    [ACCOUNT_ID, SOURCE],
+  );
 }
 
 const itemRow = async (storage: Storage, id: string) => (await storage.engine().query<{ fail_count: number; held_reason: string | null; page_slug: string | null; deleted_upstream_at: string | null }>(
