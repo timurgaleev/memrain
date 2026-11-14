@@ -8,8 +8,16 @@
  * exactly those scopes and refuses a grant that differs from them. Real
  * provider definitions are registered with their connectors; tests register
  * their own provider and play its endpoints with a recorded FetchFn.
+ *
+ * A provider that authenticates with an API key the owner pastes (Fireflies)
+ * is an ApiKeyProvider instead: no OAuth endpoints, a key check that names the
+ * key's owner, and a sync whose credential is the sealed key itself. The OAuth
+ * connect flow never sees one.
  */
+import type { Engine } from "../engine/interface.ts";
 import type { FetchFn } from "./client.ts";
+import type { ProviderLimiterOptions } from "./limiter.ts";
+import { firefliesProvider } from "./fireflies.ts";
 import type { SourceKind } from "../sources.ts";
 import type { SyncAccount, SyncAdapter } from "./sync-engine.ts";
 import { assertConnectorName } from "./accounts.ts";
@@ -63,6 +71,23 @@ export interface ConnectorProvider {
   };
 }
 
+export interface ApiKeyProvider {
+  id: string;
+  services: Readonly<Record<string, ProviderService>>;
+  /**
+   * Check a key with the provider and return who owns it (the account label).
+   * Throws when the provider refuses the key or cannot be reached.
+   */
+  verifyKey(ctx: { fetch: FetchFn; apiKey: string }): Promise<string>;
+  sync: {
+    /** The one https origin the sync client may call. */
+    apiOrigin: string;
+    /** Pacing shared by every run of one account (the key's own limits). */
+    limits: Omit<ProviderLimiterOptions, "now" | "sleep">;
+    adapter: (account: SyncAccount, ctx: { engine: Engine; now: () => number }) => SyncAdapter;
+  };
+}
+
 function assertHttps(url: string, what: string, id: string): void {
   let parsed: URL;
   try {
@@ -76,10 +101,11 @@ function assertHttps(url: string, what: string, id: string): void {
 
 export class ProviderRegistry {
   private readonly providers = new Map<string, ConnectorProvider>();
+  private readonly keyed = new Map<string, ApiKeyProvider>();
 
   register(provider: ConnectorProvider): void {
     assertConnectorName(provider.id, "provider");
-    if (this.providers.has(provider.id)) throw new Error(`provider ${provider.id} is already registered`);
+    if (this.providers.has(provider.id) || this.keyed.has(provider.id)) throw new Error(`provider ${provider.id} is already registered`);
     assertHttps(provider.authorizeUrl, "authorizeUrl", provider.id);
     assertHttps(provider.tokenUrl, "tokenUrl", provider.id);
     if (provider.revokeUrl !== undefined) assertHttps(provider.revokeUrl, "revokeUrl", provider.id);
@@ -97,11 +123,30 @@ export class ProviderRegistry {
   list(): ConnectorProvider[] {
     return [...this.providers.values()];
   }
+
+  registerApiKey(provider: ApiKeyProvider): void {
+    assertConnectorName(provider.id, "provider");
+    if (this.providers.has(provider.id) || this.keyed.has(provider.id)) throw new Error(`provider ${provider.id} is already registered`);
+    assertHttps(provider.sync.apiOrigin, "sync.apiOrigin", provider.id);
+    const services = Object.keys(provider.services);
+    if (services.length === 0) throw new Error(`provider ${provider.id} declares no services`);
+    for (const s of services) assertConnectorName(s, "service");
+    this.keyed.set(provider.id, provider);
+  }
+
+  getApiKey(id: string): ApiKeyProvider | null {
+    return this.keyed.get(id) ?? null;
+  }
+
+  listApiKey(): ApiKeyProvider[] {
+    return [...this.keyed.values()];
+  }
 }
 
 /** Providers that ship with Memrain. Each arrives with its connector. */
 export function builtinProviders(): ProviderRegistry {
   const registry = new ProviderRegistry();
   registry.register(googleProvider());
+  registry.registerApiKey(firefliesProvider());
   return registry;
 }

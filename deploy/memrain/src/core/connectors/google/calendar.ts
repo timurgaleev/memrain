@@ -55,7 +55,7 @@
 import type { ConnectorClient, ConnectorResponse } from "../client.ts";
 import { renderCalendarEvent } from "../render.ts";
 import { retentionDays } from "../retention.ts";
-import { syncItemFromPage } from "../runtime.ts";
+import { syncItemFromPage } from "../sync-item.ts";
 import { shortHash, type CalendarAttendee, type CalendarEvent, type CalendarOccurrence, type ConnectorContext, type Person } from "../model.ts";
 import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
 import type { AdapterContext } from "../providers.ts";

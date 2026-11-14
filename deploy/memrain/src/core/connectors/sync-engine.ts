@@ -33,6 +33,12 @@
  *     `<slug>/part-NNN` pages carrying the item's truth and `part_of`, so a
  *     long transcript is stored whole and deleted whole; when it shrinks,
  *     the parts the new split lacks are deleted with their derived rows;
+ *   - enrichment: an item that carries its participants (enrich) is handed
+ *     to `onItemWritten` once its page is written and before its checkpoint
+ *     commits, which links the people pages the brain already has and, for an
+ *     event or meeting, writes one chronicle row (enrich-deterministic.ts);
+ *     an enrichment failure is recorded as an item failure, so the item is
+ *     not settled and the next run writes and enriches it again;
  *   - a page whose mirror into search failed is not settled: it counts as an
  *     item failure, holds the cursor, and is mirrored again next run;
  *   - a credential the provider will not renew pauses the account
@@ -644,7 +650,7 @@ class Run {
       const item = this.written[this.enrichedItems++]!;
       if (hook === undefined) continue;
       try {
-        await hook(this.storage, item);
+        await hook(this.storage, this.swept(item));
       } catch (e) {
         if (e instanceof PageNotFoundError) continue;
         const outcome = await recordItemFailure(this.engine, {
@@ -659,6 +665,22 @@ class Run {
     }
     if (blocking > 0) this.stop("items_failed");
     return blocking === 0;
+  }
+
+  /**
+   * The item as enrichment sees it. Its title and names reach the chronicle
+   * and wanted rows from there, not from the page, so a live token is swept
+   * out of them as it is out of the page.
+   */
+  private swept(item: RenderedSyncItem & { enrich: ItemEnrichment }): RenderedSyncItem & { enrich: ItemEnrichment } {
+    if (this.tokens.size === 0) return item;
+    const sweep = (text: string): string => sweepEchoes(text, this.tokens, []);
+    const participants = item.enrich.participants.map(p => ({
+      ...p,
+      name: p.name === null ? null : sweep(p.name),
+      email: p.email === null ? null : sweep(p.email),
+    }));
+    return { ...item, title: sweep(item.title), enrich: { ...item.enrich, participants } };
   }
 
   /**

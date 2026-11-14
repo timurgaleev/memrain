@@ -106,6 +106,33 @@ export async function getItem(engine: Engine, accountId: string, externalId: str
   return r.rows[0] ? toItem(r.rows[0]) : null;
 }
 
+/**
+ * The version each of `externalIds` is settled at: stored as a page, not
+ * failing, not held, not deleted upstream. An adapter whose provider has no
+ * cheap change feed skips fetching an item whose listed version matches.
+ */
+export async function settledItemVersions(engine: Engine, accountId: string, externalIds: readonly string[]): Promise<Map<string, string>> {
+  if (externalIds.length === 0) return new Map();
+  const r = await engine.query<{ external_id: string; external_version: string }>(
+    `SELECT external_id, external_version FROM connector_items
+      WHERE account_id = $1 AND external_id = ANY($2::text[]) AND external_version IS NOT NULL
+        AND page_slug IS NOT NULL AND fail_count = 0 AND held_reason IS NULL AND deleted_upstream_at IS NULL`,
+    [accountId, [...externalIds]],
+  );
+  return new Map(r.rows.map(row => [row.external_id, row.external_version]));
+}
+
+/** Ids of the account's items stored as pages and not deleted upstream: what a deletion reconcile checks. */
+export async function liveItemIds(engine: Engine, accountId: string): Promise<string[]> {
+  const r = await engine.query<{ external_id: string }>(
+    `SELECT external_id FROM connector_items
+      WHERE account_id = $1 AND page_slug IS NOT NULL AND deleted_upstream_at IS NULL
+      ORDER BY external_id`,
+    [accountId],
+  );
+  return r.rows.map(row => row.external_id);
+}
+
 /** The page another item of this account already became under `dedupeKey`, if any. */
 export async function pageForDedupeKey(engine: Engine, accountId: string, dedupeKey: string, externalId: string): Promise<string | null> {
   const r = await engine.query<{ page_slug: string }>(
