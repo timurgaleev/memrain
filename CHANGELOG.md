@@ -17,13 +17,48 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Paid daemons (connector sync first) do not run without
   `MEMRAIN_DAILY_BUDGET_USD`; connector sync is capped at $5 a day across every
   account by default, on top of each account's cap.
+- Trust tiers: pages, facts and documents record who wrote them (`owner`,
+  `member`, `agent`, `external`), derived from the credential and the source's
+  kind, never from an argument. `search`, `query` and `context_pack` take
+  `min_trust`, and search hits report `trust_tier`. Rows written before the
+  upgrade are not rewritten; their tier is derived when read. Migration 158.
+- Write gate: text that reads as instructions to an AI is caught by a
+  deterministic check (no model call) before it becomes memory. Outside text
+  defaults to `flag` (stored, marked `content_flag: instruction_like`, read
+  back inside a stronger frame); `quarantine` hides it and queues it for
+  `memrain write-gate list|approve|reject`; `reject` refuses it. Agent writes
+  are not gated unless `MEMRAIN_WRITE_GATE_AGENT` is set. Migration 159.
+- `memrain daemons enable|disable <name> [--source ID]` and
+  `POST /admin/api/daemons/control` switch a daemon on or off, audited.
+- `--json` on the main commands prints exactly one JSON object on stdout,
+  `--json --help` included. `docs/ERRORS.md` and `docs/TOOLS.md` are
+  generated from the error registry and the tool definitions.
 
 ### Changed
 - Facts extraction, the conversation-facts backfill, the contextual-LLM tier
   and deep synthesis book their calls under their own wallet path. Their caps
   are unchanged.
 - Connector pages are left out of the facts backfill, on-write extraction and
-  the contextual-LLM tier.
+  the contextual-LLM tier. Deep synthesis gathers at `min_trust` `agent`, so
+  no outside text (connector, GitHub, webhook pages) reaches its prompt.
+- Existing `github` sources are outside sources to the write gate, so
+  re-indexed issue and PR text that reads as instructions is now flagged and
+  framed by default. Set `MEMRAIN_WRITE_GATE_EXTERNAL=off` to keep the old
+  behaviour.
+- `memrain quarantine clear` refuses a document the write gate holds (use
+  `memrain write-gate approve`) and keeps the gate's flag.
+- The index timing line goes to stderr and names a page by its redacted
+  label, so a slug holding a credential no longer reaches the log.
+
+### Fixed
+- Connector sync skips an account whose provider cannot sync instead of
+  failing the whole source run.
+- A connector's refresh token is redacted from synced text, not only its
+  access token.
+- A connector item that shrinks deletes the part pages it no longer has, with
+  their chunks, embeddings and derived rows.
+- Disconnecting a connector holds and renews the refresh lock, and a revoke
+  that outlived the lock is not trusted.
 
 ## [1.16.0] — 2026-11-14
 
