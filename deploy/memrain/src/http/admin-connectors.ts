@@ -1,11 +1,16 @@
 /**
  * Admin routes for connector accounts: status, OAuth connect,
- * bring-your-own OAuth clients, and saving a provider API key (Fireflies).
+ * bring-your-own OAuth clients, saving a provider API key (Fireflies), and
+ * the Connections page's account actions (sync on/off, disconnect, preview
+ * and delete everything, held deletions and held items).
  *
  * `/admin/api/connectors*` is dispatched from handleAdminApi after its gates
  * (admin session, same-origin on writes, post-enroll cooldown), so this file
- * only routes. Everything answers `connectors_disabled` until
- * MEMRAIN_CONNECTORS_ENABLED is on and the connector key loads.
+ * only routes. Connecting and disconnecting answer `connectors_disabled` until
+ * MEMRAIN_CONNECTORS_ENABLED is on and the connector key loads; the rest work
+ * with connectors off, so an owner can still stop a sync or delete its data.
+ * A disconnect, and deleting an account's data, both need the account's name
+ * typed back; deleting needs the account disconnected first.
  *
  * The provider sends the owner's browser back with a cross-site redirect, and
  * the admin session cookie is SameSite=Strict, so the callback request carries
@@ -15,12 +20,35 @@
  * and binds the state to it. The page runs no script and is never cached.
  */
 import type { Storage } from "../core/storage.ts";
+import type { Engine } from "../core/engine/interface.ts";
+import { listSources } from "../core/sources.ts";
+import { OperationError } from "../core/operation-error.ts";
 import type { FetchFn } from "../core/connectors/client.ts";
-import { listAccounts } from "../core/connectors/accounts.ts";
+import { credentialMeta, getAccount, listAccounts, setAccountEnabled, type ConnectorAccount } from "../core/connectors/accounts.ts";
 import { ApiKeyConnectError, connectApiKey } from "../core/connectors/api-key-connect.ts";
-import { listOAuthClients, setOAuthClient } from "../core/connectors/oauth-clients.ts";
-import { completeConnect, ConnectError, connectorCallbackUri, startConnect, type ConnectDeps } from "../core/connectors/oauth-connect.ts";
-import type { ProviderRegistry } from "../core/connectors/providers.ts";
+import { accountRef } from "../core/connectors/model.ts";
+import { deleteOAuthClient, listOAuthClients, setOAuthClient } from "../core/connectors/oauth-clients.ts";
+import { deleteAllConnectorData, previewConnectorData } from "../core/connectors/retention.ts";
+import {
+  confirmHeldDeletes,
+  forgetSyncState,
+  heldItemCount,
+  itemsInDeletionState,
+  listOpenNotices,
+  MASS_DELETE,
+  rejectHeldDeletes,
+  retryHeldItems,
+  type OpenNotice,
+} from "../core/connectors/sync-store.ts";
+import {
+  completeConnect,
+  ConnectError,
+  connectorCallbackUri,
+  disconnectAccount,
+  startConnect,
+  type ConnectDeps,
+} from "../core/connectors/oauth-connect.ts";
+import type { ProviderRegistry, ProviderService } from "../core/connectors/providers.ts";
 import { builtinProviders } from "../core/connectors/providers.ts";
 import { connectorsStatus, loadKek, VaultError, type ConnectorsStatus, type Kek } from "../core/connectors/vault.ts";
 
@@ -54,6 +82,11 @@ export function defaultConnectorDeps(
 }
 
 const PROVIDER_RE = /^[a-z][a-z0-9_]{0,31}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PLAN_HASH_RE = /^[0-9a-f]{16}$/;
+/** Where a finished connect lands: the Connections page, which reads the outcome from the query. */
+const DONE_PATH = "/admin/";
+const DONE_HASH = "#connections";
 const MAX_BODY = 16 * 1024;
 const MAX_PARAM = 4096;
 const PRINCIPAL = "admin:operator";
@@ -88,22 +121,74 @@ function disabled(deps: AdminConnectorDeps): Response {
   return json({ error: "connectors_disabled", reason: deps.status().reason }, 403);
 }
 
+/** The address a bring-your-own app must allow as its redirect; null until the public URL can receive one. */
+function callbackUri(publicUrl: string | undefined, provider: string): string | null {
+  if (!publicUrl) return null;
+  try {
+    return connectorCallbackUri(publicUrl, provider);
+  } catch {
+    return null;
+  }
+}
+
+/** The source kinds each service may write into, as the Connections page filters sources by. */
+function serviceKinds(services: Readonly<Record<string, ProviderService>>): Record<string, string[]> {
+  return Object.fromEntries(Object.entries(services).map(([id, s]) => [id, [...s.sourceKinds]]));
+}
+
+/** Everything the Connections page shows about one account; never a secret. */
+async function describeAccount(engine: Engine, account: ConnectorAccount, notices: readonly OpenNotice[]) {
+  const cred = await credentialMeta(engine, account.id);
+  return {
+    ...account,
+    held_items: await heldItemCount(engine, account.id),
+    held_deletes: (await itemsInDeletionState(engine, account.id, MASS_DELETE)).length,
+    notices: notices.filter((n) => n.account_id === account.id).map(({ kind, detail, created_at }) => ({ kind, detail, created_at })),
+    credential: cred ? { scopes: cred.scopes, expires_at: cred.expires_at } : null,
+  };
+}
+
 export async function handleAdminConnectors(req: Request, url: URL, deps: AdminConnectorDeps): Promise<Response | null> {
   const p = url.pathname;
   if (p === "/admin/api/connectors" && req.method === "GET") {
     const st = deps.status();
     const engine = deps.storage.engine();
+    const notices = await listOpenNotices(engine);
+    const accounts = await listAccounts(engine);
     return json({
       enabled: st.enabled,
       reason: st.reason,
       kek_id: st.kekId,
       providers: [
-        ...deps.providers.list().map((pr) => ({ id: pr.id, services: Object.keys(pr.services) })),
-        ...deps.providers.listApiKey().map((pr) => ({ id: pr.id, services: Object.keys(pr.services), auth: "api_key" })),
+        ...deps.providers.list().map((pr) => ({
+          id: pr.id,
+          services: Object.keys(pr.services),
+          service_kinds: serviceKinds(pr.services),
+          auth: "oauth",
+          callback_uri: callbackUri(deps.publicUrl, pr.id),
+        })),
+        ...deps.providers.listApiKey().map((pr) => ({
+          id: pr.id,
+          services: Object.keys(pr.services),
+          service_kinds: serviceKinds(pr.services),
+          auth: "api_key",
+          callback_uri: null,
+        })),
       ],
-      accounts: await listAccounts(engine),
+      sources: (await listSources(engine)).map((s) => ({ id: s.id, kind: s.kind })),
+      accounts: await Promise.all(accounts.map((a) => describeAccount(engine, a, notices))),
       clients: await listOAuthClients(engine),
     });
+  }
+
+  const acct = /^\/admin\/api\/connectors\/accounts\/([^/]+)\/(enable|disable|disconnect|preview|delete-data|retry-held|deletions\/confirm|deletions\/reject)$/.exec(p);
+  if (acct) return accountAction(req, acct[1]!, acct[2]!, deps);
+
+  const clientDelete = /^\/admin\/api\/connectors\/([^/]+)\/client\/delete$/.exec(p);
+  if (clientDelete && req.method === "POST") {
+    const provider = clientDelete[1]!;
+    if (!PROVIDER_RE.test(provider) || !deps.providers.get(provider)) return json({ error: "unknown_provider" }, 400);
+    return json({ ok: true, deleted: await deleteOAuthClient(deps.storage.engine(), provider) });
   }
 
   const m = /^\/admin\/api\/connectors\/([^/]+)\/(start|complete|client|key)$/.exec(p);
@@ -170,19 +255,104 @@ async function saveKey(provider: string, body: Record<string, unknown>, deps: Ad
   }
 }
 
+/** The typed confirmation must name the account exactly (surrounding spaces aside). */
+function confirmsAccount(body: Record<string, unknown> | null, account: ConnectorAccount): boolean {
+  return typeof body?.confirm_label === "string" && body.confirm_label.trim() === account.account_label;
+}
+
+/** Deleting everything is for an account that can no longer sync it back. */
+function isDisconnected(account: ConnectorAccount): boolean {
+  return account.status === "revoked" || (account.status === "error" && account.status_reason === "revoke_failed");
+}
+
+/**
+ * Connector pages name their owner by a hash of the lowercased label, without
+ * the provider. Another account in the same source with that label (the same
+ * mailbox through another provider, or the address in other case) owns pages
+ * the scope cannot tell apart, so deleting by it would take that account's
+ * pages too.
+ */
+async function sharesOwner(engine: Engine, account: ConnectorAccount, ref: string): Promise<boolean> {
+  return (await listAccounts(engine, { sourceId: account.source_id }))
+    .some((other) => other.id !== account.id && accountRef(other.account_label) === ref);
+}
+
+const SHARED_OWNER = {
+  error: "shared_owner",
+  message: "Another account in this source writes pages under the same name, so they cannot be told apart. Remove that account first.",
+};
+
+async function accountAction(req: Request, id: string, action: string, deps: AdminConnectorDeps): Promise<Response | null> {
+  if (req.method !== (action === "preview" ? "GET" : "POST")) return null;
+  if (!UUID_RE.test(id)) return json({ error: "invalid account id" }, 400);
+  const engine = deps.storage.engine();
+  const account = await getAccount(engine, id);
+  if (!account) return json({ error: "account_not_found" }, 404);
+  const scope = { sourceId: account.source_id, accountRef: accountRef(account.account_label) };
+
+  try {
+    switch (action) {
+      case "enable":
+      case "disable":
+        // A disconnected account has no credential to sync with; switching it on would read as on while nothing runs.
+        if (action === "enable" && isDisconnected(account)) {
+          return json({ error: "not_connected", message: "Reconnect the account before switching its sync on." }, 409);
+        }
+        await setAccountEnabled(engine, id, action === "enable");
+        return json({ ok: true, enabled: action === "enable" });
+      case "retry-held":
+        return json({ ok: true, retried: await retryHeldItems(engine, id) });
+      case "deletions/confirm":
+        return json({ ok: true, confirmed: await confirmHeldDeletes(engine, id) });
+      case "deletions/reject":
+        return json({ ok: true, kept: await rejectHeldDeletes(engine, id) });
+      case "preview":
+        if (await sharesOwner(engine, account, scope.accountRef)) return json(SHARED_OWNER, 409);
+        return json(await previewConnectorData(deps.storage, scope));
+      case "disconnect": {
+        if (!confirmsAccount(await readBody(req), account)) return json({ error: "confirm_mismatch" }, 400);
+        if (!deps.status().enabled || deps.kek() === null) return disabled(deps);
+        const r = await disconnectAccount(connectDeps(deps), id);
+        return json({ ok: true, revoked: r.revoked, credential_kept: r.credentialKept });
+      }
+      case "delete-data": {
+        const body = await readBody(req);
+        if (!confirmsAccount(body, account)) return json({ error: "confirm_mismatch" }, 400);
+        if (typeof body?.plan_hash !== "string" || !PLAN_HASH_RE.test(body.plan_hash)) return json({ error: "plan_hash is required" }, 400);
+        if (!isDisconnected(account)) {
+          return json({ error: "still_connected", message: "Disconnect the account first, so a sync cannot bring the pages back." }, 409);
+        }
+        if (await sharesOwner(engine, account, scope.accountRef)) return json(SHARED_OWNER, 409);
+        const r = await deleteAllConnectorData(deps.storage, scope, { expectedPlanHash: body.plan_hash });
+        await forgetSyncState(engine, id);
+        return json({ ok: true, deleted: r.deleted.length, changed: r.changed.length });
+      }
+      default:
+        return null;
+    }
+  } catch (e) {
+    if (e instanceof ConnectError) return json({ error: e.code }, e.code === "account_not_found" ? 404 : 409);
+    if (e instanceof OperationError) {
+      return json({ error: e.code, message: e.message, suggestion: e.suggestion }, e.code === "conflict" ? 409 : 400);
+    }
+    console.error(`[admin-connectors] ${action} failed:`, e instanceof Error ? e.name : "error");
+    return json({ error: "internal error" }, 500);
+  }
+}
+
 async function complete(req: Request, provider: string, deps: AdminConnectorDeps): Promise<Response> {
   const session = deps.adminSessionId(req);
-  if (!session) return redirect("/admin/?connector_error=state_session");
+  if (!session) return redirect(`${DONE_PATH}?connector_error=state_session${DONE_HASH}`);
   const body = await readBody(req);
-  if (!body) return redirect("/admin/?connector_error=state_invalid");
+  if (!body) return redirect(`${DONE_PATH}?connector_error=state_invalid${DONE_HASH}`);
   try {
     await completeConnect(connectDeps(deps), { provider, state: body.state, code: body.code, error: body.error, adminSessionId: session });
-    return redirect("/admin/?connector=connected");
+    return redirect(`${DONE_PATH}?connector=connected${DONE_HASH}`);
   } catch (e) {
-    if (e instanceof ConnectError) return redirect(`/admin/?connector_error=${e.code}`);
-    if (e instanceof VaultError) return redirect("/admin/?connector_error=vault");
+    if (e instanceof ConnectError) return redirect(`${DONE_PATH}?connector_error=${e.code}${DONE_HASH}`);
+    if (e instanceof VaultError) return redirect(`${DONE_PATH}?connector_error=vault${DONE_HASH}`);
     console.error("[admin-connectors] complete failed:", e instanceof Error ? e.name : "error");
-    return redirect("/admin/?connector_error=internal");
+    return redirect(`${DONE_PATH}?connector_error=internal${DONE_HASH}`);
   }
 }
 

@@ -1238,3 +1238,73 @@ pre.copy-value {
 @media (max-width: 480px) {
   .recovery-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Connections, Autonomy, Approvals */
+.holds-filter { margin-bottom: 16px; }
+.flash-dismiss { margin-left: 12px; font-size: 12px; color: inherit; }
+.status-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; color: var(--text-secondary); margin: 4px 0 8px; }
+.status-cell { display: inline-flex; align-items: center; gap: 6px; }
+.row-actions { text-align: right; white-space: nowrap; }
+.row-actions .btn + .btn { margin-left: 6px; }
+.daemon-paid { margin-left: 6px; }
+
+.account-list, .hold-list { list-style: none; }
+.account-row, .hold-row { padding: 14px 0; display: grid; gap: 8px; min-width: 0; }
+.account-row + .account-row, .hold-row + .hold-row { border-top: 1px solid var(--border); }
+.account-row:first-child, .hold-row:first-child { padding-top: 2px; }
+.account-row:last-child, .hold-row:last-child { padding-bottom: 2px; }
+.account-head, .hold-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
+.account-name, .hold-target { font-size: 13px; color: var(--text-primary); overflow-wrap: anywhere; }
+.account-state { font-size: 13px; font-weight: 500; }
+.account-meta { font-size: 12px; grid-template-columns: 88px minmax(0, 1fr); }
+.account-meta dd { text-align: left; }
+.account-scopes { overflow-wrap: anywhere; }
+.account-attention { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin: 0; }
+.attention-actions, .account-actions, .hold-actions, .dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.dialog-actions { justify-content: flex-end; margin-top: 16px; }
+
+.modal { max-height: calc(100vh - 32px); overflow-y: auto; }
+.dialog-text { font-size: 13px; line-height: 1.6; color: var(--text-secondary); margin-bottom: 12px; }
+.dialog-error { font-size: 13px; margin-top: 10px; }
+.confirm-field { margin: 4px 0 12px; }
+.confirm-field .hint { margin: -2px 0 6px; }
+.preview-counts { margin-bottom: 14px; font-size: 13px; }
+
+.provider-panel { display: grid; gap: 12px; }
+.provider-panel .panel-head { margin-bottom: 0; }
+.connect-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; }
+.connect-form .field { max-width: 260px; }
+.connect-form .field label, .own-app-form .field label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+.connect-services { border: none; display: grid; gap: 6px; }
+.connect-services legend { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+.provider-panel .hint { margin: 0; }
+.own-app summary { color: var(--text-secondary); cursor: pointer; width: fit-content; font-size: 13px; }
+.own-app summary:hover { color: var(--text-primary); }
+.own-app-body { display: grid; gap: 12px; margin-top: 10px; padding-left: 12px; border-left: 1px solid var(--border-strong); }
+.own-app-callback { display: grid; gap: 4px; max-width: 640px; }
+.field-label { font-size: 12px; color: var(--text-secondary); }
+.own-app-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; }
+.own-app-form .field { max-width: 300px; }
+
+.hold-excerpt {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12em;
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .account-actions .btn, .hold-actions .btn { min-height: 44px; }
+  .connect-form .field, .own-app-form .field { max-width: none; flex-basis: 100%; }
+  .row-actions { white-space: normal; }
+  .row-actions .btn { margin: 2px 0 2px 6px; }
+}

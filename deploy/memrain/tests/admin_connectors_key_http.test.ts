@@ -72,7 +72,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const listed = await call(new Request(`${ORIGIN}/admin/api/connectors`), d);
       const listedText = await listed.text();
       expect(listedText).not.toContain(FIREFLIES_KEY);
-      expect((JSON.parse(listedText) as { providers: unknown[] }).providers).toContainEqual({ id: "fireflies", services: ["fireflies"], auth: "api_key" });
+      expect((JSON.parse(listedText) as { providers: unknown[] }).providers).toContainEqual({
+        id: "fireflies", services: ["fireflies"], service_kinds: { fireflies: ["meeting"] }, auth: "api_key", callback_uri: null,
+      });
     } finally { await db.close(); }
   });
 

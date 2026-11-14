@@ -4,14 +4,14 @@
 export type RouteName =
   | "login" | "overview" | "search" | "pages" | "page" | "entity" | "graph"
   | "timeline" | "spend" | "agents" | "log" | "jobs" | "calibration" | "glossary" | "setup"
-  | "enroll" | "security" | "notifications";
+  | "enroll" | "security" | "notifications" | "connections" | "autonomy" | "approvals";
 
 export interface Route { name: RouteName; param: string | null }
 
 const NAMES: ReadonlySet<string> = new Set<RouteName>([
   "login", "overview", "search", "pages", "page", "entity", "graph",
   "timeline", "spend", "agents", "log", "jobs", "calibration", "glossary", "setup",
-  "enroll", "security", "notifications",
+  "enroll", "security", "notifications", "connections", "autonomy", "approvals",
 ]);
 
 export function parseHash(hash: string): Route {
