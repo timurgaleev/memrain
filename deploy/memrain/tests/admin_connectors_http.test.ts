@@ -88,7 +88,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const form = new URLSearchParams({ state, code: "auth-code" }).toString();
       const done = await call(post("/admin/api/connectors/test/complete", form, "application/x-www-form-urlencoded"), d);
       expect(done.status).toBe(303);
-      expect(done.headers.get("location")).toBe("/admin/?connector=connected");
+      expect(done.headers.get("location")).toBe("/admin/?connector=connected#connections");
       const accounts = await listAccounts(db.storage.engine());
       expect(accounts.map((a) => [a.account_label, a.enabled])).toEqual([["owner@example.test", false]]);
 
@@ -109,7 +109,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const form = new URLSearchParams({ state, code: "attacker" }).toString();
       const res = await call(post("/admin/api/connectors/test/complete", form, "application/x-www-form-urlencoded"), deps(db.storage, "sess-2"));
       expect(res.status).toBe(303);
-      expect(res.headers.get("location")).toBe("/admin/?connector_error=state_session");
+      expect(res.headers.get("location")).toBe("/admin/?connector_error=state_session#connections");
       expect(await listAccounts(db.storage.engine())).toEqual([]);
     } finally { await db.close(); }
   });
