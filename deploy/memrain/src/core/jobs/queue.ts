@@ -154,6 +154,8 @@ export interface ClaimOptions {
    * live queue. Omit for the normal any-kind claim.
    */
   kinds?: string[];
+  /** Never claim these kinds (the worker's long lane when it is full). */
+  excludeKinds?: string[];
 }
 
 export interface HandleStalledOptions {
@@ -220,6 +222,17 @@ export class Queue {
     return revived
       ? { job: revived, outcome: "revived" }
       : { job, outcome: "existing" };
+  }
+
+  /**
+   * Enqueue under a stable id unless a row already holds it, in any status.
+   * Unlike `enqueueOrRevive`, a failed row stays failed: the id names one
+   * unit of work that has had its run.
+   */
+  async enqueueIfAbsent(
+    input: EnqueueInput & { id: string },
+  ): Promise<{ job: JobRow; created: boolean }> {
+    return this.insert(input);
   }
 
   private async insert(
@@ -317,6 +330,10 @@ export class Queue {
     if (opts.kinds !== undefined && opts.kinds.length > 0) {
       params.push(opts.kinds);
       kindClause = `AND kind = ANY($${params.length}::text[])`;
+    }
+    if (opts.excludeKinds !== undefined && opts.excludeKinds.length > 0) {
+      params.push(opts.excludeKinds);
+      kindClause += ` AND NOT (kind = ANY($${params.length}::text[]))`;
     }
     const r = await this.engine.query<RawJobRow>(
       `UPDATE jobs

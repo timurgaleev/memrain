@@ -14,6 +14,7 @@ const receiptsTable = async (e: Engine) => (await e.query<{ t: string | null }>(
 const purgeTombstone = (e: Engine) => e.query<{ id: number }>(
   `INSERT INTO entity_facts (entity_slug, fact, forgotten_at, forgotten_cause) VALUES ('people/x', 'Purged.', NOW(), 'purge') RETURNING id`);
 
+
 for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`migrations 149 and 150 (${name})`, () => {
   it("are consecutive, so their downs run in turn once later ones are reverted", () => {
     expect(discoverMigrations().map((m) => m.id).filter((id) => id >= 149 && id <= 150)).toEqual([149, 150]);

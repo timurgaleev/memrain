@@ -130,6 +130,7 @@ describe("MCP HTTP transport", () => {
       "code_refs",
       "context_delta",
       "context_pack",
+      "daemons_status",
       "entity_facts",
       "entity_recall",
       "entity_timeline",

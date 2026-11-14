@@ -39,6 +39,7 @@ import { normalizeScopesInput } from "../core/scope.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 import { handleAdminTool } from "./admin-tool.ts";
 import { defaultConnectorDeps, handleAdminConnectors } from "./admin-connectors.ts";
+import { daemonsStatus } from "../core/daemons/status.ts";
 import type { RateLimiter } from "../mcp/rate_limit.ts";
 import type { SearchOptions } from "../core/search/hybrid.ts";
 
@@ -1085,6 +1086,15 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       return Response.json(r.rows[0] ?? {});
     } catch (e) {
       return serverError("stats", e);
+    }
+  }
+
+  // GET /admin/api/daemons — schedules, pauses, last runs, scheduler leader.
+  if (p === "/admin/api/daemons" && req.method === "GET") {
+    try {
+      return Response.json(await daemonsStatus(engine));
+    } catch (e) {
+      return serverError("daemons", e);
     }
   }
 

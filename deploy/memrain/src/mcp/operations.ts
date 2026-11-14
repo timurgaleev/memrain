@@ -930,6 +930,12 @@ export const OPERATIONS: readonly Operation[] = [
     params: { id: str(req) },
   },
   {
+    name: "daemons_status",
+    outputRedaction: "retrieval",
+    description: "Daemons: schedule, pauses, last run, failure streak, next window, scheduler leader. Operator only.",
+    params: {},
+  },
+  {
     name: "submit_agent",
     description:
       "Queue a read-only research agent that runs under your own grant: it reads only your sources, uses only the read tools your client is bound to, spends against your daily budget, and stops if your grant is revoked or changed. Returns a job_id; poll get_agent_job. Needs the 'agent' scope, a daily budget on your client, and a free slot under your client's concurrency limit. Writes nothing.",

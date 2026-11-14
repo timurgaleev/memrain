@@ -23,6 +23,7 @@
 import type { Storage } from "../core/storage.ts";
 import { VERSION } from "../version.ts";
 import { keywordOnlyMode } from "../core/llm/gateway.ts";
+import { daemonSchedulerHealth } from "../core/daemons/scheduler.ts";
 
 /** 3 s leaves headroom under the usual 5 s orchestrator health deadline. */
 export const HEALTH_TIMEOUT_MS = 3000;
@@ -51,6 +52,7 @@ export async function probeLiveness(
         timer = setTimeout(() => reject(new Error("health_timeout")), timeoutMs);
       }),
     ]);
+    const daemons = daemonSchedulerHealth();
     return {
       status: 200,
       body: {
@@ -66,6 +68,9 @@ export async function probeLiveness(
         schema_ahead: storage.schemaAhead(),
         ...(maintenance ? { maintenance: true } : {}),
         ...(keywordOnlyMode() ? { keyword_only: true } : {}),
+        // Only where a scheduler runs (MEMRAIN_DAEMONS=1): whether this process
+        // leads and how long since it ticked. Never the holder's host or pid.
+        ...(daemons ? { daemons } : {}),
       },
     };
   } catch (e) {

@@ -20,6 +20,7 @@ import { consoleProgress } from "../core/output/progress.ts";
 import { phasesRunTodayUtc } from "../core/cycle/phase-runs.ts";
 import { runDeepSynthPhase } from "../core/synthesis/deep-synth.ts";
 import { backfillEnabled } from "../core/cycle/conversation-facts-backfill.ts";
+import { cycleDaemonPause, recordCycleRun } from "../core/daemons/cycle-daemon.ts";
 import {
   tryAcquireDbLock,
   reapDeadHolderLocks,
@@ -233,6 +234,16 @@ export function startCycleLoop(
       /* best-effort sweep */
     }
 
+    // A paused cycle daemon (daemon_controls) skips the tick and looks again
+    // within the lock-TTL window, so a resume takes effect without waiting a
+    // full interval.
+    const pause = await cycleDaemonPause(storage.engine());
+    if (pause) {
+      console.log(`[cycle] tick status=skipped reason=paused (${pause})`);
+      if (!stopped) timer = setTimeout(runTick, nextTickDelayMs(options.intervalMs, true));
+      return;
+    }
+
     // Cross-process guard: another daemon (or a manual `cycle` run) may already
     // be working this brain. The DB lock serializes the maintenance pipeline so
     // two cycles don't fight over the same phases. A null handle means a live
@@ -271,6 +282,7 @@ export function startCycleLoop(
       const heartbeat = startLockHeartbeat(lock);
       try {
         const r = await runCycleOnce(storage.engine(), { ...opts, signal: heartbeat.signal });
+        await recordCycleRun(storage.engine(), r.status !== "fail", r.outcome);
         const mark = (s: string) => (s === "fail" ? "FAIL" : s); // ok | warn | FAIL
         const summary = r.phases
           .map((p) => `${p.phase}=${mark(p.status)}`)
@@ -308,6 +320,7 @@ export function startCycleLoop(
           }
         }
       } catch (e) {
+        await recordCycleRun(storage.engine(), false, "error");
         console.warn(
           `[cycle] tick failed:`,
           e instanceof Error ? e.message : e,
