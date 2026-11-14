@@ -517,7 +517,9 @@ async function disconnectLocked(
     // rotated away, so the revoke is not trusted.
     if (revoked && !(await stillHeld(tx))) revoked = false;
     // Unknown provider: we cannot tell whether a revoke is owed, so keep it too.
-    const owesRevoke = hasCredential && (canRevoke || provider === null) && !revoked;
+    // An API key has nothing to revoke here; the owner retires it at the provider.
+    const unknown = provider === null && deps.providers.getApiKey(providerId) === null;
+    const owesRevoke = hasCredential && (canRevoke || unknown) && !revoked;
     const keep = owesRevoke && !force;
     if (!keep) await tx.query(`DELETE FROM connector_credentials WHERE account_id = $1`, [accountId]);
     await tx.query(`UPDATE connector_accounts SET enabled = FALSE, updated_at = NOW() WHERE id = $1`, [accountId]);

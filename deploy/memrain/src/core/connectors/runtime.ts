@@ -1,8 +1,9 @@
 /**
  * The connector runtime: the sync engine wired to the rest of the connector
  * stack. Accounts and their credentials come from the vault (accounts.ts), the
- * OAuth client and token endpoint from the provider registry, a refused
- * refresh parks the account through `markNeedsReconnect`, and a provider-side
+ * OAuth client and token endpoint from the provider registry (an API-key
+ * provider sends its sealed key instead, paced by one limiter per account), a
+ * refused refresh or key parks the account through `markNeedsReconnect`, and a provider-side
  * deletion is handed to the connector-data hard delete (retention.ts), one
  * item per transaction with a text-free receipt.
  *
@@ -21,7 +22,8 @@ import {
   renewCredential,
   type ConnectorAccount,
 } from "./accounts.ts";
-import { ConnectorClient, type FetchFn } from "./client.ts";
+import { ConnectorClient, type FetchFn, type TokenSource } from "./client.ts";
+import { limiterFor } from "./limiter.ts";
 import { accountRef } from "./model.ts";
 import { resolveClient } from "./oauth-connect.ts";
 import { builtinProviders, type ProviderRegistry } from "./providers.ts";
@@ -29,7 +31,7 @@ import { hardDeleteConnectorPage } from "./retention.ts";
 import type { SyncAccount, SyncDeps } from "./sync-engine.ts";
 import { registerConnectorSync, type ConnectorSyncRuntime } from "./sync-job.ts";
 import { createTokenProvider, tokenEndpointRefresh, type CredentialStore } from "./token-provider.ts";
-import { ProviderCannotSyncError } from "./types.ts";
+import { ProviderCannotSyncError, ReauthRequiredError } from "./types.ts";
 import { connectorsStatus, loadKek, type Kek } from "./vault.ts";
 
 const MAX_REASON = 200;
@@ -42,6 +44,8 @@ export interface ConnectorRuntimeOptions {
   env?: NodeJS.ProcessEnv;
   embedFn?: EmbedFn;
   now?: () => number;
+  /** How API-key clients wait between requests; tests pass a no-op. */
+  sleep?: (ms: number) => Promise<void>;
   maxPartBytes?: number;
 }
 
@@ -85,10 +89,63 @@ export function vaultCredentialStore(engine: Engine, kek: Kek): CredentialStore 
   };
 }
 
+/**
+ * A sealed API key as a token source. Nothing renews a key, so a refusal ends
+ * in a reconnect: the owner saves a working key again.
+ */
+export function apiKeySource(credential: { tokens: { access_token: string } } | null, secret: (value: string) => void): TokenSource {
+  // A missing credential is the operator's to look at, not a reconnect.
+  if (credential === null) throw new Error("the account has no stored API key");
+  const key = credential.tokens.access_token;
+  secret(key);
+  return {
+    token: async () => key,
+    refresh: async () => {
+      throw new ReauthRequiredError("the provider refused the API key; save a working key to reconnect");
+    },
+  };
+}
+
 export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions): ConnectorSyncRuntime {
   const engine = storage.engine();
   const env = opts.env ?? process.env;
   const fetchFn: FetchFn = opts.fetch ?? ((url, init) => fetch(url, init));
+  const now = opts.now ?? Date.now;
+
+  /** How one account reads its provider: an OAuth token that renews, or a sealed API key. */
+  const providerWiring = (account: SyncAccount): Pick<SyncDeps, "adapter" | "tokenSource" | "client"> => {
+    const keyed = opts.providers.getApiKey(account.provider);
+    if (keyed) {
+      const limiter = limiterFor(`${keyed.id}:${account.id}`, { ...keyed.sync.limits, now, ...(opts.sleep ? { sleep: opts.sleep } : {}) });
+      return {
+        adapter: keyed.sync.adapter(account, { engine, now }),
+        tokenSource: async (_account, secret) => apiKeySource(await readCredential(engine, opts.kek, account.id), secret),
+        client: (_a, tokenSource) => new ConnectorClient({
+          origin: keyed.sync.apiOrigin, tokenSource, fetch: fetchFn, limiter, now, ...(opts.sleep ? { sleep: opts.sleep } : {}),
+        }),
+      };
+    }
+    const provider = opts.providers.get(account.provider);
+    const sync = provider?.sync;
+    if (!provider || !sync) throw new ProviderCannotSyncError(account.provider);
+    return {
+      adapter: sync.adapter(account),
+      tokenSource: async (_account, secret) => {
+        const client = await resolveClient({ engine, kek: opts.kek, providers: opts.providers, fetch: fetchFn, env }, opts.kek, provider.id);
+        const token = new URL(provider.tokenUrl);
+        return createTokenProvider({
+          engine,
+          accountId: account.id,
+          store: vaultCredentialStore(engine, opts.kek),
+          refresh: tokenEndpointRefresh({ origin: token.origin, path: `${token.pathname}${token.search}`, ...client, fetch: fetchFn }),
+          onSecret: secret,
+          ...(opts.now ? { now: opts.now } : {}),
+        });
+      },
+      client: (_a, tokenSource) => new ConnectorClient({ origin: sync.apiOrigin, tokenSource, fetch: fetchFn }),
+    };
+  };
+
   return {
     env,
     loadAccount: async (id) => {
@@ -98,26 +155,11 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
     runnableAccounts: async (sourceId) =>
       (await listAccounts(engine, { sourceId })).filter(a => a.enabled && a.status === "active").map(toSyncAccount),
     depsFor: (account): SyncDeps => {
-      const provider = opts.providers.get(account.provider);
-      const sync = provider?.sync;
-      if (!provider || !sync) throw new ProviderCannotSyncError(account.provider);
+      const wiring = providerWiring(account);
       if (!account.accountLabel) throw new Error(`connector account ${account.id} has no label`);
       const scope = { sourceId: account.sourceId, accountRef: accountRef(account.accountLabel) };
       return {
-        adapter: sync.adapter(account),
-        tokenSource: async (_account, secret) => {
-          const client = await resolveClient({ engine, kek: opts.kek, providers: opts.providers, fetch: fetchFn, env }, opts.kek, provider.id);
-          const token = new URL(provider.tokenUrl);
-          return createTokenProvider({
-            engine,
-            accountId: account.id,
-            store: vaultCredentialStore(engine, opts.kek),
-            refresh: tokenEndpointRefresh({ origin: token.origin, path: `${token.pathname}${token.search}`, ...client, fetch: fetchFn }),
-            onSecret: secret,
-            ...(opts.now ? { now: opts.now } : {}),
-          });
-        },
-        client: (_a, tokenSource) => new ConnectorClient({ origin: sync.apiOrigin, tokenSource, fetch: fetchFn }),
+        ...wiring,
         accounts: {
           markNeedsReconnect: async (id, reason) => {
             // eslint-disable-next-line no-control-regex
