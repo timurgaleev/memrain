@@ -4,7 +4,8 @@
  * `enqueueConnectorSync`.
  *
  * A scheduled run names a source and syncs each of its enabled, active
- * accounts in turn; a single-account run names the account (and its source).
+ * accounts in turn, skipping with a warning one whose provider has no sync
+ * adapter; a single-account run names the account (and its source).
  * A single-account payload must also name the account's source: either way
  * the handler goes through the scheduler's daemon gate, so a
  * paused or disabled `connector_sync` (globally or for that source) and the
@@ -23,6 +24,7 @@ import { UnrecoverableJobError, type JobHandler, type JobRow } from "../jobs/typ
 import { runConnectorSync, type SyncAccount, type SyncDeps } from "./sync-engine.ts";
 import { CONNECTOR_SYNC_DAEMON } from "./sync-daemon.ts";
 import { connectorsSwitchOn } from "./vault.ts";
+import { ProviderCannotSyncError } from "./types.ts";
 
 export { CONNECTOR_SYNC_DAEMON };
 
@@ -64,9 +66,19 @@ export function connectorSyncHandler(storage: Storage, runtime: ConnectorSyncRun
     if (typeof sourceId !== "string" || sourceId === "") {
       throw new UnrecoverableJobError("connector_sync payload needs an accountId (uuid) or a sourceId");
     }
-    const accounts = [];
+    const accounts: Array<Record<string, unknown>> = [];
     for (const account of await runtime.runnableAccounts(sourceId)) {
-      accounts.push(await runConnectorSync(storage, account, runtime.depsFor(account)));
+      let deps: SyncDeps;
+      try {
+        deps = runtime.depsFor(account);
+      } catch (e) {
+        if (!(e instanceof ProviderCannotSyncError)) throw e;
+        // One account this build cannot sync must not stop the source's others.
+        console.warn(`[connector_sync] skipping account ${account.id} of source '${sourceId}': ${e.message}`);
+        accounts.push({ account_id: account.id, provider: account.provider, status: "skipped", stop_reason: "provider_cannot_sync", error: e.message });
+        continue;
+      }
+      accounts.push({ ...await runConnectorSync(storage, account, deps) });
     }
     return { source_id: sourceId, accounts };
   };

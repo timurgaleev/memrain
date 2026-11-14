@@ -78,6 +78,18 @@ export interface ConnectorRunRecord {
  * source throws it; the client reports the request `auth_required` with
  * `reauth`, and the sync engine pauses the account as needing a reconnect.
  */
+/**
+ * The account's provider has no sync adapter in this process (an OAuth-only
+ * provider, or one this build does not ship): there is nothing to run, and
+ * a scheduled run skips the account instead of failing its whole source.
+ */
+export class ProviderCannotSyncError extends Error {
+  constructor(readonly provider: string) {
+    super(`connector provider '${provider}' cannot sync`);
+    this.name = "ProviderCannotSyncError";
+  }
+}
+
 export class ReauthRequiredError extends Error {
   constructor(message: string) {
     super(message);
