@@ -80,7 +80,6 @@ export const MATRIX: MatrixRow[] = [
   op("jobs_get"),
   op("jobs_logs"),
   op("daemons_status"),
-  op("daemons_control"),
   skip("submit_agent", "runs an agent job under the caller's grant; needs a worker and a scripted model", "tests/agent_tenant.test.ts"),
   skip("get_agent_job", "reads only the caller's own agent jobs; needs a submitted job", "tests/agent_tenant.test.ts"),
   iso("get_chunks", { source_path: SHARED_PATH }),

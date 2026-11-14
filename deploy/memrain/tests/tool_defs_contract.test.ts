@@ -75,13 +75,13 @@ describe("tool annotations", () => {
     }
   });
 
-  it("every read-scoped tool is read-only, except the operator-only job and daemon mutators", () => {
-    // jobs_submit / jobs_cancel / daemons_control sit under the read scope but
-    // change state; they stay reachable only by the operator, never by a tenant token.
+  it("every read-scoped tool is read-only, except the operator-only job mutators", () => {
+    // jobs_submit / jobs_cancel sit under the read scope but change state; they
+    // stay reachable only by the operator, never by a tenant token.
     const mutatingReads = TOOL_DEFS.filter(
       (t) => scopeOf(t.name) === "read" && !t.annotations.readOnlyHint,
     ).map((t) => t.name);
-    expect(mutatingReads.sort()).toEqual(["daemons_control", "jobs_cancel", "jobs_submit"]);
+    expect(mutatingReads.sort()).toEqual(["jobs_cancel", "jobs_submit"]);
     for (const name of mutatingReads) expect(OPERATOR_ONLY_TOOLS.has(name)).toBe(true);
   });
 

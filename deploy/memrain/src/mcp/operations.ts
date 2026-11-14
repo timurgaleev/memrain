@@ -931,20 +931,9 @@ export const OPERATIONS: readonly Operation[] = [
   },
   {
     name: "daemons_status",
-    description:
-      "Background daemons: each one's schedule, lane, whether it is enabled or paused (and by whom), its last window or run, failures in a row and next window; plus a global pause and which process leads the scheduler. Operator only.",
+    outputRedaction: "retrieval",
+    description: "Daemons: schedule, pauses, last run, failure streak, next window, scheduler leader. Operator only.",
     params: {},
-  },
-  {
-    name: "daemons_control",
-    description:
-      "Pause or resume a background daemon (`daemon: \"all\"` for every one). A pause stops new runs; resuming a daemon lifts its pauses for every source unless source_id is given, and restarts its failure count. Operator only.",
-    params: {
-      action: str({ ...req, enum: ["pause", "resume"] }),
-      daemon: str({ ...req, description: "Daemon name (see daemons_status) or \"all\"." }),
-      source_id: str({ description: "Only this source's runs of the named daemon." }),
-      reason: str({ description: "Shown in status; up to 200 characters." }),
-    },
   },
   {
     name: "submit_agent",
@@ -1794,7 +1783,6 @@ export const WRITE_SCOPED_TOOLS: ReadonlySet<string> = new Set(
 const MUTATING_OUTSIDE_WRITE_SCOPE: ReadonlySet<string> = new Set([
   "jobs_submit",
   "jobs_cancel",
-  "daemons_control",
   "submit_agent",
 ]);
 

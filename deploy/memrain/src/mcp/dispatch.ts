@@ -124,7 +124,7 @@ import { getRecentSalience, findAnomalies } from "../core/usage-insights.ts";
 import { recallFact, forgetFact } from "../core/facts-recall.ts";
 import { brainIdentity } from "../core/identity.ts";
 import { purgeDeletedPages } from "../core/pages-purge.ts";
-import { controlDaemon, daemonsStatus } from "../core/daemons/status.ts";
+import { daemonsStatus } from "../core/daemons/status.ts";
 import { queryRefine } from "../core/search/query-refine.ts";
 import { codeCallers, codeCallees, codeDefs, codeRefs } from "../core/code-graph.ts";
 import { runRecursiveWalk } from "../core/code-walk.ts";
@@ -813,8 +813,6 @@ async function dispatchToolInner(
         return await callJobsLogs(storage, args, redact);
       case "daemons_status":
         return jsonResult(await daemonsStatus(storage.engine()));
-      case "daemons_control":
-        return jsonResult(await controlDaemon(storage.engine(), args, "mcp"));
       case "submit_agent": {
         // Loaded on use: the agent modules import dispatchTool themselves, so a
         // static import here would close a module cycle.

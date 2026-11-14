@@ -1,6 +1,6 @@
 /**
  * The operator's view of the daemons (CLI `memrain daemons`, MCP
- * `daemons_status` / `daemons_control`): what is registered, what is paused
+ * `daemons_status`): what is registered, what is paused
  * and by whom, which process leads the scheduler and how fresh its tick is.
  */
 import type { Engine } from "../engine/interface.ts";
@@ -142,26 +142,26 @@ export interface ControlArgs {
 export async function controlDaemon(engine: Engine, args: ControlArgs, by: string): Promise<{ ok: true; action: string; daemon: string; source_id: string }> {
   const action = args.action;
   if (action !== "pause" && action !== "resume") {
-    throw new OperationError("invalid_params", "daemons_control: `action` must be pause or resume", "Pass action: \"pause\" or \"resume\".");
+    throw new OperationError("invalid_params", "daemons: `action` must be pause or resume", "Pass action: \"pause\" or \"resume\".");
   }
   const raw = typeof args.daemon === "string" ? args.daemon.trim() : "";
   const daemon = raw === "all" ? ALL : raw;
   if (daemon !== ALL && !getDaemon(daemon)) {
     throw new OperationError(
       "invalid_params",
-      `daemons_control: unknown daemon '${raw}'`,
+      `daemons: unknown daemon '${raw}'`,
       `Pass one of: all, ${listDaemons().map(d => d.name).join(", ")}.`,
     );
   }
   let sourceId: string | undefined;
   if (args.source_id !== undefined && args.source_id !== null) {
     if (typeof args.source_id !== "string" || !SOURCE_RE.test(args.source_id) || daemon === ALL) {
-      throw new OperationError("invalid_params", "daemons_control: `source_id` must be a source id, and only with a named daemon", "Pass a source id such as `default`, or omit it.");
+      throw new OperationError("invalid_params", "daemons: `source_id` must be a source id, and only with a named daemon", "Pass a source id such as `default`, or omit it.");
     }
     sourceId = args.source_id;
   }
   if (args.reason !== undefined && typeof args.reason !== "string") {
-    throw new OperationError("invalid_params", "daemons_control: `reason` must be a string", "Pass a short reason, or omit it.");
+    throw new OperationError("invalid_params", "daemons: `reason` must be a string", "Pass a short reason, or omit it.");
   }
   const target = { daemon, by, ...(sourceId ? { sourceId } : {}) };
   if (action === "pause") {

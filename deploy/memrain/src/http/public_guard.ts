@@ -222,7 +222,6 @@ const FORBIDDEN_MCP_TOOLS_FROM_PUBLIC: ReadonlySet<string> = new Set([
   "jobs_get",
   "jobs_logs",
   "daemons_status",
-  "daemons_control",
   "stats",
   "sources_list",
   "sources_status",

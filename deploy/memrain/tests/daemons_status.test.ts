@@ -113,25 +113,16 @@ describe("memrain daemons", () => {
   });
 });
 
-describe("MCP daemons tools", () => {
-  it("daemons_status answers the operator", async () => {
+describe("MCP daemons_status", () => {
+  it("answers the operator", async () => {
     const res = await dispatchTool(storage, { name: "daemons_status", arguments: {} }, {});
     expect(res.isError).toBeFalsy();
     expect(JSON.stringify(res)).toContain("cycle");
   });
 
-  it("daemons_control pauses for the operator", async () => {
-    const res = await dispatchTool(storage, { name: "daemons_control", arguments: { action: "pause", daemon: "cycle" } }, {});
-    expect(res.isError).toBeFalsy();
-    expect((await daemonsStatus(storage.engine())).daemons.find(d => d.name === "cycle")!.paused).toMatchObject({ by: "mcp" });
+  it("is operator-only", async () => {
+    const res = await dispatchTool(storage, { name: "daemons_status", arguments: {} }, { authInfo: tenant, isPublic: false });
+    expect(res.isError).toBe(true);
+    expect(JSON.stringify(res)).toContain("operator-only");
   });
-
-  for (const name of ["daemons_status", "daemons_control"]) {
-    it(`${name} is operator-only`, async () => {
-      const res = await dispatchTool(storage, { name, arguments: name === "daemons_control" ? { action: "pause", daemon: "cycle" } : {} },
-        { authInfo: tenant, isPublic: false });
-      expect(res.isError).toBe(true);
-      expect(JSON.stringify(res)).toContain("operator-only");
-    });
-  }
 });

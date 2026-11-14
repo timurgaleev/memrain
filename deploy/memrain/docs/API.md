@@ -115,7 +115,7 @@ MCP `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`); the gro
 - **Synthesis (read)** — `list_concepts`, `list_takes`,
   `get_calibration_profile` (the opt-in LLM-synthesis output store).
 - **Jobs** — `jobs_list`/`jobs_get`/`jobs_logs` + `jobs_submit`/`jobs_cancel`.
-- **Daemons** — `daemons_status` + `daemons_control` (pause/resume), operator only.
+- **Daemons** — `daemons_status`, operator only (pause and resume with `memrain daemons`).
 - **Admin / misc** — `index`, `log_friction`, `get_brain_identity`,
   `quarantine_list`, `extraction_review`.
 
