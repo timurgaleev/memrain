@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Spend wallet: paid calls run inside named paths with caps per call, per
+  run, per path, per daemon and per daemon source on top of the client, cycle
+  and brain caps. Each call is held at its maximum possible cost first; a call
+  with no price or no output bound is refused inside a path. A call that costs
+  more than its hold books the full amount, counts only the hold, and pauses
+  its path until `memrain spend resume <path>`; doctor (`spend-wallet`) and the
+  advisor report it. Migration 157.
+- Paid daemons (connector sync first) do not run without
+  `MEMRAIN_DAILY_BUDGET_USD`; connector sync is capped at $5 a day across every
+  account by default, on top of each account's cap.
+
+### Changed
+- Facts extraction, the conversation-facts backfill, the contextual-LLM tier
+  and deep synthesis book their calls under their own wallet path. Their caps
+  are unchanged.
+- Connector pages are left out of the facts backfill, on-write extraction and
+  the contextual-LLM tier.
+
 ## [1.16.0] — 2026-11-14
 
 ### Added

@@ -90,6 +90,7 @@ describe("doctor categorize", () => {
       "skillpack",
       "source-health",
       "source-routing-health",
+      "spend-wallet",
       "stale-locks",
       "stats",
       // Pushed only when teardown FAILS, so a healthy run never carries it —

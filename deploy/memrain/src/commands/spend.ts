@@ -5,6 +5,7 @@
  * price, and today's spend against the brain-wide and cycle daily caps.
  */
 import { spendReport } from "../core/spend-report.ts";
+import { resumeSpendPath } from "../core/budget.ts";
 import { loadConfig } from "../core/config.ts";
 import { Storage } from "../core/storage.ts";
 import { withStorage } from "./with-storage.ts";
@@ -13,5 +14,15 @@ export async function runSpend(opts: { days?: number } = {}): Promise<void> {
   const storage = new Storage(loadConfig());
   await withStorage(storage, async () => {
     console.log(JSON.stringify(await spendReport(storage.engine(), opts), null, 2));
+  });
+}
+
+/** `memrain spend resume <path>` — let a path paused after an overrun spend again. */
+export async function runSpendResume(path: string): Promise<boolean> {
+  const storage = new Storage(loadConfig());
+  return withStorage(storage, async () => {
+    const resumed = await resumeSpendPath(storage.engine(), path, "cli");
+    console.log(resumed ? `resumed spend path '${path}'` : `spend path '${path}' was not paused`);
+    return resumed;
   });
 }

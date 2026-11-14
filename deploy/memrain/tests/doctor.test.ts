@@ -160,6 +160,7 @@ describe("doctor", () => {
       "skillpack",
       "source-health",
       "source-routing-health",
+      "spend-wallet",
       "stale-locks",
       "stats",
       "tenancy-isolation-config",

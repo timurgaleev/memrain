@@ -74,6 +74,7 @@ import { checkCyclePhaseHealth, checkMaintenanceHeld } from "../core/doctor-main
 import { checkContextualCoverage, checkEmbedBacklog } from "../core/doctor-embed.ts";
 import { checkSecretExposure } from "../core/doctor-secrets.ts";
 import { checkConnectorAccounts } from "../core/connectors/doctor.ts";
+import { checkSpendWallet } from "../core/spend-notice.ts";
 import {
   checkFederationHealth,
   checkOauthClientHealth,
@@ -473,6 +474,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["code-graph", checkCodeGraph],
       ["connector-health", checkConnectorHealth],
       ["connector-accounts", checkConnectorAccounts],
+      ["spend-wallet", checkSpendWallet],
       ["embed-backlog", checkEmbedBacklog],
       ["contextual-coverage", checkContextualCoverage],
       ["secret-exposure", checkSecretExposure],
