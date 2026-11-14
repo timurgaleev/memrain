@@ -63,13 +63,20 @@ export async function supersedeWriteGateHolds(tx: Engine, documentId: string, bi
   );
 }
 
-/** Queue a hold for the document's current content; a repeat of the same content is a no-op. */
+/**
+ * Queue a hold for the document's current content. A repeat of content that is
+ * already queued, approved or rejected is a no-op; content whose hold was
+ * superseded by an edit and has now returned is queued again.
+ */
 export async function recordWriteGateHold(tx: Engine, hold: NewWriteGateHold): Promise<number | null> {
   await supersedeWriteGateHolds(tx, hold.documentId, hold.verdict.binding);
   const r = await tx.query<{ id: number }>(
     `INSERT INTO write_gate_holds (source_id, document_id, target_ref, origin, reason_families, detector_version, binding, excerpt)
      VALUES ($1, $2, $3, $4, $5::text[], $6, $7, $8)
-     ON CONFLICT (document_id, binding) DO NOTHING
+     ON CONFLICT (document_id, binding) DO UPDATE
+       SET decision = NULL, decided_at = NULL, decided_by = NULL, created_at = NOW(),
+           reason_families = EXCLUDED.reason_families, detector_version = EXCLUDED.detector_version, excerpt = EXCLUDED.excerpt
+       WHERE write_gate_holds.decision = 'superseded'
      RETURNING id`,
     [hold.sourceId, hold.documentId, hold.targetRef, hold.verdict.origin, hold.verdict.families,
       hold.verdict.detector_version, hold.verdict.binding, hold.excerpt],

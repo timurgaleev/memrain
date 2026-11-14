@@ -66,13 +66,12 @@ export async function planWriteGate(engine: Engine, input: WriteGatePlanInput): 
   const origin: WriteGateOrigin | null = row?.kind && (EXTERNAL_SOURCE_KINDS as readonly string[]).includes(row.kind)
     ? "external"
     : input.remote ? "agent" : null;
-  const binding = writeGateBinding(input.title, input.body);
+  const fields = writeGateFields(input.title, input.body, input.frontmatter, GATE_OWNED_KEYS);
+  const binding = writeGateBinding(fields);
   const storedApproval = stored?.[WRITE_GATE_APPROVAL_KEY];
 
   let verdict: WriteGateVerdict | null;
-  let fields: ReturnType<typeof writeGateFields> = [];
   if (origin) {
-    fields = writeGateFields(input.title, input.body, input.frontmatter, GATE_OWNED_KEYS);
     verdict = assessWriteGate({ origin, mode: resolveWriteGateMode(origin, sourceId), fields, binding, approval: storedApproval });
     if (verdict.action === "reject") {
       await auditRefusal(engine, verdict, input.sourcePath, sourceId);

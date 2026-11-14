@@ -210,9 +210,13 @@ export function resolveWriteGateMode(
   return optIn.includes(sourceId) ? "quarantine" : mode;
 }
 
-/** Hash binding a verdict or an approval to the title and body the gate assessed. */
-export function writeGateBinding(title: string | null | undefined, body: string): string {
-  const payload = JSON.stringify(["write_gate/v1", wellFormForText(title ?? ""), wellFormForText(body)]);
+/**
+ * Hash binding a verdict or an approval to every field the gate assessed
+ * (title, body, frontmatter strings), so an approval never covers text the
+ * owner did not see.
+ */
+export function writeGateBinding(fields: readonly GateField[]): string {
+  const payload = JSON.stringify(["write_gate/v2", ...fields.map(f => [f.field, wellFormForText(f.text)])]);
   return createHash("sha256").update(payload, "utf8").digest("hex");
 }
 

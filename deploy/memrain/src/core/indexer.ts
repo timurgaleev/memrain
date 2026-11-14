@@ -402,7 +402,9 @@ async function indexDocumentBody(
     sourceId: input.sourceId ?? null,
     remote: opts.remote === true,
     title: gateTitle,
-    body: parsed.chunks.join("\n\n"),
+    // The whole text, not just the prose chunks: the facts and takes fences
+    // are stripped before chunking but still become stored rows.
+    body: text,
     frontmatter: baseFrontmatter,
   });
   frontmatter = gate.stamp(frontmatter);

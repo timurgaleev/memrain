@@ -108,7 +108,13 @@ export async function markExternalChunks<T extends { chunkId: string } & FlagCar
   });
 }
 
+/** `text` framed for a reader as `hit`'s marks require: flagged, external, or as is. */
+export function frameForRead(text: string, hit: ExternalTrust & FlagCarrier): string {
+  if (hit.content_flag?.reason === INSTRUCTION_LIKE) return frameInstructionLike(text, hit.trust === "external");
+  return hit.trust === "external" ? frameExternal(text) : text;
+}
+
 export function frameMarkedContent<T extends { content: string } & ExternalTrust & FlagCarrier>(hit: T): T {
-  if (hit.content_flag?.reason === INSTRUCTION_LIKE) return { ...hit, content: frameInstructionLike(hit.content, hit.trust === "external") };
-  return hit.trust === "external" ? { ...hit, content: frameExternal(hit.content) } : hit;
+  const content = frameForRead(hit.content, hit);
+  return content === hit.content ? hit : { ...hit, content };
 }
