@@ -28,7 +28,8 @@ import { hybridSearch, type SearchOptions } from "../core/search/index.ts";
 import { resolveSearchKnobs } from "../core/search/hybrid.ts";
 import { applyTokenBudget, estTokens } from "../core/search/token-budget.ts";
 import { matchQueryFacts } from "../core/facts-query-match.ts";
-import { frameExternal, frameMarkedContent, markExternalChunks, readExternalTrust } from "../core/trust-frame.ts";
+import { frameExternal, frameMarkedContent, markChunkTrust, markExternalChunks, readExternalTrust, readTrustTiers } from "../core/trust-frame.ts";
+import { meetsMinTrust, parseMinTrust, principalTier, type TrustTier } from "../core/trust-tier.ts";
 import { runTakeMutation } from "../core/synthesis/takes-write-page.ts";
 import type { TakeFenceMutation } from "../core/synthesis/takes-write.ts";
 import { publicSearchMeta, type SearchMeta } from "../core/search/search-meta.ts";
@@ -678,7 +679,7 @@ async function dispatchToolInner(
           opts.signal,
         );
       case "index":
-        return await callIndex(storage, args, writeSource, isOperator);
+        return await callIndex(storage, args, writeSource, isOperator, principalTier(writerPrincipal(opts)));
       case "backlinks":
         return await callBacklinks(storage, args, redact, readSources, remote);
       case "stats":
@@ -1252,6 +1253,8 @@ async function callSearch(
   };
   const pageFilters = searchPageFilters(args);
   Object.assign(searchOpts, pageFilters);
+  const minTrust = parseMinTrust(args["min_trust"], "search");
+  if (minTrust) searchOpts.minTrust = minTrust;
   const typeNotice = await pageTypeNotice(storage, pageFilters, readSources, !isOperator);
   const since = dateBound("since");
   const until = dateBound("until");
@@ -1384,7 +1387,7 @@ async function frameSearchHits<T extends { chunkId: string; content: string; tit
   storage: Storage, hits: readonly T[], readSources?: string[], tokenBudget?: number,
 ) {
   const generated = await markGeneratedChunks(storage.engine(), hits, readSources);
-  const framed = (await markExternalChunks(storage.engine(), generated, readSources)).map(frameMarkedContent);
+  const framed = (await markChunkTrust(storage.engine(), generated, readSources)).map(frameMarkedContent);
   return tokenBudget === undefined ? framed : applyTokenBudget(framed, tokenBudget);
 }
 
@@ -1430,6 +1433,7 @@ async function callIndex(
   args: Record<string, unknown>,
   writeSource?: string,
   isOperator = false,
+  trustTier: TrustTier = "owner",
 ): Promise<ToolCallResult> {
   const path = args["path"];
   if (typeof path === "string" && path.length > 0) {
@@ -1489,7 +1493,7 @@ async function callIndex(
     const r = await indexDocument(
       storage,
       { sourcePath, text, ...(writeSource ? { sourceId: writeSource } : {}) },
-      { remote },
+      { remote, trustTier },
     );
     return jsonResult({ ok: true, ...r });
   }
@@ -3717,6 +3721,7 @@ async function callQuery(
     remote: true,
   });
   const pageFilters = searchPageFilters(args);
+  const minTrust = parseMinTrust(args["min_trust"], "query");
   const typeNotice = await pageTypeNotice(storage, pageFilters, readSources, !isOperator);
   const refine = typeof args["refine"] === "string" ? args["refine"] : "";
   if (refine) {
@@ -3729,7 +3734,7 @@ async function callQuery(
     if (typeof args["refine_weight"] === "number") opts.refineWeight = args["refine_weight"];
     if (readSources !== undefined) opts.sourceIds = readSources;
     const reasons = new Set<SearchMeta["degraded"][number]>();
-    opts.search = { ...pageFilters, ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}),
+    opts.search = { ...pageFilters, ...(minTrust ? { minTrust } : {}), ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}),
       onMeta: m => { for (const reason of (isOperator ? m : publicSearchMeta(m)).degraded) reasons.add(reason); },
     };
     const hits = await queryRefine(storage, q, refine, opts);
@@ -3738,7 +3743,7 @@ async function callQuery(
       capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources), readSources,
       typeof args["token_budget"] === "number" ? args["token_budget"] : undefined);
     const ledger = await queryFactsForResult(storage, q, visible, readSources, !isOperator,
-      typeof args["token_budget"] === "number" ? args["token_budget"] : undefined);
+      typeof args["token_budget"] === "number" ? args["token_budget"] : undefined, minTrust);
     diagnostic?.mark("projection");
     return jsonResult({
       ok: true,
@@ -3756,7 +3761,7 @@ async function callQuery(
     typeof args["offset"] === "number"
       ? Math.max(0, Math.floor(args["offset"] as number))
       : 0;
-  const searchOpts: SearchOptions = { ...pageFilters, k: k + offset, ...(signal ? { signal } : {}) };
+  const searchOpts: SearchOptions = { ...pageFilters, k: k + offset, ...(signal ? { signal } : {}), ...(minTrust ? { minTrust } : {}) };
   if (onCapture) searchOpts.onCapture = onCapture;
   if (readSources !== undefined) searchOpts.sourceIds = readSources;
   // Paid LLM expansion: explicit per-call value wins; omitted follows the
@@ -3803,7 +3808,7 @@ async function callQuery(
   // Diary fence for the non-operator caller (mirrors callSearch).
   const snippets = capHitSnippets(fenceDiaryHits(hitsOffset, isOperator), searchSnippetChars(), readSources);
   const hits = await frameSearchHits(storage, snippets, readSources, resolveSearchKnobs(searchOpts).tokenBudget);
-  const ledger = await queryFactsForResult(storage, q, hits, readSources, !isOperator, resolveSearchKnobs(searchOpts).tokenBudget);
+  const ledger = await queryFactsForResult(storage, q, hits, readSources, !isOperator, resolveSearchKnobs(searchOpts).tokenBudget, minTrust);
   if (meta && (hits.length < snippets.length || ledger.truncated)) meta = { ...meta, degraded: [...new Set([...meta.degraded, "budget_truncated" as const])] };
   const metaOut = responseSearchMeta(meta, hits, isOperator);
   return jsonResult({ ok: true, hits, facts: ledger.facts, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}),
@@ -3814,11 +3819,13 @@ async function callQuery(
 
 async function queryFactsForResult(
   storage: Storage, q: string, hits: readonly { content: string; title?: string | null }[],
-  readSources: string[] | undefined, remote: boolean, tokenBudget?: number,
+  readSources: string[] | undefined, remote: boolean, tokenBudget?: number, minTrust?: TrustTier,
 ) {
-  const rows = await matchQueryFacts(storage.engine(), q, readSources, remote);
-  const external = await readExternalTrust(storage.engine(), { facts: rows.map(f => f.fact_id) }, readSources);
-  const framed = rows.map(f => external.facts.has(f.fact_id) ? { ...f, fact: frameExternal(f.fact), trust: "external" as const } : f);
+  const matched = await matchQueryFacts(storage.engine(), q, readSources, remote);
+  const tiers = (await readTrustTiers(storage.engine(), { facts: matched.map(f => f.fact_id) }, readSources)).facts;
+  const tierOf = (id: number): TrustTier => tiers.get(id) ?? "external";
+  const rows = matched.filter(f => meetsMinTrust(tierOf(f.fact_id), minTrust));
+  const framed = rows.map(f => tierOf(f.fact_id) !== "owner" ? { ...f, fact: frameExternal(f.fact), trust: "external" as const } : f);
   if (tokenBudget === undefined || tokenBudget <= 0) return { facts: framed, truncated: false };
   let used = hits.reduce((n, h) => n + estTokens(h.content) + estTokens(h.title ?? ""), 0);
   const facts: typeof framed = [];
@@ -4005,6 +4012,8 @@ async function callContextPack(
   if (typeof args["facts_limit"] === "number") opts.factsLimit = args["facts_limit"];
   if (typeof args["token_budget"] === "number") opts.tokenBudget = args["token_budget"];
   if (readSources !== undefined) opts.sourceIds = readSources;
+  const minTrust = parseMinTrust(args["min_trust"], "context_pack");
+  if (minTrust) opts.minTrust = minTrust;
   // Same floors as entity_facts / entity_recall: any non-operator caller reads
   // world-visible facts only, and decay (which reorders on hidden metadata) is
   // off wherever bodies are redacted; everyone else gets the MEMRAIN_FACT_DECAY

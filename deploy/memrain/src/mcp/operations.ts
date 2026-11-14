@@ -20,6 +20,7 @@
 // constraint is never silently dropped expecting the generator to carry it.
 import { OperationError } from "../core/operation-error.ts";
 import { nearest } from "../core/did-you-mean.ts";
+import { TRUST_TIERS } from "../core/trust-tier.ts";
 
 export type ParamType = "string" | "integer" | "number" | "boolean" | "object" | "array";
 
@@ -337,6 +338,7 @@ export const OPERATIONS: readonly Operation[] = [
       slug_prefix: str({ description: "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits." }),
       q: str({ ...req, description: "Natural-language query." }),
       k: int({ minimum: 1, maximum: 100, description: "Number of hits to return. Default 20." }),
+      min_trust: str({ enum: [...TRUST_TIERS], description: "Lowest tier kept: owner>member>agent>external. Hits report trust_tier." }),
       token_budget: int({
         minimum: 1,
         maximum: 200000,
@@ -345,15 +347,15 @@ export const OPERATIONS: readonly Operation[] = [
       }),
       lang: str({
         description:
-          "Filter to chunks of a source language (chunks.language, e.g. 'typescript', 'python'). Code chunks only.",
+          "Code chunks of this source language only (chunks.language, e.g. 'typescript').",
       }),
       symbol_kind: str({
         description:
-          "Filter to chunks of a symbol kind (chunks.symbol_type, e.g. 'function', 'class', 'method').",
+          "Chunks of this symbol kind (chunks.symbol_type, e.g. 'function', 'class').",
       }),
       since: str({
         description:
-          "Keep only hits whose content date COALESCE(effective_date, updated_at) is >= this bound: an ISO-8601 date/datetime, or a relative duration like '7d' / '2w' / '6m' / '1y' (back from now).",
+          "Keep hits whose content date COALESCE(effective_date, updated_at) is >= this bound: ISO-8601 date/datetime or a duration back from now (7d/2w/6m/1y).",
       }),
       until: str({
         description:
@@ -361,17 +363,17 @@ export const OPERATIONS: readonly Operation[] = [
       }),
       near_symbol: str({
         description:
-          "Anchor retrieval at this qualified symbol name (e.g. 'BrainEngine::searchKeyword'). Its chunk(s) join the candidate set and seed a structural walk of the code call graph. Code corpora only.",
+          "Anchor retrieval at this qualified symbol (e.g. 'BrainEngine::searchKeyword'); its chunks join the candidates and seed the code-graph walk. Code corpora only.",
       }),
       walk_depth: int({
         minimum: 0,
         maximum: 2,
         description:
-          "Structural walk depth 0-2 (default 0 = off). Expands the anchors through code_edges_symbol with 1/(1+hop) score decay. Code corpora only; bypasses the query cache.",
+          "Structural walk depth 0-2 (default 0 = off) over code_edges_symbol, 1/(1+hop) score decay. Code corpora only; bypasses the query cache.",
       }),
       explain: bool({
         description:
-          "Stamp each hit with a per-signal ranking attribution (`explain`: base score + the factor every boost stage contributed + reranker delta). Bypasses the query cache.",
+          "Stamp each hit with per-signal ranking attribution (`explain`: base score, each boost factor, reranker delta). Bypasses the query cache.",
       }),
       offset: int({
         minimum: 0,
@@ -382,7 +384,7 @@ export const OPERATIONS: readonly Operation[] = [
       mode: str({
         enum: ["conservative", "balanced", "tokenmax"],
         description:
-          "Per-call search mode bundle. Honored ONLY for the operator (local/static-bearer) caller; a tenant token's mode is silently ignored (it cannot escalate to the paid tokenmax bundle).",
+          "Per-call search mode bundle. Operator only (local/static bearer); a tenant token's mode is silently ignored, so it cannot reach the paid tokenmax bundle.",
       }),
     },
   },
@@ -1200,15 +1202,16 @@ export const OPERATIONS: readonly Operation[] = [
       slug_prefix: str({ description: "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits." }),
       q: str({ ...req, description: "Natural-language query." }),
       k: int({ minimum: 1, maximum: 100, description: "Number of hits to return. Default 20; without refine, token_budget and no k uses up to 100 candidates." }),
+      min_trust: str({ enum: [...TRUST_TIERS], description: "Lowest tier kept, as in search; also filters ledger facts." }),
       offset: int({ minimum: 0, maximum: 1000, description: "Skip the first N ranked hits (pagination)." }),
       expand: bool({
         description:
-          "Force LLM query expansion on/off for this call (paid Haiku). Omit = mode-bundle default (OFF in conservative/balanced).",
+          "Force paid LLM query expansion (Haiku) on/off. Omit = mode-bundle default (OFF in conservative/balanced).",
       }),
       detail: str({
         enum: ["low", "medium", "high"],
         description:
-          "Result detail: low = compiled-truth-grade brevity (1 chunk per page), medium (default) = per-page dedup, high = all chunks + temporal source-boost bypass.",
+          "low = 1 chunk per page (compiled-truth brevity), medium (default) = per-page dedup, high = all chunks, no temporal source-boost.",
       }),
       mode: str({
         enum: ["conservative", "balanced", "tokenmax"],
@@ -1217,7 +1220,7 @@ export const OPERATIONS: readonly Operation[] = [
       salience: str({
         enum: ["off", "on", "strong"],
         description:
-          "Mattering bias (pages.salience: emotional weight + link degree + takes). Omit = auto-detect from the query phrasing.",
+          "Mattering bias (pages.salience: emotional weight, link degree, takes). Omit = auto-detect from phrasing.",
       }),
       recency: str({
         enum: ["off", "on", "strong"],
@@ -1233,7 +1236,7 @@ export const OPERATIONS: readonly Operation[] = [
       token_budget: int({ minimum: 1, maximum: 200000, description: "Cap total returned content size (~chars/4 tokens)." }),
       adaptive_return: bool({
         description:
-          "Return a TIGHT intent-sized result set instead of the full top-K (never empty when there are matches; first page only).",
+          "Return a TIGHT intent-sized set instead of the full top-K (never empty when matches exist; first page only).",
       }),
       explain: bool({ description: "Stamp per-hit ranking attribution. Bypasses the query cache." }),
       refine: str({ description: "LEGACY refinement: second term for the deterministic weighted-RRF blend. When set, only k/weights apply." }),
@@ -1373,6 +1376,7 @@ export const OPERATIONS: readonly Operation[] = [
       max_entities: int({ minimum: 1, maximum: 8, description: "Max entity cards (default 5, cap 8)." }),
       facts_limit: int({ minimum: 1, maximum: 25, description: "Max brain facts after the cards (default 10, cap 25)." }),
       token_budget: int({ minimum: 200, maximum: 8000, description: "Token budget for cards + facts (default 1500, clamped 200..8000)." }),
+      min_trust: str({ enum: [...TRUST_TIERS], description: "Lowest tier kept for cards, facts, core." }),
     },
   },
   {

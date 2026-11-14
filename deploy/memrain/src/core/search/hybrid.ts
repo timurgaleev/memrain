@@ -35,6 +35,8 @@ import { resolveDateBoundary, pageFilterClauses, validatePageFilters } from "./f
 import { visibilityClause } from "../visibility.ts";
 import { searchDiagnostics } from "./diagnostics.ts";
 import { andSourceScope, isNoGrant } from "../source-scope.ts";
+import { meetsMinTrust, type TrustTier } from "../trust-tier.ts";
+import { readTrustTiers } from "../trust-frame.ts";
 import {
   dedupByDocument,
   dedupByTextSimilarity,
@@ -393,6 +395,8 @@ export interface SearchOptions {
   since?: string;
   /** Keep only docs whose content date COALESCE(effective_date,updated_at) is <= this ISO date. */
   until?: string;
+  /** Drop chunks whose effective trust tier is below this one (core/trust-tier.ts). Unset reads every tier. */
+  minTrust?: TrustTier;
   /**
    * Structural two-pass expansion (default OFF): walk the code call graph
    * `walkDepth` hops (1-2, capped at 2) from the fused anchors over
@@ -692,7 +696,25 @@ export function hybridSearch(
   query: string,
   optsOrK: SearchOptions | number = {},
 ): Promise<SearchHit[]> {
-  return withSearchSlot(() => hybridSearchUnbounded(storage, query, optsOrK));
+  return withSearchSlot(async () => {
+    const hits = await hybridSearchUnbounded(storage, query, optsOrK);
+    const minTrust = typeof optsOrK === "number" ? undefined : optsOrK.minTrust;
+    return minTrust === undefined ? hits : enforceMinTrust(storage, hits, minTrust, optsOrK as SearchOptions);
+  });
+}
+
+/**
+ * The arms push the floor down so it does not starve the LIMIT; this pass is
+ * the choke point for every path that adds hits after them (structural walk,
+ * alias hop, cache-free fallbacks).
+ */
+async function enforceMinTrust(storage: Storage, hits: SearchHit[], minTrust: TrustTier, opts: SearchOptions): Promise<SearchHit[]> {
+  if (hits.length === 0) return hits;
+  const tiers = await readTrustTiers(storage.engine(), { chunks: hits.map(h => h.chunkId) }, opts.sourceIds);
+  return hits.filter(h => {
+    const tier = tiers.chunks.get(h.chunkId);
+    return tier !== undefined && meetsMinTrust(tier, minTrust);
+  });
 }
 
 async function hybridSearchUnbounded(
@@ -778,7 +800,7 @@ async function hybridSearchUnbounded(
   // entirely — it never reads a cached unfiltered set nor writes a filtered one.
   validatePageFilters(opts);
   const hasFilters = Boolean(
-    opts.lang || opts.symbolKind || opts.since || opts.until || opts.types?.length || opts.slugPrefix,
+    opts.lang || opts.symbolKind || opts.since || opts.until || opts.types?.length || opts.slugPrefix || opts.minTrust,
   );
   // Pushed-down filter set (lang / symbol_kind / since / until). Threaded into
   // BOTH retrieval arms so the per-arm LIMIT budget is spent on already-matching
@@ -793,6 +815,7 @@ async function hybridSearchUnbounded(
         ...(opts.until ? { until: opts.until } : {}),
         ...(opts.types?.length ? { types: opts.types } : {}),
         ...(opts.slugPrefix ? { slugPrefix: opts.slugPrefix } : {}),
+        ...(opts.minTrust ? { minTrust: opts.minTrust } : {}),
       }
     : undefined;
   // Structural expansion (near_symbol / walk_depth) widens the candidate set

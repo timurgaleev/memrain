@@ -14,6 +14,7 @@
 import { OperationError } from "../operation-error.ts";
 import { validateSlugPrefix } from "../pages.ts";
 import { PAGE_MIRROR_PATH_SQL, PAGE_TRUTH_PATH_SQL } from "../page-index.ts";
+import { minTrustClause, type TrustTier } from "../trust-tier.ts";
 
 export interface PageFilters {
   types?: readonly string[];
@@ -57,11 +58,13 @@ export interface ChunkFilters extends PageFilters {
   since?: string;
   /** Keep docs whose content date is <= this ISO date. */
   until?: string;
+  /** Keep chunks whose effective trust tier is at least this one. */
+  minTrust?: TrustTier;
 }
 
 /** True when at least one filter axis is set. */
 export function hasChunkFilters(f: ChunkFilters | undefined): boolean {
-  return Boolean(f && (f.lang || f.symbolKind || f.since || f.until || f.types?.length || f.slugPrefix));
+  return Boolean(f && (f.lang || f.symbolKind || f.since || f.until || f.types?.length || f.slugPrefix || f.minTrust));
 }
 
 const RELATIVE_DURATION = /^(\d+)([dwmy])$/;
@@ -137,5 +140,5 @@ export function chunkFilterClauses(params: unknown[], f: ChunkFilters | undefine
     params.push(resolveDateBoundary(f.until, "until"));
     sql += ` AND COALESCE(d.effective_date, d.updated_at) <= $${params.length}::timestamptz`;
   }
-  return sql + pageFilterClauses(params, f);
+  return sql + pageFilterClauses(params, f) + minTrustClause(params, f.minTrust);
 }
