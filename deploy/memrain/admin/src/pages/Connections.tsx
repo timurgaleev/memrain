@@ -270,7 +270,7 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
       {askDeletes && (
         <Dialog title={`Delete ${a.held_deletes} items from ${a.account_label}?`} onClose={() => setAskDeletes(false)}>
           <p className="dialog-text">
-            {providerLabel(a.provider)} no longer has them. The next sync deletes their pages, chunks, vectors and facts for
+            {providerLabel(a.provider)} no longer has them, or they aged out of the retention window. The next sync deletes their pages, chunks, vectors and facts for
             good and keeps a receipt without their text.
           </p>
           <div className="dialog-actions">

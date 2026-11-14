@@ -25,11 +25,16 @@ import {
   retentionDays,
   sweepRetention,
 } from "../src/core/connectors/retention.ts";
+import { createAccount } from "../src/core/connectors/accounts.ts";
+import { confirmHeldDeletes, rejectHeldDeletes } from "../src/core/connectors/sync-store.ts";
+import { currentProblems } from "../src/core/notifications/store.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
 const OWNER = "owner@example.org";
 const OTHER = "second@example.org";
+/** An account id with no account row: these sweeps stay under the guard, so nothing is recorded against it. */
+const NO_ACCOUNT = "00000000-0000-4000-8000-000000000000";
 const embedFn = async (t: string) => deterministicEmbed(t);
 
 const thread = (id: string, canary: string, date = "2026-11-01T08:00:00.000Z"): MailThread => ({
@@ -125,7 +130,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       markdown_body: `Other account ${canary}.`, compiled_truth: { ...other.truth, part_of: page.slug }, written_by: "connector-gmail", source_id: "inbox", outsideText: true });
 
     // The sweep picks whole items: the part's own last activity does not select it.
-    const swept = await sweepRetention(db.storage, scope, { kind: "mail", now: () => Date.parse("2026-11-14T00:00:00Z") });
+    const swept = await sweepRetention(db.storage, scope, { accountId: NO_ACCOUNT, kinds: ["mail"], now: () => Date.parse("2026-11-14T00:00:00Z") });
     expect(swept.deleted).toEqual([page.slug]);
     expect((await e.query("SELECT 1 FROM pages WHERE slug = $1", [part.slug])).rows).toHaveLength(0);
     // Another account's page claiming the same parent is not this account's to delete.
@@ -284,10 +289,84 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const old = await ingest(mailPage("old", "oldcanary", OWNER, "2026-01-01T00:00:00.000Z"));
     const fresh = await ingest(mailPage("new", "freshcanary", OWNER, "2026-11-01T00:00:00.000Z"));
     const now = () => Date.parse("2026-11-14T00:00:00.000Z");
-    const result = await sweepRetention(db.storage, scope, { kind: "mail", env: {}, now });
+    const result = await sweepRetention(db.storage, scope, { accountId: NO_ACCOUNT, kinds: ["mail"], env: {}, now });
     expect(result.deleted).toEqual([old.slug]);
     expect((await db.storage.engine().query("SELECT slug FROM pages WHERE source_id = 'inbox'")).rows).toEqual([{ slug: fresh.slug }]);
     expect(await rowsContaining(db.storage.engine(), "oldcanary")).toEqual([]);
+  });
+
+  /** A connected account whose items map to `pages`, as the sync engine leaves them. */
+  const trackedAccount = async (pages: readonly RenderedConnectorPage[]) => {
+    const e = db.storage.engine();
+    const account = await createAccount(e, { sourceId: "inbox", provider: "gmail", services: ["gmail"], principalRef: "admin:operator", accountLabel: OWNER });
+    for (const p of pages) {
+      await e.query(`INSERT INTO connector_items (account_id, external_id, page_slug) VALUES ($1, $2, $3)`, [account.id, String(p.truth.external_id), p.slug]);
+    }
+    return account;
+  };
+  const inboxPages = async () => (await db.storage.engine().query<{ n: number }>("SELECT count(*)::int AS n FROM pages WHERE source_id = 'inbox'")).rows[0]!.n;
+  const openNotices = async (accountId: string) => (await db.storage.engine().query<{ kind: string }>(
+    "SELECT kind FROM connector_notices WHERE account_id = $1 AND resolved_at IS NULL", [accountId])).rows.map(r => r.kind);
+  const aged = async (n: number) => {
+    const pages: RenderedConnectorPage[] = [];
+    for (let i = 0; i < n; i++) pages.push(await ingest(mailPage(`aged${i}`, `agedcanary${i}`, OWNER, "2025-01-01T08:00:00.000Z")));
+    return pages;
+  };
+  const NOW = () => Date.parse("2026-11-14T00:00:00.000Z");
+
+  it("holds a retention sweep past the mass-delete guard, deleting nothing, until the owner confirms", async () => {
+    const e = db.storage.engine();
+    const pages = await aged(12);
+    const account = await trackedAccount(pages);
+    const sweep = () => sweepRetention(db.storage, scope, { accountId: account.id, kinds: ["mail"], env: {}, now: NOW });
+
+    // Twelve of twelve pages is past the 5% rule with its floor of 10.
+    const held = await sweep();
+    expect(held.deleted).toEqual([]);
+    expect(held.held).toBe(12);
+    expect(await inboxPages()).toBe(12);
+    expect(await openNotices(account.id)).toEqual(["mass_delete_held"]);
+    expect((await currentProblems(e)).map(p => p.kind)).toContain("deletions_held");
+    // The next run holds the same pages again; it deletes nothing either.
+    expect((await sweep()).deleted).toEqual([]);
+    expect(await inboxPages()).toBe(12);
+
+    expect(await confirmHeldDeletes(e, account.id)).toBe(12);
+    const done = await sweep();
+    expect(done.deleted).toHaveLength(12);
+    expect(await inboxPages()).toBe(0);
+    const reasons = (await e.query<{ summary: string }>("SELECT summary FROM ingest_log WHERE source_type = 'connector-delete'")).rows
+      .map(r => (JSON.parse(r.summary) as { reason: string }).reason);
+    expect(reasons).toEqual(Array(12).fill("retention"));
+    expect(await openNotices(account.id)).toEqual([]);
+  });
+
+  it("keeps held retention pages the owner chose to keep, without asking again", async () => {
+    const e = db.storage.engine();
+    const pages = await aged(12);
+    const account = await trackedAccount(pages);
+    const sweep = () => sweepRetention(db.storage, scope, { accountId: account.id, kinds: ["mail"], env: {}, now: NOW });
+
+    expect((await sweep()).held).toBe(12);
+    expect(await rejectHeldDeletes(e, account.id)).toBe(12);
+    const again = await sweep();
+    expect(again.deleted).toEqual([]);
+    expect(again.held).toBe(0);
+    expect(await inboxPages()).toBe(12);
+    expect(await openNotices(account.id)).toEqual([]);
+  });
+
+  it("keeps pages already waiting for the owner held when the limit is raised", async () => {
+    const pages = await aged(3);
+    const account = await trackedAccount(pages);
+    const env = { MEMRAIN_CONNECTOR_MASS_DELETE_ITEMS: "2" };
+    const held = await sweepRetention(db.storage, scope, { accountId: account.id, kinds: ["mail", "calendar"], env, now: NOW });
+    expect(held.deleted).toEqual([]);
+    expect(held.held).toBe(3);
+    const under = await sweepRetention(db.storage, scope, { accountId: account.id, kinds: ["mail"], env: { MEMRAIN_CONNECTOR_MASS_DELETE_ITEMS: "3" }, now: NOW });
+    // Pages already waiting for the owner stay held; a raised limit does not release them.
+    expect(under.deleted).toEqual([]);
+    expect(await inboxPages()).toBe(3);
   });
 
   it("previews disconnect deletion, refuses a stale preview, and leaves other accounts alone", async () => {

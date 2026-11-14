@@ -41,7 +41,8 @@
  *     not settled and the next run writes and enriches it again;
  *   - retention: after the deletions, `sweepRetention` hard-deletes the
  *     account's pages whose last activity is older than their kind's window
- *     (retention.ts), at most 500 per kind per run;
+ *     (retention.ts), at most 500 per run, past the same mass-delete guard:
+ *     over it, the aged pages are held for the owner and none is deleted;
  *   - a page whose mirror into search failed is not settled: it counts as an
  *     item failure, holds the cursor, and is mirrored again next run;
  *   - a credential the provider will not renew pauses the account
@@ -86,6 +87,7 @@ import {
   recordItemFailure,
   recordItemSettled,
   resolveNotice,
+  RETENTION_STATES,
   touchItem,
   writeCursor,
   DELETION_STATES,
@@ -609,7 +611,9 @@ class Run {
       accountId: this.account.id, externalId: item.externalId, version: item.version, pageSlug,
       contentHash, dedupeKey: item.dedupeKey ?? null, now: this.date(),
     });
-    const settled = row !== null && row.fail_count === 0 && row.held_reason === null
+    // A retention hold rides on a live, unchanged item: seeing it again keeps the hold.
+    const settled = row !== null && row.fail_count === 0
+      && (row.held_reason === null || RETENTION_STATES.includes(row.held_reason))
       && row.deleted_upstream_at === null && row.page_slug === item.slug;
     // Without a version there is nothing to compare: the write below decides
     // by content hash.

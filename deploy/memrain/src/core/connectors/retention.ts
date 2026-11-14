@@ -28,7 +28,8 @@
  *
  * A sync run that wants to delete more than the guard allows (default 200
  * items, or 5% of the account's pages once a run deletes at least 10) is held
- * until the owner confirms; the guard beats the hard delete.
+ * until the owner confirms; the guard beats the hard delete. That holds for
+ * upstream deletions and for pages aging out of their retention window alike.
  */
 import { createHash } from "node:crypto";
 import type { Storage } from "../storage.ts";
@@ -42,6 +43,15 @@ import { OperationError } from "../operation-error.ts";
 import { deadlockSafeTransaction } from "../retry.ts";
 import { slugifyTitle } from "../synthesis/atoms.ts";
 import { shortHash, SOURCE_KIND_FOR, type ConnectorDataKind } from "./model.ts";
+import {
+  heldDeleteCount,
+  holdRetentionDeletes,
+  openNotice,
+  resolveNotice,
+  RETENTION_CONFIRMED,
+  RETENTION_HELD,
+  RETENTION_KEPT,
+} from "./sync-store.ts";
 
 export const CONNECTOR_DELETE_SOURCE_TYPE = "connector-delete";
 
@@ -462,44 +472,100 @@ export function retentionDays(kind: ConnectorDataKind, accountDays?: number | nu
 }
 
 export interface RetentionSweepResult {
-  kind: ConnectorDataKind;
-  days: number | null;
   deleted: string[];
-  /** More pages were past the window than this run's limit. */
+  /** Pages past the window waiting for the owner, because a sweep was past the mass-delete guard. */
+  held: number;
+  /** More pages could have gone than this run's limit. */
   more: boolean;
 }
 
+export interface RetentionSweepOptions {
+  /** The connector account the scope belongs to; its items carry the holds. */
+  accountId: string;
+  kinds: readonly ConnectorDataKind[];
+  /** The account's own window by kind; missing kinds fall back to the environment. */
+  accountDays?: Partial<Record<ConnectorDataKind, number | null>>;
+  env?: NodeJS.ProcessEnv;
+  now?: () => number;
+  limit?: number;
+}
+
+type DueState = "fresh" | "held" | "confirmed" | "kept";
+
 /**
- * Hard-delete this account's pages of one kind whose last activity is older
- * than the window, at most `limit` per run. `last_activity_at` is written by
- * the renderers as an ISO-8601 UTC string, so it compares as text.
+ * Hard-delete this account's pages whose last activity is older than their
+ * kind's window, at most `limit` per run across every kind. `last_activity_at`
+ * is written by the renderers as an ISO-8601 UTC string, so it compares as
+ * text.
+ *
+ * The pages due for the first time go through the mass-delete guard as one
+ * run, like upstream deletions. Past it, the guard wins: their items are held
+ * (`retention_held`), the account's `mass_delete_held` notice opens, and none
+ * of them is deleted until the owner confirms (`retention_confirmed`, deleted
+ * by the next sweep whatever their number) or keeps them (`retention_kept`,
+ * left alone until the item changes upstream). A held or confirmed item whose
+ * page is no longer due, because the window grew, is released.
  */
-export async function sweepRetention(
-  storage: Storage,
-  scope: ConnectorScope,
-  opts: { kind: ConnectorDataKind; accountDays?: number | null; env?: NodeJS.ProcessEnv; now?: () => number; limit?: number },
-): Promise<RetentionSweepResult> {
+export async function sweepRetention(storage: Storage, scope: ConnectorScope, opts: RetentionSweepOptions): Promise<RetentionSweepResult> {
   const engine = storage.engine();
   await assertConnectorSource(engine, scope.sourceId);
-  const days = retentionDays(opts.kind, opts.accountDays, opts.env ?? process.env);
-  if (days === null) return { kind: opts.kind, days, deleted: [], more: false };
+  const env = opts.env ?? process.env;
   const limit = opts.limit ?? 500;
-  const cutoff = new Date((opts.now ?? Date.now)() - days * 86_400_000).toISOString();
-  const due = (await engine.query<{ slug: string }>(
-    `SELECT p.slug FROM pages p
-      WHERE ${ownedPageScope} AND p.compiled_truth->>'kind' = $3
-        AND p.compiled_truth->>'part_of' IS NULL
-        AND p.compiled_truth->>'last_activity_at' < $4
-      ORDER BY p.compiled_truth->>'last_activity_at', p.slug
-      LIMIT $5`,
-    [scope.sourceId, scope.accountRef, opts.kind, cutoff, limit + 1],
-  )).rows.map(r => r.slug);
+  const now = (opts.now ?? Date.now)();
+  const due: Array<{ slug: string; state: DueState }> = [];
+  for (const kind of opts.kinds) {
+    const days = retentionDays(kind, opts.accountDays?.[kind], env);
+    if (days === null) continue;
+    const cutoff = new Date(now - days * 86_400_000).toISOString();
+    const itemIn = (state: string) => `EXISTS (SELECT 1 FROM connector_items i
+      WHERE i.account_id = $5 AND i.page_slug = p.slug AND i.held_reason = '${state}')`;
+    due.push(...(await engine.query<{ slug: string; state: DueState }>(
+      `SELECT p.slug,
+              CASE WHEN ${itemIn(RETENTION_KEPT)} THEN 'kept'
+                   WHEN ${itemIn(RETENTION_CONFIRMED)} THEN 'confirmed'
+                   WHEN ${itemIn(RETENTION_HELD)} THEN 'held'
+                   ELSE 'fresh' END AS state
+         FROM pages p
+        WHERE ${ownedPageScope} AND p.compiled_truth->>'kind' = $3
+          AND p.compiled_truth->>'part_of' IS NULL
+          AND p.compiled_truth->>'last_activity_at' < $4
+        ORDER BY p.compiled_truth->>'last_activity_at', p.slug`,
+      [scope.sourceId, scope.accountRef, kind, cutoff, opts.accountId],
+    )).rows);
+  }
+  await engine.query(
+    `UPDATE connector_items SET held_reason = NULL
+      WHERE account_id = $1 AND held_reason IN ('${RETENTION_HELD}', '${RETENTION_CONFIRMED}')
+        AND NOT (COALESCE(page_slug, '') = ANY($2::text[]))`,
+    [opts.accountId, due.filter(d => d.state === "held" || d.state === "confirmed").map(d => d.slug)],
+  );
+  const slugsIn = (state: DueState) => due.filter(d => d.state === state).map(d => d.slug);
+  const fresh = slugsIn("fresh");
+  const toDelete = slugsIn("confirmed");
+  let held = slugsIn("held").length;
+  const verdict = fresh.length === 0
+    ? { held: false, reason: null }
+    : massDeleteVerdict(fresh.length, await count(engine,
+      `SELECT count(*)::int AS n FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' IS NULL`,
+      [scope.sourceId, scope.accountRef]), env);
+  if (verdict.held) {
+    await holdRetentionDeletes(engine, opts.accountId, fresh);
+    held += fresh.length;
+  } else {
+    toDelete.push(...fresh);
+  }
+  if (held > 0) {
+    await openNotice(engine, opts.accountId, "mass_delete_held",
+      `${held} page(s) past the retention window are held for confirmation; they are not deleted until you choose`, new Date(now));
+  } else if (await heldDeleteCount(engine, opts.accountId) === 0) {
+    await resolveNotice(engine, opts.accountId, "mass_delete_held", new Date(now));
+  }
   const deleted: string[] = [];
-  for (const slug of due.slice(0, limit)) {
+  for (const slug of toDelete.slice(0, limit)) {
     const r = await hardDeleteConnectorPage(storage, scope, { slug, reason: "retention" });
     if (r.deleted) deleted.push(slug);
   }
-  return { kind: opts.kind, days, deleted, more: due.length > limit };
+  return { deleted, held, more: toDelete.length > limit };
 }
 
 // ---------------------------------------------------------------------------

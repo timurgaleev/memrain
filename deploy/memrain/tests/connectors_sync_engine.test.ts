@@ -24,6 +24,7 @@ import {
 } from "../src/core/connectors/sync-engine.ts";
 import {
   confirmHeldDeletes,
+  markUnseenDeletesPending,
   readCursor,
   rejectHeldDeletes,
   retryHeldItems,
@@ -143,6 +144,25 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(r2.status).toBe("success");
       expect(r2.counts).toMatchObject({ items: 1, pages_written: 0, pages_unchanged: 1 });
       expect(again.urls).toEqual([`${ORIGIN}/v1/items?after=c2`]);
+    } finally { await db.close(); }
+  });
+
+  it("keeps a retention hold on an item listed again unchanged, and drops it when the item changes", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "a" }, { id: "b" }], "c1")]).deps);
+      await db.storage.engine().query(`UPDATE connector_items SET held_reason = 'retention_kept' WHERE account_id = $1`, [ACCOUNT_ID]);
+
+      const again = await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "a" }, { id: "b", v: "2", body: "Edited upstream." }], "c2")]).deps);
+      expect(again.counts).toMatchObject({ pages_unchanged: 1, pages_written: 1, items_skipped_held: 0 });
+      expect((await itemRow(db.storage, "a"))?.held_reason).toBe("retention_kept");
+      expect((await itemRow(db.storage, "b"))?.held_reason).toBeNull();
+      // A retention hold is not an item failing: no held-items notice.
+      expect(await openNotices(db.storage)).toEqual([]);
+      // Gone from a full relisting, a kept item is an upstream deletion like any other.
+      expect(await markUnseenDeletesPending(db.storage.engine(), ACCOUNT_ID, "a", new Date(Date.now() + 3_600_000), new Date())).toBe(1);
+      expect((await itemRow(db.storage, "a"))?.held_reason).toBe("delete_pending");
     } finally { await db.close(); }
   });
 

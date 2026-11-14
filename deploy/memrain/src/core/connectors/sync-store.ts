@@ -6,20 +6,30 @@
  * Every timestamp is passed in by the caller, so a run's notion of "now" is
  * one clock, and tests can drive it.
  *
- * `held_reason` carries two kinds of hold:
+ * `held_reason` carries three kinds of hold:
  *   - an item hold: an error code; the item failed `ITEM_HOLD_AFTER` runs in a
  *     row on the same version and waits out a back-off instead of blocking its
  *     stream's cursor;
  *   - a deletion state: `delete_pending` (seen deleted upstream, not applied
  *     yet), `mass_delete` (over the threshold, waiting for the owner) and
- *     `delete_confirmed` (the owner said yes; the next run applies it).
+ *     `delete_confirmed` (the owner said yes; the next run applies it);
+ *   - a retention state, for a live item whose page aged out of its window in
+ *     a sweep past the mass-delete guard: `retention_held` (waiting for the
+ *     owner), `retention_confirmed` (the owner said yes; the next sweep
+ *     deletes it) and `retention_kept` (the owner said no; sweeps leave it
+ *     until the item changes upstream, which clears every hold).
  */
 import type { Engine } from "../engine/interface.ts";
 
 export const DELETE_PENDING = "delete_pending";
 export const MASS_DELETE = "mass_delete";
 export const DELETE_CONFIRMED = "delete_confirmed";
-export const DELETION_STATES: readonly string[] = [DELETE_PENDING, MASS_DELETE, DELETE_CONFIRMED];
+export const RETENTION_HELD = "retention_held";
+export const RETENTION_CONFIRMED = "retention_confirmed";
+export const RETENTION_KEPT = "retention_kept";
+export const RETENTION_STATES: readonly string[] = [RETENTION_HELD, RETENTION_CONFIRMED, RETENTION_KEPT];
+/** Every hold that is not an item failing: none of these is retried, counted as held, or a hold code. */
+export const DELETION_STATES: readonly string[] = [DELETE_PENDING, MASS_DELETE, DELETE_CONFIRMED, ...RETENTION_STATES];
 
 /** Consecutive failed runs on one version before an item is held. */
 export const ITEM_HOLD_AFTER = 3;
@@ -259,9 +269,10 @@ export async function markUnseenDeletesPending(engine: Engine, accountId: string
   const r = await engine.query<{ external_id: string }>(
     `UPDATE connector_items SET deleted_upstream_at = $4, held_reason = '${DELETE_PENDING}', held_until = NULL
       WHERE account_id = $1 AND left(external_id, length($2::text)) = $2::text AND last_seen_at < $3
-        AND deleted_upstream_at IS NULL AND page_slug IS NOT NULL AND held_reason IS NULL AND fail_count = 0
+        AND deleted_upstream_at IS NULL AND page_slug IS NOT NULL AND fail_count = 0
+        AND (held_reason IS NULL OR held_reason = ANY($5::text[]))
       RETURNING external_id`,
-    [accountId, prefix, since.toISOString(), now.toISOString()],
+    [accountId, prefix, since.toISOString(), now.toISOString(), [...RETENTION_STATES]],
   );
   return r.rows.length;
 }
@@ -303,22 +314,55 @@ export async function recordDeleteApplied(engine: Engine, accountId: string, ext
   );
 }
 
-/** The owner confirmed the held mass delete: the next run applies it whatever its size. */
+/**
+ * Mark the live items behind `pageSlugs` as held by a retention sweep past the
+ * guard. An item already in a deletion or retention state keeps it; an item
+ * failure hold gives way, as the page it would retry is the aged one.
+ */
+export async function holdRetentionDeletes(engine: Engine, accountId: string, pageSlugs: readonly string[]): Promise<number> {
+  if (pageSlugs.length === 0) return 0;
+  const r = await engine.query<{ external_id: string }>(
+    `UPDATE connector_items SET held_reason = '${RETENTION_HELD}', held_until = NULL
+      WHERE account_id = $1 AND page_slug = ANY($2::text[]) AND deleted_upstream_at IS NULL
+        AND (held_reason IS NULL OR NOT (held_reason = ANY($3::text[])))
+      RETURNING external_id`,
+    [accountId, [...pageSlugs], [...DELETION_STATES]],
+  );
+  return r.rows.length;
+}
+
+/** Items whose deletion waits for the owner: held upstream deletions and held retention deletions. */
+export async function heldDeleteCount(engine: Engine, accountId: string): Promise<number> {
+  const r = await engine.query<{ n: number | string }>(
+    `SELECT COUNT(*)::int AS n FROM connector_items WHERE account_id = $1 AND held_reason IN ('${MASS_DELETE}', '${RETENTION_HELD}')`,
+    [accountId],
+  );
+  return Number(r.rows[0]!.n);
+}
+
+/** The owner confirmed the held deletions: the next run applies them whatever their number. */
 export async function confirmHeldDeletes(engine: Engine, accountId: string): Promise<number> {
   const r = await engine.query<{ external_id: string }>(
-    `UPDATE connector_items SET held_reason = '${DELETE_CONFIRMED}'
-      WHERE account_id = $1 AND held_reason = '${MASS_DELETE}' RETURNING external_id`,
+    `UPDATE connector_items
+        SET held_reason = CASE held_reason WHEN '${MASS_DELETE}' THEN '${DELETE_CONFIRMED}' ELSE '${RETENTION_CONFIRMED}' END
+      WHERE account_id = $1 AND held_reason IN ('${MASS_DELETE}', '${RETENTION_HELD}') RETURNING external_id`,
     [accountId],
   );
   await resolveNotice(engine, accountId, "mass_delete_held");
   return r.rows.length;
 }
 
-/** The owner refused the held mass delete: the pages stay, and the items read as live. */
+/**
+ * The owner refused the held deletions: the pages stay. A held upstream
+ * deletion reads as live again; a held retention deletion is kept, so the
+ * next sweep does not ask again.
+ */
 export async function rejectHeldDeletes(engine: Engine, accountId: string): Promise<number> {
   const r = await engine.query<{ external_id: string }>(
-    `UPDATE connector_items SET held_reason = NULL, deleted_upstream_at = NULL
-      WHERE account_id = $1 AND held_reason = '${MASS_DELETE}' RETURNING external_id`,
+    `UPDATE connector_items
+        SET held_reason = CASE held_reason WHEN '${MASS_DELETE}' THEN NULL ELSE '${RETENTION_KEPT}' END,
+            deleted_upstream_at = CASE held_reason WHEN '${MASS_DELETE}' THEN NULL ELSE deleted_upstream_at END
+      WHERE account_id = $1 AND held_reason IN ('${MASS_DELETE}', '${RETENTION_HELD}') RETURNING external_id`,
     [accountId],
   );
   await resolveNotice(engine, accountId, "mass_delete_held");

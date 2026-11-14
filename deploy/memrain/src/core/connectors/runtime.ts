@@ -182,13 +182,8 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
           // A page that is already gone, or was never this account's, is left alone: nothing to delete.
           await hardDeleteConnectorPage(st, scope, { slug: item.pageSlug, reason: "provider_deleted", externalId: item.externalId });
         },
-        sweepRetention: async (st) => {
-          let deleted = 0;
-          for (const kind of RETENTION_KINDS) {
-            deleted += (await sweepRetention(st, scope, { kind, env, ...(opts.now ? { now: opts.now } : {}) })).deleted.length;
-          }
-          return deleted;
-        },
+        sweepRetention: async (st) =>
+          (await sweepRetention(st, scope, { accountId: account.id, kinds: RETENTION_KINDS, env, ...(opts.now ? { now: opts.now } : {}) })).deleted.length,
         onItemWritten: async (st, item) => {
           await enrichConnectorPage(st, {
             page: { slug: item.slug, title: item.title, externalId: item.externalId, truth: item.truth ?? {}, ...item.enrich },

@@ -367,6 +367,33 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("count retention deletions held past the guard with upstream ones, confirm them, and keep them", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const account = await connected(e);
+      await e.query(
+        `INSERT INTO connector_items (account_id, external_id, page_slug, held_reason, deleted_upstream_at) VALUES
+           ($1, 'a', 'mail/a', $2, NOW()), ($1, 'b', 'mail/b', 'retention_held', NULL), ($1, 'c', 'mail/c', 'retention_held', NULL)`,
+        [account.id, MASS_DELETE],
+      );
+      await openNotice(e, account.id, "mass_delete_held", "held");
+      const d = deps(db.storage);
+      const listed = await (await call(get("/admin/api/connectors"), d)).json() as { accounts: Array<{ held_deletes: number }> };
+      expect(listed.accounts[0]!.held_deletes).toBe(3);
+
+      expect(await (await call(post(`/admin/api/connectors/accounts/${account.id}/deletions/confirm`), d)).json()).toEqual({ ok: true, confirmed: 3 });
+      const states = async () => (await e.query<{ held_reason: string | null }>(
+        "SELECT held_reason FROM connector_items WHERE account_id = $1 ORDER BY external_id", [account.id])).rows.map((r) => r.held_reason);
+      expect(await states()).toEqual(["delete_confirmed", "retention_confirmed", "retention_confirmed"]);
+
+      await e.query(`UPDATE connector_items SET held_reason = 'retention_held' WHERE account_id = $1 AND external_id = 'b'`, [account.id]);
+      expect(await (await call(post(`/admin/api/connectors/accounts/${account.id}/deletions/reject`), d)).json()).toEqual({ ok: true, kept: 1 });
+      // A kept retention deletion stays on record, so the next sweep does not ask again.
+      expect(await states()).toEqual(["delete_confirmed", "retention_kept", "retention_confirmed"]);
+    } finally { await db.close(); }
+  });
+
   it("remove a bring-your-own client, and refuse an unknown provider", async () => {
     const db = await open();
     try {

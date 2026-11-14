@@ -43,10 +43,9 @@ import { deleteAllConnectorData, previewConnectorData } from "../core/connectors
 import {
   confirmHeldDeletes,
   forgetSyncState,
+  heldDeleteCount,
   heldItemCount,
-  itemsInDeletionState,
   listOpenNotices,
-  MASS_DELETE,
   rejectHeldDeletes,
   retryHeldItems,
   type OpenNotice,
@@ -153,7 +152,7 @@ async function describeAccount(engine: Engine, account: ConnectorAccount, notice
   return {
     ...account,
     held_items: await heldItemCount(engine, account.id),
-    held_deletes: (await itemsInDeletionState(engine, account.id, MASS_DELETE)).length,
+    held_deletes: await heldDeleteCount(engine, account.id),
     notices: notices.filter((n) => n.account_id === account.id).map(({ kind, detail, created_at }) => ({ kind, detail, created_at })),
     credential: cred ? { scopes: cred.scopes, expires_at: cred.expires_at } : null,
   };
