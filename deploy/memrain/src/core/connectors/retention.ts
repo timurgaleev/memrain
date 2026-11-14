@@ -300,13 +300,14 @@ export interface MassDeleteVerdict {
 }
 
 /**
- * Hold when a run deletes more than MEMRAIN_CONNECTOR_MASS_DELETE_MAX items
- * (200), or at least MEMRAIN_CONNECTOR_MASS_DELETE_MIN (10) items that are more
- * than MEMRAIN_CONNECTOR_MASS_DELETE_PCT (5) percent of the account's pages.
- * The floor keeps a small account's single deletion from holding every run.
+ * The one mass-delete guard, shared by the sync engine and this module: hold
+ * when a run deletes more than MEMRAIN_CONNECTOR_MASS_DELETE_ITEMS items (200),
+ * or at least MEMRAIN_CONNECTOR_MASS_DELETE_MIN (10) items that are more than
+ * MEMRAIN_CONNECTOR_MASS_DELETE_PCT (5) percent of the account's total. The
+ * floor keeps a small account's single deletion from holding every run.
  */
 export function massDeleteVerdict(requested: number, total: number, env: NodeJS.ProcessEnv = process.env): MassDeleteVerdict {
-  const max = envNumber(env, "MEMRAIN_CONNECTOR_MASS_DELETE_MAX", DEFAULT_MASS_MAX);
+  const max = envNumber(env, "MEMRAIN_CONNECTOR_MASS_DELETE_ITEMS", DEFAULT_MASS_MAX);
   const pct = envNumber(env, "MEMRAIN_CONNECTOR_MASS_DELETE_PCT", DEFAULT_MASS_PCT);
   const min = envNumber(env, "MEMRAIN_CONNECTOR_MASS_DELETE_MIN", DEFAULT_MASS_MIN);
   if (requested > max) return { held: true, reason: `run deletes ${requested} items, more than ${max}` };

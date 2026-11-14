@@ -108,6 +108,9 @@ async function setup(storage: Storage): Promise<void> {
   );
 }
 
+/** The percentage rule without its floor, so a handful of deletions on a small account is a mass delete. */
+const NO_FLOOR = { env: { MEMRAIN_CONNECTOR_MASS_DELETE_MIN: "1" } };
+
 const itemRow = async (storage: Storage, id: string) => (await storage.engine().query<{ fail_count: number; held_reason: string | null; page_slug: string | null; deleted_upstream_at: string | null }>(
   `SELECT fail_count, held_reason, page_slug, deleted_upstream_at::text AS deleted_upstream_at FROM connector_items WHERE account_id = $1 AND external_id = $2`,
   [ACCOUNT_ID, id])).rows[0];
@@ -212,7 +215,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect((await itemRow(db.storage, "i0"))?.deleted_upstream_at).not.toBeNull();
 
       // 5 of the 29 live items is over 5%: nothing is deleted, the owner is asked.
-      const mass = harness([wirePage([], "c3", false, ["i1", "i2", "i3", "i4", "i5"])]);
+      const mass = harness([wirePage([], "c3", false, ["i1", "i2", "i3", "i4", "i5"])], NO_FLOOR);
       const r2 = await runConnectorSync(db.storage, account(), mass.deps);
       expect(mass.deleted).toEqual([]);
       expect(r2.counts.deletions_held).toBe(5);
@@ -229,7 +232,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await setup(db.storage);
       const ids = Array.from({ length: 10 }, (_, i) => `i${i}`);
       await runConnectorSync(db.storage, account(), harness([wirePage(ids.map((id) => ({ id })), "c1")]).deps);
-      await runConnectorSync(db.storage, account(), harness([wirePage([], "c2", false, ["i0", "i1", "i2"])]).deps);
+      await runConnectorSync(db.storage, account(), harness([wirePage([], "c2", false, ["i0", "i1", "i2"])], NO_FLOOR).deps);
       expect((await itemRow(db.storage, "i0"))?.held_reason).toBe("mass_delete");
 
       expect(await confirmHeldDeletes(db.storage.engine(), ACCOUNT_ID)).toBe(3);
@@ -240,7 +243,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(r.counts.deletions_applied).toBe(3);
       expect((await itemRow(db.storage, "i0"))?.held_reason).toBeNull();
 
-      await runConnectorSync(db.storage, account(), harness([wirePage([], "c4", false, ["i3", "i4"])]).deps);
+      await runConnectorSync(db.storage, account(), harness([wirePage([], "c4", false, ["i3", "i4"])], NO_FLOOR).deps);
       expect(await rejectHeldDeletes(db.storage.engine(), ACCOUNT_ID)).toBe(2);
       expect(await itemRow(db.storage, "i3")).toMatchObject({ held_reason: null, deleted_upstream_at: null });
       const after = harness([wirePage([], "c5")]);

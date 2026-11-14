@@ -22,8 +22,9 @@
  *     page fail and half of them share one error, it is the source failing,
  *     and no item is blamed;
  *   - deletions: each upstream deletion is recorded as pending; at the end of
- *     the run, more than the mass-delete threshold (200 items or 5% of the
- *     account's items, both configurable) holds them all for the owner,
+ *     the run, past the mass-delete guard (retention.ts massDeleteVerdict:
+ *     more than 200 items, or at least 10 that are more than 5% of the
+ *     account's items, all configurable) holds them all for the owner,
  *     otherwise each is handed to the deletion handler one by one; with no
  *     handler wired they stay pending, and a page a live duplicate still
  *     points at is never handed over;
@@ -46,6 +47,7 @@ import { daySpendUsd, runWithSpendClient, utcDayStart } from "../budget.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import type { ConnectorClient, ConnectorResponse, TokenSource } from "./client.ts";
 import { isDeterministicRefusal } from "./github.ts";
+import { massDeleteVerdict } from "./retention.ts";
 import { ReauthRequiredError, type ConnectorRunStatus, type ResponseClass } from "./types.ts";
 import {
   DELETE_CONFIRMED,
@@ -208,8 +210,6 @@ export interface SyncRunResult {
 }
 
 const DEFAULT_MAX_ITEMS_PER_RUN = 500;
-const DEFAULT_MASS_DELETE_ITEMS = 200;
-const DEFAULT_MASS_DELETE_PCT = 5;
 /** Pages per stream per run; past it the run stops partial instead of looping. */
 export const MAX_PAGES_PER_STREAM = 1000;
 export const SOURCE_OUTAGE_MIN = 5;
@@ -237,19 +237,6 @@ function positiveInt(env: Env, name: string, fallback: number): number {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-function positiveNumber(env: Env, name: string, fallback: number): number {
-  const raw = (env[name] ?? "").trim();
-  const n = Number(raw);
-  return raw !== "" && Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-/** True when deleting `count` of `present` items needs the owner's confirmation. */
-export function isMassDelete(count: number, present: number, env: Env = process.env): boolean {
-  if (count === 0) return false;
-  const maxItems = positiveInt(env, "MEMRAIN_CONNECTOR_MASS_DELETE_ITEMS", DEFAULT_MASS_DELETE_ITEMS);
-  const pct = positiveNumber(env, "MEMRAIN_CONNECTOR_MASS_DELETE_PCT", DEFAULT_MASS_DELETE_PCT);
-  return count > maxItems || count * 100 > pct * present;
-}
 
 function emptyCounts(): SyncCounts {
   return {
@@ -622,7 +609,8 @@ class Run {
   private async settleDeletions(): Promise<void> {
     const engine = this.engine;
     const pending = await itemsInDeletionState(engine, this.account.id, DELETE_PENDING);
-    if (pending.length > 0 && isMassDelete(pending.length, await itemsPresent(engine, this.account.id), this.env)) {
+    // The guard wins over the hard delete: past it, nothing is deleted until the owner confirms.
+    if (pending.length > 0 && massDeleteVerdict(pending.length, await itemsPresent(engine, this.account.id), this.env).held) {
       this.result.counts.deletions_held += await holdPendingDeletes(engine, this.account.id);
       await openNotice(
         engine,
