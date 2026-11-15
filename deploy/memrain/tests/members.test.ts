@@ -122,4 +122,21 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect((await getMember(e, "erin"))?.status).toBe("removed");
     } finally { await db.close(); }
   });
+
+  it("refuses to move a token name whose live rows belong to different members", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      for (const id of ["gina", "hank", "ivy"]) await addMember(e, id, {}, OPS);
+      await pat(e, "shared-key", "h-shared-1");
+      await pat(e, "shared-key", "h-shared-2");
+      await e.query(`UPDATE access_tokens SET member_id = 'gina' WHERE token_hash = 'h-shared-1'`);
+      await e.query(`UPDATE access_tokens SET member_id = 'hank' WHERE token_hash = 'h-shared-2'`);
+      // One audit trail per member: moving both rows would leave hank's history silent.
+      expect(await code(bindCredential(e, "ivy", { kind: "token", id: "shared-key" }, OPS))).toBe("credential_mixed");
+      expect(await code(bindCredential(e, null, { kind: "token", id: "shared-key" }, OPS))).toBe("credential_mixed");
+      const rows = await e.query<{ member_id: string }>(`SELECT member_id FROM access_tokens WHERE name = 'shared-key' ORDER BY token_hash`);
+      expect(rows.rows.map(r => r.member_id)).toEqual(["gina", "hank"]);
+    } finally { await db.close(); }
+  });
 });

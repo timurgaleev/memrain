@@ -49,6 +49,7 @@ export type MemberErrorCode =
   | "member_retired"
   | "member_not_enabled"
   | "email_taken"
+  | "credential_mixed"
   | "not_found"
   | "owner_source";
 
@@ -280,6 +281,14 @@ export async function bindCredential(
       [target.id],
     );
     if (locked.rows.length === 0) throw new MemberError("not_found", `no live ${target.kind} "${target.id}"`);
+    // Each member's audit names the one previous holder; live rows of one
+    // token name held by two people would leave the second history silent.
+    if (new Set(locked.rows.map((r) => r.member_id).filter((m) => m !== null)).size > 1) {
+      throw new MemberError(
+        "credential_mixed",
+        `the live rows of ${target.kind} "${target.id}" are bound to different members; revoke the extra ones first`,
+      );
+    }
     const previous = locked.rows.find((r) => r.member_id !== null)?.member_id ?? null;
     if (opts.expectedMember !== undefined && locked.rows.some((r) => r.member_id !== opts.expectedMember)) {
       throw new MemberError("not_found", `${target.kind} "${target.id}" is not bound to member "${opts.expectedMember}"`);

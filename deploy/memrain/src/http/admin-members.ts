@@ -59,6 +59,7 @@ const STATUS: Record<MemberErrorCode, number> = {
   member_retired: 409,
   member_not_enabled: 409,
   email_taken: 409,
+  credential_mixed: 409,
   owner_source: 409,
 };
 
