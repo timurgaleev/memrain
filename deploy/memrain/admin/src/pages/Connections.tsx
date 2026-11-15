@@ -224,7 +224,7 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
             <button
               className="btn btn-secondary btn-sm"
               disabled={busy || !connectorsOn}
-              aria-label={`Reconnect ${a.account_label} now`}
+              aria-label={`Reconnect now: ${a.account_label}`}
               onClick={reconnect}
             >
               Reconnect now

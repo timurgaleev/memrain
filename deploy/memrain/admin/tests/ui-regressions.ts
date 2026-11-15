@@ -240,7 +240,7 @@ try {
     await page.getByText("success · 49 items, 49 written", { exact: true }).waitFor();
     await page.getByText("Around 2026-11-11 if the Google app is in Testing", { exact: false }).first().waitFor();
     await page.route("https://accounts.example.test/**", (r) => r.fulfill({ contentType: "text/html", body: "<p>Provider consent page</p>" }));
-    await page.getByRole("button", { name: `Reconnect ${OWNER} now` }).click();
+    await page.getByRole("button", { name: `Reconnect now: ${OWNER}` }).click();
     await page.waitForURL("https://accounts.example.test/**");
     assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/google/start", body: { source_id: "cal", services: ["calendar"] } }]);
   });
