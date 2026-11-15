@@ -14,6 +14,7 @@ import { getSource } from "../sources.ts";
 import { cleanLabel, createAccount, findAccount, setAccountStatus, storeCredential, type ConnectorAccount } from "./accounts.ts";
 import type { ConnectDeps } from "./oauth-connect.ts";
 import type { ApiKeyProvider } from "./providers.ts";
+import { resolveNotice } from "./sync-store.ts";
 
 export type ApiKeyConnectErrorCode =
   | "connectors_disabled"
@@ -90,6 +91,8 @@ export async function connectApiKey(deps: ConnectDeps, input: ApiKeyConnectInput
     if (existing) {
       await storeCredential(tx, kek, existing, tokens, { scopes: [], expiresAt: null });
       await setAccountStatus(tx, existing.id, "active", null);
+      // The new grant answers the sync engine's reconnect notice; with sync off no run would.
+      await resolveNotice(tx, existing.id, "needs_reconnect");
       return { account: (await findAccount(tx, source.id, provider.id, label))!, reconnected: true };
     }
     const created = await createAccount(tx, { sourceId: source.id, provider: provider.id, services, principalRef: principal, accountLabel: label });

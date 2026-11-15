@@ -24,6 +24,9 @@ import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { GOOGLE_ACCESS_TOKEN, GOOGLE_REFRESH_TOKEN, googleFetch, type GoogleWorld } from "./helpers/google-calendar-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
+import { listAccountStatus } from "../src/core/connectors/account-status.ts";
+import { setAccountStatus } from "../src/core/connectors/accounts.ts";
+import { openNotice } from "../src/core/connectors/sync-store.ts";
 import { startServer, type ServerHandle } from "../src/http/server.ts";
 import type { Storage } from "../src/core/storage.ts";
 
@@ -215,6 +218,23 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const again = await (await b.send(`/admin/api/connectors/accounts/${id}/calendars`, { headers: SPA })).json() as { calendars: Array<{ id: string; selected: boolean }>; history_days: number };
     expect(again.history_days).toBe(30);
     expect(again.calendars.find((c) => c.id === "team0abc123@group.calendar.google.com")?.selected).toBe(true);
+  });
+
+  it("a reconnect clears the waiting reconnect at once, before any sync runs", async () => {
+    const b = await boot();
+    expect((await connectGoogle(b)).status).toBe(303);
+    const engine = db!.storage.engine();
+    const [account] = await listAccountStatus(engine);
+    // What the sync engine does when Google refuses the grant.
+    await setAccountStatus(engine, account!.id, "needs_reconnect", "invalid_grant");
+    await openNotice(engine, account!.id, "needs_reconnect", "token refresh refused (HTTP 400)");
+    expect((await listAccountStatus(engine))[0]).toMatchObject({ needs_reconnect: true, state: "needs a reconnect" });
+
+    expect((await connectGoogle(b)).status).toBe(303);
+    // Sync is off, so no clean run will ever resolve the notice for it.
+    expect((await listAccountStatus(engine))[0]).toMatchObject({ status: "active", needs_reconnect: false, state: "sync off" });
+    const { notifications } = await (await b.send("/admin/api/notifications", { headers: SPA })).json() as { notifications: Array<{ kind: string; resolved_at: string | null }> };
+    expect(notifications.filter((n) => n.kind === "needs_reconnect" && n.resolved_at === null)).toEqual([]);
   });
 
   it("a callback page served with no-referrer would make the browser post Origin: null, which the gate refuses", async () => {

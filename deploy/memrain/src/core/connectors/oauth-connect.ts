@@ -36,6 +36,7 @@ import {
   type TokenSet,
 } from "./accounts.ts";
 import { getOAuthClient } from "./oauth-clients.ts";
+import { resolveNotice } from "./sync-store.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import { refreshLockId } from "./token-provider.ts";
 import type { ConnectorProvider, ProviderRegistry } from "./providers.ts";
@@ -422,6 +423,8 @@ async function persistGrant(
       await storeCredential(tx, kek, existing, tokens, { scopes, expiresAt });
       await tx.query(`UPDATE connector_accounts SET services = $2::text[], updated_at = NOW() WHERE id = $1`, [existing.id, st.services]);
       await setAccountStatus(tx, existing.id, "active", null);
+      // The new grant answers the sync engine's reconnect notice; with sync off no run would.
+      await resolveNotice(tx, existing.id, "needs_reconnect");
       const account = (await findAccount(tx, st.source_id, providerId, label))!;
       return { account, reconnected: true };
     }
