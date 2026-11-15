@@ -16,8 +16,10 @@ import {
   decisionMessage,
   deleteOutcome,
   providerLabel,
+  initialServices,
   safeAuthorizeUrl,
   sourcesFor,
+  toggleService,
   type ConnectorAccountView,
   type DaemonView,
 } from "../admin/src/lib/automation.ts";
@@ -85,6 +87,20 @@ describe("sourcesFor", () => {
     expect(sourcesFor(kinds, ["mail"], sources).map((s) => s.id)).toEqual(["inbox"]);
     expect(sourcesFor(kinds, ["mail", "calendar"], sources)).toEqual([]);
     expect(sourcesFor(kinds, [], sources)).toEqual([]);
+  });
+});
+
+describe("service picker", () => {
+  const google = { services: ["calendar", "gmail"], service_kinds: { calendar: ["calendar"], gmail: ["mailbox"] } };
+  it("starts with the first service only when no one source holds them all", () => {
+    expect(initialServices(google)).toEqual(["calendar"]);
+    expect(initialServices({ services: ["a", "b"], service_kinds: { a: ["chat"], b: ["chat"] } })).toEqual(["a", "b"]);
+  });
+  it("switching a service on drops the chosen ones no source could hold with it", () => {
+    expect(toggleService(google, ["calendar"], "gmail", true)).toEqual(["gmail"]);
+    expect(toggleService(google, ["gmail"], "gmail", false)).toEqual([]);
+    const shared = { services: ["a", "b"], service_kinds: { a: ["chat"], b: ["chat"] } };
+    expect(toggleService(shared, ["a"], "b", true)).toEqual(["a", "b"]);
   });
 });
 

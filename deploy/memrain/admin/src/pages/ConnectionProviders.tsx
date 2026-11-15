@@ -3,8 +3,10 @@ import { automationApi } from "../api-automation.ts";
 import { CopyField } from "../components/CopyField.tsx";
 import { Dialog } from "../components/Dialog.tsx";
 import {
+  initialServices,
   providerLabel,
   sourcesFor,
+  toggleService,
   type ConnectorProviderView,
   type OAuthClientView,
   type SourceView,
@@ -23,7 +25,7 @@ interface Props {
 /** One provider: what to read and where to put it, then connect; plus its own-app settings. */
 export function ProviderPanel({ provider: p, sources, client, connectorsOn, onDone, onError }: Props) {
   const name = providerLabel(p.id);
-  const [services, setServices] = useState<string[]>(p.services);
+  const [services, setServices] = useState<string[]>(() => initialServices(p));
   const fitting = sourcesFor(p.service_kinds, services, sources);
   const [sourceId, setSourceId] = useState("");
   const chosen = fitting.some((s) => s.id === sourceId) ? sourceId : fitting[0]?.id ?? "";
@@ -31,8 +33,7 @@ export function ProviderPanel({ provider: p, sources, client, connectorsOn, onDo
   const sourceFieldId = useId();
   const kinds = [...new Set(services.flatMap((s) => p.service_kinds[s] ?? []))];
 
-  const toggle = (svc: string, on: boolean) =>
-    setServices((cur) => (on ? p.services.filter((s) => s === svc || cur.includes(s)) : cur.filter((s) => s !== svc)));
+  const toggle = (svc: string, on: boolean) => setServices((cur) => toggleService(p, cur, svc, on));
 
   const [key, setKey] = useState("");
   const keyField = useId();

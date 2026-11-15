@@ -123,6 +123,30 @@ export function confirmMatches(typed: string, accountLabel: string): boolean {
   return typed.trim() !== "" && typed.trim() === accountLabel;
 }
 
+type ServicePicker = Pick<ConnectorProviderView, "services" | "service_kinds">;
+
+/** Whether one source kind can hold both services. */
+function shareKind(p: ServicePicker, a: string, b: string): boolean {
+  const kinds = p.service_kinds[b] ?? [];
+  return (p.service_kinds[a] ?? []).some((k) => kinds.includes(k));
+}
+
+/** The services first offered: the first one, and every other one a source of its kind can hold too. */
+export function initialServices(p: ServicePicker): string[] {
+  const first = p.services[0];
+  return first === undefined ? [] : p.services.filter((s) => shareKind(p, first, s));
+}
+
+/**
+ * Switch a service on or off. Switching one on drops the chosen services no
+ * source could hold with it (Gmail and Calendar go into sources of different
+ * kinds), so the choice always leaves a source to pick.
+ */
+export function toggleService(p: ServicePicker, current: readonly string[], svc: string, on: boolean): string[] {
+  if (!on) return current.filter((s) => s !== svc);
+  return p.services.filter((s) => s === svc || (current.includes(s) && shareKind(p, s, svc)));
+}
+
 /** The sources every chosen service may write into. */
 export function sourcesFor(serviceKinds: Record<string, string[]>, services: readonly string[], sources: readonly SourceView[]): SourceView[] {
   if (services.length === 0) return [];

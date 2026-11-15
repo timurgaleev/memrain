@@ -165,7 +165,9 @@ describe("connector routes behind handleAdminApi", () => {
       // The shipped providers are listed (no secrets in them) while nothing can connect.
       const status = await st?.json() as { enabled: boolean; accounts: unknown[]; providers: unknown[] };
       expect(status).toMatchObject({ enabled: false, accounts: [] });
-      expect(status.providers).toContainEqual(expect.objectContaining({ id: "google", services: ["calendar"], auth: "oauth" }));
+      expect(status.providers).toContainEqual(expect.objectContaining({
+        id: "google", services: ["calendar", "gmail"], service_kinds: { calendar: ["calendar"], gmail: ["mailbox"] }, auth: "oauth",
+      }));
       expect(status.providers).toContainEqual(expect.objectContaining({ id: "fireflies", services: ["fireflies"], auth: "api_key", callback_uri: null }));
     } finally {
       for (const [k, v] of saved) {
