@@ -1314,7 +1314,8 @@ async function hybridSearchUnbounded(
   // Shadow ranking (MEMRAIN_RANK_SHADOW, off by default): keep a copy of the
   // candidates before the stages score them in place, rank it with the flag
   // flipped once this call's result is decided, and record only aggregates.
-  const shadow = opts.noTelemetry || graphRerankOn || paidStageEnabled(stageInput) ? null : shadowFlag();
+  const wanted = shadowFlag();
+  const shadow = wanted && !opts.noTelemetry && !graphRerankOn && !paidStageEnabled(stageInput) ? wanted : null;
   const shadowHits = shadow ? shadowCopy(scored) : null;
   const final = await runPostFusionStages(scored, stageInput);
   if (shadow && shadowHits) startShadow(shadow, shadowHits, stageInput, final);
