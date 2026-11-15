@@ -59,6 +59,22 @@ describe("gmail message reading", () => {
     expect(extractBody(root)).toEqual({ text: "first part\n\nsecond part", isHtml: false });
   });
 
+  it("keeps an html-only segment of a mixed message next to its plain one, as text", () => {
+    const root: GmailMimePart = {
+      mimeType: "multipart/mixed",
+      parts: [
+        { mimeType: "text/plain", body: { data: b64("plain segment") } },
+        { mimeType: "text/html", body: { data: b64("<p>html <b>segment</b></p>") } },
+      ],
+    };
+    const body = extractBody(root);
+    expect(body.isHtml).toBe(false);
+    expect(body.text).toContain("plain segment");
+    expect(body.text).toContain("html segment");
+    expect(body.text).not.toContain("<p>");
+    expect(body.text.indexOf("plain segment")).toBeLessThan(body.text.indexOf("html segment"));
+  });
+
   it("describes attachments and invites by name, type and size, never their handle", () => {
     const root: GmailMimePart = {
       mimeType: "multipart/mixed",
