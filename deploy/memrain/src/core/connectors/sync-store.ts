@@ -333,6 +333,41 @@ export async function holdRetentionDeletes(engine: Engine, accountId: string, pa
   return r.rows.length;
 }
 
+/** external_id prefix of the stand-in row that carries a retention hold for a page no item maps to. */
+export const ORPHAN_HOLD_PREFIX = "retention-orphan:";
+
+/**
+ * Hold pages past retention that no item of the account maps to (their sync
+ * record was forgotten), so the owner confirms or keeps them like any other
+ * held page. Each gets a stand-in item row holding it. The row has no provider
+ * item behind it, so it is born deleted upstream: no reconcile, duplicate check
+ * or live-item count ever reads it as a live item, and a run never fetches it.
+ */
+export async function holdOrphanRetentionDeletes(engine: Engine, accountId: string, pageSlugs: readonly string[], now: Date): Promise<number> {
+  if (pageSlugs.length === 0) return 0;
+  const r = await engine.query<{ external_id: string }>(
+    `INSERT INTO connector_items (account_id, external_id, page_slug, first_seen_at, last_seen_at, deleted_upstream_at, held_reason)
+     SELECT $1, $2 || md5(s), s, $4, $4, $4, '${RETENTION_HELD}' FROM unnest($3::text[]) AS s
+     ON CONFLICT (account_id, external_id) DO NOTHING
+     RETURNING external_id`,
+    [accountId, ORPHAN_HOLD_PREFIX, [...pageSlugs], now.toISOString()],
+  );
+  return r.rows.length;
+}
+
+/**
+ * Release the retention holds and confirmations of the account whose pages are
+ * not in `dueSlugs` any more (the window grew, or the page is gone). A stand-in
+ * row for an orphan page is removed; a real item's hold is cleared.
+ */
+export async function releaseRetentionHolds(engine: Engine, accountId: string, dueSlugs: readonly string[]): Promise<void> {
+  const stale = `account_id = $1 AND held_reason IN ('${RETENTION_HELD}', '${RETENTION_CONFIRMED}')
+                 AND NOT (COALESCE(page_slug, '') = ANY($2::text[]))`;
+  await engine.query(`DELETE FROM connector_items WHERE ${stale} AND left(external_id, length($3::text)) = $3::text`,
+    [accountId, [...dueSlugs], ORPHAN_HOLD_PREFIX]);
+  await engine.query(`UPDATE connector_items SET held_reason = NULL WHERE ${stale}`, [accountId, [...dueSlugs]]);
+}
+
 /** Items whose deletion waits for the owner: held upstream deletions and held retention deletions. */
 export async function heldDeleteCount(engine: Engine, accountId: string): Promise<number> {
   const r = await engine.query<{ n: number | string }>(

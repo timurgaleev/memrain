@@ -369,16 +369,47 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await openNotices(account.id)).toEqual([]);
   });
 
-  it("never mass-deletes pages no sync record maps to, and raises no hold the owner could not confirm", async () => {
+  it("holds pages no sync record maps to past the guard for the owner, and deletes them once confirmed", async () => {
     const e = db.storage.engine();
     await aged(12);
     const account = await trackedAccount([]);
-    const r = await sweepRetention(db.storage, scope, { accountId: account.id, kinds: ["mail"], env: {}, now: NOW });
+    const sweep = () => sweepRetention(db.storage, scope, { accountId: account.id, kinds: ["mail"], env: {}, now: NOW });
+    const r = await sweep();
     expect(r.deleted).toEqual([]);
-    expect(r.held).toBe(0);
+    expect(r.held).toBe(12);
+    expect(await inboxPages()).toBe(12);
+    expect(await openNotices(account.id)).toEqual(["mass_delete_held"]);
+    expect((await currentProblems(e)).map(p => p.kind)).toContain("deletions_held");
+    expect((await sweep()).held).toBe(12);
+
+    expect(await confirmHeldDeletes(e, account.id)).toBe(12);
+    expect((await sweep()).deleted).toHaveLength(12);
+    expect(await inboxPages()).toBe(0);
+    expect(await openNotices(account.id)).toEqual([]);
+    // Nothing of the hold outlives the pages it held.
+    await sweep();
+    expect((await e.query("SELECT 1 FROM connector_items WHERE account_id = $1", [account.id])).rows).toHaveLength(0);
+  });
+
+  it("keeps pages no sync record maps to when the owner says so, without asking again", async () => {
+    const e = db.storage.engine();
+    await aged(12);
+    const account = await trackedAccount([]);
+    const sweep = () => sweepRetention(db.storage, scope, { accountId: account.id, kinds: ["mail"], env: {}, now: NOW });
+    expect((await sweep()).held).toBe(12);
+    expect(await rejectHeldDeletes(e, account.id)).toBe(12);
+    const again = await sweep();
+    expect(again).toMatchObject({ deleted: [], held: 0 });
     expect(await inboxPages()).toBe(12);
     expect(await openNotices(account.id)).toEqual([]);
-    expect((await currentProblems(e)).map(p => p.kind)).not.toContain("deletions_held");
+  });
+
+  it("ages out pages no sync record maps to in a run under the guard", async () => {
+    const pages = await aged(2);
+    const account = await trackedAccount([]);
+    const r = await sweepRetention(db.storage, scope, { accountId: account.id, kinds: ["mail"], env: {}, now: NOW });
+    expect(r.deleted.sort()).toEqual(pages.map(p => p.slug).sort());
+    expect(await inboxPages()).toBe(0);
   });
 
   it("keeps held retention pages the owner chose to keep, without asking again", async () => {

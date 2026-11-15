@@ -56,8 +56,10 @@ import { shortHash, SOURCE_KIND_FOR, type ConnectorDataKind } from "./model.ts";
 import {
   DELETION_STATES,
   heldDeleteCount,
+  holdOrphanRetentionDeletes,
   holdRetentionDeletes,
   openNotice,
+  releaseRetentionHolds,
   resolveNotice,
   RETENTION_CONFIRMED,
   RETENTION_HELD,
@@ -604,8 +606,11 @@ type DueState = "fresh" | "orphan" | "upstream" | "held" | "confirmed" | "kept";
  * (`retention_held`), the account's `mass_delete_held` notice opens, and none
  * of them is deleted until the owner confirms (`retention_confirmed`, deleted
  * by the next sweep whatever their number) or keeps them (`retention_kept`,
- * left alone until the item changes upstream). A held or confirmed item whose
- * page is no longer due, because the window grew, is released.
+ * left alone until the item changes upstream). A page no item maps to (its
+ * sync record was forgotten) is held the same way through a stand-in item
+ * (holdOrphanRetentionDeletes), so it is never deleted past the guard and
+ * never waits without a notice. A held or confirmed item whose page is no
+ * longer due, because the window grew, is released.
  */
 export async function sweepRetention(storage: Storage, scope: ConnectorScope, opts: RetentionSweepOptions): Promise<RetentionSweepResult> {
   const engine = storage.engine();
@@ -637,16 +642,11 @@ export async function sweepRetention(storage: Storage, scope: ConnectorScope, op
       [scope.sourceId, scope.accountRef, kind, cutoff, opts.accountId, [...DELETION_STATES]],
     )).rows);
   }
-  await engine.query(
-    `UPDATE connector_items SET held_reason = NULL
-      WHERE account_id = $1 AND held_reason IN ('${RETENTION_HELD}', '${RETENTION_CONFIRMED}')
-        AND NOT (COALESCE(page_slug, '') = ANY($2::text[]))`,
-    [opts.accountId, due.filter(d => d.state === "held" || d.state === "confirmed").map(d => d.slug)],
-  );
+  await releaseRetentionHolds(engine, opts.accountId, due.filter(d => d.state === "held" || d.state === "confirmed").map(d => d.slug));
   const slugsIn = (state: DueState) => due.filter(d => d.state === state).map(d => d.slug);
   const fresh = slugsIn("fresh");
-  // A page no item maps to (its sync state was forgotten) cannot be held for the
-  // owner: it counts toward the guard, and past it simply stays this run.
+  // A page no item maps to (its sync state was forgotten) counts toward the
+  // guard like the rest; past it, a stand-in item holds it for the owner.
   const orphans = slugsIn("orphan");
   const toDelete = slugsIn("confirmed");
   let held = slugsIn("held").length;
@@ -658,7 +658,8 @@ export async function sweepRetention(storage: Storage, scope: ConnectorScope, op
       [scope.sourceId, scope.accountRef]), env);
   if (verdict.held) {
     await holdRetentionDeletes(engine, opts.accountId, fresh);
-    held += fresh.length;
+    await holdOrphanRetentionDeletes(engine, opts.accountId, orphans, new Date(now));
+    held += fresh.length + orphans.length;
   } else {
     toDelete.push(...fresh, ...orphans);
   }
