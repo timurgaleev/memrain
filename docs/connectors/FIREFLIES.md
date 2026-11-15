@@ -84,8 +84,10 @@ outside text; nothing in it is ever acted on.
   picked up.
 - About once a day every transcript id the key can see is listed. A stored
   transcript missing from that list is asked for by id, and only a "not found"
-  answer deletes it: its page, parts, chunks, embeddings, links and facts are
-  hard-deleted with a receipt that holds no meeting text. More than the
+  answer deletes it: its page and parts are soft-deleted with a receipt that
+  holds no meeting text, out of search at once and restorable with
+  `page_restore` for 30 days, after which the purge removes them for good
+  (see [PRIVACY.md](../../PRIVACY.md)). More than the
   mass-delete threshold at once is held for you to confirm on the Connections
   page.
 - A key Fireflies refuses pauses the account as `needs_reconnect`, opens a

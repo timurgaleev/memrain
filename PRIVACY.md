@@ -104,10 +104,14 @@ Connector data has its own rules:
   with `MEMRAIN_CONNECTOR_RETENTION_DAYS_<KIND>`; `0` or `off` keeps pages.
   The sweep runs after each sync run.
 - **Deleted at the provider.** An event cancelled in Google or a transcript
-  Fireflies no longer has is hard-deleted from the brain with everything
-  derived from it: page history, chunks and embeddings, facts, chronicle rows
-  and links. A run that would delete more than the mass-delete guard allows is
-  held until the operator confirms it in the admin panel.
+  Fireflies no longer has is deleted from the brain with its parts, whatever
+  anyone wrote on it, but recoverably: the page is soft-deleted the way
+  `page_delete` leaves a page, so it drops out of search at once and its fence
+  facts go, while the page and its history stay restorable with
+  `page_restore` for 30 days. The purge then removes the page and its history
+  for good and retires the facts written on it. A run that would delete more
+  than the mass-delete guard allows is held until the operator confirms it in
+  the admin panel.
 - **Disconnecting** revokes a Google grant at Google and drops the stored
   credential (it is kept for another try if Google does not confirm the
   revoke); a Fireflies key is dropped and stays valid in Fireflies until the
