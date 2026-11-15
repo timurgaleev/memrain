@@ -166,6 +166,25 @@ function requestedScopes(provider: ConnectorProvider, services: readonly string[
   return out;
 }
 
+/**
+ * For a provider that combines grants: the services, other than `services`,
+ * whose every scope a stored credential of this provider holds. A disconnect
+ * deletes the credential (and revoking it ends the combined grant at the
+ * provider), so only live grants count. In provider order, so the request is
+ * stable.
+ */
+async function heldCompanionServices(engine: Engine, provider: ConnectorProvider, services: readonly string[]): Promise<string[]> {
+  if (provider.combinedGrants !== true) return [];
+  // scope: operator-only the connect flow reads which scopes this provider's credentials hold, never their contents
+  const r = await engine.query<{ scopes: string[] | null }>(
+    `SELECT c.scopes FROM connector_credentials c JOIN connector_accounts a ON a.id = c.account_id WHERE a.provider = $1`,
+    [provider.id],
+  );
+  const held = new Set(r.rows.flatMap((row) => row.scopes ?? []));
+  return Object.keys(provider.services)
+    .filter((s) => !services.includes(s) && provider.services[s]!.scopes.every((scope) => held.has(scope)));
+}
+
 /** The provider's OAuth client: the stored bring-your-own one, else the environment's. */
 export async function resolveClient(deps: ConnectDeps, kek: Kek, provider: string): Promise<{ clientId: string; clientSecret: string }> {
   const stored = await getOAuthClient(deps.engine, kek, provider);
@@ -202,6 +221,7 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
   if (!source) throw new ConnectError("source_not_found");
   if (services.some((s) => !provider.services[s]!.sourceKinds.includes(source.kind))) throw new ConnectError("source_kind");
   const client = await resolveClient(deps, kek, provider.id);
+  const companions = await heldCompanionServices(deps.engine, provider, services);
 
   const now = (deps.now ?? Date.now)();
   const state = randomBytes(32).toString("base64url");
@@ -209,7 +229,7 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   const stateHash = sha256Hex(state);
   const sealed = seal(kek, verifier, oauthStateAad(stateHash, provider.id, kek.id));
-  const scopes = requestedScopes(provider, services);
+  const scopes = requestedScopes(provider, Object.keys(provider.services).filter((s) => services.includes(s) || companions.includes(s)));
   const expiresAt = new Date(now + OAUTH_STATE_TTL_MS).toISOString();
 
   await deps.engine.query(`DELETE FROM connector_oauth_states WHERE expires_at < $1`, [new Date(now - STATE_RETENTION_MS).toISOString()]);
