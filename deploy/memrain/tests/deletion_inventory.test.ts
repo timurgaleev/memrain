@@ -60,6 +60,8 @@ const PAGE_COLUMNS: Record<string, Disposition> = {
   "hot_memory.entity_slug": { kind: "exempt", reason: "observation inbox keyed by entity subject, not by the page it was seen on" },
   "hot_memory.source_slug": { kind: "gap", reason: "an observation from a purged page stays in the inbox and a later page on the slug inherits it" },
   "synthesis_evidence.synthesis_slug": { kind: "gap", reason: "citations of a purged synthesis page stay and a later page on the slug inherits them" },
+  "loop_threads.page_slug": { kind: "cascade" },
+  "open_loops.page_slug": { kind: "cascade" },
   "connector_items.page_slug": { kind: "exempt", reason: "the sync's record of which provider item a page came from; it outlives a page the owner purged so the next run does not recreate it, and goes with its account by cascade" },
 };
 
@@ -78,6 +80,9 @@ const SOURCE_TABLES: Record<string, Disposition> = {
   "connector_oauth_states": { kind: "cascade" },
   "write_gate_holds": { kind: "cascade" },
   "notifications": { kind: "cascade" },
+  "open_loops": { kind: "cascade" },
+  "loop_suppressions": { kind: "cascade" },
+  "loop_threads": { kind: "cascade" },
   "page_versions": { kind: "referenced" },
   "oauth_tokens": { kind: "referenced" },
   "oauth_codes": { kind: "referenced" },
