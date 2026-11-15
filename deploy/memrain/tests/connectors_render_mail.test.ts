@@ -36,6 +36,17 @@ describe("trimMailBody", () => {
   it("still drops a signature and trailing quoted lines", () => {
     expect(trimMailBody("Hi\n> quoted\n-- \nBob | Sales")).toBe("Hi");
   });
+
+  it("drops a client's sent-from footer at the end of a message", () => {
+    expect(trimMailBody("See you at 10.\n\nSent from my iPhone")).toBe("See you at 10.");
+    expect(trimMailBody("Done.\n\nGet Outlook for Android")).toBe("Done.");
+    expect(trimMailBody("Ok\n\nSent from Mail for Windows\n")).toBe("Ok");
+  });
+
+  it("keeps a sent-from line that is the message's own text, not its footer", () => {
+    expect(trimMailBody("Sent from my iPhone, so excuse typos: the deal is off.")).toBe("Sent from my iPhone, so excuse typos: the deal is off.");
+    expect(trimMailBody("Sent from my iPhone\n\nThe real reply comes here.")).toBe("Sent from my iPhone\n\nThe real reply comes here.");
+  });
 });
 
 describe("renderMailThread", () => {
@@ -52,6 +63,18 @@ describe("renderMailThread", () => {
     expect(renderMailThread(ctx, thread([message({ precedence: "list" })])).bulk).toBe(true);
     expect(renderMailThread(ctx, thread([message({ listId: true })])).bulk).toBe(true);
     expect(renderMailThread(ctx, thread([message({ precedence: "first-class" })])).bulk).toBe(false);
+  });
+
+  it("marks mail from machine senders as bulk, and keeps a person whose address only resembles one", () => {
+    const ctx = { service: "gmail" as const, accountLabel: ACCOUNT };
+    const from = (email: string) => renderMailThread(ctx, thread([message({ from: { name: null, email } })])).bulk;
+    for (const email of ["postmaster@example.net", "billing-noreply@example.net", "donotreply@example.net", "calendar-notification@google.com",
+      "alerts_no_reply@example.net", "ne-pas-repondre@example.fr", "keine.antwort@example.de", "notificaciones@example.es", "gemini-notes@google.com"]) {
+      expect([email, from(email)]).toEqual([email, true]);
+    }
+    for (const email of ["noelle@example.net", "postman.pat@example.net", "ana@example.net"]) {
+      expect([email, from(email)]).toEqual([email, false]);
+    }
   });
 
   it("puts the thread's labels in its truth, sorted and lowercased", () => {

@@ -69,6 +69,16 @@ export const MAX_MAIL_MESSAGE_CHARS = 20_000;
 
 const BULK_CATEGORIES = new Set(["promotions", "social"]);
 const BULK_LOCAL_PART = /^(?:no-?reply|do-?not-?reply|mailer-daemon|notifications?|bounces?)(?:[+.-]|$)/i;
+/** Machine senders matched anywhere in the address (`billing-noreply@`, `postmaster@`). */
+const NOISE_SENDER_SUBSTRINGS = ["noreply", "no-reply", "notifications@", "notification@", "calendar-notification", "mailer-daemon", "postmaster", "donotreply", "do-not-reply"];
+/**
+ * Separator and localized no-reply spellings, matched in the local part from
+ * its start or after a separator, so a person whose name merely contains a
+ * fragment stays a person.
+ */
+const NOISE_LOCAL_PART = /(?:^|[-._+])(?:no[._]reply|do[-._]not[-._]reply|no[-._]?responder|ne[-._]?pas[-._]?repondre|keine[-._]?antwort)|notifica(?:ciones|coes)$/;
+/** Google system addresses that carry no human message, matched by equality. */
+const SYSTEM_SENDERS: ReadonlySet<string> = new Set(["gemini-notes@google.com"]);
 
 // ---------------------------------------------------------------------------
 // HTML to text: indexOf scans only, so hostile markup stays linear.
@@ -238,9 +248,12 @@ function finish(lines: string[]): string {
 const FORWARD_MARKER = /^(?:-{2,}\s*Forwarded message\s*-{2,}|Begin forwarded message:)$/i;
 const REPLY_MARKER = /^(?:On .{4,200} wrote:|-{2,}\s*Original Message\s*-{2,})$/i;
 const BULK_PRECEDENCE = new Set(["bulk", "list", "junk"]);
+/** A mail client's own footer line, only ever cut at the end of a message. */
+const CLIENT_FOOTER = /^(?:Sent from my [\w .'-]{1,40}|Sent from (?:Mail|Outlook|Yahoo Mail|Gmail)(?: for [\w .-]{1,30})?|Get Outlook for (?:iOS|Android|Mac|Windows))$/i;
 
 /**
- * Drop quoted history and a `-- ` signature. A reply marker ("On ... wrote:",
+ * Drop quoted history, a `-- ` signature and a trailing mail-client footer
+ * ("Sent from my iPhone"). A reply marker ("On ... wrote:",
  * an Outlook "Original Message" line) ends the message: what follows repeats
  * an earlier message of the thread. A forward before any reply marker keeps
  * the body whole, since forwarded text is new to the brain. Otherwise `>`
@@ -264,6 +277,7 @@ export function trimMailBody(text: string): string {
     }
     kept.push(line);
   }
+  while (kept.length > 0 && (kept.at(-1)!.trim() === "" || CLIENT_FOOTER.test(kept.at(-1)!.trim()))) kept.pop();
   return kept.join("\n").trim();
 }
 
@@ -275,11 +289,19 @@ function messageText(m: MailMessage): string {
   return text.length > MAX_MAIL_MESSAGE_CHARS ? `${text.slice(0, MAX_MAIL_MESSAGE_CHARS)}\n[message truncated]` : text;
 }
 
+function isNoiseSender(email: string | null): boolean {
+  const address = (email ?? "").trim().toLowerCase();
+  if (address === "") return false;
+  const local = address.replace(/@[^@]*$/, "");
+  return SYSTEM_SENDERS.has(address) || NOISE_SENDER_SUBSTRINGS.some(p => address.includes(p))
+    || NOISE_LOCAL_PART.test(local) || BULK_LOCAL_PART.test(local);
+}
+
 function isBulk(messages: readonly MailMessage[]): boolean {
   return messages.some(m => m.listUnsubscribe || m.autoSubmitted === true || m.listId === true
     || BULK_PRECEDENCE.has((m.precedence ?? "").trim().toLowerCase())
     || m.categories.some(c => BULK_CATEGORIES.has(c.toLowerCase()))
-    || BULK_LOCAL_PART.test((m.from.email ?? "").split("@")[0] ?? ""));
+    || isNoiseSender(m.from.email));
 }
 
 export function renderMailThread(ctx: ConnectorContext, thread: MailThread): RenderedConnectorPage {
