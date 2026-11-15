@@ -21,6 +21,7 @@
 import { OperationError } from "../core/operation-error.ts";
 import { nearest } from "../core/did-you-mean.ts";
 import { TRUST_TIERS } from "../core/trust-tier.ts";
+import { LOOP_TYPES } from "../core/loops/detect.ts";
 
 export type ParamType = "string" | "integer" | "number" | "boolean" | "object" | "array";
 
@@ -425,7 +426,7 @@ export const OPERATIONS: readonly Operation[] = [
   {
     name: "log_friction",
     description:
-      "Record a friction event — used by the agent to flag when retrieval missed, an answer felt wrong, a tool errored out, OR when a recall produced an unexpectedly good hit (`delight`). When invoked from a skill, include extra.skill = '<skill-slug>' so `memrain friction propose-fix` can group the event with the skill that fired it. Set `severity` to confused/error/blocker/nit on negative kinds for triage.",
+      "Record a friction event: retrieval missed, an answer felt wrong, a tool errored, OR a recall was unexpectedly good (`delight`). From a skill, include extra.skill = '<skill-slug>' so `memrain friction propose-fix` groups it with that skill. Set `severity` (confused/error/blocker/nit) on negative kinds for triage.",
     // Appends a friction_events row that has no source axis, so a read-scoped
     // token must not reach it — the op is a mutation and is tagged as one.
     scope: "write",
@@ -519,7 +520,7 @@ export const OPERATIONS: readonly Operation[] = [
     // The diff quotes the stored lines around the edit.
     outputRedaction: "retrieval",
     description:
-      "Atomically apply 1..50 ordered exact-text body replacements, preserving title/frontmatter. Copy unique old_text from page_get; misses/duplicates give edit_no_match/edit_ambiguous_match. Facts/takes fences and markers are protected (edit_protected_span); use their writers. Requires expected_version; conflict returns current_version. Returns version and diff capped at 8 KB (diff_truncated). Indexing follows page_put; wait_for_index waits. Public writes need MEMRAIN_PUBLIC_WRITE=1.",
+      "Atomically apply 1..50 ordered exact-text body replacements, keeping title/frontmatter. Copy unique old_text from page_get; misses/duplicates give edit_no_match/edit_ambiguous_match. Facts/takes fences are protected (edit_protected_span). Requires expected_version; a conflict returns current_version. Returns version and a diff capped at 8 KB (diff_truncated). Indexing as page_put; wait_for_index waits. Public writes need MEMRAIN_PUBLIC_WRITE=1.",
     params: {
       reason: str({ description: "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version." }),
       slug: str({ ...req, description: "The page to edit; it must exist." }),
@@ -749,7 +750,7 @@ export const OPERATIONS: readonly Operation[] = [
     callShape: "{entity_slug, fact} or {entity_slug, items:[{fact}]}",
     scope: "write",
     description:
-      "Record an entity claim; corrections create new facts. Identical entity/source/writer claims refresh (inserted:false). Withdrawn entity/source/visibility claims stay withdrawn across case/whitespace changes (withdrawn:true,id:null). Default private is operator-only; tenants use world to recall writes. Provenance: source_slug/source_chunk_id/written_by, else caller; public cannot set written_by. replaces supersedes a live fact, returning replaced. Batch ≤20 items inherits top-level defaults; all validate before writing. Results include saved/failed/partial and outcomes; all-failed is a tool error, mixed status:partial. Public forbids items/replaces; writes need MEMRAIN_PUBLIC_WRITE=1.",
+      "Record an entity claim; corrections create new facts. An identical entity/source/writer claim refreshes (inserted:false). A withdrawn claim stays withdrawn across case/whitespace (withdrawn:true,id:null). private (default) is operator-only; tenants use world to recall writes. Provenance: source_slug/source_chunk_id/written_by, else caller; public cannot set written_by. replaces supersedes a live fact. Batch ≤20 items inherits top-level defaults; all validate first. Returns saved/failed/outcomes; all-failed is a tool error, mixed is status:partial. Public: no items/replaces; writes need MEMRAIN_PUBLIC_WRITE=1.",
     argAliases: { facts: "items", memories: "items", text: "fact", content: "fact", claim: "fact", entity: "entity_slug", subject: "entity_slug" },
     params: {
       valid_from: str({ description: "Date the claim became true (YYYY-MM-DD or ISO timestamp, stored as its UTC date)." }),
@@ -791,7 +792,7 @@ export const OPERATIONS: readonly Operation[] = [
     callShape: "{slug, occurred_at, event}",
     scope: "write",
     description:
-      "Append a timeline event to an existing page. Returns the stored row, including the original on a duplicate, subject to read redaction. Correct a mistake by appending a new event describing the correction; the original remains. Idempotent on (slug, occurred_at, source_chunk_id) when source_chunk_id is provided. WRITE — refused on public ingress unless the operator sets MEMRAIN_PUBLIC_WRITE=1.",
+      "Append a timeline event to an existing page. Returns the stored row (the original on a duplicate), read-redacted. Correct a mistake with a new event describing the correction; the original remains. Idempotent on (slug, occurred_at, source_chunk_id) when source_chunk_id is given. Refused on public ingress unless MEMRAIN_PUBLIC_WRITE=1.",
     argAliases: { date: "occurred_at", summary: "event" },
     params: {
       slug: str({
@@ -854,7 +855,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "entity_recall",
     outputRedaction: "retrieval",
     description:
-      "One-shot 'what do I know about X?' aggregator. Returns the entity's page (compiled_truth + body) plus top-confidence facts plus most-recent timeline events in a single call. The page may be null when the entity exists only as a soft-stub (facts + timeline allowed, page not yet promoted). A fact that conflicts with another visible typed claim lists the peer ids in contested_with.",
+      "One-shot 'what do I know about X?': the entity's page (compiled_truth + body), top-confidence facts and the latest timeline events in one call. The page is null when the entity is only a soft-stub (facts and timeline, page not yet promoted). A fact conflicting with another visible typed claim lists the peer ids in contested_with.",
     argAliases: { entity: "slug" },
     params: {
       slug: str(req),
@@ -938,9 +939,20 @@ export const OPERATIONS: readonly Operation[] = [
     params: {},
   },
   {
+    name: "loops_list",
+    outputRedaction: "retrieval",
+    description:
+      "Open loops in your mail, chat and calendar connector pages: replies owed or awaited, your promises, unanswered invites. No LLM. Summaries are outside text; stale=true: no sync in 24h.",
+    params: {
+      status: str({ enum: ["open", "done", "dropped", "stale", "all"] }),
+      type: str({ enum: LOOP_TYPES }),
+      limit: int({ minimum: 1, maximum: 200 }),
+    },
+  },
+  {
     name: "submit_agent",
     description:
-      "Queue a read-only research agent that runs under your own grant: it reads only your sources, uses only the read tools your client is bound to, spends against your daily budget, and stops if your grant is revoked or changed. Returns a job_id; poll get_agent_job. Needs the 'agent' scope, a daily budget on your client, and a free slot under your client's concurrency limit. Writes nothing.",
+      "Queue a read-only research agent under your own grant: it reads only your sources with your client's read tools, spends your daily budget, and stops if your grant changes. Returns a job_id; poll get_agent_job. Needs the 'agent' scope, a client daily budget and a free concurrency slot. Writes nothing.",
     scope: "agent",
     params: {
       task: str({ ...req, description: "What the agent should find out, in plain language (at most 8 KB)." }),
@@ -1150,7 +1162,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "forget_fact",
     scope: "write",
     description:
-      "Durably withdraw by id within entity/source/visibility, retiring identical live copies (withdrawn_duplicates). Re-add/extraction/import cannot revive it; no undo, audit retained. Repeats no-op; unknown id gives found:false. Stores optional reason. Returns ≤5 similar_active ids/scores for distinct rewordings: confirm separately. Requires owning-source write; static public forbidden.",
+      "Durably withdraw by id within entity/source/visibility, retiring identical live copies (withdrawn_duplicates). Re-add/extraction/import cannot revive it; no undo, audit kept. Repeats no-op; unknown id: found:false. Optional reason. Returns ≤5 similar_active rewordings to confirm separately. Needs owning-source write; static public forbidden.",
     params: {
       id: int({ ...req, minimum: 1, description: "Fact id to forget (entity_facts.id)." }),
       reason: str({ description: "Optional audit note stored on the forgotten row." }),
@@ -1172,7 +1184,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "purge_deleted_pages",
     scope: "admin",
     description:
-      "HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days; document cycle TTL stays 72). Cascades page versions, aliases and links; also deletes raw_data, tags and redirects to purged slugs, with per-table counts. Returns reaped slugs, count and ttl_hours. Admin scope in the owning source or internal token required; static public bearer forbidden. page_delete needs write scope; purge needs admin.",
+      "HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days). Cascades versions, aliases and links; deletes raw_data, tags and redirects to purged slugs, with per-table counts. Returns reaped slugs, count and ttl_hours. Needs admin scope in the owning source or the internal token; the static public bearer is forbidden.",
     params: {
       older_than_hours: num({
         minimum: 0,
@@ -1369,7 +1381,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "context_pack",
     outputRedaction: "retrieval",
     description:
-      "Budgeted entity cards (title,type,facts,events; no body), up to 8: explicit slugs first, then window entities at the volunteer default gate. Adds top decayed facts across the grant, excluding card duplicates. token_budget prioritizes cards; budget reports drops. Hidden/missing slugs both yield no card. Conflicting facts carry contested_with. Operator-pinned pages (MEMRAIN_CONTEXT_CORE_SLUGS) come first as core, charged before cards. Stateless read, no LLM; internal-only.",
+      "Budgeted entity cards (title,type,facts,events; no body), up to 8: explicit slugs first, then window entities at the volunteer gate. Adds top decayed facts across the grant, minus card duplicates. token_budget prioritizes cards; budget reports drops. Hidden and missing slugs both yield no card. Conflicting facts carry contested_with. Pages pinned by MEMRAIN_CONTEXT_CORE_SLUGS come first as core. Stateless, no LLM; internal-only.",
     params: {
       slugs: arr({ description: "Entity page slugs to build cards for, in priority order (array of strings)." }),
       window: str({ description: "Conversation window text; entities it names fill the card slots left after `slugs`. 'user:'/'assistant:' line prefixes set the role." }),
@@ -1497,7 +1509,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "extract_facts",
     scope: "write",
     description:
-      "Extract events, preferences, commitments and beliefs from text OR a source_ref page in your grant. Preview by default; persist:true needs write scope and stores rows in your source. entity_hints steer extraction; session_id and visibility stamp stored facts. Input is sanitized and DATA-fenced. Paid, budget-guarded Bedrock; returns enabled:false unless MEMRAIN_FACTS_EXTRACTION=1. Internal-only.",
+      "Extract events, preferences, commitments and beliefs from text OR a source_ref page in your grant. Preview by default; persist:true needs write scope and stores rows in your source. entity_hints steer; session_id and visibility stamp stored facts. Input is sanitized and DATA-fenced. Paid, budget-guarded Bedrock; enabled:false unless MEMRAIN_FACTS_EXTRACTION=1. Internal-only.",
     params: {
       text: str({ description: "Raw conversation/transcript text to extract from. Provide this OR `source_ref`." }),
       source_ref: str({ description: "A page slug whose markdown_body is extracted (tenant-scoped). Provide this OR `text`." }),
@@ -1540,7 +1552,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "think",
     scope: "write",
     description:
-      "Multi-hop cited synthesis from pages, takes, graph and trajectories, with conflicts/gaps. Paid, budget-guarded Sonnet; default-off (ran:false unless MEMRAIN_THINK=1). save writes synthesis/<slug> + evidence; take queues its anchor-pinned headline. Both are operator-only, silently ignored otherwise. rounds 1..3 feeds gaps into scoped retrieval. synthesis_status: ok/empty_answer/not_json/output_truncated/no_llm/model_unusable/llm_error. Failed composition over gathered pages keeps synthesis:null and adds a cited extractive fallback (kind:extractive, no model call, never saved).",
+      "Multi-hop cited synthesis from pages, takes, graph and trajectories, with conflicts/gaps. Paid, budget-guarded Sonnet; off unless MEMRAIN_THINK=1 (ran:false). save writes synthesis/<slug> + evidence; take queues its anchor-pinned headline; both operator-only, else ignored. rounds 1..3 feeds gaps into scoped retrieval. synthesis_status: ok/empty_answer/not_json/output_truncated/no_llm/model_unusable/llm_error. A failed composition keeps synthesis:null and adds a cited extractive fallback (no model call, never saved).",
     params: {
       question: str({ ...req, description: "The question to think about." }),
       anchor: str({ description: "Pull the entity subgraph + trajectory around this slug (required for take:true)." }),
@@ -1700,7 +1712,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "ontology_get",
     outputRedaction: "retrieval",
     description:
-      "The live per-dimension ontology for an entity: the current value on each axis (role, employer, location, …), confidence, provenance, and bi-temporal validity. `asof` time-travels to a past date; `min_confidence` floors the rows; `include_quarantined` surfaces novel/unconfirmed dimensions. Non-operator callers see world-visible rows only and never diary-sourced values. Tenant-scoped. Read-only; no LLM.",
+      "An entity's live per-dimension ontology: the current value on each axis (role, employer, location, …), confidence, provenance, bi-temporal validity. `asof` time-travels; `min_confidence` floors rows; `include_quarantined` adds unconfirmed dimensions. Non-operators see world rows only, never diary values. Tenant-scoped, read-only, no LLM.",
     params: {
       entity: str({ ...req, description: "Entity slug (e.g. people/alice)." }),
       asof: str({ description: "Resolve the ontology as of this YYYY-MM-DD (valid-time travel)." }),

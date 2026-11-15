@@ -272,6 +272,9 @@ export async function muteLoop(engine: Engine, scope: SourceScope, id: number, k
   return { source_id: row.source_id, kind, changed: changed.rows.length > 0 };
 }
 
+/** A loop list is stale when no mail, chat or calendar account synced cleanly for this long. */
+export const LOOPS_MAX_SYNC_AGE_HOURS = 24;
+
 /** Source kinds whose connector pages carry reply state. */
 export const LOOP_SOURCE_KINDS: readonly string[] = ["mailbox", "chat", "calendar"];
 

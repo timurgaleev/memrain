@@ -17,10 +17,10 @@
  */
 import { loadConfig } from "../core/config.ts";
 import { Storage } from "../core/storage.ts";
-import { closeLoop, listLoops, muteLoop, syncFreshness, sweepLoops, isLoopType, type OpenLoopRow } from "../core/loops/store.ts";
+import {
+  closeLoop, isLoopType, listLoops, LOOPS_MAX_SYNC_AGE_HOURS as WAITING_MAX_SYNC_AGE_HOURS, muteLoop, syncFreshness, sweepLoops, type OpenLoopRow,
+} from "../core/loops/store.ts";
 import { withStorage } from "./with-storage.ts";
-
-export const WAITING_MAX_SYNC_AGE_HOURS = 24;
 
 export interface WaitingCmdOptions {
   /** undefined (list), `sweep`, `done`, `drop`, `mute`, `unmute`. */
