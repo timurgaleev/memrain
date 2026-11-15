@@ -65,7 +65,7 @@ scope. Examples:
 
 ## Connector credentials and notifications
 
-Connectors (Google Calendar, Fireflies) are off until the operator sets a
+Connectors (Google Calendar, Gmail, Fireflies) are off until the operator sets a
 connector key and `MEMRAIN_CONNECTORS_ENABLED=1`, connects an account from the
 admin panel and switches its sync on. With the switch off no credential is
 opened and nothing is synced or queued.
@@ -85,8 +85,13 @@ opened and nothing is synced or queued.
   rotate-kek` reseals every credential under a new key
   (docs/connectors/KEY.md). Losing the key loses the stored credentials, not
   the synced pages: accounts are connected again.
-- **Least access.** Google is asked only for `openid email
-  calendar.readonly`, and a grant that differs is refused and revoked.
+- **Least access.** Google is asked only for `openid email` plus
+  `calendar.readonly` for a calendar source and `gmail.readonly` for a mailbox
+  source, and a grant that differs is refused and revoked. Google merges the
+  scopes a user granted one client, so a connect also asks for the read-only
+  scopes the brain's other Google accounts already hold; nothing beyond those
+  two read scopes is ever requested. Connector text has credentials redacted
+  before it is written, whatever `MEMRAIN_SECRET_SCAN_DISPOSITION` says.
   Fireflies keys carry the owner's full API access (Fireflies offers no scoped
   key); Memrain only sends read queries with one.
 - **Outside text.** Everything a connector syncs is stored as untrusted

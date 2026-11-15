@@ -104,6 +104,7 @@ register one first (the id and prefix are yours to choose):
 
 ```bash
 docker exec deploy-memrain-1 bun run src/cli.ts sources register me-calendar --kind calendar --path-prefix calendar/
+docker exec deploy-memrain-1 bun run src/cli.ts sources register me-mail --kind mailbox --path-prefix mail/        # Gmail
 docker exec deploy-memrain-1 bun run src/cli.ts sources register me-meetings --kind meeting --path-prefix meeting/   # Fireflies
 ```
 
@@ -120,6 +121,8 @@ docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> 
 
 - Google Calendar: [GOOGLE.md](./GOOGLE.md) (a Google Cloud OAuth client of
   your own, then the Connect button).
+- Gmail: [GMAIL.md](./GMAIL.md) (the same Google client, the Gmail API turned
+  on, and a `mailbox` source).
 - Fireflies: [FIREFLIES.md](./FIREFLIES.md) (an API key).
 
 Everything a connector writes is text from outside the brain: anyone can put

@@ -6,7 +6,8 @@ calendar pages and show up in the chronicle.
 
 Memrain asks Google for read access only: it never creates, changes or
 deletes an event. The client is yours (bring your own, "BYO"): no Memrain
-project sits between you and Google.
+project sits between you and Google. The same project and client also serve
+Gmail: see [GMAIL.md](./GMAIL.md) once this guide is done.
 
 ## Prerequisites
 
@@ -25,7 +26,10 @@ project sits between you and Google.
 | `https://www.googleapis.com/auth/calendar.readonly` | To read your calendars and events |
 
 The connect flow requests exactly these and refuses a grant that adds or drops
-one. `calendar.readonly` is a sensitive scope in Google's terms: fine for an
+one. Google merges every scope a user granted one client into each new grant,
+so once Gmail is connected with the same client, a calendar connect also asks
+for `gmail.readonly` ([GMAIL.md](./GMAIL.md)); the calendar account still
+reads only calendars. `calendar.readonly` is a sensitive scope in Google's terms: fine for an
 app in Testing with you as a test user, but it needs Google's verification
 before an app in production can show it to anyone else.
 
@@ -185,12 +189,16 @@ consent on every connect, so reconnecting does not pile up tokens beyond that.
 
 ## Verification
 
+On the Connections page the Google account reads **Syncing** and, after the
+first clean run, **Last sync** shows when. From the host:
+
 ```bash
-docker exec deploy-memrain-1 bun run src/cli.ts connectors status
+docker exec deploy-memrain-1 bun run src/cli.ts doctor
 ```
 
-The Google account shows status `active` and, after the first run, a recent
-clean run. Search the brain for the title of a meeting from this week.
+`connector-accounts` reports every account active (a parked one is named with
+its status). (`connectors status` lists GitHub connector runs only.) Search
+the brain for the title of a meeting from this week.
 
 ## Troubleshooting
 
@@ -209,7 +217,9 @@ clean run. Search the brain for the title of a meeting from this week.
 ## Disconnecting
 
 Disconnect the account on the Connections page. Memrain revokes the token at
-Google, then deletes the stored credential. If Google cannot be reached, the
+Google, then deletes the stored credential. Google revokes a grant as a whole,
+so a Gmail account of the same Google account connected with the same client
+loses its access too and turns `needs_reconnect`. If Google cannot be reached, the
 account is parked as `error` (`revoke_failed`) and the credential is kept so
 the disconnect can be retried. You can also remove the access from
 the Google side at [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
