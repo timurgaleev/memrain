@@ -60,6 +60,13 @@ export const CONNECTOR_PAGE_TYPES: Readonly<Record<ConnectorDataKind, string>> =
  */
 export const MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
 
+/**
+ * One message's text past this is cut with a marker: a reply carries its own
+ * words, and a body longer than this is a pasted log or a newsletter, which
+ * would cost embeddings without adding much to recall.
+ */
+export const MAX_MAIL_MESSAGE_CHARS = 20_000;
+
 const BULK_CATEGORIES = new Set(["promotions", "social"]);
 const BULK_LOCAL_PART = /^(?:no-?reply|do-?not-?reply|mailer-daemon|notifications?|bounces?)(?:[+.-]|$)/i;
 
@@ -228,12 +235,28 @@ function finish(lines: string[]): string {
 // ---------------------------------------------------------------------------
 // Mail.
 
-/** Drop quoted history (`>` lines and the "On ... wrote:" line before them) and a `-- ` signature. */
+const FORWARD_MARKER = /^(?:-{2,}\s*Forwarded message\s*-{2,}|Begin forwarded message:)$/i;
+const REPLY_MARKER = /^(?:On .{4,200} wrote:|-{2,}\s*Original Message\s*-{2,})$/i;
+const BULK_PRECEDENCE = new Set(["bulk", "list", "junk"]);
+
+/**
+ * Drop quoted history and a `-- ` signature. A reply marker ("On ... wrote:",
+ * an Outlook "Original Message" line) ends the message: what follows repeats
+ * an earlier message of the thread. A forward before any reply marker keeps
+ * the body whole, since forwarded text is new to the brain. Otherwise `>`
+ * lines go, with the "wrote:" line before them.
+ */
 export function trimMailBody(text: string): string {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  for (const line of lines) {
+    const l = line.trim();
+    if (FORWARD_MARKER.test(l)) return lines.join("\n").trim();
+    if (REPLY_MARKER.test(l)) break;
+  }
   const kept: string[] = [];
   for (const line of lines) {
     if (line === "-- " || line === "--") break;
+    if (REPLY_MARKER.test(line.trim())) break;
     if (line.trimStart().startsWith(">")) {
       const prev = kept.at(-1);
       if (prev !== undefined && /wrote:\s*$/i.test(prev)) kept.pop();
@@ -244,8 +267,17 @@ export function trimMailBody(text: string): string {
   return kept.join("\n").trim();
 }
 
+/** One message's text, cut at MAX_MAIL_MESSAGE_CHARS with a marker. */
+function messageText(m: MailMessage): string {
+  // Cut long HTML before converting it: only the first part survives anyway.
+  const raw = m.bodyText ?? (m.bodyHtml === null ? "" : htmlToText(m.bodyHtml.slice(0, MAX_MAIL_MESSAGE_CHARS * 16)));
+  const text = trimMailBody(raw);
+  return text.length > MAX_MAIL_MESSAGE_CHARS ? `${text.slice(0, MAX_MAIL_MESSAGE_CHARS)}\n[message truncated]` : text;
+}
+
 function isBulk(messages: readonly MailMessage[]): boolean {
-  return messages.some(m => m.listUnsubscribe
+  return messages.some(m => m.listUnsubscribe || m.autoSubmitted === true || m.listId === true
+    || BULK_PRECEDENCE.has((m.precedence ?? "").trim().toLowerCase())
     || m.categories.some(c => BULK_CATEGORIES.has(c.toLowerCase()))
     || BULK_LOCAL_PART.test((m.from.email ?? "").split("@")[0] ?? ""));
 }
@@ -269,14 +301,16 @@ export function renderMailThread(ctx: ConnectorContext, thread: MailThread): Ren
     if (m.attachments.length) {
       lines.push(`Attachments: ${m.attachments.map(a => `${g.line(a.name, 200)} (${g.line(a.mime, 100)}, ${Math.max(0, Math.trunc(a.size))} bytes)`).join("; ")}`);
     }
-    const raw = m.bodyText ?? (m.bodyHtml === null ? "" : htmlToText(m.bodyHtml));
-    const body = g.text(trimMailBody(raw)).trim();
+    const body = g.text(messageText(m)).trim();
     lines.push("", body === "" ? "_No text._" : body, "");
   });
 
   const dedupe = messages[0]!.messageIdHeader;
   const truth = baseTruth(ctx, "mail", thread.threadId, first, last);
   truth["messages"] = messages.length;
+  if (thread.labels !== undefined) {
+    truth["labels"] = [...new Set(thread.labels.map(l => g.line(l, 100).toLowerCase()).filter(l => l !== ""))].sort();
+  }
   if (dedupe) truth["dedupe_key"] = shortHash(`message-id:${dedupe.trim().toLowerCase()}`);
   return {
     slug, type: CONNECTOR_PAGE_TYPES.mail, title: subject, body: finish(lines), truth, findings: g.findings,
