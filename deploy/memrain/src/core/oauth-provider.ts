@@ -441,6 +441,14 @@ function toCapUsd(raw: unknown): number | null {
   return n;
 }
 
+/** A row's tool_surface as AuthInfo carries it: absent for full. An
+ *  unreadable value fails the token rather than widening it to every tool. */
+function narrowedSurface(raw: unknown): { toolSurface?: "starter" | "verbs" } {
+  if (raw === undefined || raw === null || raw === "full") return {};
+  if (raw === "starter" || raw === "verbs") return { toolSurface: raw };
+  throw new InvalidTokenError("Corrupt tool_surface on credential row");
+}
+
 // ---------------------------------------------------------------------------
 // Legacy permissions.source_id parsing
 // ---------------------------------------------------------------------------
@@ -1012,7 +1020,8 @@ function oauthGrantSelect(): string {
               c.deleted_at AS client_deleted_at,
               c.scope AS current_scope,
               CASE WHEN t.grant_bound THEN e.member_id END AS grant_member_id,
-              c.member_id AS client_member_id
+              c.member_id AS client_member_id,
+              c.tool_surface
        FROM oauth_tokens t
        LEFT JOIN oauth_clients c ON c.client_id = t.client_id
        LEFT JOIN oauth_enrollments e ON t.grant_bound AND e.id = t.grant_id`;
@@ -1078,6 +1087,7 @@ function oauthGrantFromRow(
     sourceId: (row.source_id as string | null) ?? undefined,
     allowedSources,
     ...(boundSlugPrefixes ? { boundSlugPrefixes } : {}),
+    ...narrowedSurface(row.tool_surface),
     // A person enrolled on a shared connector spends under their own
     // enrollment, capped by it, else by the connector's cap on their own.
     // A replacement enrollment spends under its predecessor's key.
@@ -1141,6 +1151,7 @@ function legacyGrantFromRow(row: Record<string, unknown>): PrincipalGrant {
     sourceId,
     allowedSources,
     ...(takesHolders && takesHolders.length > 0 ? { takesHolders } : {}),
+    ...narrowedSurface(row.tool_surface),
     budgetUsdPerDay: toCapUsd(row.budget_usd_per_day),
   };
 }
@@ -2928,7 +2939,7 @@ export class OAuthProvider {
     let legacyRows: Record<string, unknown>[];
     try {
       legacyRows = await this.rows(
-        `SELECT id, name, permissions, scopes, budget_usd_per_day, member_id FROM access_tokens
+        `SELECT id, name, permissions, scopes, budget_usd_per_day, member_id, tool_surface FROM access_tokens
          WHERE token_hash = $1 AND revoked_at IS NULL`,
         [tokenHash],
       );
@@ -2978,7 +2989,7 @@ export class OAuthProvider {
   async resolvePrincipal(ref: PrincipalRef): Promise<PrincipalGrant> {
     if (ref.kind === "pat") {
       const rows = await this.rows(
-        `SELECT id, name, permissions, scopes, budget_usd_per_day, revoked_at, member_id FROM access_tokens WHERE id = $1`,
+        `SELECT id, name, permissions, scopes, budget_usd_per_day, revoked_at, member_id, tool_surface FROM access_tokens WHERE id = $1`,
         [ref.id],
       );
       const row = rows[0];

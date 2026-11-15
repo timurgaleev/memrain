@@ -614,6 +614,13 @@ async function dispatchToolInner(
         _meta: { "mcp/www_authenticate": insufficientScopeChallenge(stepUp, opts.issuer) },
       };
     }
+    if (refusal?.kind === "tool_surface") {
+      throw new OperationError(
+        "permission_denied",
+        `tool '${req.name}' is not on this credential's '${refusal.surface}' tool surface`,
+        "Ask the brain operator for a credential with a wider tool surface.",
+      );
+    }
     if (refusal?.kind === "slug_bound") {
       throw new OperationError(
         "permission_denied",

@@ -453,6 +453,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
                 budgetUsdPerDay: info.budgetUsdPerDay,
                 ...(info.spendId ? { spendId: info.spendId } : {}),
                 ...(info.principal ? { principal: info.principal } : {}),
+                ...(info.toolSurface ? { toolSurface: info.toolSurface } : {}),
                 isPublic: false,
               };
             } catch (e) {
@@ -636,6 +637,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
                 budgetUsdPerDay: info.budgetUsdPerDay,
                 ...(info.spendId ? { spendId: info.spendId } : {}),
                 ...(info.principal ? { principal: info.principal } : {}),
+                ...(info.toolSurface ? { toolSurface: info.toolSurface } : {}),
                 isPublic: guard.isPublic,
               };
             } catch (e) {

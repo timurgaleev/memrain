@@ -4,7 +4,7 @@
  * present it as `Authorization: Bearer memrain_at_…` on `/mcp`.
  *
  * Subcommands:
- *   register-client <name> [--grant-types G] [--scopes S] [--source SRC]
+ *   register-client <name> [--grant-types G] [--scopes S | --profile P] [--source SRC]
  *                          [--redirect-uris u1,u2] [--bound-slug-prefixes p1,p2]
  *                          [--access-ttl 1h] [--refresh-ttl 30d]
  *              --redirect-uris makes it an authorization-code (browser) client
@@ -61,14 +61,15 @@
  *              Exchange client_credentials for an access token locally (for a
  *              handoff / smoke test) — equivalent to POST /token.
  *   create <name> [--takes-holders a,b] [--source SRC] [--federated-read a,b]
- *          [--scopes read,write]
+ *          [--scopes read,write | --profile reader|writer]
  *              Mint a long-lived personal access token (access_tokens row).
  *              Prints the token ONCE — only the SHA-256 hash persists. Tenant
  *              scope comes from `permissions.source_id`: a scalar is
  *              write+read source, an array is a federated read set anchored on
  *              its first element. --source (a registered source) writes it;
  *              --federated-read adds read sources. --scopes is read and/or
- *              write (default both).
+ *              write (default both). --profile expands a ready-made profile
+ *              (core/grant-profiles.ts) into the scopes instead.
  *   list       Table of personal access tokens (no hashes).
  *   revoke <name>
  *              Soft-revoke a personal access token by name.
@@ -101,6 +102,7 @@ import {
   type Config,
 } from "../core/config.ts";
 import { patNameSpendConflict } from "../core/budget.ts";
+import { resolveGrantProfile, type ResolvedGrantProfile } from "../core/grant-profiles.ts";
 import {
   OAuthProvider,
   needsOperatorConsent,
@@ -244,6 +246,14 @@ async function withProvider<T>(
   });
 }
 
+/** Record which profile a client's grant was expanded from; it grants nothing itself. */
+async function recordClientProfile(storage: Storage, clientId: string, profile: ResolvedGrantProfile): Promise<void> {
+  await storage.raw().query(
+    `UPDATE oauth_clients SET profile = $2, profile_catalog_version = $3, tool_surface = $4 WHERE client_id = $1`,
+    [clientId, profile.profile, profile.catalogVersion, profile.toolSurface],
+  );
+}
+
 async function registerClient(name: string, rest: string[]): Promise<void> {
   if (!name) throw new Error("Usage: auth register-client <name> [flags]");
   const { flags } = parseFlags(rest);
@@ -265,7 +275,6 @@ async function registerClient(name: string, rest: string[]): Promise<void> {
   )
     .split(/[\s,]+/)
     .filter(Boolean);
-  const scopes = flags["scopes"] ?? "read";
   const sourceId = flags["source"] ?? "default";
   const federatedRead = flags["federated-read"]
     ? flags["federated-read"].split(",").map((s) => s.trim()).filter(Boolean)
@@ -275,6 +284,13 @@ async function registerClient(name: string, rest: string[]): Promise<void> {
   const boundSlugPrefixes = flags["bound-slug-prefixes"]
     ? flags["bound-slug-prefixes"].split(",").map((s) => s.trim()).filter(Boolean)
     : undefined;
+  const profile = flags["profile"] !== undefined
+    ? resolveGrantProfile(flags["profile"], "client", {
+        ...(boundSlugPrefixes ? { boundSlugPrefixes } : {}),
+        ...(flags["scopes"] !== undefined ? { scopes: listFlag(flags["scopes"])! } : {}),
+      })
+    : undefined;
+  const scopes = profile ? profile.scopes.join(" ") : flags["scopes"] ?? "read";
   const tenantMode = parseTenantMode(flags["tenant-mode"]);
   const accessTtlSeconds = parseClientTtlFlag("access-ttl", flags["access-ttl"]);
   const refreshTtlSeconds = parseClientTtlFlag("refresh-ttl", flags["refresh-ttl"]);
@@ -293,8 +309,8 @@ async function registerClient(name: string, rest: string[]): Promise<void> {
   }
 
   warnIfSelfIssuedOff();
-  const { clientId, clientSecret } = await withProvider((p) =>
-    p.registerClientManual(
+  const { clientId, clientSecret } = await withProvider(async (p, storage) => {
+    const registered = await p.registerClientManual(
       name,
       grantTypes,
       scopes,
@@ -305,8 +321,10 @@ async function registerClient(name: string, rest: string[]): Promise<void> {
       boundSlugPrefixes,
       tenantMode,
       { accessTtlSeconds, refreshTtlSeconds },
-    ),
-  );
+    );
+    if (profile) await recordClientProfile(storage, registered.clientId, profile);
+    return registered;
+  });
   // The secret is shown ONCE — only its hash is stored.
   console.log(
     JSON.stringify(
@@ -319,6 +337,7 @@ async function registerClient(name: string, rest: string[]): Promise<void> {
         source_id: sourceId,
         federated_read: federatedRead ?? [sourceId],
         tenant_mode: tenantMode,
+        ...(profile ? { profile: profile.profile, tool_surface: profile.toolSurface } : {}),
         access_ttl_seconds: accessTtlSeconds ?? null,
         refresh_ttl_seconds: refreshTtlSeconds ?? null,
         ...(tokenEndpointAuthMethod
@@ -682,7 +701,7 @@ function listFlag(raw: string | undefined): string[] | undefined {
 async function createToken(name: string, rest: string[]): Promise<void> {
   if (!name) {
     throw new Error(
-      "Usage: auth create <name> [--takes-holders a,b] [--source SRC] [--federated-read a,b] [--scopes read,write]",
+      "Usage: auth create <name> [--takes-holders a,b] [--source SRC] [--federated-read a,b] [--scopes read,write | --profile reader|writer]",
     );
   }
   const nameConflict = patNameSpendConflict(name);
@@ -701,10 +720,13 @@ async function createToken(name: string, rest: string[]): Promise<void> {
   const token = "memrain_" + randomBytes(32).toString("hex");
   const tokenHash = createHash("sha256").update(token, "utf8").digest("hex");
 
+  const profile = flags["profile"] !== undefined
+    ? resolveGrantProfile(flags["profile"], "token", flags["scopes"] !== undefined ? { scopes: listFlag(flags["scopes"])! } : {})
+    : undefined;
   const minted = await withProvider(async (_p, storage) => {
     const grant = await resolvePatGrant(storage.raw(), {
       ...(flags["source"] !== undefined ? { sourceId: flags["source"] } : {}),
-      ...(flags["scopes"] !== undefined ? { scopes: listFlag(flags["scopes"])! } : {}),
+      ...(profile ? { scopes: profile.scopes } : flags["scopes"] !== undefined ? { scopes: listFlag(flags["scopes"])! } : {}),
       ...(flags["federated-read"] !== undefined ? { federatedRead: listFlag(flags["federated-read"])! } : {}),
     });
     const existing = await storage
@@ -725,10 +747,12 @@ async function createToken(name: string, rest: string[]): Promise<void> {
     await storage.raw().query(
       // A re-minted name keeps its predecessor's daily cap: spend is booked
       // under the name, so a new row with no cap would silently uncap it.
-      `INSERT INTO access_tokens (name, token_hash, scopes, permissions, budget_usd_per_day)
+      `INSERT INTO access_tokens (name, token_hash, scopes, permissions, budget_usd_per_day,
+                                  profile, profile_catalog_version, tool_surface)
        VALUES ($1, $2, $3::text[], $4::jsonb,
                (SELECT p.budget_usd_per_day FROM access_tokens p
-                 WHERE p.name = $1 ORDER BY p.id DESC LIMIT 1))`,
+                 WHERE p.name = $1 ORDER BY p.id DESC LIMIT 1),
+               $5, $6, $7)`,
       [
         name,
         tokenHash,
@@ -737,6 +761,9 @@ async function createToken(name: string, rest: string[]): Promise<void> {
           takes_holders: takesHolders,
           ...(grant.sourceGrant !== undefined ? { source_id: grant.sourceGrant } : {}),
         },
+        profile?.profile ?? null,
+        profile?.catalogVersion ?? null,
+        profile?.toolSurface ?? "full",
       ],
     );
     return grant;
@@ -748,6 +775,7 @@ async function createToken(name: string, rest: string[]): Promise<void> {
         token,
         scopes: minted.scopes,
         ...(minted.sourceGrant !== undefined ? { source_id: minted.sourceGrant } : {}),
+        ...(profile ? { profile: profile.profile, tool_surface: profile.toolSurface } : {}),
         takes_holders: takesHolders,
         note: "Store the token now — only its hash persists. Revoke with: memrain auth revoke <name>.",
       },
@@ -767,8 +795,11 @@ async function listTokens(): Promise<void> {
         last_used_at: string | null;
         revoked_at: string | null;
         permissions: unknown;
+        member_id: string | null;
+        profile: string | null;
+        tool_surface: string;
       }>(
-        `SELECT name, created_at, last_used_at, revoked_at, permissions
+        `SELECT name, created_at, last_used_at, revoked_at, permissions, member_id, profile, tool_surface
            FROM access_tokens ORDER BY created_at DESC`,
       )
       .then((r) => r.rows),
