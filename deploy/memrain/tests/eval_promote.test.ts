@@ -94,6 +94,20 @@ describe("runEvalPromote on the bench", () => {
       const judged = join(dir, "s.json");
       writeFileSync(judged, JSON.stringify({ label: "Bedrock-Claude-judged", recall_any_at_5: 0.5 }));
       expect(await runEvalPromote({ flag: "EXACT_LOOKUP", lmeBase: judged, lmeCandidate: judged, outDir: dir, quiet: true })).toBe(2);
+      // A run stopped by its cap or with interrupted questions scored only part
+      // of the set; its recall says nothing about the whole.
+      const summary = (over: Record<string, unknown>) => ({
+        label: "LongMemEval-retrieval-only", dataset: { sha256: "d" }, selected: 20, recall_scored: 18,
+        recall_any_at_5: 0.8, not_run: 0, interrupted: [], ...over,
+      });
+      const full = join(dir, "full.json");
+      const partial = join(dir, "partial.json");
+      const interrupted = join(dir, "interrupted.json");
+      writeFileSync(full, JSON.stringify(summary({})));
+      writeFileSync(partial, JSON.stringify(summary({ not_run: 12, recall_scored: 6 })));
+      writeFileSync(interrupted, JSON.stringify(summary({ interrupted: ["q7"] })));
+      expect(await runEvalPromote({ flag: "EXACT_LOOKUP", lmeBase: full, lmeCandidate: partial, outDir: dir, quiet: true })).toBe(2);
+      expect(await runEvalPromote({ flag: "EXACT_LOOKUP", lmeBase: interrupted, lmeCandidate: full, outDir: dir, quiet: true })).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
