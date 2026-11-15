@@ -88,6 +88,7 @@ import { runConnectors } from "./commands/connectors.ts";
 import { runDaemons } from "./commands/daemons.ts";
 import { runQuarantine, type QuarantineSub } from "./commands/quarantine.ts";
 import { runWriteGate } from "./commands/write-gate.ts";
+import { runGroup, runMember } from "./commands/members.ts";
 import { runSecretsAudit } from "./commands/secrets.ts";
 import {
   runEvalRunAll,
@@ -336,6 +337,14 @@ function printUsage(): void {
   console.log("  quarantine list [--include-flagged] [--json]");
   console.log("  quarantine clear <slug|path> [--force]");
   console.log("  quarantine scan [--limit N] [--apply]");
+  console.log("  member list [--all] | show <id>        the people of a team brain");
+  console.log("  member add <id> [--name N] [--email E] [--personal-source SRC]");
+  console.log("  member disable|enable|remove <id>   disable stops every key bound to the member");
+  console.log("  member bind <id> --token NAME|--client ID|--enrollment ID");
+  console.log("  member unbind --token NAME|--client ID|--enrollment ID");
+  console.log("  group list | show <id> | add <id> [--name N] | remove <id>");
+  console.log("  group grant-source|revoke-source <id> <source> [--allow-owner-source]");
+  console.log("  group add-member|remove-member <id> <member>   members read the group's sources");
   console.log("  write-gate list [--all] [--json]");
   console.log("  write-gate approve|reject <id> [--json]");
   console.log("                               operator surface for the content-sanity gate");
@@ -1898,6 +1907,30 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       }
       if (flags.has("--json")) opts.json = true;
       return await runQuarantine(opts);
+    }
+    case "member": {
+      const opts: Parameters<typeof runMember>[0] = { sub: positional[0] ?? "", args: positional.slice(1) };
+      if (flags.has("--all")) opts.all = true;
+      const name = values.get("--name");
+      if (name !== undefined) opts.name = name;
+      const email = values.get("--email");
+      if (email !== undefined) opts.email = email;
+      const personal = values.get("--personal-source");
+      if (personal !== undefined) opts.personalSource = personal;
+      const token = values.get("--token");
+      if (token !== undefined) opts.token = token;
+      const client = values.get("--client");
+      if (client !== undefined) opts.client = client;
+      const enrollment = values.get("--enrollment");
+      if (enrollment !== undefined) opts.enrollment = enrollment;
+      return await runMember(opts);
+    }
+    case "group": {
+      const opts: Parameters<typeof runGroup>[0] = { sub: positional[0] ?? "", args: positional.slice(1) };
+      const name = values.get("--name");
+      if (name !== undefined) opts.name = name;
+      if (flags.has("--allow-owner-source")) opts.allowOwnerSource = true;
+      return await runGroup(opts);
     }
     case "write-gate": {
       const sub = positional[0];
