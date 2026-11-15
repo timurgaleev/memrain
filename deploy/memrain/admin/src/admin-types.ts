@@ -198,3 +198,29 @@ export interface NotificationList {
   webhook: { state: "off" | "refused" | "on" };
   notifications: AdminNotification[];
 }
+
+export interface EvalCandidate {
+  id: number;
+  captured_at: string;
+  tool_name: string;
+  query: string;
+  scrubbed: boolean;
+  result_count: number;
+}
+
+export interface EvalLabelCounts {
+  dev: number;
+  sealed: number;
+  target: number;
+}
+
+export interface EvalCandidateList {
+  candidates: EvalCandidate[];
+  labels: EvalLabelCounts;
+  capture: { enabled: boolean; scrub: boolean };
+}
+
+export interface EvalPreview {
+  query: string;
+  results: { document_id: string; source_path: string; title: string | null; snippet: string }[];
+}

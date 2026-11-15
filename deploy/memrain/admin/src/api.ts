@@ -105,6 +105,13 @@ export const api = {
   notificationSummary: (signal?: AbortSignal) => apiFetch("/admin/api/notifications/summary", signal ? { signal } : undefined),
   markNotificationsRead: (ids: number[] | "all") =>
     apiFetch("/admin/api/notifications/read", { method: "POST", body: JSON.stringify(ids === "all" ? { all: true } : { ids }) }),
+  evalCandidates: (signal?: AbortSignal) => apiFetch("/admin/api/eval/candidates", signal ? { signal } : undefined),
+  evalPreview: (target: { candidate_id: number } | { query: string }) =>
+    apiFetch("/admin/api/eval/preview", { method: "POST", body: JSON.stringify(target) }),
+  evalLabel: (payload: Record<string, unknown>) =>
+    apiFetch("/admin/api/eval/label", { method: "POST", body: JSON.stringify(payload) }),
+  evalDismiss: (candidate_id: number) =>
+    apiFetch("/admin/api/eval/dismiss", { method: "POST", body: JSON.stringify({ candidate_id }) }),
 };
 
 export { ApiError, expectOk, passkeyFetch } from "./lib/passkey-fetch.ts";

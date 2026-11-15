@@ -17,6 +17,7 @@ import { SetupPage } from "./pages/Setup.tsx";
 import { EnrollPage } from "./pages/Enroll.tsx";
 import { SecurityPage } from "./pages/Security.tsx";
 import { NotificationsPage } from "./pages/Notifications.tsx";
+import { LabellingPage } from "./pages/Labelling.tsx";
 import { ConnectionsPage } from "./pages/Connections.tsx";
 import { AutonomyPage } from "./pages/Autonomy.tsx";
 import { ApprovalsPage } from "./pages/Approvals.tsx";
@@ -60,6 +61,7 @@ const NAV: { section: string; items: { name: RouteName; label: string; also?: Ro
       { name: "log", label: "Request Log" },
       { name: "agents", label: "Agents" },
       { name: "calibration", label: "Calibration" },
+      { name: "labelling", label: "Labelling" },
     ],
   },
   {
@@ -391,6 +393,7 @@ export function App() {
         {page === "setup" && <SetupPage />}
         {page === "security" && <SecurityPage />}
         {page === "notifications" && <NotificationsPage param={route.param} onChange={notificationSummary.reload} />}
+        {page === "labelling" && <LabellingPage />}
         {page === "connections" && <ConnectionsPage />}
         {page === "autonomy" && <AutonomyPage />}
         {page === "approvals" && <ApprovalsPage />}

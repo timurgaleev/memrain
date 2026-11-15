@@ -40,6 +40,7 @@ import { isSameOriginPost } from "./same-origin.ts";
 import { handleAdminTool } from "./admin-tool.ts";
 import { defaultConnectorDeps, handleAdminConnectors } from "./admin-connectors.ts";
 import { handleAdminNotifications } from "./admin-notifications.ts";
+import { handleAdminEval } from "./admin-eval.ts";
 import { handleAdminApprovals } from "./admin-approvals.ts";
 import { handleAdminAutonomy } from "./admin-autonomy.ts";
 import { controlDaemon, daemonsStatus } from "../core/daemons/status.ts";
@@ -204,6 +205,11 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
 
   if (p === "/admin/api/notifications" || p.startsWith("/admin/api/notifications/")) {
     const r = await handleAdminNotifications(req, url, engine);
+    if (r) return r;
+  }
+
+  if (p.startsWith("/admin/api/eval/")) {
+    const r = await handleAdminEval(req, url, { storage: deps.storage, ...(deps.embedQuery ? { embedQuery: deps.embedQuery } : {}) });
     if (r) return r;
   }
 
