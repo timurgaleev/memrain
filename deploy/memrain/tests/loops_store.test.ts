@@ -68,6 +68,27 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("an open loop with no activity for 90 days goes stale and leaves the list; a younger one stays", async () => {
+    const { db, e } = await setup();
+    try {
+      await storeThread(db.storage, SRC, "t-old", [m("bob@example.com", [ME], 48, "Can you approve the budget?")]);
+      await storeThread(db.storage, SRC, "t-young", [m("carol@example.com", [ME], 30, "Can you call me?")]);
+      expect(await sweepLoops(e, SRC, NOW)).toMatchObject({ opened: 2 });
+      // Nobody answered either thread. Twenty days on the younger one is still owed.
+      const later = new Date(NOW.getTime() + 20 * 24 * H);
+      expect((await sweepLoops(e, SRC, later)).closed).toBe(0);
+      expect(await openLoops(e)).toHaveLength(2);
+      // Ninety days after the last message the loop is stale, not answered.
+      const muchLater = new Date(NOW.getTime() - 48 * H + 90 * 24 * H + H);
+      expect((await sweepLoops(e, SRC, muchLater)).closed).toBe(1);
+      expect((await openLoops(e)).map(l => l.counterparty)).toEqual(["carol@example.com"]);
+      const stale = (await listLoops(e, undefined, { status: "stale" }));
+      expect(stale).toMatchObject([{ counterparty: "bob@example.com", closed_by: "staleness" }]);
+      // A later sweep does not reopen it from the same old thread.
+      expect((await sweepLoops(e, SRC, muchLater)).opened).toBe(0);
+    } finally { await db.close(); }
+  });
+
   it("keeps the owner's done until the thread has newer activity", async () => {
     const { db, e } = await setup();
     try {
@@ -171,6 +192,23 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect((await openLoops(e, ["cal"]))[0]).toMatchObject({ loop_type: "rsvp_owed", due_at: at(48) });
       await sweepLoops(e, "cal", new Date(NOW.getTime() + 49 * H));
       expect((await listLoops(e, ["cal"], { status: "all" }))[0]).toMatchObject({ status: "stale", closed_by: "expired" });
+    } finally { await db.close(); }
+  });
+
+  it("an invitation sent months ahead stays owed past the 90-day staleness, until the meeting", async () => {
+    const { db, e } = await setup();
+    try {
+      await registerSource(e, { id: "cal", kind: "calendar", pathPrefix: "cal/" });
+      const start = new Date(NOW.getTime() + 120 * 24 * H).toISOString();
+      const page = renderCalendarEvent({ service: "google_calendar", accountLabel: ME }, {
+        id: "far1", iCalUID: "far1@x", title: "Offsite", description: null, location: null, start, end: null, allDay: false, status: "confirmed",
+        organizer: { name: "Bob", email: "bob@example.com" }, attendees: [{ name: null, email: ME, response: "needsAction" }], recurrence: null,
+      });
+      await putPage(db.storage, { slug: `cal/${page.slug}`, markdown_body: page.body, source_id: "cal" });
+      await recordLoopThread(e, { sourceId: "cal", slug: `cal/${page.slug}`, signals: page.loop! });
+      await sweepLoops(e, "cal", NOW);
+      expect(await sweepLoops(e, "cal", new Date(NOW.getTime() + 100 * 24 * H))).toMatchObject({ closed: 0 });
+      expect((await openLoops(e, ["cal"]))[0]).toMatchObject({ loop_type: "rsvp_owed", due_at: start });
     } finally { await db.close(); }
   });
 

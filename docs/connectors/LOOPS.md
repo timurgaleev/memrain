@@ -42,6 +42,10 @@ and `bun run src/cli.ts` in a checkout.
 | Your promise (`commitment_owed_by_me`) | Your message says "I'll send…", "Let me check…", "Will do", 24 h old or more | You write again in the thread |
 | RSVP owed (`rsvp_owed`) | You are invited, have not answered, and the meeting (or a listed occurrence of a series) is ahead | You answer, the last listed occurrence starts, or it is cancelled |
 
+A reply, waiting or promise loop with no activity for 90 days closes as
+`stale` (`closed_by: staleness`) instead of staying in the list; an RSVP closes
+when the meeting starts, however early the invitation came.
+
 These never open a loop:
 
 - newsletters and list mail (`List-Unsubscribe`, `List-Id`, `Precedence: bulk`,

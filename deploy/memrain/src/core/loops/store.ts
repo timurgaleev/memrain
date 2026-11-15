@@ -42,6 +42,8 @@ const toIso = (v: unknown): string | null => {
 const SWEEP_WINDOW_DAYS = 17;
 /** Threads one sweep query reads at a time. */
 const SWEEP_BATCH_THREADS = 500;
+/** An open loop with no activity for this long goes stale, so it neither lingers in the list nor keeps its thread in every sweep. */
+export const LOOP_STALE_DAYS = 90;
 
 /**
  * Remember an item's reply state once its page is stored. The row is written
@@ -94,6 +96,10 @@ export async function sweepLoops(engine: Engine, sourceId: string, now: Date = n
   // A page deleted (upstream, or by the owner) takes its loops out of the list.
   result.closed += await closeWhere(engine, sourceId,
     `page_slug IN (SELECT slug FROM pages WHERE source_id = $1 AND deleted_at IS NOT NULL)`, [], "dropped", "page_deleted");
+  // Unanswered for months is not answered: it is stale, and says so. An RSVP
+  // expires on its own when the meeting starts, however early it was sent.
+  result.closed += await closeWhere(engine, sourceId, `loop_type <> 'rsvp_owed' AND last_activity_at < $2::timestamptz`,
+    [new Date(now.getTime() - LOOP_STALE_DAYS * 86_400_000).toISOString()], "stale", "staleness");
 
   const since = new Date(now.getTime() - SWEEP_WINDOW_DAYS * 86_400_000).toISOString();
   const suppress = await loadSuppressions(engine, sourceId);
