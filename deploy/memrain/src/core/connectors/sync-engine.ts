@@ -656,8 +656,22 @@ class Run {
       return { externalId: item.externalId, version: item.version, code: "mirror_failed", message: "the page was written but its mirror into search failed", deterministic: false };
     }
     await settle(item.slug, hash);
+    if (row !== null && row.page_slug !== null && row.page_slug !== item.slug) await this.retireMovedPage(item.externalId, row.page_slug);
     if (item.enrich !== undefined) this.written.push({ ...item, enrich: item.enrich });
     return null;
+  }
+
+  /**
+   * An item now rendered under another slug (a mail thread whose first message
+   * was deleted names a later month) leaves its old page behind, still holding
+   * what the provider dropped. It goes through the upstream deletion path, a
+   * recoverable soft delete, unless another live item still points at it. A
+   * move replaces a page one for one, so the mass-delete guard does not apply.
+   */
+  private async retireMovedPage(externalId: string, oldSlug: string): Promise<void> {
+    const handler = this.deps.onUpstreamDelete;
+    if (handler === undefined || await pageSharedByLiveItem(this.engine, this.account.id, oldSlug, externalId)) return;
+    await handler(this.storage, { accountId: this.account.id, sourceId: this.account.sourceId, externalId, pageSlug: oldSlug });
   }
 
   private async detached(slug: string): Promise<boolean> {

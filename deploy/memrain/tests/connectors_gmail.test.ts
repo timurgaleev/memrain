@@ -243,6 +243,38 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("a thread whose first message is deleted moves to its new slug and leaves no page behind with the deleted text", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      const first = T0 - 50 * DAY; // September
+      const reply = T0 - 10 * DAY; // November
+      const w = world({ messages: [
+        plainMessage("18c0m1", "18c0m1", first, { From: "Ana Lee <ana@example.net>", To: OWNER, Subject: "Offer" }, "The private first message."),
+        plainMessage("18c0m2", "18c0m1", reply, { From: OWNER, To: "ana@example.net", Subject: "Re: Offer" }, "My reply."),
+      ] });
+      await run(db.storage, w, id);
+      const oldSlug = slugOf("18c0m1", first);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [oldSlug])).toBe(1);
+
+      w.messages = w.messages.filter(m => m.id !== "18c0m1");
+      w.history = start => (start === "120000"
+        ? { status: 200, body: { history: [{ id: "120050", messagesDeleted: [{ message: { id: "18c0m1", threadId: "18c0m1" } }] }], historyId: "120060" } }
+        : "historyEmpty");
+      const result = await run(db.storage, w, id, ENV, T0 + DAY);
+      expect(result.status).toBe("success");
+      const newSlug = slugOf("18c0m1", reply);
+      expect(newSlug).not.toBe(oldSlug);
+      const live = (await e.query<{ slug: string; markdown_body: string }>(
+        `SELECT slug, markdown_body FROM pages WHERE source_id = $1 AND deleted_at IS NULL AND slug LIKE 'mail/%'`, [SOURCE])).rows;
+      expect(live.map(r => r.slug)).toEqual([newSlug]);
+      expect(live[0]!.markdown_body).not.toContain("The private first message.");
+      // The old page went through the recoverable soft delete, not a hard one.
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 AND deleted_at IS NOT NULL`, [oldSlug])).toBe(1);
+    } finally { await db.close(); }
+  });
+
   it("holds deletions past the mass-delete guard and deletes nothing", async () => {
     const db = await open();
     try {
