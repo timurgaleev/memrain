@@ -655,8 +655,17 @@ class Run {
     if (hash === null) {
       return { externalId: item.externalId, version: item.version, code: "mirror_failed", message: "the page was written but its mirror into search failed", deterministic: false };
     }
+    // Before the item settles on its new slug: a failure leaves it unsettled,
+    // so the next run, still knowing the old page, retires it again.
+    if (row !== null && row.page_slug !== null && row.page_slug !== item.slug) {
+      try {
+        await this.retireMovedPage(item.externalId, row.page_slug);
+      } catch (e) {
+        if (!(e instanceof OperationError)) throw e;
+        return { externalId: item.externalId, version: item.version, code: "move_failed", message: "the item's previous page could not be retired", deterministic: false };
+      }
+    }
     await settle(item.slug, hash);
-    if (row !== null && row.page_slug !== null && row.page_slug !== item.slug) await this.retireMovedPage(item.externalId, row.page_slug);
     if (item.enrich !== undefined) this.written.push({ ...item, enrich: item.enrich });
     return null;
   }
