@@ -1008,23 +1008,27 @@ async function revokeGrantIn(
  * still takes the client row.
  */
 /**
- * True when `err` is a missing member_id / tool_surface column: a database
- * that has not run migrations 162/164 yet. Readers then retry without them,
- * so the verifier keeps working across the deploy window, exactly as before
- * those migrations (no member, full tool surface).
+ * Which of the 162 (member_id) and 164 (tool_surface) columns a verifier read
+ * names. A database that has not run those migrations yet lacks them; readers
+ * then retry without exactly the missing one, so the verifier keeps working
+ * across the deploy window. member_id is only dropped when it does not exist,
+ * and then no member can be bound, so no refusal is lost.
  */
-function isPreMemberSchemaError(err: unknown): boolean {
-  return isUndefinedColumnError(err, "member_id") || isUndefinedColumnError(err, "tool_surface");
+interface VerifierColumns {
+  members: boolean;
+  surface: boolean;
 }
 
-/** The PAT columns the verifier reads, without the 162/164 columns when `members` is false. */
-function patSelect(members: boolean): string {
-  return members
-    ? "id, name, permissions, scopes, budget_usd_per_day, member_id, tool_surface"
-    : "id, name, permissions, scopes, budget_usd_per_day";
+const ALL_VERIFIER_COLUMNS: VerifierColumns = { members: true, surface: true };
+
+/** The PAT columns the verifier reads. */
+function patSelect(cols: VerifierColumns): string {
+  return "id, name, permissions, scopes, budget_usd_per_day" +
+    (cols.members ? ", member_id" : "") +
+    (cols.surface ? ", tool_surface" : "");
 }
 
-function oauthGrantSelect(members = true): string {
+function oauthGrantSelect(cols: VerifierColumns = ALL_VERIFIER_COLUMNS): string {
   return `SELECT t.client_id, t.scopes, t.expires_at, t.resource, t.family_id, t.revoked_at, c.client_name,
               CASE WHEN t.grant_bound THEN t.source_id      ELSE c.source_id      END AS source_id,
               CASE WHEN t.grant_bound THEN t.federated_read ELSE c.federated_read END AS federated_read,
@@ -1037,9 +1041,9 @@ function oauthGrantSelect(members = true): string {
               e.revoked_at AS grant_revoked_at,
               ${legacyGrantRevoked("t")} AS legacy_grant_revoked,
               c.deleted_at AS client_deleted_at,
-              c.scope AS current_scope${members ? `,
+              c.scope AS current_scope${cols.members ? `,
               CASE WHEN t.grant_bound THEN e.member_id END AS grant_member_id,
-              c.member_id AS client_member_id,
+              c.member_id AS client_member_id` : ""}${cols.surface ? `,
               c.tool_surface` : ""}
        FROM oauth_tokens t
        LEFT JOIN oauth_clients c ON c.client_id = t.client_id
@@ -1938,13 +1942,12 @@ export class OAuthProvider {
           label: string | null;
           spend_id: string | null;
           budget_usd_per_day: string | number | null;
-          member_id: string | null;
         }
       | undefined;
     if (input.replaces !== undefined) {
       prior = (
         await this.rows<NonNullable<typeof prior>>(
-          `SELECT id, client_id, source_id, federated_read, label, spend_id, budget_usd_per_day, member_id
+          `SELECT id, client_id, source_id, federated_read, label, spend_id, budget_usd_per_day
              FROM oauth_enrollments WHERE id = $1`,
           [input.replaces],
         )
@@ -2005,6 +2008,14 @@ export class OAuthProvider {
     const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
     const spendId = prior ? (prior.spend_id ?? prior.id) : null;
     await this.engine.transaction(async (tx) => {
+      // The predecessor's member binding is read under its row lock (the lock
+      // bindCredential takes), so a bind racing this issue cannot be missed.
+      const memberId = prior
+        ? ((await tx.query<{ member_id: string | null }>(
+            `SELECT member_id FROM oauth_enrollments WHERE id = $1 FOR UPDATE`,
+            [prior.id],
+          )).rows[0]?.member_id ?? null)
+        : null;
       // One live replacement per predecessor: an older unredeemed one would
       // otherwise stay usable and redeem into a second grant on the same key.
       if (prior) {
@@ -2039,7 +2050,7 @@ export class OAuthProvider {
           prior?.budget_usd_per_day ?? null,
           // The same person: a replacement keeps their member binding, so a
           // new code never revives the grant of a disabled or removed member.
-          prior?.member_id ?? null,
+          memberId,
         ],
       );
       await writeEnrollmentAudit(tx, id, clientId, "issue", audit, null, {
@@ -2933,8 +2944,8 @@ export class OAuthProvider {
 
     // OAuth tokens first. JOIN oauth_clients so the source_id (write scope)
     // and federated_read (read set) arrive on the same query — no N+1 lookup.
-    const oauthRows = await this.withPreMemberFallback((members) => this.rows(
-      `${oauthGrantSelect(members)}
+    const oauthRows = await this.withPreMemberFallback((cols) => this.rows(
+      `${oauthGrantSelect(cols)}
        WHERE t.token_hash = $1 AND t.token_type = 'access'
          AND t.revoked_at IS NULL`,
       [tokenHash],
@@ -2961,8 +2972,8 @@ export class OAuthProvider {
     // instead of pinning every legacy token to 'default'.
     let legacyRows: Record<string, unknown>[];
     try {
-      legacyRows = await this.withPreMemberFallback((members) => this.rows(
-        `SELECT ${patSelect(members)} FROM access_tokens
+      legacyRows = await this.withPreMemberFallback((cols) => this.rows(
+        `SELECT ${patSelect(cols)} FROM access_tokens
          WHERE token_hash = $1 AND revoked_at IS NULL`,
         [tokenHash],
       ));
@@ -3011,8 +3022,8 @@ export class OAuthProvider {
    */
   async resolvePrincipal(ref: PrincipalRef): Promise<PrincipalGrant> {
     if (ref.kind === "pat") {
-      const rows = await this.withPreMemberFallback((members) => this.rows(
-        `SELECT ${patSelect(members)}, revoked_at FROM access_tokens WHERE id = $1`,
+      const rows = await this.withPreMemberFallback((cols) => this.rows(
+        `SELECT ${patSelect(cols)}, revoked_at FROM access_tokens WHERE id = $1`,
         [ref.id],
       ));
       const row = rows[0];
@@ -3021,8 +3032,8 @@ export class OAuthProvider {
       return this.withMembers(legacyGrantFromRow(row), [row.member_id]);
     }
     const match = ref.kind === "oauth_family" ? "t.family_id = $1" : "t.token_hash = $1 AND t.family_id IS NULL";
-    const rows = await this.withPreMemberFallback((members) =>
-      this.rows(`${oauthGrantSelect(members)} WHERE ${match} AND t.client_id = $2`, [ref.id, ref.client_id]));
+    const rows = await this.withPreMemberFallback((cols) =>
+      this.rows(`${oauthGrantSelect(cols)} WHERE ${match} AND t.client_id = $2`, [ref.id, ref.client_id]));
     if (rows.length === 0) throw new InvalidTokenError("Credential revoked or no longer exists");
     if (rows.some((r) => r.revoked_at != null)) throw new InvalidTokenError("Credential revoked");
     const grants = rows.map((r) => {
@@ -3042,13 +3053,17 @@ export class OAuthProvider {
     return this.withMembers({ ...first, scopes }, [rows[0]!.grant_member_id, rows[0]!.client_member_id]);
   }
 
-  /** Run a verifier read, retrying without the 162/164 columns on an older schema. */
-  private async withPreMemberFallback<T>(read: (members: boolean) => Promise<T>): Promise<T> {
-    try {
-      return await read(true);
-    } catch (err) {
-      if (!isPreMemberSchemaError(err)) throw err;
-      return read(false);
+  /** Run a verifier read, retrying without whichever 162/164 column an older schema lacks. */
+  private async withPreMemberFallback<T>(read: (cols: VerifierColumns) => Promise<T>): Promise<T> {
+    let cols = ALL_VERIFIER_COLUMNS;
+    for (;;) {
+      try {
+        return await read(cols);
+      } catch (err) {
+        if (cols.members && isUndefinedColumnError(err, "member_id")) cols = { ...cols, members: false };
+        else if (cols.surface && isUndefinedColumnError(err, "tool_surface")) cols = { ...cols, surface: false };
+        else throw err;
+      }
     }
   }
 
