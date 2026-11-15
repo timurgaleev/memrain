@@ -6,9 +6,10 @@
  * its page with it whatever anyone wrote on it, but recoverably: the page and
  * its parts are soft-deleted the way page_delete leaves a page — a tombstone
  * version, `deleted_at` set, history kept, out of search, its fence facts gone
- * — and what synthesis distilled from its documents goes with them, the atom
- * and concept pages it published soft-deleted alongside (synthesis output is
- * derived, and a restored page back in search can be distilled again).
+ * — and what was derived from its documents goes with them: facts and
+ * chronicle rows drawn from its chunks, its chronicle rows, and what synthesis
+ * distilled, the atom and concept pages it published soft-deleted alongside
+ * (all of it derived; a restored page back in search can be distilled again).
  * page_restore brings a page back until the purge hard-deletes it once it has
  * been deleted longer than PAGE_SOFT_DELETE_TTL_HOURS, retiring the facts
  * written on it then (softDeleteUpstreamPage). The parts a shrunk item no
@@ -609,11 +610,28 @@ async function softDeletePages(tx: Engine, slugs: readonly string[], sourceId: s
         WHERE (f.source_markdown_slug = $1 OR (f.source_markdown_slug IS NULL AND f.source_slug = $1))
           AND COALESCE(f.source_id, 'default') = $2`,
       [slug, page.source_id])).rows.map(r => r.id);
-    counts.facts += await count(tx,
-      // scope: upstream fence facts name the page by its slug, the primary key of pages
-      `WITH d AS (DELETE FROM entity_facts WHERE source_markdown_slug = $1 RETURNING 1) SELECT count(*)::int AS n FROM d`,
-      [slug]);
-    concepts.push(...await deleteSynthesisDerived(tx, ids, slug, factIds, counts));
+    const chunkIds = (await tx.query<{ id: string }>(
+      // scope: upstream document ids come from the source-scoped read above
+      `SELECT id FROM chunks WHERE document_id = ANY($1::text[])`, [ids],
+    )).rows.map(r => r.id);
+    // Its fence facts go, as page_delete drops them, and so does anything drawn
+    // from its chunks under another page's name, which nothing would hide or
+    // retire once the chunks are gone.
+    const dropped = (await tx.query<{ id: string }>(
+      `DELETE FROM entity_facts f
+        WHERE f.source_markdown_slug = $1
+           OR (f.source_chunk_id = ANY($2::text[]) AND f.id::text <> ALL($3::text[]))
+       RETURNING f.id::text AS id`,
+      [slug, chunkIds, factIds])).rows.map(r => r.id);
+    counts.facts += dropped.length;
+    // The chronicle is derived: its rows for the page, and those drawn from its
+    // chunks, go with the documents; a later write of the item writes them again.
+    counts.timeline_events += await count(tx,
+      // scope: upstream owned slug and its chunk ids; everything drawn from them goes
+      `WITH d AS (DELETE FROM timeline_events WHERE slug = $1 OR source_chunk_id = ANY($2::text[]) RETURNING 1)
+       SELECT count(*)::int AS n FROM d`,
+      [slug, chunkIds]);
+    concepts.push(...await deleteSynthesisDerived(tx, ids, slug, [...new Set([...factIds, ...dropped])], counts));
     counts.documents += await count(tx,
       // scope: upstream document ids come from the source-scoped read above
       `WITH d AS (DELETE FROM documents WHERE id = ANY($1::text[]) RETURNING 1) SELECT count(*)::int AS n FROM d`,

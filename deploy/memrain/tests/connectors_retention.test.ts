@@ -563,6 +563,25 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await rowsContaining(e, canary)).toEqual(["entity_facts"]);
   });
 
+  it("takes the chronicle rows and chunk facts drawn from an item deleted upstream with its documents", async () => {
+    const e = db.storage.engine();
+    const canary = "softchroniclecanary3317";
+    const page = await ingest(mailPage("s5", "plainwords"));
+    const chunk = (await e.query<{ id: string }>(
+      `SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.source_id = 'inbox' LIMIT 1`)).rows[0]!.id;
+    await addTimelineEvent(db.storage, { slug: page.slug, occurred_at: "2026-11-01", event: `Meeting: ${canary}`, source_label: "connector:gmail", source_chunk_id: "connector-event-key", source_id: "inbox" });
+    await addTimelineEvent(db.storage, { slug: "people/bob-stone", occurred_at: "2026-11-01", event: `Talked about ${canary}`, source_chunk_id: chunk });
+    const drawn = await addFact(db.storage, { entity_slug: "people/bob-stone", fact: `Bob plans ${canary}`, source_chunk_id: chunk });
+    const named = await addFact(db.storage, { entity_slug: "people/bob-stone", fact: `Named ${canary}`, source_slug: page.slug, source_id: "inbox" });
+
+    await softDeleteUpstreamPage(db.storage, scope, { slug: page.slug });
+    expect((await e.query("SELECT 1 FROM timeline_events WHERE event LIKE $1", [`%${canary}%`])).rows).toHaveLength(0);
+    expect((await e.query("SELECT 1 FROM entity_facts WHERE id = $1", [drawn.id])).rows).toHaveLength(0);
+    // A fact written on the page stays, hidden while it is deleted, for the purge to retire.
+    expect((await e.query<{ live: boolean }>("SELECT forgotten_at IS NULL AS live FROM entity_facts WHERE id = $1", [named.id])).rows)
+      .toEqual([{ live: true }]);
+  });
+
   it("leaves a page soft-deleted upstream to the purge: retention does not take it", async () => {
     const page = await ingest(mailPage("s2", "waitcanary", OWNER, "2025-01-01T08:00:00.000Z"));
     await softDeleteUpstreamPage(db.storage, scope, { slug: page.slug });

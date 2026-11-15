@@ -107,13 +107,13 @@ Connector data has its own rules:
   Fireflies no longer has is deleted from the brain with its parts, whatever
   anyone wrote on it, but recoverably: the page is soft-deleted the way
   `page_delete` leaves a page, so it drops out of search at once, its fence
-  facts go and so does what synthesis distilled from it (the atom and concept
+  facts go and so does what was derived from it: its chronicle rows, facts
+  drawn from its text, and what synthesis distilled (the atom and concept
   pages it published are soft-deleted too), while the page and its history
-  stay restorable with
-  `page_restore` for 30 days. The purge then removes the page and its history
-  for good and retires the facts written on it. A run that would delete more
-  than the mass-delete guard allows is held until the operator confirms it in
-  the admin panel.
+  stay restorable with `page_restore` for 30 days. The purge then removes the
+  page and its history for good and retires the facts written on it. A run
+  that would delete more than the mass-delete guard allows is held until the
+  operator confirms it in the admin panel.
 - **Disconnecting** revokes a Google grant at Google and drops the stored
   credential (it is kept for another try if Google does not confirm the
   revoke); a Fireflies key is dropped and stays valid in Fireflies until the
