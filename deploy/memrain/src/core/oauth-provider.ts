@@ -414,6 +414,8 @@ export interface AuthInfo {
   spendId?: string;
   /** The credential, by a non-bearer reference a queued job can re-check. */
   principal?: PrincipalRef;
+  /** A narrowed tool menu from the row's tool_surface; absent = full. */
+  toolSurface?: "starter" | "verbs";
 }
 
 /** A live grant read back from a principal reference: no bearer, no expiry. */

@@ -82,7 +82,8 @@ const EMAIL_RE = /^[^@\s]+@[^@\s]+$/;
 
 function assertEmail(raw: unknown): string {
   const email = typeof raw === "string" ? raw.trim().toLowerCase() : "";
-  if (email.length <= 254 && EMAIL_RE.test(email) && !/[\x00-\x1f\x7f]/.test(email)) return email;
+  const printable = [...email].every((c) => c.charCodeAt(0) >= 0x20 && c.charCodeAt(0) !== 0x7F);
+  if (email.length <= 254 && EMAIL_RE.test(email) && printable) return email;
   throw new MemberError("member_invalid", "not a valid email address (one @, no spaces, at most 254 characters)");
 }
 
