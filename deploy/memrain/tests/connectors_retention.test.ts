@@ -608,14 +608,21 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
 
   it("ages out a page only the brain's own writers touched since the connector", async () => {
     const page = await ingest(mailPage("auto1", "automatedcanary", OWNER, "2025-01-01T08:00:00.000Z"));
-    // A redaction rewrite and an enrichment pass carry no credential; a
-    // generator stamped with the operator principal is still the brain itself.
+    // A redaction rewrite and an enrichment pass carry no credential.
     await editByHand(page, "[redacted]", { written_by: "secrets-audit" });
     await editByHand(page, "Enriched summary.", { written_by: "enrichment" });
-    await editByHand(page, "Distilled.", { written_by: "extract-atoms", written_by_principal: "operator" });
     const r = await sweepRetention(db.storage, scope, { accountId: NO_ACCOUNT, kinds: ["mail"], env: {}, now: NOW });
     expect(r.detached).toEqual([]);
     expect(r.deleted).toEqual([page.slug]);
+  });
+
+  it("keeps an operator's edit made under a generator's writer name", async () => {
+    const page = await ingest(mailPage("auto2", "labelledcanary", OWNER, "2025-01-01T08:00:00.000Z"));
+    // `written_by` is the caller's choice; the credential is what counts.
+    await editByHand(page, "My note.", { written_by: "extract-atoms", written_by_principal: "operator" });
+    const r = await sweepRetention(db.storage, scope, { accountId: NO_ACCOUNT, kinds: ["mail"], env: {}, now: NOW });
+    expect(r.deleted).toEqual([]);
+    expect(r.detached).toEqual([page.slug]);
   });
 
   it("ages out a page whose hand edit the connector has since written over", async () => {

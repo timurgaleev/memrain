@@ -7,8 +7,7 @@ import { chunkMarkdown } from "../chunkers/recursive.ts";
 import { stripFactsFence } from "../facts-fence.ts";
 import { stripTakesFence } from "../synthesis/takes-fence.ts";
 
-/** The brain's own generators: they write under the `operator` principal, though no person is behind them. */
-export const GENERATORS = ["extract-atoms", "synthesize-concepts", "patterns", "reflection", "think", "auto-think", "life-chronicle"];
+const GENERATORS = ["extract-atoms", "synthesize-concepts", "patterns", "reflection", "think", "auto-think", "life-chronicle"];
 
 export async function markGeneratedChunks<T extends { chunkId: string }>(engine: Engine, hits: readonly T[], sourceIds?: readonly string[]): Promise<Array<T & { generated?: true }>> {
   if (!hits.length) return [];

@@ -62,7 +62,6 @@ import { logIngest } from "../ingest-log.ts";
 import { OperationError } from "../operation-error.ts";
 import { deadlockSafeTransaction } from "../retry.ts";
 import { slugifyTitle } from "../synthesis/atoms.ts";
-import { GENERATORS } from "../search/generated-provenance.ts";
 import { shortHash, SOURCE_KIND_FOR, type ConnectorDataKind } from "./model.ts";
 import {
   DELETION_STATES,
@@ -264,12 +263,14 @@ async function automaticPages(tx: Engine, where: string, params: unknown[], type
 /**
  * Whether a person edited any of `slugs` since the connector last wrote it: a
  * version newer than the page's latest connector write that arrived on a
- * credential. `written_by` is a label any caller picks, so the credential
+ * credential. `written_by` is a label any caller picks, so only the credential
  * decides: an authenticated caller is a person whatever writer name it used,
- * while the brain's own writers (secrets-audit redactions, enrichment, the
- * importers and the cycle) carry no principal, and its generators stamp
- * `operator` under their own writer names. Neither is a person's edit, so a
- * redaction or an enrichment pass never keeps an aged page alive.
+ * while the brain's own writers that touch other pages (secrets-audit
+ * redactions, enrichment, the importers and the cycle) carry no principal, so a
+ * redaction or an enrichment pass never keeps an aged page alive. The
+ * synthesis generators stamp `operator`, but only on the pages they publish,
+ * never on a connector page; nothing a caller cannot choose tells them from
+ * the operator, so an `operator` version always counts.
  */
 async function humanEdited(tx: Engine, slugs: readonly string[]): Promise<boolean> {
   const connectorWrite = (v: string) => `(${v}.written_by LIKE 'connector-%' AND ${v}.written_by_principal IS NULL)`;
@@ -277,11 +278,10 @@ async function humanEdited(tx: Engine, slugs: readonly string[]): Promise<boolea
     // scope: upstream slugs are the owned page and its parts, locked by the caller
     `SELECT 1 FROM page_versions v
       WHERE v.slug = ANY($1::text[]) AND v.written_by_principal IS NOT NULL
-        AND NOT (v.written_by_principal = 'operator' AND v.written_by = ANY($2::text[]))
         AND v.version_n > COALESCE((SELECT max(c.version_n) FROM page_versions c
                                      WHERE c.slug = v.slug AND ${connectorWrite("c")}), 0)
       LIMIT 1`,
-    [[...slugs], GENERATORS],
+    [[...slugs]],
   );
   return r.rows.length > 0;
 }
