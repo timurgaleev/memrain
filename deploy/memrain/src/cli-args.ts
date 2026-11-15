@@ -38,6 +38,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--allow-mass-delete",
   "--allow-errors",
   "--apply",
+  "--bench",
   "--by-kind",
   "--catch-up",
   "--contextual",
@@ -57,6 +58,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--http",
   "--include-flagged",
   "--json",
+  "--k12",
   "--live",
   "--max-pool",
   "--no-embed",
@@ -86,6 +88,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--wait",
   "--with-calibration",
   "--write-baseline",
+  "--write-snapshot",
   "--yes",
 ]);
 
@@ -209,7 +212,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--json", "--judge-model", "--k", "--limit", "--max-drop", "--max-latency-x", "--max-pool", "--max-usd",
       "--min-recall", "--modes", "--no-expand", "--out", "--prereg", "--qrels", "--record",
       "--relational-arm", "--rerank", "--rrf-k", "--sealed-fraction", "--seed", "--settle",
-      "--split", "--usd", "--via", "--write-baseline",
+      "--split", "--usd", "--via", "--write-baseline", "--k12", "--write-snapshot", "--bench",
     ]),
   ],
   ["eval-probe", new Set(["--limit", "--max-usd"])],
