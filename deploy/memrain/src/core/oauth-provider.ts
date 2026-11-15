@@ -2010,6 +2010,7 @@ export class OAuthProvider {
     await this.engine.transaction(async (tx) => {
       // The predecessor's member binding is read under its row lock (the lock
       // bindCredential takes), so a bind racing this issue cannot be missed.
+      // scope: operator-only one row by id: the predecessor the operator named with --replaces
       const memberId = prior
         ? ((await tx.query<{ member_id: string | null }>(
             `SELECT member_id FROM oauth_enrollments WHERE id = $1 FOR UPDATE`,
