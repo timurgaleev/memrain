@@ -2,8 +2,9 @@
 
 This guide connects your Gmail mailbox to Memrain. When you finish, the last
 90 days of your mail land in the brain, one page per thread, and new mail
-follows every 15 minutes. Spam, Trash, drafts and the Promotions and Social
-tabs are left out.
+follows every 15 minutes. Spam, Trash and drafts are left out, and so is a
+thread whose every message sits in the Promotions or Social tab (a promotion
+someone replied to, in a thread of your own, stays with it).
 
 Memrain asks Google for read access only: it never sends, changes, labels or
 deletes mail, and it never downloads attachments (a thread page lists each
@@ -32,7 +33,9 @@ connect also asks for `calendar.readonly`, and a calendar reconnect asks for
 `gmail.readonly`. Google merges every scope you granted one client into each
 new grant, so Memrain asks for the merged set up front: the grant then matches
 the request exactly, which is the check that refuses anything wider. The Gmail
-account still reads only mail.
+account still reads only mail. If the Google account you connect is not the
+one whose calendar is connected, untick the calendar box: a grant of exactly
+Gmail's own scopes is accepted too. Anything else is refused and revoked.
 
 `gmail.readonly` is a **restricted** scope in Google's terms
 ([Gmail API scopes](https://developers.google.com/workspace/gmail/api/auth/scopes)).
@@ -89,8 +92,10 @@ Reload the Connections page after registering, so it lists the new source.
    **Read**. Ticking it unticks **calendar**: the two go into sources of
    different kinds and are connected one at a time.
 2. Pick `me-mail` under **Into source** and choose **Connect Google**.
-3. Google opens. Sign in with the test user and allow every access it lists
-   (with a calendar connected, that includes your calendar). On an app in
+3. Google opens. Sign in with the test user and allow the access it lists
+   (with a calendar connected, that includes your calendar; see
+   [What Memrain asks for](#what-memrain-asks-for) if this is another Google
+   account). On an app in
    Testing, Google first warns that it has not verified the app; continue,
    since it is your own.
 4. Back on Memrain, choose **Finish connecting**. The Gmail account appears as
@@ -122,7 +127,9 @@ after a thread's last message by default
   shows From, To, Cc, date, attachment receipts and its own text: quoted
   history and a `-- ` signature are cut, a forwarded message is kept whole,
   and a message longer than 20,000 characters is cut with a marker. New
-  replies are appended to the same page.
+  replies are appended to the same page. Nothing older than the first sync's
+  window is stored: a recent reply in an old thread brings in only the
+  messages from that point on.
 - The thread's labels (Inbox, Sent, categories, your own labels by id) in the
   page's truth. Read, starred and important flags are left out, so reading
   mail does not rewrite pages or spend Gmail quota.
@@ -180,7 +187,7 @@ the brain for the subject of a mail from this week.
 | Symptom | Cause | Fix |
 |---|---|---|
 | The **Into source** list says "No source fits" with gmail ticked | No `mailbox` source | Step 3, then reload the page |
-| Back in Memrain, the page reports `scope_mismatch` | A box was unticked on Google's consent page (with a calendar connected, the calendar box counts too) | Connect again and allow every listed access |
+| Back in Memrain, the page reports `scope_mismatch` | The Gmail box was unticked on Google's consent page | Connect again and allow the Gmail access |
 | Back in Memrain, the page reports `source_kind` | The source picked is not a mailbox | Pick a `mailbox` source |
 | Syncs stop with `accessNotConfigured` | The Gmail API is off in the project | Step 1 |
 | Google shows `Error 403: access_denied` | The account is not a test user | Step 2.4 |

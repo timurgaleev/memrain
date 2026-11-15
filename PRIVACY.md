@@ -21,7 +21,7 @@ Memrain indexes only data the operator points it at:
 | Markdown notes | Notes the operator indexes from under the configured `MEMRAIN_VAULT_PATHS`. |
 | Code corpus | Source files under the configured `MEMRAIN_CODE_PATHS` (graph-only via tree-sitter). |
 | Google Calendar (connector, off by default) | Events of the calendars the operator picks, read-only (`calendar.readonly`, plus `openid email` to name the account): title, time, location, organizer, attendees' names and addresses, description, recurrence and occurrences. |
-| Gmail (connector, off by default) | Mail of the last 90 days and new mail, read-only (`gmail.readonly`, plus `openid email` to name the account), without Spam, Trash, drafts, Promotions or Social: per thread the subject, senders' and recipients' names and addresses, dates, labels, each message's text with quoted history cut, and each attachment's name, type and size. Attachment contents are never downloaded. |
+| Gmail (connector, off by default) | Mail of the last 90 days and new mail, read-only (`gmail.readonly`, plus `openid email` to name the account), without Spam, Trash, drafts or threads wholly in Promotions or Social, and nothing older than the first sync's window: per thread the subject, senders' and recipients' names and addresses, dates, labels, each message's text with quoted history cut, and each attachment's name, type and size. Attachment contents are never downloaded. |
 | Fireflies (connector, off by default) | Meeting transcripts the operator's API key can see: title, time, participants, the Fireflies summary and action items, and the transcript as speaker turns. Memrain sends Fireflies read queries only. |
 
 Connectors are off unless the operator sets a connector key, turns on

@@ -87,10 +87,11 @@ opened and nothing is synced or queued.
   the synced pages: accounts are connected again.
 - **Least access.** Google is asked only for `openid email` plus
   `calendar.readonly` for a calendar source and `gmail.readonly` for a mailbox
-  source, and a grant that differs is refused and revoked. Google merges the
-  scopes a user granted one client, so a connect also asks for the read-only
-  scopes the brain's other Google accounts already hold; nothing beyond those
-  two read scopes is ever requested. Connector text has credentials redacted
+  source. Google merges the scopes a user granted one client, so a connect
+  also asks for the read-only scopes the brain's other Google accounts already
+  hold; nothing beyond those two read scopes is ever requested. A grant other
+  than the request, or than exactly the connected service's own scopes, is
+  refused and revoked. Connector text has credentials redacted
   before it is written, whatever `MEMRAIN_SECRET_SCAN_DISPOSITION` says.
   Fireflies keys carry the owner's full API access (Fireflies offers no scoped
   key); Memrain only sends read queries with one.
