@@ -23,6 +23,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import type { PrincipalRef } from "./auth-info.ts";
+import { memberAccess, widenReadSources } from "./members.ts";
 import { validateSlug as validatePageSlug } from "./pages.ts";
 import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "./jobs/kinds.ts";
 import {
@@ -1009,7 +1010,9 @@ function oauthGrantSelect(): string {
               e.revoked_at AS grant_revoked_at,
               ${legacyGrantRevoked("t")} AS legacy_grant_revoked,
               c.deleted_at AS client_deleted_at,
-              c.scope AS current_scope
+              c.scope AS current_scope,
+              CASE WHEN t.grant_bound THEN e.member_id END AS grant_member_id,
+              c.member_id AS client_member_id
        FROM oauth_tokens t
        LEFT JOIN oauth_clients c ON c.client_id = t.client_id
        LEFT JOIN oauth_enrollments e ON t.grant_bound AND e.id = t.grant_id`;
@@ -2854,7 +2857,8 @@ export class OAuthProvider {
 
     if (oauthRows.length > 0) {
       const row = oauthRows[0] as Record<string, unknown>;
-      const { expiresAt, resource, ...grant } = oauthGrantFromRow(row, now);
+      const { expiresAt, resource, ...rowGrant } = oauthGrantFromRow(row, now);
+      const grant = await this.withMembers(rowGrant, [row.grant_member_id, row.client_member_id]);
       const clientId = grant.clientId;
       return {
         token,
@@ -2873,7 +2877,7 @@ export class OAuthProvider {
     let legacyRows: Record<string, unknown>[];
     try {
       legacyRows = await this.rows(
-        `SELECT id, name, permissions, scopes, budget_usd_per_day FROM access_tokens
+        `SELECT id, name, permissions, scopes, budget_usd_per_day, member_id FROM access_tokens
          WHERE token_hash = $1 AND revoked_at IS NULL`,
         [tokenHash],
       );
@@ -2891,6 +2895,7 @@ export class OAuthProvider {
 
     if (legacyRows.length > 0) {
       const row = legacyRows[0]!;
+      const grant = await this.withMembers(legacyGrantFromRow(row), [row.member_id]);
       if (recordUse) await this.engine.query(
         // Once a minute is enough for "last used"; writing on every request
         // turns each authenticated read into a row update.
@@ -2900,7 +2905,7 @@ export class OAuthProvider {
       );
       return {
         token,
-        ...legacyGrantFromRow(row),
+        ...grant,
         // Legacy tokens never expire — set a year out so the number check passes.
         expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 3600,
         principal: { kind: "pat", id: String(row.id) },
@@ -2922,13 +2927,13 @@ export class OAuthProvider {
   async resolvePrincipal(ref: PrincipalRef): Promise<PrincipalGrant> {
     if (ref.kind === "pat") {
       const rows = await this.rows(
-        `SELECT id, name, permissions, scopes, budget_usd_per_day, revoked_at FROM access_tokens WHERE id = $1`,
+        `SELECT id, name, permissions, scopes, budget_usd_per_day, revoked_at, member_id FROM access_tokens WHERE id = $1`,
         [ref.id],
       );
       const row = rows[0];
       if (!row) throw new InvalidTokenError("Credential revoked or no longer exists");
       if (row.revoked_at != null) throw new InvalidTokenError("Credential revoked");
-      return legacyGrantFromRow(row);
+      return this.withMembers(legacyGrantFromRow(row), [row.member_id]);
     }
     const match = ref.kind === "oauth_family" ? "t.family_id = $1" : "t.token_hash = $1 AND t.family_id IS NULL";
     const rows = await this.rows(`${oauthGrantSelect()} WHERE ${match} AND t.client_id = $2`, [ref.id, ref.client_id]);
@@ -2946,7 +2951,26 @@ export class OAuthProvider {
     }
     const scopes = first.scopes.filter((s) => grants.every((g) => hasScope(g.scopes, s)));
     if (scopes.length === 0) throw new InvalidTokenError("Token holds no scope its client is still granted");
-    return { ...first, scopes };
+    // Every token of one session shares its client and enrollment, so the
+    // first row names the same members as the rest.
+    return this.withMembers({ ...first, scopes }, [rows[0]!.grant_member_id, rows[0]!.client_member_id]);
+  }
+
+  /**
+   * Refuse a credential whose member is disabled, removed or missing, and
+   * widen an enabled member's reads by its groups' sources. A credential that
+   * names no member is returned untouched, without a query.
+   */
+  private async withMembers<G extends PrincipalGrant>(grant: G, bound: unknown[]): Promise<G> {
+    const access = await memberAccess(this.engine, bound);
+    if (access === null) return grant;
+    if (access.refused) {
+      throw new InvalidTokenError(
+        `member_disabled: this credential belongs to member "${access.refused.memberId}", which is ${access.refused.reason}; ` +
+          "ask the brain operator to enable the member or rebind the credential",
+      );
+    }
+    return widenReadSources(grant, access.groupSources);
   }
 
   // -------------------------------------------------------------------------
