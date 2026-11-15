@@ -48,8 +48,8 @@ async function seed(target: string, status: ConnectorRunStatus, at: number, http
 }
 
 describe("checkConnectorHealth", () => {
-  it("passes when no connector has run", async () => {
-    expect(await checkConnectorHealth(storage.engine(), NOW)).toEqual({ ok: true, status: "ok", detail: "no connector has run" });
+  it("passes when no connector account exists and no connector has run", async () => {
+    expect(await checkConnectorHealth(storage.engine(), NOW)).toEqual({ ok: true, status: "ok", detail: "no connector account and no connector has run" });
   });
 
   it("passes for a connector with a recent clean run", async () => {

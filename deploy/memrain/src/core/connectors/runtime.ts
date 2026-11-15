@@ -23,6 +23,7 @@ import {
   renewCredential,
   type ConnectorAccount,
 } from "./accounts.ts";
+import { recordAccountRun } from "./account-status.ts";
 import { ConnectorClient, type FetchFn, type TokenSource } from "./client.ts";
 import { enrichConnectorPage } from "./enrich-deterministic.ts";
 import { limiterFor } from "./limiter.ts";
@@ -179,6 +180,7 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
           },
           recordRun: async (id, result) => {
             if (result.status === "success" || result.status === "nothing_new") await markAccountSynced(engine, id);
+            await recordAccountRun(engine, id, result, new Date(now()));
           },
         },
         onUpstreamDelete: async (st, item) => {
