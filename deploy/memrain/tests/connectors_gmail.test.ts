@@ -350,6 +350,25 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("treats a thread answer with unreadable messages as a failed read, deleting nothing and keeping the cursor", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      const w = world();
+      await run(db.storage, w, id);
+      const before = await readCursor(e, id, GMAIL_STREAM);
+      const live = (await livePages(e)).rows.map(r => r.slug);
+      w.history = start => (start === "120000" ? "historyDeletion" : "historyEmpty");
+      w.thread = tid => ({ status: 200, body: { id: tid, historyId: "120099", messages: [{ id: `${tid}-x`, threadId: tid }] } });
+      const result = await run(db.storage, w, id, ENV, T0 + DAY);
+      expect(result.status).not.toBe("success");
+      expect(result.counts.deletions_applied ?? 0).toBe(0);
+      expect((await livePages(e)).rows.map(r => r.slug)).toEqual(live);
+      expect(await readCursor(e, id, GMAIL_STREAM)).toBe(before);
+    } finally { await db.close(); }
+  });
+
   it("parks the account for a reconnect when Google refuses the credential, keeping the cursor", async () => {
     const db = await open();
     try {

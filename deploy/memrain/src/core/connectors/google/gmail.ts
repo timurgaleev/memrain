@@ -452,6 +452,10 @@ class Adapter implements SyncAdapter {
     if (!isRecord(res.body) || !Array.isArray(res.body.messages)) return { kind: "stop", response: { ...res, class: "challenge", body: null, error: "unexpected thread response" } };
     const version = str(res.body.historyId);
     const messages = res.body.messages as unknown[];
+    // An unreadable message must not read as a gone thread: that would delete its page.
+    if (messages.length === 0 || messages.some(m => rawMessage(m) === null)) {
+      return { kind: "stop", response: { ...res, class: "challenge", body: null, error: "unexpected thread response" } };
+    }
     const normalized = normalizeGmailThread(threadId, messages, this.floorOf(st));
     if (normalized === null) return { kind: "gone", threadId };
     if (fromHistory && normalized.newestMs < this.windowLow()) return { kind: "old" };
