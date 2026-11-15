@@ -24,6 +24,16 @@
  *     reporting during that gap is not seen; retention still ages the page out.
  *     (developers.google.com/workspace/gmail/api/guides/sync)
  *
+ * Nothing older than the first sync's window floor is ever stored: the
+ * floor is kept in the cursor and never moves, and a thread a recent reply
+ * brings in keeps only its messages from the floor on.
+ *
+ * A page of results (a listing page, or the threads one history page touched)
+ * is handed to the engine in batches of at most BATCH_THREADS threads, never
+ * more than one run may store (MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN): a batch
+ * larger than the run cap could never reach its checkpoint, and every run
+ * would read it again and stop at the same place.
+ *
  * A thread is one page (render.ts renderMailThread), its version the thread's
  * `historyId`. Drafts, spam and trash never reach it. A thread none of whose
  * remaining messages are left once those are dropped, or whose every message is
@@ -53,8 +63,11 @@ export const GMAIL_STREAM = "gmail";
 const DAY_MS = 86_400_000;
 export const DEFAULT_MAIL_HISTORY_DAYS = 90;
 export const MAX_MAIL_HISTORY_DAYS = 3650;
-const LIST_PAGE_SIZE = "100";
+/** Threads handed to the engine per page at most (fewer when the run cap is lower). */
+export const BATCH_THREADS = 50;
 const HISTORY_PAGE_SIZE = "100";
+const DEFAULT_MAX_ITEMS_PER_RUN = 500;
+const MAX_PENDING_THREADS = 1000;
 /** A new walk's top: a little past now, so mail stamped by a clock slightly ahead is listed. */
 const WALK_TOP_MARGIN_MS = 60_000;
 const MAX_CURSOR_FIELD = 4096;
@@ -83,11 +96,20 @@ export interface GmailWalk {
   pageToken: string | null;
 }
 
+/** Threads a history page touched that are still to read, and where the history goes after them. */
+export interface GmailPending {
+  threads: string[];
+  next: { page: string } | { historyId: string };
+}
+
 export interface GmailCursor {
   v: 1;
   historyId: string | null;
   /** A history listing part-way through its pages. */
   historyPage: string | null;
+  pending: GmailPending | null;
+  /** The first sync's window floor (ms): nothing older is stored. */
+  floorMs: number | null;
   walk: GmailWalk | null;
 }
 
@@ -121,6 +143,20 @@ export function parseGmailCursor(cursor: string | null): GmailCursor | null {
   const historyId = field(raw.historyId);
   const historyPage = field(raw.historyPage);
   if (historyId === undefined || historyPage === undefined) return null;
+  const floorMs = raw.floorMs === undefined || raw.floorMs === null ? null : ms(raw.floorMs);
+  if (floorMs === null && raw.floorMs !== undefined && raw.floorMs !== null) return null;
+  let pending: GmailPending | null = null;
+  if (raw.pending !== undefined && raw.pending !== null) {
+    const p = raw.pending;
+    if (!isRecord(p) || !Array.isArray(p.threads) || p.threads.length > MAX_PENDING_THREADS || !isRecord(p.next)) return null;
+    const threads = p.threads.map(field);
+    if (threads.some(t => typeof t !== "string")) return null;
+    const page = field(p.next.page);
+    const hid = field(p.next.historyId);
+    if (typeof page === "string") pending = { threads: threads as string[], next: { page } };
+    else if (typeof hid === "string") pending = { threads: threads as string[], next: { historyId: hid } };
+    else return null;
+  }
   let walk: GmailWalk | null = null;
   if (raw.walk !== null) {
     if (!isRecord(raw.walk)) return null;
@@ -131,7 +167,7 @@ export function parseGmailCursor(cursor: string | null): GmailCursor | null {
     if (lowMs === null || queryFloorMs === null || resumeFloorMs === null || pageToken === undefined) return null;
     walk = { lowMs, queryFloorMs, resumeFloorMs, pageToken };
   }
-  return { v: 1, historyId, historyPage, walk };
+  return { v: 1, historyId, historyPage, pending, floorMs, walk };
 }
 
 function configInt(account: SyncAccount, key: string, min: number, max: number): number | null {
@@ -187,8 +223,9 @@ export function normalizeGmailMessage(m: RawMessage): MailMessage {
  * The thread as the brain keeps it: drafts, spam and trash dropped. Null when
  * nothing is left, or when every remaining message sits in Promotions or Social.
  */
-export function normalizeGmailThread(threadId: string, messages: readonly unknown[]): { thread: MailThread; newestMs: number } | null {
-  const kept = messages.map(rawMessage).filter((m): m is RawMessage => m !== null && !m.labelIds.some(l => DROPPED_LABELS.has(l)));
+export function normalizeGmailThread(threadId: string, messages: readonly unknown[], floorMs: number | null = null): { thread: MailThread; newestMs: number } | null {
+  const kept = messages.map(rawMessage).filter((m): m is RawMessage => m !== null && !m.labelIds.some(l => DROPPED_LABELS.has(l))
+    && (floorMs === null || m.internalDateMs >= floorMs));
   if (kept.length === 0 || kept.every(m => m.labelIds.some(l => EXCLUDED_CATEGORIES.has(l)))) return null;
   const labels = [...new Set(kept.flatMap(m => m.labelIds).filter(l => !VOLATILE_LABELS.has(l)))];
   return {
@@ -253,6 +290,12 @@ class Adapter implements SyncAdapter {
     return this.now() - (keep === null ? days : Math.min(days, keep)) * DAY_MS;
   }
 
+  /** Threads per page handed to the engine: never more than one run may store. */
+  private batch(): number {
+    const n = Number((this.env.MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN ?? "").trim());
+    return Math.min(BATCH_THREADS, Number.isInteger(n) && n > 0 ? n : DEFAULT_MAX_ITEMS_PER_RUN);
+  }
+
   private newWalk(): GmailWalk {
     const top = this.now() + WALK_TOP_MARGIN_MS;
     return { lowMs: this.windowLow(), queryFloorMs: top, resumeFloorMs: top, pageToken: null };
@@ -262,6 +305,7 @@ class Adapter implements SyncAdapter {
     if (stream !== GMAIL_STREAM) throw new Error(`gmail adapter has no stream ${stream}`);
     const st = parseGmailCursor(cursor);
     if (st === null || st.historyId === null) return this.anchor(client, st);
+    if (st.pending !== null) return this.pendingPage(client, st, st.pending);
     if (page === 0 || st.historyPage !== null) return this.historyPage(client, st);
     if (st.walk !== null) return this.walkPage(client, st, st.walk);
     return { ok: true, items: [], checkpoint: JSON.stringify(st), done: true };
@@ -273,8 +317,41 @@ class Adapter implements SyncAdapter {
     if (res.class !== "ok") return { ok: false, response: res };
     const historyId = isRecord(res.body) ? str(res.body.historyId) : null;
     if (historyId === null || historyId.length > MAX_CURSOR_FIELD) return invalid(res, "profile");
-    const next: GmailCursor = { v: 1, historyId, historyPage: null, walk: st?.walk ?? this.newWalk() };
+    const next: GmailCursor = { v: 1, historyId, historyPage: null, pending: null, floorMs: st?.floorMs ?? this.windowLow(), walk: st?.walk ?? this.newWalk() };
     return { ok: true, items: [], checkpoint: JSON.stringify(next), done: false };
+  }
+
+  /** Read up to one batch of `threads`: items, deletions, or the response that stopped it. */
+  private async readBatch(client: ConnectorClient, st: GmailCursor, threads: readonly string[]): Promise<{ items: SyncItem[]; deletions: string[] } | { stop: ConnectorResponse }> {
+    const items: SyncItem[] = [];
+    const deletions: string[] = [];
+    for (const tid of threads) {
+      const out = await this.readThread(client, st, tid, true);
+      if (out.kind === "stop") return { stop: out.response };
+      if (out.kind === "gone") deletions.push(out.threadId);
+      else if (out.kind === "item") items.push(out.item);
+    }
+    return { items, deletions };
+  }
+
+  /** The cursor once a history page's threads are all read. */
+  private afterHistory(st: GmailCursor, next: GmailPending["next"]): { cursor: GmailCursor; done: boolean } {
+    if ("page" in next) return { cursor: { ...st, historyPage: next.page, pending: null }, done: false };
+    const cursor: GmailCursor = { ...st, historyId: next.historyId, historyPage: null, pending: null };
+    return { cursor, done: cursor.walk === null };
+  }
+
+  /** The next batch of threads a history page touched. */
+  private async pendingPage(client: ConnectorClient, st: GmailCursor, pending: GmailPending): Promise<PageResult> {
+    const take = pending.threads.slice(0, this.batch());
+    const rest = pending.threads.slice(take.length);
+    const read = await this.readBatch(client, st, take);
+    if ("stop" in read) return { ok: false, response: read.stop };
+    if (rest.length > 0) {
+      return { ok: true, ...read, checkpoint: JSON.stringify({ ...st, pending: { threads: rest, next: pending.next } }), done: false };
+    }
+    const after = this.afterHistory(st, pending.next);
+    return { ok: true, ...read, checkpoint: JSON.stringify(after.cursor), done: after.done };
   }
 
   private async historyPage(client: ConnectorClient, st: GmailCursor): Promise<PageResult> {
@@ -285,42 +362,40 @@ class Adapter implements SyncAdapter {
     };
     let res = await client.get(path(st.historyPage));
     if (st.historyPage !== null && res.status === 400) res = await client.get(path(null));
-    if (res.status === 404) return this.expired(client);
+    if (res.status === 404) return this.expired(client, st);
     if (res.class !== "ok") return { ok: false, response: res };
     if (!isRecord(res.body) || (res.body.history !== undefined && !Array.isArray(res.body.history))) return invalid(res, "history");
 
-    const items: SyncItem[] = [];
-    const deletions: string[] = [];
-    for (const tid of touchedThreads((res.body.history ?? []) as unknown[])) {
-      const out = await this.readThread(client, tid, true);
-      if (out.kind === "stop") return { ok: false, response: out.response };
-      if (out.kind === "gone") deletions.push(out.threadId);
-      else if (out.kind === "item") items.push(out.item);
-    }
+    const touched = touchedThreads((res.body.history ?? []) as unknown[]);
+    if (touched.length > MAX_PENDING_THREADS || touched.some(t => t.length > MAX_CURSOR_FIELD)) return invalid(res, "history (too many threads on one page)");
     const nextPage = str(res.body.nextPageToken);
-    if (nextPage !== null) {
-      if (nextPage.length > MAX_CURSOR_FIELD) return invalid(res, "history (page token too long)");
-      return { ok: true, items, deletions, checkpoint: JSON.stringify({ ...st, historyPage: nextPage }), done: false };
-    }
+    if (nextPage !== null && nextPage.length > MAX_CURSOR_FIELD) return invalid(res, "history (page token too long)");
     const historyId = str(res.body.historyId) ?? st.historyId;
     if (historyId === null || historyId.length > MAX_CURSOR_FIELD) return invalid(res, "history (no history id)");
-    const next: GmailCursor = { ...st, historyId, historyPage: null };
-    return { ok: true, items, deletions, checkpoint: JSON.stringify(next), done: next.walk === null };
+    const next: GmailPending["next"] = nextPage !== null ? { page: nextPage } : { historyId };
+    // The threads go through pendingPage in batches the run cap can settle.
+    return this.pendingPage(client, { ...st, historyPage: null }, { threads: touched, next });
   }
 
   /** Google no longer has the history after the anchor: anchor anew and walk the window again. */
-  private async expired(client: ConnectorClient): Promise<PageResult> {
+  private async expired(client: ConnectorClient, st: GmailCursor): Promise<PageResult> {
     const res = await client.get(`${API}/profile`);
     if (res.class !== "ok") return { ok: false, response: res };
     const historyId = isRecord(res.body) ? str(res.body.historyId) : null;
     if (historyId === null || historyId.length > MAX_CURSOR_FIELD) return invalid(res, "profile");
-    const next: GmailCursor = { v: 1, historyId, historyPage: null, walk: this.newWalk() };
+    // The history after the old anchor is gone, threads it named included.
+    const next: GmailCursor = { v: 1, historyId, historyPage: null, pending: null, floorMs: this.floorOf(st), walk: this.newWalk() };
     return { ok: true, items: [], checkpoint: JSON.stringify(next), done: false };
+  }
+
+  /** The cursor's floor, or the first sync's window for a cursor written before it was kept. */
+  private floorOf(st: GmailCursor): number {
+    return st.floorMs ?? this.windowLow();
   }
 
   private listPath(walk: GmailWalk): string {
     const q = new URLSearchParams({
-      maxResults: LIST_PAGE_SIZE,
+      maxResults: String(this.batch()),
       q: `after:${Math.floor(walk.lowMs / 1000)} before:${Math.ceil(walk.queryFloorMs / 1000)} ${LIST_EXCLUSIONS}`,
     });
     if (walk.pageToken !== null) q.set("pageToken", walk.pageToken);
@@ -350,7 +425,7 @@ class Adapter implements SyncAdapter {
     const deletions: string[] = [];
     let oldest = walk.resumeFloorMs;
     for (const [tid, ids] of listed) {
-      const out = await this.readThread(client, tid, false, ids);
+      const out = await this.readThread(client, st, tid, false, ids);
       if (out.kind === "stop") return { ok: false, response: out.response };
       if (out.kind === "gone") deletions.push(out.threadId);
       if (out.kind === "item") {
@@ -370,14 +445,14 @@ class Adapter implements SyncAdapter {
    * Read one thread. `fromHistory` threads older than the window are left
    * alone unless they are gone (a stored page may still need deleting).
    */
-  private async readThread(client: ConnectorClient, threadId: string, fromHistory: boolean, listedIds?: Set<string>): Promise<ThreadOutcome> {
+  private async readThread(client: ConnectorClient, st: GmailCursor, threadId: string, fromHistory: boolean, listedIds?: Set<string>): Promise<ThreadOutcome> {
     const res = await client.get(`${API}/threads/${encodeURIComponent(threadId)}?format=full`);
     if (res.status === 404) return { kind: "gone", threadId };
     if (res.class !== "ok") return { kind: "stop", response: res };
     if (!isRecord(res.body) || !Array.isArray(res.body.messages)) return { kind: "stop", response: { ...res, class: "challenge", body: null, error: "unexpected thread response" } };
     const version = str(res.body.historyId);
     const messages = res.body.messages as unknown[];
-    const normalized = normalizeGmailThread(threadId, messages);
+    const normalized = normalizeGmailThread(threadId, messages, this.floorOf(st));
     if (normalized === null) return { kind: "gone", threadId };
     if (fromHistory && normalized.newestMs < this.windowLow()) return { kind: "old" };
     const listedAt = listedIds === undefined

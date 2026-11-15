@@ -275,6 +275,42 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("keeps messages older than the first sync's window out of a thread a recent reply brings in", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      const w = world({ messages: [
+        plainMessage("18c0w1", "18c0w1", T0 - 200 * DAY, { From: "Ana Lee <ana@example.net>", To: OWNER, Subject: "Lease" }, "Text from long ago."),
+        plainMessage("18c0w2", "18c0w1", T0 - 5 * DAY, { From: OWNER, To: "ana@example.net", Subject: "Re: Lease" }, "A recent reply."),
+      ] });
+      await run(db.storage, w, id);
+      const body = (await e.query<{ markdown_body: string }>(`SELECT markdown_body FROM pages WHERE slug = $1`, [slugOf("18c0w1", T0 - 5 * DAY)])).rows[0]!.markdown_body;
+      expect(body).toContain("A recent reply.");
+      expect(body).not.toContain("Text from long ago.");
+      // The floor stays where the first sync put it.
+      expect((await cursorOf(e, id))!.floorMs).toBe(T0 - 90 * DAY);
+    } finally { await db.close(); }
+  });
+
+  it("drains a history page that touches more threads than one run may store, over several runs", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      const w = world({ messages: [] });
+      await run(db.storage, w, id);
+      const fresh = Array.from({ length: 5 }, (_, i) => plainMessage(`18c1${i}`, `18c1${i}`, T0 + i * 60_000, { From: "c@example.com", To: OWNER, Subject: `New ${i}` }, `Body ${i}.`));
+      w.messages.push(...fresh);
+      const page = { history: fresh.map((m, i) => ({ id: `12010${i}`, messagesAdded: [{ message: { id: m.id, threadId: m.threadId } }] })), historyId: "120200" };
+      w.history = start => (start === "120000" ? { status: 200, body: page } : "historyEmpty");
+      const env = { ...ENV, MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN: "2" };
+      for (let i = 0; i < 6 && (await cursorOf(e, id))!.historyId !== "120200"; i++) await run(db.storage, w, id, env, T0 + DAY + i);
+      expect((await cursorOf(e, id))!.historyId).toBe("120200");
+      expect(await count(e, `SELECT count(*)::int AS n FROM connector_items WHERE account_id = $1`, [id])).toBe(5);
+    } finally { await db.close(); }
+  });
+
   it("holds deletions past the mass-delete guard and deletes nothing", async () => {
     const db = await open();
     try {

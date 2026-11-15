@@ -78,7 +78,7 @@ describe("gmail message reading", () => {
       JSON.stringify({ v: 1, historyId: "1", historyPage: null, walk: { lowMs: -1, queryFloorMs: 1, resumeFloorMs: 1, pageToken: null } })]) {
       expect(parseGmailCursor(bad)).toBeNull();
     }
-    expect(parseGmailCursor(JSON.stringify({ v: 1, historyId: "9", historyPage: null, walk: null }))).toEqual({ v: 1, historyId: "9", historyPage: null, walk: null });
+    expect(parseGmailCursor(JSON.stringify({ v: 1, historyId: "9", historyPage: null, walk: null }))).toEqual({ v: 1, historyId: "9", historyPage: null, pending: null, floorMs: null, walk: null });
   });
 });
 
