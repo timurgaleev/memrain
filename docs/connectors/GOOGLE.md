@@ -112,8 +112,10 @@ host.
 ### 6. Store the client in Memrain
 
 1. Open the admin console (`https://<your host>/admin/`) and sign in.
-2. Open the **Connections** page and choose **Google**.
-3. Paste the client ID and client secret into the OAuth client form and save.
+2. On the **Connections** page, in the **Google** panel, open
+   **Use your own OAuth app**. It also shows the redirect URL from step 1, with
+   a copy button.
+3. Paste the client ID and client secret and choose **Save app**.
 
 Memrain seals the secret with the connector key ([KEY.md](./KEY.md)) before it
 is stored; it is never shown again, logged or returned by the API. Saving a
@@ -142,19 +144,20 @@ sync starts within 15 minutes.
 ### 8. Pick calendars and the history window (optional)
 
 Memrain syncs your primary calendar and reads the last 90 days of it on the
-first sync. To add other calendars the account can read (busy-only ones are
-not offered) or change the window, use the admin API with your admin session:
+first sync. To add other calendars the account can read or change the window,
+choose **Calendars** on the account's row. It lists what Google lists for the
+account (busy-only calendars are not offered), with primary ticked and locked,
+and the history window in days. Choose **Save calendars**; the next sync
+picks them up. The button shows while connectors are on and the account is
+connected.
 
-```
-GET  /admin/api/connectors/accounts/<account id>/calendars
-POST /admin/api/connectors/accounts/<account id>/calendars
-{"calendars": ["<calendar id>", ...], "history_days": 365}
-```
+Up to 19 calendars besides primary, and a window of 1 to 3,650 days, never
+past the calendar retention window. A new window applies to calendars that
+have not had their first sync yet; one that already synced keeps its own.
 
-The list is checked against what Google returns for the account; primary is
-always synced. Up to 19 calendars besides primary, and a window of 1 to 3,650
-days, never past the retention window. A new window applies to calendars that
-have not had their first sync yet.
+The page uses `GET` and `POST /admin/api/connectors/accounts/<account id>/calendars`
+(`{"calendars": ["<calendar id>", ...], "history_days": 365}`); a script needs
+your admin session cookie and, on the `POST`, the brain's own `Origin`.
 
 ## The 7-day reconnect
 
@@ -165,10 +168,20 @@ publishing status of **Testing** is issued a refresh token that expires in
 7 days, unless the only scopes are name, email address and profile.
 `calendar.readonly` is not one of those, so this applies.
 
-What you see: about a week after you connect, the account turns
-`needs_reconnect`, `memrain doctor` names it, and syncing pauses. No data is
-lost. Choose **Connect** again on the Connections page; the sync carries on from
-where it stopped.
+Memrain cannot ask Google whether the app is in Testing, so it reads the
+signs. The 7 days count from the last consent; every reconnect starts them
+again.
+
+- While the grant is fresh, the account's row shows **Access ends**, the date
+  7 days after consent. `memrain connectors status` prints the same date.
+- From day five the row turns that into a warning with **Reconnect now**, and
+  `memrain doctor` (`connector-health`) warns.
+- When Google ends the grant, the account turns `needs_reconnect` and syncing
+  pauses. No data is lost. The row, doctor and the reconnect notification say
+  that the 7-day limit is the likely cause. Choose **Reconnect** on the row;
+  the sync carries on from where it stopped.
+- A grant that keeps syncing more than 7 days after consent shows the app is
+  not in Testing (published, or Internal), and these notes go away.
 
 Ways out, from least to most effort:
 
@@ -180,8 +193,9 @@ Ways out, from least to most effort:
 
 Two more Google rules can end a token early: a token unused for six months
 expires, and Google keeps at most 100 refresh tokens per Google account per
-client, silently revoking the oldest past that. Memrain asks for a fresh
-consent on every connect, so reconnecting does not pile up tokens beyond that.
+client, silently revoking the oldest past that. Every connect issues a new
+refresh token and Memrain keeps only the newest; the one it replaces is not
+revoked, so it counts toward that limit until it expires.
 
 ## Verification
 
@@ -189,8 +203,10 @@ consent on every connect, so reconnecting does not pile up tokens beyond that.
 docker exec deploy-memrain-1 bun run src/cli.ts connectors status
 ```
 
-The Google account shows status `active` and, after the first run, a recent
-clean run. Search the brain for the title of a meeting from this week.
+The Google account is listed under `accounts:` as `syncing` (or `sync off`
+until you switch it on) and, after the first run, with a recent clean sync and
+`last run success` or `nothing_new`. Search the brain for the title of a
+meeting from this week.
 
 ## Troubleshooting
 
@@ -203,7 +219,8 @@ clean run. Search the brain for the title of a meeting from this week.
 | The Connections page answers `no_client` | No OAuth client is stored for Google | Step 6 |
 | The Connections page answers `redirect_uri` | `MEMRAIN_PUBLIC_URL` is unset or not `https` | Fix the domain in your stack settings and redeploy |
 | Syncs fail with `accessNotConfigured` | The Google Calendar API is off in the project | Step 3 |
-| The account turns `needs_reconnect` after about a week | The Testing-mode 7-day token limit | [The 7-day reconnect](#the-7-day-reconnect) |
+| The account turns `needs_reconnect` about 7 days after you connected | The Testing-mode 7-day token limit | **Reconnect** on the row; see [the 7-day reconnect](#the-7-day-reconnect) |
+| No **Calendars** button on the account | Connectors are off, or the account needs a reconnect | Turn connectors on ([ENABLE.md](./ENABLE.md) step 3) or reconnect |
 | You lost the client secret | Google shows it only at creation | Add a new secret to the client in **Clients**, store it with step 6, then delete the old secret in Google |
 
 ## Disconnecting
