@@ -110,13 +110,24 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(account.source_id).toBe("mail");
       expect((await credentialMeta(e, account.id))!.scopes).toEqual(["email", GOOGLE_CALENDAR_READONLY, GOOGLE_GMAIL_READONLY, "openid"]);
 
-      // Google left the calendar box unticked: the grant differs from the request.
+      // Another Google user, whose calendar is not connected here, unticks the
+      // calendar box: the grant is exactly what the Gmail service needs.
+      await registerSource(e, { id: "mail2", kind: "mailbox", pathPrefix: "mail2/" });
+      const other = await connect(d, "mail2", ["gmail"], `openid ${EMAIL_URL} ${GOOGLE_GMAIL_READONLY}`, world);
+      expect(other.account.services).toEqual(["gmail"]);
+      expect((await credentialMeta(e, other.account.id))!.scopes).toEqual(["email", GOOGLE_GMAIL_READONLY, "openid"]);
+
+      // Unticking Gmail itself leaves a grant that is neither set: refused and revoked.
       world.calls.length = 0;
-      const err = await connect(d, "mail", ["gmail"], `openid ${EMAIL_URL} ${GOOGLE_GMAIL_READONLY}`, world).catch(x => x);
+      const err = await connect(d, "mail", ["gmail"], `openid ${EMAIL_URL} ${GOOGLE_CALENDAR_READONLY}`, world).catch(x => x);
       expect(err).toBeInstanceOf(ConnectError);
       expect((err as ConnectError).code).toBe("scope_mismatch");
-      expect((err as ConnectError).detail).toMatchObject({ missing: [GOOGLE_CALENDAR_READONLY], extra: [] });
+      expect((err as ConnectError).detail).toMatchObject({ missing: [GOOGLE_GMAIL_READONLY], extra: [] });
       expect(world.calls.some(c => c.url.toString() === "https://oauth2.googleapis.com/revoke")).toBe(true);
+
+      // A scope nobody asked for is refused whichever set it is measured against.
+      const wider = await connect(d, "mail", ["gmail"], `openid ${EMAIL_URL} ${GOOGLE_GMAIL_READONLY} https://www.googleapis.com/auth/gmail.modify`, world).catch(x => x);
+      expect((wider as ConnectError).code).toBe("scope_mismatch");
     } finally { await db.close(); }
   });
 

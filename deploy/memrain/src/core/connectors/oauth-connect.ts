@@ -12,9 +12,10 @@
  * provider — that stops an attacker from completing a connect with their own
  * code in the victim's session, which would pour the attacker's mailbox into
  * the victim's brain. The code is exchanged server to server, the granted
- * scopes must equal the requested read-only set exactly (anything else is
- * refused and the token revoked), and the account is stored disabled with its
- * tokens sealed. Nothing syncs until the owner enables it.
+ * scopes must equal the requested read-only set exactly, or, for a request
+ * widened by companion services, exactly the account's own services' scopes
+ * (anything else is refused and the token revoked), and the account is stored
+ * disabled with its tokens sealed. Nothing syncs until the owner enables it.
  *
  * The redirect URI comes from configuration, never from the request. Errors
  * carry a code and a fixed message; provider text, codes and tokens are never
@@ -394,7 +395,12 @@ export async function completeConnect(
   const granted = parseScopes(provider, body.scope, requested);
   const extra = granted.filter((s) => !requested.includes(s)).sort();
   const missing = requested.filter((s) => !granted.includes(s)).sort();
-  if (extra.length > 0 || missing.length > 0) {
+  // A request widened by companion services (combinedGrants) may also come
+  // back as exactly what the account's own services need: another Google
+  // user, whose calendar is not connected here, unticks the calendar box.
+  const own = requestedScopes(provider, (st.services ?? []).filter((s) => Object.hasOwn(provider.services, s)));
+  const exactlyOwn = granted.length === own.length && own.every((s) => granted.includes(s));
+  if ((extra.length > 0 || missing.length > 0) && !exactlyOwn) {
     const revoked = await revokeToken(provider, fetch, refreshToken ?? accessToken, client);
     throw new ConnectError("scope_mismatch", { extra, missing, revoked });
   }
