@@ -17,7 +17,7 @@ import {
 } from "../lib/automation.ts";
 import { DeleteDataDialog, DisconnectDialog } from "./ConnectionDialogs.tsx";
 import { CalendarPicker } from "./ConnectionCalendars.tsx";
-import { ProviderPanel } from "./ConnectionProviders.tsx";
+import { ProviderPanel, providerKeyFieldId } from "./ConnectionProviders.tsx";
 import { actionError, goToConsent } from "./connection-actions.ts";
 
 type Flash = { ok: boolean; message: string };
@@ -86,6 +86,7 @@ export function ConnectionsPage() {
                       key={a.id}
                       account={a}
                       connectorsOn={r.enabled}
+                      keyBased={r.providers.some((p) => p.id === a.provider && p.auth === "api_key")}
                       onOpen={(kind) => setOpen({ kind, account: a })}
                       onDone={done}
                       onError={failed}
@@ -137,9 +138,11 @@ export function ConnectionsPage() {
   );
 }
 
-function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
+function AccountRow({ account: a, connectorsOn, keyBased, onOpen, onDone, onError }: {
   account: ConnectorAccountView;
   connectorsOn: boolean;
+  /** An API-key provider: a reconnect is the key saved again, not a consent page. */
+  keyBased: boolean;
   onOpen: (kind: "disconnect" | "delete") => void;
   onDone: (message: string) => void;
   onError: (e: unknown) => void;
@@ -170,6 +173,12 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
     const r = await automationApi.setSync(a.id, !a.enabled);
     return r.enabled ? `Sync is on for ${a.account_label}.` : `Sync is off for ${a.account_label}. Its pages stay.`;
   });
+  const name = providerLabel(a.provider);
+  const enterKeyAgain = () => {
+    const field = document.getElementById(providerKeyFieldId(a.provider));
+    field?.scrollIntoView({ block: "center" });
+    field?.focus();
+  };
   const reconnect = () => run(async () => {
     await goToConsent(a.provider, a.source_id, a.services);
     return null;
@@ -211,7 +220,14 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
         <dt>Access</dt><dd className="mono account-scopes">{a.credential ? a.credential.scopes.join(" ") || "none" : "no credential"}</dd>
       </dl>
 
-      {view.canReconnect && (
+      {view.canReconnect && keyBased && (
+        <div className="account-attention warning-bar">
+          {reconnectNotice?.detail ?? `${name} no longer accepts the stored key.`} Sync is paused and nothing was deleted.
+          Save the current {name} API key again under Connect {name} below, into source <span className="mono">{a.source_id}</span>;
+          sync picks up where it stopped.
+        </div>
+      )}
+      {view.canReconnect && !keyBased && (
         <div className="account-attention warning-bar">
           {grant?.warn ? grant.text : reconnectNotice?.detail ?? "The provider no longer accepts the stored access."} Sync is
           paused and nothing was deleted; reconnecting picks up where it stopped.
@@ -254,7 +270,7 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
       )}
 
       <div className="account-actions">
-        {view.canReconnect && (
+        {view.canReconnect && !keyBased && (
           <button
             className="btn btn-primary btn-sm"
             disabled={busy || !connectorsOn}
@@ -262,6 +278,16 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
             onClick={reconnect}
           >
             Reconnect
+          </button>
+        )}
+        {view.canReconnect && keyBased && (
+          <button
+            className="btn btn-primary btn-sm"
+            disabled={!connectorsOn}
+            aria-label={`Enter the ${name} key again: ${a.account_label}`}
+            onClick={enterKeyAgain}
+          >
+            Enter the {name} key again
           </button>
         )}
         {view.canToggleSync && (

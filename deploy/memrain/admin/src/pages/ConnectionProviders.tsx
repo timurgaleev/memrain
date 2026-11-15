@@ -20,6 +20,11 @@ interface Props {
   onError: (e: unknown) => void;
 }
 
+/** The API-key field of a provider's panel; an account row focuses it to take a replacement key. */
+export function providerKeyFieldId(provider: string): string {
+  return `connect-key-${provider}`;
+}
+
 /** One provider: what to read and where to put it, then connect; plus its own-app settings. */
 export function ProviderPanel({ provider: p, sources, client, connectorsOn, onDone, onError }: Props) {
   const name = providerLabel(p.id);
@@ -35,7 +40,7 @@ export function ProviderPanel({ provider: p, sources, client, connectorsOn, onDo
     setServices((cur) => (on ? p.services.filter((s) => s === svc || cur.includes(s)) : cur.filter((s) => s !== svc)));
 
   const [key, setKey] = useState("");
-  const keyField = useId();
+  const keyField = providerKeyFieldId(p.id);
   const ready = connectorsOn && chosen !== "" && services.length > 0 && (p.auth === "oauth" || key.trim() !== "");
 
   const connect = async () => {

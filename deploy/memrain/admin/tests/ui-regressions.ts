@@ -128,6 +128,23 @@ try {
     await page.waitForURL("https://accounts.example.test/**");
     assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/google/start", body: { source_id: "cal", services: ["calendar"] } }]);
   });
+  await check("An API-key account that needs a reconnect is fixed by entering its key again, not by an OAuth start", "connections", async (page) => {
+    const fireflies = { id: "fireflies", services: ["fireflies"], service_kinds: { fireflies: ["meeting"] }, auth: "api_key", callback_uri: null };
+    const base = scenario();
+    automation.reset(scenario({
+      providers: [...base.connectors.providers, fireflies],
+      sources: [...base.connectors.sources, { id: "meet", kind: "meeting" }],
+      accounts: [account({ provider: "fireflies", services: ["fireflies"], source_id: "meet", status: "needs_reconnect", status_reason: "auth_required",
+        credential: { scopes: [], expires_at: null, granted_at: "2026-11-01T12:00:00.000Z" } })],
+    }));
+    await page.getByText("Needs reconnect", { exact: true }).waitFor();
+    await page.getByText("Save the current Fireflies API key again", { exact: false }).waitFor();
+    assert.equal(await page.getByRole("button", { name: `Reconnect ${OWNER}` }).count(), 0);
+    await page.getByRole("button", { name: `Enter the Fireflies key again: ${OWNER}` }).click();
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLInputElement | null)?.type), "password");
+    assert.equal(await page.getByLabel("Fireflies API key").evaluate((el) => el === document.activeElement), true);
+    assert.deepEqual(automation.posts, []);
+  });
   await check("Disconnect waits for the exact account name, then previews and deletes what it wrote", "connections", async (page) => {
     automation.reset(scenario());
     await page.getByRole("button", { name: `Disconnect ${OWNER}` }).click();
