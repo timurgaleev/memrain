@@ -78,6 +78,7 @@ const SOURCE_TABLES: Record<string, Disposition> = {
   "connector_oauth_states": { kind: "cascade" },
   "write_gate_holds": { kind: "cascade" },
   "notifications": { kind: "cascade" },
+  "group_sources": { kind: "cascade" },
   "page_versions": { kind: "referenced" },
   "oauth_tokens": { kind: "referenced" },
   "oauth_codes": { kind: "referenced" },
