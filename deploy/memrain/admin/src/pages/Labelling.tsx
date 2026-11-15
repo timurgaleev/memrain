@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { api } from "../api.ts";
 import { useAsync } from "../hooks.ts";
 import { Section } from "../components/Tile.tsx";
 import { PageIntro } from "../components/PageIntro.tsx";
 import { fmtAgo } from "../lib/format.ts";
-import { parseTagInput } from "../lib/labels.ts";
+import { latestOnly, parseTagInput } from "../lib/labels.ts";
 import type { EvalCandidate, EvalCandidateList, EvalPreview } from "../admin-types.ts";
 
 type Split = "auto" | "dev" | "sealed";
@@ -19,17 +19,28 @@ export function LabellingPage() {
   const [split, setSplit] = useState<Split>("auto");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // A preview that returns after another query was opened (or the panel was
+  // closed) belongs to that other query; showing it would let its documents be
+  // saved as this query's labels.
+  const previews = useRef(latestOnly());
   const now = Date.now();
+
+  const close = () => {
+    previews.current.start();
+    setOpen(null);
+  };
 
   const review = async (c: EvalCandidate) => {
     setError("");
     setOpen(c);
     setPreview(null);
     setPicked(new Set());
+    const current = previews.current.start();
     try {
-      setPreview(await api.evalPreview({ candidate_id: c.id }));
+      const p = await api.evalPreview({ candidate_id: c.id });
+      if (current()) setPreview(p);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load the preview.");
+      if (current()) setError(e instanceof Error ? e.message : "Could not load the preview.");
     }
   };
 
@@ -55,7 +66,7 @@ export function LabellingPage() {
         lang,
         ...(split === "auto" ? {} : { split }),
       });
-      setOpen(null);
+      close();
       list.reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save the label.");
@@ -68,7 +79,7 @@ export function LabellingPage() {
     setError("");
     try {
       await api.evalDismiss(c.id);
-      if (open?.id === c.id) setOpen(null);
+      if (open?.id === c.id) close();
       list.reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not dismiss.");
@@ -140,7 +151,7 @@ export function LabellingPage() {
                   </select>
                 </label>{" "}
                 <button className="btn btn-sm" disabled={busy} onClick={save}>Save label</button>{" "}
-                <button className="btn btn-secondary btn-sm" onClick={() => setOpen(null)}>Close</button>
+                <button className="btn btn-secondary btn-sm" onClick={close}>Close</button>
               </div>
             )}
             {r.candidates.length === 0 ? (

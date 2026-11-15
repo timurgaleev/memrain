@@ -1,7 +1,7 @@
 /** The labelling page's DOM-free pieces: its route and the tag input. */
 import { describe, expect, it } from "bun:test";
 import { buildHash, parseHash } from "../admin/src/lib/route.ts";
-import { parseTagInput } from "../admin/src/lib/labels.ts";
+import { latestOnly, parseTagInput } from "../admin/src/lib/labels.ts";
 
 describe("labelling route", () => {
   it("round-trips #labelling instead of falling back to the overview", () => {
@@ -19,5 +19,19 @@ describe("parseTagInput", () => {
   it("names a tag the server would refuse", () => {
     expect(parseTagInput("kind:alias a:b:c").error).toContain("a:b:c");
     expect(parseTagInput(Array.from({ length: 17 }, (_, i) => `t${i}`).join(" ")).error).toContain("16");
+  });
+});
+
+describe("latestOnly", () => {
+  it("lets only the newest preview request through, so a slow one cannot land on another query", () => {
+    // Review A, then Review B before A's preview returns: A's results must not
+    // be shown under B, or its documents would be saved as B's labels.
+    const latest = latestOnly();
+    const a = latest.start();
+    const b = latest.start();
+    expect(a()).toBe(false);
+    expect(b()).toBe(true);
+    latest.start(); // Close, save or dismiss: nothing in flight is current any more.
+    expect(b()).toBe(false);
   });
 });

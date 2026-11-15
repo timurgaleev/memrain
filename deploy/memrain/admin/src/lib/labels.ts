@@ -13,3 +13,18 @@ export function parseTagInput(raw: string): { tags: string[]; error: string | nu
   if (tags.length > MAX_TAGS) return { tags, error: `at most ${MAX_TAGS} tags` };
   return { tags, error: null };
 }
+
+/**
+ * Tracks the newest of a series of requests. `start()` begins one and returns
+ * a check that stays true only until the next `start()`, so a slow response can
+ * tell it has been overtaken and must not be shown.
+ */
+export function latestOnly(): { start: () => () => boolean } {
+  let current = 0;
+  return {
+    start: () => {
+      const mine = ++current;
+      return () => mine === current;
+    },
+  };
+}
