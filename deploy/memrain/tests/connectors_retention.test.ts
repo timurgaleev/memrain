@@ -230,6 +230,34 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       .toEqual([{ slug: "atoms/edited" }, { slug: "notes/claims-origin" }]);
   });
 
+  // Only Postgres runs the two transactions side by side.
+  if (name === "Postgres") it("keeps an atom page someone edited while the delete waited for its lock", async () => {
+    const e = db.storage.engine();
+    const page = await ingest(mailPage("t4", "plainwords"));
+    const doc = (await e.query<{ id: string }>(
+      `SELECT id FROM documents WHERE source_id = 'inbox' AND source_path LIKE 'page://%' LIMIT 1`)).rows[0]!.id;
+    await putPage(db.storage, { slug: "atoms/raced", type: "atom", allowAdHocType: true, title: "Atom", markdown_body: "Distilled",
+      source_id: "inbox", written_by: "extract-atoms",
+      compiled_truth: { atom_origin: { source_ref: doc, source_hash: "abcdabcdabcdabcd", source_id: "inbox", atom_key: "d".repeat(64) } } });
+    let settled!: Promise<Awaited<ReturnType<typeof hardDeleteConnectorPage>>>;
+    await e.transaction(async (tx) => {
+      // A writer holds the atom page's lock while its edit commits.
+      await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", ["memrain:page:atoms/raced"]);
+      settled = hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "disconnect" });
+      await Bun.sleep(500);
+      await tx.query(
+        `INSERT INTO page_versions (slug, version_n, hash_prev, hash_new, body_snapshot, compiled_truth_snapshot, written_by, source_id, written_by_principal)
+         SELECT p.slug, (SELECT max(v.version_n) + 1 FROM page_versions v WHERE v.slug = p.slug), p.content_hash, p.content_hash,
+                p.markdown_body, p.compiled_truth, 'mcp', p.source_id, 'member:alice'
+           FROM pages p WHERE p.slug = 'atoms/raced'`);
+    });
+    const r = await settled;
+    expect(r.deleted).toBe(true);
+    expect(r.counts.atom_pages).toBe(0);
+    expect(r.counts.atom_pages_kept).toBe(1);
+    expect((await e.query("SELECT 1 FROM pages WHERE slug = 'atoms/raced'")).rows).toHaveLength(1);
+  });
+
   it("refuses a page that is not this account's connector page", async () => {
     const e = db.storage.engine();
     await putPage(db.storage, { slug: "mail/handwritten", markdown_body: "my own note", source_id: "inbox" });

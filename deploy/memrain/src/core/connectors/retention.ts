@@ -217,18 +217,25 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
 
 /**
  * Pages a synthesis phase wrote and nobody edited: every version by `writer`.
- * Returns the deletable ones with their sources and how many were kept.
+ * Locks every page matching `where` first and only then reads their versions,
+ * so an edit committed while this waited for a lock is seen and keeps its
+ * page. Returns the deletable ones with their sources and how many were kept.
  */
 async function automaticPages(tx: Engine, where: string, params: unknown[], type: string, prefix: string, writer: string): Promise<{ pages: Array<{ slug: string; source_id: string }>; kept: number }> {
   // scope: upstream callers pass the page predicate: the account's source for atom pages, and for
   // concept pages the brain-wide synthesis output narrated over an atom this delete removed
+  const candidates = (await tx.query<{ slug: string }>(`SELECT p.slug FROM pages p WHERE ${where}`, params)).rows.map(r => r.slug);
+  if (candidates.length === 0) return { pages: [], kept: 0 };
+  await lockPageSlugs(tx, ...candidates);
+  const locked = params.length + 1;
+  // scope: upstream the same caller predicate, narrowed to the pages just locked
   const rows = (await tx.query<{ slug: string; source_id: string; automatic: boolean }>(
     `SELECT p.slug, p.source_id,
             (p.type = '${type}' AND p.slug LIKE '${prefix}%'
              AND NOT EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug
                               AND v.written_by IS DISTINCT FROM '${writer}')) AS automatic
-       FROM pages p WHERE ${where} ORDER BY p.slug`,
-    params,
+       FROM pages p WHERE ${where} AND p.slug = ANY($${locked}::text[]) ORDER BY p.slug`,
+    [...params, candidates],
   )).rows;
   const pages = rows.filter(r => r.automatic).map(r => ({ slug: r.slug, source_id: r.source_id }));
   return { pages, kept: rows.length - pages.length };
@@ -301,7 +308,9 @@ async function deleteOwnedPage(
   keepEdited = false,
 ): Promise<DeleteCounts | "changed" | "detached" | null> {
   const partsSql = `SELECT p.slug, p.content_hash FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' = $3 ORDER BY p.slug`;
-  await lockPageSlugs(tx, slug, ...(await tx.query<{ slug: string }>(partsSql, [scope.sourceId, scope.accountRef, slug])).rows.map(r => r.slug));
+  const readParts = async () => (await tx.query<{ slug: string; content_hash: string }>(partsSql, [scope.sourceId, scope.accountRef, slug])).rows;
+  const seen = new Set((await readParts()).map(r => r.slug));
+  await lockPageSlugs(tx, slug, ...seen);
   const page = await tx.query<{ content_hash: string }>(
     `SELECT p.content_hash FROM pages p WHERE p.slug = $3 AND ${ownedPageScope} FOR UPDATE`,
     [scope.sourceId, scope.accountRef, slug],
@@ -309,8 +318,14 @@ async function deleteOwnedPage(
   if (page.rows.length === 0) return null;
   if (expected.contentHash !== undefined && page.rows[0]!.content_hash !== expected.contentHash) return "changed";
   // Read under the locks: these are the parts that go, and each must still
-  // be what the caller saw when it pinned them.
-  const partRows = (await tx.query<{ slug: string; content_hash: string }>(partsSql, [scope.sourceId, scope.accountRef, slug])).rows;
+  // be what the caller saw when it pinned them. A part written while this
+  // waited is locked too before anything reads its versions.
+  let partRows = await readParts();
+  const late = partRows.map(r => r.slug).filter(s => !seen.has(s));
+  if (late.length > 0) {
+    await lockPageSlugs(tx, ...late);
+    partRows = await readParts();
+  }
   if (expected.partHashes !== undefined && (partRows.length !== expected.partHashes.size
     || partRows.some(r => expected.partHashes!.get(r.slug) !== r.content_hash))) return "changed";
   const parts = partRows.map(r => r.slug);
@@ -330,7 +345,6 @@ async function deleteOwnedPage(
       `p.source_id = $1 AND p.compiled_truth->'atom_origin'->>'source_ref' = ANY($2::text[])`,
       [scope.sourceId, docIds], "atom", "atoms/", "extract-atoms");
     counts.atom_pages_kept += atoms.kept;
-    if (atoms.pages.length > 0) await lockPageSlugs(tx, ...atoms.pages.map(p => p.slug));
     for (const atom of atoms.pages) {
       await deletePageDerived(tx, atom.slug, atom.source_id, counts);
       counts.atom_pages++;
@@ -340,7 +354,6 @@ async function deleteOwnedPage(
     const pageSlugs = concepts.map(c => `concepts/${slugifyTitle(c)}`);
     const conceptPages = await automaticPages(tx, `p.slug = ANY($1::text[])`, [pageSlugs], "concept", "concepts/", "synthesize-concepts");
     counts.concept_pages_kept += conceptPages.kept;
-    if (conceptPages.pages.length > 0) await lockPageSlugs(tx, ...conceptPages.pages.map(p => p.slug));
     for (const concept of conceptPages.pages) {
       await deletePageDerived(tx, concept.slug, concept.source_id, counts);
       counts.concept_pages++;
