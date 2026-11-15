@@ -12,7 +12,7 @@ function writes(text: string): Record<string, number> {
 }
 
 const audited = {
-  "core/connectors/retention.ts": { pages: 2, page_versions: 1, entity_facts: 1, reason: "Hard delete of one account's connector page under slug locks, with its facts and a text-free receipt; retention detaches a hand-edited page instead, as a new version under the same locks" },
+  "core/connectors/retention.ts": { pages: 2, page_versions: 1, entity_facts: 2, reason: "Hard delete of one account's connector page under slug locks, with its facts and a text-free receipt; retention detaches a hand-edited page instead, as a new version under the same locks; an upstream deletion soft-deletes through softDeleteLockedPage and drops the page's fence facts, as page_delete does" },
   "core/cycle/consolidate-facts.ts": { entity_facts: 2, reason: "Consolidation state and retirement" },
   "core/cycle/embed-facts.ts": { entity_facts: 1, reason: "Deferred embedding only" },
   "core/cycle/recompute-salience.ts": { pages: 1, reason: "Derived salience only" },
