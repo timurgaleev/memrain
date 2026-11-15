@@ -322,7 +322,16 @@ async function registerClient(name: string, rest: string[]): Promise<void> {
       tenantMode,
       { accessTtlSeconds, refreshTtlSeconds },
     );
-    if (profile) await recordClientProfile(storage, registered.clientId, profile);
+    if (profile) {
+      try {
+        await recordClientProfile(storage, registered.clientId, profile);
+      } catch (err) {
+        // The secret is never shown on this path, so a client left live here
+        // could only be a key nobody holds.
+        await p.revokeClient(registered.clientId, { actor: cliActor(), via: "cli" });
+        throw err;
+      }
+    }
     return registered;
   });
   // The secret is shown ONCE — only its hash is stored.

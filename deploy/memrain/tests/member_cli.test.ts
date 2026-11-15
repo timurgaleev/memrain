@@ -73,3 +73,37 @@ describe("member and group commands", () => {
     expect(cli("member", "frobnicate").code).toBe(1);
   });
 });
+
+describe("auth register-client --profile", () => {
+  it("leaves no live client behind when recording the profile fails", async () => {
+    // A brain whose oauth_clients lost tool_surface makes the profile write
+    // fail after the client row exists; the operator never sees its secret.
+    const own = mkdtempSync(join(tmpdir(), "member-cli-profile-"));
+    const ownConfig = join(own, "config.json");
+    const ownPath = join(own, "brain");
+    try {
+      writeFileSync(ownConfig, JSON.stringify({ embedding: { provider: "bedrock-titan", model: "amazon.titan-embed-text-v2:0", region: "eu-west-1" }, storage: {}, database: { type: "pglite", path: ownPath } }));
+      const s = new Storage({ dbPath: ownPath });
+      await s.init();
+      try {
+        await s.raw().query("ALTER TABLE oauth_clients DROP COLUMN tool_surface");
+      } finally { await s.close(); }
+
+      const child = Bun.spawnSync([process.execPath, "src/cli.ts", "auth", "register-client", "half-made", "--profile", "reader"], {
+        cwd: join(import.meta.dir, ".."),
+        env: { ...process.env, MEMRAIN_CONFIG_PATH: ownConfig, MEMRAIN_REQUIRE_POSTGRES: "0", MEMRAIN_OPERATOR: "ops" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(child.exitCode).toBe(1);
+      expect(new TextDecoder().decode(child.stdout)).not.toContain("client_secret");
+
+      const after = new Storage({ dbPath: ownPath });
+      await after.init();
+      try {
+        const live = await after.raw().query(`SELECT client_id FROM oauth_clients WHERE client_name = 'half-made' AND deleted_at IS NULL`);
+        expect(live.rows).toEqual([]);
+      } finally { await after.close(); }
+    } finally { rmSync(own, { recursive: true, force: true }); }
+  });
+});
