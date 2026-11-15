@@ -3,12 +3,15 @@
  * (`bun run src/cli.ts …`, which is what the container ships), in the order
  * docs/TEAM-SETUP.md walks through.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Storage } from "../src/core/storage.ts";
 import { registerSource } from "../src/core/sources.ts";
+
+// Each step boots the CLI and its brain in a fresh process.
+setDefaultTimeout(60_000);
 
 const dir = mkdtempSync(join(tmpdir(), "member-cli-"));
 const config = join(dir, "config.json");
