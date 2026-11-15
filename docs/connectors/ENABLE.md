@@ -248,7 +248,7 @@ data is a separate, explicit action.
 | `daemons status` shows `connector_sync` but it never runs | `MEMRAIN_DAEMONS` is not `1` in the running process, or no daily budget | Recheck steps 4 and 6; `status` says `MEMRAIN_DAEMONS is not 1` when that is it |
 | The admin Connections page answers `connectors_disabled` | Step 3 not applied, or the key failed to load | `docker exec deploy-memrain-1 bun run src/cli.ts doctor` names the reason |
 | An account shows `needs_reconnect` | The provider refused its token (expired or revoked) | Choose **Reconnect** on its row on the Connections page; the sync resumes from where it stopped. For Google in Testing mode, see [GOOGLE.md](./GOOGLE.md#the-7-day-reconnect) |
-| `connectors status` lists an account as `syncing` with `no run recorded yet` | `connector_sync` has not run for it since this release | Wait for the next 15-minute window; check `daemons status` (step 6) if it stays |
+| `connectors status` lists an account as `sync on` with `no run recorded yet` | `connector_sync` has not run for it since this release, or connectors are off (the first line says `connectors: off (...)`) | Fix the reason on that first line (step 3); otherwise wait for the next 15-minute window and check `daemons status` (step 6) if it stays |
 | `memrain config set MEMRAIN_CONNECTORS_ENABLED 1` prints `WARN — environment ... overrides this stored value` | The variable is also set in the container environment, which wins | Remove it from wherever it is set (a compose override or the `.env`) |
 | The daily budget vanished after a host rebuild | A bootstrap run rewrote `.env` | Add `MEMRAIN_DAILY_BUDGET_USD` again (step 4) |
 

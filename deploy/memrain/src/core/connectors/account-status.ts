@@ -121,7 +121,7 @@ export function grantExpiry(a: GrantExpiryInput, grantedAt: string | null, now: 
   return null;
 }
 
-export type AccountState = "syncing" | "sync off" | "needs a reconnect" | "paused" | "disconnected" | "revoke failed" | "error";
+export type AccountState = "sync on" | "sync off" | "needs a reconnect" | "paused" | "disconnected" | "revoke failed" | "error";
 
 export interface AccountStatus {
   id: string;
@@ -146,7 +146,7 @@ function stateOf(a: ConnectorAccount, needsReconnect: boolean): AccountState {
   if (a.status === "revoked") return "disconnected";
   if (a.status === "error") return a.status_reason === "revoke_failed" ? "revoke failed" : "error";
   if (a.status === "paused") return "paused";
-  return a.enabled ? "syncing" : "sync off";
+  return a.enabled ? "sync on" : "sync off";
 }
 
 /** Every account's status. Operator surfaces only: it covers every source. */

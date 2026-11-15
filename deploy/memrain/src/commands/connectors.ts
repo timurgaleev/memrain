@@ -36,6 +36,7 @@ import {
 import type { ConnectorRunStatus } from "../core/connectors/types.ts";
 import { listConnectorStates } from "../core/connectors/watermark.ts";
 import { grantExpiryText, listAccountStatus, type AccountStatus } from "../core/connectors/account-status.ts";
+import { connectorsStatus } from "../core/connectors/vault.ts";
 import { withStorage } from "./with-storage.ts";
 import { runRotateKek } from "./connectors-vault.ts";
 
@@ -222,14 +223,17 @@ async function runStatus(opts: ConnectorsCmdOptions): Promise<number> {
     states: await listConnectorStates(storage.engine()),
     accounts: await listAccountStatus(storage.engine()),
   }));
+  const gate = connectorsStatus();
   if (opts.json) {
-    console.log(JSON.stringify({ ok: true, connectors: states, accounts }, null, 2));
+    console.log(JSON.stringify({ ok: true, connectors_enabled: gate.enabled, connectors_reason: gate.reason, connectors: states, accounts }, null, 2));
     return 0;
   }
   if (states.length === 0 && accounts.length === 0) {
     console.log("no connector account and no connector has run");
     return 0;
   }
+  // An account's "sync on" is its own switch; this says whether any sync can run in this process at all.
+  console.log(gate.enabled ? "connectors: on" : `connectors: off (${gate.reason ?? "unknown"})`);
   if (accounts.length > 0) console.log("accounts:");
   for (const a of accounts) for (const line of accountStatusLine(a)) console.log(`  ${line}`);
   if (states.length > 0) console.log("recipe connectors:");

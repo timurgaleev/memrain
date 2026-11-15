@@ -203,7 +203,7 @@ revoked, so it counts toward that limit until it expires.
 docker exec deploy-memrain-1 bun run src/cli.ts connectors status
 ```
 
-The Google account is listed under `accounts:` as `syncing` (or `sync off`
+The Google account is listed under `accounts:` as `sync on` (or `sync off`
 until you switch it on) and, after the first run, with a recent clean sync and
 `last run success` or `nothing_new`. Search the brain for the title of a
 meeting from this week.

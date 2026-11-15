@@ -34,6 +34,7 @@ import { openNotice } from "../src/core/connectors/sync-store.ts";
 import { checkConnectorHealth } from "../src/core/connectors/health.ts";
 import { builtinProviders } from "../src/core/connectors/providers.ts";
 import { connectorRuntime } from "../src/core/connectors/runtime.ts";
+import { runConnectorSync } from "../src/core/connectors/sync-engine.ts";
 import type { SyncRunResult } from "../src/core/connectors/sync-engine.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 
@@ -146,7 +147,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
 
       const rows = await listAccountStatus(e);
       expect(rows.map((r) => [r.account_label, r.state, r.enabled, r.needs_reconnect])).toEqual([
-        ["owner@example.test", "syncing", true, false],
+        ["owner@example.test", "sync on", true, false],
         ["other@example.test", "needs a reconnect", true, true],
       ]);
       const [ok, waiting] = rows;
@@ -171,7 +172,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await recordAccountRun(e, a.id, result(), new Date());
       const ok = await checkConnectorHealth(e);
       expect(ok.status).toBe("ok");
-      expect(ok.detail).toContain(`google/${a.id.slice(0, 8)} into cal: syncing`);
+      expect(ok.detail).toContain(`google/${a.id.slice(0, 8)} into cal: sync on`);
       expect(ok.detail).toContain("last run success");
       // Doctor output can reach an MCP client: no mailbox address in it.
       expect(ok.detail).not.toContain("owner@example.test");
@@ -183,6 +184,24 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(warn.detail).toContain(`google/${a.id.slice(0, 8)} into cal: needs a reconnect`);
       // One line for the account, not one more for its notice.
       expect(warn.detail.match(/needs a reconnect/g)).toHaveLength(1);
+    } finally { await db.close(); }
+  });
+
+  it("doctor still names the healthy accounts while another one warns", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const ok = await seedAccount(e, "owner@example.test");
+      const parked = await seedAccount(e, "other@example.test");
+      await setAccountEnabled(e, ok.id, true);
+      await markAccountSynced(e, ok.id);
+      await markNeedsReconnect(e, parked.id, "invalid_grant");
+      const r = await checkConnectorHealth(e);
+      expect(r.status).toBe("warn");
+      expect(r.detail).toContain(`google/${parked.id.slice(0, 8)} into cal: needs a reconnect`);
+      expect(r.detail).toContain(`google/${ok.id.slice(0, 8)} into cal: sync on`);
+      // The problem comes first.
+      expect(r.detail.indexOf(parked.id.slice(0, 8))).toBeLessThan(r.detail.indexOf(ok.id.slice(0, 8)));
     } finally { await db.close(); }
   });
 
@@ -204,6 +223,22 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const lapsed = await checkConnectorHealth(e);
       expect(lapsed.detail).toContain("needs a reconnect");
       expect(lapsed.detail).toContain("likely the 7-day Testing-mode limit");
+    } finally { await db.close(); }
+  });
+
+  it("records a run stopped by the account's cap, so status does not keep showing the last good run", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const a = await seedAccount(e);
+      await setAccountEnabled(e, a.id, true);
+      await recordAccountRun(e, a.id, result(), new Date(G));
+      await e.query(`UPDATE connector_accounts SET spend_cap_usd_daily = 0 WHERE id = $1`, [a.id]);
+      const rt = connectorRuntime(db.storage, { kek, providers: builtinProviders(), env: { MEMRAIN_CONNECTORS_ENABLED: "1" } });
+      const account = (await rt.loadAccount(a.id))!;
+      const r = await runConnectorSync(db.storage, account, rt.depsFor(account));
+      expect(r).toMatchObject({ status: "partial", stop_reason: "cap_reached" });
+      expect(await readAccountRun(e, a.id)).toMatchObject({ status: "partial", stop_reason: "cap_reached" });
     } finally { await db.close(); }
   });
 
@@ -261,11 +296,13 @@ describe("memrain connectors status", () => {
     expect(await runConnectors({ sub: "status", configPath: cfgPath })).toBe(0);
     const out = printed();
     expect(out).not.toContain("no connector has run");
-    expect(out).toContain(`google owner@example.test (${accountId.slice(0, 8)}) into timur-calendar: syncing`);
+    expect(out).toContain(`google owner@example.test (${accountId.slice(0, 8)}) into timur-calendar: sync on`);
     expect(out).toContain("last run success");
     expect(out).toContain("49 items, 49 written");
     expect(out).toContain("Testing");
     expect(out).not.toContain("rt-cli");
+    // "sync on" is the account's switch; the first line says whether anything can run at all.
+    expect(out.split("\n")[0]).toMatch(/^connectors: (on|off \(.+\))$/);
   });
 
   it("puts the accounts in the JSON next to the recipe connectors", async () => {
@@ -275,7 +312,7 @@ describe("memrain connectors status", () => {
     expect(body.connectors).toEqual([]);
     expect(body.accounts).toHaveLength(1);
     expect(body.accounts[0]).toMatchObject({
-      id: accountId, provider: "google", source_id: "timur-calendar", state: "syncing", enabled: true, needs_reconnect: false,
+      id: accountId, provider: "google", source_id: "timur-calendar", state: "sync on", enabled: true, needs_reconnect: false,
       last_run: { status: "success", items: 49 }, grant_expiry: { state: "upcoming", days: 7 },
     });
     expect(body.accounts[0]!.last_success_at).not.toBeNull();

@@ -115,5 +115,7 @@ export async function checkConnectorHealth(engine: Engine, now: number = Date.no
     ];
     return { ok: true, status: "ok", detail: parts.join("; ") };
   }
-  return { ok: true, status: "warn", detail: problems.join("; ") };
+  // Problems first, then the accounts that are fine, so an incident still shows every account.
+  const healthy = lines.filter((l) => !l.problem).map((l) => l.text);
+  return { ok: true, status: "warn", detail: [...problems, ...healthy].join("; ") };
 }
