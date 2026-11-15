@@ -28,7 +28,7 @@ import { limiterFor } from "./limiter.ts";
 import { accountRef, type ConnectorDataKind } from "./model.ts";
 import { resolveClient } from "./oauth-connect.ts";
 import { builtinProviders, type ProviderRegistry } from "./providers.ts";
-import { hardDeleteConnectorPage, sweepRetention } from "./retention.ts";
+import { softDeleteUpstreamPage, sweepRetention } from "./retention.ts";
 import type { SyncAccount, SyncDeps } from "./sync-engine.ts";
 import { registerConnectorSync, type ConnectorSyncRuntime } from "./sync-job.ts";
 import { createTokenProvider, tokenEndpointRefresh, type CredentialStore } from "./token-provider.ts";
@@ -180,7 +180,7 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
         onUpstreamDelete: async (st, item) => {
           if (item.pageSlug === null) return;
           // A page that is already gone, or was never this account's, is left alone: nothing to delete.
-          await hardDeleteConnectorPage(st, scope, { slug: item.pageSlug, reason: "provider_deleted", externalId: item.externalId });
+          await softDeleteUpstreamPage(st, scope, { slug: item.pageSlug, externalId: item.externalId });
         },
         sweepRetention: async (st) =>
           (await sweepRetention(st, scope, { accountId: account.id, kinds: RETENTION_KINDS, env, ...(opts.now ? { now: opts.now } : {}) })).deleted.length,

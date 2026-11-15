@@ -1,13 +1,15 @@
 /**
  * Connector deletion, retention and disconnect. An item deleted at the
- * provider leaves no text, vector or fact behind; a run that wants to delete
+ * provider is soft-deleted, restorable until the purge; a page the owner
+ * deletes leaves no text, vector or fact behind; a run that wants to delete
  * too much is held; retention windows age pages out; disconnect previews and
  * then deletes exactly what it previewed. Nothing outside the account's own
  * connector pages is ever touched.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
-import { putPage } from "../src/core/pages.ts";
+import { putPage, restorePage } from "../src/core/pages.ts";
+import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { mirrorPage } from "../src/core/page-index.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { addFact } from "../src/core/facts.ts";
@@ -19,10 +21,12 @@ import { enrichConnectorPage } from "../src/core/connectors/enrich-deterministic
 import {
   applyProviderDeletions,
   deleteAllConnectorData,
+  deleteStaleParts,
   hardDeleteConnectorPage,
   massDeleteVerdict,
   previewConnectorData,
   retentionDays,
+  softDeleteUpstreamPage,
   sweepRetention,
 } from "../src/core/connectors/retention.ts";
 import { createAccount } from "../src/core/connectors/accounts.ts";
@@ -79,7 +83,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
   const mailPage = (id: string, canary: string, label = OWNER, date?: string) =>
     renderMailThread({ service: "gmail", accountLabel: label }, thread(id, canary, date));
 
-  it("leaves no text, vector, fact, event or link behind when the provider deletes an item", async () => {
+  it("leaves no text, vector, fact, event or link behind when the owner deletes a connector page", async () => {
     const e = db.storage.engine();
     const canary = "zebracanary4471";
     const page = await ingest(mailPage("t1", canary));
@@ -94,7 +98,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const vectorsBefore = (await e.query<{ n: number }>(`SELECT count(*)::int AS n FROM embeddings`)).rows[0]!.n;
     expect(vectorsBefore).toBeGreaterThan(0);
 
-    const result = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "provider_deleted", externalId: "t1" });
+    const result = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "disconnect", externalId: "t1" });
     expect(result.deleted).toBe(true);
     expect(result.counts.facts).toBe(2);
 
@@ -111,7 +115,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const receipts = (await e.query<{ source_ref: string; summary: string; pages_updated: unknown }>(
       "SELECT source_ref, summary, pages_updated FROM ingest_log WHERE source_type = 'connector-delete'")).rows;
     expect(receipts).toHaveLength(1);
-    expect(receipts[0]!.source_ref).toContain("provider_deleted");
+    expect(receipts[0]!.source_ref).toContain("disconnect");
     const receiptText = JSON.stringify(receipts[0]);
     expect(receiptText).not.toContain(canary);
     expect(receiptText).not.toContain(OWNER);
@@ -198,7 +202,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       [JSON.stringify({ rationale: `about ${canary}` })]);
     expect((await rowsContaining(e, canary)).length).toBeGreaterThan(0);
 
-    const result = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "provider_deleted" });
+    const result = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "disconnect" });
     expect(result.counts.atoms).toBe(1);
     expect(result.counts.atom_pages).toBe(1);
     expect(result.counts.takes).toBe(1);
@@ -223,7 +227,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       source_id: "inbox", written_by: "mcp", compiled_truth: origin });
     await putPage(db.storage, { slug: "notes/claims-origin", markdown_body: "mine", source_id: "inbox", compiled_truth: origin });
 
-    const result = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "provider_deleted" });
+    const result = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "disconnect" });
     expect(result.counts.atom_pages).toBe(0);
     expect(result.counts.atom_pages_kept).toBe(2);
     expect((await e.query("SELECT slug FROM pages WHERE slug IN ('atoms/edited', 'notes/claims-origin') ORDER BY slug")).rows)
@@ -263,10 +267,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     await putPage(db.storage, { slug: "mail/handwritten", markdown_body: "my own note", source_id: "inbox" });
     const other = await ingest(mailPage("t9", "othercanary", OTHER));
     for (const slug of ["mail/handwritten", other.slug, "people/bob-stone"]) {
-      const r = await hardDeleteConnectorPage(db.storage, scope, { slug, reason: "provider_deleted" });
+      const r = await hardDeleteConnectorPage(db.storage, scope, { slug, reason: "disconnect" });
       expect(r.deleted).toBe(false);
+      expect(await softDeleteUpstreamPage(db.storage, scope, { slug })).toEqual({ deleted: false, refused: "not_connector_page", pages: 0 });
     }
-    expect((await e.query("SELECT slug FROM pages WHERE slug IN ('mail/handwritten', $1, 'people/bob-stone')", [other.slug])).rows).toHaveLength(3);
+    expect((await e.query("SELECT slug FROM pages WHERE slug IN ('mail/handwritten', $1, 'people/bob-stone') AND deleted_at IS NULL", [other.slug])).rows).toHaveLength(3);
     expect((await e.query("SELECT 1 FROM ingest_log WHERE source_type = 'connector-delete'")).rows).toHaveLength(0);
   });
 
@@ -278,7 +283,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
   });
 
   it("refuses a source that is not a connector source", async () => {
-    await expect(hardDeleteConnectorPage(db.storage, { sourceId: "notes", accountRef: scope.accountRef }, { slug: "people/bob-stone", reason: "provider_deleted" }))
+    await expect(hardDeleteConnectorPage(db.storage, { sourceId: "notes", accountRef: scope.accountRef }, { slug: "people/bob-stone", reason: "disconnect" }))
+      .rejects.toThrow("connector");
+    await expect(softDeleteUpstreamPage(db.storage, { sourceId: "notes", accountRef: scope.accountRef }, { slug: "people/bob-stone" }))
       .rejects.toThrow("connector");
   });
 
@@ -299,7 +306,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const done = await applyProviderDeletions(db.storage, scope, pages.slice(0, 4).map(p => p.slug), { env, confirmed: true });
     expect(done.held).toBe(false);
     expect(done.deleted).toHaveLength(4);
-    expect((await db.storage.engine().query<{ n: number }>("SELECT count(*)::int AS n FROM pages WHERE source_id = 'inbox'")).rows[0]!.n).toBe(8);
+    expect((await db.storage.engine().query<{ n: number }>("SELECT count(*)::int AS n FROM pages WHERE source_id = 'inbox' AND deleted_at IS NULL")).rows[0]!.n).toBe(8);
   });
 
   it("ages pages out of the retention window and keeps the rest", async () => {
@@ -467,7 +474,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(kept?.compiled_truth.last_activity_at).toBeUndefined();
     expect(kept?.compiled_truth.trust).toBe("untrusted");
     expect((await sweep()).detached).toEqual([]);
-    expect((await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "provider_deleted" })).refused).toBe("not_connector_page");
+    expect((await softDeleteUpstreamPage(db.storage, scope, { slug: page.slug })).refused).toBe("not_connector_page");
     expect(await truthOf(page.slug)).toBeDefined();
     expect((await e.query("SELECT 1 FROM ingest_log WHERE source_type = 'connector-delete'")).rows).toHaveLength(0);
     // The detach is on record without text, and in the page's history.
@@ -477,6 +484,74 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(receipt[0]!.summary).not.toContain("handcanary");
     const versions = (await e.query<{ written_by: string | null }>("SELECT written_by FROM page_versions WHERE slug = $1 ORDER BY version_n", [page.slug])).rows;
     expect(versions.map(v => v.written_by)).toEqual(["connector-gmail", "mcp", "retention-detach"]);
+  });
+
+  const live = async (slugs: readonly string[]) => (await db.storage.engine().query<{ slug: string; deleted: boolean }>(
+    "SELECT slug, deleted_at IS NOT NULL AS deleted FROM pages WHERE slug = ANY($1::text[]) ORDER BY slug", [[...slugs]])).rows;
+
+  it("soft-deletes an item deleted at the provider with its parts, whatever a person wrote on it, until the purge", async () => {
+    const e = db.storage.engine();
+    const canary = "softcanary6612";
+    const page = await ingest(mailPage("s1", canary));
+    const part = await ingest({ ...page, slug: `${page.slug}/part-001`, body: `Tail ${canary}.\n`, truth: { ...page.truth, part_of: page.slug, part: 1 } });
+    await editByHand(page, "My own note.", { written_by: "mcp", written_by_principal: "member:alice" });
+    const fenced = await addFact(db.storage, { entity_slug: "people/bob-stone", fact: `Fenced ${canary}`, source_slug: page.slug, source_id: "inbox" });
+    await e.query("UPDATE entity_facts SET source_markdown_slug = $1 WHERE id = $2", [page.slug, fenced.id]);
+    const named = await addFact(db.storage, { entity_slug: "people/bob-stone", fact: `Named ${canary}`, source_slug: page.slug, source_id: "inbox" });
+    const versions = async (slug: string) => (await e.query<{ written_by: string | null; deleted: boolean }>(
+      "SELECT written_by, compiled_truth_snapshot ? 'deleted_at' AS deleted FROM page_versions WHERE slug = $1 ORDER BY version_n", [slug])).rows;
+    const before = await versions(page.slug);
+
+    const r = await softDeleteUpstreamPage(db.storage, scope, { slug: page.slug, externalId: "s1" });
+    expect(r).toEqual({ deleted: true, pages: 2 });
+    // The rows and their history stay, each with a tombstone version.
+    expect(await live([page.slug, part.slug])).toEqual([{ slug: page.slug, deleted: true }, { slug: part.slug, deleted: true }]);
+    expect(await versions(page.slug)).toEqual([...before, { written_by: "connector-delete", deleted: true }]);
+    expect((await versions(part.slug)).at(-1)).toEqual({ written_by: "connector-delete", deleted: true });
+    // Hidden while deleted, as page_delete leaves a page: out of search, its fence facts gone.
+    expect((await e.query("SELECT 1 FROM documents WHERE source_id = 'inbox'")).rows).toHaveLength(0);
+    expect((await e.query("SELECT 1 FROM entity_facts WHERE id = $1", [fenced.id])).rows).toHaveLength(0);
+    const receipts = (await e.query<{ source_ref: string; summary: string }>(
+      "SELECT source_ref, summary FROM ingest_log WHERE source_type = 'connector-delete'")).rows;
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.source_ref).toContain("provider_deleted");
+    for (const needle of [canary, OWNER, page.slug, "s1\""]) expect(JSON.stringify(receipts[0])).not.toContain(needle);
+    // A second report of the same deletion changes nothing.
+    expect(await softDeleteUpstreamPage(db.storage, scope, { slug: page.slug })).toEqual({ deleted: true, pages: 0 });
+
+    // Recoverable until the purge.
+    expect((await restorePage(db.storage, page.slug)).restored).toBe(true);
+    expect(await live([page.slug])).toEqual([{ slug: page.slug, deleted: false }]);
+    await softDeleteUpstreamPage(db.storage, scope, { slug: page.slug });
+    const purged = await purgeDeletedPages(e, 0);
+    expect(purged.slugs.sort()).toEqual([page.slug, part.slug].sort());
+    expect(await live([page.slug, part.slug])).toEqual([]);
+    expect((await e.query<{ retired: boolean }>("SELECT forgotten_at IS NOT NULL AS retired FROM entity_facts WHERE id = $1", [named.id])).rows)
+      .toEqual([{ retired: true }]);
+  });
+
+  it("leaves a page soft-deleted upstream to the purge: retention does not take it", async () => {
+    const page = await ingest(mailPage("s2", "waitcanary", OWNER, "2025-01-01T08:00:00.000Z"));
+    await softDeleteUpstreamPage(db.storage, scope, { slug: page.slug });
+    const r = await sweepRetention(db.storage, scope, { accountId: NO_ACCOUNT, kinds: ["mail"], env: {}, now: NOW });
+    expect(r.deleted).toEqual([]);
+    expect(await live([page.slug])).toEqual([{ slug: page.slug, deleted: true }]);
+  });
+
+  it("soft-deletes the parts a shrunk item no longer has, whatever a person wrote on them", async () => {
+    const e = db.storage.engine();
+    const page = await ingest(mailPage("s3", "shrinkcanary"));
+    const parts = [];
+    for (const n of [1, 2]) {
+      parts.push(await ingest({ ...page, slug: `${page.slug}/part-00${n}`, body: `Part ${n}.\n`, truth: { ...page.truth, part_of: page.slug, part: n } }));
+    }
+    await editByHand(parts[1]!, "Annotated.", { written_by: "mcp", written_by_principal: "member:alice" });
+    const r = await deleteStaleParts(db.storage, scope, page.slug, [parts[0]!.slug]);
+    expect(r.parts).toBe(1);
+    expect(await live(parts.map(p => p.slug))).toEqual([{ slug: parts[0]!.slug, deleted: false }, { slug: parts[1]!.slug, deleted: true }]);
+    // Already gone: a later write of the item finds nothing stale.
+    expect((await deleteStaleParts(db.storage, scope, page.slug, [parts[0]!.slug])).parts).toBe(0);
+    expect((await e.query("SELECT 1 FROM ingest_log WHERE source_type = 'connector-delete'")).rows).toHaveLength(1);
   });
 
   it("ages out a page only the brain's own writers touched since the connector", async () => {

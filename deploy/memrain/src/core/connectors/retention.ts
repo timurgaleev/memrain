@@ -1,18 +1,26 @@
 /**
  * Deletion, retention and disconnect for connector pages.
  *
- * A connector copy is the provider's data, so its deletions are hard: when an
- * item is deleted at the provider, ages out of its retention window, or the
- * owner deletes everything a connector brought in, the page goes with
- * everything derived from it — page history, search documents, chunks and
- * their embeddings, facts written from the page or its chunks, chronicle
- * events drawn from its chunks, links it is the provenance of, the
- * slug-keyed leftovers a purge also clears, and what synthesis distilled from
- * it: atoms, the atom pages the atoms phase published, takes, concepts
- * narrated over a deleted atom and their pages, and the contradiction rows
- * that snapshot a deleted claim. A synthesized page someone edited is kept
- * and counted in the receipt, so human-written text is never destroyed. Facts are deleted, not retired:
- * a retired fact still holds the text.
+ * An item deleted at the provider (a deletion it reports, a full relisting or
+ * a 410 resync that no longer has it, a probe that answers "not found") takes
+ * its page with it whatever anyone wrote on it, but recoverably: the page and
+ * its parts are soft-deleted the way page_delete leaves a page — a tombstone
+ * version, `deleted_at` set, history kept, out of search, its fence facts gone
+ * — and page_restore brings a page back until the purge hard-deletes it once
+ * it has been deleted longer than PAGE_SOFT_DELETE_TTL_HOURS, retiring the
+ * facts written on it then (softDeleteUpstreamPage). The parts a shrunk item
+ * no longer has go the same way (deleteStaleParts).
+ *
+ * Retention and the owner's own "delete everything" are hard: the page goes
+ * with everything derived from it — page history, search documents, chunks
+ * and their embeddings, facts written from the page or its chunks, chronicle
+ * events drawn from its chunks, links it is the provenance of, the slug-keyed
+ * leftovers a purge also clears, and what synthesis distilled from it: atoms,
+ * the atom pages the atoms phase published, takes, concepts narrated over a
+ * deleted atom and their pages, and the contradiction rows that snapshot a
+ * deleted claim. A synthesized page someone edited is kept and counted in the
+ * receipt, so human-written text is never destroyed. Facts are deleted, not
+ * retired: a retired fact still holds the text.
  *
  * Retention never deletes what a person wrote: a page whose latest connector
  * write was followed by a version an authenticated caller wrote (not one of
@@ -24,11 +32,10 @@
  * a text-free `connector-detach` receipt.
  *
  * A page split into parts (`compiled_truth.part_of` names it) goes together
- * with its parts. When a long item shrinks, the parts its new split no longer
- * has go the same way, all in one transaction (deleteStaleParts). Each page goes in its own transaction, which also writes a receipt to the
- * ingest log (`connector-delete`) that holds counts and hashes only — no
- * slug, title, address or text — so the deletion is provable without keeping
- * what was deleted.
+ * with its parts. Each item goes in its own transaction, which also writes a
+ * receipt to the ingest log (`connector-delete`) that holds counts and hashes
+ * only — no slug, title, address or text — so the deletion is provable
+ * without keeping what was deleted.
  *
  * Every delete is fenced to one account: the source must be a connector
  * source, and the page must be that source's page with compiled truth
@@ -37,13 +44,13 @@
  *
  * A sync run that wants to delete more than the guard allows (default 200
  * items, or 5% of the account's pages once a run deletes at least 10) is held
- * until the owner confirms; the guard beats the hard delete. That holds for
+ * until the owner confirms; the guard beats the delete. That holds for
  * upstream deletions and for pages aging out of their retention window alike.
  */
 import { createHash } from "node:crypto";
 import type { Storage } from "../storage.ts";
 import type { Engine } from "../engine/interface.ts";
-import { lockPageSlugs } from "../pages.ts";
+import { lockPageSlugs, softDeleteLockedPage } from "../pages.ts";
 import { leftovers } from "../pages-purge.ts";
 import { pageSourcePath, pageTruthSourcePath } from "../page-index.ts";
 import { bumpClock, bumpDocumentClock, bumpPageGeneration } from "../generation.ts";
@@ -71,8 +78,6 @@ export const CONNECTOR_DETACH_SOURCE_TYPE = "connector-detach";
 /** compiled_truth.origin of a connector page a person edited and retention handed over to the brain. */
 export const DETACHED_ORIGIN = "connector_detached";
 const DETACH_WRITER = "retention-detach";
-
-export type DeleteReason = "provider_deleted" | "retention" | "disconnect" | "part_superseded";
 
 export interface ConnectorScope {
   sourceId: string;
@@ -297,6 +302,35 @@ async function detachPages(tx: Engine, slugs: readonly string[]): Promise<void> 
 }
 
 /**
+ * Lock this account's connector page `slug` and its parts inside `tx`, and
+ * read them under the locks: null when the page is not this account's. A part
+ * written while this waited for the locks is locked too before it is read, so
+ * nothing later reads a version an unlocked writer could still change.
+ */
+async function lockOwnedItem(
+  tx: Engine,
+  scope: ConnectorScope,
+  slug: string,
+): Promise<{ contentHash: string; parts: Array<{ slug: string; content_hash: string }> } | null> {
+  const partsSql = `SELECT p.slug, p.content_hash FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' = $3 ORDER BY p.slug`;
+  const readParts = async () => (await tx.query<{ slug: string; content_hash: string }>(partsSql, [scope.sourceId, scope.accountRef, slug])).rows;
+  const seen = new Set((await readParts()).map(r => r.slug));
+  await lockPageSlugs(tx, slug, ...seen);
+  const page = (await tx.query<{ content_hash: string }>(
+    `SELECT p.content_hash FROM pages p WHERE p.slug = $3 AND ${ownedPageScope} FOR UPDATE`,
+    [scope.sourceId, scope.accountRef, slug],
+  )).rows[0];
+  if (page === undefined) return null;
+  let parts = await readParts();
+  const late = parts.map(r => r.slug).filter(s => !seen.has(s));
+  if (late.length > 0) {
+    await lockPageSlugs(tx, ...late);
+    parts = await readParts();
+  }
+  return { contentHash: page.content_hash, parts };
+}
+
+/**
  * Delete one owned connector page and the atom pages the atoms phase
  * published from its documents, inside `tx`. Only an atom page every version
  * of which the atoms phase wrote goes; one someone edited, or any other page
@@ -309,25 +343,11 @@ async function deleteOwnedPage(
   expected: { contentHash?: string; partHashes?: ReadonlyMap<string, string> } = {},
   keepEdited = false,
 ): Promise<DeleteCounts | "changed" | "detached" | null> {
-  const partsSql = `SELECT p.slug, p.content_hash FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' = $3 ORDER BY p.slug`;
-  const readParts = async () => (await tx.query<{ slug: string; content_hash: string }>(partsSql, [scope.sourceId, scope.accountRef, slug])).rows;
-  const seen = new Set((await readParts()).map(r => r.slug));
-  await lockPageSlugs(tx, slug, ...seen);
-  const page = await tx.query<{ content_hash: string }>(
-    `SELECT p.content_hash FROM pages p WHERE p.slug = $3 AND ${ownedPageScope} FOR UPDATE`,
-    [scope.sourceId, scope.accountRef, slug],
-  );
-  if (page.rows.length === 0) return null;
-  if (expected.contentHash !== undefined && page.rows[0]!.content_hash !== expected.contentHash) return "changed";
-  // Read under the locks: these are the parts that go, and each must still
-  // be what the caller saw when it pinned them. A part written while this
-  // waited is locked too before anything reads its versions.
-  let partRows = await readParts();
-  const late = partRows.map(r => r.slug).filter(s => !seen.has(s));
-  if (late.length > 0) {
-    await lockPageSlugs(tx, ...late);
-    partRows = await readParts();
-  }
+  const item = await lockOwnedItem(tx, scope, slug);
+  if (item === null) return null;
+  if (expected.contentHash !== undefined && item.contentHash !== expected.contentHash) return "changed";
+  // Each part must still be what the caller saw when it pinned them.
+  const partRows = item.parts;
   if (expected.partHashes !== undefined && (partRows.length !== expected.partHashes.size
     || partRows.some(r => expected.partHashes!.get(r.slug) !== r.content_hash))) return "changed";
   const parts = partRows.map(r => r.slug);
@@ -376,7 +396,8 @@ export async function hardDeleteConnectorPage(
   scope: ConnectorScope,
   item: {
     slug: string;
-    reason: DeleteReason;
+    /** An item deleted at the provider is soft-deleted instead (softDeleteUpstreamPage). */
+    reason: "retention" | "disconnect";
     externalId?: string;
     expectedContentHash?: string;
     /** The page's parts by slug, as the caller saw them; any difference refuses the delete. */
@@ -420,35 +441,40 @@ export async function hardDeleteConnectorPage(
 }
 
 /**
- * Delete the parts of `parentSlug` that its latest split no longer has, with
- * everything derived from them, in one transaction and with one text-free
- * receipt. Called after the item's new parts and contents page are written,
- * so nothing still links to what goes. Fenced like every connector delete:
- * only this account's connector pages in a connector source; on any other
- * source it does nothing.
+ * Soft-delete the parts of `parentSlug` that its latest split no longer has,
+ * as an upstream deletion does (softDeleteUpstreamPage), in one transaction and
+ * with one text-free receipt. Called after the item's new parts and contents
+ * page are written, so nothing still links to what goes; a later write that
+ * needs a part again revives it. Fenced like every connector delete: only this
+ * account's connector pages in a connector source; on any other source it does
+ * nothing.
  */
 export async function deleteStaleParts(
   storage: Storage,
   scope: ConnectorScope,
   parentSlug: string,
   keep: readonly string[],
-): Promise<{ parts: number; counts: DeleteCounts }> {
+): Promise<{ parts: number }> {
   const engine = storage.engine();
-  const none = { parts: 0, counts: { ...EMPTY_COUNTS } };
+  const none = { parts: 0 };
   const kind = (await engine.query<{ kind: string }>(`SELECT kind FROM sources WHERE id = $1`, [scope.sourceId])).rows[0]?.kind;
   if (kind === undefined || !CONNECTOR_SOURCE_KINDS.has(kind)) return none;
   const staleSql = `SELECT p.slug FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' = $3
-                     AND NOT (p.slug = ANY($4::text[])) ORDER BY p.slug`;
+                     AND p.deleted_at IS NULL AND NOT (p.slug = ANY($4::text[])) ORDER BY p.slug`;
   const params = [scope.sourceId, scope.accountRef, parentSlug, [...keep]];
   // Most writes have nothing stale: check before opening a transaction.
   if ((await engine.query(staleSql, params)).rows.length === 0) return none;
   return deadlockSafeTransaction(engine, async (tx) => {
-    const counts: DeleteCounts = { ...EMPTY_COUNTS };
+    const counts = { pages: 0, documents: 0, facts: 0 };
     let parts = 0;
     for (const { slug } of (await tx.query<{ slug: string }>(staleSql, params)).rows) {
-      const deleted = await deleteOwnedPage(tx, scope, slug);
-      if (deleted === null || deleted === "changed" || deleted === "detached") continue;
-      for (const k of Object.keys(counts) as Array<keyof DeleteCounts>) counts[k] += deleted[k];
+      const owned = await lockOwnedItem(tx, scope, slug);
+      if (owned === null) continue;
+      const done = await softDeletePages(tx, [slug, ...owned.parts.map(p => p.slug)], scope.sourceId);
+      if (done.pages === 0) continue;
+      counts.pages += done.pages;
+      counts.documents += done.documents;
+      counts.facts += done.facts;
       parts++;
     }
     if (parts === 0) return none;
@@ -457,9 +483,9 @@ export async function deleteStaleParts(
       source_id: scope.sourceId,
       source_ref: `part_superseded:${scope.accountRef}:${hash(`slug:${parentSlug}`)}`,
       pages_updated: [],
-      summary: JSON.stringify({ reason: "part_superseded", account: scope.accountRef, page: hash(`slug:${parentSlug}`), parts, counts }),
+      summary: JSON.stringify({ reason: "part_superseded", account: scope.accountRef, page: hash(`slug:${parentSlug}`), parts, soft_deleted: counts }),
     });
-    return { parts, counts };
+    return { parts };
   });
 }
 
@@ -502,7 +528,7 @@ export function massDeleteVerdict(requested: number, total: number, env: NodeJS.
 }
 
 async function accountPageCount(engine: Engine, scope: ConnectorScope): Promise<number> {
-  return count(engine, `SELECT count(*)::int AS n FROM pages p WHERE ${ownedPageScope}`, [scope.sourceId, scope.accountRef]);
+  return count(engine, `SELECT count(*)::int AS n FROM pages p WHERE ${ownedPageScope} AND p.deleted_at IS NULL`, [scope.sourceId, scope.accountRef]);
 }
 
 export interface ProviderDeletionResult {
@@ -510,6 +536,78 @@ export interface ProviderDeletionResult {
   reason: string | null;
   deleted: string[];
   refused: string[];
+}
+
+export interface UpstreamDeleteResult {
+  deleted: boolean;
+  refused?: "not_connector_page";
+  /** Pages this call soft-deleted: the item's page and its parts. */
+  pages: number;
+}
+
+const UPSTREAM_DELETE_WRITER = "connector-delete";
+const UPSTREAM_DELETE_REASON = "the item was deleted at the provider";
+
+/**
+ * Soft-delete `slugs` inside `tx` (the caller locked them), as page_delete
+ * leaves a page: `deleted_at` set and a tombstone version, history kept, out of
+ * search, its fence facts gone. Returns how many were live.
+ */
+async function softDeletePages(tx: Engine, slugs: readonly string[], sourceId: string): Promise<{ pages: number; documents: number; facts: number }> {
+  const out = { pages: 0, documents: 0, facts: 0 };
+  for (const slug of slugs) {
+    const page = (await tx.query<{ content_hash: string; source_id: string }>(
+      // scope: upstream the slug is an owned page or part the caller locked
+      `SELECT content_hash, source_id FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [slug],
+    )).rows[0];
+    if (page === undefined) continue;
+    await softDeleteLockedPage(tx, { slug, ...page }, { writtenBy: UPSTREAM_DELETE_WRITER, writtenByPrincipal: null, changeReason: UPSTREAM_DELETE_REASON });
+    out.pages++;
+    out.documents += await count(tx,
+      `WITH d AS (DELETE FROM documents WHERE source_path = ANY($1::text[]) AND COALESCE(source_id, 'default') = $2 RETURNING 1)
+       SELECT count(*)::int AS n FROM d`,
+      [[pageSourcePath(slug, sourceId), pageTruthSourcePath(slug, sourceId)], sourceId]);
+    out.facts += await count(tx,
+      // scope: upstream fence facts name the page by its slug, the primary key of pages
+      `WITH d AS (DELETE FROM entity_facts WHERE source_markdown_slug = $1 RETURNING 1) SELECT count(*)::int AS n FROM d`,
+      [slug]);
+  }
+  if (out.documents > 0) await bumpDocumentClock(tx);
+  return out;
+}
+
+/**
+ * An item deleted at the provider: soft-delete this account's page for it and
+ * its parts, whatever anyone wrote on them, in one transaction with a
+ * text-free receipt. The page stays restorable with page_restore until the
+ * purge hard-deletes it once it has been deleted longer than
+ * PAGE_SOFT_DELETE_TTL_HOURS, retiring the facts written on it then. A page
+ * that is not this account's connector page is refused untouched.
+ */
+export async function softDeleteUpstreamPage(storage: Storage, scope: ConnectorScope, item: { slug: string; externalId?: string }): Promise<UpstreamDeleteResult> {
+  const engine = storage.engine();
+  await assertConnectorSource(engine, scope.sourceId);
+  return deadlockSafeTransaction(engine, async (tx) => {
+    const owned = await lockOwnedItem(tx, scope, item.slug);
+    if (owned === null) return { deleted: false, refused: "not_connector_page", pages: 0 };
+    const counts = await softDeletePages(tx, [item.slug, ...owned.parts.map(p => p.slug)], scope.sourceId);
+    if (counts.pages > 0) {
+      await logIngest(tx, {
+        source_type: CONNECTOR_DELETE_SOURCE_TYPE,
+        source_id: scope.sourceId,
+        source_ref: `provider_deleted:${scope.accountRef}:${hash(`slug:${item.slug}`)}`,
+        pages_updated: [],
+        summary: JSON.stringify({
+          reason: "provider_deleted",
+          account: scope.accountRef,
+          page: hash(`slug:${item.slug}`),
+          ...(item.externalId === undefined ? {} : { item: shortHash(`item:${item.externalId}`) }),
+          soft_deleted: counts,
+        }),
+      });
+    }
+    return { deleted: true, pages: counts.pages };
+  });
 }
 
 /**
@@ -531,7 +629,7 @@ export async function applyProviderDeletions(
   const deleted: string[] = [];
   const refused: string[] = [];
   for (const slug of unique) {
-    const r = await hardDeleteConnectorPage(storage, scope, { slug, reason: "provider_deleted" });
+    const r = await softDeleteUpstreamPage(storage, scope, { slug });
     (r.deleted ? deleted : refused).push(slug);
   }
   return { held: false, reason: verdict.reason, deleted, refused };
@@ -636,7 +734,7 @@ export async function sweepRetention(storage: Storage, scope: ConnectorScope, op
                    ELSE 'upstream' END AS state
          FROM pages p
         WHERE ${ownedPageScope} AND p.compiled_truth->>'kind' = $3
-          AND p.compiled_truth->>'part_of' IS NULL
+          AND p.compiled_truth->>'part_of' IS NULL AND p.deleted_at IS NULL
           AND p.compiled_truth->>'last_activity_at' < $4
         ORDER BY p.compiled_truth->>'last_activity_at', p.slug`,
       [scope.sourceId, scope.accountRef, kind, cutoff, opts.accountId, [...DELETION_STATES]],
@@ -654,7 +752,7 @@ export async function sweepRetention(storage: Storage, scope: ConnectorScope, op
   const verdict = newlyDue === 0
     ? { held: false, reason: null }
     : massDeleteVerdict(newlyDue, await count(engine,
-      `SELECT count(*)::int AS n FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' IS NULL`,
+      `SELECT count(*)::int AS n FROM pages p WHERE ${ownedPageScope} AND p.compiled_truth->>'part_of' IS NULL AND p.deleted_at IS NULL`,
       [scope.sourceId, scope.accountRef]), env);
   if (verdict.held) {
     await holdRetentionDeletes(engine, opts.accountId, fresh);

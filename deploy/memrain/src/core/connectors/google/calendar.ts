@@ -33,7 +33,8 @@
  *     stale and retention would sweep a meeting that still happens.
  *     (developers.google.com/workspace/calendar/api/guides/sync)
  *   - `status: cancelled` reports an event deleted upstream; the engine routes
- *     it through the hard-delete path and its mass-delete guard.
+ *     it through the upstream deletion path (a recoverable soft delete) and its
+ *     mass-delete guard.
  *   - A recurring series is one page. Its occurrences are expanded by Google
  *     (`events.instances`) inside that window and a 90-day horizon
  *     only, never the whole, possibly endless, series. A changed or cancelled

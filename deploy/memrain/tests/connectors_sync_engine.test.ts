@@ -395,7 +395,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
-  it("removes the parts a shrunken item no longer has, with their search documents, chunks and embeddings", async () => {
+  it("soft-deletes the parts a shrunken item no longer has, dropping their search documents, chunks and embeddings", async () => {
     const db = await open();
     try {
       const e = db.storage.engine();
@@ -415,7 +415,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const deps = { ...harness([]).deps, maxPartBytes: 200 };
       await runConnectorSync(db.storage, acct, { ...deps, adapter: long("1", Array.from({ length: 12 }, (_, i) => line(i)).join("")) });
       const parts = async () => (await e.query<{ slug: string }>(
-        `SELECT slug FROM pages WHERE compiled_truth->>'part_of' = 'test/acct/m' ORDER BY slug`)).rows.map(r => r.slug);
+        `SELECT slug FROM pages WHERE compiled_truth->>'part_of' = 'test/acct/m' AND deleted_at IS NULL ORDER BY slug`)).rows.map(r => r.slug);
       const before = await parts();
       expect(before.length).toBeGreaterThan(3);
       const docsOf = (slugs: string[]) => e.query<{ id: string }>(
@@ -438,7 +438,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(after).toEqual(before.slice(0, after.length));
       expect(after.length).toBeLessThan(before.length);
       const gone = before.filter(s => !after.includes(s));
-      expect(await e.query(`SELECT slug FROM pages WHERE slug = ANY($1::text[])`, [gone]).then(q => q.rows)).toEqual([]);
+      // Soft-deleted, as an upstream deletion leaves a page: restorable until the purge.
+      expect(await e.query(`SELECT slug FROM pages WHERE slug = ANY($1::text[]) AND deleted_at IS NULL`, [gone]).then(q => q.rows)).toEqual([]);
+      expect(await e.query(`SELECT slug FROM pages WHERE slug = ANY($1::text[]) AND deleted_at IS NOT NULL`, [gone]).then(q => q.rows)).toHaveLength(gone.length);
       expect((await docsOf(gone)).rows).toEqual([]);
       const chunkCount = await e.query<{ n: number }>(`SELECT count(*)::int AS n FROM chunks WHERE document_id = ANY($1::text[])`, [staleDocs]);
       expect(Number(chunkCount.rows[0]!.n)).toBe(0);

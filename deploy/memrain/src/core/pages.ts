@@ -1310,44 +1310,51 @@ export async function deletePage(
     if (r.rows.length === 0 || r.rows[0]!.deleted_at !== null) {
       return { slug, already_deleted: true };
     }
-    const ts = new Date().toISOString();
-    const updated = await tx.query(
-      `UPDATE pages SET deleted_at = NOW(), updated_at = NOW()
-        WHERE slug = $1${sourceFilter} RETURNING slug`,
-      params,
-    );
-    if (updated.rows.length !== 1) {
-      throw new OperationError("conflict", `page '${slug}' vanished during the write`, "Retry the write.");
-    }
-    // Append a tombstone version so the history shows the deletion event.
-    const nextN = await tx.query<{ n: number }>(
-      `SELECT COALESCE(MAX(version_n), 0)::int + 1 AS n
-         FROM page_versions WHERE slug = $1`,
-      [slug],
-    );
-    const tombstone = JSON.stringify({ deleted_at: ts });
-    // The marker belongs to the page's owner, so its own scoped history read
-    // still sees the deletion.
-    await tx.query(
-      `INSERT INTO page_versions
-         (slug, version_n, hash_prev, hash_new,
-          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id, written_by_principal, change_reason)
-       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6, $7, $8)`,
-      [
-        slug,
-        nextN.rows[0]!.n,
-        r.rows[0]!.content_hash,
-        tombstone,
-        writtenBy ?? null,
-        r.rows[0]!.source_id,
-        opts.writtenByPrincipal ?? null,
-        reason === null ? null : guardedReason.text,
-      ],
-    );
-    await bumpPageGeneration(tx, slug);
+    await softDeleteLockedPage(tx, { slug, content_hash: r.rows[0]!.content_hash, source_id: r.rows[0]!.source_id }, {
+      writtenBy: writtenBy ?? null,
+      writtenByPrincipal: opts.writtenByPrincipal ?? null,
+      changeReason: reason === null ? null : guardedReason.text,
+    });
     await auditSecrets(tx, guardedReason.findings, slug, scope);
     return { slug, already_deleted: false };
   });
+}
+
+/**
+ * The soft delete itself, for a live page the caller has locked and read
+ * inside `tx`: set `deleted_at` and append a tombstone version, so the history
+ * shows the deletion and restorePage can undo it.
+ */
+export async function softDeleteLockedPage(
+  tx: Engine,
+  page: { slug: string; content_hash: string; source_id: string },
+  by: { writtenBy: string | null; writtenByPrincipal: string | null; changeReason: string | null },
+): Promise<void> {
+  const ts = new Date().toISOString();
+  const updated = await tx.query(
+    `UPDATE pages SET deleted_at = NOW(), updated_at = NOW()
+      WHERE slug = $1 AND source_id = $2 AND deleted_at IS NULL RETURNING slug`,
+    [page.slug, page.source_id],
+  );
+  if (updated.rows.length !== 1) {
+    throw new OperationError("conflict", `page '${page.slug}' vanished during the write`, "Retry the write.");
+  }
+  const nextN = await tx.query<{ n: number }>(
+    `SELECT COALESCE(MAX(version_n), 0)::int + 1 AS n
+       FROM page_versions WHERE slug = $1`,
+    [page.slug],
+  );
+  const tombstone = JSON.stringify({ deleted_at: ts });
+  // The marker belongs to the page's owner, so its own scoped history read
+  // still sees the deletion.
+  await tx.query(
+    `INSERT INTO page_versions
+       (slug, version_n, hash_prev, hash_new,
+        body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id, written_by_principal, change_reason)
+     VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6, $7, $8)`,
+    [page.slug, nextN.rows[0]!.n, page.content_hash, tombstone, by.writtenBy, page.source_id, by.writtenByPrincipal, by.changeReason],
+  );
+  await bumpPageGeneration(tx, page.slug);
 }
 
 export interface RestoreResult {

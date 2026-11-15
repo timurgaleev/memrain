@@ -440,7 +440,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(result.status).toBe("success");
       expect(eventListCalls(world).map(q => q.get("syncToken"))).toEqual([FULL_TOKEN, null, null]);
       expect(result.counts.deletions_applied).toBe(1);
-      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [pageSlug("e2allday0001@google.com")])).toBe(0);
       // The floor stayed where the first sync put it.
       const inst = world.calls.find(c => c.url.pathname.endsWith("/instances"))!;
       expect(Date.parse(inst.url.searchParams.get("timeMin")!)).toBe(T0 - 90 * DAY);
@@ -473,7 +473,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const inst = world.calls.find(c => c.url.pathname.endsWith("/instances"))!;
       expect(Date.parse(inst.url.searchParams.get("timeMax")!)).toBe(T8 + 90 * DAY);
       expect(result.counts.deletions_applied).toBe(1);
-      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [pageSlug("e2allday0001@google.com")])).toBe(0);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 AND deleted_at IS NOT NULL`, [pageSlug("e2allday0001@google.com")])).toBe(1);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("s1weekly0001@google.com")])).toBe(1);
       expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
     } finally { await db.close(); }
@@ -554,7 +555,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
 
       const result = await run(db.storage, world, account.id, ENV, T1 + 60_000);
       expect(result.counts.deletions_applied).toBe(1);
-      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [pageSlug("e2allday0001@google.com")])).toBe(0);
       expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
     } finally { await db.close(); }
   });
@@ -579,7 +580,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
-  it("delta: sends the stored token, updates, re-renders a series whose occurrence moved and hard-deletes a cancelled event", async () => {
+  it("delta: sends the stored token, updates, re-renders a series whose occurrence moved and soft-deletes a cancelled event", async () => {
     const db = await open();
     try {
       const e = db.storage.engine();
@@ -609,7 +610,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       // The moved occurrence is a change to the series page, not a page of its own.
       expect(await count(e, `SELECT count(*)::int AS n FROM connector_items WHERE account_id = $1 AND external_id LIKE '%\\_2026%'`, [account.id])).toBe(0);
 
-      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [pageSlug("e2allday0001@google.com")])).toBe(0);
       const receipts = (await e.query<{ summary: string }>(`SELECT summary FROM ingest_log WHERE source_type = 'connector-delete'`)).rows;
       expect(receipts).toHaveLength(1);
       expect(receipts[0]!.summary).not.toContain("Offsite");
@@ -654,7 +655,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       world.events = () => "eventsSeriesCancelled";
       const result = await run(db.storage, world, account.id);
       expect(result.counts.deletions_applied).toBe(1);
-      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("s1weekly0001@google.com")])).toBe(0);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [pageSlug("s1weekly0001@google.com")])).toBe(0);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e1single0001@google.com")])).toBe(1);
     } finally { await db.close(); }
   });
@@ -707,7 +708,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       ]);
       expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
       expect(result.counts.deletions_applied).toBe(1);
-      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [pageSlug("e2allday0001@google.com")])).toBe(0);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e1single0001@google.com")])).toBe(1);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("s1weekly0001@google.com")])).toBe(1);
     } finally { await db.close(); }
@@ -817,7 +818,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(result.counts.items_failed).toBe(1);
       // The cancellation on primary still went through.
       expect(result.counts.deletions_applied).toBe(1);
-      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("e2allday0001@google.com")])).toBe(0);
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [pageSlug("e2allday0001@google.com")])).toBe(0);
       expect(await storedToken(e, account.id, "team0abc123@group.calendar.google.com")).toBe(String(GOOGLE_FIXTURES.eventsSeriesCancelled!.nextSyncToken));
       expect(await readCursor(e, account.id, calendarStream("left0abc@group.calendar.google.com"))).toBeNull();
       const failed = (await e.query<{ external_id: string; last_error: string }>(

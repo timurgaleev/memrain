@@ -15,6 +15,7 @@ import { ff, FIREFLIES_KEY, firefliesFetch, type FirefliesRequest, type Fireflie
 import type { Recorded } from "./github-recorded.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { putPage } from "../src/core/pages.ts";
+import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { readExternalTrust } from "../src/core/trust-frame.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
 import { getAccount, readCredential, setAccountEnabled, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
@@ -140,7 +141,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await count(e, "SELECT count(*)::int AS n FROM connector_accounts")).toBe(0);
   });
 
-  it("backfills, then fetches only what changed, then hard-deletes a transcript the provider no longer has", async () => {
+  it("backfills, then fetches only what changed, then soft-deletes a transcript the provider no longer has", async () => {
     await putPage(db.storage, { slug: "people/ana-lee", markdown_body: "Ana.", compiled_truth: { aliases: ["ana@example.net"] } });
     let list = "list-initial";
     let ids: string | Recorded = listing([{ id: "ff-t1" }, { id: "ff-t2" }]);
@@ -211,6 +212,10 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const third = await sync(db.storage, account.id, fake.fetch, T0 + 25 * HOUR);
     expect(ops(fake.requests)).toEqual(["FirefliesTranscripts", "FirefliesTranscriptIds", "FirefliesTranscriptExists:ff-t1"]);
     expect(third.counts.deletions_applied).toBe(1);
+    // Soft-deleted: out of search at once, restorable until the purge removes it for good.
+    expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 AND deleted_at IS NOT NULL`, [t1])).toBe(1);
+    expect(await count(e, `SELECT count(*)::int AS n FROM documents WHERE source_path LIKE '%' || $1`, [t1])).toBe(0);
+    expect((await purgeDeletedPages(e, 0)).slugs).toEqual([t1]);
     expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [t1])).toBe(0);
     expect(await rowsContaining(e, "Let us look at the roadmap")).toEqual([]);
     expect(await count(e, `SELECT count(*)::int AS n FROM links WHERE source_slug = $1`, [t1])).toBe(0);
@@ -350,7 +355,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const probed = fake.requests.filter(r => r.operation === "FirefliesTranscriptExists").map(r => String(r.variables.id));
     expect(probed).toEqual(stored.slice(50));
     expect(second.counts.deletions_applied).toBe(5);
-    expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE source_id = $1`, [SOURCE])).toBe(50);
+    expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE source_id = $1 AND deleted_at IS NULL`, [SOURCE])).toBe(50);
     // The cycle is complete: the next reconcile waits a day again.
     fake.requests.length = 0;
     await sync(db.storage, account.id, fake.fetch, T0 + 27 * HOUR);

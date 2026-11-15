@@ -25,14 +25,15 @@
  *     the run, past the mass-delete guard (retention.ts massDeleteVerdict:
  *     more than 200 items, or at least 10 that are more than 5% of the
  *     account's items, all configurable) holds them all for the owner,
- *     otherwise each is handed to the deletion handler one by one; with no
+ *     otherwise each is handed to the deletion handler one by one (the
+ *     runtime's soft-deletes the page and its parts, retention.ts); with no
  *     handler wired they stay pending, and a page a live duplicate still
  *     points at is never handed over;
  *   - size: a body past the part size (2 MiB, or MEMRAIN_PAGE_MAX_BYTES when
  *     lower) is written as a contents page at the item's slug plus
  *     `<slug>/part-NNN` pages carrying the item's truth and `part_of`, so a
  *     long transcript is stored whole and deleted whole; when it shrinks,
- *     the parts the new split lacks are deleted with their derived rows;
+ *     the parts the new split lacks are soft-deleted (deleteStaleParts);
  *   - enrichment: an item that carries its participants (enrich) is handed
  *     to `onItemWritten` once its page is written and before its checkpoint
  *     commits, which links the people pages the brain already has and, for an
@@ -784,7 +785,7 @@ class Run {
   private async settleDeletions(): Promise<void> {
     const engine = this.engine;
     const pending = await itemsInDeletionState(engine, this.account.id, DELETE_PENDING);
-    // The guard wins over the hard delete: past it, nothing is deleted until the owner confirms.
+    // The guard wins over the delete: past it, nothing is deleted until the owner confirms.
     if (pending.length > 0 && massDeleteVerdict(pending.length, await itemsPresent(engine, this.account.id), this.env).held) {
       this.result.counts.deletions_held += await holdPendingDeletes(engine, this.account.id);
       await openNotice(

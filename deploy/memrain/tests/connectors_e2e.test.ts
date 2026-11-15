@@ -13,6 +13,7 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { fakeProvider, TEST_ACCESS_TOKEN, TEST_REFRESH_TOKEN, testProvider } from "./helpers/connector-test-provider.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { putPage } from "../src/core/pages.ts";
+import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { addFact } from "../src/core/facts.ts";
 import { readExternalTrust } from "../src/core/trust-frame.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
@@ -166,7 +167,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     return { queued, results };
   }
 
-  it("syncs a connected account on schedule and hard-deletes what the provider deleted", async () => {
+  it("syncs a connected account on schedule and soft-deletes what the provider deleted, until the purge", async () => {
     const db = await open();
     const e = db.storage.engine();
     try {
@@ -210,15 +211,23 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const run = (second.results[0]!.accounts as Array<{ status: string; counts: { deletions_applied: number } }>)[0]!;
       expect(run.counts.deletions_applied).toBe(1);
 
-      expect(await rowsContaining(e, CANARY)).toEqual([]);
-      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1 OR compiled_truth->>'part_of' = $1`, [slug])).toBe(0);
+      // The meeting and its parts are soft-deleted: out of search at once, restorable until the purge.
+      const item = `SELECT count(*)::int AS n FROM pages WHERE (slug = $1 OR compiled_truth->>'part_of' = $1)`;
+      expect(await count(e, `${item} AND deleted_at IS NULL`, [slug])).toBe(0);
+      expect(await count(e, `${item} AND deleted_at IS NOT NULL`, [slug])).toBe(parts.length + 1);
       expect(await count(e, `SELECT count(*)::int AS n FROM documents WHERE source_id = '${SOURCE}'`)).toBe(0);
-      expect(await count(e, `SELECT count(*)::int AS n FROM entity_facts WHERE source_id = '${SOURCE}'`)).toBe(0);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = 'people/ana-lee'`)).toBe(1);
       const receipts = (await e.query<{ summary: string }>(`SELECT summary FROM ingest_log WHERE source_type = 'connector-delete'`)).rows;
       expect(receipts).toHaveLength(1);
       expect(receipts[0]!.summary).not.toContain(slug);
+      expect(receipts[0]!.summary).not.toContain(CANARY);
       expect(await readCursor(e, account.id, "meetings")).toBe("c2");
+
+      // The purge removes the pages and their history for good and retires the facts written on them.
+      expect((await purgeDeletedPages(e, 0)).count).toBe(parts.length + 1);
+      expect(await count(e, `${item}`, [slug])).toBe(0);
+      expect(await count(e, `SELECT count(*)::int AS n FROM entity_facts WHERE source_id = '${SOURCE}' AND forgotten_at IS NULL`)).toBe(0);
+      expect(await rowsContaining(e, CANARY)).toEqual(["entity_facts"]);
     } finally { await db.close(); }
   });
 
