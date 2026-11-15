@@ -10,7 +10,8 @@
  *     enabled and active, its daily item cap and its daily dollar cap, and a
  *     per-account run lock;
  *   - writing: live connector tokens are swept out of the text, then each item
- *     goes through putPage as outside text (secret scan, gate keys stripped)
+ *     goes through putPage as outside text (secret scan under the redact
+ *     disposition whatever the operator set, gate keys stripped)
  *     into the account's source and is mirrored into search, with every paid
  *     embedding booked to `connector:<account>` under the account's cap;
  *   - cursors: a stream's cursor moves to a page's checkpoint only when every
@@ -61,7 +62,7 @@ import { logIngest } from "../ingest-log.ts";
 import { OperationError, PageNotFoundError } from "../operation-error.ts";
 import { getSource } from "../sources.ts";
 import { DEFAULT_SPLIT_PART_BYTES, pageMaxBytes, splitLargeDocument, type PageDraft } from "../page-size.ts";
-import { sweepEchoes, type SecretFinding } from "../secret-scan.ts";
+import { sweepEchoes, withSecretDisposition, type SecretFinding } from "../secret-scan.ts";
 import { daySpendUsd, runWithSpendClient, utcDayStart } from "../budget.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import type { ConnectorClient, ConnectorResponse, TokenSource } from "./client.ts";
@@ -398,7 +399,9 @@ export async function runConnectorSync(storage: Storage, account: SyncAccount, d
     }
     const client = deps.client(account, recordingSource(source, secret));
     const run = new Run(storage, account, deps, env, now, result, tokens, seenToday, spentUsd, () => heartbeatWorkerLock(engine, lockId, holder));
-    await runWithSpendClient({ clientId: spendClient, capUsd: account.spendCapUsdDaily }, () => run.execute(client));
+    // Provider text is redacted, never refused or kept, whatever the operator's disposition.
+    await withSecretDisposition("redact", () =>
+      runWithSpendClient({ clientId: spendClient, capUsd: account.spendCapUsdDaily }, () => run.execute(client)));
     if (result.stop_reason === "needs_reconnect") return await needsReconnect(storage, account, deps, result, result.http_status, now);
     await deps.accounts.recordRun?.(account.id, result);
     return result;

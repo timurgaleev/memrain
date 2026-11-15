@@ -18,6 +18,7 @@
  * The lookbehinds that let a key start after an escape or a `_` are bounded
  * (six characters at most), so they keep it linear.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { OperationError } from "./operation-error.ts";
 import type { Engine } from "./engine/interface.ts";
@@ -553,9 +554,24 @@ export function scanSecrets(text: string, allow: ReadonlySet<string> = new Set()
 
 export type SecretDisposition = "redact" | "flag" | "reject";
 
+const _dispositionOverride = new AsyncLocalStorage<SecretDisposition>();
+
 export function secretDisposition(): SecretDisposition {
+  const forced = _dispositionOverride.getStore();
+  if (forced !== undefined) return forced;
   const v = (process.env.MEMRAIN_SECRET_SCAN_DISPOSITION ?? "").trim().toLowerCase();
   return v === "flag" || v === "reject" ? v : "redact";
+}
+
+/**
+ * Run `fn` with every scan inside it under `disposition`, whatever
+ * MEMRAIN_SECRET_SCAN_DISPOSITION says. Connector runs use it with `redact`:
+ * a provider's text is not the operator's to fix, so refusing a thread for a
+ * one-time token in it would hold the thread forever, and storing it as it
+ * came (`flag`) would keep the token.
+ */
+export function withSecretDisposition<T>(disposition: SecretDisposition, fn: () => T): T {
+  return _dispositionOverride.run(disposition, fn);
 }
 
 /** On unless the variable says `0`, `false`, `off` or `no`. */
