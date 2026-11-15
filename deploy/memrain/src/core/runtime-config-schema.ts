@@ -223,6 +223,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_RANK_KEYWORD_OR_RETRY: "flag",
   MEMRAIN_RANK_METADATA_GATE: "flag",
   MEMRAIN_RANK_PAGE_FUSION: "flag",
+  MEMRAIN_RANK_SHADOW: "string",
   MEMRAIN_RECENCY_BOOST: "string",
   MEMRAIN_RECENCY_DECAY: "string",
   MEMRAIN_RECHUNK_SWEEP: "flag",

@@ -82,20 +82,27 @@ export function shadowCopy(hits: readonly Hit[]): Hit[] {
 }
 
 /**
- * Rank `copy` with `flag` flipped, compare it with the caller's `main` result
- * and record the comparison. Starts in the background and returns at once.
+ * Rank `copy` with `flag` flipped, put it through `finish` (the steps the
+ * caller's result took after the stages), compare it with the caller's `main`
+ * result and record the comparison. Starts in the background and returns at once.
  */
-export function startShadow(flag: RankingFlag, copy: Hit[], input: StageInput, main: readonly Hit[]): void {
+export function startShadow(
+  flag: RankingFlag,
+  copy: Hit[],
+  input: StageInput,
+  main: readonly { documentId: string }[],
+  finish: (hits: Hit[]) => Promise<readonly { documentId: string }[]> = async (hits) => hits,
+): void {
   const key = SHADOWABLE[flag];
   if (!key) return;
   const run = (async () => {
     try {
-      const shadow = await runPostFusionStages(copy, {
+      const ranked = await runPostFusionStages(copy, {
         ...input,
         rank: { ...input.rank, [key]: !input.rank[key] },
         explainAcc: null,
       });
-      await record(input.engine, flag, compareTop5(main, shadow));
+      await record(input.engine, flag, compareTop5(main, await finish(ranked)));
     } catch {
       // Observational only.
     }

@@ -50,9 +50,12 @@ the same pages as `src/eval/bench/snapshot.json`.
   whether the mailbox pushed any page people wrote off its rank. It fails when a
   mail page ranks first for any query, or when the `noise:mail` queries lose
   hit@5 or more than 0.01 MRR.
-- `--write-snapshot` rewrites the snapshot. Commit a new snapshot only for a
-  ranking change you mean to make, in its own commit, so the diff shows which
-  queries moved.
+- `--write-snapshot` rewrites the snapshot. Run it in a checkout, not in the
+  container (`cd deploy/memrain && bun run src/cli.ts eval bench
+  --write-snapshot`): in the container it would write into the image's `/app/src`,
+  which no commit sees and the next rebuild discards. Commit a new snapshot only
+  for a ranking change you mean to make, in its own commit, so the diff shows
+  which queries moved.
 
 Exit 0 when every decoy was rejected, nothing was spent, no query threw and
 (with `--k12`) K12 held; 1 otherwise; 2 when `MEMRAIN_CONTEXTUAL_LLM` is set,

@@ -8,7 +8,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, setDefaultTimeout
 import { loadBenchQrels, openBenchBrain, scoredQrels, type BenchBrain } from "../src/eval/bench/harness.ts";
 import { hybridSearch } from "../src/core/search/hybrid.ts";
 import { classifyIntentZeroLlm } from "../src/core/search/intent.ts";
-import { compareTop5, flushShadowTelemetry, readShadowStats, shadowFlag } from "../src/core/search/shadow.ts";
+import { compareTop5, flushShadowTelemetry, readShadowStats, shadowFlag, startShadow } from "../src/core/search/shadow.ts";
+import { classifyQuerySuggestions as classifySuggestions } from "../src/core/search/query-intent.ts";
+import { validateConfigValue } from "../src/core/runtime-config-schema.ts";
 import { deterministicEmbedQuery } from "../src/eval/bench/deterministic-embed.ts";
 
 setDefaultTimeout(120_000);
@@ -87,6 +89,33 @@ describe("shadow ranking in hybridSearch", () => {
     await search(queries()[1]!);
     await flushShadowTelemetry();
     expect(await rows()).toEqual([]);
+  });
+});
+
+describe("startShadow", () => {
+  it("compares the shadow list only after the caller's finishing steps", async () => {
+    const e = brain.storage.engine();
+    const hit = (id: string, score: number) => ({ chunkId: `${id}_c0`, documentId: id, score, payload: { content: id, title: id, sourcePath: `/${id}.md`, source_id: "bench-vault", source_kind: "vault" as const, frontmatter: {} } });
+    const input = {
+      engine: e, query: "ledger", intent: "topic" as const, opts: {}, detailResolved: "medium" as const,
+      suggestions: classifySuggestions("ledger"),
+      rank: { metadataGate: false, entityTruthSoft: false, keywordOrRetry: false, pageFusion: false, keywordConfidence: false, exactLookup: false },
+      k: 5, structural: false, graphFloorRatio: undefined, graphSignalsOn: false, backlinkBoostOn: false, rerankWanted: false,
+      pageKeys: null, votes: { vectorVoted: true, lexicalVoted: false }, explainAcc: null,
+    };
+    // Like an alias hop, the finisher puts the canonical page first on both
+    // sides, so the first page the caller sees does not change.
+    const canonical = { documentId: "canon" };
+    startShadow("METADATA_GATE", [hit("a", 1), hit("b", 0.9)], input, [canonical, { documentId: "a" }],
+      async (hits) => [canonical, ...hits]);
+    await flushShadowTelemetry();
+    expect(await rows()).toEqual([{ flag: "METADATA_GATE", count: 1, rank1_changed: 0, sum_jaccard5: expect.any(Number) }]);
+  });
+});
+
+describe("config set MEMRAIN_RANK_SHADOW", () => {
+  it("is a known key, so the documented command needs no --force", () => {
+    expect(validateConfigValue("MEMRAIN_RANK_SHADOW", "EXACT_LOOKUP")).toEqual({ ok: true, value: "EXACT_LOOKUP" });
   });
 });
 

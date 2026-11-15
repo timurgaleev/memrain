@@ -94,7 +94,7 @@ import { fuseByPage, pageKeysForChunks } from "./page-fusion.ts";
 import { CACHE_HIT_CONFIDENCE, gradeConfidence } from "./confidence-grade.ts";
 import { paidStageEnabled, runPostFusionStages } from "./stages/pipeline.ts";
 import { shadowCopy, shadowFlag, startShadow } from "./shadow.ts";
-import type { HitPayload, StageInput } from "./stages/types.ts";
+import type { Hit as HitScore, HitPayload, StageInput } from "./stages/types.ts";
 
 /**
  * RRF weight for the deterministic relational arm (opt-in 4th arm). A gentle
@@ -1318,7 +1318,6 @@ async function hybridSearchUnbounded(
   const shadow = wanted && !opts.noTelemetry && !graphRerankOn && !paidStageEnabled(stageInput) ? wanted : null;
   const shadowHits = shadow ? shadowCopy(scored) : null;
   const final = await runPostFusionStages(scored, stageInput);
-  if (shadow && shadowHits) startShadow(shadow, shadowHits, stageInput, final);
 
   // 8c. Alias-hop (default ON, exact-full-query-alias gated): if the whole
   //     query is a declared alias, boost the canonical page when present or
@@ -1326,19 +1325,25 @@ async function hybridSearchUnbounded(
   //     (before the trim) so an injected page can't be trimmed out. A normal
   //     (non-alias) query is a no-op.
   opts.signal?.throwIfAborted();
-  let organic: SearchHit[] = final.map((h) => ({
-    ...h.payload?.provenance,
-    chunkId: h.chunkId,
-    documentId: h.documentId,
-    sourcePath: h.payload?.sourcePath ?? "",
-    title: h.payload?.title ?? null,
-    content: h.payload?.content ?? "",
-    score: h.score,
-    intent,
-  }));
-  if (aliasHopEnabled()) {
-    organic = await applyAliasHop(organic, storage, trimmed, intent, opts.sourceIds, { filters: chunkFilters });
-  }
+  const withAliasHop = async (hits: readonly HitScore[]): Promise<SearchHit[]> => {
+    const mapped: SearchHit[] = hits.map((h) => ({
+      ...h.payload?.provenance,
+      chunkId: h.chunkId,
+      documentId: h.documentId,
+      sourcePath: h.payload?.sourcePath ?? "",
+      title: h.payload?.title ?? null,
+      content: h.payload?.content ?? "",
+      score: h.score,
+      intent,
+    }));
+    return aliasHopEnabled()
+      ? applyAliasHop(mapped, storage, trimmed, intent, opts.sourceIds, { filters: chunkFilters })
+      : mapped;
+  };
+  let organic: SearchHit[] = await withAliasHop(final);
+  // The shadow list goes through the same alias hop, so both sides are compared
+  // as the caller would see them.
+  if (shadow && shadowHits) startShadow(shadow, shadowHits, stageInput, organic, withAliasHop);
 
   // 8d. Graph-aware Sonnet rerank (opt-in, default OFF) — reorder the top hits
   //     with one paid Sonnet call using a link-graph connectivity hint. Runs on
