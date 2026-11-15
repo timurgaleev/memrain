@@ -530,6 +530,39 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       .toEqual([{ retired: true }]);
   });
 
+  it("takes what synthesis distilled from an item deleted upstream with it, soft-deleting the pages it published", async () => {
+    const e = db.storage.engine();
+    const canary = "softatomcanary2208";
+    const page = await ingest(mailPage("s4", "plainwords"));
+    const doc = (await e.query<{ id: string }>(
+      `SELECT id FROM documents WHERE source_id = 'inbox' AND source_path LIKE 'page://%' LIMIT 1`)).rows[0]!.id;
+    await e.query(`INSERT INTO synth_atoms (atom_key, source_ref, source_kind, source_hash, title, body, model_id)
+       VALUES ($1, $2, 'document', 'abcdabcdabcdabcd', $3, $3, 'test-model')`, ["e".repeat(64), doc, `Atom about ${canary}`]);
+    await e.query(`INSERT INTO synth_concepts (concept_slug, title, narrative, model_id) VALUES ('Pricing', 'Pricing', $1, 'test-model')`, [`Narrative ${canary}`]);
+    await e.query(`INSERT INTO synth_concept_atoms (concept_slug, atom_id) SELECT 'Pricing', id FROM synth_atoms WHERE atom_key = $1`, ["e".repeat(64)]);
+    await putPage(db.storage, { slug: "concepts/pricing", type: "concept", allowAdHocType: true, title: "Pricing",
+      markdown_body: `Narrative ${canary}`, written_by: "synthesize-concepts", written_by_principal: "operator" });
+    await putPage(db.storage, { slug: "atoms/soft-derived", type: "atom", allowAdHocType: true, title: "Atom",
+      markdown_body: `Distilled ${canary}`, source_id: "inbox", written_by: "extract-atoms",
+      compiled_truth: { atom_origin: { source_ref: doc, source_hash: "abcdabcdabcdabcd", source_id: "inbox", atom_key: "e".repeat(64) } } });
+    await e.query(`INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, model_id)
+       VALUES ($1, $2, 'abcdabcdabcdabcd', 'v1', $3, 'test-model')`, ["u".repeat(64), doc, `Take on ${canary}`]);
+    const fact = await addFact(db.storage, { entity_slug: "people/bob-stone", fact: `Fact ${canary}`, source_slug: page.slug, source_id: "inbox" });
+    await e.query(`INSERT INTO synth_contradictions (pair_key, a_ref, a_kind, a_text, b_ref, b_kind, b_text, prompt_version, model_id)
+       VALUES ('pair-2', $1, 'fact', $2, 'people/bob-stone', 'page', 'Other side', 'v1', 'test-model')`, [String(fact.id), `Fact ${canary}`]);
+
+    expect((await softDeleteUpstreamPage(db.storage, scope, { slug: page.slug })).deleted).toBe(true);
+    for (const table of ["synth_atoms", "synth_concepts", "synth_takes", "synth_contradictions"]) {
+      expect((await e.query(`SELECT 1 FROM ${table} t WHERE to_jsonb(t)::text LIKE $1`, [`%${canary}%`])).rows).toHaveLength(0);
+    }
+    // The pages synthesis published from it go the same recoverable way.
+    expect(await live(["atoms/soft-derived", "concepts/pricing"])).toEqual([
+      { slug: "atoms/soft-derived", deleted: true }, { slug: "concepts/pricing", deleted: true }]);
+    // After the purge only the retired fact still holds the text.
+    await purgeDeletedPages(e, 0);
+    expect(await rowsContaining(e, canary)).toEqual(["entity_facts"]);
+  });
+
   it("leaves a page soft-deleted upstream to the purge: retention does not take it", async () => {
     const page = await ingest(mailPage("s2", "waitcanary", OWNER, "2025-01-01T08:00:00.000Z"));
     await softDeleteUpstreamPage(db.storage, scope, { slug: page.slug });

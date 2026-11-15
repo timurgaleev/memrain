@@ -6,10 +6,13 @@
  * its page with it whatever anyone wrote on it, but recoverably: the page and
  * its parts are soft-deleted the way page_delete leaves a page — a tombstone
  * version, `deleted_at` set, history kept, out of search, its fence facts gone
- * — and page_restore brings a page back until the purge hard-deletes it once
- * it has been deleted longer than PAGE_SOFT_DELETE_TTL_HOURS, retiring the
- * facts written on it then (softDeleteUpstreamPage). The parts a shrunk item
- * no longer has go the same way (deleteStaleParts).
+ * — and what synthesis distilled from its documents goes with them, the atom
+ * and concept pages it published soft-deleted alongside (synthesis output is
+ * derived, and a restored page back in search can be distilled again).
+ * page_restore brings a page back until the purge hard-deletes it once it has
+ * been deleted longer than PAGE_SOFT_DELETE_TTL_HOURS, retiring the facts
+ * written on it then (softDeleteUpstreamPage). The parts a shrunk item no
+ * longer has go the same way (deleteStaleParts).
  *
  * Retention and the owner's own "delete everything" are hard: the page goes
  * with everything derived from it — page history, search documents, chunks
@@ -148,6 +151,42 @@ async function count(tx: Engine, sql: string, params: unknown[]): Promise<number
 }
 
 /**
+ * Delete what synthesis distilled from the documents `docIds` of page `slug`,
+ * inside `tx`, adding to `counts`: atoms, takes, concepts narrated over a
+ * doomed atom, and the contradiction rows that snapshot one of `factIds`, a
+ * doomed take or the page. Synthesis keeps all of it by reference, with no
+ * foreign key, so nothing else would remove it; a concepts run rebuilds a
+ * concept from the atoms that remain. Returns the concepts deleted.
+ */
+async function deleteSynthesisDerived(tx: Engine, docIds: readonly string[], slug: string, factIds: readonly string[], counts: DeleteCounts): Promise<string[]> {
+  const concepts = (await tx.query<{ concept_slug: string }>(
+    `DELETE FROM synth_concepts WHERE concept_slug IN (
+       SELECT ca.concept_slug FROM synth_concept_atoms ca JOIN synth_atoms a ON a.id = ca.atom_id
+        WHERE a.source_kind = 'document' AND a.source_ref = ANY($1::text[]))
+     RETURNING concept_slug`,
+    [[...docIds]])).rows.map(r => r.concept_slug);
+  counts.concepts += concepts.length;
+  counts.atoms += await count(tx,
+    `WITH d AS (DELETE FROM synth_atoms WHERE source_kind = 'document' AND source_ref = ANY($1::text[]) RETURNING 1)
+     SELECT count(*)::int AS n FROM d`,
+    [[...docIds]]);
+  const takeKeys = (await tx.query<{ take_key: string }>(
+    `DELETE FROM synth_takes WHERE source_ref = ANY($1::text[]) RETURNING take_key`,
+    [[...docIds, slug]])).rows.map(r => r.take_key);
+  counts.takes += takeKeys.length;
+  const pairs = (await tx.query<{ pair_key: string }>(
+    `DELETE FROM synth_contradictions
+      WHERE (a_kind = 'fact' AND a_ref = ANY($1::text[])) OR (b_kind = 'fact' AND b_ref = ANY($1::text[]))
+         OR (a_kind = 'take' AND a_ref = ANY($2::text[])) OR (b_kind = 'take' AND b_ref = ANY($2::text[]))
+         OR (a_kind = 'page' AND a_ref = $3) OR (b_kind = 'page' AND b_ref = $3)
+     RETURNING pair_key`,
+    [[...factIds], takeKeys, slug])).rows.map(r => r.pair_key);
+  counts.contradictions += pairs.length;
+  if (pairs.length > 0) await tx.query(`DELETE FROM synth_contradiction_verdicts WHERE pair_key = ANY($1::text[])`, [pairs]);
+  return concepts;
+}
+
+/**
  * Delete one page and everything derived from it, inside `tx`, adding to
  * `counts`. Returns the ids of the page's search documents.
  */
@@ -184,34 +223,7 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
     `WITH d AS (DELETE FROM links WHERE source_slug = $1 OR origin_slug = $1 RETURNING 1)
      SELECT count(*)::int AS n FROM d`,
     [slug]);
-  // Synthesis keeps what it distils from a document or page by reference, with
-  // no foreign key, and snapshots claim text into contradiction rows. A concept
-  // narrated over one of the doomed atoms goes too; the next concepts run
-  // rebuilds it from the atoms that remain.
-  const concepts = (await tx.query<{ concept_slug: string }>(
-    `DELETE FROM synth_concepts WHERE concept_slug IN (
-       SELECT ca.concept_slug FROM synth_concept_atoms ca JOIN synth_atoms a ON a.id = ca.atom_id
-        WHERE a.source_kind = 'document' AND a.source_ref = ANY($1::text[]))
-     RETURNING concept_slug`,
-    [docIds])).rows.map(r => r.concept_slug);
-  counts.concepts += concepts.length;
-  counts.atoms += await count(tx,
-    `WITH d AS (DELETE FROM synth_atoms WHERE source_kind = 'document' AND source_ref = ANY($1::text[]) RETURNING 1)
-     SELECT count(*)::int AS n FROM d`,
-    [docIds]);
-  const takeKeys = (await tx.query<{ take_key: string }>(
-    `DELETE FROM synth_takes WHERE source_ref = ANY($1::text[]) RETURNING take_key`,
-    [[...docIds, slug]])).rows.map(r => r.take_key);
-  counts.takes += takeKeys.length;
-  const pairs = (await tx.query<{ pair_key: string }>(
-    `DELETE FROM synth_contradictions
-      WHERE (a_kind = 'fact' AND a_ref = ANY($1::text[])) OR (b_kind = 'fact' AND b_ref = ANY($1::text[]))
-         OR (a_kind = 'take' AND a_ref = ANY($2::text[])) OR (b_kind = 'take' AND b_ref = ANY($2::text[]))
-         OR (a_kind = 'page' AND a_ref = $3) OR (b_kind = 'page' AND b_ref = $3)
-     RETURNING pair_key`,
-    [factIds, takeKeys, slug])).rows.map(r => r.pair_key);
-  counts.contradictions += pairs.length;
-  if (pairs.length > 0) await tx.query(`DELETE FROM synth_contradiction_verdicts WHERE pair_key = ANY($1::text[])`, [pairs]);
+  const concepts = await deleteSynthesisDerived(tx, docIds, slug, factIds, counts);
   counts.documents += await count(tx,
     // scope: upstream document ids come from the source-scoped read above
     `WITH d AS (DELETE FROM documents WHERE id = ANY($1::text[]) RETURNING 1) SELECT count(*)::int AS n FROM d`,
@@ -302,6 +314,36 @@ async function detachPages(tx: Engine, slugs: readonly string[]): Promise<void> 
 }
 
 /**
+ * The pages synthesis published from what a delete removed, locked, that
+ * nobody edited: atom pages the atoms phase wrote from `docIds` in this
+ * source, and concept pages of the deleted `concepts`. Pages someone edited,
+ * or any other page claiming the same origin, are kept and counted.
+ */
+async function publishedSynthesisPages(
+  tx: Engine,
+  sourceId: string,
+  docIds: readonly string[],
+  concepts: readonly string[],
+  counts: DeleteCounts,
+): Promise<{ atoms: Array<{ slug: string; source_id: string }>; concepts: Array<{ slug: string; source_id: string }> }> {
+  const out: { atoms: Array<{ slug: string; source_id: string }>; concepts: Array<{ slug: string; source_id: string }> } = { atoms: [], concepts: [] };
+  if (docIds.length > 0) {
+    const atoms = await automaticPages(tx,
+      `p.source_id = $1 AND p.compiled_truth->'atom_origin'->>'source_ref' = ANY($2::text[])`,
+      [sourceId, [...docIds]], "atom", "atoms/", "extract-atoms");
+    counts.atom_pages_kept += atoms.kept;
+    out.atoms = atoms.pages;
+  }
+  if (concepts.length > 0) {
+    const pageSlugs = concepts.map(c => `concepts/${slugifyTitle(c)}`);
+    const conceptPages = await automaticPages(tx, `p.slug = ANY($1::text[])`, [pageSlugs], "concept", "concepts/", "synthesize-concepts");
+    counts.concept_pages_kept += conceptPages.kept;
+    out.concepts = conceptPages.pages;
+  }
+  return out;
+}
+
+/**
  * Lock this account's connector page `slug` and its parts inside `tx`, and
  * read them under the locks: null when the page is not this account's. A part
  * written while this waited for the locks is locked too before it is read, so
@@ -362,24 +404,14 @@ async function deleteOwnedPage(
     docIds.push(...derived.docIds);
     concepts.push(...derived.concepts);
   }
-  if (docIds.length > 0) {
-    const atoms = await automaticPages(tx,
-      `p.source_id = $1 AND p.compiled_truth->'atom_origin'->>'source_ref' = ANY($2::text[])`,
-      [scope.sourceId, docIds], "atom", "atoms/", "extract-atoms");
-    counts.atom_pages_kept += atoms.kept;
-    for (const atom of atoms.pages) {
-      await deletePageDerived(tx, atom.slug, atom.source_id, counts);
-      counts.atom_pages++;
-    }
+  const published = await publishedSynthesisPages(tx, scope.sourceId, docIds, concepts, counts);
+  for (const atom of published.atoms) {
+    await deletePageDerived(tx, atom.slug, atom.source_id, counts);
+    counts.atom_pages++;
   }
-  if (concepts.length > 0) {
-    const pageSlugs = concepts.map(c => `concepts/${slugifyTitle(c)}`);
-    const conceptPages = await automaticPages(tx, `p.slug = ANY($1::text[])`, [pageSlugs], "concept", "concepts/", "synthesize-concepts");
-    counts.concept_pages_kept += conceptPages.kept;
-    for (const concept of conceptPages.pages) {
-      await deletePageDerived(tx, concept.slug, concept.source_id, counts);
-      counts.concept_pages++;
-    }
+  for (const concept of published.concepts) {
+    await deletePageDerived(tx, concept.slug, concept.source_id, counts);
+    counts.concept_pages++;
   }
   if (counts.documents > 0) await bumpDocumentClock(tx);
   await bumpClock(tx);
@@ -465,16 +497,15 @@ export async function deleteStaleParts(
   // Most writes have nothing stale: check before opening a transaction.
   if ((await engine.query(staleSql, params)).rows.length === 0) return none;
   return deadlockSafeTransaction(engine, async (tx) => {
-    const counts = { pages: 0, documents: 0, facts: 0 };
+    const counts: DeleteCounts = { ...EMPTY_COUNTS };
+    let pages = 0;
     let parts = 0;
     for (const { slug } of (await tx.query<{ slug: string }>(staleSql, params)).rows) {
       const owned = await lockOwnedItem(tx, scope, slug);
       if (owned === null) continue;
-      const done = await softDeletePages(tx, [slug, ...owned.parts.map(p => p.slug)], scope.sourceId);
-      if (done.pages === 0) continue;
-      counts.pages += done.pages;
-      counts.documents += done.documents;
-      counts.facts += done.facts;
+      const done = await softDeletePages(tx, [slug, ...owned.parts.map(p => p.slug)], scope.sourceId, counts);
+      if (done === 0) continue;
+      pages += done;
       parts++;
     }
     if (parts === 0) return none;
@@ -483,7 +514,7 @@ export async function deleteStaleParts(
       source_id: scope.sourceId,
       source_ref: `part_superseded:${scope.accountRef}:${hash(`slug:${parentSlug}`)}`,
       pages_updated: [],
-      summary: JSON.stringify({ reason: "part_superseded", account: scope.accountRef, page: hash(`slug:${parentSlug}`), parts, soft_deleted: counts }),
+      summary: JSON.stringify({ reason: "part_superseded", account: scope.accountRef, page: hash(`slug:${parentSlug}`), parts, soft_deleted: { pages, counts } }),
     });
     return { parts };
   });
@@ -551,29 +582,53 @@ const UPSTREAM_DELETE_REASON = "the item was deleted at the provider";
 /**
  * Soft-delete `slugs` inside `tx` (the caller locked them), as page_delete
  * leaves a page: `deleted_at` set and a tombstone version, history kept, out of
- * search, its fence facts gone. Returns how many were live.
+ * search, its fence facts gone. What synthesis distilled from their documents
+ * goes as the documents do (deleteSynthesisDerived), and the atom and concept
+ * pages it published in `sourceId` nobody edited are soft-deleted with them
+ * (unless `published` is false, for those pages themselves). Adds to
+ * `counts`; returns how many of `slugs` were live.
  */
-async function softDeletePages(tx: Engine, slugs: readonly string[], sourceId: string): Promise<{ pages: number; documents: number; facts: number }> {
-  const out = { pages: 0, documents: 0, facts: 0 };
+async function softDeletePages(tx: Engine, slugs: readonly string[], sourceId: string, counts: DeleteCounts, published = true): Promise<number> {
+  const docIds: string[] = [];
+  const concepts: string[] = [];
+  let pages = 0;
   for (const slug of slugs) {
     const page = (await tx.query<{ content_hash: string; source_id: string }>(
       // scope: upstream the slug is an owned page or part the caller locked
       `SELECT content_hash, source_id FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [slug],
     )).rows[0];
     if (page === undefined) continue;
-    await softDeleteLockedPage(tx, { slug, ...page }, { writtenBy: UPSTREAM_DELETE_WRITER, writtenByPrincipal: null, changeReason: UPSTREAM_DELETE_REASON });
-    out.pages++;
-    out.documents += await count(tx,
-      `WITH d AS (DELETE FROM documents WHERE source_path = ANY($1::text[]) AND COALESCE(source_id, 'default') = $2 RETURNING 1)
-       SELECT count(*)::int AS n FROM d`,
-      [[pageSourcePath(slug, sourceId), pageTruthSourcePath(slug, sourceId)], sourceId]);
-    out.facts += await count(tx,
+    const ids = (await tx.query<{ id: string }>(
+      `SELECT id FROM documents WHERE source_path = ANY($1::text[]) AND COALESCE(source_id, 'default') = $2`,
+      [[pageSourcePath(slug, page.source_id), pageTruthSourcePath(slug, page.source_id)], page.source_id],
+    )).rows.map(r => r.id);
+    // The facts written on the page stay, hidden while it is deleted, until the
+    // purge retires them; a contradiction row snapshots their text, so it goes.
+    const factIds = (await tx.query<{ id: string }>(
+      `SELECT f.id::text AS id FROM entity_facts f
+        WHERE (f.source_markdown_slug = $1 OR (f.source_markdown_slug IS NULL AND f.source_slug = $1))
+          AND COALESCE(f.source_id, 'default') = $2`,
+      [slug, page.source_id])).rows.map(r => r.id);
+    counts.facts += await count(tx,
       // scope: upstream fence facts name the page by its slug, the primary key of pages
       `WITH d AS (DELETE FROM entity_facts WHERE source_markdown_slug = $1 RETURNING 1) SELECT count(*)::int AS n FROM d`,
       [slug]);
+    concepts.push(...await deleteSynthesisDerived(tx, ids, slug, factIds, counts));
+    counts.documents += await count(tx,
+      // scope: upstream document ids come from the source-scoped read above
+      `WITH d AS (DELETE FROM documents WHERE id = ANY($1::text[]) RETURNING 1) SELECT count(*)::int AS n FROM d`,
+      [ids]);
+    await softDeleteLockedPage(tx, { slug, ...page }, { writtenBy: UPSTREAM_DELETE_WRITER, writtenByPrincipal: null, changeReason: UPSTREAM_DELETE_REASON });
+    docIds.push(...ids);
+    pages++;
   }
-  if (out.documents > 0) await bumpDocumentClock(tx);
-  return out;
+  if (published && pages > 0) {
+    const synthesized = await publishedSynthesisPages(tx, sourceId, docIds, concepts, counts);
+    counts.atom_pages += await softDeletePages(tx, synthesized.atoms.map(p => p.slug), sourceId, counts, false);
+    counts.concept_pages += await softDeletePages(tx, synthesized.concepts.map(p => p.slug), sourceId, counts, false);
+  }
+  if (counts.documents > 0) await bumpDocumentClock(tx);
+  return pages;
 }
 
 /**
@@ -590,8 +645,9 @@ export async function softDeleteUpstreamPage(storage: Storage, scope: ConnectorS
   return deadlockSafeTransaction(engine, async (tx) => {
     const owned = await lockOwnedItem(tx, scope, item.slug);
     if (owned === null) return { deleted: false, refused: "not_connector_page", pages: 0 };
-    const counts = await softDeletePages(tx, [item.slug, ...owned.parts.map(p => p.slug)], scope.sourceId);
-    if (counts.pages > 0) {
+    const counts: DeleteCounts = { ...EMPTY_COUNTS };
+    const pages = await softDeletePages(tx, [item.slug, ...owned.parts.map(p => p.slug)], scope.sourceId, counts);
+    if (pages > 0) {
       await logIngest(tx, {
         source_type: CONNECTOR_DELETE_SOURCE_TYPE,
         source_id: scope.sourceId,
@@ -602,11 +658,11 @@ export async function softDeleteUpstreamPage(storage: Storage, scope: ConnectorS
           account: scope.accountRef,
           page: hash(`slug:${item.slug}`),
           ...(item.externalId === undefined ? {} : { item: shortHash(`item:${item.externalId}`) }),
-          soft_deleted: counts,
+          soft_deleted: { pages, counts },
         }),
       });
     }
-    return { deleted: true, pages: counts.pages };
+    return { deleted: true, pages };
   });
 }
 
