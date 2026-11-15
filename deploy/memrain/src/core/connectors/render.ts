@@ -69,8 +69,10 @@ export const MAX_MAIL_MESSAGE_CHARS = 20_000;
 
 const BULK_CATEGORIES = new Set(["promotions", "social"]);
 const BULK_LOCAL_PART = /^(?:no-?reply|do-?not-?reply|mailer-daemon|notifications?|bounces?)(?:[+.-]|$)/i;
-/** Machine senders matched anywhere in the address (`billing-noreply@`, `postmaster@`). */
-const NOISE_SENDER_SUBSTRINGS = ["noreply", "no-reply", "notifications@", "notification@", "calendar-notification", "mailer-daemon", "postmaster", "donotreply", "do-not-reply"];
+/** Machine senders matched anywhere in the local part (`billing-noreply@`, `postmaster@`); never the domain. */
+const NOISE_SENDER_SUBSTRINGS = ["noreply", "no-reply", "calendar-notification", "mailer-daemon", "postmaster", "donotreply", "do-not-reply"];
+/** Local parts that end like a notification mailbox (`team-notifications@`). */
+const NOISE_LOCAL_SUFFIXES = ["notifications", "notification"];
 /**
  * Separator and localized no-reply spellings, matched in the local part from
  * its start or after a separator, so a person whose name merely contains a
@@ -293,8 +295,8 @@ function isNoiseSender(email: string | null): boolean {
   const address = (email ?? "").trim().toLowerCase();
   if (address === "") return false;
   const local = address.replace(/@[^@]*$/, "");
-  return SYSTEM_SENDERS.has(address) || NOISE_SENDER_SUBSTRINGS.some(p => address.includes(p))
-    || NOISE_LOCAL_PART.test(local) || BULK_LOCAL_PART.test(local);
+  return SYSTEM_SENDERS.has(address) || NOISE_SENDER_SUBSTRINGS.some(p => local.includes(p))
+    || NOISE_LOCAL_SUFFIXES.some(p => local.endsWith(p)) || NOISE_LOCAL_PART.test(local) || BULK_LOCAL_PART.test(local);
 }
 
 function isBulk(messages: readonly MailMessage[]): boolean {

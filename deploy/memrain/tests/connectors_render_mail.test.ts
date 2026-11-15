@@ -72,7 +72,7 @@ describe("renderMailThread", () => {
       "alerts_no_reply@example.net", "ne-pas-repondre@example.fr", "keine.antwort@example.de", "notificaciones@example.es", "gemini-notes@google.com"]) {
       expect([email, from(email)]).toEqual([email, true]);
     }
-    for (const email of ["noelle@example.net", "postman.pat@example.net", "ana@example.net"]) {
+    for (const email of ["noelle@example.net", "postman.pat@example.net", "ana@example.net", "pat@postmaster.example", "ana@noreply-press.example", "lee@notifications.example"]) {
       expect([email, from(email)]).toEqual([email, false]);
     }
   });
