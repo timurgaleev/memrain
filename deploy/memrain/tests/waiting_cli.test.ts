@@ -99,6 +99,21 @@ describe("memrain waiting", () => {
     expect(text.out).toContain("Reply owed to Bob <bob@example.com>");
   });
 
+  it("names an account that is behind even when another one is fresh", async () => {
+    await registerSource(storage.engine(), { id: "chat", kind: "chat", pathPrefix: "chat/" });
+    await storage.engine().query(
+      `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label, enabled, status, last_success_at)
+       VALUES ('00000000-0000-4000-8000-0000000000bb', 'chat', 'slack', 'admin:operator', 'acme', TRUE, 'error', $1)`,
+      [new Date(NOW.getTime() - 50 * H).toISOString()],
+    );
+    const r = await run({ sub: undefined, json: true });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out)).toMatchObject({ stale: false, stale_accounts: [{ source_id: "chat", provider: "slack", status: "error" }] });
+    const text = await run({ sub: undefined });
+    expect(text.out).toContain("behind: chat (slack): error");
+    await storage.engine().query(`DELETE FROM connector_accounts WHERE source_id = 'chat'`);
+  });
+
   it("mutes, unmutes, drops and refuses unknown ids", async () => {
     const [loop] = (JSON.parse((await run({ sub: undefined, json: true })).out) as { loops: Array<{ id: number }> }).loops;
     expect((await run({ sub: "mute", target: "sender", id: String(loop!.id) })).code).toBe(0);

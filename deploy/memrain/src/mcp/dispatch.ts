@@ -4723,7 +4723,11 @@ async function callLoopsList(
     ok: true,
     stale,
     newest_sync: fresh.newest,
-    ...(stale ? { warning: `No mail, chat or calendar sync in the last ${WAITING_MAX_SYNC_AGE_HOURS} h: this list may be missing loops.` } : {}),
+    // Accounts with no clean sync in the window: their loops may be missing even when another account is fresh.
+    accounts_behind: fresh.stale.length,
+    ...(stale
+      ? { warning: `No mail, chat or calendar sync in the last ${WAITING_MAX_SYNC_AGE_HOURS} h: this list may be missing loops.` }
+      : fresh.stale.length > 0 ? { warning: `${fresh.stale.length} account(s) not synced in ${WAITING_MAX_SYNC_AGE_HOURS} h: their loops may be missing.` } : {}),
     loops: loops.map(({ counterparty: _counterparty, ...l }) => ({ ...l, summary: frameExternal(l.summary), trust: "external" })),
   });
 }

@@ -79,7 +79,7 @@ describe("MCP loops_list", () => {
 
   it("says the list is stale when no mail, chat or calendar sync is fresh", async () => {
     const { body } = await call({});
-    expect(body).toMatchObject({ ok: true, stale: true, newest_sync: null });
+    expect(body).toMatchObject({ ok: true, stale: true, newest_sync: null, accounts_behind: 0 });
     expect(String(body["warning"])).toContain("24 h");
   });
 

@@ -9,6 +9,16 @@ model is called and nothing is spent.
 You see the list with `memrain waiting`, and an agent sees it through the MCP
 tool `loops_list`.
 
+Which loops you get depends on the connectors you run:
+
+| Connector | Loops |
+|---|---|
+| Google Calendar ([GOOGLE.md](./GOOGLE.md)) | RSVP owed, today |
+| A mail connector (Gmail, then Outlook) | reply owed, waiting on them, your promise, once that connector is connected; until then there are no mail loops |
+| A chat connector (Slack, Teams) | the same three for direct conversations, once its adapter marks direct conversations and your own messages |
+
+Fireflies meeting notes carry no reply state and add nothing here.
+
 ## Prerequisites
 
 - Connectors are on and at least one account syncs: [ENABLE.md](./ENABLE.md)
@@ -30,7 +40,7 @@ and `bun run src/cli.ts` in a checkout.
 | Reply owed (`unanswered_inbound`) | Their last message is to you (in To), 24 h old or more | You reply |
 | Waiting on them (`unanswered_outbound`) | Your last message asks a question, 72 h old or more | They reply |
 | Your promise (`commitment_owed_by_me`) | Your message says "I'll send…", "Let me check…", "Will do", 24 h old or more | You write again in the thread |
-| RSVP owed (`rsvp_owed`) | You are invited, have not answered, and the meeting is ahead | You answer, the meeting starts, or it is cancelled |
+| RSVP owed (`rsvp_owed`) | You are invited, have not answered, and the meeting (or a listed occurrence of a series) is ahead | You answer, the last listed occurrence starts, or it is cancelled |
 
 These never open a loop:
 
@@ -82,7 +92,8 @@ docker exec deploy-memrain-1 bun run src/cli.ts waiting --type rsvp_owed --limit
 `waiting` refuses when the newest mail, chat or calendar sync is older than 24
 hours, or when none ever ran. It prints the accounts that are behind and their
 state (for example `needs_reconnect`). Fix the sync first; `--stale` shows the
-list anyway, marked stale.
+list anyway, marked stale. When one account is fresh and another is behind, the
+list is shown with a `behind:` line naming the one whose loops may be missing.
 
 `loops_list` answers the same list for an MCP client, only from the sources the
 client's grant can read, and refused on the public bearer. Each summary carries
