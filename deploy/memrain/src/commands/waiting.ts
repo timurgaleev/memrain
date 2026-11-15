@@ -87,7 +87,7 @@ export async function runWaiting(opts: WaitingCmdOptions): Promise<number> {
       for (const source of sources) results.push({ source_id: source, ...await sweepLoops(engine, source, now()) });
       if (opts.json) console.log(JSON.stringify({ ok: true, swept: results }, null, 2));
       else if (results.length === 0) console.log("no connector thread states to sweep yet");
-      else for (const r of results) console.log(`${r.source_id}: ${r.threads} thread(s), ${r.opened} opened, ${r.closed} closed${r.truncated ? " (more next run)" : ""}`);
+      else for (const r of results) console.log(`${r.source_id}: ${r.threads} thread(s), ${r.opened} opened, ${r.closed} closed`);
       return 0;
     }
     if (sub === "done" || sub === "drop") {
@@ -127,10 +127,14 @@ export async function runWaiting(opts: WaitingCmdOptions): Promise<number> {
       ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
     });
     if (opts.json) {
-      console.log(JSON.stringify({ ok: true, stale, newest_sync: fresh.newest, loops }, null, 2));
+      console.log(JSON.stringify({ ok: true, stale, newest_sync: fresh.newest, stale_accounts: fresh.stale, loops }, null, 2));
       return 0;
     }
     if (stale) console.log(`(stale: the newest mail, chat or calendar sync is ${fresh.newest ?? "never"})`);
+    // Another account being fresh does not make this one's loops complete.
+    if (!stale && fresh.stale.length > 0) {
+      console.log(`(behind: ${fresh.stale.map(a => `${a.source_id} (${a.provider}): ${a.status}`).join("; ")}; its loops may be missing)`);
+    }
     if (loops.length === 0) console.log("nobody is waiting: no open loops");
     for (const l of loops) console.log(line(l));
     return 0;

@@ -140,6 +140,40 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("judges every thread of a source larger than one batch, keeping each thread whole", async () => {
+    const { db, e } = await setup();
+    try {
+      for (let i = 0; i < 5; i++) await storeThread(db.storage, SRC, `big-${i}`, [m(`p${i}@example.com`, [ME], 48, "Can you?")]);
+      expect(await sweepLoops(e, SRC, NOW, { batchSize: 2 })).toMatchObject({ threads: 5, opened: 5 });
+      expect(await openLoops(e)).toHaveLength(5);
+    } finally { await db.close(); }
+  });
+
+  it("a weekly invitation stays owed until its last listed occurrence has started", async () => {
+    const { db, e } = await setup();
+    try {
+      await registerSource(e, { id: "cal", kind: "calendar", pathPrefix: "cal/" });
+      const at = (h: number) => new Date(NOW.getTime() + h * H).toISOString();
+      const page = renderCalendarEvent({ service: "google_calendar", accountLabel: ME }, {
+        id: "s1", iCalUID: "s1@x", title: "Weekly", description: null, location: null, start: at(-24 * 7), end: null, allDay: false, status: "confirmed",
+        organizer: { name: "Bob", email: "bob@example.com" }, attendees: [{ name: null, email: ME, response: "needsAction" }],
+        recurrence: ["RRULE:FREQ=WEEKLY"],
+        occurrences: [
+          { start: at(-24 * 7), end: null, status: "confirmed" },
+          { start: at(24), end: null, status: "cancelled" },
+          { start: at(48), end: null, status: "confirmed" },
+        ],
+      });
+      await putPage(db.storage, { slug: `cal/${page.slug}`, markdown_body: page.body, source_id: "cal" });
+      await recordLoopThread(e, { sourceId: "cal", slug: `cal/${page.slug}`, signals: page.loop! });
+      await sweepLoops(e, "cal", NOW);
+      // The cancelled occurrence is skipped: due at the next one that happens.
+      expect((await openLoops(e, ["cal"]))[0]).toMatchObject({ loop_type: "rsvp_owed", due_at: at(48) });
+      await sweepLoops(e, "cal", new Date(NOW.getTime() + 49 * H));
+      expect((await listLoops(e, ["cal"], { status: "all" }))[0]).toMatchObject({ status: "stale", closed_by: "expired" });
+    } finally { await db.close(); }
+  });
+
   it("an RSVP loop expires when the meeting starts", async () => {
     const { db, e } = await setup();
     try {

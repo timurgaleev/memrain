@@ -56,6 +56,8 @@ export interface CalendarLoopSignals {
   threadRef: string;
   title: string;
   start: string;
+  /** A series' listed occurrences that still happen (not cancelled), in time order. */
+  occurrences?: string[];
   status: CalendarEvent["status"];
   organizerMine: boolean;
   organizer: string | null;
@@ -67,6 +69,8 @@ export interface CalendarLoopSignals {
 export type LoopSignals = ThreadLoopSignals | CalendarLoopSignals;
 
 const REF_LEN = 16;
+/** Occurrences of a series kept in its state; the renderer lists at most 500 in a 90-day horizon. */
+const MAX_OCCURRENCES = 100;
 const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex").slice(0, REF_LEN);
 
 /** The hash a sender mute and `open_loops.counterparty_key` use for an address. */
@@ -236,16 +240,19 @@ export function calendarLoopSignals(
   start: string,
   title: string,
   label: (p: Person) => string,
+  occurrences: readonly string[] = [],
 ): CalendarLoopSignals {
   const own = ctx.accountLabel.trim().toLowerCase();
   const me = event.attendees.find(a => lower(a) === own);
   const organizer = event.organizer;
+  const upcoming = [...occurrences].sort().slice(-MAX_OCCURRENCES);
   return {
     v: LOOP_SIGNALS_VERSION,
     kind: "calendar",
     threadRef: threadRefOf("calendar", event.iCalUID ? `ical:${event.iCalUID}` : `event:${ctx.service}:${event.id}`),
     title,
     start,
+    ...(upcoming.length ? { occurrences: upcoming } : {}),
     status: event.status,
     organizerMine: organizer !== null && lower(organizer) === own,
     organizer: organizer ? label(organizer) : null,
@@ -254,9 +261,16 @@ export function calendarLoopSignals(
   };
 }
 
-/** When the item last changed hands: the last message, or the event's start. */
+/** When the item last changed hands: the last message, or the event's latest listed start. */
 export function signalsActivityAt(s: LoopSignals): string {
-  return s.kind === "calendar" ? s.start : (s.messages.at(-1)?.at ?? new Date(0).toISOString());
+  if (s.kind === "calendar") return [s.start, ...(s.occurrences ?? [])].reduce((a, b) => (b > a ? b : a));
+  return s.messages.at(-1)?.at ?? new Date(0).toISOString();
+}
+
+/** The next start of an event after `now`, its occurrences included; null when none is ahead. */
+export function nextCalendarStart(s: CalendarLoopSignals, now: Date): string | null {
+  const ahead = [s.start, ...(s.occurrences ?? [])].filter(t => Date.parse(t) > now.getTime()).sort();
+  return ahead[0] ?? null;
 }
 
 /** Shape check for signals read back from the database. */

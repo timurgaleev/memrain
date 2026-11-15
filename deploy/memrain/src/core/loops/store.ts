@@ -40,8 +40,8 @@ const toIso = (v: unknown): string | null => {
 
 /** Thread states with any activity this recent are swept. */
 const SWEEP_WINDOW_DAYS = 17;
-/** Most thread states one sweep reads for one source. */
-export const MAX_SWEEP_THREADS = 5000;
+/** Threads one sweep query reads at a time. */
+const SWEEP_BATCH_THREADS = 500;
 
 /**
  * Remember an item's reply state once its page is stored. The row is written
@@ -77,41 +77,54 @@ export interface SweepResult {
   threads: number;
   opened: number;
   closed: number;
-  /** Thread states past the per-run limit, left for the next sweep. */
-  truncated: boolean;
 }
 
 interface ThreadRow { page_slug: string; kind: string; thread_ref: string; signals: unknown; updated_at: unknown; deleted: boolean }
 
 /**
- * One sweep of one source: re-judge every thread state with recent activity
- * (and every thread that still has an open loop), close what stopped holding,
- * open what holds now. Free: no model and no network.
+ * One sweep of one source: re-judge every thread with recent activity (and
+ * every thread that still has an open loop), close what stopped holding, open
+ * what holds now. Threads are read in batches of whole threads, keyed by
+ * thread ref, so a large source is covered in full and a conversation spread
+ * over several day pages is always judged as one. Free: no model, no network.
  */
-export async function sweepLoops(engine: Engine, sourceId: string, now: Date = new Date()): Promise<SweepResult> {
-  const result: SweepResult = { threads: 0, opened: 0, closed: 0, truncated: false };
+export async function sweepLoops(engine: Engine, sourceId: string, now: Date = new Date(), opts: { batchSize?: number } = {}): Promise<SweepResult> {
+  const result: SweepResult = { threads: 0, opened: 0, closed: 0 };
+  const batchSize = Math.max(1, Math.trunc(opts.batchSize ?? SWEEP_BATCH_THREADS));
   // A page deleted (upstream, or by the owner) takes its loops out of the list.
   result.closed += await closeWhere(engine, sourceId,
     `page_slug IN (SELECT slug FROM pages WHERE source_id = $1 AND deleted_at IS NOT NULL)`, [], "dropped", "page_deleted");
 
   const since = new Date(now.getTime() - SWEEP_WINDOW_DAYS * 86_400_000).toISOString();
-  const rows = (await engine.query<ThreadRow>(
-    `SELECT t.page_slug, t.kind, t.thread_ref, t.signals, t.updated_at, (p.deleted_at IS NOT NULL) AS deleted
-       FROM loop_threads t JOIN pages p ON p.slug = t.page_slug
-      WHERE t.source_id = $1
-        AND (t.last_activity_at >= $2::timestamptz
-             OR t.thread_ref IN (SELECT thread_ref FROM open_loops
-                                  WHERE source_id = $1 AND status = 'open' AND detector = 'deterministic' AND thread_ref IS NOT NULL))
-      ORDER BY t.last_activity_at DESC
-      LIMIT ${MAX_SWEEP_THREADS + 1}`,
-    [sourceId, since],
-  )).rows;
-  if (rows.length > MAX_SWEEP_THREADS) {
-    result.truncated = true;
-    rows.length = MAX_SWEEP_THREADS;
-  }
   const suppress = await loadSuppressions(engine, sourceId);
+  let after = "";
+  for (;;) {
+    const refs = (await engine.query<{ thread_ref: string }>(
+      `SELECT DISTINCT t.thread_ref FROM loop_threads t
+        WHERE t.source_id = $1 AND t.thread_ref > $3
+          AND (t.last_activity_at >= $2::timestamptz
+               OR t.thread_ref IN (SELECT thread_ref FROM open_loops
+                                    WHERE source_id = $1 AND status = 'open' AND detector = 'deterministic' AND thread_ref IS NOT NULL))
+        ORDER BY t.thread_ref
+        LIMIT ${batchSize}`,
+      [sourceId, since, after],
+    )).rows.map(r => r.thread_ref);
+    if (refs.length === 0) break;
+    after = refs.at(-1)!;
+    const rows = (await engine.query<ThreadRow>(
+      `SELECT t.page_slug, t.kind, t.thread_ref, t.signals, t.updated_at, (p.deleted_at IS NOT NULL) AS deleted
+         FROM loop_threads t JOIN pages p ON p.slug = t.page_slug
+        WHERE t.source_id = $1 AND t.thread_ref = ANY($2::text[])
+        ORDER BY t.thread_ref, t.last_activity_at`,
+      [sourceId, refs],
+    )).rows;
+    await judgeThreads(engine, sourceId, rows, now, suppress, result);
+  }
+  return result;
+}
 
+/** Whole threads of one batch: judge each and apply its verdict. */
+async function judgeThreads(engine: Engine, sourceId: string, rows: readonly ThreadRow[], now: Date, suppress: LoopSuppressions, result: SweepResult): Promise<void> {
   const groups = new Map<string, ThreadRow[]>();
   for (const row of rows) {
     if (row.deleted) continue;
@@ -141,7 +154,6 @@ export async function sweepLoops(engine: Engine, sourceId: string, now: Date = n
     result.closed += await closeThread(engine, sourceId, merged.threadRef, v.close.filter(t => !desired.has(t)), "done", "reply");
     for (const o of v.open) if (await upsertLoop(engine, sourceId, merged.kind, merged.threadRef, latestPage, o)) result.opened++;
   }
-  return result;
 }
 
 async function closeWhere(engine: Engine, sourceId: string, where: string, params: unknown[], status: LoopStatus, closedBy: string): Promise<number> {
@@ -219,7 +231,13 @@ export async function listLoops(engine: Engine, scope: SourceScope, opts: ListLo
       LIMIT ${limit}`,
     params,
   );
-  return r.rows.map(row => ({
+  return r.rows.map(toLoopRow);
+}
+
+const LOOP_COLUMNS = "id, source_id, loop_type, status, kind, summary, counterparty_label, page_slug, due_at, opened_at, last_activity_at, closed_at, closed_by";
+
+function toLoopRow(row: Record<string, unknown>): OpenLoopRow {
+  return {
     id: Number(row["id"]),
     source_id: String(row["source_id"]),
     loop_type: row["loop_type"] as LoopType,
@@ -233,19 +251,18 @@ export async function listLoops(engine: Engine, scope: SourceScope, opts: ListLo
     last_activity_at: toIso(row["last_activity_at"])!,
     closed_at: toIso(row["closed_at"]),
     closed_by: (row["closed_by"] as string | null) ?? null,
-  }));
+  };
 }
 
 /** The owner closes a loop (done or dropped). Null when no open loop with that id is in scope. */
 export async function closeLoop(engine: Engine, scope: SourceScope, id: number, status: "done" | "dropped"): Promise<OpenLoopRow | null> {
   const params: unknown[] = [id, status];
-  const r = await engine.query<{ id: number }>(
+  const r = await engine.query<Record<string, unknown>>(
     `UPDATE open_loops SET status = $2, closed_at = NOW(), closed_by = 'owner', updated_at = NOW()
-      WHERE id = $1 AND status = 'open'${andSourceScope("source_id", scope, params)} RETURNING id`,
+      WHERE id = $1 AND status = 'open'${andSourceScope("source_id", scope, params)} RETURNING ${LOOP_COLUMNS}`,
     params,
   );
-  if (r.rows.length === 0) return null;
-  return (await listLoops(engine, scope, { status: "all", limit: 500 })).find(l => l.id === id) ?? null;
+  return r.rows[0] ? toLoopRow(r.rows[0]) : null;
 }
 
 export type MuteKind = "sender" | "thread";

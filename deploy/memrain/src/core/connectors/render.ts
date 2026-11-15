@@ -340,7 +340,7 @@ export function renderCalendarEvent(ctx: ConnectorContext, event: CalendarEvent)
     kind: "calendar", externalId: event.id, occurredAt: start,
     participants: [...(event.organizer ? [event.organizer] : []), ...event.attendees],
     bulk: false,
-    loop: calendarLoopSignals(ctx, event, start, title, p => g.person(p)),
+    loop: calendarLoopSignals(ctx, event, start, title, p => g.person(p), occurrences.filter(o => o.status !== "cancelled").map(o => o.start)),
   };
 }
 

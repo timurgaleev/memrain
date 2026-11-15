@@ -32,7 +32,7 @@
  * outbound side, a later message of mine a promise. Grace, CC-only, list mail
  * and mutes withhold an open but never fabricate a close.
  */
-import type { CalendarLoopSignals, MessageSignal, ThreadLoopSignals } from "./signals.ts";
+import { nextCalendarStart, type CalendarLoopSignals, type MessageSignal, type ThreadLoopSignals } from "./signals.ts";
 
 export const INBOUND_GRACE_HOURS = 24;
 export const OUTBOUND_GRACE_HOURS = 72;
@@ -246,7 +246,9 @@ export function detectThread(thread: ThreadLoopSignals, now: Date, suppress: Loo
 export function detectCalendar(event: CalendarLoopSignals, now: Date, suppress: LoopSuppressions, changedAt: string = now.toISOString()): CalendarVerdict {
   if (event.myResponse === null) return { open: [], close: [] };
   if (event.status === "cancelled") return { open: [], close: ["rsvp_owed"], closedBy: "cancelled" };
-  if (ms(event.start) <= now.getTime()) return { open: [], close: ["rsvp_owed"], closedBy: "expired" };
+  // A series stays owed while any listed occurrence is still ahead.
+  const next = nextCalendarStart(event, now);
+  if (next === null) return { open: [], close: ["rsvp_owed"], closedBy: "expired" };
   if (event.myResponse !== "needsaction") return { open: [], close: ["rsvp_owed"], closedBy: "reply" };
   if (event.organizerMine) return { open: [], close: [] };
   if (suppress.threads.has(event.threadRef) || (event.organizerKey !== null && suppress.senders.has(event.organizerKey))) {
@@ -262,8 +264,8 @@ export function detectCalendar(event: CalendarLoopSignals, now: Date, suppress: 
       summary: summaryLine("RSVP owed to", event.organizer, event.title),
       openedAt: changedAt,
       lastActivityAt: changedAt,
-      evidenceAt: event.start,
-      dueAt: event.start,
+      evidenceAt: next,
+      dueAt: next,
     }],
     close: [],
   };
