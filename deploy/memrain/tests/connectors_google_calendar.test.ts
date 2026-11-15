@@ -272,6 +272,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const result = await run(db.storage, world, account.id);
       expect(result.status).toBe("success");
       expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
+      // The admin page and doctor read this; a clean run must stamp it.
+      expect((await getAccount(e, account.id))!.last_success_at).not.toBeNull();
 
       const lists = eventListCalls(world);
       expect(lists).toHaveLength(2);
@@ -329,6 +331,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       world.events = (_cal, q) => (q.get("pageToken") === PAGE_TOKEN ? { status: 429, retryAfter: "3600", body: GOOGLE_FIXTURES.error403UserRateLimit! } : "eventsFullPage1");
       const result = await run(db.storage, world, account.id);
       expect(result.status).toBe("partial");
+      expect((await getAccount(e, account.id))!.last_success_at).toBeNull();
       // The checkpoint is the half-done pass, never a sync token.
       const cursor = await readCursor(e, account.id, calendarStream("primary"));
       expect(cursor).not.toBe(FULL_TOKEN);

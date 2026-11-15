@@ -195,6 +195,11 @@ export async function markNeedsReconnect(engine: Engine, id: string, reason: str
   return r.rows.length > 0;
 }
 
+/** Stamp a clean sync run: the admin page shows it as "Last sync". */
+export async function markAccountSynced(engine: Engine, id: string): Promise<void> {
+  await engine.query(`UPDATE connector_accounts SET last_success_at = NOW() WHERE id = $1`, [id]);
+}
+
 /** Delete an account and, by cascade, its credential. Pages are never touched. */
 export async function deleteAccount(engine: Engine, id: string): Promise<boolean> {
   const r = await engine.query(`DELETE FROM connector_accounts WHERE id = $1 RETURNING id`, [id]);

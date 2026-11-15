@@ -17,6 +17,7 @@ import type { EmbedFn } from "../indexer.ts";
 import {
   getAccount,
   listAccounts,
+  markAccountSynced,
   markNeedsReconnect,
   readCredential,
   renewCredential,
@@ -175,6 +176,9 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
             // eslint-disable-next-line no-control-regex
             const why = reason.replace(/[\u0000-\u001F\u007F]/g, " ").trim().slice(0, MAX_REASON) || DEFAULT_REASON;
             await markNeedsReconnect(engine, id, why);
+          },
+          recordRun: async (id, result) => {
+            if (result.status === "success" || result.status === "nothing_new") await markAccountSynced(engine, id);
           },
         },
         onUpstreamDelete: async (st, item) => {
