@@ -17,6 +17,7 @@ import {
   readSearchStats,
   type StatsWindow,
 } from "../core/search/telemetry.ts";
+import { readShadowStats, type ShadowStats } from "../core/search/shadow.ts";
 import {
   resolveSearchMode,
   MODE_BUNDLES,
@@ -40,6 +41,8 @@ export async function runSearchStats(opts: SearchStatsOptions = {}): Promise<num
     const stats = await readSearchStats(storage.engine(), {
       ...(opts.days !== undefined ? { days: opts.days } : {}),
     });
+    // Shadow ranking rollup (MEMRAIN_RANK_SHADOW); empty when it never ran.
+    const shadow = await readShadowStats(storage.engine(), opts.days ?? 7).catch(() => [] as ShadowStats[]);
     if (opts.json) {
       console.log(
         JSON.stringify(
@@ -48,6 +51,7 @@ export async function runSearchStats(opts: SearchStatsOptions = {}): Promise<num
             schema_version: 1,
             active_mode: resolveSearchMode(),
             ...stats,
+            shadow,
           },
           null,
           2,
@@ -56,6 +60,12 @@ export async function runSearchStats(opts: SearchStatsOptions = {}): Promise<num
       return 0;
     }
     printStatsText(stats);
+    for (const sh of shadow) {
+      console.log(
+        `  Shadow ${sh.flag}: ${sh.count} searches, first page would change in ` +
+          `${(sh.rank1_changed_rate * 100).toFixed(1)}%, top-5 overlap ${sh.mean_jaccard5.toFixed(2)}`,
+      );
+    }
     return 0;
   });
 }

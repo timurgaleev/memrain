@@ -92,7 +92,8 @@ import { rankFlag } from "./ranking-flags.ts";
 import { downweightKeywordArm, KEYWORD_WEAK_WEIGHT } from "./arm-confidence.ts";
 import { fuseByPage, pageKeysForChunks } from "./page-fusion.ts";
 import { CACHE_HIT_CONFIDENCE, gradeConfidence } from "./confidence-grade.ts";
-import { runPostFusionStages } from "./stages/pipeline.ts";
+import { paidStageEnabled, runPostFusionStages } from "./stages/pipeline.ts";
+import { shadowCopy, shadowFlag, startShadow } from "./shadow.ts";
 import type { HitPayload, StageInput } from "./stages/types.ts";
 
 /**
@@ -1310,7 +1311,13 @@ async function hybridSearchUnbounded(
     },
     explainAcc,
   };
+  // Shadow ranking (MEMRAIN_RANK_SHADOW, off by default): keep a copy of the
+  // candidates before the stages score them in place, rank it with the flag
+  // flipped once this call's result is decided, and record only aggregates.
+  const shadow = opts.noTelemetry || graphRerankOn || paidStageEnabled(stageInput) ? null : shadowFlag();
+  const shadowHits = shadow ? shadowCopy(scored) : null;
   const final = await runPostFusionStages(scored, stageInput);
+  if (shadow && shadowHits) startShadow(shadow, shadowHits, stageInput, final);
 
   // 8c. Alias-hop (default ON, exact-full-query-alias gated): if the whole
   //     query is a declared alias, boost the canonical page when present or
