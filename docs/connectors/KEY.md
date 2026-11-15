@@ -131,8 +131,8 @@ Both keys are read from files only their owner can read; neither is printed.
 ### 1. Close connectors
 
 ```bash
-docker exec deploy-memrain-1 memrain config set MEMRAIN_CONNECTORS_ENABLED 0
-bash deploy/deploy.sh
+docker exec deploy-memrain-1 bun run src/cli.ts config set MEMRAIN_CONNECTORS_ENABLED 0
+docker restart deploy-memrain-1
 ```
 
 A sync that renews a token while you rotate would seal it under the old key.
@@ -157,7 +157,7 @@ docker exec -i deploy-memrain-1 sh -c 'umask 077; cat > /tmp/kek-new' < /root/ke
 ### 3. Rotate
 
 ```bash
-docker exec deploy-memrain-1 memrain connectors rotate-kek --old-file /tmp/kek-old --new-file /tmp/kek-new
+docker exec deploy-memrain-1 bun run src/cli.ts connectors rotate-kek --old-file /tmp/kek-old --new-file /tmp/kek-new
 # rotated connector key <old id> -> <new id>: N credential(s), N oauth client(s), N pending connect(s)
 ```
 
@@ -186,9 +186,9 @@ old key is still there if you need it in step 6.
 docker exec deploy-memrain-1 rm -f /tmp/kek-old /tmp/kek-new
 # back up /root/kek-new.b64 offline (as in "Back it up" above), then:
 shred -u /root/kek-new.b64
-docker exec deploy-memrain-1 memrain config set MEMRAIN_CONNECTORS_ENABLED 1
-bash deploy/deploy.sh
-docker exec deploy-memrain-1 memrain doctor     # connector-accounts clean
+docker exec deploy-memrain-1 bun run src/cli.ts config set MEMRAIN_CONNECTORS_ENABLED 1
+docker restart deploy-memrain-1
+docker exec deploy-memrain-1 bun run src/cli.ts doctor     # connector-accounts clean
 ```
 
 ### 6. If doctor reports rows sealed by another key
@@ -202,7 +202,7 @@ aws secretsmanager get-secret-value --secret-id <secrets_prefix>/memrain-connect
   --version-stage AWSPREVIOUS --query SecretString --output text --region <region> \
   | docker exec -i deploy-memrain-1 sh -c 'umask 077; cat > /tmp/kek-old'
 docker exec deploy-memrain-1 sh -c 'umask 077; printf %s "$MEMRAIN_CONNECTOR_KEK" > /tmp/kek-new'
-docker exec deploy-memrain-1 memrain connectors rotate-kek --old-file /tmp/kek-old --new-file /tmp/kek-new
+docker exec deploy-memrain-1 bun run src/cli.ts connectors rotate-kek --old-file /tmp/kek-old --new-file /tmp/kek-new
 docker exec deploy-memrain-1 rm -f /tmp/kek-old /tmp/kek-new
 ```
 

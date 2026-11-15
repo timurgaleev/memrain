@@ -28,14 +28,14 @@ sync run, and all four must be open:
 
 The commands below run on the host from `/opt/memrain` unless they start with
 `terraform` or `aws` on your machine. `memrain` means
-`docker exec deploy-memrain-1 memrain`.
+`docker exec deploy-memrain-1 bun run src/cli.ts`.
 
 ## Steps
 
 ### 1. Check the starting point
 
 ```bash
-docker exec deploy-memrain-1 memrain doctor
+docker exec deploy-memrain-1 bun run src/cli.ts doctor
 ```
 
 The `connector-accounts` line should read
@@ -58,16 +58,18 @@ in the next step is on.
 ### 3. Turn connectors on
 
 ```bash
-docker exec deploy-memrain-1 memrain config set MEMRAIN_CONNECTORS_ENABLED 1
-bash deploy/deploy.sh
-docker exec deploy-memrain-1 memrain doctor     # connector-accounts: connectors on, no account connected
+docker exec deploy-memrain-1 bun run src/cli.ts config set MEMRAIN_CONNECTORS_ENABLED 1
+docker restart deploy-memrain-1
+docker exec deploy-memrain-1 bun run src/cli.ts doctor     # connector-accounts: connectors on, no account connected
 ```
 
 If doctor says `connectors requested but closed: <reason>` instead, the key did
 not load; the reason names the problem (see Troubleshooting).
 
 The setting is stored in the database, so it survives the `.env` rewrite that
-every bootstrap run does, and it is read at start-up, hence the redeploy. It
+every bootstrap run does, and it is read at start-up, hence the restart.
+`deploy.sh` is not enough here: it leaves an unchanged container running, so the
+process would never read the new setting. It
 is deliberately not in the compose `environment:` allowlist: an entry there,
 even an empty one, would hide the stored setting. With it on, the Connections
 page in the admin console opens and you can store OAuth clients and connect
@@ -95,6 +97,25 @@ day counts against it. Pick a value you are happy to spend on a bad day.
 
 ### 5. Connect your accounts
 
+Each connector writes into a source of its own kind, never into a source that
+holds your notes: retention and upstream deletes only ever run in such a
+source. The Connections page offers only sources of the right kind, so
+register one first (the id and prefix are yours to choose):
+
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts sources register me-calendar --kind calendar --path-prefix calendar/
+docker exec deploy-memrain-1 bun run src/cli.ts sources register me-meetings --kind meeting --path-prefix meeting/   # Fireflies
+```
+
+Then let your agents read it. Add the new source to the read set of each OAuth
+client that should see it (check with `--dry-run` first; only the read set
+changes):
+
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> --source <its write source> \
+  --federated-read <its current read sources>,me-calendar --dry-run
+```
+
 - Google Calendar: [GOOGLE.md](./GOOGLE.md) (a Google Cloud OAuth client of
   your own, then the Connect button).
 - Fireflies: [FIREFLIES.md](./FIREFLIES.md) (an API key).
@@ -108,10 +129,10 @@ frame, never acted on.
 ### 6. Start the scheduler and enable `connector_sync`
 
 ```bash
-docker exec deploy-memrain-1 memrain config set MEMRAIN_DAEMONS 1
-bash deploy/deploy.sh
-docker exec deploy-memrain-1 memrain daemons enable connector_sync
-docker exec deploy-memrain-1 memrain daemons status
+docker exec deploy-memrain-1 bun run src/cli.ts config set MEMRAIN_DAEMONS 1
+docker restart deploy-memrain-1
+docker exec deploy-memrain-1 bun run src/cli.ts daemons enable connector_sync
+docker exec deploy-memrain-1 bun run src/cli.ts daemons status
 ```
 
 `status` lists `connector_sync` as enabled and paid. It runs every 15 minutes
@@ -125,7 +146,7 @@ Three caps apply to every sync run, and the lowest one wins:
 | Cap | Default | Change it with |
 |---|---|---|
 | Brain-wide, per UTC day | none (step 4 set it) | `MEMRAIN_DAILY_BUDGET_USD` in the host `.env` |
-| `connector_sync`, all sources, per day | `$5` | `memrain config set --force MEMRAIN_DAEMON_CONNECTOR_SYNC_MAX_USD_PER_DAY 2`, then redeploy |
+| `connector_sync`, all sources, per day | `$5` | `memrain config set --force MEMRAIN_DAEMON_CONNECTOR_SYNC_MAX_USD_PER_DAY 2`, then `docker restart deploy-memrain-1` |
 | One account, per day | `$1.00` and 5,000 items | the account's own settings |
 
 A run also stops after 500 items (`MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN`) and
@@ -140,10 +161,10 @@ account's items, is held for you rather than applied
 Look at these at least daily for 48 hours before you rely on the data:
 
 ```bash
-docker exec deploy-memrain-1 memrain doctor             # connector-accounts, connector-health, spend-wallet
-docker exec deploy-memrain-1 memrain connectors status
-docker exec deploy-memrain-1 memrain daemons status
-docker exec deploy-memrain-1 memrain spend --days 2     # where the money went, against the daily caps
+docker exec deploy-memrain-1 bun run src/cli.ts doctor             # connector-accounts, connector-health, spend-wallet
+docker exec deploy-memrain-1 bun run src/cli.ts connectors status
+docker exec deploy-memrain-1 bun run src/cli.ts daemons status
+docker exec deploy-memrain-1 bun run src/cli.ts spend --days 2     # where the money went, against the daily caps
 ```
 
 ## Optional: the notification webhook secret
@@ -208,7 +229,7 @@ webhook delivery stays off.
 |---|---|---|
 | Now, no restart | `memrain daemons pause connector_sync` | No new sync runs; `resume` undoes it |
 | Now, no restart | `memrain daemons pause all` | Every daemon stops scheduling |
-| On restart | `memrain config set MEMRAIN_CONNECTORS_ENABLED 0`, then redeploy | Connectors closed: no account is synced, no token is opened |
+| On restart | `memrain config set MEMRAIN_CONNECTORS_ENABLED 0`, then `docker restart deploy-memrain-1` | Connectors closed: no account is synced, no token is opened |
 
 Pages already written stay in the brain in every case. Removing an account's
 data is a separate, explicit action.
@@ -220,7 +241,7 @@ data is a separate, explicit action.
 | doctor: `connectors requested but closed: no connector key: ...` | The secret has no value yet, or fetch-secrets ran before you filled it | Fill it ([KEY.md](./KEY.md)), rerun `fetch-secrets.sh`, redeploy |
 | doctor: `... MEMRAIN_CONNECTOR_KEK must decode to 32 bytes` (or `is not base64`) | The value is not base64 of exactly 32 bytes | Put a new value in with [KEY.md](./KEY.md) step 3 before any account is connected |
 | `daemons status` shows `connector_sync` but it never runs | `MEMRAIN_DAEMONS` is not `1` in the running process, or no daily budget | Recheck steps 4 and 6; `status` says `MEMRAIN_DAEMONS is not 1` when that is it |
-| The admin Connections page answers `connectors_disabled` | Step 3 not applied, or the key failed to load | `docker exec deploy-memrain-1 memrain doctor` names the reason |
+| The admin Connections page answers `connectors_disabled` | Step 3 not applied, or the key failed to load | `docker exec deploy-memrain-1 bun run src/cli.ts doctor` names the reason |
 | An account shows `needs_reconnect` | The provider refused its token (expired or revoked) | Connect it again from the Connections page; the sync resumes from where it stopped. For Google in Testing mode, see [GOOGLE.md](./GOOGLE.md#the-7-day-reconnect) |
 | `memrain config set MEMRAIN_CONNECTORS_ENABLED 1` prints `WARN — environment ... overrides this stored value` | The variable is also set in the container environment, which wins | Remove it from wherever it is set (a compose override or the `.env`) |
 | The daily budget vanished after a host rebuild | A bootstrap run rewrote `.env` | Add `MEMRAIN_DAILY_BUDGET_USD` again (step 4) |

@@ -126,13 +126,15 @@ of `.env` files and shell history.)
 
 ### 7. Connect your calendar
 
-1. On the **Connections** page, choose **Connect** for Google, pick the source
-   the calendar should belong to and the **calendar** service.
+1. On the **Connections** page, pick a source of kind `calendar` under
+   **Into source** and choose **Connect Google**. The list is empty until such
+   a source exists: register one first ([ENABLE.md](./ENABLE.md) step 5).
 2. Google opens. Sign in with the test user from step 4, and allow the access
    it lists. On an app in Testing, Google first warns that it has not verified
    the app; continue, since it is your own.
-3. Google sends you back to the redirect URI. The page posts back to Memrain
-   and the account appears with status `active`.
+3. Google sends you back to the redirect URI. Choose **Finish connecting**; the
+   page posts back to Memrain and the account appears as connected, sync off.
+4. Choose **Turn sync on** for the account. Nothing is read before that.
 
 With `connector_sync` enabled ([ENABLE.md](./ENABLE.md) step 6), the first
 sync starts within 15 minutes.
@@ -184,7 +186,7 @@ consent on every connect, so reconnecting does not pile up tokens beyond that.
 ## Verification
 
 ```bash
-docker exec deploy-memrain-1 memrain connectors status
+docker exec deploy-memrain-1 bun run src/cli.ts connectors status
 ```
 
 The Google account shows status `active` and, after the first run, a recent

@@ -114,7 +114,7 @@ a first sync of a busy 90 days can take more than one day.
 ## Verification
 
 ```bash
-docker exec deploy-memrain-1 memrain connectors status
+docker exec deploy-memrain-1 bun run src/cli.ts connectors status
 ```
 
 The Fireflies account shows a recent clean run. Search the brain for the title
