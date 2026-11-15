@@ -2288,6 +2288,57 @@ export class OAuthProvider {
   }
 
   /**
+   * Replace the read set of the live token(s) named `name`, keeping the write
+   * source: it stays the first element of `permissions.source_id` and is
+   * always readable. A token with no source grant writes to `default`, so
+   * that becomes its stored write source. Every source must be registered.
+   * Audited and revision-bumped like set-scopes; a dry run returns the same
+   * before/after and writes nothing.
+   */
+  async setPatReadSources(
+    name: string,
+    sources: string[],
+    who: GrantActor,
+    opts: { dryRun?: boolean } = {},
+  ): Promise<PatGrantChange[]> {
+    const list = Array.from(new Set(sources.map((s) => s.trim()).filter(Boolean)));
+    if (list.length === 0) throw new Error("read source list cannot be empty");
+    return this.engine.transaction(async (tx) => {
+      const live = await tx.query<{ id: number | string; name: string; scopes: unknown; permissions: unknown; budget_usd_per_day: unknown; grant_revision: number | string }>(
+        `SELECT id, name, scopes, permissions, budget_usd_per_day, grant_revision FROM access_tokens
+          WHERE name = $1 AND revoked_at IS NULL ORDER BY id FOR UPDATE`,
+        [name],
+      );
+      if (live.rows.length === 0) return [];
+      const writeSources = new Set(live.rows.map((r) => {
+        const grant = patSnapshot(r).source_id;
+        return typeof grant === "string" ? grant : Array.isArray(grant) && typeof grant[0] === "string" ? grant[0] : "default";
+      }));
+      if (writeSources.size !== 1) {
+        throw new Error(`the live tokens named '${name}' write to different sources; revoke the extra ones first`);
+      }
+      const writeSource = [...writeSources][0]!;
+      const wanted = Array.from(new Set([writeSource, ...list]));
+      const known = await tx.query<{ id: string }>("SELECT id FROM sources WHERE id = ANY($1::text[])", [wanted]);
+      const knownIds = new Set(known.rows.map((r) => r.id));
+      const missing = wanted.filter((id) => !knownIds.has(id));
+      if (missing.length > 0) throw new Error(`Unknown source '${missing.join("', '")}'`);
+      const grant: string | string[] = wanted.length > 1 ? wanted : writeSource;
+      const next = (b: PatGrantSnapshot): PatGrantSnapshot => ({ ...b, source_id: grant });
+      if (opts.dryRun) {
+        return live.rows.map((r) => {
+          const before = patSnapshot(r);
+          return { id: Number(r.id), revision: Number(r.grant_revision), before, after: next(before) };
+        });
+      }
+      return this.mutatePatGrant(tx, name, who, "set_read_sources", next, {
+        sql: "permissions = COALESCE(permissions, '{}'::jsonb) || $6::text::jsonb",
+        params: [JSON.stringify({ source_id: grant })],
+      });
+    });
+  }
+
+  /**
    * Replace the takes-holder allow-list of the live token(s) named `name`.
    * A JSONB merge, not a replace: an operator-set `permissions.source_id`
    * tenant grant survives (a wholesale replace would floor the token to the

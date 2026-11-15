@@ -74,6 +74,10 @@
  *              Soft-revoke a personal access token by name.
  *   permissions <name> set-takes-holders a,b
  *              Replace the token's takes-visibility allow-list.
+ *   permissions <name> set-read-sources a,b,c [--dry-run]
+ *              Replace the token's read set in place. The write source stays
+ *              first and readable; every source must exist. Prints before and
+ *              after; --dry-run changes nothing.
  *   permissions <name> set-scopes read,write,admin
  *              Replace the token's scopes. Both permissions changes, and
  *              set-budget on a token, are audited as `pat:<id>` in the grant
@@ -820,18 +824,59 @@ async function setScopes(name: string, value: string): Promise<void> {
   );
 }
 
+/** A token's read set as its snapshot stores it; no grant reads the `default` floor. */
+function readSourcesOf(grant: string | string[] | null): string[] {
+  if (typeof grant === "string") return [grant];
+  if (Array.isArray(grant) && grant.length > 0) return grant;
+  return ["default"];
+}
+
+/**
+ * Replace the read set of a personal access token in place, keeping its write
+ * source. Prints before and after; --dry-run changes nothing.
+ */
+async function setReadSources(name: string, value: string, dryRun: boolean): Promise<void> {
+  const list = value.split(",").map((s) => s.trim()).filter(Boolean);
+  const changed = await withProvider((p) =>
+    p.setPatReadSources(name, list, { actor: cliActor(), via: "cli" }, { dryRun }),
+  );
+  if (changed.length === 0) throw new Error(`no live token named '${name}'`);
+  const first = changed[0]!;
+  const after = readSourcesOf(first.after.source_id);
+  console.log(
+    JSON.stringify(
+      {
+        name,
+        dry_run: dryRun,
+        write_source: after[0],
+        before: { read_sources: readSourcesOf(first.before.source_id) },
+        after: { read_sources: after },
+        revisions: dryRun ? [] : changed.map((c) => c.revision),
+        note: "The write source is always readable and stays first. The token reads the new set on its next request.",
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 async function setPermissions(
   name: string,
   action: string,
   value: string | undefined,
+  dryRun = false,
 ): Promise<void> {
   if (name && action === "set-scopes" && value) {
     return setScopes(name, value);
   }
+  if (name && action === "set-read-sources" && value) {
+    return setReadSources(name, value, dryRun);
+  }
   if (!name || action !== "set-takes-holders" || !value) {
     throw new Error(
       "Usage: auth permissions <name> set-takes-holders world,grace,brain\n" +
-        "       auth permissions <name> set-scopes read,write,admin",
+        "       auth permissions <name> set-scopes read,write,admin\n" +
+        "       auth permissions <name> set-read-sources a,b,c [--dry-run]",
     );
   }
   const list = value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -1074,10 +1119,11 @@ async function doctorCommand(rest: string[]): Promise<void> {
 
 export async function runAuth(args: string[]): Promise<void> {
   const [sub, ...rest] = args;
-  // Only rescope-client can preview. Every other subcommand would ignore the
+  // Only rescope-client and set-read-sources preview. Every other subcommand would ignore the
   // flag and mutate, which is the opposite of what it asks for.
-  if (sub !== "rescope-client" && rest.some((a) => a === "--dry-run" || a.startsWith("--dry-run="))) {
-    throw new Error(`auth ${sub ?? ""}: --dry-run is supported only by rescope-client`);
+  const previews = sub === "rescope-client" || (sub === "permissions" && rest[1] === "set-read-sources");
+  if (!previews && rest.some((a) => a === "--dry-run" || a.startsWith("--dry-run="))) {
+    throw new Error(`auth ${sub ?? ""}: --dry-run is supported only by rescope-client and permissions set-read-sources`);
   }
   switch (sub as AuthSub) {
     case "register-client":
@@ -1117,8 +1163,10 @@ export async function runAuth(args: string[]): Promise<void> {
       return listTokens();
     case "revoke":
       return revokeToken(rest[0]!);
-    case "permissions":
-      return setPermissions(rest[0]!, rest[1]!, rest[2]);
+    case "permissions": {
+      const { positional, flags } = parseFlags(rest);
+      return setPermissions(positional[0]!, positional[1]!, positional[2], parseBoolFlag("dry-run", flags["dry-run"]));
+    }
     case "test":
       return testCommand(rest);
     case "doctor":
