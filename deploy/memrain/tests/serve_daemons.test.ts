@@ -14,6 +14,8 @@ import { startBackgroundWork, workerLaneOptions, type BackgroundDeps } from "../
 import { daemonSchedulerHealth, stopDaemonScheduler } from "../src/core/daemons/scheduler.ts";
 import { probeLiveness } from "../src/http/health.ts";
 import type { Worker } from "../src/core/jobs/worker.ts";
+import { getHandler } from "../src/core/jobs/handlers.ts";
+import { LOOPS_SWEEP_JOB_KIND } from "../src/core/loops/daemon.ts";
 
 let dir: string;
 let storage: Storage;
@@ -69,6 +71,13 @@ describe("daemon scheduler in serve", () => {
     const h = daemonSchedulerHealth();
     expect(h).toEqual({ leader: false, tick_age_s: null });
     expect((await probeLiveness(storage)).body.daemons).toEqual({ leader: false, tick_age_s: null });
+  });
+
+  it("registers the loops_sweep handler at boot, so the scheduler can queue it once enabled", async () => {
+    delete process.env.MEMRAIN_DAEMONS;
+    const { worker } = await boot({});
+    await worker.stop();
+    expect(getHandler(LOOPS_SWEEP_JOB_KIND)).toBeDefined();
   });
 
   it("stays off in maintenance", async () => {

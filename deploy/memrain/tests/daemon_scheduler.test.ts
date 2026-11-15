@@ -25,9 +25,9 @@ const probe = (over: Partial<DaemonSpec> = {}): DaemonSpec => ({
   ...over,
 });
 
-/** The probe's outcome; built-in daemons (connector_sync, notifications) report alongside it. */
+/** The probe's outcome; built-in daemons (connector_sync, notifications, loops_sweep) report alongside it. */
 const probeOutcome = (results: Array<{ daemon: string; outcome: string }>) => results.find(r => r.daemon === "probe")?.outcome;
-const BUILTIN_REPORTERS: ReadonlySet<string> = new Set(["connector_sync", "notifications"]);
+const BUILTIN_REPORTERS: ReadonlySet<string> = new Set(["connector_sync", "notifications", "loops_sweep"]);
 
 const jobIds = async (e: Engine) =>
   (await e.query<{ id: string }>(`SELECT id FROM jobs WHERE kind = 'daemon_probe' ORDER BY id`)).rows.map(r => r.id);

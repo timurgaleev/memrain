@@ -69,6 +69,7 @@ import { isDeterministicRefusal } from "./github.ts";
 import type { ConnectorAccountStatus } from "./accounts.ts";
 import { deleteStaleParts, DETACHED_ORIGIN, massDeleteVerdict } from "./retention.ts";
 import { accountRef, type ConnectorDataKind, type Person } from "./model.ts";
+import type { LoopSignals } from "../loops/signals.ts";
 import { connectorsSwitchOn } from "./vault.ts";
 import { ReauthRequiredError, type ConnectorRunStatus, type ResponseClass } from "./types.ts";
 import {
@@ -120,6 +121,8 @@ export interface ItemEnrichment {
   occurredAt: string;
   participants: Person[];
   bulk: boolean;
+  /** Reply state the loop sweep judges (loops/signals.ts). */
+  loop?: LoopSignals;
 }
 
 /** One provider item, rendered and ready to store. */

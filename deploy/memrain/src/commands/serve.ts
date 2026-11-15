@@ -37,6 +37,7 @@ import { envSwitches } from "../core/daemons/controls.ts";
 import { startDaemonScheduler, stopDaemonScheduler } from "../core/daemons/scheduler.ts";
 import { registerConnectorRuntimeIfEnabled } from "../core/connectors/runtime.ts";
 import { registerNotificationsDaemon } from "../core/notifications/job.ts";
+import { registerLoopsSweepDaemon } from "../core/loops/job.ts";
 
 const MAX_JOB_CONCURRENCY = 8;
 
@@ -495,6 +496,8 @@ export function startBackgroundWork(
   // The notifications daemon is off until enabled; registering it only lets
   // the scheduler queue it once the operator turns it on.
   registerNotificationsDaemon(storage.engine());
+  // Same for loops_sweep: free, and off until the operator enables it.
+  registerLoopsSweepDaemon(storage.engine());
   if (registerConnectorRuntimeIfEnabled(storage)) {
     console.log("[memrain] connector sync enabled (connector_sync jobs; the daemon stays off until enabled)");
   }

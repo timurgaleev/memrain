@@ -297,6 +297,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         `SELECT target_slug, type FROM links WHERE source_slug = $1`, [pageSlug("e1single0001@google.com")])).rows;
       expect(links).toEqual([{ target_slug: "people/ana-lee", type: "attended" }]);
       expect(await count(e, `SELECT count(*)::int AS n FROM timeline_events WHERE slug = $1`, [pageSlug("e1single0001@google.com")])).toBe(1);
+      // The runtime's onItemWritten records each event's reply state for the loop sweep.
+      const state = (await e.query<{ kind: string; source_id: string; signals: Record<string, unknown> }>(
+        `SELECT kind, source_id, signals FROM loop_threads WHERE page_slug = $1`, [pageSlug("e1single0001@google.com")])).rows;
+      expect(state).toHaveLength(1);
+      expect(state[0]).toMatchObject({ kind: "calendar", source_id: SOURCE, signals: { kind: "calendar", title: "Roadmap review" } });
 
       // The working-location entry is not a meeting and is not stored.
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("wl0001@google.com")])).toBe(0);
