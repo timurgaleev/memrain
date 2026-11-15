@@ -109,7 +109,8 @@ thread reads a minute, and a run stores at most 500 threads, so a busy mailbox
 takes a few runs: expect an hour or two for a few thousand threads. A run that
 stops part-way (a restart, a rate limit, the run cap) carries on from where it
 stopped, and mail that arrives meanwhile comes in through the change feed.
-Start the first backfill in the evening if your host is small.
+`connector_sync` skips the quiet-hours window (06:00 to 08:00 Europe/Berlin
+by default), so the backfill pauses then and carries on after.
 
 The window never reaches past mail retention: pages are hard-deleted 180 days
 after a thread's last message by default
