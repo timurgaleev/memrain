@@ -9,6 +9,7 @@ import { listAccounts } from "../src/core/connectors/accounts.ts";
 import { getOAuthClient } from "../src/core/connectors/oauth-clients.ts";
 import { handleAdminConnectors, handleConnectorCallbackPage, type AdminConnectorDeps } from "../src/http/admin-connectors.ts";
 import { handleAdminApi } from "../src/http/admin-api.ts";
+import { isSameOriginPost } from "../src/http/same-origin.ts";
 import type { Storage } from "../src/core/storage.ts";
 
 const ORIGIN = "https://brain.example.test";
@@ -80,6 +81,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(page.headers.get("cache-control")).toContain("no-store");
       expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
       expect(page.headers.get("content-security-policy")).toContain("form-action 'self'");
+      // A no-referrer page makes the browser post with `Origin: null`, which the
+      // same-origin gate refuses (seen live). strict-origin keeps a real Origin.
+      expect(page.headers.get("referrer-policy")).toBe("strict-origin");
+      const completeUrl = new URL(`${ORIGIN}/admin/api/connectors/test/complete`);
+      expect(isSameOriginPost(new Request(completeUrl.toString(), { method: "POST", headers: { origin: "null" } }), completeUrl, ORIGIN)).toBe(false);
       const html = await page.text();
       expect(html).not.toContain("<script>");
       expect(html).toContain(`action="/admin/api/connectors/test/complete"`);

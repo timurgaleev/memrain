@@ -498,7 +498,10 @@ export function handleConnectorCallbackPage(req: Request, url: URL): Response | 
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
-      "referrer-policy": "no-referrer",
+      // Not no-referrer: under that policy browsers send `Origin: null` on the
+      // form post, and the same-origin check on /complete refuses it.
+      // strict-origin still keeps the code out of Referer (origin only).
+      "referrer-policy": "strict-origin",
       "x-frame-options": "DENY",
       "content-security-policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     },
