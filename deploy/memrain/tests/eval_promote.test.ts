@@ -9,6 +9,9 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promoteVerdict, runEvalPromote, type PromoteRun } from "../src/commands/eval-promote.ts";
+import { Storage } from "../src/core/storage.ts";
+import { writeDocumentTransaction } from "../src/core/indexer-tx.ts";
+import { deterministicEmbed } from "./det-embed.ts";
 
 setDefaultTimeout(240_000);
 
@@ -91,6 +94,57 @@ describe("runEvalPromote on the bench", () => {
       const judged = join(dir, "s.json");
       writeFileSync(judged, JSON.stringify({ label: "Bedrock-Claude-judged", recall_any_at_5: 0.5 }));
       expect(await runEvalPromote({ flag: "EXACT_LOOKUP", lmeBase: judged, lmeCandidate: judged, outDir: dir, quiet: true })).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runEvalPromote --live", () => {
+  it("joins the labelled dev queries of the live brain, run three times, and refuses an empty set", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "memrain-promote-live-"));
+    const cfgPath = join(dir, "config.json");
+    const db = join(dir, "brain.pglite");
+    try {
+      writeFileSync(cfgPath, JSON.stringify({
+        database: { type: "pglite", path: db },
+        embedding: { provider: "bedrock-titan", model: "amazon.titan-embed-text-v2:0", region: "eu-west-1" },
+        storage: {},
+      }));
+      const seed = new Storage({ dbPath: db });
+      await seed.init();
+      try {
+        await writeDocumentTransaction(seed, { documentId: "doc-ledger", sourcePath: "/notes/ledger.md", title: "Ledger", frontmatter: {}, embeddingModel: "deterministic-test" },
+          [{ text: "ledger owner", entities: [], embedding: deterministicEmbed("ledger owner") }]);
+      } finally {
+        await seed.close();
+      }
+      const out = join(dir, "out");
+      expect(await runEvalPromote({ flag: "EXACT_LOOKUP", live: true, configPath: cfgPath, outDir: out, quiet: true })).toBe(2);
+      const label = new Storage({ dbPath: db });
+      await label.init();
+      try {
+        await label.engine().query(
+          `INSERT INTO eval_queries (id, query, tag, source, expected_doc_ids, tags, lang, split)
+           VALUES ('lbl-1', 'who owns the ledger', 'good', 'labelled', '["doc-ledger"]', '{kind:entity}', 'en', 'dev')`,
+        );
+      } finally {
+        await label.close();
+      }
+      const searched: string[] = [];
+      const code = await runEvalPromote({
+        flag: "EXACT_LOOKUP", live: true, configPath: cfgPath, outDir: out, quiet: true,
+        liveSearch: async (_s, q) => {
+          searched.push(q);
+          return ["/notes/ledger.md"];
+        },
+      });
+      expect(code).not.toBe(2);
+      expect(searched).toEqual(["who owns the ledger", "who owns the ledger", "who owns the ledger"]);
+      const [file] = readdirSync(out);
+      const report = JSON.parse(readFileSync(join(out, file!), "utf8")) as { sets: string[]; by_tag: Record<string, { n: number }> };
+      expect(report.sets).toEqual(["bench", "live"]);
+      expect(report.by_tag["live:kind:entity"]!.n).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
