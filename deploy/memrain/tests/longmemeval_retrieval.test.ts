@@ -103,6 +103,26 @@ describe("runLongMemEval --retrieval-only", () => {
     expect(lines.filter((l) => l.t === "reserve").length).toBe(calls.embeds);
   });
 
+  it("records the ranking flags it ran under and which questions it covered", async () => {
+    // eval promote pairs two summaries by these: a baseline passed twice, or
+    // runs over different questions, must not count as measuring a flag.
+    const prev = process.env.MEMRAIN_RANK_EXACT_LOOKUP;
+    process.env.MEMRAIN_RANK_EXACT_LOOKUP = "1";
+    try {
+      const r = await runLongMemEval({ questions: QUESTIONS, dataset: DATASET, outDir: out, maxUsd: 1, bedrock: stub(calls), retrievalOnly: true });
+      expect(r.summary.ranking_flags).toEqual(["EXACT_LOOKUP"]);
+      const other = await runLongMemEval({ questions: QUESTIONS.slice(0, 1), dataset: DATASET, outDir: join(out, "one"), maxUsd: 1, bedrock: stub(calls), retrievalOnly: true });
+      expect(typeof r.summary.question_ids_sha256).toBe("string");
+      expect(other.summary.question_ids_sha256).not.toBe(r.summary.question_ids_sha256);
+      // Resuming the directory with different flags would mix two configurations.
+      delete process.env.MEMRAIN_RANK_EXACT_LOOKUP;
+      await expect(runLongMemEval({ questions: QUESTIONS, dataset: DATASET, outDir: out, maxUsd: 1, bedrock: stub(calls), retrievalOnly: true })).rejects.toThrow(/different/);
+    } finally {
+      if (prev === undefined) delete process.env.MEMRAIN_RANK_EXACT_LOOKUP;
+      else process.env.MEMRAIN_RANK_EXACT_LOOKUP = prev;
+    }
+  });
+
   it("prices only the embeddings in a dry run", () => {
     const e = estimateLongMemEval({ questions: QUESTIONS, retrievalOnly: true });
     expect(e.stages.answer.max_usd).toBe(0);

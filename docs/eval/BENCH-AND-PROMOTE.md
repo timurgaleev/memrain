@@ -132,7 +132,7 @@ two baseline runs. It then compares the flag with the baseline query by query:
 | `PASS` | nothing failed, nDCG@10 or MRR improved by at least the noise with a Holm-adjusted paired p-value below 0.05, and the lme-r figures were supplied |
 | `INCOMPLETE` | it would pass, but the lme-r figures are missing |
 | `NEUTRAL` | nothing failed and nothing improved beyond the noise; the flag stays opt-in |
-| `REFUSED` | the inputs cannot support a verdict, such as LongMemEval summaries that are not retrieval-only or cover different questions |
+| `REFUSED` | the inputs cannot support a verdict, such as LongMemEval summaries that are not retrieval-only, cover different questions, or do not show the flag off in the base run and on in the other with no other ranking flag different |
 
 - `--lme-r-base` and `--lme-r` take the `summary.json` of two `eval longmemeval
   --retrieval-only` runs over the same questions. For the second run, set the

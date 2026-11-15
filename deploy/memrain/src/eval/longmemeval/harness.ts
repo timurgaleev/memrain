@@ -31,7 +31,7 @@
  * directory.
  */
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../../core/storage.ts";
@@ -51,6 +51,7 @@ import type { LmeQuestion, LmeSession } from "./dataset.ts";
 import { CapExceeded, SpendLedger, type Stage } from "./ledger.ts";
 import { EmbedCache } from "./embed-cache.ts";
 import { binaryGrades, ndcgAtK } from "../../core/search/metrics.ts";
+import { RANKING_FLAGS, rankFlag } from "../../core/search/ranking-flags.ts";
 import {
   ANSWER_SYSTEM,
   JUDGE_SYSTEM,
@@ -230,6 +231,10 @@ export interface LongMemEvalSummary {
   recall_any_at_10?: number | null;
   recall_all_at_10?: number | null;
   ndcg_at_10?: number | null;
+  /** Retrieval-only runs: the MEMRAIN_RANK_* flags that were on, so two runs can be paired by what they measured. */
+  ranking_flags?: string[];
+  /** Retrieval-only runs: sha256 of the sorted selected question ids. */
+  question_ids_sha256?: string;
 }
 
 export interface SessionRecall {
@@ -590,6 +595,8 @@ function runHeader(dataset: { url: string; sha256: string }, models: LmeModels, 
       models: { embed: models.embed },
       retrieval_k: RETRIEVAL_K,
       bounds: { embed_max_input_bytes: EMBED_MAX_INPUT_BYTES },
+      // In the header, so resuming the directory under other flags is refused.
+      ranking_flags: RANKING_FLAGS.filter((f) => rankFlag(f)),
     };
   }
   return {
@@ -690,6 +697,8 @@ function summarize(
           recall_any_at_10: meanOf(retrieval.recall_any_at_10),
           recall_all_at_10: meanOf(retrieval.recall_all_at_10),
           ndcg_at_10: meanOf(retrieval.ndcg_at_10),
+          ranking_flags: header.ranking_flags as string[],
+          question_ids_sha256: createHash("sha256").update(selected.map((q) => q.question_id).sort().join("\n")).digest("hex"),
         }
       : {}),
   };

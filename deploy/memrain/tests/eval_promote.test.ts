@@ -8,7 +8,7 @@ import { describe, expect, it, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promoteVerdict, runEvalPromote, type PromoteRun } from "../src/commands/eval-promote.ts";
+import { pairLme, promoteVerdict, runEvalPromote, type LmeRun, type PromoteRun } from "../src/commands/eval-promote.ts";
 import { Storage } from "../src/core/storage.ts";
 import { writeDocumentTransaction } from "../src/core/indexer-tx.ts";
 import { deterministicEmbed } from "./det-embed.ts";
@@ -98,7 +98,7 @@ describe("runEvalPromote on the bench", () => {
       // of the set; its recall says nothing about the whole.
       const summary = (over: Record<string, unknown>) => ({
         label: "LongMemEval-retrieval-only", dataset: { sha256: "d" }, selected: 20, recall_scored: 18,
-        recall_any_at_5: 0.8, not_run: 0, interrupted: [], ...over,
+        recall_any_at_5: 0.8, not_run: 0, interrupted: [], ranking_flags: [], question_ids_sha256: "ids", ...over,
       });
       const full = join(dir, "full.json");
       const partial = join(dir, "partial.json");
@@ -108,9 +108,33 @@ describe("runEvalPromote on the bench", () => {
       writeFileSync(interrupted, JSON.stringify(summary({ interrupted: ["q7"] })));
       expect(await runEvalPromote({ flag: "EXACT_LOOKUP", lmeBase: full, lmeCandidate: partial, outDir: dir, quiet: true })).toBe(2);
       expect(await runEvalPromote({ flag: "EXACT_LOOKUP", lmeBase: interrupted, lmeCandidate: full, outDir: dir, quiet: true })).toBe(2);
+      // A summary from before the run recorded its flags cannot show what it measured.
+      const unlabelled = join(dir, "unlabelled.json");
+      const { ranking_flags: _f, ...rest } = summary({ ranking_flags: ["EXACT_LOOKUP"] });
+      writeFileSync(unlabelled, JSON.stringify(rest));
+      expect(await runEvalPromote({ flag: "EXACT_LOOKUP", lmeBase: full, lmeCandidate: unlabelled, outDir: dir, quiet: true })).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("pairLme", () => {
+  const lmeRun = (over: Partial<LmeRun> = {}): LmeRun => ({
+    path: "s.json", recall: 0.8, selected: 20, scored: 18, dataset: "d", questions: "ids-a", flagsOn: [], ...over,
+  });
+
+  it("pairs a flag-off baseline with a run that differs only by the flag", () => {
+    const pair = pairLme("EXACT_LOOKUP", lmeRun(), lmeRun({ recall: 0.82, flagsOn: ["EXACT_LOOKUP"] }));
+    expect(pair).toEqual({ base: 0.8, candidate: 0.82 });
+  });
+
+  it("refuses a pair that did not measure the flag, or measured other questions", () => {
+    // The baseline passed twice would let lme-r look measured when it was not.
+    expect(() => pairLme("EXACT_LOOKUP", lmeRun(), lmeRun())).toThrow(/EXACT_LOOKUP/);
+    expect(() => pairLme("EXACT_LOOKUP", lmeRun({ flagsOn: ["EXACT_LOOKUP"] }), lmeRun({ flagsOn: ["EXACT_LOOKUP"] }))).toThrow(/EXACT_LOOKUP/);
+    expect(() => pairLme("EXACT_LOOKUP", lmeRun(), lmeRun({ flagsOn: ["EXACT_LOOKUP", "PAGE_FUSION"] }))).toThrow(/PAGE_FUSION/);
+    expect(() => pairLme("EXACT_LOOKUP", lmeRun(), lmeRun({ flagsOn: ["EXACT_LOOKUP"], questions: "ids-b" }))).toThrow(/different questions/);
   });
 });
 

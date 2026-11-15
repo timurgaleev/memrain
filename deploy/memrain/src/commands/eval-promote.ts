@@ -182,7 +182,39 @@ class Refusal extends Error {
   override name = "Refusal";
 }
 
-function readLme(path: string): { recall: number; selected: number; scored: number; dataset: string } {
+export interface LmeRun {
+  path: string;
+  recall: number;
+  selected: number;
+  scored: number;
+  dataset: string;
+  /** sha256 of the sorted question ids the run selected. */
+  questions: string;
+  /** The ranking flags that were on during the run. */
+  flagsOn: string[];
+}
+
+/**
+ * The lme-r figures for the verdict, only when the two runs measured this flag:
+ * the same questions and dataset, the flag off in the baseline and on in the
+ * candidate, and no other flag different. Otherwise passing the baseline twice
+ * (or a run with a second flag on) would count as evidence for the flag.
+ */
+export function pairLme(flag: RankingFlag, b: LmeRun, c: LmeRun): { base: number; candidate: number } {
+  if (b.selected !== c.selected || b.scored !== c.scored || b.dataset !== c.dataset || b.questions !== c.questions) {
+    throw new Refusal("the two LongMemEval summaries cover different questions or datasets");
+  }
+  if (b.flagsOn.includes(flag) || !c.flagsOn.includes(flag)) {
+    throw new Refusal(`--lme-r-base must be a run with MEMRAIN_RANK_${flag} off and --lme-r one with it on`);
+  }
+  const others = [...new Set([...b.flagsOn, ...c.flagsOn])].filter((f) => f !== flag && b.flagsOn.includes(f) !== c.flagsOn.includes(f));
+  if (others.length > 0) {
+    throw new Refusal(`the two LongMemEval runs also differ in ${others.map((f) => `MEMRAIN_RANK_${f}`).join(", ")}`);
+  }
+  return { base: b.recall, candidate: c.recall };
+}
+
+function readLme(path: string): LmeRun {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
@@ -192,6 +224,7 @@ function readLme(path: string): { recall: number; selected: number; scored: numb
   const s = raw as {
     label?: unknown; recall_any_at_5?: unknown; selected?: unknown; recall_scored?: unknown;
     not_run?: unknown; interrupted?: unknown; dataset?: { sha256?: unknown };
+    ranking_flags?: unknown; question_ids_sha256?: unknown;
   };
   if (s.label !== LME_RETRIEVAL_LABEL || typeof s.recall_any_at_5 !== "number") {
     throw new Refusal(`${path} is not the summary of an 'eval longmemeval --retrieval-only' run`);
@@ -201,7 +234,18 @@ function readLme(path: string): { recall: number; selected: number; scored: numb
   if (s.not_run !== 0 || !Array.isArray(s.interrupted) || s.interrupted.length > 0 || typeof s.recall_scored !== "number" || s.recall_scored < 1) {
     throw new Refusal(`${path} is from an incomplete run (questions not run or interrupted); finish or resume it first`);
   }
-  return { recall: s.recall_any_at_5, selected: Number(s.selected ?? 0), scored: s.recall_scored, dataset: String(s.dataset?.sha256 ?? "") };
+  if (!Array.isArray(s.ranking_flags) || !s.ranking_flags.every((f) => typeof f === "string") || typeof s.question_ids_sha256 !== "string") {
+    throw new Refusal(`${path} does not record its ranking flags and questions; rerun it with this version`);
+  }
+  return {
+    path,
+    recall: s.recall_any_at_5,
+    selected: Number(s.selected ?? 0),
+    scored: s.recall_scored,
+    dataset: String(s.dataset?.sha256 ?? ""),
+    questions: s.question_ids_sha256,
+    flagsOn: s.ranking_flags as string[],
+  };
 }
 
 const envFor = (flag: RankingFlag, on: boolean) => ({ [`MEMRAIN_RANK_${flag}`]: on ? "1" : "0" });
@@ -257,11 +301,7 @@ export async function runEvalPromote(opts: EvalPromoteOptions): Promise<number> 
   try {
     let lme: { base: number; candidate: number } | undefined;
     if (opts.lmeBase && opts.lmeCandidate) {
-      const [b, c] = [readLme(opts.lmeBase), readLme(opts.lmeCandidate)];
-      if (b.selected !== c.selected || b.scored !== c.scored || b.dataset !== c.dataset) {
-        throw new Refusal("the two LongMemEval summaries cover different questions or datasets");
-      }
-      lme = { base: b.recall, candidate: c.recall };
+      lme = pairLme(flag, readLme(opts.lmeBase), readLme(opts.lmeCandidate));
     }
     const qrels = loadBenchQrels();
     const brain = await openBenchBrain();
