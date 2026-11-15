@@ -4,7 +4,8 @@
  *
  * Only `good` rows with at least one relevant document count, and only the
  * dev split unless asked: sealed rows are scored once per pre-registration by
- * `memrain eval --split sealed`, never by a tuning loop. Document ids are
+ * the sealed A/B run (`eval qrels build`, then `eval --split sealed`), never by
+ * a tuning loop. Document ids are
  * mapped to their current source path; a label whose documents are all gone
  * is skipped rather than scored as a miss.
  */

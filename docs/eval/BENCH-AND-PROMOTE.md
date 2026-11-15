@@ -179,7 +179,17 @@ choices cannot tilt it. Dismiss captures that are not worth a label. The page
 shows how many dev and sealed labels exist against the target of 150.
 
 Labelled dev queries feed `eval promote --live`. Sealed ones are scored only by
-`memrain eval --split sealed`, once per pre-registration.
+the sealed A/B run, once per pre-registration. That run reads a qrels file, so
+export the labels first; the file keeps each label's split and every document
+you marked:
+
+```bash
+sudo docker exec deploy-memrain-1 bun run src/cli.ts eval qrels build \
+  --out /home/bun/.memrain/qrels.live.local.json
+```
+
+Then pass `--qrels /home/bun/.memrain/qrels.live.local.json --split sealed` to
+the sealed run described in [PREREG-TEMPLATE.md](PREREG-TEMPLATE.md).
 
 ## Shadow ranking
 
