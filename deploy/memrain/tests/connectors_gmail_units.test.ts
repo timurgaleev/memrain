@@ -43,6 +43,22 @@ describe("gmail message reading", () => {
     expect(extractBody(root)).toEqual({ text: "<p>own html</p>", isHtml: true });
   });
 
+  it("keeps every inline text part of a mixed message, in order, and the plain alternative over its html", () => {
+    const root: GmailMimePart = {
+      mimeType: "multipart/mixed",
+      parts: [
+        { mimeType: "multipart/alternative", parts: [
+          { mimeType: "text/plain", body: { data: b64("first part") } },
+          { mimeType: "text/html", body: { data: b64("<p>first part</p>") } },
+        ] },
+        { mimeType: "image/png", filename: "", headers: [{ name: "Content-Disposition", value: "inline" }], body: { attachmentId: "img", size: 10 } },
+        { mimeType: "text/plain", body: { data: b64("second part") } },
+        { mimeType: "text/plain", filename: "notes.txt", body: { data: b64("attached notes") } },
+      ],
+    };
+    expect(extractBody(root)).toEqual({ text: "first part\n\nsecond part", isHtml: false });
+  });
+
   it("describes attachments and invites by name, type and size, never their handle", () => {
     const root: GmailMimePart = {
       mimeType: "multipart/mixed",

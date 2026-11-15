@@ -70,11 +70,16 @@ function isAttachment(p: GmailMimePart): boolean {
   return (typeof p.filename === "string" && p.filename !== "") || p.mimeType === "message/rfc822" || /^attachment\b/i.test(partHeader(p, "Content-Disposition"));
 }
 
-/** The message text: the first text/plain part, else the first text/html, never inside an attachment. */
+/**
+ * The message text: every inline text/plain part in order (a client can put an
+ * image between two text parts), else every inline text/html part, so the
+ * plain version of a multipart/alternative stands for its html one. Never
+ * inside an attachment.
+ */
 export function extractBody(root: GmailMimePart | undefined): { text: string; isHtml: boolean } {
   if (!isPart(root)) return { text: "", isHtml: false };
-  let html: string | null = null;
   const attached: string[] = [];
+  const texts: Array<{ html: boolean; data: string }> = [];
   for (const { part: p, path } of walkGmailMime(root)) {
     if (attached.some(parent => path.startsWith(`${parent}.`))) continue;
     if (isAttachment(p)) {
@@ -83,10 +88,12 @@ export function extractBody(root: GmailMimePart | undefined): { text: string; is
     }
     const data = typeof p.body?.data === "string" ? p.body.data : null;
     if (data === null) continue;
-    if (p.mimeType === "text/plain") return { text: decodeBase64Url(data), isHtml: false };
-    if (p.mimeType === "text/html" && html === null) html = decodeBase64Url(data);
+    if (p.mimeType === "text/plain" || p.mimeType === "text/html") texts.push({ html: p.mimeType === "text/html", data });
   }
-  if (html !== null) return { text: html, isHtml: true };
+  const plain = texts.filter(t => !t.html);
+  if (plain.length > 0) return { text: plain.map(t => decodeBase64Url(t.data)).join("\n\n"), isHtml: false };
+  const html = texts.filter(t => t.html);
+  if (html.length > 0) return { text: html.map(t => decodeBase64Url(t.data)).join("\n"), isHtml: true };
   // A single-part message sometimes carries its data at the top with no usable type.
   if (!root.mimeType && !root.filename && typeof root.body?.data === "string") return { text: decodeBase64Url(root.body.data), isHtml: false };
   return { text: "", isHtml: false };
