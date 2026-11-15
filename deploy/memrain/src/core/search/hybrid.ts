@@ -37,39 +37,13 @@ import { searchDiagnostics } from "./diagnostics.ts";
 import { andSourceScope, isNoGrant } from "../source-scope.ts";
 import { meetsMinTrust, type TrustTier } from "../trust-tier.ts";
 import { readTrustTiers } from "../trust-frame.ts";
-import {
-  dedupByDocument,
-  dedupByTextSimilarity,
-  getNearDupThreshold,
-  enforceTypeDiversity,
-  type ChunkScore,
-} from "./dedup.ts";
-import {
-  applySourceBoost,
-  type BoostablePayload,
-} from "./source-boost.ts";
+import type { ChunkScore } from "./dedup.ts";
 import { classifyIntent, type Intent } from "./intent.ts";
 import { keywordOnlyMode } from "../llm/gateway.ts";
-import {
-  rrfWeightsForLists,
-  exactMatchBoostForTaxonomy,
-  exactMatchIndices,
-} from "./intent-weights.ts";
+import { rrfWeightsForLists } from "./intent-weights.ts";
 import { classifyQuerySuggestions } from "./query-intent.ts";
 import { activeModeBundle, resolveKnob, resolveSearchMode } from "./mode.ts";
 import { recordSearchTelemetry } from "./telemetry.ts";
-import {
-  recencyMultiplierForPath,
-  resolveRecencyDecayMap,
-  resolveRecencyBoostMap,
-  recencyBoostMultiplierForPath,
-} from "./recency.ts";
-import { chronicleBoostMultiplier } from "./chronicle-boost.ts";
-import { salienceMultiplier, applyMatteringBoost } from "./salience.ts";
-import { applyAliasResolvedBoost, ALIAS_RESOLVED_BOOST } from "./alias-resolved.ts";
-import { slugCandidatesForPath } from "./page-slug.ts";
-import { isTitlePhraseMatch, getTitleBoost } from "./title-match.ts";
-import { isCanonicalQuery } from "./recency-gate.ts";
 import {
   getSearchExcludePrefixes,
   isExcludedPath,
@@ -100,34 +74,26 @@ import { stampContentFlags, type ContentFlag } from "./content-flag.ts";
 import { currentDocumentClock } from "../generation.ts";
 import type { Engine } from "../engine/interface.ts";
 import { expandQuery } from "./expansion.ts";
-import { rerank, type ChunkPayloadForRerank } from "./two-pass.ts";
 import { graphRerank, graphRerankLiveEnabled } from "./graph-rerank.ts";
-import {
-  applyGraphSignals,
-  computeFloorThreshold,
-  getGraphSignalsFloorRatio,
-} from "./graph-signals.ts";
+import { getGraphSignalsFloorRatio } from "./graph-signals.ts";
 import { applyAliasHop, aliasHopEnabled } from "./alias-hop.ts";
 import { titleArmChunkIds, titleArmEnabled, TITLE_ARM_WEIGHT } from "./title-arm.ts";
 import { expandAnchors } from "./structural-expand.ts";
-import { applyBacklinkBoost } from "./backlink-boost.ts";
 import { cosineReScore } from "./cosine-rescore.ts";
 import type { ChunkFilters } from "./filters.ts";
 import { relationalArmChunkIds } from "./relational-recall.ts";
 import {
-  snapshotScores,
-  recordStageFactor,
   mergeExplain,
   finalizeExplain,
   type SearchExplain,
 } from "./explain.ts";
 import type { DegradedReason, SearchCacheState, SearchMeta } from "./search-meta.ts";
 import { rankFlag } from "./ranking-flags.ts";
-import { skipMetadataBoosts } from "./metadata-boost-gate.ts";
 import { downweightKeywordArm, KEYWORD_WEAK_WEIGHT } from "./arm-confidence.ts";
 import { fuseByPage, pageKeysForChunks } from "./page-fusion.ts";
-import { promoteExactLookup } from "./exact-lookup.ts";
 import { CACHE_HIT_CONFIDENCE, gradeConfidence } from "./confidence-grade.ts";
+import { runPostFusionStages } from "./stages/pipeline.ts";
+import type { HitPayload, StageInput } from "./stages/types.ts";
 
 /**
  * RRF weight for the deterministic relational arm (opt-in 4th arm). A gentle
@@ -140,63 +106,8 @@ function relationalArmWeight(): number {
   return Number.isFinite(n) && n > 0 ? n : 1.0;
 }
 
-// Two-pass rerank candidate window (`top_n_in`, default 30). The
-// reranker sees this many top candidates and may promote one above the return
-// cutoff; the actual return size (k) trims afterward. Clamped to >= k and to the
-// available candidate count at the call site.
-const DEFAULT_RERANK_WINDOW = 30;
-function resolveRerankWindow(): number {
-  const n = Number.parseInt(process.env.MEMRAIN_RERANK_WINDOW ?? "", 10);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_RERANK_WINDOW;
-}
-
-// Recency decay map resolved once per process (defaults ∪ MEMRAIN_RECENCY_DECAY).
-// Memoized so the env parse + its fail-loud validation runs on the first
-// search, not on every query.
-let _recencyDecayMap: ReturnType<typeof resolveRecencyDecayMap> | null = null;
-function getRecencyDecayMap(): ReturnType<typeof resolveRecencyDecayMap> {
-  return (_recencyDecayMap ??= resolveRecencyDecayMap());
-}
-
-// Recency BOOST map (defaults ∪ MEMRAIN_RECENCY_BOOST) — same memoization
-// contract as the decay map. Only consulted when the zero-LLM classifier
-// suggests a temporal tilt (recency 'on'/'strong').
-let _recencyBoostMap: ReturnType<typeof resolveRecencyBoostMap> | null = null;
-function getRecencyBoostMap(): ReturnType<typeof resolveRecencyBoostMap> {
-  return (_recencyBoostMap ??= resolveRecencyBoostMap());
-}
-
-/**
- * Compiled-truth boost: chunks of a page's compiled-truth mirror
- * (`page-truth://…`, see page-index.ts) are the canonical per-page answers,
- * multiplied ×2 after fusion — but ONLY at detail 'low' (one chunk per
- * document), where the distilled truth is exactly what the collapse should
- * keep. At the default detail the multiplier is NOT order-preserving across
- * pages: RRF-fused scores sit in a narrow band, so ×2 let a weakly-matching
- * page's mirror chunk displace a strongly-matching page's best chunk.
- * Also bypassed for temporal queries (detail 'high') — freshness queries
- * want the record, not the distilled truth.
- */
-const COMPILED_TRUTH_BOOST = 2.0;
-const PAGE_TRUTH_PREFIX = "page-truth://";
-
-/**
- * The classifier reads every "tell me about X" as detail 'low', and at ×2 a
- * mirror that barely matches still outranks the page body that answers. With
- * MEMRAIN_RANK_ENTITY_TRUTH_SOFT the full ×2 needs the caller to ask for
- * detail 'low'; a classifier guess gets a tilt that only settles near-ties.
- */
-const COMPILED_TRUTH_SOFT_BOOST = 1.2;
-
-export function compiledTruthBoost(
-  requestedDetail: SearchOptions["detail"],
-  resolvedDetail: SearchOptions["detail"],
-  soft: boolean,
-): number {
-  if (resolvedDetail !== "low") return 1;
-  if (!soft || requestedDetail === "low") return COMPILED_TRUTH_BOOST;
-  return COMPILED_TRUTH_SOFT_BOOST;
-}
+// Moved with the rest of the post-fusion stages; re-exported for callers.
+export { compiledTruthBoost } from "./stages/pipeline.ts";
 
 /** A strict keyword pass with fewer rows than this triggers the OR retry. */
 const KEYWORD_RELAX_MIN_ROWS = 3;
@@ -610,19 +521,6 @@ async function raceEmbedderAgainstDeadline(
   }
 }
 
-interface HitPayload extends BoostablePayload, ChunkPayloadForRerank {
-  provenance?: SearchProvenance;
-  /** Live-model content freshness (documents.updated_at), for recency. */
-  updated_at?: string | null;
-  /** Document frontmatter (documents.frontmatter), for salience. */
-  frontmatter?: unknown;
-  /** Chunk source language (chunks.language), for the lang filter. */
-  language?: string | null;
-  /** Chunk symbol kind (chunks.symbol_type), for the symbol_kind filter. */
-  symbol_type?: string | null;
-  /** Content date COALESCE(effective_date, updated_at), for since/until. */
-  effective_date?: string | null;
-}
 
 /**
  * Hydrate a cached list of chunk ids back into SearchHits, preserving the
@@ -1387,305 +1285,32 @@ async function hybridSearchUnbounded(
     }
   }
 
-  // Metadata-boost gate (MEMRAIN_RANK_METADATA_GATE): on a query only the
-  // vector arm answered, the metadata stages below stand down and the
-  // similarity order stands. See metadata-boost-gate.ts.
-  const skipMetadata = skipMetadataBoosts({
-    enabled: rank.metadataGate,
-    vectorVoted: vectorIds.length > 0,
-    lexicalVoted: primaryKeywordIds.length > 0 || titleIds.length > 0 || relationalIds.length > 0,
-  });
-
-  // 5d. Compiled-truth boost — a page's canonical answers (its compiled-truth
-  //     mirror chunks) get ×2 so the distilled truth outranks body prose for
-  //     the same page. Applied ONLY at detail=low (see COMPILED_TRUTH_BOOST):
-  //     at medium/high the cross-page displacement outweighs the tilt.
-  //     Pre-dedup like every other boost, so the truth chunk wins the
-  //     per-doc collapse of its own mirror document.
-  const truthBoost = compiledTruthBoost(opts.detail, detailResolved, rank.entityTruthSoft);
-  if (truthBoost > 1) {
-    for (const s of scored) {
-      if (s.payload?.sourcePath?.startsWith(PAGE_TRUTH_PREFIX)) {
-        s.score *= truthBoost;
-        if (explainAcc) {
-          mergeExplain(explainAcc, s.chunkId, { compiled_truth: truthBoost });
-        }
-      }
-    }
-  }
-
-  // 6. Source-boost.
-  const preSourceBoost = explainAcc ? snapshotScores(scored) : null;
-  scored = applySourceBoost(scored);
-  if (explainAcc && preSourceBoost) {
-    recordStageFactor(explainAcc, preSourceBoost, scored, "source");
-  }
-
-  // 6b. Recency (documents.effective_date) + salience (frontmatter pinned/weight)
-  //     — gentle post-fusion multipliers on the LIVE model. Immutable like
-  //     the rest of the pipeline; both are neutral (1.0) when their signal
-  //     is absent, so neither can bury a hit that doesn't declare it.
-  const nowMs = Date.now();
-  // Canonical/definitional queries ("who is X", "define X", a bare symbol)
-  // want the authoritative page regardless of age — skip the recency + salience
-  // multipliers for them (an explicit temporal bound re-enables freshness).
-  const canonical = isCanonicalQuery(trimmed);
-  // Curation authority by slug prefix — curated originals outrank bulk feeds
-  // inside one store. Orthogonal to recency decay; neutral (×1) off-prefix.
-  // Per-prefix recency decay (env-overridable); paths matching no prefix
-  // (e.g. code chunks under `src/`) fall back to the original uniform decay.
-  // Memoized: resolved once per process, so the env parse (and its fail-loud
-  // validation) runs on the first search rather than on every query.
-  const recencyMap = getRecencyDecayMap();
-  // Title-phrase boost: when the query is a contiguous phrase in the page
-  // title, nudge the score up by a scale-invariant factor. A name-of-thing
-  // query should surface the page over a weak body chunk. Neutral (×1) for
-  // every hit whose title doesn't match, so it can never bury a non-matching
-  // hit; inert entirely when MEMRAIN_TITLE_BOOST <= 1.0.
-  const titleBoost = getTitleBoost();
-  const titleBoostActive = Number.isFinite(titleBoost) && titleBoost > 1.0;
-  // Recency BOOST activation: the zero-LLM classifier's
-  // off/on/strong suggestion. 'off' keeps the historical penalty-only decay;
-  // 'on'/'strong' additionally LIFT fresh content hyperbolically so a
-  // this-week note can win a "what's going on" query. Canonical queries stay
-  // fully recency-neutral (both decay and boost skipped).
-  // An explicit per-call recency bias overrides both the classifier and the
-  // canonical gate (the agent asserted the temporal intent).
-  const recencyBoostMode =
-    opts.recency ?? (canonical ? "off" : suggestions.suggestedRecency);
-  const recencyBoostMap = recencyBoostMode === "off" ? null : getRecencyBoostMap();
-  scored = scored.map((s) => {
-    const contentDate = s.payload?.effective_date ?? s.payload?.updated_at ?? null;
-    const decayF = canonical || skipMetadata
-      ? 1
-      : recencyMultiplierForPath(
-          // Decay on the content date (effective_date, already COALESCE'd with
-          // updated_at at hydrate), NOT the row's updated_at — a backfill /
-          // re-ingest / rechunk bumps updated_at and would otherwise make stale
-          // content score as fresh.
-          contentDate,
-          nowMs,
-          s.payload?.sourcePath ?? null,
-          recencyMap,
-        );
-    const boostF = recencyBoostMap && !skipMetadata
-      ? recencyBoostMultiplierForPath(
-          contentDate,
-          nowMs,
-          s.payload?.sourcePath ?? null,
-          recencyBoostMode as "on" | "strong",
-          recencyBoostMap,
-        )
-      : 1;
-    const recencyF = decayF * boostF;
-    const salienceF = canonical || skipMetadata ? 1 : salienceMultiplier(s.payload?.frontmatter);
-    // Curation tiers act ONLY inside the arm SQL (the
-    // prefix factor shapes per-arm LIMIT survival; runPostFusionStages has no
-    // curation stage). Multiplying the fused score again would double-apply
-    // the tier map and over-tilt low-tier prefixes like chat/ 0.5.
-    const titleF =
-      titleBoostActive && isTitlePhraseMatch(trimmed, s.payload?.title) ? titleBoost : 1;
-    // Life-Chronicle lift for life/events + life/diary hits — gated on the same
-    // recency-boost activation, so a non-temporal query leaves every hit at ×1
-    // (bit-for-bit unchanged). Pure ranking; the diary read-fence lives elsewhere.
-    const chronicleF = skipMetadata
-      ? 1
-      : chronicleBoostMultiplier(
-          s.payload?.sourcePath,
-          recencyBoostMode as "off" | "on" | "strong",
-        );
-    if (explainAcc) {
-      const patch: Partial<SearchExplain> = {};
-      if (recencyF !== 1) patch.recency = recencyF;
-      if (salienceF !== 1) patch.salience = salienceF;
-      if (titleF !== 1) patch.title = titleF;
-      if (chronicleF !== 1) patch.chronicle = chronicleF;
-      mergeExplain(explainAcc, s.chunkId, patch);
-    }
-    return { ...s, score: s.score * recencyF * salienceF * titleF * chronicleF };
-  });
-
-  // 6b2. Mattering-salience join — the cycle-computed
-  //      pages.salience score (emotional-weight tags + link degree + takes)
-  //      lifts "what matters" pages when the query asks for current context
-  //      (meeting prep / catch-up phrasings). Classifier-gated; canonical
-  //      queries never fire it. Fail-open; floor-gated like the other
-  //      metadata boosts.
-  // Explicit per-call salience bias wins over classifier + canonical gate;
-  // 'strong' selects the aggressive mattering coefficient.
-  const matteringOn =
-    opts.salience !== undefined
-      ? opts.salience !== "off"
-      : !canonical && suggestions.suggestedSalience === "on";
-  if (matteringOn && !skipMetadata) {
-    const floor = computeFloorThreshold(scored, graphFloorRatio);
-    const preMattering = explainAcc ? snapshotScores(scored) : null;
-    try {
-      await applyMatteringBoost(scored, engine, {
-        strength: opts.salience === "strong" ? "strong" : "on",
-        ...(Number.isFinite(floor) ? { floorThreshold: floor } : {}),
-      });
-    } catch {
-      // A pages lookup error leaves scores intact.
-    }
-    if (explainAcc && preMattering) {
-      recordStageFactor(explainAcc, preMattering, scored, "mattering");
-    }
-  }
-
-  // 6c. Graph signals (opt-in, default OFF) — adjacency hub boost + session
-  //     diversification over the link graph, applied pre-dedup on the full
-  //     scored set so a hub's chunk can rise before per-doc collapse. Mutates
-  //     score in place; fail-open (a links query error leaves scores intact).
-  if (graphSignalsOn && !skipMetadata) {
-    // Relative score floor (MEMRAIN_GRAPH_SIGNALS_FLOOR): a hit must score within
-    // `ratio` of the top hit to be eligible for a graph signal. Unset → the
-    // ratio is undefined → computeFloorThreshold returns -Infinity; collapse
-    // that back to `undefined` so the disabled path is byte-identical to the
-    // pre-floor call (the `floor === undefined` short-circuit), with no NaN-edge
-    // divergence between the two.
-    const floor = computeFloorThreshold(scored, graphFloorRatio);
-    const preGraph = explainAcc ? snapshotScores(scored) : null;
-    await applyGraphSignals(scored, engine, {
-      enabled: true,
-      floorThreshold: Number.isFinite(floor) ? floor : undefined,
-      ...(opts.sourceIds ? { sourceIds: opts.sourceIds } : {}),
-    });
-    if (explainAcc && preGraph) recordStageFactor(explainAcc, preGraph, scored, "graph");
-  }
-
-  // 6d. Backlink-count boost (default ON) — a standing hub signal: multiply each
-  //     hit by 1 + 0.05*ln(1+inbound_link_count) using the page's GLOBAL
-  //     in-degree from the `links` table. Distinct from graph-signals (which
-  //     counts only in-set links, opt-in): this reads whole-corpus in-degree so
-  //     a hub earns a small boost on every query. Floor-ratio-gated by the SAME
-  //     MEMRAIN_GRAPH_SIGNALS_FLOOR ratio (undefined → no gate, every hit
-  //     eligible). Pre-dedup so the boost decides which chunk survives per-doc
-  //     collapse; fail-open on a links query error.
-  if (backlinkBoostOn && !skipMetadata) {
-    const floor = computeFloorThreshold(scored, graphFloorRatio);
-    const preBacklink = explainAcc ? snapshotScores(scored) : null;
-    await applyBacklinkBoost(scored, engine, {
-      floorThreshold: Number.isFinite(floor) ? floor : undefined,
-      ...(opts.sourceIds ? { sourceIds: opts.sourceIds } : {}),
-    });
-    if (explainAcc && preBacklink) recordStageFactor(explainAcc, preBacklink, scored, "backlink");
-  }
-
-  // 6e. Exact-match boost — a hit whose slug / kebab-slug /
-  //     title IS the query wins the tie on entity/event queries (the user
-  //     typed the thing's name). Lexical-relevance signal: NOT floor-gated,
-  //     applied outside the metadata gate.
-  const exactBoost = exactMatchBoostForTaxonomy(suggestions.taxonomy);
-  if (exactBoost > 1.0) {
-    const cands = scored.map((s) => ({
-      slugs: slugCandidatesForPath(s.payload?.sourcePath ?? null, s.payload?.source_id ?? null),
-      title: s.payload?.title ?? null,
-    }));
-    for (const i of exactMatchIndices(cands, trimmed)) {
-      const s = scored[i]!;
-      s.score *= exactBoost;
-      if (explainAcc) mergeExplain(explainAcc, s.chunkId, { exact: exactBoost });
-    }
-  }
-
-  // 6f. Alias-resolved canonical boost (×1.05) — pages that
-  //     old slugs forward to (slug_aliases canonical side) are the explicitly
-  //     disambiguated authority. Fail-open: a pre-migration store no-ops.
-  if (!skipMetadata) {
-    try {
-      const touched = await applyAliasResolvedBoost(scored, engine);
-      if (explainAcc) {
-        for (const i of touched) {
-          mergeExplain(explainAcc, scored[i]!.chunkId, { alias: ALIAS_RESOLVED_BOOST });
-        }
-      }
-    } catch {
-      // Non-fatal — the boost is a nudge, never a dependency.
-    }
-  }
-
-  // Re-sort after boost + recency (RRF was already sorted but these flip).
-  scored.sort((a, b) => b.score - a.score);
-
-  // 7. Per-document dedup — cap 2 chunks per document (maxPerPage 2; one
-  //    strong page may show its two best chunks, the rest yield slots to other
-  //    pages). Skip for `exact` intent ("show me
-  //    everything about this note").
-  // Structural walks deliberately surface multiple neighbor chunks from the
-  // same document/class (sibling methods, the call-site + its callee), so the
-  // one-chunk-per-doc collapse is widened proportionally to the walk depth.
-  const maxPerDoc = structural
-    ? Math.min(10, Math.max((opts.walkDepth ?? 0) * 5, 5))
-    : opts.detail === "low"
-      ? 1
-      : 2;
-  // detail 'high' = the all-chunks view: skip the per-doc collapse
-  // entirely (like `exact` intent), so every matching chunk of a page returns.
-  const perDoc =
-    intent === "exact" || opts.detail === "high"
-      ? scored
-      : dedupByDocument(scored, {
-          enabled: true,
-          maxPerDoc,
-          // Under page fusion a page and its compiled-truth mirror share one cap.
-          ...(pageKeys ? { keyOf: (h) => pageKeys.get(h.chunkId) ?? `doc:${h.documentId}` } : {}),
-        });
-
-  // 7b. Type-diversity layer: no page type may exceed
-  //     MEMRAIN_MAX_TYPE_RATIO (default 0.6) of the candidate set, so one noisy
-  //     shape (chat exports, dailies) can't monopolise every slot. Skipped for
-  //     `exact` intent and structural walks (both deliberately homogeneous).
-  const diversified =
-    intent === "exact" || structural || opts.detail === "high"
-      ? perDoc
-      : enforceTypeDiversity(perDoc);
-
-  // 8. Two-pass rerank (opt-in) — runs BEFORE near-dup so the reranker sees
-  //    both near-identical twins and decides their order; near-dup then drops
-  //    the now-lower-ranked one (the reranker can't undo a drop, so it must
-  //    come first). Contract: rerank a CANDIDATE window WIDER than the
-  //    return size (top_n_in, default 30 via MEMRAIN_RERANK_WINDOW) so a hit fused
-  //    below the return cutoff can still be promoted into the top-k — the trim
-  //    to k happens after. The un-reranked tail keeps its fused order behind the
-  //    window instead of being truncated away (it still feeds near-dup /
-  //    alias-hop recall). The window is clamped to at least k and to the
-  //    available candidate count.
-  const rerankWindow = Math.min(
-    diversified.length,
-    Math.max(k, resolveRerankWindow()),
-  );
-  const preRerankOrder =
-    explainAcc && rerankWanted
-      ? new Map(diversified.map((h, i) => [h.chunkId, i] as const))
-      : null;
-  const reranked = rerankWanted
-    ? [
-        ...(await rerank(trimmed, diversified.slice(0, rerankWindow))),
-        ...diversified.slice(rerankWindow),
-      ]
-    : diversified;
-  if (explainAcc && preRerankOrder) {
-    reranked.forEach((h, i) => {
-      const prev = preRerankOrder.get(h.chunkId);
-      if (prev !== undefined && prev !== i) {
-        mergeExplain(explainAcc, h.chunkId, { rerank_delta: prev - i });
-      }
-    });
-  }
-
-  // 8b. Near-dup dedup across documents (Jaccard on text) — two DIFFERENT docs
-  //     can still carry near-identical text (a note + its `.bak`); drop the
-  //     lower-ranked twin. Applied AFTER rerank, skipped for `exact` intent or
-  //     when MEMRAIN_NEARDUP_JACCARD > 1.0.
-  let final = reranked;
-  if (intent !== "exact") {
-    const ndThreshold = getNearDupThreshold();
-    if (ndThreshold <= 1.0) final = dedupByTextSimilarity(reranked, ndThreshold);
-  }
-  // 8b2. Exact lookup (MEMRAIN_RANK_EXACT_LOOKUP): the one page the whole query
-  //      names goes to rank 1. See exact-lookup.ts.
-  if (rank.exactLookup) final = promoteExactLookup(final, trimmed);
+  // 5d–8b2. The post-fusion stages (stages/pipeline.ts): compiled-truth,
+  //     source, recency/salience/title/chronicle, mattering, graph signals,
+  //     backlinks, exact match, alias-resolved, re-sort, per-document cap, type
+  //     diversity, the opt-in two-pass rerank, near-dup drop and exact lookup.
+  const stageInput: StageInput = {
+    engine,
+    query: trimmed,
+    intent,
+    opts,
+    detailResolved,
+    suggestions,
+    rank,
+    k,
+    structural,
+    graphFloorRatio,
+    graphSignalsOn,
+    backlinkBoostOn,
+    rerankWanted,
+    pageKeys,
+    votes: {
+      vectorVoted: vectorIds.length > 0,
+      lexicalVoted: primaryKeywordIds.length > 0 || titleIds.length > 0 || relationalIds.length > 0,
+    },
+    explainAcc,
+  };
+  const final = await runPostFusionStages(scored, stageInput);
 
   // 8c. Alias-hop (default ON, exact-full-query-alias gated): if the whole
   //     query is a declared alias, boost the canonical page when present or
