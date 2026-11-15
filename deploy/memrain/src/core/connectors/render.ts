@@ -15,6 +15,7 @@
 import { guardSecrets, type SecretFinding } from "../secret-scan.ts";
 import { neutralizeOutsideText } from "../neutralize-outside-text.ts";
 import { OUTSIDE_NEUTRALIZED } from "../fence-carry.ts";
+import { calendarLoopSignals, chatLoopSignals, mailLoopSignals, type LoopSignals } from "../loops/signals.ts";
 import {
   accountRef,
   shortHash,
@@ -43,6 +44,8 @@ export interface RenderedConnectorPage {
   participants: Person[];
   /** Mailing-list or notification mail: enrichment links nobody from it. */
   bulk: boolean;
+  /** Reply state for the loop detector; no message text (loops/signals.ts). */
+  loop?: LoopSignals;
 }
 
 export const CONNECTOR_PAGE_TYPES: Readonly<Record<ConnectorDataKind, string>> = {
@@ -261,6 +264,7 @@ export function renderMailThread(ctx: ConnectorContext, thread: MailThread): Ren
   const subject = headingText(g.line(messages[0]!.subject), "(no subject)");
 
   const lines = [`# ${subject}`, "", `Mail thread · ${messages.length} message${messages.length === 1 ? "" : "s"}`, ""];
+  const bodies: string[] = [];
   messages.forEach((m, i) => {
     lines.push(`## Message ${i + 1}`, "", `From: ${g.person(m.from)}`);
     if (m.to.length) lines.push(`To: ${m.to.map(p => g.person(p)).join(", ")}`);
@@ -271,6 +275,7 @@ export function renderMailThread(ctx: ConnectorContext, thread: MailThread): Ren
     }
     const raw = m.bodyText ?? (m.bodyHtml === null ? "" : htmlToText(m.bodyHtml));
     const body = g.text(trimMailBody(raw)).trim();
+    bodies.push(body);
     lines.push("", body === "" ? "_No text._" : body, "");
   });
 
@@ -283,6 +288,7 @@ export function renderMailThread(ctx: ConnectorContext, thread: MailThread): Ren
     kind: "mail", externalId: thread.threadId, occurredAt: first,
     participants: messages.flatMap(m => [m.from, ...m.to, ...m.cc]),
     bulk: isBulk(messages),
+    loop: mailLoopSignals(ctx, thread.threadId, messages, bodies, subject, p => g.person(p)),
   };
 }
 
@@ -334,6 +340,7 @@ export function renderCalendarEvent(ctx: ConnectorContext, event: CalendarEvent)
     kind: "calendar", externalId: event.id, occurredAt: start,
     participants: [...(event.organizer ? [event.organizer] : []), ...event.attendees],
     bulk: false,
+    loop: calendarLoopSignals(ctx, event, start, title, p => g.person(p)),
   };
 }
 
@@ -350,12 +357,15 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
   const title = `#${channel} · ${day.day}`;
 
   const lines = [`# ${title}`, "", `Chat channel day · ${messages.length} message${messages.length === 1 ? "" : "s"}`, ""];
+  const bodies: string[] = [];
   for (const m of messages) {
     const at = iso(m.ts, "message time");
     lines.push(`${at.slice(11, 16)} ${g.person({ name: m.author.name, email: m.author.name ? null : m.author.email })}${m.threadId ? " (reply)" : ""}`);
     const text = g.text(m.text).trim();
+    bodies.push(text);
     lines.push(text === "" ? "_No text._" : text, "");
   }
+  const loop = chatLoopSignals(day, bodies, channel, p => g.person(p));
   const lastActivity = messages.length ? iso(messages.at(-1)!.ts, "message time") : dayStart;
   const truth = baseTruth(ctx, "chat", `${day.channelId}:${day.day}`, dayStart, lastActivity);
   truth["messages"] = messages.length;
@@ -364,6 +374,7 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
     kind: "chat", externalId: `${day.channelId}:${day.day}`, occurredAt: dayStart,
     participants: messages.map(m => m.author),
     bulk: false,
+    ...(loop ? { loop } : {}),
   };
 }
 

@@ -63,6 +63,22 @@ export interface MailMessage {
   listUnsubscribe: boolean;
   /** Provider categories or labels, lowercased (promotions, social, ...). */
   categories: string[];
+  /*
+   * Reply-state fields the loop detector reads (loops/signals.ts). Optional:
+   * an adapter that cannot see one leaves it out and the rule it feeds is off.
+   */
+  /** The account sent this message (Gmail's SENT label, a sent-items folder), whatever address it used. */
+  sent?: boolean;
+  /** RFC 3834 Auto-Submitted with a value other than "no" (auto-replies, tracker notices). */
+  autoSubmitted?: boolean;
+  /** The Precedence header, lowercased (bulk, list, junk). */
+  precedence?: string | null;
+  /** The message carried a List-Id header (RFC 2919). */
+  listId?: boolean;
+  /** Reply-To addresses, lowercased. */
+  replyTo?: string[];
+  /** The iCalendar METHOD of a text/calendar part (REQUEST, REPLY, CANCEL, ...). */
+  calendarMethod?: string | null;
 }
 
 export interface MailThread {
@@ -111,6 +127,10 @@ export interface ChatMessage {
   text: string;
   /** The parent message id when this is a thread reply. */
   threadId: string | null;
+  /** Written by the connected account itself; needed, with ChatDay.direct, for reply loops. */
+  fromSelf?: boolean;
+  /** Posted by a bot or an integration. */
+  bot?: boolean;
 }
 
 export interface ChatDay {
@@ -120,6 +140,8 @@ export interface ChatDay {
   /** YYYY-MM-DD in UTC. */
   day: string;
   messages: ChatMessage[];
+  /** A direct conversation (a 1:1 or group DM), not a channel. */
+  direct?: boolean;
 }
 
 export interface MeetingSentence {
