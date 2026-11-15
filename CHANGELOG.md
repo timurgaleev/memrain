@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Open loops without a model: the connector sync records each mail thread,
+  direct chat and calendar event's reply state, and the new `loops_sweep`
+  daemon (free, off by default) lists replies owed and awaited, your promises
+  and unanswered invitations. `memrain waiting` shows them and refuses when no
+  sync is fresh; the MCP tool `loops_list` returns them scoped to the caller's
+  grant. Migration 161 adds `open_loops`, `loop_threads` and
+  `loop_suppressions`. See docs/connectors/LOOPS.md.
+
 ## [1.16.0] — 2026-11-14
 
 ### Added
