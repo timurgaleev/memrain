@@ -1,0 +1,700 @@
+{
+ "profile": {
+  "emailAddress": "owner@example.test",
+  "messagesTotal": 9,
+  "threadsTotal": 7,
+  "historyId": "120000"
+ },
+ "profileAfterExpiry": {
+  "emailAddress": "owner@example.test",
+  "messagesTotal": 10,
+  "threadsTotal": 8,
+  "historyId": "150000"
+ },
+ "messages": [
+  {
+   "id": "18c0a1",
+   "threadId": "18c0a1",
+   "labelIds": [
+    "INBOX",
+    "CATEGORY_PERSONAL"
+   ],
+   "snippet": "",
+   "historyId": "",
+   "internalDate": "1793959200000",
+   "sizeEstimate": 1000,
+   "payload": {
+    "partId": "",
+    "mimeType": "multipart/mixed",
+    "filename": "",
+    "headers": [
+     {
+      "name": "From",
+      "value": "Ana Lee <ana@example.net>"
+     },
+     {
+      "name": "To",
+      "value": "owner@example.test"
+     },
+     {
+      "name": "Subject",
+      "value": "Quarterly budget"
+     },
+     {
+      "name": "Message-ID",
+      "value": "<a1@mail.example.net>"
+     },
+     {
+      "name": "Date",
+      "value": "Fri, 6 Nov 2026 10:00:00 +0000"
+     }
+    ],
+    "body": {
+     "size": 0
+    },
+    "parts": [
+     {
+      "partId": "0",
+      "mimeType": "multipart/alternative",
+      "filename": "",
+      "headers": [],
+      "body": {
+       "size": 0
+      },
+      "parts": [
+       {
+        "partId": "0.0",
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [
+         {
+          "name": "Content-Type",
+          "value": "text/plain; charset=UTF-8"
+         }
+        ],
+        "body": {
+         "size": 47,
+         "data": "SGksCgpDYW4geW91IHNlbmQgdGhlIFE0IGJ1ZGdldCBieSBGcmlkYXk_CgpBbmE"
+        }
+       },
+       {
+        "partId": "0.1",
+        "mimeType": "text/html",
+        "filename": "",
+        "headers": [
+         {
+          "name": "Content-Type",
+          "value": "text/html; charset=UTF-8"
+         }
+        ],
+        "body": {
+         "size": 97,
+         "data": "PGh0bWw-PGJvZHk-PHA-SGksPC9wPjxwPkNhbiB5b3Ugc2VuZCB0aGUgPGI-UTQgYnVkZ2V0PC9iPiBieSBGcmlkYXk_PC9wPjxwPkFuYTwvcD48L2JvZHk-PC9odG1sPg"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "18c0a2",
+   "threadId": "18c0a1",
+   "labelIds": [
+    "SENT"
+   ],
+   "snippet": "",
+   "historyId": "",
+   "internalDate": "1794045600000",
+   "sizeEstimate": 1000,
+   "payload": {
+    "partId": "",
+    "mimeType": "multipart/mixed",
+    "filename": "",
+    "headers": [
+     {
+      "name": "From",
+      "value": "Owner <owner@example.test>"
+     },
+     {
+      "name": "To",
+      "value": "Ana Lee <ana@example.net>"
+     },
+     {
+      "name": "Cc",
+      "value": "\"Stone, Bob\" <bob@example.org>"
+     },
+     {
+      "name": "Subject",
+      "value": "Re: Quarterly budget"
+     },
+     {
+      "name": "Message-ID",
+      "value": "<a2@mail.example.test>"
+     },
+     {
+      "name": "In-Reply-To",
+      "value": "<a1@mail.example.net>"
+     }
+    ],
+    "body": {
+     "size": 0
+    },
+    "parts": [
+     {
+      "partId": "0",
+      "mimeType": "text/plain",
+      "filename": "",
+      "headers": [
+       {
+        "name": "Content-Type",
+        "value": "text/plain; charset=UTF-8"
+       }
+      ],
+      "body": {
+       "size": 133,
+       "data": "QXR0YWNoZWQgaXMgdGhlIGJ1ZGdldC4KCk9uIEZyaSwgNiBOb3YgMjAyNiBhdCAxMDowMCwgQW5hIExlZSA8YW5hQGV4YW1wbGUubmV0PiB3cm90ZToKPiBIaSwKPiBDYW4geW91IHNlbmQgdGhlIFE0IGJ1ZGdldCBieSBGcmlkYXk_Cg"
+      }
+     },
+     {
+      "partId": "1",
+      "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "filename": "budget-q4.xlsx",
+      "headers": [
+       {
+        "name": "Content-Disposition",
+        "value": "attachment; filename=\"budget-q4.xlsx\""
+       }
+      ],
+      "body": {
+       "attachmentId": "ANGjdJ8-attachment-handle",
+       "size": 18432
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "18c0a3",
+   "threadId": "18c0a1",
+   "labelIds": [
+    "DRAFT"
+   ],
+   "snippet": "",
+   "historyId": "",
+   "internalDate": "1794132000000",
+   "sizeEstimate": 1000,
+   "payload": {
+    "partId": "",
+    "mimeType": "text/plain",
+    "filename": "",
+    "headers": [
+     {
+      "name": "From",
+      "value": "owner@example.test"
+     },
+     {
+      "name": "To",
+      "value": "ana@example.net"
+     },
+     {
+      "name": "Subject",
+      "value": "Re: Quarterly budget"
+     }
+    ],
+    "body": {
+     "size": 17,
+     "data": "dW5zZW50IGRyYWZ0IHRleHQ"
+    }
+   }
+  },
+  {
+   "id": "18c0b1",
+   "threadId": "18c0b1",
+   "labelIds": [
+    "INBOX",
+    "CATEGORY_UPDATES"
+   ],
+   "snippet": "",
+   "historyId": "",
+   "internalDate": "1793095200000",
+   "sizeEstimate": 1000,
+   "payload": {
+    "partId": "",
+    "mimeType": "text/html",
+    "filename": "",
+    "headers": [
+     {
+      "name": "From",
+      "value": "Shop News <news@shop.example>"
+     },
+     {
+      "name": "To",
+      "value": "owner@example.test"
+     },
+     {
+      "name": "Subject",
+      "value": "Your November digest"
+     },
+     {
+      "name": "Message-ID",
+      "value": "<b1@shop.example>"
+     },
+     {
+      "name": "List-Unsubscribe",
+      "value": "<https://shop.example/u>"
+     },
+     {
+      "name": "Precedence",
+      "value": "bulk"
+     }
+    ],
+    "body": {
+     "size": 109,
+     "data": "PGh0bWw-PGhlYWQ-PHN0eWxlPnB7fTwvc3R5bGU-PC9oZWFkPjxib2R5PjxwPlRvcCBkZWFscyB0aGlzIG1vbnRoLjwvcD48c2NyaXB0PnRyYWNrKCk8L3NjcmlwdD48L2JvZHk-PC9odG1sPg"
+    }
+   }
+  },
+  {
+   "id": "18c0c1",
+   "threadId": "18c0c1",
+   "labelIds": [
+    "INBOX",
+    "CATEGORY_PROMOTIONS"
+   ],
+   "snippet": "",
+   "historyId": "",
+   "internalDate": "1794564000000",
+   "sizeEstimate": 1000,
+   "payload": {
+    "partId": "",
+    "mimeType": "text/plain",
+    "filename": "",
+    "headers": [
+     {
+      "name": "From",
+      "value": "Deals <deals@promo.example>"
+     },
+     {
+      "name": "To",
+      "value": "owner@example.test"
+     },
+     {
+      "name": "Subject",
+      "value": "50% off"
+     },
+     {
+      "name": "Message-ID",
+      "value": "<c1@promo.example>"
+     }
+    ],
+    "body": {
+     "size": 8,
+     "data": "QnV5IG5vdy4"
+    }
+   }
+  },
+  {
+   "id": "18c0d1",
+   "threadId": "18c0d1",
+   "labelIds": [
+    "SPAM"
+   ],
+   "snippet": "",
+   "historyId": "",
+   "internalDate": "1794650400000",
+   "sizeEstimate": 1000,
+   "payload": {
+    "partId": "",
+    "mimeType": "text/plain",
+    "filename": "",
+    "headers": [
+     {
+      "name": "From",
+      "value": "x@spam.example"
+     },
+     {
+      "name": "To",
+      "value": "owner@example.test"
+     },
+     {
+      "name": "Subject",
+      "value": "You won"
+     },
+     {
+      "name": "Message-ID",
+      "value": "<d1@spam.example>"
+     }
+    ],
+    "body": {
+     "size": 6,
+     "data": "Q2xhaW0u"
+    }
+   }
+  },
+  {
+   "id": "18c0e1",
+   "threadId": "18c0e1",
+   "labelIds": [
+    "INBOX"
+   ],
+   "snippet": "",
+   "historyId": "",
+   "internalDate": "1794391200000",
+   "sizeEstimate": 1000,
+   "payload": {
+    "partId": "",
+    "mimeType": "text/plain",
+    "filename": "",
+    "headers": [
+     {
+      "name": "From",
+      "value": "Bob Stone <bob@example.org>"
+     },
+     {
+      "name": "To",
+      "value": "owner@example.test"
+     },
+     {
+      "name": "Subject",
+      "value": "Automatic reply: Quarterly budget"
+     },
+     {
+      "name": "Message-ID",
+      "value": "<e1@example.org>"
+     },
+     {
+      "name": "Auto-Submitted",
+      "value": "auto-replied"
+     }
+    ],
+    "body": {
+     "size": 36,
+     "data": "SSBhbSBvdXQgb2YgdGhlIG9mZmljZSB1bnRpbCBNb25kYXku"
+    }
+   }
+  },
+  {
+   "id": "18c0g1",
+   "threadId": "18c0g1",
+   "labelIds": [
+    "INBOX"
+   ],
+   "snippet": "",
+   "historyId": "",
+   "internalDate": "1786183200000",
+   "sizeEstimate": 1000,
+   "payload": {
+    "partId": "",
+    "mimeType": "text/plain",
+    "filename": "",
+    "headers": [
+     {
+      "name": "From",
+      "value": "Old Friend <old@example.net>"
+     },
+     {
+      "name": "To",
+      "value": "owner@example.test"
+     },
+     {
+      "name": "Subject",
+      "value": "Long ago"
+     },
+     {
+      "name": "Message-ID",
+      "value": "<g1@example.net>"
+     }
+    ],
+    "body": {
+     "size": 15,
+     "data": "QW4gb2xkIG1lc3NhZ2Uu"
+    }
+   }
+  },
+  {
+   "id": "18c0h1",
+   "threadId": "18c0h1",
+   "labelIds": [
+    "INBOX"
+   ],
+   "snippet": "",
+   "historyId": "",
+   "internalDate": "1794736800000",
+   "sizeEstimate": 1000,
+   "payload": {
+    "partId": "",
+    "mimeType": "text/plain",
+    "filename": "",
+    "headers": [
+     {
+      "name": "From",
+      "value": "Ana Lee <ana@example.net>"
+     },
+     {
+      "name": "To",
+      "value": "owner@example.test"
+     },
+     {
+      "name": "Subject",
+      "value": "Fwd: contract"
+     },
+     {
+      "name": "Message-ID",
+      "value": "<h1@mail.example.net>"
+     }
+    ],
+    "body": {
+     "size": 118,
+     "data": "U2VlIGJlbG93LgoKLS0tLS0tLS0tLSBGb3J3YXJkZWQgbWVzc2FnZSAtLS0tLS0tLS0KRnJvbTogTGVnYWwgPGxlZ2FsQGV4YW1wbGUuY29tPgpUaGUgY29udHJhY3QgdGVybSBpcyB0d2VsdmUgbW9udGhzLg"
+    }
+   }
+  }
+ ],
+ "newMail": {
+  "id": "18c0n1",
+  "threadId": "18c0n1",
+  "labelIds": [
+   "INBOX",
+   "UNREAD"
+  ],
+  "snippet": "",
+  "historyId": "",
+  "internalDate": "1794825000000",
+  "sizeEstimate": 1000,
+  "payload": {
+   "partId": "",
+   "mimeType": "text/plain",
+   "filename": "",
+   "headers": [
+    {
+     "name": "From",
+     "value": "Carol Diaz <carol@example.com>"
+    },
+    {
+     "name": "To",
+     "value": "owner@example.test"
+    },
+    {
+     "name": "Subject",
+     "value": "Kickoff on Thursday"
+    },
+    {
+     "name": "Message-ID",
+     "value": "<n1@example.com>"
+    }
+   ],
+   "body": {
+    "size": 27,
+    "data": "Q2FuIHdlIG1lZXQgVGh1cnNkYXkgYXQgMTA_"
+   }
+  }
+ },
+ "historyDelta": {
+  "history": [
+   {
+    "id": "120010",
+    "messages": [
+     {
+      "id": "18c0n1",
+      "threadId": "18c0n1"
+     }
+    ],
+    "messagesAdded": [
+     {
+      "message": {
+       "id": "18c0n1",
+       "threadId": "18c0n1",
+       "labelIds": [
+        "INBOX",
+        "UNREAD"
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "id": "120011",
+    "messages": [
+     {
+      "id": "18c0a1",
+      "threadId": "18c0a1"
+     }
+    ],
+    "labelsRemoved": [
+     {
+      "message": {
+       "id": "18c0a1",
+       "threadId": "18c0a1",
+       "labelIds": [
+        "INBOX"
+       ]
+      },
+      "labelIds": [
+       "UNREAD"
+      ]
+     }
+    ]
+   }
+  ],
+  "historyId": "120020"
+ },
+ "historyDeletion": {
+  "history": [
+   {
+    "id": "120030",
+    "messages": [
+     {
+      "id": "18c0b1",
+      "threadId": "18c0b1"
+     }
+    ],
+    "messagesDeleted": [
+     {
+      "message": {
+       "id": "18c0b1",
+       "threadId": "18c0b1",
+       "labelIds": [
+        "INBOX",
+        "CATEGORY_UPDATES"
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "id": "120031",
+    "messages": [
+     {
+      "id": "18c0e1",
+      "threadId": "18c0e1"
+     }
+    ],
+    "labelsAdded": [
+     {
+      "message": {
+       "id": "18c0e1",
+       "threadId": "18c0e1",
+       "labelIds": [
+        "TRASH"
+       ]
+      },
+      "labelIds": [
+       "TRASH"
+      ]
+     }
+    ]
+   },
+   {
+    "id": "120032",
+    "messages": [
+     {
+      "id": "18c0a2",
+      "threadId": "18c0a1"
+     }
+    ],
+    "messagesDeleted": [
+     {
+      "message": {
+       "id": "18c0a2",
+       "threadId": "18c0a1",
+       "labelIds": [
+        "SENT"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "historyId": "120040"
+ },
+ "historyEmpty": {
+  "historyId": "120020"
+ },
+ "error404History": {
+  "error": {
+   "code": 404,
+   "message": "Requested entity was not found.",
+   "errors": [
+    {
+     "message": "Requested entity was not found.",
+     "domain": "global",
+     "reason": "notFound"
+    }
+   ],
+   "status": "NOT_FOUND"
+  }
+ },
+ "error404Thread": {
+  "error": {
+   "code": 404,
+   "message": "Requested entity was not found.",
+   "errors": [
+    {
+     "message": "Requested entity was not found.",
+     "domain": "global",
+     "reason": "notFound"
+    }
+   ],
+   "status": "NOT_FOUND"
+  }
+ },
+ "error401": {
+  "error": {
+   "code": 401,
+   "message": "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential.",
+   "errors": [
+    {
+     "message": "Invalid Credentials",
+     "domain": "global",
+     "reason": "authError",
+     "location": "Authorization",
+     "locationType": "header"
+    }
+   ],
+   "status": "UNAUTHENTICATED"
+  }
+ },
+ "error429": {
+  "error": {
+   "code": 429,
+   "message": "Too many concurrent requests for user.",
+   "errors": [
+    {
+     "message": "Too many concurrent requests for user.",
+     "domain": "global",
+     "reason": "rateLimitExceeded"
+    }
+   ],
+   "status": "RESOURCE_EXHAUSTED"
+  }
+ },
+ "error403UserRateLimit": {
+  "error": {
+   "code": 403,
+   "message": "User-rate limit exceeded.",
+   "errors": [
+    {
+     "message": "User-rate limit exceeded.",
+     "domain": "usageLimits",
+     "reason": "userRateLimitExceeded"
+    }
+   ],
+   "status": "PERMISSION_DENIED"
+  }
+ },
+ "error400InvalidPageToken": {
+  "error": {
+   "code": 400,
+   "message": "Invalid pageToken",
+   "errors": [
+    {
+     "message": "Invalid pageToken",
+     "domain": "global",
+     "reason": "invalidArgument"
+    }
+   ],
+   "status": "INVALID_ARGUMENT"
+  }
+ }
+}

@@ -30,6 +30,7 @@
 import type { FetchFn } from "../client.ts";
 import type { ConnectorProvider } from "../providers.ts";
 import { googleCalendarAdapter, GOOGLE_API_ORIGIN } from "./calendar.ts";
+import { googleGmailAdapter, GOOGLE_GMAIL_SERVICE } from "./gmail.ts";
 
 export const GOOGLE_CALENDAR_READONLY = "https://www.googleapis.com/auth/calendar.readonly";
 export const GOOGLE_GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly";
@@ -81,7 +82,8 @@ export function googleProvider(): ConnectorProvider {
     identify: ({ fetch, accessToken }) => identify(fetch, accessToken),
     sync: {
       apiOrigin: GOOGLE_API_ORIGIN,
-      adapter: (account, ctx) => googleCalendarAdapter(account, ctx),
+      // An account syncs one service: its source holds one kind (mailbox or calendar).
+      adapter: (account, ctx) => ((account.services ?? []).includes(GOOGLE_GMAIL_SERVICE) ? googleGmailAdapter(account, ctx) : googleCalendarAdapter(account, ctx)),
     },
   };
 }
