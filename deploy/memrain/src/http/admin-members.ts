@@ -114,12 +114,10 @@ async function membersRoute(req: Request, url: URL, engine: Engine): Promise<Res
   const target = b ? credential(b) : null;
   if (!target) return bad("body must be {kind: token|client|enrollment, id}");
   if (action === "bind") return json({ binding: await bindCredential(engine, (await existingMember(engine, id)).id, target, WHO) });
-  // Unbinding names the member so a stale page cannot unbind someone else's key.
-  const bound = await boundCredentials(engine, (await existingMember(engine, id)).id);
-  if (!bound.some((c) => c.kind === target.kind && c.id === target.id)) {
-    return json({ error: "not_found", message: `${target.kind} "${target.id}" is not bound to member "${id}"` }, 404);
-  }
-  return json({ binding: await bindCredential(engine, null, target, WHO) });
+  // Unbinding names the member, checked under the credential's row lock, so a
+  // stale page cannot unbind a key that was since rebound to someone else.
+  const holder = (await existingMember(engine, id)).id;
+  return json({ binding: await bindCredential(engine, null, target, WHO, { expectedMember: holder }) });
 }
 
 async function groupsRoute(req: Request, url: URL, engine: Engine): Promise<Response | null> {

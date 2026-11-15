@@ -97,6 +97,10 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await code(bindCredential(e, "dan", { kind: "token", id: "dan-cli-old" }, OPS))).toBe("member_not_enabled");
       expect((await boundCredentials(e, "dan")).sort((a, b) => a.kind.localeCompare(b.kind)))
         .toEqual([{ kind: "client", id: "cl-dan" }, { kind: "token", id: "dan-cli" }]);
+      // A change conditioned on another holder is refused under the row lock.
+      await addMember(e, "dana", {}, OPS);
+      expect(await code(bindCredential(e, null, { kind: "token", id: "dan-cli" }, OPS, { expectedMember: "dana" }))).toBe("not_found");
+      expect((await boundCredentials(e, "dan")).map(c => c.id)).toContain("dan-cli");
       // Unbinding from a disabled member is an explicit operator choice, and audited.
       const un = await bindCredential(e, null, { kind: "token", id: "dan-cli" }, OPS);
       expect(un).toMatchObject({ member_id: null, previous_member_id: "dan" });

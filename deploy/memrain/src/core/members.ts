@@ -253,13 +253,16 @@ export interface BindResult {
 /**
  * Bind one credential to `memberId`, or unbind it with null. The member must
  * be enabled. A credential already bound to a removed member is never moved:
- * that would revive a key its removal was meant to kill.
+ * that would revive a key its removal was meant to kill. `expectedMember`
+ * makes the change apply only while the credential is still bound to that
+ * member, checked under the row lock, so a stale caller cannot undo a rebind.
  */
 export async function bindCredential(
   engine: Engine,
   memberId: string | null,
   target: CredentialRef,
   who: MemberActor,
+  opts: { expectedMember?: string } = {},
 ): Promise<BindResult> {
   const spec = CREDENTIAL_TABLE[target.kind];
   if (!spec) throw new MemberError("member_invalid", `unknown credential kind "${String(target.kind)}"`);
@@ -278,6 +281,9 @@ export async function bindCredential(
     );
     if (locked.rows.length === 0) throw new MemberError("not_found", `no live ${target.kind} "${target.id}"`);
     const previous = locked.rows.find((r) => r.member_id !== null)?.member_id ?? null;
+    if (opts.expectedMember !== undefined && locked.rows.some((r) => r.member_id !== opts.expectedMember)) {
+      throw new MemberError("not_found", `${target.kind} "${target.id}" is not bound to member "${opts.expectedMember}"`);
+    }
     if (locked.rows.some((r) => r.status === "removed") && memberId !== previous) {
       throw new MemberError(
         "member_retired",
