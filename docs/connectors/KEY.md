@@ -187,9 +187,15 @@ docker exec deploy-memrain-1 rm -f /tmp/kek-old /tmp/kek-new
 # back up /root/kek-new.b64 offline (as in "Back it up" above), then:
 shred -u /root/kek-new.b64
 docker exec deploy-memrain-1 bun run src/cli.ts config set MEMRAIN_CONNECTORS_ENABLED 1
-docker restart deploy-memrain-1
+bash deploy/deploy.sh
 docker exec deploy-memrain-1 bun run src/cli.ts doctor     # connector-accounts clean
 ```
+
+Use `deploy.sh` here, not `docker restart`: the key in `.secrets/memrain.env`
+changed in step 4, and only a recreated container reads the new file. A
+restart keeps the old key in the process environment, and every row resealed
+in step 3 then fails to open. Because the env file changed, `deploy.sh` does
+recreate the container, and the new process also reads the setting above.
 
 ### 6. If doctor reports rows sealed by another key
 

@@ -108,12 +108,14 @@ docker exec deploy-memrain-1 bun run src/cli.ts sources register me-meetings --k
 ```
 
 Then let your agents read it. Add the new source to the read set of each OAuth
-client that should see it (check with `--dry-run` first; only the read set
-changes):
+client that should see it. Preview with `--dry-run` (only the read set should
+change), then run the same command without it:
 
 ```bash
 docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> --source <its write source> \
   --federated-read <its current read sources>,me-calendar --dry-run
+docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> --source <its write source> \
+  --federated-read <its current read sources>,me-calendar
 ```
 
 - Google Calendar: [GOOGLE.md](./GOOGLE.md) (a Google Cloud OAuth client of
