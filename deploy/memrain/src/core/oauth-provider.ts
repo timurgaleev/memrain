@@ -1007,7 +1007,24 @@ async function revokeGrantIn(
  * row (every token issued before grants, and every client_credentials token)
  * still takes the client row.
  */
-function oauthGrantSelect(): string {
+/**
+ * True when `err` is a missing member_id / tool_surface column: a database
+ * that has not run migrations 162/164 yet. Readers then retry without them,
+ * so the verifier keeps working across the deploy window, exactly as before
+ * those migrations (no member, full tool surface).
+ */
+function isPreMemberSchemaError(err: unknown): boolean {
+  return isUndefinedColumnError(err, "member_id") || isUndefinedColumnError(err, "tool_surface");
+}
+
+/** The PAT columns the verifier reads, without the 162/164 columns when `members` is false. */
+function patSelect(members: boolean): string {
+  return members
+    ? "id, name, permissions, scopes, budget_usd_per_day, member_id, tool_surface"
+    : "id, name, permissions, scopes, budget_usd_per_day";
+}
+
+function oauthGrantSelect(members = true): string {
   return `SELECT t.client_id, t.scopes, t.expires_at, t.resource, t.family_id, t.revoked_at, c.client_name,
               CASE WHEN t.grant_bound THEN t.source_id      ELSE c.source_id      END AS source_id,
               CASE WHEN t.grant_bound THEN t.federated_read ELSE c.federated_read END AS federated_read,
@@ -1020,10 +1037,10 @@ function oauthGrantSelect(): string {
               e.revoked_at AS grant_revoked_at,
               ${legacyGrantRevoked("t")} AS legacy_grant_revoked,
               c.deleted_at AS client_deleted_at,
-              c.scope AS current_scope,
+              c.scope AS current_scope${members ? `,
               CASE WHEN t.grant_bound THEN e.member_id END AS grant_member_id,
               c.member_id AS client_member_id,
-              c.tool_surface
+              c.tool_surface` : ""}
        FROM oauth_tokens t
        LEFT JOIN oauth_clients c ON c.client_id = t.client_id
        LEFT JOIN oauth_enrollments e ON t.grant_bound AND e.id = t.grant_id`;
@@ -2916,12 +2933,12 @@ export class OAuthProvider {
 
     // OAuth tokens first. JOIN oauth_clients so the source_id (write scope)
     // and federated_read (read set) arrive on the same query — no N+1 lookup.
-    const oauthRows = await this.rows(
-      `${oauthGrantSelect()}
+    const oauthRows = await this.withPreMemberFallback((members) => this.rows(
+      `${oauthGrantSelect(members)}
        WHERE t.token_hash = $1 AND t.token_type = 'access'
          AND t.revoked_at IS NULL`,
       [tokenHash],
-    );
+    ));
 
     if (oauthRows.length > 0) {
       const row = oauthRows[0] as Record<string, unknown>;
@@ -2944,11 +2961,11 @@ export class OAuthProvider {
     // instead of pinning every legacy token to 'default'.
     let legacyRows: Record<string, unknown>[];
     try {
-      legacyRows = await this.rows(
-        `SELECT id, name, permissions, scopes, budget_usd_per_day, member_id, tool_surface FROM access_tokens
+      legacyRows = await this.withPreMemberFallback((members) => this.rows(
+        `SELECT ${patSelect(members)} FROM access_tokens
          WHERE token_hash = $1 AND revoked_at IS NULL`,
         [tokenHash],
-      );
+      ));
     } catch (err) {
       if (isUndefinedColumnError(err, "permissions")) {
         legacyRows = await this.rows(
@@ -2994,17 +3011,18 @@ export class OAuthProvider {
    */
   async resolvePrincipal(ref: PrincipalRef): Promise<PrincipalGrant> {
     if (ref.kind === "pat") {
-      const rows = await this.rows(
-        `SELECT id, name, permissions, scopes, budget_usd_per_day, revoked_at, member_id, tool_surface FROM access_tokens WHERE id = $1`,
+      const rows = await this.withPreMemberFallback((members) => this.rows(
+        `SELECT ${patSelect(members)}, revoked_at FROM access_tokens WHERE id = $1`,
         [ref.id],
-      );
+      ));
       const row = rows[0];
       if (!row) throw new InvalidTokenError("Credential revoked or no longer exists");
       if (row.revoked_at != null) throw new InvalidTokenError("Credential revoked");
       return this.withMembers(legacyGrantFromRow(row), [row.member_id]);
     }
     const match = ref.kind === "oauth_family" ? "t.family_id = $1" : "t.token_hash = $1 AND t.family_id IS NULL";
-    const rows = await this.rows(`${oauthGrantSelect()} WHERE ${match} AND t.client_id = $2`, [ref.id, ref.client_id]);
+    const rows = await this.withPreMemberFallback((members) =>
+      this.rows(`${oauthGrantSelect(members)} WHERE ${match} AND t.client_id = $2`, [ref.id, ref.client_id]));
     if (rows.length === 0) throw new InvalidTokenError("Credential revoked or no longer exists");
     if (rows.some((r) => r.revoked_at != null)) throw new InvalidTokenError("Credential revoked");
     const grants = rows.map((r) => {
@@ -3022,6 +3040,16 @@ export class OAuthProvider {
     // Every token of one session shares its client and enrollment, so the
     // first row names the same members as the rest.
     return this.withMembers({ ...first, scopes }, [rows[0]!.grant_member_id, rows[0]!.client_member_id]);
+  }
+
+  /** Run a verifier read, retrying without the 162/164 columns on an older schema. */
+  private async withPreMemberFallback<T>(read: (members: boolean) => Promise<T>): Promise<T> {
+    try {
+      return await read(true);
+    } catch (err) {
+      if (!isPreMemberSchemaError(err)) throw err;
+      return read(false);
+    }
   }
 
   /**
