@@ -382,7 +382,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
   });
 
   /** A hand edit as page_edit leaves it: the body changes, the connector's truth stays. */
-  const editByHand = async (page: RenderedConnectorPage, note: string, writer: { written_by: string; written_by_principal: string }) => {
+  const editByHand = async (page: RenderedConnectorPage, note: string, writer: { written_by: string; written_by_principal?: string }) => {
     const current = (await db.storage.engine().query<{ markdown_body: string; compiled_truth: Record<string, unknown> }>(
       "SELECT markdown_body, compiled_truth FROM pages WHERE slug = $1", [page.slug])).rows[0]!;
     await putPage(db.storage, { slug: page.slug, type: page.type, allowAdHocType: true, title: page.title,
@@ -418,6 +418,18 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(receipt[0]!.summary).not.toContain("handcanary");
     const versions = (await e.query<{ written_by: string | null }>("SELECT written_by FROM page_versions WHERE slug = $1 ORDER BY version_n", [page.slug])).rows;
     expect(versions.map(v => v.written_by)).toEqual(["connector-gmail", "mcp", "retention-detach"]);
+  });
+
+  it("ages out a page only the brain's own writers touched since the connector", async () => {
+    const page = await ingest(mailPage("auto1", "automatedcanary", OWNER, "2025-01-01T08:00:00.000Z"));
+    // A redaction rewrite and an enrichment pass carry no credential; a
+    // generator stamped with the operator principal is still the brain itself.
+    await editByHand(page, "[redacted]", { written_by: "secrets-audit" });
+    await editByHand(page, "Enriched summary.", { written_by: "enrichment" });
+    await editByHand(page, "Distilled.", { written_by: "extract-atoms", written_by_principal: "operator" });
+    const r = await sweepRetention(db.storage, scope, { accountId: NO_ACCOUNT, kinds: ["mail"], env: {}, now: NOW });
+    expect(r.detached).toEqual([]);
+    expect(r.deleted).toEqual([page.slug]);
   });
 
   it("ages out a page whose hand edit the connector has since written over", async () => {
