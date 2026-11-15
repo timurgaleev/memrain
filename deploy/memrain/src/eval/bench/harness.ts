@@ -163,12 +163,16 @@ export async function openBenchBrain(opts: { includeMail?: boolean } = {}): Prom
   }
 }
 
-/** Distinct pages, best first, for one query: production ranking minus every paid stage. */
-export async function benchRankedPaths(storage: Storage, query: string, depth = BENCH_DEPTH): Promise<string[]> {
+/**
+ * Distinct pages, best first, for one query: production ranking minus every
+ * paid stage. The bench embeds the query deterministically; a live brain
+ * passes `live` to embed it with the brain's own model.
+ */
+export async function benchRankedPaths(storage: Storage, query: string, depth = BENCH_DEPTH, live = false): Promise<string[]> {
   const hits = await hybridSearch(storage, query, {
     k: depth * PAGE_OVERFETCH,
     intent: classifyIntentZeroLlm(query),
-    embedQuery: deterministicEmbedQuery,
+    ...(live ? {} : { embedQuery: deterministicEmbedQuery }),
     noCache: true,
     noTelemetry: true,
     rerank: false,
@@ -206,14 +210,14 @@ export interface BenchMetrics {
   recall_at_10: number;
 }
 
-interface QueryScore {
+export interface QueryScore {
   hit5: number;
   rr: number;
   ndcg10: number;
   recall10: number;
 }
 
-function scoreRanked(paths: string[], q: Qrel): QueryScore {
+export function scoreRanked(paths: string[], q: Qrel): QueryScore {
   const expected = new Set(q.expected_paths);
   return {
     hit5: recallAtK(paths, expected, 5) > 0 ? 1 : 0,
@@ -223,7 +227,7 @@ function scoreRanked(paths: string[], q: Qrel): QueryScore {
   };
 }
 
-function mean(scores: QueryScore[]): BenchMetrics {
+export function meanScores(scores: QueryScore[]): BenchMetrics {
   const n = scores.length;
   const avg = (pick: (s: QueryScore) => number) => (n === 0 ? 0 : scores.reduce((a, s) => a + pick(s), 0) / n);
   return { n, hit_at_5: avg((s) => s.hit5), mrr: avg((s) => s.rr), ndcg_at_10: avg((s) => s.ndcg10), recall_at_10: avg((s) => s.recall10) };
@@ -321,8 +325,8 @@ export async function scoreBench(brain: BenchBrain, qrels: BenchQrels, opts: { e
     embed_model: BENCH_EMBED_MODEL,
     mail_noise: opts.mailNoise ?? true,
     queries: Object.keys(ranked).length + errors.length,
-    overall: mean(scored.map((x) => x.s)),
-    by_tag: Object.fromEntries(Object.entries(byTag).sort(([a], [b]) => a.localeCompare(b)).map(([t, s]) => [t, mean(s)])),
+    overall: meanScores(scored.map((x) => x.s)),
+    by_tag: Object.fromEntries(Object.entries(byTag).sort(([a], [b]) => a.localeCompare(b)).map(([t, s]) => [t, meanScores(s)])),
     abstention: { n: abstentions, returned_any: returnedAny },
     decoys,
     errors,
