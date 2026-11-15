@@ -17,8 +17,13 @@ interface Account {
   held_items: number;
   held_deletes: number;
   notices: Array<{ kind: string; detail: string; created_at: string }>;
-  credential: { scopes: string[]; expires_at: string | null } | null;
+  credential: { scopes: string[]; expires_at: string | null; granted_at: string } | null;
+  last_run: Record<string, unknown> | null;
+  needs_reconnect: boolean;
+  grant_expiry: { granted_at: string; expires_at: string; days: number; state: string; due_soon: boolean } | null;
 }
+
+export interface Calendar { id: string; summary: string; primary: boolean; access_role: string; selected: boolean }
 
 export interface AutomationState {
   connectors: {
@@ -31,6 +36,7 @@ export interface AutomationState {
     clients: Array<{ provider: string; client_id: string; updated_at: string }>;
   };
   failConnectors: number;
+  calendars: { calendars: Calendar[]; history_days: number };
   daemons: unknown;
   pausedSpend: unknown[];
   holds: Array<Record<string, unknown>>;
@@ -43,7 +49,9 @@ export function account(over: Partial<Account> = {}): Account {
     id: "6f1c1f4e-3a2b-4c5d-8e9f-0a1b2c3d4e5f", source_id: "cal", provider: "google", services: ["calendar"],
     account_label: OWNER, status: "active", status_reason: null, enabled: true, spend_cap_usd_daily: 1, item_cap_daily: 5000,
     last_success_at: "2026-11-09T11:00:00Z", held_items: 0, held_deletes: 0, notices: [],
-    credential: { scopes: ["https://www.googleapis.com/auth/calendar.readonly"], expires_at: null }, ...over,
+    credential: { scopes: ["https://www.googleapis.com/auth/calendar.readonly"], expires_at: null, granted_at: "2026-11-08T12:00:00.000Z" },
+    last_run: { status: "success", stop_reason: null, at: "2026-11-09T11:00:00Z", http_status: null, error: null, items: 49, pages_written: 49, items_failed: 0 },
+    needs_reconnect: false, grant_expiry: null, ...over,
   };
 }
 
@@ -61,6 +69,14 @@ export function scenario(over: Partial<AutomationState["connectors"]> = {}): Aut
       ...over,
     },
     failConnectors: 0,
+    calendars: {
+      calendars: [
+        { id: "primary-id@example.test", summary: OWNER, primary: true, access_role: "owner", selected: true },
+        { id: "team@group.calendar.example.test", summary: "Team", primary: false, access_role: "reader", selected: false },
+        { id: "holidays@group.calendar.example.test", summary: "Holidays", primary: false, access_role: "reader", selected: true },
+      ],
+      history_days: 90,
+    },
     daemons: {
       scheduler: { enabled_here: true, leader: { holder: "brain-1:42", tick_age_s: 12, live: true } },
       paused_all: null,
@@ -104,6 +120,7 @@ export async function automationRoute(request: Request): Promise<Response | null
       return Response.json(st.connectors);
     }
     if (/\/accounts\/[^/]+\/preview$/.test(path)) return Response.json(PREVIEW);
+    if (/\/accounts\/[^/]+\/calendars$/.test(path)) return Response.json(st.calendars);
     if (path === "/admin/api/daemons") return Response.json(st.daemons);
     if (path === "/admin/api/spend/paused") return Response.json({ paths: st.pausedSpend });
     if (path === "/admin/api/write-gate/holds") return Response.json({ holds: st.holds });
@@ -135,6 +152,12 @@ export async function automationRoute(request: Request): Promise<Response | null
         const kept = a.held_deletes;
         a.held_deletes = 0;
         return Response.json({ ok: true, kept });
+      }
+      case "calendars": {
+        const chosen = new Set(Array.isArray(body.calendars) ? body.calendars as string[] : []);
+        st.calendars.calendars = st.calendars.calendars.map((c) => ({ ...c, selected: c.primary || chosen.has(c.id) }));
+        if (typeof body.history_days === "number") st.calendars.history_days = body.history_days;
+        return Response.json({ ok: true, calendars: [...chosen], history_days: st.calendars.history_days });
       }
       case "retry-held": {
         const retried = a.held_items;

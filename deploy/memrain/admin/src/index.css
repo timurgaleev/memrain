@@ -1266,6 +1266,17 @@ pre.copy-value {
 .modal { max-height: calc(100vh - 32px); overflow-y: auto; }
 .dialog-text { font-size: 13px; line-height: 1.6; color: var(--text-secondary); margin-bottom: 12px; }
 .dialog-error { font-size: 13px; margin-top: 10px; }
+.calendar-picker { display: grid; gap: 10px; padding-left: 12px; border-left: 1px solid var(--border-strong); max-width: 640px; }
+.calendar-form { display: grid; gap: 10px; }
+.calendar-form .dialog-actions { justify-content: flex-start; margin-top: 0; }
+.calendar-form .hint { margin: 0; }
+.calendar-list { border: none; display: grid; gap: 8px; min-width: 0; }
+.calendar-list legend { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+.calendar-option { gap: 8px; margin: 0; font-weight: 400; align-items: baseline; }
+.calendar-option input { width: auto; flex: none; margin: 0; padding: 0; accent-color: var(--accent); align-self: center; }
+.calendar-name { color: var(--text-primary); overflow-wrap: anywhere; }
+.calendar-days label { font-size: 12px; color: var(--text-secondary); }
+.calendar-days input { max-width: 120px; font-variant-numeric: tabular-nums; }
 .confirm-field { margin: 4px 0 12px; }
 .confirm-field .hint { margin: -2px 0 6px; }
 .preview-counts { margin-bottom: 14px; font-size: 13px; }

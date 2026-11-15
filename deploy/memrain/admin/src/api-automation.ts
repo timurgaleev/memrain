@@ -1,5 +1,6 @@
 import { ApiError, expectOk, passkeyFetch } from "./lib/passkey-fetch.ts";
 import type {
+  CalendarsReport,
   ConnectorsReport,
   DaemonsReport,
   DataPreview,
@@ -42,6 +43,9 @@ export const automationApi = {
   retryHeld: (id: string) => call<{ ok: true; retried: number }>(account(id, "retry-held"), post()),
   confirmDeletes: (id: string) => call<{ ok: true; confirmed: number }>(account(id, "deletions/confirm"), post()),
   rejectDeletes: (id: string) => call<{ ok: true; kept: number }>(account(id, "deletions/reject"), post()),
+  calendars: (id: string) => call<CalendarsReport>(account(id, "calendars")),
+  saveCalendars: (id: string, calendars: string[], historyDays: number) =>
+    call<{ ok: true; calendars: string[]; history_days: number }>(account(id, "calendars"), post({ calendars, history_days: historyDays })),
 
   daemons: () => call<DaemonsReport>("/admin/api/daemons"),
   controlDaemon: (action: "pause" | "resume" | "enable" | "disable", daemon: string, reason?: string) =>

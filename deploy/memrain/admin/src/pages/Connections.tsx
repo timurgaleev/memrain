@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { automationApi } from "../api-automation.ts";
 import { useAsync, useNow } from "../hooks.ts";
 import { Section } from "../components/Tile.tsx";
@@ -8,11 +8,15 @@ import { fmtAgo, fmtInt, fmtUsd } from "../lib/format.ts";
 import {
   accountView,
   connectOutcome,
+  grantNote,
+  hasCalendarPicker,
+  lastRunText,
   providerLabel,
   type ConnectorAccountView,
   type ConnectorsReport,
 } from "../lib/automation.ts";
 import { DeleteDataDialog, DisconnectDialog } from "./ConnectionDialogs.tsx";
+import { CalendarPicker } from "./ConnectionCalendars.tsx";
 import { ProviderPanel } from "./ConnectionProviders.tsx";
 import { actionError, goToConsent } from "./connection-actions.ts";
 
@@ -144,7 +148,11 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
   const view = accountView(a);
   const [busy, setBusy] = useState(false);
   const [askDeletes, setAskDeletes] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const pickerId = useId();
   const reconnectNotice = a.notices.find((n) => n.kind === "needs_reconnect");
+  const grant = grantNote(a);
+  const canPick = hasCalendarPicker(a, connectorsOn);
 
   const run = async (work: () => Promise<string | null>) => {
     setBusy(true);
@@ -193,14 +201,35 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
 
       <dl className="kv account-meta">
         <dt>Last sync</dt><dd>{a.last_success_at ? fmtAgo(a.last_success_at, now) : "never"}</dd>
+        <dt>Last run</dt>
+        <dd>
+          <span>{lastRunText(a.last_run)}</span>
+          {a.last_run && <span className="muted"> · {fmtAgo(a.last_run.at, now)}</span>}
+        </dd>
+        {grant && !grant.warn && <><dt>Access ends</dt><dd>{grant.text}</dd></>}
         <dt>Daily caps</dt><dd className="num">{fmtUsd(a.spend_cap_usd_daily)} · {fmtInt(a.item_cap_daily)} items</dd>
         <dt>Access</dt><dd className="mono account-scopes">{a.credential ? a.credential.scopes.join(" ") || "none" : "no credential"}</dd>
       </dl>
 
       {view.canReconnect && (
         <div className="account-attention warning-bar">
-          {reconnectNotice?.detail ?? "The provider no longer accepts the stored access."} Sync is paused and nothing was
-          deleted; reconnecting picks up where it stopped.
+          {grant?.warn ? grant.text : reconnectNotice?.detail ?? "The provider no longer accepts the stored access."} Sync is
+          paused and nothing was deleted; reconnecting picks up where it stopped.
+        </div>
+      )}
+      {!view.canReconnect && grant?.warn && (
+        <div className="account-attention warning-bar">
+          <span>{grant.text}</span>
+          <span className="attention-actions">
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled={busy || !connectorsOn}
+              aria-label={`Reconnect ${a.account_label} now`}
+              onClick={reconnect}
+            >
+              Reconnect now
+            </button>
+          </span>
         </div>
       )}
       {a.held_deletes > 0 && (
@@ -245,6 +274,18 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
             {a.enabled ? "Turn sync off" : "Turn sync on"}
           </button>
         )}
+        {canPick && (
+          <button
+            className="btn btn-secondary btn-sm"
+            disabled={busy}
+            aria-expanded={picking}
+            aria-controls={picking ? pickerId : undefined}
+            aria-label={`Choose calendars for ${a.account_label}`}
+            onClick={() => setPicking(!picking)}
+          >
+            Calendars
+          </button>
+        )}
         {view.canDisconnect && (
           <button
             className="btn btn-danger btn-sm"
@@ -266,6 +307,15 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
           </button>
         )}
       </div>
+
+      {canPick && picking && (
+        <CalendarPicker
+          account={a}
+          id={pickerId}
+          onClose={() => setPicking(false)}
+          onSaved={(message) => { setPicking(false); onDone(message); }}
+        />
+      )}
 
       {askDeletes && (
         <Dialog title={`Delete ${a.held_deletes} items from ${a.account_label}?`} onClose={() => setAskDeletes(false)}>

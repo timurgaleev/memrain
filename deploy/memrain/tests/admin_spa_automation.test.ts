@@ -15,6 +15,9 @@ import {
   daemonView,
   decisionMessage,
   deleteOutcome,
+  grantNote,
+  hasCalendarPicker,
+  lastRunText,
   providerLabel,
   safeAuthorizeUrl,
   sourcesFor,
@@ -25,8 +28,50 @@ import {
 const base: ConnectorAccountView = {
   id: "a1", source_id: "inbox", provider: "google", services: ["calendar"], account_label: "owner@example.test",
   status: "active", status_reason: null, enabled: false, spend_cap_usd_daily: 1, item_cap_daily: 5000,
-  last_success_at: null, held_items: 0, held_deletes: 0, notices: [], credential: { scopes: ["calendar.readonly"], expires_at: null },
+  last_success_at: null, held_items: 0, held_deletes: 0, notices: [],
+  credential: { scopes: ["calendar.readonly"], expires_at: null, granted_at: "2026-11-09T10:00:00.000Z" },
+  last_run: null, needs_reconnect: false, grant_expiry: null,
 };
+
+describe("lastRunText", () => {
+  it("says how the last run ended and what it read, or that none ran yet", () => {
+    expect(lastRunText(null)).toBe("none yet");
+    expect(lastRunText({ status: "success", stop_reason: null, at: "x", http_status: null, error: null, items: 12, pages_written: 3, items_failed: 0 }))
+      .toBe("success · 12 items, 3 written");
+    expect(lastRunText({ status: "partial", stop_reason: "fetch_failed", at: "x", http_status: 429, error: "rate", items: 4, pages_written: 1, items_failed: 2 }))
+      .toBe("partial (fetch_failed, HTTP 429) · 4 items, 1 written, 2 failed");
+  });
+});
+
+describe("grantNote", () => {
+  const upcoming = { granted_at: "2026-11-09T10:00:00.000Z", expires_at: "2026-11-16T10:00:00.000Z", days: 7, state: "upcoming" as const, due_soon: false };
+  it("names the expected end of a Testing-mode grant, and asks for a reconnect once it is close", () => {
+    expect(grantNote(base)).toBeNull();
+    expect(grantNote({ ...base, grant_expiry: upcoming })).toEqual({
+      warn: false, text: "Around 2026-11-16 if the Google app is in Testing (7 days after consent).",
+    });
+    const soon = grantNote({ ...base, grant_expiry: { ...upcoming, due_soon: true } })!;
+    expect(soon.warn).toBe(true);
+    expect(soon.text).toContain("Reconnect before then");
+  });
+
+  it("explains a reconnect the Testing-mode limit likely caused", () => {
+    const lapsed = grantNote({ ...base, status: "needs_reconnect", needs_reconnect: true, grant_expiry: { ...upcoming, state: "lapsed" } })!;
+    expect(lapsed.warn).toBe(true);
+    expect(lapsed.text).toContain("7 days after consent");
+    expect(lapsed.text).toContain("publish the app");
+  });
+});
+
+describe("hasCalendarPicker", () => {
+  it("offers the calendar picker for a connected Google Calendar account while connectors are on", () => {
+    expect(hasCalendarPicker(base, true)).toBe(true);
+    expect(hasCalendarPicker(base, false)).toBe(false);
+    expect(hasCalendarPicker({ ...base, status: "needs_reconnect" }, true)).toBe(false);
+    expect(hasCalendarPicker({ ...base, provider: "fireflies", services: ["fireflies"] }, true)).toBe(false);
+    expect(hasCalendarPicker({ ...base, services: ["mail"] }, true)).toBe(false);
+  });
+});
 
 describe("routes", () => {
   it("knows the three automation pages", () => {

@@ -25,8 +25,49 @@ export interface ConnectorAccountView {
   held_items: number;
   held_deletes: number;
   notices: ConnectorNotice[];
-  credential: { scopes: string[]; expires_at: string | null } | null;
+  /** `granted_at`: the last consent. */
+  credential: { scopes: string[]; expires_at: string | null; granted_at: string } | null;
+  last_run: AccountRunView | null;
+  needs_reconnect: boolean;
+  grant_expiry: GrantExpiryView | null;
 }
+
+export interface AccountRunView {
+  status: "success" | "nothing_new" | "partial" | "auth_required" | "forbidden" | "skipped";
+  stop_reason: string | null;
+  at: string;
+  http_status: number | null;
+  error: string | null;
+  items: number;
+  pages_written: number;
+  items_failed: number;
+}
+
+/** When a provider's test-mode grant ends (Google: 7 days after consent while the app is in Testing). */
+export interface GrantExpiryView {
+  granted_at: string;
+  expires_at: string;
+  days: number;
+  state: "upcoming" | "lapsed";
+  due_soon: boolean;
+}
+
+/** A calendar the account can read, as the picker lists it. */
+export interface CalendarView {
+  id: string;
+  summary: string;
+  primary: boolean;
+  access_role: string;
+  selected: boolean;
+}
+
+export interface CalendarsReport {
+  calendars: CalendarView[];
+  history_days: number;
+}
+
+/** The longest history window the server accepts, in days. */
+export const MAX_HISTORY_DAYS = 3650;
 
 export interface ConnectorProviderView {
   id: string;
@@ -116,6 +157,37 @@ export function accountView(a: ConnectorAccountView): {
     canDeleteData: disconnected,
     attention,
   };
+}
+
+/** How the account's last sync run ended, and what it read. */
+export function lastRunText(run: AccountRunView | null): string {
+  if (run === null) return "none yet";
+  const why = [run.stop_reason, run.http_status !== null ? `HTTP ${run.http_status}` : null].filter((x) => x !== null);
+  const counts = `${fmtInt(run.items)} items, ${fmtInt(run.pages_written)} written${run.items_failed > 0 ? `, ${fmtInt(run.items_failed)} failed` : ""}`;
+  return `${run.status}${why.length > 0 ? ` (${why.join(", ")})` : ""} · ${counts}`;
+}
+
+/**
+ * What the owner should know about a test-mode grant: when it is expected to
+ * end, or that it likely ended the account's access. `warn` asks for action.
+ */
+export function grantNote(a: ConnectorAccountView): { warn: boolean; text: string } | null {
+  const g = a.grant_expiry;
+  if (g === null) return null;
+  const day = g.expires_at.slice(0, 10);
+  if (g.state === "lapsed") {
+    return {
+      warn: true,
+      text: `${providerLabel(a.provider)} ends a grant ${g.days} days after consent while its OAuth app is in Testing, and this one was granted on ${g.granted_at.slice(0, 10)}. Reconnect, or publish the app to stop the weekly expiry.`,
+    };
+  }
+  const base = `Around ${day} if the ${providerLabel(a.provider)} app is in Testing (${g.days} days after consent).`;
+  return g.due_soon ? { warn: true, text: `${base} Reconnect before then to keep syncing, or publish the app.` } : { warn: false, text: base };
+}
+
+/** The calendar picker is for a connected Google Calendar account, and needs connectors on to read the list. */
+export function hasCalendarPicker(a: ConnectorAccountView, connectorsOn: boolean): boolean {
+  return connectorsOn && a.provider === "google" && a.services.includes("calendar") && a.status === "active";
 }
 
 /** The typed confirmation names the account exactly, surrounding spaces aside. */
