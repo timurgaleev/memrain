@@ -69,7 +69,7 @@ import { isDeterministicRefusal } from "./github.ts";
 import type { ConnectorAccountStatus } from "./accounts.ts";
 import { deleteStaleParts, DETACHED_ORIGIN, massDeleteVerdict } from "./retention.ts";
 import { accountRef, type ConnectorDataKind, type Person } from "./model.ts";
-import type { LoopSignals } from "../loops/signals.ts";
+import { mapLoopSignalsText, type LoopSignals } from "../loops/signals.ts";
 import { connectorsSwitchOn } from "./vault.ts";
 import { ReauthRequiredError, type ConnectorRunStatus, type ResponseClass } from "./types.ts";
 import {
@@ -706,7 +706,7 @@ class Run {
 
   /**
    * The item as enrichment sees it. Its title and names reach the chronicle
-   * and wanted rows from there, not from the page, so a live token is swept
+   * and wanted rows and the loop state from there, not from the page, so a live token is swept
    * out of them as it is out of the page.
    */
   private swept(item: RenderedSyncItem & { enrich: ItemEnrichment }): RenderedSyncItem & { enrich: ItemEnrichment } {
@@ -717,7 +717,8 @@ class Run {
       name: p.name === null ? null : sweep(p.name),
       email: p.email === null ? null : sweep(p.email),
     }));
-    return { ...item, title: sweep(item.title), enrich: { ...item.enrich, participants } };
+    const loop = item.enrich.loop ? { loop: mapLoopSignalsText(item.enrich.loop, sweep) } : {};
+    return { ...item, title: sweep(item.title), enrich: { ...item.enrich, participants, ...loop } };
   }
 
   /**

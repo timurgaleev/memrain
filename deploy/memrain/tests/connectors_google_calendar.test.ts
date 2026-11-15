@@ -653,6 +653,35 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("keeps a live token pasted into an invitation out of the stored reply state", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const account = await connect(db.storage, world);
+      await run(db.storage, world, account.id);
+      world.events = () => ({ status: 200, body: {
+        kind: "calendar#events", nextSyncToken: "after-echo",
+        items: [{
+          id: "echo0001", iCalUID: "echo0001@google.com", status: "confirmed", etag: "\"1\"", summary: `Sync ${GOOGLE_ACCESS_TOKEN}`,
+          organizer: { email: "bob@example.com", displayName: `Bob ${GOOGLE_ACCESS_TOKEN}` },
+          attendees: [
+            { email: "bob@example.com", displayName: `Bob ${GOOGLE_ACCESS_TOKEN}`, responseStatus: "accepted", organizer: true },
+            { email: OWNER, responseStatus: "needsAction", self: true },
+          ],
+          start: { dateTime: "2026-11-18T09:00:00Z" }, end: { dateTime: "2026-11-18T09:30:00Z" },
+        }],
+      } });
+      expect((await run(db.storage, world, account.id)).status).toBe("success");
+      const state = (await e.query<{ signals: unknown }>(
+        `SELECT signals FROM loop_threads WHERE page_slug = $1`, [pageSlug("echo0001@google.com")])).rows;
+      expect(state).toHaveLength(1);
+      const stored = JSON.stringify(state[0]!.signals);
+      expect(stored).toContain("Sync");
+      expect(stored).not.toContain(GOOGLE_ACCESS_TOKEN);
+    } finally { await db.close(); }
+  });
+
   it("deletes a cancelled series", async () => {
     const db = await open();
     try {

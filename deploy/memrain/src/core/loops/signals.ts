@@ -273,6 +273,16 @@ export function nextCalendarStart(s: CalendarLoopSignals, now: Date): string | n
   return ahead[0] ?? null;
 }
 
+/** The same signals with `fn` applied to every outside-text field (title and the names shown). */
+export function mapLoopSignalsText(s: LoopSignals, fn: (text: string) => string): LoopSignals {
+  if (s.kind === "calendar") return { ...s, title: fn(s.title), organizer: s.organizer === null ? null : fn(s.organizer) };
+  return {
+    ...s,
+    title: fn(s.title),
+    messages: s.messages.map(m => ({ ...m, from: fn(m.from), ...(m.to !== undefined ? { to: fn(m.to) } : {}) })),
+  };
+}
+
 /** Shape check for signals read back from the database. */
 export function isLoopSignals(value: unknown): value is LoopSignals {
   if (typeof value !== "object" || value === null) return false;
