@@ -1,5 +1,5 @@
 /**
- * `--json` contract over the real entrypoint: for each of the fifteen most-used
+ * `--json` contract over the real entrypoint: for each of the sixteen most-used
  * commands, `JSON.parse(stdout)` yields exactly one object — on success, on a
  * usage error and on a refused flag — while human-readable output stays on
  * stderr. A script or an agent can therefore branch on stdout alone.
@@ -53,13 +53,14 @@ const SUCCESS_CASES: { argv: string[]; key: string; engineFree?: boolean }[] = [
   { argv: ["spend", "--json"], key: "total_usd" },
   { argv: ["engine", "status", "--json"], key: "engine" },
   { argv: ["version", "--json"], key: "version", engineFree: true },
+  { argv: ["waiting", "sweep", "--json"], key: "swept" },
 ];
 
 describe("the guarded command set", () => {
-  it("is the fifteen commands the contract below covers", () => {
+  it("is the sixteen commands the contract below covers", () => {
     const covered = new Set(SUCCESS_CASES.map((c) => c.argv[0]!));
     expect([...JSON_GUARDED_COMMANDS].sort()).toEqual([...covered].sort());
-    expect(JSON_GUARDED_COMMANDS.size).toBe(15);
+    expect(JSON_GUARDED_COMMANDS.size).toBe(16);
   });
 });
 

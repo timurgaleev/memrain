@@ -86,6 +86,7 @@ import { runCapture } from "./commands/capture.ts";
 import { runTranscripts } from "./commands/transcripts.ts";
 import { runConnectors } from "./commands/connectors.ts";
 import { runDaemons } from "./commands/daemons.ts";
+import { runWaiting } from "./commands/waiting.ts";
 import { runQuarantine, type QuarantineSub } from "./commands/quarantine.ts";
 import { runWriteGate } from "./commands/write-gate.ts";
 import { runSecretsAudit } from "./commands/secrets.ts";
@@ -333,6 +334,9 @@ function printUsage(): void {
   console.log("  daemons status [--json]      background daemons: schedule, pauses, last run, scheduler leader");
   console.log("  daemons pause|resume <name|all> [--source ID] [--reason TEXT] [--json]");
   console.log("  daemons enable|disable <name> [--source ID] [--json]");
+  console.log("  waiting [--source ID] [--type T] [--limit N] [--stale] [--json]");
+  console.log("                               who waits on a reply, whom you wait on, promises, RSVPs (refuses if syncs are >24h old)");
+  console.log("  waiting sweep [--source ID] | done|drop <id> | mute|unmute sender|thread <id>");
   console.log("  quarantine list [--include-flagged] [--json]");
   console.log("  quarantine clear <slug|path> [--force]");
   console.log("  quarantine scan [--limit N] [--apply]");
@@ -1865,6 +1869,27 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (reason) opts.reason = reason;
       if (flags.has("--json")) opts.json = true;
       return await runDaemons(opts);
+    }
+    case "waiting": {
+      const sub = positional[0];
+      const opts: Parameters<typeof runWaiting>[0] = { sub };
+      if (sub === "mute" || sub === "unmute") {
+        if (positional[1]) opts.target = positional[1];
+        if (positional[2]) opts.id = positional[2];
+      } else if (positional[1]) opts.id = positional[1];
+      const src = values.get("--source");
+      if (src) opts.sourceId = src;
+      const type = values.get("--type");
+      if (type) opts.type = type;
+      const limitStr = values.get("--limit");
+      if (limitStr !== undefined) {
+        const n = Number(limitStr);
+        if (!Number.isInteger(n) || n < 1 || n > 500) throw new Error(`memrain waiting: invalid --limit ${limitStr} (1-500)`);
+        opts.limit = n;
+      }
+      if (flags.has("--stale")) opts.stale = true;
+      if (flags.has("--json")) opts.json = true;
+      return await runWaiting(opts);
     }
     case "quarantine": {
       const sub = positional[0];
