@@ -129,7 +129,7 @@ its last run. Search the brain for the title of a recent meeting.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| The account shows `needs_reconnect` | Fireflies refused the key (revoked or regenerated) | Copy the current key from Fireflies and save it again on the Connections page |
+| The account shows `needs_reconnect` | Fireflies refused the key (revoked or regenerated) | Copy the current key from Fireflies, choose **Enter the Fireflies key again** on the account's row, and save it under **Connect Fireflies** into the same source |
 | Runs stop `partial` every day | The daily quota of your plan is used up | Wait for midnight UTC; the backlog drains over the next days |
 | A meeting has no summary | Fireflies had not finished it when the run read it | Runs within the next 48 hours pick it up |
 | The Connections page answers `connectors_disabled` | Connectors are off or the connector key did not load | [ENABLE.md](./ENABLE.md) step 3 |
