@@ -453,7 +453,7 @@ class Adapter implements SyncAdapter {
     const version = str(res.body.historyId);
     const messages = res.body.messages as unknown[];
     // An unreadable message must not read as a gone thread: that would delete its page.
-    if (messages.length === 0 || messages.some(m => rawMessage(m) === null)) {
+    if (messages.length === 0 || messages.some(m => rawMessage(m)?.payload === undefined)) {
       return { kind: "stop", response: { ...res, class: "challenge", body: null, error: "unexpected thread response" } };
     }
     const normalized = normalizeGmailThread(threadId, messages, this.floorOf(st));
