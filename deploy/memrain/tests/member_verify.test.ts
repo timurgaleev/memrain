@@ -121,6 +121,19 @@ describe("OAuth credentials", () => {
     await enableMember(storage.engine(), "carol", OPS);
   });
 
+  it("a replacement code for a disabled member's enrollment inherits the binding and stays refused", async () => {
+    await addMember(storage.engine(), "gina", {}, OPS);
+    const gina = await enroll();
+    await bindCredential(storage.engine(), "gina", { kind: "enrollment", id: gina.enrollmentId }, OPS);
+    await disableMember(storage.engine(), "gina", OPS);
+    const issued = await provider.issueEnrollment({ replaces: gina.enrollmentId });
+    const grant = await provider.claimEnrollment(issued.code, client.client_id);
+    const { redirectUrl } = await provider.authorize(client, { redirectUri: CB, codeChallenge: CHALLENGE, scopes: ["read", "write"] }, grant);
+    const code = new URL(redirectUrl).searchParams.get("code")!;
+    const tokens = await provider.exchangeAuthorizationCode(client, code, undefined, CB);
+    expect(await refused(provider.verifyAccessToken(tokens.access_token))).toContain("member_disabled");
+  });
+
   it("a client bound to a disabled member refuses every token it issued", async () => {
     await addMember(storage.engine(), "erin", {}, OPS);
     const reg = await provider.registerClientManual("erin-agent", ["client_credentials"], "read", [], "team");

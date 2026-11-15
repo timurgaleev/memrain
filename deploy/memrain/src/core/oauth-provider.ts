@@ -1921,12 +1921,13 @@ export class OAuthProvider {
           label: string | null;
           spend_id: string | null;
           budget_usd_per_day: string | number | null;
+          member_id: string | null;
         }
       | undefined;
     if (input.replaces !== undefined) {
       prior = (
         await this.rows<NonNullable<typeof prior>>(
-          `SELECT id, client_id, source_id, federated_read, label, spend_id, budget_usd_per_day
+          `SELECT id, client_id, source_id, federated_read, label, spend_id, budget_usd_per_day, member_id
              FROM oauth_enrollments WHERE id = $1`,
           [input.replaces],
         )
@@ -2006,8 +2007,8 @@ export class OAuthProvider {
       await tx.query(
         `INSERT INTO oauth_enrollments
            (id, code_hash, client_id, source_id, federated_read, label, expires_at,
-            spend_id, replaces_id, budget_usd_per_day)
-         VALUES ($1, $2, $3, $4, $5::text[], $6, $7::timestamptz, $8, $9, $10)`,
+            spend_id, replaces_id, budget_usd_per_day, member_id)
+         VALUES ($1, $2, $3, $4, $5::text[], $6, $7::timestamptz, $8, $9, $10, $11)`,
         [
           id,
           hashToken(code),
@@ -2019,6 +2020,9 @@ export class OAuthProvider {
           spendId,
           prior?.id ?? null,
           prior?.budget_usd_per_day ?? null,
+          // The same person: a replacement keeps their member binding, so a
+          // new code never revives the grant of a disabled or removed member.
+          prior?.member_id ?? null,
         ],
       );
       await writeEnrollmentAudit(tx, id, clientId, "issue", audit, null, {
