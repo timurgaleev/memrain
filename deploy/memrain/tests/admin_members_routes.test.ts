@@ -99,6 +99,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await refused(post("/admin/api/members", { id: "eve" }), deps(s, { requireAdmin: () => false }), 401);
       await refused(post("/admin/api/members", { id: "eve" }), deps(s, { sessionCooldown: () => Date.now() + 60_000 }), 403);
       expect(((await (await call(get("/admin/api/members?all=1"), deps(s))).json()) as { members: unknown[] }).members).toEqual([]);
+      await refused(get("/admin/api/members/%E0%A4%A"), deps(s), 400);
     } finally { await db.close(); }
   });
 });

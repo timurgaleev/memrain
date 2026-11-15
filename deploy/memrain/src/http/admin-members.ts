@@ -173,6 +173,8 @@ export async function handleAdminMembers(req: Request, url: URL, engine: Engine)
     return null;
   } catch (e) {
     if (e instanceof MemberError) return json({ error: e.code, message: e.message }, STATUS[e.code]);
+    // A malformed percent-escape in a path segment is the caller's mistake, not ours.
+    if (e instanceof URIError) return bad("malformed path segment");
     throw e;
   }
 }
