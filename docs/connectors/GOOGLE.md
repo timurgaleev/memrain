@@ -33,6 +33,15 @@ reads only calendars. `calendar.readonly` is a sensitive scope in Google's terms
 app in Testing with you as a test user, but it needs Google's verification
 before an app in production can show it to anyone else.
 
+Gmail's `gmail.readonly` is a **restricted** scope, a stricter class: an app
+in production that asks for it needs Google's verification and a security
+assessment. Google exempts an app used only by you or a few people you know,
+and an app left in the **Testing** publishing status that only its test users
+can reach
+([restricted scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification),
+"Exceptions to verification requirements"). A brain of your own stays in
+Testing, with the 7-day token below; see [GMAIL.md](./GMAIL.md).
+
 ## Steps
 
 ### 1. Find your redirect URI
@@ -167,11 +176,11 @@ Google limits refresh tokens for apps that are not published. From Google's
 "Refresh token expiration": an app with an **External** user type and a
 publishing status of **Testing** is issued a refresh token that expires in
 7 days, unless the only scopes are name, email address and profile.
-`calendar.readonly` is not one of those, so this applies.
+`calendar.readonly` and `gmail.readonly` are not among those, so this applies.
 
 What you see: about a week after you connect, the account turns
 `needs_reconnect`, `memrain doctor` names it, and syncing pauses. No data is
-lost. Choose **Connect** again on the Connections page; the sync carries on from
+lost. Choose **Reconnect** on the account on the Connections page; the sync carries on from
 where it stopped.
 
 Ways out, from least to most effort:

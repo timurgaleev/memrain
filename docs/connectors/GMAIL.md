@@ -125,7 +125,8 @@ after a thread's last message by default
 
 - One page per thread, under `mail/`, titled with the subject. Each message
   shows From, To, Cc, date, attachment receipts and its own text: quoted
-  history and a `-- ` signature are cut, a forwarded message is kept whole,
+  history, a `-- ` signature and a closing "Sent from my iPhone" style line
+  are cut, a forwarded message is kept whole,
   and a message longer than 20,000 characters is cut with a marker. New
   replies are appended to the same page. Nothing older than the first sync's
   window is stored: a recent reply in an old thread brings in only the
@@ -134,8 +135,9 @@ after a thread's last message by default
   page's truth. Read, starred and important flags are left out, so reading
   mail does not rewrite pages or spend Gmail quota.
 - People: a sender or recipient whose address is an alias on an existing
-  people page is linked to it; nobody new is created. Newsletters, auto-replies
-  and mailing lists link nobody.
+  people page is linked to it; nobody new is created. Newsletters, auto-replies,
+  mailing lists and machine senders (no-reply, postmaster, notification
+  addresses) link nobody.
 - Everything is outside text: stored marked as untrusted, passed through the
   write gate for outside sources, and read back inside a trust frame. A
   credential in a mail (a sign-in token, a reset link with a key) is cut out
@@ -159,9 +161,10 @@ after a thread's last message by default
 An External app in Testing gets refresh tokens that expire after 7 days
 ([OAuth 2.0, "Refresh token expiration"](https://developers.google.com/identity/protocols/oauth2#expiration)).
 About a week after you connect, the account turns `needs_reconnect`, the
-`doctor` command above names it, and syncing pauses with nothing lost.
-Choose **Connect** on the account again (it asks for the same scopes) and the
-sync carries on from where it stopped.
+`doctor` command in [Verification](#verification) names it, and syncing
+pauses with nothing lost. Choose **Reconnect** on the account on the
+Connections page (it asks for the same scopes) and the sync carries on from
+where it stopped.
 
 The Internal user type (a Google Workspace organization that owns the
 project) has no 7-day limit. Publishing the app to production with
