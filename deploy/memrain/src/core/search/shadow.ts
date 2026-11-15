@@ -13,6 +13,8 @@
  * is ever made), the copy is ranked after the caller's result is ready and is
  * never awaited by it, and a call whose pipeline could spend (the paid
  * rerank, the graph rerank) or that opted out of telemetry is not shadowed.
+ * A query-cache hit returns before ranking and is not counted either, so the
+ * rates cover searches that ranked, not repeats served from the cache.
  * Every failure is swallowed: the shadow must never break a search.
  */
 import type { Engine } from "../engine/interface.ts";

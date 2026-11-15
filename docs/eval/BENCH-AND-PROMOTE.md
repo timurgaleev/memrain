@@ -200,9 +200,11 @@ sudo docker restart deploy-memrain-1
 sudo docker exec deploy-memrain-1 bun run src/cli.ts search stats --days 7
 ```
 
-With `MEMRAIN_RANK_SHADOW=<FLAG>`, every search with telemetry on also ranks
-its candidates a second time with that flag flipped, after its own result is
-ready. It records only daily counts per flag in `search_telemetry_shadow`: how
+With `MEMRAIN_RANK_SHADOW=<FLAG>`, every search with telemetry on that runs its
+ranking also ranks its candidates a second time with that flag flipped, after
+its own result is ready. A result served from the query cache is not ranked
+again, so it is not counted: the rates cover distinct searches, not repeats of
+a cached one. It records only daily counts per flag in `search_telemetry_shadow`: how
 many searches were compared, how often the first page would have changed, and
 the mean overlap of the top five pages. The results people get do not change,
 and no query text is stored. `search stats` prints one line per shadowed flag.
