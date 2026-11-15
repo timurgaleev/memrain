@@ -582,6 +582,19 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       .toEqual([{ live: true }]);
   });
 
+  it("never ages out a page restored after its item was deleted upstream", async () => {
+    const e = db.storage.engine();
+    const page = await ingest(mailPage("r1", "restoredcanary", OWNER, "2025-01-01T08:00:00.000Z"));
+    const account = await trackedAccount([page]);
+    await e.query("UPDATE connector_items SET deleted_upstream_at = NOW() WHERE account_id = $1", [account.id]);
+    await softDeleteUpstreamPage(db.storage, scope, { slug: page.slug });
+    // Restored without a credential (an internal caller), so no hand edit protects it.
+    expect((await restorePage(db.storage, page.slug)).restored).toBe(true);
+    const r = await sweepRetention(db.storage, scope, { accountId: account.id, kinds: ["mail"], env: {}, now: NOW });
+    expect(r).toMatchObject({ deleted: [], detached: [] });
+    expect(await live([page.slug])).toEqual([{ slug: page.slug, deleted: false }]);
+  });
+
   it("leaves a page soft-deleted upstream to the purge: retention does not take it", async () => {
     const page = await ingest(mailPage("s2", "waitcanary", OWNER, "2025-01-01T08:00:00.000Z"));
     await softDeleteUpstreamPage(db.storage, scope, { slug: page.slug });

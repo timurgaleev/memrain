@@ -797,14 +797,16 @@ export async function sweepRetention(storage: Storage, scope: ConnectorScope, op
     const cutoff = new Date(now - days * 86_400_000).toISOString();
     const item = (where: string) => `EXISTS (SELECT 1 FROM connector_items i
       WHERE i.account_id = $5 AND i.page_slug = p.slug AND ${where})`;
-    // An item held for an upstream deletion belongs to that deletion, not to retention.
+    // An item held for an upstream deletion belongs to that deletion, not to
+    // retention, and so does a page whose items are all gone upstream: one a
+    // person restored after its deletion stays theirs.
     due.push(...(await engine.query<{ slug: string; state: DueState }>(
       `SELECT p.slug,
               CASE WHEN ${item(`i.held_reason = '${RETENTION_KEPT}'`)} THEN 'kept'
                    WHEN ${item(`i.held_reason = '${RETENTION_CONFIRMED}'`)} THEN 'confirmed'
                    WHEN ${item(`i.held_reason = '${RETENTION_HELD}'`)} THEN 'held'
                    WHEN NOT ${item("TRUE")} THEN 'orphan'
-                   WHEN ${item("(i.held_reason IS NULL OR NOT (i.held_reason = ANY($6::text[])))")} THEN 'fresh'
+                   WHEN ${item("i.deleted_upstream_at IS NULL AND (i.held_reason IS NULL OR NOT (i.held_reason = ANY($6::text[])))")} THEN 'fresh'
                    ELSE 'upstream' END AS state
          FROM pages p
         WHERE ${ownedPageScope} AND p.compiled_truth->>'kind' = $3
