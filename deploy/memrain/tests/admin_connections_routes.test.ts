@@ -18,6 +18,7 @@ import { createAccount, getAccount, storeCredential, type ConnectorAccount } fro
 import { getOAuthClient, setOAuthClient } from "../src/core/connectors/oauth-clients.ts";
 import { accountRef } from "../src/core/connectors/model.ts";
 import { MASS_DELETE, openNotice } from "../src/core/connectors/sync-store.ts";
+import { recordAccountRun } from "../src/core/connectors/account-status.ts";
 import { handleAdminConnectors, type AdminConnectorDeps } from "../src/http/admin-connectors.ts";
 import type { Storage } from "../src/core/storage.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
@@ -109,6 +110,33 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         notices: [{ kind: "mass_delete_held", detail: "run deletes 2 of 3 items" }],
         credential: { scopes: ["mail.read"] },
       });
+    } finally { await db.close(); }
+  });
+
+  it("list each account's last run, whether it waits on a reconnect, and when a Google Testing-mode grant ends", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: "cal", kind: "calendar", pathPrefix: "calendar/" });
+      const google = await createAccount(e, { sourceId: "cal", provider: "google", services: ["calendar"], principalRef: "admin:operator", accountLabel: OWNER });
+      await storeCredential(e, kek, google, { access_token: TEST_ACCESS_TOKEN, refresh_token: TEST_REFRESH_TOKEN }, { scopes: ["calendar.readonly"], expiresAt: null });
+      await recordAccountRun(e, google.id, {
+        account_id: google.id, source_id: "cal", status: "partial", stop_reason: "fetch_failed", streams: [], error_class: "rate_limited",
+        http_status: 429, error: "calendar list failed: rate_limited",
+        counts: { items: 4, pages_written: 1, pages_unchanged: 3, duplicates: 0, items_failed: 0, items_held: 0, items_skipped_held: 0,
+          deletions_seen: 0, deletions_applied: 0, deletions_held: 0, retention_deleted: 0, mirror_failures: 0 },
+      });
+
+      const body = await (await call(get("/admin/api/connectors"), deps(db.storage))).json() as {
+        accounts: Array<Record<string, unknown> & { credential: { granted_at: string } | null; grant_expiry: { expires_at: string } | null }>;
+      };
+      const row = body.accounts[0]!;
+      expect(row).toMatchObject({
+        id: google.id, needs_reconnect: false,
+        last_run: { status: "partial", stop_reason: "fetch_failed", http_status: 429, items: 4 },
+        grant_expiry: { state: "upcoming", days: 7 },
+      });
+      expect(Date.parse(row.grant_expiry!.expires_at) - Date.parse(row.credential!.granted_at)).toBe(7 * 86_400_000);
     } finally { await db.close(); }
   });
 

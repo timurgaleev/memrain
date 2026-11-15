@@ -107,3 +107,31 @@ describe("POST /admin/api/notifications/read", () => {
     expect(summary.unread).toBe(0);
   });
 });
+
+describe("a reconnect notification for a Google Testing-mode grant", () => {
+  it("names the 7-day limit as the likely cause, still with no address in it", async () => {
+    const e = storage.engine();
+    const google = "66666666-6666-4666-8666-66666666666b";
+    await registerSource(e, { id: "cal", kind: "calendar", pathPrefix: "calendar/" });
+    await e.query(
+      `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label, status, status_reason)
+       VALUES ($1, 'cal', 'google', 'admin:operator', 'owner@example.test', 'needs_reconnect', 'invalid_grant')`,
+      [google],
+    );
+    await e.query(
+      `INSERT INTO connector_credentials (account_id, kek_id, nonce, ciphertext, created_at) VALUES ($1, 'k', 'n', 'c', NOW() - INTERVAL '7 days 2 hours')`,
+      [google],
+    );
+    const body = await (await call("/admin/api/notifications", { headers: { cookie } }))!.json() as {
+      notifications: Array<{ kind: string; ref: string; hint: string }>;
+    };
+    const row = body.notifications.find((n) => n.ref === google)!;
+    expect(row.kind).toBe("needs_reconnect");
+    expect(row.hint).toContain("7 days after consent");
+    expect(row.hint).toContain("Testing");
+    expect(row.hint).toContain("Connections page");
+    const other = body.notifications.find((n) => n.ref === ACCOUNT)!;
+    expect(other.hint).not.toContain("Testing");
+    expect(JSON.stringify(body)).not.toContain("owner@example.test");
+  });
+});
