@@ -429,6 +429,26 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("holds a page of oversized threads instead of reading them as a source outage", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      const huge = JSON.stringify({ id: "x", historyId: "1", messages: [], pad: "x".repeat(GMAIL_MAX_THREAD_BYTES) });
+      const big = ["18c0z1", "18c0z2", "18c0z3", "18c0z4", "18c0z5", "18c0z6"];
+      const w = world({
+        messages: big.map((t, i) => plainMessage(t, t, T0 - (i + 1) * 3_600_000, { From: "Peer <peer@example.net>", To: OWNER, Subject: `Big ${i}` }, "big")),
+        thread: () => ({ status: 200, body: huge }),
+      });
+      const result = await run(db.storage, w, id);
+      expect(result.stop_reason).not.toBe("source_outage");
+      expect(result.counts.items_held).toBe(big.length);
+      expect((await cursorOf(e, id))!.walk).toBeNull();
+      const held = (await e.query<{ held_reason: string }>(`SELECT held_reason FROM connector_items WHERE account_id = $1`, [id])).rows;
+      expect(held.map(r => r.held_reason)).toEqual(big.map(() => "too_large"));
+    } finally { await db.close(); }
+  });
+
   it("stops on a rate limit with its cursor kept, and finishes on the next run", async () => {
     const db = await open();
     try {

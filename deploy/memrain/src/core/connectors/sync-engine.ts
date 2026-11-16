@@ -338,6 +338,8 @@ interface PageFailure {
   code: string;
   message: string;
   deterministic: boolean;
+  /** The adapter held it (FailedSyncItem.holdNow): its own verdict on one item, never the source failing. */
+  adapterHold?: boolean;
 }
 
 /** The single error code shared by most of a page's failures, when the source itself is failing. */
@@ -597,7 +599,7 @@ class Run {
     }
     if (failures.length === 0) return true;
 
-    const outageCode = sourceOutage(failures, items.length);
+    const outageCode = sourceOutage(failures.filter(f => f.adapterHold !== true), items.length);
     if (outageCode !== null) {
       this.stop("source_outage");
       this.result.error ??= `${failures.length} of ${items.length} items failed with ${outageCode}; treated as a source failure`;
@@ -627,7 +629,8 @@ class Run {
       return null;
     }
     if (item.failure !== undefined) {
-      return { externalId: item.externalId, version: item.version, code: item.failure.code, message: item.failure.message, deterministic: item.failure.holdNow === true };
+      const hold = item.failure.holdNow === true;
+      return { externalId: item.externalId, version: item.version, code: item.failure.code, message: item.failure.message, deterministic: hold, adapterHold: hold };
     }
     const settle = (pageSlug: string, contentHash: string | null) => recordItemSettled(this.engine, {
       accountId: this.account.id, externalId: item.externalId, version: item.version, pageSlug,
