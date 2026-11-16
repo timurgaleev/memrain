@@ -334,7 +334,7 @@ describe("calendar series occurrences", () => {
     } as unknown as CalendarEvent;
     // The series began a month ago; its start is behind us.
     const seriesStart = new Date(now.getTime() - 30 * 86_400_000).toISOString();
-    const s = calendarLoopSignals({ service: "calendar", accountLabel: "me@example.com" }, event, seriesStart, "Standup", p => p.email ?? "", occurrences);
+    const s = calendarLoopSignals({ service: "google_calendar", accountLabel: "me@example.com" }, event, seriesStart, "Standup", p => p.email ?? "", occurrences);
     expect(nextCalendarStart(s, now)).toBe(occurrences[0]!);
   });
 });

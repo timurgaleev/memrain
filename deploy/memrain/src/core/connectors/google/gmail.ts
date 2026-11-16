@@ -293,10 +293,15 @@ class Adapter implements SyncAdapter {
     return this.now() - (keep === null ? days : Math.min(days, keep)) * DAY_MS;
   }
 
-  /** Threads per page handed to the engine: never more than one run may store. */
+  /**
+   * Threads per page handed to the engine: never more than one run, or one
+   * day under the account's item cap, may store. A larger page would stop
+   * part-way, keep its checkpoint and replay the same threads every day.
+   */
   private batch(): number {
     const n = Number((this.env.MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN ?? "").trim());
-    return Math.min(BATCH_THREADS, Number.isInteger(n) && n > 0 ? n : DEFAULT_MAX_ITEMS_PER_RUN);
+    const daily = this.account.itemCapDaily > 0 ? this.account.itemCapDaily : BATCH_THREADS;
+    return Math.min(BATCH_THREADS, daily, Number.isInteger(n) && n > 0 ? n : DEFAULT_MAX_ITEMS_PER_RUN);
   }
 
   private newWalk(): GmailWalk {

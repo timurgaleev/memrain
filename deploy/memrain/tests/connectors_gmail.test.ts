@@ -441,4 +441,20 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(listCalls(w)[0]!.get("q")).toContain(`after:${Math.floor((T0 - 180 * DAY) / 1000)}`);
     } finally { await db.close(); }
   });
+
+  it("a daily item cap smaller than a page still moves the backfill forward, day by day", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      await e.query(`UPDATE connector_accounts SET item_cap_daily = 3 WHERE id = $1`, [id]);
+      const messages = Array.from({ length: 5 }, (_, i) =>
+        plainMessage(`cap${i}`, `cap${i}`, T0 - (i + 1) * DAY, { From: "peer@example.net", To: OWNER, Subject: `Note ${i}` }, `Note ${i}.`));
+      const w = world({ messages });
+      await run(db.storage, w, id);
+      await run(db.storage, w, id, ENV, T0 + DAY);
+      const stored = (await e.query<{ external_id: string }>(`SELECT external_id FROM connector_items WHERE account_id = $1 ORDER BY external_id`, [id])).rows;
+      expect(stored.map(r => r.external_id)).toEqual(messages.map(m => m.threadId).sort());
+    } finally { await db.close(); }
+  });
 });
