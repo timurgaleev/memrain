@@ -7,9 +7,16 @@
  * only ever described (file name, type, size); its `attachmentId` is a fetch
  * handle and is never used or kept. A body part inside an attachment
  * (a forwarded `message/rfc822`) is not mistaken for the message's own text.
+ *
+ * The API reference does not promise header values with their RFC 2047
+ * encoded words decoded, nor body data transcoded to UTF-8, so a text part is
+ * read in the charset its Content-Type names and address display names are
+ * decoded here (mime-text.ts); decoding text that holds no encoded word
+ * changes nothing.
  */
 import type { MailAttachment, Person } from "../model.ts";
 import { htmlToText } from "../render.ts";
+import { contentTypeCharset, decodeCharset, decodeEncodedWords } from "../mime-text.ts";
 
 export interface GmailMimePart {
   partId?: string;
@@ -62,9 +69,14 @@ export function partHeader(part: GmailMimePart | undefined, name: string): strin
   return "";
 }
 
-/** Gmail's base64url body data as UTF-8 text. */
-export function decodeBase64Url(data: string): string {
-  return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+/** Gmail's base64url body data as text in `charset` (UTF-8 when null or unknown). */
+export function decodeBase64Url(data: string, charset: string | null = null): string {
+  return decodeCharset(Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64"), charset);
+}
+
+/** A part's body data in the charset its Content-Type declares. */
+function partText(p: GmailMimePart, data: string): string {
+  return decodeBase64Url(data, contentTypeCharset(partHeader(p, "Content-Type")));
 }
 
 function isAttachment(p: GmailMimePart): boolean {
@@ -85,7 +97,7 @@ export function extractBody(root: GmailMimePart | undefined): { text: string; is
   if (!isPart(root)) return { text: "", isHtml: false };
   const attached: string[] = [];
   const alternatives: string[] = [];
-  const texts: Array<{ path: string; html: boolean; data: string }> = [];
+  const texts: Array<{ path: string; html: boolean; data: string; part: GmailMimePart }> = [];
   for (const { part: p, path } of walkGmailMime(root)) {
     if (attached.some(parent => path.startsWith(`${parent}.`))) continue;
     if (isAttachment(p)) {
@@ -95,17 +107,17 @@ export function extractBody(root: GmailMimePart | undefined): { text: string; is
     if (p.mimeType === "multipart/alternative") alternatives.push(path);
     const data = typeof p.body?.data === "string" ? p.body.data : null;
     if (data === null) continue;
-    if (p.mimeType === "text/plain" || p.mimeType === "text/html") texts.push({ path, html: p.mimeType === "text/html", data });
+    if (p.mimeType === "text/plain" || p.mimeType === "text/html") texts.push({ path, html: p.mimeType === "text/html", data, part: p });
   }
   const within = (path: string, alt: string) => path.startsWith(`${alt}.`);
   // An html part inside an alternative that also has a plain version is that version's twin.
   const kept = texts.filter(t => !t.html || !alternatives.some(a => within(t.path, a) && texts.some(x => !x.html && within(x.path, a))));
-  if (kept.length > 0 && kept.every(t => t.html)) return { text: kept.map(t => decodeBase64Url(t.data)).join("\n"), isHtml: true };
+  if (kept.length > 0 && kept.every(t => t.html)) return { text: kept.map(t => partText(t.part, t.data)).join("\n"), isHtml: true };
   if (kept.length > 0) {
-    return { text: kept.map(t => (t.html ? htmlToText(decodeBase64Url(t.data).slice(0, MAX_HTML_PART_CHARS)) : decodeBase64Url(t.data))).join("\n\n"), isHtml: false };
+    return { text: kept.map(t => (t.html ? htmlToText(partText(t.part, t.data).slice(0, MAX_HTML_PART_CHARS)) : partText(t.part, t.data))).join("\n\n"), isHtml: false };
   }
   // A single-part message sometimes carries its data at the top with no usable type.
-  if (!root.mimeType && !root.filename && typeof root.body?.data === "string") return { text: decodeBase64Url(root.body.data), isHtml: false };
+  if (!root.mimeType && !root.filename && typeof root.body?.data === "string") return { text: partText(root, root.body.data), isHtml: false };
   return { text: "", isHtml: false };
 }
 
@@ -167,7 +179,11 @@ function splitAddresses(raw: string): string[] {
   return out.map(s => s.trim()).filter(s => s !== "");
 }
 
-/** One address: `Name <a@b>`, `"Doe, Jane" <a@b>` or a bare `a@b`; null without an address. */
+/**
+ * One address: `Name <a@b>`, `"Doe, Jane" <a@b>` or a bare `a@b`; null
+ * without an address. The display name's encoded words are decoded after the
+ * list was split, so a decoded comma cannot split it.
+ */
 export function parseAddress(raw: string): Person | null {
   const open = raw.lastIndexOf("<");
   const close = raw.indexOf(">", open + 1);
@@ -175,7 +191,7 @@ export function parseAddress(raw: string): Person | null {
   let name: string | null = null;
   if (open !== -1 && close !== -1) {
     email = raw.slice(open + 1, close).trim();
-    const display = raw.slice(0, open).trim().replace(/^"(.*)"$/s, "$1").trim();
+    const display = decodeEncodedWords(raw.slice(0, open).trim().replace(/^"(.*)"$/s, "$1").trim()).trim();
     name = display === "" ? null : display;
   } else {
     email = raw.trim();

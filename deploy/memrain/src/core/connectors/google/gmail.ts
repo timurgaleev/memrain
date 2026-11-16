@@ -54,6 +54,7 @@ import { syncItemFromPage } from "../sync-item.ts";
 import type { ConnectorContext, MailMessage, MailThread } from "../model.ts";
 import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
 import type { AdapterContext } from "../providers.ts";
+import { decodeEncodedWords } from "../mime-text.ts";
 import { attachmentReceipts, calendarMethod, extractBody, isAutoSubmitted, parseAddress, parseAddressList, partHeader, type GmailMimePart } from "./gmail-mime.ts";
 
 /** The account service this adapter syncs. */
@@ -203,7 +204,7 @@ export function normalizeGmailMessage(m: RawMessage): MailMessage {
   return {
     id: m.id,
     messageIdHeader: str(partHeader(p, "Message-ID").trim()),
-    subject: partHeader(p, "Subject"),
+    subject: decodeEncodedWords(partHeader(p, "Subject")),
     from: parseAddress(partHeader(p, "From")) ?? { name: null, email: null },
     to: parseAddressList(partHeader(p, "To")),
     cc: parseAddressList(partHeader(p, "Cc")),
