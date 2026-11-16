@@ -52,6 +52,12 @@
     "mail": "Owner.Alias@example.test",
     "userPrincipalName": "Owner@Example.test"
   },
+  "meRenamed": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,mail,userPrincipalName)/$entity",
+    "id": "87d349ed-44d7-43e1-9a83-5f2406dee5bd",
+    "mail": "Owner.New@example.test",
+    "userPrincipalName": "Owner.New@Example.test"
+  },
   "meConsumer": {
     "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,mail,userPrincipalName)/$entity",
     "id": "0123456789abcdef",

@@ -322,6 +322,33 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("renews a Reconnect's own row when the same Microsoft user signs in under a new address, and refuses any other user", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await sources(e);
+      const first = await connect(deps(e, { calls: [] }), "work-mail", ["outlook_mail"]);
+      const reconnect = async (me: string) => {
+        const d = deps(e, { calls: [], me });
+        const started = await startConnect(d, {
+          provider: "microsoft", sourceId: "work-mail", services: ["outlook_mail"], principalRef: "admin:operator", adminSessionId: SESSION, redirectUri: REDIRECT,
+          accountId: first.account.id,
+        });
+        const state = new URL(started.authorizeUrl).searchParams.get("state")!;
+        return completeConnect(d, { provider: "microsoft", state, code: "M.C5-auth-code", adminSessionId: SESSION });
+      };
+      // Another user, by address or by id, changes nothing.
+      expect(await code(reconnect("meSameAddressOtherUser"))).toBe("identity_mismatch");
+      expect(await code(reconnect("meGuest"))).toBe("identity_mismatch");
+      // The same Graph user under a new address renews the row; its label, and so its pages' names, stay.
+      const renamed = await reconnect("meRenamed");
+      expect(renamed.reconnected).toBe(true);
+      expect(renamed.account).toMatchObject({ id: first.account.id, account_label: first.account.account_label });
+      expect(renamed.account.config).toMatchObject({ provider_user_id: "87d349ed-44d7-43e1-9a83-5f2406dee5bd", mailbox_address: "owner.new@example.test" });
+      expect(await rowCount(e, "connector_accounts")).toBe(1);
+    } finally { await db.close(); }
+  });
+
   it("disconnects without calling Microsoft and drops the credential", async () => {
     const db = await open();
     const e = db.storage.engine();

@@ -668,14 +668,16 @@ async function persistGrant(
 ): Promise<{ account: ConnectorAccount; reconnected: boolean }> {
   return engine.transaction(async (tx) => {
     const existing = st.account_id === null ? await findAccount(tx, st.source_id, providerId, label) : await getAccount(tx, st.account_id);
+    if (st.account_id !== null && existing === null) throw new ConnectError("account_not_found");
+    const stored = existing?.config[PROVIDER_USER_ID];
     // A Reconnect renews its own row: an account signed in under another
-    // address would otherwise be added to the row's source beside it.
-    if (st.account_id !== null && (existing === null || existing.account_label !== label)) {
-      throw new ConnectError(existing === null ? "account_not_found" : "identity_mismatch");
-    }
+    // address would otherwise be added to the row's source beside it. The
+    // same provider user under a new address is the row's, and keeps the
+    // row's label, so its pages keep their names.
+    const sameUser = typeof stored === "string" && stored === config[PROVIDER_USER_ID];
+    if (st.account_id !== null && existing!.account_label !== label && !sameUser) throw new ConnectError("identity_mismatch");
     // The same address can belong to two users (a personal account made with a
     // work address): a reconnect by another user than the row's changes nothing.
-    const stored = existing?.config[PROVIDER_USER_ID];
     if (typeof stored === "string" && typeof config[PROVIDER_USER_ID] === "string" && stored !== config[PROVIDER_USER_ID]) {
       throw new ConnectError("identity_mismatch");
     }
