@@ -45,3 +45,8 @@ tests/fixtures/repo-with-pii/**
 deploy/memrain/src/core/write-gate-patterns.ts
 deploy/memrain/src/core/write-gate.ts
 deploy/memrain/tests/fixtures/write-gate/benign.jsonl
+# The open-loop detector reads Russian mail as well as English: its
+# acknowledgement and promise word lists and the calendar notice subject
+# prefixes hold Cyrillic by design.
+deploy/memrain/src/core/loops/detect.ts
+deploy/memrain/src/core/loops/signals.ts
