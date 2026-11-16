@@ -561,8 +561,9 @@ Memrain renews it whenever a sync runs, about once an hour. So:
 - If the **app** is refused (an expired or wrong secret), see
   [Renewing the secret](#renewing-the-secret): no account needs reconnecting.
 - If your company disables or removes the app, only the work account turns
-  `needs_reconnect`, with `unauthorized_client` in its reason; your personal
-  account keeps syncing. Ask IT to restore the app, then reconnect.
+  `needs_reconnect` (`connectors status` shows `unauthorized_client` in its
+  reason); your personal account keeps syncing. Ask IT to restore the app,
+  then reconnect.
 
 ## Pausing and withdrawing access
 
@@ -626,7 +627,7 @@ message.
 | Memrain reports `scope_mismatch` | A permission was declined, or the app lists permissions beyond the six (an administrator approved them all) | [Step 5](#5-add-exactly-six-permissions): keep exactly the six; then ask IT to approve again and connect again |
 | Memrain reports `token_exchange` | Microsoft refused the sign-in code: most often the secret's **ID** pasted instead of its **Value**, or `offline_access` missing | Save the secret's value ([step 6](#6-save-the-app-in-memrain)), or add `offline_access` ([step 5](#5-add-exactly-six-permissions)), then connect again |
 | A notification says **OAuth app refused by its provider**; accounts stop with `client_rejected` | The secret expired or is wrong (`invalid_client`, `AADSTS7000222` or `7000215`) | [Renewing the secret](#renewing-the-secret); no reconnect needed |
-| One account turns `needs_reconnect` with `unauthorized_client` in its reason (`7000112`: the app is disabled; `700016`: not in that directory), and the others keep syncing | That account's organization disabled or removed the app (for the work account, your IT administrator did) | Ask IT whether they disabled or removed the app and to restore it ([For your IT administrator](#for-your-it-administrator)), then **Reconnect** on its row. A new secret does not help |
+| One account turns `needs_reconnect`, the others keep syncing, and `connectors status` or `doctor` shows `unauthorized_client` in its reason (`7000112`: the app is disabled; `700016`: not in that directory) | That account's organization disabled or removed the app (for the work account, your IT administrator did) | Ask IT whether they disabled or removed the app and to restore it ([For your IT administrator](#for-your-it-administrator)), then **Reconnect** on its row. A new secret does not help |
 | Your IT administrator's browser shows **Admin consent recorded at Microsoft** | That is the end of their approval | Nothing: close the tab and connect the work account ([step 12](#12-connect-your-work-account-on-your-company-device)) |
 | The work account connects, then turns `needs_reconnect` within hours | A Conditional Access policy blocks the server's renewals | Ask IT about [Conditional Access](#for-your-it-administrator) |
 | The account turns `needs_reconnect` after weeks | 90 days without use, or sessions revoked | **Reconnect** on its row; see [Keeping access alive](#keeping-access-alive) |
