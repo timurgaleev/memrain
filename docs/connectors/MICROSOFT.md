@@ -11,7 +11,9 @@ deletes mail, and never creates or changes an event. The app is yours (bring
 your own): no Memrain app sits between you and Microsoft.
 
 You connect mail and calendar separately. Each one is its own account on the
-Connections page, writing into its own source. One Entra app serves both.
+Connections page, writing into its own source: register new sources for
+Outlook (step 8), never the ones Gmail or Google Calendar write into. One
+Entra app serves both.
 
 ## Prerequisites
 
@@ -41,7 +43,7 @@ and only on your own mailbox and calendar.
 |---|---|
 | `openid`, `email` | To learn which account connected; the account is labelled with its address |
 | `offline_access` | To keep syncing after you close the browser (a refresh token) |
-| `User.Read` | To read your own profile: the address the account is labelled with |
+| `User.Read` | To read your own profile: the address the account is labelled with, and the address your mail arrives at |
 | `Mail.Read` | Outlook mail: to read your messages |
 | `Calendars.Read` | Outlook calendar: to read your events |
 
@@ -190,10 +192,15 @@ the admin has granted consent.
    **Use your own OAuth app**.
 3. Paste the **Application (client) ID** under **Client ID** and the secret
    **Value** under **Client secret**.
-4. Under **Who can sign in**, pick the value from the table in step 2. For a
-   single-tenant app choose **One organization: its directory ID or domain**
-   and enter the **Directory (tenant) ID** from the app's Overview page (a
-   verified domain such as `contoso.onmicrosoft.com` works too).
+4. Under **Who can sign in**, pick the value from the table in step 2:
+   - **Personal account** (outlook.com, hotmail.com, live.com): **Personal
+     accounts only** (`consumers`), or **Work, school and personal accounts**
+     (`common`) when the app also lets work accounts in.
+   - **Work or school account:** **One organization: its directory ID or
+     domain** with the **Directory (tenant) ID** from the app's Overview page
+     (a verified domain such as `contoso.onmicrosoft.com` works too), or
+     **Work or school accounts only** (`organizations`) for a multi-tenant
+     app. A single-tenant app must use its directory ID.
 5. Choose **Save app**. The panel shows the saved client and who can sign in.
 
 Memrain seals the secret with the connector key ([KEY.md](./KEY.md)) before
@@ -215,30 +222,36 @@ the secret out of files and shell history.)
 ### 8. Register the sources and let your agents read them
 
 Each service writes into a source of its own kind: Outlook mail into a
-`mailbox` source, Outlook calendar into a `calendar` source. The ids and
-prefixes are yours to choose. If you already connected Gmail or Google
-Calendar, you can reuse those sources or register new ones. On the host:
+`mailbox` source, Outlook calendar into a `calendar` source. Register two new
+sources for Outlook, even if Gmail or Google Calendar are already connected:
+do not pick the sources a Google account writes into. Keeping each provider in
+its own source keeps its pages, its sync and deleting its data apart from the
+Google account's. The ids and prefixes are yours to choose; this guide uses
+`outlook-mail` and `outlook-calendar`. On the host:
 
 ```bash
-docker exec deploy-memrain-1 bun run src/cli.ts sources register work-mail --kind mailbox --path-prefix work-mail/
-docker exec deploy-memrain-1 bun run src/cli.ts sources register work-calendar --kind calendar --path-prefix work-calendar/
+docker exec deploy-memrain-1 bun run src/cli.ts sources register outlook-mail --kind mailbox --path-prefix outlook-mail/
+docker exec deploy-memrain-1 bun run src/cli.ts sources register outlook-calendar --kind calendar --path-prefix outlook-calendar/
 ```
 
 Then let your agents read them. For each OAuth client that should see the
 new sources, add them to its read set. The list replaces the client's whole
-read set, so name every source it reads today and the new ones at the end.
-Preview with `--dry-run` (only the read set should change), then run the same
-command without it:
+read set, so name every source it reads today (Gmail's and Google Calendar's
+included) and the new ones at the end. `auth list-clients` and `auth list`
+show what each client and token reads now. Preview with `--dry-run` (only the
+read set should change), then run the same command without it:
 
 ```bash
+docker exec deploy-memrain-1 bun run src/cli.ts auth list-clients
 docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> --source <its write source> \
-  --federated-read <its current read sources>,work-mail,work-calendar --dry-run
+  --federated-read <current read sources>,outlook-mail,outlook-calendar --dry-run
 ```
 
 For a personal access token, `set-read-sources` works the same way:
 
 ```bash
-docker exec deploy-memrain-1 bun run src/cli.ts auth permissions <token-name> set-read-sources <current read sources>,work-mail,work-calendar --dry-run
+docker exec deploy-memrain-1 bun run src/cli.ts auth list
+docker exec deploy-memrain-1 bun run src/cli.ts auth permissions <token-name> set-read-sources <current read sources>,outlook-mail,outlook-calendar --dry-run
 ```
 
 Check that `before` and `after` differ only by the new sources: a source
@@ -250,8 +263,8 @@ without `--dry-run`. Reload the Connections page so it lists the new sources.
 1. On the **Connections** page, in the **Microsoft** panel, choose
    **Outlook mail** under **Read**. **Outlook mail** and **Outlook calendar**
    are a single choice; each is connected on its own.
-2. Pick `work-mail` under **Into source** (only `mailbox` sources are
-   listed) and choose **Connect Microsoft**.
+2. Pick `outlook-mail` under **Into source** (only `mailbox` sources are
+   listed; not Gmail's) and choose **Connect Microsoft**.
 3. Microsoft opens. Sign in with the account whose mailbox you connect, read
    the list of permissions, and choose **Accept**. After an admin granted
    consent for the organization (step 6), a work account may go straight
@@ -265,8 +278,8 @@ sync starts within 15 minutes.
 
 ### 10. Connect Outlook calendar
 
-Repeat step 9 with **Outlook calendar** under **Read** and `work-calendar`
-under **Into source**. Microsoft asks you to accept the calendar permission
+Repeat step 9 with **Outlook calendar** under **Read** and `outlook-calendar`
+under **Into source** (not Google Calendar's). Microsoft asks you to accept the calendar permission
 if you have not given it yet (after an admin's consent it does not ask).
 Choose **Turn sync on** for the calendar account too.
 

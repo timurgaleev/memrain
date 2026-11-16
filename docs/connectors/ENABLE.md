@@ -106,7 +106,7 @@ register one first (the id and prefix are yours to choose):
 
 ```bash
 docker exec deploy-memrain-1 bun run src/cli.ts sources register me-calendar --kind calendar --path-prefix calendar/
-docker exec deploy-memrain-1 bun run src/cli.ts sources register me-mail --kind mailbox --path-prefix mail/        # Gmail or Outlook mail
+docker exec deploy-memrain-1 bun run src/cli.ts sources register me-mail --kind mailbox --path-prefix mail/        # Gmail
 docker exec deploy-memrain-1 bun run src/cli.ts sources register me-meetings --kind meeting --path-prefix meeting/   # Fireflies
 ```
 
@@ -126,8 +126,8 @@ docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> 
 - Gmail: [GMAIL.md](./GMAIL.md) (the same Google client, the Gmail API turned
   on, and a `mailbox` source).
 - Outlook mail and Outlook calendar: [MICROSOFT.md](./MICROSOFT.md) (a
-  Microsoft Entra app of your own, a `mailbox` and a `calendar` source, each
-  connected on its own).
+  Microsoft Entra app of your own, and a `mailbox` and a `calendar` source of
+  their own, not the Google ones, each connected on its own).
 - Fireflies: [FIREFLIES.md](./FIREFLIES.md) (an API key).
 
 Everything a connector writes is text from outside the brain: anyone can put
