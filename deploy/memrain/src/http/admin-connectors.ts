@@ -27,7 +27,7 @@ import type { ConnectorClient, FetchFn } from "../core/connectors/client.ts";
 import { credentialMeta, getAccount, listAccounts, setAccountConfig, setAccountEnabled, type ConnectorAccount } from "../core/connectors/accounts.ts";
 import { ApiKeyConnectError, connectApiKey } from "../core/connectors/api-key-connect.ts";
 import { listAccountStatus, type AccountStatus } from "../core/connectors/account-status.ts";
-import { accountRef } from "../core/connectors/model.ts";
+import { accountRef, ownAddresses } from "../core/connectors/model.ts";
 import {
   DEFAULT_HISTORY_DAYS,
   GOOGLE_CALENDAR_SERVICE,
@@ -409,7 +409,7 @@ async function accountAction(req: Request, id: string, action: string, deps: Adm
 }
 
 /** How each calendar provider lists the calendars an account can read. */
-const CALENDAR_LISTS: Readonly<Record<string, { service: string; name: string; list: (client: ConnectorClient, accountLabel: string) => Promise<GoogleCalendarEntry[]> }>> = {
+const CALENDAR_LISTS: Readonly<Record<string, { service: string; name: string; list: (client: ConnectorClient, own: readonly string[]) => Promise<GoogleCalendarEntry[]> }>> = {
   google: { service: GOOGLE_CALENDAR_SERVICE, name: "Google", list: (client) => listGoogleCalendars(client) },
   microsoft: { service: OUTLOOK_CALENDAR_SERVICE, name: "Microsoft", list: listOutlookCalendars },
 };
@@ -422,7 +422,7 @@ async function readableCalendars(account: ConnectorAccount, deps: AdminConnector
   const sync = toSyncAccount(account);
   const wiring = runtime.depsFor(sync);
   const client = wiring.client(sync, await wiring.tokenSource(sync, () => {}));
-  return CALENDAR_LISTS[account.provider]!.list(client, account.account_label);
+  return CALENDAR_LISTS[account.provider]!.list(client, ownAddresses(account.account_label, account.config));
 }
 
 function historyDays(account: ConnectorAccount): number {

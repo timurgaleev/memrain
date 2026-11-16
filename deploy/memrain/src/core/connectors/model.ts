@@ -168,6 +168,25 @@ export interface ConnectorContext {
   service: ConnectorService;
   /** The connected account's own identity (email or workspace). Hashed before it reaches a page. */
   accountLabel: string;
+  /**
+   * Every address that is the account's own, for telling its own mail and
+   * answers from others' (ownAddresses); the label alone when absent.
+   */
+  ownAddresses?: readonly string[];
+}
+
+/**
+ * The account config key holding the address mail reaches the account at,
+ * when the provider names it apart from the label (a Microsoft work account
+ * is labelled by its sign-in name, which need not receive mail).
+ */
+export const MAILBOX_ADDRESS = "mailbox_address";
+
+/** The account's own addresses, lowercased: its mailbox address first, then its label. */
+export function ownAddresses(accountLabel: string, config?: Readonly<Record<string, unknown>>): string[] {
+  const mailbox = config?.[MAILBOX_ADDRESS];
+  const all = [typeof mailbox === "string" ? mailbox : "", accountLabel].map(a => a.trim().toLowerCase()).filter(a => a !== "");
+  return [...new Set(all)];
 }
 
 const REF_LEN = 16;

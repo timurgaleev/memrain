@@ -139,6 +139,11 @@ export function stripReplyPrefix(subject: string): string {
 
 const lower = (p: Person) => (p.email ?? "").trim().toLowerCase();
 
+/** The account's own addresses, lowercased. */
+function ownSet(ctx: ConnectorContext): Set<string> {
+  return new Set((ctx.ownAddresses ?? [ctx.accountLabel]).map(a => a.trim().toLowerCase()));
+}
+
 /**
  * Signals of a mail thread. `bodies[i]` is message i's text as the page shows
  * it (quoted history and signature already trimmed), `label` renders a person
@@ -152,7 +157,7 @@ export function mailLoopSignals(
   title: string,
   label: (p: Person) => string,
 ): ThreadLoopSignals {
-  const own = new Set([ctx.accountLabel.trim().toLowerCase()]);
+  const own = ownSet(ctx);
   return {
     v: LOOP_SIGNALS_VERSION,
     kind: "mail",
@@ -245,8 +250,8 @@ export function calendarLoopSignals(
   label: (p: Person) => string,
   occurrences: readonly string[] = [],
 ): CalendarLoopSignals {
-  const own = ctx.accountLabel.trim().toLowerCase();
-  const me = event.attendees.find(a => lower(a) === own);
+  const own = ownSet(ctx);
+  const me = event.attendees.find(a => own.has(lower(a)));
   const organizer = event.organizer;
   const upcoming = [...occurrences].sort().slice(-MAX_OCCURRENCES);
   return {
@@ -257,7 +262,7 @@ export function calendarLoopSignals(
     start,
     ...(upcoming.length ? { occurrences: upcoming } : {}),
     status: event.status,
-    organizerMine: organizer !== null && lower(organizer) === own,
+    organizerMine: organizer !== null && own.has(lower(organizer)),
     organizer: organizer ? label(organizer) : null,
     organizerKey: organizer && lower(organizer) ? counterpartyKey(lower(organizer)) : null,
     myResponse: me ? (me.response ?? "needsaction").toLowerCase() : null,

@@ -187,4 +187,56 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     // The default calendar always syncs and is not stored.
     expect(await saved.json()).toEqual({ ok: true, calendars: [TEAM], history_days: 30 });
   });
+
+  it("offers the calendars the mailbox owns when the account is labelled by a different UPN", async () => {
+    // A tenant whose sign-in names differ from the mail addresses calendars are owned by.
+    world.me = { id: "00000000-0000-4000-8000-0000000000ab", mail: "Owner@Example.test", userPrincipalName: "O.Wner@corp.example.test" };
+    const b = await boot();
+    const listedProviders = await (await b.send("/admin/api/connectors", { headers: SPA })).json() as { providers: Array<{ id: string; services: string[] }> };
+    expect(listedProviders.providers.find(p => p.id === "microsoft")).toMatchObject({ services: ["outlook_mail", "outlook_calendar"] });
+
+    const started = await b.send("/admin/api/connectors/microsoft/start", {
+      method: "POST",
+      headers: { ...SPA, origin: PUBLIC, "content-type": "application/json" },
+      body: JSON.stringify({ source_id: "cal", services: ["outlook_calendar"] }),
+    });
+    expect(started.status).toBe(200);
+    const authorize = new URL(((await started.json()) as { authorize_url: string }).authorize_url);
+    expect(authorize.origin + authorize.pathname).toBe("https://login.microsoftonline.com/common/oauth2/v2.0/authorize");
+    expect(authorize.searchParams.get("redirect_uri")).toBe(`${PUBLIC}/admin/connectors/callback/microsoft`);
+
+    // Microsoft sends the browser back with the code in the query (response_mode=query): a cross-site navigation.
+    const back = new URL(authorize.searchParams.get("redirect_uri")!);
+    back.searchParams.set("code", "M.C512_test-auth-code");
+    back.searchParams.set("state", authorize.searchParams.get("state")!);
+    back.searchParams.set("session_state", "00000000-0000-4000-8000-0000000000ss");
+    const page = await b.send(`${back.pathname}${back.search}`, {
+      withCookie: false,
+      headers: { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document", referer: "https://login.microsoftonline.com/" },
+    });
+    expect(page.status).toBe(200);
+    const { action, fields } = formFields(await page.text());
+    expect(action).toBe("/admin/api/connectors/microsoft/complete");
+    const done = await b.send(action, {
+      method: "POST",
+      headers: {
+        origin: formPostOrigin(page.headers.get("referrer-policy")), "content-type": "application/x-www-form-urlencoded",
+        "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document",
+      },
+      body: new URLSearchParams(fields).toString(),
+    });
+    expect(done.status).toBe(303);
+    expect(done.headers.get("location")).toBe("/admin/?connector=connected#connections");
+
+    const text = await (await b.send("/admin/api/connectors", { headers: SPA })).text();
+    for (const secret of [GRAPH_ACCESS_TOKEN, GRAPH_REFRESH_TOKEN, "env-ms-client-secret-value"]) expect(text).not.toContain(secret);
+    const { accounts } = JSON.parse(text) as { accounts: Array<Record<string, unknown> & { id: string }> };
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]).toMatchObject({ provider: "microsoft", source_id: "cal", account_label: "o.wner@corp.example.test", status: "active", enabled: false, grant_expiry: null });
+    const id = accounts[0]!.id;
+
+    const calendars = await b.send(`/admin/api/connectors/accounts/${id}/calendars`, { headers: SPA });
+    expect(calendars.status).toBe(200);
+    expect(((await calendars.json()) as { calendars: Array<{ id: string }> }).calendars.map(c => c.id)).toEqual(["AAMkCalDefault01=", TEAM]);
+  });
 });

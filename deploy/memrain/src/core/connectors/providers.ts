@@ -35,6 +35,12 @@ export interface ProviderService {
   minSpacingMs?: number;
 }
 
+/** Who a token belongs to: the account label and, when it can differ, the mailbox address. */
+export interface ProviderIdentity {
+  label: string;
+  mailbox?: string;
+}
+
 /** Connect errors a provider can name from its own refusal. */
 export type ProviderConnectError = "admin_consent_required";
 
@@ -101,8 +107,12 @@ export interface ConnectorProvider {
   scopeSeparator?: string;
   /** Map a granted scope onto the spelling that was requested. */
   normalizeScope?: (scope: string) => string;
-  /** The mailbox address or workspace name the token belongs to. */
-  identify: (ctx: { fetch: FetchFn; accessToken: string; tokenResponse: Record<string, unknown> }) => Promise<string>;
+  /**
+   * The mailbox address or workspace name the token belongs to (the account
+   * label), or that label with the address mail reaches the account at when
+   * the two can differ (stored as the account's MAILBOX_ADDRESS).
+   */
+  identify: (ctx: { fetch: FetchFn; accessToken: string; tokenResponse: Record<string, unknown> }) => Promise<string | ProviderIdentity>;
   /** Provider-specific revocation; the default posts RFC 7009 to `revokeUrl`. */
   revoke?: (ctx: RevokeContext) => Promise<boolean>;
   /** How an account of this provider syncs; a provider without it can connect but not sync. */

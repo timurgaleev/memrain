@@ -38,11 +38,13 @@ import {
   createAccount,
   findAccount,
   readCredential,
+  setAccountConfig,
   setAccountStatus,
   storeCredential,
   type ConnectorAccount,
   type TokenSet,
 } from "./accounts.ts";
+import { MAILBOX_ADDRESS } from "./model.ts";
 import { getOAuthClient } from "./oauth-clients.ts";
 import { resolveNotice } from "./sync-store.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
@@ -399,10 +401,20 @@ async function sharesLiveGrant(engine: Engine, provider: ConnectorProvider): Pro
   return r.rows.length > 0;
 }
 
-/** The account label the provider names for a token, or null when it cannot be read. */
-async function identifyLabel(provider: ConnectorProvider, fetch: FetchFn, accessToken: string, body: Record<string, unknown>): Promise<string | null> {
+/** Who the provider names for a token, or null when it cannot be read. */
+async function identifyAccount(
+  provider: ConnectorProvider,
+  fetch: FetchFn,
+  accessToken: string,
+  body: Record<string, unknown>,
+): Promise<{ label: string; mailbox: string | null } | null> {
   try {
-    return cleanLabel(await provider.identify({ fetch, accessToken, tokenResponse: body }), "account label", 320);
+    const who = await provider.identify({ fetch, accessToken, tokenResponse: body });
+    if (typeof who === "string") return { label: cleanLabel(who, "account label", 320), mailbox: null };
+    return {
+      label: cleanLabel(who.label, "account label", 320),
+      mailbox: who.mailbox === undefined ? null : cleanLabel(who.mailbox, "mailbox address", 320).toLowerCase(),
+    };
   } catch {
     return null;
   }
@@ -504,8 +516,8 @@ export async function completeConnect(
     throw new ConnectError("scope_mismatch", { extra, missing, revoked: await revoke() });
   }
 
-  const label = await identifyLabel(provider, fetch, accessToken, body);
-  if (label === null) {
+  const who = await identifyAccount(provider, fetch, accessToken, body);
+  if (who === null) {
     if (await sharedWithLive()) throw new ConnectError("identity_not_revoked");
     await revoke();
     throw new ConnectError("identity");
@@ -522,7 +534,8 @@ export async function completeConnect(
   const scopes = [...granted].sort();
 
   try {
-    return await persistGrant(deps.engine, kek, st, provider.id, label, tokens, scopes, expiresAt);
+    const config = who.mailbox === null ? {} : { [MAILBOX_ADDRESS]: who.mailbox };
+    return await persistGrant(deps.engine, kek, st, provider.id, who.label, config, tokens, scopes, expiresAt);
   } catch (e) {
     // Nothing was stored, so nothing could disconnect this grant later.
     if (!(await sharedWithLive().catch(() => true))) await revoke();
@@ -536,6 +549,8 @@ async function persistGrant(
   st: StateRow,
   providerId: string,
   label: string,
+  /** Identity settings the grant names (the mailbox address), written on every connect. */
+  config: Record<string, unknown>,
   tokens: TokenSet,
   scopes: string[],
   expiresAt: Date | null,
@@ -545,6 +560,7 @@ async function persistGrant(
     if (existing) {
       await storeCredential(tx, kek, existing, tokens, { scopes, expiresAt });
       await tx.query(`UPDATE connector_accounts SET services = $2::text[], updated_at = NOW() WHERE id = $1`, [existing.id, st.services]);
+      if (Object.keys(config).length > 0) await setAccountConfig(tx, existing.id, config);
       await setAccountStatus(tx, existing.id, "active", null);
       // The new grant answers the sync engine's reconnect notice; with sync off no run would.
       await resolveNotice(tx, existing.id, "needs_reconnect");
@@ -557,6 +573,7 @@ async function persistGrant(
       services: st.services,
       principalRef: st.principal_ref,
       accountLabel: label,
+      config,
     });
     await storeCredential(tx, kek, created, tokens, { scopes, expiresAt });
     return { account: created, reconnected: false };

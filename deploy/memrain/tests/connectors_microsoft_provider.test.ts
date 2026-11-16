@@ -247,6 +247,27 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("keeps the mailbox address apart from the UPN label, and updates it on a reconnect", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await sources(e);
+      // Graph's mail is the address mail arrives at; the UPN is only the sign-in name.
+      const work = await connect(deps(e, { calls: [] }), "work-mail", ["outlook_mail"]);
+      expect(work.account.account_label).toBe("owner@example.test");
+      expect(work.account.config).toMatchObject({ mailbox_address: "owner.alias@example.test" });
+      const personal = await connect(deps(e, { calls: [], me: "meConsumer" }), "work-mail", ["outlook_mail"]);
+      expect(personal.account.config).toMatchObject({ mailbox_address: "someone@outlook.example.test" });
+      const guest = await connect(deps(e, { calls: [], me: "meGuest" }), "work-mail", ["outlook_mail"]);
+      expect(guest.account.config).toMatchObject({ mailbox_address: "guest@partner.example.test" });
+
+      await e.query(`UPDATE connector_accounts SET config = config || '{"mailbox_address":"stale@example.test","calendars":["x"]}'::jsonb WHERE id = $1`, [work.account.id]);
+      const again = await connect(deps(e, { calls: [] }), "work-mail", ["outlook_mail"]);
+      expect(again.reconnected).toBe(true);
+      expect(again.account.config).toEqual({ mailbox_address: "owner.alias@example.test", calendars: ["x"] });
+    } finally { await db.close(); }
+  });
+
   it("labels a personal account by its sign-in address, a guest by its mail, and refuses no address", async () => {
     const db = await open();
     const e = db.storage.engine();

@@ -28,6 +28,8 @@ setDefaultTimeout(60_000);
 const kek = kekFromBytes(randomBytes(32));
 const SOURCE = "cal";
 const OWNER = "owner@example.test";
+/** A sign-in name that receives no mail: the tenant's UPN differs from the mailbox address. */
+const UPN = "o.wner@corp.example.test";
 const T0 = Date.parse("2026-11-16T10:00:00Z");
 const ENV: NodeJS.ProcessEnv = {
   MEMRAIN_CONNECTORS_ENABLED: "1",
@@ -73,6 +75,54 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await sweepLoops(e, SOURCE, new Date(T0))).toMatchObject({ threads: 4, opened: 1 });
       const open1 = (await listLoops(e, [SOURCE])).map(l => [l.loop_type, l.counterparty]);
       expect(open1).toEqual([["rsvp_owed", "Dan Park <dan@example.org>"]]);
+
+      // The owner accepts in Outlook; the next round reports the event with its new answer.
+      expect((await sync()).status).toBe("success");
+      const swept = await sweepLoops(e, SOURCE, new Date(T0 + 60_000));
+      expect(swept.closed).toBeGreaterThanOrEqual(1);
+      expect(await listLoops(e, [SOURCE])).toEqual([]);
+    } finally { await db.close(); }
+  });
+
+  it("a work account labelled by a UPN that is not its mail address answers as that address, listed once", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: SOURCE, kind: "calendar", pathPrefix: "calendar/" });
+      const account = await createAccount(e, { sourceId: SOURCE, provider: "microsoft", services: ["outlook_calendar"], principalRef: "admin:operator", accountLabel: UPN,
+        config: { mailbox_address: OWNER } });
+      await storeCredential(e, kek, account, { access_token: GRAPH_ACCESS_TOKEN, refresh_token: GRAPH_REFRESH_TOKEN }, {
+        scopes: [MICROSOFT_CALENDARS_READ, "User.Read", "email", "offline_access", "openid"], expiresAt: new Date(T0 + 3_000_000),
+      });
+      await setAccountEnabled(e, account.id, true);
+
+      const providers = new ProviderRegistry();
+      providers.register(microsoftProvider());
+      const w: GraphWorld = {
+        calls: [],
+        delta: (_cal, q) => (q.get("$skiptoken") === "skip-page-2" ? "deltaFirstPage2" : q.get("$deltatoken") === "delta-one" ? "deltaChanges" : "deltaFirstPage1"),
+        event: (_cal, id) => (id === "AAMkS1master=" ? "seriesS1Master" : { status: 404, body: GRAPH_FIXTURES.errorItemNotFound! }),
+        instances: () => "instancesS1",
+      };
+      const sync = async () => {
+        const rt = connectorRuntime(db.storage, {
+          kek, providers, fetch: graphFetch(w), env: ENV, now: () => T0, sleep: async () => {}, embedFn: async (t: string) => deterministicEmbed(t),
+        });
+        const loaded = (await rt.loadAccount(account.id))!;
+        return runConnectorSync(db.storage, loaded, rt.depsFor(loaded));
+      };
+
+      expect((await sync()).status).toBe("success");
+      // Roadmap review, the offsite, the vendor sync and the weekly series.
+      expect(Number((await e.query<{ n: number }>(`SELECT count(*)::int AS n FROM loop_threads WHERE source_id = $1`, [SOURCE])).rows[0]!.n)).toBe(4);
+
+      expect(await sweepLoops(e, SOURCE, new Date(T0))).toMatchObject({ threads: 4, opened: 1 });
+      const open1 = (await listLoops(e, [SOURCE])).map(l => [l.loop_type, l.counterparty]);
+      expect(open1).toEqual([["rsvp_owed", "Dan Park <dan@example.org>"]]);
+      // The owner is the attendee Graph lists under the mailbox address, never added again under the sign-in name.
+      const bodies = (await e.query<{ markdown_body: string }>(`SELECT markdown_body FROM pages WHERE source_id = $1`, [SOURCE])).rows;
+      expect(bodies.length).toBeGreaterThan(0);
+      for (const b of bodies) expect(b.markdown_body).not.toContain(UPN);
 
       // The owner accepts in Outlook; the next round reports the event with its new answer.
       expect((await sync()).status).toBe("success");

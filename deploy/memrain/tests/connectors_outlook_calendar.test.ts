@@ -131,10 +131,15 @@ describe("microsoft provider", () => {
   it("identifies the account by its sign-in name, a guest by its Graph mail address, lowercased", async () => {
     const ms = microsoftProvider();
     const w: GraphWorld = { calls: [], delta: () => "deltaEmpty" };
-    expect(await ms.identify({ fetch: graphFetch(w), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} })).toBe(OWNER);
+    expect(await ms.identify({ fetch: graphFetch(w), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} })).toEqual({ label: OWNER, mailbox: OWNER });
     expect(w.calls[0]!.url.toString()).toBe("https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName");
     const personal: GraphWorld = { calls: [], delta: () => "deltaEmpty", me: { id: "x", mail: null, userPrincipalName: "Someone@Outlook.example" } };
-    expect(await ms.identify({ fetch: graphFetch(personal), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} })).toBe("someone@outlook.example");
+    expect(await ms.identify({ fetch: graphFetch(personal), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} }))
+      .toEqual({ label: "someone@outlook.example", mailbox: "someone@outlook.example" });
+    // A work account signs in with a UPN that need not receive mail: the mailbox address is Graph's mail.
+    const work: GraphWorld = { calls: [], delta: () => "deltaEmpty", me: { id: "x", mail: "Owner@Example.test", userPrincipalName: "O.Wner@corp.example.test" } };
+    expect(await ms.identify({ fetch: graphFetch(work), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} }))
+      .toEqual({ label: "o.wner@corp.example.test", mailbox: OWNER });
     const nameless: GraphWorld = { calls: [], delta: () => "deltaEmpty", me: { id: "x", mail: null, userPrincipalName: "not-an-address" } };
     await expect(ms.identify({ fetch: graphFetch(nameless), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} })).rejects.toThrow();
   });
@@ -172,7 +177,7 @@ describe("outlook calendar, pure parts", () => {
 
   it("maps the owner's own answer from responseStatus and drops rooms", () => {
     const base = (GRAPH_FIXTURES.deltaFirstPage1!.value as Record<string, unknown>[])[0]!;
-    const e1 = normalizeOutlookEvent("primary", base, OWNER)!;
+    const e1 = normalizeOutlookEvent("primary", base, [OWNER])!;
     expect(e1.attendees).toEqual([
       { name: "Ana Lee", email: "ana@example.net", response: "accepted" },
       { name: "Owner Example", email: "owner@example.test", response: "needsAction" },
@@ -182,20 +187,20 @@ describe("outlook calendar, pure parts", () => {
     expect(e1.organizer).toEqual({ name: "Dan Park", email: "dan@example.org" });
 
     // An organizer who asked for no answer is owed none.
-    const noAnswer = normalizeOutlookEvent("primary", { ...base, responseRequested: false }, OWNER)!;
+    const noAnswer = normalizeOutlookEvent("primary", { ...base, responseRequested: false }, [OWNER])!;
     expect(noAnswer.attendees.find(a => a.email === OWNER)!.response).toBe("not requested");
     // Invited through a list: the owner is not among the attendees and is added with their own answer.
-    const viaList = normalizeOutlookEvent("primary", { ...base, attendees: [(base.attendees as unknown[])[0]] }, OWNER)!;
+    const viaList = normalizeOutlookEvent("primary", { ...base, attendees: [(base.attendees as unknown[])[0]] }, [OWNER])!;
     expect(viaList.attendees.at(-1)).toEqual({ name: null, email: OWNER, response: "needsAction" });
-    const mine = normalizeOutlookEvent("primary", { ...base, isOrganizer: true, organizer: { emailAddress: { address: OWNER } }, attendees: [] }, OWNER)!;
+    const mine = normalizeOutlookEvent("primary", { ...base, isOrganizer: true, organizer: { emailAddress: { address: OWNER } }, attendees: [] }, [OWNER])!;
     expect(mine.attendees).toEqual([]);
-    expect(normalizeOutlookEvent("primary", { ...base, isCancelled: true }, OWNER)!.status).toBe("cancelled");
-    expect(normalizeOutlookEvent("primary", { ...base, start: { dateTime: "2026-11-18T09:00:00", timeZone: "W. Europe Standard Time" } }, OWNER)).toBeNull();
+    expect(normalizeOutlookEvent("primary", { ...base, isCancelled: true }, [OWNER])!.status).toBe("cancelled");
+    expect(normalizeOutlookEvent("primary", { ...base, start: { dateTime: "2026-11-18T09:00:00", timeZone: "W. Europe Standard Time" } }, [OWNER])).toBeNull();
   });
 
   it("keeps an online meeting as a flag and never its join link", () => {
     const e3 = (GRAPH_FIXTURES.deltaFirstPage2!.value as Record<string, unknown>[])[1]!;
-    const event = normalizeOutlookEvent("primary", e3, OWNER)!;
+    const event = normalizeOutlookEvent("primary", e3, [OWNER])!;
     expect(event.onlineMeeting).toBe(true);
     const page = renderCalendarEvent(ctx("outlook_calendar"), event);
     expect(page.body).toContain("Online meeting: yes");
@@ -228,7 +233,7 @@ describe("outlook calendar, pure parts", () => {
         { email: OWNER, displayName: "Owner Example", responseStatus: "needsAction", self: true },
       ],
     };
-    const o = renderCalendarEvent(ctx("outlook_calendar"), normalizeOutlookEvent("primary", outlook, OWNER)!);
+    const o = renderCalendarEvent(ctx("outlook_calendar"), normalizeOutlookEvent("primary", outlook, [OWNER])!);
     const g = renderCalendarEvent(ctx("google_calendar"), normalizeGoogleEvent("primary", google)!);
     // Same event key; each provider's copy is its own account's page.
     expect(o.slug).toBe(pageSlug("golden-0001@example.test"));
@@ -258,7 +263,7 @@ describe("outlook calendar, pure parts", () => {
       organizer: { email: "ana@example.net", displayName: "Ana Lee" },
       attendees: [{ email: OWNER, displayName: "Owner Example", responseStatus: "accepted" }],
     };
-    const o = renderCalendarEvent(ctx("outlook_calendar"), normalizeOutlookEvent("primary", master, OWNER, { list: occurrences, truncated: false })!);
+    const o = renderCalendarEvent(ctx("outlook_calendar"), normalizeOutlookEvent("primary", master, [OWNER], { list: occurrences, truncated: false })!);
     const g = renderCalendarEvent(ctx("google_calendar"), normalizeGoogleEvent("primary", google, { list: occurrences, truncated: false })!);
     expect(o.body).toBe(g.body);
     expect(o.body).toContain("Repeats: RRULE:FREQ=WEEKLY;BYDAY=MO");
@@ -285,7 +290,7 @@ describe("outlook calendar, pure parts", () => {
   it("lists the owner's own calendars, default first, and leaves out ones others share (Calendars.Read cannot read them)", async () => {
     const w: GraphWorld = { calls: [], delta: () => "deltaEmpty" };
     const client = new ConnectorClient({ origin: "https://graph.microsoft.com", token: GRAPH_ACCESS_TOKEN, fetch: graphFetch(w), sleep: async () => {} });
-    expect(await listOutlookCalendars(client, OWNER)).toEqual([
+    expect(await listOutlookCalendars(client, [OWNER])).toEqual([
       { id: "AAMkCalDefault01=", summary: "Calendar", primary: true, accessRole: "writer" },
       { id: TEAM, summary: "Team", primary: false, accessRole: "reader" },
     ]);

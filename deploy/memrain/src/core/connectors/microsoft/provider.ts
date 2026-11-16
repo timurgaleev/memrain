@@ -42,7 +42,7 @@
  * `admin_consent_required`.
  */
 import { readTextCapped, type FetchFn } from "../client.ts";
-import type { ConnectorProvider, ProviderConnectError } from "../providers.ts";
+import type { ConnectorProvider, ProviderConnectError, ProviderIdentity } from "../providers.ts";
 import { OUTLOOK_CALENDAR_SERVICE, outlookCalendarAdapter } from "./calendar.ts";
 import { GRAPH_API_ORIGIN } from "./graph-client.ts";
 import { OUTLOOK_MAIL_SERVICE, outlookMailAdapter, outlookMailService } from "./mail.ts";
@@ -93,8 +93,14 @@ function address(value: unknown): string | null {
  * to verify, or the sign-in address of a personal account. A guest's UPN is a
  * rewritten `#EXT#` name, so a guest is labelled by its mail address instead.
  * The `mail` property is not used first: a tenant admin can set it to anything.
+ *
+ * The mailbox address is `mail`, else the label. A work account's UPN need not
+ * receive mail (`o.wner@corp` signs in, `owner@` gets the mail), and mail,
+ * calendar owners and attendees name the account by its mailbox address, so
+ * telling the account's own mail and calendars apart compares that address
+ * too. It identifies nothing: the label stays the account's identity.
  */
-async function identify(fetch: FetchFn, accessToken: string): Promise<string> {
+async function identify(fetch: FetchFn, accessToken: string): Promise<ProviderIdentity> {
   const res = await fetch(ME_URL, {
     method: "GET",
     redirect: "manual",
@@ -107,9 +113,10 @@ async function identify(fetch: FetchFn, accessToken: string): Promise<string> {
   const body = JSON.parse(text) as { id?: unknown; mail?: unknown; userPrincipalName?: unknown };
   if (typeof body.id !== "string" || body.id === "") throw new Error("Graph /me has no id");
   const upn = typeof body.userPrincipalName === "string" && !body.userPrincipalName.includes("#EXT#") ? address(body.userPrincipalName) : null;
-  const label = upn ?? address(body.mail);
+  const mail = address(body.mail);
+  const label = upn ?? mail;
   if (label === null) throw new Error("Graph /me has no usable address");
-  return label;
+  return { label, mailbox: mail ?? label };
 }
 
 export function microsoftProvider(): ConnectorProvider {

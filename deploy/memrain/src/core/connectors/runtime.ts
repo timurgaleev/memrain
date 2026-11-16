@@ -28,7 +28,7 @@ import { ConnectorClient, type FetchFn, type TokenSource } from "./client.ts";
 import { enrichConnectorPage } from "./enrich-deterministic.ts";
 import { recordLoopThread } from "../loops/store.ts";
 import { limiterFor } from "./limiter.ts";
-import { accountRef, type ConnectorDataKind } from "./model.ts";
+import { accountRef, ownAddresses, type ConnectorDataKind } from "./model.ts";
 import { resolveClient } from "./oauth-connect.ts";
 import { builtinProviders, oauthEndpoints, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
 import { softDeleteUpstreamPage, sweepRetention } from "./retention.ts";
@@ -243,7 +243,7 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
           await enrichConnectorPage(st, {
             page: { slug: item.slug, title: item.title, externalId: item.externalId, truth: item.truth ?? {}, ...item.enrich },
             sourceId: account.sourceId,
-            ownAddresses: [account.accountLabel!],
+            ownAddresses: ownAddresses(account.accountLabel!, account.config),
             peopleSourceIds: peopleSources(account.sourceId),
           });
           // The page's reply state, for the loops_sweep daemon; free, no model.

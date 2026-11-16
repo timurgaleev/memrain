@@ -60,7 +60,7 @@ import type { ConnectorClient, ConnectorResponse } from "../client.ts";
 import { renderMailThread } from "../render.ts";
 import { retentionDays } from "../retention.ts";
 import { syncItemFromPage } from "../sync-item.ts";
-import { shortHash, type ConnectorContext, type MailAttachment, type MailMessage, type MailThread, type Person } from "../model.ts";
+import { ownAddresses, shortHash, type ConnectorContext, type MailAttachment, type MailMessage, type MailThread, type Person } from "../model.ts";
 import type { Engine } from "../../engine/interface.ts";
 import type { AdapterContext, ProviderService } from "../providers.ts";
 import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
@@ -560,7 +560,8 @@ class Adapter implements SyncAdapter {
     const normalized = normalizeOutlookConversation(conversationId, messages, folders);
     if (normalized === null) return { kind: "gone" };
     if (normalized.newestMs < this.windowLow()) return { kind: "old" };
-    const ctx: ConnectorContext = { service: "outlook_mail", accountLabel: this.account.accountLabel ?? "" };
+    const label = this.account.accountLabel ?? "";
+    const ctx: ConnectorContext = { service: "outlook_mail", accountLabel: label, ownAddresses: ownAddresses(label, this.account.config) };
     try {
       return { kind: "item", item: syncItemFromPage(renderMailThread(ctx, normalized.thread), normalized.version, { enrich: true }) };
     } catch (e) {

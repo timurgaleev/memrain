@@ -27,6 +27,8 @@ setDefaultTimeout(60_000);
 const kek = kekFromBytes(randomBytes(32));
 const SOURCE = "outlook";
 const OWNER = "owner@example.test";
+/** A sign-in name that receives no mail: the tenant's UPN differs from the mailbox address. */
+const UPN = "o.wner@corp.example.test";
 const T0 = Date.parse("2026-11-16T10:00:00Z");
 const ENV: NodeJS.ProcessEnv = {
   MEMRAIN_CONNECTORS_ENABLED: "1",
@@ -44,6 +46,40 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const e = db.storage.engine();
       await registerSource(e, { id: SOURCE, kind: "mailbox", pathPrefix: "mail/" });
       const account = await createAccount(e, { sourceId: SOURCE, provider: "microsoft", services: [OUTLOOK_MAIL_SERVICE], principalRef: "admin:operator", accountLabel: OWNER });
+      await storeCredential(e, kek, account, { access_token: GRAPH_ACCESS_TOKEN, refresh_token: GRAPH_REFRESH_TOKEN }, {
+        scopes: ["Mail.Read", "User.Read", "email", "offline_access", "openid"], expiresAt: new Date(T0 + 3_000_000),
+      });
+      await setAccountEnabled(e, account.id, true);
+
+      const providers = new ProviderRegistry();
+      providers.register(outlookTestProvider());
+      const world = outlookWorld();
+      // The newsletter asks a question too; bring it inside the sweep's window so it is judged.
+      world.messages.find(m => m.id === "b1")!.receivedDateTime = new Date(T0 - 2 * 86_400_000).toISOString();
+      const rt = connectorRuntime(db.storage, {
+        kek, providers, fetch: outlookFetch(world), env: ENV, now: () => T0, sleep: async () => {},
+        embedFn: async (t: string) => deterministicEmbed(t),
+      });
+      const loaded = (await rt.loadAccount(account.id))!;
+      expect((await runConnectorSync(db.storage, loaded, rt.depsFor(loaded))).status).toBe("success");
+      expect(Number((await e.query<{ n: number }>(`SELECT count(*)::int AS n FROM loop_threads WHERE source_id = $1`, [SOURCE])).rows[0]!.n)).toBe(6);
+
+      expect(await sweepLoops(e, SOURCE, new Date(T0))).toMatchObject({ threads: 6, opened: 2 });
+      const loops = (await listLoops(e, [SOURCE])).map(l => [l.loop_type, l.counterparty]).sort();
+      expect(loops).toEqual([
+        ["unanswered_inbound", "Carol Diaz <carol@example.com>"],
+        ["unanswered_outbound", "Eve Ng <eve@example.net>"],
+      ]);
+    } finally { await db.close(); }
+  });
+
+  it("a work account labelled by a UPN that is not its mail address still owes the replies sent to that address", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: SOURCE, kind: "mailbox", pathPrefix: "mail/" });
+      const account = await createAccount(e, { sourceId: SOURCE, provider: "microsoft", services: [OUTLOOK_MAIL_SERVICE], principalRef: "admin:operator", accountLabel: UPN,
+        config: { mailbox_address: OWNER } });
       await storeCredential(e, kek, account, { access_token: GRAPH_ACCESS_TOKEN, refresh_token: GRAPH_REFRESH_TOKEN }, {
         scopes: ["Mail.Read", "User.Read", "email", "offline_access", "openid"], expiresAt: new Date(T0 + 3_000_000),
       });

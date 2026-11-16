@@ -57,7 +57,7 @@ import type { ConnectorClient, ConnectorResponse } from "../client.ts";
 import { renderCalendarEvent } from "../render.ts";
 import { retentionDays } from "../retention.ts";
 import { syncItemFromPage } from "../sync-item.ts";
-import { shortHash, type CalendarAttendee, type CalendarEvent, type CalendarOccurrence, type ConnectorContext, type Person } from "../model.ts";
+import { ownAddresses, shortHash, type CalendarAttendee, type CalendarEvent, type CalendarOccurrence, type ConnectorContext, type Person } from "../model.ts";
 import type { ItemBudget, PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
 import type { AdapterContext } from "../providers.ts";
 import { DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, selectedCalendars, type GoogleCalendarEntry } from "../google/calendar.ts";
@@ -258,8 +258,10 @@ function lower(p: Person | null): string {
   return (p?.email ?? "").trim().toLowerCase();
 }
 
-function attendees(ev: Json, accountLabel: string): CalendarAttendee[] {
-  const own = accountLabel.trim().toLowerCase();
+/** `own` lists the account's addresses, its mailbox address first (ownAddresses). */
+function attendees(ev: Json, own: readonly string[]): CalendarAttendee[] {
+  const mineSet = new Set(own.map(a => a.trim().toLowerCase()).filter(a => a !== ""));
+  const self = [...mineSet][0] ?? "";
   const mine = ownAnswer(ev);
   const out: CalendarAttendee[] = [];
   let found = false;
@@ -268,14 +270,14 @@ function attendees(ev: Json, accountLabel: string): CalendarAttendee[] {
     if (!isRecord(a) || a.type === "resource") continue;
     const p = person(a);
     if (p === null) continue;
-    const self = own !== "" && lower(p) === own;
-    found ||= self;
-    out.push({ ...p, response: self && mine !== null ? mine : answerWord(isRecord(a.status) ? a.status.response : undefined) });
+    const isSelf = mineSet.has(lower(p));
+    found ||= isSelf;
+    out.push({ ...p, response: isSelf && mine !== null ? mine : answerWord(isRecord(a.status) ? a.status.response : undefined) });
   }
   // Invited through a list or a group: the owner is not listed, but owes an answer all the same.
   const organizer = person(ev.organizer);
-  if (!found && own !== "" && ev.isOrganizer !== true && organizer !== null && lower(organizer) !== own && mine !== null) {
-    out.push({ name: null, email: accountLabel.trim().toLowerCase(), response: mine });
+  if (!found && self !== "" && ev.isOrganizer !== true && organizer !== null && !mineSet.has(lower(organizer)) && mine !== null) {
+    out.push({ name: null, email: self, response: mine });
   }
   return out;
 }
@@ -302,13 +304,13 @@ function isOnline(ev: Json): boolean {
 
 /**
  * A Graph event as the provider-neutral shape; null when it has no start in
- * the zone the requests asked for. `accountLabel` is the connected address,
- * whose own answer is read from the event.
+ * the zone the requests asked for. `own` holds the account's own addresses
+ * (ownAddresses), whose answer is read from the event.
  */
 export function normalizeOutlookEvent(
   calendarId: string,
   ev: Json,
-  accountLabel: string,
+  own: readonly string[],
   occurrences?: { list: CalendarOccurrence[]; truncated: boolean },
 ): CalendarEvent | null {
   const id = str(ev.id);
@@ -327,7 +329,7 @@ export function normalizeOutlookEvent(
     allDay,
     status: ev.isCancelled === true ? "cancelled" : "confirmed",
     organizer: person(ev.organizer),
-    attendees: attendees(ev, accountLabel),
+    attendees: attendees(ev, own),
     recurrence: recurrenceToRrule(ev.recurrence),
     ...(isOnline(ev) ? { onlineMeeting: true } : {}),
     ...(occurrences ? { occurrences: occurrences.list, occurrencesTruncated: occurrences.truncated } : {}),
@@ -570,9 +572,10 @@ class Adapter implements SyncAdapter {
   private renderItem(calendarId: string, ev: Json, ver: string | null, occurrences?: { list: CalendarOccurrence[]; truncated: boolean }): SyncItem {
     const externalId = itemKey(calendarId, str(ev.id) ?? "");
     const label = this.account.accountLabel ?? "";
-    const event = normalizeOutlookEvent(calendarId, ev, label, occurrences);
+    const own = ownAddresses(label, this.account.config);
+    const event = normalizeOutlookEvent(calendarId, ev, own, occurrences);
     if (event === null) return { externalId, version: ver, failure: { code: "invalid_event", message: "the event has no start in UTC" } };
-    const ctx: ConnectorContext = { service: OUTLOOK_CALENDAR_SERVICE, accountLabel: label };
+    const ctx: ConnectorContext = { service: OUTLOOK_CALENDAR_SERVICE, accountLabel: label, ownAddresses: own };
     try {
       return syncItemFromPage(renderCalendarEvent(ctx, event), ver, { enrich: true });
     } catch (e) {
@@ -653,11 +656,13 @@ export function outlookCalendarAdapter(account: SyncAccount, opts: Partial<Adapt
  * The account's own calendars, its default calendar first, for the owner to
  * pick from. A calendar another user shares is left out: reading it takes
  * Calendars.Read.Shared, which this connector does not ask for
- * (learn.microsoft.com/graph/outlook-get-shared-events-calendars). The name
- * is the owner's (outside text, display only).
+ * (learn.microsoft.com/graph/outlook-get-shared-events-calendars). A
+ * calendar's owner is named by its mailbox address, so `own` holds the
+ * account's own addresses (ownAddresses), not its sign-in name alone. The
+ * name is the owner's (outside text, display only).
  */
-export async function listOutlookCalendars(client: ConnectorClient, accountLabel: string): Promise<GoogleCalendarEntry[]> {
-  const own = accountLabel.trim().toLowerCase();
+export async function listOutlookCalendars(client: ConnectorClient, own: readonly string[]): Promise<GoogleCalendarEntry[]> {
+  const mine = new Set(own.map(a => a.trim().toLowerCase()).filter(a => a !== ""));
   const out: GoogleCalendarEntry[] = [];
   let path: string | null = "/v1.0/me/calendars?$top=100";
   for (let page = 0; page < MAX_LIST_PAGES && path !== null; page++) {
@@ -667,7 +672,7 @@ export async function listOutlookCalendars(client: ConnectorClient, accountLabel
     for (const c of (res.body.value as unknown[]).filter(isRecord)) {
       const id = str(c.id);
       const owner = isRecord(c.owner) ? (str(c.owner.address) ?? "").trim().toLowerCase() : "";
-      if (id === null || (c.isDefaultCalendar !== true && (own === "" || owner !== own))) continue;
+      if (id === null || (c.isDefaultCalendar !== true && (owner === "" || !mine.has(owner)))) continue;
       out.push({ id, summary: (str(c.name) ?? id).slice(0, 200), primary: c.isDefaultCalendar === true, accessRole: c.canEdit === true ? "writer" : "reader" });
     }
     const next = res.body["@odata.nextLink"];
