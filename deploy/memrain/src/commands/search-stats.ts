@@ -41,8 +41,15 @@ export async function runSearchStats(opts: SearchStatsOptions = {}): Promise<num
     const stats = await readSearchStats(storage.engine(), {
       ...(opts.days !== undefined ? { days: opts.days } : {}),
     });
-    // Shadow ranking rollup (MEMRAIN_RANK_SHADOW); empty when it never ran.
-    const shadow = await readShadowStats(storage.engine(), opts.days ?? 7).catch(() => [] as ShadowStats[]);
+    // Shadow ranking rollup (MEMRAIN_RANK_SHADOW); empty when it never ran. A
+    // failed read is reported, so it never looks like "no shadow data yet".
+    let shadow: ShadowStats[] = [];
+    let shadowError: string | null = null;
+    try {
+      shadow = await readShadowStats(storage.engine(), opts.days ?? 7);
+    } catch (e) {
+      shadowError = e instanceof Error ? e.message : String(e);
+    }
     if (opts.json) {
       console.log(
         JSON.stringify(
@@ -52,6 +59,7 @@ export async function runSearchStats(opts: SearchStatsOptions = {}): Promise<num
             active_mode: resolveSearchMode(),
             ...stats,
             shadow,
+            ...(shadowError !== null ? { shadow_error: shadowError } : {}),
           },
           null,
           2,
@@ -60,6 +68,7 @@ export async function runSearchStats(opts: SearchStatsOptions = {}): Promise<num
       return 0;
     }
     printStatsText(stats);
+    if (shadowError !== null) console.log(`  Shadow ranking: could not read search_telemetry_shadow: ${shadowError}`);
     for (const sh of shadow) {
       console.log(
         `  Shadow ${sh.flag}: ${sh.count} searches, first page would change in ` +
