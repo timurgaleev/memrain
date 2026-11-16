@@ -176,9 +176,25 @@ export type PageResult =
   }
   | { ok: false; response: ConnectorResponse };
 
+/**
+ * How many items the run may still store. The engine stops a run at the item
+ * cap even in the middle of a page, and a page that never settles never moves
+ * its stream's cursor: an adapter whose provider pages are larger than one run
+ * may store would replay the same first items forever. So an adapter keeps
+ * each page within `remaining`, or, when the provider wants the same page size
+ * on every request of a listing (a page token issued for one size), within
+ * `perRun`, which a later run can always settle whole.
+ */
+export interface ItemBudget {
+  /** Items this run may still store; at least 1 whenever `page` is called. */
+  remaining: number;
+  /** The most one run can ever store: the smaller of the per-run and the daily item cap. */
+  perRun: number;
+}
+
 export interface SyncAdapter {
   streams(account: SyncAccount): string[];
-  page(ctx: { client: ConnectorClient; account: SyncAccount; stream: string; cursor: string | null; page: number }): Promise<PageResult>;
+  page(ctx: { client: ConnectorClient; account: SyncAccount; stream: string; cursor: string | null; page: number; budget?: ItemBudget }): Promise<PageResult>;
 }
 
 export interface UpstreamDeletion {
@@ -520,7 +536,14 @@ class Run {
         this.fetchStopped = true;
         return;
       }
-      const res = await this.deps.adapter.page({ client, account: this.account, stream, cursor, page });
+      const budget = this.budget();
+      // Nothing more may be stored: a page fetched now could only be dropped.
+      if (budget.remaining <= 0) {
+        this.stop("item_cap_reached");
+        this.fetchStopped = true;
+        return;
+      }
+      const res = await this.deps.adapter.page({ client, account: this.account, stream, cursor, page, budget });
       if (!res.ok) {
         this.fetchFailed(res.response);
         return;
@@ -549,6 +572,12 @@ class Run {
     }
   }
 
+  private budget(): ItemBudget {
+    const perRun = positiveInt(this.env, "MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN", DEFAULT_MAX_ITEMS_PER_RUN);
+    const remaining = Math.min(perRun - this.itemsThisRun, this.account.itemCapDaily - this.seenToday - this.itemsThisRun);
+    return { remaining: Math.max(0, remaining), perRun: Math.max(1, Math.min(perRun, this.account.itemCapDaily)) };
+  }
+
   private fetchFailed(res: ConnectorResponse): void {
     this.result.error_class = res.class;
     this.result.http_status = res.status === 0 ? null : res.status;
@@ -573,9 +602,9 @@ class Run {
   /** Process one page. True when every item on it is settled, so its checkpoint may be committed. */
   private async processPage(items: readonly SyncItem[]): Promise<boolean> {
     const failures: PageFailure[] = [];
-    const maxPerRun = positiveInt(this.env, "MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN", DEFAULT_MAX_ITEMS_PER_RUN);
     for (const item of items) {
-      if (this.itemsThisRun >= maxPerRun || this.seenToday + this.itemsThisRun >= this.account.itemCapDaily) {
+      // An adapter that ignores the budget is still stopped here, part-way through its page.
+      if (this.budget().remaining <= 0) {
         this.stop("item_cap_reached");
         this.fetchStopped = true;
         return false;

@@ -36,7 +36,7 @@ import type { Engine } from "../engine/interface.ts";
 import type { MeetingSentence, MeetingTranscript, Person } from "./model.ts";
 import type { ApiKeyProvider } from "./providers.ts";
 import { renderMeeting } from "./render.ts";
-import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "./sync-engine.ts";
+import type { ItemBudget, PageResult, SyncAccount, SyncAdapter, SyncItem } from "./sync-engine.ts";
 import { syncItemFromPage } from "./sync-item.ts";
 import { liveItemIds, settledItemVersions } from "./sync-store.ts";
 import type { ResponseClass } from "./types.ts";
@@ -491,7 +491,13 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
     }
   }
 
-  async function transcriptsPage(client: ConnectorClient, cursor: string | null, page: number): Promise<PageResult> {
+  /**
+   * Set once this run leaves a listed transcript unfetched for the item budget:
+   * the window's end may not be committed after that, whatever later pages say.
+   */
+  let windowCut = false;
+
+  async function transcriptsPage(client: ConnectorClient, cursor: string | null, page: number, budget: ItemBudget | undefined): Promise<PageResult> {
     const since = timeOf(cursor);
     const fromDate = new Date(since === null ? runAt - BACKFILL_DAYS * 86_400_000 : since - LOOKBACK_MS).toISOString();
     const toDate = new Date(runAt).toISOString();
@@ -502,14 +508,22 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
     const versions = new Map(listed.map(t => [t.id, transcriptVersion(t, refreshDayOf(t))]));
     const settled = await settledItemVersions(ctx.engine, account.id, [...versions.keys()]);
     const items: SyncItem[] = [];
+    // A transcript fetched past what the run may store would be dropped by the
+    // engine, and its request still counts against the key's daily quota. The
+    // ones left are unsettled, so the next run's listing fetches them.
+    const room = budget?.remaining ?? Number.POSITIVE_INFINITY;
     for (const [id, version] of versions) {
       if (settled.get(id) === version) continue;
+      if (items.length >= room) {
+        windowCut = true;
+        break;
+      }
       const item = await fetchItem(client, id, version);
       if (item === null) continue;
       if ("class" in item) return { ok: false, response: item };
       items.push(item);
     }
-    const done = rows.length < LIST_PAGE_SIZE;
+    const done = rows.length < LIST_PAGE_SIZE && !windowCut;
     return { ok: true, items, checkpoint: done ? toDate : null, done };
   }
 
@@ -549,8 +563,8 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
 
   return {
     streams: () => [STREAM_TRANSCRIPTS, STREAM_RECONCILE],
-    page: async ({ client, stream, cursor, page }) => {
-      if (stream === STREAM_TRANSCRIPTS) return transcriptsPage(client, cursor, page);
+    page: async ({ client, stream, cursor, page, budget }) => {
+      if (stream === STREAM_TRANSCRIPTS) return transcriptsPage(client, cursor, page, budget);
       if (stream === STREAM_RECONCILE) return reconcilePage(client, cursor, page);
       throw new Error(`unknown Fireflies stream ${stream}`);
     },
