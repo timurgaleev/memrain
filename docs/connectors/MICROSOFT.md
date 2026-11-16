@@ -19,9 +19,12 @@ Memrain app sits between you and Microsoft.
   from it.
 - A source of kind `calendar` ([ENABLE.md](./ENABLE.md) step 5). One source
   can hold Google and Outlook calendars side by side.
-- An account that can register an app in Microsoft Entra: any work account
-  whose tenant lets users register apps, or a personal Microsoft account (it
-  gets a directory of its own when you first open the Entra admin center).
+- A Microsoft Entra tenant where you may register apps: your work tenant (if
+  its settings let users register apps, or an admin does it), or the tenant
+  that comes with an Azure account. A personal Microsoft account cannot
+  register an app on its own; sign up for a free Azure account with it first
+  ([register an app](https://learn.microsoft.com/entra/identity-platform/quickstart-register-app)).
+  The app can still let personal accounts connect (step 2).
 
 ## What Memrain asks for
 
@@ -159,12 +162,19 @@ then without it), or for a member: `auth permissions <name> set-read-sources`.
 ### 9. Pick calendars and the history window (optional)
 
 Memrain syncs the account's default calendar and reads the last 90 days of it
-on the first sync. To add other calendars the account can read (shared and
-group calendars included) or change the window, choose **Calendars** on the
-account's row, tick them, and choose **Save calendars**. The default calendar
-is always synced. The limits are those of Google Calendar
+on the first sync. To add your other calendars or change the window, choose
+**Calendars** on the account's row, tick them, and choose **Save calendars**.
+The default calendar is always synced. The limits are those of Google Calendar
 ([GOOGLE.md](./GOOGLE.md) step 8): up to 19 calendars besides the default, and
 a window of 1 to 3,650 days, never past the calendar retention window.
+
+Only calendars the account owns are offered. A calendar a colleague shares
+with you, or a Microsoft 365 group calendar, is not: reading another user's
+calendar needs `Calendars.Read.Shared`, which Memrain does not ask for.
+
+Graph offers change tracking for the default calendar only, so another
+calendar is read whole, at most once an hour: its changes can be up to an hour
+late, and an event deleted there goes at the next reading.
 
 ## What is stored
 
@@ -185,8 +195,9 @@ a window of 1 to 3,650 days, never past the calendar retention window.
 
 ## How syncing works
 
-Memrain reads each calendar through Graph's calendar view delta
-([delta-query-events](https://learn.microsoft.com/graph/delta-query-events)):
+Memrain reads the default calendar through Graph's calendar view delta
+([delta-query-events](https://learn.microsoft.com/graph/delta-query-events)),
+and other calendars as step 9 says:
 a first pass over the window, then only what changed. Graph fixes the window
 when a pass starts, so Memrain starts a fresh pass once a week to move it
 forward, and whenever Graph says it lost the pass (`410` or
