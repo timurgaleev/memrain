@@ -230,6 +230,9 @@ const DAY_MS = 86_400_000;
  * (learn.microsoft.com/entra/identity-platform/refresh-tokens), and Memrain
  * uses one only when a sync needs a fresh access token. A grant that syncs
  * never runs out; one whose sync is off ends 90 days after its last use.
+ * The last use is estimated from the last consent and the last run that got
+ * a token; a run may use an access token renewed up to about an hour before,
+ * which is noise against 90 days.
  */
 const IDLE_GRANT_DAYS = 90;
 const IDLE_WARN_DAYS = 15;
@@ -255,9 +258,13 @@ function idleGrantNote(a: ConnectorAccountView, now: number): { warn: boolean; t
       ? { warn: true, text: `${limit}, and this account was last used on ${new Date(used).toISOString().slice(0, 10)}. Reconnect to renew it.` }
       : null;
   }
-  if (a.enabled && a.status === "active") return null;
-  const why = a.enabled ? "and this account is not syncing" : "and sync is off";
-  return now >= ends - IDLE_WARN_DAYS * DAY_MS
+  const soon = now >= ends - IDLE_WARN_DAYS * DAY_MS;
+  // Sync on renews the grant, unless nothing runs (scheduler off, daemon paused): then it lapses all the same.
+  if (a.enabled && a.status === "active" && !soon) return null;
+  const why = !a.enabled ? "and sync is off"
+    : a.status === "active" ? `and this account has not synced since ${new Date(used).toISOString().slice(0, 10)}`
+    : "and this account is not syncing";
+  return soon
     ? { warn: true, text: `Around ${day}: ${limit}, ${why}. Turn sync on or reconnect before then to renew it.` }
     : { warn: false, text: `Around ${day}: ${limit}, ${why}. Turn sync on to keep it renewed.` };
 }

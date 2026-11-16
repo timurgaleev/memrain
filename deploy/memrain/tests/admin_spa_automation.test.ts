@@ -81,6 +81,14 @@ describe("grantNote for Microsoft", () => {
     expect(grantNote({ ...ms, enabled: true, last_success_at: "2026-11-09T11:00:00Z" }, NOW)).toBeNull();
   });
 
+  it("still warns when sync is on but nothing has run for weeks (the scheduler is off or paused)", () => {
+    const stalled = grantNote({ ...ms, enabled: true, last_success_at: "2026-08-20T10:00:00Z",
+      credential: { ...ms.credential!, granted_at: "2026-08-10T12:00:00.000Z" } }, NOW)!;
+    expect(stalled.warn).toBe(true);
+    expect(stalled.text).toContain("has not synced since 2026-08-20");
+    expect(stalled.text).toContain("2026-11-18");
+  });
+
   it("names the day 90 unused days end a grant whose sync is off, counting from its last use", () => {
     expect(grantNote(ms, NOW)).toEqual({
       warn: false,
