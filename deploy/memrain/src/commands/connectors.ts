@@ -3,6 +3,10 @@
  *                               [--full] [--dry-run] [--json]`
  * `memrain connectors status [--json]`
  *
+ * `status` lists every connector account (state, last clean sync, last run,
+ * a waiting reconnect, a Google Testing-mode grant about to end) and every
+ * recipe connector's watermark and last run.
+ *
  * A one-shot, operator-run mirror of a GitHub repository's issues and pull
  * requests into a `github` source (see src/core/connectors/). The token comes
  * from `--token-file` or MEMRAIN_GITHUB_TOKEN; it is held in memory for the run,
@@ -31,6 +35,8 @@ import {
 } from "../core/connectors/github.ts";
 import type { ConnectorRunStatus } from "../core/connectors/types.ts";
 import { listConnectorStates } from "../core/connectors/watermark.ts";
+import { grantExpiryText, listAccountStatus, type AccountStatus } from "../core/connectors/account-status.ts";
+import { connectorsStatus } from "../core/connectors/vault.ts";
 import { withStorage } from "./with-storage.ts";
 import { runRotateKek } from "./connectors-vault.ts";
 
@@ -192,21 +198,49 @@ async function runGithubSync(opts: ConnectorsCmdOptions): Promise<number> {
   return code;
 }
 
+/** One account as the operator reads it in a terminal. */
+export function accountStatusLine(a: AccountStatus): string[] {
+  const head = `${a.provider} ${a.account_label} (${a.id.slice(0, 8)}) into ${a.source_id}: ${a.state}`;
+  const run = a.last_run;
+  const parts = [
+    `last clean sync ${a.last_success_at ?? "never"}`,
+    ...(run
+      ? [`last run ${run.status}${run.stop_reason ? ` (${run.stop_reason})` : ""} at ${run.at}, ${run.items} items, ${run.pages_written} written` +
+        (run.items_failed > 0 ? `, ${run.items_failed} failed` : "") + (run.error ? ` — ${run.error}` : "")]
+      : ["no run recorded yet"]),
+  ];
+  const lines = [`${head}, ${parts.join(", ")}`];
+  if (a.needs_reconnect) {
+    lines.push(`  needs a reconnect since ${a.reconnect_since}${a.status_reason ? ` (${a.status_reason})` : ""}: reconnect it on the admin Connections page; its data and cursors are kept`);
+  }
+  if (a.grant_expiry) lines.push(`  ${grantExpiryText(a.grant_expiry)}`);
+  return lines;
+}
+
 async function runStatus(opts: ConnectorsCmdOptions): Promise<number> {
   const storage = new Storage(loadConfig(opts.configPath));
-  const states = await withStorage(storage, () => listConnectorStates(storage.engine()));
+  const { states, accounts } = await withStorage(storage, async () => ({
+    states: await listConnectorStates(storage.engine()),
+    accounts: await listAccountStatus(storage.engine()),
+  }));
+  const gate = connectorsStatus();
   if (opts.json) {
-    console.log(JSON.stringify({ ok: true, connectors: states }, null, 2));
+    console.log(JSON.stringify({ ok: true, connectors_enabled: gate.enabled, connectors_reason: gate.reason, connectors: states, accounts }, null, 2));
     return 0;
   }
-  if (states.length === 0) {
-    console.log("no connector has run");
+  if (states.length === 0 && accounts.length === 0) {
+    console.log("no connector account and no connector has run");
     return 0;
   }
+  // An account's "sync on" is its own switch; this says whether any sync can run in this process at all.
+  console.log(gate.enabled ? "connectors: on" : `connectors: off (${gate.reason ?? "unknown"})`);
+  if (accounts.length > 0) console.log("accounts:");
+  for (const a of accounts) for (const line of accountStatusLine(a)) console.log(`  ${line}`);
+  if (states.length > 0) console.log("recipe connectors:");
   for (const s of states) {
     const run = s.last_run;
     console.log(
-      `${s.recipe_id}: watermark ${s.watermark ?? "none"}` +
+      `  ${s.recipe_id}: watermark ${s.watermark ?? "none"}` +
         (run ? `, last run ${run.status} at ${run.at}, last clean run ${run.last_success_at ?? "never"}` : "") +
         (s.refused.length > 0 ? `, ${s.refused.length} item(s) refused` : ""),
     );

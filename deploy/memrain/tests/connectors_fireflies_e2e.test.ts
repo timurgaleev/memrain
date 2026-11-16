@@ -417,6 +417,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       { provider: "fireflies", sourceId: SOURCE, apiKey: FIREFLIES_KEY, principalRef: "admin:operator" });
     expect(again.reconnected).toBe(true);
     expect((await getAccount(e, account.id))?.status).toBe("active");
+    // ...and answers the reconnect notice at once, without waiting for a clean run.
+    expect((await e.query(`SELECT kind FROM connector_notices WHERE account_id = $1 AND resolved_at IS NULL`, [account.id])).rows).toEqual([]);
   });
 
   it("stores a long transcript whole across part pages and keeps the key out of every row", async () => {

@@ -200,9 +200,10 @@ export async function markAccountSynced(engine: Engine, id: string): Promise<voi
   await engine.query(`UPDATE connector_accounts SET last_success_at = NOW() WHERE id = $1`, [id]);
 }
 
-/** Delete an account and, by cascade, its credential. Pages are never touched. */
+/** Delete an account and, by cascade, its credential, and its last-run record. Pages are never touched. */
 export async function deleteAccount(engine: Engine, id: string): Promise<boolean> {
   const r = await engine.query(`DELETE FROM connector_accounts WHERE id = $1 RETURNING id`, [id]);
+  await engine.query(`DELETE FROM recipe_state WHERE recipe_id = $1`, [`connector-account:${id}`]);
   return r.rows.length > 0;
 }
 
@@ -228,7 +229,12 @@ function parseTokens(text: string): TokenSet {
   };
 }
 
-/** Seal and store (or replace) an account's tokens. */
+/**
+ * Seal and store (or replace) an account's tokens: a connect or a reconnect.
+ * A reconnect is a new consent, so `created_at` restarts with it; it dates the
+ * grant a test-mode provider limit counts from. A refresh (renewCredential)
+ * keeps it.
+ */
 export async function storeCredential(
   engine: Engine,
   kek: Kek,
@@ -250,7 +256,7 @@ export async function storeCredential(
      VALUES ($1, $2, $3, $4, $5::text[], $6)
      ON CONFLICT (account_id) DO UPDATE SET
        kek_id = EXCLUDED.kek_id, nonce = EXCLUDED.nonce, ciphertext = EXCLUDED.ciphertext,
-       scopes = EXCLUDED.scopes, expires_at = EXCLUDED.expires_at, updated_at = NOW()`,
+       scopes = EXCLUDED.scopes, expires_at = EXCLUDED.expires_at, created_at = NOW(), updated_at = NOW()`,
     [account.id, sealed.kek_id, sealed.nonce, sealed.ciphertext, [...opts.scopes], opts.expiresAt?.toISOString() ?? null],
   );
 }
@@ -324,6 +330,8 @@ export async function readCredential(
 
 export interface CredentialMeta {
   kek_id: string;
+  /** The last consent: when the current grant was stored. */
+  granted_at: string;
   scopes: string[];
   expires_at: string | null;
   rotated_at: string | null;
@@ -337,15 +345,17 @@ export async function credentialMeta(engine: Engine, accountId: string): Promise
     scopes: string[];
     expires_at: Date | string | null;
     rotated_at: Date | string | null;
+    created_at: Date | string;
     updated_at: Date | string;
   }>(
-    `SELECT kek_id, scopes, expires_at, rotated_at, updated_at FROM connector_credentials WHERE account_id = $1`,
+    `SELECT kek_id, scopes, expires_at, rotated_at, created_at, updated_at FROM connector_credentials WHERE account_id = $1`,
     [accountId],
   );
   const row = r.rows[0];
   if (!row) return null;
   return {
     kek_id: row.kek_id,
+    granted_at: iso(row.created_at)!,
     scopes: [...(row.scopes ?? [])],
     expires_at: iso(row.expires_at),
     rotated_at: iso(row.rotated_at),

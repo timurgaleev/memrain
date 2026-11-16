@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { automationApi } from "../api-automation.ts";
 import { useAsync, useNow } from "../hooks.ts";
 import { Section } from "../components/Tile.tsx";
@@ -8,12 +8,16 @@ import { fmtAgo, fmtInt, fmtUsd } from "../lib/format.ts";
 import {
   accountView,
   connectOutcome,
+  grantNote,
+  hasCalendarPicker,
+  lastRunText,
   providerLabel,
   type ConnectorAccountView,
   type ConnectorsReport,
 } from "../lib/automation.ts";
 import { DeleteDataDialog, DisconnectDialog } from "./ConnectionDialogs.tsx";
-import { ProviderPanel } from "./ConnectionProviders.tsx";
+import { CalendarPicker } from "./ConnectionCalendars.tsx";
+import { ProviderPanel, providerKeyFieldId } from "./ConnectionProviders.tsx";
 import { actionError, goToConsent } from "./connection-actions.ts";
 
 type Flash = { ok: boolean; message: string };
@@ -82,6 +86,7 @@ export function ConnectionsPage() {
                       key={a.id}
                       account={a}
                       connectorsOn={r.enabled}
+                      keyBased={r.providers.some((p) => p.id === a.provider && p.auth === "api_key")}
                       onOpen={(kind) => setOpen({ kind, account: a })}
                       onDone={done}
                       onError={failed}
@@ -133,9 +138,11 @@ export function ConnectionsPage() {
   );
 }
 
-function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
+function AccountRow({ account: a, connectorsOn, keyBased, onOpen, onDone, onError }: {
   account: ConnectorAccountView;
   connectorsOn: boolean;
+  /** An API-key provider: a reconnect is the key saved again, not a consent page. */
+  keyBased: boolean;
   onOpen: (kind: "disconnect" | "delete") => void;
   onDone: (message: string) => void;
   onError: (e: unknown) => void;
@@ -144,7 +151,11 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
   const view = accountView(a);
   const [busy, setBusy] = useState(false);
   const [askDeletes, setAskDeletes] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const pickerId = useId();
   const reconnectNotice = a.notices.find((n) => n.kind === "needs_reconnect");
+  const grant = grantNote(a);
+  const canPick = hasCalendarPicker(a, connectorsOn);
 
   const run = async (work: () => Promise<string | null>) => {
     setBusy(true);
@@ -162,6 +173,12 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
     const r = await automationApi.setSync(a.id, !a.enabled);
     return r.enabled ? `Sync is on for ${a.account_label}.` : `Sync is off for ${a.account_label}. Its pages stay.`;
   });
+  const name = providerLabel(a.provider);
+  const enterKeyAgain = () => {
+    const field = document.getElementById(providerKeyFieldId(a.provider));
+    field?.scrollIntoView({ block: "center" });
+    field?.focus();
+  };
   const reconnect = () => run(async () => {
     await goToConsent(a.provider, a.source_id, a.services);
     return null;
@@ -193,14 +210,42 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
 
       <dl className="kv account-meta">
         <dt>Last sync</dt><dd>{a.last_success_at ? fmtAgo(a.last_success_at, now) : "never"}</dd>
+        <dt>Last run</dt>
+        <dd>
+          <span>{lastRunText(a.last_run)}</span>
+          {a.last_run && <span className="muted"> · {fmtAgo(a.last_run.at, now)}</span>}
+        </dd>
+        {grant && !grant.warn && <><dt>Access ends</dt><dd>{grant.text}</dd></>}
         <dt>Daily caps</dt><dd className="num">{fmtUsd(a.spend_cap_usd_daily)} · {fmtInt(a.item_cap_daily)} items</dd>
         <dt>Access</dt><dd className="mono account-scopes">{a.credential ? a.credential.scopes.join(" ") || "none" : "no credential"}</dd>
       </dl>
 
-      {view.canReconnect && (
+      {view.canReconnect && keyBased && (
         <div className="account-attention warning-bar">
-          {reconnectNotice?.detail ?? "The provider no longer accepts the stored access."} Sync is paused and nothing was
-          deleted; reconnecting picks up where it stopped.
+          {reconnectNotice?.detail ?? `${name} no longer accepts the stored key.`} Sync is paused and nothing was deleted.
+          Save the current {name} API key again under Connect {name} below, into source <span className="mono">{a.source_id}</span>;
+          sync picks up where it stopped.
+        </div>
+      )}
+      {view.canReconnect && !keyBased && (
+        <div className="account-attention warning-bar">
+          {grant?.warn ? grant.text : reconnectNotice?.detail ?? "The provider no longer accepts the stored access."} Sync is
+          paused and nothing was deleted; reconnecting picks up where it stopped.
+        </div>
+      )}
+      {!view.canReconnect && grant?.warn && (
+        <div className="account-attention warning-bar">
+          <span>{grant.text}</span>
+          <span className="attention-actions">
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled={busy || !connectorsOn}
+              aria-label={`Reconnect now: ${a.account_label}`}
+              onClick={reconnect}
+            >
+              Reconnect now
+            </button>
+          </span>
         </div>
       )}
       {a.held_deletes > 0 && (
@@ -225,7 +270,7 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
       )}
 
       <div className="account-actions">
-        {view.canReconnect && (
+        {view.canReconnect && !keyBased && (
           <button
             className="btn btn-primary btn-sm"
             disabled={busy || !connectorsOn}
@@ -233,6 +278,16 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
             onClick={reconnect}
           >
             Reconnect
+          </button>
+        )}
+        {view.canReconnect && keyBased && (
+          <button
+            className="btn btn-primary btn-sm"
+            disabled={!connectorsOn}
+            aria-label={`Enter the ${name} key again: ${a.account_label}`}
+            onClick={enterKeyAgain}
+          >
+            Enter the {name} key again
           </button>
         )}
         {view.canToggleSync && (
@@ -243,6 +298,18 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
             onClick={toggleSync}
           >
             {a.enabled ? "Turn sync off" : "Turn sync on"}
+          </button>
+        )}
+        {canPick && (
+          <button
+            className="btn btn-secondary btn-sm"
+            disabled={busy}
+            aria-expanded={picking}
+            aria-controls={picking ? pickerId : undefined}
+            aria-label={`Choose calendars for ${a.account_label}`}
+            onClick={() => setPicking(!picking)}
+          >
+            Calendars
           </button>
         )}
         {view.canDisconnect && (
@@ -266,6 +333,15 @@ function AccountRow({ account: a, connectorsOn, onOpen, onDone, onError }: {
           </button>
         )}
       </div>
+
+      {canPick && picking && (
+        <CalendarPicker
+          account={a}
+          id={pickerId}
+          onClose={() => setPicking(false)}
+          onSaved={(message) => { setPicking(false); onDone(message); }}
+        />
+      )}
 
       {askDeletes && (
         <Dialog title={`Delete ${a.held_deletes} items from ${a.account_label}?`} onClose={() => setAskDeletes(false)}>

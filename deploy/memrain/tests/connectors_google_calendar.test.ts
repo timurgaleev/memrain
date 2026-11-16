@@ -24,6 +24,7 @@ import { ConnectorClient } from "../src/core/connectors/client.ts";
 import { readCursor, writeCursor } from "../src/core/connectors/sync-store.ts";
 import { runConnectorSync, type SyncAccount } from "../src/core/connectors/sync-engine.ts";
 import { connectorRuntime } from "../src/core/connectors/runtime.ts";
+import { readAccountRun } from "../src/core/connectors/account-status.ts";
 import { accountRef, shortHash } from "../src/core/connectors/model.ts";
 import { GOOGLE_CALENDAR_READONLY, googleProvider } from "../src/core/connectors/google/provider.ts";
 import { calendarStream, googleCalendarAdapter, listGoogleCalendars, parsePassCursor, seriesEndedBefore } from "../src/core/connectors/google/calendar.ts";
@@ -274,6 +275,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
       // The admin page and doctor read this; a clean run must stamp it.
       expect((await getAccount(e, account.id))!.last_success_at).not.toBeNull();
+      expect(await readAccountRun(e, account.id)).toMatchObject({ status: "success", stop_reason: null, at: new Date(T0).toISOString() });
 
       const lists = eventListCalls(world);
       expect(lists).toHaveLength(2);
@@ -332,6 +334,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const result = await run(db.storage, world, account.id);
       expect(result.status).toBe("partial");
       expect((await getAccount(e, account.id))!.last_success_at).toBeNull();
+      expect(await readAccountRun(e, account.id)).toMatchObject({ status: "partial" });
       // The checkpoint is the half-done pass, never a sync token.
       const cursor = await readCursor(e, account.id, calendarStream("primary"));
       expect(cursor).not.toBe(FULL_TOKEN);
@@ -773,6 +776,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(eventListCalls(world)).toHaveLength(0);
       expect(world.calls.map(c => c.url.toString())).toEqual(["https://oauth2.googleapis.com/token"]);
       expect((await getAccount(e, account.id))?.status).toBe("needs_reconnect");
+      expect(await readAccountRun(e, account.id)).toMatchObject({ status: "auth_required", stop_reason: "needs_reconnect" });
       expect(await storedToken(e, account.id, "primary")).toBe(FULL_TOKEN);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE source_id = $1`, [SOURCE])).toBeGreaterThan(0);
     } finally { await db.close(); }

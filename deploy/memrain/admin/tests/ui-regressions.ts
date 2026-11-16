@@ -128,6 +128,23 @@ try {
     await page.waitForURL("https://accounts.example.test/**");
     assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/google/start", body: { source_id: "cal", services: ["calendar"] } }]);
   });
+  await check("An API-key account that needs a reconnect is fixed by entering its key again, not by an OAuth start", "connections", async (page) => {
+    const fireflies = { id: "fireflies", services: ["fireflies"], service_kinds: { fireflies: ["meeting"] }, auth: "api_key", callback_uri: null };
+    const base = scenario();
+    automation.reset(scenario({
+      providers: [...base.connectors.providers, fireflies],
+      sources: [...base.connectors.sources, { id: "meet", kind: "meeting" }],
+      accounts: [account({ provider: "fireflies", services: ["fireflies"], source_id: "meet", status: "needs_reconnect", status_reason: "auth_required",
+        credential: { scopes: [], expires_at: null, granted_at: "2026-11-01T12:00:00.000Z" } })],
+    }));
+    await page.getByText("Needs reconnect", { exact: true }).waitFor();
+    await page.getByText("Save the current Fireflies API key again", { exact: false }).waitFor();
+    assert.equal(await page.getByRole("button", { name: `Reconnect ${OWNER}` }).count(), 0);
+    await page.getByRole("button", { name: `Enter the Fireflies key again: ${OWNER}` }).click();
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLInputElement | null)?.type), "password");
+    assert.equal(await page.getByLabel("Fireflies API key").evaluate((el) => el === document.activeElement), true);
+    assert.deepEqual(automation.posts, []);
+  });
   await check("Disconnect waits for the exact account name, then previews and deletes what it wrote", "connections", async (page) => {
     automation.reset(scenario());
     await page.getByRole("button", { name: `Disconnect ${OWNER}` }).click();
@@ -192,6 +209,66 @@ try {
     await page.getByText("Saved", { exact: false }).waitFor();
     assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/google/client", body: { client_id: "byo-client.apps.example.test", client_secret: "byo-secret" } }]);
     assert.equal(await page.getByLabel("Client secret").inputValue(), "");
+  });
+  await check("The calendar picker keeps primary on and saves the chosen calendars and history window", "connections", async (page) => {
+    automation.reset(scenario());
+    await page.getByRole("button", { name: `Choose calendars for ${OWNER}` }).click();
+    const picker = page.getByRole("group", { name: "Calendars to sync" });
+    const primary = picker.getByRole("checkbox", { name: new RegExp(`^${OWNER}`) });
+    await primary.waitFor();
+    assert.equal(await primary.isChecked(), true);
+    assert.equal(await primary.isDisabled(), true);
+    assert.equal(await picker.getByRole("checkbox", { name: /^Holidays/ }).isChecked(), true);
+    await picker.getByRole("checkbox", { name: /^Team/ }).check();
+    await picker.getByRole("checkbox", { name: /^Holidays/ }).uncheck();
+    const days = page.getByLabel("History window in days");
+    assert.equal(await days.inputValue(), "90");
+    await days.fill("30");
+    await page.getByRole("button", { name: "Save calendars" }).click();
+    await page.getByText(`Saved: 2 calendars sync for ${OWNER}`, { exact: false }).waitFor();
+    assert.deepEqual(automation.posts, [{
+      path: `/admin/api/connectors/accounts/${account().id}/calendars`,
+      body: { calendars: ["team@group.calendar.example.test"], history_days: 30 },
+    }]);
+    assert.equal(await page.getByRole("group", { name: "Calendars to sync" }).count(), 0);
+  });
+  await check("The calendar picker refuses a history window outside 1 to 3650 days without posting", "connections", async (page) => {
+    automation.reset(scenario());
+    await page.getByRole("button", { name: `Choose calendars for ${OWNER}` }).click();
+    await page.getByLabel("History window in days").fill("0");
+    assert.equal(await page.getByRole("button", { name: "Save calendars" }).isDisabled(), true);
+    await page.getByRole("button", { name: "Cancel" }).click();
+    assert.deepEqual(automation.posts, []);
+  });
+  await check("No calendar picker while connectors are off or for an account that needs a reconnect", "connections", async (page) => {
+    automation.reset(scenario({ enabled: false, reason: "MEMRAIN_CONNECTORS_ENABLED is not set" }));
+    await page.getByText("Connectors are off", { exact: false }).waitFor();
+    assert.equal(await page.getByRole("button", { name: `Choose calendars for ${OWNER}` }).count(), 0);
+    automation.reset(scenario({ accounts: [account({ status: "needs_reconnect", needs_reconnect: true })] }));
+    await page.reload();
+    await page.getByText("Needs reconnect", { exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: `Choose calendars for ${OWNER}` }).count(), 0);
+    await page.getByRole("button", { name: `Turn sync off for ${OWNER}` }).waitFor();
+  });
+  await check("An account shows its last run, and a Testing-mode grant near its end asks for a reconnect", "connections", async (page) => {
+    automation.reset(scenario({ accounts: [account({
+      grant_expiry: { granted_at: "2026-11-04T12:00:00.000Z", expires_at: "2026-11-11T12:00:00.000Z", days: 7, state: "upcoming", due_soon: true },
+    })] }));
+    await page.getByText("success · 49 items, 49 written", { exact: true }).waitFor();
+    await page.getByText("Around 2026-11-11 if the Google app is in Testing", { exact: false }).first().waitFor();
+    await page.route("https://accounts.example.test/**", (r) => r.fulfill({ contentType: "text/html", body: "<p>Provider consent page</p>" }));
+    await page.getByRole("button", { name: `Reconnect now: ${OWNER}` }).click();
+    await page.waitForURL("https://accounts.example.test/**");
+    assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/google/start", body: { source_id: "cal", services: ["calendar"] } }]);
+  });
+  await check("A reconnect the Testing-mode limit caused says so", "connections", async (page) => {
+    automation.reset(scenario({ accounts: [account({
+      status: "needs_reconnect", status_reason: "invalid_grant", needs_reconnect: true,
+      grant_expiry: { granted_at: "2026-11-01T12:00:00.000Z", expires_at: "2026-11-08T12:00:00.000Z", days: 7, state: "lapsed", due_soon: false },
+    })] }));
+    await page.getByText("Needs reconnect", { exact: true }).waitFor();
+    await page.getByText("ends a grant 7 days after consent while its OAuth app is in Testing", { exact: false }).waitFor();
+    assert.equal(await page.getByRole("button", { name: `Reconnect ${OWNER}`, exact: true }).isEnabled(), true);
   });
   await check("Autonomy pauses a daemon and resumes a paused spend path", "autonomy", async (page) => {
     const st = scenario();

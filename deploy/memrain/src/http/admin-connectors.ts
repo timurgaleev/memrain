@@ -26,6 +26,7 @@ import { OperationError } from "../core/operation-error.ts";
 import type { FetchFn } from "../core/connectors/client.ts";
 import { credentialMeta, getAccount, listAccounts, setAccountConfig, setAccountEnabled, type ConnectorAccount } from "../core/connectors/accounts.ts";
 import { ApiKeyConnectError, connectApiKey } from "../core/connectors/api-key-connect.ts";
+import { listAccountStatus, type AccountStatus } from "../core/connectors/account-status.ts";
 import { accountRef } from "../core/connectors/model.ts";
 import {
   DEFAULT_HISTORY_DAYS,
@@ -147,14 +148,17 @@ function serviceKinds(services: Readonly<Record<string, ProviderService>>): Reco
 }
 
 /** Everything the Connections page shows about one account; never a secret. */
-async function describeAccount(engine: Engine, account: ConnectorAccount, notices: readonly OpenNotice[]) {
+async function describeAccount(engine: Engine, account: ConnectorAccount, notices: readonly OpenNotice[], status: AccountStatus | undefined) {
   const cred = await credentialMeta(engine, account.id);
   return {
     ...account,
     held_items: await heldItemCount(engine, account.id),
     held_deletes: await heldDeleteCount(engine, account.id),
     notices: notices.filter((n) => n.account_id === account.id).map(({ kind, detail, created_at }) => ({ kind, detail, created_at })),
-    credential: cred ? { scopes: cred.scopes, expires_at: cred.expires_at } : null,
+    credential: cred ? { scopes: cred.scopes, expires_at: cred.expires_at, granted_at: cred.granted_at } : null,
+    last_run: status?.last_run ?? null,
+    needs_reconnect: status?.needs_reconnect ?? account.status === "needs_reconnect",
+    grant_expiry: status?.grant_expiry ?? null,
   };
 }
 
@@ -165,6 +169,7 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
     const engine = deps.storage.engine();
     const notices = await listOpenNotices(engine);
     const accounts = await listAccounts(engine);
+    const statuses = new Map((await listAccountStatus(engine)).map((s) => [s.id, s]));
     return json({
       enabled: st.enabled,
       reason: st.reason,
@@ -186,7 +191,7 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
         })),
       ],
       sources: (await listSources(engine)).map((s) => ({ id: s.id, kind: s.kind })),
-      accounts: await Promise.all(accounts.map((a) => describeAccount(engine, a, notices))),
+      accounts: await Promise.all(accounts.map((a) => describeAccount(engine, a, notices, statuses.get(a.id)))),
       clients: await listOAuthClients(engine),
     });
   }

@@ -19,6 +19,7 @@ import {
   type NotificationKind,
 } from "../core/notifications/store.ts";
 import { loadWebhookConfig } from "../core/notifications/webhook.ts";
+import { listAccountStatus } from "../core/connectors/account-status.ts";
 
 const MAX_IDS = 500;
 const MAX_BODY = 16 * 1024;
@@ -47,16 +48,31 @@ function parseIds(raw: unknown): number[] | null {
   return raw.every(v => Number.isSafeInteger(v) && (v as number) > 0) ? (raw as number[]) : null;
 }
 
+/**
+ * A reconnect that a provider's test-mode grant limit likely caused gets a
+ * hint that says so (by account id). No address or token: only the dates.
+ */
+async function lapsedGrants(engine: Engine, notifications: ReadonlyArray<{ kind: NotificationKind; ref: string; resolved_at: string | null }>): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!notifications.some(n => n.kind === "needs_reconnect" && n.resolved_at === null)) return out;
+  for (const a of await listAccountStatus(engine)) {
+    if (a.grant_expiry?.state !== "lapsed") continue;
+    out.set(a.id, `Google ends a grant ${a.grant_expiry.days} days after consent while its OAuth app is in Testing, and this one was granted on ${a.grant_expiry.granted_at.slice(0, 10)}. ${HINTS.needs_reconnect} Publish the Google app to stop the weekly expiry.`);
+  }
+  return out;
+}
+
 export async function handleAdminNotifications(req: Request, url: URL, engine: Engine): Promise<Response | null> {
   const p = url.pathname;
   try {
     if (p === "/admin/api/notifications" && req.method === "GET") {
       const webhook = await sync(engine);
       const notifications = await listNotifications(engine, { includeResolved: url.searchParams.get("all") === "1" });
+      const lapsed = await lapsedGrants(engine, notifications);
       return json({
         summary: await notificationSummary(engine),
         webhook: { state: webhook },
-        notifications: notifications.map(n => ({ ...n, hint: HINTS[n.kind] })),
+        notifications: notifications.map(n => ({ ...n, hint: (n.kind === "needs_reconnect" ? lapsed.get(n.ref) : undefined) ?? HINTS[n.kind] })),
       });
     }
     if (p === "/admin/api/notifications/summary" && req.method === "GET") {

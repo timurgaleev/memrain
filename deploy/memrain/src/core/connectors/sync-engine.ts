@@ -362,6 +362,15 @@ export async function runConnectorSync(storage: Storage, account: SyncAccount, d
     result.stop_reason = reason;
     return result;
   };
+  // A run its own cap or a missing credential stopped is reported to the
+  // account like a finished one, so its status does not keep showing the last
+  // good run. The gates before it (switch off, account off, run locked) did
+  // nothing worth recording.
+  const stopped = async (reason: SyncStopReason): Promise<SyncRunResult> => {
+    skip(reason, "partial");
+    await deps.accounts.recordRun?.(account.id, result);
+    return result;
+  };
 
   if (!connectorsSwitchOn(env)) return skip("connectors_disabled");
   if (!account.enabled) return skip("account_disabled");
@@ -372,10 +381,10 @@ export async function runConnectorSync(storage: Storage, account: SyncAccount, d
 
   const dayStart = utcDayStart(new Date(now()));
   const seenToday = await itemsSeenSince(engine, account.id, dayStart);
-  if (seenToday >= account.itemCapDaily) return skip("item_cap_reached", "partial");
+  if (seenToday >= account.itemCapDaily) return stopped("item_cap_reached");
   const spendClient = connectorSpendClient(account.id);
   const spentUsd = async (): Promise<number> => daySpendUsd(engine, spendClient, new Date(now()));
-  if (account.spendCapUsdDaily <= 0 || (await spentUsd()) >= account.spendCapUsdDaily) return skip("cap_reached", "partial");
+  if (account.spendCapUsdDaily <= 0 || (await spentUsd()) >= account.spendCapUsdDaily) return stopped("cap_reached");
 
   // Unique per run, whatever worker name is given: the worker runs jobs
   // concurrently, and the lock lets its own holder back in.
@@ -394,7 +403,7 @@ export async function runConnectorSync(storage: Storage, account: SyncAccount, d
       if (e instanceof ReauthRequiredError) return await needsReconnect(storage, account, deps, result, null, now);
       // A missing key or credential row is the operator's to fix, not the owner's: no pause.
       result.error = `credentials unavailable (${e instanceof Error ? e.name : "error"})`;
-      return skip("credentials_unavailable", "partial");
+      return await stopped("credentials_unavailable");
     }
     const client = deps.client(account, recordingSource(source, secret));
     const run = new Run(storage, account, deps, env, now, result, tokens, seenToday, spentUsd, () => heartbeatWorkerLock(engine, lockId, holder));

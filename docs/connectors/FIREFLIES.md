@@ -6,6 +6,9 @@ meeting lands in the brain as a meeting page with its transcript and summary. Fi
 ## Prerequisites
 
 - Connectors are on: [ENABLE.md](./ENABLE.md) steps 1 to 3.
+- A source of kind `meeting` to hold the meetings. The Connections page offers
+  only sources of that kind, so its list is empty until you register one
+  ([ENABLE.md](./ENABLE.md) step 5).
 - A Fireflies account whose meetings you want in the brain.
 
 ## What the key can do
@@ -34,14 +37,16 @@ treat it like a password.
 ### 2. Paste it into Memrain
 
 1. Open the admin console (`https://<your host>/admin/`) and sign in.
-2. Open the **Connections** page and choose **Fireflies**.
-3. Pick the source the meetings should belong to, paste the key, and save.
+2. On the **Connections** page, in the **Fireflies** panel, pick the
+   `meeting` source under **Into source**.
+3. Paste the key into **Fireflies API key** and choose **Connect Fireflies**.
 
 Paste the key into that form only. Do not put it in `.env`, a chat with your
 agent, or a brain page.
 
 The form posts to the admin API, which a script can call the same way with an
-admin session:
+admin session cookie and the brain's own `Origin` (admin writes refuse any
+other origin):
 
 ```
 POST /admin/api/connectors/fireflies/key
@@ -117,14 +122,14 @@ a first sync of a busy 90 days can take more than one day.
 docker exec deploy-memrain-1 bun run src/cli.ts connectors status
 ```
 
-The Fireflies account shows a recent clean run. Search the brain for the title
-of a recent meeting.
+The Fireflies account is listed under `accounts:` with a recent clean sync and
+its last run. Search the brain for the title of a recent meeting.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| The account shows `needs_reconnect` | Fireflies refused the key (revoked or regenerated) | Copy the current key from Fireflies and save it again on the Connections page |
+| The account shows `needs_reconnect` | Fireflies refused the key (revoked or regenerated) | Copy the current key from Fireflies, choose **Enter the Fireflies key again** on the account's row, and save it under **Connect Fireflies** into the same source |
 | Runs stop `partial` every day | The daily quota of your plan is used up | Wait for midnight UTC; the backlog drains over the next days |
 | A meeting has no summary | Fireflies had not finished it when the run read it | Runs within the next 48 hours pick it up |
 | The Connections page answers `connectors_disabled` | Connectors are off or the connector key did not load | [ENABLE.md](./ENABLE.md) step 3 |
