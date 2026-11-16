@@ -240,15 +240,15 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await syncFreshness(e, undefined, NOW, 24)).toEqual({ newest: null, accounts: 0, stale: [] });
       const insert = `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label, enabled, last_success_at)
         VALUES ($1, $2, $3, 'admin:operator', $4, TRUE, $5)`;
-      await e.query(insert, ["00000000-0000-4000-8000-000000000001", SRC, "google", "a@example.com", new Date(NOW.getTime() - 30 * H).toISOString()]);
-      await e.query(insert, ["00000000-0000-4000-8000-000000000002", OTHER, "google", "b@example.com", new Date(NOW.getTime() - 2 * H).toISOString()]);
+      await e.query(insert, ["00000000-0000-4000-8000-00000000000a", SRC, "google", "a@example.com", new Date(NOW.getTime() - 30 * H).toISOString()]);
+      await e.query(insert, ["00000000-0000-4000-8000-00000000000b", OTHER, "google", "b@example.com", new Date(NOW.getTime() - 2 * H).toISOString()]);
       const all = await syncFreshness(e, undefined, NOW, 24);
       expect(all.newest).toBe(new Date(NOW.getTime() - 2 * H).toISOString());
       expect(all.stale.map(s => s.source_id)).toEqual([SRC]);
       expect((await syncFreshness(e, [SRC], NOW, 24)).newest).toBe(new Date(NOW.getTime() - 30 * H).toISOString());
       // A meeting-transcript account says nothing about mail freshness.
       await registerSource(e, { id: "meet", kind: "meeting", pathPrefix: "meet/" });
-      await e.query(insert, ["00000000-0000-4000-8000-000000000003", "meet", "fireflies", "c@example.com", NOW.toISOString()]);
+      await e.query(insert, ["00000000-0000-4000-8000-00000000000c", "meet", "fireflies", "c@example.com", NOW.toISOString()]);
       expect((await syncFreshness(e, undefined, NOW, 24)).newest).toBe(new Date(NOW.getTime() - 2 * H).toISOString());
     } finally { await db.close(); }
   });
