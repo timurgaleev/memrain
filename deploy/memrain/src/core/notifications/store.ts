@@ -28,6 +28,7 @@ export const NOTIFICATION_KINDS = [
   "spend_path_paused",
   "daemon_auto_paused",
   "write_gate_hold",
+  "oauth_client_rejected",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -36,7 +37,7 @@ export type WebhookState = "off" | "pending" | "delivered" | "failed" | "cancell
 /** A problem as its own table records it. */
 export interface Problem {
   kind: NotificationKind;
-  /** The problem's identity within its kind: an account id, `daemon:source`, a spend path, a source id. */
+  /** The problem's identity within its kind: an account id, `daemon:source`, a spend path, a source id, a provider. */
   ref: string;
   /** The source the problem is about; brain-wide problems belong to `default`. */
   source_id: string;
@@ -88,7 +89,9 @@ export function notificationRetentionDays(env: NodeJS.ProcessEnv = process.env):
  * Every problem open right now. Read-only, so doctor can call it.
  *
  * A needs_reconnect problem is the account's own status or the sync engine's
- * open notice for it; both name the account, so they are one problem.
+ * open notice for it; both name the account, so they are one problem. An
+ * OAuth app its provider refused is one problem for the provider, however
+ * many accounts renew with it, and stays open until the hold ends.
  */
 export async function currentProblems(engine: Engine): Promise<Problem[]> {
   // scope: operator-only notifications are the operator's view of every source's problems
@@ -111,6 +114,8 @@ export async function currentProblems(engine: Engine): Promise<Problem[]> {
      UNION ALL
      SELECT 'write_gate_hold', h.source_id, h.source_id
        FROM write_gate_holds h WHERE h.decision IS NULL GROUP BY h.source_id
+     UNION ALL
+     SELECT 'oauth_client_rejected', c.provider, 'default' FROM connector_client_holds c
      ORDER BY 1, 2`,
   );
   return r.rows.map(p => ({ kind: p.kind, ref: p.ref, source_id: p.source_id }));

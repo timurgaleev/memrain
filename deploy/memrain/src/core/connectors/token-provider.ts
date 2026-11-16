@@ -17,7 +17,7 @@
 import type { Engine } from "../engine/interface.ts";
 import { acquireWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import type { FetchFn, TokenSource } from "./client.ts";
-import { ReauthRequiredError } from "./types.ts";
+import { OAuthClientRejectedError, ReauthRequiredError } from "./types.ts";
 
 export interface StoredCredential {
   accessToken: string;
@@ -39,7 +39,10 @@ export interface RefreshResult {
   expiresInSec?: number | null;
 }
 
-/** Exchange a refresh token for a new access token. Throws ReauthRequiredError on `invalid_grant`. */
+/**
+ * Exchange a refresh token for a new access token. Throws ReauthRequiredError
+ * on `invalid_grant`, OAuthClientRejectedError when the app itself is refused.
+ */
 export type RefreshFn = (refreshToken: string) => Promise<RefreshResult>;
 
 export interface TokenProviderOptions {
@@ -215,7 +218,8 @@ export function tokenEndpointRefresh(opts: TokenEndpointOptions): RefreshFn {
     const code = typeof parsed.error === "string" && ERROR_CODE_RE.test(parsed.error) ? parsed.error : null;
     // Microsoft adds numeric service codes (`error_codes`, e.g. 700082 for an
     // inactive refresh token); a number carries no token, so it may be named.
-    const serviceCode = Array.isArray(parsed.error_codes) && Number.isInteger(parsed.error_codes[0]) ? `, code ${String(parsed.error_codes[0])}` : "";
+    const serviceNumber = Array.isArray(parsed.error_codes) && Number.isInteger(parsed.error_codes[0]) ? parsed.error_codes[0] as number : null;
+    const serviceCode = serviceNumber === null ? "" : `, code ${String(serviceNumber)}`;
     if (res.status === 200) {
       if (typeof parsed.access_token !== "string" || parsed.access_token.length === 0) {
         throw new Error("token endpoint answered 200 without an access token");
@@ -232,6 +236,11 @@ export function tokenEndpointRefresh(opts: TokenEndpointOptions): RefreshFn {
     // Microsoft: the user must sign in again (multifactor, a new conditional access policy).
     if ((res.status === 400 || res.status === 401) && code === "interaction_required") {
       throw new ReauthRequiredError(`the provider needs the owner to sign in again (interaction_required${serviceCode})`);
+    }
+    // The app itself was refused (RFC 6749 §5.2): a wrong or expired secret,
+    // an app the provider or tenant does not know. A reconnect cannot fix it.
+    if ((res.status === 400 || res.status === 401) && (code === "invalid_client" || code === "unauthorized_client")) {
+      throw new OAuthClientRejectedError(code, serviceNumber);
     }
     throw new Error(`token endpoint answered HTTP ${res.status}${code ? ` (${code}${serviceCode})` : ""}`);
   };

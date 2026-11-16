@@ -20,6 +20,8 @@ import { accountRef, type CalendarEvent } from "../src/core/connectors/model.ts"
 import { renderCalendarEvent } from "../src/core/connectors/render.ts";
 import { MASS_DELETE, openNotice } from "../src/core/connectors/sync-store.ts";
 import { recordAccountRun } from "../src/core/connectors/account-status.ts";
+import { recordClientRejection } from "../src/core/connectors/client-holds.ts";
+import { OAuthClientRejectedError } from "../src/core/connectors/types.ts";
 import { handleAdminConnectors, type AdminConnectorDeps } from "../src/http/admin-connectors.ts";
 import type { Storage } from "../src/core/storage.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
@@ -98,14 +100,14 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const body = JSON.parse(text) as {
         providers: Array<{
           id: string; services: string[]; service_kinds: Record<string, string[]>; auth: string; callback_uri: string | null;
-          tenant_default: string | null; can_revoke: boolean; consent_urls: string[];
+          tenant_default: string | null; can_revoke: boolean; consent_urls: string[]; client_rejected: unknown;
         }>;
         sources: Array<{ id: string; kind: string }>;
         accounts: Array<ConnectorAccount & { held_items: number; held_deletes: number; notices: Array<{ kind: string; detail: string }>; credential: { scopes: string[] } | null }>;
       };
       expect(body.providers).toEqual([{
         id: "test", services: ["mail", "calendar"], service_kinds: { mail: ["mailbox"], calendar: ["calendar"] }, auth: "oauth",
-        callback_uri: `${ORIGIN}/admin/connectors/callback/test`, tenant_default: null, can_revoke: true, consent_urls: [],
+        callback_uri: `${ORIGIN}/admin/connectors/callback/test`, tenant_default: null, can_revoke: true, consent_urls: [], client_rejected: null,
       }]);
       expect(body.sources).toContainEqual({ id: "inbox", kind: "mailbox" });
       expect(body.accounts).toHaveLength(1);
@@ -566,6 +568,28 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await setOAuthClient(e, kek, "microsoft", "env-app", "rotated", null);
       expect(await (await remove()).json()).toEqual({ ok: true, deleted: true });
       expect(await getAccount(e, account.id)).toMatchObject({ status: "active" });
+    } finally { await db.close(); }
+  });
+
+  it("show which provider refused its OAuth app, and drop it once a new secret for the app is saved", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await connected(e);
+      await setOAuthClient(e, kek, "test", "env-client", "expired-secret-value");
+      const d = deps(db.storage);
+      const refusedAt = new Date("2026-11-16T10:00:00Z");
+      await recordClientRejection(e, { provider: "test", clientId: "env-client", error: new OAuthClientRejectedError("invalid_client", 7000222), now: refusedAt });
+      const listed = async () => (await (await call(get("/admin/api/connectors"), d)).json()) as { providers: Array<{ id: string; client_rejected: unknown }> };
+      const text = JSON.stringify(await listed());
+      expect(text).not.toContain("expired-secret-value");
+      expect((await listed()).providers[0]!.client_rejected).toEqual({
+        reason: "invalid_client", service_code: 7000222, since: refusedAt.toISOString(), held_until: new Date(refusedAt.getTime() + 3_600_000).toISOString(),
+      });
+
+      // The same app with a new secret: no confirmation, no reconnect, and the refusal is over.
+      expect((await call(post("/admin/api/connectors/test/client", { client_id: "env-client", client_secret: "fresh-secret-value" }), d)).status).toBe(200);
+      expect((await listed()).providers[0]!.client_rejected).toBeNull();
     } finally { await db.close(); }
   });
 

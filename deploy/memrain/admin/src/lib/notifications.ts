@@ -11,6 +11,7 @@ const LABELS: Record<string, string> = {
   spend_path_paused: "Spend path paused",
   daemon_auto_paused: "Daemon auto-paused",
   write_gate_hold: "Writes held by the write gate",
+  oauth_client_rejected: "OAuth app refused by its provider",
 };
 
 export function kindLabel(kind: string): string {
@@ -24,6 +25,7 @@ const ACTION_PAGES: Record<string, RouteName> = {
   spend_path_paused: "autonomy",
   daemon_auto_paused: "autonomy",
   write_gate_hold: "approvals",
+  oauth_client_rejected: "connections",
 };
 
 /** The admin page that holds the action for a kind: reconnect, confirm or retry, resume, approve. */

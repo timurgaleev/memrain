@@ -14,7 +14,7 @@ import {
   type RefreshResult,
   type StoredCredential,
 } from "../src/core/connectors/token-provider.ts";
-import { ReauthRequiredError } from "../src/core/connectors/types.ts";
+import { OAuthClientRejectedError, ReauthRequiredError } from "../src/core/connectors/types.ts";
 import { acquireWorkerLock, releaseWorkerLock } from "../src/core/jobs/worker-lock.ts";
 import { fakeClock, replay, type Recorded } from "./github-recorded.ts";
 
@@ -200,12 +200,34 @@ describe("tokenEndpointRefresh", () => {
     expect(String((err as Error).message)).not.toContain(tok("r1"));
   });
 
+  it("reads an app the provider refuses (a wrong or expired secret, an unknown app) as the operator's to fix, not a reconnect", async () => {
+    const cases: Array<[Recorded, string, number | null]> = [
+      // Microsoft: an expired secret (AADSTS7000222), a wrong one (AADSTS7000215), an app the tenant does not know (AADSTS700016).
+      [json(401, { error: "invalid_client", error_description: `AADSTS7000222: expired ${SECRET}`, error_codes: [7000222] }), "invalid_client", 7000222],
+      [json(401, { error: "invalid_client", error_codes: [7000215] }), "invalid_client", 7000215],
+      [json(400, { error: "unauthorized_client", error_codes: [700016] }), "unauthorized_client", 700016],
+      // Google: a deleted or unknown client, and a refresh token issued to another client.
+      [json(401, { error: "invalid_client", error_description: "The OAuth client was not found." }), "invalid_client", null],
+      [json(400, { error: "unauthorized_client", error_description: "Unauthorized" }), "unauthorized_client", null],
+    ];
+    for (const [response, code, serviceCode] of cases) {
+      const { fn } = refresher([response]);
+      const err = await fn(tok("r1")).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(OAuthClientRejectedError);
+      expect(err).not.toBeInstanceOf(ReauthRequiredError);
+      expect(err).toMatchObject({ code, serviceCode });
+      expect(String((err as Error).message)).not.toContain(SECRET);
+      expect(String((err as Error).message)).not.toContain(tok("r1"));
+    }
+  });
+
   it("reads a server error, a redirect, a network failure and a body without a token as transient, quoting no secret", async () => {
     for (const r of [json(503, { error: "x" }), { status: 302, headers: { location: "https://evil.example/" }, body: "" }, new Error(`reset ${SECRET}`), json(200, { token_type: "Bearer" })] as Array<Recorded | Error>) {
       const { fn } = refresher([r]);
       const err = await fn(tok("r1")).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(Error);
       expect(err).not.toBeInstanceOf(ReauthRequiredError);
+      expect(err).not.toBeInstanceOf(OAuthClientRejectedError);
       expect(String((err as Error).message)).not.toContain(SECRET);
       expect(String((err as Error).message)).not.toContain(tok("r1"));
     }

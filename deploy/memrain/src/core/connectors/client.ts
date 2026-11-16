@@ -17,7 +17,9 @@
  * it. With a source, a 401 earns exactly one forced refresh and one retry; a
  * second 401, or a refresh the provider refuses, ends the request
  * `auth_required` with `reauth` set, which the sync engine turns into a paused
- * account waiting for its owner to reconnect.
+ * account waiting for its owner to reconnect. A refresh refused because of
+ * the OAuth app itself ends it `auth_required` with `clientRejected` set
+ * instead: the operator fixes the app, and the account stays as it is.
  *
  * A request may bound the response body (`maxBytes`): a larger body is not
  * buffered, the read stops past the bound and the request ends `challenge`
@@ -29,7 +31,7 @@
  */
 import { classifyResponse, CLASSIFY_BODY_PREFIX } from "./classify.ts";
 import type { ProviderLimiter } from "./limiter.ts";
-import { ReauthRequiredError, type ResponseClass } from "./types.ts";
+import { OAuthClientRejectedError, ReauthRequiredError, type ResponseClass } from "./types.ts";
 
 export type FetchFn = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -75,6 +77,8 @@ export interface ConnectorResponse {
   error: string | null;
   /** Set on `auth_required` when the credential cannot be renewed: the owner has to reconnect. */
   reauth?: boolean;
+  /** Set on `auth_required` when the provider refused the OAuth app itself: the operator has to fix the app. */
+  clientRejected?: boolean;
   /**
    * The parsed JSON body of a response that did not end `ok`, when it had one.
    * GraphQL providers put their error code there; it is provider text, never
@@ -251,6 +255,16 @@ export class ConnectorClient {
         next: null,
         error: `${what}: the provider will not renew the credential; reconnect the account`,
         reauth: true,
+      };
+    }
+    if (e instanceof OAuthClientRejectedError) {
+      return {
+        class: "auth_required",
+        status: 0,
+        body: null,
+        next: null,
+        error: `${what}: ${e.message}; save the app's current secret, or the right app`,
+        clientRejected: true,
       };
     }
     // A token endpoint that is down or slow is not the owner's problem: the

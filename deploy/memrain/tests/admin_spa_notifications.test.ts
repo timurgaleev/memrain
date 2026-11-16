@@ -54,6 +54,7 @@ describe("actionPage", () => {
     expect(actionPage("write_gate_hold")).toBe("approvals");
     expect(actionPage("spend_path_paused")).toBe("autonomy");
     expect(actionPage("daemon_auto_paused")).toBe("autonomy");
+    expect(actionPage("oauth_client_rejected")).toBe("connections");
     for (const k of NOTIFICATION_KINDS) {
       const page = actionPage(k)!;
       expect(parseHash(buildHash({ name: page, param: null })).name).toBe(page);

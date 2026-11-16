@@ -41,6 +41,7 @@ import { listOutlookCalendars, OUTLOOK_CALENDAR_SERVICE } from "../core/connecto
 import { connectorRuntime, toSyncAccount } from "../core/connectors/runtime.ts";
 import { ReauthRequiredError } from "../core/connectors/types.ts";
 import { deleteOAuthClient, listOAuthClients, setOAuthClient } from "../core/connectors/oauth-clients.ts";
+import { clearClientHold, listClientHolds, type ClientHold } from "../core/connectors/client-holds.ts";
 import { deleteAllConnectorData, previewConnectorData } from "../core/connectors/retention.ts";
 import {
   confirmHeldDeletes,
@@ -156,6 +157,10 @@ function serviceKinds(services: Readonly<Record<string, ProviderService>>): Reco
   return Object.fromEntries(Object.entries(services).map(([id, s]) => [id, [...s.sourceKinds]]));
 }
 
+function clientRejected(hold: ClientHold | undefined) {
+  return hold ? { reason: hold.reason, service_code: hold.service_code, since: hold.since, held_until: hold.held_until } : null;
+}
+
 /** Everything the Connections page shows about one account; never a secret. */
 async function describeAccount(engine: Engine, account: ConnectorAccount, notices: readonly OpenNotice[], status: AccountStatus | undefined) {
   const cred = await credentialMeta(engine, account.id);
@@ -179,6 +184,7 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
     const notices = await listOpenNotices(engine);
     const accounts = await listAccounts(engine);
     const statuses = new Map((await listAccountStatus(engine)).map((s) => [s.id, s]));
+    const holds = new Map((await listClientHolds(engine)).map((h) => [h.provider, h]));
     return json({
       enabled: st.enabled,
       reason: st.reason,
@@ -195,6 +201,8 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
           tenant_default: pr.tenant?.default ?? null,
           can_revoke: pr.revoke !== undefined || pr.revokeUrl !== undefined,
           consent_urls: [...(pr.consentUrls ?? [])],
+          // The provider refused its OAuth app on a renewal: codes only, until the app is saved again.
+          client_rejected: clientRejected(holds.get(pr.id)),
         })),
         ...deps.providers.listApiKey().map((pr) => ({
           id: pr.id,
@@ -205,6 +213,7 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
           tenant_default: null,
           can_revoke: false,
           consent_urls: [],
+          client_rejected: null,
         })),
       ],
       sources: (await listSources(engine)).map((s) => ({ id: s.id, kind: s.kind })),
@@ -238,6 +247,8 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
     const deleted = await engine.transaction(async (tx) => {
       const gone = await deleteOAuthClient(tx, provider);
       if (gone && change !== null) await parkAccountsForReconnect(tx, provider, "remove");
+      // A refusal of the removed app says nothing about the one accounts renew with now.
+      if (gone) await clearClientHold(tx, provider);
       return gone;
     });
     return json({ ok: true, deleted });
@@ -284,6 +295,8 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
       await engine.transaction(async (tx) => {
         await setOAuthClient(tx, deps.kek()!, provider, clientId, clientSecret, tenant);
         if (change !== null) await parkAccountsForReconnect(tx, provider, change);
+        // A new secret (or app) is what a refused app waits for: the provider's syncs try again at once.
+        await clearClientHold(tx, provider);
       });
     } catch {
       return json({ error: "invalid client" }, 400);

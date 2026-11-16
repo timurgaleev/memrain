@@ -51,7 +51,11 @@
  *     item failure, holds the cursor, and is mirrored again next run;
  *   - a credential the provider will not renew pauses the account
  *     (`markNeedsReconnect`), opens a notice and leaves every cursor where it
- *     was, so reconnecting resumes from the same place.
+ *     was, so reconnecting resumes from the same place;
+ *   - an OAuth app the provider refused ends the run at the first refusal
+ *     (`client_rejected`) and leaves the account as it is: no reconnect fixes
+ *     an app. While the runtime holds the app (`clientHeld`), a run asks the
+ *     provider nothing.
  */
 import type { Storage } from "../storage.ts";
 import type { EmbedFn } from "../indexer.ts";
@@ -209,6 +213,12 @@ export interface AccountGateway {
   markNeedsReconnect(accountId: string, reason: string): Promise<void>;
   /** Optional: remember the run on the account row. */
   recordRun?(accountId: string, result: SyncRunResult): Promise<void>;
+  /**
+   * Optional: whether the provider refused the OAuth app this account renews
+   * with, recently enough that a run would only be refused again. A held run
+   * opens no credential and asks the provider nothing.
+   */
+  clientHeld?(account: SyncAccount): Promise<boolean>;
 }
 
 export interface SyncDeps {
@@ -259,6 +269,7 @@ export type SyncStopReason =
   | "item_cap_reached"
   | "credentials_unavailable"
   | "needs_reconnect"
+  | "client_rejected"
   | "forbidden"
   | "fetch_failed"
   | "source_outage"
@@ -418,6 +429,10 @@ export async function runConnectorSync(storage: Storage, account: SyncAccount, d
   const lockId = syncLockId(account.id);
   if (!(await acquireWorkerLock(engine, lockId, holder, RUN_LOCK_TTL_SEC))) return skip("locked");
   try {
+    if (await deps.accounts.clientHeld?.(account)) {
+      result.error = "the provider refused this account's OAuth app; sync waits until the app's current secret is saved";
+      return await stopped("client_rejected");
+    }
     const tokens = new Map<string, string>();
     const secret = (value: string): void => {
       if (value.length > 0) tokens.set(value, "connector-token");
@@ -584,6 +599,10 @@ class Run {
     this.result.error = res.error;
     if (res.class === "auth_required" && res.reauth === true) {
       this.stop("needs_reconnect");
+      this.fetchStopped = true;
+    } else if (res.clientRejected === true) {
+      // Every request would be refused the same way: the operator fixes the app, the account waits.
+      this.stop("client_rejected");
       this.fetchStopped = true;
     } else if (res.class === "auth_required" || res.class === "forbidden") {
       this.stop("forbidden");

@@ -3,6 +3,7 @@ import { automationApi } from "../api-automation.ts";
 import { CopyField } from "../components/CopyField.tsx";
 import { Dialog } from "../components/Dialog.tsx";
 import {
+  clientRejectedNote,
   exclusiveServices,
   initialServices,
   providerLabel,
@@ -73,6 +74,9 @@ export function ProviderPanel({ provider: p, sources, client, connectorsOn, onDo
         <h3 className="panel-title" id={`${sourceFieldId}-title`}>{name}</h3>
         {client && <span className="badge badge-read">Your own app</span>}
       </div>
+      {clientRejectedNote(p.id, p.client_rejected) !== null && (
+        <p className="error-text" role="alert">{clientRejectedNote(p.id, p.client_rejected)}</p>
+      )}
 
       <form className="connect-form" onSubmit={(e) => { e.preventDefault(); void connect(); }}>
         {p.services.length > 1 && (

@@ -74,7 +74,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(listedText).not.toContain(FIREFLIES_KEY);
       expect((JSON.parse(listedText) as { providers: unknown[] }).providers).toContainEqual({
         id: "fireflies", services: ["fireflies"], service_kinds: { fireflies: ["meeting"] }, auth: "api_key", callback_uri: null,
-        tenant_default: null, can_revoke: false, consent_urls: [],
+        tenant_default: null, can_revoke: false, consent_urls: [], client_rejected: null,
       });
     } finally { await db.close(); }
   });

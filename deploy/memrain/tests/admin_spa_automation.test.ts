@@ -9,6 +9,7 @@ import { describe, expect, it } from "bun:test";
 import { buildHash, parseHash } from "../admin/src/lib/route.ts";
 import {
   accountView,
+  clientRejectedNote,
   confirmMatches,
   connectOutcome,
   connectorErrorCopy,
@@ -153,6 +154,21 @@ describe("Microsoft service labels and the tenant field", () => {
     const common = tenantChangeEffect("common");
     expect(common).toContain("can all sign in");
     expect(common).not.toContain("keep Work");
+  });
+
+  it("says what to do when a provider refused its OAuth app, by its codes only", () => {
+    const since = "2026-11-16T10:00:00.000Z";
+    const until = "2026-11-16T11:00:00.000Z";
+    const expired = clientRejectedNote("microsoft", { reason: "invalid_client", service_code: 7000222, since, held_until: until })!;
+    expect(expired).toContain("Microsoft refused your app");
+    expect(expired).toContain("AADSTS7000222");
+    expect(expired).toContain("save it with the same client ID");
+    expect(expired).toContain("No reconnect");
+    const unknown = clientRejectedNote("google", { reason: "unauthorized_client", service_code: null, since, held_until: until })!;
+    expect(unknown).toContain("Google refused your app");
+    expect(unknown).toContain("unauthorized_client");
+    expect(unknown).not.toContain("AADSTS");
+    expect(clientRejectedNote("google", null)).toBeNull();
   });
 
   it("tells the owner where to remove a consent the provider cannot withdraw for us", () => {

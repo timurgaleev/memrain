@@ -7,7 +7,7 @@
 import { describe, expect, it } from "bun:test";
 import { ConnectorClient, ConnectorRequestError, type TokenSource } from "../src/core/connectors/client.ts";
 import { ProviderLimiter } from "../src/core/connectors/limiter.ts";
-import { ReauthRequiredError } from "../src/core/connectors/types.ts";
+import { OAuthClientRejectedError, ReauthRequiredError } from "../src/core/connectors/types.ts";
 import { fakeClock, replay, type Recorded } from "./github-recorded.ts";
 
 const ORIGIN = ["https://api", "provider", "test"].join(".");
@@ -73,6 +73,16 @@ describe("ConnectorClient with a token source", () => {
     const res = await c.get("/v1/items");
     expect(res.class).toBe("auth_required");
     expect(res.reauth).toBe(true);
+    expect(fake.urls).toHaveLength(1);
+  });
+
+  it("reports an OAuth app the provider refused as that, neither a reconnect nor a retry, without another request", async () => {
+    const { s } = source({ refresh: async () => { throw new OAuthClientRejectedError("invalid_client", 7000222); } });
+    const { c, fake } = client([unauthorized], s);
+    const res = await c.get("/v1/items");
+    expect(res).toMatchObject({ class: "auth_required", clientRejected: true });
+    expect(res.reauth).toBeFalsy();
+    expect(res.error).toContain("invalid_client");
     expect(fake.urls).toHaveLength(1);
   });
 

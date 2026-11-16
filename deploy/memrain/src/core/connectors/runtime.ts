@@ -29,13 +29,14 @@ import { enrichConnectorPage } from "./enrich-deterministic.ts";
 import { recordLoopThread } from "../loops/store.ts";
 import { limiterFor } from "./limiter.ts";
 import { accountRef, ownAddresses, type ConnectorDataKind } from "./model.ts";
-import { resolveClient } from "./oauth-connect.ts";
+import { clearClientHold, clientHeld, recordClientRejection } from "./client-holds.ts";
+import { renewalApp, resolveClient } from "./oauth-connect.ts";
 import { builtinProviders, oauthEndpoints, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
 import { softDeleteUpstreamPage, sweepRetention } from "./retention.ts";
 import type { SyncAccount, SyncDeps } from "./sync-engine.ts";
 import { registerConnectorSync, type ConnectorSyncRuntime } from "./sync-job.ts";
-import { createTokenProvider, tokenEndpointRefresh, type CredentialStore } from "./token-provider.ts";
-import { ProviderCannotSyncError, ReauthRequiredError } from "./types.ts";
+import { createTokenProvider, tokenEndpointRefresh, type CredentialStore, type RefreshFn } from "./token-provider.ts";
+import { OAuthClientRejectedError, ProviderCannotSyncError, ReauthRequiredError } from "./types.ts";
 import { connectorsStatus, loadKek, type Kek } from "./vault.ts";
 
 const MAX_REASON = 200;
@@ -148,20 +149,37 @@ export interface OAuthTokenSourceOptions {
 /**
  * An OAuth account's token, renewed at the provider's token endpoint for the
  * account's OAuth client (and that client's tenant, for a provider whose
- * endpoints name one), with the vault as its store.
+ * endpoints name one), with the vault as its store. A renewal the provider
+ * refuses because of the app itself holds the provider's syncs
+ * (client-holds.ts); one that succeeds ends any such hold.
  */
 export async function oauthTokenSource(opts: OAuthTokenSourceOptions): Promise<TokenSource> {
   const provider = opts.providers.get(opts.provider);
   if (!provider) throw new ProviderCannotSyncError(opts.provider);
   const client = await resolveClient({ engine: opts.engine, kek: opts.kek, providers: opts.providers, fetch: opts.fetch, env: opts.env }, opts.kek, provider.id);
   const token = new URL(oauthEndpoints(provider, client.tenant).tokenUrl);
+  const endpoint = tokenEndpointRefresh({
+    origin: token.origin, path: `${token.pathname}${token.search}`, clientId: client.clientId, clientSecret: client.clientSecret, fetch: opts.fetch,
+  });
+  const now = opts.now ?? Date.now;
+  const refresh: RefreshFn = async (refreshToken) => {
+    let renewed: Awaited<ReturnType<RefreshFn>>;
+    try {
+      renewed = await endpoint(refreshToken);
+    } catch (e) {
+      if (e instanceof OAuthClientRejectedError) {
+        await recordClientRejection(opts.engine, { provider: provider.id, clientId: client.clientId, error: e, now: new Date(now()) });
+      }
+      throw e;
+    }
+    await clearClientHold(opts.engine, provider.id);
+    return renewed;
+  };
   return createTokenProvider({
     engine: opts.engine,
     accountId: opts.accountId,
     store: vaultCredentialStore(opts.engine, opts.kek),
-    refresh: tokenEndpointRefresh({
-      origin: token.origin, path: `${token.pathname}${token.search}`, clientId: client.clientId, clientSecret: client.clientSecret, fetch: opts.fetch,
-    }),
+    refresh,
     onSecret: opts.secret,
     ...(opts.now ? { now: opts.now } : {}),
   });
@@ -231,6 +249,10 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
             if (result.status === "success" || result.status === "nothing_new") await markAccountSynced(engine, id);
             await recordAccountRun(engine, id, result, new Date(now()));
           },
+          // An API key has no app to refuse.
+          ...(opts.providers.get(account.provider)
+            ? { clientHeld: async (a: SyncAccount) => clientHeld(engine, a.provider, (await renewalApp({ engine, env }, a.provider))?.clientId ?? null, new Date(now())) }
+            : {}),
         },
         onUpstreamDelete: async (st, item) => {
           if (item.pageSlug === null) return;

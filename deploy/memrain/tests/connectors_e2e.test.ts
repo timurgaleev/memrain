@@ -31,6 +31,8 @@ import { CONNECTOR_SYNC_JOB_KIND } from "../src/core/jobs/kinds.ts";
 import { _resetHandlersForTesting, getHandler } from "../src/core/jobs/handlers.ts";
 import { Queue } from "../src/core/jobs/queue.ts";
 import { enqueueDueDaemons } from "../src/core/daemons/scheduler.ts";
+import { listNotifications, syncNotifications } from "../src/core/notifications/store.ts";
+import { handleAdminConnectors } from "../src/http/admin-connectors.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import type { Storage } from "../src/core/storage.ts";
 import { deterministicEmbed } from "./det-embed.ts";
@@ -58,6 +60,9 @@ interface World {
   cursor: string;
   refuseRefresh: boolean;
   apiCalls: number;
+  /** The token endpoint refuses the app itself, as for an expired client secret. */
+  refuseClient?: boolean;
+  refreshCalls?: number;
 }
 
 const meeting = (): MeetingTranscript => ({
@@ -102,8 +107,12 @@ function providerFetch(world: World): FetchFn {
   const auth = fakeProvider({ grantedScope: "openid meetings.read" });
   return async (url, init) => {
     const body = typeof init.body === "string" ? new URLSearchParams(init.body) : null;
+    if (url === "https://auth.provider.test/token" && body?.get("grant_type") === "refresh_token") world.refreshCalls = (world.refreshCalls ?? 0) + 1;
     if (url === "https://auth.provider.test/token" && body?.get("grant_type") === "refresh_token" && world.refuseRefresh) {
       return Response.json({ error: "invalid_grant" }, { status: 400 });
+    }
+    if (url === "https://auth.provider.test/token" && body?.get("grant_type") === "refresh_token" && world.refuseClient === true) {
+      return Response.json({ error: "invalid_client", error_codes: [7000222] }, { status: 401 });
     }
     if (url.startsWith(`${API}/v1/meetings`)) {
       world.apiCalls++;
@@ -266,6 +275,58 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
 
       // A paused account gives the scheduler nothing to queue.
       expect((await tick(db.storage, new Date(T0.getTime() + 2 * WINDOW_MS))).queued).toEqual([]);
+    } finally { await db.close(); }
+  });
+
+  it("holds a refused OAuth app's accounts with one notification and no reconnect, until the app's current secret is saved", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      const world: World = { meetings: [meeting()], deleted: [], cursor: "c1", refuseRefresh: false, apiCalls: 0 };
+      const account = await connect(db.storage, world);
+      await tick(db.storage, T0);
+
+      // The access token has expired, and the app's client secret with it.
+      await storeCredential(e, kek, account, { access_token: "expired-access-token-0000", refresh_token: "live-refresh-token-0000" },
+        { scopes: ["openid", "meetings.read"], expiresAt: new Date(T0.getTime() - 3_600_000) });
+      world.refuseClient = true;
+      world.refreshCalls = 0;
+      const calls = world.apiCalls;
+      const refused = await tick(db.storage, new Date(T0.getTime() + WINDOW_MS));
+      expect((refused.results[0]!.accounts as Array<{ status: string; stop_reason: string }>)[0]).toMatchObject({ status: "partial", stop_reason: "client_rejected" });
+      // One refusal ends the run: the app is not asked again for the next request.
+      expect(world.refreshCalls).toBe(1);
+      expect(world.apiCalls).toBe(calls);
+      // No reconnect fixes an app, so the account keeps its state and asks the owner for nothing.
+      expect(await getAccount(e, account.id)).toMatchObject({ status: "active", enabled: true });
+      expect(await count(e, `SELECT count(*)::int AS n FROM connector_notices WHERE account_id = $1 AND resolved_at IS NULL`, [account.id])).toBe(0);
+      await syncNotifications(e);
+      expect((await listNotifications(e)).map(n => [n.kind, n.ref])).toEqual([["oauth_client_rejected", "test"]]);
+
+      // While the app is held, a run asks the provider nothing, and the notification stays the one.
+      const held = await tick(db.storage, new Date(T0.getTime() + 2 * WINDOW_MS));
+      expect((held.results[0]!.accounts as Array<{ stop_reason: string }>)[0]!.stop_reason).toBe("client_rejected");
+      expect(world.refreshCalls).toBe(1);
+      await syncNotifications(e);
+      expect(await listNotifications(e)).toHaveLength(1);
+
+      // The owner saves the app's new secret: the hold and the notification end, and the next run renews and syncs.
+      world.refuseClient = false;
+      const providers = new ProviderRegistry();
+      providers.register(provider());
+      const save = new Request("https://brain.example.test/admin/api/connectors/test/client", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client_id: "env-client-id", client_secret: "new-client-secret-value" }),
+      });
+      const saved = await handleAdminConnectors(save, new URL(save.url), {
+        storage: db.storage, publicUrl: "https://brain.example.test", adminSessionId: () => SESSION,
+        status: () => ({ enabled: true, kekId: kek.id, reason: null }), kek: () => kek, providers, fetch: providerFetch(world), env: ENV,
+      });
+      expect(saved!.status).toBe(200);
+      await syncNotifications(e);
+      expect(await listNotifications(e)).toEqual([]);
+      const resumed = await tick(db.storage, new Date(T0.getTime() + 3 * WINDOW_MS));
+      expect(["success", "nothing_new"]).toContain((resumed.results[0]!.accounts as Array<{ status: string }>)[0]!.status);
+      expect(world.refreshCalls).toBe(2);
     } finally { await db.close(); }
   });
 

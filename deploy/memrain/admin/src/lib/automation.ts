@@ -80,6 +80,17 @@ export interface ConnectorProviderView {
   tenant_default: string | null;
   /** Whether a disconnect can withdraw the grant at the provider. */
   can_revoke: boolean;
+  /** The provider refused its OAuth app on a renewal; null when it did not, or the app was saved since. */
+  client_rejected?: ClientRejectedView | null;
+}
+
+export interface ClientRejectedView {
+  reason: "invalid_client" | "unauthorized_client";
+  /** Microsoft's AADSTS number, when it sent one. */
+  service_code: number | null;
+  since: string;
+  /** Until then the provider's accounts do not try again. */
+  held_until: string;
 }
 
 export interface SourceView {
@@ -155,6 +166,22 @@ export function tenantFromForm(choice: TenantChoice, typed: string): string | nu
   if (TENANT_ID_RE.test(t)) return t;
   const labels = t.split(".");
   return t.length <= 253 && labels.length >= 2 && labels.every((l) => DOMAIN_LABEL_RE.test(l)) ? t : null;
+}
+
+/**
+ * What a provider's refusal of its OAuth app means and how the owner fixes
+ * it: a new secret for the same app, never a reconnect. Null when nothing
+ * was refused.
+ */
+export function clientRejectedNote(provider: string, rejected: ClientRejectedView | null | undefined): string | null {
+  if (!rejected) return null;
+  const name = providerLabel(provider);
+  const code = rejected.service_code === null ? rejected.reason : `${rejected.reason}, AADSTS${rejected.service_code}`;
+  const cause = rejected.reason === "invalid_client"
+    ? "its client secret has expired or is wrong, or the app was deleted"
+    : "it does not know the app, or the app may not renew this access (check the client ID and tenant, and that the app is still enabled)";
+  return `${name} refused your app when renewing access (${code}): ${cause}. Create a new client secret for the app, then save it with the same client ID below, under Use your own OAuth app. `
+    + `No reconnect is needed: every ${name} account syncs again once it is saved. Until then they try once an hour.`;
 }
 
 /**

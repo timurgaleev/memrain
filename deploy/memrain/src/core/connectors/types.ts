@@ -90,6 +90,20 @@ export class ProviderCannotSyncError extends Error {
   }
 }
 
+/**
+ * The token endpoint refused the OAuth app itself (`invalid_client`: a wrong
+ * or expired client secret, an unknown app; `unauthorized_client`: an app the
+ * tenant does not know, or one that may not renew this token). No reconnect
+ * fixes it and every account of the app fails alike, so it is the operator's
+ * to fix: save the app's current secret, or the right app.
+ */
+export class OAuthClientRejectedError extends Error {
+  constructor(readonly code: "invalid_client" | "unauthorized_client", readonly serviceCode: number | null = null) {
+    super(`the provider refused the OAuth app (${code}${serviceCode === null ? "" : `, code ${serviceCode}`})`);
+    this.name = "OAuthClientRejectedError";
+  }
+}
+
 export class ReauthRequiredError extends Error {
   constructor(message: string) {
     super(message);

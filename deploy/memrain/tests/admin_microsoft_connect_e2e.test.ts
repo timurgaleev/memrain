@@ -167,6 +167,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       tenant_default: "common",
       can_revoke: false,
       consent_urls: ["https://myapplications.microsoft.com", "https://account.microsoft.com/privacy/app-access"],
+      client_rejected: null,
     });
     expect(report.providers.find((p) => p.id === "google")).toMatchObject({ tenant_default: null, consent_urls: [] });
 
