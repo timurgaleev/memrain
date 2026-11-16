@@ -65,6 +65,22 @@ marked; this section is the one that stands.
   Code callers without a visible starting definition retain the stricter
   identity boundary.
 
+## Follow-ups from the 1.19 merge review
+
+- **Connector pages larger than the daily item cap (calendar, Fireflies).**
+  The sync engine stops part-way through a page when the account's daily item
+  cap or `MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN` runs out, keeps the old
+  checkpoint, and replays the same items the next day. Gmail bounds its page by
+  both limits; Google Calendar asks for 250 events per page and Fireflies for 25,
+  so an account capped below that never moves past its first page. Fix in the
+  engine: pass the remaining item budget to `SyncAdapter.page` as a page-size
+  hint, and test each adapter with a cap below its page size.
+- **Shadow ranking compares before the final trim.** `startShadow` in
+  `search/hybrid.ts` compares the shadow list with the organic list before the
+  graph rerank and the token-budget trim, so `search stats` can record a
+  first-result comparison for a hit the caller never received. Compare at the
+  point the caller's list is final; keep `eval bench` snapshot identical.
+
 ## Follow-ups from the 1.16 batch
 
 - OAuth callers on `/mcp` are treated as non-public, so an unexpected error
