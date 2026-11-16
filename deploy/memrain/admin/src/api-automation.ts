@@ -29,14 +29,14 @@ export const automationApi = {
   connectors: () => call<ConnectorsReport>("/admin/api/connectors"),
   startConnect: (providerId: string, sourceId: string, services: string[]) =>
     call<{ authorize_url: string; expires_at: string }>(provider(providerId, "start"), post({ source_id: sourceId, services })),
-  saveClient: (providerId: string, clientId: string, clientSecret: string) =>
-    call<{ ok: true }>(provider(providerId, "client"), post({ client_id: clientId, client_secret: clientSecret })),
+  saveClient: (providerId: string, clientId: string, clientSecret: string, tenant?: string) =>
+    call<{ ok: true }>(provider(providerId, "client"), post({ client_id: clientId, client_secret: clientSecret, ...(tenant ? { tenant } : {}) })),
   deleteClient: (providerId: string) => call<{ ok: true; deleted: boolean }>(provider(providerId, "client/delete"), post()),
   saveApiKey: (providerId: string, sourceId: string, services: string[], apiKey: string) =>
     call<{ ok: true }>(provider(providerId, "key"), post({ source_id: sourceId, services, api_key: apiKey })),
   setSync: (id: string, on: boolean) => call<{ ok: true; enabled: boolean }>(account(id, on ? "enable" : "disable"), post()),
   disconnect: (id: string, confirmLabel: string) =>
-    call<{ ok: true; revoked: boolean; credential_kept: boolean }>(account(id, "disconnect"), post({ confirm_label: confirmLabel })),
+    call<{ ok: true; revoked: boolean; credential_kept: boolean; consent_urls?: string[] }>(account(id, "disconnect"), post({ confirm_label: confirmLabel })),
   preview: (id: string) => call<DataPreview>(account(id, "preview")),
   deleteData: (id: string, confirmLabel: string, planHash: string) =>
     call<{ ok: true; deleted: number; changed: number }>(account(id, "delete-data"), post({ confirm_label: confirmLabel, plan_hash: planHash })),

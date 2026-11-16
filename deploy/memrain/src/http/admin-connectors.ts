@@ -39,7 +39,7 @@ import {
 } from "../core/connectors/google/calendar.ts";
 import { connectorRuntime, toSyncAccount } from "../core/connectors/runtime.ts";
 import { ReauthRequiredError } from "../core/connectors/types.ts";
-import { deleteOAuthClient, listOAuthClients, setOAuthClient } from "../core/connectors/oauth-clients.ts";
+import { deleteOAuthClient, isTenant, listOAuthClients, setOAuthClient } from "../core/connectors/oauth-clients.ts";
 import { deleteAllConnectorData, previewConnectorData } from "../core/connectors/retention.ts";
 import {
   confirmHeldDeletes,
@@ -181,6 +181,9 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
           service_kinds: serviceKinds(pr.services),
           auth: "oauth",
           callback_uri: callbackUri(deps.publicUrl, pr.id),
+          // A provider whose endpoints name a directory tenant takes one with its own app.
+          tenant_default: pr.tenant?.default ?? null,
+          consent_urls: [...(pr.consentUrls ?? [])],
         })),
         ...deps.providers.listApiKey().map((pr) => ({
           id: pr.id,
@@ -188,11 +191,13 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
           service_kinds: serviceKinds(pr.services),
           auth: "api_key",
           callback_uri: null,
+          tenant_default: null,
+          consent_urls: [],
         })),
       ],
       sources: (await listSources(engine)).map((s) => ({ id: s.id, kind: s.kind })),
       accounts: await Promise.all(accounts.map((a) => describeAccount(engine, a, notices, statuses.get(a.id)))),
-      clients: await listOAuthClients(engine),
+      clients: await listOAuthClients(engine, st.enabled ? deps.kek() ?? undefined : undefined),
     });
   }
 
@@ -223,16 +228,23 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
   if (action === "key") return saveKey(provider, body, deps);
 
   if (action === "client") {
-    if (!deps.providers.get(provider)) return json({ error: "unknown_provider" }, 400);
+    const target = deps.providers.get(provider);
+    if (!target) return json({ error: "unknown_provider" }, 400);
     if (typeof body.client_id !== "string" || typeof body.client_secret !== "string") {
       return json({ error: "client_id and client_secret are required" }, 400);
     }
+    // A tenant only means something to a provider whose endpoints name one; empty keeps its default.
+    const tenant = typeof body.tenant === "string" ? body.tenant.trim() : body.tenant;
+    if (tenant !== undefined && tenant !== null && tenant !== "" && (target.tenant === undefined || !isTenant(tenant))) {
+      return json({ error: "invalid_tenant" }, 400);
+    }
+    const settings = typeof tenant === "string" && tenant !== "" ? { tenant } : {};
     try {
-      await setOAuthClient(deps.storage.engine(), deps.kek()!, provider, body.client_id, body.client_secret);
+      await setOAuthClient(deps.storage.engine(), deps.kek()!, provider, body.client_id, body.client_secret, settings);
     } catch {
       return json({ error: "invalid client" }, 400);
     }
-    return json({ ok: true, provider, client_id: body.client_id });
+    return json({ ok: true, provider, client_id: body.client_id, ...settings });
   }
 
   const session = deps.adminSessionId(req);
@@ -331,7 +343,9 @@ async function accountAction(req: Request, id: string, action: string, deps: Adm
         if (!confirmsAccount(await readBody(req), account)) return json({ error: "confirm_mismatch" }, 400);
         if (!deps.status().enabled || deps.kek() === null) return disabled(deps);
         const r = await disconnectAccount(connectDeps(deps), id);
-        return json({ ok: true, revoked: r.revoked, credential_kept: r.credentialKept });
+        // A provider Memrain cannot revoke at keeps the consent; say where the owner withdraws it.
+        const consentUrls = deps.providers.get(account.provider)?.consentUrls;
+        return json({ ok: true, revoked: r.revoked, credential_kept: r.credentialKept, ...(consentUrls ? { consent_urls: [...consentUrls] } : {}) });
       }
       case "delete-data": {
         const body = await readBody(req);

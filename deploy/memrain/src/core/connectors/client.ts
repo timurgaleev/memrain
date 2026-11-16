@@ -116,6 +116,12 @@ async function readBody(res: Response, maxBytes: number | undefined): Promise<st
   return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
+/** A response body as text, or null past `maxBytes`, read without buffering more than that. */
+export async function readTextCapped(res: Response, maxBytes: number): Promise<string | null> {
+  const text = await readBody(res, maxBytes);
+  return text === TOO_LARGE ? null : text;
+}
+
 /** A path or pagination link the client refuses to request. */
 export class ConnectorRequestError extends Error {}
 

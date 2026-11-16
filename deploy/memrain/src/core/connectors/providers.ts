@@ -22,6 +22,8 @@ import type { SourceKind } from "../sources.ts";
 import type { SyncAccount, SyncAdapter } from "./sync-engine.ts";
 import { assertConnectorName } from "./accounts.ts";
 import { googleProvider } from "./google/provider.ts";
+import { microsoftProvider } from "./microsoft/provider.ts";
+import { isTenant } from "./oauth-clients.ts";
 
 export interface ProviderService {
   /** Read-only scopes this service needs. */
@@ -33,6 +35,9 @@ export interface ProviderService {
   /** Minimum gap between two requests of one account to this service, in ms (the client's default otherwise). */
   minSpacingMs?: number;
 }
+
+/** Connect errors a provider can name from its own refusal. */
+export type ProviderConnectError = "admin_consent_required";
 
 export interface RevokeContext {
   fetch: FetchFn;
@@ -66,6 +71,29 @@ export interface ConnectorProvider {
    * hold, so the grant equals the request and the exact-scope check holds.
    */
   combinedGrants?: boolean;
+  /**
+   * The provider names a directory tenant in its endpoint paths (Microsoft):
+   * `{tenant}` in authorizeUrl and tokenUrl is filled from the OAuth client's
+   * tenant, else `default`.
+   */
+  tenant?: { default: string };
+  /**
+   * Scopes the provider may leave out of a grant, or add to it, without
+   * changing what the grant allows (Microsoft's OpenID Connect scopes). The
+   * exact-scope check ignores them on both sides.
+   */
+  optionalGrantScopes?: readonly string[];
+  /**
+   * Every new grant carries all the scopes the user already consented to for
+   * this client, and Memrain cannot withdraw that consent (Microsoft has no
+   * revocation for a delegated grant). A grant may then hold other services'
+   * read-only scopes of this provider on top of the request.
+   */
+  grantIncludesPriorConsent?: boolean;
+  /** A clearer connect error for a refused code exchange, read from the provider's error body. */
+  tokenErrorCode?: (body: Record<string, unknown>) => ProviderConnectError | null;
+  /** Where the owner withdraws the app's consent, for a provider Memrain cannot revoke at. */
+  consentUrls?: readonly string[];
   /** Separator of the token response's `scope` field (a space by default). */
   scopeSeparator?: string;
   /** Map a granted scope onto the spelling that was requested. */
@@ -110,6 +138,18 @@ function assertHttps(url: string, what: string, id: string): void {
   if (parsed.username || parsed.password || parsed.hash) throw new Error(`provider ${id}: ${what} must not carry credentials or a fragment`);
 }
 
+/**
+ * The authorize and token endpoints for one OAuth client. A provider with a
+ * tenant segment takes the client's tenant, else its default; an invalid one
+ * throws rather than reach a URL.
+ */
+export function oauthEndpoints(provider: ConnectorProvider, tenant?: string | null): { authorizeUrl: string; tokenUrl: string } {
+  if (!provider.tenant) return { authorizeUrl: provider.authorizeUrl, tokenUrl: provider.tokenUrl };
+  const t = tenant ?? provider.tenant.default;
+  if (!isTenant(t)) throw new Error(`provider ${provider.id}: invalid tenant`);
+  return { authorizeUrl: provider.authorizeUrl.replace("{tenant}", t), tokenUrl: provider.tokenUrl.replace("{tenant}", t) };
+}
+
 export class ProviderRegistry {
   private readonly providers = new Map<string, ConnectorProvider>();
   private readonly keyed = new Map<string, ApiKeyProvider>();
@@ -117,6 +157,14 @@ export class ProviderRegistry {
   register(provider: ConnectorProvider): void {
     assertConnectorName(provider.id, "provider");
     if (this.providers.has(provider.id) || this.keyed.has(provider.id)) throw new Error(`provider ${provider.id} is already registered`);
+    if (provider.tenant) {
+      for (const [what, url] of [["authorizeUrl", provider.authorizeUrl], ["tokenUrl", provider.tokenUrl]] as const) {
+        if (url.split("{tenant}").length !== 2) throw new Error(`provider ${provider.id}: ${what} must hold {tenant} once`);
+      }
+      const resolved = oauthEndpoints(provider);
+      assertHttps(resolved.authorizeUrl, "authorizeUrl", provider.id);
+      assertHttps(resolved.tokenUrl, "tokenUrl", provider.id);
+    }
     assertHttps(provider.authorizeUrl, "authorizeUrl", provider.id);
     assertHttps(provider.tokenUrl, "tokenUrl", provider.id);
     if (provider.revokeUrl !== undefined) assertHttps(provider.revokeUrl, "revokeUrl", provider.id);
@@ -162,6 +210,7 @@ export class ProviderRegistry {
 export function builtinProviders(): ProviderRegistry {
   const registry = new ProviderRegistry();
   registry.register(googleProvider());
+  registry.register(microsoftProvider());
   registry.registerApiKey(firefliesProvider());
   return registry;
 }

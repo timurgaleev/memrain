@@ -30,7 +30,7 @@ import { recordLoopThread } from "../loops/store.ts";
 import { limiterFor } from "./limiter.ts";
 import { accountRef, type ConnectorDataKind } from "./model.ts";
 import { resolveClient } from "./oauth-connect.ts";
-import { builtinProviders, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
+import { builtinProviders, oauthEndpoints, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
 import { softDeleteUpstreamPage, sweepRetention } from "./retention.ts";
 import type { SyncAccount, SyncDeps } from "./sync-engine.ts";
 import { registerConnectorSync, type ConnectorSyncRuntime } from "./sync-job.ts";
@@ -132,6 +132,41 @@ function serviceApi(provider: ConnectorProvider, account: SyncAccount, fallback:
   return { origin: origins[0] ?? fallback, ...(spacing.length > 0 ? { minSpacingMs: Math.max(...spacing) } : {}) };
 }
 
+export interface OAuthTokenSourceOptions {
+  engine: Engine;
+  kek: Kek;
+  providers: ProviderRegistry;
+  provider: string;
+  accountId: string;
+  fetch: FetchFn;
+  env: NodeJS.ProcessEnv;
+  /** Hands each live token to the run's secret scanner. */
+  secret: (value: string) => void;
+  now?: () => number;
+}
+
+/**
+ * An OAuth account's token, renewed at the provider's token endpoint for the
+ * account's OAuth client (and that client's tenant, for a provider whose
+ * endpoints name one), with the vault as its store.
+ */
+export async function oauthTokenSource(opts: OAuthTokenSourceOptions): Promise<TokenSource> {
+  const provider = opts.providers.get(opts.provider);
+  if (!provider) throw new ProviderCannotSyncError(opts.provider);
+  const client = await resolveClient({ engine: opts.engine, kek: opts.kek, providers: opts.providers, fetch: opts.fetch, env: opts.env }, opts.kek, provider.id);
+  const token = new URL(oauthEndpoints(provider, client.tenant).tokenUrl);
+  return createTokenProvider({
+    engine: opts.engine,
+    accountId: opts.accountId,
+    store: vaultCredentialStore(opts.engine, opts.kek),
+    refresh: tokenEndpointRefresh({
+      origin: token.origin, path: `${token.pathname}${token.search}`, clientId: client.clientId, clientSecret: client.clientSecret, fetch: opts.fetch,
+    }),
+    onSecret: opts.secret,
+    ...(opts.now ? { now: opts.now } : {}),
+  });
+}
+
 export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions): ConnectorSyncRuntime {
   const engine = storage.engine();
   const env = opts.env ?? process.env;
@@ -156,18 +191,10 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
     if (!provider || !sync) throw new ProviderCannotSyncError(account.provider);
     return {
       adapter: sync.adapter(account, { env, ...(opts.now ? { now: opts.now } : {}) }),
-      tokenSource: async (_account, secret) => {
-        const client = await resolveClient({ engine, kek: opts.kek, providers: opts.providers, fetch: fetchFn, env }, opts.kek, provider.id);
-        const token = new URL(provider.tokenUrl);
-        return createTokenProvider({
-          engine,
-          accountId: account.id,
-          store: vaultCredentialStore(engine, opts.kek),
-          refresh: tokenEndpointRefresh({ origin: token.origin, path: `${token.pathname}${token.search}`, ...client, fetch: fetchFn }),
-          onSecret: secret,
-          ...(opts.now ? { now: opts.now } : {}),
-        });
-      },
+      tokenSource: async (_account, secret) => oauthTokenSource({
+        engine, kek: opts.kek, providers: opts.providers, provider: provider.id, accountId: account.id, fetch: fetchFn, env, secret,
+        ...(opts.now ? { now: opts.now } : {}),
+      }),
       client: (_a, tokenSource) => {
         const { origin, minSpacingMs } = serviceApi(provider, account, sync.apiOrigin);
         const limiter = minSpacingMs === undefined

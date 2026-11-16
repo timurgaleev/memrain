@@ -31,7 +31,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Engine } from "../engine/interface.ts";
 import { getSource } from "../sources.ts";
-import type { FetchFn } from "./client.ts";
+import { readTextCapped, type FetchFn } from "./client.ts";
 import {
   assertConnectorName,
   cleanLabel,
@@ -43,11 +43,11 @@ import {
   type ConnectorAccount,
   type TokenSet,
 } from "./accounts.ts";
-import { getOAuthClient } from "./oauth-clients.ts";
+import { getOAuthClient, isTenant, type OAuthClient } from "./oauth-clients.ts";
 import { resolveNotice } from "./sync-store.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import { refreshLockId } from "./token-provider.ts";
-import type { ConnectorProvider, ProviderRegistry } from "./providers.ts";
+import { oauthEndpoints, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
 import { oauthStateAad, seal, unseal, type Kek } from "./vault.ts";
 
 export const OAUTH_STATE_TTL_MS = 10 * 60_000;
@@ -80,7 +80,8 @@ export type ConnectErrorCode =
   | "identity"
   | "identity_not_revoked"
   | "account_not_found"
-  | "refresh_in_progress";
+  | "refresh_in_progress"
+  | "admin_consent_required";
 
 const MESSAGES: Record<ConnectErrorCode, string> = {
   connectors_disabled: "connectors are off or the connector key is missing",
@@ -104,6 +105,7 @@ const MESSAGES: Record<ConnectErrorCode, string> = {
   identity_not_revoked: "could not read the connected account's identity; the grant was left in place, because a connected account may share it",
   account_not_found: "connector account not found",
   refresh_in_progress: "a worker is renewing this account's token; try the disconnect again shortly",
+  admin_consent_required: "the account's organization requires an administrator to approve this app before it can connect",
 };
 
 export class ConnectError extends Error {
@@ -198,16 +200,23 @@ async function heldCompanionServices(engine: Engine, provider: ConnectorProvider
     .filter((s) => !services.includes(s) && provider.services[s]!.scopes.every((scope) => held.has(scope)));
 }
 
-/** The provider's OAuth client: the stored bring-your-own one, else the environment's. */
-export async function resolveClient(deps: ConnectDeps, kek: Kek, provider: string): Promise<{ clientId: string; clientSecret: string }> {
+/**
+ * The provider's OAuth client: the stored bring-your-own one (with the tenant
+ * saved beside it), else the environment's, whose tenant is
+ * `MEMRAIN_<PROVIDER>_OAUTH_TENANT`. An environment tenant that is not one
+ * counts as no client: the endpoints could not be built from it.
+ */
+export async function resolveClient(deps: ConnectDeps, kek: Kek, provider: string): Promise<OAuthClient> {
   const stored = await getOAuthClient(deps.engine, kek, provider);
   if (stored) return stored;
   const env = deps.env ?? process.env;
   const key = provider.toUpperCase();
   const clientId = env[`MEMRAIN_${key}_OAUTH_CLIENT_ID`]?.trim() ?? "";
   const clientSecret = env[`MEMRAIN_${key}_OAUTH_CLIENT_SECRET`]?.trim() ?? "";
+  const tenant = env[`MEMRAIN_${key}_OAUTH_TENANT`]?.trim() ?? "";
   if (clientId === "" || clientSecret === "") throw new ConnectError("no_client");
-  return { clientId, clientSecret };
+  if (tenant !== "" && !isTenant(tenant)) throw new ConnectError("no_client");
+  return { clientId, clientSecret, ...(tenant !== "" ? { tenant } : {}) };
 }
 
 export interface StartConnectInput {
@@ -255,7 +264,7 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
       sealed.ciphertext, scopes, services, input.redirectUri, new Date(now).toISOString(), expiresAt],
   );
 
-  const url = new URL(provider.authorizeUrl);
+  const url = new URL(oauthEndpoints(provider, client.tenant).authorizeUrl);
   for (const [k, v] of Object.entries(provider.authorizeParams ?? {})) url.searchParams.set(k, v);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", client.clientId);
@@ -308,8 +317,8 @@ async function consumeState(deps: ConnectDeps, state: unknown, provider: string,
 }
 
 async function readProviderJson(res: Response): Promise<Record<string, unknown> | null> {
-  const text = await res.text();
-  if (text.length > MAX_PROVIDER_BODY) return null;
+  const text = await readTextCapped(res, MAX_PROVIDER_BODY);
+  if (text === null) return null;
   try {
     const v = JSON.parse(text) as unknown;
     return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -404,7 +413,7 @@ export async function completeConnect(
 
   let res: Response;
   try {
-    res = await fetch(provider.tokenUrl, {
+    res = await fetch(oauthEndpoints(provider, client.tenant).tokenUrl, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
       body: new URLSearchParams({
@@ -421,16 +430,27 @@ export async function completeConnect(
   } catch {
     throw new ConnectError("token_exchange", { status: 0 });
   }
-  const body = res.ok ? await readProviderJson(res) : null;
-  if (!res.ok || !body) throw new ConnectError("token_exchange", { status: res.status });
+  const body = await readProviderJson(res).catch(() => null);
+  if (!res.ok) {
+    // The provider may say why (a work tenant that needs an admin's approval); only its own mapping is trusted.
+    if (body && provider.tokenErrorCode?.(body) === "admin_consent_required") throw new ConnectError("admin_consent_required", { status: res.status });
+    throw new ConnectError("token_exchange", { status: res.status });
+  }
+  if (!body) throw new ConnectError("token_exchange", { status: res.status });
   const accessToken = body.access_token;
   if (typeof accessToken !== "string" || accessToken === "") throw new ConnectError("token_exchange", { status: res.status });
   const refreshToken = typeof body.refresh_token === "string" && body.refresh_token !== "" ? body.refresh_token : undefined;
 
   const requested = st.requested_scopes ?? [];
+  // A grant that asked for offline access but came back without a refresh
+  // token would stop syncing within the hour; refuse it instead of storing it.
+  if (requested.includes("offline_access") && refreshToken === undefined) throw new ConnectError("token_exchange", { status: res.status, refresh_token: false });
   const granted = parseScopes(provider, body.scope, requested);
-  const extra = granted.filter((s) => !requested.includes(s)).sort();
-  const missing = requested.filter((s) => !granted.includes(s)).sort();
+  const optional = new Set(provider.optionalGrantScopes ?? []);
+  // Scopes of this provider's services the user consented to earlier, which a grant may carry along.
+  const consented = new Set(provider.grantIncludesPriorConsent === true ? Object.values(provider.services).flatMap((s) => s.scopes) : []);
+  const extra = granted.filter((s) => !requested.includes(s) && !optional.has(s) && !consented.has(s)).sort();
+  const missing = requested.filter((s) => !granted.includes(s) && !optional.has(s)).sort();
   // A request widened by companion services (combinedGrants) may also come
   // back as exactly what the account's own services need: another Google
   // user, whose calendar is not connected here, unticks the calendar box.
