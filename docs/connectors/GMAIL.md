@@ -105,9 +105,9 @@ Reload the Connections page after registering, so it lists the new source.
 
 ### 4. Connect Gmail
 
-1. On the **Connections** page, in the **Google** panel, tick **gmail** under
-   **Read**. Ticking it unticks **calendar**: the two go into sources of
-   different kinds and are connected one at a time.
+1. On the **Connections** page, in the **Google** panel, choose **Gmail**
+   under **Read**. **Google Calendar** and **Gmail** are a single choice: the
+   two go into sources of different kinds and are connected one at a time.
 2. Pick `me-mail` under **Into source** and choose **Connect Google**.
 3. Google opens. Sign in with the test user and allow the access it lists
    (with a calendar connected, that includes your calendar; see
@@ -229,7 +229,7 @@ the brain for the subject of a mail from this week.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| The **Into source** list says "No source fits" with gmail ticked | No `mailbox` source | Step 3, then reload the page |
+| The **Into source** list says "No source fits" with Gmail chosen | No `mailbox` source | Step 3, then reload the page |
 | Back in Memrain, the page reports `scope_mismatch` | The Gmail box was unticked on Google's consent page | Connect again and allow the Gmail access |
 | Back in Memrain, the page reports `scope_mismatch_not_revoked` | A box was unticked on Google's consent page; a Google account is already connected here, so Memrain left the grant in place rather than risk the Calendar's access | Connect again and allow every listed access; the Calendar keeps working meanwhile |
 | Back in Memrain, the page reports `source_kind` | The source picked is not a mailbox | Pick a `mailbox` source |
