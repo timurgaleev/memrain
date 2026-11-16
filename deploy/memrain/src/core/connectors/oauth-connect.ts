@@ -86,7 +86,8 @@ export type ConnectErrorCode =
   | "identity_not_revoked"
   | "account_not_found"
   | "refresh_in_progress"
-  | "admin_consent_required";
+  | "admin_consent_required"
+  | "consent_declined";
 
 const MESSAGES: Record<ConnectErrorCode, string> = {
   connectors_disabled: "connectors are off or the connector key is missing",
@@ -112,6 +113,7 @@ const MESSAGES: Record<ConnectErrorCode, string> = {
   account_not_found: "connector account not found",
   refresh_in_progress: "a worker is renewing this account's token; try the disconnect again shortly",
   admin_consent_required: "the account's organization requires an administrator to approve this app before it can connect",
+  consent_declined: "the provider says consent was not given: the owner cancelled, or asked an administrator to approve the app first",
 };
 
 export class ConnectError extends Error {
@@ -525,9 +527,8 @@ export async function completeConnect(
   if (input.error !== undefined && input.error !== null && input.error !== "") {
     const reason = typeof input.error === "string" && /^[a-z_]{1,64}$/.test(input.error) ? input.error : "unknown";
     const description = typeof input.errorDescription === "string" ? input.errorDescription.slice(0, MAX_ERROR_DESCRIPTION) : null;
-    if (provider.callbackErrorCode?.({ error: reason, description }) === "admin_consent_required") {
-      throw new ConnectError("admin_consent_required", { error: reason });
-    }
+    const named = provider.callbackErrorCode?.({ error: reason, description }) ?? null;
+    if (named !== null) throw new ConnectError(named, { error: reason });
     throw new ConnectError("provider_denied", { error: reason });
   }
   if (typeof input.code !== "string" || input.code === "" || input.code.length > MAX_CODE || !/^[\x21-\x7E]+$/.test(input.code)) {

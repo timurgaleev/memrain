@@ -257,16 +257,21 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       ["access_denied", "AADSTS65001: The user or administrator has not consented to use the application with ID '11111111-2222-3333-4444-a55555555555'."],
       ["consent_required", "AADSTS90094: The grant requires admin permission."],
       ["access_denied", "AADSTS90095: An administrator must review and approve this request."],
+      ["access_denied", "AADSTS90093: An administrator of Contoso has set a policy that prevents you from granting the app the permissions it is requesting."],
+      // An app Microsoft deems risky: only an administrator may consent to it.
+      ["access_denied", "AADSTS900941: Administrator consent is required. App is considered risky. (AdminConsentRequiredDueToRiskyApp)"],
+      ["access_denied", "AADSTS900981: An admin consent request was received for a risky app. (AdminConsentRequestRiskyAppWarning)"],
     ] as const) {
       const done = await refusedAtCallback(b, { error, error_description: description });
       expect(done.status).toBe(303);
       expect(done.headers.get("location")).toBe("/admin/?connector_error=admin_consent_required#connections");
     }
-    // The owner's own Cancel, and a description that only mentions a code, stay a plain refusal.
-    for (const description of ["AADSTS65004: User declined to consent to access the app.", "the user canceled; see AADSTS65001 in the docs"]) {
-      const done = await refusedAtCallback(b, { error: "access_denied", error_description: description });
-      expect(done.headers.get("location")).toBe("/admin/?connector_error=provider_denied#connections");
-    }
+    // A Cancel, or the "Back to app" after asking an administrator for approval: both arrive as 65004.
+    const declined = await refusedAtCallback(b, { error: "access_denied", error_description: "AADSTS65004: User declined to consent to access the app." });
+    expect(declined.headers.get("location")).toBe("/admin/?connector_error=consent_declined#connections");
+    // A description that only mentions a code stays a plain refusal.
+    const mentioned = await refusedAtCallback(b, { error: "access_denied", error_description: "the user canceled; see AADSTS65001 in the docs" });
+    expect(mentioned.headers.get("location")).toBe("/admin/?connector_error=provider_denied#connections");
     const { accounts } = await (await b.send("/admin/api/connectors", { headers: SPA })).json() as { accounts: unknown[] };
     expect(accounts).toEqual([]);
     // Nothing was exchanged at the token endpoint.

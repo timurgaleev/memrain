@@ -43,7 +43,10 @@
  * instead (`access_denied` or `consent_required`); that response carries
  * only `error` and `error_description`, no numeric `error_codes`
  * (v2-oauth2-auth-code-flow, "Error response"), so the code is read from the
- * `AADSTS<n>:` the description opens with, never from its prose.
+ * `AADSTS<n>:` the description opens with, never from its prose. AADSTS65004
+ * there is `consent_declined`: a Cancel, or the end of a request for an
+ * administrator's approval. Microsoft says its codes can change, so they
+ * only choose a clearer message; any other code is a plain refusal.
  */
 import { readTextCapped, type FetchFn } from "../client.ts";
 import type { ConnectorProvider, ProviderConnectError, ProviderIdentity } from "../providers.ts";
@@ -62,8 +65,20 @@ export const MICROSOFT_CALENDARS_READ = "Calendars.Read";
 const GRAPH_RESOURCE = `${GRAPH_API_ORIGIN}/`;
 const OIDC_SCOPES = ["openid", "email", "profile", "offline_access"] as const;
 const KNOWN_SCOPES = ["User.Read", "Mail.Read", MICROSOFT_CALENDARS_READ, ...OIDC_SCOPES] as const;
-/** DelegationDoesNotExist, AdminConsentRequired, AdminConsentRequiredRequestAccess. */
-const ADMIN_CONSENT_CODES = new Set([65001, 90094, 90095]);
+/**
+ * DelegationDoesNotExist, a tenant policy that keeps consent for an
+ * administrator (90093), AdminConsentRequired, AdminConsentRequiredRequestAccess,
+ * and an app Microsoft deems risky, which only an administrator may consent to
+ * (900941; 900981 with the admin consent workflow on).
+ */
+const ADMIN_CONSENT_CODES = new Set([65001, 90093, 90094, 90095, 900941, 900981]);
+/**
+ * UserDeclinedConsent: the owner chose Cancel, or asked an administrator for
+ * approval and chose "Back to app" afterwards, which Microsoft also answers
+ * with 65004 (learn.microsoft.com/entra/identity/enterprise-apps/
+ * application-sign-in-unexpected-user-consent-error).
+ */
+const DECLINED_CONSENT_CODE = 65004;
 const ME_URL = `${GRAPH_API_ORIGIN}/v1.0/me?$select=id,mail,userPrincipalName`;
 const IDENTITY_TIMEOUT_MS = 15_000;
 const MAX_ME_BYTES = 16 * 1024;
@@ -93,7 +108,10 @@ const LEADING_AADSTS_RE = /^AADSTS(\d{4,6}):/;
 
 function callbackErrorCode(params: { description: string | null }): ProviderConnectError | null {
   const m = LEADING_AADSTS_RE.exec((params.description ?? "").trim());
-  return m !== null && ADMIN_CONSENT_CODES.has(Number(m[1])) ? "admin_consent_required" : null;
+  if (m === null) return null;
+  const code = Number(m[1]);
+  if (ADMIN_CONSENT_CODES.has(code)) return "admin_consent_required";
+  return code === DECLINED_CONSENT_CODE ? "consent_declined" : null;
 }
 
 function address(value: unknown): string | null {

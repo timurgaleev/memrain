@@ -42,7 +42,7 @@ export interface ProviderIdentity {
 }
 
 /** Connect errors a provider can name from its own refusal. */
-export type ProviderConnectError = "admin_consent_required";
+export type ProviderConnectError = "admin_consent_required" | "consent_declined";
 
 export interface RevokeContext {
   fetch: FetchFn;

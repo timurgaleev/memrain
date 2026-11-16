@@ -414,6 +414,7 @@ const CONNECT_ERRORS: Record<string, string> = {
   provider_unavailable: "The provider could not be reached to check the key. Nothing was saved; try again in a minute.",
   delete_incomplete: "Deleting stopped part-way. Preview again and delete what is left.",
   admin_consent_required: "The account's organization lets only an administrator approve this app. Ask your Microsoft 365 admin to grant consent, then connect again.",
+  consent_declined: "Microsoft says the access was not granted. If you chose Cancel, connect again and choose Accept. If you asked an administrator to approve the app, wait until IT has approved it, then choose Connect again.",
 };
 
 /** Copy for an error code the connector routes answer; unknown codes get the fallback, never the code itself. */

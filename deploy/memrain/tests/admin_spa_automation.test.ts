@@ -180,6 +180,14 @@ describe("Microsoft service labels and the tenant field", () => {
     expect(disconnectConsentNote("other", false)).toContain("the provider's own settings");
   });
 
+  it("does not tell an owner who asked an administrator for approval that they cancelled", () => {
+    const declined = connectorErrorCopy("consent_declined");
+    expect(declined).toContain("asked an administrator");
+    expect(declined).toContain("wait until");
+    expect(declined).toContain("choose Accept");
+    expect(connectorErrorCopy("admin_consent_required")).toContain("administrator");
+  });
+
   it("explains a tenant the server refused", () => {
     expect(connectorErrorCopy("invalid_tenant")).toContain("directory ID");
     expect(connectorErrorCopy("tenant_unsupported")).toContain("does not take a tenant");
