@@ -25,6 +25,7 @@ import { readCursor, writeCursor } from "../src/core/connectors/sync-store.ts";
 import { runConnectorSync, type SyncAccount } from "../src/core/connectors/sync-engine.ts";
 import { connectorRuntime } from "../src/core/connectors/runtime.ts";
 import { readAccountRun } from "../src/core/connectors/account-status.ts";
+import { checkDuplicatePages } from "../src/core/doctor-ops.ts";
 import { accountRef, shortHash } from "../src/core/connectors/model.ts";
 import { GOOGLE_CALENDAR_READONLY, googleProvider } from "../src/core/connectors/google/provider.ts";
 import { calendarStream, googleCalendarAdapter, listGoogleCalendars, parsePassCursor, seriesEndedBefore } from "../src/core/connectors/google/calendar.ts";
@@ -344,6 +345,27 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const cursor = await readCursor(e, account.id, calendarStream("primary"));
       expect(cursor).not.toBe(FULL_TOKEN);
       expect(JSON.parse(cursor!)).toMatchObject({ mode: "full", pageToken: PAGE_TOKEN });
+    } finally { await db.close(); }
+  });
+
+  it("two accounts that attend the same meetings store a page each, which doctor does not report as duplicate pages", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const first = await connect(db.storage, world);
+      world.userinfo = { sub: "2", email: "second@example.test", email_verified: true };
+      const second = await connect(db.storage, world);
+      expect((await run(db.storage, world, first.id)).status).toBe("success");
+      expect((await run(db.storage, world, second.id)).status).toBe("success");
+      // Each account keeps its own copy (deletion and retention are fenced by account), so
+      // the same series renders to the same text under two slugs.
+      const shared = await e.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM (SELECT content_hash FROM pages WHERE slug LIKE 'calendar/%' AND deleted_at IS NULL
+           GROUP BY source_id, content_hash HAVING count(*) > 1) g`,
+      );
+      expect(shared.rows[0]!.n).toBeGreaterThan(0);
+      expect(await checkDuplicatePages(e)).toMatchObject({ status: "ok", detail: "no duplicate pages" });
     } finally { await db.close(); }
   });
 
