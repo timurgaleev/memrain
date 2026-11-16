@@ -54,7 +54,7 @@ import { syncItemFromPage } from "../sync-item.ts";
 import type { ConnectorContext, MailMessage, MailThread } from "../model.ts";
 import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
 import type { AdapterContext } from "../providers.ts";
-import { attachmentReceipts, extractBody, isAutoSubmitted, parseAddress, parseAddressList, partHeader, type GmailMimePart } from "./gmail-mime.ts";
+import { attachmentReceipts, calendarMethod, extractBody, isAutoSubmitted, parseAddress, parseAddressList, partHeader, type GmailMimePart } from "./gmail-mime.ts";
 
 /** The account service this adapter syncs. */
 export const GOOGLE_GMAIL_SERVICE = "gmail";
@@ -216,6 +216,9 @@ export function normalizeGmailMessage(m: RawMessage): MailMessage {
     autoSubmitted: isAutoSubmitted(partHeader(p, "Auto-Submitted")),
     precedence: precedence === "" ? null : precedence,
     listId: partHeader(p, "List-Id") !== "",
+    sent: m.labelIds.includes("SENT"),
+    replyTo: parseAddressList(partHeader(p, "Reply-To"), 10).map(a => a.email).filter((a): a is string => a !== null),
+    calendarMethod: calendarMethod(p),
   };
 }
 

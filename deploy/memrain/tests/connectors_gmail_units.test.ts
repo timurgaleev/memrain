@@ -112,6 +112,31 @@ describe("gmail message reading", () => {
     }
     expect(parseGmailCursor(JSON.stringify({ v: 1, historyId: "9", historyPage: null, walk: null }))).toEqual({ v: 1, historyId: "9", historyPage: null, pending: null, floorMs: null, walk: null });
   });
+
+  it("fills the reply-state fields the loop detector reads: SENT, Reply-To and a calendar part's METHOD", () => {
+    const sent = plainMessage("s1", "ts", T0, { From: "Me <alias@other.example>", To: "peer@example.net", Subject: "Plan" }, "Can you check?", ["SENT"]);
+    const news = plainMessage("n1", "tn", T0, { From: "Shop <hello@shop.example>", To: "me@example.test", "Reply-To": "Shop <NoReply@shop.example>", Subject: "Deals" }, "New?");
+    const invite = {
+      ...plainMessage("i1", "ti", T0, { From: "peer@example.net", To: "me@example.test", Subject: "Planning" }, ""),
+      payload: {
+        mimeType: "multipart/mixed",
+        headers: [{ name: "From", value: "peer@example.net" }, { name: "To", value: "me@example.test" }, { name: "Subject", value: "Planning" }],
+        parts: [
+          { mimeType: "multipart/alternative", parts: [
+            { mimeType: "text/plain", body: { data: b64("Can you join?") } },
+            { mimeType: "text/calendar", headers: [{ name: "Content-Type", value: "text/calendar; charset=\"UTF-8\"; method=REQUEST" }], body: { data: b64("BEGIN:VCALENDAR") } },
+          ] },
+          { mimeType: "application/ics", filename: "invite.ics", headers: [{ name: "Content-Type", value: "application/ics; name=\"invite.ics\"" }], body: { attachmentId: "x", size: 10 } },
+        ],
+      },
+    };
+    const plain = plainMessage("p1", "tp", T0, { From: "peer@example.net", To: "me@example.test", Subject: "Hi" }, "Hi?");
+    const one = (raw: RawMessage) => normalizeGmailThread(raw.threadId, [raw])!.thread.messages[0]!;
+    expect(one(sent)).toMatchObject({ sent: true });
+    expect(one(news)).toMatchObject({ sent: false, replyTo: ["noreply@shop.example"] });
+    expect(one(invite)).toMatchObject({ calendarMethod: "REQUEST" });
+    expect(one(plain)).toMatchObject({ sent: false, replyTo: [], calendarMethod: null });
+  });
 });
 
 /**

@@ -130,6 +130,22 @@ export function attachmentReceipts(root: GmailMimePart | undefined): MailAttachm
   return out;
 }
 
+/**
+ * The iCalendar METHOD of the message's first `text/calendar` part, from its
+ * Content-Type `method` parameter (RFC 6047), uppercased; null without one.
+ * Only the header is read: the calendar body is never decoded.
+ */
+export function calendarMethod(root: GmailMimePart | undefined): string | null {
+  for (const { part: p } of walkGmailMime(root)) {
+    const type = partHeader(p, "Content-Type");
+    const mime = (type || (typeof p.mimeType === "string" ? p.mimeType : "")).split(";")[0]!.trim().toLowerCase();
+    if (mime !== "text/calendar") continue;
+    const method = /;\s*method\s*=\s*"?([a-z-]{1,32})"?/i.exec(type);
+    if (method) return method[1]!.toUpperCase();
+  }
+  return null;
+}
+
 /** Split an address header on commas outside quotes and angle brackets. Linear. */
 function splitAddresses(raw: string): string[] {
   const out: string[] = [];
