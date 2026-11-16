@@ -259,7 +259,7 @@ describe("eval qrels build", () => {
     try {
       await s.engine().query(
         `INSERT INTO eval_queries (id, query, k, expected_doc_id, expected_doc_ids, tag, source, split)
-         VALUES ('lab1', 'alpha and beta', 10, 'notes/a.md', $1::jsonb, 'good', 'admin-label', $2)`,
+         VALUES ('lab1', 'alpha and beta', 10, 'notes/a.md', $1::text::jsonb, 'good', 'admin-label', $2)`,
         [JSON.stringify(["notes/a.md", "notes/gone.md", "notes/b.md"]), stored],
       );
     } finally {

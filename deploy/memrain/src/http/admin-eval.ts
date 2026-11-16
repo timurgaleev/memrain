@@ -140,7 +140,7 @@ async function label(engine: Engine, b: Record<string, unknown>): Promise<Respon
   try {
     await engine.query(
       `INSERT INTO eval_queries (id, query, k, expected_doc_id, expected_doc_ids, tag, source, tags, lang, split, candidate_id)
-       VALUES ($1, $2, 10, $3, $4::jsonb, 'good', 'labelled', $5::text[], $6, $7, $8)`,
+       VALUES ($1, $2, 10, $3, $4::text::jsonb, 'good', 'labelled', $5::text[], $6, $7, $8)`,
       [id, target.query, ids[0], JSON.stringify(ids), tags, lang, split, target.candidateId],
     );
   } catch (e) {

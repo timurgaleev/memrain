@@ -14,7 +14,7 @@ async function revertLaterThan(e: Engine, id: number): Promise<void> {
 }
 
 const LABEL = `INSERT INTO eval_queries (id, query, tag, source, tags, lang, split, expected_doc_ids, candidate_id)
-  VALUES ($1, 'who owns the ledger', 'good', 'labelled', $2::text[], $3, $4, $5::jsonb, $6)`;
+  VALUES ($1, 'who owns the ledger', 'good', 'labelled', $2::text[], $3, $4, $5::text::jsonb, $6)`;
 const SHADOW = `INSERT INTO search_telemetry_shadow (date, flag, count, rank1_changed, sum_jaccard5) VALUES ($1, $2, 1, 0, 1)`;
 
 for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`migrations 165-166 (${name})`, () => {
