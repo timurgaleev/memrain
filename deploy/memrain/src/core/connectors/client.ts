@@ -360,11 +360,17 @@ export class ConnectorClient {
         await this.sleep(wait);
         continue;
       }
-      if (cls === "server_error" && attempt < this.maxRetries) {
-        // A 503 that says when to come back (Graph throttling) is waited out for that long.
+      if (cls === "server_error") {
+        // A 503 that says when to come back (Graph throttling) is waited out for
+        // that long; past the cap it is a rate limit, not a retry to send early.
         const asked = res.headers.get("retry-after") === null ? null : this.rateLimitWait(res);
-        await this.sleep(Math.min(asked ?? BASE_BACKOFF_MS * 2 ** attempt, this.maxWaitMs));
-        continue;
+        if (asked !== null && asked > this.maxWaitMs) {
+          return { class: "rate_limited", status: res.status, body: null, next: null, error: `HTTP ${res.status} rate limited; the provider asked for ${Math.ceil(asked / 1000)}s` };
+        }
+        if (attempt < this.maxRetries) {
+          await this.sleep(asked ?? Math.min(BASE_BACKOFF_MS * 2 ** attempt, this.maxWaitMs));
+          continue;
+        }
       }
       const errorBody = parseJson(text);
       return {

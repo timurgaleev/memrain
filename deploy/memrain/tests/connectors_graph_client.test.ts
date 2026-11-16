@@ -42,6 +42,15 @@ describe("graph client", () => {
     expect(clock.sleeps).toEqual([7000]);
   });
 
+  it("stops, without retrying early, when a 503 asks for longer than the wait cap", async () => {
+    const { c, clock, fake } = client([json(503, { error: { code: "ServiceUnavailable" } }, { "retry-after": "600" }), json(200, {})]);
+    const r = await graphGet(c, "/v1.0/me");
+    expect(r.class).toBe("rate_limited");
+    expect(r.status).toBe(503);
+    expect(clock.sleeps).toEqual([]);
+    expect(fake.urls).toHaveLength(1);
+  });
+
   it("waits out the Retry-After of a 429 and stops when Graph asks for longer than the cap", async () => {
     const a = client([json(429, { error: { code: "TooManyRequests" } }, { "retry-after": "10" }), json(200, {})]);
     expect((await graphGet(a.c, "/v1.0/me")).class).toBe("ok");
