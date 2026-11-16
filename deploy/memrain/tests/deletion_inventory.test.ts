@@ -83,6 +83,7 @@ const SOURCE_TABLES: Record<string, Disposition> = {
   "open_loops": { kind: "cascade" },
   "loop_suppressions": { kind: "cascade" },
   "loop_threads": { kind: "cascade" },
+  "group_sources": { kind: "cascade" },
   "page_versions": { kind: "referenced" },
   "oauth_tokens": { kind: "referenced" },
   "oauth_codes": { kind: "referenced" },

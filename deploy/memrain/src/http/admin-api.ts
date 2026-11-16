@@ -41,6 +41,7 @@ import { handleAdminTool } from "./admin-tool.ts";
 import { defaultConnectorDeps, handleAdminConnectors } from "./admin-connectors.ts";
 import { handleAdminNotifications } from "./admin-notifications.ts";
 import { handleAdminApprovals } from "./admin-approvals.ts";
+import { handleAdminMembers } from "./admin-members.ts";
 import { handleAdminAutonomy } from "./admin-autonomy.ts";
 import { controlDaemon, daemonsStatus } from "../core/daemons/status.ts";
 import { OperationError } from "../core/operation-error.ts";
@@ -195,6 +196,10 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
   }
   if (p.startsWith("/admin/api/write-gate/")) {
     const r = await handleAdminApprovals(req, url, engine).catch((e: unknown) => serverError("write-gate", e));
+    if (r) return r;
+  }
+  if (p.startsWith("/admin/api/members") || p.startsWith("/admin/api/groups") || p === "/admin/api/grant-profiles") {
+    const r = await handleAdminMembers(req, url, engine).catch((e: unknown) => serverError("members", e));
     if (r) return r;
   }
   if (p === "/admin/api/spend/paused" || p === "/admin/api/spend/resume") {

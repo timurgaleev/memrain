@@ -103,6 +103,11 @@ export interface AuthInfo {
   spendId?: string;
   /** The credential behind this principal; absent for callers no token resolved. */
   principal?: PrincipalRef;
+  /**
+   * A narrowed tool menu (`tool_surface` on the token or client row); absent
+   * means the full surface. It only ever hides tools (mcp/surface.ts).
+   */
+  toolSurface?: "starter" | "verbs";
 }
 
 /**

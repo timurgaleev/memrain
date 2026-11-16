@@ -23,6 +23,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import type { PrincipalRef } from "./auth-info.ts";
+import { memberAccess, widenReadSources } from "./members.ts";
 import { validateSlug as validatePageSlug } from "./pages.ts";
 import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "./jobs/kinds.ts";
 import {
@@ -413,6 +414,8 @@ export interface AuthInfo {
   spendId?: string;
   /** The credential, by a non-bearer reference a queued job can re-check. */
   principal?: PrincipalRef;
+  /** A narrowed tool menu from the row's tool_surface; absent = full. */
+  toolSurface?: "starter" | "verbs";
 }
 
 /** A live grant read back from a principal reference: no bearer, no expiry. */
@@ -438,6 +441,14 @@ function toCapUsd(raw: unknown): number | null {
   const n = Number(raw);
   if (!Number.isFinite(n)) throw new InvalidTokenError("Corrupt budget_usd_per_day on token row");
   return n;
+}
+
+/** A row's tool_surface as AuthInfo carries it: absent for full. An
+ *  unreadable value fails the token rather than widening it to every tool. */
+function narrowedSurface(raw: unknown): { toolSurface?: "starter" | "verbs" } {
+  if (raw === undefined || raw === null || raw === "full") return {};
+  if (raw === "starter" || raw === "verbs") return { toolSurface: raw };
+  throw new InvalidTokenError("Corrupt tool_surface on credential row");
 }
 
 // ---------------------------------------------------------------------------
@@ -996,7 +1007,28 @@ async function revokeGrantIn(
  * row (every token issued before grants, and every client_credentials token)
  * still takes the client row.
  */
-function oauthGrantSelect(): string {
+/**
+ * Which of the 162 (member_id) and 164 (tool_surface) columns a verifier read
+ * names. A database that has not run those migrations yet lacks them; readers
+ * then retry without exactly the missing one, so the verifier keeps working
+ * across the deploy window. member_id is only dropped when it does not exist,
+ * and then no member can be bound, so no refusal is lost.
+ */
+interface VerifierColumns {
+  members: boolean;
+  surface: boolean;
+}
+
+const ALL_VERIFIER_COLUMNS: VerifierColumns = { members: true, surface: true };
+
+/** The PAT columns the verifier reads. */
+function patSelect(cols: VerifierColumns): string {
+  return "id, name, permissions, scopes, budget_usd_per_day" +
+    (cols.members ? ", member_id" : "") +
+    (cols.surface ? ", tool_surface" : "");
+}
+
+function oauthGrantSelect(cols: VerifierColumns = ALL_VERIFIER_COLUMNS): string {
   return `SELECT t.client_id, t.scopes, t.expires_at, t.resource, t.family_id, t.revoked_at, c.client_name,
               CASE WHEN t.grant_bound THEN t.source_id      ELSE c.source_id      END AS source_id,
               CASE WHEN t.grant_bound THEN t.federated_read ELSE c.federated_read END AS federated_read,
@@ -1009,7 +1041,10 @@ function oauthGrantSelect(): string {
               e.revoked_at AS grant_revoked_at,
               ${legacyGrantRevoked("t")} AS legacy_grant_revoked,
               c.deleted_at AS client_deleted_at,
-              c.scope AS current_scope
+              c.scope AS current_scope${cols.members ? `,
+              CASE WHEN t.grant_bound THEN e.member_id END AS grant_member_id,
+              c.member_id AS client_member_id` : ""}${cols.surface ? `,
+              c.tool_surface` : ""}
        FROM oauth_tokens t
        LEFT JOIN oauth_clients c ON c.client_id = t.client_id
        LEFT JOIN oauth_enrollments e ON t.grant_bound AND e.id = t.grant_id`;
@@ -1075,6 +1110,7 @@ function oauthGrantFromRow(
     sourceId: (row.source_id as string | null) ?? undefined,
     allowedSources,
     ...(boundSlugPrefixes ? { boundSlugPrefixes } : {}),
+    ...narrowedSurface(row.tool_surface),
     // A person enrolled on a shared connector spends under their own
     // enrollment, capped by it, else by the connector's cap on their own.
     // A replacement enrollment spends under its predecessor's key.
@@ -1138,6 +1174,7 @@ function legacyGrantFromRow(row: Record<string, unknown>): PrincipalGrant {
     sourceId,
     allowedSources,
     ...(takesHolders && takesHolders.length > 0 ? { takesHolders } : {}),
+    ...narrowedSurface(row.tool_surface),
     budgetUsdPerDay: toCapUsd(row.budget_usd_per_day),
   };
 }
@@ -1971,6 +2008,15 @@ export class OAuthProvider {
     const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
     const spendId = prior ? (prior.spend_id ?? prior.id) : null;
     await this.engine.transaction(async (tx) => {
+      // The predecessor's member binding is read under its row lock (the lock
+      // bindCredential takes), so a bind racing this issue cannot be missed.
+      // scope: operator-only one row by id: the predecessor the operator named with --replaces
+      const memberId = prior
+        ? ((await tx.query<{ member_id: string | null }>(
+            `SELECT member_id FROM oauth_enrollments WHERE id = $1 FOR UPDATE`,
+            [prior.id],
+          )).rows[0]?.member_id ?? null)
+        : null;
       // One live replacement per predecessor: an older unredeemed one would
       // otherwise stay usable and redeem into a second grant on the same key.
       if (prior) {
@@ -1990,8 +2036,8 @@ export class OAuthProvider {
       await tx.query(
         `INSERT INTO oauth_enrollments
            (id, code_hash, client_id, source_id, federated_read, label, expires_at,
-            spend_id, replaces_id, budget_usd_per_day)
-         VALUES ($1, $2, $3, $4, $5::text[], $6, $7::timestamptz, $8, $9, $10)`,
+            spend_id, replaces_id, budget_usd_per_day, member_id)
+         VALUES ($1, $2, $3, $4, $5::text[], $6, $7::timestamptz, $8, $9, $10, $11)`,
         [
           id,
           hashToken(code),
@@ -2003,6 +2049,9 @@ export class OAuthProvider {
           spendId,
           prior?.id ?? null,
           prior?.budget_usd_per_day ?? null,
+          // The same person: a replacement keeps their member binding, so a
+          // new code never revives the grant of a disabled or removed member.
+          memberId,
         ],
       );
       await writeEnrollmentAudit(tx, id, clientId, "issue", audit, null, {
@@ -2282,6 +2331,57 @@ export class OAuthProvider {
         { sql: "scopes = $6::text[]", params: [list] },
       ),
     );
+  }
+
+  /**
+   * Replace the read set of the live token(s) named `name`, keeping the write
+   * source: it stays the first element of `permissions.source_id` and is
+   * always readable. A token with no source grant writes to `default`, so
+   * that becomes its stored write source. Every source must be registered.
+   * Audited and revision-bumped like set-scopes; a dry run returns the same
+   * before/after and writes nothing.
+   */
+  async setPatReadSources(
+    name: string,
+    sources: string[],
+    who: GrantActor,
+    opts: { dryRun?: boolean } = {},
+  ): Promise<PatGrantChange[]> {
+    const list = Array.from(new Set(sources.map((s) => s.trim()).filter(Boolean)));
+    if (list.length === 0) throw new Error("read source list cannot be empty");
+    return this.engine.transaction(async (tx) => {
+      const live = await tx.query<{ id: number | string; name: string; scopes: unknown; permissions: unknown; budget_usd_per_day: unknown; grant_revision: number | string }>(
+        `SELECT id, name, scopes, permissions, budget_usd_per_day, grant_revision FROM access_tokens
+          WHERE name = $1 AND revoked_at IS NULL ORDER BY id FOR UPDATE`,
+        [name],
+      );
+      if (live.rows.length === 0) return [];
+      const writeSources = new Set(live.rows.map((r) => {
+        const grant = patSnapshot(r).source_id;
+        return typeof grant === "string" ? grant : Array.isArray(grant) && typeof grant[0] === "string" ? grant[0] : "default";
+      }));
+      if (writeSources.size !== 1) {
+        throw new Error(`the live tokens named '${name}' write to different sources; revoke the extra ones first`);
+      }
+      const writeSource = [...writeSources][0]!;
+      const wanted = Array.from(new Set([writeSource, ...list]));
+      const known = await tx.query<{ id: string }>("SELECT id FROM sources WHERE id = ANY($1::text[])", [wanted]);
+      const knownIds = new Set(known.rows.map((r) => r.id));
+      const missing = wanted.filter((id) => !knownIds.has(id));
+      if (missing.length > 0) throw new Error(`Unknown source '${missing.join("', '")}'`);
+      const grant: string | string[] = wanted.length > 1 ? wanted : writeSource;
+      const next = (b: PatGrantSnapshot): PatGrantSnapshot => ({ ...b, source_id: grant });
+      if (opts.dryRun) {
+        return live.rows.map((r) => {
+          const before = patSnapshot(r);
+          return { id: Number(r.id), revision: Number(r.grant_revision), before, after: next(before) };
+        });
+      }
+      return this.mutatePatGrant(tx, name, who, "set_read_sources", next, {
+        sql: "permissions = COALESCE(permissions, '{}'::jsonb) || $6::text::jsonb",
+        params: [JSON.stringify({ source_id: grant })],
+      });
+    });
   }
 
   /**
@@ -2845,16 +2945,17 @@ export class OAuthProvider {
 
     // OAuth tokens first. JOIN oauth_clients so the source_id (write scope)
     // and federated_read (read set) arrive on the same query — no N+1 lookup.
-    const oauthRows = await this.rows(
-      `${oauthGrantSelect()}
+    const oauthRows = await this.withPreMemberFallback((cols) => this.rows(
+      `${oauthGrantSelect(cols)}
        WHERE t.token_hash = $1 AND t.token_type = 'access'
          AND t.revoked_at IS NULL`,
       [tokenHash],
-    );
+    ));
 
     if (oauthRows.length > 0) {
       const row = oauthRows[0] as Record<string, unknown>;
-      const { expiresAt, resource, ...grant } = oauthGrantFromRow(row, now);
+      const { expiresAt, resource, ...rowGrant } = oauthGrantFromRow(row, now);
+      const grant = await this.withMembers(rowGrant, [row.grant_member_id, row.client_member_id]);
       const clientId = grant.clientId;
       return {
         token,
@@ -2872,11 +2973,11 @@ export class OAuthProvider {
     // instead of pinning every legacy token to 'default'.
     let legacyRows: Record<string, unknown>[];
     try {
-      legacyRows = await this.rows(
-        `SELECT id, name, permissions, scopes, budget_usd_per_day FROM access_tokens
+      legacyRows = await this.withPreMemberFallback((cols) => this.rows(
+        `SELECT ${patSelect(cols)} FROM access_tokens
          WHERE token_hash = $1 AND revoked_at IS NULL`,
         [tokenHash],
-      );
+      ));
     } catch (err) {
       if (isUndefinedColumnError(err, "permissions")) {
         legacyRows = await this.rows(
@@ -2891,6 +2992,7 @@ export class OAuthProvider {
 
     if (legacyRows.length > 0) {
       const row = legacyRows[0]!;
+      const grant = await this.withMembers(legacyGrantFromRow(row), [row.member_id]);
       if (recordUse) await this.engine.query(
         // Once a minute is enough for "last used"; writing on every request
         // turns each authenticated read into a row update.
@@ -2900,7 +3002,7 @@ export class OAuthProvider {
       );
       return {
         token,
-        ...legacyGrantFromRow(row),
+        ...grant,
         // Legacy tokens never expire — set a year out so the number check passes.
         expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 3600,
         principal: { kind: "pat", id: String(row.id) },
@@ -2921,17 +3023,18 @@ export class OAuthProvider {
    */
   async resolvePrincipal(ref: PrincipalRef): Promise<PrincipalGrant> {
     if (ref.kind === "pat") {
-      const rows = await this.rows(
-        `SELECT id, name, permissions, scopes, budget_usd_per_day, revoked_at FROM access_tokens WHERE id = $1`,
+      const rows = await this.withPreMemberFallback((cols) => this.rows(
+        `SELECT ${patSelect(cols)}, revoked_at FROM access_tokens WHERE id = $1`,
         [ref.id],
-      );
+      ));
       const row = rows[0];
       if (!row) throw new InvalidTokenError("Credential revoked or no longer exists");
       if (row.revoked_at != null) throw new InvalidTokenError("Credential revoked");
-      return legacyGrantFromRow(row);
+      return this.withMembers(legacyGrantFromRow(row), [row.member_id]);
     }
     const match = ref.kind === "oauth_family" ? "t.family_id = $1" : "t.token_hash = $1 AND t.family_id IS NULL";
-    const rows = await this.rows(`${oauthGrantSelect()} WHERE ${match} AND t.client_id = $2`, [ref.id, ref.client_id]);
+    const rows = await this.withPreMemberFallback((cols) =>
+      this.rows(`${oauthGrantSelect(cols)} WHERE ${match} AND t.client_id = $2`, [ref.id, ref.client_id]));
     if (rows.length === 0) throw new InvalidTokenError("Credential revoked or no longer exists");
     if (rows.some((r) => r.revoked_at != null)) throw new InvalidTokenError("Credential revoked");
     const grants = rows.map((r) => {
@@ -2946,7 +3049,40 @@ export class OAuthProvider {
     }
     const scopes = first.scopes.filter((s) => grants.every((g) => hasScope(g.scopes, s)));
     if (scopes.length === 0) throw new InvalidTokenError("Token holds no scope its client is still granted");
-    return { ...first, scopes };
+    // Every token of one session shares its client and enrollment, so the
+    // first row names the same members as the rest.
+    return this.withMembers({ ...first, scopes }, [rows[0]!.grant_member_id, rows[0]!.client_member_id]);
+  }
+
+  /** Run a verifier read, retrying without whichever 162/164 column an older schema lacks. */
+  private async withPreMemberFallback<T>(read: (cols: VerifierColumns) => Promise<T>): Promise<T> {
+    let cols = ALL_VERIFIER_COLUMNS;
+    for (;;) {
+      try {
+        return await read(cols);
+      } catch (err) {
+        if (cols.members && isUndefinedColumnError(err, "member_id")) cols = { ...cols, members: false };
+        else if (cols.surface && isUndefinedColumnError(err, "tool_surface")) cols = { ...cols, surface: false };
+        else throw err;
+      }
+    }
+  }
+
+  /**
+   * Refuse a credential whose member is disabled, removed or missing, and
+   * widen an enabled member's reads by its groups' sources. A credential that
+   * names no member is returned untouched, without a query.
+   */
+  private async withMembers<G extends PrincipalGrant>(grant: G, bound: unknown[]): Promise<G> {
+    const access = await memberAccess(this.engine, bound);
+    if (access === null) return grant;
+    if (access.refused) {
+      throw new InvalidTokenError(
+        `member_disabled: this credential belongs to member "${access.refused.memberId}", which is ${access.refused.reason}; ` +
+          "ask the brain operator to enable the member or rebind the credential",
+      );
+    }
+    return widenReadSources(grant, access.groupSources);
   }
 
   // -------------------------------------------------------------------------
