@@ -433,11 +433,12 @@ everyone at once.
   conversation twice.
 - **Run `sources register` again with an id that exists.** It overwrites that
   source's settings. Check `sources list` first.
-- **Pick the wrong account** when Microsoft shows the same address twice:
-  personal mail into `work-mail` mixes your private mail with your work
-  sources. Memrain refuses to reconnect a row with another account than the
-  one it was connected with (`identity_mismatch`); a first connect it cannot
-  check.
+- **Pick the wrong account** when Microsoft asks which one to use: personal
+  mail into `work-mail` mixes your private mail with your work sources.
+  **Reconnect** on a row accepts only the account that row belongs to and
+  refuses any other (`identity_mismatch`), whatever its address. A first
+  connect with **Connect Microsoft** it cannot check: it adds whichever
+  account you pick to the source you chose.
 - **Reset the secret without `--append`.** `az ad app credential reset`
   deletes every existing secret unless you append, and Memrain's stops
   working at once.
@@ -578,7 +579,7 @@ message.
 | Microsoft shows `AADSTS700016` (application not found in the directory) | The client ID is wrong, or the app was deleted | Check the client ID on the app's **Overview** page and save it again ([step 6](#6-save-the-app-in-memrain)) |
 | Microsoft shows **Need admin approval**, or Memrain says to ask your Microsoft 365 admin (`admin_consent_required`) | Your company keeps consent to this app for an administrator, or Microsoft flagged the app as risky (`AADSTS90094`, `65001`, `90093`, `900941`, `900981`) | [Step 11](#11-ask-your-it-administrator-to-approve-the-app), then connect again |
 | Memrain says the access was not granted (`consent_declined`) | You chose **Cancel**, or you asked an administrator for approval and chose **Back to app** (`AADSTS65004`) | After a Cancel, connect again and choose **Accept**. After a request, wait until IT has approved the app, then connect again |
-| Memrain says you signed in with a different Microsoft account than this row (`identity_mismatch`) | A personal and a work account share the address, and you picked the other one | Reconnect and pick the account the row belongs to (**Personal account** or **Work or school account**). Nothing was changed |
+| Memrain says you signed in with a different account than the one this row belongs to (`identity_mismatch`) | On a **Reconnect** you picked another account than the row's, or the other of a personal and a work account that share one address | **Reconnect** again and pick the account named on the row (**Personal account** or **Work or school account**). Nothing was changed |
 | Memrain says the account came with no email address | The personal account signs in with a phone number | Nothing to fix: it is listed under its sign-in name or ID |
 | Memrain reports `scope_mismatch` | A permission was declined, or the app lists permissions beyond the six (an administrator approved them all) | [Step 5](#5-add-exactly-six-permissions): keep exactly the six; then ask IT to approve again and connect again |
 | Memrain reports `token_exchange` | Microsoft refused the sign-in code: most often the secret's **ID** pasted instead of its **Value**, or `offline_access` missing | Save the secret's value ([step 6](#6-save-the-app-in-memrain)), or add `offline_access` ([step 5](#5-add-exactly-six-permissions)), then connect again |

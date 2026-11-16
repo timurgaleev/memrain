@@ -292,6 +292,7 @@ describe("connectOutcome", () => {
     expect(connectOutcome("?connector_error=scope_mismatch_not_revoked")?.message).toContain("allow every access");
     expect(connectOutcome("?connector_error=scope_mismatch_not_revoked")?.message).toContain("Nothing was saved");
     expect(connectOutcome("?connector_error=identity_not_revoked")?.message).toContain("Nothing was saved");
+    expect(connectOutcome("?connector=reconnected")).toEqual({ ok: true, message: "Account reconnected. Its pages and sync position were kept, and its sync stays on or off as it was." });
     expect(connectOutcome("")).toBeNull();
     expect(connectOutcome("?other=1")).toBeNull();
   });
@@ -303,7 +304,7 @@ describe("connectOutcome", () => {
     expect(noted.message).toContain("no email address");
     expect(connectOutcome("?connector=connected&connector_note=<b>")).toEqual({ ok: true, message: "Account connected. Sync stays off until you switch it on." });
     const mismatch = connectorErrorCopy("identity_mismatch");
-    expect(mismatch).toContain("different Microsoft account than this row");
+    expect(mismatch).toContain("different account than the one this row belongs to");
     expect(mismatch).toContain("Nothing was changed");
   });
 

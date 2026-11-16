@@ -182,7 +182,7 @@ function AccountRow({ account: a, connectorsOn, keyBased, onOpen, onDone, onErro
     field?.focus();
   };
   const reconnect = () => run(async () => {
-    await goToConsent(a.provider, a.source_id, a.services);
+    await goToConsent(a.provider, a.source_id, a.services, a.id);
     return null;
   });
   const confirmDeletes = () => run(async () => {

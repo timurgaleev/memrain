@@ -318,6 +318,8 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
       principalRef: PRINCIPAL,
       adminSessionId: session,
       redirectUri: connectorCallbackUri(deps.publicUrl, provider),
+      // A Reconnect names its row; a first connect names none.
+      ...(body.account_id === undefined ? {} : { accountId: typeof body.account_id === "string" ? body.account_id : "" }),
     });
     return json({ authorize_url: started.authorizeUrl, expires_at: started.expiresAt });
   } catch (e) {
@@ -572,7 +574,7 @@ async function complete(req: Request, provider: string, deps: AdminConnectorDeps
       provider, state: body.state, code: body.code, error: body.error, errorDescription: body.error_description, adminSessionId: session,
     });
     // An account the provider named by no address is labelled by its sign-in name or id: say so.
-    return redirect(`${DONE_PATH}?connector=connected${done.noAddress ? "&connector_note=no_address" : ""}${DONE_HASH}`);
+    return redirect(`${DONE_PATH}?connector=${done.reconnected ? "reconnected" : "connected"}${done.noAddress ? "&connector_note=no_address" : ""}${DONE_HASH}`);
   } catch (e) {
     if (e instanceof ConnectError) return redirect(`${DONE_PATH}?connector_error=${e.code}${DONE_HASH}`);
     if (e instanceof VaultError) return redirect(`${DONE_PATH}?connector_error=vault${DONE_HASH}`);

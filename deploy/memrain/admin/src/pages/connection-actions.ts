@@ -9,8 +9,8 @@ export function actionError(e: unknown): string {
 }
 
 /** Sends the browser to the provider's consent page, or says why it will not. */
-export async function goToConsent(provider: string, sourceId: string, services: string[]): Promise<void> {
-  const { authorize_url } = await automationApi.startConnect(provider, sourceId, services);
+export async function goToConsent(provider: string, sourceId: string, services: string[], accountId?: string): Promise<void> {
+  const { authorize_url } = await automationApi.startConnect(provider, sourceId, services, accountId);
   const target = safeAuthorizeUrl(authorize_url);
   if (!target) throw new Error("The server returned a consent address that is not https. Nothing was opened.");
   window.location.assign(target);

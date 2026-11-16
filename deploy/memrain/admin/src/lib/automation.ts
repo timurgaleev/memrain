@@ -411,7 +411,7 @@ const CONNECT_ERRORS: Record<string, string> = {
   provider_unavailable: "The provider could not be reached to check the key. Nothing was saved; try again in a minute.",
   delete_incomplete: "Deleting stopped part-way. Preview again and delete what is left.",
   admin_consent_required: "The account's organization lets only an administrator approve this app. Ask your Microsoft 365 admin to grant consent, then connect again.",
-  identity_mismatch: "You signed in with a different Microsoft account than this row: a personal and a work account can share one address. Nothing was changed. Connect again and pick the account this row belongs to (Work or school account, or Personal account).",
+  identity_mismatch: "You signed in with a different account than the one this row belongs to (a personal and a work Microsoft account can even share one address). Nothing was changed. Choose Reconnect again and pick the account named on the row (for Microsoft: Personal account, or Work or school account).",
   consent_declined: "Microsoft says the access was not granted. If you chose Cancel, connect again and choose Accept. If you asked an administrator to approve the app, wait until IT has approved it, then choose Connect again.",
 };
 
@@ -423,6 +423,9 @@ export function connectorErrorCopy(code: string, fallback = "The connect did not
 /** The outcome a finished connect left in the page's query string, if any. */
 export function connectOutcome(search: string): { ok: boolean; message: string } | null {
   const q = new URLSearchParams(search);
+  if (q.get("connector") === "reconnected") {
+    return { ok: true, message: "Account reconnected. Its pages and sync position were kept, and its sync stays on or off as it was." };
+  }
   if (q.get("connector") === "connected") {
     const connected = "Account connected. Sync stays off until you switch it on.";
     if (q.get("connector_note") !== "no_address") return { ok: true, message: connected };

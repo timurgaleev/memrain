@@ -37,6 +37,7 @@ import {
   cleanLabel,
   createAccount,
   findAccount,
+  getAccount,
   markNeedsReconnect,
   readCredential,
   setAccountConfig,
@@ -111,7 +112,7 @@ const MESSAGES: Record<ConnectErrorCode, string> = {
   scope_mismatch_not_revoked: "the provider granted different scopes than requested; the grant was refused but left in place, because a connected account may share it",
   identity: "could not read the connected account's identity",
   identity_not_revoked: "could not read the connected account's identity; the grant was left in place, because a connected account may share it",
-  identity_mismatch: "the account signed in is another user than the connected account with that address; nothing was changed",
+  identity_mismatch: "the account signed in is not the one this account row was connected with; nothing was changed",
   account_not_found: "connector account not found",
   refresh_in_progress: "a worker is renewing this account's token; try the disconnect again shortly",
   admin_consent_required: "the account's organization requires an administrator to approve this app before it can connect",
@@ -342,7 +343,14 @@ export interface StartConnectInput {
   adminSessionId: string;
   /** From configuration (see connectorCallbackUri), never from the request. */
   redirectUri: string;
+  /**
+   * A Reconnect on an account row: the callback renews that row only, and
+   * refuses a grant for any other account instead of adding it to the source.
+   */
+  accountId?: string;
 }
+
+const ACCOUNT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function startConnect(deps: ConnectDeps, input: StartConnectInput): Promise<{ authorizeUrl: string; expiresAt: string }> {
   const kek = requireKek(deps);
@@ -357,6 +365,12 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
   const source = await getSource(deps.engine, input.sourceId);
   if (!source) throw new ConnectError("source_not_found");
   if (services.some((s) => !provider.services[s]!.sourceKinds.includes(source.kind))) throw new ConnectError("source_kind");
+  let accountId: string | null = null;
+  if (input.accountId !== undefined) {
+    const account = ACCOUNT_ID_RE.test(input.accountId) ? await getAccount(deps.engine, input.accountId) : null;
+    if (!account || account.provider !== provider.id || account.source_id !== source.id) throw new ConnectError("account_not_found");
+    accountId = account.id;
+  }
   const client = await resolveClient(deps, kek, provider.id);
   const companions = await heldCompanionServices(deps.engine, provider, services);
 
@@ -373,10 +387,10 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
   await deps.engine.query(
     `INSERT INTO connector_oauth_states
        (state_hash, provider, source_id, principal_ref, admin_session_hash, kek_id, nonce, pkce_verifier_enc,
-        requested_scopes, services, redirect_uri, created_at, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10::text[], $11, $12, $13)`,
+        requested_scopes, services, redirect_uri, created_at, expires_at, account_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10::text[], $11, $12, $13, $14)`,
     [stateHash, provider.id, source.id, principal, sessionHash(input.adminSessionId), sealed.kek_id, sealed.nonce,
-      sealed.ciphertext, scopes, services, input.redirectUri, new Date(now).toISOString(), expiresAt],
+      sealed.ciphertext, scopes, services, input.redirectUri, new Date(now).toISOString(), expiresAt, accountId],
   );
 
   const url = new URL(oauthEndpoints(provider, client.tenant).authorizeUrl);
@@ -403,6 +417,8 @@ interface StateRow {
   services: string[];
   redirect_uri: string;
   expires_at: Date | string;
+  /** The row a Reconnect is for; null for a first connect. */
+  account_id: string | null;
 }
 
 /** Consume a state exactly once, then check what it is bound to. */
@@ -413,7 +429,7 @@ async function consumeState(deps: ConnectDeps, state: unknown, provider: string,
     `UPDATE connector_oauth_states SET consumed_at = NOW()
       WHERE state_hash = $1 AND consumed_at IS NULL
       RETURNING provider, source_id, principal_ref, admin_session_hash, kek_id, nonce, pkce_verifier_enc,
-                requested_scopes, services, redirect_uri, expires_at`,
+                requested_scopes, services, redirect_uri, expires_at, account_id`,
     [stateHash],
   );
   const row = r.rows[0];
@@ -651,7 +667,12 @@ async function persistGrant(
   expiresAt: Date | null,
 ): Promise<{ account: ConnectorAccount; reconnected: boolean }> {
   return engine.transaction(async (tx) => {
-    const existing = await findAccount(tx, st.source_id, providerId, label);
+    const existing = st.account_id === null ? await findAccount(tx, st.source_id, providerId, label) : await getAccount(tx, st.account_id);
+    // A Reconnect renews its own row: an account signed in under another
+    // address would otherwise be added to the row's source beside it.
+    if (st.account_id !== null && (existing === null || existing.account_label !== label)) {
+      throw new ConnectError(existing === null ? "account_not_found" : "identity_mismatch");
+    }
     // The same address can belong to two users (a personal account made with a
     // work address): a reconnect by another user than the row's changes nothing.
     const stored = existing?.config[PROVIDER_USER_ID];
@@ -665,7 +686,7 @@ async function persistGrant(
       await setAccountStatus(tx, existing.id, "active", null);
       // The new grant answers the sync engine's reconnect notice; with sync off no run would.
       await resolveNotice(tx, existing.id, "needs_reconnect");
-      const account = (await findAccount(tx, st.source_id, providerId, label))!;
+      const account = (await getAccount(tx, existing.id))!;
       return { account, reconnected: true };
     }
     const created = await createAccount(tx, {

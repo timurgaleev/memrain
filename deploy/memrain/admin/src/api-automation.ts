@@ -27,8 +27,11 @@ const provider = (id: string, action: string) => `/admin/api/connectors/${encode
 
 export const automationApi = {
   connectors: () => call<ConnectorsReport>("/admin/api/connectors"),
-  startConnect: (providerId: string, sourceId: string, services: string[]) =>
-    call<{ authorize_url: string; expires_at: string }>(provider(providerId, "start"), post({ source_id: sourceId, services })),
+  /** `accountId` for a Reconnect: the server then renews that row only. */
+  startConnect: (providerId: string, sourceId: string, services: string[], accountId?: string) =>
+    call<{ authorize_url: string; expires_at: string }>(provider(providerId, "start"), post({
+      source_id: sourceId, services, ...(accountId === undefined ? {} : { account_id: accountId }),
+    })),
   /** `tenant` only for a provider with tenants; the server refuses one for any other. */
   /** `confirmReplace` lets another app id replace the one connected accounts renew with; they must reconnect. */
   saveClient: (providerId: string, clientId: string, clientSecret: string, tenant?: string, confirmReplace = false) =>

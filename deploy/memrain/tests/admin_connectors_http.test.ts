@@ -5,7 +5,7 @@ import { fakeProvider, TEST_ACCESS_TOKEN, testProvider } from "./helpers/connect
 import { registerSource } from "../src/core/sources.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
 import { ProviderRegistry } from "../src/core/connectors/providers.ts";
-import { listAccounts } from "../src/core/connectors/accounts.ts";
+import { listAccounts, markNeedsReconnect } from "../src/core/connectors/accounts.ts";
 import { getOAuthClient } from "../src/core/connectors/oauth-clients.ts";
 import { handleAdminConnectors, handleConnectorCallbackPage, type AdminConnectorDeps } from "../src/http/admin-connectors.ts";
 import { handleAdminApi } from "../src/http/admin-api.ts";
@@ -103,6 +103,47 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(text).toContain("owner@example.test");
       expect(text).not.toContain(TEST_ACCESS_TOKEN);
       expect(text).not.toContain("env-secret");
+    } finally { await db.close(); }
+  });
+
+  it("binds a Reconnect to its row: another account is refused and nothing is added; the same one comes back reconnected", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "/inbox" });
+      await registerSource(e, { id: "work-inbox", kind: "mailbox", pathPrefix: "/work-inbox" });
+      const start = (body: Record<string, unknown>, d: AdminConnectorDeps) => call(post("/admin/api/connectors/test/start", JSON.stringify(body)), d);
+      const flow = async (body: Record<string, unknown>, d: AdminConnectorDeps) => {
+        const started = await start(body, d);
+        expect(started.status).toBe(200);
+        const state = new URL(((await started.json()) as { authorize_url: string }).authorize_url).searchParams.get("state")!;
+        return call(post("/admin/api/connectors/test/complete", new URLSearchParams({ state, code: "auth-code" }).toString(), "application/x-www-form-urlencoded"), d);
+      };
+      const first = await flow({ source_id: "inbox", services: ["mail"] }, deps(db.storage, "sess-1"));
+      expect(first.headers.get("location")).toBe("/admin/?connector=connected#connections");
+      const row = (await listAccounts(e))[0]!;
+      await markNeedsReconnect(e, row.id, "invalid_grant");
+
+      // Reconnect on the row, and the owner picks another account at the provider (another address, so no label matches).
+      const otherAccount = deps(db.storage, "sess-1", { fetch: fakeProvider({ identity: "someone-else@example.test" }).fetch });
+      const wrong = await flow({ source_id: "inbox", services: ["mail"], account_id: row.id }, otherAccount);
+      expect(wrong.headers.get("location")).toBe("/admin/?connector_error=identity_mismatch#connections");
+      expect((await listAccounts(e)).map((a) => [a.account_label, a.status])).toEqual([["owner@example.test", "needs_reconnect"]]);
+
+      const right = await flow({ source_id: "inbox", services: ["mail"], account_id: row.id }, deps(db.storage, "sess-1"));
+      expect(right.headers.get("location")).toBe("/admin/?connector=reconnected#connections");
+      expect((await listAccounts(e)).map((a) => [a.id, a.status])).toEqual([[row.id, "active"]]);
+
+      // A row that does not exist, or belongs to another source, starts nothing.
+      for (const body of [
+        { source_id: "inbox", services: ["mail"], account_id: "00000000-0000-4000-8000-000000000000" },
+        { source_id: "inbox", services: ["mail"], account_id: "not-an-id" },
+        { source_id: "work-inbox", services: ["mail"], account_id: row.id },
+      ]) {
+        const refused = await start(body, deps(db.storage, "sess-1"));
+        expect(refused.status).toBe(400);
+        expect(await refused.json()).toEqual({ error: "account_not_found" });
+      }
     } finally { await db.close(); }
   });
 
