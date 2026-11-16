@@ -156,8 +156,8 @@ Three caps apply to every sync run, and the lowest one wins:
 
 A run also stops after 500 items (`MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN`) and
 picks up where it stopped on the next run. Each page asked of a provider is
-sized to fit in one run, so a lower cap makes a backfill take more runs but
-never stalls it on the same page. A provider deletion of more than
+sized to fit in one run, so a lower cap makes a backfill take more runs
+instead of reading the same first page again every run. A provider deletion of more than
 200 items in one run, or of at least 10 items that are more than 5% of the
 account's items, is held for you rather than applied
 (`MEMRAIN_CONNECTOR_MASS_DELETE_*`). Every one of these is described in

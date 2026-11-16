@@ -510,10 +510,14 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
     const items: SyncItem[] = [];
     // A transcript fetched past what the run may store would be dropped by the
     // engine, and its request still counts against the key's daily quota. The
-    // ones left are unsettled, so the next run's listing fetches them.
+    // ones left are unsettled, so the next run's listing fetches them. One
+    // never stored goes before a stored one due a re-read (a recent transcript
+    // is re-read daily), or a small daily cap would spend each day re-reading
+    // the same recent transcripts while new ones wait.
     const room = budget?.remaining ?? Number.POSITIVE_INFINITY;
-    for (const [id, version] of versions) {
-      if (settled.get(id) === version) continue;
+    const due = [...versions].filter(([id, version]) => settled.get(id) !== version);
+    const ordered = due.length <= room ? due : [...due.filter(([id]) => !settled.has(id)), ...due.filter(([id]) => settled.has(id))];
+    for (const [id, version] of ordered) {
       if (items.length >= room) {
         windowCut = true;
         break;
