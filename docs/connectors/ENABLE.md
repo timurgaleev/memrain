@@ -123,6 +123,9 @@ docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> 
   your own, then the Connect button).
 - Gmail: [GMAIL.md](./GMAIL.md) (the same Google client, the Gmail API turned
   on, and a `mailbox` source).
+- Outlook calendar (Microsoft 365 or Outlook.com): [MICROSOFT.md](./MICROSOFT.md)
+  (a Microsoft Entra app of your own, then the Connect button; a `calendar`
+  source).
 - Fireflies: [FIREFLIES.md](./FIREFLIES.md) (an API key).
 
 Everything a connector writes is text from outside the brain: anyone can put
@@ -259,6 +262,7 @@ data is a separate, explicit action.
 
 - [KEY.md](./KEY.md): create, back up and rotate the connector key.
 - [GOOGLE.md](./GOOGLE.md): Google Cloud project and OAuth client for Calendar.
+- [MICROSOFT.md](./MICROSOFT.md): Microsoft Entra app for an Outlook calendar.
 - [FIREFLIES.md](./FIREFLIES.md): Fireflies API key.
 - [LOOPS.md](./LOOPS.md): who is waiting on whom (`memrain waiting`, `loops_sweep`).
 - [CONFIGURATION.md](../CONFIGURATION.md): every connector and daemon setting.
