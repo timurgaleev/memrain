@@ -281,6 +281,14 @@ export async function checkInvalidIndexes(
  * one body twice. Retrieval still works (both copies rank, dedup collapses
  * near-twins), so a duplicate group warns rather than fails (ok:true); the
  * sample names the slug groups so the operator knows what to reconcile.
+ *
+ * Connector pages are left out. Each mirrors one provider item under the
+ * account that synced it (the slug is made from the item's id and the
+ * account), so the sync never stores one item twice; two connector pages with
+ * one body are two items that read alike, or two connected accounts' copies of
+ * one meeting or mail. Neither is a double import, and the next sync would
+ * rewrite whatever the operator merged. A page retention handed to the brain
+ * (origin `connector_detached`) is the brain's own again and is counted.
  */
 export async function checkDuplicatePages(
   engine: Engine,
@@ -292,6 +300,7 @@ export async function checkDuplicatePages(
        FROM (SELECT string_agg(slug, ', ' ORDER BY slug) AS slugs
                FROM pages
               WHERE deleted_at IS NULL
+                AND (compiled_truth->>'origin') IS DISTINCT FROM 'connector'
               GROUP BY source_id, content_hash
              HAVING count(*) > 1
               ORDER BY count(*) DESC, MIN(slug)) g

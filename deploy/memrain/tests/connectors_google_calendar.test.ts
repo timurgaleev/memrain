@@ -25,6 +25,7 @@ import { readCursor, writeCursor } from "../src/core/connectors/sync-store.ts";
 import { runConnectorSync, type SyncAccount } from "../src/core/connectors/sync-engine.ts";
 import { connectorRuntime } from "../src/core/connectors/runtime.ts";
 import { readAccountRun } from "../src/core/connectors/account-status.ts";
+import { checkDuplicatePages } from "../src/core/doctor-ops.ts";
 import { accountRef, shortHash } from "../src/core/connectors/model.ts";
 import { GOOGLE_CALENDAR_READONLY, googleProvider } from "../src/core/connectors/google/provider.ts";
 import { calendarStream, googleCalendarAdapter, listGoogleCalendars, parsePassCursor, seriesEndedBefore } from "../src/core/connectors/google/calendar.ts";
@@ -347,11 +348,67 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("two accounts that attend the same meetings store a page each, which doctor does not report as duplicate pages", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const first = await connect(db.storage, world);
+      world.userinfo = { sub: "2", email: "second@example.test", email_verified: true };
+      const second = await connect(db.storage, world);
+      expect((await run(db.storage, world, first.id)).status).toBe("success");
+      expect((await run(db.storage, world, second.id)).status).toBe("success");
+      // Each account keeps its own copy (deletion and retention are fenced by account), so
+      // the same series renders to the same text under two slugs.
+      const shared = await e.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM (SELECT content_hash FROM pages WHERE slug LIKE 'calendar/%' AND deleted_at IS NULL
+           GROUP BY source_id, content_hash HAVING count(*) > 1) g`,
+      );
+      expect(shared.rows[0]!.n).toBeGreaterThan(0);
+      expect(await checkDuplicatePages(e)).toMatchObject({ status: "ok", detail: "no duplicate pages" });
+    } finally { await db.close(); }
+  });
+
+  it("a run cap below Google's page size still finishes the calendar over several runs instead of replaying the first page", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const env = { ...ENV, MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN: "40" };
+      const events = Array.from({ length: 100 }, (_, i) => ({
+        id: `cap${String(i).padStart(4, "0")}`, iCalUID: `cap${i}@google.com`, status: "confirmed", etag: `"${i}"`, summary: `Slot ${i}`,
+        start: { dateTime: new Date(T0 + i * 3_600_000).toISOString() }, end: { dateTime: new Date(T0 + i * 3_600_000 + 1_800_000).toISOString() },
+      }));
+      // Google honours maxResults and pages by token; the last page carries the sync token.
+      const world: GoogleWorld = {
+        calls: [],
+        events: (_cal, q) => {
+          const from = Number(q.get("pageToken")?.replace("off:", "") ?? "0");
+          const size = Number(q.get("maxResults") ?? "250");
+          const to = Math.min(events.length, from + size);
+          const body: Record<string, unknown> = { kind: "calendar#events", items: events.slice(from, to) };
+          if (to < events.length) body.nextPageToken = `off:${to}`;
+          else body.nextSyncToken = "cap-sync-token";
+          return { status: 200, body };
+        },
+      };
+      const account = await connect(db.storage, world, env);
+      const results = [];
+      for (let i = 0; i < 3; i++) results.push(await run(db.storage, world, account.id, env));
+      expect(results.map(r => r.status)).toEqual(["partial", "partial", "success"]);
+      expect(await storedToken(e, account.id, "primary")).toBe("cap-sync-token");
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug LIKE 'calendar/%'`)).toBe(100);
+      // Every page asked for no more than one run may store, and none was read twice.
+      const lists = eventListCalls(world);
+      expect(lists.map(q => q.get("maxResults"))).toEqual(["40", "40", "40"]);
+      expect(lists.map(q => q.get("pageToken"))).toEqual([null, "off:40", "off:80"]);
+    } finally { await db.close(); }
+  });
+
   it("resumes a first sync larger than one run from its page token, then commits the sync token", async () => {
     const db = await open();
     try {
       const e = db.storage.engine();
-      // Page 1 yields two items: the run stops on page 2's first item.
+      // Page 1 yields two items: the run stops before it asks for page 2.
       const env = { ...ENV, MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN: "2" };
       const world = firstSyncWorld();
       const account = await connect(db.storage, world, env);

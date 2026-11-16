@@ -58,7 +58,7 @@ import { renderCalendarEvent } from "../render.ts";
 import { retentionDays } from "../retention.ts";
 import { syncItemFromPage } from "../sync-item.ts";
 import { shortHash, type CalendarAttendee, type CalendarEvent, type CalendarOccurrence, type ConnectorContext, type Person } from "../model.ts";
-import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
+import type { ItemBudget, PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
 import type { AdapterContext } from "../providers.ts";
 
 export const GOOGLE_API_ORIGIN = "https://www.googleapis.com";
@@ -330,8 +330,17 @@ class Adapter implements SyncAdapter {
     return st.mode === "delta" && st.pageToken === null && st.listedAt !== null && this.now() - Date.parse(st.listedAt) >= RELIST_EVERY_MS;
   }
 
-  private listPath(calendarId: string, st: PassState): string {
-    const q = new URLSearchParams({ maxResults: PAGE_SIZE, showDeleted: "true", singleEvents: "false" });
+  /**
+   * Events per listed page: never more than one run may store, or a run cap
+   * below Google's default would stop every run inside the same first page.
+   * The size follows the caps, not what is left of today's: Google pages a
+   * listing by repeating one query with `pageToken`, so the size stays put
+   * across a pass, and a page the day's leftover cannot hold is finished whole
+   * by the next run.
+   */
+  private listPath(calendarId: string, st: PassState, budget: ItemBudget | undefined): string {
+    const size = Math.min(Number(PAGE_SIZE), budget?.perRun ?? Number(PAGE_SIZE));
+    const q = new URLSearchParams({ maxResults: String(size), showDeleted: "true", singleEvents: "false" });
     if (st.mode === "delta") q.set("syncToken", st.token!);
     if (st.pageToken !== null) q.set("pageToken", st.pageToken);
     return `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${q.toString()}`;
@@ -347,20 +356,20 @@ class Adapter implements SyncAdapter {
     return { ok: true, items: [item], deletions: [], checkpoint: null, done: true };
   }
 
-  async page({ client, stream, cursor }: Parameters<SyncAdapter["page"]>[0]): Promise<PageResult> {
+  async page({ client, stream, cursor, budget }: Parameters<SyncAdapter["page"]>[0]): Promise<PageResult> {
     const calendarId = this.calendars.get(stream);
     if (calendarId === undefined) throw new Error(`google calendar adapter has no stream ${stream}`);
     let st = parsePassCursor(cursor) ?? this.firstPass();
     if (this.relistDue(st)) st = this.relist(st);
-    let res = await client.get(this.listPath(calendarId, st));
+    let res = await client.get(this.listPath(calendarId, st, budget));
     if (st.pageToken !== null && (res.status === 400 || res.status === 410)) {
       // A page token Google no longer takes: that pass starts over.
       st = { ...st, pageToken: null };
-      res = await client.get(this.listPath(calendarId, st));
+      res = await client.get(this.listPath(calendarId, st, budget));
     }
     if (st.mode === "delta" && res.status === 410) {
       st = this.relist(st);
-      res = await client.get(this.listPath(calendarId, st));
+      res = await client.get(this.listPath(calendarId, st, budget));
     }
     if (res.status === 404 && calendarId !== "primary") return this.calendarGone(calendarId);
     if (res.class !== "ok") return { ok: false, response: res };

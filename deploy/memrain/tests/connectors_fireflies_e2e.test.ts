@@ -362,6 +362,63 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(fake.requests.map(r => r.operation)).toEqual(["FirefliesTranscripts"]);
   });
 
+  it("fetches only as many transcripts as the run may store, and finishes the window over several runs", async () => {
+    // Older than the lookback, so a transcript's version does not change between runs.
+    const all = Array.from({ length: 30 }, (_, i) => listed(`ff-cap-${String(i).padStart(2, "0")}`, { date: T0 - 10 * 24 * HOUR - i * HOUR }));
+    const fake = firefliesFetch({
+      user: () => "user",
+      list: (vars) => listing(all.slice(Number(vars.skip), Number(vars.skip) + Number(vars.limit))),
+      ids: () => listing(all.map(t => ({ id: t.id }))),
+      transcript: (id) => transcript(id, [{ speaker_name: "Ana Lee", text: `Notes for ${id}.` }], { date: all.find(t => t.id === id)!.date }),
+    });
+    const account = await connect(fake.fetch);
+    const env = { ...ENV, MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN: "10" };
+    const runAt = async (at: number) => {
+      const runtime = connectorRuntime(db.storage, {
+        kek, providers: providers(), fetch: fake.fetch, env, now: () => at, sleep: async () => {}, embedFn: async (t: string) => deterministicEmbed(t),
+      });
+      const loaded = (await runtime.loadAccount(account.id))!;
+      return runConnectorSync(db.storage, loaded, runtime.depsFor(loaded));
+    };
+    const fetched = () => fake.requests.filter(r => r.operation === "FirefliesTranscript").length;
+
+    fake.requests.length = 0;
+    const first = await runAt(T0);
+    expect(first).toMatchObject({ status: "partial", stop_reason: "item_cap_reached" });
+    // The 15 the cap would have dropped are never fetched, so no request of the daily quota is wasted.
+    expect(fetched()).toBe(10);
+    expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBeNull();
+
+    await runAt(T0 + HOUR);
+    await runAt(T0 + 2 * HOUR);
+    expect(fetched()).toBe(30);
+    expect(await count(e, `SELECT count(*)::int AS n FROM connector_items WHERE account_id = $1 AND page_slug IS NOT NULL`, [account.id])).toBe(30);
+    // The window's end is committed only once every transcript in it is stored.
+    expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBe(new Date(T0 + 2 * HOUR).toISOString());
+  });
+
+  it("under a daily cap, stores new transcripts before re-reading the recent ones it already has", async () => {
+    // All six are recent: each is re-read once a day while it is (see the case above).
+    const recent = Array.from({ length: 6 }, (_, i) => listed(`ff-new-${i}`, { date: T0 - 5 * HOUR - i * 60_000 }));
+    const fake = firefliesFetch({
+      user: () => "user",
+      list: (vars) => listing(recent.slice(Number(vars.skip), Number(vars.skip) + Number(vars.limit))),
+      ids: () => listing(recent.map(t => ({ id: t.id }))),
+      transcript: (id) => transcript(id, [{ speaker_name: "Ana Lee", text: `Notes for ${id}.` }], { date: recent.find(t => t.id === id)!.date }),
+    });
+    const account = await connect(fake.fetch);
+    await e.query(`UPDATE connector_accounts SET item_cap_daily = 3 WHERE id = $1`, [account.id]);
+    const stored = async () => count(e, `SELECT count(*)::int AS n FROM connector_items WHERE account_id = $1 AND page_slug IS NOT NULL`, [account.id]);
+
+    expect((await sync(db.storage, account.id, fake.fetch, T0)).stop_reason).toBe("item_cap_reached");
+    expect(await stored()).toBe(3);
+    fake.requests.length = 0;
+    // The next UTC day the first three are due a re-read, but the three never stored go first.
+    await sync(db.storage, account.id, fake.fetch, T0 + 24 * HOUR);
+    expect(await stored()).toBe(6);
+    expect(ops(fake.requests).filter(op => op.startsWith("FirefliesTranscript:"))).toEqual(["FirefliesTranscript:ff-new-3", "FirefliesTranscript:ff-new-4", "FirefliesTranscript:ff-new-5"]);
+  });
+
   it("holds a mass deletion for the owner instead of deleting", async () => {
     const many = Array.from({ length: 12 }, (_, i) => `ff-m${i}`);
     let gone = false;

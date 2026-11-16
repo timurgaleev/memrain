@@ -546,6 +546,26 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("tells the adapter how many items the run may still store, and fetches no page once none are left", async () => {
+    const db = await open();
+    try {
+      await setup(db.storage);
+      // 1 item already seen today: the daily cap leaves 4, the run cap 3.
+      await runConnectorSync(db.storage, account(), harness([wirePage([{ id: "z" }], "c0")]).deps);
+      const h = harness([wirePage([{ id: "a" }, { id: "b" }], "c1", true), wirePage([{ id: "c" }], "c2", true), wirePage([{ id: "d" }], "c3")],
+        { env: { MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN: "3" } });
+      const budgets: unknown[] = [];
+      const inner = h.deps.adapter;
+      h.deps.adapter = { streams: inner.streams, page: async (ctx) => { budgets.push(ctx.budget); return inner.page(ctx); } };
+      const r = await runConnectorSync(db.storage, account({ itemCapDaily: 5 }), h.deps);
+      expect(budgets).toEqual([{ remaining: 3, perRun: 3 }, { remaining: 1, perRun: 3 }]);
+      expect(r).toMatchObject({ status: "partial", stop_reason: "item_cap_reached" });
+      // Both pages settled, so the cursor sits past them; the third page was never asked for.
+      expect(h.urls).toHaveLength(2);
+      expect(await readCursor(db.storage.engine(), ACCOUNT_ID, STREAM)).toBe("c2");
+    } finally { await db.close(); }
+  });
+
   it("refuses to start once the daily item cap or dollar cap is spent, without touching the credential", async () => {
     const db = await open();
     try {
