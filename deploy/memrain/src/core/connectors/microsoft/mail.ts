@@ -14,6 +14,12 @@
  *     checkpoint, so a round cut short resumes where it stopped. The last page
  *     hands over an `@odata.deltaLink`, and every later run starts from it.
  *     (learn.microsoft.com/graph/delta-query-messages)
+ *   - A filtered delta returns at most 5,000 messages (same page), so a
+ *     folder with more inside the window would come back short. Once the
+ *     first round ends, one backfill pass lists the folder's messages over
+ *     the same floor (the plain list has no such cap; conversation ids only,
+ *     1,000 a page) and reads each conversation not stored yet. The delta
+ *     link waits until the backfill is through.
  *   - A changed message names its conversation; the conversation is read whole
  *     (`$filter=conversationId eq …`, bodies as text, attachments expanded to
  *     name, type and size only) and rendered by the same MailThread renderer as
@@ -93,6 +99,8 @@ const MAX_RECIPIENTS = 100;
 const API = "/v1.0/me";
 
 const DELTA_SELECT = "conversationId,receivedDateTime,parentFolderId";
+/** Messages per backfill listing page: conversation ids only, so Graph's largest page. */
+const BACKFILL_PAGE = 1000;
 const MESSAGE_SELECT = [
   "conversationId", "parentFolderId", "receivedDateTime", "sentDateTime", "isDraft", "subject", "from", "sender",
   "toRecipients", "ccRecipients", "replyTo", "body", "internetMessageId", "internetMessageHeaders", "categories", "changeKey",
@@ -138,6 +146,10 @@ export interface OutlookMailCursor {
   link: string | null;
   linkKind: "next" | "delta" | null;
   pending: OutlookMailPending | null;
+  /** The round in progress is the first over the window (its delta was filtered, so capped). */
+  firstRound?: true;
+  /** The next page of the backfill listing that follows a first round. */
+  backfill?: string;
 }
 
 function linkField(v: unknown): string | null | undefined {
@@ -167,6 +179,10 @@ export function parseOutlookMailCursor(cursor: string | null): OutlookMailCursor
   const link = linkField(raw.link);
   const linkKind = raw.linkKind;
   if (link === undefined || !(linkKind === null || linkKind === "next" || linkKind === "delta") || (link === null) !== (linkKind === null)) return null;
+  if (raw.firstRound !== undefined && raw.firstRound !== true) return null;
+  const backfill = raw.backfill === undefined ? undefined : linkField(raw.backfill);
+  if (backfill === null) return null;
+  if (raw.backfill !== undefined && backfill === undefined) return null;
   let pending: OutlookMailPending | null = null;
   if (raw.pending !== null && raw.pending !== undefined) {
     const p = raw.pending;
@@ -177,7 +193,7 @@ export function parseOutlookMailCursor(cursor: string | null): OutlookMailCursor
     if (conversations === null || removed === null || typeof plink !== "string" || (p.linkKind !== "next" && p.linkKind !== "delta")) return null;
     pending = { conversations, removed, link: plink, linkKind: p.linkKind };
   }
-  return { v: 1, floorMs, link, linkKind, pending };
+  return { v: 1, floorMs, link, linkKind, pending, ...(raw.firstRound === true ? { firstRound: true as const } : {}), ...(backfill !== undefined ? { backfill } : {}) };
 }
 
 function person(v: unknown): Person | null {
@@ -404,6 +420,37 @@ class Adapter implements SyncAdapter {
     return `${API}/mailFolders/${folder}/messages/delta?$select=${DELTA_SELECT}&$filter=${filter}`;
   }
 
+  private backfillPath(folder: string, floorMs: number): string {
+    const filter = encodeURIComponent(`receivedDateTime ge ${graphDate(floorMs)}`);
+    return `${API}/mailFolders/${folder}/messages?$select=conversationId&$filter=${filter}&$top=${BACKFILL_PAGE}`;
+  }
+
+  /** Of `ids`, the conversations this account has not stored. */
+  private async notStored(ids: readonly string[]): Promise<string[]> {
+    if (this.engine === null || ids.length === 0) return [...ids];
+    const r = await this.engine.query<{ external_id: string }>(
+      `SELECT external_id FROM connector_items WHERE account_id = $1 AND deleted_upstream_at IS NULL AND external_id = ANY($2::text[])`,
+      [this.account.id, [...ids]],
+    );
+    const stored = new Set(r.rows.map(row => row.external_id));
+    return ids.filter(id => !stored.has(id));
+  }
+
+  /** One page of the backfill listing: queue the conversations it names that are not stored yet. */
+  private async backfillPage(client: ConnectorClient, st: OutlookMailCursor & { backfill: string }, folders: ConversationFolders): Promise<PageResult> {
+    const res = await graphGet(client, st.backfill, { prefer: preferHeader({ immutableIds: true }) });
+    if (res.class !== "ok") return { ok: false, response: res };
+    if (!isRecord(res.body) || !Array.isArray(res.body.value) || res.body.value.length > BACKFILL_PAGE) return invalid(res, "messages list");
+    const rawNext = res.body["@odata.nextLink"];
+    const next = rawNext === undefined ? null : graphLinkPath(rawNext);
+    if (rawNext !== undefined && next === null) return invalid(res, "messages list next link");
+    const ids = [...new Set((res.body.value as unknown[]).map(m => (isRecord(m) ? str(m.conversationId) : null)).filter((c): c is string => c !== null))];
+    const { backfill: _done, ...rest } = st;
+    const after: OutlookMailCursor = next === null ? rest : { ...rest, backfill: next };
+    const pending: OutlookMailPending = { conversations: await this.notStored(ids), removed: [], link: st.link!, linkKind: st.linkKind! };
+    return this.drain(client, after, pending, folders);
+  }
+
   async page({ client, stream, cursor, page }: Parameters<SyncAdapter["page"]>[0]): Promise<PageResult> {
     if (!stream.startsWith(STREAM_PREFIX)) throw new Error(`outlook mail adapter has no stream ${stream}`);
     const folder = stream.slice(STREAM_PREFIX.length);
@@ -415,6 +462,7 @@ class Adapter implements SyncAdapter {
     const st: OutlookMailCursor = parseOutlookMailCursor(cursor) ?? { v: 1, floorMs: this.windowLow(), link: null, linkKind: null, pending: null };
     const folders: ConversationFolders = { ...resolved.folders, floorMs: st.floorMs };
     if (st.pending !== null) return this.drain(client, st, st.pending, folders);
+    if (st.backfill !== undefined && st.link !== null) return this.backfillPage(client, { ...st, backfill: st.backfill }, folders);
     // One delta round per run: the round that just ended is not asked again.
     if (st.linkKind === "delta" && page > 0) return { ok: true, items: [], checkpoint: JSON.stringify(st), done: true };
 
@@ -443,7 +491,11 @@ class Adapter implements SyncAdapter {
       if (conv !== null) conversations.add(conv);
     }
     const pending: OutlookMailPending = { conversations: [...conversations], removed: [...removed], link: (next ?? delta)!, linkKind: next !== null ? "next" : "delta" };
-    return this.drain(client, st, pending, folders);
+    // A round that starts over the window is a first round; its end hands over to the backfill.
+    const { firstRound: _first, backfill: _old, ...base } = st;
+    const first = st.link === null || st.firstRound === true;
+    const round: OutlookMailCursor = !first ? base : next !== null ? { ...base, firstRound: true } : { ...base, backfill: this.backfillPath(folder, st.floorMs) };
+    return this.drain(client, round, pending, folders);
   }
 
   /** Look the removed messages up, then read up to one batch of conversations. */
@@ -475,7 +527,7 @@ class Adapter implements SyncAdapter {
       return { ok: true, items, deletions, checkpoint: JSON.stringify({ ...st, pending }), done: false };
     }
     const after: OutlookMailCursor = { ...st, link: start.link, linkKind: start.linkKind, pending: null };
-    return { ok: true, items, deletions, checkpoint: JSON.stringify(after), done: start.linkKind === "delta" };
+    return { ok: true, items, deletions, checkpoint: JSON.stringify(after), done: start.linkKind === "delta" && after.backfill === undefined };
   }
 
   private conversationPath(conversationId: string): string {

@@ -65,6 +65,8 @@ export interface OutlookWorld {
   conversation?: (conversationId: string) => GraphAnswer | undefined;
   expired?: boolean;
   refuseRefresh?: boolean;
+  /** Messages a filtered delta returns at most, as Graph caps it (5,000 by default). */
+  filteredDeltaCap?: number;
   calls: GraphCall[];
 }
 
@@ -179,6 +181,8 @@ function deltaResponse(w: OutlookWorld, url: URL, prefer: string | null): Respon
       .filter(m => m.parentFolderId === folderId && (state.filterMs === null || Date.parse(m.receivedDateTime) >= Number(state.filterMs)))
       .sort((a, b) => Date.parse(b.receivedDateTime) - Date.parse(a.receivedDateTime))
       .map(m => project(m, select, null));
+    // "Applying $filter in a delta query returns only up to 5,000 messages" (learn.microsoft.com/graph/delta-query-messages).
+    if (state.filterMs !== null) rows = rows.slice(0, w.filteredDeltaCap ?? 5000);
   } else {
     const ids: string[] = [];
     for (const e of w.log) if (e.epoch > Number(state.since) && e.epoch <= Number(state.upto) && e.folderId === folderId && !ids.includes(e.id)) ids.push(e.id);
@@ -192,6 +196,28 @@ function deltaResponse(w: OutlookWorld, url: URL, prefer: string | null): Respon
   const body: Json = { "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Collection(message)", value: slice };
   if (more) body["@odata.nextLink"] = link("skiptoken", { ...state, offset: offset + size });
   else body["@odata.deltaLink"] = link("deltatoken", { epoch: state.mode === "initial" ? state.snap : state.upto, select });
+  return json(200, body);
+}
+
+/** A folder's messages, newest first, filtered by receivedDateTime and paged by $top / $skip (no cap). */
+function folderListResponse(w: OutlookWorld, url: URL, name: string): Response {
+  const folderId = FOLDERS[name] ?? name;
+  const filter = url.searchParams.get("$filter") ?? "";
+  const f = /^receivedDateTime ge (\S+)$/.exec(filter);
+  if (filter !== "" && !f) return json(400, { error: { code: "ErrorInvalidUrlQueryFilter", message: "unsupported filter" } });
+  const select = (url.searchParams.get("$select") ?? "").split(",").filter(Boolean);
+  const top = Number(url.searchParams.get("$top") ?? "10");
+  const skip = Number(url.searchParams.get("$skip") ?? "0");
+  const all = w.messages
+    .filter(m => m.parentFolderId === folderId && (!f || Date.parse(m.receivedDateTime) >= Date.parse(f[1]!)))
+    .sort((a, b) => Date.parse(b.receivedDateTime) - Date.parse(a.receivedDateTime))
+    .map(m => project(m, select, null));
+  const body: Json = { value: all.slice(skip, skip + top) };
+  if (skip + top < all.length) {
+    const next = new URL(url.toString());
+    next.searchParams.set("$skip", String(skip + top));
+    body["@odata.nextLink"] = next.toString();
+  }
   return json(200, body);
 }
 
@@ -242,6 +268,8 @@ export function outlookFetch(w: OutlookWorld): FetchFn {
       const id = FOLDERS[decodeURIComponent(folder[1]!)];
       return id ? json(200, { id, displayName: folder[1] }) : json(404, OUTLOOK_FIXTURES.error404Item);
     }
+    const list = /^\/v1\.0\/me\/mailFolders\/([^/]+)\/messages$/.exec(p);
+    if (list) return folderListResponse(w, url, decodeURIComponent(list[1]!));
     if (p === "/v1.0/me/messages") return conversationResponse(w, url);
     const one = /^\/v1\.0\/me\/messages\/([^/]+)$/.exec(p);
     if (one) {

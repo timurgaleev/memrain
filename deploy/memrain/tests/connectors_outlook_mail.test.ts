@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "
 import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import {
-  addMessage, conversationCalls, deltaCalls, GRAPH_ACCESS_TOKEN, GRAPH_REFRESH_TOKEN, markRead, moveMessage,
+  addMessage, conversationCalls, deltaCalls, FOLDERS, GRAPH_ACCESS_TOKEN, GRAPH_REFRESH_TOKEN, markRead, moveMessage,
   OUTLOOK_FIXTURES, outlookFetch, outlookTestProvider, outlookWorld, purgeMessage, type GraphMessage, type OutlookWorld,
 } from "./helpers/outlook-mail-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
@@ -155,6 +155,33 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       }
       expect(JSON.stringify(result)).not.toContain(OWNER);
       expect(JSON.stringify(result)).not.toContain(GRAPH_ACCESS_TOKEN);
+    } finally { await db.close(); }
+  });
+
+  it("a first sync past Graph's cap on a filtered delta still stores every conversation in the window", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      // Graph's filtered delta stops at 5,000 messages; here at 3, which leaves the inbox's oldest conversations out.
+      const w = outlookWorld({ filteredDeltaCap: 3 });
+      expect(w.messages.filter(m => m.parentFolderId === FOLDERS.inbox && Date.parse(m.receivedDateTime) >= T0 - 90 * DAY).length).toBeGreaterThan(3);
+      const result = await run(db.storage, w, id);
+      expect(result.status).toBe("success");
+      expect(await items(e, id)).toEqual(STORED);
+      expect(await livePages(e)).toHaveLength(STORED.length);
+      // The backfill lists conversation ids only, over the first round's floor, and is not repeated once through.
+      const lists = w.calls.filter(c => c.url.pathname === "/v1.0/me/mailFolders/inbox/messages");
+      expect(lists).toHaveLength(1);
+      expect(lists[0]!.url.searchParams.get("$select")).toBe("conversationId");
+      expect(lists[0]!.url.searchParams.get("$filter")).toBe(`receivedDateTime ge ${gd(T0 - 90 * DAY)}`);
+      const cur = (await cursorOf(e, id))!;
+      expect(cur).toMatchObject({ linkKind: "delta", pending: null });
+      expect(cur.backfill).toBeUndefined();
+      expect(cur.firstRound).toBeUndefined();
+      w.calls.length = 0;
+      expect((await run(db.storage, w, id)).status).toBe("nothing_new");
+      expect(w.calls.some(c => c.url.pathname.endsWith("/messages") && c.url.pathname.includes("mailFolders"))).toBe(false);
     } finally { await db.close(); }
   });
 
