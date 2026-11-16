@@ -20,9 +20,10 @@ Connections page, writing into its own source. One Entra app serves both.
   from your domain). Microsoft sends your browser back to an address built
   from it.
 - A Microsoft Entra directory (also called a tenant) to register the app in:
-  - **Work or school account:** your organization's directory. Registering an
-    app needs at least the Application Developer role; if you do not have it,
-    ask your IT admin to do steps 2 to 5 for you, or to give you the role.
+  - **Work or school account:** your organization's directory. Members can
+    register apps unless the organization turned that off. If registering
+    is refused, your IT admin either does steps 2
+    to 5 for you or gives you the Application Developer role.
   - **Personal account only:** since June 2024 Microsoft no longer lets a
     personal account register an app outside a directory
     ([breaking changes, "Applications must be registered in a directory"](https://learn.microsoft.com/entra/identity-platform/reference-breaking-changes)).
