@@ -3,6 +3,7 @@
  * page framed as untrusted outside text, slugs that carry no message text.
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { locateFenceMarkers } from "../src/core/fence-shared.ts";
 import { parseBodyTimeline } from "../src/core/timeline-body.ts";
 import { GATE_OWNED_KEYS } from "../src/core/quarantine.ts";
@@ -49,7 +50,7 @@ describe("mail", () => {
     expect(page.kind).toBe("mail");
     expect(page.truth).toMatchObject({
       origin: "connector", connector: "gmail", kind: "mail", trust: "untrusted",
-      account: accountRef(ACCOUNT), external_id: "thr-001", last_activity_at: "2026-10-03T09:00:00.000Z",
+      account: accountRef(ACCOUNT, "google"), external_id: "thr-001", last_activity_at: "2026-10-03T09:00:00.000Z",
     });
     expect(page.truth[OUTSIDE_NEUTRALIZED]).toBe(1);
     expect(JSON.stringify(page.truth)).not.toContain(ACCOUNT);
@@ -122,15 +123,37 @@ const event = (over: Partial<CalendarEvent> = {}): CalendarEvent => ({
 });
 
 describe("calendar", () => {
-  it("renders the same event identically whichever provider it came from", () => {
+  it("renders the same event identically whichever provider it came from, each provider under its own page", () => {
     const google = renderCalendarEvent({ service: "google_calendar", accountLabel: ACCOUNT }, event());
     const outlook = renderCalendarEvent({ service: "outlook_calendar", accountLabel: ACCOUNT }, event({ id: "AAMk-other-id" }));
-    expect(google.slug).toBe(outlook.slug);
+    // The same invitation in a Google and an Outlook calendar of one address is two items of two accounts.
+    expect(outlook.slug).not.toBe(google.slug);
+    expect(outlook.truth.account).not.toBe(google.truth.account);
     expect(google.body).toBe(outlook.body);
+    expect(outlook.slug).toMatch(/^calendar\/[0-9a-f]{16}\/[0-9a-f]{16}$/);
     expect(google.slug).toMatch(/^calendar\/[0-9a-f]{16}\/[0-9a-f]{16}$/);
     expect(google.truth).toMatchObject({ kind: "calendar", trust: "untrusted", occurred_at: "2026-11-12T10:00:00.000Z", last_activity_at: "2026-11-12T11:00:00.000Z" });
     expect(google.participants.map(p => p.email).sort()).toEqual(["bob@example.net", "carol@example.net"]);
     expect(google.body).toContain("Carol Diaz <carol@example.net> (accepted)");
+  });
+});
+
+describe("slugs of accounts already syncing", () => {
+  // Google pages are live: their slugs and owner refs must never move.
+  it("keep Google's label-only account ref, and key every Microsoft service by provider", () => {
+    const legacy = createHash("sha256").update(`account:${ACCOUNT}`, "utf8").digest("hex").slice(0, 16);
+    const ical = createHash("sha256").update("ical:uid-77@example.net", "utf8").digest("hex").slice(0, 16);
+    expect(renderCalendarEvent({ service: "google_calendar", accountLabel: ACCOUNT }, event()).slug).toBe(`calendar/${legacy}/${ical}`);
+    expect(renderMailThread({ service: "gmail", accountLabel: ACCOUNT }, thread()).truth.account).toBe(legacy);
+    for (const service of ["outlook_mail", "outlook_calendar"] as const) {
+      const page = service === "outlook_mail"
+        ? renderMailThread({ service, accountLabel: ACCOUNT }, thread())
+        : renderCalendarEvent({ service, accountLabel: ACCOUNT }, event());
+      expect(page.truth.account).not.toBe(legacy);
+      expect(page.slug).not.toContain(legacy);
+    }
+    expect(renderMailThread({ service: "outlook_mail", accountLabel: ACCOUNT }, thread()).slug)
+      .not.toBe(renderMailThread({ service: "gmail", accountLabel: ACCOUNT }, thread()).slug);
   });
 });
 

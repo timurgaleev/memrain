@@ -57,7 +57,7 @@ const SENT = outlookMailStream("sentitems");
 const STORED = ["conv-A", "conv-B", "conv-E", "conv-I", "conv-O", "conv-R"];
 
 const slugOf = (conv: string, firstAt: number) =>
-  `mail/${accountRef(OWNER)}/${new Date(firstAt).toISOString().slice(0, 7)}/${shortHash(`thread:${conv}`)}`;
+  `mail/${accountRef(OWNER, "microsoft")}/${new Date(firstAt).toISOString().slice(0, 7)}/${shortHash(`thread:${conv}`)}`;
 const SLUG_A = slugOf("conv-A", T0 - 10 * DAY);
 const SLUG_B = slugOf("conv-B", T0 - 20 * DAY);
 const SLUG_E = slugOf("conv-E", T0 - 5 * DAY);

@@ -17,7 +17,7 @@ import { neutralizeOutsideText } from "../neutralize-outside-text.ts";
 import { OUTSIDE_NEUTRALIZED } from "../fence-carry.ts";
 import { calendarLoopSignals, chatLoopSignals, mailLoopSignals, type LoopSignals } from "../loops/signals.ts";
 import {
-  accountRef,
+  serviceAccountRef,
   shortHash,
   type CalendarEvent,
   type ChatDay,
@@ -228,7 +228,7 @@ function baseTruth(ctx: ConnectorContext, kind: ConnectorDataKind, externalId: s
     connector: ctx.service,
     kind,
     trust: "untrusted",
-    account: accountRef(ctx.accountLabel),
+    account: serviceAccountRef(ctx),
     external_id: externalId,
     occurred_at: occurredAt,
     last_activity_at: lastActivityAt,
@@ -314,7 +314,7 @@ export function renderMailThread(ctx: ConnectorContext, thread: MailThread): Ren
   const messages = [...thread.messages].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
   const first = iso(messages[0]!.date, "message date");
   const last = iso(messages.at(-1)!.date, "message date");
-  const account = accountRef(ctx.accountLabel);
+  const account = serviceAccountRef(ctx);
   const slug = `mail/${account}/${first.slice(0, 7)}/${shortHash(`thread:${thread.threadId}`)}`;
   const g = new Guard(`connector mail '${slug}'`);
   const subject = headingText(g.line(messages[0]!.subject), "(no subject)");
@@ -358,7 +358,7 @@ export function renderCalendarEvent(ctx: ConnectorContext, event: CalendarEvent)
   const end = event.end === null ? null : iso(event.end, "event end");
   const key = shortHash(event.iCalUID ? `ical:${event.iCalUID}` : `event:${ctx.service}:${event.id}`);
   // No date in the slug: a rescheduled event stays one page.
-  const slug = `calendar/${accountRef(ctx.accountLabel)}/${key}`;
+  const slug = `calendar/${serviceAccountRef(ctx)}/${key}`;
   const g = new Guard(`connector event '${slug}'`);
   const title = headingText(g.line(event.title), "(untitled event)");
 
@@ -410,7 +410,7 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day.day)) throw new Error("connector chat day is not YYYY-MM-DD");
   const dayStart = iso(`${day.day}T00:00:00.000Z`, "chat day");
   const messages = [...day.messages].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
-  const slug = `chat/${accountRef(ctx.accountLabel)}/${shortHash(`channel:${day.channelId}`)}/${day.day}`;
+  const slug = `chat/${serviceAccountRef(ctx)}/${shortHash(`channel:${day.channelId}`)}/${day.day}`;
   const g = new Guard(`connector chat '${slug}'`);
   const channel = headingText(g.line(day.channelName, 120), "channel");
   const title = `#${channel} · ${day.day}`;
@@ -443,7 +443,7 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
 export function renderMeeting(ctx: ConnectorContext, meeting: MeetingTranscript): RenderedConnectorPage {
   const start = iso(meeting.start, "meeting start");
   const end = meeting.end === null ? null : iso(meeting.end, "meeting end");
-  const slug = `meeting/${accountRef(ctx.accountLabel)}/${start.slice(0, 10)}-${shortHash(`meeting:${ctx.service}:${meeting.id}`)}`;
+  const slug = `meeting/${serviceAccountRef(ctx)}/${start.slice(0, 10)}-${shortHash(`meeting:${ctx.service}:${meeting.id}`)}`;
   const g = new Guard(`connector meeting '${slug}'`);
   const title = headingText(g.line(meeting.title), "(untitled meeting)");
 

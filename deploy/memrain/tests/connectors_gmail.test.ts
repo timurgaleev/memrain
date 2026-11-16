@@ -47,7 +47,7 @@ const ENV: NodeJS.ProcessEnv = {
 const STORED = ["18c0a1", "18c0b1", "18c0e1", "18c0h1"];
 
 const slugOf = (threadId: string, firstAt: number) =>
-  `mail/${accountRef(OWNER)}/${new Date(firstAt).toISOString().slice(0, 7)}/${shortHash(`thread:${threadId}`)}`;
+  `mail/${accountRef(OWNER, "google")}/${new Date(firstAt).toISOString().slice(0, 7)}/${shortHash(`thread:${threadId}`)}`;
 const SLUG_A = slugOf("18c0a1", T0 - 10 * DAY);
 const SLUG_B = slugOf("18c0b1", T0 - 20 * DAY);
 const SLUG_E = slugOf("18c0e1", T0 - 5 * DAY);

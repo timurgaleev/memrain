@@ -63,7 +63,7 @@ async function rowsContaining(e: Engine, needle: string): Promise<string[]> {
 
 for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`connector deletion and retention (${name})`, () => {
   let db: Awaited<ReturnType<typeof open>>;
-  const scope = { sourceId: "inbox", accountRef: accountRef(OWNER) };
+  const scope = { sourceId: "inbox", accountRef: accountRef(OWNER, "google") };
 
   beforeEach(async () => {
     db = await open();

@@ -70,7 +70,7 @@ async function storedToken(e: Engine, accountId: string, calendarId: string): Pr
 }
 
 const eventKey = (eventId: string) => `${shortHash("gcal:primary")}:${eventId}`;
-const pageSlug = (iCalUID: string) => `calendar/${accountRef(OWNER)}/${shortHash(`ical:${iCalUID}`)}`;
+const pageSlug = (iCalUID: string) => `calendar/${accountRef(OWNER, "google")}/${shortHash(`ical:${iCalUID}`)}`;
 
 describe("google provider", () => {
   it("ships in the built-in registry with read-only Calendar access and the documented endpoints", () => {

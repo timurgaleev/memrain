@@ -14,9 +14,10 @@ import { registerSource } from "../src/core/sources.ts";
 import { putPage } from "../src/core/pages.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
 import { ProviderRegistry } from "../src/core/connectors/providers.ts";
-import { createAccount, getAccount, storeCredential, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
+import { createAccount, getAccount, setAccountStatus, storeCredential, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
 import { getOAuthClient, setOAuthClient } from "../src/core/connectors/oauth-clients.ts";
-import { accountRef } from "../src/core/connectors/model.ts";
+import { accountRef, type CalendarEvent } from "../src/core/connectors/model.ts";
+import { renderCalendarEvent } from "../src/core/connectors/render.ts";
 import { MASS_DELETE, openNotice } from "../src/core/connectors/sync-store.ts";
 import { recordAccountRun } from "../src/core/connectors/account-status.ts";
 import { handleAdminConnectors, type AdminConnectorDeps } from "../src/http/admin-connectors.ts";
@@ -71,7 +72,7 @@ async function connected(engine: Engine): Promise<ConnectorAccount> {
 async function connectorPage(storage: Storage, slug: string): Promise<void> {
   await putPage(storage, {
     slug, type: "email", allowAdHocType: true, title: slug, markdown_body: `Body of ${slug}.`,
-    compiled_truth: { origin: "connector", account: accountRef(OWNER), kind: "mail" },
+    compiled_truth: { origin: "connector", account: accountRef(OWNER, "test"), kind: "mail" },
     written_by: "connector-test", source_id: "inbox", outsideText: true,
   });
 }
@@ -278,6 +279,49 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         expect((await e.query("SELECT 1 FROM pages WHERE slug = 'mail/2026-11/shared'")).rows).toHaveLength(1);
         await e.query("DELETE FROM connector_accounts WHERE id = $1", [twin.id]);
       }
+    } finally { await db.close(); }
+  });
+
+  it("keep a Google and an Outlook copy of one event on separate pages, and delete one account's without touching the other's", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: "cal", kind: "calendar", pathPrefix: "calendar/" });
+      const event: CalendarEvent = {
+        id: "evt-1", iCalUID: "uid-77@example.net", title: "Design review", description: null, location: null,
+        start: "2026-11-12T10:00:00.000Z", end: "2026-11-12T11:00:00.000Z", allDay: false, status: "confirmed",
+        organizer: { name: null, email: "bob@example.net" }, attendees: [], recurrence: null,
+      };
+      const accounts: ConnectorAccount[] = [];
+      const slugs: string[] = [];
+      // One address, both providers, one source: the shape an owner gets by reusing the Google source for Outlook.
+      for (const [provider, service] of [["google", "google_calendar"], ["microsoft", "outlook_calendar"]] as const) {
+        const account = await createAccount(e, { sourceId: "cal", provider, services: [service], principalRef: "admin:operator", accountLabel: OWNER });
+        await setAccountStatus(e, account.id, "revoked");
+        const page = renderCalendarEvent({ service, accountLabel: OWNER }, event);
+        await putPage(db.storage, {
+          slug: page.slug, type: page.type, allowAdHocType: true, title: page.title, markdown_body: page.body,
+          compiled_truth: page.truth, written_by: `connector-${provider}`, source_id: "cal", outsideText: true,
+        });
+        accounts.push(account);
+        slugs.push(page.slug);
+      }
+      expect(slugs[1]).not.toBe(slugs[0]);
+      expect((await e.query("SELECT count(*)::int AS n FROM pages WHERE source_id = 'cal'")).rows[0]).toEqual({ n: 2 });
+
+      const [google, outlook] = accounts as [ConnectorAccount, ConnectorAccount];
+      const d = deps(db.storage);
+      const googlePreview = await call(get(`/admin/api/connectors/accounts/${google.id}/preview`), d);
+      expect(googlePreview.status).toBe(200);
+      expect(await googlePreview.json()).toMatchObject({ pages: 1 });
+      const preview = await call(get(`/admin/api/connectors/accounts/${outlook.id}/preview`), d);
+      expect(preview.status).toBe(200);
+      const plan = await preview.json() as { pages: number; plan_hash: string };
+      expect(plan.pages).toBe(1);
+      const done = await call(post(`/admin/api/connectors/accounts/${outlook.id}/delete-data`, { confirm_label: OWNER, plan_hash: plan.plan_hash }), d);
+      expect(await done.json()).toEqual({ ok: true, deleted: 1, changed: 0 });
+      const left = (await e.query<{ slug: string }>("SELECT slug FROM pages WHERE source_id = 'cal' AND deleted_at IS NULL")).rows.map((r) => r.slug);
+      expect(left).toEqual([slugs[0]!]);
     } finally { await db.close(); }
   });
 

@@ -298,15 +298,16 @@ function isDisconnected(account: ConnectorAccount): boolean {
 }
 
 /**
- * Connector pages name their owner by a hash of the lowercased label, without
- * the provider. Another account in the same source with that label (the same
- * mailbox through another provider, or the address in other case) owns pages
+ * Connector pages name their owner by accountRef: a hash of the lowercased
+ * label, with the provider only for providers keyed that way (model.ts).
+ * Another account in the same source under the same ref (the address in other
+ * case, or the same mailbox through another label-only provider) owns pages
  * the scope cannot tell apart, so deleting by it would take that account's
  * pages too.
  */
 async function sharesOwner(engine: Engine, account: ConnectorAccount, ref: string): Promise<boolean> {
   return (await listAccounts(engine, { sourceId: account.source_id }))
-    .some((other) => other.id !== account.id && accountRef(other.account_label) === ref);
+    .some((other) => other.id !== account.id && accountRef(other.account_label, other.provider) === ref);
 }
 
 const SHARED_OWNER = {
@@ -320,7 +321,7 @@ async function accountAction(req: Request, id: string, action: string, deps: Adm
   const engine = deps.storage.engine();
   const account = await getAccount(engine, id);
   if (!account) return json({ error: "account_not_found" }, 404);
-  const scope = { sourceId: account.source_id, accountRef: accountRef(account.account_label) };
+  const scope = { sourceId: account.source_id, accountRef: accountRef(account.account_label, account.provider) };
 
   try {
     switch (action) {

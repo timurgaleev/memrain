@@ -405,7 +405,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES ($1, 'conn-meet', 'test', 'admin:operator', $2)`,
         [ACCOUNT_ID, label],
       );
-      const truth = { origin: "connector", trust: "untrusted", account: accountRef(label) };
+      const truth = { origin: "connector", trust: "untrusted", account: accountRef(label, "test") };
       const long = (version: string, body: string): SyncAdapter => ({
         streams: () => [STREAM],
         page: async () => ({ ok: true, items: [{ externalId: "m", version, slug: "test/acct/m", type: "note", title: "M", body, truth }], checkpoint: "c1", done: true }),
@@ -427,7 +427,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       // Another account's page claiming to be a part of this item is not this account's to delete.
       await putPage(db.storage, {
         slug: "test/acct/m/part-099", title: "Not ours", markdown_body: "Another account's text.", source_id: "conn-meet",
-        compiled_truth: { origin: "connector", account: accountRef("someone@example.test"), part_of: "test/acct/m" },
+        compiled_truth: { origin: "connector", account: accountRef("someone@example.test", "test"), part_of: "test/acct/m" },
       });
 
       const r = await runConnectorSync(db.storage, acct, { ...deps, adapter: long("2", Array.from({ length: 4 }, (_, i) => line(i)).join("")) });

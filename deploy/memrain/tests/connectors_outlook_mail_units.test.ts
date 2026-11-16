@@ -16,6 +16,7 @@ import { FOLDERS, fixtureMessages, type GraphMessage } from "./helpers/outlook-m
 import { normalizeGmailThread } from "../src/core/connectors/google/gmail.ts";
 import { normalizeOutlookConversation, normalizeOutlookMessage, parseOutlookMailCursor } from "../src/core/connectors/microsoft/mail.ts";
 import { renderMailThread } from "../src/core/connectors/render.ts";
+import { accountRef } from "../src/core/connectors/model.ts";
 import { costUsd } from "../src/core/budget.ts";
 import { DEFAULT_MODEL_ID } from "../src/core/embedding.ts";
 import { registerSource } from "../src/core/sources.ts";
@@ -101,12 +102,17 @@ describe("outlook and gmail render alike", () => {
     expect({ bulk: o.bulk, kind: o.kind, occurredAt: o.occurredAt, participants: o.participants })
       .toEqual({ bulk: g.bulk, kind: g.kind, occurredAt: g.occurredAt, participants: g.participants });
     const strip = (t: Record<string, unknown>) => {
-      const { connector: _c, external_id: _x, labels: _l, ...rest } = t;
+      const { connector: _c, external_id: _x, labels: _l, account: _a, ...rest } = t;
       return rest;
     };
     expect(strip(o.truth)).toEqual(strip(g.truth));
     expect(o.truth.connector).toBe("outlook_mail");
-    expect(o.slug.split("/").slice(0, 3)).toEqual(g.slug.split("/").slice(0, 3));
+    // Each provider's copy belongs to its own account: same month, its own owner ref.
+    expect([o.truth.account, g.truth.account]).toEqual([accountRef(OWNER, "microsoft"), accountRef(OWNER, "google")]);
+    const [oKind, oAccount, oMonth] = o.slug.split("/");
+    const [gKind, gAccount, gMonth] = g.slug.split("/");
+    expect([oKind, oMonth]).toEqual([gKind, gMonth]);
+    expect([oAccount, gAccount]).toEqual([accountRef(OWNER, "microsoft"), accountRef(OWNER, "google")]);
   });
 });
 

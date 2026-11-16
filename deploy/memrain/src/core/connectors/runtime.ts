@@ -218,7 +218,7 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
     depsFor: (account): SyncDeps => {
       const wiring = providerWiring(account);
       if (!account.accountLabel) throw new Error(`connector account ${account.id} has no label`);
-      const scope = { sourceId: account.sourceId, accountRef: accountRef(account.accountLabel) };
+      const scope = { sourceId: account.sourceId, accountRef: accountRef(account.accountLabel, account.provider) };
       return {
         ...wiring,
         accounts: {

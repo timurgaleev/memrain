@@ -63,7 +63,7 @@ const DELTA_ONE = "/v1.0/me/calendarView/delta?$deltatoken=delta-one";
 const TEAM = "AAMkCalTeam0001=";
 
 const eventKey = (eventId: string, calendar = "primary") => `${shortHash(`ocal:${calendar}`)}:${eventId}`;
-const pageSlug = (iCalUId: string) => `calendar/${accountRef(OWNER)}/${shortHash(`ical:${iCalUId}`)}`;
+const pageSlug = (iCalUId: string) => `calendar/${accountRef(OWNER, "microsoft")}/${shortHash(`ical:${iCalUId}`)}`;
 const E1 = pageSlug("040000008200E00074C5B7101A82E0080000000001E1");
 const E2 = pageSlug("040000008200E00074C5B7101A82E0080000000003E2");
 const E3 = pageSlug("040000008200E00074C5B7101A82E0080000000004E3");
@@ -230,12 +230,15 @@ describe("outlook calendar, pure parts", () => {
     };
     const o = renderCalendarEvent(ctx("outlook_calendar"), normalizeOutlookEvent("primary", outlook, OWNER)!);
     const g = renderCalendarEvent(ctx("google_calendar"), normalizeGoogleEvent("primary", google)!);
-    expect(o.slug).toBe(g.slug);
+    // Same event key; each provider's copy is its own account's page.
+    expect(o.slug).toBe(pageSlug("golden-0001@example.test"));
+    expect(g.slug).toBe(`calendar/${accountRef(OWNER, "google")}/${shortHash("ical:golden-0001@example.test")}`);
     expect(o.title).toBe(g.title);
     expect(o.body).toBe(g.body);
-    const { connector: oc, external_id: oe, ...oRest } = o.truth;
-    const { connector: gc, external_id: ge, ...gRest } = g.truth;
+    const { connector: oc, external_id: oe, account: oa, ...oRest } = o.truth;
+    const { connector: gc, external_id: ge, account: ga, ...gRest } = g.truth;
     expect([oc, gc]).toEqual(["outlook_calendar", "google_calendar"]);
+    expect([oa, ga]).toEqual([accountRef(OWNER, "microsoft"), accountRef(OWNER, "google")]);
     expect(oe).not.toBe(ge);
     expect(oRest).toEqual(gRest);
     // The open-loop detector reads the same reply state from both.

@@ -176,10 +176,39 @@ export function shortHash(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex").slice(0, REF_LEN);
 }
 
+/** The provider each service connects through. */
+export const SERVICE_PROVIDER: Readonly<Record<ConnectorService, string>> = {
+  gmail: "google",
+  google_calendar: "google",
+  outlook_mail: "microsoft",
+  outlook_calendar: "microsoft",
+  teams_chat: "microsoft",
+  teams_transcripts: "microsoft",
+  slack: "slack",
+  fireflies: "fireflies",
+};
+
+/**
+ * Providers whose account ref names the provider too. One address can be a
+ * Google and a Microsoft account at once (a Microsoft account may sign in
+ * with a Gmail address), and an invitation reaches both calendars under one
+ * iCalUID; a ref of the label alone would put both copies on one page, owned
+ * by both accounts. Providers that synced before this keep the label-only ref
+ * their stored pages carry, so none of those pages moves.
+ */
+const PROVIDER_KEYED_REFS = new Set(["microsoft"]);
+
 /**
  * The account as it appears in slugs and compiled truth: a hash of the
- * lowercased label, so no address reaches a slug, a receipt or a log line.
+ * lowercased label (and, for PROVIDER_KEYED_REFS, the provider), so no address
+ * reaches a slug, a receipt or a log line.
  */
-export function accountRef(accountLabel: string): string {
-  return shortHash(`account:${accountLabel.trim().toLowerCase()}`);
+export function accountRef(accountLabel: string, provider: string): string {
+  const label = accountLabel.trim().toLowerCase();
+  return shortHash(PROVIDER_KEYED_REFS.has(provider) ? `account:${provider}:${label}` : `account:${label}`);
+}
+
+/** The account ref of the account a service's item belongs to. */
+export function serviceAccountRef(ctx: ConnectorContext): string {
+  return accountRef(ctx.accountLabel, SERVICE_PROVIDER[ctx.service]);
 }

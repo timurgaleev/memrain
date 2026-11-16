@@ -814,7 +814,7 @@ class Run {
     // Parts an earlier, longer version had: once the contents page no longer
     // links to them they would linger in search with text the item dropped.
     if (hash !== null && this.account.accountLabel) {
-      await deleteStaleParts(this.storage, { sourceId: this.account.sourceId, accountRef: accountRef(this.account.accountLabel) },
+      await deleteStaleParts(this.storage, { sourceId: this.account.sourceId, accountRef: accountRef(this.account.accountLabel, this.account.provider) },
         item.slug, doc.parts.map(p => p.slug));
     }
     return hash;
