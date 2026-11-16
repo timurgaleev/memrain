@@ -428,13 +428,16 @@ export async function completeConnect(
   const refreshToken = typeof body.refresh_token === "string" && body.refresh_token !== "" ? body.refresh_token : undefined;
 
   const requested = st.requested_scopes ?? [];
-  const granted = parseScopes(provider, body.scope, requested);
+  // Scopes the provider's token response does not report are not checked.
+  const unreported = new Set(provider.unreportedScopes ?? []);
+  const checked = (scopes: readonly string[]) => scopes.filter((s) => !unreported.has(s));
+  const granted = checked(parseScopes(provider, body.scope, requested));
   const extra = granted.filter((s) => !requested.includes(s)).sort();
-  const missing = requested.filter((s) => !granted.includes(s)).sort();
+  const missing = checked(requested).filter((s) => !granted.includes(s)).sort();
   // A request widened by companion services (combinedGrants) may also come
   // back as exactly what the account's own services need: another Google
   // user, whose calendar is not connected here, unticks the calendar box.
-  const own = requestedScopes(provider, (st.services ?? []).filter((s) => Object.hasOwn(provider.services, s)));
+  const own = checked(requestedScopes(provider, (st.services ?? []).filter((s) => Object.hasOwn(provider.services, s))));
   const exactlyOwn = granted.length === own.length && own.every((s) => granted.includes(s));
   const revoke = () => revokeToken(provider, fetch, refreshToken ?? accessToken, client);
   // A refused token is kept away from revocation when a live account shares its grant.
@@ -464,7 +467,7 @@ export async function completeConnect(
     ...(refreshToken ? { refresh_token: refreshToken } : {}),
     ...(typeof body.token_type === "string" ? { token_type: body.token_type } : {}),
   };
-  const scopes = [...granted].sort();
+  const scopes = [...new Set([...granted, ...requested.filter((s) => unreported.has(s))])].sort();
 
   try {
     return await persistGrant(deps.engine, kek, st, provider.id, label, tokens, scopes, expiresAt);

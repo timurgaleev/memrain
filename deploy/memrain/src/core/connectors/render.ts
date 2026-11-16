@@ -364,6 +364,7 @@ export function renderCalendarEvent(ctx: ConnectorContext, event: CalendarEvent)
 
   const lines = [`# ${title}`, "", `Calendar event · ${event.status}`, "", `When: ${event.allDay ? start.slice(0, 10) : start}${end ? ` to ${event.allDay ? end.slice(0, 10) : end}` : ""}`];
   if (event.location) lines.push(`Where: ${g.line(event.location)}`);
+  if (event.onlineMeeting) lines.push("Online meeting: yes");
   if (event.organizer) lines.push(`Organizer: ${g.person(event.organizer)}`);
   if (event.recurrence?.length) lines.push(`Repeats: ${event.recurrence.map(r => g.line(r, 200)).join("; ")}`);
   const occurrences = [...(event.occurrences ?? [])]

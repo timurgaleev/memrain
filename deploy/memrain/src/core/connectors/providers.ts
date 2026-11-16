@@ -22,6 +22,7 @@ import type { SourceKind } from "../sources.ts";
 import type { SyncAccount, SyncAdapter } from "./sync-engine.ts";
 import { assertConnectorName } from "./accounts.ts";
 import { googleProvider } from "./google/provider.ts";
+import { microsoftProvider, microsoftTenant } from "./microsoft/provider.ts";
 
 export interface ProviderService {
   /** Read-only scopes this service needs. */
@@ -32,6 +33,8 @@ export interface ProviderService {
   apiOrigin?: string;
   /** Minimum gap between two requests of one account to this service, in ms (the client's default otherwise). */
   minSpacingMs?: number;
+  /** Request headers every API call of this service carries (Graph's `Prefer`). */
+  headers?: Readonly<Record<string, string>>;
 }
 
 export interface RevokeContext {
@@ -70,6 +73,11 @@ export interface ConnectorProvider {
   scopeSeparator?: string;
   /** Map a granted scope onto the spelling that was requested. */
   normalizeScope?: (scope: string) => string;
+  /**
+   * Scopes the token response's `scope` may leave out or add (Microsoft's
+   * OpenID scopes): asking for them is not checked against the grant.
+   */
+  unreportedScopes?: readonly string[];
   /** The mailbox address or workspace name the token belongs to. */
   identify: (ctx: { fetch: FetchFn; accessToken: string; tokenResponse: Record<string, unknown> }) => Promise<string>;
   /** Provider-specific revocation; the default posts RFC 7009 to `revokeUrl`. */
@@ -158,10 +166,22 @@ export class ProviderRegistry {
   }
 }
 
-/** Providers that ship with Memrain. Each arrives with its connector. */
-export function builtinProviders(): ProviderRegistry {
+let badTenantWarned = false;
+
+/**
+ * Providers that ship with Memrain. Each arrives with its connector. A
+ * MEMRAIN_MICROSOFT_TENANT that names no tenant leaves Microsoft out, said
+ * once on stderr, rather than stopping the server.
+ */
+export function builtinProviders(env: NodeJS.ProcessEnv = process.env): ProviderRegistry {
   const registry = new ProviderRegistry();
   registry.register(googleProvider());
+  const tenant = microsoftTenant(env);
+  if (tenant !== null) registry.register(microsoftProvider(tenant));
+  else if (!badTenantWarned) {
+    badTenantWarned = true;
+    console.error("[connectors] MEMRAIN_MICROSOFT_TENANT is not common, organizations, consumers, a tenant id or a domain; Microsoft is not offered");
+  }
   registry.registerApiKey(firefliesProvider());
   return registry;
 }
