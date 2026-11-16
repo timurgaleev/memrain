@@ -308,6 +308,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const relist = deltaCalls(w).filter(u => u.searchParams.has("$filter"));
       expect(relist.map(u => u.pathname)).toEqual(["/v1.0/me/mailFolders/inbox/messages/delta", "/v1.0/me/mailFolders/sentitems/messages/delta"]);
       expect(relist[0]!.searchParams.get("$filter")).toBe(`receivedDateTime ge ${gd(T0 + DAY - 90 * DAY)}`);
+      // The backfill after the re-listed round lists that same window, not the first sync's older floor.
+      const lists = w.calls.filter(c => c.url.pathname === "/v1.0/me/mailFolders/inbox/messages");
+      expect(lists.map(c => c.url.searchParams.get("$filter"))).toEqual([`receivedDateTime ge ${gd(T0 + DAY - 90 * DAY)}`]);
       expect(await items(e, id)).toEqual(STORED);
       expect(await livePages(e)).toHaveLength(STORED.length);
       expect(result.counts.pages_written).toBe(0);

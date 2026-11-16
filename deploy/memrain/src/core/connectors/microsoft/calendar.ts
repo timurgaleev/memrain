@@ -38,10 +38,11 @@
  *   - An online meeting is kept as a flag. Its join link is never stored:
  *     it is dropped from the event and scrubbed from the description.
  *
- * Every request carries `Prefer: outlook.timezone="UTC", odata.maxpagesize=50`
- * and bounds the response body. A delta or list page asks for no more events
- * than one run may store (the engine's `perRun` budget), so a low item cap
- * makes a first sync take more runs instead of replaying its first page. Rate
+ * Every request carries `Prefer: outlook.timezone="UTC"` and
+ * `odata.maxpagesize` (50 at most) and bounds the response body. A delta or
+ * list page asks for no more events than one run may store (the engine's
+ * `perRun` budget), so a low item cap makes a first sync take more runs
+ * instead of replaying its first page. Rate
  * limits (429 with Retry-After) are waited out and retried by the connector
  * client; past its cap the run stops partial and resumes from the same
  * cursor. A selected calendar that answers 404 is one failing item, held

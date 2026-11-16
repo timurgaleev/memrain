@@ -494,7 +494,7 @@ class Adapter implements SyncAdapter {
     // A round that starts over the window is a first round; its end hands over to the backfill.
     const { firstRound: _first, backfill: _old, ...base } = st;
     const first = st.link === null || st.firstRound === true;
-    const round: OutlookMailCursor = !first ? base : next !== null ? { ...base, firstRound: true } : { ...base, backfill: this.backfillPath(folder, st.floorMs) };
+    const round: OutlookMailCursor = !first ? base : next !== null ? { ...base, firstRound: true } : { ...base, backfill: this.backfillPath(folder, Math.max(st.floorMs, this.windowLow())) };
     return this.drain(client, round, pending, folders);
   }
 
