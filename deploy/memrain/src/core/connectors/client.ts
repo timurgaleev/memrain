@@ -18,6 +18,10 @@
  * `auth_required` with `reauth` set, which the sync engine turns into a paused
  * account waiting for its owner to reconnect.
  *
+ * A request may bound the response body (`maxBytes`): a larger body is not
+ * buffered, the read stops past the bound and the request ends `challenge`
+ * with `tooLarge` set, never retried, so one huge item cannot exhaust memory.
+ *
  * A token lives in the Authorization header only. Error text is built from
  * status codes and classes, and anything that does quote a thrown message has
  * every token this client sent scrubbed from it first.
@@ -76,6 +80,40 @@ export interface ConnectorResponse {
    * printed, and read only for that code.
    */
   errorBody?: unknown;
+  /** Set when the body was larger than the request's `maxBytes` and was not read. */
+  tooLarge?: boolean;
+}
+
+export interface RequestOptions {
+  /** Largest response body read, in bytes; past it the request ends `tooLarge`. Default: unbounded. */
+  maxBytes?: number;
+}
+
+/** The body past `maxBytes`: the read stopped and the stream was cancelled. */
+const TOO_LARGE = Symbol("too large");
+
+/** The body as text, stopping past `maxBytes` instead of buffering it whole. */
+async function readBody(res: Response, maxBytes: number | undefined): Promise<string | typeof TOO_LARGE> {
+  if (maxBytes === undefined || res.body === null) return res.text();
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body.cancel().catch(() => {});
+    return TOO_LARGE;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return TOO_LARGE;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 /** A path or pagination link the client refuses to request. */
@@ -226,8 +264,8 @@ export class ConnectorClient {
     return UNSPECIFIED_RATE_LIMIT_WAIT_MS;
   }
 
-  async get(path: string): Promise<ConnectorResponse> {
-    return this.request("GET", path, undefined);
+  async get(path: string, opts: RequestOptions = {}): Promise<ConnectorResponse> {
+    return this.request("GET", path, undefined, opts);
   }
 
   /** POST a JSON body to a path on the origin. */
@@ -235,7 +273,7 @@ export class ConnectorClient {
     return this.request("POST", path, JSON.stringify(body));
   }
 
-  private async request(method: "GET" | "POST", path: string, body: string | undefined): Promise<ConnectorResponse> {
+  private async request(method: "GET" | "POST", path: string, body: string | undefined, opts: RequestOptions = {}): Promise<ConnectorResponse> {
     const url = this.urlFor(path);
     let refreshed = false;
     let pending = await this.currentToken();
@@ -247,7 +285,7 @@ export class ConnectorClient {
       this.lastRequestAt = this.now();
       this.sent.add(token);
       let res: Response;
-      let text: string;
+      let read: string | typeof TOO_LARGE;
       try {
         res = await this.fetchFn(url, {
           method,
@@ -259,7 +297,7 @@ export class ConnectorClient {
           },
           ...(body === undefined ? {} : { body }),
         });
-        text = await res.text();
+        read = await readBody(res, opts.maxBytes);
       } catch (e) {
         const reason = this.scrub(e instanceof Error ? e.message : String(e));
         if (attempt >= this.maxRetries) {
@@ -268,6 +306,10 @@ export class ConnectorClient {
         await this.sleep(Math.min(BASE_BACKOFF_MS * 2 ** attempt, this.maxWaitMs));
         continue;
       }
+      if (read === TOO_LARGE) {
+        return { class: "challenge", status: res.status, body: null, next: null, error: `HTTP ${res.status} body larger than ${opts.maxBytes} bytes; not read`, tooLarge: true };
+      }
+      const text = read;
 
       const cls = classifyResponse(res.status, res.headers, text.slice(0, CLASSIFY_BODY_PREFIX));
       if (cls === "auth_required" && this.renewable) {

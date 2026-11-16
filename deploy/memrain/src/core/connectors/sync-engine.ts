@@ -143,11 +143,15 @@ export interface RenderedSyncItem {
   failure?: undefined;
 }
 
-/** An item the adapter could not read or render; counted toward its hold. */
+/**
+ * An item the adapter could not read or render; counted toward its hold.
+ * `holdNow` marks a failure no retry of the same version can fix: the item
+ * is held at once instead of blocking its stream for ITEM_HOLD_AFTER runs.
+ */
 export interface FailedSyncItem {
   externalId: string;
   version: string | null;
-  failure: { code: string; message: string };
+  failure: { code: string; message: string; holdNow?: boolean };
 }
 
 export type SyncItem = RenderedSyncItem | FailedSyncItem;
@@ -623,7 +627,7 @@ class Run {
       return null;
     }
     if (item.failure !== undefined) {
-      return { externalId: item.externalId, version: item.version, code: item.failure.code, message: item.failure.message, deterministic: false };
+      return { externalId: item.externalId, version: item.version, code: item.failure.code, message: item.failure.message, deterministic: item.failure.holdNow === true };
     }
     const settle = (pageSlug: string, contentHash: string | null) => recordItemSettled(this.engine, {
       accountId: this.account.id, externalId: item.externalId, version: item.version, pageSlug,

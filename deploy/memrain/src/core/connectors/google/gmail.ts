@@ -42,6 +42,11 @@
  * soft delete, under the mass-delete guard). Attachments are receipts only;
  * nothing is downloaded. Every header and body is outside text.
  *
+ * Size: a thread response past GMAIL_MAX_THREAD_BYTES is not read into
+ * memory. The thread becomes a failed item held at once with the reason
+ * `too_large` (the owner sees it among held items); it is never treated as
+ * gone, so a page it already has stays as it is.
+ *
  * Quota: Gmail meters 6,000 units a minute per user; a full thread read costs
  * 120 (developers.google.com/workspace/gmail/api/reference/quota), so the
  * Gmail client is paced by the provider (GMAIL_MIN_SPACING_MS). A rate limit
@@ -72,6 +77,8 @@ const MAX_PENDING_THREADS = 1000;
 /** A new walk's top: a little past now, so mail stamped by a clock slightly ahead is listed. */
 const WALK_TOP_MARGIN_MS = 60_000;
 const MAX_CURSOR_FIELD = 4096;
+/** A thread response larger than this is not read; the thread is held instead. */
+export const GMAIL_MAX_THREAD_BYTES = 10 * 1024 * 1024;
 const API = "/gmail/v1/users/me";
 
 /** Labels whose messages are never stored. */
@@ -455,7 +462,11 @@ class Adapter implements SyncAdapter {
    * alone unless they are gone (a stored page may still need deleting).
    */
   private async readThread(client: ConnectorClient, st: GmailCursor, threadId: string, fromHistory: boolean, listedIds?: Set<string>): Promise<ThreadOutcome> {
-    const res = await client.get(`${API}/threads/${encodeURIComponent(threadId)}?format=full`);
+    const res = await client.get(`${API}/threads/${encodeURIComponent(threadId)}?format=full`, { maxBytes: GMAIL_MAX_THREAD_BYTES });
+    if (res.tooLarge === true) {
+      const message = `the thread is larger than ${GMAIL_MAX_THREAD_BYTES / (1024 * 1024)} MiB and was not read`;
+      return { kind: "item", item: { externalId: threadId, version: null, failure: { code: "too_large", message, holdNow: true } }, listedAt: [] };
+    }
     if (res.status === 404) return { kind: "gone", threadId };
     if (res.class !== "ok") return { kind: "stop", response: res };
     if (!isRecord(res.body) || !Array.isArray(res.body.messages)) return { kind: "stop", response: { ...res, class: "challenge", body: null, error: "unexpected thread response" } };

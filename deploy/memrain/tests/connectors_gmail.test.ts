@@ -26,7 +26,7 @@ import { runConnectorSync } from "../src/core/connectors/sync-engine.ts";
 import { connectorRuntime } from "../src/core/connectors/runtime.ts";
 import { accountRef, shortHash } from "../src/core/connectors/model.ts";
 import { GOOGLE_GMAIL_READONLY, googleProvider } from "../src/core/connectors/google/provider.ts";
-import { GMAIL_STREAM, parseGmailCursor } from "../src/core/connectors/google/gmail.ts";
+import { GMAIL_MAX_THREAD_BYTES, GMAIL_STREAM, parseGmailCursor } from "../src/core/connectors/google/gmail.ts";
 import { _resetLimitersForTesting } from "../src/core/connectors/limiter.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import type { Storage } from "../src/core/storage.ts";
@@ -392,6 +392,40 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(result.status).toBe("auth_required");
       expect((await getAccount(e, id))!.status).toBe("needs_reconnect");
       expect(await readCursor(e, id, GMAIL_STREAM)).toBe(before);
+    } finally { await db.close(); }
+  });
+
+  it("holds a thread past the size bound with its reason, keeps its existing page, and moves on", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      // Past the bound: a thread whose body would be read whole into memory.
+      const huge = JSON.stringify({ id: "18c0a1", historyId: "120099", messages: [], pad: "x".repeat(GMAIL_MAX_THREAD_BYTES) });
+      const w = world({ thread: tid => (tid === "18c0b1" ? { status: 200, body: huge } : undefined) });
+      const first = await run(db.storage, w, id);
+      expect(first.counts.items_held).toBe(1);
+      expect((await cursorOf(e, id))!.walk).toBeNull();
+      const heldB = (await e.query<{ held_reason: string | null; last_error: string | null; page_slug: string | null }>(
+        `SELECT held_reason, last_error, page_slug FROM connector_items WHERE account_id = $1 AND external_id = '18c0b1'`, [id])).rows[0]!;
+      expect(heldB.held_reason).toBe("too_large");
+      expect(heldB.last_error).toContain("larger than");
+      expect(heldB.page_slug).toBeNull();
+      expect((await livePages(e)).rows.map(r => r.slug)).not.toContain(SLUG_B);
+
+      // A stored thread that grows past the bound is held too; its page stays.
+      w.thread = tid => (tid === "18c0a1" ? { status: 200, body: huge } : undefined);
+      w.history = start => (start === "120000"
+        ? { status: 200, body: { history: [{ id: "120010", messagesAdded: [{ message: { id: "18c0a9", threadId: "18c0a1" } }] }], historyId: "120010" } }
+        : "historyEmpty");
+      const second = await run(db.storage, w, id, ENV, T0 + DAY);
+      expect(second.counts.items_held).toBe(1);
+      expect(second.counts.deletions_seen).toBe(0);
+      expect((await cursorOf(e, id))!.historyId).toBe("120010");
+      expect((await livePages(e)).rows.map(r => r.slug)).toContain(SLUG_A);
+      const heldA = (await e.query<{ held_reason: string | null; page_slug: string | null; deleted_upstream_at: Date | null }>(
+        `SELECT held_reason, page_slug, deleted_upstream_at FROM connector_items WHERE account_id = $1 AND external_id = '18c0a1'`, [id])).rows[0]!;
+      expect(heldA).toMatchObject({ held_reason: "too_large", page_slug: SLUG_A, deleted_upstream_at: null });
     } finally { await db.close(); }
   });
 

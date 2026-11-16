@@ -146,3 +146,57 @@ describe("ConnectorClient never leaks the token", () => {
     expect(String((err as Error).message)).not.toContain(TOKEN);
   });
 });
+
+describe("ConnectorClient response size bound", () => {
+  /** A 200 whose body streams `chunks` chunks of `size` bytes, counting what was pulled. */
+  function streamed(chunks: number, size: number, headers: Record<string, string> = {}) {
+    const state = { pulled: 0, cancelled: false, fetches: 0 };
+    const fetch = async () => {
+      state.fetches++;
+      const body = new ReadableStream<Uint8Array>({
+        pull(ctrl) {
+          if (state.pulled >= chunks) return ctrl.close();
+          state.pulled++;
+          ctrl.enqueue(new Uint8Array(size).fill(0x20));
+        },
+        cancel() { state.cancelled = true; },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json", ...headers } });
+    };
+    const clock = fakeClock();
+    const c = new ConnectorClient({ origin: ORIGIN, token: TOKEN, fetch, now: clock.now, sleep: clock.sleep, maxRetries: 2 });
+    return { c, state };
+  }
+
+  it("stops reading a body past the limit, says so, and does not retry", async () => {
+    const { c, state } = streamed(100, 1024);
+    const res = await c.get("/big", { maxBytes: 10 * 1024 });
+    expect(res.class).toBe("challenge");
+    expect(res.tooLarge).toBe(true);
+    expect(res.body).toBeNull();
+    expect(res.error).toContain("10240 bytes");
+    expect(state.pulled).toBeLessThan(100);
+    expect(state.cancelled).toBe(true);
+    expect(state.fetches).toBe(1);
+  });
+
+  it("refuses a declared Content-Length past the limit before reading the body", async () => {
+    const { c, state } = streamed(100, 1024, { "content-length": String(100 * 1024) });
+    const res = await c.get("/big", { maxBytes: 10 * 1024 });
+    expect(res.tooLarge).toBe(true);
+    expect(state.pulled).toBeLessThanOrEqual(1);
+  });
+
+  it("reads a body within the limit, and any body when no limit is given", async () => {
+    const { c } = streamed(3, 1024);
+    // Spaces are whitespace around no value: not JSON, so the read itself is what is checked.
+    const within = await c.get("/ok", { maxBytes: 4 * 1024 });
+    expect(within.tooLarge).toBeUndefined();
+    expect(within.error).toContain("not JSON");
+    const json = new ConnectorClient({ origin: ORIGIN, token: TOKEN, fetch: async () => Response.json({ a: 1 }), sleep: async () => {} });
+    expect((await json.get("/ok", { maxBytes: 64 })).body).toEqual({ a: 1 });
+    const unbounded = streamed(100, 1024);
+    expect((await unbounded.c.get("/big")).tooLarge).toBeUndefined();
+    expect(unbounded.state.pulled).toBe(100);
+  });
+});
