@@ -20,8 +20,7 @@ import { registerSource } from "../src/core/sources.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
 import { getAccount, setAccountConfig, setAccountEnabled, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
 import { completeConnect, ConnectError, connectorCallbackUri, disconnectAccount, startConnect, type ConnectDeps } from "../src/core/connectors/oauth-connect.ts";
-import { builtinProviders, oauthEndpoints, ProviderRegistry } from "../src/core/connectors/providers.ts";
-import { isTenant } from "../src/core/connectors/oauth-clients.ts";
+import { builtinProviders, normalizeTenant, oauthEndpoints, ProviderRegistry } from "../src/core/connectors/providers.ts";
 import { ConnectorClient } from "../src/core/connectors/client.ts";
 import { readCursor } from "../src/core/connectors/sync-store.ts";
 import { runConnectorSync, type SyncAccount } from "../src/core/connectors/sync-engine.ts";
@@ -113,8 +112,8 @@ describe("microsoft provider", () => {
   });
 
   it("takes a tenant segment that names a tenant and refuses one that does not", () => {
-    for (const ok of ["common", "organizations", "consumers", "0f0e0d0c-0b0a-4908-8706-050403020100", "contoso.onmicrosoft.com"]) expect(isTenant(ok)).toBe(true);
-    for (const bad of ["evil.example/../x", "common?x=1", "", "a b", "x/y"]) expect(isTenant(bad)).toBe(false);
+    for (const ok of ["common", "organizations", "consumers", "0f0e0d0c-0b0a-4908-8706-050403020100", "contoso.onmicrosoft.com"]) expect(normalizeTenant(ok)).toBe(ok);
+    for (const bad of ["evil.example/../x", "common?x=1", "", "a b", "x/y"]) expect(normalizeTenant(bad)).toBeNull();
     const ms = microsoftProvider();
     expect(oauthEndpoints(ms, "organizations").authorizeUrl).toBe("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize");
     // A tenant that is not one never reaches a URL.

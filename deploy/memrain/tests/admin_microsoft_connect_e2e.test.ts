@@ -165,7 +165,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       auth: "oauth",
       callback_uri: `${PUBLIC}/admin/connectors/callback/microsoft`,
       tenant_default: "common",
-      consent_urls: ["https://myapps.microsoft.com", "https://account.live.com/consent/Manage"],
+      can_revoke: false,
+      consent_urls: ["https://myapplications.microsoft.com", "https://account.microsoft.com/privacy/app-access"],
     });
     expect(report.providers.find((p) => p.id === "google")).toMatchObject({ tenant_default: null, consent_urls: [] });
 
@@ -176,7 +177,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await badTenant.json()).toEqual({ error: "invalid_tenant" });
     const googleTenant = await spaPost(b, "/admin/api/connectors/google/client", { client_id: "c.apps.googleusercontent.com", client_secret: "s-value", tenant: "common" });
     expect(googleTenant.status).toBe(400);
-    expect(await googleTenant.json()).toEqual({ error: "invalid_tenant" });
+    expect(await googleTenant.json()).toEqual({ error: "tenant_unsupported" });
 
     const saved = await spaPost(b, "/admin/api/connectors/microsoft/client", { client_id: APP_ID, client_secret: APP_SECRET, tenant: TENANT_ID });
     expect(saved.status).toBe(200);
@@ -204,7 +205,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const off = await spaPost(b, `/admin/api/connectors/accounts/${accounts[0]!.id}/disconnect`, { confirm_label: "owner@example.test" });
     expect(off.status).toBe(200);
     expect(await off.json()).toEqual({
-      ok: true, revoked: false, credential_kept: false, consent_urls: ["https://myapps.microsoft.com", "https://account.live.com/consent/Manage"],
+      ok: true, revoked: false, credential_kept: false, consent_urls: ["https://myapplications.microsoft.com", "https://account.microsoft.com/privacy/app-access"],
     });
     // Nothing at Microsoft can revoke a delegated grant; the disconnect called nothing.
     expect(world.calls.length).toBe(calls);

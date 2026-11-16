@@ -1,259 +1,354 @@
-# How to connect a Microsoft account
+# How to connect Outlook mail and calendar (Microsoft 365)
 
-This guide registers a Microsoft Entra app of your own and connects a
-Microsoft 365 work or school account, or a personal Outlook.com account, to
-Memrain for Outlook mail and Outlook calendar.
+This guide sets up a Microsoft Entra app of your own and connects your
+Outlook mailbox and your Outlook calendar to Memrain. It works for a work or
+school account (Microsoft 365) and for a personal account (outlook.com,
+hotmail.com, live.com). When you finish, your mail threads and meetings land
+in the brain the same way Gmail and Google Calendar do.
 
-Memrain asks Microsoft for read access only: it never sends, moves or deletes
-a message, and never changes an event. The app is yours (bring your own,
-"BYO"): no Memrain app sits between you and Microsoft.
+Memrain asks Microsoft for read access only: it never sends, moves, flags or
+deletes mail, and never creates or changes an event. The app is yours (bring
+your own): no Memrain app sits between you and Microsoft.
 
-This guide covers the app and the connect. Until the Outlook mail and
-calendar sync is in your build, a connected Microsoft account is listed and
-kept but not read: `connector_sync` skips it (`provider_cannot_sync`).
+You connect mail and calendar separately. Each one is its own account on the
+Connections page, writing into its own source. One Entra app serves both.
 
 ## Prerequisites
 
-- Connectors are on: [ENABLE.md](./ENABLE.md) steps 1 to 3.
-- `MEMRAIN_PUBLIC_URL` is your public `https://` address. Microsoft sends your
-  browser back to an address built from it.
-- An account that can register an app in the
-  [Microsoft Entra admin center](https://entra.microsoft.com): at least the
-  Application Developer role in a work tenant. With only a personal Microsoft
-  account, you first need an Azure account (the free one is enough), which
-  comes with an Entra directory to register the app in
-  ([Microsoft's prerequisites](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app)).
-- For a work or school account: an organization that lets users consent to
-  apps, or an administrator who grants the consent ([Work accounts and admin
-  consent](#work-accounts-and-admin-consent)).
+- Connectors are on: [ENABLE.md](./ENABLE.md) steps 1 to 4.
+- `MEMRAIN_PUBLIC_URL` is your public `https://` address (bootstrap writes it
+  from your domain). Microsoft sends your browser back to an address built
+  from it.
+- A Microsoft Entra directory (also called a tenant) to register the app in:
+  - **Work or school account:** your organization's directory. Members can
+    register apps unless the organization turned that off. If registering
+    is refused, your IT admin either does steps 2
+    to 5 for you or gives you the Application Developer role.
+  - **Personal account only:** since June 2024 Microsoft no longer lets a
+    personal account register an app outside a directory
+    ([breaking changes, "Applications must be registered in a directory"](https://learn.microsoft.com/entra/identity-platform/reference-breaking-changes)).
+    Create a free directory by [signing up for Azure](https://aka.ms/signUpForAzure)
+    or [joining the Microsoft 365 Developer Program](https://aka.ms/joinM365DeveloperProgram)
+    with the same personal account, then register the app there. The mailbox
+    you connect stays your personal one.
 
 ## What Memrain asks for
 
-All are delegated Microsoft Graph permissions: Memrain reads as the signed-in
-user, never as the app on its own.
+These are Microsoft Graph **delegated** permissions: Memrain acts as you,
+and only on your own mailbox and calendar.
 
-| Scope | Asked for | Why |
-|---|---|---|
-| `openid`, `email` | Every connect | To sign the user in |
-| `offline_access` | Every connect | A refresh token, so sync keeps working after the one-hour access token |
-| `User.Read` | Every connect | To read who connected (Graph `/me`); the account is labelled with its user principal name |
-| `Mail.Read` | Outlook mail (`outlook_mail`) | To read mail |
-| `Calendars.Read` | Outlook calendar (`outlook_calendar`) | To read calendar events |
+| Permission | Why |
+|---|---|
+| `openid`, `email` | To learn which account connected; the account is labelled with its address |
+| `offline_access` | To keep syncing after you close the browser (a refresh token) |
+| `User.Read` | To read your own profile: the address the account is labelled with |
+| `Mail.Read` | Outlook mail: to read your messages |
+| `Calendars.Read` | Outlook calendar: to read your events |
 
-A connect asks only for the service it connects. Microsoft keeps consent per
-user and app, so once a user has allowed `Mail.Read`, their later calendar
-grant carries `Mail.Read` too; Memrain accepts that, because both are read
-scopes it asks for itself. Any other scope in a grant, such as `Mail.ReadWrite`
-granted to the app by an administrator, makes Memrain refuse the grant
-(`scope_mismatch`) and store nothing.
+A mail connect asks for `Mail.Read` and a calendar connect for
+`Calendars.Read`, each with the four above. The connect flow refuses a grant
+that adds or drops a permission, and stores nothing then.
+
+On a personal account you consent yourself when you connect. On a work or
+school account you usually cannot: Microsoft's default consent setting for
+organizations ("Let Microsoft manage your consent settings", also the default
+for a new organization) keeps `Mail.Read` and `Calendars.Read` for an
+administrator to approve
+([app consent policies](https://learn.microsoft.com/entra/identity/enterprise-apps/manage-app-consent-policies),
+"Microsoft recommended user consent policy"). Plan on an IT admin granting
+consent once for the app: [step 6](#6-work-accounts-ask-an-admin-to-grant-consent).
 
 ## Steps
 
 ### 1. Find your redirect URI
 
-The origin of `MEMRAIN_PUBLIC_URL` followed by
-`/admin/connectors/callback/microsoft`. Print it on the host:
-
-```bash
-docker exec deploy-memrain-1 sh -c 'echo "${MEMRAIN_PUBLIC_URL%/}/admin/connectors/callback/microsoft"'
-```
-
-For a brain at `brain.example.com`:
+Microsoft only sends a sign-in back to an address registered in the app. For
+Memrain it is the origin of `MEMRAIN_PUBLIC_URL` followed by
+`/admin/connectors/callback/microsoft`. For a brain at `brain.example.com`:
 
 ```
 https://brain.example.com/admin/connectors/callback/microsoft
 ```
 
+Print yours on the host:
+
+```bash
+docker exec deploy-memrain-1 sh -c 'echo "${MEMRAIN_PUBLIC_URL%/}/admin/connectors/callback/microsoft"'
+```
+
+The Connections page shows the same line with a **Copy** button, under
+**Use your own OAuth app** in the **Microsoft** panel. Microsoft compares it
+exactly, including upper and lower case, so copy it rather than typing it.
+
 ### 2. Register the app
 
 1. Sign in to the [Microsoft Entra admin center](https://entra.microsoft.com).
-   With several tenants, switch to the one that should own the app (the
-   **Settings** icon in the top menu).
+   If your account sees several directories, use the **Settings** icon in the
+   top menu to switch to the one you register the app in.
 2. Open **Entra ID > App registrations** and choose **New registration**.
-3. **Name**: for example `Memrain on brain.example.com`. Users see it on the
-   consent screen.
-4. **Supported account types** decides who can connect, and the tenant you
-   give Memrain in step 5:
+3. **Name**: anything you will recognise, for example
+   `Memrain on brain.example.com`. People see it on the consent screen.
+4. **Supported account types**: pick who may connect. This choice decides
+   the **Who can sign in** value you enter in Memrain in step 7.
 
-   | Supported account types | Who can connect | Tenant in Memrain |
+   | Supported account types | Use it when | Who can sign in, in Memrain |
    |---|---|---|
-   | **Single tenant only** | Accounts of your organization | Your **Directory (tenant) ID** from the app's **Overview** |
-   | **Multiple Entra ID tenants** | Any work or school account | `organizations` |
-   | **Any Entra ID Tenant + Personal Microsoft accounts** | Work, school and personal accounts | `common` (the default) |
-   | **Personal accounts only** | Personal accounts (Outlook.com) | `consumers` |
+   | **Any Entra ID Tenant + Personal Microsoft accounts** | You connect a personal account, or both kinds | Work, school and personal accounts (`common`) |
+   | **Personal accounts only** | Only personal accounts will connect | Personal accounts only (`consumers`) |
+   | **Multiple Entra ID tenants** | Only work or school accounts, possibly of several organizations | Work or school accounts only (`organizations`) |
+   | **Single tenant only - &lt;your directory&gt;** | Only accounts of the directory you register in | One organization: its directory ID or domain |
 
-5. Under **Redirect URI**, pick the platform **Web** (not "Single-page
-   application": that platform cannot use a client secret and its refresh
-   tokens end after 24 hours) and paste the line from step 1.
-6. Choose **Register**. On **Overview**, copy the **Application (client) ID**
-   and, for a single-tenant app, the **Directory (tenant) ID**.
+   Older screens name the first option "Accounts in any organizational
+   directory and personal Microsoft accounts"; it is the same type.
+5. Leave **Redirect URI** empty here; step 3 adds it with the right platform.
+6. Choose **Register**. The app's **Overview** page opens. Note two values:
+   **Application (client) ID**, and for a single-tenant app also
+   **Directory (tenant) ID**.
 
-### 3. Create a client secret
+### 3. Add the redirect URI as a Web platform
+
+1. In the app, under **Manage**, open **Authentication**.
+2. On the **Redirect URI configuration** tab, choose **Add Redirect URI**.
+3. Pick the **Web** tile. Not **Single-page application**: Microsoft ends
+   refresh tokens issued to that platform after 24 hours
+   ([refresh tokens](https://learn.microsoft.com/entra/identity-platform/refresh-tokens)),
+   and Memrain's connect is a server-side web flow.
+4. Paste the line from step 1 as the **Redirect URI**, leave
+   **Front-channel logout URL** empty, and choose **Configure**.
+
+### 4. Create the client secret
 
 1. In the app, open **Certificates & secrets > Client secrets** and choose
    **New client secret**.
-2. Pick an expiry. Note the date: when the secret expires, connecting and
-   token renewals fail (`AADSTS7000222`) until you add a new one (step 5
-   again).
-3. Copy the secret's **Value** now (not the **Secret ID**). The admin center
-   shows it only once.
+2. Enter a description (for example `memrain`) and pick an expiry. Microsoft
+   allows at most 24 months and recommends less than 12; note the date, the
+   connect stops working when the secret expires.
+3. Choose **Add** and copy the **Value** column right away. Microsoft shows
+   the value once; after you leave the page it is masked for good. The
+   **Secret ID** next to it is not the secret.
 
-Keep it in your password manager, not in a file in the repository or on the
-host.
+Put the value in your password manager, not in a file in the repository or on
+the host.
 
-### 4. Add the API permissions
+### 5. Add the Microsoft Graph permissions
 
-1. In the app, open **API permissions** and choose **Add a permission >
-   Microsoft Graph > Delegated permissions**.
-2. Add `Mail.Read`, `Calendars.Read`, `offline_access`, `openid` and `email`.
-   `User.Read` is already there.
-3. In an organization that does not let users consent, an administrator
-   chooses **Grant admin consent for <tenant>** here (see below).
+1. In the app, open **API permissions**. `User.Read` is already there.
+2. Choose **Add a permission > Microsoft Graph > Delegated permissions**.
+3. Search for and tick `Mail.Read`, `Calendars.Read`, `offline_access`,
+   `openid` and `email` (the last three sit under **OpenId permissions**).
+4. Choose **Add permissions**. The list under **Configured permissions** now
+   shows the six from [What Memrain asks for](#what-memrain-asks-for).
 
-Do not add write permissions: a grant that carries one is refused.
+Do not add `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite` or any
+**Application permissions**: Memrain does not ask for them, and a grant that
+includes them is refused.
 
-### 5. Store the app in Memrain
+### 6. Work accounts: ask an admin to grant consent
+
+Skip this step for a personal account.
+
+Your organization decides what users may consent to themselves
+([user consent settings](https://learn.microsoft.com/entra/identity/enterprise-apps/configure-user-consent)),
+and its default keeps mail and calendar access for an administrator. Unless
+your organization changed that, connecting in step 9 shows
+**Need admin approval** until an admin grants consent for the app. If you are
+that admin, do it now; otherwise ask your IT admin, and send them:
+
+- the app's name and its **Application (client) ID**;
+- the permissions: delegated `Mail.Read`, `Calendars.Read`, `User.Read`,
+  `offline_access`, `openid`, `email`, all read-only, no application
+  permissions;
+- what it is for: a private memory of your own mail and calendar, run on your
+  team's own server.
+
+An admin with the Cloud Application Administrator, Application Administrator
+or Privileged Role Administrator role can grant it in the app under
+**API permissions > Grant admin consent for &lt;organization&gt;**, or under
+**Entra ID > Enterprise apps > All applications > &lt;app&gt; > Security >
+Permissions > Grant admin consent**
+([grant admin consent](https://learn.microsoft.com/entra/identity/enterprise-apps/grant-admin-consent)).
+Admin consent covers the whole organization and only an admin can take it
+back; your own consent you can remove yourself.
+
+### 7. Store the app in Memrain
 
 1. Open the admin console (`https://<your host>/admin/`) and sign in.
-2. On the **Connections** page, in the **Microsoft** panel, open **Use your
-   own OAuth app**. It shows the redirect URL from step 1 with a copy button.
-3. Paste the **Client ID** and **Client secret**, and the **Tenant** from the
-   table in step 2 (leave it empty for `common`). Choose **Save app**.
+2. On the **Connections** page, in the **Microsoft** panel, open
+   **Use your own OAuth app**.
+3. Paste the **Application (client) ID** under **Client ID** and the secret
+   **Value** under **Client secret**.
+4. Under **Who can sign in**, pick the value from the table in step 2. For a
+   single-tenant app choose **One organization: its directory ID or domain**
+   and enter the **Directory (tenant) ID** from the app's Overview page (a
+   verified domain such as `contoso.onmicrosoft.com` works too).
+5. Choose **Save app**. The panel shows the saved client and who can sign in.
 
-Memrain checks that the tenant is a tenant ID, a domain, `common`,
-`organizations` or `consumers` (otherwise `invalid_tenant`), seals the secret
-and the tenant with the connector key ([KEY.md](./KEY.md)) and never shows the
-secret again. Saving a new app later replaces the stored one.
+Memrain seals the secret with the connector key ([KEY.md](./KEY.md)) before
+it is stored; it is never shown again, logged or returned by the API. Saving
+a new app later replaces the stored one, tenant included. A new secret for
+the same app (before the old one expires) is saved the same way: paste the
+same client ID and the new value.
 
-The form is the supported path. `MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID`,
-`MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET` and `MEMRAIN_MICROSOFT_OAUTH_TENANT`
-in the process environment are used only when no app is stored, for a
-deployment that sets the container's environment itself. Do not add them to
-`deploy/.secrets/memrain.env` by hand: `fetch-secrets.sh` rewrites that file
-from the secret store and drops them. `memrain config set` refuses the secret.
+(The code also reads a server-wide app from the process environment,
+`MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID`, `MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET`
+and `MEMRAIN_MICROSOFT_OAUTH_TENANT`, when none is stored; see
+[CONFIGURATION.md](../CONFIGURATION.md). On a deployed stack use the form:
+the compose file does not pass these from the host `.env`, and the form keeps
+the secret out of files and shell history.)
 
-### 6. Register the sources
+### 8. Register the sources and let your agents read them
 
-Outlook mail goes into a `mailbox` source and Outlook calendar into a
-`calendar` source, never into a source that holds your notes. Skip a line if
-you already have that source (one source may hold Gmail and Outlook mail
-alike):
+Each service writes into a source of its own kind: Outlook mail into a
+`mailbox` source, Outlook calendar into a `calendar` source. The ids and
+prefixes are yours to choose. If you already connected Gmail or Google
+Calendar, you can reuse those sources or register new ones. On the host:
 
 ```bash
-docker exec deploy-memrain-1 bun run src/cli.ts sources register me-outlook-mail --kind mailbox --path-prefix outlook-mail/
-docker exec deploy-memrain-1 bun run src/cli.ts sources register me-outlook-calendar --kind calendar --path-prefix outlook-calendar/
+docker exec deploy-memrain-1 bun run src/cli.ts sources register work-mail --kind mailbox --path-prefix work-mail/
+docker exec deploy-memrain-1 bun run src/cli.ts sources register work-calendar --kind calendar --path-prefix work-calendar/
 ```
 
-Then add them to the read set of each agent that should see them, as in
-[ENABLE.md](./ENABLE.md) step 5 (`auth rescope-client ... --dry-run`, then
-without it).
+Then let your agents read them. For each OAuth client that should see the
+new sources, add them to its read set. The list replaces the client's whole
+read set, so name every source it reads today and the new ones at the end.
+Preview with `--dry-run` (only the read set should change), then run the same
+command without it:
 
-### 7. Connect
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> --source <its write source> \
+  --federated-read <its current read sources>,work-mail,work-calendar --dry-run
+```
 
-1. On the **Connections** page, in the **Microsoft** panel, tick
-   `outlook_mail` or `outlook_calendar`, pick the source under **Into
-   source** and choose **Connect Microsoft**.
-2. Microsoft shows its account picker even when you are signed in: pick the
-   account to connect. Allow the access it lists.
-3. Microsoft sends you back to the redirect URI. Choose **Finish connecting**;
-   the account appears as connected, sync off.
-4. Connect the other service the same way, into its own source. Each service
-   is its own account row with its own token.
+For a personal access token, `set-read-sources` works the same way:
 
-Nothing is read before you choose **Turn sync on** for the account.
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts auth permissions <token-name> set-read-sources <current read sources>,work-mail,work-calendar --dry-run
+```
 
-## Work accounts and admin consent
+Check that `before` and `after` differ only by the new sources: a source
+missing from `after` is one the client would stop reading. Then run it
+without `--dry-run`. Reload the Connections page so it lists the new sources.
 
-Many organizations let only an administrator consent to apps. Then:
+### 9. Connect Outlook mail
 
-- Microsoft shows **Need admin approval** (or **Approval required**) instead of
-  the consent screen. Ask your administrator. Going back without consent from
-  there reaches Memrain as `provider_denied`.
-- Or Memrain reports `admin_consent_required` when it redeems the code
-  (Microsoft's `AADSTS65001`, `AADSTS90094` or `AADSTS90095`).
+1. On the **Connections** page, in the **Microsoft** panel, choose
+   **Outlook mail** under **Read**. **Outlook mail** and **Outlook calendar**
+   are a single choice; each is connected on its own.
+2. Pick `work-mail` under **Into source** (only `mailbox` sources are
+   listed) and choose **Connect Microsoft**.
+3. Microsoft opens. Sign in with the account whose mailbox you connect, read
+   the list of permissions, and choose **Accept**. After an admin granted
+   consent for the organization (step 6), a work account may go straight
+   through without this screen.
+4. Microsoft sends you back to Memrain. Choose **Finish connecting**; the page
+   posts back to Memrain and the account appears as connected, sync off.
+5. Choose **Turn sync on** for the account. Nothing is read before that.
 
-The administrator grants consent once for the organization: in the app
-registration (or under **Entra ID > Enterprise apps** for an app registered in
-another tenant), **API permissions > Grant admin consent for <tenant>**. Then
-connect again. An administrator's consent covers what the app registration
-lists, so keep that list to the permissions in step 4.
+With `connector_sync` enabled ([ENABLE.md](./ENABLE.md) step 6), the first
+sync starts within 15 minutes.
 
-## Staying connected
+### 10. Connect Outlook calendar
 
-Microsoft issues a new refresh token on every renewal; Memrain stores it and
-drops the old one. The account turns `needs_reconnect` and syncing pauses, with
-no data lost, when Microsoft will not renew it:
+Repeat step 9 with **Outlook calendar** under **Read** and `work-calendar`
+under **Into source**. Microsoft asks for consent again for the calendar
+permission. Choose **Turn sync on** for the calendar account too.
 
-| Reason shown | Cause |
-|---|---|
-| `invalid_grant, code 700082` | The refresh token went unused for 90 days |
-| `invalid_grant, code 50173` | The password was reset or an administrator revoked the user's sessions |
-| `invalid_grant, code 65001` | The consent was withdrawn |
-| `interaction_required, code 50076` | The organization now requires multifactor sign-in for this access |
+## Keeping access alive
 
-Choose **Reconnect** on the row; the sync carries on from where it stopped.
+Microsoft refresh tokens last 90 days and are replaced with a fresh one each
+time they are used
+([refresh tokens](https://learn.microsoft.com/entra/identity-platform/refresh-tokens),
+"Token lifetime"). Memrain uses one whenever a sync needs a new access token,
+about once an hour while it runs. So:
+
+- While an account syncs, its access renews itself; the account row shows no
+  deadline.
+- While sync is off, nothing renews it. The row shows **Access ends** with
+  the day 90 days after it was last used, and from 15 days before that day it
+  turns into a warning with **Reconnect now**. Choose **Turn sync on** or
+  **Reconnect** before then.
+- If the access ends anyway, or you change your password, or an admin
+  revokes your sessions, the account turns `needs_reconnect` and syncing
+  pauses with nothing lost. Choose **Reconnect** on its row; the sync carries
+  on from where it stopped.
+
+The client secret also expires (step 4). Add a new secret in Entra before the
+old one's date and save it in Memrain (step 7); connected accounts keep
+working.
+
+## Pausing, disconnecting and removing the consent
+
+**To pause, choose Turn sync off.** Nothing is read while it is off, the
+access and the consent stay as they are, and **Turn sync on** carries on
+from where it stopped. Mind the 90 days in
+[Keeping access alive](#keeping-access-alive).
+
+**Disconnect is not a pause.** Microsoft gives an app with read-only
+permissions no way to withdraw its own consent, so a disconnect deletes the
+access Memrain stored, stops syncing, and leaves the consent in place at
+Microsoft. Connecting again later means signing in and accepting again.
+Disconnecting the mail account does not touch the calendar account, and the
+other way round. Pages already synced stay in the brain unless you also
+delete the account's data from the Connections page.
+
+To remove the consent too, after disconnecting both accounts:
+
+- **Personal account:** open
+  [account.microsoft.com/privacy/app-access](https://account.microsoft.com/privacy/app-access),
+  find the app by its name from step 2, and remove its access.
+- **Work or school account:** open
+  [myapplications.microsoft.com](https://myapplications.microsoft.com),
+  choose **...** on the app, then **Manage your application**, and
+  **Revoke Permissions**
+  ([edit or revoke application permissions](https://support.microsoft.com/account-billing/edit-or-revoke-application-permissions-in-the-my-apps-portal-169be2b4-ee26-4338-aea8-d19bb2f329ee)).
+  Permissions your IT admin granted for the whole organization are listed
+  separately and only the admin can remove them.
+
+Deleting the app registration in Entra (step 2) ends every account's access
+at once.
 
 ## Verification
 
-On the Connections page the Microsoft account appears with its user principal
-name (for a guest account, its mail address). From the host:
+On the Connections page each Microsoft account reads **Syncing** and, after
+the first clean run, **Last sync** shows when. From the host:
 
 ```bash
 docker exec deploy-memrain-1 bun run src/cli.ts connectors status
+docker exec deploy-memrain-1 bun run src/cli.ts doctor
 ```
 
-The account is listed under `accounts:` with provider `microsoft`.
+`connectors status` lists both accounts as `sync on` with a recent clean
+sync; `doctor` (`connector-accounts`, `connector-health`) names any account
+that needs a reconnect or has held items. Search the brain for the subject of
+a mail, or the title of a meeting, from this week.
 
 ## Troubleshooting
 
+Microsoft's sign-in errors start with `AADSTS`
+([error codes](https://learn.microsoft.com/entra/identity-platform/reference-error-codes)).
+
 | Symptom | Cause | Fix |
 |---|---|---|
-| Microsoft shows `AADSTS50011` | The redirect URI in the app differs from what Memrain sent | Register the exact line from step 1 under the **Web** platform (step 2) |
-| Microsoft shows `AADSTS50194` | A single-tenant app signed in through `common` | Save the app's **Directory (tenant) ID** as its tenant (step 5) |
-| Microsoft shows `AADSTS700016` | The tenant does not hold the app | Check the client ID, and the tenant saved with it |
-| Microsoft shows **Need admin approval** | The organization lets only admins consent | [Work accounts and admin consent](#work-accounts-and-admin-consent) |
-| Back in Memrain, `admin_consent_required` | Same | Same |
-| Back in Memrain, `scope_mismatch` | The grant held a permission Memrain does not ask for, often one an administrator granted to the app | Remove the extra permission from the app registration and its admin consent, then connect again |
-| Back in Memrain, `token_exchange` | The secret is wrong or expired (`AADSTS7000215`, `AADSTS7000222`), or the app's platform is not **Web** | Add a new client secret and save the app again (step 5); check the platform |
-| Back in Memrain, `identity` | Graph `/me` named no address for the account | Connect with an account that has a mailbox |
-| Back in Memrain, `provider_denied` | You cancelled, or declined the consent | Connect again |
-| The Connections page answers `no_client` | No app is stored, or `MEMRAIN_MICROSOFT_OAUTH_TENANT` is not a tenant | Step 5 |
-| Saving the app answers `invalid_tenant` | The tenant is not a tenant ID, domain or keyword | Use a value from the table in step 2 |
-
-## Disconnecting
-
-Disconnect the account on the Connections page. Microsoft offers apps no way
-to revoke a user's delegated grant, so Memrain deletes the stored credential,
-stops syncing and parks the account as disconnected; it calls nothing at
-Microsoft. The consent stays with Microsoft until you remove it:
-
-- Work or school account: [myapps.microsoft.com](https://myapps.microsoft.com),
-  the app's **...** menu, **Manage your application**, then **Revoke
-  Permissions**. A new app registration is hidden there until an administrator
-  sets **Visible to users?** to **Yes** under **Entra ID > Enterprise apps >
-  the app > Properties**. Permissions an administrator consented to can only be
-  revoked by an administrator, under **Enterprise apps > the app >
-  Permissions**.
-- Personal account:
-  [account.live.com/consent/Manage](https://account.live.com/consent/Manage),
-  the app, then **Remove these permissions**.
-
-Consent belongs to the user and the app, not to one account row. While
-another account of the same user stays connected here (mail in one source,
-calendar in another), its token still carries every scope the user
-consented to: disconnecting the mail account leaves the calendar account's
-token able to read mail, though the calendar sync never does. The
-account row's scopes show what its token holds. To end that access too,
-remove the consent at Microsoft (it ends both accounts' access) and reconnect
-only what should stay.
-
-Deleting the client secret in the app registration also stops every token of
-the app from renewing. Pages already synced stay in the brain unless you also
-remove the account's data.
+| Microsoft shows `AADSTS50011` (reply URL does not match) | The registered redirect URI differs from what Memrain sent | Step 3: paste the exact line from step 1 under the **Web** platform |
+| Microsoft shows `AADSTS50194` (not configured as a multi-tenant application) | A single-tenant app with **Who can sign in** set to `common` or `organizations` | Step 7: choose **One organization** and enter the directory ID |
+| Microsoft shows `AADSTS50020` (account does not exist in tenant) | The account is not one the app's supported account types allow, for example a personal account on a work-only app | Register an app with a type that allows it (step 2), or sign in with an allowed account |
+| Microsoft shows `AADSTS700016` (application not found in the directory) | The client ID is wrong, or **Who can sign in** points at another directory | Check the client ID and the directory ID from the Overview page (step 7) |
+| Microsoft shows **Need admin approval** | Your organization keeps mail and calendar consent for an admin | [Step 6](#6-work-accounts-ask-an-admin-to-grant-consent) |
+| Back in Memrain, the page reports `token_exchange` | Microsoft refused the code; most often an expired secret, or the Secret ID pasted instead of the value | Add a new secret (step 4) and save it (step 7), then connect again |
+| Back in Memrain, the page reports `scope_mismatch` | A permission was declined, or the app has permissions Memrain does not ask for | Step 5: keep exactly the six permissions; connect again and accept |
+| Back in Memrain, the page reports `provider_denied` | You chose **Cancel** on Microsoft's consent page | Connect again |
+| The Connections page answers `no_client` | No app is stored for Microsoft | Step 7 |
+| The Connections page answers `invalid_tenant` | **Who can sign in** holds something that is not an audience, a directory ID or a domain | Step 7 |
+| The Connections page answers `redirect_uri` | `MEMRAIN_PUBLIC_URL` is unset or not `https` | Fix the domain in your stack settings and redeploy |
+| **Into source** says "No source fits" | No source of the chosen service's kind | Step 8, then reload the page |
+| The account turns `needs_reconnect` | 90 days unused, a password change, or revoked sessions | **Reconnect** on its row; see [Keeping access alive](#keeping-access-alive) |
+| You lost the client secret | Microsoft shows the value only when it is created | Add a new secret (step 4), save it (step 7), then delete the old one in Entra |
 
 ## Related
 
 - [ENABLE.md](./ENABLE.md): the order to switch connectors on.
 - [KEY.md](./KEY.md): the connector key that seals the client secret and the
   tokens.
-- [GOOGLE.md](./GOOGLE.md): the same flow for a Google account.
+- [GMAIL.md](./GMAIL.md) and [GOOGLE.md](./GOOGLE.md): the same for a Google
+  account.
+- [LOOPS.md](./LOOPS.md): who is waiting on whom, from your mail.

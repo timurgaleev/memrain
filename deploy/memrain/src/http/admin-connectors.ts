@@ -40,7 +40,7 @@ import {
 import { listOutlookCalendars, OUTLOOK_CALENDAR_SERVICE } from "../core/connectors/microsoft/calendar.ts";
 import { connectorRuntime, toSyncAccount } from "../core/connectors/runtime.ts";
 import { ReauthRequiredError } from "../core/connectors/types.ts";
-import { deleteOAuthClient, isTenant, listOAuthClients, setOAuthClient } from "../core/connectors/oauth-clients.ts";
+import { deleteOAuthClient, listOAuthClients, setOAuthClient } from "../core/connectors/oauth-clients.ts";
 import { deleteAllConnectorData, previewConnectorData } from "../core/connectors/retention.ts";
 import {
   confirmHeldDeletes,
@@ -61,7 +61,7 @@ import {
   type ConnectDeps,
 } from "../core/connectors/oauth-connect.ts";
 import type { ProviderRegistry, ProviderService } from "../core/connectors/providers.ts";
-import { builtinProviders } from "../core/connectors/providers.ts";
+import { builtinProviders, normalizeTenant } from "../core/connectors/providers.ts";
 import { connectorsStatus, loadKek, VaultError, type ConnectorsStatus, type Kek } from "../core/connectors/vault.ts";
 
 export interface AdminConnectorDeps {
@@ -182,8 +182,10 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
           service_kinds: serviceKinds(pr.services),
           auth: "oauth",
           callback_uri: callbackUri(deps.publicUrl, pr.id),
-          // A provider whose endpoints name a directory tenant takes one with its own app.
+          // The tenant a bring-your-own app may name, whether a disconnect can withdraw the grant
+          // upstream, and where the owner withdraws it when it cannot.
           tenant_default: pr.tenant?.default ?? null,
+          can_revoke: pr.revoke !== undefined || pr.revokeUrl !== undefined,
           consent_urls: [...(pr.consentUrls ?? [])],
         })),
         ...deps.providers.listApiKey().map((pr) => ({
@@ -193,12 +195,13 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
           auth: "api_key",
           callback_uri: null,
           tenant_default: null,
+          can_revoke: false,
           consent_urls: [],
         })),
       ],
       sources: (await listSources(engine)).map((s) => ({ id: s.id, kind: s.kind })),
       accounts: await Promise.all(accounts.map((a) => describeAccount(engine, a, notices, statuses.get(a.id)))),
-      clients: await listOAuthClients(engine, st.enabled ? deps.kek() ?? undefined : undefined),
+      clients: await listOAuthClients(engine),
     });
   }
 
@@ -229,23 +232,21 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
   if (action === "key") return saveKey(provider, body, deps);
 
   if (action === "client") {
-    const target = deps.providers.get(provider);
-    if (!target) return json({ error: "unknown_provider" }, 400);
+    const pr = deps.providers.get(provider);
+    if (!pr) return json({ error: "unknown_provider" }, 400);
     if (typeof body.client_id !== "string" || typeof body.client_secret !== "string") {
       return json({ error: "client_id and client_secret are required" }, 400);
     }
-    // A tenant only means something to a provider whose endpoints name one; empty keeps its default.
-    const tenant = typeof body.tenant === "string" ? body.tenant.trim() : body.tenant;
-    if (tenant !== undefined && tenant !== null && tenant !== "" && (target.tenant === undefined || !isTenant(tenant))) {
-      return json({ error: "invalid_tenant" }, 400);
-    }
-    const settings = typeof tenant === "string" && tenant !== "" ? { tenant } : {};
+    const rawTenant = body.tenant === undefined || body.tenant === null || body.tenant === "" ? null : body.tenant;
+    if (rawTenant !== null && !pr.tenant) return json({ error: "tenant_unsupported" }, 400);
+    const tenant = typeof rawTenant === "string" ? normalizeTenant(rawTenant) : null;
+    if (rawTenant !== null && tenant === null) return json({ error: "invalid_tenant" }, 400);
     try {
-      await setOAuthClient(deps.storage.engine(), deps.kek()!, provider, body.client_id, body.client_secret, settings);
+      await setOAuthClient(deps.storage.engine(), deps.kek()!, provider, body.client_id, body.client_secret, tenant);
     } catch {
       return json({ error: "invalid client" }, 400);
     }
-    return json({ ok: true, provider, client_id: body.client_id, ...settings });
+    return json({ ok: true, provider, client_id: body.client_id, ...(pr.tenant ? { tenant } : {}) });
   }
 
   const session = deps.adminSessionId(req);

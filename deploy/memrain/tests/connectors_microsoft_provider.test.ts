@@ -106,7 +106,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const e = db.storage.engine();
     try {
       await sources(e);
-      await setOAuthClient(e, kek, "microsoft", "11111111-2222-3333-4444-555555555555", "byo-ms-secret-value", { tenant: TENANT_ID });
+      await setOAuthClient(e, kek, "microsoft", "11111111-2222-3333-4444-555555555555", "byo-ms-secret-value", TENANT_ID);
       expect(await getOAuthClient(e, kek, "microsoft")).toEqual({
         clientId: "11111111-2222-3333-4444-555555555555", clientSecret: "byo-ms-secret-value", tenant: TENANT_ID,
       });
@@ -125,7 +125,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await e.query(`DELETE FROM connector_oauth_clients`);
       const orgs = (await begin(deps(e, world, { env: { ...ENV, MEMRAIN_MICROSOFT_OAUTH_TENANT: "organizations" } }), "work-mail", ["outlook_mail"])).url;
       expect(orgs.pathname).toBe("/organizations/oauth2/v2.0/authorize");
-      expect(await code(begin(deps(e, world, { env: { ...ENV, MEMRAIN_MICROSOFT_OAUTH_TENANT: "evil.example/../x" } }), "work-mail", ["outlook_mail"]))).toBe("no_client");
+      expect(await code(begin(deps(e, world, { env: { ...ENV, MEMRAIN_MICROSOFT_OAUTH_TENANT: "evil.example/../x" } }), "work-mail", ["outlook_mail"]))).toBe("invalid_tenant");
     } finally { await db.close(); }
   });
 
@@ -134,15 +134,15 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const e = db.storage.engine();
     try {
       for (const bad of ["", "a/b", "common?x=1", "../common", "evil.example#", "x".repeat(300)]) {
-        await expect(setOAuthClient(e, kek, "microsoft", "client-id-1", "secret-value", { tenant: bad })).rejects.toThrow("invalid tenant");
+        await expect(setOAuthClient(e, kek, "microsoft", "client-id-1", "secret-value", bad)).rejects.toThrow("invalid tenant");
       }
       for (const good of ["common", "organizations", "consumers", TENANT_ID, "contoso.onmicrosoft.com"]) {
-        await setOAuthClient(e, kek, "microsoft", "client-id-1", "secret-value", { tenant: good });
+        await setOAuthClient(e, kek, "microsoft", "client-id-1", "secret-value", good);
         expect((await getOAuthClient(e, kek, "microsoft"))?.tenant).toBe(good);
       }
       // A client saved without a tenant reads back without one.
       await setOAuthClient(e, kek, "microsoft", "client-id-1", "secret-value");
-      expect(await getOAuthClient(e, kek, "microsoft")).toEqual({ clientId: "client-id-1", clientSecret: "secret-value" });
+      expect(await getOAuthClient(e, kek, "microsoft")).toEqual({ clientId: "client-id-1", clientSecret: "secret-value", tenant: null });
     } finally { await db.close(); }
   });
 
@@ -267,7 +267,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(world.calls).toEqual([]);
       expect(await readCredential(e, kek, done.account.id)).toBeNull();
       expect(await getAccount(e, done.account.id)).toMatchObject({ status: "revoked", enabled: false });
-      expect(builtinProviders().get("microsoft")!.consentUrls).toEqual(["https://myapps.microsoft.com", "https://account.live.com/consent/Manage"]);
+      expect(builtinProviders().get("microsoft")!.consentUrls).toEqual(["https://myapplications.microsoft.com", "https://account.microsoft.com/privacy/app-access"]);
     } finally { await db.close(); }
   });
 
@@ -276,7 +276,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const e = db.storage.engine();
     try {
       await sources(e);
-      await setOAuthClient(e, kek, "microsoft", "client-id-1", "secret-value", { tenant: "organizations" });
+      await setOAuthClient(e, kek, "microsoft", "client-id-1", "secret-value", "organizations");
       const done = await connect(deps(e, { calls: [] }), "work-mail", ["outlook_mail"]);
       const world: MicrosoftWorld = { calls: [] };
       const source = await oauthTokenSource({

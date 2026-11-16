@@ -142,12 +142,12 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await setOAuthClient(e, kek, "test", "client-123.apps.example", "byo-client-secret-value");
       const raw = await e.query<Record<string, unknown>>(`SELECT * FROM connector_oauth_clients`);
       expect(JSON.stringify(raw.rows)).not.toContain("byo-client-secret-value");
-      expect(await getOAuthClient(e, kek, "test")).toEqual({ clientId: "client-123.apps.example", clientSecret: "byo-client-secret-value" });
+      expect(await getOAuthClient(e, kek, "test")).toEqual({ clientId: "client-123.apps.example", clientSecret: "byo-client-secret-value", tenant: null });
       const listed = await listOAuthClients(e);
       expect(listed).toEqual([expect.objectContaining({ provider: "test", client_id: "client-123.apps.example", kek_id: kek.id })]);
       expect(JSON.stringify(listed)).not.toContain("byo-client-secret-value");
       await setOAuthClient(e, kek, "test", "client-456.apps.example", "rotated-secret-value");
-      expect(await getOAuthClient(e, kek, "test")).toEqual({ clientId: "client-456.apps.example", clientSecret: "rotated-secret-value" });
+      expect(await getOAuthClient(e, kek, "test")).toEqual({ clientId: "client-456.apps.example", clientSecret: "rotated-secret-value", tenant: null });
       expect(await deleteOAuthClient(e, "test")).toBe(true);
       expect(await getOAuthClient(e, kek, "test")).toBeNull();
       await expect(setOAuthClient(e, kek, "test", "has space", "s")).rejects.toThrow("client id");
@@ -160,7 +160,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     try {
       const acct = await setup(e);
       await storeCredential(e, kek, acct, TOKENS, { scopes: ["read"], expiresAt: null });
-      await setOAuthClient(e, kek, "test", "client-123", "byo-secret");
+      await setOAuthClient(e, kek, "test", "client-123", "byo-secret", "organizations");
       const stateHash = "a".repeat(64);
       const sealedVerifier = seal(kek, "verifier-value", oauthStateAad(stateHash, "test", kek.id));
       await e.query(
@@ -173,7 +173,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(result).toEqual({ credentials: 1, oauthClients: 1, oauthStates: 1 });
       expect(await vaultCode(readCredential(e, kek, acct.id))).toBe("vault_wrong_key");
       expect((await readCredential(e, next, acct.id))?.tokens).toEqual(TOKENS);
-      expect(await getOAuthClient(e, next, "test")).toEqual({ clientId: "client-123", clientSecret: "byo-secret" });
+      expect(await getOAuthClient(e, next, "test")).toEqual({ clientId: "client-123", clientSecret: "byo-secret", tenant: "organizations" });
       const states = await e.query<{ kek_id: string }>(`SELECT kek_id FROM connector_oauth_states`);
       expect(states.rows.map((r) => r.kek_id)).toEqual([next.id]);
       expect(await rotateKek(e, kek, next)).toEqual({ credentials: 0, oauthClients: 0, oauthStates: 0 });
@@ -217,7 +217,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         `SELECT kek_id FROM connector_credentials UNION ALL SELECT kek_id FROM connector_oauth_clients`);
       expect(new Set(ids.rows.map((r) => r.kek_id))).toEqual(new Set([kek.id]));
       expect((await readCredential(e, kek, first.id))?.tokens).toEqual(TOKENS);
-      expect(await getOAuthClient(e, kek, "test")).toEqual({ clientId: "client-123", clientSecret: "byo-secret" });
+      expect(await getOAuthClient(e, kek, "test")).toEqual({ clientId: "client-123", clientSecret: "byo-secret", tenant: null });
     } finally { await db.close(); }
   });
 });

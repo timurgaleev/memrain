@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium, type Page } from "playwright";
-import { account, automation, automationRoute, OWNER, scenario } from "./automation-server.ts";
+import { account, automation, automationRoute, MICROSOFT, OWNER, scenario } from "./automation-server.ts";
 
 const bundle = await Bun.build({ entrypoints: [join(import.meta.dir, "ui-fixture.tsx")], target: "browser" });
 if (!bundle.success) throw new AggregateError(bundle.logs, "UI fixture build failed");
@@ -129,7 +129,7 @@ try {
     assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/google/start", body: { source_id: "cal", services: ["calendar"] } }]);
   });
   await check("An API-key account that needs a reconnect is fixed by entering its key again, not by an OAuth start", "connections", async (page) => {
-    const fireflies = { id: "fireflies", services: ["fireflies"], service_kinds: { fireflies: ["meeting"] }, auth: "api_key", callback_uri: null };
+    const fireflies = { id: "fireflies", services: ["fireflies"], service_kinds: { fireflies: ["meeting"] }, auth: "api_key", callback_uri: null, tenant_default: null, can_revoke: false };
     const base = scenario();
     automation.reset(scenario({
       providers: [...base.connectors.providers, fireflies],
@@ -269,6 +269,105 @@ try {
     await page.getByText("Needs reconnect", { exact: true }).waitFor();
     await page.getByText("ends a grant 7 days after consent while its OAuth app is in Testing", { exact: false }).waitFor();
     assert.equal(await page.getByRole("button", { name: `Reconnect ${OWNER}`, exact: true }).isEnabled(), true);
+  });
+  await check("Microsoft offers Outlook mail or Outlook calendar, one at a time, each into a source of its kind", "connections", async (page) => {
+    automation.reset(scenario({ providers: [MICROSOFT], accounts: [],
+      sources: [{ id: "default", kind: "other" }, { id: "cal", kind: "calendar" }, { id: "me-mail", kind: "mailbox" }] }));
+    const panel = page.getByRole("region", { name: "Microsoft" });
+    const read = panel.getByRole("group", { name: "Read" });
+    const mail = read.getByRole("radio", { name: "Outlook mail" });
+    const calendar = read.getByRole("radio", { name: "Outlook calendar" });
+    await mail.waitFor();
+    assert.equal(await mail.isChecked(), true);
+    assert.deepEqual(await panel.getByLabel("Into source").locator("option").allTextContents(), ["me-mail"]);
+    await calendar.check();
+    assert.equal(await mail.isChecked(), false);
+    assert.deepEqual(await panel.getByLabel("Into source").locator("option").allTextContents(), ["cal"]);
+    await page.route("https://accounts.example.test/**", (r) => r.fulfill({ contentType: "text/html", body: "<p>Provider consent page</p>" }));
+    await panel.getByRole("button", { name: "Connect Microsoft" }).click();
+    await page.waitForURL("https://accounts.example.test/**");
+    assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/microsoft/start", body: { source_id: "cal", services: ["outlook_calendar"] } }]);
+  });
+  await check("Microsoft with no mailbox source says how to register one and let agents read it", "connections", async (page) => {
+    automation.reset(scenario({ providers: [MICROSOFT], accounts: [] }));
+    const panel = page.getByRole("region", { name: "Microsoft" });
+    await panel.getByText("No source can hold mailbox data yet", { exact: false }).waitFor();
+    await panel.getByText("--kind mailbox", { exact: false }).waitFor();
+    assert.equal(await panel.getByRole("button", { name: "Connect Microsoft" }).isDisabled(), true);
+  });
+  await check("A Microsoft own app names who can sign in, and refuses a tenant that is not one", "connections", async (page) => {
+    automation.reset(scenario({ providers: [MICROSOFT], accounts: [] }));
+    const panel = page.getByRole("region", { name: "Microsoft" });
+    await panel.getByText("Use your own OAuth app").click();
+    assert.equal(await panel.getByLabel("Callback URL for Microsoft", { exact: true }).inputValue(), MICROSOFT.callback_uri);
+    await panel.getByRole("button", { name: "Copy Callback URL for Microsoft" }).waitFor();
+    const who = panel.getByLabel("Who can sign in");
+    assert.equal(await who.inputValue(), "common");
+    await panel.getByLabel("Client ID").fill("11111111-2222-3333-4444-555555555555");
+    await panel.getByLabel("Client secret").fill("ms-secret-value");
+    await who.selectOption("tenant");
+    const dir = panel.getByLabel("Directory (tenant) ID or domain");
+    await dir.fill("contoso");
+    const save = panel.getByRole("button", { name: "Save app" });
+    assert.equal(await save.isDisabled(), true);
+    await panel.getByText("a directory ID like", { exact: false }).waitFor();
+    await dir.fill("Contoso.onmicrosoft.com");
+    await save.click();
+    await page.getByText("Saved your Microsoft app", { exact: false }).waitFor();
+    assert.deepEqual(automation.posts, [{
+      path: "/admin/api/connectors/microsoft/client",
+      body: { client_id: "11111111-2222-3333-4444-555555555555", client_secret: "ms-secret-value", tenant: "contoso.onmicrosoft.com" },
+    }]);
+  });
+  await check("A saved Microsoft app shows its tenant, and an audience saves as itself", "connections", async (page) => {
+    automation.reset(scenario({ providers: [MICROSOFT], accounts: [],
+      clients: [{ provider: "microsoft", client_id: "app-1", tenant: "organizations", updated_at: "2026-11-08T12:00:00Z" }] }));
+    const panel = page.getByRole("region", { name: "Microsoft" });
+    await panel.getByText("Use your own OAuth app").click();
+    const savedApp = panel.locator("p", { hasText: "app-1" });
+    await savedApp.waitFor();
+    assert.match((await savedApp.textContent()) ?? "", /Using app-1, work or school accounts only, saved/);
+    assert.equal(await panel.getByLabel("Who can sign in").inputValue(), "organizations");
+    await panel.getByLabel("Who can sign in").selectOption("consumers");
+    await panel.getByLabel("Client ID").fill("app-2");
+    await panel.getByLabel("Client secret").fill("ms-secret-value");
+    await panel.getByRole("button", { name: "Replace app" }).click();
+    await page.getByText("Saved your Microsoft app", { exact: false }).waitFor();
+    assert.deepEqual(automation.posts[0]!.body, { client_id: "app-2", client_secret: "ms-secret-value", tenant: "consumers" });
+  });
+  await check("A Microsoft account with sync off warns before 90 unused days end its access", "connections", async (page) => {
+    const idle = account({
+      provider: "microsoft", services: ["outlook_mail"], source_id: "me-mail", enabled: false, last_success_at: "2026-08-20T10:00:00Z", last_run: null,
+      credential: { scopes: ["Mail.Read"], expires_at: null, granted_at: "2026-08-10T12:00:00.000Z" },
+    });
+    automation.reset(scenario({ providers: [MICROSOFT], sources: [{ id: "me-mail", kind: "mailbox" }], accounts: [idle] }));
+    await page.getByText("Microsoft · Outlook mail · into", { exact: false }).waitFor();
+    await page.getByText("Microsoft ends access that goes unused for 90 days", { exact: false }).waitFor();
+    await page.getByText("2026-11-18", { exact: false }).first().waitFor();
+    await page.route("https://accounts.example.test/**", (r) => r.fulfill({ contentType: "text/html", body: "<p>Provider consent page</p>" }));
+    await page.getByRole("button", { name: `Reconnect now: ${OWNER}` }).click();
+    await page.waitForURL("https://accounts.example.test/**");
+    assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/microsoft/start", body: { source_id: "me-mail", services: ["outlook_mail"] } }]);
+  });
+  await check("A syncing Microsoft account renews itself and shows no access deadline", "connections", async (page) => {
+    automation.reset(scenario({ providers: [MICROSOFT], sources: [{ id: "me-mail", kind: "mailbox" }],
+      accounts: [account({ provider: "microsoft", services: ["outlook_mail"], source_id: "me-mail" })] }));
+    await page.getByText("Syncing", { exact: true }).waitFor();
+    assert.equal(await page.getByText("Access ends", { exact: true }).count(), 0);
+    assert.equal(await page.getByText("unused for 90 days", { exact: false }).count(), 0);
+  });
+  await check("Disconnecting a Microsoft account says where to remove the consent, and to pause with sync off instead", "connections", async (page) => {
+    automation.reset(scenario({ providers: [MICROSOFT], sources: [{ id: "me-mail", kind: "mailbox" }],
+      accounts: [account({ provider: "microsoft", services: ["outlook_mail"], source_id: "me-mail" })] }));
+    await page.getByRole("button", { name: `Disconnect ${OWNER}` }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByText("account.microsoft.com/privacy/app-access", { exact: false }).waitFor();
+    await dialog.getByText("myapplications.microsoft.com", { exact: false }).waitFor();
+    await dialog.getByText("Turn sync off", { exact: false }).waitFor();
+    await dialog.getByLabel("Type the account name to confirm").fill(OWNER);
+    await dialog.getByRole("button", { name: "Disconnect", exact: true }).click();
+    await page.getByText(`${OWNER} is disconnected and Memrain deleted its access.`, { exact: false }).waitFor();
+    await page.getByText("consent", { exact: false }).first().waitFor();
   });
   await check("Autonomy pauses a daemon and resumes a paused spend path", "autonomy", async (page) => {
     const st = scenario();

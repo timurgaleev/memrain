@@ -23,7 +23,6 @@ import type { SyncAccount, SyncAdapter } from "./sync-engine.ts";
 import { assertConnectorName } from "./accounts.ts";
 import { googleProvider } from "./google/provider.ts";
 import { microsoftProvider } from "./microsoft/provider.ts";
-import { isTenant } from "./oauth-clients.ts";
 
 export interface ProviderService {
   /** Read-only scopes this service needs. */
@@ -144,18 +143,6 @@ function assertHttps(url: string, what: string, id: string): void {
   if (parsed.username || parsed.password || parsed.hash) throw new Error(`provider ${id}: ${what} must not carry credentials or a fragment`);
 }
 
-/**
- * The authorize and token endpoints for one OAuth client. A provider with a
- * tenant segment takes the client's tenant, else its default; an invalid one
- * throws rather than reach a URL.
- */
-export function oauthEndpoints(provider: ConnectorProvider, tenant?: string | null): { authorizeUrl: string; tokenUrl: string } {
-  if (!provider.tenant) return { authorizeUrl: provider.authorizeUrl, tokenUrl: provider.tokenUrl };
-  const t = tenant ?? provider.tenant.default;
-  if (!isTenant(t)) throw new Error(`provider ${provider.id}: invalid tenant`);
-  return { authorizeUrl: provider.authorizeUrl.replace("{tenant}", t), tokenUrl: provider.tokenUrl.replace("{tenant}", t) };
-}
-
 export class ProviderRegistry {
   private readonly providers = new Map<string, ConnectorProvider>();
   private readonly keyed = new Map<string, ApiKeyProvider>();
@@ -163,16 +150,10 @@ export class ProviderRegistry {
   register(provider: ConnectorProvider): void {
     assertConnectorName(provider.id, "provider");
     if (this.providers.has(provider.id) || this.keyed.has(provider.id)) throw new Error(`provider ${provider.id} is already registered`);
-    if (provider.tenant) {
-      for (const [what, url] of [["authorizeUrl", provider.authorizeUrl], ["tokenUrl", provider.tokenUrl]] as const) {
-        if (url.split("{tenant}").length !== 2) throw new Error(`provider ${provider.id}: ${what} must hold {tenant} once`);
-      }
-      const resolved = oauthEndpoints(provider);
-      assertHttps(resolved.authorizeUrl, "authorizeUrl", provider.id);
-      assertHttps(resolved.tokenUrl, "tokenUrl", provider.id);
-    }
-    assertHttps(provider.authorizeUrl, "authorizeUrl", provider.id);
-    assertHttps(provider.tokenUrl, "tokenUrl", provider.id);
+    assertTenantEndpoints(provider);
+    const endpoints = oauthEndpoints(provider);
+    assertHttps(endpoints.authorizeUrl, "authorizeUrl", provider.id);
+    assertHttps(endpoints.tokenUrl, "tokenUrl", provider.id);
     if (provider.revokeUrl !== undefined) assertHttps(provider.revokeUrl, "revokeUrl", provider.id);
     if (provider.sync !== undefined) assertHttps(provider.sync.apiOrigin, "sync.apiOrigin", provider.id);
     const services = Object.keys(provider.services);
@@ -210,6 +191,53 @@ export class ProviderRegistry {
   listApiKey(): ApiKeyProvider[] {
     return [...this.keyed.values()];
   }
+}
+
+/** The placeholder a provider's authorize and token URLs carry for the directory (tenant) segment. */
+export const TENANT_PLACEHOLDER = "{tenant}";
+const TENANT_AUDIENCES = new Set(["common", "organizations", "consumers"]);
+const TENANT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const DOMAIN_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * A tenant as it may go into an endpoint path: one of the three audiences
+ * (`common`, `organizations`, `consumers`), a directory id, or a verified
+ * domain such as `contoso.onmicrosoft.com`
+ * (learn.microsoft.com/entra/identity-platform/v2-protocols, "Endpoints").
+ * Lower-cased; null for anything else, so no value can add a path segment,
+ * a query or another host.
+ */
+export function normalizeTenant(value: string): string | null {
+  const t = value.trim().toLowerCase();
+  if (TENANT_AUDIENCES.has(t) || TENANT_ID_RE.test(t)) return t;
+  if (t.length > 253) return null;
+  const labels = t.split(".");
+  return labels.length >= 2 && labels.every((l) => DOMAIN_LABEL_RE.test(l)) ? t : null;
+}
+
+/**
+ * The authorize and token endpoints for one OAuth client. A provider with a
+ * tenant segment takes the client's tenant, else its default; a value that is
+ * not a tenant throws rather than reach a URL.
+ */
+export function oauthEndpoints(provider: ConnectorProvider, tenant?: string | null): { authorizeUrl: string; tokenUrl: string } {
+  if (!provider.tenant) return { authorizeUrl: provider.authorizeUrl, tokenUrl: provider.tokenUrl };
+  const t = normalizeTenant(tenant ?? provider.tenant.default);
+  if (t === null) throw new Error(`provider ${provider.id}: invalid tenant`);
+  return { authorizeUrl: provider.authorizeUrl.replace(TENANT_PLACEHOLDER, t), tokenUrl: provider.tokenUrl.replace(TENANT_PLACEHOLDER, t) };
+}
+
+function assertTenantEndpoints(provider: ConnectorProvider): void {
+  const templated = [provider.authorizeUrl, provider.tokenUrl].some((u) => u.includes(TENANT_PLACEHOLDER));
+  if (provider.revokeUrl?.includes(TENANT_PLACEHOLDER)) throw new Error(`provider ${provider.id}: revokeUrl cannot carry a tenant`);
+  if (!provider.tenant) {
+    if (templated) throw new Error(`provider ${provider.id}: endpoints carry ${TENANT_PLACEHOLDER} but no tenant is declared`);
+    return;
+  }
+  for (const [what, url] of [["authorizeUrl", provider.authorizeUrl], ["tokenUrl", provider.tokenUrl]] as const) {
+    if (url.split(TENANT_PLACEHOLDER).length !== 2) throw new Error(`provider ${provider.id}: ${what} must hold ${TENANT_PLACEHOLDER} once, as it declares a tenant`);
+  }
+  if (normalizeTenant(provider.tenant.default) !== provider.tenant.default) throw new Error(`provider ${provider.id}: default tenant is not a tenant name`);
 }
 
 /** Providers that ship with Memrain. Each arrives with its connector. */

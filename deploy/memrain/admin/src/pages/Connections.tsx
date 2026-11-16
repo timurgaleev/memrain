@@ -12,6 +12,7 @@ import {
   hasCalendarPicker,
   lastRunText,
   providerLabel,
+  serviceLabel,
   type ConnectorAccountView,
   type ConnectorsReport,
 } from "../lib/automation.ts";
@@ -121,7 +122,7 @@ export function ConnectionsPage() {
       {open?.kind === "disconnect" && (
         <DisconnectDialog
           account={open.account}
-          consentUrls={report.data?.providers.find((p) => p.id === open.account.provider)?.consent_urls ?? []}
+          canRevoke={report.data?.providers.find((p) => p.id === open.account.provider)?.can_revoke ?? true}
           onClose={() => setOpen(null)}
           onDone={(message) => { setOpen(null); done(message); }}
           onChanged={report.reload}
@@ -155,7 +156,7 @@ function AccountRow({ account: a, connectorsOn, keyBased, onOpen, onDone, onErro
   const [picking, setPicking] = useState(false);
   const pickerId = useId();
   const reconnectNotice = a.notices.find((n) => n.kind === "needs_reconnect");
-  const grant = grantNote(a);
+  const grant = grantNote(a, now);
   const canPick = hasCalendarPicker(a, connectorsOn);
 
   const run = async (work: () => Promise<string | null>) => {
@@ -205,7 +206,7 @@ function AccountRow({ account: a, connectorsOn, keyBased, onOpen, onDone, onErro
         <span className="account-name mono">{a.account_label}</span>
         <span className="account-state">{view.label}</span>
         <span className="muted small">
-          {providerLabel(a.provider)} · {a.services.join(", ")} · into <span className="mono">{a.source_id}</span>
+          {providerLabel(a.provider)} · {a.services.map((s) => serviceLabel(a.provider, s)).join(", ")} · into <span className="mono">{a.source_id}</span>
         </span>
       </div>
 

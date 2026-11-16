@@ -127,7 +127,7 @@ export function microsoftProvider(): ConnectorProvider {
     optionalGrantScopes: OIDC_SCOPES,
     grantIncludesPriorConsent: true,
     tokenErrorCode,
-    consentUrls: ["https://myapps.microsoft.com", "https://account.live.com/consent/Manage"],
+    consentUrls: ["https://myapplications.microsoft.com", "https://account.microsoft.com/privacy/app-access"],
     normalizeScope,
     identify: ({ fetch, accessToken }) => identify(fetch, accessToken),
     sync: {

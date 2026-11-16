@@ -1,7 +1,9 @@
 # How to turn on connectors
 
 This guide takes a running Memrain from "connectors off" to syncing your
-Google Calendar and Fireflies meetings into the brain. It lists the switches
+calendar, mail and meetings into the brain: Google Calendar, Gmail, Outlook
+mail and calendar (Microsoft 365 or a personal Microsoft account), and
+Fireflies. It lists the switches
 in the order they must be thrown. Each one is safe alone, and nothing is
 fetched from a provider until every one of them is in place.
 
@@ -20,8 +22,8 @@ sync run, and all four must be open:
 - A deployed stack that is healthy on the current release:
   `memrain auth doctor` and `/health` are clean.
 - `MEMRAIN_PUBLIC_URL` is set (bootstrap writes it from your domain). Google
-  sends you back to an address built from it, and the connect flow refuses to
-  start without it.
+  and Microsoft send you back to an address built from it, and the connect
+  flow refuses to start without it.
 - Shell access to the host (SSM Session Manager) and an AWS profile that can
   run `terraform plan` against the stack's S3 state, from your private ops
   directory (the one with the filled `backend.hcl` and `terraform.tfvars`).
@@ -104,7 +106,7 @@ register one first (the id and prefix are yours to choose):
 
 ```bash
 docker exec deploy-memrain-1 bun run src/cli.ts sources register me-calendar --kind calendar --path-prefix calendar/
-docker exec deploy-memrain-1 bun run src/cli.ts sources register me-mail --kind mailbox --path-prefix mail/        # Gmail
+docker exec deploy-memrain-1 bun run src/cli.ts sources register me-mail --kind mailbox --path-prefix mail/        # Gmail or Outlook mail
 docker exec deploy-memrain-1 bun run src/cli.ts sources register me-meetings --kind meeting --path-prefix meeting/   # Fireflies
 ```
 
@@ -123,12 +125,10 @@ docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> 
   your own, then the Connect button).
 - Gmail: [GMAIL.md](./GMAIL.md) (the same Google client, the Gmail API turned
   on, and a `mailbox` source).
-- Outlook calendar (Microsoft 365 or Outlook.com): [MICROSOFT.md](./MICROSOFT.md)
-  (a Microsoft Entra app of your own, then the Connect button; a `calendar`
-  source).
+- Outlook mail and Outlook calendar: [MICROSOFT.md](./MICROSOFT.md) (a
+  Microsoft Entra app of your own, a `mailbox` and a `calendar` source, each
+  connected on its own).
 - Fireflies: [FIREFLIES.md](./FIREFLIES.md) (an API key).
-- Outlook mail and calendar: [MICROSOFT.md](./MICROSOFT.md) (a Microsoft
-  Entra app of your own, then the Connect button).
 
 Everything a connector writes is text from outside the brain: anyone can put
 words in a meeting title or a transcript. It passes the write gate for outside
@@ -257,7 +257,7 @@ data is a separate, explicit action.
 | doctor: `... MEMRAIN_CONNECTOR_KEK must decode to 32 bytes` (or `is not base64`) | The value is not base64 of exactly 32 bytes | Put a new value in with [KEY.md](./KEY.md) step 3 before any account is connected |
 | `daemons status` shows `connector_sync` but it never runs | `MEMRAIN_DAEMONS` is not `1` in the running process, or no daily budget | Recheck steps 4 and 6; `status` says `MEMRAIN_DAEMONS is not 1` when that is it |
 | The admin Connections page answers `connectors_disabled` | Step 3 not applied, or the key failed to load | `docker exec deploy-memrain-1 bun run src/cli.ts doctor` names the reason |
-| An account shows `needs_reconnect` | The provider refused its token (expired or revoked) | Choose **Reconnect** on its row on the Connections page; the sync resumes from where it stopped. For Google in Testing mode, see [GOOGLE.md](./GOOGLE.md#the-7-day-reconnect) |
+| An account shows `needs_reconnect` | The provider refused its token (expired or revoked) | Choose **Reconnect** on its row on the Connections page; the sync resumes from where it stopped. For Google in Testing mode, see [GOOGLE.md](./GOOGLE.md#the-7-day-reconnect); for Microsoft, [MICROSOFT.md](./MICROSOFT.md#keeping-access-alive) |
 | `connectors status` lists an account as `sync on` with `no run recorded yet` | `connector_sync` has not run for it since this release, or connectors are off (the first line says `connectors: off (...)`) | Fix the reason on that first line (step 3); otherwise wait for the next 15-minute window and check `daemons status` (step 6) if it stays |
 | `memrain config set MEMRAIN_CONNECTORS_ENABLED 1` prints `WARN — environment ... overrides this stored value` | The variable is also set in the container environment, which wins | Remove it from wherever it is set (a compose override or the `.env`) |
 | The daily budget vanished after a host rebuild | A bootstrap run rewrote `.env` | Add `MEMRAIN_DAILY_BUDGET_USD` again (step 4) |
@@ -266,8 +266,8 @@ data is a separate, explicit action.
 
 - [KEY.md](./KEY.md): create, back up and rotate the connector key.
 - [GOOGLE.md](./GOOGLE.md): Google Cloud project and OAuth client for Calendar.
-- [MICROSOFT.md](./MICROSOFT.md): Microsoft Entra app for an Outlook calendar.
-- [FIREFLIES.md](./FIREFLIES.md): Fireflies API key.
+- [GMAIL.md](./GMAIL.md): Gmail with the same Google client.
 - [MICROSOFT.md](./MICROSOFT.md): Microsoft Entra app for Outlook mail and calendar.
+- [FIREFLIES.md](./FIREFLIES.md): Fireflies API key.
 - [LOOPS.md](./LOOPS.md): who is waiting on whom (`memrain waiting`, `loops_sweep`).
 - [CONFIGURATION.md](../CONFIGURATION.md): every connector and daemon setting.
