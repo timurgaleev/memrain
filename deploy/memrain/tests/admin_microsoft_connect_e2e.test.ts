@@ -224,6 +224,54 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(accounts).toEqual([]);
   });
 
+  /** Start a connect, then come back from Microsoft with an error instead of a code, through the callback page and its form post. */
+  async function refusedAtCallback(b: Browser, error: Record<string, string>): Promise<Response> {
+    const started = await spaPost(b, "/admin/api/connectors/microsoft/start", { source_id: "work-mail", services: ["outlook_mail"] });
+    expect(started.status).toBe(200);
+    const authorize = new URL(((await started.json()) as { authorize_url: string }).authorize_url);
+    const back = new URL(authorize.searchParams.get("redirect_uri")!);
+    for (const [k, v] of Object.entries(error)) back.searchParams.set(k, v);
+    back.searchParams.set("state", authorize.searchParams.get("state")!);
+    const page = await b.send(`${back.pathname}${back.search}`, {
+      withCookie: false,
+      headers: { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document", referer: "https://login.microsoftonline.com/" },
+    });
+    expect(page.status).toBe(200);
+    const { action, fields } = formFields(await page.text());
+    return b.send(action, {
+      method: "POST",
+      headers: {
+        origin: formPostOrigin(page.headers.get("referrer-policy")), "content-type": "application/x-www-form-urlencoded",
+        "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document",
+      },
+      body: new URLSearchParams(fields).toString(),
+    });
+  }
+
+  it("reports an administrator's approval the organization requires when Microsoft refuses at the callback", async () => {
+    const b = await boot();
+    expect((await spaPost(b, "/admin/api/connectors/microsoft/client", { client_id: APP_ID, client_secret: APP_SECRET, tenant: TENANT_ID })).status).toBe(200);
+    // Microsoft's authorization error carries `error` and `error_description`; the AADSTS code opens the description.
+    for (const [error, description] of [
+      ["access_denied", "AADSTS65001: The user or administrator has not consented to use the application with ID '11111111-2222-3333-4444-a55555555555'."],
+      ["consent_required", "AADSTS90094: The grant requires admin permission."],
+      ["access_denied", "AADSTS90095: An administrator must review and approve this request."],
+    ] as const) {
+      const done = await refusedAtCallback(b, { error, error_description: description });
+      expect(done.status).toBe(303);
+      expect(done.headers.get("location")).toBe("/admin/?connector_error=admin_consent_required#connections");
+    }
+    // The owner's own Cancel, and a description that only mentions a code, stay a plain refusal.
+    for (const description of ["AADSTS65004: User declined to consent to access the app.", "the user canceled; see AADSTS65001 in the docs"]) {
+      const done = await refusedAtCallback(b, { error: "access_denied", error_description: description });
+      expect(done.headers.get("location")).toBe("/admin/?connector_error=provider_denied#connections");
+    }
+    const { accounts } = await (await b.send("/admin/api/connectors", { headers: SPA })).json() as { accounts: unknown[] };
+    expect(accounts).toEqual([]);
+    // Nothing was exchanged at the token endpoint.
+    expect(world.calls.filter((c) => c.body?.get("grant_type") === "authorization_code")).toEqual([]);
+  });
+
   it("uses the environment's app and tenant when none is saved", async () => {
     process.env.MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID = APP_ID;
     process.env.MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET = APP_SECRET;

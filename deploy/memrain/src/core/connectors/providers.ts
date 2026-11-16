@@ -101,6 +101,12 @@ export interface ConnectorProvider {
   grantIncludesPriorConsent?: boolean;
   /** A clearer connect error for a refused code exchange, read from the provider's error body. */
   tokenErrorCode?: (body: Record<string, unknown>) => ProviderConnectError | null;
+  /**
+   * A clearer connect error for a refusal sent back to the redirect URI, read
+   * from its `error` and `error_description` parameters; anything else is
+   * `provider_denied`.
+   */
+  callbackErrorCode?: (params: { error: string; description: string | null }) => ProviderConnectError | null;
   /** Where the owner withdraws the app's consent, for a provider Memrain cannot revoke at. */
   consentUrls?: readonly string[];
   /** Separator of the token response's `scope` field (a space by default). */

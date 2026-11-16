@@ -39,7 +39,11 @@
  * (AADSTS50173); both answer `invalid_grant` and park the account as
  * needs_reconnect. A work tenant that does not let users consent refuses the
  * code exchange with AADSTS65001 or AADSTS90094, which the connect reports as
- * `admin_consent_required`.
+ * `admin_consent_required`. Microsoft may refuse already at the redirect URI
+ * instead (`access_denied` or `consent_required`); that response carries
+ * only `error` and `error_description`, no numeric `error_codes`
+ * (v2-oauth2-auth-code-flow, "Error response"), so the code is read from the
+ * `AADSTS<n>:` the description opens with, never from its prose.
  */
 import { readTextCapped, type FetchFn } from "../client.ts";
 import type { ConnectorProvider, ProviderConnectError, ProviderIdentity } from "../providers.ts";
@@ -82,6 +86,14 @@ function normalizeScope(raw: string): string {
 function tokenErrorCode(body: Record<string, unknown>): ProviderConnectError | null {
   const codes = Array.isArray(body.error_codes) ? body.error_codes : [];
   return codes.some((c) => typeof c === "number" && ADMIN_CONSENT_CODES.has(c)) ? "admin_consent_required" : null;
+}
+
+/** The AADSTS code an error description opens with: `AADSTS65001: The user or administrator ...`. */
+const LEADING_AADSTS_RE = /^AADSTS(\d{4,6}):/;
+
+function callbackErrorCode(params: { description: string | null }): ProviderConnectError | null {
+  const m = LEADING_AADSTS_RE.exec((params.description ?? "").trim());
+  return m !== null && ADMIN_CONSENT_CODES.has(Number(m[1])) ? "admin_consent_required" : null;
 }
 
 function address(value: unknown): string | null {
@@ -134,6 +146,7 @@ export function microsoftProvider(): ConnectorProvider {
     optionalGrantScopes: OIDC_SCOPES,
     grantIncludesPriorConsent: true,
     tokenErrorCode,
+    callbackErrorCode,
     consentUrls: ["https://myapplications.microsoft.com", "https://account.microsoft.com/privacy/app-access"],
     normalizeScope,
     identify: ({ fetch, accessToken }) => identify(fetch, accessToken),

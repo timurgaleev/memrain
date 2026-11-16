@@ -58,6 +58,7 @@ const STATE_RETENTION_MS = 24 * 60 * 60_000;
 const PROVIDER_TIMEOUT_MS = 15_000;
 const MAX_PROVIDER_BODY = 64 * 1024;
 const MAX_CODE = 2048;
+const MAX_ERROR_DESCRIPTION = 4096;
 const CALLBACK_PATH = "/admin/connectors/callback";
 const STATE_RE = /^[\w-]{43}$/;
 
@@ -436,6 +437,8 @@ export interface CompleteConnectInput {
   code?: unknown;
   /** The provider's `error` parameter, when the owner declined. */
   error?: unknown;
+  /** The provider's `error_description`, read only by the provider's own callbackErrorCode; never stored or echoed. */
+  errorDescription?: unknown;
   adminSessionId: string;
 }
 
@@ -448,6 +451,10 @@ export async function completeConnect(
   const provider = requireProvider(deps, st.provider);
   if (input.error !== undefined && input.error !== null && input.error !== "") {
     const reason = typeof input.error === "string" && /^[a-z_]{1,64}$/.test(input.error) ? input.error : "unknown";
+    const description = typeof input.errorDescription === "string" ? input.errorDescription.slice(0, MAX_ERROR_DESCRIPTION) : null;
+    if (provider.callbackErrorCode?.({ error: reason, description }) === "admin_consent_required") {
+      throw new ConnectError("admin_consent_required", { error: reason });
+    }
     throw new ConnectError("provider_denied", { error: reason });
   }
   if (typeof input.code !== "string" || input.code === "" || input.code.length > MAX_CODE || !/^[\x21-\x7E]+$/.test(input.code)) {

@@ -245,6 +245,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect((err as ConnectError).code).toBe("provider_denied");
       expect((err as Error).message).not.toContain("<script>");
       expect(await code(completeConnect(d, { provider: "test", state: denied.state, code: "c", adminSessionId: SESSION }))).toBe("state_used");
+      // Only a provider's own mapping reads a description: anyone else's text naming a code stays a plain refusal.
+      const described = await begin(e, d);
+      expect(await code(completeConnect(d, {
+        provider: "test", state: described.state, error: "access_denied", errorDescription: "AADSTS65001: needs an admin", adminSessionId: SESSION,
+      }))).toBe("provider_denied");
 
       const failing = deps(e, fakeProvider({ tokenStatus: 400 }).fetch);
       const bad = await begin(e, failing);

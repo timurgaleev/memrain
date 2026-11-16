@@ -499,7 +499,9 @@ async function complete(req: Request, provider: string, deps: AdminConnectorDeps
   const body = await readBody(req);
   if (!body) return redirect(`${DONE_PATH}?connector_error=state_invalid${DONE_HASH}`);
   try {
-    await completeConnect(connectDeps(deps), { provider, state: body.state, code: body.code, error: body.error, adminSessionId: session });
+    await completeConnect(connectDeps(deps), {
+      provider, state: body.state, code: body.code, error: body.error, errorDescription: body.error_description, adminSessionId: session,
+    });
     return redirect(`${DONE_PATH}?connector=connected${DONE_HASH}`);
   } catch (e) {
     if (e instanceof ConnectError) return redirect(`${DONE_PATH}?connector_error=${e.code}${DONE_HASH}`);
@@ -530,7 +532,7 @@ export function handleConnectorCallbackPage(req: Request, url: URL): Response | 
     return new Response("Not Found", { status: 404 });
   }
   if (!PROVIDER_RE.test(provider)) return new Response("Not Found", { status: 404 });
-  const fields = (["state", "code", "error"] as const)
+  const fields = (["state", "code", "error", "error_description"] as const)
     .map((k) => [k, param(url, k)] as const)
     .filter(([, v]) => v !== "")
     .map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(v)}">`)
