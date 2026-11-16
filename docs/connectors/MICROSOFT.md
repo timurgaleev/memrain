@@ -236,7 +236,9 @@ limit: an unscoped token or client reads **every** source, the new ones
 included, from the moment they exist. Decide for each of your clients and
 tokens whether it should see your personal mail, and separately whether it
 should see `work-mail` and `work-calendar`: your employer may have rules
-about where work mail goes.
+about where work mail goes, and the request to your IT administrator
+([MICROSOFT-IT-REQUEST.md](./MICROSOFT-IT-REQUEST.md)) names every client
+you let read them.
 
 See what each one reads now:
 
@@ -340,15 +342,27 @@ send.
 
 **What the app is.** A personal memory that reads one employee's own Outlook
 mail (Inbox and Sent Items) and calendar and keeps them searchable for that
-employee. It runs on the employee's own server (in the standard setup at
-AWS, region eu-west-1 in Ireland); data and access tokens stay there (the
-tokens encrypted), and the server talks to Microsoft Graph directly. Nothing
-goes to a third-party service in between.
+employee. It runs on the employee's own server, which talks to Microsoft
+Graph directly. Where the mail and events go from there
+([PRIVACY.md](../../PRIVACY.md#where-the-data-goes) has the details):
+
+- **Storage:** the employee's own AWS account, in the region their server
+  runs in; access tokens are stored encrypted.
+- **Processing:** the text is indexed for search with Amazon Bedrock under
+  that AWS account, and, when the employee asks the server for a written
+  answer, read by a Claude model on Amazon Bedrock. Cross-region inference
+  can take these calls to other regions the employee allows. Amazon does not
+  train models on them.
+- **Readers:** the AI assistants the employee connects to the server read
+  search results, which can include work mail and events. The request names
+  them.
+- **Transit:** with the default ingress (Cloudflare Tunnel), requests to the
+  server pass through Cloudflare.
 
 **What it asks for.** Six **delegated** Microsoft Graph permissions, all
 read-only: `openid`, `email`, `offline_access`, `User.Read`, `Mail.Read`,
-`Calendars.Read`. No application permissions: it can only read what the
-signed-in employee can read, and only while that employee's consent stands.
+`Calendars.Read`. No application permissions: it acts only for a signed-in
+user and reads only that user's own mailbox and calendar.
 
 **Why it needs you.** The app is registered in the employee's own directory,
 not yours, and its publisher is not verified. Your organization's consent
@@ -388,14 +402,20 @@ own directory, and **Enterprise apps > Permissions > Grant admin consent**
 only for an app already present in it, which this one is not until someone
 consents. Use the link above.
 
-**Narrower options.** Tenant-wide consent lets every user of your
-organization sign in to the app (each still sees only their own mail). To
-keep it to the one employee:
+**Restrict it to the one employee.** The link grants tenant-wide consent:
+every user of your organization could then sign in to the app without being
+asked, and the app is the employee's, so that user's mail would go to the
+employee's server, not to the user. Microsoft:
+"granting tenant-wide admin consent to an application allows all users to
+access the application unless otherwise restricted"
+([grant tenant-wide admin consent](https://learn.microsoft.com/entra/identity/enterprise-apps/grant-admin-consent)).
+So do one of these:
 
 - After granting consent, open **Entra ID > Enterprise apps > the app >
   Properties**, set **Assignment required?** to **Yes**, and under **Users and
   groups** assign only the employee.
-- Or grant consent for that one user only, with Microsoft Graph PowerShell
+- Or, instead of the link, grant consent for that one user only, with
+  Microsoft Graph PowerShell
   ([grant consent on behalf of a single user](https://learn.microsoft.com/entra/identity/enterprise-apps/grant-consent-single-user)):
 
   ```powershell

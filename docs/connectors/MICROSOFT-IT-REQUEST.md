@@ -10,8 +10,19 @@ the placeholders first:
   placeholder: IT does.
 - `<host>`: your Memrain server's address, as in your redirect URI.
 - `<your name>` and `<your work address>`.
-- The data location says AWS, region eu-west-1 (Ireland), Memrain's standard
-  setup: change it if your server runs elsewhere.
+- `<aws-region>`: the AWS region your server and database run in (for
+  example `eu-west-1`, Ireland).
+- `<bedrock-regions>`: the regions your Bedrock calls may reach. With
+  cross-region inference profiles that is more than one region; see
+  [PRIVACY.md](../../PRIVACY.md#where-the-data-goes).
+- `<assistants>`: every AI assistant or client you let read `work-mail` and
+  `work-calendar` ([MICROSOFT.md](./MICROSOFT.md) step 9). Name each one;
+  they receive search results, so they receive your work mail.
+- Keep the Cloudflare line only if your server is reached through
+  Cloudflare Tunnel (the default ingress); delete it otherwise.
+
+Do not send the request with a placeholder left in it, and do not shorten
+"Where the data goes": IT approves exactly what you write there.
 
 [MICROSOFT.md, "For your IT administrator"](./MICROSOFT.md#for-your-it-administrator)
 has the background, should IT ask for more. An English and a German version
@@ -36,18 +47,27 @@ you please review and, if acceptable, approve it?
   is not verified.
 - **Permissions:** six delegated Microsoft Graph permissions, all read-only:
   `openid`, `email`, `offline_access`, `User.Read`, `Mail.Read`,
-  `Calendars.Read`. No application permissions: the app can only read my own
-  mailbox and calendar, as me, while my consent stands.
+  `Calendars.Read`. No application permissions: the app acts only for a
+  signed-in user and reads only that user's own mailbox and calendar.
 - **What it reads:** my Inbox and Sent Items, and my calendar events. It never
   sends, changes or deletes anything.
-- **Where the data goes:** to my own Memrain server only (AWS, region
-  eu-west-1, Ireland). The server calls Microsoft Graph directly; no other
-  service is involved. Access tokens are stored encrypted.
+- **Where the data goes:**
+  - It is stored on my own Memrain server, in my own AWS account (region
+    `<aws-region>`), and the server calls Microsoft Graph directly. Access
+    tokens are stored encrypted.
+  - To make it searchable, the text is indexed with Amazon Bedrock under the
+    same AWS account (`<bedrock-regions>`). If I ask the server for a written
+    answer, a Claude model on Amazon Bedrock reads the matching mail for it.
+    Amazon does not use either to train models.
+  - The AI assistants I connect to the server read search results, which
+    can include this mail and these events: `<assistants>`.
+  - Requests to my server pass through Cloudflare (Cloudflare Tunnel).
 
 **To approve it**, please open this link signed in as an administrator
 (Privileged Role Administrator, Cloud Application Administrator, Application
 Administrator or AI Administrator), review the permissions and choose
-**Accept**:
+**Accept**. The link approves the app for everyone in our organization:
+please restrict it to me afterwards, as described below.
 
 ```
 https://login.microsoftonline.com/<company-tenant-id-or-domain>/v2.0/adminconsent?client_id=<client-id>&scope=https://graph.microsoft.com/.default&redirect_uri=https://<host>/admin/connectors/callback/microsoft
@@ -56,20 +76,28 @@ https://login.microsoftonline.com/<company-tenant-id-or-domain>/v2.0/adminconsen
 Afterwards a page on my server says "Admin consent recorded at Microsoft".
 Please just close it.
 
+**Please restrict it to me.** Once approved for the organization, any
+colleague could sign in to the app without being asked, and their mail would
+then be read by my server, which only I control. To prevent that, either:
+
+- after approving, set **Assignment required?** to **Yes** on the app under
+  **Enterprise apps > Properties**, and under **Users and groups** assign only
+  me; or
+- instead of the link, grant consent for my user only with Microsoft Graph
+  PowerShell (`New-MgOauth2PermissionGrant` with `ConsentType` `Principal`).
+
 Please note:
 
 - The **Grant admin consent** buttons under App registrations and Enterprise
   apps will not work for this app, because it is registered in another
   directory. The link above is the way.
-- If you prefer to limit it to me, you can set **Assignment required?** to
-  **Yes** on the app under Enterprise apps after approving, and assign only
-  me; or grant consent for my user only with Microsoft Graph PowerShell
-  (`New-MgOauth2PermissionGrant` with `ConsentType` `Principal`).
+- If a request from me already reached your **Admin consent requests** list,
+  please still approve with the link: it covers mail and calendar at once.
 - The server renews its access from its own address, not from a company
   device. If a Conditional Access policy requires a compliant device or a
   company location for all cloud apps, the app would need an exclusion. Could
   you tell me if that applies?
-- You can withdraw the app at any time under Enterprise apps.
+- You can withdraw your approval at any time under Enterprise apps.
 
 Thank you,
 `<your name>` (`<your work address>`)
@@ -94,20 +122,31 @@ prüfen und, wenn es passt, freigeben?
   daher ist der Herausgeber nicht verifiziert.
 - **Berechtigungen:** sechs delegierte Microsoft-Graph-Berechtigungen, alle
   nur lesend: `openid`, `email`, `offline_access`, `User.Read`, `Mail.Read`,
-  `Calendars.Read`. Keine Anwendungsberechtigungen: Die App kann nur mein
-  eigenes Postfach und meinen eigenen Kalender lesen, in meinem Namen und
-  nur, solange meine Zustimmung besteht.
+  `Calendars.Read`. Keine Anwendungsberechtigungen: Die App handelt nur für
+  einen angemeldeten Benutzer und liest nur dessen eigenes Postfach und
+  dessen eigenen Kalender.
 - **Was gelesen wird:** mein Posteingang und meine gesendeten Elemente sowie
   meine Termine. Die App sendet, ändert oder löscht nie etwas.
-- **Wohin die Daten gehen:** ausschließlich auf meinen eigenen
-  Memrain-Server (AWS, Region eu-west-1, Irland). Der Server ruft Microsoft
-  Graph direkt auf; kein anderer Dienst ist beteiligt. Zugriffstoken werden
-  verschlüsselt gespeichert.
+- **Wohin die Daten gehen:**
+  - Gespeichert werden sie auf meinem eigenen Memrain-Server in meinem
+    eigenen AWS-Konto (Region `<aws-region>`); der Server ruft Microsoft
+    Graph direkt auf. Zugriffstoken werden verschlüsselt gespeichert.
+  - Damit sie durchsuchbar sind, wird der Text mit Amazon Bedrock im selben
+    AWS-Konto indiziert (`<bedrock-regions>`). Wenn ich den Server um eine
+    ausformulierte Antwort bitte, liest ein Claude-Modell auf Amazon Bedrock
+    die passenden E-Mails dafür. Amazon verwendet beides nicht zum
+    Trainieren von Modellen.
+  - Die KI-Assistenten, die ich mit dem Server verbinde, lesen
+    Suchergebnisse, die diese E-Mails und Termine enthalten können:
+    `<assistants>`.
+  - Anfragen an meinen Server laufen über Cloudflare (Cloudflare Tunnel).
 
 **Zur Freigabe** öffnen Sie bitte diesen Link, angemeldet als Administrator
 (Administrator für privilegierte Rollen, Cloudanwendungsadministrator,
 Anwendungsadministrator oder KI-Administrator), prüfen die Berechtigungen und
-wählen **Akzeptieren**:
+wählen **Akzeptieren**. Der Link gibt die App für alle in unserer
+Organisation frei: Bitte beschränken Sie sie danach auf mich, wie unten
+beschrieben.
 
 ```
 https://login.microsoftonline.com/<company-tenant-id-or-domain>/v2.0/adminconsent?client_id=<client-id>&scope=https://graph.microsoft.com/.default&redirect_uri=https://<host>/admin/connectors/callback/microsoft
@@ -116,23 +155,33 @@ https://login.microsoftonline.com/<company-tenant-id-or-domain>/v2.0/adminconsen
 Danach zeigt eine Seite auf meinem Server „Admin consent recorded at
 Microsoft“. Bitte schließen Sie sie einfach.
 
+**Bitte beschränken Sie die App auf mich.** Nach der Freigabe für die
+Organisation könnte sich jede Kollegin und jeder Kollege ohne Rückfrage bei
+der App anmelden, und deren E-Mails würden dann von meinem Server gelesen,
+den nur ich kontrolliere. Um das zu verhindern, entweder:
+
+- nach der Freigabe unter **Unternehmensanwendungen > Eigenschaften** bei der
+  App **Zuweisung erforderlich?** auf **Ja** setzen und unter **Benutzer und
+  Gruppen** nur mich zuweisen, oder
+- statt des Links die Zustimmung nur für meinen Benutzer mit Microsoft Graph
+  PowerShell erteilen (`New-MgOauth2PermissionGrant` mit `ConsentType`
+  `Principal`).
+
 Bitte beachten Sie:
 
 - Die Schaltflächen **Administratorzustimmung erteilen** unter
   App-Registrierungen und Unternehmensanwendungen funktionieren für diese App
   nicht, weil sie in einem anderen Verzeichnis registriert ist. Der Link oben
   ist der Weg.
-- Wenn Sie den Zugriff auf mich beschränken möchten, können Sie nach der
-  Freigabe unter Unternehmensanwendungen bei der App **Zuweisung
-  erforderlich?** auf **Ja** setzen und nur mich zuweisen, oder die
-  Zustimmung nur für meinen Benutzer mit Microsoft Graph PowerShell erteilen
-  (`New-MgOauth2PermissionGrant` mit `ConsentType` `Principal`).
+- Falls bereits eine Anfrage von mir in Ihrer Liste der
+  **Administratoreinwilligungsanforderungen** liegt, geben Sie die App bitte
+  trotzdem über den Link frei: Er deckt E-Mail und Kalender auf einmal ab.
 - Der Server erneuert seinen Zugriff von seiner eigenen Adresse aus, nicht
   von einem Firmengerät. Falls eine Richtlinie für bedingten Zugriff für alle
   Cloud-Apps ein konformes Gerät oder einen Firmenstandort verlangt, bräuchte
   die App eine Ausnahme. Könnten Sie mir sagen, ob das zutrifft?
-- Sie können die App jederzeit unter Unternehmensanwendungen wieder
-  entfernen.
+- Sie können Ihre Freigabe jederzeit unter Unternehmensanwendungen
+  widerrufen.
 
 Vielen Dank
 `<your name>` (`<your work address>`)
