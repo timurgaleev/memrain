@@ -54,6 +54,12 @@ export interface ConnectorProvider {
   tokenUrl: string;
   /** RFC 7009 revocation endpoint, when the provider has one (https). */
   revokeUrl?: string;
+  /**
+   * For a provider whose app decides who may sign in (Microsoft): the
+   * authorize and token URLs carry `{tenant}`, filled from the OAuth client's
+   * tenant or this default.
+   */
+  tenant?: { default: string };
   /** Scopes every connect asks for, on top of the services' scopes. */
   baseScopes: readonly string[];
   services: Readonly<Record<string, ProviderService>>;
@@ -117,8 +123,9 @@ export class ProviderRegistry {
   register(provider: ConnectorProvider): void {
     assertConnectorName(provider.id, "provider");
     if (this.providers.has(provider.id) || this.keyed.has(provider.id)) throw new Error(`provider ${provider.id} is already registered`);
-    assertHttps(provider.authorizeUrl, "authorizeUrl", provider.id);
-    assertHttps(provider.tokenUrl, "tokenUrl", provider.id);
+    assertTenantEndpoints(provider);
+    assertHttps(providerEndpoint(provider, provider.authorizeUrl, null), "authorizeUrl", provider.id);
+    assertHttps(providerEndpoint(provider, provider.tokenUrl, null), "tokenUrl", provider.id);
     if (provider.revokeUrl !== undefined) assertHttps(provider.revokeUrl, "revokeUrl", provider.id);
     if (provider.sync !== undefined) assertHttps(provider.sync.apiOrigin, "sync.apiOrigin", provider.id);
     const services = Object.keys(provider.services);
@@ -156,6 +163,45 @@ export class ProviderRegistry {
   listApiKey(): ApiKeyProvider[] {
     return [...this.keyed.values()];
   }
+}
+
+/** The placeholder a provider's authorize and token URLs carry for the directory (tenant) segment. */
+export const TENANT_PLACEHOLDER = "{tenant}";
+const TENANT_AUDIENCES = new Set(["common", "organizations", "consumers"]);
+const TENANT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const DOMAIN_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * A tenant as it may go into an endpoint path: one of the three audiences
+ * (`common`, `organizations`, `consumers`), a directory id, or a verified
+ * domain such as `contoso.onmicrosoft.com`
+ * (learn.microsoft.com/entra/identity-platform/v2-protocols, "Endpoints").
+ * Lower-cased; null for anything else, so no value can add a path segment,
+ * a query or another host.
+ */
+export function normalizeTenant(value: string): string | null {
+  const t = value.trim().toLowerCase();
+  if (TENANT_AUDIENCES.has(t) || TENANT_ID_RE.test(t)) return t;
+  if (t.length > 253) return null;
+  const labels = t.split(".");
+  return labels.length >= 2 && labels.every((l) => DOMAIN_LABEL_RE.test(l)) ? t : null;
+}
+
+/** A provider endpoint with its `{tenant}` filled: the client's tenant, else the provider's default. */
+export function providerEndpoint(provider: ConnectorProvider, url: string, tenant: string | null | undefined): string {
+  if (!provider.tenant) return url;
+  return url.replaceAll(TENANT_PLACEHOLDER, tenant ?? provider.tenant.default);
+}
+
+function assertTenantEndpoints(provider: ConnectorProvider): void {
+  const templated = [provider.authorizeUrl, provider.tokenUrl].some((u) => u.includes(TENANT_PLACEHOLDER));
+  if (provider.revokeUrl?.includes(TENANT_PLACEHOLDER)) throw new Error(`provider ${provider.id}: revokeUrl cannot carry a tenant`);
+  if (!provider.tenant) {
+    if (templated) throw new Error(`provider ${provider.id}: endpoints carry ${TENANT_PLACEHOLDER} but no tenant is declared`);
+    return;
+  }
+  if (!templated) throw new Error(`provider ${provider.id}: declares a tenant its endpoints do not use`);
+  if (normalizeTenant(provider.tenant.default) !== provider.tenant.default) throw new Error(`provider ${provider.id}: default tenant is not a tenant name`);
 }
 
 /** Providers that ship with Memrain. Each arrives with its connector. */

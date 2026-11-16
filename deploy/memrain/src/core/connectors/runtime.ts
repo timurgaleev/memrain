@@ -30,7 +30,7 @@ import { recordLoopThread } from "../loops/store.ts";
 import { limiterFor } from "./limiter.ts";
 import { accountRef, type ConnectorDataKind } from "./model.ts";
 import { resolveClient } from "./oauth-connect.ts";
-import { builtinProviders, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
+import { builtinProviders, providerEndpoint, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
 import { softDeleteUpstreamPage, sweepRetention } from "./retention.ts";
 import type { SyncAccount, SyncDeps } from "./sync-engine.ts";
 import { registerConnectorSync, type ConnectorSyncRuntime } from "./sync-job.ts";
@@ -158,12 +158,14 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
       adapter: sync.adapter(account, { env, ...(opts.now ? { now: opts.now } : {}) }),
       tokenSource: async (_account, secret) => {
         const client = await resolveClient({ engine, kek: opts.kek, providers: opts.providers, fetch: fetchFn, env }, opts.kek, provider.id);
-        const token = new URL(provider.tokenUrl);
+        const token = new URL(providerEndpoint(provider, provider.tokenUrl, client.tenant));
         return createTokenProvider({
           engine,
           accountId: account.id,
           store: vaultCredentialStore(engine, opts.kek),
-          refresh: tokenEndpointRefresh({ origin: token.origin, path: `${token.pathname}${token.search}`, ...client, fetch: fetchFn }),
+          refresh: tokenEndpointRefresh({
+            origin: token.origin, path: `${token.pathname}${token.search}`, clientId: client.clientId, clientSecret: client.clientSecret, fetch: fetchFn,
+          }),
           onSecret: secret,
           ...(opts.now ? { now: opts.now } : {}),
         });

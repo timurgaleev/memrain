@@ -47,7 +47,7 @@ import { getOAuthClient } from "./oauth-clients.ts";
 import { resolveNotice } from "./sync-store.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import { refreshLockId } from "./token-provider.ts";
-import type { ConnectorProvider, ProviderRegistry } from "./providers.ts";
+import { normalizeTenant, providerEndpoint, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
 import { oauthStateAad, seal, unseal, type Kek } from "./vault.ts";
 
 export const OAUTH_STATE_TTL_MS = 10 * 60_000;
@@ -67,6 +67,7 @@ export type ConnectErrorCode =
   | "source_kind"
   | "redirect_uri"
   | "no_client"
+  | "invalid_tenant"
   | "state_invalid"
   | "state_used"
   | "state_expired"
@@ -90,6 +91,7 @@ const MESSAGES: Record<ConnectErrorCode, string> = {
   source_kind: "this source's kind cannot hold that service",
   redirect_uri: "the connector redirect URI must be https (or http on localhost)",
   no_client: "no OAuth client configured for this provider",
+  invalid_tenant: "the OAuth client's tenant is not common, organizations, consumers, a directory id or a domain",
   state_invalid: "unknown connect state",
   state_used: "this connect link was already used",
   state_expired: "this connect link expired; start again",
@@ -198,8 +200,19 @@ async function heldCompanionServices(engine: Engine, provider: ConnectorProvider
     .filter((s) => !services.includes(s) && provider.services[s]!.scopes.every((scope) => held.has(scope)));
 }
 
-/** The provider's OAuth client: the stored bring-your-own one, else the environment's. */
-export async function resolveClient(deps: ConnectDeps, kek: Kek, provider: string): Promise<{ clientId: string; clientSecret: string }> {
+export interface ResolvedClient {
+  clientId: string;
+  clientSecret: string;
+  /** The app's tenant; null leaves the provider's default in its endpoints. */
+  tenant: string | null;
+}
+
+/**
+ * The provider's OAuth client: the stored bring-your-own one, else the
+ * environment's (`MEMRAIN_<PROVIDER>_OAUTH_CLIENT_ID`, `_SECRET` and, for a
+ * provider with tenants, the optional `_TENANT`).
+ */
+export async function resolveClient(deps: ConnectDeps, kek: Kek, provider: string): Promise<ResolvedClient> {
   const stored = await getOAuthClient(deps.engine, kek, provider);
   if (stored) return stored;
   const env = deps.env ?? process.env;
@@ -207,7 +220,10 @@ export async function resolveClient(deps: ConnectDeps, kek: Kek, provider: strin
   const clientId = env[`MEMRAIN_${key}_OAUTH_CLIENT_ID`]?.trim() ?? "";
   const clientSecret = env[`MEMRAIN_${key}_OAUTH_CLIENT_SECRET`]?.trim() ?? "";
   if (clientId === "" || clientSecret === "") throw new ConnectError("no_client");
-  return { clientId, clientSecret };
+  const rawTenant = env[`MEMRAIN_${key}_OAUTH_TENANT`]?.trim() ?? "";
+  const tenant = rawTenant === "" ? null : normalizeTenant(rawTenant);
+  if (rawTenant !== "" && tenant === null) throw new ConnectError("invalid_tenant");
+  return { clientId, clientSecret, tenant };
 }
 
 export interface StartConnectInput {
@@ -255,7 +271,7 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
       sealed.ciphertext, scopes, services, input.redirectUri, new Date(now).toISOString(), expiresAt],
   );
 
-  const url = new URL(provider.authorizeUrl);
+  const url = new URL(providerEndpoint(provider, provider.authorizeUrl, client.tenant));
   for (const [k, v] of Object.entries(provider.authorizeParams ?? {})) url.searchParams.set(k, v);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", client.clientId);
@@ -404,7 +420,7 @@ export async function completeConnect(
 
   let res: Response;
   try {
-    res = await fetch(provider.tokenUrl, {
+    res = await fetch(providerEndpoint(provider, provider.tokenUrl, client.tenant), {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
       body: new URLSearchParams({

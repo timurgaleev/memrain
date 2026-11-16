@@ -60,7 +60,7 @@ import {
   type ConnectDeps,
 } from "../core/connectors/oauth-connect.ts";
 import type { ProviderRegistry, ProviderService } from "../core/connectors/providers.ts";
-import { builtinProviders } from "../core/connectors/providers.ts";
+import { builtinProviders, normalizeTenant } from "../core/connectors/providers.ts";
 import { connectorsStatus, loadKek, VaultError, type ConnectorsStatus, type Kek } from "../core/connectors/vault.ts";
 
 export interface AdminConnectorDeps {
@@ -181,6 +181,9 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
           service_kinds: serviceKinds(pr.services),
           auth: "oauth",
           callback_uri: callbackUri(deps.publicUrl, pr.id),
+          // The tenant a bring-your-own app may name, and whether a disconnect can withdraw the grant upstream.
+          tenant_default: pr.tenant?.default ?? null,
+          can_revoke: pr.revoke !== undefined || pr.revokeUrl !== undefined,
         })),
         ...deps.providers.listApiKey().map((pr) => ({
           id: pr.id,
@@ -188,6 +191,8 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
           service_kinds: serviceKinds(pr.services),
           auth: "api_key",
           callback_uri: null,
+          tenant_default: null,
+          can_revoke: false,
         })),
       ],
       sources: (await listSources(engine)).map((s) => ({ id: s.id, kind: s.kind })),
@@ -223,16 +228,21 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
   if (action === "key") return saveKey(provider, body, deps);
 
   if (action === "client") {
-    if (!deps.providers.get(provider)) return json({ error: "unknown_provider" }, 400);
+    const pr = deps.providers.get(provider);
+    if (!pr) return json({ error: "unknown_provider" }, 400);
     if (typeof body.client_id !== "string" || typeof body.client_secret !== "string") {
       return json({ error: "client_id and client_secret are required" }, 400);
     }
+    const rawTenant = body.tenant === undefined || body.tenant === null || body.tenant === "" ? null : body.tenant;
+    if (rawTenant !== null && !pr.tenant) return json({ error: "tenant_unsupported" }, 400);
+    const tenant = typeof rawTenant === "string" ? normalizeTenant(rawTenant) : null;
+    if (rawTenant !== null && tenant === null) return json({ error: "invalid_tenant" }, 400);
     try {
-      await setOAuthClient(deps.storage.engine(), deps.kek()!, provider, body.client_id, body.client_secret);
+      await setOAuthClient(deps.storage.engine(), deps.kek()!, provider, body.client_id, body.client_secret, tenant);
     } catch {
       return json({ error: "invalid client" }, 400);
     }
-    return json({ ok: true, provider, client_id: body.client_id });
+    return json({ ok: true, provider, client_id: body.client_id, ...(pr.tenant ? { tenant } : {}) });
   }
 
   const session = deps.adminSessionId(req);

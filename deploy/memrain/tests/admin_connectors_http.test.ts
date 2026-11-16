@@ -127,9 +127,43 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const res = await call(post("/admin/api/connectors/test/client", JSON.stringify({ client_id: "byo-id", client_secret: "byo-secret-value" })), d);
       expect(res.status).toBe(200);
       expect(await res.text()).not.toContain("byo-secret-value");
-      expect(await getOAuthClient(db.storage.engine(), kek, "test")).toEqual({ clientId: "byo-id", clientSecret: "byo-secret-value" });
+      expect(await getOAuthClient(db.storage.engine(), kek, "test")).toEqual({ clientId: "byo-id", clientSecret: "byo-secret-value", tenant: null });
       const unknown = await call(post("/admin/api/connectors/nope/client", JSON.stringify({ client_id: "a", client_secret: "b" })), d);
       expect(unknown.status).toBe(400);
+    } finally { await db.close(); }
+  });
+
+  it("stores a client's tenant only for a provider with tenants, and lists it with the provider's default", async () => {
+    const db = await open();
+    try {
+      const providers = registry();
+      providers.register({
+        ...testProvider("dir"),
+        authorizeUrl: "https://login.provider.test/{tenant}/authorize",
+        tokenUrl: "https://login.provider.test/{tenant}/token",
+        revokeUrl: undefined,
+        tenant: { default: "common" },
+      });
+      const d = deps(db.storage, "sess-1", { providers });
+      const save = (provider: string, body: Record<string, unknown>) => call(post(`/admin/api/connectors/${provider}/client`, JSON.stringify(body)), d);
+
+      const saved = await save("dir", { client_id: "dir-id", client_secret: "dir-secret-value", tenant: "Contoso.onmicrosoft.com" });
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toEqual({ ok: true, provider: "dir", client_id: "dir-id", tenant: "contoso.onmicrosoft.com" });
+      expect((await save("dir", { client_id: "dir-id", client_secret: "dir-secret-value", tenant: "common/../x" })).status).toBe(400);
+      const bad = await save("dir", { client_id: "dir-id", client_secret: "dir-secret-value", tenant: "a b" });
+      expect(await bad.json()).toEqual({ error: "invalid_tenant" });
+      const unsupported = await save("test", { client_id: "byo-id", client_secret: "byo-secret-value", tenant: "common" });
+      expect(unsupported.status).toBe(400);
+      expect(await unsupported.json()).toEqual({ error: "tenant_unsupported" });
+      expect((await getOAuthClient(db.storage.engine(), kek, "dir"))?.tenant).toBe("contoso.onmicrosoft.com");
+
+      const report = await (await call(new Request(`${ORIGIN}/admin/api/connectors`), d)).json() as {
+        providers: Array<{ id: string; tenant_default: string | null; can_revoke: boolean }>;
+        clients: Array<{ provider: string; tenant: string | null }>;
+      };
+      expect(report.providers.map((p) => [p.id, p.tenant_default, p.can_revoke])).toEqual([["test", null, true], ["dir", "common", false]]);
+      expect(report.clients.map((c) => [c.provider, c.tenant])).toEqual([["dir", "contoso.onmicrosoft.com"]]);
     } finally { await db.close(); }
   });
 });
