@@ -155,7 +155,7 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
     const sync = provider?.sync;
     if (!provider || !sync) throw new ProviderCannotSyncError(account.provider);
     return {
-      adapter: sync.adapter(account, { env, ...(opts.now ? { now: opts.now } : {}) }),
+      adapter: sync.adapter(account, { env, engine, ...(opts.now ? { now: opts.now } : {}) }),
       tokenSource: async (_account, secret) => {
         const client = await resolveClient({ engine, kek: opts.kek, providers: opts.providers, fetch: fetchFn, env }, opts.kek, provider.id);
         const token = new URL(provider.tokenUrl);

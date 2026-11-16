@@ -25,9 +25,10 @@
  *     which is read again: rendered without it, or, when nothing of the
  *     conversation is left in the synced folders, handed to the engine's
  *     upstream deletion (a recoverable soft delete, under the mass-delete
- *     guard). A purged message can no longer be looked up; its conversation
- *     keeps the page until the conversation changes again or retention ages
- *     it out.
+ *     guard). A purged message Graph can no longer look up (404) is found in
+ *     the account's stored items instead: an item's version carries a short
+ *     hash of every message id it rendered, so the conversation that held the
+ *     message is read again all the same.
  *   - A delta token Graph no longer holds (410, syncStateNotFound) starts a
  *     new first round over the window; unchanged conversations rewrite
  *     nothing. A deletion Graph stopped reporting during that gap is not seen.
@@ -53,7 +54,8 @@ import type { ConnectorClient, ConnectorResponse } from "../client.ts";
 import { renderMailThread } from "../render.ts";
 import { retentionDays } from "../retention.ts";
 import { syncItemFromPage } from "../sync-item.ts";
-import type { ConnectorContext, MailAttachment, MailMessage, MailThread, Person } from "../model.ts";
+import { shortHash, type ConnectorContext, type MailAttachment, type MailMessage, type MailThread, type Person } from "../model.ts";
+import type { Engine } from "../../engine/interface.ts";
 import type { AdapterContext, ProviderService } from "../providers.ts";
 import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
 import { GMAIL_MIME_LIMITS, isAutoSubmitted } from "../google/gmail-mime.ts";
@@ -269,10 +271,16 @@ export interface ConversationFolders {
   floorMs: number | null;
 }
 
+/** A message's mark in its conversation's version: found again once Graph has purged it. */
+export function outlookMessageRef(id: string): string {
+  return shortHash(`outlook-message:${id}`);
+}
+
 /**
  * The conversation as the brain keeps it: drafts and messages outside the
  * synced folders dropped. Null when nothing is left. The version moves when a
- * kept message is added, removed or changed.
+ * kept message is added, removed or changed, and names every kept message
+ * (outlookMessageRef).
  */
 export function normalizeOutlookConversation(conversationId: string, raws: readonly unknown[], folders: ConversationFolders): { thread: MailThread; newestMs: number; version: string } | null {
   const kept = raws.filter((m): m is Json => isRecord(m) && str(m.id) !== null && m.isDraft !== true
@@ -281,10 +289,11 @@ export function normalizeOutlookConversation(conversationId: string, raws: reado
   if (kept.length === 0) return null;
   kept.sort((a, b) => receivedMs(a)! - receivedMs(b)!);
   const labels = [...new Set(kept.flatMap(m => (Array.isArray(m.categories) ? m.categories.filter((c): c is string => typeof c === "string" && c !== "") : [])))];
-  const version = createHash("sha256")
+  const digest = createHash("sha256")
     .update(kept.map(m => `${String(m.id)}:${typeof m.changeKey === "string" ? m.changeKey : ""}:${String(m.parentFolderId)}`).join("\n"))
     .digest("hex")
     .slice(0, 24);
+  const version = `${digest}:${kept.map(m => outlookMessageRef(String(m.id))).join(".")}`;
   return {
     thread: { threadId: conversationId, messages: kept.map(m => normalizeOutlookMessage(m, folders.sent)), labels },
     newestMs: Math.max(...kept.map(m => receivedMs(m)!)),
@@ -332,7 +341,25 @@ interface ResolvedFolders {
 class Adapter implements SyncAdapter {
   private resolved: ResolvedFolders | null = null;
 
-  constructor(private readonly account: SyncAccount, private readonly now: () => number, private readonly env: NodeJS.ProcessEnv) {}
+  constructor(
+    private readonly account: SyncAccount,
+    private readonly now: () => number,
+    private readonly env: NodeJS.ProcessEnv,
+    private readonly engine: Engine | null,
+  ) {}
+
+  /** The stored conversations whose last version rendered `messageId` (normally one). */
+  private async storedConversationsOf(messageId: string): Promise<string[]> {
+    if (this.engine === null) return [];
+    const r = await this.engine.query<{ external_id: string }>(
+      `SELECT external_id FROM connector_items
+        WHERE account_id = $1 AND deleted_upstream_at IS NULL AND external_version IS NOT NULL
+          AND strpos(external_version, $2) > 0
+        ORDER BY external_id LIMIT 5`,
+      [this.account.id, `${outlookMessageRef(messageId)}`],
+    );
+    return r.rows.map(row => row.external_id);
+  }
 
   streams(): string[] {
     return (this.account.services ?? []).includes(OUTLOOK_MAIL_SERVICE) ? outlookFolders(this.account).map(outlookMailStream) : [];
@@ -424,8 +451,11 @@ class Adapter implements SyncAdapter {
     const queue = [...start.conversations];
     for (const id of start.removed) {
       const res = await graphGet(client, `${API}/messages/${encodeURIComponent(id)}?$select=conversationId`, { prefer: this.prefer() });
-      // Purged: nothing names its conversation any more.
-      if (res.status === 404) continue;
+      if (res.status === 404) {
+        // Purged: Graph no longer names its conversation, the stored items still do.
+        for (const conv of await this.storedConversationsOf(id)) if (!queue.includes(conv)) queue.unshift(conv);
+        continue;
+      }
       if (res.class !== "ok") return { ok: false, response: res };
       const conv = isRecord(res.body) ? str(res.body.conversationId) : null;
       if (conv !== null && !queue.includes(conv)) queue.unshift(conv);
@@ -489,5 +519,5 @@ class Adapter implements SyncAdapter {
 }
 
 export function outlookMailAdapter(account: SyncAccount, opts: Partial<AdapterContext> = {}): SyncAdapter {
-  return new Adapter(account, opts.now ?? Date.now, opts.env ?? process.env);
+  return new Adapter(account, opts.now ?? Date.now, opts.env ?? process.env, opts.engine ?? null);
 }

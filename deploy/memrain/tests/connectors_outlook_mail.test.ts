@@ -223,15 +223,31 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       moveMessage(w, "e1", "junkemail");
       const result = await run(db.storage, w, id, ENV, T0 + DAY);
       expect(result.status).toBe("success");
-      expect(result.counts.deletions_applied).toBe(1);
+      expect(result.counts.deletions_applied).toBe(2);
       const deleted = (await e.query<{ slug: string }>(`SELECT slug FROM pages WHERE source_id = $1 AND deleted_at IS NOT NULL ORDER BY slug`, [SOURCE])).rows.map(r => r.slug);
-      // The purged message's conversation cannot be named any more (404): its page stays until retention.
-      expect(deleted).toEqual([SLUG_E]);
-      expect(await livePages(e)).toContain(SLUG_B);
+      expect(deleted.sort()).toEqual([SLUG_B, SLUG_E].sort());
       const a = (await e.query<{ markdown_body: string; deleted_at: unknown }>(`SELECT markdown_body, deleted_at FROM pages WHERE slug = $1`, [SLUG_A])).rows[0]!;
       expect(a.deleted_at).toBeNull();
       expect(a.markdown_body).not.toContain("Attached is the budget.");
       expect(a.markdown_body).toContain("Can you send the Q4 budget by Friday?");
+    } finally { await db.close(); }
+  });
+
+  it("a purged reply, which Graph can no longer look up, still re-renders its conversation without it", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      const w = outlookWorld();
+      await run(db.storage, w, id);
+      purgeMessage(w, "a2");
+      w.calls.length = 0;
+      expect((await run(db.storage, w, id, ENV, T0 + DAY)).status).toBe("success");
+      // The stored conversation names the purged message, so its page is found without Graph.
+      expect(conversationCalls(w)).toEqual(["conv-A"]);
+      const a = (await e.query<{ markdown_body: string; deleted_at: unknown }>(`SELECT markdown_body, deleted_at FROM pages WHERE slug = $1`, [SLUG_A])).rows[0]!;
+      expect(a.deleted_at).toBeNull();
+      expect(a.markdown_body).not.toContain("Attached is the budget.");
     } finally { await db.close(); }
   });
 
