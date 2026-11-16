@@ -47,7 +47,20 @@ A section for your IT administrator, a copy-and-paste request to send them
 
   - If you have none, create one for free by
     [signing up for Azure](https://azure.microsoft.com/pricing/purchase-options/azure-account)
-    with your personal account. Nothing you do in this guide costs money.
+    with your personal account. Sign-up asks for a phone number and a credit
+    or debit card (not prepaid); nothing is charged unless you move to
+    pay-as-you-go. The free Azure subscription is disabled after 30 days
+    unless you upgrade it, but the directory and the app you register in it
+    do not need a subscription and stay. Nothing you do in this guide costs
+    money.
+  - Microsoft blocks a directory it sees as inactive (`AADSTS5000225`) and
+    deletes it, with your app, 20 days later unless you ask Microsoft
+    support to reactivate it
+    ([inaccessible tenants](https://learn.microsoft.com/entra/fundamentals/inaccessible-tenant)).
+    Nobody signs in to this directory day to day, so sign in to the admin
+    center with your personal account now and then; renewing the secret
+    each year ([Renewing the secret](#renewing-the-secret)) is one such
+    sign-in.
   - Do **not** use a Microsoft 365 Developer Program sandbox for this: it is
     for testing only, lasts up to 90 days, and is deleted with everything in
     it ([Developer Program FAQ](https://learn.microsoft.com/office/developer-program/microsoft-365-developer-program-faq)).
@@ -300,9 +313,17 @@ Send [MICROSOFT-IT-REQUEST.md](./MICROSOFT-IT-REQUEST.md), filled in with the
 app's name, its client ID and your company's directory (its directory ID or
 domain; IT knows it). The [section for your IT administrator](#for-your-it-administrator)
 below has the details they may ask for. Do not try to connect the work
-account before they confirm: Microsoft would only show **Need admin
-approval**, or send you back to Memrain with "Ask your Microsoft 365 admin to
-grant consent".
+account before they confirm. Microsoft would show one of two screens:
+
+- **Need admin approval**: your company has no way to ask from there. Memrain
+  then says "Ask your Microsoft 365 admin to grant consent".
+- **Approval required** (your company has the admin consent workflow on):
+  you can type a reason and choose **Request approval**; Microsoft confirms
+  with **Request sent**, and **Back to app** brings you to Memrain, which
+  says the access was not granted (`consent_declined`). That request reaches
+  IT's **Admin consent requests** list, and may hold only the mail or only
+  the calendar, whichever you were connecting. Send the IT request all the
+  same: its link approves mail and calendar at once.
 
 ### 12. Connect your work account, on your company device
 
@@ -597,7 +618,8 @@ message.
 | Microsoft shows `AADSTS50194` (not configured as a multi-tenant application) | The app's account type is single tenant | [Step 2](#2-register-the-app): the app must be **Any Entra ID Tenant + Personal Microsoft accounts** (in the app, **Authentication**, **Supported account types**) |
 | Microsoft shows `AADSTS50020` (account does not exist in tenant) | **Who can sign in** names one directory (an ID or a domain), and the account is not in it: a personal account, or another organization's | [Step 6](#6-save-the-app-in-memrain): choose `common`, confirm, then reconnect every account |
 | Microsoft shows `AADSTS700016` (application not found in the directory) | The client ID is wrong, or the app was deleted | Check the client ID on the app's **Overview** page and save it again ([step 6](#6-save-the-app-in-memrain)) |
-| Microsoft shows **Need admin approval**, or Memrain says to ask your Microsoft 365 admin (`admin_consent_required`) | Your company keeps consent to this app for an administrator, or Microsoft flagged the app as risky (`AADSTS90094`, `65001`, `90093`, `900941`, `900981`) | [Step 11](#11-ask-your-it-administrator-to-approve-the-app), then connect again |
+| Microsoft shows `AADSTS5000225` (tenant blocked due to inactivity) when you sign in to the admin center, and every Microsoft account stops | Microsoft blocked your app's directory as inactive; after 20 days it deletes the directory and the app for good | Contact Microsoft support at once to reactivate the directory ([inaccessible tenants](https://learn.microsoft.com/entra/fundamentals/inaccessible-tenant)); afterwards sign in now and then ([Before you start](#before-you-start)) |
+| Microsoft shows **Need admin approval** or **Approval required**, or Memrain says to ask your Microsoft 365 admin (`admin_consent_required`) | Your company keeps consent to this app for an administrator, or Microsoft flagged the app as risky (`AADSTS90094`, `90095`, `65001`, `90093`, `900941`, `900981`) | [Step 11](#11-ask-your-it-administrator-to-approve-the-app), then connect again |
 | Memrain says the access was not granted (`consent_declined`) | You chose **Cancel**, or you asked an administrator for approval and chose **Back to app** (`AADSTS65004`) | After a Cancel, connect again and choose **Accept**. After a request, wait until IT has approved the app, then connect again |
 | Memrain says you signed in with a different account than the one this row belongs to (`identity_mismatch`) | On a **Reconnect** you picked another account than the row's, or the other of a personal and a work account that share one address | **Reconnect** again and pick the account named on the row (**Personal account** or **Work or school account**). Nothing was changed |
 | Memrain says the account came with no email address | The personal account signs in with a phone number | Nothing to fix: it is listed under its sign-in name or ID |
