@@ -131,17 +131,21 @@ describe("microsoft provider", () => {
   it("identifies the account by its sign-in name, a guest by its Graph mail address, lowercased", async () => {
     const ms = microsoftProvider();
     const w: GraphWorld = { calls: [], delta: () => "deltaEmpty" };
-    expect(await ms.identify({ fetch: graphFetch(w), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} })).toEqual({ label: OWNER, mailbox: OWNER });
+    expect(await ms.identify({ fetch: graphFetch(w), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} })).toEqual({ label: OWNER, mailbox: OWNER, userId: "00000000-0000-4000-8000-0000000000aa" });
     expect(w.calls[0]!.url.toString()).toBe("https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName");
     const personal: GraphWorld = { calls: [], delta: () => "deltaEmpty", me: { id: "x", mail: null, userPrincipalName: "Someone@Outlook.example" } };
     expect(await ms.identify({ fetch: graphFetch(personal), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} }))
-      .toEqual({ label: "someone@outlook.example", mailbox: "someone@outlook.example" });
+      .toEqual({ label: "someone@outlook.example", mailbox: "someone@outlook.example", userId: "x" });
     // A work account signs in with a UPN that need not receive mail: the mailbox address is Graph's mail.
     const work: GraphWorld = { calls: [], delta: () => "deltaEmpty", me: { id: "x", mail: "Owner@Example.test", userPrincipalName: "O.Wner@corp.example.test" } };
     expect(await ms.identify({ fetch: graphFetch(work), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} }))
-      .toEqual({ label: "o.wner@corp.example.test", mailbox: OWNER });
+      .toEqual({ label: "o.wner@corp.example.test", mailbox: OWNER, userId: "x" });
+    // No address at all (a personal account that signs in with a phone number): its sign-in name, and no mailbox.
     const nameless: GraphWorld = { calls: [], delta: () => "deltaEmpty", me: { id: "x", mail: null, userPrincipalName: "not-an-address" } };
-    await expect(ms.identify({ fetch: graphFetch(nameless), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} })).rejects.toThrow();
+    expect(await ms.identify({ fetch: graphFetch(nameless), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} }))
+      .toEqual({ label: "not-an-address", userId: "x", noAddress: true });
+    const idless: GraphWorld = { calls: [], delta: () => "deltaEmpty", me: { mail: "Owner@Example.test", userPrincipalName: OWNER } };
+    await expect(ms.identify({ fetch: graphFetch(idless), accessToken: GRAPH_ACCESS_TOKEN, tokenResponse: {} })).rejects.toThrow();
   });
 });
 

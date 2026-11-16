@@ -264,20 +264,61 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await e.query(`UPDATE connector_accounts SET config = config || '{"mailbox_address":"stale@example.test","calendars":["x"]}'::jsonb WHERE id = $1`, [work.account.id]);
       const again = await connect(deps(e, { calls: [] }), "work-mail", ["outlook_mail"]);
       expect(again.reconnected).toBe(true);
-      expect(again.account.config).toEqual({ mailbox_address: "owner.alias@example.test", calendars: ["x"] });
+      expect(again.account.config).toEqual({ mailbox_address: "owner.alias@example.test", calendars: ["x"], provider_user_id: "87d349ed-44d7-43e1-9a83-5f2406dee5bd" });
     } finally { await db.close(); }
   });
 
-  it("labels a personal account by its sign-in address, a guest by its mail, and refuses no address", async () => {
+  it("labels a personal account by its sign-in address and a guest by its mail", async () => {
     const db = await open();
     const e = db.storage.engine();
     try {
       await sources(e);
       const personal = await connect(deps(e, { calls: [], me: "meConsumer" }), "work-mail", ["outlook_mail"]);
       expect(personal.account.account_label).toBe("someone@outlook.example.test");
+      expect(personal.noAddress).toBe(false);
       const guest = await connect(deps(e, { calls: [], me: "meGuest" }), "work-mail", ["outlook_mail"]);
       expect(guest.account.account_label).toBe("guest@partner.example.test");
-      expect(await code(connect(deps(e, { calls: [], me: "meNoAddress" }), "work-mail", ["outlook_mail"]))).toBe("identity");
+      // Without a Graph id there is no account to tell apart: refused, nothing stored.
+      expect(await code(connect(deps(e, { calls: [], me: "meNoId" }), "work-mail", ["outlook_mail"]))).toBe("identity");
+    } finally { await db.close(); }
+  });
+
+  it("connects an account Graph names by no address under its sign-in name, else its id, and says so", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await sources(e);
+      // A personal account that signs in with a phone number has no mail and no address as its UPN.
+      const phone = await connect(deps(e, { calls: [], me: "mePhone" }), "work-mail", ["outlook_mail"]);
+      expect(phone.account.account_label).toBe("+4915100000000");
+      expect(phone.noAddress).toBe(true);
+      expect(phone.account.config).toEqual({ provider_user_id: "00a1b2c3d4e5f607" });
+      const bare = await connect(deps(e, { calls: [], me: "meNoAddress" }), "work-mail", ["outlook_mail"]);
+      expect(bare.account.account_label).toBe("22222222-3333-4444-5555-a66666666666");
+      expect(bare.noAddress).toBe(true);
+    } finally { await db.close(); }
+  });
+
+  it("keeps the Graph user id, and refuses a reconnect by another account that shares the row's address", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await sources(e);
+      const first = await connect(deps(e, { calls: [] }), "work-mail", ["outlook_mail"]);
+      expect(first.account.config).toMatchObject({ provider_user_id: "87d349ed-44d7-43e1-9a83-5f2406dee5bd" });
+      const before = await readCredential(e, kek, first.account.id);
+
+      // A personal account under the work address: the same label, another user.
+      expect(await code(connect(deps(e, { calls: [], me: "meSameAddressOtherUser" }), "work-mail", ["outlook_mail"]))).toBe("identity_mismatch");
+      expect(await readCredential(e, kek, first.account.id)).toEqual(before);
+      expect(await getAccount(e, first.account.id)).toMatchObject({ status: "active", config: { provider_user_id: "87d349ed-44d7-43e1-9a83-5f2406dee5bd" } });
+      expect(await rowCount(e, "connector_accounts")).toBe(1);
+
+      // An account connected before the id was kept takes it on its next reconnect.
+      await e.query(`UPDATE connector_accounts SET config = config - 'provider_user_id' WHERE id = $1`, [first.account.id]);
+      const again = await connect(deps(e, { calls: [] }), "work-mail", ["outlook_mail"]);
+      expect(again.reconnected).toBe(true);
+      expect(again.account.config).toMatchObject({ provider_user_id: "87d349ed-44d7-43e1-9a83-5f2406dee5bd" });
     } finally { await db.close(); }
   });
 

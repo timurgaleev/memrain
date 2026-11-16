@@ -45,7 +45,7 @@ import {
   type ConnectorAccount,
   type TokenSet,
 } from "./accounts.ts";
-import { MAILBOX_ADDRESS } from "./model.ts";
+import { MAILBOX_ADDRESS, PROVIDER_USER_ID } from "./model.ts";
 import { getOAuthClient } from "./oauth-clients.ts";
 import { openNotice, resolveNotice } from "./sync-store.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
@@ -84,6 +84,7 @@ export type ConnectErrorCode =
   | "scope_mismatch_not_revoked"
   | "identity"
   | "identity_not_revoked"
+  | "identity_mismatch"
   | "account_not_found"
   | "refresh_in_progress"
   | "admin_consent_required"
@@ -110,6 +111,7 @@ const MESSAGES: Record<ConnectErrorCode, string> = {
   scope_mismatch_not_revoked: "the provider granted different scopes than requested; the grant was refused but left in place, because a connected account may share it",
   identity: "could not read the connected account's identity",
   identity_not_revoked: "could not read the connected account's identity; the grant was left in place, because a connected account may share it",
+  identity_mismatch: "the account signed in is another user than the connected account with that address; nothing was changed",
   account_not_found: "connector account not found",
   refresh_in_progress: "a worker is renewing this account's token; try the disconnect again shortly",
   admin_consent_required: "the account's organization requires an administrator to approve this app before it can connect",
@@ -477,19 +479,28 @@ async function sharesLiveGrant(engine: Engine, provider: ConnectorProvider): Pro
   return r.rows.length > 0;
 }
 
+interface Identified {
+  label: string;
+  mailbox: string | null;
+  userId: string | null;
+  noAddress: boolean;
+}
+
 /** Who the provider names for a token, or null when it cannot be read. */
 async function identifyAccount(
   provider: ConnectorProvider,
   fetch: FetchFn,
   accessToken: string,
   body: Record<string, unknown>,
-): Promise<{ label: string; mailbox: string | null } | null> {
+): Promise<Identified | null> {
   try {
     const who = await provider.identify({ fetch, accessToken, tokenResponse: body });
-    if (typeof who === "string") return { label: cleanLabel(who, "account label", 320), mailbox: null };
+    if (typeof who === "string") return { label: cleanLabel(who, "account label", 320), mailbox: null, userId: null, noAddress: false };
     return {
       label: cleanLabel(who.label, "account label", 320),
       mailbox: who.mailbox === undefined ? null : cleanLabel(who.mailbox, "mailbox address", 320).toLowerCase(),
+      userId: who.userId === undefined ? null : cleanLabel(who.userId, "user id", 200),
+      noAddress: who.noAddress === true,
     };
   } catch {
     return null;
@@ -520,7 +531,7 @@ export interface CompleteConnectInput {
 export async function completeConnect(
   deps: ConnectDeps,
   input: CompleteConnectInput,
-): Promise<{ account: ConnectorAccount; reconnected: boolean }> {
+): Promise<{ account: ConnectorAccount; reconnected: boolean; noAddress: boolean }> {
   const kek = requireKek(deps);
   const st = await consumeState(deps, input.state, input.provider, input.adminSessionId);
   const provider = requireProvider(deps, st.provider);
@@ -615,8 +626,11 @@ export async function completeConnect(
   const scopes = [...granted].sort();
 
   try {
-    const config = who.mailbox === null ? {} : { [MAILBOX_ADDRESS]: who.mailbox };
-    return await persistGrant(deps.engine, kek, st, provider.id, who.label, config, tokens, scopes, expiresAt);
+    const config = {
+      ...(who.mailbox === null ? {} : { [MAILBOX_ADDRESS]: who.mailbox }),
+      ...(who.userId === null ? {} : { [PROVIDER_USER_ID]: who.userId }),
+    };
+    return { ...await persistGrant(deps.engine, kek, st, provider.id, who.label, config, tokens, scopes, expiresAt), noAddress: who.noAddress };
   } catch (e) {
     // Nothing was stored, so nothing could disconnect this grant later.
     if (!(await sharedWithLive().catch(() => true))) await revoke();
@@ -630,7 +644,7 @@ async function persistGrant(
   st: StateRow,
   providerId: string,
   label: string,
-  /** Identity settings the grant names (the mailbox address), written on every connect. */
+  /** Identity settings the grant names (the mailbox address, the provider's user id), written on every connect. */
   config: Record<string, unknown>,
   tokens: TokenSet,
   scopes: string[],
@@ -638,6 +652,12 @@ async function persistGrant(
 ): Promise<{ account: ConnectorAccount; reconnected: boolean }> {
   return engine.transaction(async (tx) => {
     const existing = await findAccount(tx, st.source_id, providerId, label);
+    // The same address can belong to two users (a personal account made with a
+    // work address): a reconnect by another user than the row's changes nothing.
+    const stored = existing?.config[PROVIDER_USER_ID];
+    if (typeof stored === "string" && typeof config[PROVIDER_USER_ID] === "string" && stored !== config[PROVIDER_USER_ID]) {
+      throw new ConnectError("identity_mismatch");
+    }
     if (existing) {
       await storeCredential(tx, kek, existing, tokens, { scopes, expiresAt });
       await tx.query(`UPDATE connector_accounts SET services = $2::text[], updated_at = NOW() WHERE id = $1`, [existing.id, st.services]);

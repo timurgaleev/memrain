@@ -181,6 +181,8 @@ export interface ConnectorContext {
  * is labelled by its sign-in name, which need not receive mail).
  */
 export const MAILBOX_ADDRESS = "mailbox_address";
+/** The account config key holding the provider's id for the connected user (ProviderIdentity.userId). */
+export const PROVIDER_USER_ID = "provider_user_id";
 
 /** The account's own addresses, lowercased: its mailbox address first, then its label. */
 export function ownAddresses(accountLabel: string, config?: Readonly<Record<string, unknown>>): string[] {

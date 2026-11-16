@@ -83,6 +83,10 @@ const ME_URL = `${GRAPH_API_ORIGIN}/v1.0/me?$select=id,mail,userPrincipalName`;
 const IDENTITY_TIMEOUT_MS = 15_000;
 const MAX_ME_BYTES = 16 * 1024;
 const ADDRESS_RE = /^[^\s@]{1,64}@[^\s@]{1,255}$/;
+/** A Graph user id: a directory object's GUID, or a personal account's hex id. */
+const USER_ID_RE = /^[\w-]{1,128}$/;
+/** A sign-in name shown as a label: printable, no spaces, bounded. */
+const SIGN_IN_RE = /^[\x21-\x7E]{1,320}$/;
 
 /** Graph's `https://graph.microsoft.com/Mail.Read`, or any casing of a known scope, in the spelling Memrain requests. */
 function normalizeScope(raw: string): string {
@@ -129,6 +133,12 @@ function address(value: unknown): string | null {
  * calendar owners and attendees name the account by its mailbox address, so
  * telling the account's own mail and calendars apart compares that address
  * too. It identifies nothing: the label stays the account's identity.
+ *
+ * Graph's `id` comes back as the user id: a personal and a work account can
+ * share one address (a Microsoft account made with a work address), and only
+ * the id tells them apart. An account with no address at all, a personal one
+ * that signs in with a phone number, is labelled by that sign-in name, else
+ * its id, and says it had none.
  */
 async function identify(fetch: FetchFn, accessToken: string): Promise<ProviderIdentity> {
   const res = await fetch(ME_URL, {
@@ -141,12 +151,15 @@ async function identify(fetch: FetchFn, accessToken: string): Promise<ProviderId
   const text = await readTextCapped(res, MAX_ME_BYTES);
   if (text === null) throw new Error("Graph /me response is too large");
   const body = JSON.parse(text) as { id?: unknown; mail?: unknown; userPrincipalName?: unknown };
-  if (typeof body.id !== "string" || body.id === "") throw new Error("Graph /me has no id");
-  const upn = typeof body.userPrincipalName === "string" && !body.userPrincipalName.includes("#EXT#") ? address(body.userPrincipalName) : null;
+  if (typeof body.id !== "string" || !USER_ID_RE.test(body.id)) throw new Error("Graph /me has no id");
+  const signIn = typeof body.userPrincipalName === "string" && !body.userPrincipalName.includes("#EXT#") ? body.userPrincipalName.trim() : "";
+  const upn = address(signIn);
   const mail = address(body.mail);
   const label = upn ?? mail;
-  if (label === null) throw new Error("Graph /me has no usable address");
-  return { label, mailbox: mail ?? label };
+  if (label !== null) return { label, mailbox: mail ?? label, userId: body.id };
+  // A personal account that signs in with a phone number has neither: its
+  // sign-in name labels it, else its id, and nothing names its mailbox.
+  return { label: SIGN_IN_RE.test(signIn) ? signIn : body.id, userId: body.id, noAddress: true };
 }
 
 export function microsoftProvider(): ConnectorProvider {

@@ -39,6 +39,13 @@ export interface ProviderService {
 export interface ProviderIdentity {
   label: string;
   mailbox?: string;
+  /**
+   * The provider's own id for the user (Graph's `id`): stable when an address
+   * is reused or shared, so a reconnect can tell another user from the row's.
+   */
+  userId?: string;
+  /** The provider named no address for the account; the label is a sign-in name or the id. */
+  noAddress?: boolean;
 }
 
 /** Connect errors a provider can name from its own refusal. */

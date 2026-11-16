@@ -297,6 +297,17 @@ describe("connectOutcome", () => {
     expect(connectOutcome("?other=1")).toBeNull();
   });
 
+  it("says when the connected account came with no address, and when another user signed in for a row", () => {
+    const noted = connectOutcome("?connector=connected&connector_note=no_address")!;
+    expect(noted.ok).toBe(true);
+    expect(noted.message).toContain("Sync stays off");
+    expect(noted.message).toContain("no email address");
+    expect(connectOutcome("?connector=connected&connector_note=<b>")).toEqual({ ok: true, message: "Account connected. Sync stays off until you switch it on." });
+    const mismatch = connectorErrorCopy("identity_mismatch");
+    expect(mismatch).toContain("different Microsoft account than this row");
+    expect(mismatch).toContain("Nothing was changed");
+  });
+
   it("explains why a pasted API key was not saved", () => {
     expect(connectorErrorCopy("key_rejected")).toContain("refused the key");
     expect(connectorErrorCopy("key_invalid")).toContain("does not look like an API key");

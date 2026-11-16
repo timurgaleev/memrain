@@ -414,6 +414,7 @@ const CONNECT_ERRORS: Record<string, string> = {
   provider_unavailable: "The provider could not be reached to check the key. Nothing was saved; try again in a minute.",
   delete_incomplete: "Deleting stopped part-way. Preview again and delete what is left.",
   admin_consent_required: "The account's organization lets only an administrator approve this app. Ask your Microsoft 365 admin to grant consent, then connect again.",
+  identity_mismatch: "You signed in with a different Microsoft account than this row: a personal and a work account can share one address. Nothing was changed. Connect again and pick the account this row belongs to (Work or school account, or Personal account).",
   consent_declined: "Microsoft says the access was not granted. If you chose Cancel, connect again and choose Accept. If you asked an administrator to approve the app, wait until IT has approved it, then choose Connect again.",
 };
 
@@ -425,7 +426,15 @@ export function connectorErrorCopy(code: string, fallback = "The connect did not
 /** The outcome a finished connect left in the page's query string, if any. */
 export function connectOutcome(search: string): { ok: boolean; message: string } | null {
   const q = new URLSearchParams(search);
-  if (q.get("connector") === "connected") return { ok: true, message: "Account connected. Sync stays off until you switch it on." };
+  if (q.get("connector") === "connected") {
+    const connected = "Account connected. Sync stays off until you switch it on.";
+    if (q.get("connector_note") !== "no_address") return { ok: true, message: connected };
+    return {
+      ok: true,
+      message: `${connected} Microsoft gave no email address for this account (it signs in with a phone number), so it is listed under its sign-in name or ID, `
+        + "and mail and invitations cannot be told apart as its own.",
+    };
+  }
   const err = q.get("connector_error");
   if (err !== null) return { ok: false, message: connectorErrorCopy(err) };
   return null;

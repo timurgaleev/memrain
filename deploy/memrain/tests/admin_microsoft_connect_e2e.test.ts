@@ -278,6 +278,15 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(world.calls.filter((c) => c.body?.get("grant_type") === "authorization_code")).toEqual([]);
   });
 
+  it("connects an account Microsoft names by no address, and tells the owner so", async () => {
+    process.env.MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID = APP_ID;
+    process.env.MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET = APP_SECRET;
+    process.env.MEMRAIN_MICROSOFT_OAUTH_TENANT = TENANT_ID;
+    const b = await boot();
+    world.me = "mePhone";
+    expect((await connectMicrosoft(b)).headers.get("location")).toBe("/admin/?connector=connected&connector_note=no_address#connections");
+  });
+
   it("uses the environment's app and tenant when none is saved", async () => {
     process.env.MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID = APP_ID;
     process.env.MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET = APP_SECRET;

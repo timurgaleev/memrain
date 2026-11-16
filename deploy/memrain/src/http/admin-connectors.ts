@@ -568,10 +568,11 @@ async function complete(req: Request, provider: string, deps: AdminConnectorDeps
   const body = await readBody(req);
   if (!body) return redirect(`${DONE_PATH}?connector_error=state_invalid${DONE_HASH}`);
   try {
-    await completeConnect(connectDeps(deps), {
+    const done = await completeConnect(connectDeps(deps), {
       provider, state: body.state, code: body.code, error: body.error, errorDescription: body.error_description, adminSessionId: session,
     });
-    return redirect(`${DONE_PATH}?connector=connected${DONE_HASH}`);
+    // An account the provider named by no address is labelled by its sign-in name or id: say so.
+    return redirect(`${DONE_PATH}?connector=connected${done.noAddress ? "&connector_note=no_address" : ""}${DONE_HASH}`);
   } catch (e) {
     if (e instanceof ConnectError) return redirect(`${DONE_PATH}?connector_error=${e.code}${DONE_HASH}`);
     if (e instanceof VaultError) return redirect(`${DONE_PATH}?connector_error=vault${DONE_HASH}`);
