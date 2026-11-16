@@ -11,7 +11,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { runConnectors } from "../src/commands/connectors.ts";
+import { accountStatusLine, runConnectors } from "../src/commands/connectors.ts";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
@@ -112,6 +112,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await readAccountRun(e, a.id)).toEqual({
         status: "partial", stop_reason: "fetch_failed", at: "2026-11-09T10:00:00.000Z", http_status: 429,
         error: "calendar list failed: rate_limited", items: 12, pages_written: 3, items_failed: 0,
+        pages_unchanged: 9, items_held: 0, deletions_applied: 0, deletions_held: 0,
       });
       expect(await deleteAccount(e, a.id)).toBe(true);
       expect(await readAccountRun(e, a.id)).toBeNull();
@@ -184,6 +185,54 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(warn.detail).toContain(`google/${a.id.slice(0, 8)} into cal: needs a reconnect`);
       // One line for the account, not one more for its notice.
       expect(warn.detail.match(/needs a reconnect/g)).toHaveLength(1);
+    } finally { await db.close(); }
+  });
+
+  it("shows an account of any provider with its services and what its last run stored, held and deleted", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: "mail", kind: "mailbox", pathPrefix: "mail/" });
+      const a = await createAccount(e, { sourceId: "mail", provider: "microsoft", services: ["mail", "calendar"], principalRef: "admin:operator", accountLabel: "owner@example.test" });
+      await storeCredential(e, kek, a, { access_token: "at-ms", refresh_token: "rt-ms" }, { scopes: ["Mail.Read"], expiresAt: null });
+      await setAccountEnabled(e, a.id, true);
+      await markAccountSynced(e, a.id);
+      await recordAccountRun(e, a.id, result({
+        status: "partial", stop_reason: "items_failed",
+        counts: { ...result().counts, items: 12, pages_written: 3, pages_unchanged: 6, items_failed: 1, items_held: 2, deletions_applied: 1, deletions_held: 4 },
+      }), new Date());
+
+      const [row] = await listAccountStatus(e);
+      expect(row).toMatchObject({ provider: "microsoft", services: ["mail", "calendar"], state: "sync on", grant_expiry: null });
+      expect(row!.last_run).toMatchObject({ items: 12, pages_written: 3, pages_unchanged: 6, items_failed: 1, items_held: 2, deletions_applied: 1, deletions_held: 4 });
+
+      const line = accountStatusLine(row!).join("\n");
+      expect(line).toContain(`microsoft owner@example.test (${a.id.slice(0, 8)}) into mail: sync on`);
+      expect(line).toContain("services mail, calendar");
+      expect(line).toContain("12 items, 3 written, 6 unchanged, 1 failed, 2 held, 1 deletion(s) applied, 4 held for confirmation");
+      // No other provider's grant rules leak onto it.
+      expect(line).not.toContain("Google");
+
+      const doctor = await checkConnectorHealth(e);
+      expect(doctor.detail).toContain(`microsoft/${a.id.slice(0, 8)} into mail: sync on`);
+      expect(doctor.detail).toContain("12 items, 3 written, 6 unchanged, 1 failed, 2 held");
+      expect(doctor.detail).not.toContain("owner@example.test");
+      expect(doctor.detail).not.toContain("Google");
+    } finally { await db.close(); }
+  });
+
+  it("reads a run recorded before the held and deletion counts were kept", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const a = await seedAccount(e);
+      await e.query(`INSERT INTO recipe_state (recipe_id, key, value) VALUES ($1, 'last_run', $2::jsonb)`, [
+        `connector-account:${a.id}`,
+        JSON.stringify({ status: "success", stop_reason: null, at: new Date(G).toISOString(), http_status: null, error: null, items: 5, pages_written: 2, items_failed: 0 }),
+      ]);
+      const [row] = await listAccountStatus(e);
+      expect(accountStatusLine(row!)[0]).toContain("5 items, 2 written");
+      expect(accountStatusLine(row!)[0]).not.toContain("undefined");
     } finally { await db.close(); }
   });
 

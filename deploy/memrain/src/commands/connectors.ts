@@ -35,7 +35,7 @@ import {
 } from "../core/connectors/github.ts";
 import type { ConnectorRunStatus } from "../core/connectors/types.ts";
 import { listConnectorStates } from "../core/connectors/watermark.ts";
-import { grantExpiryText, listAccountStatus, type AccountStatus } from "../core/connectors/account-status.ts";
+import { grantExpiryText, listAccountStatus, runCountsText, type AccountStatus } from "../core/connectors/account-status.ts";
 import { connectorsStatus } from "../core/connectors/vault.ts";
 import { withStorage } from "./with-storage.ts";
 import { runRotateKek } from "./connectors-vault.ts";
@@ -203,10 +203,10 @@ export function accountStatusLine(a: AccountStatus): string[] {
   const head = `${a.provider} ${a.account_label} (${a.id.slice(0, 8)}) into ${a.source_id}: ${a.state}`;
   const run = a.last_run;
   const parts = [
+    ...(a.services.length > 0 ? [`services ${a.services.join(", ")}`] : []),
     `last clean sync ${a.last_success_at ?? "never"}`,
     ...(run
-      ? [`last run ${run.status}${run.stop_reason ? ` (${run.stop_reason})` : ""} at ${run.at}, ${run.items} items, ${run.pages_written} written` +
-        (run.items_failed > 0 ? `, ${run.items_failed} failed` : "") + (run.error ? ` — ${run.error}` : "")]
+      ? [`last run ${run.status}${run.stop_reason ? ` (${run.stop_reason})` : ""} at ${run.at}, ${runCountsText(run)}` + (run.error ? ` — ${run.error}` : "")]
       : ["no run recorded yet"]),
   ];
   const lines = [`${head}, ${parts.join(", ")}`];

@@ -17,7 +17,7 @@ import type { OpsCheckResult } from "../doctor-ops.ts";
 import { needsReauth } from "./types.ts";
 import { CONNECTOR_RECIPE_PREFIX, listConnectorStates } from "./watermark.ts";
 import { listOpenNotices, type OpenNotice } from "./sync-store.ts";
-import { grantExpiryText, listAccountStatus, type AccountStatus } from "./account-status.ts";
+import { grantExpiryText, listAccountStatus, runCountsText, type AccountStatus } from "./account-status.ts";
 
 const DEFAULT_STALL_DAYS = 7;
 const DAY_MS = 86_400_000;
@@ -61,7 +61,7 @@ function accountLine(a: AccountStatus, stallDays: number, now: number): { text: 
     return { text: `${ref}: needs a reconnect since ${a.reconnect_since}${why}${cause}`, problem: true };
   }
   const clean = a.last_success_at ? `, last clean sync ${a.last_success_at}` : ", no clean sync yet";
-  const lastRun = run ? `, last run ${run.status}${run.stop_reason ? ` (${run.stop_reason})` : ""} at ${run.at}` : "";
+  const lastRun = run ? `, last run ${run.status}${run.stop_reason ? ` (${run.stop_reason})` : ""} at ${run.at}, ${runCountsText(run)}` : "";
   const text = `${ref}: ${a.state}${clean}${lastRun}`;
   if (a.status !== "active" || !a.enabled) return { text, problem: false };
   if (run && (run.status === "forbidden" || run.status === "auth_required")) return { text, problem: true };

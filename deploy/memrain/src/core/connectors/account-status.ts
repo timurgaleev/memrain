@@ -52,6 +52,25 @@ export interface AccountRunRecord {
   items: number;
   pages_written: number;
   items_failed: number;
+  /** Absent from a run recorded before these were kept. */
+  pages_unchanged?: number;
+  items_held?: number;
+  deletions_applied?: number;
+  deletions_held?: number;
+}
+
+/** What a run did, in a few words: "12 items, 3 written, 6 unchanged, 1 failed, 2 held". */
+export function runCountsText(run: AccountRunRecord): string {
+  const parts = [`${run.items} items`, `${run.pages_written} written`];
+  const more: Array<[number | undefined, string]> = [
+    [run.pages_unchanged, "unchanged"],
+    [run.items_failed, "failed"],
+    [run.items_held, "held"],
+    [run.deletions_applied, "deletion(s) applied"],
+    [run.deletions_held, "held for confirmation"],
+  ];
+  for (const [n, what] of more) if (n !== undefined && n > 0) parts.push(`${n} ${what}`);
+  return parts.join(", ");
 }
 
 export function accountRunRecipeId(accountId: string): string {
@@ -68,6 +87,10 @@ export async function recordAccountRun(engine: Engine, accountId: string, result
     items: result.counts.items,
     pages_written: result.counts.pages_written,
     items_failed: result.counts.items_failed,
+    pages_unchanged: result.counts.pages_unchanged,
+    items_held: result.counts.items_held,
+    deletions_applied: result.counts.deletions_applied,
+    deletions_held: result.counts.deletions_held,
   };
   await setRecipeState(engine, accountRunRecipeId(accountId), LAST_RUN_KEY, record);
 }
