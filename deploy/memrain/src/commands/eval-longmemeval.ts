@@ -8,6 +8,12 @@
  *        [--answer-model ID] [--judge-model ID] [--dir CACHE]
  *   --out DIR --settle RESERVATION --usd N    record the billed amount of a call
  *                                             a crashed run never settled
+ *   --retrieval-only                          lme-r: stop after retrieval and score
+ *                                             evidence-session recall@5/@10 and
+ *                                             nDCG@10; no answer or judge model,
+ *                                             only embeddings are paid, and vectors
+ *                                             are cached in the dataset directory so
+ *                                             a repeat run costs nothing
  *
  * --limit N takes the first N questions in dataset file order, not a sample.
  *
@@ -49,6 +55,7 @@ export interface EvalLongMemEvalOptions {
   cacheDir?: string;
   answerModel?: string;
   judgeModel?: string;
+  retrievalOnly?: boolean;
   /** Seams for offline tests. */
   bedrock?: LmeBedrock;
   fetchFn?: typeof fetch;
@@ -84,6 +91,9 @@ export async function runEvalLongMemEval(opts: EvalLongMemEvalOptions): Promise<
     if (opts.maxUsd === undefined) return usage("a paid run needs --max-usd (use --dry-run to price it first)");
     if (!opts.out) return usage("a paid run needs --out <run dir>");
   }
+  if (opts.retrievalOnly && (opts.answerModel || opts.judgeModel)) {
+    return usage("--retrieval-only calls no answer or judge model; drop --answer-model / --judge-model");
+  }
   const models: Partial<LmeModels> = {
     ...(opts.answerModel ? { answer: opts.answerModel } : {}),
     ...(opts.judgeModel ? { judge: opts.judgeModel } : {}),
@@ -106,8 +116,9 @@ export async function runEvalLongMemEval(opts: EvalLongMemEvalOptions): Promise<
         models,
         ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
         ...(opts.maxUsd !== undefined ? { maxUsd: opts.maxUsd } : {}),
+        ...(opts.retrievalOnly ? { retrievalOnly: true } : {}),
       });
-      console.log(JSON.stringify({ dataset: loaded.dataset, ...estimate }, null, 2));
+      console.log(JSON.stringify({ dataset: loaded.dataset, ...(opts.retrievalOnly ? { mode: "retrieval-only" } : {}), ...estimate }, null, 2));
       return 0;
     }
     const result = await runLongMemEval({
@@ -118,6 +129,7 @@ export async function runEvalLongMemEval(opts: EvalLongMemEvalOptions): Promise<
       models,
       bedrock: opts.bedrock ?? bedrockBoundary(),
       ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+      ...(opts.retrievalOnly ? { retrievalOnly: true, embedCacheDir: opts.cacheDir ?? defaultCacheDir() } : {}),
       log: (line) => console.error(`[longmemeval] ${line}`),
     });
     console.log(JSON.stringify({ outcome: result.outcome, ...(result.message ? { message: result.message } : {}), ...result.summary }, null, 2));

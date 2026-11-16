@@ -21,9 +21,17 @@
  *
  * The score is labelled "Bedrock-Claude-judged": it is not comparable with
  * figures produced by another judge model or other prompts.
+ *
+ * Retrieval-only mode (`lme-r`) stops after the search: no answer model, no
+ * judge, only whether the evidence sessions came back (recall@5/@10 over the
+ * distinct sessions of the top chunk rows, nDCG@10). Its only spend is the
+ * embeddings, still reserved and settled on the same ledger, and an optional
+ * vector cache (embed-cache.ts) makes a repeat run over the same haystacks
+ * free. Its summary carries its own label and never mixes with a judged run's
+ * directory.
  */
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../../core/storage.ts";
@@ -41,6 +49,9 @@ import { DEFAULT_SONNET_MODEL, STOP_REASON_MAX_TOKENS } from "../../core/llm/son
 import { DEFAULT_HAIKU_MODEL } from "../../core/llm/haiku.ts";
 import type { LmeQuestion, LmeSession } from "./dataset.ts";
 import { CapExceeded, SpendLedger, type Stage } from "./ledger.ts";
+import { EmbedCache } from "./embed-cache.ts";
+import { binaryGrades, ndcgAtK } from "../../core/search/metrics.ts";
+import { RANKING_FLAGS, rankFlag } from "../../core/search/ranking-flags.ts";
 import {
   ANSWER_SYSTEM,
   JUDGE_SYSTEM,
@@ -55,6 +66,7 @@ import {
 export { ANSWER_SYSTEM, parseJudgeVerdict };
 
 export const RESULT_LABEL = "Bedrock-Claude-judged";
+export const LME_RETRIEVAL_LABEL = "LongMemEval-retrieval-only";
 
 /** Excerpts retrieved per question. */
 export const RETRIEVAL_K = 10;
@@ -212,6 +224,48 @@ export interface LongMemEvalSummary {
   not_run: number;
   spent_usd: number;
   unsettled_reservations: { id: string; question_id: string; stage: Stage; max_usd: number }[];
+  /** Retrieval-only runs: questions with evidence sessions, and the mean recall over them. */
+  recall_scored?: number;
+  recall_any_at_5?: number | null;
+  recall_all_at_5?: number | null;
+  recall_any_at_10?: number | null;
+  recall_all_at_10?: number | null;
+  ndcg_at_10?: number | null;
+  /** Retrieval-only runs: the MEMRAIN_RANK_* flags that were on, so two runs can be paired by what they measured. */
+  ranking_flags?: string[];
+  /** Retrieval-only runs: sha256 of the sorted selected question ids. */
+  question_ids_sha256?: string;
+}
+
+export interface SessionRecall {
+  recall_any_at_5: number;
+  recall_all_at_5: number;
+  recall_any_at_10: number;
+  recall_all_at_10: number;
+  ndcg_at_10: number;
+}
+
+/**
+ * Recall over the DISTINCT sessions among the top-k chunk rows, in rank order
+ * (`rowSessions` holds one session id per returned chunk). "any" = at least one
+ * evidence session is there, "all" = every one is. nDCG@10 grades the distinct
+ * sessions of the top ten rows against the evidence set.
+ */
+export function scoreSessionRecall(rowSessions: readonly string[], gold: readonly string[]): SessionRecall {
+  const goldSet = new Set(gold);
+  const distinct = (k: number) => [...new Set(rowSessions.slice(0, k))];
+  const at = (k: number) => {
+    const found = distinct(k).filter((s) => goldSet.has(s)).length;
+    return { any: found > 0 ? 1 : 0, all: goldSet.size > 0 && found === goldSet.size ? 1 : 0 };
+  };
+  const [five, ten] = [at(5), at(10)];
+  return {
+    recall_any_at_5: five.any,
+    recall_all_at_5: five.all,
+    recall_any_at_10: ten.any,
+    recall_all_at_10: ten.all,
+    ndcg_at_10: ndcgAtK(distinct(10), binaryGrades([...goldSet]), 10),
+  };
 }
 
 export interface LongMemEvalRunOptions {
@@ -223,6 +277,10 @@ export interface LongMemEvalRunOptions {
   limit?: number;
   bedrock: LmeBedrock;
   log?: (line: string) => void;
+  /** Stop after retrieval: no answer or judge call (lme-r). */
+  retrievalOnly?: boolean;
+  /** Directory of the vector cache; omitted, every embedding is paid. */
+  embedCacheDir?: string;
 }
 
 export interface LongMemEvalRunResult {
@@ -231,9 +289,11 @@ export interface LongMemEvalRunResult {
   summary: LongMemEvalSummary;
 }
 
-function resolveModels(partial: Partial<LmeModels> = {}): LmeModels {
+function resolveModels(partial: Partial<LmeModels> = {}, retrievalOnly = false): LmeModels {
   const models = { ...DEFAULT_MODELS, ...partial };
   for (const [role, model] of Object.entries(models)) {
+    // A retrieval-only run never calls the answer or judge model.
+    if (retrievalOnly && role !== "embed") continue;
     if (worstCaseUsd({ operation: "longmemeval", model, worstCase: { input: "", maxOutputTokens: 0 } }) === null) {
       throw new UnknownPrice(`no price for the ${role} model '${model}': refusing to spend against it`);
     }
@@ -259,7 +319,7 @@ interface StageBound {
   max_usd: number;
 }
 
-function questionBounds(q: LmeQuestion, models: LmeModels): Record<Stage, StageBound> {
+function questionBounds(q: LmeQuestion, models: LmeModels, retrievalOnly = false): Record<Stage, StageBound> {
   let calls = 0;
   let bytes = 0;
   for (const s of q.sessions) {
@@ -276,6 +336,7 @@ function questionBounds(q: LmeQuestion, models: LmeModels): Record<Stage, StageB
     }
   }
   const queryBytes = Buffer.byteLength(q.question);
+  const none = (maxTokens: number): StageBound => ({ calls: 0, max_input_bytes: 0, max_tokens: maxTokens, max_usd: 0 });
   return {
     embed: { calls, max_input_bytes: bytes, max_tokens: 0, max_usd: boundUsd(models.embed, bytes, 0, calls) },
     query_embed: {
@@ -284,11 +345,11 @@ function questionBounds(q: LmeQuestion, models: LmeModels): Record<Stage, StageB
       max_tokens: 0,
       max_usd: boundUsd(models.embed, QUERY_EMBEDS_PER_QUESTION * queryBytes, 0, QUERY_EMBEDS_PER_QUESTION),
     },
-    answer: {
+    answer: retrievalOnly ? none(ANSWER_MAX_TOKENS) : {
       calls: 1, max_input_bytes: ANSWER_PROMPT_MAX_BYTES, max_tokens: ANSWER_MAX_TOKENS,
       max_usd: boundUsd(models.answer, ANSWER_PROMPT_MAX_BYTES, ANSWER_MAX_TOKENS),
     },
-    judge: {
+    judge: retrievalOnly ? none(JUDGE_MAX_TOKENS) : {
       calls: 1, max_input_bytes: JUDGE_PROMPT_MAX_BYTES, max_tokens: JUDGE_MAX_TOKENS,
       max_usd: boundUsd(models.judge, JUDGE_PROMPT_MAX_BYTES, JUDGE_MAX_TOKENS),
     },
@@ -315,8 +376,9 @@ export function estimateLongMemEval(opts: {
   limit?: number;
   models?: Partial<LmeModels>;
   maxUsd?: number;
+  retrievalOnly?: boolean;
 }): DryRunEstimate {
-  const models = resolveModels(opts.models);
+  const models = resolveModels(opts.models, opts.retrievalOnly);
   const selected = opts.questions.slice(0, opts.limit ?? opts.questions.length);
   const stages: Record<Stage, StageBound> = {
     embed: { calls: 0, max_input_bytes: 0, max_tokens: 0, max_usd: 0 },
@@ -325,7 +387,7 @@ export function estimateLongMemEval(opts: {
     judge: { calls: 0, max_input_bytes: 0, max_tokens: JUDGE_MAX_TOKENS, max_usd: 0 },
   };
   for (const q of selected) {
-    for (const [stage, b] of Object.entries(questionBounds(q, models)) as [Stage, StageBound][]) {
+    for (const [stage, b] of Object.entries(questionBounds(q, models, opts.retrievalOnly)) as [Stage, StageBound][]) {
       stages[stage].calls += b.calls;
       stages[stage].max_input_bytes += b.max_input_bytes;
       stages[stage].max_usd += b.max_usd;
@@ -354,6 +416,7 @@ class QuestionCalls {
     private readonly questionId: string,
     private readonly models: LmeModels,
     private readonly bedrock: LmeBedrock,
+    private readonly cache: EmbedCache | null = null,
   ) {}
 
   private fail(e: Error): Error {
@@ -414,9 +477,12 @@ class QuestionCalls {
 
   async embed(stage: "embed" | "query_embed", text: string): Promise<number[]> {
     const model = this.models.embed;
+    const cached = this.cache?.get(model, text) ?? null;
+    if (cached) return cached;
     const { id, maxUsd } = this.reserve(stage, model, text, EMBED_MAX_INPUT_BYTES, 0);
     const res = await this.invoke(id, maxUsd, () => this.bedrock.embed(text, model));
     this.settle(id, maxUsd, model, res.inputTokens > 0 ? { inputTokens: res.inputTokens, outputTokens: 0 } : null);
+    this.cache?.put(model, text, res.vector);
     return res.vector;
   }
 
@@ -454,6 +520,7 @@ async function runQuestion(
   q: LmeQuestion,
   calls: QuestionCalls,
   models: LmeModels,
+  retrievalOnly = false,
 ): Promise<Record<string, unknown>> {
   const dir = mkdtempSync(join(tmpdir(), "memrain-lme-q-"));
   const storage = new Storage({ dbPath: join(dir, "brain") });
@@ -483,8 +550,19 @@ async function runQuestion(
     await calls.drain();
     calls.check();
 
-    const retrieved = [...new Set(hits.map((h) => sessions.get(h.sourcePath)?.id).filter((x): x is string => !!x))];
+    const rowSessions = hits.map((h) => sessions.get(h.sourcePath)?.id).filter((x): x is string => !!x);
+    const retrieved = [...new Set(rowSessions)];
     const gold = q.answer_session_ids;
+    if (retrievalOnly) {
+      return {
+        status: "scored",
+        question_type: q.question_type,
+        abstention: isAbstention(q),
+        ...(gold.length > 0 ? scoreSessionRecall(rowSessions, gold) : {}),
+        retrieved_session_ids: retrieved,
+        search_degraded: degraded,
+      };
+    }
     const evidenceRecall = gold.length === 0 ? null : gold.filter((id) => retrieved.includes(id)).length / gold.length;
 
     const answer = await calls.converse("answer", ANSWER_SYSTEM, answerPrompt(q, excerptsFrom(hits, sessions)));
@@ -509,7 +587,18 @@ async function runQuestion(
   }
 }
 
-function runHeader(dataset: { url: string; sha256: string }, models: LmeModels): Record<string, unknown> {
+function runHeader(dataset: { url: string; sha256: string }, models: LmeModels, retrievalOnly = false): Record<string, unknown> {
+  if (retrievalOnly) {
+    return {
+      label: LME_RETRIEVAL_LABEL,
+      dataset,
+      models: { embed: models.embed },
+      retrieval_k: RETRIEVAL_K,
+      bounds: { embed_max_input_bytes: EMBED_MAX_INPUT_BYTES },
+      // In the header, so resuming the directory under other flags is refused.
+      ranking_flags: RANKING_FLAGS.filter((f) => rankFlag(f)),
+    };
+  }
   return {
     label: RESULT_LABEL,
     dataset,
@@ -543,6 +632,9 @@ function summarize(
   let unparseable = 0;
   let truncated = 0;
   const recalls: number[] = [];
+  const retrieval: Record<keyof SessionRecall, number[]> = {
+    recall_any_at_5: [], recall_all_at_5: [], recall_any_at_10: [], recall_all_at_10: [], ndcg_at_10: [],
+  };
   const interrupted: string[] = [];
   let notRun = 0;
   for (const q of selected) {
@@ -562,6 +654,10 @@ function summarize(
     if (r.judge_verdict === "unparseable") unparseable++;
     if (r.answer_stop_reason === STOP_REASON_MAX_TOKENS) truncated++;
     if (typeof r.evidence_recall === "number") recalls.push(r.evidence_recall);
+    for (const [k, list] of Object.entries(retrieval)) {
+      const v = (r as Record<string, unknown>)[k];
+      if (typeof v === "number") list.push(v);
+    }
     const t = typeOf(q);
     t.scored++;
     if (ok) t.correct++;
@@ -570,8 +666,10 @@ function summarize(
     t.accuracy = t.scored === 0 ? null : t.correct / t.scored;
     t.accuracy_with_interrupted = t.correct / (t.scored + t.interrupted);
   }
+  const meanOf = (xs: number[]) => (xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length);
+  const retrievalOnly = header.label === LME_RETRIEVAL_LABEL;
   return {
-    label: RESULT_LABEL,
+    label: header.label as string,
     dataset: header.dataset as LongMemEvalSummary["dataset"],
     prompt_hash: header.prompt_hash as string,
     models: header.models as LmeModels,
@@ -591,6 +689,18 @@ function summarize(
     unsettled_reservations: ledger.unsettled().map((r) => ({
       id: r.id, question_id: r.question_id, stage: r.stage, max_usd: r.max_usd,
     })),
+    ...(retrievalOnly
+      ? {
+          recall_scored: retrieval.recall_any_at_5.length,
+          recall_any_at_5: meanOf(retrieval.recall_any_at_5),
+          recall_all_at_5: meanOf(retrieval.recall_all_at_5),
+          recall_any_at_10: meanOf(retrieval.recall_any_at_10),
+          recall_all_at_10: meanOf(retrieval.recall_all_at_10),
+          ndcg_at_10: meanOf(retrieval.ndcg_at_10),
+          ranking_flags: header.ranking_flags as string[],
+          question_ids_sha256: createHash("sha256").update(selected.map((q) => q.question_id).sort().join("\n")).digest("hex"),
+        }
+      : {}),
   };
 }
 
@@ -600,7 +710,7 @@ export function ledgerPath(outDir: string): string {
 
 export async function runLongMemEval(opts: LongMemEvalRunOptions): Promise<LongMemEvalRunResult> {
   if (!Number.isFinite(opts.maxUsd) || opts.maxUsd <= 0) throw new Error("--max-usd must be a positive number");
-  const models = resolveModels(opts.models);
+  const models = resolveModels(opts.models, opts.retrievalOnly);
   if (keywordOnlyMode()) {
     throw new UnsafeConfig(
       "MEMRAIN_KEYWORD_ONLY is on: nothing would be embedded and no model could answer, so the score would not measure Memrain's retrieval",
@@ -627,13 +737,14 @@ async function runLocked(
   log: (line: string) => void,
 ): Promise<LongMemEvalRunResult> {
   const ledger = SpendLedger.open(ledgerPath(opts.outDir));
-  const header = runHeader(opts.dataset, models);
+  const retrievalOnly = opts.retrievalOnly === true;
+  const header = runHeader(opts.dataset, models, retrievalOnly);
   const existing = ledger.header();
   if (existing === null) {
     ledger.writeHeader(header);
   } else if (JSON.stringify(existing) !== JSON.stringify(header)) {
     throw new ResumeMismatch(
-      `${ledgerPath(opts.outDir)} was written under a different dataset, prompts, models or bounds; use a new --out`,
+      `${ledgerPath(opts.outDir)} was written under a different mode, dataset, prompts, models or bounds; use a new --out`,
     );
   }
   ledger.recordCap(opts.maxUsd);
@@ -649,30 +760,35 @@ async function runLocked(
 
   let outcome: RunOutcome = "complete";
   let message: string | undefined;
-  for (const q of selected) {
-    if (ledger.results().has(q.question_id)) continue;
-    const worst = totalUsd(questionBounds(q, models));
-    if (ledger.spentUsd() + worst > opts.maxUsd) {
-      outcome = "cap_exceeded";
-      message = `${q.question_id} could cost up to $${worst.toFixed(4)}; $${ledger.spentUsd().toFixed(4)} ` +
-        `of the $${opts.maxUsd} cap is already spent or reserved`;
-      break;
+  const cache = opts.embedCacheDir ? EmbedCache.inDir(opts.embedCacheDir) : null;
+  try {
+    for (const q of selected) {
+      if (ledger.results().has(q.question_id)) continue;
+      const worst = totalUsd(questionBounds(q, models, retrievalOnly));
+      if (ledger.spentUsd() + worst > opts.maxUsd) {
+        outcome = "cap_exceeded";
+        message = `${q.question_id} could cost up to $${worst.toFixed(4)}; $${ledger.spentUsd().toFixed(4)} ` +
+          `of the $${opts.maxUsd} cap is already spent or reserved`;
+        break;
+      }
+      const calls = new QuestionCalls(ledger, opts.maxUsd, q.question_id, models, opts.bedrock, cache);
+      try {
+        const fields = await runQuestion(q, calls, models, retrievalOnly);
+        ledger.appendResult(q.question_id, { ...fields, cost_usd: ledger.questionSpendUsd(q.question_id) });
+        log(`${q.question_id}: ${retrievalOnly ? `recall@5 ${fields.recall_any_at_5 ?? "-"}` : fields.judge_verdict}`);
+      } catch (e) {
+        await calls.drain();
+        if (e instanceof CapExceeded) outcome = "cap_exceeded";
+        else if (e instanceof PaidCallFailed) outcome = "call_failed";
+        else if (e instanceof CeilingBreached) outcome = "ceiling_breached";
+        else if (e instanceof UnboundedInput || e instanceof UnknownPrice) outcome = "refused";
+        else throw e;
+        message = (e as Error).message;
+        break;
+      }
     }
-    const calls = new QuestionCalls(ledger, opts.maxUsd, q.question_id, models, opts.bedrock);
-    try {
-      const fields = await runQuestion(q, calls, models);
-      ledger.appendResult(q.question_id, { ...fields, cost_usd: ledger.questionSpendUsd(q.question_id) });
-      log(`${q.question_id}: ${fields.judge_verdict}`);
-    } catch (e) {
-      await calls.drain();
-      if (e instanceof CapExceeded) outcome = "cap_exceeded";
-      else if (e instanceof PaidCallFailed) outcome = "call_failed";
-      else if (e instanceof CeilingBreached) outcome = "ceiling_breached";
-      else if (e instanceof UnboundedInput || e instanceof UnknownPrice) outcome = "refused";
-      else throw e;
-      message = (e as Error).message;
-      break;
-    }
+  } finally {
+    cache?.close();
   }
 
   const summary = summarize(ledger, header, selected);

@@ -1,0 +1,797 @@
+{
+  "_doc": "Synthetic search bench. Paths are /bench/vault/<page>.md (vault source) and /bench/mail/<page>.md (mailbox source). Every query carries tags; decoy entries carry decoy_output, a wrong answer the scorer must reject.",
+  "_version": 1,
+  "queries": [
+    {
+      "id": "t-odile",
+      "query": "Odile Varga",
+      "expected_paths": [
+        "/bench/vault/people/odile-varga.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:entity"
+      ],
+      "lang": "en",
+      "expected_top1": true
+    },
+    {
+      "id": "t-kestrel",
+      "query": "Project Kestrel",
+      "expected_paths": [
+        "/bench/vault/projects/kestrel.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:entity",
+        "noise:mail"
+      ],
+      "lang": "en",
+      "expected_top1": true
+    },
+    {
+      "id": "t-heron",
+      "query": "Project Heron",
+      "expected_paths": [
+        "/bench/vault/projects/heron.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:entity"
+      ],
+      "lang": "en",
+      "expected_top1": true
+    },
+    {
+      "id": "t-pebble",
+      "query": "Pebble component library",
+      "expected_paths": [
+        "/bench/vault/projects/pebble.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:entity"
+      ],
+      "lang": "en",
+      "expected_top1": true
+    },
+    {
+      "id": "t-lantern",
+      "query": "Project Lantern",
+      "expected_paths": [
+        "/bench/vault/projects/lantern.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:entity"
+      ],
+      "lang": "en",
+      "expected_top1": true
+    },
+    {
+      "id": "t-variance",
+      "query": "variance report",
+      "expected_paths": [
+        "/bench/vault/concepts/variance-report.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "t-rrf",
+      "query": "reciprocal rank fusion",
+      "expected_paths": [
+        "/bench/vault/concepts/reciprocal-rank-fusion.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "t-shadow",
+      "query": "shadow mode",
+      "expected_paths": [
+        "/bench/vault/concepts/shadow-mode.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:topic"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "t-noshow",
+      "query": "no-show rate",
+      "expected_paths": [
+        "/bench/vault/concepts/no-show-rate.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:topic"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "t-thistle",
+      "query": "Thistle access review",
+      "expected_paths": [
+        "/bench/vault/projects/thistle.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:entity",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "a-ledger-keeper",
+      "query": "who is the ledger keeper",
+      "expected_paths": [
+        "/bench/vault/people/odile-varga.md"
+      ],
+      "tags": [
+        "kind:alias",
+        "intent:entity",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "a-tom-pager",
+      "query": "Tom the pager",
+      "expected_paths": [
+        "/bench/vault/people/tomasz-wierzba.md"
+      ],
+      "tags": [
+        "kind:alias",
+        "intent:entity"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "a-search-rewrite",
+      "query": "search rewrite codename",
+      "expected_paths": [
+        "/bench/vault/projects/kestrel.md"
+      ],
+      "tags": [
+        "kind:alias",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "a-reminder-redesign",
+      "query": "appointment reminder redesign",
+      "expected_paths": [
+        "/bench/vault/projects/heron.md"
+      ],
+      "tags": [
+        "kind:alias",
+        "intent:topic"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "a-refund-automation",
+      "query": "refund automation",
+      "expected_paths": [
+        "/bench/vault/projects/marigold.md"
+      ],
+      "tags": [
+        "kind:alias",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "a-lab-integration",
+      "query": "lab results integration",
+      "expected_paths": [
+        "/bench/vault/projects/saffron.md"
+      ],
+      "tags": [
+        "kind:alias",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "a-churn-model",
+      "query": "churn prediction model",
+      "expected_paths": [
+        "/bench/vault/projects/lantern.md"
+      ],
+      "tags": [
+        "kind:alias",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "a-oncall-program",
+      "query": "on-call program for the data platform",
+      "expected_paths": [
+        "/bench/vault/projects/beacon.md"
+      ],
+      "tags": [
+        "kind:alias",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "s-kestrel-status",
+      "query": "what is the status of Kestrel",
+      "expected_paths": [
+        "/bench/vault/projects/kestrel.md"
+      ],
+      "tags": [
+        "kind:entity-state",
+        "intent:entity",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "s-heron-optout",
+      "query": "Heron pilot opt-out rate",
+      "expected_paths": [
+        "/bench/vault/projects/heron.md"
+      ],
+      "tags": [
+        "kind:entity-state",
+        "intent:entity"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "s-lantern-shadow",
+      "query": "is the churn model still in shadow mode",
+      "expected_paths": [
+        "/bench/vault/projects/lantern.md",
+        "/bench/vault/meetings/lantern-model-review.md"
+      ],
+      "tags": [
+        "kind:entity-state",
+        "intent:topic"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "s-quarry-blocked",
+      "query": "what is Quarry blocked on",
+      "expected_paths": [
+        "/bench/vault/projects/quarry.md"
+      ],
+      "tags": [
+        "kind:entity-state",
+        "intent:entity"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "s-ines-owns",
+      "query": "what does Ines Castellano own",
+      "expected_paths": [
+        "/bench/vault/people/ines-castellano.md"
+      ],
+      "tags": [
+        "kind:entity-state",
+        "intent:entity"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "s-amara-owns",
+      "query": "who owns the vendor risk register",
+      "expected_paths": [
+        "/bench/vault/people/amara-nwosu.md"
+      ],
+      "tags": [
+        "kind:entity-state",
+        "intent:entity"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "s-greta-signs",
+      "query": "who signs off the month-end close",
+      "expected_paths": [
+        "/bench/vault/people/greta-lindqvist.md"
+      ],
+      "tags": [
+        "kind:entity-state",
+        "intent:entity",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "s-yusuf",
+      "query": "who shipped offline mode",
+      "expected_paths": [
+        "/bench/vault/people/yusuf-demir.md"
+      ],
+      "tags": [
+        "kind:entity-state",
+        "intent:entity",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "r-round-half-even",
+      "query": "round_half_even",
+      "expected_paths": [
+        "/bench/vault/code/ledger-sync.md"
+      ],
+      "tags": [
+        "kind:rare-term",
+        "kind:code",
+        "intent:exact"
+      ],
+      "lang": "en",
+      "expected_top1": true
+    },
+    {
+      "id": "r-reconcile-batch",
+      "query": "reconcile_batch needs_review",
+      "expected_paths": [
+        "/bench/vault/code/ledger-sync.md"
+      ],
+      "tags": [
+        "kind:rare-term",
+        "kind:code",
+        "intent:exact"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "r-apply-change",
+      "query": "apply_change idempotent event id",
+      "expected_paths": [
+        "/bench/vault/code/index-worker.md"
+      ],
+      "tags": [
+        "kind:rare-term",
+        "kind:code",
+        "intent:exact"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "r-grid-navigation",
+      "query": "useGridNavigation",
+      "expected_paths": [
+        "/bench/vault/code/pebble-datepicker.md"
+      ],
+      "tags": [
+        "kind:rare-term",
+        "kind:code",
+        "intent:exact"
+      ],
+      "lang": "en",
+      "expected_top1": true
+    },
+    {
+      "id": "r-parse-oru",
+      "query": "parse_oru observations",
+      "expected_paths": [
+        "/bench/vault/code/hl7-parser.md"
+      ],
+      "tags": [
+        "kind:rare-term",
+        "kind:code",
+        "intent:exact"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "r-dispute-count",
+      "query": "dispute_count_90d",
+      "expected_paths": [
+        "/bench/vault/code/churn-features.md"
+      ],
+      "tags": [
+        "kind:rare-term",
+        "kind:code",
+        "intent:exact"
+      ],
+      "lang": "en",
+      "expected_top1": true
+    },
+    {
+      "id": "r-hl7",
+      "query": "HL7 acknowledgement within one minute",
+      "expected_paths": [
+        "/bench/vault/meetings/partner-sync-saffron.md"
+      ],
+      "tags": [
+        "kind:rare-term",
+        "intent:topic"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "r-exclusivity",
+      "query": "twelve month exclusivity clause",
+      "expected_paths": [
+        "/bench/vault/transcripts/partner-negotiation.md"
+      ],
+      "tags": [
+        "kind:rare-term",
+        "intent:topic"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "p-rounding",
+      "query": "why do invoices differ by one cent",
+      "expected_paths": [
+        "/bench/vault/transcripts/billing-call.md",
+        "/bench/vault/meetings/tidewater-month-end.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "p-no-night",
+      "query": "reminders must not go out at night",
+      "expected_paths": [
+        "/bench/vault/decisions/quiet-hours.md",
+        "/bench/vault/meetings/heron-pilot-retro.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "p-leaked-token",
+      "query": "what happened after the deploy token leaked",
+      "expected_paths": [
+        "/bench/vault/meetings/security-incident-review.md",
+        "/bench/vault/decisions/short-lived-credentials.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "p-consumers-reconnect",
+      "query": "consumers did not reconnect after failover",
+      "expected_paths": [
+        "/bench/vault/meetings/broker-failover-drill.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "p-flags-expire",
+      "query": "feature flags need an expiry date",
+      "expected_paths": [
+        "/bench/vault/decisions/flag-expiry.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "p-hyphen-drugs",
+      "query": "tokenizer splits hyphenated drug names",
+      "expected_paths": [
+        "/bench/vault/transcripts/kestrel-standup.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "p-disk-full",
+      "query": "scratch volume filled by the export",
+      "expected_paths": [
+        "/bench/vault/transcripts/oncall-handover.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "p-keyboard-datepicker",
+      "query": "date picker keyboard navigation bug",
+      "expected_paths": [
+        "/bench/vault/meetings/design-critique-pebble.md",
+        "/bench/vault/code/pebble-datepicker.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "p-retention",
+      "query": "document data retention before launch",
+      "expected_paths": [
+        "/bench/vault/decisions/data-retention.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "p-first-response",
+      "query": "first response time on weekdays",
+      "expected_paths": [
+        "/bench/vault/meetings/support-weekly.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "m-kestrel-people",
+      "query": "who works on Kestrel",
+      "expected_paths": [
+        "/bench/vault/projects/kestrel.md",
+        "/bench/vault/people/bram-oyelaran.md",
+        "/bench/vault/people/rafael-quintero.md"
+      ],
+      "tags": [
+        "kind:multi-session",
+        "intent:entity",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "m-heron-team",
+      "query": "Heron team members",
+      "expected_paths": [
+        "/bench/vault/projects/heron.md",
+        "/bench/vault/meetings/heron-pilot-retro.md"
+      ],
+      "tags": [
+        "kind:multi-session",
+        "intent:entity"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "m-roadmap-order",
+      "query": "portal roadmap order Heron Kestrel Saffron",
+      "expected_paths": [
+        "/bench/vault/meetings/roadmap-planning.md"
+      ],
+      "tags": [
+        "kind:multi-session",
+        "intent:topic"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "m-month-end",
+      "query": "month-end close reconciliation spreadsheets",
+      "expected_paths": [
+        "/bench/vault/meetings/tidewater-month-end.md",
+        "/bench/vault/people/odile-varga.md",
+        "/bench/vault/people/greta-lindqvist.md"
+      ],
+      "tags": [
+        "kind:multi-session",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "m-incident",
+      "query": "build server incident signing keys",
+      "expected_paths": [
+        "/bench/vault/meetings/security-incident-review.md",
+        "/bench/vault/people/amara-nwosu.md"
+      ],
+      "tags": [
+        "kind:multi-session",
+        "intent:topic",
+        "noise:mail"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "de-kestrel",
+      "query": "hybride Suche Kundenportal",
+      "expected_paths": [
+        "/bench/vault/de/kestrel-zusammenfassung.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic"
+      ],
+      "lang": "de"
+    },
+    {
+      "id": "de-abschluss",
+      "query": "Abweichungsbericht Monatsabschluss",
+      "expected_paths": [
+        "/bench/vault/de/abrechnung-monatsabschluss.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:topic"
+      ],
+      "lang": "de"
+    },
+    {
+      "id": "de-ruhezeit",
+      "query": "Ruhezeit Terminerinnerungen",
+      "expected_paths": [
+        "/bench/vault/de/erinnerungen-ruhezeiten.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:topic"
+      ],
+      "lang": "de"
+    },
+    {
+      "id": "de-zugriff",
+      "query": "verwaiste Konten entfernen",
+      "expected_paths": [
+        "/bench/vault/de/zugriffspruefung.md"
+      ],
+      "tags": [
+        "kind:paraphrase",
+        "intent:topic"
+      ],
+      "lang": "de"
+    },
+    {
+      "id": "de-labor",
+      "query": "Laborbefunde Patientenakte",
+      "expected_paths": [
+        "/bench/vault/de/laborbefunde.md"
+      ],
+      "tags": [
+        "kind:title-in-query",
+        "intent:topic"
+      ],
+      "lang": "de"
+    },
+    {
+      "id": "abs-1",
+      "query": "volcano eruption forecast",
+      "expected_paths": [],
+      "tags": [
+        "kind:abstention"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "abs-2",
+      "query": "submarine sonar calibration",
+      "expected_paths": [],
+      "tags": [
+        "kind:abstention"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "abs-3",
+      "query": "medieval tapestry restoration",
+      "expected_paths": [],
+      "tags": [
+        "kind:abstention"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "abs-4",
+      "query": "quantum chromodynamics lattice",
+      "expected_paths": [],
+      "tags": [
+        "kind:abstention"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "abs-5",
+      "query": "sourdough starter hydration",
+      "expected_paths": [],
+      "tags": [
+        "kind:abstention"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "abs-6",
+      "query": "glacier ice core sampling",
+      "expected_paths": [],
+      "tags": [
+        "kind:abstention"
+      ],
+      "lang": "en"
+    },
+    {
+      "id": "decoy-wrong-owner",
+      "query": "who owns the ledger reconciliation service",
+      "expected_paths": [
+        "/bench/vault/people/odile-varga.md"
+      ],
+      "tags": [
+        "decoy"
+      ],
+      "lang": "en",
+      "decoy_output": [
+        "/bench/vault/people/greta-lindqvist.md",
+        "/bench/vault/projects/tidewater.md"
+      ]
+    },
+    {
+      "id": "decoy-mail-answer",
+      "query": "Kestrel ranking review decision",
+      "expected_paths": [
+        "/bench/vault/meetings/kestrel-ranking-review.md"
+      ],
+      "tags": [
+        "decoy"
+      ],
+      "lang": "en",
+      "decoy_output": [
+        "/bench/mail/invite-kestrel-review.md",
+        "/bench/mail/auto-reply-bram.md"
+      ]
+    },
+    {
+      "id": "decoy-empty",
+      "query": "Heron pilot result",
+      "expected_paths": [
+        "/bench/vault/meetings/heron-pilot-retro.md"
+      ],
+      "tags": [
+        "decoy"
+      ],
+      "lang": "en",
+      "decoy_output": []
+    }
+  ]
+}

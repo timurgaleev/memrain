@@ -21,6 +21,8 @@ import { runEval } from "./commands/eval.ts";
 import { runEvalChronicle } from "./commands/eval-chronicle.ts";
 import { runEvalCode } from "./commands/eval-code.ts";
 import { runEvalLongMemEval } from "./commands/eval-longmemeval.ts";
+import { runEvalBench } from "./commands/eval-bench.ts";
+import { runEvalPromote } from "./commands/eval-promote.ts";
 import { runEvalProbe } from "./commands/eval-probe.ts";
 import { runBenchCli, isBenchFamilySelector } from "./commands/bench.ts";
 import { runBacklinks } from "./commands/backlinks.ts";
@@ -165,13 +167,23 @@ function printUsage(): void {
   console.log("  eval compare [--input P] [--json]");
   console.log("                               per-mode comparison table from the results log");
   console.log("  eval gate [--baseline P] [--max-drop X] [--min-recall X] [--write-baseline]");
-  console.log("            [--split dev|all] [--allow-errors] [--max-latency-x X]");
-  console.log("                               regression gate vs a stored baseline (exit 1 on drop)");
+  console.log("            [--split dev|all] [--allow-errors] [--max-latency-x X] [--bench]");
+  console.log("                               regression gate vs a stored baseline (exit 1 on drop);");
+  console.log("                               --bench scores the synthetic bench on its own brain, no model spend");
   console.log("  eval chronicle [--json]      deterministic Life Chronicle feature eval (own DB, no LLM)");
   console.log("  eval code [--json]           fixed code-retrieval eval: hit@5 and top-1 stability over this repo's own code");
+  console.log("  eval bench [--json] [--k12] [--write-snapshot]");
+  console.log("                               synthetic search bench (own DB, no model spend): metrics per tag, decoys,");
+  console.log("                               snapshot match; --k12 also checks that mail noise displaces no page");
   console.log("  eval longmemeval --dry-run [--max-usd N] [--limit N]");
   console.log("  eval longmemeval --out DIR --max-usd N [--limit N] [--answer-model ID] [--judge-model ID] [--dir CACHE]");
   console.log("  eval longmemeval --out DIR --settle RESERVATION --usd N");
+  console.log("  eval longmemeval --retrieval-only (--dry-run | --out DIR --max-usd N) [--limit N] [--dir CACHE]");
+  console.log("                               lme-r: evidence-session recall@5/@10 and nDCG@10, no answer or judge model;");
+  console.log("                               only embeddings are paid, cached in CACHE so a repeat run costs nothing");
+  console.log("  eval promote <FLAG> [--lme-r-base SUMMARY --lme-r SUMMARY] [--live] [--out DIR] [--json]");
+  console.log("                               may a ranking flag become a default: bench baseline x2 (noise) vs flag,");
+  console.log("                               paired stats, per-tag drops, decoys, top-1 and lme-r; exit 0 PASS 1 FAIL 3 not yet");
   console.log("                               LongMemEval-S answered from retrieval, Bedrock-Claude-judged; budgeted, resumable;");
   console.log("                               --limit N runs the first N questions in dataset order");
   console.log("  eval-probe [--limit N]       replay eval set, append a row to eval_snapshots (nightly probe)");
@@ -556,6 +568,28 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (positional.length === 1 && positional[0] === "code") {
         return await runEvalCode(flags.has("--json") ? { json: true } : {});
       }
+      if (positional[0] === "promote") {
+        if (positional.length !== 2) throw new Error("memrain eval promote: name one ranking flag, e.g. EXACT_LOOKUP");
+        const lmeBase = values.get("--lme-r-base");
+        const lmeCandidate = values.get("--lme-r");
+        const out = values.get("--out");
+        return await runEvalPromote({
+          flag: positional[1]!,
+          ...(lmeBase ? { lmeBase } : {}),
+          ...(lmeCandidate ? { lmeCandidate } : {}),
+          ...(out ? { outDir: out } : {}),
+          ...(flags.has("--live") ? { live: true } : {}),
+          ...(flags.has("--json") ? { json: true } : {}),
+        });
+      }
+      // `eval bench` builds its own throwaway brain from the shipped corpus.
+      if (positional.length === 1 && positional[0] === "bench") {
+        return await runEvalBench({
+          ...(flags.has("--json") ? { json: true } : {}),
+          ...(flags.has("--k12") ? { k12: true } : {}),
+          ...(flags.has("--write-snapshot") ? { writeSnapshot: true } : {}),
+        });
+      }
       if (positional.length === 1 && positional[0] === "longmemeval") {
         const lmeOpts: Parameters<typeof runEvalLongMemEval>[0] = {};
         const lmeOut = values.get("--out");
@@ -575,6 +609,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
         if (answerModel) lmeOpts.answerModel = answerModel;
         const judgeModel = values.get("--judge-model");
         if (judgeModel) lmeOpts.judgeModel = judgeModel;
+        if (flags.has("--retrieval-only")) lmeOpts.retrievalOnly = true;
         return await runEvalLongMemEval(lmeOpts);
       }
       // Sub-subcommands: run-all / compare / gate (aggregate instruments).
@@ -644,6 +679,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
           gateOpts.split = gateSplit;
         }
         if (flags.has("--allow-errors")) gateOpts.allowErrors = true;
+        if (flags.has("--bench")) gateOpts.bench = true;
         const maxLatencyX = values.get("--max-latency-x");
         if (maxLatencyX !== undefined) {
           const n = Number(maxLatencyX);

@@ -233,12 +233,15 @@ to `environment:` before overriding.
 | `MEMRAIN_RANK_PAGE_FUSION` | off (`=1` on) | Ranking flag: fusion votes per page instead of per chunk, so a page's mirror and its truth copy hold one slot and agreement across arms counts once per arm. Allowlisted. | free |
 | `MEMRAIN_RANK_KEYWORD_CONFIDENCE` | off (`=1` on) | Ranking flag: when the keyword arm's top hit barely leads its runner-up and the vector arm voted, the keyword and title arms fuse at half weight. Allowlisted. | free |
 | `MEMRAIN_RANK_EXACT_LOOKUP` | off (`=1` on) | Ranking flag: when exactly one page's title or slug equals the whole query, its best chunk moves to rank 1. Allowlisted. | free |
+| `MEMRAIN_RANK_SHADOW` | unset | Shadow ranking: name one ranking flag read after fusion (`METADATA_GATE`, `ENTITY_TRUTH_SOFT`, `EXACT_LOOKUP`) and each search with telemetry that runs its ranking (not a query-cache hit) also ranks its candidates with that flag flipped, recording only daily counts in `search_telemetry_shadow` (shown by `memrain search stats`). Results do not change; other values are ignored. Read at server start. See `docs/eval/BENCH-AND-PROMOTE.md`. | free |
 
 The `MEMRAIN_RANK_*` flags ship off and are promoted one at a time, after a
 paired A/B on the live corpus says the change helps. `memrain eval
 --config-a '{"name":"off"}' --config-b '{"name":"on","env":{"MEMRAIN_RANK_EXACT_LOOKUP":"1"}}'`
 sets the flag for the B side's queries only; see `docs/eval/PREREG-TEMPLATE.md`
-for the sealed run that decides a promotion.
+for the sealed run that decides a promotion. `memrain eval promote <FLAG>` runs
+the acceptance protocol on the search bench in one step; see
+`docs/eval/BENCH-AND-PROMOTE.md`.
 
 `near_symbol` and `walk_depth` are **search-tool parameters**, not env vars —
 pass them per call (`walk_depth` 1–2, capped at 2; inert unless `walk_depth > 0`
