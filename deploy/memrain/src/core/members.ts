@@ -20,6 +20,7 @@
  * Every change writes one member_audit row. The email is personal data: the
  * audit records that one was set, never the address.
  */
+import { effectiveReadSourceIds } from "./auth-info.ts";
 import type { Engine } from "./engine/interface.ts";
 
 export const MEMBER_ID_RE = /^[a-z0-9][a-z0-9-]{1,62}$/;
@@ -424,11 +425,7 @@ export async function memberAccess(engine: Pick<Engine, "query">, bound: readonl
  */
 export function widenReadSources<G extends { sourceId?: string; allowedSources?: string[] }>(grant: G, extra: readonly string[]): G {
   if (extra.length === 0) return grant;
-  const base = grant.allowedSources && grant.allowedSources.length > 0
-    ? grant.allowedSources
-    : grant.sourceId
-      ? [grant.sourceId]
-      : undefined;
+  const base = effectiveReadSourceIds(grant);
   if (base === undefined) return grant;
   return { ...grant, allowedSources: [...new Set([...base, ...extra])] };
 }
