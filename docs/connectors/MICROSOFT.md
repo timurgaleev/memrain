@@ -288,10 +288,13 @@ read whole at most once an hour: its changes can be up to an hour late.
 - **Mail:** Inbox and Sent Items, from 90 days before the first sync on.
   One page per conversation, rendered like a Gmail thread: subject, people,
   dates, the text of each message, and attachment names, types and sizes
-  (never their contents). Junk, Deleted Items, Drafts and other folders are
-  never read. A conversation that leaves both folders, or is deleted, is
-  soft-deleted (restorable until the usual purge), under the mass-delete
-  guard.
+  (never their contents). Only Inbox and Sent Items are watched for changes.
+  A conversation with a message there is read whole, and its messages in
+  Junk, Deleted Items, Drafts or any other folder are dropped before the page
+  is written, so nothing from those folders is stored. (`Mail.Read` itself
+  covers the whole mailbox; Graph has no read permission limited to some folders.) A
+  conversation that leaves both folders, or is deleted, is soft-deleted
+  (restorable until the usual purge), under the mass-delete guard.
 - **Calendar:** one page per event, and one per recurring series with its
   occurrences inside the window, rendered like a Google Calendar event.
   Rooms and equipment are not listed as attendees. An online meeting is noted
