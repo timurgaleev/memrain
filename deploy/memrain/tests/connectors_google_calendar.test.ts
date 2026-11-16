@@ -299,6 +299,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         `SELECT target_slug, type FROM links WHERE source_slug = $1`, [pageSlug("e1single0001@google.com")])).rows;
       expect(links).toEqual([{ target_slug: "people/ana-lee", type: "attended" }]);
       expect(await count(e, `SELECT count(*)::int AS n FROM timeline_events WHERE slug = $1`, [pageSlug("e1single0001@google.com")])).toBe(1);
+      // The runtime's onItemWritten records each event's reply state for the loop sweep.
+      const state = (await e.query<{ kind: string; source_id: string; signals: Record<string, unknown> }>(
+        `SELECT kind, source_id, signals FROM loop_threads WHERE page_slug = $1`, [pageSlug("e1single0001@google.com")])).rows;
+      expect(state).toHaveLength(1);
+      expect(state[0]).toMatchObject({ kind: "calendar", source_id: SOURCE, signals: { kind: "calendar", title: "Roadmap review" } });
 
       // The working-location entry is not a meeting and is not stored.
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE slug = $1`, [pageSlug("wl0001@google.com")])).toBe(0);
@@ -648,6 +653,35 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       // Only the events list was asked for: no link in the text was followed.
       expect(world.calls.map(c => c.url.origin + c.url.pathname)).toEqual(["https://www.googleapis.com/calendar/v3/calendars/primary/events"]);
       expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE source_id = $1`, [SOURCE])).toBeGreaterThan(1);
+    } finally { await db.close(); }
+  });
+
+  it("keeps a live token pasted into an invitation out of the stored reply state", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const account = await connect(db.storage, world);
+      await run(db.storage, world, account.id);
+      world.events = () => ({ status: 200, body: {
+        kind: "calendar#events", nextSyncToken: "after-echo",
+        items: [{
+          id: "echo0001", iCalUID: "echo0001@google.com", status: "confirmed", etag: "\"1\"", summary: `Sync ${GOOGLE_ACCESS_TOKEN}`,
+          organizer: { email: "bob@example.com", displayName: `Bob ${GOOGLE_ACCESS_TOKEN}` },
+          attendees: [
+            { email: "bob@example.com", displayName: `Bob ${GOOGLE_ACCESS_TOKEN}`, responseStatus: "accepted", organizer: true },
+            { email: OWNER, responseStatus: "needsAction", self: true },
+          ],
+          start: { dateTime: "2026-11-18T09:00:00Z" }, end: { dateTime: "2026-11-18T09:30:00Z" },
+        }],
+      } });
+      expect((await run(db.storage, world, account.id)).status).toBe("success");
+      const state = (await e.query<{ signals: unknown }>(
+        `SELECT signals FROM loop_threads WHERE page_slug = $1`, [pageSlug("echo0001@google.com")])).rows;
+      expect(state).toHaveLength(1);
+      const stored = JSON.stringify(state[0]!.signals);
+      expect(stored).toContain("Sync");
+      expect(stored).not.toContain(GOOGLE_ACCESS_TOKEN);
     } finally { await db.close(); }
   });
 

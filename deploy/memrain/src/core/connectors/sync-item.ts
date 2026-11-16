@@ -22,6 +22,8 @@ export function syncItemFromPage(page: RenderedConnectorPage, version: string | 
     body: page.body,
     truth: page.truth,
     dedupeKey: typeof dedupe === "string" ? dedupe : null,
-    ...(opts.enrich ? { enrich: { kind: page.kind, occurredAt: page.occurredAt, participants: page.participants, bulk: page.bulk } } : {}),
+    ...(opts.enrich
+      ? { enrich: { kind: page.kind, occurredAt: page.occurredAt, participants: page.participants, bulk: page.bulk, ...(page.loop ? { loop: page.loop } : {}) } }
+      : {}),
   };
 }

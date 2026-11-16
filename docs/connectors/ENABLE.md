@@ -260,4 +260,5 @@ data is a separate, explicit action.
 - [KEY.md](./KEY.md): create, back up and rotate the connector key.
 - [GOOGLE.md](./GOOGLE.md): Google Cloud project and OAuth client for Calendar.
 - [FIREFLIES.md](./FIREFLIES.md): Fireflies API key.
+- [LOOPS.md](./LOOPS.md): who is waiting on whom (`memrain waiting`, `loops_sweep`).
 - [CONFIGURATION.md](../CONFIGURATION.md): every connector and daemon setting.

@@ -126,6 +126,7 @@ import { recallFact, forgetFact } from "../core/facts-recall.ts";
 import { brainIdentity } from "../core/identity.ts";
 import { purgeDeletedPages } from "../core/pages-purge.ts";
 import { daemonsStatus } from "../core/daemons/status.ts";
+import { isLoopType, listLoops, LOOPS_MAX_SYNC_AGE_HOURS as WAITING_MAX_SYNC_AGE_HOURS, syncFreshness, type LoopStatus } from "../core/loops/store.ts";
 import { queryRefine } from "../core/search/query-refine.ts";
 import { codeCallers, codeCallees, codeDefs, codeRefs } from "../core/code-graph.ts";
 import { runRecursiveWalk } from "../core/code-walk.ts";
@@ -814,6 +815,8 @@ async function dispatchToolInner(
         return await callJobsLogs(storage, args, redact);
       case "daemons_status":
         return jsonResult(await daemonsStatus(storage.engine()));
+      case "loops_list":
+        return await callLoopsList(storage, args, readSources);
       case "submit_agent": {
         // Loaded on use: the agent modules import dispatchTool themselves, so a
         // static import here would close a module cycle.
@@ -4694,6 +4697,39 @@ async function callGetJobProgress(
   const progress = await getJobProgress(queue, args["id"]);
   if (!progress) return errResult(`get_job_progress: ${args["id"]} not found`);
   return jsonResult({ ok: true, ...progress });
+}
+
+/**
+ * Open loops in the caller's sources. Summaries carry a mail subject and a
+ * sender's name, so each is framed as outside text; the newest sync age is
+ * reported so a stale list never passes for a clean one.
+ */
+async function callLoopsList(
+  storage: Storage,
+  args: Record<string, unknown>,
+  readSources?: string[],
+): Promise<ToolCallResult> {
+  const engine = storage.engine();
+  const status = typeof args["status"] === "string" ? args["status"] as LoopStatus | "all" : "open";
+  const loops = await listLoops(engine, readSources, {
+    status,
+    ...(isLoopType(args["type"]) ? { loopType: args["type"] } : {}),
+    ...(typeof args["limit"] === "number" ? { limit: Math.min(args["limit"], 200) } : {}),
+  });
+  const now = new Date();
+  const fresh = await syncFreshness(engine, readSources, now, WAITING_MAX_SYNC_AGE_HOURS);
+  const stale = fresh.newest === null || now.getTime() - Date.parse(fresh.newest) >= WAITING_MAX_SYNC_AGE_HOURS * 3_600_000;
+  return jsonResult({
+    ok: true,
+    stale,
+    newest_sync: fresh.newest,
+    // Accounts with no clean sync in the window: their loops may be missing even when another account is fresh.
+    accounts_behind: fresh.stale.length,
+    ...(stale
+      ? { warning: `No mail, chat or calendar sync in the last ${WAITING_MAX_SYNC_AGE_HOURS} h: this list may be missing loops.` }
+      : fresh.stale.length > 0 ? { warning: `${fresh.stale.length} account(s) not synced in ${WAITING_MAX_SYNC_AGE_HOURS} h: their loops may be missing.` } : {}),
+    loops: loops.map(({ counterparty: _counterparty, ...l }) => ({ ...l, summary: frameExternal(l.summary), trust: "external" })),
+  });
 }
 
 async function callSourcesList(

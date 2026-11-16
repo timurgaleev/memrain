@@ -150,7 +150,7 @@ export const KNOWN_FLAGS: ReadonlySet<string> = new Set([
  */
 export const JSON_GUARDED_COMMANDS: ReadonlySet<string> = new Set([
   "call", "connectors", "daemons", "doctor", "engine", "eval", "export", "models",
-  "pages", "search", "secrets", "sources", "spend", "status", "version",
+  "pages", "search", "secrets", "sources", "spend", "status", "version", "waiting",
 ]);
 
 /** Answered by every command, so no command lists it. */
@@ -349,6 +349,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ],
   ["connectors", new Set(["--dry-run", "--full", "--json", "--new-file", "--old-file", "--source", "--token-file"])],
   ["daemons", new Set(["--json", "--reason", "--source"])],
+  ["waiting", new Set(["--json", "--limit", "--source", "--stale", "--type"])],
   ["version", new Set(["--json"])],
   ["help", new Set<string>()],
 ]);

@@ -105,6 +105,12 @@ async function seedMatrixExtras(): Promise<void> {
     // Token callers read world facts only; give each tenant one on the shared entity.
     await addFact(storage, { entity_slug: ENTITY_SLUG, fact: `${tag}_FACT_world`, source_id: who, visibility: "world" });
     await addFact(storage, { entity_slug: ENTITY_SLUG, fact: `${KEYWORD} ${tag}_QUERY_FACT`, source_id: who, visibility: "world" });
+    // An open loop on each tenant's page, as the loops sweep would leave it.
+    await storage.engine().query(
+      `INSERT INTO open_loops (source_id, dedup_key, loop_type, detector, kind, page_slug, summary, opened_at, last_activity_at)
+       VALUES ($1, 'matrix', 'unanswered_inbound', 'deterministic', 'mail', $2, $3, NOW(), NOW())`,
+      [who, slug, `Reply owed: "${tag}_LOOP_subject"`],
+    );
   }
   await call("chronicle_backfill", {});
 }
