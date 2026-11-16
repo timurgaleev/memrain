@@ -232,16 +232,63 @@ export async function resolveClient(deps: ConnectDeps, kek: Kek, provider: strin
   return { clientId, clientSecret, tenant };
 }
 
+/** An OAuth app as its accounts renew with it: the client id and the tenant its endpoints name. Never the secret. */
+export interface RenewalApp {
+  clientId: string;
+  /** As configured; null is the provider's default. */
+  tenant: string | null;
+}
+
+/** The environment's app (`MEMRAIN_<PROVIDER>_OAUTH_CLIENT_ID`, `_SECRET`, `_TENANT`), or null when its id or secret is unset. */
+export function environmentApp(env: NodeJS.ProcessEnv | undefined, provider: string): RenewalApp | null {
+  const vars = env ?? process.env;
+  const key = provider.toUpperCase();
+  const clientId = vars[`MEMRAIN_${key}_OAUTH_CLIENT_ID`]?.trim() ?? "";
+  const secret = vars[`MEMRAIN_${key}_OAUTH_CLIENT_SECRET`]?.trim() ?? "";
+  if (clientId === "" || secret === "") return null;
+  const tenant = vars[`MEMRAIN_${key}_OAUTH_TENANT`]?.trim() ?? "";
+  return { clientId, tenant: tenant === "" ? null : tenant };
+}
+
 /**
- * The client id this provider's accounts renew their tokens with (resolveClient's
+ * The app this provider's accounts renew their tokens with (resolveClient's
  * choice: the stored app, else the environment's), read without opening the
  * secret; null when neither is set.
  */
-export async function currentClientId(deps: Pick<ConnectDeps, "engine" | "env">, provider: string): Promise<string | null> {
-  const r = await deps.engine.query<{ client_id: string }>(`SELECT client_id FROM connector_oauth_clients WHERE provider = $1`, [provider]);
-  if (r.rows[0]) return r.rows[0].client_id;
-  const env = (deps.env ?? process.env)[`MEMRAIN_${provider.toUpperCase()}_OAUTH_CLIENT_ID`]?.trim() ?? "";
-  return env === "" ? null : env;
+export async function renewalApp(deps: Pick<ConnectDeps, "engine" | "env">, provider: string): Promise<RenewalApp | null> {
+  return (await storedApp(deps.engine, provider)) ?? environmentApp(deps.env, provider);
+}
+
+/** The bring-your-own app saved for a provider, without its secret; null when none is. */
+export async function storedApp(engine: Engine, provider: string): Promise<RenewalApp | null> {
+  const r = await engine.query<{ client_id: string; tenant: string | null }>(
+    `SELECT client_id, tenant FROM connector_oauth_clients WHERE provider = $1`,
+    [provider],
+  );
+  return r.rows[0] ? { clientId: r.rows[0].client_id, tenant: r.rows[0].tenant ?? null } : null;
+}
+
+/**
+ * What going from one app to another does to accounts that renew with the
+ * first: `app` when another app (or none) takes over, since a refresh token
+ * renews only with the app that issued it; `tenant` when the same app names
+ * another tenant, since its endpoints then turn away accounts of another kind
+ * (personal ones under `organizations`, work ones under `consumers`) or of
+ * another organization; null when nothing changes for them. A tenant left
+ * out is the provider's default, so naming the default is no change.
+ */
+export function renewalChange(provider: ConnectorProvider, before: RenewalApp | null, after: RenewalApp | null): "app" | "tenant" | null {
+  if (before === null) return null;
+  if (after === null || after.clientId !== before.clientId) return "app";
+  if (!provider.tenant) return null;
+  return effectiveTenant(provider, before) === effectiveTenant(provider, after) ? null : "tenant";
+}
+
+/** The tenant an app's endpoints name: its own, else the provider's default, in canonical form. */
+export function effectiveTenant(provider: ConnectorProvider, app: RenewalApp): string | null {
+  if (!provider.tenant) return null;
+  const raw = app.tenant ?? provider.tenant.default;
+  return normalizeTenant(raw) ?? raw.trim().toLowerCase();
 }
 
 /**
@@ -260,12 +307,14 @@ export async function accountsRenewingWith(engine: Engine, provider: string): Pr
 
 /**
  * Park a provider's active accounts for a reconnect once the app they renew
- * with was replaced: the new app cannot renew their tokens, and a sync would
+ * with was replaced, removed or pointed at another tenant: their tokens may no
+ * longer renew, and a sync would
  * otherwise run on until the current access token expires and then fail
  * with whatever the provider answers. Each gets the needs_reconnect notice a
  * reconnect resolves. Returns how many were parked.
  */
-export async function parkAccountsForReconnect(engine: Engine, provider: string): Promise<number> {
+export async function parkAccountsForReconnect(engine: Engine, provider: string, change: "app" | "tenant" | "remove" = "app"): Promise<number> {
+  const what = { app: "was replaced", tenant: "names another tenant", remove: "was removed" }[change];
   // scope: operator-only replacing a provider's app is an operator action on all of its accounts
   const r = await engine.query<{ id: string; source_id: string }>(
     `SELECT id, source_id FROM connector_accounts WHERE provider = $1 AND status = 'active'`,
@@ -273,9 +322,9 @@ export async function parkAccountsForReconnect(engine: Engine, provider: string)
   );
   let parked = 0;
   for (const a of r.rows) {
-    if (!(await markNeedsReconnect(engine, a.id, "the OAuth app was replaced; reconnect the account"))) continue;
+    if (!(await markNeedsReconnect(engine, a.id, `the OAuth app ${what}; reconnect the account`))) continue;
     await openNotice(engine, a.id, "needs_reconnect",
-      `${provider} account for source '${a.source_id}' needs a reconnect: its OAuth app was replaced, so sync is paused; its data and cursors are kept`);
+      `${provider} account for source '${a.source_id}' needs a reconnect: its OAuth app ${what}, so sync is paused; its data and cursors are kept`);
     parked++;
   }
   return parked;

@@ -509,6 +509,66 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("ask before another tenant cuts accounts off the app they renew with, and park them once it is confirmed", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "mail/" });
+      const d = deps(db.storage, { providers: builtinProviders() });
+      const save = (body: Record<string, unknown>) => call(post("/admin/api/connectors/microsoft/client", body), d);
+      expect((await save({ client_id: "app-a", client_secret: "secret-1", tenant: "common" })).status).toBe(200);
+      const account = await createAccount(e, { sourceId: "inbox", provider: "microsoft", services: ["outlook_mail"], principalRef: "admin:operator", accountLabel: OWNER });
+
+      // The provider's default tenant is common, so naming it or leaving it out is the same app: a rotation.
+      expect((await save({ client_id: "app-a", client_secret: "secret-2" })).status).toBe(200);
+      expect((await save({ client_id: "app-a", client_secret: "secret-3", tenant: "Common" })).status).toBe(200);
+
+      // organizations shuts personal accounts out, consumers work accounts, a directory every other organization.
+      for (const tenant of ["organizations", "consumers", "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "contoso.onmicrosoft.com"]) {
+        const refused = await save({ client_id: "app-a", client_secret: "secret-3", tenant });
+        expect(refused.status).toBe(409);
+        expect(await refused.json()).toMatchObject({ error: "client_replace_requires_confirm", change: "tenant", accounts: 1, tenant_from: "common", tenant_to: tenant.toLowerCase() });
+        expect(await getOAuthClient(e, kek, "microsoft")).toMatchObject({ clientId: "app-a", clientSecret: "secret-3", tenant: "common" });
+        expect(await getAccount(e, account.id)).toMatchObject({ status: "active" });
+      }
+
+      const changed = await save({ client_id: "app-a", client_secret: "secret-3", tenant: "organizations", confirm_replace: true });
+      expect(changed.status).toBe(200);
+      expect(await getOAuthClient(e, kek, "microsoft")).toMatchObject({ clientId: "app-a", tenant: "organizations" });
+      expect(await getAccount(e, account.id)).toMatchObject({ status: "needs_reconnect" });
+      expect((await e.query("SELECT kind FROM connector_notices WHERE account_id = $1 AND resolved_at IS NULL", [account.id])).rows)
+        .toEqual([{ kind: "needs_reconnect" }]);
+    } finally { await db.close(); }
+  });
+
+  it("ask before removing the app accounts renew with, unless the server's own app is the same one", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "mail/" });
+      const env = { MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID: "env-app", MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET: "env-secret" };
+      const d = deps(db.storage, { providers: builtinProviders(), env });
+      const remove = (body: Record<string, unknown> = {}) => call(post("/admin/api/connectors/microsoft/client/delete", body), d);
+      await setOAuthClient(e, kek, "microsoft", "own-app", "own-secret", "common");
+      const account = await createAccount(e, { sourceId: "inbox", provider: "microsoft", services: ["outlook_mail"], principalRef: "admin:operator", accountLabel: OWNER });
+
+      const refused = await remove();
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ error: "client_replace_requires_confirm", change: "remove", accounts: 1 });
+      expect(await getOAuthClient(e, kek, "microsoft")).toMatchObject({ clientId: "own-app" });
+
+      expect(await (await remove({ confirm_replace: true })).json()).toEqual({ ok: true, deleted: true });
+      expect(await getOAuthClient(e, kek, "microsoft")).toBeNull();
+      expect(await getAccount(e, account.id)).toMatchObject({ status: "needs_reconnect" });
+
+      // The stored app is the server's own app under the same tenant: the accounts keep renewing.
+      await setAccountStatus(e, account.id, "active");
+      await setOAuthClient(e, kek, "microsoft", "env-app", "rotated", null);
+      expect(await (await remove()).json()).toEqual({ ok: true, deleted: true });
+      expect(await getAccount(e, account.id)).toMatchObject({ status: "active" });
+    } finally { await db.close(); }
+  });
+
   it("ask before an own app replaces the environment's app that connected accounts renew with", async () => {
     const db = await open();
     try {

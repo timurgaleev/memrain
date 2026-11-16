@@ -8,6 +8,7 @@ import {
   providerLabel,
   serviceLabel,
   sourcesFor,
+  tenantChangeEffect,
   tenantChoice,
   tenantFromForm,
   toggleService,
@@ -151,6 +152,7 @@ function TenantFields({ choice, directory, invalid, onChoice, onDirectory }: {
         <select id={whoField} value={choice} onChange={(e) => onChoice(e.target.value as TenantChoice)}>
           {TENANT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
+        <p className="hint">It must match the app's supported account types. To read a personal and a work account with one app, choose common.</p>
       </div>
       {choice === "tenant" && (
         <div className="field">
@@ -176,6 +178,24 @@ function TenantFields({ choice, directory, invalid, onChoice, onDirectory }: {
   );
 }
 
+/** What the server said a confirmed app change would strand: how many accounts, and for a tenant change, from where to where. */
+interface ReplaceAsk {
+  accounts: number;
+  change: "app" | "tenant" | "remove";
+  from: string;
+  to: string;
+}
+
+function replaceAsk(body: Record<string, unknown>): ReplaceAsk {
+  const text = (v: unknown) => (typeof v === "string" ? v : "");
+  return {
+    accounts: typeof body.accounts === "number" ? body.accounts : 1,
+    change: body.change === "tenant" || body.change === "remove" ? body.change : "app",
+    from: text(body.tenant_from),
+    to: text(body.tenant_to),
+  };
+}
+
 /** Bring-your-own OAuth app: the callback to register, then the app's id and secret. The secret is never shown again. */
 function OwnAppSettings({ provider: p, client, onDone, onError }: {
   provider: ConnectorProviderView;
@@ -188,7 +208,7 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [askRemove, setAskRemove] = useState(false);
-  const [askReplace, setAskReplace] = useState<number | null>(null);
+  const [askReplace, setAskReplace] = useState<ReplaceAsk | null>(null);
   const idField = useId();
   const secretField = useId();
   const tenants = p.tenant_default !== null;
@@ -208,9 +228,9 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
         ? `Saved your ${name} app. Reconnect every ${name} account so it keeps syncing.`
         : `Saved your ${name} app. New connections and renewals use it.`);
     } catch (e) {
-      // Another app id while accounts depend on the current one: say what it costs, then ask.
+      // Another app id or tenant while accounts depend on the current one: say what it costs, then ask.
       if (e instanceof ApiError && e.code === "client_replace_requires_confirm") {
-        setAskReplace(typeof e.body.accounts === "number" ? e.body.accounts : 1);
+        setAskReplace(replaceAsk(e.body));
       } else {
         onError(e);
       }
@@ -223,7 +243,8 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
     setAskRemove(false);
     setBusy(true);
     try {
-      await automationApi.deleteClient(p.id);
+      // The dialog is the confirmation the server asks for when accounts renew with the app.
+      await automationApi.deleteClient(p.id, true);
       onDone(`Removed your ${name} app.`);
     } catch (e) {
       onError(e);
@@ -286,10 +307,23 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
           </button>
         </form>
       </div>
-      {askReplace !== null && (
+      {askReplace !== null && askReplace.change === "tenant" && (
+        <Dialog title={`Change who can sign in to your ${name} app?`} onClose={() => setAskReplace(null)}>
+          <p className="dialog-text">
+            {askReplace.accounts === 1 ? "One connected account renews" : `${askReplace.accounts} connected accounts renew`} its access
+            through <span className="mono">{askReplace.from}</span>. After the change every connected {name} account stops syncing
+            until you choose <strong>Reconnect</strong> on its row. {tenantChangeEffect(askReplace.to)}
+          </p>
+          <div className="dialog-actions">
+            <button className="btn btn-secondary" onClick={() => setAskReplace(null)}>Cancel</button>
+            <button className="btn btn-danger" disabled={busy} onClick={() => void save(true)}>Change tenant</button>
+          </div>
+        </Dialog>
+      )}
+      {askReplace !== null && askReplace.change !== "tenant" && (
         <Dialog title={`Replace your ${name} app?`} onClose={() => setAskReplace(null)}>
           <p className="dialog-text">
-            {askReplace === 1 ? "One connected account renews" : `${askReplace} connected accounts renew`} its access with
+            {askReplace.accounts === 1 ? "One connected account renews" : `${askReplace.accounts} connected accounts renew`} its access with
             {client ? <> <span className="mono">{client.client_id}</span></> : " the server's app"}. Access granted to one app cannot be
             renewed by another, so after the replacement every connected {name} account stops syncing until you choose
             {" "}<strong>Reconnect</strong> on its row. To renew an expiring secret, keep the same client ID: that needs no reconnect.
@@ -304,7 +338,8 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
         <Dialog title={`Remove your ${name} app?`} onClose={() => setAskRemove(false)}>
           <p className="dialog-text">
             <span className="mono">{client.client_id}</span> and its secret are forgotten. New connections fall back to the
-            server's app, if one is configured; connected accounts need reconnecting once their access has to be renewed.
+            server's app, if one is configured. Connected {name} accounts that renew with this app stop syncing until you
+            choose <strong>Reconnect</strong> on their rows.
           </p>
           <div className="dialog-actions">
             <button className="btn btn-secondary" onClick={() => setAskRemove(false)}>Cancel</button>

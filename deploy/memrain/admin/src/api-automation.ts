@@ -35,7 +35,9 @@ export const automationApi = {
     call<{ ok: true }>(provider(providerId, "client"), post({
       client_id: clientId, client_secret: clientSecret, ...(tenant === undefined ? {} : { tenant }), ...(confirmReplace ? { confirm_replace: true } : {}),
     })),
-  deleteClient: (providerId: string) => call<{ ok: true; deleted: boolean }>(provider(providerId, "client/delete"), post()),
+  /** `confirmReplace` removes an app connected accounts renew with; they must reconnect. */
+  deleteClient: (providerId: string, confirmReplace = false) =>
+    call<{ ok: true; deleted: boolean }>(provider(providerId, "client/delete"), post(confirmReplace ? { confirm_replace: true } : {})),
   saveApiKey: (providerId: string, sourceId: string, services: string[], apiKey: string) =>
     call<{ ok: true }>(provider(providerId, "key"), post({ source_id: sourceId, services, api_key: apiKey })),
   setSync: (id: string, on: boolean) => call<{ ok: true; enabled: boolean }>(account(id, on ? "enable" : "disable"), post()),

@@ -158,6 +158,20 @@ export function tenantFromForm(choice: TenantChoice, typed: string): string | nu
 }
 
 /**
+ * Who can no longer sign in once a Microsoft app names `to` as its tenant:
+ * an account that cannot sign in there can neither renew nor reconnect.
+ */
+export function tenantChangeEffect(to: string): string {
+  const mixed = " To read a personal and a work account with one app, keep Work, school and personal accounts (common).";
+  if (to === "common") return "Personal, work and school accounts can all sign in through common.";
+  if (to === "organizations") {
+    return "Personal Microsoft accounts (outlook.com, hotmail.com, live.com) cannot sign in through organizations: they stop syncing and cannot reconnect." + mixed;
+  }
+  if (to === "consumers") return "Work and school accounts cannot sign in through consumers: they stop syncing and cannot reconnect." + mixed;
+  return `Only accounts of the directory ${to} can sign in: personal accounts and accounts of any other organization stop syncing and cannot reconnect.${mixed}`;
+}
+
+/**
  * What a disconnect cannot do for the owner: withdraw a consent the provider
  * gives the app no way to withdraw. Null when the disconnect revokes it.
  */

@@ -25,6 +25,7 @@ import {
   safeAuthorizeUrl,
   serviceLabel,
   sourcesFor,
+  tenantChangeEffect,
   tenantChoice,
   tenantFromForm,
   toggleService,
@@ -138,6 +139,20 @@ describe("Microsoft service labels and the tenant field", () => {
     expect(tenantFromForm("tenant", " Contoso.OnMicrosoft.com ")).toBe("contoso.onmicrosoft.com");
     expect(tenantFromForm("tenant", "0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D")).toBe("0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
     for (const bad of ["", "contoso", "a/b.example", "x.example?y=1"]) expect(tenantFromForm("tenant", bad)).toBeNull();
+  });
+
+  it("says which accounts a new tenant turns away, and points mixed accounts at common", () => {
+    const orgs = tenantChangeEffect("organizations");
+    expect(orgs).toContain("Personal Microsoft accounts");
+    expect(orgs).toContain("cannot reconnect");
+    expect(orgs).toContain("keep Work, school and personal accounts (common)");
+    expect(tenantChangeEffect("consumers")).toContain("Work and school accounts");
+    const one = tenantChangeEffect("contoso.onmicrosoft.com");
+    expect(one).toContain("contoso.onmicrosoft.com");
+    expect(one).toContain("personal accounts and accounts of any other organization");
+    const common = tenantChangeEffect("common");
+    expect(common).toContain("can all sign in");
+    expect(common).not.toContain("keep Work");
   });
 
   it("tells the owner where to remove a consent the provider cannot withdraw for us", () => {

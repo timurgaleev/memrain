@@ -57,13 +57,18 @@ import {
   completeConnect,
   ConnectError,
   connectorCallbackUri,
-  currentClientId,
   disconnectAccount,
+  effectiveTenant,
+  environmentApp,
   parkAccountsForReconnect,
+  renewalApp,
+  renewalChange,
   startConnect,
+  storedApp,
   type ConnectDeps,
+  type RenewalApp,
 } from "../core/connectors/oauth-connect.ts";
-import type { ProviderRegistry, ProviderService } from "../core/connectors/providers.ts";
+import type { ConnectorProvider, ProviderRegistry, ProviderService } from "../core/connectors/providers.ts";
 import { builtinProviders, normalizeTenant } from "../core/connectors/providers.ts";
 import { connectorsStatus, loadKek, VaultError, type ConnectorsStatus, type Kek } from "../core/connectors/vault.ts";
 
@@ -217,8 +222,25 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
   const clientDelete = /^\/admin\/api\/connectors\/([^/]+)\/client\/delete$/.exec(p);
   if (clientDelete && req.method === "POST") {
     const provider = clientDelete[1]!;
-    if (!PROVIDER_RE.test(provider) || !deps.providers.get(provider)) return json({ error: "unknown_provider" }, 400);
-    return json({ ok: true, deleted: await deleteOAuthClient(deps.storage.engine(), provider) });
+    const pr = PROVIDER_RE.test(provider) ? deps.providers.get(provider) : null;
+    if (!pr) return json({ error: "unknown_provider" }, 400);
+    const body = await readBody(req) ?? {};
+    // Without the stored app, accounts renew with the environment's app, if any:
+    // unless that is the same app under the same tenant, they are stranded too.
+    const engine = deps.storage.engine();
+    const before = await storedApp(engine, provider);
+    const after = environmentApp(deps.env, provider);
+    const change = renewalChange(pr, before, after);
+    if (change !== null && body.confirm_replace !== true) {
+      const refused = await confirmRenewalChange(engine, pr, "remove", before!, after);
+      if (refused) return refused;
+    }
+    const deleted = await engine.transaction(async (tx) => {
+      const gone = await deleteOAuthClient(tx, provider);
+      if (gone && change !== null) await parkAccountsForReconnect(tx, provider, "remove");
+      return gone;
+    });
+    return json({ ok: true, deleted });
   }
 
   const m = /^\/admin\/api\/connectors\/([^/]+)\/(start|complete|client|key)$/.exec(p);
@@ -244,28 +266,24 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
     if (rawTenant !== null && !pr.tenant) return json({ error: "tenant_unsupported" }, 400);
     const tenant = typeof rawTenant === "string" ? normalizeTenant(rawTenant) : null;
     if (rawTenant !== null && tenant === null) return json({ error: "invalid_tenant" }, 400);
-    // A refresh token renews only with the app that issued it: another app id
-    // strands every connected account until it reconnects, so that takes a
-    // confirmation. A new secret for the same app is a rotation and needs none.
+    // A refresh token renews only with the app that issued it, and only through
+    // a tenant its account may sign in to: another app id, or another tenant,
+    // strands connected accounts until they reconnect, so either takes a
+    // confirmation. A new secret for the same app and tenant is a rotation.
     const engine = deps.storage.engine();
-    const current = await currentClientId(connectDeps(deps), provider);
-    const replacing = current !== null && current !== body.client_id;
-    if (replacing && body.confirm_replace !== true) {
-      const accounts = await accountsRenewingWith(engine, provider);
-      if (accounts > 0) {
-        return json({
-          error: "client_replace_requires_confirm",
-          accounts,
-          message: `${accounts} connected account(s) renew their access with the current app. Another app cannot renew it: each must reconnect after the replacement. Send confirm_replace: true to replace it anyway.`,
-        }, 409);
-      }
+    const before = await renewalApp(connectDeps(deps), provider);
+    const after = { clientId: body.client_id, tenant };
+    const change = renewalChange(pr, before, after);
+    if (change !== null && body.confirm_replace !== true) {
+      const refused = await confirmRenewalChange(engine, pr, change, before!, after);
+      if (refused) return refused;
     }
     const clientId = body.client_id;
     const clientSecret = body.client_secret;
     try {
       await engine.transaction(async (tx) => {
         await setOAuthClient(tx, deps.kek()!, provider, clientId, clientSecret, tenant);
-        if (replacing) await parkAccountsForReconnect(tx, provider);
+        if (change !== null) await parkAccountsForReconnect(tx, provider, change);
       });
     } catch {
       return json({ error: "invalid client" }, 400);
@@ -291,6 +309,35 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
     if (e instanceof ConnectError) return e.code === "connectors_disabled" ? disabled(deps) : json({ error: e.code }, 400);
     throw e;
   }
+}
+
+/**
+ * The 409 that asks the operator to confirm an app change that strands the
+ * provider's connected accounts, or null when no account renews with the
+ * current app. `change` says what strands them, and for a tenant change which
+ * tenant they renew through now and which one they would.
+ */
+async function confirmRenewalChange(
+  engine: Engine,
+  provider: ConnectorProvider,
+  change: "app" | "tenant" | "remove",
+  before: RenewalApp,
+  after: RenewalApp | null,
+): Promise<Response | null> {
+  const accounts = await accountsRenewingWith(engine, provider.id);
+  if (accounts === 0) return null;
+  const why = {
+    app: "Another app cannot renew it: each must reconnect after the replacement.",
+    tenant: `Through tenant '${after === null ? "" : effectiveTenant(provider, after)}' an account of another kind or organization can neither renew nor reconnect, and every account must reconnect once.`,
+    remove: "Without this app they cannot renew it: each must reconnect, with the server's app if one is configured.",
+  }[change];
+  return json({
+    error: "client_replace_requires_confirm",
+    change,
+    accounts,
+    ...(change === "tenant" ? { tenant_from: effectiveTenant(provider, before), tenant_to: effectiveTenant(provider, after!) } : {}),
+    message: `${accounts} connected account(s) renew their access with the current app. ${why} Send confirm_replace: true to go ahead anyway.`,
+  }, 409);
 }
 
 /** Save a provider API key: verified with the provider, sealed, never echoed. */
