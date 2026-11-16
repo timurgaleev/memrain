@@ -63,11 +63,19 @@ export interface MailMessage {
   listUnsubscribe: boolean;
   /** Provider categories or labels, lowercased (promotions, social, ...). */
   categories: string[];
+  /** RFC 3834 Auto-Submitted said the message was machine-sent (an auto-reply, a notification). */
+  autoSubmitted?: boolean;
+  /** The Precedence header, lowercased (`bulk`, `list`, `junk` mark mass mail). */
+  precedence?: string | null;
+  /** The message carried a List-Id header (a mailing list). */
+  listId?: boolean;
 }
 
 export interface MailThread {
   threadId: string;
   messages: MailMessage[];
+  /** The provider's labels on the thread, as it names them; recorded in the page's truth. */
+  labels?: string[];
 }
 
 export interface CalendarAttendee extends Person {

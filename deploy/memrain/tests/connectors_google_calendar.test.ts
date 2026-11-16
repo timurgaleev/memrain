@@ -79,7 +79,7 @@ describe("google provider", () => {
     expect(google!.tokenUrl).toBe("https://oauth2.googleapis.com/token");
     expect(google!.revokeUrl).toBe("https://oauth2.googleapis.com/revoke");
     expect(google!.baseScopes).toEqual(["openid", "email"]);
-    expect(Object.keys(google!.services)).toEqual(["calendar"]);
+    expect(Object.keys(google!.services)).toEqual(["calendar", "gmail"]);
     expect(google!.services.calendar!.scopes).toEqual([GOOGLE_CALENDAR_READONLY]);
     expect(google!.services.calendar!.sourceKinds).toEqual(["calendar"]);
     expect(google!.sync?.apiOrigin).toBe("https://www.googleapis.com");

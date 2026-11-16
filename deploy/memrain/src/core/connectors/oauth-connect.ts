@@ -12,9 +12,10 @@
  * provider — that stops an attacker from completing a connect with their own
  * code in the victim's session, which would pour the attacker's mailbox into
  * the victim's brain. The code is exchanged server to server, the granted
- * scopes must equal the requested read-only set exactly (anything else is
- * refused and the token revoked), and the account is stored disabled with its
- * tokens sealed. Nothing syncs until the owner enables it.
+ * scopes must equal the requested read-only set exactly, or, for a request
+ * widened by companion services, exactly the account's own services' scopes
+ * (anything else is refused and the token revoked), and the account is stored
+ * disabled with its tokens sealed. Nothing syncs until the owner enables it.
  *
  * The redirect URI comes from configuration, never from the request. Errors
  * carry a code and a fixed message; provider text, codes and tokens are never
@@ -167,6 +168,25 @@ function requestedScopes(provider: ConnectorProvider, services: readonly string[
   return out;
 }
 
+/**
+ * For a provider that combines grants: the services, other than `services`,
+ * whose every scope a stored credential of this provider holds. A disconnect
+ * deletes the credential (and revoking it ends the combined grant at the
+ * provider), so only live grants count. In provider order, so the request is
+ * stable.
+ */
+async function heldCompanionServices(engine: Engine, provider: ConnectorProvider, services: readonly string[]): Promise<string[]> {
+  if (provider.combinedGrants !== true) return [];
+  // scope: operator-only the connect flow reads which scopes this provider's credentials hold, never their contents
+  const r = await engine.query<{ scopes: string[] | null }>(
+    `SELECT c.scopes FROM connector_credentials c JOIN connector_accounts a ON a.id = c.account_id WHERE a.provider = $1`,
+    [provider.id],
+  );
+  const held = new Set(r.rows.flatMap((row) => row.scopes ?? []));
+  return Object.keys(provider.services)
+    .filter((s) => !services.includes(s) && provider.services[s]!.scopes.every((scope) => held.has(scope)));
+}
+
 /** The provider's OAuth client: the stored bring-your-own one, else the environment's. */
 export async function resolveClient(deps: ConnectDeps, kek: Kek, provider: string): Promise<{ clientId: string; clientSecret: string }> {
   const stored = await getOAuthClient(deps.engine, kek, provider);
@@ -203,6 +223,7 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
   if (!source) throw new ConnectError("source_not_found");
   if (services.some((s) => !provider.services[s]!.sourceKinds.includes(source.kind))) throw new ConnectError("source_kind");
   const client = await resolveClient(deps, kek, provider.id);
+  const companions = await heldCompanionServices(deps.engine, provider, services);
 
   const now = (deps.now ?? Date.now)();
   const state = randomBytes(32).toString("base64url");
@@ -210,7 +231,7 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   const stateHash = sha256Hex(state);
   const sealed = seal(kek, verifier, oauthStateAad(stateHash, provider.id, kek.id));
-  const scopes = requestedScopes(provider, services);
+  const scopes = requestedScopes(provider, Object.keys(provider.services).filter((s) => services.includes(s) || companions.includes(s)));
   const expiresAt = new Date(now + OAUTH_STATE_TTL_MS).toISOString();
 
   await deps.engine.query(`DELETE FROM connector_oauth_states WHERE expires_at < $1`, [new Date(now - STATE_RETENTION_MS).toISOString()]);
@@ -375,7 +396,12 @@ export async function completeConnect(
   const granted = parseScopes(provider, body.scope, requested);
   const extra = granted.filter((s) => !requested.includes(s)).sort();
   const missing = requested.filter((s) => !granted.includes(s)).sort();
-  if (extra.length > 0 || missing.length > 0) {
+  // A request widened by companion services (combinedGrants) may also come
+  // back as exactly what the account's own services need: another Google
+  // user, whose calendar is not connected here, unticks the calendar box.
+  const own = requestedScopes(provider, (st.services ?? []).filter((s) => Object.hasOwn(provider.services, s)));
+  const exactlyOwn = granted.length === own.length && own.every((s) => granted.includes(s));
+  if ((extra.length > 0 || missing.length > 0) && !exactlyOwn) {
     const revoked = await revokeToken(provider, fetch, refreshToken ?? accessToken, client);
     throw new ConnectError("scope_mismatch", { extra, missing, revoked });
   }

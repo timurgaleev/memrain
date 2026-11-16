@@ -28,6 +28,10 @@ export interface ProviderService {
   scopes: readonly string[];
   /** Source kinds an account of this service may write into. */
   sourceKinds: readonly SourceKind[];
+  /** The https origin this service's API answers on, when it is not the provider's `sync.apiOrigin`. */
+  apiOrigin?: string;
+  /** Minimum gap between two requests of one account to this service, in ms (the client's default otherwise). */
+  minSpacingMs?: number;
 }
 
 export interface RevokeContext {
@@ -55,6 +59,13 @@ export interface ConnectorProvider {
   services: Readonly<Record<string, ProviderService>>;
   /** Extra query parameters on the authorization URL. */
   authorizeParams?: Readonly<Record<string, string>>;
+  /**
+   * The provider folds every scope a user granted this OAuth client into each
+   * new grant of it (Google's combined authorization). A connect then also
+   * asks for the services the brain's other accounts of this provider still
+   * hold, so the grant equals the request and the exact-scope check holds.
+   */
+  combinedGrants?: boolean;
   /** Separator of the token response's `scope` field (a space by default). */
   scopeSeparator?: string;
   /** Map a granted scope onto the spelling that was requested. */
@@ -112,7 +123,11 @@ export class ProviderRegistry {
     if (provider.sync !== undefined) assertHttps(provider.sync.apiOrigin, "sync.apiOrigin", provider.id);
     const services = Object.keys(provider.services);
     if (services.length === 0) throw new Error(`provider ${provider.id} declares no services`);
-    for (const s of services) assertConnectorName(s, "service");
+    for (const s of services) {
+      assertConnectorName(s, "service");
+      const origin = provider.services[s]!.apiOrigin;
+      if (origin !== undefined) assertHttps(origin, `services.${s}.apiOrigin`, provider.id);
+    }
     this.providers.set(provider.id, provider);
   }
 

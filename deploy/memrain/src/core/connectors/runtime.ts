@@ -29,7 +29,7 @@ import { enrichConnectorPage } from "./enrich-deterministic.ts";
 import { limiterFor } from "./limiter.ts";
 import { accountRef, type ConnectorDataKind } from "./model.ts";
 import { resolveClient } from "./oauth-connect.ts";
-import { builtinProviders, type ProviderRegistry } from "./providers.ts";
+import { builtinProviders, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
 import { softDeleteUpstreamPage, sweepRetention } from "./retention.ts";
 import type { SyncAccount, SyncDeps } from "./sync-engine.ts";
 import { registerConnectorSync, type ConnectorSyncRuntime } from "./sync-job.ts";
@@ -118,6 +118,19 @@ export function apiKeySource(credential: { tokens: { access_token: string } } | 
   };
 }
 
+/**
+ * The API origin and pacing of an account's services: a service that names
+ * its own origin (Gmail) wins over the provider's. One client talks to one
+ * origin, so an account whose services answer on different origins cannot sync.
+ */
+function serviceApi(provider: ConnectorProvider, account: SyncAccount, fallback: string): { origin: string; minSpacingMs?: number } {
+  const declared = (account.services ?? []).map((s) => provider.services[s]).filter((s) => s !== undefined);
+  const origins = [...new Set(declared.map((s) => s.apiOrigin ?? fallback))];
+  if (origins.length > 1) throw new Error(`connector account ${account.id} mixes services on different API origins`);
+  const spacing = declared.map((s) => s.minSpacingMs).filter((n): n is number => n !== undefined);
+  return { origin: origins[0] ?? fallback, ...(spacing.length > 0 ? { minSpacingMs: Math.max(...spacing) } : {}) };
+}
+
 export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions): ConnectorSyncRuntime {
   const engine = storage.engine();
   const env = opts.env ?? process.env;
@@ -154,7 +167,15 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
           ...(opts.now ? { now: opts.now } : {}),
         });
       },
-      client: (_a, tokenSource) => new ConnectorClient({ origin: sync.apiOrigin, tokenSource, fetch: fetchFn }),
+      client: (_a, tokenSource) => {
+        const { origin, minSpacingMs } = serviceApi(provider, account, sync.apiOrigin);
+        const limiter = minSpacingMs === undefined
+          ? undefined
+          : limiterFor(`${provider.id}:${origin}:${account.id}`, { minSpacingMs, now, ...(opts.sleep ? { sleep: opts.sleep } : {}) });
+        return new ConnectorClient({
+          origin, tokenSource, fetch: fetchFn, ...(limiter ? { limiter } : {}), ...(opts.sleep ? { sleep: opts.sleep } : {}),
+        });
+      },
     };
   };
 

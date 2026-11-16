@@ -6,7 +6,8 @@ calendar pages and show up in the chronicle.
 
 Memrain asks Google for read access only: it never creates, changes or
 deletes an event. The client is yours (bring your own, "BYO"): no Memrain
-project sits between you and Google.
+project sits between you and Google. The same project and client also serve
+Gmail: see [GMAIL.md](./GMAIL.md) once this guide is done.
 
 ## Prerequisites
 
@@ -25,9 +26,21 @@ project sits between you and Google.
 | `https://www.googleapis.com/auth/calendar.readonly` | To read your calendars and events |
 
 The connect flow requests exactly these and refuses a grant that adds or drops
-one. `calendar.readonly` is a sensitive scope in Google's terms: fine for an
+one. Google merges every scope a user granted one client into each new grant,
+so once Gmail is connected with the same client, a calendar connect also asks
+for `gmail.readonly` ([GMAIL.md](./GMAIL.md)); the calendar account still
+reads only calendars. `calendar.readonly` is a sensitive scope in Google's terms: fine for an
 app in Testing with you as a test user, but it needs Google's verification
 before an app in production can show it to anyone else.
+
+Gmail's `gmail.readonly` is a **restricted** scope, a stricter class: an app
+in production that asks for it needs Google's verification and a security
+assessment. Google exempts an app used only by you or a few people you know,
+and an app left in the **Testing** publishing status that only its test users
+can reach
+([restricted scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification),
+"Exceptions to verification requirements"). A brain of your own stays in
+Testing, with the 7-day token below; see [GMAIL.md](./GMAIL.md).
 
 ## Steps
 
@@ -166,7 +179,7 @@ Google limits refresh tokens for apps that are not published. From Google's
 "Refresh token expiration": an app with an **External** user type and a
 publishing status of **Testing** is issued a refresh token that expires in
 7 days, unless the only scopes are name, email address and profile.
-`calendar.readonly` is not one of those, so this applies.
+`calendar.readonly` and `gmail.readonly` are not among those, so this applies.
 
 Memrain cannot ask Google whether the app is in Testing, so it reads the
 signs. The 7 days count from the last consent; every reconnect starts them
@@ -199,6 +212,9 @@ revoked, so it counts toward that limit until it expires.
 
 ## Verification
 
+On the Connections page the Google account reads **Syncing** and, after the
+first clean run, **Last sync** shows when. From the host:
+
 ```bash
 docker exec deploy-memrain-1 bun run src/cli.ts connectors status
 ```
@@ -226,7 +242,9 @@ meeting from this week.
 ## Disconnecting
 
 Disconnect the account on the Connections page. Memrain revokes the token at
-Google, then deletes the stored credential. If Google cannot be reached, the
+Google, then deletes the stored credential. Google revokes a grant as a whole,
+so a Gmail account of the same Google account connected with the same client
+loses its access too and turns `needs_reconnect`. If Google cannot be reached, the
 account is parked as `error` (`revoke_failed`) and the credential is kept so
 the disconnect can be retried. You can also remove the access from
 the Google side at [myaccount.google.com/permissions](https://myaccount.google.com/permissions).

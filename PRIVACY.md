@@ -21,13 +21,15 @@ Memrain indexes only data the operator points it at:
 | Markdown notes | Notes the operator indexes from under the configured `MEMRAIN_VAULT_PATHS`. |
 | Code corpus | Source files under the configured `MEMRAIN_CODE_PATHS` (graph-only via tree-sitter). |
 | Google Calendar (connector, off by default) | Events of the calendars the operator picks, read-only (`calendar.readonly`, plus `openid email` to name the account): title, time, location, organizer, attendees' names and addresses, description, recurrence and occurrences. |
+| Gmail (connector, off by default) | Mail of the last 90 days and new mail, read-only (`gmail.readonly`, plus `openid email` to name the account), without Spam, Trash, drafts or threads wholly in Promotions or Social, and nothing older than the first sync's window: per thread the subject, senders' and recipients' names and addresses, dates, labels, each message's text with quoted history cut, and each attachment's name, type and size. Attachment contents are never downloaded. |
 | Fireflies (connector, off by default) | Meeting transcripts the operator's API key can see: title, time, participants, the Fireflies summary and action items, and the transcript as speaker turns. Memrain sends Fireflies read queries only. |
 
 Connectors are off unless the operator sets a connector key, turns on
 `MEMRAIN_CONNECTORS_ENABLED`, connects an account from the admin panel and
-switches its sync on (docs/connectors/ENABLE.md). There is no email, chat,
-smart-home or other integration. A synced event or transcript is written to
-the brain as a page marked as outside text: its people are linked to people
+switches its sync on (docs/connectors/ENABLE.md). There is no chat,
+smart-home or other integration. A synced event, mail thread or transcript is
+written to the brain as a page marked as outside text, with any credential in
+it (a sign-in token, a password-reset key) cut out first: its people are linked to people
 pages that already exist (others are only listed as wanted, never created),
 an event or meeting gets one chronicle row, and the page is chunked and
 embedded like any other. Connector pages are left out of fact extraction, the
@@ -61,7 +63,7 @@ configured region:
 Stored data stays in your AWS account. Query results go to the MCP client you
 connect, and with the default Cloudflare Tunnel, requests pass through
 Cloudflare. A connected connector calls only its provider's API (Google's
-OAuth and Calendar endpoints, Fireflies' GraphQL endpoint) with the stored
+OAuth, Calendar and Gmail endpoints, Fireflies' GraphQL endpoint) with the stored
 credential. Owner notifications, when the operator sets
 `MEMRAIN_NOTIFY_WEBHOOK_URL`, send the configured receiver a signed pointer
 (kind, id, a link into the admin panel, time) and never the problem's text. There are no analytics SDKs, no advertising
@@ -99,12 +101,13 @@ row).
 Connector data has its own rules:
 
 - **Retention.** A connector page is hard-deleted once its last activity is
-  older than its window: 365 days for calendar events and meetings by default
-  (180 for mail and chat, which no shipped connector reads yet), set per kind
+  older than its window: 365 days for calendar events and meetings, 180 for
+  mail threads (and chat, which no shipped connector reads yet), set per kind
   with `MEMRAIN_CONNECTOR_RETENTION_DAYS_<KIND>`; `0` or `off` keeps pages.
   The sweep runs after each sync run.
-- **Deleted at the provider.** An event cancelled in Google or a transcript
-  Fireflies no longer has is deleted from the brain with its parts, whatever
+- **Deleted at the provider.** An event cancelled in Google, a Gmail thread
+  deleted or moved to Trash or Spam, or a transcript Fireflies no longer has is
+  deleted from the brain with its parts, whatever
   anyone wrote on it, but recoverably: the page is soft-deleted the way
   `page_delete` leaves a page, so it drops out of search at once, its fence
   facts go and so does what was derived from it: its chronicle rows, facts
