@@ -21,6 +21,7 @@ import {
 import { STARTER_TOOLS, VERB_TOOLS } from "../src/mcp/surface.ts";
 import { OPERATIONS } from "../src/mcp/operations.ts";
 import { dispatchRefusal, visibleToolDefs } from "../src/mcp/visibility.ts";
+import { isPublicMcpToolForbidden } from "../src/http/public_guard.ts";
 import type { AuthInfo } from "../src/core/auth-info.ts";
 import { Storage } from "../src/core/storage.ts";
 import { OAuthProvider } from "../src/core/oauth-provider.ts";
@@ -70,6 +71,20 @@ describe("tool surfaces", () => {
     expect(dispatchRefusal("recall", verbs)).toBeNull();
     const listed = visibleToolDefs({ isPublic: false, authInfo: verbs }, () => false).map((t) => t.name).sort();
     expect(listed).toEqual([...VERB_TOOLS].sort());
+  });
+
+  it("show loops_list on the full surface only, and never on the public bearer", () => {
+    const grant = (toolSurface?: "full" | "starter" | "verbs"): AuthInfo =>
+      ({ token: "t", clientId: "c", scopes: ["read"], sourceId: "default", isPublic: false, ...(toolSurface ? { toolSurface } : {}) });
+    const lists = (authInfo: AuthInfo) => visibleToolDefs({ isPublic: false, authInfo }, isPublicMcpToolForbidden).some((t) => t.name === "loops_list");
+    expect(lists(grant())).toBe(true);
+    expect(lists(grant("full"))).toBe(true);
+    for (const surface of ["starter", "verbs"] as const) {
+      expect(lists(grant(surface))).toBe(false);
+      expect(dispatchRefusal("loops_list", grant(surface))).toEqual({ kind: "tool_surface", surface });
+    }
+    const pub: AuthInfo = { token: "p", clientId: "public", scopes: ["read"], sourceId: "default", isPublic: true };
+    expect(visibleToolDefs({ isPublic: true, authInfo: pub }, isPublicMcpToolForbidden).some((t) => t.name === "loops_list")).toBe(false);
   });
 });
 
