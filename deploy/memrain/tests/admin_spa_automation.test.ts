@@ -128,7 +128,7 @@ describe("Microsoft service labels and the tenant field", () => {
     expect(tenantChoice("contoso.onmicrosoft.com", "common")).toBe("tenant");
     expect(tenantFromForm("organizations", "")).toBe("organizations");
     expect(tenantFromForm("tenant", " Contoso.OnMicrosoft.com ")).toBe("contoso.onmicrosoft.com");
-    expect(tenantFromForm("tenant", "72F988BF-86F1-41AF-91AB-2D7CD011DB47")).toBe("72f988bf-86f1-41af-91ab-2d7cd011db47");
+    expect(tenantFromForm("tenant", "0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D")).toBe("0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
     for (const bad of ["", "contoso", "a/b.example", "x.example?y=1"]) expect(tenantFromForm("tenant", bad)).toBeNull();
   });
 

@@ -23,7 +23,7 @@ import type { Engine } from "../src/core/engine/interface.ts";
 const kek = kekFromBytes(randomBytes(32));
 const SESSION = "admin-session-id-tenant-aaaaaaaaaaaaaaaa";
 const REDIRECT = connectorCallbackUri("https://brain.example.test", "dir");
-const TENANT_ID = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+const TENANT_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 
 function dirProvider(over: Partial<ConnectorProvider> = {}): ConnectorProvider {
   return {

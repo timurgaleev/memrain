@@ -166,7 +166,7 @@ function TenantFields({ choice, directory, invalid, onChoice, onDirectory }: {
           />
           {invalid && (
             <p className="error-text" id={`${dirField}-error`}>
-              Enter a directory ID like 72f988bf-86f1-41af-91ab-2d7cd011db47, or a domain like contoso.onmicrosoft.com.
+              Enter a directory ID like 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d, or a domain like contoso.onmicrosoft.com.
             </p>
           )}
         </div>
