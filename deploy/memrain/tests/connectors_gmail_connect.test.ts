@@ -245,25 +245,34 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       } finally { await db.close(); }
     });
 
-    it("still revokes when the refused grant belongs to another Google user, or the shared account was disconnected", async () => {
+    it("leaves the grant in place under another email too, since a renamed Google user keeps the grant", async () => {
+      const db = await open();
+      try {
+        const e = db.storage.engine();
+        const world: GoogleWorld = { calls: [], events: () => "eventsDelta" };
+        const { d, cal, before } = await withCalendar(e, world);
+        // The label is the email; a Workspace rename changes it for the same grant.
+        world.userinfo = { email: "renamed-owner@example.test", email_verified: true };
+        const other = await connect(d, "mail", ["gmail"], onlyCalendar, world).catch(x => x);
+        expect((other as ConnectError).code).toBe("scope_mismatch_not_revoked");
+        expect(revokes(world)).toBe(0);
+        expect(await readCredential(e, kek, cal.id)).toEqual(before);
+      } finally { await db.close(); }
+    });
+
+    it("still revokes once the only other account was disconnected", async () => {
       const db = await open();
       try {
         const e = db.storage.engine();
         const world: GoogleWorld = { calls: [], events: () => "eventsDelta" };
         const { d, cal } = await withCalendar(e, world);
-        world.userinfo = { email: "someone-else@example.test", email_verified: true };
-        const other = await connect(d, "mail", ["gmail"], onlyCalendar, world).catch(x => x);
-        expect((other as ConnectError).code).toBe("scope_mismatch");
-        expect(revokes(world)).toBe(1);
-
-        world.calls.length = 0;
-        delete world.userinfo;
         await e.query(`UPDATE connector_accounts SET status = 'revoked' WHERE id = $1`, [cal.id]);
         const parked = await connect(d, "mail", ["gmail"], onlyCalendar, world).catch(x => x);
         expect((parked as ConnectError).code).toBe("scope_mismatch");
         expect(revokes(world)).toBe(1);
       } finally { await db.close(); }
     });
+
     it("does not revoke a token it failed to store when a live account shares its grant", async () => {
       const db = await open();
       try {
@@ -279,7 +288,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         expect(revokes(world)).toBe(0);
         expect(await readCredential(e, kek, cal.id)).toEqual(before);
 
-        world.userinfo = { email: "someone-else@example.test", email_verified: true };
+        await e.query(`UPDATE connector_accounts SET status = 'revoked' WHERE id = $1`, [cal.id]);
         const alone = await connect({ ...d, engine: failing }, "mail", ["gmail"], union, world).catch(x => x);
         expect((alone as Error).message).toBe("store failed");
         expect(revokes(world)).toBe(1);

@@ -19,10 +19,10 @@
  *
  * A refused token is not revoked when that could end a live account's access:
  * for a provider that combines grants, revoking any token of a user's grant
- * revokes all of it, so a token issued to the user a live account of that
- * provider belongs to (or to a user the identity check could not name, while
- * any live account exists) is left alone and the connect fails with a
- * `*_not_revoked` code. Nothing is stored either way.
+ * revokes all of it. The account label (an email) cannot prove two tokens
+ * belong to different users, since a renamed user keeps the grant, so while
+ * any live account of that provider exists a refused token is left alone and
+ * the connect fails with a `*_not_revoked` code. Nothing is stored either way.
  *
  * The redirect URI comes from configuration, never from the request. Errors
  * carry a code and a fixed message; provider text, codes and tokens are never
@@ -99,7 +99,7 @@ const MESSAGES: Record<ConnectErrorCode, string> = {
   code_missing: "the provider returned no authorization code",
   token_exchange: "the provider refused the authorization code",
   scope_mismatch: "the provider granted different scopes than requested; the grant was refused",
-  scope_mismatch_not_revoked: "the provider granted different scopes than requested; the grant was refused but left in place, because a connected account shares it",
+  scope_mismatch_not_revoked: "the provider granted different scopes than requested; the grant was refused but left in place, because a connected account may share it",
   identity: "could not read the connected account's identity",
   identity_not_revoked: "could not read the connected account's identity; the grant was left in place, because a connected account may share it",
   account_not_found: "connector account not found",
@@ -341,20 +341,18 @@ async function revokeToken(
 }
 
 /**
- * Whether revoking a token issued to `label` (null: unknown) could end a live
- * account's access. Only a provider that combines grants shares one grant
- * across accounts; there every token of one user's grant revokes all of it.
- * Any status but `revoked` is live: an account parked on an error may still
- * hold a working credential.
+ * Whether revoking a new token could end a live account's access. Only a
+ * provider that combines grants shares one grant across accounts; there every
+ * token of one user's grant revokes all of it, and the stored label (an email)
+ * cannot rule out that a live account is the same user under a changed
+ * address. Any status but `revoked` is live: an account parked on an error may
+ * still hold a working credential.
  */
-async function sharesLiveGrant(engine: Engine, provider: ConnectorProvider, label: string | null): Promise<boolean> {
+async function sharesLiveGrant(engine: Engine, provider: ConnectorProvider): Promise<boolean> {
   if (provider.combinedGrants !== true) return false;
-  // scope: operator-only the connect flow reads which identities this provider's live accounts belong to
-  const r = await engine.query<{ account_label: string }>(
-    `SELECT account_label FROM connector_accounts WHERE provider = $1 AND status <> 'revoked'`,
-    [provider.id],
-  );
-  return label === null ? r.rows.length > 0 : r.rows.some((row) => row.account_label === label);
+  // scope: operator-only the connect flow asks whether this provider has any live account, never what it holds
+  const r = await engine.query(`SELECT 1 FROM connector_accounts WHERE provider = $1 AND status <> 'revoked' LIMIT 1`, [provider.id]);
+  return r.rows.length > 0;
 }
 
 /** The account label the provider names for a token, or null when it cannot be read. */
@@ -440,21 +438,20 @@ export async function completeConnect(
   const exactlyOwn = granted.length === own.length && own.every((s) => granted.includes(s));
   const revoke = () => revokeToken(provider, fetch, refreshToken ?? accessToken, client);
   // A refused token is kept away from revocation when a live account shares its grant.
-  const sharedWithLive = async (label: string | null): Promise<boolean> => {
-    if (!(await sharesLiveGrant(deps.engine, provider, label))) return false;
+  const sharedWithLive = async (): Promise<boolean> => {
+    if (!(await sharesLiveGrant(deps.engine, provider))) return false;
     console.warn(`[connectors] ${provider.id} connect refused; the new token was not revoked because a live account shares its grant`);
     return true;
   };
 
   if ((extra.length > 0 || missing.length > 0) && !exactlyOwn) {
-    const label = provider.combinedGrants === true ? await identifyLabel(provider, fetch, accessToken, body) : null;
-    if (await sharedWithLive(label)) throw new ConnectError("scope_mismatch_not_revoked", { extra, missing, revoked: false });
+    if (await sharedWithLive()) throw new ConnectError("scope_mismatch_not_revoked", { extra, missing, revoked: false });
     throw new ConnectError("scope_mismatch", { extra, missing, revoked: await revoke() });
   }
 
   const label = await identifyLabel(provider, fetch, accessToken, body);
   if (label === null) {
-    if (await sharedWithLive(null)) throw new ConnectError("identity_not_revoked");
+    if (await sharedWithLive()) throw new ConnectError("identity_not_revoked");
     await revoke();
     throw new ConnectError("identity");
   }
@@ -473,7 +470,7 @@ export async function completeConnect(
     return await persistGrant(deps.engine, kek, st, provider.id, label, tokens, scopes, expiresAt);
   } catch (e) {
     // Nothing was stored, so nothing could disconnect this grant later.
-    if (!(await sharedWithLive(label).catch(() => true))) await revoke();
+    if (!(await sharedWithLive().catch(() => true))) await revoke();
     throw e;
   }
 }

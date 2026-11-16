@@ -36,10 +36,11 @@ the request exactly, which is the check that refuses anything wider. The Gmail
 account still reads only mail. If the Google account you connect is not the
 one whose calendar is connected, untick the calendar box: a grant of exactly
 Gmail's own scopes is accepted too. Anything else is refused and nothing is
-stored. A refused grant is revoked at Google only when no live account here
-belongs to the same Google user: revoking it would end that account's access
-too (Google revokes a grant as a whole), so in that case it is left in place
-and the page reports `scope_mismatch_not_revoked`.
+stored. A refused grant is revoked at Google only when no other Google
+account is connected here: Google revokes a grant as a whole, so revoking it
+could end a connected Calendar's access too (an address alone cannot prove
+it is another Google user). Otherwise it is left in place and the page
+reports `scope_mismatch_not_revoked`.
 
 `gmail.readonly` is a **restricted** scope in Google's terms
 ([Gmail API scopes](https://developers.google.com/workspace/gmail/api/auth/scopes)).
@@ -230,7 +231,7 @@ the brain for the subject of a mail from this week.
 |---|---|---|
 | The **Into source** list says "No source fits" with gmail ticked | No `mailbox` source | Step 3, then reload the page |
 | Back in Memrain, the page reports `scope_mismatch` | The Gmail box was unticked on Google's consent page | Connect again and allow the Gmail access |
-| Back in Memrain, the page reports `scope_mismatch_not_revoked` | A box was unticked on Google's consent page, and a connected Calendar of the same Google account shares the grant, so Memrain left it in place | Connect again and allow every listed access; the Calendar keeps working meanwhile |
+| Back in Memrain, the page reports `scope_mismatch_not_revoked` | A box was unticked on Google's consent page; a Google account is already connected here, so Memrain left the grant in place rather than risk the Calendar's access | Connect again and allow every listed access; the Calendar keeps working meanwhile |
 | Back in Memrain, the page reports `source_kind` | The source picked is not a mailbox | Pick a `mailbox` source |
 | Syncs stop with `accessNotConfigured` | The Gmail API is off in the project | Step 1 |
 | Google shows `Error 403: access_denied` | The account is not a test user | Step 2.4 |

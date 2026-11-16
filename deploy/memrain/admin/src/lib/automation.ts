@@ -242,7 +242,7 @@ const CONNECT_ERRORS: Record<string, string> = {
   code_missing: "The provider sent no authorization code. Start again.",
   token_exchange: "The provider refused the authorization code. Start again.",
   scope_mismatch: "The provider granted different access than Memrain asks for, so the grant was refused and returned.",
-  scope_mismatch_not_revoked: "The provider granted different access than Memrain asks for. Nothing was saved. The grant was left in place, because another connected account of the same user shares it. Start again and allow every access listed.",
+  scope_mismatch_not_revoked: "The provider granted different access than Memrain asks for. Nothing was saved. The grant was left in place, because another connected account of this provider may share it. Start again and allow every access listed.",
   identity: "Memrain could not read which account this is. Nothing was connected.",
   identity_not_revoked: "Memrain could not read which account this is. Nothing was saved. The grant was left in place, because another connected account may share it. Start again.",
   vault: "The connector key could not seal the credential. Check the key, then start again.",
