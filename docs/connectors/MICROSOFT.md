@@ -18,9 +18,11 @@ kept but not read: `connector_sync` skips it (`provider_cannot_sync`).
 - `MEMRAIN_PUBLIC_URL` is your public `https://` address. Microsoft sends your
   browser back to an address built from it.
 - An account that can register an app in the
-  [Microsoft Entra admin center](https://entra.microsoft.com) (at least the
-  Application Developer role in a work tenant; any personal Microsoft account
-  can create a tenant of its own for this).
+  [Microsoft Entra admin center](https://entra.microsoft.com): at least the
+  Application Developer role in a work tenant. With only a personal Microsoft
+  account, you first need an Azure account (the free one is enough), which
+  comes with an Entra directory to register the app in
+  ([Microsoft's prerequisites](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app)).
 - For a work or school account: an organization that lets users consent to
   apps, or an administrator who grants the consent ([Work accounts and admin
   consent](#work-accounts-and-admin-consent)).
@@ -123,11 +125,12 @@ Memrain checks that the tenant is a tenant ID, a domain, `common`,
 and the tenant with the connector key ([KEY.md](./KEY.md)) and never shows the
 secret again. Saving a new app later replaces the stored one.
 
-(Alternatively, `MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID`,
+The form is the supported path. `MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID`,
 `MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET` and `MEMRAIN_MICROSOFT_OAUTH_TENANT`
-in the process environment are used when no app is stored. They belong in
-`.secrets/memrain.env`; after changing that file, run `bash deploy/deploy.sh`.
-`memrain config set` refuses the secret. The form is the recommended path.)
+in the process environment are used only when no app is stored, for a
+deployment that sets the container's environment itself. Do not add them to
+`deploy/.secrets/memrain.env` by hand: `fetch-secrets.sh` rewrites that file
+from the secret store and drops them. `memrain config set` refuses the secret.
 
 ### 6. Register the sources
 
@@ -234,6 +237,15 @@ Microsoft. The consent stays with Microsoft until you remove it:
 - Personal account:
   [account.live.com/consent/Manage](https://account.live.com/consent/Manage),
   the app, then **Remove these permissions**.
+
+Consent belongs to the user and the app, not to one account row. While
+another account of the same user stays connected here (mail in one source,
+calendar in another), its token still carries every scope the user
+consented to: disconnecting the mail account leaves the calendar account's
+token able to read mail, though the calendar sync never does. The
+account row's scopes show what its token holds. To end that access too,
+remove the consent at Microsoft (it ends both accounts' access) and reconnect
+only what should stay.
 
 Deleting the client secret in the app registration also stops every token of
 the app from renewing. Pages already synced stay in the brain unless you also
