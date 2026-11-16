@@ -74,11 +74,10 @@ describe("tool surfaces", () => {
   });
 
   it("show loops_list on the full surface only, and never on the public bearer", () => {
-    const grant = (toolSurface?: "full" | "starter" | "verbs"): AuthInfo =>
+    const grant = (toolSurface?: "starter" | "verbs"): AuthInfo =>
       ({ token: "t", clientId: "c", scopes: ["read"], sourceId: "default", isPublic: false, ...(toolSurface ? { toolSurface } : {}) });
     const lists = (authInfo: AuthInfo) => visibleToolDefs({ isPublic: false, authInfo }, isPublicMcpToolForbidden).some((t) => t.name === "loops_list");
     expect(lists(grant())).toBe(true);
-    expect(lists(grant("full"))).toBe(true);
     for (const surface of ["starter", "verbs"] as const) {
       expect(lists(grant(surface))).toBe(false);
       expect(dispatchRefusal("loops_list", grant(surface))).toEqual({ kind: "tool_surface", surface });
