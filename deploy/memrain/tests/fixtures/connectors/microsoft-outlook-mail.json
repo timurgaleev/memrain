@@ -1,0 +1,618 @@
+{
+  "folders": {
+    "inbox": "AAMkFolderInbox==",
+    "sentitems": "AAMkFolderSent==",
+    "deleteditems": "AAMkFolderDeleted==",
+    "junkemail": "AAMkFolderJunk==",
+    "drafts": "AAMkFolderDrafts==",
+    "archive": "AAMkFolderArchive=="
+  },
+  "messages": [
+    {
+      "@odata.type": "#microsoft.graph.message",
+      "id": "a1",
+      "conversationId": "conv-A",
+      "parentFolderId": "AAMkFolderInbox==",
+      "receivedDateTime": "2026-11-06T10:00:00Z",
+      "sentDateTime": "2026-11-06T10:00:00Z",
+      "isDraft": false,
+      "subject": "Q4 budget",
+      "from": {
+        "emailAddress": {
+          "name": "Ana Lee",
+          "address": "Ana@Example.net"
+        }
+      },
+      "sender": {
+        "emailAddress": {
+          "name": "Ana Lee",
+          "address": "Ana@Example.net"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Owner",
+            "address": "owner@example.test"
+          }
+        }
+      ],
+      "ccRecipients": [
+        {
+          "emailAddress": {
+            "name": "Stone, Bob",
+            "address": "bob@example.org"
+          }
+        }
+      ],
+      "replyTo": [],
+      "body": {
+        "contentType": "text",
+        "content": "Hi,\n\nCan you send the Q4 budget by Friday?\n\nAna"
+      },
+      "internetMessageId": "<a1@example.net>",
+      "internetMessageHeaders": [],
+      "categories": [
+        "Red category"
+      ],
+      "inferenceClassification": "focused",
+      "changeKey": "CQAAABYAAAa1",
+      "hasAttachments": false,
+      "attachments": []
+    },
+    {
+      "@odata.type": "#microsoft.graph.message",
+      "id": "a2",
+      "conversationId": "conv-A",
+      "parentFolderId": "AAMkFolderSent==",
+      "receivedDateTime": "2026-11-06T12:00:00Z",
+      "sentDateTime": "2026-11-06T12:00:00Z",
+      "isDraft": false,
+      "subject": "RE: Q4 budget",
+      "from": {
+        "emailAddress": {
+          "name": "Owner",
+          "address": "owner@example.test"
+        }
+      },
+      "sender": {
+        "emailAddress": {
+          "name": "Owner",
+          "address": "owner@example.test"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Ana Lee",
+            "address": "ana@example.net"
+          }
+        }
+      ],
+      "ccRecipients": [],
+      "replyTo": [],
+      "body": {
+        "contentType": "text",
+        "content": "Attached is the budget.\n\nOn Fri, 6 Nov 2026 at 10:00, Ana Lee <ana@example.net> wrote:\n> Can you send the Q4 budget by Friday?"
+      },
+      "internetMessageId": "<a2@example.net>",
+      "internetMessageHeaders": [],
+      "categories": [],
+      "inferenceClassification": "focused",
+      "changeKey": "CQAAABYAAAa2",
+      "hasAttachments": true,
+      "attachments": [
+        {
+          "@odata.type": "#microsoft.graph.fileAttachment",
+          "id": "att-1",
+          "name": "budget-q4.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "size": 18432,
+          "isInline": false
+        },
+        {
+          "@odata.type": "#microsoft.graph.fileAttachment",
+          "id": "att-2",
+          "name": "image001.png",
+          "contentType": "image/png",
+          "size": 2048,
+          "isInline": true
+        }
+      ]
+    },
+    {
+      "@odata.type": "#microsoft.graph.message",
+      "id": "a3",
+      "conversationId": "conv-A",
+      "parentFolderId": "AAMkFolderDrafts==",
+      "receivedDateTime": "2026-11-07T10:00:00Z",
+      "sentDateTime": "2026-11-07T10:00:00Z",
+      "isDraft": true,
+      "subject": "RE: Q4 budget",
+      "from": {
+        "emailAddress": {
+          "name": "Owner",
+          "address": "owner@example.test"
+        }
+      },
+      "sender": {
+        "emailAddress": {
+          "name": "Owner",
+          "address": "owner@example.test"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Ana Lee",
+            "address": "ana@example.net"
+          }
+        }
+      ],
+      "ccRecipients": [],
+      "replyTo": [],
+      "body": {
+        "contentType": "text",
+        "content": "unsent draft text"
+      },
+      "internetMessageId": "<a3@example.net>",
+      "internetMessageHeaders": [],
+      "categories": [],
+      "inferenceClassification": "focused",
+      "changeKey": "CQAAABYAAAa3",
+      "hasAttachments": false,
+      "attachments": []
+    },
+    {
+      "@odata.type": "#microsoft.graph.message",
+      "id": "b1",
+      "conversationId": "conv-B",
+      "parentFolderId": "AAMkFolderInbox==",
+      "receivedDateTime": "2026-10-27T10:00:00Z",
+      "sentDateTime": "2026-10-27T10:00:00Z",
+      "isDraft": false,
+      "subject": "This week",
+      "from": {
+        "emailAddress": {
+          "name": "Shop Weekly",
+          "address": "weekly@shop.example"
+        }
+      },
+      "sender": {
+        "emailAddress": {
+          "name": "Shop Weekly",
+          "address": "weekly@shop.example"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Owner",
+            "address": "owner@example.test"
+          }
+        }
+      ],
+      "ccRecipients": [],
+      "replyTo": [],
+      "body": {
+        "contentType": "text",
+        "content": "Top deals this month.\nDid you see our new arrivals?"
+      },
+      "internetMessageId": "<b1@example.net>",
+      "internetMessageHeaders": [
+        {
+          "name": "List-Unsubscribe",
+          "value": "<https://shop.example/u>"
+        },
+        {
+          "name": "List-Id",
+          "value": "<weekly.shop.example>"
+        },
+        {
+          "name": "Precedence",
+          "value": "Bulk"
+        }
+      ],
+      "categories": [],
+      "inferenceClassification": "other",
+      "changeKey": "CQAAABYAAAb1",
+      "hasAttachments": false,
+      "attachments": []
+    },
+    {
+      "@odata.type": "#microsoft.graph.message",
+      "id": "e1",
+      "conversationId": "conv-E",
+      "parentFolderId": "AAMkFolderInbox==",
+      "receivedDateTime": "2026-11-11T10:00:00Z",
+      "sentDateTime": "2026-11-11T10:00:00Z",
+      "isDraft": false,
+      "subject": "Venue",
+      "from": {
+        "emailAddress": {
+          "name": "Carol Diaz",
+          "address": "carol@example.com"
+        }
+      },
+      "sender": {
+        "emailAddress": {
+          "name": "Carol Diaz",
+          "address": "carol@example.com"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Owner",
+            "address": "owner@example.test"
+          }
+        }
+      ],
+      "ccRecipients": [],
+      "replyTo": [],
+      "body": {
+        "contentType": "text",
+        "content": "Can you confirm the venue by Friday?"
+      },
+      "internetMessageId": "<e1@example.net>",
+      "internetMessageHeaders": [],
+      "categories": [],
+      "inferenceClassification": "focused",
+      "changeKey": "CQAAABYAAAe1",
+      "hasAttachments": false,
+      "attachments": []
+    },
+    {
+      "@odata.type": "#microsoft.graph.message",
+      "id": "e2",
+      "conversationId": "conv-E",
+      "parentFolderId": "AAMkFolderJunk==",
+      "receivedDateTime": "2026-11-12T10:00:00Z",
+      "sentDateTime": "2026-11-12T10:00:00Z",
+      "isDraft": false,
+      "subject": "RE: Venue",
+      "from": {
+        "emailAddress": {
+          "name": "Carol Diaz",
+          "address": "carol@example.com"
+        }
+      },
+      "sender": {
+        "emailAddress": {
+          "name": "Carol Diaz",
+          "address": "carol@example.com"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Owner",
+            "address": "owner@example.test"
+          }
+        }
+      ],
+      "ccRecipients": [],
+      "replyTo": [],
+      "body": {
+        "contentType": "text",
+        "content": "junk reply text"
+      },
+      "internetMessageId": "<e2@example.net>",
+      "internetMessageHeaders": [],
+      "categories": [],
+      "inferenceClassification": "focused",
+      "changeKey": "CQAAABYAAAe2",
+      "hasAttachments": false,
+      "attachments": []
+    },
+    {
+      "@odata.type": "#microsoft.graph.message",
+      "id": "o1",
+      "conversationId": "conv-O",
+      "parentFolderId": "AAMkFolderSent==",
+      "receivedDateTime": "2026-11-12T10:00:00Z",
+      "sentDateTime": "2026-11-12T10:00:00Z",
+      "isDraft": false,
+      "subject": "Contract",
+      "from": {
+        "emailAddress": {
+          "name": "Owner",
+          "address": "owner.alias@example.org"
+        }
+      },
+      "sender": {
+        "emailAddress": {
+          "name": "Owner",
+          "address": "owner.alias@example.org"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Eve Ng",
+            "address": "eve@example.net"
+          }
+        }
+      ],
+      "ccRecipients": [],
+      "replyTo": [],
+      "body": {
+        "contentType": "text",
+        "content": "Could you send the signed contract?"
+      },
+      "internetMessageId": "<o1@example.net>",
+      "internetMessageHeaders": [],
+      "categories": [],
+      "inferenceClassification": "focused",
+      "changeKey": "CQAAABYAAAo1",
+      "hasAttachments": false,
+      "attachments": []
+    },
+    {
+      "@odata.type": "#microsoft.graph.eventMessageRequest",
+      "id": "i1",
+      "conversationId": "conv-I",
+      "parentFolderId": "AAMkFolderInbox==",
+      "receivedDateTime": "2026-11-14T10:00:00Z",
+      "sentDateTime": "2026-11-14T10:00:00Z",
+      "isDraft": false,
+      "subject": "Planning",
+      "from": {
+        "emailAddress": {
+          "name": "Dan Park",
+          "address": "dan@example.org"
+        }
+      },
+      "sender": {
+        "emailAddress": {
+          "name": "Dan Park",
+          "address": "dan@example.org"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Owner",
+            "address": "owner@example.test"
+          }
+        }
+      ],
+      "ccRecipients": [],
+      "replyTo": [],
+      "body": {
+        "contentType": "text",
+        "content": "Can you join the planning session?"
+      },
+      "internetMessageId": "<i1@example.net>",
+      "internetMessageHeaders": [],
+      "categories": [],
+      "inferenceClassification": "focused",
+      "changeKey": "CQAAABYAAAi1",
+      "hasAttachments": false,
+      "attachments": []
+    },
+    {
+      "@odata.type": "#microsoft.graph.message",
+      "id": "r1",
+      "conversationId": "conv-R",
+      "parentFolderId": "AAMkFolderInbox==",
+      "receivedDateTime": "2026-11-14T10:00:00Z",
+      "sentDateTime": "2026-11-14T10:00:00Z",
+      "isDraft": false,
+      "subject": "Quick question",
+      "from": {
+        "emailAddress": {
+          "name": "Survey Team",
+          "address": "team@survey.example"
+        }
+      },
+      "sender": {
+        "emailAddress": {
+          "name": "Survey Team",
+          "address": "team@survey.example"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Owner",
+            "address": "owner@example.test"
+          }
+        }
+      ],
+      "ccRecipients": [],
+      "replyTo": [
+        {
+          "emailAddress": {
+            "name": "Survey",
+            "address": "No-Reply@survey.example"
+          }
+        }
+      ],
+      "body": {
+        "contentType": "text",
+        "content": "How did we do?"
+      },
+      "internetMessageId": "<r1@example.net>",
+      "internetMessageHeaders": [
+        {
+          "name": "Auto-Submitted",
+          "value": "no"
+        }
+      ],
+      "categories": [],
+      "inferenceClassification": "focused",
+      "changeKey": "CQAAABYAAAr1",
+      "hasAttachments": false,
+      "attachments": []
+    },
+    {
+      "@odata.type": "#microsoft.graph.message",
+      "id": "j1",
+      "conversationId": "conv-J",
+      "parentFolderId": "AAMkFolderJunk==",
+      "receivedDateTime": "2026-11-13T10:00:00Z",
+      "sentDateTime": "2026-11-13T10:00:00Z",
+      "isDraft": false,
+      "subject": "You won",
+      "from": {
+        "emailAddress": {
+          "name": "Prize Desk",
+          "address": "prize@lottery.example"
+        }
+      },
+      "sender": {
+        "emailAddress": {
+          "name": "Prize Desk",
+          "address": "prize@lottery.example"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Owner",
+            "address": "owner@example.test"
+          }
+        }
+      ],
+      "ccRecipients": [],
+      "replyTo": [],
+      "body": {
+        "contentType": "text",
+        "content": "Claim your prize?"
+      },
+      "internetMessageId": "<j1@example.net>",
+      "internetMessageHeaders": [],
+      "categories": [],
+      "inferenceClassification": "focused",
+      "changeKey": "CQAAABYAAAj1",
+      "hasAttachments": false,
+      "attachments": []
+    },
+    {
+      "@odata.type": "#microsoft.graph.message",
+      "id": "old1",
+      "conversationId": "conv-OLD",
+      "parentFolderId": "AAMkFolderInbox==",
+      "receivedDateTime": "2026-07-19T10:00:00Z",
+      "sentDateTime": "2026-07-19T10:00:00Z",
+      "isDraft": false,
+      "subject": "Old thread",
+      "from": {
+        "emailAddress": {
+          "name": "Ana Lee",
+          "address": "ana@example.net"
+        }
+      },
+      "sender": {
+        "emailAddress": {
+          "name": "Ana Lee",
+          "address": "ana@example.net"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Owner",
+            "address": "owner@example.test"
+          }
+        }
+      ],
+      "ccRecipients": [],
+      "replyTo": [],
+      "body": {
+        "contentType": "text",
+        "content": "From long ago."
+      },
+      "internetMessageId": "<old1@example.net>",
+      "internetMessageHeaders": [],
+      "categories": [],
+      "inferenceClassification": "focused",
+      "changeKey": "CQAAABYAAAold1",
+      "hasAttachments": false,
+      "attachments": []
+    }
+  ],
+  "newMail": {
+    "@odata.type": "#microsoft.graph.message",
+    "id": "n1",
+    "conversationId": "conv-N",
+    "parentFolderId": "AAMkFolderInbox==",
+    "receivedDateTime": "2026-11-16T22:00:00Z",
+    "sentDateTime": "2026-11-16T22:00:00Z",
+    "isDraft": false,
+    "subject": "Offsite",
+    "from": {
+      "emailAddress": {
+        "name": "Ana Lee",
+        "address": "ana@example.net"
+      }
+    },
+    "sender": {
+      "emailAddress": {
+        "name": "Ana Lee",
+        "address": "ana@example.net"
+      }
+    },
+    "toRecipients": [
+      {
+        "emailAddress": {
+          "name": "Owner",
+          "address": "owner@example.test"
+        }
+      }
+    ],
+    "ccRecipients": [],
+    "replyTo": [],
+    "body": {
+      "contentType": "text",
+      "content": "Are we still on for the offsite?"
+    },
+    "internetMessageId": "<n1@example.net>",
+    "internetMessageHeaders": [],
+    "categories": [],
+    "inferenceClassification": "focused",
+    "changeKey": "CQAAABYAAAn1",
+    "hasAttachments": false,
+    "attachments": []
+  },
+  "token": {
+    "token_type": "Bearer",
+    "scope": "openid email offline_access User.Read Mail.Read",
+    "expires_in": 3599,
+    "ext_expires_in": 3599,
+    "access_token": "graph-test-access-token",
+    "refresh_token": "graph-test-refresh-token"
+  },
+  "tokenRefreshInvalidGrant": {
+    "error": "invalid_grant",
+    "error_description": "AADSTS70008: The provided authorization code or refresh token has expired due to inactivity.",
+    "error_codes": [
+      70008
+    ]
+  },
+  "error401": {
+    "error": {
+      "code": "InvalidAuthenticationToken",
+      "message": "Access token has expired or is not yet valid."
+    }
+  },
+  "error404Item": {
+    "error": {
+      "code": "ErrorItemNotFound",
+      "message": "The specified object was not found in the store."
+    }
+  },
+  "error410SyncState": {
+    "error": {
+      "code": "SyncStateNotFound",
+      "message": "The sync state was not found or has expired."
+    }
+  },
+  "error429": {
+    "error": {
+      "code": "TooManyRequests",
+      "message": "Application is over its MailboxConcurrency limit."
+    }
+  }
+}
