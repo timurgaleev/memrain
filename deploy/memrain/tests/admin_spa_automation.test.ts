@@ -15,13 +15,18 @@ import {
   daemonView,
   decisionMessage,
   deleteOutcome,
+  disconnectConsentNote,
+  exclusiveServices,
   grantNote,
   hasCalendarPicker,
   lastRunText,
   providerLabel,
   initialServices,
   safeAuthorizeUrl,
+  serviceLabel,
   sourcesFor,
+  tenantChoice,
+  tenantFromForm,
   toggleService,
   type ConnectorAccountView,
   type DaemonView,
@@ -62,6 +67,83 @@ describe("grantNote", () => {
     expect(lapsed.warn).toBe(true);
     expect(lapsed.text).toContain("7 days after consent");
     expect(lapsed.text).toContain("publish the app");
+  });
+});
+
+describe("grantNote for Microsoft", () => {
+  const NOW = Date.parse("2026-11-09T12:00:00Z");
+  const ms: ConnectorAccountView = {
+    ...base, provider: "microsoft", services: ["mail"], enabled: false,
+    credential: { scopes: ["Mail.Read"], expires_at: null, granted_at: "2026-10-01T12:00:00.000Z" },
+  };
+
+  it("says nothing while the account syncs, since every sync renews the grant", () => {
+    expect(grantNote({ ...ms, enabled: true, last_success_at: "2026-11-09T11:00:00Z" }, NOW)).toBeNull();
+  });
+
+  it("names the day 90 unused days end a grant whose sync is off, counting from its last use", () => {
+    expect(grantNote(ms, NOW)).toEqual({
+      warn: false,
+      text: "Around 2026-12-30: Microsoft ends access that goes unused for 90 days, and sync is off. Turn sync on to keep it renewed.",
+    });
+    // A clean sync after the consent is the later use.
+    expect(grantNote({ ...ms, last_success_at: "2026-10-20T08:00:00Z" }, NOW)!.text).toContain("2027-01-18");
+  });
+
+  it("warns from 15 days before the end, and explains a reconnect that 90 unused days likely caused", () => {
+    const soon = grantNote({ ...ms, credential: { ...ms.credential!, granted_at: "2026-08-20T12:00:00.000Z" } }, NOW)!;
+    expect(soon.warn).toBe(true);
+    expect(soon.text).toContain("2026-11-18");
+    expect(soon.text).toContain("Turn sync on or reconnect");
+    const lapsed = grantNote({ ...ms, status: "needs_reconnect", needs_reconnect: true,
+      credential: { ...ms.credential!, granted_at: "2026-07-01T12:00:00.000Z" } }, NOW)!;
+    expect(lapsed.warn).toBe(true);
+    expect(lapsed.text).toContain("unused for 90 days");
+    // A refusal well inside the 90 days has another cause: the notice says which.
+    expect(grantNote({ ...ms, status: "needs_reconnect", needs_reconnect: true }, NOW)).toBeNull();
+  });
+
+  it("has nothing to say about an account without a credential", () => {
+    expect(grantNote({ ...ms, status: "revoked", credential: null }, NOW)).toBeNull();
+  });
+});
+
+describe("Microsoft service labels and the tenant field", () => {
+  it("names each service as the owner knows it, and keeps an unknown one as it is", () => {
+    expect(serviceLabel("microsoft", "mail")).toBe("Outlook mail");
+    expect(serviceLabel("microsoft", "calendar")).toBe("Outlook calendar");
+    expect(serviceLabel("google", "gmail")).toBe("Gmail");
+    expect(serviceLabel("google", "calendar")).toBe("Google Calendar");
+    expect(serviceLabel("slack", "channels")).toBe("channels");
+  });
+
+  it("offers services as a single choice when no one source can hold two of them", () => {
+    expect(exclusiveServices({ services: ["mail", "calendar"], service_kinds: { mail: ["mailbox"], calendar: ["calendar"] } })).toBe(true);
+    expect(exclusiveServices({ services: ["a", "b"], service_kinds: { a: ["chat"], b: ["chat"] } })).toBe(false);
+  });
+
+  it("reads a saved tenant as the choice it was, and a form back as the tenant to send", () => {
+    expect(tenantChoice(null, "common")).toBe("common");
+    expect(tenantChoice("consumers", "common")).toBe("consumers");
+    expect(tenantChoice("contoso.onmicrosoft.com", "common")).toBe("tenant");
+    expect(tenantFromForm("organizations", "")).toBe("organizations");
+    expect(tenantFromForm("tenant", " Contoso.OnMicrosoft.com ")).toBe("contoso.onmicrosoft.com");
+    expect(tenantFromForm("tenant", "72F988BF-86F1-41AF-91AB-2D7CD011DB47")).toBe("72f988bf-86f1-41af-91ab-2d7cd011db47");
+    for (const bad of ["", "contoso", "a/b.example", "x.example?y=1"]) expect(tenantFromForm("tenant", bad)).toBeNull();
+  });
+
+  it("tells the owner where to remove a consent the provider cannot withdraw for us", () => {
+    expect(disconnectConsentNote("google", true)).toBeNull();
+    const ms = disconnectConsentNote("microsoft", false)!;
+    expect(ms).toContain("account.microsoft.com/privacy/app-access");
+    expect(ms).toContain("myapplications.microsoft.com");
+    expect(ms).toContain("IT admin");
+    expect(disconnectConsentNote("other", false)).toContain("the provider's own settings");
+  });
+
+  it("explains a tenant the server refused", () => {
+    expect(connectorErrorCopy("invalid_tenant")).toContain("directory ID");
+    expect(connectorErrorCopy("tenant_unsupported")).toContain("does not take a tenant");
   });
 });
 

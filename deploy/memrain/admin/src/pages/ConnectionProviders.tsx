@@ -3,13 +3,18 @@ import { automationApi } from "../api-automation.ts";
 import { CopyField } from "../components/CopyField.tsx";
 import { Dialog } from "../components/Dialog.tsx";
 import {
+  exclusiveServices,
   initialServices,
   providerLabel,
+  serviceLabel,
   sourcesFor,
+  tenantChoice,
+  tenantFromForm,
   toggleService,
   type ConnectorProviderView,
   type OAuthClientView,
   type SourceView,
+  type TenantChoice,
 } from "../lib/automation.ts";
 import { goToConsent } from "./connection-actions.ts";
 
@@ -72,10 +77,13 @@ export function ProviderPanel({ provider: p, sources, client, connectorsOn, onDo
           <fieldset className="connect-services">
             <legend>Read</legend>
             <div className="checkbox-group">
+              {/* Services that go into sources of different kinds connect one at a time: a single choice. */}
               {p.services.map((svc) => (
                 <label key={svc} className="checkbox-label">
-                  <input type="checkbox" checked={services.includes(svc)} onChange={(e) => toggle(svc, e.target.checked)} />
-                  {svc}
+                  {exclusiveServices(p)
+                    ? <input type="radio" name={`${sourceFieldId}-service`} checked={services.includes(svc)} onChange={() => setServices([svc])} />
+                    : <input type="checkbox" checked={services.includes(svc)} onChange={(e) => toggle(svc, e.target.checked)} />}
+                  {serviceLabel(p.id, svc)}
                 </label>
               ))}
             </div>
@@ -101,12 +109,69 @@ export function ProviderPanel({ provider: p, sources, client, connectorsOn, onDo
       {services.length > 0 && fitting.length === 0 && (
         <p className="hint">
           No source can hold {kinds.join(" or ")} data yet. Register one with{" "}
-          <code>memrain sources register &lt;id&gt; --kind {kinds[0] ?? "calendar"} --path-prefix &lt;prefix&gt;/</code>, then reload this page.
+          <code>memrain sources register &lt;id&gt; --kind {kinds[0] ?? "calendar"} --path-prefix &lt;prefix&gt;/</code>, add it to the read
+          sources of the agents that should see it, then reload this page.
         </p>
       )}
 
       {p.auth === "oauth" && <OwnAppSettings provider={p} client={client} onDone={onDone} onError={onError} />}
     </section>
+  );
+}
+
+const TENANT_OPTIONS: ReadonlyArray<{ value: TenantChoice; label: string }> = [
+  { value: "common", label: "Work, school and personal accounts (common)" },
+  { value: "organizations", label: "Work or school accounts only (organizations)" },
+  { value: "consumers", label: "Personal accounts only (consumers)" },
+  { value: "tenant", label: "One organization: its directory ID or domain" },
+];
+
+/** How a saved app's tenant reads next to its client id. */
+function tenantSummary(tenant: string | null, fallback: string): string {
+  const t = tenant ?? fallback;
+  const option = TENANT_OPTIONS.find((o) => o.value === t);
+  return option ? option.label.replace(/ \(.*\)$/, "").toLowerCase() : `directory ${t}`;
+}
+
+/** Who may sign in to the app: an audience, or one directory by id or domain. It must match the app's supported account types. */
+function TenantFields({ choice, directory, invalid, onChoice, onDirectory }: {
+  choice: TenantChoice;
+  directory: string;
+  invalid: boolean;
+  onChoice: (c: TenantChoice) => void;
+  onDirectory: (v: string) => void;
+}) {
+  const whoField = useId();
+  const dirField = useId();
+  return (
+    <>
+      <div className="field">
+        <label htmlFor={whoField}>Who can sign in</label>
+        <select id={whoField} value={choice} onChange={(e) => onChoice(e.target.value as TenantChoice)}>
+          {TENANT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
+      {choice === "tenant" && (
+        <div className="field">
+          <label htmlFor={dirField}>Directory (tenant) ID or domain</label>
+          <input
+            id={dirField}
+            value={directory}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="contoso.onmicrosoft.com"
+            aria-invalid={invalid}
+            aria-describedby={invalid ? `${dirField}-error` : undefined}
+            onChange={(e) => onDirectory(e.target.value)}
+          />
+          {invalid && (
+            <p className="error-text" id={`${dirField}-error`}>
+              Enter a directory ID like 72f988bf-86f1-41af-91ab-2d7cd011db47, or a domain like contoso.onmicrosoft.com.
+            </p>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -124,11 +189,16 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
   const [askRemove, setAskRemove] = useState(false);
   const idField = useId();
   const secretField = useId();
+  const tenants = p.tenant_default !== null;
+  const [choice, setChoice] = useState<TenantChoice>(() => tenantChoice(client?.tenant ?? null, p.tenant_default ?? "common"));
+  const [directory, setDirectory] = useState(() => (client?.tenant && tenantChoice(client.tenant, "common") === "tenant" ? client.tenant : ""));
+  const tenant = tenants ? tenantFromForm(choice, directory) : null;
+  const tenantBad = tenants && choice === "tenant" && directory.trim() !== "" && tenant === null;
 
   const save = async () => {
     setBusy(true);
     try {
-      await automationApi.saveClient(p.id, clientId.trim(), secret);
+      await automationApi.saveClient(p.id, clientId.trim(), secret, tenants ? tenant ?? undefined : undefined);
       setClientId("");
       setSecret("");
       onDone(`Saved your ${name} app. New connections use it.`);
@@ -158,17 +228,26 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
       <div className="own-app-body">
         {client && (
           <p className="dialog-text">
-            Using <span className="mono">{client.client_id}</span>, saved {new Date(client.updated_at).toLocaleDateString()}.{" "}
+            Using <span className="mono">{client.client_id}</span>
+            {tenants && <>, {tenantSummary(client.tenant, p.tenant_default ?? "common")}</>}, saved {new Date(client.updated_at).toLocaleDateString()}.{" "}
             <button className="btn-link" disabled={busy} onClick={() => setAskRemove(true)}>Remove</button>
           </p>
         )}
         {p.callback_uri ? (
           <div className="own-app-callback">
-            <span className="field-label">Register this redirect URL in the app</span>
+            <span className="field-label">
+              {p.id === "microsoft" ? "Register this redirect URI in the app, as a Web platform" : "Register this redirect URL in the app"}
+            </span>
             <CopyField value={p.callback_uri} label={`Callback URL for ${name}`} />
           </div>
         ) : (
           <p className="hint">Set <code>MEMRAIN_PUBLIC_URL</code> to the brain's https address first; the redirect URL is built from it.</p>
+        )}
+        {p.id === "microsoft" && (
+          <p className="hint">
+            The client ID is the app's Application (client) ID on its Overview page. The secret is the Value column under
+            Certificates &amp; secrets, shown once when you add it; the Secret ID beside it is not the secret.
+          </p>
         )}
         <form className="own-app-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
           <div className="field">
@@ -179,7 +258,20 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
             <label htmlFor={secretField}>Client secret</label>
             <input id={secretField} type="password" value={secret} autoComplete="new-password" onChange={(e) => setSecret(e.target.value)} />
           </div>
-          <button className="btn btn-secondary" type="submit" disabled={busy || clientId.trim() === "" || secret === ""}>
+          {tenants && (
+            <TenantFields
+              choice={choice}
+              directory={directory}
+              invalid={tenantBad}
+              onChoice={setChoice}
+              onDirectory={setDirectory}
+            />
+          )}
+          <button
+            className="btn btn-secondary"
+            type="submit"
+            disabled={busy || clientId.trim() === "" || secret === "" || (tenants && tenant === null)}
+          >
             {client ? "Replace app" : "Save app"}
           </button>
         </form>

@@ -3,7 +3,7 @@ import { automationApi } from "../api-automation.ts";
 import { Dialog } from "../components/Dialog.tsx";
 import { ApiError } from "../lib/passkey-fetch.ts";
 import { fmtInt } from "../lib/format.ts";
-import { confirmMatches, deleteOutcome, providerLabel, type ConnectorAccountView, type DataPreview } from "../lib/automation.ts";
+import { confirmMatches, deleteOutcome, disconnectConsentNote, providerLabel, type ConnectorAccountView, type DataPreview } from "../lib/automation.ts";
 import { actionError } from "./connection-actions.ts";
 
 function NameConfirm({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
@@ -28,10 +28,14 @@ const plural = (n: number, one: string, many: string) => `${fmtInt(n)} ${n === 1
 
 /**
  * Disconnect: revoke upstream, drop the credential, keep the pages. With the
- * box ticked, the dialog goes on to the preview-then-delete step.
+ * box ticked, the dialog goes on to the preview-then-delete step. A provider
+ * that gives the app no way to revoke (Microsoft) keeps the consent until the
+ * owner removes it there, and the dialog says where.
  */
-export function DisconnectDialog({ account, onClose, onDone, onChanged }: {
+export function DisconnectDialog({ account, canRevoke, onClose, onDone, onChanged }: {
   account: ConnectorAccountView;
+  /** Whether the provider lets Memrain withdraw the grant itself. */
+  canRevoke: boolean;
   onClose: () => void;
   onDone: (message: string) => void;
   /** The account changed underneath the page (it is disconnected now). */
@@ -43,6 +47,7 @@ export function DisconnectDialog({ account, onClose, onDone, onChanged }: {
   const [error, setError] = useState("");
   const [next, setNext] = useState<{ kept: boolean } | null>(null);
   const deleteId = useId();
+  const consent = disconnectConsentNote(account.provider, canRevoke);
 
   if (next) {
     return (
@@ -51,7 +56,7 @@ export function DisconnectDialog({ account, onClose, onDone, onChanged }: {
         initialName={typed}
         lead={next.kept
           ? `${providerLabel(account.provider)} did not confirm the revoke, so the credential is kept for another Disconnect. Its pages can still be deleted.`
-          : `${account.account_label} is disconnected.`}
+          : consent ? `${account.account_label} is disconnected and Memrain deleted its access. ${consent}` : `${account.account_label} is disconnected.`}
         onClose={onClose}
         onDone={onDone}
       />
@@ -70,7 +75,9 @@ export function DisconnectDialog({ account, onClose, onDone, onChanged }: {
       }
       onDone(r.credential_kept
         ? `${providerLabel(account.provider)} did not confirm the revoke. The credential is kept so Disconnect can be tried again; sync is off.`
-        : `${account.account_label} is disconnected. Its pages stay in the brain.`);
+        : consent
+          ? `${account.account_label} is disconnected and Memrain deleted its access. Its pages stay in the brain. ${consent}`
+          : `${account.account_label} is disconnected. Its pages stay in the brain.`);
     } catch (e) {
       setError(actionError(e));
     } finally {
@@ -80,10 +87,21 @@ export function DisconnectDialog({ account, onClose, onDone, onChanged }: {
 
   return (
     <Dialog title={`Disconnect ${account.account_label}?`} onClose={onClose}>
-      <p className="dialog-text">
-        Memrain revokes its access at {providerLabel(account.provider)}, forgets the credential and stops syncing. Pages it
-        already brought in stay searchable.
-      </p>
+      {consent ? (
+        <>
+          <p className="dialog-text">
+            Memrain deletes its stored access to {providerLabel(account.provider)} and stops syncing. Pages it already brought in
+            stay searchable.
+          </p>
+          <p className="dialog-text">{consent}</p>
+        </>
+      ) : (
+        <p className="dialog-text">
+          Memrain revokes its access at {providerLabel(account.provider)}, forgets the credential and stops syncing. Pages it
+          already brought in stay searchable.
+        </p>
+      )}
+      <p className="hint">To pause for a while instead, close this and use Turn sync off: reconnecting means consenting again.</p>
       <NameConfirm label={account.account_label} value={typed} onChange={setTyped} />
       <label className="checkbox-label" htmlFor={deleteId}>
         <input id={deleteId} type="checkbox" checked={thenDelete} onChange={(e) => setThenDelete(e.target.checked)} />

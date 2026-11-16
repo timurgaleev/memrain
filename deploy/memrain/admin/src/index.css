@@ -1288,6 +1288,7 @@ pre.copy-value {
 .connect-form .field label, .own-app-form .field label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
 .connect-services { border: none; display: grid; gap: 6px; }
 .connect-services legend { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+.connect-services .checkbox-label { white-space: nowrap; }
 .provider-panel .hint { margin: 0; }
 .own-app summary { color: var(--text-secondary); cursor: pointer; width: fit-content; font-size: 13px; }
 .own-app summary:hover { color: var(--text-primary); }
@@ -1296,6 +1297,7 @@ pre.copy-value {
 .field-label { font-size: 12px; color: var(--text-secondary); }
 .own-app-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; }
 .own-app-form .field { max-width: 300px; }
+.own-app-form .field .error-text { font-size: 12px; margin: 0; }
 
 .hold-excerpt {
   margin: 0;

@@ -76,6 +76,10 @@ export interface ConnectorProviderView {
   auth: "oauth" | "api_key";
   /** The redirect a bring-your-own app must allow; null until MEMRAIN_PUBLIC_URL can receive one. */
   callback_uri: string | null;
+  /** The tenant an app of this provider signs in to unless it names one; null when the provider has no tenants. */
+  tenant_default: string | null;
+  /** Whether a disconnect can withdraw the grant at the provider. */
+  can_revoke: boolean;
 }
 
 export interface SourceView {
@@ -86,6 +90,8 @@ export interface SourceView {
 export interface OAuthClientView {
   provider: string;
   client_id: string;
+  /** Who may sign in to the app; null is the provider's default. */
+  tenant: string | null;
   updated_at: string;
 }
 
@@ -112,6 +118,57 @@ const PROVIDER_LABELS: Record<string, string> = { google: "Google", fireflies: "
 /** A provider's display name; an id the panel does not know stays as it is. */
 export function providerLabel(id: string): string {
   return Object.hasOwn(PROVIDER_LABELS, id) ? PROVIDER_LABELS[id]! : id;
+}
+
+const SERVICE_LABELS: Record<string, string> = {
+  "google:calendar": "Google Calendar",
+  "google:gmail": "Gmail",
+  "microsoft:mail": "Outlook mail",
+  "microsoft:calendar": "Outlook calendar",
+};
+
+/** A service as the owner knows it (Outlook mail, Gmail); an id the page does not know stays as it is. */
+export function serviceLabel(provider: string, service: string): string {
+  const key = `${provider}:${service}`;
+  return Object.hasOwn(SERVICE_LABELS, key) ? SERVICE_LABELS[key]! : service;
+}
+
+export type TenantChoice = "common" | "organizations" | "consumers" | "tenant";
+const TENANT_AUDIENCES: readonly string[] = ["common", "organizations", "consumers"];
+const TENANT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const DOMAIN_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** The tenant picker's option for a saved tenant: one of the audiences, or a single directory. */
+export function tenantChoice(tenant: string | null, fallback: string): TenantChoice {
+  const t = tenant ?? fallback;
+  return TENANT_AUDIENCES.includes(t) ? t as TenantChoice : "tenant";
+}
+
+/**
+ * The tenant the form sends: the chosen audience, or the typed directory id
+ * or domain in lower case. Null when the typed value is neither; the server
+ * applies the same rule.
+ */
+export function tenantFromForm(choice: TenantChoice, typed: string): string | null {
+  if (choice !== "tenant") return choice;
+  const t = typed.trim().toLowerCase();
+  if (TENANT_ID_RE.test(t)) return t;
+  const labels = t.split(".");
+  return t.length <= 253 && labels.length >= 2 && labels.every((l) => DOMAIN_LABEL_RE.test(l)) ? t : null;
+}
+
+/**
+ * What a disconnect cannot do for the owner: withdraw a consent the provider
+ * gives the app no way to withdraw. Null when the disconnect revokes it.
+ */
+export function disconnectConsentNote(provider: string, canRevoke: boolean): string | null {
+  if (canRevoke) return null;
+  if (provider === "microsoft") {
+    return "Microsoft gives Memrain no way to withdraw the consent you gave, so it stays listed until you remove it: for a personal "
+      + "account at account.microsoft.com/privacy/app-access, for a work or school account at myapplications.microsoft.com (the app's "
+      + "… menu, Manage your application, Revoke permissions). Consent your IT admin gave for the whole organization only the IT admin can remove.";
+  }
+  return `${providerLabel(provider)} gives Memrain no way to withdraw the consent you gave; remove it in the provider's own settings.`;
 }
 
 /** The provider's consent page, followed only when it is a plain https address. */
@@ -167,11 +224,51 @@ export function lastRunText(run: AccountRunView | null): string {
   return `${run.status}${why.length > 0 ? ` (${why.join(", ")})` : ""} · ${counts}`;
 }
 
+const DAY_MS = 86_400_000;
 /**
- * What the owner should know about a test-mode grant: when it is expected to
- * end, or that it likely ended the account's access. `warn` asks for action.
+ * Microsoft refresh tokens live 90 days and replace themselves on every use
+ * (learn.microsoft.com/entra/identity-platform/refresh-tokens), and Memrain
+ * uses one only when a sync needs a fresh access token. A grant that syncs
+ * never runs out; one whose sync is off ends 90 days after its last use.
  */
-export function grantNote(a: ConnectorAccountView): { warn: boolean; text: string } | null {
+const IDLE_GRANT_DAYS = 90;
+const IDLE_WARN_DAYS = 15;
+/** Run outcomes that prove the run got an access token, so the grant was used. */
+const USED_RUNS: ReadonlySet<string> = new Set(["success", "nothing_new", "partial", "forbidden"]);
+
+function lastGrantUse(a: ConnectorAccountView): number {
+  const used = [a.credential?.granted_at, a.last_success_at, a.last_run && USED_RUNS.has(a.last_run.status) ? a.last_run.at : null]
+    .map((t) => (t ? Date.parse(t) : Number.NaN))
+    .filter((t) => Number.isFinite(t));
+  return used.length > 0 ? Math.max(...used) : Number.NaN;
+}
+
+function idleGrantNote(a: ConnectorAccountView, now: number): { warn: boolean; text: string } | null {
+  if (a.credential === null || a.status === "revoked") return null;
+  const used = lastGrantUse(a);
+  if (!Number.isFinite(used)) return null;
+  const ends = used + IDLE_GRANT_DAYS * DAY_MS;
+  const day = new Date(ends).toISOString().slice(0, 10);
+  const limit = `Microsoft ends access that goes unused for ${IDLE_GRANT_DAYS} days`;
+  if (a.status === "needs_reconnect") {
+    return now >= ends
+      ? { warn: true, text: `${limit}, and this account was last used on ${new Date(used).toISOString().slice(0, 10)}. Reconnect to renew it.` }
+      : null;
+  }
+  if (a.enabled && a.status === "active") return null;
+  const why = a.enabled ? "and this account is not syncing" : "and sync is off";
+  return now >= ends - IDLE_WARN_DAYS * DAY_MS
+    ? { warn: true, text: `Around ${day}: ${limit}, ${why}. Turn sync on or reconnect before then to renew it.` }
+    : { warn: false, text: `Around ${day}: ${limit}, ${why}. Turn sync on to keep it renewed.` };
+}
+
+/**
+ * What the owner should know about when a grant ends: a test-mode grant's
+ * expected end (Google), or an idle grant's (Microsoft), or that either likely
+ * ended the account's access. `warn` asks for action.
+ */
+export function grantNote(a: ConnectorAccountView, now: number = Date.now()): { warn: boolean; text: string } | null {
+  if (a.provider === "microsoft") return idleGrantNote(a, now);
   const g = a.grant_expiry;
   if (g === null) return null;
   const day = g.expires_at.slice(0, 10);
@@ -196,6 +293,11 @@ export function confirmMatches(typed: string, accountLabel: string): boolean {
 }
 
 type ServicePicker = Pick<ConnectorProviderView, "services" | "service_kinds">;
+
+/** No one source can hold two of the services: they connect one at a time, a single choice. */
+export function exclusiveServices(p: ServicePicker): boolean {
+  return p.services.every((a, i) => p.services.slice(i + 1).every((b) => !shareKind(p, a, b)));
+}
 
 /** Whether one source kind can hold both services. */
 function shareKind(p: ServicePicker, a: string, b: string): boolean {
@@ -233,6 +335,8 @@ const CONNECT_ERRORS: Record<string, string> = {
   source_kind: "That source cannot hold this kind of data. Pick another source.",
   redirect_uri: "MEMRAIN_PUBLIC_URL must be an https address before a provider can send you back.",
   no_client: "No OAuth app is set up for this provider. Add your own client below.",
+  invalid_tenant: "That is not a tenant. Use common, organizations, consumers, a directory ID (a GUID) or a domain such as contoso.onmicrosoft.com.",
+  tenant_unsupported: "This provider does not take a tenant. Save the app without one.",
   state_invalid: "The connect link was not recognised. Start again.",
   state_used: "That connect link was already used. Start again.",
   state_expired: "The connect link expired. Start again.",

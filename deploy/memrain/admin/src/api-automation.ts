@@ -29,8 +29,9 @@ export const automationApi = {
   connectors: () => call<ConnectorsReport>("/admin/api/connectors"),
   startConnect: (providerId: string, sourceId: string, services: string[]) =>
     call<{ authorize_url: string; expires_at: string }>(provider(providerId, "start"), post({ source_id: sourceId, services })),
-  saveClient: (providerId: string, clientId: string, clientSecret: string) =>
-    call<{ ok: true }>(provider(providerId, "client"), post({ client_id: clientId, client_secret: clientSecret })),
+  /** `tenant` only for a provider with tenants; the server refuses one for any other. */
+  saveClient: (providerId: string, clientId: string, clientSecret: string, tenant?: string) =>
+    call<{ ok: true }>(provider(providerId, "client"), post({ client_id: clientId, client_secret: clientSecret, ...(tenant === undefined ? {} : { tenant }) })),
   deleteClient: (providerId: string) => call<{ ok: true; deleted: boolean }>(provider(providerId, "client/delete"), post()),
   saveApiKey: (providerId: string, sourceId: string, services: string[], apiKey: string) =>
     call<{ ok: true }>(provider(providerId, "key"), post({ source_id: sourceId, services, api_key: apiKey })),

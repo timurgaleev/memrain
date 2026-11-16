@@ -23,6 +23,22 @@ interface Account {
   grant_expiry: { granted_at: string; expires_at: string; days: number; state: string; due_soon: boolean } | null;
 }
 
+export interface Provider {
+  id: string;
+  services: string[];
+  service_kinds: Record<string, string[]>;
+  auth: string;
+  callback_uri: string | null;
+  tenant_default: string | null;
+  can_revoke: boolean;
+}
+
+/** Microsoft as the server lists it: two services into sources of different kinds, a tenant, no upstream revoke. */
+export const MICROSOFT: Provider = {
+  id: "microsoft", services: ["mail", "calendar"], service_kinds: { mail: ["mailbox"], calendar: ["calendar"] }, auth: "oauth",
+  callback_uri: "https://brain.example.test/admin/connectors/callback/microsoft", tenant_default: "common", can_revoke: false,
+};
+
 export interface Calendar { id: string; summary: string; primary: boolean; access_role: string; selected: boolean }
 
 export interface AutomationState {
@@ -30,10 +46,10 @@ export interface AutomationState {
     enabled: boolean;
     reason: string | null;
     kek_id: string | null;
-    providers: Array<{ id: string; services: string[]; service_kinds: Record<string, string[]>; auth: string; callback_uri: string | null }>;
+    providers: Provider[];
     sources: Array<{ id: string; kind: string }>;
     accounts: Account[];
-    clients: Array<{ provider: string; client_id: string; updated_at: string }>;
+    clients: Array<{ provider: string; client_id: string; tenant: string | null; updated_at: string }>;
   };
   failConnectors: number;
   calendars: { calendars: Calendar[]; history_days: number };
@@ -61,7 +77,7 @@ export function scenario(over: Partial<AutomationState["connectors"]> = {}): Aut
       enabled: true, reason: null, kek_id: "k1",
       providers: [{
         id: "google", services: ["calendar"], service_kinds: { calendar: ["calendar"] }, auth: "oauth",
-        callback_uri: "https://brain.example.test/admin/connectors/callback/google",
+        callback_uri: "https://brain.example.test/admin/connectors/callback/google", tenant_default: null, can_revoke: true,
       }],
       sources: [{ id: "default", kind: "other" }, { id: "cal", kind: "calendar" }],
       accounts: [account()],
@@ -140,7 +156,7 @@ export async function automationRoute(request: Request): Promise<Response | null
         if (body.confirm_label !== a.account_label) return Response.json({ error: "confirm_mismatch" }, { status: 400 });
         a.status = "revoked";
         a.enabled = false;
-        return Response.json({ ok: true, revoked: true, credential_kept: false });
+        return Response.json({ ok: true, revoked: st.connectors.providers.find((p) => p.id === a.provider)?.can_revoke ?? false, credential_kept: false });
       case "delete-data":
         return Response.json({ ok: true, deleted: PREVIEW.pages, changed: 0 });
       case "deletions/confirm": {
