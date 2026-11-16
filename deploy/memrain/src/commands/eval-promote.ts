@@ -62,12 +62,15 @@ export interface PromoteRun {
   spend: { calls: number; usd: number };
 }
 
-type MetricKey = "hit_at_5" | "mrr" | "ndcg_at_10";
+type MetricKey = "hit_at_5" | "mrr" | "ndcg_at_10" | "recall_at_10";
+/** The metrics the paired statistics and the Holm family cover. */
 const METRICS: [MetricKey, (s: QueryScore) => number][] = [
   ["hit_at_5", (s) => s.hit5],
   ["mrr", (s) => s.rr],
   ["ndcg_at_10", (s) => s.ndcg10],
 ];
+/** Every metric the protocol forbids to drop, overall and per tag. */
+const DROP_METRICS: [MetricKey, (s: QueryScore) => number][] = [...METRICS, ["recall_at_10", (s) => s.recall10]];
 
 /** Noise floor and the per-tag tolerance from the acceptance protocol. */
 export const MIN_NOISE = 0.01;
@@ -108,7 +111,7 @@ function byTag(run: PromoteRun): Record<string, QueryScore[]> {
 
 /** The pure verdict; exported for tests. */
 export function promoteVerdict(input: PromoteInput): PromoteResult {
-  const empty = { hit_at_5: MIN_NOISE, mrr: MIN_NOISE, ndcg_at_10: MIN_NOISE };
+  const empty = { hit_at_5: MIN_NOISE, mrr: MIN_NOISE, ndcg_at_10: MIN_NOISE, recall_at_10: MIN_NOISE };
   if (input.baselines.length < 2) {
     return {
       verdict: "REFUSED",
@@ -117,7 +120,7 @@ export function promoteVerdict(input: PromoteInput): PromoteResult {
     };
   }
   const [b1, b2] = [metricsOf(input.baselines[0]!), metricsOf(input.baselines[1]!)];
-  const noise = Object.fromEntries(METRICS.map(([m]) => [m, Math.max(MIN_NOISE, 2 * Math.abs(b1[m] - b2[m]))])) as Record<MetricKey, number>;
+  const noise = Object.fromEntries(DROP_METRICS.map(([m]) => [m, Math.max(MIN_NOISE, 2 * Math.abs(b1[m] - b2[m]))])) as Record<MetricKey, number>;
   const base = input.baselines[0]!;
   const cand = input.candidate;
   const c = metricsOf(cand);
@@ -128,7 +131,7 @@ export function promoteVerdict(input: PromoteInput): PromoteResult {
     if (run.spend.calls > 0) reasons.push(`the ${label} bench run made ${run.spend.calls} paid call(s); it must spend nothing`);
     if (run.decoys.passed.length > 0) reasons.push(`the scorer accepted decoy answers (${run.decoys.passed.join(", ")}) in the ${label} run`);
   }
-  for (const [m] of METRICS) {
+  for (const [m] of DROP_METRICS) {
     if (b1[m] - c[m] > noise[m]) reasons.push(`${m} fell ${(b1[m] - c[m]).toFixed(3)} overall, above the noise ${noise[m].toFixed(3)}`);
   }
   const baseTags = byTag(base);
@@ -139,7 +142,7 @@ export function promoteVerdict(input: PromoteInput): PromoteResult {
     const after = meanScores(scores);
     tagReport[tag] = { n: scores.length, baseline: before, candidate: after };
     if (scores.length < TAG_MIN_N) continue;
-    for (const [m] of METRICS) {
+    for (const [m] of DROP_METRICS) {
       if (before[m] - after[m] > TAG_MAX_DROP) reasons.push(`${m} fell ${(before[m] - after[m]).toFixed(3)} on ${tag} (n=${scores.length})`);
     }
   }

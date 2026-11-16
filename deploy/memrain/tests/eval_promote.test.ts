@@ -63,6 +63,19 @@ describe("promoteVerdict", () => {
     expect(r.verdict).toBe("FAIL");
   });
 
+  it("fails when recall@10 drops even though the other metrics improve", () => {
+    // A flag that lifts the first hit but pushes the other relevant pages out
+    // of the top ten loses evidence; the protocol counts every metric.
+    const withRecall = (r: PromoteRun, recall10: number): PromoteRun => ({
+      ...r,
+      per_query: Object.fromEntries(Object.entries(r.per_query).map(([id, s]) => [id, { ...s, recall10 }])),
+    });
+    const base = withRecall(run(40, () => 0.5), 1);
+    const r = promoteVerdict({ baselines: [base, base], candidate: withRecall(run(40, () => 1), 0.5), top1: [], lme });
+    expect(r.verdict).toBe("FAIL");
+    expect(r.reasons.join(" ")).toContain("recall_at_10");
+  });
+
   it("is incomplete without LongMemEval figures, and neutral when nothing moves", () => {
     expect(promoteVerdict({ baselines: [run(40, () => 0.5), run(40, () => 0.5)], candidate: run(40, () => 1), top1: [] }).verdict).toBe("INCOMPLETE");
     expect(promoteVerdict({ baselines: [run(40, () => 0.5), run(40, () => 0.5)], candidate: run(40, () => 0.5), top1: [], lme }).verdict).toBe("NEUTRAL");
