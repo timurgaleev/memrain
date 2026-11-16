@@ -153,13 +153,20 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     return account;
   }
 
-  /** One scheduler tick at `at`, then the worker runs what it queued. */
+  /**
+   * One scheduler tick at `at`, then the worker runs what it queued. The
+   * queue stamps a new job due at the database's own clock, so the worker
+   * claims at that clock once it has passed `at`: a fixed `at` in the past
+   * would otherwise find nothing due.
+   */
   async function tick(storage: Storage, at: Date) {
     const e = storage.engine();
     const queued = (await enqueueDueDaemons(e, at, { env: ENV })).filter(r => r.daemon === "connector_sync");
     const queue = new Queue(e);
+    const dbNow = new Date((await e.query<{ now: Date | string }>(`SELECT NOW() AS now`)).rows[0]!.now);
+    const claimAt = new Date(Math.max(at.getTime(), dbNow.getTime()));
     const results: Array<Record<string, unknown>> = [];
-    for (let job = await queue.claim({ now: at, kinds: [CONNECTOR_SYNC_JOB_KIND] }); job; job = await queue.claim({ now: at, kinds: [CONNECTOR_SYNC_JOB_KIND] })) {
+    for (let job = await queue.claim({ now: claimAt, kinds: [CONNECTOR_SYNC_JOB_KIND] }); job; job = await queue.claim({ now: claimAt, kinds: [CONNECTOR_SYNC_JOB_KIND] })) {
       const out = (await getHandler(CONNECTOR_SYNC_JOB_KIND)!(job.payload, { job })) ?? {};
       await queue.complete(job.id, job.claimGeneration, out);
       results.push(out);
@@ -240,9 +247,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await tick(db.storage, T0);
       expect(await readCursor(e, account.id, "meetings")).toBe("c1");
 
-      // The access token has expired and the provider will not renew it.
+      // The access token has expired, by the run's clock, and the provider will not renew it.
       await storeCredential(e, kek, account, { access_token: "expired-access-token-0000", refresh_token: "revoked-refresh-token-0000" },
-        { scopes: ["openid", "meetings.read"], expiresAt: new Date(Date.now() - 3_600_000) });
+        { scopes: ["openid", "meetings.read"], expiresAt: new Date(T0.getTime() - 3_600_000) });
       world.refuseRefresh = true;
       world.cursor = "c2";
       const calls = world.apiCalls;
