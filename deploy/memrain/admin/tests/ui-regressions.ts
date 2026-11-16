@@ -303,7 +303,7 @@ try {
     await panel.getByRole("button", { name: "Copy Callback URL for Microsoft" }).waitFor();
     const who = panel.getByLabel("Who can sign in");
     assert.equal(await who.inputValue(), "common");
-    await panel.getByLabel("Client ID").fill("11111111-2222-3333-4444-555555555555");
+    await panel.getByLabel("Client ID").fill("11111111-2222-3333-4444-a55555555555");
     await panel.getByLabel("Client secret").fill("ms-secret-value");
     await who.selectOption("tenant");
     const dir = panel.getByLabel("Directory (tenant) ID or domain");
@@ -316,7 +316,7 @@ try {
     await page.getByText("Saved your Microsoft app", { exact: false }).waitFor();
     assert.deepEqual(automation.posts, [{
       path: "/admin/api/connectors/microsoft/client",
-      body: { client_id: "11111111-2222-3333-4444-555555555555", client_secret: "ms-secret-value", tenant: "contoso.onmicrosoft.com" },
+      body: { client_id: "11111111-2222-3333-4444-a55555555555", client_secret: "ms-secret-value", tenant: "contoso.onmicrosoft.com" },
     }]);
   });
   await check("A saved Microsoft app shows its tenant, and an audience saves as itself", "connections", async (page) => {

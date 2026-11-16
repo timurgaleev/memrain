@@ -27,7 +27,7 @@ const PUBLIC = "https://brain.example.test";
 const HOST = "brain.example.test";
 const BOOT = `boot-${randomBytes(12).toString("hex")}`;
 const TENANT_ID = "72f988bf-86f1-41af-91ab-2d7cd011db47";
-const APP_ID = "11111111-2222-3333-4444-555555555555";
+const APP_ID = "11111111-2222-3333-4444-a55555555555";
 const APP_SECRET = "byo-entra-secret-value~0123456789";
 const ENV_KEYS = [
   "MEMRAIN_CONNECTORS_ENABLED", "MEMRAIN_CONNECTOR_KEK", "MEMRAIN_CONNECTOR_KEK_FILE",

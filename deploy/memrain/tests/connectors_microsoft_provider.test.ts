@@ -106,9 +106,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const e = db.storage.engine();
     try {
       await sources(e);
-      await setOAuthClient(e, kek, "microsoft", "11111111-2222-3333-4444-555555555555", "byo-ms-secret-value", TENANT_ID);
+      await setOAuthClient(e, kek, "microsoft", "11111111-2222-3333-4444-a55555555555", "byo-ms-secret-value", TENANT_ID);
       expect(await getOAuthClient(e, kek, "microsoft")).toEqual({
-        clientId: "11111111-2222-3333-4444-555555555555", clientSecret: "byo-ms-secret-value", tenant: TENANT_ID,
+        clientId: "11111111-2222-3333-4444-a55555555555", clientSecret: "byo-ms-secret-value", tenant: TENANT_ID,
       });
       const world: MicrosoftWorld = { calls: [] };
       const d = deps(e, world);
@@ -117,7 +117,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await completeConnect(d, { provider: "microsoft", state, code: "M.C5-auth-code", adminSessionId: SESSION });
       const exchange = world.calls.find((c) => c.body?.get("grant_type") === "authorization_code")!;
       expect(tokenTenant(exchange)).toBe(TENANT_ID);
-      expect(exchange.body!.get("client_id")).toBe("11111111-2222-3333-4444-555555555555");
+      expect(exchange.body!.get("client_id")).toBe("11111111-2222-3333-4444-a55555555555");
       expect(exchange.body!.get("client_secret")).toBe("byo-ms-secret-value");
       expect(exchange.body!.get("code_verifier")).toMatch(/^[\w-]{43}$/);
 

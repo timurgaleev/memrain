@@ -76,7 +76,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const db = await open();
     try {
       await registerSource(db.storage.engine(), { id: "work-mail", kind: "mailbox", pathPrefix: "mail/" });
-      const app = "11111111-2222-4333-8444-555555555555";
+      const app = "11111111-2222-4333-8444-a55555555555";
       const saved = await send(db.storage, browser("/admin/api/connectors/microsoft/client", { client_id: app, client_secret: "ms-secret-value-0123", tenant: " Contoso.OnMicrosoft.com " }));
       expect(saved.status).toBe(200);
       expect(await saved.json()).toEqual({ ok: true, provider: "microsoft", client_id: app, tenant: "contoso.onmicrosoft.com" });
