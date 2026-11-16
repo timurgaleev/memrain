@@ -19,7 +19,7 @@ import { deltaCalls, GRAPH_ACCESS_TOKEN, GRAPH_FIXTURES, graphFetch, MS_TOKEN_UR
 import { registerSource } from "../src/core/sources.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
 import { getAccount, setAccountConfig, setAccountEnabled, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
-import { completeConnect, ConnectError, connectorCallbackUri, startConnect, type ConnectDeps } from "../src/core/connectors/oauth-connect.ts";
+import { completeConnect, ConnectError, connectorCallbackUri, disconnectAccount, startConnect, type ConnectDeps } from "../src/core/connectors/oauth-connect.ts";
 import { builtinProviders, ProviderRegistry } from "../src/core/connectors/providers.ts";
 import { ConnectorClient } from "../src/core/connectors/client.ts";
 import { readCursor } from "../src/core/connectors/sync-store.ts";
@@ -379,6 +379,21 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const exchange = world.calls.find(c => c.url.toString() === MS_TOKEN_URL)!;
       expect(exchange.body?.get("code_verifier")).toMatch(/^[\w-]{43}$/);
       expect(exchange.body?.get("client_secret")).toBe(ENV.MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET!);
+    } finally { await db.close(); }
+  });
+
+  it("disconnects without a revocation endpoint: the credential is deleted, nothing is sent to Microsoft", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const account = await connect(db.storage, world);
+      world.calls.length = 0;
+      const deps: ConnectDeps = { engine: e, kek, providers: providers(), fetch: graphFetch(world), env: ENV, now: () => T0 };
+      expect(await disconnectAccount(deps, account.id)).toEqual({ revoked: false, credentialKept: false });
+      expect(world.calls).toEqual([]);
+      expect((await getAccount(e, account.id))!.status).toBe("revoked");
+      expect(await count(e, "SELECT count(*)::int AS n FROM connector_credentials WHERE account_id = $1", [account.id])).toBe(0);
     } finally { await db.close(); }
   });
 
