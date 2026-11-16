@@ -45,10 +45,14 @@ export interface RevokeContext {
   client: { clientId: string; clientSecret: string };
 }
 
-/** What a sync run hands its adapter: the run's environment and clock. */
+/**
+ * What a sync run hands its adapter: the run's environment and clock, and the
+ * brain's engine for an adapter that reads back what its account stored.
+ */
 export interface AdapterContext {
   env: NodeJS.ProcessEnv;
   now?: () => number;
+  engine?: Engine;
 }
 
 export interface ConnectorProvider {

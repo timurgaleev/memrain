@@ -190,7 +190,7 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
     const sync = provider?.sync;
     if (!provider || !sync) throw new ProviderCannotSyncError(account.provider);
     return {
-      adapter: sync.adapter(account, { env, ...(opts.now ? { now: opts.now } : {}) }),
+      adapter: sync.adapter(account, { env, engine, ...(opts.now ? { now: opts.now } : {}) }),
       tokenSource: async (_account, secret) => oauthTokenSource({
         engine, kek: opts.kek, providers: opts.providers, provider: provider.id, accountId: account.id, fetch: fetchFn, env, secret,
         ...(opts.now ? { now: opts.now } : {}),

@@ -10,7 +10,8 @@
  * the provider says how long (`Retry-After`, or `X-RateLimit-Reset`) and the
  * wait fits under a cap; past the cap the client gives up with `rate_limited`
  * instead of parking the run for an hour. Server errors and network failures
- * are retried a bounded number of times with a growing back-off.
+ * are retried a bounded number of times with a growing back-off, or after the
+ * server's own Retry-After when it names one (capped like any wait).
  *
  * The credential is a static token (GitHub) or a token source that can renew
  * it. With a source, a 401 earns exactly one forced refresh and one retry; a
@@ -87,6 +88,8 @@ export interface ConnectorResponse {
 export interface RequestOptions {
   /** Largest response body read, in bytes; past it the request ends `tooLarge`. Default: unbounded. */
   maxBytes?: number;
+  /** Headers for this request only (Graph's Prefer); the client's own and Authorization win. */
+  headers?: Record<string, string>;
 }
 
 /** The body past `maxBytes`: the read stopped and the stream was cancelled. */
@@ -297,6 +300,7 @@ export class ConnectorClient {
           method,
           redirect: "manual",
           headers: {
+            ...opts.headers,
             ...this.headers,
             ...(body === undefined ? {} : { "content-type": "application/json" }),
             Authorization: `Bearer ${token}`,
@@ -362,9 +366,17 @@ export class ConnectorClient {
         await this.sleep(wait);
         continue;
       }
-      if (cls === "server_error" && attempt < this.maxRetries) {
-        await this.sleep(Math.min(BASE_BACKOFF_MS * 2 ** attempt, this.maxWaitMs));
-        continue;
+      if (cls === "server_error") {
+        // A 503 that says when to come back (Graph throttling) is waited out for
+        // that long; past the cap it is a rate limit, not a retry to send early.
+        const asked = res.headers.get("retry-after") === null ? null : this.rateLimitWait(res);
+        if (asked !== null && asked > this.maxWaitMs) {
+          return { class: "rate_limited", status: res.status, body: null, next: null, error: `HTTP ${res.status} rate limited; the provider asked for ${Math.ceil(asked / 1000)}s` };
+        }
+        if (attempt < this.maxRetries) {
+          await this.sleep(asked ?? Math.min(BASE_BACKOFF_MS * 2 ** attempt, this.maxWaitMs));
+          continue;
+        }
       }
       const errorBody = parseJson(text);
       return {
