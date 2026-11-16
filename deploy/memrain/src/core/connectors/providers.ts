@@ -33,8 +33,6 @@ export interface ProviderService {
   apiOrigin?: string;
   /** Minimum gap between two requests of one account to this service, in ms (the client's default otherwise). */
   minSpacingMs?: number;
-  /** Request headers every API call of this service carries (Graph's `Prefer`). */
-  headers?: Readonly<Record<string, string>>;
 }
 
 /** Connect errors a provider can name from its own refusal. */

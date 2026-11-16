@@ -102,7 +102,6 @@ describe("microsoft provider", () => {
     expect(ms!.baseScopes).toEqual(["openid", "email", "offline_access", "User.Read"]);
     expect(ms!.services.outlook_calendar!.scopes).toEqual([MICROSOFT_CALENDARS_READ]);
     expect(ms!.services.outlook_calendar!.sourceKinds).toEqual(["calendar"]);
-    expect(ms!.services.outlook_calendar!.headers).toEqual({ Prefer: OUTLOOK_PREFER });
     expect(OUTLOOK_PREFER).toContain("outlook.timezone=\"UTC\"");
     expect(OUTLOOK_PREFER).toContain("odata.maxpagesize=");
     expect(ms!.sync?.apiOrigin).toBe("https://graph.microsoft.com");
@@ -112,7 +111,7 @@ describe("microsoft provider", () => {
   });
 
   it("takes a tenant segment that names a tenant and refuses one that does not", () => {
-    for (const ok of ["common", "organizations", "consumers", "0f0e0d0c-0b0a-4908-8706-050403020100", "contoso.onmicrosoft.com"]) expect(normalizeTenant(ok)).toBe(ok);
+    for (const ok of ["common", "organizations", "consumers", "0f0e0d0c-0b0a-4908-8706-a50403020100", "contoso.onmicrosoft.com"]) expect(normalizeTenant(ok)).toBe(ok);
     for (const bad of ["evil.example/../x", "common?x=1", "", "a b", "x/y"]) expect(normalizeTenant(bad)).toBeNull();
     const ms = microsoftProvider();
     expect(oauthEndpoints(ms, "organizations").authorizeUrl).toBe("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize");
@@ -401,6 +400,45 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(err).toBeInstanceOf(ConnectError);
       expect((err as ConnectError).code).toBe("scope_mismatch");
       expect(await count(db.storage.engine(), "SELECT count(*)::int AS n FROM connector_accounts")).toBe(0);
+    } finally { await db.close(); }
+  });
+
+  it("a run cap below Graph's page size still finishes the calendar over several runs instead of replaying the first page", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const env = { ...ENV, MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN: "20" };
+      const at = (ms: number) => new Date(ms).toISOString().replace("Z", "");
+      const events = Array.from({ length: 50 }, (_, i) => ({
+        id: `AAMkCap${String(i).padStart(4, "0")}=`, iCalUId: `cap-${i}@example.test`, type: "singleInstance", subject: `Slot ${i}`,
+        start: { dateTime: at(T0 + i * 3_600_000), timeZone: "UTC" }, end: { dateTime: at(T0 + i * 3_600_000 + 1_800_000), timeZone: "UTC" },
+        isAllDay: false, isCancelled: false, isOrganizer: true, organizer: { emailAddress: { name: "Owner Example", address: OWNER } }, attendees: [],
+      }));
+      // Graph honours odata.maxpagesize and pages with a skip token; the last page carries the delta link.
+      const world: GraphWorld = {
+        calls: [],
+        delta: (_cal, q, prefer) => {
+          const from = Number(q.get("$skiptoken")?.replace("off:", "") ?? "0");
+          const size = Number(/odata\.maxpagesize=(\d+)/.exec(prefer ?? "")?.[1] ?? "1000");
+          const to = Math.min(events.length, from + size);
+          const body: Record<string, unknown> = { value: events.slice(from, to) };
+          if (to < events.length) body["@odata.nextLink"] = `https://graph.microsoft.com/v1.0/me/calendarView/delta?$skiptoken=off:${to}`;
+          else body["@odata.deltaLink"] = "https://graph.microsoft.com/v1.0/me/calendarView/delta?$deltatoken=cap-delta";
+          return { status: 200, body };
+        },
+      };
+      const account = await connect(db.storage, world, env);
+      world.calls.length = 0;
+      const results = [];
+      for (let i = 0; i < 3; i++) results.push(await run(db.storage, world, account.id, env));
+      expect(results.map(r => r.status)).toEqual(["partial", "partial", "success"]);
+      expect(await cursor(e, account.id)).toMatchObject({ mode: "delta", link: "/v1.0/me/calendarView/delta?$deltatoken=cap-delta", atRest: true });
+      expect(await count(e, `SELECT count(*)::int AS n FROM pages WHERE source_id = $1 AND deleted_at IS NULL`, [SOURCE])).toBe(50);
+      // Every page asked for no more than one run may store, and none was read twice.
+      const calls = deltaCalls(world);
+      expect(calls.map(c => /odata\.maxpagesize=(\d+)/.exec(c.prefer ?? "")?.[1])).toEqual(["20", "20", "20"]);
+      expect(calls.map(c => c.url.searchParams.get("$skiptoken"))).toEqual([null, "off:20", "off:40"]);
+      for (const c of world.calls.filter(c => c.url.origin === "https://graph.microsoft.com")) expect(c.prefer).toContain('outlook.timezone="UTC"');
     } finally { await db.close(); }
   });
 

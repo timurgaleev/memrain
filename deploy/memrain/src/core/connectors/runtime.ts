@@ -124,17 +124,12 @@ export function apiKeySource(credential: { tokens: { access_token: string } } | 
  * its own origin (Gmail) wins over the provider's. One client talks to one
  * origin, so an account whose services answer on different origins cannot sync.
  */
-function serviceApi(provider: ConnectorProvider, account: SyncAccount, fallback: string): { origin: string; minSpacingMs?: number; headers?: Record<string, string> } {
+function serviceApi(provider: ConnectorProvider, account: SyncAccount, fallback: string): { origin: string; minSpacingMs?: number } {
   const declared = (account.services ?? []).map((s) => provider.services[s]).filter((s) => s !== undefined);
   const origins = [...new Set(declared.map((s) => s.apiOrigin ?? fallback))];
   if (origins.length > 1) throw new Error(`connector account ${account.id} mixes services on different API origins`);
   const spacing = declared.map((s) => s.minSpacingMs).filter((n): n is number => n !== undefined);
-  const headers = Object.assign({}, ...declared.map((s) => s.headers ?? {})) as Record<string, string>;
-  return {
-    origin: origins[0] ?? fallback,
-    ...(spacing.length > 0 ? { minSpacingMs: Math.max(...spacing) } : {}),
-    ...(Object.keys(headers).length > 0 ? { headers } : {}),
-  };
+  return { origin: origins[0] ?? fallback, ...(spacing.length > 0 ? { minSpacingMs: Math.max(...spacing) } : {}) };
 }
 
 export interface OAuthTokenSourceOptions {
@@ -201,12 +196,12 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
         ...(opts.now ? { now: opts.now } : {}),
       }),
       client: (_a, tokenSource) => {
-        const { origin, minSpacingMs, headers } = serviceApi(provider, account, sync.apiOrigin);
+        const { origin, minSpacingMs } = serviceApi(provider, account, sync.apiOrigin);
         const limiter = minSpacingMs === undefined
           ? undefined
           : limiterFor(`${provider.id}:${origin}:${account.id}`, { minSpacingMs, now, ...(opts.sleep ? { sleep: opts.sleep } : {}) });
         return new ConnectorClient({
-          origin, tokenSource, fetch: fetchFn, ...(headers ? { headers } : {}), ...(limiter ? { limiter } : {}), ...(opts.sleep ? { sleep: opts.sleep } : {}),
+          origin, tokenSource, fetch: fetchFn, ...(limiter ? { limiter } : {}), ...(opts.sleep ? { sleep: opts.sleep } : {}),
         });
       },
     };

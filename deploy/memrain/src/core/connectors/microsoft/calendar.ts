@@ -39,7 +39,9 @@
  *     it is dropped from the event and scrubbed from the description.
  *
  * Every request carries `Prefer: outlook.timezone="UTC", odata.maxpagesize=50`
- * (set on the client by the provider) and bounds the response body. Rate
+ * and bounds the response body. A delta or list page asks for no more events
+ * than one run may store (the engine's `perRun` budget), so a low item cap
+ * makes a first sync take more runs instead of replaying its first page. Rate
  * limits (429 with Retry-After) are waited out and retried by the connector
  * client; past its cap the run stops partial and resumes from the same
  * cursor. A selected calendar that answers 404 is one failing item, held
@@ -55,10 +57,10 @@ import { renderCalendarEvent } from "../render.ts";
 import { retentionDays } from "../retention.ts";
 import { syncItemFromPage } from "../sync-item.ts";
 import { shortHash, type CalendarAttendee, type CalendarEvent, type CalendarOccurrence, type ConnectorContext, type Person } from "../model.ts";
-import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
+import type { ItemBudget, PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
 import type { AdapterContext } from "../providers.ts";
 import { DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, selectedCalendars, type GoogleCalendarEntry } from "../google/calendar.ts";
-import { graphLinkPath, isGraphPath, isSyncStateLost } from "./graph-client.ts";
+import { graphGet, graphLinkPath, isGraphPath, isSyncStateLost } from "./graph-client.ts";
 
 /** The account service this adapter syncs. */
 export const OUTLOOK_CALENDAR_SERVICE = "outlook_calendar";
@@ -66,8 +68,12 @@ export const OUTLOOK_CALENDAR_SERVICE = "outlook_calendar";
 const GRAPH_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 /** Events per page; Graph's own default is smaller and its maximum is not documented for calendar views. */
 const PAGE_SIZE = 50;
-/** Sent on every Graph request of a calendar account (see the provider). */
-export const OUTLOOK_PREFER = `outlook.timezone="UTC", odata.maxpagesize=${PAGE_SIZE}`;
+/** Times in UTC, and at most `pageSize` events a page. */
+function outlookPrefer(pageSize: number): string {
+  return `outlook.timezone="UTC", odata.maxpagesize=${pageSize}`;
+}
+/** Sent on every Graph request of a calendar account whose page is not sized by the run's budget. */
+export const OUTLOOK_PREFER = outlookPrefer(PAGE_SIZE);
 
 const DAY_MS = 86_400_000;
 /** How far ahead a round's window, and a series' listed occurrences, reach. */
@@ -469,9 +475,20 @@ class Adapter implements SyncAdapter {
     return { ok: true, items: [item], deletions: [], checkpoint: null, done: true };
   }
 
-  async page({ client, stream, cursor }: Parameters<SyncAdapter["page"]>[0]): Promise<PageResult> {
+  /**
+   * Events per delta or list page: never more than one run may store. The
+   * size follows the caps, not what is left of today's, so it stays put
+   * across a pass's skip-token pages; a page the day's leftover cannot hold
+   * is finished whole by the next run.
+   */
+  private pagePrefer(budget: ItemBudget | undefined): string {
+    return outlookPrefer(Math.max(1, Math.min(PAGE_SIZE, budget?.perRun ?? PAGE_SIZE)));
+  }
+
+  async page({ client, stream, cursor, budget }: Parameters<SyncAdapter["page"]>[0]): Promise<PageResult> {
     const calendarId = this.calendars.get(stream);
     if (calendarId === undefined) throw new Error(`outlook calendar adapter has no stream ${stream}`);
+    const prefer = this.pagePrefer(budget);
     let st = parseOutlookCursor(cursor) ?? this.firstPass();
     const listed = calendarId !== "primary";
     if (listed && st.link === null && st.listedAt !== null) {
@@ -480,10 +497,10 @@ class Adapter implements SyncAdapter {
       st = this.relist(st);
     }
     if (this.relistDue(st)) st = this.relist(st);
-    let res = await client.get(this.requestPath(calendarId, st), { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
+    let res = await graphGet(client, this.requestPath(calendarId, st), { prefer, maxBytes: GRAPH_MAX_RESPONSE_BYTES });
     if (st.link !== null && isSyncStateLost(res)) {
       st = this.relist(st);
-      res = await client.get(this.requestPath(calendarId, st), { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
+      res = await graphGet(client, this.requestPath(calendarId, st), { prefer, maxBytes: GRAPH_MAX_RESPONSE_BYTES });
     }
     if (res.status === 404 && calendarId !== "primary") return this.calendarGone(calendarId);
     if (res.class !== "ok") return { ok: false, response: res };
@@ -573,7 +590,7 @@ class Adapter implements SyncAdapter {
   ): Promise<SyncItem | { deleted: string } | { response: ConnectorResponse } | null> {
     const key = itemKey(calendarId, seriesId);
     const base = `${calendarBase(calendarId)}/events/${encodeURIComponent(seriesId)}`;
-    const res = await client.get(base, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
+    const res = await graphGet(client, base, { prefer: OUTLOOK_PREFER, maxBytes: GRAPH_MAX_RESPONSE_BYTES });
     if (res.status === 404 || res.status === 410) return { deleted: key };
     if (res.class !== "ok") {
       if (res.class !== "forbidden") return { response: res };
@@ -604,7 +621,7 @@ class Adapter implements SyncAdapter {
     const versions: string[] = [];
     let path: string | null = `${base}/instances?${new URLSearchParams({ startDateTime: new Date(lo).toISOString(), endDateTime: hi }).toString()}`;
     for (let page = 0; page < MAX_INSTANCE_PAGES && path !== null; page++) {
-      const res = await client.get(path, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
+      const res = await graphGet(client, path, { prefer: OUTLOOK_PREFER, maxBytes: GRAPH_MAX_RESPONSE_BYTES });
       if (res.class !== "ok") return { response: res };
       if (!isRecord(res.body) || !Array.isArray(res.body.value)) {
         return { response: { ...res, class: "challenge", body: null, error: "unexpected instances response" } };
@@ -643,7 +660,7 @@ export async function listOutlookCalendars(client: ConnectorClient, accountLabel
   const out: GoogleCalendarEntry[] = [];
   let path: string | null = "/v1.0/me/calendars?$top=100";
   for (let page = 0; page < MAX_LIST_PAGES && path !== null; page++) {
-    const res = await client.get(path, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
+    const res = await graphGet(client, path, { prefer: OUTLOOK_PREFER, maxBytes: GRAPH_MAX_RESPONSE_BYTES });
     if (res.class !== "ok") throw new Error(`calendar list failed: ${res.error ?? res.class}`);
     if (!isRecord(res.body) || !Array.isArray(res.body.value)) throw new Error("calendar list failed: unexpected response");
     for (const c of (res.body.value as unknown[]).filter(isRecord)) {

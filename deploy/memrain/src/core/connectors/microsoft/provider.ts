@@ -43,7 +43,7 @@
  */
 import { readTextCapped, type FetchFn } from "../client.ts";
 import type { ConnectorProvider, ProviderConnectError } from "../providers.ts";
-import { OUTLOOK_CALENDAR_SERVICE, OUTLOOK_PREFER, outlookCalendarAdapter } from "./calendar.ts";
+import { OUTLOOK_CALENDAR_SERVICE, outlookCalendarAdapter } from "./calendar.ts";
 import { GRAPH_API_ORIGIN } from "./graph-client.ts";
 import { OUTLOOK_MAIL_SERVICE, outlookMailAdapter, outlookMailService } from "./mail.ts";
 
@@ -121,7 +121,7 @@ export function microsoftProvider(): ConnectorProvider {
     baseScopes: ["openid", "email", "offline_access", "User.Read"],
     services: {
       [OUTLOOK_MAIL_SERVICE]: outlookMailService,
-      [OUTLOOK_CALENDAR_SERVICE]: { scopes: [MICROSOFT_CALENDARS_READ], sourceKinds: ["calendar"], headers: { Prefer: OUTLOOK_PREFER } },
+      [OUTLOOK_CALENDAR_SERVICE]: { scopes: [MICROSOFT_CALENDARS_READ], sourceKinds: ["calendar"] },
     },
     authorizeParams: { response_mode: "query", prompt: "select_account" },
     optionalGrantScopes: OIDC_SCOPES,
