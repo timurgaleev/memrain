@@ -17,7 +17,9 @@
  * no session. `/admin/connectors/callback/:provider` therefore only renders a
  * static page holding the returned parameters in a form; the owner's click
  * posts it from our own origin to `/complete`, which arrives with the session
- * and binds the state to it. The page runs no script and is never cached.
+ * and binds the state to it. The page runs no script and is never cached. An
+ * administrator's consent at Microsoft returns to the same address without a
+ * code or a state of ours, and gets a page that says what happened instead.
  */
 import type { Storage } from "../core/storage.ts";
 import type { Engine } from "../core/engine/interface.ts";
@@ -587,7 +589,50 @@ function param(url: URL, name: string): string {
   return v.length <= MAX_PARAM ? v : "";
 }
 
-/** The landing page of a provider redirect: a form that posts back same-origin. */
+const PROVIDER_NAMES: Readonly<Record<string, string>> = { google: "Google", microsoft: "Microsoft" };
+const CODE_RE = /^[a-z_]{1,64}$/;
+const LEADING_AADSTS_RE = /^AADSTS(\d{4,6}):/;
+
+/**
+ * A redirect that finishes no connect of ours, so it gets a page with nothing
+ * to post: the return of an administrator's consent at Microsoft's
+ * /adminconsent endpoint (`admin_consent=True`, a tenant id and no code;
+ * learn.microsoft.com/entra/identity-platform/v2-admin-consent), or a visit
+ * with neither a code nor a state. Only the error code and the AADSTS number
+ * its description opens with are shown; the tenant and any other provider
+ * text are not, since anyone can craft this URL.
+ */
+function landingPage(provider: string, url: URL): string {
+  const name = PROVIDER_NAMES[provider] ?? provider;
+  const error = param(url, "error");
+  const code = CODE_RE.test(error) ? error : error === "" ? "" : "unknown";
+  const aadsts = LEADING_AADSTS_RE.exec(param(url, "error_description").trim());
+  const codes = [code, aadsts ? `AADSTS${aadsts[1]}` : ""].filter((c) => c !== "").join(", ");
+  const adminConsent = url.searchParams.has("admin_consent");
+  const [title, text] = error !== ""
+    ? [
+        "Consent not recorded",
+        `${name} did not record the consent (${codes}). Nothing was connected. An administrator can try the consent link again; `
+        + `the owner then connects from Memrain's Connections page. You can close this tab.`,
+      ]
+    : adminConsent
+      ? [
+          "Admin consent recorded",
+          `Admin consent recorded at ${name}. The owner can now connect from Memrain's Connections page. You can close this tab.`,
+        ]
+      : [
+          "Nothing to finish",
+          `This page finishes a ${name} sign-in started from Memrain, and there is none to finish here. Start connecting from Memrain's Connections page.`,
+        ];
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body>`
+    + `<p>${escapeHtml(text)}</p></body></html>`;
+}
+
+/**
+ * The landing page of a provider redirect: a form that posts back
+ * same-origin, or, for a redirect that finishes no connect (landingPage), a
+ * page that says so.
+ */
 export function handleConnectorCallbackPage(req: Request, url: URL): Response | null {
   const m = /^\/admin\/connectors\/callback\/([^/]+)$/.exec(url.pathname);
   if (!m) return null;
@@ -599,15 +644,18 @@ export function handleConnectorCallbackPage(req: Request, url: URL): Response | 
     return new Response("Not Found", { status: 404 });
   }
   if (!PROVIDER_RE.test(provider)) return new Response("Not Found", { status: 404 });
+  const finishesNothing = url.searchParams.has("admin_consent") || (param(url, "code") === "" && param(url, "state") === "");
   const fields = (["state", "code", "error", "error_description"] as const)
     .map((k) => [k, param(url, k)] as const)
     .filter(([, v]) => v !== "")
     .map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(v)}">`)
     .join("");
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Finish connecting</title></head><body>`
-    + `<form method="post" action="/admin/api/connectors/${provider}/complete">${fields}`
-    + `<p>Finish connecting your ${escapeHtml(provider)} account to Memrain.</p>`
-    + `<button type="submit">Finish connecting</button></form></body></html>`;
+  const html = finishesNothing
+    ? landingPage(provider, url)
+    : `<!doctype html><html><head><meta charset="utf-8"><title>Finish connecting</title></head><body>`
+      + `<form method="post" action="/admin/api/connectors/${provider}/complete">${fields}`
+      + `<p>Finish connecting your ${escapeHtml(provider)} account to Memrain.</p>`
+      + `<button type="submit">Finish connecting</button></form></body></html>`;
   return new Response(html, {
     status: 200,
     headers: {

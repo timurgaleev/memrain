@@ -180,6 +180,66 @@ describe("connector callback page", () => {
   });
 });
 
+describe("connector callback page after an administrator's consent", () => {
+  const TENANT = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  const landing = (query: Record<string, string>) => {
+    const u = new URL(`${ORIGIN}/admin/connectors/callback/microsoft`);
+    for (const [k, v] of Object.entries(query)) u.searchParams.set(k, v);
+    return handleConnectorCallbackPage(new Request(u.toString()), u)!;
+  };
+  const sameHeaders = (page: Response) => {
+    expect(page.status).toBe(200);
+    expect(page.headers.get("cache-control")).toContain("no-store");
+    expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(page.headers.get("x-frame-options")).toBe("DENY");
+    expect(page.headers.get("referrer-policy")).toBe("strict-origin");
+  };
+
+  it("says the consent was recorded, with nothing to post and no tenant echoed", async () => {
+    // What Microsoft's /adminconsent endpoint sends back: no code and none of our states.
+    const page = landing({ admin_consent: "True", tenant: TENANT, scope: "https://graph.microsoft.com/Mail.Read" });
+    sameHeaders(page);
+    const html = await page.text();
+    expect(html).toContain("Admin consent recorded at Microsoft");
+    expect(html).toContain("Connections page");
+    expect(html).toContain("You can close this tab");
+    expect(html).not.toContain("<form");
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain(TENANT);
+  });
+
+  it("says the consent was not recorded when Microsoft answers with an error, quoting only its codes", async () => {
+    const page = landing({
+      admin_consent: "True", error: "consent_required", state: "12345",
+      error_description: "AADSTS65004: The resource owner or authorization server denied the request. <script>x</script>",
+    });
+    sameHeaders(page);
+    const html = await page.text();
+    expect(html).toContain("did not record");
+    expect(html).toContain("consent_required");
+    expect(html).toContain("AADSTS65004");
+    expect(html).not.toContain("<form");
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("resource owner");
+  });
+
+  it("finishes nothing for a visit that carries neither a code nor a state", async () => {
+    for (const query of [{}, { error: "access_denied" }, { error: "<b>" }] as Array<Record<string, string>>) {
+      const page = landing(query);
+      sameHeaders(page);
+      const html = await page.text();
+      expect(html).not.toContain("<form");
+      expect(html).not.toContain("<b>");
+      expect(html).toContain("Connections page");
+    }
+  });
+
+  it("still hands the owner's own refusal to the connect, which consumes its state", async () => {
+    const html = await landing({ state: "s".repeat(43), error: "access_denied", error_description: "AADSTS65004: declined" }).text();
+    expect(html).toContain(`action="/admin/api/connectors/microsoft/complete"`);
+  });
+});
+
 describe("connector routes behind handleAdminApi", () => {
   it("are registered, gated by the admin session, and off by default", async () => {
     const db = await storageEngines(undefined)[0]!.open();
