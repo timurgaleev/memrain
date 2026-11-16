@@ -136,7 +136,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
 
       // A row that does not exist, or belongs to another source, starts nothing.
       for (const body of [
-        { source_id: "inbox", services: ["mail"], account_id: "00000000-0000-4000-8000-000000000000" },
+        { source_id: "inbox", services: ["mail"], account_id: "0f0f0f0f-0000-4000-8000-00000000abcd" },
         { source_id: "inbox", services: ["mail"], account_id: "not-an-id" },
         { source_id: "work-inbox", services: ["mail"], account_id: row.id },
       ]) {

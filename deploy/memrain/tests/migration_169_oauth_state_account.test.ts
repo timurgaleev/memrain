@@ -26,7 +26,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const account = await createAccount(e, { sourceId: "inbox", provider: "microsoft", services: ["outlook_mail"], principalRef: "admin:operator", accountLabel: "me@example.test" });
       await e.query(STATE, ["first-connect", null]);
       await e.query(STATE, ["reconnect", account.id]);
-      await expect(e.query(STATE, ["gone", "00000000-0000-4000-8000-000000000000"])).rejects.toThrow();
+      await expect(e.query(STATE, ["gone", "0f0f0f0f-0000-4000-8000-00000000abcd"])).rejects.toThrow();
       await e.query(`DELETE FROM connector_accounts WHERE id = $1`, [account.id]);
       expect(await states(e)).toBe(1);
       expect((await runMigrations(e)).applied).toEqual([]);
