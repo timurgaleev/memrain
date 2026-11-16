@@ -12,9 +12,9 @@ import { normalizeGmailMessage } from "../src/core/connectors/google/gmail.ts";
 import { decodeCharset, decodeEncodedWords } from "../src/core/connectors/mime-text.ts";
 
 /** "Privet, mir" in Russian. */
-const RU = "Привет, мир";
+const RU = "\u041F\u0440\u0438\u0432\u0435\u0442, \u043C\u0438\u0440";
 /** "Gruesse aus Muenchen" with its umlauts. */
-const DE = "Grüße aus München";
+const DE = "Gr\u00FC\u00DFe aus M\u00FCnchen";
 const b64url = (bytes: Uint8Array | Buffer) => Buffer.from(bytes).toString("base64url");
 const ru1251 = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2, 0x2c, 0x20, 0xec, 0xe8, 0xf0]);
 const ruKoi8 = Buffer.from([0xf0, 0xd2, 0xc9, 0xd7, 0xc5, 0xd4, 0x2c, 0x20, 0xcd, 0xc9, 0xd2]);
@@ -32,7 +32,7 @@ describe("body charset", () => {
 
   it("decodes an iso-8859-1 German body with umlauts, and iso-8859-15's euro sign", () => {
     expect(extractBody(textPart(deLatin1, "text/plain; charset=ISO-8859-1")).text).toBe(DE);
-    expect(extractBody(textPart(Buffer.from([0x31, 0x30, 0x20, 0xa4]), "text/plain; format=flowed; charset=iso-8859-15")).text).toBe("10 €");
+    expect(extractBody(textPart(Buffer.from([0x31, 0x30, 0x20, 0xa4]), "text/plain; format=flowed; charset=iso-8859-15")).text).toBe("10 \u20AC");
   });
 
   it("decodes each part with its own charset, html included", () => {
@@ -53,7 +53,7 @@ describe("body charset", () => {
   it("reads UTF-8 when the charset is missing or unknown, with replacement characters and no exception", () => {
     expect(extractBody({ mimeType: "text/plain", body: { data: b64url(Buffer.from(RU)) } }).text).toBe(RU);
     expect(extractBody(textPart(Buffer.from(RU), "text/plain; charset=x-no-such-charset")).text).toBe(RU);
-    expect(decodeCharset(new Uint8Array([0x41, 0xff, 0x42]), "x-no-such-charset")).toBe("A�B");
+    expect(decodeCharset(new Uint8Array([0x41, 0xff, 0x42]), "x-no-such-charset")).toBe("A\uFFFDB");
     expect(decodeCharset(new Uint8Array([0x41]), "\"\u0000bad label\"")).toBe("A");
   });
 });
@@ -62,7 +62,7 @@ describe("RFC 2047 encoded words", () => {
   it("decodes B and Q words in a subject", () => {
     expect(decodeEncodedWords(`=?UTF-8?B?${Buffer.from(RU).toString("base64")}?=`)).toBe(RU);
     expect(decodeEncodedWords("=?ISO-8859-1?Q?Gr=FC=DFe_aus_M=FCnchen?=")).toBe(DE);
-    expect(decodeEncodedWords("=?iso-8859-1?q?Gr=fc=dfe?= aus Berlin")).toBe("Grüße aus Berlin");
+    expect(decodeEncodedWords("=?iso-8859-1?q?Gr=fc=dfe?= aus Berlin")).toBe("Gr\u00FC\u00DFe aus Berlin");
   });
 
   it("drops whitespace between adjacent words only, and joins a character split across them", () => {
@@ -78,7 +78,7 @@ describe("RFC 2047 encoded words", () => {
 
   it("decodes adjacent words in different charsets", () => {
     const ru = `=?windows-1251?B?${ru1251.toString("base64")}?=`;
-    expect(decodeEncodedWords(`=?ISO-8859-1?Q?Gr=FC=DFe?= ${ru}`)).toBe(`Grüße${RU}`);
+    expect(decodeEncodedWords(`=?ISO-8859-1?Q?Gr=FC=DFe?= ${ru}`)).toBe(`Gr\u00FC\u00DFe${RU}`);
   });
 
   it("leaves a malformed encoded word as written", () => {
@@ -90,7 +90,7 @@ describe("RFC 2047 encoded words", () => {
 
   it("decodes an unknown charset's word as UTF-8 and a language tag is ignored", () => {
     expect(decodeEncodedWords(`=?x-unknown?B?${Buffer.from("ok").toString("base64")}?=`)).toBe("ok");
-    expect(decodeEncodedWords("=?ISO-8859-1*de?Q?M=FCnchen?=")).toBe("München");
+    expect(decodeEncodedWords("=?ISO-8859-1*de?Q?M=FCnchen?=")).toBe("M\u00FCnchen");
   });
 });
 
@@ -115,7 +115,7 @@ describe("gmail headers", () => {
     });
     expect(msg.subject).toBe(DE);
     expect(msg.from).toEqual({ name: RU, email: "ivan@example.org" });
-    expect(msg.to).toEqual([{ name: "Müller, Jörg", email: "joerg@example.net" }, { name: "Ana", email: "ana@example.com" }]);
+    expect(msg.to).toEqual([{ name: "M\u00FCller, J\u00F6rg", email: "joerg@example.net" }, { name: "Ana", email: "ana@example.com" }]);
     expect(msg.cc).toEqual([{ name: "=?UTF-8?B?broken", email: "cc@example.com" }]);
     expect(msg.bodyText).toBe(RU);
     expect(parseAddressList("Plain Name <p@example.org>")).toEqual([{ name: "Plain Name", email: "p@example.org" }]);
