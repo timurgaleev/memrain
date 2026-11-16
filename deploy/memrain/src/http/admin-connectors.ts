@@ -376,8 +376,8 @@ async function accountAction(req: Request, id: string, action: string, deps: Adm
 }
 
 /** How each calendar provider lists the calendars an account can read. */
-const CALENDAR_LISTS: Readonly<Record<string, { service: string; name: string; list: (client: ConnectorClient) => Promise<GoogleCalendarEntry[]> }>> = {
-  google: { service: GOOGLE_CALENDAR_SERVICE, name: "Google", list: listGoogleCalendars },
+const CALENDAR_LISTS: Readonly<Record<string, { service: string; name: string; list: (client: ConnectorClient, accountLabel: string) => Promise<GoogleCalendarEntry[]> }>> = {
+  google: { service: GOOGLE_CALENDAR_SERVICE, name: "Google", list: (client) => listGoogleCalendars(client) },
   microsoft: { service: OUTLOOK_CALENDAR_SERVICE, name: "Microsoft", list: listOutlookCalendars },
 };
 
@@ -389,7 +389,7 @@ async function readableCalendars(account: ConnectorAccount, deps: AdminConnector
   const sync = toSyncAccount(account);
   const wiring = runtime.depsFor(sync);
   const client = wiring.client(sync, await wiring.tokenSource(sync, () => {}));
-  return CALENDAR_LISTS[account.provider]!.list(client);
+  return CALENDAR_LISTS[account.provider]!.list(client, account.account_label);
 }
 
 function historyDays(account: ConnectorAccount): number {

@@ -34,6 +34,8 @@ export type GraphAnswer = string | { status: number; body: Json | string; retryA
 export interface GraphWorld {
   /** Answer for a calendar view delta request: `calendar` is "primary" or the calendar id; `query` the request's query. */
   delta: (calendar: string, query: URLSearchParams) => GraphAnswer;
+  /** Answer for a plain calendar view of a calendar other than the default one. */
+  view?: (calendar: string, query: URLSearchParams) => GraphAnswer;
   /** Answer for GET of one event. */
   event?: (calendar: string, eventId: string) => GraphAnswer;
   /** Answer for a series' instances. */
@@ -79,8 +81,10 @@ export function graphFetch(world: GraphWorld): FetchFn {
     const p = url.pathname;
     if (p === "/v1.0/me") return Response.json(world.me ?? GRAPH_FIXTURES.me);
     if (p === "/v1.0/me/calendars") return answer("calendars");
-    const view = /^\/v1\.0\/me(?:\/calendars\/([^/]+))?\/calendarView\/delta$/.exec(p);
-    if (view) return answer(world.delta(view[1] === undefined ? "primary" : decodeURIComponent(view[1]), url.searchParams));
+    // Graph v1.0 documents the calendar view delta for the default calendar only.
+    if (p === "/v1.0/me/calendarView/delta") return answer(world.delta("primary", url.searchParams));
+    const list = /^\/v1\.0\/me\/calendars\/([^/]+)\/calendarView$/.exec(p);
+    if (list) return answer(world.view?.(decodeURIComponent(list[1]!), url.searchParams) ?? NOT_FOUND);
     const ev = /^\/v1\.0\/me(?:\/calendars\/([^/]+))?\/events\/([^/]+)(\/instances)?$/.exec(p);
     if (ev) {
       const calendar = ev[1] === undefined ? "primary" : decodeURIComponent(ev[1]);

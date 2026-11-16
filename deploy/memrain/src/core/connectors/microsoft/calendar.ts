@@ -19,6 +19,11 @@
  *     re-lists a fresh window; once through, every stored event of the
  *     calendar it did not touch is deleted as gone upstream, under the
  *     engine's mass-delete guard.
+ *   - Graph v1.0 documents the calendar view delta for the default calendar
+ *     only. Any other selected calendar (one of the owner's own; calendars
+ *     others share need Calendars.Read.Shared, which is not asked for) is
+ *     listed whole through the plain calendar view at most once an hour, and
+ *     reconciled the same way after each listing.
  *   - `@removed` and `isCancelled` report an event deleted upstream; the
  *     engine routes it through the upstream deletion path (a recoverable soft
  *     delete) and its guard. Graph also reports under `@removed` events that
@@ -72,6 +77,8 @@ const MAX_INSTANCE_PAGES = 10;
 const MAX_LIST_PAGES = 10;
 const RECONCILE_CLOCK_MARGIN_MS = 5 * 60_000;
 const RELIST_EVERY_MS = 7 * DAY_MS;
+/** How often a calendar other than the default one, which has no delta, is listed again. */
+const LIST_EVERY_MS = 3_600_000;
 
 type Json = Record<string, unknown>;
 
@@ -426,7 +433,11 @@ class Adapter implements SyncAdapter {
       startDateTime: new Date(this.windowLo(st)).toISOString(),
       endDateTime: st.timeMax ?? this.horizon(),
     });
-    return `${calendarBase(calendarId)}/calendarView/delta?${q.toString()}`;
+    // Graph v1.0 documents the calendar view delta for the default calendar
+    // only; any other calendar is listed whole (learn.microsoft.com/graph/api/event-delta).
+    return calendarId === "primary"
+      ? `/v1.0/me/calendarView/delta?${q.toString()}`
+      : `${calendarBase(calendarId)}/calendarView?${q.toString()}`;
   }
 
   /** A selected calendar Graph says is not there: one failing item, not a stopped run. */
@@ -443,6 +454,12 @@ class Adapter implements SyncAdapter {
     const calendarId = this.calendars.get(stream);
     if (calendarId === undefined) throw new Error(`outlook calendar adapter has no stream ${stream}`);
     let st = parseOutlookCursor(cursor) ?? this.firstPass();
+    const listed = calendarId !== "primary";
+    if (listed && st.link === null && st.listedAt !== null) {
+      // A listed calendar rests between passes; within the hour nothing is asked.
+      if (this.now() - Date.parse(st.listedAt) < LIST_EVERY_MS) return { ok: true, items: [], deletions: [], checkpoint: null, done: true };
+      st = this.relist(st);
+    }
     if (this.relistDue(st)) st = this.relist(st);
     let res = await client.get(this.requestPath(calendarId, st), { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
     if (st.link !== null && isSyncReset(res)) {
@@ -498,6 +515,11 @@ class Adapter implements SyncAdapter {
       if (next === null) return invalid(res, "calendar view delta (next link off Graph or too long)");
       return { ok: true, items, deletions: [...deletions], checkpoint: JSON.stringify({ ...st, link: next, atRest: false }), done: false };
     }
+    const reconcile = full && st.since !== null ? { prefix: `${calendarKey(calendarId)}:`, unseenSince: st.since } : null;
+    if (listed) {
+      const rest: PassState = { ...st, link: null, atRest: false, since: null, listedAt: new Date(this.now()).toISOString() };
+      return { ok: true, items, deletions: [...deletions], checkpoint: JSON.stringify(rest), done: true, ...(reconcile ? { reconcile } : {}) };
+    }
     const delta = graphLinkPath(res.body["@odata.deltaLink"]);
     // Without it the next run could only read this last page again.
     if (delta === null) return invalid(res, "calendar view delta (no usable delta link on the last page)");
@@ -505,7 +527,6 @@ class Adapter implements SyncAdapter {
       v: 1, mode: "delta", timeMin: st.timeMin, timeMax: st.timeMax, link: delta, atRest: true, since: null,
       listedAt: full ? new Date(this.now()).toISOString() : st.listedAt,
     };
-    const reconcile = full && st.since !== null ? { prefix: `${calendarKey(calendarId)}:`, unseenSince: st.since } : null;
     return { ok: true, items, deletions: [...deletions], checkpoint: JSON.stringify(rest), done: true, ...(reconcile ? { reconcile } : {}) };
   }
 
@@ -592,10 +613,14 @@ export function outlookCalendarAdapter(account: SyncAccount, opts: Partial<Adapt
 }
 
 /**
- * The calendars the account can read, its default calendar first, for the
- * owner to pick from. The name is the owner's (outside text, display only).
+ * The account's own calendars, its default calendar first, for the owner to
+ * pick from. A calendar another user shares is left out: reading it takes
+ * Calendars.Read.Shared, which this connector does not ask for
+ * (learn.microsoft.com/graph/outlook-get-shared-events-calendars). The name
+ * is the owner's (outside text, display only).
  */
-export async function listOutlookCalendars(client: ConnectorClient): Promise<GoogleCalendarEntry[]> {
+export async function listOutlookCalendars(client: ConnectorClient, accountLabel: string): Promise<GoogleCalendarEntry[]> {
+  const own = accountLabel.trim().toLowerCase();
   const out: GoogleCalendarEntry[] = [];
   let path: string | null = "/v1.0/me/calendars?$top=100";
   for (let page = 0; page < MAX_LIST_PAGES && path !== null; page++) {
@@ -604,7 +629,8 @@ export async function listOutlookCalendars(client: ConnectorClient): Promise<Goo
     if (!isRecord(res.body) || !Array.isArray(res.body.value)) throw new Error("calendar list failed: unexpected response");
     for (const c of (res.body.value as unknown[]).filter(isRecord)) {
       const id = str(c.id);
-      if (id === null) continue;
+      const owner = isRecord(c.owner) ? (str(c.owner.address) ?? "").trim().toLowerCase() : "";
+      if (id === null || (c.isDefaultCalendar !== true && (own === "" || owner !== own))) continue;
       out.push({ id, summary: (str(c.name) ?? id).slice(0, 200), primary: c.isDefaultCalendar === true, accessRole: c.canEdit === true ? "writer" : "reader" });
     }
     const next = res.body["@odata.nextLink"];

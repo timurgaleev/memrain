@@ -19,9 +19,35 @@
   },
   "calendars": {
     "value": [
-      { "id": "AAMkCalTeam0001=", "name": "Team", "isDefaultCalendar": false, "canEdit": false, "owner": { "name": "Team", "address": "team@example.test" } },
+      { "id": "AAMkCalTeam0001=", "name": "Team", "isDefaultCalendar": false, "canEdit": false, "owner": { "name": "Owner Example", "address": "Owner@Example.test" } },
+      { "id": "AAMkCalShared01=", "name": "Colleague's calendar", "isDefaultCalendar": false, "canEdit": false, "owner": { "name": "Ana Lee", "address": "ana@example.net" } },
       { "id": "AAMkCalDefault01=", "name": "Calendar", "isDefaultCalendar": true, "canEdit": true, "owner": { "name": "Owner Example", "address": "owner@example.test" } }
     ]
+  },
+  "secondaryView": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users('owner')/calendars('AAMkCalTeam0001%3D')/calendarView",
+    "value": [
+      {
+        "id": "AAMkE4team=",
+        "changeKey": "ck-e4-1",
+        "type": "singleInstance",
+        "iCalUId": "040000008200E00074C5B7101A82E0080000000006E4",
+        "subject": "Team planning",
+        "body": { "contentType": "html", "content": "<p>Quarter plan.</p>" },
+        "start": { "dateTime": "2026-11-24T13:00:00.0000000", "timeZone": "UTC" },
+        "end": { "dateTime": "2026-11-24T14:00:00.0000000", "timeZone": "UTC" },
+        "isAllDay": false,
+        "isCancelled": false,
+        "isOrganizer": true,
+        "responseStatus": { "response": "organizer" },
+        "organizer": { "emailAddress": { "name": "Owner Example", "address": "owner@example.test" } },
+        "attendees": []
+      }
+    ]
+  },
+  "secondaryViewEmpty": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users('owner')/calendars('AAMkCalTeam0001%3D')/calendarView",
+    "value": []
   },
   "deltaFirstPage1": {
     "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Collection(event)",

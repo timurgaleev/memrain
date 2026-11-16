@@ -284,10 +284,10 @@ describe("outlook calendar, pure parts", () => {
     expect(parseOutlookCursor(null)).toBeNull();
   });
 
-  it("lists the calendars the owner can read, default first, with Graph's own paging", async () => {
+  it("lists the owner's own calendars, default first, and leaves out ones others share (Calendars.Read cannot read them)", async () => {
     const w: GraphWorld = { calls: [], delta: () => "deltaEmpty" };
     const client = new ConnectorClient({ origin: "https://graph.microsoft.com", token: GRAPH_ACCESS_TOKEN, fetch: graphFetch(w), sleep: async () => {} });
-    expect(await listOutlookCalendars(client)).toEqual([
+    expect(await listOutlookCalendars(client, OWNER)).toEqual([
       { id: "AAMkCalDefault01=", summary: "Calendar", primary: true, accessRole: "writer" },
       { id: TEAM, summary: "Team", primary: false, accessRole: "reader" },
     ]);
@@ -558,6 +558,41 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("a selected secondary calendar is re-listed through the v1.0 calendar view at most hourly, and what it no longer lists goes", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const world = firstSyncWorld();
+      const account = await connect(db.storage, world);
+      await setAccountConfig(e, account.id, { calendars: [TEAM] });
+      const E4 = pageSlug("040000008200E00074C5B7101A82E0080000000006E4");
+      const views = () => world.calls.filter(c => c.url.pathname === `/v1.0/me/calendars/${encodeURIComponent(TEAM)}/calendarView`);
+      world.view = () => "secondaryView";
+
+      expect((await run(db.storage, world, account.id)).status).toBe("success");
+      expect(views()).toHaveLength(1);
+      expect(Date.parse(views()[0]!.url.searchParams.get("startDateTime")!)).toBe(T0 - 90 * DAY);
+      expect(Date.parse(views()[0]!.url.searchParams.get("endDateTime")!)).toBe(T0 + 90 * DAY);
+      // Never the per-calendar delta, which v1.0 does not document.
+      expect(world.calls.some(c => c.url.pathname.includes("/calendars/") && c.url.pathname.endsWith("/delta"))).toBe(false);
+      expect(await live(e, E4)).toBe(1);
+      expect((await e.query<{ compiled_truth: Record<string, unknown> }>(`SELECT compiled_truth FROM pages WHERE slug = $1`, [E4])).rows[0]!.compiled_truth)
+        .toMatchObject({ connector: "outlook_calendar", external_id: eventKey("AAMkE4team=", TEAM) });
+
+      world.calls.length = 0;
+      expect((await run(db.storage, world, account.id, ENV, T0 + 30 * 60_000)).status).not.toBe("failed");
+      expect(views()).toHaveLength(0);
+
+      world.view = () => "secondaryViewEmpty";
+      const later = await run(db.storage, world, account.id, ENV, T0 + 2 * 3_600_000);
+      expect(views()).toHaveLength(1);
+      expect(later.counts.deletions_applied).toBe(1);
+      expect(await live(e, E4)).toBe(0);
+      // The default calendar's events are untouched by the secondary's reconcile.
+      expect(await live(e, E1)).toBe(1);
+    } finally { await db.close(); }
+  });
+
   it("a selected calendar Graph no longer has is one failing item; the default calendar still syncs", async () => {
     const db = await open();
     try {
@@ -566,10 +601,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const account = await connect(db.storage, world);
       await setAccountConfig(e, account.id, { calendars: [TEAM] });
       const inner = world.delta;
-      world.delta = (cal, q) => (cal === TEAM ? { status: 404, body: GRAPH_FIXTURES.errorItemNotFound! } : inner(cal, q));
+      world.delta = inner;
+      world.view = () => ({ status: 404, body: GRAPH_FIXTURES.errorItemNotFound! });
       const result = await run(db.storage, world, account.id);
       expect(result.counts.items_failed).toBe(1);
-      expect(world.calls.some(c => c.url.pathname === `/v1.0/me/calendars/${encodeURIComponent(TEAM)}/calendarView/delta`)).toBe(true);
+      expect(world.calls.some(c => c.url.pathname === `/v1.0/me/calendars/${encodeURIComponent(TEAM)}/calendarView`)).toBe(true);
       expect(await live(e, E1)).toBe(1);
       expect(await cursor(e, account.id)).toMatchObject({ link: DELTA_ONE });
     } finally { await db.close(); }
