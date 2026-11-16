@@ -48,11 +48,14 @@ A mail connect asks for `Mail.Read` and a calendar connect for
 `Calendars.Read`, each with the four above. The connect flow refuses a grant
 that adds or drops a permission, and stores nothing then.
 
-None of these needs an administrator by Microsoft's own rules, so on a
-personal account and in most organizations you consent yourself. Your
-organization can still turn user consent off or limit it to verified apps;
-then you see **Need admin approval** instead: see
-[step 6](#6-work-accounts-check-whether-your-organization-lets-you-consent).
+On a personal account you consent yourself when you connect. On a work or
+school account you usually cannot: Microsoft's default consent setting for
+organizations ("Let Microsoft manage your consent settings", also the default
+for a new organization) keeps `Mail.Read` and `Calendars.Read` for an
+administrator to approve
+([app consent policies](https://learn.microsoft.com/entra/identity/enterprise-apps/manage-app-consent-policies),
+"Microsoft recommended user consent policy"). Plan on an IT admin granting
+consent once for the app: [step 6](#6-work-accounts-ask-an-admin-to-grant-consent).
 
 ## Steps
 
@@ -139,15 +142,16 @@ Do not add `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite` or any
 **Application permissions**: Memrain does not ask for them, and a grant that
 includes them is refused.
 
-### 6. Work accounts: check whether your organization lets you consent
+### 6. Work accounts: ask an admin to grant consent
 
 Skip this step for a personal account.
 
-Your organization decides whether users may consent to an app themselves
-([user consent settings](https://learn.microsoft.com/entra/identity/enterprise-apps/configure-user-consent)).
-If, when you connect in step 9, Microsoft shows **Need admin approval** or
-says you need permission, ask your IT admin to grant consent for the app.
-Send them:
+Your organization decides what users may consent to themselves
+([user consent settings](https://learn.microsoft.com/entra/identity/enterprise-apps/configure-user-consent)),
+and its default keeps mail and calendar access for an administrator. Unless
+your organization changed that, connecting in step 9 shows
+**Need admin approval** until an admin grants consent for the app. If you are
+that admin, do it now; otherwise ask your IT admin, and send them:
 
 - the app's name and its **Application (client) ID**;
 - the permissions: delegated `Mail.Read`, `Calendars.Read`, `User.Read`,
@@ -184,11 +188,12 @@ a new app later replaces the stored one, tenant included. A new secret for
 the same app (before the old one expires) is saved the same way: paste the
 same client ID and the new value.
 
-(Alternatively, `MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID`,
-`MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET` and, optionally,
-`MEMRAIN_MICROSOFT_OAUTH_TENANT` in the process environment are used when no
-app is stored; see [CONFIGURATION.md](../CONFIGURATION.md). The form is the
-recommended path: it keeps the secret out of `.env` files and shell history.)
+(The code also reads a server-wide app from the process environment,
+`MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID`, `MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET`
+and `MEMRAIN_MICROSOFT_OAUTH_TENANT`, when none is stored; see
+[CONFIGURATION.md](../CONFIGURATION.md). On a deployed stack use the form:
+the compose file does not pass these from the host `.env`, and the form keeps
+the secret out of files and shell history.)
 
 ### 8. Register the sources and let your agents read them
 
@@ -231,7 +236,9 @@ without `--dry-run`. Reload the Connections page so it lists the new sources.
 2. Pick `work-mail` under **Into source** (only `mailbox` sources are
    listed) and choose **Connect Microsoft**.
 3. Microsoft opens. Sign in with the account whose mailbox you connect, read
-   the list of permissions, and choose **Accept**.
+   the list of permissions, and choose **Accept**. After an admin granted
+   consent for the organization (step 6), a work account may go straight
+   through without this screen.
 4. Microsoft sends you back to Memrain. Choose **Finish connecting**; the page
    posts back to Memrain and the account appears as connected, sync off.
 5. Choose **Turn sync on** for the account. Nothing is read before that.
@@ -325,7 +332,7 @@ Microsoft's sign-in errors start with `AADSTS`
 | Microsoft shows `AADSTS50194` (not configured as a multi-tenant application) | A single-tenant app with **Who can sign in** set to `common` or `organizations` | Step 7: choose **One organization** and enter the directory ID |
 | Microsoft shows `AADSTS50020` (account does not exist in tenant) | The account is not one the app's supported account types allow, for example a personal account on a work-only app | Register an app with a type that allows it (step 2), or sign in with an allowed account |
 | Microsoft shows `AADSTS700016` (application not found in the directory) | The client ID is wrong, or **Who can sign in** points at another directory | Check the client ID and the directory ID from the Overview page (step 7) |
-| Microsoft shows **Need admin approval** | Your organization does not let users consent to this app | [Step 6](#6-work-accounts-check-whether-your-organization-lets-you-consent) |
+| Microsoft shows **Need admin approval** | Your organization keeps mail and calendar consent for an admin | [Step 6](#6-work-accounts-ask-an-admin-to-grant-consent) |
 | Back in Memrain, the page reports `token_exchange` | Microsoft refused the code; most often an expired secret, or the Secret ID pasted instead of the value | Add a new secret (step 4) and save it (step 7), then connect again |
 | Back in Memrain, the page reports `scope_mismatch` | A permission was declined, or the app has permissions Memrain does not ask for | Step 5: keep exactly the six permissions; connect again and accept |
 | Back in Memrain, the page reports `provider_denied` | You chose **Cancel** on Microsoft's consent page | Connect again |
