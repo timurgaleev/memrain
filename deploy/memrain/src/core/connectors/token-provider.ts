@@ -213,6 +213,9 @@ export function tokenEndpointRefresh(opts: TokenEndpointOptions): RefreshFn {
       // Not JSON; only the status is reported.
     }
     const code = typeof parsed.error === "string" && ERROR_CODE_RE.test(parsed.error) ? parsed.error : null;
+    // Microsoft adds numeric service codes (`error_codes`, e.g. 700082 for an
+    // inactive refresh token); a number carries no token, so it may be named.
+    const serviceCode = Array.isArray(parsed.error_codes) && Number.isInteger(parsed.error_codes[0]) ? `, code ${String(parsed.error_codes[0])}` : "";
     if (res.status === 200) {
       if (typeof parsed.access_token !== "string" || parsed.access_token.length === 0) {
         throw new Error("token endpoint answered 200 without an access token");
@@ -224,8 +227,12 @@ export function tokenEndpointRefresh(opts: TokenEndpointOptions): RefreshFn {
       };
     }
     if ((res.status === 400 || res.status === 401) && code === "invalid_grant") {
-      throw new ReauthRequiredError("the provider refused the refresh token (invalid_grant)");
+      throw new ReauthRequiredError(`the provider refused the refresh token (invalid_grant${serviceCode})`);
     }
-    throw new Error(`token endpoint answered HTTP ${res.status}${code ? ` (${code})` : ""}`);
+    // Microsoft: the user must sign in again (multifactor, a new conditional access policy).
+    if ((res.status === 400 || res.status === 401) && code === "interaction_required") {
+      throw new ReauthRequiredError(`the provider needs the owner to sign in again (interaction_required${serviceCode})`);
+    }
+    throw new Error(`token endpoint answered HTTP ${res.status}${code ? ` (${code}${serviceCode})` : ""}`);
   };
 }
