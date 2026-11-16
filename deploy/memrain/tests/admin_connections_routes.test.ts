@@ -13,7 +13,7 @@ import { fakeProvider, TEST_ACCESS_TOKEN, TEST_REFRESH_TOKEN, testProvider } fro
 import { registerSource } from "../src/core/sources.ts";
 import { putPage } from "../src/core/pages.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
-import { ProviderRegistry } from "../src/core/connectors/providers.ts";
+import { builtinProviders, ProviderRegistry } from "../src/core/connectors/providers.ts";
 import { createAccount, getAccount, setAccountStatus, storeCredential, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
 import { getOAuthClient, setOAuthClient } from "../src/core/connectors/oauth-clients.ts";
 import { accountRef, type CalendarEvent } from "../src/core/connectors/model.ts";
@@ -466,6 +466,57 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await (await call(post(`/admin/api/connectors/accounts/${account.id}/deletions/reject`), d)).json()).toEqual({ ok: true, kept: 1 });
       // A kept retention deletion stays on record, so the next sweep does not ask again.
       expect(await states()).toEqual(["delete_confirmed", "retention_kept", "retention_confirmed"]);
+    } finally { await db.close(); }
+  });
+
+  it("rotate an app's secret silently, but replace an app its connected accounts renew with only on confirmation", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "mail/" });
+      const d = deps(db.storage, { providers: builtinProviders() });
+      const save = (provider: string, body: Record<string, unknown>) => call(post(`/admin/api/connectors/${provider}/client`, body), d);
+      // Google and Microsoft share this code path; both strand their accounts the same way.
+      for (const [provider, service] of [["google", "gmail"], ["microsoft", "outlook_mail"]] as const) {
+        // No account yet: any app may replace any other.
+        expect((await save(provider, { client_id: "app-a", client_secret: "secret-1" })).status).toBe(200);
+        expect((await save(provider, { client_id: "app-b", client_secret: "secret-1" })).status).toBe(200);
+        expect((await save(provider, { client_id: "app-a", client_secret: "secret-1" })).status).toBe(200);
+
+        const account = await createAccount(e, { sourceId: "inbox", provider, services: [service], principalRef: "admin:operator", accountLabel: OWNER });
+        // A new secret for the same app keeps every account working.
+        expect((await save(provider, { client_id: "app-a", client_secret: "secret-2" })).status).toBe(200);
+        expect((await getOAuthClient(e, kek, provider))!.clientSecret).toBe("secret-2");
+
+        const refused = await save(provider, { client_id: "app-c", client_secret: "secret-3" });
+        expect(refused.status).toBe(409);
+        expect(await refused.json()).toMatchObject({ error: "client_replace_requires_confirm", accounts: 1 });
+        expect(await getOAuthClient(e, kek, provider)).toMatchObject({ clientId: "app-a", clientSecret: "secret-2" });
+        expect((await save(provider, { client_id: "app-c", client_secret: "secret-3", confirm_replace: "yes" })).status).toBe(409);
+
+        const replaced = await save(provider, { client_id: "app-c", client_secret: "secret-3", confirm_replace: true });
+        expect(replaced.status).toBe(200);
+        expect(await getOAuthClient(e, kek, provider)).toMatchObject({ clientId: "app-c", clientSecret: "secret-3" });
+
+        // A disconnected account renews nothing: no confirmation for it.
+        await setAccountStatus(e, account.id, "revoked");
+        expect((await save(provider, { client_id: "app-d", client_secret: "secret-4" })).status).toBe(200);
+      }
+    } finally { await db.close(); }
+  });
+
+  it("ask before an own app replaces the environment's app that connected accounts renew with", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await connected(e);
+      const d = deps(db.storage);
+      const refused = await call(post("/admin/api/connectors/test/client", { client_id: "byo-id", client_secret: "byo-secret-value" }), d);
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ error: "client_replace_requires_confirm", accounts: 1 });
+      expect(await getOAuthClient(e, kek, "test")).toBeNull();
+      // The environment's own app id with a stored secret is the same app.
+      expect((await call(post("/admin/api/connectors/test/client", { client_id: "env-client", client_secret: "rotated" }), d)).status).toBe(200);
     } finally { await db.close(); }
   });
 

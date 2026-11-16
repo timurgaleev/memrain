@@ -30,8 +30,11 @@ export const automationApi = {
   startConnect: (providerId: string, sourceId: string, services: string[]) =>
     call<{ authorize_url: string; expires_at: string }>(provider(providerId, "start"), post({ source_id: sourceId, services })),
   /** `tenant` only for a provider with tenants; the server refuses one for any other. */
-  saveClient: (providerId: string, clientId: string, clientSecret: string, tenant?: string) =>
-    call<{ ok: true }>(provider(providerId, "client"), post({ client_id: clientId, client_secret: clientSecret, ...(tenant === undefined ? {} : { tenant }) })),
+  /** `confirmReplace` lets another app id replace the one connected accounts renew with; they must reconnect. */
+  saveClient: (providerId: string, clientId: string, clientSecret: string, tenant?: string, confirmReplace = false) =>
+    call<{ ok: true }>(provider(providerId, "client"), post({
+      client_id: clientId, client_secret: clientSecret, ...(tenant === undefined ? {} : { tenant }), ...(confirmReplace ? { confirm_replace: true } : {}),
+    })),
   deleteClient: (providerId: string) => call<{ ok: true; deleted: boolean }>(provider(providerId, "client/delete"), post()),
   saveApiKey: (providerId: string, sourceId: string, services: string[], apiKey: string) =>
     call<{ ok: true }>(provider(providerId, "key"), post({ source_id: sourceId, services, api_key: apiKey })),

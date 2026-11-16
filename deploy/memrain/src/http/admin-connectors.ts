@@ -53,9 +53,11 @@ import {
   type OpenNotice,
 } from "../core/connectors/sync-store.ts";
 import {
+  accountsRenewingWith,
   completeConnect,
   ConnectError,
   connectorCallbackUri,
+  currentClientId,
   disconnectAccount,
   startConnect,
   type ConnectDeps,
@@ -241,8 +243,23 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
     if (rawTenant !== null && !pr.tenant) return json({ error: "tenant_unsupported" }, 400);
     const tenant = typeof rawTenant === "string" ? normalizeTenant(rawTenant) : null;
     if (rawTenant !== null && tenant === null) return json({ error: "invalid_tenant" }, 400);
+    // A refresh token renews only with the app that issued it: another app id
+    // strands every connected account until it reconnects, so that takes a
+    // confirmation. A new secret for the same app is a rotation and needs none.
+    const engine = deps.storage.engine();
+    const current = await currentClientId(connectDeps(deps), provider);
+    if (current !== null && current !== body.client_id && body.confirm_replace !== true) {
+      const accounts = await accountsRenewingWith(engine, provider);
+      if (accounts > 0) {
+        return json({
+          error: "client_replace_requires_confirm",
+          accounts,
+          message: `${accounts} connected account(s) renew their access with the current app. Another app cannot renew it: each must reconnect after the replacement. Send confirm_replace: true to replace it anyway.`,
+        }, 409);
+      }
+    }
     try {
-      await setOAuthClient(deps.storage.engine(), deps.kek()!, provider, body.client_id, body.client_secret, tenant);
+      await setOAuthClient(engine, deps.kek()!, provider, body.client_id, body.client_secret, tenant);
     } catch {
       return json({ error: "invalid client" }, 400);
     }

@@ -228,6 +228,32 @@ export async function resolveClient(deps: ConnectDeps, kek: Kek, provider: strin
   return { clientId, clientSecret, tenant };
 }
 
+/**
+ * The client id this provider's accounts renew their tokens with (resolveClient's
+ * choice: the stored app, else the environment's), read without opening the
+ * secret; null when neither is set.
+ */
+export async function currentClientId(deps: Pick<ConnectDeps, "engine" | "env">, provider: string): Promise<string | null> {
+  const r = await deps.engine.query<{ client_id: string }>(`SELECT client_id FROM connector_oauth_clients WHERE provider = $1`, [provider]);
+  if (r.rows[0]) return r.rows[0].client_id;
+  const env = (deps.env ?? process.env)[`MEMRAIN_${provider.toUpperCase()}_OAUTH_CLIENT_ID`]?.trim() ?? "";
+  return env === "" ? null : env;
+}
+
+/**
+ * Accounts of a provider that still hold a credential to renew: every status
+ * but `revoked`. A refresh token belongs to the app that issued it, so these
+ * stop renewing once another app replaces it.
+ */
+export async function accountsRenewingWith(engine: Engine, provider: string): Promise<number> {
+  // scope: operator-only replacing a provider's app is an operator action; it counts accounts, never reads them
+  const r = await engine.query<{ n: number | string }>(
+    `SELECT count(*) AS n FROM connector_accounts WHERE provider = $1 AND status <> 'revoked'`,
+    [provider],
+  );
+  return Number(r.rows[0]?.n ?? 0);
+}
+
 export interface StartConnectInput {
   provider: string;
   sourceId: string;

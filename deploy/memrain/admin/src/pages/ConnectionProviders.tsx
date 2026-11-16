@@ -16,6 +16,7 @@ import {
   type SourceView,
   type TenantChoice,
 } from "../lib/automation.ts";
+import { ApiError } from "../lib/passkey-fetch.ts";
 import { goToConsent } from "./connection-actions.ts";
 
 interface Props {
@@ -187,6 +188,7 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [askRemove, setAskRemove] = useState(false);
+  const [askReplace, setAskReplace] = useState<number | null>(null);
   const idField = useId();
   const secretField = useId();
   const tenants = p.tenant_default !== null;
@@ -195,15 +197,23 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
   const tenant = tenants ? tenantFromForm(choice, directory) : null;
   const tenantBad = tenants && choice === "tenant" && directory.trim() !== "" && tenant === null;
 
-  const save = async () => {
+  const save = async (confirmReplace = false) => {
+    setAskReplace(null);
     setBusy(true);
     try {
-      await automationApi.saveClient(p.id, clientId.trim(), secret, tenants ? tenant ?? undefined : undefined);
+      await automationApi.saveClient(p.id, clientId.trim(), secret, tenants ? tenant ?? undefined : undefined, confirmReplace);
       setClientId("");
       setSecret("");
-      onDone(`Saved your ${name} app. New connections use it.`);
+      onDone(confirmReplace
+        ? `Saved your ${name} app. Reconnect every ${name} account so it keeps syncing.`
+        : `Saved your ${name} app. New connections and renewals use it.`);
     } catch (e) {
-      onError(e);
+      // Another app id while accounts depend on the current one: say what it costs, then ask.
+      if (e instanceof ApiError && e.code === "client_replace_requires_confirm") {
+        setAskReplace(typeof e.body.accounts === "number" ? e.body.accounts : 1);
+      } else {
+        onError(e);
+      }
     } finally {
       setBusy(false);
     }
@@ -276,6 +286,20 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
           </button>
         </form>
       </div>
+      {askReplace !== null && (
+        <Dialog title={`Replace your ${name} app?`} onClose={() => setAskReplace(null)}>
+          <p className="dialog-text">
+            {askReplace === 1 ? "One connected account renews" : `${askReplace} connected accounts renew`} its access with
+            {client ? <> <span className="mono">{client.client_id}</span></> : " the server's app"}. Access granted to one app cannot be
+            renewed by another, so after the replacement every connected {name} account stops syncing until you choose
+            {" "}<strong>Reconnect</strong> on its row. To renew an expiring secret, keep the same client ID: that needs no reconnect.
+          </p>
+          <div className="dialog-actions">
+            <button className="btn btn-secondary" onClick={() => setAskReplace(null)}>Cancel</button>
+            <button className="btn btn-danger" disabled={busy} onClick={() => void save(true)}>Replace app</button>
+          </div>
+        </Dialog>
+      )}
       {askRemove && client && (
         <Dialog title={`Remove your ${name} app?`} onClose={() => setAskRemove(false)}>
           <p className="dialog-text">

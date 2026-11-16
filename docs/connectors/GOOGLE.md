@@ -131,8 +131,12 @@ host.
 3. Paste the client ID and client secret and choose **Save app**.
 
 Memrain seals the secret with the connector key ([KEY.md](./KEY.md)) before it
-is stored; it is never shown again, logged or returned by the API. Saving a
-new client for Google later replaces the stored one.
+is stored; it is never shown again, logged or returned by the API. A new
+secret for the same client ID replaces the stored one and connected accounts
+keep working. A different client ID is another app: Google renews an
+account's access only for the app that granted it, so while accounts are
+connected the page asks you to confirm, and after the replacement every
+connected Google account must be reconnected.
 
 (Alternatively, `MEMRAIN_GOOGLE_OAUTH_CLIENT_ID` and
 `MEMRAIN_GOOGLE_OAUTH_CLIENT_SECRET` in the process environment are used when

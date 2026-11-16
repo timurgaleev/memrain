@@ -197,10 +197,13 @@ the admin has granted consent.
 5. Choose **Save app**. The panel shows the saved client and who can sign in.
 
 Memrain seals the secret with the connector key ([KEY.md](./KEY.md)) before
-it is stored; it is never shown again, logged or returned by the API. Saving
-a new app later replaces the stored one, tenant included. A new secret for
-the same app (before the old one expires) is saved the same way: paste the
-same client ID and the new value.
+it is stored; it is never shown again, logged or returned by the API. A new
+secret for the same app (before the old one expires) is saved the same way:
+paste the same client ID and the new value; connected accounts keep working.
+A different **Application (client) ID** is another app. Microsoft renews an
+account's access only for the app that granted it, so while accounts are
+connected the page asks you to confirm the replacement, and afterwards every
+connected Microsoft account must be reconnected (**Reconnect** on its row).
 
 (The code also reads a server-wide app from the process environment,
 `MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID`, `MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET`
