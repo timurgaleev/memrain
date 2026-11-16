@@ -11,7 +11,7 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { GOOGLE_FIXTURES, googleFetch, type GoogleWorld } from "./helpers/google-calendar-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
-import { credentialMeta } from "../src/core/connectors/accounts.ts";
+import { credentialMeta, getAccount, listAccounts, readCredential } from "../src/core/connectors/accounts.ts";
 import { completeConnect, ConnectError, connectorCallbackUri, startConnect, type ConnectDeps } from "../src/core/connectors/oauth-connect.ts";
 import { builtinProviders, ProviderRegistry } from "../src/core/connectors/providers.ts";
 import { GMAIL_API_ORIGIN, GMAIL_MIN_SPACING_MS, GOOGLE_CALENDAR_READONLY, GOOGLE_GMAIL_READONLY, googleProvider } from "../src/core/connectors/google/provider.ts";
@@ -117,17 +117,19 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(other.account.services).toEqual(["gmail"]);
       expect((await credentialMeta(e, other.account.id))!.scopes).toEqual(["email", GOOGLE_GMAIL_READONLY, "openid"]);
 
-      // Unticking Gmail itself leaves a grant that is neither set: refused and revoked.
+      // Unticking Gmail itself leaves a grant that is neither set: refused. The
+      // same Google user's calendar and mailbox are live on that grant, so it
+      // is not revoked (revoking would end their access too).
       world.calls.length = 0;
       const err = await connect(d, "mail", ["gmail"], `openid ${EMAIL_URL} ${GOOGLE_CALENDAR_READONLY}`, world).catch(x => x);
       expect(err).toBeInstanceOf(ConnectError);
-      expect((err as ConnectError).code).toBe("scope_mismatch");
+      expect((err as ConnectError).code).toBe("scope_mismatch_not_revoked");
       expect((err as ConnectError).detail).toMatchObject({ missing: [GOOGLE_GMAIL_READONLY], extra: [] });
-      expect(world.calls.some(c => c.url.toString() === "https://oauth2.googleapis.com/revoke")).toBe(true);
+      expect(world.calls.some(c => c.url.toString() === "https://oauth2.googleapis.com/revoke")).toBe(false);
 
       // A scope nobody asked for is refused whichever set it is measured against.
       const wider = await connect(d, "mail", ["gmail"], `openid ${EMAIL_URL} ${GOOGLE_GMAIL_READONLY} https://www.googleapis.com/auth/gmail.modify`, world).catch(x => x);
-      expect((wider as ConnectError).code).toBe("scope_mismatch");
+      expect((wider as ConnectError).code).toBe("scope_mismatch_not_revoked");
     } finally { await db.close(); }
   });
 
@@ -173,6 +175,116 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       // The Gmail pair is spaced by Gmail's own gap.
       expect(sleeps).toContain(GMAIL_MIN_SPACING_MS);
     } finally { await db.close(); }
+  });
+
+  describe("a refused grant next to a live account of the same Google user", () => {
+    const revokes = (world: GoogleWorld) => world.calls.filter(c => c.url.toString() === "https://oauth2.googleapis.com/revoke").length;
+    const onlyCalendar = `openid ${EMAIL_URL} ${GOOGLE_CALENDAR_READONLY}`;
+
+    async function withCalendar(e: ConnectDeps["engine"], world: GoogleWorld) {
+      await registerSource(e, { id: "cal", kind: "calendar", pathPrefix: "calendar/" });
+      await registerSource(e, { id: "mail", kind: "mailbox", pathPrefix: "mail/" });
+      const d = deps(e, world);
+      const cal = (await connect(d, "cal", ["calendar"], String(GOOGLE_FIXTURES.token!.scope), world)).account;
+      const before = await readCredential(e, kek, cal.id);
+      world.calls.length = 0;
+      return { d, cal, before };
+    }
+
+    it("leaves the shared grant in place when Gmail comes back without its scope, and stores nothing", async () => {
+      const db = await open();
+      try {
+        const e = db.storage.engine();
+        const world: GoogleWorld = { calls: [], events: () => "eventsDelta" };
+        const { d, cal, before } = await withCalendar(e, world);
+        const err = await connect(d, "mail", ["gmail"], onlyCalendar, world).catch(x => x);
+        expect(err).toBeInstanceOf(ConnectError);
+        expect((err as ConnectError).code).toBe("scope_mismatch_not_revoked");
+        expect((err as ConnectError).detail).toMatchObject({ missing: [GOOGLE_GMAIL_READONLY], extra: [], revoked: false });
+        // Revoking any token of the grant would end the calendar's access too.
+        expect(revokes(world)).toBe(0);
+        expect(await readCredential(e, kek, cal.id)).toEqual(before);
+        expect((await getAccount(e, cal.id))!.status).toBe("active");
+        expect((await listAccounts(e)).map(a => a.id)).toEqual([cal.id]);
+      } finally { await db.close(); }
+    });
+
+    it("leaves the shared grant in place when the identity cannot be read", async () => {
+      const db = await open();
+      try {
+        const e = db.storage.engine();
+        const world: GoogleWorld = { calls: [], events: () => "eventsDelta" };
+        const { d, cal, before } = await withCalendar(e, world);
+        world.userinfo = { email: "owner@example.test", email_verified: false };
+        const err = await connect(d, "mail", ["gmail"], `openid ${EMAIL_URL} ${GOOGLE_CALENDAR_READONLY} ${GOOGLE_GMAIL_READONLY}`, world).catch(x => x);
+        expect((err as ConnectError).code).toBe("identity_not_revoked");
+        expect(revokes(world)).toBe(0);
+        expect(await readCredential(e, kek, cal.id)).toEqual(before);
+        expect((await listAccounts(e)).map(a => a.id)).toEqual([cal.id]);
+      } finally { await db.close(); }
+    });
+
+    it("still revokes a refused grant no live account shares", async () => {
+      const db = await open();
+      try {
+        const e = db.storage.engine();
+        await registerSource(e, { id: "mail", kind: "mailbox", pathPrefix: "mail/" });
+        const world: GoogleWorld = { calls: [], events: () => "eventsDelta" };
+        const d = deps(e, world);
+        const err = await connect(d, "mail", ["gmail"], `openid ${EMAIL_URL}`, world).catch(x => x);
+        expect((err as ConnectError).code).toBe("scope_mismatch");
+        expect((err as ConnectError).detail).toMatchObject({ revoked: true });
+        expect(revokes(world)).toBe(1);
+
+        world.calls.length = 0;
+        world.userinfo = { email: "owner@example.test", email_verified: false };
+        const unread = await connect(d, "mail", ["gmail"], `openid ${EMAIL_URL} ${GOOGLE_GMAIL_READONLY}`, world).catch(x => x);
+        expect((unread as ConnectError).code).toBe("identity");
+        expect(revokes(world)).toBe(1);
+        expect(await listAccounts(e)).toEqual([]);
+      } finally { await db.close(); }
+    });
+
+    it("still revokes when the refused grant belongs to another Google user, or the shared account was disconnected", async () => {
+      const db = await open();
+      try {
+        const e = db.storage.engine();
+        const world: GoogleWorld = { calls: [], events: () => "eventsDelta" };
+        const { d, cal } = await withCalendar(e, world);
+        world.userinfo = { email: "someone-else@example.test", email_verified: true };
+        const other = await connect(d, "mail", ["gmail"], onlyCalendar, world).catch(x => x);
+        expect((other as ConnectError).code).toBe("scope_mismatch");
+        expect(revokes(world)).toBe(1);
+
+        world.calls.length = 0;
+        delete world.userinfo;
+        await e.query(`UPDATE connector_accounts SET status = 'revoked' WHERE id = $1`, [cal.id]);
+        const parked = await connect(d, "mail", ["gmail"], onlyCalendar, world).catch(x => x);
+        expect((parked as ConnectError).code).toBe("scope_mismatch");
+        expect(revokes(world)).toBe(1);
+      } finally { await db.close(); }
+    });
+    it("does not revoke a token it failed to store when a live account shares its grant", async () => {
+      const db = await open();
+      try {
+        const e = db.storage.engine();
+        const world: GoogleWorld = { calls: [], events: () => "eventsDelta" };
+        const { d, before, cal } = await withCalendar(e, world);
+        const failing = new Proxy(e, {
+          get: (t, k) => (k === "transaction" ? async () => { throw new Error("store failed"); } : (v => (typeof v === "function" ? v.bind(t) : v))(Reflect.get(t, k))),
+        });
+        const union = `openid ${EMAIL_URL} ${GOOGLE_CALENDAR_READONLY} ${GOOGLE_GMAIL_READONLY}`;
+        const shared = await connect({ ...d, engine: failing }, "mail", ["gmail"], union, world).catch(x => x);
+        expect((shared as Error).message).toBe("store failed");
+        expect(revokes(world)).toBe(0);
+        expect(await readCredential(e, kek, cal.id)).toEqual(before);
+
+        world.userinfo = { email: "someone-else@example.test", email_verified: true };
+        const alone = await connect({ ...d, engine: failing }, "mail", ["gmail"], union, world).catch(x => x);
+        expect((alone as Error).message).toBe("store failed");
+        expect(revokes(world)).toBe(1);
+      } finally { await db.close(); }
+    });
   });
 
   it("drops a disconnected account's scopes from the union", async () => {

@@ -231,6 +231,7 @@ meeting from this week.
 | Google shows `Error 400: redirect_uri_mismatch` | The registered URI differs from what Memrain sent | Register the exact line from step 1 in the client (step 5), including `https` and no trailing slash |
 | Google shows `Error 403: access_denied` | The account is not a test user of an External app in Testing | Add it under **Audience > Test users** (step 4) |
 | Back in Memrain, the page reports `scope_mismatch` | A scope box was unticked on Google's consent page | Connect again and allow every listed access |
+| Back in Memrain, the page reports `scope_mismatch_not_revoked` or `identity_not_revoked` | The grant was refused, and another connected account of the same Google account shares it, so Memrain stored nothing and left the grant in place rather than end that account's access | Connect again and allow every listed access |
 | Back in Memrain, the page reports `provider_denied` | You chose **Cancel** on Google's consent page | Connect again |
 | The Connections page answers `no_client` | No OAuth client is stored for Google | Step 6 |
 | The Connections page answers `redirect_uri` | `MEMRAIN_PUBLIC_URL` is unset or not `https` | Fix the domain in your stack settings and redeploy |

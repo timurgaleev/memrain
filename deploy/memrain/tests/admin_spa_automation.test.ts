@@ -154,6 +154,10 @@ describe("connectOutcome", () => {
     expect(connectOutcome("?connector=connected")).toEqual({ ok: true, message: "Account connected. Sync stays off until you switch it on." });
     expect(connectOutcome("?connector_error=state_expired")).toEqual({ ok: false, message: "The connect link expired. Start again." });
     expect(connectOutcome("?connector_error=scope_mismatch")?.message).toContain("different access");
+    // A refused grant another connected account shares is left in place: the owner retries and allows everything.
+    expect(connectOutcome("?connector_error=scope_mismatch_not_revoked")?.message).toContain("allow every access");
+    expect(connectOutcome("?connector_error=scope_mismatch_not_revoked")?.message).toContain("Nothing was saved");
+    expect(connectOutcome("?connector_error=identity_not_revoked")?.message).toContain("Nothing was saved");
     expect(connectOutcome("")).toBeNull();
     expect(connectOutcome("?other=1")).toBeNull();
   });
