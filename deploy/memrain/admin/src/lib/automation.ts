@@ -187,7 +187,7 @@ export function grantNote(a: ConnectorAccountView): { warn: boolean; text: strin
 
 /** The calendar picker is for a connected Google Calendar account, and needs connectors on to read the list. */
 export function hasCalendarPicker(a: ConnectorAccountView, connectorsOn: boolean): boolean {
-  return connectorsOn && a.provider === "google" && a.services.includes("calendar") && a.status === "active";
+  return connectorsOn && (a.provider === "google" || a.provider === "microsoft") && a.services.includes("calendar") && a.status === "active";
 }
 
 /** The typed confirmation names the account exactly, surrounding spaces aside. */

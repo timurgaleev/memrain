@@ -2,7 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { automationApi } from "../api-automation.ts";
 import { ApiError } from "../lib/passkey-fetch.ts";
 import { fmtInt } from "../lib/format.ts";
-import { MAX_HISTORY_DAYS, type CalendarsReport, type ConnectorAccountView } from "../lib/automation.ts";
+import { MAX_HISTORY_DAYS, providerLabel, type CalendarsReport, type ConnectorAccountView } from "../lib/automation.ts";
 import { actionError } from "./connection-actions.ts";
 
 const ROLE_LABELS: Record<string, string> = { owner: "you own it", writer: "you can edit it", reader: "read only" };
@@ -21,9 +21,9 @@ function pickerError(e: unknown): string {
 }
 
 /**
- * Which of a Google account's calendars sync, and how far back a calendar's
- * first sync reads. The list comes from Google with the account's own access;
- * primary always syncs and cannot be unticked.
+ * Which of a Google or Microsoft account's calendars sync, and how far back a
+ * calendar's first sync reads. The list comes from the provider with the
+ * account's own access; primary always syncs and cannot be unticked.
  */
 export function CalendarPicker({ account, id, onClose, onSaved }: {
   account: ConnectorAccountView;
@@ -81,7 +81,7 @@ export function CalendarPicker({ account, id, onClose, onSaved }: {
         <form className="calendar-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
           <fieldset className="calendar-list">
             <legend>Calendars to sync</legend>
-            {report.calendars.length === 0 && <p className="empty-note">Google lists no calendar this account can read.</p>}
+            {report.calendars.length === 0 && <p className="empty-note">{providerLabel(account.provider)} lists no calendar this account can read.</p>}
             {report.calendars.map((c) => (
               <label key={c.id} className="checkbox-label calendar-option">
                 <input
