@@ -190,9 +190,13 @@ export function grantNote(a: ConnectorAccountView): { warn: boolean; text: strin
   return g.due_soon ? { warn: true, text: `${base} Reconnect before then to keep syncing, or publish the app.` } : { warn: false, text: base };
 }
 
-/** The calendar picker is for a connected Google Calendar account, and needs connectors on to read the list. */
+/** Each calendar provider's calendar service, whose accounts have calendars to pick. */
+const CALENDAR_SERVICES: Readonly<Record<string, string>> = { google: "calendar", microsoft: "outlook_calendar" };
+
+/** The calendar picker is for a connected Google or Outlook calendar account, and needs connectors on to read the list. */
 export function hasCalendarPicker(a: ConnectorAccountView, connectorsOn: boolean): boolean {
-  return connectorsOn && a.provider === "google" && a.services.includes("calendar") && a.status === "active";
+  const service = Object.hasOwn(CALENDAR_SERVICES, a.provider) ? CALENDAR_SERVICES[a.provider]! : null;
+  return connectorsOn && service !== null && a.services.includes(service) && a.status === "active";
 }
 
 /** The typed confirmation names the account exactly, surrounding spaces aside. */

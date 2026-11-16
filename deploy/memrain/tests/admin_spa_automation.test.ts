@@ -73,6 +73,12 @@ describe("hasCalendarPicker", () => {
     expect(hasCalendarPicker({ ...base, provider: "fireflies", services: ["fireflies"] }, true)).toBe(false);
     expect(hasCalendarPicker({ ...base, services: ["mail"] }, true)).toBe(false);
   });
+
+  it("offers it for a connected Outlook calendar account too", () => {
+    expect(hasCalendarPicker({ ...base, provider: "microsoft", services: ["outlook_calendar"] }, true)).toBe(true);
+    expect(hasCalendarPicker({ ...base, provider: "microsoft" }, true)).toBe(false);
+    expect(hasCalendarPicker({ ...base, provider: "microsoft", services: ["outlook_mail"] }, true)).toBe(false);
+  });
 });
 
 describe("routes", () => {

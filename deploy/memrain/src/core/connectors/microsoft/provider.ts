@@ -43,16 +43,21 @@
  */
 import { readTextCapped, type FetchFn } from "../client.ts";
 import type { ConnectorProvider, ProviderConnectError } from "../providers.ts";
+import { OUTLOOK_CALENDAR_SERVICE, OUTLOOK_PREFER, outlookCalendarAdapter } from "./calendar.ts";
+import { GRAPH_API_ORIGIN } from "./graph-client.ts";
+import { OUTLOOK_MAIL_SERVICE, outlookMailAdapter, outlookMailService } from "./mail.ts";
+
+export { GRAPH_API_ORIGIN } from "./graph-client.ts";
+export { OUTLOOK_CALENDAR_SERVICE } from "./calendar.ts";
+export { OUTLOOK_MAIL_SERVICE } from "./mail.ts";
 
 export const MICROSOFT_PROVIDER = "microsoft";
-export const OUTLOOK_MAIL_SERVICE = "outlook_mail";
-export const OUTLOOK_CALENDAR_SERVICE = "outlook_calendar";
-export const GRAPH_API_ORIGIN = "https://graph.microsoft.com";
 export const MICROSOFT_DEFAULT_TENANT = "common";
+export const MICROSOFT_CALENDARS_READ = "Calendars.Read";
 
 const GRAPH_RESOURCE = `${GRAPH_API_ORIGIN}/`;
 const OIDC_SCOPES = ["openid", "email", "profile", "offline_access"] as const;
-const KNOWN_SCOPES = ["User.Read", "Mail.Read", "Calendars.Read", ...OIDC_SCOPES] as const;
+const KNOWN_SCOPES = ["User.Read", "Mail.Read", MICROSOFT_CALENDARS_READ, ...OIDC_SCOPES] as const;
 /** DelegationDoesNotExist, AdminConsentRequired, AdminConsentRequiredRequestAccess. */
 const ADMIN_CONSENT_CODES = new Set([65001, 90094, 90095]);
 const ME_URL = `${GRAPH_API_ORIGIN}/v1.0/me?$select=id,mail,userPrincipalName`;
@@ -115,15 +120,19 @@ export function microsoftProvider(): ConnectorProvider {
     tenant: { default: MICROSOFT_DEFAULT_TENANT },
     baseScopes: ["openid", "email", "offline_access", "User.Read"],
     services: {
-      [OUTLOOK_MAIL_SERVICE]: { scopes: ["Mail.Read"], sourceKinds: ["mailbox"] },
-      [OUTLOOK_CALENDAR_SERVICE]: { scopes: ["Calendars.Read"], sourceKinds: ["calendar"] },
+      [OUTLOOK_MAIL_SERVICE]: outlookMailService,
+      [OUTLOOK_CALENDAR_SERVICE]: { scopes: [MICROSOFT_CALENDARS_READ], sourceKinds: ["calendar"], headers: { Prefer: OUTLOOK_PREFER } },
     },
-    authorizeParams: { prompt: "select_account" },
+    authorizeParams: { response_mode: "query", prompt: "select_account" },
     optionalGrantScopes: OIDC_SCOPES,
     grantIncludesPriorConsent: true,
     tokenErrorCode,
     consentUrls: ["https://myapps.microsoft.com", "https://account.live.com/consent/Manage"],
     normalizeScope,
     identify: ({ fetch, accessToken }) => identify(fetch, accessToken),
+    sync: {
+      apiOrigin: GRAPH_API_ORIGIN,
+      adapter: (account, ctx) => ((account.services ?? []).includes(OUTLOOK_MAIL_SERVICE) ? outlookMailAdapter(account, ctx) : outlookCalendarAdapter(account, ctx)),
+    },
   };
 }

@@ -63,6 +63,12 @@ export function graphLinkPath(link: unknown): string | null {
   return `${url.pathname}${url.search}`;
 }
 
+/** Whether a stored path is one this client would request: on the Graph origin, under /v1.0/. */
+export function isGraphPath(path: unknown): path is string {
+  return typeof path === "string" && path.startsWith(`${GRAPH_ROOT}/`) && !path.includes("\\") && path.length <= MAX_GRAPH_LINK_CHARS
+    && graphLinkPath(`${GRAPH_API_ORIGIN}${path}`) === path;
+}
+
 /** The `error.code` of a Graph error body, when it carries one. */
 export function graphErrorCode(res: ConnectorResponse): string | null {
   const body = res.errorBody;

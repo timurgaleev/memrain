@@ -114,6 +114,8 @@ export interface CalendarEvent {
   occurrences?: CalendarOccurrence[];
   /** More occurrences fell inside the window than were listed. */
   occurrencesTruncated?: boolean;
+  /** The event has an online meeting. Only the fact is kept, never its join link. */
+  onlineMeeting?: boolean;
 }
 
 export interface CalendarOccurrence {

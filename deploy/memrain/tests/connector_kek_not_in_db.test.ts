@@ -29,6 +29,15 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("refuses to store the Microsoft OAuth client secret for the same reason", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      await expect(setRuntimeConfig(e, "MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET", "client-secret-value")).rejects.toThrow("environment");
+      expect((await e.query(`SELECT key FROM runtime_config WHERE key LIKE '%MICROSOFT_OAUTH%'`)).rows).toEqual([]);
+    } finally { await db.close(); }
+  });
+
   it("never projects a stored key row into the environment", async () => {
     const db = await open();
     const e = db.storage.engine();

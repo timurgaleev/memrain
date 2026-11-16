@@ -23,7 +23,7 @@ import type { Storage } from "../core/storage.ts";
 import type { Engine } from "../core/engine/interface.ts";
 import { listSources } from "../core/sources.ts";
 import { OperationError } from "../core/operation-error.ts";
-import type { FetchFn } from "../core/connectors/client.ts";
+import type { ConnectorClient, FetchFn } from "../core/connectors/client.ts";
 import { credentialMeta, getAccount, listAccounts, setAccountConfig, setAccountEnabled, type ConnectorAccount } from "../core/connectors/accounts.ts";
 import { ApiKeyConnectError, connectApiKey } from "../core/connectors/api-key-connect.ts";
 import { listAccountStatus, type AccountStatus } from "../core/connectors/account-status.ts";
@@ -37,6 +37,7 @@ import {
   selectedCalendars,
   type GoogleCalendarEntry,
 } from "../core/connectors/google/calendar.ts";
+import { listOutlookCalendars, OUTLOOK_CALENDAR_SERVICE } from "../core/connectors/microsoft/calendar.ts";
 import { connectorRuntime, toSyncAccount } from "../core/connectors/runtime.ts";
 import { ReauthRequiredError } from "../core/connectors/types.ts";
 import { deleteOAuthClient, isTenant, listOAuthClients, setOAuthClient } from "../core/connectors/oauth-clients.ts";
@@ -388,7 +389,13 @@ async function accountAction(req: Request, id: string, action: string, deps: Adm
   }
 }
 
-/** The calendars a Google account can read, fetched with its own credential. */
+/** How each calendar provider lists the calendars an account can read. */
+const CALENDAR_LISTS: Readonly<Record<string, { service: string; name: string; list: (client: ConnectorClient, accountLabel: string) => Promise<GoogleCalendarEntry[]> }>> = {
+  google: { service: GOOGLE_CALENDAR_SERVICE, name: "Google", list: (client) => listGoogleCalendars(client) },
+  microsoft: { service: OUTLOOK_CALENDAR_SERVICE, name: "Microsoft", list: listOutlookCalendars },
+};
+
+/** The calendars a calendar account can read, fetched with its own credential. */
 async function readableCalendars(account: ConnectorAccount, deps: AdminConnectorDeps): Promise<GoogleCalendarEntry[]> {
   const runtime = connectorRuntime(deps.storage, {
     kek: deps.kek()!, providers: deps.providers, ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.env ? { env: deps.env } : {}),
@@ -396,7 +403,7 @@ async function readableCalendars(account: ConnectorAccount, deps: AdminConnector
   const sync = toSyncAccount(account);
   const wiring = runtime.depsFor(sync);
   const client = wiring.client(sync, await wiring.tokenSource(sync, () => {}));
-  return listGoogleCalendars(client);
+  return CALENDAR_LISTS[account.provider]!.list(client, account.account_label);
 }
 
 function historyDays(account: ConnectorAccount): number {
@@ -406,7 +413,7 @@ function historyDays(account: ConnectorAccount): number {
 
 /**
  * The calendar picker: GET lists what the account can read and what syncs;
- * POST saves `calendars` (ids Google lists for the account; primary always
+ * POST saves `calendars` (ids the provider lists for the account; primary always
  * syncs and is not stored) and `history_days` into the account's config.
  * A new window applies to calendars that have not had their first sync.
  */
@@ -417,8 +424,9 @@ async function calendarsAction(req: Request, id: string, deps: AdminConnectorDep
   const engine = deps.storage.engine();
   const account = await getAccount(engine, id);
   if (!account) return json({ error: "account_not_found" }, 404);
-  if (account.provider !== "google" || !account.services.includes(GOOGLE_CALENDAR_SERVICE) || !deps.providers.get("google")) {
-    return json({ error: "no_calendars", message: "Only a Google Calendar account has calendars to pick." }, 400);
+  const calendarProvider = Object.hasOwn(CALENDAR_LISTS, account.provider) ? CALENDAR_LISTS[account.provider]! : null;
+  if (calendarProvider === null || !account.services.includes(calendarProvider.service) || !deps.providers.get(account.provider)) {
+    return json({ error: "no_calendars", message: "Only a Google or Outlook calendar account has calendars to pick." }, 400);
   }
   if (account.status !== "active") return json({ error: "not_connected", message: "Reconnect the account before picking its calendars." }, 409);
 
@@ -438,7 +446,7 @@ async function calendarsAction(req: Request, id: string, deps: AdminConnectorDep
   try {
     listed = await readableCalendars(account, deps);
   } catch (e) {
-    if (e instanceof ReauthRequiredError) return json({ error: "not_connected", message: "Google refused the account's access; reconnect it." }, 409);
+    if (e instanceof ReauthRequiredError) return json({ error: "not_connected", message: `${calendarProvider.name} refused the account's access; reconnect it.` }, 409);
     console.error("[admin-connectors] calendar list failed:", e instanceof Error ? e.name : "error");
     return json({ error: "provider_unavailable" }, 502);
   }
