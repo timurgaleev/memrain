@@ -23,8 +23,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FetchFn } from "../../src/core/connectors/client.ts";
 import type { ConnectorProvider } from "../../src/core/connectors/providers.ts";
-import { GRAPH_API_ORIGIN } from "../../src/core/connectors/microsoft/graph-client.ts";
-import { OUTLOOK_MAIL_SERVICE, outlookMailAdapter, outlookMailService } from "../../src/core/connectors/microsoft/mail.ts";
+import { microsoftProvider } from "../../src/core/connectors/microsoft/provider.ts";
 
 type Json = Record<string, unknown>;
 
@@ -259,21 +258,9 @@ export function deltaCalls(w: OutlookWorld): URL[] {
   return w.calls.filter(c => c.url.pathname.endsWith("/messages/delta")).map(c => c.url);
 }
 
-/**
- * A Microsoft provider for tests, carrying the Outlook mail service as the
- * adapter declares it; the shipped provider registration lives with the
- * Microsoft connect flow.
- */
+/** The shipped Microsoft provider, so a mail sync runs through its own routing to the mail adapter. */
 export function outlookTestProvider(): ConnectorProvider {
-  return {
-    id: "microsoft",
-    authorizeUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-    tokenUrl: MS_TOKEN_URL,
-    baseScopes: ["openid", "email", "offline_access", "User.Read"],
-    services: { [OUTLOOK_MAIL_SERVICE]: outlookMailService },
-    identify: async () => "owner@example.test",
-    sync: { apiOrigin: GRAPH_API_ORIGIN, adapter: (account, ctx) => outlookMailAdapter(account, ctx) },
-  };
+  return microsoftProvider();
 }
 
 /** The conversation ids a recorded run listed, in order. */

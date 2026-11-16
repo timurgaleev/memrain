@@ -215,6 +215,10 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(again.reconnected).toBe(true);
       // A scope of no service of this provider is still refused.
       expect(await code(connect(deps(e, { calls: [], grantedScope: `${both} https://graph.microsoft.com/Files.Read` }), "work-calendar", ["outlook_calendar"]))).toBe("scope_mismatch");
+      // Nor does a prior consent let a write scope through.
+      for (const write of ["Mail.ReadWrite", "Calendars.ReadWrite", "Mail.Send"]) {
+        expect(await code(connect(deps(e, { calls: [], grantedScope: `${both} https://graph.microsoft.com/${write}` }), "work-calendar", ["outlook_calendar"]))).toBe("scope_mismatch");
+      }
     } finally { await db.close(); }
   });
 

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { listOAuthClients } from "../src/core/connectors/oauth-clients.ts";
+import { registerSource } from "../src/core/sources.ts";
 import { handleAdminApi } from "../src/http/admin-api.ts";
 import type { Storage } from "../src/core/storage.ts";
 
@@ -47,7 +48,7 @@ async function send(storage: Storage, req: Request): Promise<Response> {
 }
 
 interface Report {
-  providers: Array<{ id: string; auth: string; tenant_default: string | null; can_revoke: boolean; callback_uri: string | null }>;
+  providers: Array<{ id: string; auth: string; tenant_default: string | null; can_revoke: boolean; callback_uri: string | null; consent_urls: string[] }>;
   clients: Array<{ provider: string; client_id: string; tenant: string | null }>;
 }
 
@@ -68,6 +69,40 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(google).toMatchObject({ auth: "oauth", tenant_default: null, can_revoke: true, callback_uri: `${ORIGIN}/admin/connectors/callback/google` });
       // An API-key provider has no app of its own to name a tenant, and nothing to revoke here.
       expect(report.providers.find((p) => p.id === "fireflies")).toMatchObject({ auth: "api_key", tenant_default: null, can_revoke: false });
+    } finally { await db.close(); }
+  });
+
+  it("saves a Microsoft app with its tenant and starts a connect on that tenant's endpoint", async () => {
+    const db = await open();
+    try {
+      await registerSource(db.storage.engine(), { id: "work-mail", kind: "mailbox", pathPrefix: "mail/" });
+      const app = "11111111-2222-4333-8444-555555555555";
+      const saved = await send(db.storage, browser("/admin/api/connectors/microsoft/client", { client_id: app, client_secret: "ms-secret-value-0123", tenant: " Contoso.OnMicrosoft.com " }));
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toEqual({ ok: true, provider: "microsoft", client_id: app, tenant: "contoso.onmicrosoft.com" });
+      const bad = await send(db.storage, browser("/admin/api/connectors/microsoft/client", { client_id: app, client_secret: "ms-secret-value-0123", tenant: "contoso.example/../evil" }));
+      expect(bad.status).toBe(400);
+      expect(await bad.json()).toEqual({ error: "invalid_tenant" });
+
+      const listed = await send(db.storage, browser("/admin/api/connectors"));
+      const text = await listed.text();
+      expect(text).not.toContain("ms-secret-value-0123");
+      const report = JSON.parse(text) as Report;
+      expect(report.clients.map((c) => [c.provider, c.client_id, c.tenant])).toEqual([["microsoft", app, "contoso.onmicrosoft.com"]]);
+      expect(report.providers.find((p) => p.id === "microsoft")).toMatchObject({
+        auth: "oauth", tenant_default: "common", can_revoke: false, callback_uri: `${ORIGIN}/admin/connectors/callback/microsoft`,
+        consent_urls: ["https://myapplications.microsoft.com", "https://account.microsoft.com/privacy/app-access"],
+      });
+
+      const started = await send(db.storage, browser("/admin/api/connectors/microsoft/start", { source_id: "work-mail", services: ["outlook_mail"] }));
+      expect(started.status).toBe(200);
+      const url = new URL(((await started.json()) as { authorize_url: string }).authorize_url);
+      expect(`${url.origin}${url.pathname}`).toBe("https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/authorize");
+      expect(url.searchParams.get("client_id")).toBe(app);
+      expect(url.searchParams.get("redirect_uri")).toBe(`${ORIGIN}/admin/connectors/callback/microsoft`);
+      expect(url.searchParams.get("scope")).toBe("openid email offline_access User.Read Mail.Read");
+      expect(url.searchParams.get("prompt")).toBe("select_account");
+      expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     } finally { await db.close(); }
   });
 
