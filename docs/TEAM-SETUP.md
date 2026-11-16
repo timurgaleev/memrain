@@ -293,8 +293,8 @@ A personal access token's read set changes in place; there is no need to issue
 a new one when you connect a new source:
 
 ```bash
-memrain auth permissions <name> set-read-sources default,timur-calendar --dry-run   # shows before/after, changes nothing
-memrain auth permissions <name> set-read-sources default,timur-calendar
+memrain auth permissions <name> set-read-sources default,me-calendar --dry-run   # shows before/after, changes nothing
+memrain auth permissions <name> set-read-sources default,me-calendar
 ```
 
 The token's write source stays first and always readable (a token created

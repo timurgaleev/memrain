@@ -275,8 +275,8 @@ describe("memrain connectors status", () => {
     await s.init();
     try {
       const e = s.engine();
-      await registerSource(e, { id: "timur-calendar", kind: "calendar", pathPrefix: "calendar/" });
-      const a = await createAccount(e, { sourceId: "timur-calendar", provider: "google", services: ["calendar"], principalRef: "admin:operator", accountLabel: "owner@example.test" });
+      await registerSource(e, { id: "me-calendar", kind: "calendar", pathPrefix: "calendar/" });
+      const a = await createAccount(e, { sourceId: "me-calendar", provider: "google", services: ["calendar"], principalRef: "admin:operator", accountLabel: "owner@example.test" });
       await storeCredential(e, kek, a, { access_token: "at-cli", refresh_token: "rt-cli" }, { scopes: ["calendar.readonly"], expiresAt: null });
       await setAccountEnabled(e, a.id, true);
       await markAccountSynced(e, a.id);
@@ -296,7 +296,7 @@ describe("memrain connectors status", () => {
     expect(await runConnectors({ sub: "status", configPath: cfgPath })).toBe(0);
     const out = printed();
     expect(out).not.toContain("no connector has run");
-    expect(out).toContain(`google owner@example.test (${accountId.slice(0, 8)}) into timur-calendar: sync on`);
+    expect(out).toContain(`google owner@example.test (${accountId.slice(0, 8)}) into me-calendar: sync on`);
     expect(out).toContain("last run success");
     expect(out).toContain("49 items, 49 written");
     expect(out).toContain("Testing");
@@ -312,7 +312,7 @@ describe("memrain connectors status", () => {
     expect(body.connectors).toEqual([]);
     expect(body.accounts).toHaveLength(1);
     expect(body.accounts[0]).toMatchObject({
-      id: accountId, provider: "google", source_id: "timur-calendar", state: "sync on", enabled: true, needs_reconnect: false,
+      id: accountId, provider: "google", source_id: "me-calendar", state: "sync on", enabled: true, needs_reconnect: false,
       last_run: { status: "success", items: 49 }, grant_expiry: { state: "upcoming", days: 7 },
     });
     expect(body.accounts[0]!.last_success_at).not.toBeNull();
