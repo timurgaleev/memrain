@@ -300,6 +300,21 @@ describe("outlook calendar, pure parts", () => {
     ]);
   });
 
+  it("lists a personal account's calendars: it names their properties, and owns one Graph names no owner for", async () => {
+    // outlook.com has answered 500 to a calendar list that does not name its properties.
+    const w: GraphWorld = { calls: [], delta: () => "deltaEmpty", calendars: "calendarsPersonal", calendarsNeedSelect: true };
+    const client = new ConnectorClient({ origin: "https://graph.microsoft.com", token: GRAPH_ACCESS_TOKEN, fetch: graphFetch(w), sleep: async () => {}, maxRetries: 0 });
+    expect(await listOutlookCalendars(client, ["someone@outlook.example.test"])).toEqual([
+      { id: "AQMkPersonalDefault=", summary: "Calendar", primary: true, accessRole: "writer" },
+      // Listed under /me/calendars with no owner address: the account's own. A bad field costs that field, not the list.
+      { id: "AQMkPersonalFamily=", summary: "Family", primary: false, accessRole: "writer" },
+      { id: "AQMkPersonalBirthdays=", summary: "Birthdays", primary: false, accessRole: "reader" },
+      { id: "AQMkPersonalOdd=", summary: "AQMkPersonalOdd=", primary: false, accessRole: "reader" },
+    ]);
+    const listed = w.calls.find(c => c.url.pathname === "/v1.0/me/calendars")!;
+    expect(listed.url.searchParams.get("$select")).toBe("id,name,isDefaultCalendar,owner,canEdit");
+  });
+
   it("waits out a 429 for as long as Retry-After asks, and stops rate_limited when it does not clear", async () => {
     let refusals = 1;
     const w: GraphWorld = {

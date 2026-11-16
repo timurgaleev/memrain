@@ -24,6 +24,16 @@
       { "id": "AAMkCalDefault01=", "name": "Calendar", "isDefaultCalendar": true, "canEdit": true, "owner": { "name": "Owner Example", "address": "owner@example.test" } }
     ]
   },
+  "calendarsPersonal": {
+    "value": [
+      { "id": "AQMkPersonalFamily=", "name": "Family", "isDefaultCalendar": false, "canEdit": true, "owner": { "name": "Someone" } },
+      { "id": "AQMkPersonalBirthdays=", "name": "Birthdays", "isDefaultCalendar": false, "canEdit": false },
+      { "id": "AQMkPersonalShared=", "name": "Ana's calendar", "isDefaultCalendar": false, "canEdit": false, "owner": { "name": "Ana Lee", "address": "ana@example.net" } },
+      { "id": 42, "name": "No string id" },
+      { "id": "AQMkPersonalOdd=", "name": { "text": "not a string" }, "isDefaultCalendar": "yes", "canEdit": "no", "owner": null },
+      { "id": "AQMkPersonalDefault=", "name": "Calendar", "isDefaultCalendar": true, "canEdit": true }
+    ]
+  },
   "secondaryView": {
     "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users('owner')/calendars('AAMkCalTeam0001%3D')/calendarView",
     "value": [

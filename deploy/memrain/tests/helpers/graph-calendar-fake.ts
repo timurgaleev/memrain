@@ -44,6 +44,10 @@ export interface GraphWorld {
   grantedScope?: string;
   me?: Json;
   refuseRefresh?: boolean;
+  /** Answer for the calendar list (the `calendars` fixture when unset). */
+  calendars?: GraphAnswer;
+  /** The calendar list answers 500 unless it names its properties, as outlook.com has been seen to. */
+  calendarsNeedSelect?: boolean;
   calls: GraphCall[];
 }
 
@@ -80,7 +84,12 @@ export function graphFetch(world: GraphWorld): FetchFn {
     if (authorization !== `Bearer ${GRAPH_ACCESS_TOKEN}`) return answer({ status: 401, body: GRAPH_FIXTURES.errorInvalidAuthenticationToken! });
     const p = url.pathname;
     if (p === "/v1.0/me") return Response.json(world.me ?? GRAPH_FIXTURES.me);
-    if (p === "/v1.0/me/calendars") return answer("calendars");
+    if (p === "/v1.0/me/calendars") {
+      if (world.calendarsNeedSelect === true && !url.searchParams.has("$select")) {
+        return answer({ status: 500, body: { error: { code: "ErrorInternalServerError", message: "An internal server error occurred." } } });
+      }
+      return answer(world.calendars ?? "calendars");
+    }
     // Graph v1.0 documents the calendar view delta for the default calendar only.
     if (p === "/v1.0/me/calendarView/delta") return answer(world.delta("primary", url.searchParams, headers.get("prefer")));
     const list = /^\/v1\.0\/me\/calendars\/([^/]+)\/calendarView$/.exec(p);

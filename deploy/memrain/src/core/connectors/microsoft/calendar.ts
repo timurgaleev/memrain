@@ -658,13 +658,19 @@ export function outlookCalendarAdapter(account: SyncAccount, opts: Partial<Adapt
  * Calendars.Read.Shared, which this connector does not ask for
  * (learn.microsoft.com/graph/outlook-get-shared-events-calendars). A
  * calendar's owner is named by its mailbox address, so `own` holds the
- * account's own addresses (ownAddresses), not its sign-in name alone. The
- * name is the owner's (outside text, display only).
+ * account's own addresses (ownAddresses), not its sign-in name alone. A
+ * calendar in the account's own list whose owner has no address (a personal
+ * account's calendars may name none) is the account's. The name is the
+ * owner's (outside text, display only).
+ *
+ * The request names the properties it reads: outlook.com has answered the
+ * bare list with HTTP 500. A field of the wrong type costs that field (a
+ * calendar without a string id is skipped), never the whole list.
  */
 export async function listOutlookCalendars(client: ConnectorClient, own: readonly string[]): Promise<GoogleCalendarEntry[]> {
   const mine = new Set(own.map(a => a.trim().toLowerCase()).filter(a => a !== ""));
   const out: GoogleCalendarEntry[] = [];
-  let path: string | null = "/v1.0/me/calendars?$top=100";
+  let path: string | null = "/v1.0/me/calendars?$select=id,name,isDefaultCalendar,owner,canEdit&$top=100";
   for (let page = 0; page < MAX_LIST_PAGES && path !== null; page++) {
     const res = await graphGet(client, path, { prefer: OUTLOOK_PREFER, maxBytes: GRAPH_MAX_RESPONSE_BYTES });
     if (res.class !== "ok") throw new Error(`calendar list failed: ${res.error ?? res.class}`);
@@ -672,7 +678,7 @@ export async function listOutlookCalendars(client: ConnectorClient, own: readonl
     for (const c of (res.body.value as unknown[]).filter(isRecord)) {
       const id = str(c.id);
       const owner = isRecord(c.owner) ? (str(c.owner.address) ?? "").trim().toLowerCase() : "";
-      if (id === null || (c.isDefaultCalendar !== true && (owner === "" || !mine.has(owner)))) continue;
+      if (id === null || (c.isDefaultCalendar !== true && owner !== "" && !mine.has(owner))) continue;
       out.push({ id, summary: (str(c.name) ?? id).slice(0, 200), primary: c.isDefaultCalendar === true, accessRole: c.canEdit === true ? "writer" : "reader" });
     }
     const next = res.body["@odata.nextLink"];
