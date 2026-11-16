@@ -320,3 +320,21 @@ describe("signals carry no message text", () => {
     expect(JSON.stringify(signals)).not.toContain("launch date");
   });
 });
+
+describe("calendar series occurrences", () => {
+  test("a series listing more than a hundred occurrences keeps its nearest one as the next start", async () => {
+    const { calendarLoopSignals, nextCalendarStart } = await import("../src/core/loops/signals.ts");
+    const now = new Date("2026-11-16T09:00:00Z");
+    // Twice a day for 90 days ahead: 180 listed occurrences.
+    const occurrences = Array.from({ length: 180 }, (_, i) => new Date(now.getTime() + 3_600_000 + i * 12 * 3_600_000).toISOString());
+    const event: CalendarEvent = {
+      id: "e1", iCalUID: "series@example.com", title: "Standup", start: new Date(now.getTime() - 30 * 86_400_000).toISOString(), end: null, allDay: false, status: "confirmed",
+      organizer: { name: null, email: "lead@example.com" }, attendees: [{ name: null, email: "me@example.com", response: "needsAction" }],
+      location: null, description: null, recurrence: null,
+    } as unknown as CalendarEvent;
+    // The series began a month ago; its start is behind us.
+    const seriesStart = new Date(now.getTime() - 30 * 86_400_000).toISOString();
+    const s = calendarLoopSignals({ service: "calendar", accountLabel: "me@example.com" }, event, seriesStart, "Standup", p => p.email ?? "", occurrences);
+    expect(nextCalendarStart(s, now)).toBe(occurrences[0]!);
+  });
+});

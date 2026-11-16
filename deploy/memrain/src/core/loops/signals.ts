@@ -69,8 +69,11 @@ export interface CalendarLoopSignals {
 export type LoopSignals = ThreadLoopSignals | CalendarLoopSignals;
 
 const REF_LEN = 16;
-/** Occurrences of a series kept in its state; the renderer lists at most 500 in a 90-day horizon. */
-const MAX_OCCURRENCES = 100;
+/**
+ * Occurrences of a series kept in its state: the renderer's own bound (500 in a
+ * 90-day horizon), so the nearest coming one is never cut from a busy series.
+ */
+const MAX_OCCURRENCES = 500;
 const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex").slice(0, REF_LEN);
 
 /** The hash a sender mute and `open_loops.counterparty_key` use for an address. */
