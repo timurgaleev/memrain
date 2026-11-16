@@ -200,15 +200,13 @@ describe("tokenEndpointRefresh", () => {
     expect(String((err as Error).message)).not.toContain(tok("r1"));
   });
 
-  it("reads an app the provider refuses (a wrong or expired secret, an unknown app) as the operator's to fix, not a reconnect", async () => {
+  it("reads an app the provider refuses for every account (a wrong or expired secret, a deleted app) as the operator's to fix, not a reconnect", async () => {
     const cases: Array<[Recorded, string, number | null]> = [
-      // Microsoft: an expired secret (AADSTS7000222), a wrong one (AADSTS7000215), an app the tenant does not know (AADSTS700016).
+      // Microsoft: an expired secret (AADSTS7000222), a wrong one (AADSTS7000215).
       [json(401, { error: "invalid_client", error_description: `AADSTS7000222: expired ${SECRET}`, error_codes: [7000222] }), "invalid_client", 7000222],
       [json(401, { error: "invalid_client", error_codes: [7000215] }), "invalid_client", 7000215],
-      [json(400, { error: "unauthorized_client", error_codes: [700016] }), "unauthorized_client", 700016],
-      // Google: a deleted or unknown client, and a refresh token issued to another client.
+      // Google: a deleted or unknown client.
       [json(401, { error: "invalid_client", error_description: "The OAuth client was not found." }), "invalid_client", null],
-      [json(400, { error: "unauthorized_client", error_description: "Unauthorized" }), "unauthorized_client", null],
     ];
     for (const [response, code, serviceCode] of cases) {
       const { fn } = refresher([response]);
@@ -216,6 +214,26 @@ describe("tokenEndpointRefresh", () => {
       expect(err).toBeInstanceOf(OAuthClientRejectedError);
       expect(err).not.toBeInstanceOf(ReauthRequiredError);
       expect(err).toMatchObject({ code, serviceCode });
+      expect(String((err as Error).message)).not.toContain(SECRET);
+      expect(String((err as Error).message)).not.toContain(tok("r1"));
+    }
+  });
+
+  it("reads a renewal refused for one account (unauthorized_client) as that account's reconnect, naming the code", async () => {
+    const cases: Array<[Recorded, string]> = [
+      // Microsoft: the account's organization disabled the app (AADSTS7000112), or it is not in that directory (AADSTS700016).
+      [json(400, { error: "unauthorized_client", error_description: `AADSTS7000112: disabled ${SECRET}`, error_codes: [7000112] }), "(unauthorized_client, code 7000112)"],
+      [json(400, { error: "unauthorized_client", error_codes: [700016] }), "(unauthorized_client, code 700016)"],
+      // Google: a refresh token issued to another client.
+      [json(400, { error: "unauthorized_client", error_description: "Unauthorized" }), "(unauthorized_client)"],
+    ];
+    for (const [response, named] of cases) {
+      const { fn } = refresher([response]);
+      const err = await fn(tok("r1")).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ReauthRequiredError);
+      expect(err).not.toBeInstanceOf(OAuthClientRejectedError);
+      expect(String((err as Error).message)).toContain(named);
+      expect(String((err as Error).message)).toContain("organization");
       expect(String((err as Error).message)).not.toContain(SECRET);
       expect(String((err as Error).message)).not.toContain(tok("r1"));
     }

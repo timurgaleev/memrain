@@ -92,13 +92,12 @@ export class ProviderCannotSyncError extends Error {
 
 /**
  * The token endpoint refused the OAuth app itself (`invalid_client`: a wrong
- * or expired client secret, an unknown app; `unauthorized_client`: an app the
- * tenant does not know, or one that may not renew this token). No reconnect
- * fixes it and every account of the app fails alike, so it is the operator's
- * to fix: save the app's current secret, or the right app.
+ * or expired client secret, an app the provider no longer knows). No
+ * reconnect fixes it and every account of the app fails alike, so it is the
+ * operator's to fix: save the app's current secret, or the right app.
  */
 export class OAuthClientRejectedError extends Error {
-  constructor(readonly code: "invalid_client" | "unauthorized_client", readonly serviceCode: number | null = null) {
+  constructor(readonly code: "invalid_client", readonly serviceCode: number | null = null) {
     super(`the provider refused the OAuth app (${code}${serviceCode === null ? "" : `, code ${serviceCode}`})`);
     this.name = "OAuthClientRejectedError";
   }
@@ -108,5 +107,22 @@ export class ReauthRequiredError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ReauthRequiredError";
+  }
+}
+
+/**
+ * The token endpoint would not renew this one account's access with the app
+ * (`unauthorized_client`). With one app for several directories this is the
+ * account's own: its organization disabled the app (Microsoft AADSTS7000112)
+ * or removed it (AADSTS700016), the app no longer admits this kind of
+ * account, or (Google) the token was issued to another app. Its siblings of
+ * the same app may renew fine, so only this account waits for a reconnect,
+ * and the message, codes only, is the reason shown on its row.
+ */
+export class AccountAppRefusedError extends ReauthRequiredError {
+  constructor(readonly serviceCode: number | null = null) {
+    super(`the provider refused to renew this account for the app (unauthorized_client${serviceCode === null ? "" : `, code ${serviceCode}`}): `
+      + "its organization may have disabled or removed the app; ask its admin, then reconnect");
+    this.name = "AccountAppRefusedError";
   }
 }

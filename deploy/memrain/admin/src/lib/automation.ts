@@ -85,7 +85,7 @@ export interface ConnectorProviderView {
 }
 
 export interface ClientRejectedView {
-  reason: "invalid_client" | "unauthorized_client";
+  reason: "invalid_client";
   /** Microsoft's AADSTS number, when it sent one. */
   service_code: number | null;
   since: string;
@@ -177,10 +177,7 @@ export function clientRejectedNote(provider: string, rejected: ClientRejectedVie
   if (!rejected) return null;
   const name = providerLabel(provider);
   const code = rejected.service_code === null ? rejected.reason : `${rejected.reason}, AADSTS${rejected.service_code}`;
-  const cause = rejected.reason === "invalid_client"
-    ? "its client secret has expired or is wrong, or the app was deleted"
-    : "it does not know the app, or the app may not renew this access (check the client ID and tenant, and that the app is still enabled)";
-  return `${name} refused your app when renewing access (${code}): ${cause}. Create a new client secret for the app, then save it with the same client ID below, under Use your own OAuth app. `
+  return `${name} refused your app when renewing access (${code}): its client secret has expired or is wrong, or the app was deleted. Create a new client secret for the app, then save it with the same client ID below, under Use your own OAuth app. `
     + `No reconnect is needed: every ${name} account syncs again once it is saved. Until then they try once an hour.`;
 }
 

@@ -1,14 +1,19 @@
 /**
  * OAuth apps their provider refused (migration 168): one row per provider
- * whose token endpoint turned the app itself away, `invalid_client` (a wrong
- * or expired client secret, an unknown app) or `unauthorized_client`.
+ * whose token endpoint turned the app itself away with `invalid_client` (a
+ * wrong or expired client secret, a deleted app).
  *
  * No reconnect fixes that, and every account renewing with the app fails
  * alike, so the accounts are neither parked for a reconnect nor left to ask
  * again every run: the provider's syncs wait until `held_until`, one try an
  * hour, and the owner is told once (notifications kind
  * `oauth_client_rejected`). Saving or removing the provider's app ends the
- * hold, and so does any renewal that succeeds.
+ * hold, and so does any renewal that succeeds: the secret works again.
+ *
+ * `unauthorized_client` is not held here. One app may serve accounts of
+ * several directories, and that refusal is one directory's (it disabled or
+ * removed the app): only that account waits for a reconnect
+ * (AccountAppRefusedError), and its siblings keep syncing.
  *
  * Only codes are kept: the app's public id, the OAuth error code and the
  * provider's numeric service code. Never a secret or provider text.

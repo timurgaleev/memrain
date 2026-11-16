@@ -50,7 +50,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       for (const label of ["one@example.test", "two@example.test"]) {
         await createAccount(e, { sourceId: "inbox", provider: "google", services: ["gmail"], principalRef: "admin:operator", accountLabel: label });
       }
-      await recordClientRejection(e, { provider: "google", clientId: "app-g", error: new OAuthClientRejectedError("unauthorized_client"), now: T0 });
+      await recordClientRejection(e, { provider: "google", clientId: "app-g", error: new OAuthClientRejectedError("invalid_client"), now: T0 });
       expect((await currentProblems(e)).filter(p => p.kind === "oauth_client_rejected"))
         .toEqual([{ kind: "oauth_client_rejected", ref: "google", source_id: "default" }]);
       // The hold running out does not resolve it: only a renewal that works, or a saved app, does.

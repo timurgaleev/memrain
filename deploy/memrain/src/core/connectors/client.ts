@@ -31,7 +31,7 @@
  */
 import { classifyResponse, CLASSIFY_BODY_PREFIX } from "./classify.ts";
 import type { ProviderLimiter } from "./limiter.ts";
-import { OAuthClientRejectedError, ReauthRequiredError, type ResponseClass } from "./types.ts";
+import { AccountAppRefusedError, OAuthClientRejectedError, ReauthRequiredError, type ResponseClass } from "./types.ts";
 
 export type FetchFn = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -253,7 +253,8 @@ export class ConnectorClient {
         status: 0,
         body: null,
         next: null,
-        error: `${what}: the provider will not renew the credential; reconnect the account`,
+        // Codes only, and the one case where the owner has to look elsewhere before reconnecting.
+        error: `${what}: ${e instanceof AccountAppRefusedError ? e.message : "the provider will not renew the credential; reconnect the account"}`,
         reauth: true,
       };
     }

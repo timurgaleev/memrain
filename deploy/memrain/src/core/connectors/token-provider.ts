@@ -17,7 +17,7 @@
 import type { Engine } from "../engine/interface.ts";
 import { acquireWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import type { FetchFn, TokenSource } from "./client.ts";
-import { OAuthClientRejectedError, ReauthRequiredError } from "./types.ts";
+import { AccountAppRefusedError, OAuthClientRejectedError, ReauthRequiredError } from "./types.ts";
 
 export interface StoredCredential {
   accessToken: string;
@@ -41,7 +41,8 @@ export interface RefreshResult {
 
 /**
  * Exchange a refresh token for a new access token. Throws ReauthRequiredError
- * on `invalid_grant`, OAuthClientRejectedError when the app itself is refused.
+ * on `invalid_grant` (AccountAppRefusedError when the app may not renew this
+ * account's token), OAuthClientRejectedError when the app itself is refused.
  */
 export type RefreshFn = (refreshToken: string) => Promise<RefreshResult>;
 
@@ -238,9 +239,14 @@ export function tokenEndpointRefresh(opts: TokenEndpointOptions): RefreshFn {
       throw new ReauthRequiredError(`the provider needs the owner to sign in again (interaction_required${serviceCode})`);
     }
     // The app itself was refused (RFC 6749 §5.2): a wrong or expired secret,
-    // an app the provider or tenant does not know. A reconnect cannot fix it.
-    if ((res.status === 400 || res.status === 401) && (code === "invalid_client" || code === "unauthorized_client")) {
+    // a deleted app. Every account of the app fails alike; a reconnect cannot fix it.
+    if ((res.status === 400 || res.status === 401) && code === "invalid_client") {
       throw new OAuthClientRejectedError(code, serviceNumber);
+    }
+    // The app may not renew this account's token: under one app for several
+    // directories, that is one directory's answer, not the app's.
+    if ((res.status === 400 || res.status === 401) && code === "unauthorized_client") {
+      throw new AccountAppRefusedError(serviceNumber);
     }
     throw new Error(`token endpoint answered HTTP ${res.status}${code ? ` (${code}${serviceCode})` : ""}`);
   };

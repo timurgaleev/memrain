@@ -164,10 +164,9 @@ describe("Microsoft service labels and the tenant field", () => {
     expect(expired).toContain("AADSTS7000222");
     expect(expired).toContain("save it with the same client ID");
     expect(expired).toContain("No reconnect");
-    const unknown = clientRejectedNote("google", { reason: "unauthorized_client", service_code: null, since, held_until: until })!;
-    expect(unknown).toContain("Google refused your app");
-    expect(unknown).toContain("unauthorized_client");
-    expect(unknown).not.toContain("AADSTS");
+    const google = clientRejectedNote("google", { reason: "invalid_client", service_code: null, since, held_until: until })!;
+    expect(google).toContain("Google refused your app when renewing access (invalid_client)");
+    expect(google).not.toContain("AADSTS");
     expect(clientRejectedNote("google", null)).toBeNull();
   });
 

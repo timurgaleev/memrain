@@ -32,7 +32,7 @@ const HINTS: Record<NotificationKind, string> = {
   spend_path_paused: "A paid call cost more than its hold, so its spend path is paused. Check the price table in memrain doctor, then resume the path on the Autonomy page (or: memrain spend resume <path>).",
   daemon_auto_paused: "The daemon failed five runs in a row and was paused. Check its failed jobs, then resume it on the Autonomy page (or: memrain daemons resume <daemon>).",
   write_gate_hold: "Writes from this source read as instructions to an AI and are held out of search. Approve or reject them on the Approvals page (or: memrain write-gate list).",
-  oauth_client_rejected: "The provider refused this OAuth app when renewing access: its client secret has expired or is wrong, or the app was deleted or disabled. Save a new secret for the same client ID on the Connections page (Use your own OAuth app); the provider's accounts need no reconnect and sync again once it is saved. Until then they try once an hour.",
+  oauth_client_rejected: "The provider refused this OAuth app when renewing access: its client secret has expired or is wrong, or the app was deleted. Save a new secret for the same client ID on the Connections page (Use your own OAuth app); the provider's accounts need no reconnect and sync again once it is saved. Until then they try once an hour.",
 };
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "cache-control": "no-store" } });

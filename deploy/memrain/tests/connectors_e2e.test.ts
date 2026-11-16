@@ -17,7 +17,8 @@ import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { addFact } from "../src/core/facts.ts";
 import { readExternalTrust } from "../src/core/trust-frame.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
-import { getAccount, setAccountEnabled, storeCredential } from "../src/core/connectors/accounts.ts";
+import { createAccount, getAccount, setAccountEnabled, storeCredential } from "../src/core/connectors/accounts.ts";
+import { listClientHolds } from "../src/core/connectors/client-holds.ts";
 import { completeConnect, connectorCallbackUri, startConnect, type ConnectDeps } from "../src/core/connectors/oauth-connect.ts";
 import { ProviderRegistry, type ConnectorProvider } from "../src/core/connectors/providers.ts";
 import { renderMeeting } from "../src/core/connectors/render.ts";
@@ -62,6 +63,8 @@ interface World {
   apiCalls: number;
   /** The token endpoint refuses the app itself, as for an expired client secret. */
   refuseClient?: boolean;
+  /** The token endpoint refuses to renew this one refresh token for the app, as a tenant that disabled the app does. */
+  refuseAppFor?: string;
   refreshCalls?: number;
 }
 
@@ -113,6 +116,9 @@ function providerFetch(world: World): FetchFn {
     }
     if (url === "https://auth.provider.test/token" && body?.get("grant_type") === "refresh_token" && world.refuseClient === true) {
       return Response.json({ error: "invalid_client", error_codes: [7000222] }, { status: 401 });
+    }
+    if (url === "https://auth.provider.test/token" && world.refuseAppFor !== undefined && body?.get("refresh_token") === world.refuseAppFor) {
+      return Response.json({ error: "unauthorized_client", error_codes: [7000112] }, { status: 400 });
     }
     if (url.startsWith(`${API}/v1/meetings`)) {
       world.apiCalls++;
@@ -327,6 +333,46 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const resumed = await tick(db.storage, new Date(T0.getTime() + 3 * WINDOW_MS));
       expect(["success", "nothing_new"]).toContain((resumed.results[0]!.accounts as Array<{ status: string }>)[0]!.status);
       expect(world.refreshCalls).toBe(2);
+    } finally { await db.close(); }
+  });
+
+  it("parks only the account whose organization refused the app (unauthorized_client); its sibling of the same app keeps syncing", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      const world: World = { meetings: [meeting()], deleted: [], cursor: "c1", refuseRefresh: false, apiCalls: 0 };
+      const personal = await connect(db.storage, world);
+      // A second account of the same app, in an organization that has since disabled the app.
+      const work = await createAccount(e, { sourceId: SOURCE, provider: "test", services: ["meetings"], principalRef: "admin:operator", accountLabel: "work@company.test" });
+      await setAccountEnabled(e, work.id, true);
+      const expired = { scopes: ["openid", "meetings.read"], expiresAt: new Date(T0.getTime() - 3_600_000) };
+      await storeCredential(e, kek, personal, { access_token: "expired-access-token-0000", refresh_token: "personal-refresh-token-0000" }, expired);
+      await storeCredential(e, kek, work, { access_token: "expired-access-token-1111", refresh_token: "work-refresh-token-1111" }, expired);
+      world.refuseAppFor = "work-refresh-token-1111";
+
+      const first = await tick(db.storage, T0);
+      const runs = new Map((first.results[0]!.accounts as Array<{ account_id: string; status: string; stop_reason: string | null }>).map(r => [r.account_id, r]));
+      expect(runs.get(personal.id)!.status).toBe("success");
+      expect(runs.get(work.id)).toMatchObject({ status: "auth_required", stop_reason: "needs_reconnect" });
+      // The refusal is the work account's: it alone waits for a reconnect, with a reason that names the code and where to look.
+      const parked = (await getAccount(e, work.id))!;
+      expect(parked.status).toBe("needs_reconnect");
+      expect(parked.status_reason).toContain("unauthorized_client, code 7000112");
+      expect(parked.status_reason).toContain("organization");
+      expect((await getAccount(e, personal.id))!.status).toBe("active");
+      // Nothing holds the app for every account, and the owner is told about the one account.
+      expect(await listClientHolds(e)).toEqual([]);
+      await syncNotifications(e);
+      expect((await listNotifications(e)).map(n => [n.kind, n.ref])).toEqual([["needs_reconnect", work.id]]);
+
+      // The next window the personal account renews and syncs again; the parked one is not run.
+      await storeCredential(e, kek, personal, { access_token: "expired-access-token-0000", refresh_token: "personal-refresh-token-0000" }, expired);
+      world.refreshCalls = 0;
+      const second = await tick(db.storage, new Date(T0.getTime() + WINDOW_MS));
+      const again = second.results[0]!.accounts as Array<{ account_id: string; status: string }>;
+      expect(again.map(r => r.account_id)).toEqual([personal.id]);
+      expect(["success", "nothing_new"]).toContain(again[0]!.status);
+      expect(world.refreshCalls).toBe(1);
     } finally { await db.close(); }
   });
 

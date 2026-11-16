@@ -19,7 +19,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const e = db.storage.engine();
     try {
       await e.query(HOLD, ["microsoft", "invalid_client", 7000222]);
-      await e.query(HOLD, ["google", "unauthorized_client", null]);
+      await e.query(HOLD, ["google", "invalid_client", null]);
+      // One account's refusal (unauthorized_client) parks that account; it never holds the provider.
+      await expect(e.query(HOLD, ["other", "unauthorized_client", null])).rejects.toThrow();
       await expect(e.query(HOLD, ["microsoft", "invalid_client", null])).rejects.toThrow();
       await expect(e.query(HOLD, ["other", "the secret expired", null])).rejects.toThrow();
       await expect(e.query(HOLD, ["Bad/Provider", "invalid_client", null])).rejects.toThrow();
