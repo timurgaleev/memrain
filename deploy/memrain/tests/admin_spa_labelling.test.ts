@@ -34,4 +34,14 @@ describe("latestOnly", () => {
     latest.start(); // Close, save or dismiss: nothing in flight is current any more.
     expect(b()).toBe(false);
   });
+
+  it("tells a save that finished late that another query was opened meanwhile", () => {
+    // Save on A captures A's check; Review on B while the save runs; the save
+    // must then leave B open instead of closing it.
+    const latest = latestOnly();
+    const savedOn = latest.start();
+    expect(savedOn()).toBe(true);
+    latest.start();
+    expect(savedOn()).toBe(false);
+  });
 });

@@ -23,6 +23,9 @@ export function LabellingPage() {
   // closed) belongs to that other query; showing it would let its documents be
   // saved as this query's labels.
   const previews = useRef(latestOnly());
+  // True while the query opened last is still the open one; a save or dismiss
+  // that finishes later must not close a query opened in the meantime.
+  const stillOpen = useRef<() => boolean>(() => false);
   const now = Date.now();
 
   const close = () => {
@@ -36,6 +39,7 @@ export function LabellingPage() {
     setPreview(null);
     setPicked(new Set());
     const current = previews.current.start();
+    stillOpen.current = current;
     try {
       const p = await api.evalPreview({ candidate_id: c.id });
       if (current()) setPreview(p);
@@ -58,6 +62,7 @@ export function LabellingPage() {
     if (picked.size === 0) return setError("Mark at least one document that answers the query.");
     setBusy(true);
     setError("");
+    const same = stillOpen.current;
     try {
       await api.evalLabel({
         candidate_id: open.id,
@@ -66,7 +71,7 @@ export function LabellingPage() {
         lang,
         ...(split === "auto" ? {} : { split }),
       });
-      close();
+      if (same()) close();
       list.reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save the label.");
@@ -77,9 +82,10 @@ export function LabellingPage() {
 
   const dismiss = async (c: EvalCandidate) => {
     setError("");
+    const same = open?.id === c.id ? stillOpen.current : () => false;
     try {
       await api.evalDismiss(c.id);
-      if (open?.id === c.id) close();
+      if (same()) close();
       list.reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not dismiss.");
