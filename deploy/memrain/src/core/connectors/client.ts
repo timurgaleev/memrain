@@ -10,7 +10,8 @@
  * the provider says how long (`Retry-After`, or `X-RateLimit-Reset`) and the
  * wait fits under a cap; past the cap the client gives up with `rate_limited`
  * instead of parking the run for an hour. Server errors and network failures
- * are retried a bounded number of times with a growing back-off.
+ * are retried a bounded number of times with a growing back-off, or after the
+ * server's own Retry-After when it names one (capped like any wait).
  *
  * The credential is a static token (GitHub) or a token source that can renew
  * it. With a source, a 401 earns exactly one forced refresh and one retry; a
@@ -87,6 +88,8 @@ export interface ConnectorResponse {
 export interface RequestOptions {
   /** Largest response body read, in bytes; past it the request ends `tooLarge`. Default: unbounded. */
   maxBytes?: number;
+  /** Headers for this request only (Graph's Prefer); the client's own and Authorization win. */
+  headers?: Record<string, string>;
 }
 
 /** The body past `maxBytes`: the read stopped and the stream was cancelled. */
@@ -291,6 +294,7 @@ export class ConnectorClient {
           method,
           redirect: "manual",
           headers: {
+            ...opts.headers,
             ...this.headers,
             ...(body === undefined ? {} : { "content-type": "application/json" }),
             Authorization: `Bearer ${token}`,
@@ -357,7 +361,9 @@ export class ConnectorClient {
         continue;
       }
       if (cls === "server_error" && attempt < this.maxRetries) {
-        await this.sleep(Math.min(BASE_BACKOFF_MS * 2 ** attempt, this.maxWaitMs));
+        // A 503 that says when to come back (Graph throttling) is waited out for that long.
+        const asked = res.headers.get("retry-after") === null ? null : this.rateLimitWait(res);
+        await this.sleep(Math.min(asked ?? BASE_BACKOFF_MS * 2 ** attempt, this.maxWaitMs));
         continue;
       }
       const errorBody = parseJson(text);
