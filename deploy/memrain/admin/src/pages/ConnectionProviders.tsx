@@ -120,17 +120,21 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
   const name = providerLabel(p.id);
   const [clientId, setClientId] = useState("");
   const [secret, setSecret] = useState("");
+  const [tenant, setTenant] = useState("");
   const [busy, setBusy] = useState(false);
   const [askRemove, setAskRemove] = useState(false);
   const idField = useId();
   const secretField = useId();
+  const tenantField = useId();
+  const tenantDefault = p.tenant_default ?? null;
 
   const save = async () => {
     setBusy(true);
     try {
-      await automationApi.saveClient(p.id, clientId.trim(), secret);
+      await automationApi.saveClient(p.id, clientId.trim(), secret, tenantDefault === null ? undefined : tenant.trim() || undefined);
       setClientId("");
       setSecret("");
+      setTenant("");
       onDone(`Saved your ${name} app. New connections use it.`);
     } catch (e) {
       onError(e);
@@ -158,7 +162,9 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
       <div className="own-app-body">
         {client && (
           <p className="dialog-text">
-            Using <span className="mono">{client.client_id}</span>, saved {new Date(client.updated_at).toLocaleDateString()}.{" "}
+            Using <span className="mono">{client.client_id}</span>
+            {tenantDefault !== null && <> in tenant <span className="mono">{client.tenant ?? tenantDefault}</span></>}
+            , saved {new Date(client.updated_at).toLocaleDateString()}.{" "}
             <button className="btn-link" disabled={busy} onClick={() => setAskRemove(true)}>Remove</button>
           </p>
         )}
@@ -179,6 +185,24 @@ function OwnAppSettings({ provider: p, client, onDone, onError }: {
             <label htmlFor={secretField}>Client secret</label>
             <input id={secretField} type="password" value={secret} autoComplete="new-password" onChange={(e) => setSecret(e.target.value)} />
           </div>
+          {tenantDefault !== null && (
+            <div className="field">
+              <label htmlFor={tenantField}>Tenant</label>
+              <input
+                id={tenantField}
+                value={tenant}
+                placeholder={tenantDefault}
+                autoComplete="off"
+                spellCheck={false}
+                aria-describedby={`${tenantField}-hint`}
+                onChange={(e) => setTenant(e.target.value)}
+              />
+              <p className="hint" id={`${tenantField}-hint`}>
+                Your directory (tenant) ID for an app of one organization, <code>organizations</code> for any work or
+                school account, <code>consumers</code> for personal accounts only. Empty uses <code>{tenantDefault}</code>.
+              </p>
+            </div>
+          )}
           <button className="btn btn-secondary" type="submit" disabled={busy || clientId.trim() === "" || secret === ""}>
             {client ? "Replace app" : "Save app"}
           </button>

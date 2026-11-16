@@ -76,6 +76,10 @@ export interface ConnectorProviderView {
   auth: "oauth" | "api_key";
   /** The redirect a bring-your-own app must allow; null until MEMRAIN_PUBLIC_URL can receive one. */
   callback_uri: string | null;
+  /** The directory tenant its own app signs in through by default; null when the provider has none. */
+  tenant_default?: string | null;
+  /** Where the owner withdraws the app's consent, for a provider Memrain cannot revoke at. */
+  consent_urls?: string[];
 }
 
 export interface SourceView {
@@ -87,6 +91,7 @@ export interface OAuthClientView {
   provider: string;
   client_id: string;
   updated_at: string;
+  tenant?: string;
 }
 
 export interface ConnectorsReport {
@@ -257,6 +262,8 @@ const CONNECT_ERRORS: Record<string, string> = {
   key_rejected: "The provider refused the key. Copy the current key from the provider and try again.",
   provider_unavailable: "The provider could not be reached to check the key. Nothing was saved; try again in a minute.",
   delete_incomplete: "Deleting stopped part-way. Preview again and delete what is left.",
+  admin_consent_required: "The account's organization lets only an administrator approve this app. Ask your Microsoft 365 admin to grant consent, then connect again.",
+  invalid_tenant: "That is not a tenant: use common, organizations, consumers, a tenant ID or the organization's domain.",
 };
 
 /** Copy for an error code the connector routes answer; unknown codes get the fallback, never the code itself. */

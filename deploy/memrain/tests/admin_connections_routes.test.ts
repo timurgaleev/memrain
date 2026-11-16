@@ -95,13 +95,13 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const text = await res.text();
       for (const secret of [TEST_ACCESS_TOKEN, TEST_REFRESH_TOKEN, "byo-secret-value", "env-secret"]) expect(text).not.toContain(secret);
       const body = JSON.parse(text) as {
-        providers: Array<{ id: string; services: string[]; service_kinds: Record<string, string[]>; auth: string; callback_uri: string | null }>;
+        providers: Array<{ id: string; services: string[]; service_kinds: Record<string, string[]>; auth: string; callback_uri: string | null; tenant_default: string | null; consent_urls: string[] }>;
         sources: Array<{ id: string; kind: string }>;
         accounts: Array<ConnectorAccount & { held_items: number; held_deletes: number; notices: Array<{ kind: string; detail: string }>; credential: { scopes: string[] } | null }>;
       };
       expect(body.providers).toEqual([{
         id: "test", services: ["mail", "calendar"], service_kinds: { mail: ["mailbox"], calendar: ["calendar"] }, auth: "oauth",
-        callback_uri: `${ORIGIN}/admin/connectors/callback/test`,
+        callback_uri: `${ORIGIN}/admin/connectors/callback/test`, tenant_default: null, consent_urls: [],
       }]);
       expect(body.sources).toContainEqual({ id: "inbox", kind: "mailbox" });
       expect(body.accounts).toHaveLength(1);

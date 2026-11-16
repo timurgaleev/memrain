@@ -121,6 +121,7 @@ export function ConnectionsPage() {
       {open?.kind === "disconnect" && (
         <DisconnectDialog
           account={open.account}
+          consentUrls={report.data?.providers.find((p) => p.id === open.account.provider)?.consent_urls ?? []}
           onClose={() => setOpen(null)}
           onDone={(message) => { setOpen(null); done(message); }}
           onChanged={report.reload}

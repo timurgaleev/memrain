@@ -30,8 +30,10 @@ const plural = (n: number, one: string, many: string) => `${fmtInt(n)} ${n === 1
  * Disconnect: revoke upstream, drop the credential, keep the pages. With the
  * box ticked, the dialog goes on to the preview-then-delete step.
  */
-export function DisconnectDialog({ account, onClose, onDone, onChanged }: {
+export function DisconnectDialog({ account, consentUrls = [], onClose, onDone, onChanged }: {
   account: ConnectorAccountView;
+  /** Where the owner withdraws the consent, when the provider lets Memrain revoke nothing. */
+  consentUrls?: string[];
   onClose: () => void;
   onDone: (message: string) => void;
   /** The account changed underneath the page (it is disconnected now). */
@@ -68,9 +70,13 @@ export function DisconnectDialog({ account, onClose, onDone, onChanged }: {
         setNext({ kept: r.credential_kept });
         return;
       }
+      const withdrawAt = r.consent_urls ?? [];
+      const withdraw = withdrawAt.length > 0
+        ? ` ${providerLabel(account.provider)} keeps the app's consent until you remove it at ${withdrawAt.join(" or ")}.`
+        : "";
       onDone(r.credential_kept
         ? `${providerLabel(account.provider)} did not confirm the revoke. The credential is kept so Disconnect can be tried again; sync is off.`
-        : `${account.account_label} is disconnected. Its pages stay in the brain.`);
+        : `${account.account_label} is disconnected. Its pages stay in the brain.${withdraw}`);
     } catch (e) {
       setError(actionError(e));
     } finally {
@@ -80,10 +86,21 @@ export function DisconnectDialog({ account, onClose, onDone, onChanged }: {
 
   return (
     <Dialog title={`Disconnect ${account.account_label}?`} onClose={onClose}>
-      <p className="dialog-text">
-        Memrain revokes its access at {providerLabel(account.provider)}, forgets the credential and stops syncing. Pages it
-        already brought in stay searchable.
-      </p>
+      {consentUrls.length > 0 ? (
+        <p className="dialog-text">
+          {providerLabel(account.provider)} gives Memrain no way to revoke its access, so Memrain forgets the credential and
+          stops syncing. To withdraw the app's consent too, remove it at{" "}
+          {consentUrls.map((u, i) => (
+            <span key={u}>{i > 0 && " or "}<a href={u} target="_blank" rel="noreferrer">{new URL(u).host}</a></span>
+          ))}
+          {" "}(work or school account, then personal account). Pages it already brought in stay searchable.
+        </p>
+      ) : (
+        <p className="dialog-text">
+          Memrain revokes its access at {providerLabel(account.provider)}, forgets the credential and stops syncing. Pages it
+          already brought in stay searchable.
+        </p>
+      )}
       <NameConfirm label={account.account_label} value={typed} onChange={setTyped} />
       <label className="checkbox-label" htmlFor={deleteId}>
         <input id={deleteId} type="checkbox" checked={thenDelete} onChange={(e) => setThenDelete(e.target.checked)} />
