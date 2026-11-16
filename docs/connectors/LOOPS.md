@@ -13,8 +13,8 @@ Which loops you get depends on the connectors you run:
 
 | Connector | Loops |
 |---|---|
-| Google Calendar ([GOOGLE.md](./GOOGLE.md)) | RSVP owed, today |
-| A mail connector (Gmail, then Outlook) | reply owed, waiting on them, your promise, once that connector is connected; until then there are no mail loops |
+| Google Calendar or Outlook calendar ([GOOGLE.md](./GOOGLE.md), [MICROSOFT.md](./MICROSOFT.md)) | RSVP owed, today |
+| A mail connector (Gmail or Outlook mail) | reply owed, waiting on them, your promise, once that connector is connected; until then there are no mail loops |
 | A chat connector (Slack, Teams) | the same three for direct conversations, once its adapter marks direct conversations and your own messages |
 
 Fireflies meeting notes carry no reply state and add nothing here.

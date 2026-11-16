@@ -46,8 +46,14 @@ and only on your own mailbox and calendar.
 | `Calendars.Read` | Outlook calendar: to read your events |
 
 A mail connect asks for `Mail.Read` and a calendar connect for
-`Calendars.Read`, each with the four above. The connect flow refuses a grant
-that adds or drops a permission, and stores nothing then.
+`Calendars.Read`, each with the four above; a connect never asks for the
+other service's permission. Microsoft answers every connect with all the
+permissions this account has given the app, so a calendar connect after a
+mail connect comes back holding `Mail.Read` too. That one is accepted, since
+it is the other service's read permission. Any other difference (a write
+permission such as `Mail.ReadWrite` or `Mail.Send`, a permission Memrain does
+not use, or a requested one missing) makes the connect refuse the grant, and
+it stores nothing then.
 
 On a personal account you consent yourself when you connect. On a work or
 school account you usually cannot: Microsoft's default consent setting for
@@ -168,7 +174,14 @@ or Privileged Role Administrator role can grant it in the app under
 Permissions > Grant admin consent**
 ([grant admin consent](https://learn.microsoft.com/entra/identity/enterprise-apps/grant-admin-consent)).
 Admin consent covers the whole organization and only an admin can take it
-back; your own consent you can remove yourself.
+back; your own consent you can remove yourself. Granting it once for the app
+covers both mail and calendar, since the app lists both permissions.
+
+If you connect before consent is granted, Microsoft either shows **Need admin
+approval** (with a request form, when the organization turned admin consent
+requests on) or sends you back to Memrain, whose page then reports
+`admin_consent_required`. Either way nothing is stored; connect again once
+the admin has granted consent.
 
 ### 7. Store the app in Memrain
 
@@ -250,8 +263,48 @@ sync starts within 15 minutes.
 ### 10. Connect Outlook calendar
 
 Repeat step 9 with **Outlook calendar** under **Read** and `work-calendar`
-under **Into source**. Microsoft asks for consent again for the calendar
-permission. Choose **Turn sync on** for the calendar account too.
+under **Into source**. Microsoft asks you to accept the calendar permission
+if you have not given it yet (after an admin's consent it does not ask).
+Choose **Turn sync on** for the calendar account too.
+
+### 11. Pick calendars and the history window (optional)
+
+The calendar account syncs its default calendar, and its first sync reads
+the last 90 days and the next 90. To add your other calendars or change how
+far back the first sync reads, choose **Calendars** on the account's row,
+tick them, and choose **Save calendars**. The default calendar always syncs.
+The limits are those of Google Calendar ([GOOGLE.md](./GOOGLE.md)): up to 19
+calendars besides the default, and a window of 1 to 3,650 days, never past
+the calendar retention window.
+
+Only calendars the account owns are offered. A calendar a colleague shares
+with you, or a Microsoft 365 group calendar, is not: reading another user's
+calendar needs `Calendars.Read.Shared`, which Memrain does not ask for.
+Graph tracks changes for the default calendar only, so another calendar is
+read whole at most once an hour: its changes can be up to an hour late.
+
+## What is stored
+
+- **Mail:** Inbox and Sent Items, from 90 days before the first sync on.
+  One page per conversation, rendered like a Gmail thread: subject, people,
+  dates, the text of each message, and attachment names, types and sizes
+  (never their contents). Junk, Deleted Items, Drafts and other folders are
+  never read. A conversation that leaves both folders, or is deleted, is
+  soft-deleted (restorable until the usual purge), under the mass-delete
+  guard.
+- **Calendar:** one page per event, and one per recurring series with its
+  occurrences inside the window, rendered like a Google Calendar event.
+  Rooms and equipment are not listed as attendees. An online meeting is noted
+  as `Online meeting: yes`; its join link is not stored, and is cut out of
+  the description. A cancelled or deleted event is soft-deleted the same way.
+- **Loops** ([LOOPS.md](./LOOPS.md)): a message someone sent you that waits
+  on your answer opens a reply-owed loop (`unanswered_inbound`), and a
+  newsletter or other bulk mail does not. An invitation you have not answered, for a meeting still
+  ahead, opens an `rsvp_owed` loop to its organizer; accepting or declining
+  in Outlook closes it on the next sync.
+
+Everything stored is text from outside the brain: it passes the write gate
+for outside sources, as Gmail's does ([ENABLE.md](./ENABLE.md)).
 
 ## Keeping access alive
 
@@ -334,7 +387,8 @@ Microsoft's sign-in errors start with `AADSTS`
 | Microsoft shows `AADSTS50020` (account does not exist in tenant) | The account is not one the app's supported account types allow, for example a personal account on a work-only app | Register an app with a type that allows it (step 2), or sign in with an allowed account |
 | Microsoft shows `AADSTS700016` (application not found in the directory) | The client ID is wrong, or **Who can sign in** points at another directory | Check the client ID and the directory ID from the Overview page (step 7) |
 | Microsoft shows **Need admin approval** | Your organization keeps mail and calendar consent for an admin | [Step 6](#6-work-accounts-ask-an-admin-to-grant-consent) |
-| Back in Memrain, the page reports `token_exchange` | Microsoft refused the code; most often an expired secret, or the Secret ID pasted instead of the value | Add a new secret (step 4) and save it (step 7), then connect again |
+| Back in Memrain, the page reports `admin_consent_required` | Your organization lets only an admin consent to the app | [Step 6](#6-work-accounts-ask-an-admin-to-grant-consent), then connect again |
+| Back in Memrain, the page reports `token_exchange` | Microsoft refused the code; most often an expired secret, or the Secret ID pasted instead of the value. Also when no refresh token came back because `offline_access` is missing from the app | Add a new secret (step 4) and save it (step 7), or add `offline_access` (step 5), then connect again |
 | Back in Memrain, the page reports `scope_mismatch` | A permission was declined, or the app has permissions Memrain does not ask for | Step 5: keep exactly the six permissions; connect again and accept |
 | Back in Memrain, the page reports `provider_denied` | You chose **Cancel** on Microsoft's consent page | Connect again |
 | The Connections page answers `no_client` | No app is stored for Microsoft | Step 7 |
