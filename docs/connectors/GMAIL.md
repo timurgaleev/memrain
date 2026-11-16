@@ -88,6 +88,18 @@ Then let your agents read it, as for any connector source
 client that should see your mail, with `auth rescope-client ... --dry-run`
 first.
 
+For a personal access token, `set-read-sources` replaces the token's whole
+read set, so list every source it reads today and add `me-mail` at the end.
+Preview first:
+
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts auth permissions <token-name> set-read-sources <current read sources>,me-mail --dry-run
+```
+
+Check that `before` and `after` differ only by `me-mail`: a source missing from
+`after` is one the token would stop reading (your calendar, say). Then run the
+same command without `--dry-run`.
+
 Reload the Connections page after registering, so it lists the new source.
 
 ### 4. Connect Gmail
@@ -113,13 +125,36 @@ grant is untouched.
 
 With `connector_sync` enabled ([ENABLE.md](./ENABLE.md) step 6), the first run
 starts within 15 minutes. It notes where your mailbox's change feed stands,
-then reads the last 90 days newest first. Gmail allows each user about 50 full
-thread reads a minute, and a run stores at most 500 threads, so a busy mailbox
-takes a few runs: expect an hour or two for a few thousand threads. A run that
-stops part-way (a restart, a rate limit, the run cap) carries on from where it
-stopped, and mail that arrives meanwhile comes in through the change feed.
-`connector_sync` skips the quiet-hours window (06:00 to 08:00 Europe/Berlin
-by default), so the backfill pauses then and carries on after.
+then reads the last 90 days newest first, one thread at a time. Mail that
+arrives meanwhile comes in through the change feed.
+
+A run stops at the first of these, and the next one carries on from where it
+stopped, so a large mailbox backfills over several days on its own:
+
+| Limit | Default | Where it is set |
+|---|---|---|
+| Threads per run | 500 | `MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN` |
+| Threads per account per UTC day | 5,000 | the account's item cap |
+| Spend per account per UTC day | $1.00 | the account's spend cap |
+| Spend of `connector_sync`, every account together, per day | $5 | `MEMRAIN_DAEMON_CONNECTOR_SYNC_MAX_USD_PER_DAY` |
+| Spend of the whole brain per UTC day | none; sync does not run without it | `MEMRAIN_DAILY_BUDGET_USD`, shared with Calendar and every other paid job |
+| Quiet hours | 06:00 to 08:00 Europe/Berlin | no run starts in the window |
+
+Requests to Gmail go out at most one every 1.25 seconds, which keeps a run
+under Gmail's per-user quota (about 50 full thread reads a minute), so 500
+threads take a run at least ten minutes and runs start every 15 minutes. In
+practice the daily thread cap is what a backfill meets first: about 5,000
+threads a day, reached within a few hours, after which runs stop with
+`item_cap_reached` until the next UTC day. A mailbox with 12,000 threads in
+the window therefore takes about three days. Embedding is cheap (90 days of 35
+threads a day costs well under a quarter of the $1.00 account cap), but a
+brain-wide cap set low, or spent by other work first, stops the sync sooner:
+runs then end `cap_reached` and resume the next day. `connectors status` and
+`spend --days 2` ([ENABLE.md](./ENABLE.md) step 8) show which limit stopped
+the last run.
+
+A thread larger than 10 MiB is not read: it is held with the reason
+`too_large`, and `doctor` lists it among held items.
 
 The window never reaches past mail retention: pages are hard-deleted 180 days
 after a thread's last message by default
@@ -204,7 +239,13 @@ the brain for the subject of a mail from this week.
 
 ## Disconnecting
 
-Disconnect the account on the Connections page. Memrain revokes the token at
+**To stop Gmail alone, choose Turn sync off on the Gmail account; do not
+disconnect it.** Disconnect is not a Gmail-only rollback: Google revokes the
+whole grant, so a Calendar of the same Google account loses its access too
+and has to be reconnected. With sync off nothing is read from the mailbox,
+the grant stays as it is and the Calendar keeps syncing.
+
+Disconnect the account on the Connections page when you are done with it. Memrain revokes the token at
 Google and deletes the stored credential. Google revokes a grant as a whole:
 the scopes of every account connected with the same client and Google
 account go together, so a connected Google Calendar of the same Google
