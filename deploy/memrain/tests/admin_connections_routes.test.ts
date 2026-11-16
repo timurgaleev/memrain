@@ -497,6 +497,10 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         const replaced = await save(provider, { client_id: "app-c", client_secret: "secret-3", confirm_replace: true });
         expect(replaced.status).toBe(200);
         expect(await getOAuthClient(e, kek, provider)).toMatchObject({ clientId: "app-c", clientSecret: "secret-3" });
+        // The account cannot renew with the new app: it waits on a reconnect now, not once its access token expires.
+        expect(await getAccount(e, account.id)).toMatchObject({ status: "needs_reconnect" });
+        expect((await e.query("SELECT kind FROM connector_notices WHERE account_id = $1 AND resolved_at IS NULL", [account.id])).rows)
+          .toEqual([{ kind: "needs_reconnect" }]);
 
         // A disconnected account renews nothing: no confirmation for it.
         await setAccountStatus(e, account.id, "revoked");

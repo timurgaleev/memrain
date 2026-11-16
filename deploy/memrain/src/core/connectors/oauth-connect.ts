@@ -37,6 +37,7 @@ import {
   cleanLabel,
   createAccount,
   findAccount,
+  markNeedsReconnect,
   readCredential,
   setAccountConfig,
   setAccountStatus,
@@ -46,7 +47,7 @@ import {
 } from "./accounts.ts";
 import { MAILBOX_ADDRESS } from "./model.ts";
 import { getOAuthClient } from "./oauth-clients.ts";
-import { resolveNotice } from "./sync-store.ts";
+import { openNotice, resolveNotice } from "./sync-store.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import { refreshLockId } from "./token-provider.ts";
 import { normalizeTenant, oauthEndpoints, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
@@ -255,6 +256,29 @@ export async function accountsRenewingWith(engine: Engine, provider: string): Pr
     [provider],
   );
   return Number(r.rows[0]?.n ?? 0);
+}
+
+/**
+ * Park a provider's active accounts for a reconnect once the app they renew
+ * with was replaced: the new app cannot renew their tokens, and a sync would
+ * otherwise run on until the current access token expires and then fail
+ * with whatever the provider answers. Each gets the needs_reconnect notice a
+ * reconnect resolves. Returns how many were parked.
+ */
+export async function parkAccountsForReconnect(engine: Engine, provider: string): Promise<number> {
+  // scope: operator-only replacing a provider's app is an operator action on all of its accounts
+  const r = await engine.query<{ id: string; source_id: string }>(
+    `SELECT id, source_id FROM connector_accounts WHERE provider = $1 AND status = 'active'`,
+    [provider],
+  );
+  let parked = 0;
+  for (const a of r.rows) {
+    if (!(await markNeedsReconnect(engine, a.id, "the OAuth app was replaced; reconnect the account"))) continue;
+    await openNotice(engine, a.id, "needs_reconnect",
+      `${provider} account for source '${a.source_id}' needs a reconnect: its OAuth app was replaced, so sync is paused; its data and cursors are kept`);
+    parked++;
+  }
+  return parked;
 }
 
 export interface StartConnectInput {

@@ -59,6 +59,7 @@ import {
   connectorCallbackUri,
   currentClientId,
   disconnectAccount,
+  parkAccountsForReconnect,
   startConnect,
   type ConnectDeps,
 } from "../core/connectors/oauth-connect.ts";
@@ -248,7 +249,8 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
     // confirmation. A new secret for the same app is a rotation and needs none.
     const engine = deps.storage.engine();
     const current = await currentClientId(connectDeps(deps), provider);
-    if (current !== null && current !== body.client_id && body.confirm_replace !== true) {
+    const replacing = current !== null && current !== body.client_id;
+    if (replacing && body.confirm_replace !== true) {
       const accounts = await accountsRenewingWith(engine, provider);
       if (accounts > 0) {
         return json({
@@ -258,8 +260,13 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
         }, 409);
       }
     }
+    const clientId = body.client_id;
+    const clientSecret = body.client_secret;
     try {
-      await setOAuthClient(engine, deps.kek()!, provider, body.client_id, body.client_secret, tenant);
+      await engine.transaction(async (tx) => {
+        await setOAuthClient(tx, deps.kek()!, provider, clientId, clientSecret, tenant);
+        if (replacing) await parkAccountsForReconnect(tx, provider);
+      });
     } catch {
       return json({ error: "invalid client" }, 400);
     }
