@@ -16,6 +16,11 @@
  * and the page is left for the next run. Older version snapshots keep the
  * text they had; this never rewrites history.
  *
+ * The stored body is already neutralized outside text, with any facts or takes
+ * fence the brain added after it, so only the redaction is applied; its
+ * markers are fixed text. A page not marked as neutralized is held, since
+ * writing it as outside text would vouch for a body nothing checked.
+ *
  * Nothing reported names a value, a line or a preview: counts and slugs only,
  * and a connector slug is a hash.
  */
@@ -23,8 +28,8 @@ import type { Storage } from "../storage.ts";
 import { logIngest } from "../ingest-log.ts";
 import { putPage, VersionConflictError } from "../pages.ts";
 import { mirrorPage, type MirrorPageOptions } from "../page-index.ts";
-import { neutralizeOutsideText } from "../neutralize-outside-text.ts";
 import { withSecretDisposition } from "../secret-scan.ts";
+import { OUTSIDE_NEUTRALIZED } from "../fence-carry.ts";
 import { CONNECTOR_PAGE_TYPES } from "./render.ts";
 import { redactMeetingCredentials } from "./meeting-redact.ts";
 
@@ -113,8 +118,12 @@ export async function sweepMeetingCredentials(storage: Storage, opts: MeetingRed
       const body = redactMeetingCredentials(row.markdown_body);
       const removals = title.count + body.count;
       if (removals === 0) continue;
+      if (truthOf(row.compiled_truth)[OUTSIDE_NEUTRALIZED] !== 1) {
+        result.errors.push(`${row.slug}: held (not_neutralized)`);
+        continue;
+      }
       if (opts.apply === true) {
-        const outcome = await rewrite(storage, row, title.text, neutralizeOutsideText(body.text), opts, result);
+        const outcome = await rewrite(storage, row, title.text, body.text, opts, result);
         if (outcome !== "rewritten") continue;
         changedSlugs.set(row.source_id, [...(changedSlugs.get(row.source_id) ?? []), row.slug]);
       }

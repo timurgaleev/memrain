@@ -10,10 +10,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
-import { putPage } from "../src/core/pages.ts";
+import { getPage, putPage } from "../src/core/pages.ts";
 import { mirrorPage } from "../src/core/page-index.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { OUTSIDE_NEUTRALIZED } from "../src/core/fence-carry.ts";
+import { parseFactsFence, renderFactsFence } from "../src/core/facts-fence.ts";
+import { parseTakesFence, renderTakesFence } from "../src/core/synthesis/takes-fence.ts";
 import { accountRef, type CalendarEvent, type MailThread } from "../src/core/connectors/model.ts";
 import { renderCalendarEvent, renderMailThread, type RenderedConnectorPage } from "../src/core/connectors/render.ts";
 import { MEETING_REDACT_REASON, MEETING_REDACT_WRITER, sweepMeetingCredentials } from "../src/core/connectors/meeting-redact-sweep.ts";
@@ -124,6 +126,39 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const again = await sweepMeetingCredentials(db.storage, { apply: true, mirror: { embedFn } });
     expect(again).toMatchObject({ pages_scanned: 4, pages_changed: 0, removals: 0, rewritten: 0 });
     expect((await versions(mail.slug)).length).toBe(2);
+  });
+
+  it("changes only the credentials: the brain's fences and the rendered page stay byte for byte", async () => {
+    const series = renderCalendarEvent({ service: "outlook_calendar", accountLabel: OWNER }, {
+      ...event, recurrence: ["RRULE:FREQ=WEEKLY"],
+      occurrences: [{ start: "2026-11-12T10:00:00.000Z", end: "2026-11-12T11:00:00.000Z", status: "confirmed" },
+        { start: "2026-11-19T10:00:00.000Z", end: "2026-11-19T11:00:00.000Z", status: "confirmed" }],
+    });
+    await legacy(series, "cal", "Meeting ID: 812 3456 7890\nPasscode: 482913");
+    // The brain appends its fences after the rendered page, as the fence writers do.
+    const facts = renderFactsFence([{ rowNum: 1, claim: "The review repeats weekly.", confidence: 1, active: true }]);
+    const takes = renderTakesFence([{ rowNum: 1, claim: "The review runs long.", kind: "take", holder: "brain", weight: 0.6, active: true }]);
+    const cur = (await getPage(db.storage, series.slug))!;
+    await putPage(db.storage, { slug: series.slug, type: cur.type, allowAdHocType: true, title: cur.title!, compiled_truth: cur.compiled_truth,
+      markdown_body: `${cur.markdown_body}\n## Facts\n\n${facts}\n\n## Takes\n\n${takes}\n`, written_by: "agent", source_id: "cal" });
+    const before = (await getPage(db.storage, series.slug))!;
+    expect(parseFactsFence(before.markdown_body).map(f => f.claim)).toEqual(["The review repeats weekly."]);
+
+    const r = await sweepMeetingCredentials(db.storage, { apply: true, mirror: { embedFn } });
+    expect(r).toMatchObject({ rewritten: 1, removals: 2, errors: [] });
+    const after = (await getPage(db.storage, series.slug))!;
+    expect(after.markdown_body).toBe(before.markdown_body.replace("812 3456 7890", "[removed]").replace("482913", "[removed]"));
+    expect(parseFactsFence(after.markdown_body).map(f => f.claim)).toEqual(["The review repeats weekly."]);
+    expect(parseTakesFence(after.markdown_body).takes.map(t => t.claim)).toEqual(["The review runs long."]);
+  });
+
+  it("holds a connector page not marked as neutralized outside text, on a dry run and on apply", async () => {
+    const p = await legacy(mail, "inbox", ZOOM);
+    await db.storage.engine().query(`UPDATE pages SET compiled_truth = compiled_truth - '${OUTSIDE_NEUTRALIZED}' WHERE slug = $1`, [p.slug]);
+    const held = `${p.slug}: held (not_neutralized)`;
+    expect(await sweepMeetingCredentials(db.storage, { mirror: { embedFn } })).toMatchObject({ pages_changed: 0, errors: [held] });
+    expect(await sweepMeetingCredentials(db.storage, { apply: true, mirror: { embedFn } })).toMatchObject({ rewritten: 0, errors: [held] });
+    expect((await versions(p.slug)).length).toBe(1);
   });
 
   it("leaves the page to connector retention: the rewrite is not a person's edit", async () => {
