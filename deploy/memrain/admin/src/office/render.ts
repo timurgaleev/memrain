@@ -230,7 +230,7 @@ const PROP_DRAWS = [...PROPS]
   .map((p) => ({ y: p.y, sx: p.cell[0] * SHEET_STEP, sy: p.cell[1] * SHEET_STEP, dx: p.x * TILE, dy: p.y * TILE }));
 
 interface StaticLayer {
-  key: string;
+  scale: number;
   tiles: HTMLImageElement;
   canvas: HTMLCanvasElement;
   plaques: Box[];
@@ -239,22 +239,23 @@ interface StaticLayer {
 let staticLayer: StaticLayer | null = null;
 
 // Floors, walls, rugs, pictures and room plaques never change, so they are drawn
-// once per canvas size and copied in on every frame.
-function staticFor(width: number, height: number, layout: { scale: number; ox: number; oy: number }, sprites: Sprites): StaticLayer {
-  const key = `${width}x${height}@${layout.scale},${layout.ox},${layout.oy}`;
-  if (staticLayer && staticLayer.key === key && staticLayer.tiles === sprites.tiles) return staticLayer;
+// once at a whole-number scale and copied in on every frame. A canvas smaller than
+// the map shrinks the 1x copy in one drawImage, which leaves no seams between tiles.
+function staticFor(layoutScale: number, sprites: Sprites): StaticLayer {
+  const scale = Math.max(1, Math.floor(layoutScale));
+  if (staticLayer && staticLayer.scale === scale && staticLayer.tiles === sprites.tiles) return staticLayer;
   const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = OFFICE_MAP.width * TILE * scale;
+  canvas.height = OFFICE_MAP.height * TILE * scale;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas 2D is not available");
-  ctx.setTransform(layout.scale, 0, 0, layout.scale, layout.ox, layout.oy);
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
   ctx.imageSmoothingEnabled = false;
   drawFloors(ctx, OFFICE_MAP.width, OFFICE_MAP.height);
   drawWalls(ctx, OFFICE_MAP.width, OFFICE_MAP.height);
   for (const d of WALL_DECOR) drawCell(ctx, sprites.tiles, d.cell, d.x * TILE, d.y * TILE + 2);
   const plaques = drawRoomLabels(ctx);
-  staticLayer = { key, tiles: sprites.tiles, canvas, plaques };
+  staticLayer = { scale, tiles: sprites.tiles, canvas, plaques };
   return staticLayer;
 }
 
@@ -267,13 +268,13 @@ export function drawOffice(
 ): void {
   const { width, height } = ctx.canvas;
   const layout = officeLayout(width, height);
-  const layer = staticFor(width, height, layout, sprites);
+  const layer = staticFor(layout.scale, sprites);
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, width, height);
-  ctx.drawImage(layer.canvas, 0, 0);
-  ctx.setTransform(layout.scale, 0, 0, layout.scale, layout.ox, layout.oy);
   ctx.imageSmoothingEnabled = false;
+  ctx.setTransform(layout.scale, 0, 0, layout.scale, layout.ox, layout.oy);
+  ctx.drawImage(layer.canvas, 0, 0, OFFICE_MAP.width * TILE, OFFICE_MAP.height * TILE);
 
   const people: { c: Character; pose: Pose }[] = [];
   for (const c of state.characters.values()) {

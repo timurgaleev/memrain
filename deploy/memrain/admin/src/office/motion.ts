@@ -34,6 +34,8 @@ export function stepCharacter(
   dtMs: number,
   opts: { reducedMotion: boolean },
 ): Pose {
+  // A wall or furniture is never a valid spot: stay where we are.
+  if (!OFFICE_MAP.walkable(target.x, target.y)) return pose;
   const arrived: Pose = { x: target.x, y: target.y, path: [], facing: pose.facing, frame: 0 };
   if (opts.reducedMotion) return arrived;
   if (pose.x === target.x && pose.y === target.y) {
@@ -42,11 +44,8 @@ export function stepCharacter(
 
   const last = pose.path[pose.path.length - 1];
   const path = last && last.x === target.x && last.y === target.y ? pose.path : route(pose, target);
-  if (path.length === 0) {
-    // No route to a real floor tile: place the character rather than freeze it.
-    // A wall or furniture is never a valid spot, so stay where we are.
-    return OFFICE_MAP.walkable(target.x, target.y) ? arrived : pose;
-  }
+  // No route to a real floor tile: place the character rather than freeze it.
+  if (path.length === 0) return arrived;
 
   let { x, y, facing } = pose;
   // A hidden tab resumes with one huge dt; walk on from there instead of skipping to the end.

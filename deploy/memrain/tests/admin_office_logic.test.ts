@@ -313,6 +313,11 @@ describe("stepCharacter limits", () => {
     expect(stepCharacter(pose, { x: desk.x, y: desk.y }, 100, { reducedMotion: false })).toEqual(pose);
   });
 
+  it("does not jump onto a wall or a desk under reduced motion", () => {
+    expect(stepCharacter(pose, { x: 0, y: 0 }, 16, { reducedMotion: true })).toEqual(pose);
+    expect(stepCharacter(pose, { x: desk.x, y: desk.y }, 16, { reducedMotion: true })).toEqual(pose);
+  });
+
   it("caps one step so a long pause does not skip the walk", () => {
     const target = OFFICE_MAP.seats.archive[0]!;
     const next = stepCharacter(pose, target, 60_000, { reducedMotion: false });
