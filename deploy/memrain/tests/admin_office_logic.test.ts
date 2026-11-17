@@ -18,6 +18,8 @@ import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, PROPS, TILE, WALL_DECOR, officeL
 import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
 import { findPath } from "../admin/src/office/path.ts";
 import { facingToYaw, tileToWorld } from "../admin/src/office/world.ts";
+import { animPose, syncCharacters } from "../admin/src/office/anim.ts";
+import { buildPlacements, buildSeats, floorBoxes } from "../admin/src/office/layout3d.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
 import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
 import { CHARACTER_VARIANTS, MODEL_URLS, resolveModelFile, type ModelId } from "../admin/src/office/assets3d.ts";
@@ -822,6 +824,75 @@ describe("ambient life", () => {
         const hit = [...PROPS, ...WALL_DECOR].some((p) => p.kind === want[kind] && p.x === t.x + dx && p.y === t.y + dy);
         expect(hit).toBe(true);
       }
+    }
+  });
+});
+
+describe("3D animation helpers", () => {
+  const kinds = ["walk", "idle", "sit", "work", "wander", "coffee", "chat", "whiteboard", "water_plants", "sofa"] as const;
+
+  it("keeps every pose inside its bounds", () => {
+    for (const k of kinds) {
+      for (const t of [0, 0.25, 0.5, 1, 10]) {
+        const p = animPose(k, t);
+        for (const v of Object.values(p)) expect(Number.isFinite(v)).toBe(true);
+        expect(Math.abs(p.armSwing)).toBeLessThanOrEqual(0.8);
+        expect(Math.abs(p.legSwing)).toBeLessThanOrEqual(0.8);
+        expect(p.seatDrop).toBeGreaterThanOrEqual(0);
+        expect(p.seatDrop).toBeLessThanOrEqual(0.35);
+        expect(animPose(k, t)).toEqual(p);
+      }
+    }
+  });
+
+  it("lowers a sitting figure and swings a walking one", () => {
+    expect(animPose("sit", 0).seatDrop).toBeGreaterThan(0.2);
+    expect(animPose("sofa", 3).seatDrop).toBeGreaterThan(0.2);
+    expect(animPose("walk", 0.25).legSwing).not.toBe(0);
+    expect(animPose("walk", 0.25).seatDrop).toBe(0);
+  });
+
+  it("diffs the people on screen against the wanted ones", () => {
+    const set = (...ids: string[]) => new Set(ids);
+    expect(syncCharacters(set(), set("a", "b"))).toEqual({ add: ["a", "b"], remove: [] });
+    expect(syncCharacters(set("a", "b"), set())).toEqual({ add: [], remove: ["a", "b"] });
+    expect(syncCharacters(set("a", "b"), set("b", "c"))).toEqual({ add: ["c"], remove: ["a"] });
+    expect(syncCharacters(set("a", "b"), set("a", "b"))).toEqual({ add: [], remove: [] });
+  });
+});
+
+describe("3D office layout", () => {
+  const { seats, sofaSpots, chairs } = buildSeats();
+
+  it("seats everyone on the sofa from every sofa spot", () => {
+    for (const t of AMBIENT_SPOTS.sofa) {
+      const seat = sofaSpots.get(`${t.x},${t.y}`);
+      expect(seat).toBeDefined();
+      const sofa = tileToWorld({ x: t.x + Math.sign(seat!.x - tileToWorld(t).x), y: t.y + Math.sign(seat!.z - tileToWorld(t).z) });
+      expect(PROPS.some((p) => p.kind === "sofa" && tileToWorld(p).x === sofa.x && tileToWorld(p).z === sofa.z)).toBe(true);
+    }
+  });
+
+  it("puts a chair at every seat beside a desk, facing it, with a seat to sit on", () => {
+    const step = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] } as const;
+    for (const c of chairs) {
+      expect(seats.has(`${c.tile.x},${c.tile.y}`)).toBe(true);
+      const [dx, dy] = step[c.facing];
+      const ahead = PROPS.find((p) => p.x === c.tile.x + dx && p.y === c.tile.y + dy);
+      if (ahead) expect(ahead.kind === "desk" || ahead.kind === "counter").toBe(true);
+    }
+    for (const t of Object.values(OFFICE_MAP.seats).flat()) {
+      const besideDesk = PROPS.some((p) => p.kind === "desk" && Math.abs(p.x - t.x) + Math.abs(p.y - t.y) === 1);
+      if (besideDesk) expect(chairs.some((c) => c.tile.x === t.x && c.tile.y === t.y)).toBe(true);
+    }
+  });
+
+  it("covers the floor inside the outer walls and places every model kind it loads", () => {
+    const quarters = floorBoxes();
+    expect(quarters.length).toBe((OFFICE_MAP.width * 2 - 2) * (OFFICE_MAP.height * 2 - 2));
+    const placed = buildPlacements(() => ({ x: 1, y: 1, z: 1 }), chairs);
+    for (const k of ["desk", "chair", "monitor", "sofa", "whiteboard", "coffee_machine", "rug"]) {
+      expect(placed.some((p) => p.kind === k)).toBe(true);
     }
   });
 });
