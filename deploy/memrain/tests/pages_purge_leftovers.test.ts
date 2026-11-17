@@ -87,6 +87,23 @@ describe("purge leftovers (PGLite)", () => {
     expect((await e.query<{ synthesis_slug: string }>(`SELECT synthesis_slug FROM synthesis_evidence`)).rows).toEqual([{ synthesis_slug: "synthesis/keep" }]);
   });
 
+  it("an observation the purged page's observation replaced points at the one that replaced that in turn", async () => {
+    await seedPurgeable(storage, "people/a");
+    const e = storage.engine();
+    const id = async (fact: string, source: string) => Number((await e.query<{ id: number }>(
+      `INSERT INTO hot_memory (entity_slug, fact, source_slug) VALUES ('people/b', $1, $2) RETURNING id`, [fact, source])).rows[0]!.id);
+    // old (kept page) -> mid (purged page) -> new (kept page): the old one stays replaced, by `new`.
+    const [oldId, midId, newId] = [await id("old", "people/keep"), await id("mid", "people/a"), await id("new", "people/other")];
+    // last (kept page) -> top (purged page, current): with nothing after it, `last` is the newest left.
+    const [lastId, topId] = [await id("last", "people/keep"), await id("top", "people/a")];
+    await e.query(`UPDATE hot_memory SET superseded_by = $2 WHERE id = $1`, [oldId, midId]);
+    await e.query(`UPDATE hot_memory SET superseded_by = $2 WHERE id = $1`, [midId, newId]);
+    await e.query(`UPDATE hot_memory SET superseded_by = $2 WHERE id = $1`, [lastId, topId]);
+    expect(await purgeDeletedPages(e)).toMatchObject({ count: 1, hot_memory_rows: 2 });
+    const rows = (await e.query<{ fact: string; superseded_by: number | null }>(`SELECT fact, superseded_by FROM hot_memory ORDER BY id`)).rows;
+    expect(rows.map(r => [r.fact, r.superseded_by === null ? null : Number(r.superseded_by)])).toEqual([["old", newId], ["new", null], ["last", null]]);
+  });
+
   it("dry-run reports the leftovers it would remove without touching them", async () => {
     await seedPurgeable(storage, "people/a");
     const r = await purgeDeletedPages(storage.engine(), undefined, undefined, { dryRun: true });

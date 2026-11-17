@@ -92,9 +92,8 @@ marked; this section is the one that stands.
   loses `Thanks,`. A read-only count on prod found none.
 - The sweep selects connector pages by type and `compiled_truth.origin`, not
   by source kind; check the kind as retention's `assertConnectorSource` does.
-- Purging a page deletes its `hot_memory` rows by `source_slug`, and
-  `superseded_by` is `ON DELETE SET NULL`, so the observation the purged one
-  replaced becomes current again. `hot_memory.source_slug` has no index.
+- Purging a page deletes its `hot_memory` rows by `source_slug`, which has no
+  index, so every purge scans the table.
 - The concept hub gate reuses the entity junk list, so a real concept named
   `meetings`, `customers`, `project` or `idea` can never get a hub page.
 
