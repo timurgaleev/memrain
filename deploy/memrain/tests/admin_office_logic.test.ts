@@ -677,6 +677,17 @@ describe("spreadLabels", () => {
     }
   });
 
+  it("pins a busy label inside the stage top when no sideways spot is free", () => {
+    const narrow = 60;
+    const boxes = [box("b1", 30, 20, true), box("b2", 30, 20, true), box("b3", 30, 24, true)];
+    const spots = spreadLabels(boxes, 40, narrow);
+    for (const b of boxes) {
+      const p = spots.get(b.id)!;
+      expect(p).not.toBeNull();
+      expect(b.y - p.lift).toBeGreaterThanOrEqual(b.h);
+    }
+  });
+
   it("hides an idle label rather than push it above the stage", () => {
     const spots = spreadLabels([box("busy", 100, 20, true), box("idle", 100, 25)], 40, STAGE);
     expect(spots.get("busy")).toEqual({ x: 100, lift: 0 });

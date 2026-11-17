@@ -35,8 +35,9 @@ const DRAG_PX = 4;
 const ROOM_LABEL_Y = 0.6;
 // Idle name tags in a crowd stack upward this far at most, then step aside.
 const MAX_LABEL_LIFT = 36;
-// After a change the scene draws on its next frame; keep placing tags until it has.
-const SETTLE_FRAMES = 2;
+// After a change the scene draws on its next frame, which can come after this page's
+// own frame; keep placing tags until it surely has.
+const SETTLE_FRAMES = 3;
 const NO_WEBGL = "Your browser cannot show the 3D office. The list shows the same activity.";
 
 type Feed = "connecting" | "connected" | "disconnected";
@@ -178,6 +179,16 @@ interface Overlay {
   poke: () => void;
 }
 
+type Tag = LabelBox & { el: HTMLDivElement };
+
+// Tag sizes and layout input kept between frames: a tag is measured again only when
+// its text, badge or style changes, or the stage is resized.
+interface TagLayout {
+  sizes: Map<string, { key: string; w: number; h: number }>;
+  tags: Map<string, Tag>;
+  list: Tag[];
+}
+
 interface Figures {
   poses: Map<string, Pose>;
   byId: Map<string, SceneCharacter>;
@@ -271,15 +282,24 @@ function place(el: HTMLElement, p: { x: number; y: number } | null, size: Size):
   el.style.top = `${p.y}px`;
 }
 
+function measure(layout: TagLayout, id: string, el: HTMLDivElement): { w: number; h: number } {
+  const key = `${el.className}\u0000${el.textContent}`;
+  let size = layout.sizes.get(id);
+  if (!size || size.key !== key) {
+    size = { key, w: el.offsetWidth, h: el.offsetHeight };
+    layout.sizes.set(id, size);
+  }
+  return size;
+}
+
 // Keeps names, badges and the tooltip over their figures without a React render per frame.
-function placeOverlay(scene: OfficeScene, overlay: Overlay, st: OfficeState | null, now: number, size: Size): void {
+function placeOverlay(scene: OfficeScene, overlay: Overlay, layout: TagLayout, st: OfficeState | null, now: number, size: Size): void {
   ROOM_ANCHORS.forEach((r, i) => {
     const el = overlay.rooms[i];
     if (el) place(el, scene.projectWorld(r.x, r.z, ROOM_LABEL_Y), size);
   });
-  // Show or hide each badge before measuring, then move every tag, so the browser
-  // lays out once per frame and a badge counts towards its tag's width.
-  const boxes: (LabelBox & { el: HTMLDivElement })[] = [];
+  // The badge is set before measuring so it counts towards its tag's width.
+  layout.list.length = 0;
   for (const [id, el] of overlay.labels) {
     const c = st?.characters.get(id);
     el.classList.toggle("office-label-error", (c?.errorUntil ?? 0) > now);
@@ -288,18 +308,32 @@ function placeOverlay(scene: OfficeScene, overlay: Overlay, st: OfficeState | nu
       el.style.visibility = "hidden";
       continue;
     }
-    const w = el.offsetWidth;
+    const { w, h } = measure(layout, id, el);
+    let tag = layout.tags.get(id);
+    if (!tag || tag.el !== el) {
+      tag = { id, el, x: 0, y: 0, w, h, keep: false };
+      layout.tags.set(id, tag);
+    }
     // Slide a tag sideways rather than let the stage edge cut it off.
-    const x = Math.min(Math.max(p.x, w / 2), Math.max(w / 2, size.w - w / 2));
-    boxes.push({ id, el, x, y: p.y, w, h: el.offsetHeight, keep: !!c && c.room !== "break_room" });
+    tag.x = Math.min(Math.max(p.x, w / 2), Math.max(w / 2, size.w - w / 2));
+    tag.y = p.y;
+    tag.w = w;
+    tag.h = h;
+    tag.keep = !!c && c.room !== "break_room";
+    layout.list.push(tag);
   }
-  const spots = spreadLabels(boxes, MAX_LABEL_LIFT, size.w);
-  for (const b of boxes) {
-    const spot = spots.get(b.id);
-    b.el.style.visibility = spot ? "visible" : "hidden";
+  for (const id of layout.tags.keys()) {
+    if (overlay.labels.has(id)) continue;
+    layout.tags.delete(id);
+    layout.sizes.delete(id);
+  }
+  const spots = spreadLabels(layout.list, MAX_LABEL_LIFT, size.w);
+  for (const t of layout.list) {
+    const spot = spots.get(t.id);
+    t.el.style.visibility = spot ? "visible" : "hidden";
     if (!spot) continue;
-    b.el.style.left = `${spot.x}px`;
-    b.el.style.top = `${b.y - spot.lift}px`;
+    t.el.style.left = `${spot.x}px`;
+    t.el.style.top = `${t.y - spot.lift}px`;
   }
   const { id, el } = overlay.tip;
   if (id && el) place(el, scene.project(id), size);
@@ -347,6 +381,9 @@ function useOfficeScene(
     let moving = false;
     let nextExpiry = Infinity;
     let settle = SETTLE_FRAMES;
+    let onScreen = true;
+    let io: IntersectionObserver | null = null;
+    const layout: TagLayout = { sizes: new Map(), tags: new Map(), list: [] };
 
     function wake(): void {
       clearTimeout(sleep);
@@ -387,10 +424,14 @@ function useOfficeScene(
         }
       }
       if (dirty) settle = SETTLE_FRAMES;
+      // Off screen the overlay waits; coming back on screen starts a fresh settle pass.
       const animating = scene.isAnimating();
-      if (animating || settle > 0) placeOverlay(scene, overlay.current, st, now, size);
-      settle = Math.max(0, settle - 1);
-      if (animating || moving || settle > 0) {
+      const placing = onScreen && (animating || settle > 0);
+      if (placing) {
+        placeOverlay(scene, overlay.current, layout, st, now, size);
+        settle = Math.max(0, settle - 1);
+      }
+      if (animating || moving || placing) {
         raf = requestAnimationFrame(frame);
         return;
       }
@@ -431,11 +472,19 @@ function useOfficeScene(
           size.w = box.clientWidth;
           size.h = box.clientHeight;
           s.resize(size.w, size.h, window.devicePixelRatio || 1);
+          // Tags may change font size with the stage width.
+          layout.sizes.clear();
           poke();
         };
         ro = new ResizeObserver(resize);
         ro.observe(box);
         resize();
+        // Made after the scene's own observer, so the scene redraws before this page places tags.
+        io = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver((entries) => {
+          onScreen = entries.some((e) => e.isIntersecting);
+          if (onScreen) poke();
+        });
+        io?.observe(box);
       }, (e: unknown) => {
         console.warn("office: the 3D view could not start", e);
         fail();
@@ -449,6 +498,7 @@ function useOfficeScene(
       if (store.current.wake === wake) store.current.wake = null;
       overlay.current.poke = () => {};
       ro?.disconnect();
+      io?.disconnect();
       document.removeEventListener("visibilitychange", onVisible);
       scene?.dispose();
       sceneRef.current = null;

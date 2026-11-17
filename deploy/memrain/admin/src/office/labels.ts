@@ -42,8 +42,8 @@ function stack(b: LabelBox, x: number, placed: readonly Rect[]): { rect: Rect; l
 
 // Where each tag goes so none covers another: busy tags first, then from the front of
 // the room to the back, each lifted above what it would cover. A busy tag that would
-// rise past the stage top steps sideways instead; an idle tag that would rise past
-// maxLift or the top is hidden (null).
+// rise past the stage top steps sideways instead, or is pinned to the top edge when
+// no step is free; an idle tag that would rise past maxLift or the top is hidden (null).
 export function spreadLabels(boxes: readonly LabelBox[], maxLift: number, stageW: number): Map<string, LabelSpot | null> {
   const order = [...boxes].sort((a, b) => Number(b.keep) - Number(a.keep) || b.y - a.y);
   const placed: Rect[] = [];
@@ -61,8 +61,10 @@ export function spreadLabels(boxes: readonly LabelBox[], maxLift: number, stageW
       spots.set(b.id, null);
       continue;
     }
-    placed.push(best.rect);
-    spots.set(b.id, { x: best.x, lift: best.lift });
+    // Nowhere free inside the stage: pin the tag to the top edge, even over another one.
+    const lift = Math.min(best.lift, b.y - b.h);
+    placed.push({ ...best.rect, top: b.y - lift - b.h, bottom: b.y - lift });
+    spots.set(b.id, { x: best.x, lift });
   }
   return spots;
 }
