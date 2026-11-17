@@ -107,6 +107,8 @@ export interface FeedEvent {
   latency_ms: number;
   status: string;
   timestamp: string;
+  kind?: "tool" | "job";
+  phase?: "start" | "end";
 }
 
 /**

@@ -16,8 +16,10 @@ export interface AdminEvent {
   agent: string;
   operation: string;
   latency_ms: number;
-  status: "success" | "error";
+  status: "success" | "error" | "running";
   timestamp: string;
+  kind: "tool" | "job";
+  phase: "start" | "end";
 }
 
 const MAX_SUBSCRIBERS = 50;
@@ -93,9 +95,37 @@ export function publishToolCallEvent(e: {
       latency_ms: Math.round(e.latencyMs),
       status: e.ok ? "success" : "error",
       timestamp: new Date().toISOString(),
+      kind: "tool",
+      phase: "end",
     });
   } catch {
     /* never break the request path */
+  }
+}
+
+/**
+ * Publish a background-job or cycle event. Same redaction stance as tool
+ * calls: worker and job kind names only, never payloads. Best-effort.
+ */
+export function publishJobEvent(e: {
+  worker: string;
+  kind: string;
+  phase: "start" | "end";
+  ok?: boolean;
+  latencyMs?: number;
+}): void {
+  try {
+    adminEventBus.publish({
+      agent: e.worker,
+      operation: e.kind,
+      latency_ms: Math.round(e.latencyMs ?? 0),
+      status: e.phase === "start" ? "running" : e.ok ? "success" : "error",
+      timestamp: new Date().toISOString(),
+      kind: "job",
+      phase: e.phase,
+    });
+  } catch {
+    /* never break the worker */
   }
 }
 

@@ -51,7 +51,9 @@ function useFeed() {
     es.onopen = () => setSse("connected");
     es.onmessage = (e) => {
       try {
-        setEvents((prev) => [JSON.parse(e.data) as FeedEvent, ...prev].slice(0, 100));
+        const evt = JSON.parse(e.data) as FeedEvent;
+        if (evt.kind === "job") return;
+        setEvents((prev) => [evt, ...prev].slice(0, 100));
       } catch { /* ignore a malformed frame */ }
     };
     es.onerror = () => setSse(es.readyState === EventSource.CLOSED ? "disconnected" : "connecting");
