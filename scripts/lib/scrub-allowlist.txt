@@ -50,3 +50,6 @@ deploy/memrain/tests/fixtures/write-gate/benign.jsonl
 # prefixes hold Cyrillic by design.
 deploy/memrain/src/core/loops/detect.ts
 deploy/memrain/src/core/loops/signals.ts
+# The meeting-credential redactor reads Russian invitations as well as English
+# and German ones: its label table holds Cyrillic by design.
+deploy/memrain/src/core/connectors/meeting-redact.ts

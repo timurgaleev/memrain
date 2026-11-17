@@ -90,4 +90,34 @@ describe("renderMailThread", () => {
     ]));
     expect(page.body.indexOf("First.")).toBeLessThan(page.body.indexOf("Second."));
   });
+
+  it("strips online-meeting credentials and a labelled password from the subject and every body, text or HTML", () => {
+    const zoom = [
+      "Join Zoom Meeting",
+      "https://us02web.zoom.us/j/81234567890?pwd=Ab12Cd34Ef56Gh78Ij90Kl12Mn34Op56.1",
+      "Meeting ID: 812 3456 7890",
+      "Passcode: 482913",
+      "+4969710499,,81234567890#,,,,*48291300# Germany",
+    ].join("\n");
+    const html = "<p>Ihre Zugangsdaten</p><table><tr><td>Passwort:</td></tr><tr><td>abcD1efg</td></tr></table>"
+      + "<p><a href=\"https://portal.example/login?user=max&amp;pwd=abcD1efg\">Login</a> https://portal.example/login?user=max&amp;pwd=abcD1efg</p>"
+      + "<p>Besprechungs-ID: 311 222 333 444 55<br>Passcode: aB3cD4eF</p>";
+    for (const service of ["gmail", "outlook_mail"] as const) {
+      const page = renderMailThread({ service, accountLabel: ACCOUNT }, thread([
+        message({ id: "m1", subject: "Invite: https://teams.microsoft.com/meet/311222333444555?p=Qw7er9Ty", bodyText: zoom }),
+        message({ id: "m2", date: "2026-10-04T09:00:00.000Z", bodyText: null, bodyHtml: html }),
+      ]));
+      for (const secret of ["81234567890", "Ab12Cd34", "812 3456 7890", "482913", "48291300", "abcD1efg", "311 222 333 444 55", "aB3cD4eF", "311222333444555", "Qw7er9Ty"]) {
+        expect([service, secret, page.body.includes(secret)]).toEqual([service, secret, false]);
+        expect(page.title).not.toContain(secret);
+        // The loop detector reads the bodies the page shows.
+        expect(JSON.stringify(page.loop)).not.toContain(secret);
+      }
+      expect(page.body).toContain("Join Zoom Meeting");
+      expect(page.body).toContain("+4969710499,,");
+      expect(page.body).toMatch(/Passwort:\s+\[removed\]/);
+      expect(page.title).toBe("Invite: [meeting link removed]");
+      expect(page.findings).toEqual([]);
+    }
+  });
 });

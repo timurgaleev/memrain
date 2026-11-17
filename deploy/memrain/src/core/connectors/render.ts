@@ -16,6 +16,7 @@ import { guardSecrets, type SecretFinding } from "../secret-scan.ts";
 import { neutralizeOutsideText } from "../neutralize-outside-text.ts";
 import { OUTSIDE_NEUTRALIZED } from "../fence-carry.ts";
 import { calendarLoopSignals, chatLoopSignals, mailLoopSignals, type LoopSignals } from "../loops/signals.ts";
+import { redactMeetingCredentials } from "./meeting-redact.ts";
 import {
   serviceAccountRef,
   shortHash,
@@ -204,7 +205,20 @@ class Guard {
 
   /** Outside single-line text (a name, a subject, an address). */
   line(value: string | null | undefined, max = 300): string {
-    return this.text(value).replace(/\s+/g, " ").trim().slice(0, max);
+    return oneLine(this.text(value), max);
+  }
+
+  /**
+   * Text that can carry an online-meeting invitation (a mail body or subject,
+   * an event's description, title or place): its meeting credentials go first
+   * (meeting-redact.ts), then it is guarded like any outside text.
+   */
+  invite(value: string | null | undefined): string {
+    return this.text(redactMeetingCredentials(value ?? "").text);
+  }
+
+  inviteLine(value: string | null | undefined, max = 300): string {
+    return oneLine(this.invite(value), max);
   }
 
   person(p: Person | null | undefined): string {
@@ -214,6 +228,10 @@ class Guard {
     if (name && email) return `${name} <${email}>`;
     return name || email || "unknown";
   }
+}
+
+function oneLine(text: string, max: number): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, max);
 }
 
 function iso(value: string, what: string): string {
@@ -317,7 +335,7 @@ export function renderMailThread(ctx: ConnectorContext, thread: MailThread): Ren
   const account = serviceAccountRef(ctx);
   const slug = `mail/${account}/${first.slice(0, 7)}/${shortHash(`thread:${thread.threadId}`)}`;
   const g = new Guard(`connector mail '${slug}'`);
-  const subject = headingText(g.line(messages[0]!.subject), "(no subject)");
+  const subject = headingText(g.inviteLine(messages[0]!.subject), "(no subject)");
 
   const lines = [`# ${subject}`, "", `Mail thread · ${messages.length} message${messages.length === 1 ? "" : "s"}`, ""];
   const bodies: string[] = [];
@@ -329,7 +347,7 @@ export function renderMailThread(ctx: ConnectorContext, thread: MailThread): Ren
     if (m.attachments.length) {
       lines.push(`Attachments: ${m.attachments.map(a => `${g.line(a.name, 200)} (${g.line(a.mime, 100)}, ${Math.max(0, Math.trunc(a.size))} bytes)`).join("; ")}`);
     }
-    const body = g.text(messageText(m)).trim();
+    const body = g.invite(messageText(m)).trim();
     bodies.push(body);
     lines.push("", body === "" ? "_No text._" : body, "");
   });
@@ -360,10 +378,10 @@ export function renderCalendarEvent(ctx: ConnectorContext, event: CalendarEvent)
   // No date in the slug: a rescheduled event stays one page.
   const slug = `calendar/${serviceAccountRef(ctx)}/${key}`;
   const g = new Guard(`connector event '${slug}'`);
-  const title = headingText(g.line(event.title), "(untitled event)");
+  const title = headingText(g.inviteLine(event.title), "(untitled event)");
 
   const lines = [`# ${title}`, "", `Calendar event · ${event.status}`, "", `When: ${event.allDay ? start.slice(0, 10) : start}${end ? ` to ${event.allDay ? end.slice(0, 10) : end}` : ""}`];
-  if (event.location) lines.push(`Where: ${g.line(event.location)}`);
+  if (event.location) lines.push(`Where: ${g.inviteLine(event.location)}`);
   if (event.onlineMeeting) lines.push("Online meeting: yes");
   if (event.organizer) lines.push(`Organizer: ${g.person(event.organizer)}`);
   if (event.recurrence?.length) lines.push(`Repeats: ${event.recurrence.map(r => g.line(r, 200)).join("; ")}`);
@@ -382,7 +400,7 @@ export function renderCalendarEvent(ctx: ConnectorContext, event: CalendarEvent)
     lines.push("", "Attendees:");
     for (const a of event.attendees) lines.push(`* ${g.person(a)}${a.response ? ` (${g.line(a.response, 40)})` : ""}`);
   }
-  const description = event.description === null ? "" : g.text(htmlToText(event.description)).trim();
+  const description = event.description === null ? "" : g.invite(htmlToText(event.description)).trim();
   if (description) lines.push("", description);
 
   // A series that began long ago is still active while it keeps occurring:

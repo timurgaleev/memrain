@@ -136,6 +136,33 @@ describe("calendar", () => {
     expect(google.participants.map(p => p.email).sort()).toEqual(["bob@example.net", "carol@example.net"]);
     expect(google.body).toContain("Carol Diaz <carol@example.net> (accepted)");
   });
+
+  it("strips online-meeting credentials from the title, the place and the description, whichever provider sent them", () => {
+    // An HTML invitation puts each label and its value in their own cells, so they land on separate lines.
+    const description = [
+      "<div>Microsoft Teams</div><div><a href=\"https://teams.microsoft.com/l/meetup-join/19%3ameeting_x%40thread.v2/0\">Join the meeting now</a></div>",
+      "<table><tr><td>Meeting ID:</td></tr><tr><td>311 222 333 444 55</td></tr><tr><td>Passcode:</td></tr><tr><td>Qw7er9Ty</td></tr></table>",
+      "<p>Dial in by phone</p><p>+49 69 1234 5678,,987654321# Germany</p><p>Phone conference ID: 987 654 321#</p>",
+      "<p>Zoom: https://us02web.zoom.us/j/81234567890?pwd=Ab12Cd34Ef56Gh78Ij90Kl12Mn34Op56.1</p>",
+    ].join("");
+    for (const service of ["google_calendar", "outlook_calendar"] as const) {
+      const page = renderCalendarEvent({ service, accountLabel: ACCOUNT }, event({
+        title: "Sync https://meet.google.com/abc-defg-hij",
+        location: "Microsoft Teams Meeting https://teams.microsoft.com/meet/311222333444555?p=Qw7er9Ty",
+        description,
+      }));
+      for (const secret of ["311 222 333 444 55", "Qw7er9Ty", "987654321", "987 654 321", "81234567890", "Ab12Cd34", "abc-defg-hij", "311222333444555"]) {
+        expect([service, secret, page.body.includes(secret)]).toEqual([service, secret, false]);
+        expect(page.title).not.toContain(secret);
+      }
+      expect(page.body).toContain("Join the meeting now");
+      expect(page.body).toContain("+49 69 1234 5678,,");
+      expect(page.body).toMatch(/Meeting ID:\s+\[removed\]/);
+      expect(page.body).toContain("Where: Microsoft Teams Meeting [meeting link removed]");
+      expect(page.title).toBe("Sync [meeting link removed]");
+      expect(page.findings).toEqual([]);
+    }
+  });
 });
 
 describe("slugs of accounts already syncing", () => {
