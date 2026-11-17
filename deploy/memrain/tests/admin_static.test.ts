@@ -73,6 +73,9 @@ describe("serveAdminStatic security headers", () => {
     writeFileSync(join(dist, "index.html"), "<!doctype html><div id=\"root\"></div>");
     writeFileSync(join(dist, "assets", "app.css"), "body{}");
     writeFileSync(join(dist, "assets", "app.js"), "void 0;");
+    writeFileSync(join(dist, "assets", "room.gltf"), "{}");
+    writeFileSync(join(dist, "assets", "room.glb"), "glTF");
+    writeFileSync(join(dist, "assets", "room.bin"), "bin");
   });
   afterAll(() => rmSync(dist, { recursive: true, force: true }));
 
@@ -87,6 +90,21 @@ describe("serveAdminStatic security headers", () => {
   it("sets the headers on the traversal refusal too", async () => {
     const r = await serve("/admin/assets/..%2f..%2f..%2fetc%2fpasswd");
     expectSecurityHeaders(r);
+  });
+
+  it("serves 3D model files with their own content types", async () => {
+    expect((await serve("/admin/assets/room.gltf"))!.headers.get("Content-Type")).toBe("model/gltf+json");
+    expect((await serve("/admin/assets/room.glb"))!.headers.get("Content-Type")).toBe("model/gltf-binary");
+    expect((await serve("/admin/assets/room.bin"))!.headers.get("Content-Type")).toBe("application/octet-stream");
+  });
+
+  it("caches hashed assets for a year and keeps index.html revalidating", async () => {
+    for (const p of ["/admin/assets/app.js", "/admin/assets/app.css", "/admin/assets/room.glb"]) {
+      expect((await serve(p))!.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+    }
+    for (const p of ["/admin", "/admin/office", "/admin/assets/missing-asset.js"]) {
+      expect((await serve(p))!.headers.get("Cache-Control")).toBe("no-cache");
+    }
   });
 
   it("allows passkey ceremonies in this document only, and leaves the CSP as it was", async () => {

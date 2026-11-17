@@ -25,7 +25,14 @@ const MIME: Record<string, string> = {
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
   ".png": "image/png",
+  ".glb": "model/gltf-binary",
+  ".gltf": "model/gltf+json",
+  ".bin": "application/octet-stream",
 };
+
+// Vite hashes every file under assets/, so a year-long cache is safe there;
+// index.html names those hashes and has to be refetched.
+const ASSET_CACHE = "public, max-age=31536000, immutable";
 
 // The SPA ships its own scripts and styles and talks only to this origin.
 // React `style` props go through CSSOM, which style-src does not govern.
@@ -72,7 +79,19 @@ export async function serveAdminStatic(url: URL, distDir: string = DIST_DIR): Pr
     if (rel === "index.html") return null;
     const index = Bun.file(resolve(distDir, "index.html"));
     if (!(await index.exists())) return null;
-    return new Response(index, { headers: { ...ADMIN_SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8" } });
+    return new Response(index, {
+      headers: {
+        ...ADMIN_SECURITY_HEADERS,
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-cache",
+      },
+    });
   }
-  return new Response(file, { headers: { ...ADMIN_SECURITY_HEADERS, "Content-Type": mimeFor(filePath) } });
+  return new Response(file, {
+    headers: {
+      ...ADMIN_SECURITY_HEADERS,
+      "Content-Type": mimeFor(filePath),
+      "Cache-Control": rel === "index.html" ? "no-cache" : ASSET_CACHE,
+    },
+  });
 }
