@@ -343,6 +343,9 @@ function printUsage(): void {
   console.log("                               mirror a repository's issues and pull requests into a github source");
   console.log("                               (token: MEMRAIN_GITHUB_TOKEN or --token-file; exit 1 partial, 2 re-auth)");
   console.log("  connectors status [--json]   every connector account and recipe connector: state, last run");
+  console.log("  connectors redact-meetings [--source ID] [--apply --yes] [--json]");
+  console.log("                               remove meeting ids, passcodes, PINs and join links from stored connector");
+  console.log("                               mail and calendar pages (dry run with counts per source unless --apply)");
   console.log("  connectors rotate-kek --old-file F --new-file F [--json]   re-seal connector secrets under a new key");
   console.log("  daemons status [--json]      background daemons: schedule, pauses, last run, scheduler leader");
   console.log("  daemons pause|resume <name|all> [--source ID] [--reason TEXT] [--json]");
@@ -1902,6 +1905,8 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (newKekFile) opts.newKekFile = newKekFile;
       if (flags.has("--full")) opts.full = true;
       if (flags.has("--dry-run")) opts.dryRun = true;
+      if (flags.has("--apply")) opts.apply = true;
+      if (flags.has("--yes")) opts.yes = true;
       if (flags.has("--json")) opts.json = true;
       return await runConnectors(opts);
     }

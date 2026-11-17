@@ -182,6 +182,25 @@ docker exec deploy-memrain-1 bun run src/cli.ts spend --days 2     # where the m
 `connectors status --json` prints the same, with each account's last run
 (status, stop reason, HTTP status, counts) for a script to read.
 
+## Meeting credentials in pages stored earlier
+
+Mail and calendar pages are stored without online-meeting credentials: meeting
+ids, passcodes, dial-in PINs, one-tap dial strings and Teams, Zoom, Webex and
+Google Meet join links, plus a password or PIN a mail spells out under a
+label. A page stored before a release that stripped them keeps them until its
+item changes upstream, which for mail is never. Clean those pages in place:
+
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts connectors redact-meetings            # dry run: pages and credentials per source
+docker exec deploy-memrain-1 bun run src/cli.ts connectors redact-meetings --apply --yes
+```
+
+`--source ID` limits either run to one source. Each changed page gets a new
+version written by `meeting-redact` and is mirrored into search again; the
+pages still age out under connector retention. Earlier versions in the
+page's history keep the text they had. A second dry run should report 0
+pages.
+
 ## Optional: the notification webhook secret
 
 Memrain can sign the notifications it posts to a webhook of yours with an

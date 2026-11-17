@@ -355,7 +355,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--source", "--token-file", "--url", "--plan-hash",
     ]),
   ],
-  ["connectors", new Set(["--dry-run", "--full", "--json", "--new-file", "--old-file", "--source", "--token-file"])],
+  ["connectors", new Set(["--apply", "--dry-run", "--full", "--json", "--new-file", "--old-file", "--source", "--token-file", "--yes"])],
   ["daemons", new Set(["--json", "--reason", "--source"])],
   ["waiting", new Set(["--json", "--limit", "--source", "--stale", "--type"])],
   ["version", new Set(["--json"])],
@@ -379,7 +379,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
       "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts",
     ]),
   ],
-  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts"])],
+  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors"])],
   ["--fix", new Set(["lint"])],
 ]);
 

@@ -2,6 +2,12 @@
  * `memrain connectors github sync <owner/repo> --source ID [--token-file F]
  *                               [--full] [--dry-run] [--json]`
  * `memrain connectors status [--json]`
+ * `memrain connectors redact-meetings [--source ID] [--apply --yes] [--json]`
+ *
+ * `redact-meetings` removes online-meeting credentials (ids, passcodes, PINs,
+ * join links) from connector mail and calendar pages stored before the
+ * renderers stripped them. Dry run by default, with counts per source;
+ * `--apply --yes` writes each changed page as a new version and re-mirrors it.
  *
  * `status` lists every connector account (state, last clean sync, last run,
  * a waiting reconnect, a Google Testing-mode grant about to end) and every
@@ -37,11 +43,12 @@ import type { ConnectorRunStatus } from "../core/connectors/types.ts";
 import { listConnectorStates } from "../core/connectors/watermark.ts";
 import { grantExpiryText, listAccountStatus, runCountsText, type AccountStatus } from "../core/connectors/account-status.ts";
 import { connectorsStatus } from "../core/connectors/vault.ts";
+import { sweepMeetingCredentials, type MeetingRedactSweepResult } from "../core/connectors/meeting-redact-sweep.ts";
 import { withStorage } from "./with-storage.ts";
 import { runRotateKek } from "./connectors-vault.ts";
 
 export interface ConnectorsCmdOptions {
-  /** `github`, `status` or `rotate-kek`. */
+  /** `github`, `status`, `redact-meetings` or `rotate-kek`. */
   sub: string | undefined;
   /** `sync` under `github`. */
   action?: string;
@@ -51,8 +58,13 @@ export interface ConnectorsCmdOptions {
   tokenFile?: string;
   full?: boolean;
   dryRun?: boolean;
+  /** `redact-meetings`: write the changes (needs `yes`). */
+  apply?: boolean;
+  yes?: boolean;
   json?: boolean;
   configPath?: string;
+  /** Test seam: a Storage the caller opened and closes. */
+  storage?: Storage;
   /** Test seams: recorded responses, a fake clock, a deterministic embedder. */
   fetch?: FetchFn;
   sleep?: (ms: number) => Promise<void>;
@@ -248,10 +260,44 @@ async function runStatus(opts: ConnectorsCmdOptions): Promise<number> {
   return 0;
 }
 
+function printMeetingRedact(r: MeetingRedactSweepResult): void {
+  console.log(`connector meeting credentials (${r.applied ? "apply" : "dry run"}): ${r.pages_changed} of ${r.pages_scanned} page(s), ${r.removals} credential(s)`);
+  for (const [source, c] of Object.entries(r.by_source).sort(([a], [b]) => a.localeCompare(b))) {
+    console.log(`  ${source}: ${c.pages_changed} of ${c.pages_scanned} page(s), ${c.removals} credential(s)`);
+  }
+  if (r.applied) {
+    console.log(`  ${r.rewritten} page(s) written as a new version`);
+    if (r.mirror_failed > 0) console.log(`  ${r.mirror_failed} written page(s) whose search mirror failed; run again`);
+    if (r.moved > 0) console.log(`  ${r.moved} page(s) changed by a sync meanwhile; run again`);
+  } else if (r.pages_changed > 0) {
+    console.log("Older version snapshots keep their text. Run with --apply --yes to write the redacted pages.");
+  }
+  for (const e of r.errors) console.log(`  ${e}`);
+}
+
+async function runRedactMeetings(opts: ConnectorsCmdOptions): Promise<number> {
+  if (opts.apply && !opts.yes) {
+    console.error("memrain connectors redact-meetings: --apply writes a new version of each changed page; add --yes to confirm (run without --apply first to review)");
+    return 2;
+  }
+  const storage = opts.storage ?? new Storage(loadConfig(opts.configPath));
+  return withStorage(storage, async () => {
+    const r = await sweepMeetingCredentials(storage, {
+      ...(opts.sourceId !== undefined ? { sourceId: opts.sourceId } : {}),
+      apply: opts.apply === true,
+      ...(opts.embedFn ? { mirror: { embedFn: opts.embedFn } } : {}),
+    });
+    if (opts.json) console.log(JSON.stringify({ ok: r.errors.length === 0, ...r }, null, 2));
+    else printMeetingRedact(r);
+    return r.errors.length + r.mirror_failed + r.moved > 0 ? 1 : 0;
+  }, { owned: opts.storage === undefined });
+}
+
 export async function runConnectors(opts: ConnectorsCmdOptions): Promise<number> {
   if (opts.sub === "status") return runStatus(opts);
   if (opts.sub === "github") return runGithubSync(opts);
+  if (opts.sub === "redact-meetings") return runRedactMeetings(opts);
   if (opts.sub === "rotate-kek") return runRotateKek(opts);
-  console.error("memrain connectors: subcommand required (github sync <owner/repo> | status | rotate-kek)");
+  console.error("memrain connectors: subcommand required (github sync <owner/repo> | status | redact-meetings | rotate-kek)");
   return 1;
 }
