@@ -12,6 +12,7 @@ import {
   isFactsExtractionEligible,
   factsExtractionEnabled,
   extractFactsForPage,
+  DEFAULT_EXTRACTION_MAX_TOKENS,
 } from "../src/core/facts-extract.ts";
 import {
   FactsQueue,
@@ -285,7 +286,7 @@ describe("extractFactsForPage", () => {
   });
 
   it("default per-write budget affords the truncation retry for a full-window page", async () => {
-    // A page at the extractor's input window, cut at the 800-token cap: the
+    // A page at the extractor's input window, cut at the output cap: the
     // retry must fit the DEFAULT per-write ceiling, or long pages lose facts.
     let n = 0;
     const fn: SonnetFn = async () => {
@@ -294,11 +295,11 @@ describe("extractFactsForPage", () => {
         return {
           text: '{"facts": [{"fact": "prefers tea',
           modelId: "eu.anthropic.claude-sonnet-4-6",
-          usage: { inputTokens: 4000, outputTokens: 800 },
+          usage: { inputTokens: 4000, outputTokens: DEFAULT_EXTRACTION_MAX_TOKENS },
           stopReason: "max_tokens",
         };
       }
-      const ok = await fakeSonnet().fn({ system: "", user: "", maxTokens: 1600 });
+      const ok = await fakeSonnet().fn({ system: "", user: "", maxTokens: 2 * DEFAULT_EXTRACTION_MAX_TOKENS });
       return { ...ok, usage: { inputTokens: 4000, outputTokens: 900 } };
     };
     const saved = process.env["MEMRAIN_FACTS_WRITE_BUDGET_USD"];

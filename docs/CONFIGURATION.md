@@ -361,7 +361,7 @@ that stops making calls once the budget is spent. All default OFF.
 | `MEMRAIN_ENRICH_THIN_MAX_PAGES` | `3` | Max pages rewritten per run. Code-only. | — |
 | `MEMRAIN_ENRICH_THIN_THRESHOLD` | `400` | Body length (characters) under which a page counts as thin. Code-only. | — |
 | `MEMRAIN_ENRICH_THIN_TYPES` | `person,company,concept,note` | Page types eligible for enrichment. CSV. Code-only. | — |
-| `MEMRAIN_FACTS_WRITE_BUDGET_USD` | `0.08` | USD ceiling for one fact extraction, either the one a page write triggers when `MEMRAIN_FACTS_EXTRACTION` is on or an on-demand `extract_facts` call, including its one retry when the output is cut off. Code-only. | — |
+| `MEMRAIN_FACTS_WRITE_BUDGET_USD` | `0.25` | USD ceiling for one fact extraction, either the one a page write triggers when `MEMRAIN_FACTS_EXTRACTION` is on or an on-demand `extract_facts` call, including its one retry when the output is cut off. Code-only. | — |
 | `MEMRAIN_AUTO_CHRONICLE` | off (`=1` on) | On an operator write of a conversation-shaped page, queue one `chronicle_extract` job that projects its events into the chronicle. Tenant and public writes never trigger it. Code-only. | **paid (Sonnet)** |
 | `MEMRAIN_CHRONICLE_WRITE_BUDGET_USD` | `0.05` | USD ceiling for one page's chronicle extraction (also what `chronicle_backfill` quotes per page). Code-only. | — |
 | `MEMRAIN_CHRONICLE_TZ` | `UTC` | Time zone used to turn a chronicle event's time into a date. Code-only. | free |

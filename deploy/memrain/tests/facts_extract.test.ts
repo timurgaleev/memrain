@@ -350,8 +350,8 @@ describe("runExtractConversationFacts (stubbed model)", () => {
         stopReason: "max_tokens",
       };
     };
-    // Room for one worst-case call ($0.024), not for that call plus a retry.
-    const cap = 0.03;
+    // Room for one worst-case call ($0.072), not for that call plus a retry.
+    const cap = 0.08;
     const report = await runExtractConversationFacts(storage, {
       text: "Alice: I really enjoy a cup of tea",
       maxBudgetUsd: cap,

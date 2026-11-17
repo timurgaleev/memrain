@@ -425,9 +425,12 @@ export function parseFactsResponse(
 }
 
 /** Output-token cap for one extractor call. A turn is capped at ~12K chars in
- *  and 10 facts out, so this is generous; a truncated call is retried once at
+ *  and 10 facts out, each with about eleven keys: a complete answer averages
+ *  1.3K-1.4K tokens and some pass 2K, more for German or Russian text. A cut
+ *  answer is unreadable as a whole, so the cap leaves room for the largest;
+ *  Bedrock bills only the tokens produced. A truncated call is retried once at
  *  double this — but only when the caller says the retry fits its budget. */
-export const DEFAULT_EXTRACTION_MAX_TOKENS = 1000;
+export const DEFAULT_EXTRACTION_MAX_TOKENS = 4000;
 
 export interface ExtractTurnOptions {
   /** Injectable model seam — tests pass a fake; production resolves Sonnet. */
@@ -840,12 +843,14 @@ export function factsExtractionEnabled(
 }
 
 /** Per-write USD ceiling for one on-write extraction. Small — it prices a
- *  single page-body turn plus its one truncation retry (a full-window Sonnet
- *  page needs ~$0.06 for both). MEMRAIN_FACTS_WRITE_BUDGET_USD overrides. */
+ *  single page-body turn plus its one truncation retry: a full-window Sonnet
+ *  page cut at the output cap reaches ~$0.15 for both at Sonnet 5.5 prices,
+ *  ~$0.21 at Sonnet 4.6's. Most writes settle far below it.
+ *  MEMRAIN_FACTS_WRITE_BUDGET_USD overrides. */
 function perWriteBudgetUsd(): number {
   const raw = (process.env["MEMRAIN_FACTS_WRITE_BUDGET_USD"] ?? "").trim();
   const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : 0.08;
+  return Number.isFinite(n) && n > 0 ? n : 0.25;
 }
 
 /** The spend wallet path of facts extraction (on write and on demand). */
