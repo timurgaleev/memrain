@@ -58,8 +58,8 @@ const PAGE_COLUMNS: Record<string, Disposition> = {
   "synth_concepts.concept_slug": { kind: "exempt", reason: "concepts are their own namespace of synthesis rows, not pages" },
   "synth_concept_atoms.concept_slug": { kind: "exempt", reason: "provenance of a concept row, which is not a page" },
   "hot_memory.entity_slug": { kind: "exempt", reason: "observation inbox keyed by entity subject, not by the page it was seen on" },
-  "hot_memory.source_slug": { kind: "gap", reason: "an observation from a purged page stays in the inbox and a later page on the slug inherits it" },
-  "synthesis_evidence.synthesis_slug": { kind: "gap", reason: "citations of a purged synthesis page stay and a later page on the slug inherits them" },
+  "hot_memory.source_slug": { kind: "leftover" },
+  "synthesis_evidence.synthesis_slug": { kind: "leftover" },
   "loop_threads.page_slug": { kind: "cascade" },
   "open_loops.page_slug": { kind: "cascade" },
   "connector_items.page_slug": { kind: "exempt", reason: "the sync's record of which provider item a page came from; it outlives a page the owner purged so the next run does not recreate it, and goes with its account by cascade" },
@@ -106,11 +106,9 @@ const SOURCE_TABLES: Record<string, Disposition> = {
 // Each is a TODO.md item ("Deletion inventory gaps"). Fix one, then delete its line.
 const KNOWN_GAPS = [
   "fact_withdrawals",
-  "hot_memory.source_slug",
   "ingest_log",
   "slug_aliases",
   "synth_contradictions",
-  "synthesis_evidence.synthesis_slug",
   "take_nudge_log",
 ];
 

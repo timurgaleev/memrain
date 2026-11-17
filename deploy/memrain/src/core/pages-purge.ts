@@ -37,11 +37,13 @@ export interface PurgeDeletedPagesResult {
   blocked: Array<{ slug: string; reason: string }>;
   /** The age cutoff in hours this run applied (the default or the caller's). */
   ttl_hours: number;
-  /** raw_data / tags / slug_aliases / volunteer-event rows removed with the pages (on a dry run: that would be). */
+  /** raw_data / tags / slug_aliases / volunteer-event / hot-memory / synthesis-evidence rows removed with the pages (on a dry run: that would be). */
   raw_data_rows: number;
   tags_rows: number;
   slug_aliases_rows: number;
   volunteer_event_rows: number;
+  hot_memory_rows: number;
+  synthesis_evidence_rows: number;
   /** Live facts written on the purged pages, retired with cause 'purge' (on a dry run: that would be). */
   facts_retired: number;
   /** Set on a dry run: nothing was deleted, `planned` is what a real run would reap now. */
@@ -72,7 +74,8 @@ export function purgePlanHash(entries: ReadonlyArray<{ slug: string; deleted_at:
 
 const FOREIGN_KEY_VIOLATION = "23503";
 
-type Leftovers = Pick<PurgeDeletedPagesResult, "raw_data_rows" | "tags_rows" | "slug_aliases_rows" | "volunteer_event_rows">;
+type Leftovers = Pick<PurgeDeletedPagesResult,
+  "raw_data_rows" | "tags_rows" | "slug_aliases_rows" | "volunteer_event_rows" | "hot_memory_rows" | "synthesis_evidence_rows">;
 
 /** Tables that name a page by slug with no foreign key to pages: [result key, table, slug column]. */
 export const LEFTOVER_TABLES: ReadonlyArray<[keyof Leftovers, string, string]> = [
@@ -80,9 +83,14 @@ export const LEFTOVER_TABLES: ReadonlyArray<[keyof Leftovers, string, string]> =
   ["tags_rows", "tags", "slug"],
   ["slug_aliases_rows", "slug_aliases", "canonical_slug"],
   ["volunteer_event_rows", "context_volunteer_events", "slug"],
+  // An observation seen on the page, and the citations of a synthesis page.
+  ["hot_memory_rows", "hot_memory", "source_slug"],
+  ["synthesis_evidence_rows", "synthesis_evidence", "synthesis_slug"],
 ];
 
-const NO_LEFTOVERS: Leftovers = { raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0, volunteer_event_rows: 0 };
+const NO_LEFTOVERS: Leftovers = {
+  raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0, volunteer_event_rows: 0, hot_memory_rows: 0, synthesis_evidence_rows: 0,
+};
 
 /**
  * Count (or, with `remove`, delete) the rows that would outlive the given

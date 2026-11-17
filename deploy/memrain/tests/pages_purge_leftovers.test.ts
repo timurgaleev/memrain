@@ -75,6 +75,18 @@ describe("purge leftovers (PGLite)", () => {
     expect(left.rows.map((row) => row.slug)).toEqual(["people/keep"]);
   });
 
+  it("a purged page takes the observations and citations that name it, and only those", async () => {
+    await seedPurgeable(storage, "people/a");
+    const e = storage.engine();
+    await e.query(`INSERT INTO hot_memory (entity_slug, fact, source_slug) VALUES ('people/b', 'seen on a', 'people/a'), ('people/b', 'seen elsewhere', 'people/keep')`);
+    await e.query(`INSERT INTO synthesis_evidence (synthesis_slug, ref) VALUES ('people/a', 'page://notes/x'), ('synthesis/keep', 'page://notes/x')`);
+    const dry = await purgeDeletedPages(e, undefined, undefined, { dryRun: true });
+    expect(dry).toMatchObject({ hot_memory_rows: 1, synthesis_evidence_rows: 1 });
+    expect(await purgeDeletedPages(e)).toMatchObject({ count: 1, hot_memory_rows: 1, synthesis_evidence_rows: 1 });
+    expect((await e.query<{ source_slug: string }>(`SELECT source_slug FROM hot_memory`)).rows).toEqual([{ source_slug: "people/keep" }]);
+    expect((await e.query<{ synthesis_slug: string }>(`SELECT synthesis_slug FROM synthesis_evidence`)).rows).toEqual([{ synthesis_slug: "synthesis/keep" }]);
+  });
+
   it("dry-run reports the leftovers it would remove without touching them", async () => {
     await seedPurgeable(storage, "people/a");
     const r = await purgeDeletedPages(storage.engine(), undefined, undefined, { dryRun: true });

@@ -229,7 +229,8 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
     `WITH d AS (DELETE FROM documents WHERE id = ANY($1::text[]) RETURNING 1) SELECT count(*)::int AS n FROM d`,
     [docIds]);
   const rest = await leftovers(tx, [slug], true);
-  counts.leftovers += rest.raw_data_rows + rest.tags_rows + rest.slug_aliases_rows + rest.volunteer_event_rows;
+  counts.leftovers += rest.raw_data_rows + rest.tags_rows + rest.slug_aliases_rows + rest.volunteer_event_rows
+    + rest.hot_memory_rows + rest.synthesis_evidence_rows;
   await tx.query(`DELETE FROM pages WHERE slug = $1`, [slug]);
   return { docIds, concepts };
 }

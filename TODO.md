@@ -97,8 +97,6 @@ marked; this section is the one that stands.
 source a fate on purge. These rows outlive what they name; fix each, then drop
 it from the test's known-gap list.
 
-- Page purge: `hot_memory.source_slug` and `synthesis_evidence.synthesis_slug`
-  stay, so a later page on the slug inherits observations and citations.
 - Source delete: `fact_withdrawals`, `ingest_log`, `slug_aliases`,
   `synth_contradictions` and `take_nudge_log` are neither foreign-keyed to
   `sources` nor counted by `sourceReferences`, so a new source created with a
