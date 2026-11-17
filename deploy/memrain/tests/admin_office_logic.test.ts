@@ -17,6 +17,7 @@ import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motio
 import { findPath } from "../admin/src/office/path.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
 import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
+import { CHARACTER_VARIANTS, MODEL_URLS, resolveModelFile, type ModelId } from "../admin/src/office/assets3d.ts";
 
 const NOW = 1_000_000;
 const empty: OfficeState = { characters: new Map(), recent: [] };
@@ -562,5 +563,29 @@ describe("lineFor", () => {
 
   it("describes apps and running workers as usual", () => {
     expect(lineFor(initialState(snap, NOW).characters.get(C("c1"))!)).toBe("Laptop is idle");
+  });
+});
+
+describe("3D office assets", () => {
+  const ids: ModelId[] = ["desk", "chair", "shelf", "cabinet", "plant", "sofa", "coffee_machine", "whiteboard", "board", "lamp", "rug", "character"];
+
+  it("has a model file for every model id", () => {
+    for (const id of ids) expect(MODEL_URLS[id]).toMatch(/\.(glb|gltf)$/);
+  });
+
+  it("offers at least six distinct people", () => {
+    expect(new Set(CHARACTER_VARIANTS).size).toBe(CHARACTER_VARIANTS.length);
+    expect(CHARACTER_VARIANTS.length).toBeGreaterThanOrEqual(6);
+    for (const url of CHARACTER_VARIANTS) expect(url).toMatch(/\.gltf$/);
+  });
+
+  it("never points at an inline data URL", () => {
+    for (const url of [...Object.values(MODEL_URLS), ...CHARACTER_VARIANTS]) expect(url).not.toContain("data:");
+  });
+
+  it("maps the side files a model names to their built URLs", () => {
+    expect(resolveModelFile("/admin/assets/colormap.png")).toMatch(/colormap.*\.png$/);
+    expect(resolveModelFile("/admin/assets/colormap.png")).not.toBe("/admin/assets/colormap.png");
+    expect(resolveModelFile("/admin/assets/other-Ab12.png")).toBe("/admin/assets/other-Ab12.png");
   });
 });
