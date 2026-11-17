@@ -30,9 +30,15 @@ const MIME: Record<string, string> = {
   ".bin": "application/octet-stream",
 };
 
-// Vite hashes every file under assets/, so a year-long cache is safe there;
-// index.html names those hashes and has to be refetched.
-const ASSET_CACHE = "public, max-age=31536000, immutable";
+// Only a name carrying Vite's content hash (`index-DP2joJTf.js`) can be cached
+// for a year; anything else must revalidate, and so must index.html, which
+// names the hashes.
+const HASHED_ASSET = /-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$/;
+const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
+
+function cacheControlFor(rel: string): string {
+  return rel.startsWith("assets/") && HASHED_ASSET.test(rel) ? IMMUTABLE_CACHE : "no-cache";
+}
 
 // The SPA ships its own scripts and styles and talks only to this origin.
 // React `style` props go through CSSOM, which style-src does not govern.
@@ -91,7 +97,7 @@ export async function serveAdminStatic(url: URL, distDir: string = DIST_DIR): Pr
     headers: {
       ...ADMIN_SECURITY_HEADERS,
       "Content-Type": mimeFor(filePath),
-      "Cache-Control": rel === "index.html" ? "no-cache" : ASSET_CACHE,
+      "Cache-Control": cacheControlFor(rel),
     },
   });
 }

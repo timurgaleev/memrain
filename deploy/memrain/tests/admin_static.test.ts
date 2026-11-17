@@ -76,6 +76,9 @@ describe("serveAdminStatic security headers", () => {
     writeFileSync(join(dist, "assets", "room.gltf"), "{}");
     writeFileSync(join(dist, "assets", "room.glb"), "glTF");
     writeFileSync(join(dist, "assets", "room.bin"), "bin");
+    writeFileSync(join(dist, "assets", "index-DP2joJTf.js"), "void 0;");
+    writeFileSync(join(dist, "assets", "characters-DP2joJTf.png"), "png");
+    writeFileSync(join(dist, "assets", "room-DP2joJTf.gltf"), "{}");
   });
   afterAll(() => rmSync(dist, { recursive: true, force: true }));
 
@@ -98,11 +101,16 @@ describe("serveAdminStatic security headers", () => {
     expect((await serve("/admin/assets/room.bin"))!.headers.get("Content-Type")).toBe("application/octet-stream");
   });
 
-  it("caches hashed assets for a year and keeps index.html revalidating", async () => {
-    for (const p of ["/admin/assets/app.js", "/admin/assets/app.css", "/admin/assets/room.glb"]) {
-      expect((await serve(p))!.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+  it("caches content-hashed assets for a year", async () => {
+    for (const p of ["index-DP2joJTf.js", "characters-DP2joJTf.png", "room-DP2joJTf.gltf"]) {
+      expect((await serve(`/admin/assets/${p}`))!.headers.get("Cache-Control")).toBe(
+        "public, max-age=31536000, immutable",
+      );
     }
-    for (const p of ["/admin", "/admin/office", "/admin/assets/missing-asset.js"]) {
+  });
+
+  it("makes unhashed assets and index.html revalidate", async () => {
+    for (const p of ["/admin/assets/app.js", "/admin/assets/room.glb", "/admin", "/admin/office", "/admin/assets/missing-asset.js"]) {
       expect((await serve(p))!.headers.get("Cache-Control")).toBe("no-cache");
     }
   });
