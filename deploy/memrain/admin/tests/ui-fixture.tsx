@@ -5,12 +5,14 @@ import { JobsWatchPage } from "../src/pages/JobsWatch.tsx";
 import { ConnectionsPage } from "../src/pages/Connections.tsx";
 import { AutonomyPage } from "../src/pages/Autonomy.tsx";
 import { ApprovalsPage } from "../src/pages/Approvals.tsx";
+import { OfficePage } from "../src/pages/Office.tsx";
 
 const VIEWS: Record<string, () => React.ReactElement> = {
   jobs: () => <JobsWatchPage />,
   connections: () => <ConnectionsPage />,
   autonomy: () => <AutonomyPage />,
   approvals: () => <ApprovalsPage />,
+  office: () => <OfficePage />,
 };
 
 const root = createRoot(document.getElementById("root")!);

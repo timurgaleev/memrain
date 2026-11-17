@@ -14,6 +14,7 @@ import { roomFor, type RoomId } from "../admin/src/office/rooms.ts";
 import { OFFICE_MAP, PROPS, TILE, officeLayout, seatFor } from "../admin/src/office/map.ts";
 import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
 import { findPath } from "../admin/src/office/path.ts";
+import { parseHash } from "../admin/src/lib/route.ts";
 
 const NOW = 1_000_000;
 const empty: OfficeState = { characters: new Map(), recent: [] };
@@ -345,5 +346,11 @@ describe("officeLayout", () => {
     expect(officeLayout(pw * 2, ph * 2)).toEqual({ scale: 2, ox: 0, oy: 0 });
     expect(officeLayout(pw * 2 + 100, ph * 3).scale).toBe(2);
     expect(officeLayout(pw, ph).scale).toBe(1);
+  });
+});
+
+describe("office route", () => {
+  it("opens the Office page from its hash", () => {
+    expect(parseHash("#office").name).toBe("office");
   });
 });

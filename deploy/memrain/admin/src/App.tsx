@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useId } from "react";
 import { LoginPage } from "./pages/Login";
 import { OverviewPage } from "./pages/Overview.tsx";
+import { OfficePage } from "./pages/Office.tsx";
 import { SearchPage } from "./pages/Search.tsx";
 import { PagesPage } from "./pages/Pages.tsx";
 import { PageViewPage } from "./pages/PageView.tsx";
@@ -46,6 +47,7 @@ const NAV: { section: string; items: { name: RouteName; label: string; also?: Ro
     section: "Brain",
     items: [
       { name: "overview", label: "Overview" },
+      { name: "office", label: "Office" },
       { name: "search", label: "Search" },
       { name: "pages", label: "Pages", also: ["page", "entity"] },
       { name: "graph", label: "Graph" },
@@ -378,6 +380,7 @@ export function App() {
           </div>
         )}
         {page === "overview" && <OverviewPage />}
+        {page === "office" && <OfficePage />}
         {page === "search" && <SearchPage query={route.param} />}
         {page === "pages" && <PagesPage />}
         {page === "page" && <PageViewPage slug={route.param} />}

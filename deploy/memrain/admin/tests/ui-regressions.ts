@@ -6,6 +6,21 @@ import { account, automation, automationRoute, MICROSOFT, OWNER, scenario } from
 const bundle = await Bun.build({ entrypoints: [join(import.meta.dir, "ui-fixture.tsx")], target: "browser" });
 if (!bundle.success) throw new AggregateError(bundle.logs, "UI fixture build failed");
 const script = await bundle.outputs[0]!.text();
+// Sprites come out as separate files next to the script, the way the CSP needs them.
+const assets = new Map(bundle.outputs.filter((o) => o.kind === "asset").map((o) => [`/${o.path.replace(/^\.\//, "")}`, o]));
+// The CSP the server sends with the real admin (src/http/admin-static.ts).
+const ADMIN_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; "
+  + "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+const OFFICE_SNAPSHOT = {
+  workers: [
+    { name: "worker", enabled: true, running: true },
+    { name: "connector_sync", enabled: true, running: false },
+    { name: "cycle", enabled: false, running: false },
+  ],
+  clients: [{ id: "client-1", display_name: "Laptop", last_seen: "2026-11-09T11:30:00Z" }],
+};
+const OFFICE_EVENT = { agent: "client-1", operation: "search", latency_ms: 4, status: "success", timestamp: "2026-11-09T12:00:00Z", kind: "tool", phase: "end" };
+let officeCalls = 0;
 let jobsCalls = 0;
 let jobsFail = false;
 const historyRequests: number[] = [];
@@ -15,6 +30,17 @@ const server = Bun.serve({
   async fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === "/fixture.js") return new Response(script, { headers: { "Content-Type": "text/javascript" } });
+    const asset = assets.get(path);
+    if (asset) return new Response(asset, { headers: { "Content-Type": asset.type } });
+    if (path === "/admin/api/office") {
+      officeCalls += 1;
+      return Response.json(OFFICE_SNAPSHOT);
+    }
+    if (path === "/admin/events") {
+      // One live event, then the stream stays open like the real feed.
+      const body = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(OFFICE_EVENT)}\n\n`)); } });
+      return new Response(body, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+    }
     const automated = await automationRoute(request);
     if (automated) return automated;
     if (path === "/admin/api/jobs/watch") {
@@ -42,7 +68,8 @@ const server = Bun.serve({
       }
       return Response.json({ ok: true, data });
     }
-    return new Response('<!doctype html><div id="root"></div><script type="module" src="/fixture.js"></script>', { headers: { "Content-Type": "text/html" } });
+    const csp: Record<string, string> = new URL(request.url).searchParams.get("view") === "office" ? { "Content-Security-Policy": ADMIN_CSP } : {};
+    return new Response('<!doctype html><div id="root"></div><script type="module" src="/fixture.js"></script>', { headers: { "Content-Type": "text/html", ...csp } });
   },
 });
 const browser = await chromium.launch();
@@ -397,6 +424,28 @@ try {
     await page.getByText("Approved: the document is released", { exact: false }).waitFor();
     assert.deepEqual(automation.posts, [{ path: "/admin/api/write-gate/holds/7/decide", body: { decision: "approve" } }]);
     assert.equal(await page.evaluate(() => (window as unknown as { pwned?: number }).pwned), undefined);
+  });
+  await check("Office draws under the admin CSP and lists who is working", "office", async (page) => {
+    const consoleErrors: string[] = [];
+    page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
+    // Listen from the first byte so a blocked sprite or inline style is caught.
+    await page.reload();
+    const list = page.locator(".office-list");
+    await list.getByText("Librarian is indexing pages", { exact: true }).waitFor();
+    await list.getByText("Night shift is off", { exact: true }).waitFor();
+    await list.getByText("Laptop is searching memory", { exact: true }).first().waitFor();
+    assert.equal(await page.locator("canvas").count(), 1);
+    assert.equal(await list.getAttribute("aria-live"), "polite");
+    await page.clock.runFor(1000);
+    const painted = await page.locator("canvas").evaluate((el) => {
+      const c = el as HTMLCanvasElement;
+      const data = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) return true;
+      return false;
+    });
+    assert.equal(painted, true, "the office canvas stays blank");
+    assert.equal(officeCalls > 0, true);
+    assert.deepEqual(consoleErrors, []);
   });
   await check("Approvals with nothing held says so", "approvals", async (page) => {
     automation.reset(scenario());
