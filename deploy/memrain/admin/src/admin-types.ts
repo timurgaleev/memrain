@@ -88,6 +88,11 @@ export interface AgentUsageRow {
   usage: { requests_today: number; total_requests: number; last_used_at: string | null };
 }
 
+export interface OfficeSnapshot {
+  workers: { name: string; enabled: boolean; running: boolean }[];
+  clients: { id: string; display_name: string; last_seen: string | null }[];
+}
+
 export interface JobsWatch {
   counts: { status: string; n: number }[];
   recent: {

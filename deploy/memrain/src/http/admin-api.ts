@@ -44,6 +44,7 @@ import { handleAdminEval } from "./admin-eval.ts";
 import { handleAdminApprovals } from "./admin-approvals.ts";
 import { handleAdminMembers } from "./admin-members.ts";
 import { handleAdminAutonomy } from "./admin-autonomy.ts";
+import { handleAdminOffice } from "./admin-office.ts";
 import { controlDaemon, daemonsStatus } from "../core/daemons/status.ts";
 import { OperationError } from "../core/operation-error.ts";
 import type { RateLimiter } from "../mcp/rate_limit.ts";
@@ -201,6 +202,10 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
   }
   if (p.startsWith("/admin/api/members") || p.startsWith("/admin/api/groups") || p === "/admin/api/grant-profiles") {
     const r = await handleAdminMembers(req, url, engine).catch((e: unknown) => serverError("members", e));
+    if (r) return r;
+  }
+  if (p === "/admin/api/office") {
+    const r = await handleAdminOffice(req, url, engine).catch((e: unknown) => serverError("office", e));
     if (r) return r;
   }
   if (p === "/admin/api/spend/paused" || p === "/admin/api/spend/resume") {
