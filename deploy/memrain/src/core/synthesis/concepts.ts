@@ -30,10 +30,16 @@ import { readAtomCompletion } from "./atoms-lifecycle.ts";
 
 const DEFAULT_MAX_CONCEPTS = 30;
 export const CONCEPT_PROMPT_VERSION = 1;
+/** Bump when deterministicNarrative's text changes: groups on the deterministic
+ *  narrative render once more, while model narratives keep their memo. */
+const DETERMINISTIC_NARRATIVE_VERSION = 2;
 
 function memberHash(atomIds: number[], modelId: string): string {
+  const version = modelId === "deterministic"
+    ? `${CONCEPT_PROMPT_VERSION}.${DETERMINISTIC_NARRATIVE_VERSION}`
+    : `${CONCEPT_PROMPT_VERSION}`;
   return createHash("sha256")
-    .update(`${[...atomIds].sort((a, b) => a - b).join(",")}|${CONCEPT_PROMPT_VERSION}|${modelId}`)
+    .update(`${[...atomIds].sort((a, b) => a - b).join(",")}|${version}|${modelId}`)
     .digest("hex");
 }
 /** Output side of the pre-call estimate: exactly the maxTokens this phase asks
@@ -155,11 +161,21 @@ function parseConcepts(raw: unknown): string[] {
     .map((c) => slugifyTitle(c)))];
 }
 
-/** Deterministic narrative for T3 groups (and LLM-failure fallback). */
+/** A concept's display name: the last slug segment, hyphens as spaces. */
+function conceptName(slug: string): string {
+  return (slug.split("/").pop() ?? slug).replace(/-/g, " ");
+}
+
+/**
+ * Deterministic narrative for T3 groups (and LLM-failure fallback). It names
+ * the concept: one atom carries several concept tags, so two concepts often
+ * share their atoms, and without the name their pages would be byte-identical
+ * and their search text would never say which concept it is.
+ */
 export function deterministicNarrative(group: ConceptGroup): string {
   const n = group.titles.length;
   const top = group.titles.slice(0, 5).map((t) => `- ${t}`).join("\n");
-  return `${group.tier} concept. ${n} atom${n === 1 ? "" : "s"} reference this.\nTop mentions:\n${top}`;
+  return `${group.tier} concept "${conceptName(group.slug)}". ${n} atom${n === 1 ? "" : "s"} reference this.\nTop mentions:\n${top}`;
 }
 
 export async function synthesizeConceptsPhase(
@@ -301,7 +317,7 @@ export async function synthesizeConceptsPhase(
       }
     }
 
-    let title = (group.slug.split("/").pop() ?? group.slug).replace(/-/g, " ");
+    let title = conceptName(group.slug);
     try {
       // The narrative is model output over atom text, which can carry a credential.
       ({ title, narrative } = await guardFields(engine, group.slug, null, "concept", { title, narrative }));
