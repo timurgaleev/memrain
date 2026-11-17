@@ -42,9 +42,17 @@ interface ManifestEntry {
 
 const hashedFilesByDist = new Map<string, Set<string>>();
 
+// A missing or unreadable manifest is remembered too: the dist does not change under a
+// running server, so trying again on every request would only cost a disk read.
 async function hashedFiles(distDir: string): Promise<Set<string>> {
   const known = hashedFilesByDist.get(distDir);
   if (known) return known;
+  const files = await readManifest(distDir);
+  hashedFilesByDist.set(distDir, files);
+  return files;
+}
+
+async function readManifest(distDir: string): Promise<Set<string>> {
   const manifest = Bun.file(resolve(distDir, ".vite", "manifest.json"));
   if (!(await manifest.exists())) return new Set();
   const files = new Set<string>();
@@ -59,7 +67,6 @@ async function hashedFiles(distDir: string): Promise<Set<string>> {
   } catch {
     return new Set();
   }
-  hashedFilesByDist.set(distDir, files);
   return files;
 }
 

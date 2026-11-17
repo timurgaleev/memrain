@@ -140,6 +140,24 @@ describe("serveAdminStatic security headers", () => {
     }
   });
 
+  it("reads a broken manifest once, not on every request", async () => {
+    const broken = mkdtempSync(join(tmpdir(), "admin-dist-broken-"));
+    try {
+      mkdirSync(join(broken, "assets"));
+      mkdirSync(join(broken, ".vite"));
+      writeFileSync(join(broken, "index.html"), "<div id=\"root\"></div>");
+      writeFileSync(join(broken, "assets", "index-abc.js"), "void 0;");
+      writeFileSync(join(broken, ".vite", "manifest.json"), "{ not json");
+      const get = () => serveAdminStatic(new URL("http://h/admin/assets/index-abc.js"), broken);
+      expect((await get())!.headers.get("Cache-Control")).toBe("no-cache");
+      // Fixing the file on disk proves the failed read was kept rather than retried.
+      writeFileSync(join(broken, ".vite", "manifest.json"), JSON.stringify({ "index.html": { file: "assets/index-abc.js" } }));
+      expect((await get())!.headers.get("Cache-Control")).toBe("no-cache");
+    } finally {
+      rmSync(broken, { recursive: true, force: true });
+    }
+  });
+
   it("allows passkey ceremonies in this document only, and leaves the CSP as it was", async () => {
     for (const p of ["/admin/", "/admin/assets/app.js"]) {
       const r = await serve(p);

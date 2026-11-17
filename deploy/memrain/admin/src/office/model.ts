@@ -37,6 +37,14 @@ const NEW_APP_LABEL = "New app";
 // A worker this page has no friendly name for; its internal name never reaches the screen.
 const WORKER_FALLBACK_LABEL = "Background worker";
 
+// App names come from whoever registered the app; a long one would cover the office.
+const MAX_LABEL = 40;
+
+function appLabel(name: string): string {
+  const chars = [...name];
+  return chars.length > MAX_LABEL ? `${chars.slice(0, MAX_LABEL - 1).join("")}…` : name;
+}
+
 function workerLabel(name: string): string {
   return WORKER_LABEL[name] ?? WORKER_FALLBACK_LABEL;
 }
@@ -57,7 +65,7 @@ export function namesFromSnapshot(s: OfficeSnapshot): Map<string, string> {
     const key = characterKey("worker", w.name);
     if (!names.has(key)) names.set(key, WORKER_FALLBACK_LABEL);
   }
-  for (const c of s.clients) names.set(characterKey("client", c.id), c.display_name);
+  for (const c of s.clients) names.set(characterKey("client", c.id), appLabel(c.display_name));
   return names;
 }
 
@@ -87,7 +95,7 @@ function clientCharacter(c: OfficeSnapshot["clients"][number], now: number): Cha
   return {
     id: characterKey("client", c.id),
     agent: c.id,
-    label: c.display_name,
+    label: appLabel(c.display_name),
     kind: "client",
     enabled: true,
     room: "break_room",
@@ -157,7 +165,7 @@ export function applySnapshot(
     const key = characterKey("client", cl.id);
     const c = characters.get(key);
     if (c) {
-      characters.set(key, { ...c, label: cl.display_name });
+      characters.set(key, { ...c, label: appLabel(cl.display_name) });
     } else {
       const client = clientCharacter(cl, now);
       if (client) characters.set(key, client);
@@ -268,12 +276,10 @@ export function labelFor(c: Character): string {
   return c.room === "break_room" ? c.label : `${c.label} · ${ROOM_PHRASE[c.room]}`;
 }
 
-// How many people models the 3D office ships with.
-const LOOKS = 6;
-
-// A figure keeps the same look for as long as its id stays the same.
+// A figure keeps the same look for as long as its id stays the same. The scene picks
+// the look by this number modulo the people models it ships, so the count lives there.
 export function variantFor(id: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193);
-  return (h >>> 0) % LOOKS;
+  return h >>> 0;
 }

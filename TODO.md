@@ -91,6 +91,14 @@ marked; this section is the one that stands.
 - Unauthenticated local calls (agent `internal`) always show as "New app".
 - The Office snapshot runs one target query per daemon on every 30 s poll, for
   each open tab.
+- Wire `admin/scripts/check-office-chunks.ts` and `bun run test:ui` into CI or
+  a make target; today both run only by hand.
+- Split the stage logic out of `admin/src/pages/Office.tsx` into
+  `office/stage.ts`; the page file is about 700 lines.
+- Busy name tags crowd each other at phone width; consider hiding idle tags
+  below 600 px.
+- The whiteboard model is a stand-in that reads as a framed mirror.
+- Measure the Office page's CPU and GPU use on a real laptop GPU after deploy.
 
 ## Follow-ups from the meeting-credential review (2026-11-17)
 

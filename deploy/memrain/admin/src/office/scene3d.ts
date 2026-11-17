@@ -43,6 +43,7 @@ import { OFFICE_MAP, PROPS, WALL_DECOR } from "./map.ts";
 import type { targetFor } from "./ambient.ts";
 import { buildPlacements, buildSeats, floorBoxes, SPEC, tileKey, WALL_H, WALL_T, wallBoxes, type BoxItem, type Furniture, type Placement, type Seat } from "./layout3d.ts";
 import { animPose, clipFor, nextClips, syncCharacters, type ClipName } from "./anim.ts";
+import { orbitAwake, shouldDraw } from "./pacing.ts";
 import { WORLD_TILE } from "./world.ts";
 import type { Tile } from "./path.ts";
 
@@ -74,8 +75,11 @@ export interface OfficeScene {
   setOrbitDrag(dx: number): void;
   dispose(): void;
   onContextLost(cb: () => void): void;
-  // True while the view moves on its own (orbit, clips), so screen positions change every frame.
-  isAnimating(): boolean;
+  // Called right after each drawn frame, so anything laid over the canvas can follow it.
+  onFrame(cb: () => void): void;
+  // The office changed or someone touched the view: keeps the camera's slow turn going.
+  noteActivity(): void;
+  setReducedMotion(on: boolean): void;
 }
 
 const W = OFFICE_MAP.width;
@@ -95,7 +99,6 @@ const AUTO_ORBIT = 15 * DEG;
 const AUTO_PERIOD_S = 48;
 const DRAG_LIMIT = 30 * DEG;
 const DRAG_RAD_PER_PX = 0.006;
-const IDLE_FPS = 30;
 const NO_CHANGE: { add: string[]; remove: string[] } = { add: [], remove: [] };
 const FADE_S = 0.3;
 
@@ -232,7 +235,8 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
   }
 }
 
-async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, reduced: boolean): Promise<OfficeScene> {
+async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, reducedAtStart: boolean): Promise<OfficeScene> {
+  let reduced = reducedAtStart;
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = NeutralToneMapping;
   renderer.toneMappingExposure = 1.05;
@@ -484,6 +488,7 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
   const target = new Vector3(0, 0.2, 0);
   let cssW = 1;
   let cssH = 1;
+  let orbitClock = 0;
   let autoAngle = 0;
   let dragAngle = 0;
   let dragAt = -Infinity;
@@ -528,11 +533,13 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
     camera.updateProjectionMatrix();
   }
 
-  // Rendering is on demand. With motion allowed the loop runs while the canvas is on
-  // screen: full frame rate while someone walks, works or the view is dragged, 30 fps
-  // otherwise. With reduced motion nothing animates and a frame is drawn per change.
+  // Rendering is on demand and never above 30 fps, except for a moment after a drag.
+  // With motion allowed the loop runs while the canvas is on screen; with reduced
+  // motion nothing animates and a frame is drawn per change.
   let raf = 0;
-  let last = 0;
+  let drawnAt: number | null = null;
+  let activityAt = performance.now();
+  let frameCb: (() => void) | null = null;
   let clock = 0;
   let needsRender = true;
   let disposed = false;
@@ -548,16 +555,14 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
     if (!raf && running()) raf = requestAnimationFrame(tick);
   };
 
-  function busyOrMoving(): boolean {
-    for (const f of figures.values()) if (f.state.moving || f.state.busy) return true;
-    return performance.now() - dragAt < 600;
-  }
-
   const scratch = new Vector3();
 
-  function step(dt: number): void {
+  function step(dt: number, t: number): void {
     clock += dt;
-    if (!reduced) autoAngle = AUTO_ORBIT * Math.sin((TAU * clock) / AUTO_PERIOD_S);
+    if (!reduced && orbitAwake(t, activityAt)) {
+      orbitClock += dt;
+      autoAngle = AUTO_ORBIT * Math.sin((TAU * orbitClock) / AUTO_PERIOD_S);
+    }
     aim(BASE_AZIMUTH + autoAngle + dragAngle);
     const pulse = reduced ? 0.85 : 0.7 + 0.25 * Math.sin(clock * 3.2);
     busyMat.opacity = pulse;
@@ -570,7 +575,8 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
       const seat = seatOf(c);
       play(f, clipFor(c.pose, c.moving, seat !== undefined, now - f.since, f.phase), reduced || !f.placed ? 0 : FADE_S);
       setGhost(f, !c.enabled);
-      f.ring.visible = c.enabled && (c.busy || c.error);
+      // A switched-off worker can still be finishing a job, and that shows.
+      f.ring.visible = c.busy || c.error;
       f.ring.material = c.error ? errorMat : busyMat;
       f.ring.position.set(c.worldX, 0.012, c.worldZ);
 
@@ -596,22 +602,23 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
 
   function tick(t: number): void {
     raf = 0;
-    if (!running()) return;
-    if (!reduced && !needsRender && last && !busyOrMoving() && t - last < 1000 / IDLE_FPS - 2) {
+    if (!running() || (reduced && !needsRender)) return;
+    if (!shouldDraw(drawnAt, t, dragAt)) {
       schedule();
       return;
     }
-    const dt = last ? Math.min(0.1, (t - last) / 1000) : 0;
-    last = t;
-    step(dt);
+    const dt = drawnAt === null ? 0 : Math.min(0.1, (t - drawnAt) / 1000);
+    drawnAt = t;
+    step(dt, t);
     renderer.render(scene, camera);
     needsRender = false;
     if (!reduced) schedule();
+    frameCb?.();
   }
 
   const onVisibility = () => {
     pageVisible = document.visibilityState !== "hidden";
-    last = 0;
+    drawnAt = null;
     if (pageVisible) {
       needsRender = true;
       schedule();
@@ -624,7 +631,7 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
   document.addEventListener("visibilitychange", onVisibility);
   const observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver((entries) => {
     onScreen = entries.some((e) => e.isIntersecting);
-    last = 0;
+    drawnAt = null;
     if (onScreen) {
       needsRender = true;
       schedule();
@@ -725,12 +732,27 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
       if (disposed || !Number.isFinite(dx)) return;
       dragAngle = Math.max(-DRAG_LIMIT, Math.min(DRAG_LIMIT, dragAngle + dx * DRAG_RAD_PER_PX));
       dragAt = performance.now();
+      activityAt = dragAt;
       if (reduced) aim(BASE_AZIMUTH + dragAngle);
       needsRender = true;
       schedule();
     },
-    isAnimating() {
-      return !reduced && running();
+    onFrame(cb) {
+      frameCb = cb;
+    },
+    noteActivity() {
+      activityAt = performance.now();
+    },
+    setReducedMotion(on) {
+      if (disposed || on === reduced) return;
+      reduced = on;
+      // Back to the base angle, from where the slow turn starts again smoothly.
+      orbitClock = 0;
+      autoAngle = 0;
+      aim(BASE_AZIMUTH + dragAngle);
+      drawnAt = null;
+      needsRender = true;
+      schedule();
     },
     onContextLost(cb) {
       lostCb = cb;

@@ -35,9 +35,6 @@ const DRAG_PX = 4;
 const ROOM_LABEL_Y = 0.6;
 // Idle name tags in a crowd stack upward this far at most, then step aside.
 const MAX_LABEL_LIFT = 36;
-// After a change the scene draws on its next frame, which can come after this page's
-// own frame; keep placing tags until it surely has.
-const SETTLE_FRAMES = 3;
 const NO_WEBGL = "Your browser cannot show the 3D office. The list shows the same activity.";
 
 type Feed = "connecting" | "connected" | "disconnected";
@@ -46,6 +43,8 @@ interface Store {
   state: OfficeState | null;
   // When the first snapshot landed; clients that arrive later walk in from reception.
   loadedAt: number;
+  // When the office last had news: a live event, or a snapshot unlike the one before.
+  newsAt: number;
   // Set by the 3D view: wakes its frame loop when the state changes.
   wake: (() => void) | null;
 }
@@ -55,7 +54,7 @@ function byLabel(a: Character, b: Character): number {
 }
 
 function useOffice() {
-  const store = useRef<Store>({ state: null, loadedAt: 0, wake: null });
+  const store = useRef<Store>({ state: null, loadedAt: 0, newsAt: 0, wake: null });
   const [view, setView] = useState<OfficeState | null>(null);
   const [feed, setFeed] = useState<Feed>("connecting");
   const [error, setError] = useState("");
@@ -75,6 +74,7 @@ function useOffice() {
     let again = false;
     let lastLoad = 0;
     let lastUnknownLoad = -Infinity;
+    let lastSnapshot = "";
     let retry: ReturnType<typeof setTimeout> | undefined;
     let retryMs = FIRST_RETRY_MS;
 
@@ -90,6 +90,11 @@ function useOffice() {
       try {
         const s = (await api.office(ctrl.signal)) as OfficeSnapshot;
         const now = Date.now();
+        const seen = JSON.stringify(s);
+        if (seen !== lastSnapshot) {
+          lastSnapshot = seen;
+          store.current.newsAt = now;
+        }
         names = namesFromSnapshot(s);
         const st = store.current.state;
         if (st) {
@@ -150,6 +155,7 @@ function useOffice() {
       }
       const next = applyEvent(st, e, Date.now(), names);
       if (next === st) return;
+      store.current.newsAt = Date.now();
       commit(next);
       // A new app or worker: fetch its proper name, but not on every call it makes.
       if (!names.has(eventKey(e)) && Date.now() - lastUnknownLoad >= POLL_MS) {
@@ -175,7 +181,7 @@ interface Overlay {
   labels: Map<string, HTMLDivElement>;
   rooms: (HTMLDivElement | null)[];
   tip: { id: string | null; el: HTMLDivElement | null };
-  // Asks the frame loop to place the overlay again: a resize, a drag, a new tag or tooltip.
+  // Asks the frame loop to place the overlay again: a resize, a new tag or tooltip.
   poke: () => void;
 }
 
@@ -365,7 +371,9 @@ function useOfficeScene(
     canvas.setAttribute("role", "img");
     canvas.setAttribute("aria-label", "3D office with a figure for each app and background worker");
     host.append(canvas);
-    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    const motionQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)") ?? null;
+    let reducedMotion = motionQuery?.matches ?? false;
+    let motionChanged = false;
     const size: Size = { w: box.clientWidth, h: box.clientHeight };
     let alive = true;
     let scene: OfficeScene | null = null;
@@ -376,11 +384,12 @@ function useOfficeScene(
     const figs: Figures = { poses: new Map(), byId: new Map(), chars: [] };
     let seats = new Map<string, Seat>();
     let seenState: OfficeState | null = null;
+    let seenNews = 0;
     let amb = emptyAmbient();
     let plannedAt = -Infinity;
     let moving = false;
     let nextExpiry = Infinity;
-    let settle = SETTLE_FRAMES;
+    let placeNow = true;
     let onScreen = true;
     let io: IntersectionObserver | null = null;
     const layout: TagLayout = { sizes: new Map(), tags: new Map(), list: [] };
@@ -392,7 +401,7 @@ function useOfficeScene(
       raf = requestAnimationFrame(frame);
     }
     // Only work when something can have changed: a new state or idle plan, a figure
-    // walking, a busy or error flag running out, or the view moving.
+    // walking, or a busy or error flag running out. Tags follow the scene's own frames.
     function frame(t: number): void {
       raf = 0;
       if (!alive || !scene || document.hidden) return;
@@ -400,13 +409,20 @@ function useOfficeScene(
       last = t;
       const st = store.current.state;
       const now = Date.now();
-      let dirty = false;
       if (st) {
-        let replan = st !== seenState;
-        if (replan) {
+        let replan = st !== seenState || motionChanged;
+        if (st !== seenState) {
           seats = assignSeats(seats, st.characters.values());
           seenState = st;
         }
+        // The 30 s poll alone is no news, so an unchanged office lets the camera rest.
+        if (store.current.newsAt !== seenNews) {
+          seenNews = store.current.newsAt;
+          scene.noteActivity();
+        }
+        // Reduced motion switched on: everyone drops what they idle at and goes to their spot.
+        if (motionChanged && reducedMotion) amb = emptyAmbient();
+        motionChanged = false;
         if (!reducedMotion && now - plannedAt >= PLAN_MS) {
           const next = planAmbient(st, amb, now, Math.random, { reducedMotion });
           plannedAt = now;
@@ -417,33 +433,32 @@ function useOfficeScene(
           const r = advance(figs, st, seats, amb, dt, now, store.current.loadedAt, reducedMotion);
           moving = r.moving;
           nextExpiry = r.nextExpiry;
-          if (r.changed) {
-            scene.update(figs.chars, now);
-            dirty = true;
-          }
+          if (r.changed) scene.update(figs.chars, now);
         }
       }
-      if (dirty) settle = SETTLE_FRAMES;
-      // Off screen the overlay waits; coming back on screen starts a fresh settle pass.
-      const animating = scene.isAnimating();
-      const placing = onScreen && (animating || settle > 0);
-      if (placing) {
-        placeOverlay(scene, overlay.current, layout, st, now, size);
-        settle = Math.max(0, settle - 1);
-      }
-      if (animating || moving || placing) {
+      // A new tag or tooltip has no scene frame to wait for. Off screen the overlay waits.
+      if (placeNow && onScreen) placeOverlay(scene, overlay.current, layout, st, now, size);
+      placeNow = false;
+      if (moving) {
         raf = requestAnimationFrame(frame);
         return;
       }
-      // Asleep: a state change, resize, drag or tooltip wakes the loop; so do the
+      // Asleep: a state change, resize, new tag or tooltip wakes the loop; so do the
       // next idle plan and the next busy or error flag running out.
       const until = Math.min(reducedMotion ? Infinity : PLAN_MS, nextExpiry - now);
       if (Number.isFinite(until)) sleep = setTimeout(wake, Math.max(0, until) + 1);
     }
     const poke = () => {
-      settle = SETTLE_FRAMES;
+      placeNow = true;
       wake();
     };
+    const onMotion = (e: MediaQueryListEvent) => {
+      reducedMotion = e.matches;
+      motionChanged = true;
+      scene?.setReducedMotion(reducedMotion);
+      wake();
+    };
+    motionQuery?.addEventListener("change", onMotion);
     store.current.wake = wake;
     overlay.current.poke = poke;
     const onVisible = () => {
@@ -468,6 +483,12 @@ function useOfficeScene(
         scene = s;
         sceneRef.current = s;
         s.onContextLost(fail);
+        // The preference may have changed while the models loaded.
+        s.setReducedMotion(reducedMotion);
+        // Tags move only when the scene has drawn a new frame, and in the same frame.
+        s.onFrame(() => {
+          if (onScreen) placeOverlay(s, overlay.current, layout, store.current.state, Date.now(), size);
+        });
         const resize = () => {
           size.w = box.clientWidth;
           size.h = box.clientHeight;
@@ -479,7 +500,6 @@ function useOfficeScene(
         ro = new ResizeObserver(resize);
         ro.observe(box);
         resize();
-        // Made after the scene's own observer, so the scene redraws before this page places tags.
         io = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver((entries) => {
           onScreen = entries.some((e) => e.isIntersecting);
           if (onScreen) poke();
@@ -499,6 +519,7 @@ function useOfficeScene(
       overlay.current.poke = () => {};
       ro?.disconnect();
       io?.disconnect();
+      motionQuery?.removeEventListener("change", onMotion);
       document.removeEventListener("visibilitychange", onVisible);
       scene?.dispose();
       sceneRef.current = null;
@@ -567,6 +588,24 @@ function ActivityList({ view }: { view: OfficeState | null }) {
 }
 
 function FigureLabels({ view, overlay }: { view: OfficeState | null; overlay: RefObject<Overlay> }) {
+  // One ref callback per figure for its whole life; a new one each render would detach
+  // and attach every tag on every state tick.
+  const refs = useRef(new Map<string, (el: HTMLDivElement | null) => void>());
+  const refFor = (id: string) => {
+    let cb = refs.current.get(id);
+    if (!cb) {
+      cb = (el) => {
+        if (el) overlay.current.labels.set(id, el);
+        else {
+          overlay.current.labels.delete(id);
+          refs.current.delete(id);
+        }
+        overlay.current.poke();
+      };
+      refs.current.set(id, cb);
+    }
+    return cb;
+  };
   if (!view) return null;
   return (
     <>
@@ -574,11 +613,7 @@ function FigureLabels({ view, overlay }: { view: OfficeState | null; overlay: Re
         <div
           key={c.id}
           className={`office-label${c.room !== "break_room" ? " office-label-busy" : ""}${c.enabled ? "" : " office-label-off"}`}
-          ref={(el) => {
-            if (el) overlay.current.labels.set(c.id, el);
-            else overlay.current.labels.delete(c.id);
-            overlay.current.poke();
-          }}
+          ref={refFor(c.id)}
         >
           {labelFor(c)}
           <span className="office-badge">!</span>
@@ -608,6 +643,7 @@ export function OfficePage() {
   const onDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!sceneRef.current || (e.pointerType === "mouse" && e.button !== 0)) return;
     drag.current = { pointer: e.pointerId, startX: e.clientX, lastX: e.clientX, moved: false };
+    sceneRef.current.noteActivity();
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onMove = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -619,7 +655,6 @@ export function OfficePage() {
       }
       if (d.moved) {
         sceneRef.current?.setOrbitDrag(e.clientX - d.lastX);
-        overlay.current.poke();
         d.lastX = e.clientX;
       }
       return;
@@ -645,9 +680,9 @@ export function OfficePage() {
     <>
       <h1 className="page-title">Office</h1>
       <PageIntro>
-        A live view of who is working in this brain right now. Each figure is an app connected to it or one of its
-        background workers; they walk to the room that matches what they are doing. Only the kind of work is shown,
-        never what is in your brain.
+        A live view of this brain. Each figure is an app connected to it or one of its background workers. They walk
+        to the room that matches their real work and take a break in between. Only the kind of work is shown, never
+        what is in your brain.
       </PageIntro>
       <div className="office-status" role="status">
         <span className="strip-item">
