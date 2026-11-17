@@ -77,6 +77,11 @@ interface Pattern {
 
 /** Documentation passwords: `<password>`, `${VAR}`, `$VAR`, all `*`, all `x`. */
 const PLACEHOLDER = /^(?:<[^<>]*>|\$\{[^{}]*\}|\$[A-Z_]\w*|\*+|x+|%s)$/i;
+/**
+ * A database URL's placeholder: only an upper-case `$VAR` names a variable, so
+ * `$Summer2024` is a password; an all-`x` value is one too.
+ */
+const DB_PLACEHOLDER = /^(?:<[^<>]*>|\$\{[^{}]*\}|\$[A-Z_][A-Z0-9_]*|\*+|%s)$/;
 
 /** The password of a `scheme://user:password@` span (the user never holds a `:`). */
 function urlPassword(span: string): string {
@@ -270,7 +275,7 @@ const SHAPE_PATTERNS: Pattern[] = [
   {
     kind: "database-url",
     regex: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqp|mssql):\/\/[^\s:/@"']{0,128}:[^\s"']{1,256}@/g,
-    validate: (span) => !PLACEHOLDER.test(urlPassword(span)),
+    validate: (span) => !DB_PLACEHOLDER.test(urlPassword(span)),
     echo: { min: 8, pick: urlPassword },
   },
   // The password stops at `/`, `?` and `#` too (RFC 3986 escapes them in

@@ -94,6 +94,15 @@ describe("vendor prefixes", () => {
     const real = scanSecrets(`${"postgres"}://app:p@db.internal/app`);
     expect(real.findings.map((f) => f.kind)).toEqual(["database-url"]);
   });
+
+  it("still redacts a real database password that starts with `$` or is all `x`", () => {
+    for (const url of [
+      `${"postgres"}://app:$Up3rS3cret2024@db.internal:5432/app`,
+      `${"mysql"}://root:$rootpw@10.0.0.5/app`,
+      `${"redis"}://:$Redis_Pass_77@cache:6379/0`,
+      `${"postgres"}://app:XXXXXXXX@db/app`,
+    ]) expect([url, scanSecrets(url).findings.map((f) => f.kind)]).toEqual([url, ["database-url"]]);
+  });
 });
 
 describe("url credentials", () => {
