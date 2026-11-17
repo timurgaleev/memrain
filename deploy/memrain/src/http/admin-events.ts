@@ -11,6 +11,8 @@
  * path.
  */
 import { isKnownTool } from "../mcp/param-redaction.ts";
+import { isKnownJobKind } from "../core/jobs/handlers.ts";
+import { getDaemon } from "../core/daemons/registry.ts";
 
 export interface AdminEvent {
   agent: string;
@@ -103,9 +105,12 @@ export function publishToolCallEvent(e: {
   }
 }
 
+const JOB_WORKER_NAMES = new Set(["worker", "assistant", "cycle"]);
+
 /**
  * Publish a background-job or cycle event. Same redaction stance as tool
- * calls: worker and job kind names only, never payloads. Best-effort.
+ * calls: only registered job kinds and worker names go out, anything else
+ * becomes a fixed placeholder. Best-effort.
  */
 export function publishJobEvent(e: {
   worker: string;
@@ -116,8 +121,8 @@ export function publishJobEvent(e: {
 }): void {
   try {
     adminEventBus.publish({
-      agent: e.worker,
-      operation: e.kind,
+      agent: JOB_WORKER_NAMES.has(e.worker) || getDaemon(e.worker) ? e.worker : "worker",
+      operation: isKnownJobKind(e.kind) || e.kind === "cycle" ? e.kind : "other",
       latency_ms: Math.round(e.latencyMs ?? 0),
       status: e.phase === "start" ? "running" : e.ok ? "success" : "error",
       timestamp: new Date().toISOString(),

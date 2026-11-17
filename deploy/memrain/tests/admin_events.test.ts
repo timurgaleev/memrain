@@ -75,6 +75,16 @@ describe("admin SSE feed", () => {
     await reader.cancel();
   });
 
+  it("replaces an unregistered job kind and worker with placeholders", async () => {
+    const { reader, next } = await openFeed();
+    publishJobEvent({ worker: "source-id-123", kind: "daemon:connector_sync:me-mail:secret-window", phase: "start" });
+    const evt = await next();
+    expect(evt.operation).toBe("other");
+    expect(evt.agent).toBe("worker");
+    expect(JSON.stringify(evt)).not.toContain("secret-window");
+    await reader.cancel();
+  });
+
   it("publishes a job end event with error status", async () => {
     const { reader, next } = await openFeed();
     publishJobEvent({ worker: "w", kind: "k", phase: "end", ok: false, latencyMs: 12.6 });
