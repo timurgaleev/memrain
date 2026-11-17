@@ -158,7 +158,7 @@ try {
     await page.route("https://accounts.example.test/**", (r) => r.fulfill({ contentType: "text/html", body: "<p>Provider consent page</p>" }));
     await page.getByRole("button", { name: `Reconnect ${OWNER}` }).click();
     await page.waitForURL("https://accounts.example.test/**");
-    assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/google/start", body: { source_id: "cal", services: ["calendar"] } }]);
+    assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/google/start", body: { source_id: "cal", services: ["calendar"], account_id: account().id } }]);
   });
   await check("An API-key account that needs a reconnect is fixed by entering its key again, not by an OAuth start", "connections", async (page) => {
     const fireflies = { id: "fireflies", services: ["fireflies"], service_kinds: { fireflies: ["meeting"] }, auth: "api_key", callback_uri: null, tenant_default: null, can_revoke: false };
@@ -291,7 +291,7 @@ try {
     await page.route("https://accounts.example.test/**", (r) => r.fulfill({ contentType: "text/html", body: "<p>Provider consent page</p>" }));
     await page.getByRole("button", { name: `Reconnect now: ${OWNER}` }).click();
     await page.waitForURL("https://accounts.example.test/**");
-    assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/google/start", body: { source_id: "cal", services: ["calendar"] } }]);
+    assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/google/start", body: { source_id: "cal", services: ["calendar"], account_id: account().id } }]);
   });
   await check("A reconnect the Testing-mode limit caused says so", "connections", async (page) => {
     automation.reset(scenario({ accounts: [account({
@@ -379,7 +379,7 @@ try {
     await page.route("https://accounts.example.test/**", (r) => r.fulfill({ contentType: "text/html", body: "<p>Provider consent page</p>" }));
     await page.getByRole("button", { name: `Reconnect now: ${OWNER}` }).click();
     await page.waitForURL("https://accounts.example.test/**");
-    assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/microsoft/start", body: { source_id: "me-mail", services: ["outlook_mail"] } }]);
+    assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/microsoft/start", body: { source_id: "me-mail", services: ["outlook_mail"], account_id: idle.id } }]);
   });
   await check("A syncing Microsoft account renews itself and shows no access deadline", "connections", async (page) => {
     automation.reset(scenario({ providers: [MICROSOFT], sources: [{ id: "me-mail", kind: "mailbox" }],
