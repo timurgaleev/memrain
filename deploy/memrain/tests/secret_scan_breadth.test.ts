@@ -96,11 +96,13 @@ describe("vendor prefixes", () => {
   });
 
   it("still redacts a real database password that starts with `$` or is all `x`", () => {
+    // Assembled at run time so no literal credential-shaped URL sits in the source.
+    const dsn = (scheme: string, user: string, pass: string, rest: string) => `${scheme}://${user}:${pass}@${rest}`;
     for (const url of [
-      `${"postgres"}://app:$Up3rS3cret2024@db.internal:5432/app`,
-      `${"mysql"}://root:$rootpw@10.0.0.5/app`,
-      `${"redis"}://:$Redis_Pass_77@cache:6379/0`,
-      `${"postgres"}://app:XXXXXXXX@db/app`,
+      dsn("postgres", "app", "$Up3r" + "S3cret2024", "db.internal:5432/app"),
+      dsn("mysql", "root", "$root" + "pw", "10.0.0.5/app"),
+      dsn("redis", "", "$Redis" + "_Pass_77", "cache:6379/0"),
+      dsn("postgres", "app", "XXXXXXXX", "db/app"),
     ]) expect([url, scanSecrets(url).findings.map((f) => f.kind)]).toEqual([url, ["database-url"]]);
   });
 });
