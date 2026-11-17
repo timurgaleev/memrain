@@ -11,6 +11,7 @@ export interface Pose {
 }
 
 const TILES_PER_SECOND = 3;
+export const MAX_STEP_MS = 250;
 
 function route(pose: Pose, target: Tile): Tile[] {
   const start = { x: Math.round(pose.x), y: Math.round(pose.y) };
@@ -41,11 +42,15 @@ export function stepCharacter(
 
   const last = pose.path[pose.path.length - 1];
   const path = last && last.x === target.x && last.y === target.y ? pose.path : route(pose, target);
-  // Nowhere to walk (e.g. the map changed under a character): place it rather than freeze it.
-  if (path.length === 0) return arrived;
+  if (path.length === 0) {
+    // No route to a real floor tile: place the character rather than freeze it.
+    // A wall or furniture is never a valid spot, so stay where we are.
+    return OFFICE_MAP.walkable(target.x, target.y) ? arrived : pose;
+  }
 
   let { x, y, facing } = pose;
-  let budget = (TILES_PER_SECOND * Math.max(0, dtMs)) / 1000;
+  // A hidden tab resumes with one huge dt; walk on from there instead of skipping to the end.
+  let budget = (TILES_PER_SECOND * Math.min(MAX_STEP_MS, Math.max(0, dtMs))) / 1000;
   let moved = 0;
   let i = 0;
   while (budget > 0 && i < path.length) {

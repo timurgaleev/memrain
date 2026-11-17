@@ -18554,12 +18554,13 @@ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 ```
 
-## Kenney Roguelike Indoor pack
+## Kenney Roguelike Indoors
 
 License: CC0-1.0
 
 Used for `deploy/memrain/admin/src/assets/office/indoor.png` (the office
 furniture tiles), unmodified. Source: https://kenney.nl/assets/roguelike-indoors
+(the pack's License.txt calls it "Roguelike Indoor pack").
 
 ```
 Roguelike Indoor pack
@@ -18582,7 +18583,7 @@ Request:  http://request.kenney.nl
 Follow on Twitter for updates: @KenneyNL (www.twitter.com/kenneynl)
 ```
 
-## Kenney Roguelike Characters pack 2.0
+## Kenney Roguelike Characters 2.0
 
 License: CC0-1.0
 

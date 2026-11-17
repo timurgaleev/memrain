@@ -220,10 +220,12 @@ export function seatFor(room: RoomId, index: number): Tile {
   return seats[i]!;
 }
 
-// Largest whole-number scale that fits the map, centred in a w×h canvas.
+// Largest whole-number scale that fits the map, centred in a w×h canvas. A canvas
+// smaller than the map gets a fractional scale so the whole office stays visible.
 export function officeLayout(w: number, h: number): { scale: number; ox: number; oy: number } {
   const pw = W * TILE;
   const ph = H * TILE;
-  const scale = Math.max(1, Math.floor(Math.min(w / pw, h / ph)));
+  const fit = Math.min(w / pw, h / ph);
+  const scale = fit >= 1 ? Math.floor(fit) : Math.max(fit, 0.01);
   return { scale, ox: Math.floor((w - pw * scale) / 2), oy: Math.floor((h - ph * scale) / 2) };
 }

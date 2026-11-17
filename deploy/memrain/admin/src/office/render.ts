@@ -96,25 +96,6 @@ function drawWalls(ctx: CanvasRenderingContext2D, width: number, height: number)
   }
 }
 
-function drawRoomLabels(ctx: CanvasRenderingContext2D): void {
-  ctx.font = LABEL_FONT;
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "left";
-  for (const r of ROOMS) {
-    const w = Math.ceil(ctx.measureText(r.label).width) + 6;
-    const x = r.x * TILE + 2;
-    const y = (r.y - 1) * TILE + 6;
-    ctx.fillStyle = PLAQUE;
-    ctx.fillRect(x, y, w, 8);
-    ctx.fillStyle = PLAQUE_TEXT;
-    ctx.fillText(r.label, x + 3, y + 4.5);
-  }
-}
-
-function shortName(label: string): string {
-  return label.length > MAX_NAME ? `${label.slice(0, MAX_NAME - 1)}…` : label;
-}
-
 interface Box {
   x: number;
   y: number;
@@ -122,11 +103,31 @@ interface Box {
   h: number;
 }
 
+function drawRoomLabels(ctx: CanvasRenderingContext2D): Box[] {
+  ctx.font = LABEL_FONT;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  const plaques: Box[] = [];
+  for (const r of ROOMS) {
+    const box = { x: r.x * TILE + 2, y: (r.y - 1) * TILE + 6, w: Math.ceil(ctx.measureText(r.label).width) + 6, h: 8 };
+    ctx.fillStyle = PLAQUE;
+    ctx.fillRect(box.x, box.y, box.w, box.h);
+    ctx.fillStyle = PLAQUE_TEXT;
+    ctx.fillText(r.label, box.x + 3, box.y + 4);
+    plaques.push(box);
+  }
+  return plaques;
+}
+
+function shortName(label: string): string {
+  return label.length > MAX_NAME ? `${label.slice(0, MAX_NAME - 1)}…` : label;
+}
+
 function overlaps(a: Box, b: Box): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
-// Places a name tag above a head, nudging it up past tags already drawn nearby.
+// Places a name tag above a head, nudging it up past plaques and tags already drawn nearby.
 function drawName(ctx: CanvasRenderingContext2D, text: string, cx: number, bottom: number, taken: Box[]): void {
   ctx.font = NAME_FONT;
   ctx.textAlign = "center";
@@ -138,7 +139,7 @@ function drawName(ctx: CanvasRenderingContext2D, text: string, cx: number, botto
   ctx.fillStyle = NAME_BG;
   ctx.fillRect(box.x, box.y, box.w, box.h);
   ctx.fillStyle = "#ffffff";
-  ctx.fillText(text, cx, box.y + 3.8);
+  ctx.fillText(text, cx, box.y + 4);
 }
 
 function drawErrorBubble(ctx: CanvasRenderingContext2D, x: number, y: number): void {
@@ -147,37 +148,33 @@ function drawErrorBubble(ctx: CanvasRenderingContext2D, x: number, y: number): v
   ctx.arc(x, y, 4, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = "#ffffff";
-  ctx.fillRect(x - 0.5, y - 2.5, 1, 3);
-  ctx.fillRect(x - 0.5, y + 1.5, 1, 1);
+  ctx.fillRect(x - 1, y - 3, 2, 4);
+  ctx.fillRect(x - 1, y + 2, 2, 1);
 }
 
 function drawBusyBubble(ctx: CanvasRenderingContext2D, x: number, y: number, now: number): void {
   ctx.fillStyle = "#ffffff";
-  ctx.fillRect(x - 5, y - 3, 10, 6);
+  ctx.fillRect(x - 5, y - 3, 11, 6);
   ctx.fillRect(x - 4, y + 3, 2, 1);
   const lit = Math.floor(now / 350) % 4;
   for (let k = 0; k < 3; k++) {
     ctx.fillStyle = k < lit ? "#3a3f4d" : "#c8c8c8";
-    ctx.fillRect(x - 3 + k * 2.5, y - 0.5, 1.5, 1.5);
+    ctx.fillRect(x - 3 + k * 3, y - 1, 2, 2);
   }
 }
 
 function drawSnooze(ctx: CanvasRenderingContext2D, x: number, y: number, now: number): void {
   const t = (now % 2400) / 2400;
+  const rise = Math.round(t * 3);
   ctx.font = "700 5px ui-sans-serif, system-ui, sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   ctx.fillStyle = `rgba(70, 82, 112, ${1 - t * 0.6})`;
-  ctx.fillText("z", x, y - t * 3);
-  ctx.fillText("z", x + 3, y - 3 - t * 3);
+  ctx.fillText("z", x, y - rise);
+  ctx.fillText("z", x + 3, y - 3 - rise);
 }
 
-function drawCharacter(
-  ctx: CanvasRenderingContext2D,
-  c: Character,
-  pose: Pose,
-  sprites: Sprites,
-): void {
+function drawCharacter(ctx: CanvasRenderingContext2D, c: Character, pose: Pose, sprites: Sprites): void {
   const walking = pose.path.length > 0;
   const tx = Math.round(pose.x);
   const ty = Math.round(pose.y);
@@ -186,10 +183,9 @@ function drawCharacter(
   const bob = walking && pose.frame >= 0.5 ? 1 : 0;
   const px = Math.round(pose.x * TILE);
   const py = Math.round(pose.y * TILE) + tucked - bob;
-  const dimmed = c.kind === "worker" && !c.enabled;
 
   ctx.save();
-  if (dimmed) {
+  if (c.kind === "worker" && !c.enabled) {
     ctx.globalAlpha = 0.45;
     ctx.filter = "grayscale(1)";
   }
@@ -210,13 +206,7 @@ function drawCharacter(
   ctx.restore();
 }
 
-function drawOverlay(
-  ctx: CanvasRenderingContext2D,
-  c: Character,
-  pose: Pose,
-  now: number,
-  taken: Box[],
-): void {
+function drawOverlay(ctx: CanvasRenderingContext2D, c: Character, pose: Pose, now: number, taken: Box[]): void {
   const walking = pose.path.length > 0;
   const px = Math.round(pose.x * TILE);
   const py = Math.round(pose.y * TILE);
@@ -234,6 +224,40 @@ function drawOverlay(
   }
 }
 
+// Furniture in depth order, with source and target rectangles worked out once.
+const PROP_DRAWS = [...PROPS]
+  .sort((a, b) => a.y - b.y)
+  .map((p) => ({ y: p.y, sx: p.cell[0] * SHEET_STEP, sy: p.cell[1] * SHEET_STEP, dx: p.x * TILE, dy: p.y * TILE }));
+
+interface StaticLayer {
+  key: string;
+  tiles: HTMLImageElement;
+  canvas: HTMLCanvasElement;
+  plaques: Box[];
+}
+
+let staticLayer: StaticLayer | null = null;
+
+// Floors, walls, rugs, pictures and room plaques never change, so they are drawn
+// once per canvas size and copied in on every frame.
+function staticFor(width: number, height: number, layout: { scale: number; ox: number; oy: number }, sprites: Sprites): StaticLayer {
+  const key = `${width}x${height}@${layout.scale},${layout.ox},${layout.oy}`;
+  if (staticLayer && staticLayer.key === key && staticLayer.tiles === sprites.tiles) return staticLayer;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D is not available");
+  ctx.setTransform(layout.scale, 0, 0, layout.scale, layout.ox, layout.oy);
+  ctx.imageSmoothingEnabled = false;
+  drawFloors(ctx, OFFICE_MAP.width, OFFICE_MAP.height);
+  drawWalls(ctx, OFFICE_MAP.width, OFFICE_MAP.height);
+  for (const d of WALL_DECOR) drawCell(ctx, sprites.tiles, d.cell, d.x * TILE, d.y * TILE + 2);
+  const plaques = drawRoomLabels(ctx);
+  staticLayer = { key, tiles: sprites.tiles, canvas, plaques };
+  return staticLayer;
+}
+
 export function drawOffice(
   ctx: CanvasRenderingContext2D,
   state: OfficeState,
@@ -242,36 +266,35 @@ export function drawOffice(
   now: number,
 ): void {
   const { width, height } = ctx.canvas;
-  const { scale, ox, oy } = officeLayout(width, height);
+  const layout = officeLayout(width, height);
+  const layer = staticFor(width, height, layout, sprites);
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, width, height);
-  ctx.setTransform(scale, 0, 0, scale, ox, oy);
+  ctx.drawImage(layer.canvas, 0, 0);
+  ctx.setTransform(layout.scale, 0, 0, layout.scale, layout.ox, layout.oy);
   ctx.imageSmoothingEnabled = false;
 
-  drawFloors(ctx, OFFICE_MAP.width, OFFICE_MAP.height);
-  drawWalls(ctx, OFFICE_MAP.width, OFFICE_MAP.height);
-  for (const d of WALL_DECOR) drawCell(ctx, sprites.tiles, d.cell, d.x * TILE, d.y * TILE + 2);
-  drawRoomLabels(ctx);
-
-  // Props and people share one depth order so someone behind a desk is hidden by it.
-  type Drawable = { y: number; draw: () => void };
-  const drawables: Drawable[] = PROPS.map((p) => ({
-    y: p.y,
-    draw: () => drawCell(ctx, sprites.tiles, p.cell, p.x * TILE, p.y * TILE),
-  }));
   const people: { c: Character; pose: Pose }[] = [];
   for (const c of state.characters.values()) {
     const pose = poses.get(c.id);
-    if (!pose) continue;
-    people.push({ c, pose });
-    drawables.push({ y: pose.y + 0.01, draw: () => drawCharacter(ctx, c, pose, sprites) });
+    if (pose) people.push({ c, pose });
   }
-  drawables.sort((a, b) => a.y - b.y);
-  for (const d of drawables) d.draw();
+
+  // Props and people share one depth order so someone behind a desk is hidden by it.
+  people.sort((a, b) => a.pose.y - b.pose.y);
+  let next = 0;
+  for (const p of PROP_DRAWS) {
+    while (next < people.length && people[next]!.pose.y < p.y) {
+      drawCharacter(ctx, people[next]!.c, people[next]!.pose, sprites);
+      next++;
+    }
+    ctx.drawImage(sprites.tiles, p.sx, p.sy, TILE, TILE, p.dx, p.dy, TILE, TILE);
+  }
+  for (; next < people.length; next++) drawCharacter(ctx, people[next]!.c, people[next]!.pose, sprites);
 
   // Front rows claim their tag spot first; tags further back move up out of the way.
   people.sort((a, b) => b.pose.y - a.pose.y || a.pose.x - b.pose.x);
-  const taken: Box[] = [];
+  const taken: Box[] = [...layer.plaques];
   for (const { c, pose } of people) drawOverlay(ctx, c, pose, now, taken);
 }

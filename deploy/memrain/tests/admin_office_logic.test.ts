@@ -11,8 +11,8 @@ import {
   type OfficeState,
 } from "../admin/src/office/model.ts";
 import { roomFor, type RoomId } from "../admin/src/office/rooms.ts";
-import { OFFICE_MAP, seatFor } from "../admin/src/office/map.ts";
-import { stepCharacter, type Pose } from "../admin/src/office/motion.ts";
+import { OFFICE_MAP, PROPS, TILE, officeLayout, seatFor } from "../admin/src/office/map.ts";
+import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
 import { findPath } from "../admin/src/office/path.ts";
 
 const NOW = 1_000_000;
@@ -300,5 +300,45 @@ describe("stepCharacter", () => {
     }
     expect({ x: p.x, y: p.y }).toEqual(target);
     expect(p.path).toEqual([]);
+  });
+});
+
+describe("stepCharacter limits", () => {
+  const start = OFFICE_MAP.seats.break_room[0]!;
+  const pose: Pose = { x: start.x, y: start.y, path: [], facing: "down", frame: 0 };
+  const desk = PROPS.find((p) => p.solid)!;
+
+  it("stays put when the target is a wall or a desk", () => {
+    expect(stepCharacter(pose, { x: 0, y: 0 }, 100, { reducedMotion: false })).toEqual(pose);
+    expect(stepCharacter(pose, { x: desk.x, y: desk.y }, 100, { reducedMotion: false })).toEqual(pose);
+  });
+
+  it("caps one step so a long pause does not skip the walk", () => {
+    const target = OFFICE_MAP.seats.archive[0]!;
+    const next = stepCharacter(pose, target, 60_000, { reducedMotion: false });
+    const moved = Math.abs(next.x - start.x) + Math.abs(next.y - start.y);
+    expect(moved).toBeGreaterThan(0);
+    expect(moved).toBeLessThanOrEqual((3 * MAX_STEP_MS) / 1000 + 1e-9);
+    expect(MAX_STEP_MS).toBe(250);
+  });
+});
+
+describe("officeLayout", () => {
+  const pw = OFFICE_MAP.width * TILE;
+  const ph = OFFICE_MAP.height * TILE;
+
+  it("shrinks to fit a phone-width canvas without clipping", () => {
+    const { scale, ox, oy } = officeLayout(343, 300);
+    expect(scale).toBeLessThan(1);
+    expect(ox).toBeGreaterThanOrEqual(0);
+    expect(oy).toBeGreaterThanOrEqual(0);
+    expect(ox + pw * scale).toBeLessThanOrEqual(343);
+    expect(oy + ph * scale).toBeLessThanOrEqual(300);
+  });
+
+  it("keeps whole-number scales when the map fits", () => {
+    expect(officeLayout(pw * 2, ph * 2)).toEqual({ scale: 2, ox: 0, oy: 0 });
+    expect(officeLayout(pw * 2 + 100, ph * 3).scale).toBe(2);
+    expect(officeLayout(pw, ph).scale).toBe(1);
   });
 });
