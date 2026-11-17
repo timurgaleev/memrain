@@ -48,7 +48,17 @@ describe("lastRunText", () => {
     expect(lastRunText({ status: "success", stop_reason: null, at: "x", http_status: null, error: null, items: 12, pages_written: 3, items_failed: 0 }))
       .toBe("success · 12 items, 3 written");
     expect(lastRunText({ status: "partial", stop_reason: "fetch_failed", at: "x", http_status: 429, error: "rate", items: 4, pages_written: 1, items_failed: 2 }))
-      .toBe("partial (fetch_failed, HTTP 429) · 4 items, 1 written, 2 failed");
+      .toBe("partial (fetch_failed, HTTP 429) · 4 items, 1 written, 2 failed — rate");
+  });
+
+  it("shows the same run detail the CLI prints: unchanged, held and deletion counts, and the error", () => {
+    expect(lastRunText({
+      status: "partial", stop_reason: null, at: "x", http_status: null, error: "credentials unavailable (Error)",
+      items: 12, pages_written: 3, items_failed: 1, pages_unchanged: 6, items_held: 2, deletions_applied: 1, deletions_held: 4,
+    })).toBe("partial · 12 items, 3 written, 6 unchanged, 1 failed, 2 held, 1 deletion(s) applied, 4 held for confirmation — credentials unavailable (Error)");
+    // A run recorded before the newer counts were kept has none of them.
+    expect(lastRunText({ status: "success", stop_reason: null, at: "x", http_status: null, error: null, items: 2, pages_written: 0, items_failed: 0, pages_unchanged: 0 }))
+      .toBe("success · 2 items, 0 written");
   });
 });
 

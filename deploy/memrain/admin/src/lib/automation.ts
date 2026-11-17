@@ -41,6 +41,11 @@ export interface AccountRunView {
   items: number;
   pages_written: number;
   items_failed: number;
+  /** Absent from a run recorded before these were kept. */
+  pages_unchanged?: number;
+  items_held?: number;
+  deletions_applied?: number;
+  deletions_held?: number;
 }
 
 /** When a provider's test-mode grant ends (Google: 7 days after consent while the app is in Testing). */
@@ -254,12 +259,20 @@ export function accountView(a: ConnectorAccountView): {
   };
 }
 
-/** How the account's last sync run ended, and what it read. */
+/** How the account's last sync run ended, what it read and why it stopped: the detail `connectors status` prints. */
 export function lastRunText(run: AccountRunView | null): string {
   if (run === null) return "none yet";
   const why = [run.stop_reason, run.http_status !== null ? `HTTP ${run.http_status}` : null].filter((x) => x !== null);
-  const counts = `${fmtInt(run.items)} items, ${fmtInt(run.pages_written)} written${run.items_failed > 0 ? `, ${fmtInt(run.items_failed)} failed` : ""}`;
-  return `${run.status}${why.length > 0 ? ` (${why.join(", ")})` : ""} · ${counts}`;
+  const parts = [`${fmtInt(run.items)} items`, `${fmtInt(run.pages_written)} written`];
+  const more: Array<[number | undefined, string]> = [
+    [run.pages_unchanged, "unchanged"],
+    [run.items_failed, "failed"],
+    [run.items_held, "held"],
+    [run.deletions_applied, "deletion(s) applied"],
+    [run.deletions_held, "held for confirmation"],
+  ];
+  for (const [n, what] of more) if (n !== undefined && n > 0) parts.push(`${fmtInt(n)} ${what}`);
+  return `${run.status}${why.length > 0 ? ` (${why.join(", ")})` : ""} · ${parts.join(", ")}${run.error ? ` — ${run.error}` : ""}`;
 }
 
 const DAY_MS = 86_400_000;
