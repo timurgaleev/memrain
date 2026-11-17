@@ -21,7 +21,8 @@ export type Cell = readonly [number, number];
 
 export interface Prop {
   cell: Cell;
-  kind: ModelId;
+  // null: no 3D model fits, the 3D scene skips the prop.
+  kind: ModelId | null;
   x: number;
   y: number;
   solid: boolean;
@@ -102,7 +103,7 @@ const LONG_TABLE: Cell[] = [[0, 0], [1, 0], [2, 0]];
 const PIANO: Cell[] = [[23, 8], [24, 8]];
 
 // The sheet cell picks the 2D sprite; the kind picks the 3D model.
-const KIND_OF_CELL = new Map<string, ModelId>();
+const KIND_OF_CELL = new Map<string, ModelId | null>();
 for (const [cell, kind] of [
   [PLANT, "plant"],
   [PLANT_TALL, "plant"],
@@ -130,14 +131,14 @@ for (const [cell, kind] of [
   ...ORANGE_TABLE.map((c) => [c, "counter"] as const),
   ...GREEN_TABLE.map((c) => [c, "counter"] as const),
   ...LONG_TABLE.map((c) => [c, "counter"] as const),
-  ...PIANO.map((c) => [c, "counter"] as const),
+  ...PIANO.map((c) => [c, null] as const),
 ] as const) {
   KIND_OF_CELL.set(cell.join(","), kind);
 }
 
-function kindOf(cell: Cell): ModelId {
+function kindOf(cell: Cell): ModelId | null {
   const kind = KIND_OF_CELL.get(cell.join(","));
-  if (!kind) throw new Error(`office prop cell ${cell.join(",")} has no model kind`);
+  if (kind === undefined) throw new Error(`office prop cell ${cell.join(",")} has no model kind`);
   return kind;
 }
 
@@ -266,7 +267,7 @@ export const AMBIENT_SPOTS: Record<Exclude<AmbientKind, "wander" | "chat">, read
   coffee: [{ x: 17, y: 20 }, { x: 18, y: 20 }],
   whiteboard: [{ x: 20, y: 19 }, { x: 21, y: 19 }],
   water_plants: [{ x: 17, y: 22 }, { x: 9, y: 22 }, { x: 8, y: 2 }],
-  sofa: [{ x: 23, y: 20 }, { x: 24, y: 20 }, { x: 25, y: 20 }, { x: 26, y: 20 }],
+  sofa: [{ x: 23, y: 19 }, { x: 23, y: 20 }, { x: 26, y: 20 }, { x: 27, y: 20 }],
 };
 
 // Two people face each other across neighbouring tiles.

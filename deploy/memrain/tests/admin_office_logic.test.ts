@@ -649,7 +649,7 @@ describe("3D world mapping", () => {
 
   it("gives every prop a known model kind", () => {
     const known = new Set(Object.keys(MODEL_URLS));
-    for (const p of [...PROPS, ...WALL_DECOR]) expect(known.has(p.kind)).toBe(true);
+    for (const p of [...PROPS, ...WALL_DECOR]) expect(p.kind === null || known.has(p.kind)).toBe(true);
   });
 
   it("keeps every ambient spot walkable and reachable", () => {
@@ -667,6 +667,22 @@ describe("3D world mapping", () => {
       expect(reachable(a)).toBe(true);
       expect(reachable(b)).toBe(true);
     }
+  });
+
+  it("leaves the piano without a 3D model", () => {
+    expect(PROPS.filter((p) => p.cell[0] >= 23 && p.cell[1] === 8).every((p) => p.kind === null)).toBe(true);
+  });
+
+  it("keeps ambient and chat tiles off every seat", () => {
+    const seats = new Set<string>();
+    for (const room of Object.keys(OFFICE_MAP.seats) as RoomId[]) {
+      for (let i = 0; i < OFFICE_MAP.seats[room].length; i++) {
+        const t = seatFor(room, i);
+        seats.add(`${t.x},${t.y}`);
+      }
+    }
+    const tiles = [...Object.values(AMBIENT_SPOTS).flat(), ...CHAT_SPOTS.flat()];
+    for (const t of tiles) expect(seats.has(`${t.x},${t.y}`)).toBe(false);
   });
 
   it("centres the scene on the origin", () => {
