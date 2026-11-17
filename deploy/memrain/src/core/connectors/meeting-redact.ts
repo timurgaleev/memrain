@@ -40,7 +40,7 @@ const ID_LABELS = [
   "Meeting[ -]?ID", "Meeting number", "Meeting-Kennnummer", "Meetingnummer", "Webinar[ -]ID",
   "Phone conference ID", "Conference ID", "Besprechungs-ID", "Konferenz-ID", "Telefonkonferenz-ID",
   "(?:Meeting|Besprechungs|Konferenz)-?kennung", "Access code", "Zugriffscode",
-  "Идентификатор (?:собрания|конференции|встречи|совещания)", "ID (?:собрания|конференции|встречи)",
+  "Идентификатор (?:собрания|(?:телефонной )?конференции|встречи|совещания)", "(?:ID|ИД) (?:собрания|конференции|встречи)",
   "Номер (?:конференции|совещания|собрания)", "Код конференции",
 ].join("|");
 /** Labels that only ever name a meeting passcode. */
@@ -67,20 +67,35 @@ const keepLabel: Replace = (_m, [label, gap]) => `${label}${gap}${REMOVED}`;
 
 const RULES: readonly Rule[] = [
   // Join links: the link itself carries the meeting id, and often the passcode.
-  { re: new RegExp(`https?:\\/\\/teams\\.(?:microsoft|live)\\.com\\/(?:l\\/meetup-join|meet)\\/${URL_TAIL}{1,2048}`, "gi"), replace: link },
-  { re: new RegExp(`https?:\\/\\/(?:[\\w-]{1,63}\\.){0,4}zoom(?:gov)?\\.us\\/(?:[jsw]|wc\\/join|my)\\/${URL_TAIL}{1,2048}`, "gi"), replace: link },
+  // A Teams link that names the meeting thread goes too: behind the web client
+  // or launcher, and the organizer's "Meeting options" link, whose organizer,
+  // tenant and thread ids are all a join link is built from.
+  {
+    re: new RegExp(`https?:\\/\\/teams\\.(?:microsoft|live)\\.com\\/(?:meet\\/|${URL_TAIL}{0,512}?(?:meetup-join|meetingOptions))${URL_TAIL}{0,2048}`, "gi"),
+    replace: link,
+  },
+  { re: new RegExp(`https?:\\/\\/(?:[\\w-]{1,63}\\.){0,4}zoom(?:gov)?\\.us\\/(?:[jsw]|wc\\/join|my|skype)\\/${URL_TAIL}{1,2048}`, "gi"), replace: link },
   { re: new RegExp(`https?:\\/\\/(?:[\\w-]{1,63}\\.){1,4}webex\\.com\\/${URL_TAIL}{0,512}(?:MTID=|\\/j\\.php|\\/meet\\/)${URL_TAIL}{0,2048}`, "gi"), replace: link },
   { re: new RegExp(`(?:https?:\\/\\/)?(?:meet\\.google\\.com|tel\\.meet)\\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:[?#]${URL_TAIL}{0,512})?`, "gi"), replace: link },
   // The same links wrapped by a mail gateway (Outlook Safe Links), percent-encoded.
   {
-    re: new RegExp(`https?:\\/\\/${URL_TAIL}{0,512}?(?:teams\\.(?:microsoft|live)\\.com|zoom(?:gov)?\\.us)(?:%2F|\\/)(?:l(?:%2F|\\/)meetup-join|meet|j|w|wc(?:%2F|\\/)join)(?:%2F|\\/)${URL_TAIL}{0,2048}`, "gi"),
+    re: new RegExp(`https?:\\/\\/${URL_TAIL}{0,512}?(?:teams\\.(?:microsoft|live)\\.com|zoom(?:gov)?\\.us)(?:%2F|\\/)(?:l(?:%2F|\\/)meetup-join|meetingOptions|meet|j|w|wc(?:%2F|\\/)join|skype)(?:%2F|\\/)${URL_TAIL}{0,2048}`, "gi"),
     replace: link,
   },
+  // A wrapped Meet code or Webex meeting key, wherever the gateway put it.
+  { re: /((?:meet\.google\.com|tel\.meet)%2F)[a-z]{3}-[a-z]{4}-[a-z]{3}/gi, replace: keepPrefix },
+  { re: /(MTID(?:=|%3D))[0-9a-z]{8,128}/gi, replace: keepPrefix },
+  // Teams dial-in pages ("Find a local number", VTC instructions) carry the conference id.
+  { re: new RegExp(`(dialin\\.teams\\.microsoft\\.com\\/${URL_TAIL}{0,200}?[?&]id=)\\d{5,20}`, "gi"), replace: keepPrefix },
+  // SIP addresses: Zoom's `<id>[.<passcode>]@zoomcrc.com`, a Webex video system's `<number>@<site>.webex.com`.
+  { re: /(?<![\w.])\d{9,11}(?:\.{1,2}[\w-]{1,64}){0,2}(@zoomcrc\.com)/gi, replace: (_m, [host]) => `${REMOVED}${host}` },
+  { re: /(?<![\w.])\d{9,12}(@(?:[\w-]{1,63}\.){1,4}webex\.com)/gi, replace: (_m, [host]) => `${REMOVED}${host}` },
   // A passcode or PIN in any other link, an account login link too.
   { re: /([?&;]pwd=)[^\s&#"'<>()[\]]{1,256}/gi, replace: keepPrefix },
   { re: /([?&;]pin=)\d{3,20}/gi, replace: keepPrefix },
-  // One-tap dial strings: the bridge number stays, `,,<id>#` and `,,,,*<passcode>#` go.
-  { re: /(\d)(,{2,8}\d{3,20}#(?:,{1,8}\*?\d{3,20}#?){0,2})/g, replace: (_m, [digit]) => `${digit},,${REMOVED}` },
+  // One-tap dial strings: the bridge number stays; `,,<id>#`, Webex's `<password>#`
+  // straight after it and Zoom's `,,,,*<passcode>#` go.
+  { re: /(\d)(,{2,8}\d{3,20}#(?:\*?\d{3,20}#)?(?:,{1,8}\*?\d{3,20}#?){0,2})/g, replace: (_m, [digit]) => `${digit},,${REMOVED}` },
   // Labelled meeting ids, digits only.
   { re: new RegExp(`(${ID_LABELS})(${PAREN}(?:${COLON})?${GAP})(${ID_DIGITS})`, "gi"), replace: keepLabel, labelled: true },
   // Meeting passcodes. Without a digit the value counts only after a colon and
