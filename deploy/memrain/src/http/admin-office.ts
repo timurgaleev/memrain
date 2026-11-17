@@ -6,6 +6,10 @@
  */
 import type { Engine } from "../core/engine/interface.ts";
 import { daemonsStatus } from "../core/daemons/status.ts";
+import { readControls, resolveControl } from "../core/daemons/controls.ts";
+import { cycleDaemonPause } from "../core/daemons/cycle-daemon.ts";
+import { getDaemon } from "../core/daemons/registry.ts";
+import { targetsOf } from "../core/daemons/scheduler.ts";
 import { getHandler } from "../core/jobs/handlers.ts";
 import { SUBAGENT_JOB_KIND } from "../core/jobs/kinds.ts";
 import { workerNameFor } from "../core/jobs/activity.ts";
@@ -36,6 +40,22 @@ export function _resetOfficeRuntimeForTesting(): void {
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "cache-control": "no-store" } });
 
+/** True when at least one of the daemon's real targets would be queued: enabled and not paused, resolved as the scheduler does. */
+async function anyTargetRuns(engine: Engine, name: string, controls: Awaited<ReturnType<typeof readControls>>): Promise<boolean> {
+  const spec = getDaemon(name);
+  if (!spec) return false;
+  let targets;
+  try {
+    targets = await targetsOf(engine, spec);
+  } catch {
+    return false;
+  }
+  return targets.some((t) => {
+    const ctl = resolveControl(controls, name, t.sourceId);
+    return !ctl.pausedBy && (ctl.enabled ?? spec.defaultEnabled);
+  });
+}
+
 export async function officeSnapshot(engine: Engine): Promise<OfficeSnapshot> {
   const [report, running, oauth, pats] = await Promise.all([
     daemonsStatus(engine),
@@ -50,21 +70,21 @@ export async function officeSnapshot(engine: Engine): Promise<OfficeSnapshot> {
     ),
   ]);
   const busy = new Set(running.rows.map(workerNameFor));
-  const held = report.paused_all !== null;
+  const controls = await readControls(engine);
+  const cycleOpen = (await cycleDaemonPause(engine)) === null;
   const workers = [
-    ...report.daemons.map((d) => {
-      const usable = !d.env_disabled && !d.paused && !held;
+    ...(await Promise.all(report.daemons.map(async (d) => {
+      // The cycle obeys only a pause, as its own runner does; the enabled
+      // switch does not stop it.
       if (d.schedule === "external") {
-        return { name: d.name, enabled: usable && d.enabled && runtime.cycleLoop, running: cycleRunning };
+        return { name: d.name, enabled: runtime.cycleLoop && cycleOpen, running: cycleRunning };
       }
-      // Enabled brain-wide, or for at least one source.
-      const forSomeTarget = d.enabled || d.sources.some((s) => s.enabled && !s.paused);
       return {
         name: d.name,
-        enabled: usable && forSomeTarget && report.scheduler.enabled_here,
+        enabled: report.scheduler.enabled_here && !d.env_disabled && (await anyTargetRuns(engine, d.name, controls)),
         running: busy.has(d.name),
       };
-    }),
+    }))),
     { name: "worker", enabled: runtime.jobsWorker, running: busy.has("worker") },
     ...(getHandler(SUBAGENT_JOB_KIND)
       ? [{ name: "assistant", enabled: runtime.jobsWorker, running: busy.has("assistant") }]

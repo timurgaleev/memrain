@@ -9,7 +9,8 @@ import { Storage } from "../src/core/storage.ts";
 import { createAdminAuth } from "../src/http/admin.ts";
 import { handleAdminApi } from "../src/http/admin-api.ts";
 import { _resetOfficeRuntimeForTesting, noteCycleRun, noteOfficeRuntime, type OfficeSnapshot } from "../src/http/admin-office.ts";
-import { pauseDaemon, setDaemonEnabled } from "../src/core/daemons/controls.ts";
+import { _resetDaemonsForTesting, registerDaemon } from "../src/core/daemons/registry.ts";
+import { pauseDaemon, resumeDaemon, setDaemonEnabled } from "../src/core/daemons/controls.ts";
 
 const BOOT = "boot-secret";
 let tmp: string;
@@ -48,6 +49,7 @@ afterEach(async () => {
   if (savedDaemons === undefined) delete process.env.MEMRAIN_DAEMONS;
   else process.env.MEMRAIN_DAEMONS = savedDaemons;
   _resetOfficeRuntimeForTesting();
+  _resetDaemonsForTesting();
   await storage.close();
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -95,7 +97,7 @@ describe("GET /admin/api/office", () => {
   it("reports effective availability, not the configured switch", async () => {
     process.env.MEMRAIN_DAEMONS = "1";
     noteOfficeRuntime({ jobsWorker: true, cycleLoop: true });
-    for (const daemon of ["notifications", "connector_sync"]) {
+    for (const daemon of ["notifications"]) {
       await setDaemonEnabled(storage.engine(), { daemon, enabled: true, by: "cli" });
     }
     let b = await snapshot();
@@ -106,11 +108,11 @@ describe("GET /admin/api/office", () => {
     await pauseDaemon(storage.engine(), { daemon: "notifications", by: "cli" });
     b = await snapshot();
     expect(worker(b, "notifications")?.enabled).toBe(false);
-    expect(worker(b, "connector_sync")?.enabled).toBe(true);
+    await resumeDaemon(storage.engine(), { daemon: "notifications", by: "cli" });
+    expect(worker(await snapshot(), "notifications")?.enabled).toBe(true);
 
     process.env.MEMRAIN_DAEMONS = "0";
-    b = await snapshot();
-    expect(worker(b, "connector_sync")?.enabled).toBe(false);
+    expect(worker(await snapshot(), "notifications")?.enabled).toBe(false);
   });
 
   it("keeps worker and cycle off until serve notes what it started", async () => {
@@ -144,5 +146,37 @@ describe("GET /admin/api/office", () => {
     expect(b.clients.filter((c) => c.id === "public")).toEqual([
       { id: "public", display_name: "Shared key", last_seen: null },
     ]);
+  });
+
+  it("resolves a daemon per target, like the scheduler", async () => {
+    process.env.MEMRAIN_DAEMONS = "1";
+    registerDaemon({
+      name: "probe",
+      kind: "daemon_probe",
+      schedule: { cron: "0 7 * * *" },
+      lane: "short",
+      paid: false,
+      defaultEnabled: true,
+      targets: async () => [{ sourceId: "a" }, { sourceId: "b" }],
+    });
+    const e = storage.engine();
+    expect(worker(await snapshot(), "probe")?.enabled).toBe(true);
+
+    await setDaemonEnabled(e, { daemon: "probe", sourceId: "a", enabled: false, by: "cli" });
+    await pauseDaemon(e, { daemon: "probe", sourceId: "b", by: "cli" });
+    expect(worker(await snapshot(), "probe")?.enabled).toBe(false);
+
+    await setDaemonEnabled(e, { daemon: "probe", sourceId: "b", enabled: true, by: "cli" });
+    await e.query("UPDATE daemon_controls SET paused = false WHERE daemon = 'probe' AND source_id = 'b'");
+    expect(worker(await snapshot(), "probe")?.enabled).toBe(true);
+  });
+
+  it("treats the cycle as open unless paused, whatever its enabled switch says", async () => {
+    noteOfficeRuntime({ jobsWorker: true, cycleLoop: true });
+    const e = storage.engine();
+    await setDaemonEnabled(e, { daemon: "cycle", enabled: false, by: "cli" });
+    expect(worker(await snapshot(), "cycle")?.enabled).toBe(true);
+    await pauseDaemon(e, { daemon: "cycle", by: "cli" });
+    expect(worker(await snapshot(), "cycle")?.enabled).toBe(false);
   });
 });

@@ -101,7 +101,7 @@ export async function consecutiveFailures(engine: Engine, spec: DaemonSpec, sour
   return n;
 }
 
-async function targetsOf(engine: Engine, spec: DaemonSpec): Promise<DaemonTarget[]> {
+export async function targetsOf(engine: Engine, spec: DaemonSpec): Promise<DaemonTarget[]> {
   return spec.targets ? spec.targets(engine) : [{ sourceId: DEFAULT_DAEMON_SOURCE }];
 }
 
