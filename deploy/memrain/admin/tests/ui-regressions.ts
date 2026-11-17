@@ -21,6 +21,7 @@ const OFFICE_SNAPSHOT = {
 };
 const OFFICE_EVENT = { agent: "client-1", operation: "search", latency_ms: 4, status: "success", timestamp: "2026-11-09T12:00:00Z", kind: "tool", phase: "end" };
 let officeCalls = 0;
+let officeFailures = 0;
 let jobsCalls = 0;
 let jobsFail = false;
 const historyRequests: number[] = [];
@@ -34,6 +35,10 @@ const server = Bun.serve({
     if (asset) return new Response(asset, { headers: { "Content-Type": asset.type } });
     if (path === "/admin/api/office") {
       officeCalls += 1;
+      if (officeFailures > 0) {
+        officeFailures -= 1;
+        return Response.json({ error: "office snapshot unavailable" }, { status: 503 });
+      }
       return Response.json(OFFICE_SNAPSHOT);
     }
     if (path === "/admin/events") {
@@ -446,6 +451,14 @@ try {
     assert.equal(painted, true, "the office canvas stays blank");
     assert.equal(officeCalls > 0, true);
     assert.deepEqual(consoleErrors, []);
+  });
+  await check("Office retries a failed first snapshot well before the next poll", "office", async (page) => {
+    officeFailures = 1;
+    await page.reload();
+    await page.getByText("office snapshot unavailable", { exact: true }).waitFor();
+    await page.clock.runFor(5_000);
+    await page.locator(".office-list").getByText("Librarian is indexing pages", { exact: true }).waitFor();
+    await page.waitForFunction(() => !document.querySelector(".warning-bar"));
   });
   await check("Approvals with nothing held says so", "approvals", async (page) => {
     automation.reset(scenario());

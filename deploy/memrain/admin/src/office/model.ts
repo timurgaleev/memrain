@@ -27,6 +27,7 @@ export const STALE_JOB_MS = 15 * 60_000;
 const CLIENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RECENT_CAP = 20;
 const IGNORED_AGENTS = new Set(["admin-panel"]);
+const NEW_APP_LABEL = "New app";
 
 export function namesFromSnapshot(s: OfficeSnapshot): Map<string, string> {
   const names = new Map<string, string>();
@@ -53,26 +54,32 @@ function workerCharacter(w: OfficeSnapshot["workers"][number], now: number): Cha
   };
 }
 
+// Only apps seen in the last day get a figure; older or never-used ones stay out.
+function clientCharacter(c: OfficeSnapshot["clients"][number], now: number): Character | null {
+  const seen = c.last_seen ? Date.parse(c.last_seen) : NaN;
+  if (!Number.isFinite(seen) || now - seen > CLIENT_WINDOW_MS) return null;
+  return {
+    id: c.id,
+    label: c.display_name,
+    kind: "client",
+    enabled: true,
+    room: "break_room",
+    activity: null,
+    busyUntil: 0,
+    startedAt: null,
+    endedAt: null,
+    errorUntil: 0,
+    arrivedAt: now,
+    lastSeen: seen,
+  };
+}
+
 export function initialState(s: OfficeSnapshot, now: number): OfficeState {
   const characters = new Map<string, Character>();
   for (const w of s.workers) characters.set(w.name, workerCharacter(w, now));
   for (const c of s.clients) {
-    const seen = c.last_seen ? Date.parse(c.last_seen) : NaN;
-    if (!Number.isFinite(seen) || now - seen > CLIENT_WINDOW_MS) continue;
-    characters.set(c.id, {
-      id: c.id,
-      label: c.display_name,
-      kind: "client",
-      enabled: true,
-      room: "break_room",
-      activity: null,
-      busyUntil: 0,
-      startedAt: null,
-      endedAt: null,
-      errorUntil: 0,
-      arrivedAt: now,
-      lastSeen: seen,
-    });
+    const client = clientCharacter(c, now);
+    if (client) characters.set(c.id, client);
   }
   return { characters, recent: [] };
 }
@@ -106,9 +113,15 @@ export function applySnapshot(
       characters.set(w.name, { ...c, enabled: w.enabled, busyUntil: lostEnd ? now : c.busyUntil });
     }
   }
+  // Also picks up apps whose live events this page missed.
   for (const cl of s.clients) {
     const c = characters.get(cl.id);
-    if (c && c.kind === "client") characters.set(cl.id, { ...c, label: cl.display_name });
+    if (c?.kind === "client") {
+      characters.set(cl.id, { ...c, label: cl.display_name });
+    } else if (!c) {
+      const client = clientCharacter(cl, now);
+      if (client) characters.set(cl.id, client);
+    }
   }
   return { characters, recent: st.recent };
 }
@@ -130,7 +143,8 @@ export function applyEvent(
   if (!isJob && prev?.kind === "worker") return st;
   const base: Character = prev ?? {
     id: e.agent,
-    label: names.get(e.agent) ?? WORKER_LABEL[e.agent] ?? e.agent.slice(0, 8),
+    // Until the snapshot names a new app, never show any part of its id.
+    label: names.get(e.agent) ?? WORKER_LABEL[e.agent] ?? (isJob ? e.agent : NEW_APP_LABEL),
     kind: isJob ? "worker" : "client",
     enabled: true,
     room: "reception",

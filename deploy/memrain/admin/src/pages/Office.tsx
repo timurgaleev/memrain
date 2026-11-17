@@ -16,10 +16,11 @@ import {
 } from "../office/model.ts";
 import { stepCharacter, type Pose } from "../office/motion.ts";
 import { drawOffice } from "../office/render.ts";
-import type { RoomId } from "../office/rooms.ts";
+import { assignSeats, freeSeat, type Seat } from "../office/seats.ts";
 import { loadSprites, type Sprites } from "../office/sprites.ts";
 
 const POLL_MS = 30_000;
+const FIRST_RETRY_MS = 5_000;
 const TICK_MS = 250;
 const PENDING_CAP = 50;
 const MAP_W = OFFICE_MAP.width * TILE;
@@ -35,8 +36,7 @@ interface Store {
   loadedAt: number;
 }
 
-interface Tip {
-  id: string;
+interface Point {
   left: number;
   top: number;
 }
@@ -69,6 +69,8 @@ function useOffice() {
     let again = false;
     let lastLoad = 0;
     let lastUnknownLoad = -Infinity;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let retryMs = FIRST_RETRY_MS;
 
     const load = async (): Promise<void> => {
       if (inFlight) {
@@ -76,6 +78,7 @@ function useOffice() {
         return;
       }
       inFlight = true;
+      clearTimeout(retry);
       const requestedAt = Date.now();
       lastLoad = requestedAt;
       try {
@@ -92,7 +95,14 @@ function useOffice() {
         }
         setError("");
       } catch (e) {
-        if (!ctrl.signal.aborted) setError(describeError(e));
+        if (!ctrl.signal.aborted) {
+          setError(describeError(e));
+          // Nothing to show yet: try again sooner than the poll, backing off up to it.
+          if (!store.current.state) {
+            retry = setTimeout(() => void load(), retryMs);
+            retryMs = Math.min(retryMs * 2, POLL_MS);
+          }
+        }
       } finally {
         inFlight = false;
       }
@@ -144,6 +154,7 @@ function useOffice() {
 
     return () => {
       ctrl.abort();
+      clearTimeout(retry);
       es.close();
       clearInterval(poll);
       clearInterval(ticker);
@@ -154,30 +165,21 @@ function useOffice() {
   return { store, view, feed, error };
 }
 
-function seatIndex(order: Map<RoomId, string[]>, room: RoomId, id: string): number {
-  const ids = order.get(room) ?? [];
-  if (!order.has(room)) order.set(room, ids);
-  const at = ids.indexOf(id);
-  if (at !== -1) return at;
-  ids.push(id);
-  return ids.length - 1;
-}
-
 function advancePoses(
   prev: Map<string, Pose>,
   st: OfficeState,
-  seats: Map<RoomId, string[]>,
+  seats: ReadonlyMap<string, Seat>,
   dtMs: number,
   loadedAt: number,
   reducedMotion: boolean,
 ): Map<string, Pose> {
   const next = new Map<string, Pose>();
   for (const c of st.characters.values()) {
-    const target = seatFor(c.room, seatIndex(seats, c.room, c.id));
+    const target = seatFor(c.room, seats.get(c.id)?.index ?? 0);
     let pose = prev.get(c.id);
     if (!pose) {
       const walksIn = c.kind === "client" && c.arrivedAt > loadedAt;
-      const from = walksIn ? seatFor("reception", seatIndex(seats, "reception", c.id)) : target;
+      const from = walksIn ? seatFor("reception", freeSeat(seats, "reception")) : target;
       pose = { x: from.x, y: from.y, path: [], facing: "down", frame: 0 };
     }
     next.set(c.id, stepCharacter(pose, target, dtMs, { reducedMotion }));
@@ -206,6 +208,7 @@ function useOfficeCanvas(
   fitRef: RefObject<HTMLDivElement | null>,
   canvasRef: RefObject<HTMLCanvasElement | null>,
   store: RefObject<Store>,
+  tip: RefObject<{ id: string | null; el: HTMLDivElement | null }>,
 ) {
   const poses = useRef(new Map<string, Pose>());
   const [spritesFailed, setSpritesFailed] = useState(false);
@@ -224,7 +227,8 @@ function useOfficeCanvas(
     const ctx = canvasRef.current?.getContext("2d");
     if (!ctx) return;
     const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    const seats = new Map<RoomId, string[]>();
+    let seats: Map<string, Seat> = new Map();
+    let seatedFor: OfficeState | null = null;
     let sprites: Sprites | null = null;
     let raf = 0;
     let last = 0;
@@ -237,8 +241,13 @@ function useOfficeCanvas(
       const dt = last ? t - last : 0;
       last = t;
       if (st) {
+        if (st !== seatedFor) {
+          seats = assignSeats(seats, st.characters.values());
+          seatedFor = st;
+        }
         poses.current = advancePoses(poses.current, st, seats, dt, store.current.loadedAt, reducedMotion);
         drawOffice(ctx, st, poses.current, sprites, Date.now());
+        followTip(ctx.canvas, poses.current, tip.current);
       }
       raf = requestAnimationFrame(frame);
     };
@@ -270,13 +279,32 @@ function useOfficeCanvas(
       if (raf) cancelAnimationFrame(raf);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [canvasRef, store]);
+  }, [canvasRef, store, tip]);
 
   return { poses, spritesFailed };
 }
 
-// Which character sits under a pointer, and where its head is in CSS pixels of the canvas.
-function hitTest(canvas: HTMLCanvasElement, st: OfficeState, poses: Map<string, Pose>, clientX: number, clientY: number): Tip | null {
+// Where a character's head is, in CSS pixels from the canvas corner.
+function headAt(canvas: HTMLCanvasElement, pose: Pose): Point | null {
+  const width = canvas.getBoundingClientRect().width;
+  if (width === 0) return null;
+  const ratio = canvas.width / width;
+  const { scale, ox, oy } = officeLayout(canvas.width, canvas.height);
+  const unit = scale * TILE;
+  return { left: (ox + (pose.x + 0.5) * unit) / ratio, top: (oy + pose.y * unit) / ratio };
+}
+
+// Keeps an open tooltip over its character while it walks, without a React render per frame.
+function followTip(canvas: HTMLCanvasElement, poses: Map<string, Pose>, tip: { id: string | null; el: HTMLDivElement | null }): void {
+  const pose = tip.id ? poses.get(tip.id) : undefined;
+  const at = pose && tip.el ? headAt(canvas, pose) : null;
+  if (!at || !tip.el) return;
+  tip.el.style.left = `${at.left}px`;
+  tip.el.style.top = `${at.top}px`;
+}
+
+// Which character sits under a pointer; the front-most one wins.
+function hitTest(canvas: HTMLCanvasElement, st: OfficeState, poses: Map<string, Pose>, clientX: number, clientY: number): string | null {
   const rect = canvas.getBoundingClientRect();
   if (rect.width === 0) return null;
   const ratio = canvas.width / rect.width;
@@ -290,8 +318,7 @@ function hitTest(canvas: HTMLCanvasElement, st: OfficeState, poses: Map<string, 
     if (!p || mx < p.x || mx >= p.x + 1 || my < p.y - 0.25 || my >= p.y + 1) continue;
     if (!hit || p.y > hit.pose.y) hit = { id: c.id, pose: p };
   }
-  if (!hit) return null;
-  return { id: hit.id, left: (ox + (hit.pose.x + 0.5) * unit) / ratio, top: (oy + hit.pose.y * unit) / ratio };
+  return hit?.id ?? null;
 }
 
 function formatTime(at: number): string {
@@ -332,14 +359,29 @@ export function OfficePage() {
   const { store, view, feed, error } = useOffice();
   const fitRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { poses, spritesFailed } = useOfficeCanvas(fitRef, canvasRef, store);
-  const [tip, setTip] = useState<Tip | null>(null);
+  const tipRef = useRef<{ id: string | null; el: HTMLDivElement | null }>({ id: null, el: null });
+  const { poses, spritesFailed } = useOfficeCanvas(fitRef, canvasRef, store, tipRef);
+  const [tipId, setTipId] = useState<string | null>(null);
+  useEffect(() => {
+    tipRef.current.id = tipId;
+  }, [tipId]);
 
-  const pick = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+  const under = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const st = store.current.state;
-    setTip(st ? hitTest(e.currentTarget, st, poses.current, e.clientX, e.clientY) : null);
+    return st ? hitTest(e.currentTarget, st, poses.current, e.clientX, e.clientY) : null;
   };
-  const tipped = tip ? view?.characters.get(tip.id) : undefined;
+  // A second tap on the same figure closes its tooltip.
+  const onDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    const id = under(e);
+    setTipId((open) => (e.pointerType !== "mouse" && id !== null && open === id ? null : id));
+  };
+  const tipped = tipId ? view?.characters.get(tipId) : undefined;
+  const tipPose = tipId ? poses.current.get(tipId) : undefined;
+  const tipAt = tipped && tipPose && canvasRef.current ? headAt(canvasRef.current, tipPose) : null;
+
+  useEffect(() => {
+    if (tipId && view && !view.characters.has(tipId)) setTipId(null);
+  }, [tipId, view]);
 
   return (
     <>
@@ -367,12 +409,17 @@ export function OfficePage() {
                 className="office-canvas"
                 role="img"
                 aria-label="Office floor plan with a figure for each app and background worker"
-                onPointerMove={(e) => { if (e.pointerType === "mouse") pick(e); }}
-                onPointerDown={pick}
-                onPointerLeave={(e) => { if (e.pointerType === "mouse") setTip(null); }}
+                onPointerMove={(e) => { if (e.pointerType === "mouse") setTipId(under(e)); }}
+                onPointerDown={onDown}
+                onPointerLeave={(e) => { if (e.pointerType === "mouse") setTipId(null); }}
               />
-              {tip && tipped && (
-                <div className="office-tip" aria-hidden="true" style={{ left: tip.left, top: tip.top }}>
+              {tipped && tipAt && (
+                <div
+                  className="office-tip"
+                  aria-hidden="true"
+                  ref={(el) => { tipRef.current.el = el; }}
+                  style={{ left: tipAt.left, top: tipAt.top }}
+                >
                   {lineFor(tipped)}
                 </div>
               )}

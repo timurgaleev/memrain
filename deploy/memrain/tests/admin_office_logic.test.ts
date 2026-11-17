@@ -15,6 +15,7 @@ import { OFFICE_MAP, PROPS, TILE, officeLayout, seatFor } from "../admin/src/off
 import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
 import { findPath } from "../admin/src/office/path.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
+import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
 
 const NOW = 1_000_000;
 const empty: OfficeState = { characters: new Map(), recent: [] };
@@ -52,9 +53,12 @@ describe("applyEvent", () => {
     expect(st.recent.length).toBeLessThanOrEqual(20);
   });
 
-  it("labels an unknown agent by its short id", () => {
+  it("labels an unknown app generically, never by its id", () => {
     const st = applyEvent(empty, ev({ agent: "abcdef123456" }), NOW, none);
-    expect(st.characters.get("abcdef123456")?.label).toBe("abcdef12");
+    const c = st.characters.get("abcdef123456")!;
+    expect(c.label).toBe("New app");
+    expect(describeCharacter(c)).not.toContain("abcdef");
+    expect(st.recent[0]!.text).not.toContain("abcdef");
   });
 
   it("records the error window on a failed job end", () => {
@@ -177,7 +181,7 @@ describe("applySnapshot", () => {
     expect(out.characters.get("cycle")?.busyUntil).toBe(Infinity);
   });
 
-  it("adds new workers, not new clients, and refreshes labels", () => {
+  it("adds new workers and recent clients, and refreshes labels", () => {
     const st = initialState(
       snap([], [{ id: "c1", display_name: "Old", last_seen: new Date(NOW).toISOString() }]),
       NOW,
@@ -188,15 +192,26 @@ describe("applySnapshot", () => {
         [{ name: "notifications", enabled: true, running: false }],
         [
           { id: "c1", display_name: "New", last_seen: null },
-          { id: "c9", display_name: "Fresh", last_seen: new Date(NOW).toISOString() },
+          { id: "c9", display_name: "Fresh", last_seen: new Date(NOW - 60_000).toISOString() },
+          { id: "c8", display_name: "Stale", last_seen: new Date(NOW - 25 * 3600_000).toISOString() },
+          { id: "c7", display_name: "Never", last_seen: null },
         ],
       ),
       NOW,
       NOW,
     );
     expect(out.characters.has("notifications")).toBe(true);
-    expect(out.characters.has("c9")).toBe(false);
     expect(out.characters.get("c1")?.label).toBe("New");
+    const fresh = out.characters.get("c9")!;
+    expect(fresh).toMatchObject({ kind: "client", label: "Fresh", room: "break_room", busyUntil: 0 });
+    expect(out.characters.has("c8")).toBe(false);
+    expect(out.characters.has("c7")).toBe(false);
+  });
+
+  it("names an app that first showed up through a live event", () => {
+    const st = applyEvent(empty, ev({ agent: "c5" }), NOW, none);
+    const out = applySnapshot(st, snap([], [{ id: "c5", display_name: "Desk app", last_seen: new Date(NOW).toISOString() }]), NOW, NOW);
+    expect(out.characters.get("c5")?.label).toBe("Desk app");
   });
 });
 
@@ -352,5 +367,40 @@ describe("officeLayout", () => {
 describe("office route", () => {
   it("opens the Office page from its hash", () => {
     expect(parseHash("#office").name).toBe("office");
+  });
+});
+
+describe("assignSeats", () => {
+  const person = (id: string, room: RoomId) => ({ id, room });
+
+  it("keeps a seat while the character stays in the room", () => {
+    const a = assignSeats(new Map(), [person("a", "archive"), person("b", "archive")]);
+    const b = assignSeats(a, [person("b", "archive")]);
+    expect(b.get("b")).toEqual(a.get("b"));
+  });
+
+  it("reuses a freed seat instead of stacking a newcomer on someone", () => {
+    let seats: Map<string, Seat> = new Map();
+    const n = OFFICE_MAP.seats.archive.length;
+    const ids = Array.from({ length: n }, (_, i) => `p${i}`);
+    seats = assignSeats(seats, ids.map((id) => person(id, "archive")));
+    // p1 walks off to write, then a newcomer arrives in the archive.
+    const moved = ids.map((id) => person(id, id === "p1" ? "writing" : "archive"));
+    seats = assignSeats(seats, [...moved, person("new", "archive")]);
+    expect(seats.get("new")).toEqual({ room: "archive", index: 1 });
+    const spots = [...seats.values()].filter((s) => s.room === "archive").map((s) => seatFor("archive", s.index));
+    expect(new Set(spots.map((t) => `${t.x},${t.y}`)).size).toBe(spots.length);
+  });
+
+  it("forgets characters that left the office", () => {
+    const a = assignSeats(new Map(), [person("a", "archive"), person("b", "library")]);
+    const b = assignSeats(a, [person("b", "library")]);
+    expect([...b.keys()]).toEqual(["b"]);
+  });
+
+  it("finds the lowest free seat in a room", () => {
+    const seats = assignSeats(new Map(), [person("a", "reception"), person("b", "reception")]);
+    expect(freeSeat(seats, "reception")).toBe(2);
+    expect(freeSeat(assignSeats(seats, [person("b", "reception")]), "reception")).toBe(0);
   });
 });
