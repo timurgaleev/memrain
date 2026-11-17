@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { Queue } from "../src/core/jobs/queue.ts";
 import { Worker } from "../src/core/jobs/worker.ts";
+import type { JobActivity } from "../src/core/jobs/activity.ts";
 import { _resetHandlersForTesting, registerHandler } from "../src/core/jobs/handlers.ts";
 
 let tmp: string;
@@ -81,6 +82,60 @@ describe("worker lanes", () => {
       expect(await running()).toEqual(["long-1"]);
     } finally {
       release.resolve();
+      await worker.stop();
+    }
+  });
+});
+
+describe("worker job events", () => {
+  const settled = async (id: string) =>
+    (await storage.engine().query<{ status: string }>(`SELECT status FROM jobs WHERE id = $1`, [id])).rows[0]?.status;
+
+  it("reports start then end for a succeeding job", async () => {
+    registerHandler("ok_kind", async () => ({}));
+    await queue.enqueue({ kind: "ok_kind", id: "ev-ok" });
+    const events: JobActivity[] = [];
+    const worker = new Worker(queue, { intervalMs: 10, logger: () => {}, onJobEvent: e => events.push(e) });
+    worker.start();
+    try {
+      await until(async () => events.length === 2);
+    } finally {
+      await worker.stop();
+    }
+    expect(events.map(e => e.phase)).toEqual(["start", "end"]);
+    expect(events[1]?.ok).toBe(true);
+    expect(events[0]?.worker).toBe("worker");
+    expect(events[1]?.worker).toBe(events[0]?.worker);
+    expect(events[1]?.kind).toBe("ok_kind");
+    expect(events[1]?.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("reports end with ok false when the handler throws", async () => {
+    registerHandler("bad_kind", async () => { throw new Error("boom"); });
+    await queue.enqueue({ kind: "bad_kind", id: "ev-bad" });
+    const events: JobActivity[] = [];
+    const worker = new Worker(queue, { intervalMs: 10, logger: () => {}, onJobEvent: e => events.push(e) });
+    worker.start();
+    try {
+      await until(async () => events.length === 2);
+    } finally {
+      await worker.stop();
+    }
+    expect(events.at(-1)).toMatchObject({ phase: "end", ok: false });
+  });
+
+  it("still completes the job when the hook throws", async () => {
+    registerHandler("ok_kind", async () => ({}));
+    await queue.enqueue({ kind: "ok_kind", id: "ev-throw" });
+    const worker = new Worker(queue, {
+      intervalMs: 10,
+      logger: () => {},
+      onJobEvent: () => { throw new Error("hook down"); },
+    });
+    worker.start();
+    try {
+      await until(async () => (await settled("ev-throw")) === "succeeded" || (await settled("ev-throw")) === "completed");
+    } finally {
       await worker.stop();
     }
   });

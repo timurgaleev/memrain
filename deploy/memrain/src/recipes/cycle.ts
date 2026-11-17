@@ -38,6 +38,16 @@ export interface CycleLoopOptions {
   quietStartHour?: number;
   /** Exclusive quiet-hour end in the configured zone (default 8). */
   quietEndHour?: number;
+  /** Live-activity hook around each cycle run. Errors it throws are dropped. */
+  onRun?: (e: { phase: "start" | "end"; ok?: boolean; latencyMs?: number }) => void;
+}
+
+function notifyRun(hook: CycleLoopOptions["onRun"], e: Parameters<NonNullable<CycleLoopOptions["onRun"]>>[0]): void {
+  try {
+    hook?.(e);
+  } catch {
+    // an observer must never touch the cycle
+  }
 }
 
 export interface CycleHandle {
@@ -281,7 +291,16 @@ export function startCycleLoop(
       // run alive under it, and its signal stops a run whose lock was taken.
       const heartbeat = startLockHeartbeat(lock);
       try {
-        const r = await runCycleOnce(storage.engine(), { ...opts, signal: heartbeat.signal });
+        const runStart = Date.now();
+        notifyRun(options.onRun, { phase: "start" });
+        let r;
+        try {
+          r = await runCycleOnce(storage.engine(), { ...opts, signal: heartbeat.signal });
+        } catch (e) {
+          notifyRun(options.onRun, { phase: "end", ok: false, latencyMs: Date.now() - runStart });
+          throw e;
+        }
+        notifyRun(options.onRun, { phase: "end", ok: true, latencyMs: Date.now() - runStart });
         await recordCycleRun(storage.engine(), r.status !== "fail", r.outcome);
         const mark = (s: string) => (s === "fail" ? "FAIL" : s); // ok | warn | FAIL
         const summary = r.phases

@@ -23,6 +23,7 @@ import { haltOf, llmHaltEnabled, noteHalt } from "./llm-halt.ts";
 import { isProviderLeaseBusy } from "./rate-leases.ts";
 import type { Queue } from "./queue.ts";
 import { type JobRow, UnrecoverableJobError, jobSpendClient } from "./types.ts";
+import { workerNameFor, type JobActivity } from "./activity.ts";
 import type { Engine } from "../engine/interface.ts";
 import {
   acquireWorkerLock,
@@ -56,6 +57,12 @@ export interface WorkerOptions {
    * one; with concurrency 1 the single slot is shared as before.
    */
   longKinds?: readonly string[];
+  /**
+   * Live-activity hook: `start` once a claimed job's handler begins, `end`
+   * once the job was completed or failed (a retryable fail counts). A claim
+   * lost or a shutdown hand-back emits no `end`. Errors it throws are dropped.
+   */
+  onJobEvent?: (e: JobActivity) => void;
   /** Hook for log lines — defaults to console.log/console.error. */
   logger?: (level: "info" | "warn" | "error", msg: string) => void;
   /** Seconds the running claim is valid for. Renewed every third of it while
@@ -389,6 +396,20 @@ export class Worker {
     };
     this.running.set(job.id, abort);
     const lease = this.renewLease(job, gen, abort);
+    const activity = { worker: workerNameFor(job), kind: job.kind };
+    const startedAt = Date.now();
+    const emit = (phase: JobActivity["phase"], ok?: boolean) => {
+      try {
+        this.opts.onJobEvent?.(
+          phase === "start"
+            ? { ...activity, phase }
+            : { ...activity, phase, ok, latencyMs: Date.now() - startedAt },
+        );
+      } catch {
+        // an observer must never touch the job
+      }
+    };
+    emit("start");
     // The whole body is guarded: a persistence failure (complete/fail) must
     // never crash the worker tick or escape as an unhandledRejection.
     try {
@@ -436,6 +457,7 @@ export class Worker {
         );
         if (done || !(await this.claimLost(job.id, gen))) {
           this.stats.succeeded++;
+          emit("end", true);
         }
       } catch (e) {
         if (e instanceof WorkerShutdownError) {
@@ -465,12 +487,15 @@ export class Worker {
         const unrecoverable =
           !timedOut && (isUnrecoverable(e) || (isDailyCapRefusal(e) && !isRolloverDailyCapRefusal(e)));
         if (!timedOut && !unrecoverable && (await this.deferForOutage(job, gen, e, message))) {
+          emit("end", false);
           return;
         }
         if (!timedOut && !unrecoverable && (await this.deferForDailyCap(job, gen, e, message))) {
+          emit("end", false);
           return;
         }
         if (!timedOut && !unrecoverable && (await this.deferForLease(job, gen, e, message))) {
+          emit("end", false);
           return;
         }
         this.log(
@@ -485,6 +510,7 @@ export class Worker {
         );
         if (timedOut) this.stats.timedOut++;
         if (!updated && (await this.claimLost(job.id, gen))) return;
+        emit("end", false);
         if (updated && updated.status === "pending") {
           this.stats.retried++;
         } else {
