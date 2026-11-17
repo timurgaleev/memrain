@@ -1,4 +1,4 @@
-import type { ModelId } from "./assets3d.ts";
+import type { ModelId } from "./asset-names.ts";
 import { AMBIENT_SPOTS, CORRIDOR_FLOOR, OFFICE_MAP, PROPS, RUGS, WALL_DECOR, isWall, roomAt, type Prop } from "./map.ts";
 import { facingProp } from "./ambient.ts";
 import { facingToYaw, tileToWorld } from "./world.ts";

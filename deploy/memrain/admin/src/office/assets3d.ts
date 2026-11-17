@@ -24,59 +24,55 @@ import sofaUrl from "../assets/office3d/loungeSofa.glb?url";
 import boardUrl from "../assets/office3d/paneling.glb?url";
 import plantUrl from "../assets/office3d/pottedPlant.glb?url";
 import rugUrl from "../assets/office3d/rugRectangle.glb?url";
+import { CHARACTER_FILES, MODEL_FILES, sideFileOf, type ModelId } from "./asset-names.ts";
 
-export type ModelId =
-  | "desk"
-  | "chair"
-  | "shelf"
-  | "cabinet"
-  | "plant"
-  | "sofa"
-  | "coffee_machine"
-  | "counter"
-  | "whiteboard"
-  | "board"
-  | "lamp"
-  | "rug"
-  | "monitor"
-  | "character";
+export type { ModelId } from "./asset-names.ts";
 
-// One URL per person; every person shares the same rig and clips.
-export const CHARACTER_VARIANTS: readonly string[] = [maleA, femaleB, maleD, femaleF, maleB, femaleD];
-
-// Clips each person carries; anything else (typing, watering) is animated by hand.
-export const CHARACTER_CLIPS = ["idle", "walk", "sit", "interact-right", "pick-up", "emote-yes"] as const;
-
-export const MODEL_URLS: Record<ModelId, string> = {
-  desk: deskUrl,
-  chair: chairUrl,
-  shelf: shelfUrl,
-  cabinet: cabinetUrl,
-  plant: plantUrl,
-  sofa: sofaUrl,
-  coffee_machine: coffeeUrl,
-  counter: counterUrl,
-  // The board's glass reads as a whiteboard once the scene paints it white.
-  whiteboard: whiteboardUrl,
-  board: boardUrl,
-  lamp: lampUrl,
-  rug: rugUrl,
-  monitor: monitorUrl,
-  character: maleA,
-};
-
-// A .gltf names its buffer and texture by plain file name, but the build renames
-// them with a content hash. The loader runs every URL through this to find them.
-const SIDE_FILES: ReadonlyMap<string, string> = new Map([
-  ["colormap.png", colormapUrl],
-  ["character-male-a.bin", maleABin],
-  ["character-male-b.bin", maleBBin],
-  ["character-male-d.bin", maleDBin],
+// The build renames every file with a content hash; this maps each plain name to it.
+const BUILT: ReadonlyMap<string, string> = new Map([
+  ["bathroomMirror.glb", whiteboardUrl],
+  ["bookcaseClosedDoors.glb", cabinetUrl],
+  ["bookcaseOpen.glb", shelfUrl],
+  ["chairDesk.glb", chairUrl],
   ["character-female-b.bin", femaleBBin],
+  ["character-female-b.gltf", femaleB],
   ["character-female-d.bin", femaleDBin],
+  ["character-female-d.gltf", femaleD],
   ["character-female-f.bin", femaleFBin],
+  ["character-female-f.gltf", femaleF],
+  ["character-male-a.bin", maleABin],
+  ["character-male-a.gltf", maleA],
+  ["character-male-b.bin", maleBBin],
+  ["character-male-b.gltf", maleB],
+  ["character-male-d.bin", maleDBin],
+  ["character-male-d.gltf", maleD],
+  ["colormap.png", colormapUrl],
+  ["computerScreen.glb", monitorUrl],
+  ["desk.glb", deskUrl],
+  ["kitchenBar.glb", counterUrl],
+  ["kitchenCoffeeMachine.glb", coffeeUrl],
+  ["lampRoundFloor.glb", lampUrl],
+  ["loungeSofa.glb", sofaUrl],
+  ["paneling.glb", boardUrl],
+  ["pottedPlant.glb", plantUrl],
+  ["rugRectangle.glb", rugUrl],
 ]);
 
+function built(name: string): string {
+  const url = BUILT.get(name);
+  if (!url) throw new Error(`office: ${name} is not imported in assets3d.ts`);
+  return url;
+}
+
+export const CHARACTER_VARIANTS: readonly string[] = CHARACTER_FILES.map(built);
+
+export const MODEL_URLS = Object.fromEntries(
+  (Object.keys(MODEL_FILES) as ModelId[]).map((id) => [id, built(MODEL_FILES[id])]),
+) as Record<ModelId, string>;
+
+// A .gltf names its buffer and texture by plain file name; the loader runs every
+// URL through this to find their built names.
 export function resolveModelFile(url: string): string {
-  return SIDE_FILES.get(url.slice(url.lastIndexOf("/") + 1)) ?? url;
+  const side = sideFileOf(url);
+  return side ? built(side) : url;
 }

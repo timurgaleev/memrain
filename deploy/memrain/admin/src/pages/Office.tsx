@@ -635,6 +635,12 @@ export function OfficePage() {
     overlay.current.tip.id = tipId;
     overlay.current.poke();
   }, [tipId]);
+  // Any state change can change a tag's words, and so its width, with no scene frame
+  // to follow (a rename, under reduced motion). Runs after React has updated the text;
+  // the tag's size cache is keyed by that text, so it measures again.
+  useEffect(() => {
+    overlay.current.poke();
+  }, [view]);
 
   const under = (e: ReactPointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();

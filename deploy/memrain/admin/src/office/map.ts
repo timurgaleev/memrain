@@ -1,5 +1,5 @@
 import type { Tile } from "./path.ts";
-import type { ModelId } from "./assets3d.ts";
+import type { ModelId } from "./asset-names.ts";
 import type { RoomId } from "./rooms.ts";
 
 const W = 34;

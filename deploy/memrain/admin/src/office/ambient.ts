@@ -1,6 +1,6 @@
 import type { Character, OfficeState } from "./model.ts";
 import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, PROPS, WALL_DECOR, roomAt, type AmbientKind } from "./map.ts";
-import type { ModelId } from "./assets3d.ts";
+import type { ModelId } from "./asset-names.ts";
 import type { Pose } from "./motion.ts";
 import type { Tile } from "./path.ts";
 

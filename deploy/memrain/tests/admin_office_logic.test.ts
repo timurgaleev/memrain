@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
 import type { FeedEvent, OfficeSnapshot } from "../admin/src/admin-types.ts";
 import {
@@ -27,10 +27,11 @@ import { animPose, clipFor, clipsForPose, nextClips, syncCharacters, type ClipNa
 import { buildPlacements, buildSeats, floorBoxes } from "../admin/src/office/layout3d.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
 import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
-import { CHARACTER_CLIPS, CHARACTER_VARIANTS, MODEL_URLS, resolveModelFile, type ModelId } from "../admin/src/office/assets3d.ts";
+import { CHARACTER_CLIPS, CHARACTER_FILES, MODEL_FILES, SIDE_FILES, sideFileOf, type ModelId } from "../admin/src/office/asset-names.ts";
 import { modelsOverBudget, staticClosure, threeInStaticClosure, type Manifest } from "../admin/scripts/check-office-chunks.ts";
 
 const NOW = 1_000_000;
+const ASSET_DIR = join(import.meta.dir, "../admin/src/assets/office3d");
 const empty: OfficeState = { characters: new Map(), recent: [] };
 const none = new Map<string, string>();
 const W = (name: string) => `worker:${name}`;
@@ -710,38 +711,53 @@ describe("figure looks", () => {
   });
 
   it("spreads the cast over several of the looks the scene ships", () => {
-    expect(new Set(ids.map((id) => variantFor(id) % CHARACTER_VARIANTS.length)).size).toBeGreaterThanOrEqual(4);
+    expect(new Set(ids.map((id) => variantFor(id) % CHARACTER_FILES.length)).size).toBeGreaterThanOrEqual(4);
   });
 });
 
 describe("3D office assets", () => {
   const ids: ModelId[] = ["desk", "chair", "shelf", "cabinet", "plant", "sofa", "coffee_machine", "counter", "whiteboard", "board", "lamp", "rug", "monitor", "character"];
 
-  it("has a model file for every model id", () => {
-    for (const id of ids) expect(MODEL_URLS[id]).toMatch(/\.(glb|gltf)$/);
+  it("has a model file on disk for every model id", () => {
+    for (const id of ids) {
+      expect(MODEL_FILES[id]).toMatch(/\.(glb|gltf)$/);
+      expect(existsSync(join(ASSET_DIR, MODEL_FILES[id]))).toBe(true);
+    }
   });
 
   it("offers at least six distinct people", () => {
-    expect(new Set(CHARACTER_VARIANTS).size).toBe(CHARACTER_VARIANTS.length);
-    expect(CHARACTER_VARIANTS.length).toBeGreaterThanOrEqual(6);
-    for (const url of CHARACTER_VARIANTS) expect(url).toMatch(/\.gltf$/);
+    expect(new Set(CHARACTER_FILES).size).toBe(CHARACTER_FILES.length);
+    expect(CHARACTER_FILES.length).toBeGreaterThanOrEqual(6);
+    for (const file of CHARACTER_FILES) {
+      expect(file).toMatch(/\.gltf$/);
+      expect(existsSync(join(ASSET_DIR, file))).toBe(true);
+    }
   });
 
-  it("never points at an inline data URL", () => {
-    for (const url of [...Object.values(MODEL_URLS), ...CHARACTER_VARIANTS]) expect(url).not.toContain("data:");
+  it("imports every file it names with ?url, so the build hashes and serves it", () => {
+    const source = readFileSync(join(import.meta.dir, "../admin/src/office/assets3d.ts"), "utf8");
+    for (const file of [...Object.values(MODEL_FILES), ...CHARACTER_FILES, ...SIDE_FILES]) {
+      expect(source).toContain(`"../assets/office3d/${file}?url"`);
+      expect(source).toContain(`["${file}", `);
+    }
   });
 
-  it("maps the side files a model names to their built URLs", () => {
-    expect(resolveModelFile("/admin/assets/colormap.png")).toMatch(/colormap.*\.png$/);
-    expect(resolveModelFile("/admin/assets/colormap.png")).not.toBe("/admin/assets/colormap.png");
-    expect(resolveModelFile("/admin/assets/other-Ab12.png")).toBe("/admin/assets/other-Ab12.png");
+  it("lists every buffer and texture a person model names as a side file", () => {
+    for (const file of CHARACTER_FILES) {
+      const gltf = JSON.parse(readFileSync(join(ASSET_DIR, file), "utf8")) as { buffers?: { uri?: string }[]; images?: { uri?: string }[] };
+      for (const { uri } of [...(gltf.buffers ?? []), ...(gltf.images ?? [])]) {
+        if (uri) expect(SIDE_FILES).toContain(uri);
+      }
+    }
+    for (const file of SIDE_FILES) expect(existsSync(join(ASSET_DIR, file))).toBe(true);
   });
 
-  it("maps every person's buffer file", () => {
+  it("recognises the side files a model asks for and nothing else", () => {
+    expect(sideFileOf("/admin/assets/colormap.png")).toBe("colormap.png");
+    expect(sideFileOf("/admin/assets/other-Ab12.png")).toBeNull();
+    expect(sideFileOf("/admin/assets/desk-Ab12.glb")).toBeNull();
     for (const person of ["male-a", "male-b", "male-d", "female-b", "female-d", "female-f"]) {
-      const asked = `/admin/assets/character-${person}.bin`;
-      expect(resolveModelFile(asked)).not.toBe(asked);
-      expect(resolveModelFile(asked)).toMatch(new RegExp(`character-${person}.*\\.bin$`));
+      expect(sideFileOf(`/admin/assets/character-${person}.bin`)).toBe(`character-${person}.bin`);
     }
   });
 });
@@ -794,7 +810,7 @@ describe("3D world mapping", () => {
       (t.x === home.x && t.y === home.y));
 
   it("gives every prop a known model kind", () => {
-    const known = new Set(Object.keys(MODEL_URLS));
+    const known = new Set(Object.keys(MODEL_FILES));
     for (const p of [...PROPS, ...WALL_DECOR]) expect(p.kind === null || known.has(p.kind)).toBe(true);
   });
 
@@ -1037,9 +1053,8 @@ describe("3D animation helpers", () => {
   });
 
   it("ships every clip in every person's model", () => {
-    const dir = join(import.meta.dir, "../admin/src/assets/office3d");
-    for (const url of CHARACTER_VARIANTS) {
-      const gltf = JSON.parse(readFileSync(join(dir, basename(url)), "utf8")) as { animations: { name: string }[] };
+    for (const file of CHARACTER_FILES) {
+      const gltf = JSON.parse(readFileSync(join(ASSET_DIR, file), "utf8")) as { animations: { name: string }[] };
       const names = new Set(gltf.animations.map((a) => a.name));
       for (const clip of CHARACTER_CLIPS) expect(names.has(clip)).toBe(true);
     }
