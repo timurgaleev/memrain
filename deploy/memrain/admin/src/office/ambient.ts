@@ -1,5 +1,6 @@
 import type { Character, OfficeState } from "./model.ts";
-import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, roomAt, type AmbientKind } from "./map.ts";
+import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, PROPS, WALL_DECOR, roomAt, type AmbientKind } from "./map.ts";
+import type { ModelId } from "./assets3d.ts";
 import type { Pose } from "./motion.ts";
 import type { Tile } from "./path.ts";
 
@@ -49,9 +50,19 @@ export function emptyAmbient(): AmbientState {
   return { activities: new Map(), nextAt: new Map() };
 }
 
-// Look at whatever blocks a neighbouring tile: the prop or wall the spot belongs to.
-function facingProp(t: Tile): Facing | undefined {
-  for (const [f, dx, dy] of SIDES) if (!OFFICE_MAP.walkable(t.x + dx, t.y + dy)) return f;
+// The prop each activity is about; the figure turns to the matching one beside its spot.
+const PROP_OF: Record<"coffee" | "whiteboard" | "water_plants" | "sofa", ModelId> = {
+  coffee: "coffee_machine",
+  whiteboard: "whiteboard",
+  water_plants: "plant",
+  sofa: "sofa",
+};
+
+export function facingProp(kind: keyof typeof PROP_OF, t: Tile): Facing | undefined {
+  for (const [f, dx, dy] of SIDES) {
+    const hit = [...PROPS, ...WALL_DECOR].some((p) => p.kind === PROP_OF[kind] && p.x === t.x + dx && p.y === t.y + dy);
+    if (hit) return f;
+  }
   return undefined;
 }
 
@@ -132,7 +143,7 @@ export function planAmbient(
       continue;
     }
     const target = pick(free(kind === "wander" ? WANDER_TILES : AMBIENT_SPOTS[kind]));
-    const facing = kind === "wander" ? undefined : facingProp(target);
+    const facing = kind === "wander" ? undefined : facingProp(kind, target);
     activities.set(id, { kind, target, ...(facing ? { facing } : {}), until });
     taken.add(key(target));
   }
@@ -144,7 +155,7 @@ export function targetFor(
   c: Character,
   amb: AmbientState,
   seatTile: Tile,
-  now: number = Date.now(),
+  now: number,
 ): { tile: Tile; facing?: Pose["facing"]; pose: "walk" | "idle" | "sit" | "work" | AmbientKind } {
   if (c.busyUntil > now) return { tile: seatTile, pose: "work" };
   const a = amb.activities.get(c.id);

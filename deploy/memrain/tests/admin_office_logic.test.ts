@@ -12,7 +12,7 @@ import {
   type Character,
   type OfficeState,
 } from "../admin/src/office/model.ts";
-import { emptyAmbient, planAmbient, targetFor } from "../admin/src/office/ambient.ts";
+import { emptyAmbient, facingProp, planAmbient, targetFor } from "../admin/src/office/ambient.ts";
 import { roomFor, type RoomId } from "../admin/src/office/rooms.ts";
 import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, PROPS, TILE, WALL_DECOR, officeLayout, roomAt, seatFor, spotFor } from "../admin/src/office/map.ts";
 import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
@@ -807,7 +807,21 @@ describe("ambient life", () => {
 
   it("targetFor sits in the break room and idles elsewhere", () => {
     const seat = { x: 3, y: 3 };
-    expect(targetFor(person("a"), emptyAmbient(), seat).pose).toBe("sit");
-    expect(targetFor(person("a", { room: "writing" }), emptyAmbient(), seat).pose).toBe("idle");
+    expect(targetFor(person("a"), emptyAmbient(), seat, 0).pose).toBe("sit");
+    expect(targetFor(person("a", { room: "writing" }), emptyAmbient(), seat, 0).pose).toBe("idle");
+  });
+
+  it("faces the matching prop from every ambient spot", () => {
+    const want = { coffee: "coffee_machine", whiteboard: "whiteboard", water_plants: "plant", sofa: "sofa" } as const;
+    const dir = { up: [0, -1], right: [1, 0], down: [0, 1], left: [-1, 0] } as const;
+    for (const [kind, spots] of Object.entries(AMBIENT_SPOTS) as [keyof typeof want, { x: number; y: number }[]][]) {
+      for (const t of spots) {
+        const f = facingProp(kind, t);
+        expect(f).toBeDefined();
+        const [dx, dy] = dir[f!];
+        const hit = [...PROPS, ...WALL_DECOR].some((p) => p.kind === want[kind] && p.x === t.x + dx && p.y === t.y + dy);
+        expect(hit).toBe(true);
+      }
+    }
   });
 });
