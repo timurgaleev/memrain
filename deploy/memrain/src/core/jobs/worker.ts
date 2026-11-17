@@ -385,7 +385,7 @@ export class Worker {
         const updated = await this.queue.fail(job.id, gen, msg, { terminal: true });
         if (!updated && (await this.claimLost(job.id, gen))) return;
         this.stats.failed++;
-        emit("end", false);
+        if (updated) emit("end", false);
       } catch (e) {
         this.log("error", `[${job.id}] no-handler fail persist: ${asMessage(e)}`);
       }
@@ -458,7 +458,7 @@ export class Worker {
         );
         if (done || !(await this.claimLost(job.id, gen))) {
           this.stats.succeeded++;
-          emit("end", true);
+          if (done) emit("end", true);
         }
       } catch (e) {
         if (e instanceof WorkerShutdownError) {
@@ -508,7 +508,7 @@ export class Worker {
         );
         if (timedOut) this.stats.timedOut++;
         if (!updated && (await this.claimLost(job.id, gen))) return;
-        emit("end", false);
+        if (updated) emit("end", false);
         if (updated && updated.status === "pending") {
           this.stats.retried++;
         } else {

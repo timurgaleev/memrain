@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import * as cycleCore from "../src/core/cycle/index.ts";
+import { readControls } from "../src/core/daemons/controls.ts";
 import { startCycleLoop, type CycleRunEvent } from "../src/recipes/cycle.ts";
 
 let tmp: string;
@@ -43,10 +44,24 @@ async function until(cond: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
+async function untilAsync(cond: () => Promise<boolean>, ms = 5000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!(await cond())) {
+    if (Date.now() > end) throw new Error("condition not met in time");
+    await Bun.sleep(20);
+  }
+}
+
 async function runOnce(onRun: (e: CycleRunEvent) => void): Promise<void> {
   const loop = startCycleLoop(storage, { intervalMs: 3_600_000, onRun });
   try {
     await until(() => calls > 0);
+    // The run is stored last; stopping before that would let teardown close
+    // the engine under a write still in flight.
+    await untilAsync(async () => {
+      const rows = await readControls(storage.engine());
+      return rows.some(r => r.daemon === "cycle" && r.last_run_at != null);
+    });
   } finally {
     await loop.stop();
   }
