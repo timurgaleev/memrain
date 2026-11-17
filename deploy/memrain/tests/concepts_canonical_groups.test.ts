@@ -59,4 +59,13 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     expect(third.groupsUnchanged).toBe(1);
     expect(third.conceptsWritten).toBe(0);
   });
+
+  it("mints no hub for a placeholder concept tag", async () => {
+    await atoms([["first insight", ["organization", "astro"]], ["second insight", ["organization", "astro"]]]);
+    const r = await synthesizeConceptsPhase(db.storage.engine(), { llmFn: noModel, storage: db.storage });
+    expect(r.errors).toEqual([]);
+    expect((await db.storage.engine().query("SELECT concept_slug FROM synth_concepts ORDER BY concept_slug")).rows).toEqual([{ concept_slug: "astro" }]);
+    expect(await page("concepts/organization")).toBeUndefined();
+    expect(await page("concepts/astro")).toBeDefined();
+  });
 });
