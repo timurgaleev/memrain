@@ -7,5 +7,14 @@ export default defineConfig({
   base: "/admin/",
   // assetsInlineLimit 0: the CSP (img-src 'self') rejects data: URIs, so the favicon must be a file.
   // manifest: the server reads dist/.vite/manifest.json to know which files carry a content hash.
-  build: { outDir: "dist", emptyOutDir: true, assetsInlineLimit: 0, manifest: true },
+  // three: one named chunk, so scripts/check-office-chunks.ts can find it in the manifest.
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    assetsInlineLimit: 0,
+    manifest: true,
+    rollupOptions: {
+      output: { manualChunks: (id) => (id.includes("/node_modules/three/") ? "three" : undefined) },
+    },
+  },
 });

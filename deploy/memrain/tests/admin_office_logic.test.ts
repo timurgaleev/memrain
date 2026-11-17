@@ -18,6 +18,7 @@ import { findPath } from "../admin/src/office/path.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
 import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
 import { CHARACTER_VARIANTS, MODEL_URLS, resolveModelFile, type ModelId } from "../admin/src/office/assets3d.ts";
+import { modelsOverBudget, staticClosure, threeInStaticClosure, type Manifest } from "../admin/scripts/check-office-chunks.ts";
 
 const NOW = 1_000_000;
 const empty: OfficeState = { characters: new Map(), recent: [] };
@@ -567,7 +568,7 @@ describe("lineFor", () => {
 });
 
 describe("3D office assets", () => {
-  const ids: ModelId[] = ["desk", "chair", "shelf", "cabinet", "plant", "sofa", "coffee_machine", "whiteboard", "board", "lamp", "rug", "character"];
+  const ids: ModelId[] = ["desk", "chair", "shelf", "cabinet", "plant", "sofa", "coffee_machine", "counter", "whiteboard", "board", "lamp", "rug", "monitor", "character"];
 
   it("has a model file for every model id", () => {
     for (const id of ids) expect(MODEL_URLS[id]).toMatch(/\.(glb|gltf)$/);
@@ -587,5 +588,53 @@ describe("3D office assets", () => {
     expect(resolveModelFile("/admin/assets/colormap.png")).toMatch(/colormap.*\.png$/);
     expect(resolveModelFile("/admin/assets/colormap.png")).not.toBe("/admin/assets/colormap.png");
     expect(resolveModelFile("/admin/assets/other-Ab12.png")).toBe("/admin/assets/other-Ab12.png");
+  });
+
+  it("maps every person's buffer file", () => {
+    for (const person of ["male-a", "male-b", "male-d", "female-b", "female-d", "female-f"]) {
+      const asked = `/admin/assets/character-${person}.bin`;
+      expect(resolveModelFile(asked)).not.toBe(asked);
+      expect(resolveModelFile(asked)).toMatch(new RegExp(`character-${person}.*\\.bin$`));
+    }
+  });
+});
+
+describe("office chunk check", () => {
+  const office = { file: "assets/Office-1.js", src: "src/pages/Office.tsx", isDynamicEntry: true, imports: ["_three-1.js"] };
+  const three = { file: "assets/three-1.js", name: "three" };
+
+  it("lets three load through a dynamic import", () => {
+    const manifest: Manifest = {
+      "index.html": { file: "assets/index-1.js", isEntry: true, imports: ["_vendor-1.js"], dynamicImports: ["src/pages/Office.tsx"] },
+      "_vendor-1.js": { file: "assets/vendor-1.js" },
+      "src/pages/Office.tsx": office,
+      "_three-1.js": three,
+    };
+    expect([...staticClosure(manifest, "index.html")].sort()).toEqual(["_vendor-1.js", "index.html"]);
+    expect(threeInStaticClosure(manifest, "index.html")).toBe(false);
+  });
+
+  it("catches three pulled statically two imports deep", () => {
+    const manifest: Manifest = {
+      "index.html": { file: "assets/index-1.js", isEntry: true, imports: ["_a-1.js"] },
+      "_a-1.js": { file: "assets/a-1.js", imports: ["_b-1.js"] },
+      "_b-1.js": { file: "assets/b-1.js", imports: ["_three-1.js"] },
+      "_three-1.js": three,
+    };
+    expect(staticClosure(manifest, "index.html").has("_three-1.js")).toBe(true);
+    expect(threeInStaticClosure(manifest, "index.html")).toBe(true);
+  });
+
+  it("knows three by its source path as well as its chunk name", () => {
+    const manifest: Manifest = {
+      "index.html": { file: "assets/index-1.js", isEntry: true, imports: ["node_modules/three/build/three.module.js"] },
+      "node_modules/three/build/three.module.js": { file: "assets/three.module-1.js", src: "node_modules/three/build/three.module.js" },
+    };
+    expect(threeInStaticClosure(manifest, "index.html")).toBe(true);
+  });
+
+  it("holds the models to 1,500,000 bytes", () => {
+    expect(modelsOverBudget(1_500_000)).toBe(false);
+    expect(modelsOverBudget(1_500_001)).toBe(true);
   });
 });
