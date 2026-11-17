@@ -158,6 +158,15 @@ describe("applySnapshot", () => {
     expect(tick(out, NOW + 2000).characters.get("cycle")?.room).toBe("break_room");
   });
 
+  it("ignores a running snapshot requested before a job ended", () => {
+    const run = ev({ agent: "cycle", kind: "job", phase: "start", status: "running" });
+    let st = applyEvent(empty, run, NOW, none);
+    st = applyEvent(st, { ...run, phase: "end", status: "success" }, NOW + 2000, none);
+    const out = applySnapshot(st, snap([{ name: "cycle", enabled: true, running: true }]), NOW + 1000, NOW + 3000);
+    expect(out.characters.get("cycle")?.busyUntil).toBe(NOW + 5000);
+    expect(tick(out, NOW + 5000).characters.get("cycle")?.room).toBe("break_room");
+  });
+
   it("leaves a start that arrived after the query", () => {
     const st = applyEvent(empty, ev({ agent: "cycle", kind: "job", phase: "start", status: "running" }), NOW + 500, none);
     const out = applySnapshot(st, snap([{ name: "cycle", enabled: true, running: false }]), NOW, NOW + 1000);

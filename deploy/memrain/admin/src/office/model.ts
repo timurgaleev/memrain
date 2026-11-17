@@ -10,6 +10,7 @@ export interface Character {
   activity: string | null;
   busyUntil: number;
   startedAt: number | null;
+  endedAt: number | null;
   errorUntil: number;
   arrivedAt: number;
   lastSeen: number;
@@ -45,6 +46,7 @@ function workerCharacter(w: OfficeSnapshot["workers"][number], now: number): Cha
     activity: null,
     busyUntil: w.running ? Infinity : 0,
     startedAt: w.running ? now : null,
+    endedAt: null,
     errorUntil: 0,
     arrivedAt: now,
     lastSeen: now,
@@ -66,6 +68,7 @@ export function initialState(s: OfficeSnapshot, now: number): OfficeState {
       activity: null,
       busyUntil: 0,
       startedAt: null,
+      endedAt: null,
       errorUntil: 0,
       arrivedAt: now,
       lastSeen: seen,
@@ -86,6 +89,10 @@ export function applySnapshot(
     if (!c) {
       characters.set(w.name, workerCharacter(w, now));
     } else if (w.running) {
+      if (c.endedAt !== null && c.endedAt >= requestedAt) {
+        characters.set(w.name, { ...c, enabled: w.enabled });
+        continue;
+      }
       characters.set(w.name, {
         ...c,
         enabled: w.enabled,
@@ -130,6 +137,7 @@ export function applyEvent(
     activity: null,
     busyUntil: 0,
     startedAt: null,
+    endedAt: null,
     errorUntil: 0,
     arrivedAt: now,
     lastSeen: now,
@@ -152,10 +160,11 @@ export function applyEvent(
       activity: e.operation,
       busyUntil: now + JOB_LINGER_MS,
       startedAt: null,
+      endedAt: now,
       errorUntil: failed ? now + JOB_LINGER_MS : base.errorUntil,
     };
   } else {
-    next = { ...base, room, activity: e.operation, busyUntil: Infinity, startedAt: now };
+    next = { ...base, room, activity: e.operation, busyUntil: Infinity, startedAt: now, endedAt: null };
   }
 
   const characters = new Map(st.characters);
