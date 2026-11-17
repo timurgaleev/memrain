@@ -65,14 +65,6 @@ marked; this section is the one that stands.
   Code callers without a visible starting definition retain the stricter
   identity boundary.
 
-## Follow-ups from the 1.19 merge review
-
-- **Shadow ranking compares before the final trim.** `startShadow` in
-  `search/hybrid.ts` compares the shadow list with the organic list before the
-  graph rerank and the token-budget trim, so `search stats` can record a
-  first-result comparison for a hit the caller never received. Compare at the
-  point the caller's list is final; keep `eval bench` snapshot identical.
-
 ## Follow-ups from the 1.16 batch
 
 - OAuth callers on `/mcp` are treated as non-public, so an unexpected error

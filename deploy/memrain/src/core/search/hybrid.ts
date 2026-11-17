@@ -1341,9 +1341,6 @@ async function hybridSearchUnbounded(
       : mapped;
   };
   let organic: SearchHit[] = await withAliasHop(final);
-  // The shadow list goes through the same alias hop, so both sides are compared
-  // as the caller would see them.
-  if (shadow && shadowHits) startShadow(shadow, shadowHits, stageInput, organic, withAliasHop);
 
   // 8d. Graph-aware Sonnet rerank (opt-in, default OFF) — reorder the top hits
   //     with one paid Sonnet call using a link-graph connectivity hint. Runs on
@@ -1471,6 +1468,15 @@ async function hybridSearchUnbounded(
   //     the cap is a pure view on the returned value: it never poisons the
   //     cache and never shrinks the eval window. Default OFF → `hits` unchanged.
   const kept = applyAdaptiveReturn(hits, intent, adaptiveCfg).kept;
+  // The shadow list takes the same alias hop, trim to k, token budget and
+  // return sizing, so it is compared with exactly what the caller got back.
+  if (shadow && shadowHits) {
+    startShadow(shadow, shadowHits, stageInput, kept, async (shadowRanked) => {
+      let view = (await withAliasHop(shadowRanked)).slice(0, k);
+      if (tokenBudget !== undefined) view = applyTokenBudget(view, tokenBudget);
+      return applyAdaptiveReturn(view, intent, adaptiveCfg).kept;
+    });
+  }
   diagnostic?.mark("ranking");
   await report({
     vectorEnabled: queryVector !== null,

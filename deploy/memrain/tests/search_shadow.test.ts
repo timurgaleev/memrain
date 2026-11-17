@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, setDefaultTimeout
 import { loadBenchQrels, openBenchBrain, scoredQrels, type BenchBrain } from "../src/eval/bench/harness.ts";
 import { hybridSearch } from "../src/core/search/hybrid.ts";
 import { classifyIntentZeroLlm } from "../src/core/search/intent.ts";
+import * as shadow from "../src/core/search/shadow.ts";
 import { compareTop5, flushShadowTelemetry, readShadowStats, shadowFlag, startShadow } from "../src/core/search/shadow.ts";
 import { classifyQuerySuggestions as classifySuggestions } from "../src/core/search/query-intent.ts";
 import { validateConfigValue } from "../src/core/runtime-config-schema.ts";
@@ -80,6 +81,33 @@ describe("shadow ranking in hybridSearch", () => {
     expect(r[0]!.count).toBe(queries().length);
     expect(r[0]!.rank1_changed).toBeLessThanOrEqual(r[0]!.count);
     expect(r[0]!.sum_jaccard5).toBeGreaterThan(0);
+  });
+
+  it("compares only the results the caller gets back: after the trim to k and the token budget", async () => {
+    const seen: Array<{ main: number; finished: number; returned: number }> = [];
+    const spy = spyOn(shadow, "startShadow").mockImplementation((_flag, copy, _input, main, finish) => {
+      void (async () => {
+        seen.push({ main: main.length, finished: finish ? (await finish(copy)).length : copy.length, returned: -1 });
+      })();
+    });
+    process.env.MEMRAIN_RANK_SHADOW = "EXACT_LOOKUP";
+    try {
+      for (const [k, tokenBudget] of [[1, undefined], [3, undefined], [10, 1]] as const) {
+        const q = queries()[0]!;
+        const r = await hybridSearch(brain.storage, q, {
+          k, intent: classifyIntentZeroLlm(q), embedQuery: deterministicEmbedQuery, noCache: true,
+          rerank: false, graphRerank: false, expansion: false, noExpansion: true, ...(tokenBudget ? { tokenBudget } : {}),
+        });
+        await Bun.sleep(0);
+        seen.at(-1)!.returned = r.length;
+      }
+    } finally {
+      spy.mockRestore();
+    }
+    expect(seen).toHaveLength(3);
+    for (const s of seen) expect(s).toEqual({ main: s.returned, finished: s.returned, returned: s.returned });
+    expect(seen.map(s => s.returned)).toEqual([1, 3, seen[2]!.returned]);
+    expect(seen[2]!.returned).toBeLessThan(10);
   });
 
   it("records nothing for a call that opts out of telemetry, or for a flag it cannot shadow", async () => {
