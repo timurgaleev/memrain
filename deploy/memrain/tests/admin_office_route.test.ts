@@ -135,6 +135,25 @@ describe("GET /admin/api/office", () => {
     expect(worker(await snapshot(), "cycle")?.running).toBe(false);
   });
 
+  it("dates an OAuth app by its newest token and leaves an app without tokens undated", async () => {
+    const e = storage.engine();
+    await e.query(`INSERT INTO oauth_clients (client_id, client_name) VALUES ('cid-live', 'Live app'), ('cid-idle', 'Idle app')`);
+    await e.query(
+      `INSERT INTO oauth_tokens (token_hash, token_type, client_id, created_at)
+       VALUES ('TOKEN-OLD', 'refresh', 'cid-live', NOW() - INTERVAL '3 days'),
+              ('TOKEN-NEW', 'access', 'cid-live', NOW())`,
+    );
+    const res = await call("/admin/api/office", { cookie });
+    const text = await res!.text();
+    const b = JSON.parse(text) as OfficeSnapshot;
+    const live = b.clients.find((c) => c.id === "cid-live")!;
+    expect(live.last_seen).not.toBeNull();
+    expect(Math.abs(Date.now() - Date.parse(live.last_seen!))).toBeLessThan(60_000);
+    expect(b.clients.find((c) => c.id === "cid-idle")?.last_seen).toBeNull();
+    expect(b.clients.find((c) => c.id === "public")?.last_seen).toBeNull();
+    for (const leak of ["token_hash", "TOKEN-OLD", "TOKEN-NEW"]) expect(text).not.toContain(leak);
+  });
+
   it("lists each client id once, OAuth and the shared key winning over a same-named PAT", async () => {
     const e = storage.engine();
     await e.query(`INSERT INTO oauth_clients (client_id, client_name) VALUES ('shared-name', 'Real client')`);

@@ -11,7 +11,7 @@ import {
   type OfficeState,
 } from "../admin/src/office/model.ts";
 import { roomFor, type RoomId } from "../admin/src/office/rooms.ts";
-import { OFFICE_MAP, PROPS, TILE, officeLayout, seatFor } from "../admin/src/office/map.ts";
+import { OFFICE_MAP, PROPS, TILE, officeLayout, roomAt, seatFor, spotFor } from "../admin/src/office/map.ts";
 import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
 import { findPath } from "../admin/src/office/path.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
@@ -402,5 +402,41 @@ describe("assignSeats", () => {
     const seats = assignSeats(new Map(), [person("a", "reception"), person("b", "reception")]);
     expect(freeSeat(seats, "reception")).toBe(2);
     expect(freeSeat(assignSeats(seats, [person("b", "reception")]), "reception")).toBe(0);
+  });
+});
+
+describe("spotFor", () => {
+  const floorIn = (room: RoomId) => {
+    let n = 0;
+    for (let y = 0; y < OFFICE_MAP.height; y++) {
+      for (let x = 0; x < OFFICE_MAP.width; x++) if (OFFICE_MAP.walkable(x, y) && roomAt(x, y)?.id === room) n++;
+    }
+    return n;
+  };
+
+  it("uses the room's seats first", () => {
+    OFFICE_MAP.seats.archive.forEach((seat, i) => expect(spotFor("archive", i)).toEqual(seat));
+  });
+
+  it("stands a 7th archive visitor on a free floor tile inside the archive", () => {
+    const seats = OFFICE_MAP.seats.archive.length;
+    const extra = spotFor("archive", seats);
+    expect(OFFICE_MAP.walkable(extra.x, extra.y)).toBe(true);
+    expect(roomAt(extra.x, extra.y)?.id).toBe("archive");
+    expect(OFFICE_MAP.seats.archive.some((t) => t.x === extra.x && t.y === extra.y)).toBe(false);
+  });
+
+  it("gives every floor tile of a room before it wraps", () => {
+    const rooms = Object.keys(OFFICE_MAP.seats) as RoomId[];
+    for (const room of rooms) {
+      const n = floorIn(room);
+      const spots = Array.from({ length: n }, (_, i) => spotFor(room, i));
+      for (const t of spots) {
+        expect(OFFICE_MAP.walkable(t.x, t.y)).toBe(true);
+        expect(roomAt(t.x, t.y)?.id).toBe(room);
+      }
+      expect(new Set(spots.map((t) => `${t.x},${t.y}`)).size).toBe(n);
+      expect(spotFor(room, n)).toEqual(spotFor(room, 0));
+    }
   });
 });

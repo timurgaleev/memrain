@@ -220,6 +220,29 @@ export function seatFor(room: RoomId, index: number): Tile {
   return seats[i]!;
 }
 
+// Free floor inside each room, row by row, for visitors once every seat is taken.
+const FLOOR: Record<RoomId, Tile[]> = Object.fromEntries(
+  ROOMS.map((r) => {
+    const tiles: Tile[] = [];
+    for (let y = r.y; y < r.y + r.h; y++) {
+      for (let x = r.x; x < r.x + r.w; x++) {
+        const seat = SEATS[r.id].some((t) => t.x === x && t.y === y);
+        if (!seat && OFFICE_MAP.walkable(x, y)) tiles.push({ x, y });
+      }
+    }
+    return [r.id, tiles];
+  }),
+) as Record<RoomId, Tile[]>;
+
+// Seats first, then the room's free floor; wraps only once every floor tile is in use.
+export function spotFor(room: RoomId, index: number): Tile {
+  const seats = SEATS[room];
+  const floor = FLOOR[room];
+  const total = seats.length + floor.length;
+  const i = ((Math.trunc(index) % total) + total) % total;
+  return i < seats.length ? seats[i]! : floor[i - seats.length]!;
+}
+
 // Largest whole-number scale that fits the map, centred in a w×h canvas. A canvas
 // smaller than the map gets a fractional scale so the whole office stays visible.
 export function officeLayout(w: number, h: number): { scale: number; ox: number; oy: number } {

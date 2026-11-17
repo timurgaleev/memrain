@@ -60,8 +60,13 @@ export async function officeSnapshot(engine: Engine): Promise<OfficeSnapshot> {
   const [report, running, oauth, pats] = await Promise.all([
     daemonsStatus(engine),
     engine.query<{ id: string; kind: string }>("SELECT id, kind FROM jobs WHERE status = 'running'"),
-    engine.query<{ client_id: string; client_name: string }>(
-      "SELECT client_id, client_name FROM oauth_clients WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 500",
+    // An app's newest token, issued or refreshed, is the closest thing to its last use.
+    engine.query<{ client_id: string; client_name: string; last_seen: string | null }>(
+      `SELECT c.client_id, c.client_name, max(t.created_at)::text AS last_seen
+         FROM oauth_clients c LEFT JOIN oauth_tokens t ON t.client_id = c.client_id
+        WHERE c.deleted_at IS NULL
+        GROUP BY c.client_id, c.client_name, c.created_at
+        ORDER BY max(t.created_at) DESC NULLS LAST, c.created_at DESC LIMIT 500`,
     ),
     engine.query<{ name: string; last_seen: string | null }>(
       `SELECT name, max(last_used_at)::text AS last_seen
@@ -97,7 +102,7 @@ export async function officeSnapshot(engine: Engine): Promise<OfficeSnapshot> {
   const add = (c: OfficeSnapshot["clients"][number]) => {
     if (!byId.has(c.id)) byId.set(c.id, c);
   };
-  for (const c of oauth.rows) add({ id: c.client_id, display_name: c.client_name, last_seen: null });
+  for (const c of oauth.rows) add({ id: c.client_id, display_name: c.client_name, last_seen: c.last_seen });
   add({ id: "public", display_name: "Shared key", last_seen: null });
   for (const t of pats.rows) add({ id: t.name, display_name: t.name, last_seen: t.last_seen });
   return { workers, clients: [...byId.values()] };

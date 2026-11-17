@@ -3,7 +3,7 @@ import { api } from "../api";
 import type { FeedEvent, OfficeSnapshot } from "../admin-types.ts";
 import { PageIntro } from "../components/PageIntro.tsx";
 import { describeError } from "../hooks.ts";
-import { OFFICE_MAP, TILE, officeLayout, seatFor } from "../office/map.ts";
+import { OFFICE_MAP, TILE, officeLayout, spotFor } from "../office/map.ts";
 import {
   applyEvent,
   applySnapshot,
@@ -175,11 +175,11 @@ function advancePoses(
 ): Map<string, Pose> {
   const next = new Map<string, Pose>();
   for (const c of st.characters.values()) {
-    const target = seatFor(c.room, seats.get(c.id)?.index ?? 0);
+    const target = spotFor(c.room, seats.get(c.id)?.index ?? 0);
     let pose = prev.get(c.id);
     if (!pose) {
       const walksIn = c.kind === "client" && c.arrivedAt > loadedAt;
-      const from = walksIn ? seatFor("reception", freeSeat(seats, "reception")) : target;
+      const from = walksIn ? spotFor("reception", freeSeat(seats, "reception")) : target;
       pose = { x: from.x, y: from.y, path: [], facing: "down", frame: 0 };
     }
     next.set(c.id, stepCharacter(pose, target, dtMs, { reducedMotion }));
