@@ -9,6 +9,11 @@ export interface LabelBox {
   keep: boolean;
 }
 
+export interface LabelSpot {
+  x: number;
+  lift: number;
+}
+
 interface Rect {
   left: number;
   right: number;
@@ -17,32 +22,47 @@ interface Rect {
 }
 
 const GAP = 1;
+// Sideways steps, in tag widths, tried when a busy tag cannot rise any further.
+const STEPS = [0, 1, -1, 2, -2, 3, -3];
 
 function overlap(a: Rect, b: Rect): boolean {
   return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 }
 
-// How far to lift each tag so none covers another: busy tags first, then from the
-// front of the room to the back. An idle tag that would rise past maxLift is hidden (null).
-export function spreadLabels(boxes: readonly LabelBox[], maxLift: number): Map<string, number | null> {
+// Lift a tag at x until it covers no placed tag.
+function stack(b: LabelBox, x: number, placed: readonly Rect[]): { rect: Rect; lift: number } {
+  let lift = 0;
+  for (;;) {
+    const rect = { left: x - b.w / 2, right: x + b.w / 2, top: b.y - lift - b.h, bottom: b.y - lift };
+    const hit = placed.find((p) => overlap(rect, p));
+    if (!hit) return { rect, lift };
+    lift = b.y - hit.top + GAP;
+  }
+}
+
+// Where each tag goes so none covers another: busy tags first, then from the front of
+// the room to the back, each lifted above what it would cover. A busy tag that would
+// rise past the stage top steps sideways instead; an idle tag that would rise past
+// maxLift or the top is hidden (null).
+export function spreadLabels(boxes: readonly LabelBox[], maxLift: number, stageW: number): Map<string, LabelSpot | null> {
   const order = [...boxes].sort((a, b) => Number(b.keep) - Number(a.keep) || b.y - a.y);
   const placed: Rect[] = [];
-  const lifts = new Map<string, number | null>();
+  const spots = new Map<string, LabelSpot | null>();
   for (const b of order) {
-    let lift = 0;
-    let rect: Rect;
-    for (;;) {
-      rect = { left: b.x - b.w / 2, right: b.x + b.w / 2, top: b.y - lift - b.h, bottom: b.y - lift };
-      const hit = placed.find((p) => overlap(rect, p));
-      if (!hit) break;
-      lift = b.y - hit.top + GAP;
+    const fits = (lift: number) => b.y - lift >= b.h;
+    let best: { rect: Rect; lift: number; x: number } | null = null;
+    for (const step of b.keep ? STEPS : [0]) {
+      const x = Math.min(Math.max(b.x + step * (b.w + GAP), b.w / 2), Math.max(b.w / 2, stageW - b.w / 2));
+      const at = { ...stack(b, x, placed), x };
+      if (!best || (fits(at.lift) && !fits(best.lift))) best = at;
+      if (fits(at.lift)) break;
     }
-    if (!b.keep && lift > maxLift) {
-      lifts.set(b.id, null);
+    if (!best || (!b.keep && (best.lift > maxLift || !fits(best.lift)))) {
+      spots.set(b.id, null);
       continue;
     }
-    placed.push(rect);
-    lifts.set(b.id, lift);
+    placed.push(best.rect);
+    spots.set(b.id, { x: best.x, lift: best.lift });
   }
-  return lifts;
+  return spots;
 }

@@ -584,53 +584,103 @@ describe("figure labels", () => {
   });
 });
 
+describe("unknown workers", () => {
+  const snap: OfficeSnapshot = { workers: [{ name: "nightly_reindex_v2", enabled: true, running: true }], clients: [] };
+
+  it("never shows a snapshot worker's raw name", () => {
+    const c = initialState(snap, NOW).characters.get(W("nightly_reindex_v2"))!;
+    expect(c.label).toBe("Background worker");
+    expect(labelFor(c)).toBe(`Background worker · ${ROOM_PHRASE.back_office}`);
+    expect(namesFromSnapshot(snap).get(W("nightly_reindex_v2"))).toBe("Background worker");
+    const later = applySnapshot(initialState({ workers: [], clients: [] }, NOW), snap, NOW, NOW + 1);
+    expect(later.characters.get(W("nightly_reindex_v2"))!.label).toBe("Background worker");
+  });
+
+  it("never shows an event worker's raw name, with or without the snapshot's names", () => {
+    const start = ev({ agent: "nightly_reindex_v2", kind: "job", phase: "start", status: "running", operation: "reindex" });
+    for (const names of [none, namesFromSnapshot(snap)]) {
+      const st = applyEvent(empty, start, NOW, names);
+      const c = st.characters.get(W("nightly_reindex_v2"))!;
+      expect(c.label).toBe("Background worker");
+      expect(st.recent[0]!.text).not.toContain("nightly_reindex_v2");
+    }
+  });
+
+  it("keeps the friendly names of known workers", () => {
+    const st = applyEvent(empty, ev({ agent: "worker", kind: "job", phase: "start", status: "running", operation: "embed" }), NOW, none);
+    expect(st.characters.get(W("worker"))!.label).toBe("Librarian");
+  });
+});
+
 describe("spreadLabels", () => {
+  const STAGE = 1000;
   const box = (id: string, x: number, y: number, keep = false): LabelBox => ({ id, x, y, w: 60, h: 16, keep });
-  const overlaps = (a: LabelBox, la: number, b: LabelBox, lb: number) =>
-    Math.abs(a.x - b.x) < (a.w + b.w) / 2 && a.y - la - a.h < b.y - lb && b.y - lb - b.h < a.y - la;
+  type Spot = { x: number; lift: number } | null | undefined;
+  const overlaps = (a: LabelBox, pa: Spot, b: LabelBox, pb: Spot) =>
+    !!pa && !!pb && Math.abs(pa.x - pb.x) < (a.w + b.w) / 2
+    && a.y - pa.lift - a.h < b.y - pb.lift && b.y - pb.lift - b.h < a.y - pa.lift;
 
   it("leaves labels that do not touch where they are", () => {
-    const lifts = spreadLabels([box("a", 50, 100), box("b", 200, 100), box("c", 50, 300)], 40);
-    expect([...lifts.values()]).toEqual([0, 0, 0]);
+    const spots = spreadLabels([box("a", 50, 100), box("b", 200, 100), box("c", 50, 300)], 40, STAGE);
+    expect(Object.fromEntries(spots)).toEqual({ a: { x: 50, lift: 0 }, b: { x: 200, lift: 0 }, c: { x: 50, lift: 0 } });
   });
 
   it("stacks a label behind above the one in front", () => {
     const front = box("front", 100, 120);
     const back = box("back", 110, 110);
-    const lifts = spreadLabels([back, front], 40);
-    expect(lifts.get("front")).toBe(0);
-    expect(lifts.get("back")).toBeGreaterThan(0);
-    expect(overlaps(front, 0, back, lifts.get("back")!)).toBe(false);
+    const spots = spreadLabels([back, front], 40, STAGE);
+    expect(spots.get("front")).toEqual({ x: 100, lift: 0 });
+    expect(spots.get("back")!.lift).toBeGreaterThan(0);
+    expect(overlaps(front, spots.get("front"), back, spots.get("back"))).toBe(false);
   });
 
   it("gives a busy label its own spot before any idle one", () => {
     const idle = box("idle", 100, 130);
     const busy = box("busy", 100, 120, true);
-    const lifts = spreadLabels([idle, busy], 40);
-    expect(lifts.get("busy")).toBe(0);
-    expect(overlaps(busy, 0, idle, lifts.get("idle")!)).toBe(false);
+    const spots = spreadLabels([idle, busy], 40, STAGE);
+    expect(spots.get("busy")).toEqual({ x: 100, lift: 0 });
+    expect(overlaps(busy, spots.get("busy"), idle, spots.get("idle"))).toBe(false);
   });
 
   it("hides idle labels in a crowd but never a busy one", () => {
     const crowd = [0, 1, 2, 3, 4, 5].map((i) => box(`idle${i}`, 100, 200 + i));
-    const lifts = spreadLabels([...crowd, box("busy", 100, 150, true), box("busy2", 100, 150, true)], 40);
-    expect(lifts.get("busy")).not.toBeNull();
-    expect(lifts.get("busy2")).not.toBeNull();
-    const shown = [...lifts.entries()].filter(([, l]) => l !== null);
-    expect(shown.length).toBeLessThan(8);
-    for (const [, l] of lifts) if (l !== null && l !== undefined) expect(l).toBeGreaterThanOrEqual(0);
-    for (const [id, l] of lifts) if (id.startsWith("idle") && l !== null) expect(l).toBeLessThanOrEqual(40);
+    const spots = spreadLabels([...crowd, box("busy", 100, 150, true), box("busy2", 100, 150, true)], 40, STAGE);
+    expect(spots.get("busy")).not.toBeNull();
+    expect(spots.get("busy2")).not.toBeNull();
+    expect([...spots.values()].filter((p) => p !== null).length).toBeLessThan(8);
+    for (const [id, p] of spots) {
+      if (!p) continue;
+      expect(p.lift).toBeGreaterThanOrEqual(0);
+      if (id.startsWith("idle")) expect(p.lift).toBeLessThanOrEqual(40);
+    }
   });
 
   it("never lets two shown labels overlap", () => {
     const boxes = Array.from({ length: 10 }, (_, i) => box(`l${i}`, 100 + (i % 3) * 20, 200 - i * 3, i === 4));
-    const lifts = spreadLabels(boxes, 200);
+    const spots = spreadLabels(boxes, 200, STAGE);
     for (const a of boxes) {
-      for (const b of boxes) {
-        if (a === b || lifts.get(a.id) === null || lifts.get(b.id) === null) continue;
-        expect(overlaps(a, lifts.get(a.id)!, b, lifts.get(b.id)!)).toBe(false);
-      }
+      for (const b of boxes) if (a !== b) expect(overlaps(a, spots.get(a.id), b, spots.get(b.id))).toBe(false);
     }
+  });
+
+  it("keeps busy labels inside the stage top by stepping them sideways", () => {
+    const boxes = [box("b1", 300, 20, true), box("b2", 300, 20, true), box("b3", 305, 22, true)];
+    const spots = spreadLabels(boxes, 40, STAGE);
+    for (const b of boxes) {
+      const p = spots.get(b.id)!;
+      expect(b.y - p.lift).toBeGreaterThanOrEqual(b.h);
+      expect(p.x - b.w / 2).toBeGreaterThanOrEqual(0);
+      expect(p.x + b.w / 2).toBeLessThanOrEqual(STAGE);
+    }
+    for (const a of boxes) {
+      for (const b of boxes) if (a !== b) expect(overlaps(a, spots.get(a.id), b, spots.get(b.id))).toBe(false);
+    }
+  });
+
+  it("hides an idle label rather than push it above the stage", () => {
+    const spots = spreadLabels([box("busy", 100, 20, true), box("idle", 100, 25)], 40, STAGE);
+    expect(spots.get("busy")).toEqual({ x: 100, lift: 0 });
+    expect(spots.get("idle")).toBeNull();
   });
 });
 

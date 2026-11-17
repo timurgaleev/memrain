@@ -35,6 +35,7 @@ const OFFICE_SNAPSHOT = {
   ],
   clients: [{ id: "client-1", display_name: "Laptop", last_seen: "2026-11-09T11:30:00Z" }],
 };
+const OFFICE_FALLBACK = "Your browser cannot show the 3D office. The list shows the same activity.";
 const OFFICE_EVENT = { agent: "client-1", operation: "search", latency_ms: 4, status: "success", timestamp: "2026-11-09T12:00:00Z", kind: "tool", phase: "end" };
 let officeCalls = 0;
 let officeFailures = 0;
@@ -103,6 +104,8 @@ interface CheckOptions {
   realClock?: boolean;
   viewport?: BrowserContextOptions["viewport"];
   noWebGL?: boolean;
+  // The paint check reads the drawn frame back.
+  keepFrame?: boolean;
 }
 // Keeps the drawn frame readable after it reaches the screen, for the paint check only.
 const KEEP_FRAME = () => {
@@ -123,7 +126,8 @@ async function check(name: string, view: string, body: (page: Page) => Promise<v
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   try {
-    await page.addInitScript(opts.noWebGL ? NO_WEBGL : KEEP_FRAME);
+    if (opts.noWebGL) await page.addInitScript(NO_WEBGL);
+    else if (opts.keepFrame) await page.addInitScript(KEEP_FRAME);
     if (!opts.realClock) await page.clock.install({ time: new Date("2026-11-09T12:00:00Z") });
     await page.goto(`${server.url}?view=${view}`);
     await body(page);
@@ -506,13 +510,23 @@ try {
     }
     assert.equal(officeCalls > 0, true);
     assert.deepEqual(consoleErrors, []);
-  }, { realClock: true });
+  }, { realClock: true, keepFrame: true });
   await check("Office without WebGL says so and keeps the list", "office", async (page) => {
-    await page.getByText("Your browser cannot show the 3D office. The list on the right shows the same activity.", { exact: true }).waitFor();
+    await page.getByText(OFFICE_FALLBACK, { exact: true }).waitFor();
     await page.locator(".office-list").getByText("Librarian is indexing pages", { exact: true }).waitFor();
     assert.equal(await page.locator("canvas").count(), 0);
   }, { noWebGL: true });
+  await check("A person model that fails to load leaves the note and the list", "office", async (page) => {
+    await page.route("**/assets/character-male-a-*.gltf", (r) => r.fulfill({ status: 404, body: "" }));
+    await page.reload();
+    await page.getByText(OFFICE_FALLBACK, { exact: true }).waitFor({ timeout: 30_000 });
+    await page.locator(".office-list").getByText("Librarian is indexing pages", { exact: true }).waitFor();
+    assert.equal(await page.locator("canvas").count(), 0);
+  }, { realClock: true });
   await check("Office fits a 390 px phone without sideways scrolling", "office", async (page) => {
+    const consoleErrors: string[] = [];
+    page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
+    await page.reload();
     await waitForPaint(page);
     const fit = await page.evaluate(() => ({
       canvas: document.querySelector(".office-canvas-box canvas")!.getBoundingClientRect().width,
@@ -522,7 +536,8 @@ try {
     assert.equal(fit.viewport, 390);
     assert.equal(fit.canvas <= 390, true, `canvas is ${fit.canvas}px wide`);
     assert.equal(fit.page <= 390, true, `page scrolls to ${fit.page}px`);
-  }, { realClock: true, viewport: { width: 390, height: 844 } });
+    assert.deepEqual(consoleErrors, []);
+  }, { realClock: true, keepFrame: true, viewport: { width: 390, height: 844 } });
   await check("Office retries a failed first snapshot well before the next poll", "office", async (page) => {
     officeFailures = 1;
     await page.reload();

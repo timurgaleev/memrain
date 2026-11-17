@@ -74,6 +74,8 @@ export interface OfficeScene {
   setOrbitDrag(dx: number): void;
   dispose(): void;
   onContextLost(cb: () => void): void;
+  // True while the view moves on its own (orbit, clips), so screen positions change every frame.
+  isAnimating(): boolean;
 }
 
 const W = OFFICE_MAP.width;
@@ -94,6 +96,7 @@ const AUTO_PERIOD_S = 48;
 const DRAG_LIMIT = 30 * DEG;
 const DRAG_RAD_PER_PX = 0.006;
 const IDLE_FPS = 30;
+const NO_CHANGE: { add: string[]; remove: string[] } = { add: [], remove: [] };
 const FADE_S = 0.3;
 
 const SLAB_COLOR = "#2b3040";
@@ -645,6 +648,14 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
     return { x: ((v.x + 1) / 2) * cssW, y: ((1 - v.y) / 2) * cssH };
   };
 
+  // Reused across update() calls so a steady frame allocates nothing.
+  const wanted = new Map<string, SceneCharacter>();
+  const sameIds = () => {
+    if (wanted.size !== figures.size) return false;
+    for (const id of wanted.keys()) if (!figures.has(id)) return false;
+    return true;
+  };
+
   const sameState = (a: SceneCharacter, b: SceneCharacter) =>
     a.worldX === b.worldX && a.worldZ === b.worldZ && a.yaw === b.yaw && a.pose === b.pose && a.moving === b.moving
     && a.busy === b.busy && a.error === b.error && a.enabled === b.enabled && a.variant === b.variant;
@@ -654,8 +665,9 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
       if (disposed) return;
       lastNow = now;
       lastNowAt = performance.now();
-      const wanted = new Map(chars.map((c) => [c.id, c]));
-      const { add, remove } = syncCharacters(new Set(figures.keys()), new Set(wanted.keys()));
+      wanted.clear();
+      for (const c of chars) wanted.set(c.id, c);
+      const { add, remove } = sameIds() ? NO_CHANGE : syncCharacters(new Set(figures.keys()), new Set(wanted.keys()));
       let changed = add.length > 0 || remove.length > 0;
       for (const id of remove) {
         dropFigure(figures.get(id)!);
@@ -716,6 +728,9 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
       if (reduced) aim(BASE_AZIMUTH + dragAngle);
       needsRender = true;
       schedule();
+    },
+    isAnimating() {
+      return !reduced && running();
     },
     onContextLost(cb) {
       lostCb = cb;

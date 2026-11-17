@@ -35,7 +35,9 @@ const DRAG_PX = 4;
 const ROOM_LABEL_Y = 0.6;
 // Idle name tags in a crowd stack upward this far at most, then step aside.
 const MAX_LABEL_LIFT = 36;
-const NO_WEBGL = "Your browser cannot show the 3D office. The list on the right shows the same activity.";
+// After a change the scene draws on its next frame; keep placing tags until it has.
+const SETTLE_FRAMES = 2;
+const NO_WEBGL = "Your browser cannot show the 3D office. The list shows the same activity.";
 
 type Feed = "connecting" | "connected" | "disconnected";
 
@@ -43,6 +45,8 @@ interface Store {
   state: OfficeState | null;
   // When the first snapshot landed; clients that arrive later walk in from reception.
   loadedAt: number;
+  // Set by the 3D view: wakes its frame loop when the state changes.
+  wake: (() => void) | null;
 }
 
 function byLabel(a: Character, b: Character): number {
@@ -50,7 +54,7 @@ function byLabel(a: Character, b: Character): number {
 }
 
 function useOffice() {
-  const store = useRef<Store>({ state: null, loadedAt: 0 });
+  const store = useRef<Store>({ state: null, loadedAt: 0, wake: null });
   const [view, setView] = useState<OfficeState | null>(null);
   const [feed, setFeed] = useState<Feed>("connecting");
   const [error, setError] = useState("");
@@ -59,6 +63,7 @@ function useOffice() {
     if (next === store.current.state) return;
     store.current.state = next;
     setView(next);
+    store.current.wake?.();
   }, []);
 
   useEffect(() => {
@@ -169,6 +174,14 @@ interface Overlay {
   labels: Map<string, HTMLDivElement>;
   rooms: (HTMLDivElement | null)[];
   tip: { id: string | null; el: HTMLDivElement | null };
+  // Asks the frame loop to place the overlay again: a resize, a drag, a new tag or tooltip.
+  poke: () => void;
+}
+
+interface Figures {
+  poses: Map<string, Pose>;
+  byId: Map<string, SceneCharacter>;
+  chars: SceneCharacter[];
 }
 
 interface Size {
@@ -178,10 +191,16 @@ interface Size {
 
 const ROOM_ANCHORS = ROOMS.map((r) => ({ id: r.id, label: r.label, ...tileToWorld({ x: r.x + (r.w - 1) / 2, y: r.y + (r.h - 1) / 2 }) }));
 
+function sameCharacter(a: SceneCharacter, b: SceneCharacter): boolean {
+  return a.label === b.label && a.worldX === b.worldX && a.worldZ === b.worldZ && a.yaw === b.yaw && a.pose === b.pose
+    && a.moving === b.moving && a.busy === b.busy && a.error === b.error && a.enabled === b.enabled && a.variant === b.variant;
+}
+
 // Moves every figure one frame toward where it should be: its seat while it works,
-// an idle activity in the break room, or its seat there otherwise.
+// an idle activity in the break room, or its seat there otherwise. Updates figs in
+// place and keeps each unchanged SceneCharacter, so a still office allocates nothing.
 function advance(
-  prev: Map<string, Pose>,
+  figs: Figures,
   st: OfficeState,
   seats: ReadonlyMap<string, Seat>,
   amb: AmbientState,
@@ -189,37 +208,55 @@ function advance(
   now: number,
   loadedAt: number,
   reducedMotion: boolean,
-): { poses: Map<string, Pose>; chars: SceneCharacter[] } {
-  const poses = new Map<string, Pose>();
-  const chars: SceneCharacter[] = [];
+): { changed: boolean; moving: boolean; nextExpiry: number } {
+  let changed = figs.byId.size !== st.characters.size;
+  let moving = false;
+  let nextExpiry = Infinity;
+  for (const id of figs.byId.keys()) {
+    if (st.characters.has(id)) continue;
+    figs.byId.delete(id);
+    figs.poses.delete(id);
+    changed = true;
+  }
+  figs.chars.length = 0;
   for (const c of st.characters.values()) {
     const want = targetFor(c, amb, spotFor(c.room, seats.get(c.id)?.index ?? 0), now);
-    let pose = prev.get(c.id);
+    let pose = figs.poses.get(c.id);
     if (!pose) {
       const walksIn = c.kind === "client" && c.arrivedAt > loadedAt;
       const from = walksIn ? spotFor("reception", freeSeat(seats, "reception")) : want.tile;
       pose = { x: from.x, y: from.y, path: [], facing: "down", frame: 0 };
     }
     pose = stepCharacter(pose, want.tile, dtMs, { reducedMotion });
-    poses.set(c.id, pose);
-    const moving = pose.path.length > 0;
-    const arrived = !moving && pose.x === want.tile.x && pose.y === want.tile.y;
+    figs.poses.set(c.id, pose);
+    const walking = pose.path.length > 0;
+    const arrived = !walking && pose.x === want.tile.x && pose.y === want.tile.y;
     const at = tileToWorld(pose);
-    chars.push({
+    const next: SceneCharacter = {
       id: c.id,
       label: c.label,
       worldX: at.x,
       worldZ: at.z,
       yaw: facingToYaw(arrived && want.facing ? want.facing : pose.facing),
       pose: want.pose,
-      moving,
+      moving: walking,
       busy: c.busyUntil > now,
       error: c.errorUntil > now,
       enabled: c.enabled,
       variant: variantFor(c.id),
-    });
+    };
+    const prev = figs.byId.get(c.id);
+    const keep = prev && sameCharacter(prev, next) ? prev : next;
+    if (keep !== prev) {
+      figs.byId.set(c.id, keep);
+      changed = true;
+    }
+    figs.chars.push(keep);
+    moving ||= walking;
+    // busy and error flip on the clock alone, without a new state.
+    for (const t of [c.busyUntil, c.errorUntil]) if (t > now && t < nextExpiry) nextExpiry = t;
   }
-  return { poses, chars };
+  return { changed, moving, nextExpiry };
 }
 
 function onCanvas(p: { x: number; y: number } | null, size: Size): p is { x: number; y: number } {
@@ -240,30 +277,39 @@ function placeOverlay(scene: OfficeScene, overlay: Overlay, st: OfficeState | nu
     const el = overlay.rooms[i];
     if (el) place(el, scene.projectWorld(r.x, r.z, ROOM_LABEL_Y), size);
   });
-  // Measure every tag first, then move them, so the browser lays out once per frame.
+  // Show or hide each badge before measuring, then move every tag, so the browser
+  // lays out once per frame and a badge counts towards its tag's width.
   const boxes: (LabelBox & { el: HTMLDivElement })[] = [];
   for (const [id, el] of overlay.labels) {
+    const c = st?.characters.get(id);
+    el.classList.toggle("office-label-error", (c?.errorUntil ?? 0) > now);
     const p = scene.project(id);
     if (!onCanvas(p, size)) {
       el.style.visibility = "hidden";
       continue;
     }
-    const c = st?.characters.get(id);
     const w = el.offsetWidth;
     // Slide a tag sideways rather than let the stage edge cut it off.
     const x = Math.min(Math.max(p.x, w / 2), Math.max(w / 2, size.w - w / 2));
     boxes.push({ id, el, x, y: p.y, w, h: el.offsetHeight, keep: !!c && c.room !== "break_room" });
   }
-  const lifts = spreadLabels(boxes, MAX_LABEL_LIFT);
+  const spots = spreadLabels(boxes, MAX_LABEL_LIFT, size.w);
   for (const b of boxes) {
-    const lift = lifts.get(b.id);
-    b.el.style.visibility = lift === null || lift === undefined ? "hidden" : "visible";
-    b.el.style.left = `${b.x}px`;
-    b.el.style.top = `${b.y - (lift ?? 0)}px`;
-    b.el.classList.toggle("office-label-error", (st?.characters.get(b.id)?.errorUntil ?? 0) > now);
+    const spot = spots.get(b.id);
+    b.el.style.visibility = spot ? "visible" : "hidden";
+    if (!spot) continue;
+    b.el.style.left = `${spot.x}px`;
+    b.el.style.top = `${b.y - spot.lift}px`;
   }
   const { id, el } = overlay.tip;
   if (id && el) place(el, scene.project(id), size);
+}
+
+// planAmbient keeps the same Activity object while an activity goes on.
+function sameActivities(a: AmbientState, b: AmbientState): boolean {
+  if (a.activities.size !== b.activities.size) return false;
+  for (const [id, act] of b.activities) if (a.activities.get(id) !== act) return false;
+  return true;
 }
 
 // The canvas is made here rather than by React: a scene owns its canvas for life
@@ -291,43 +337,76 @@ function useOfficeScene(
     let scene: OfficeScene | null = null;
     let ro: ResizeObserver | null = null;
     let raf = 0;
+    let sleep: ReturnType<typeof setTimeout> | undefined;
     let last = 0;
-    let poses = new Map<string, Pose>();
+    const figs: Figures = { poses: new Map(), byId: new Map(), chars: [] };
     let seats = new Map<string, Seat>();
-    let seatedFor: OfficeState | null = null;
+    let seenState: OfficeState | null = null;
     let amb = emptyAmbient();
     let plannedAt = -Infinity;
+    let moving = false;
+    let nextExpiry = Infinity;
+    let settle = SETTLE_FRAMES;
 
-    const frame = (t: number) => {
+    function wake(): void {
+      clearTimeout(sleep);
+      if (raf || !alive || !scene || document.hidden) return;
+      last = 0;
+      raf = requestAnimationFrame(frame);
+    }
+    // Only work when something can have changed: a new state or idle plan, a figure
+    // walking, a busy or error flag running out, or the view moving.
+    function frame(t: number): void {
       raf = 0;
       if (!alive || !scene || document.hidden) return;
       const dt = last ? t - last : 0;
       last = t;
       const st = store.current.state;
       const now = Date.now();
+      let dirty = false;
       if (st) {
-        if (st !== seatedFor) {
+        let replan = st !== seenState;
+        if (replan) {
           seats = assignSeats(seats, st.characters.values());
-          seatedFor = st;
+          seenState = st;
         }
-        if (now - plannedAt >= PLAN_MS) {
-          amb = planAmbient(st, amb, now, Math.random, { reducedMotion });
+        if (!reducedMotion && now - plannedAt >= PLAN_MS) {
+          const next = planAmbient(st, amb, now, Math.random, { reducedMotion });
           plannedAt = now;
+          replan ||= !sameActivities(amb, next);
+          amb = next;
         }
-        const next = advance(poses, st, seats, amb, dt, now, store.current.loadedAt, reducedMotion);
-        poses = next.poses;
-        scene.update(next.chars, now);
+        if (replan || moving || now >= nextExpiry) {
+          const r = advance(figs, st, seats, amb, dt, now, store.current.loadedAt, reducedMotion);
+          moving = r.moving;
+          nextExpiry = r.nextExpiry;
+          if (r.changed) {
+            scene.update(figs.chars, now);
+            dirty = true;
+          }
+        }
       }
-      placeOverlay(scene, overlay.current, st, now, size);
-      raf = requestAnimationFrame(frame);
+      if (dirty) settle = SETTLE_FRAMES;
+      const animating = scene.isAnimating();
+      if (animating || settle > 0) placeOverlay(scene, overlay.current, st, now, size);
+      settle = Math.max(0, settle - 1);
+      if (animating || moving || settle > 0) {
+        raf = requestAnimationFrame(frame);
+        return;
+      }
+      // Asleep: a state change, resize, drag or tooltip wakes the loop; so do the
+      // next idle plan and the next busy or error flag running out.
+      const until = Math.min(reducedMotion ? Infinity : PLAN_MS, nextExpiry - now);
+      if (Number.isFinite(until)) sleep = setTimeout(wake, Math.max(0, until) + 1);
+    }
+    const poke = () => {
+      settle = SETTLE_FRAMES;
+      wake();
     };
-    const start = () => {
-      if (raf || !alive || !scene || document.hidden) return;
-      last = 0;
-      raf = requestAnimationFrame(frame);
-    };
+    store.current.wake = wake;
+    overlay.current.poke = poke;
     const onVisible = () => {
-      if (!document.hidden) start();
+      if (!document.hidden) poke();
       else if (raf) {
         cancelAnimationFrame(raf);
         raf = 0;
@@ -352,11 +431,11 @@ function useOfficeScene(
           size.w = box.clientWidth;
           size.h = box.clientHeight;
           s.resize(size.w, size.h, window.devicePixelRatio || 1);
+          poke();
         };
         ro = new ResizeObserver(resize);
         ro.observe(box);
         resize();
-        start();
       }, (e: unknown) => {
         console.warn("office: the 3D view could not start", e);
         fail();
@@ -366,6 +445,9 @@ function useOfficeScene(
     return () => {
       alive = false;
       if (raf) cancelAnimationFrame(raf);
+      clearTimeout(sleep);
+      if (store.current.wake === wake) store.current.wake = null;
+      overlay.current.poke = () => {};
       ro?.disconnect();
       document.removeEventListener("visibilitychange", onVisible);
       scene?.dispose();
@@ -445,6 +527,7 @@ function FigureLabels({ view, overlay }: { view: OfficeState | null; overlay: Re
           ref={(el) => {
             if (el) overlay.current.labels.set(c.id, el);
             else overlay.current.labels.delete(c.id);
+            overlay.current.poke();
           }}
         >
           {labelFor(c)}
@@ -459,12 +542,13 @@ export function OfficePage() {
   const { store, view, feed, error } = useOffice();
   const hostRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
-  const overlay = useRef<Overlay>({ labels: new Map(), rooms: [], tip: { id: null, el: null } });
+  const overlay = useRef<Overlay>({ labels: new Map(), rooms: [], tip: { id: null, el: null }, poke: () => {} });
   const { sceneRef, failed } = useOfficeScene(hostRef, boxRef, store, overlay);
   const [tipId, setTipId] = useState<string | null>(null);
   const drag = useRef<{ pointer: number; startX: number; lastX: number; moved: boolean } | null>(null);
   useEffect(() => {
     overlay.current.tip.id = tipId;
+    overlay.current.poke();
   }, [tipId]);
 
   const under = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -485,6 +569,7 @@ export function OfficePage() {
       }
       if (d.moved) {
         sceneRef.current?.setOrbitDrag(e.clientX - d.lastX);
+        overlay.current.poke();
         d.lastX = e.clientX;
       }
       return;
@@ -543,7 +628,7 @@ export function OfficePage() {
                 ))}
                 <FigureLabels view={view} overlay={overlay} />
                 {tipped && (
-                  <div className="office-tip" ref={(el) => { overlay.current.tip.el = el; }}>
+                  <div className="office-tip" ref={(el) => { overlay.current.tip.el = el; overlay.current.poke(); }}>
                     {lineFor(tipped)}
                   </div>
                 )}

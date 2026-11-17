@@ -34,6 +34,12 @@ const CLIENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RECENT_CAP = 20;
 const IGNORED_AGENTS = new Set(["admin-panel"]);
 const NEW_APP_LABEL = "New app";
+// A worker this page has no friendly name for; its internal name never reaches the screen.
+const WORKER_FALLBACK_LABEL = "Background worker";
+
+function workerLabel(name: string): string {
+  return WORKER_LABEL[name] ?? WORKER_FALLBACK_LABEL;
+}
 
 export function characterKey(kind: CharacterKind, agent: string): string {
   return `${kind}:${agent}`;
@@ -49,7 +55,7 @@ export function namesFromSnapshot(s: OfficeSnapshot): Map<string, string> {
   for (const [name, label] of Object.entries(WORKER_LABEL)) names.set(characterKey("worker", name), label);
   for (const w of s.workers) {
     const key = characterKey("worker", w.name);
-    if (!names.has(key)) names.set(key, w.name);
+    if (!names.has(key)) names.set(key, WORKER_FALLBACK_LABEL);
   }
   for (const c of s.clients) names.set(characterKey("client", c.id), c.display_name);
   return names;
@@ -59,7 +65,7 @@ function workerCharacter(w: OfficeSnapshot["workers"][number], now: number): Cha
   return {
     id: characterKey("worker", w.name),
     agent: w.name,
-    label: WORKER_LABEL[w.name] ?? w.name,
+    label: workerLabel(w.name),
     kind: "worker",
     enabled: w.enabled,
     room: w.running ? roomFor({ kind: "job", agent: w.name, operation: "other" }) : "break_room",
@@ -184,7 +190,7 @@ export function applyEvent(
     id: key,
     agent: e.agent,
     // Until the snapshot names a new app, never show any part of its id.
-    label: names.get(key) ?? (isJob ? WORKER_LABEL[e.agent] ?? e.agent : NEW_APP_LABEL),
+    label: names.get(key) ?? (isJob ? workerLabel(e.agent) : NEW_APP_LABEL),
     kind: isJob ? "worker" : "client",
     enabled: true,
     room: "reception",
