@@ -9,8 +9,10 @@ import {
   lineFor,
   namesFromSnapshot,
   tick,
+  type Character,
   type OfficeState,
 } from "../admin/src/office/model.ts";
+import { emptyAmbient, planAmbient, targetFor } from "../admin/src/office/ambient.ts";
 import { roomFor, type RoomId } from "../admin/src/office/rooms.ts";
 import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, PROPS, TILE, WALL_DECOR, officeLayout, roomAt, seatFor, spotFor } from "../admin/src/office/map.ts";
 import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
@@ -709,5 +711,103 @@ describe("3D world mapping", () => {
   it("turns the four facings into distinct yaws", () => {
     const yaws = (["up", "down", "left", "right"] as const).map(facingToYaw);
     expect(new Set(yaws).size).toBe(4);
+  });
+});
+
+describe("ambient life", () => {
+  const seeded = (seed: number) => () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 2 ** 32;
+  };
+  const person = (id: string, over: Partial<Character> = {}): Character => ({
+    id: `client:${id}`, agent: id, label: id, kind: "client", enabled: true, room: "break_room",
+    activity: null, busyUntil: 0, startedAt: null, endedAt: null, errorUntil: 0, arrivedAt: 0, lastSeen: 0, inFlight: 0, ...over,
+  });
+  const stateOf = (cs: Character[]): OfficeState => ({ characters: new Map(cs.map((c) => [c.id, c])), recent: [] });
+  const crowd = (n: number) => Array.from({ length: n }, (_, i) => person(`p${i}`));
+  const opts = { reducedMotion: false };
+
+  it("gives activities only to idle, enabled characters in the break room", () => {
+    const st = stateOf([
+      person("a"),
+      person("off", { kind: "worker", id: "worker:off", enabled: false }),
+      person("busy", { busyUntil: 99_999, room: "writing" }),
+      person("busyhere", { busyUntil: 99_999 }),
+    ]);
+    const amb = planAmbient(st, emptyAmbient(), 1000, seeded(1), opts);
+    expect([...amb.activities.keys()]).toEqual(["client:a"]);
+  });
+
+  it("drops an activity the same tick a character turns busy", () => {
+    const idle = stateOf(crowd(3));
+    const amb = planAmbient(idle, emptyAmbient(), 1000, seeded(2), opts);
+    expect(amb.activities.size).toBeGreaterThan(0);
+    const id = [...amb.activities.keys()][0]!;
+    const c = { ...idle.characters.get(id)!, busyUntil: 5000 };
+    const busy = stateOf([...idle.characters.values()].map((x) => (x.id === id ? c : x)));
+    expect(planAmbient(busy, amb, 1100, seeded(3), opts).activities.has(id)).toBe(false);
+    const t = targetFor(c, amb, { x: 1, y: 1 }, 1100);
+    expect(t.pose).toBe("work");
+    expect(t.tile).toEqual({ x: 1, y: 1 });
+  });
+
+  it("pairs two distinct characters for a chat, facing each other", () => {
+    for (let seed = 1; seed < 60; seed++) {
+      const amb = planAmbient(stateOf(crowd(6)), emptyAmbient(), 0, seeded(seed), opts);
+      for (const [id, a] of amb.activities) {
+        if (a.kind !== "chat") continue;
+        const b = amb.activities.get(a.partner!)!;
+        expect(a.partner).not.toBe(id);
+        expect(b.partner).toBe(id);
+        expect(b.until).toBe(a.until);
+        const opposite = { left: "right", right: "left", up: "down", down: "up" } as const;
+        expect(b.facing).toBe(opposite[a.facing!]);
+      }
+    }
+  });
+
+  it("never plans a chat for one idle character", () => {
+    for (let seed = 1; seed < 80; seed++) {
+      const amb = planAmbient(stateOf(crowd(1)), emptyAmbient(), 0, seeded(seed), opts);
+      for (const a of amb.activities.values()) expect(a.kind).not.toBe("chat");
+    }
+  });
+
+  it("never shares a target tile and never targets a seat", () => {
+    const seats = new Set(Object.values(OFFICE_MAP.seats).flat().map((t) => `${t.x},${t.y}`));
+    for (let seed = 1; seed < 40; seed++) {
+      const amb = planAmbient(stateOf(crowd(12)), emptyAmbient(), 0, seeded(seed), opts);
+      const tiles = [...amb.activities.values()].map((a) => `${a.target.x},${a.target.y}`);
+      expect(new Set(tiles).size).toBe(tiles.length);
+      for (const t of tiles) expect(seats.has(t)).toBe(false);
+    }
+  });
+
+  it("changes each character's activity at most once per call after a long gap", () => {
+    const st = stateOf(crowd(5));
+    const first = planAmbient(st, emptyAmbient(), 0, seeded(4), opts);
+    const later = planAmbient(st, first, 600_000, seeded(5), opts);
+    for (const [id, a] of later.activities) {
+      const was = first.activities.get(id);
+      expect(a.until).toBeGreaterThan(600_000);
+      expect(was === undefined || was.until <= 600_000).toBe(true);
+    }
+  });
+
+  it("is empty under reduced motion", () => {
+    const amb = planAmbient(stateOf(crowd(4)), emptyAmbient(), 0, seeded(6), { reducedMotion: true });
+    expect(amb.activities.size).toBe(0);
+  });
+
+  it("is deterministic for a seed", () => {
+    const a = planAmbient(stateOf(crowd(8)), emptyAmbient(), 0, seeded(7), opts);
+    const b = planAmbient(stateOf(crowd(8)), emptyAmbient(), 0, seeded(7), opts);
+    expect([...a.activities]).toEqual([...b.activities]);
+  });
+
+  it("targetFor sits in the break room and idles elsewhere", () => {
+    const seat = { x: 3, y: 3 };
+    expect(targetFor(person("a"), emptyAmbient(), seat).pose).toBe("sit");
+    expect(targetFor(person("a", { room: "writing" }), emptyAmbient(), seat).pose).toBe("idle");
   });
 });
