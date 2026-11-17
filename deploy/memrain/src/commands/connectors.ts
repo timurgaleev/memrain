@@ -267,15 +267,22 @@ function printMeetingRedact(r: MeetingRedactSweepResult): void {
   }
   if (r.applied) {
     console.log(`  ${r.rewritten} page(s) written as a new version`);
-    if (r.mirror_failed > 0) console.log(`  ${r.mirror_failed} written page(s) whose search mirror failed; run again`);
+    if (r.mirror_failed > 0) {
+      console.log(`  ${r.mirror_failed} written page(s) not re-indexed yet: search returns their old text until the cycle's mirror-pages phase re-indexes them`);
+    }
     if (r.moved > 0) console.log(`  ${r.moved} page(s) changed by a sync meanwhile; run again`);
-  } else if (r.pages_changed > 0) {
-    console.log("Older version snapshots keep their text. Run with --apply --yes to write the redacted pages.");
+  }
+  if (r.pages_changed > 0) {
+    console.log(`Older version snapshots keep their text.${r.applied ? "" : " Run with --apply --yes to write the redacted pages."}`);
   }
   for (const e of r.errors) console.log(`  ${e}`);
 }
 
 async function runRedactMeetings(opts: ConnectorsCmdOptions): Promise<number> {
+  if (opts.apply && opts.dryRun) {
+    console.error("memrain connectors redact-meetings: choose --apply or --dry-run (a run without --apply is the dry run)");
+    return 2;
+  }
   if (opts.apply && !opts.yes) {
     console.error("memrain connectors redact-meetings: --apply writes a new version of each changed page; add --yes to confirm (run without --apply first to review)");
     return 2;
@@ -294,6 +301,10 @@ async function runRedactMeetings(opts: ConnectorsCmdOptions): Promise<number> {
 }
 
 export async function runConnectors(opts: ConnectorsCmdOptions): Promise<number> {
+  if ((opts.apply || opts.yes) && opts.sub !== "redact-meetings") {
+    console.error("memrain connectors: --apply and --yes belong to redact-meetings only");
+    return 2;
+  }
   if (opts.sub === "status") return runStatus(opts);
   if (opts.sub === "github") return runGithubSync(opts);
   if (opts.sub === "redact-meetings") return runRedactMeetings(opts);

@@ -185,4 +185,38 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     }
     expect((await versions(mail.slug)).length).toBe(1);
   });
+
+  it("refuses --dry-run with --apply, and --apply or --yes on any other subcommand", async () => {
+    await legacy(mail, "inbox", ZOOM);
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await runConnectors({ sub: "redact-meetings", apply: true, yes: true, dryRun: true, storage: db.storage })).toBe(2);
+      expect(await runConnectors({ sub: "status", apply: true, storage: db.storage })).toBe(2);
+      expect(await runConnectors({ sub: "rotate-kek", yes: true, storage: db.storage })).toBe(2);
+    } finally {
+      err.mockRestore();
+    }
+    expect((await versions(mail.slug)).length).toBe(1);
+  });
+
+  it("says after an apply that older versions keep their text, and where a failed re-index is picked up", async () => {
+    await legacy(mail, "inbox", ZOOM);
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => { lines.push(a.join(" ")); });
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const failing = async () => { throw new Error("embedder down"); };
+      expect(await runConnectors({ sub: "redact-meetings", apply: true, yes: true, storage: db.storage, embedFn: failing })).toBe(1);
+    } finally {
+      log.mockRestore();
+      err.mockRestore();
+    }
+    const out = lines.join("\n");
+    expect(out).toContain("1 page(s) written as a new version");
+    expect(out).toContain("Older version snapshots keep their text");
+    expect(out).toContain("1 written page(s) not re-indexed yet");
+    expect(out).toContain("mirror-pages");
+    expect(out).not.toContain("run again");
+    expect((await versions(mail.slug)).length).toBe(2);
+  });
 });

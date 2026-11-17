@@ -61,7 +61,7 @@ export interface MeetingRedactSweepResult extends MeetingRedactSourceCounts {
   by_source: Record<string, MeetingRedactSourceCounts>;
   /** Pages written with a new version (apply only). */
   rewritten: number;
-  /** Written, but the search mirror still holds the old text; run again. */
+  /** Written, but search still holds the old text until the cycle's mirror-pages phase re-indexes it. */
   mirror_failed: number;
   /** Pages a sync wrote between the read and the write; run again. */
   moved: number;
