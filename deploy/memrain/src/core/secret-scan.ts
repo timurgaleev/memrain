@@ -29,7 +29,7 @@ import { encodedCandidates, protectEncodedAllowlist } from "./secret-scan-encode
  * Bumped whenever the rules change what is caught, so text stored under an
  * older version can be found and scanned again.
  */
-export const SECRET_SCAN_VERSION = 5;
+export const SECRET_SCAN_VERSION = 6;
 
 export interface SecretFinding {
   kind: string;
@@ -76,7 +76,7 @@ interface Pattern {
 }
 
 /** Documentation passwords: `<password>`, `${VAR}`, `$VAR`, all `*`, all `x`. */
-const PLACEHOLDER = /^(?:<[^<>]*>|\$\{[^{}]*\}|\$[A-Z_]\w*|\*+|x+)$/i;
+const PLACEHOLDER = /^(?:<[^<>]*>|\$\{[^{}]*\}|\$[A-Z_]\w*|\*+|x+|%s)$/i;
 
 /** The password of a `scheme://user:password@` span (the user never holds a `:`). */
 function urlPassword(span: string): string {
@@ -266,9 +266,11 @@ const VENDOR_PATTERNS: Pattern[] = [
 
 /** Catch-alls run after every named prefix, so a vendor key or a JWT keeps its own kind. */
 const SHAPE_PATTERNS: Pattern[] = [
+  // A template's `${password}`, `***` or `%s` names a password, it is not one.
   {
     kind: "database-url",
     regex: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqp|mssql):\/\/[^\s:/@"']{0,128}:[^\s"']{1,256}@/g,
+    validate: (span) => !PLACEHOLDER.test(urlPassword(span)),
     echo: { min: 8, pick: urlPassword },
   },
   // The password stops at `/`, `?` and `#` too (RFC 3986 escapes them in
