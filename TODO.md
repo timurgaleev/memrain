@@ -73,10 +73,6 @@ marked; this section is the one that stands.
 - `page_delete` over MCP hard-deletes the page's fence facts at soft-delete
   time (`purgeFenceFactsForPage`), so restore and purge receipts cannot see
   them. Retire instead of delete, or move the removal to purge.
-- A capture job id leaves out the requested slug: the same credential sending
-  the same bytes to two slugs writes only the first.
-- The default capture slug depends only on the content, so two tenants sending
-  identical bytes without a slug aim at the same page.
 - Restating a claim on a second page with the same writer collapses onto the
   first page's fact row; purging the first page then retires the claim the
   second page still states. Record per-page support for collapsed claims.
