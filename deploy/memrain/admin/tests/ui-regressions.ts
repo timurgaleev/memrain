@@ -1,13 +1,29 @@
 import assert from "node:assert/strict";
-import { join } from "node:path";
-import { chromium, type Page } from "playwright";
+import { dirname, join, resolve } from "node:path";
+import { chromium, type BrowserContextOptions, type Page } from "playwright";
 import { account, automation, automationRoute, MICROSOFT, OWNER, scenario } from "./automation-server.ts";
 
-const bundle = await Bun.build({ entrypoints: [join(import.meta.dir, "ui-fixture.tsx")], target: "browser" });
+// Vite's `?url` imports become plain file imports, so model files come out as hashed assets.
+const viteUrls: Bun.BunPlugin = {
+  name: "vite-url-imports",
+  setup(build) {
+    build.onResolve({ filter: /\?url$/ }, (args) => ({ path: resolve(dirname(args.importer), args.path.slice(0, -"?url".length)) }));
+  },
+};
+// Split so the 3D scene loads through its dynamic import(), the way the real admin does.
+const bundle = await Bun.build({
+  entrypoints: [join(import.meta.dir, "ui-fixture.tsx")],
+  target: "browser",
+  splitting: true,
+  publicPath: "/",
+  plugins: [viteUrls],
+  loader: { ".glb": "file", ".gltf": "file", ".bin": "file" },
+  naming: { entry: "[name].[ext]", chunk: "[name]-[hash].[ext]", asset: "assets/[name]-[hash].[ext]" },
+});
 if (!bundle.success) throw new AggregateError(bundle.logs, "UI fixture build failed");
-const script = await bundle.outputs[0]!.text();
-// Sprites come out as separate files next to the script, the way the CSP needs them.
-const assets = new Map(bundle.outputs.filter((o) => o.kind === "asset").map((o) => [`/${o.path.replace(/^\.\//, "")}`, o]));
+const built = new Map(bundle.outputs.map((o) => [`/${o.path.replace(/^\.\//, "")}`, o]));
+// The Office view sizes its 3D stage with the admin stylesheet.
+const stylesheet = await Bun.file(join(import.meta.dir, "../src/index.css")).text();
 // The CSP the server sends with the real admin (src/http/admin-static.ts).
 const ADMIN_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; "
   + "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
@@ -30,9 +46,8 @@ const server = Bun.serve({
   port: 0,
   async fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === "/fixture.js") return new Response(script, { headers: { "Content-Type": "text/javascript" } });
-    const asset = assets.get(path);
-    if (asset) return new Response(asset, { headers: { "Content-Type": asset.type } });
+    const file = built.get(path);
+    if (file) return new Response(file, { headers: { "Content-Type": file.type } });
     if (path === "/admin/api/office") {
       officeCalls += 1;
       if (officeFailures > 0) {
@@ -73,19 +88,43 @@ const server = Bun.serve({
       }
       return Response.json({ ok: true, data });
     }
-    const csp: Record<string, string> = new URL(request.url).searchParams.get("view") === "office" ? { "Content-Security-Policy": ADMIN_CSP } : {};
-    return new Response('<!doctype html><div id="root"></div><script type="module" src="/fixture.js"></script>', { headers: { "Content-Type": "text/html", ...csp } });
+    if (path === "/index.css") return new Response(stylesheet, { headers: { "Content-Type": "text/css" } });
+    const office = new URL(request.url).searchParams.get("view") === "office";
+    const csp: Record<string, string> = office ? { "Content-Security-Policy": ADMIN_CSP } : {};
+    const css = office ? '<link rel="stylesheet" href="/index.css">' : "";
+    return new Response(`<!doctype html>${css}<div id="root"></div><script type="module" src="/ui-fixture.js"></script>`, { headers: { "Content-Type": "text/html", ...csp } });
   },
 });
-const browser = await chromium.launch();
+// Software WebGL, so the Office scene draws without a GPU.
+const browser = await chromium.launch({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
 const failures: string[] = [];
-async function check(name: string, view: string, body: (page: Page) => Promise<void>) {
-  const page = await browser.newPage();
+interface CheckOptions {
+  // Real timers: the 3D scene needs real animation frames to draw.
+  realClock?: boolean;
+  viewport?: BrowserContextOptions["viewport"];
+  noWebGL?: boolean;
+}
+// Keeps the drawn frame readable after it reaches the screen, for the paint check only.
+const KEEP_FRAME = () => {
+  const getContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, attrs?: object) {
+    return getContext.call(this, type, type.startsWith("webgl") ? { ...attrs, preserveDrawingBuffer: true } : attrs);
+  } as typeof getContext;
+};
+const NO_WEBGL = () => {
+  const getContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, attrs?: object) {
+    return /webgl/.test(type) ? null : getContext.call(this, type, attrs);
+  } as typeof getContext;
+};
+async function check(name: string, view: string, body: (page: Page) => Promise<void>, opts: CheckOptions = {}) {
+  const page = await browser.newPage(opts.viewport ? { viewport: opts.viewport } : {});
   page.setDefaultTimeout(2000);
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   try {
-    await page.clock.install({ time: new Date("2026-11-09T12:00:00Z") });
+    await page.addInitScript(opts.noWebGL ? NO_WEBGL : KEEP_FRAME);
+    if (!opts.realClock) await page.clock.install({ time: new Date("2026-11-09T12:00:00Z") });
     await page.goto(`${server.url}?view=${view}`);
     await body(page);
     assert.deepEqual(pageErrors, []);
@@ -96,6 +135,19 @@ async function check(name: string, view: string, body: (page: Page) => Promise<v
   } finally {
     await page.close();
   }
+}
+// Some part of the middle of the WebGL canvas holds a drawn, non-transparent pixel.
+async function waitForPaint(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const c = document.querySelector<HTMLCanvasElement>(".office-canvas-box canvas");
+    const gl = c?.getContext("webgl2");
+    if (!c || !gl || c.width < 64 || c.height < 64) return false;
+    const px = new Uint8Array(64 * 64 * 4);
+    gl.readPixels((c.width >> 1) - 32, (c.height >> 1) - 32, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let drawn = 0;
+    for (let i = 3; i < px.length; i += 4) if (px[i]! > 0) drawn++;
+    return drawn > 64 * 64 * 0.5;
+  }, undefined, { polling: 250, timeout: 30_000 });
 }
 try {
   await check("View loads the selected historical body without requesting all snapshots", "history", async (page) => {
@@ -430,29 +482,47 @@ try {
     assert.deepEqual(automation.posts, [{ path: "/admin/api/write-gate/holds/7/decide", body: { decision: "approve" } }]);
     assert.equal(await page.evaluate(() => (window as unknown as { pwned?: number }).pwned), undefined);
   });
-  await check("Office draws under the admin CSP and lists who is working", "office", async (page) => {
+  await check("Office draws the 3D floor under the admin CSP and lists who is working", "office", async (page) => {
     const consoleErrors: string[] = [];
+    const files: { url: string; status: number }[] = [];
     page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
-    // Listen from the first byte so a blocked sprite or inline style is caught.
+    page.on("response", (r) => { if (/\.(?:glb|gltf|bin|png)$/.test(new URL(r.url()).pathname)) files.push({ url: r.url(), status: r.status() }); });
+    // Listen from the first byte so a blocked model, texture or inline style is caught.
     await page.reload();
     const list = page.locator(".office-list");
     await list.getByText("Librarian is indexing pages", { exact: true }).waitFor();
     await list.getByText("Night shift is off", { exact: true }).waitFor();
     await list.getByText("Laptop is searching memory", { exact: true }).first().waitFor();
-    assert.equal(await page.locator("canvas").count(), 1);
     assert.equal(await list.locator(".office-people").getAttribute("aria-live"), "polite");
     assert.equal(await page.locator(".office-side [aria-live]").count(), 1);
-    await page.clock.runFor(1000);
-    const painted = await page.locator("canvas").evaluate((el) => {
-      const c = el as HTMLCanvasElement;
-      const data = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
-      for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) return true;
-      return false;
-    });
-    assert.equal(painted, true, "the office canvas stays blank");
+    await waitForPaint(page);
+    assert.equal(await page.locator("canvas").count(), 1);
+    await page.locator(".office-label", { hasText: "Librarian · indexing pages" }).waitFor({ state: "visible" });
+    const kinds = new Set(files.map((f) => f.url.slice(f.url.lastIndexOf(".") + 1)));
+    assert.deepEqual([...kinds].sort(), ["bin", "glb", "gltf", "png"]);
+    for (const f of files) {
+      assert.equal(f.url.startsWith(`${server.url}assets/`), true, `${f.url} is not a same-origin assets/ file`);
+      assert.equal(f.status, 200, f.url);
+    }
     assert.equal(officeCalls > 0, true);
     assert.deepEqual(consoleErrors, []);
-  });
+  }, { realClock: true });
+  await check("Office without WebGL says so and keeps the list", "office", async (page) => {
+    await page.getByText("Your browser cannot show the 3D office. The list on the right shows the same activity.", { exact: true }).waitFor();
+    await page.locator(".office-list").getByText("Librarian is indexing pages", { exact: true }).waitFor();
+    assert.equal(await page.locator("canvas").count(), 0);
+  }, { noWebGL: true });
+  await check("Office fits a 390 px phone without sideways scrolling", "office", async (page) => {
+    await waitForPaint(page);
+    const fit = await page.evaluate(() => ({
+      canvas: document.querySelector(".office-canvas-box canvas")!.getBoundingClientRect().width,
+      page: document.documentElement.scrollWidth,
+      viewport: window.innerWidth,
+    }));
+    assert.equal(fit.viewport, 390);
+    assert.equal(fit.canvas <= 390, true, `canvas is ${fit.canvas}px wide`);
+    assert.equal(fit.page <= 390, true, `page scrolls to ${fit.page}px`);
+  }, { realClock: true, viewport: { width: 390, height: 844 } });
   await check("Office retries a failed first snapshot well before the next poll", "office", async (page) => {
     officeFailures = 1;
     await page.reload();
@@ -460,7 +530,7 @@ try {
     await page.clock.runFor(5_000);
     await page.locator(".office-list").getByText("Librarian is indexing pages", { exact: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector(".warning-bar"));
-  });
+  }, { noWebGL: true });
   await check("Approvals with nothing held says so", "approvals", async (page) => {
     automation.reset(scenario());
     await page.getByText("Nothing is waiting", { exact: false }).waitFor();

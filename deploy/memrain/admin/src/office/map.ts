@@ -2,7 +2,6 @@ import type { Tile } from "./path.ts";
 import type { ModelId } from "./assets3d.ts";
 import type { RoomId } from "./rooms.ts";
 
-export const TILE = 16;
 const W = 34;
 const H = 25;
 
@@ -16,11 +15,7 @@ export interface Room {
   floor: string;
 }
 
-// [column, row] in the indoor tile sheet.
-export type Cell = readonly [number, number];
-
 export interface Prop {
-  cell: Cell;
   // null: no 3D model fits, the 3D scene skips the prop.
   kind: ModelId | null;
   x: number;
@@ -65,135 +60,78 @@ const DOORS: readonly Tile[] = [
   { x: 5, y: 18 }, { x: 13, y: 18 }, { x: 22, y: 18 }, { x: 29, y: 18 },
 ];
 
-const PLANT: Cell = [16, 0];
-const PLANT_TALL: Cell = [17, 0];
-const DESK: Cell = [5, 4];
-const DESK_END: Cell = [4, 4];
-const ROUND_TABLE: Cell = [7, 0];
-const DRAWERS: Cell = [1, 13];
-const CUPBOARD: Cell = [0, 13];
-const CUPBOARD_WIDE: Cell = [2, 13];
-const CABINET_LOW: Cell = [1, 15];
-const SHELF_PLATES: Cell = [4, 15];
-const SHELF_JARS: Cell = [5, 13];
-const SHELF_POTS: Cell = [6, 13];
-const BOOKCASE: Cell = [19, 17];
-const BOOKCASE_B: Cell = [20, 17];
-const BOOKCASE_C: Cell = [21, 17];
-const NOTES: Cell = [16, 13];
-const BOARD_LEFT: Cell = [20, 13];
-const BOARD_RIGHT: Cell = [21, 13];
-const CANDLE: Cell = [16, 6];
-const CANDELABRA: Cell = [17, 7];
-const STOVE: Cell = [14, 14];
-const ARMCHAIR: Cell = [14, 9];
-const ARMCHAIR_B: Cell = [15, 9];
+// What each piece of furniture is drawn as; the piano has no model and is left out.
+const PLANT: ModelId = "plant";
+const DESK: ModelId = "desk";
+const TABLE: ModelId = "counter";
+const CABINET: ModelId = "cabinet";
+const SHELF: ModelId = "shelf";
+const BOARD: ModelId = "board";
+const LAMP: ModelId = "lamp";
+const COFFEE: ModelId = "coffee_machine";
+const SOFA: ModelId = "sofa";
+const PIANO = null;
 
-function solid(cell: Cell, x: number, y: number): Prop {
-  return { cell, kind: kindOf(cell), x, y, solid: true };
+function solid(kind: ModelId | null, x: number, y: number): Prop {
+  return { kind, x, y, solid: true };
 }
 
-function row(cells: readonly Cell[], x: number, y: number): Prop[] {
-  return cells.map((cell, dx) => solid(cell, x + dx, y));
-}
-
-const ORANGE_TABLE: Cell[] = [[16, 8], [17, 8], [18, 8]];
-const GREEN_TABLE: Cell[] = [[16, 10], [17, 10], [18, 10]];
-const LONG_TABLE: Cell[] = [[0, 0], [1, 0], [2, 0]];
-const PIANO: Cell[] = [[23, 8], [24, 8]];
-
-// The sheet cell picks the 2D sprite; the kind picks the 3D model.
-const KIND_OF_CELL = new Map<string, ModelId | null>();
-for (const [cell, kind] of [
-  [PLANT, "plant"],
-  [PLANT_TALL, "plant"],
-  [DESK, "desk"],
-  [DESK_END, "desk"],
-  [ROUND_TABLE, "counter"],
-  [DRAWERS, "cabinet"],
-  [CUPBOARD, "cabinet"],
-  [CUPBOARD_WIDE, "cabinet"],
-  [CABINET_LOW, "cabinet"],
-  [SHELF_PLATES, "shelf"],
-  [SHELF_JARS, "shelf"],
-  [SHELF_POTS, "shelf"],
-  [BOOKCASE, "shelf"],
-  [BOOKCASE_B, "shelf"],
-  [BOOKCASE_C, "shelf"],
-  [NOTES, "board"],
-  [BOARD_LEFT, "board"],
-  [BOARD_RIGHT, "board"],
-  [CANDLE, "lamp"],
-  [CANDELABRA, "lamp"],
-  [STOVE, "coffee_machine"],
-  [ARMCHAIR, "sofa"],
-  [ARMCHAIR_B, "sofa"],
-  ...ORANGE_TABLE.map((c) => [c, "counter"] as const),
-  ...GREEN_TABLE.map((c) => [c, "counter"] as const),
-  ...LONG_TABLE.map((c) => [c, "counter"] as const),
-  ...PIANO.map((c) => [c, null] as const),
-] as const) {
-  KIND_OF_CELL.set(cell.join(","), kind);
-}
-
-function kindOf(cell: Cell): ModelId | null {
-  const kind = KIND_OF_CELL.get(cell.join(","));
-  if (kind === undefined) throw new Error(`office prop cell ${cell.join(",")} has no model kind`);
-  return kind;
+function row(kind: ModelId | null, n: number, x: number, y: number): Prop[] {
+  return Array.from({ length: n }, (_, dx) => solid(kind, x + dx, y));
 }
 
 export const PROPS: readonly Prop[] = [
   // Reception
-  solid(PLANT, 1, 1), solid(DRAWERS, 2, 1), solid(CUPBOARD_WIDE, 7, 1), solid(PLANT_TALL, 8, 1),
-  solid(DESK_END, 3, 3), solid(DESK, 4, 3), solid(DESK, 5, 3), solid(DESK, 6, 3),
+  solid(PLANT, 1, 1), solid(CABINET, 2, 1), solid(CABINET, 7, 1), solid(PLANT, 8, 1),
+  solid(DESK, 3, 3), solid(DESK, 4, 3), solid(DESK, 5, 3), solid(DESK, 6, 3),
   // Archive
-  solid(DRAWERS, 10, 1), solid(CUPBOARD, 11, 1), solid(CABINET_LOW, 12, 1), solid(CUPBOARD_WIDE, 13, 1),
-  solid(DRAWERS, 14, 1), solid(CUPBOARD, 15, 1), solid(DRAWERS, 16, 1),
-  ...row(LONG_TABLE, 14, 4),
+  solid(CABINET, 10, 1), solid(CABINET, 11, 1), solid(CABINET, 12, 1), solid(CABINET, 13, 1),
+  solid(CABINET, 14, 1), solid(CABINET, 15, 1), solid(CABINET, 16, 1),
+  ...row(TABLE, 3, 14, 4),
   // Writing desk
-  solid(SHELF_PLATES, 18, 1), solid(PLANT, 24, 1),
-  solid(DESK_END, 18, 3), solid(DESK, 19, 3), solid(DESK_END, 22, 3), solid(DESK, 23, 3), solid(DESK, 24, 3),
+  solid(SHELF, 18, 1), solid(PLANT, 24, 1),
+  solid(DESK, 18, 3), solid(DESK, 19, 3), solid(DESK, 22, 3), solid(DESK, 23, 3), solid(DESK, 24, 3),
   // Library
-  solid(BOOKCASE, 26, 1), solid(BOOKCASE_B, 27, 1), solid(BOOKCASE_C, 28, 1), solid(BOOKCASE_B, 29, 1),
-  solid(BOOKCASE, 30, 1), solid(BOOKCASE_C, 31, 1), solid(BOOKCASE_B, 32, 1),
-  ...row(GREEN_TABLE, 30, 4), solid(PLANT_TALL, 26, 5),
+  solid(SHELF, 26, 1), solid(SHELF, 27, 1), solid(SHELF, 28, 1), solid(SHELF, 29, 1),
+  solid(SHELF, 30, 1), solid(SHELF, 31, 1), solid(SHELF, 32, 1),
+  ...row(TABLE, 3, 30, 4), solid(PLANT, 26, 5),
   // Mailroom
-  solid(SHELF_JARS, 1, 10), solid(SHELF_POTS, 2, 10), solid(CABINET_LOW, 3, 10), solid(DRAWERS, 7, 10),
-  ...row(ORANGE_TABLE, 2, 12),
+  solid(SHELF, 1, 10), solid(SHELF, 2, 10), solid(CABINET, 3, 10), solid(CABINET, 7, 10),
+  ...row(TABLE, 3, 2, 12),
   // Post office
-  solid(SHELF_PLATES, 9, 10), solid(DRAWERS, 10, 10), solid(CUPBOARD_WIDE, 11, 10), solid(CUPBOARD, 14, 10),
-  solid(DESK_END, 9, 12), solid(DESK, 10, 12), solid(DESK_END, 13, 12), solid(DESK, 14, 12),
-  solid(PLANT, 9, 14), solid(PLANT_TALL, 14, 14),
+  solid(SHELF, 9, 10), solid(CABINET, 10, 10), solid(CABINET, 11, 10), solid(CABINET, 14, 10),
+  solid(DESK, 9, 12), solid(DESK, 10, 12), solid(DESK, 13, 12), solid(DESK, 14, 12),
+  solid(PLANT, 9, 14), solid(PLANT, 14, 14),
   // Night shift
-  solid(CANDLE, 19, 10), solid(SHELF_PLATES, 20, 10), solid(DRAWERS, 21, 10), solid(CANDELABRA, 25, 10),
-  solid(DESK_END, 19, 12), solid(DESK, 20, 12), solid(DESK_END, 22, 12), solid(DESK, 23, 12),
+  solid(LAMP, 19, 10), solid(SHELF, 20, 10), solid(CABINET, 21, 10), solid(LAMP, 25, 10),
+  solid(DESK, 19, 12), solid(DESK, 20, 12), solid(DESK, 22, 12), solid(DESK, 23, 12),
   // Who's waiting
-  solid(NOTES, 27, 10), solid(BOARD_LEFT, 28, 10), solid(BOARD_RIGHT, 29, 10), solid(ROUND_TABLE, 32, 13),
+  solid(BOARD, 27, 10), solid(BOARD, 28, 10), solid(BOARD, 29, 10), solid(TABLE, 32, 13),
   // Assistant
-  solid(PLANT_TALL, 1, 19), solid(BOOKCASE_B, 2, 19), solid(BOOKCASE_C, 3, 19), solid(PLANT, 7, 19),
-  solid(DESK_END, 1, 21), solid(DESK, 2, 21), solid(DESK_END, 4, 21), solid(DESK, 5, 21),
+  solid(PLANT, 1, 19), solid(SHELF, 2, 19), solid(SHELF, 3, 19), solid(PLANT, 7, 19),
+  solid(DESK, 1, 21), solid(DESK, 2, 21), solid(DESK, 4, 21), solid(DESK, 5, 21),
   // Back office
-  solid(CUPBOARD, 9, 19), solid(DRAWERS, 10, 19), solid(CUPBOARD_WIDE, 11, 19), solid(CABINET_LOW, 12, 19),
-  solid(CUPBOARD, 15, 19),
-  solid(DESK_END, 9, 21), solid(DESK, 10, 21), solid(DESK_END, 14, 21), solid(DESK, 15, 21),
+  solid(CABINET, 9, 19), solid(CABINET, 10, 19), solid(CABINET, 11, 19), solid(CABINET, 12, 19),
+  solid(CABINET, 15, 19),
+  solid(DESK, 9, 21), solid(DESK, 10, 21), solid(DESK, 14, 21), solid(DESK, 15, 21),
   solid(PLANT, 9, 23),
   // Break room
-  solid(STOVE, 17, 19), solid(SHELF_JARS, 18, 19), solid(SHELF_POTS, 19, 19),
-  solid(ARMCHAIR, 24, 19), solid(ARMCHAIR_B, 25, 19), solid(PLANT_TALL, 26, 19),
-  solid(ARMCHAIR, 28, 19), solid(ARMCHAIR_B, 29, 19), solid(STOVE, 19, 20),
-  ...row(PIANO, 31, 19),
-  solid(ROUND_TABLE, 20, 22), solid(ROUND_TABLE, 26, 22), solid(PLANT, 17, 23),
+  solid(COFFEE, 17, 19), solid(SHELF, 18, 19), solid(SHELF, 19, 19),
+  solid(SOFA, 24, 19), solid(SOFA, 25, 19), solid(PLANT, 26, 19),
+  solid(SOFA, 28, 19), solid(SOFA, 29, 19), solid(COFFEE, 19, 20),
+  ...row(PIANO, 2, 31, 19),
+  solid(TABLE, 20, 22), solid(TABLE, 26, 22), solid(PLANT, 17, 23),
 ];
 
 // Pictures hung on the wall above a room; purely decorative.
 export const WALL_DECOR: readonly Prop[] = [
-  { cell: [19, 12], kind: "board", x: 6, y: 0, solid: false },
-  { cell: [16, 12], kind: "board", x: 15, y: 0, solid: false },
-  { cell: [19, 14], kind: "board", x: 23, y: 0, solid: false },
-  { cell: [18, 0], kind: "board", x: 31, y: 0, solid: false },
+  { kind: "board", x: 6, y: 0, solid: false },
+  { kind: "board", x: 15, y: 0, solid: false },
+  { kind: "board", x: 23, y: 0, solid: false },
+  { kind: "board", x: 31, y: 0, solid: false },
   // Break room whiteboard; the wall row sits above the room's top tiles.
-  { cell: [16, 12], kind: "whiteboard", x: 20, y: 18, solid: false },
-  { cell: [16, 12], kind: "whiteboard", x: 21, y: 18, solid: false },
+  { kind: "whiteboard", x: 20, y: 18, solid: false },
+  { kind: "whiteboard", x: 21, y: 18, solid: false },
 ];
 
 export const RUGS: readonly Rug[] = [
@@ -307,14 +245,4 @@ export function spotFor(room: RoomId, index: number): Tile {
   const total = seats.length + floor.length;
   const i = ((Math.trunc(index) % total) + total) % total;
   return i < seats.length ? seats[i]! : floor[i - seats.length]!;
-}
-
-// Largest whole-number scale that fits the map, centred in a w×h canvas. A canvas
-// smaller than the map gets a fractional scale so the whole office stays visible.
-export function officeLayout(w: number, h: number): { scale: number; ox: number; oy: number } {
-  const pw = W * TILE;
-  const ph = H * TILE;
-  const fit = Math.min(w / pw, h / ph);
-  const scale = fit >= 1 ? Math.floor(fit) : Math.max(fit, 0.01);
-  return { scale, ox: Math.floor((w - pw * scale) / 2), oy: Math.floor((h - ph * scale) / 2) };
 }

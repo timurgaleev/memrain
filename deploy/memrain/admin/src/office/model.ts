@@ -256,3 +256,18 @@ export function tick(st: OfficeState, now: number): OfficeState {
   }
   return changed ? { characters, recent: st.recent } : st;
 }
+
+// The name floating over a figure; a busy one also says what kind of work it does.
+export function labelFor(c: Character): string {
+  return c.room === "break_room" ? c.label : `${c.label} · ${ROOM_PHRASE[c.room]}`;
+}
+
+// How many people models the 3D office ships with.
+const LOOKS = 6;
+
+// A figure keeps the same look for as long as its id stays the same.
+export function variantFor(id: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193);
+  return (h >>> 0) % LOOKS;
+}

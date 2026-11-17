@@ -3,31 +3,39 @@ import { api } from "../api";
 import type { FeedEvent, OfficeSnapshot } from "../admin-types.ts";
 import { PageIntro } from "../components/PageIntro.tsx";
 import { describeError } from "../hooks.ts";
-import { OFFICE_MAP, TILE, officeLayout, spotFor } from "../office/map.ts";
+import { emptyAmbient, planAmbient, targetFor, type AmbientState } from "../office/ambient.ts";
+import { spreadLabels, type LabelBox } from "../office/labels.ts";
+import { ROOMS, spotFor } from "../office/map.ts";
 import {
   applyEvent,
   applySnapshot,
   eventKey,
   initialState,
+  labelFor,
   lineFor,
   namesFromSnapshot,
   tick,
+  variantFor,
   type Character,
   type OfficeState,
 } from "../office/model.ts";
 import { stepCharacter, type Pose } from "../office/motion.ts";
-import { drawOffice } from "../office/render.ts";
+import type { OfficeScene, SceneCharacter } from "../office/scene3d.ts";
 import { assignSeats, freeSeat, type Seat } from "../office/seats.ts";
-import { loadSprites, type Sprites } from "../office/sprites.ts";
+import { facingToYaw, tileToWorld } from "../office/world.ts";
 
 const POLL_MS = 30_000;
 const FIRST_RETRY_MS = 5_000;
 const TICK_MS = 250;
 const PENDING_CAP = 50;
-const MAP_W = OFFICE_MAP.width * TILE;
-const MAP_H = OFFICE_MAP.height * TILE;
-// Below this share of the column a crisp whole-number scale looks lost, so the canvas fills the column instead.
-const MIN_CRISP_FILL = 0.75;
+const PLAN_MS = 250;
+// A press that moves further than this turns the view instead of picking a figure.
+const DRAG_PX = 4;
+// Room names float a little above the floor so furniture does not hide them.
+const ROOM_LABEL_Y = 0.6;
+// Idle name tags in a crowd stack upward this far at most, then step aside.
+const MAX_LABEL_LIFT = 36;
+const NO_WEBGL = "Your browser cannot show the 3D office. The list on the right shows the same activity.";
 
 type Feed = "connecting" | "connected" | "disconnected";
 
@@ -35,11 +43,6 @@ interface Store {
   state: OfficeState | null;
   // When the first snapshot landed; clients that arrive later walk in from reception.
   loadedAt: number;
-}
-
-interface Point {
-  left: number;
-  top: number;
 }
 
 function byLabel(a: Character, b: Character): number {
@@ -162,94 +165,164 @@ function useOffice() {
   return { store, view, feed, error };
 }
 
-function advancePoses(
+interface Overlay {
+  labels: Map<string, HTMLDivElement>;
+  rooms: (HTMLDivElement | null)[];
+  tip: { id: string | null; el: HTMLDivElement | null };
+}
+
+interface Size {
+  w: number;
+  h: number;
+}
+
+const ROOM_ANCHORS = ROOMS.map((r) => ({ id: r.id, label: r.label, ...tileToWorld({ x: r.x + (r.w - 1) / 2, y: r.y + (r.h - 1) / 2 }) }));
+
+// Moves every figure one frame toward where it should be: its seat while it works,
+// an idle activity in the break room, or its seat there otherwise.
+function advance(
   prev: Map<string, Pose>,
   st: OfficeState,
   seats: ReadonlyMap<string, Seat>,
+  amb: AmbientState,
   dtMs: number,
+  now: number,
   loadedAt: number,
   reducedMotion: boolean,
-): Map<string, Pose> {
-  const next = new Map<string, Pose>();
+): { poses: Map<string, Pose>; chars: SceneCharacter[] } {
+  const poses = new Map<string, Pose>();
+  const chars: SceneCharacter[] = [];
   for (const c of st.characters.values()) {
-    const target = spotFor(c.room, seats.get(c.id)?.index ?? 0);
+    const want = targetFor(c, amb, spotFor(c.room, seats.get(c.id)?.index ?? 0), now);
     let pose = prev.get(c.id);
     if (!pose) {
       const walksIn = c.kind === "client" && c.arrivedAt > loadedAt;
-      const from = walksIn ? spotFor("reception", freeSeat(seats, "reception")) : target;
+      const from = walksIn ? spotFor("reception", freeSeat(seats, "reception")) : want.tile;
       pose = { x: from.x, y: from.y, path: [], facing: "down", frame: 0 };
     }
-    next.set(c.id, stepCharacter(pose, target, dtMs, { reducedMotion }));
+    pose = stepCharacter(pose, want.tile, dtMs, { reducedMotion });
+    poses.set(c.id, pose);
+    const moving = pose.path.length > 0;
+    const arrived = !moving && pose.x === want.tile.x && pose.y === want.tile.y;
+    const at = tileToWorld(pose);
+    chars.push({
+      id: c.id,
+      label: c.label,
+      worldX: at.x,
+      worldZ: at.z,
+      yaw: facingToYaw(arrived && want.facing ? want.facing : pose.facing),
+      pose: want.pose,
+      moving,
+      busy: c.busyUntil > now,
+      error: c.errorUntil > now,
+      enabled: c.enabled,
+      variant: variantFor(c.id),
+    });
   }
-  return next;
+  return { poses, chars };
 }
 
-// Backing store in device pixels at a whole-number scale when that still fills
-// most of the column; otherwise fill the column and let the browser resample.
-function fitCanvas(canvas: HTMLCanvasElement, available: number): void {
-  if (available <= 0) return;
-  const dpr = window.devicePixelRatio || 1;
-  const whole = Math.floor((available * dpr) / MAP_W);
-  const crisp = whole >= 1 && (whole * MAP_W) / dpr >= available * MIN_CRISP_FILL;
-  const scale = crisp ? whole : whole >= 1 ? whole + 1 : 0;
-  const w = scale > 0 ? scale * MAP_W : Math.max(1, Math.round(available * dpr));
-  const h = scale > 0 ? scale * MAP_H : Math.max(1, Math.round((w * MAP_H) / MAP_W));
-  const cssW = crisp ? w / dpr : available;
-  if (canvas.width !== w) canvas.width = w;
-  if (canvas.height !== h) canvas.height = h;
-  canvas.style.width = `${cssW}px`;
-  canvas.style.height = `${(cssW * MAP_H) / MAP_W}px`;
+function onCanvas(p: { x: number; y: number } | null, size: Size): p is { x: number; y: number } {
+  return p !== null && p.x >= 0 && p.y >= 0 && p.x <= size.w && p.y <= size.h;
 }
 
-function useOfficeCanvas(
-  fitRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
+function place(el: HTMLElement, p: { x: number; y: number } | null, size: Size): void {
+  const shown = onCanvas(p, size);
+  el.style.visibility = shown ? "visible" : "hidden";
+  if (!shown) return;
+  el.style.left = `${p.x}px`;
+  el.style.top = `${p.y}px`;
+}
+
+// Keeps names, badges and the tooltip over their figures without a React render per frame.
+function placeOverlay(scene: OfficeScene, overlay: Overlay, st: OfficeState | null, now: number, size: Size): void {
+  ROOM_ANCHORS.forEach((r, i) => {
+    const el = overlay.rooms[i];
+    if (el) place(el, scene.projectWorld(r.x, r.z, ROOM_LABEL_Y), size);
+  });
+  // Measure every tag first, then move them, so the browser lays out once per frame.
+  const boxes: (LabelBox & { el: HTMLDivElement })[] = [];
+  for (const [id, el] of overlay.labels) {
+    const p = scene.project(id);
+    if (!onCanvas(p, size)) {
+      el.style.visibility = "hidden";
+      continue;
+    }
+    const c = st?.characters.get(id);
+    const w = el.offsetWidth;
+    // Slide a tag sideways rather than let the stage edge cut it off.
+    const x = Math.min(Math.max(p.x, w / 2), Math.max(w / 2, size.w - w / 2));
+    boxes.push({ id, el, x, y: p.y, w, h: el.offsetHeight, keep: !!c && c.room !== "break_room" });
+  }
+  const lifts = spreadLabels(boxes, MAX_LABEL_LIFT);
+  for (const b of boxes) {
+    const lift = lifts.get(b.id);
+    b.el.style.visibility = lift === null || lift === undefined ? "hidden" : "visible";
+    b.el.style.left = `${b.x}px`;
+    b.el.style.top = `${b.y - (lift ?? 0)}px`;
+    b.el.classList.toggle("office-label-error", (st?.characters.get(b.id)?.errorUntil ?? 0) > now);
+  }
+  const { id, el } = overlay.tip;
+  if (id && el) place(el, scene.project(id), size);
+}
+
+// The canvas is made here rather than by React: a scene owns its canvas for life
+// and loses the WebGL context on dispose, so every scene gets a fresh one.
+function useOfficeScene(
+  hostRef: RefObject<HTMLDivElement | null>,
+  boxRef: RefObject<HTMLDivElement | null>,
   store: RefObject<Store>,
-  tip: RefObject<{ id: string | null; el: HTMLDivElement | null }>,
+  overlay: RefObject<Overlay>,
 ) {
-  const poses = useRef(new Map<string, Pose>());
-  const [spritesFailed, setSpritesFailed] = useState(false);
+  const sceneRef = useRef<OfficeScene | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    const fit = fitRef.current;
-    const canvas = canvasRef.current;
-    if (!fit || !canvas) return;
-    const ro = new ResizeObserver(() => fitCanvas(canvas, fit.clientWidth));
-    ro.observe(fit);
-    fitCanvas(canvas, fit.clientWidth);
-    return () => ro.disconnect();
-  }, [fitRef, canvasRef]);
-
-  useEffect(() => {
-    const ctx = canvasRef.current?.getContext("2d");
-    if (!ctx) return;
+    const host = hostRef.current;
+    const box = boxRef.current;
+    if (failed || !host || !box) return;
+    const canvas = document.createElement("canvas");
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("aria-label", "3D office with a figure for each app and background worker");
+    host.append(canvas);
     const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    let seats: Map<string, Seat> = new Map();
-    let seatedFor: OfficeState | null = null;
-    let sprites: Sprites | null = null;
+    const size: Size = { w: box.clientWidth, h: box.clientHeight };
+    let alive = true;
+    let scene: OfficeScene | null = null;
+    let ro: ResizeObserver | null = null;
     let raf = 0;
     let last = 0;
-    let alive = true;
+    let poses = new Map<string, Pose>();
+    let seats = new Map<string, Seat>();
+    let seatedFor: OfficeState | null = null;
+    let amb = emptyAmbient();
+    let plannedAt = -Infinity;
 
     const frame = (t: number) => {
       raf = 0;
-      const st = store.current.state;
-      if (!sprites || document.hidden) return;
+      if (!alive || !scene || document.hidden) return;
       const dt = last ? t - last : 0;
       last = t;
+      const st = store.current.state;
+      const now = Date.now();
       if (st) {
         if (st !== seatedFor) {
           seats = assignSeats(seats, st.characters.values());
           seatedFor = st;
         }
-        poses.current = advancePoses(poses.current, st, seats, dt, store.current.loadedAt, reducedMotion);
-        drawOffice(ctx, st, poses.current, sprites, Date.now());
-        followTip(ctx.canvas, poses.current, tip.current);
+        if (now - plannedAt >= PLAN_MS) {
+          amb = planAmbient(st, amb, now, Math.random, { reducedMotion });
+          plannedAt = now;
+        }
+        const next = advance(poses, st, seats, amb, dt, now, store.current.loadedAt, reducedMotion);
+        poses = next.poses;
+        scene.update(next.chars, now);
       }
+      placeOverlay(scene, overlay.current, st, now, size);
       raf = requestAnimationFrame(frame);
     };
     const start = () => {
-      if (raf || !alive || !sprites || document.hidden) return;
+      if (raf || !alive || !scene || document.hidden) return;
       last = 0;
       raf = requestAnimationFrame(frame);
     };
@@ -260,62 +333,48 @@ function useOfficeCanvas(
         raf = 0;
       }
     };
+    const fail = () => {
+      if (alive) setFailed(true);
+    };
 
-    loadSprites().then(
-      (s) => {
-        sprites = s;
+    import("../office/scene3d.ts")
+      .then(({ createOfficeScene }) => (alive ? createOfficeScene(canvas, { reducedMotion }) : null))
+      .then((s) => {
+        if (!s) return;
+        if (!alive) {
+          s.dispose();
+          return;
+        }
+        scene = s;
+        sceneRef.current = s;
+        s.onContextLost(fail);
+        const resize = () => {
+          size.w = box.clientWidth;
+          size.h = box.clientHeight;
+          s.resize(size.w, size.h, window.devicePixelRatio || 1);
+        };
+        ro = new ResizeObserver(resize);
+        ro.observe(box);
+        resize();
         start();
-      },
-      () => {
-        if (alive) setSpritesFailed(true);
-      },
-    );
+      }, (e: unknown) => {
+        console.warn("office: the 3D view could not start", e);
+        fail();
+      });
     document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       alive = false;
       if (raf) cancelAnimationFrame(raf);
+      ro?.disconnect();
       document.removeEventListener("visibilitychange", onVisible);
+      scene?.dispose();
+      sceneRef.current = null;
+      canvas.remove();
     };
-  }, [canvasRef, store, tip]);
+  }, [hostRef, boxRef, store, overlay, failed]);
 
-  return { poses, spritesFailed };
-}
-
-// Where a character's head is, in CSS pixels from the canvas corner.
-function headAt(canvas: HTMLCanvasElement, pose: Pose): Point | null {
-  const width = canvas.getBoundingClientRect().width;
-  if (width === 0) return null;
-  const ratio = canvas.width / width;
-  const { scale, ox, oy } = officeLayout(canvas.width, canvas.height);
-  const unit = scale * TILE;
-  return { left: (ox + (pose.x + 0.5) * unit) / ratio, top: (oy + pose.y * unit) / ratio };
-}
-
-// Keeps an open tooltip over its character while it walks, without a React render per frame.
-function followTip(canvas: HTMLCanvasElement, poses: Map<string, Pose>, tip: { id: string | null; el: HTMLDivElement | null }): void {
-  const pose = tip.id ? poses.get(tip.id) : undefined;
-  const at = pose && tip.el ? headAt(canvas, pose) : null;
-  if (!at || !tip.el) return;
-  tip.el.style.left = `${at.left}px`;
-  tip.el.style.top = `${at.top}px`;
-}
-
-// Which character sits under a pointer; the front-most one wins.
-function hitTest(canvas: HTMLCanvasElement, st: OfficeState, poses: Map<string, Pose>, clientX: number, clientY: number): string | null {
-  const rect = canvas.getBoundingClientRect();
-  if (rect.width === 0) return null;
-  const ratio = canvas.width / rect.width;
-  const { scale, ox, oy } = officeLayout(canvas.width, canvas.height);
-  const unit = scale * TILE;
-  const mx = ((clientX - rect.left) * ratio - ox) / unit;
-  const my = ((clientY - rect.top) * ratio - oy) / unit;
-  let hit: { id: string; pose: Pose } | null = null;
-  for (const c of st.characters.values()) {
-    const p = poses.get(c.id);
-    if (!p || mx < p.x || mx >= p.x + 1 || my < p.y - 0.25 || my >= p.y + 1) continue;
-    if (!hit || p.y > hit.pose.y) hit = { id: c.id, pose: p };
-  }
-  return hit?.id ?? null;
+  return { sceneRef, failed };
 }
 
 function formatTime(at: number): string {
@@ -375,29 +434,73 @@ function ActivityList({ view }: { view: OfficeState | null }) {
   );
 }
 
+function FigureLabels({ view, overlay }: { view: OfficeState | null; overlay: RefObject<Overlay> }) {
+  if (!view) return null;
+  return (
+    <>
+      {[...view.characters.values()].map((c) => (
+        <div
+          key={c.id}
+          className={`office-label${c.room !== "break_room" ? " office-label-busy" : ""}${c.enabled ? "" : " office-label-off"}`}
+          ref={(el) => {
+            if (el) overlay.current.labels.set(c.id, el);
+            else overlay.current.labels.delete(c.id);
+          }}
+        >
+          {labelFor(c)}
+          <span className="office-badge">!</span>
+        </div>
+      ))}
+    </>
+  );
+}
+
 export function OfficePage() {
   const { store, view, feed, error } = useOffice();
-  const fitRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const tipRef = useRef<{ id: string | null; el: HTMLDivElement | null }>({ id: null, el: null });
-  const { poses, spritesFailed } = useOfficeCanvas(fitRef, canvasRef, store, tipRef);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const overlay = useRef<Overlay>({ labels: new Map(), rooms: [], tip: { id: null, el: null } });
+  const { sceneRef, failed } = useOfficeScene(hostRef, boxRef, store, overlay);
   const [tipId, setTipId] = useState<string | null>(null);
+  const drag = useRef<{ pointer: number; startX: number; lastX: number; moved: boolean } | null>(null);
   useEffect(() => {
-    tipRef.current.id = tipId;
+    overlay.current.tip.id = tipId;
   }, [tipId]);
 
-  const under = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    const st = store.current.state;
-    return st ? hitTest(e.currentTarget, st, poses.current, e.clientX, e.clientY) : null;
+  const under = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return sceneRef.current?.pick(e.clientX - rect.left, e.clientY - rect.top) ?? null;
   };
-  // A second tap on the same figure closes its tooltip.
-  const onDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+  const onDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!sceneRef.current || (e.pointerType === "mouse" && e.button !== 0)) return;
+    drag.current = { pointer: e.pointerId, startX: e.clientX, lastX: e.clientX, moved: false };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (d && d.pointer === e.pointerId) {
+      if (!d.moved && Math.abs(e.clientX - d.startX) > DRAG_PX) {
+        d.moved = true;
+        d.lastX = d.startX;
+      }
+      if (d.moved) {
+        sceneRef.current?.setOrbitDrag(e.clientX - d.lastX);
+        d.lastX = e.clientX;
+      }
+      return;
+    }
+    if (e.pointerType === "mouse") setTipId(under(e));
+  };
+  // A tap picks a figure; a second tap on the same one closes its tooltip.
+  const onUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d || d.pointer !== e.pointerId) return;
+    drag.current = null;
+    if (d.moved) return;
     const id = under(e);
     setTipId((open) => (e.pointerType !== "mouse" && id !== null && open === id ? null : id));
   };
   const tipped = tipId ? view?.characters.get(tipId) : undefined;
-  const tipPose = tipId ? poses.current.get(tipId) : undefined;
-  const tipAt = tipped && tipPose && canvasRef.current ? headAt(canvasRef.current, tipPose) : null;
 
   useEffect(() => {
     if (tipId && view && !view.characters.has(tipId)) setTipId(null);
@@ -418,33 +521,35 @@ export function OfficePage() {
         </span>
       </div>
       {error && <div className="warning-bar">{error}</div>}
-      {spritesFailed && <div className="warning-bar">The office pictures could not be loaded. The list still updates.</div>}
 
       <div className="office-layout">
         <div className="panel office-stage">
-          <div className="office-fit" ref={fitRef}>
-            <div className="office-canvas-box">
-              <canvas
-                ref={canvasRef}
-                className="office-canvas"
-                role="img"
-                aria-label="Office floor plan with a figure for each app and background worker"
-                onPointerMove={(e) => { if (e.pointerType === "mouse") setTipId(under(e)); }}
-                onPointerDown={onDown}
-                onPointerLeave={(e) => { if (e.pointerType === "mouse") setTipId(null); }}
-              />
-              {tipped && tipAt && (
-                <div
-                  className="office-tip"
-                  aria-hidden="true"
-                  ref={(el) => { tipRef.current.el = el; }}
-                  style={{ left: tipAt.left, top: tipAt.top }}
-                >
-                  {lineFor(tipped)}
-                </div>
-              )}
+          {failed ? (
+            <p className="office-note office-fallback">{NO_WEBGL}</p>
+          ) : (
+            <div
+              className="office-canvas-box"
+              ref={boxRef}
+              onPointerDown={onDown}
+              onPointerMove={onMove}
+              onPointerUp={onUp}
+              onPointerCancel={() => { drag.current = null; }}
+              onPointerLeave={(e) => { if (e.pointerType === "mouse" && !drag.current) setTipId(null); }}
+            >
+              <div className="office-gl" ref={hostRef} />
+              <div className="office-overlay" aria-hidden="true">
+                {ROOM_ANCHORS.map((r, i) => (
+                  <div key={r.id} className="office-room" ref={(el) => { overlay.current.rooms[i] = el; }}>{r.label}</div>
+                ))}
+                <FigureLabels view={view} overlay={overlay} />
+                {tipped && (
+                  <div className="office-tip" ref={(el) => { overlay.current.tip.el = el; }}>
+                    {lineFor(tipped)}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
         <section className="panel office-side">
           <h2 className="panel-title">Who is here</h2>

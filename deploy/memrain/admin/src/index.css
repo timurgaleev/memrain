@@ -1327,12 +1327,61 @@ pre.copy-value {
 .office-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
 .office-layout .panel + .panel { margin-top: 0; }
 .office-stage { padding: 12px; }
-.office-fit { width: 100%; }
-.office-canvas-box { position: relative; width: fit-content; max-width: 100%; margin: 0 auto; }
-.office-canvas { display: block; image-rendering: pixelated; border-radius: 4px; touch-action: manipulation; cursor: default; }
+.office-canvas-box {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1.6;
+  max-height: 640px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: radial-gradient(ellipse at 50% 45%, #1b1d2c 0%, var(--bg-secondary) 75%);
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+}
+.office-canvas-box:active { cursor: grabbing; }
+.office-gl, .office-gl canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.office-overlay { position: absolute; inset: 0; pointer-events: none; }
+.office-room, .office-label, .office-tip { position: absolute; visibility: hidden; white-space: nowrap; }
+.office-room {
+  transform: translate(-50%, -50%);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.78);
+  text-shadow: 0 1px 2px rgba(0,0,0,0.75);
+}
+.office-label {
+  transform: translate(-50%, calc(-100% - 2px));
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(10,10,15,0.62);
+  color: var(--text-primary);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.office-label-busy {
+  z-index: 1;
+  background: rgba(13,64,62,0.9);
+  box-shadow: 0 0 0 1px rgba(45,212,191,0.55);
+  color: #ecfffb;
+  font-size: 11px;
+}
+.office-label-off { color: var(--text-muted); }
+.office-badge {
+  display: none;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--error);
+  color: #fff;
+  font-weight: 700;
+}
+.office-label-error .office-badge { display: inline-block; }
 .office-tip {
-  position: absolute;
-  transform: translate(-50%, calc(-100% - 6px));
+  transform: translate(-50%, calc(-100% - 22px));
   max-width: 240px;
   padding: 5px 9px;
   background: var(--bg-tertiary);
@@ -1341,10 +1390,9 @@ pre.copy-value {
   color: var(--text-primary);
   font-size: 12px;
   line-height: 1.4;
-  white-space: nowrap;
-  pointer-events: none;
   z-index: 2;
 }
+.office-fallback { margin: 0; padding: 24px 8px; text-align: center; }
 .office-people, .office-recent { list-style: none; display: grid; gap: 6px; }
 .office-people { font-size: 13px; }
 .office-people .office-off { color: var(--text-muted); }
@@ -1355,4 +1403,11 @@ pre.copy-value {
 
 @media (max-width: 1024px) {
   .office-layout { grid-template-columns: minmax(0, 1fr); }
+}
+/* On a phone the rooms are too small to name; the figures keep their tags. */
+@media (max-width: 600px) {
+  .office-stage { padding: 8px; }
+  .office-room { display: none; }
+  .office-label { font-size: 9px; padding: 0 5px; }
+  .office-label-busy { font-size: 10px; }
 }

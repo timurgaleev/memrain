@@ -8,18 +8,21 @@ import {
   applySnapshot,
   describe as describeCharacter,
   initialState,
+  labelFor,
   lineFor,
   namesFromSnapshot,
   tick,
   type Character,
   type OfficeState,
+  variantFor,
 } from "../admin/src/office/model.ts";
 import { emptyAmbient, facingProp, planAmbient, targetFor } from "../admin/src/office/ambient.ts";
-import { roomFor, type RoomId } from "../admin/src/office/rooms.ts";
-import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, PROPS, TILE, WALL_DECOR, officeLayout, roomAt, seatFor, spotFor } from "../admin/src/office/map.ts";
+import { ROOM_PHRASE, roomFor, type RoomId } from "../admin/src/office/rooms.ts";
+import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, PROPS, WALL_DECOR, roomAt, seatFor, spotFor } from "../admin/src/office/map.ts";
 import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
 import { findPath } from "../admin/src/office/path.ts";
 import { facingToYaw, tileToWorld } from "../admin/src/office/world.ts";
+import { spreadLabels, type LabelBox } from "../admin/src/office/labels.ts";
 import { animPose, clipFor, clipsForPose, nextClips, syncCharacters, type ClipName } from "../admin/src/office/anim.ts";
 import { buildPlacements, buildSeats, floorBoxes } from "../admin/src/office/layout3d.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
@@ -357,26 +360,6 @@ describe("stepCharacter limits", () => {
   });
 });
 
-describe("officeLayout", () => {
-  const pw = OFFICE_MAP.width * TILE;
-  const ph = OFFICE_MAP.height * TILE;
-
-  it("shrinks to fit a phone-width canvas without clipping", () => {
-    const { scale, ox, oy } = officeLayout(343, 300);
-    expect(scale).toBeLessThan(1);
-    expect(ox).toBeGreaterThanOrEqual(0);
-    expect(oy).toBeGreaterThanOrEqual(0);
-    expect(ox + pw * scale).toBeLessThanOrEqual(343);
-    expect(oy + ph * scale).toBeLessThanOrEqual(300);
-  });
-
-  it("keeps whole-number scales when the map fits", () => {
-    expect(officeLayout(pw * 2, ph * 2)).toEqual({ scale: 2, ox: 0, oy: 0 });
-    expect(officeLayout(pw * 2 + 100, ph * 3).scale).toBe(2);
-    expect(officeLayout(pw, ph).scale).toBe(1);
-  });
-});
-
 describe("office route", () => {
   it("opens the Office page from its hash", () => {
     expect(parseHash("#office").name).toBe("office");
@@ -574,6 +557,103 @@ describe("lineFor", () => {
   });
 });
 
+describe("figure labels", () => {
+  const snap: OfficeSnapshot = {
+    workers: [{ name: "worker", enabled: true, running: true }, { name: "cycle", enabled: false, running: false }],
+    clients: [{ id: "c1", display_name: "Laptop", last_seen: new Date(NOW).toISOString() }],
+  };
+
+  it("adds the room's phrase while a figure is busy", () => {
+    const st = applyEvent(initialState(snap, NOW), ev({ agent: "c1", kind: "tool", operation: "search" }), NOW, namesFromSnapshot(snap));
+    expect(labelFor(st.characters.get(C("c1"))!)).toBe(`Laptop · ${ROOM_PHRASE.archive}`);
+    expect(labelFor(st.characters.get(W("worker"))!)).toBe(`Librarian · ${ROOM_PHRASE.library}`);
+  });
+
+  it("shows only the name while a figure is idle or off", () => {
+    const st = initialState(snap, NOW);
+    expect(labelFor(st.characters.get(C("c1"))!)).toBe("Laptop");
+    expect(labelFor(st.characters.get(W("cycle"))!)).toBe("Night shift");
+  });
+
+  it("gives every room but the break room its phrase", () => {
+    const base = initialState(snap, NOW).characters.get(C("c1"))!;
+    for (const room of Object.keys(ROOM_PHRASE) as RoomId[]) {
+      const want = room === "break_room" ? "Laptop" : `Laptop · ${ROOM_PHRASE[room]}`;
+      expect(labelFor({ ...base, room })).toBe(want);
+    }
+  });
+});
+
+describe("spreadLabels", () => {
+  const box = (id: string, x: number, y: number, keep = false): LabelBox => ({ id, x, y, w: 60, h: 16, keep });
+  const overlaps = (a: LabelBox, la: number, b: LabelBox, lb: number) =>
+    Math.abs(a.x - b.x) < (a.w + b.w) / 2 && a.y - la - a.h < b.y - lb && b.y - lb - b.h < a.y - la;
+
+  it("leaves labels that do not touch where they are", () => {
+    const lifts = spreadLabels([box("a", 50, 100), box("b", 200, 100), box("c", 50, 300)], 40);
+    expect([...lifts.values()]).toEqual([0, 0, 0]);
+  });
+
+  it("stacks a label behind above the one in front", () => {
+    const front = box("front", 100, 120);
+    const back = box("back", 110, 110);
+    const lifts = spreadLabels([back, front], 40);
+    expect(lifts.get("front")).toBe(0);
+    expect(lifts.get("back")).toBeGreaterThan(0);
+    expect(overlaps(front, 0, back, lifts.get("back")!)).toBe(false);
+  });
+
+  it("gives a busy label its own spot before any idle one", () => {
+    const idle = box("idle", 100, 130);
+    const busy = box("busy", 100, 120, true);
+    const lifts = spreadLabels([idle, busy], 40);
+    expect(lifts.get("busy")).toBe(0);
+    expect(overlaps(busy, 0, idle, lifts.get("idle")!)).toBe(false);
+  });
+
+  it("hides idle labels in a crowd but never a busy one", () => {
+    const crowd = [0, 1, 2, 3, 4, 5].map((i) => box(`idle${i}`, 100, 200 + i));
+    const lifts = spreadLabels([...crowd, box("busy", 100, 150, true), box("busy2", 100, 150, true)], 40);
+    expect(lifts.get("busy")).not.toBeNull();
+    expect(lifts.get("busy2")).not.toBeNull();
+    const shown = [...lifts.entries()].filter(([, l]) => l !== null);
+    expect(shown.length).toBeLessThan(8);
+    for (const [, l] of lifts) if (l !== null && l !== undefined) expect(l).toBeGreaterThanOrEqual(0);
+    for (const [id, l] of lifts) if (id.startsWith("idle") && l !== null) expect(l).toBeLessThanOrEqual(40);
+  });
+
+  it("never lets two shown labels overlap", () => {
+    const boxes = Array.from({ length: 10 }, (_, i) => box(`l${i}`, 100 + (i % 3) * 20, 200 - i * 3, i === 4));
+    const lifts = spreadLabels(boxes, 200);
+    for (const a of boxes) {
+      for (const b of boxes) {
+        if (a === b || lifts.get(a.id) === null || lifts.get(b.id) === null) continue;
+        expect(overlaps(a, lifts.get(a.id)!, b, lifts.get(b.id)!)).toBe(false);
+      }
+    }
+  });
+});
+
+describe("figure looks", () => {
+  const ids = [...["worker", "cycle", "connector_sync", "loops_sweep", "notifications", "assistant"].map(W), C("c1"), C("c2"), C("c3")];
+
+  it("keeps one look per id", () => {
+    for (const id of ids) expect(variantFor(id)).toBe(variantFor(id));
+  });
+
+  it("returns a small non-negative whole number", () => {
+    for (const id of ids) {
+      expect(Number.isInteger(variantFor(id))).toBe(true);
+      expect(variantFor(id)).toBeGreaterThanOrEqual(0);
+      expect(variantFor(id)).toBeLessThan(CHARACTER_VARIANTS.length);
+    }
+  });
+
+  it("spreads the cast over several looks", () => {
+    expect(new Set(ids.map(variantFor)).size).toBeGreaterThanOrEqual(4);
+  });
+});
+
 describe("3D office assets", () => {
   const ids: ModelId[] = ["desk", "chair", "shelf", "cabinet", "plant", "sofa", "coffee_machine", "counter", "whiteboard", "board", "lamp", "rug", "monitor", "character"];
 
@@ -688,7 +768,9 @@ describe("3D world mapping", () => {
   });
 
   it("leaves the piano without a 3D model", () => {
-    expect(PROPS.filter((p) => p.cell[0] >= 23 && p.cell[1] === 8).every((p) => p.kind === null)).toBe(true);
+    const piano = PROPS.filter((p) => p.y === 19 && p.x >= 31);
+    expect(piano.length).toBe(2);
+    expect(piano.every((p) => p.kind === null)).toBe(true);
   });
 
   it("keeps ambient and chat tiles off every seat", () => {
