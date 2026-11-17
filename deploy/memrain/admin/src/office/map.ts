@@ -1,4 +1,5 @@
 import type { Tile } from "./path.ts";
+import type { ModelId } from "./assets3d.ts";
 import type { RoomId } from "./rooms.ts";
 
 export const TILE = 16;
@@ -20,6 +21,7 @@ export type Cell = readonly [number, number];
 
 export interface Prop {
   cell: Cell;
+  kind: ModelId;
   x: number;
   y: number;
   solid: boolean;
@@ -87,7 +89,7 @@ const ARMCHAIR: Cell = [14, 9];
 const ARMCHAIR_B: Cell = [15, 9];
 
 function solid(cell: Cell, x: number, y: number): Prop {
-  return { cell, x, y, solid: true };
+  return { cell, kind: kindOf(cell), x, y, solid: true };
 }
 
 function row(cells: readonly Cell[], x: number, y: number): Prop[] {
@@ -98,6 +100,46 @@ const ORANGE_TABLE: Cell[] = [[16, 8], [17, 8], [18, 8]];
 const GREEN_TABLE: Cell[] = [[16, 10], [17, 10], [18, 10]];
 const LONG_TABLE: Cell[] = [[0, 0], [1, 0], [2, 0]];
 const PIANO: Cell[] = [[23, 8], [24, 8]];
+
+// The sheet cell picks the 2D sprite; the kind picks the 3D model.
+const KIND_OF_CELL = new Map<string, ModelId>();
+for (const [cell, kind] of [
+  [PLANT, "plant"],
+  [PLANT_TALL, "plant"],
+  [DESK, "desk"],
+  [DESK_END, "desk"],
+  [ROUND_TABLE, "counter"],
+  [DRAWERS, "cabinet"],
+  [CUPBOARD, "cabinet"],
+  [CUPBOARD_WIDE, "cabinet"],
+  [CABINET_LOW, "cabinet"],
+  [SHELF_PLATES, "shelf"],
+  [SHELF_JARS, "shelf"],
+  [SHELF_POTS, "shelf"],
+  [BOOKCASE, "shelf"],
+  [BOOKCASE_B, "shelf"],
+  [BOOKCASE_C, "shelf"],
+  [NOTES, "board"],
+  [BOARD_LEFT, "board"],
+  [BOARD_RIGHT, "board"],
+  [CANDLE, "lamp"],
+  [CANDELABRA, "lamp"],
+  [STOVE, "coffee_machine"],
+  [ARMCHAIR, "sofa"],
+  [ARMCHAIR_B, "sofa"],
+  ...ORANGE_TABLE.map((c) => [c, "counter"] as const),
+  ...GREEN_TABLE.map((c) => [c, "counter"] as const),
+  ...LONG_TABLE.map((c) => [c, "counter"] as const),
+  ...PIANO.map((c) => [c, "counter"] as const),
+] as const) {
+  KIND_OF_CELL.set(cell.join(","), kind);
+}
+
+function kindOf(cell: Cell): ModelId {
+  const kind = KIND_OF_CELL.get(cell.join(","));
+  if (!kind) throw new Error(`office prop cell ${cell.join(",")} has no model kind`);
+  return kind;
+}
 
 export const PROPS: readonly Prop[] = [
   // Reception
@@ -143,10 +185,13 @@ export const PROPS: readonly Prop[] = [
 
 // Pictures hung on the wall above a room; purely decorative.
 export const WALL_DECOR: readonly Prop[] = [
-  { cell: [19, 12], x: 6, y: 0, solid: false },
-  { cell: [16, 12], x: 15, y: 0, solid: false },
-  { cell: [19, 14], x: 23, y: 0, solid: false },
-  { cell: [18, 0], x: 31, y: 0, solid: false },
+  { cell: [19, 12], kind: "board", x: 6, y: 0, solid: false },
+  { cell: [16, 12], kind: "board", x: 15, y: 0, solid: false },
+  { cell: [19, 14], kind: "board", x: 23, y: 0, solid: false },
+  { cell: [18, 0], kind: "board", x: 31, y: 0, solid: false },
+  // Break room whiteboard; the wall row sits above the room's top tiles.
+  { cell: [16, 12], kind: "whiteboard", x: 20, y: 18, solid: false },
+  { cell: [16, 12], kind: "whiteboard", x: 21, y: 18, solid: false },
 ];
 
 export const RUGS: readonly Rug[] = [
@@ -213,6 +258,25 @@ export const OFFICE_MAP: {
   walkable: (x, y) => !isWall(x, y) && !isSolid(x, y),
   seats: SEATS,
 };
+
+export type AmbientKind = "wander" | "coffee" | "chat" | "whiteboard" | "water_plants" | "sofa";
+
+// Free floor beside the prop each idle activity belongs to.
+export const AMBIENT_SPOTS: Record<Exclude<AmbientKind, "wander" | "chat">, readonly Tile[]> = {
+  coffee: [{ x: 17, y: 20 }, { x: 18, y: 20 }],
+  whiteboard: [{ x: 20, y: 19 }, { x: 21, y: 19 }],
+  water_plants: [{ x: 17, y: 22 }, { x: 9, y: 22 }, { x: 8, y: 2 }],
+  sofa: [{ x: 23, y: 20 }, { x: 24, y: 20 }, { x: 25, y: 20 }, { x: 26, y: 20 }],
+};
+
+// Two people face each other across neighbouring tiles.
+export const CHAT_SPOTS: readonly (readonly [Tile, Tile])[] = [
+  [{ x: 8, y: 7 }, { x: 9, y: 7 }],
+  [{ x: 20, y: 8 }, { x: 21, y: 8 }],
+  [{ x: 6, y: 17 }, { x: 7, y: 17 }],
+  [{ x: 26, y: 16 }, { x: 27, y: 16 }],
+  [{ x: 22, y: 23 }, { x: 23, y: 23 }],
+];
 
 export function seatFor(room: RoomId, index: number): Tile {
   const seats = SEATS[room];

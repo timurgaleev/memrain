@@ -12,9 +12,10 @@ import {
   type OfficeState,
 } from "../admin/src/office/model.ts";
 import { roomFor, type RoomId } from "../admin/src/office/rooms.ts";
-import { OFFICE_MAP, PROPS, TILE, officeLayout, roomAt, seatFor, spotFor } from "../admin/src/office/map.ts";
+import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, PROPS, TILE, WALL_DECOR, officeLayout, roomAt, seatFor, spotFor } from "../admin/src/office/map.ts";
 import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
 import { findPath } from "../admin/src/office/path.ts";
+import { facingToYaw, tileToWorld } from "../admin/src/office/world.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
 import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
 import { CHARACTER_VARIANTS, MODEL_URLS, resolveModelFile, type ModelId } from "../admin/src/office/assets3d.ts";
@@ -636,5 +637,49 @@ describe("office chunk check", () => {
   it("holds the models to 1,500,000 bytes", () => {
     expect(modelsOverBudget(1_500_000)).toBe(false);
     expect(modelsOverBudget(1_500_001)).toBe(true);
+  });
+});
+
+describe("3D world mapping", () => {
+  const home = OFFICE_MAP.seats.break_room[0]!;
+  const reachable = (t: { x: number; y: number }) =>
+    OFFICE_MAP.walkable(t.x, t.y) &&
+    (findPath(home, t, OFFICE_MAP.walkable, OFFICE_MAP.width, OFFICE_MAP.height).length > 0 ||
+      (t.x === home.x && t.y === home.y));
+
+  it("gives every prop a known model kind", () => {
+    const known = new Set(Object.keys(MODEL_URLS));
+    for (const p of [...PROPS, ...WALL_DECOR]) expect(known.has(p.kind)).toBe(true);
+  });
+
+  it("keeps every ambient spot walkable and reachable", () => {
+    for (const tiles of Object.values(AMBIENT_SPOTS)) for (const t of tiles) expect(reachable(t)).toBe(true);
+    expect(AMBIENT_SPOTS.sofa.length).toBeGreaterThanOrEqual(4);
+    for (const k of ["coffee", "whiteboard", "water_plants"] as const) {
+      expect(AMBIENT_SPOTS[k].length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("pairs chat spots on adjacent walkable tiles", () => {
+    expect(CHAT_SPOTS.length).toBeGreaterThanOrEqual(4);
+    for (const [a, b] of CHAT_SPOTS) {
+      expect(Math.abs(a.x - b.x) + Math.abs(a.y - b.y)).toBe(1);
+      expect(reachable(a)).toBe(true);
+      expect(reachable(b)).toBe(true);
+    }
+  });
+
+  it("centres the scene on the origin", () => {
+    const mid = tileToWorld({ x: OFFICE_MAP.width / 2 - 0.5, y: OFFICE_MAP.height / 2 - 0.5 });
+    expect(mid.x).toBeCloseTo(0);
+    expect(mid.z).toBeCloseTo(0);
+    const c = tileToWorld({ x: 0, y: 0 });
+    expect(c.x).toBeCloseTo(-OFFICE_MAP.width / 2 + 0.5);
+    expect(c.z).toBeCloseTo(-OFFICE_MAP.height / 2 + 0.5);
+  });
+
+  it("turns the four facings into distinct yaws", () => {
+    const yaws = (["up", "down", "left", "right"] as const).map(facingToYaw);
+    expect(new Set(yaws).size).toBe(4);
   });
 });
