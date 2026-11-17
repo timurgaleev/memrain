@@ -42,7 +42,7 @@ import { CHARACTER_VARIANTS, MODEL_URLS, resolveModelFile } from "./assets3d.ts"
 import { OFFICE_MAP, PROPS, WALL_DECOR } from "./map.ts";
 import type { targetFor } from "./ambient.ts";
 import { buildPlacements, buildSeats, floorBoxes, SPEC, tileKey, WALL_H, WALL_T, wallBoxes, type BoxItem, type Furniture, type Placement, type Seat } from "./layout3d.ts";
-import { animPose, clipFor, clipsForPose, syncCharacters, type ClipName } from "./anim.ts";
+import { animPose, clipFor, nextClips, syncCharacters, type ClipName } from "./anim.ts";
 import { WORLD_TILE } from "./world.ts";
 import type { Tile } from "./path.ts";
 
@@ -185,9 +185,11 @@ interface Figure {
   state: SceneCharacter;
   root: Group;
   mixer: AnimationMixer;
-  sets: Map<string, AnimationAction[]>;
+  actions: Map<string, AnimationAction>;
   available: ReadonlySet<string>;
-  clip: string;
+  // What update asked for, and what really plays after the idle fallback.
+  clip: ClipName | null;
+  played: ClipName | null;
   torso: Object3D | undefined;
   torsoRest: Quaternion;
   meshes: Mesh[];
@@ -383,9 +385,10 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
 
     const mixer = new AnimationMixer(model);
     const phase = hashPhase(c.id);
-    const action = (name: string) => {
+    const actions = new Map<string, AnimationAction>();
+    for (const name of ["idle", "walk", "sit", "sit-lower", "interact-right", "pick-up", "emote-yes"]) {
       const clip = name === "sit-lower" ? sitLower.get(gltf) : gltf.animations.find((a) => a.name === name);
-      if (!clip) return [];
+      if (!clip) continue;
       const a = mixer.clipAction(clip);
       a.time = phase % clip.duration;
       if (name === "walk") a.timeScale = 1.35;
@@ -394,20 +397,17 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
         a.timeScale = 0.35;
       }
       if (name === "interact-right") a.timeScale = 0.8;
-      return [a];
-    };
-    const sets = new Map<string, AnimationAction[]>();
-    for (const name of ["idle", "walk", "sit", "interact-right", "pick-up", "emote-yes"]) sets.set(name, action(name));
-    // Typing at a desk: legs from the sit clip, upper body from the interact clip.
-    sets.set("type", [...action("sit-lower"), ...sets.get("interact-right")!]);
+      actions.set(name, a);
+    }
     const torso = model.getObjectByName("torso");
     return {
       state: c,
       root,
       mixer,
-      sets,
+      actions,
       available: new Set(gltf.animations.map((a) => a.name)),
-      clip: "",
+      clip: null,
+      played: null,
       torso,
       torsoRest: torso ? torso.quaternion.clone() : new Quaternion(),
       meshes,
@@ -448,22 +448,23 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
 
   function play(f: Figure, name: ClipName, fade: number): void {
     if (f.clip === name) return;
-    const prev = f.sets.get(f.clip) ?? [];
-    const parts = clipsForPose(name, f.available);
-    const next = f.sets.get(parts.length === 1 && parts[0] === "idle" ? "idle" : name) ?? [];
-    for (const a of prev) {
-      if (next.includes(a)) continue;
+    const { played, fadeOut, fadeIn } = nextClips(f.played, name, f.available);
+    for (const id of fadeOut) {
+      const a = f.actions.get(id);
+      if (!a) continue;
       if (fade > 0) a.fadeOut(fade);
       else a.stop();
     }
-    for (const a of next) {
-      if (prev.includes(a)) continue;
+    for (const id of fadeIn) {
+      const a = f.actions.get(id);
+      if (!a) continue;
       a.reset();
       a.time = f.phase % a.getClip().duration;
       if (fade > 0) a.fadeIn(fade);
       a.play();
     }
     f.clip = name;
+    f.played = played;
   }
 
   function setGhost(f: Figure, ghost: boolean): void {

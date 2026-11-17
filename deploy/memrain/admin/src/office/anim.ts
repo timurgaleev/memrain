@@ -81,3 +81,22 @@ export function clipsForPose(clip: ClipName, available: ReadonlySet<string>): st
   const parts = clip === "type" ? ["sit", "interact-right"] : [clip];
   return parts.every((c) => available.has(c)) ? parts : ["idle"];
 }
+
+// The scene's actions behind a clip; typing borrows only the legs of the sit clip.
+function actionsOf(clip: ClipName): string[] {
+  return clip === "type" ? ["sit-lower", "interact-right"] : [clip];
+}
+
+// What to fade when a figure switches clips. `prev` is the clip that really played
+// last (after any idle fallback), so a fallback idle is faded out like any other.
+export function nextClips(
+  prev: ClipName | null,
+  next: ClipName,
+  available: ReadonlySet<string>,
+): { played: ClipName; fadeOut: string[]; fadeIn: string[] } {
+  const parts = clipsForPose(next, available);
+  const played: ClipName = next !== "idle" && parts.length === 1 && parts[0] === "idle" ? "idle" : next;
+  const before = prev ? actionsOf(prev) : [];
+  const after = actionsOf(played);
+  return { played, fadeOut: before.filter((a) => !after.includes(a)), fadeIn: after.filter((a) => !before.includes(a)) };
+}

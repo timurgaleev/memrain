@@ -20,7 +20,7 @@ import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, PROPS, TILE, WALL_DECOR, officeL
 import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
 import { findPath } from "../admin/src/office/path.ts";
 import { facingToYaw, tileToWorld } from "../admin/src/office/world.ts";
-import { animPose, clipFor, clipsForPose, syncCharacters, type ClipName } from "../admin/src/office/anim.ts";
+import { animPose, clipFor, clipsForPose, nextClips, syncCharacters, type ClipName } from "../admin/src/office/anim.ts";
 import { buildPlacements, buildSeats, floorBoxes } from "../admin/src/office/layout3d.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
 import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
@@ -880,6 +880,18 @@ describe("3D animation helpers", () => {
     expect(clipsForPose("walk", all)).toEqual(["walk"]);
     expect(clipsForPose("walk", without("walk"))).toEqual(["idle"]);
     expect(clipsForPose("idle", all)).toEqual(["idle"]);
+  });
+
+  it("hands over from the clip that really played", () => {
+    const all = new Set<string>(CHARACTER_CLIPS);
+    const noSit = new Set([...all].filter((c) => c !== "sit"));
+    expect(nextClips(null, "walk", all)).toEqual({ played: "walk", fadeOut: [], fadeIn: ["walk"] });
+    expect(nextClips("walk", "type", all)).toEqual({ played: "type", fadeOut: ["walk"], fadeIn: ["sit-lower", "interact-right"] });
+    expect(nextClips("type", "interact-right", all)).toEqual({ played: "interact-right", fadeOut: ["sit-lower"], fadeIn: [] });
+    // Typing falls back to idle on a model without the sit clip; the idle must go when walking starts.
+    const fallback = nextClips("walk", "type", noSit);
+    expect(fallback).toEqual({ played: "idle", fadeOut: ["walk"], fadeIn: ["idle"] });
+    expect(nextClips(fallback.played, "walk", noSit)).toEqual({ played: "walk", fadeOut: ["idle"], fadeIn: ["walk"] });
   });
 
   it("ships every clip in every person's model", () => {
