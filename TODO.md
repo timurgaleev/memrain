@@ -79,6 +79,25 @@ marked; this section is the one that stands.
 - A single-value link target cannot hold two separate periods (A, then B, then
   A again); the re-add is refused.
 
+## Follow-ups from the meeting-credential review (2026-11-17)
+
+- Older versions of a page cleaned by `connectors redact-meetings` keep the
+  credentials: `page_versions` with bodies and `page_revert` still reach them.
+  Scrubbing history is an operator decision.
+- Teams chat days and meeting summaries (`renderChatDay` and the summary
+  renderer in `connectors/render.ts`) still guard with `g.text`, not
+  `g.invite`, and the sweep covers mail and calendar only.
+- A label can take the next line's value: `Access code` above a line starting
+  `2026-11-17` loses the date, and `Password:` then a blank line then `Thanks,`
+  loses `Thanks,`. A read-only count on prod found none.
+- The sweep selects connector pages by type and `compiled_truth.origin`, not
+  by source kind; check the kind as retention's `assertConnectorSource` does.
+- Purging a page deletes its `hot_memory` rows by `source_slug`, and
+  `superseded_by` is `ON DELETE SET NULL`, so the observation the purged one
+  replaced becomes current again. `hot_memory.source_slug` has no index.
+- The concept hub gate reuses the entity junk list, so a real concept named
+  `meetings`, `customers`, `project` or `idea` can never get a hub page.
+
 ## Deletion inventory gaps (2026-11-14)
 
 `tests/deletion_inventory.test.ts` gives every column that names a page or a

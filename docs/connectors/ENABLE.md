@@ -185,9 +185,10 @@ docker exec deploy-memrain-1 bun run src/cli.ts spend --days 2     # where the m
 ## Meeting credentials in pages stored earlier
 
 Mail and calendar pages are stored without online-meeting credentials: meeting
-ids, passcodes, dial-in PINs, one-tap dial strings and Teams, Zoom, Webex and
-Google Meet join links, plus a password or PIN a mail spells out under a
-label. A page stored before a release that stripped them keeps them until its
+ids, passcodes, dial-in PINs, one-tap dial strings, SIP addresses and Teams,
+Zoom, Webex and Google Meet join links (with the Teams "Meeting options" and
+dial-in links, which carry the same ids), plus a password or PIN a mail spells
+out under a label. A page stored before a release that stripped them keeps them until its
 item changes upstream, which for mail is never. Clean those pages in place:
 
 ```bash
@@ -198,7 +199,9 @@ docker exec deploy-memrain-1 bun run src/cli.ts connectors redact-meetings --app
 `--source ID` limits either run to one source. Each changed page gets a new
 version written by `meeting-redact` and is mirrored into search again; the
 pages still age out under connector retention. Earlier versions in the
-page's history keep the text they had. A second dry run should report 0
+page's history keep the text they had. A page the output reports as not
+re-indexed yet is re-indexed by the cycle's mirror-pages phase; until then
+search can still return its old text. A second dry run should report 0
 pages.
 
 ## Optional: the notification webhook secret
