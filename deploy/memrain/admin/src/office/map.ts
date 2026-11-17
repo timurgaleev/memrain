@@ -180,6 +180,7 @@ export const PROPS: readonly Prop[] = [
   // Break room
   solid(STOVE, 17, 19), solid(SHELF_JARS, 18, 19), solid(SHELF_POTS, 19, 19),
   solid(ARMCHAIR, 24, 19), solid(ARMCHAIR_B, 25, 19), solid(PLANT_TALL, 26, 19),
+  solid(ARMCHAIR, 28, 19), solid(ARMCHAIR_B, 29, 19), solid(STOVE, 19, 20),
   ...row(PIANO, 31, 19),
   solid(ROUND_TABLE, 20, 22), solid(ROUND_TABLE, 26, 22), solid(PLANT, 17, 23),
 ];
@@ -267,7 +268,7 @@ export const AMBIENT_SPOTS: Record<Exclude<AmbientKind, "wander" | "chat">, read
   coffee: [{ x: 17, y: 20 }, { x: 18, y: 20 }],
   whiteboard: [{ x: 20, y: 19 }, { x: 21, y: 19 }],
   water_plants: [{ x: 17, y: 22 }, { x: 9, y: 22 }, { x: 8, y: 2 }],
-  sofa: [{ x: 23, y: 19 }, { x: 23, y: 20 }, { x: 26, y: 20 }, { x: 27, y: 20 }],
+  sofa: [{ x: 23, y: 19 }, { x: 28, y: 20 }, { x: 29, y: 20 }, { x: 30, y: 19 }],
 };
 
 // Two people face each other across neighbouring tiles.

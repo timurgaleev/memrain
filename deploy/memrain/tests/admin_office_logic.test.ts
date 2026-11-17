@@ -669,6 +669,18 @@ describe("3D world mapping", () => {
     }
   });
 
+  it("puts every ambient spot beside a prop of its own kind", () => {
+    const wanted = { coffee: "coffee_machine", whiteboard: "whiteboard", water_plants: "plant", sofa: "sofa" } as const;
+    for (const [k, tiles] of Object.entries(AMBIENT_SPOTS) as [keyof typeof wanted, readonly { x: number; y: number }[]][]) {
+      for (const t of tiles) {
+        const beside = [...PROPS, ...WALL_DECOR].some(
+          (p) => p.kind === wanted[k] && Math.abs(p.x - t.x) + Math.abs(p.y - t.y) === 1,
+        );
+        expect(beside).toBe(true);
+      }
+    }
+  });
+
   it("leaves the piano without a 3D model", () => {
     expect(PROPS.filter((p) => p.cell[0] >= 23 && p.cell[1] === 8).every((p) => p.kind === null)).toBe(true);
   });
