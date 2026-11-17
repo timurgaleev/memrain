@@ -60,7 +60,7 @@ export interface WorkerOptions {
   /**
    * Live-activity hook: `start` once a claimed job's handler begins, `end`
    * once the job was completed or failed (a retryable fail counts). A claim
-   * lost or a shutdown hand-back emits no `end`. Errors it throws are dropped.
+   * lost, a shutdown hand-back or a deferral emits no `end`. Errors it throws are dropped.
    */
   onJobEvent?: (e: JobActivity) => void;
   /** Hook for log lines — defaults to console.log/console.error. */
@@ -362,6 +362,20 @@ export class Worker {
     // The claim token for this attempt: every write below presents it, so once
     // a newer attempt re-claims the row, this one's writes change nothing.
     const gen = job.claimGeneration;
+    const activity = { worker: workerNameFor(job), kind: job.kind };
+    const startedAt = Date.now();
+    const emit = (phase: JobActivity["phase"], ok?: boolean) => {
+      try {
+        this.opts.onJobEvent?.(
+          phase === "start"
+            ? { ...activity, phase }
+            : { ...activity, phase, ok, latencyMs: Date.now() - startedAt },
+        );
+      } catch {
+        // an observer must never touch the job
+      }
+    };
+    emit("start");
     const handler = getHandler(job.kind);
     if (!handler) {
       const msg = `no handler registered for kind '${job.kind}'`;
@@ -371,6 +385,7 @@ export class Worker {
         const updated = await this.queue.fail(job.id, gen, msg, { terminal: true });
         if (!updated && (await this.claimLost(job.id, gen))) return;
         this.stats.failed++;
+        emit("end", false);
       } catch (e) {
         this.log("error", `[${job.id}] no-handler fail persist: ${asMessage(e)}`);
       }
@@ -396,20 +411,6 @@ export class Worker {
     };
     this.running.set(job.id, abort);
     const lease = this.renewLease(job, gen, abort);
-    const activity = { worker: workerNameFor(job), kind: job.kind };
-    const startedAt = Date.now();
-    const emit = (phase: JobActivity["phase"], ok?: boolean) => {
-      try {
-        this.opts.onJobEvent?.(
-          phase === "start"
-            ? { ...activity, phase }
-            : { ...activity, phase, ok, latencyMs: Date.now() - startedAt },
-        );
-      } catch {
-        // an observer must never touch the job
-      }
-    };
-    emit("start");
     // The whole body is guarded: a persistence failure (complete/fail) must
     // never crash the worker tick or escape as an unhandledRejection.
     try {
@@ -487,15 +488,12 @@ export class Worker {
         const unrecoverable =
           !timedOut && (isUnrecoverable(e) || (isDailyCapRefusal(e) && !isRolloverDailyCapRefusal(e)));
         if (!timedOut && !unrecoverable && (await this.deferForOutage(job, gen, e, message))) {
-          emit("end", false);
           return;
         }
         if (!timedOut && !unrecoverable && (await this.deferForDailyCap(job, gen, e, message))) {
-          emit("end", false);
           return;
         }
         if (!timedOut && !unrecoverable && (await this.deferForLease(job, gen, e, message))) {
-          emit("end", false);
           return;
         }
         this.log(

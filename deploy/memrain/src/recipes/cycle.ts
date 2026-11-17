@@ -29,6 +29,12 @@ import {
   type DbLockHandle,
 } from "../core/db-lock.ts";
 
+export interface CycleRunEvent {
+  phase: "start" | "end";
+  ok?: boolean;
+  latencyMs?: number;
+}
+
 export interface CycleLoopOptions {
   /** Interval between ticks, ms. */
   intervalMs: number;
@@ -39,10 +45,10 @@ export interface CycleLoopOptions {
   /** Exclusive quiet-hour end in the configured zone (default 8). */
   quietEndHour?: number;
   /** Live-activity hook around each cycle run. Errors it throws are dropped. */
-  onRun?: (e: { phase: "start" | "end"; ok?: boolean; latencyMs?: number }) => void;
+  onRun?: (e: CycleRunEvent) => void;
 }
 
-function notifyRun(hook: CycleLoopOptions["onRun"], e: Parameters<NonNullable<CycleLoopOptions["onRun"]>>[0]): void {
+function notifyRun(hook: CycleLoopOptions["onRun"], e: CycleRunEvent): void {
   try {
     hook?.(e);
   } catch {
@@ -300,7 +306,7 @@ export function startCycleLoop(
           notifyRun(options.onRun, { phase: "end", ok: false, latencyMs: Date.now() - runStart });
           throw e;
         }
-        notifyRun(options.onRun, { phase: "end", ok: true, latencyMs: Date.now() - runStart });
+        notifyRun(options.onRun, { phase: "end", ok: r.status !== "fail", latencyMs: Date.now() - runStart });
         await recordCycleRun(storage.engine(), r.status !== "fail", r.outcome);
         const mark = (s: string) => (s === "fail" ? "FAIL" : s); // ok | warn | FAIL
         const summary = r.phases

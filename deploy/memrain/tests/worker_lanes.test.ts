@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { Queue } from "../src/core/jobs/queue.ts";
 import { Worker } from "../src/core/jobs/worker.ts";
+import { ProviderLeaseBusy } from "../src/core/jobs/rate-leases.ts";
 import type { JobActivity } from "../src/core/jobs/activity.ts";
 import { _resetHandlersForTesting, registerHandler } from "../src/core/jobs/handlers.ts";
 
@@ -127,10 +128,11 @@ describe("worker job events", () => {
   it("still completes the job when the hook throws", async () => {
     registerHandler("ok_kind", async () => ({}));
     await queue.enqueue({ kind: "ok_kind", id: "ev-throw" });
+    let hookCalls = 0;
     const worker = new Worker(queue, {
       intervalMs: 10,
       logger: () => {},
-      onJobEvent: () => { throw new Error("hook down"); },
+      onJobEvent: () => { hookCalls++; throw new Error("hook down"); },
     });
     worker.start();
     try {
@@ -138,5 +140,36 @@ describe("worker job events", () => {
     } finally {
       await worker.stop();
     }
+    expect(hookCalls).toBeGreaterThan(0);
+  });
+
+  it("reports start then end ok false for a job with no handler", async () => {
+    await queue.enqueue({ kind: "nobody_home", id: "ev-nohandler" });
+    const events: JobActivity[] = [];
+    const worker = new Worker(queue, { intervalMs: 10, logger: () => {}, onJobEvent: e => events.push(e) });
+    worker.start();
+    try {
+      await until(async () => (await settled("ev-nohandler")) === "failed");
+      await Bun.sleep(50);
+    } finally {
+      await worker.stop();
+    }
+    expect(events.map(e => e.phase)).toEqual(["start", "end"]);
+    expect(events[1]?.ok).toBe(false);
+  });
+
+  it("emits start but no end when the job is deferred for a busy lease", async () => {
+    registerHandler("lease_kind", async () => { throw new ProviderLeaseBusy("test"); });
+    await queue.enqueue({ kind: "lease_kind", id: "ev-defer" });
+    const events: JobActivity[] = [];
+    const worker = new Worker(queue, { intervalMs: 10, logger: () => {}, onJobEvent: e => events.push(e) });
+    worker.start();
+    try {
+      await until(async () => (await settled("ev-defer")) === "pending" && events.length > 0);
+      await Bun.sleep(50);
+    } finally {
+      await worker.stop();
+    }
+    expect(events.map(e => e.phase)).toEqual(["start"]);
   });
 });
