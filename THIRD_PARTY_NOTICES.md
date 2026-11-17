@@ -18554,3 +18554,60 @@ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 ```
 
+## Kenney Roguelike Indoor pack
+
+License: CC0-1.0
+
+Used for `deploy/memrain/admin/src/assets/office/indoor.png` (the office
+furniture tiles), unmodified. Source: https://kenney.nl/assets/roguelike-indoors
+
+```
+Roguelike Indoor pack
+
+by Kenney Vleugels (Kenney.nl)
+
+------------------------------
+
+License (Creative Commons Zero, CC0)
+http://creativecommons.org/publicdomain/zero/1.0/
+
+You may use these assets in personal and commercial projects.
+Credit (Kenney or www.kenney.nl) would be nice but is not mandatory.
+
+------------------------------
+
+Donate:   http://support.kenney.nl
+Request:  http://request.kenney.nl
+
+Follow on Twitter for updates: @KenneyNL (www.twitter.com/kenneynl)
+```
+
+## Kenney Roguelike Characters pack 2.0
+
+License: CC0-1.0
+
+Used for `deploy/memrain/admin/src/assets/office/characters.png` (the office
+characters), unmodified. Source: https://kenney.nl/assets/roguelike-characters
+
+```
+Roguelike Characters pack (2.0)
+
+Created/distributed by Kenney (www.kenney.nl)
+Creation date: 20-05-2015
+
+------------------------------
+
+License: (Creative Commons Zero, CC0)
+http://creativecommons.org/publicdomain/zero/1.0/
+
+This content is free to use in personal, educational and commercial projects.
+Support us by crediting Kenney or www.kenney.nl (this is not mandatory)
+
+------------------------------
+
+Donate:   http://support.kenney.nl
+Patreon:  http://patreon.com/kenney/
+
+Follow on Twitter for updates:
+http://twitter.com/KenneyNL
+```

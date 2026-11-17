@@ -10,7 +10,10 @@ import {
   tick,
   type OfficeState,
 } from "../admin/src/office/model.ts";
-import { roomFor } from "../admin/src/office/rooms.ts";
+import { roomFor, type RoomId } from "../admin/src/office/rooms.ts";
+import { OFFICE_MAP, seatFor } from "../admin/src/office/map.ts";
+import { stepCharacter, type Pose } from "../admin/src/office/motion.ts";
+import { findPath } from "../admin/src/office/path.ts";
 
 const NOW = 1_000_000;
 const empty: OfficeState = { characters: new Map(), recent: [] };
@@ -193,5 +196,109 @@ describe("applySnapshot", () => {
     expect(out.characters.has("notifications")).toBe(true);
     expect(out.characters.has("c9")).toBe(false);
     expect(out.characters.get("c1")?.label).toBe("New");
+  });
+});
+
+describe("findPath", () => {
+  const W = 5;
+  const H = 5;
+  // Wall column at x=2, open only at the bottom row.
+  const detour = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && !(x === 2 && y < 4);
+
+  it("walks around a wall column", () => {
+    const path = findPath({ x: 0, y: 0 }, { x: 4, y: 0 }, detour, W, H);
+    expect(path).toHaveLength(12);
+    expect(path.at(-1)).toEqual({ x: 4, y: 0 });
+    expect(path[0]).not.toEqual({ x: 0, y: 0 });
+    let prev = { x: 0, y: 0 };
+    for (const step of path) {
+      expect(Math.abs(step.x - prev.x) + Math.abs(step.y - prev.y)).toBe(1);
+      expect(detour(step.x, step.y)).toBe(true);
+      prev = step;
+    }
+  });
+
+  it("returns [] when the target is walled off", () => {
+    const sealed = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && x !== 2;
+    expect(findPath({ x: 0, y: 0 }, { x: 4, y: 0 }, sealed, W, H)).toEqual([]);
+  });
+
+  it("returns [] for a target that is not walkable", () => {
+    expect(findPath({ x: 0, y: 0 }, { x: 2, y: 0 }, detour, W, H)).toEqual([]);
+  });
+});
+
+describe("OFFICE_MAP", () => {
+  const rooms = Object.keys(OFFICE_MAP.seats) as RoomId[];
+
+  it("has a room for every RoomId with enough seats", () => {
+    expect([...rooms].sort()).toEqual(
+      ([
+        "archive", "assistant_desk", "back_office", "break_room", "library", "mailroom",
+        "night_shift", "post_office", "reception", "waiting_board", "writing",
+      ] satisfies RoomId[]).sort(),
+    );
+    for (const r of rooms) expect(OFFICE_MAP.seats[r].length).toBeGreaterThanOrEqual(4);
+    expect(OFFICE_MAP.seats.break_room.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("puts every seat on a walkable tile reachable from the break room", () => {
+    const home = OFFICE_MAP.seats.break_room[0]!;
+    for (const r of rooms) {
+      for (const seat of OFFICE_MAP.seats[r]) {
+        expect(OFFICE_MAP.walkable(seat.x, seat.y)).toBe(true);
+        if (seat.x === home.x && seat.y === home.y) continue;
+        const path = findPath(home, seat, OFFICE_MAP.walkable, OFFICE_MAP.width, OFFICE_MAP.height);
+        expect(path.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("never shares a seat between rooms or within one", () => {
+    const seen = new Set<string>();
+    for (const r of rooms) {
+      for (const s of OFFICE_MAP.seats[r]) {
+        const key = `${s.x},${s.y}`;
+        expect(seen.has(key)).toBe(false);
+        seen.add(key);
+      }
+    }
+  });
+
+  it("seatFor wraps the index", () => {
+    const n = OFFICE_MAP.seats.archive.length;
+    expect(seatFor("archive", 0)).toEqual(OFFICE_MAP.seats.archive[0]!);
+    expect(seatFor("archive", n + 1)).toEqual(OFFICE_MAP.seats.archive[1]!);
+  });
+});
+
+describe("stepCharacter", () => {
+  const start = OFFICE_MAP.seats.break_room[0]!;
+  const target = OFFICE_MAP.seats.archive[0]!;
+  const pose: Pose = { x: start.x, y: start.y, path: [], facing: "down", frame: 0 };
+
+  it("jumps straight to the target under reduced motion", () => {
+    const next = stepCharacter(pose, target, 16, { reducedMotion: true });
+    expect({ x: next.x, y: next.y }).toEqual(target);
+    expect(next.path).toEqual([]);
+  });
+
+  it("moves at most 3 tiles per second and does not mutate the pose", () => {
+    const before = structuredClone(pose);
+    const next = stepCharacter(pose, target, 1000, { reducedMotion: false });
+    expect(pose).toEqual(before);
+    const moved = Math.abs(next.x - start.x) + Math.abs(next.y - start.y);
+    expect(moved).toBeGreaterThan(0);
+    expect(moved).toBeLessThanOrEqual(3 + 1e-9);
+  });
+
+  it("arrives after enough small steps", () => {
+    let p = pose;
+    for (let i = 0; i < 2000 && (p.x !== target.x || p.y !== target.y); i++) {
+      p = stepCharacter(p, target, 50, { reducedMotion: false });
+      expect(OFFICE_MAP.walkable(Math.round(p.x), Math.round(p.y))).toBe(true);
+    }
+    expect({ x: p.x, y: p.y }).toEqual(target);
+    expect(p.path).toEqual([]);
   });
 });
