@@ -109,4 +109,21 @@ describe("admin SSE feed", () => {
     // assert publish never throws regardless of subscriber state.
     expect(() => adminEventBus.publish({ agent: "a", operation: "search", latency_ms: 1, status: "success", timestamp: new Date().toISOString(), kind: "tool", phase: "end" })).not.toThrow();
   });
+
+  it("refuses with a 503 and no stream once the subscriber cap is reached", () => {
+    const fakes: ReadableStreamDefaultController[] = [];
+    for (;;) {
+      const fake = { desiredSize: 1, enqueue() {}, close() {} } as unknown as ReadableStreamDefaultController;
+      if (!adminEventBus.add(fake)) break;
+      fakes.push(fake);
+    }
+    try {
+      const r = handleAdminEventsRoute(req(), () => true)!;
+      expect(r.status).toBe(503);
+      expect(r.headers.get("Content-Type") ?? "").not.toContain("text/event-stream");
+    } finally {
+      for (const f of fakes) adminEventBus.remove(f);
+    }
+  });
 });
+

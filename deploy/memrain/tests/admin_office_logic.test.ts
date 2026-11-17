@@ -6,6 +6,7 @@ import {
   applySnapshot,
   describe as describeCharacter,
   initialState,
+  lineFor,
   namesFromSnapshot,
   tick,
   type OfficeState,
@@ -20,6 +21,8 @@ import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
 const NOW = 1_000_000;
 const empty: OfficeState = { characters: new Map(), recent: [] };
 const none = new Map<string, string>();
+const W = (name: string) => `worker:${name}`;
+const C = (id: string) => `client:${id}`;
 
 function ev(p: Partial<FeedEvent> & { agent: string }): FeedEvent {
   return { operation: "search", latency_ms: 1, status: "success", timestamp: "", ...p };
@@ -55,7 +58,7 @@ describe("applyEvent", () => {
 
   it("labels an unknown app generically, never by its id", () => {
     const st = applyEvent(empty, ev({ agent: "abcdef123456" }), NOW, none);
-    const c = st.characters.get("abcdef123456")!;
+    const c = st.characters.get(C("abcdef123456"))!;
     expect(c.label).toBe("New app");
     expect(describeCharacter(c)).not.toContain("abcdef");
     expect(st.recent[0]!.text).not.toContain("abcdef");
@@ -63,35 +66,35 @@ describe("applyEvent", () => {
 
   it("records the error window on a failed job end", () => {
     const st = applyEvent(empty, ev({ agent: "cycle", kind: "job", phase: "end", status: "error" }), NOW, none);
-    expect(st.characters.get("cycle")?.errorUntil).toBe(NOW + 3000);
+    expect(st.characters.get(W("cycle"))?.errorUntil).toBe(NOW + 3000);
   });
 
   it("restarts startedAt on a repeated job start", () => {
     let st = applyEvent(empty, ev({ agent: "cycle", kind: "job", phase: "start", status: "running" }), NOW, none);
     st = applyEvent(st, ev({ agent: "cycle", kind: "job", phase: "start", status: "running" }), NOW + 5, none);
     expect(st.characters.size).toBe(1);
-    expect(st.characters.get("cycle")?.startedAt).toBe(NOW + 5);
+    expect(st.characters.get(W("cycle"))?.startedAt).toBe(NOW + 5);
   });
 });
 
 describe("tick", () => {
   it("keeps a long job busy and drops it past the stale cap", () => {
     const st = applyEvent(empty, ev({ agent: "cycle", kind: "job", phase: "start", status: "running" }), NOW, none);
-    expect(tick(st, NOW + 61_000).characters.get("cycle")?.room).toBe("night_shift");
-    expect(tick(st, NOW + STALE_JOB_MS + 1).characters.get("cycle")?.room).toBe("break_room");
+    expect(tick(st, NOW + 61_000).characters.get(W("cycle"))?.room).toBe("night_shift");
+    expect(tick(st, NOW + STALE_JOB_MS + 1).characters.get(W("cycle"))?.room).toBe("break_room");
   });
 
   it("prunes a client idle in the break room for over 24h", () => {
     let st = applyEvent(empty, ev({ agent: "a" }), NOW, none);
     st = tick(st, NOW + 5_000);
-    expect(st.characters.get("a")?.room).toBe("break_room");
-    expect(tick(st, NOW + 25 * 3600_000).characters.has("a")).toBe(false);
+    expect(st.characters.get(C("a"))?.room).toBe("break_room");
+    expect(tick(st, NOW + 25 * 3600_000).characters.has(C("a"))).toBe(false);
   });
 
   it("holds a tool visit for 4s", () => {
     const st = applyEvent(empty, ev({ agent: "a" }), NOW, none);
-    expect(tick(st, NOW + 3_999).characters.get("a")?.room).toBe("archive");
-    expect(tick(st, NOW + 4_001).characters.get("a")?.room).toBe("break_room");
+    expect(tick(st, NOW + 3_999).characters.get(C("a"))?.room).toBe("archive");
+    expect(tick(st, NOW + 4_001).characters.get(C("a"))?.room).toBe("break_room");
   });
 });
 
@@ -110,32 +113,33 @@ describe("initialState", () => {
 
   it("seeds workers and recent clients only", () => {
     const st = initialState(snap, NOW);
-    expect([...st.characters.keys()].sort()).toEqual(["c1", "cycle", "worker"]);
-    expect(st.characters.get("cycle")?.room).toBe("night_shift");
-    expect(st.characters.get("cycle")?.busyUntil).toBe(Infinity);
-    expect(st.characters.get("worker")?.room).toBe("break_room");
-    expect(st.characters.get("worker")?.enabled).toBe(false);
+    expect([...st.characters.keys()].sort()).toEqual([C("c1"), W("cycle"), W("worker")]);
+    expect(st.characters.get(W("cycle"))?.room).toBe("night_shift");
+    expect(st.characters.get(W("cycle"))?.busyUntil).toBe(Infinity);
+    expect(st.characters.get(W("worker"))?.room).toBe("break_room");
+    expect(st.characters.get(W("worker"))?.enabled).toBe(false);
   });
 
   it("describes characters from labels and rooms", () => {
     const names = namesFromSnapshot(snap);
-    expect(names.get("c1")).toBe("Claude Code");
+    expect(names.get(C("c1"))).toBe("Claude Code");
     const st = applyEvent(initialState(snap, NOW), ev({ agent: "c1" }), NOW, names);
-    expect(describeCharacter(st.characters.get("c1")!)).toBe("Claude Code is searching memory");
-    expect(describeCharacter(initialState(snap, NOW).characters.get("worker")!)).toBe("Librarian is idle");
+    expect(describeCharacter(st.characters.get(C("c1"))!)).toBe("Claude Code is searching memory");
+    expect(describeCharacter(initialState(snap, NOW).characters.get(W("worker"))!)).toBe("Librarian is idle");
   });
 });
 
 describe("event rules", () => {
   it("marks a failed tool call", () => {
     const st = applyEvent(empty, ev({ agent: "a", status: "error" }), NOW, none);
-    expect(st.characters.get("a")?.errorUntil).toBe(NOW + 3000);
+    expect(st.characters.get(C("a"))?.errorUntil).toBe(NOW + 3000);
   });
 
-  it("ignores tool events for a worker", () => {
+  it("sends a tool call from an app named like a worker to the app, not the worker", () => {
     const st = applyEvent(empty, ev({ agent: "cycle", kind: "job", phase: "start", status: "running" }), NOW, none);
     const after = applyEvent(st, ev({ agent: "cycle" }), NOW + 10, none);
-    expect(after).toBe(st);
+    expect(after.characters.get(W("cycle"))).toEqual(st.characters.get(W("cycle")));
+    expect(after.characters.get(C("cycle"))).toMatchObject({ kind: "client", room: "archive", label: "New app" });
   });
 
   it("treats more mutating tools as writes", () => {
@@ -153,7 +157,7 @@ describe("applySnapshot", () => {
   it("refreshes a running worker and updates enabled", () => {
     const st = initialState(snap([{ name: "cycle", enabled: true, running: true }]), NOW);
     const out = applySnapshot(st, snap([{ name: "cycle", enabled: false, running: true }]), NOW + 119_000, NOW + 120_000);
-    const c = out.characters.get("cycle")!;
+    const c = out.characters.get(W("cycle"))!;
     expect(c.startedAt).toBe(NOW + 120_000);
     expect(c.busyUntil).toBe(Infinity);
     expect(c.enabled).toBe(false);
@@ -162,8 +166,8 @@ describe("applySnapshot", () => {
   it("ends a job whose end was lost", () => {
     const st = initialState(snap([{ name: "cycle", enabled: true, running: true }]), NOW);
     const out = applySnapshot(st, snap([{ name: "cycle", enabled: true, running: false }]), NOW + 1000, NOW + 2000);
-    expect(out.characters.get("cycle")?.busyUntil).toBe(NOW + 2000);
-    expect(tick(out, NOW + 2000).characters.get("cycle")?.room).toBe("break_room");
+    expect(out.characters.get(W("cycle"))?.busyUntil).toBe(NOW + 2000);
+    expect(tick(out, NOW + 2000).characters.get(W("cycle"))?.room).toBe("break_room");
   });
 
   it("ignores a running snapshot requested before a job ended", () => {
@@ -171,14 +175,14 @@ describe("applySnapshot", () => {
     let st = applyEvent(empty, run, NOW, none);
     st = applyEvent(st, { ...run, phase: "end", status: "success" }, NOW + 2000, none);
     const out = applySnapshot(st, snap([{ name: "cycle", enabled: true, running: true }]), NOW + 1000, NOW + 3000);
-    expect(out.characters.get("cycle")?.busyUntil).toBe(NOW + 5000);
-    expect(tick(out, NOW + 5000).characters.get("cycle")?.room).toBe("break_room");
+    expect(out.characters.get(W("cycle"))?.busyUntil).toBe(NOW + 5000);
+    expect(tick(out, NOW + 5000).characters.get(W("cycle"))?.room).toBe("break_room");
   });
 
   it("leaves a start that arrived after the query", () => {
     const st = applyEvent(empty, ev({ agent: "cycle", kind: "job", phase: "start", status: "running" }), NOW + 500, none);
     const out = applySnapshot(st, snap([{ name: "cycle", enabled: true, running: false }]), NOW, NOW + 1000);
-    expect(out.characters.get("cycle")?.busyUntil).toBe(Infinity);
+    expect(out.characters.get(W("cycle"))?.busyUntil).toBe(Infinity);
   });
 
   it("adds new workers and recent clients, and refreshes labels", () => {
@@ -200,18 +204,18 @@ describe("applySnapshot", () => {
       NOW,
       NOW,
     );
-    expect(out.characters.has("notifications")).toBe(true);
-    expect(out.characters.get("c1")?.label).toBe("New");
-    const fresh = out.characters.get("c9")!;
+    expect(out.characters.has(W("notifications"))).toBe(true);
+    expect(out.characters.get(C("c1"))?.label).toBe("New");
+    const fresh = out.characters.get(C("c9"))!;
     expect(fresh).toMatchObject({ kind: "client", label: "Fresh", room: "break_room", busyUntil: 0 });
-    expect(out.characters.has("c8")).toBe(false);
-    expect(out.characters.has("c7")).toBe(false);
+    expect(out.characters.has(C("c8"))).toBe(false);
+    expect(out.characters.has(C("c7"))).toBe(false);
   });
 
   it("names an app that first showed up through a live event", () => {
     const st = applyEvent(empty, ev({ agent: "c5" }), NOW, none);
     const out = applySnapshot(st, snap([], [{ id: "c5", display_name: "Desk app", last_seen: new Date(NOW).toISOString() }]), NOW, NOW);
-    expect(out.characters.get("c5")?.label).toBe("Desk app");
+    expect(out.characters.get(C("c5"))?.label).toBe("Desk app");
   });
 });
 
@@ -438,5 +442,125 @@ describe("spotFor", () => {
       expect(new Set(spots.map((t) => `${t.x},${t.y}`)).size).toBe(n);
       expect(spotFor(room, n)).toEqual(spotFor(room, 0));
     }
+  });
+});
+
+describe("clients and workers with the same name", () => {
+  const recent = new Date(NOW - 60_000).toISOString();
+  const snap: OfficeSnapshot = {
+    workers: [
+      { name: "worker", enabled: true, running: false },
+      { name: "cycle", enabled: true, running: false },
+    ],
+    clients: [
+      { id: "worker", display_name: "worker", last_seen: recent },
+      { id: "cycle", display_name: "cycle", last_seen: recent },
+    ],
+  };
+
+  it("keeps a PAT named worker and the Librarian as two figures", () => {
+    const st = initialState(snap, NOW);
+    expect(st.characters.get(W("worker"))).toMatchObject({ kind: "worker", label: "Librarian", agent: "worker" });
+    expect(st.characters.get(C("worker"))).toMatchObject({ kind: "client", label: "worker", agent: "worker" });
+    const names = namesFromSnapshot(snap);
+    expect(names.get(W("worker"))).toBe("Librarian");
+    expect(names.get(C("worker"))).toBe("worker");
+  });
+
+  it("moves each one only on its own events", () => {
+    const names = namesFromSnapshot(snap);
+    let st = applyEvent(initialState(snap, NOW), ev({ agent: "worker" }), NOW, names);
+    expect(st.characters.get(C("worker"))?.room).toBe("archive");
+    expect(st.characters.get(W("worker"))?.room).toBe("break_room");
+    st = applyEvent(st, ev({ agent: "worker", kind: "job", phase: "start", status: "running" }), NOW + 1, names);
+    expect(st.characters.get(W("worker"))?.room).toBe("library");
+    expect(st.characters.get(C("worker"))?.room).toBe("archive");
+  });
+
+  it("moves the app when a PAT named cycle calls a tool, not the Night shift", () => {
+    const names = namesFromSnapshot(snap);
+    const before = initialState(snap, NOW);
+    const st = applyEvent(before, ev({ agent: "cycle", operation: "page_put" }), NOW, names);
+    expect(st.characters.get(C("cycle"))).toMatchObject({ room: "writing", label: "cycle" });
+    expect(st.characters.get(W("cycle"))).toEqual(before.characters.get(W("cycle")));
+    expect(st.characters.get(W("cycle"))?.label).toBe("Night shift");
+  });
+
+  it("never gives an unnamed app a worker's label", () => {
+    const st = applyEvent(empty, ev({ agent: "cycle" }), NOW, none);
+    expect(st.characters.get(C("cycle"))?.label).toBe("New app");
+  });
+});
+
+describe("overlapping jobs of one worker", () => {
+  const start = ev({ agent: "worker", kind: "job", phase: "start", status: "running", operation: "page_mirror" });
+  const end = { ...start, phase: "end" as const, status: "success" };
+
+  it("stays busy while another job still runs", () => {
+    let st = applyEvent(empty, start, NOW, none);
+    st = applyEvent(st, start, NOW + 10, none);
+    st = applyEvent(st, end, NOW + 20, none);
+    const later = tick(st, NOW + 60_000);
+    expect(later.characters.get(W("worker"))?.room).toBe("library");
+  });
+
+  it("goes idle after the hold once the last job ends", () => {
+    let st = applyEvent(empty, start, NOW, none);
+    st = applyEvent(st, start, NOW + 10, none);
+    st = applyEvent(st, end, NOW + 20, none);
+    st = applyEvent(st, end, NOW + 30, none);
+    expect(tick(st, NOW + 30 + 2_999).characters.get(W("worker"))?.room).toBe("library");
+    expect(tick(st, NOW + 30 + 3_001).characters.get(W("worker"))?.room).toBe("break_room");
+  });
+
+  it("shows a failed end even while another job runs", () => {
+    let st = applyEvent(empty, start, NOW, none);
+    st = applyEvent(st, start, NOW + 10, none);
+    st = applyEvent(st, { ...end, status: "error" }, NOW + 20, none);
+    const w = st.characters.get(W("worker"))!;
+    expect(w.errorUntil).toBe(NOW + 20 + 3000);
+    expect(tick(st, NOW + 60_000).characters.get(W("worker"))?.room).toBe("library");
+  });
+
+  it("forgets a stuck count when a later snapshot finds nothing running", () => {
+    let st = applyEvent(empty, start, NOW, none);
+    st = applyEvent(st, start, NOW + 10, none);
+    st = applySnapshot(st, { workers: [{ name: "worker", enabled: true, running: false }], clients: [] }, NOW + 1000, NOW + 2000);
+    expect(st.characters.get(W("worker"))?.inFlight).toBe(0);
+    st = tick(st, NOW + 2000);
+    st = applyEvent(st, start, NOW + 3000, none);
+    st = applyEvent(st, end, NOW + 4000, none);
+    expect(tick(st, NOW + 4000 + 3_001).characters.get(W("worker"))?.room).toBe("break_room");
+  });
+
+  it("forgets a stuck count at the stale cap", () => {
+    let st = applyEvent(empty, start, NOW, none);
+    st = applyEvent(st, start, NOW + 10, none);
+    const at = NOW + 10 + STALE_JOB_MS + 1;
+    st = tick(st, at);
+    expect(st.characters.get(W("worker"))).toMatchObject({ room: "break_room", inFlight: 0 });
+    st = applyEvent(st, start, at + 1000, none);
+    st = applyEvent(st, end, at + 2000, none);
+    expect(tick(st, at + 2000 + 3_001).characters.get(W("worker"))?.room).toBe("break_room");
+  });
+});
+
+describe("lineFor", () => {
+  const snap: OfficeSnapshot = {
+    workers: [{ name: "cycle", enabled: false, running: false }],
+    clients: [{ id: "c1", display_name: "Laptop", last_seen: new Date(NOW).toISOString() }],
+  };
+
+  it("says an idle switched-off worker is off", () => {
+    expect(lineFor(initialState(snap, NOW).characters.get(W("cycle"))!)).toBe("Night shift is off");
+  });
+
+  it("says what a switched-off worker is doing while it still works", () => {
+    const st = applyEvent(initialState(snap, NOW), ev({ agent: "cycle", kind: "job", phase: "start", status: "running", operation: "cycle" }), NOW, none);
+    expect(lineFor(st.characters.get(W("cycle"))!)).toBe("Night shift is running the nightly cycle");
+  });
+
+  it("describes apps and running workers as usual", () => {
+    expect(lineFor(initialState(snap, NOW).characters.get(C("c1"))!)).toBe("Laptop is idle");
   });
 });

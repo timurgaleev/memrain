@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { api } from "../api";
 import type { FeedEvent, OfficeSnapshot } from "../admin-types.ts";
 import { PageIntro } from "../components/PageIntro.tsx";
@@ -7,8 +7,9 @@ import { OFFICE_MAP, TILE, officeLayout, spotFor } from "../office/map.ts";
 import {
   applyEvent,
   applySnapshot,
-  describe,
+  eventKey,
   initialState,
+  lineFor,
   namesFromSnapshot,
   tick,
   type Character,
@@ -39,10 +40,6 @@ interface Store {
 interface Point {
   left: number;
   top: number;
-}
-
-function lineFor(c: Character): string {
-  return c.kind === "worker" && !c.enabled ? `${c.label} is off` : describe(c);
 }
 
 function byLabel(a: Character, b: Character): number {
@@ -146,7 +143,7 @@ function useOffice() {
       if (next === st) return;
       commit(next);
       // A new app or worker: fetch its proper name, but not on every call it makes.
-      if (!names.has(e.agent) && Date.now() - lastUnknownLoad >= POLL_MS) {
+      if (!names.has(eventKey(e)) && Date.now() - lastUnknownLoad >= POLL_MS) {
         lastUnknownLoad = Date.now();
         void load();
       }
@@ -325,19 +322,42 @@ function formatTime(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+interface PersonLine {
+  id: string;
+  text: string;
+  off: boolean;
+}
+
+function sameLines(a: { lines: PersonLine[] }, b: { lines: PersonLine[] }): boolean {
+  return a.lines.length === b.lines.length
+    && a.lines.every((l, i) => l.id === b.lines[i]!.id && l.text === b.lines[i]!.text && l.off === b.lines[i]!.off);
+}
+
+// The only live region: it re-renders when a line's words change, not on every state tick.
+const PeopleList = memo(function PeopleList({ lines }: { lines: PersonLine[] }) {
+  return (
+    <ul className="office-people" aria-live="polite">
+      {lines.map((l) => (
+        <li key={l.id} className={l.off ? "office-off" : undefined}>{l.text}</li>
+      ))}
+    </ul>
+  );
+}, sameLines);
+
 function ActivityList({ view }: { view: OfficeState | null }) {
   if (!view) return <div className="feed-empty">Opening the office…</div>;
   const everyone = [...view.characters.values()];
   const clients = everyone.filter((c) => c.kind === "client").sort(byLabel);
   const workers = everyone.filter((c) => c.kind === "worker").sort(byLabel);
+  const lines = [...clients, ...workers].map((c) => ({
+    id: c.id,
+    text: lineFor(c),
+    off: c.kind === "worker" && !c.enabled,
+  }));
   return (
     <>
       {clients.length === 0 && <p className="office-note">No apps have used this brain in the last day.</p>}
-      <ul className="office-people">
-        {[...clients, ...workers].map((c) => (
-          <li key={c.id} className={c.kind === "worker" && !c.enabled ? "office-off" : undefined}>{lineFor(c)}</li>
-        ))}
-      </ul>
+      <PeopleList lines={lines} />
       <h3 className="office-recent-title">Recent</h3>
       {view.recent.length === 0 ? (
         <p className="office-note">Nothing has happened since you opened this page.</p>
@@ -428,7 +448,7 @@ export function OfficePage() {
         </div>
         <section className="panel office-side">
           <h2 className="panel-title">Who is here</h2>
-          <div className="office-list" aria-live="polite">
+          <div className="office-list">
             <ActivityList view={view} />
           </div>
         </section>

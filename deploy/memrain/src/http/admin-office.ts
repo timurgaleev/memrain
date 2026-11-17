@@ -9,7 +9,7 @@ import { daemonsStatus } from "../core/daemons/status.ts";
 import { readControls, resolveControl } from "../core/daemons/controls.ts";
 import { cycleDaemonPause } from "../core/daemons/cycle-daemon.ts";
 import { getDaemon } from "../core/daemons/registry.ts";
-import { targetsOf } from "../core/daemons/scheduler.ts";
+import { daemonRunBlocker, targetsOf } from "../core/daemons/scheduler.ts";
 import { getHandler } from "../core/jobs/handlers.ts";
 import { SUBAGENT_JOB_KIND } from "../core/jobs/kinds.ts";
 import { workerNameFor } from "../core/jobs/activity.ts";
@@ -40,10 +40,22 @@ export function _resetOfficeRuntimeForTesting(): void {
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "cache-control": "no-store" } });
 
-/** True when at least one of the daemon's real targets would be queued: enabled and not paused, resolved as the scheduler does. */
-async function anyTargetRuns(engine: Engine, name: string, controls: Awaited<ReturnType<typeof readControls>>): Promise<boolean> {
+const DISPLAY_NAME_MAX = 80;
+
+// Names come from whoever registered the app or token; keep them short and printable.
+function displayName(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  return raw.replace(/[\u0000-\u001F\u007F]/g, "").slice(0, DISPLAY_NAME_MAX);
+}
+
+/**
+ * True when this process would run the daemon: its job worker is up, it has a
+ * handler and, if paid, a brain cap, and at least one real target is enabled
+ * and not paused, all resolved as the scheduler does.
+ */
+async function daemonRunsHere(engine: Engine, name: string, controls: Awaited<ReturnType<typeof readControls>>): Promise<boolean> {
   const spec = getDaemon(name);
-  if (!spec) return false;
+  if (!spec || !runtime.jobsWorker || daemonRunBlocker(spec, process.env)) return false;
   let targets;
   try {
     targets = await targetsOf(engine, spec);
@@ -86,7 +98,7 @@ export async function officeSnapshot(engine: Engine): Promise<OfficeSnapshot> {
       }
       return {
         name: d.name,
-        enabled: report.scheduler.enabled_here && !d.env_disabled && (await anyTargetRuns(engine, d.name, controls)),
+        enabled: report.scheduler.enabled_here && !d.env_disabled && (await daemonRunsHere(engine, d.name, controls)),
         running: busy.has(d.name),
       };
     }))),
@@ -102,9 +114,9 @@ export async function officeSnapshot(engine: Engine): Promise<OfficeSnapshot> {
   const add = (c: OfficeSnapshot["clients"][number]) => {
     if (!byId.has(c.id)) byId.set(c.id, c);
   };
-  for (const c of oauth.rows) add({ id: c.client_id, display_name: c.client_name, last_seen: c.last_seen });
+  for (const c of oauth.rows) add({ id: c.client_id, display_name: displayName(c.client_name), last_seen: c.last_seen });
   add({ id: "public", display_name: "Shared key", last_seen: null });
-  for (const t of pats.rows) add({ id: t.name, display_name: t.name, last_seen: t.last_seen });
+  for (const t of pats.rows) add({ id: t.name, display_name: displayName(t.name), last_seen: t.last_seen });
   return { workers, clients: [...byId.values()] };
 }
 

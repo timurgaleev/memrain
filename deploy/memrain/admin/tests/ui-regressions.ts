@@ -440,7 +440,8 @@ try {
     await list.getByText("Night shift is off", { exact: true }).waitFor();
     await list.getByText("Laptop is searching memory", { exact: true }).first().waitFor();
     assert.equal(await page.locator("canvas").count(), 1);
-    assert.equal(await list.getAttribute("aria-live"), "polite");
+    assert.equal(await list.locator(".office-people").getAttribute("aria-live"), "polite");
+    assert.equal(await page.locator(".office-side [aria-live]").count(), 1);
     await page.clock.runFor(1000);
     const painted = await page.locator("canvas").evaluate((el) => {
       const c = el as HTMLCanvasElement;

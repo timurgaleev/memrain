@@ -1,10 +1,14 @@
 import type { FeedEvent, OfficeSnapshot } from "../admin-types.ts";
 import { ROOM_PHRASE, WORKER_LABEL, roomFor, type RoomId } from "./rooms.ts";
 
+export type CharacterKind = "client" | "worker";
+
 export interface Character {
+  // Keyed by kind as well, so an app named like a worker never stands in for it.
   id: string;
+  agent: string;
   label: string;
-  kind: "client" | "worker";
+  kind: CharacterKind;
   enabled: boolean;
   room: RoomId;
   activity: string | null;
@@ -14,6 +18,8 @@ export interface Character {
   errorUntil: number;
   arrivedAt: number;
   lastSeen: number;
+  // Jobs of this worker started and not yet ended; one figure stands for all of them.
+  inFlight: number;
 }
 
 export interface OfficeState {
@@ -29,17 +35,30 @@ const RECENT_CAP = 20;
 const IGNORED_AGENTS = new Set(["admin-panel"]);
 const NEW_APP_LABEL = "New app";
 
+export function characterKey(kind: CharacterKind, agent: string): string {
+  return `${kind}:${agent}`;
+}
+
+// Tool calls come from apps, job events from workers.
+export function eventKey(e: FeedEvent): string {
+  return characterKey(e.kind === "job" ? "worker" : "client", e.agent);
+}
+
 export function namesFromSnapshot(s: OfficeSnapshot): Map<string, string> {
   const names = new Map<string, string>();
-  for (const [name, label] of Object.entries(WORKER_LABEL)) names.set(name, label);
-  for (const w of s.workers) if (!names.has(w.name)) names.set(w.name, w.name);
-  for (const c of s.clients) names.set(c.id, c.display_name);
+  for (const [name, label] of Object.entries(WORKER_LABEL)) names.set(characterKey("worker", name), label);
+  for (const w of s.workers) {
+    const key = characterKey("worker", w.name);
+    if (!names.has(key)) names.set(key, w.name);
+  }
+  for (const c of s.clients) names.set(characterKey("client", c.id), c.display_name);
   return names;
 }
 
 function workerCharacter(w: OfficeSnapshot["workers"][number], now: number): Character {
   return {
-    id: w.name,
+    id: characterKey("worker", w.name),
+    agent: w.name,
     label: WORKER_LABEL[w.name] ?? w.name,
     kind: "worker",
     enabled: w.enabled,
@@ -51,6 +70,7 @@ function workerCharacter(w: OfficeSnapshot["workers"][number], now: number): Cha
     errorUntil: 0,
     arrivedAt: now,
     lastSeen: now,
+    inFlight: w.running ? 1 : 0,
   };
 }
 
@@ -59,7 +79,8 @@ function clientCharacter(c: OfficeSnapshot["clients"][number], now: number): Cha
   const seen = c.last_seen ? Date.parse(c.last_seen) : NaN;
   if (!Number.isFinite(seen) || now - seen > CLIENT_WINDOW_MS) return null;
   return {
-    id: c.id,
+    id: characterKey("client", c.id),
+    agent: c.id,
     label: c.display_name,
     kind: "client",
     enabled: true,
@@ -71,15 +92,19 @@ function clientCharacter(c: OfficeSnapshot["clients"][number], now: number): Cha
     errorUntil: 0,
     arrivedAt: now,
     lastSeen: seen,
+    inFlight: 0,
   };
 }
 
 export function initialState(s: OfficeSnapshot, now: number): OfficeState {
   const characters = new Map<string, Character>();
-  for (const w of s.workers) characters.set(w.name, workerCharacter(w, now));
+  for (const w of s.workers) {
+    const worker = workerCharacter(w, now);
+    characters.set(worker.id, worker);
+  }
   for (const c of s.clients) {
     const client = clientCharacter(c, now);
-    if (client) characters.set(c.id, client);
+    if (client) characters.set(client.id, client);
   }
   return { characters, recent: [] };
 }
@@ -92,35 +117,44 @@ export function applySnapshot(
 ): OfficeState {
   const characters = new Map(st.characters);
   for (const w of s.workers) {
-    const c = characters.get(w.name);
+    const key = characterKey("worker", w.name);
+    const c = characters.get(key);
     if (!c) {
-      characters.set(w.name, workerCharacter(w, now));
+      characters.set(key, workerCharacter(w, now));
     } else if (w.running) {
       if (c.endedAt !== null && c.endedAt >= requestedAt) {
-        characters.set(w.name, { ...c, enabled: w.enabled });
+        characters.set(key, { ...c, enabled: w.enabled });
         continue;
       }
-      characters.set(w.name, {
+      characters.set(key, {
         ...c,
         enabled: w.enabled,
         room: roomFor({ kind: "job", agent: w.name, operation: "other" }),
         busyUntil: Infinity,
         startedAt: now,
         lastSeen: now,
+        inFlight: Math.max(c.inFlight, 1),
       });
     } else {
+      // Nothing runs, yet every start we saw came before the query: their ends were lost.
       const lostEnd = c.busyUntil === Infinity && c.startedAt !== null && c.startedAt < requestedAt;
-      characters.set(w.name, { ...c, enabled: w.enabled, busyUntil: lostEnd ? now : c.busyUntil });
+      characters.set(key, {
+        ...c,
+        enabled: w.enabled,
+        busyUntil: lostEnd ? now : c.busyUntil,
+        inFlight: lostEnd ? 0 : c.inFlight,
+      });
     }
   }
   // Also picks up apps whose live events this page missed.
   for (const cl of s.clients) {
-    const c = characters.get(cl.id);
-    if (c?.kind === "client") {
-      characters.set(cl.id, { ...c, label: cl.display_name });
-    } else if (!c) {
+    const key = characterKey("client", cl.id);
+    const c = characters.get(key);
+    if (c) {
+      characters.set(key, { ...c, label: cl.display_name });
+    } else {
       const client = clientCharacter(cl, now);
-      if (client) characters.set(cl.id, client);
+      if (client) characters.set(key, client);
     }
   }
   return { characters, recent: st.recent };
@@ -128,6 +162,11 @@ export function applySnapshot(
 
 export function describe(c: Character): string {
   return `${c.label} is ${ROOM_PHRASE[c.room]}`;
+}
+
+// A switched-off worker can still be finishing a job; say so rather than "off".
+export function lineFor(c: Character): string {
+  return c.kind === "worker" && !c.enabled && c.room === "break_room" ? `${c.label} is off` : describe(c);
 }
 
 export function applyEvent(
@@ -138,13 +177,14 @@ export function applyEvent(
 ): OfficeState {
   if (IGNORED_AGENTS.has(e.agent)) return st;
   const isJob = e.kind === "job";
+  const key = eventKey(e);
   const room = roomFor({ kind: isJob ? "job" : "tool", agent: e.agent, operation: e.operation });
-  const prev = st.characters.get(e.agent);
-  if (!isJob && prev?.kind === "worker") return st;
+  const prev = st.characters.get(key);
   const base: Character = prev ?? {
-    id: e.agent,
+    id: key,
+    agent: e.agent,
     // Until the snapshot names a new app, never show any part of its id.
-    label: names.get(e.agent) ?? WORKER_LABEL[e.agent] ?? (isJob ? e.agent : NEW_APP_LABEL),
+    label: names.get(key) ?? (isJob ? WORKER_LABEL[e.agent] ?? e.agent : NEW_APP_LABEL),
     kind: isJob ? "worker" : "client",
     enabled: true,
     room: "reception",
@@ -155,6 +195,7 @@ export function applyEvent(
     errorUntil: 0,
     arrivedAt: now,
     lastSeen: now,
+    inFlight: 0,
   };
 
   let next: Character;
@@ -167,22 +208,34 @@ export function applyEvent(
       errorUntil: e.status === "error" ? now + JOB_LINGER_MS : base.errorUntil,
     };
   } else if (e.phase === "end") {
-    const failed = e.status === "error";
+    const errorUntil = e.status === "error" ? now + JOB_LINGER_MS : base.errorUntil;
+    const inFlight = Math.max(0, base.inFlight - 1);
+    next = inFlight > 0
+      ? { ...base, inFlight, endedAt: now, errorUntil }
+      : {
+          ...base,
+          room,
+          activity: e.operation,
+          busyUntil: now + JOB_LINGER_MS,
+          startedAt: null,
+          endedAt: now,
+          errorUntil,
+          inFlight,
+        };
+  } else {
     next = {
       ...base,
       room,
       activity: e.operation,
-      busyUntil: now + JOB_LINGER_MS,
-      startedAt: null,
-      endedAt: now,
-      errorUntil: failed ? now + JOB_LINGER_MS : base.errorUntil,
+      busyUntil: Infinity,
+      startedAt: now,
+      endedAt: null,
+      inFlight: base.inFlight + 1,
     };
-  } else {
-    next = { ...base, room, activity: e.operation, busyUntil: Infinity, startedAt: now, endedAt: null };
   }
 
   const characters = new Map(st.characters);
-  characters.set(e.agent, { ...next, lastSeen: now });
+  characters.set(key, { ...next, lastSeen: now });
   const recent = [{ at: now, text: describe(next) }, ...st.recent].slice(0, RECENT_CAP);
   return { characters, recent };
 }
@@ -194,7 +247,7 @@ export function tick(st: OfficeState, now: number): OfficeState {
     const stale = c.startedAt !== null && now - c.startedAt > STALE_JOB_MS;
     if (c.room !== "break_room" && (c.busyUntil <= now || stale)) {
       changed = true;
-      characters.set(id, { ...c, room: "break_room", activity: null, startedAt: null, busyUntil: 0 });
+      characters.set(id, { ...c, room: "break_room", activity: null, startedAt: null, busyUntil: 0, inFlight: 0 });
     } else if (c.kind === "client" && c.room === "break_room" && now - c.lastSeen > CLIENT_WINDOW_MS) {
       changed = true;
     } else {

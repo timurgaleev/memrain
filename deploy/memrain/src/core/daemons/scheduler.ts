@@ -105,6 +105,13 @@ export async function targetsOf(engine: Engine, spec: DaemonSpec): Promise<Daemo
   return spec.targets ? spec.targets(engine) : [{ sourceId: DEFAULT_DAEMON_SOURCE }];
 }
 
+/** Why this process would skip the daemon before looking at its targets, or null. */
+export function daemonRunBlocker(spec: DaemonSpec, env: NodeJS.ProcessEnv): "no_handler" | "no_brain_cap" | null {
+  if (!getHandler(spec.kind)) return "no_handler";
+  if (spec.paid && brainDailyCapUsd(env) === null) return "no_brain_cap";
+  return null;
+}
+
 /** Queue every daemon whose latest window is due and not yet queued. */
 export async function enqueueDueDaemons(engine: Engine, now: Date, opts: DueOptions = {}): Promise<DaemonTickResult[]> {
   const env = opts.env ?? process.env;
@@ -120,8 +127,8 @@ export async function enqueueDueDaemons(engine: Engine, now: Date, opts: DueOpti
     const skip = (outcome: DaemonOutcome, detail?: string) =>
       results.push({ daemon: spec.name, sourceId: null, outcome, ...(detail ? { detail } : {}) });
     if (switches.disabled.has(spec.name)) { skip("env_disabled"); continue; }
-    if (!getHandler(spec.kind)) { skip("no_handler"); continue; }
-    if (spec.paid && brainDailyCapUsd(env) === null) { skip("no_brain_cap"); continue; }
+    const blocked = daemonRunBlocker(spec, env);
+    if (blocked) { skip(blocked); continue; }
     let targets: DaemonTarget[];
     try {
       targets = await targetsOf(engine, spec);

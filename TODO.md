@@ -79,6 +79,19 @@ marked; this section is the one that stands.
 - A single-value link target cannot hold two separate periods (A, then B, then
   A again); the re-add is refused.
 
+## Follow-ups from the Office page
+
+- Dynamic client registration stores `client_name` with no length or
+  control-character cap (`src/core/oauth-provider.ts`); the Office snapshot
+  trims it, but the stored name needs its own fix and review on the auth path.
+- Open `/admin/events` streams stay open after the admin session expires or
+  the admin logs out.
+- The Office page's cached static floor canvas stays in memory after leaving
+  the page.
+- Unauthenticated local calls (agent `internal`) always show as "New app".
+- The Office snapshot runs one target query per daemon on every 30 s poll, for
+  each open tab.
+
 ## Follow-ups from the meeting-credential review (2026-11-17)
 
 - Older versions of a page cleaned by `connectors redact-meetings` keep the

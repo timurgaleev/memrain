@@ -46,7 +46,7 @@ class AdminEventBus {
     const frame = encoder.encode(`data: ${JSON.stringify(evt)}\n\n`);
     for (const c of [...this.subscribers]) {
       // Drop the frame (not the connection) for a backpressured client so a slow
-      // reader can't make the in-memory queue grow unbounded (codex). The feed
+      // reader can't make the in-memory queue grow unbounded. The feed
       // is a live tail, so a dropped event is acceptable; a dead client still
       // gets evicted by the enqueue throw below.
       if (c.desiredSize !== null && c.desiredSize <= 0) continue;
@@ -146,14 +146,11 @@ export function handleAdminEventsRoute(req: Request, requireAdmin: (req: Request
     return Response.json({ error: "Admin authentication required" }, { status: 401 });
   }
 
+  // start() runs inside the constructor, so `controllerRef` is known right after it.
   let controllerRef: ReadableStreamDefaultController | null = null;
   const stream = new ReadableStream({
     start(controller) {
-      if (!adminEventBus.add(controller)) {
-        controller.enqueue(encoder.encode(`event: error\ndata: subscriber limit reached\n\n`));
-        controller.close();
-        return;
-      }
+      if (!adminEventBus.add(controller)) return;
       controllerRef = controller;
       controller.enqueue(encoder.encode(`: connected\n\n`)); // initial comment
     },
@@ -161,6 +158,10 @@ export function handleAdminEventsRoute(req: Request, requireAdmin: (req: Request
       if (controllerRef) adminEventBus.remove(controllerRef);
     },
   });
+  // A plain error rather than a stream that closes at once, which EventSource would reopen in a loop.
+  if (!controllerRef) {
+    return Response.json({ error: "Too many live feeds are open" }, { status: 503 });
+  }
 
   return new Response(stream, {
     headers: {

@@ -38,10 +38,10 @@ const WORKER_LOOK: Record<string, number> = {
 };
 
 function lookFor(c: Character): number {
-  const fixed = WORKER_LOOK[c.id];
+  const fixed = c.kind === "worker" ? WORKER_LOOK[c.agent] : undefined;
   if (fixed !== undefined) return fixed;
   let h = 5381;
-  for (let i = 0; i < c.id.length; i++) h = ((h << 5) + h + c.id.charCodeAt(i)) | 0;
+  for (let i = 0; i < c.agent.length; i++) h = ((h << 5) + h + c.agent.charCodeAt(i)) | 0;
   return Math.abs(h) % PEOPLE_COUNT;
 }
 

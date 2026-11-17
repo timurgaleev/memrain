@@ -11,6 +11,8 @@ import { handleAdminApi } from "../src/http/admin-api.ts";
 import { _resetOfficeRuntimeForTesting, noteCycleRun, noteOfficeRuntime, type OfficeSnapshot } from "../src/http/admin-office.ts";
 import { _resetDaemonsForTesting, registerDaemon } from "../src/core/daemons/registry.ts";
 import { pauseDaemon, resumeDaemon, setDaemonEnabled } from "../src/core/daemons/controls.ts";
+import { NOTIFICATIONS_JOB_KIND } from "../src/core/notifications/daemon.ts";
+import { _resetHandlersForTesting, registerHandler } from "../src/core/jobs/handlers.ts";
 
 const BOOT = "boot-secret";
 let tmp: string;
@@ -18,6 +20,19 @@ let storage: Storage;
 let auth: ReturnType<typeof createAdminAuth>;
 let cookie: string;
 const savedDaemons = process.env.MEMRAIN_DAEMONS;
+const savedBrainCap = process.env.MEMRAIN_DAILY_BUDGET_USD;
+const noop = async () => ({});
+
+function registerProbe(paid = false): void {
+  registerDaemon({
+    name: "probe",
+    kind: "daemon_probe",
+    schedule: { cron: "0 7 * * *" },
+    lane: "short",
+    paid,
+    defaultEnabled: true,
+  });
+}
 
 async function snapshot(): Promise<OfficeSnapshot> {
   const res = await call("/admin/api/office", { cookie });
@@ -48,6 +63,9 @@ beforeEach(async () => {
 afterEach(async () => {
   if (savedDaemons === undefined) delete process.env.MEMRAIN_DAEMONS;
   else process.env.MEMRAIN_DAEMONS = savedDaemons;
+  if (savedBrainCap === undefined) delete process.env.MEMRAIN_DAILY_BUDGET_USD;
+  else process.env.MEMRAIN_DAILY_BUDGET_USD = savedBrainCap;
+  _resetHandlersForTesting();
   _resetOfficeRuntimeForTesting();
   _resetDaemonsForTesting();
   await storage.close();
@@ -97,6 +115,7 @@ describe("GET /admin/api/office", () => {
   it("reports effective availability, not the configured switch", async () => {
     process.env.MEMRAIN_DAEMONS = "1";
     noteOfficeRuntime({ jobsWorker: true, cycleLoop: true });
+    registerHandler(NOTIFICATIONS_JOB_KIND, noop);
     for (const daemon of ["notifications"]) {
       await setDaemonEnabled(storage.engine(), { daemon, enabled: true, by: "cli" });
     }
@@ -169,6 +188,8 @@ describe("GET /admin/api/office", () => {
 
   it("resolves a daemon per target, like the scheduler", async () => {
     process.env.MEMRAIN_DAEMONS = "1";
+    noteOfficeRuntime({ jobsWorker: true, cycleLoop: false });
+    registerHandler("daemon_probe", noop);
     registerDaemon({
       name: "probe",
       kind: "daemon_probe",
@@ -197,5 +218,49 @@ describe("GET /admin/api/office", () => {
     expect(worker(await snapshot(), "cycle")?.enabled).toBe(true);
     await pauseDaemon(e, { daemon: "cycle", by: "cli" });
     expect(worker(await snapshot(), "cycle")?.enabled).toBe(false);
+  });
+
+  it("keeps a scheduled daemon off while this process runs no job worker", async () => {
+    process.env.MEMRAIN_DAEMONS = "1";
+    registerProbe();
+    registerHandler("daemon_probe", noop);
+    expect(worker(await snapshot(), "probe")?.enabled).toBe(false);
+    noteOfficeRuntime({ jobsWorker: true, cycleLoop: false });
+    expect(worker(await snapshot(), "probe")?.enabled).toBe(true);
+  });
+
+  it("keeps a daemon off when this process has no handler for its kind", async () => {
+    process.env.MEMRAIN_DAEMONS = "1";
+    noteOfficeRuntime({ jobsWorker: true, cycleLoop: false });
+    registerProbe();
+    expect(worker(await snapshot(), "probe")?.enabled).toBe(false);
+    registerHandler("daemon_probe", noop);
+    expect(worker(await snapshot(), "probe")?.enabled).toBe(true);
+  });
+
+  it("keeps a paid daemon off without a brain-wide daily cap", async () => {
+    process.env.MEMRAIN_DAEMONS = "1";
+    delete process.env.MEMRAIN_DAILY_BUDGET_USD;
+    noteOfficeRuntime({ jobsWorker: true, cycleLoop: false });
+    registerProbe(true);
+    registerHandler("daemon_probe", noop);
+    expect(worker(await snapshot(), "probe")?.enabled).toBe(false);
+    process.env.MEMRAIN_DAILY_BUDGET_USD = "5";
+    expect(worker(await snapshot(), "probe")?.enabled).toBe(true);
+  });
+
+  it("caps display names and strips control characters", async () => {
+    const long = `bell\u0007${"n".repeat(500)}`;
+    const e = storage.engine();
+    await e.query(`INSERT INTO access_tokens (name, token_hash) VALUES ($1, 'h-long')`, [long]);
+    await e.query(`INSERT INTO oauth_clients (client_id, client_name) VALUES ('cid-long', $1)`, [`tab\t${"o".repeat(500)}\u007F`]);
+    const b = await snapshot();
+    const pat = b.clients.find((c) => c.id === long)!;
+    expect(pat.display_name.length).toBeLessThanOrEqual(80);
+    expect(pat.display_name.startsWith("bell")).toBe(true);
+    const app = b.clients.find((c) => c.id === "cid-long")!;
+    expect(app.display_name.length).toBeLessThanOrEqual(80);
+    // eslint-disable-next-line no-control-regex
+    for (const c of [pat, app]) expect(c.display_name).not.toMatch(/[\u0000-\u001F\u007F]/);
   });
 });
