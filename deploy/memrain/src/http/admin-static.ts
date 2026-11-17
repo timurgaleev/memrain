@@ -30,14 +30,37 @@ const MIME: Record<string, string> = {
   ".bin": "application/octet-stream",
 };
 
-// Only a name carrying Vite's content hash (`index-DP2joJTf.js`) can be cached
-// for a year; anything else must revalidate, and so must index.html, which
-// names the hashes.
-const HASHED_ASSET = /-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$/;
+// Only files the Vite build manifest lists carry a content hash, so only those
+// may be cached for a year; everything else, index.html included, revalidates.
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 
-function cacheControlFor(rel: string): string {
-  return rel.startsWith("assets/") && HASHED_ASSET.test(rel) ? IMMUTABLE_CACHE : "no-cache";
+interface ManifestEntry {
+  file?: unknown;
+  css?: unknown;
+  assets?: unknown;
+}
+
+const hashedFilesByDist = new Map<string, Set<string>>();
+
+async function hashedFiles(distDir: string): Promise<Set<string>> {
+  const known = hashedFilesByDist.get(distDir);
+  if (known) return known;
+  const manifest = Bun.file(resolve(distDir, ".vite", "manifest.json"));
+  if (!(await manifest.exists())) return new Set();
+  const files = new Set<string>();
+  try {
+    const entries = Object.values((await manifest.json()) as Record<string, ManifestEntry>);
+    for (const entry of entries) {
+      if (typeof entry.file === "string") files.add(entry.file);
+      for (const list of [entry.css, entry.assets]) {
+        if (Array.isArray(list)) for (const f of list) if (typeof f === "string") files.add(f);
+      }
+    }
+  } catch {
+    return new Set();
+  }
+  hashedFilesByDist.set(distDir, files);
+  return files;
 }
 
 // The SPA ships its own scripts and styles and talks only to this origin.
@@ -97,7 +120,7 @@ export async function serveAdminStatic(url: URL, distDir: string = DIST_DIR): Pr
     headers: {
       ...ADMIN_SECURITY_HEADERS,
       "Content-Type": mimeFor(filePath),
-      "Cache-Control": cacheControlFor(rel),
+      "Cache-Control": (await hashedFiles(distDir)).has(rel) ? IMMUTABLE_CACHE : "no-cache",
     },
   });
 }

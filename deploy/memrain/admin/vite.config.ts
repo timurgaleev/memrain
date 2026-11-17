@@ -6,5 +6,6 @@ export default defineConfig({
   plugins: [react()],
   base: "/admin/",
   // assetsInlineLimit 0: the CSP (img-src 'self') rejects data: URIs, so the favicon must be a file.
-  build: { outDir: "dist", emptyOutDir: true, assetsInlineLimit: 0 },
+  // manifest: the server reads dist/.vite/manifest.json to know which files carry a content hash.
+  build: { outDir: "dist", emptyOutDir: true, assetsInlineLimit: 0, manifest: true },
 });

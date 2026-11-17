@@ -76,9 +76,16 @@ describe("serveAdminStatic security headers", () => {
     writeFileSync(join(dist, "assets", "room.gltf"), "{}");
     writeFileSync(join(dist, "assets", "room.glb"), "glTF");
     writeFileSync(join(dist, "assets", "room.bin"), "bin");
-    writeFileSync(join(dist, "assets", "index-DP2joJTf.js"), "void 0;");
-    writeFileSync(join(dist, "assets", "characters-DP2joJTf.png"), "png");
-    writeFileSync(join(dist, "assets", "room-DP2joJTf.gltf"), "{}");
+    writeFileSync(join(dist, "assets", "index-abc.js"), "void 0;");
+    writeFileSync(join(dist, "assets", "office-characters.png"), "png");
+    writeFileSync(join(dist, "assets", "index-abc.css"), "body{}");
+    mkdirSync(join(dist, ".vite"));
+    writeFileSync(
+      join(dist, ".vite", "manifest.json"),
+      JSON.stringify({
+        "index.html": { file: "assets/index-abc.js", css: ["assets/index-abc.css"], assets: ["assets/office-characters.png"] },
+      }),
+    );
   });
   afterAll(() => rmSync(dist, { recursive: true, force: true }));
 
@@ -101,17 +108,35 @@ describe("serveAdminStatic security headers", () => {
     expect((await serve("/admin/assets/room.bin"))!.headers.get("Content-Type")).toBe("application/octet-stream");
   });
 
-  it("caches content-hashed assets for a year", async () => {
-    for (const p of ["index-DP2joJTf.js", "characters-DP2joJTf.png", "room-DP2joJTf.gltf"]) {
+  it("caches only files the build manifest lists for a year", async () => {
+    for (const p of ["index-abc.js", "index-abc.css", "office-characters.png"]) {
       expect((await serve(`/admin/assets/${p}`))!.headers.get("Cache-Control")).toBe(
         "public, max-age=31536000, immutable",
       );
     }
   });
 
-  it("makes unhashed assets and index.html revalidate", async () => {
+  it("makes files outside the manifest, index.html and SPA routes revalidate", async () => {
     for (const p of ["/admin/assets/app.js", "/admin/assets/room.glb", "/admin", "/admin/office", "/admin/assets/missing-asset.js"]) {
       expect((await serve(p))!.headers.get("Cache-Control")).toBe("no-cache");
+    }
+  });
+
+  it("does not serve the manifest itself", async () => {
+    const r = await serve("/admin/.vite/manifest.json");
+    expect(r!.headers.get("Content-Type")).toContain("text/html");
+  });
+
+  it("revalidates everything when there is no manifest", async () => {
+    const bare = mkdtempSync(join(tmpdir(), "admin-dist-bare-"));
+    try {
+      mkdirSync(join(bare, "assets"));
+      writeFileSync(join(bare, "index.html"), "<div id=\"root\"></div>");
+      writeFileSync(join(bare, "assets", "index-abc.js"), "void 0;");
+      const r = await serveAdminStatic(new URL("http://h/admin/assets/index-abc.js"), bare);
+      expect(r!.headers.get("Cache-Control")).toBe("no-cache");
+    } finally {
+      rmSync(bare, { recursive: true, force: true });
     }
   });
 
