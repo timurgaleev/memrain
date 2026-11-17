@@ -29,6 +29,16 @@ const WRITE_TOOLS = new Set([
   "takes_update",
   "put_raw_data",
   "log_ingest",
+  "add_timeline_event",
+  "set_take_status",
+  "takes_resolve",
+  "ontology_propose",
+  "log_friction",
+  "index",
+  "extract_facts",
+  "think",
+  "retry_job",
+  "chronicle_backfill",
 ]);
 
 const JOB_ROOM: Record<string, RoomId> = {
