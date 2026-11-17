@@ -15,6 +15,25 @@ export interface OfficeSnapshot {
   clients: { id: string; display_name: string; last_seen: string | null }[];
 }
 
+// What this process actually started, and whether a maintenance cycle is in
+// flight. The cycle runs outside the jobs queue, so neither shows in the DB.
+let runtime = { jobsWorker: false, cycleLoop: false };
+let cycleRunning = false;
+
+/** Serve calls this once with what really started. */
+export function noteOfficeRuntime(r: { jobsWorker: boolean; cycleLoop: boolean }): void {
+  runtime = { ...r };
+}
+
+export function noteCycleRun(phase: "start" | "end"): void {
+  cycleRunning = phase === "start";
+}
+
+export function _resetOfficeRuntimeForTesting(): void {
+  runtime = { jobsWorker: false, cycleLoop: false };
+  cycleRunning = false;
+}
+
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "cache-control": "no-store" } });
 
 export async function officeSnapshot(engine: Engine): Promise<OfficeSnapshot> {
@@ -22,27 +41,46 @@ export async function officeSnapshot(engine: Engine): Promise<OfficeSnapshot> {
     daemonsStatus(engine),
     engine.query<{ id: string; kind: string }>("SELECT id, kind FROM jobs WHERE status = 'running'"),
     engine.query<{ client_id: string; client_name: string }>(
-      "SELECT client_id, client_name FROM oauth_clients WHERE deleted_at IS NULL ORDER BY client_name",
+      "SELECT client_id, client_name FROM oauth_clients WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 500",
     ),
     engine.query<{ name: string; last_seen: string | null }>(
       `SELECT name, max(last_used_at)::text AS last_seen
-         FROM access_tokens WHERE revoked_at IS NULL GROUP BY name ORDER BY name`,
+         FROM access_tokens WHERE revoked_at IS NULL
+        GROUP BY name ORDER BY max(last_used_at) DESC NULLS LAST, name LIMIT 500`,
     ),
   ]);
   const busy = new Set(running.rows.map(workerNameFor));
+  const held = report.paused_all !== null;
   const workers = [
-    ...report.daemons.map((d) => ({ name: d.name, enabled: d.enabled, running: busy.has(d.name) })),
-    { name: "worker", enabled: true, running: busy.has("worker") },
-    ...(getHandler(SUBAGENT_JOB_KIND) ? [{ name: "assistant", enabled: true, running: busy.has("assistant") }] : []),
+    ...report.daemons.map((d) => {
+      const usable = !d.env_disabled && !d.paused && !held;
+      if (d.schedule === "external") {
+        return { name: d.name, enabled: usable && d.enabled && runtime.cycleLoop, running: cycleRunning };
+      }
+      // Enabled brain-wide, or for at least one source.
+      const forSomeTarget = d.enabled || d.sources.some((s) => s.enabled && !s.paused);
+      return {
+        name: d.name,
+        enabled: usable && forSomeTarget && report.scheduler.enabled_here,
+        running: busy.has(d.name),
+      };
+    }),
+    { name: "worker", enabled: runtime.jobsWorker, running: busy.has("worker") },
+    ...(getHandler(SUBAGENT_JOB_KIND)
+      ? [{ name: "assistant", enabled: runtime.jobsWorker, running: busy.has("assistant") }]
+      : []),
   ];
   // A PAT shows up in events under its name (see legacyGrantFromRow), so the
-  // name is its id here.
-  const clients = [
-    ...oauth.rows.map((c) => ({ id: c.client_id, display_name: c.client_name, last_seen: null })),
-    ...pats.rows.map((t) => ({ id: t.name, display_name: t.name, last_seen: t.last_seen })),
-    { id: "public", display_name: "Shared key", last_seen: null },
-  ];
-  return { workers, clients };
+  // name is its id here. First entry per id wins: OAuth clients, then the
+  // shared key, then PATs.
+  const byId = new Map<string, OfficeSnapshot["clients"][number]>();
+  const add = (c: OfficeSnapshot["clients"][number]) => {
+    if (!byId.has(c.id)) byId.set(c.id, c);
+  };
+  for (const c of oauth.rows) add({ id: c.client_id, display_name: c.client_name, last_seen: null });
+  add({ id: "public", display_name: "Shared key", last_seen: null });
+  for (const t of pats.rows) add({ id: t.name, display_name: t.name, last_seen: t.last_seen });
+  return { workers, clients: [...byId.values()] };
 }
 
 export async function handleAdminOffice(req: Request, url: URL, engine: Engine): Promise<Response | null> {

@@ -8,6 +8,7 @@ import { randomBytes } from "node:crypto";
 import { Storage } from "../core/storage.ts";
 import { startServer } from "../http/server.ts";
 import { publishJobEvent } from "../http/admin-events.ts";
+import { noteCycleRun, noteOfficeRuntime } from "../http/admin-office.ts";
 import { isRelyingParty, resolveRelyingParty } from "../core/webauthn-config.ts";
 import { loadConfig, selfIssuedMismatch } from "../core/config.ts";
 import { startCycleLoop, type CycleHandle } from "../recipes/cycle.ts";
@@ -543,8 +544,12 @@ export function startBackgroundWork(
     cycle = deps.startCycleLoop(storage, {
       intervalMs: cycleIntervalS * 1000,
       staleDays: cycleStaleDays,
-      onRun: e => publishJobEvent({ worker: "cycle", kind: "cycle", ...e }),
+      onRun: e => {
+        noteCycleRun(e.phase);
+        publishJobEvent({ worker: "cycle", kind: "cycle", ...e });
+      },
     });
   }
+  noteOfficeRuntime({ jobsWorker: quiescence.jobsWorker, cycleLoop: cycle !== null });
   return { worker, cycle };
 }
