@@ -42,7 +42,7 @@ import { CHARACTER_VARIANTS, MODEL_URLS, resolveModelFile } from "./assets3d.ts"
 import { OFFICE_MAP, PROPS, WALL_DECOR } from "./map.ts";
 import type { targetFor } from "./ambient.ts";
 import { buildPlacements, buildSeats, floorBoxes, SPEC, tileKey, WALL_H, WALL_T, wallBoxes, type BoxItem, type Furniture, type Placement, type Seat } from "./layout3d.ts";
-import { animPose, clipFor, syncCharacters, type ClipName } from "./anim.ts";
+import { animPose, clipFor, clipsForPose, syncCharacters, type ClipName } from "./anim.ts";
 import { WORLD_TILE } from "./world.ts";
 import type { Tile } from "./path.ts";
 
@@ -186,6 +186,7 @@ interface Figure {
   root: Group;
   mixer: AnimationMixer;
   sets: Map<string, AnimationAction[]>;
+  available: ReadonlySet<string>;
   clip: string;
   torso: Object3D | undefined;
   torsoRest: Quaternion;
@@ -213,9 +214,20 @@ function shortestTurn(from: number, to: number): number {
 }
 
 export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reducedMotion: boolean }): Promise<OfficeScene> {
-  const reduced = opts.reducedMotion;
   if (LIVE.has(canvas)) throw new Error("This canvas already hosts an office scene; give each scene its own canvas.");
   const renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "low-power" });
+  LIVE.add(canvas);
+  try {
+    return await buildScene(canvas, renderer, opts.reducedMotion);
+  } catch (e) {
+    renderer.dispose();
+    renderer.forceContextLoss();
+    LIVE.delete(canvas);
+    throw e;
+  }
+}
+
+async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, reduced: boolean): Promise<OfficeScene> {
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = NeutralToneMapping;
   renderer.toneMappingExposure = 1.05;
@@ -230,21 +242,16 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
   const { seats, sofaSpots, chairs } = buildSeats();
   const kinds = new Set<Furniture>(["chair", "monitor", "counter", "rug"]);
   for (const p of [...PROPS, ...WALL_DECOR]) if (p.kind && p.kind !== "character") kinds.add(p.kind);
-  LIVE.add(canvas);
   // A missing piece of furniture leaves a gap; missing people mean no office at all.
   const kindList = [...kinds];
   const [settled, people] = await Promise.all([
     Promise.allSettled(kindList.map(async (k) => [k, (await loader.loadAsync(MODEL_URLS[k])).scene] as const)),
     Promise.all(CHARACTER_VARIANTS.map((url) => loader.loadAsync(url))),
-  ]).catch((e: unknown) => {
-    LIVE.delete(canvas);
-    renderer.dispose();
-    renderer.forceContextLoss();
-    throw e;
-  });
+  ]);
   const furniture = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
-  const missing = kindList.filter((_, i) => settled[i]?.status === "rejected");
-  if (missing.length) console.warn(`office: left out models that did not load: ${missing.join(", ")}`);
+  const missing = settled.flatMap((r, i) =>
+    r.status === "rejected" ? [`${kindList[i]} (${r.reason instanceof Error ? r.reason.message : String(r.reason)})`] : []);
+  if (missing.length) console.warn(`office: left out models that did not load: ${missing.join("; ")}`);
 
   const templates = new Map<Furniture, Template>();
   for (const [k, root] of furniture) {
@@ -399,6 +406,7 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
       root,
       mixer,
       sets,
+      available: new Set(gltf.animations.map((a) => a.name)),
       clip: "",
       torso,
       torsoRest: torso ? torso.quaternion.clone() : new Quaternion(),
@@ -441,8 +449,8 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
   function play(f: Figure, name: ClipName, fade: number): void {
     if (f.clip === name) return;
     const prev = f.sets.get(f.clip) ?? [];
-    // A model without the clip plays idle instead; every shipped person has all of them.
-    const next = f.sets.get(name)?.length ? f.sets.get(name)! : (f.sets.get("idle") ?? []);
+    const parts = clipsForPose(name, f.available);
+    const next = f.sets.get(parts.length === 1 && parts[0] === "idle" ? "idle" : name) ?? [];
     for (const a of prev) {
       if (next.includes(a)) continue;
       if (fade > 0) a.fadeOut(fade);
@@ -608,6 +616,7 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
       raf = 0;
     }
   };
+  fitCamera();
   document.addEventListener("visibilitychange", onVisibility);
   const observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver((entries) => {
     onScreen = entries.some((e) => e.isIntersecting);
@@ -638,8 +647,6 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
   const sameState = (a: SceneCharacter, b: SceneCharacter) =>
     a.worldX === b.worldX && a.worldZ === b.worldZ && a.yaw === b.yaw && a.pose === b.pose && a.moving === b.moving
     && a.busy === b.busy && a.error === b.error && a.enabled === b.enabled && a.variant === b.variant;
-
-  fitCamera();
 
   return {
     update(chars, now) {
@@ -716,32 +723,39 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
     dispose() {
       if (disposed) return;
       disposed = true;
-      if (raf) cancelAnimationFrame(raf);
-      raf = 0;
-      document.removeEventListener("visibilitychange", onVisibility);
-      observer?.disconnect();
-      canvas.removeEventListener("webglcontextlost", onLost);
-      for (const f of figures.values()) dropFigure(f);
-      figures.clear();
-      const roots: Object3D[] = [scene, ...furniture.map(([, r]) => r), ...people.map((g) => g.scene)];
-      for (const r of roots) {
-        r.traverse((o) => {
-          if (!(o instanceof Mesh)) return;
-          own(o.geometry as BufferGeometry);
-          for (const m of Array.isArray(o.material) ? o.material : [o.material]) own(m as Material);
-          if (o instanceof InstancedMesh) o.dispose();
-        });
+      try {
+        release();
+      } finally {
+        LIVE.delete(canvas);
       }
-      for (const m of owned.materials) {
-        for (const v of Object.values(m)) if (v instanceof Texture) owned.textures.add(v);
-        m.dispose();
-      }
-      for (const g of owned.geometries) g.dispose();
-      for (const t of owned.textures) t.dispose();
-      sun.dispose();
-      renderer.dispose();
-      if (!lost) renderer.forceContextLoss();
-      LIVE.delete(canvas);
     },
   };
+
+  function release(): void {
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+    document.removeEventListener("visibilitychange", onVisibility);
+    observer?.disconnect();
+    canvas.removeEventListener("webglcontextlost", onLost);
+    for (const f of figures.values()) dropFigure(f);
+    figures.clear();
+    const roots: Object3D[] = [scene, ...furniture.map(([, r]) => r), ...people.map((g) => g.scene)];
+    for (const r of roots) {
+      r.traverse((o) => {
+        if (!(o instanceof Mesh)) return;
+        own(o.geometry as BufferGeometry);
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) own(m as Material);
+        if (o instanceof InstancedMesh) o.dispose();
+      });
+    }
+    for (const m of owned.materials) {
+      for (const v of Object.values(m)) if (v instanceof Texture) owned.textures.add(v);
+      m.dispose();
+    }
+    for (const g of owned.geometries) g.dispose();
+    for (const t of owned.textures) t.dispose();
+    sun.dispose();
+    renderer.dispose();
+    if (!lost) renderer.forceContextLoss();
+  }
 }

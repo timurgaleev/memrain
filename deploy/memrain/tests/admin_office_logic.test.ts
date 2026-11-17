@@ -20,7 +20,7 @@ import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, PROPS, TILE, WALL_DECOR, officeL
 import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
 import { findPath } from "../admin/src/office/path.ts";
 import { facingToYaw, tileToWorld } from "../admin/src/office/world.ts";
-import { animPose, clipFor, syncCharacters } from "../admin/src/office/anim.ts";
+import { animPose, clipFor, clipsForPose, syncCharacters, type ClipName } from "../admin/src/office/anim.ts";
 import { buildPlacements, buildSeats, floorBoxes } from "../admin/src/office/layout3d.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
 import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
@@ -867,6 +867,19 @@ describe("3D animation helpers", () => {
     expect(clipFor("coffee", false, false, 9000, 0)).toBe("idle");
     const chat = new Set([0, 700, 1500, 2600, 4000].map((ms) => clipFor("chat", false, false, ms, 0)));
     expect(chat).toEqual(new Set(["emote-yes", "idle"]));
+  });
+
+  it("plays idle when a model lacks any clip a pose needs", () => {
+    const all = new Set<string>(CHARACTER_CLIPS);
+    const without = (name: string) => new Set([...all].filter((c) => c !== name));
+    const names: ClipName[] = ["idle", "walk", "sit", "interact-right", "pick-up", "emote-yes", "type"];
+    for (const n of names) expect(clipsForPose(n, all)).not.toEqual(n === "idle" ? [] : ["idle"]);
+    expect(clipsForPose("type", all)).toEqual(["sit", "interact-right"]);
+    expect(clipsForPose("type", without("sit"))).toEqual(["idle"]);
+    expect(clipsForPose("type", without("interact-right"))).toEqual(["idle"]);
+    expect(clipsForPose("walk", all)).toEqual(["walk"]);
+    expect(clipsForPose("walk", without("walk"))).toEqual(["idle"]);
+    expect(clipsForPose("idle", all)).toEqual(["idle"]);
   });
 
   it("ships every clip in every person's model", () => {

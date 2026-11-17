@@ -74,3 +74,10 @@ export function syncCharacters(existing: ReadonlySet<string>, wanted: ReadonlySe
     remove: [...existing].filter((id) => !wanted.has(id)),
   };
 }
+
+// The model clips a chosen clip is made of. If the model lacks any of them the
+// figure stands idle rather than play half a pose (typing with no legs bent).
+export function clipsForPose(clip: ClipName, available: ReadonlySet<string>): string[] {
+  const parts = clip === "type" ? ["sit", "interact-right"] : [clip];
+  return parts.every((c) => available.has(c)) ? parts : ["idle"];
+}
