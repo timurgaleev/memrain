@@ -1,3 +1,6 @@
+// The 3D office: an isometric diorama of the rooms in map.ts with the people on top.
+// Each createOfficeScene call needs its own <canvas>: dispose() forces the WebGL
+// context lost, so a canvas is never handed to a second scene.
 import {
   AnimationClip,
   AnimationMixer,
@@ -39,7 +42,7 @@ import { CHARACTER_VARIANTS, MODEL_URLS, resolveModelFile } from "./assets3d.ts"
 import { OFFICE_MAP, PROPS, WALL_DECOR } from "./map.ts";
 import type { targetFor } from "./ambient.ts";
 import { buildPlacements, buildSeats, floorBoxes, SPEC, tileKey, WALL_H, WALL_T, wallBoxes, type BoxItem, type Furniture, type Placement, type Seat } from "./layout3d.ts";
-import { animPose, syncCharacters } from "./anim.ts";
+import { animPose, clipFor, syncCharacters, type ClipName } from "./anim.ts";
 import { WORLD_TILE } from "./world.ts";
 import type { Tile } from "./path.ts";
 
@@ -96,6 +99,9 @@ const FADE_S = 0.3;
 const SLAB_COLOR = "#2b3040";
 const GLOW_BUSY = "#3ee6b5";
 const GLOW_ERROR = "#ff5d5d";
+
+const FALLBACK_SIZE = { x: 0.5, y: 0.5, z: 0.5 };
+const LIVE = new WeakSet<HTMLCanvasElement>();
 
 interface Template {
   root: Object3D;
@@ -208,6 +214,7 @@ function shortestTurn(from: number, to: number): number {
 
 export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reducedMotion: boolean }): Promise<OfficeScene> {
   const reduced = opts.reducedMotion;
+  if (LIVE.has(canvas)) throw new Error("This canvas already hosts an office scene; give each scene its own canvas.");
   const renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "low-power" });
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = NeutralToneMapping;
@@ -223,13 +230,21 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
   const { seats, sofaSpots, chairs } = buildSeats();
   const kinds = new Set<Furniture>(["chair", "monitor", "counter", "rug"]);
   for (const p of [...PROPS, ...WALL_DECOR]) if (p.kind && p.kind !== "character") kinds.add(p.kind);
-  const [furniture, people] = await Promise.all([
-    Promise.all([...kinds].map(async (k) => [k, (await loader.loadAsync(MODEL_URLS[k])).scene] as const)),
+  LIVE.add(canvas);
+  // A missing piece of furniture leaves a gap; missing people mean no office at all.
+  const kindList = [...kinds];
+  const [settled, people] = await Promise.all([
+    Promise.allSettled(kindList.map(async (k) => [k, (await loader.loadAsync(MODEL_URLS[k])).scene] as const)),
     Promise.all(CHARACTER_VARIANTS.map((url) => loader.loadAsync(url))),
   ]).catch((e: unknown) => {
+    LIVE.delete(canvas);
     renderer.dispose();
+    renderer.forceContextLoss();
     throw e;
   });
+  const furniture = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+  const missing = kindList.filter((_, i) => settled[i]?.status === "rejected");
+  if (missing.length) console.warn(`office: left out models that did not load: ${missing.join(", ")}`);
 
   const templates = new Map<Furniture, Template>();
   for (const [k, root] of furniture) {
@@ -303,7 +318,7 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
   scene.add(halo);
 
   // Furniture, one instanced mesh per model part.
-  const placements = buildPlacements((k) => templates.get(k)!.size, chairs);
+  const placements = buildPlacements((k) => templates.get(k)?.size ?? FALLBACK_SIZE, chairs);
   for (const [k, t] of templates) {
     const ps = placements.filter((p) => p.kind === k);
     if (!ps.length) continue;
@@ -350,14 +365,14 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
     });
     const root = new Group();
     root.add(model);
+    // The ring lies on the floor under the figure's tile, even while it sits up on a seat.
     const ring = new Mesh(glowGeo, busyMat);
-    ring.position.y = 0.012;
     ring.renderOrder = 1;
     ring.visible = false;
     const hit = new Mesh(hitGeo, hitMat);
     hit.userData.id = c.id;
-    root.add(ring, hit);
-    scene.add(root);
+    root.add(hit);
+    scene.add(root, ring);
 
     const mixer = new AnimationMixer(model);
     const phase = hashPhase(c.id);
@@ -408,7 +423,7 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
     });
     f.mixer.stopAllAction();
     f.mixer.uncacheRoot(f.mixer.getRoot());
-    scene.remove(f.root);
+    scene.remove(f.root, f.ring);
   }
 
   function tileOf(c: SceneCharacter): Tile {
@@ -423,31 +438,11 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
     return undefined;
   }
 
-  function clipFor(c: SceneCharacter, seat: Seat | undefined, elapsedMs: number, phase: number): string {
-    if (c.moving) return "walk";
-    if (seat) return c.pose === "work" ? "type" : "sit";
-    switch (c.pose) {
-      case "work":
-      case "whiteboard":
-        return "interact-right";
-      case "water_plants":
-        return "pick-up";
-      case "coffee":
-        return elapsedMs < 2500 ? "interact-right" : "idle";
-      case "chat":
-        return (elapsedMs + phase * 1000) % 5200 < 1330 ? "emote-yes" : "idle";
-      case "sit":
-      case "sofa":
-        return "sit";
-      default:
-        return "idle";
-    }
-  }
-
-  function play(f: Figure, name: string, fade: number): void {
+  function play(f: Figure, name: ClipName, fade: number): void {
     if (f.clip === name) return;
     const prev = f.sets.get(f.clip) ?? [];
-    const next = f.sets.get(name) ?? [];
+    // A model without the clip plays idle instead; every shipped person has all of them.
+    const next = f.sets.get(name)?.length ? f.sets.get(name)! : (f.sets.get("idle") ?? []);
     for (const a of prev) {
       if (next.includes(a)) continue;
       if (fade > 0) a.fadeOut(fade);
@@ -561,10 +556,11 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
     for (const f of figures.values()) {
       const c = f.state;
       const seat = seatOf(c);
-      play(f, clipFor(c, seat, now - f.since, f.phase), reduced || !f.placed ? 0 : FADE_S);
+      play(f, clipFor(c.pose, c.moving, seat !== undefined, now - f.since, f.phase), reduced || !f.placed ? 0 : FADE_S);
       setGhost(f, !c.enabled);
       f.ring.visible = c.enabled && (c.busy || c.error);
       f.ring.material = c.error ? errorMat : busyMat;
+      f.ring.position.set(c.worldX, 0.012, c.worldZ);
 
       const wantYaw = seat ? seat.yaw : c.yaw;
       const wantOff = seat ? scratch.set(seat.x - c.worldX, seat.height - SIT_HIP, seat.z - c.worldZ) : scratch.set(0, 0, 0);
@@ -715,6 +711,7 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
     },
     onContextLost(cb) {
       lostCb = cb;
+      if (lost) cb();
     },
     dispose() {
       if (disposed) return;
@@ -744,6 +741,7 @@ export async function createOfficeScene(canvas: HTMLCanvasElement, opts: { reduc
       sun.dispose();
       renderer.dispose();
       if (!lost) renderer.forceContextLoss();
+      LIVE.delete(canvas);
     },
   };
 }

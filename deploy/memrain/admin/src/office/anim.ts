@@ -2,14 +2,13 @@ import type { AmbientKind } from "./map.ts";
 
 export type PoseKind = "walk" | "idle" | "sit" | "work" | AmbientKind;
 
-// Hand-made body motion, in radians and world units. The figures have clips for most
-// of this; the scene reads these for the extra sway and lean the clips do not carry.
+// "type" is the scene's blend of the sit clip's legs with the interact clip's arms.
+export type ClipName = "idle" | "walk" | "sit" | "interact-right" | "pick-up" | "emote-yes" | "type";
+
+// The sway and lean the clips do not carry: world units and radians.
 export interface AnimPose {
   bob: number;
-  armSwing: number;
-  legSwing: number;
   lean: number;
-  seatDrop: number;
 }
 
 const TAU = Math.PI * 2;
@@ -18,28 +17,54 @@ const wave = (t: number, hz: number) => Math.sin(TAU * hz * t);
 export function animPose(kind: PoseKind, t: number): AnimPose {
   const breath = 0.008 * wave(t, 0.25);
   switch (kind) {
-    case "walk": {
-      const s = wave(t, 1.5);
-      return { bob: 0.03 * Math.abs(s), armSwing: -0.5 * s, legSwing: 0.6 * s, lean: 0.05, seatDrop: 0 };
-    }
+    case "walk":
+      return { bob: 0.03 * Math.abs(wave(t, 1.5)), lean: 0.05 };
     case "sit":
-      return { bob: breath, armSwing: 0.05 * wave(t, 0.2), legSwing: 0.8, lean: 0, seatDrop: 0.3 };
+      return { bob: breath, lean: 0 };
     case "sofa":
-      return { bob: breath, armSwing: 0.1, legSwing: 0.8, lean: -0.08, seatDrop: 0.32 };
+      return { bob: breath, lean: -0.08 };
     case "work":
-      return { bob: 0.004 * wave(t, 3), armSwing: 0.25 * wave(t, 3), legSwing: 0, lean: 0.15, seatDrop: 0 };
+      return { bob: 0.004 * wave(t, 3), lean: 0.15 };
     case "whiteboard":
-      return { bob: breath, armSwing: 0.55 + 0.2 * wave(t, 1.2), legSwing: 0, lean: 0.05, seatDrop: 0 };
+      return { bob: breath, lean: 0.05 };
     case "water_plants":
-      return { bob: breath, armSwing: 0.5, legSwing: 0, lean: 0.25 + 0.05 * wave(t, 0.5), seatDrop: 0 };
-    case "coffee":
-      return { bob: breath, armSwing: 0.4 * (1 - Math.cos(TAU * t / 4)) / 2, legSwing: 0, lean: 0, seatDrop: 0 };
+      return { bob: breath, lean: 0.25 + 0.05 * wave(t, 0.5) };
     case "chat":
-      return { bob: 0.01 * Math.abs(wave(t, 0.8)), armSwing: 0.3 * wave(t, 0.8), legSwing: 0, lean: 0.03, seatDrop: 0 };
+      return { bob: 0.01 * Math.abs(wave(t, 0.8)), lean: 0.03 };
     case "wander":
-      return { bob: breath, armSwing: 0.04 * wave(t, 0.3), legSwing: 0, lean: 0.02 * wave(t, 0.15), seatDrop: 0 };
+      return { bob: breath, lean: 0.02 * wave(t, 0.15) };
+    case "coffee":
     case "idle":
-      return { bob: breath, armSwing: 0.03 * wave(t, 0.25), legSwing: 0, lean: 0, seatDrop: 0 };
+      return { bob: breath, lean: 0 };
+  }
+}
+
+const COFFEE_POUR_MS = 2500;
+const CHAT_CYCLE_MS = 5200;
+const CHAT_NOD_MS = 1330;
+
+// Which clip a figure plays. `seated` means it has settled on a chair or sofa;
+// `elapsedMs` counts from the last pose change and `phase` (seconds) staggers people.
+export function clipFor(pose: PoseKind, moving: boolean, seated: boolean, elapsedMs: number, phase: number): ClipName {
+  if (moving) return "walk";
+  if (seated) return pose === "work" ? "type" : "sit";
+  switch (pose) {
+    case "work":
+    case "whiteboard":
+      return "interact-right";
+    case "water_plants":
+      return "pick-up";
+    case "coffee":
+      return elapsedMs < COFFEE_POUR_MS ? "interact-right" : "idle";
+    case "chat":
+      return (elapsedMs + phase * 1000) % CHAT_CYCLE_MS < CHAT_NOD_MS ? "emote-yes" : "idle";
+    case "sit":
+    case "sofa":
+      return "sit";
+    case "walk":
+    case "wander":
+    case "idle":
+      return "idle";
   }
 }
 

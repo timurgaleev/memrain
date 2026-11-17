@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "bun:test";
 import type { FeedEvent, OfficeSnapshot } from "../admin/src/admin-types.ts";
 import {
@@ -18,11 +20,11 @@ import { AMBIENT_SPOTS, CHAT_SPOTS, OFFICE_MAP, PROPS, TILE, WALL_DECOR, officeL
 import { MAX_STEP_MS, stepCharacter, type Pose } from "../admin/src/office/motion.ts";
 import { findPath } from "../admin/src/office/path.ts";
 import { facingToYaw, tileToWorld } from "../admin/src/office/world.ts";
-import { animPose, syncCharacters } from "../admin/src/office/anim.ts";
+import { animPose, clipFor, syncCharacters } from "../admin/src/office/anim.ts";
 import { buildPlacements, buildSeats, floorBoxes } from "../admin/src/office/layout3d.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
 import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
-import { CHARACTER_VARIANTS, MODEL_URLS, resolveModelFile, type ModelId } from "../admin/src/office/assets3d.ts";
+import { CHARACTER_CLIPS, CHARACTER_VARIANTS, MODEL_URLS, resolveModelFile, type ModelId } from "../admin/src/office/assets3d.ts";
 import { modelsOverBudget, staticClosure, threeInStaticClosure, type Manifest } from "../admin/scripts/check-office-chunks.ts";
 
 const NOW = 1_000_000;
@@ -831,25 +833,49 @@ describe("ambient life", () => {
 describe("3D animation helpers", () => {
   const kinds = ["walk", "idle", "sit", "work", "wander", "coffee", "chat", "whiteboard", "water_plants", "sofa"] as const;
 
-  it("keeps every pose inside its bounds", () => {
+  it("keeps the hand-made sway small and deterministic", () => {
     for (const k of kinds) {
       for (const t of [0, 0.25, 0.5, 1, 10]) {
         const p = animPose(k, t);
-        for (const v of Object.values(p)) expect(Number.isFinite(v)).toBe(true);
-        expect(Math.abs(p.armSwing)).toBeLessThanOrEqual(0.8);
-        expect(Math.abs(p.legSwing)).toBeLessThanOrEqual(0.8);
-        expect(p.seatDrop).toBeGreaterThanOrEqual(0);
-        expect(p.seatDrop).toBeLessThanOrEqual(0.35);
+        expect(Object.keys(p).sort()).toEqual(["bob", "lean"]);
+        expect(Math.abs(p.bob)).toBeLessThanOrEqual(0.05);
+        expect(Math.abs(p.lean)).toBeLessThanOrEqual(0.35);
         expect(animPose(k, t)).toEqual(p);
       }
     }
+    expect(animPose("water_plants", 1).lean).toBeGreaterThan(0.15);
   });
 
-  it("lowers a sitting figure and swings a walking one", () => {
-    expect(animPose("sit", 0).seatDrop).toBeGreaterThan(0.2);
-    expect(animPose("sofa", 3).seatDrop).toBeGreaterThan(0.2);
-    expect(animPose("walk", 0.25).legSwing).not.toBe(0);
-    expect(animPose("walk", 0.25).seatDrop).toBe(0);
+  it("maps every pose to a clip the people carry", () => {
+    const carried = new Set<string>(CHARACTER_CLIPS);
+    for (const k of kinds) {
+      for (const moving of [false, true]) {
+        for (const seated of [false, true]) {
+          for (const ms of [0, 1000, 3000, 6000]) {
+            const clip = clipFor(k, moving, seated, ms, 0.4);
+            if (clip === "type") expect(k === "work" && seated && !moving).toBe(true);
+            else expect(carried.has(clip)).toBe(true);
+          }
+        }
+      }
+    }
+    expect(clipFor("idle", true, true, 0, 0)).toBe("walk");
+    expect(clipFor("work", false, true, 0, 0)).toBe("type");
+    expect(clipFor("sofa", false, true, 0, 0)).toBe("sit");
+    expect(clipFor("whiteboard", false, false, 0, 0)).toBe("interact-right");
+    expect(clipFor("coffee", false, false, 500, 0)).toBe("interact-right");
+    expect(clipFor("coffee", false, false, 9000, 0)).toBe("idle");
+    const chat = new Set([0, 700, 1500, 2600, 4000].map((ms) => clipFor("chat", false, false, ms, 0)));
+    expect(chat).toEqual(new Set(["emote-yes", "idle"]));
+  });
+
+  it("ships every clip in every person's model", () => {
+    const dir = join(import.meta.dir, "../admin/src/assets/office3d");
+    for (const url of CHARACTER_VARIANTS) {
+      const gltf = JSON.parse(readFileSync(join(dir, basename(url)), "utf8")) as { animations: { name: string }[] };
+      const names = new Set(gltf.animations.map((a) => a.name));
+      for (const clip of CHARACTER_CLIPS) expect(names.has(clip)).toBe(true);
+    }
   });
 
   it("diffs the people on screen against the wanted ones", () => {
