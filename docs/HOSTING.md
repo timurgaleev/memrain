@@ -12,7 +12,10 @@ container that has `MEMRAIN_TENANT_ID` or `MEMRAIN_CONTROL_URL`
 when `deploy/tenants/*.yml` exists. Without both, every code path and
 `deploy/deploy.sh` behave as before.
 
-A hosting host runs no single-tenant brain. Keep yours on its own stack.
+A hosting host runs no single-tenant brain. Keep yours on its own stack. The
+standard bootstrap starts the single-tenant service, so stop it on a hosting
+host (`docker compose --env-file .env stop memrain`). The tenant deploy refuses
+to run while `deploy-memrain-1` is running.
 
 ## Layout
 
@@ -65,9 +68,22 @@ other, and the isolation smoke proves that on every start (see below).
 ## Setting up a hosting stack
 
 1. Terraform, with the stack's own state and tfvars. Set
-   `enable_hosting = true` and `instance_metadata_hop_limit = 1`; with a hop
-   limit of 1 no container can take the instance role. Size the database with
-   `rds_instance_class`. Run `terraform plan`, review it, then apply.
+   `enable_hosting = true` and `instance_metadata_hop_limit = 1`. With a hop
+   limit of 1 no container can take the instance role. That includes
+   `tenant-ctl` and the tenant containers, which then have no AWS credentials
+   at all. Size the database with `rds_instance_class`. Run `terraform plan`,
+   review it, then apply.
+
+   Two pieces are not built yet:
+   - **Bedrock for tenants.** A tenant container needs its own Bedrock-only
+     credential, which the host puts into its secrets file. Until then a
+     tenant has no Bedrock, and its paid calls stay off
+     (`MEMRAIN_TENANT_DAILY_BUDGET_USD=0`). The smoke checks only that
+     Bedrock's endpoint is reachable, not that a call succeeds.
+   - **Writing a tenant's secrets to Secrets Manager.** The instance role may
+     write only the public bearer secret, and `tenant-ctl` has no credentials
+     under a hop limit of 1. Until a write path exists, provision with the
+     `file` secrets backend on the host (below).
 2. Put the control admin URL (master role, database `memrain_control`) into
    `<prefix>/hosting/control-admin-url`.
 3. On the host, run `bash deploy/secrets/fetch-secrets.sh --control`, and the
@@ -79,11 +95,17 @@ other, and the isolation smoke proves that on every start (see below).
    empty secrets under `<prefix>/tenants/<id>/`.
 2. `memrain tenant create <id> --host <hostname>`, from the `tenant-ctl`
    container. It creates the database, roles and secrets, migrates and creates
-   the owner's invitation.
+   the owner's invitation. Until there is a write path to Secrets Manager (see
+   above), it writes the secrets with the `file` backend into a host
+   directory, and step 4 reads them from there.
 3. `bash scripts/tenant-render.sh <id> --host <hostname>` writes
    `deploy/tenants/<id>.yml`.
 4. `bash deploy/secrets/fetch-secrets.sh --tenant <id>`. It refuses a missing
-   secret and refuses an internal token that another tenant already holds.
+   secret and an internal token that another tenant already holds. It also
+   refuses a URL that is not this tenant's: the database URL must use the
+   role `tenant_<id>_owner` on the database `tenant_<id>`, and the control URL
+   the role `tenant_<id>_ctl` on `memrain_control`. A hyphen in the id may
+   appear as an underscore.
 5. Route `<hostname>` in the tunnel to `http://memrain-<id>:18790`.
 6. `bash deploy/deploy.sh`.
 
@@ -128,8 +150,8 @@ smoke therefore leaves the tenant closed, not open.
 - **Inside the container:** its database and
   `bedrock-runtime.<region>.amazonaws.com:443` answer. No other tenant
   container answers, by name or by IP. The instance metadata service does not
-  answer. Reading another tenant's secret fails, either because there are no
-  credentials or with `AccessDenied`.
+  answer. Reading any other tenant's three secrets, or the control admin URL,
+  fails, either because there are no credentials or with `AccessDenied`.
 
 A pass is recorded with `memrain tenant smoke-record <id>`. `--no-record`
 checks without recording.
@@ -147,3 +169,11 @@ script prints p50, p95 and maximum RSS per brain, the suggested
 `MEMRAIN_TENANT_MEM_LIMIT` (1.5 × the worst p95) and how many tenants fit the
 host. The bench runs keyword-only, without Bedrock. Run it again after a
 release that changes memory use.
+
+A run on Docker Desktop (three brains at the server's limit of about 10
+requests a second each, no errors) measured a steady-state p95 RSS of 85–91 MiB
+per brain and 12 Postgres connections in total. That points to a 192m limit.
+The template keeps 1024m anyway: the bench never runs the maintenance cycle or
+embeddings, and a cycle phase has reached several GB on a single-tenant brain.
+Lower `MEMRAIN_TENANT_MEM_LIMIT` only after a bench on the hosting instance
+that includes a cycle.
