@@ -24,6 +24,7 @@
 #                    (default pgvector/pgvector:pg16)
 #   TEST_PG_TIMEOUT  seconds to wait for readiness (default 60)
 #   TEST_TIMEOUT     per-test timeout in ms passed to bun (default 30000)
+#   TEST_PG_CHUNK    test files per bun process (default 25)
 
 set -euo pipefail
 
@@ -118,8 +119,14 @@ run_pg_tests() {
   [ "${#files[@]}" -gt 0 ] || die "no test file reads MEMRAIN_TEST_POSTGRES_URL"
   log "running ${#files[@]} test file(s): ${files[*]}"
   OUT="$(mktemp -t test-pg-out.XXXXXX)"
-  # pipefail (set above) keeps bun's exit status through tee.
-  (cd "$PKG" && bun test --timeout "$TEST_TIMEOUT" "${files[@]}") 2>&1 | tee "$OUT"
+  # One bun process for every file stalls once the suite passes ~200 files
+  # (each file passes alone), so run them in chunks of TEST_PG_CHUNK files.
+  local chunk="${TEST_PG_CHUNK:-25}" i
+  for ((i = 0; i < ${#files[@]}; i += chunk)); do
+    log "chunk $((i / chunk + 1)): files $((i + 1))-$((i + chunk < ${#files[@]} ? i + chunk : ${#files[@]}))"
+    # pipefail (set above) keeps bun's exit status through tee.
+    (cd "$PKG" && bun test --timeout "$TEST_TIMEOUT" "${files[@]:i:chunk}") 2>&1 | tee -a "$OUT"
+  done
   assert_no_skips "$OUT"
 }
 
