@@ -224,7 +224,7 @@ async function newImportPages(storage: Storage, sessions: readonly TranscriptSes
   if (slugs.length === 0) return 0;
   // scope: operator-only slugs are global, so a live slug anywhere is a rewrite, not a new page; only a count leaves here
   const r = await storage.engine().query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM unnest($1::text[]) AS s(slug)
+    `SELECT count(DISTINCT s.slug)::int AS n FROM unnest($1::text[]) AS s(slug)
       WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.slug = s.slug AND p.deleted_at IS NULL)`,
     [slugs],
   );

@@ -268,7 +268,10 @@ describe("routes", () => {
       expect(((await res.json()) as { error: string }).error).toBe("tenant_limit_reached");
       const none = await storage.engine().query(`SELECT 1 FROM pages WHERE markdown_body LIKE '%peas climb%' OR markdown_body LIKE '%leeks thicken%'`);
       expect(none.rows.length).toBe(0);
-      setTenantPolicySource(async () => ({ status: "active", mode: null, limits: { maxPages: room - 1 }, llmOff: false, isolation: "verified" }));
+      // The same conversation twice in one export writes one page.
+      const twice = [...claudeExport("conv-6", "When do the onions dry?"), ...claudeExport("conv-6", "When do the onions dry?")];
+      expect((await call("erin", "POST", "/app/api/onboarding/import", twice)).status).toBe(200);
+      setTenantPolicySource(async () => ({ status: "active", mode: null, limits: { maxPages: room }, llmOff: false, isolation: "verified" }));
       const again = await call("erin", "POST", "/app/api/onboarding/import", claudeExport("conv-1", "Where does the compost go?"));
       expect(again.status).toBe(200);
       expect(await again.json()).toMatchObject({ parts_written: 0 });
