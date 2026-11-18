@@ -340,6 +340,33 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("reconnects a renamed workspace over OAuth onto its own account by team id", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: SOURCE, kind: "chat", pathPrefix: "chat/" });
+      const w = world();
+      const plain = slackFetch(w);
+      let rename = false;
+      const deps: ConnectDeps = {
+        engine: e, kek, providers: providers(), env: {}, now: () => T0,
+        fetch: async (url, init) => {
+          const res = await plain(url, init);
+          if (!rename || new URL(url).pathname !== "/api/auth.test") return res;
+          const json = await res.json() as Record<string, unknown>;
+          return Response.json({ ...json, team: "Example Team Renamed" }, { headers: res.headers });
+        },
+      };
+      const { account } = await oauthConnect(deps);
+      rename = true;
+      const again = await oauthConnect(deps);
+      expect(again.reconnected).toBe(true);
+      expect(again.account.id).toBe(account.id);
+      expect(again.account.account_label).toBe(SLACK_TEAM.name);
+      expect(await count(e, "SELECT count(*)::int AS n FROM connector_accounts")).toBe(1);
+    } finally { await db.close(); }
+  });
+
   it("refuses an OAuth connect for private channels alone", async () => {
     const db = await open();
     try {

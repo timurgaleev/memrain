@@ -17,8 +17,7 @@
  * and into the vault: errors carry a code, never the key or provider text.
  */
 import { getSource } from "../sources.ts";
-import { cleanLabel, createAccount, findAccount, getAccount, setAccountConfig, setAccountStatus, storeCredential, type ConnectorAccount } from "./accounts.ts";
-import type { Engine } from "../engine/interface.ts";
+import { cleanLabel, createAccount, findAccount, findAccountByUserId, getAccount, setAccountConfig, setAccountStatus, storeCredential, type ConnectorAccount } from "./accounts.ts";
 import { PASTED_TOKEN, PROVIDER_USER_ID } from "./model.ts";
 import type { ConnectDeps } from "./oauth-connect.ts";
 import type { ApiKeyProvider, ConnectorProvider, PastedTokenGrant } from "./providers.ts";
@@ -166,14 +165,4 @@ async function connectPastedToken(deps: ConnectDeps, provider: ConnectorProvider
     await storeCredential(tx, kek, created, tokens, { scopes: grant.scopes, expiresAt: null });
     return { account: created, reconnected: false };
   });
-}
-
-/** The source's account of this provider pinned to the provider's id for the user or workspace, if any. */
-async function findAccountByUserId(engine: Engine, sourceId: string, provider: string, userId: string): Promise<ConnectorAccount | null> {
-  // scope: operator-only connecting is an operator action on a named source
-  const r = await engine.query<{ id: string }>(
-    `SELECT id FROM connector_accounts WHERE source_id = $1 AND provider = $2 AND config->>$3 = $4 ORDER BY created_at LIMIT 1`,
-    [sourceId, provider, PROVIDER_USER_ID, userId],
-  );
-  return r.rows[0] ? getAccount(engine, r.rows[0].id) : null;
 }

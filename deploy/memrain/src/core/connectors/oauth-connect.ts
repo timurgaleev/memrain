@@ -38,6 +38,7 @@ import {
   cleanLabel,
   createAccount,
   findAccount,
+  findAccountByUserId,
   getAccount,
   markNeedsReconnect,
   readCredential,
@@ -691,7 +692,10 @@ async function persistGrant(
   expiresAt: Date | null,
 ): Promise<{ account: ConnectorAccount; reconnected: boolean }> {
   return engine.transaction(async (tx) => {
-    const existing = st.account_id === null ? await findAccount(tx, st.source_id, providerId, label) : await getAccount(tx, st.account_id);
+    // A first connect finds the source's account by the provider's id first: a renamed workspace keeps its row.
+    const userId = typeof config[PROVIDER_USER_ID] === "string" ? config[PROVIDER_USER_ID] : null;
+    const existing = st.account_id !== null ? await getAccount(tx, st.account_id)
+      : (userId === null ? null : await findAccountByUserId(tx, st.source_id, providerId, userId)) ?? await findAccount(tx, st.source_id, providerId, label);
     if (st.account_id !== null && existing === null) throw new ConnectError("account_not_found");
     const stored = existing?.config[PROVIDER_USER_ID];
     // A Reconnect renews its own row: an account signed in under another

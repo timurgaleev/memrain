@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import type { Engine } from "../engine/interface.ts";
 import type { EchoDictionary } from "../secret-scan.ts";
 import { credentialAad, seal, unseal, type Kek } from "./vault.ts";
+import { PROVIDER_USER_ID } from "./model.ts";
 
 export const CONNECTOR_ACCOUNT_STATUSES = ["active", "paused", "needs_reconnect", "revoked", "error"] as const;
 export type ConnectorAccountStatus = (typeof CONNECTOR_ACCOUNT_STATUSES)[number];
@@ -133,6 +134,16 @@ export async function findAccount(
     [sourceId, provider, accountLabel],
   );
   return r.rows[0] ? toAccount(r.rows[0]) : null;
+}
+
+/** The source's account of this provider pinned to the provider's id for the user or workspace, if any. */
+export async function findAccountByUserId(engine: Engine, sourceId: string, provider: string, userId: string): Promise<ConnectorAccount | null> {
+  // scope: operator-only connecting is an operator action on a named source
+  const r = await engine.query<{ id: string }>(
+    `SELECT id FROM connector_accounts WHERE source_id = $1 AND provider = $2 AND config->>$3 = $4 ORDER BY created_at LIMIT 1`,
+    [sourceId, provider, PROVIDER_USER_ID, userId],
+  );
+  return r.rows[0] ? getAccount(engine, r.rows[0].id) : null;
 }
 
 export async function listAccounts(engine: Engine, opts: { sourceId?: string } = {}): Promise<ConnectorAccount[]> {
