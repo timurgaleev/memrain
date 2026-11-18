@@ -33,6 +33,7 @@ cat > "$S/bin/docker" <<'STUB'
 printf '%s\n' "$*" >> "$STUB_DIR/calls.log"
 case "$*" in
   *"tenant-ctl tenant purge-deleted"*) cat "$STUB_DIR/purge.json" ;;
+  *"tenant-ctl tenant list --json --status deleted"*) cat "$STUB_DIR/deleted.json" 2>/dev/null || printf '{"ok":true,"tenants":[]}\n' ;;
 esac
 exit 0
 STUB
@@ -76,6 +77,19 @@ seed acme
 printf '{"ok":true,"purged":["../x"],"skipped":[],"removedExports":{}}\n' > "$S/purge.json"
 run
 if [ "$RC" -ne 0 ] && [ -f "$WS/deploy/tenants/acme.yml" ]; then pass "an invalid id from control is refused and nothing is removed"; else die "invalid id accepted (rc=$RC)"; fi
+
+# A run that stopped after control purged the tenant: the next one, with
+# nothing new to purge, still clears what the host holds of it.
+seed acme
+printf '{"ok":true,"purged":[],"skipped":[],"removedExports":{}}\n' > "$S/purge.json"
+printf '{"ok":true,"tenants":[{"id":"acme","status":"deleted","mode":null,"hostname":"acme.example.test"}]}\n' > "$S/deleted.json"
+run
+if [ "$RC" -eq 0 ] && [ -z "$(left acme)" ] && grep -q '^rm -f memrain-acme$' "$S/calls.log"; then
+  pass "a rerun clears a tenant purged earlier whose host files were left"
+else
+  die "rerun left: $(left acme | tr '\n' ' ') rc=$RC"; sed 's/^/      /' "$WS/out.log"
+fi
+rm -f "$S/deleted.json"
 
 printf 'not json\n' > "$S/purge.json"
 run

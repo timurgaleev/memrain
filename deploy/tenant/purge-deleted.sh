@@ -7,7 +7,8 @@
 # `tenant purge-deleted` (in tenant-ctl) drops the database and roles of each
 # tenant with a good receipt under its current fence, removes its secrets
 # through the secret writer and every export copy under /provisioned. This
-# script then removes what only the host holds, for each purged id exactly:
+# script then removes what only the host holds, for each id exactly that
+# control now holds as deleted (this run's and any earlier run left behind):
 # the container memrain-<id>, deploy/tenants/<id>.yml and <id>.*,
 # deploy/.secrets/tenants/<id>.env, deploy/.bedrock/<id>/, and
 # deploy/.secrets/provisioned/<id>/ and <id>.invite; then it refreshes
@@ -26,7 +27,14 @@ if ! OUT="$(hosting_ctl tenant purge-deleted "$@")" \
   echo "FAIL: tenant purge-deleted did not answer as expected; nothing on the host was removed" >&2
   exit 1
 fi
-IDS="$(printf '%s' "$OUT" | jq -r '.purged[]')"
+# Every tenant control holds as deleted, not only this run's: a run that
+# stopped after control purged a tenant leaves its host files for the next.
+if ! DELETED="$(hosting_ctl tenant list --json --status deleted)" \
+   || ! printf '%s' "$DELETED" | jq -e '.ok == true and (.tenants | type == "array")' >/dev/null 2>&1; then
+  echo "FAIL: cannot list the deleted tenants; nothing on the host was removed" >&2
+  exit 1
+fi
+IDS="$( { printf '%s' "$OUT" | jq -r '.purged[]'; printf '%s' "$DELETED" | jq -r '.tenants[].id'; } | sort -u)"
 
 # Every id is checked before anything is removed.
 PURGED=()
@@ -42,7 +50,7 @@ for id in ${PURGED[@]+"${PURGED[@]}"}; do
   rm -f "${TENANTS_DIR}/${id}.yml" "${TENANTS_DIR}/${id}".*
   rm -f "${SECRETS_DIR}/tenants/${id}.env" "${SECRETS_DIR}/provisioned/${id}.invite"
   rm -rf "${DEPLOY_DIR}/.bedrock/${id}" "${SECRETS_DIR}/provisioned/${id}"
-  echo "ok ${id}: purged; container, files and secrets removed from the host"
+  echo "ok ${id}: deleted; container, files and secrets removed from the host"
 done
 
 if [ "${#PURGED[@]}" -gt 0 ]; then

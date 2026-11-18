@@ -213,8 +213,10 @@ owner can read.
    table by table, and records the receipt and a seven-day window in one
    transaction. It prints the export's path (on the host,
    `deploy/.secrets/provisioned/exports/<id>`) and its SHA-256.
-2. Take the export off the host within the window and check its SHA-256. It
-   is the customer's data; the host keeps it only until the purge.
+2. Copy the export off the host within the window and check its SHA-256. It
+   is the customer's data; the host keeps it only until the purge. Copy it,
+   do not move or open it in place: the purge checks the host copy against its
+   receipt and skips a tenant whose export is missing or changed.
 3. If the delete stopped half-way, run it again with `--resume`. It finishes
    under the fence it already holds; on a scheduled delete it checks the
    receipt against the files again.
@@ -223,7 +225,8 @@ owner can read.
 5. After the window, `bash deploy/tenant/purge-deleted.sh`. It drops the
    database and roles and removes the tenant's secrets and every export copy
    on the host. It then removes the container, the rendered file, the secrets
-   file, the Bedrock credentials and the network. With `--secrets aws` the
+   file, the Bedrock credentials and the network of every tenant control holds
+   as deleted, so a run that stopped half-way is finished by the next. With `--secrets aws` the
    secrets get a tombstone value instead, and the output reminds you to drop
    the id from `hosting_tenants` and apply, which deletes the secrets.
 
