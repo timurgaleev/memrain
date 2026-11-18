@@ -71,7 +71,7 @@ async function save(storage: Storage, owner: ChatOwner, messageId: number, now: 
   if (!found) return refuse(404, "not_found");
   const { message, question } = found;
   if (message.saved_slug) return { ok: true, slug: message.saved_slug };
-  if ((message.status !== "ok" && message.status !== "refused") || !message.content.trim()) return refuse(409, "not_saveable");
+  if (message.status !== "ok" || !message.content.trim()) return refuse(409, "not_saveable");
   const base = `chats/${now.toISOString().slice(0, 10)}-${slugWords(question ?? message.content)}`;
   const title = (question ?? "Chat answer").replace(/\s+/g, " ").trim().slice(0, 200);
   const body = pageBody(question, message.content, message.citations);

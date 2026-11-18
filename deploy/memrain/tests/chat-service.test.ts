@@ -19,7 +19,7 @@ import { runThink } from "../src/core/synthesis/think.ts";
 import type { SonnetCallInput, SonnetFn } from "../src/core/llm/sonnet.ts";
 import { deterministicEmbedQuery } from "./det-embed.ts";
 import { ChatError, operatorOwner, runChatTurn, type ChatCtx, type ChatStreamEvent } from "../src/core/chat/chat-service.ts";
-import { getChatThread, listChatThreads, threadMessages } from "../src/core/chat/store.ts";
+import { confirmAnswer, getChatThread, listChatThreads, threadMessages } from "../src/core/chat/store.ts";
 
 setDefaultTimeout(60_000);
 
@@ -250,6 +250,32 @@ describe("chat turn (P5-C1)", () => {
     const { result } = await turn(ctx(s.fn), "what is the capital of nowhere?");
     expect(result.status).toBe("refused");
     expect(result.citations).toEqual([]);
+  });
+
+  it("a turn stopped while it is still gathering ends at once and releases its hold", async () => {
+    const abort = new AbortController();
+    const s = stub(() => answer([]));
+    const gathering = () => new Promise<never>(() => {});
+    const run = runChatTurn(ctx(s.fn, { signal: abort.signal, pagesFn: gathering }), { message: "what is the garden plan?" }, (e) => {
+      if (e.event === "trace" && (e.data as { step: string }).step === "intent") setTimeout(() => abort.abort(), 20);
+    });
+    const outcome = await Promise.race([run, new Promise<"still running">(r => setTimeout(() => r("still running"), 3000))]);
+    expect(outcome).not.toBe("still running");
+    expect((outcome as { status: string }).status).toBe("error");
+    expect(s.calls).toHaveLength(0);
+    const pending = await storage.engine().query<{ n: number }>(`SELECT count(*)::int AS n FROM mcp_spend_reservations WHERE status = 'pending'`);
+    expect(pending.rows[0]!.n).toBe(0);
+  });
+
+  it("with confirmLater a finished answer is stored unconfirmed until the caller confirms it", async () => {
+    await page("notes/garden", "The garden plan is to plant tomatoes in May.");
+    const s = stub(() => answer(["page://notes/garden"]));
+    const { result } = await turn(ctx(s.fn, { confirmLater: true }), "what is the garden plan?");
+    expect(result.status).toBe("ok");
+    const stored = async () => (await threadMessages(storage.engine(), operatorOwner(), result.thread_id))!.at(-1)!.status;
+    expect(await stored()).toBe("error");
+    await confirmAnswer(storage.engine(), result.message_id);
+    expect(await stored()).toBe("ok");
   });
 
   it("an empty or oversized message is invalid", async () => {

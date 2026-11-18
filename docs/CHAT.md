@@ -55,12 +55,14 @@ Chat history is personal data.
 - `memrain erase chat --owner operator` shows what one owner has; add
   `--apply` to delete it.
 - `memrain export` writes conversations to `_chat/<thread>.json` beside the
-  pages; `--owner KEY` narrows them to one owner.
+  pages; `--owner KEY` narrows them to one owner. An export scoped with
+  `--source` leaves out the operator's conversations, which read the whole
+  brain, unless it also names `--owner operator`.
 - The progress trace stores counts and page names only, never page text.
 
 ## Saving an answer
 
-**Save as page** writes the answer to `chats/<date>-<question>` through the
+**Save as page** (offered for a confirmed `ok` answer only) writes the answer to `chats/<date>-<question>` through the
 normal page write: the secret scanner, the write gate and the grant all apply.
 The page quotes the question and links each source with a wikilink.
 
@@ -83,4 +85,7 @@ origin.
 `rate_limited`, `network`, `provider_error`, `budget_exhausted`,
 `chat_disabled`, `invalid_params`, `db_busy`. A send refused before any work
 (an empty question, an unknown model or conversation) is a 400 whose body is
-the `error` and `done` events.
+the `error` and `done` events. An answer is stored as `ok` only once `done` has been
+handed to the client; if the stream closes first, the stored copy stays
+`error` and cannot be saved. `default` is `null` when no configured
+model has a price.

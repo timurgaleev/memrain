@@ -11,7 +11,9 @@
  *
  * The stream sends `trace` events while the answer is prepared, then one
  * `answer`, then `done`; a turn that cannot produce an answer sends `error`
- * (closed code vocabulary) then `done`. A send the server refuses before any
+ * (closed code vocabulary) then `done`. An answer is stored `ok` (and so
+ * saveable) only once `done` was handed to an open stream; until then, and for
+ * good if the client left or the process died first, it is stored `error`. A send the server refuses before any
  * work (bad body, unknown model or thread) is a 400 whose body is that same
  * error/done pair. A thread that is not the caller's is a 404, never a 403.
  *
@@ -24,9 +26,9 @@ import type { SonnetFn } from "../core/llm/sonnet.ts";
 import { RateLimiter } from "../mcp/rate_limit.ts";
 import { readBodyWithCap } from "./body_limit.ts";
 import { chatConfig } from "../core/chat/config.ts";
-import { CHAT_MESSAGE_MAX_CHARS, operatorOwner, runChatTurn, type ChatOwner, type ChatStreamEvent } from "../core/chat/chat-service.ts";
+import { CHAT_MESSAGE_MAX_CHARS, operatorOwner, runChatTurn, type ChatAnswer, type ChatOwner, type ChatStreamEvent } from "../core/chat/chat-service.ts";
 import { ChatError, chatErrorMessage, type ChatErrorCode } from "../core/chat/failures.ts";
-import { deleteChatThread, getChatThread, isThreadId, listChatThreads, threadMessages } from "../core/chat/store.ts";
+import { deleteChatThread, getChatThread, isThreadId, listChatThreads, confirmAnswer, threadMessages } from "../core/chat/store.ts";
 import { saveAnswerAsPage } from "../core/chat/save.ts";
 
 export interface ChatApiDeps {
@@ -113,9 +115,10 @@ function streamTurn(req: Request, deps: ChatApiDeps, owner: ChatOwner, send: Sen
   const onRequestAbort = () => stop.abort();
   req.signal.addEventListener("abort", onRequestAbort, { once: true });
   let ping: ReturnType<typeof setInterval> | undefined;
+  let open = true;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      let open = true;
+      let answer: ChatAnswer | null = null;
       const write = (bytes: Uint8Array) => {
         if (!open) return;
         try {
@@ -133,21 +136,33 @@ function streamTurn(req: Request, deps: ChatApiDeps, owner: ChatOwner, send: Sen
           storage: deps.storage,
           owner,
           signal: stop.signal,
+          confirmLater: true,
           ...(deps.chatModel ? { sonnetFn: deps.chatModel, embedFn: null } : {}),
           ...(deps.embedQuery ? { embedQuery: deps.embedQuery } : {}),
         },
         send,
         onEvent,
       )
+        .then((a) => {
+          answer = a;
+        })
         .catch((e: unknown) => {
           const code: ChatErrorCode = e instanceof ChatError ? e.code : "provider_error";
           if (!(e instanceof ChatError)) console.error("[chat] turn failed:", e instanceof Error ? e.message : e);
           write(frame("error", { code, message: e instanceof ChatError ? e.message : chatErrorMessage(code) }));
         })
-        .finally(() => {
+        .finally(async () => {
           clearInterval(ping);
           req.signal.removeEventListener("abort", onRequestAbort);
           write(frame("done", {}));
+          const a = answer as ChatAnswer | null;
+          if (open && !stop.signal.aborted && a?.status === "ok") {
+            // Confirmed before the stream closes, so a reader that saves on
+            // the close finds the answer saveable.
+            await confirmAnswer(deps.storage.engine(), a.message_id).catch((e: unknown) => {
+              console.error("[chat] could not confirm an answer:", e instanceof Error ? e.message : e);
+            });
+          }
           if (open) {
             open = false;
             try {
@@ -160,6 +175,7 @@ function streamTurn(req: Request, deps: ChatApiDeps, owner: ChatOwner, send: Sen
     },
     cancel() {
       // The tab closed or the user pressed stop: the turn releases its hold.
+      open = false;
       clearInterval(ping);
       stop.abort();
     },
@@ -187,7 +203,7 @@ export async function handleChatApi(req: Request, url: URL, deps: ChatApiDeps): 
     const cfg = chatConfig();
     return json({
       enabled: cfg.enabled,
-      default: cfg.defaultModel ?? "",
+      default: cfg.defaultModel,
       answer_cap_usd: cfg.answerCapUsd,
       models: cfg.models,
       ...(cfg.disabledReason ? { disabled_reason: cfg.disabledReason } : {}),

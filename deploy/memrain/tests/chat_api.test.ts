@@ -206,4 +206,80 @@ describe("admin chat API", () => {
     while ((await pending()) > 0 && Date.now() < deadline) await new Promise(r => setTimeout(r, 25));
     expect(await pending()).toBe(0);
   });
+
+  it("a refused answer cannot be saved as a page", async () => {
+    chatOn();
+    const old = reply;
+    reply = () => JSON.stringify({ answer: "Nothing in memory says where the lemons go.", citations: [], gaps: [] });
+    try {
+      const evs = await events(await call(req("POST", "/admin/api/chat", { message: "where do the lemons go?" })));
+      const a = evs.find(e => e.event === "answer")!;
+      expect(a.data.status).toBe("refused");
+      const res = await call(req("POST", `/admin/api/chat/messages/${String(a.data.message_id)}/save`, {}));
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: "not_saveable" });
+    } finally {
+      reply = old;
+    }
+  });
+
+  it("names no default model when no configured model has a price", async () => {
+    chatOn();
+    process.env["MEMRAIN_CHAT_MODELS"] = "vendor.unpriced-v1";
+    const body = await (await call(req("GET", "/admin/api/chat/models"))).json() as Record<string, unknown>;
+    expect(body).toMatchObject({ enabled: false, default: null, models: [] });
+  });
+
+  it("an answer whose stream closed before done is not stored as a finished answer", async () => {
+    chatOn();
+    // Hold the assistant row's insert until the client has gone, so the answer
+    // is written after the stream closed and done can never reach the client.
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    const realEngine = storage.engine();
+    const gatedTx = (tx: ReturnType<Storage["engine"]>) => new Proxy(tx, {
+      get(t, k) {
+        const v = Reflect.get(t, k, t) as unknown;
+        if (k !== "query" || typeof v !== "function") return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+        return async (sql: string, params?: unknown[]) => {
+          if (sql.includes("INSERT INTO chat_messages") && params?.[1] === "assistant") await gate;
+          return (v as (s: string, p?: unknown[]) => unknown).call(t, sql, params);
+        };
+      },
+    });
+    const engine = new Proxy(realEngine, {
+      get(t, k) {
+        const v = Reflect.get(t, k, t) as unknown;
+        if (k === "transaction") {
+          return <T>(fn: (tx: ReturnType<Storage["engine"]>) => Promise<T>) =>
+            realEngine.transaction(tx => fn(gatedTx(tx as ReturnType<Storage["engine"]>)));
+        }
+        return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+    const gatedStorage = new Proxy(storage, {
+      get(t, k) {
+        if (k === "engine") return () => engine;
+        const v = Reflect.get(t, k, t) as unknown;
+        return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+    const res = await call(req("POST", "/admin/api/chat", { message: "where do the tomatoes go, again?" }), deps({ storage: gatedStorage }));
+    const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+    let seen = "";
+    while (!seen.includes("\"step\":\"settle\"")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += value;
+    }
+    expect(seen).toContain("\"step\":\"settle\"");
+    await reader.cancel();
+    release();
+    const status = async () => (await realEngine.query<{ status: string | null }>(
+      `SELECT m.status FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
+        WHERE t.title = 'where do the tomatoes go, again?' AND m.role = 'assistant'`)).rows[0]?.status ?? null;
+    const deadline = Date.now() + 5000;
+    while (((await status()) === null || (await status()) === "ok") && Date.now() < deadline) await new Promise(r => setTimeout(r, 25));
+    expect(await status()).toBe("error");
+  });
 });

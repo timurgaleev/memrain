@@ -6,6 +6,9 @@
 import { randomUUID } from "node:crypto";
 import type { Engine } from "../engine/interface.ts";
 
+/** The operator's owner key: its chat reads the whole brain. */
+export const OPERATOR_CHAT_OWNER = "operator";
+
 /** Who a conversation belongs to and what it may read and spend. */
 export interface ChatOwner {
   /** `operator` today; a member id once members can sign in. */
@@ -225,7 +228,7 @@ export async function appendChatMessage(engine: Engine, threadId: string, m: New
   return engine.transaction(async (tx) => {
     const r = await tx.query<{ id: number | string }>(
       `INSERT INTO chat_messages (thread_id, role, content, status, citations, gaps, model, cost_usd, input_tokens, output_tokens, trace)
-       VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11::jsonb)
+       VALUES ($1::uuid, $2, $3, $4, $5::text::jsonb, $6::text::jsonb, $7, $8, $9, $10, $11::text::jsonb)
        RETURNING id`,
       [
         threadId,
@@ -274,6 +277,19 @@ export async function ownedAnswer(
   );
   const row = r.rows[0];
   return row ? { message: toMessage(row), threadId: row.thread_id, question: row.question } : null;
+}
+
+/**
+ * A finished answer the stream stores before the client has it is kept as
+ * `error` until `done` reaches an open stream; this then marks it `ok`. A
+ * client that left, or a process that died, before that leaves it `error`, so
+ * an answer nobody saw confirmed can never be saved.
+ */
+export async function confirmAnswer(engine: Engine, messageId: number): Promise<void> {
+  await engine.query(
+    `UPDATE chat_messages SET status = 'ok' WHERE id = $1 AND role = 'assistant' AND status = 'error'`,
+    [messageId],
+  );
 }
 
 export async function setSavedSlug(engine: Engine, messageId: number, slug: string): Promise<void> {
@@ -364,6 +380,11 @@ export async function exportChatThreads(
   if (filter.ownerKey !== undefined) {
     params.push(filter.ownerKey);
     where.push(`owner_key = $${params.length}`);
+  } else if (filter.sourceIds !== undefined) {
+    // The operator's threads read the whole brain, so a source-scoped export
+    // carries them only when it names the operator.
+    params.push(OPERATOR_CHAT_OWNER);
+    where.push(`owner_key <> $${params.length}`);
   }
   // scope: operator-only the operator's export command; the filter narrows by source and owner
   const threads = await engine.query<{ id: string; title: string | null; created_at: unknown; updated_at: unknown; owner_key: string; source_id: string }>(

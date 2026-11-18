@@ -47,6 +47,7 @@ import {
   appendChatMessage,
   createChatThread,
   getChatThread,
+  OPERATOR_CHAT_OWNER,
   recentTurns,
   threadTitle,
   type ChatCitation,
@@ -65,7 +66,7 @@ const DEFAULT_TURN_TIMEOUT_MS = 120_000;
 
 /** The operator's own chat: whole-brain reads, booked under its own spend id. */
 export function operatorOwner(): ChatOwner {
-  return { key: "operator", sourceId: "default", spendId: "memrain_chat_operator" };
+  return { key: OPERATOR_CHAT_OWNER, sourceId: "default", spendId: "memrain_chat_operator" };
 }
 
 export interface ChatCtx {
@@ -73,6 +74,11 @@ export interface ChatCtx {
   owner: ChatOwner;
   /** Fires when the client goes away or the caller stops the turn. */
   signal?: AbortSignal;
+  /**
+   * Store a finished answer as `error` until the caller confirms it with
+   * confirmAnswer once the client has it (the HTTP stream, after `done`).
+   */
+  confirmLater?: boolean;
   /** Environment the switches and limits are read from (default process.env). */
   env?: NodeJS.ProcessEnv;
   /** Test seam: a fake model for both the condense and the answer call. */
@@ -269,7 +275,7 @@ async function turn(
     const id = await db(() => appendChatMessage(engine, threadId!, {
       role: "assistant",
       content: a.answer,
-      status: a.status,
+      status: ctx.confirmLater && a.status === "ok" ? "error" : a.status,
       citations: a.citations,
       gaps: a.gaps,
       model: a.model,
@@ -369,10 +375,21 @@ async function turn(
         onTrace: (e: ThinkTraceEvent) => { if (e.step !== "settle") emitTrace(e); },
       });
     };
-    const result = await runInWallet(
-      { role: "chat", requiresBrainCap: true, callCapUsd: answerCap, runCapUsd: answerCap },
-      () => runWithSpendClient({ clientId: owner.spendId, capUsd: null }, run),
-    );
+    // Stop and the timeout end the turn at once, even mid-gather: the run left
+    // behind can no longer start a paid call (guard), and the hold is released
+    // below instead of waiting for retrieval to finish.
+    let result: ThinkResult | null = null;
+    try {
+      result = await untilAborted(
+        runInWallet(
+          { role: "chat", requiresBrainCap: true, callCapUsd: answerCap, runCapUsd: answerCap },
+          () => runWithSpendClient({ clientId: owner.spendId, capUsd: null }, run),
+        ),
+        stop.signal,
+      );
+    } catch (e) {
+      if (!(e instanceof TurnStopped)) throw e;
+    }
     if (result) spentUsd += result.spentUsd;
 
     if (stop.signal.aborted && !timedOut) {

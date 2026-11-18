@@ -110,4 +110,15 @@ describe("chat erase and export", () => {
     expect(exported).toMatchObject({ id: mine, owner_key: "member-a", title: "mine" });
     expect(exported.messages.map((m: { role: string }) => m.role)).toEqual(["user", "assistant"]);
   });
+
+  it("a source-scoped export leaves out the operator's threads, which read the whole brain", async () => {
+    const op = await threadAged(owner("operator"), "whole brain", 1);
+    const member = await threadAged(owner("member-a"), "mine", 1);
+    const scoped = join(tmp, "scoped");
+    await silently(() => runExport({ dir: scoped, storage, sourceIds: ["default"] }));
+    expect(readdirSync(join(scoped, "_chat"))).toEqual([`${member}.json`]);
+    const asked = join(tmp, "asked");
+    await silently(() => runExport({ dir: asked, storage, chatOwner: "operator", sourceIds: ["default"] }));
+    expect(readdirSync(join(asked, "_chat"))).toEqual([`${op}.json`]);
+  });
 });
