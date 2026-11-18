@@ -360,6 +360,8 @@ function printUsage(): void {
   console.log("  member list [--all] | show <id>        the people of a team brain");
   console.log("  member add <id> [--name N] [--email E] [--personal-source SRC]");
   console.log("  member disable|enable|remove <id>   disable stops every key bound to the member");
+  console.log("  member remove <id> --erase-personal-source [--apply --out DIR]   export, then erase the member's own source");
+  console.log("  member invite <id> [--ttl 72h]      one-time /app sign-in link (needs MEMRAIN_PUBLIC_URL)");
   console.log("  member bind <id> --token NAME|--client ID|--enrollment ID");
   console.log("  member unbind --token NAME|--client ID|--enrollment ID");
   console.log("  group list | show <id> | add <id> [--name N] | remove <id>");
@@ -1995,6 +1997,12 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (client !== undefined) opts.client = client;
       const enrollment = values.get("--enrollment");
       if (enrollment !== undefined) opts.enrollment = enrollment;
+      const ttl = values.get("--ttl");
+      if (ttl !== undefined) opts.ttl = ttl;
+      if (flags.has("--erase-personal-source")) opts.erasePersonalSource = true;
+      if (flags.has("--apply")) opts.apply = true;
+      const out = values.get("--out");
+      if (out !== undefined) opts.out = out;
       return await runMember(opts);
     }
     case "group": {
