@@ -17,6 +17,7 @@ import { demoLoaded, loadDemo, removeDemo } from "../core/demo-brain.ts";
 import { transcriptPushMaxBytes } from "../core/transcripts/push.ts";
 import { readBodyWithCap } from "./body_limit.ts";
 import type { AppDeps } from "./app.ts";
+import { OperationError } from "../core/operation-error.ts";
 
 const PASTE_BODY_CAP = 1024 * 1024;
 
@@ -73,6 +74,7 @@ export async function handleAppOnboarding(req: Request, url: URL, session: Membe
     }
   } catch (e) {
     if (e instanceof OnboardingError) return json({ error: e.code, message: e.message, ...e.extra }, e.status);
+    if (e instanceof OperationError && e.code === "tenant_limit_reached") return json({ error: e.code, message: e.message }, 409);
     console.error("[app] onboarding failed:", e instanceof Error ? e.message : e);
     return json({ error: "internal_error" }, 500);
   }

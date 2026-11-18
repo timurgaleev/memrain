@@ -24,6 +24,7 @@ import { priceFor, runWithSpendClient } from "./budget.ts";
 import { slugWords } from "./chat/save.ts";
 import { parseTranscriptExport } from "./transcripts/detect.ts";
 import { ingestSessions } from "./transcripts/ingest.ts";
+import { assertHostedPageRoom } from "./tenant-guard.ts";
 
 export type OnboardingStep = "connect" | "fill" | "ask" | "done";
 const STEPS: readonly OnboardingStep[] = ["connect", "fill", "ask", "done"];
@@ -232,6 +233,7 @@ export async function importExport(storage: Storage, g: OnboardingGrant, bytes: 
       estimate_usd: estimate, cap_usd: cap, sessions: parsed.sessions.length,
     });
   }
+  await assertHostedPageRoom(storage.engine());
   const result = await runWithSpendClient({ clientId: g.spendId }, () => ingestSessions(storage, parsed.sessions, {
     sourceId: g.sourceId, ref: `app:${g.memberId}`, remote: true, trustTier: "member",
   }));

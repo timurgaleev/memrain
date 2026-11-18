@@ -5,7 +5,9 @@
  *     (from the keyword index);
  *   - at the plan's page limit, page_put is refused with tenant_limit_reached
  *     while page_get and editing an existing page still work;
- *   - at the plan's member limit, adding a member is refused.
+ *   - at the plan's member limit, adding a member is refused;
+ *   - the /app demo load, which writes pages outside dispatch, honours the
+ *     page limit too.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -20,6 +22,8 @@ import { setSpendLedgerEngine } from "../src/core/budget.ts";
 import { HOSTING_ENV, setTenantPolicySource, type TenantPolicy } from "../src/control/contract.ts";
 import { setHostingSpendBackend } from "../src/control/hosting-spend.ts";
 import { addMember } from "../src/core/members.ts";
+import { registerSource } from "../src/core/sources.ts";
+import { loadDemo } from "../src/core/demo-brain.ts";
 
 const active: TenantPolicy = { status: "active", mode: null, limits: {}, llmOff: false, isolation: "verified" };
 
@@ -76,6 +80,19 @@ describe("hosted dispatch", () => {
     expect(get.isError ?? false).toBe(false);
     const append = await dispatchTool(storage, { name: "page_append", arguments: { slug: "notes/garden", markdown: "Also beans." } });
     expect(text(append)).not.toContain("tenant_limit_reached");
+    // Rewriting a page that exists adds no page, so the limit does not apply.
+    const rewrite = await dispatchTool(storage, { name: "page_put", arguments: { slug: "notes/garden", markdown_body: "Plant tomatoes in June.", title: "Garden" } });
+    expect(text(rewrite)).not.toContain("tenant_limit_reached");
+    expect(rewrite.isError ?? false).toBe(false);
+  });
+
+  it("at the page limit the demo memory is not loaded", async () => {
+    setTenantPolicySource(async () => ({ ...active, limits: { maxPages: 1 } }));
+    await registerSource(storage.engine(), { id: "person-carol", kind: "other", pathPrefix: "/person-carol" });
+    await addMember(storage.engine(), "carol", { personalSource: "person-carol" }, { actor: "operator", via: "cli" });
+    await expect(loadDemo(storage, "carol", { embedFn: deterministicEmbedQuery })).rejects.toMatchObject({ code: "tenant_limit_reached" });
+    const n = await storage.engine().query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE deleted_at IS NULL`);
+    expect(n.rows[0]!.n).toBe(1);
   });
 
   it("at the member limit a new member is refused", async () => {

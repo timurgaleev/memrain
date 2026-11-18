@@ -159,16 +159,37 @@ export async function assertMemberRoom(engine: Pick<Engine, "query">): Promise<v
 }
 
 /**
+ * Throws `tenant_limit_reached` when a hosted brain is at its plan's page
+ * limit. For the paths that write pages outside MCP dispatch (the /app import
+ * and demo); outside hosting mode it does nothing.
+ */
+export async function assertHostedPageRoom(engine: Pick<Engine, "query">): Promise<void> {
+  if (hostingMode() === null) return;
+  await assertPageRoom(engine, (await hostedPolicy())?.limits.maxPages);
+}
+
+/** A page_put that rewrites a live page adds none, so the page limit does not stop it. */
+async function rewritesLivePage(engine: Pick<Engine, "query">, name: string, args: Record<string, unknown> | undefined): Promise<boolean> {
+  const slug = args?.["slug"];
+  if (name !== "page_put" || typeof slug !== "string") return false;
+  const r = await engine.query(`SELECT 1 FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [slug]);
+  return r.rows.length > 0;
+}
+
+/**
  * Throws when this tenant may not run the MCP operation `name` now: held, or
  * (given the brain's engine, opened only then) an operation that adds a page
  * at the page limit.
  */
-export async function assertTenantAllows(name: string, engine?: () => Pick<Engine, "query">): Promise<void> {
+export async function assertTenantAllows(name: string, engine?: () => Pick<Engine, "query">, args?: Record<string, unknown>): Promise<void> {
   if (hostingMode() === null) return;
   const policy = await hostedPolicy();
   const d = decideOperation(policy, name);
   if (d.allow) {
-    if (engine && policy && PAGE_ADDING_OPERATIONS.has(name)) await assertPageRoom(engine(), policy.limits.maxPages);
+    if (engine && policy && policy.limits.maxPages !== undefined && PAGE_ADDING_OPERATIONS.has(name)
+      && !(await rewritesLivePage(engine(), name, args))) {
+      await assertPageRoom(engine(), policy.limits.maxPages);
+    }
     return;
   }
   if (d.error === "tenant_suspended") {

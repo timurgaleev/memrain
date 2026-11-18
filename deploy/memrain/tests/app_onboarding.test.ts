@@ -24,12 +24,13 @@ import { createChatThread } from "../src/core/chat/store.ts";
 import { mintMemberInvite, openMemberInvite } from "../src/core/member-invites.ts";
 import { refreshOnboarding, importEstimateUsd } from "../src/core/onboarding.ts";
 import { handleApp } from "../src/http/app.ts";
+import { setTenantPolicySource } from "../src/control/contract.ts";
 
 setDefaultTimeout(60_000);
 
 const ORIGIN = "https://acme.example.test";
 const OPS: MemberActor = { actor: "ops", via: "cli" };
-const ENV_KEYS = ["MEMRAIN_APP", "MEMRAIN_KEYWORD_ONLY", "MEMRAIN_ONBOARD_IMPORT_MAX_USD"] as const;
+const ENV_KEYS = ["MEMRAIN_APP", "MEMRAIN_KEYWORD_ONLY", "MEMRAIN_ONBOARD_IMPORT_MAX_USD", "MEMRAIN_TENANT_ID", "MEMRAIN_CONTROL_URL"] as const;
 const saved = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]));
 
 let tmp: string;
@@ -237,6 +238,21 @@ describe("routes", () => {
     const none = await storage.engine().query(`SELECT 1 FROM pages WHERE markdown_body LIKE '%carrots%'`);
     expect(none.rows.length).toBe(0);
     expect((await call("erin", "POST", "/app/api/onboarding/import?confirm=1", file)).status).toBe(200);
+  });
+
+  it("on a hosted brain at its plan's page limit, refuses an import and writes nothing", async () => {
+    process.env["MEMRAIN_TENANT_ID"] = "acme";
+    process.env["MEMRAIN_CONTROL_URL"] = "set-by-the-test-source";
+    setTenantPolicySource(async () => ({ status: "active", mode: null, limits: { maxPages: 1 }, llmOff: false, isolation: "verified" }));
+    try {
+      const res = await call("erin", "POST", "/app/api/onboarding/import", claudeExport("conv-3", "When do the beans flower?"));
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toBe("tenant_limit_reached");
+      const none = await storage.engine().query(`SELECT 1 FROM pages WHERE markdown_body LIKE '%beans flower%'`);
+      expect(none.rows.length).toBe(0);
+    } finally {
+      setTenantPolicySource(null);
+    }
   });
 
   it("estimates an import from its text, and a bigger one costs more", () => {

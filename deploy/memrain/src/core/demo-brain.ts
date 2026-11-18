@@ -24,6 +24,7 @@ import { OnboardingError } from "./onboarding.ts";
 import { writeMemberAudit, type MemberActor } from "./members.ts";
 import { leftovers } from "./pages-purge.ts";
 import { benchCorpusFiles } from "../eval/bench/harness.ts";
+import { assertHostedPageRoom } from "./tenant-guard.ts";
 
 const ID_MAX = 63;
 const BENCH_PREFIX = "/bench/vault/";
@@ -70,6 +71,7 @@ export async function loadDemo(storage: Storage, memberId: string, opts: { embed
   if (taken.rows.length > 0) {
     throw new OnboardingError("demo_unavailable", 409, "The demo cannot be loaded: its name is already in use on this brain. Ask the brain operator.");
   }
+  await assertHostedPageRoom(engine);
   // The source, the group and the grant commit together, so the demo is
   // either this member's or not there at all.
   await engine.transaction(async (tx) => {
