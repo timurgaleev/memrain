@@ -31,6 +31,7 @@ import { CHAT_MESSAGE_MAX_CHARS, operatorOwner, runChatTurn, type ChatAnswer, ty
 import { ChatError, chatErrorMessage, type ChatErrorCode } from "../core/chat/failures.ts";
 import { deleteChatThread, getChatThread, isThreadId, listChatThreads, confirmAnswer, threadMessages, withdrawAnswer } from "../core/chat/store.ts";
 import { saveAnswerAsPage } from "../core/chat/save.ts";
+import { handleShareCreate } from "./share.ts";
 
 export interface ChatApiDeps {
   storage: Storage;
@@ -197,6 +198,8 @@ export async function handleChatApi(req: Request, url: URL, deps: ChatApiDeps): 
   if (p !== "/admin/api/chat" && !p.startsWith("/admin/api/chat/")) return null;
   const owner = operatorOwner();
   const engine = deps.storage.engine();
+  const shared = await handleShareCreate(req, url, deps.storage, owner);
+  if (shared) return shared;
 
   if (p === "/admin/api/chat") {
     if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);

@@ -31,6 +31,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_CHAT_ANSWER_MAX_USD_CAP: "string",
   MEMRAIN_CHAT_MODELS: "string",
   MEMRAIN_CHAT_RETENTION_DAYS: "int",
+  MEMRAIN_CHAT_SHARE: "flag",
   MEMRAIN_CHAT_TIMEOUT_MS: "int",
   MEMRAIN_CHAT_USER_DAY_USD: "string",
   MEMRAIN_CHRONICLE_TZ: "string",

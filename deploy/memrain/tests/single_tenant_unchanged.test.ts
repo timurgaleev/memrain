@@ -131,6 +131,14 @@ describe("single tenant HTTP surface", () => {
     expect(res.headers.get("WWW-Authenticate")).toContain("resource_metadata");
   });
 
+  it("with sharing and feedback off, a public /s/ link or rating needs the bearer as before", async () => {
+    expect(process.env["MEMRAIN_CHAT_SHARE"]).toBeUndefined();
+    expect(process.env["MEMRAIN_FEEDBACK"]).toBeUndefined();
+    const pub = { "Cf-Connecting-Ip": "203.0.113.7" };
+    expect((await fetch(`${base}/s/${"a".repeat(43)}`, { headers: pub })).status).toBe(401);
+    expect((await fetch(`${base}/s/${"a".repeat(43)}`, { method: "POST", headers: pub, body: "password=x" })).status).toBe(401);
+  });
+
   it("/health answers", async () => {
     expect((await fetch(`${base}/health`)).status).toBe(200);
   });

@@ -38,6 +38,7 @@ import { timingSafeEqual } from "node:crypto";
 // Canonical definition lives in core so the MCP layer shares it without
 // importing this http/ module (which would create an import cycle).
 import { publicReadBodiesAllowed } from "../core/public_redaction.ts";
+import { chatShareEnabled } from "../core/chat/share.ts";
 
 export interface PublicGuardOptions {
   /** Bearer token. If undefined, every public request is rejected. */
@@ -371,6 +372,8 @@ function isPreCredentialRoute(req: Request, url: URL): boolean {
   ) {
     return true;
   }
+  // A shared chat answer: the link's password is the credential (http/share.ts).
+  if (url.pathname.startsWith("/s/") && (req.method === "GET" || req.method === "POST") && chatShareEnabled()) return true;
   return url.pathname === "/admin" || url.pathname.startsWith("/admin/");
 }
 
