@@ -49,6 +49,16 @@ export interface SpendReport {
   /** ok | error | halted | refused; key null = booked before outcomes were kept. */
   outcomes: SpendGroup[];
   latency: SpendLatency[];
+  /** Calls made on the admin chat's `chat` wallet path (role chain includes it). */
+  chat: {
+    total_usd: number;
+    calls: number;
+    by_model: SpendGroup[];
+    /** Spender: each chat owner books under its own spend id. */
+    by_client: SpendGroup[];
+    /** UTC day, YYYY-MM-DD. */
+    by_day: SpendGroup[];
+  };
   coverage: {
     /** Calls whose model has no price: their cost is missing from every total. */
     unpriced_calls: number;
@@ -81,6 +91,16 @@ const GROUPS = {
   outcomes: { column: "outcome", where: "TRUE", limit: "" },
 } as const;
 
+/** Rows booked on the chat wallet path; a role is the chain of nested paths. */
+const CHAT_ROWS = `${MADE} AND 'chat' = ANY(string_to_array(role, '/'))`;
+const UTC_DAY = "to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')";
+
+const CHAT_GROUPS = {
+  by_model: { column: "model", order: "usd DESC, calls DESC" },
+  by_client: { column: "client_id", order: "usd DESC, calls DESC" },
+  by_day: { column: UTC_DAY, order: "key" },
+} as const;
+
 export async function spendReport(engine: Engine, opts: { days?: number; now?: Date } = {}): Promise<SpendReport> {
   const days = opts.days ?? 7;
   if (!Number.isInteger(days) || days < 1 || days > 366) {
@@ -104,6 +124,28 @@ export async function spendReport(engine: Engine, opts: { days?: number; now?: D
       [since],
     );
     groups[name] = r.rows.map((row) => ({
+      key: (row.key as string | null) ?? null,
+      calls: Number(row.calls),
+      usd: Number(row.usd),
+      input_tokens: Number(row.input_tokens),
+      output_tokens: Number(row.output_tokens),
+    }));
+  }
+
+  const chatGroups = {} as Record<keyof typeof CHAT_GROUPS, SpendGroup[]>;
+  for (const [name, g] of Object.entries(CHAT_GROUPS) as [keyof typeof CHAT_GROUPS, (typeof CHAT_GROUPS)[keyof typeof CHAT_GROUPS]][]) {
+    const r = await engine.query<Record<string, unknown>>(
+      `SELECT ${g.column} AS key, count(*)::int AS calls,
+              COALESCE(SUM(spend_cents), 0)::float8 / 100 AS usd,
+              COALESCE(SUM(input_tokens), 0)::float8 AS input_tokens,
+              COALESCE(SUM(output_tokens), 0)::float8 AS output_tokens
+         FROM mcp_spend_log
+        WHERE created_at >= $1::timestamptz AND ${CHAT_ROWS}
+        GROUP BY 1
+        ORDER BY ${g.order}`,
+      [since],
+    );
+    chatGroups[name] = r.rows.map((row) => ({
       key: (row.key as string | null) ?? null,
       calls: Number(row.calls),
       usd: Number(row.usd),
@@ -140,6 +182,11 @@ export async function spendReport(engine: Engine, opts: { days?: number; now?: D
     total_usd: byModel.reduce((s, g) => s + g.usd, 0),
     calls: byModel.reduce((s, g) => s + g.calls, 0),
     ...groups,
+    chat: {
+      total_usd: chatGroups.by_model.reduce((s, g) => s + g.usd, 0),
+      calls: chatGroups.by_model.reduce((s, g) => s + g.calls, 0),
+      ...chatGroups,
+    },
     latency: lat.rows.map((row) => ({
       operation: String(row.operation),
       calls: Number(row.calls),
