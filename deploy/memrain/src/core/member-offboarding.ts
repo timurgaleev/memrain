@@ -275,7 +275,9 @@ export async function eraseMemberPersonalSource(
     await tx.query(`UPDATE member_web_sessions SET revoked_at = now() WHERE member_id = $1 AND revoked_at IS NULL`, [member.id]);
     await tx.query(`DELETE FROM member_passkeys WHERE member_id = $1`, [member.id]);
     await tx.query(`DELETE FROM member_invites WHERE member_id = $1`, [member.id]);
-    await eraseOwnerChat(tx, ownerKey, true);
+    // Not eraseOwnerChat: it opens its own transaction, which Postgres cannot nest.
+    // scope: operator-only the operator's offboarding erases the one member's chat
+    await tx.query(`DELETE FROM chat_threads WHERE owner_key = $1`, [ownerKey]);
 
     const slugs = (await tx.query<{ slug: string }>(
       // scope: operator-only the pages of the one source being erased
