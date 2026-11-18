@@ -20,6 +20,7 @@
 import { describe, expect, it, setDefaultTimeout } from "bun:test";
 import { LEFTOVER_TABLES } from "../src/core/pages-purge.ts";
 import { sourceReferences } from "../src/core/sources.ts";
+import { eraseMemberPersonalSource } from "../src/core/member-offboarding.ts";
 import { storageEngines } from "./helpers/storage-engines.ts";
 
 setDefaultTimeout(60000);
@@ -210,6 +211,57 @@ describe("deletion inventory", () => {
       }
       for (const key of Object.keys(PAGE_COLUMNS)) if (!pageKeys.includes(key)) problems.push(`${key}: stale entry, no such column`);
       for (const key of Object.keys(SOURCE_TABLES)) if (!sourceKeys.includes(key)) problems.push(`${key}: stale entry, no source_id column`);
+      expect(problems).toEqual([]);
+    });
+  }
+});
+
+/**
+ * Tables that name a member (`member_id`) and their fate when a member is
+ * removed with its personal source (core/member-offboarding.ts):
+ *   erased     deleted by the offboarding transaction (checked in its code)
+ *   revoked    kept as a dead row, revoked by the offboarding (checked)
+ *   exempt     outlives the member on purpose; the reason says why
+ * A new member_id column fails here until it is given a fate.
+ */
+type MemberDisposition = { kind: "erased" } | { kind: "revoked" } | { kind: "exempt"; reason: string };
+
+const MEMBER_TABLES: Record<string, MemberDisposition> = {
+  "member_passkeys": { kind: "erased" },
+  "member_invites": { kind: "erased" },
+  "group_members": { kind: "erased" },
+  "member_web_sessions": { kind: "revoked" },
+  "access_tokens": { kind: "revoked" },
+  "oauth_enrollments": { kind: "revoked" },
+  "oauth_clients": { kind: "exempt", reason: "a client bound to a member stays bound to the tombstone, so the verifier refuses it; the operator revokes the client" },
+  "member_audit": { kind: "exempt", reason: "the member history, including the erasure receipt, outlives the member on purpose" },
+};
+
+describe("member deletion inventory", () => {
+  for (const engine of storageEngines(process.env["MEMRAIN_TEST_POSTGRES_URL"])) {
+    it(`gives every member_id column in the ${engine.name} catalog a fate`, async () => {
+      const { storage, close } = await engine.open();
+      let tables: string[];
+      try {
+        const r = await storage.engine().query<{ table_name: string }>(
+          `SELECT c.table_name FROM information_schema.columns c
+             JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+            WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE' AND c.column_name = 'member_id'`,
+        );
+        tables = r.rows.map(x => x.table_name).sort();
+      } finally {
+        await close();
+      }
+      const code = eraseMemberPersonalSource.toString();
+      const problems: string[] = [];
+      for (const table of tables) {
+        const d = MEMBER_TABLES[table];
+        if (!d) problems.push(`${table}: names a member but has no fate`);
+        else if (d.kind === "erased" && !new RegExp(`DELETE FROM ${table} WHERE member_id`).test(code)) problems.push(`${table}: declared erased but the offboarding does not delete it`);
+        else if (d.kind === "revoked" && !new RegExp(`UPDATE ${table} SET revoked_at = now\\(\\) WHERE member_id`).test(code)) problems.push(`${table}: declared revoked but the offboarding does not revoke it`);
+        else if (d.kind === "exempt" && d.reason.trim().length < 20) problems.push(`${table}: exempt needs a reason`);
+      }
+      for (const key of Object.keys(MEMBER_TABLES)) if (!tables.includes(key)) problems.push(`${key}: stale entry, no member_id column`);
       expect(problems).toEqual([]);
     });
   }
