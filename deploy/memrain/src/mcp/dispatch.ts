@@ -298,6 +298,7 @@ import { extractionReview } from "../core/extraction-review.ts";
 import { findTypedConflicts } from "../core/typed-conflicts.ts";
 import { markGeneratedChunks } from "../core/search/generated-provenance.ts";
 import { assertTenantAllows } from "../core/tenant-guard.ts";
+import { hostingMode } from "../control/contract.ts";
 
 export { OPERATOR_ONLY_TOOLS } from "./visibility.ts";
 
@@ -1008,11 +1009,14 @@ async function dispatchToolInner(
     if (isOperationError(e)) {
       return errResult(JSON.stringify(e.toEnvelope(opts.isPublic ?? false)));
     }
+    // A hosted tenant's OAuth and PAT callers are outside the operator's house:
+    // they get the public ingress's closed text for anything unexpected.
+    const withhold = (opts.isPublic ?? false) || (opts.authInfo !== undefined && hostingMode() !== null);
     const databaseError = databaseOperationError(e);
-    if (databaseError) return errResult(JSON.stringify(databaseError.toEnvelope(opts.isPublic ?? false)));
+    if (databaseError) return errResult(JSON.stringify(databaseError.toEnvelope(withhold)));
     // A raw exception (Postgres schema, DSN host, stack internals) must NOT
     // leak across the public boundary; fully redact it there, log server-side.
-    return errResult(publicSafeErrorMessage(e, opts.isPublic ?? false));
+    return errResult(publicSafeErrorMessage(e, withhold));
   }
 }
 
