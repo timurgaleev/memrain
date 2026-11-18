@@ -19,7 +19,7 @@ import { Storage } from "../src/core/storage.ts";
 import { putPage } from "../src/core/pages.ts";
 import { planCopy, readCatalog, verifyTables } from "../src/core/engine-copy.ts";
 import { cancelDelete, currentReceipt, deleteTenant, exportTenant, purgeDeleted } from "../src/control/export.ts";
-import { requireTenant } from "../src/control/tenants.ts";
+import { requireTenant, suspendTenant } from "../src/control/tenants.ts";
 import { PG_URL, withDatabase } from "./helpers/control-pg.ts";
 import { openControlFixture, type ControlFixture } from "./helpers/control-tenants.ts";
 
@@ -173,6 +173,27 @@ describe.skipIf(!PG_URL)("tenant delete behind a fence", () => {
     await fx.create(id);
     await exportTenant(ctx(), id, join(out, "reuse"));
     await expect(exportTenant(ctx(), id, join(out, "reuse"))).rejects.toMatchObject({ code: "wrong_state" });
+  });
+
+  it("cancelling the delete of a suspended tenant leaves it suspended in its mode, even after a second fence", async () => {
+    const id = fx.tenantId("heldundo");
+    await fx.create(id);
+    await suspendTenant(fx.control, id, "block");
+    await deleteTenant(ctx(), id, id, join(out, "heldundo-a"));
+    let after = await cancelDelete(ctx(), id);
+    expect({ status: after.status, mode: after.mode }).toEqual({ status: "suspended", mode: "block" });
+    // A fence taken while already fenced (an export that failed and is run
+    // again) still remembers the state before the first one.
+    await fx.control.query(`UPDATE tenants SET status = 'deleting', mode = NULL, delete_after = NULL WHERE id = $1`, [id]);
+    await fx.control.query(`INSERT INTO tenant_events (tenant_id, kind, detail) VALUES ($1, 'fence', $2::jsonb)`, [id, JSON.stringify({ fence: "x", before: { status: "suspended", mode: "read-only" } })]);
+    await deleteTenant(ctx(), id, id, join(out, "heldundo-b"));
+    after = await cancelDelete(ctx(), id);
+    expect({ status: after.status, mode: after.mode }).toEqual({ status: "suspended", mode: "read-only" });
+    const r = await fx.control.query<{ login: boolean; connect: boolean }>(
+      `SELECT rolcanlogin AS login, has_database_privilege(rolname, $2, 'CONNECT') AS connect FROM pg_roles WHERE rolname = $1`,
+      [`tenant_${id}_owner`, `tenant_${id}`],
+    );
+    expect(r.rows[0]).toEqual({ login: true, connect: true });
   });
 
   it("resuming in the window lifts the fence and voids the receipt", async () => {

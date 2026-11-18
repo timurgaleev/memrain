@@ -33,6 +33,7 @@ import {
   withTenantLock,
   type TenantRow,
 } from "./tenants.ts";
+import type { TenantMode } from "./contract.ts";
 
 export const DELETE_WINDOW_DAYS = 7;
 
@@ -150,6 +151,27 @@ export async function exportTenant(ctx: ExportContext, id: string, outDir: strin
   return exportInto(ctx, t, outDir, "live");
 }
 
+interface StateBeforeFence {
+  status: "active" | "suspended";
+  mode: TenantMode | null;
+}
+
+/** What the tenant was before its first fence, as the latest fence event recorded it. */
+async function stateBeforeFence(tx: Engine, id: string): Promise<StateBeforeFence> {
+  const r = await tx.query<{ detail: unknown }>(
+    `SELECT detail FROM tenant_events WHERE tenant_id = $1 AND kind = 'fence' ORDER BY id DESC LIMIT 1`,
+    [id],
+  );
+  const raw = r.rows[0]?.detail;
+  const before = (typeof raw === "string" ? JSON.parse(raw) : raw as Record<string, unknown> | undefined)?.["before"] as Partial<StateBeforeFence> | undefined;
+  if (before?.status === "suspended" && (before.mode === "block" || before.mode === "read-only")) {
+    return { status: "suspended", mode: before.mode };
+  }
+  // An unreadable record never reopens a tenant: it comes back held.
+  if (before?.status !== "active") return { status: "suspended", mode: "block" };
+  return { status: "active", mode: null };
+}
+
 /** Close the tenant database to every writer: no LOGIN, no CONNECT, no open session. */
 async function fence(ctx: ExportContext, t: TenantRow): Promise<string> {
   const n = tenantNames(t.id);
@@ -159,11 +181,17 @@ async function fence(ctx: ExportContext, t: TenantRow): Promise<string> {
     if (now.status !== t.status || now.fenceId !== t.fenceId) {
       throw new TenantError("wrong_state", `tenant '${t.id}' changed while it was being fenced; run the command again`);
     }
+    // Fencing an already fenced tenant keeps the state from before the first fence.
+    const before: StateBeforeFence = now.status === "deleting"
+      ? await stateBeforeFence(tx, t.id)
+      : now.status === "suspended"
+        ? { status: "suspended", mode: now.mode ?? "block" }
+        : { status: "active", mode: null };
     await tx.query(
       `UPDATE tenants SET status = 'deleting', mode = NULL, fence_id = $2, delete_after = NULL, updated_at = now() WHERE id = $1`,
       [t.id, fenceId],
     );
-    await logTenantEvent(tx, t.id, "fence", { fence: fenceId });
+    await logTenantEvent(tx, t.id, "fence", { fence: fenceId, before });
     // In the same transaction as the status, under the same lock, so a
     // cancel can never lift a newer fence. The master keeps its own CONNECT:
     // on RDS it reaches the database only through the owner role it is a
@@ -216,7 +244,11 @@ export async function deleteTenant(ctx: ExportContext, id: string, confirm: stri
   return { receipt, deleteAfter };
 }
 
-/** Lift the fence of a tenant waiting for deletion; its receipts stop counting. */
+/**
+ * Lift the fence of a tenant waiting for deletion; its receipts stop counting.
+ * The tenant returns to the state it had before the fence: a suspended tenant
+ * stays suspended in its mode and needs its own `resume`.
+ */
 export async function cancelDelete(ctx: ExportContext, id: string): Promise<TenantRow> {
   // Status and access change together under the lifecycle lock: a purge that
   // already claimed the tenant wins and this refuses, and a newer fence is
@@ -224,11 +256,12 @@ export async function cancelDelete(ctx: ExportContext, id: string): Promise<Tena
   await withTenantLock(ctx.control, id, async (tx) => {
     const t = await requireTenant(tx, id);
     if (t.status !== "deleting") throw new TenantError("wrong_state", `tenant '${id}' is ${t.status}, not waiting for deletion`);
+    const before = await stateBeforeFence(tx, id);
     await tx.query(
-      `UPDATE tenants SET status = 'active', mode = NULL, fence_id = $2, delete_after = NULL, updated_at = now() WHERE id = $1`,
-      [id, randomUUID()],
+      `UPDATE tenants SET status = $3, mode = $4, fence_id = $2, delete_after = NULL, updated_at = now() WHERE id = $1`,
+      [id, randomUUID(), before.status, before.mode],
     );
-    await logTenantEvent(tx, id, "delete_cancelled");
+    await logTenantEvent(tx, id, "delete_cancelled", { restored: before });
     const n = tenantNames(id);
     await tx.query(`GRANT CONNECT, TEMPORARY ON DATABASE ${ident(n.db)} TO ${ident(n.owner)}`);
     await tx.query(`ALTER ROLE ${ident(n.owner)} LOGIN`);
