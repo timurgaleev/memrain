@@ -129,18 +129,32 @@ export async function openShare(engine: Engine, token: string, password: string)
   if (row.gone) return { ok: false, error: "gone" };
   if (row.locked) return { ok: false, error: "locked" };
   const hash = shareTokenHash(token);
+  // The attempt is counted before the password is checked, by one statement
+  // that refuses a locked link: parallel guesses cannot all pass the lock
+  // check while the slow hash runs. At most SHARE_MAX_FAILURES checks per lock.
+  const claim = await engine.query<{ locked: boolean }>(
+    `UPDATE chat_shares SET
+       failed_attempts = CASE WHEN failed_attempts + 1 >= $2 THEN 0 ELSE failed_attempts + 1 END,
+       locked_until = CASE WHEN failed_attempts + 1 >= $2 THEN NOW() + make_interval(mins => $3::int) ELSE locked_until END
+     WHERE token_hash = $1 AND (locked_until IS NULL OR locked_until <= NOW())
+     RETURNING (locked_until IS NOT NULL AND locked_until > NOW()) AS locked`,
+    [hash, SHARE_MAX_FAILURES, SHARE_LOCK_MINUTES],
+  );
+  const attempt = claim.rows[0];
+  if (!attempt) return { ok: false, error: "locked" };
   const right = password.length > 0 && password.length <= SHARE_PASSWORD_MAX && await Bun.password.verify(password, row.password_hash);
-  if (!right) {
-    const r = await engine.query<{ locked: boolean }>(
-      `UPDATE chat_shares SET
-         failed_attempts = CASE WHEN failed_attempts + 1 >= $2 THEN 0 ELSE failed_attempts + 1 END,
-         locked_until = CASE WHEN failed_attempts + 1 >= $2 THEN NOW() + make_interval(mins => $3::int) ELSE locked_until END
-       WHERE token_hash = $1
-       RETURNING (locked_until IS NOT NULL AND locked_until > NOW()) AS locked`,
-      [hash, SHARE_MAX_FAILURES, SHARE_LOCK_MINUTES],
-    );
-    return { ok: false, error: r.rows[0]?.locked === true ? "locked" : "wrong_password" };
-  }
-  await engine.query(`UPDATE chat_shares SET failed_attempts = 0 WHERE token_hash = $1 AND failed_attempts > 0`, [hash]);
-  return { ok: true, answer: { content: row.content, sources: sourcesOf(row.citations) } };
+  if (!right) return { ok: false, error: attempt.locked === true ? "locked" : "wrong_password" };
+  // The right password does not count as a failure; a lock this very attempt
+  // set is lifted, one another attempt set stays.
+  await engine.query(
+    `UPDATE chat_shares SET failed_attempts = 0,
+       locked_until = CASE WHEN $2::boolean THEN NULL ELSE locked_until END
+     WHERE token_hash = $1`,
+    [hash, attempt.locked === true],
+  );
+  // Revoked, expired or closed while the hash ran: nothing is shown.
+  const now = await findShare(engine, token);
+  if (!now) return { ok: false, error: "not_found" };
+  if (now.gone) return { ok: false, error: "gone" };
+  return { ok: true, answer: { content: now.content, sources: sourcesOf(now.citations) } };
 }

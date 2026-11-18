@@ -160,6 +160,44 @@ describe("chat share links", () => {
     expect((await view(url, PASSWORD)).status).toBe(200);
   });
 
+  it("parallel wrong passwords never check more than five against the hash before the lock", async () => {
+    process.env["MEMRAIN_CHAT_SHARE"] = "1";
+    const url = await create(okAnswer);
+    const pw = Bun.password as { verify: typeof Bun.password.verify };
+    const original = pw.verify;
+    let checked = 0;
+    pw.verify = (async (...args: Parameters<typeof Bun.password.verify>) => {
+      checked++;
+      return original.apply(Bun.password, args);
+    }) as typeof Bun.password.verify;
+    let statuses: number[];
+    try {
+      statuses = await Promise.all(Array.from({ length: 20 }, () => view(url, "wrong password!").then((r) => r.status)));
+    } finally {
+      pw.verify = original;
+    }
+    expect(checked).toBeLessThanOrEqual(5);
+    expect(statuses.filter((s) => s === 401).length).toBeLessThanOrEqual(4);
+    expect(statuses.every((s) => s === 401 || s === 429)).toBe(true);
+    expect((await view(url, PASSWORD)).status).toBe(429);
+  });
+
+  it("a link revoked while its password is being checked shows nothing", async () => {
+    process.env["MEMRAIN_CHAT_SHARE"] = "1";
+    const url = await create(okAnswer);
+    const pw = Bun.password as { verify: typeof Bun.password.verify };
+    const original = pw.verify;
+    pw.verify = (async (...args: Parameters<typeof Bun.password.verify>) => {
+      await storage.engine().query(`UPDATE chat_shares SET revoked_at = NOW()`);
+      return original.apply(Bun.password, args);
+    }) as typeof Bun.password.verify;
+    try {
+      expect((await view(url, PASSWORD)).status).toBe(410);
+    } finally {
+      pw.verify = original;
+    }
+  });
+
   it("throttles password attempts per client across links", async () => {
     process.env["MEMRAIN_CHAT_SHARE"] = "1";
     const url = await create(okAnswer);
