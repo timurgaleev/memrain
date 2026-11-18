@@ -263,6 +263,69 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("picks up an edited thread reply inside the lookback by the next UTC day, without reading threads every run", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      const account = await pasteToken(db.storage, w, [GENERAL]);
+      await run(db.storage, w, account.id);
+      const parent = w.messages[GENERAL]![0]!;
+      const reply = w.replies![`${GENERAL}:${parent.ts}`]![0]!;
+      w.replies![`${GENERAL}:${parent.ts}`]![0] = { ...reply, text: "yes, after the fix", edited: { ts: slackTs("2026-11-16T13:00:00Z") } };
+
+      w.calls.length = 0;
+      await run(db.storage, w, account.id, T0 + HOUR);
+      expect(slackCalls(w, "conversations.replies")).toHaveLength(0);
+
+      w.calls.length = 0;
+      const nextDay = await run(db.storage, w, account.id, T0 + 24 * HOUR);
+      expect(nextDay.counts.pages_written).toBe(1);
+      expect(slackCalls(w, "conversations.replies").map(q => q.get("ts"))).toEqual([parent.ts]);
+      expect(await body(e, daySlug(GENERAL, "2026-11-14"))).toContain("yes, after the fix");
+    } finally { await db.close(); }
+  });
+
+  it("reconnects a renamed workspace's pasted token onto its own account by team id", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      const account = await pasteToken(db.storage, w, [GENERAL]);
+      const renamed = slackFetch(w);
+      const deps: ConnectDeps = {
+        engine: e, kek, providers: providers(), env: ENV, now: () => T0,
+        fetch: async (url, init) => {
+          const res = await renamed(url, init);
+          if (new URL(url).pathname !== "/api/auth.test") return res;
+          const json = await res.json() as Record<string, unknown>;
+          return Response.json({ ...json, team: "Example Team Renamed" }, { headers: res.headers });
+        },
+      };
+      const again = await connectApiKey(deps, { provider: "slack", sourceId: SOURCE, apiKey: SLACK_BOT_TOKEN, principalRef: "admin:operator" });
+      expect(again.reconnected).toBe(true);
+      expect(again.account.id).toBe(account.id);
+      expect(again.account.account_label).toBe(SLACK_TEAM.name);
+      expect(await count(e, "SELECT count(*)::int AS n FROM connector_accounts")).toBe(1);
+    } finally { await db.close(); }
+  });
+
+  it("refuses an OAuth connect for private channels alone", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: SOURCE, kind: "chat", pathPrefix: "chat/" });
+      await setOAuthClient(e, kek, "slack", "111.222", "byo-slack-client-secret");
+      const deps: ConnectDeps = { engine: e, kek, providers: providers(), fetch: slackFetch(world()), env: {}, now: () => T0 };
+      const err = await startConnect(deps, {
+        provider: "slack", sourceId: SOURCE, services: ["slack_private"], principalRef: "admin:operator", adminSessionId: SESSION,
+        redirectUri: connectorCallbackUri("https://brain.example.test", "slack"),
+      }).catch(x => x);
+      expect(err).toBeInstanceOf(ConnectError);
+      expect((err as ConnectError).code).toBe("unknown_service");
+    } finally { await db.close(); }
+  });
+
   it("keeps a reply posted on a later day with its thread, dated", async () => {
     const db = await open();
     try {

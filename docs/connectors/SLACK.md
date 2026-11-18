@@ -178,7 +178,10 @@ then **Add apps**. For a private channel, invite the bot the same way.
 - Every run reads each channel's last three days again, and today, with one
   history request per day. A day whose messages did not change costs that one
   request: its threads are not read and nothing is written. An edited or
-  deleted message, or a new reply, rebuilds that day's page.
+  deleted message, or a new reply, rebuilds that day's page at once. An edit
+  to a thread reply does not change the messages Slack lists for the day, so
+  each of those days also reads its threads once a day; such an edit shows up
+  by the next UTC day.
 - A reply to a thread older than those three days is not picked up, unless it
   was also sent to the channel.
 - A day whose messages were all deleted in Slack is deleted from the brain the

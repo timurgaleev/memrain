@@ -9,10 +9,13 @@
  *     converge, and reads each day up to today with one
  *     `conversations.history` window per day. The first sync starts
  *     `config.history_days` (default 14) days back.
- *   - A day whose fingerprint (text.ts) equals the version its stored page
- *     settled at costs that one history read: its threads are not read and
- *     nothing is written. Only a changed day reads `conversations.replies`
- *     for its threads and is rendered again whole.
+ *   - A day's version is its fingerprint (text.ts) and the UTC day its
+ *     threads were last read. A day whose version equals the one its stored
+ *     page settled at costs that one history read: its threads are not read
+ *     and nothing is written. A changed day, and once a day every day in the
+ *     lookback, reads `conversations.replies` for its threads and is rendered
+ *     again whole, so an edited or deleted thread reply (which leaves the
+ *     top-level messages as they were) converges within a day.
  *   - A stored day with no messages left upstream is reported deleted; the
  *     engine soft-deletes its page past the mass-delete guard.
  *   - User names come from `users.info`, cached per account for a day in this
@@ -140,9 +143,9 @@ class Adapter implements SyncAdapter {
         last = day;
         continue;
       }
-      const fingerprint = dayFingerprint(info, messages);
-      if (settled.get(id) !== fingerprint) {
-        const item = await this.renderDay(ctx.client, info, day, messages, fingerprint);
+      const version = `${dayFingerprint(info, messages)}@${today}`;
+      if (settled.get(id) !== version) {
+        const item = await this.renderDay(ctx.client, info, day, messages, version);
         if ("response" in item) return item;
         items.push(item);
       }
@@ -202,7 +205,7 @@ class Adapter implements SyncAdapter {
     );
   }
 
-  private async renderDay(client: ConnectorClient, info: SlackChannelInfo, day: string, messages: SlackApiMessage[], fingerprint: string): Promise<SyncItem | { ok: false; response: ConnectorResponse }> {
+  private async renderDay(client: ConnectorClient, info: SlackChannelInfo, day: string, messages: SlackApiMessage[], version: string): Promise<SyncItem | { ok: false; response: ConnectorResponse }> {
     const replies = new Map<string, SlackApiMessage[]>();
     for (const m of messages) {
       if ((m.reply_count ?? 0) === 0 || m.subtype === "thread_broadcast") continue;
@@ -218,9 +221,9 @@ class Adapter implements SyncAdapter {
         { service: "slack", accountLabel: this.account.accountLabel ?? "" },
         toChatDay(this.account.accountLabel ?? "", info, day, messages, replies, users.body),
       );
-      return syncItemFromPage(page, fingerprint, { enrich: true });
+      return syncItemFromPage(page, version, { enrich: true });
     } catch (e) {
-      return { externalId: id, version: fingerprint, failure: { code: "render_failed", message: e instanceof Error ? e.message.slice(0, 200) : "render failed" } };
+      return { externalId: id, version, failure: { code: "render_failed", message: e instanceof Error ? e.message.slice(0, 200) : "render failed" } };
     }
   }
 
