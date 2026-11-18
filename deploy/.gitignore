@@ -1,1 +1,3 @@
 .secrets/
+# Short-lived Bedrock credentials the hosting refresher writes per tenant.
+.bedrock/
