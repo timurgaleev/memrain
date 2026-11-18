@@ -33,6 +33,7 @@ import {
 } from "../budget.ts";
 import { runThink, type ThinkResult, type ThinkTraceEvent } from "../synthesis/think.ts";
 import { pageSourcePath } from "../page-index.ts";
+import { andSourceScope } from "../source-scope.ts";
 import { chatConfig, CHAT_MAX_TAKES, CHAT_OUTPUT_TOKENS, CHAT_PAGE_HITS } from "./config.ts";
 import { condenseQuestion, CONDENSE_TURNS } from "./condense.ts";
 import { ChatError, chatErrorMessage, classifyChatFailure, type ChatErrorCode } from "./failures.ts";
@@ -156,12 +157,14 @@ async function numberCitations(
     let slug = c.ref;
     let title = c.ref.split("/").pop() ?? c.ref;
     for (const candidate of refSlugCandidates(c.ref)) {
+      const params: unknown[] = [candidate];
+      const scope = andSourceScope("source_id", owner.readSources, params);
       const p = await engine.query<{ slug: string; title: string | null; source_id: string }>(
-        `SELECT slug, title, source_id FROM pages WHERE slug = $1 AND deleted_at IS NULL`,
-        [candidate],
+        `SELECT slug, title, source_id FROM pages WHERE slug = $1 AND deleted_at IS NULL${scope}`,
+        params,
       );
       const row = p.rows[0];
-      if (!row || (owner.readSources !== undefined && !owner.readSources.includes(row.source_id))) continue;
+      if (!row) continue;
       if (pageSourcePath(row.slug, row.source_id) !== c.ref && !c.ref.startsWith("page-truth://")) continue;
       slug = row.slug;
       title = row.title ?? row.slug;

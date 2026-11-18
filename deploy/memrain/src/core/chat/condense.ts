@@ -15,6 +15,16 @@ export const CONDENSE_TURNS = 6;
 const TURN_CHARS = 1200;
 const QUESTION_CHARS = 4000;
 const OUTPUT_CHARS = 600;
+const QUOTES = new Set(['"', "'", "`"]);
+
+/** The reply without wrapping quotes; a loop, so no regex can go quadratic. */
+function unquote(text: string): string {
+  let start = 0;
+  let end = text.length;
+  while (start < end && QUOTES.has(text[start]!)) start++;
+  while (end > start && QUOTES.has(text[end - 1]!)) end--;
+  return text.slice(start, end);
+}
 
 export const CONDENSE_SYSTEM_PROMPT = `You rewrite the last message of a conversation into one standalone question for a search over a personal knowledge brain.
 
@@ -60,7 +70,7 @@ export async function condenseQuestion(
     maxTokens: CHAT_CONDENSE_OUTPUT_TOKENS,
     temperature: 0,
   });
-  const line = resp.text.replace(/\s+/g, " ").trim().replace(/^["'`]+|["'`]+$/g, "");
+  const line = unquote(resp.text.replace(/\s+/g, " ").trim()).trim();
   const usable = line.length > 0 && line.length <= OUTPUT_CHARS;
   return { question: usable ? line : question, rewritten: usable && line !== question, modelId: resp.modelId, usage: resp.usage };
 }

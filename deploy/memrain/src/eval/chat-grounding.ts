@@ -46,7 +46,7 @@ export const CHAT_GROUNDING_QUESTIONS: ReadonlyArray<{ question: string; expect:
   FACTS.map((f) => ({ question: f.question, expect: f.slug }));
 
 /** Write the fixture pages and index them with the given query embedder. */
-export async function seedChatGroundingBrain(storage: Storage, embedFn: (text: string) => Promise<number[]>): Promise<void> {
+export async function seedChatGroundingFixture(storage: Storage, embedFn: (text: string) => Promise<number[]>): Promise<void> {
   for (const f of FACTS) {
     await putPage(storage, { slug: f.slug, markdown_body: f.body, title: f.title });
     await indexPageIntoSearch(storage, { slug: f.slug, markdown_body: f.body, title: f.title }, { embedFn });
@@ -61,7 +61,7 @@ export function extractiveModel(modelId = "eu.anthropic.claude-haiku-5-5"): Sonn
   return async (input) => {
     const m = /<page ref="([^"]+)" rank="1"[^>]*>\n([\s\S]*?)\n<\/page>/.exec(input.user);
     const ref = m?.[1];
-    const sentence = (m?.[2] ?? "").replace(/<[^>]+>/g, " ").split(/(?<=\.)\s/)[0]?.trim() ?? "";
+    const sentence = (m?.[2] ?? "").split(/(?<=\.)\s/)[0]?.trim() ?? "";
     const text = ref
       ? JSON.stringify({ answer: `${sentence} [${ref}]`, citations: [{ ref, kind: "page" }], gaps: [] })
       : JSON.stringify({ answer: "Nothing gathered answers this.", citations: [], gaps: ["no evidence"] });

@@ -14,7 +14,7 @@ import {
   CHAT_GROUNDING_QUESTIONS,
   extractiveModel,
   runChatGrounding,
-  seedChatGroundingBrain,
+  seedChatGroundingFixture,
 } from "../src/eval/chat-grounding.ts";
 
 setDefaultTimeout(180_000);
@@ -25,7 +25,7 @@ beforeAll(async () => {
   tmp = mkdtempSync(join(tmpdir(), "memrain-chat-grounding-"));
   storage = new Storage({ dbPath: join(tmp, "db") });
   await storage.init();
-  await seedChatGroundingBrain(storage, deterministicEmbedQuery);
+  await seedChatGroundingFixture(storage, deterministicEmbedQuery);
 });
 afterAll(async () => {
   await storage.close();

@@ -143,6 +143,7 @@ export async function createChatThread(engine: Engine, owner: ChatOwner, title: 
 
 export async function getChatThread(engine: Engine, owner: ChatOwner, id: string): Promise<ChatThread | null> {
   if (!isThreadId(id)) return null;
+  // scope: upstream a thread is keyed by owner_key and read only by that owner; its source_id is where it lives, not a read grant
   const r = await engine.query<{ id: string; title: string | null; created_at: unknown; updated_at: unknown }>(
     `SELECT id::text AS id, title, created_at, updated_at FROM chat_threads WHERE id = $1::uuid AND owner_key = $2`,
     [id, owner.key],
@@ -152,6 +153,7 @@ export async function getChatThread(engine: Engine, owner: ChatOwner, id: string
 }
 
 export async function listChatThreads(engine: Engine, owner: ChatOwner, limit = 100): Promise<ChatThreadSummary[]> {
+  // scope: upstream a thread is keyed by owner_key and read only by that owner; its source_id is where it lives, not a read grant
   const r = await engine.query<{ id: string; title: string | null; updated_at: unknown; message_count: number | string }>(
     `SELECT t.id::text AS id, t.title, t.updated_at,
             (SELECT count(*) FROM chat_messages m WHERE m.thread_id = t.id)::int AS message_count
@@ -260,6 +262,7 @@ export async function ownedAnswer(
   messageId: number,
 ): Promise<{ message: ChatMessage; threadId: string; question: string | null } | null> {
   if (!Number.isSafeInteger(messageId) || messageId < 1) return null;
+  // scope: upstream a thread is keyed by owner_key and read only by that owner; its source_id is where it lives, not a read grant
   const r = await engine.query<MessageRow & { thread_id: string; question: string | null }>(
     `SELECT ${MESSAGE_COLUMNS}, m.thread_id::text AS thread_id,
             (SELECT q.content FROM chat_messages q
@@ -311,6 +314,7 @@ export async function purgeOldChat(
       break;
     }
   }
+  // scope: operator-only retention runs over every owner's history, by age alone
   const t = await engine.query<{ id: string }>(
     `DELETE FROM chat_threads t
       WHERE t.updated_at < $1::timestamptz
@@ -328,6 +332,7 @@ export async function eraseOwnerChat(
   apply: boolean,
 ): Promise<{ threads: number; messages: number }> {
   return engine.transaction(async (tx) => {
+    // scope: operator-only the operator's erase command, keyed by the owner it names
     const c = await tx.query<{ threads: number | string; messages: number | string }>(
       `SELECT (SELECT count(*) FROM chat_threads WHERE owner_key = $1)::int AS threads,
               (SELECT count(*) FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id WHERE t.owner_key = $1)::int AS messages`,
@@ -360,6 +365,7 @@ export async function exportChatThreads(
     params.push(filter.ownerKey);
     where.push(`owner_key = $${params.length}`);
   }
+  // scope: operator-only the operator's export command; the filter narrows by source and owner
   const threads = await engine.query<{ id: string; title: string | null; created_at: unknown; updated_at: unknown; owner_key: string; source_id: string }>(
     `SELECT id::text AS id, title, created_at, updated_at, owner_key, source_id FROM chat_threads
       ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at, id`,
