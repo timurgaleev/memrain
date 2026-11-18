@@ -5,7 +5,9 @@
  *
  *   - OAuth v2 (slack.com/oauth/v2/authorize, then oauth.v2.access) with the
  *     operator's app (MEMRAIN_SLACK_OAUTH_CLIENT_ID / _SECRET, or a
- *     bring-your-own app saved in the admin, which wins). Slack takes the bot
+ *     bring-your-own app saved in the admin, which wins). The app holds a
+ *     client secret and is not opted into PKCE, which Slack would refuse
+ *     (`pkce_not_allowed`), so no code challenge is sent. Slack takes the bot
  *     scopes comma-separated and answers the code exchange with HTTP 200 and
  *     `ok: false` on failure, which the connect flow reads as a failed exchange.
  *   - A bot token pasted from an internal app's "OAuth & Permissions" page,
@@ -128,6 +130,7 @@ export function slackProvider(): ConnectorProvider {
       [SLACK_SERVICE]: { scopes: [...SLACK_PUBLIC_SCOPES], sourceKinds: ["chat"], minSpacingMs: SLACK_MIN_SPACING_MS },
       [SLACK_PRIVATE_SERVICE]: { scopes: [...SLACK_PRIVATE_SCOPES], sourceKinds: ["chat"], minSpacingMs: SLACK_MIN_SPACING_MS, optIn: true },
     },
+    pkce: false,
     scopeSeparator: ",",
     grantIncludesPriorConsent: true,
     callbackErrorCode: ({ error }) => (error === "access_denied" ? "consent_declined" : null),

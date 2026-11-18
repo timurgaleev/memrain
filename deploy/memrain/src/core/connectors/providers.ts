@@ -129,6 +129,13 @@ export interface ConnectorProvider {
   callbackErrorCode?: (params: { error: string; description: string | null }) => ProviderConnectError | null;
   /** Where the owner withdraws the app's consent, for a provider Memrain cannot revoke at. */
   consentUrls?: readonly string[];
+  /**
+   * False for a provider that refuses PKCE from a confidential app that did
+   * not opt into it (Slack answers `pkce_not_allowed`): the connect flow then
+   * sends no code challenge or verifier and relies on the client secret and
+   * the one-time state alone.
+   */
+  pkce?: false;
   /** Separator of the token response's `scope` field (a space by default). */
   scopeSeparator?: string;
   /** Map a granted scope onto the spelling that was requested. */

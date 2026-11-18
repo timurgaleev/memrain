@@ -100,6 +100,8 @@ step 3.
    too.
 4. Leave **token rotation** off. Memrain stores the bot token and uses it as it
    is; with rotation on, Slack expires the token every 12 hours.
+5. Leave **PKCE** off too (Slack cannot switch it back off). Memrain connects
+   with the app's client secret and sends no PKCE challenge.
 
 ## Step 3. Connect Memrain
 
@@ -216,6 +218,7 @@ altogether, open the app's **Basic Information** page and choose
 |---|---|---|
 | `no_client` when you choose Connect Slack | No Slack app saved and none in the environment | Save the app's client ID and secret (option A, step 3), or paste a bot token (option B) |
 | Slack says the redirect URL does not match | The app's Redirect URLs lack the brain's callback address | Add `https://<host>/admin/connectors/callback/slack` exactly (step 2) |
+| `token_exchange` after Slack's consent screen | PKCE may have been switched on for the app; Memrain connects without it | Paste the bot token instead (option B), or create a new app with PKCE left off |
 | `scope_mismatch` | The token or grant has a scope beyond the read scopes, such as `chat:write` | Remove the extra scope under **OAuth & Permissions**, reinstall the app, connect again |
 | `key_invalid` when pasting | Not a bot token (a user token starts with `xoxp-`) | Copy the **Bot User OAuth Token** (`xoxb-`) |
 | A channel cannot be ticked in the picker | The bot is not in the channel | `/invite @<your app>` in the channel (step 4) |

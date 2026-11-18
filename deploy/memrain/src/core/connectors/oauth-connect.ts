@@ -1,5 +1,6 @@
 /**
- * Connect a provider account with OAuth 2.0 authorization code + PKCE (S256).
+ * Connect a provider account with OAuth 2.0 authorization code + PKCE (S256);
+ * a provider marked `pkce: false` (Slack) gets the code flow without PKCE.
  *
  * start: the signed-in admin picks a provider, services and a source. A random
  * state and PKCE verifier are minted; the database keeps only the state's hash,
@@ -402,8 +403,10 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
   url.searchParams.set("redirect_uri", input.redirectUri);
   url.searchParams.set("scope", scopes.join(provider.scopeSeparator ?? " "));
   url.searchParams.set("state", state);
-  url.searchParams.set("code_challenge", challenge);
-  url.searchParams.set("code_challenge_method", "S256");
+  if (provider.pkce !== false) {
+    url.searchParams.set("code_challenge", challenge);
+    url.searchParams.set("code_challenge_method", "S256");
+  }
   return { authorizeUrl: url.toString(), expiresAt };
 }
 
@@ -577,7 +580,7 @@ export async function completeConnect(
         grant_type: "authorization_code",
         code: input.code,
         redirect_uri: st.redirect_uri,
-        code_verifier: verifier,
+        ...(provider.pkce === false ? {} : { code_verifier: verifier }),
         client_id: client.clientId,
         client_secret: client.clientSecret,
       }).toString(),

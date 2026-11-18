@@ -87,6 +87,8 @@ export function slackFetch(world: SlackWorld): FetchFn {
 
     if (method === "oauth.v2.access") {
       if (params.get("code") !== "fake-slack-code") return fail("invalid_code");
+      // An app that has not opted into PKCE in its settings (the setup guide never asks for it).
+      if (params.has("code_verifier")) return fail("pkce_not_allowed");
       return ok({
         access_token: SLACK_BOT_TOKEN, token_type: "bot", scope: world.scope ?? SLACK_PUBLIC_SCOPE,
         bot_user_id: "UBOTFAKE01", app_id: "AFAKEAPP01", team: SLACK_TEAM, enterprise: null,

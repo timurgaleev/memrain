@@ -145,6 +145,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(url.origin + url.pathname).toBe("https://slack.com/oauth/v2/authorize");
       expect(url.searchParams.get("scope")).toBe(SLACK_PUBLIC_SCOPE);
       expect(url.searchParams.get("redirect_uri")).toBe("https://brain.example.test/admin/connectors/callback/slack");
+      // Slack refuses PKCE from an app that did not opt into it, and the app holds a client secret.
+      expect(url.searchParams.has("code_challenge")).toBe(false);
+      expect(url.searchParams.has("code_challenge_method")).toBe(false);
       const { account } = await completeConnect(deps, { provider: "slack", state: url.searchParams.get("state"), code: "fake-slack-code", adminSessionId: SESSION });
       expect(account.account_label).toBe(SLACK_TEAM.name);
       expect(account.services).toEqual(["slack"]);
@@ -153,7 +156,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(account.config[PASTED_TOKEN]).toBeUndefined();
       const exchange = slackCalls(w, "oauth.v2.access")[0]!;
       expect(exchange.get("client_id")).toBe("111.222");
-      expect(exchange.get("code_verifier")).toMatch(/^[\w-]{43}$/);
+      expect(exchange.get("client_secret")).toBe("byo-slack-client-secret");
+      expect(exchange.has("code_verifier")).toBe(false);
     } finally { await db.close(); }
   });
 
