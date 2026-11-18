@@ -19,6 +19,7 @@ import { Storage } from "../src/core/storage.ts";
 import { OAuthProvider } from "../src/core/oauth-provider.ts";
 import { startServer, type ServerHandle } from "../src/http/server.ts";
 import { assertIngressConfig } from "../src/http/public_guard.ts";
+import { setTenantPolicySource, type TenantPolicy } from "../src/control/contract.ts";
 
 const KEYS = ["MEMRAIN_TENANT_ID", "MEMRAIN_CONTROL_URL", "MEMRAIN_PUBLIC_AUTH", "MEMRAIN_ASSUME_PUBLIC", "MEMRAIN_REQUIRE_MEMBER"] as const;
 const saved = Object.fromEntries(KEYS.map(k => [k, process.env[k]]));
@@ -82,6 +83,10 @@ describe("a hosted tenant's /mcp", () => {
     process.env["MEMRAIN_TENANT_ID"] = "acme";
     process.env["MEMRAIN_PUBLIC_AUTH"] = "oauth";
     process.env["MEMRAIN_ASSUME_PUBLIC"] = "1";
+    // As control states it for an active container whose isolation smoke
+    // passed: without a policy a hosted container serves nothing but /health.
+    const verified: TenantPolicy = { status: "active", mode: null, limits: {}, llmOff: false, isolation: "verified" };
+    setTenantPolicySource(async () => verified);
     const provider = new OAuthProvider({ engine: storage.engine() });
     const client = await provider.registerClientManual("svc", ["client_credentials"], "read");
     oauthToken = (await provider.exchangeClientCredentials(client.clientId, client.clientSecret!)).access_token;
@@ -89,6 +94,7 @@ describe("a hosted tenant's /mcp", () => {
     base = `http://127.0.0.1:${server.port}`;
   });
   afterAll(async () => {
+    setTenantPolicySource(null);
     await server.stop();
   });
 

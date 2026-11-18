@@ -50,7 +50,7 @@ describe("post-fusion stages", () => {
   it("run in a fixed order, and only the two-pass rerank can spend", () => {
     expect(POST_FUSION_STAGES.map((s) => s.name)).toEqual([
       "compiled-truth", "source", "recency-salience-title", "mattering", "graph-signals", "backlink",
-      "exact-match", "alias-resolved", "sort", "per-document", "type-diversity", "two-pass-rerank",
+      "exact-match", "alias-resolved", "sort", "feedback", "per-document", "type-diversity", "two-pass-rerank",
       "near-duplicate", "exact-lookup",
     ]);
     expect(POST_FUSION_STAGES.filter((s) => s.costClass === "paid").map((s) => s.name)).toEqual(["two-pass-rerank"]);
