@@ -93,8 +93,6 @@ marked; this section is the one that stands.
   each open tab.
 - Busy name tags crowd each other at phone width; consider hiding idle tags
   below 600 px.
-- The whiteboard model is a stand-in that reads as a framed mirror; replace it
-  with a proper whiteboard model (CC0).
 - Measure the Office page's CPU and GPU use on a real laptop GPU after deploy.
 
 ## Follow-ups from the meeting-credential review (2026-11-17)
