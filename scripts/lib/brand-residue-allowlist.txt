@@ -506,6 +506,7 @@ scripts/bootstrap.sh|COMPAT|5|legacy stack-env, admin secret and MEMEX_ fallback
 scripts/init.sh|COMPAT|2|MEMEX_ fallback and the public repository's current name
 scripts/mcp-refresh.sh|COMPAT|11|MEMEX_ fallbacks, legacy secret and an old MCP registration notice
 scripts/rotate-memrain-public-bearer.sh|COMPAT|7|legacy secret name and MEMEX_ROTATE_ fallbacks
+scripts/tenant-isolation-smoke.sh|COMPAT|1|the secrets prefix default when SECRETS_PREFIX is unset
 scripts/test-pg.sh|COMPAT|3|accepts the caller's legacy test URL
 terraform/moved.tf|INFRA-MOVED|24|moved blocks from the pre-rename resource addresses
 terraform/names.tf|COMPAT|4|the deprecated memex_subdomain variable
