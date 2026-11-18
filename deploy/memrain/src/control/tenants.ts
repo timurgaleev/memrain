@@ -156,6 +156,19 @@ export async function tenantEvents(control: Engine, tenantId: string): Promise<{
   return r.rows.map((e) => ({ kind: e.kind, detail: typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail }));
 }
 
+/**
+ * Run `fn` in one control transaction holding tenant `id`'s lifecycle lock, so
+ * fencing, cancelling a delete and purging never interleave. `fn` re-reads the
+ * row through `tx` and decides on what it sees there.
+ */
+export function withTenantLock<T>(control: Engine, id: string, fn: (tx: Engine) => Promise<T>): Promise<T> {
+  assertTenantId(id);
+  return control.transaction(async (tx) => {
+    await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`memrain:tenant:${id}`]);
+    return fn(tx);
+  });
+}
+
 /** Hold a tenant: `block` refuses everything but /health, `read-only` refuses every change. */
 export async function suspendTenant(control: Engine, id: string, mode: TenantMode): Promise<TenantRow> {
   const t = await requireTenant(control, id);

@@ -131,6 +131,31 @@ describe.skipIf(!PG_URL)("tenant delete behind a fence", () => {
     expect((await requireTenant(fx.control, id)).status).toBe("deleted");
   });
 
+  it("a purge and a cancelled delete racing each other: exactly one wins, and a cancelled tenant keeps its database", async () => {
+    for (let round = 0; round < 3; round++) {
+      const id = fx.tenantId(`racecancel${round}`);
+      await fx.create(id);
+      await deleteTenant(ctx(), id, id, join(out, `racecancel${round}`));
+      const [purge, cancel] = await Promise.allSettled([
+        purgeDeleted(ctx(), { now: new Date(Date.now() + 8 * 86_400_000) }),
+        cancelDelete(ctx(), id),
+      ]);
+      const purged = purge.status === "fulfilled" && purge.value.purged.includes(id);
+      const cancelled = cancel.status === "fulfilled";
+      expect({ round, one: purged !== cancelled }).toEqual({ round, one: true });
+      const db = await fx.control.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [`tenant_${id}`]);
+      expect(db.rows.length).toBe(cancelled ? 1 : 0);
+      expect((await requireTenant(fx.control, id)).status).toBe(cancelled ? "active" : "deleted");
+    }
+  });
+
+  it("refuses to export into a directory that already holds files", async () => {
+    const id = fx.tenantId("reuse");
+    await fx.create(id);
+    await exportTenant(ctx(), id, join(out, "reuse"));
+    await expect(exportTenant(ctx(), id, join(out, "reuse"))).rejects.toMatchObject({ code: "wrong_state" });
+  });
+
   it("resuming in the window lifts the fence and voids the receipt", async () => {
     const id = fx.tenantId("undo");
     await fx.create(id);

@@ -16,7 +16,7 @@
  * is worth nothing afterwards.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { Engine } from "../core/engine/interface.ts";
 import { PostgresEngine } from "../core/engine/postgres.ts";
@@ -30,6 +30,7 @@ import {
   logTenantEvent,
   requireTenant,
   tenantNames,
+  withTenantLock,
   type TenantRow,
 } from "./tenants.ts";
 
@@ -94,9 +95,12 @@ async function writeReadableCopy(src: Engine, outDir: string): Promise<number> {
 
 async function exportInto(ctx: ExportContext, t: TenantRow, outDir: string, kind: "live" | "fenced"): Promise<ExportReceipt> {
   const out = resolve(outDir);
+  // A used directory could still hold another export's pages next to this one's brain.
+  if (existsSync(out) && readdirSync(out).length > 0) {
+    throw new TenantError("wrong_state", `export directory ${out} is not empty; give a new one`);
+  }
   mkdirSync(out, { recursive: true, mode: 0o700 });
   const brainDir = join(out, "brain");
-  rmSync(brainDir, { recursive: true, force: true });
   const dst = new Storage({ dbPath: brainDir });
   let summary: Awaited<ReturnType<typeof copyEngine>>;
   let pages: number;
@@ -144,7 +148,11 @@ export async function exportTenant(ctx: ExportContext, id: string, outDir: strin
 async function fence(ctx: ExportContext, t: TenantRow): Promise<string> {
   const n = tenantNames(t.id);
   const fenceId = randomUUID();
-  await ctx.control.transaction(async (tx) => {
+  await withTenantLock(ctx.control, t.id, async (tx) => {
+    const now = await requireTenant(tx, t.id);
+    if (now.status !== t.status || now.fenceId !== t.fenceId) {
+      throw new TenantError("wrong_state", `tenant '${t.id}' changed while it was being fenced; run the command again`);
+    }
     await tx.query(
       `UPDATE tenants SET status = 'deleting', mode = NULL, fence_id = $2, delete_after = NULL, updated_at = now() WHERE id = $1`,
       [t.id, fenceId],
@@ -202,18 +210,20 @@ export async function deleteTenant(ctx: ExportContext, id: string, confirm: stri
 
 /** Lift the fence of a tenant waiting for deletion; its receipts stop counting. */
 export async function cancelDelete(ctx: ExportContext, id: string): Promise<TenantRow> {
-  const t = await requireTenant(ctx.control, id);
-  if (t.status !== "deleting") throw new TenantError("wrong_state", `tenant '${id}' is ${t.status}, not waiting for deletion`);
-  const n = tenantNames(id);
-  await ctx.control.query(`GRANT CONNECT, TEMPORARY ON DATABASE ${ident(n.db)} TO ${ident(n.owner)}`);
-  await ctx.control.query(`ALTER ROLE ${ident(n.owner)} LOGIN`);
-  await ctx.control.transaction(async (tx) => {
+  // The status flips under the lifecycle lock first, so a purge that already
+  // claimed the tenant wins and this refuses; only then is the fence lifted.
+  await withTenantLock(ctx.control, id, async (tx) => {
+    const t = await requireTenant(tx, id);
+    if (t.status !== "deleting") throw new TenantError("wrong_state", `tenant '${id}' is ${t.status}, not waiting for deletion`);
     await tx.query(
       `UPDATE tenants SET status = 'active', mode = NULL, fence_id = $2, delete_after = NULL, updated_at = now() WHERE id = $1`,
       [id, randomUUID()],
     );
     await logTenantEvent(tx, id, "delete_cancelled");
   });
+  const n = tenantNames(id);
+  await ctx.control.query(`GRANT CONNECT, TEMPORARY ON DATABASE ${ident(n.db)} TO ${ident(n.owner)}`);
+  await ctx.control.query(`ALTER ROLE ${ident(n.owner)} LOGIN`);
   return requireTenant(ctx.control, id);
 }
 
@@ -236,8 +246,11 @@ export interface PurgeOptions {
 
 /**
  * Drop the database and roles of every tenant whose window has passed and
- * whose current fence has a good receipt. Returns the ids purged; a tenant
- * without such a receipt is skipped and named in `skipped`.
+ * whose current fence has a good receipt. Each tenant is claimed first, under
+ * its lifecycle lock: checked again and marked `deleted`, so a delete
+ * cancelled at the same moment either wins (nothing is dropped) or is refused.
+ * A purge that stopped after the claim is finished by the next run. Returns
+ * the ids purged; a tenant without such a receipt is named in `skipped`.
  */
 export async function purgeDeleted(ctx: ExportContext, opts: PurgeOptions = {}): Promise<{ purged: string[]; skipped: { id: string; why: string }[] }> {
   const now = opts.now ?? new Date();
@@ -248,12 +261,27 @@ export async function purgeDeleted(ctx: ExportContext, opts: PurgeOptions = {}):
   const purged: string[] = [];
   const skipped: { id: string; why: string }[] = [];
   const controlDb = decodeURIComponent(new URL(ctx.masterUrl).pathname.slice(1));
+  const unfinished = (await ctx.control.query<{ id: string }>(
+    `SELECT t.id FROM tenants t
+      WHERE t.status = 'deleted'
+        AND (EXISTS (SELECT 1 FROM pg_database d WHERE d.datname = t.db_name)
+             OR EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname IN (t.owner_role, t.ctl_role)))
+      ORDER BY t.id`,
+  )).rows.map((r) => r.id);
+  const claimed: string[] = [...unfinished];
   for (const { id } of due) {
-    const t = await requireTenant(ctx.control, id);
-    if (!(await currentReceipt(ctx.control, t))) {
-      skipped.push({ id, why: "no good export receipt under the current fence" });
-      continue;
-    }
+    const why = await withTenantLock(ctx.control, id, async (tx) => {
+      const t = await requireTenant(tx, id);
+      if (t.status !== "deleting" || t.deleteAfter === null || t.deleteAfter > now) return "no longer due for deletion";
+      if (!(await currentReceipt(tx, t))) return "no good export receipt under the current fence";
+      await tx.query(`UPDATE tenants SET status = 'deleted', updated_at = now() WHERE id = $1`, [id]);
+      await logTenantEvent(tx, id, "purge_claimed", { fence: t.fenceId });
+      return null;
+    });
+    if (why) skipped.push({ id, why });
+    else claimed.push(id);
+  }
+  for (const id of claimed) {
     const n = tenantNames(id);
     await ctx.control.query(`DROP DATABASE IF EXISTS ${ident(n.db)} WITH (FORCE)`);
     for (const role of [n.owner, n.ctl]) {
@@ -266,7 +294,6 @@ export async function purgeDeleted(ctx: ExportContext, opts: PurgeOptions = {}):
     await opts.removeSecrets?.(id);
     await ctx.control.transaction(async (tx) => {
       await tx.query(`DELETE FROM tenant_isolation WHERE tenant_id = $1`, [id]);
-      await tx.query(`UPDATE tenants SET status = 'deleted', updated_at = now() WHERE id = $1`, [id]);
       await logTenantEvent(tx, id, "purged");
     });
     purged.push(id);
