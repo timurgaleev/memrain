@@ -24,7 +24,7 @@ import type { SaveGrant } from "../core/chat/save.ts";
 import { hostingFlags } from "../control/contract.ts";
 import { getMember } from "../core/members.ts";
 import { isAppPath, resolveMemberSession, type MemberSession } from "../core/member-sessions.ts";
-import { RateLimiter } from "../mcp/rate_limit.ts";
+import type { RateLimiter } from "../mcp/rate_limit.ts";
 import { handleAppAuth } from "./app-auth.ts";
 import { handleAppConnect } from "./app-connect.ts";
 import { handleChatRoutes } from "./chat-api.ts";

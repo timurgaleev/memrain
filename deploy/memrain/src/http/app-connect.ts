@@ -30,7 +30,9 @@ const json = (body: unknown, status = 200) => Response.json(body, { status, head
 
 function publicBase(deps: AppDeps, url: URL): string {
   const raw = (deps.publicUrl ?? "").trim() || url.origin;
-  return raw.replace(/\/+$/, "");
+  let end = raw.length;
+  while (end > 0 && raw[end - 1] === "/") end--;
+  return raw.slice(0, end);
 }
 
 /** The tenant's one enrollment-mode connector, or null when there is not exactly one. */
@@ -55,8 +57,8 @@ async function readJson(req: Request): Promise<Record<string, unknown> | Respons
 }
 
 function labelSlug(raw: unknown): string {
-  const s = typeof raw === "string" ? raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) : "";
-  return s || "key";
+  const words = typeof raw === "string" ? raw.toLowerCase().split(/[^a-z0-9]/).filter(Boolean) : [];
+  return words.join("-").slice(0, 24) || "key";
 }
 
 async function mintToken(engine: Engine, session: MemberSession & { personalSourceId: string }, body: Record<string, unknown>): Promise<Response> {

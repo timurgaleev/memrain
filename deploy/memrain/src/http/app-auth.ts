@@ -115,7 +115,8 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 function labelOf(raw: unknown): string {
-  const s = typeof raw === "string" ? raw.replace(/[\u0000-\u001F\u007F]/g, "").trim() : "";
+  const printable = (c: string) => c.charCodeAt(0) >= 0x20 && c.charCodeAt(0) !== 0x7F;
+  const s = typeof raw === "string" ? [...raw].filter(printable).join("").trim() : "";
   return s.length > 0 ? s.slice(0, 64) : "Passkey";
 }
 
