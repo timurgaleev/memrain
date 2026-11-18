@@ -397,6 +397,25 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("stops a run already under way from reading a channel taken off the allowlist meanwhile", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      const account = await pasteToken(db.storage, w);
+      const rt = connectorRuntime(db.storage, {
+        kek, providers: providers(), fetch: slackFetch(w), env: ENV, now: () => T0, sleep: async () => {},
+        embedFn: async (t: string) => deterministicEmbed(t),
+      });
+      const started = (await rt.loadAccount(account.id))!;
+      await setAccountConfig(e, account.id, { channels: [GENERAL] });
+      await runConnectorSync(db.storage, started, rt.depsFor(started));
+      expect(slackCalls(w, "conversations.history").filter(p => p.get("channel") === RANDOM)).toHaveLength(0);
+      expect(await body(e, daySlug(RANDOM, "2026-11-15"))).toBeNull();
+      expect(await body(e, daySlug(GENERAL, "2026-11-15"))).toContain("Deploy done");
+    } finally { await db.close(); }
+  });
+
   it("waits out a short rate limit, and ends partial with the cursor kept when Slack asks for longer", async () => {
     const db = await open();
     try {

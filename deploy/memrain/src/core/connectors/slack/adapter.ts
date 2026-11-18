@@ -25,7 +25,8 @@
  *     channel the account was not granted, and a direct conversation are each
  *     held as one failing item for the channel, so the other channels still
  *     sync; the hold is cleared once the channel reads again.
- *   - A channel taken off the allowlist is simply not read: its pages stay.
+ *   - A channel taken off the allowlist is simply not read, from the next
+ *     page of a run already under way: its pages stay.
  *   - Slack's rate limits are the connector client's: a 429 is waited out up
  *     to its cap, past it the run ends partial and resumes from the cursor.
  *
@@ -35,6 +36,7 @@
  * channel's cursor there.
  */
 import type { Engine } from "../../engine/interface.ts";
+import { getAccount } from "../accounts.ts";
 import type { ConnectorClient, ConnectorResponse } from "../client.ts";
 import { renderChatDay } from "../render.ts";
 import { syncItemFromPage } from "../sync-item.ts";
@@ -113,6 +115,7 @@ class Adapter implements SyncAdapter {
 
   async page(ctx: { client: ConnectorClient; account: SyncAccount; stream: string; cursor: string | null; page: number; budget?: ItemBudget }): Promise<PageResult> {
     const channelId = ctx.stream.slice("slack:".length);
+    if (!(await this.stillSelected(channelId))) return { ok: true, items: [], checkpoint: null, done: true };
     const info = await this.channel(ctx.client, channelId);
     if ("failure" in info) return info.failure;
 
@@ -165,6 +168,17 @@ class Adapter implements SyncAdapter {
       checkpoint: last === null ? null : JSON.stringify({ v: 1, through: last }),
       done: last === today,
     };
+  }
+
+  /**
+   * The run lists its streams from the account as it started; the owner may
+   * untick a channel while a long backfill is under way, so each page checks
+   * the allowlist as it is now.
+   */
+  private async stillSelected(channelId: string): Promise<boolean> {
+    if (this.engine === null) return true;
+    const current = await getAccount(this.engine, this.account.id);
+    return current !== null && selectedChannels(current).includes(channelId);
   }
 
   /** One day's top-level messages, join and leave notices left out. */
