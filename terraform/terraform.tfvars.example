@@ -57,6 +57,13 @@ ssh_public_key    = ""           # ssh-rsa / ssh-ed25519 key to register as the 
 enable_connector_kek_secret  = false  # <secrets_prefix>/memrain-connector-kek
 enable_notify_webhook_secret = false  # <secrets_prefix>/memrain-notify-webhook
 
+# Hosting stack only (docs/HOSTING.md). Leave these as they are on a
+# single-tenant stack; a hosting stack has its own state and tfvars.
+# enable_hosting              = false           # <secrets_prefix>/hosting/control-admin-url
+# hosting_tenants             = []              # e.g. ["acme"]: <secrets_prefix>/tenants/<id>/*
+# rds_instance_class          = "db.t4g.micro"
+# instance_metadata_hop_limit = 2               # 1 on a hosting stack: no container reaches IMDS
+
 # ---------------------------------------------------------------------------
 # Legacy — only set true while migrating from a private SSH-clone deploy.
 # Public-repo deploys leave this at false.

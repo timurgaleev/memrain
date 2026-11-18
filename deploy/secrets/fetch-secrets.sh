@@ -19,6 +19,21 @@
 #   MEMRAIN_PUBLIC_WRITE (or MEMEX_PUBLIC_WRITE)
 #                    set to 1 in .env to opt in to public MCP write tools.
 #
+# Hosting host (docs/HOSTING.md), one mode per run:
+#   --tenant <id>    writes .secrets/tenants/<id>.env (MEMRAIN_POSTGRES_URL,
+#                    MEMRAIN_CONTROL_URL, MEMRAIN_INTERNAL_TOKEN) from
+#                    <SECRETS_PREFIX>/tenants/<id>/{postgres-url,control-url,
+#                    internal-token}. All three are required.
+#   --control        writes .secrets/hosting-control.env
+#                    (MEMRAIN_CONTROL_ADMIN_URL) from
+#                    <SECRETS_PREFIX>/hosting/control-admin-url, for the
+#                    one-shot tenant-ctl container only.
+#   TENANT_SECRETS_BACKEND=file with TENANT_SECRETS_DIR=<dir> reads
+#                    <dir>/<id>/<name> (and <dir>/_hosting/control-admin-url)
+#                    instead: no AWS, for a local stack. Source files must be
+#                    regular files readable by their owner only.
+#   Neither mode touches memrain.env or cloudflared.env.
+#
 # Two phases, so a failed run never damages what is already on disk: every
 # secret is fetched into a temp file first, and only when all of them
 # succeeded are the temp files renamed into place. Any error other than a
@@ -29,12 +44,166 @@ set -euo pipefail
 # Defensive: never leak secret values via shell trace if someone exports DEBUG.
 set +x
 
+HOSTING_MODE="" TENANT_ID=""
+case "$#:${1:-}" in
+  0:) ;;
+  2:--tenant) HOSTING_MODE=tenant; TENANT_ID="$2" ;;
+  1:--control) HOSTING_MODE=control ;;
+  *) echo "usage: $0 [--tenant <id> | --control]" >&2; exit 2 ;;
+esac
+if [ "$HOSTING_MODE" = tenant ] && ! [[ "$TENANT_ID" =~ ^[a-z][a-z0-9-]{1,30}$ ]]; then
+  echo "[secrets] ERROR: '${TENANT_ID}' is not a tenant id" >&2
+  exit 2
+fi
+
 # Try to source the repo-level .env so this script works both from
 # bootstrap.sh (which exports the prefix) and from a manual rerun.
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 if [ -f "${REPO_ROOT}/.env" ]; then
   # shellcheck source=/dev/null
   . "${REPO_ROOT}/.env"
+fi
+
+# ---- Hosting modes: one tenant's file, or the control admin URL -------------
+if [ -n "$HOSTING_MODE" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  SECRETS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)/.secrets"
+  # shellcheck source=/dev/null
+  . "${SCRIPT_DIR}/lib.sh"
+  BACKEND="${TENANT_SECRETS_BACKEND:-aws}"
+  case "$BACKEND" in
+    aws) : "${AWS_REGION:?AWS_REGION must be set (export it or define it in ${REPO_ROOT}/.env)}" ;;
+    file) [ -n "${TENANT_SECRETS_DIR:-}" ] && [ -d "${TENANT_SECRETS_DIR}" ] \
+            || { echo "[secrets] ERROR: TENANT_SECRETS_BACKEND=file needs TENANT_SECRETS_DIR (a directory)" >&2; exit 1; } ;;
+    *) echo "[secrets] ERROR: TENANT_SECRETS_BACKEND must be aws or file, got '${BACKEND}'" >&2; exit 1 ;;
+  esac
+
+  umask 077
+  mkdir -p "$SECRETS_DIR"
+  chmod 0711 "$SECRETS_DIR"
+  if [ "$HOSTING_MODE" = tenant ]; then
+    OUT_DIR="${SECRETS_DIR}/tenants"
+    OUT="${OUT_DIR}/${TENANT_ID}.env"
+    SCOPE="tenants/${TENANT_ID}" FILE_SCOPE="${TENANT_ID}"
+    mkdir -p "$OUT_DIR"
+    # Compose reads env files as root; no container user needs the directory.
+    chmod 0700 "$OUT_DIR"
+  else
+    OUT_DIR="$SECRETS_DIR"
+    OUT="${SECRETS_DIR}/hosting-control.env"
+    SCOPE="hosting" FILE_SCOPE="_hosting"
+  fi
+  OUT_TMP="${OUT_DIR}/.$(basename "$OUT").tmp.$$"
+  trap 'rm -f "$OUT_TMP"' EXIT
+
+  # hosting_value NAME -> the value on stdout; exits on any failure. A
+  # missing secret is fatal here: a tenant without its URL or token does not
+  # start (MEMRAIN_REQUIRE_POSTGRES, hosting-mode token check).
+  hosting_value() {
+    local name="$1" id src mode rc=0 value
+    if [ "$BACKEND" = aws ]; then
+      id="${SECRETS_PREFIX:-memex}/${SCOPE}/${name}"
+      value="$(secret_value "$id")" || rc=$?
+      case "$rc" in
+        0) ;;
+        2) echo "[secrets] ERROR: ${id} is missing or has no value; nothing written" >&2; exit 1 ;;
+        *) echo "[secrets] ERROR: reading ${id} failed; nothing written" >&2; exit 1 ;;
+      esac
+    else
+      src="${TENANT_SECRETS_DIR}/${FILE_SCOPE}/${name}"
+      if [ -L "$src" ] || [ ! -f "$src" ]; then
+        echo "[secrets] ERROR: ${src} is not a regular file; nothing written" >&2; exit 1
+      fi
+      mode="$(stat -c '%a' "$src" 2>/dev/null || stat -f '%Lp' "$src")"
+      if [ $((8#$mode & 8#077)) -ne 0 ]; then
+        echo "[secrets] ERROR: ${src} is readable beyond its owner (mode ${mode}); nothing written" >&2; exit 1
+      fi
+      value="$(cat "$src")"
+      value="${value//$'\n'/}"
+      value="${value//$'\r'/}"
+    fi
+    # Compose interpolates env-file values and cuts them at ' #'; a value it
+    # would rewrite is refused rather than passed on altered.
+    if [ -z "$value" ] || [[ "$value" =~ [[:space:]\'\"\`\\\$#] ]]; then
+      echo "[secrets] ERROR: ${SCOPE}/${name} is empty or holds a character an env file cannot carry; nothing written" >&2
+      exit 1
+    fi
+    printf '%s' "$value"
+  }
+
+  require_pg_url() {
+    case "$2" in
+      postgres://*|postgresql://*) ;;
+      *) echo "[secrets] ERROR: ${SCOPE}/$1 is not a postgres:// URL; nothing written" >&2; exit 1 ;;
+    esac
+  }
+
+  # require_owned_url NAME URL ROLE_SUFFIX DATABASE... -> the URL's role is
+  # tenant_<id>_<suffix> and its database one of DATABASE. Provisioning names
+  # them after the id (hyphens may become underscores), so a valid URL of
+  # another tenant, or of the master role, is refused instead of started.
+  require_owned_url() {
+    local name="$1" url="$2" suffix="$3" rest user db ok=0 want
+    shift 3
+    require_pg_url "$name" "$url"
+    rest="${url#*://}"
+    user="${rest%%@*}"; user="${user%%:*}"
+    db="${rest#*@}"
+    case "$rest" in *@*/*) db="${db#*/}"; db="${db%%\?*}" ;; *) db="" ;; esac
+    # Postgres percent-decodes both; hosting_value has already refused '\'.
+    # An encoded NUL would vanish in the shell and let a longer name match.
+    case "$user$db" in *%00*) user="" ;; esac
+    user="$(printf '%b' "${user//%/\\x}")"
+    db="$(printf '%b' "${db//%/\\x}")"
+    for want in "tenant_${TENANT_ID}_${suffix}" "tenant_${TENANT_ID//-/_}_${suffix}"; do
+      [ "$user" = "$want" ] && ok=1
+    done
+    if [ "$ok" = 1 ]; then
+      ok=0
+      for want in "$@"; do [ "$db" = "$want" ] && ok=1; done
+    fi
+    if [ "$ok" != 1 ]; then
+      echo "[secrets] ERROR: ${SCOPE}/${name} names role '${user}' on database '${db}', not tenant ${TENANT_ID}'s; nothing written" >&2
+      exit 1
+    fi
+  }
+
+  if [ "$HOSTING_MODE" = tenant ]; then
+    PG_URL="$(hosting_value postgres-url)"
+    require_owned_url postgres-url "$PG_URL" owner "tenant_${TENANT_ID}" "tenant_${TENANT_ID//-/_}"
+    CTL_URL="$(hosting_value control-url)"
+    require_owned_url control-url "$CTL_URL" ctl memrain_control
+    TOKEN="$(hosting_value internal-token)"
+    if [ "${#TOKEN}" -lt 32 ]; then
+      echo "[secrets] ERROR: ${SCOPE}/internal-token is shorter than 32 characters; nothing written" >&2
+      exit 1
+    fi
+    # Each tenant's token is its own: a neighbour holding the same one could
+    # call this tenant's internal routes. Compared in the shell, so the value
+    # never reaches a process argument list.
+    # shellcheck disable=SC2094  # only basename of the file is printed
+    for other in "${OUT_DIR}"/*.env; do
+      [ -f "$other" ] && [ "$other" != "$OUT" ] || continue
+      while IFS= read -r line || [ -n "$line" ]; do
+        if [ "$line" = "MEMRAIN_INTERNAL_TOKEN=${TOKEN}" ]; then
+          echo "[secrets] ERROR: tenant ${TENANT_ID}'s internal token is already held by $(basename "$other" .env); nothing written" >&2
+          exit 1
+        fi
+      done < "$other"
+    done
+    { printf 'MEMRAIN_POSTGRES_URL=%s\n' "$PG_URL"
+      printf 'MEMRAIN_CONTROL_URL=%s\n' "$CTL_URL"
+      printf 'MEMRAIN_INTERNAL_TOKEN=%s\n' "$TOKEN"; } > "$OUT_TMP"
+    WHAT="tenant ${TENANT_ID}: database URL, control URL and internal token"
+  else
+    ADMIN_URL="$(hosting_value control-admin-url)"; require_pg_url control-admin-url "$ADMIN_URL"
+    printf 'MEMRAIN_CONTROL_ADMIN_URL=%s\n' "$ADMIN_URL" > "$OUT_TMP"
+    WHAT="control admin URL"
+  fi
+  chmod 0400 "$OUT_TMP"
+  mv -f "$OUT_TMP" "$OUT"
+  echo "[secrets] ${WHAT} written to ${OUT} (backend ${BACKEND})"
+  exit 0
 fi
 
 : "${AWS_REGION:?AWS_REGION must be set (export it or define it in ${REPO_ROOT}/.env)}"

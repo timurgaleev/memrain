@@ -1,0 +1,83 @@
+# Hosting host base — Docker Compose v2. Used only on a host that runs tenant
+# brains (docs/HOSTING.md); the single-tenant stack is deploy/docker-compose.yml
+# and never loads this file.
+#
+# Always loaded together with every deploy/tenants/<id>.yml, by the scripts in
+# deploy/tenant/ (lib.sh builds the -f list). The project directory is this
+# file's directory, so relative paths below and in the tenant files resolve
+# from deploy/tenant/.
+#
+# Required env (from the host .env, passed with --env-file):
+#   AWS_REGION    AWS region
+#   MEMRAIN_VERSION is exported by deploy-tenants.sh (git describe).
+
+name: memrain-hosting
+
+x-logging: &bounded-logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  # The tenant image and the one-shot CLI container in one service: `compose
+  # build tenant-ctl` builds the image every tenant container runs, and
+  # `compose run --rm tenant-ctl tenant ...` runs the control-plane commands.
+  # Only this container receives the control admin URL (hosting-control.env);
+  # no tenant container ever does.
+  tenant-ctl:
+    build:
+      context: ../memrain
+      dockerfile: Dockerfile
+      args:
+        MEMRAIN_VERSION: "${MEMRAIN_VERSION:-dev}"
+    image: memrain-hosting:${MEMRAIN_VERSION:-dev}
+    profiles: ["ops"]
+    logging: *bounded-logs
+    entrypoint: ["bun", "run", "src/cli.ts"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      - AWS_REGION=${AWS_REGION:?AWS_REGION must be set}
+      # Where provisioning writes a tenant's secrets with the file backend,
+      # as <dir>/<id>/<name>; `fetch-secrets.sh --tenant` reads them back with
+      # TENANT_SECRETS_BACKEND=file TENANT_SECRETS_DIR=deploy/.secrets/provisioned.
+      - MEMRAIN_TENANT_SECRETS_DIR=/provisioned
+    env_file:
+      - path: ../.secrets/hosting-control.env
+        required: false
+    # Create it owned by the image user before provisioning:
+    #   install -d -m 0700 -o 1000 -g 1000 deploy/.secrets/provisioned
+    volumes:
+      - type: bind
+        source: ../.secrets/provisioned
+        target: /provisioned
+    networks:
+      - ops
+
+  # Tenant hostnames route here (remote-managed tunnel, one ingress rule per
+  # tenant to http://memrain-<id>:18790). Each tenant file adds its network to
+  # this service; cloudflared proxies HTTP and does not route between them.
+  cloudflared:
+    image: cloudflare/cloudflared:2025.4.0
+    restart: unless-stopped
+    logging: *bounded-logs
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command: tunnel --no-autoupdate --protocol http2 run
+    env_file:
+      - path: ../.secrets/cloudflared.env
+        required: false
+    networks:
+      egress: {}
+
+networks:
+  ops:
+    name: memrain_hosting_ops
+  egress:
+    name: memrain_hosting_egress

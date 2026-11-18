@@ -40,6 +40,12 @@ locals {
   secrets_read_prefixes = coalescelist(var.secrets_read_prefixes, [var.secrets_prefix])
 
   subdomain = var.memex_subdomain != null ? var.memex_subdomain : var.subdomain
+
+  # "<tenant>/<kind>" => { tenant, kind } for every hosting tenant secret.
+  hosting_tenant_secrets = {
+    for pair in setproduct(var.hosting_tenants, ["postgres-url", "control-url", "internal-token"]) :
+    "${pair[0]}/${pair[1]}" => { tenant = pair[0], kind = pair[1] }
+  }
 }
 
 check "memex_subdomain_deprecated" {

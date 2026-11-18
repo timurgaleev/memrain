@@ -495,7 +495,7 @@ deploy/memrain/tests/worth_gate.test.ts|COMPAT-TEST|1|incidental: pre-rename tem
 deploy/memrain/tests/write_preconditions.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/write_timing.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/secrets/README.md|COMPAT-DOC|2|legacy secret names and the unset-prefix default
-deploy/secrets/fetch-secrets.sh|COMPAT|8|legacy secret names, prefix default and MEMEX_ fallbacks
+deploy/secrets/fetch-secrets.sh|COMPAT|9|legacy secret names, prefix default and MEMEX_ fallbacks
 deploy/secrets/lib.sh|COMPAT|5|legacy secret names and the unset-prefix default
 deploy/skills/_brain-filing-rules.md|COMPAT-DOC|1|keep an existing memex: fence marker
 deploy/skills/_resolver.md|COMPAT-DOC|2|generated routing table repeats the legacy trigger aliases of brain-upgrade and setup
@@ -506,6 +506,7 @@ scripts/bootstrap.sh|COMPAT|5|legacy stack-env, admin secret and MEMEX_ fallback
 scripts/init.sh|COMPAT|2|MEMEX_ fallback and the public repository's current name
 scripts/mcp-refresh.sh|COMPAT|11|MEMEX_ fallbacks, legacy secret and an old MCP registration notice
 scripts/rotate-memrain-public-bearer.sh|COMPAT|7|legacy secret name and MEMEX_ROTATE_ fallbacks
+scripts/tenant-isolation-smoke.sh|COMPAT|1|the secrets prefix default when SECRETS_PREFIX is unset
 scripts/test-pg.sh|COMPAT|3|accepts the caller's legacy test URL
 terraform/moved.tf|INFRA-MOVED|24|moved blocks from the pre-rename resource addresses
 terraform/names.tf|COMPAT|4|the deprecated memex_subdomain variable

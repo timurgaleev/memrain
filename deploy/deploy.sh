@@ -35,6 +35,12 @@ set -euo pipefail
 ENV_FILE="${ENV_FILE:-.env}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# A hosting host (deploy/tenants/*.yml exists) runs one brain per tenant and
+# no single-tenant brain: it deploys tenant by tenant instead (docs/HOSTING.md).
+if compgen -G "${SCRIPT_DIR}/tenants/*.yml" > /dev/null; then
+  exec bash "${SCRIPT_DIR}/tenant/deploy-tenants.sh" "$@"
+fi
+
 # The ingress overlay (Caddy, when ingress_mode=caddy) is a SECOND compose file
 # chosen at bootstrap and recorded as COMPOSE_FILE in the host .env. Resolving
 # only the base file here would treat the running ingress container as an

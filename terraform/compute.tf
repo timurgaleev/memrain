@@ -55,8 +55,9 @@ resource "aws_instance" "memrain" {
     # get-secret-value) fails with "Unable to locate credentials".
     # The bare-metal threat model that motivates hop_limit=1 (untrusted
     # host-side processes exfiltrating role creds) does not apply here:
-    # the whole workload IS containerised.
-    http_put_response_hop_limit = 2
+    # the whole workload IS containerised. A hosting stack sets 1 instead:
+    # there the containers are tenants, and none may take the instance role.
+    http_put_response_hop_limit = var.instance_metadata_hop_limit
   }
 
   root_block_device {
