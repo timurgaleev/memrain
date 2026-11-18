@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { dispatchTool } from "../src/mcp/dispatch.ts";
 import type { AuthInfo } from "../src/core/auth-info.ts";
+import { setTenantPolicySource } from "../src/control/contract.ts";
 
 const DETAIL = "internal-detail-db-host-and-schema";
 const saved = process.env["MEMRAIN_TENANT_ID"];
@@ -42,6 +43,7 @@ afterAll(async () => {
   rmSync(tmp, { recursive: true, force: true });
 });
 afterEach(() => {
+  setTenantPolicySource(null);
   if (saved === undefined) delete process.env["MEMRAIN_TENANT_ID"];
   else process.env["MEMRAIN_TENANT_ID"] = saved;
 });
@@ -63,6 +65,8 @@ async function errorText(): Promise<string> {
 describe("raw error text for OAuth callers", () => {
   it("is withheld on a hosted tenant", async () => {
     process.env["MEMRAIN_TENANT_ID"] = "acme";
+    // An open, verified tenant: the call reaches the failing engine.
+    setTenantPolicySource(async () => ({ status: "active", mode: null, limits: {}, llmOff: false, isolation: "verified" }));
     const text = await errorText();
     expect(text).not.toContain(DETAIL);
     expect(text).toContain("incident");
