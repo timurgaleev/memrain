@@ -28,6 +28,7 @@ to run while `deploy-memrain-1` is running.
 | `deploy/.secrets/hosting-control.env` | The control admin URL, for `tenant-ctl` only (`fetch-secrets.sh --control`) |
 | `deploy/.secrets/provisioned/<id>/` | Secrets provisioning wrote with the `file` backend (mounted into `tenant-ctl` only) |
 | `deploy/tenant/deploy-tenants.sh` | The per-tenant deploy; `deploy/deploy.sh` hands over to it |
+| `deploy/tenant/ctl.sh` | One control-plane command (`tenant ...`) in `tenant-ctl`, with the deploy's file set |
 | `scripts/tenant-isolation-smoke.sh` | The isolation smoke for one tenant container |
 | `deploy/tenant/smoke-all.sh` | The smoke for every running tenant (after a reboot) |
 | `scripts/tenant-rss-bench.sh` | The memory bench behind `MEMRAIN_TENANT_MEM_LIMIT` |
@@ -72,8 +73,9 @@ other, and the isolation smoke proves that on every start (see below).
    `enable_hosting = true` and `instance_metadata_hop_limit = 1`. With a hop
    limit of 1 no container can take the instance role. That includes
    `tenant-ctl` and the tenant containers, which then have no AWS credentials
-   at all. Size the database with `rds_instance_class`. Run `terraform plan`,
-   review it, then apply.
+   at all. Size the database with `rds_instance_class`, and set
+   `db_name = "memrain_control"` so the instance starts with the control
+   database. Run `terraform plan`, review it, then apply.
 
    Two pieces are not built yet:
    - **Bedrock for tenants.** A tenant container needs its own Bedrock-only
@@ -89,21 +91,31 @@ other, and the isolation smoke proves that on every start (see below).
    `<prefix>/hosting/control-admin-url`.
 3. On the host, run `bash deploy/secrets/fetch-secrets.sh --control`, and the
    default `fetch-secrets.sh` run for the cloudflared tunnel token.
+4. Create the directory provisioning writes secrets to, owned by the image
+   user: `install -d -m 0700 -o 1000 -g 1000 deploy/.secrets/provisioned`.
+   `tenant-ctl` mounts it at `/provisioned` and names it in
+   `MEMRAIN_TENANT_SECRETS_DIR`.
+5. Build the image and migrate the control database:
+   `bash deploy/tenant/ctl.sh --build tenant migrate-control`.
+
+`deploy/tenant/ctl.sh` runs one control-plane command in the one-shot
+`tenant-ctl` container, with the same file set as the deploy. It runs the
+image the tenant containers run. Until a tenant runs there is none to take,
+so add `--build`: it builds the image stamped with `git describe`, as a deploy
+does.
 
 ## Adding a tenant
 
 1. Add the id to `hosting_tenants`, then plan and apply. This creates the three
    empty secrets under `<prefix>/tenants/<id>/`.
-2. `memrain tenant create <id> --host <hostname>`, from the `tenant-ctl`
-   container. It creates the database, roles and secrets, migrates and creates
-   the owner's invitation. Until there is a write path to Secrets Manager (see
-   above), it writes the secrets with the `file` backend.
-   `tenant-ctl` mounts `deploy/.secrets/provisioned` at `/provisioned` and
-   names that directory in `MEMRAIN_TENANT_SECRETS_DIR`. Before the first
-   tenant, create it for the image user:
-   `install -d -m 0700 -o 1000 -g 1000 deploy/.secrets/provisioned`. Step 4
-   then runs with `TENANT_SECRETS_BACKEND=file
-   TENANT_SECRETS_DIR=deploy/.secrets/provisioned`.
+2. `bash deploy/tenant/ctl.sh tenant create <id> --host <hostname>
+   --invite-out /provisioned/<id>.invite` (add `--build` before `tenant` for
+   the first tenant). It creates the database, roles and secrets, migrates and
+   creates the owner's invitation. The one-time invite link lands in
+   `deploy/.secrets/provisioned/<id>.invite`, mode 0600. Until there is a write
+   path to Secrets Manager (see above), it writes the secrets with the `file`
+   backend into `deploy/.secrets/provisioned/<id>/`, so step 4 runs with
+   `TENANT_SECRETS_BACKEND=file TENANT_SECRETS_DIR=deploy/.secrets/provisioned`.
 3. `bash scripts/tenant-render.sh <id> --host <hostname>` writes
    `deploy/tenants/<id>.yml`.
 4. `bash deploy/secrets/fetch-secrets.sh --tenant <id>`. It refuses a missing
@@ -162,9 +174,16 @@ smoke therefore leaves the tenant closed, not open.
 A pass is recorded with `memrain tenant smoke-record <id>`. `--no-record`
 checks without recording.
 
-The deploy runs the smoke after each tenant. After a host reboot,
-`docker restart` or a Docker upgrade, run `bash deploy/tenant/smoke-all.sh`.
-It smokes every running tenant and lists the failures.
+The deploy runs the smoke after each tenant. Every other start of a tenant
+container needs one too, and nothing runs it automatically. That covers a host
+reboot, `docker restart` and a Docker upgrade. It also covers a crash or an
+out-of-memory kill at `MEMRAIN_TENANT_MEM_LIMIT`: Docker restarts the container
+(`restart: unless-stopped`), and the tenant then answers 503
+`isolation_unverified` until a smoke passes. After any of these, run
+`bash deploy/tenant/smoke-all.sh`. It smokes every running tenant and lists the
+failures. A tenant that answers 503 `isolation_unverified` while its container
+is up has restarted since its last smoke: check
+`docker inspect memrain-<id> --format '{{.State.StartedAt}} {{.RestartCount}} {{.State.OOMKilled}}'`.
 
 ## Memory
 
