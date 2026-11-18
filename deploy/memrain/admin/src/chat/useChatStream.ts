@@ -81,6 +81,8 @@ export function useChatStream(opts: { onAnswer?: (a: Answer) => void; onDone?: (
           update((t) => ({ ...t, phase: "answered", answer: e.answer }));
           cbs.current.onAnswer?.(e.answer);
         } else if (e.type === "error") {
+          // An error after the answer keeps the text on screen but marks the
+          // turn failed: the server may not have kept that answer.
           failed = true;
           fail(e.error.code);
         } else {

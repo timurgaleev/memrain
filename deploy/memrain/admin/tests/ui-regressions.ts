@@ -230,6 +230,8 @@ try {
   };
   const T1 = { id: "t1", title: "Offsite plans", updated_at: "2026-11-08T10:05:00Z", message_count: 2 };
   const ask = async (page: Page, question: string) => {
+    // The model picker appears once the model list has loaded and sending is possible.
+    await page.getByLabel("Model").waitFor();
     await page.getByLabel("Question", { exact: true }).fill(question);
     await page.getByRole("button", { name: "Send", exact: true }).click();
   };
@@ -409,6 +411,37 @@ try {
     assert.equal(await page.getByRole("dialog").count(), 0);
     assert.deepEqual(chat.posts("/admin/api/chat"), []);
   });
+  await check("Arrowing to the palette's Ask row survives the search debounce", "palette", async (page) => {
+    await fresh(page, chatScenario());
+    const input = page.getByRole("dialog").getByRole("combobox");
+    await input.fill("offsite dates");
+    await input.press("ArrowDown");
+    await page.clock.runFor(400);
+    await input.press("Enter");
+    await page.waitForFunction(() => location.hash === "#ask");
+    assert.equal(await page.getByLabel("Question", { exact: true }).inputValue(), "offsite dates");
+  });
+  await check("An error after the answer says so and offers no save", "ask", async (page) => {
+    await fresh(page, chatScenario({ script: [
+      { event: "answer", data: ANSWER },
+      { event: "error", data: { code: "db_busy", message: "settle failed" } },
+    ] }));
+    await ask(page, "When is the offsite?");
+    await page.getByText("The offsite is in", { exact: false }).waitFor();
+    await page.getByText("Memory is busy right now", { exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Save as page" }).count(), 0);
+  });
+  await check("New question closes the phone drawer, and Tab stays inside it while open", "ask", async (page) => {
+    await fresh(page, chatScenario({ threads: [{ id: "t1", title: "Offsite plans", updated_at: "2026-11-08T10:05:00Z", message_count: 2 }] }));
+    const toggle = page.getByRole("button", { name: "Conversations" });
+    await toggle.click();
+    const list = page.getByRole("navigation", { name: "Conversations" });
+    await list.getByRole("link", { name: /Offsite plans/ }).waitFor({ state: "visible" });
+    for (let i = 0; i < 6; i++) await page.keyboard.press("Tab");
+    assert.equal(await page.evaluate(() => !!document.activeElement?.closest("nav[aria-label='Conversations']")), true);
+    await list.getByRole("button", { name: "New question" }).click();
+    assert.equal(await list.isVisible(), false);
+  }, { viewport: { width: 375, height: 812 } });
   await check("With no hits, Enter in the palette still opens full search", "palette", async (page) => {
     await fresh(page, chatScenario());
     const input = page.getByRole("dialog").getByRole("combobox");

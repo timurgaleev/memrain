@@ -97,12 +97,27 @@ export function ChatView({ threadId }: { threadId: string | null }) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.stopPropagation();
-      setDrawer(false);
-      toggleRef.current?.focus();
+      closeDrawer();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [drawer]);
+
+  function closeDrawer() {
+    setDrawer(false);
+    toggleRef.current?.focus();
+  }
+
+  // While the drawer covers the page, Tab cycles inside it.
+  const trapTab = (e: React.KeyboardEvent) => {
+    if (e.key !== "Tab") return;
+    const items = drawerRef.current?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])");
+    if (!items || items.length === 0) return;
+    const first = items[0]!;
+    const last = items[items.length - 1]!;
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
 
   const model = effectiveModel(models.data, picked);
   const canSend = enabled && !stream.busy && text.trim() !== "";
@@ -114,6 +129,7 @@ export function ChatView({ threadId }: { threadId: string | null }) {
   };
   const retry = (t: LiveTurn) => { stream.send(t.question, turnThread(t), model); };
   const startNew = () => {
+    setDrawer(false);
     stream.clear();
     setText("");
     go(null);
@@ -159,8 +175,14 @@ export function ChatView({ threadId }: { threadId: string | null }) {
       {models.data && !models.data.enabled && <DisabledNote />}
 
       <div className="chat">
-        {drawer && <div className="chat-backdrop" aria-hidden="true" onClick={() => setDrawer(false)} />}
-        <nav ref={drawerRef} id={drawerId} className={drawer ? "chat-threads open" : "chat-threads"} aria-label="Conversations">
+        {drawer && <div className="chat-backdrop" aria-hidden="true" onClick={closeDrawer} />}
+        <nav
+          ref={drawerRef}
+          id={drawerId}
+          className={drawer ? "chat-threads open" : "chat-threads"}
+          aria-label="Conversations"
+          onKeyDown={drawer ? trapTab : undefined}
+        >
           <ThreadList state={threads} activeId={threadId} now={now} onNew={startNew} onDelete={deleteThread} />
         </nav>
 
@@ -272,7 +294,9 @@ function LiveAnswer({ turn, saved, onSaved, onRetry }: {
 }) {
   if (turn.answer) {
     const a = turn.answer;
+    const brokenAfter = turn.phase === "failed";
     return (
+      <>
       <AnswerView
         messageId={a.message_id}
         status={a.status}
@@ -287,8 +311,11 @@ function LiveAnswer({ turn, saved, onSaved, onRetry }: {
         savedSlug={saved[a.message_id] ?? null}
         onSaved={onSaved}
         onRetry={onRetry}
+        canSave={!brokenAfter}
         live
       />
+      {brokenAfter && <Outcome code={turn.error ?? "stream_closed"} pages={[]} onRetry={onRetry} live />}
+      </>
     );
   }
   return (
@@ -349,6 +376,8 @@ function AnswerView(p: {
   savedSlug: string | null;
   onSaved: (messageId: string, slug: string) => void;
   onRetry?: () => void;
+  /** False when the stream failed after this answer arrived: the server may not have kept it. */
+  canSave?: boolean;
   live?: boolean;
 }) {
   const outcome = answerOutcome(p.status, p.code);
@@ -368,7 +397,7 @@ function AnswerView(p: {
           )}
           <div className="chat-a-foot">
             <CostBadge costUsd={p.costUsd} model={p.model} durationMs={p.durationMs} />
-            <SaveAnswer messageId={p.messageId} savedSlug={p.savedSlug} onSaved={p.onSaved} />
+            {p.canSave !== false && <SaveAnswer messageId={p.messageId} savedSlug={p.savedSlug} onSaved={p.onSaved} />}
           </div>
         </>
       ) : (

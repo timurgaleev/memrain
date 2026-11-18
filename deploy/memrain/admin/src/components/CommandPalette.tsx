@@ -114,7 +114,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   // results change underneath it.
   const askOnly = rows.length > 0 && rows.every((r) => r.group === "ask");
   const activeId = askOnly && !askArmed ? undefined : rows[Math.min(active, Math.max(0, rows.length - 1))]?.id;
-  useEffect(() => { setActive(0); setAskArmed(false); }, [slugQuery]);
+  useEffect(() => { setActive(0); }, [slugQuery]);
 
   if (!open) return null;
 
@@ -198,7 +198,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           ref={inputRef}
           className="cmdk-input"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => { setInput(e.target.value); setAskArmed(false); }}
           placeholder="Jump to a page or search the brain…"
           role="combobox"
           aria-expanded={rows.length > 0}
