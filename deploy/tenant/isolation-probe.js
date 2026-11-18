@@ -10,7 +10,8 @@
 //   PROBE_NEIGHBOURS      comma-separated host:port that must NOT answer
 //   PROBE_IMDS            host:port of the instance metadata service; it must
 //                         not answer
-//   PROBE_FOREIGN_SECRET  a secret id of another tenant; reading it must fail
+//   PROBE_FOREIGN_SECRETS comma-separated secret ids of other tenants and the
+//                         control admin URL; reading each must fail
 //                         for want of credentials or with AccessDenied
 import net from "node:net";
 
@@ -73,7 +74,8 @@ try {
   report(true, "imds", "no answer");
 }
 
-if (env.PROBE_FOREIGN_SECRET) {
+const foreign = (env.PROBE_FOREIGN_SECRETS || "").split(",").filter(Boolean);
+if (foreign.length > 0) {
   // The instance role is the imds check's job. Here only the credentials the
   // container holds itself (env, files) count. Left on, the SDK's IMDS lookup
   // in the image ran for minutes against a refusing endpoint, past any abort
@@ -81,22 +83,25 @@ if (env.PROBE_FOREIGN_SECRET) {
   process.env.AWS_EC2_METADATA_DISABLED = "true";
   const { SecretsManagerClient, GetSecretValueCommand } = await import("@aws-sdk/client-secrets-manager");
   const client = new SecretsManagerClient({ region: env.AWS_REGION || "eu-west-1", maxAttempts: 1 });
-  const what = env.PROBE_FOREIGN_SECRET;
-  const deadline = new Promise((_, reject) => {
-    setTimeout(() => reject(Object.assign(new Error("no answer"), { name: "Deadline" })), 30000).unref?.();
-  });
-  try {
-    await Promise.race([
-      client.send(new GetSecretValueCommand({ SecretId: what }), { abortSignal: AbortSignal.timeout(20000) }),
-      deadline,
-    ]);
-    report(false, "secrets", `${what} was readable`);
-  } catch (e) {
-    const name = e?.name || "Error";
-    if (name === "CredentialsProviderError") report(true, "secrets", `${what}: no AWS credentials in the container`);
-    else if (name === "AccessDeniedException") report(true, "secrets", `${what}: access denied`);
-    else report(false, "secrets", `${what}: ${name} (only no credentials or AccessDenied pass)`);
-  }
+  // All at once, so a silent endpoint costs one deadline, not one per secret.
+  const outcomes = await Promise.all(foreign.map(async (what) => {
+    const deadline = new Promise((_, reject) => {
+      setTimeout(() => reject(Object.assign(new Error("no answer"), { name: "Deadline" })), 30000).unref?.();
+    });
+    try {
+      await Promise.race([
+        client.send(new GetSecretValueCommand({ SecretId: what }), { abortSignal: AbortSignal.timeout(20000) }),
+        deadline,
+      ]);
+      return [false, `${what} was readable`];
+    } catch (e) {
+      const name = e?.name || "Error";
+      if (name === "CredentialsProviderError") return [true, `${what}: no AWS credentials in the container`];
+      if (name === "AccessDeniedException") return [true, `${what}: access denied`];
+      return [false, `${what}: ${name} (only no credentials or AccessDenied pass)`];
+    }
+  }));
+  for (const [ok, why] of outcomes) report(ok, "secrets", why);
 } else {
   report(false, "secrets", "no foreign secret id to probe");
 }

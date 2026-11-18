@@ -54,8 +54,12 @@ const imds = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Respon
 ports.imds = imds.port;
 const secrets = Bun.serve({
   port: 0, hostname: "127.0.0.1",
-  fetch() {
-    const mode = readFileSync(`${dir}/secrets_mode`, "utf8").trim();
+  async fetch(req) {
+    // A per-secret answer in secret_mode/<id with / as __> wins over secrets_mode.
+    const id = String((await req.json().catch(() => ({}))).SecretId || "").replaceAll("/", "__");
+    let mode;
+    try { mode = readFileSync(`${dir}/secret_mode/${id}`, "utf8").trim(); }
+    catch { mode = readFileSync(`${dir}/secrets_mode`, "utf8").trim(); }
     if (mode === "readable") return Response.json({ Name: "x", SecretString: "leaked" });
     return new Response(JSON.stringify({ __type: mode, message: "stub" }), {
       status: 400, headers: { "content-type": "application/x-amz-json-1.1" },
@@ -147,6 +151,7 @@ ws_new() {
   container_json memrain-acme memrain_tenant_acme
   container_json memrain-beta memrain_tenant_beta
   printf 'postgres://acme_owner:%s@127.0.0.1:%s/tenant_acme' "pw-secret" "$(port rds)" > "$S/pg_url"
+  rm -rf "$TMPROOT/secret_mode"
   echo AccessDeniedException > "$TMPROOT/secrets_mode"
 }
 
@@ -169,7 +174,11 @@ if [ "$RC" -eq 0 ]; then pass "an isolated tenant passes"; else die "isolated te
 if called 'tenant smoke-record acme'; then pass "a pass is recorded in control"; else die "no smoke-record after a pass"; fi
 if grep -q 'pw-secret' "$WS/out.log"; then die "the database password reached the output"; else pass "no secret in the output"; fi
 if called 'inspect memrain-beta'; then pass "the neighbour comes from deploy/tenants/"; else die "neighbour not looked up"; fi
-if grep -q 'hst/tenants/beta/postgres-url' "$WS/out.log"; then pass "the foreign secret probed is the neighbour's"; else die "foreign secret id not reported"; show; fi
+probed=1
+for id in hst/tenants/beta/postgres-url hst/tenants/beta/control-url hst/tenants/beta/internal-token hst/hosting/control-admin-url; do
+  grep -q "ok secrets ($id:" "$WS/out.log" || { probed=0; echo "      not probed: $id"; }
+done
+if [ "$probed" = 1 ]; then pass "every neighbour secret and the control admin URL are probed"; else die "foreign secrets not all probed"; show; fi
 
 ws_new; SMOKE_ARGS=--no-record run_smoke
 if [ "$RC" -eq 0 ] && ! called 'smoke-record'; then pass "--no-record checks without recording"; else die "--no-record: rc=$RC"; fi
@@ -196,6 +205,28 @@ ws_new; creds; echo ResourceNotFoundException > "$TMPROOT/secrets_mode"; run_smo
 if [ "$RC" -ne 0 ] && grep -q 'FAIL secrets' "$WS/out.log"; then pass "NotFound (the role may read the prefix) fails the smoke"; else die "NotFound passed (rc=$RC)"; show; fi
 ws_new; creds; echo AccessDeniedException > "$TMPROOT/secrets_mode"; run_smoke
 if [ "$RC" -eq 0 ]; then pass "AccessDenied on the foreign secret passes"; else die "AccessDenied failed (rc=$RC)"; show; fi
+
+# Credentials denied the first neighbour's secret may still read a later
+# neighbour's, or the control admin URL; each one must be refused.
+readable_one() { # SECRET_ID
+  mkdir -p "$TMPROOT/secret_mode"
+  echo readable > "$TMPROOT/secret_mode/${1//\//__}"
+}
+ws_new; creds
+printf 'services: {}\n' > "$WS/deploy/tenants/gamma.yml"; container_json memrain-gamma memrain_tenant_gamma
+readable_one hst/tenants/gamma/internal-token
+run_smoke
+if [ "$RC" -ne 0 ] && grep -q 'FAIL secrets: hst/tenants/gamma/internal-token' "$WS/out.log" && ! called 'smoke-record'; then
+  pass "a readable secret of the third tenant fails the smoke"
+else
+  die "third tenant's readable secret passed (rc=$RC)"; show
+fi
+ws_new; creds; readable_one hst/hosting/control-admin-url; run_smoke
+if [ "$RC" -ne 0 ] && grep -q 'FAIL secrets: hst/hosting/control-admin-url' "$WS/out.log"; then
+  pass "a readable control admin URL fails the smoke"
+else
+  die "readable control admin URL passed (rc=$RC)"; show
+fi
 
 # The SDK's own IMDS timeout does not hold under bun: a metadata endpoint that
 # swallows the connection hung the credential lookup for minutes. The

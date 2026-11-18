@@ -14,8 +14,8 @@
 #   bedrock  bedrock-runtime.<region>.amazonaws.com:443 answers
 #   neighbour  every other tenant container, by name and by IP, does not
 #   imds     the instance metadata service does not answer
-#   secrets  another tenant's secret cannot be read (no credentials, or
-#            AccessDenied)
+#   secrets  none of the other tenants' secrets, and not the control admin
+#            URL, can be read (no credentials, or AccessDenied)
 # On a pass it records the result in control (`memrain tenant smoke-record`),
 # unless --no-record. Prints no secret.
 #
@@ -64,12 +64,15 @@ BAD_MOUNT="$(jq -r '.[0].Mounts // [] | .[].Source | select(test("/\\.secrets(/|
 echo "ok host (one network, no secrets mounted)"
 
 # ---- Neighbours: every other tenant with a running container ---------------
-NEIGHBOURS=() FIRST_NEIGHBOUR=""
+# Every other tenant's three secrets and the control admin URL must be out of
+# reach: credentials denied one of them may still read another.
+NEIGHBOURS=() FOREIGN=() OTHERS=0
 for f in "${TENANTS_DIR}"/*.yml; do
   [ -e "$f" ] || continue
   other="$(basename "$f" .yml)"
   if [ "$other" = "$ID" ] || ! valid_tenant_id "$other"; then continue; fi
-  [ -n "$FIRST_NEIGHBOUR" ] || FIRST_NEIGHBOUR="$other"
+  OTHERS=$((OTHERS + 1))
+  for kind in postgres-url control-url internal-token; do FOREIGN+=("${PREFIX}/tenants/${other}/${kind}"); done
   oinfo="$(docker inspect "memrain-${other}" 2>/dev/null)" || { echo "note: memrain-${other} has no container; skipped"; continue; }
   [ "$(jq -r '.[0].State.Running' <<< "$oinfo")" = "true" ] || { echo "note: memrain-${other} is not running; skipped"; continue; }
   NEIGHBOURS+=("memrain-${other}:${PORT}")
@@ -77,16 +80,18 @@ for f in "${TENANTS_DIR}"/*.yml; do
     [ -n "$ip" ] && NEIGHBOURS+=("${ip}:${PORT}")
   done < <(jq -r '.[0].NetworkSettings.Networks[]?.IPAddress // empty' <<< "$oinfo")
 done
-FOREIGN="${PREFIX}/tenants/${FIRST_NEIGHBOUR:-smoke-probe}/postgres-url"
+[ "$OTHERS" -gt 0 ] || FOREIGN+=("${PREFIX}/tenants/smoke-probe/postgres-url")
+FOREIGN+=("${PREFIX}/hosting/control-admin-url")
 
 # ---- From inside the container ---------------------------------------------
 PROBE="$(cat "${HOSTING_DIR}/isolation-probe.js")"
 NEIGHBOUR_LIST="$(IFS=,; printf '%s' "${NEIGHBOURS[*]+"${NEIGHBOURS[*]}"}")"
+FOREIGN_LIST="$(IFS=,; printf '%s' "${FOREIGN[*]}")"
 if ! docker exec \
     -e PROBE_BEDROCK="${SMOKE_BEDROCK_ADDR:-bedrock-runtime.${REGION:-eu-west-1}.amazonaws.com:443}" \
     -e PROBE_NEIGHBOURS="$NEIGHBOUR_LIST" \
     -e PROBE_IMDS="${SMOKE_IMDS_ADDR:-169.254.169.254:80}" \
-    -e PROBE_FOREIGN_SECRET="$FOREIGN" \
+    -e PROBE_FOREIGN_SECRETS="$FOREIGN_LIST" \
     "$C" bun -e "$PROBE"; then
   echo "isolation smoke for ${ID}: FAILED (not recorded)"
   exit 1
