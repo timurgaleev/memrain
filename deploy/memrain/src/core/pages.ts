@@ -36,6 +36,7 @@ import { assertTakeMutationHolder } from "./synthesis/takes-write.ts";
 import { storedTakeRowMax, syncTakesFromFence } from "./synthesis/takes-canon.ts";
 import { takePageEligibleSql } from "./synthesis/takes-owner.ts";
 import { atomPageMatches, lockAtomSource, tryLockAtomSlugs, type AtomPageExpectation, type AtomSourceExpectation } from "./synthesis/atoms-source.ts";
+import type { TrustTier } from "./trust-tier.ts";
 
 // Catalogue of well-known page types. Not enforced at the DB level (see
 // migration 015 comment); kept here so application code can normalise +
@@ -218,6 +219,12 @@ export interface PageInput {
   requireCleanNewSlug?: boolean;
   /** The authenticated principal behind the write (page_versions.written_by_principal). */
   written_by_principal?: string;
+  /**
+   * The highest tier this write may leave the page at, set in the same
+   * transaction as the write. It lowers a stored tier, never raises it.
+   * In-process writers only; no tool argument reaches it.
+   */
+  trust_tier?: TrustTier;
 }
 
 /**
@@ -798,9 +805,9 @@ export async function putPage(
       // Brand new page.
       await tx.query(
         `INSERT INTO pages (slug, type, title, compiled_truth,
-                            markdown_body, content_hash, source_id)
-         VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7)`,
-        [input.slug, type, title, truthJson, body, hashNew, sourceId],
+                            markdown_body, content_hash, source_id, trust_tier)
+         VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8)`,
+        [input.slug, type, title, truthJson, body, hashNew, sourceId, input.trust_tier ?? null],
       );
       await tx.query(
         `INSERT INTO page_versions
@@ -859,9 +866,11 @@ export async function putPage(
              markdown_body = $5,
              content_hash = $6,
              updated_at = NOW(),
-             deleted_at = NULL
+             deleted_at = NULL,
+             trust_tier = CASE WHEN $7::text IS NULL THEN trust_tier
+                               ELSE memrain_min_trust_tier(COALESCE(trust_tier, 'owner'), $7::text) END
        WHERE slug = $1 RETURNING slug`,
-      [input.slug, type, title, truthJson, body, hashNew],
+      [input.slug, type, title, truthJson, body, hashNew, input.trust_tier ?? null],
     );
     if (updated.rows.length !== 1) {
       throw new OperationError("conflict", `page '${input.slug}' vanished during the write`, "Retry the write.");

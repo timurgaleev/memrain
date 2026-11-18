@@ -9,6 +9,7 @@ import { registerSource } from "../src/core/sources.ts";
 import { readExternalTrust, readTrustTiers } from "../src/core/trust-frame.ts";
 import { appendChatMessage, createChatThread, type ChatCitation, type ChatOwner } from "../src/core/chat/store.ts";
 import { saveAnswerAsPage } from "../src/core/chat/save.ts";
+import { dispatchTool } from "../src/mcp/dispatch.ts";
 
 const owner: ChatOwner = { key: "operator", sourceId: "default", spendId: "memrain_chat_operator" };
 
@@ -59,6 +60,27 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
        VALUES ('take-chat-1', 'chat/general/day', 'h1', 'v1', 'Vendor X changed banks', 'test')`,
     );
     const slug = await savedAnswer("did vendor x change banks?", "Yes [1].", [{ n: 1, slug: "take-chat-1", title: "Vendor X changed banks", kind: "take" }]);
+    expect(await tierOf(slug)).toBe("external");
+  });
+
+  it("an in-process writer can cap the tier in the write itself; an MCP argument cannot", async () => {
+    const put = async (slug: string, opts: Parameters<typeof dispatchTool>[2], extra: Record<string, unknown> = {}) => {
+      const r = await dispatchTool(storage, { name: "page_put", arguments: { slug, markdown_body: "Body.", expected_version: 0, ...extra } }, opts);
+      expect(r.isError).toBeFalsy();
+    };
+    await put("notes/capped", { trustCeiling: "external" });
+    expect(await tierOf("notes/capped")).toBe("external");
+    await putPage(storage, { slug: "notes/capped", markdown_body: "An owner edit.", title: "capped" });
+    expect(await tierOf("notes/capped")).toBe("external");
+    await dispatchTool(storage, { name: "page_put", arguments: { slug: "notes/uncapped", markdown_body: "Body.", expected_version: 0, trust_tier: "external" } });
+    expect(await tierOf("notes/uncapped")).not.toBe("external");
+  });
+
+  it("a cited slug that also names another source's page counts that page too", async () => {
+    // page://team-chat/chat/general/day is both the team-chat page chat/general/day and
+    // a default page slugged team-chat/chat/general/day: the less trusted one decides.
+    await putPage(storage, { slug: "team-chat/chat/general/day", markdown_body: "An owner page.", title: "owner copy" });
+    const slug = await savedAnswer("vendor x account again?", "It changed [1].", [{ n: 1, slug: "team-chat/chat/general/day", title: "owner copy", kind: "page" }]);
     expect(await tierOf(slug)).toBe("external");
   });
 

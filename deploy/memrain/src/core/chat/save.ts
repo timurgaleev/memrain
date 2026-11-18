@@ -81,6 +81,10 @@ async function evidenceTier(engine: Engine, citations: readonly ChatCitation[]):
     `SELECT pg.slug AS ref, (${pageRankSql("pg")})::int AS rank FROM pages pg
       WHERE pg.slug = ANY($1::text[]) AND pg.deleted_at IS NULL
      UNION ALL
+     -- page://<source>/<slug> also reads as the default page slugged <source>/<slug>.
+     SELECT pg.source_id || '/' || pg.slug AS ref, (${pageRankSql("pg")})::int AS rank FROM pages pg
+      WHERE pg.source_id <> 'default' AND pg.source_id || '/' || pg.slug = ANY($1::text[]) AND pg.deleted_at IS NULL
+     UNION ALL
      SELECT d.source_path AS ref, (${documentRankSql("d")})::int AS rank FROM documents d WHERE d.source_path = ANY($1::text[])
      UNION ALL
      SELECT d.id AS ref, (${documentRankSql("d")})::int AS rank FROM documents d WHERE d.id = ANY($1::text[])`,
@@ -117,16 +121,9 @@ async function save(storage: Storage, owner: ChatOwner, messageId: number, now: 
     const res = await dispatchTool(storage, {
       name: "page_put",
       arguments: { slug, title, markdown_body: body, type: "note", expected_version: 0, written_by: "admin-chat", reason: "saved from chat" },
-    });
+    }, tier === "owner" ? {} : { trustCeiling: tier });
     const text = res.content?.[0]?.text ?? "";
     if (!res.isError) {
-      // Stored tiers only ever go down (migration 158), so later owner edits keep it below owner.
-      if (tier !== "owner") {
-        await engine.query(
-          `UPDATE pages SET trust_tier = memrain_min_trust_tier(COALESCE(trust_tier, 'owner'), $2) WHERE slug = $1`,
-          [slug, tier],
-        );
-      }
       await setSavedSlug(engine, messageId, slug);
       return { ok: true, slug };
     }

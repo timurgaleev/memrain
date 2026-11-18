@@ -419,6 +419,12 @@ export interface DispatchOptions {
   adminPanel?: boolean;
   /** The admin panel request's own abort signal: a search the browser dropped skips its query embed. */
   signal?: AbortSignal;
+  /**
+   * The highest trust tier a page_put may leave its page at, set in the write's
+   * own transaction: an in-process writer whose text came from below the owner
+   * (a saved chat answer citing outside evidence). Transports never set it.
+   */
+  trustCeiling?: TrustTier;
 }
 
 /**
@@ -706,6 +712,7 @@ async function dispatchToolInner(
             remoteWriterIdentity(opts),
             receipt,
             writerPrincipal(opts),
+            opts.trustCeiling,
           ),
         );
       case "page_append":
@@ -1755,10 +1762,12 @@ async function callPagePut(
   remoteIdentity?: string,
   receipt?: WriteRequestKey,
   principal?: string,
+  trustCeiling?: TrustTier,
 ): Promise<ToolCallResult> {
   const input = asPageInput(args, remoteIdentity);
   if (typeof input === "string") return errResult(input);
   if (writeSource) input.source_id = writeSource;
+  if (trustCeiling !== undefined) input.trust_tier = trustCeiling;
   const { expectedVersion } = writePrecondition("page_put", args);
   if (expectedVersion !== undefined) input.expectedVersion = expectedVersion;
   if (receipt !== undefined) input.receipt = receipt;
