@@ -21,12 +21,13 @@
  *      longer matches the export, so nothing is erased that DIR lacks.
  * Any failure rolls the whole erasure back; the export stays on disk.
  */
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { Engine } from "./engine/interface.ts";
 import type { Storage } from "./storage.ts";
 import { eraseOwnerChat, exportChatThreads } from "./chat/store.ts";
-import { leftovers } from "./pages-purge.ts";
+import { leftovers, LEFTOVER_TABLES } from "./pages-purge.ts";
 import { getMember, MemberError, writeMemberAudit, type MemberActor } from "./members.ts";
 
 /** A refused erasure request the operator can fix (a missing --out). */
@@ -47,7 +48,7 @@ export interface ErasureReport {
   credentials: { tokens: number; enrollments: number; sessions: number; passkeys: number; invites: number };
   /** Other users of the source (`kind:id`); any one refuses the erasure. */
   blockers: string[];
-  exported?: { dir: string; pages: number; threads: number; rows: Record<string, number> };
+  exported?: { dir: string; pages: number; threads: number; rows: Record<string, number>; digest: string };
 }
 
 async function sourceTables(engine: Pick<Engine, "query">): Promise<string[]> {
@@ -123,6 +124,7 @@ async function sharedUses(engine: Pick<Engine, "query">, memberId: string, sourc
     // scope: operator-only the operator's offboarding checks every use of the one source it would erase
     `SELECT 'member' AS kind, id FROM members WHERE personal_source_id = $1 AND id <> $2
      UNION ALL SELECT 'group', group_id FROM group_sources WHERE source_id = $1
+     UNION ALL SELECT 'chat', owner_key FROM chat_threads WHERE source_id = $1 AND owner_key <> 'member:' || $2
      UNION ALL SELECT 'client', client_id FROM oauth_clients WHERE source_id = $1 OR $1 = ANY(COALESCE(federated_read, '{}'))
      UNION ALL SELECT 'token', name FROM access_tokens
       WHERE revoked_at IS NULL AND member_id IS DISTINCT FROM $2
@@ -139,29 +141,64 @@ async function sharedUses(engine: Pick<Engine, "query">, memberId: string, sourc
 }
 
 /**
- * Write everything the erasure deletes under `dir`: every row of the source
- * from every table with a `source_id` (rows/<table>.jsonl), the live pages as
- * markdown, and the member's chat threads.
+ * Every row the erasure deletes, as sorted JSON lines per file name: the
+ * source's rows from each `source_id` table (`<table>`), the slug-keyed
+ * leftovers of its pages (`leftover.<table>`), and the chat messages of its
+ * threads (`chat_messages`). Taken again inside the erasing transaction and
+ * compared, so nothing is deleted that the export does not hold.
+ */
+async function snapshotRows(engine: Pick<Engine, "query">, sourceId: string): Promise<Map<string, string[]>> {
+  const line = (row: Record<string, unknown>) => JSON.stringify(row, (_k, v: unknown) => (typeof v === "bigint" ? v.toString() : v));
+  const out = new Map<string, string[]>();
+  const add = (name: string, rows: Record<string, unknown>[]) => {
+    if (rows.length > 0) out.set(name, rows.map(line).sort());
+  };
+  for (const table of await sourceTables(engine)) {
+    // scope: operator-only the operator's export of the one source being erased
+    add(table, (await engine.query<Record<string, unknown>>(`SELECT * FROM ${table} WHERE source_id = $1`, [sourceId])).rows);
+  }
+  const slugs = (await engine.query<{ slug: string }>(
+    // scope: operator-only the pages of the one source being erased
+    `SELECT slug FROM pages WHERE source_id = $1`, [sourceId],
+  )).rows.map((r) => r.slug);
+  if (slugs.length > 0) {
+    for (const [, table, column] of LEFTOVER_TABLES) {
+      add(`leftover.${table}`, (await engine.query<Record<string, unknown>>(`SELECT * FROM ${table} WHERE ${column} = ANY($1::text[])`, [slugs])).rows);
+    }
+  }
+  add("chat_messages", (await engine.query<Record<string, unknown>>(
+    // scope: operator-only the messages of the threads that live in the one source being erased
+    `SELECT m.* FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id WHERE t.source_id = $1`, [sourceId],
+  )).rows);
+  return out;
+}
+
+function digest(snapshot: Map<string, string[]>): string {
+  const h = createHash("sha256");
+  for (const name of [...snapshot.keys()].sort()) h.update(`${name}\n${snapshot.get(name)!.join("\n")}\n`);
+  return h.digest("hex");
+}
+
+/**
+ * Write everything the erasure deletes under `dir`: the row snapshot
+ * (rows/<name>.jsonl), the live pages as markdown, and the source's chat
+ * threads with their messages.
  */
 async function exportPersonal(
   engine: Engine,
   sourceId: string,
-  ownerKey: string,
   dir: string,
-): Promise<{ pages: number; threads: number; rows: Record<string, number> }> {
+): Promise<{ pages: number; threads: number; rows: Record<string, number>; digest: string }> {
   const root = resolve(dir);
   const pagesDir = join(root, "pages");
   const rowsDir = join(root, "rows");
   mkdirSync(pagesDir, { recursive: true, mode: 0o700 });
   mkdirSync(rowsDir, { recursive: true, mode: 0o700 });
+  const snapshot = await snapshotRows(engine, sourceId);
   const rows: Record<string, number> = {};
-  for (const table of await sourceTables(engine)) {
-    // scope: operator-only the operator's export of the one source being erased
-    const r = await engine.query<Record<string, unknown>>(`SELECT * FROM ${table} WHERE source_id = $1`, [sourceId]);
-    if (r.rows.length === 0) continue;
-    rows[table] = r.rows.length;
-    const line = (row: Record<string, unknown>) => JSON.stringify(row, (_k, v: unknown) => (typeof v === "bigint" ? v.toString() : v));
-    writeFileSync(join(rowsDir, `${table}.jsonl`), `${r.rows.map(line).join("\n")}\n`, { mode: 0o600 });
+  for (const [name, lines] of snapshot) {
+    rows[name] = lines.length;
+    writeFileSync(join(rowsDir, `${name}.jsonl`), `${lines.join("\n")}\n`, { mode: 0o600 });
   }
   const pages = await engine.query<{ slug: string; title: string | null; type: string; markdown_body: string | null }>(
     // scope: operator-only the operator's export of the one source being erased
@@ -177,9 +214,9 @@ async function exportPersonal(
     writeFileSync(target, `${header}\n${p.markdown_body ?? ""}\n`, { mode: 0o600 });
     written++;
   }
-  const threads = await exportChatThreads(engine, { ownerKey });
+  const threads = await exportChatThreads(engine, { sourceIds: [sourceId] });
   writeFileSync(join(root, "chat.json"), `${JSON.stringify(threads, null, 2)}\n`, { mode: 0o600 });
-  return { pages: written, threads: threads.length, rows };
+  return { pages: written, threads: threads.length, rows, digest: digest(snapshot) };
 }
 
 export async function eraseMemberPersonalSource(
@@ -220,12 +257,12 @@ export async function eraseMemberPersonalSource(
       await writeMemberAudit(tx, opts.actor, { memberId: member.id, action: "disable", detail: { reason: "erase_personal_source" } });
     });
   }
-  const exported = await exportPersonal(engine, sourceId, ownerKey, opts.outDir);
+  const exported = await exportPersonal(engine, sourceId, opts.outDir);
   await engine.transaction(async (tx) => {
     await tx.query(`SELECT id FROM members WHERE id = $1 FOR UPDATE`, [member.id]);
     if ((await sharedUses(tx, member.id, sourceId)).length > 0) throw new MemberError("source_shared", `source "${sourceId}" gained another user during the export; run again`);
-    // Nothing is erased that the export does not hold.
-    if (JSON.stringify(await countRows(tx, sourceId)) !== JSON.stringify(exported.rows)) {
+    // Nothing is erased that the export does not hold, row for row.
+    if (digest(await snapshotRows(tx, sourceId)) !== exported.digest) {
       throw new Error(`source ${sourceId} changed during the export; nothing was erased, run again`);
     }
     await tx.query(

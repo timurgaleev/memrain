@@ -69,8 +69,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(readFileSync(join(out, "pages", "notes", "alice-garden.md"), "utf8")).toContain("basil");
       expect(existsSync(join(out, "chat.json"))).toBe(true);
       // Every erased row of the source is in the export.
-      expect(done.exported?.rows).toEqual(plan.rows);
-      for (const [table, n] of Object.entries(plan.rows)) {
+      expect(done.exported?.rows).toMatchObject({ ...plan.rows, "leftover.tags": 1, "chat_messages": 1 });
+      for (const [table, n] of Object.entries(done.exported!.rows)) {
         expect({ table, n: readFileSync(join(out, "rows", `${table}.jsonl`), "utf8").trim().split("\n").length }).toEqual({ table, n });
       }
 
@@ -127,6 +127,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await e.query(`INSERT INTO groups (id) VALUES ('team')`);
       await e.query(`INSERT INTO group_sources (group_id, source_id) VALUES ('team', 'shared')`);
       expect((await eraseMemberPersonalSource(storage, "alice", { apply: false, actor: OPS })).blockers).toEqual(["group:team"]);
+
+      // A thread someone else keeps in the source is theirs too.
+      await e.query(`DELETE FROM group_sources WHERE group_id = 'team'`);
+      await createChatThread(e, { key: "member:bob", sourceId: "shared", spendId: "memrain_chat_m_bob" }, "old thread");
+      expect((await eraseMemberPersonalSource(storage, "alice", { apply: false, actor: OPS })).blockers).toEqual(["chat:member:bob"]);
     } finally {
       rmSync(out, { recursive: true, force: true });
       await db.close();
