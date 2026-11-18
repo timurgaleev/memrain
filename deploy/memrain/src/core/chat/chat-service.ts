@@ -38,7 +38,7 @@ import {
   settleSpend,
 } from "../budget.ts";
 import { runThink, type ThinkResult, type ThinkTraceEvent } from "../synthesis/think.ts";
-import { pageSourcePath } from "../page-index.ts";
+import { pageSourcePath, pageTruthSourcePath } from "../page-index.ts";
 import { andSourceScope } from "../source-scope.ts";
 import { chatConfig, CHAT_MAX_TAKES, CHAT_OUTPUT_TOKENS, CHAT_PAGE_HITS } from "./config.ts";
 import { condenseQuestion, CONDENSE_TURNS } from "./condense.ts";
@@ -177,7 +177,7 @@ async function numberCitations(
       );
       const row = p.rows[0];
       if (!row) continue;
-      if (pageSourcePath(row.slug, row.source_id) !== c.ref && !c.ref.startsWith("page-truth://")) continue;
+      if (pageSourcePath(row.slug, row.source_id) !== c.ref && pageTruthSourcePath(row.slug, row.source_id) !== c.ref) continue;
       slug = row.slug;
       title = row.title ?? row.slug;
       break;

@@ -18,6 +18,7 @@ import { costUsd, logSpend, setSpendLedgerEngine, trackedInvoke } from "../src/c
 import { runThink } from "../src/core/synthesis/think.ts";
 import type { SonnetCallInput, SonnetFn } from "../src/core/llm/sonnet.ts";
 import { deterministicEmbedQuery } from "./det-embed.ts";
+import type { SearchHit } from "../src/core/search/hybrid.ts";
 import { ChatError, operatorOwner, runChatTurn, type ChatCtx, type ChatStreamEvent } from "../src/core/chat/chat-service.ts";
 import { confirmAnswer, getChatThread, listChatThreads, threadMessages } from "../src/core/chat/store.ts";
 
@@ -243,6 +244,18 @@ describe("chat turn (P5-C1)", () => {
     expect(second.result.thread_id).toBe(first.result.thread_id);
     const stored = await threadMessages(storage.engine(), operatorOwner(), first.result.thread_id);
     expect(stored!.map(m => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+  });
+
+  it("a compiled-truth citation never resolves to a page in another source", async () => {
+    await registerSource(storage.engine(), { id: "team-chat", kind: "chat", pathPrefix: "chat/" });
+    await putPage(storage, { slug: "notes/vendor", markdown_body: "Vendor X is paid monthly.", title: "Vendor" });
+    // The team-chat source has no notes/vendor; the owner's default page of that slug is not it.
+    const ref = "page-truth://team-chat/notes/vendor";
+    const hit = { chunkId: "c-truth", documentId: "d-truth", sourcePath: ref, title: "vendor", content: "Vendor X has a new bank account.", score: 1, intent: "general" } as unknown as SearchHit;
+    const s = stub(() => answer([ref], "Vendor X has a new bank account"));
+    const { result } = await turn(ctx(s.fn, { pagesFn: async () => [hit] }), "what is vendor x's bank account?");
+    expect(result.citations).toHaveLength(1);
+    expect(result.citations[0]!.slug).not.toBe("notes/vendor");
   });
 
   it("an answer that cites nothing gathered is refused, not passed off as grounded", async () => {
