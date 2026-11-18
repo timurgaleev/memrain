@@ -26,6 +26,7 @@ import { parseTranscriptExport } from "./transcripts/detect.ts";
 import { ingestSessions } from "./transcripts/ingest.ts";
 
 export type OnboardingStep = "connect" | "fill" | "ask" | "done";
+const STEPS: readonly OnboardingStep[] = ["connect", "fill", "ask", "done"];
 
 export interface OnboardingState {
   step: OnboardingStep;
@@ -67,9 +68,12 @@ export async function refreshOnboarding(engine: Engine, m: OnboardingMember): Pr
     `WITH evidence AS (
        SELECT
          LEAST(
+           -- The log names a key only by its name, which is not unique: a name
+           -- that any other credential also carries proves nothing.
            (SELECT min(l.created_at) FROM mcp_request_log l
               JOIN access_tokens a ON a.name = l.token_name
-             WHERE a.member_id = $1 AND l.status = 'success'),
+             WHERE a.member_id = $1 AND l.status = 'success'
+               AND NOT EXISTS (SELECT 1 FROM access_tokens o WHERE o.name = a.name AND o.member_id IS DISTINCT FROM $1)),
            (SELECT min(a.last_used_at) FROM access_tokens a WHERE a.member_id = $1),
            (SELECT min(t.created_at) FROM oauth_tokens t
               JOIN oauth_enrollments e ON t.grant_bound AND e.id = t.grant_id
@@ -102,9 +106,14 @@ export async function refreshOnboarding(engine: Engine, m: OnboardingMember): Pr
     first_write_at: iso(row?.first_write_at),
     first_answer_at: iso(row?.first_answer_at),
   };
-  const step = stepOf(markers);
-  await engine.query(`UPDATE onboarding_state SET step = $2 WHERE member_id = $1 AND step <> $2`, [m.memberId, step]);
-  return { step, ...markers, opened_at: iso(row?.opened_at) };
+  // Two refreshes can race; the stored step only ever moves forward.
+  const r2 = await engine.query<{ step: OnboardingStep }>(
+    `UPDATE onboarding_state SET step = CASE
+         WHEN array_position($3::text[], step) < array_position($3::text[], $2::text) THEN $2::text ELSE step END
+       WHERE member_id = $1 RETURNING step`,
+    [m.memberId, stepOf(markers), STEPS],
+  );
+  return { step: r2.rows[0]?.step ?? stepOf(markers), ...markers, opened_at: iso(row?.opened_at) };
 }
 
 /** Where a member's onboarding writes, and as whom. */

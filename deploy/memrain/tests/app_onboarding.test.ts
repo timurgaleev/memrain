@@ -149,6 +149,25 @@ describe("wizard state", () => {
     expect((await state("erin")).connected_at).toBeNull();
   });
 
+  it("does not count a call made with another credential of the same name", async () => {
+    const e = storage.engine();
+    await registerSource(e, { id: "person-gil", kind: "other", pathPrefix: "/person-gil" });
+    await addMember(e, "gil", { personalSource: "person-gil" }, OPS);
+    await e.query(`INSERT INTO access_tokens (name, token_hash, scopes, member_id) VALUES ('laptop', 'hash-gil', ARRAY['read'], 'gil')`);
+    await e.query(`INSERT INTO access_tokens (name, token_hash, scopes) VALUES ('laptop', 'hash-ops', ARRAY['read'])`);
+    await e.query(`INSERT INTO mcp_request_log (token_name, agent_name, operation, status) VALUES ('laptop', 'laptop', 'search', 'success')`);
+    expect((await refreshOnboarding(e, { memberId: "gil", personalSourceId: "person-gil" })).connected_at).toBeNull();
+  });
+
+  it("never stores an earlier step over a later one", async () => {
+    const e = storage.engine();
+    await registerSource(e, { id: "person-hal", kind: "other", pathPrefix: "/person-hal" });
+    await addMember(e, "hal", { personalSource: "person-hal" }, OPS);
+    await e.query(`INSERT INTO onboarding_state (member_id, step) VALUES ('hal', 'ask')`);
+    await refreshOnboarding(e, { memberId: "hal", personalSourceId: "person-hal" });
+    expect((await e.query<{ step: string }>(`SELECT step FROM onboarding_state WHERE member_id = 'hal'`)).rows[0]!.step).toBe("ask");
+  });
+
   it("reports when the member first opened its invite", async () => {
     const invite = await mintMemberInvite(storage.engine(), "fay", 3600_000);
     await openMemberInvite(storage.engine(), invite.token, "f".repeat(64), Date.parse("2026-11-18T09:00:00Z"));
