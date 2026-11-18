@@ -16,11 +16,12 @@ BENCH_LIB_ONLY=1 . "$REPO_ROOT/scripts/tenant-rss-bench.sh"
 
 echo "== tenant-rss-bench.sh summary =="
 
+before=$FAIL
 for pair in "512MiB:512" "1.5GiB:1536" "2048KiB:2" "0B:0" "300.4MiB:300"; do
   got="$(to_mib "${pair%%:*}")"
   [ "$got" = "${pair#*:}" ] || die "to_mib ${pair%%:*} = $got, want ${pair#*:}"
 done
-[ "$FAIL" -eq 0 ] && pass "docker stats sizes convert to whole MiB"
+[ "$FAIL" -eq "$before" ] && pass "docker stats sizes convert to whole MiB"
 
 # 20 samples for t1 (100..290 step 10) and a flat t2 at 200.
 samples="$(for i in $(seq 0 19); do printf 't1\t%s\nt2\t200\n' $((100 + i * 10)); done)"

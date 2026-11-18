@@ -50,11 +50,12 @@ if [ "$RC" -ne 0 ]; then pass "an existing tenant file is not overwritten"; else
 render acme --host other.example.test --force
 if [ "$RC" -eq 0 ] && grep -q 'https://other.example.test$' "$F"; then pass "--force re-renders"; else die "--force did not re-render"; fi
 
+before=$FAIL
 for bad in 'A' 'x' '9abc' 'a_b' 'acme;rm' '../acme' "$(printf 'a%.0s' $(seq 1 32))"; do
   render "$bad" --host ok.example.test
   if [ "$RC" -eq 0 ]; then die "accepted tenant id '$bad'"; fi
 done
-[ "$FAIL" -eq 0 ] && pass "invalid tenant ids refused"
+[ "$FAIL" -eq "$before" ] && pass "invalid tenant ids refused"
 for bad in 'http://acme.example.test' 'acme' 'acme.example.test/x' 'acme.example.test"' 'ACME.example.test' 'a b.example.test' '-acme.example.test'; do
   render beta --host "$bad"
   if [ "$RC" -eq 0 ]; then die "accepted host '$bad'"; fi
