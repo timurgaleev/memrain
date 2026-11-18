@@ -29,6 +29,7 @@ import { hostedPolicy } from "../control/policy.ts";
 import { OperationError } from "./operation-error.ts";
 import type { Engine } from "./engine/interface.ts";
 import { OPERATIONS, operationAnnotations } from "../mcp/operations.ts";
+import { assertPageRoom, limitReached } from "./page-room.ts";
 
 export type RouteClass = "health" | "auth" | "read" | "mcp" | "write";
 
@@ -137,21 +138,7 @@ export async function admitRequest(req: Request, url: URL = new URL(req.url)): P
 /** Operations that can add a page; refused once the plan's page limit is reached. */
 const PAGE_ADDING_OPERATIONS: ReadonlySet<string> = new Set(["index", "page_put", "page_restore"]);
 
-function limitReached(what: string): OperationError {
-  return new OperationError(
-    "tenant_limit_reached",
-    `this brain has reached its plan's ${what} limit`,
-    "Delete what you no longer need, or ask the operator to raise the limit.",
-  );
-}
-
-/** Throws `tenant_limit_reached` when `adding` more live pages would pass the plan's maximum. */
-export async function assertPageRoom(engine: Pick<Engine, "query">, maxPages: number | undefined, adding = 1): Promise<void> {
-  if (maxPages === undefined || adding <= 0) return;
-  // scope: operator-only the plan's page limit counts the whole brain; only a yes/no leaves here
-  const r = await engine.query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE deleted_at IS NULL`);
-  if ((r.rows[0]?.n ?? 0) + adding > maxPages) throw limitReached("page");
-}
+export { assertPageRoom };
 
 /**
  * Throws `tenant_limit_reached` when a hosted brain already has its plan's
@@ -162,7 +149,7 @@ export async function assertMemberRoom(engine: Pick<Engine, "query">): Promise<v
   if (hostingMode() === null) return;
   const max = (await hostedPolicy())?.limits.maxMembers;
   if (max === undefined) return;
-  const r = await engine.query<{ n: number }>(`SELECT count(*)::int AS n FROM members WHERE status <> 'removed'`);
+  const r = await engine.query<{ n: number }>(`SELECT count(*)::int AS n FROM public.members WHERE status <> 'removed'`);
   if ((r.rows[0]?.n ?? 0) >= max) throw limitReached("member");
 }
 
@@ -184,7 +171,7 @@ async function rewritesLivePage(engine: Pick<Engine, "query">, name: string, arg
   const slug = args?.["slug"];
   if (name !== "page_put" || typeof slug !== "string") return false;
   // scope: operator-only slugs are global, so a live slug anywhere means the write adds no page; only a yes/no leaves here
-  const r = await engine.query(`SELECT 1 FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [slug]);
+  const r = await engine.query(`SELECT 1 FROM public.pages WHERE slug = $1 AND deleted_at IS NULL`, [slug]);
   return r.rows.length > 0;
 }
 

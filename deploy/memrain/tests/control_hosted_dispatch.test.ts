@@ -24,6 +24,7 @@ import { setHostingSpendBackend } from "../src/control/hosting-spend.ts";
 import { addMember } from "../src/core/members.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { loadDemo } from "../src/core/demo-brain.ts";
+import { assertMemberRoom, assertPageRoom } from "../src/core/tenant-guard.ts";
 
 const active: TenantPolicy = { status: "active", mode: null, limits: {}, llmOff: false, isolation: "verified" };
 
@@ -111,5 +112,31 @@ describe("hosted dispatch", () => {
     await expect(addMember(storage.engine(), "bob", {}, ops)).rejects.toMatchObject({ code: "tenant_limit_reached" });
     const n = await storage.engine().query<{ n: number }>(`SELECT count(*)::int AS n FROM members`);
     expect(n.rows[0]!.n).toBe(1);
+  });
+
+  it("a search_path the tenant set cannot shadow the tables the limits count", async () => {
+    const e = storage.engine();
+    await e.query(`CREATE SCHEMA shadow`);
+    await e.query(`CREATE TABLE shadow.pages (deleted_at timestamptz)`);
+    await e.query(`CREATE TABLE shadow.members (status text)`);
+    await addMember(e, "erin", {}, { actor: "operator", via: "cli" });
+    setTenantPolicySource(async () => ({ ...active, limits: { maxMembers: 1 } }));
+    await e.query(`SET search_path = shadow, public`);
+    try {
+      await expect(assertPageRoom(e, 1)).rejects.toMatchObject({ code: "tenant_limit_reached" });
+      await expect(assertMemberRoom(e)).rejects.toMatchObject({ code: "tenant_limit_reached" });
+    } finally {
+      await e.query(`SET search_path = public`);
+    }
+  });
+
+  it("two new pages racing for the last free place: exactly one is written", async () => {
+    setTenantPolicySource(async () => ({ ...active, limits: { maxPages: 2 } }));
+    const results = await Promise.all(["notes/race-a", "notes/race-b"].map((slug) =>
+      dispatchTool(storage, { name: "page_put", arguments: { slug, markdown_body: `The page ${slug}.`, title: slug } })));
+    const refused = results.filter((r) => text(r).includes("tenant_limit_reached"));
+    expect(refused).toHaveLength(1);
+    const n = await storage.engine().query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE deleted_at IS NULL`);
+    expect(n.rows[0]!.n).toBe(2);
   });
 });
