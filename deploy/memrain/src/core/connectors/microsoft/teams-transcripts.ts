@@ -25,13 +25,18 @@
  *     `SpeakerAttributionNotAllowed`, and the same content without speakers
  *     is read with `Accept: application/vnd.microsoft.graph.transcript+text`.
  *
- * Each run lists the calendar from the last scanned time less a 48-hour
+ * Each pass reads the calendar from the last scanned time less a 48-hour
  * lookback (a transcript is ready only after its meeting) to now, or from the
- * history floor on the first run. A transcript without an `endDateTime` is
- * still being written and waits for a later run; one already stored at the
- * same times is not fetched again. The cursor moves to the run's start only
- * when every transcript in the window was stored; a run cut by the item
- * budget lists the window again next page.
+ * history floor on the first pass, one day per stream page; the cursor's
+ * `pos` moves a day at a time, and `scannedTo` to the run's start once the
+ * last day is through. Each day's meetings are those that start in it, and
+ * of a recurring meeting's transcripts only those made in one of that day's
+ * occurrences. A day listing more events than MAX_EVENT_PAGES, or a meeting
+ * listing more transcripts than MAX_TRANSCRIPT_PAGES, fails loudly instead of
+ * being stored in part. A transcript without an `endDateTime` is still being
+ * written and waits for a later run; one already stored at the same times is
+ * not fetched again; one whose content has no cue fails and is read again.
+ * A page cut by the item budget lists the same day again.
  *
  * The meeting page's compiled truth names the calendar event page
  * (`calendar_event`, the slug the Outlook calendar adapter of the same
@@ -41,8 +46,8 @@
  * forbidden with that code; a meeting Graph will not show is one held item.
  *
  * Everything a transcript holds is outside text: meeting credentials are
- * removed from the title and every line before the shared renderer
- * secret-scans and neutralizes it.
+ * removed from the title, every name and every line before the shared
+ * renderer secret-scans and neutralizes it.
  */
 import type { ConnectorClient, ConnectorResponse } from "../client.ts";
 import { redactMeetingCredentials } from "../meeting-redact.ts";
@@ -67,16 +72,18 @@ export const UNATTRIBUTED_FORMAT = "application/vnd.microsoft.graph.transcript+t
 
 const LOOKBACK_MS = 48 * 3_600_000;
 const DAY_MS = 86_400_000;
+/** The calendar is read one slice of this length per stream page. */
+const SLICE_MS = DAY_MS;
 const PAGE_SIZE = 50;
 const MAX_EVENT_PAGES = 20;
-const MAX_TRANSCRIPT_PAGES = 5;
+const MAX_TRANSCRIPT_PAGES = 20;
 /** A transcript body past this is not read: no meeting produces one. */
 const MAX_CONTENT_BYTES = 16 * 1024 * 1024;
 const GRAPH_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 /** A turn longer than this starts a new line: the renderer keeps 4000 characters per line. */
 const MAX_TURN_CHARS = 3_000;
 const MAX_PARTICIPANTS = 200;
-/** A transcript belongs to the latest occurrence that began no later than this after it started. */
+/** A transcript may start this long before its occurrence's scheduled start (a meeting opened early). */
 const OCCURRENCE_SLACK_MS = 15 * 60_000;
 const TEAMS_JOIN_RE = /^https:\/\/teams\.(?:microsoft|live)\.com\/(?:l\/meetup-join|meet)\//i;
 const CALENDAR_SELECT = "id,iCalUId,subject,start,end,isAllDay,isCancelled,isOnlineMeeting,onlineMeeting,organizer,attendees,type,seriesMasterId";
@@ -99,6 +106,11 @@ function enc(v: string): string {
   return encodeURIComponent(v);
 }
 
+/** A name or title is outside text that lands on the page: its meeting credentials go too. */
+function redacted(v: string): string {
+  return redactMeetingCredentials(v).text.trim();
+}
+
 // ---------------------------------------------------------------------------
 // WebVTT.
 
@@ -108,15 +120,16 @@ const TAG_RE = /<\/?[a-z][^<>]{0,200}>/gi;
 
 /**
  * A WebVTT transcript as speaker turns: each cue's `<v Name>` voice tag names
- * its speaker (none in the unattributed format), other inline tags go, and
- * consecutive cues of one speaker join into one turn up to MAX_TURN_CHARS.
- * Linear in the text: line splits and bounded patterns only.
+ * its speaker, other inline tags go, and consecutive cues of one speaker join
+ * into one turn up to MAX_TURN_CHARS. The unattributed format has the same
+ * cues without voice tags and without the `WEBVTT` header, so cues are found
+ * by their timing line alone. Linear in the text: line splits and bounded
+ * patterns only.
  */
 export function parseVtt(text: string): MeetingSentence[] {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
-  if (!(lines[0] ?? "").trimStart().startsWith("WEBVTT")) return [];
   const out: MeetingSentence[] = [];
-  for (let i = 1; i < lines.length; i++) {
+  for (let i = 0; i < lines.length; i++) {
     if (!CUE_TIME_RE.test(lines[i]!)) continue;
     const payload: string[] = [];
     for (i++; i < lines.length && lines[i]!.trim() !== ""; i++) payload.push(lines[i]!.trim());
@@ -196,16 +209,27 @@ function linkCalendarEvent(page: RenderedConnectorPage, slug: string, iCalUID: s
 // ---------------------------------------------------------------------------
 // The adapter.
 
+/**
+ * `scannedTo`: where the last whole pass ended (null before the first one).
+ * `pos`: where the pass under way resumes, one day slice at a time; null
+ * between passes.
+ */
 interface TranscriptState {
   v: 1;
-  scannedTo: string;
+  scannedTo: string | null;
+  pos: string | null;
 }
 
 function parseCursor(cursor: string | null): TranscriptState | null {
   if (cursor === null || !cursor.startsWith("{")) return null;
   try {
     const raw = JSON.parse(cursor) as unknown;
-    return isRecord(raw) && raw.v === 1 && Number.isFinite(timeMs(raw.scannedTo)) ? { v: 1, scannedTo: raw.scannedTo as string } : null;
+    if (!isRecord(raw) || raw.v !== 1) return null;
+    const scannedTo = raw.scannedTo ?? null;
+    const pos = raw.pos ?? null;
+    if (scannedTo !== null && !Number.isFinite(timeMs(scannedTo))) return null;
+    if (pos !== null && !Number.isFinite(timeMs(pos))) return null;
+    return { v: 1, scannedTo: scannedTo as string | null, pos: pos as string | null };
   } catch {
     return null;
   }
@@ -267,8 +291,14 @@ class TranscriptsAdapter implements SyncAdapter {
   async page({ client, cursor, budget }: Parameters<SyncAdapter["page"]>[0]): Promise<PageResult> {
     const st = parseCursor(cursor);
     const floor = this.floorMs();
-    const from = st === null ? floor : Math.max(floor, Date.parse(st.scannedTo) - LOOKBACK_MS);
-    const listed = await this.onlineEvents(client, from, this.runAt);
+    const start = st?.pos != null
+      ? Math.max(floor, Date.parse(st.pos))
+      : st?.scannedTo != null ? Math.max(floor, Date.parse(st.scannedTo) - LOOKBACK_MS) : floor;
+    const passDone = { ok: true as const, items: [], checkpoint: JSON.stringify({ v: 1, scannedTo: new Date(this.runAt).toISOString(), pos: null }), done: true };
+    if (start >= this.runAt) return passDone;
+    // One day at a time, so no listing cap can step over a meeting.
+    const end = Math.min(start + SLICE_MS, this.runAt);
+    const listed = await this.onlineEvents(client, start, end);
     if ("response" in listed) return { ok: false, response: listed.response };
 
     const byLink = new Map<string, OnlineEvent[]>();
@@ -295,32 +325,45 @@ class TranscriptsAdapter implements SyncAdapter {
         items.push(unavailable(meetingKey, res, "meeting"));
         continue;
       }
-      const due = transcripts.list.filter(t => !done.has(t.externalId) && t.created >= floor && t.created >= from - DAY_MS);
-      for (const t of due) done.add(t.externalId);
+      if (transcripts.truncated) {
+        // Not stored in part: the item fails, and is held after repeated runs, rather than skip transcripts unseen.
+        items.push({ externalId: meetingKey, version: null, failure: { code: "transcript_list_truncated", message: `the meeting lists more than ${MAX_TRANSCRIPT_PAGES} pages of transcripts` } });
+        continue;
+      }
+      // A recurring meeting lists every occurrence's transcripts: only this slice's occurrences' are due here.
+      const due = transcripts.list
+        .map(t => ({ t, ev: occurrenceOf(t, occurrences) }))
+        .filter((d): d is { t: Transcript; ev: OnlineEvent } => d.ev !== null && d.t.created >= floor && !done.has(d.t.externalId));
+      for (const d of due) done.add(d.t.externalId);
       const settled = this.engine === undefined ? new Map<string, string>()
-        : await settledItemVersions(this.engine, this.account.id, due.map(t => t.externalId));
-      for (const t of due) {
+        : await settledItemVersions(this.engine, this.account.id, due.map(d => d.t.externalId));
+      for (const { t, ev } of due) {
         if (settled.get(t.externalId) === t.version) continue;
         if (items.length >= room) {
           cut = true;
           break;
         }
-        const item = await this.transcriptItem(client, meeting.id, t, occurrences);
+        const item = await this.transcriptItem(client, meeting.id, t, ev);
         if ("response" in item) return { ok: false, response: item.response };
         items.push(item);
       }
     }
-    return cut
-      ? { ok: true, items, checkpoint: null, done: false }
-      : { ok: true, items, checkpoint: JSON.stringify({ v: 1, scannedTo: new Date(this.runAt).toISOString() }), done: true };
+    // Cut by the budget: the same slice is listed again, and what was stored is skipped.
+    if (cut) return { ok: true, items, checkpoint: null, done: false };
+    if (end >= this.runAt) return { ...passDone, items };
+    return { ok: true, items, checkpoint: JSON.stringify({ v: 1, scannedTo: st?.scannedTo ?? null, pos: new Date(end).toISOString() }), done: false };
   }
 
-  /** The calendar's Teams meetings in [from, to], by start. */
+  /**
+   * The calendar's Teams meetings that start in [from, to), by start. A
+   * listing longer than MAX_EVENT_PAGES ends the run instead of skipping the
+   * rest of the slice.
+   */
   private async onlineEvents(client: ConnectorClient, from: number, to: number): Promise<OnlineEvent[] | { response: ConnectorResponse }> {
     const q = `startDateTime=${enc(new Date(from).toISOString())}&endDateTime=${enc(new Date(to).toISOString())}`;
     let path: string | null = `/v1.0/me/calendarView?${q}&$select=${CALENDAR_SELECT}&$top=${PAGE_SIZE}`;
     const out: OnlineEvent[] = [];
-    for (let p = 0; p < MAX_EVENT_PAGES && path !== null; p++) {
+    for (let p = 0; path !== null; p++) {
       const res = await graphGet(client, path, { prefer: `outlook.timezone="UTC", odata.maxpagesize=${PAGE_SIZE}`, maxBytes: GRAPH_MAX_RESPONSE_BYTES });
       if (res.class !== "ok") {
         if (res.class !== "forbidden") return { response: res };
@@ -335,11 +378,15 @@ class TranscriptsAdapter implements SyncAdapter {
       if (!isRecord(res.body) || !Array.isArray(res.body.value)) return { response: badBody(res, "calendar view") };
       for (const ev of (res.body.value as unknown[]).filter(isRecord)) {
         const o = onlineEvent(ev);
-        if (o !== null) out.push(o);
+        // The view also returns meetings that began before the slice; each belongs to the slice it starts in.
+        if (o !== null && o.start >= from && o.start < to) out.push(o);
       }
       const next = res.body["@odata.nextLink"];
       path = next === undefined ? null : graphLinkPath(next);
       if (next !== undefined && path === null) return { response: badBody(res, "calendar view next link") };
+      if (path !== null && p + 1 >= MAX_EVENT_PAGES) {
+        return { response: { ...res, class: "challenge", body: null, error: `the calendar lists more than ${MAX_EVENT_PAGES * PAGE_SIZE} events in one day` } };
+      }
     }
     return out.sort((a, b) => a.start - b.start);
   }
@@ -357,10 +404,11 @@ class TranscriptsAdapter implements SyncAdapter {
     return { id: id !== null && id.length <= 1024 ? id : null };
   }
 
-  private async transcripts(client: ConnectorClient, meetingId: string): Promise<{ list: Transcript[] } | { response: ConnectorResponse }> {
+  private async transcripts(client: ConnectorClient, meetingId: string): Promise<{ list: Transcript[]; truncated: boolean } | { response: ConnectorResponse }> {
     let path: string | null = `/v1.0/me/onlineMeetings/${enc(meetingId)}/transcripts`;
     const list: Transcript[] = [];
-    for (let p = 0; p < MAX_TRANSCRIPT_PAGES && path !== null; p++) {
+    for (let p = 0; path !== null; p++) {
+      if (p >= MAX_TRANSCRIPT_PAGES) return { list, truncated: true };
       const res = await graphGet(client, path, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
       if (res.class !== "ok") return { response: res };
       if (!isRecord(res.body) || !Array.isArray(res.body.value)) return { response: badBody(res, "transcript list") };
@@ -376,7 +424,7 @@ class TranscriptsAdapter implements SyncAdapter {
       path = next === undefined ? null : graphLinkPath(next);
       if (next !== undefined && path === null) return { response: badBody(res, "transcript list next link") };
     }
-    return { list };
+    return { list, truncated: false };
   }
 
   /** The WebVTT text, read without speakers when the tenant keeps them out. */
@@ -390,19 +438,25 @@ class TranscriptsAdapter implements SyncAdapter {
     return { text: res.body };
   }
 
-  /** The iCalUID the calendar page of an event is keyed by: its own, or its series master's. */
-  private async eventICalUID(client: ConnectorClient, ev: OnlineEvent): Promise<string | null> {
-    if (ev.iCalUID !== null) return ev.iCalUID;
-    if (ev.seriesMasterId === null) return null;
+  /**
+   * The iCalUID the calendar page of an event is keyed by: its own, or its
+   * series master's. A master Graph does not have (404, 403) has none; any
+   * other failure ends the run, so a transcript is never stored without the
+   * link only a passing outage kept from it.
+   */
+  private async eventICalUID(client: ConnectorClient, ev: OnlineEvent): Promise<{ uid: string | null } | { response: ConnectorResponse }> {
+    if (ev.iCalUID !== null) return { uid: ev.iCalUID };
+    if (ev.seriesMasterId === null) return { uid: null };
     const known = this.masters.get(ev.seriesMasterId);
-    if (known !== undefined) return known;
+    if (known !== undefined) return { uid: known };
     const res = await graphGet(client, `/v1.0/me/events/${enc(ev.seriesMasterId)}?$select=iCalUId`, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
+    if (res.class !== "ok" && endsRun(res)) return { response: res };
     const uid = res.class === "ok" && isRecord(res.body) ? str(res.body.iCalUId) : null;
     this.masters.set(ev.seriesMasterId, uid);
-    return uid;
+    return { uid };
   }
 
-  private async transcriptItem(client: ConnectorClient, meetingId: string, t: Transcript, occurrences: OnlineEvent[]): Promise<SyncItem | { response: ConnectorResponse }> {
+  private async transcriptItem(client: ConnectorClient, meetingId: string, t: Transcript, ev: OnlineEvent): Promise<SyncItem | { response: ConnectorResponse }> {
     const got = await this.content(client, meetingId, t.id);
     if ("response" in got) {
       const res = got.response;
@@ -410,11 +464,17 @@ class TranscriptsAdapter implements SyncAdapter {
       if (endsRun(res)) return { response: res };
       return unavailable(t.externalId, res, "transcript");
     }
-    const ev = [...occurrences].reverse().find(o => o.start <= t.created + OCCURRENCE_SLACK_MS) ?? occurrences[0]!;
-    const sentences = parseVtt(got.text).map(s => ({ speaker: s.speaker, text: redactMeetingCredentials(s.text).text }));
+    const linked = await this.eventICalUID(client, ev);
+    if ("response" in linked) return linked;
+    const sentences = parseVtt(got.text).map(s => ({ speaker: redacted(s.speaker), text: redactMeetingCredentials(s.text).text }));
+    if (sentences.length === 0 && got.text.trim() !== "") {
+      // Not settled on an empty page: the next run reads it again, and repeated failures hold it.
+      return { externalId: t.externalId, version: t.version, failure: { code: "invalid_transcript", message: "the transcript content has no cue this reader understands" } };
+    }
     const speakers = [...new Set(sentences.map(s => s.speaker).filter(s => s !== ""))];
-    const named = new Set(ev.people.map(p => (p.name ?? "").trim().toLowerCase()));
-    const participants = [...ev.people, ...speakers.filter(s => !named.has(s.toLowerCase())).map(name => ({ name, email: null }))].slice(0, MAX_PARTICIPANTS);
+    const people = ev.people.map(p => ({ name: p.name === null ? null : redacted(p.name), email: p.email }));
+    const named = new Set(people.map(p => (p.name ?? "").trim().toLowerCase()));
+    const participants = [...people, ...speakers.filter(s => !named.has(s.toLowerCase())).map(name => ({ name, email: null }))].slice(0, MAX_PARTICIPANTS);
     const label = this.account.accountLabel ?? "";
     const ctx: ConnectorContext = { service: TEAMS_TRANSCRIPTS_SERVICE, accountLabel: label };
     const start = Math.abs(t.created - ev.start) < DAY_MS ? ev.start : t.created;
@@ -429,8 +489,7 @@ class TranscriptsAdapter implements SyncAdapter {
         actionItems: [],
         sentences,
       });
-      const uid = await this.eventICalUID(client, ev);
-      if (uid !== null) page = linkCalendarEvent(page, calendarEventSlug(label, uid), uid);
+      if (linked.uid !== null) page = linkCalendarEvent(page, calendarEventSlug(label, linked.uid), linked.uid);
       return syncItemFromPage(page, t.version, { enrich: true });
     } catch (e) {
       // The message can quote transcript text; only the error's kind is kept.
@@ -445,6 +504,21 @@ interface Transcript {
   end: number;
   externalId: string;
   version: string;
+}
+
+/**
+ * The occurrence a transcript was made in: the latest one of `occurrences`
+ * (sorted by start) that had begun, give or take OCCURRENCE_SLACK_MS, when
+ * the transcript started, and had not ended more than a day before. Null when
+ * none of them fits: the transcript belongs to an occurrence another slice
+ * lists.
+ */
+function occurrenceOf(t: Transcript, occurrences: readonly OnlineEvent[]): OnlineEvent | null {
+  for (let i = occurrences.length - 1; i >= 0; i--) {
+    const o = occurrences[i]!;
+    if (o.start - OCCURRENCE_SLACK_MS <= t.created && t.created < (o.end ?? o.start) + DAY_MS) return o;
+  }
+  return null;
 }
 
 export function teamsTranscriptsAdapter(account: SyncAccount, opts: Partial<AdapterContext> = {}): SyncAdapter {

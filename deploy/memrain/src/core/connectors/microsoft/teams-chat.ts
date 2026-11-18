@@ -16,8 +16,9 @@
  * One stream holds the whole account. Its cursor keeps, per chat, a
  * watermark: the newest `lastModifiedDateTime` Graph reported for it. A
  * round lists the chats and queues those whose last message is newer than
- * their watermark (or, with none, newer than the history floor). Each queued
- * chat is then handled in two steps:
+ * their watermark (or, with none, newer than the history floor); a list
+ * longer than one page's cap carries on from its next link on the following
+ * page. Each queued chat is then handled in two steps:
  *
  *   1. detect: the messages modified after the watermark, newest first, name
  *      the days that changed: a new message, an edit, a deletion. On the
@@ -27,7 +28,8 @@
  *      changes, every day back to the floor is rendered again.
  *   2. walk: the messages by creation time, newest first, down to the start
  *      of the oldest changed day. A day is rendered once the walk has seen a
- *      message older than it, so a day page always holds the whole day; a
+ *      message older than it, so a day page always holds the whole day (a
+ *      single day is read on past MAX_WALK_PAGES, up to MAX_DAY_PAGES); a
  *      changed day left with no message is deleted.
  *
  * The watermark moves only when a chat's walk is through. A walk cut short
@@ -52,7 +54,7 @@ import { syncItemFromPage } from "../sync-item.ts";
 import { PROVIDER_USER_ID, shortHash, type ChatMessage, type ConnectorContext } from "../model.ts";
 import type { ItemBudget, PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
 import type { AdapterContext } from "../providers.ts";
-import { graphGet, graphLinkPath } from "./graph-client.ts";
+import { graphGet, graphLinkPath, isGraphPath } from "./graph-client.ts";
 
 /** The account service this adapter syncs. */
 export const TEAMS_CHAT_SERVICE = "teams_chat";
@@ -66,6 +68,8 @@ const PAGE_SIZE = 50;
 const MAX_CHAT_LIST_PAGES = 20;
 const MAX_DETECT_PAGES = 10;
 const MAX_WALK_PAGES = 20;
+/** A single UTC day is read whole up to this many pages (10,000 messages). */
+const MAX_DAY_PAGES = 200;
 /** Chats queued in one round; the rest wait for the next round. */
 const MAX_QUEUE = 500;
 const MAX_ID_CHARS = 512;
@@ -159,6 +163,8 @@ export interface TeamsChatState {
   /** Per chat (chatKey): the newest lastModifiedDateTime stored. */
   marks: Record<string, string>;
   queue: QueuedChat[];
+  /** The chat list's next page while a round is still listing; null once the list is through. */
+  listing: string | null;
 }
 
 function isoOrNull(v: unknown): string | null | undefined {
@@ -202,7 +208,9 @@ export function parseTeamsChatCursor(cursor: string | null): TeamsChatState | nu
     if (parsed === null) return null;
     queue.push(parsed);
   }
-  return { v: 1, floor: raw.floor as string, marks, queue };
+  const listing = raw.listing ?? null;
+  if (listing !== null && !isGraphPath(listing)) return null;
+  return { v: 1, floor: raw.floor as string, marks, queue, listing };
 }
 
 // ---------------------------------------------------------------------------
@@ -252,11 +260,11 @@ class ChatAdapter implements SyncAdapter {
 
   async page({ client, cursor, budget }: Parameters<SyncAdapter["page"]>[0]): Promise<PageResult> {
     const state = parseTeamsChatCursor(cursor)
-      ?? { v: 1 as const, floor: isoOf(this.now() - this.historyDays() * DAY_MS), marks: {}, queue: [] };
-    if (state.queue.length === 0) {
+      ?? { v: 1 as const, floor: isoOf(this.now() - this.historyDays() * DAY_MS), marks: {}, queue: [], listing: null };
+    if (state.queue.length === 0 || state.listing !== null) {
       const listed = await this.listChats(client, state);
       if ("response" in listed) return { ok: false, response: listed.response };
-      return { ok: true, items: [], checkpoint: JSON.stringify(listed), done: listed.queue.length === 0 };
+      return { ok: true, items: [], checkpoint: JSON.stringify(listed), done: listed.listing === null && listed.queue.length === 0 };
     }
     const [head, ...rest] = state.queue as [QueuedChat, ...QueuedChat[]];
     const through = (chat: QueuedChat, items: SyncItem[], deletions: string[] = []): PageResult => {
@@ -295,12 +303,19 @@ class ChatAdapter implements SyncAdapter {
     return through({ ...chat, mark: isoOf(this.now()) }, [item]);
   }
 
-  /** The chats with something new since their watermark, oldest watermark state pruned. */
+  /**
+   * Queue the chats with something new since their watermark, MAX_CHAT_LIST_PAGES
+   * list pages per stream page: a longer list carries on from its next link on
+   * the following page, so no chat past the cap is starved. A fresh round
+   * prunes the watermarks older than the floor.
+   */
   private async listChats(client: ConnectorClient, state: TeamsChatState): Promise<TeamsChatState | { response: ConnectorResponse }> {
     const floor = this.floorMs(state);
-    const marks = Object.fromEntries(Object.entries(state.marks).filter(([, m]) => Date.parse(m) >= floor));
-    const queue: QueuedChat[] = [];
-    let path: string | null = `/v1.0/me/chats?$expand=lastMessagePreview&$top=${PAGE_SIZE}`;
+    const fresh = state.listing === null;
+    const marks = fresh ? Object.fromEntries(Object.entries(state.marks).filter(([, m]) => Date.parse(m) >= floor)) : state.marks;
+    const queue: QueuedChat[] = fresh ? [] : [...state.queue];
+    const queued = new Set(queue.map(q => q.id));
+    let path: string | null = state.listing ?? `/v1.0/me/chats?$expand=lastMessagePreview&$top=${PAGE_SIZE}`;
     for (let p = 0; p < MAX_CHAT_LIST_PAGES && path !== null && queue.length < MAX_QUEUE; p++) {
       const res = await graphGet(client, path, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
       if (res.class !== "ok") {
@@ -316,23 +331,26 @@ class ChatAdapter implements SyncAdapter {
       if (!isRecord(res.body) || !Array.isArray(res.body.value)) return { response: { ...res, class: "challenge", body: null, error: "unexpected chat list response" } };
       for (const c of (res.body.value as unknown[]).filter(isRecord)) {
         const id = str(c.id);
-        if (id === null || id.length > MAX_ID_CHARS) continue;
+        if (id === null || id.length > MAX_ID_CHARS || queued.has(id)) continue;
         const last = timeMs(isRecord(c.lastMessagePreview) ? c.lastMessagePreview.createdDateTime : undefined);
         if (!Number.isFinite(last) || last < floor) continue;
         const mark = marks[chatKey(id)];
         if (mark !== undefined && last <= Date.parse(mark)) continue;
-        const topic = str(c.topic);
+        // The topic is outside text that reaches the page's title: its meeting credentials go too.
+        const topic = str(c.topic) === null ? null : str(redactMeetingCredentials(c.topic as string).text.trim());
         queue.push({
           id, type: (str(c.chatType) ?? "unknown").slice(0, 32), topic: topic === null ? null : topic.slice(0, MAX_TOPIC_CHARS),
           detected: false, mark: null, days: null, lo: null, hi: null,
         });
+        queued.add(id);
         if (queue.length >= MAX_QUEUE) break;
       }
       const next = res.body["@odata.nextLink"];
       path = next === undefined ? null : graphLinkPath(next);
       if (next !== undefined && path === null) return { response: { ...res, class: "challenge", body: null, error: "unexpected chat list next link" } };
     }
-    return { ...state, marks, queue };
+    // A full queue ends the round's listing; the chats left are queued by the next round.
+    return { ...state, marks, queue, listing: queue.length >= MAX_QUEUE ? null : path };
   }
 
   /** Which days of a chat changed since its watermark, and the watermark to commit after. */
@@ -382,7 +400,10 @@ class ChatAdapter implements SyncAdapter {
     const byDay = new Map<string, Json[]>();
     let oldest = Number.POSITIVE_INFINITY;
     let ended = false;
-    for (let p = 0; p < MAX_WALK_PAGES && path !== null; p++) {
+    for (let p = 0; path !== null; p++) {
+      // Past MAX_WALK_PAGES the walk stops at the first whole day it holds; a
+      // single day longer than that is read on to its start, up to MAX_DAY_PAGES.
+      if (p >= MAX_DAY_PAGES || (p >= MAX_WALK_PAGES && byDay.size >= 2)) break;
       const res = await graphGet(client, path, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
       if (res.class !== "ok") return { response: res };
       if (!isRecord(res.body) || !Array.isArray(res.body.value)) return { response: { ...res, class: "challenge", body: null, error: "unexpected chat messages response" } };
@@ -395,7 +416,9 @@ class ChatAdapter implements SyncAdapter {
           continue;
         }
         const day = dayOf(created);
-        byDay.set(day, [...(byDay.get(day) ?? []), m]);
+        const list = byDay.get(day);
+        if (list === undefined) byDay.set(day, [m]);
+        else list.push(m);
       }
       if (ended) break;
       const next = res.body["@odata.nextLink"];
@@ -411,7 +434,7 @@ class ChatAdapter implements SyncAdapter {
     if (!Number.isFinite(oldest)) ended = true;
     const seen = [...byDay.keys()].sort().reverse();
     let complete = ended ? seen : seen.filter(d => oldest < dayStartMs(d));
-    // One day larger than a whole walk: stored with what was read rather than never.
+    // One day of more than MAX_DAY_PAGES pages: its newest messages are stored rather than none.
     if (!ended && complete.length === 0 && seen.length > 0) complete = [seen.at(-1)!];
     const wanted = chat.days === null ? complete : complete.filter(d => chat.days!.includes(d));
     const room = Math.max(1, budget?.remaining ?? Number.POSITIVE_INFINITY);
@@ -445,7 +468,9 @@ class ChatAdapter implements SyncAdapter {
     const from = isRecord(m.from) ? m.from : {};
     const userFrom = isRecord(from.user) ? from.user : null;
     const app = isRecord(from.application) ? from.application : null;
-    const name = str(userFrom?.displayName) ?? str(app?.displayName);
+    const shown = str(userFrom?.displayName) ?? str(app?.displayName);
+    // A display name is outside text too, and lands on the page.
+    const name = shown === null ? null : str(redactMeetingCredentials(shown).text.trim());
     const authorId = str(userFrom?.id);
     return {
       id,

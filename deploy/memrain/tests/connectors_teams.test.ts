@@ -291,6 +291,40 @@ describe("teams chat adapter", () => {
     expect(failed[0]!.failure).toMatchObject({ code: "chat_unavailable", holdNow: true });
     expect(rendered(out.items).map(i => i.externalId)).toEqual([`${CHAT_B}:2026-11-15`]);
   });
+
+  it("reads a day longer than one walk to its end instead of storing part of it", async () => {
+    const busy = Array.from({ length: 1001 }, (_, i) => msg(`busy-${i}`, new Date(Date.parse("2026-11-15T23:00:00.000Z") - i * 60_000).toISOString(), { text: `line ${i}` }));
+    const older = msg("older", "2026-11-14T08:00:00.000Z", { text: "yesterday" });
+    const g = world([chat(CHAT_B, "group", "Launch plan", "2026-11-15T23:00:00.000Z")], { [CHAT_B]: [...busy, older] });
+    const out = await drain(teamsChatAdapter(account("teams_chat"), { now: () => T0, env: {} }), g.client, TEAMS_CHAT_STREAM, null);
+    const day = rendered(out.items).find(i => i.externalId === `${CHAT_B}:2026-11-15`)!;
+    expect(day.body).toContain("1001 messages");
+    expect(rendered(out.items).map(i => i.externalId)).toContain(`${CHAT_B}:2026-11-14`);
+  });
+
+  it("removes meeting credentials from a chat's topic and its people's names too", async () => {
+    const named = { ...msg("n1", "2026-11-15T12:00:00.000Z", { text: "hello" }), from: user("user-x", "Dial-in Passcode: 551234") };
+    const g = world([chat(CHAT_B, "group", "Standup Passcode: 482913", "2026-11-15T12:00:00.000Z")], { [CHAT_B]: [named] });
+    const out = await drain(teamsChatAdapter(account("teams_chat"), { now: () => T0, env: {} }), g.client, TEAMS_CHAT_STREAM, null);
+    const page = rendered(out.items)[0]!;
+    expect(`${page.title}\n${page.body}`).not.toContain("482913");
+    expect(page.body).not.toContain("551234");
+  });
+
+  it("keeps listing chats past one page cap, across pages of the stream", async () => {
+    const chats = Array.from({ length: 22 }, (_, i) => chat(`19:many-${i}@thread.v2`, "group", `Chat ${i}`, "2026-11-15T12:00:00.000Z"));
+    const byChat = Object.fromEntries(chats.map(c => [c.id, [msg(`m-${c.id}`, "2026-11-15T12:00:00.000Z", { text: "hi" })]]));
+    const messages = messagesRoute(byChat);
+    const g = graph((url) => {
+      if (url.pathname !== "/v1.0/me/chats") return messages(url);
+      const at = Number(url.searchParams.get("$skiptoken") ?? "0");
+      const next = new URL(url.toString());
+      next.searchParams.set("$skiptoken", String(at + 1));
+      return { body: { value: [chats[at]], ...(at + 1 < chats.length ? { "@odata.nextLink": next.toString() } : {}) } };
+    });
+    const out = await drain(teamsChatAdapter(account("teams_chat"), { now: () => T0, env: {} }), g.client, TEAMS_CHAT_STREAM, null);
+    expect(rendered(out.items)).toHaveLength(22);
+  });
 });
 
 describe("webvtt transcripts", () => {
@@ -318,6 +352,11 @@ describe("webvtt transcripts", () => {
     ]);
     expect(parseVtt("not a transcript")).toEqual([]);
   });
+
+  it("reads the unattributed format, which has cues but no WEBVTT header", () => {
+    expect(parseVtt("00:00:16.246 --> 00:00:17.726\nThis is a transcript test.\n\n00:00:18.000 --> 00:00:19.000\nSecond line.\n"))
+      .toEqual([{ speaker: "", text: "This is a transcript test. Second line." }]);
+  });
 });
 
 describe("teams transcripts adapter", () => {
@@ -343,11 +382,11 @@ describe("teams transcripts adapter", () => {
     "00:00:03.000 --> 00:00:04.000", "<v Bob>Dial in again, Passcode: 551234</v>", "",
   ].join("\n");
 
-  function transcriptWorld(opts: { disabled?: boolean } = {}) {
+  function transcriptWorld(opts: { disabled?: boolean; masterDown?: boolean } = {}) {
     return graph((url, call): Reply | null => {
       const p = url.pathname;
       if (p === "/v1.0/me/calendarView") return { body: { value: events } };
-      if (p === "/v1.0/me/events/series-1") return { body: { id: "series-1", iCalUId: "ical-series" } };
+      if (p === "/v1.0/me/events/series-1") return opts.masterDown ? { status: 503, body: { error: { code: "ServiceUnavailable" } } } : { body: { id: "series-1", iCalUId: "ical-series" } };
       if (p === "/v1.0/me/onlineMeetings") {
         const filter = url.searchParams.get("$filter");
         if (filter === `JoinWebUrl eq '${encodeURIComponent(joinOne)}'`) return { body: { value: [{ id: "meeting-one" }] } };
@@ -372,7 +411,7 @@ describe("teams transcripts adapter", () => {
       }
       if (p === "/v1.0/me/onlineMeetings/meeting-one/transcripts/tr-1/content") return { body: vttOne };
       if (p === "/v1.0/me/onlineMeetings/meeting-two/transcripts/tr-2/content") {
-        if (call.accept === "application/vnd.microsoft.graph.transcript+text") return { body: "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHello all\n" };
+        if (call.accept === "application/vnd.microsoft.graph.transcript+text") return { body: "00:00:01.000 --> 00:00:03.000\nHello all\n" };
         return { status: 403, body: { error: { code: "Forbidden", innerError: { code: "SpeakerAttributionNotAllowed" } } } };
       }
       return null;
@@ -410,16 +449,37 @@ describe("teams transcripts adapter", () => {
     expect(encoded.url.search).toContain(encodeURIComponent(encodeURIComponent(joinOne).slice(0, 20)));
     // A transcript still being written is left for a later run.
     expect(g.calls.some(c => c.url.pathname.includes("tr-3"))).toBe(false);
-    expect(JSON.parse(out.cursor!)).toEqual({ v: 1, scannedTo: new Date(T0).toISOString() });
+    expect(JSON.parse(out.cursor!)).toEqual({ v: 1, scannedTo: new Date(T0).toISOString(), pos: null });
+    // The window is read one day at a time, so no listing cap can skip a meeting.
+    const views = g.calls.filter(c => c.url.pathname === "/v1.0/me/calendarView");
+    expect(views.length).toBeGreaterThanOrEqual(30);
+    for (const v of views) expect(Date.parse(v.url.searchParams.get("endDateTime")!) - Date.parse(v.url.searchParams.get("startDateTime")!)).toBeLessThanOrEqual(86_400_000);
   });
 
+  /** Pages of the stream until one fails or the stream is done; the last result. */
+  async function firstFailure(g: ReturnType<typeof transcriptWorld>) {
+    const adapter = teamsTranscriptsAdapter(account("teams_transcripts"), { now: () => T0, env: {} });
+    let cursor: string | null = null;
+    for (let i = 0; i < 60; i++) {
+      const res = await adapter.page({ client: g.client, account: account("teams_transcripts"), stream: TEAMS_TRANSCRIPTS_STREAM, cursor, page: i });
+      if (!res.ok || res.done) return res;
+      if (res.checkpoint !== null) cursor = res.checkpoint;
+    }
+    throw new Error("stream never finished");
+  }
+
   it("reports transcripts turned off for the organization as forbidden, by its code", async () => {
-    const g = transcriptWorld({ disabled: true });
-    const res = await teamsTranscriptsAdapter(account("teams_transcripts"), { now: () => T0, env: {} })
-      .page({ client: g.client, account: account("teams_transcripts"), stream: TEAMS_TRANSCRIPTS_STREAM, cursor: null, page: 0 });
+    const res = await firstFailure(transcriptWorld({ disabled: true }));
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.response.class).toBe("forbidden");
     expect(res.response.error).toContain("GraphAccessToTranscriptsDisabled");
+  });
+
+  it("stops rather than store a transcript without its calendar link when the series cannot be read", async () => {
+    const res = await firstFailure(transcriptWorld({ masterDown: true }));
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.response.class).toBe("server_error");
   });
 });
