@@ -497,6 +497,7 @@ deploy/secrets/README.md|COMPAT-DOC|2|legacy secret names and the unset-prefix d
 deploy/secrets/fetch-secrets.sh|COMPAT|8|legacy secret names, prefix default and MEMEX_ fallbacks
 deploy/secrets/lib.sh|COMPAT|5|legacy secret names and the unset-prefix default
 deploy/skills/_brain-filing-rules.md|COMPAT-DOC|1|keep an existing memex: fence marker
+deploy/skills/_resolver.md|COMPAT-DOC|2|generated routing table repeats the legacy trigger aliases of brain-upgrade and setup
 deploy/skills/brain-upgrade/SKILL.md|COMPAT-DOC|8|legacy trigger alias and the rename-crossing rule
 deploy/skills/setup/SKILL.md|COMPAT-DOC|1|legacy trigger alias (removed in 1.1.0)
 docs/CONFIGURATION.md|COMPAT-DOC|16|Legacy names section and the deprecated memex_subdomain variable

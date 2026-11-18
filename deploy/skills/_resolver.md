@@ -1,0 +1,91 @@
+# Skill Resolver
+
+Generated from each skill's frontmatter by `scripts/generate-plugin-tree.ts`
+in `deploy/memrain`; edit the skills, not this page.
+
+Match the request against a skill's triggers and purpose, then read it with
+`get_skill` and its slug. Writes: the skill changes the brain. Ships in:
+plugin (also copied into the Claude Code and Codex plugin), operator only
+(host-side work, never in the plugin), brain (served by the brain only);
+prompt marks the skills also offered as MCP prompts.
+
+| Skill | Use it for | Triggers | Writes | Ships in |
+|---|---|---|---|---|
+| `academic-verify` | Verify a research claim or academic citation by tracing it through publication → methodology → raw data → independent replication. | "verify this academic claim", "check this study", "academic verify", "validate citation" | yes | brain |
+| `advisor` | Proactive "make the most of the brain" coaching. | "what should I do to get more out of the brain", "is my brain set up right", "brain advisor", "advise me on my brain" | no | brain |
+| `archive-crawler` | Universal archivist for personal file archives (Dropbox/B2/Gmail-takeout/local-mount/hard-drive-dump). | "crawl my archive", "find gold in my archive", "archive crawler", "scan my dropbox for" | yes | brain |
+| `article-enrichment` | Transform raw article text dumps in the brain into structured pages with executive summary, verbatim quotes, key insights, why-it-matters, and cross-references. | "enrich this article", "enrich the article", "enriching the article", "enrich brain pages" | yes | brain |
+| `ask-user` | Reusable pattern for presenting the user with explicit choices and gating execution until they respond. | "present options", "ask before proceeding", "choice gate", "user decision" | no | brain |
+| `blog-ingest` | Whole-publication ingestion: turn an entire blog, newsletter or RSS/Atom archive into brain source pages. | "ingest this publication", "ingest this whole blog", "ingest this feed", "ingest this newsletter archive" | yes | brain |
+| `book-mirror` | Take any book (EPUB/PDF), produce a personalized chapter-by-chapter analysis with two-column tables. | "personalized version of this book", "mirror this book", "two-column book analysis", "apply this book to my life" | yes | brain |
+| `brain-link-discipline` | When you report a brain page to the user (created, edited, or relayed from a subagent), a working link is part of the deliverable, in the same message. | "give me the link", "where is the page", "why does this link 404", "brain link discipline" | no | plugin |
+| `brain-ops` | Brain knowledge base operations. | "any brain read/write/lookup/citation" | yes | plugin |
+| `brain-pdf` | Generate a publication-quality PDF from any brain page via the host agent's PDF renderer. | "make pdf from brain", "brain pdf", "convert brain page to pdf", "publish this page as pdf" | no | brain |
+| `brain-taxonomist` | Filing gate for ALL brain writes. | "where does this brain page go", "file this in the brain", "brain taxonomist", "taxonomy check" | no | brain |
+| `brain-upgrade` | Keep the brain server current. | "brain update available", "upgrade the brain", "update memrain", "update memex" | yes | operator only |
+| `briefing` | Compile daily briefing with meeting context, active deals, and citation tracking | "daily briefing", "morning briefing", "what's happening today" | no | plugin |
+| `bulk-ingestion` | End-to-end discipline for turning a large data source (audio libraries, mail exports, document corpora, chat exports, API dumps) into brain pages at scale. | "bulk ingest", "bulk import", "ingest all", "ingestion pipeline" | yes | brain |
+| `capture` | Save any thought or content into the brain via one CLI command. | "capture this", "save this thought", "remember this", "ingest this into my brain" | no | plugin |
+| `chat-connectors` | Keep the user's chat history flowing into the brain without a manual export each time: Claude Code and Codex sessions pushed when they end, a scheduled import of new local session logs, and ChatGPT or Claude.ai histor... | "keep my conversations synced", "sync my chat history", "auto-import my chats", "connect my chatgpt" | yes | brain |
+| `citation-fixer` | Audit and fix citation formatting across brain pages. | "fix citations", "fix broken citations", "citation audit", "check citations" | yes | brain |
+| `citation-graph-ingest` | Build a typed citation graph over an ingested corpus, not just embeddings. | "citation graph", "typed citation graph", "build a reference graph", "graph over a corpus" | yes | brain |
+| `cold-start` | Day-one data bootstrapping for a new brain. | "cold start", "fill my brain", "bootstrap brain", "import my data" | yes | brain |
+| `company-brainify` | Build a shared team source from a personal brain without carrying the sensitive parts across: internal ratings, compensation, performance assessments, retention and political dynamics, personal details. | "company brain", "team brain", "brainify", "sanitize the brain" | yes | operator only |
+| `concept-synthesis` | Deduplicate and synthesize raw concept stubs into a tiered intellectual map (T1 Canon to T4 Riff), tracing idea evolution across sources over time. | "concept synthesis", "synthesize my concepts", "find patterns across my notes", "build my intellectual map" | yes | brain |
+| `connect-client` | Connect a Memrain MCP client using the matching client guide and verify its source and access. | "connect a memrain client", "set up a memrain connector" | no | plugin, prompt |
+| `context-audit` | Token-hygiene audit of the context an agent loads on every turn: the harness's instruction files (CLAUDE.md, AGENTS.md and their equivalents), its auto-memory index, and the brain's own identity pages when the harness... | "context audit", "context diet", "system prompt audit", "prompt compression" | no | brain |
+| `conversation-archive` | Bring chat history into the brain as conversation pages, or find out why it did not arrive. | "import my chat export", "import my claude conversations", "archive this agent session", "push my session log" | yes | brain |
+| `correction-pipeline` | Trace an incorrect claim to its source and correct that source before changing derived facts. | "correct a stored claim", "trace a wrong fact" | yes | plugin |
+| `cron-scheduler` | Schedule management with staggering, quiet hours, and wake-up override. | "schedule a job", "cron", "quiet hours", "what jobs are running" | yes | brain |
+| `cross-modal-review` | Quality gate via second model. | "second opinion", "cross-modal review", "double check this", "get another perspective" | no | brain, prompt |
+| `daily-task-manager` | Task lifecycle management. | "add task", "complete task", "what are my tasks", "task list" | yes | brain |
+| `daily-task-prep` | Morning preparation. | "morning prep", "prepare for today", "what's on my plate", "day prep" | no | brain, prompt |
+| `data-loss-gate` | Review and confirm irreversible fact removal, page purge, or bulk page changes before execution. | "review data loss", "confirm bulk deletion" | yes | brain |
+| `data-research` | Structured data research: search sources, extract structured data, archive raw sources, maintain canonical tracker pages, deduplicate. | "research", "track", "extract from email", "investor updates" | yes | brain |
+| `db-repair` | Diagnose why the brain's database cannot be reached (Postgres or PGLite) when a tool call fails with db_busy, db_timeout or storage_error, or the operator says the brain database is down. | "brain database is down", "cannot reach the brain database", "memrain database error", "memrain connection refused" | no | operator only |
+| `draft-in-voice` | Ghostwrite in a specific person's voice from a validated voice profile: posts, replies, launch copy, recruiting blurbs, emails. | "draft in voice", "write this as", "make this sound like", "ghostwrite" | yes | plugin |
+| `eiirp` | Everything In Its Right Place. | "everything in its right place", "eiirp", "store this research", "put this in the brain" | yes | brain |
+| `enrich` | Enrich brain pages with tiered enrichment protocol. | "enrich", "create person page", "update company page", "who is this person" | yes | brain |
+| `fact-check` | Claim-by-claim verification of any content before it ships, in the manner of a professional fact-checking desk: extract every verifiable claim, check each against live citable sources (never model memory), give it one... | "fact check", "fact-check", "verify the facts", "check the claims" | no | plugin |
+| `frontmatter-guard` | Validate and auto-repair YAML frontmatter on brain pages. | "validate frontmatter", "check frontmatter", "fix frontmatter", "frontmatter audit" | yes | brain |
+| `functional-area-resolver` | Compress an agent's routing file (RESOLVER.md or AGENTS.md) by converting granular skill-per-row tables into functional-area dispatchers. | "compress agents.md", "compress my resolver", "resolver too big", "resolver.md too big" | yes | brain |
+| `idea-ingest` | Ingest links, articles, tweets, and ideas into the brain. | "shares a link or URL", "read this", "save this", "think about this" | yes | brain |
+| `idea-lineage` | Trace one idea's evolution through the brain: first mention, best articulation, related concepts, reversals, contradictions, abandoned branches, and the current live version. | "idea lineage", "trace the lineage of this idea", "how my thinking about", "how has my thinking about" | no | brain |
+| `ingest` | Route content to specialized ingestion skills. | "ingest this", "save this to brain" | yes | brain |
+| `ingest-gate` | Check identity and duplicates before creating a brain page from new material. | "check before creating a page", "check ingest duplicates" | yes | brain |
+| `install` | Deprecated pointer. | "install" | no | operator only |
+| `mail-loops` | Who is waiting on the user, and what the user is waiting on: replies owed, replies awaited, promises made, invitations not answered, across Gmail and Outlook mail and the Google and Outlook calendars. | "who is waiting on me", "what do i owe people", "open loops", "unanswered email" | yes | brain |
+| `maintain` | Brain health checks: back-link enforcement, citation audit, filing validation, stale info detection, orphan pages, and benchmarks. | "check backlinks", "maintenance", "orphan pages", "stale pages" | yes | brain |
+| `mcp-access` | The owner's administration of who may use the brain over MCP: sign in to the admin panel, register OAuth clients and personal tokens, change a client's source or scopes, cut off tokens, revoke a client, and check who ... | "memrain admin login link", "open the admin panel", "manage mcp clients", "register an mcp client" | yes | operator only |
+| `measure-before-you-fix` | Before fixing a slow, stale or timed-out alert, measure the blamed step yourself: kill the theory with a stopwatch, not a code change. | "keeps timing out", "etimedout", "why is this data stale", "freshness alert" | no | brain |
+| `media-ingest` | Ingest video, audio, PDF, book, screenshot, and GitHub repo content into the brain. | "watch this video", "process this YouTube link", "ingest this PDF", "save this podcast" | yes | brain |
+| `meeting-ingestion` | Ingest meeting transcripts into brain pages with attendee enrichment, entity propagation, and timeline merge. | "meeting transcript", "process this meeting", "meeting notes", "meeting transcript received" | yes | brain |
+| `migrate` | Universal migration from Obsidian, Notion, Logseq, markdown, CSV, JSON, Roam | "migrate from", "import from obsidian", "import from notion" | yes | brain |
+| `minion-orchestrator` | Unified background-work skill for durable server-side jobs of the kinds the brain registers, and for agent-side subagent orchestration. | "jobs submit", "submit a job", "spawn agent", "background task" | yes | operator only |
+| `perplexity-research` | Brain-augmented Perplexity research. | "Perplexity research", "perplexity-research", "perplexity", "what's new about" | yes | brain |
+| `postgres-adopt` | Find out which engine a Memrain brain runs on (PGLite or Postgres), say when Postgres is worth it, and move a PGLite brain to Postgres with every table copied and verified (dry run, agree, copy, verify, switch). | "which memrain engine", "pglite or postgres", "memrain engine status", "upgrade to postgres" | yes | operator only |
+| `publish` | Share brain pages as beautiful password-protected HTML with client-side encryption | "share this page", "publish page", "create shareable link" | no | brain |
+| `query` | Answer questions using the brain's knowledge with 3-layer search, synthesis, and citation propagation. | "what do we know about", "tell me about", "who is", "what happened" | no | plugin, prompt |
+| `remote-mcp` | Make the user's own Memrain reachable over MCP from their other devices, desktop apps and cloud agents, without moving the data or putting the database on the internet. | "use my brain over mcp", "serve my brain over mcp", "expose my brain over mcp", "remote mcp access to my brain" | yes | operator only |
+| `repo-architecture` | Where new brain pages go. | "where does this go", "filing rules", "create new page", "which directory" | no | brain |
+| `reports` | Save and load timestamped reports as brain pages. | "save report", "load latest report", "what's the latest briefing", "show me the pulse" | yes | brain |
+| `research-compendium` | Deep-research a topic end to end and leave a permanent knowledge asset: archive every primary source (as the user's retention posture allows), write one summary per source, then synthesise one self-contained compendiu... | "compendium", "research everything about", "read them all and summarize", "definitive guide" | yes | plugin |
+| `resolve-before-asking` | Gate on identity questions to the user. | "resolve before asking", "before asking the user", "unidentified contact", "unknown relationship" | yes | plugin |
+| `schema-author` | Evolve the brain's type taxonomy. | "add a page type", "add a type to my taxonomy", "my brain has untyped pages", "types aren't matching my notes" | no | brain |
+| `schema-unify` | Collapse a brain's sprawl of page types (tweet, tweet-thread, tweet-single, x-post…) into a small canonical set, with the long tail kept recoverable. | "unify my types", "consolidate page types", "too many page types", "shrink type proliferation" | yes | operator only |
+| `setup` | Set up Memrain with provisioned Postgres (RDS + pgvector), AGENTS.md injection, first import | "set up memrain", "initialize brain", "memrain setup", "set up memex" | yes | brain |
+| `share-audit` | Operator review of the pages a proposed team or pilot grant would expose, without quoting sensitive material. | "audit a proposed share", "review team exposure" | no | brain |
+| `signal-detector` | Always-on ambient signal capture. | "every inbound message (always-on)" | yes | brain |
+| `skill-autobench` | Write a skill's routing benchmark from how it was really used, not from its spec. | "skill autobench", "autobench", "write the eval from usage history", "synthesize an eval for this skill" | no | operator only |
+| `skill-creator` | Create new skills following the Memrain conformance standard. | "create a skill", "new skill", "improve this skill" | yes | brain |
+| `skill-optimizer` | Improve how reliably a skill gets picked, against its routing benchmark, with a paid but hard-capped evaluation. | "optimize this skill", "tune the skill against the benchmark", "make the skill route better", "run skillopt" | no | operator only |
+| `skillify` | The meta skill. | "skillify this", "skillify", "is this a skill?", "make this proper" | yes | brain |
+| `skillpack-check` | Produce an agent-readable health verdict for the brain install from the doctor report (run_doctor over MCP, memrain doctor on the host), plus the status and per-source rollups, so a host agent (a morning-briefing run,... | "is the brain healthy", "brain health", "check the brain", "is the brain working" | no | brain |
+| `skillpack-harvest` | Lift a proven skill from somewhere else (the user's own skills folder, a team's private pack, a public catalog) into Memrain's shipped pack in deploy/skills, so every brain and the plugin can serve it. | "harvest this skill", "harvest my skill", "lift this skill into the pack", "add this skill to memrain" | no | operator only |
+| `smoke-test` | Post-restart smoke tests + auto-fix for the Memrain server environment. | "smoke test", "run smoke tests", "container restart check", "did the restart break anything" | yes | brain |
+| `soul-audit` | 6-phase interactive interview that generates the agent's identity (identity/soul), operator profile (identity/user), access posture (identity/access-policy), and operational cadence (identity/heartbeat) as brain pages. | "soul audit", "customize agent", "who am I", "set up identity" | yes | brain |
+| `strategic-reading` | Read a book, article, transcript, or case study through the lens of a specific strategic problem you're facing. | "strategic reading", "read this through the lens of", "apply this to my problem", "what can I learn from this about" | yes | brain |
+| `testing` | Skill validation framework PLUS daily test-suite health and regression intelligence. | "validate skills", "test skills", "skill health check", "run conformance tests" | yes | brain |
+| `two-tier-extraction` | Tiered model extraction for large corpora (mail archives, document dumps, transcript libraries). | "two-tier extraction", "triage then deep read", "smart model routing", "cheap triage expensive analysis" | yes | brain |
+| `voice-note-ingest` | Ingest a voice note with exact-phrasing preservation (never paraphrased). | "voice note", "ingest this voice memo", "transcribe and file", "voice note ingest" | yes | brain |
+| `webhook-transforms` | Generic framework for converting external events (SMS, meetings, social mentions) into brain-ingestible signals. | "set up webhook", "process webhook event", "transform this event" | yes | brain |

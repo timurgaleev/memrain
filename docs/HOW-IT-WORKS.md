@@ -364,7 +364,10 @@ A few that are easy to miss:
   description and triggers. An exact slug ranks first; ties keep catalog
   order. With a query it returns up to five skills by default. Without
   arguments the complete catalog is unchanged. Tool availability in each
-  entry still reflects the caller's grant.
+  entry still reflects the caller's grant. `get_skill _resolver` returns the
+  whole pack as one routing table (purpose, triggers, whether the skill
+  writes, and whether it also ships in the plugin), generated from the skills'
+  frontmatter.
 - A skill with `prompt: true` frontmatter can appear in MCP `prompts/list`
   when all its declared tools are available to the caller. `prompts/get`
   returns its literal Markdown without arguments or execution. No bundled

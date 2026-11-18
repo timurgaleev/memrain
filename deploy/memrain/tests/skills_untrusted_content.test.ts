@@ -28,6 +28,18 @@ const SKILLS = [
   "perplexity-research",
   "strategic-reading",
   "conversation-archive",
+  "blog-ingest",
+  "bulk-ingestion",
+  "citation-graph-ingest",
+  "two-tier-extraction",
+  "research-compendium",
+  "fact-check",
+  "draft-in-voice",
+  "chat-connectors",
+  "mail-loops",
+  "company-brainify",
+  "skill-autobench",
+  "skillpack-harvest",
 ];
 
 describe("untrusted-content convention", () => {

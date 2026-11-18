@@ -29,7 +29,9 @@ ALL = (CLAUDE_PLUGIN, CLAUDE_MARKET, CODEX_PLUGIN, CODEX_MCP, CODEX_MARKET)
 
 PLUGIN_SKILLS = PLUGIN / "skills"
 SOURCE_SKILLS = REPO / "deploy" / "skills"
-CURATED = {"query", "brain-ops", "capture", "briefing", "correction-pipeline", "connect-client"}
+LANES = json.loads((SOURCE_SKILLS / "plugin-lanes.json").read_text(encoding="utf-8"))
+CURATED = set(LANES["plugin"])
+OPERATOR_ONLY = set(LANES["operator_only"])
 
 # A literal bearer value, a Memrain token, a long hex or base64 secret, an AWS key.
 CREDENTIAL = re.compile(
@@ -109,6 +111,8 @@ def test_claude_reads_the_same_skills_folder():
 def test_plugin_ships_the_curated_skills():
     shipped = {p.name for p in PLUGIN_SKILLS.iterdir() if p.is_dir()}
     assert shipped == CURATED
+    assert not shipped & OPERATOR_ONLY, sorted(shipped & OPERATOR_ONLY)
+    assert {"query", "capture", "connect-client"} <= CURATED
     for name in CURATED:
         assert (PLUGIN_SKILLS / name / "SKILL.md").is_file(), f"{name}/SKILL.md missing"
 
@@ -124,7 +128,7 @@ def test_plugin_skill_matches_its_source(name: str):
     drift = differences(filecmp.dircmp(SOURCE_SKILLS / name, PLUGIN_SKILLS / name, ignore=[]))
     assert not drift, (
         f"plugins/memrain/skills/{name} differs from deploy/skills/{name}: {drift}; "
-        f"copy it again: rm -r plugins/memrain/skills/{name} && cp -R deploy/skills/{name} plugins/memrain/skills/"
+        "regenerate it: cd deploy/memrain && bun scripts/generate-plugin-tree.ts"
     )
 
 

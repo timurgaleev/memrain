@@ -96,8 +96,11 @@ enrollment-mode client and a code as described in
 
 The repository is also a Claude Code plugin marketplace. Its one plugin lives
 in `plugins/memrain`, so an install copies only that folder: the same `memrain`
-MCP server plus six skills (`query`, `brain-ops`, `capture`, `briefing`,
-`correction-pipeline`, `connect-client`) that teach the agent how to use it.
+MCP server plus eleven skills: `query`, `brain-ops`, `capture`, `briefing`,
+`correction-pipeline`, `connect-client`, `fact-check`, `research-compendium`,
+`draft-in-voice`, `resolve-before-asking` and `brain-link-discipline` that teach the agent how to use it.
+They are generated from `deploy/skills`; `deploy/skills/plugin-lanes.json`
+decides which skills ship, and host-side skills never do.
 
 1. Mint a token as in Option A, step 1 (or take the one `make local-up`
    printed for a local brain).
