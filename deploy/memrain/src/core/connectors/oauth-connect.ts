@@ -1,5 +1,6 @@
 /**
- * Connect a provider account with OAuth 2.0 authorization code + PKCE (S256).
+ * Connect a provider account with OAuth 2.0 authorization code + PKCE (S256);
+ * a provider marked `pkce: false` (Slack) gets the code flow without PKCE.
  *
  * start: the signed-in admin picks a provider, services and a source. A random
  * state and PKCE verifier are minted; the database keeps only the state's hash,
@@ -46,7 +47,7 @@ import {
   type ConnectorAccount,
   type TokenSet,
 } from "./accounts.ts";
-import { MAILBOX_ADDRESS, PROVIDER_USER_ID } from "./model.ts";
+import { MAILBOX_ADDRESS, PASTED_TOKEN, PROVIDER_USER_ID } from "./model.ts";
 import { getOAuthClient } from "./oauth-clients.ts";
 import { openNotice, resolveNotice } from "./sync-store.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
@@ -359,6 +360,8 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
   if (services.length === 0 || services.some((s) => !Object.hasOwn(provider.services, s))) {
     throw new ConnectError("unknown_service");
   }
+  // An opt-in service adds to another one (Slack's private channels to its public ones); it never connects alone.
+  if (services.every((s) => provider.services[s]!.optIn === true)) throw new ConnectError("unknown_service");
   if (typeof input.adminSessionId !== "string" || input.adminSessionId === "") throw new ConnectError("state_session");
   if (!checkRedirect(input.redirectUri)) throw new ConnectError("redirect_uri");
   const principal = cleanLabel(input.principalRef, "principal", 200);
@@ -398,10 +401,12 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", client.clientId);
   url.searchParams.set("redirect_uri", input.redirectUri);
-  url.searchParams.set("scope", scopes.join(" "));
+  url.searchParams.set("scope", scopes.join(provider.scopeSeparator ?? " "));
   url.searchParams.set("state", state);
-  url.searchParams.set("code_challenge", challenge);
-  url.searchParams.set("code_challenge_method", "S256");
+  if (provider.pkce !== false) {
+    url.searchParams.set("code_challenge", challenge);
+    url.searchParams.set("code_challenge_method", "S256");
+  }
   return { authorizeUrl: url.toString(), expiresAt };
 }
 
@@ -462,11 +467,11 @@ async function revokeToken(
   provider: ConnectorProvider,
   fetch: FetchFn,
   token: string,
-  client: { clientId: string; clientSecret: string },
+  client: { clientId: string; clientSecret: string } | null,
 ): Promise<boolean> {
   try {
     if (provider.revoke) return await provider.revoke({ fetch, token, client });
-    if (!provider.revokeUrl) return false;
+    if (!provider.revokeUrl || client === null) return false;
     const res = await fetch(provider.revokeUrl, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
@@ -575,7 +580,7 @@ export async function completeConnect(
         grant_type: "authorization_code",
         code: input.code,
         redirect_uri: st.redirect_uri,
-        code_verifier: verifier,
+        ...(provider.pkce === false ? {} : { code_verifier: verifier }),
         client_id: client.clientId,
         client_secret: client.clientSecret,
       }).toString(),
@@ -684,7 +689,9 @@ async function persistGrant(
     if (existing) {
       await storeCredential(tx, kek, existing, tokens, { scopes, expiresAt });
       await tx.query(`UPDATE connector_accounts SET services = $2::text[], updated_at = NOW() WHERE id = $1`, [existing.id, st.services]);
-      if (Object.keys(config).length > 0) await setAccountConfig(tx, existing.id, config);
+      // An account that synced with a pasted token now holds an OAuth grant, renewed with the app.
+      const patch = existing.config[PASTED_TOKEN] === true ? { ...config, [PASTED_TOKEN]: false } : config;
+      if (Object.keys(patch).length > 0) await setAccountConfig(tx, existing.id, patch);
       await setAccountStatus(tx, existing.id, "active", null);
       // The new grant answers the sync engine's reconnect notice; with sync off no run would.
       await resolveNotice(tx, existing.id, "needs_reconnect");
@@ -774,7 +781,8 @@ async function disconnectLocked(
   if (hasCredential && canRevoke && deps.kek) {
     const cred = await readCredential(deps.engine, deps.kek, accountId).catch(() => null);
     const client = cred ? await resolveClient(deps, deps.kek, provider.id).catch(() => null) : null;
-    if (cred && client) {
+    // A provider's own revocation may need only the token (Slack's auth.revoke): a pasted token has no app.
+    if (cred && (client || provider.revoke)) {
       revoked = await revokeToken(provider, deps.fetch ?? (globalThis.fetch as FetchFn), cred.tokens.refresh_token ?? cred.tokens.access_token, client);
     }
   }

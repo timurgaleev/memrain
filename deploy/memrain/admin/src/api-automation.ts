@@ -1,6 +1,7 @@
 import { ApiError, expectOk, passkeyFetch } from "./lib/passkey-fetch.ts";
 import type {
   CalendarsReport,
+  ChannelsReport,
   ConnectorsReport,
   DaemonsReport,
   DataPreview,
@@ -55,6 +56,9 @@ export const automationApi = {
   calendars: (id: string) => call<CalendarsReport>(account(id, "calendars")),
   saveCalendars: (id: string, calendars: string[], historyDays: number) =>
     call<{ ok: true; calendars: string[]; history_days: number }>(account(id, "calendars"), post({ calendars, history_days: historyDays })),
+  channels: (id: string) => call<ChannelsReport>(account(id, "channels")),
+  saveChannels: (id: string, channels: string[], historyDays: number) =>
+    call<{ ok: true; channels: string[]; history_days: number }>(account(id, "channels"), post({ channels, history_days: historyDays })),
 
   daemons: () => call<DaemonsReport>("/admin/api/daemons"),
   controlDaemon: (action: "pause" | "resume" | "enable" | "disable", daemon: string, reason?: string) =>

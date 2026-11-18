@@ -123,7 +123,7 @@ To report a vulnerability, see [SECURITY.md](./SECURITY.md).
 | [docs/QUICKSTART.md](./docs/QUICKSTART.md) | Install, connect, credentials, day-to-day operation |
 | [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md) | How search works, what it costs |
 | [docs/TEAM-SETUP.md](./docs/TEAM-SETUP.md) | One connector for a team, a private space per person |
-| [docs/connectors/ENABLE.md](./docs/connectors/ENABLE.md) | Sync your calendar, mail and meetings: Google Calendar, Gmail, Outlook mail and calendar, Fireflies |
+| [docs/connectors/ENABLE.md](./docs/connectors/ENABLE.md) | Sync your calendar, mail and meetings: Google Calendar, Gmail, Outlook mail and calendar, Slack, Fireflies |
 | [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Every install and update step in detail |
 | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) | Every setting, quality tiers, budgets |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | What runs where, and the security model |

@@ -264,6 +264,8 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_SKILLOPT_ENABLED: "flag",
   MEMRAIN_SKILLOPT_MAX_USD: "string",
   MEMRAIN_SKILLS_DIR: "string",
+  MEMRAIN_SLACK_OAUTH_CLIENT_ID: "string",
+  MEMRAIN_SLACK_OAUTH_CLIENT_SECRET: "string",
   MEMRAIN_SYNTHESIS_ONCE_PER_DAY: "flag",
   MEMRAIN_SYNTH_PAGES: "flag",
   MEMRAIN_TAKE_AUTO_RESOLVE: "flag",

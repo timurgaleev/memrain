@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { dirname, join, resolve } from "node:path";
 import { chromium, type BrowserContextOptions, type Page } from "playwright";
-import { account, automation, automationRoute, MICROSOFT, OWNER, scenario } from "./automation-server.ts";
+import { account, automation, automationRoute, MICROSOFT, OWNER, scenario, SLACK } from "./automation-server.ts";
 import { ANSWER, chat, chatRoute, chatScenario, MODELS, OK_SCRIPT } from "./chat-server.ts";
 
 // Vite's `?url` imports become plain file imports, so model files come out as hashed assets.
@@ -599,6 +599,36 @@ try {
     assert.equal(await page.getByRole("button", { name: "Save calendars" }).isDisabled(), true);
     await page.getByRole("button", { name: "Cancel" }).click();
     assert.deepEqual(automation.posts, []);
+  });
+  await check("Slack connects with a pasted bot token into a chat source, private channels left unticked", "connections", async (page) => {
+    automation.reset(scenario({ providers: [SLACK], accounts: [], sources: [{ id: "default", kind: "other" }, { id: "team-chat", kind: "chat" }] }));
+    const panel = page.getByRole("region", { name: "Slack" });
+    await panel.getByRole("checkbox", { name: "Public channels" }).waitFor();
+    assert.equal(await panel.getByRole("checkbox", { name: "Public channels" }).isChecked(), true);
+    assert.equal(await panel.getByRole("checkbox", { name: "Private channels too" }).isChecked(), false);
+    const token = ["xoxb", "ui", "fixture", "token"].join("-");
+    await panel.getByLabel("Slack bot token (optional)").fill(token);
+    await panel.getByRole("button", { name: "Connect Slack" }).click();
+    await page.getByText("Slack is connected", { exact: false }).waitFor();
+    assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/slack/key", body: { source_id: "team-chat", services: ["slack"], api_key: token } }]);
+  });
+  await check("The channel picker saves channels the bot is in and says how to invite it to the others", "connections", async (page) => {
+    const team = "Example Team";
+    automation.reset(scenario({
+      providers: [SLACK], sources: [{ id: "team-chat", kind: "chat" }],
+      accounts: [account({ provider: "slack", services: ["slack"], source_id: "team-chat", account_label: team, credential: null })],
+    }));
+    await page.getByRole("button", { name: `Choose channels for ${team}` }).click();
+    const picker = page.getByRole("group", { name: "Channels to sync" });
+    const general = picker.getByRole("checkbox", { name: /^#general/ });
+    await general.waitFor();
+    assert.equal(await picker.getByRole("checkbox", { name: /^#random/ }).isDisabled(), true);
+    await picker.getByText("/invite", { exact: false }).first().waitFor();
+    await general.check();
+    await page.getByLabel("History window in days").fill("30");
+    await page.getByRole("button", { name: "Save channels" }).click();
+    await page.getByText(`Saved: 1 channel syncs for ${team}`, { exact: false }).waitFor();
+    assert.deepEqual(automation.posts, [{ path: `/admin/api/connectors/accounts/${account().id}/channels`, body: { channels: ["C0GENERAL1"], history_days: 30 } }]);
   });
   await check("No calendar picker while connectors are off or for an account that needs a reconnect", "connections", async (page) => {
     automation.reset(scenario({ enabled: false, reason: "MEMRAIN_CONNECTORS_ENABLED is not set" }));
