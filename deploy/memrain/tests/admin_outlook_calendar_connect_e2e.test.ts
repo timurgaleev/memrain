@@ -122,7 +122,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
   it("connects a Microsoft calendar, lists it, and picks its calendars, through every gate", async () => {
     const b = await boot();
     const listedProviders = await (await b.send("/admin/api/connectors", { headers: SPA })).json() as { providers: Array<{ id: string; services: string[] }> };
-    expect(listedProviders.providers.find(p => p.id === "microsoft")).toMatchObject({ services: ["outlook_mail", "outlook_calendar"] });
+    expect(listedProviders.providers.find(p => p.id === "microsoft")).toMatchObject({ services: ["outlook_mail", "outlook_calendar", "teams_chat", "teams_transcripts"] });
 
     const started = await b.send("/admin/api/connectors/microsoft/start", {
       method: "POST",
@@ -193,7 +193,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     world.me = { id: "00000000-0000-4000-8000-0000000000ab", mail: "Owner@Example.test", userPrincipalName: "O.Wner@corp.example.test" };
     const b = await boot();
     const listedProviders = await (await b.send("/admin/api/connectors", { headers: SPA })).json() as { providers: Array<{ id: string; services: string[] }> };
-    expect(listedProviders.providers.find(p => p.id === "microsoft")).toMatchObject({ services: ["outlook_mail", "outlook_calendar"] });
+    expect(listedProviders.providers.find(p => p.id === "microsoft")).toMatchObject({ services: ["outlook_mail", "outlook_calendar", "teams_chat", "teams_transcripts"] });
 
     const started = await b.send("/admin/api/connectors/microsoft/start", {
       method: "POST",

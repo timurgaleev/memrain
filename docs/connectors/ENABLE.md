@@ -131,6 +131,9 @@ docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> 
   their own, not the Google ones, each connected on its own).
 - Slack: [SLACK.md](./SLACK.md) (a Slack app of your own, then the Connect
   button or its pasted bot token, and a `chat` source).
+- Teams chats and meeting transcripts: [MICROSOFT.md](./MICROSOFT.md), Part 4
+  (three more permissions on the same Entra app, one of them with admin
+  consent, and a `chat` and a `meeting` source).
 - Fireflies: [FIREFLIES.md](./FIREFLIES.md) (an API key).
 
 Everything a connector writes is text from outside the brain: anyone can put

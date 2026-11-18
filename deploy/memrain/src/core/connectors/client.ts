@@ -94,6 +94,8 @@ export interface RequestOptions {
   maxBytes?: number;
   /** Headers for this request only (Graph's Prefer); the client's own and Authorization win. */
   headers?: Record<string, string>;
+  /** Return a successful body as the raw string instead of parsing it as JSON (a WebVTT transcript). */
+  text?: boolean;
 }
 
 /** The body past `maxBytes`: the read stopped and the stream was cancelled. */
@@ -359,6 +361,7 @@ export class ConnectorClient {
         continue;
       }
       if (cls === "ok") {
+        if (opts.text === true) return { class: "ok", status: res.status, body: text, next: null, error: null };
         let body: unknown;
         try {
           body = JSON.parse(text);

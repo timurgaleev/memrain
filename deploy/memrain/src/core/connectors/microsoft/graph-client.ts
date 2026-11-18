@@ -42,10 +42,21 @@ export function preferHeader(opts: PreferOptions): string {
   return parts.join(", ");
 }
 
-export function graphGet(client: ConnectorClient, path: string, opts: { prefer?: string; maxBytes?: number } = {}): Promise<ConnectorResponse> {
+export interface GraphGetOptions {
+  prefer?: string;
+  maxBytes?: number;
+  /** The Accept header, for a body that is not JSON (a transcript's content). */
+  accept?: string;
+  /** Read a successful body as text rather than JSON. */
+  text?: boolean;
+}
+
+export function graphGet(client: ConnectorClient, path: string, opts: GraphGetOptions = {}): Promise<ConnectorResponse> {
+  const headers = { ...(opts.prefer ? { Prefer: opts.prefer } : {}), ...(opts.accept ? { Accept: opts.accept } : {}) };
   return client.get(path, {
-    ...(opts.prefer ? { headers: { Prefer: opts.prefer } } : {}),
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
     ...(opts.maxBytes !== undefined ? { maxBytes: opts.maxBytes } : {}),
+    ...(opts.text === true ? { text: true } : {}),
   });
 }
 
@@ -76,6 +87,22 @@ export function graphErrorCode(res: ConnectorResponse): string | null {
   const err = (body as { error?: unknown }).error;
   if (err === null || typeof err !== "object") return null;
   const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+/**
+ * The `error.innerError.code` of a Graph error body (Teams names its policy
+ * refusals there, such as GraphAccessToTranscriptsDisabled), when it has one.
+ */
+export function graphInnerErrorCode(res: ConnectorResponse): string | null {
+  const body = res.errorBody;
+  if (body === null || typeof body !== "object") return null;
+  const err = (body as { error?: unknown }).error;
+  if (err === null || typeof err !== "object") return null;
+  const e = err as { innerError?: unknown; innererror?: unknown };
+  const inner = e.innerError ?? e.innererror;
+  if (inner === null || typeof inner !== "object") return null;
+  const code = (inner as { code?: unknown }).code;
   return typeof code === "string" ? code : null;
 }
 

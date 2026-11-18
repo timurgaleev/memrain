@@ -678,6 +678,20 @@ try {
     await page.waitForURL("https://accounts.example.test/**");
     assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/microsoft/start", body: { source_id: "cal", services: ["outlook_calendar"] } }]);
   });
+  await check("Microsoft adds Teams chats or transcripts on their own, each into a source of its kind", "connections", async (page) => {
+    automation.reset(scenario({ providers: [MICROSOFT], accounts: [],
+      sources: [{ id: "me-mail", kind: "mailbox" }, { id: "work-teams", kind: "chat" }, { id: "work-transcripts", kind: "meeting" }] }));
+    const panel = page.getByRole("region", { name: "Microsoft" });
+    const read = panel.getByRole("group", { name: "Read" });
+    await read.getByRole("radio", { name: "Teams meeting transcripts" }).check();
+    assert.deepEqual(await panel.getByLabel("Into source").locator("option").allTextContents(), ["work-transcripts"]);
+    await read.getByRole("radio", { name: "Teams chats" }).check();
+    assert.deepEqual(await panel.getByLabel("Into source").locator("option").allTextContents(), ["work-teams"]);
+    await page.route("https://accounts.example.test/**", (r) => r.fulfill({ contentType: "text/html", body: "<p>Provider consent page</p>" }));
+    await panel.getByRole("button", { name: "Add Teams" }).click();
+    await page.waitForURL("https://accounts.example.test/**");
+    assert.deepEqual(automation.posts, [{ path: "/admin/api/connectors/microsoft/start", body: { source_id: "work-teams", services: ["teams_chat"] } }]);
+  });
   await check("Microsoft with no mailbox source says how to register one and let agents read it", "connections", async (page) => {
     automation.reset(scenario({ providers: [MICROSOFT], accounts: [] }));
     const panel = page.getByRole("region", { name: "Microsoft" });
