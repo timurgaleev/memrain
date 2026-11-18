@@ -146,6 +146,11 @@ export const OPERATION_ERROR_DOCS: Record<OperationErrorCode, OperationErrorDoc>
     cause: "A storage operation failed for a reason that may pass, such as an unavailable volume or connection.",
     fix: "Retry later. If it persists, check `memrain doctor` and the server logs.",
   },
+  tenant_suspended: {
+    title: "This hosted brain is suspended",
+    cause: "The operator suspended this brain on a hosted install. Its data is intact; while it is held read-only, reads still work and every change is refused.",
+    fix: "Ask the operator to resume the brain. Retrying does not help until then.",
+  },
   unsupported: {
     title: "This is not supported here",
     cause: "The mode, option or tool is not available in this configuration — for example a model call while `MEMRAIN_KEYWORD_ONLY` is on, or an option this tool does not offer.",
