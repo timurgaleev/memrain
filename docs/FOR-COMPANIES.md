@@ -56,7 +56,10 @@ or if you need the identity and availability features listed under
   can carry an expected version so they do not overwrite someone else's change.
 - **An admin panel with its own sign-in.** Overview charts, a brain explorer,
   credentials and members, spend and a request log, served with a strict
-  Content-Security-Policy.
+  Content-Security-Policy. Its Ask page answers a question from your own pages
+  with numbered sources, shows each search step and the cost, and can save an
+  answer as a page. Ask is off, and costs nothing, until `MEMRAIN_CHAT=1` is
+  set; every answer then runs inside the per-answer and daily spend caps.
 - **Import of existing chat history.** ChatGPT and Claude.ai exports, Codex
   rollouts and Claude Code session logs, redacted on the way in. See
   [TRANSCRIPTS.md](./TRANSCRIPTS.md).
