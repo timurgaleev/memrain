@@ -93,11 +93,15 @@ function mimeFor(path: string): string {
  * Returns null only when the built dist is missing (so the caller 404s rather
  * than masking a broken build). Never serves outside the dist dir.
  */
-export async function serveAdminStatic(url: URL, distDir: string = DIST_DIR): Promise<Response | null> {
+export async function serveAdminStatic(
+  url: URL,
+  distDir: string = DIST_DIR,
+  site: { mount: string; index: string } = { mount: "/admin", index: "index.html" },
+): Promise<Response | null> {
   // The asset path under dist. "/admin" or "/admin/" → index.html. A real asset
   // request is "/admin/assets/<file>"; anything else is SPA-routed → index.html.
-  let rel = url.pathname.slice("/admin".length).replace(/^\/+/, ""); // strip "/admin/"
-  if (rel === "" || !rel.startsWith("assets/")) rel = "index.html";
+  let rel = url.pathname.slice(site.mount.length).replace(/^\/+/, ""); // strip "/admin/"
+  if (rel === "" || !rel.startsWith("assets/")) rel = site.index;
 
   // Path-traversal guard: resolve, then check the file is genuinely INSIDE
   // the dist dir via a `relative()` boundary (a bare `startsWith` would admit a
@@ -112,8 +116,8 @@ export async function serveAdminStatic(url: URL, distDir: string = DIST_DIR): Pr
   const file = Bun.file(filePath);
   if (!(await file.exists())) {
     // Asset miss → SPA fallback; index miss → the build is absent.
-    if (rel === "index.html") return null;
-    const index = Bun.file(resolve(distDir, "index.html"));
+    if (rel === site.index) return null;
+    const index = Bun.file(resolve(distDir, site.index));
     if (!(await index.exists())) return null;
     return new Response(index, {
       headers: {

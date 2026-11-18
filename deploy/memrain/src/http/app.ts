@@ -27,6 +27,8 @@ import { isAppPath, resolveMemberSession, type MemberSession } from "../core/mem
 import type { RateLimiter } from "../mcp/rate_limit.ts";
 import { handleAppAuth } from "./app-auth.ts";
 import { handleAppConnect } from "./app-connect.ts";
+import { handleAppOnboarding } from "./app-onboarding.ts";
+import { serveAppStatic } from "./app-static.ts";
 import { handleChatRoutes } from "./chat-api.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 
@@ -82,7 +84,9 @@ export async function handleApp(req: Request, url: URL, deps: AppDeps): Promise<
   if (auth) return auth;
 
   const p = url.pathname;
-  if (p !== "/app/api" && !p.startsWith("/app/api/")) return notFound();
+  if (p !== "/app/api" && !p.startsWith("/app/api/")) {
+    return req.method === "GET" || req.method === "HEAD" ? (await serveAppStatic(url)) ?? notFound() : notFound();
+  }
   const session = await resolveMemberSession(deps.storage.engine(), req);
   if (!session) return json({ error: "unauthorized" }, 401);
   if (req.method !== "GET" && req.method !== "HEAD" && !isSameOriginPost(req, url, deps.publicUrl)) {
@@ -111,6 +115,8 @@ export async function handleApp(req: Request, url: URL, deps: AppDeps): Promise<
 
   const connect = await handleAppConnect(req, url, session, deps);
   if (connect) return connect;
+  const onboarding = await handleAppOnboarding(req, url, session, deps);
+  if (onboarding) return onboarding;
 
   return json({ error: "not_found" }, 404);
 }

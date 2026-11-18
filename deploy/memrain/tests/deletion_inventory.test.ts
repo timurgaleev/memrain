@@ -229,6 +229,7 @@ type MemberDisposition = { kind: "erased" } | { kind: "revoked" } | { kind: "exe
 const MEMBER_TABLES: Record<string, MemberDisposition> = {
   "member_passkeys": { kind: "erased" },
   "member_invites": { kind: "erased" },
+  "onboarding_state": { kind: "erased" },
   "group_members": { kind: "erased" },
   "member_web_sessions": { kind: "revoked" },
   "access_tokens": { kind: "revoked" },
