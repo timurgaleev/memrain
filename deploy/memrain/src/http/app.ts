@@ -27,6 +27,7 @@ import { isAppPath, resolveMemberSession, type MemberSession } from "../core/mem
 import type { RateLimiter } from "../mcp/rate_limit.ts";
 import { handleAppAuth } from "./app-auth.ts";
 import { handleAppConnect } from "./app-connect.ts";
+import { handleAppOnboarding } from "./app-onboarding.ts";
 import { handleChatRoutes } from "./chat-api.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 
@@ -111,6 +112,8 @@ export async function handleApp(req: Request, url: URL, deps: AppDeps): Promise<
 
   const connect = await handleAppConnect(req, url, session, deps);
   if (connect) return connect;
+  const onboarding = await handleAppOnboarding(req, url, session, deps);
+  if (onboarding) return onboarding;
 
   return json({ error: "not_found" }, 404);
 }

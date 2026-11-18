@@ -763,6 +763,7 @@ ingress for an unexpected failure.
 | `MEMRAIN_HOSTING_LLM_OFF` | off (`=1` on) | In hosting mode, mark this tenant's paid model calls as off, whatever the control plane says. Not acted on yet: no paid call checks it. Environment only. | free |
 | `MEMRAIN_PUBLIC_AUTH` | unset | `oauth`: public requests have no static bearer; a missing or unknown credential gets 401 with the resource-metadata challenge, and OAuth tokens and personal access tokens are verified as usual. Refuses to start with `MEMRAIN_PUBLIC_BEARER` also set; any other value is refused. Environment only. | free |
 | `MEMRAIN_APP` | off (`=1` on) | Serve the member app under `/app`: invite links, passkey sign-in, the member's chat and the connect page (docs/TEAM-SETUP.md). Off, every `/app` path answers 404. Environment only. | free |
+| `MEMRAIN_ONBOARD_IMPORT_MAX_USD` | `1.00` | Largest estimated embedding spend of a ChatGPT or Claude export a member imports from the `/app` wizard without confirming it first. Above it the import waits until the member confirms; the spend still goes through the daily caps. | the import's embeddings |
 | `MEMRAIN_REQUIRE_MEMBER` | off (`=1` on) | Refuse a credential that is not bound to a member on `/mcp` and `/ingest`. Environment only. | free |
 
 ---

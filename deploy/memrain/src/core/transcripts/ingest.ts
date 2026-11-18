@@ -32,6 +32,7 @@ import {
 } from "../secret-scan.ts";
 import { renderSession, sessionBaseSlug, type RenderedPart } from "./render.ts";
 import type { TranscriptSession } from "./types.ts";
+import type { TrustTier } from "../trust-tier.ts";
 
 export const TRANSCRIPT_PAGE_TYPE = "conversation";
 const WRITTEN_BY = "transcripts-ingest";
@@ -87,6 +88,8 @@ export interface IngestTranscriptsOptions {
   deferMirror?: boolean;
   /** Mirror as a remote write (a pushed transcript), not an operator one. */
   remote?: boolean;
+  /** Ceiling on the parts' trust tier; unset, they are written as before. */
+  trustTier?: TrustTier;
   /** Called for every part written or rewritten (not unchanged, not deleted). */
   onPartWritten?: (part: { slug: string; body: string; sourceId: string }) => void;
   /**
@@ -184,6 +187,7 @@ async function writeSession(
         written_by: WRITTEN_BY,
         source_id: sourceId,
         outsideText: true,
+        ...(opts.trustTier ? { trust_tier: opts.trustTier } : {}),
       });
       if (put.held) throw new OperationError("conflict", `Import held: ${put.held}`);
       const body = put.outside_body!;
