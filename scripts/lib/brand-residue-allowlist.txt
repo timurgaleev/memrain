@@ -516,6 +516,7 @@ tests/deploy.test.sh|COMPAT-TEST|12|covers legacy names or legacy data (may also
 tests/entrypoint.test.sh|COMPAT-TEST|5|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/fetch-secrets-overrides.test.sh|COMPAT-TEST|27|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/fetch-secrets.test.sh|COMPAT-TEST|35|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
+tests/fixtures/deploy-single-tenant.trace|COMPAT-TEST|8|the recorded deploy.sh trace includes the pre-rename container guard's docker ps calls
 tests/init.test.sh|COMPAT-TEST|8|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/legacy-guard.test.sh|COMPAT-TEST|16|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_bootstrap_sh.py|COMPAT-TEST|27|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
