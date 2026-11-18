@@ -10,6 +10,7 @@ import {
   connectOutcome,
   grantNote,
   hasCalendarPicker,
+  hasChannelPicker,
   lastRunText,
   providerLabel,
   serviceLabel,
@@ -18,6 +19,7 @@ import {
 } from "../lib/automation.ts";
 import { DeleteDataDialog, DisconnectDialog } from "./ConnectionDialogs.tsx";
 import { CalendarPicker } from "./ConnectionCalendars.tsx";
+import { ChannelPicker } from "./ConnectionChannels.tsx";
 import { ProviderPanel, providerKeyFieldId } from "./ConnectionProviders.tsx";
 import { actionError, goToConsent } from "./connection-actions.ts";
 
@@ -158,6 +160,7 @@ function AccountRow({ account: a, connectorsOn, keyBased, onOpen, onDone, onErro
   const reconnectNotice = a.notices.find((n) => n.kind === "needs_reconnect");
   const grant = grantNote(a, now);
   const canPick = hasCalendarPicker(a, connectorsOn);
+  const canPickChannels = hasChannelPicker(a, connectorsOn);
 
   const run = async (work: () => Promise<string | null>) => {
     setBusy(true);
@@ -314,6 +317,18 @@ function AccountRow({ account: a, connectorsOn, keyBased, onOpen, onDone, onErro
             Calendars
           </button>
         )}
+        {canPickChannels && (
+          <button
+            className="btn btn-secondary btn-sm"
+            disabled={busy}
+            aria-expanded={picking}
+            aria-controls={picking ? pickerId : undefined}
+            aria-label={`Choose channels for ${a.account_label}`}
+            onClick={() => setPicking(!picking)}
+          >
+            Channels
+          </button>
+        )}
         {view.canDisconnect && (
           <button
             className="btn btn-danger btn-sm"
@@ -338,6 +353,15 @@ function AccountRow({ account: a, connectorsOn, keyBased, onOpen, onDone, onErro
 
       {canPick && picking && (
         <CalendarPicker
+          account={a}
+          id={pickerId}
+          onClose={() => setPicking(false)}
+          onSaved={(message) => { setPicking(false); onDone(message); }}
+        />
+      )}
+
+      {canPickChannels && picking && (
+        <ChannelPicker
           account={a}
           id={pickerId}
           onClose={() => setPicking(false)}

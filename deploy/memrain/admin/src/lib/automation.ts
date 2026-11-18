@@ -74,6 +74,25 @@ export interface CalendarsReport {
 /** The longest history window the server accepts, in days. */
 export const MAX_HISTORY_DAYS = 3650;
 
+export interface ChannelView {
+  id: string;
+  name: string;
+  is_private: boolean;
+  /** The bot was invited to it; only such a channel can sync. */
+  is_member: boolean;
+  selected: boolean;
+}
+
+export interface ChannelsReport {
+  channels: ChannelView[];
+  history_days: number;
+  /** The account was granted private channels. */
+  private_channels: boolean;
+}
+
+/** The longest Slack history window the server accepts, in days. */
+export const MAX_SLACK_HISTORY_DAYS = 365;
+
 export interface ConnectorProviderView {
   id: string;
   services: string[];
@@ -87,6 +106,10 @@ export interface ConnectorProviderView {
   can_revoke: boolean;
   /** The provider refused its OAuth app on a renewal; null when it did not, or the app was saved since. */
   client_rejected?: ClientRejectedView | null;
+  /** The provider also takes a token the owner pastes (a Slack internal app's bot token). */
+  pasted_token?: boolean;
+  /** Services left unticked until the owner asks for them. */
+  opt_in_services?: string[];
 }
 
 export interface ClientRejectedView {
@@ -141,6 +164,8 @@ const SERVICE_LABELS: Record<string, string> = {
   "google:gmail": "Gmail",
   "microsoft:outlook_mail": "Outlook mail",
   "microsoft:outlook_calendar": "Outlook calendar",
+  "slack:slack": "Public channels",
+  "slack:slack_private": "Private channels too",
 };
 
 /** A service as the owner knows it (Outlook mail, Gmail); an id the page does not know stays as it is. */
@@ -349,12 +374,17 @@ export function hasCalendarPicker(a: ConnectorAccountView, connectorsOn: boolean
   return connectorsOn && service !== null && a.services.includes(service) && a.status === "active";
 }
 
+/** The channel picker is for a connected Slack account, and needs connectors on to read the list. */
+export function hasChannelPicker(a: ConnectorAccountView, connectorsOn: boolean): boolean {
+  return connectorsOn && a.provider === "slack" && a.services.includes("slack") && a.status === "active";
+}
+
 /** The typed confirmation names the account exactly, surrounding spaces aside. */
 export function confirmMatches(typed: string, accountLabel: string): boolean {
   return typed.trim() !== "" && typed.trim() === accountLabel;
 }
 
-type ServicePicker = Pick<ConnectorProviderView, "services" | "service_kinds">;
+type ServicePicker = Pick<ConnectorProviderView, "services" | "service_kinds" | "opt_in_services">;
 
 /** No one source can hold two of the services: they connect one at a time, a single choice. */
 export function exclusiveServices(p: ServicePicker): boolean {
@@ -367,10 +397,11 @@ function shareKind(p: ServicePicker, a: string, b: string): boolean {
   return (p.service_kinds[a] ?? []).some((k) => kinds.includes(k));
 }
 
-/** The services first offered: the first one, and every other one a source of its kind can hold too. */
+/** The services first offered: the first one, and every other one a source of its kind can hold too, unless it waits to be asked for. */
 export function initialServices(p: ServicePicker): string[] {
   const first = p.services[0];
-  return first === undefined ? [] : p.services.filter((s) => shareKind(p, first, s));
+  const optIn = p.opt_in_services ?? [];
+  return first === undefined ? [] : p.services.filter((s) => shareKind(p, first, s) && (s === first || !optIn.includes(s)));
 }
 
 /**

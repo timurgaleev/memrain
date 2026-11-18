@@ -31,6 +31,8 @@ export interface Provider {
   callback_uri: string | null;
   tenant_default: string | null;
   can_revoke: boolean;
+  pasted_token?: boolean;
+  opt_in_services?: string[];
 }
 
 /** Microsoft as the server lists it: two services into sources of different kinds, a tenant, no upstream revoke. */
@@ -40,6 +42,15 @@ export const MICROSOFT: Provider = {
 };
 
 export interface Calendar { id: string; summary: string; primary: boolean; access_role: string; selected: boolean }
+
+/** Slack as the server lists it: public channels, private ones on request, and a pasted bot token beside OAuth. */
+export const SLACK: Provider = {
+  id: "slack", services: ["slack", "slack_private"], service_kinds: { slack: ["chat"], slack_private: ["chat"] }, auth: "oauth",
+  callback_uri: "https://brain.example.test/admin/connectors/callback/slack", tenant_default: null, can_revoke: true,
+  pasted_token: true, opt_in_services: ["slack_private"],
+};
+
+export interface Channel { id: string; name: string; is_private: boolean; is_member: boolean; selected: boolean }
 
 export interface AutomationState {
   connectors: {
@@ -53,6 +64,7 @@ export interface AutomationState {
   };
   failConnectors: number;
   calendars: { calendars: Calendar[]; history_days: number };
+  channels: { channels: Channel[]; history_days: number; private_channels: boolean };
   daemons: unknown;
   pausedSpend: unknown[];
   holds: Array<Record<string, unknown>>;
@@ -92,6 +104,14 @@ export function scenario(over: Partial<AutomationState["connectors"]> = {}): Aut
         { id: "holidays@group.calendar.example.test", summary: "Holidays", primary: false, access_role: "reader", selected: true },
       ],
       history_days: 90,
+    },
+    channels: {
+      channels: [
+        { id: "C0GENERAL1", name: "general", is_private: false, is_member: true, selected: false },
+        { id: "C0RANDOM01", name: "random", is_private: false, is_member: false, selected: false },
+      ],
+      history_days: 14,
+      private_channels: false,
     },
     daemons: {
       scheduler: { enabled_here: true, leader: { holder: "brain-1:42", tick_age_s: 12, live: true } },
@@ -137,6 +157,7 @@ export async function automationRoute(request: Request): Promise<Response | null
     }
     if (/\/accounts\/[^/]+\/preview$/.test(path)) return Response.json(PREVIEW);
     if (/\/accounts\/[^/]+\/calendars$/.test(path)) return Response.json(st.calendars);
+    if (/\/accounts\/[^/]+\/channels$/.test(path)) return Response.json(st.channels);
     if (path === "/admin/api/daemons") return Response.json(st.daemons);
     if (path === "/admin/api/spend/paused") return Response.json({ paths: st.pausedSpend });
     if (path === "/admin/api/write-gate/holds") return Response.json({ holds: st.holds });
@@ -175,6 +196,12 @@ export async function automationRoute(request: Request): Promise<Response | null
         if (typeof body.history_days === "number") st.calendars.history_days = body.history_days;
         return Response.json({ ok: true, calendars: [...chosen], history_days: st.calendars.history_days });
       }
+      case "channels": {
+        const chosen = new Set(Array.isArray(body.channels) ? body.channels as string[] : []);
+        st.channels.channels = st.channels.channels.map((c) => ({ ...c, selected: chosen.has(c.id) }));
+        if (typeof body.history_days === "number") st.channels.history_days = body.history_days;
+        return Response.json({ ok: true, channels: [...chosen], history_days: st.channels.history_days });
+      }
       case "retry-held": {
         const retried = a.held_items;
         a.held_items = 0;
@@ -187,6 +214,7 @@ export async function automationRoute(request: Request): Promise<Response | null
     return Response.json({ authorize_url: "https://accounts.example.test/o/oauth2/auth?state=fixture", expires_at: "2026-11-09T12:10:00Z" });
   }
   if (/^\/admin\/api\/connectors\/[^/]+\/client$/.test(path)) return Response.json({ ok: true, client_id: body.client_id });
+  if (/^\/admin\/api\/connectors\/[^/]+\/key$/.test(path)) return Response.json({ ok: true, reconnected: false, account: {} });
   if (/^\/admin\/api\/connectors\/[^/]+\/client\/delete$/.test(path)) return Response.json({ ok: true, deleted: true });
   if (path === "/admin/api/daemons/control") return Response.json({ ok: true, action: body.action, daemon: body.daemon, source_id: "*" });
   if (path === "/admin/api/spend/resume") {

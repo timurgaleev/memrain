@@ -51,11 +51,13 @@ export function ProviderPanel({ provider: p, sources, client, connectorsOn, onDo
   const [key, setKey] = useState("");
   const keyField = providerKeyFieldId(p.id);
   const ready = connectorsOn && chosen !== "" && services.length > 0 && (p.auth === "oauth" || key.trim() !== "");
+  // A provider that also takes a pasted token connects with it when one is given, else through its consent page.
+  const pasted = p.auth === "oauth" && p.pasted_token === true && key.trim() !== "";
 
   const connect = async () => {
     setBusy(true);
     try {
-      if (p.auth === "oauth") {
+      if (p.auth === "oauth" && !pasted) {
         await goToConsent(p.id, chosen, services);
         return;
       }
@@ -108,10 +110,31 @@ export function ProviderPanel({ provider: p, sources, client, connectorsOn, onDo
             <input id={keyField} type="password" value={key} autoComplete="off" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
           </div>
         )}
+        {p.auth === "oauth" && p.pasted_token === true && (
+          <div className="field connect-key">
+            <label htmlFor={keyField}>{name} bot token (optional)</label>
+            <input
+              id={keyField}
+              type="password"
+              value={key}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="xoxb-…"
+              aria-describedby={`${keyField}-hint`}
+              onChange={(e) => setKey(e.target.value)}
+            />
+          </div>
+        )}
         <button className="btn btn-primary" type="submit" disabled={busy || !ready} aria-label={`Connect ${name}`}>
-          {busy ? (p.auth === "oauth" ? "Opening…" : "Checking…") : `Connect ${name}`}
+          {busy ? (p.auth === "oauth" && !pasted ? "Opening…" : "Checking…") : `Connect ${name}`}
         </button>
       </form>
+      {p.auth === "oauth" && p.pasted_token === true && (
+        <p className="hint" id={`${keyField}-hint`}>
+          Leave the token empty to sign in to {name} with an app. Or paste the Bot User OAuth Token of an internal app you created for this
+          workspace; it is checked with {name} and may only read.
+        </p>
+      )}
       {services.length > 0 && fitting.length === 0 && (
         <p className="hint">
           No source can hold {kinds.join(" or ")} data yet. Register one with{" "}
