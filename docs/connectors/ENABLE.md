@@ -128,6 +128,9 @@ docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> 
 - Outlook mail and Outlook calendar: [MICROSOFT.md](./MICROSOFT.md) (a
   Microsoft Entra app of your own, and a `mailbox` and a `calendar` source of
   their own, not the Google ones, each connected on its own).
+- Teams chats and meeting transcripts: [MICROSOFT.md](./MICROSOFT.md), Part 4
+  (three more permissions on the same Entra app, one of them with admin
+  consent, and a `chat` and a `meeting` source).
 - Fireflies: [FIREFLIES.md](./FIREFLIES.md) (an API key).
 
 Everything a connector writes is text from outside the brain: anyone can put

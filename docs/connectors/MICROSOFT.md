@@ -18,6 +18,9 @@ You do this once, in three parts:
 3. [Connect](#part-3-connect): your personal account first, then, after your IT
    administrator approves the app, your work account.
 
+Later, and only if you want it, [Part 4](#part-4-add-teams-work-account)
+adds your work account's Teams chats and meeting transcripts to the same app.
+
 A section for your IT administrator, a copy-and-paste request to send them
 ([MICROSOFT-IT-REQUEST.md](./MICROSOFT-IT-REQUEST.md)) and a list of
 [things never to do](#never-do-this) follow.
@@ -170,8 +173,10 @@ That is enough to add a new one before the old one is removed.
 | `Mail.Read` | To read your mail |
 | `Calendars.Read` | To read your calendar |
 
-Add **nothing else**: no `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`,
-`Calendars.Read.Shared`, and no **Application permissions** at all. Memrain
+Add **nothing else** now (Teams adds its own three in
+[Part 4](#part-4-add-teams-work-account), and only then): no `Mail.ReadWrite`,
+`Mail.Send`, `Calendars.ReadWrite`, `Calendars.Read.Shared`, and no
+**Application permissions** at all. Memrain
 does not use them, and they cost you twice:
 
 - When your IT administrator approves the app, they approve every permission
@@ -355,6 +360,149 @@ with you, or a group calendar, is not: reading another user's calendar needs
 changes for the default calendar only, so another calendar is read whole at
 most once an hour: its changes can be up to an hour late.
 
+## Part 4. Add Teams (work account)
+
+Teams is optional and added on its own, after Outlook works. It reads two
+things of your **work** account, each into a source of its own:
+
+- **Teams chats**: your 1:1, group and meeting chats, one page per chat and
+  day. Channel messages in teams are **not** read.
+- **Teams meeting transcripts**: the transcript of a scheduled Teams meeting
+  you organized or were invited to, one page per transcript, linked to that
+  meeting's page from your work calendar. The calendar page is not written
+  twice.
+
+Personal Microsoft accounts have no Teams chats or transcripts through
+Microsoft Graph; Teams works with a work or school account only. An app
+saved for one organization (its directory ID or domain under **Who can sign
+in**) works as well as one saved for `common`.
+
+As everywhere, Memrain only reads: it never posts a message, joins a meeting
+or changes a chat. Join links, meeting IDs, passcodes and dial-in PINs are
+removed from chat text and transcripts before anything is stored
+([ENABLE.md](./ENABLE.md)). Nothing syncs until you turn sync on for each
+account, and an account costs nothing before that.
+
+### 14. Add three permissions to the app
+
+1. In the [Microsoft Entra admin center](https://entra.microsoft.com), open
+   **Applications > App registrations**, your Memrain app, then **API
+   permissions**.
+2. Choose **Add a permission > Microsoft Graph > Delegated permissions** and
+   tick `Chat.Read`, `OnlineMeetings.Read` and
+   `OnlineMeetingTranscript.Read.All`. Choose **Add permissions**.
+3. **Configured permissions** now lists nine, all **Delegated**:
+
+| Permission | Why Memrain asks for it | Admin consent |
+|---|---|---|
+| `Chat.Read` | To read your Teams chats | not required |
+| `OnlineMeetings.Read` | To find a calendar meeting's Teams meeting from its join link | not required |
+| `OnlineMeetingTranscript.Read.All` | To read the transcripts of your meetings | **required** |
+
+Transcripts also use `Calendars.Read`, which the app already has: Memrain
+finds your Teams meetings through your calendar, because Microsoft offers
+no way to list a user's transcripts with delegated access (the
+organization-wide listing takes application permissions, which Memrain never
+asks for).
+
+These three are Memrain's own, so a mail or calendar connect that comes back
+carrying them is still accepted; anything beyond the nine is refused
+(`scope_mismatch`).
+
+No **Application permissions**, no `ChannelMessage.Read.All`, and no
+"protected API" request. Microsoft's extra approval for Teams protected APIs
+(the request form at `aka.ms/teamsgraph/requestaccess`) is for apps that read
+Teams data with application permissions, without a signed-in user; Memrain
+reads only as you, with delegated permissions, and needs none.
+
+### 15. Grant admin consent
+
+`OnlineMeetingTranscript.Read.All` needs an administrator's consent even for
+your own transcripts. If you are your directory's administrator:
+
+1. In **API permissions**, choose **Grant admin consent for _your
+   organization_** and confirm. Every row's **Status** turns to a green
+   **Granted for _your organization_**.
+2. Check that Teams lets apps read transcripts. In the
+   [Teams admin center](https://admin.teams.microsoft.com), transcription has
+   to be on for your meetings (your meeting policy), and Microsoft Graph
+   access to transcripts must not be turned off for the organization
+   ([manage transcript API access](https://learn.microsoft.com/microsoftteams/meeting-transcript-api-access)).
+   With it off, every transcript request answers
+   `GraphAccessToTranscriptsDisabled`.
+
+If someone else administers your directory, send them this step, with the
+three permissions and the app's client ID; the
+[section for your IT administrator](#for-your-it-administrator) explains the
+rest. Do not connect Teams before they confirm.
+
+Grant admin consent once more whenever the app's permissions change.
+
+### 16. Register the two Teams sources
+
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts sources register work-teams --kind chat --path-prefix work-teams/
+docker exec deploy-memrain-1 bun run src/cli.ts sources register work-transcripts --kind meeting --path-prefix work-transcripts/
+```
+
+As in [step 7](#7-look-at-the-sources-you-have), check `sources list` first
+and never register an id that exists.
+
+### 17. Let the right agents read them
+
+Add `work-teams` and `work-transcripts` to the read sources of the clients
+and tokens that may see your work conversations, exactly as in
+[step 9](#9-decide-which-agents-may-read-them): preview with `--dry-run`,
+name every source the client reads today plus the new ones, and check that
+nothing else changes.
+
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> --source <its write source> \
+  --federated-read <its current read sources>,work-teams,work-transcripts --dry-run
+docker exec deploy-memrain-1 bun run src/cli.ts auth permissions <token-name> set-read-sources <current read sources>,work-teams,work-transcripts --dry-run
+```
+
+Run each again without `--dry-run` once the preview shows only the new
+sources added.
+
+### 18. Add Teams
+
+On your work computer, signed in to the Memrain admin console:
+
+1. On the **Connections** page, in the **Microsoft** panel, choose **Teams
+   chats** under **Read** and `work-teams` under **Into source**. The button
+   reads **Add Teams**: choose it.
+2. Pick your work account. After the admin consent of step 15 Microsoft
+   usually asks nothing more; if it shows the permissions, choose **Accept**.
+3. Choose **Finish connecting**, then **Turn sync on**.
+4. Repeat with **Teams meeting transcripts** and `work-transcripts`.
+
+The first chat sync reads the last 30 days, the first transcript sync the
+transcripts of the last 30 days' meetings. A transcript is read once its
+meeting's transcription has stopped, within 15 minutes of the next sync.
+
+### How Teams syncs, and its limits
+
+- Each chat keeps its own place: a sync reads only the chats with a message
+  newer than the last one stored, and renders again only the days a new or
+  changed message falls on. A day left with no message is deleted.
+- An edit or a deletion is seen when the chat next gets a message: Microsoft
+  shows only each chat's latest message in the chat list.
+- A transcript needs a calendar event with a Teams join link. An instant
+  meeting ("Meet now") has none, and Microsoft does not offer its transcript
+  this way either. A recurring meeting's transcripts link to the series'
+  calendar page.
+- The link to the calendar page works when the work calendar is connected
+  with the same account ([step 12](#12-connect-your-work-account-on-your-company-device)).
+- Microsoft keeps a meeting's transcripts only until the meeting expires; a
+  transcript already stored stays until its retention window ends (365 days;
+  chats 180), set with `MEMRAIN_CONNECTOR_RETENTION_DAYS_MEETING` and
+  `_CHAT` ([CONFIGURATION.md](../CONFIGURATION.md)).
+- If your tenant turns speaker names off for transcripts, Memrain reads the
+  same transcript without speakers instead.
+- A chat or meeting Microsoft no longer shows you (you left the chat, the
+  meeting is gone) is held on its own; the rest keep syncing.
+
 ## For your IT administrator
 
 This part is written for the administrator of your company's Microsoft 365.
@@ -383,7 +531,12 @@ Graph directly. Where the mail and events go from there
 **What it asks for.** Six **delegated** Microsoft Graph permissions, all
 read-only: `openid`, `email`, `offline_access`, `User.Read`, `Mail.Read`,
 `Calendars.Read`. No application permissions: it acts only for a signed-in
-user and reads only that user's own mailbox and calendar.
+user and reads only that user's own mailbox and calendar. If the employee
+adds Teams ([Part 4](#part-4-add-teams-work-account)), three more delegated
+read permissions follow: `Chat.Read` (the user's own chats, not channels),
+`OnlineMeetings.Read` and `OnlineMeetingTranscript.Read.All` (transcripts of
+meetings the user organized or was invited to); the last always needs an
+administrator's consent, and the link below then approves all nine.
 
 **Why it needs you.** The app is registered in the employee's own directory,
 not yours, and its publisher is not verified. Your organization's consent
@@ -624,7 +777,7 @@ message.
 | Memrain says the access was not granted (`consent_declined`) | You chose **Cancel**, or you asked an administrator for approval and chose **Back to app** (`AADSTS65004`) | After a Cancel, connect again and choose **Accept**. After a request, wait until IT has approved the app, then connect again |
 | Memrain says you signed in with a different account than the one this row belongs to (`identity_mismatch`) | On a **Reconnect** you picked another account than the row's, or the other of a personal and a work account that share one address | **Reconnect** again and pick the account named on the row (**Personal account** or **Work or school account**). Nothing was changed |
 | Memrain says the account came with no email address | The personal account signs in with a phone number | Nothing to fix: it is listed under its sign-in name or ID |
-| Memrain reports `scope_mismatch` | A permission was declined, or the app lists permissions beyond the six (an administrator approved them all) | [Step 5](#5-add-exactly-six-permissions): keep exactly the six; then ask IT to approve again and connect again |
+| Memrain reports `scope_mismatch` | A permission was declined, or the app lists permissions beyond the six (nine with Teams; an administrator approved them all) | [Step 5](#5-add-exactly-six-permissions) (and [step 14](#14-add-three-permissions-to-the-app) for Teams): keep exactly those; then ask IT to approve again and connect again |
 | Memrain reports `token_exchange` | Microsoft refused the sign-in code: most often the secret's **ID** pasted instead of its **Value**, or `offline_access` missing | Save the secret's value ([step 6](#6-save-the-app-in-memrain)), or add `offline_access` ([step 5](#5-add-exactly-six-permissions)), then connect again |
 | A notification says **OAuth app refused by its provider**; accounts stop with `client_rejected` | The secret expired or is wrong (`invalid_client`, `AADSTS7000222` or `7000215`) | [Renewing the secret](#renewing-the-secret); no reconnect needed |
 | One account turns `needs_reconnect`, the others keep syncing, and `connectors status` or `doctor` shows `unauthorized_client` in its reason (`7000112`: the app is disabled; `700016`: not in that directory) | That account's organization disabled or removed the app (for the work account, your IT administrator did) | Ask IT whether they disabled or removed the app and to restore it ([For your IT administrator](#for-your-it-administrator)), then **Reconnect** on its row. A new secret does not help |
@@ -635,6 +788,10 @@ message.
 | The Connections page answers `no_client` | No app is saved for Microsoft | [Step 6](#6-save-the-app-in-memrain) |
 | The Connections page answers `redirect_uri` | `MEMRAIN_PUBLIC_URL` is unset or not `https` | Fix the domain in your stack settings and redeploy |
 | You lost the client secret | Microsoft shows the value only when it is created | [Renewing the secret](#renewing-the-secret) |
+| A Teams chats account stops as `forbidden` and names `Chat.Read` | The app lacks `Chat.Read`, or the account's grant does not hold it | [Step 14](#14-add-three-permissions-to-the-app), then **Reconnect** the account |
+| A Teams transcripts account stops as `forbidden` and names `GraphAccessToTranscriptsDisabled` | Your organization turned Graph access to transcripts off | [Step 15](#15-grant-admin-consent): a Teams administrator turns it back on. The account is asked again at each scheduled sync, once, and needs no reconnect |
+| Adding Teams says to ask your Microsoft 365 admin (`admin_consent_required`) | `OnlineMeetingTranscript.Read.All` has no admin consent yet | [Step 15](#15-grant-admin-consent), then **Add Teams** again |
+| Teams chats sync but transcripts never appear | Transcription is off for your meetings, or the meetings have no event on your calendar | [Step 15](#15-grant-admin-consent) and [How Teams syncs](#how-teams-syncs-and-its-limits) |
 
 ## Related
 
