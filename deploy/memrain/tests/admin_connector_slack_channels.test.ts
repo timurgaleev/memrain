@@ -7,7 +7,7 @@
  * a response, and nothing runs while connectors are off. Both engines, against
  * the fake workspace; no request leaves the process.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, setDefaultTimeout } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { SLACK_BOT_TOKEN, SLACK_TEAM, slackCalls, slackFetch, type SlackWorld } from "./helpers/slack-fake.ts";
@@ -23,6 +23,8 @@ import type { Storage } from "../src/core/storage.ts";
 const kek = kekFromBytes(randomBytes(32));
 const ORIGIN = "https://brain.example.test";
 const ENV: NodeJS.ProcessEnv = { MEMRAIN_CONNECTORS_ENABLED: "1" };
+// Each picker request waits out the account's Slack pacing (1.2 s), as it does in production.
+setDefaultTimeout(30_000);
 
 function deps(storage: Storage, world: SlackWorld, extra: Partial<AdminConnectorDeps> = {}): AdminConnectorDeps {
   const providers = new ProviderRegistry();
