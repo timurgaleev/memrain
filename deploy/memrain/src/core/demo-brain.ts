@@ -77,7 +77,7 @@ export async function loadDemo(storage: Storage, memberId: string, opts: { embed
 function splitFrontmatter(text: string): { title: string | null; body: string } {
   const m = /^---\n([\s\S]*?)\n---\n/.exec(text);
   if (!m) return { title: null, body: text };
-  const title = /^title:\s*(.+)$/m.exec(m[1]!)?.[1]?.trim() ?? null;
+  const title = /^title:[ \t]*(\S.*)$/m.exec(m[1]!)?.[1]?.trim() ?? null;
   return { title, body: text.slice(m[0].length).trim() };
 }
 
