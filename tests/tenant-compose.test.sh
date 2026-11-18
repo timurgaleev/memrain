@@ -123,6 +123,16 @@ case "$(env_of memrain-acme MEMRAIN_POSTGRES_URL)" in
 esac
 mounts="$(svc memrain-acme '[.services[$s].volumes[]?.source] | join(",")')"
 if printf '%s' "$mounts" | grep -Eq '\.secrets|\.aws'; then die "a secrets or AWS directory is mounted: $mounts"; else pass "no secrets or AWS config is mounted into the tenant"; fi
+bmounts="$(svc memrain-acme '[.services[$s].volumes[]? | "\(.source)|\(.target)|\(.read_only // false)"] | join(",")')"
+case "$bmounts" in
+  */deploy/.bedrock/acme\|/run/memrain-bedrock\|true) pass "only its own Bedrock credentials directory is mounted, read-only" ;;
+  *) die "tenant mounts: '$bmounts'" ;;
+esac
+if [ "$(env_of memrain-acme MEMRAIN_BEDROCK_CREDENTIALS_FILE)" = "/run/memrain-bedrock/credentials.json" ]; then
+  pass "the container reads its Bedrock credentials from the mounted file"
+else
+  die "MEMRAIN_BEDROCK_CREDENTIALS_FILE not set"
+fi
 if [ "$(svc memrain-acme '.services[$s].cap_drop | join(",")')" = "ALL" ] \
    && [ "$(svc memrain-acme '.services[$s].pull_policy')" = "never" ] \
    && [ "$(svc memrain-acme '.services[$s].mem_limit // empty')" != "" ]; then

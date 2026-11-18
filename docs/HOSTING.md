@@ -59,7 +59,8 @@ The template sets the hosting environment. Nothing in it is a secret:
 
 The secrets come from the tenant's own `.secrets/tenants/<id>.env`. No
 container mounts a secrets directory or AWS configuration, and no tenant
-container reads Secrets Manager.
+container reads Secrets Manager. The one mount is the tenant's own Bedrock
+credentials directory, `deploy/.bedrock/<id>/`, read-only (see below).
 
 Each tenant container sits on one network, `memrain_tenant_<id>`. That is a
 plain bridge, so outbound NAT to the database and Bedrock works. The only other
@@ -109,12 +110,14 @@ secrets file, read by its own container.
    `db_name = "memrain_control"` so the instance starts with the control
    database. Run `terraform plan`, review it, then apply.
 
-   Two pieces are not built yet:
-   - **Bedrock for tenants.** A tenant container needs its own Bedrock-only
-     credential, which the host puts into its secrets file. Until then a
-     tenant has no Bedrock, and its paid calls stay off
-     (`MEMRAIN_TENANT_DAILY_BUDGET_USD=0`). The smoke checks only that
-     Bedrock's endpoint is reachable, not that a call succeeds.
+   Two pieces need operator setup that this repo does not apply:
+   - **Bedrock for tenants.** The host gives each tenant short-lived,
+     Bedrock-only credentials (next section). That needs an IAM role the
+     instance role may assume, allowed to invoke Bedrock models and nothing
+     else; it is not in terraform yet. Until it exists and
+     `MEMRAIN_TENANT_BEDROCK_ROLE_ARN` is set, a tenant has no Bedrock, and its
+     paid calls stay off (`MEMRAIN_TENANT_DAILY_BUDGET_USD=0`). The smoke checks
+     only that Bedrock's endpoint is reachable, not that a call succeeds.
    - **Writing a tenant's secrets to Secrets Manager.** The instance role may
      write only the public bearer secret, and `tenant-ctl` has no credentials
      under a hop limit of 1. Until a write path exists, provision with the
@@ -135,6 +138,32 @@ secrets file, read by its own container.
 image the tenant containers run. Until a tenant runs there is none to take,
 so add `--build`: it builds the image stamped with `git describe`, as a deploy
 does.
+
+## Bedrock credentials for tenants
+
+A tenant container cannot use the instance role, so the host hands each one
+credentials of its own. `deploy/tenant/bedrock-credentials.sh`, run as root
+every five minutes by `memrain-tenant-bedrock-credentials.timer`, goes through
+`deploy/tenants/*.yml`. For each tenant whose file is missing or expires within
+20 minutes, it assumes `MEMRAIN_TENANT_BEDROCK_ROLE_ARN` (host `.env`) in a
+session named `memrain-tenant-<id>`. A session policy narrows that session to
+invoking Bedrock models. The script writes the result to
+`deploy/.bedrock/<id>/credentials.json` (0440, group 1000, renamed into place).
+
+The container mounts only `deploy/.bedrock/<id>/`, read-only, at
+`/run/memrain-bedrock`, and `MEMRAIN_BEDROCK_CREDENTIALS_FILE` names the file.
+The SDK reads it again whenever the credentials it holds are within five
+minutes of expiring, so a rewrite needs no restart. When the refresher fails,
+it keeps the old file and exits non-zero. Once that file expires, the tenant's
+paid calls fail at once with an error naming the file; nothing hangs. The
+isolation smoke fails a container that mounts any other tenant's directory.
+
+Install the units once on the host:
+
+```
+install -m 644 deploy/tenant/memrain-tenant-bedrock-credentials.{service,timer} /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now memrain-tenant-bedrock-credentials.timer
+```
 
 ## Adding a tenant
 

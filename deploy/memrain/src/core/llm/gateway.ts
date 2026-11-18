@@ -9,6 +9,7 @@
 
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { noteWriteTiming } from "../write-timing.ts";
+import { bedrockCredentialsConfig, type AwsCredentialIdentity } from "./bedrock-credentials.ts";
 
 const DEFAULT_MAX_INFLIGHT = 4;
 
@@ -183,11 +184,14 @@ export function bedrockClientConfig(timeoutMs: number): {
   maxAttempts: number;
   retryMode: "adaptive";
   requestHandler: NodeHttpHandler;
+  credentials?: () => Promise<AwsCredentialIdentity>;
 } {
   return {
     maxAttempts: 4,
     retryMode: "adaptive",
     requestHandler: new NodeHttpHandler({ requestTimeout: timeoutMs, throwOnRequestTimeout: true }),
+    // A hosted tenant reads its credentials from the file the host rotates.
+    ...bedrockCredentialsConfig(),
   };
 }
 

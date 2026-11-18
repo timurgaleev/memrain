@@ -781,6 +781,7 @@ ingress for an unexpected failure.
 | `MEMRAIN_APP` | off (`=1` on) | Serve the member app under `/app`: invite links, passkey sign-in, the member's chat and the connect page (docs/TEAM-SETUP.md). Off, every `/app` path answers 404. Environment only. | free |
 | `MEMRAIN_ONBOARD_IMPORT_MAX_USD` | `1.00` | Largest estimated embedding spend of a ChatGPT or Claude export a member imports from the `/app` wizard without confirming it first. Above it the import waits until the member confirms; the spend still goes through the daily caps. | the import's embeddings |
 | `MEMRAIN_REQUIRE_MEMBER` | off (`=1` on) | Refuse a credential that is not bound to a member on `/mcp` and `/ingest`. Environment only. | free |
+| `MEMRAIN_BEDROCK_CREDENTIALS_FILE` | unset | In hosting mode, the file this tenant's Bedrock credentials are read from (the JSON `aws sts assume-role` returns, with `Expiration`). It is read again whenever the AWS SDK needs credentials, so the host's rewrite (`deploy/tenant/bedrock-credentials.sh`) is picked up without a restart; an expired or missing file fails paid calls at once. The tenant template sets it. Ignored outside hosting mode. Environment only. | free |
 
 ---
 

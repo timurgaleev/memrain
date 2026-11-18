@@ -23,6 +23,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_AUTO_THINK_MAX: "int",
   MEMRAIN_AUTO_THINK_QUESTIONS: "string",
   MEMRAIN_BACKLINK_BOOST: "flag",
+  MEMRAIN_BEDROCK_CREDENTIALS_FILE: "string",
   MEMRAIN_BODY_TIMELINE: "flag",
   MEMRAIN_BOOT_CODE_SWEEP: "flag",
   MEMRAIN_BULK_MAX_RETRIES: "int",

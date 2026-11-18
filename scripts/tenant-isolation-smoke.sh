@@ -9,7 +9,8 @@
 #
 # Checks, from inside memrain-<id> unless noted:
 #   host     the container runs, sits on exactly one network
-#            (memrain_tenant_<id>) and has no secrets or AWS config mounted
+#            (memrain_tenant_<id>) and has no secrets or AWS config mounted,
+#            only its own Bedrock credentials directory
 #   rds      its own database host answers on TCP
 #   bedrock  bedrock-runtime.<region>.amazonaws.com:443 answers
 #   neighbour  every other tenant container, by name and by IP, does not
@@ -60,9 +61,11 @@ INFO="$(docker inspect "$C" 2>/dev/null)" || fail "host: ${C} does not exist"
 [ "$(jq -r '.[0].State.Running' <<< "$INFO")" = "true" ] || fail "host: ${C} is not running"
 NETS="$(jq -r '.[0].NetworkSettings.Networks | keys | join(",")' <<< "$INFO")"
 [ "$NETS" = "memrain_tenant_${ID}" ] || fail "host: ${C} is on '${NETS}', not only memrain_tenant_${ID}"
-BAD_MOUNT="$(jq -r '.[0].Mounts // [] | .[].Source | select(test("/\\.secrets(/|$)|/\\.aws(/|$)"))' <<< "$INFO" | head -1)"
+# Its own Bedrock credentials directory is the one mount allowed.
+BAD_MOUNT="$(jq -r --arg own "/.bedrock/${ID}" '.[0].Mounts // [] | .[].Source
+  | select(test("/\\.secrets(/|$)|/\\.aws(/|$)") or (test("/\\.bedrock(/|$)") and (endswith($own) | not)))' <<< "$INFO" | head -1)"
 [ -z "$BAD_MOUNT" ] || fail "host: ${C} mounts ${BAD_MOUNT}"
-echo "ok host (one network, no secrets mounted)"
+echo "ok host (one network, no secrets mounted but its own Bedrock credentials)"
 
 # ---- Neighbours: every other tenant the host or control knows --------------
 # Every other tenant's three secrets and the control admin URL must be out of

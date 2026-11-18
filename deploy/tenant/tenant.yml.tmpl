@@ -3,7 +3,10 @@
 # deploy/tenant/compose.hosting.yml (see deploy/tenant/lib.sh). Holds no
 # secret: the database URL, the control URL and the internal token come from
 # deploy/.secrets/tenants/@TENANT_ID@.env (deploy/secrets/fetch-secrets.sh
-# --tenant @TENANT_ID@), which only this container reads.
+# --tenant @TENANT_ID@), which only this container reads. Its short-lived
+# Bedrock credentials are the one file mounted: deploy/.bedrock/@TENANT_ID@/,
+# read-only, rewritten by the host before they expire
+# (deploy/tenant/bedrock-credentials.sh).
 
 services:
   memrain-@TENANT_ID@:
@@ -47,9 +50,20 @@ services:
       - MEMRAIN_DAILY_BUDGET_USD=${MEMRAIN_TENANT_DAILY_BUDGET_USD:-0}
       # Host-wide switch for every paid call of every tenant.
       - MEMRAIN_HOSTING_LLM_OFF=${MEMRAIN_HOSTING_LLM_OFF:-}
+      # Read on every credentials request; see bedrock-credentials.sh.
+      - MEMRAIN_BEDROCK_CREDENTIALS_FILE=/run/memrain-bedrock/credentials.json
     env_file:
       - path: ../.secrets/tenants/@TENANT_ID@.env
         required: true
+    # A directory, not the file: the refresher renames a new file into it,
+    # which a single-file bind mount would never show.
+    volumes:
+      - type: bind
+        source: ../.bedrock/@TENANT_ID@
+        target: /run/memrain-bedrock
+        read_only: true
+        bind:
+          create_host_path: true
     networks:
       tenant-@TENANT_ID@: {}
 

@@ -72,6 +72,8 @@ export const ENV_ONLY_KEYS: ReadonlySet<string> = new Set([
   // database must never decide whether it is hosted or how it is guarded.
   ...Object.values(HOSTING_ENV),
   CONTROL_ADMIN_URL_ENV,
+  // Which file a hosted tenant takes its Bedrock credentials from.
+  "MEMRAIN_BEDROCK_CREDENTIALS_FILE",
 ]);
 
 /**

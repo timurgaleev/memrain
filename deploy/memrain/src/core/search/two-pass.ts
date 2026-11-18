@@ -24,6 +24,7 @@ import {
 } from "./rerank-audit.ts";
 import { awsRegion, generationFields, responseText } from "../llm/gateway.ts";
 import { trackedInvoke } from "../budget.ts";
+import { bedrockCredentialsConfig } from "../llm/bedrock-credentials.ts";
 
 
 /** Ledger label — the opt-in paid rerank behind MEMRAIN_RERANK=1. */
@@ -52,7 +53,7 @@ function rerankTimeoutMs(): number {
 
 let _client: BedrockRuntimeClient | null = null;
 function client(region: string): BedrockRuntimeClient {
-  if (!_client) _client = new BedrockRuntimeClient({ region });
+  if (!_client) _client = new BedrockRuntimeClient({ region, ...bedrockCredentialsConfig() });
   return _client;
 }
 

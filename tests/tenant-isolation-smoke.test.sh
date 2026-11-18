@@ -282,6 +282,13 @@ ws_new; container_json memrain-acme memrain_tenant_acme /home/ec2-user/.aws
 run_smoke
 if [ "$RC" -ne 0 ]; then pass "a mounted AWS config fails the smoke"; else die "aws mount passed"; fi
 
+ws_new; container_json memrain-acme memrain_tenant_acme /opt/memrain/deploy/.bedrock/beta
+run_smoke
+if [ "$RC" -ne 0 ] && ! called 'smoke-record'; then pass "another tenant's Bedrock credentials mounted fail the smoke"; else die "foreign bedrock mount passed (rc=$RC)"; fi
+ws_new; container_json memrain-acme memrain_tenant_acme /opt/memrain/deploy/.bedrock/acme
+run_smoke
+if ! grep -q 'mounts /opt/memrain/deploy/.bedrock/acme' "$WS/out.log"; then pass "its own Bedrock credentials directory is allowed"; else die "own bedrock mount refused"; show; fi
+
 ws_new; rm -f "$S/inspect/memrain-acme.json"; run_smoke
 if [ "$RC" -ne 0 ] && ! called 'smoke-record'; then pass "a missing container fails the smoke"; else die "missing container passed"; fi
 
