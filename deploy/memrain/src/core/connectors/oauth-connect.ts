@@ -742,8 +742,10 @@ const DISCONNECT_HEARTBEAT_MS = 15_000;
  * but the revocation fails (or the credential cannot be opened), the sealed
  * credential is kept and the account parked as `error`/`revoke_failed`, so a
  * later retry can still revoke it; `force` drops it anyway. A provider with no
- * revocation endpoint has nothing to retry. Pages stay either way; deleting
- * them is a separate, explicit step.
+ * revocation endpoint has nothing to retry. A token another live account of
+ * the same workspace still uses (`tokenPerIdentity`) is not revoked; only
+ * this account's credential goes. Pages stay either way; deleting them is a
+ * separate, explicit step.
  *
  * The whole disconnect holds the account's refresh lock. A provider that
  * rotates refresh tokens retires the old one on every renewal, so a revoke
@@ -785,6 +787,14 @@ export async function disconnectAccount(
   }
 }
 
+/** Whether another live account is pinned to the same provider identity as this one. */
+async function sharesTokenOfIdentity(engine: Engine, accountId: string, providerId: string): Promise<boolean> {
+  // scope: operator-only disconnect is an operator action on a named account
+  const r = await engine.query<{ user_id: string | null }>(`SELECT config->>$2 AS user_id FROM connector_accounts WHERE id = $1`, [accountId, PROVIDER_USER_ID]);
+  const userId = r.rows[0]?.user_id ?? null;
+  return userId !== null && liveAccountOfIdentity(engine, providerId, userId, accountId);
+}
+
 async function disconnectLocked(
   deps: ConnectDeps,
   accountId: string,
@@ -795,7 +805,9 @@ async function disconnectLocked(
 ): Promise<{ revoked: boolean; credentialKept: boolean }> {
   const provider = deps.providers.get(providerId);
   const hasCredential = (await deps.engine.query(`SELECT 1 FROM connector_credentials WHERE account_id = $1`, [accountId])).rows.length > 0;
-  const canRevoke = provider !== null && (provider.revoke !== undefined || provider.revokeUrl !== undefined);
+  // Another live account of the same workspace holds the same token: only this account's copy goes.
+  const shared = provider?.tokenPerIdentity === true && await sharesTokenOfIdentity(deps.engine, accountId, providerId);
+  const canRevoke = !shared && provider !== null && (provider.revoke !== undefined || provider.revokeUrl !== undefined);
   let revoked = false;
   if (hasCredential && canRevoke && deps.kek) {
     const cred = await readCredential(deps.engine, deps.kek, accountId).catch(() => null);

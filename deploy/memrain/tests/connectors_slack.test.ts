@@ -521,6 +521,29 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("disconnecting one of two accounts on the same workspace token drops only its own credential", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      const first = await pasteToken(db.storage, w);
+      await registerSource(e, { id: "team-chat-2", kind: "chat", pathPrefix: "chat2/" });
+      const deps: ConnectDeps = { engine: e, kek, providers: providers(), fetch: slackFetch(w), env: ENV, now: () => T0 };
+      const { account: second } = await connectApiKey(deps, { provider: "slack", sourceId: "team-chat-2", apiKey: SLACK_BOT_TOKEN, principalRef: "admin:operator" });
+      expect(second.id).not.toBe(first.id);
+
+      expect(await disconnectAccount(deps, first.id)).toEqual({ revoked: false, credentialKept: false });
+      expect(slackCalls(w, "auth.revoke")).toHaveLength(0);
+      expect(await readCredential(e, kek, first.id)).toBeNull();
+      expect((await getAccount(e, first.id))!.status).toBe("revoked");
+      expect((await readCredential(e, kek, second.id))!.tokens.access_token).toBe(SLACK_BOT_TOKEN);
+
+      // The last account of the workspace revokes the token at Slack.
+      expect(await disconnectAccount(deps, second.id)).toEqual({ revoked: true, credentialKept: false });
+      expect(slackCalls(w, "auth.revoke")).toHaveLength(1);
+    } finally { await db.close(); }
+  });
+
   it("disconnecting a pasted token revokes it at Slack and drops the credential", async () => {
     const db = await open();
     try {
