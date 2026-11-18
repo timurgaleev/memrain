@@ -1,8 +1,8 @@
 /**
  * A hosted tenant through MCP dispatch, with the policy as the control plane
  * would state it:
- *   - with no policy read yet, no paid call goes out, and search still answers
- *     (from the keyword index);
+ *   - with no policy read yet, nothing is served and no paid call goes out:
+ *     an unknown policy has no verified isolation stamp, reads included;
  *   - at the plan's page limit, page_put is refused with tenant_limit_reached
  *     while page_get and editing an existing page still work;
  *   - at the plan's member limit, adding a member is refused;
@@ -61,12 +61,12 @@ function text(r: { content: { type: string; text?: string }[] }): string {
 }
 
 describe("hosted dispatch", () => {
-  it("with the control plane silent, no paid call is reserved and search still answers", async () => {
+  it("with the control plane silent, nothing is served and no paid call is reserved", async () => {
     let reserves = 0;
     setHostingSpendBackend({ reserve: async () => { reserves++; return { ok: true, id: "x" }; }, settle: async () => ({ ok: true }) });
     const r = await dispatchTool(storage, { name: "search", arguments: { q: "garden tomatoes" } });
-    expect(r.isError ?? false).toBe(false);
-    expect(text(r)).toContain("notes/garden");
+    expect(r.isError).toBe(true);
+    expect(text(r)).not.toContain("notes/garden");
     expect(reserves).toBe(0);
   });
 
