@@ -6,11 +6,13 @@ import { PageIntro } from "../components/PageIntro.tsx";
 import { ApiError } from "../lib/passkey-fetch.ts";
 import { buildHash } from "../lib/route.ts";
 import { parseChronicle } from "../lib/tool-result.ts";
-import { chatApi } from "./chat-api.ts";
+import { chatApi, type AnswerExtras } from "./chat-api.ts";
 import { answerOutcome, exampleQuestions, outcomeCopy } from "./copy.ts";
 import type { AnswerStatus, ChatMessage, Citation, ModelsReport, ThreadSummary, TraceEvent } from "./events.ts";
 import { CitationChip } from "./CitationChip.tsx";
 import { CostBadge } from "./CostBadge.tsx";
+import { Feedback } from "./Feedback.tsx";
+import { ShareButton } from "./ShareButton.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import { onPendingQuestion, takePendingQuestion } from "./pending.ts";
 import { chatErrorText, ThreadList } from "./ThreadList.tsx";
@@ -33,6 +35,7 @@ function effectiveModel(report: ModelsReport | null, picked: string | null): str
 export function ChatView({ threadId }: { threadId: string | null }) {
   const now = useNow(30_000);
   const models = useAsync((s) => chatApi.models(s), []);
+  const extras = useAsync((s) => chatApi.extras(s), []).data ?? NO_EXTRAS;
   const threads = useAsync((s) => chatApi.threads(s), []);
   const thread = useAsync((s) => chatApi.thread(threadId ?? "", s), [threadId], { enabled: threadId !== null });
   // While the model list loads nothing is sent; if it cannot load, sending is
@@ -244,12 +247,13 @@ export function ChatView({ threadId }: { threadId: string | null }) {
                   trace={m.trace}
                   savedSlug={saved[m.id] ?? m.saved_slug}
                   onSaved={markSaved}
+                  extras={extras}
                 />
               ))}
             {showTurn && liveTurn && (
               <div ref={turnRef} className="chat-turn">
                 <Question text={liveTurn.question} />
-                <LiveAnswer turn={liveTurn} saved={saved} onSaved={markSaved} onRetry={() => retry(liveTurn)} />
+                <LiveAnswer turn={liveTurn} saved={saved} onSaved={markSaved} onRetry={() => retry(liveTurn)} extras={extras} />
               </div>
             )}
           </div>
@@ -272,6 +276,8 @@ export function ChatView({ threadId }: { threadId: string | null }) {
     </>
   );
 }
+
+const NO_EXTRAS: AnswerExtras = { feedback: false, share: false };
 
 /** The stored messages minus one assistant answer and the question just before it. */
 function withoutTurn(messages: ChatMessage[], answerId: string | null): ChatMessage[] {
@@ -300,11 +306,12 @@ function Question({ text }: { text: string }) {
   );
 }
 
-function LiveAnswer({ turn, saved, onSaved, onRetry }: {
+function LiveAnswer({ turn, saved, onSaved, onRetry, extras }: {
   turn: LiveTurn;
   saved: Record<string, string>;
   onSaved: (messageId: string, slug: string) => void;
   onRetry: () => void;
+  extras: AnswerExtras;
 }) {
   if (turn.answer) {
     const a = turn.answer;
@@ -327,6 +334,7 @@ function LiveAnswer({ turn, saved, onSaved, onRetry }: {
         onSaved={onSaved}
         onRetry={onRetry}
         canSave={turn.phase === "answered"}
+        extras={extras}
         live
       />
       {problem && <Outcome code={problem} pages={[]} onRetry={onRetry} live />}
@@ -393,9 +401,12 @@ function AnswerView(p: {
   onRetry?: () => void;
   /** False when the stream failed after this answer arrived: the server may not have kept it. */
   canSave?: boolean;
+  extras: AnswerExtras;
   live?: boolean;
 }) {
   const outcome = answerOutcome(p.status, p.code);
+  // Rating and sharing need the finished answer the server kept, like saving.
+  const kept = p.canSave !== false;
   return (
     <div className="chat-a">
       <TraceTimeline trace={p.trace} live={false} costUsd={p.costUsd} />
@@ -407,12 +418,18 @@ function AnswerView(p: {
           {p.gaps.length > 0 && <p className="chat-gaps"><strong>Not found:</strong> {p.gaps.join("; ")}</p>}
           {p.citations.length > 0 && (
             <ol className="chat-sources" aria-label="Sources">
-              {p.citations.map((c) => <li key={`${c.n}:${c.slug}`}><CitationChip citation={c} /></li>)}
+              {p.citations.map((c) => (
+                <li key={`${c.n}:${c.slug}`} className="chat-source">
+                  <CitationChip citation={c} />
+                  {kept && p.extras.feedback && c.kind !== "take" && <Feedback messageId={p.messageId} slug={c.slug} title={c.title} />}
+                </li>
+              ))}
             </ol>
           )}
           <div className="chat-a-foot">
             <CostBadge costUsd={p.costUsd} model={p.model} durationMs={p.durationMs} />
-            {p.canSave !== false && <SaveAnswer messageId={p.messageId} savedSlug={p.savedSlug} onSaved={p.onSaved} />}
+            {kept && <SaveAnswer messageId={p.messageId} savedSlug={p.savedSlug} onSaved={p.onSaved} />}
+            {kept && p.extras.share && <ShareButton messageId={p.messageId} />}
           </div>
         </>
       ) : (

@@ -65,6 +65,7 @@ import { handleAdminEventsRoute } from "./admin-events.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
 import { admitRequest } from "../core/tenant-guard.ts";
 import { handleApp } from "./app.ts";
+import { handleShareView } from "./share.ts";
 
 /** RFC 6749 §5.2-style throttle response for the rate-limited OAuth endpoints. */
 function rateLimited(): Response {
@@ -690,6 +691,8 @@ export function startServer(opts: ServerOptions): ServerHandle {
           issuer: resolveIssuer(url, opts.publicUrl),
         });
       }
+      const shared = await handleShareView(req, url, opts.storage);
+      if (shared) return shared;
       if (adminAuth && (url.pathname === "/admin" || url.pathname.startsWith("/admin/"))) {
         // A1 auth routes, then A2 data/provisioning routes (each gates on
         // requireAdmin itself). The embedded SPA (B/C) dispatches here later.

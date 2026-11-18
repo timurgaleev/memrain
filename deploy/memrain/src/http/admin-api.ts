@@ -46,6 +46,8 @@ import { handleAdminMembers } from "./admin-members.ts";
 import { handleAdminAutonomy } from "./admin-autonomy.ts";
 import { handleAdminOffice } from "./admin-office.ts";
 import { handleChatApi } from "./chat-api.ts";
+import { handleFeedbackApi } from "./feedback-api.ts";
+import { operatorOwner } from "../core/chat/chat-service.ts";
 import type { SonnetFn } from "../core/llm/sonnet.ts";
 import { controlDaemon, daemonsStatus } from "../core/daemons/status.ts";
 import { OperationError } from "../core/operation-error.ts";
@@ -216,6 +218,7 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     }).catch((e: unknown) => serverError("chat", e));
     if (r) return r;
   }
+  if (p === "/admin/api/feedback") return handleFeedbackApi(req, { storage: deps.storage, owner: operatorOwner() }).catch((e: unknown) => serverError("feedback", e));
   if (p === "/admin/api/office") {
     const r = await handleAdminOffice(req, url, engine).catch((e: unknown) => serverError("office", e));
     if (r) return r;

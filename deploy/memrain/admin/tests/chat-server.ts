@@ -16,6 +16,9 @@ export interface ChatState {
   refuse: { status: number; body: Record<string, unknown> } | null;
   failThreads: number;
   saveSlug: string;
+  /** MEMRAIN_FEEDBACK and MEMRAIN_CHAT_SHARE on the server. */
+  feedback: boolean;
+  share: boolean;
 }
 
 export const MODELS = {
@@ -41,7 +44,7 @@ export const OK_SCRIPT: SseStep[] = [
 ];
 
 export function chatScenario(over: Partial<ChatState> = {}): ChatState {
-  return { models: MODELS, threads: [], details: {}, script: OK_SCRIPT, hold: false, refuse: null, failThreads: 0, saveSlug: "chats/2026-11-09-offsite", ...over };
+  return { models: MODELS, threads: [], details: {}, script: OK_SCRIPT, hold: false, refuse: null, failThreads: 0, saveSlug: "chats/2026-11-09-offsite", feedback: false, share: false, ...over };
 }
 
 export const chat = {
@@ -90,10 +93,21 @@ function stream(request: Request): Response {
 /** Answers a chat route, or null for a path it does not own. */
 export async function chatRoute(request: Request): Promise<Response | null> {
   const path = new URL(request.url).pathname;
-  if (!path.startsWith("/admin/api/chat")) return null;
+  if (!path.startsWith("/admin/api/chat") && path !== "/admin/api/feedback") return null;
   const st = chat.state;
   const body = request.method === "POST" ? (await request.json().catch(() => ({}))) as Record<string, unknown> : null;
   chat.requests.push({ method: request.method, path, body });
+  const off = Response.json({ error: "not_found" }, { status: 404 });
+  if (path === "/admin/api/feedback") {
+    if (!st.feedback) return off;
+    return request.method === "POST" ? Response.json({ ok: true }) : Response.json({ enabled: true });
+  }
+  if (path === "/admin/api/chat/share") return st.share ? Response.json({ enabled: true }) : off;
+  if (/^\/admin\/api\/chat\/messages\/[^/]+\/share$/.test(path)) {
+    if (!st.share) return off;
+    if (request.method === "DELETE") return Response.json({ ok: true, revoked: 1 });
+    return Response.json({ url: `/s/${"t".repeat(43)}`, expires_at: "2026-11-16T12:00:00Z" });
+  }
   if (path === "/admin/api/chat" && request.method === "POST") {
     if (st.refuse) return Response.json(st.refuse.body, { status: st.refuse.status });
     return stream(request);

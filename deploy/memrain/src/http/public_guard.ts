@@ -39,6 +39,7 @@ import { timingSafeEqual } from "node:crypto";
 // importing this http/ module (which would create an import cycle).
 import { publicReadBodiesAllowed } from "../core/public_redaction.ts";
 import { hostingFlags, hostingMode } from "../control/contract.ts";
+import { chatShareEnabled } from "../core/chat/share.ts";
 
 export interface PublicGuardOptions {
   /** Bearer token. If undefined, every public request is rejected. */
@@ -375,6 +376,8 @@ function isPreCredentialRoute(req: Request, url: URL): boolean {
   // The member app authenticates every route itself (http/app.ts), and only
   // exists while MEMRAIN_APP is on.
   if ((url.pathname === "/app" || url.pathname.startsWith("/app/")) && hostingFlags().app) return true;
+  // A shared chat answer: the link's password is the credential (http/share.ts).
+  if (url.pathname.startsWith("/s/") && (req.method === "GET" || req.method === "POST") && chatShareEnabled()) return true;
   return url.pathname === "/admin" || url.pathname.startsWith("/admin/");
 }
 

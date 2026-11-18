@@ -30,6 +30,7 @@ import { handleAppConnect } from "./app-connect.ts";
 import { handleAppOnboarding } from "./app-onboarding.ts";
 import { serveAppStatic } from "./app-static.ts";
 import { handleChatRoutes } from "./chat-api.ts";
+import { handleFeedbackApi } from "./feedback-api.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 
 export interface AppDeps {
@@ -112,6 +113,7 @@ export async function handleApp(req: Request, url: URL, deps: AppDeps): Promise<
       ...(deps.sendLimiter ? { sendLimiter: deps.sendLimiter } : {}),
     }, memberChatOwner(session), memberSaveGrant(session));
   }
+  if (p === "/app/api/feedback") return ready(session) ? handleFeedbackApi(req, { storage: deps.storage, owner: memberChatOwner(session) }) : json(MEMBER_NOT_READY, 409);
 
   const connect = await handleAppConnect(req, url, session, deps);
   if (connect) return connect;

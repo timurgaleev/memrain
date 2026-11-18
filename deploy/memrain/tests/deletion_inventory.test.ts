@@ -64,6 +64,8 @@ const PAGE_COLUMNS: Record<string, Disposition> = {
   "loop_threads.page_slug": { kind: "cascade" },
   "open_loops.page_slug": { kind: "cascade" },
   "chat_messages.saved_slug": { kind: "exempt", reason: "names the page a chat answer was saved as; the answer is the owner's own record and outlives a purge of that page" },
+  "retrieval_feedback.slug": { kind: "cascade" },
+  "retrieval_weights.slug": { kind: "cascade" },
   "connector_items.page_slug": { kind: "exempt", reason: "the sync's record of which provider item a page came from; it outlives a page the owner purged so the next run does not recreate it, and goes with its account by cascade" },
 };
 
@@ -87,6 +89,8 @@ const SOURCE_TABLES: Record<string, Disposition> = {
   "loop_threads": { kind: "cascade" },
   "group_sources": { kind: "cascade" },
   "chat_threads": { kind: "cascade" },
+  "retrieval_feedback": { kind: "cascade" },
+  "retrieval_weights": { kind: "cascade" },
   "page_versions": { kind: "referenced" },
   "oauth_tokens": { kind: "referenced" },
   "oauth_codes": { kind: "referenced" },

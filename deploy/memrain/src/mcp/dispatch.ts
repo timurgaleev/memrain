@@ -299,6 +299,7 @@ import { findTypedConflicts } from "../core/typed-conflicts.ts";
 import { markGeneratedChunks } from "../core/search/generated-provenance.ts";
 import { assertTenantAllows } from "../core/tenant-guard.ts";
 import { hostingMode } from "../control/contract.ts";
+import { observeRetrievalUse } from "../core/feedback/implicit.ts";
 
 export { OPERATOR_ONLY_TOOLS } from "./visibility.ts";
 
@@ -459,6 +460,7 @@ export async function dispatchTool(
   const { result: dispatched, cost } = await withRequestCost(() => runWithSpendClient(spendClient, () =>
     dispatchToolInner(storage, req, opts),
   ));
+  observeRetrievalUse(storage, req.name, req.arguments ?? {}, dispatched, writerPrincipal(opts));
   const enriched = withPageAdminUrl(req, dispatched, opts);
   // The operator reads stored text as it is; everyone else gets retrieval
   // results scanned for credentials that predate (or slipped past) the write scan.
