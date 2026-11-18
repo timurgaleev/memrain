@@ -9,6 +9,7 @@ import type { Storage } from "../storage.ts";
 import type { Engine } from "../engine/interface.ts";
 import { dispatchTool } from "../../mcp/dispatch.ts";
 import { documentRankSql, isTrustTier, lowerTier, pageRankSql, tierOfRank, type TrustTier } from "../trust-tier.ts";
+import { readTrustTiers } from "../trust-frame.ts";
 import { ownedAnswer, setSavedSlug, type ChatOwner } from "./store.ts";
 
 const SLUG_WORDS_MAX = 60;
@@ -61,12 +62,29 @@ interface ToolEnvelope { error?: unknown }
 
 /**
  * The least trusted tier among an answer's evidence: page refs (slugs,
- * `<source>/<slug>`, document paths or ids) and take keys. The page is
+ * `<source>/<slug>`, document paths or ids), take keys, and the entity_facts
+ * and timeline_events rows of a trajectory. The page is
  * written by the operator, so without this an answer that repeats a synced
  * Slack channel would turn that text into owner text. A take counts as the
  * text it was distilled from; a ref no row backs any more is not vouched for.
  */
-export async function evidenceTier(engine: Engine, evidence: { pages: readonly string[]; takes: readonly string[] }): Promise<TrustTier> {
+export async function evidenceTier(
+  engine: Engine,
+  evidence: { pages: readonly string[]; takes: readonly string[]; facts?: readonly number[]; events?: readonly number[] },
+): Promise<TrustTier> {
+  const facts = [...new Set(evidence.facts ?? [])];
+  const events = [...new Set(evidence.events ?? [])];
+  let rowsTier: TrustTier = "owner";
+  if (facts.length > 0 || events.length > 0) {
+    // scope: upstream the rows are the ones the owner's own turn was shown under its grant; reading wider only lowers the tier
+    const t = await readTrustTiers(engine, { facts, events });
+    if (t.facts.size < facts.length || t.events.size < events.length) return "external";
+    for (const tier of [...t.facts.values(), ...t.events.values()]) rowsTier = lowerTier(rowsTier, tier);
+  }
+  return lowerTier(rowsTier, await refsTier(engine, evidence));
+}
+
+async function refsTier(engine: Engine, evidence: { pages: readonly string[]; takes: readonly string[] }): Promise<TrustTier> {
   const refs = [...new Set(evidence.pages)];
   const takeKeys = [...new Set(evidence.takes)];
   if (takeKeys.length > 0) {

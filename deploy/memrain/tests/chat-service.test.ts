@@ -22,6 +22,7 @@ import type { SearchHit } from "../src/core/search/hybrid.ts";
 import { ChatError, operatorOwner, runChatTurn, type ChatCtx, type ChatStreamEvent } from "../src/core/chat/chat-service.ts";
 import { confirmAnswer, getChatThread, listChatThreads, threadMessages } from "../src/core/chat/store.ts";
 import { saveAnswerAsPage } from "../src/core/chat/save.ts";
+import { addTimelineEvent } from "../src/core/timeline.ts";
 import { readTrustTiers } from "../src/core/trust-frame.ts";
 
 setDefaultTimeout(60_000);
@@ -325,6 +326,16 @@ describe("chat turn (P5-C1)", () => {
     expect(s.calls[0]!.user).toContain("40 euros");
     expect(result.citations.map(c => c.slug)).toEqual(["notes/garden"]);
     expect(await tierOf(await saveOf(result.message_id))).toBe("external");
+  });
+
+  it("think reports the trajectory rows it put before the model as evidence", async () => {
+    await registerSource(storage.engine(), { id: "mail", kind: "mailbox", pathPrefix: "/mail" });
+    await page("people/acme", "Acme is a vendor.", "mail");
+    const ev = await addTimelineEvent(storage, { slug: "people/acme", occurred_at: "2026-10-01T00:00:00Z", event: "Acme moved to a new bank", source_id: "mail" });
+    const s = stub(() => answer(["page://mail/people/acme"]));
+    const r = await runThink(storage, { question: "when did acme change banks?", anchors: ["people/acme"], sonnetFn: s.fn, embedFn: null, embedQuery: deterministicEmbedQuery });
+    expect(s.calls[0]!.user).toContain("<trajectory>");
+    expect(r.evidence?.events).toContain(ev.id!);
   });
 
   it("an empty or oversized message is invalid", async () => {

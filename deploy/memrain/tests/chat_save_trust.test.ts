@@ -8,7 +8,8 @@ import { putPage } from "../src/core/pages.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { readExternalTrust, readTrustTiers } from "../src/core/trust-frame.ts";
 import { appendChatMessage, createChatThread, type ChatCitation, type ChatOwner } from "../src/core/chat/store.ts";
-import { saveAnswerAsPage } from "../src/core/chat/save.ts";
+import { evidenceTier, saveAnswerAsPage } from "../src/core/chat/save.ts";
+import { addTimelineEvent } from "../src/core/timeline.ts";
 import { dispatchTool } from "../src/mcp/dispatch.ts";
 
 const owner: ChatOwner = { key: "operator", sourceId: "default", spendId: "memrain_chat_operator" };
@@ -132,6 +133,14 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(again.slug).toMatch(/-how-is-vendor-x-paid-again$/);
     const copies = await engine.query<{ slug: string }>(`SELECT slug FROM pages WHERE slug LIKE $1 AND deleted_at IS NULL`, [`${again.slug}%`]);
     expect(copies.rows.map(r => r.slug)).toEqual([again.slug]);
+  });
+
+  it("a timeline row from a chat source shown beside owner pages lowers the evidence tier", async () => {
+    const ev = await addTimelineEvent(storage, { slug: "chat/general/day", occurred_at: "2026-11-01T00:00:00Z", event: "Vendor X moved banks", source_id: "team-chat" });
+    expect(await evidenceTier(storage.engine(), { pages: ["notes/vendor"], takes: [] })).toBe("owner");
+    expect(await evidenceTier(storage.engine(), { pages: ["notes/vendor"], takes: [], events: [ev.id!] })).toBe("external");
+    // A row that is gone is not vouched for.
+    expect(await evidenceTier(storage.engine(), { pages: ["notes/vendor"], takes: [], facts: [987654321] })).toBe("external");
   });
 
   it("evidence that can no longer be found is not vouched for", async () => {

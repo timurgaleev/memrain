@@ -252,10 +252,11 @@ export interface ThinkResult {
   quote_check?: QuoteCheck;
   unverified_quotes?: Array<{ text: string; reason: string }>;
   /**
-   * Every page (source path) and take (take key) put before the model in any
-   * round, cited or not: what an answer may restate. Present when a model ran.
+   * Every page (source path), take (take key) and trajectory row (entity_facts
+   * and timeline_events ids) put before the model in any round, cited or
+   * not: what an answer may restate. Present when a model ran.
    */
-  evidence?: { pages: string[]; takes: string[] };
+  evidence?: { pages: string[]; takes: string[]; facts: number[]; events: number[] };
 }
 
 const THINK_SYSTEM_PROMPT = `You are memrain's synthesis engine. You answer a question by reasoning across a personal knowledge brain. Your inputs are wrapped in structural tags:
@@ -1453,12 +1454,12 @@ async function runThinkSteps(
   if (intent !== "other" && anchors.length === 0 && autoAnchorEnabled()) {
     anchors = await autoAnchors(storage, question, hybridPages, diagnostics.note);
   }
-  const trajectoryBlock =
+  const trajectories =
     intent !== "other" && anchors.length > 0
-      ? renderTrajectoryBlock(
-          await gatherTrajectories(storage, anchors, opts.sourceIds, diagnostics.note),
-        )
-      : "";
+      ? await gatherTrajectories(storage, anchors, opts.sourceIds, diagnostics.note)
+      : [];
+  const trajectoryBlock = renderTrajectoryBlock(trajectories);
+  const shownPoints = trajectoryBlock === "" ? [] : trajectories.flatMap((t) => t.points);
 
   // Anchor-subgraph gather stream: the anchors' 2-hop link neighborhood joins
   // the page evidence via RRF fusion, so an entity question sees the subgraph
@@ -1697,7 +1698,12 @@ async function runThinkSteps(
     ...windowFields,
     evidence_truncated: pages.some(p => p.truncated === true || p.content.length > PAGE_EXCERPT_CHARS),
     ...quoteFields,
-    evidence: { pages: [...shownPages], takes: [...new Set(takes.map((t) => t.take_key))] },
+    evidence: {
+      pages: [...shownPages],
+      takes: [...new Set(takes.map((t) => t.take_key))],
+      facts: [...new Set(shownPoints.filter((p) => p.source === "fact").map((p) => p.id))],
+      events: [...new Set(shownPoints.filter((p) => p.source === "event").map((p) => p.id))],
+    },
   }, question, pages);
 }
 
