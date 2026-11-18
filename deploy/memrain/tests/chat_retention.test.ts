@@ -61,6 +61,22 @@ describe("chat retention", () => {
     expect(await purgeOldChat(storage.engine(), { days: null, now: NOW })).toEqual({ messages: 0, threads: 0, capped: false });
   });
 
+  it("does not keep a purged question alive in its thread's title", async () => {
+    const e = storage.engine();
+    const o = owner("operator");
+    const id = await threadAged(o, "my salary is 90k, should I ask for more", 91);
+    // A later turn in the same thread is still inside the window.
+    await appendChatMessage(e, id, { role: "user", content: "what about a  bonus\ninstead?" });
+    await appendChatMessage(e, id, { role: "assistant", content: "Maybe.", status: "ok" });
+    const gone = await threadAged(o, "every turn of this one expires", 91);
+    await e.query(`UPDATE chat_threads SET updated_at = $2 WHERE id = $1::uuid`, [gone, NOW.toISOString()]);
+    await purgeOldChat(e, { days: 90, now: NOW });
+    const titles = new Map((await listChatThreads(e, o)).map(t => [t.id, t.title]));
+    expect(titles.get(id)).toBe("what about a bonus instead?");
+    // A thread left with no question has no title to show.
+    expect(titles.get(gone)).toBeNull();
+  });
+
   it("runs in the purge phase under MEMRAIN_CHAT_RETENTION_DAYS (0 keeps everything)", async () => {
     await threadAged(owner("operator"), "ancient", 400);
     const saved = process.env["MEMRAIN_CHAT_RETENTION_DAYS"];

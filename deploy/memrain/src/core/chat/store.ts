@@ -314,9 +314,30 @@ const PURGE_BATCH = 5000;
 const PURGE_MAX_BATCHES = 100;
 
 /**
+ * A thread is titled by its first question. Once retention took that
+ * question, the title is the oldest question left, or none: the expired
+ * text must not outlive itself in the thread list.
+ */
+async function retitleThreads(engine: Engine, threadIds: readonly string[]): Promise<void> {
+  if (threadIds.length === 0) return;
+  const first = await engine.query<{ id: string; content: string }>(
+    `SELECT DISTINCT ON (thread_id) thread_id::text AS id, content FROM chat_messages
+      WHERE thread_id = ANY($1::uuid[]) AND role = 'user' ORDER BY thread_id, id`,
+    [threadIds],
+  );
+  const titles = new Map(first.rows.map((r) => [r.id, threadTitle(r.content)]));
+  await engine.query(
+    `UPDATE chat_threads t SET title = v.title FROM unnest($1::uuid[], $2::text[]) AS v(id, title) WHERE t.id = v.id`,
+    [threadIds, threadIds.map((id) => titles.get(id) ?? null)],
+  );
+}
+
+/**
  * Retention: delete messages older than `days`, then the threads left empty.
- * Batched, oldest first; the cutoff is fixed once per run. `between` runs
- * after each full batch (the purge phase passes its fence check).
+ * Batched, oldest first; the cutoff is fixed once per run. Each batch
+ * retitles the threads it took messages from in the same transaction.
+ * `between` runs after each full batch (the purge phase passes its fence
+ * check).
  */
 export async function purgeOldChat(
   engine: Engine,
@@ -328,16 +349,19 @@ export async function purgeOldChat(
   let capped = true;
   for (let i = 0; i < PURGE_MAX_BATCHES; i++) {
     if (i > 0) await opts.between?.();
-    const r = await engine.query<{ n: string }>(
-      `WITH doomed AS (
-         SELECT id FROM chat_messages WHERE created_at < $1::timestamptz ORDER BY created_at LIMIT $2
-       ), gone AS (
-         DELETE FROM chat_messages m USING doomed d WHERE m.id = d.id RETURNING 1
-       )
-       SELECT count(*)::text AS n FROM gone`,
-      [cutoff, PURGE_BATCH],
-    );
-    const n = Number(r.rows[0]?.n ?? 0);
+    const n = await engine.transaction(async (tx) => {
+      const r = await tx.query<{ n: string; threads: string[] | null }>(
+        `WITH doomed AS (
+           SELECT id FROM chat_messages WHERE created_at < $1::timestamptz ORDER BY created_at LIMIT $2
+         ), gone AS (
+           DELETE FROM chat_messages m USING doomed d WHERE m.id = d.id RETURNING m.thread_id
+         )
+         SELECT count(*)::text AS n, array_agg(DISTINCT thread_id::text) AS threads FROM gone`,
+        [cutoff, PURGE_BATCH],
+      );
+      await retitleThreads(tx, r.rows[0]?.threads ?? []);
+      return Number(r.rows[0]?.n ?? 0);
+    });
     messages += n;
     if (n < PURGE_BATCH) {
       capped = false;

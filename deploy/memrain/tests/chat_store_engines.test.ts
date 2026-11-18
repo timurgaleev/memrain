@@ -63,4 +63,22 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await eraseOwnerChat(e, "a", true)).toEqual({ threads: 0, messages: 0 });
     } finally { await db.close(); }
   });
+
+  it("retention retitles a thread whose first question expired, or clears its title", async () => {
+    const db = await open();
+    const e = db.storage.engine();
+    try {
+      const a = owner("a");
+      const kept = await createChatThread(e, a, "Expired question");
+      const emptied = await createChatThread(e, a, "Also expired");
+      await appendChatMessage(e, kept, { role: "user", content: "Expired question" });
+      await appendChatMessage(e, emptied, { role: "user", content: "Also expired" });
+      await e.query(`UPDATE chat_messages SET created_at = NOW() - interval '100 days'`);
+      await appendChatMessage(e, kept, { role: "user", content: "Later question" });
+      expect(await purgeOldChat(e, { days: 90 })).toMatchObject({ messages: 2 });
+      const titles = new Map((await listChatThreads(e, a)).map(t => [t.id, t.title]));
+      expect(titles.get(kept)).toBe("Later question");
+      expect(titles.get(emptied)).toBeNull();
+    } finally { await db.close(); }
+  });
 });
