@@ -130,6 +130,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_FACTS_MODEL: "string",
   MEMRAIN_FACTS_WRITE_BUDGET_USD: "string",
   MEMRAIN_FACT_DECAY: "flag",
+  MEMRAIN_FEEDBACK: "flag",
   MEMRAIN_GAZETTEER: "flag",
   MEMRAIN_GITHUB_TOKEN: "string",
   MEMRAIN_GOOGLE_OAUTH_CLIENT_ID: "string",
