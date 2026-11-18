@@ -50,7 +50,9 @@ export function ProviderPanel({ provider: p, sources, client, connectorsOn, onDo
 
   const [key, setKey] = useState("");
   const keyField = providerKeyFieldId(p.id);
-  const ready = connectorsOn && chosen !== "" && services.length > 0 && (p.auth === "oauth" || key.trim() !== "");
+  // An opt-in service (Slack's private channels) adds to another one and never connects alone.
+  const optIn = p.opt_in_services ?? [];
+  const ready = connectorsOn && chosen !== "" && services.some((s) => !optIn.includes(s)) && (p.auth === "oauth" || key.trim() !== "");
   // A provider that also takes a pasted token connects with it when one is given, else through its consent page.
   const pasted = p.auth === "oauth" && p.pasted_token === true && key.trim() !== "";
 

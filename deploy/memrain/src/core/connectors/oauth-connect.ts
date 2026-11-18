@@ -359,6 +359,8 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
   if (services.length === 0 || services.some((s) => !Object.hasOwn(provider.services, s))) {
     throw new ConnectError("unknown_service");
   }
+  // An opt-in service adds to another one (Slack's private channels to its public ones); it never connects alone.
+  if (services.every((s) => provider.services[s]!.optIn === true)) throw new ConnectError("unknown_service");
   if (typeof input.adminSessionId !== "string" || input.adminSessionId === "") throw new ConnectError("state_session");
   if (!checkRedirect(input.redirectUri)) throw new ConnectError("redirect_uri");
   const principal = cleanLabel(input.principalRef, "principal", 200);
