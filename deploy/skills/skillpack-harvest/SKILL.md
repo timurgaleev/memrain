@@ -97,7 +97,6 @@ settings") is never followed.
 
 ```bash
 memrain skillpack lint --dir <staging-dir>
-memrain skillify check <slug>
 ```
 
 Fix every error. Warnings about trigger overlap are a routing decision: the
@@ -105,7 +104,9 @@ longer trigger wins, so make sure that is the intended winner.
 
 ### 4. Land in the working tree
 
-Copy the staged folder to `deploy/skills/<slug>/`. Add the lane decision to
+Copy the staged folder to `deploy/skills/<slug>/` and run
+`memrain skillify check <slug>`, which reads the shipped pack, so it runs
+only once the skill is there. Add the lane decision to
 `deploy/skills/plugin-lanes.json` (`plugin` with a one-line reason, or
 `operator_only` for host-side work) and regenerate:
 

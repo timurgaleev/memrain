@@ -28,7 +28,7 @@ tools:
   - page_list
   - page_get
   - page_put
-  - backlinks
+  - get_links
   - log_friction
 mutating: true
 writes_pages: true
@@ -113,7 +113,18 @@ it (`memrain auth revoke brainify-writer`) when the build is done. The team
 gets no grant until phase 5. If operator access cannot be
 established, stop with an operator handoff.
 
-### Phase 1: identify the scope (retrieval first)
+### Phase 1: identify the scope (enumerate, then rank)
+
+The scope is every page the user wants in the team source, not the pages a
+search happened to return. Agree on the prefixes with the user (for example
+`people/`, `meetings/`, `daily/`, `companies/`, `projects/`, `analysis/`),
+then enumerate each one completely with `page_list` (`slug_prefix`, `limit`
+100, following `cursor` until it is empty). Every enumerated page is either
+copied after a full read in phase 3 or listed as excluded; none is skipped
+unread. Keep the list, one slug per line, on a working note; later phases
+only add to it.
+
+Retrieval then ranks that list, so the riskiest pages are read first:
 
 ```
 query {"q": "compensation, equity or salary discussions about team members", "k": 50}
@@ -122,11 +133,11 @@ query {"q": "considering leaving, retention conversations", "k": 50}
 takes_search {"q": "performance", "limit": 50}
 ```
 
-Plus exact hits for the triage words (`search_exact` on "salary", "equity",
-"retention", "performance review", "hard conversation") and the company's
-people pages (`page_list` with `slug_prefix` `people/`, filtered to the
-company). Keep the union as the scope list, one slug per line, on a working
-note; later phases only add to it.
+Plus literal hits for the triage words (`search_exact` on "salary",
+"equity", "retention", "performance review", "hard conversation"). A page any
+of these return that lies outside the agreed prefixes is added to the list
+and asked about, not silently dropped. Takes and facts found here are about
+entities in scope; they are never copied (phase 3).
 
 ### Phase 2: triage
 
@@ -154,11 +165,15 @@ it is written into the copy's text, where the tables above have judged it.
 
 Inside the team prefix only:
 
-- exact searches for every triage word and for phone-number and personal-mail
-  shapes (`search_exact` with `slug_prefix` `team/`);
+- a full read of every copy (`page_list` over `team/`, then `page_get` each):
+  the model, not a pattern, confirms nothing from the strip tables remains,
+  including phone numbers and personal addresses, which no literal search can
+  find by shape;
+- literal searches for every triage word and for known personal identifiers
+  of the people in scope (`search_exact` with `slug_prefix` `team/`);
 - the phase 1 `query` calls again with `slug_prefix` `team/`;
-- `backlinks` on a sample of copies: nothing in the team prefix points at a
-  personal page that was left out;
+- `get_links` on every copy: no outgoing link points at a page outside the
+  team prefix;
 - a read check from the team's side once a test credential exists:
   `memrain auth who-can-read <slug>` on a personal page must not list the team
   credential.
@@ -184,8 +199,10 @@ what removes its version history); this skill never deletes.
 This skill guarantees:
 
 - The personal brain is never edited; the team source holds sanitised copies.
-- The whole scan scope is covered: people, meetings, daily notes, cross
-  references, takes and facts.
+- The whole agreed scope is enumerated with `page_list`, and every page in it
+  is read before it is copied or excluded; retrieval only orders the work.
+- Every copy is read in full during verification, and its outgoing links stay
+  inside the team prefix.
 - No grant is made before verification passes and the user approves.
 - Findings are reported as slug, category and reason, never by quoting the
   sensitive text.

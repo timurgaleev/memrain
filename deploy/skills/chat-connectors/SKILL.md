@@ -80,12 +80,19 @@ Follow `docs/TRANSCRIPTS.md` ("Push from a laptop", "Claude Code session hook",
 - Install it on session end only, never on every turn: a growing transcript
   has a new hash each turn and would import repeatedly.
 
-Test one push by hand before relying on the hook:
+Test by hand before relying on the hook. A dry run only parses the log; it
+never reads the token or contacts the server:
 
 ```bash
 memrain transcripts push <one-session.jsonl> --url https://brain.example.com \
   --token-file ~/.config/memrain/push-token --dry-run
+memrain transcripts push <one-session.jsonl> --url https://brain.example.com \
+  --token-file ~/.config/memrain/push-token --json
 ```
+
+The real push must answer with a queued job id; then confirm the session's
+pages arrived (`get_recent_transcripts`, or `page_list` under
+`transcripts/`). Only that proves the token, the endpoint and the grant.
 
 ### Scheduled import on the brain host
 
@@ -129,7 +136,7 @@ This skill guarantees:
 ```
 Lane: <hook | scheduled import | export>   provider: <...>
 Target: source <id>, prefix transcripts/<format>/   (whoami checked)
-Test: <dry run counts | one push accepted, job <id>>
+Test: <dry run counts> then <one real push queued, job <id>, pages arrived>
 Next: <install the hook | add the timer | export from the provider>
 ```
 

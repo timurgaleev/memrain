@@ -105,7 +105,10 @@ level at a time when the user says "go deeper".
 `ran: false` when it is off and degrades to a cited extractive answer when the
 budget is spent. Record each pass in the index ledger. Its `save` option is
 operator-only; write the pass result yourself onto
-`research/<topic>/index` instead.
+`research/<topic>/index` instead. When `think` (or `query`) is in the
+skill's `unavailable_tools` (the public bearer, or a grant without it), do the
+pass yourself over the archived summaries with `search` and `page_get`, and
+mark it in the ledger as an agent-side pass.
 
 ## Pipeline
 

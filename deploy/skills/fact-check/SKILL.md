@@ -53,6 +53,11 @@ This skill reads only. When a correction belongs in a brain page, hand it to
 `correction-pipeline`; the document under review is edited in the
 conversation, not in the brain.
 
+Check `get_skill fact-check`'s `unavailable_tools` first. A caller on the
+public bearer cannot use `search_exact` or `query`: re-derive with `search`
+plus `page_get` instead (still a different path from the producer's), and
+say in the report which checks ran on the narrower path.
+
 ## Contract
 
 - Every verifiable claim is extracted, numbered and tagged with its lane.

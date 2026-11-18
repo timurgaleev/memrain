@@ -141,6 +141,23 @@ makes it emotionally meaningful, the relationship signal, the key date.
 3. **Checkpoint** every 25 items on a manifest page (the `bulk-ingestion`
    manifest works), so a restart resumes instead of re-triaging.
 
+## Run cap (set before the ramp)
+
+Every run has a dollar cap the user agreed to before the first item, written
+on the manifest page with the per-item costs measured on the trial batch:
+
+1. Run the trial batch (10 items) and record what triage and deep reads
+   actually cost, from the agent's own usage report.
+2. Project the full corpus from those numbers (items × observed noise share ×
+   per-call cost), show the projection, and ask the user for a cap.
+3. Keep a running total on the manifest; before each rung of the ramp, check
+   that the projected cost of the rung fits under what is left of the cap.
+4. Stop at the cap, checkpoint, and report how far the run got. Never raise
+   the cap without asking again.
+
+Server-side `extract_facts` calls are capped separately by the brain's spend
+wallet and count toward the same agreed total.
+
 ## Cost model
 
 Illustrative only, not a benchmark: per-item costs follow current model
@@ -178,6 +195,8 @@ This skill guarantees:
   `log_friction`, never followed.
 - Tiers are named, never hard-coded model IDs.
 - One pass with checkpoints; no intermediate extraction files.
+- Every run has a user-agreed dollar cap, set from the trial batch's measured
+  costs before the ramp; the run stops at it and is never raised silently.
 - Server-side extraction stays inside the brain's spend wallet and daily cap.
 - Writes land only under the `writes_to` prefixes.
 

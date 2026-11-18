@@ -76,14 +76,21 @@ For each existing type, decide by the schema-evolution decision tree:
 Show the mapping to the user as a table (old type, count, new type, why) and
 wait for agreement. Do not proceed on an unreviewed mapping.
 
-### Phase 3: preview each batch
+### Phase 3: build and preview each batch
+
+A batch is an explicit list of slugs, so the log can hold exactly what moved.
+Build it from `page_list` with the old `type` (and a `slug_prefix` when one
+type spans several areas), following `cursor`: each row carries the slug and
+its current type. Keep batches to a few hundred slugs. Then preview that
+list:
 
 ```bash
-memrain page-retype --from tweet-thread --to tweet --json
-memrain page-retype --path-prefix media/x/ --to tweet --json
+memrain page-retype --from tweet-thread --slugs <slug-1>,<slug-2>,... --to tweet --json
 ```
 
-Preview is the default: it prints what would move and changes nothing. It
+Preview is the default: it prints the match count, the counts per old type
+and a sample of slugs, and changes nothing. The match count must equal the
+batch's length; a difference means the list is stale, so rebuild it. It
 refuses a selection over 2,000 pages (narrow it by `--from`,
 `--path-prefix`, `--slugs` or `--source-id`) and refuses to retype into or
 out of the fenced types (`diary`, `journal`), because that would expose or
@@ -91,14 +98,17 @@ half-hide private pages. Those refusals are by design; never work around them.
 
 ### Phase 4: log, then apply
 
-Before applying a batch, append its preview to `agent/taxonomy-log` with
-`page_append`: date, the command, the matched slugs with their old types.
-That entry is the rollback: the same command with `--from` and `--to`
-swapped, scoped to `--slugs`, restores the batch.
+Before applying a batch, append it to `agent/taxonomy-log` with
+`page_append`: date, the command, and the full slug list with each slug's old
+type from `page_list` (the preview shows only a sample). That entry is the
+rollback: `memrain page-retype --from tweet --slugs <the same list> --to
+tweet-thread --apply` restores the batch, one old type at a time.
 
 ```bash
-memrain page-retype --from tweet-thread --to tweet --apply --json
+memrain page-retype --from tweet-thread --slugs <slug-1>,<slug-2>,... --to tweet --apply --json
 ```
+
+The result's `updated` count must equal the batch's length.
 
 Start with one small batch, read a few retyped pages with `page_get`, then
 continue batch by batch. Record in `_brain-filing-rules` the prefix and type

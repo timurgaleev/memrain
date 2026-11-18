@@ -66,7 +66,8 @@ writes_to:
 This skill guarantees:
 
 - Every surviving reference becomes one typed edge written with `link`, from
-  the citing document to the cited one, and listed on the edges ledger page.
+  the citing document to the cited one, and listed on the edges ledger page;
+  edges that existed before the run are marked so an undo leaves them alone.
 - Judgment, not a pattern, decides the type. Detection only nominates pairs;
   the model reads the context and classifies or rejects each one.
 - Re-running is safe: repeating `(source, target, type)` updates the edge's
@@ -106,6 +107,11 @@ default) instead of writing noise.
 
 ### 3. Write the edges
 
+Before each write, check whether the edge already exists:
+`graph_query` with the same `source_slug`, `target_slug` and `type`. An edge
+that is already there is recorded in the ledger as `preexisting: true` and is
+never removed by an undo; `link` on it only updates its confidence.
+
 One `link` call per classified edge, for example:
 
 ```
@@ -129,7 +135,8 @@ exists before reporting anything.
 ### 5. Hygiene
 
 Compare the ledger's edge count with what `graph_query` returns per type. To
-undo a run, `unlink` each ledger row with its exact type.
+undo a run, `unlink` each ledger row with its exact type, skipping the rows
+marked `preexisting: true`.
 
 ## Worked example (synthetic)
 
