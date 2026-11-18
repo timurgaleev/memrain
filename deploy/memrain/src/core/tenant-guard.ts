@@ -34,22 +34,27 @@ export interface RouteClassEntry {
   cls: RouteClass;
 }
 
-const GET = ["GET", "HEAD"] as const;
+const GET = ["GET", "HEAD", "OPTIONS"] as const;
 
-/** First match wins; order specific entries before their prefixes. */
+/**
+ * First match wins; order specific entries before their prefixes. A CORS
+ * preflight (OPTIONS) takes the class of the route it asks about.
+ */
 export const ROUTE_CLASSES: readonly RouteClassEntry[] = [
   { path: "/health", methods: GET, cls: "health" },
   { path: "/.well-known/", prefix: true, methods: GET, cls: "health" },
-  { path: "/authorize", methods: ["GET", "HEAD", "POST"], cls: "auth" },
-  { path: "/token", methods: ["POST"], cls: "auth" },
-  { path: "/register", methods: ["POST"], cls: "auth" },
-  { path: "/revoke", methods: ["POST"], cls: "auth" },
+  { path: "/authorize", methods: ["GET", "HEAD", "POST", "OPTIONS"], cls: "auth" },
+  { path: "/token", methods: ["POST", "OPTIONS"], cls: "auth" },
+  { path: "/register", methods: ["POST", "OPTIONS"], cls: "auth" },
+  { path: "/revoke", methods: ["POST", "OPTIONS"], cls: "auth" },
   { path: "/app/login", methods: ["GET", "HEAD", "POST"], cls: "auth" },
   { path: "/app/invite", methods: ["GET", "HEAD", "POST"], cls: "auth" },
-  { path: "/mcp", methods: ["POST"], cls: "mcp" },
+  { path: "/mcp", methods: ["POST", "OPTIONS"], cls: "mcp" },
   { path: "/ingest", methods: ["POST"], cls: "write" },
-  { path: "/admin", prefix: true, methods: GET, cls: "read" },
-  { path: "/app", prefix: true, methods: GET, cls: "read" },
+  // A one-time sign-in link: a GET that issues an admin session.
+  { path: "/admin/auth/", prefix: true, methods: ["GET", "HEAD"], cls: "auth" },
+  { path: "/admin", prefix: true, methods: ["GET", "HEAD"], cls: "read" },
+  { path: "/app", prefix: true, methods: ["GET", "HEAD"], cls: "read" },
   { path: "/s/", prefix: true, methods: ["GET", "HEAD", "POST"], cls: "write" },
 ];
 

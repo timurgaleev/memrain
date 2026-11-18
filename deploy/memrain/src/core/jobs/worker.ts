@@ -326,8 +326,8 @@ export class Worker {
           this.log("error", `stall sweep crashed: ${asMessage(e)}`);
         }
       }
-      if (!(await admitJob())) return;
       while (this.inflight < concurrency && !this.stopping) {
+        if (!(await admitJob())) break;
         const job = await this.queue.claim(this.claimOpts(concurrency));
         if (!job) break;
         if (this.stopping) {

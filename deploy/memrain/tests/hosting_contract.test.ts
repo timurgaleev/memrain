@@ -138,6 +138,17 @@ describe("ROUTE_CLASSES", () => {
     expect(routeClass("GET", "/s/abc")).toBe("write");
   });
 
+  it("a GET that issues a credential is auth, not read", () => {
+    expect(routeClass("GET", "/admin/auth/one-time-nonce")).toBe("auth");
+    expect(routeClass("GET", "/admin/login")).toBe("read");
+  });
+
+  it("a CORS preflight takes the class of the route it asks about", () => {
+    expect(routeClass("OPTIONS", "/mcp")).toBe("mcp");
+    expect(routeClass("OPTIONS", "/token")).toBe("auth");
+    expect(routeClass("OPTIONS", "/nowhere")).toBe("write");
+  });
+
   it("an unknown path or method is write (fail closed)", () => {
     expect(routeClassEntry("GET", "/nowhere")).toBeNull();
     expect(routeClass("GET", "/nowhere")).toBe("write");

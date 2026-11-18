@@ -385,6 +385,8 @@ export function startServer(opts: ServerOptions): ServerHandle {
     port: opts.port,
     fetch: async (req, server) => {
       const url = new URL(req.url);
+      const refused = await admitRequest(req, url);
+      if (refused) return refused;
 
       // CORS preflight — answered BEFORE auth: preflights carry no
       // credentials by design, so the bearer guard would 401 every browser
@@ -395,8 +397,6 @@ export function startServer(opts: ServerOptions): ServerHandle {
 
       const handle = async (): Promise<Response> => {
 
-      const refused = await admitRequest(req, url);
-      if (refused) return refused;
       let guard = evaluatePublicGuard(req, url, guardOpts);
       let oauthAuth: AuthInfo | undefined;
       if (!guard.allow) {

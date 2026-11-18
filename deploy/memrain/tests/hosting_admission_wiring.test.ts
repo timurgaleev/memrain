@@ -65,7 +65,21 @@ describe("HTTP server", () => {
       expect(mcp.status).toBe(403);
       expect(await mcp.json()).toEqual({ ok: false, error: "tenant_suspended" });
       expect((await fetch(`${base}/nowhere`)).status).toBe(403);
+      expect((await fetch(`${base}/mcp`, { method: "OPTIONS", headers: { Origin: "https://claude.ai" } })).status).toBe(403);
       expect((await fetch(`${base}/health`)).status).toBe(200);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe("HTTP server, read-only", () => {
+  it("a credential-issuing GET is refused while the tenant is read-only", async () => {
+    hostWith(readOnly);
+    const server = startServer({ host: "127.0.0.1", port: 0, storage });
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/admin/auth/one-time-nonce`, { redirect: "manual" });
+      expect(res.status).toBe(403);
     } finally {
       await server.stop();
     }
