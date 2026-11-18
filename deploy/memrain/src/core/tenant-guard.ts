@@ -20,6 +20,7 @@
 import { hostingMode, type TenantPolicy } from "../control/contract.ts";
 import { hostedPolicy } from "../control/policy.ts";
 import { OperationError } from "./operation-error.ts";
+import type { Engine } from "./engine/interface.ts";
 import { OPERATIONS, operationAnnotations } from "../mcp/operations.ts";
 
 export type RouteClass = "health" | "auth" | "read" | "mcp" | "write";
@@ -122,11 +123,49 @@ export async function admitRequest(req: Request, url: URL = new URL(req.url)): P
   return d.allow ? null : Response.json({ ok: false, error: d.error }, { status: d.status });
 }
 
-/** Throws when this tenant may not run the MCP operation `name` now. */
-export async function assertTenantAllows(name: string): Promise<void> {
+/** Operations that can add a page; refused once the plan's page limit is reached. */
+const PAGE_ADDING_OPERATIONS: ReadonlySet<string> = new Set(["index", "page_put", "page_restore"]);
+
+function limitReached(what: string): OperationError {
+  return new OperationError(
+    "tenant_limit_reached",
+    `this brain has reached its plan's ${what} limit`,
+    "Delete what you no longer need, or ask the operator to raise the limit.",
+  );
+}
+
+/** Throws `tenant_limit_reached` when the brain already holds its plan's maximum of live pages. */
+export async function assertPageRoom(engine: Pick<Engine, "query">, maxPages: number | undefined): Promise<void> {
+  if (maxPages === undefined) return;
+  const r = await engine.query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE deleted_at IS NULL`);
+  if ((r.rows[0]?.n ?? 0) >= maxPages) throw limitReached("page");
+}
+
+/**
+ * Throws `tenant_limit_reached` when a hosted brain already has its plan's
+ * maximum of members (removed members do not count). For the member-adding
+ * paths; outside hosting mode it does nothing.
+ */
+export async function assertMemberRoom(engine: Pick<Engine, "query">): Promise<void> {
   if (hostingMode() === null) return;
-  const d = decideOperation(await hostedPolicy(), name);
-  if (d.allow) return;
+  const max = (await hostedPolicy())?.limits.maxMembers;
+  if (max === undefined) return;
+  const r = await engine.query<{ n: number }>(`SELECT count(*)::int AS n FROM members WHERE status <> 'removed'`);
+  if ((r.rows[0]?.n ?? 0) >= max) throw limitReached("member");
+}
+
+/**
+ * Throws when this tenant may not run the MCP operation `name` now: held, or
+ * (given the brain's engine) an operation that adds a page at the page limit.
+ */
+export async function assertTenantAllows(name: string, engine?: Pick<Engine, "query">): Promise<void> {
+  if (hostingMode() === null) return;
+  const policy = await hostedPolicy();
+  const d = decideOperation(policy, name);
+  if (d.allow) {
+    if (engine && policy && PAGE_ADDING_OPERATIONS.has(name)) await assertPageRoom(engine, policy.limits.maxPages);
+    return;
+  }
   if (d.error === "tenant_suspended") {
     throw new OperationError(
       "tenant_suspended",

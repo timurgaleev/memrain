@@ -583,7 +583,7 @@ async function dispatchToolInner(
   const takesHolders = effectiveTakesHolders(opts.authInfo);
   try {
     if (req.name === "search" || req.name === "query") opts.signal?.throwIfAborted();
-    await assertTenantAllows(req.name);
+    await assertTenantAllows(req.name, storage.engine());
     // Tool-level gates, in order: the fail-closed write gate (a scopeless
     // authenticated principal on a write op, default-OFF unless
     // MEMRAIN_TENANT_FAIL_CLOSED=1), operator-only tools for any authenticated
