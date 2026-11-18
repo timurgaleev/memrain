@@ -383,7 +383,7 @@ describe("teams transcripts adapter", () => {
     "00:00:03.000 --> 00:00:04.000", "<v Bob>Dial in again, Passcode: 551234</v>", "",
   ].join("\n");
 
-  function transcriptWorld(opts: { disabled?: boolean; masterDown?: boolean } = {}) {
+  function transcriptWorld(opts: { disabled?: boolean; masterDown?: boolean; contentDenied?: boolean } = {}) {
     return graph((url, call): Reply | null => {
       const p = url.pathname;
       if (p === "/v1.0/me/calendarView") return { body: { value: events } };
@@ -410,7 +410,7 @@ describe("teams transcripts adapter", () => {
           },
         };
       }
-      if (p === "/v1.0/me/onlineMeetings/meeting-one/transcripts/tr-1/content") return { body: vttOne };
+      if (p === "/v1.0/me/onlineMeetings/meeting-one/transcripts/tr-1/content") return opts.contentDenied ? { status: 403, body: { error: { code: "Forbidden" } } } : { body: vttOne };
       if (p === "/v1.0/me/onlineMeetings/meeting-two/transcripts/tr-2/content") {
         if (call.accept === "application/vnd.microsoft.graph.transcript+text") return { body: "00:00:01.000 --> 00:00:03.000\nHello all\n" };
         return { status: 403, body: { error: { code: "Forbidden", innerError: { code: "SpeakerAttributionNotAllowed" } } } };
@@ -475,6 +475,14 @@ describe("teams transcripts adapter", () => {
     if (res.ok) return;
     expect(res.response.class).toBe("forbidden");
     expect(res.response.error).toContain("GraphAccessToTranscriptsDisabled");
+  });
+
+  it("holds a transcript Graph will not show at its own version, so the held check can skip it later", async () => {
+    const out = await drain(teamsTranscriptsAdapter(account("teams_transcripts"), { now: () => T0, env: {} }), transcriptWorld({ contentDenied: true }).client, TEAMS_TRANSCRIPTS_STREAM, null);
+    const failed = out.items.filter(i => i.failure !== undefined);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ version: "2026-11-15T14:02:00.000Z|2026-11-15T14:58:00.000Z", failure: { code: "transcript_unavailable", holdNow: true } });
+    expect(rendered(out.items).map(i => i.title)).toEqual(["Standup"]);
   });
 
   it("does not spend the run's budget on a transcript the engine holds", async () => {

@@ -79,7 +79,8 @@ const DAY_MS = 86_400_000;
 /** The calendar is read one slice of this length per stream page. */
 const SLICE_MS = DAY_MS;
 const PAGE_SIZE = 50;
-const MAX_EVENT_PAGES = 20;
+/** Pages of one listing: two days of the calendar (a slice and the day before it), 1,000 events each. */
+const MAX_EVENT_PAGES = 40;
 const MAX_TRANSCRIPT_PAGES = 20;
 /** A transcript body past this is not read: no meeting produces one. */
 const MAX_CONTENT_BYTES = 16 * 1024 * 1024;
@@ -259,8 +260,8 @@ function badBody(res: ConnectorResponse, what: string): ConnectorResponse {
 }
 
 /** A meeting or transcript Graph will not show: one held item, so the other meetings go on. */
-function unavailable(externalId: string, res: ConnectorResponse, what: string): SyncItem {
-  return { externalId, version: null, failure: { code: `${what}_unavailable`, message: `Graph did not show the ${what} (HTTP ${res.status})`, holdNow: true } };
+function unavailable(externalId: string, res: ConnectorResponse, what: string, version: string | null = null): SyncItem {
+  return { externalId, version, failure: { code: `${what}_unavailable`, message: `Graph did not show the ${what} (HTTP ${res.status})`, holdNow: true } };
 }
 
 /** A response that ends the run (a rate limit, a server error, a lost credential), as opposed to one meeting's refusal. */
@@ -394,7 +395,7 @@ class TranscriptsAdapter implements SyncAdapter {
       path = next === undefined ? null : graphLinkPath(next);
       if (next !== undefined && path === null) return { response: badBody(res, "calendar view next link") };
       if (path !== null && p + 1 >= MAX_EVENT_PAGES) {
-        return { response: { ...res, class: "challenge", body: null, error: `the calendar lists more than ${MAX_EVENT_PAGES * PAGE_SIZE} events in one day` } };
+        return { response: { ...res, class: "challenge", body: null, error: `the calendar lists more than ${MAX_EVENT_PAGES * PAGE_SIZE} events in two days` } };
       }
     }
     return out.sort((a, b) => a.start - b.start);
@@ -498,7 +499,8 @@ class TranscriptsAdapter implements SyncAdapter {
       const res = got.response;
       if (graphInnerErrorCode(res) === TRANSCRIPTS_DISABLED) return { response: transcriptsDisabled(res) };
       if (endsRun(res)) return { response: res };
-      return unavailable(t.externalId, res, "transcript");
+      // At the transcript's own version, so the held check before the next fetch matches it.
+      return unavailable(t.externalId, res, "transcript", t.version);
     }
     const linked = await this.eventICalUID(client, ev);
     if ("response" in linked) return linked;
