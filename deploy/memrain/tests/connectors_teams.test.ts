@@ -358,6 +358,13 @@ describe("webvtt transcripts", () => {
     expect(parseVtt("00:00:16.246 --> 00:00:17.726\nThis is a transcript test.\n\n00:00:18.000 --> 00:00:19.000\nSecond line.\n"))
       .toEqual([{ speaker: "", text: "This is a transcript test. Second line." }]);
   });
+
+  it("reads cues whose offsets are negative, as Graph may write them", () => {
+    const mixed = ["WEBVTT", "", "-00:00:01.500 --> 00:00:00.500", "<v Ada>Before zero.</v>", "", "00:00:00.500 --> 00:00:02.000", "<v Bob>After zero.</v>", ""].join("\n");
+    expect(parseVtt(mixed)).toEqual([{ speaker: "Ada", text: "Before zero." }, { speaker: "Bob", text: "After zero." }]);
+    const allNegative = "-00:00:03.000 --> -00:00:02.000\nFirst.\n\n-00:00:02.000 --> -00:00:01.000\nSecond.\n";
+    expect(parseVtt(allNegative)).toEqual([{ speaker: "", text: "First. Second." }]);
+  });
 });
 
 describe("teams transcripts adapter", () => {

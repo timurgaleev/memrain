@@ -119,7 +119,8 @@ function redacted(v: string): string {
 // ---------------------------------------------------------------------------
 // WebVTT.
 
-const CUE_TIME_RE = /^\s*(?:\d{1,3}:)?\d{2}:\d{2}[.,]\d{3}\s+-->\s+/;
+// Graph may write a cue before the transcript's zero point with a negative offset.
+const CUE_TIME_RE = /^\s*-?(?:\d{1,3}:)?\d{2}:\d{2}[.,]\d{3}\s+-->\s+/;
 const VOICE_RE = /^<v(?:\.[^\s>]{0,40})?\s+([^>]{1,200})>/;
 const TAG_RE = /<\/?[a-z][^<>]{0,200}>/gi;
 
