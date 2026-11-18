@@ -38,6 +38,7 @@ import {
 } from "./cors.ts";
 import { handleIngestRoute } from "./ingest.ts";
 import {
+  assertIngressConfig,
   evaluatePublicGuard,
   evaluateInternalAuth,
   isPublicMcpToolForbidden,
@@ -198,6 +199,10 @@ export interface ServerHandle {
 }
 
 export function startServer(opts: ServerOptions): ServerHandle {
+  assertIngressConfig({
+    ...(opts.publicBearerToken ? { publicBearerToken: opts.publicBearerToken } : {}),
+    ...(opts.internalToken ? { internalToken: opts.internalToken } : {}),
+  });
   const mcpEnabled = opts.mcpEnabled !== false;
   const mcpHandler = mcpEnabled
     ? makeMcpHandler({
