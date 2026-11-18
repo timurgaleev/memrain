@@ -35,7 +35,8 @@ export interface Provider {
 
 /** Microsoft as the server lists it: two services into sources of different kinds, a tenant, no upstream revoke. */
 export const MICROSOFT: Provider = {
-  id: "microsoft", services: ["outlook_mail", "outlook_calendar"], service_kinds: { outlook_mail: ["mailbox"], outlook_calendar: ["calendar"] }, auth: "oauth",
+  id: "microsoft", services: ["outlook_mail", "outlook_calendar", "teams_chat", "teams_transcripts"],
+  service_kinds: { outlook_mail: ["mailbox"], outlook_calendar: ["calendar"], teams_chat: ["chat"], teams_transcripts: ["meeting"] }, auth: "oauth",
   callback_uri: "https://brain.example.test/admin/connectors/callback/microsoft", tenant_default: "common", can_revoke: false,
 };
 

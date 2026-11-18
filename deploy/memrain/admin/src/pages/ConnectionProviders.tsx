@@ -4,6 +4,7 @@ import { CopyField } from "../components/CopyField.tsx";
 import { Dialog } from "../components/Dialog.tsx";
 import {
   clientRejectedNote,
+  connectButtonLabel,
   exclusiveServices,
   initialServices,
   providerLabel,
@@ -108,8 +109,8 @@ export function ProviderPanel({ provider: p, sources, client, connectorsOn, onDo
             <input id={keyField} type="password" value={key} autoComplete="off" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
           </div>
         )}
-        <button className="btn btn-primary" type="submit" disabled={busy || !ready} aria-label={`Connect ${name}`}>
-          {busy ? (p.auth === "oauth" ? "Opening…" : "Checking…") : `Connect ${name}`}
+        <button className="btn btn-primary" type="submit" disabled={busy || !ready} aria-label={connectButtonLabel(p.id, services)}>
+          {busy ? (p.auth === "oauth" ? "Opening…" : "Checking…") : connectButtonLabel(p.id, services)}
         </button>
       </form>
       {services.length > 0 && fitting.length === 0 && (

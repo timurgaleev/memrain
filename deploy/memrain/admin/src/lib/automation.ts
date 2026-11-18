@@ -141,12 +141,25 @@ const SERVICE_LABELS: Record<string, string> = {
   "google:gmail": "Gmail",
   "microsoft:outlook_mail": "Outlook mail",
   "microsoft:outlook_calendar": "Outlook calendar",
+  "microsoft:teams_chat": "Teams chats",
+  "microsoft:teams_transcripts": "Teams meeting transcripts",
 };
 
 /** A service as the owner knows it (Outlook mail, Gmail); an id the page does not know stays as it is. */
 export function serviceLabel(provider: string, service: string): string {
   const key = `${provider}:${service}`;
   return Object.hasOwn(SERVICE_LABELS, key) ? SERVICE_LABELS[key]! : service;
+}
+
+const TEAMS_SERVICES: readonly string[] = ["teams_chat", "teams_transcripts"];
+
+/**
+ * The connect button's words. Teams is added to a Microsoft app on its own:
+ * it asks for its own permissions, one of which an administrator consents to.
+ */
+export function connectButtonLabel(provider: string, services: readonly string[]): string {
+  if (provider === "microsoft" && services.length > 0 && services.every((s) => TEAMS_SERVICES.includes(s))) return "Add Teams";
+  return `Connect ${providerLabel(provider)}`;
 }
 
 export type TenantChoice = "common" | "organizations" | "consumers" | "tenant";

@@ -11,6 +11,7 @@ import {
   accountView,
   clientRejectedNote,
   confirmMatches,
+  connectButtonLabel,
   connectOutcome,
   connectorErrorCopy,
   daemonView,
@@ -135,6 +136,16 @@ describe("Microsoft service labels and the tenant field", () => {
     expect(serviceLabel("google", "gmail")).toBe("Gmail");
     expect(serviceLabel("google", "calendar")).toBe("Google Calendar");
     expect(serviceLabel("slack", "channels")).toBe("channels");
+    expect(serviceLabel("microsoft", "teams_chat")).toBe("Teams chats");
+    expect(serviceLabel("microsoft", "teams_transcripts")).toBe("Teams meeting transcripts");
+  });
+
+  it("calls the connect action Add Teams for a Teams service, its own consent step", () => {
+    expect(connectButtonLabel("microsoft", ["teams_chat"])).toBe("Add Teams");
+    expect(connectButtonLabel("microsoft", ["teams_transcripts"])).toBe("Add Teams");
+    expect(connectButtonLabel("microsoft", ["outlook_mail"])).toBe("Connect Microsoft");
+    expect(connectButtonLabel("microsoft", [])).toBe("Connect Microsoft");
+    expect(connectButtonLabel("google", ["gmail"])).toBe("Connect Google");
   });
 
   it("offers services as a single choice when no one source can hold two of them", () => {
