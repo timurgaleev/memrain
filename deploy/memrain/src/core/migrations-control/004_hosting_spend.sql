@@ -61,8 +61,11 @@ CREATE TABLE IF NOT EXISTS hosting_spend_reservations (
 CREATE INDEX IF NOT EXISTS hosting_spend_reservations_open
   ON hosting_spend_reservations (expires_at) WHERE settled_at IS NULL;
 
--- Turn every reservation past its TTL into spend at its full amount.
-CREATE OR REPLACE FUNCTION public.hosting_expire() RETURNS integer
+-- Turn reservations past their TTL into spend at their full amount: one
+-- tenant's (from hosting_reserve, which may touch only its caller's rows), or
+-- every tenant's (the operator, p_tenant NULL). Rows another sweep or a settle
+-- holds are skipped, never waited on, so concurrent sweeps cannot deadlock.
+CREATE OR REPLACE FUNCTION public.hosting_expire(p_tenant text DEFAULT NULL) RETURNS integer
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, pg_temp
 AS $fn$
@@ -71,11 +74,17 @@ DECLARE
   agg jsonb;
   g record;
 BEGIN
-  WITH gone AS (
-    UPDATE public.hosting_spend_reservations
-       SET settled_at = now(), outcome = 'expired', actual_usd = usd
+  WITH due AS (
+    SELECT id FROM public.hosting_spend_reservations
      WHERE settled_at IS NULL AND expires_at <= now()
-     RETURNING tenant_id, day, usd
+       AND (p_tenant IS NULL OR tenant_id = p_tenant)
+     ORDER BY id
+     FOR UPDATE SKIP LOCKED
+  ), gone AS (
+    UPDATE public.hosting_spend_reservations r
+       SET settled_at = now(), outcome = 'expired', actual_usd = r.usd
+      FROM due WHERE r.id = due.id
+     RETURNING r.tenant_id, r.day, r.usd
   )
   SELECT coalesce(jsonb_agg(x), '[]'::jsonb) INTO agg
     FROM (SELECT tenant_id, day, sum(usd) AS usd, count(*) AS c FROM gone GROUP BY tenant_id, day) x;
@@ -119,7 +128,9 @@ BEGIN
   IF t.status <> 'active' THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'tenant_inactive');
   END IF;
-  PERFORM public.hosting_expire();
+  -- Only this tenant's own expired rows; another tenant's still count as
+  -- reserved until they are swept, which only errs toward refusing.
+  PERFORM public.hosting_expire(t.id);
   SELECT * INTO s FROM public.hosting_settings;
   IF s.llm_off THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'llm_off');
@@ -148,9 +159,13 @@ BEGIN
 END
 $fn$;
 
--- Settle one of the calling tenant's open reservations at what the call cost;
--- 0 releases it. An actual above the reservation is booked in full and turns
--- paid calls off for everyone for the rest of the day.
+-- Settle one of the calling tenant's reservations at what the call cost.
+--   open, within its TTL   books the actual; 0 releases it
+--   open, past its TTL     books the larger of the hold and the actual: time
+--                          never frees a reservation
+--   already expired        books only an actual above the hold, once
+-- An actual above the reservation is booked in full and turns paid calls off
+-- for everyone for the rest of the day.
 CREATE OR REPLACE FUNCTION public.hosting_settle(p_id uuid, p_actual numeric) RETURNS jsonb
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, pg_temp
@@ -159,6 +174,8 @@ DECLARE
   tid text;
   r public.hosting_spend_reservations%ROWTYPE;
   today date := (now() AT TIME ZONE 'UTC')::date;
+  booked numeric;
+  released numeric;
 BEGIN
   IF p_actual IS NULL OR p_actual < 0 THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid_amount');
@@ -167,20 +184,36 @@ BEGIN
   IF tid IS NULL THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'unknown_tenant');
   END IF;
-  UPDATE public.hosting_spend_reservations
-     SET settled_at = now(),
-         outcome = CASE WHEN p_actual = 0 THEN 'released' ELSE 'settled' END,
-         actual_usd = p_actual
-   WHERE id = p_id AND tenant_id = tid AND settled_at IS NULL
-  RETURNING * INTO r;
+  SELECT * INTO r FROM public.hosting_spend_reservations WHERE id = p_id AND tenant_id = tid FOR UPDATE;
   IF NOT FOUND THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'not_open');
   END IF;
+  IF r.settled_at IS NULL THEN
+    released := r.usd;
+    IF r.expires_at <= now() THEN
+      booked := greatest(r.usd, p_actual);
+      UPDATE public.hosting_spend_reservations
+         SET settled_at = now(), outcome = 'expired', actual_usd = booked WHERE id = r.id;
+    ELSE
+      booked := p_actual;
+      UPDATE public.hosting_spend_reservations
+         SET settled_at = now(), outcome = CASE WHEN p_actual = 0 THEN 'released' ELSE 'settled' END,
+             actual_usd = p_actual
+       WHERE id = r.id;
+    END IF;
+  ELSIF r.outcome = 'expired' AND p_actual > r.usd AND r.actual_usd <= r.usd THEN
+    -- The sweep booked the hold; the call reports more. Book the rest.
+    released := 0;
+    booked := p_actual - r.usd;
+    UPDATE public.hosting_spend_reservations SET actual_usd = p_actual WHERE id = r.id;
+  ELSE
+    RETURN jsonb_build_object('ok', false, 'reason', 'not_open');
+  END IF;
   UPDATE public.hosting_spend_windows
-     SET reserved_usd = greatest(reserved_usd - r.usd, 0), spent_usd = spent_usd + p_actual
+     SET reserved_usd = greatest(reserved_usd - released, 0), spent_usd = spent_usd + booked
    WHERE day = r.day;
   UPDATE public.tenant_spend_windows
-     SET reserved_usd = greatest(reserved_usd - r.usd, 0), spent_usd = spent_usd + p_actual
+     SET reserved_usd = greatest(reserved_usd - released, 0), spent_usd = spent_usd + booked
    WHERE tenant_id = tid AND day = r.day;
   IF p_actual > r.usd THEN
     INSERT INTO public.hosting_spend_windows (day, cap_usd)
@@ -217,7 +250,7 @@ AS $fn$
    WHERE t.ctl_role = session_user
 $fn$;
 
-REVOKE ALL ON FUNCTION public.hosting_expire() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.hosting_expire(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.hosting_reserve(numeric, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.hosting_settle(uuid, numeric) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.hosting_reserve(numeric, integer) TO memrain_tenant_ctl;

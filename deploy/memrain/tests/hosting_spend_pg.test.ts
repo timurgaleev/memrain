@@ -103,14 +103,48 @@ describe.skipIf(!PG_URL)("hosting spend cap on Postgres", () => {
     const h = await backends[0]!.reserve(0.4, 600);
     if (!h.ok) throw new Error("reserve refused");
     await fx.control.query(`UPDATE hosting_spend_reservations SET expires_at = now() - interval '1 second' WHERE id = $1`, [h.id]);
-    // The next reservation sweeps it first.
+    // Another tenant cannot sweep it, but it still counts as reserved.
     expect((await backends[1]!.reserve(0.7, 600)).ok).toBe(false);
+    expect(await window()).toMatchObject({ spent: 0, reserved: 0.4 });
+    // Its own tenant's next reservation sweeps it into spend.
+    expect((await backends[0]!.reserve(0.7, 600)).ok).toBe(false);
     const w = await window();
     expect(w).toMatchObject({ spent: 0.4, reserved: 0 });
     const r = await fx.control.query<{ outcome: string }>(`SELECT outcome FROM hosting_spend_reservations WHERE id = $1`, [h.id]);
     expect(r.rows[0]!.outcome).toBe("expired");
     // A late settle of an expired reservation changes nothing.
     expect(await backends[0]!.settle(h.id, 0)).toMatchObject({ ok: false, reason: "not_open" });
+  });
+
+  it("a settle arriving after the TTL never frees the hold, and a late actual above it is still booked", async () => {
+    const lapse = (id: string) => fx.control.query(
+      `UPDATE hosting_spend_reservations SET expires_at = now() - interval '1 second' WHERE id = $1`, [id]);
+    // Not yet swept: a $0 settle past the TTL books the whole hold.
+    const a = await backends[0]!.reserve(0.2, 600);
+    if (!a.ok) throw new Error("reserve refused");
+    await lapse(a.id);
+    expect(await backends[0]!.settle(a.id, 0)).toMatchObject({ ok: true, overrun: false });
+    expect(await window()).toMatchObject({ spent: 0.2, reserved: 0, llm_off: false });
+    // Swept first, then the call reports more than it held: the rest is booked once.
+    const b = await backends[0]!.reserve(0.1, 600);
+    if (!b.ok) throw new Error("reserve refused");
+    await lapse(b.id);
+    await fx.control.query(`SELECT hosting_expire()`);
+    expect(await backends[0]!.settle(b.id, 0.15)).toMatchObject({ ok: true, overrun: true });
+    expect(await backends[0]!.settle(b.id, 0.15)).toMatchObject({ ok: false, reason: "not_open" });
+    const w = await window();
+    expect(w.spent).toBeCloseTo(0.35, 9);
+    expect(w.llm_off).toBe(true);
+  });
+
+  it("one tenant's reservation sweeps only its own expired rows", async () => {
+    const other = await backends[1]!.reserve(0.1, 600);
+    if (!other.ok) throw new Error("reserve refused");
+    await fx.control.query(`UPDATE hosting_spend_reservations SET expires_at = now() - interval '1 second' WHERE id = $1`, [other.id]);
+    expect((await backends[0]!.reserve(0.01, 600)).ok).toBe(true);
+    const r = await fx.control.query<{ settled: boolean }>(
+      `SELECT settled_at IS NOT NULL AS settled FROM hosting_spend_reservations WHERE id = $1`, [other.id]);
+    expect(r.rows[0]!.settled).toBe(false);
   });
 
   it("a tenant cannot settle another tenant's reservation, and a suspended tenant reserves nothing", async () => {

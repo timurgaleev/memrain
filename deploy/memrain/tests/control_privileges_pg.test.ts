@@ -69,7 +69,7 @@ describe.skipIf(!PG_URL)("control privilege matrix", () => {
       `SELECT p.oid::regprocedure::text AS sig FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'public' ORDER BY 1`,
     )).rows.map((r) => r.sig);
-    expect(fns.sort()).toEqual([...TENANT_FUNCTIONS, "hosting_expire()"].sort());
+    expect(fns.sort()).toEqual([...TENANT_FUNCTIONS, "hosting_expire(text)"].sort());
     for (const [role, kind] of Object.entries(roles())) {
       for (const fn of fns) {
         const r = await fx.control.query<{ ok: boolean }>(`SELECT has_function_privilege($1, $2, 'EXECUTE') AS ok`, [role, fn]);

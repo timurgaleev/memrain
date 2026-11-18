@@ -11,7 +11,7 @@ $down$;
 
 DROP FUNCTION IF EXISTS public.hosting_settle(uuid, numeric);
 DROP FUNCTION IF EXISTS public.hosting_reserve(numeric, integer);
-DROP FUNCTION IF EXISTS public.hosting_expire();
+DROP FUNCTION IF EXISTS public.hosting_expire(text);
 DROP TABLE IF EXISTS hosting_spend_reservations;
 DROP TABLE IF EXISTS tenant_spend_windows;
 DROP TABLE IF EXISTS hosting_spend_windows;
