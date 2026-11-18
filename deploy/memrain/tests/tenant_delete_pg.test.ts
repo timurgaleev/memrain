@@ -10,7 +10,7 @@
  * Skipped unless MEMRAIN_TEST_POSTGRES_URL points at a scratch Postgres.
  */
 import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PostgresEngine } from "../src/core/engine/postgres.ts";
@@ -106,9 +106,11 @@ describe.skipIf(!PG_URL)("tenant delete behind a fence", () => {
     const exported = readdirSync(join(out, "race", "markdown", "notes")).map((f) => `notes/${f.replace(/\.md$/, "")}`).sort();
     expect(exported).toEqual([...acked].sort());
 
-    // The PGLite brain matches the frozen database, every table.
+    // The PGLite brain matches the frozen database, every table. Opened from a
+    // copy, as the operator would: opening the export itself changes its files.
+    cpSync(join(out, "race", "brain"), join(out, "race-restored"), { recursive: true });
     const master = new PostgresEngine({ url: withDatabase(fx.masterUrl, `tenant_${id}`), max: 1 });
-    const copy = new PGliteEngine({ dbPath: join(out, "race", "brain") });
+    const copy = new PGliteEngine({ dbPath: join(out, "race-restored") });
     try {
       await copy.ready();
       const plan = planCopy(await readCatalog(master), await readCatalog(copy));
@@ -276,5 +278,21 @@ describe.skipIf(!PG_URL)("tenant delete behind a fence", () => {
     expect(holding.filter((t) => !["tenant_events", "tenant_exports"].includes(t))).toEqual([]);
     expect((await requireTenant(fx.control, id)).status).toBe("deleted");
     rmSync(secretsRoot, { recursive: true, force: true });
+  });
+
+  it("a purge never drops a tenant whose export is gone or changed since its receipt", async () => {
+    const id = fx.tenantId("lostcopy");
+    await fx.create(id);
+    const del = await deleteTenant(ctx(), id, id, join(out, `${id}-fenced`));
+    appendFileSync(join(del.receipt.outDir, "tampered.txt"), "x\n");
+    const later = { now: new Date(Date.now() + 8 * 86_400_000) };
+    const r = await purgeDeleted(ctx(), later);
+    expect(r.purged).not.toContain(id);
+    expect(r.skipped.find((s) => s.id === id)?.why).toMatch(/export/);
+    expect((await requireTenant(fx.control, id)).status).toBe("deleting");
+    const db = await fx.control.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [`tenant_${id}`]);
+    expect(db.rows).toHaveLength(1);
+    rmSync(del.receipt.outDir, { recursive: true, force: true });
+    expect((await purgeDeleted(ctx(), later)).purged).not.toContain(id);
   });
 });

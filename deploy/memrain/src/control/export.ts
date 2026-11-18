@@ -423,6 +423,9 @@ export async function purgeDeleted(ctx: ExportContext, opts: PurgeOptions = {}):
       const t = await requireTenant(tx, id);
       if (t.status !== "deleting" || t.deleteAfter === null || t.deleteAfter > now) return "no longer due for deletion";
       if (!(await currentReceipt(tx, t))) return "no good export receipt under the current fence";
+      // The export must still be there as its receipt names it: dropping the
+      // database is safe only while a verified copy exists.
+      if (!(await verifiedReceipt(tx, t, t.fenceId!))) return "the export under the current fence is missing or changed since its receipt";
       await tx.query(`UPDATE tenants SET status = 'deleted', updated_at = now() WHERE id = $1`, [id]);
       await logTenantEvent(tx, id, "purge_claimed", { fence: t.fenceId });
       return null;
