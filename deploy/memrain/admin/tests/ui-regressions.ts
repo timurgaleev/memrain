@@ -431,6 +431,33 @@ try {
     await page.getByText("Memory is busy right now", { exact: true }).waitFor();
     assert.equal(await page.getByRole("button", { name: "Save as page" }).count(), 0);
   });
+  await check("An answer whose stream ends without done is shown unconfirmed and cannot be saved", "ask", async (page) => {
+    await fresh(page, chatScenario({ script: [{ event: "answer", data: ANSWER }] }));
+    await ask(page, "When is the offsite?");
+    await page.getByText("The offsite is in", { exact: false }).waitFor();
+    await page.getByText("The connection closed before the server confirmed this answer", { exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Save as page" }).count(), 0);
+  });
+  await check("A late error stays on screen after the new thread loads with that answer in it", "ask", async (page) => {
+    const stored = {
+      thread: { id: "t-new", title: "Offsite", created_at: "2026-11-09T12:00:00Z", updated_at: "2026-11-09T12:00:00Z" },
+      messages: [
+        { id: "u-1", role: "user", content: "When is the offsite?", status: null, citations: [], gaps: [], model: null, cost_usd: null, trace: [], created_at: "2026-11-09T12:00:00Z", saved_slug: null },
+        { id: "m-1", role: "assistant", content: ANSWER.answer, status: "ok", citations: ANSWER.citations, gaps: [], model: "small-1", cost_usd: 0.0012, trace: [], created_at: "2026-11-09T12:00:01Z", saved_slug: null },
+      ],
+    };
+    await fresh(page, chatScenario({ details: { "t-new": stored }, script: [
+      { event: "answer", data: ANSWER },
+      { event: "error", data: { code: "db_busy", message: "settle failed" } },
+    ] }));
+    await ask(page, "When is the offsite?");
+    await page.getByText("Memory is busy right now", { exact: true }).waitFor();
+    await page.waitForFunction(() => location.hash === "#ask/t-new");
+    await page.clock.runFor(500);
+    await page.getByText("Memory is busy right now", { exact: true }).waitFor();
+    assert.equal(await page.getByText("The offsite is in", { exact: false }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "Save as page" }).count(), 0);
+  });
   await check("New question closes the phone drawer, and Tab stays inside it while open", "ask", async (page) => {
     await fresh(page, chatScenario({ threads: [{ id: "t1", title: "Offsite plans", updated_at: "2026-11-08T10:05:00Z", message_count: 2 }] }));
     const toggle = page.getByRole("button", { name: "Conversations" });

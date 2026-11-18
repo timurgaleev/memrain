@@ -145,9 +145,15 @@ export function ChatView({ threadId }: { threadId: string | null }) {
   };
   const markSaved = (messageId: string, slug: string) => setSaved((s) => ({ ...s, [messageId]: slug }));
 
-  const history: ChatMessage[] = threadId !== null && thread.data ? thread.data.messages : [];
-  const turnInHistory = !!liveTurn?.answer && history.some((m) => m.id === liveTurn.answer?.message_id);
-  const showTurn = liveTurn !== null && !turnInHistory;
+  const stored: ChatMessage[] = threadId !== null && thread.data ? thread.data.messages : [];
+  // A confirmed turn gives way to its stored copy once the thread reloads. An
+  // unconfirmed or failed one stays on screen with its warning, and its stored
+  // copy is held back so it cannot be saved from there.
+  const liveId = liveTurn?.answer?.message_id ?? null;
+  const turnStored = liveId !== null && stored.some((m) => m.id === liveId);
+  const confirmed = liveTurn?.phase === "answered";
+  const history = turnStored && !confirmed ? withoutTurn(stored, liveId) : stored;
+  const showTurn = liveTurn !== null && !(turnStored && confirmed);
   const threadMissing = threadId !== null && thread.status === "error" && thread.error instanceof ApiError && thread.error.status === 404;
   const blank = threadId === null && !showTurn;
 
@@ -267,6 +273,14 @@ export function ChatView({ threadId }: { threadId: string | null }) {
   );
 }
 
+/** The stored messages minus one assistant answer and the question just before it. */
+function withoutTurn(messages: ChatMessage[], answerId: string | null): ChatMessage[] {
+  const i = messages.findIndex((m) => m.id === answerId);
+  if (i === -1) return messages;
+  const from = i > 0 && messages[i - 1]?.role === "user" ? i - 1 : i;
+  return [...messages.slice(0, from), ...messages.slice(i + 1)];
+}
+
 function DisabledNote() {
   const c = outcomeCopy("chat_disabled");
   return (
@@ -294,7 +308,8 @@ function LiveAnswer({ turn, saved, onSaved, onRetry }: {
 }) {
   if (turn.answer) {
     const a = turn.answer;
-    const brokenAfter = turn.phase === "failed";
+    // Saving waits for done; a turn stopped or broken after its answer shows why.
+    const problem = turn.phase === "failed" ? turn.error ?? "unconfirmed" : turn.phase === "stopped" ? "unconfirmed" : null;
     return (
       <>
       <AnswerView
@@ -311,10 +326,10 @@ function LiveAnswer({ turn, saved, onSaved, onRetry }: {
         savedSlug={saved[a.message_id] ?? null}
         onSaved={onSaved}
         onRetry={onRetry}
-        canSave={!brokenAfter}
+        canSave={turn.phase === "answered"}
         live
       />
-      {brokenAfter && <Outcome code={turn.error ?? "stream_closed"} pages={[]} onRetry={onRetry} live />}
+      {problem && <Outcome code={problem} pages={[]} onRetry={onRetry} live />}
       </>
     );
   }

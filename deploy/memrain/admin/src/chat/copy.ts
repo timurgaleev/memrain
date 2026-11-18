@@ -80,6 +80,11 @@ const COPY: Record<string, Omit<OutcomeCopy, "spendLink" | "enableHint"> & Parti
   provider_error: { title: "The model returned an error", detail: "No answer was saved. Try again, or pick another model.", retry: true },
   invalid_params: { title: "The server refused this question", detail: "Check that the question is not empty or too long, and that the model is still on the list.", retry: false },
   db_busy: { title: "Memory is busy right now", detail: "The search could not finish. Try again in a moment.", retry: true },
+  unconfirmed: {
+    title: "The connection closed before the server confirmed this answer",
+    detail: "It may not have been kept. Ask again to be sure.",
+    retry: true,
+  },
   stream_closed: { title: "The connection closed before an answer arrived", detail: "Try again. If it keeps happening, check that the server is running.", retry: true },
 };
 

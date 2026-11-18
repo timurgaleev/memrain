@@ -8,6 +8,10 @@ import type { Answer, TraceEvent } from "./events.ts";
 // POST). Stop, a newer turn, and leaving the page all abort the request, which
 // closes the stream so the server can release the money it set aside.
 
+/**
+ * streaming: waiting (an answer may already be on screen, unconfirmed);
+ * answered: the answer arrived and the server closed the turn with done.
+ */
 export type TurnPhase = "streaming" | "answered" | "failed" | "stopped";
 
 export interface LiveTurn {
@@ -72,13 +76,15 @@ export function useChatStream(opts: { onAnswer?: (a: Answer) => void; onDone?: (
       const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
       let done = false;
       const parser = createSseParser((m) => {
+        // Chunks already buffered when the turn was stopped or replaced are dropped.
+        if (c.signal.aborted) return;
         const e = toChatEvent(m);
         if (!e) return;
         if (e.type === "trace") {
           update((t) => (t.trace.length >= MAX_STEPS ? t : { ...t, trace: [...t.trace, e.trace] }));
         } else if (e.type === "answer") {
           answered = true;
-          update((t) => ({ ...t, phase: "answered", answer: e.answer }));
+          update((t) => ({ ...t, answer: e.answer }));
           cbs.current.onAnswer?.(e.answer);
         } else if (e.type === "error") {
           // An error after the answer keeps the text on screen but marks the
@@ -96,13 +102,18 @@ export function useChatStream(opts: { onAnswer?: (a: Answer) => void; onDone?: (
       }
       parser.end();
       if (done) await reader.cancel().catch(() => undefined);
-      if (!answered && !failed) fail("stream_closed");
+      if (c.signal.aborted) throw new DOMException("aborted", "AbortError");
+      if (failed) return;
+      // Only done confirms an answer; a stream that ends without it leaves the answer unconfirmed.
+      if (!answered) return fail("stream_closed");
+      if (!done) return fail("unconfirmed");
+      update((t) => ({ ...t, phase: "answered" }));
       cbs.current.onDone?.();
     } catch {
       if (c.signal.aborted) {
-        if (!answered) update((t) => ({ ...t, phase: "stopped" }));
-      } else if (!answered && !failed) {
-        fail("network");
+        update((t) => (t.phase === "failed" ? t : { ...t, phase: "stopped" }));
+      } else if (!failed) {
+        fail(answered ? "unconfirmed" : "network");
       }
     }
   }, []);

@@ -182,7 +182,7 @@ describe("chat copy", () => {
   });
 
   it("gives every outcome a human line and says which ones can be retried", () => {
-    for (const code of ["timeout", "rate_limited", "network", "provider_error", "budget_exhausted", "chat_disabled", "invalid_params", "db_busy", "refused", "stream_closed", "made_up_code"]) {
+    for (const code of ["timeout", "rate_limited", "network", "provider_error", "budget_exhausted", "chat_disabled", "invalid_params", "db_busy", "refused", "stream_closed", "unconfirmed", "made_up_code"]) {
       const c = outcomeCopy(code);
       expect(c.title.length).toBeGreaterThan(0);
       expect(c.title).not.toContain("_");
