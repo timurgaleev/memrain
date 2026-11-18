@@ -137,12 +137,12 @@ function limitReached(what: string): OperationError {
   );
 }
 
-/** Throws `tenant_limit_reached` when the brain already holds its plan's maximum of live pages. */
-export async function assertPageRoom(engine: Pick<Engine, "query">, maxPages: number | undefined): Promise<void> {
-  if (maxPages === undefined) return;
+/** Throws `tenant_limit_reached` when `adding` more live pages would pass the plan's maximum. */
+export async function assertPageRoom(engine: Pick<Engine, "query">, maxPages: number | undefined, adding = 1): Promise<void> {
+  if (maxPages === undefined || adding <= 0) return;
   // scope: operator-only the plan's page limit counts the whole brain; only a yes/no leaves here
   const r = await engine.query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE deleted_at IS NULL`);
-  if ((r.rows[0]?.n ?? 0) >= maxPages) throw limitReached("page");
+  if ((r.rows[0]?.n ?? 0) + adding > maxPages) throw limitReached("page");
 }
 
 /**
@@ -159,13 +159,16 @@ export async function assertMemberRoom(engine: Pick<Engine, "query">): Promise<v
 }
 
 /**
- * Throws `tenant_limit_reached` when a hosted brain is at its plan's page
- * limit. For the paths that write pages outside MCP dispatch (the /app import
- * and demo); outside hosting mode it does nothing.
+ * Throws `tenant_limit_reached` when the pages a write will add would take a
+ * hosted brain past its plan's page limit. For the paths that write many pages
+ * outside MCP dispatch (the /app import and demo); `adding` is counted only
+ * when there is a limit. Outside hosting mode it does nothing.
  */
-export async function assertHostedPageRoom(engine: Pick<Engine, "query">): Promise<void> {
+export async function assertHostedPageRoom(engine: Pick<Engine, "query">, adding: () => number | Promise<number>): Promise<void> {
   if (hostingMode() === null) return;
-  await assertPageRoom(engine, (await hostedPolicy())?.limits.maxPages);
+  const max = (await hostedPolicy())?.limits.maxPages;
+  if (max === undefined) return;
+  await assertPageRoom(engine, max, await adding());
 }
 
 /** A page_put that rewrites a live page adds none, so the page limit does not stop it. */

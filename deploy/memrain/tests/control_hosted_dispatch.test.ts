@@ -95,6 +95,15 @@ describe("hosted dispatch", () => {
     expect(n.rows[0]!.n).toBe(1);
   });
 
+  it("the demo memory is not loaded when its pages would pass the limit", async () => {
+    setTenantPolicySource(async () => ({ ...active, limits: { maxPages: 3 } }));
+    await registerSource(storage.engine(), { id: "person-dora", kind: "other", pathPrefix: "/person-dora" });
+    await addMember(storage.engine(), "dora", { personalSource: "person-dora" }, { actor: "operator", via: "cli" });
+    await expect(loadDemo(storage, "dora", { embedFn: deterministicEmbedQuery })).rejects.toMatchObject({ code: "tenant_limit_reached" });
+    const n = await storage.engine().query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE deleted_at IS NULL`);
+    expect(n.rows[0]!.n).toBe(1);
+  });
+
   it("at the member limit a new member is refused", async () => {
     setTenantPolicySource(async () => ({ ...active, limits: { maxMembers: 1 } }));
     const ops = { actor: "operator", via: "cli" as const };

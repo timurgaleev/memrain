@@ -23,7 +23,9 @@ import type { AuthInfo } from "./auth-info.ts";
 import { priceFor, runWithSpendClient } from "./budget.ts";
 import { slugWords } from "./chat/save.ts";
 import { parseTranscriptExport } from "./transcripts/detect.ts";
-import { ingestSessions } from "./transcripts/ingest.ts";
+import { ingestSessions, prepareSession } from "./transcripts/ingest.ts";
+import type { TranscriptSession } from "./transcripts/types.ts";
+import { SecretRejectedError } from "./secret-scan.ts";
 import { assertHostedPageRoom } from "./tenant-guard.ts";
 
 export type OnboardingStep = "connect" | "fill" | "ask" | "done";
@@ -206,6 +208,29 @@ export interface ImportResult {
   estimate_usd: number;
 }
 
+/**
+ * Pages an import would add: its parts whose slug is not live yet. A session
+ * the secret scan refuses writes nothing; a re-imported session adds nothing.
+ */
+async function newImportPages(storage: Storage, sessions: readonly TranscriptSession[]): Promise<number> {
+  const slugs: string[] = [];
+  for (const session of sessions) {
+    try {
+      for (const part of prepareSession(session).parts) slugs.push(part.slug);
+    } catch (e) {
+      if (!(e instanceof SecretRejectedError)) throw e;
+    }
+  }
+  if (slugs.length === 0) return 0;
+  // scope: operator-only slugs are global, so a live slug anywhere is a rewrite, not a new page; only a count leaves here
+  const r = await storage.engine().query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM unnest($1::text[]) AS s(slug)
+      WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.slug = s.slug AND p.deleted_at IS NULL)`,
+    [slugs],
+  );
+  return r.rows[0]?.n ?? 0;
+}
+
 const NOT_AN_EXPORT = "This is not a ChatGPT or Claude export. Upload conversations.json from the export archive.";
 
 /**
@@ -233,7 +258,7 @@ export async function importExport(storage: Storage, g: OnboardingGrant, bytes: 
       estimate_usd: estimate, cap_usd: cap, sessions: parsed.sessions.length,
     });
   }
-  await assertHostedPageRoom(storage.engine());
+  await assertHostedPageRoom(storage.engine(), () => newImportPages(storage, parsed.sessions));
   const result = await runWithSpendClient({ clientId: g.spendId }, () => ingestSessions(storage, parsed.sessions, {
     sourceId: g.sourceId, ref: `app:${g.memberId}`, remote: true, trustTier: "member",
   }));

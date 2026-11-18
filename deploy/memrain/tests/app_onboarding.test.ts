@@ -255,6 +255,28 @@ describe("routes", () => {
     }
   });
 
+  it("on a hosted brain, refuses an import that would pass the page limit, but lets a re-import that adds nothing through", async () => {
+    const live = async () => Number((await storage.engine().query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE deleted_at IS NULL`)).rows[0]!.n);
+    process.env["MEMRAIN_TENANT_ID"] = "acme";
+    process.env["MEMRAIN_CONTROL_URL"] = "set-by-the-test-source";
+    const room = await live() + 1;
+    setTenantPolicySource(async () => ({ status: "active", mode: null, limits: { maxPages: room }, llmOff: false, isolation: "verified" }));
+    try {
+      const two = [...claudeExport("conv-4", "When do the peas climb?"), ...claudeExport("conv-5", "When do the leeks thicken?")];
+      const res = await call("erin", "POST", "/app/api/onboarding/import", two);
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toBe("tenant_limit_reached");
+      const none = await storage.engine().query(`SELECT 1 FROM pages WHERE markdown_body LIKE '%peas climb%' OR markdown_body LIKE '%leeks thicken%'`);
+      expect(none.rows.length).toBe(0);
+      setTenantPolicySource(async () => ({ status: "active", mode: null, limits: { maxPages: room - 1 }, llmOff: false, isolation: "verified" }));
+      const again = await call("erin", "POST", "/app/api/onboarding/import", claudeExport("conv-1", "Where does the compost go?"));
+      expect(again.status).toBe(200);
+      expect(await again.json()).toMatchObject({ parts_written: 0 });
+    } finally {
+      setTenantPolicySource(null);
+    }
+  });
+
   it("estimates an import from its text, and a bigger one costs more", () => {
     expect(importEstimateUsd(0)).toBe(0);
     expect(importEstimateUsd(4_000_000)).toBeGreaterThan(importEstimateUsd(1_000));

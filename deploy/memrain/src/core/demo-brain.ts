@@ -71,7 +71,7 @@ export async function loadDemo(storage: Storage, memberId: string, opts: { embed
   if (taken.rows.length > 0) {
     throw new OnboardingError("demo_unavailable", 409, "The demo cannot be loaded: its name is already in use on this brain. Ask the brain operator.");
   }
-  await assertHostedPageRoom(engine);
+  await assertHostedPageRoom(engine, () => benchCorpusFiles({ includeMail: false }).length);
   // The source, the group and the grant commit together, so the demo is
   // either this member's or not there at all.
   await engine.transaction(async (tx) => {
