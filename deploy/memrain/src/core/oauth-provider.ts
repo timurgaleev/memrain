@@ -24,6 +24,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import type { PrincipalRef } from "./auth-info.ts";
 import { memberAccess, widenReadSources } from "./members.ts";
+import { hostingFlags } from "../control/contract.ts";
 import { validateSlug as validatePageSlug } from "./pages.ts";
 import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "./jobs/kinds.ts";
 import {
@@ -3075,6 +3076,7 @@ export class OAuthProvider {
    */
   private async withMembers<G extends PrincipalGrant>(grant: G, bound: unknown[]): Promise<G> {
     const access = await memberAccess(this.engine, bound);
+    if (access === null && hostingFlags().requireMember) throw new InvalidTokenError("member_required: this brain accepts only credentials that belong to a member");
     if (access === null) return grant;
     if (access.refused) {
       throw new InvalidTokenError(
