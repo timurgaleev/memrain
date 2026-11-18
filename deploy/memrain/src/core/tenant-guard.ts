@@ -160,14 +160,15 @@ export async function assertMemberRoom(engine: Pick<Engine, "query">): Promise<v
 
 /**
  * Throws when this tenant may not run the MCP operation `name` now: held, or
- * (given the brain's engine) an operation that adds a page at the page limit.
+ * (given the brain's engine, opened only then) an operation that adds a page
+ * at the page limit.
  */
-export async function assertTenantAllows(name: string, engine?: Pick<Engine, "query">): Promise<void> {
+export async function assertTenantAllows(name: string, engine?: () => Pick<Engine, "query">): Promise<void> {
   if (hostingMode() === null) return;
   const policy = await hostedPolicy();
   const d = decideOperation(policy, name);
   if (d.allow) {
-    if (engine && policy && PAGE_ADDING_OPERATIONS.has(name)) await assertPageRoom(engine, policy.limits.maxPages);
+    if (engine && policy && PAGE_ADDING_OPERATIONS.has(name)) await assertPageRoom(engine(), policy.limits.maxPages);
     return;
   }
   if (d.error === "tenant_suspended") {
