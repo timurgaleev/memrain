@@ -37,7 +37,9 @@ Every other setting has a safe default; see the chat rows in
   $0.50), and the brain-wide `MEMRAIN_DAILY_BUDGET_USD` still applies. A
   question that would not fit is answered `budget` and no model is called.
 - **Models.** `MEMRAIN_CHAT_MODELS` lists the models offered (default: one
-  cheap Haiku model). A model without a price is never offered. The model list
+  cheap Haiku model). A model without a price is never offered, nor one whose
+  2,000 reserved output tokens alone cost more than `MEMRAIN_CHAT_ANSWER_MAX_USD`
+  (Sonnet at the default $0.02, for example). The model list
   shows, for each model, the most an answer can cost on it.
 - **Stopping.** Closing the tab or pressing stop releases the held money.
 - **Where it shows.** `memrain spend` and the Spend page have a `chat` slice:

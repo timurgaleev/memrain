@@ -22,7 +22,7 @@ const SONNET = "eu.anthropic.claude-sonnet-5-5";
 
 describe("chat models", () => {
   it("offers the configured priced models in order, the first as default", () => {
-    const cfg = chatConfig({ MEMRAIN_CHAT: "1", MEMRAIN_DAILY_BUDGET_USD: "5", MEMRAIN_CHAT_MODELS: `${SONNET}, vendor.unpriced-v1 ,${HAIKU}` });
+    const cfg = chatConfig({ MEMRAIN_CHAT: "1", MEMRAIN_DAILY_BUDGET_USD: "5", MEMRAIN_CHAT_ANSWER_MAX_USD: "0.5", MEMRAIN_CHAT_MODELS: `${SONNET}, vendor.unpriced-v1 ,${HAIKU}` });
     expect(cfg.models.map(m => m.id)).toEqual([SONNET, HAIKU]);
     expect(cfg.defaultModel).toBe(SONNET);
     expect(cfg.models[1]).toMatchObject({ label: "Claude Haiku 5.5", input_usd_per_m: 0.11, output_usd_per_m: 0.55 });
@@ -35,6 +35,26 @@ describe("chat models", () => {
     expect(chatConfig({ MEMRAIN_CHAT: "1" }).disabledReason).toContain("MEMRAIN_DAILY_BUDGET_USD");
     expect(chatConfig({ MEMRAIN_CHAT: "1", MEMRAIN_DAILY_BUDGET_USD: "5" }).enabled).toBe(true);
     expect(chatConfig({ MEMRAIN_CHAT: "1", MEMRAIN_DAILY_BUDGET_USD: "5", MEMRAIN_CHAT_MODELS: "vendor.unpriced-v1" }).enabled).toBe(false);
+  });
+
+  it("does not offer a model whose reserved output alone is above the per-answer cap", async () => {
+    // Sonnet 5.5's 2000 reserved output tokens cost $0.022: every answer under the
+    // default $0.02 cap would be refused before it starts, and reported as the day being spent.
+    const env = { MEMRAIN_CHAT: "1", MEMRAIN_DAILY_BUDGET_USD: "5", MEMRAIN_CHAT_MODELS: `${SONNET},${HAIKU}` };
+    expect(chatConfig(env).models.map(m => m.id)).toEqual([HAIKU]);
+    expect(chatConfig(env).defaultModel).toBe(HAIKU);
+    const only = chatConfig({ ...env, MEMRAIN_CHAT_MODELS: SONNET });
+    expect(only.enabled).toBe(false);
+    expect(only.disabledReason).toContain("MEMRAIN_CHAT_ANSWER_MAX_USD");
+    let calls = 0;
+    const model: SonnetFn = async () => { calls++; return { text: "{}", modelId: SONNET, usage: { inputTokens: 1, outputTokens: 1 } }; };
+    const storage = { engine: () => ({}) } as never;
+    let thrown: unknown;
+    try {
+      await runChatTurn({ storage, owner: operatorOwner(), env, sonnetFn: model }, { message: "hi", model: SONNET }, () => {});
+    } catch (e) { thrown = e; }
+    expect((thrown as { code?: string }).code).toBe("invalid_params");
+    expect(calls).toBe(0);
   });
 
   it("caps the answer ceiling at the hard cap", () => {

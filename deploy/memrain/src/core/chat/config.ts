@@ -3,7 +3,7 @@
  * call so a test (or a restart) sees the current values.
  *
  *   MEMRAIN_CHAT                     on/off, default off: no model is called
- *   MEMRAIN_CHAT_MODELS              comma list of model ids; only priced ones count
+ *   MEMRAIN_CHAT_MODELS              comma list of model ids; only priced ones that fit the answer cap count
  *   MEMRAIN_CHAT_ANSWER_MAX_USD      most one answer may cost (default 0.02)
  *   MEMRAIN_CHAT_ANSWER_MAX_USD_CAP  hard ceiling on the above (default 0.50)
  *   MEMRAIN_CHAT_USER_DAY_USD        one owner's day (default 0.50)
@@ -98,6 +98,14 @@ export function estimateAnswerUsd(model: string, questionBytes = 4096): number |
   );
 }
 
+/**
+ * The least an answer's pre-flight reserves on `model`: the reserved output
+ * alone. Above the per-answer cap, every answer is refused before it starts.
+ */
+export function minAnswerUsd(model: string): number {
+  return worstUsd(model, 0, CHAT_OUTPUT_TOKENS);
+}
+
 /** The configured models that have a price, in the configured order. */
 export function chatModels(env: NodeJS.ProcessEnv = process.env): ChatModel[] {
   const raw = env["MEMRAIN_CHAT_MODELS"]?.trim();
@@ -121,15 +129,18 @@ function retentionDays(env: NodeJS.ProcessEnv): number | null {
 }
 
 export function chatConfig(env: NodeJS.ProcessEnv = process.env): ChatConfig {
-  const models = chatModels(env);
   const hardCap = usd(env, "MEMRAIN_CHAT_ANSWER_MAX_USD_CAP", CHAT_DEFAULT_ANSWER_HARD_CAP_USD);
   const answerCapUsd = Math.min(usd(env, "MEMRAIN_CHAT_ANSWER_MAX_USD", CHAT_DEFAULT_ANSWER_MAX_USD), hardCap);
+  const priced = chatModels(env);
+  const models = priced.filter((m) => minAnswerUsd(m.id) <= answerCapUsd);
   let disabledReason: string | null = null;
   if (!flagOn(env["MEMRAIN_CHAT"])) disabledReason = "Chat is off. Set MEMRAIN_CHAT=1 and restart.";
   else if (brainDailyCapUsd(env) === null) {
     disabledReason = "Chat needs a brain-wide daily cap. Set MEMRAIN_DAILY_BUDGET_USD and restart.";
-  } else if (models.length === 0) {
+  } else if (priced.length === 0) {
     disabledReason = "No chat model has a price. Set MEMRAIN_CHAT_MODELS to priced model ids.";
+  } else if (models.length === 0) {
+    disabledReason = "No chat model can answer within MEMRAIN_CHAT_ANSWER_MAX_USD. Raise it or list a cheaper model in MEMRAIN_CHAT_MODELS.";
   }
   return {
     enabled: disabledReason === null,
