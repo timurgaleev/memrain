@@ -193,9 +193,9 @@ describe("decideRequest", () => {
     }
   });
 
-  it("an unknown policy allows reading and refuses writes", () => {
-    for (const c of ["health", "read", "mcp"] as const) expect(decideRequest(null, c)).toEqual({ allow: true });
-    for (const c of ["auth", "write"] as const) {
+  it("an unknown policy serves only health: the isolation stamp cannot be checked either", () => {
+    expect(decideRequest(null, "health")).toEqual({ allow: true });
+    for (const c of ["read", "mcp", "auth", "write"] as const) {
       expect(decideRequest(null, c)).toEqual({ allow: false, status: 503, error: "tenant_policy_unavailable" });
     }
   });
@@ -274,7 +274,8 @@ describe("admission in hosting mode", () => {
   it("no policy yet: jobs do not run and writes are refused", async () => {
     hostingOn();
     expect((await admitRequest(new Request("http://h/ingest", { method: "POST" })))?.status).toBe(503);
-    expect(await admitRequest(new Request("http://h/mcp", { method: "POST" }))).toBeNull();
+    expect((await admitRequest(new Request("http://h/mcp", { method: "POST" })))?.status).toBe(503);
+    expect(await admitRequest(new Request("http://h/health"))).toBeNull();
     expect(await admitJob()).toBe(false);
   });
 });

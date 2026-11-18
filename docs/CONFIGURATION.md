@@ -747,8 +747,9 @@ refuses to store `MEMRAIN_CONTROL_URL` at all.
 In hosting mode every request, MCP operation and queued job first passes the
 tenant's policy from the control plane. A suspended tenant held read-only
 still serves reads and refuses every change with `tenant_suspended`; a blocked
-one answers only `/health`. While the policy cannot be read, reads pass and
-writes, credential issuance and queued jobs are refused.
+one answers only `/health`. Until the control plane has answered once, a
+container answers only `/health`; after that an outage keeps the last policy
+it read.
 
 A tenant container serves nothing but `/health` (503 `isolation_unverified`)
 until the operator's `memrain tenant smoke-record` has stamped it after the

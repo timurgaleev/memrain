@@ -13,9 +13,12 @@
  *   mcp     refused when blocked; otherwise judged per operation in dispatch
  *   auth    refused when blocked or read-only (it issues credentials)
  *   write   refused when blocked or read-only
- * A path the table does not name is a write. An unknown policy (control
- * unreachable, nothing cached) lets reads through and refuses writes. Until the
- * isolation smoke has passed for this container, only health is served.
+ * A path the table does not name is a write. Until the control plane has
+ * answered once (nothing cached) and its isolation smoke stamp has been
+ * verified for this container, only health is served: without the stamp the
+ * container cannot know its network is closed to its neighbours. After that, an
+ * outage keeps the last good policy. Inside dispatch an unknown policy still
+ * lets read-only operations through and refuses the rest.
  */
 import { hostingMode, type TenantPolicy } from "../control/contract.ts";
 import { hostedPolicy } from "../control/policy.ts";
@@ -92,12 +95,12 @@ function holdOf(policy: TenantPolicy | null): Hold {
 
 export function decideRequest(policy: TenantPolicy | null, cls: RouteClass): Admission {
   if (cls === "health") return ALLOW;
-  if (policy?.isolation === "unverified") return UNVERIFIED;
+  if (policy === null) return UNAVAILABLE;
+  if (policy.isolation === "unverified") return UNVERIFIED;
   const hold = holdOf(policy);
   if (hold === "open") return ALLOW;
   if (hold === "block") return SUSPENDED;
-  if (cls === "read" || cls === "mcp") return ALLOW;
-  return hold === "unknown" ? UNAVAILABLE : SUSPENDED;
+  return cls === "read" || cls === "mcp" ? ALLOW : SUSPENDED;
 }
 
 const OP_BY_NAME = new Map(OPERATIONS.map((o) => [o.name, o]));
