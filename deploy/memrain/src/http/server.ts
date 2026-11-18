@@ -62,6 +62,7 @@ import { handleConnectorCallbackPage } from "./admin-connectors.ts";
 import { serveAdminStatic } from "./admin-static.ts";
 import { handleAdminEventsRoute } from "./admin-events.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
+import { admitRequest } from "../core/tenant-guard.ts";
 
 /** RFC 6749 §5.2-style throttle response for the rate-limited OAuth endpoints. */
 function rateLimited(): Response {
@@ -384,6 +385,8 @@ export function startServer(opts: ServerOptions): ServerHandle {
     port: opts.port,
     fetch: async (req, server) => {
       const url = new URL(req.url);
+      const refused = await admitRequest(req, url);
+      if (refused) return refused;
 
       // CORS preflight — answered BEFORE auth: preflights carry no
       // credentials by design, so the bearer guard would 401 every browser

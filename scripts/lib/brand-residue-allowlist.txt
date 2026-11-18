@@ -399,6 +399,7 @@ deploy/memrain/tests/search_zero_result_retry.test.ts|COMPAT-TEST|1|incidental: 
 deploy/memrain/tests/secret_scan.test.ts|COMPAT-TEST|12|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/sentinel_compat.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/serve_quiescence.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
+deploy/memrain/tests/single_tenant_unchanged.test.ts|COMPAT-TEST|3|covers legacy names: a legacy-prefixed runtime_config row must not switch hosting on
 deploy/memrain/tests/skill_and_model_json_linearity.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/skillify.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/skillopt_benchmark.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
@@ -516,6 +517,7 @@ tests/deploy.test.sh|COMPAT-TEST|12|covers legacy names or legacy data (may also
 tests/entrypoint.test.sh|COMPAT-TEST|5|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/fetch-secrets-overrides.test.sh|COMPAT-TEST|27|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/fetch-secrets.test.sh|COMPAT-TEST|35|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
+tests/fixtures/deploy-single-tenant.trace|COMPAT-TEST|8|the recorded deploy.sh trace includes the pre-rename container guard's docker ps calls
 tests/init.test.sh|COMPAT-TEST|8|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/legacy-guard.test.sh|COMPAT-TEST|16|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_bootstrap_sh.py|COMPAT-TEST|27|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
