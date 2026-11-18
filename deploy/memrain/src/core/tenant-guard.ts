@@ -172,6 +172,7 @@ export async function assertHostedPageRoom(engine: Pick<Engine, "query">): Promi
 async function rewritesLivePage(engine: Pick<Engine, "query">, name: string, args: Record<string, unknown> | undefined): Promise<boolean> {
   const slug = args?.["slug"];
   if (name !== "page_put" || typeof slug !== "string") return false;
+  // scope: operator-only slugs are global, so a live slug anywhere means the write adds no page; only a yes/no leaves here
   const r = await engine.query(`SELECT 1 FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [slug]);
   return r.rows.length > 0;
 }
