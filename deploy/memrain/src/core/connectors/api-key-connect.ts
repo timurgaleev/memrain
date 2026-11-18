@@ -17,7 +17,8 @@
  * and into the vault: errors carry a code, never the key or provider text.
  */
 import { getSource } from "../sources.ts";
-import { cleanLabel, createAccount, findAccount, setAccountConfig, setAccountStatus, storeCredential, type ConnectorAccount } from "./accounts.ts";
+import { cleanLabel, createAccount, findAccount, getAccount, setAccountConfig, setAccountStatus, storeCredential, type ConnectorAccount } from "./accounts.ts";
+import type { Engine } from "../engine/interface.ts";
 import { PASTED_TOKEN, PROVIDER_USER_ID } from "./model.ts";
 import type { ConnectDeps } from "./oauth-connect.ts";
 import type { ApiKeyProvider, ConnectorProvider, PastedTokenGrant } from "./providers.ts";
@@ -148,7 +149,9 @@ async function connectPastedToken(deps: ConnectDeps, provider: ConnectorProvider
   const config = { [PASTED_TOKEN]: true, ...(userId === null ? {} : { [PROVIDER_USER_ID]: userId }) };
   const tokens = { access_token: token };
   return deps.engine.transaction(async (tx) => {
-    const existing = await findAccount(tx, source.id, provider.id, label);
+    // The provider's id pins the account: a renamed workspace keeps its row, its label and its cursors.
+    const existing = (userId === null ? null : await findAccountByUserId(tx, source.id, provider.id, userId))
+      ?? await findAccount(tx, source.id, provider.id, label);
     if (existing) {
       const stored = existing.config[PROVIDER_USER_ID];
       if (typeof stored === "string" && userId !== null && stored !== userId) throw new ApiKeyConnectError("identity_mismatch");
@@ -157,10 +160,20 @@ async function connectPastedToken(deps: ConnectDeps, provider: ConnectorProvider
       await setAccountConfig(tx, existing.id, config);
       await setAccountStatus(tx, existing.id, "active", null);
       await resolveNotice(tx, existing.id, "needs_reconnect");
-      return { account: (await findAccount(tx, source.id, provider.id, label))!, reconnected: true };
+      return { account: (await getAccount(tx, existing.id))!, reconnected: true };
     }
     const created = await createAccount(tx, { sourceId: source.id, provider: provider.id, services, principalRef: principal, accountLabel: label, config });
     await storeCredential(tx, kek, created, tokens, { scopes: grant.scopes, expiresAt: null });
     return { account: created, reconnected: false };
   });
+}
+
+/** The source's account of this provider pinned to the provider's id for the user or workspace, if any. */
+async function findAccountByUserId(engine: Engine, sourceId: string, provider: string, userId: string): Promise<ConnectorAccount | null> {
+  // scope: operator-only connecting is an operator action on a named source
+  const r = await engine.query<{ id: string }>(
+    `SELECT id FROM connector_accounts WHERE source_id = $1 AND provider = $2 AND config->>$3 = $4 ORDER BY created_at LIMIT 1`,
+    [sourceId, provider, PROVIDER_USER_ID, userId],
+  );
+  return r.rows[0] ? getAccount(engine, r.rows[0].id) : null;
 }
