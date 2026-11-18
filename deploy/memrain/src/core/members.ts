@@ -53,7 +53,8 @@ export type MemberErrorCode =
   | "email_taken"
   | "credential_mixed"
   | "not_found"
-  | "owner_source";
+  | "owner_source"
+  | "source_shared";
 
 /** A refused member or group change; `code` maps to an HTTP status in the admin routes. */
 export class MemberError extends Error {

@@ -68,6 +68,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(done.applied).toBe(true);
       expect(readFileSync(join(out, "pages", "notes", "alice-garden.md"), "utf8")).toContain("basil");
       expect(existsSync(join(out, "chat.json"))).toBe(true);
+      // Every erased row of the source is in the export.
+      expect(done.exported?.rows).toEqual(plan.rows);
+      for (const [table, n] of Object.entries(plan.rows)) {
+        expect({ table, n: readFileSync(join(out, "rows", `${table}.jsonl`), "utf8").trim().split("\n").length }).toEqual({ table, n });
+      }
 
       const tables = await e.query<{ table_name: string }>(
         `SELECT c.table_name FROM information_schema.columns c
@@ -96,6 +101,32 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       }
       const receipt = (await listMemberAudit(e, { memberId: "alice" })).find(r => r.action === "erase_personal_source");
       expect(receipt?.detail).toMatchObject({ source_id: "person-alice", exported: { pages: 1, threads: 1 } });
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+      await db.close();
+    }
+  });
+
+  it("refuses a source someone else also uses, and erases nothing", async () => {
+    const db = await open();
+    const storage = db.storage;
+    const e = storage.engine();
+    const out = mkdtempSync(join(tmpdir(), "memrain-offboard-shared-"));
+    try {
+      await registerSource(e, { id: "shared", kind: "other", pathPrefix: "/shared" });
+      await addMember(e, "alice", { personalSource: "shared" }, OPS);
+      await addMember(e, "bob", { personalSource: "shared" }, OPS);
+      await putPage(storage, { slug: "notes/bob", markdown_body: "Bob's.", title: "Bob", source_id: "shared" });
+      const plan = await eraseMemberPersonalSource(storage, "alice", { apply: false, actor: OPS });
+      expect(plan.blockers).toEqual(["member:bob"]);
+      await expect(eraseMemberPersonalSource(storage, "alice", { apply: true, outDir: out, actor: OPS })).rejects.toThrow(/not only alice's/);
+      expect((await e.query(`SELECT 1 FROM pages WHERE slug = 'notes/bob'`)).rows.length).toBe(1);
+      expect((await getMember(e, "alice"))?.status).toBe("enabled");
+
+      await e.query(`UPDATE members SET personal_source_id = NULL WHERE id = 'bob'`);
+      await e.query(`INSERT INTO groups (id) VALUES ('team')`);
+      await e.query(`INSERT INTO group_sources (group_id, source_id) VALUES ('team', 'shared')`);
+      expect((await eraseMemberPersonalSource(storage, "alice", { apply: false, actor: OPS })).blockers).toEqual(["group:team"]);
     } finally {
       rmSync(out, { recursive: true, force: true });
       await db.close();

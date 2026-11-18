@@ -69,6 +69,7 @@ const STATUS: Record<MemberErrorCode, number> = {
   email_taken: 409,
   credential_mixed: 409,
   owner_source: 409,
+  source_shared: 409,
 };
 
 const INVITE_STATUS: Record<MemberInviteErrorCode, number> = {

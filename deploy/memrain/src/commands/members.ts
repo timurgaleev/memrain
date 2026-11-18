@@ -112,9 +112,10 @@ async function memberCommand(storage: Storage, opts: MemberCmdOptions, who: Memb
   switch (opts.sub) {
     case "invite": {
       const member = await existingMember(engine, need(id, "Usage: memrain member invite <id> [--ttl 72h]"));
-      const invite = await mintMemberInvite(engine, member.id, opts.ttl !== undefined ? parseTtl(opts.ttl) : INVITE_DEFAULT_TTL_MS, { createdBy: who.actor });
+      // Checked before minting: a new invite revokes the member's last one.
       const publicUrl = process.env.MEMRAIN_PUBLIC_URL?.trim();
       if (!publicUrl) throw new UsageError("set MEMRAIN_PUBLIC_URL: the invite link is built from the brain's public address");
+      const invite = await mintMemberInvite(engine, member.id, opts.ttl !== undefined ? parseTtl(opts.ttl) : INVITE_DEFAULT_TTL_MS, { createdBy: who.actor });
       return {
         member_id: member.id,
         url: memberInviteUrl(publicUrl, invite.token),
