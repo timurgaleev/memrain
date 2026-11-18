@@ -31,7 +31,7 @@ import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { callWithTruncationRetry, isTruncated } from "../llm/truncation.ts";
 import { parseModelJson } from "../llm/json-output.ts";
 import { clampOutputTokens, outputTokensFromEnv } from "../llm/output-limits.ts";
-import { BudgetTracker, BudgetExhausted, isBudgetRefusal, priceFor, type BudgetHold } from "../budget.ts";
+import { BudgetTracker, BudgetExhausted, costUsd, isBudgetRefusal, priceFor, type BudgetHold } from "../budget.ts";
 import { BedrockHalted, classifyBedrockError, bedrockFixHint } from "../llm/bedrock-errors.ts";
 import { embedText } from "../embedding.ts";
 import { classifyIntent, type Intent } from "./intent.ts";
@@ -110,6 +110,30 @@ export interface ThinkFallback {
   answer: string;
   citations: ThinkCitation[];
   note: string;
+}
+
+/** One step of a run, for a caller that shows progress (the admin chat). */
+export type ThinkTraceStep =
+  | "intent"
+  | "gather"
+  | "reserve"
+  | "model_start"
+  | "model_end"
+  | "citations"
+  | "quote_check"
+  | "settle";
+
+/**
+ * Counts, timings and the refs of gathered evidence only: never page text.
+ * The refs come from the same grant-scoped gather the model sees.
+ */
+export interface ThinkTraceEvent {
+  step: ThinkTraceStep;
+  count?: number;
+  slugs?: string[];
+  ms?: number;
+  usd?: number;
+  note?: string;
 }
 
 export interface ThinkOptions {
@@ -191,6 +215,8 @@ export interface ThinkOptions {
    * date throws ReferenceDateError before any retrieval or spend.
    */
   referenceDate?: string;
+  /** Called at each step of the run. A throwing listener is ignored. */
+  onTrace?: (event: ThinkTraceEvent) => void;
 }
 
 export interface ThinkResult {
@@ -1289,11 +1315,48 @@ function defaultBudget(): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_BUDGET_USD;
 }
 
+const TRACE_SLUGS = 5;
+
+/** The ref a trace shows for a gathered page: its slug when it is a page mirror. */
+function traceRef(sourcePath: string): string {
+  const ref = mirrorSlug(sourcePath) ?? (sourcePath.startsWith("page-truth://") ? sourcePath.slice("page-truth://".length) : sourcePath);
+  return ref.slice(0, 200);
+}
+
+function traceGather(trace: (e: ThinkTraceEvent) => void, note: string, hits: SearchHit[], ms?: number): void {
+  trace({
+    step: "gather",
+    note,
+    count: hits.length,
+    slugs: hits.slice(0, TRACE_SLUGS).map((h) => traceRef(h.sourcePath)),
+    ...(ms !== undefined ? { ms } : {}),
+  });
+}
+
 /**
  * Run one think synthesis. Default-OFF: a live (paid) run needs MEMRAIN_THINK=1;
  * tests inject a sonnetFn, which both bypasses the gate and avoids any spend.
  */
 export async function runThink(storage: Storage, opts: ThinkOptions): Promise<ThinkResult> {
+  const listener = opts.onTrace;
+  const trace = (e: ThinkTraceEvent): void => {
+    if (!listener) return;
+    try {
+      listener(e);
+    } catch {
+      // Progress reporting never changes the run.
+    }
+  };
+  const result = await runThinkSteps(storage, opts, trace);
+  trace({ step: "settle", usd: result.spentUsd });
+  return result;
+}
+
+async function runThinkSteps(
+  storage: Storage,
+  opts: ThinkOptions,
+  trace: (e: ThinkTraceEvent) => void,
+): Promise<ThinkResult> {
   const question = (opts.question ?? "").trim();
   if (!question) {
     return blankResult("empty question");
@@ -1316,10 +1379,24 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   const budget = new BudgetTracker(opts.maxBudgetUsd ?? defaultBudget(), "think");
   const modelId = resolveModel("reasoning", opts.modelId, "think");
   // Price the pre-flight and the live call on the same model (test seam ignores).
-  const sonnetFn = resolveSonnetFn(opts.sonnetFn, { modelId });
+  const modelFn = resolveSonnetFn(opts.sonnetFn, { modelId });
+  const sonnetFn: SonnetFn = async (input) => {
+    trace({ step: "model_start" });
+    const started = Date.now();
+    try {
+      const resp = await modelFn(input);
+      const usd = priceFor(resp.modelId) ? costUsd(resp.modelId, resp.usage) : undefined;
+      trace({ step: "model_end", ms: Date.now() - started, ...(usd !== undefined ? { usd } : {}) });
+      return resp;
+    } catch (e) {
+      trace({ step: "model_end", ms: Date.now() - started, note: "failed" });
+      throw e;
+    }
+  };
 
   const diagnostics = gatherDiagnostics();
   const intent = classifyIntent(question);
+  trace({ step: "intent", note: intent });
   const engine = storage.engine();
   // Default embedder: the real Titan path ONLY on the live route (no injected
   // sonnetFn). When a sonnetFn is injected (tests / deep-synth), skip the
@@ -1349,6 +1426,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   const rawPagesFn = opts.pagesFn ?? ((q, kk) => gatherPages(storage, q, kk, scopeIds, window, opts.embedQuery, diagnostics.note, opts.minTrust));
   const pagesFn = async (q: string, kk: number): Promise<SearchHit[]> =>
     markExternalChunks(engine, await keepMinTrust(engine, fence(await rawPagesFn(q, kk)), opts.minTrust, scopeIds), scopeIds);
+  const gatherStarted = Date.now();
   const [hybridPages, takesKw, takesVec] = await Promise.all([
     pagesFn(question, k),
     gatherTakes(engine, question, maxTakes, scopeIds, diagnostics.note),
@@ -1358,6 +1436,8 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   ]);
   // Fuse the keyword + vector take streams (RRF, dedup by take_key).
   const takes = takesVec.length > 0 ? fuseTakeStreams(takesKw, takesVec, maxTakes) : takesKw;
+  traceGather(trace, "pages", hybridPages, Date.now() - gatherStarted);
+  trace({ step: "gather", note: "takes", count: takes.length });
 
   // Trajectory injection — only for temporal / knowledge_update questions.
   // Anchors come from the caller OR, when none are named, are auto-derived from
@@ -1383,6 +1463,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
     const graphPages = await markExternalChunks(engine, await keepMinTrust(engine, fence(await gatherGraphPages(
       storage, anchors, k, scopeIds, diagnostics.note, questionWindow?.since,
     )), opts.minTrust, scopeIds), scopeIds);
+    traceGather(trace, "graph", graphPages);
     if (graphPages.length > 0) pages = fusePageStreams(hybridPages, graphPages, Math.max(k, hybridPages.length));
   }
 
@@ -1417,6 +1498,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
       if (!synthesis || synthesis.gaps.length === 0 || exhausted) break;
       const gapQuery = `${question}\n${synthesis.gaps.join("\n")}`.slice(0, 400);
       const gapPages = await pagesFn(gapQuery, k);
+      traceGather(trace, "gaps", gapPages);
       pages = fusePageStreams(pages, gapPages, Math.max(k, pages.length));
     }
 
@@ -1440,6 +1522,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
     // The estimate is held until the call settles, so concurrent askers sharing
     // one tracker cannot all pass against the same headroom.
     const hold = budget.reserve(modelId, estimateUsage(THINK_SYSTEM_PROMPT, user, maxTokens));
+    trace(hold ? { step: "reserve", usd: hold.usd } : { step: "reserve", note: "refused" });
     if (hold === null) {
       if (round === 1) {
         // An unpriced model is refused by the same check, but more budget
@@ -1565,6 +1648,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
     });
     synthesis = { ...synthesis, citations: v.citations };
     dropped = v.dropped;
+    trace({ step: "citations", count: v.citations.length, ...(dropped.length > 0 ? { note: `citation_dropped:${dropped.length}` } : {}) });
     if (dropped.length > 0) {
       process.stderr.write(`[think] dropped ${dropped.length} unresolvable citation(s): ${dropped.join(", ")}\n`);
     }
@@ -1576,6 +1660,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   if (synthesis && thinkQuoteVerifyEnabled()) {
     const check = verifyQuotes(synthesis.answer, synthesisEvidence);
     const q = check.quote_check;
+    trace({ step: "quote_check", count: q.grounded + q.repaired + q.unverified, ...(q.unverified > 0 ? { note: `unverified:${q.unverified}` } : {}) });
     if (q.grounded + q.repaired + q.unverified > 0) {
       quoteFields = {
         answer_raw: check.answer_raw,
