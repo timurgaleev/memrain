@@ -349,4 +349,11 @@ describe("admin chat API", () => {
     await new Promise(r => setTimeout(r, 500));
     expect(await status()).toBe("error");
   });
+  it("an answer that cannot be confirmed ends in a db_busy error, not a done that cannot be saved", async () => {
+    chatOn();
+    const broken = gated(sql => sql.includes("SET status = 'ok'") ? Promise.reject(new Error("connection reset")) : undefined);
+    const evs = await events(await send({ message: "where do the tomatoes go, today?" }, broken));
+    expect(evs.map(e => e.event).slice(-3)).toEqual(["answer", "error", "done"]);
+    expect(evs.at(-2)!.data).toMatchObject({ code: "db_busy" });
+  });
 });

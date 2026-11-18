@@ -161,9 +161,15 @@ function streamTurn(req: Request, deps: ChatApiDeps, owner: ChatOwner, send: Sen
           if (a?.status === "ok" && open && !stop.signal.aborted) {
             const engine = deps.storage.engine();
             const logged = (e: unknown) => console.error("[chat] could not confirm an answer:", e instanceof Error ? e.message : e);
-            await confirmAnswer(engine, a.message_id).catch(logged);
-            // The client left while it was confirmed: done will not reach it.
-            if (!open || stop.signal.aborted) await withdrawAnswer(engine, a.message_id).catch(logged);
+            try {
+              await confirmAnswer(engine, a.message_id);
+              // The client left while it was confirmed: done will not reach it.
+              if (!open || stop.signal.aborted) await withdrawAnswer(engine, a.message_id).catch(logged);
+            } catch (e) {
+              // Unconfirmed, the answer cannot be saved, so done must not suggest it can.
+              logged(e);
+              write(frame("error", { code: "db_busy", message: chatErrorMessage("db_busy") }));
+            }
           }
           write(frame("done", {}));
           if (open) {
