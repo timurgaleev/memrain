@@ -15,6 +15,7 @@ import { handleShareCreate, handleShareView } from "../src/http/share.ts";
 import { appendChatMessage, createChatThread, eraseOwnerChat, type ChatOwner } from "../src/core/chat/store.ts";
 import { RateLimiter } from "../src/mcp/rate_limit.ts";
 import { startServer } from "../src/http/server.ts";
+import { addMember, disableMember, enableMember, removeMember } from "../src/core/members.ts";
 
 setDefaultTimeout(60_000);
 
@@ -205,6 +206,29 @@ describe("chat share links", () => {
     } finally {
       await server.stop();
     }
+  });
+
+  it("closes a member's links while the member is disabled, and for good once removed", async () => {
+    process.env["MEMRAIN_CHAT_SHARE"] = "1";
+    const e = storage.engine();
+    const who = { actor: "test", via: "cli" } as const;
+    await addMember(e, "bea", {}, who);
+    const bea: ChatOwner = { key: "member:bea", sourceId: "default", spendId: "memrain_chat_m_bea", readSources: ["default"], fenceDiary: true };
+    const t = await createChatThread(e, bea, "Group notes");
+    const answer = await appendChatMessage(e, t, { role: "assistant", content: "Built from the group source.", status: "ok" });
+    const res = await handleShareCreate(createReq(answer, { password: PASSWORD }, "/app/api/chat"), new URL(`${ORIGIN}/app/api/chat/messages/${answer}/share`), storage, bea);
+    expect(res?.status).toBe(200);
+    const url = (await res!.json() as { url: string }).url;
+    expect((await view(url, PASSWORD)).status).toBe(200);
+    await disableMember(e, "bea", who);
+    expect((await view(url)).status).toBe(410);
+    expect((await view(url, PASSWORD)).status).toBe(410);
+    await enableMember(e, "bea", who);
+    expect((await view(url, PASSWORD)).status).toBe(200);
+    await removeMember(e, "bea", who);
+    expect((await view(url, PASSWORD)).status).toBe(410);
+    // An operator link does not depend on any member row.
+    expect((await view(await create(okAnswer), PASSWORD)).status).toBe(200);
   });
 
   it("goes with the answer when the owner's chat is erased", async () => {

@@ -78,14 +78,18 @@ interface ShareRow {
 
 async function findShare(engine: Engine, token: string): Promise<ShareRow | null> {
   if (!SHARE_TOKEN_RE.test(token)) return null;
+  // A member's link lives only while that member is enabled: the answer may
+  // quote a group source the member no longer reaches.
   // scope: upstream a link is found by its token hash and shows only the one answer its owner shared
   const r = await engine.query<ShareRow>(
     `SELECT s.password_hash, m.content, m.citations,
-            (s.revoked_at IS NOT NULL OR s.expires_at <= NOW() OR m.status IS DISTINCT FROM 'ok') AS gone,
+            (s.revoked_at IS NOT NULL OR s.expires_at <= NOW() OR m.status IS DISTINCT FROM 'ok'
+             OR (left(s.owner_key, 7) = 'member:' AND mb.status IS DISTINCT FROM 'enabled')) AS gone,
             (s.locked_until IS NOT NULL AND s.locked_until > NOW()) AS locked
        FROM chat_shares s
        JOIN chat_messages m ON m.id = s.message_id AND m.role = 'assistant'
        JOIN chat_threads t ON t.id = m.thread_id AND t.owner_key = s.owner_key
+       LEFT JOIN members mb ON s.owner_key = 'member:' || mb.id
       WHERE s.token_hash = $1`,
     [shareTokenHash(token)],
   );
