@@ -97,9 +97,19 @@ export function validateLanes(lanes: PluginLanes, skillsDir: string): string[] {
   return errors;
 }
 
-/** Regular files under `dir`, as `/`-joined paths relative to it, sorted. */
+/**
+ * Regular files under `dir`, as `/`-joined paths relative to it, sorted. A
+ * symbolic link anywhere, `dir` itself included, is refused: following one
+ * would copy from, or write and delete in, a tree outside the pack.
+ */
 function listFiles(dir: string, prefix = ""): string[] {
-  if (!existsSync(dir)) return [];
+  let st;
+  try {
+    st = lstatSync(dir);
+  } catch {
+    return [];
+  }
+  if (st.isSymbolicLink()) throw new Error(`plugin tree: ${prefix === "" ? dir : prefix} is a symbolic link`);
   const out: string[] = [];
   for (const name of readdirSync(dir).sort()) {
     if (name.startsWith(".")) continue;

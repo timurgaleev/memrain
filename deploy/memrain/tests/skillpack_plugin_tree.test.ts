@@ -7,10 +7,10 @@
  * matching its file.
  */
 import { describe, expect, it } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { listSkillCatalog } from "../src/core/skillpack/brain-resident.ts";
+import { getBrainSkill, listSkillCatalog } from "../src/core/skillpack/brain-resident.ts";
 import {
   LOCK_FILE,
   RESOLVER_FILE,
@@ -19,6 +19,7 @@ import {
   renderLock,
   renderResolver,
   validateLanes,
+  writePluginTree,
 } from "../src/core/skillpack/plugin-tree.ts";
 
 const PACK_DIR = resolve(import.meta.dir, "..", "..", "skills");
@@ -83,6 +84,34 @@ describe("the committed plugin tree", () => {
     }
   });
 
+  it("refuses a plugin skill folder that is a symbolic link in the pack", () => {
+    const s = scratchCopy();
+    try {
+      const outside = join(s.pack, "..", "outside-query");
+      cpSync(join(s.pack, "query"), outside, { recursive: true });
+      rmSync(join(s.pack, "query"), { recursive: true });
+      symlinkSync(outside, join(s.pack, "query"));
+      expect(() => diffPluginTree(s.pack, s.plugin)).toThrow(/symbolic link/);
+    } finally {
+      s.done();
+    }
+  });
+
+  it("refuses to write through a plugin folder that is a symbolic link", () => {
+    const s = scratchCopy();
+    try {
+      const elsewhere = join(s.pack, "..", "elsewhere");
+      mkdirSync(elsewhere);
+      writeFileSync(join(elsewhere, "keep.txt"), "keep");
+      const linked = join(s.pack, "..", "linked-plugin");
+      symlinkSync(elsewhere, linked);
+      expect(() => writePluginTree(s.pack, linked)).toThrow(/symbolic link/);
+      expect(readFileSync(join(elsewhere, "keep.txt"), "utf8")).toBe("keep");
+    } finally {
+      s.done();
+    }
+  });
+
   it("reports a stray skill in the plugin that no lane ships", () => {
     const s = scratchCopy();
     try {
@@ -114,6 +143,11 @@ describe("generated pack files", () => {
 
   it("the resolver is the render of the frontmatter, not a hand edit", () => {
     expect(readFileSync(join(PACK_DIR, RESOLVER_FILE), "utf8")).toBe(renderResolver(PACK_DIR, readPluginLanes(PACK_DIR)));
+  });
+
+  it("the resolver is served through get_skill and is not listed as a skill", () => {
+    expect(getBrainSkill("_resolver", { skillsDir: PACK_DIR })?.body).toContain("# Skill Resolver");
+    expect(listSkillCatalog({ skillsDir: PACK_DIR }).skills.map((s) => s.slug)).not.toContain("_resolver");
   });
 
   it("the resolver lists every routable skill once", () => {
