@@ -59,6 +59,12 @@ describe("feedback weights", () => {
     expect(feedbackMultiplier(aggregateWeight(many.map(v => ({ ...v, rating: -1 as const }))))).toBeGreaterThanOrEqual(1 - FEEDBACK_INFLUENCE);
   });
 
+  it("a withdrawn vote (0) counts as no vote and dilutes nobody else's", () => {
+    const member = aggregateWeight([vote(1, "member")]);
+    expect(aggregateWeight([vote(1, "member"), vote(0, "owner")])).toBeCloseTo(member, 12);
+    expect(aggregateWeight([vote(0, "owner"), vote(0, "agent")])).toBe(NEUTRAL_WEIGHT);
+  });
+
   it("weighs a vote by the voter's tier, its signal, its age and whether the page changed since", () => {
     const owner = aggregateWeight([vote(1, "owner")]);
     const member = aggregateWeight([vote(1, "member")]);

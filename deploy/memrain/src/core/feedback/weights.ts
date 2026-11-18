@@ -5,7 +5,8 @@
  *
  *   w = 0.5 + 0.5 · Σ(c·r) / (1 + Σc)
  *
- * with r ∈ {-1, 0, +1} and c a vote's strength: the voter's tier (owner 1,
+ * over the votes still standing (a withdrawn 0 counts as none), with
+ * r ∈ {-1, +1} and c a vote's strength: the voter's tier (owner 1,
  * member 0.5, agent 0.25), times 0.25 for an implicit signal, times 0.5 per
  * FEEDBACK_HALF_LIFE_DAYS of age, times 0.5 when the page changed since the
  * vote. The prior of strength 1 keeps one rater from moving a page further
@@ -47,6 +48,8 @@ export function aggregateWeight(votes: readonly Vote[]): number {
   let sum = 0;
   let strength = 0;
   for (const v of votes) {
+    // A withdrawn vote is no vote: it must not pull the others toward neutral.
+    if (v.rating === 0) continue;
     const c = voteStrength(v);
     sum += c * v.rating;
     strength += c;
