@@ -1,0 +1,66 @@
+# Tenant @TENANT_ID@ — rendered by scripts/tenant-render.sh from
+# deploy/tenant/tenant.yml.tmpl. Loaded only together with
+# deploy/tenant/compose.hosting.yml (see deploy/tenant/lib.sh). Holds no
+# secret: the database URL, the control URL and the internal token come from
+# deploy/.secrets/tenants/@TENANT_ID@.env (deploy/secrets/fetch-secrets.sh
+# --tenant @TENANT_ID@), which only this container reads.
+
+services:
+  memrain-@TENANT_ID@:
+    image: memrain-hosting:${MEMRAIN_VERSION:-dev}
+    pull_policy: never
+    container_name: memrain-@TENANT_ID@
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    init: true
+    stop_grace_period: 30s
+    # Measured by scripts/tenant-rss-bench.sh; see docs/HOSTING.md.
+    mem_limit: ${MEMRAIN_TENANT_MEM_LIMIT:-1024m}
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    expose:
+      - "18790"
+    environment:
+      - AWS_REGION=${AWS_REGION:?AWS_REGION must be set}
+      - MEMRAIN_TENANT_ID=@TENANT_ID@
+      - MEMRAIN_PUBLIC_URL=@PUBLIC_URL@
+      # No static public bearer: /mcp takes OAuth and member tokens only, and
+      # a missing credential gets 401.
+      - MEMRAIN_PUBLIC_AUTH=oauth
+      # Every request is public; there is no internal path on a tenant host.
+      - MEMRAIN_ASSUME_PUBLIC=1
+      - MEMRAIN_APP=1
+      - MEMRAIN_REQUIRE_MEMBER=1
+      - MEMRAIN_TENANT_FAIL_CLOSED=1
+      - MEMRAIN_REQUIRE_POSTGRES=1
+      - MEMRAIN_PG_POOL_MAX=4
+      - MEMRAIN_PG_APPLICATION_NAME=memrain:@TENANT_ID@:serve
+      # Second rail under the control plane's hosting ceiling. 0 refuses
+      # every paid call; the host .env raises it once the ceiling is set.
+      - MEMRAIN_DAILY_BUDGET_USD=${MEMRAIN_TENANT_DAILY_BUDGET_USD:-0}
+      # Host-wide switch for every paid call of every tenant.
+      - MEMRAIN_HOSTING_LLM_OFF=${MEMRAIN_HOSTING_LLM_OFF:-}
+    env_file:
+      - path: ../.secrets/tenants/@TENANT_ID@.env
+        required: true
+    networks:
+      tenant-@TENANT_ID@: {}
+
+  cloudflared:
+    networks:
+      tenant-@TENANT_ID@: {}
+
+networks:
+  # A plain bridge, not `internal`: outbound NAT to RDS and Bedrock stays.
+  # Containers on different user bridges cannot reach each other; the
+  # isolation smoke proves that on every start.
+  tenant-@TENANT_ID@:
+    name: memrain_tenant_@TENANT_ID@
+    driver: bridge

@@ -73,3 +73,7 @@ __pycache__/
 
 # Claude Code project settings + scheduled task state
 .claude/
+
+# Hosting host: tenant container definitions rendered by
+# scripts/tenant-render.sh, and the tenant deploy report.
+deploy/tenants/
