@@ -287,6 +287,46 @@ Every change is written to `member_audit` with who made it. The admin API has
 the same operations under `/admin/api/members` and `/admin/api/groups`, behind
 the admin login.
 
+### Invite a member to /app
+
+With `MEMRAIN_APP=1` a member signs in to the brain's own web app under
+`/app`, asks questions there and connects their own clients, without the admin
+panel. The member needs a personal source: `/app` writes nowhere else.
+
+```bash
+memrain sources register person-alice --kind other --path-prefix tenant:person-alice
+memrain member add alice --name Alice --personal-source person-alice
+memrain member invite alice --ttl 72h        # prints https://<host>/app/invite#<token>
+```
+
+The token sits in the link's fragment, so no proxy or server log sees it; send
+the link to the member only. It works once. Opening it lets the member create a
+passkey on their device, and from then on they sign in with it. A device that
+cannot hold a passkey gets one 7-day session from the link instead, and signing
+in again then takes a new invite. Minting a new invite revokes the member's
+earlier unused one. `POST /admin/api/members/:id/invite` does the same from the
+admin API.
+
+The session lives in the `memrain_app` cookie (`Path=/app; HttpOnly; Secure;
+SameSite=Strict`). It ends after 7 idle days, 30 days in all, on sign-out, or
+the moment the member is disabled or removed. It opens `/app` and nothing else:
+the admin panel ignores it.
+
+In `/app` a member reads their personal source and the sources of their groups,
+and writes only to the personal source. A saved chat answer lands there at the
+`member` trust tier. From the connect page the member can get a one-time code
+for the brain's enrollment connector (Claude.ai, ChatGPT; valid 24 hours, a new
+one revokes the last) or a personal access token for Claude Code, Codex or
+Cursor (shown once). Both are bound to the member, so `member disable` stops
+them too.
+
+**Offboarding with the personal source.** `memrain member remove alice
+--erase-personal-source` shows what would go. Adding `--apply --out DIR`
+exports the source's pages and the member's chat threads into DIR first, then
+removes the member, revokes their keys, grants and sessions, deletes their
+passkeys and invites, erases their chat and every row of the personal source.
+A receipt stays in `member_audit`. Erasure cannot be undone; keep DIR.
+
 ### Give an existing token another source
 
 A personal access token's read set changes in place; there is no need to issue

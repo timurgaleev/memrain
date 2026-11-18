@@ -750,14 +750,20 @@ still serves reads and refuses every change with `tenant_suspended`; a blocked
 one answers only `/health`. While the policy cannot be read, reads pass and
 writes, credential issuance and queued jobs are refused.
 
+A container in hosting mode refuses to start without its own
+`MEMRAIN_INTERNAL_TOKEN`: without it, any request that looks internal (a
+sibling container on the same host) would pass with no credential. A hosted
+tenant's OAuth and PAT callers get the same closed error text as the public
+ingress for an unexpected failure.
+
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
 | `MEMRAIN_TENANT_ID` | unset | This container's tenant id on a hosted install. Setting it turns hosting mode on. Environment only. | free |
 | `MEMRAIN_CONTROL_URL` | unset | Connection URL of the hosting control database, read from the tenant's secrets file. Setting it turns hosting mode on. Environment only; `memrain config set` refuses to store it. | free |
 | `MEMRAIN_HOSTING_LLM_OFF` | off (`=1` on) | In hosting mode, mark this tenant's paid model calls as off, whatever the control plane says. Not acted on yet: no paid call checks it. Environment only. | free |
-| `MEMRAIN_PUBLIC_AUTH` | unset | `oauth` selects the hosted-tenant sign-in mode for public `/mcp`; any other value is refused. Not acted on yet. Environment only. | free |
-| `MEMRAIN_APP` | off (`=1` on) | Serve the member app under `/app` on a hosted tenant. Not acted on yet: `/app` answers 404. Environment only. | free |
-| `MEMRAIN_REQUIRE_MEMBER` | off (`=1` on) | Refuse a credential that is not bound to a member on `/mcp` and `/ingest`. Not acted on yet. Environment only. | free |
+| `MEMRAIN_PUBLIC_AUTH` | unset | `oauth`: public requests have no static bearer; a missing or unknown credential gets 401 with the resource-metadata challenge, and OAuth tokens and personal access tokens are verified as usual. Refuses to start with `MEMRAIN_PUBLIC_BEARER` also set; any other value is refused. Environment only. | free |
+| `MEMRAIN_APP` | off (`=1` on) | Serve the member app under `/app`: invite links, passkey sign-in, the member's chat and the connect page (docs/TEAM-SETUP.md). Off, every `/app` path answers 404. Environment only. | free |
+| `MEMRAIN_REQUIRE_MEMBER` | off (`=1` on) | Refuse a credential that is not bound to a member on `/mcp` and `/ingest`. Environment only. | free |
 
 ---
 
