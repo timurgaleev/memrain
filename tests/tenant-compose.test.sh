@@ -131,3 +131,25 @@ else
   die "hardening missing"
 fi
 if [ "$(svc memrain-acme '.services[$s].ports // [] | length')" = "0" ]; then pass "no published port"; else die "memrain-acme publishes a port"; fi
+
+# tenant-ctl (profile ops) writes provisioned secrets into a host directory
+# that fetch-secrets.sh --tenant reads with the file backend. No tenant
+# container may see that directory.
+OPS="$TMPROOT/ops.json"
+if (cd "$WS" && docker compose --env-file .env --profile ops -f deploy/tenant/compose.hosting.yml \
+      -f deploy/tenants/acme.yml -f deploy/tenants/beta.yml config --format json) > "$OPS" 2> "$TMPROOT/ops.err"; then
+  ctl_target="$(jq -r '[.services["tenant-ctl"].volumes[]? | select(.source | test("/\\.secrets/provisioned$")) | .target] | join(",")' "$OPS")"
+  ctl_env="$(jq -r '.services["tenant-ctl"].environment.MEMRAIN_TENANT_SECRETS_DIR // empty' "$OPS")"
+  if [ "$ctl_target" = "/provisioned" ] && [ "$ctl_env" = "/provisioned" ]; then
+    pass "tenant-ctl mounts deploy/.secrets/provisioned and is told where it is"
+  else
+    die "tenant-ctl provisioning mount: target='$ctl_target' env='$ctl_env'"
+  fi
+  if jq -e '[.services | to_entries[] | select(.key != "tenant-ctl") | .value.volumes[]?.source // empty | select(test("provisioned"))] | length == 0' "$OPS" >/dev/null; then
+    pass "no other service mounts the provisioned secrets"
+  else
+    die "a tenant or cloudflared mounts the provisioned secrets"
+  fi
+else
+  die "compose config with --profile ops failed:"; sed 's/^/      /' "$TMPROOT/ops.err"
+fi

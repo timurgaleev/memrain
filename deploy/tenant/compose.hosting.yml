@@ -42,9 +42,19 @@ services:
       - ALL
     environment:
       - AWS_REGION=${AWS_REGION:?AWS_REGION must be set}
+      # Where provisioning writes a tenant's secrets with the file backend,
+      # as <dir>/<id>/<name>; `fetch-secrets.sh --tenant` reads them back with
+      # TENANT_SECRETS_BACKEND=file TENANT_SECRETS_DIR=deploy/.secrets/provisioned.
+      - MEMRAIN_TENANT_SECRETS_DIR=/provisioned
     env_file:
       - path: ../.secrets/hosting-control.env
         required: false
+    # Create it owned by the image user before provisioning:
+    #   install -d -m 0700 -o 1000 -g 1000 deploy/.secrets/provisioned
+    volumes:
+      - type: bind
+        source: ../.secrets/provisioned
+        target: /provisioned
     networks:
       - ops
 

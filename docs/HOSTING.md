@@ -26,6 +26,7 @@ to run while `deploy-memrain-1` is running.
 | `deploy/tenants/<id>.yml` | A tenant's rendered file (not tracked; `scripts/tenant-render.sh`) |
 | `deploy/.secrets/tenants/<id>.env` | A tenant's database URL, control URL and internal token, 0400 (`fetch-secrets.sh --tenant`) |
 | `deploy/.secrets/hosting-control.env` | The control admin URL, for `tenant-ctl` only (`fetch-secrets.sh --control`) |
+| `deploy/.secrets/provisioned/<id>/` | Secrets provisioning wrote with the `file` backend (mounted into `tenant-ctl` only) |
 | `deploy/tenant/deploy-tenants.sh` | The per-tenant deploy; `deploy/deploy.sh` hands over to it |
 | `scripts/tenant-isolation-smoke.sh` | The isolation smoke for one tenant container |
 | `deploy/tenant/smoke-all.sh` | The smoke for every running tenant (after a reboot) |
@@ -96,8 +97,13 @@ other, and the isolation smoke proves that on every start (see below).
 2. `memrain tenant create <id> --host <hostname>`, from the `tenant-ctl`
    container. It creates the database, roles and secrets, migrates and creates
    the owner's invitation. Until there is a write path to Secrets Manager (see
-   above), it writes the secrets with the `file` backend into a host
-   directory, and step 4 reads them from there.
+   above), it writes the secrets with the `file` backend.
+   `tenant-ctl` mounts `deploy/.secrets/provisioned` at `/provisioned` and
+   names that directory in `MEMRAIN_TENANT_SECRETS_DIR`. Before the first
+   tenant, create it for the image user:
+   `install -d -m 0700 -o 1000 -g 1000 deploy/.secrets/provisioned`. Step 4
+   then runs with `TENANT_SECRETS_BACKEND=file
+   TENANT_SECRETS_DIR=deploy/.secrets/provisioned`.
 3. `bash scripts/tenant-render.sh <id> --host <hostname>` writes
    `deploy/tenants/<id>.yml`.
 4. `bash deploy/secrets/fetch-secrets.sh --tenant <id>`. It refuses a missing
@@ -105,7 +111,7 @@ other, and the isolation smoke proves that on every start (see below).
    refuses a URL that is not this tenant's: the database URL must use the
    role `tenant_<id>_owner` on the database `tenant_<id>`, and the control URL
    the role `tenant_<id>_ctl` on `memrain_control`. A hyphen in the id may
-   appear as an underscore.
+   appear as an underscore, and percent-encoded names are decoded first.
 5. Route `<hostname>` in the tunnel to `http://memrain-<id>:18790`.
 6. `bash deploy/deploy.sh`.
 
