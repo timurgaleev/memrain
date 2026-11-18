@@ -117,7 +117,7 @@ export function chatKey(chatId: string): string {
 // ---------------------------------------------------------------------------
 // Message text.
 
-const EMOJI_RE = /<emoji\b[^>]{0,500}?\balt="([^"<>]{0,40})"[^>]{0,500}>(?:<\/emoji>)?/gi;
+const EMOJI_RE = /<emoji\b[^>]{0,500}?\salt="([^"<>]{0,40})"[^>]{0,500}>(?:<\/emoji>)?/gi;
 const MENTION_RE = /<\/?at\b[^>]{0,200}>/gi;
 const ATTACHMENT_RE = /<attachment\b[^>]{0,500}>(?:<\/attachment>)?/gi;
 
