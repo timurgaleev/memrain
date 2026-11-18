@@ -143,6 +143,7 @@ ws_new; seed_acme
 stub_secret "hst/tenants/acme/postgres-url" "${SCHEME}://tenant%5Facme%5Fowner:pw@[::1]:5432/tenant%5Facme"
 if fetch -- --tenant acme; then pass "percent-encoded role and database names are decoded before the check"; else die "percent-encoded URL refused"; cat "$WS/out.log"; fi
 cross_wired postgres-url "${SCHEME}://tenant%5Fbeta%5Fowner:pw@db.example.test/tenant_acme" "a percent-encoded foreign role"
+cross_wired postgres-url "${SCHEME}://tenant_acme_owner%00:pw@db.example.test/tenant_acme%00" "an encoded NUL after the expected names"
 
 ws_new; seed_acme
 stub_secret "hst/tenants/acme/internal-token" "short"

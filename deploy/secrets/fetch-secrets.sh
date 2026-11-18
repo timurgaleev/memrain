@@ -151,6 +151,8 @@ if [ -n "$HOSTING_MODE" ]; then
     db="${rest#*@}"
     case "$rest" in *@*/*) db="${db#*/}"; db="${db%%\?*}" ;; *) db="" ;; esac
     # Postgres percent-decodes both; hosting_value has already refused '\'.
+    # An encoded NUL would vanish in the shell and let a longer name match.
+    case "$user$db" in *%00*) user="" ;; esac
     user="$(printf '%b' "${user//%/\\x}")"
     db="$(printf '%b' "${db//%/\\x}")"
     for want in "tenant_${TENANT_ID}_${suffix}" "tenant_${TENANT_ID//-/_}_${suffix}"; do
