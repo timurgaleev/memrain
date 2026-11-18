@@ -74,11 +74,22 @@ try {
 }
 
 if (env.PROBE_FOREIGN_SECRET) {
+  // The instance role is the imds check's job. Here only the credentials the
+  // container holds itself (env, files) count. Left on, the SDK's IMDS lookup
+  // in the image ran for minutes against a refusing endpoint, past any abort
+  // signal, so the lookup is off and the whole check has its own deadline.
+  process.env.AWS_EC2_METADATA_DISABLED = "true";
   const { SecretsManagerClient, GetSecretValueCommand } = await import("@aws-sdk/client-secrets-manager");
   const client = new SecretsManagerClient({ region: env.AWS_REGION || "eu-west-1", maxAttempts: 1 });
   const what = env.PROBE_FOREIGN_SECRET;
+  const deadline = new Promise((_, reject) => {
+    setTimeout(() => reject(Object.assign(new Error("no answer"), { name: "Deadline" })), 30000).unref?.();
+  });
   try {
-    await client.send(new GetSecretValueCommand({ SecretId: what }), { abortSignal: AbortSignal.timeout(20000) });
+    await Promise.race([
+      client.send(new GetSecretValueCommand({ SecretId: what }), { abortSignal: AbortSignal.timeout(20000) }),
+      deadline,
+    ]);
     report(false, "secrets", `${what} was readable`);
   } catch (e) {
     const name = e?.name || "Error";

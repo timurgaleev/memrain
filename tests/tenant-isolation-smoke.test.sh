@@ -67,6 +67,12 @@ const tmp = net.createServer().listen(0, "127.0.0.1");
 await new Promise((r) => tmp.on("listening", r));
 ports.closed = tmp.address().port;
 tmp.close();
+// Accepts and never answers: what IMDS looks like from a tenant container
+// whose responses are dropped (hop limit 1, or a firewall DROP).
+const held = [];
+const blackhole = net.createServer((s) => held.push(s)).listen(0, "127.0.0.1");
+await new Promise((r) => blackhole.on("listening", r));
+ports.blackhole = blackhole.address().port;
 writeFileSync(`${dir}/ports.json`, JSON.stringify(ports));
 JS
 echo AccessDeniedException > "$TMPROOT/secrets_mode"
@@ -190,6 +196,29 @@ ws_new; creds; echo ResourceNotFoundException > "$TMPROOT/secrets_mode"; run_smo
 if [ "$RC" -ne 0 ] && grep -q 'FAIL secrets' "$WS/out.log"; then pass "NotFound (the role may read the prefix) fails the smoke"; else die "NotFound passed (rc=$RC)"; show; fi
 ws_new; creds; echo AccessDeniedException > "$TMPROOT/secrets_mode"; run_smoke
 if [ "$RC" -eq 0 ]; then pass "AccessDenied on the foreign secret passes"; else die "AccessDenied failed (rc=$RC)"; show; fi
+
+# The SDK's own IMDS timeout does not hold under bun: a metadata endpoint that
+# swallows the connection hung the credential lookup for minutes. The
+# `imds` check covers the instance role; the secrets check must still finish.
+ws_new
+printf 'AWS_EC2_METADATA_SERVICE_ENDPOINT=http://127.0.0.1:%s\n' "$(port blackhole)" > "$S/probe_env"
+started=$SECONDS
+run_smoke
+if [ "$RC" -eq 0 ] && [ $((SECONDS - started)) -lt 60 ]; then
+  pass "a metadata endpoint that never answers does not hang the smoke ($((SECONDS - started))s)"
+else
+  die "silent metadata endpoint: rc=$RC after $((SECONDS - started))s"; show
+fi
+
+ws_new
+printf 'AWS_ACCESS_KEY_ID=AKIDSTUBSTUBSTUB\nAWS_SECRET_ACCESS_KEY=stub\nAWS_ENDPOINT_URL_SECRETS_MANAGER=http://127.0.0.1:%s\n' "$(port blackhole)" > "$S/probe_env"
+started=$SECONDS
+run_smoke
+if [ "$RC" -ne 0 ] && grep -q 'FAIL secrets' "$WS/out.log" && [ $((SECONDS - started)) -lt 60 ]; then
+  pass "a Secrets Manager that never answers fails the smoke in bounded time ($((SECONDS - started))s)"
+else
+  die "silent Secrets Manager: rc=$RC after $((SECONDS - started))s"; show
+fi
 
 ws_new
 printf '{"Name":"/memrain-acme","State":{"Running":true},"Mounts":[],"NetworkSettings":{"Networks":{"memrain_tenant_acme":{},"memrain_tenant_beta":{}}}}\n' > "$S/inspect/memrain-acme.json"
