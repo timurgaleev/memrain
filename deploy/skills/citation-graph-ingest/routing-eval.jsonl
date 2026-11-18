@@ -1,0 +1,8 @@
+// Routing eval fixtures for skills/citation-graph-ingest.
+// Each line: {intent, expected_skill, ambiguous_with?}.
+// Rule: intent must paraphrase the trigger, not copy it.
+{"intent": "Build a citation graph over this case-law corpus so I can see what overrules what", "expected_skill": "citation-graph-ingest"}
+{"intent": "Create a typed citation graph for these papers: extends, relies on, refutes", "expected_skill": "citation-graph-ingest"}
+{"intent": "Build a reference graph over the ingested filings so we can trace which supersede which", "expected_skill": "citation-graph-ingest"}
+{"intent": "I want to reason over a domain corpus, not just similarity-search it", "expected_skill": "citation-graph-ingest"}
+{"intent": "Just walk one hop out from this page", "expected_skill": null}

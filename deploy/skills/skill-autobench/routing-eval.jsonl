@@ -1,0 +1,8 @@
+// Routing eval fixtures for skills/skill-autobench.
+// Each line: {intent, expected_skill, ambiguous_with?}.
+// Rule: intent must paraphrase the trigger, not copy it.
+{"intent": "Run autobench on the briefing skill from my last month of chats", "expected_skill": "skill-autobench"}
+{"intent": "Write the eval from usage history instead of the spec for capture", "expected_skill": "skill-autobench"}
+{"intent": "Mine how this skill is actually used and propose cases", "expected_skill": "skill-autobench"}
+{"intent": "Build a benchmark from my corrections to the query skill", "expected_skill": "skill-autobench"}
+{"intent": "Benchmark my laptop's disk speed", "expected_skill": null}
