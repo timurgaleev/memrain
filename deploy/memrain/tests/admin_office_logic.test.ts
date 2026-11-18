@@ -25,6 +25,7 @@ import { facingToYaw, tileToWorld } from "../admin/src/office/world.ts";
 import { spreadLabels, type LabelBox } from "../admin/src/office/labels.ts";
 import { animPose, clipFor, clipsForPose, nextClips, syncCharacters, type ClipName } from "../admin/src/office/anim.ts";
 import { buildPlacements, buildSeats, floorBoxes } from "../admin/src/office/layout3d.ts";
+import { buildWhiteboard } from "../admin/src/office/whiteboard3d.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
 import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
 import { CHARACTER_CLIPS, CHARACTER_FILES, MODEL_FILES, PROCEDURAL_MODELS, SIDE_FILES, sideFileOf, type ModelId } from "../admin/src/office/asset-names.ts";
@@ -731,6 +732,40 @@ describe("3D office assets", () => {
     expect(PROCEDURAL_MODELS).toEqual(["whiteboard"]);
     expect(Object.keys(MODEL_FILES)).not.toContain("whiteboard");
     expect(existsSync(join(ASSET_DIR, "bathroomMirror.glb"))).toBe(false);
+  });
+
+  it("gives the whiteboard a real shape: a board on legs with a white face", () => {
+    const root = buildWhiteboard();
+    // Extent of the parts' boxes; the tilted strokes sit well inside the frame.
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (const c of root.children) {
+      const at = [c.position.x, c.position.y, c.position.z];
+      const sz = [c.scale.x, c.scale.y, c.scale.z];
+      for (let i = 0; i < 3; i++) {
+        lo[i] = Math.min(lo[i]!, at[i]! - sz[i]! / 2);
+        hi[i] = Math.max(hi[i]!, at[i]! + sz[i]! / 2);
+      }
+    }
+    const size = { x: hi[0]! - lo[0]!, y: hi[1]! - lo[1]!, z: hi[2]! - lo[2]! };
+    expect(lo[1]).toBeCloseTo(0, 3);
+    expect(root.children.length).toBeGreaterThan(10);
+    expect(size.x).toBeGreaterThan(0.25);
+    expect(size.y).toBeGreaterThan(0.4);
+    expect(size.z).toBeGreaterThan(0.1);
+    const widest = root.children.reduce((a, c) => (c.scale.x * c.scale.y > a.scale.x * a.scale.y ? c : a));
+    expect(widest.scale.x).toBeGreaterThan(widest.scale.y);
+  });
+
+  it("stands the whiteboards on the floor, facing the spots where people use them", () => {
+    const placed = buildPlacements(() => ({ x: 0.3, y: 0.435, z: 0.14 }), []).filter((p) => p.kind === "whiteboard");
+    expect(placed.length).toBe(WALL_DECOR.filter((p) => p.kind === "whiteboard").length);
+    for (const p of placed) {
+      expect(p.y).toBe(0);
+      const spots = AMBIENT_SPOTS.whiteboard.map((t) => tileToWorld(t));
+      const near = spots.reduce((a, b) => (Math.hypot(b.x - p.x, b.z - p.z) < Math.hypot(a.x - p.x, a.z - p.z) ? b : a));
+      expect(Math.sin(p.yaw) * (near.x - p.x) + Math.cos(p.yaw) * (near.z - p.z)).toBeGreaterThan(0);
+    }
   });
 
   it("offers at least six distinct people", () => {

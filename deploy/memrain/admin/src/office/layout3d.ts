@@ -160,11 +160,12 @@ export function buildPlacements(size: Size, chairs: readonly Chair[]): Placement
     }
   }
 
-  // Pictures and boards hang on the face of the wall that looks into the room.
+  // Pictures and boards hang on the face of the wall that looks into the room; the
+  // whiteboard is a stand, so its feet rest on the floor.
   for (const p of WALL_DECOR) {
     if (!p.kind || p.kind === "character") continue;
     const open = (["down", "up", "left", "right"] as const).find((f) => !isWall(p.x + STEP[f][0], p.y + STEP[f][1])) ?? "down";
-    put(p.kind, p, open, WALL_T / 2 + depth(p.kind) / 2 + 0.005, 0.1);
+    put(p.kind, p, open, WALL_T / 2 + depth(p.kind) / 2 + 0.005, p.kind === "whiteboard" ? 0 : 0.1);
   }
 
   for (const { tile, facing } of chairs) {
