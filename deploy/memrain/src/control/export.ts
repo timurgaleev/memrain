@@ -10,14 +10,18 @@
  * the owner role loses LOGIN and CONNECT and every session on the database is
  * terminated, so nothing can write while the export runs. The export taken
  * then is checked against a database that no longer changes, and its receipt
- * names the fence. The tenant waits seven days in `deleting`; `purgeDeleted`
- * accepts only a good receipt taken under the current fence. Resuming the
- * tenant in the window lifts the fence and changes its id, so an old receipt
- * is worth nothing afterwards.
+ * names the fence and the SHA-256 of the files written. The receipt and the
+ * seven-day schedule commit in one transaction; `deleteTenant --resume`
+ * finishes or re-checks a delete under the same fence. `purgeDeleted` accepts
+ * only a good receipt taken under the current fence, and removes the database,
+ * the roles, the tenant's secrets and every export copy on this host: the
+ * operator takes the export off the host within the window, by its path and
+ * digest. Resuming the tenant in the window lifts the fence and changes its
+ * id, so an old receipt is worth nothing afterwards.
  */
-import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import type { Engine } from "../core/engine/interface.ts";
 import { Storage } from "../core/storage.ts";
 import { copyEngine, type TableReport } from "../core/engine-copy.ts";
@@ -32,7 +36,7 @@ import {
   withTenantLock,
   type TenantRow,
 } from "./tenants.ts";
-import type { TenantMode } from "./contract.ts";
+import type { SecretWriter, TenantMode } from "./contract.ts";
 
 export const DELETE_WINDOW_DAYS = 7;
 
@@ -40,6 +44,10 @@ export interface ExportContext {
   /** Master-role URL of the control database. */
   masterUrl: string;
   control: Engine;
+  /** The tenant secrets `purgeDeleted` removes. */
+  secrets?: SecretWriter;
+  /** Test seam: runs inside the receipt's transaction, before the schedule. */
+  beforeSchedule?: () => void | Promise<void>;
 }
 
 export interface ExportReceipt {
@@ -48,6 +56,8 @@ export interface ExportReceipt {
   kind: "live" | "fenced";
   fenceId: string | null;
   outDir: string;
+  /** SHA-256 over every file written, by relative path (exportDigest). */
+  sha256: string;
   ok: boolean;
   pages: number;
   tables: Pick<TableReport, "name" | "src" | "dst" | "match">[];
@@ -84,7 +94,40 @@ async function writeReadableCopy(src: Engine, outDir: string): Promise<number> {
   return written;
 }
 
-async function exportInto(ctx: ExportContext, t: TenantRow, outDir: string, kind: "live" | "fenced"): Promise<ExportReceipt> {
+/** Every regular file under `dir`, as paths relative to it, sorted. */
+function filesUnder(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile()) out.push(relative(dir, p));
+    }
+  };
+  walk(dir);
+  return out.sort();
+}
+
+/** One SHA-256 over an export directory: each file's path and content hash, in path order. */
+export function exportDigest(dir: string): string {
+  const h = createHash("sha256");
+  for (const rel of filesUnder(dir)) {
+    const file = createHash("sha256").update(readFileSync(join(dir, rel))).digest("hex");
+    h.update(`${rel}\0${file}\n`);
+  }
+  return h.digest("hex");
+}
+
+/** Runs in the receipt's transaction; throwing rolls the receipt back too. */
+type InReceiptTx = (tx: Engine, receipt: ExportReceipt) => Promise<void>;
+
+async function exportInto(
+  ctx: ExportContext,
+  t: TenantRow,
+  outDir: string,
+  kind: "live" | "fenced",
+  inReceiptTx?: InReceiptTx,
+): Promise<ExportReceipt> {
   const out = resolve(outDir);
   // A new directory, created here and only here: a used one could hold another
   // export's pages next to this one's brain, and two exports must not share one.
@@ -116,6 +159,7 @@ async function exportInto(ctx: ExportContext, t: TenantRow, outDir: string, kind
     kind,
     fenceId: kind === "fenced" ? t.fenceId : null,
     outDir: out,
+    sha256: exportDigest(out),
     ok: summary.ok,
     pages,
     tables: summary.tables.map(({ name, src, dst: d, match }) => ({ name, src, dst: d, match })),
@@ -123,11 +167,12 @@ async function exportInto(ctx: ExportContext, t: TenantRow, outDir: string, kind
   };
   await ctx.control.transaction(async (tx) => {
     await tx.query(
-      `INSERT INTO tenant_exports (id, tenant_id, kind, fence_id, out_dir, tables, pages, ok)
-       VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, $7, $8)`,
-      [receipt.id, t.id, kind, receipt.fenceId, out, JSON.stringify(receipt.tables), pages, receipt.ok],
+      `INSERT INTO tenant_exports (id, tenant_id, kind, fence_id, out_dir, tables, pages, ok, sha256)
+       VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, $7, $8, $9)`,
+      [receipt.id, t.id, kind, receipt.fenceId, out, JSON.stringify(receipt.tables), pages, receipt.ok, receipt.sha256],
     );
-    await logTenantEvent(tx, t.id, `export:${kind}`, { receipt: receipt.id, ok: receipt.ok, pages });
+    await logTenantEvent(tx, t.id, `export:${kind}`, { receipt: receipt.id, ok: receipt.ok, pages, sha256: receipt.sha256 });
+    await inReceiptTx?.(tx, receipt);
   });
   return receipt;
 }
@@ -204,13 +249,92 @@ export interface DeleteResult {
   deleteAfter: Date;
 }
 
+export interface DeleteOptions {
+  /**
+   * Finish a delete that stopped half-way, under the fence it already holds:
+   * check its receipt against its files and schedule it, or export again
+   * under the same fence. On a scheduled delete, re-check the receipt.
+   */
+  resume?: boolean;
+}
+
+/** Schedule the purge, in the receipt's own transaction, only under `fenceId`. */
+async function schedule(tx: Engine, ctx: ExportContext, id: string, fenceId: string, receiptId: string): Promise<Date> {
+  await ctx.beforeSchedule?.();
+  const deleteAfter = new Date(Date.now() + DELETE_WINDOW_DAYS * 86_400_000);
+  const r = await tx.query(
+    `UPDATE tenants SET delete_after = $3, updated_at = now() WHERE id = $1 AND status = 'deleting' AND fence_id = $2 RETURNING id`,
+    [id, fenceId, deleteAfter.toISOString()],
+  );
+  if (r.rows.length === 0) throw new TenantError("wrong_state", `tenant '${id}' changed while it was being exported`);
+  await logTenantEvent(tx, id, "delete_scheduled", { fence: fenceId, receipt: receiptId, delete_after: deleteAfter.toISOString() });
+  return deleteAfter;
+}
+
+/** Export under `fenceId` and schedule the purge in the receipt's transaction. */
+async function exportAndSchedule(ctx: ExportContext, t: TenantRow, fenceId: string, outDir: string): Promise<DeleteResult> {
+  let deleteAfter: Date | null = null;
+  const receipt = await exportInto(ctx, { ...t, fenceId, status: "deleting" }, outDir, "fenced", async (tx, r) => {
+    if (r.ok) deleteAfter = await schedule(tx, ctx, t.id, fenceId, r.id);
+  });
+  if (!receipt.ok || deleteAfter === null) {
+    throw new TenantError("no_receipt", `the export under the fence did not verify (${receipt.failures.map((f) => f.table).join(", ")}); the tenant stays fenced`);
+  }
+  return { receipt, deleteAfter };
+}
+
+interface ReceiptRow {
+  id: string;
+  out_dir: string;
+  sha256: string | null;
+  pages: number;
+  tables: unknown;
+}
+
+/** The latest good fenced receipt under `fenceId`, with its files still matching its digest. */
+async function verifiedReceipt(control: Engine, t: TenantRow, fenceId: string): Promise<ExportReceipt | null> {
+  const r = await control.query<ReceiptRow>(
+    `SELECT id, out_dir, sha256, pages, tables FROM tenant_exports
+      WHERE tenant_id = $1 AND kind = 'fenced' AND ok AND fence_id = $2 ORDER BY created_at DESC LIMIT 1`,
+    [t.id, fenceId],
+  );
+  const row = r.rows[0];
+  if (!row || row.sha256 === null || !existsSync(row.out_dir) || exportDigest(row.out_dir) !== row.sha256) return null;
+  const tables = typeof row.tables === "string" ? JSON.parse(row.tables) : row.tables;
+  return {
+    id: row.id, tenantId: t.id, kind: "fenced", fenceId, outDir: row.out_dir, sha256: row.sha256,
+    ok: true, pages: Number(row.pages), tables: tables as ExportReceipt["tables"], failures: [],
+  };
+}
+
+async function resumeDelete(ctx: ExportContext, t: TenantRow, outDir: string): Promise<DeleteResult> {
+  if (t.status !== "deleting" || t.fenceId === null) {
+    throw new TenantError("wrong_state", `tenant '${t.id}' is ${t.status}; there is no delete to resume`);
+  }
+  const fenceId = t.fenceId;
+  const receipt = await verifiedReceipt(ctx.control, t, fenceId);
+  if (t.deleteAfter !== null) {
+    if (!receipt) {
+      throw new TenantError("no_receipt", `the receipt of tenant '${t.id}' under its fence is missing or its files changed since; take the export again with 'tenant delete' after 'tenant resume'`);
+    }
+    return { receipt, deleteAfter: t.deleteAfter };
+  }
+  if (receipt) {
+    const deleteAfter = await withTenantLock(ctx.control, t.id, (tx) => schedule(tx, ctx, t.id, fenceId, receipt.id));
+    return { receipt, deleteAfter };
+  }
+  return exportAndSchedule(ctx, t, fenceId, outDir);
+}
+
 /**
- * Fence, export under the fence, record the receipt, and leave the tenant in
- * `deleting` for the window. Nothing is dropped here.
+ * Fence, export under the fence, and record the receipt together with the
+ * seven-day schedule, leaving the tenant in `deleting`. Nothing is dropped
+ * here. With `resume`, finish or re-check the delete under its current fence.
  */
-export async function deleteTenant(ctx: ExportContext, id: string, confirm: string, outDir: string): Promise<DeleteResult> {
+export async function deleteTenant(ctx: ExportContext, id: string, confirm: string, outDir: string, opts: DeleteOptions = {}): Promise<DeleteResult> {
   const t = await requireTenant(ctx.control, id);
   if (confirm !== id) throw new TenantError("wrong_state", `--confirm must repeat the tenant id '${id}'`);
+  if (opts.resume) return resumeDelete(ctx, t, outDir);
   if (t.status !== "active" && t.status !== "suspended" && t.status !== "deleting") {
     throw new TenantError("wrong_state", `tenant '${id}' is ${t.status}; it cannot be deleted`);
   }
@@ -218,20 +342,7 @@ export async function deleteTenant(ctx: ExportContext, id: string, confirm: stri
     throw new TenantError("wrong_state", `tenant '${id}' is already waiting for deletion until ${t.deleteAfter.toISOString()}`);
   }
   const fenceId = await fence(ctx, t);
-  const receipt = await exportInto(ctx, { ...t, fenceId, status: "deleting" }, outDir, "fenced");
-  if (!receipt.ok) {
-    throw new TenantError("no_receipt", `the export under the fence did not verify (${receipt.failures.map((f) => f.table).join(", ")}); the tenant stays fenced`);
-  }
-  const deleteAfter = new Date(Date.now() + DELETE_WINDOW_DAYS * 86_400_000);
-  await ctx.control.transaction(async (tx) => {
-    const r = await tx.query(
-      `UPDATE tenants SET delete_after = $3, updated_at = now() WHERE id = $1 AND status = 'deleting' AND fence_id = $2 RETURNING id`,
-      [id, fenceId, deleteAfter.toISOString()],
-    );
-    if (r.rows.length === 0) throw new TenantError("wrong_state", `tenant '${id}' changed while it was being exported`);
-    await logTenantEvent(tx, id, "delete_scheduled", { fence: fenceId, receipt: receipt.id, delete_after: deleteAfter.toISOString() });
-  });
-  return { receipt, deleteAfter };
+  return exportAndSchedule(ctx, t, fenceId, outDir);
 }
 
 /**
@@ -272,8 +383,13 @@ export async function currentReceipt(control: Engine, t: TenantRow): Promise<{ i
 
 export interface PurgeOptions {
   now?: Date;
-  /** Removes the tenant's secrets from the secret store, when the backend can. */
-  removeSecrets?: (tenantId: string) => Promise<void>;
+}
+
+export interface PurgeResult {
+  purged: string[];
+  skipped: { id: string; why: string }[];
+  /** Export copies removed from this host, per purged tenant. */
+  removedExports: Record<string, string[]>;
 }
 
 /**
@@ -284,7 +400,7 @@ export interface PurgeOptions {
  * A purge that stopped after the claim is finished by the next run. Returns
  * the ids purged; a tenant without such a receipt is named in `skipped`.
  */
-export async function purgeDeleted(ctx: ExportContext, opts: PurgeOptions = {}): Promise<{ purged: string[]; skipped: { id: string; why: string }[] }> {
+export async function purgeDeleted(ctx: ExportContext, opts: PurgeOptions = {}): Promise<PurgeResult> {
   const now = opts.now ?? new Date();
   const due = (await ctx.control.query<{ id: string }>(
     `SELECT id FROM tenants WHERE status = 'deleting' AND delete_after IS NOT NULL AND delete_after <= $1 ORDER BY id`,
@@ -292,6 +408,7 @@ export async function purgeDeleted(ctx: ExportContext, opts: PurgeOptions = {}):
   )).rows;
   const purged: string[] = [];
   const skipped: { id: string; why: string }[] = [];
+  const removedExports: Record<string, string[]> = {};
   const controlDb = decodeURIComponent(new URL(ctx.masterUrl).pathname.slice(1));
   const unfinished = (await ctx.control.query<{ id: string }>(
     `SELECT t.id FROM tenants t
@@ -327,12 +444,19 @@ export async function purgeDeleted(ctx: ExportContext, opts: PurgeOptions = {}):
       await ctx.control.query(`DROP OWNED BY ${ident(role)}`);
       await ctx.control.query(`DROP ROLE ${ident(role)}`);
     }
-    await opts.removeSecrets?.(id);
+    await ctx.secrets?.remove(id);
+    // Every copy this host still holds, live or fenced: the operator was handed
+    // the export by path and digest and had the window to take it.
+    const dirs = (await ctx.control.query<{ out_dir: string }>(
+      `SELECT DISTINCT out_dir FROM tenant_exports WHERE tenant_id = $1 ORDER BY out_dir`, [id],
+    )).rows.map((r) => r.out_dir);
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+    removedExports[id] = dirs;
     await ctx.control.transaction(async (tx) => {
       await tx.query(`DELETE FROM tenant_isolation WHERE tenant_id = $1`, [id]);
       await logTenantEvent(tx, id, "purged");
     });
     purged.push(id);
   }
-  return { purged, skipped };
+  return { purged, skipped, removedExports };
 }

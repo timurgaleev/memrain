@@ -197,4 +197,10 @@ export interface SecretWriter {
   readonly backend: "file" | "aws";
   /** Store `value` under `<tenantId>/<name>`, replacing an older value. */
   put(tenantId: string, name: string, value: string): Promise<void>;
+  /**
+   * Make every secret of a purged tenant unusable. `file` deletes them; `aws`
+   * overwrites each value with a tombstone, since the secrets themselves are
+   * terraform's to delete (drop the id from `hosting_tenants`, plan, apply).
+   */
+  remove(tenantId: string): Promise<void>;
 }

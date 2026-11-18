@@ -8,8 +8,14 @@
  *   resume <id>                 a suspended tenant, or one waiting for deletion
  *   limits <id> --set k=v[,k=v] max-members, max-pages, max-usd-per-day ('none' clears)
  *   export <id> --out DIR       the customer's copy; never authorises a delete
- *   delete <id> --confirm <id> --out DIR
- *   purge-deleted               drop tenants whose window passed, with a good receipt
+ *   delete <id> --confirm <id> --out DIR [--resume]
+ *                               fence, export and schedule; prints the export's
+ *                               path and SHA-256 for the operator to take off
+ *                               the host within the window. --resume finishes
+ *                               or re-checks a delete under its current fence
+ *   purge-deleted [--secrets file|aws]
+ *                               drop tenants whose window passed, with a good
+ *                               receipt: database, roles, secrets, export copies
  *   migrate-control             apply the control database's migrations
  *   migrate <id>                apply the brain migrations to one tenant
  *   usage <id> --date YYYY-MM-DD [--out FILE]
@@ -23,7 +29,7 @@
  * owner's invite link is printed once (or written to --invite-out, 0600).
  */
 import { rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { PostgresEngine } from "../core/engine/postgres.ts";
 import { runMigrations } from "../core/migrate.ts";
 import { CONTROL_ADMIN_URL_ENV, renderTenantListJson, type TenantMode } from "../control/contract.ts";
@@ -224,15 +230,24 @@ export async function runTenant(args: readonly string[], env: NodeJS.ProcessEnv 
       }
       case "delete": {
         const id = idArg(positional, "delete <id> --confirm <id> --out DIR");
-        const r = await deleteTenant(ctx, id, need(flags["confirm"], "confirm", "delete <id> --confirm <id>"), need(flags["out"], "out", "delete <id> --out DIR"));
-        print({ ok: true, tenant: id, receipt: r.receipt.id, export_dir: r.receipt.outDir, delete_after: r.deleteAfter.toISOString() });
+        const r = await deleteTenant(ctx, id, need(flags["confirm"], "confirm", "delete <id> --confirm <id>"), need(flags["out"], "out", "delete <id> --out DIR"),
+          flags["resume"] ? { resume: true } : {});
+        print({
+          ok: true, tenant: id, receipt: r.receipt.id, export_dir: r.receipt.outDir, export_sha256: r.receipt.sha256,
+          delete_after: r.deleteAfter.toISOString(),
+          note: "Copy the export off this host and check its SHA-256; purge-deleted removes the host copy after the window.",
+        });
         return 0;
       }
       case "purge-deleted": {
-        const removeSecrets = flags["secrets"] === "aws"
-          ? undefined
-          : async (id: string) => rmSync(join(resolve(tenantSecretsDir(flags, env)), id), { recursive: true, force: true });
-        print({ ok: true, ...(await purgeDeleted(ctx, removeSecrets ? { removeSecrets } : {})) });
+        const secrets = secretWriter(flags, env);
+        const r = await purgeDeleted({ ...ctx, secrets });
+        print({
+          ok: true, ...r,
+          ...(secrets.backend === "aws" && r.purged.length > 0
+            ? { terraform: `the secrets now hold a tombstone; drop ${r.purged.join(", ")} from hosting_tenants, then plan and apply to delete them` }
+            : {}),
+        });
         return 0;
       }
       case "migrate": {

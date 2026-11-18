@@ -10,7 +10,7 @@
  * Skipped unless MEMRAIN_TEST_POSTGRES_URL points at a scratch Postgres.
  */
 import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PostgresEngine } from "../src/core/engine/postgres.ts";
@@ -18,7 +18,8 @@ import { PGliteEngine } from "../src/core/engine/pglite.ts";
 import { Storage } from "../src/core/storage.ts";
 import { putPage } from "../src/core/pages.ts";
 import { planCopy, readCatalog, verifyTables } from "../src/core/engine-copy.ts";
-import { cancelDelete, currentReceipt, deleteTenant, exportTenant, purgeDeleted } from "../src/control/export.ts";
+import { cancelDelete, currentReceipt, deleteTenant, exportDigest, exportTenant, purgeDeleted } from "../src/control/export.ts";
+import { FileSecretWriter } from "../src/control/secret-writer.ts";
 import { requireTenant, suspendTenant } from "../src/control/tenants.ts";
 import { PG_URL, withDatabase } from "./helpers/control-pg.ts";
 import { openControlFixture, type ControlFixture } from "./helpers/control-tenants.ts";
@@ -213,5 +214,67 @@ describe.skipIf(!PG_URL)("tenant delete behind a fence", () => {
       await s.close();
     }
     await expect(deleteTenant(ctx(), id, "wrong", join(out, "undo2"))).rejects.toMatchObject({ code: "wrong_state" });
+  });
+
+  it("the receipt and the schedule commit together; --resume finishes under the same fence", async () => {
+    const id = fx.tenantId("halfdel");
+    await fx.create(id);
+    const crash = { ...ctx(), beforeSchedule: () => { throw new Error("injected crash"); } };
+    await expect(deleteTenant(crash, id, id, join(out, "halfdel-a"))).rejects.toThrow("injected crash");
+    const fenced = await requireTenant(fx.control, id);
+    expect(fenced).toMatchObject({ status: "deleting", deleteAfter: null });
+    // The receipt went with the schedule: none is left behind on its own.
+    expect(await currentReceipt(fx.control, fenced)).toBeNull();
+    const done = await deleteTenant(ctx(), id, id, join(out, "halfdel-b"), { resume: true });
+    const after = await requireTenant(fx.control, id);
+    expect(after.fenceId).toBe(fenced.fenceId);
+    expect(after.deleteAfter).not.toBeNull();
+    expect(done.receipt).toMatchObject({ fenceId: fenced.fenceId, ok: true });
+    expect(done.receipt.sha256).toBe(exportDigest(join(out, "halfdel-b")));
+    // Run again: the same receipt, verified against its files, nothing new.
+    const again = await deleteTenant(ctx(), id, id, join(out, "halfdel-c"), { resume: true });
+    expect(again.receipt.id).toBe(done.receipt.id);
+    expect(existsSync(join(out, "halfdel-c"))).toBe(false);
+    // A receipt whose files changed since is refused.
+    appendFileSync(join(out, "halfdel-b", "tampered.txt"), "tampered\n");
+    await expect(deleteTenant(ctx(), id, id, join(out, "halfdel-d"), { resume: true })).rejects.toMatchObject({ code: "no_receipt" });
+  });
+
+  it("after purge nothing with the tenant id is left: database, roles, secrets, exports", async () => {
+    const id = fx.tenantId("inventory");
+    const secretsRoot = mkdtempSync(join(tmpdir(), "memrain-purge-secrets-"));
+    const secrets = new FileSecretWriter(secretsRoot);
+    await secrets.put(id, "postgres-url", "postgres://x");
+    writeFileSync(join(secretsRoot, `${id}.invite`), "https://invite\n");
+    mkdirSync(join(secretsRoot, `${id}x`), { recursive: true });
+    await fx.create(id);
+    const live = await exportTenant(ctx(), id, join(out, `${id}-live`));
+    const del = await deleteTenant(ctx(), id, id, join(out, `${id}-fenced`));
+    expect(del.receipt.sha256).toMatch(/^[0-9a-f]{64}$/);
+    const r = await purgeDeleted({ ...ctx(), secrets }, { now: new Date(Date.now() + 8 * 86_400_000) });
+    expect(r.purged).toContain(id);
+    const pg = await fx.control.query<{ name: string }>(
+      `SELECT datname AS name FROM pg_database WHERE datname LIKE $1
+       UNION ALL SELECT rolname FROM pg_roles WHERE rolname LIKE $1`, [`%${id.replace(/-/g, "_")}%`]);
+    const pgDash = await fx.control.query<{ name: string }>(
+      `SELECT datname AS name FROM pg_database WHERE datname LIKE $1
+       UNION ALL SELECT rolname FROM pg_roles WHERE rolname LIKE $1`, [`%${id}%`]);
+    expect([...pg.rows, ...pgDash.rows]).toEqual([]);
+    expect(existsSync(live.outDir)).toBe(false);
+    expect(existsSync(del.receipt.outDir)).toBe(false);
+    expect(readdirSync(secretsRoot).filter((n) => n === id || n.startsWith(`${id}.`))).toEqual([]);
+    // Another tenant whose id only starts with this one keeps its secrets.
+    expect(existsSync(join(secretsRoot, `${id}x`))).toBe(true);
+    // In control only the history stays: the retired row, its events and receipts.
+    const tables = await fx.control.query<{ t: string }>(
+      `SELECT table_name AS t FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'tenant_id' ORDER BY 1`);
+    const holding: string[] = [];
+    for (const { t } of tables.rows) {
+      const n = await fx.control.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${t} WHERE tenant_id = $1`, [id]);
+      if (n.rows[0]!.n > 0) holding.push(t);
+    }
+    expect(holding.filter((t) => !["tenant_events", "tenant_exports"].includes(t))).toEqual([]);
+    expect((await requireTenant(fx.control, id)).status).toBe("deleted");
+    rmSync(secretsRoot, { recursive: true, force: true });
   });
 });

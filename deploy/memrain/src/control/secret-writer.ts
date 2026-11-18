@@ -7,12 +7,15 @@
  *         directory (the host's secrets tree, and local tests)
  *   aws   `put-secret-value` into `<prefix>/tenants/<tenant>/<name>`; the
  *         secret itself is created by terraform, never here
+ *
+ * `remove` is what `tenant purge-deleted` calls for a purged tenant.
  */
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { PutSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import type { SecretWriter } from "./contract.ts";
 import { assertTenantId } from "./tenants.ts";
+import { TENANT_SECRETS } from "./provision.ts";
 
 const SECRET_NAME_RE = /^[a-z][a-z0-9-]{0,62}$/;
 
@@ -44,6 +47,13 @@ export class FileSecretWriter implements SecretWriter {
     renameSync(tmp, target);
   }
 
+  /** The tenant's directory and the invite link provisioning wrote beside it. */
+  async remove(tenantId: string): Promise<void> {
+    assertTenantId(tenantId);
+    rmSync(join(this.root, tenantId), { recursive: true, force: true });
+    rmSync(join(this.root, `${tenantId}.invite`), { force: true });
+  }
+
   /** Where `name` of `tenantId` lives (for the operator's own tooling). */
   pathOf(tenantId: string, name: string): string {
     return join(this.root, tenantId, name);
@@ -67,5 +77,11 @@ export class AwsSecretWriter implements SecretWriter {
       SecretId: `${this.prefix}/tenants/${tenantId}/${name}`,
       SecretString: value,
     }));
+  }
+
+  async remove(tenantId: string): Promise<void> {
+    assertTenantId(tenantId);
+    const tombstone = `purged:${new Date().toISOString()}`;
+    for (const name of Object.values(TENANT_SECRETS)) await this.put(tenantId, name, tombstone);
   }
 }

@@ -90,7 +90,7 @@ describe.skipIf(!PG_URL)("hosting control plane under a non-superuser master", (
     expect((await requireTenant(control, id)).status).toBe("active");
     await deleteTenant({ masterUrl, control }, id, id, join(dir, "export"));
     const r = await purgeDeleted({ masterUrl, control }, { now: new Date(Date.now() + 8 * 86_400_000) });
-    expect(r).toEqual({ purged: [id], skipped: [] });
+    expect(r).toEqual({ purged: [id], skipped: [], removedExports: { [id]: [join(dir, "export")] } });
     const roles = await su.query(`SELECT rolname FROM pg_roles WHERE rolname LIKE $1`, [`tenant_${id}%`]);
     expect(roles.rows).toEqual([]);
     const db = await su.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [`tenant_${id}`]);
