@@ -30,6 +30,9 @@ import { OPERATIONS, operationAnnotations } from "../src/mcp/operations.ts";
 import { PG_URL, withDatabase } from "./helpers/control-pg.ts";
 import { openControlFixture, type ControlFixture } from "./helpers/control-tenants.ts";
 
+// A hosted container refuses to start without its own internal token (B7).
+const INTERNAL_TOKEN = ["held", "tenant", "internal", "token"].join("-");
+
 setDefaultTimeout(300_000);
 
 const BOOT = randomUUID();
@@ -65,7 +68,7 @@ describe.skipIf(!PG_URL)("a held tenant over HTTP", () => {
     storage = new Storage(new PostgresEngine({ url: fx.secret(id, "postgres-url"), max: 4 }));
     await storage.init();
     await putPage(storage, { slug: "notes/kept", markdown_body: "This page must survive the hold.", source_id: "default", title: "Kept" });
-    server = startServer({ host: "127.0.0.1", port: 0, storage });
+    server = startServer({ host: "127.0.0.1", port: 0, storage, internalToken: INTERNAL_TOKEN });
     base = `http://127.0.0.1:${server.port}`;
   });
 
@@ -84,7 +87,7 @@ describe.skipIf(!PG_URL)("a held tenant over HTTP", () => {
 
   const mcp = (method: string, params: Record<string, unknown> = {}) => fetch(`${base}/mcp`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${INTERNAL_TOKEN}` },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
 

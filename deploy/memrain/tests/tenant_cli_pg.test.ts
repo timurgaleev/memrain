@@ -6,7 +6,7 @@
  * points at a scratch Postgres.
  */
 import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PostgresEngine } from "../src/core/engine/postgres.ts";
@@ -54,19 +54,24 @@ describe.skipIf(!PG_URL)("memrain tenant", () => {
     expect(JSON.parse((await run("list", "--json")).out)).toEqual({ ok: true, tenants: [] });
   });
 
-  it("refuses to create without a host, and creates one waiting for member invites", async () => {
+  it("refuses to create without a host, and creates one with the owner's invite in a 0600 file", async () => {
     await expect(run("create", id)).rejects.toThrow(/--host is required/);
     await expect(run("create", id, "--host", `${id}.example.test`, "--secrets-dir", join(dir, "secrets"))).rejects.toThrow(/--invite-out/);
     const r = await run("create", id, "--host", `${id}.example.test`, "--secrets-dir", join(dir, "secrets"), "--invite-out", join(dir, "invite"));
     expect(r.code).toBe(0);
     const body = JSON.parse(r.out);
-    expect(body).toMatchObject({ ok: true, tenant: id, status: "provisioning", pending: "invite" });
+    expect(body).toMatchObject({ ok: true, tenant: id, status: "active" });
+    expect(body.pending).toBeUndefined();
+    const invite = readFileSync(join(dir, "invite"), "utf8");
+    expect(invite).toContain(`https://${id}.example.test/app/invite#`);
+    expect(statSync(join(dir, "invite")).mode & 0o777).toBe(0o600);
+    expect(r.out).not.toContain(invite.trim().split("#")[1]!);
     const secret = readFileSync(join(dir, "secrets", id, "postgres-url"), "utf8").trim();
     const password = decodeURIComponent(new URL(secret).password);
     expect(r.out).not.toContain(password);
     expect(r.err).not.toContain(password);
     expect(JSON.parse((await run("list", "--json")).out).tenants).toEqual([
-      { id, status: "provisioning", mode: null, hostname: `${id}.example.test` },
+      { id, status: "active", mode: null, hostname: `${id}.example.test` },
     ]);
   });
 

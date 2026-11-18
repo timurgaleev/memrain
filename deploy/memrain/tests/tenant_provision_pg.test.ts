@@ -9,6 +9,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { PostgresEngine } from "../src/core/engine/postgres.ts";
 import { createTenant } from "../src/control/provision.ts";
+import { MemberInviteError } from "../src/core/member-invites.ts";
 import { getTenant, tenantEvents } from "../src/control/tenants.ts";
 import { PG_URL } from "./helpers/control-pg.ts";
 import { openControlFixture, type ControlFixture } from "./helpers/control-tenants.ts";
@@ -85,8 +86,16 @@ describe.skipIf(!PG_URL)("tenant create on Postgres", () => {
 
   it("without member invites the tenant waits in provisioning", async () => {
     const id = fx.tenantId("noinvite");
-    const r = await createTenant({ ...fx.ctx, mintInvite: undefined }, { id, hostname: `${id}.example.test` });
+    const unavailable = async (): Promise<never> => { throw new MemberInviteError("not_implemented", "member invites are not available"); };
+    const r = await createTenant({ ...fx.ctx, mintInvite: unavailable }, { id, hostname: `${id}.example.test` });
     expect(r).toMatchObject({ status: "provisioning", pending: "invite", invite: null });
+  });
+
+  it("with member invites the tenant goes active and hands out the owner's invite link", async () => {
+    const id = fx.tenantId("invited");
+    const r = await createTenant({ ...fx.ctx, mintInvite: undefined }, { id, hostname: `${id}.example.test` });
+    expect(r).toMatchObject({ status: "active", pending: null });
+    expect(r.invite?.url).toStartWith(`https://${id}.example.test/app/invite#`);
   });
 
   it("a deleted id is never reused, and a hostile id never reaches SQL", async () => {
