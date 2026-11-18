@@ -56,7 +56,8 @@ describe.skipIf(!PG_URL)("memrain tenant", () => {
 
   it("refuses to create without a host, and creates one waiting for member invites", async () => {
     await expect(run("create", id)).rejects.toThrow(/--host is required/);
-    const r = await run("create", id, "--host", `${id}.example.test`, "--secrets-dir", join(dir, "secrets"));
+    await expect(run("create", id, "--host", `${id}.example.test`, "--secrets-dir", join(dir, "secrets"))).rejects.toThrow(/--invite-out/);
+    const r = await run("create", id, "--host", `${id}.example.test`, "--secrets-dir", join(dir, "secrets"), "--invite-out", join(dir, "invite"));
     expect(r.code).toBe(0);
     const body = JSON.parse(r.out);
     expect(body).toMatchObject({ ok: true, tenant: id, status: "provisioning", pending: "invite" });

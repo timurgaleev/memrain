@@ -161,9 +161,14 @@ export async function runTenant(args: readonly string[], env: NodeJS.ProcessEnv 
         const id = idArg(positional, "create <id> --host <hostname>");
         const plan = (flags["plan"] ?? "personal") as TenantPlan;
         if (plan !== "personal" && plan !== "team") throw new Error("tenant: --plan must be personal or team");
+        // The invite link is a credential: it goes to a terminal, or to a 0600 file.
+        const hostname = need(flags["host"], "host", "create <id> --host <hostname>");
+        if (!flags["invite-out"] && !process.stdout.isTTY) {
+          throw new Error("tenant create: stdout is not a terminal; pass --invite-out FILE for the owner's one-time invite link");
+        }
         const r = await createTenant({ masterUrl, control, secrets: secretWriter(flags, env) }, {
           id,
-          hostname: need(flags["host"], "host", "create <id> --host <hostname>"),
+          hostname,
           plan,
           ...(flags["owner"] ? { ownerMember: flags["owner"] } : {}),
           ...(flags["resume"] ? { resume: true } : {}),
