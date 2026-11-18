@@ -95,6 +95,45 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(await tierOf(slug)).toBe("external");
   });
 
+  it("a save retried after the page was written but not recorded reuses that page", async () => {
+    const engine = storage.engine();
+    const thread = await createChatThread(engine, owner, "retry question");
+    await appendChatMessage(engine, thread, { role: "user", content: "how is vendor x paid, again?" });
+    const id = await appendChatMessage(engine, thread, {
+      role: "assistant", content: "Monthly [1].", status: "ok", evidenceTier: "owner",
+      citations: [{ n: 1, slug: "notes/vendor", title: "Vendor", kind: "page" }],
+    });
+    // The page write commits, then recording its slug on the answer fails once.
+    let failRecord = true;
+    const flaky = new Proxy(engine, {
+      get(target, key) {
+        if (key === "query") {
+          return async (sql: string, params?: unknown[]) => {
+            if (failRecord && sql.includes("SET saved_slug")) {
+              failRecord = false;
+              throw new Error("connection lost");
+            }
+            return target.query(sql, params);
+          };
+        }
+        const v = Reflect.get(target, key) as unknown;
+        return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+      },
+    });
+    const realEngine = storage.engine.bind(storage);
+    storage.engine = () => flaky;
+    try {
+      await expect(saveAnswerAsPage(storage, owner, id)).rejects.toThrow("connection lost");
+    } finally {
+      storage.engine = realEngine;
+    }
+    const again = await saveAnswerAsPage(storage, owner, id);
+    if (!again.ok) throw new Error(`save refused: ${again.error}`);
+    expect(again.slug).toMatch(/-how-is-vendor-x-paid-again$/);
+    const copies = await engine.query<{ slug: string }>(`SELECT slug FROM pages WHERE slug LIKE $1 AND deleted_at IS NULL`, [`${again.slug}%`]);
+    expect(copies.rows.map(r => r.slug)).toEqual([again.slug]);
+  });
+
   it("evidence that can no longer be found is not vouched for", async () => {
     const slug = await savedAnswer("what about the gone page?", "It said so [1].", [{ n: 1, slug: "notes/gone", title: "gone", kind: "page" }]);
     expect(await tierOf(slug)).not.toBe("owner");

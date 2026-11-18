@@ -97,24 +97,25 @@ export async function evidenceTier(engine: Engine, evidence: { pages: readonly s
   return tierOfRank(Math.min(...r.rows.map((row) => Number(row.rank))));
 }
 
-export async function saveAnswerAsPage(storage: Storage, owner: ChatOwner, messageId: number, now = new Date()): Promise<SaveAnswerResult> {
+export async function saveAnswerAsPage(storage: Storage, owner: ChatOwner, messageId: number): Promise<SaveAnswerResult> {
   if (saving.has(messageId)) return refuse(409, "busy");
   saving.add(messageId);
   try {
-    return await save(storage, owner, messageId, now);
+    return await save(storage, owner, messageId);
   } finally {
     saving.delete(messageId);
   }
 }
 
-async function save(storage: Storage, owner: ChatOwner, messageId: number, now: Date): Promise<SaveAnswerResult> {
+async function save(storage: Storage, owner: ChatOwner, messageId: number): Promise<SaveAnswerResult> {
   const engine = storage.engine();
   const found = await ownedAnswer(engine, owner, messageId);
   if (!found) return refuse(404, "not_found");
   const { message, question, evidenceTier: shown } = found;
   if (message.saved_slug) return { ok: true, slug: message.saved_slug };
   if (message.status !== "ok" || !message.content.trim()) return refuse(409, "not_saveable");
-  const base = `chats/${now.toISOString().slice(0, 10)}-${slugWords(question ?? message.content)}`;
+  // Named by the answer's own day, so a retry on a later day tries the same names.
+  const base = `chats/${message.created_at.slice(0, 10)}-${slugWords(question ?? message.content)}`;
   const title = (question ?? "Chat answer").replace(/\s+/g, " ").trim().slice(0, 200);
   const body = pageBody(question, message.content, message.citations);
   const cited = await evidenceTier(engine, {
@@ -125,9 +126,15 @@ async function save(storage: Storage, owner: ChatOwner, messageId: number, now: 
   const tier = lowerTier(cited, isTrustTier(shown) ? shown : "external");
   for (let i = 1; i <= SLUG_ATTEMPTS; i++) {
     const slug = i === 1 ? base : `${base}-${i}`;
+    // The write's receipt commits with the page: a save retried after the
+    // page was written but before its slug was recorded replays it instead of
+    // finding the name taken and writing the answer again under the next one.
     const res = await dispatchTool(storage, {
       name: "page_put",
-      arguments: { slug, title, markdown_body: body, type: "note", expected_version: 0, written_by: "admin-chat", reason: "saved from chat" },
+      arguments: {
+        slug, title, markdown_body: body, type: "note", expected_version: 0, written_by: "admin-chat", reason: "saved from chat",
+        request_id: `chat-save:${messageId}:${slug}`,
+      },
     }, tier === "owner" ? {} : { trustCeiling: tier });
     const text = res.content?.[0]?.text ?? "";
     if (!res.isError) {
@@ -141,6 +148,7 @@ async function save(storage: Storage, owner: ChatOwner, messageId: number, now: 
       // not an envelope; logged below
     }
     if (env.error === "version_conflict") continue;
+    if (env.error === "request_in_progress") return refuse(409, "busy");
     console.error("[chat] save refused:", text.slice(0, 300));
     return refuse(422, "write_refused");
   }
