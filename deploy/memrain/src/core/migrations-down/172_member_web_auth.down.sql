@@ -11,8 +11,15 @@ BEGIN
   IF EXISTS (SELECT 1 FROM member_passkeys) THEN
     RAISE EXCEPTION '172 down: member passkeys exist; delete them first';
   END IF;
+  -- The audit is history; it is never rewritten to fit the older constraint.
+  IF EXISTS (SELECT 1 FROM member_audit WHERE via = 'app') THEN
+    RAISE EXCEPTION '172 down: member_audit has rows written from /app (via app)';
+  END IF;
 END
 $down$;
+
+ALTER TABLE member_audit DROP CONSTRAINT IF EXISTS member_audit_via_check;
+ALTER TABLE member_audit ADD CONSTRAINT member_audit_via_check CHECK (via IN ('cli', 'admin_api'));
 
 DROP TABLE IF EXISTS member_web_sessions;
 DROP TABLE IF EXISTS member_invites;

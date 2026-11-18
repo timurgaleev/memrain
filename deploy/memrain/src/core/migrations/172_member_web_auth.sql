@@ -58,3 +58,8 @@ CREATE TABLE IF NOT EXISTS member_web_sessions (
   revoked_at    TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS member_web_sessions_member_idx ON member_web_sessions (member_id) WHERE revoked_at IS NULL;
+
+-- A member binding its own connector code or key from /app is audited as
+-- via 'app', next to the operator's 'cli' and 'admin_api'.
+ALTER TABLE member_audit DROP CONSTRAINT IF EXISTS member_audit_via_check;
+ALTER TABLE member_audit ADD CONSTRAINT member_audit_via_check CHECK (via IN ('cli', 'admin_api', 'app'));

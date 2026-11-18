@@ -23,7 +23,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import type { PrincipalRef } from "./auth-info.ts";
-import { memberAccess, widenReadSources } from "./members.ts";
+import { memberAccess, widenReadSources, writeMemberAudit } from "./members.ts";
 import { hostingFlags } from "../control/contract.ts";
 import { validateSlug as validatePageSlug } from "./pages.ts";
 import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "./jobs/kinds.ts";
@@ -1180,6 +1180,9 @@ function legacyGrantFromRow(row: Record<string, unknown>): PrincipalGrant {
   };
 }
 
+/** The label of an enrollment a member issued for itself from /app. */
+export const MEMBER_APP_ENROLLMENT_LABEL = "app-connect";
+
 export class OAuthProvider {
   private engine: Engine;
   private tokenTtl: number;
@@ -2075,6 +2078,71 @@ export class OAuthProvider {
       label,
       clientId,
     };
+  }
+
+  /**
+   * Issue a member's own enrollment code from /app, in one transaction with
+   * everything that makes it the member's: the member binding (`member_id`
+   * on the row itself), the revocation of the member's last unused /app code,
+   * and both audit trails. A failure anywhere leaves no code and no binding,
+   * and the code is returned only after the commit.
+   *
+   * The grant writes `sourceId` (the member's personal source) and reads it;
+   * the verifier widens the read by the member's groups on every request, so
+   * a group change applies to a code already redeemed.
+   */
+  async issueMemberEnrollment(input: {
+    memberId: string;
+    sourceId: string;
+    clientId: string;
+    ttlSeconds: number;
+  }): Promise<{ id: string; code: string; expiresAt: string; clientId: string }> {
+    const client = await this.getClient(input.clientId);
+    if (!client || client.tenant_mode !== "enrollment") throw new Error(`Client '${input.clientId}' is not an enrollment connector`);
+    const id = generateToken("memrain_enr_");
+    const code = generateToken("memrain_en_");
+    const expiresAt = new Date(Date.now() + input.ttlSeconds * 1000).toISOString();
+    const who: EnrollmentAuditActor = { actor: `member:${input.memberId}`, via: "enrollment" };
+    await this.engine.transaction(async (tx) => {
+      const member = await tx.query<{ status: string; personal_source_id: string | null }>(
+        `SELECT status, personal_source_id FROM members WHERE id = $1 FOR UPDATE`,
+        [input.memberId],
+      );
+      const m = member.rows[0];
+      if (!m || m.status !== "enabled" || m.personal_source_id !== input.sourceId) {
+        throw new Error(`member '${input.memberId}' cannot be issued a code for '${input.sourceId}'`);
+      }
+      const superseded = await tx.query<{ id: string; client_id: string | null }>(
+        // scope: upstream the member's own unused /app codes, keyed by the member the session resolved
+        `UPDATE oauth_enrollments SET revoked_at = NOW()
+          WHERE member_id = $1 AND label = $2 AND used_at IS NULL AND revoked_at IS NULL
+          RETURNING id, client_id`,
+        [input.memberId, MEMBER_APP_ENROLLMENT_LABEL],
+      );
+      for (const old of superseded.rows) {
+        await writeEnrollmentAudit(tx, old.id, old.client_id, "revoke_code", who, { revoked: false }, { revoked: true, superseded_by: id });
+      }
+      await tx.query(
+        `INSERT INTO oauth_enrollments
+           (id, code_hash, client_id, source_id, federated_read, label, expires_at, member_id)
+         VALUES ($1, $2, $3, $4, $5::text[], $6, $7::timestamptz, $8)`,
+        [id, hashToken(code), input.clientId, input.sourceId, [input.sourceId], MEMBER_APP_ENROLLMENT_LABEL, expiresAt, input.memberId],
+      );
+      await writeEnrollmentAudit(tx, id, input.clientId, "issue", who, null, {
+        source_id: input.sourceId,
+        federated_read: [input.sourceId],
+        label: MEMBER_APP_ENROLLMENT_LABEL,
+        expires_at: expiresAt,
+        spend_id: id,
+        member_id: input.memberId,
+      });
+      await writeMemberAudit(tx, { actor: `member:${input.memberId}`, via: "app" }, {
+        memberId: input.memberId,
+        action: "bind",
+        detail: { credential: { kind: "enrollment", id }, previous_member_id: null },
+      });
+    });
+    return { id, code, expiresAt, clientId: input.clientId };
   }
 
   /**

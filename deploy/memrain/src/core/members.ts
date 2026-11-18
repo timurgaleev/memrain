@@ -41,7 +41,8 @@ export interface MemberRecord {
 /** Who changed a member or a group, recorded as data only; it authorizes nothing. */
 export interface MemberActor {
   actor: string;
-  via: "cli" | "admin_api";
+  /** `app`: the member acting on its own credentials from /app. */
+  via: "cli" | "admin_api" | "app";
 }
 
 export type MemberErrorCode =
