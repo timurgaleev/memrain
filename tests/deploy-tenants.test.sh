@@ -78,6 +78,7 @@ case "$1" in
   inspect)
     printf 'docker %s\n' "$*" >> "$S/calls.log"
     c="$2"; id="${c#memrain-}"
+    if [ "$c" = deploy-memrain-1 ]; then [ -e "$S/single_running" ] && echo true || echo false; exit 0; fi
     if [ -e "$S/up_$id" ] && [ ! -e "$S/unhealthy_$id" ]; then echo healthy; else echo starting; fi ;;
   exec)
     printf 'docker %s\n' "$*" >> "$S/calls.log"
@@ -295,4 +296,14 @@ if [ "$RC" -ne 0 ] && ! called '| build' && ! called 'tenant migrate-control'; t
   pass "an unparsable compose set changes nothing"
 else
   die "config failure: rc=$RC"
+fi
+
+# ---- 10. A single-tenant brain still runs on the host -------------------
+ws_new; tenants ta:active
+touch "$S/single_running"
+run_deploy
+if [ "$RC" -ne 0 ] && ! called '| build' && ! called 'tenant migrate-control' && grep -q 'deploy-memrain-1' "$WS/out.log"; then
+  pass "a running single-tenant brain stops the hosting deploy before anything changes"
+else
+  die "single-tenant brain next to tenants: rc=$RC"
 fi

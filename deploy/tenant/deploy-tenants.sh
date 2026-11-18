@@ -55,6 +55,13 @@ write_report() {
 
 # ---- Preflights: nothing is touched until all of them pass -----------------
 
+# A hosting host runs no single-tenant brain: its container would hold the
+# instance role and the host's single-tenant secrets next to the tenants.
+if [ "$(docker inspect deploy-memrain-1 --format '{{.State.Running}}' 2>/dev/null || true)" = "true" ]; then
+  echo "FAIL: the single-tenant brain (deploy-memrain-1) runs on this hosting host; stop it first (docs/HOSTING.md)" >&2
+  exit 1
+fi
+
 if ! hosting_compose config -q; then
   echo "FAIL: docker compose cannot parse the hosting file set (deploy/tenant/compose.hosting.yml + deploy/tenants/*.yml)" >&2
   exit 1
