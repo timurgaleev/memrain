@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { dirname, join, resolve } from "node:path";
 import { chromium, type BrowserContextOptions, type Page } from "playwright";
 import { account, automation, automationRoute, MICROSOFT, OWNER, scenario } from "./automation-server.ts";
+import { ANSWER, chat, chatRoute, chatScenario, MODELS, OK_SCRIPT } from "./chat-server.ts";
 
 // Vite's `?url` imports become plain file imports, so model files come out as hashed assets.
 const viteUrls: Bun.BunPlugin = {
@@ -62,6 +63,8 @@ const server = Bun.serve({
       const body = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(OFFICE_EVENT)}\n\n`)); } });
       return new Response(body, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
     }
+    const chatted = await chatRoute(request);
+    if (chatted) return chatted;
     const automated = await automationRoute(request);
     if (automated) return automated;
     if (path === "/admin/api/jobs/watch") {
@@ -85,14 +88,23 @@ const server = Bun.serve({
         case "get_tags": data = { tags: [] }; break;
         case "get_links": data = { groups: [] }; break;
         case "graph_neighbors": data = { neighbors: [] }; break;
+        case "resolve_slugs": data = { hits: [] }; break;
+        case "search": data = { hits: [] }; break;
+        case "chronicle_since":
+          data = { events: [
+            { date: "2026-11-08", summary: "Planning the offsite", slug: "notes/offsite" },
+            { date: "2026-11-07", summary: "Vendor contract", slug: "notes/vendor" },
+          ] };
+          break;
         default: throw new Error(`Unexpected fixture tool: ${name}`);
       }
       return Response.json({ ok: true, data });
     }
     if (path === "/index.css") return new Response(stylesheet, { headers: { "Content-Type": "text/css" } });
-    const office = new URL(request.url).searchParams.get("view") === "office";
-    const csp: Record<string, string> = office ? { "Content-Security-Policy": ADMIN_CSP } : {};
-    const css = office ? '<link rel="stylesheet" href="/index.css">' : "";
+    // Office and Ask render with the admin stylesheet and CSP, so layout and blocked styles show.
+    const styled = ["office", "ask", "palette"].includes(new URL(request.url).searchParams.get("view") ?? "");
+    const csp: Record<string, string> = styled ? { "Content-Security-Policy": ADMIN_CSP } : {};
+    const css = styled ? '<link rel="stylesheet" href="/index.css">' : "";
     return new Response(`<!doctype html>${css}<div id="root"></div><script type="module" src="/ui-fixture.js"></script>`, { headers: { "Content-Type": "text/html", ...csp } });
   },
 });
@@ -120,7 +132,10 @@ const NO_WEBGL = () => {
     return /webgl/.test(type) ? null : getContext.call(this, type, attrs);
   } as typeof getContext;
 };
+// UI_FILTER=<text> runs only the checks whose name contains it.
+const only = process.env.UI_FILTER ?? "";
 async function check(name: string, view: string, body: (page: Page) => Promise<void>, opts: CheckOptions = {}) {
+  if (only !== "" && !name.includes(only)) return;
   const page = await browser.newPage(opts.viewport ? { viewport: opts.viewport } : {});
   page.setDefaultTimeout(2000);
   const pageErrors: string[] = [];
@@ -135,8 +150,7 @@ async function check(name: string, view: string, body: (page: Page) => Promise<v
     console.log(`PASS ${name}`);
   } catch (error) {
     failures.push(name);
-    console.error(`FAIL ${name}: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
+    console.error(`FAIL ${name}: ${error instanceof Error ? error.message : String(error)}`);  } finally {
     await page.close();
   }
 }
@@ -206,6 +220,204 @@ try {
     assert.equal(aborted, true);
   });
 
+  const THREAD = {
+    thread: { id: "t1", title: "Offsite plans", created_at: "2026-11-08T10:00:00Z", updated_at: "2026-11-08T10:05:00Z" },
+    messages: [
+      { id: 11, role: "user", content: "When is the offsite?", status: null, citations: [], gaps: [], model: null, cost_usd: null, trace: [], created_at: "2026-11-08T10:00:00Z", saved_slug: null },
+      { id: 12, role: "assistant", content: "In March [1].", status: "ok", citations: [{ n: 1, slug: "notes/history", title: "History fixture" }], gaps: [],
+        model: "small-1", cost_usd: 0.0009, trace: [{ step: "gather", count: 1 }, { step: "settle", usd: 0.0009 }], created_at: "2026-11-08T10:00:03Z", saved_slug: "chats/offsite" },
+    ],
+  };
+  const T1 = { id: "t1", title: "Offsite plans", updated_at: "2026-11-08T10:05:00Z", message_count: 2 };
+  const ask = async (page: Page, question: string) => {
+    await page.getByLabel("Question", { exact: true }).fill(question);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+  };
+  // The fixture page loads before a check runs; reload so its first reads see the check's state.
+  const fresh = async (page: Page, next: ReturnType<typeof chatScenario>) => {
+    chat.reset(next);
+    await page.reload();
+  };
+  const closedStreams = async (n: number) => {
+    for (let i = 0; i < 40 && chat.closed < n; i++) await Bun.sleep(25);
+    return chat.closed;
+  };
+
+  await check("Ask with chat off says how to switch it on and sends nothing", "ask", async (page) => {
+    await fresh(page, chatScenario({ models: { enabled: false, default: null, answer_cap_usd: null, models: [] } }));
+    await page.getByText("MEMRAIN_CHAT=1", { exact: false }).first().waitFor();
+    assert.equal(await page.getByLabel("Question", { exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole("button", { name: "Send", exact: true }).isDisabled(), true);
+    assert.deepEqual(chat.posts("/admin/api/chat"), []);
+  });
+  await check("An empty Ask offers starter questions from recent pages and an empty conversation list", "ask", async (page) => {
+    await fresh(page, chatScenario());
+    const list = page.getByRole("navigation", { name: "Conversations" });
+    await list.getByText("Your conversations will appear here", { exact: false }).waitFor();
+    await page.getByRole("button", { name: "What do I know about Planning the offsite?" }).click();
+    assert.equal(await page.getByLabel("Question", { exact: true }).inputValue(), "What do I know about Planning the offsite?");
+    assert.deepEqual(chat.posts("/admin/api/chat"), [], "a starter question fills the box; it does not spend money");
+  });
+  await check("A streamed answer shows its search steps, then the answer with sources, gaps and cost", "ask", async (page) => {
+    await fresh(page, chatScenario());
+    await page.getByLabel("Model").selectOption("m1");
+    await ask(page, "When is the offsite?");
+    await page.getByText("The offsite is in", { exact: false }).waitFor();
+    assert.equal(await page.getByLabel("Question", { exact: true }).inputValue(), "");
+    assert.deepEqual(chat.posts("/admin/api/chat").map((r) => r.body), [{ message: "When is the offsite?", model: "m1" }]);
+    const steps = page.getByRole("list", { name: "Search steps", includeHidden: true });
+    assert.equal(await steps.first().evaluate((el) => el.closest("[aria-live]")?.getAttribute("aria-live")), "polite");
+    await page.getByText("Searched memory, found 2", { exact: true }).first().waitFor({ state: "attached" });
+    await page.getByRole("link", { name: "Source 1: History fixture" }).waitFor();
+    await page.getByText("Not found: the exact date", { exact: false }).waitFor();
+    await page.getByText("$0.0012 · small-1 · 2.1 s", { exact: true }).waitFor();
+    await page.waitForFunction(() => location.hash === "#ask/t-new");
+  });
+  await check("A source opens its page", "ask", async (page) => {
+    await fresh(page, chatScenario());
+    await ask(page, "When is the offsite?");
+    const source = page.getByRole("link", { name: "Source 1: History fixture" });
+    await source.focus();
+    await page.keyboard.press("Enter");
+    await page.getByText("Current replacement text.").waitFor();
+  });
+  await check("A second Send while the answer streams sends nothing, and Stop closes the stream", "ask", async (page) => {
+    await fresh(page, chatScenario({ script: [{ event: "trace", data: { step: "intent" } }], hold: true }));
+    const box = page.getByLabel("Question", { exact: true });
+    await page.getByLabel("Model").waitFor();
+    await box.fill("Slow question");
+    await box.press("Enter");
+    await page.getByText("Worked out what you are asking", { exact: true }).waitFor();
+    await box.fill("Another one");
+    await box.press("Enter");
+    assert.equal(await page.getByRole("button", { name: "Send", exact: true }).count(), 0);
+    assert.equal(chat.posts("/admin/api/chat").length, 1);
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await page.getByText("Stopped before the answer arrived.", { exact: false }).waitFor();
+    assert.equal(await closedStreams(1), 1);
+    await page.getByRole("button", { name: "Send", exact: true }).waitFor();
+  });
+  await check("Leaving the Ask page closes an open stream", "ask", async (page) => {
+    await fresh(page, chatScenario({ script: [{ event: "trace", data: { step: "intent" } }], hold: true }));
+    await ask(page, "Slow question");
+    await page.getByText("Worked out what you are asking", { exact: true }).waitFor();
+    await page.evaluate(() => (window as typeof window & { unmountFixture: () => void }).unmountFixture());
+    assert.equal(await closedStreams(1), 1);
+  });
+  await check("A spent daily limit says when it resets and links to Spend", "ask", async (page) => {
+    await fresh(page, chatScenario({ script: [{ event: "answer", data: { ...ANSWER, status: "budget", answer: "", citations: [], gaps: [], cost_usd: null } }, { event: "done", data: {} }] }));
+    await ask(page, "Anything?");
+    await page.getByText("Today's chat spending limit is used up", { exact: true }).waitFor();
+    await page.getByText("00:00 UTC", { exact: false }).waitFor();
+    assert.equal(await page.getByRole("link", { name: "Open Spend" }).getAttribute("href"), "#spend");
+    assert.equal(await page.getByRole("button", { name: "Try again" }).count(), 0);
+  });
+  await check("A refused answer lists the pages it looked at", "ask", async (page) => {
+    await fresh(page, chatScenario({ script: [
+      { event: "trace", data: { step: "gather", count: 1, slugs: ["notes/plans"] } },
+      { event: "answer", data: { ...ANSWER, status: "refused", answer: "", citations: [], gaps: [] } },
+      { event: "done", data: {} },
+    ] }));
+    await ask(page, "Who won the 1930 cup?");
+    await page.getByText("Your memory has no answer to this", { exact: true }).waitFor();
+    assert.equal(await page.getByRole("link", { name: "notes/plans" }).getAttribute("href"), "#page/notes%2Fplans");
+    assert.equal(await page.getByRole("button", { name: "Save as page" }).count(), 0);
+  });
+  await check("A stream error says what happened and Try again asks the same question", "ask", async (page) => {
+    await fresh(page, chatScenario({ script: [{ event: "error", data: { code: "rate_limited", message: "429 from provider" } }] }));
+    await ask(page, "Busy question");
+    await page.getByText("The model is busy right now", { exact: true }).waitFor();
+    assert.equal(await page.getByText("429 from provider").count(), 0, "raw provider text stays out of the page");
+    chat.state.script = OK_SCRIPT;
+    await page.getByRole("button", { name: "Try again" }).click();
+    await page.getByText("The offsite is in", { exact: false }).waitFor();
+    assert.deepEqual(chat.posts("/admin/api/chat").map((r) => r.body?.message), ["Busy question", "Busy question"]);
+  });
+  await check("A refused POST names the reason, here chat being off", "ask", async (page) => {
+    await fresh(page, chatScenario({ refuse: { status: 503, body: { error: "chat_disabled" } } }));
+    await ask(page, "Anything?");
+    await page.getByText("Ask is switched off on this server", { exact: true }).waitFor();
+  });
+  await check("Save as page saves the answer once and links the new page", "ask", async (page) => {
+    await fresh(page, chatScenario());
+    await ask(page, "When is the offsite?");
+    await page.getByRole("button", { name: "Save as page" }).click();
+    await page.getByRole("link", { name: "chats/2026-11-09-offsite" }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Save as page" }).count(), 0);
+    assert.equal(chat.posts("/admin/api/chat/messages/m-1/save").length, 1);
+  });
+  await check("An open conversation shows its messages, follows up in the same thread, and can be deleted", "ask#ask/t1", async (page) => {
+    const followUp = OK_SCRIPT.map((s) => (s.event === "answer" ? { ...s, data: { ...ANSWER, thread_id: "t1", message_id: "m-2" } } : s));
+    await fresh(page, chatScenario({ threads: [T1], details: { t1: THREAD }, script: followUp }));
+    await page.getByText("In March", { exact: false }).waitFor();
+    await page.getByText("When is the offsite?", { exact: true }).waitFor();
+    await page.getByRole("link", { name: "chats/offsite" }).waitFor();
+    await page.getByText("Searched 1 place · $0.0009", { exact: true }).waitFor();
+    await ask(page, "And who is going?");
+    await page.getByText("The offsite is in", { exact: false }).waitFor();
+    assert.equal(chat.posts("/admin/api/chat")[0]!.body?.thread_id, "t1");
+    assert.equal(await page.evaluate(() => location.hash), "#ask/t1");
+    const list = page.getByRole("navigation", { name: "Conversations" });
+    await list.getByRole("button", { name: "Delete conversation: Offsite plans" }).click();
+    await list.getByRole("button", { name: "Delete", exact: true }).click();
+    await page.waitForFunction(() => location.hash === "#ask");
+    assert.equal(chat.requests.some((r) => r.method === "DELETE" && r.path === "/admin/api/chat/threads/t1"), true);
+    await list.getByText("Your conversations will appear here", { exact: false }).waitFor();
+  });
+  await check("A conversation that is gone or not yours says so", "ask#ask/t-missing", async (page) => {
+    await fresh(page, chatScenario({ threads: [T1], details: { t1: THREAD } }));
+    await page.getByText("This conversation does not exist, or it is not yours.", { exact: true }).waitFor();
+  });
+  await check("A failed conversation list says why and retries", "ask", async (page) => {
+    await fresh(page, chatScenario({ threads: [T1], details: { t1: THREAD }, failThreads: 1 }));
+    const list = page.getByRole("navigation", { name: "Conversations" });
+    await list.getByRole("button", { name: "Retry" }).click();
+    await list.getByRole("link", { name: /Offsite plans/ }).waitFor();
+  });
+  await check("A model whose estimate is above the per-answer cap is flagged before sending", "ask", async (page) => {
+    await fresh(page, chatScenario());
+    await page.getByLabel("Model").selectOption("m2");
+    await page.getByText("above the $0.0200 cap per answer", { exact: false }).waitFor();
+    await page.getByLabel("Model").selectOption("m1");
+    await page.getByText("About $0.0040 per answer", { exact: false }).waitFor();
+    assert.equal(await page.getByText("above the $0.0200 cap per answer", { exact: false }).count(), 0);
+    assert.deepEqual(MODELS.models.map((m) => m.id), ["m1", "m2"]);
+  });
+  await check("Ask fits a 375 px phone: conversations behind a button, no sideways scroll", "ask#ask/t1", async (page) => {
+    await fresh(page, chatScenario({ threads: [T1], details: { t1: THREAD } }));
+    await page.getByText("In March", { exact: false }).waitFor();
+    const list = page.getByRole("navigation", { name: "Conversations" });
+    assert.equal(await list.isVisible(), false);
+    const toggle = page.getByRole("button", { name: "Conversations" });
+    await toggle.click();
+    assert.equal(await toggle.getAttribute("aria-expanded"), "true");
+    await list.getByRole("link", { name: /Offsite plans/ }).waitFor({ state: "visible" });
+    await page.keyboard.press("Escape");
+    assert.equal(await list.isVisible(), false);
+    const fit = await page.evaluate(() => ({ page: document.documentElement.scrollWidth, viewport: window.innerWidth }));
+    assert.equal(fit.page <= fit.viewport, true, `page scrolls to ${fit.page}px`);
+  }, { viewport: { width: 375, height: 812 } });
+  await check("The command palette hands a typed question to Ask without sending it", "palette", async (page) => {
+    await fresh(page, chatScenario());
+    const input = page.getByRole("dialog").getByRole("combobox");
+    await input.fill("When is the offsite");
+    await page.getByRole("option", { name: /Ask: .When is the offsite./ }).waitFor();
+    await input.press("ArrowDown");
+    await input.press("Enter");
+    assert.equal(await page.getByLabel("Question", { exact: true }).inputValue(), "When is the offsite");
+    assert.equal(await page.evaluate(() => location.hash), "#ask");
+    assert.equal(await page.getByRole("dialog").count(), 0);
+    assert.deepEqual(chat.posts("/admin/api/chat"), []);
+  });
+  await check("With no hits, Enter in the palette still opens full search", "palette", async (page) => {
+    await fresh(page, chatScenario());
+    const input = page.getByRole("dialog").getByRole("combobox");
+    await input.fill("offsite dates");
+    await page.getByRole("option", { name: /Ask: / }).waitFor();
+    assert.equal(await page.locator(".cmdk-row.active").count(), 0);
+    await input.press("Enter");
+    await page.waitForFunction(() => location.hash === "#search/offsite%20dates");
+  });
   await check("Connections reconnects a needs-reconnect account with its provider, source and services", "connections", async (page) => {
     automation.reset(scenario({ accounts: [account({ status: "needs_reconnect", status_reason: "invalid_grant", enabled: true,
       notices: [{ kind: "needs_reconnect", detail: "The provider refused the stored access.", created_at: "2026-11-09T10:00:00Z" }] })] }));
