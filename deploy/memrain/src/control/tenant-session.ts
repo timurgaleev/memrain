@@ -87,9 +87,13 @@ async function dropLogin(master: PostgresEngine, masterUrl: string, login: strin
   try {
     await tenantDb.transaction(async (tx) => {
       // Settings the tenant gave its database (ALTER DATABASE ... SET) apply
-      // to this session too; these two would stop the clean-up.
+      // to this session too, and the tenant can hold a lock on what pins the
+      // login: no setting and no timeout may stop the clean-up half-way and
+      // leave the login behind. It waits instead.
       await tx.query(`SET TRANSACTION READ WRITE`);
       await tx.query(`SET LOCAL lock_timeout = 0`);
+      await tx.query(`SET LOCAL statement_timeout = 0`);
+      await tx.query(`SET LOCAL idle_in_transaction_session_timeout = 0`);
       await tx.query(`REASSIGN OWNED BY ${ident(login)} TO ${ident(owner)}`);
       await tx.query(`DROP OWNED BY ${ident(login)}`);
     });
