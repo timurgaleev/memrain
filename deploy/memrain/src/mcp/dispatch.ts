@@ -426,6 +426,8 @@ export interface DispatchOptions {
    * (a saved chat answer citing outside evidence). Transports never set it.
    */
   trustCeiling?: TrustTier;
+  /** A member's own write from /app (`member:<id>`), recorded as its principal. Transports never set it. */
+  memberPrincipal?: `member:${string}`;
 }
 
 /**
@@ -2867,6 +2869,7 @@ export function remoteWriterIdentity(opts: DispatchOptions): string | undefined 
 
 export function writerIdentity(opts: DispatchOptions): string {
   if (opts.isPublic) return "public";
+  if (opts.memberPrincipal) return opts.memberPrincipal;
   const id = opts.authInfo?.clientId;
   return id !== undefined && id.length > 0 ? `client:${id}` : "operator";
 }

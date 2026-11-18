@@ -63,6 +63,7 @@ import { serveAdminStatic } from "./admin-static.ts";
 import { handleAdminEventsRoute } from "./admin-events.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
 import { admitRequest } from "../core/tenant-guard.ts";
+import { handleApp } from "./app.ts";
 
 /** RFC 6749 §5.2-style throttle response for the rate-limited OAuth endpoints. */
 function rateLimited(): Response {
@@ -661,6 +662,13 @@ export function startServer(opts: ServerOptions): ServerHandle {
           clientIp: ip,
         });
       }
+      // The member app: its own cookie session, never the admin's (app.ts).
+      const app = await handleApp(req, url, {
+        storage: opts.storage,
+        ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
+        ...(opts.oauthProvider ? { oauthProvider: opts.oauthProvider } : {}),
+      });
+      if (app) return app;
       if (url.pathname === "/mcp" && mcpHandler) {
         // Evaluate the internal-token gate once per request; the handler
         // enforces it only for write tools on the internal path (read

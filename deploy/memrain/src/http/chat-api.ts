@@ -18,8 +18,8 @@
  * work (bad body, unknown model or thread) is a 400 whose body is that same
  * error/done pair. A thread that is not the caller's is a 404, never a 403.
  *
- * The owner is the operator today; the owner record carries the grant and
- * spend id a member will bring.
+ * The same routes serve a member under /app/api/chat (http/app.ts), with the
+ * member as owner and the member's own grant for saves.
  */
 import type { Storage } from "../core/storage.ts";
 import type { SearchOptions } from "../core/search/hybrid.ts";
@@ -30,7 +30,7 @@ import { chatConfig } from "../core/chat/config.ts";
 import { CHAT_MESSAGE_MAX_CHARS, operatorOwner, runChatTurn, type ChatAnswer, type ChatOwner, type ChatStreamEvent } from "../core/chat/chat-service.ts";
 import { ChatError, chatErrorMessage, type ChatErrorCode } from "../core/chat/failures.ts";
 import { deleteChatThread, getChatThread, isThreadId, listChatThreads, confirmAnswer, threadMessages, withdrawAnswer } from "../core/chat/store.ts";
-import { saveAnswerAsPage } from "../core/chat/save.ts";
+import { saveAnswerAsPage, type SaveGrant } from "../core/chat/save.ts";
 
 export interface ChatApiDeps {
   storage: Storage;
@@ -195,10 +195,24 @@ function streamTurn(req: Request, deps: ChatApiDeps, owner: ChatOwner, send: Sen
 export async function handleChatApi(req: Request, url: URL, deps: ChatApiDeps): Promise<Response | null> {
   const p = url.pathname;
   if (p !== "/admin/api/chat" && !p.startsWith("/admin/api/chat/")) return null;
-  const owner = operatorOwner();
+  return handleChatRoutes(req, p.slice("/admin/api/chat".length), deps, operatorOwner());
+}
+
+/**
+ * The chat routes below a prefix (`/admin/api/chat`, `/app/api/chat`) for one
+ * owner. `sub` is the path after the prefix. A member's save writes under the
+ * member's own grant (`saveGrant`); the operator's under none.
+ */
+export async function handleChatRoutes(
+  req: Request,
+  sub: string,
+  deps: ChatApiDeps,
+  owner: ChatOwner,
+  saveGrant?: SaveGrant,
+): Promise<Response> {
   const engine = deps.storage.engine();
 
-  if (p === "/admin/api/chat") {
+  if (sub === "") {
     if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     const send = await parseSend(req);
     if (send instanceof Response) return send;
@@ -208,7 +222,7 @@ export async function handleChatApi(req: Request, url: URL, deps: ChatApiDeps): 
     return streamTurn(req, deps, owner, send);
   }
 
-  if (p === "/admin/api/chat/models" && req.method === "GET") {
+  if (sub === "/models" && req.method === "GET") {
     const cfg = chatConfig();
     return json({
       enabled: cfg.enabled,
@@ -219,11 +233,11 @@ export async function handleChatApi(req: Request, url: URL, deps: ChatApiDeps): 
     });
   }
 
-  if (p === "/admin/api/chat/threads" && req.method === "GET") {
+  if (sub === "/threads" && req.method === "GET") {
     return json({ threads: await listChatThreads(engine, owner) });
   }
 
-  const thread = /^\/admin\/api\/chat\/threads\/([^/]+)$/.exec(p);
+  const thread = /^\/threads\/([^/]+)$/.exec(sub);
   if (thread) {
     const id = decodeURIComponent(thread[1]!);
     if (!isThreadId(id)) return notFound();
@@ -236,9 +250,9 @@ export async function handleChatApi(req: Request, url: URL, deps: ChatApiDeps): 
     return json({ error: "method_not_allowed" }, 405);
   }
 
-  const save = /^\/admin\/api\/chat\/messages\/(\d{1,15})\/save$/.exec(p);
+  const save = /^\/messages\/(\d{1,15})\/save$/.exec(sub);
   if (save && req.method === "POST") {
-    const r = await saveAnswerAsPage(deps.storage, owner, Number(save[1]));
+    const r = await saveAnswerAsPage(deps.storage, owner, Number(save[1]), saveGrant);
     if (r.ok) return json({ slug: r.slug });
     return json({ error: r.error, message: r.message }, r.status);
   }
