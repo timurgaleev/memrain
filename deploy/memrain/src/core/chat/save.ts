@@ -10,9 +10,25 @@ import { ownedAnswer, setSavedSlug, type ChatOwner } from "./store.ts";
 const SLUG_WORDS_MAX = 60;
 const SLUG_ATTEMPTS = 9;
 
+/** What a refused save tells the client: a closed list, never the write's own text. */
+export type SaveError = "not_found" | "not_saveable" | "write_refused" | "slug_taken" | "busy";
+
 export type SaveAnswerResult =
   | { ok: true; slug: string }
-  | { ok: false; status: 404 | 409 | 422; error: string; message?: string };
+  | { ok: false; status: 404 | 409 | 422; error: SaveError; message: string };
+
+const SAVE_MESSAGES: Record<SaveError, string> = {
+  not_found: "That answer does not exist.",
+  not_saveable: "Only a finished answer can be saved.",
+  write_refused: "The page write was refused. The server log says why.",
+  slug_taken: "A page with this name already exists.",
+  busy: "This answer is already being saved.",
+};
+
+const refuse = (status: 404 | 409 | 422, error: SaveError): SaveAnswerResult => ({ ok: false, status, error, message: SAVE_MESSAGES[error] });
+
+/** Answers being saved in this process: a second click waits for nothing and is refused. */
+const saving = new Set<number>();
 
 /** Lowercase words joined by single hyphens, no trailing hyphen. */
 export function slugWords(text: string): string {
@@ -37,17 +53,25 @@ function pageBody(question: string | null, answer: string, citations: Array<{ n:
   return `${parts.join("\n\n")}\n`;
 }
 
-interface ToolEnvelope { error?: unknown; message?: unknown }
+interface ToolEnvelope { error?: unknown }
 
 export async function saveAnswerAsPage(storage: Storage, owner: ChatOwner, messageId: number, now = new Date()): Promise<SaveAnswerResult> {
+  if (saving.has(messageId)) return refuse(409, "busy");
+  saving.add(messageId);
+  try {
+    return await save(storage, owner, messageId, now);
+  } finally {
+    saving.delete(messageId);
+  }
+}
+
+async function save(storage: Storage, owner: ChatOwner, messageId: number, now: Date): Promise<SaveAnswerResult> {
   const engine = storage.engine();
   const found = await ownedAnswer(engine, owner, messageId);
-  if (!found) return { ok: false, status: 404, error: "not_found" };
+  if (!found) return refuse(404, "not_found");
   const { message, question } = found;
   if (message.saved_slug) return { ok: true, slug: message.saved_slug };
-  if ((message.status !== "ok" && message.status !== "refused") || !message.content.trim()) {
-    return { ok: false, status: 409, error: "not_saveable", message: "Only a finished answer can be saved." };
-  }
+  if ((message.status !== "ok" && message.status !== "refused") || !message.content.trim()) return refuse(409, "not_saveable");
   const base = `chats/${now.toISOString().slice(0, 10)}-${slugWords(question ?? message.content)}`;
   const title = (question ?? "Chat answer").replace(/\s+/g, " ").trim().slice(0, 200);
   const body = pageBody(question, message.content, message.citations);
@@ -66,16 +90,11 @@ export async function saveAnswerAsPage(storage: Storage, owner: ChatOwner, messa
     try {
       env = JSON.parse(text) as ToolEnvelope;
     } catch {
-      console.error("[chat] save failed:", text.slice(0, 300));
-      return { ok: false, status: 422, error: "write_refused" };
+      // not an envelope; logged below
     }
     if (env.error === "version_conflict") continue;
-    return {
-      ok: false,
-      status: 422,
-      error: typeof env.error === "string" ? env.error : "write_refused",
-      ...(typeof env.message === "string" ? { message: env.message } : {}),
-    };
+    console.error("[chat] save refused:", text.slice(0, 300));
+    return refuse(422, "write_refused");
   }
-  return { ok: false, status: 409, error: "slug_taken", message: "A page with this name already exists." };
+  return refuse(409, "slug_taken");
 }

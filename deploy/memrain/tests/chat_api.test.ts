@@ -181,7 +181,7 @@ describe("admin chat API", () => {
       const res = await call(req("POST", `/admin/api/chat/messages/${second.at(-2)!.data.message_id}/save`, {}));
       expect(res.status).toBe(422);
       const body = await res.json() as { error: string; message?: string };
-      expect(body.error).not.toBe("internal error");
+      expect(body.error).toBe("write_refused");
       expect(JSON.stringify(body)).not.toContain(key);
     } finally {
       reply = old;

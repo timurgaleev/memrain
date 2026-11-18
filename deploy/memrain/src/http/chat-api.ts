@@ -215,7 +215,7 @@ export async function handleChatApi(req: Request, url: URL, deps: ChatApiDeps): 
   if (save && req.method === "POST") {
     const r = await saveAnswerAsPage(deps.storage, owner, Number(save[1]));
     if (r.ok) return json({ slug: r.slug });
-    return json({ error: r.error, ...(r.message ? { message: r.message } : {}) }, r.status);
+    return json({ error: r.error, message: r.message }, r.status);
   }
 
   return notFound();

@@ -14,7 +14,7 @@ import { Storage } from "../src/core/storage.ts";
 import { putPage } from "../src/core/pages.ts";
 import { indexPageIntoSearch } from "../src/core/page-index.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { costUsd, logSpend } from "../src/core/budget.ts";
+import { costUsd, logSpend, setSpendLedgerEngine, trackedInvoke } from "../src/core/budget.ts";
 import { runThink } from "../src/core/synthesis/think.ts";
 import type { SonnetCallInput, SonnetFn } from "../src/core/llm/sonnet.ts";
 import { deterministicEmbedQuery } from "./det-embed.ts";
@@ -169,6 +169,48 @@ describe("chat turn (P5-C1)", () => {
     const holds = await storage.engine().query<{ status: string }>(`SELECT status FROM mcp_spend_reservations`);
     expect(holds.rows.length).toBeGreaterThan(0);
     expect(holds.rows.every(h => h.status !== "pending")).toBe(true);
+  });
+
+  it("a booked model call is held once against the owner's day, not twice", async () => {
+    await page("notes/garden", "The garden plan is to plant tomatoes in May.");
+    // The stub books itself through the paid-call chokepoint, as a live call does.
+    const booked: SonnetFn = (input) => trackedInvoke(
+      { operation: "chat", model: MODEL, worstCase: { input: input.system + input.user, maxOutputTokens: input.maxTokens } },
+      async (meter) => {
+        const usage = { inputTokens: 900, outputTokens: 120 };
+        meter.report(usage);
+        return { text: answer(["page://notes/garden"]), modelId: MODEL, usage };
+      },
+    );
+    const saved = process.env["MEMRAIN_DAILY_BUDGET_USD"];
+    process.env["MEMRAIN_DAILY_BUDGET_USD"] = "5";
+    setSpendLedgerEngine(storage.engine());
+    try {
+      // The owner's day is exactly one answer: the turn's hold must not crowd out its own call.
+      const { result } = await turn(ctx(booked, { env: { ...ENV, MEMRAIN_CHAT_USER_DAY_USD: "0.02" } }), "what is the garden plan?");
+      expect(result).toMatchObject({ status: "ok" });
+      const rows = await storage.engine().query<{ client_id: string; role: string; outcome: string }>(
+        `SELECT client_id, role, outcome FROM mcp_spend_log WHERE operation = 'chat'`);
+      expect(rows.rows).toEqual([{ client_id: "memrain_chat_operator", role: "chat", outcome: "ok" }]);
+      const pending = await storage.engine().query<{ n: number }>(`SELECT count(*)::int AS n FROM mcp_spend_reservations WHERE status = 'pending'`);
+      expect(pending.rows[0]!.n).toBe(0);
+    } finally {
+      setSpendLedgerEngine(null);
+      if (saved === undefined) delete process.env["MEMRAIN_DAILY_BUDGET_USD"];
+      else process.env["MEMRAIN_DAILY_BUDGET_USD"] = saved;
+    }
+  });
+
+  it("a turn stopped before its model call never starts the call", async () => {
+    await page("notes/garden", "The garden plan is to plant tomatoes in May.");
+    const abort = new AbortController();
+    let calls = 0;
+    const model: SonnetFn = async () => { calls++; return { text: answer(["page://notes/garden"]), modelId: MODEL, usage: { inputTokens: 1, outputTokens: 1 } }; };
+    const result = await runChatTurn(ctx(model, { signal: abort.signal }), { message: "what is the garden plan?" }, (e) => {
+      if (e.event === "trace" && (e.data as { step: string }).step === "gather") abort.abort();
+    });
+    expect(calls).toBe(0);
+    expect(result.status).toBe("error");
   });
 
   it("8. cost is the model's price times usage; an unpriced model is refused before any call", async () => {

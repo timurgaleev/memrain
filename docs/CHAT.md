@@ -41,7 +41,9 @@ Every other setting has a safe default; see the chat rows in
   shows, for each model, the most an answer can cost on it.
 - **Stopping.** Closing the tab or pressing stop releases the held money.
 - **Where it shows.** `memrain spend` and the Spend page have a `chat` slice:
-  chat calls by model, by owner and by day.
+  chat calls by model, by owner and by day. The cost shown under an answer is
+  its model calls; the slice also counts the search embeddings (a fraction of
+  a cent).
 
 ## Privacy
 

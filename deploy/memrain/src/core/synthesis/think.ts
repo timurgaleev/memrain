@@ -1315,7 +1315,8 @@ function defaultBudget(): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_BUDGET_USD;
 }
 
-const TRACE_SLUGS = 5;
+/** Every page of a default gather: a citation can rest on any of them. */
+const TRACE_SLUGS = DEFAULT_PAGE_HITS;
 
 /** The ref a trace shows for a gathered page: its slug when it is a page mirror. */
 function traceRef(sourcePath: string): string {

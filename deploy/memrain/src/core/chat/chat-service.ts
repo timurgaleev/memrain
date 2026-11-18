@@ -10,7 +10,13 @@
  * owner's day (MEMRAIN_CHAT_USER_DAY_USD) before any model call, and checked
  * against the brain's day. Every live call then runs inside the `chat` wallet
  * path, whose per-call and per-run caps are that same ceiling, booked under
- * the owner's spend id. A cancelled turn releases its hold.
+ * the owner's spend id. That id carries no day cap of its own inside the
+ * turn: the turn's hold already reserved the owner's share and the run cap
+ * keeps the turn inside it, so a second owner check would count the turn
+ * twice. The brain-wide cap still checks every call, the turn's hold
+ * included, which errs on the safe side near that cap. A cancelled turn
+ * releases its hold; a model call already on the wire keeps its own hold
+ * until it settles.
  *
  * The model gets no tools: it writes text and changes nothing. Retrieved
  * outside text reaches it only inside think's external frame, and the trace
@@ -310,6 +316,8 @@ async function turn(
   const tokens = { input: 0, output: 0 };
   const guard = (fn: SonnetFn): SonnetFn => async (call) => {
     try {
+      // A turn stopped while it was still gathering never starts a paid call.
+      if (stop.signal.aborted) throw new TurnStopped();
       const resp = await untilAborted(fn(call), stop.signal);
       tokens.input += resp.usage.inputTokens;
       tokens.output += resp.usage.outputTokens;
@@ -363,7 +371,7 @@ async function turn(
     };
     const result = await runInWallet(
       { role: "chat", requiresBrainCap: true, callCapUsd: answerCap, runCapUsd: answerCap },
-      () => runWithSpendClient({ clientId: owner.spendId, capUsd: cfg.userDayUsd }, run),
+      () => runWithSpendClient({ clientId: owner.spendId, capUsd: null }, run),
     );
     if (result) spentUsd += result.spentUsd;
 
