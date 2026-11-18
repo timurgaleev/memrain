@@ -63,14 +63,29 @@ BAD_MOUNT="$(jq -r '.[0].Mounts // [] | .[].Source | select(test("/\\.secrets(/|
 [ -z "$BAD_MOUNT" ] || fail "host: ${C} mounts ${BAD_MOUNT}"
 echo "ok host (one network, no secrets mounted)"
 
-# ---- Neighbours: every other tenant with a running container ---------------
+# ---- Neighbours: every other tenant the host or control knows --------------
 # Every other tenant's three secrets and the control admin URL must be out of
-# reach: credentials denied one of them may still read another.
+# reach: credentials denied one of them may still read another. A tenant can
+# have secrets before it has a container file, so the ids come from control's
+# list as well as from deploy/tenants/ and the staged secrets. Without the
+# list the smoke cannot know every neighbour, and fails.
+hosting_files
+if ! LIST="$(hosting_ctl tenant list --json --status provisioning,active,suspended,deleting)" \
+   || ! printf '%s' "$LIST" | jq -e '.ok == true and (.tenants | type == "array")' >/dev/null 2>&1; then
+  fail "neighbours: cannot read the tenant list from control"
+fi
+IDS_FROM_CONTROL="$(printf '%s' "$LIST" | jq -r '.tenants[].id')"
+OTHER_IDS="$(
+  { printf '%s\n' "$IDS_FROM_CONTROL"
+    for f in "${TENANTS_DIR}"/*.yml "${DEPLOY_DIR}/.secrets/tenants"/*.env; do
+      if [ -e "$f" ]; then basename "${f%.*}"; fi
+    done; } | sort -u
+)"
 NEIGHBOURS=() FOREIGN=() OTHERS=0
-for f in "${TENANTS_DIR}"/*.yml; do
-  [ -e "$f" ] || continue
-  other="$(basename "$f" .yml)"
-  if [ "$other" = "$ID" ] || ! valid_tenant_id "$other"; then continue; fi
+while IFS= read -r other; do
+  [ -n "$other" ] || continue
+  if [ "$other" = "$ID" ]; then continue; fi
+  valid_tenant_id "$other" || fail "neighbours: '${other}' is not a tenant id"
   OTHERS=$((OTHERS + 1))
   for kind in postgres-url control-url internal-token; do FOREIGN+=("${PREFIX}/tenants/${other}/${kind}"); done
   oinfo="$(docker inspect "memrain-${other}" 2>/dev/null)" || { echo "note: memrain-${other} has no container; skipped"; continue; }
@@ -79,7 +94,7 @@ for f in "${TENANTS_DIR}"/*.yml; do
   while IFS= read -r ip; do
     [ -n "$ip" ] && NEIGHBOURS+=("${ip}:${PORT}")
   done < <(jq -r '.[0].NetworkSettings.Networks[]?.IPAddress // empty' <<< "$oinfo")
-done
+done <<< "$OTHER_IDS"
 [ "$OTHERS" -gt 0 ] || FOREIGN+=("${PREFIX}/tenants/smoke-probe/postgres-url")
 FOREIGN+=("${PREFIX}/hosting/control-admin-url")
 

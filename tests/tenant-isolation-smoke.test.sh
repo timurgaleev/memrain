@@ -121,7 +121,10 @@ case "$1" in
   compose)
     shift
     while [ $# -gt 0 ]; do case "$1" in --env-file|-f) shift 2 ;; *) break ;; esac; done
-    printf 'compose %s\n' "$*" >> "$S/calls.log" ;;
+    printf 'compose %s\n' "$*" >> "$S/calls.log"
+    case "$*" in
+      *"tenant list --json"*) [ -e "$S/list_fail" ] && exit 1; cat "$S/list.json" ;;
+    esac ;;
   *) printf 'docker %s\n' "$*" >> "$S/calls.log" ;;
 esac
 STUB
@@ -133,6 +136,13 @@ container_json() { # NAME NETWORK [MOUNT_SOURCE]
   [ -n "${3:-}" ] && mounts="[{\"Type\":\"bind\",\"Source\":\"$3\",\"Destination\":\"/x\"}]"
   printf '{"Name":"/%s","State":{"Running":true},"Mounts":%s,"NetworkSettings":{"Networks":{"%s":{"IPAddress":"127.0.0.1"}}}}\n' \
     "$1" "$mounts" "$2" > "$S/inspect/$1.json"
+}
+
+# list ID:STATUS... -> what `tenant list --json` answers in this workspace
+list() {
+  local e="" p
+  for p in "$@"; do e="${e:+$e,}{\"id\":\"${p%%:*}\",\"status\":\"${p#*:}\",\"mode\":null,\"hostname\":\"h\"}"; done
+  printf '{"ok":true,"tenants":[%s]}\n' "$e" > "$S/list.json"
 }
 
 N=0
@@ -152,6 +162,7 @@ ws_new() {
   container_json memrain-beta memrain_tenant_beta
   printf 'postgres://acme_owner:%s@127.0.0.1:%s/tenant_acme' "pw-secret" "$(port rds)" > "$S/pg_url"
   rm -rf "$TMPROOT/secret_mode"
+  list acme:active beta:active
   echo AccessDeniedException > "$TMPROOT/secrets_mode"
 }
 
@@ -270,5 +281,27 @@ ws_new; RC=0
 (cd "$WS" && env -i PATH="$S/bin:$PATH" STUB_DIR="$S" bash scripts/tenant-isolation-smoke.sh 'acme;id') > "$WS/out.log" 2>&1 || RC=$?
 if [ "$RC" -ne 0 ] && [ ! -s "$S/calls.log" ]; then pass "an invalid tenant id is refused before any docker call"; else die "invalid id: rc=$RC"; fi
 
-ws_new; rm -f "$WS/deploy/tenants/beta.yml"; run_smoke
+ws_new; rm -f "$WS/deploy/tenants/beta.yml"; list acme:active; run_smoke
 if [ "$RC" -eq 0 ] && grep -q 'hst/tenants/smoke-probe/postgres-url' "$WS/out.log"; then pass "a lone tenant probes a made-up neighbour secret"; else die "lone tenant: rc=$RC"; show; fi
+
+# Neighbours whose container file does not exist yet still have secrets.
+ws_new; creds; list acme:active beta:active delta:provisioning
+readable_one hst/tenants/delta/internal-token
+run_smoke
+if [ "$RC" -ne 0 ] && grep -q 'FAIL secrets: hst/tenants/delta/internal-token' "$WS/out.log" && ! called 'smoke-record'; then
+  pass "a tenant known only to control is probed too"
+else
+  die "control-only tenant not probed (rc=$RC)"; show
+fi
+ws_new; mkdir -p "$WS/deploy/.secrets/tenants"; : > "$WS/deploy/.secrets/tenants/epsilon.env"; run_smoke
+if [ "$RC" -eq 0 ] && grep -q 'ok secrets (hst/tenants/epsilon/internal-token:' "$WS/out.log"; then
+  pass "a tenant with staged secrets but no container file is probed too"
+else
+  die "staged-only tenant not probed (rc=$RC)"; show
+fi
+ws_new; touch "$S/list_fail"; run_smoke
+if [ "$RC" -ne 0 ] && ! called 'exec memrain-acme' && ! called 'smoke-record'; then
+  pass "an unreadable tenant list fails the smoke before probing"
+else
+  die "list failure: rc=$RC"; show
+fi
