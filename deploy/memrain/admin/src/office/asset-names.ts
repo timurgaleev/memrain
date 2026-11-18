@@ -18,7 +18,11 @@ export type ModelId =
   | "monitor"
   | "character";
 
-export const MODEL_FILES: Readonly<Record<ModelId, string>> = {
+// Built in code (whiteboard3d.ts), so there is no file to load.
+export type ProceduralModelId = "whiteboard";
+export const PROCEDURAL_MODELS: readonly ModelId[] = ["whiteboard"];
+
+export const MODEL_FILES: Readonly<Record<Exclude<ModelId, ProceduralModelId>, string>> = {
   desk: "desk.glb",
   chair: "chairDesk.glb",
   shelf: "bookcaseOpen.glb",
@@ -27,8 +31,6 @@ export const MODEL_FILES: Readonly<Record<ModelId, string>> = {
   sofa: "loungeSofa.glb",
   coffee_machine: "kitchenCoffeeMachine.glb",
   counter: "kitchenBar.glb",
-  // The board's glass reads as a whiteboard once the scene paints it white.
-  whiteboard: "bathroomMirror.glb",
   board: "paneling.glb",
   lamp: "lampRoundFloor.glb",
   rug: "rugRectangle.glb",

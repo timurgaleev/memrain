@@ -27,7 +27,7 @@ import { animPose, clipFor, clipsForPose, nextClips, syncCharacters, type ClipNa
 import { buildPlacements, buildSeats, floorBoxes } from "../admin/src/office/layout3d.ts";
 import { parseHash } from "../admin/src/lib/route.ts";
 import { assignSeats, freeSeat, type Seat } from "../admin/src/office/seats.ts";
-import { CHARACTER_CLIPS, CHARACTER_FILES, MODEL_FILES, SIDE_FILES, sideFileOf, type ModelId } from "../admin/src/office/asset-names.ts";
+import { CHARACTER_CLIPS, CHARACTER_FILES, MODEL_FILES, PROCEDURAL_MODELS, SIDE_FILES, sideFileOf, type ModelId } from "../admin/src/office/asset-names.ts";
 import { modelsOverBudget, staticClosure, threeInStaticClosure, type Manifest } from "../admin/scripts/check-office-chunks.ts";
 
 const NOW = 1_000_000;
@@ -718,11 +718,19 @@ describe("figure looks", () => {
 describe("3D office assets", () => {
   const ids: ModelId[] = ["desk", "chair", "shelf", "cabinet", "plant", "sofa", "coffee_machine", "counter", "whiteboard", "board", "lamp", "rug", "monitor", "character"];
 
-  it("has a model file on disk for every model id", () => {
+  it("has a model file on disk for every model id, except those built in code", () => {
     for (const id of ids) {
-      expect(MODEL_FILES[id]).toMatch(/\.(glb|gltf)$/);
-      expect(existsSync(join(ASSET_DIR, MODEL_FILES[id]))).toBe(true);
+      if (PROCEDURAL_MODELS.includes(id)) continue;
+      const file = MODEL_FILES[id as keyof typeof MODEL_FILES];
+      expect(file).toMatch(/\.(glb|gltf)$/);
+      expect(existsSync(join(ASSET_DIR, file))).toBe(true);
     }
+  });
+
+  it("builds the whiteboard in code, with no file for it", () => {
+    expect(PROCEDURAL_MODELS).toEqual(["whiteboard"]);
+    expect(Object.keys(MODEL_FILES)).not.toContain("whiteboard");
+    expect(existsSync(join(ASSET_DIR, "bathroomMirror.glb"))).toBe(false);
   });
 
   it("offers at least six distinct people", () => {
@@ -810,7 +818,7 @@ describe("3D world mapping", () => {
       (t.x === home.x && t.y === home.y));
 
   it("gives every prop a known model kind", () => {
-    const known = new Set(Object.keys(MODEL_FILES));
+    const known = new Set<string>([...Object.keys(MODEL_FILES), ...PROCEDURAL_MODELS]);
     for (const p of [...PROPS, ...WALL_DECOR]) expect(p.kind === null || known.has(p.kind)).toBe(true);
   });
 

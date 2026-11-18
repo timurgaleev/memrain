@@ -1,4 +1,3 @@
-import whiteboardUrl from "../assets/office3d/bathroomMirror.glb?url";
 import cabinetUrl from "../assets/office3d/bookcaseClosedDoors.glb?url";
 import shelfUrl from "../assets/office3d/bookcaseOpen.glb?url";
 import chairUrl from "../assets/office3d/chairDesk.glb?url";
@@ -24,13 +23,12 @@ import sofaUrl from "../assets/office3d/loungeSofa.glb?url";
 import boardUrl from "../assets/office3d/paneling.glb?url";
 import plantUrl from "../assets/office3d/pottedPlant.glb?url";
 import rugUrl from "../assets/office3d/rugRectangle.glb?url";
-import { CHARACTER_FILES, MODEL_FILES, sideFileOf, type ModelId } from "./asset-names.ts";
+import { CHARACTER_FILES, MODEL_FILES, sideFileOf, type ModelId, type ProceduralModelId } from "./asset-names.ts";
 
 export type { ModelId } from "./asset-names.ts";
 
 // The build renames every file with a content hash; this maps each plain name to it.
 const BUILT: ReadonlyMap<string, string> = new Map([
-  ["bathroomMirror.glb", whiteboardUrl],
   ["bookcaseClosedDoors.glb", cabinetUrl],
   ["bookcaseOpen.glb", shelfUrl],
   ["chairDesk.glb", chairUrl],
@@ -67,8 +65,8 @@ function built(name: string): string {
 export const CHARACTER_VARIANTS: readonly string[] = CHARACTER_FILES.map(built);
 
 export const MODEL_URLS = Object.fromEntries(
-  (Object.keys(MODEL_FILES) as ModelId[]).map((id) => [id, built(MODEL_FILES[id])]),
-) as Record<ModelId, string>;
+  (Object.keys(MODEL_FILES) as Exclude<ModelId, ProceduralModelId>[]).map((id) => [id, built(MODEL_FILES[id])]),
+) as Record<Exclude<ModelId, ProceduralModelId>, string>;
 
 // A .gltf names its buffer and texture by plain file name; the loader runs every
 // URL through this to find their built names.

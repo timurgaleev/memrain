@@ -39,6 +39,7 @@ import {
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneRig } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { CHARACTER_VARIANTS, MODEL_URLS, resolveModelFile } from "./assets3d.ts";
+import { buildWhiteboard } from "./whiteboard3d.ts";
 import { OFFICE_MAP, PROPS, WALL_DECOR } from "./map.ts";
 import type { targetFor } from "./ambient.ts";
 import { buildPlacements, buildSeats, floorBoxes, SPEC, tileKey, WALL_H, WALL_T, wallBoxes, type BoxItem, type Furniture, type Placement, type Seat } from "./layout3d.ts";
@@ -254,7 +255,7 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
   // A missing piece of furniture leaves a gap; missing people mean no office at all.
   const kindList = [...kinds];
   const [settled, people] = await Promise.all([
-    Promise.allSettled(kindList.map(async (k) => [k, (await loader.loadAsync(MODEL_URLS[k])).scene] as const)),
+    Promise.allSettled(kindList.map(async (k) => [k, k === "whiteboard" ? buildWhiteboard() : (await loader.loadAsync(MODEL_URLS[k])).scene] as const)),
     Promise.all(CHARACTER_VARIANTS.map((url) => loader.loadAsync(url))),
   ]);
   const furniture = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
@@ -264,15 +265,6 @@ async function buildScene(canvas: HTMLCanvasElement, renderer: WebGLRenderer, re
 
   const templates = new Map<Furniture, Template>();
   for (const [k, root] of furniture) {
-    if (k === "whiteboard") {
-      root.traverse((o) => {
-        if (o instanceof Mesh && o.material instanceof MeshStandardMaterial && o.material.name === "glass") {
-          o.material.color.set("#fbfcfd");
-          o.material.emissive.set("#ffffff");
-          o.material.emissiveIntensity = 0.12;
-        }
-      });
-    }
     if (k === "rug") {
       // Rugs take their colour per instance; the darker border keeps its shade.
       root.traverse((o) => {
