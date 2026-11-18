@@ -53,7 +53,8 @@ same transcript importer, so redaction, page names
 | Codex | session-end hook | the same push from `~/.codex/hooks.json` |
 | Local session logs on the brain host | scheduled import | `memrain transcripts ingest <dir> --since auto` on a timer |
 | ChatGPT, Claude.ai | official export | the user downloads an export; `conversation-archive` imports it |
-| Slack, Teams | not available yet | say so; no workaround |
+| Slack | connector (operator-run, off by default) | the operator connects a Slack app of their own and picks channels; each channel day becomes one page in a `chat` source |
+| Teams | connector (operator-run, off by default) | the operator adds Teams to the Microsoft account; each 1:1, group or meeting chat day becomes one page in a `chat` source |
 
 There is no account-connected scraper for ChatGPT or Claude.ai. Do not offer
 one, and never ask for a session cookie: a cookie is the user's full account
@@ -108,6 +109,18 @@ changed. Schedule it with `cron-scheduler`; daily is plenty. Fact extraction
 during import (`--facts`) is paid and needs `--max-cost-usd`; leave it off
 unless the user asked for it.
 
+### Slack and Teams
+
+These are connectors, not transcript lanes: the brain's operator sets them up
+on the admin Connections page, never through this skill, and they stay off
+until configured. Point the user to `docs/connectors/SLACK.md` (a Slack app of
+their own, channels the bot was invited to, direct messages never read) or
+`docs/connectors/MICROSOFT.md` Part 4 (Teams chats and meeting transcripts,
+one permission needing admin consent). Once a sync ran, `sources_list` shows
+the `chat` source and `search` finds the channel or chat days. Do not ask for a
+Slack token or a Microsoft password in chat; the operator enters them in the
+admin panel.
+
 ### ChatGPT and Claude.ai
 
 The user exports from the provider's settings and downloads the archive. Hand
@@ -122,6 +135,8 @@ This skill guarantees:
   as hand-built pages.
 - No session cookie is requested, stored or used; ChatGPT and Claude.ai come
   in through their official exports.
+- Slack and Teams arrive only through their connectors, set up by the
+  operator; no token is asked for in chat.
 - Push tokens live in 0600 files, are scoped to one write source, and are
   never put on a command line or in chat.
 - Hooks run on session end only and cannot break a session.
