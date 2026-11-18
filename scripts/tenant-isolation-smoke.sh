@@ -20,7 +20,8 @@
 # unless --no-record. Prints no secret.
 #
 # Debug and test knobs (shell env; never set them on a live host):
-#   SMOKE_BEDROCK_ADDR, SMOKE_IMDS_ADDR (host:port), SMOKE_SERVICE_PORT
+#   SMOKE_BEDROCK_ADDR, SMOKE_IMDS_ADDR (host:port), SMOKE_SERVICE_PORT,
+#   SMOKE_BOOT_ID_FILE
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -113,8 +114,16 @@ if ! docker exec \
 fi
 
 if [ "$RECORD" = 1 ]; then
+  # The container serves only under a record with the boot id it reads (the
+  # host's: one kernel), its own image stamp, and a pass after its start.
+  BOOT_ID="$(tr -d '[:space:]' < "${SMOKE_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" 2>/dev/null)" || BOOT_ID=""
+  [ -n "$BOOT_ID" ] || { echo "FAIL record: cannot read the host's boot id"; exit 1; }
+  STAMP="$(jq -r '[.[0].Config.Env // [] | .[] | select(startswith("MEMRAIN_VERSION=")) | sub("^MEMRAIN_VERSION="; "")] | last // "" | if . == "" then "dev" else . end' <<< "$INFO")"
+  STARTED="$(jq -r '.[0].State.StartedAt // empty' <<< "$INFO" | sed -E 's/(\.[0-9]{3})[0-9]*Z$/\1Z/')"
+  [ -n "$STARTED" ] || { echo "FAIL record: ${C} has no start time"; exit 1; }
   hosting_files
-  hosting_ctl tenant smoke-record "$ID" || { echo "FAIL record: tenant smoke-record ${ID} failed"; exit 1; }
+  hosting_ctl tenant smoke-record "$ID" --boot-id "$BOOT_ID" --image-stamp "$STAMP" --started-at "$STARTED" \
+    || { echo "FAIL record: tenant smoke-record ${ID} failed"; exit 1; }
   echo "isolation smoke for ${ID}: passed and recorded"
 else
   echo "isolation smoke for ${ID}: passed (not recorded)"

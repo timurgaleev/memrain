@@ -134,7 +134,7 @@ STUB
 container_json() { # NAME NETWORK [MOUNT_SOURCE]
   local mounts='[]'
   [ -n "${3:-}" ] && mounts="[{\"Type\":\"bind\",\"Source\":\"$3\",\"Destination\":\"/x\"}]"
-  printf '{"Name":"/%s","State":{"Running":true},"Mounts":%s,"NetworkSettings":{"Networks":{"%s":{"IPAddress":"127.0.0.1"}}}}\n' \
+  printf '{"Name":"/%s","State":{"Running":true,"StartedAt":"2026-11-18T09:30:00.123456789Z"},"Config":{"Env":["PATH=/usr/bin","MEMRAIN_VERSION=v9.9.9"]},"Mounts":%s,"NetworkSettings":{"Networks":{"%s":{"IPAddress":"127.0.0.1"}}}}\n' \
     "$1" "$mounts" "$2" > "$S/inspect/$1.json"
 }
 
@@ -164,6 +164,7 @@ ws_new() {
   rm -rf "$TMPROOT/secret_mode"
   list acme:active beta:active
   echo AccessDeniedException > "$TMPROOT/secrets_mode"
+  echo 5f0c9a8e-1b2d-4c3e-9f4a-0123456789ab > "$S/boot_id"
 }
 
 # Defaults every run: Bedrock is the local listener, IMDS a refused port, and
@@ -172,7 +173,7 @@ run_smoke() {
   RC=0
   (cd "$WS" && env -i PATH="$S/bin:$PATH" HOME="$WS" STUB_DIR="$S" MEMRAIN_DIR="$MEMRAIN_DIR" \
     SMOKE_BEDROCK_ADDR="127.0.0.1:$(port bedrock)" SMOKE_IMDS_ADDR="127.0.0.1:$(port closed)" \
-    SMOKE_SERVICE_PORT="$(port closed)" "$@" \
+    SMOKE_SERVICE_PORT="$(port closed)" SMOKE_BOOT_ID_FILE="$S/boot_id" "$@" \
     timeout 120 bash scripts/tenant-isolation-smoke.sh acme ${SMOKE_ARGS:+"$SMOKE_ARGS"}) > "$WS/out.log" 2>&1 || RC=$?
 }
 called() { grep -qF -- "$1" "$S/calls.log" 2>/dev/null; }
@@ -183,6 +184,11 @@ echo "== tenant-isolation-smoke.sh =="
 ws_new; run_smoke
 if [ "$RC" -eq 0 ]; then pass "an isolated tenant passes"; else die "isolated tenant failed (rc=$RC)"; show; fi
 if called 'tenant smoke-record acme'; then pass "a pass is recorded in control"; else die "no smoke-record after a pass"; fi
+# The container admits traffic only for a record with its own boot id and
+# image stamp, made after it started: the record must carry all three.
+if called 'tenant smoke-record acme --boot-id 5f0c9a8e-1b2d-4c3e-9f4a-0123456789ab --image-stamp v9.9.9 --started-at 2026-11-18T09:30:00.123Z'; then
+  pass "the record carries the container's boot id, image stamp and start time"
+else die "smoke-record lacks the container's stamp"; grep smoke-record "$S/calls.log" | sed 's/^/      /'; fi
 if grep -q 'pw-secret' "$WS/out.log"; then die "the database password reached the output"; else pass "no secret in the output"; fi
 if called 'inspect memrain-beta'; then pass "the neighbour comes from deploy/tenants/"; else die "neighbour not looked up"; fi
 probed=1
