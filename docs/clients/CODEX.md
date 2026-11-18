@@ -113,8 +113,11 @@ are with a one-time code instead.
 
 The repository is also a Codex plugin marketplace. Its one plugin lives in
 `plugins/memrain`, so an install copies only that folder: the `memrain` MCP
-server plus six skills (`query`, `brain-ops`, `capture`, `briefing`,
-`correction-pipeline`, `connect-client`).
+server plus eleven skills: `query`, `brain-ops`, `capture`, `briefing`,
+`correction-pipeline`, `connect-client`, `fact-check`, `research-compendium`,
+`draft-in-voice`, `resolve-before-asking` and `brain-link-discipline`. They are generated from `deploy/skills`; the
+lanes in `deploy/skills/plugin-lanes.json` decide which skills ship, and host-side
+skills (database diagnosis, engine moves, client administration) never do.
 
 ```bash
 codex plugin marketplace add <your-github-username>/memrain
