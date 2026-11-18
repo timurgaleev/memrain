@@ -176,6 +176,8 @@ describe("admin chat API", () => {
     chatOn();
     expect((await call(req("GET", "/admin/api/chat/threads/0f0f0f0f-0000-4000-8000-00000000dead"))).status).toBe(404);
     expect((await call(req("GET", "/admin/api/chat/threads/not-a-uuid"))).status).toBe(404);
+    expect((await call(req("GET", "/admin/api/chat/threads/%E0%A4%A"))).status).toBe(404);
+    expect((await call(req("DELETE", "/admin/api/chat/threads/%E0%A4%A"))).status).toBe(404);
     const evs = await events(await call(req("POST", "/admin/api/chat", { message: "where do the tomatoes go?" })));
     const id = String(evs.at(-2)!.data.thread_id);
     expect(await (await call(req("DELETE", `/admin/api/chat/threads/${id}`))).json()).toEqual({ ok: true });

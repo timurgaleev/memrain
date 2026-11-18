@@ -225,7 +225,8 @@ export async function handleChatApi(req: Request, url: URL, deps: ChatApiDeps): 
 
   const thread = /^\/admin\/api\/chat\/threads\/([^/]+)$/.exec(p);
   if (thread) {
-    const id = decodeURIComponent(thread[1]!);
+    // Thread ids are UUIDs, so the raw segment needs no decoding (a stray % would throw).
+    const id = thread[1]!;
     if (!isThreadId(id)) return notFound();
     if (req.method === "GET") {
       const t = await getChatThread(engine, owner, id);
