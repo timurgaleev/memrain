@@ -43,6 +43,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await recentTurns(e, id, 6)).toEqual([{ role: "user", content: "where?" }, { role: "assistant", content: "North bed [1]." }]);
       expect((await ownedAnswer(e, a, answerId))?.question).toBe("where?");
       expect(await ownedAnswer(e, owner("b"), answerId)).toBeNull();
+      const refused = await appendChatMessage(e, id, { role: "assistant", content: "Made up, cites nothing.", status: "refused" });
+      expect(await recentTurns(e, id, 6)).toEqual([{ role: "user", content: "where?" }, { role: "assistant", content: "North bed [1]." }]);
+      await e.query(`DELETE FROM chat_messages WHERE id = $1`, [refused]);
       const second = await appendChatMessage(e, id, { role: "assistant", content: "Unconfirmed.", status: "error" });
       await confirmAnswer(e, second);
       expect((await threadMessages(e, a, id))!.map(m => m.status)).toEqual([null, "ok", "ok"]);

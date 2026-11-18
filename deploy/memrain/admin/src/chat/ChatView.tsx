@@ -418,7 +418,7 @@ function AnswerView(p: {
       ) : (
         <>
           <Outcome code={outcome} pages={pagesLookedAt(p.citations, p.trace)} onRetry={p.onRetry} live={p.live} />
-          {outcome === "refused" && p.text.trim() !== "" && <div className="chat-answer"><Markdown source={p.text} /></div>}
+          {outcome === "refused" && p.gaps.length > 0 && <p className="chat-gaps"><strong>Not found:</strong> {p.gaps.join("; ")}</p>}
         </>
       )}
     </div>

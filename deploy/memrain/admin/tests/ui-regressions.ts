@@ -317,11 +317,13 @@ try {
   await check("A refused answer lists the pages it looked at", "ask", async (page) => {
     await fresh(page, chatScenario({ script: [
       { event: "trace", data: { step: "gather", count: 1, slugs: ["notes/plans"] } },
-      { event: "answer", data: { ...ANSWER, status: "refused", answer: "", citations: [], gaps: [] } },
+      { event: "answer", data: { ...ANSWER, status: "refused", answer: "Uruguay won it, says nothing.", citations: [], gaps: ["no page names the winner"] } },
       { event: "done", data: {} },
     ] }));
     await ask(page, "Who won the 1930 cup?");
     await page.getByText("Your memory has no answer to this", { exact: true }).waitFor();
+    await page.getByText("no page names the winner", { exact: false }).waitFor();
+    assert.equal(await page.getByText("Uruguay won it", { exact: false }).count(), 0, "uncited text is not shown");
     assert.equal(await page.getByRole("link", { name: "notes/plans" }).getAttribute("href"), "#page/notes%2Fplans");
     assert.equal(await page.getByRole("button", { name: "Save as page" }).count(), 0);
   });

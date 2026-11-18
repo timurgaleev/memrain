@@ -425,7 +425,8 @@ async function turn(
     const citations = await db(() => numberCitations(ctx.storage, owner, result));
     return await finish({
       status: citations.length > 0 ? "ok" : "refused",
-      answer: renderMarkers(result.synthesis.answer, result),
+      // Text no citation backs is not shown, stored or fed to the next turn.
+      answer: citations.length > 0 ? renderMarkers(result.synthesis.answer, result) : "",
       citations,
       gaps: result.synthesis.gaps,
       model: result.modelId ?? model,

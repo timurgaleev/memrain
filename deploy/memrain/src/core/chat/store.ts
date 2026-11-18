@@ -216,7 +216,7 @@ export async function recentTurns(engine: Engine, threadId: string, limit: numbe
   const r = await engine.query<{ role: "user" | "assistant"; content: string }>(
     `SELECT role, content FROM (
        SELECT id, role, content FROM chat_messages
-        WHERE thread_id = $1::uuid AND (role = 'user' OR status IN ('ok', 'refused'))
+        WHERE thread_id = $1::uuid AND (role = 'user' OR status = 'ok')
         ORDER BY id DESC LIMIT $2
      ) t ORDER BY id`,
     [threadId, limit],

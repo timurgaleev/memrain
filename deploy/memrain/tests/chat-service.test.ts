@@ -246,10 +246,15 @@ describe("chat turn (P5-C1)", () => {
   });
 
   it("an answer that cites nothing gathered is refused, not passed off as grounded", async () => {
-    const s = stub(() => answer([], "Nothing in memory says"));
+    const s = stub(() => JSON.stringify({ answer: "The capital of nowhere is Elsewhere [page://made/up].", citations: [{ ref: "page://made/up", kind: "page" }], gaps: ["no page names a capital"] }));
     const { result } = await turn(ctx(s.fn), "what is the capital of nowhere?");
     expect(result.status).toBe("refused");
     expect(result.citations).toEqual([]);
+    // Text no citation backs never reaches the client or the stored thread; the gaps do.
+    expect(result.answer).toBe("");
+    expect(result.gaps).toEqual(["no page names a capital"]);
+    const stored = await threadMessages(storage.engine(), operatorOwner(), result.thread_id);
+    expect(stored!.at(-1)!.content).toBe("");
   });
 
   it("a turn stopped while it is still gathering ends at once; its hold closes when the gather does", async () => {
