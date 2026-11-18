@@ -189,4 +189,21 @@ describe("admin chat API", () => {
       else process.env["MEMRAIN_SECRET_SCAN_DISPOSITION"] = oldDisposition;
     }
   });
+
+  it("a client that drops the stream mid-answer releases the turn's hold", async () => {
+    chatOn();
+    let started!: () => void;
+    const modelStarted = new Promise<void>(r => { started = r; });
+    const hanging: SonnetFn = () => { started(); return new Promise(() => {}); };
+    const res = await call(req("POST", "/admin/api/chat", { message: "where do the tomatoes go?" }), deps({ chatModel: hanging }));
+    const reader = res.body!.getReader();
+    await modelStarted;
+    const pending = async () => (await storage.engine().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM mcp_spend_reservations WHERE status = 'pending' AND client_id = 'memrain_chat_operator'`)).rows[0]!.n;
+    expect(await pending()).toBe(1);
+    await reader.cancel();
+    const deadline = Date.now() + 5000;
+    while ((await pending()) > 0 && Date.now() < deadline) await new Promise(r => setTimeout(r, 25));
+    expect(await pending()).toBe(0);
+  });
 });
