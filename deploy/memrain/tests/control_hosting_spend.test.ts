@@ -138,7 +138,7 @@ describe("hosting spend cap", () => {
       settle: async () => ({ ok: true }),
     });
     let sent = 0;
-    await expect(trackedInvoke(CALL, async (m) => { sent++; return ok(m); })).rejects.toMatchObject({ code: "budget_exhausted" });
+    await expect(trackedInvoke(CALL, async (m) => { sent++; return ok(m); })).rejects.toMatchObject({ code: "storage_error" });
     expect(sent).toBe(0);
     expect(await pendingHolds()).toBe(0);
   });
@@ -149,7 +149,7 @@ describe("hosting spend cap", () => {
     hosted({ ...active, llmOff: true });
     await expect(trackedInvoke(CALL, ok)).rejects.toMatchObject({ code: "budget_exhausted" });
     hosted(null);
-    await expect(trackedInvoke(CALL, ok)).rejects.toMatchObject({ code: "budget_exhausted" });
+    await expect(trackedInvoke(CALL, ok)).rejects.toMatchObject({ code: "storage_error" });
     hosted();
     await expect(trackedInvoke({ ...CALL, model: "vendor.unpriced-model-v1" }, ok)).rejects.toMatchObject({ code: "budget_exhausted" });
     expect(b.reserves).toEqual([]);

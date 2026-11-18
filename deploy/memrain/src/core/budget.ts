@@ -1447,9 +1447,16 @@ async function holdHosting(call: TrackedCall): Promise<HostingHold> {
     await bookRefusal(call);
     throw new DailyCapRefusal("hosting", `'${call.operation}' was not sent: ${message}`, suggestion, rollover);
   };
+  // An unreachable control plane is an outage, not a spending decision: it is
+  // a transient error, so search falls back to its keyword arm instead of
+  // failing, while nothing paid is sent.
+  const unavailable = async (message: string): Promise<never> => {
+    await bookRefusal(call);
+    throw new OperationError("storage_error", `'${call.operation}' was not sent: ${message}`, "Retry shortly.");
+  };
   const policy = await hostedPolicy();
-  if (policy === null) return refuse("the hosting control plane has not answered yet", "Retry shortly; reading and search keep working.");
-  if (policy.llmOff) return refuse("paid calls are switched off on this hosted install", "Ask the operator; reading and search keep working.");
+  if (policy === null) return unavailable("the hosting control plane has not answered yet");
+  if (policy.llmOff) return refuse("paid calls are switched off on this hosted install", "Ask the operator.");
   if (policy.status !== "active") return refuse("this hosted brain is suspended", "Ask the operator to resume it.");
   const worst = worstCaseUsd(call);
   if (worst === null) {
@@ -1457,12 +1464,12 @@ async function holdHosting(call: TrackedCall): Promise<HostingHold> {
       "Price the model in MODEL_PRICING/EMBEDDING_PRICING and give the call an explicit maximum output.", false);
   }
   const backend = hostingSpendBackend();
-  if (!backend) return refuse("no control plane connection is configured", "Set MEMRAIN_CONTROL_URL to this tenant's control URL.");
+  if (!backend) return unavailable("no control plane connection is configured");
   let r: Awaited<ReturnType<typeof backend.reserve>>;
   try {
     r = await backend.reserve(worst, reservationTtlSeconds());
   } catch (err) {
-    return refuse(`the hosting control plane is unreachable (${err instanceof Error ? err.message : String(err)})`, "Retry shortly.");
+    return unavailable(`the hosting control plane is unreachable (${err instanceof Error ? err.message : String(err)})`);
   }
   if (!r.ok) return refuse(`the hosting spend cap refused it (${r.reason})`, "Wait for the UTC day to roll over, or ask the operator.");
   return { id: r.id, usd: worst };
