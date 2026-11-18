@@ -35,7 +35,7 @@ hosting_compose() { docker compose --env-file "$ENV_FILE" "${HOSTING_COMPOSE_ARG
 # container runs, or fails when none runs.
 hosting_running_version() {
   local v
-  v="$(docker ps --filter 'name=^memrain-' --format '{{.Image}}' \
+  v="$(docker ps --filter 'name=memrain-' --format '{{.Image}}' \
     | sed -n 's/^memrain-hosting://p' | sort -V | tail -n 1)"
   [ -n "$v" ] && printf '%s\n' "$v"
 }
