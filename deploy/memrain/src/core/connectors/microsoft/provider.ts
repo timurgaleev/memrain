@@ -1,8 +1,8 @@
 /**
  * The Microsoft provider: OAuth 2.0 authorization code with PKCE against the
  * Microsoft identity platform's v2.0 endpoints, read-only delegated Graph
- * access to Outlook mail and calendar, and the account identified by Graph
- * `/me`.
+ * access to Outlook mail and calendar and to Teams chats and meeting
+ * transcripts, and the account identified by Graph `/me`.
  *
  * Endpoints carry a tenant segment: `common` by default, or `organizations`,
  * `consumers`, a tenant id or a verified domain saved with the bring-your-own
@@ -12,7 +12,12 @@
  *
  * Scopes are the minimum: `openid email offline_access User.Read` on every
  * connect (who connected, and a refresh token), plus `Mail.Read` for a mailbox
- * source and `Calendars.Read` for a calendar source. A scope without a
+ * source and `Calendars.Read` for a calendar source. Teams is added on its
+ * own, so a mail or calendar connect never asks for it: `Chat.Read` for a
+ * chat source, and for a meeting source `OnlineMeetings.Read` and
+ * `OnlineMeetingTranscript.Read.All` (which only an administrator can
+ * consent to) plus `Calendars.Read`, through which the meetings are found
+ * (teams-transcripts.ts). A scope without a
  * resource means Microsoft Graph, and the token response may spell it as the
  * full URL, may leave out the OpenID Connect scopes and may add `profile`
  * (learn.microsoft.com/entra/identity-platform/scopes-oidc); those differences
@@ -53,6 +58,8 @@ import type { ConnectorProvider, ProviderConnectError, ProviderIdentity } from "
 import { OUTLOOK_CALENDAR_SERVICE, outlookCalendarAdapter } from "./calendar.ts";
 import { GRAPH_API_ORIGIN } from "./graph-client.ts";
 import { OUTLOOK_MAIL_SERVICE, outlookMailAdapter, outlookMailService } from "./mail.ts";
+import { TEAMS_CHAT_SERVICE, teamsChatAdapter } from "./teams-chat.ts";
+import { TEAMS_TRANSCRIPTS_SERVICE, teamsTranscriptsAdapter } from "./teams-transcripts.ts";
 
 export { GRAPH_API_ORIGIN } from "./graph-client.ts";
 export { OUTLOOK_CALENDAR_SERVICE } from "./calendar.ts";
@@ -64,7 +71,12 @@ export const MICROSOFT_CALENDARS_READ = "Calendars.Read";
 
 const GRAPH_RESOURCE = `${GRAPH_API_ORIGIN}/`;
 const OIDC_SCOPES = ["openid", "email", "profile", "offline_access"] as const;
-const KNOWN_SCOPES = ["User.Read", "Mail.Read", MICROSOFT_CALENDARS_READ, ...OIDC_SCOPES] as const;
+export const TEAMS_CHAT_READ = "Chat.Read";
+export const ONLINE_MEETINGS_READ = "OnlineMeetings.Read";
+export const MEETING_TRANSCRIPTS_READ = "OnlineMeetingTranscript.Read.All";
+const KNOWN_SCOPES = [
+  "User.Read", "Mail.Read", MICROSOFT_CALENDARS_READ, TEAMS_CHAT_READ, ONLINE_MEETINGS_READ, MEETING_TRANSCRIPTS_READ, ...OIDC_SCOPES,
+] as const;
 /**
  * DelegationDoesNotExist, a tenant policy that keeps consent for an
  * administrator (90093), AdminConsentRequired, AdminConsentRequiredRequestAccess,
@@ -172,6 +184,8 @@ export function microsoftProvider(): ConnectorProvider {
     services: {
       [OUTLOOK_MAIL_SERVICE]: outlookMailService,
       [OUTLOOK_CALENDAR_SERVICE]: { scopes: [MICROSOFT_CALENDARS_READ], sourceKinds: ["calendar"] },
+      [TEAMS_CHAT_SERVICE]: { scopes: [TEAMS_CHAT_READ], sourceKinds: ["chat"] },
+      [TEAMS_TRANSCRIPTS_SERVICE]: { scopes: [MICROSOFT_CALENDARS_READ, ONLINE_MEETINGS_READ, MEETING_TRANSCRIPTS_READ], sourceKinds: ["meeting"] },
     },
     authorizeParams: { response_mode: "query", prompt: "select_account" },
     optionalGrantScopes: OIDC_SCOPES,
@@ -183,7 +197,13 @@ export function microsoftProvider(): ConnectorProvider {
     identify: ({ fetch, accessToken }) => identify(fetch, accessToken),
     sync: {
       apiOrigin: GRAPH_API_ORIGIN,
-      adapter: (account, ctx) => ((account.services ?? []).includes(OUTLOOK_MAIL_SERVICE) ? outlookMailAdapter(account, ctx) : outlookCalendarAdapter(account, ctx)),
+      adapter: (account, ctx) => {
+        const services = account.services ?? [];
+        if (services.includes(OUTLOOK_MAIL_SERVICE)) return outlookMailAdapter(account, ctx);
+        if (services.includes(TEAMS_CHAT_SERVICE)) return teamsChatAdapter(account, ctx);
+        if (services.includes(TEAMS_TRANSCRIPTS_SERVICE)) return teamsTranscriptsAdapter(account, ctx);
+        return outlookCalendarAdapter(account, ctx);
+      },
     },
   };
 }

@@ -160,8 +160,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const report = await (await b.send("/admin/api/connectors", { headers: SPA })).json() as { providers: Array<Record<string, unknown>> };
     expect(report.providers.find((p) => p.id === "microsoft")).toEqual({
       id: "microsoft",
-      services: ["outlook_mail", "outlook_calendar"],
-      service_kinds: { outlook_mail: ["mailbox"], outlook_calendar: ["calendar"] },
+      services: ["outlook_mail", "outlook_calendar", "teams_chat", "teams_transcripts"],
+      service_kinds: { outlook_mail: ["mailbox"], outlook_calendar: ["calendar"], teams_chat: ["chat"], teams_transcripts: ["meeting"] },
       auth: "oauth",
       callback_uri: `${PUBLIC}/admin/connectors/callback/microsoft`,
       tenant_default: "common",

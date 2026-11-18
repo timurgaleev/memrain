@@ -1,0 +1,452 @@
+/**
+ * The Teams meeting transcript adapter: transcripts of the signed-in user's
+ * scheduled Teams meetings, one meeting page per transcript (the shared
+ * meeting renderer, as Fireflies'), linked to the meeting's calendar event
+ * page rather than writing a second one.
+ *
+ * Graph facts relied on (learn.microsoft.com/graph/api, v1.0, delegated,
+ * work or school accounts only):
+ *   - transcripts hang off an online meeting id, and the delegated way to the
+ *     id is the meeting's join link: `GET /me/onlineMeetings?$filter=
+ *     JoinWebUrl eq '<link, URL-encoded>'` (onlinemeeting-get,
+ *     OnlineMeetings.Read). The links come from the calendar
+ *     (`/me/calendarView`, Calendars.Read): the account-wide listing
+ *     (getAllTranscripts) takes application permissions only;
+ *   - `GET /me/onlineMeetings/{id}/transcripts` lists a meeting's transcripts
+ *     and `.../transcripts/{tid}/content` returns one as WebVTT with
+ *     `<v Speaker>` voice tags (onlinemeeting-list-transcripts,
+ *     calltranscript-get, OnlineMeetingTranscript.Read.All, which needs an
+ *     administrator's consent). It works for the organizer and for users on
+ *     the meeting's calendar invite, until the meeting expires; a recurring
+ *     meeting shares one join link and lists every occurrence's transcripts;
+ *   - a tenant can turn Graph access to transcripts off: every request then
+ *     answers 403 `GraphAccessToTranscriptsDisabled`, and no retry helps. It
+ *     can also turn speaker attribution off: the WebVTT request answers 403
+ *     `SpeakerAttributionNotAllowed`, and the same content without speakers
+ *     is read with `Accept: application/vnd.microsoft.graph.transcript+text`.
+ *
+ * Each run lists the calendar from the last scanned time less a 48-hour
+ * lookback (a transcript is ready only after its meeting) to now, or from the
+ * history floor on the first run. A transcript without an `endDateTime` is
+ * still being written and waits for a later run; one already stored at the
+ * same times is not fetched again. The cursor moves to the run's start only
+ * when every transcript in the window was stored; a run cut by the item
+ * budget lists the window again next page.
+ *
+ * The meeting page's compiled truth names the calendar event page
+ * (`calendar_event`, the slug the Outlook calendar adapter of the same
+ * Microsoft account writes, keyed by the event's iCalUID, or its series
+ * master's for an occurrence) and `event_dedupe_key`, and its body links it
+ * with a wikilink. A tenant that turned transcripts off ends the run as
+ * forbidden with that code; a meeting Graph will not show is one held item.
+ *
+ * Everything a transcript holds is outside text: meeting credentials are
+ * removed from the title and every line before the shared renderer
+ * secret-scans and neutralizes it.
+ */
+import type { ConnectorClient, ConnectorResponse } from "../client.ts";
+import { redactMeetingCredentials } from "../meeting-redact.ts";
+import { renderMeeting, type RenderedConnectorPage } from "../render.ts";
+import { retentionDays } from "../retention.ts";
+import { syncItemFromPage } from "../sync-item.ts";
+import { settledItemVersions } from "../sync-store.ts";
+import { accountRef, shortHash, type ConnectorContext, type MeetingSentence, type Person } from "../model.ts";
+import type { Engine } from "../../engine/interface.ts";
+import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
+import type { AdapterContext } from "../providers.ts";
+import { graphTime } from "./calendar.ts";
+import { graphGet, graphInnerErrorCode, graphLinkPath } from "./graph-client.ts";
+import { TEAMS_HISTORY_DAYS, TEAMS_MAX_HISTORY_DAYS } from "./teams-chat.ts";
+
+/** The account service this adapter syncs. */
+export const TEAMS_TRANSCRIPTS_SERVICE = "teams_transcripts";
+export const TEAMS_TRANSCRIPTS_STREAM = "teams_transcripts";
+export const TRANSCRIPTS_DISABLED = "GraphAccessToTranscriptsDisabled";
+export const SPEAKERS_NOT_ALLOWED = "SpeakerAttributionNotAllowed";
+export const UNATTRIBUTED_FORMAT = "application/vnd.microsoft.graph.transcript+text";
+
+const LOOKBACK_MS = 48 * 3_600_000;
+const DAY_MS = 86_400_000;
+const PAGE_SIZE = 50;
+const MAX_EVENT_PAGES = 20;
+const MAX_TRANSCRIPT_PAGES = 5;
+/** A transcript body past this is not read: no meeting produces one. */
+const MAX_CONTENT_BYTES = 16 * 1024 * 1024;
+const GRAPH_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+/** A turn longer than this starts a new line: the renderer keeps 4000 characters per line. */
+const MAX_TURN_CHARS = 3_000;
+const MAX_PARTICIPANTS = 200;
+/** A transcript belongs to the latest occurrence that began no later than this after it started. */
+const OCCURRENCE_SLACK_MS = 15 * 60_000;
+const TEAMS_JOIN_RE = /^https:\/\/teams\.(?:microsoft|live)\.com\/(?:l\/meetup-join|meet)\//i;
+const CALENDAR_SELECT = "id,iCalUId,subject,start,end,isAllDay,isCancelled,isOnlineMeeting,onlineMeeting,organizer,attendees,type,seriesMasterId";
+
+type Json = Record<string, unknown>;
+
+function isRecord(v: unknown): v is Json {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+function str(v: unknown): string | null {
+  return typeof v === "string" && v.trim() !== "" ? v : null;
+}
+
+function timeMs(v: unknown): number {
+  return typeof v === "string" && v.length <= 64 ? Date.parse(v) : Number.NaN;
+}
+
+function enc(v: string): string {
+  return encodeURIComponent(v);
+}
+
+// ---------------------------------------------------------------------------
+// WebVTT.
+
+const CUE_TIME_RE = /^\s*(?:\d{1,3}:)?\d{2}:\d{2}[.,]\d{3}\s+-->\s+/;
+const VOICE_RE = /^<v(?:\.[^\s>]{0,40})?\s+([^>]{1,200})>/;
+const TAG_RE = /<\/?[a-z][^<>]{0,200}>/gi;
+
+/**
+ * A WebVTT transcript as speaker turns: each cue's `<v Name>` voice tag names
+ * its speaker (none in the unattributed format), other inline tags go, and
+ * consecutive cues of one speaker join into one turn up to MAX_TURN_CHARS.
+ * Linear in the text: line splits and bounded patterns only.
+ */
+export function parseVtt(text: string): MeetingSentence[] {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  if (!(lines[0] ?? "").trimStart().startsWith("WEBVTT")) return [];
+  const out: MeetingSentence[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!CUE_TIME_RE.test(lines[i]!)) continue;
+    const payload: string[] = [];
+    for (i++; i < lines.length && lines[i]!.trim() !== ""; i++) payload.push(lines[i]!.trim());
+    const joined = payload.join(" ");
+    const voice = VOICE_RE.exec(joined);
+    const speaker = voice ? voice[1]!.trim() : "";
+    const said = joined.replace(TAG_RE, "").replace(/\s+/g, " ").trim();
+    if (said === "") continue;
+    const last = out.at(-1);
+    if (last !== undefined && last.speaker === speaker && last.text.length + said.length < MAX_TURN_CHARS) {
+      out[out.length - 1] = { speaker, text: `${last.text} ${said}` };
+    } else {
+      out.push({ speaker, text: said });
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// The calendar side: which meetings had a Teams join link, and their pages.
+
+interface OnlineEvent {
+  joinUrl: string;
+  subject: string;
+  start: number;
+  end: number | null;
+  /** The event's own iCalUID, or null when it is an occurrence (its series' is looked up). */
+  iCalUID: string | null;
+  seriesMasterId: string | null;
+  people: Person[];
+}
+
+function person(v: unknown): Person | null {
+  if (!isRecord(v) || !isRecord(v.emailAddress)) return null;
+  const p = { name: str(v.emailAddress.name), email: str(v.emailAddress.address) };
+  return p.name === null && p.email === null ? null : p;
+}
+
+function onlineEvent(ev: Json): OnlineEvent | null {
+  if (ev.isCancelled === true) return null;
+  const join = isRecord(ev.onlineMeeting) ? str(ev.onlineMeeting.joinUrl) : null;
+  if (join === null || join.length > 2048 || !TEAMS_JOIN_RE.test(join)) return null;
+  const allDay = ev.isAllDay === true;
+  const start = Date.parse(graphTime(ev.start, allDay) ?? "");
+  if (!Number.isFinite(start)) return null;
+  const end = Date.parse(graphTime(ev.end, allDay) ?? "");
+  const occurrence = ev.type === "occurrence" || ev.type === "exception";
+  const people = [person(ev.organizer), ...(Array.isArray(ev.attendees) ? ev.attendees.filter(a => !isRecord(a) || a.type !== "resource").map(person) : [])];
+  return {
+    joinUrl: join,
+    subject: str(ev.subject) ?? "",
+    start,
+    end: Number.isFinite(end) ? end : null,
+    iCalUID: occurrence ? null : str(ev.iCalUId),
+    seriesMasterId: occurrence ? str(ev.seriesMasterId) : null,
+    people: people.filter((p): p is Person => p !== null),
+  };
+}
+
+/** The page the Outlook calendar adapter of this Microsoft account writes for an event (render.ts renderCalendarEvent). */
+export function calendarEventSlug(accountLabel: string, iCalUID: string): string {
+  return `calendar/${accountRef(accountLabel, "microsoft")}/${shortHash(`ical:${iCalUID}`)}`;
+}
+
+/** Name the calendar event page on the meeting page: in its truth, and as a wikilink under its heading. */
+function linkCalendarEvent(page: RenderedConnectorPage, slug: string, iCalUID: string): RenderedConnectorPage {
+  const lines = page.body.split("\n");
+  const at = lines.findIndex(l => l.startsWith("Meeting · "));
+  lines.splice(at + 1, 0, "", `Calendar event: [[${slug}]]`);
+  return {
+    ...page,
+    body: lines.join("\n"),
+    truth: { ...page.truth, calendar_event: slug, event_dedupe_key: shortHash(`ical:${iCalUID}`) },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The adapter.
+
+interface TranscriptState {
+  v: 1;
+  scannedTo: string;
+}
+
+function parseCursor(cursor: string | null): TranscriptState | null {
+  if (cursor === null || !cursor.startsWith("{")) return null;
+  try {
+    const raw = JSON.parse(cursor) as unknown;
+    return isRecord(raw) && raw.v === 1 && Number.isFinite(timeMs(raw.scannedTo)) ? { v: 1, scannedTo: raw.scannedTo as string } : null;
+  } catch {
+    return null;
+  }
+}
+
+function configInt(account: SyncAccount, key: string, min: number, max: number): number | null {
+  const v = account.config?.[key];
+  return typeof v === "number" && Number.isInteger(v) && v >= min && v <= max ? v : null;
+}
+
+/** Graph's answer when the tenant turned transcripts off: the run stops, saying so. */
+function transcriptsDisabled(res: ConnectorResponse): ConnectorResponse {
+  return {
+    ...res,
+    class: "forbidden",
+    error: `Microsoft Graph refused meeting transcripts for the whole organization (${TRANSCRIPTS_DISABLED}): `
+      + "a Teams administrator has to allow Graph API access to transcripts; see docs/connectors/MICROSOFT.md, Teams",
+  };
+}
+
+function badBody(res: ConnectorResponse, what: string): ConnectorResponse {
+  return { ...res, class: "challenge", body: null, error: `unexpected ${what} response` };
+}
+
+/** A meeting or transcript Graph will not show: one held item, so the other meetings go on. */
+function unavailable(externalId: string, res: ConnectorResponse, what: string): SyncItem {
+  return { externalId, version: null, failure: { code: `${what}_unavailable`, message: `Graph did not show the ${what} (HTTP ${res.status})`, holdNow: true } };
+}
+
+/** A response that ends the run (a rate limit, a server error, a lost credential), as opposed to one meeting's refusal. */
+function endsRun(res: ConnectorResponse): boolean {
+  return res.class !== "forbidden" || res.status === 0 || graphInnerErrorCode(res) === TRANSCRIPTS_DISABLED;
+}
+
+class TranscriptsAdapter implements SyncAdapter {
+  /** Fixed once per run, so every page of a window asks the same question. */
+  private readonly runAt: number;
+  private readonly masters = new Map<string, string | null>();
+
+  constructor(
+    private readonly account: SyncAccount,
+    now: () => number,
+    private readonly env: NodeJS.ProcessEnv,
+    private readonly engine: Engine | undefined,
+  ) {
+    this.runAt = now();
+  }
+
+  streams(): string[] {
+    return (this.account.services ?? []).includes(TEAMS_TRANSCRIPTS_SERVICE) ? [TEAMS_TRANSCRIPTS_STREAM] : [];
+  }
+
+  private floorMs(): number {
+    const keep = retentionDays("meeting", configInt(this.account, "retention_days", 0, 100_000), this.env);
+    const days = configInt(this.account, "history_days", 1, TEAMS_MAX_HISTORY_DAYS) ?? TEAMS_HISTORY_DAYS;
+    return this.runAt - (keep === null ? days : Math.min(days, keep)) * DAY_MS;
+  }
+
+  async page({ client, cursor, budget }: Parameters<SyncAdapter["page"]>[0]): Promise<PageResult> {
+    const st = parseCursor(cursor);
+    const floor = this.floorMs();
+    const from = st === null ? floor : Math.max(floor, Date.parse(st.scannedTo) - LOOKBACK_MS);
+    const listed = await this.onlineEvents(client, from, this.runAt);
+    if ("response" in listed) return { ok: false, response: listed.response };
+
+    const byLink = new Map<string, OnlineEvent[]>();
+    for (const ev of listed) byLink.set(ev.joinUrl, [...(byLink.get(ev.joinUrl) ?? []), ev]);
+    const room = budget?.remaining ?? Number.POSITIVE_INFINITY;
+    const items: SyncItem[] = [];
+    const done = new Set<string>();
+    let cut = false;
+    for (const [joinUrl, occurrences] of byLink) {
+      if (cut) break;
+      const meetingKey = `meeting:${shortHash(`tmeet:${joinUrl}`)}`;
+      const meeting = await this.meetingId(client, joinUrl);
+      if ("response" in meeting) {
+        if (endsRun(meeting.response)) return { ok: false, response: meeting.response };
+        items.push(unavailable(meetingKey, meeting.response, "meeting"));
+        continue;
+      }
+      if (meeting.id === null) continue;
+      const transcripts = await this.transcripts(client, meeting.id);
+      if ("response" in transcripts) {
+        const res = transcripts.response;
+        if (graphInnerErrorCode(res) === TRANSCRIPTS_DISABLED) return { ok: false, response: transcriptsDisabled(res) };
+        if (endsRun(res)) return { ok: false, response: res };
+        items.push(unavailable(meetingKey, res, "meeting"));
+        continue;
+      }
+      const due = transcripts.list.filter(t => !done.has(t.externalId) && t.created >= floor && t.created >= from - DAY_MS);
+      for (const t of due) done.add(t.externalId);
+      const settled = this.engine === undefined ? new Map<string, string>()
+        : await settledItemVersions(this.engine, this.account.id, due.map(t => t.externalId));
+      for (const t of due) {
+        if (settled.get(t.externalId) === t.version) continue;
+        if (items.length >= room) {
+          cut = true;
+          break;
+        }
+        const item = await this.transcriptItem(client, meeting.id, t, occurrences);
+        if ("response" in item) return { ok: false, response: item.response };
+        items.push(item);
+      }
+    }
+    return cut
+      ? { ok: true, items, checkpoint: null, done: false }
+      : { ok: true, items, checkpoint: JSON.stringify({ v: 1, scannedTo: new Date(this.runAt).toISOString() }), done: true };
+  }
+
+  /** The calendar's Teams meetings in [from, to], by start. */
+  private async onlineEvents(client: ConnectorClient, from: number, to: number): Promise<OnlineEvent[] | { response: ConnectorResponse }> {
+    const q = `startDateTime=${enc(new Date(from).toISOString())}&endDateTime=${enc(new Date(to).toISOString())}`;
+    let path: string | null = `/v1.0/me/calendarView?${q}&$select=${CALENDAR_SELECT}&$top=${PAGE_SIZE}`;
+    const out: OnlineEvent[] = [];
+    for (let p = 0; p < MAX_EVENT_PAGES && path !== null; p++) {
+      const res = await graphGet(client, path, { prefer: `outlook.timezone="UTC", odata.maxpagesize=${PAGE_SIZE}`, maxBytes: GRAPH_MAX_RESPONSE_BYTES });
+      if (res.class !== "ok") {
+        if (res.class !== "forbidden") return { response: res };
+        return {
+          response: {
+            ...res,
+            error: `Microsoft Graph refused the calendar (HTTP ${res.status}): Teams transcripts find meetings through it and need `
+              + "the delegated permission Calendars.Read; see docs/connectors/MICROSOFT.md, Teams",
+          },
+        };
+      }
+      if (!isRecord(res.body) || !Array.isArray(res.body.value)) return { response: badBody(res, "calendar view") };
+      for (const ev of (res.body.value as unknown[]).filter(isRecord)) {
+        const o = onlineEvent(ev);
+        if (o !== null) out.push(o);
+      }
+      const next = res.body["@odata.nextLink"];
+      path = next === undefined ? null : graphLinkPath(next);
+      if (next !== undefined && path === null) return { response: badBody(res, "calendar view next link") };
+    }
+    return out.sort((a, b) => a.start - b.start);
+  }
+
+  private async meetingId(client: ConnectorClient, joinUrl: string): Promise<{ id: string | null } | { response: ConnectorResponse }> {
+    // The link itself goes URL-encoded inside the OData literal (onlinemeeting-get), a quote included.
+    const literal = enc(joinUrl).replace(/'/g, "%27");
+    const res = await graphGet(client, `/v1.0/me/onlineMeetings?$filter=${enc(`JoinWebUrl eq '${literal}'`)}`, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
+    // A meeting of another organization, or one Graph no longer has: nothing to read.
+    if (res.status === 404) return { id: null };
+    if (res.class !== "ok") return { response: res };
+    if (!isRecord(res.body) || !Array.isArray(res.body.value)) return { response: badBody(res, "online meeting") };
+    const first = (res.body.value as unknown[]).find(isRecord);
+    const id = first === undefined ? null : str(first.id);
+    return { id: id !== null && id.length <= 1024 ? id : null };
+  }
+
+  private async transcripts(client: ConnectorClient, meetingId: string): Promise<{ list: Transcript[] } | { response: ConnectorResponse }> {
+    let path: string | null = `/v1.0/me/onlineMeetings/${enc(meetingId)}/transcripts`;
+    const list: Transcript[] = [];
+    for (let p = 0; p < MAX_TRANSCRIPT_PAGES && path !== null; p++) {
+      const res = await graphGet(client, path, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
+      if (res.class !== "ok") return { response: res };
+      if (!isRecord(res.body) || !Array.isArray(res.body.value)) return { response: badBody(res, "transcript list") };
+      for (const t of (res.body.value as unknown[]).filter(isRecord)) {
+        const id = str(t.id);
+        const created = timeMs(t.createdDateTime);
+        const end = timeMs(t.endDateTime);
+        // Still being written: a later run reads it whole.
+        if (id === null || id.length > 1024 || !Number.isFinite(created) || !Number.isFinite(end)) continue;
+        list.push({ id, created, end, externalId: `transcript:${shortHash(`${meetingId}:${id}`)}`, version: `${new Date(created).toISOString()}|${new Date(end).toISOString()}` });
+      }
+      const next = res.body["@odata.nextLink"];
+      path = next === undefined ? null : graphLinkPath(next);
+      if (next !== undefined && path === null) return { response: badBody(res, "transcript list next link") };
+    }
+    return { list };
+  }
+
+  /** The WebVTT text, read without speakers when the tenant keeps them out. */
+  private async content(client: ConnectorClient, meetingId: string, transcriptId: string): Promise<{ text: string } | { response: ConnectorResponse }> {
+    const base = `/v1.0/me/onlineMeetings/${enc(meetingId)}/transcripts/${enc(transcriptId)}/content`;
+    let res = await graphGet(client, `${base}?$format=${enc("text/vtt")}`, { text: true, maxBytes: MAX_CONTENT_BYTES });
+    if (res.class === "forbidden" && graphInnerErrorCode(res) === SPEAKERS_NOT_ALLOWED) {
+      res = await graphGet(client, base, { text: true, accept: UNATTRIBUTED_FORMAT, maxBytes: MAX_CONTENT_BYTES });
+    }
+    if (res.class !== "ok" || typeof res.body !== "string") return { response: res.class === "ok" ? badBody(res, "transcript content") : res };
+    return { text: res.body };
+  }
+
+  /** The iCalUID the calendar page of an event is keyed by: its own, or its series master's. */
+  private async eventICalUID(client: ConnectorClient, ev: OnlineEvent): Promise<string | null> {
+    if (ev.iCalUID !== null) return ev.iCalUID;
+    if (ev.seriesMasterId === null) return null;
+    const known = this.masters.get(ev.seriesMasterId);
+    if (known !== undefined) return known;
+    const res = await graphGet(client, `/v1.0/me/events/${enc(ev.seriesMasterId)}?$select=iCalUId`, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
+    const uid = res.class === "ok" && isRecord(res.body) ? str(res.body.iCalUId) : null;
+    this.masters.set(ev.seriesMasterId, uid);
+    return uid;
+  }
+
+  private async transcriptItem(client: ConnectorClient, meetingId: string, t: Transcript, occurrences: OnlineEvent[]): Promise<SyncItem | { response: ConnectorResponse }> {
+    const got = await this.content(client, meetingId, t.id);
+    if ("response" in got) {
+      const res = got.response;
+      if (graphInnerErrorCode(res) === TRANSCRIPTS_DISABLED) return { response: transcriptsDisabled(res) };
+      if (endsRun(res)) return { response: res };
+      return unavailable(t.externalId, res, "transcript");
+    }
+    const ev = [...occurrences].reverse().find(o => o.start <= t.created + OCCURRENCE_SLACK_MS) ?? occurrences[0]!;
+    const sentences = parseVtt(got.text).map(s => ({ speaker: s.speaker, text: redactMeetingCredentials(s.text).text }));
+    const speakers = [...new Set(sentences.map(s => s.speaker).filter(s => s !== ""))];
+    const named = new Set(ev.people.map(p => (p.name ?? "").trim().toLowerCase()));
+    const participants = [...ev.people, ...speakers.filter(s => !named.has(s.toLowerCase())).map(name => ({ name, email: null }))].slice(0, MAX_PARTICIPANTS);
+    const label = this.account.accountLabel ?? "";
+    const ctx: ConnectorContext = { service: TEAMS_TRANSCRIPTS_SERVICE, accountLabel: label };
+    const start = Math.abs(t.created - ev.start) < DAY_MS ? ev.start : t.created;
+    try {
+      let page = renderMeeting(ctx, {
+        id: t.externalId,
+        title: redactMeetingCredentials(ev.subject).text,
+        start: new Date(start).toISOString(),
+        end: new Date(t.end).toISOString(),
+        participants,
+        summary: null,
+        actionItems: [],
+        sentences,
+      });
+      const uid = await this.eventICalUID(client, ev);
+      if (uid !== null) page = linkCalendarEvent(page, calendarEventSlug(label, uid), uid);
+      return syncItemFromPage(page, t.version, { enrich: true });
+    } catch (e) {
+      // The message can quote transcript text; only the error's kind is kept.
+      return { externalId: t.externalId, version: t.version, failure: { code: "render_failed", message: `the transcript could not be rendered (${e instanceof Error ? e.name : "error"})` } };
+    }
+  }
+}
+
+interface Transcript {
+  id: string;
+  created: number;
+  end: number;
+  externalId: string;
+  version: string;
+}
+
+export function teamsTranscriptsAdapter(account: SyncAccount, opts: Partial<AdapterContext> = {}): SyncAdapter {
+  return new TranscriptsAdapter(account, opts.now ?? Date.now, opts.env ?? process.env, opts.engine);
+}
