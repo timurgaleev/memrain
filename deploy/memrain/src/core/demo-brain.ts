@@ -131,6 +131,7 @@ export async function removeDemo(engine: Engine, memberId: string): Promise<Demo
     }
     if (slugs.length > 0) {
       // A slug the demo shares with a live page elsewhere keeps that page's rows.
+      // scope: operator-only the slug-keyed leftovers are global, so any source's page on the slug keeps them
       const live = new Set((await tx.query<{ slug: string }>(`SELECT slug FROM pages WHERE slug = ANY($1::text[])`, [slugs])).rows.map((r) => r.slug));
       const gone = slugs.filter((s) => !live.has(s));
       if (gone.length > 0) await leftovers(tx, gone, true);
