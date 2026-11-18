@@ -4564,9 +4564,11 @@ async function callThink(
       });
     }
   }
+  // The evidence list is for in-process callers; the tool's answer already names its citations.
+  const { evidence: _evidence, ...shown } = result;
   return jsonResult({
     ok: true,
-    ...result,
+    ...shown,
     synthesis_status: result.synthesisStatus,
     save_applied: safeSave,
     take_applied: safeTake,

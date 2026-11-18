@@ -21,6 +21,8 @@ import { deterministicEmbedQuery } from "./det-embed.ts";
 import type { SearchHit } from "../src/core/search/hybrid.ts";
 import { ChatError, operatorOwner, runChatTurn, type ChatCtx, type ChatStreamEvent } from "../src/core/chat/chat-service.ts";
 import { confirmAnswer, getChatThread, listChatThreads, threadMessages } from "../src/core/chat/store.ts";
+import { saveAnswerAsPage } from "../src/core/chat/save.ts";
+import { readTrustTiers } from "../src/core/trust-frame.ts";
 
 setDefaultTimeout(60_000);
 
@@ -301,6 +303,28 @@ describe("chat turn (P5-C1)", () => {
     expect(await stored()).toBe("error");
     await confirmAnswer(storage.engine(), result.message_id);
     expect(await stored()).toBe("ok");
+  });
+
+  it("a saved answer keeps the trust of everything put before the model, not only what it cited", async () => {
+    const tierOf = async (slug: string) => (await readTrustTiers(storage.engine(), { pages: [slug] })).pages.get(slug);
+    const saveOf = async (messageId: number) => {
+      const saved = await saveAnswerAsPage(storage, operatorOwner(), messageId);
+      if (!saved.ok) throw new Error(`save refused: ${saved.error}`);
+      return saved.slug;
+    };
+    await page("notes/garden", "The garden plan is to plant tomatoes in May.");
+    // Owner evidence alone keeps the saved answer owner text.
+    const own = await turn(ctx(stub(() => answer(["page://notes/garden"])).fn), "when is the garden planted?");
+    expect(await tierOf(await saveOf(own.result.message_id))).toBe("owner");
+
+    await registerSource(storage.engine(), { id: "mail", kind: "mailbox", pathPrefix: "/mail" });
+    await page("inbox/garden-invoice", "The garden invoice says the tomatoes cost 40 euros.", "mail");
+    // The answer restates the mail but cites only the owner's note.
+    const s = stub(() => answer(["page://notes/garden"], "The tomatoes cost 40 euros"));
+    const { result } = await turn(ctx(s.fn), "what do the garden tomatoes cost?");
+    expect(s.calls[0]!.user).toContain("40 euros");
+    expect(result.citations.map(c => c.slug)).toEqual(["notes/garden"]);
+    expect(await tierOf(await saveOf(result.message_id))).toBe("external");
   });
 
   it("an empty or oversized message is invalid", async () => {

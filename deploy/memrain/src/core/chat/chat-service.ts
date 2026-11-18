@@ -42,6 +42,7 @@ import { pageSourcePath, pageTruthSourcePath } from "../page-index.ts";
 import { andSourceScope } from "../source-scope.ts";
 import { chatConfig, CHAT_MAX_TAKES, CHAT_OUTPUT_TOKENS, CHAT_PAGE_HITS } from "./config.ts";
 import { condenseQuestion, CONDENSE_TURNS } from "./condense.ts";
+import { evidenceTier } from "./save.ts";
 import { ChatError, chatErrorMessage, classifyChatFailure, type ChatErrorCode } from "./failures.ts";
 import {
   appendChatMessage,
@@ -271,7 +272,11 @@ async function turn(
     trace.push(e);
     emitSafe(onEvent, { event: "trace", data: e });
   };
-  const finish = async (a: Omit<ChatAnswer, "thread_id" | "message_id" | "duration_ms">, tokens?: { input: number; output: number }): Promise<ChatAnswer> => {
+  const finish = async (
+    a: Omit<ChatAnswer, "thread_id" | "message_id" | "duration_ms">,
+    tokens?: { input: number; output: number },
+    evidence?: string,
+  ): Promise<ChatAnswer> => {
     const id = await db(() => appendChatMessage(engine, threadId!, {
       role: "assistant",
       content: a.answer,
@@ -282,6 +287,7 @@ async function turn(
       costUsd: a.cost_usd,
       ...(tokens ? { inputTokens: tokens.input, outputTokens: tokens.output } : {}),
       trace,
+      ...(evidence !== undefined ? { evidenceTier: evidence } : {}),
     }));
     const out: ChatAnswer = { thread_id: threadId!, message_id: id, duration_ms: Date.now() - started, ...a };
     emitSafe(onEvent, { event: "answer", data: out });
@@ -423,6 +429,8 @@ async function turn(
       }, tokens);
     }
     const citations = await db(() => numberCitations(ctx.storage, owner, result));
+    // The model read every gathered page and take, cited or not; a saved answer keeps their least trusted tier.
+    const evidence = result.evidence ? await db(() => evidenceTier(engine, result.evidence!)) : undefined;
     return await finish({
       status: citations.length > 0 ? "ok" : "refused",
       // Text no citation backs is not shown, stored or fed to the next turn.
@@ -431,7 +439,7 @@ async function turn(
       gaps: result.synthesis.gaps,
       model: result.modelId ?? model,
       cost_usd: spentUsd,
-    }, tokens);
+    }, tokens, evidence);
   } finally {
     clearTimeout(timer);
     ctx.signal?.removeEventListener("abort", onClientAbort);

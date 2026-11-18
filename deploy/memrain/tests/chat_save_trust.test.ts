@@ -28,11 +28,12 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     await db.close();
   });
 
-  async function savedAnswer(question: string, answer: string, citations: ChatCitation[]): Promise<string> {
+  /** `evidenceTier` is what the turn recorded for everything it showed the model; owner unless a test says otherwise. */
+  async function savedAnswer(question: string, answer: string, citations: ChatCitation[], evidenceTier: string | null = "owner"): Promise<string> {
     const engine = storage.engine();
     const thread = await createChatThread(engine, owner, question);
     await appendChatMessage(engine, thread, { role: "user", content: question });
-    const id = await appendChatMessage(engine, thread, { role: "assistant", content: answer, status: "ok", citations });
+    const id = await appendChatMessage(engine, thread, { role: "assistant", content: answer, status: "ok", citations, evidenceTier });
     const r = await saveAnswerAsPage(storage, owner, id);
     if (!r.ok) throw new Error(`save refused: ${r.error}`);
     return r.slug;
@@ -81,6 +82,16 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     // a default page slugged team-chat/chat/general/day: the less trusted one decides.
     await putPage(storage, { slug: "team-chat/chat/general/day", markdown_body: "An owner page.", title: "owner copy" });
     const slug = await savedAnswer("vendor x account again?", "It changed [1].", [{ n: 1, slug: "team-chat/chat/general/day", title: "owner copy", kind: "page" }]);
+    expect(await tierOf(slug)).toBe("external");
+  });
+
+  it("evidence the model was shown but the answer does not cite still lowers the saved tier", async () => {
+    const slug = await savedAnswer("vendor x payment?", "Monthly [1].", [{ n: 1, slug: "notes/vendor", title: "Vendor", kind: "page" }], "external");
+    expect(await tierOf(slug)).toBe("external");
+  });
+
+  it("an answer stored before its evidence was recorded is not vouched for", async () => {
+    const slug = await savedAnswer("vendor x payment, older?", "Monthly [1].", [{ n: 1, slug: "notes/vendor", title: "Vendor", kind: "page" }], null);
     expect(await tierOf(slug)).toBe("external");
   });
 

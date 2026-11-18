@@ -80,6 +80,7 @@ export interface NewChatMessage {
   inputTokens?: number | null;
   outputTokens?: number | null;
   trace?: ChatTraceEvent[];
+  evidenceTier?: string | null;
 }
 
 /** The stored trace never exceeds this many bytes of JSON. */
@@ -227,8 +228,8 @@ export async function recentTurns(engine: Engine, threadId: string, limit: numbe
 export async function appendChatMessage(engine: Engine, threadId: string, m: NewChatMessage): Promise<number> {
   return engine.transaction(async (tx) => {
     const r = await tx.query<{ id: number | string }>(
-      `INSERT INTO chat_messages (thread_id, role, content, status, citations, gaps, model, cost_usd, input_tokens, output_tokens, trace)
-       VALUES ($1::uuid, $2, $3, $4, $5::text::jsonb, $6::text::jsonb, $7, $8, $9, $10, $11::text::jsonb)
+      `INSERT INTO chat_messages (thread_id, role, content, status, citations, gaps, model, cost_usd, input_tokens, output_tokens, trace, evidence_tier)
+       VALUES ($1::uuid, $2, $3, $4, $5::text::jsonb, $6::text::jsonb, $7, $8, $9, $10, $11::text::jsonb, $12)
        RETURNING id`,
       [
         threadId,
@@ -242,6 +243,7 @@ export async function appendChatMessage(engine: Engine, threadId: string, m: New
         m.inputTokens ?? null,
         m.outputTokens ?? null,
         m.trace ? JSON.stringify(capTrace(m.trace)) : null,
+        m.evidenceTier ?? null,
       ],
     );
     await tx.query(`UPDATE chat_threads SET updated_at = NOW() WHERE id = $1::uuid`, [threadId]);
@@ -258,16 +260,20 @@ export async function deleteChatThread(engine: Engine, owner: ChatOwner, id: str
   return r.rows.length > 0;
 }
 
-/** An assistant message of the owner's, with its thread's question, or null. */
+/**
+ * An assistant message of the owner's, with its thread's question and the
+ * least trusted tier of everything it was written from (null when unknown),
+ * or null.
+ */
 export async function ownedAnswer(
   engine: Engine,
   owner: ChatOwner,
   messageId: number,
-): Promise<{ message: ChatMessage; threadId: string; question: string | null } | null> {
+): Promise<{ message: ChatMessage; threadId: string; question: string | null; evidenceTier: string | null } | null> {
   if (!Number.isSafeInteger(messageId) || messageId < 1) return null;
   // scope: upstream a thread is keyed by owner_key and read only by that owner; its source_id is where it lives, not a read grant
-  const r = await engine.query<MessageRow & { thread_id: string; question: string | null }>(
-    `SELECT ${MESSAGE_COLUMNS}, m.thread_id::text AS thread_id,
+  const r = await engine.query<MessageRow & { thread_id: string; question: string | null; evidence_tier: string | null }>(
+    `SELECT ${MESSAGE_COLUMNS}, m.thread_id::text AS thread_id, m.evidence_tier,
             (SELECT q.content FROM chat_messages q
               WHERE q.thread_id = m.thread_id AND q.role = 'user' AND q.id < m.id
               ORDER BY q.id DESC LIMIT 1) AS question
@@ -276,7 +282,7 @@ export async function ownedAnswer(
     [messageId, owner.key],
   );
   const row = r.rows[0];
-  return row ? { message: toMessage(row), threadId: row.thread_id, question: row.question } : null;
+  return row ? { message: toMessage(row), threadId: row.thread_id, question: row.question, evidenceTier: row.evidence_tier } : null;
 }
 
 /**

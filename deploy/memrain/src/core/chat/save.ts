@@ -1,14 +1,15 @@
 /**
  * Save a chat answer as a page, through the same page_put every writer uses:
  * the secret scanner and the caller's grant apply, and the page keeps the
- * lowest trust tier of the evidence it cites. The citations become wikilinks,
- * so the saved page links to its evidence.
+ * lowest trust tier of the evidence the answer was written from, cited or
+ * not. The citations become wikilinks, so the saved page links to its
+ * evidence.
  */
 import type { Storage } from "../storage.ts";
 import type { Engine } from "../engine/interface.ts";
 import { dispatchTool } from "../../mcp/dispatch.ts";
-import { documentRankSql, pageRankSql, tierOfRank, type TrustTier } from "../trust-tier.ts";
-import { ownedAnswer, setSavedSlug, type ChatCitation, type ChatOwner } from "./store.ts";
+import { documentRankSql, isTrustTier, lowerTier, pageRankSql, tierOfRank, type TrustTier } from "../trust-tier.ts";
+import { ownedAnswer, setSavedSlug, type ChatOwner } from "./store.ts";
 
 const SLUG_WORDS_MAX = 60;
 const SLUG_ATTEMPTS = 9;
@@ -59,14 +60,15 @@ function pageBody(question: string | null, answer: string, citations: Array<{ n:
 interface ToolEnvelope { error?: unknown }
 
 /**
- * The least trusted tier among the evidence an answer cites. The page is
+ * The least trusted tier among an answer's evidence: page refs (slugs,
+ * `<source>/<slug>`, document paths or ids) and take keys. The page is
  * written by the operator, so without this an answer that repeats a synced
  * Slack channel would turn that text into owner text. A take counts as the
  * text it was distilled from; a ref no row backs any more is not vouched for.
  */
-async function evidenceTier(engine: Engine, citations: readonly ChatCitation[]): Promise<TrustTier> {
-  const refs = citations.filter((c) => c.kind === "page").map((c) => c.slug);
-  const takeKeys = [...new Set(citations.filter((c) => c.kind === "take").map((c) => c.slug))];
+export async function evidenceTier(engine: Engine, evidence: { pages: readonly string[]; takes: readonly string[] }): Promise<TrustTier> {
+  const refs = [...new Set(evidence.pages)];
+  const takeKeys = [...new Set(evidence.takes)];
   if (takeKeys.length > 0) {
     const t = await engine.query<{ source_ref: string }>(
       `SELECT DISTINCT ON (take_key) source_ref FROM synth_takes WHERE take_key = ANY($1::text[])`,
@@ -109,13 +111,18 @@ async function save(storage: Storage, owner: ChatOwner, messageId: number, now: 
   const engine = storage.engine();
   const found = await ownedAnswer(engine, owner, messageId);
   if (!found) return refuse(404, "not_found");
-  const { message, question } = found;
+  const { message, question, evidenceTier: shown } = found;
   if (message.saved_slug) return { ok: true, slug: message.saved_slug };
   if (message.status !== "ok" || !message.content.trim()) return refuse(409, "not_saveable");
   const base = `chats/${now.toISOString().slice(0, 10)}-${slugWords(question ?? message.content)}`;
   const title = (question ?? "Chat answer").replace(/\s+/g, " ").trim().slice(0, 200);
   const body = pageBody(question, message.content, message.citations);
-  const tier = await evidenceTier(engine, message.citations);
+  const cited = await evidenceTier(engine, {
+    pages: message.citations.filter((c) => c.kind === "page").map((c) => c.slug),
+    takes: message.citations.filter((c) => c.kind === "take").map((c) => c.slug),
+  });
+  // What the model was shown but did not cite can be restated all the same; unknown evidence is not vouched for.
+  const tier = lowerTier(cited, isTrustTier(shown) ? shown : "external");
   for (let i = 1; i <= SLUG_ATTEMPTS; i++) {
     const slug = i === 1 ? base : `${base}-${i}`;
     const res = await dispatchTool(storage, {

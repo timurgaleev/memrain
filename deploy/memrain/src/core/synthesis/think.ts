@@ -251,6 +251,11 @@ export interface ThinkResult {
   answer_raw?: string;
   quote_check?: QuoteCheck;
   unverified_quotes?: Array<{ text: string; reason: string }>;
+  /**
+   * Every page (source path) and take (take key) put before the model in any
+   * round, cited or not: what an answer may restate. Present when a model ran.
+   */
+  evidence?: { pages: string[]; takes: string[] };
 }
 
 const THINK_SYSTEM_PROMPT = `You are memrain's synthesis engine. You answer a question by reasoning across a personal knowledge brain. Your inputs are wrapped in structural tags:
@@ -1494,6 +1499,8 @@ async function runThinkSteps(
   let status: SynthesisStatus = "ok";
   // The evidence blocks the kept synthesis was written from, for the quote check.
   let synthesisEvidence: string[] = [];
+  // Every page any round put before the model: a later round's fusion may drop one an earlier answer read.
+  const shownPages = new Set<string>();
   for (let round = 1; round <= rounds; round++) {
     if (round > 1) {
       if (!synthesis || synthesis.gaps.length === 0 || exhausted) break;
@@ -1510,6 +1517,7 @@ async function runThinkSteps(
       await loadPageDates(engine, pages, temporal.timeZone, diagnostics.note),
     );
     const takesBlock = renderTakesBlock(takes);
+    for (const p of pages) shownPages.add(p.sourcePath);
     const user = buildThinkUserMessage({
       currentDate,
       question,
@@ -1689,6 +1697,7 @@ async function runThinkSteps(
     ...windowFields,
     evidence_truncated: pages.some(p => p.truncated === true || p.content.length > PAGE_EXCERPT_CHARS),
     ...quoteFields,
+    evidence: { pages: [...shownPages], takes: [...new Set(takes.map((t) => t.take_key))] },
   }, question, pages);
 }
 
