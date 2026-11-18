@@ -49,7 +49,7 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "watch": bare,
   "cycle": bare,
   "atoms-retire": bare,
-  "erase": subs("forgotten"),
+  "erase": subs("forgotten", "chat"),
   "extract": bare,
   "extract-conversation-facts": free,
   "think": free,

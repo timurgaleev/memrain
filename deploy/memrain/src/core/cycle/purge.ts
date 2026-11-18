@@ -17,6 +17,8 @@ import { purgeStaleVolunteerEvents } from "../context/volunteer-events.ts";
 import { purgeDeletedPages } from "../pages-purge.ts";
 import { purgeExpiredWriteRequests } from "../write-requests.ts";
 import { purgeRequestLog } from "../request-log-retention.ts";
+import { purgeOldChat } from "../chat/store.ts";
+import { chatConfig } from "../chat/config.ts";
 import { phaseFenceCheck, PhaseStoppedError } from "./phase-context.ts";
 
 export interface PurgeResult {
@@ -32,6 +34,9 @@ export interface PurgeResult {
   purged_request_log: number;
   /** The run hit its batch cap; the rest goes next cycle. */
   request_log_capped: boolean;
+  /** chat_messages past MEMRAIN_CHAT_RETENTION_DAYS, and threads left empty. */
+  purged_chat_messages: number;
+  purged_chat_threads: number;
   /** Retention failures; a non-empty list marks the phase warn. */
   errors: string[];
 }
@@ -66,6 +71,15 @@ export async function purgePhase(
     if (e instanceof PhaseStoppedError) throw e;
     errors.push(`request_log: ${e instanceof Error ? e.message : String(e)}`);
   }
+  // Chat history is personal data: it does not outlive its window.
+  let chat = { messages: 0, threads: 0 };
+  await phaseFenceCheck();
+  try {
+    chat = await purgeOldChat(engine, { days: chatConfig().retentionDays, between: phaseFenceCheck });
+  } catch (e) {
+    if (e instanceof PhaseStoppedError) throw e;
+    errors.push(`chat: ${e instanceof Error ? e.message : String(e)}`);
+  }
   return {
     purged_documents_deleted: docs.purged_deleted,
     purged_documents_archived: docs.purged_archived,
@@ -75,6 +89,8 @@ export async function purgePhase(
     purged_write_requests,
     purged_request_log: rl.deleted,
     request_log_capped: rl.capped,
+    purged_chat_messages: chat.messages,
+    purged_chat_threads: chat.threads,
     errors,
   };
 }
