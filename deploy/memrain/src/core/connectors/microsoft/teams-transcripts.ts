@@ -9,9 +9,11 @@
  *   - transcripts hang off an online meeting id, and the delegated way to the
  *     id is the meeting's join link: `GET /me/onlineMeetings?$filter=
  *     JoinWebUrl eq '<link, URL-encoded>'` (onlinemeeting-get,
- *     OnlineMeetings.Read). The links come from the calendar
- *     (`/me/calendarView`, Calendars.Read): the account-wide listing
- *     (getAllTranscripts) takes application permissions only;
+ *     OnlineMeetings.Read). The links come from the calendars the Outlook
+ *     calendar adapter syncs (the default one's `/me/calendarView` and each
+ *     selected calendar's `/me/calendars/{id}/calendarView`, Calendars.Read;
+ *     a selected calendar that answers 404 is skipped): the account-wide
+ *     listing (getAllTranscripts) takes application permissions only;
  *   - `GET /me/onlineMeetings/{id}/transcripts` lists a meeting's transcripts
  *     and `.../transcripts/{tid}/content` returns one as WebVTT with
  *     `<v Speaker>` voice tags (onlinemeeting-list-transcripts,
@@ -63,7 +65,8 @@ import { accountRef, shortHash, type ConnectorContext, type MeetingSentence, typ
 import type { Engine } from "../../engine/interface.ts";
 import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
 import type { AdapterContext } from "../providers.ts";
-import { graphTime } from "./calendar.ts";
+import { selectedCalendars } from "../google/calendar.ts";
+import { calendarBase, graphTime } from "./calendar.ts";
 import { graphGet, graphInnerErrorCode, graphLinkPath } from "./graph-client.ts";
 import { TEAMS_HISTORY_DAYS, TEAMS_MAX_HISTORY_DAYS } from "./teams-chat.ts";
 
@@ -277,6 +280,8 @@ class TranscriptsAdapter implements SyncAdapter {
   /** Per run: neighbouring days list the same meetings, which are asked about once. */
   private readonly meetingIds = new Map<string, { id: string | null }>();
   private readonly transcriptLists = new Map<string, { list: Transcript[]; truncated: boolean }>();
+  /** The calendars the Outlook calendar adapter of this account syncs: a meeting may be on any of them. */
+  private readonly calendars: string[];
 
   constructor(
     private readonly account: SyncAccount,
@@ -285,6 +290,7 @@ class TranscriptsAdapter implements SyncAdapter {
     private readonly engine: Engine | undefined,
   ) {
     this.runAt = now();
+    this.calendars = selectedCalendars(account);
   }
 
   streams(): string[] {
@@ -366,13 +372,38 @@ class TranscriptsAdapter implements SyncAdapter {
   }
 
   /**
-   * The calendar's Teams meetings that start in [from, to), by start. A
-   * listing longer than MAX_EVENT_PAGES ends the run instead of skipping the
-   * rest of the slice.
+   * The Teams meetings of every selected calendar that start in [from, to),
+   * by start; a meeting on two of them is listed once. A selected calendar
+   * that is gone (404) is the Outlook calendar adapter's to report, so the
+   * others are still read.
    */
   private async onlineEvents(client: ConnectorClient, from: number, to: number): Promise<OnlineEvent[] | { response: ConnectorResponse }> {
+    const out: OnlineEvent[] = [];
+    const seen = new Set<string>();
+    for (const calendarId of this.calendars) {
+      const listed = await this.calendarEvents(client, calendarId, from, to);
+      if ("response" in listed) {
+        if (calendarId !== "primary" && listed.response.status === 404) continue;
+        return listed;
+      }
+      for (const ev of listed) {
+        const key = `${ev.start}|${ev.joinUrl}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(ev);
+      }
+    }
+    return out.sort((a, b) => a.start - b.start);
+  }
+
+  /**
+   * One calendar's Teams meetings that start in [from, to). A listing longer
+   * than MAX_EVENT_PAGES ends the run instead of skipping the rest of the
+   * slice.
+   */
+  private async calendarEvents(client: ConnectorClient, calendarId: string, from: number, to: number): Promise<OnlineEvent[] | { response: ConnectorResponse }> {
     const q = `startDateTime=${enc(new Date(from).toISOString())}&endDateTime=${enc(new Date(to).toISOString())}`;
-    let path: string | null = `/v1.0/me/calendarView?${q}&$select=${CALENDAR_SELECT}&$top=${PAGE_SIZE}`;
+    let path: string | null = `${calendarBase(calendarId)}/calendarView?${q}&$select=${CALENDAR_SELECT}&$top=${PAGE_SIZE}`;
     const out: OnlineEvent[] = [];
     for (let p = 0; path !== null; p++) {
       const res = await graphGet(client, path, { prefer: `outlook.timezone="UTC", odata.maxpagesize=${PAGE_SIZE}`, maxBytes: GRAPH_MAX_RESPONSE_BYTES });
@@ -399,7 +430,7 @@ class TranscriptsAdapter implements SyncAdapter {
         return { response: { ...res, class: "challenge", body: null, error: `the calendar lists more than ${MAX_EVENT_PAGES * PAGE_SIZE} events in two days` } };
       }
     }
-    return out.sort((a, b) => a.start - b.start);
+    return out;
   }
 
   /**

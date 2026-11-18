@@ -490,7 +490,8 @@ meeting's transcription has stopped, within 15 minutes of the next sync.
   shows only each chat's latest message in the chat list.
 - A chat day is stored whole up to 10,000 messages; past that, only its
   newest 10,000.
-- A transcript needs a calendar event with a Teams join link. An instant
+- A transcript needs a calendar event with a Teams join link, on your default
+  calendar or one of the calendars ticked for the account. An instant
   meeting ("Meet now") has none, and Microsoft does not offer its transcript
   this way either. A recurring meeting's transcripts link to the series'
   calendar page. A transcript recorded more than a day after its meeting's

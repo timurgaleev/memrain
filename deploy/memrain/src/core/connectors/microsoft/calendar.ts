@@ -130,7 +130,7 @@ function itemKey(calendarId: string, eventId: string): string {
 }
 
 /** The Graph path a calendar's events hang under: the default calendar is `/me`'s own. */
-function calendarBase(calendarId: string): string {
+export function calendarBase(calendarId: string): string {
   return calendarId === "primary" ? "/v1.0/me" : `/v1.0/me/calendars/${encodeURIComponent(calendarId)}`;
 }
 

@@ -517,6 +517,30 @@ describe("teams transcripts adapter", () => {
     expect(g.calls.some(c => c.url.pathname.endsWith("/tr-1/content"))).toBe(false);
   });
 
+  it("finds meetings on every selected calendar, not only the default one", async () => {
+    const joinThree = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_three%40thread.v2/0?context=%7b%7d";
+    const board = event("ev-9", "ical-board", "Board review", "2026-11-15T16:00:00.0000000", "2026-11-15T17:00:00.0000000", joinThree);
+    const g = graph((url): Reply | null => {
+      const p = url.pathname;
+      if (p === "/v1.0/me/calendarView") return { body: { value: [] } };
+      if (p === "/v1.0/me/calendars/cal-2/calendarView") return { body: { value: [board] } };
+      // A selected calendar that was deleted does not stop the others.
+      if (p === "/v1.0/me/calendars/cal-gone/calendarView") return { status: 404, body: { error: { code: "ErrorItemNotFound" } } };
+      if (p === "/v1.0/me/onlineMeetings") return { body: { value: [{ id: "meeting-three" }] } };
+      if (p === "/v1.0/me/onlineMeetings/meeting-three/transcripts") {
+        return { body: { value: [{ id: "tr-9", createdDateTime: "2026-11-15T16:01:00Z", endDateTime: "2026-11-15T16:59:00Z" }] } };
+      }
+      if (p === "/v1.0/me/onlineMeetings/meeting-three/transcripts/tr-9/content") return { body: vttOne };
+      return null;
+    });
+    const acct = account("teams_transcripts", { calendars: ["cal-gone", "cal-2"] });
+    const out = await drain(teamsTranscriptsAdapter(acct, { now: () => T0, env: {} }), g.client, TEAMS_TRANSCRIPTS_STREAM, null);
+    const items = rendered(out.items);
+    expect(items.map(i => i.title)).toEqual(["Board review"]);
+    expect(items[0]!.body).toContain(`[[calendar/${accountRef(OWNER, "microsoft")}/${shortHash("ical:ical-board")}]]`);
+    expect(out.items.filter(i => i.failure !== undefined)).toEqual([]);
+  });
+
   it("stops rather than store a transcript without its calendar link when the series cannot be read", async () => {
     const res = await firstFailure(transcriptWorld({ masterDown: true }));
     expect(res.ok).toBe(false);
