@@ -92,6 +92,7 @@ import { runWaiting } from "./commands/waiting.ts";
 import { runQuarantine, type QuarantineSub } from "./commands/quarantine.ts";
 import { runWriteGate } from "./commands/write-gate.ts";
 import { runGroup, runMember } from "./commands/members.ts";
+import { runTenant } from "./commands/tenant.ts";
 import { runSecretsAudit } from "./commands/secrets.ts";
 import {
   runEvalRunAll,
@@ -1734,6 +1735,9 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       const ttl = values.get("--ttl");
       return runAdminSetupLink({ ...(ttl !== undefined ? { ttl } : {}), json: flags.has("--json") });
     }
+    case "tenant":
+      // Hosted install control plane; parses its own raw flags, like auth.
+      return await runTenant(argv.slice(1));
     case "auth": {
       // Self-issued OAuth 2.1 provider management. Re-parses its own raw flags
       // (--grant-types/--scopes/--source/--federated-read), so pass the raw tail.

@@ -128,6 +128,10 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "group": subs("list", "show", "add", "remove", "grant-source", "revoke-source", "add-member", "remove-member"),
   "waiting": subs("sweep", "done", "drop", "mute", "unmute"),
   "secrets": subs("audit"),
+  "tenant": subs(
+    "create", "list", "suspend", "resume", "limits", "export", "delete", "purge-deleted",
+    "migrate-control", "migrate", "usage", "smoke-record", "spend", "cap",
+  ),
   "version": bare,
   "help": bare,
 };

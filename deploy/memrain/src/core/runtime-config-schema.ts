@@ -63,6 +63,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_CONTEXT_CORE_MAX_CHARS: "int",
   MEMRAIN_CONTEXT_CORE_SLUGS: "string",
   MEMRAIN_CONTEXT_NEWER_MENTIONS: "flag",
+  MEMRAIN_CONTROL_ADMIN_URL: "string",
   MEMRAIN_CONTROL_URL: "string",
   MEMRAIN_COSINE_RESCORE: "flag",
   MEMRAIN_CURATION_BOOST: "string",

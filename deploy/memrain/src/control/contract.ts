@@ -19,6 +19,12 @@ export const HOSTING_ENV = {
   requireMember: "MEMRAIN_REQUIRE_MEMBER",
 } as const;
 
+/**
+ * The master-role URL of the control database, read only by the operator's
+ * `memrain tenant` CLI. Never given to a tenant container.
+ */
+export const CONTROL_ADMIN_URL_ENV = "MEMRAIN_CONTROL_ADMIN_URL";
+
 type Env = Readonly<Record<string, string | undefined>>;
 
 /** A tenant id: also the suffix of its database and role names. */

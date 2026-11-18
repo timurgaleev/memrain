@@ -61,6 +61,8 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--json",
   "--k12",
   "--live",
+  "--llm-off",
+  "--llm-on",
   "--max-pool",
   "--no-embed",
   "--no-expand",
@@ -78,6 +80,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--record",
   "--relational-arm",
   "--remediate",
+  "--resume",
   "--remediation-plan",
   "--rerank",
   "--respect-quiet-hours",
@@ -113,7 +116,8 @@ const FALSE_LITERALS: ReadonlySet<string> = new Set(["false", "0", "no"]);
  */
 export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--fact-ids", "--deleted-pages", "--source-ref", "--completed-hash",
-  "--access-ttl", "--anchor", "--answer-model", "--args", "--baseline", "--batch-size", "--boost-weight", "--candidate",
+  "--access-ttl", "--anchor", "--boot-id", "--confirm", "--date", "--image-stamp", "--invite-out",
+  "--mode", "--plan", "--secrets", "--secrets-dir", "--secrets-prefix", "--set", "--started-at", "--answer-model", "--args", "--baseline", "--batch-size", "--boost-weight", "--candidate",
   "--bound-slug-prefixes", "--budget", "--client", "--client-file", "--config-a",
   "--config-b", "--corpus", "--rds-instance", "--efs-id", "--copy-report",
   "--date-context", "--days", "--dedup-type-ratio", "--depth", "--description", "--epsilon",
@@ -168,10 +172,11 @@ const UNIVERSAL_FLAGS: ReadonlySet<string> = new Set(["--help"]);
  * so a flag added to a command without an entry here fails the suite instead of
  * failing the operator.
  *
- * Two commands do their own parsing and so have no reads in the switch:
+ * Three commands do their own parsing and so have no reads in the switch:
  * `doctor` reads its remediation flags straight off `process.argv` inside
- * runDoctor, and `auth` re-parses the raw tail with its own `parseFlags`. Their
- * rows come from those modules, and the test reads them from there.
+ * runDoctor, and `auth` and `tenant` re-parse the raw tail with their own
+ * parsers. Their rows come from those modules, and the test reads them from
+ * there.
  */
 export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["aliases", new Set(["--source", "--limit", "--json"])],
@@ -357,6 +362,14 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ],
   ["connectors", new Set(["--apply", "--dry-run", "--full", "--json", "--new-file", "--old-file", "--source", "--token-file", "--yes"])],
   ["daemons", new Set(["--json", "--reason", "--source"])],
+  [
+    "tenant",
+    new Set([
+      "--boot-id", "--confirm", "--date", "--days", "--host", "--image-stamp", "--invite-out", "--json",
+      "--llm-off", "--llm-on", "--mode", "--out", "--owner", "--plan", "--resume", "--secrets", "--secrets-dir",
+      "--secrets-prefix", "--set", "--started-at", "--status", "--usd",
+    ]),
+  ],
   ["waiting", new Set(["--json", "--limit", "--source", "--stale", "--type"])],
   ["version", new Set(["--json"])],
   ["help", new Set<string>()],

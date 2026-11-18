@@ -392,7 +392,7 @@ describe("COMMAND_FLAGS is derived from the code, not hand-maintained", () => {
         const declared = COMMAND_FLAGS.get(label);
         expect(declared).toBeDefined();
         // doctor and auth parse their own argv; their rows are checked below.
-        if (label === "doctor" || label === "auth") return;
+        if (label === "doctor" || label === "auth" || label === "tenant") return;
         expect([...declared!].sort()).toEqual(read);
       });
     }
@@ -407,6 +407,12 @@ describe("COMMAND_FLAGS is derived from the code, not hand-maintained", () => {
       ]),
     ].sort();
     expect([...COMMAND_FLAGS.get("doctor")!].sort()).toEqual(expected);
+  });
+
+  it("takes tenant's row from the flags its own parser reads", () => {
+    const tenant = readFileSync(join(root, "src", "commands", "tenant.ts"), "utf8");
+    const read = flagsIn(tenant, /flags\["([a-z-]+)"\]/g);
+    expect([...COMMAND_FLAGS.get("tenant")!].sort()).toEqual(read);
   });
 
   it("takes auth's row from the flags its own parser reads", () => {
