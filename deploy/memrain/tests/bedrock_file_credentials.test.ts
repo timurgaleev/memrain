@@ -72,9 +72,21 @@ describe("Bedrock credentials from a file", () => {
   it("outside hosting mode the client config is untouched, even with the variable set", () => {
     process.env[BEDROCK_CREDENTIALS_FILE_ENV] = file;
     expect("credentials" in bedrockClientConfig(1_000)).toBe(false);
+  });
+
+  it("a hosted container without the variable fails closed instead of using the SDK's own chain", async () => {
     process.env["MEMRAIN_TENANT_ID"] = "acme";
-    delete process.env[BEDROCK_CREDENTIALS_FILE_ENV];
-    expect("credentials" in bedrockClientConfig(1_000)).toBe(false);
+    process.env["AWS_ACCESS_KEY_ID"] = "AKIAFROMENV";
+    process.env["AWS_SECRET_ACCESS_KEY"] = "secret-from-env";
+    try {
+      const seen: string[] = [];
+      const err = await call(recordingClient(seen));
+      expect(String((err as Error).message)).toContain(BEDROCK_CREDENTIALS_FILE_ENV);
+      expect(seen).toEqual([]);
+    } finally {
+      delete process.env["AWS_ACCESS_KEY_ID"];
+      delete process.env["AWS_SECRET_ACCESS_KEY"];
+    }
   });
 
   it("picks up a rotated file without a restart", async () => {

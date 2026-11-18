@@ -14,8 +14,9 @@
  * missing or malformed file fails the call at once, before anything is sent,
  * with an error that names the file.
  *
- * Only in hosting mode: elsewhere the variable is ignored and the SDK's own
- * chain applies, as before.
+ * Only in hosting mode, and then always: a hosted container with no file named
+ * refuses every call rather than use the SDK's own chain. Elsewhere the
+ * variable is ignored and the SDK's chain applies, as before.
  */
 import { readFileSync } from "node:fs";
 import { hostingMode } from "../../control/contract.ts";
@@ -69,9 +70,19 @@ export function fileCredentials(path: string, now: () => number = Date.now): () 
   };
 }
 
-/** `{ credentials }` for a Bedrock client in a hosted container with a credentials file; else nothing. */
+/**
+ * `{ credentials }` for a Bedrock client in a hosted container: its file, or,
+ * with none named, a provider that refuses, so a hosted container never falls
+ * back to whatever the SDK's own chain finds. Outside hosting mode, nothing.
+ */
 export function bedrockCredentialsConfig(env: NodeJS.ProcessEnv = process.env): { credentials?: () => Promise<AwsCredentialIdentity> } {
   if (hostingMode(env) === null) return {};
   const path = env[BEDROCK_CREDENTIALS_FILE_ENV]?.trim();
-  return path ? { credentials: fileCredentials(path) } : {};
+  if (path) return { credentials: fileCredentials(path) };
+  return {
+    credentials: async () => {
+      throw failure("CredentialsProviderError",
+        `a hosted brain takes its Bedrock credentials only from a file, and ${BEDROCK_CREDENTIALS_FILE_ENV} names none`);
+    },
+  };
 }
