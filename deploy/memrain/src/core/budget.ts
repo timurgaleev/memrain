@@ -573,11 +573,18 @@ export interface ReserveSpendInput {
   role?: string | null;
   daemon?: string | null;
   daemonSource?: string | null;
+  /**
+   * Also hold the estimate against the brain's day under this cap, in the same
+   * transaction and under the brain-wide lock every paid call takes. A hold
+   * that later covers calls (`runUnderHold`) needs it: those calls are not
+   * checked against the brain's day again.
+   */
+  brainCapUsd?: number | null;
 }
 
 export type ReserveSpendResult =
   | { reserved: true; reservationId: string }
-  | { reserved: false; reason: "budget_exhausted"; check: ClientBudgetCheck };
+  | { reserved: false; reason: "budget_exhausted"; check: ClientBudgetCheck; scope?: "brain" };
 
 /**
  * Pre-flight hold: reject when the client's cap leaves no room for the
@@ -600,6 +607,20 @@ async function reserveWithin(tx: Engine, input: ReserveSpendInput): Promise<Rese
   const estCents = usdToCents(input.estimatedUsd);
   const reservationId = randomUUID();
   const ttl = input.ttlMs ?? SPEND_RESERVATION_TTL_MS;
+  const brainCap = input.brainCapUsd ?? null;
+  if (brainCap !== null) {
+    // Same order as holdDurable: the brain lock, then the client's.
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [BRAIN_SPEND_LOCK]);
+    const spentUsd = await brainDaySpendUsd(tx, now);
+    if (spentUsd + estCents / CENTS_PER_USD > brainCap) {
+      return {
+        reserved: false,
+        reason: "budget_exhausted",
+        scope: "brain",
+        check: { allowed: false, capUsd: brainCap, spentUsd, remainingUsd: Math.max(0, brainCap - spentUsd) },
+      };
+    }
+  }
   await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
     `memrain_spend:${input.clientId}`,
   ]);
@@ -855,6 +876,32 @@ export function runWithSpendTags<T>(tags: SpendTags, fn: () => T): T {
 /** The tags in scope (a copy); `{}` outside any. */
 export function currentSpendTags(): SpendTags {
   return { ..._spendTags.getStore() };
+}
+
+/**
+ * A pending reservation that already counts a unit of work (a chat turn)
+ * against every day cap. A paid call inside it moves its own worst case out of
+ * that reservation into its own hold, in one transaction, so the day sees the
+ * work once: the outer hold shrinks by exactly what the call holds. A call the
+ * outer hold cannot cover (closed, or not enough left) is held the ordinary
+ * way. Not carried into queued jobs: they outlive the work that queued them.
+ */
+const _outerHold = new AsyncLocalStorage<string>();
+
+export function runUnderHold<T>(reservationId: string, fn: () => Promise<T>): Promise<T> {
+  return _outerHold.run(reservationId, fn);
+}
+
+/** Take `cents` out of the pending outer hold `id`; false when it cannot cover them. */
+async function carveFromOuterHold(tx: Engine, id: string, cents: number): Promise<boolean> {
+  const r = await tx.query<{ reservation_id: string }>(
+    `UPDATE mcp_spend_reservations
+        SET estimated_cents = estimated_cents - $2
+      WHERE reservation_id = $1 AND status = 'pending' AND estimated_cents >= $2
+      RETURNING reservation_id`,
+    [id, cents],
+  );
+  return r.rows.length > 0;
 }
 
 /** Why a brain-wide or cycle daily cap refused a call; the prefix of its message. */
@@ -1486,10 +1533,14 @@ async function holdDurable(call: TrackedCall, frames: readonly WalletFrame[], wo
     | { refused: DurableCap; spentUsd: number }
     | { refused: "client"; check: ClientBudgetCheck };
   let held: Held;
+  const outer = _outerHold.getStore() ?? null;
   try {
     held = await engine.transaction(async (tx): Promise<Held> => {
       const now = new Date();
-      if (caps.length > 0) {
+      // Under an outer hold the caps were checked when it was taken; the call
+      // only moves its share out of it, so no day sum changes.
+      const covered = outer !== null && (await carveFromOuterHold(tx, outer, usdToCents(worst)));
+      if (caps.length > 0 && !covered) {
         await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [BRAIN_SPEND_LOCK]);
         for (const cap of caps) {
           const spentUsd = await cap.spent(tx, now);
@@ -1498,7 +1549,7 @@ async function holdDurable(call: TrackedCall, frames: readonly WalletFrame[], wo
       }
       const r = await reserveWithin(tx, {
         clientId: ctx?.clientId ?? BRAIN_SPEND_ID,
-        capUsd: clientCap,
+        capUsd: covered ? null : clientCap,
         estimatedUsd: worst,
         model: call.model,
         provider: call.provider ?? DEFAULT_SPEND_PROVIDER,
