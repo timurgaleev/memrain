@@ -137,6 +137,7 @@ function limitReached(what: string): OperationError {
 /** Throws `tenant_limit_reached` when the brain already holds its plan's maximum of live pages. */
 export async function assertPageRoom(engine: Pick<Engine, "query">, maxPages: number | undefined): Promise<void> {
   if (maxPages === undefined) return;
+  // scope: operator-only the plan's page limit counts the whole brain; only a yes/no leaves here
   const r = await engine.query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE deleted_at IS NULL`);
   if ((r.rows[0]?.n ?? 0) >= maxPages) throw limitReached("page");
 }

@@ -57,7 +57,7 @@ export class AwsSecretWriter implements SecretWriter {
     private readonly prefix: string,
     private readonly client: Pick<SecretsManagerClient, "send"> = new SecretsManagerClient({}),
   ) {
-    if (!/^[A-Za-z0-9/_+=.@-]{1,200}$/.test(prefix)) throw new Error("secret prefix has characters AWS does not allow");
+    if (!/^[\w/+=.@-]{1,200}$/.test(prefix)) throw new Error("secret prefix has characters AWS does not allow");
   }
 
   async put(tenantId: string, name: string, value: string): Promise<void> {

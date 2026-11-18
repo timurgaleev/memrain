@@ -178,8 +178,9 @@ describe.skipIf(!PG_URL)("a held tenant over HTTP", () => {
     const running = new Promise<void>((r) => { entered = r; });
     registerHandler("hold-probe", async (_payload, ctx) => {
       entered();
-      await new Promise<void>((resolve) => ctx.signal.addEventListener("abort", () => resolve(), { once: true }));
-      throw ctx.signal.reason;
+      const signal = ctx.signal!;
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+      throw signal.reason;
     });
     const worker = new Worker(queue, { intervalMs: 20, lockSeconds: 1, engine: storage.engine(), workerLockId: `held-${id}`, logger: () => {} });
     await queue.enqueue({ kind: "hold-probe", id: `run-${id}`, maxRetries: 3 });
