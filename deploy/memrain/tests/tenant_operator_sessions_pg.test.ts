@@ -6,7 +6,9 @@
  * function in that view that runs as the caller and can `RESET ROLE` or
  * `SET ROLE NONE` first. Run as the master, that function could grant one
  * tenant's owner role to another. Here it tries exactly that during suspend,
- * resume, usage, migrate, export and delete, and must get nowhere.
+ * resume, usage, migrate, export and delete, and must get nowhere. It also
+ * pins the login it ran under (a grant to it, a table it owns); the command
+ * must still finish and leave no login behind.
  * Skipped unless MEMRAIN_TEST_POSTGRES_URL points at a scratch Postgres.
  */
 import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from "bun:test";
@@ -66,7 +68,7 @@ describe.skipIf(!PG_URL)("operator sessions in a tenant database", () => {
     try {
       const s = `"${schema}"`;
       await brain.query(`CREATE SCHEMA ${s}`);
-      await brain.query(`GRANT USAGE ON SCHEMA ${s} TO PUBLIC`);
+      await brain.query(`GRANT USAGE, CREATE ON SCHEMA ${s} TO PUBLIC`);
       await brain.query(`
         CREATE FUNCTION ${s}.pwn() RETURNS boolean LANGUAGE plpgsql AS $f$
         BEGIN
@@ -83,6 +85,21 @@ describe.skipIf(!PG_URL)("operator sessions in a tenant database", () => {
           BEGIN
             EXECUTE 'RESET ROLE';
             EXECUTE format('CREATE ROLE %I', '${marker}');
+          EXCEPTION WHEN others THEN NULL;
+          END;
+          -- Pin whoever logged in: a privilege granted to it and an object
+          -- it owns, so a plain DROP ROLE of that login fails.
+          BEGIN
+            EXECUTE format('GRANT SELECT ON public.pages TO %I', session_user);
+          EXCEPTION WHEN others THEN NULL;
+          END;
+          BEGIN
+            EXECUTE 'SET ROLE NONE';
+            EXECUTE format('CREATE TABLE %I.%I (x int)', '${schema}', 'pin_' || md5(clock_timestamp()::text));
+          EXCEPTION WHEN others THEN NULL;
+          END;
+          BEGIN
+            EXECUTE 'RESET ROLE';
           EXCEPTION WHEN others THEN NULL;
           END;
           RETURN true;

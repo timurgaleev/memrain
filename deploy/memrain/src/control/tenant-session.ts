@@ -6,8 +6,9 @@
  * they would hold every tenant's owner role and the control database, and a
  * `SET ROLE` to the owner is no guard: the function can `RESET ROLE` first.
  *
- * So the master never runs SQL in a tenant database (dropping it, and the
- * fixed DDL of provisioning, aside). Each operator command gets a throwaway
+ * So the master runs no SQL in a tenant database beyond fixed DDL that calls
+ * no tenant code (provisioning's extensions, and the clean-up of a login the
+ * tenant pinned, below). Each operator command gets a throwaway
  * login instead: NOINHERIT, a member of the tenant's owner role and nothing
  * else, allowed to CONNECT to this one database, and starting every session as
  * the owner. RESET ROLE lands on the owner, SET ROLE NONE on a role with no
@@ -58,23 +59,36 @@ export async function asTenantOwner<T>(
         await brain.close();
       }
     } finally {
-      await dropLogin(master, login, n.owner, n.db);
+      await dropLogin(master, masterUrl, login, n.owner, n.db);
     }
   } finally {
     await master.close();
   }
 }
 
-async function dropLogin(master: PostgresEngine, login: string, owner: string, db: string): Promise<void> {
+async function dropLogin(master: PostgresEngine, masterUrl: string, login: string, owner: string, db: string): Promise<void> {
   await master.query(`ALTER ROLE ${ident(login)} NOLOGIN`);
   await master.query(`REVOKE ${ident(owner)} FROM ${ident(login)}`);
   await master.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = $1`, [login]);
   await master.query(`REVOKE CONNECT ON DATABASE ${ident(db)} FROM ${ident(login)}`);
   try {
     await master.query(`DROP ROLE ${ident(login)}`);
+    return;
   } catch (err) {
-    // Only an object the tenant made this login own keeps it, and by now it
-    // can neither log in nor act as the owner.
-    throw new Error(`temporary login ${login} is disabled but could not be dropped: ${(err as Error).message}`);
+    if ((err as { code?: string }).code !== "2BP01") throw err;
   }
+  // Code the tenant planted can pin the login: grant it a privilege, or
+  // `SET ROLE NONE` and create an object it then owns. Hand those objects to
+  // the owner and drop the grants. These two statements run no tenant code,
+  // and the login holds nothing by now, so the master taking its privileges
+  // to run them gains nothing.
+  await master.query(`GRANT ${ident(login)} TO CURRENT_USER`);
+  const tenantDb = new PostgresEngine({ url: urlForDatabase(masterUrl, db), max: 1 });
+  try {
+    await tenantDb.query(`REASSIGN OWNED BY ${ident(login)} TO ${ident(owner)}`);
+    await tenantDb.query(`DROP OWNED BY ${ident(login)}`);
+  } finally {
+    await tenantDb.close();
+  }
+  await master.query(`DROP ROLE ${ident(login)}`);
 }
