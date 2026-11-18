@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
-import { resolveSinceHours } from "./core/search/filters.ts";
-import { runAliasesSuggest } from "./commands/aliases.ts";
 /**
  * memrain CLI entrypoint.
  */
 import "./core/env-compat.ts";
+import { resolveSinceHours } from "./core/search/filters.ts";
+import { runAliasesSuggest } from "./commands/aliases.ts";
 import { VERSION } from "./version.ts";
 import { normalizeSourceFilterParam } from "./core/source-scope.ts";
 import { runInit } from "./commands/init.ts";
