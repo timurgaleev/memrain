@@ -118,6 +118,31 @@ describe("hosting spend cap", () => {
     expect(b.settles).toHaveLength(1);
   });
 
+  it("each call settles the very reservation it took, however the calls interleave", async () => {
+    hosted();
+    let n = 0;
+    const b = fake(() => ({ ok: true, id: `r${++n}` }));
+    setHostingSpendBackend(b);
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((r) => { releaseFirst = r; });
+    const slow = trackedInvoke(CALL, async (m) => {
+      await gate;
+      m.report({ inputTokens: 10, outputTokens: 10 });
+      return "slow";
+    });
+    const failing = trackedInvoke(CALL, async () => { throw new Error("ValidationException: bad input"); }).catch(() => "failed");
+    const fast = trackedInvoke(CALL, ok);
+    expect(await failing).toBe("failed");
+    expect(await fast).toBe("done");
+    releaseFirst();
+    expect(await slow).toBe("slow");
+    expect(new Map(b.settles)).toEqual(new Map([
+      ["r1", costUsd(MODEL, { inputTokens: 10, outputTokens: 10 })],
+      ["r2", 0],
+      ["r3", costUsd(MODEL, USAGE)],
+    ]));
+  });
+
   it("a refusal sends nothing and releases the brain's own hold", async () => {
     process.env["MEMRAIN_DAILY_BUDGET_USD"] = "5";
     hosted();

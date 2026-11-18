@@ -175,6 +175,21 @@ export function renderTenantListJson(entries: readonly TenantListEntry[]): strin
 }
 
 /**
+ * One paid call's reservation against the hosting spend cap. It lives on the
+ * call's hold object from the reservation to the settlement in the call's
+ * `finally`, so every exit settles exactly the reservation it took. A call
+ * that may have billed without reporting (keepHold), or a process that dies,
+ * leaves it open in the control plane, where it turns into spend at its TTL;
+ * a settlement that still arrives later books only the part above the hold.
+ */
+export interface HostingReservation {
+  /** The control plane's reservation id. */
+  id: string;
+  /** The worst case reserved, in USD. */
+  usd: number;
+}
+
+/**
  * Where provisioning puts a tenant's generated secrets. Values are written,
  * never printed; a backend that cannot keep them private refuses.
  */

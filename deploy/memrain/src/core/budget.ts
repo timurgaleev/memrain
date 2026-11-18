@@ -25,7 +25,7 @@ import { appendAudit, auditDir } from "./audit-week-file.ts";
 import { withProviderLease } from "./jobs/rate-leases.ts";
 import type { Engine } from "./engine/interface.ts";
 import type { SonnetUsage } from "./llm/sonnet.ts";
-import { hostingMode } from "../control/contract.ts";
+import { hostingMode, type HostingReservation } from "../control/contract.ts";
 import { hostedPolicy } from "../control/policy.ts";
 import { hostingSpendBackend, reservationTtlSeconds } from "../control/hosting-spend.ts";
 
@@ -1409,12 +1409,7 @@ interface CallHold {
   usd: number;
   runs: RunLedger[];
   /** The hosting-wide reservation, in hosting mode. */
-  hosting?: HostingHold;
-}
-
-interface HostingHold {
-  id: string;
-  usd: number;
+  hosting?: HostingReservation;
 }
 
 /**
@@ -1424,7 +1419,7 @@ interface HostingHold {
 async function holdForCall(call: TrackedCall): Promise<CallHold | null> {
   const local = await holdLocally(call);
   if (hostingMode() === null) return local;
-  let hosting: HostingHold;
+  let hosting: HostingReservation;
   try {
     hosting = await holdHosting(call);
   } catch (err) {
@@ -1442,7 +1437,7 @@ async function holdForCall(call: TrackedCall): Promise<CallHold | null> {
  * nothing sent, when the policy is unknown, paid calls are off, the tenant is
  * held, the call has no price, or the control plane says no or does not answer.
  */
-async function holdHosting(call: TrackedCall): Promise<HostingHold> {
+async function holdHosting(call: TrackedCall): Promise<HostingReservation> {
   const refuse = async (message: string, suggestion: string, rollover = true): Promise<never> => {
     await bookRefusal(call);
     throw new DailyCapRefusal("hosting", `'${call.operation}' was not sent: ${message}`, suggestion, rollover);
@@ -1476,7 +1471,7 @@ async function holdHosting(call: TrackedCall): Promise<HostingHold> {
 }
 
 /** Settle a hosting reservation; a failure leaves it to turn into spend at its TTL. */
-async function settleHosting(call: TrackedCall, hold: HostingHold, actualUsd: number): Promise<void> {
+async function settleHosting(call: TrackedCall, hold: HostingReservation, actualUsd: number): Promise<void> {
   const backend = hostingSpendBackend();
   try {
     const r = await backend?.settle(hold.id, actualUsd);
