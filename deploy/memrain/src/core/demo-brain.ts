@@ -21,7 +21,7 @@ import type { IndexFileOptions } from "./indexer.ts";
 import { putPage } from "./pages.ts";
 import { indexPageIntoSearch } from "./page-index.ts";
 import { registerSource } from "./sources.ts";
-import { addGroup, addGroupMember, grantGroupSource } from "./groups.ts";
+import { OnboardingError } from "./onboarding.ts";
 import { writeMemberAudit, type MemberActor } from "./members.ts";
 import { leftovers } from "./pages-purge.ts";
 import { benchCorpusFiles } from "../eval/bench/harness.ts";
@@ -37,8 +37,20 @@ export function demoSourceId(memberId: string): string {
 
 const actorOf = (memberId: string): MemberActor => ({ actor: `member:${memberId}`, via: "app" });
 
-export async function demoLoaded(engine: Engine, memberId: string): Promise<boolean> {
-  const r = await engine.query(`SELECT 1 FROM sources WHERE id = $1`, [demoSourceId(memberId)]);
+/**
+ * The demo is this member's only when its group holds exactly this member and
+ * exactly this source, no member has the source as a personal source and no
+ * other group grants it. A source that merely has the name is not one.
+ */
+const OWNED_SQL = `SELECT 1 FROM sources s
+   WHERE s.id = $1
+     AND (SELECT array_agg(gm.member_id) FROM group_members gm WHERE gm.group_id = $1) = ARRAY[$2::text]
+     AND (SELECT array_agg(gs.source_id) FROM group_sources gs WHERE gs.group_id = $1) = ARRAY[$1::text]
+     AND NOT EXISTS (SELECT 1 FROM group_sources o WHERE o.source_id = $1 AND o.group_id <> $1)
+     AND NOT EXISTS (SELECT 1 FROM members m WHERE m.personal_source_id = $1)`;
+
+export async function demoLoaded(engine: Pick<Engine, "query">, memberId: string): Promise<boolean> {
+  const r = await engine.query(OWNED_SQL, [demoSourceId(memberId), memberId]);
   return r.rows.length > 0;
 }
 
@@ -55,11 +67,19 @@ export async function loadDemo(storage: Storage, memberId: string, opts: { embed
     const n = await engine.query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE source_id = $1`, [source]);
     return { source_id: source, pages: Number(n.rows[0]?.n ?? 0), already: true };
   }
-  const who = actorOf(memberId);
-  await registerSource(engine, { id: source, kind: "other", pathPrefix: `/${source}/` });
-  await addGroup(engine, source, { displayName: "Demo memory" }, who);
-  await grantGroupSource(engine, source, source, {}, who);
-  await addGroupMember(engine, source, memberId, who);
+  const taken = await engine.query(`SELECT 1 FROM sources WHERE id = $1 UNION ALL SELECT 1 FROM groups WHERE id = $1`, [source]);
+  if (taken.rows.length > 0) {
+    throw new OnboardingError("demo_unavailable", 409, "The demo cannot be loaded: its name is already in use on this brain. Ask the brain operator.");
+  }
+  // The source, the group and the grant commit together, so the demo is
+  // either this member's or not there at all.
+  await engine.transaction(async (tx) => {
+    await registerSource(tx, { id: source, kind: "other", pathPrefix: `/${source}/` });
+    await tx.query(`INSERT INTO groups (id, display_name) VALUES ($1, 'Demo memory')`, [source]);
+    await tx.query(`INSERT INTO group_sources (group_id, source_id) VALUES ($1, $1)`, [source]);
+    await tx.query(`INSERT INTO group_members (group_id, member_id) VALUES ($1, $2)`, [source, memberId]);
+    await writeMemberAudit(tx, actorOf(memberId), { groupId: source, memberId, action: "demo_load", detail: { source_id: source } });
+  });
   let pages = 0;
   for (const f of benchCorpusFiles({ includeMail: false })) {
     const { title, body } = splitFrontmatter(f.text);
@@ -120,7 +140,10 @@ export async function removeDemo(engine: Engine, memberId: string): Promise<Demo
   if (!(await demoLoaded(engine, memberId))) return { source_id: source, removed: false, rows: {} };
   const tables = await sourceTablesInDeleteOrder(engine);
   const rows: Record<string, number> = {};
-  await engine.transaction(async (tx) => {
+  const removed = await engine.transaction(async (tx) => {
+    // Checked again under the lock: nothing may make the source anyone else's in between.
+    await tx.query(`SELECT 1 FROM sources WHERE id = $1 FOR UPDATE`, [source]);
+    if (!(await demoLoaded(tx, memberId))) return false;
     const slugs = (await tx.query<{ slug: string }>(`SELECT slug FROM pages WHERE source_id = $1`, [source])).rows.map((r) => r.slug);
     await tx.query(`DELETE FROM groups WHERE id = $1`, [source]);
     for (const t of tables) {
@@ -142,6 +165,7 @@ export async function removeDemo(engine: Engine, memberId: string): Promise<Demo
       if (Number(r.rows[0]?.n ?? 0) > 0) throw new Error(`demo removal left rows in ${t}`);
     }
     await writeMemberAudit(tx, actorOf(memberId), { groupId: source, memberId, action: "demo_remove", detail: { source_id: source, rows } });
+    return true;
   });
-  return { source_id: source, removed: true, rows };
+  return { source_id: source, removed, rows: removed ? rows : {} };
 }

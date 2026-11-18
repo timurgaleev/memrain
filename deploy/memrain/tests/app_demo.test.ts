@@ -92,4 +92,18 @@ describe("demo memory", () => {
     expect(Object.keys(await rowsOf(demoSourceId("bob")))).toContain("pages");
     expect((await removeDemo(e, "alice")).removed).toBe(false);
   });
+
+  it("never treats a source of the same name that is not this member's demo as one", async () => {
+    const e = storage.engine();
+    // The operator happened to name another member's personal source demo-carol.
+    await registerSource(e, { id: "demo-carol", kind: "other", pathPrefix: "/demo-carol" });
+    await addMember(e, "dave", { personalSource: "demo-carol" }, OPS);
+    await addMember(e, "carol", {}, OPS);
+    await e.query(`INSERT INTO pages (slug, type, title, markdown_body, content_hash, source_id) VALUES ('notes/dave', 'note', 'd', 'dave''s note', 'h-dave', 'demo-carol')`);
+    expect(await demoLoaded(e, "carol")).toBe(false);
+    expect((await removeDemo(e, "carol")).removed).toBe(false);
+    await expect(loadDemo(storage, "carol", { embedFn })).rejects.toThrow(/demo/);
+    expect(Object.keys(await rowsOf("demo-carol"))).toContain("pages");
+    expect((await memberAccess(e, ["carol"]))?.groupSources ?? []).not.toContain("demo-carol");
+  });
 });
