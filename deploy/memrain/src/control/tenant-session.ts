@@ -85,6 +85,10 @@ async function dropLogin(master: PostgresEngine, masterUrl: string, login: strin
   await master.query(`GRANT ${ident(login)} TO CURRENT_USER`);
   const tenantDb = new PostgresEngine({ url: urlForDatabase(masterUrl, db), max: 1 });
   try {
+    // Settings the tenant gave its database (ALTER DATABASE ... SET) apply to
+    // this session too; these two would stop the clean-up.
+    await tenantDb.query(`SET default_transaction_read_only = off`);
+    await tenantDb.query(`SET lock_timeout = 0`);
     await tenantDb.query(`REASSIGN OWNED BY ${ident(login)} TO ${ident(owner)}`);
     await tenantDb.query(`DROP OWNED BY ${ident(login)}`);
   } finally {

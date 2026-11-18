@@ -93,6 +93,12 @@ describe.skipIf(!PG_URL)("operator sessions in a tenant database", () => {
             EXECUTE format('GRANT SELECT ON public.pages TO %I', session_user);
           EXCEPTION WHEN others THEN NULL;
           END;
+          -- And make every later session of this database read-only, the
+          -- master's clean-up connection included.
+          BEGIN
+            EXECUTE format('ALTER DATABASE %I SET default_transaction_read_only = on', current_database());
+          EXCEPTION WHEN others THEN NULL;
+          END;
           BEGIN
             EXECUTE 'SET ROLE NONE';
             EXECUTE format('CREATE TABLE %I.%I (x int)', '${schema}', 'pin_' || md5(clock_timestamp()::text));
