@@ -46,7 +46,7 @@ import {
   type ConnectorAccount,
   type TokenSet,
 } from "./accounts.ts";
-import { MAILBOX_ADDRESS, PROVIDER_USER_ID } from "./model.ts";
+import { MAILBOX_ADDRESS, PASTED_TOKEN, PROVIDER_USER_ID } from "./model.ts";
 import { getOAuthClient } from "./oauth-clients.ts";
 import { openNotice, resolveNotice } from "./sync-store.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
@@ -398,7 +398,7 @@ export async function startConnect(deps: ConnectDeps, input: StartConnectInput):
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", client.clientId);
   url.searchParams.set("redirect_uri", input.redirectUri);
-  url.searchParams.set("scope", scopes.join(" "));
+  url.searchParams.set("scope", scopes.join(provider.scopeSeparator ?? " "));
   url.searchParams.set("state", state);
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
@@ -462,11 +462,11 @@ async function revokeToken(
   provider: ConnectorProvider,
   fetch: FetchFn,
   token: string,
-  client: { clientId: string; clientSecret: string },
+  client: { clientId: string; clientSecret: string } | null,
 ): Promise<boolean> {
   try {
     if (provider.revoke) return await provider.revoke({ fetch, token, client });
-    if (!provider.revokeUrl) return false;
+    if (!provider.revokeUrl || client === null) return false;
     const res = await fetch(provider.revokeUrl, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
@@ -684,7 +684,9 @@ async function persistGrant(
     if (existing) {
       await storeCredential(tx, kek, existing, tokens, { scopes, expiresAt });
       await tx.query(`UPDATE connector_accounts SET services = $2::text[], updated_at = NOW() WHERE id = $1`, [existing.id, st.services]);
-      if (Object.keys(config).length > 0) await setAccountConfig(tx, existing.id, config);
+      // An account that synced with a pasted token now holds an OAuth grant, renewed with the app.
+      const patch = existing.config[PASTED_TOKEN] === true ? { ...config, [PASTED_TOKEN]: false } : config;
+      if (Object.keys(patch).length > 0) await setAccountConfig(tx, existing.id, patch);
       await setAccountStatus(tx, existing.id, "active", null);
       // The new grant answers the sync engine's reconnect notice; with sync off no run would.
       await resolveNotice(tx, existing.id, "needs_reconnect");
@@ -774,7 +776,8 @@ async function disconnectLocked(
   if (hasCredential && canRevoke && deps.kek) {
     const cred = await readCredential(deps.engine, deps.kek, accountId).catch(() => null);
     const client = cred ? await resolveClient(deps, deps.kek, provider.id).catch(() => null) : null;
-    if (cred && client) {
+    // A provider's own revocation may need only the token (Slack's auth.revoke): a pasted token has no app.
+    if (cred && (client || provider.revoke)) {
       revoked = await revokeToken(provider, deps.fetch ?? (globalThis.fetch as FetchFn), cred.tokens.refresh_token ?? cred.tokens.access_token, client);
     }
   }

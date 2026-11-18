@@ -183,6 +183,12 @@ export interface ConnectorContext {
 export const MAILBOX_ADDRESS = "mailbox_address";
 /** The account config key holding the provider's id for the connected user (ProviderIdentity.userId). */
 export const PROVIDER_USER_ID = "provider_user_id";
+/**
+ * The account config key marking a credential the owner pasted (a Slack
+ * internal app's bot token) rather than one an OAuth grant issued: it is sent
+ * as it is, never renewed, and needs no OAuth app to sync or revoke.
+ */
+export const PASTED_TOKEN = "pasted_token";
 
 /** The account's own addresses, lowercased: its mailbox address first, then its label. */
 export function ownAddresses(accountLabel: string, config?: Readonly<Record<string, unknown>>): string[] {

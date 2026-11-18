@@ -28,7 +28,7 @@ import { ConnectorClient, type FetchFn, type TokenSource } from "./client.ts";
 import { enrichConnectorPage } from "./enrich-deterministic.ts";
 import { recordLoopThread } from "../loops/store.ts";
 import { limiterFor } from "./limiter.ts";
-import { accountRef, ownAddresses, type ConnectorDataKind } from "./model.ts";
+import { accountRef, ownAddresses, PASTED_TOKEN, type ConnectorDataKind } from "./model.ts";
 import { clearClientHold, clientHeld, recordClientRejection } from "./client-holds.ts";
 import { renewalApp, resolveClient } from "./oauth-connect.ts";
 import { builtinProviders, oauthEndpoints, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
@@ -57,6 +57,11 @@ export interface ConnectorRuntimeOptions {
 }
 
 export { syncItemFromPage } from "./sync-item.ts";
+
+/** An account of an OAuth provider that syncs with a token its owner pasted: no app renews or vouches for it. */
+function usesPastedToken(providers: ProviderRegistry, account: SyncAccount): boolean {
+  return account.config?.[PASTED_TOKEN] === true && providers.get(account.provider)?.pastedToken !== undefined;
+}
 
 /** Sources whose people pages a connector page may link: its own and the default brain. */
 function peopleSources(sourceId: string): string[] {
@@ -209,10 +214,12 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
     if (!provider || !sync) throw new ProviderCannotSyncError(account.provider);
     return {
       adapter: sync.adapter(account, { env, engine, ...(opts.now ? { now: opts.now } : {}) }),
-      tokenSource: async (_account, secret) => oauthTokenSource({
-        engine, kek: opts.kek, providers: opts.providers, provider: provider.id, accountId: account.id, fetch: fetchFn, env, secret,
-        ...(opts.now ? { now: opts.now } : {}),
-      }),
+      tokenSource: usesPastedToken(opts.providers, account)
+        ? async (_account, secret) => apiKeySource(await readCredential(engine, opts.kek, account.id), secret)
+        : async (_account, secret) => oauthTokenSource({
+          engine, kek: opts.kek, providers: opts.providers, provider: provider.id, accountId: account.id, fetch: fetchFn, env, secret,
+          ...(opts.now ? { now: opts.now } : {}),
+        }),
       client: (_a, tokenSource) => {
         const { origin, minSpacingMs } = serviceApi(provider, account, sync.apiOrigin);
         const limiter = minSpacingMs === undefined
@@ -249,8 +256,8 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
             if (result.status === "success" || result.status === "nothing_new") await markAccountSynced(engine, id);
             await recordAccountRun(engine, id, result, new Date(now()));
           },
-          // An API key has no app to refuse.
-          ...(opts.providers.get(account.provider)
+          // An API key, or a pasted token, has no app to refuse.
+          ...(opts.providers.get(account.provider) && !usesPastedToken(opts.providers, account)
             ? { clientHeld: async (a: SyncAccount) => clientHeld(engine, a.provider, (await renewalApp({ engine, env }, a.provider))?.clientId ?? null, new Date(now())) }
             : {}),
         },

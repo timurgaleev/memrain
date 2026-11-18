@@ -437,7 +437,9 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
   const bodies: string[] = [];
   for (const m of messages) {
     const at = iso(m.ts, "message time");
-    lines.push(`${at.slice(11, 16)} ${g.person({ name: m.author.name, email: m.author.name ? null : m.author.email })}${m.threadId ? " (reply)" : ""}`);
+    // A thread reply posted on a later day stays with its thread and carries its own date.
+    const stamp = at.slice(0, 10) === day.day ? at.slice(11, 16) : `${at.slice(0, 10)} ${at.slice(11, 16)}`;
+    lines.push(`${stamp} ${g.person({ name: m.author.name, email: m.author.name ? null : m.author.email })}${m.threadId ? " (reply)" : ""}`);
     const text = g.text(m.text).trim();
     bodies.push(text);
     lines.push(text === "" ? "_No text._" : text, "");

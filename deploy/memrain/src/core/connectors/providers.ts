@@ -23,6 +23,7 @@ import type { SyncAccount, SyncAdapter } from "./sync-engine.ts";
 import { assertConnectorName } from "./accounts.ts";
 import { googleProvider } from "./google/provider.ts";
 import { microsoftProvider } from "./microsoft/provider.ts";
+import { slackProvider } from "./slack/provider.ts";
 
 export interface ProviderService {
   /** Read-only scopes this service needs. */
@@ -33,6 +34,8 @@ export interface ProviderService {
   apiOrigin?: string;
   /** Minimum gap between two requests of one account to this service, in ms (the client's default otherwise). */
   minSpacingMs?: number;
+  /** Left unticked on the connect form until the owner asks for it (Slack's private channels). */
+  optIn?: boolean;
 }
 
 /** Who a token belongs to: the account label and, when it can differ, the mailbox address. */
@@ -54,7 +57,17 @@ export type ProviderConnectError = "admin_consent_required" | "consent_declined"
 export interface RevokeContext {
   fetch: FetchFn;
   token: string;
-  client: { clientId: string; clientSecret: string };
+  /** The OAuth app, when one is configured; a pasted token may have none. */
+  client: { clientId: string; clientSecret: string } | null;
+}
+
+/** What a pasted token turned out to be. */
+export interface PastedTokenGrant {
+  identity: ProviderIdentity;
+  /** The scopes the provider says the token holds. */
+  scopes: string[];
+  /** The services those scopes cover. */
+  services: string[];
 }
 
 /**
@@ -128,6 +141,15 @@ export interface ConnectorProvider {
   identify: (ctx: { fetch: FetchFn; accessToken: string; tokenResponse: Record<string, unknown> }) => Promise<string | ProviderIdentity>;
   /** Provider-specific revocation; the default posts RFC 7009 to `revokeUrl`. */
   revoke?: (ctx: RevokeContext) => Promise<boolean>;
+  /**
+   * The provider also takes a token the owner pastes (a Slack internal app's
+   * bot token) in place of the OAuth flow. `verify` checks it with the
+   * provider and throws an error carrying a `code` when it will not do. The
+   * token is stored as it is and never renewed (model.ts PASTED_TOKEN).
+   */
+  pastedToken?: {
+    verify(ctx: { fetch: FetchFn; token: string }): Promise<PastedTokenGrant>;
+  };
   /** How an account of this provider syncs; a provider without it can connect but not sync. */
   sync?: {
     /** The one https origin the sync client may call. */
@@ -266,6 +288,7 @@ export function builtinProviders(): ProviderRegistry {
   const registry = new ProviderRegistry();
   registry.register(googleProvider());
   registry.register(microsoftProvider());
+  registry.register(slackProvider());
   registry.registerApiKey(firefliesProvider());
   return registry;
 }
