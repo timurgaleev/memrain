@@ -125,6 +125,8 @@ case "$1" in
     case "$*" in
       *"tenant list --json"*) [ -e "$S/list_fail" ] && exit 1; cat "$S/list.json" ;;
     esac ;;
+  # The image the running tenants run: hosting_ctl takes its version from it.
+  ps) echo "memrain-hosting:v9.9.9" ;;
   *) printf 'docker %s\n' "$*" >> "$S/calls.log" ;;
 esac
 STUB

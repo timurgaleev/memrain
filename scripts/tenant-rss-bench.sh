@@ -7,8 +7,11 @@
 #   bash scripts/tenant-rss-bench.sh [--image IMG] [--tenants 3] [--pages 2000]
 #                                    [--minutes 5] [--host-mib 4096]
 #
-# --image defaults to memrain-hosting:dev; build it first with
-#   docker build -t memrain-hosting:dev deploy/memrain
+# --image defaults to memrain-bench:local; build it first with
+#   docker build -t memrain-bench:local deploy/memrain
+# On a hosting host pass the deployed memrain-hosting:<tag> instead. Never
+# tag a bench build memrain-hosting:dev: that is the tag the hosting compose
+# falls back to.
 # Each brain gets --pages pages of five sections (~10k chunks at 2000), then
 # --minutes of load from four workers per brain: 70% search, 20% page_get,
 # 10% page_put, paced to the server's per-caller limit (about 10 requests a
@@ -51,7 +54,7 @@ bench_summary() {
 
 [ "${BENCH_LIB_ONLY:-}" = 1 ] && return 0
 
-IMAGE="memrain-hosting:dev" TENANTS=3 PAGES=2000 MINUTES=5 HOST_MIB=4096 RESERVED_MIB=768
+IMAGE="memrain-bench:local" TENANTS=3 PAGES=2000 MINUTES=5 HOST_MIB=4096 RESERVED_MIB=768
 while [ $# -gt 0 ]; do
   case "$1" in
     --image) IMAGE="$2"; shift 2 ;;
