@@ -1,8 +1,9 @@
 /**
  * Admin routes for connector accounts: status, OAuth connect,
- * bring-your-own OAuth clients, saving a provider API key (Fireflies), and
- * the Connections page's account actions (sync on/off, disconnect, preview
- * and delete everything, held deletions and held items).
+ * bring-your-own OAuth clients, saving a provider API key (Fireflies) or a
+ * pasted bot token (Slack), the calendar and Slack channel pickers, and the
+ * Connections page's account actions (sync on/off, disconnect, preview and
+ * delete everything, held deletions and held items).
  *
  * `/admin/api/connectors*` is dispatched from handleAdminApi after its gates
  * (admin session, same-origin on writes, post-enroll cooldown), so this file
@@ -41,6 +42,15 @@ import {
 } from "../core/connectors/google/calendar.ts";
 import { listOutlookCalendars, OUTLOOK_CALENDAR_SERVICE } from "../core/connectors/microsoft/calendar.ts";
 import { connectorRuntime, toSyncAccount } from "../core/connectors/runtime.ts";
+import { listChannels, type SlackChannelEntry } from "../core/connectors/slack/api.ts";
+import {
+  MAX_SLACK_CHANNELS,
+  MAX_SLACK_HISTORY_DAYS,
+  selectedChannels,
+  SLACK_PRIVATE_SERVICE,
+  SLACK_SERVICE,
+  slackHistoryDays,
+} from "../core/connectors/slack/adapter.ts";
 import { ReauthRequiredError } from "../core/connectors/types.ts";
 import { deleteOAuthClient, listOAuthClients, setOAuthClient } from "../core/connectors/oauth-clients.ts";
 import { clearClientHold, listClientHolds, type ClientHold } from "../core/connectors/client-holds.ts";
@@ -159,6 +169,11 @@ function serviceKinds(services: Readonly<Record<string, ProviderService>>): Reco
   return Object.fromEntries(Object.entries(services).map(([id, s]) => [id, [...s.sourceKinds]]));
 }
 
+function optInServices(services: Readonly<Record<string, ProviderService>>): { opt_in_services?: string[] } {
+  const ids = Object.entries(services).filter(([, s]) => s.optIn === true).map(([id]) => id);
+  return ids.length > 0 ? { opt_in_services: ids } : {};
+}
+
 function clientRejected(hold: ClientHold | undefined) {
   return hold ? { reason: hold.reason, service_code: hold.service_code, since: hold.since, held_until: hold.held_until } : null;
 }
@@ -205,6 +220,9 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
           consent_urls: [...(pr.consentUrls ?? [])],
           // The provider refused its OAuth app on a renewal: codes only, until the app is saved again.
           client_rejected: clientRejected(holds.get(pr.id)),
+          // A provider that also takes a pasted token (Slack), and services left unticked until asked for.
+          ...(pr.pastedToken ? { pasted_token: true } : {}),
+          ...optInServices(pr.services),
         })),
         ...deps.providers.listApiKey().map((pr) => ({
           id: pr.id,
@@ -229,6 +247,9 @@ export async function handleAdminConnectors(req: Request, url: URL, deps: AdminC
 
   const calendars = /^\/admin\/api\/connectors\/accounts\/([^/]+)\/calendars$/.exec(p);
   if (calendars) return calendarsAction(req, calendars[1]!, deps);
+
+  const channels = /^\/admin\/api\/connectors\/accounts\/([^/]+)\/channels$/.exec(p);
+  if (channels) return channelsAction(req, channels[1]!, deps);
 
   const clientDelete = /^\/admin\/api\/connectors\/([^/]+)\/client\/delete$/.exec(p);
   if (clientDelete && req.method === "POST") {
@@ -562,6 +583,88 @@ async function calendarsAction(req: Request, id: string, deps: AdminConnectorDep
   await setAccountConfig(engine, id, patch);
   const saved = (await getAccount(engine, id))!;
   return json({ ok: true, calendars: Array.isArray(saved.config["calendars"]) ? saved.config["calendars"] : [], history_days: historyDays(saved) });
+}
+
+/** The channels a Slack account's bot can list, fetched with the account's own token. */
+async function slackChannels(account: ConnectorAccount, deps: AdminConnectorDeps): Promise<SlackChannelEntry[] | Response> {
+  const runtime = connectorRuntime(deps.storage, {
+    kek: deps.kek()!, providers: deps.providers, ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.env ? { env: deps.env } : {}),
+  });
+  const sync = toSyncAccount(account);
+  const wiring = runtime.depsFor(sync);
+  let res: Awaited<ReturnType<typeof listChannels>>;
+  try {
+    const client = wiring.client(sync, await wiring.tokenSource(sync, () => {}));
+    res = await listChannels(client, account.services.includes(SLACK_PRIVATE_SERVICE));
+  } catch (e) {
+    if (e instanceof ReauthRequiredError) return json({ error: "not_connected", message: "Slack refused the account's token; reconnect it." }, 409);
+    console.error("[admin-connectors] slack channel list failed:", e instanceof Error ? e.name : "error");
+    return json({ error: "provider_unavailable" }, 502);
+  }
+  if (res.ok) return res.body;
+  if (res.response.reauth === true) return json({ error: "not_connected", message: "Slack refused the account's token; reconnect it." }, 409);
+  if (res.response.class === "forbidden") return json({ error: "missing_scope", message: "The Slack app lacks a scope listing channels needs (channels:read); add it and reinstall the app." }, 409);
+  return json({ error: "provider_unavailable" }, 502);
+}
+
+/**
+ * The Slack channel picker: GET lists the channels the bot can see (private
+ * ones only for an account granted them), whether the bot was invited to
+ * each, and which sync; POST saves `channels` (ids Slack lists for the
+ * account, the bot a member of each) and `history_days` (how far back a
+ * channel's first sync reads) into the account's config.
+ */
+async function channelsAction(req: Request, id: string, deps: AdminConnectorDeps): Promise<Response | null> {
+  if (req.method !== "GET" && req.method !== "POST") return null;
+  if (!UUID_RE.test(id)) return json({ error: "invalid account id" }, 400);
+  if (!deps.status().enabled || deps.kek() === null) return disabled(deps);
+  const engine = deps.storage.engine();
+  const account = await getAccount(engine, id);
+  if (!account) return json({ error: "account_not_found" }, 404);
+  if (account.provider !== "slack" || !account.services.includes(SLACK_SERVICE) || !deps.providers.get("slack")) {
+    return json({ error: "no_channels", message: "Only a Slack account has channels to pick." }, 400);
+  }
+  if (account.status !== "active") return json({ error: "not_connected", message: "Reconnect the account before picking its channels." }, 409);
+
+  const body = req.method === "POST" ? await readBody(req) : null;
+  if (req.method === "POST") {
+    if (!body) return json({ error: "invalid body" }, 400);
+    if (body.channels !== undefined && (!Array.isArray(body.channels) || !body.channels.every((c) => typeof c === "string"))) {
+      return json({ error: "channels must be a list of channel ids" }, 400);
+    }
+    const days = body.history_days;
+    if (days !== undefined && !(typeof days === "number" && Number.isInteger(days) && days >= 1 && days <= MAX_SLACK_HISTORY_DAYS)) {
+      return json({ error: "invalid_history_days", message: `history_days is a whole number from 1 to ${MAX_SLACK_HISTORY_DAYS}.` }, 400);
+    }
+  }
+
+  const listed = await slackChannels(account, deps);
+  if (listed instanceof Response) return listed;
+  const selected = new Set(selectedChannels(toSyncAccount(account)));
+
+  if (req.method === "GET") {
+    return json({
+      channels: listed.map((c) => ({ id: c.id, name: c.name, is_private: c.isPrivate, is_member: c.isMember, selected: selected.has(c.id) })),
+      history_days: slackHistoryDays(toSyncAccount(account)),
+      private_channels: account.services.includes(SLACK_PRIVATE_SERVICE),
+    });
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (Array.isArray(body!.channels)) {
+    const visible = new Map(listed.map((c) => [c.id, c]));
+    const chosen = [...new Set(body!.channels as string[])];
+    if (chosen.some((c) => !visible.has(c))) return json({ error: "unknown_channel", message: "Pick channels from the list Slack shows for this account." }, 400);
+    if (chosen.some((c) => !visible.get(c)!.isMember)) {
+      return json({ error: "not_in_channel", message: "Invite the bot to each channel first: type /invite @<your app> in it, then pick it here." }, 400);
+    }
+    if (chosen.length > MAX_SLACK_CHANNELS) return json({ error: "too_many_channels", message: `At most ${MAX_SLACK_CHANNELS} channels.` }, 400);
+    patch.channels = chosen;
+  }
+  if (body!.history_days !== undefined) patch.history_days = body!.history_days;
+  await setAccountConfig(engine, id, patch);
+  const saved = toSyncAccount((await getAccount(engine, id))!);
+  return json({ ok: true, channels: selectedChannels(saved), history_days: slackHistoryDays(saved) });
 }
 
 async function complete(req: Request, provider: string, deps: AdminConnectorDeps): Promise<Response> {
