@@ -100,6 +100,59 @@ variable "enable_notify_webhook_secret" {
   default     = false
 }
 
+# ---------------------------------------------------------------------------
+# Hosting stack (docs/HOSTING.md). Every default leaves a single-tenant stack
+# unchanged; a hosting stack is this terraform with its own state and tfvars.
+# ---------------------------------------------------------------------------
+
+variable "enable_hosting" {
+  description = <<-EOT
+    Create the empty <secrets_prefix>/hosting/control-admin-url secret: the
+    control database URL under the master role, read only by the host for the
+    one-shot tenant-ctl container. Value put in by hand. Off by default.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "hosting_tenants" {
+  description = <<-EOT
+    Tenant ids of a hosting stack. Each gets three empty secrets,
+    <secrets_prefix>/tenants/<id>/{postgres-url,control-url,internal-token};
+    `memrain tenant create` writes their values, terraform never holds one.
+    Removing an id destroys its secrets with a 7-day recovery window.
+  EOT
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for id in var.hosting_tenants : can(regex("^[a-z][a-z0-9-]{1,30}$", id))])
+    error_message = "hosting_tenants entries must match ^[a-z][a-z0-9-]{1,30}$ (the control-plane tenant id)."
+  }
+}
+
+variable "rds_instance_class" {
+  description = "RDS instance class. A hosting stack moves to db.t4g.small once its connections need it."
+  type        = string
+  default     = "db.t4g.micro"
+}
+
+variable "instance_metadata_hop_limit" {
+  description = <<-EOT
+    IMDSv2 PUT response hop limit of the EC2 instance. 2 lets containers reach
+    IMDS (the single-tenant brain uses the instance role from its container).
+    1 stops every container at the docker bridge, so no tenant container can
+    take the instance role; the host itself keeps IMDS.
+  EOT
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = contains([1, 2], var.instance_metadata_hop_limit)
+    error_message = "instance_metadata_hop_limit must be 1 or 2."
+  }
+}
+
 variable "ssh_public_key" {
   description = <<-EOT
     Public key (ssh-rsa / ssh-ed25519) to register as the EC2 key pair.

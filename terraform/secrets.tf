@@ -160,3 +160,34 @@ resource "aws_secretsmanager_secret" "notify_webhook" {
     ignore_changes  = [description]
   }
 }
+
+# ---- Hosting stack (docs/HOSTING.md) -----------------------------------------
+# Empty containers only. `memrain tenant create` puts the values in with
+# put-secret-value, and the host stages them with
+# `deploy/secrets/fetch-secrets.sh --tenant <id>` / `--control`. A tenant
+# container never reads Secrets Manager. Not prevent_destroy: deleting a
+# tenant removes its secrets, after the 7-day recovery window.
+
+resource "aws_secretsmanager_secret" "hosting_control_admin_url" {
+  count = var.enable_hosting ? 1 : 0
+
+  name                    = "${var.secrets_prefix}/hosting/control-admin-url"
+  description             = "Control database URL under the master role (hosting tenant-ctl only)"
+  recovery_window_in_days = 7
+
+  lifecycle {
+    ignore_changes = [description]
+  }
+}
+
+resource "aws_secretsmanager_secret" "hosting_tenant" {
+  for_each = local.hosting_tenant_secrets
+
+  name                    = "${var.secrets_prefix}/tenants/${each.key}"
+  description             = "Hosting tenant ${each.value.tenant}: ${each.value.kind}"
+  recovery_window_in_days = 7
+
+  lifecycle {
+    ignore_changes = [description]
+  }
+}
