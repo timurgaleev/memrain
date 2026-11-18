@@ -138,9 +138,36 @@ if [ -n "$HOSTING_MODE" ]; then
     esac
   }
 
+  # require_owned_url NAME URL ROLE_SUFFIX DATABASE... -> the URL's role is
+  # tenant_<id>_<suffix> and its database one of DATABASE. Provisioning names
+  # them after the id (hyphens may become underscores), so a valid URL of
+  # another tenant, or of the master role, is refused instead of started.
+  require_owned_url() {
+    local name="$1" url="$2" suffix="$3" rest user db ok=0 want
+    shift 3
+    require_pg_url "$name" "$url"
+    rest="${url#*://}"
+    user="${rest%%@*}"; user="${user%%:*}"
+    db="${rest#*@}"
+    case "$rest" in *@*/*) db="${db#*/}"; db="${db%%\?*}" ;; *) db="" ;; esac
+    for want in "tenant_${TENANT_ID}_${suffix}" "tenant_${TENANT_ID//-/_}_${suffix}"; do
+      [ "$user" = "$want" ] && ok=1
+    done
+    if [ "$ok" = 1 ]; then
+      ok=0
+      for want in "$@"; do [ "$db" = "$want" ] && ok=1; done
+    fi
+    if [ "$ok" != 1 ]; then
+      echo "[secrets] ERROR: ${SCOPE}/${name} names role '${user}' on database '${db}', not tenant ${TENANT_ID}'s; nothing written" >&2
+      exit 1
+    fi
+  }
+
   if [ "$HOSTING_MODE" = tenant ]; then
-    PG_URL="$(hosting_value postgres-url)"; require_pg_url postgres-url "$PG_URL"
-    CTL_URL="$(hosting_value control-url)"; require_pg_url control-url "$CTL_URL"
+    PG_URL="$(hosting_value postgres-url)"
+    require_owned_url postgres-url "$PG_URL" owner "tenant_${TENANT_ID}" "tenant_${TENANT_ID//-/_}"
+    CTL_URL="$(hosting_value control-url)"
+    require_owned_url control-url "$CTL_URL" ctl memrain_control
     TOKEN="$(hosting_value internal-token)"
     if [ "${#TOKEN}" -lt 32 ]; then
       echo "[secrets] ERROR: ${SCOPE}/internal-token is shorter than 32 characters; nothing written" >&2

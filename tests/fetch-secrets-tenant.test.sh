@@ -119,6 +119,27 @@ stub_secret "hst/tenants/acme/postgres-url" "mysql://x"
 stub_secret "hst/tenants/acme/control-url" "$CTL_ACME"
 stub_secret "hst/tenants/acme/internal-token" "$TOK_ACME"
 if fetch -- --tenant acme; then die "a non-Postgres URL was accepted"; else pass "a database URL that is not postgres:// is refused"; fi
+# A URL that is valid but belongs to another tenant (a provisioning slip or a
+# swapped secret) would start acme on beta's data. Provisioning names the
+# roles tenant_<id>_owner / tenant_<id>_ctl and the database tenant_<id>.
+cross_wired() { # NAME VALUE -> acme with one secret replaced
+  ws_new; seed_acme
+  stub_secret "hst/tenants/acme/$1" "$2"
+  if fetch -- --tenant acme; then die "$3 was accepted"; else pass "$3 is refused"; fi
+  if [ -e "$OUT" ]; then die "a file was written after: $3"; fi
+}
+cross_wired postgres-url "${SCHEME}://tenant_beta_owner:pw@db.example.test:5432/tenant_beta" "beta's database URL under acme"
+cross_wired postgres-url "${SCHEME}://tenant_acme_owner:pw@db.example.test:5432/tenant_beta" "acme's role on beta's database"
+cross_wired postgres-url "${SCHEME}://tenant_acme_owner:pw@db.example.test:5432/memrain_control" "the control database as acme's brain"
+cross_wired control-url "${SCHEME}://tenant_beta_ctl:pw@db.example.test:5432/memrain_control" "beta's control role under acme"
+cross_wired control-url "${SCHEME}://tenant_acme_ctl:pw@db.example.test:5432/tenant_acme" "a control URL on the tenant database"
+cross_wired control-url "${SCHEME}://master:pw@db.example.test:5432/memrain_control" "the master role as acme's control URL"
+ws_new
+stub_secret "hst/tenants/my-co/postgres-url" "${SCHEME}://tenant_my_co_owner:pw@db.example.test:5432/tenant_my_co?sslmode=require"
+stub_secret "hst/tenants/my-co/control-url" "${SCHEME}://tenant_my_co_ctl:pw@db.example.test/memrain_control"
+stub_secret "hst/tenants/my-co/internal-token" "$TOK_ACME"
+if fetch -- --tenant my-co; then pass "a hyphenated id matches its underscored role and database names"; else die "hyphenated id refused"; cat "$WS/out.log"; fi
+
 ws_new; seed_acme
 stub_secret "hst/tenants/acme/internal-token" "short"
 if fetch -- --tenant acme; then die "a short internal token was accepted"; else pass "an internal token under 32 characters is refused"; fi
