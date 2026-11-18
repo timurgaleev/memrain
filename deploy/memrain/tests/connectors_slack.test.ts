@@ -364,6 +364,20 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("keeps a stored day that Slack answers empty once, deleting only when a second read agrees", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      const account = await pasteToken(db.storage, w);
+      await run(db.storage, w, account.id);
+      w.blankHistory = { channel: RANDOM, day: "2026-11-15", times: 1 };
+      const result = await run(db.storage, w, account.id, T0 + HOUR);
+      expect(result.counts.deletions_applied ?? 0).toBe(0);
+      expect(await body(e, daySlug(RANDOM, "2026-11-15"))).toContain("lunch?");
+    } finally { await db.close(); }
+  });
+
   it("stops reading a channel taken off the allowlist and keeps the pages it wrote", async () => {
     const db = await open();
     try {

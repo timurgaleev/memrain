@@ -51,6 +51,8 @@ export interface SlackWorld {
   scope?: string;
   /** Answer this method with HTTP 429 and this Retry-After (seconds): `times` times, or every time. */
   rateLimit?: { method: string; retryAfter: string; times?: number };
+  /** Answer this many conversations.history reads of a channel's UTC day (YYYY-MM-DD) with an empty, successful page. */
+  blankHistory?: { channel: string; day: string; times: number };
   calls: SlackCall[];
 }
 
@@ -124,6 +126,9 @@ export function slackFetch(world: SlackWorld): FetchFn {
         const ch = world.channels[id];
         if (!ch) return fail("channel_not_found");
         if (ch.is_member === false) return fail("not_in_channel");
+        const blank = world.blankHistory;
+        const dayStart = Date.parse(`${blank?.day}T00:00:00Z`) / 1000;
+        if (blank?.channel === id && Number(params.get("oldest")) === dayStart && blank.times-- > 0) return ok({ messages: [], has_more: false, response_metadata: { next_cursor: "" } });
         return ok({ messages: window(world.messages[id] ?? [], params), has_more: false, response_metadata: { next_cursor: "" } });
       }
       case "conversations.replies": {

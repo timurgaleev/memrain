@@ -16,8 +16,9 @@
  *     lookback, reads `conversations.replies` for its threads and is rendered
  *     again whole, so an edited or deleted thread reply (which leaves the
  *     top-level messages as they were) converges within a day.
- *   - A stored day with no messages left upstream is reported deleted; the
- *     engine soft-deletes its page past the mass-delete guard.
+ *   - A stored day with no messages left upstream, on two reads in a row, is
+ *     reported deleted; the engine soft-deletes its page past the mass-delete
+ *     guard.
  *   - User names come from `users.info`, cached per account for a day in this
  *     process, so a run asks once per person at most.
  *   - A channel the bot cannot read (not invited, not found), a private
@@ -28,8 +29,10 @@
  *   - Slack's rate limits are the connector client's: a 429 is waited out up
  *     to its cap, past it the run ends partial and resumes from the cursor.
  *
- * Coverage limit: a reply to a thread that started before the lookback is not
- * seen unless it was also sent to the channel.
+ * Coverage limits: a reply to a thread that started before the lookback is not
+ * seen unless it was also sent to the channel; a channel day or thread longer
+ * than 25 listing pages (5,000 messages) fails its read and holds the
+ * channel's cursor there.
  */
 import type { Engine } from "../../engine/interface.ts";
 import type { ConnectorClient, ConnectorResponse } from "../client.ts";
@@ -131,13 +134,17 @@ class Adapter implements SyncAdapter {
     let last: string | null = null;
     for (const day of days) {
       if (items.length >= remaining) break;
-      const history = await channelHistory(ctx.client, channelId, dayStartSec(day), dayStartSec(addDays(day, 1)));
-      if (!history.ok) {
-        if (history.channelUnavailable) return this.unavailable(channelId, history.channelUnavailable);
-        return { ok: false, response: history.response };
-      }
       const id = dayItemId(channelId, day);
-      const messages = history.body.filter(m => !skippedMessage(m));
+      const read = await this.dayMessages(ctx.client, channelId, day);
+      if ("failure" in read) return read.failure;
+      let messages = read.messages;
+      // A stored day that comes back empty is read once more before its page
+      // goes: one blank answer is not enough to delete what is already stored.
+      if (messages.length === 0 && settled.has(id)) {
+        const again = await this.dayMessages(ctx.client, channelId, day);
+        if ("failure" in again) return again.failure;
+        messages = again.messages;
+      }
       if (messages.length === 0) {
         if (settled.has(id)) deletions.push(id);
         last = day;
@@ -158,6 +165,16 @@ class Adapter implements SyncAdapter {
       checkpoint: last === null ? null : JSON.stringify({ v: 1, through: last }),
       done: last === today,
     };
+  }
+
+  /** One day's top-level messages, join and leave notices left out. */
+  private async dayMessages(client: ConnectorClient, channelId: string, day: string): Promise<{ messages: SlackApiMessage[] } | { failure: PageResult }> {
+    const history = await channelHistory(client, channelId, dayStartSec(day), dayStartSec(addDays(day, 1)));
+    if (!history.ok) {
+      if (history.channelUnavailable) return { failure: this.unavailable(channelId, history.channelUnavailable) };
+      return { failure: { ok: false, response: history.response } };
+    }
+    return { messages: history.body.filter(m => !skippedMessage(m)) };
   }
 
   /** The channel's info, once per run; a channel that cannot be synced is one held failure. */
