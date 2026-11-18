@@ -261,6 +261,15 @@ describe("chat turn (P5-C1)", () => {
     expect(result.citations[0]!.slug).not.toBe("notes/vendor");
   });
 
+  it("a run that throws still stores the turn as an error answer", async () => {
+    const s = stub(() => answer([]));
+    const boom = async (): Promise<SearchHit[]> => { throw new Error("retrieval exploded"); };
+    const { result } = await turn(ctx(s.fn, { pagesFn: boom, embedQuery: boom as never }), "what is the garden plan?");
+    expect(result.status).toBe("error");
+    const stored = await threadMessages(storage.engine(), operatorOwner(), result.thread_id);
+    expect(stored!.map(m => [m.role, m.status])).toEqual([["user", null], ["assistant", "error"]]);
+  });
+
   it("an answer that cites nothing gathered is refused, not passed off as grounded", async () => {
     const s = stub(() => JSON.stringify({ answer: "The capital of nowhere is Elsewhere [page://made/up].", citations: [{ ref: "page://made/up", kind: "page" }], gaps: ["no page names a capital"] }));
     const { result } = await turn(ctx(s.fn), "what is the capital of nowhere?");

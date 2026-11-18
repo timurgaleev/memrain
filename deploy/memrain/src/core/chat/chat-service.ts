@@ -115,7 +115,8 @@ export type ChatStreamEvent =
 
 function turnTimeoutMs(env: NodeJS.ProcessEnv): number {
   const n = Number(env["MEMRAIN_CHAT_TIMEOUT_MS"]);
-  return Number.isFinite(n) && n >= 1000 ? Math.min(n, 600_000) : DEFAULT_TURN_TIMEOUT_MS;
+  // Stays a minute under the hold's lifetime so the hold never lapses mid-turn.
+  return Number.isFinite(n) && n >= 1000 ? Math.min(n, CHAT_HOLD_TTL_MS - 60_000) : DEFAULT_TURN_TIMEOUT_MS;
 }
 
 /** One turn per owner at a time: a second send while one runs is refused. */
@@ -394,8 +395,9 @@ async function turn(
     try {
       result = await untilAborted(runP, stop.signal);
     } catch (e) {
-      if (!(e instanceof TurnStopped)) throw e;
-      leftBehind = true;
+      if (e instanceof TurnStopped) leftBehind = true;
+      // A run that throws still ends as a stored error turn, not a bare question.
+      else if (failure === null) failure = classifyChatFailure(e);
     }
     if (result) spentUsd += result.spentUsd;
     const spentBefore = spentUsd;

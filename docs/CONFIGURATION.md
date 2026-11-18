@@ -316,7 +316,7 @@ that stops making calls once the budget is spent. All default OFF.
 | `MEMRAIN_CHAT_ANSWER_MAX_USD_CAP` | `0.50` | Hard ceiling on `MEMRAIN_CHAT_ANSWER_MAX_USD`: a larger value is lowered to it. Allowlisted. | — |
 | `MEMRAIN_CHAT_USER_DAY_USD` | `0.50` | One chat owner's UTC day. A send that would not fit is answered `budget` with no model call. Allowlisted. | — |
 | `MEMRAIN_CHAT_RETENTION_DAYS` | `90` (`0` = keep forever) | Age past which the purge phase deletes chat messages, and the threads they leave empty. Allowlisted. | free |
-| `MEMRAIN_CHAT_TIMEOUT_MS` | `120000` | How long one answer may take before it is stopped and answered `timeout` (1000 to 600000). Allowlisted. | — |
+| `MEMRAIN_CHAT_TIMEOUT_MS` | `120000` | How long one answer may take before it is stopped and answered `timeout` (1000 to 540000; kept a minute under the 10-minute spend hold). Allowlisted. | — |
 | `MEMRAIN_THINK_BUDGET_USD` | `1.0` | USD ceiling for `think`. | — |
 | `MEMRAIN_THINK_OUTPUT_TOKENS` | `4000` | Output-token cap for one `think` call. `think` returns structured JSON, so a cut-off answer is total loss rather than a shorter answer — raise this if answers come back incomplete. Clamped to 8000. Code-only. | — |
 | `MEMRAIN_THINK_AUTO_ANCHOR` | on (`=0` off) | When a temporal question ("when did X change, is it still…") names no anchor, `think` derives candidate entity slugs from the question + retrieved pages and anchors on them. Temporal/knowledge-update intents only, fail-soft. A behavior toggle inside the `think` flow — no extra billable call beyond `think` itself. Code-only. | — |
