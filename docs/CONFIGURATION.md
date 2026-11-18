@@ -747,13 +747,26 @@ refuses to store `MEMRAIN_CONTROL_URL` at all.
 In hosting mode every request, MCP operation and queued job first passes the
 tenant's policy from the control plane. A suspended tenant held read-only
 still serves reads and refuses every change with `tenant_suspended`; a blocked
-one answers only `/health`. While the policy cannot be read, reads pass and
-writes, credential issuance and queued jobs are refused.
+one answers only `/health`. Until the control plane has answered once, a
+container answers only `/health`; after that an outage keeps the last policy
+it read.
+
+A tenant container serves nothing but `/health` (503 `isolation_unverified`)
+until the operator's `memrain tenant smoke-record` has stamped it after the
+container started, on the same host boot and image. Every paid model call of
+every tenant also reserves its worst case against the hosting-wide daily cap
+(and the tenant's own `max-usd-per-day`) in the control database before it is
+sent; a call with no price is refused, and while the control plane does not
+answer no paid call is sent and search falls back to its keyword arm.
+`memrain tenant cap --usd N` sets the hosting cap (default $10), `--llm-off`
+switches every paid call off; the first call that costs more than it reserved
+switches them off for the rest of the UTC day.
 
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
 | `MEMRAIN_TENANT_ID` | unset | This container's tenant id on a hosted install. Setting it turns hosting mode on. Environment only. | free |
 | `MEMRAIN_CONTROL_URL` | unset | Connection URL of the hosting control database, read from the tenant's secrets file. Setting it turns hosting mode on. Environment only; `memrain config set` refuses to store it. | free |
+| `MEMRAIN_CONTROL_ADMIN_URL` | unset | Master-role connection URL of the hosting control database, read only by the operator's `memrain tenant` commands on the hosting host. Never set it in a tenant container. Environment only; never stored. | free |
 | `MEMRAIN_HOSTING_LLM_OFF` | off (`=1` on) | In hosting mode, mark this tenant's paid model calls as off, whatever the control plane says. Not acted on yet: no paid call checks it. Environment only. | free |
 | `MEMRAIN_PUBLIC_AUTH` | unset | `oauth` selects the hosted-tenant sign-in mode for public `/mcp`; any other value is refused. Not acted on yet. Environment only. | free |
 | `MEMRAIN_APP` | off (`=1` on) | Serve the member app under `/app` on a hosted tenant. Not acted on yet: `/app` answers 404. Environment only. | free |

@@ -28,12 +28,12 @@ import { callSonnet, type SonnetFn } from "../llm/sonnet.ts";
 import { embedText } from "../embedding.ts";
 import {
   brainDailyCapUsd,
-  brainDaySpendUsd,
   costUsd,
   priceFor,
   releaseReservation,
   reserveSpend,
   runInWallet,
+  runUnderHold,
   runWithSpendClient,
   settleSpend,
 } from "../budget.ts";
@@ -301,11 +301,8 @@ async function turn(
   const model = t.model!;
   const answerCap = cfg.answerCapUsd;
 
-  // The brain's day, then the owner's: both before any model is called.
-  const brainCap = brainDailyCapUsd(env);
-  if (brainCap !== null && (await db(() => brainDaySpendUsd(engine))) + answerCap > brainCap) {
-    return refusal("budget", "budget_exhausted", model);
-  }
+  // The brain's day and the owner's, in one hold before any model is called.
+  // The turn's calls run under it (runUnderHold), so the day counts the turn once.
   const hold = await db(() => reserveSpend(engine, {
     clientId: owner.spendId,
     capUsd: cfg.userDayUsd,
@@ -314,6 +311,7 @@ async function turn(
     provider: "bedrock",
     ttlMs: CHAT_HOLD_TTL_MS,
     role: "chat",
+    brainCapUsd: brainDailyCapUsd(env),
   }));
   if (!hold.reserved) return refusal("budget", "budget_exhausted", model);
 
@@ -388,7 +386,7 @@ async function turn(
     // the turn's hold stays until that run ends and is closed then.
     const runP = runInWallet(
       { role: "chat", requiresBrainCap: true, callCapUsd: answerCap, runCapUsd: answerCap },
-      () => runWithSpendClient({ clientId: owner.spendId, capUsd: null }, run),
+      () => runWithSpendClient({ clientId: owner.spendId, capUsd: null }, () => runUnderHold(hold.reservationId, run)),
     );
     let result: ThinkResult | null = null;
     let leftBehind = false;

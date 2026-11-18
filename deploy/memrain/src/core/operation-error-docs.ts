@@ -146,6 +146,11 @@ export const OPERATION_ERROR_DOCS: Record<OperationErrorCode, OperationErrorDoc>
     cause: "A storage operation failed for a reason that may pass, such as an unavailable volume or connection.",
     fix: "Retry later. If it persists, check `memrain doctor` and the server logs.",
   },
+  tenant_limit_reached: {
+    title: "This hosted brain has reached a limit of its plan",
+    cause: "The brain runs on a hosted install whose plan caps how much it may hold, for example its number of pages. Reading, editing and deleting still work; only adding more is refused.",
+    fix: "Delete what you no longer need, or ask the operator to raise the limit.",
+  },
   tenant_suspended: {
     title: "This hosted brain is suspended",
     cause: "The operator suspended this brain on a hosted install. Its data is intact; while it is held read-only, reads still work and every change is refused.",

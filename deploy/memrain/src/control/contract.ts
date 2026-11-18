@@ -19,6 +19,12 @@ export const HOSTING_ENV = {
   requireMember: "MEMRAIN_REQUIRE_MEMBER",
 } as const;
 
+/**
+ * The master-role URL of the control database, read only by the operator's
+ * `memrain tenant` CLI. Never given to a tenant container.
+ */
+export const CONTROL_ADMIN_URL_ENV = "MEMRAIN_CONTROL_ADMIN_URL";
+
 type Env = Readonly<Record<string, string | undefined>>;
 
 /** A tenant id: also the suffix of its database and role names. */
@@ -41,6 +47,12 @@ export interface TenantPolicy {
   limits: TenantLimits;
   /** Paid model calls are off for this tenant. */
   llmOff: boolean;
+  /**
+   * Whether the isolation smoke has passed for this container since it
+   * started. The control-plane source always sets it; `unverified` serves
+   * nothing but /health. Absent (a policy from another source) imposes nothing.
+   */
+  isolation?: "verified" | "unverified";
 }
 
 /** The policy of a brain that is not hosted: active, no limits, paid calls on. */
@@ -107,6 +119,10 @@ let policySource: TenantPolicySource | null = null;
 /** Install the control-plane reader; null removes it. */
 export function setTenantPolicySource(source: TenantPolicySource | null): void {
   policySource = source;
+}
+
+export function hasTenantPolicySource(): boolean {
+  return policySource !== null;
 }
 
 /**

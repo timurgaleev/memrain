@@ -29,7 +29,7 @@ import {
   JOBS_WORKER_ENV,
   MAINTENANCE_ENV,
 } from "./quiescence.ts";
-import { HOSTING_ENV } from "../control/contract.ts";
+import { CONTROL_ADMIN_URL_ENV, HOSTING_ENV } from "../control/contract.ts";
 
 export const RUNTIME_CONFIG_KEY_RE = /^(?:MEMRAIN|MEMEX)_[A-Z0-9_]{1,64}$/;
 
@@ -71,6 +71,7 @@ export const ENV_ONLY_KEYS: ReadonlySet<string> = new Set([
   // Hosting mode and its switches (control/contract.ts): a tenant's own
   // database must never decide whether it is hosted or how it is guarded.
   ...Object.values(HOSTING_ENV),
+  CONTROL_ADMIN_URL_ENV,
 ]);
 
 /**
@@ -89,6 +90,7 @@ export const NEVER_STORED_KEYS: ReadonlySet<string> = new Set([
   "MEMRAIN_NOTIFY_WEBHOOK_SECRET",
   "MEMRAIN_NOTIFY_WEBHOOK_SECRET_FILE",
   HOSTING_ENV.controlUrl,
+  CONTROL_ADMIN_URL_ENV,
 ]);
 
 /**
