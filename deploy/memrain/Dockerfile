@@ -10,9 +10,11 @@ FROM oven/bun:1.4.4-alpine AS admin-builder
 WORKDIR /admin
 COPY admin/package.json admin/bun.lock ./
 RUN bun install --frozen-lockfile
-COPY admin/vite.config.ts admin/tsconfig.json admin/index.html ./
+COPY admin/vite.config.ts admin/vite.app.config.ts admin/tsconfig.json admin/index.html admin/app.html ./
 COPY admin/src ./src
-RUN bun run build
+COPY admin/scripts ./scripts
+# The operator's panel (dist) and the member app (dist-app, served at /app).
+RUN bun run build && bun run build:app
 
 # --- runtime --------------------------------------------------------------
 FROM oven/bun:1.4.4-alpine
@@ -34,6 +36,7 @@ COPY wasm/ ./wasm/
 # Built admin SPA (static dist) from the builder stage — served at /admin by
 # http/admin-static.ts (resolves to /app/admin/dist).
 COPY --from=admin-builder /admin/dist ./admin/dist
+COPY --from=admin-builder /admin/dist-app ./admin/dist-app
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
