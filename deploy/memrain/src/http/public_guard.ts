@@ -38,6 +38,7 @@ import { timingSafeEqual } from "node:crypto";
 // Canonical definition lives in core so the MCP layer shares it without
 // importing this http/ module (which would create an import cycle).
 import { publicReadBodiesAllowed } from "../core/public_redaction.ts";
+import { hostingFlags, hostingMode } from "../control/contract.ts";
 
 export interface PublicGuardOptions {
   /** Bearer token. If undefined, every public request is rejected. */
@@ -371,7 +372,38 @@ function isPreCredentialRoute(req: Request, url: URL): boolean {
   ) {
     return true;
   }
+  // The member app authenticates every route itself (http/app.ts), and only
+  // exists while MEMRAIN_APP is on.
+  if ((url.pathname === "/app" || url.pathname.startsWith("/app/")) && hostingFlags().app) return true;
   return url.pathname === "/admin" || url.pathname.startsWith("/admin/");
+}
+
+/**
+ * Refuse to start on an ingress that would be open or ambiguous:
+ *   - MEMRAIN_PUBLIC_AUTH must be unset or `oauth`;
+ *   - `oauth` means there is no static public bearer, so one configured
+ *     alongside it is a mistake, not a fallback;
+ *   - a hosted tenant needs its own MEMRAIN_INTERNAL_TOKEN: without it every
+ *     request that looks internal would pass with no credential, and a
+ *     sibling container on the same host is exactly such a request.
+ */
+export function assertIngressConfig(
+  opts: { publicBearerToken?: string; internalToken?: string },
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  const flags = hostingFlags(env);
+  if (flags.publicAuth === "oauth" && opts.publicBearerToken) {
+    throw new Error(
+      "MEMRAIN_PUBLIC_AUTH=oauth takes no static public bearer; unset MEMRAIN_PUBLIC_BEARER " +
+        "(clients sign in with OAuth or a personal access token)",
+    );
+  }
+  if (hostingMode(env) !== null && !opts.internalToken) {
+    throw new Error(
+      "hosting mode (MEMRAIN_TENANT_ID or MEMRAIN_CONTROL_URL) needs this tenant's own " +
+        "MEMRAIN_INTERNAL_TOKEN; refusing to start with the internal ingress open",
+    );
+  }
 }
 
 export function evaluatePublicGuard(
@@ -405,6 +437,16 @@ export function evaluatePublicGuard(
       allow: false,
       status: 403,
       reason: `route ${url.pathname} is internal-only (set MEMRAIN_PUBLIC_WRITE=1 to opt in)`,
+    };
+  }
+
+  // A hosted tenant has no static public bearer: every public caller presents
+  // its own OAuth token or PAT, which the server verifies on this 401.
+  if (hostingFlags().publicAuth === "oauth") {
+    return {
+      allow: false,
+      status: 401,
+      reason: "missing or invalid bearer token",
     };
   }
 

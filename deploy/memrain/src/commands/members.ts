@@ -6,6 +6,8 @@
  *   member show <id>
  *   member add <id> [--name N] [--email E] [--personal-source SRC]
  *   member disable|enable|remove <id>
+ *   member remove <id> --erase-personal-source [--apply --out DIR]
+ *   member invite <id> [--ttl 72h]
  *   member bind <id> --token NAME | --client CLIENT_ID | --enrollment ID
  *   member unbind --token NAME | --client CLIENT_ID | --enrollment ID
  *
@@ -47,11 +49,13 @@ import {
   removeGroupMember,
   revokeGroupSource,
 } from "../core/groups.ts";
+import { INVITE_DEFAULT_TTL_MS, MemberInviteError, memberInviteUrl, mintMemberInvite } from "../core/member-invites.ts";
+import { ErasureUsageError, eraseMemberPersonalSource } from "../core/member-offboarding.ts";
 import { cliActor } from "./auth.ts";
 import { withStorage } from "./with-storage.ts";
 import type { Engine } from "../core/engine/interface.ts";
 
-export const MEMBER_SUBCOMMANDS = ["list", "show", "add", "disable", "enable", "remove", "bind", "unbind"] as const;
+export const MEMBER_SUBCOMMANDS = ["list", "show", "add", "disable", "enable", "remove", "bind", "unbind", "invite"] as const;
 export const GROUP_SUBCOMMANDS = [
   "list", "show", "add", "remove", "grant-source", "revoke-source", "add-member", "remove-member",
 ] as const;
@@ -67,10 +71,23 @@ export interface MemberCmdOptions {
   client?: string;
   enrollment?: string;
   allowOwnerSource?: boolean;
+  /** `invite --ttl`: 90m, 72h, 7d. */
+  ttl?: string;
+  /** `remove --erase-personal-source`: offboard the member's own source too. */
+  erasePersonalSource?: boolean;
+  apply?: boolean;
+  out?: string;
   configPath?: string;
 }
 
-const MEMBER_USAGE = "Usage: memrain member <list|show|add|disable|enable|remove|bind|unbind> … (see memrain help)";
+/** `90m`, `72h` or `7d` in milliseconds. */
+export function parseTtl(raw: string): number {
+  const m = /^(\d{1,5})([mhd])$/.exec(raw.trim());
+  if (!m) throw new UsageError(`--ttl takes a number and a unit: 90m, 72h or 7d (got "${raw}")`);
+  return Number(m[1]) * { m: 60_000, h: 3600_000, d: 86_400_000 }[m[2] as "m" | "h" | "d"];
+}
+
+const MEMBER_USAGE = "Usage: memrain member <list|show|add|disable|enable|remove|bind|unbind|invite> … (see memrain help)";
 const GROUP_USAGE = "Usage: memrain group <list|show|add|remove|grant-source|revoke-source|add-member|remove-member> … (see memrain help)";
 
 class UsageError extends Error {}
@@ -89,9 +106,23 @@ function credentialFrom(opts: MemberCmdOptions): CredentialRef {
   return { kind, id: id! };
 }
 
-async function memberCommand(engine: Engine, opts: MemberCmdOptions, who: MemberActor): Promise<unknown> {
+async function memberCommand(storage: Storage, opts: MemberCmdOptions, who: MemberActor): Promise<unknown> {
+  const engine = storage.engine();
   const [id] = opts.args;
   switch (opts.sub) {
+    case "invite": {
+      const member = await existingMember(engine, need(id, "Usage: memrain member invite <id> [--ttl 72h]"));
+      // Checked before minting: a new invite revokes the member's last one.
+      const publicUrl = process.env.MEMRAIN_PUBLIC_URL?.trim();
+      if (!publicUrl) throw new UsageError("set MEMRAIN_PUBLIC_URL: the invite link is built from the brain's public address");
+      const invite = await mintMemberInvite(engine, member.id, opts.ttl !== undefined ? parseTtl(opts.ttl) : INVITE_DEFAULT_TTL_MS, { createdBy: who.actor });
+      return {
+        member_id: member.id,
+        url: memberInviteUrl(publicUrl, invite.token),
+        expires_at: invite.expiresAt.toISOString(),
+        note: "Send the link to the member only; it works once and is not shown again.",
+      };
+    }
     case "list":
       return { members: await listMembers(engine, { includeRemoved: opts.all === true }) };
     case "show": {
@@ -118,6 +149,13 @@ async function memberCommand(engine: Engine, opts: MemberCmdOptions, who: Member
     case "enable":
       return { member: await enableMember(engine, need(id, "Usage: memrain member enable <id>"), who) };
     case "remove":
+      if (opts.erasePersonalSource) {
+        return eraseMemberPersonalSource(storage, need(id, "Usage: memrain member remove <id> --erase-personal-source [--apply --out DIR]"), {
+          apply: opts.apply === true,
+          ...(opts.out !== undefined ? { outDir: opts.out } : {}),
+          actor: who,
+        });
+      }
       return {
         ...(await removeMember(engine, need(id, "Usage: memrain member remove <id>"), who)),
         note: "Removal is permanent: the id is never reused and its keys stay refused. Revoke them to tidy up.",
@@ -174,12 +212,12 @@ async function run(kind: "member" | "group", opts: MemberCmdOptions): Promise<nu
     const who: MemberActor = { actor: cliActor(), via: "cli" };
     try {
       const out = kind === "member"
-        ? await memberCommand(storage.engine(), opts, who)
+        ? await memberCommand(storage, opts, who)
         : await groupCommand(storage.engine(), opts, who);
       console.log(JSON.stringify(out, null, 2));
       return 0;
     } catch (e) {
-      if (e instanceof MemberError || e instanceof UsageError) {
+      if (e instanceof MemberError || e instanceof UsageError || e instanceof MemberInviteError || e instanceof ErasureUsageError) {
         console.error(`memrain ${kind}: ${e.message}`);
         return 1;
       }

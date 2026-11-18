@@ -7,7 +7,8 @@
  */
 import type { Storage } from "../storage.ts";
 import type { Engine } from "../engine/interface.ts";
-import { dispatchTool } from "../../mcp/dispatch.ts";
+import { dispatchTool, type DispatchOptions } from "../../mcp/dispatch.ts";
+import type { AuthInfo } from "../auth-info.ts";
 import { documentRankSql, isTrustTier, lowerTier, pageRankSql, tierOfRank, type TrustTier } from "../trust-tier.ts";
 import { readTrustTiers } from "../trust-frame.ts";
 import { ownedAnswer, setSavedSlug, type ChatOwner } from "./store.ts";
@@ -115,17 +116,43 @@ async function refsTier(engine: Engine, evidence: { pages: readonly string[]; ta
   return tierOfRank(Math.min(...r.rows.map((row) => Number(row.rank))));
 }
 
-export async function saveAnswerAsPage(storage: Storage, owner: ChatOwner, messageId: number): Promise<SaveAnswerResult> {
+/**
+ * The grant a member's save writes under: the member's personal source, the
+ * member's read set, and the member principal the page is attributed to. The
+ * operator saves with none and writes as the owner.
+ */
+export interface SaveGrant {
+  sourceId: string;
+  allowedSources: string[];
+  principal: `member:${string}`;
+  spendId: string;
+}
+
+function dispatchOptionsFor(grant: SaveGrant | undefined, tier: TrustTier): DispatchOptions {
+  if (!grant) return tier === "owner" ? {} : { trustCeiling: tier };
+  const authInfo: AuthInfo = {
+    token: "",
+    clientId: grant.spendId,
+    scopes: ["read", "write"],
+    sourceId: grant.sourceId,
+    allowedSources: grant.allowedSources,
+    budgetUsdPerDay: null,
+    isPublic: false,
+  };
+  return { authInfo, memberPrincipal: grant.principal, trustCeiling: lowerTier(tier, "member") };
+}
+
+export async function saveAnswerAsPage(storage: Storage, owner: ChatOwner, messageId: number, grant?: SaveGrant): Promise<SaveAnswerResult> {
   if (saving.has(messageId)) return refuse(409, "busy");
   saving.add(messageId);
   try {
-    return await save(storage, owner, messageId);
+    return await save(storage, owner, messageId, grant);
   } finally {
     saving.delete(messageId);
   }
 }
 
-async function save(storage: Storage, owner: ChatOwner, messageId: number): Promise<SaveAnswerResult> {
+async function save(storage: Storage, owner: ChatOwner, messageId: number, grant: SaveGrant | undefined): Promise<SaveAnswerResult> {
   const engine = storage.engine();
   const found = await ownedAnswer(engine, owner, messageId);
   if (!found) return refuse(404, "not_found");
@@ -150,10 +177,10 @@ async function save(storage: Storage, owner: ChatOwner, messageId: number): Prom
     const res = await dispatchTool(storage, {
       name: "page_put",
       arguments: {
-        slug, title, markdown_body: body, type: "note", expected_version: 0, written_by: "admin-chat", reason: "saved from chat",
+        slug, title, markdown_body: body, type: "note", expected_version: 0, written_by: grant ? "app-chat" : "admin-chat", reason: "saved from chat",
         request_id: `chat-save:${messageId}:${slug}`,
       },
-    }, tier === "owner" ? {} : { trustCeiling: tier });
+    }, dispatchOptionsFor(grant, tier));
     const text = res.content?.[0]?.text ?? "";
     if (!res.isError) {
       await setSavedSlug(engine, messageId, slug);
@@ -165,7 +192,8 @@ async function save(storage: Storage, owner: ChatOwner, messageId: number): Prom
     } catch {
       // not an envelope; logged below
     }
-    if (env.error === "version_conflict") continue;
+    // A member's name can be held by a page of another source; it takes the next one.
+    if (env.error === "version_conflict" || (grant && env.error === "permission_denied")) continue;
     if (env.error === "request_in_progress") return refuse(409, "busy");
     console.error("[chat] save refused:", text.slice(0, 300));
     return refuse(422, "write_refused");

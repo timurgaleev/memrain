@@ -41,7 +41,8 @@ export interface MemberRecord {
 /** Who changed a member or a group, recorded as data only; it authorizes nothing. */
 export interface MemberActor {
   actor: string;
-  via: "cli" | "admin_api";
+  /** `app`: the member acting on its own credentials from /app. */
+  via: "cli" | "admin_api" | "app";
 }
 
 export type MemberErrorCode =
@@ -52,7 +53,8 @@ export type MemberErrorCode =
   | "email_taken"
   | "credential_mixed"
   | "not_found"
-  | "owner_source";
+  | "owner_source"
+  | "source_shared";
 
 /** A refused member or group change; `code` maps to an HTTP status in the admin routes. */
 export class MemberError extends Error {

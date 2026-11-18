@@ -12,6 +12,7 @@
  *   GET  /admin/api/members/:id
  *   POST /admin/api/members/:id/disable | enable | remove
  *   POST /admin/api/members/:id/bind | unbind         {kind: token|client|enrollment, id}
+ *   POST /admin/api/members/:id/invite               {ttl_hours?} a one-time /app link
  *   GET  /admin/api/groups
  *   POST /admin/api/groups                           {id, display_name?}
  *   GET  /admin/api/groups/:id
@@ -49,6 +50,13 @@ import {
   revokeGroupSource,
 } from "../core/groups.ts";
 import { GRANT_PROFILE_CATALOG_VERSION, GRANT_PROFILES } from "../core/grant-profiles.ts";
+import {
+  INVITE_DEFAULT_TTL_MS,
+  MemberInviteError,
+  memberInviteUrl,
+  mintMemberInvite,
+  type MemberInviteErrorCode,
+} from "../core/member-invites.ts";
 
 const WHO: MemberActor = { actor: "admin", via: "admin_api" };
 
@@ -61,6 +69,15 @@ const STATUS: Record<MemberErrorCode, number> = {
   email_taken: 409,
   credential_mixed: 409,
   owner_source: 409,
+  source_shared: 409,
+};
+
+const INVITE_STATUS: Record<MemberInviteErrorCode, number> = {
+  not_implemented: 501,
+  not_found: 404,
+  member_not_enabled: 409,
+  member_not_ready: 409,
+  invalid_ttl: 400,
 };
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "cache-control": "no-store" } });
@@ -84,7 +101,9 @@ function credential(b: Record<string, unknown>): { kind: CredentialKind; id: str
   return null;
 }
 
-async function membersRoute(req: Request, url: URL, engine: Engine): Promise<Response | null> {
+const HOUR = 3600_000;
+
+async function membersRoute(req: Request, url: URL, engine: Engine, publicUrl: string): Promise<Response | null> {
   const p = url.pathname;
   if (p === "/admin/api/members") {
     if (req.method === "GET") return json({ members: await listMembers(engine, { includeRemoved: url.searchParams.get("all") === "1" }) });
@@ -98,7 +117,7 @@ async function membersRoute(req: Request, url: URL, engine: Engine): Promise<Res
     }, WHO);
     return json({ member }, 201);
   }
-  const m = /^\/admin\/api\/members\/([^/]+)(?:\/(disable|enable|remove|bind|unbind))?$/.exec(p);
+  const m = /^\/admin\/api\/members\/([^/]+)(?:\/(disable|enable|remove|bind|unbind|invite))?$/.exec(p);
   if (!m) return null;
   const id = decodeURIComponent(m[1]!);
   const action = m[2];
@@ -111,6 +130,14 @@ async function membersRoute(req: Request, url: URL, engine: Engine): Promise<Res
   if (action === "disable") return json({ member: await disableMember(engine, id, WHO) });
   if (action === "enable") return json({ member: await enableMember(engine, id, WHO) });
   if (action === "remove") return json(await removeMember(engine, id, WHO));
+  if (action === "invite") {
+    const b = (await body(req)) ?? {};
+    const hours = b.ttl_hours === undefined ? INVITE_DEFAULT_TTL_MS / HOUR : b.ttl_hours;
+    if (typeof hours !== "number" || !Number.isFinite(hours)) return bad("ttl_hours must be a number");
+    const member = await existingMember(engine, id);
+    const invite = await mintMemberInvite(engine, member.id, hours * HOUR, { createdBy: WHO.actor });
+    return json({ member_id: member.id, url: memberInviteUrl(publicUrl, invite.token), expires_at: invite.expiresAt.toISOString() });
+  }
   const b = await body(req);
   const target = b ? credential(b) : null;
   if (!target) return bad("body must be {kind: token|client|enrollment, id}");
@@ -160,18 +187,24 @@ async function groupsRoute(req: Request, url: URL, engine: Engine): Promise<Resp
   return null;
 }
 
-export async function handleAdminMembers(req: Request, url: URL, engine: Engine): Promise<Response | null> {
+export async function handleAdminMembers(
+  req: Request,
+  url: URL,
+  engine: Engine,
+  publicUrl: string = process.env.MEMRAIN_PUBLIC_URL?.trim() || url.origin,
+): Promise<Response | null> {
   const p = url.pathname;
   try {
     if (p === "/admin/api/grant-profiles") {
       if (req.method !== "GET") return null;
       return json({ catalog_version: GRANT_PROFILE_CATALOG_VERSION, profiles: GRANT_PROFILES });
     }
-    if (p === "/admin/api/members" || p.startsWith("/admin/api/members/")) return await membersRoute(req, url, engine);
+    if (p === "/admin/api/members" || p.startsWith("/admin/api/members/")) return await membersRoute(req, url, engine, publicUrl);
     if (p === "/admin/api/groups" || p.startsWith("/admin/api/groups/")) return await groupsRoute(req, url, engine);
     return null;
   } catch (e) {
     if (e instanceof MemberError) return json({ error: e.code, message: e.message }, STATUS[e.code]);
+    if (e instanceof MemberInviteError) return json({ error: e.code, message: e.message }, INVITE_STATUS[e.code]);
     // A malformed percent-escape in a path segment is the caller's mistake, not ours.
     if (e instanceof URIError) return bad("malformed path segment");
     throw e;

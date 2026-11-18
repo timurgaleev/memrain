@@ -58,7 +58,7 @@ afterEach(() => {
 describe("HTTP server", () => {
   it("a blocked tenant answers 403 tenant_suspended before routing, and /health still serves", async () => {
     hostWith(blocked);
-    const server = startServer({ host: "127.0.0.1", port: 0, storage });
+    const server = startServer({ host: "127.0.0.1", port: 0, storage, internalToken: "tenant-internal-token" });
     try {
       const base = `http://127.0.0.1:${server.port}`;
       const mcp = await fetch(`${base}/mcp`, { method: "POST", body: "{}" });
@@ -76,7 +76,7 @@ describe("HTTP server", () => {
 describe("HTTP server, read-only", () => {
   it("a credential-issuing GET is refused while the tenant is read-only", async () => {
     hostWith(readOnly);
-    const server = startServer({ host: "127.0.0.1", port: 0, storage });
+    const server = startServer({ host: "127.0.0.1", port: 0, storage, internalToken: "tenant-internal-token" });
     try {
       const res = await fetch(`http://127.0.0.1:${server.port}/admin/auth/one-time-nonce`, { redirect: "manual" });
       expect(res.status).toBe(403);
