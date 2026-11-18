@@ -16,7 +16,7 @@
 set -euo pipefail
 
 REPO_ROOT="${AUDIT_REPO:-$(git rev-parse --show-toplevel 2>/dev/null || echo "")}"
-if [ -z "$REPO_ROOT" ] || [ ! -d "$REPO_ROOT/.git" ]; then
+if [ -z "$REPO_ROOT" ] || [ ! -e "$REPO_ROOT/.git" ]; then
   echo "[audit] ERROR: not inside a git repository (set AUDIT_REPO to override)" >&2
   exit 2
 fi
