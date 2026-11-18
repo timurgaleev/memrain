@@ -750,6 +750,17 @@ still serves reads and refuses every change with `tenant_suspended`; a blocked
 one answers only `/health`. While the policy cannot be read, reads pass and
 writes, credential issuance and queued jobs are refused.
 
+A tenant container serves nothing but `/health` (503 `isolation_unverified`)
+until the operator's `memrain tenant smoke-record` has stamped it after the
+container started, on the same host boot and image. Every paid model call of
+every tenant also reserves its worst case against the hosting-wide daily cap
+(and the tenant's own `max-usd-per-day`) in the control database before it is
+sent; a call with no price is refused, and while the control plane does not
+answer no paid call is sent and search falls back to its keyword arm.
+`memrain tenant cap --usd N` sets the hosting cap (default $10), `--llm-off`
+switches every paid call off; the first call that costs more than it reserved
+switches them off for the rest of the UTC day.
+
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
 | `MEMRAIN_TENANT_ID` | unset | This container's tenant id on a hosted install. Setting it turns hosting mode on. Environment only. | free |

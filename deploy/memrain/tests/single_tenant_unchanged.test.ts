@@ -27,6 +27,9 @@ import {
   setRuntimeConfig,
 } from "../src/core/runtime-config.ts";
 import { putRuntimeConfigRow } from "./helpers/runtime-config-row.ts";
+import { trackedInvoke } from "../src/core/budget.ts";
+import { setHostingSpendBackend } from "../src/control/hosting-spend.ts";
+import { controlClient } from "../src/control/policy.ts";
 
 const HOSTING_KEYS = Object.values(HOSTING_ENV);
 const saved = new Map<string, string | undefined>();
@@ -98,6 +101,30 @@ describe("single tenant, hosting flags off", () => {
       expect(process.env[k.replace(/^MEMRAIN_/, "MEMEX_")]).toBeUndefined();
     }
     expect(hostingMode()).toBeNull();
+  });
+});
+
+describe("single tenant paid calls and control plane", () => {
+  it("trackedInvoke reads no policy, reserves nothing and opens no control connection", async () => {
+    let reads = 0;
+    let reserves = 0;
+    setTenantPolicySource(async () => { reads++; return SINGLE_TENANT_POLICY; });
+    setHostingSpendBackend({ reserve: async () => { reserves++; return { ok: true, id: "x" }; }, settle: async () => ({ ok: true }) });
+    try {
+      const out = await trackedInvoke(
+        { operation: "probe", model: "eu.anthropic.claude-haiku-5-5", worstCase: { input: "x", maxOutputTokens: 10 } },
+        async (meter) => { meter.report({ inputTokens: 1, outputTokens: 1 }); return "sent"; },
+      );
+      expect(out).toBe("sent");
+      expect({ reads, reserves, client: controlClient() }).toEqual({ reads: 0, reserves: 0, client: null });
+    } finally {
+      setTenantPolicySource(null);
+      setHostingSpendBackend(null);
+    }
+  });
+
+  it("no request is held for an isolation stamp", async () => {
+    expect(await admitRequest(new Request("http://h/mcp", { method: "POST" }))).toBeNull();
   });
 });
 
