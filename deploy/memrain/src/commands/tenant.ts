@@ -28,14 +28,14 @@ import { PostgresEngine } from "../core/engine/postgres.ts";
 import { runMigrations } from "../core/migrate.ts";
 import { CONTROL_ADMIN_URL_ENV, renderTenantListJson, type TenantMode } from "../control/contract.ts";
 import { migrateControl } from "../control/migrations.ts";
-import { createTenant, urlForDatabase } from "../control/provision.ts";
+import { createTenant } from "../control/provision.ts";
+import { asTenantOwner } from "../control/tenant-session.ts";
 import { AwsSecretWriter, FileSecretWriter } from "../control/secret-writer.ts";
 import { cancelDelete, deleteTenant, exportTenant, purgeDeleted } from "../control/export.ts";
 import { JsonlFileSink, noopSink, recordSmoke, setHostingCap, spendSummary, tenantUsage } from "../control/usage.ts";
 import {
   TenantError,
   assertTenantId,
-  ident,
   listEntry,
   listTenants,
   parseLimitAssignments,
@@ -43,7 +43,6 @@ import {
   resumeTenant,
   setTenantLimits,
   suspendTenant,
-  tenantNames,
   type TenantPlan,
   type TenantRowStatus,
 } from "../control/tenants.ts";
@@ -123,9 +122,8 @@ const ACTIVE_JOB_POLL_MS = 2_000;
 const SUSPEND_WAIT_MS = 60_000;
 
 /** Wait up to a minute for the tenant's running jobs to hand themselves back; the ids still running. */
-async function runningJobsAfterSuspend(masterUrl: string, db: string): Promise<string[]> {
-  const brain = new PostgresEngine({ url: urlForDatabase(masterUrl, db), max: 1 });
-  try {
+async function runningJobsAfterSuspend(masterUrl: string, id: string): Promise<string[]> {
+  return asTenantOwner(masterUrl, id, async (brain) => {
     const deadline = Date.now() + SUSPEND_WAIT_MS;
     for (;;) {
       const r = await brain.query<{ id: string }>(`SELECT id FROM jobs WHERE status = 'running' ORDER BY id`);
@@ -133,9 +131,7 @@ async function runningJobsAfterSuspend(masterUrl: string, db: string): Promise<s
       if (ids.length === 0 || Date.now() >= deadline) return ids;
       await new Promise((res) => setTimeout(res, ACTIVE_JOB_POLL_MS));
     }
-  } finally {
-    await brain.close();
-  }
+  });
 }
 
 export async function runTenant(args: readonly string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
@@ -204,7 +200,7 @@ export async function runTenant(args: readonly string[], env: NodeJS.ProcessEnv 
         const mode = need(flags["mode"], "mode", "suspend <id> --mode block|read-only") as TenantMode;
         if (mode !== "block" && mode !== "read-only") throw new Error("tenant: --mode must be block or read-only");
         const t = await suspendTenant(control, id, mode);
-        const still = await runningJobsAfterSuspend(masterUrl, t.dbName);
+        const still = await runningJobsAfterSuspend(masterUrl, id);
         print({ ok: true, tenant: id, status: t.status, mode: t.mode, jobs_still_running: still });
         return 0;
       }
@@ -243,15 +239,9 @@ export async function runTenant(args: readonly string[], env: NodeJS.ProcessEnv 
         const id = idArg(positional, "migrate <id>");
         const t = await requireTenant(control, id);
         if (t.status === "deleting" || t.status === "deleted") throw new TenantError("wrong_state", `tenant '${id}' is ${t.status}`);
-        // The master acts as the owner role, so new objects belong to the tenant.
-        const brain = new PostgresEngine({ url: urlForDatabase(masterUrl, t.dbName), max: 1 });
-        try {
-          await brain.query(`SET ROLE ${ident(tenantNames(id).owner)}`);
-          const r = await runMigrations(brain);
-          print({ ok: true, tenant: id, applied: r.applied, skipped: r.skipped });
-        } finally {
-          await brain.close();
-        }
+        // As the owner role, so new objects belong to the tenant.
+        const r = await asTenantOwner(masterUrl, id, (brain) => runMigrations(brain));
+        print({ ok: true, tenant: id, applied: r.applied, skipped: r.skipped });
         return 0;
       }
       case "usage": {

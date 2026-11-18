@@ -23,6 +23,11 @@ export interface PostgresEngineOptions {
   statementTimeoutMs?: number;
   /** `application_name` shown in pg_stat_activity; postgres-js's default when unset. */
   applicationName?: string;
+  /**
+   * Role every session starts as, sent at connect: each pooled connection
+   * acts as this role, and RESET ROLE returns to it.
+   */
+  role?: string;
 }
 
 export class PostgresEngine implements Engine {
@@ -52,6 +57,7 @@ export class PostgresEngine implements Engine {
         // that would freeze every write to the slug. End such a session.
         idle_in_transaction_session_timeout: 60_000,
         ...(opts.applicationName ? { application_name: opts.applicationName } : {}),
+        ...(opts.role ? { role: opts.role } : {}),
       },
       // Suppress the default debug logger; we route via the cycle / progress
       // channels instead.

@@ -7,8 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Engine } from "../core/engine/interface.ts";
-import { PostgresEngine } from "../core/engine/postgres.ts";
-import { urlForDatabase } from "./provision.ts";
+import { asTenantOwner } from "./tenant-session.ts";
 import { requireTenant } from "./tenants.ts";
 
 export type UsageMetric = "seats" | "pages" | "llm_usd" | "storage_bytes";
@@ -57,8 +56,7 @@ export async function tenantUsage(ctx: { masterUrl: string; control: Engine }, i
     [id, date],
   );
   const size = await ctx.control.query<{ bytes: string }>(`SELECT pg_database_size($1)::text AS bytes`, [t.dbName]);
-  const brain = new PostgresEngine({ url: urlForDatabase(ctx.masterUrl, t.dbName), max: 1 });
-  try {
+  return asTenantOwner(ctx.masterUrl, id, async (brain) => {
     const seats = await brain.query<{ n: number }>(`SELECT count(*)::int AS n FROM members WHERE status = 'enabled'`);
     const pages = await brain.query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE deleted_at IS NULL`);
     return [
@@ -67,9 +65,7 @@ export async function tenantUsage(ctx: { masterUrl: string; control: Engine }, i
       { tenant: id, date, metric: "llm_usd", value: Number(spend.rows[0]?.usd ?? 0) },
       { tenant: id, date, metric: "storage_bytes", value: Number(size.rows[0]?.bytes ?? 0) },
     ];
-  } finally {
-    await brain.close();
-  }
+  });
 }
 
 /** Per day and tenant: what the hosting spend windows hold. */

@@ -19,11 +19,10 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { Engine } from "../core/engine/interface.ts";
-import { PostgresEngine } from "../core/engine/postgres.ts";
 import { Storage } from "../core/storage.ts";
 import { copyEngine, type TableReport } from "../core/engine-copy.ts";
 import { exportChatThreads } from "../core/chat/store.ts";
-import { urlForDatabase } from "./provision.ts";
+import { asTenantOwner } from "./tenant-session.ts";
 import {
   TenantError,
   ident,
@@ -53,15 +52,6 @@ export interface ExportReceipt {
   pages: number;
   tables: Pick<TableReport, "name" | "src" | "dst" | "match">[];
   failures: { table: string; error: string }[];
-}
-
-async function withMaster<T>(ctx: ExportContext, db: string, fn: (e: PostgresEngine) => Promise<T>): Promise<T> {
-  const e = new PostgresEngine({ url: urlForDatabase(ctx.masterUrl, db), max: 2, statementTimeoutMs: 600_000 });
-  try {
-    return await fn(e);
-  } finally {
-    await e.close();
-  }
 }
 
 interface PageRow {
@@ -113,10 +103,10 @@ async function exportInto(ctx: ExportContext, t: TenantRow, outDir: string, kind
   let pages: number;
   try {
     await dst.init();
-    ({ summary, pages } = await withMaster(ctx, t.dbName, async (src) => ({
+    ({ summary, pages } = await asTenantOwner(ctx.masterUrl, t.id, async (src) => ({
       summary: await copyEngine(src, dst.engine()),
       pages: await writeReadableCopy(src, out),
-    })));
+    }), { max: 2, statementTimeoutMs: 600_000 }));
   } finally {
     await dst.close();
   }
