@@ -54,6 +54,7 @@ import { ErasureUsageError, eraseMemberPersonalSource } from "../core/member-off
 import { cliActor } from "./auth.ts";
 import { withStorage } from "./with-storage.ts";
 import type { Engine } from "../core/engine/interface.ts";
+import { OperationError } from "../core/operation-error.ts";
 
 export const MEMBER_SUBCOMMANDS = ["list", "show", "add", "disable", "enable", "remove", "bind", "unbind", "invite"] as const;
 export const GROUP_SUBCOMMANDS = [
@@ -217,7 +218,7 @@ async function run(kind: "member" | "group", opts: MemberCmdOptions): Promise<nu
       console.log(JSON.stringify(out, null, 2));
       return 0;
     } catch (e) {
-      if (e instanceof MemberError || e instanceof UsageError || e instanceof MemberInviteError || e instanceof ErasureUsageError) {
+      if (e instanceof MemberError || e instanceof UsageError || e instanceof MemberInviteError || e instanceof ErasureUsageError || e instanceof OperationError) {
         console.error(`memrain ${kind}: ${e.message}`);
         return 1;
       }

@@ -57,6 +57,7 @@ import {
   mintMemberInvite,
   type MemberInviteErrorCode,
 } from "../core/member-invites.ts";
+import { OperationError } from "../core/operation-error.ts";
 
 const WHO: MemberActor = { actor: "admin", via: "admin_api" };
 
@@ -205,6 +206,7 @@ export async function handleAdminMembers(
   } catch (e) {
     if (e instanceof MemberError) return json({ error: e.code, message: e.message }, STATUS[e.code]);
     if (e instanceof MemberInviteError) return json({ error: e.code, message: e.message }, INVITE_STATUS[e.code]);
+    if (e instanceof OperationError && e.code === "tenant_limit_reached") return json({ error: e.code, message: e.message }, 409);
     // A malformed percent-escape in a path segment is the caller's mistake, not ours.
     if (e instanceof URIError) return bad("malformed path segment");
     throw e;

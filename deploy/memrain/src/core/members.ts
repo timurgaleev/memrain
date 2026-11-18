@@ -22,6 +22,7 @@
  */
 import { effectiveReadSourceIds } from "./auth-info.ts";
 import type { Engine } from "./engine/interface.ts";
+import { assertMemberRoom } from "./tenant-guard.ts";
 
 export const MEMBER_ID_RE = /^[a-z0-9][a-z0-9-]{1,62}$/;
 
@@ -169,6 +170,7 @@ export async function addMember(
     const src = await engine.query(`SELECT 1 FROM sources WHERE id = $1`, [opts.personalSource]);
     if (src.rows.length === 0) throw new MemberError("not_found", `unknown source "${opts.personalSource}"`);
   }
+  await assertMemberRoom(engine);
   await engine.transaction(async (tx) => {
     await tx.query(
       `INSERT INTO members (id, display_name, email, personal_source_id) VALUES ($1, $2, $3, $4)`,

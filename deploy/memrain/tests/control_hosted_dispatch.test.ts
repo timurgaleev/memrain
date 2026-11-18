@@ -4,7 +4,8 @@
  *   - with no policy read yet, no paid call goes out, and search still answers
  *     (from the keyword index);
  *   - at the plan's page limit, page_put is refused with tenant_limit_reached
- *     while page_get and editing an existing page still work.
+ *     while page_get and editing an existing page still work;
+ *   - at the plan's member limit, adding a member is refused.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -18,6 +19,7 @@ import { dispatchTool } from "../src/mcp/dispatch.ts";
 import { setSpendLedgerEngine } from "../src/core/budget.ts";
 import { HOSTING_ENV, setTenantPolicySource, type TenantPolicy } from "../src/control/contract.ts";
 import { setHostingSpendBackend } from "../src/control/hosting-spend.ts";
+import { addMember } from "../src/core/members.ts";
 
 const active: TenantPolicy = { status: "active", mode: null, limits: {}, llmOff: false, isolation: "verified" };
 
@@ -74,5 +76,14 @@ describe("hosted dispatch", () => {
     expect(get.isError ?? false).toBe(false);
     const append = await dispatchTool(storage, { name: "page_append", arguments: { slug: "notes/garden", markdown: "Also beans." } });
     expect(text(append)).not.toContain("tenant_limit_reached");
+  });
+
+  it("at the member limit a new member is refused", async () => {
+    setTenantPolicySource(async () => ({ ...active, limits: { maxMembers: 1 } }));
+    const ops = { actor: "operator", via: "cli" as const };
+    await addMember(storage.engine(), "alice", {}, ops);
+    await expect(addMember(storage.engine(), "bob", {}, ops)).rejects.toMatchObject({ code: "tenant_limit_reached" });
+    const n = await storage.engine().query<{ n: number }>(`SELECT count(*)::int AS n FROM members`);
+    expect(n.rows[0]!.n).toBe(1);
   });
 });
