@@ -149,6 +149,25 @@ describe.skipIf(!PG_URL)("tenant delete behind a fence", () => {
     }
   });
 
+  it("a cancel racing a new delete leaves access matching the status", async () => {
+    for (let round = 0; round < 3; round++) {
+      const id = fx.tenantId(`refence${round}`);
+      await fx.create(id);
+      await deleteTenant(ctx(), id, id, join(out, `refence${round}-a`));
+      await Promise.allSettled([
+        cancelDelete(ctx(), id),
+        deleteTenant(ctx(), id, id, join(out, `refence${round}-b`)),
+      ]);
+      const t = await requireTenant(fx.control, id);
+      const r = await fx.control.query<{ login: boolean; connect: boolean }>(
+        `SELECT rolcanlogin AS login, has_database_privilege(rolname, $2, 'CONNECT') AS connect FROM pg_roles WHERE rolname = $1`,
+        [`tenant_${id}_owner`, `tenant_${id}`],
+      );
+      const open = t.status === "active";
+      expect({ round, status: t.status, ...r.rows[0] }).toEqual({ round, status: t.status, login: open, connect: open });
+    }
+  });
+
   it("refuses to export into a directory that already holds files", async () => {
     const id = fx.tenantId("reuse");
     await fx.create(id);

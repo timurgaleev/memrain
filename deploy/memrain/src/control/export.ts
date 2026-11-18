@@ -16,7 +16,7 @@
  * is worth nothing afterwards.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { Engine } from "../core/engine/interface.ts";
 import { PostgresEngine } from "../core/engine/postgres.ts";
@@ -95,11 +95,17 @@ async function writeReadableCopy(src: Engine, outDir: string): Promise<number> {
 
 async function exportInto(ctx: ExportContext, t: TenantRow, outDir: string, kind: "live" | "fenced"): Promise<ExportReceipt> {
   const out = resolve(outDir);
-  // A used directory could still hold another export's pages next to this one's brain.
-  if (existsSync(out) && readdirSync(out).length > 0) {
-    throw new TenantError("wrong_state", `export directory ${out} is not empty; give a new one`);
+  // A new directory, created here and only here: a used one could hold another
+  // export's pages next to this one's brain, and two exports must not share one.
+  mkdirSync(dirname(out), { recursive: true, mode: 0o700 });
+  try {
+    mkdirSync(out, { mode: 0o700 });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new TenantError("wrong_state", `export directory ${out} already exists; give a new one`);
+    }
+    throw err;
   }
-  mkdirSync(out, { recursive: true, mode: 0o700 });
   const brainDir = join(out, "brain");
   const dst = new Storage({ dbPath: brainDir });
   let summary: Awaited<ReturnType<typeof copyEngine>>;
@@ -158,14 +164,16 @@ async function fence(ctx: ExportContext, t: TenantRow): Promise<string> {
       [t.id, fenceId],
     );
     await logTenantEvent(tx, t.id, "fence", { fence: fenceId });
+    // In the same transaction as the status, under the same lock, so a
+    // cancel can never lift a newer fence. The master keeps its own CONNECT:
+    // on RDS it reaches the database only through the owner role it is a
+    // member of. The owner loses LOGIN too: database privileges are
+    // cluster-wide, so from any other database it could grant CONNECT back.
+    await tx.query(`GRANT CONNECT ON DATABASE ${ident(n.db)} TO CURRENT_USER`);
+    await tx.query(`ALTER ROLE ${ident(n.owner)} NOLOGIN`);
+    await tx.query(`REVOKE CONNECT, TEMPORARY ON DATABASE ${ident(n.db)} FROM ${ident(n.owner)}, PUBLIC`);
   });
-  // The owner could otherwise log in to any other database and grant itself
-  // CONNECT back: database privileges are cluster-wide.
-  // The master keeps its own CONNECT: on RDS it reaches the database only
-  // through the owner role it is a member of, which is about to lose it.
-  await ctx.control.query(`GRANT CONNECT ON DATABASE ${ident(n.db)} TO CURRENT_USER`);
-  await ctx.control.query(`ALTER ROLE ${ident(n.owner)} NOLOGIN`);
-  await ctx.control.query(`REVOKE CONNECT, TEMPORARY ON DATABASE ${ident(n.db)} FROM ${ident(n.owner)}, PUBLIC`);
+  // Sessions opened before the fence committed end here; new ones are refused.
   await ctx.control.query(
     `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
     [n.db],
@@ -210,8 +218,9 @@ export async function deleteTenant(ctx: ExportContext, id: string, confirm: stri
 
 /** Lift the fence of a tenant waiting for deletion; its receipts stop counting. */
 export async function cancelDelete(ctx: ExportContext, id: string): Promise<TenantRow> {
-  // The status flips under the lifecycle lock first, so a purge that already
-  // claimed the tenant wins and this refuses; only then is the fence lifted.
+  // Status and access change together under the lifecycle lock: a purge that
+  // already claimed the tenant wins and this refuses, and a newer fence is
+  // never lifted by an older cancel.
   await withTenantLock(ctx.control, id, async (tx) => {
     const t = await requireTenant(tx, id);
     if (t.status !== "deleting") throw new TenantError("wrong_state", `tenant '${id}' is ${t.status}, not waiting for deletion`);
@@ -220,10 +229,10 @@ export async function cancelDelete(ctx: ExportContext, id: string): Promise<Tena
       [id, randomUUID()],
     );
     await logTenantEvent(tx, id, "delete_cancelled");
+    const n = tenantNames(id);
+    await tx.query(`GRANT CONNECT, TEMPORARY ON DATABASE ${ident(n.db)} TO ${ident(n.owner)}`);
+    await tx.query(`ALTER ROLE ${ident(n.owner)} LOGIN`);
   });
-  const n = tenantNames(id);
-  await ctx.control.query(`GRANT CONNECT, TEMPORARY ON DATABASE ${ident(n.db)} TO ${ident(n.owner)}`);
-  await ctx.control.query(`ALTER ROLE ${ident(n.owner)} LOGIN`);
   return requireTenant(ctx.control, id);
 }
 
@@ -264,8 +273,8 @@ export async function purgeDeleted(ctx: ExportContext, opts: PurgeOptions = {}):
   const unfinished = (await ctx.control.query<{ id: string }>(
     `SELECT t.id FROM tenants t
       WHERE t.status = 'deleted'
-        AND (EXISTS (SELECT 1 FROM pg_database d WHERE d.datname = t.db_name)
-             OR EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname IN (t.owner_role, t.ctl_role)))
+        AND EXISTS (SELECT 1 FROM tenant_events e WHERE e.tenant_id = t.id AND e.kind = 'purge_claimed')
+        AND NOT EXISTS (SELECT 1 FROM tenant_events e WHERE e.tenant_id = t.id AND e.kind = 'purged')
       ORDER BY t.id`,
   )).rows.map((r) => r.id);
   const claimed: string[] = [...unfinished];
