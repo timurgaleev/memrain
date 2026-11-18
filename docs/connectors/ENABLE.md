@@ -2,8 +2,8 @@
 
 This guide takes a running Memrain from "connectors off" to syncing your
 calendar, mail and meetings into the brain: Google Calendar, Gmail, Outlook
-mail and calendar (Microsoft 365 or a personal Microsoft account), and
-Fireflies. It lists the switches
+mail and calendar (Microsoft 365 or a personal Microsoft account), Slack
+channels, and Fireflies. It lists the switches
 in the order they must be thrown. Each one is safe alone, and nothing is
 fetched from a provider until every one of them is in place.
 
@@ -108,6 +108,7 @@ register one first (the id and prefix are yours to choose):
 docker exec deploy-memrain-1 bun run src/cli.ts sources register me-calendar --kind calendar --path-prefix calendar/
 docker exec deploy-memrain-1 bun run src/cli.ts sources register me-mail --kind mailbox --path-prefix mail/        # Gmail
 docker exec deploy-memrain-1 bun run src/cli.ts sources register me-meetings --kind meeting --path-prefix meeting/   # Fireflies
+docker exec deploy-memrain-1 bun run src/cli.ts sources register team-chat --kind chat --path-prefix chat/           # Slack
 ```
 
 Then let your agents read it. Add the new source to the read set of each OAuth
@@ -128,6 +129,8 @@ docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> 
 - Outlook mail and Outlook calendar: [MICROSOFT.md](./MICROSOFT.md) (a
   Microsoft Entra app of your own, and a `mailbox` and a `calendar` source of
   their own, not the Google ones, each connected on its own).
+- Slack: [SLACK.md](./SLACK.md) (a Slack app of your own, then the Connect
+  button or its pasted bot token, and a `chat` source).
 - Fireflies: [FIREFLIES.md](./FIREFLIES.md) (an API key).
 
 Everything a connector writes is text from outside the brain: anyone can put
@@ -291,6 +294,7 @@ data is a separate, explicit action.
 - [GOOGLE.md](./GOOGLE.md): Google Cloud project and OAuth client for Calendar.
 - [GMAIL.md](./GMAIL.md): Gmail with the same Google client.
 - [MICROSOFT.md](./MICROSOFT.md): Microsoft Entra app for Outlook mail and calendar.
+- [SLACK.md](./SLACK.md): Slack app, bot token and channel picker.
 - [FIREFLIES.md](./FIREFLIES.md): Fireflies API key.
 - [LOOPS.md](./LOOPS.md): who is waiting on whom (`memrain waiting`, `loops_sweep`).
 - [CONFIGURATION.md](../CONFIGURATION.md): every connector and daemon setting.

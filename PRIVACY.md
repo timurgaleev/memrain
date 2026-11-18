@@ -24,6 +24,7 @@ Memrain indexes only data the operator points it at:
 | Gmail (connector, off by default) | Mail of the last 90 days and new mail, read-only (`gmail.readonly`, plus `openid email` to name the account), without Spam, Trash, drafts or threads wholly in Promotions or Social, and nothing older than the first sync's window: per thread the subject, senders' and recipients' names and addresses, dates, labels, each message's text with quoted history cut, and each attachment's name, type and size. Attachment contents are never downloaded. |
 | Outlook mail (connector, off by default) | Mail of a personal or work Microsoft account, read-only (`Mail.Read`, plus `openid email offline_access User.Read` to name the account and keep access), from Inbox and Sent Items, from 90 days before the first sync on: per conversation the subject, people's names and addresses, dates, each message's text, and each attachment's name, type and size; messages of the conversation in other folders (Junk, Deleted Items, Drafts) are dropped before the page is written. Attachment contents are never downloaded. |
 | Outlook calendar (connector, off by default) | Events of the account's default calendar and of the calendars the operator picks, read-only (`Calendars.Read`, plus the same sign-in scopes): title, time, location, organizer, attendees' names and addresses (rooms and equipment left out), description, recurrence and occurrences, and whether it is an online meeting (never its join link). |
+| Slack (connector, off by default) | Messages of the channels the operator picks and invited the bot to, read-only (bot scopes `channels:history channels:read users:read`, plus `groups:history groups:read` only for private channels): per channel and day each message's author name, time and text, thread replies, and attached files' names. Direct messages are never read, and file contents are never downloaded. |
 | Fireflies (connector, off by default) | Meeting transcripts the operator's API key can see: title, time, participants, the Fireflies summary and action items, and the transcript as speaker turns. Memrain sends Fireflies read queries only. |
 
 Connectors are off unless the operator sets a connector key, turns on
@@ -38,8 +39,8 @@ embedded like any other. Connector pages are left out of fact extraction, the
 contextual LLM tier and deep synthesis, so their text is not sent to a model
 for those features.
 
-Connector credentials (Google and Microsoft refresh tokens, the Fireflies API
-key, an operator's own OAuth client secret) are stored encrypted with AES-256-GCM
+Connector credentials (Google and Microsoft refresh tokens, Slack bot tokens,
+the Fireflies API key, an operator's own OAuth client secret) are stored encrypted with AES-256-GCM
 under the connector key, which lives in AWS Secrets Manager and never in the
 database (see SECURITY.md).
 
@@ -66,7 +67,7 @@ Stored data stays in your AWS account. Query results go to the MCP client you
 connect, and with the default Cloudflare Tunnel, requests pass through
 Cloudflare. A connected connector calls only its provider's API (Google's
 OAuth, Calendar and Gmail endpoints, Microsoft's identity platform and
-Microsoft Graph, Fireflies' GraphQL endpoint) with the stored credential.
+Microsoft Graph, the Slack Web API, Fireflies' GraphQL endpoint) with the stored credential.
 Connector pages are searchable like any other page: an MCP client allowed to
 read their source receives their text in search results. Owner notifications, when the operator sets
 `MEMRAIN_NOTIFY_WEBHOOK_URL`, send the configured receiver a signed pointer
@@ -106,7 +107,7 @@ Connector data has its own rules:
 
 - **Retention.** A connector page is hard-deleted once its last activity is
   older than its window: 365 days for calendar events and meetings, 180 for
-  mail threads (and chat, which no shipped connector reads yet), set per kind
+  mail threads and Slack channel days, set per kind
   with `MEMRAIN_CONNECTOR_RETENTION_DAYS_<KIND>`; `0` or `off` keeps pages.
   The sweep runs after each sync run.
 - **Deleted at the provider.** An event cancelled in Google, a Gmail thread
@@ -123,7 +124,8 @@ Connector data has its own rules:
   operator confirms it in the admin panel.
 - **Disconnecting** revokes a Google grant at Google and drops the stored
   credential (it is kept for another try if Google does not confirm the
-  revoke); a Fireflies key is dropped and stays valid in Fireflies until the
+  revoke); a Slack bot token is revoked at Slack (`auth.revoke`) and dropped;
+  a Fireflies key is dropped and stays valid in Fireflies until the
   operator regenerates it there. The synced pages stay. **Delete everything** on the Connections
   page then removes every page that account brought in, after a preview and a
   typed confirmation.
