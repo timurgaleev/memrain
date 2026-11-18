@@ -20,7 +20,6 @@ import type { Storage } from "./storage.ts";
 import type { IndexFileOptions } from "./indexer.ts";
 import { putPage } from "./pages.ts";
 import { indexPageIntoSearch } from "./page-index.ts";
-import { registerSource } from "./sources.ts";
 import { OnboardingError } from "./onboarding.ts";
 import { writeMemberAudit, type MemberActor } from "./members.ts";
 import { leftovers } from "./pages-purge.ts";
@@ -74,7 +73,15 @@ export async function loadDemo(storage: Storage, memberId: string, opts: { embed
   // The source, the group and the grant commit together, so the demo is
   // either this member's or not there at all.
   await engine.transaction(async (tx) => {
-    await registerSource(tx, { id: source, kind: "other", pathPrefix: `/${source}/` });
+    // A plain insert, not registerSource's upsert: a source of this name made
+    // since the check above is left alone and the load refused.
+    const made = await tx.query(
+      `INSERT INTO sources (id, kind, path_prefix) VALUES ($1, 'other', $2) ON CONFLICT (id) DO NOTHING RETURNING id`,
+      [source, `/${source}/`],
+    );
+    if (made.rows.length === 0) {
+      throw new OnboardingError("demo_unavailable", 409, "The demo cannot be loaded: its name is already in use on this brain. Ask the brain operator.");
+    }
     await tx.query(`INSERT INTO groups (id, display_name) VALUES ($1, 'Demo memory')`, [source]);
     await tx.query(`INSERT INTO group_sources (group_id, source_id) VALUES ($1, $1)`, [source]);
     await tx.query(`INSERT INTO group_members (group_id, member_id) VALUES ($1, $2)`, [source, memberId]);
@@ -141,8 +148,10 @@ export async function removeDemo(engine: Engine, memberId: string): Promise<Demo
   const tables = await sourceTablesInDeleteOrder(engine);
   const rows: Record<string, number> = {};
   const removed = await engine.transaction(async (tx) => {
-    // Checked again under the lock: nothing may make the source anyone else's in between.
+    // Checked again under the locks: adding a member or a source to the group
+    // takes a key-share lock on its row, which FOR UPDATE holds off until the end.
     await tx.query(`SELECT 1 FROM sources WHERE id = $1 FOR UPDATE`, [source]);
+    await tx.query(`SELECT 1 FROM groups WHERE id = $1 FOR UPDATE`, [source]);
     if (!(await demoLoaded(tx, memberId))) return false;
     const slugs = (await tx.query<{ slug: string }>(`SELECT slug FROM pages WHERE source_id = $1`, [source])).rows.map((r) => r.slug);
     await tx.query(`DELETE FROM groups WHERE id = $1`, [source]);
