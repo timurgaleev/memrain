@@ -13,7 +13,8 @@ import {
   type TenantSelf,
 } from "../src/control/policy.ts";
 import { HOSTING_ENV, setTenantPolicySource, tenantPolicy } from "../src/control/contract.ts";
-import { decideRequest } from "../src/core/tenant-guard.ts";
+import { decideOperation, decideRequest } from "../src/core/tenant-guard.ts";
+import { POLICY_MAX_STALE_MS } from "../src/control/policy.ts";
 
 const me: ContainerIdentity = { startedAt: new Date("2026-11-18T10:00:00Z"), bootId: "boot-1", imageStamp: "v1.23.0" };
 
@@ -82,6 +83,32 @@ describe("controlPolicySource", () => {
     await expect(never()).rejects.toThrow(/unreachable/);
     const unknown = controlPolicySource({ readSelf: async () => null, identity: () => me });
     await expect(unknown()).rejects.toThrow(/no tenant/);
+  });
+});
+
+describe("controlPolicySource during a long outage", () => {
+  it("keeps the last good policy only up to its maximum age, then fails closed", async () => {
+    expect(POLICY_MAX_STALE_MS).toBeLessThanOrEqual(5 * 60_000);
+    let now = 0;
+    let fail = false;
+    const src = controlPolicySource({
+      readSelf: async () => { if (fail) throw new Error("unreachable"); return self(); },
+      identity: () => me,
+      ttlMs: 30_000,
+      now: () => now,
+    });
+    await src();
+    fail = true;
+    now = POLICY_MAX_STALE_MS - 1;
+    expect((await src()).status).toBe("active");
+    now = POLICY_MAX_STALE_MS + 1;
+    await expect(src()).rejects.toThrow(/unreachable/);
+    // The gates then see an unknown policy: nothing but health, reads included.
+    expect(decideRequest(null, "read").allow).toBe(false);
+    expect(decideOperation(null, "search").allow).toBe(false);
+    // The first answer after the outage serves again.
+    fail = false;
+    expect((await src()).status).toBe("active");
   });
 });
 

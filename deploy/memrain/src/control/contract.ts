@@ -134,7 +134,8 @@ export function hasTenantPolicySource(): boolean {
  * This tenant's policy. Outside hosting mode: {@link SINGLE_TENANT_POLICY},
  * without consulting anything. In hosting mode: the policy source's answer,
  * or null when there is no source or it failed. Null means unknown, and every
- * caller treats it fail-closed: reads pass, writes and paid calls do not.
+ * caller treats it fail-closed: nothing but /health is served, no job runs and
+ * no paid call is sent.
  */
 export async function tenantPolicy(env: Env = process.env): Promise<TenantPolicy | null> {
   if (hostingMode(env) === null) return SINGLE_TENANT_POLICY;

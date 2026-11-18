@@ -4,9 +4,11 @@
  * run only the functions of control migration 003.
  *
  * The policy is `tenant_self()`, cached for 30 s. When the control plane does
- * not answer, the last good policy stays in force; with none ever read the
- * policy is unknown, which every gate treats fail-closed (reads pass, writes
- * and paid calls do not).
+ * not answer, the last good policy stays in force for up to
+ * POLICY_MAX_STALE_MS after it was read; past that, or with none ever read,
+ * the policy is unknown, and every gate then serves nothing but /health: no
+ * write, no job, no paid call, and no read either, since an unknown policy
+ * carries no verified isolation stamp.
  *
  * The isolation stamp is judged here, against this container: it counts only
  * when it was taken after the container started, on the same host boot and
@@ -46,6 +48,8 @@ export interface ContainerIdentity {
 }
 
 export const POLICY_TTL_MS = 30_000;
+/** How long the last good policy outlives an unreachable control plane. */
+export const POLICY_MAX_STALE_MS = 5 * 60_000;
 
 const PROCESS_STARTED_AT = new Date(Date.now() - Math.round(process.uptime() * 1000));
 
@@ -76,11 +80,13 @@ export interface ControlPolicyOptions {
   readSelf: () => Promise<TenantSelf | null>;
   identity?: () => ContainerIdentity;
   ttlMs?: number;
+  maxStaleMs?: number;
   now?: () => number;
 }
 
 export function controlPolicySource(opts: ControlPolicyOptions): TenantPolicySource {
   const ttl = opts.ttlMs ?? POLICY_TTL_MS;
+  const maxStale = opts.maxStaleMs ?? POLICY_MAX_STALE_MS;
   const now = opts.now ?? Date.now;
   const identity = opts.identity ?? containerIdentity;
   let cached: { policy: TenantPolicy; at: number } | null = null;
@@ -99,7 +105,7 @@ export function controlPolicySource(opts: ControlPolicyOptions): TenantPolicySou
       cached = { policy, at: now() };
       return policy;
     } catch (err) {
-      if (cached) return cached.policy;
+      if (cached && now() - cached.at <= maxStale) return cached.policy;
       throw err;
     }
   };
