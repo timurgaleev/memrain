@@ -14,6 +14,7 @@ import { ConnectorClient, type FetchFn } from "../src/core/connectors/client.ts"
 import { accountRef, shortHash } from "../src/core/connectors/model.ts";
 import type { PageResult, RenderedSyncItem, SyncAccount, SyncAdapter, SyncItem } from "../src/core/connectors/sync-engine.ts";
 import { microsoftProvider } from "../src/core/connectors/microsoft/provider.ts";
+import type { Engine } from "../src/core/engine/interface.ts";
 import { parseTeamsChatCursor, TEAMS_CHAT_STREAM, teamsChatAdapter, teamsMessageText } from "../src/core/connectors/microsoft/teams-chat.ts";
 import { parseVtt, TEAMS_TRANSCRIPTS_STREAM, teamsTranscriptsAdapter } from "../src/core/connectors/microsoft/teams-transcripts.ts";
 
@@ -450,10 +451,10 @@ describe("teams transcripts adapter", () => {
     // A transcript still being written is left for a later run.
     expect(g.calls.some(c => c.url.pathname.includes("tr-3"))).toBe(false);
     expect(JSON.parse(out.cursor!)).toEqual({ v: 1, scannedTo: new Date(T0).toISOString(), pos: null });
-    // The window is read one day at a time, so no listing cap can skip a meeting.
+    // The window is read one day at a time (with the day before, for meetings that ran late), so no listing cap can skip a meeting.
     const views = g.calls.filter(c => c.url.pathname === "/v1.0/me/calendarView");
     expect(views.length).toBeGreaterThanOrEqual(30);
-    for (const v of views) expect(Date.parse(v.url.searchParams.get("endDateTime")!) - Date.parse(v.url.searchParams.get("startDateTime")!)).toBeLessThanOrEqual(86_400_000);
+    for (const v of views) expect(Date.parse(v.url.searchParams.get("endDateTime")!) - Date.parse(v.url.searchParams.get("startDateTime")!)).toBeLessThanOrEqual(2 * 86_400_000);
   });
 
   /** Pages of the stream until one fails or the stream is done; the last result. */
@@ -474,6 +475,31 @@ describe("teams transcripts adapter", () => {
     if (res.ok) return;
     expect(res.response.class).toBe("forbidden");
     expect(res.response.error).toContain("GraphAccessToTranscriptsDisabled");
+  });
+
+  it("does not spend the run's budget on a transcript the engine holds", async () => {
+    const heldId = `transcript:${shortHash("meeting-one:tr-1")}`;
+    const engine = {
+      query: async (sql: string, params: unknown[]) => (sql.includes("FROM connector_items WHERE account_id = $1 AND external_id = $2") && params[1] === heldId
+        ? {
+            rows: [{
+              external_id: heldId, external_version: "2026-11-15T14:02:00.000Z|2026-11-15T14:58:00.000Z", page_slug: null, dedupe_key: null, content_hash: null,
+              deleted_upstream_at: null, fail_count: 3, held_reason: "repeated_failure", held_until: new Date(T0 + 86_400_000).toISOString(),
+            }],
+          }
+        : { rows: [] }),
+    } as unknown as Engine;
+    const g = transcriptWorld();
+    const adapter = teamsTranscriptsAdapter(account("teams_transcripts"), { now: () => T0, env: {}, engine });
+    const res = await adapter.page({
+      client: g.client, account: account("teams_transcripts"), stream: TEAMS_TRANSCRIPTS_STREAM,
+      cursor: JSON.stringify({ v: 1, scannedTo: null, pos: "2026-11-15T10:00:00.000Z" }), page: 0, budget: { remaining: 1, perRun: 1 },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(rendered(res.items).map(i => i.title)).toEqual(["Standup"]);
+    expect(res.done).toBe(true);
+    expect(g.calls.some(c => c.url.pathname.endsWith("/tr-1/content"))).toBe(false);
   });
 
   it("stops rather than store a transcript without its calendar link when the series cannot be read", async () => {

@@ -29,14 +29,18 @@
  * lookback (a transcript is ready only after its meeting) to now, or from the
  * history floor on the first pass, one day per stream page; the cursor's
  * `pos` moves a day at a time, and `scannedTo` to the run's start once the
- * last day is through. Each day's meetings are those that start in it, and
- * of a recurring meeting's transcripts only those made in one of that day's
- * occurrences. A day listing more events than MAX_EVENT_PAGES, or a meeting
+ * last day is through. A transcript belongs to the day it was started in,
+ * and is found through the meetings that start in that day or the day
+ * before (so a meeting that ran past midnight is covered); a transcript
+ * started later than that after its meeting's start, by reusing an old join
+ * link, is not found. Meeting ids and transcript lists are asked for once
+ * per run. A day listing more events than MAX_EVENT_PAGES, or a meeting
  * listing more transcripts than MAX_TRANSCRIPT_PAGES, fails loudly instead of
  * being stored in part. A transcript without an `endDateTime` is still being
- * written and waits for a later run; one already stored at the same times is
- * not fetched again; one whose content has no cue fails and is read again.
- * A page cut by the item budget lists the same day again.
+ * written and waits for a later run; one already stored at the same times,
+ * or held by the engine, is not fetched again; one whose content has no cue
+ * fails and is read again. A page cut by the item budget lists the same day
+ * again.
  *
  * The meeting page's compiled truth names the calendar event page
  * (`calendar_event`, the slug the Outlook calendar adapter of the same
@@ -54,7 +58,7 @@ import { redactMeetingCredentials } from "../meeting-redact.ts";
 import { renderMeeting, type RenderedConnectorPage } from "../render.ts";
 import { retentionDays } from "../retention.ts";
 import { syncItemFromPage } from "../sync-item.ts";
-import { settledItemVersions } from "../sync-store.ts";
+import { DELETION_STATES, getItem, settledItemVersions } from "../sync-store.ts";
 import { accountRef, shortHash, type ConnectorContext, type MeetingSentence, type Person } from "../model.ts";
 import type { Engine } from "../../engine/interface.ts";
 import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
@@ -268,6 +272,9 @@ class TranscriptsAdapter implements SyncAdapter {
   /** Fixed once per run, so every page of a window asks the same question. */
   private readonly runAt: number;
   private readonly masters = new Map<string, string | null>();
+  /** Per run: neighbouring days list the same meetings, which are asked about once. */
+  private readonly meetingIds = new Map<string, { id: string | null }>();
+  private readonly transcriptLists = new Map<string, { list: Transcript[]; truncated: boolean }>();
 
   constructor(
     private readonly account: SyncAccount,
@@ -296,24 +303,30 @@ class TranscriptsAdapter implements SyncAdapter {
       : st?.scannedTo != null ? Math.max(floor, Date.parse(st.scannedTo) - LOOKBACK_MS) : floor;
     const passDone = { ok: true as const, items: [], checkpoint: JSON.stringify({ v: 1, scannedTo: new Date(this.runAt).toISOString(), pos: null }), done: true };
     if (start >= this.runAt) return passDone;
-    // One day at a time, so no listing cap can step over a meeting.
+    // One day at a time, so no listing cap can step over a meeting. A
+    // transcript belongs to the day it was started in; its meeting may have
+    // begun the day before (a late meeting, a long one).
     const end = Math.min(start + SLICE_MS, this.runAt);
-    const listed = await this.onlineEvents(client, start, end);
+    const listed = await this.onlineEvents(client, start - DAY_MS, end);
     if ("response" in listed) return { ok: false, response: listed.response };
 
     const byLink = new Map<string, OnlineEvent[]>();
     for (const ev of listed) byLink.set(ev.joinUrl, [...(byLink.get(ev.joinUrl) ?? []), ev]);
     const room = budget?.remaining ?? Number.POSITIVE_INFINITY;
     const items: SyncItem[] = [];
-    const done = new Set<string>();
     let cut = false;
+    /** Room for one more item; false once the page is full. */
+    const fits = (): boolean => {
+      cut ||= items.length >= room;
+      return !cut;
+    };
     for (const [joinUrl, occurrences] of byLink) {
       if (cut) break;
       const meetingKey = `meeting:${shortHash(`tmeet:${joinUrl}`)}`;
       const meeting = await this.meetingId(client, joinUrl);
       if ("response" in meeting) {
         if (endsRun(meeting.response)) return { ok: false, response: meeting.response };
-        items.push(unavailable(meetingKey, meeting.response, "meeting"));
+        if (!(await this.held(meetingKey, null)) && fits()) items.push(unavailable(meetingKey, meeting.response, "meeting"));
         continue;
       }
       if (meeting.id === null) continue;
@@ -322,28 +335,24 @@ class TranscriptsAdapter implements SyncAdapter {
         const res = transcripts.response;
         if (graphInnerErrorCode(res) === TRANSCRIPTS_DISABLED) return { ok: false, response: transcriptsDisabled(res) };
         if (endsRun(res)) return { ok: false, response: res };
-        items.push(unavailable(meetingKey, res, "meeting"));
+        if (!(await this.held(meetingKey, null)) && fits()) items.push(unavailable(meetingKey, res, "meeting"));
         continue;
       }
       if (transcripts.truncated) {
         // Not stored in part: the item fails, and is held after repeated runs, rather than skip transcripts unseen.
-        items.push({ externalId: meetingKey, version: null, failure: { code: "transcript_list_truncated", message: `the meeting lists more than ${MAX_TRANSCRIPT_PAGES} pages of transcripts` } });
+        if (!(await this.held(meetingKey, null)) && fits()) {
+          items.push({ externalId: meetingKey, version: null, failure: { code: "transcript_list_truncated", message: `the meeting lists more than ${MAX_TRANSCRIPT_PAGES} pages of transcripts` } });
+        }
         continue;
       }
-      // A recurring meeting lists every occurrence's transcripts: only this slice's occurrences' are due here.
-      const due = transcripts.list
-        .map(t => ({ t, ev: occurrenceOf(t, occurrences) }))
-        .filter((d): d is { t: Transcript; ev: OnlineEvent } => d.ev !== null && d.t.created >= floor && !done.has(d.t.externalId));
-      for (const d of due) done.add(d.t.externalId);
+      // A recurring meeting lists every occurrence's transcripts: only those started in this day are due here.
+      const due = transcripts.list.filter(t => t.created >= start && t.created < end && t.created >= floor);
       const settled = this.engine === undefined ? new Map<string, string>()
-        : await settledItemVersions(this.engine, this.account.id, due.map(d => d.t.externalId));
-      for (const { t, ev } of due) {
-        if (settled.get(t.externalId) === t.version) continue;
-        if (items.length >= room) {
-          cut = true;
-          break;
-        }
-        const item = await this.transcriptItem(client, meeting.id, t, ev);
+        : await settledItemVersions(this.engine, this.account.id, due.map(t => t.externalId));
+      for (const t of due) {
+        if (settled.get(t.externalId) === t.version || await this.held(t.externalId, t.version)) continue;
+        if (!fits()) break;
+        const item = await this.transcriptItem(client, meeting.id, t, occurrenceOf(t, occurrences));
         if ("response" in item) return { ok: false, response: item.response };
         items.push(item);
       }
@@ -378,7 +387,7 @@ class TranscriptsAdapter implements SyncAdapter {
       if (!isRecord(res.body) || !Array.isArray(res.body.value)) return { response: badBody(res, "calendar view") };
       for (const ev of (res.body.value as unknown[]).filter(isRecord)) {
         const o = onlineEvent(ev);
-        // The view also returns meetings that began before the slice; each belongs to the slice it starts in.
+        // The view also returns meetings that began before `from`; they are not this listing's.
         if (o !== null && o.start >= from && o.start < to) out.push(o);
       }
       const next = res.body["@odata.nextLink"];
@@ -391,7 +400,26 @@ class TranscriptsAdapter implements SyncAdapter {
     return out.sort((a, b) => a.start - b.start);
   }
 
+  /**
+   * Whether the engine holds this item at this version for now: it would skip
+   * it, and still count it against the run's items, so it is not sent again.
+   */
+  private async held(externalId: string, version: string | null): Promise<boolean> {
+    if (this.engine === undefined) return false;
+    const row = await getItem(this.engine, this.account.id, externalId);
+    return row !== null && row.external_version === version && row.held_reason !== null && !DELETION_STATES.includes(row.held_reason)
+      && row.held_until !== null && row.held_until.getTime() > this.runAt;
+  }
+
   private async meetingId(client: ConnectorClient, joinUrl: string): Promise<{ id: string | null } | { response: ConnectorResponse }> {
+    const known = this.meetingIds.get(joinUrl);
+    if (known !== undefined) return known;
+    const found = await this.lookUpMeeting(client, joinUrl);
+    if (!("response" in found)) this.meetingIds.set(joinUrl, found);
+    return found;
+  }
+
+  private async lookUpMeeting(client: ConnectorClient, joinUrl: string): Promise<{ id: string | null } | { response: ConnectorResponse }> {
     // The link itself goes URL-encoded inside the OData literal (onlinemeeting-get), a quote included.
     const literal = enc(joinUrl).replace(/'/g, "%27");
     const res = await graphGet(client, `/v1.0/me/onlineMeetings?$filter=${enc(`JoinWebUrl eq '${literal}'`)}`, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
@@ -405,6 +433,14 @@ class TranscriptsAdapter implements SyncAdapter {
   }
 
   private async transcripts(client: ConnectorClient, meetingId: string): Promise<{ list: Transcript[]; truncated: boolean } | { response: ConnectorResponse }> {
+    const known = this.transcriptLists.get(meetingId);
+    if (known !== undefined) return known;
+    const listed = await this.listTranscripts(client, meetingId);
+    if (!("response" in listed)) this.transcriptLists.set(meetingId, listed);
+    return listed;
+  }
+
+  private async listTranscripts(client: ConnectorClient, meetingId: string): Promise<{ list: Transcript[]; truncated: boolean } | { response: ConnectorResponse }> {
     let path: string | null = `/v1.0/me/onlineMeetings/${enc(meetingId)}/transcripts`;
     const list: Transcript[] = [];
     for (let p = 0; path !== null; p++) {
@@ -508,17 +544,14 @@ interface Transcript {
 
 /**
  * The occurrence a transcript was made in: the latest one of `occurrences`
- * (sorted by start) that had begun, give or take OCCURRENCE_SLACK_MS, when
- * the transcript started, and had not ended more than a day before. Null when
- * none of them fits: the transcript belongs to an occurrence another slice
- * lists.
+ * (sorted by start, never empty) that had begun, give or take
+ * OCCURRENCE_SLACK_MS, when the transcript started; else the first.
  */
-function occurrenceOf(t: Transcript, occurrences: readonly OnlineEvent[]): OnlineEvent | null {
+function occurrenceOf(t: Transcript, occurrences: readonly OnlineEvent[]): OnlineEvent {
   for (let i = occurrences.length - 1; i >= 0; i--) {
-    const o = occurrences[i]!;
-    if (o.start - OCCURRENCE_SLACK_MS <= t.created && t.created < (o.end ?? o.start) + DAY_MS) return o;
+    if (occurrences[i]!.start - OCCURRENCE_SLACK_MS <= t.created) return occurrences[i]!;
   }
-  return null;
+  return occurrences[0]!;
 }
 
 export function teamsTranscriptsAdapter(account: SyncAccount, opts: Partial<AdapterContext> = {}): SyncAdapter {

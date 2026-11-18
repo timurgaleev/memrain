@@ -493,7 +493,8 @@ meeting's transcription has stopped, within 15 minutes of the next sync.
 - A transcript needs a calendar event with a Teams join link. An instant
   meeting ("Meet now") has none, and Microsoft does not offer its transcript
   this way either. A recurring meeting's transcripts link to the series'
-  calendar page.
+  calendar page. A transcript recorded more than a day after its meeting's
+  scheduled start (an old join link used again) is not found.
 - The link to the calendar page works when the work calendar is connected
   with the same account ([step 12](#12-connect-your-work-account-on-your-company-device)).
 - Microsoft keeps a meeting's transcripts only until the meeting expires; a
