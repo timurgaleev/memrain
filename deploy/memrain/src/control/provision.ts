@@ -191,9 +191,13 @@ export async function createTenant(ctx: ProvisionContext, input: CreateTenantInp
     const c = ctx.control;
     for (const role of [names.owner, names.ctl]) {
       if (!(await roleExists(c, role))) await c.query(`CREATE ROLE ${ident(role)} LOGIN`);
+      // Only a superuser may name the SUPERUSER attribute at all, even to
+      // clear it, and the RDS master is not one: refuse such a role instead.
+      const su = await c.query<{ su: boolean }>(`SELECT rolsuper AS su FROM pg_roles WHERE rolname = $1`, [role]);
+      if (su.rows[0]?.su) throw new TenantError("wrong_state", `role '${role}' is a superuser; a tenant role never is`);
     }
-    await c.query(`ALTER ROLE ${ident(names.owner)} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD ${literal(ownerPassword)}`);
-    await c.query(`ALTER ROLE ${ident(names.ctl)} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE CONNECTION LIMIT 8 PASSWORD ${literal(ctlPassword)}`);
+    await c.query(`ALTER ROLE ${ident(names.owner)} WITH LOGIN NOCREATEDB NOCREATEROLE PASSWORD ${literal(ownerPassword)}`);
+    await c.query(`ALTER ROLE ${ident(names.ctl)} WITH LOGIN NOCREATEDB NOCREATEROLE CONNECTION LIMIT 8 PASSWORD ${literal(ctlPassword)}`);
     await c.query(`ALTER ROLE ${ident(names.owner)} SET statement_timeout = '60s'`);
     await c.query(`ALTER ROLE ${ident(names.owner)} SET idle_in_transaction_session_timeout = '60s'`);
     await c.query(`ALTER ROLE ${ident(names.ctl)} SET statement_timeout = '5s'`);

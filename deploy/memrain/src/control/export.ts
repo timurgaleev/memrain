@@ -330,6 +330,10 @@ export async function purgeDeleted(ctx: ExportContext, opts: PurgeOptions = {}):
       const has = await ctx.control.query(`SELECT 1 FROM pg_roles WHERE rolname = $1`, [role]);
       if (has.rows.length === 0) continue;
       await ctx.control.query(`REVOKE ALL ON DATABASE ${ident(controlDb)} FROM ${ident(role)}`);
+      // DROP OWNED needs the privileges of the role. A non-superuser master
+      // (RDS) holds only ADMIN on the roles it created, so it takes them
+      // first, as provisioning already did for the owner.
+      await ctx.control.query(`GRANT ${ident(role)} TO CURRENT_USER`);
       await ctx.control.query(`DROP OWNED BY ${ident(role)}`);
       await ctx.control.query(`DROP ROLE ${ident(role)}`);
     }
