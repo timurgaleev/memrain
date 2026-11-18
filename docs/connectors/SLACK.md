@@ -8,7 +8,10 @@ a channel by itself.
 
 ## Prerequisites
 
-- Connectors are on: [ENABLE.md](./ENABLE.md) steps 1 to 3.
+- Connectors are on and scheduled: [ENABLE.md](./ENABLE.md) steps 1 to 4 and
+  step 6 (connector key, connectors on, a brain-wide daily budget, and the
+  scheduler with `connector_sync` enabled). Without step 4 and step 6 no sync
+  ever runs; `daemons status` must list `connector_sync` as enabled.
 - A source of kind `chat` to hold the channels. The Connections page offers
   only sources of that kind, so register one first:
 
@@ -170,7 +173,7 @@ then **Add apps**. For a private channel, invite the bot the same way.
 3. **History window in days**: how far back a channel's first sync reads, 1 to
    365 days, 14 by default. Choose **Save channels**.
 4. Choose **Turn sync on**. The next sync run (every 15 minutes by default)
-   reads the channels.
+   reads the channels, provided `connector_sync` is enabled (see Prerequisites).
 
 ## How syncing works
 
