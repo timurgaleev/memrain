@@ -2,11 +2,25 @@ import { Storage } from "../core/storage.ts";
 import { loadConfig } from "../core/config.ts";
 import { applyForgottenErasure, planForgottenErasure, type ErasureTargets } from "../core/forgotten-erasure.ts";
 import { withStorage } from "./with-storage.ts";
+import { eraseOwnerChat } from "../core/chat/store.ts";
 
-export interface EraseOptions extends ErasureTargets { sub: string; apply?: boolean; planHash?: string; storage?: Storage }
+export interface EraseOptions extends ErasureTargets { sub: string; apply?: boolean; planHash?: string; storage?: Storage; owner?: string }
+
+/** `erase chat --owner KEY [--apply]`: an owner's chat threads and messages. */
+async function runEraseChat(opts: EraseOptions): Promise<number> {
+  const owner = (opts.owner ?? "").trim();
+  if (!owner || owner.length > 200) throw new Error("erase chat requires --owner KEY (the chat owner, e.g. operator)");
+  const storage = opts.storage ?? new Storage(loadConfig());
+  return withStorage(storage, async () => {
+    const counts = await eraseOwnerChat(storage.engine(), owner, opts.apply === true);
+    console.log(JSON.stringify({ ok: true, dry_run: opts.apply !== true, owner, ...counts }, null, 2));
+    return 0;
+  }, { owned: !opts.storage, migrate: false });
+}
 
 export async function runErase(opts: EraseOptions): Promise<number> {
-  if (opts.sub !== "forgotten") throw new Error("Use erase forgotten with explicit fact IDs or deleted pages");
+  if (opts.sub === "chat") return runEraseChat(opts);
+  if (opts.sub !== "forgotten") throw new Error("Use erase forgotten with explicit fact IDs or deleted pages, or erase chat --owner KEY");
   if (opts.apply && !opts.planHash) throw new Error("Erasure apply requires the exact preview plan hash");
   const storage = opts.storage ?? new Storage(loadConfig());
   return withStorage(storage, async () => {

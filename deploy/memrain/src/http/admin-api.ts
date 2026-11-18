@@ -45,6 +45,8 @@ import { handleAdminApprovals } from "./admin-approvals.ts";
 import { handleAdminMembers } from "./admin-members.ts";
 import { handleAdminAutonomy } from "./admin-autonomy.ts";
 import { handleAdminOffice } from "./admin-office.ts";
+import { handleChatApi } from "./chat-api.ts";
+import type { SonnetFn } from "../core/llm/sonnet.ts";
 import { controlDaemon, daemonsStatus } from "../core/daemons/status.ts";
 import { OperationError } from "../core/operation-error.ts";
 import type { RateLimiter } from "../mcp/rate_limit.ts";
@@ -64,6 +66,8 @@ export interface AdminApiDeps {
   embedQuery?: SearchOptions["embedQuery"];
   /** The live admin session's id, which a connector OAuth state is bound to. */
   adminSessionId?: (req: Request) => string | null;
+  /** Fake model for the chat routes (tests only). */
+  chatModel?: SonnetFn;
 }
 
 const unauthorized = () => Response.json({ error: "Admin authentication required" }, { status: 401 });
@@ -202,6 +206,14 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
   }
   if (p.startsWith("/admin/api/members") || p.startsWith("/admin/api/groups") || p === "/admin/api/grant-profiles") {
     const r = await handleAdminMembers(req, url, engine).catch((e: unknown) => serverError("members", e));
+    if (r) return r;
+  }
+  if (p === "/admin/api/chat" || p.startsWith("/admin/api/chat/")) {
+    const r = await handleChatApi(req, url, {
+      storage: deps.storage,
+      ...(deps.chatModel ? { chatModel: deps.chatModel } : {}),
+      ...(deps.embedQuery ? { embedQuery: deps.embedQuery } : {}),
+    }).catch((e: unknown) => serverError("chat", e));
     if (r) return r;
   }
   if (p === "/admin/api/office") {

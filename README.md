@@ -60,8 +60,9 @@ are flagged, so your agent does not repeat one of them as settled truth.
   <img src="docs/assets/how-it-works-light.svg" alt="Five steps: your notes, code and chats; Memrain reads them; stored in your Postgres database; search by meaning and by words; your AI agent answers with sources." width="100%">
 </picture>
 
-Memrain does the remembering, not the talking (the opt-in `think` tool is the
-one exception). It returns ranked passages with
+Memrain does the remembering, not the talking (the opt-in `think` tool and the
+admin **Ask** page built on it, see [docs/CHAT.md](./docs/CHAT.md), are the
+exceptions). It returns ranked passages with
 their sources, and your agent writes the answer from them. A search costs one
 embedding call and no chat-model call by default. The full pipeline is in
 [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md).

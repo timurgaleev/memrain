@@ -114,11 +114,12 @@ function printUsage(): void {
   console.log("");
   console.log("Commands:");
   console.log("  backup status [--rds-instance ID] [--efs-id ID] [--copy-report FILE]  inspect backup evidence");
-  console.log("  export [--dir DIR] [--source ID]  export live pages as markdown");
+  console.log("  export [--dir DIR] [--source ID] [--owner KEY]  export live pages as markdown and chat threads as JSON");
   console.log("  import --dir DIR --source ID [--apply --plan-hash HASH]  preview create-only page import; indexing deferred");
   console.log("  mirror-adopt --source ID [--limit N] [--apply --plan-hash HASH]  preview proven mirror ownership repair");
   console.log("  atoms-retire --source-ref DOC --completed-hash HASH16 [--apply --plan-hash HASH64]  preview proven stale atom pages");
   console.log("  erase forgotten --source ID [--fact-ids CSV] [--deleted-pages CSV] [--apply --plan-hash HASH]");
+  console.log("  erase chat --owner KEY [--apply]  preview, then delete one owner's chat threads");
   console.log("                               preview explicit database erasure of forgotten facts/deleted pages");
   console.log("  aliases suggest [--source ID] [--limit N] [--json]  preview undeclared name aliases");
   console.log("  models [--probe] [--max-cost-usd N] [--json]  resolved chat models and registered prices");
@@ -1162,7 +1163,10 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
         apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
     }
     case "erase": {
-      if (positional.length !== 1 || positional[0] !== "forgotten") throw new Error("erase: use erase forgotten with explicit targets");
+      if (positional.length === 1 && positional[0] === "chat") {
+        return runErase({ sub: "chat", source: "", owner: values.get("--owner") ?? "", apply: flags.has("--apply") });
+      }
+      if (positional.length !== 1 || positional[0] !== "forgotten") throw new Error("erase: use erase forgotten with explicit targets, or erase chat --owner KEY");
       const rawIds = values.get("--fact-ids");
       const factIds = rawIds === undefined ? undefined : rawIds.split(",").map(value => {
         if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("erase: --fact-ids must be comma-separated positive safe integers");
@@ -1187,6 +1191,8 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       const src = values.get("--source");
       const sourceIds = normalizeSourceFilterParam(src?.split(","));
       if (sourceIds !== undefined) opts.sourceIds = sourceIds;
+      const chatOwner = values.get("--owner");
+      if (chatOwner) opts.chatOwner = chatOwner;
       await runExport(opts);
       return 0;
     }
