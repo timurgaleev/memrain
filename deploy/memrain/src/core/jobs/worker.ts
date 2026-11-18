@@ -25,7 +25,7 @@ import type { Queue } from "./queue.ts";
 import { type JobRow, UnrecoverableJobError, jobSpendClient } from "./types.ts";
 import { workerNameFor, type JobActivity } from "./activity.ts";
 import type { Engine } from "../engine/interface.ts";
-import { admitJob } from "../tenant-guard.ts";
+import { admitJob, tenantPaused } from "../tenant-guard.ts";
 import {
   acquireWorkerLock,
   heartbeatWorkerLock,
@@ -547,6 +547,9 @@ export class Worker {
     };
     const timer = setInterval(() => {
       if (renewing || stopped) return;
+      // A hosted tenant held mid-job: the attempt is handed back at its next
+      // batch boundary, as on shutdown, and waits for the tenant to resume.
+      void tenantPaused().then((p) => { if (p && !abort.signal.aborted) abort.abort(new WorkerShutdownError()); }, () => {});
       renewing = true;
       const until = Date.now() + lockMs;
       this.queue

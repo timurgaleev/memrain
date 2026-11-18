@@ -112,6 +112,7 @@ import { heldLockOf } from "../db-lock.ts";
 import { runInPhaseContext } from "./phase-context.ts";
 import { recordPhaseRun } from "./phase-runs.ts";
 import { runWithSpendTags } from "../budget.ts";
+import { tenantPaused } from "../tenant-guard.ts";
 
 export type PhaseName =
   | "lint"
@@ -857,7 +858,7 @@ async function runPhases(
   const phases: PhaseResult[] = [];
   const phasesNotRun: PhaseName[] = [];
   for (const p of requested) {
-    if (signal.aborted) {
+    if (signal.aborted || (await tenantPaused())) {
       phasesNotRun.push(p);
       continue;
     }
