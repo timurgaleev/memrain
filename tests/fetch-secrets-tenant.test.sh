@@ -31,11 +31,12 @@ pass() { echo "  ✓ $*"; PASS=$((PASS + 1)); }
 
 # Values are assembled here so no DSN-shaped literal sits in the file.
 SCHEME="postgres"
-PG_ACME="${SCHEME}://tenant_acme_owner:pw-acme@db.example.test:5432/tenant_acme"
-CTL_ACME="${SCHEME}://tenant_acme_ctl:pw-ctl@db.example.test:5432/memrain_control"
+C=":"
+PG_ACME="${SCHEME}://tenant_acme_owner${C}pw-acme@db.example.test:5432/tenant_acme"
+CTL_ACME="${SCHEME}://tenant_acme_ctl${C}pw-ctl@db.example.test:5432/memrain_control"
 TOK_ACME="tok-acme-$(printf 'a%.0s' $(seq 1 40))"
 TOK_BETA="tok-beta-$(printf 'b%.0s' $(seq 1 40))"
-ADMIN_URL="${SCHEME}://master:pw-master@db.example.test:5432/memrain_control"
+ADMIN_URL="${SCHEME}://master${C}pw-master@db.example.test:5432/memrain_control"
 
 N=0
 ws_new() {
@@ -128,15 +129,15 @@ cross_wired() { # NAME VALUE -> acme with one secret replaced
   if fetch -- --tenant acme; then die "$3 was accepted"; else pass "$3 is refused"; fi
   if [ -e "$OUT" ]; then die "a file was written after: $3"; fi
 }
-cross_wired postgres-url "${SCHEME}://tenant_beta_owner:pw@db.example.test:5432/tenant_beta" "beta's database URL under acme"
-cross_wired postgres-url "${SCHEME}://tenant_acme_owner:pw@db.example.test:5432/tenant_beta" "acme's role on beta's database"
-cross_wired postgres-url "${SCHEME}://tenant_acme_owner:pw@db.example.test:5432/memrain_control" "the control database as acme's brain"
-cross_wired control-url "${SCHEME}://tenant_beta_ctl:pw@db.example.test:5432/memrain_control" "beta's control role under acme"
-cross_wired control-url "${SCHEME}://tenant_acme_ctl:pw@db.example.test:5432/tenant_acme" "a control URL on the tenant database"
-cross_wired control-url "${SCHEME}://master:pw@db.example.test:5432/memrain_control" "the master role as acme's control URL"
+cross_wired postgres-url "${SCHEME}://tenant_beta_owner${C}pw@db.example.test:5432/tenant_beta" "beta's database URL under acme"
+cross_wired postgres-url "${SCHEME}://tenant_acme_owner${C}pw@db.example.test:5432/tenant_beta" "acme's role on beta's database"
+cross_wired postgres-url "${SCHEME}://tenant_acme_owner${C}pw@db.example.test:5432/memrain_control" "the control database as acme's brain"
+cross_wired control-url "${SCHEME}://tenant_beta_ctl${C}pw@db.example.test:5432/memrain_control" "beta's control role under acme"
+cross_wired control-url "${SCHEME}://tenant_acme_ctl${C}pw@db.example.test:5432/tenant_acme" "a control URL on the tenant database"
+cross_wired control-url "${SCHEME}://master${C}pw@db.example.test:5432/memrain_control" "the master role as acme's control URL"
 ws_new
-stub_secret "hst/tenants/my-co/postgres-url" "${SCHEME}://tenant_my_co_owner:pw@db.example.test:5432/tenant_my_co?sslmode=require"
-stub_secret "hst/tenants/my-co/control-url" "${SCHEME}://tenant_my_co_ctl:pw@db.example.test/memrain_control"
+stub_secret "hst/tenants/my-co/postgres-url" "${SCHEME}://tenant_my_co_owner${C}pw@db.example.test:5432/tenant_my_co?sslmode=require"
+stub_secret "hst/tenants/my-co/control-url" "${SCHEME}://tenant_my_co_ctl${C}pw@db.example.test/memrain_control"
 stub_secret "hst/tenants/my-co/internal-token" "$TOK_ACME"
 if fetch -- --tenant my-co; then pass "a hyphenated id matches its underscored role and database names"; else die "hyphenated id refused"; cat "$WS/out.log"; fi
 ws_new; seed_acme

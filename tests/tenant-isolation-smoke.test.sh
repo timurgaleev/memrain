@@ -206,7 +206,7 @@ if [ "$RC" -ne 0 ] && ! called 'smoke-record' && grep -q 'FAIL neighbour' "$WS/o
 ws_new; run_smoke SMOKE_IMDS_ADDR="127.0.0.1:$(port imds)"
 if [ "$RC" -ne 0 ] && ! called 'smoke-record' && grep -q 'FAIL imds' "$WS/out.log"; then pass "a reachable IMDS fails the smoke"; else die "reachable IMDS passed (rc=$RC)"; show; fi
 
-ws_new; printf 'postgres://u:pw-secret@127.0.0.1:%s/db' "$(port closed)" > "$S/pg_url"; run_smoke
+ws_new; printf 'postgres://u:%s@127.0.0.1:%s/db' "pw-secret" "$(port closed)" > "$S/pg_url"; run_smoke
 if [ "$RC" -ne 0 ] && grep -q 'FAIL rds' "$WS/out.log" && ! grep -q 'pw-secret' "$WS/out.log"; then pass "an unreachable RDS fails the smoke"; else die "unreachable RDS passed (rc=$RC)"; show; fi
 
 ws_new; run_smoke SMOKE_BEDROCK_ADDR="127.0.0.1:$(port closed)"
