@@ -29,6 +29,9 @@ to run while `deploy-memrain-1` is running.
 | `deploy/.secrets/provisioned/<id>/` | Secrets provisioning wrote with the `file` backend (mounted into `tenant-ctl` only) |
 | `deploy/tenant/deploy-tenants.sh` | The per-tenant deploy; `deploy/deploy.sh` hands over to it |
 | `deploy/tenant/ctl.sh` | One control-plane command (`tenant ...`) in `tenant-ctl`, with the deploy's file set |
+| `deploy/tenant/purge-deleted.sh` | Purges tenants whose deletion window passed, and what the host holds of them |
+| `deploy/tenant/bedrock-credentials.sh` | Rewrites each tenant's Bedrock credentials before they expire (systemd timer) |
+| `deploy/.bedrock/<id>/` | A tenant's short-lived Bedrock credentials, the one directory its container mounts |
 | `scripts/tenant-isolation-smoke.sh` | The isolation smoke for one tenant container |
 | `deploy/tenant/smoke-all.sh` | The smoke for every running tenant (after a reboot) |
 | `scripts/tenant-rss-bench.sh` | The memory bench behind `MEMRAIN_TENANT_MEM_LIMIT` |
@@ -61,6 +64,14 @@ The secrets come from the tenant's own `.secrets/tenants/<id>.env`. No
 container mounts a secrets directory or AWS configuration, and no tenant
 container reads Secrets Manager. The one mount is the tenant's own Bedrock
 credentials directory, `deploy/.bedrock/<id>/`, read-only (see below).
+
+The container's control-plane login (`tenant_<id>_ctl`) is its own, and so is
+its connection pool: `tenant_self()` and the spend functions recognise the
+tenant by `session_user`. Never put a connection pooler between tenant
+containers and `memrain_control` that shares server connections across
+tenants (PgBouncer in transaction or statement mode). If one is ever needed,
+give each tenant its own pool and login, or leave the control connections
+unpooled.
 
 Each tenant container sits on one network, `memrain_tenant_<id>`. That is a
 plain bridge, so outbound NAT to the database and Bedrock works. The only other
@@ -193,6 +204,28 @@ On a stack without Secrets Manager, set `TENANT_SECRETS_BACKEND=file` and
 `<dir>/<id>/{postgres-url,control-url,internal-token}` and
 `<dir>/_hosting/control-admin-url`. Each must be a regular file that only its
 owner can read.
+
+## Deleting a tenant
+
+1. `bash deploy/tenant/ctl.sh tenant delete <id> --confirm <id> --out
+   /provisioned/exports/<id>`. It closes the tenant's database to every
+   writer at the database itself, exports it under that fence, checks the copy
+   table by table, and records the receipt and a seven-day window in one
+   transaction. It prints the export's path (on the host,
+   `deploy/.secrets/provisioned/exports/<id>`) and its SHA-256.
+2. Take the export off the host within the window and check its SHA-256. It
+   is the customer's data; the host keeps it only until the purge.
+3. If the delete stopped half-way, run it again with `--resume`. It finishes
+   under the fence it already holds; on a scheduled delete it checks the
+   receipt against the files again.
+4. `tenant resume <id>` within the window cancels the delete. The fence id
+   changes, so the old receipt no longer counts.
+5. After the window, `bash deploy/tenant/purge-deleted.sh`. It drops the
+   database and roles and removes the tenant's secrets and every export copy
+   on the host. It then removes the container, the rendered file, the secrets
+   file, the Bedrock credentials and the network. With `--secrets aws` the
+   secrets get a tombstone value instead, and the output reminds you to drop
+   the id from `hosting_tenants` and apply, which deletes the secrets.
 
 ## Deploying
 
