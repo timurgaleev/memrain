@@ -1457,7 +1457,7 @@ async function holdHosting(call: TrackedCall): Promise<HostingHold> {
   const policy = await hostedPolicy();
   if (policy === null) return unavailable("the hosting control plane has not answered yet");
   if (policy.llmOff) return refuse("paid calls are switched off on this hosted install", "Ask the operator.");
-  if (policy.status !== "active") return refuse("this hosted brain is suspended", "Ask the operator to resume it.");
+  if (policy.status !== "active") return refuse(`this hosted brain is ${policy.status}, not active`, "Ask the operator to resume it.");
   const worst = worstCaseUsd(call);
   if (worst === null) {
     return refuse(`model '${call.model}' has no price or the call no output bound, so the hosting cap cannot hold it`,

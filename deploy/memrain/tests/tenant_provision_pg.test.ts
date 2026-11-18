@@ -11,6 +11,9 @@ import { PostgresEngine } from "../src/core/engine/postgres.ts";
 import { createTenant } from "../src/control/provision.ts";
 import { MemberInviteError } from "../src/core/member-invites.ts";
 import { getTenant, tenantEvents } from "../src/control/tenants.ts";
+import { controlPolicySource, type TenantSelf } from "../src/control/policy.ts";
+import { recordSmoke } from "../src/control/usage.ts";
+import { decideOperation, decideRequest } from "../src/core/tenant-guard.ts";
 import { PG_URL } from "./helpers/control-pg.ts";
 import { openControlFixture, type ControlFixture } from "./helpers/control-tenants.ts";
 
@@ -82,6 +85,28 @@ describe.skipIf(!PG_URL)("tenant create on Postgres", () => {
     const kinds = (await tenantEvents(fx.control, id)).map((e) => e.kind);
     expect(kinds.filter((k) => k === "provision:row")).toHaveLength(1);
     expect(kinds.slice(-2)).toEqual(["active", "provision:postcheck"]);
+  });
+
+  it("a creation that fails before the post-check serves nothing, even with a fresh smoke stamp", async () => {
+    const id = fx.tenantId("unfinished");
+    const failing = { ...fx.ctx, beforeStep: (s: string) => { if (s === "postcheck") throw new Error("injected failure"); } };
+    await expect(createTenant(failing, { id, hostname: `${id}.example.test` })).rejects.toThrow("injected failure");
+    const bootId = "0b0e0c0a-0000-4000-8000-000000000001";
+    const startedAt = new Date(Date.now() - 60_000);
+    await recordSmoke(fx.control, id, { startedAt, bootId, imageStamp: "img" });
+    const ctl = new PostgresEngine({ url: fx.secret(id, "control-url"), max: 1 });
+    try {
+      const policy = await controlPolicySource({
+        readSelf: async () => (await ctl.query<{ s: TenantSelf | null }>(`SELECT tenant_self() AS s`)).rows[0]?.s ?? null,
+        identity: () => ({ startedAt, bootId, imageStamp: "img" }),
+        ttlMs: 0,
+      })();
+      expect(policy).toMatchObject({ status: "provisioning", isolation: "verified" });
+      for (const cls of ["auth", "read", "mcp", "write"] as const) expect(decideRequest(policy, cls).allow).toBe(false);
+      for (const op of ["search", "page_get", "page_put"]) expect(decideOperation(policy, op).allow).toBe(false);
+    } finally {
+      await ctl.close();
+    }
   });
 
   it("without member invites the tenant waits in provisioning", async () => {

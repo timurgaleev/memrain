@@ -230,9 +230,26 @@ describe("decideOperation", () => {
     expect(decideOperation(active, "no_such_tool").allow).toBe(true);
   });
 
-  it("an unknown policy refuses writes but not reads", () => {
-    expect(decideOperation(null, "search").allow).toBe(true);
-    expect(decideOperation(null, "page_put").allow).toBe(false);
+  it("an unknown policy refuses reads too: it carries no verified isolation stamp", () => {
+    for (const op of ["search", "page_put"]) {
+      expect(decideOperation(null, op)).toEqual({ allow: false, status: 503, error: "tenant_policy_unavailable" });
+    }
+  });
+
+  it("the isolation check comes before the hold, in dispatch as at the door", () => {
+    const unverifiedBlocked: TenantPolicy = { ...blocked, isolation: "unverified" };
+    expect(decideOperation({ ...readOnly, isolation: "unverified" }, "search")).toEqual({ allow: false, status: 503, error: "isolation_unverified" });
+    expect(decideOperation(unverifiedBlocked, "search")).toEqual({ allow: false, status: 503, error: "isolation_unverified" });
+    expect(decideRequest(unverifiedBlocked, "read")).toEqual({ allow: false, status: 503, error: "isolation_unverified" });
+  });
+
+  it("only active is open and only suspended read-only reads; every other status is blocked", () => {
+    const at = (status: string, mode: TenantPolicy["mode"] = null): TenantPolicy =>
+      ({ status: status as TenantPolicy["status"], mode, limits: {}, llmOff: false, isolation: "verified" });
+    for (const p of [at("provisioning"), at("provisioning", "read-only"), at("deleting"), at("deleted"), at("frozen"), at("suspended")]) {
+      for (const c of ["auth", "read", "mcp", "write"] as const) expect(decideRequest(p, c).allow).toBe(false);
+      for (const op of ["search", "page_put"]) expect(decideOperation(p, op).allow).toBe(false);
+    }
   });
 });
 

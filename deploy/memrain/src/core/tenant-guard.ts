@@ -13,12 +13,16 @@
  *   mcp     refused when blocked; otherwise judged per operation in dispatch
  *   auth    refused when blocked or read-only (it issues credentials)
  *   write   refused when blocked or read-only
- * A path the table does not name is a write. Until the control plane has
- * answered once (nothing cached) and its isolation smoke stamp has been
- * verified for this container, only health is served: without the stamp the
- * container cannot know its network is closed to its neighbours. After that, an
- * outage keeps the last good policy. Inside dispatch an unknown policy still
- * lets read-only operations through and refuses the rest.
+ * A path the table does not name is a write. Only an `active` tenant is open;
+ * a `suspended` one held `read-only` serves reads; every other status, known
+ * or not, is blocked.
+ *
+ * The isolation check comes first (503 before 403): until the control plane
+ * has answered and its smoke stamp is verified for this container, only health
+ * is served, in dispatch as well as at the door. An outage keeps the last good
+ * policy for a while (policy.ts); past that, or with none ever read, the policy
+ * is unknown and nothing but health is served: an unknown policy carries no
+ * verified stamp, so "reads still pass" never bypasses the isolation check.
  */
 import { hostingMode, type TenantPolicy } from "../control/contract.ts";
 import { hostedPolicy } from "../control/policy.ts";
@@ -115,11 +119,12 @@ function isReadOnlyOperation(name: string): boolean {
 }
 
 export function decideOperation(policy: TenantPolicy | null, name: string): Admission {
+  if (policy === null) return UNAVAILABLE;
+  if (policy.isolation === "unverified") return UNVERIFIED;
   const hold = holdOf(policy);
   if (hold === "open") return ALLOW;
   if (hold === "block") return SUSPENDED;
-  if (isReadOnlyOperation(name)) return ALLOW;
-  return hold === "unknown" ? UNAVAILABLE : SUSPENDED;
+  return isReadOnlyOperation(name) ? ALLOW : SUSPENDED;
 }
 
 /** Null when the request may proceed; otherwise the refusal to send. */
@@ -199,6 +204,13 @@ export async function assertTenantAllows(name: string, engine?: () => Pick<Engin
     }
     return;
   }
+  if (d.error === "isolation_unverified") {
+    throw new OperationError(
+      "storage_error",
+      `this brain's isolation check has not passed since it started; '${name}' is refused`,
+      "Retry shortly; the operator runs the isolation smoke after every start.",
+    );
+  }
   if (d.error === "tenant_suspended") {
     throw new OperationError(
       "tenant_suspended",
@@ -208,12 +220,12 @@ export async function assertTenantAllows(name: string, engine?: () => Pick<Engin
   }
   throw new OperationError(
     "storage_error",
-    `the tenant policy is unavailable; '${name}' changes data and is refused`,
+    `the tenant policy is unavailable; '${name}' is refused`,
     "Retry shortly.",
   );
 }
 
-/** True when a hosted tenant is held (suspended, deleting, or policy unknown). */
+/** True when a hosted tenant is held (any status but active, or policy unknown). */
 export async function tenantPaused(): Promise<boolean> {
   if (hostingMode() === null) return false;
   return holdOf(await hostedPolicy()) !== "open";

@@ -30,7 +30,12 @@ type Env = Readonly<Record<string, string | undefined>>;
 /** A tenant id: also the suffix of its database and role names. */
 export const TENANT_ID_RE = /^[a-z][a-z0-9-]{1,30}$/;
 
-export type TenantStatus = "active" | "suspended" | "deleting";
+/**
+ * A tenant's lifecycle status, as the control plane stores it. Only `active`
+ * serves; a `suspended` tenant held `read-only` serves reads; every other
+ * status serves nothing but /health.
+ */
+export type TenantStatus = "provisioning" | "active" | "suspended" | "deleting" | "deleted";
 export type TenantMode = "read-only" | "block";
 
 export interface TenantLimits {
@@ -144,7 +149,7 @@ export async function tenantPolicy(env: Env = process.env): Promise<TenantPolicy
 }
 
 /** A tenant's lifecycle state in the control plane. */
-export type TenantLifecycleStatus = "provisioning" | TenantStatus | "deleted";
+export type TenantLifecycleStatus = TenantStatus;
 
 /** One row of `memrain tenant list --json`. */
 export interface TenantListEntry {
