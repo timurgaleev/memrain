@@ -212,7 +212,7 @@ export async function handleChatRoutes(
   saveGrant?: SaveGrant,
 ): Promise<Response> {
   const engine = deps.storage.engine();
-  const shared = await handleShareCreate(req, url, deps.storage, owner);
+  const shared = await handleShareCreate(req, new URL(req.url), deps.storage, owner);
   if (shared) return shared;
 
   if (sub === "") {
