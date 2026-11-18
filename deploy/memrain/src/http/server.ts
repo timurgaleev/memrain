@@ -62,6 +62,7 @@ import { handleConnectorCallbackPage } from "./admin-connectors.ts";
 import { serveAdminStatic } from "./admin-static.ts";
 import { handleAdminEventsRoute } from "./admin-events.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
+import { admitRequest } from "../core/tenant-guard.ts";
 
 /** RFC 6749 §5.2-style throttle response for the rate-limited OAuth endpoints. */
 function rateLimited(): Response {
@@ -394,6 +395,8 @@ export function startServer(opts: ServerOptions): ServerHandle {
 
       const handle = async (): Promise<Response> => {
 
+      const refused = await admitRequest(req, url);
+      if (refused) return refused;
       let guard = evaluatePublicGuard(req, url, guardOpts);
       let oauthAuth: AuthInfo | undefined;
       if (!guard.allow) {

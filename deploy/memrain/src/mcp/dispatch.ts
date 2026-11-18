@@ -297,6 +297,7 @@ import { listQuarantined } from "../core/quarantine-list.ts";
 import { extractionReview } from "../core/extraction-review.ts";
 import { findTypedConflicts } from "../core/typed-conflicts.ts";
 import { markGeneratedChunks } from "../core/search/generated-provenance.ts";
+import { assertTenantAllows } from "../core/tenant-guard.ts";
 
 export { OPERATOR_ONLY_TOOLS } from "./visibility.ts";
 
@@ -582,6 +583,7 @@ async function dispatchToolInner(
   const takesHolders = effectiveTakesHolders(opts.authInfo);
   try {
     if (req.name === "search" || req.name === "query") opts.signal?.throwIfAborted();
+    await assertTenantAllows(req.name);
     // Tool-level gates, in order: the fail-closed write gate (a scopeless
     // authenticated principal on a write op, default-OFF unless
     // MEMRAIN_TENANT_FAIL_CLOSED=1), operator-only tools for any authenticated

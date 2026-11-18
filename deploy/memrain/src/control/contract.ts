@@ -57,8 +57,7 @@ export interface HostingMode {
 }
 
 function envValue(env: Env, name: string): string | null {
-  const v = env[name]?.trim();
-  return v ? v : null;
+  return env[name]?.trim() || null;
 }
 
 function envFlag(env: Env, name: string): boolean {

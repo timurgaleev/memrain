@@ -25,6 +25,7 @@ import type { Queue } from "./queue.ts";
 import { type JobRow, UnrecoverableJobError, jobSpendClient } from "./types.ts";
 import { workerNameFor, type JobActivity } from "./activity.ts";
 import type { Engine } from "../engine/interface.ts";
+import { admitJob } from "../tenant-guard.ts";
 import {
   acquireWorkerLock,
   heartbeatWorkerLock,
@@ -227,6 +228,7 @@ export class Worker {
   async drainOnce(): Promise<number> {
     let processed = 0;
     while (!this.stopping) {
+      if (!(await admitJob())) break;
       const job = await this.queue.claim(this.claimOpts());
       if (!job) break;
       if (this.stopping) {
@@ -324,6 +326,7 @@ export class Worker {
           this.log("error", `stall sweep crashed: ${asMessage(e)}`);
         }
       }
+      if (!(await admitJob())) return;
       while (this.inflight < concurrency && !this.stopping) {
         const job = await this.queue.claim(this.claimOpts(concurrency));
         if (!job) break;
