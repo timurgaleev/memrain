@@ -291,6 +291,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_TAKE_ENSEMBLE_JUDGES: "int",
   MEMRAIN_TENANT_FAIL_CLOSED: "flag",
   MEMRAIN_TENANT_ID: "string",
+  MEMRAIN_TENANT_SECRETS_DIR: "string",
   MEMRAIN_TEST_PGLITE_TEMPLATE: "string",
   MEMRAIN_THINK: "flag",
   MEMRAIN_THINK_AUTO_ANCHOR: "flag",

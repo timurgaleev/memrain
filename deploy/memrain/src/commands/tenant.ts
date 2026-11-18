@@ -104,9 +104,14 @@ function print(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
 
+/** Where the `file` secret backend writes: the flag, else the directory the hosting compose mounts. */
+export function tenantSecretsDir(flags: Record<string, string>, env: NodeJS.ProcessEnv): string {
+  return flags["secrets-dir"] ?? (env["MEMRAIN_TENANT_SECRETS_DIR"] || undefined) ?? "./tenant-secrets";
+}
+
 function secretWriter(flags: Record<string, string>, env: NodeJS.ProcessEnv): FileSecretWriter | AwsSecretWriter {
   const backend = flags["secrets"] ?? "file";
-  if (backend === "file") return new FileSecretWriter(flags["secrets-dir"] ?? "./tenant-secrets");
+  if (backend === "file") return new FileSecretWriter(tenantSecretsDir(flags, env));
   if (backend === "aws") {
     const prefix = flags["secrets-prefix"] ?? env["SECRETS_PREFIX"] ?? "memrain";
     return new AwsSecretWriter(prefix);
@@ -230,7 +235,7 @@ export async function runTenant(args: readonly string[], env: NodeJS.ProcessEnv 
       case "purge-deleted": {
         const removeSecrets = flags["secrets"] === "aws"
           ? undefined
-          : async (id: string) => rmSync(join(resolve(flags["secrets-dir"] ?? "./tenant-secrets"), id), { recursive: true, force: true });
+          : async (id: string) => rmSync(join(resolve(tenantSecretsDir(flags, env)), id), { recursive: true, force: true });
         print({ ok: true, ...(await purgeDeleted(ctx, removeSecrets ? { removeSecrets } : {})) });
         return 0;
       }
