@@ -734,6 +734,31 @@ Two things to know before you rely on this:
   afterwards with `memrain auth rescope-client <client_id> --source SRC
   --federated-read SRC`.
 
+### Hosted tenants
+
+A hosted install runs one container per tenant, each with its own database.
+Hosting mode is on when `MEMRAIN_TENANT_ID` or `MEMRAIN_CONTROL_URL` is set;
+either one alone still counts, so a half-configured container fails closed.
+With both unset, nothing below applies and a self-hosted brain behaves as if
+these variables did not exist. Every variable in this table is environment
+only: a `runtime_config` row can never set them, and `memrain config set`
+refuses to store `MEMRAIN_CONTROL_URL` at all.
+
+In hosting mode every request, MCP operation and queued job first passes the
+tenant's policy from the control plane. A suspended tenant held read-only
+still serves reads and refuses every change with `tenant_suspended`; a blocked
+one answers only `/health`. While the policy cannot be read, reads pass and
+writes, credential issuance and queued jobs are refused.
+
+| Variable | Default | What it does | Cost |
+|---|---|---|---|
+| `MEMRAIN_TENANT_ID` | unset | This container's tenant id on a hosted install. Setting it turns hosting mode on. Environment only. | free |
+| `MEMRAIN_CONTROL_URL` | unset | Connection URL of the hosting control database, read from the tenant's secrets file. Setting it turns hosting mode on. Environment only; `memrain config set` refuses to store it. | free |
+| `MEMRAIN_HOSTING_LLM_OFF` | off (`=1` on) | In hosting mode, switch every paid model call off for this tenant, whatever the control plane says. Environment only. | free |
+| `MEMRAIN_PUBLIC_AUTH` | unset | `oauth` selects the hosted-tenant sign-in mode for public `/mcp`; any other value is refused. Not acted on yet. Environment only. | free |
+| `MEMRAIN_APP` | off (`=1` on) | Serve the member app under `/app` on a hosted tenant. Not acted on yet: `/app` answers 404. Environment only. | free |
+| `MEMRAIN_REQUIRE_MEMBER` | off (`=1` on) | Refuse a credential that is not bound to a member on `/mcp` and `/ingest`. Not acted on yet. Environment only. | free |
+
 ---
 
 ## 6. Maintenance cycle & ingest / ops
