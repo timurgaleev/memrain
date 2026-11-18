@@ -5,6 +5,7 @@
  * MEMRAIN_TEST_POSTGRES_URL points at a scratch Postgres (superuser).
  */
 import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { PostgresEngine } from "../src/core/engine/postgres.ts";
@@ -91,7 +92,7 @@ describe.skipIf(!PG_URL)("tenant create on Postgres", () => {
     const id = fx.tenantId("unfinished");
     const failing = { ...fx.ctx, beforeStep: (s: string) => { if (s === "postcheck") throw new Error("injected failure"); } };
     await expect(createTenant(failing, { id, hostname: `${id}.example.test` })).rejects.toThrow("injected failure");
-    const bootId = "0b0e0c0a-0000-4000-8000-000000000001";
+    const bootId = randomUUID();
     const startedAt = new Date(Date.now() - 60_000);
     await recordSmoke(fx.control, id, { startedAt, bootId, imageStamp: "img" });
     const ctl = new PostgresEngine({ url: fx.secret(id, "control-url"), max: 1 });

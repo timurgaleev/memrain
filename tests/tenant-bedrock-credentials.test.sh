@@ -34,7 +34,7 @@ WS="$TMPROOT/ws"; S="$WS/stub"
 mkdir -p "$WS/deploy/tenant" "$WS/deploy/tenants" "$S/bin"
 cp "$REPO_ROOT/deploy/tenant/"* "$WS/deploy/tenant/"
 for id in alpha beta; do printf 'services: {}\n' > "$WS/deploy/tenants/$id.yml"; done
-printf 'AWS_REGION=eu-west-1\nMEMRAIN_TENANT_BEDROCK_ROLE_ARN=arn:aws:iam::000000000000:role/tenant-bedrock\n' > "$WS/.env"
+printf 'AWS_REGION=eu-west-1\nMEMRAIN_TENANT_BEDROCK_ROLE_ARN=arn:aws:iam::example-account:role/tenant-bedrock\n' > "$WS/.env"
 cat > "$S/bin/aws" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_DIR/calls.log"
