@@ -297,10 +297,10 @@ export function utcDayStart(now: Date = new Date()): Date {
 }
 
 /** Prefixes of generated OAuth client ids and enrollment ids, under both the
- *  current and the pre-rename name (existing ids keep theirs). Spend is booked
- *  under a PAT's name, so a PAT named in any of these namespaces would share
- *  another principal's ledger key and cap. */
-export const RESERVED_SPEND_ID_PREFIXES = ["memrain_cl_", "memrain_enr_", "memex_cl_", "memex_enr_"] as const;
+ *  current and the pre-rename name (existing ids keep theirs), and of the chat
+ *  owners' spend ids. Spend is booked under a PAT's name, so a PAT named in any
+ *  of these namespaces would share another principal's ledger key and cap. */
+export const RESERVED_SPEND_ID_PREFIXES = ["memrain_cl_", "memrain_enr_", "memex_cl_", "memex_enr_", "memrain_chat_"] as const;
 
 /** Why `name` cannot be minted as a PAT name, or null when it is free to use. */
 export function patNameSpendConflict(name: string): string | null {
