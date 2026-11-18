@@ -139,6 +139,10 @@ stub_secret "hst/tenants/my-co/postgres-url" "${SCHEME}://tenant_my_co_owner:pw@
 stub_secret "hst/tenants/my-co/control-url" "${SCHEME}://tenant_my_co_ctl:pw@db.example.test/memrain_control"
 stub_secret "hst/tenants/my-co/internal-token" "$TOK_ACME"
 if fetch -- --tenant my-co; then pass "a hyphenated id matches its underscored role and database names"; else die "hyphenated id refused"; cat "$WS/out.log"; fi
+ws_new; seed_acme
+stub_secret "hst/tenants/acme/postgres-url" "${SCHEME}://tenant%5Facme%5Fowner:pw@[::1]:5432/tenant%5Facme"
+if fetch -- --tenant acme; then pass "percent-encoded role and database names are decoded before the check"; else die "percent-encoded URL refused"; cat "$WS/out.log"; fi
+cross_wired postgres-url "${SCHEME}://tenant%5Fbeta%5Fowner:pw@db.example.test/tenant_acme" "a percent-encoded foreign role"
 
 ws_new; seed_acme
 stub_secret "hst/tenants/acme/internal-token" "short"

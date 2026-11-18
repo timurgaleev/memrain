@@ -150,6 +150,9 @@ if [ -n "$HOSTING_MODE" ]; then
     user="${rest%%@*}"; user="${user%%:*}"
     db="${rest#*@}"
     case "$rest" in *@*/*) db="${db#*/}"; db="${db%%\?*}" ;; *) db="" ;; esac
+    # Postgres percent-decodes both; hosting_value has already refused '\'.
+    user="$(printf '%b' "${user//%/\\x}")"
+    db="$(printf '%b' "${db//%/\\x}")"
     for want in "tenant_${TENANT_ID}_${suffix}" "tenant_${TENANT_ID//-/_}_${suffix}"; do
       [ "$user" = "$want" ] && ok=1
     done
