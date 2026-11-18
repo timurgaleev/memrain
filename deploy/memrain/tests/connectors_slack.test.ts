@@ -182,6 +182,32 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  /** An OAuth connect into `sourceId` through Slack's fake: started, then called back with a code. */
+  async function oauthConnect(deps: ConnectDeps, sourceId: string = SOURCE) {
+    await setOAuthClient(deps.engine, kek, "slack", "111.222", "byo-slack-client-secret");
+    const started = await startConnect(deps, {
+      provider: "slack", sourceId, services: ["slack"], principalRef: "admin:operator", adminSessionId: SESSION,
+      redirectUri: connectorCallbackUri("https://brain.example.test", "slack"),
+    });
+    const state = new URL(started.authorizeUrl).searchParams.get("state");
+    return completeConnect(deps, { provider: "slack", state, code: "fake-slack-code", adminSessionId: SESSION });
+  }
+
+  it("refuses a widened grant for a workspace a live account syncs without revoking the token they share", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      await pasteToken(db.storage, w);
+      // Slack adds scopes on a reinstall and hands back the workspace's one bot token: revoking it would cut off the live account.
+      const wide = { ...w, scope: `${SLACK_PUBLIC_SCOPE},chat:write` };
+      const err = await oauthConnect({ engine: e, kek, providers: providers(), fetch: slackFetch(wide), env: {}, now: () => T0 }).catch(x => x);
+      expect(err).toBeInstanceOf(ConnectError);
+      expect((err as ConnectError).code).toBe("scope_mismatch_not_revoked");
+      expect(slackCalls(wide, "auth.revoke")).toHaveLength(0);
+    } finally { await db.close(); }
+  });
+
   it("takes a pasted bot token: checks it with Slack, refuses user tokens and write scopes", async () => {
     const db = await open();
     try {

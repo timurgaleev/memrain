@@ -493,10 +493,27 @@ async function revokeToken(
  * address. Any status but `revoked` is live: an account parked on an error may
  * still hold a working credential.
  */
-async function sharesLiveGrant(engine: Engine, provider: ConnectorProvider): Promise<boolean> {
-  if (provider.combinedGrants !== true) return false;
+/**
+ * Whether a live account may hold the token a connect is about to refuse:
+ * any of the provider's for a combined grant; for a token per identity, one
+ * pinned to `userId`, or any of the provider's when the identity is unknown.
+ */
+async function sharesLiveGrant(engine: Engine, provider: ConnectorProvider, userId: string | null = null): Promise<boolean> {
+  if (provider.tokenPerIdentity === true && userId !== null) return liveAccountOfIdentity(engine, provider.id, userId, null);
+  if (provider.combinedGrants !== true && provider.tokenPerIdentity !== true) return false;
   // scope: operator-only the connect flow asks whether this provider has any live account, never what it holds
   const r = await engine.query(`SELECT 1 FROM connector_accounts WHERE provider = $1 AND status <> 'revoked' LIMIT 1`, [provider.id]);
+  return r.rows.length > 0;
+}
+
+/** Whether a live account of the provider other than `exceptId` is pinned to the provider's `userId`. */
+async function liveAccountOfIdentity(engine: Engine, providerId: string, userId: string, exceptId: string | null): Promise<boolean> {
+  // scope: operator-only the connect and disconnect flows ask whether another account holds the same identity, never what it holds
+  const r = await engine.query(
+    `SELECT 1 FROM connector_accounts
+      WHERE provider = $1 AND status <> 'revoked' AND config->>$2 = $3 AND ($4::uuid IS NULL OR id <> $4::uuid) LIMIT 1`,
+    [providerId, PROVIDER_USER_ID, userId, exceptId],
+  );
   return r.rows.length > 0;
 }
 
@@ -618,14 +635,16 @@ export async function completeConnect(
   const exactlyOwn = granted.length === own.length && own.every((s) => granted.includes(s));
   const revoke = () => revokeToken(provider, fetch, refreshToken ?? accessToken, client);
   // A refused token is kept away from revocation when a live account shares its grant.
-  const sharedWithLive = async (): Promise<boolean> => {
-    if (!(await sharesLiveGrant(deps.engine, provider))) return false;
+  const sharedWithLive = async (userId: string | null = null): Promise<boolean> => {
+    if (!(await sharesLiveGrant(deps.engine, provider, userId))) return false;
     console.warn(`[connectors] ${provider.id} connect refused; the new token was not revoked because a live account shares its grant`);
     return true;
   };
 
   if ((extra.length > 0 || missing.length > 0) && !exactlyOwn) {
-    if (await sharedWithLive()) throw new ConnectError("scope_mismatch_not_revoked", { extra, missing, revoked: false });
+    // A token per identity is the workspace's own: who it names decides whether a live account holds it.
+    const holder = provider.tokenPerIdentity === true ? await identifyAccount(provider, fetch, accessToken, body) : null;
+    if (await sharedWithLive(holder?.userId ?? null)) throw new ConnectError("scope_mismatch_not_revoked", { extra, missing, revoked: false });
     throw new ConnectError("scope_mismatch", { extra, missing, revoked: await revoke() });
   }
 
@@ -654,7 +673,7 @@ export async function completeConnect(
     return { ...await persistGrant(deps.engine, kek, st, provider.id, who.label, config, tokens, scopes, expiresAt), noAddress: who.noAddress };
   } catch (e) {
     // Nothing was stored, so nothing could disconnect this grant later.
-    if (!(await sharedWithLive().catch(() => true))) await revoke();
+    if (!(await sharedWithLive(who.userId).catch(() => true))) await revoke();
     throw e;
   }
 }

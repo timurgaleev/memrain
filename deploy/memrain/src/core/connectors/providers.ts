@@ -119,6 +119,13 @@ export interface ConnectorProvider {
    * read-only scopes of this provider on top of the request.
    */
   grantIncludesPriorConsent?: boolean;
+  /**
+   * The app holds one token per provider identity (Slack's bot token per
+   * workspace, handed back again on a reinstall): every account pinned to
+   * that identity uses the same token, so revoking it for one disconnects
+   * them all.
+   */
+  tokenPerIdentity?: boolean;
   /** A clearer connect error for a refused code exchange, read from the provider's error body. */
   tokenErrorCode?: (body: Record<string, unknown>) => ProviderConnectError | null;
   /**

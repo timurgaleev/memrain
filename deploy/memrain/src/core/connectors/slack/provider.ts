@@ -23,7 +23,9 @@
  * Direct messages are never read: a bot only sees the DMs sent to it.
  *
  * The account is the workspace: labelled by its name, pinned by its team id,
- * so a reconnect into another workspace is refused. Bot tokens do not expire
+ * so a reconnect into another workspace is refused. The app has one bot token
+ * per workspace, so a token is never revoked while another live account of
+ * the same workspace holds it (`tokenPerIdentity`). Bot tokens do not expire
  * unless the app opts into token rotation; with rotation off nothing renews.
  * Disconnecting calls auth.revoke with the token itself, which needs no app.
  *
@@ -133,6 +135,7 @@ export function slackProvider(): ConnectorProvider {
     pkce: false,
     scopeSeparator: ",",
     grantIncludesPriorConsent: true,
+    tokenPerIdentity: true,
     callbackErrorCode: ({ error }) => (error === "access_denied" ? "consent_declined" : null),
     identify: async ({ fetch, accessToken, tokenResponse }): Promise<ProviderIdentity> => {
       // Only a bot token is asked for; a user token would read as its user.
