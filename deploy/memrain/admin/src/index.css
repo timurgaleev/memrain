@@ -1552,6 +1552,30 @@ pre.copy-value {
 .chat-cost { font-size: 12px; color: var(--text-muted); }
 .chat-saved { font-size: 12px; color: var(--text-secondary); }
 .chat-save { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.chat-source { display: inline-flex; align-items: center; gap: 4px; }
+.chat-rate { display: inline-flex; align-items: center; gap: 2px; }
+.chat-rate-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.chat-rate-btn:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-strong); }
+.chat-rate-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chat-rate-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+.chat-rate-btn:disabled { cursor: default; opacity: 0.6; }
+.chat-rate-down svg { transform: rotate(180deg); }
+.chat-share { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.chat-share-form input { width: 200px; max-width: 100%; }
+.chat-share-done { display: grid; gap: 6px; flex-basis: 100%; max-width: 70ch; }
+.chat-share-hint { flex-basis: 100%; font-size: 12px; color: var(--text-muted); max-width: 70ch; }
 
 .chat-outcome {
   display: grid;
