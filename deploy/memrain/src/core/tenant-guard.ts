@@ -57,7 +57,10 @@ export const ROUTE_CLASSES: readonly RouteClassEntry[] = [
   { path: "/admin/auth/", prefix: true, methods: ["GET", "HEAD"], cls: "auth" },
   { path: "/admin", prefix: true, methods: ["GET", "HEAD"], cls: "read" },
   { path: "/app", prefix: true, methods: ["GET", "HEAD"], cls: "read" },
-  { path: "/s/", prefix: true, methods: ["GET", "HEAD", "POST"], cls: "write" },
+  // A share link: the form, and the password post that shows the answer. It
+  // changes nothing but the link's own attempt counter, so a read-only tenant
+  // keeps serving its links; a blocked one serves none.
+  { path: "/s/", prefix: true, methods: ["GET", "HEAD", "POST"], cls: "read" },
 ];
 
 function pathMatches(entry: RouteClassEntry, pathname: string): boolean {

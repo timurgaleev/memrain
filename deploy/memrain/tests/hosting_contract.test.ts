@@ -135,7 +135,19 @@ describe("ROUTE_CLASSES", () => {
     expect(routeClass("GET", "/admin/api/pages")).toBe("read");
     expect(routeClass("POST", "/admin/api/pages")).toBe("write");
     expect(routeClass("POST", "/app/api/chat")).toBe("write");
-    expect(routeClass("GET", "/s/abc")).toBe("write");
+    expect(routeClass("GET", "/s/abc")).toBe("read");
+    expect(routeClass("HEAD", "/s/abc")).toBe("read");
+  });
+
+  it("a share link stays open on a read-only tenant and closed on a blocked one", () => {
+    // The password form posts back to the link: it reveals an answer, it
+    // changes nothing but the link's own attempt counter.
+    expect(routeClass("POST", "/s/abc")).toBe("read");
+    for (const method of ["GET", "POST"]) {
+      expect(decideRequest(readOnly, routeClass(method, "/s/abc"))).toEqual({ allow: true });
+      expect(decideRequest(blocked, routeClass(method, "/s/abc"))).toEqual({ allow: false, status: 403, error: "tenant_suspended" });
+    }
+    expect(routeClass("DELETE", "/s/abc")).toBe("write");
   });
 
   it("a GET that issues a credential is auth, not read", () => {
