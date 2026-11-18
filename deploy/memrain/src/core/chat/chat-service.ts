@@ -375,32 +375,43 @@ async function turn(
         onTrace: (e: ThinkTraceEvent) => { if (e.step !== "settle") emitTrace(e); },
       });
     };
-    // Stop and the timeout end the turn at once, even mid-gather: the run left
-    // behind can no longer start a paid call (guard), and the hold is released
-    // below instead of waiting for retrieval to finish.
+    // Stop and the timeout end the turn at once, even mid-gather, so the
+    // owner can ask again. The run left behind starts no model call (guard),
+    // but whatever it already started still spends inside the run's cap, so
+    // the turn's hold stays until that run ends and is closed then.
+    const runP = runInWallet(
+      { role: "chat", requiresBrainCap: true, callCapUsd: answerCap, runCapUsd: answerCap },
+      () => runWithSpendClient({ clientId: owner.spendId, capUsd: null }, run),
+    );
     let result: ThinkResult | null = null;
+    let leftBehind = false;
     try {
-      result = await untilAborted(
-        runInWallet(
-          { role: "chat", requiresBrainCap: true, callCapUsd: answerCap, runCapUsd: answerCap },
-          () => runWithSpendClient({ clientId: owner.spendId, capUsd: null }, run),
-        ),
-        stop.signal,
-      );
+      result = await untilAborted(runP, stop.signal);
     } catch (e) {
       if (!(e instanceof TurnStopped)) throw e;
+      leftBehind = true;
     }
     if (result) spentUsd += result.spentUsd;
+    const spentBefore = spentUsd;
+    const closeHold = async (cancelled: boolean): Promise<void> => {
+      settled = true;
+      const close = (extraUsd: number): Promise<unknown> => cancelled
+        ? releaseReservation(engine, hold.reservationId)
+        : settleSpend(engine, hold.reservationId, spentBefore + extraUsd);
+      if (!leftBehind) {
+        await close(0).catch(() => undefined);
+        return;
+      }
+      void runP.then((r) => close(r?.spentUsd ?? 0), () => close(0)).catch(() => undefined);
+    };
 
     if (stop.signal.aborted && !timedOut) {
-      await releaseReservation(engine, hold.reservationId).catch(() => undefined);
-      settled = true;
+      await closeHold(true);
       emitTrace({ step: "settle", usd: spentUsd, note: "cancelled" });
       // Nobody is listening for a code: the client stopped the turn.
       return await finish({ status: "error", answer: "", citations: [], gaps: [], model, cost_usd: spentUsd }, tokens);
     }
-    await settleSpend(engine, hold.reservationId, spentUsd).catch(() => undefined);
-    settled = true;
+    await closeHold(false);
     emitTrace({ step: "settle", usd: spentUsd });
 
     if (result === null || failure !== null || !result.synthesis) {

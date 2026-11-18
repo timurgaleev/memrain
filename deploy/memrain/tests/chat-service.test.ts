@@ -252,19 +252,26 @@ describe("chat turn (P5-C1)", () => {
     expect(result.citations).toEqual([]);
   });
 
-  it("a turn stopped while it is still gathering ends at once and releases its hold", async () => {
+  it("a turn stopped while it is still gathering ends at once; its hold closes when the gather does", async () => {
     const abort = new AbortController();
     const s = stub(() => answer([]));
-    const gathering = () => new Promise<never>(() => {});
+    let finishGather!: () => void;
+    const gathering = () => new Promise<[]>(r => { finishGather = () => r([]); });
     const run = runChatTurn(ctx(s.fn, { signal: abort.signal, pagesFn: gathering }), { message: "what is the garden plan?" }, (e) => {
       if (e.event === "trace" && (e.data as { step: string }).step === "intent") setTimeout(() => abort.abort(), 20);
     });
     const outcome = await Promise.race([run, new Promise<"still running">(r => setTimeout(() => r("still running"), 3000))]);
     expect(outcome).not.toBe("still running");
     expect((outcome as { status: string }).status).toBe("error");
+    const pending = async () => (await storage.engine().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM mcp_spend_reservations WHERE status = 'pending'`)).rows[0]!.n;
+    // The run left behind could still be finishing a call it started.
+    expect(await pending()).toBe(1);
+    finishGather();
+    const deadline = Date.now() + 5000;
+    while ((await pending()) > 0 && Date.now() < deadline) await new Promise(r => setTimeout(r, 25));
+    expect(await pending()).toBe(0);
     expect(s.calls).toHaveLength(0);
-    const pending = await storage.engine().query<{ n: number }>(`SELECT count(*)::int AS n FROM mcp_spend_reservations WHERE status = 'pending'`);
-    expect(pending.rows[0]!.n).toBe(0);
   });
 
   it("with confirmLater a finished answer is stored unconfirmed until the caller confirms it", async () => {

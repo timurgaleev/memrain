@@ -11,9 +11,10 @@
  *
  * The stream sends `trace` events while the answer is prepared, then one
  * `answer`, then `done`; a turn that cannot produce an answer sends `error`
- * (closed code vocabulary) then `done`. An answer is stored `ok` (and so
- * saveable) only once `done` was handed to an open stream; until then, and for
- * good if the client left or the process died first, it is stored `error`. A send the server refuses before any
+ * (closed code vocabulary) then `done`. A finished answer is stored `error`
+ * and marked `ok` (saveable) just before `done` is sent, and only while the
+ * stream is open; a client that leaves first, or a process that dies first,
+ * leaves it `error`. So `done` always means the answer can be saved. A send the server refuses before any
  * work (bad body, unknown model or thread) is a 400 whose body is that same
  * error/done pair. A thread that is not the caller's is a 404, never a 403.
  *
@@ -28,7 +29,7 @@ import { readBodyWithCap } from "./body_limit.ts";
 import { chatConfig } from "../core/chat/config.ts";
 import { CHAT_MESSAGE_MAX_CHARS, operatorOwner, runChatTurn, type ChatAnswer, type ChatOwner, type ChatStreamEvent } from "../core/chat/chat-service.ts";
 import { ChatError, chatErrorMessage, type ChatErrorCode } from "../core/chat/failures.ts";
-import { deleteChatThread, getChatThread, isThreadId, listChatThreads, confirmAnswer, threadMessages } from "../core/chat/store.ts";
+import { deleteChatThread, getChatThread, isThreadId, listChatThreads, confirmAnswer, threadMessages, withdrawAnswer } from "../core/chat/store.ts";
 import { saveAnswerAsPage } from "../core/chat/save.ts";
 
 export interface ChatApiDeps {
@@ -37,6 +38,8 @@ export interface ChatApiDeps {
   chatModel?: SonnetFn;
   /** Test seam: a deterministic query embedder. */
   embedQuery?: SearchOptions["embedQuery"];
+  /** Test seam: the per-owner send limiter (default: the process-wide one). */
+  sendLimiter?: RateLimiter;
 }
 
 const BODY_CAP = 16_384;
@@ -154,15 +157,15 @@ function streamTurn(req: Request, deps: ChatApiDeps, owner: ChatOwner, send: Sen
         .finally(async () => {
           clearInterval(ping);
           req.signal.removeEventListener("abort", onRequestAbort);
-          write(frame("done", {}));
           const a = answer as ChatAnswer | null;
-          if (open && !stop.signal.aborted && a?.status === "ok") {
-            // Confirmed before the stream closes, so a reader that saves on
-            // the close finds the answer saveable.
-            await confirmAnswer(deps.storage.engine(), a.message_id).catch((e: unknown) => {
-              console.error("[chat] could not confirm an answer:", e instanceof Error ? e.message : e);
-            });
+          if (a?.status === "ok" && open && !stop.signal.aborted) {
+            const engine = deps.storage.engine();
+            const logged = (e: unknown) => console.error("[chat] could not confirm an answer:", e instanceof Error ? e.message : e);
+            await confirmAnswer(engine, a.message_id).catch(logged);
+            // The client left while it was confirmed: done will not reach it.
+            if (!open || stop.signal.aborted) await withdrawAnswer(engine, a.message_id).catch(logged);
           }
+          write(frame("done", {}));
           if (open) {
             open = false;
             try {
@@ -195,7 +198,7 @@ export async function handleChatApi(req: Request, url: URL, deps: ChatApiDeps): 
     if (send instanceof Response) return send;
     const refused = await precheck(deps.storage, owner, send);
     if (refused) return refused;
-    if (!sendLimiter.allow(owner.key)) return refusedStream("rate_limited", chatErrorMessage("rate_limited"), 429);
+    if (!(deps.sendLimiter ?? sendLimiter).allow(owner.key)) return refusedStream("rate_limited", chatErrorMessage("rate_limited"), 429);
     return streamTurn(req, deps, owner, send);
   }
 

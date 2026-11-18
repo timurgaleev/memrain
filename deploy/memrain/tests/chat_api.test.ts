@@ -11,6 +11,8 @@ import { Storage } from "../src/core/storage.ts";
 import { getPage, putPage } from "../src/core/pages.ts";
 import { indexPageIntoSearch } from "../src/core/page-index.ts";
 import { handleAdminApi, type AdminApiDeps } from "../src/http/admin-api.ts";
+import { handleChatApi } from "../src/http/chat-api.ts";
+import { RateLimiter } from "../src/mcp/rate_limit.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
 import { deterministicEmbedQuery } from "./det-embed.ts";
 
@@ -73,6 +75,61 @@ async function events(res: Response): Promise<Array<{ event: string; data: Recor
     const [ev, ...rest] = block.split("\n");
     return { event: ev!.slice("event: ".length), data: JSON.parse(rest.join("\n").slice("data: ".length)) };
   });
+}
+
+/**
+ * The test storage with chosen statements held back: `hold` returns a promise
+ * to wait on before a statement runs (directly or inside a transaction).
+ */
+function gated(hold: (sql: string, params?: unknown[]) => Promise<void> | undefined): Storage {
+  type Eng = ReturnType<Storage["engine"]>;
+  const bind = (t: object, v: unknown) => typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+  const withQuery = (target: Eng, extra: (k: PropertyKey) => unknown = () => undefined): Eng => new Proxy(target, {
+    get(t, k) {
+      const own = extra(k);
+      if (own !== undefined) return own;
+      const v = Reflect.get(t, k, t) as unknown;
+      if (k !== "query" || typeof v !== "function") return bind(t, v);
+      return async (sql: string, params?: unknown[]) => {
+        await hold(sql, params);
+        return (v as (s: string, p?: unknown[]) => unknown).call(t, sql, params);
+      };
+    },
+  });
+  const real = storage.engine();
+  const engine = withQuery(real, k => k === "transaction"
+    ? <T>(fn: (tx: Eng) => Promise<T>) => real.transaction(tx => fn(withQuery(tx as Eng)))
+    : undefined);
+  return new Proxy(storage, {
+    get(t, k) {
+      if (k === "engine") return () => engine;
+      return bind(t, Reflect.get(t, k, t) as unknown);
+    },
+  });
+}
+
+/**
+ * One send straight to the chat routes with its own send limiter, for the
+ * stream tests: the process-wide limiter is spent by the tests above.
+ */
+async function send(body: unknown, store: Storage): Promise<Response> {
+  const r = req("POST", "/admin/api/chat", body);
+  const res = await handleChatApi(r, new URL(r.url), {
+    storage: store, chatModel: model, embedQuery: deterministicEmbedQuery, sendLimiter: new RateLimiter({ capacity: 1, refillPerSecond: 0 }),
+  });
+  if (!res) throw new Error("not handled");
+  return res;
+}
+
+/** Read a stream until `text` has arrived, returning what was read. */
+async function readUntil(reader: { read(): Promise<{ value?: string; done?: boolean }> }, text: string): Promise<string> {
+  let seen = "";
+  while (!seen.includes(text)) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    seen += value;
+  }
+  return seen;
 }
 
 describe("admin chat API", () => {
@@ -237,34 +294,8 @@ describe("admin chat API", () => {
     let release!: () => void;
     const gate = new Promise<void>(r => { release = r; });
     const realEngine = storage.engine();
-    const gatedTx = (tx: ReturnType<Storage["engine"]>) => new Proxy(tx, {
-      get(t, k) {
-        const v = Reflect.get(t, k, t) as unknown;
-        if (k !== "query" || typeof v !== "function") return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
-        return async (sql: string, params?: unknown[]) => {
-          if (sql.includes("INSERT INTO chat_messages") && params?.[1] === "assistant") await gate;
-          return (v as (s: string, p?: unknown[]) => unknown).call(t, sql, params);
-        };
-      },
-    });
-    const engine = new Proxy(realEngine, {
-      get(t, k) {
-        const v = Reflect.get(t, k, t) as unknown;
-        if (k === "transaction") {
-          return <T>(fn: (tx: ReturnType<Storage["engine"]>) => Promise<T>) =>
-            realEngine.transaction(tx => fn(gatedTx(tx as ReturnType<Storage["engine"]>)));
-        }
-        return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
-      },
-    });
-    const gatedStorage = new Proxy(storage, {
-      get(t, k) {
-        if (k === "engine") return () => engine;
-        const v = Reflect.get(t, k, t) as unknown;
-        return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
-      },
-    });
-    const res = await call(req("POST", "/admin/api/chat", { message: "where do the tomatoes go, again?" }), deps({ storage: gatedStorage }));
+    const gatedStorage = gated((sql, params) => sql.includes("INSERT INTO chat_messages") && params?.[1] === "assistant" ? gate : undefined);
+    const res = await send({ message: "where do the tomatoes go, again?" }, gatedStorage);
     const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
     let seen = "";
     while (!seen.includes("\"step\":\"settle\"")) {
@@ -280,6 +311,42 @@ describe("admin chat API", () => {
         WHERE t.title = 'where do the tomatoes go, again?' AND m.role = 'assistant'`)).rows[0]?.status ?? null;
     const deadline = Date.now() + 5000;
     while (((await status()) === null || (await status()) === "ok") && Date.now() < deadline) await new Promise(r => setTimeout(r, 25));
+    expect(await status()).toBe("error");
+  });
+  it("an answer is saveable the moment done arrives", async () => {
+    chatOn();
+    // A slow confirm: done must not reach the client before it lands.
+    const slow = gated(sql => sql.includes("SET status = 'ok'") ? new Promise(r => setTimeout(r, 300)) : undefined);
+    const res = await send({ message: "where do the tomatoes go, quickly?" }, slow);
+    const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+    const seen = await readUntil(reader, "event: done");
+    const id = /"message_id":(\d+)/.exec(seen)![1];
+    const saved = await call(req("POST", `/admin/api/chat/messages/${id}/save`, {}));
+    expect(saved.status).toBe(200);
+    await reader.cancel();
+  });
+
+  it("a client that leaves while its answer is being confirmed leaves it unsaveable", async () => {
+    chatOn();
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    let confirming!: () => void;
+    const reached = new Promise<void>(r => { confirming = r; });
+    const held = gated(sql => {
+      if (!sql.includes("SET status = 'ok'")) return undefined;
+      confirming();
+      return gate;
+    });
+    const res = await send({ message: "where do the tomatoes go, now?" }, held);
+    const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+    const seen = await readUntil(reader, "event: answer");
+    const id = Number(/"message_id":(\d+)/.exec(seen)![1]);
+    await reached;
+    await reader.cancel();
+    release();
+    const status = async () => (await storage.engine().query<{ status: string }>(`SELECT status FROM chat_messages WHERE id = $1`, [id])).rows[0]!.status;
+    // Give the confirm that was held back time to land; it must not stick.
+    await new Promise(r => setTimeout(r, 500));
     expect(await status()).toBe("error");
   });
 });

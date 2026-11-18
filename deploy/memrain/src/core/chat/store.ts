@@ -292,6 +292,14 @@ export async function confirmAnswer(engine: Engine, messageId: number): Promise<
   );
 }
 
+/** Undo confirmAnswer for a client that left before `done` reached it. */
+export async function withdrawAnswer(engine: Engine, messageId: number): Promise<void> {
+  await engine.query(
+    `UPDATE chat_messages SET status = 'error' WHERE id = $1 AND role = 'assistant' AND status = 'ok' AND saved_slug IS NULL`,
+    [messageId],
+  );
+}
+
 export async function setSavedSlug(engine: Engine, messageId: number, slug: string): Promise<void> {
   await engine.query(`UPDATE chat_messages SET saved_slug = $2 WHERE id = $1`, [messageId, slug]);
 }
