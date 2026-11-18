@@ -25,6 +25,9 @@ import { appendAudit, auditDir } from "./audit-week-file.ts";
 import { withProviderLease } from "./jobs/rate-leases.ts";
 import type { Engine } from "./engine/interface.ts";
 import type { SonnetUsage } from "./llm/sonnet.ts";
+import { hostingMode } from "../control/contract.ts";
+import { hostedPolicy } from "../control/policy.ts";
+import { hostingSpendBackend, reservationTtlSeconds } from "../control/hosting-spend.ts";
 
 /**
  * Ledger key of the brain's own held calls (cycle, jobs, CLI) when a
@@ -909,7 +912,7 @@ export const DAILY_CAP_REASON = "daily_cap";
 
 /** Which cap refused a call: a day cap (brain, cycle, wallet path, daemon, one
  *  daemon source) or a wallet limit that no rollover clears (see WalletRefusal). */
-export type SpendCapScope = "brain" | "cycle" | "role" | "daemon" | "daemon_source" | WalletRefusalScope;
+export type SpendCapScope = "brain" | "cycle" | "role" | "daemon" | "daemon_source" | "hosting" | WalletRefusalScope;
 
 /** A brain-wide, cycle or wallet cap refused the call. Code `budget_exhausted`,
  *  so `isBudgetRefusal` holds too; `reason` survives the public envelope, which
@@ -1388,6 +1391,9 @@ async function invokeTracked<T>(
     const actualUsd = usage && priceFor(call.model) ? costUsd(call.model, chargeableUsage(usage)) : null;
     settleRequestCost(usage ? actualUsd : failure !== undefined && !keepHold ? 0 : null);
     if (hold) settleRuns(hold.runs, hold.usd, keepHold ? hold.usd : (actualUsd ?? 0));
+    // A call that may have billed unreported keeps its hosting reservation; the
+    // control plane turns it into spend at its TTL.
+    if (hold?.hosting && !keepHold) await settleHosting(call, hold.hosting, usage ? (actualUsd ?? hold.hosting.usd) : 0);
     await bookSpend(call, usage, hold, keepHold, { outcome, latencyMs: bookStart - sendStart });
     noteWriteTiming("ledgerMs", performance.now() - bookStart);
   }
@@ -1402,9 +1408,80 @@ interface CallHold {
   id: string | null;
   usd: number;
   runs: RunLedger[];
+  /** The hosting-wide reservation, in hosting mode. */
+  hosting?: HostingHold;
 }
 
+interface HostingHold {
+  id: string;
+  usd: number;
+}
+
+/**
+ * The brain's own holds first, then, in hosting mode, the hosting-wide cap. A
+ * hosting refusal or failure releases the brain's holds before it is thrown.
+ */
 async function holdForCall(call: TrackedCall): Promise<CallHold | null> {
+  const local = await holdLocally(call);
+  if (hostingMode() === null) return local;
+  let hosting: HostingHold;
+  try {
+    hosting = await holdHosting(call);
+  } catch (err) {
+    if (local) {
+      settleRuns(local.runs, local.usd, 0);
+      if (local.id && _ledgerEngine) await releaseReservation(_ledgerEngine, local.id).catch(() => undefined);
+    }
+    throw err;
+  }
+  return { ...(local ?? { id: null, usd: hosting.usd, runs: [] }), hosting };
+}
+
+/**
+ * Reserve the call's worst case with the hosting control plane. Refused, and
+ * nothing sent, when the policy is unknown, paid calls are off, the tenant is
+ * held, the call has no price, or the control plane says no or does not answer.
+ */
+async function holdHosting(call: TrackedCall): Promise<HostingHold> {
+  const refuse = async (message: string, suggestion: string, rollover = true): Promise<never> => {
+    await bookRefusal(call);
+    throw new DailyCapRefusal("hosting", `'${call.operation}' was not sent: ${message}`, suggestion, rollover);
+  };
+  const policy = await hostedPolicy();
+  if (policy === null) return refuse("the hosting control plane has not answered yet", "Retry shortly; reading and search keep working.");
+  if (policy.llmOff) return refuse("paid calls are switched off on this hosted install", "Ask the operator; reading and search keep working.");
+  if (policy.status !== "active") return refuse("this hosted brain is suspended", "Ask the operator to resume it.");
+  const worst = worstCaseUsd(call);
+  if (worst === null) {
+    return refuse(`model '${call.model}' has no price or the call no output bound, so the hosting cap cannot hold it`,
+      "Price the model in MODEL_PRICING/EMBEDDING_PRICING and give the call an explicit maximum output.", false);
+  }
+  const backend = hostingSpendBackend();
+  if (!backend) return refuse("no control plane connection is configured", "Set MEMRAIN_CONTROL_URL to this tenant's control URL.");
+  let r: Awaited<ReturnType<typeof backend.reserve>>;
+  try {
+    r = await backend.reserve(worst, reservationTtlSeconds());
+  } catch (err) {
+    return refuse(`the hosting control plane is unreachable (${err instanceof Error ? err.message : String(err)})`, "Retry shortly.");
+  }
+  if (!r.ok) return refuse(`the hosting spend cap refused it (${r.reason})`, "Wait for the UTC day to roll over, or ask the operator.");
+  return { id: r.id, usd: worst };
+}
+
+/** Settle a hosting reservation; a failure leaves it to turn into spend at its TTL. */
+async function settleHosting(call: TrackedCall, hold: HostingHold, actualUsd: number): Promise<void> {
+  const backend = hostingSpendBackend();
+  try {
+    const r = await backend?.settle(hold.id, actualUsd);
+    if (r?.overrun) {
+      console.warn(`[memrain] hosting overrun: '${call.operation}' on ${call.model} cost $${actualUsd.toFixed(6)} against $${hold.usd.toFixed(6)}; paid calls are off for the rest of the day`);
+    }
+  } catch (err) {
+    console.warn(`[memrain] hosting settle failed for '${call.operation}': ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function holdLocally(call: TrackedCall): Promise<CallHold | null> {
   const frames = walletFrames();
   if (frames.length === 0) {
     const id = await holdDurable(call, frames, worstCaseUsd(call));

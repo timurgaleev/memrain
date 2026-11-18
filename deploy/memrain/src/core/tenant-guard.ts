@@ -14,13 +14,11 @@
  *   auth    refused when blocked or read-only (it issues credentials)
  *   write   refused when blocked or read-only
  * A path the table does not name is a write. An unknown policy (control
- * unreachable, nothing cached) lets reads through and refuses writes.
+ * unreachable, nothing cached) lets reads through and refuses writes. Until the
+ * isolation smoke has passed for this container, only health is served.
  */
-import {
-  hostingMode,
-  tenantPolicy,
-  type TenantPolicy,
-} from "../control/contract.ts";
+import { hostingMode, type TenantPolicy } from "../control/contract.ts";
+import { hostedPolicy } from "../control/policy.ts";
 import { OperationError } from "./operation-error.ts";
 import { OPERATIONS, operationAnnotations } from "../mcp/operations.ts";
 
@@ -75,11 +73,12 @@ export function routeClass(method: string, pathname: string): RouteClass {
 
 export type Admission =
   | { allow: true }
-  | { allow: false; status: 403 | 503; error: "tenant_suspended" | "tenant_policy_unavailable" };
+  | { allow: false; status: 403 | 503; error: "tenant_suspended" | "tenant_policy_unavailable" | "isolation_unverified" };
 
 const ALLOW: Admission = { allow: true };
 const SUSPENDED: Admission = { allow: false, status: 403, error: "tenant_suspended" };
 const UNAVAILABLE: Admission = { allow: false, status: 503, error: "tenant_policy_unavailable" };
+const UNVERIFIED: Admission = { allow: false, status: 503, error: "isolation_unverified" };
 
 type Hold = "open" | "read-only" | "block" | "unknown";
 
@@ -91,8 +90,10 @@ function holdOf(policy: TenantPolicy | null): Hold {
 }
 
 export function decideRequest(policy: TenantPolicy | null, cls: RouteClass): Admission {
+  if (cls === "health") return ALLOW;
+  if (policy?.isolation === "unverified") return UNVERIFIED;
   const hold = holdOf(policy);
-  if (hold === "open" || cls === "health") return ALLOW;
+  if (hold === "open") return ALLOW;
   if (hold === "block") return SUSPENDED;
   if (cls === "read" || cls === "mcp") return ALLOW;
   return hold === "unknown" ? UNAVAILABLE : SUSPENDED;
@@ -117,14 +118,14 @@ export function decideOperation(policy: TenantPolicy | null, name: string): Admi
 /** Null when the request may proceed; otherwise the refusal to send. */
 export async function admitRequest(req: Request, url: URL = new URL(req.url)): Promise<Response | null> {
   if (hostingMode() === null) return null;
-  const d = decideRequest(await tenantPolicy(), routeClass(req.method, url.pathname));
+  const d = decideRequest(await hostedPolicy(), routeClass(req.method, url.pathname));
   return d.allow ? null : Response.json({ ok: false, error: d.error }, { status: d.status });
 }
 
 /** Throws when this tenant may not run the MCP operation `name` now. */
 export async function assertTenantAllows(name: string): Promise<void> {
   if (hostingMode() === null) return;
-  const d = decideOperation(await tenantPolicy(), name);
+  const d = decideOperation(await hostedPolicy(), name);
   if (d.allow) return;
   if (d.error === "tenant_suspended") {
     throw new OperationError(
@@ -143,7 +144,7 @@ export async function assertTenantAllows(name: string): Promise<void> {
 /** True when a hosted tenant is held (suspended, deleting, or policy unknown). */
 export async function tenantPaused(): Promise<boolean> {
   if (hostingMode() === null) return false;
-  return holdOf(await tenantPolicy()) !== "open";
+  return holdOf(await hostedPolicy()) !== "open";
 }
 
 /** False when the worker must not claim a job now. */
