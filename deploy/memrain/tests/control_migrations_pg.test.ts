@@ -25,7 +25,7 @@ describe.skipIf(!PG_URL)("control migrations on Postgres", () => {
 
   it("numbers its own set from 001 and applies it once", async () => {
     const ids = discoverMigrations(CONTROL_MIGRATIONS_DIR).map((m) => m.id);
-    expect(ids).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(ids).toEqual([1, 2, 3, 4, 5, 6, 7]);
     const first = await migrateControl(e);
     expect(first.applied.map((m) => m.id)).toEqual(ids);
     const second = await migrateControl(e);
@@ -38,7 +38,7 @@ describe.skipIf(!PG_URL)("control migrations on Postgres", () => {
   });
 
   it("001 down refuses while a tenant row exists", async () => {
-    for (const id of [6, 5, 4, 3, 2]) await revertControl(e, id);
+    for (const id of [7, 6, 5, 4, 3, 2]) await revertControl(e, id);
     await e.query(
       `INSERT INTO tenants (id, db_name, owner_role, ctl_role, hostname)
        VALUES ('acme', 'tenant_acme', 'tenant_acme_owner', 'tenant_acme_ctl', 'acme.example.test')`,
@@ -49,7 +49,7 @@ describe.skipIf(!PG_URL)("control migrations on Postgres", () => {
     const left = await e.query(`SELECT 1 FROM information_schema.tables WHERE table_name IN ('tenants','tenant_events')`);
     expect(left.rows).toEqual([]);
     const again = await migrateControl(e);
-    expect(again.applied.map((m) => m.id)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(again.applied.map((m) => m.id)).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
 
   it("003 down refuses while a tenant role is still in the control group", async () => {
@@ -57,7 +57,7 @@ describe.skipIf(!PG_URL)("control migrations on Postgres", () => {
     await e.query(`DROP ROLE IF EXISTS ${role}`);
     await e.query(`CREATE ROLE ${role} NOLOGIN IN ROLE memrain_tenant_ctl`);
     try {
-      for (const id of [6, 5, 4]) await revertControl(e, id);
+      for (const id of [7, 6, 5, 4]) await revertControl(e, id);
       await expect(revertControl(e, 3)).rejects.toThrow(/members/);
     } finally {
       await e.query(`DROP ROLE ${role}`);
@@ -65,6 +65,6 @@ describe.skipIf(!PG_URL)("control migrations on Postgres", () => {
     await revertControl(e, 3);
     const fn = await e.query(`SELECT 1 FROM pg_proc WHERE proname = 'tenant_self'`);
     expect(fn.rows).toEqual([]);
-    expect((await migrateControl(e)).applied.map((m) => m.id)).toEqual([3, 4, 5, 6]);
+    expect((await migrateControl(e)).applied.map((m) => m.id)).toEqual([3, 4, 5, 6, 7]);
   });
 });

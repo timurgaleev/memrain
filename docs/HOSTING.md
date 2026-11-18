@@ -67,6 +67,38 @@ member of that network is `cloudflared`, which proxies HTTP and does not route
 between networks. Containers on different user bridges cannot reach each
 other, and the isolation smoke proves that on every start (see below).
 
+## Spend ceiling
+
+Every paid model call of every tenant first reserves its worst case in the
+control database (`hosting_reserve`) and settles it afterwards
+(`hosting_settle`). A reservation counts against two UTC-day windows: the
+install's (`tenant cap --usd`, default $10) and the tenant's own
+(`plan_limits.maxUsdPerDay`, else `hosting_settings.default_tenant_day_usd`,
+default $5). A reservation that passes its lifetime turns into spend at its full
+amount; time never frees one.
+
+The control plane takes no tenant's report on trust. Assume a tenant holds its
+own control login, which a compromised container does:
+
+- A settlement books at most `overrun_factor` (default 2) times its
+  reservation. Anything reported above that becomes a `hosting_settle_anomaly`
+  event in `tenant_events`.
+- A cost above the reservation switches paid calls off for that tenant only,
+  for the rest of the UTC day, and records a `hosting_overrun` event. The
+  install-wide switch belongs to the operator (`tenant cap --llm-off`). It also
+  goes on by itself, but only when the install's booked total passes its cap.
+- A reservation is never of nothing, lives at most `max_ttl_seconds` (default
+  900), and a tenant holds at most `max_open_reservations` (default 8) at once.
+- Settled reservations older than `reservation_retention_days` (default 30)
+  are pruned.
+
+These bound what a lying tenant can book, not what it spends. A tenant's
+container calls Bedrock with its own credentials, so the true cost is known
+only to Bedrock. Making the control plane the cost authority would take a
+metering gateway in front of Bedrock, which this install does not have.
+Customers never hold `_ctl` credentials: those exist only in the tenant's
+secrets file, read by its own container.
+
 ## Setting up a hosting stack
 
 1. Terraform, with the stack's own state and tfvars. Set

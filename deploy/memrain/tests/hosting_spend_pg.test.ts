@@ -2,8 +2,11 @@
  * The hosting-wide spend cap in the control database, with real concurrent
  * transactions from three tenants' control logins:
  *   - spent + reserved never passes the cap, for the install or for a tenant;
- *   - an actual above its reservation is booked in full, the overrun is
- *     exactly the sum of (actual - hold), and paid calls go off for everyone;
+ *   - an actual above its reservation is booked up to twice the hold (the
+ *     rest is an anomaly event), the overrun switches off only that tenant for
+ *     the day, and paid calls go off for everyone only past the real cap;
+ *   - a reservation is never of nothing, never lives past the operator's
+ *     maximum, and a tenant holds only so many open at once;
  *   - a reservation past its TTL turns into spend, never into free room.
  * Skipped unless MEMRAIN_TEST_POSTGRES_URL points at a scratch Postgres.
  */
@@ -42,7 +45,10 @@ describe.skipIf(!PG_URL)("hosting spend cap on Postgres", () => {
     await fx.control.query(`DELETE FROM hosting_spend_reservations`);
     await fx.control.query(`DELETE FROM tenant_spend_windows`);
     await fx.control.query(`DELETE FROM hosting_spend_windows`);
-    await fx.control.query(`UPDATE hosting_settings SET cap_usd = 1, llm_off = false`);
+    await fx.control.query(`DELETE FROM tenant_events WHERE kind IN ('hosting_overrun', 'hosting_settle_anomaly')`);
+    // The race tests below hand one tenant more than the default number of
+    // open reservations; the limit has its own test.
+    await fx.control.query(`UPDATE hosting_settings SET cap_usd = 1, llm_off = false, max_open_reservations = 100`);
   });
 
   async function window(): Promise<{ spent: number; reserved: number; llm_off: boolean }> {
@@ -78,7 +84,7 @@ describe.skipIf(!PG_URL)("hosting spend cap on Postgres", () => {
     }
   });
 
-  it("an overrun is booked in full, equals the sum of actual minus hold, and turns paid calls off", async () => {
+  it("an overrun is booked, switches off only that tenant for the day and is recorded for the operator", async () => {
     const holds = await Promise.all([backends[0]!.reserve(0.1, 600), backends[1]!.reserve(0.1, 600), backends[2]!.reserve(0.1, 600)]);
     const actuals = [0.05, 0.13, 0.12];
     let overruns = 0;
@@ -93,10 +99,83 @@ describe.skipIf(!PG_URL)("hosting spend cap on Postgres", () => {
     expect(w.reserved).toBe(0);
     expect(w.spent).toBeCloseTo(0.3, 9);
     expect(w.spent - (0.05 + 0.1 + 0.1)).toBeCloseTo((0.13 - 0.1) + (0.12 - 0.1), 9);
-    expect(w.llm_off).toBe(true);
-    expect(await backends[0]!.reserve(0.01, 600)).toEqual({ ok: false, reason: "llm_off" });
-    const self = await logins[1]!.query<{ s: { llm_off: boolean } }>(`SELECT tenant_self() AS s`);
-    expect(self.rows[0]!.s.llm_off).toBe(true);
+    // The install stays on: the real total is far below the cap.
+    expect(w.llm_off).toBe(false);
+    expect(await backends[1]!.reserve(0.01, 600)).toEqual({ ok: false, reason: "tenant_llm_off" });
+    expect((await backends[0]!.reserve(0.01, 600)).ok).toBe(true);
+    const selfOf = async (i: number) => (await logins[i]!.query<{ s: { llm_off: boolean } }>(`SELECT tenant_self() AS s`)).rows[0]!.s.llm_off;
+    expect(await selfOf(1)).toBe(true);
+    expect(await selfOf(0)).toBe(false);
+    const ev = await fx.control.query<{ tenant_id: string }>(`SELECT tenant_id FROM tenant_events WHERE kind = 'hosting_overrun' ORDER BY tenant_id`);
+    expect(ev.rows.map((r) => r.tenant_id)).toEqual([ids[1]!, ids[2]!].sort());
+  });
+
+  it("a reported cost is booked at most twice its reservation; the rest is an anomaly event", async () => {
+    const h = await backends[0]!.reserve(0.1, 600);
+    if (!h.ok) throw new Error("reserve refused");
+    expect(await backends[0]!.settle(h.id, 5)).toMatchObject({ ok: true, overrun: true });
+    expect((await window()).spent).toBeCloseTo(0.2, 9);
+    const ev = await fx.control.query<{ detail: { reported_usd: number } }>(
+      `SELECT detail FROM tenant_events WHERE kind = 'hosting_settle_anomaly' AND tenant_id = $1`, [ids[0]]);
+    expect(ev.rows).toHaveLength(1);
+    expect(Number(ev.rows[0]!.detail.reported_usd)).toBe(5);
+  });
+
+  it("paid calls go off for everyone only when the install's real total passes its cap", async () => {
+    await fx.control.query(`UPDATE hosting_settings SET cap_usd = 0.25`);
+    const a = await backends[0]!.reserve(0.1, 600);
+    const b = await backends[1]!.reserve(0.1, 600);
+    if (!a.ok || !b.ok) throw new Error("reserve refused");
+    await backends[0]!.settle(a.id, 0.2);
+    expect((await window()).llm_off).toBe(true);
+    expect(await backends[2]!.reserve(0.01, 600)).toEqual({ ok: false, reason: "llm_off" });
+  });
+
+  it("refuses a reservation of nothing, caps its lifetime and limits a tenant's open ones", async () => {
+    expect(await backends[0]!.reserve(0, 600)).toEqual({ ok: false, reason: "invalid_amount" });
+    const long = await backends[0]!.reserve(0.01, 10_000_000);
+    if (!long.ok) throw new Error("reserve refused");
+    const ttl = await fx.control.query<{ secs: number; max: number }>(
+      `SELECT extract(epoch FROM r.expires_at - r.created_at)::int AS secs, s.max_ttl_seconds AS max
+         FROM hosting_spend_reservations r, hosting_settings s WHERE r.id = $1`, [long.id]);
+    expect(ttl.rows[0]!.secs).toBeLessThanOrEqual(ttl.rows[0]!.max);
+    expect(ttl.rows[0]!.max).toBeLessThan(3600);
+    await fx.control.query(`UPDATE hosting_settings SET max_open_reservations = 3`);
+    expect((await backends[0]!.reserve(0.01, 600)).ok).toBe(true);
+    expect((await backends[0]!.reserve(0.01, 600)).ok).toBe(true);
+    expect(await backends[0]!.reserve(0.01, 600)).toEqual({ ok: false, reason: "too_many_open" });
+    expect((await backends[1]!.reserve(0.01, 600)).ok).toBe(true);
+  });
+
+  it("a tenant without its own daily cap gets the operator's default one", async () => {
+    await fx.control.query(`UPDATE hosting_settings SET default_tenant_day_usd = 0.2`);
+    try {
+      expect((await backends[0]!.reserve(0.15, 600)).ok).toBe(true);
+      expect(await backends[0]!.reserve(0.15, 600)).toEqual({ ok: false, reason: "tenant_cap" });
+    } finally {
+      await fx.control.query(`UPDATE hosting_settings SET default_tenant_day_usd = 5`);
+    }
+  });
+
+  it("a held tenant's reservation attempt still sweeps its own expired rows first, and old settled rows are pruned", async () => {
+    const h = await backends[2]!.reserve(0.1, 600);
+    if (!h.ok) throw new Error("reserve refused");
+    await fx.control.query(`UPDATE hosting_spend_reservations SET expires_at = now() - interval '1 second' WHERE id = $1`, [h.id]);
+    await fx.control.query(
+      `INSERT INTO hosting_spend_reservations (id, tenant_id, day, usd, created_at, expires_at, settled_at, outcome, actual_usd)
+       VALUES (gen_random_uuid(), $1, current_date - 60, 0.1, now() - interval '60 days', now() - interval '60 days',
+               now() - interval '60 days', 'settled', 0.1)`, [ids[2]]);
+    await fx.control.query(`UPDATE tenants SET status = 'suspended', mode = 'block' WHERE id = $1`, [ids[2]]);
+    try {
+      expect(await backends[2]!.reserve(0.01, 600)).toEqual({ ok: false, reason: "tenant_inactive" });
+    } finally {
+      await fx.control.query(`UPDATE tenants SET status = 'active', mode = NULL WHERE id = $1`, [ids[2]]);
+    }
+    const r = await fx.control.query<{ outcome: string | null; old: number }>(
+      `SELECT (SELECT outcome FROM hosting_spend_reservations WHERE id = $1) AS outcome,
+              (SELECT count(*)::int FROM hosting_spend_reservations WHERE tenant_id = $2 AND created_at < now() - interval '30 days') AS old`,
+      [h.id, ids[2]]);
+    expect(r.rows[0]).toEqual({ outcome: "expired", old: 0 });
   });
 
   it("a reservation abandoned past its TTL becomes spend, not free room", async () => {
@@ -134,7 +213,8 @@ describe.skipIf(!PG_URL)("hosting spend cap on Postgres", () => {
     expect(await backends[0]!.settle(b.id, 0.15)).toMatchObject({ ok: false, reason: "not_open" });
     const w = await window();
     expect(w.spent).toBeCloseTo(0.35, 9);
-    expect(w.llm_off).toBe(true);
+    expect(w.llm_off).toBe(false);
+    expect(await backends[0]!.reserve(0.01, 600)).toEqual({ ok: false, reason: "tenant_llm_off" });
   });
 
   it("one tenant's reservation sweeps only its own expired rows", async () => {
