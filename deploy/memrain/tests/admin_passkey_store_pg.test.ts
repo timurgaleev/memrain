@@ -6,7 +6,8 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import { Storage } from "../src/core/storage.ts";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 import {
@@ -48,8 +49,8 @@ describe.skipIf(!URL_)("admin passkey store on Postgres", () => {
   let b: PostgresEngine;
 
   beforeAll(async () => {
-    a = new PostgresEngine({ url: URL_!, max: 2 });
-    b = new PostgresEngine({ url: URL_!, max: 2 });
+    a = pgTestEngine({ url: URL_!, max: 2 });
+    b = pgTestEngine({ url: URL_!, max: 2 });
     await new Storage(a).init();
   });
   afterAll(async () => {

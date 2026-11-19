@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import {
   ProviderLeaseBusy,
@@ -150,7 +150,7 @@ if (process.env.MEMRAIN_TEST_POSTGRES_URL) describe("provider leases across proc
     const e = db.storage.engine();
     const url = new URL(process.env.MEMRAIN_TEST_POSTGRES_URL!);
     url.pathname = `/${(await e.query<{ name: string }>("SELECT current_database() AS name")).rows[0]!.name}`;
-    const other = new PostgresEngine({ url: url.toString(), max: 3 });
+    const other = pgTestEngine({ url: url.toString(), max: 3 });
     try {
       const got = await Promise.all(Array.from({ length: 8 }, (_, i) => tryAcquireLease(i % 2 ? e : other, "bedrock:haiku", 2, OWNER)));
       expect(got.filter(Boolean)).toHaveLength(2);

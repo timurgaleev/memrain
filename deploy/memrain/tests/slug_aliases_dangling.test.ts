@@ -11,7 +11,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { deletePage, putPage } from "../src/core/pages.ts";
 import { resolveSlugWithAlias, setSlugAlias } from "../src/core/slug-aliases.ts";
@@ -85,7 +86,7 @@ describe.skipIf(!PG_URL)("dangling slug redirects (Postgres)", () => {
   const alias = `people/alias-dangling-pg-a-${run}`;
 
   beforeAll(async () => {
-    pg = new PostgresEngine({ url: PG_URL! });
+    pg = pgTestEngine({ url: PG_URL! });
     storage = new Storage(pg);
     await storage.init();
   });

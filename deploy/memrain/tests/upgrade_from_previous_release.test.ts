@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PGliteEngine } from "../src/core/engine/pglite.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import { Storage } from "../src/core/storage.ts";
 import { discoverMigrations, runMigrations } from "../src/core/migrate.ts";
@@ -66,19 +66,19 @@ async function openPglite(lastMigration: number): Promise<Opened> {
 
 async function openPostgres(baseUrl: string, lastMigration: number): Promise<Opened> {
   const name = `upgrade_prev_${process.pid}_${Math.floor(Math.random() * 1e9)}`;
-  const admin = new PostgresEngine({ url: baseUrl, max: 1 });
+  const admin = pgTestEngine({ url: baseUrl, max: 1 });
   await admin.exec(`CREATE DATABASE ${name}`);
   await admin.close();
   const u = new URL(baseUrl);
   u.pathname = `/${name}`;
-  const engine = new PostgresEngine({ url: u.toString(), max: 2 });
+  const engine = pgTestEngine({ url: u.toString(), max: 2 });
   await engine.ready();
   await migrateToPrevious(engine, lastMigration);
   return {
     engine,
     close: async () => {
       await engine.close();
-      const a = new PostgresEngine({ url: baseUrl, max: 1 });
+      const a = pgTestEngine({ url: baseUrl, max: 1 });
       try {
         await a.exec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
       } finally {

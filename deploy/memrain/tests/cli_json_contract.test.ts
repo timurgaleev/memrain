@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JSON_GUARDED_COMMANDS } from "../src/cli-args.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine, pgTestEnv } from "./helpers/pg-test-engine.ts";
 
 const root = join(import.meta.dir, "..");
 const pgUrl = process.env.MEMRAIN_TEST_POSTGRES_URL;
@@ -77,7 +77,7 @@ const engines: { name: string; setup: (dir: string) => Promise<{ env: Record<str
     name: "Postgres",
     setup: async () => {
       const name = `json_contract_${process.pid}_${Math.floor(Math.random() * 1e9)}`;
-      const admin = new PostgresEngine({ url: pgUrl, max: 1 });
+      const admin = pgTestEngine({ url: pgUrl, max: 1 });
       try {
         await admin.exec(`CREATE DATABASE ${name}`);
       } finally {
@@ -86,10 +86,10 @@ const engines: { name: string; setup: (dir: string) => Promise<{ env: Record<str
       const url = new URL(pgUrl);
       url.pathname = `/${name}`;
       return {
-        env: { MEMRAIN_POSTGRES_URL: url.toString() },
+        env: pgTestEnv(url.toString()),
         config: { type: "postgres" },
         close: async () => {
-          const cleanup = new PostgresEngine({ url: pgUrl, max: 1 });
+          const cleanup = pgTestEngine({ url: pgUrl, max: 1 });
           try {
             await cleanup.exec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
           } finally {

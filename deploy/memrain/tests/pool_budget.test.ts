@@ -14,14 +14,15 @@ import {
   withLongHold,
   withSearchSlot,
 } from "../src/core/pool-budget.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine, TEST_PG_POOLED } from "./helpers/pg-test-engine.ts";
 import { makeEngine } from "../src/core/engine/factory.ts";
 import type { Engine, QueryResult } from "../src/core/engine/interface.ts";
 import { storageEngines } from "./helpers/storage-engines.ts";
 
 setDefaultTimeout(60000);
 
-const ENV = ["MEMRAIN_PG_POOL_RESERVE", "MEMRAIN_PG_POOL_MAX", "MEMRAIN_SEARCH_MAX_CONCURRENT", "MEMRAIN_PG_APPLICATION_NAME"];
+const ENV = ["MEMRAIN_PG_POOL_RESERVE", "MEMRAIN_PG_POOL_MAX", "MEMRAIN_SEARCH_MAX_CONCURRENT", "MEMRAIN_PG_APPLICATION_NAME", "MEMRAIN_PG_POOLER"];
 afterEach(() => { for (const k of ENV) delete process.env[k]; });
 
 const tick = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -169,7 +170,7 @@ if (PG) {
     }
 
     it("control: without the reserve two long holders starve the health probe", async () => {
-      const engine = new PostgresEngine({ url: PG, max: 2 });
+      const engine = pgTestEngine({ url: PG, max: 2 });
       try {
         expect(await probeWhileBusy(engine, false)).toBeGreaterThan(1000);
       } finally {
@@ -180,7 +181,7 @@ if (PG) {
     it("with the reserve the health probe gets the spare connection", async () => {
       process.env["MEMRAIN_PG_POOL_RESERVE"] = "1";
       process.env["MEMRAIN_PG_POOL_MAX"] = "2";
-      const engine = new PostgresEngine({ url: PG, max: 2 });
+      const engine = pgTestEngine({ url: PG, max: 2 });
       try {
         expect(await probeWhileBusy(engine, true)).toBeLessThan(1000);
       } finally {
@@ -190,6 +191,8 @@ if (PG) {
 
     it("tags the connection with the configured application_name", async () => {
       process.env["MEMRAIN_PG_APPLICATION_NAME"] = "memrain:test:serve";
+      // Through the test pooler the factory runs in pooler mode, as a tenant does.
+      if (TEST_PG_POOLED) process.env["MEMRAIN_PG_POOLER"] = "pgbouncer";
       const engine = makeEngine({ database: { type: "postgres", url: PG } } as Parameters<typeof makeEngine>[0]);
       try {
         const r = await engine.query<{ name: string }>("SELECT current_setting('application_name') AS name");
@@ -200,11 +203,13 @@ if (PG) {
     });
 
     it("reads the server's connection limits for the doctor", async () => {
-      const engine = new PostgresEngine({ url: PG, max: 2 });
+      const engine = pgTestEngine({ url: PG, max: 2 });
       try {
         const c = await checkConnectionBudget(engine);
         expect(c.name).toBe("db-connection-budget");
         expect(["ok", "warn"]).toContain(c.status);
+        // test-pg.sh gives the test role the same timeouts a tenant role has.
+        if (TEST_PG_POOLED) expect(c.detail).toContain("from the role");
         expect(c.detail).toMatch(/max_connections/);
       } finally {
         await engine.close();
