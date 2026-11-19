@@ -61,6 +61,9 @@ export function judge(p95: number | null, targetMs: number): Verdict {
 
 export type ErrorCounts = Record<string, number>;
 
+/** Error-count key prefix for a search that came back with an arm missing. */
+export const ARM_FAILURE_PREFIX = "degraded:";
+
 /** SQLSTATE classes and driver codes that mean "no connection", not "bad query". */
 function isConnectionError(code: string): boolean {
   return (
@@ -120,10 +123,16 @@ export async function runQueries(
     while (next < queries.length) {
       const q = queries[next++]!;
       if (mode === "hybrid") counters.hybridQueries++;
+      let degraded: readonly string[] = [];
       const t0 = performance.now();
       try {
-        await hybridSearch(storage, q.text, opts);
-        latencies.push(performance.now() - t0);
+        // The arms swallow their own database errors and return what is left,
+        // so a resolved search is not yet a served one: read how it ran.
+        await hybridSearch(storage, q.text, { ...opts, onMeta: (m) => void (degraded = m.degraded) });
+        const elapsed = performance.now() - t0;
+        const failed = armFailures(degraded);
+        if (failed.length === 0) latencies.push(elapsed);
+        for (const r of failed) errors[`${ARM_FAILURE_PREFIX}${r}`] = (errors[`${ARM_FAILURE_PREFIX}${r}`] ?? 0) + 1;
       } catch (err) {
         const code = errorCode(err);
         errors[code] = (errors[code] ?? 0) + 1;
@@ -140,6 +149,19 @@ export function mergeErrors(into: ErrorCounts, from: ErrorCounts): void {
 
 export function connectionErrorCount(errors: ErrorCounts): number {
   return Object.entries(errors).reduce((n, [k, v]) => n + (isConnectionError(k) ? v : 0), 0);
+}
+
+/**
+ * The degraded reasons that mean part of the search did not run: an arm
+ * failed or timed out. A query with no hit, an incomplete candidate list or a
+ * truncated budget was still served in full and stays a sample.
+ */
+export function armFailures(degraded: readonly string[]): string[] {
+  return degraded.filter((r) => r.endsWith("_failed") || r.endsWith("_timeout"));
+}
+
+export function armFailureCount(errors: ErrorCounts): number {
+  return Object.entries(errors).reduce((n, [k, v]) => n + (k.startsWith(ARM_FAILURE_PREFIX) ? v : 0), 0);
 }
 
 /**

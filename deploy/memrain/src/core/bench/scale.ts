@@ -17,7 +17,8 @@
  * then `runs` runs of `queries` queries per mode. p95 is nearest-rank over all
  * measured samples; each run's own p95 and the spread between runs are kept so
  * a noisy laptop shows up as noise. `protocol.compliant` says whether the run
- * met the agreed floor (≥200 queries, ≥3 runs, ≥50 warmup).
+ * met the agreed floor: ≥200 queries, ≥3 runs, ≥50 warmup, on a container
+ * with known CPU/RAM limits and max_connections=200.
  *
  * WHERE IT WRITES: only databases it created and marked (`scale-target.ts`).
  * They are dropped before the report returns, and on failure.
@@ -41,6 +42,7 @@ import {
   assertBenchContainer,
   assertBenchTarget,
   assertNotProductionServer,
+  assertPoolerBesideAdmin,
   createScratchDatabase,
   displayServer,
   dropScratchDatabase,
@@ -54,6 +56,7 @@ import {
 } from "./scale-target.ts";
 import {
   ConnectionSampler,
+  armFailureCount,
   connectionErrorCount,
   judge,
   measure,
@@ -70,7 +73,14 @@ import {
 } from "./scale-measure.ts";
 
 export * from "./scale-target.ts";
-export { judge, percentileNearestRank, summarizeRuns, type LatencySummary, type Verdict } from "./scale-measure.ts";
+export {
+  armFailures,
+  judge,
+  percentileNearestRank,
+  summarizeRuns,
+  type LatencySummary,
+  type Verdict,
+} from "./scale-measure.ts";
 
 /** Q51: the targets one brain at 100k chunks is measured against. */
 export const Q51_TARGETS = { hybridP95Ms: 800, keywordP95Ms: 300 } as const;
@@ -144,6 +154,8 @@ export interface S2Report {
   hybrid: LatencySummary;
   errors: ErrorCounts;
   connectionErrors: number;
+  /** Searches that came back with an arm missing (an error the search swallowed). */
+  armFailures: number;
   verdict: "pass" | "fail";
   peakConnections: number;
 }
@@ -257,6 +269,13 @@ async function ledger(engine: Engine): Promise<{ calls: number; usd: number }> {
     `SELECT count(*)::int AS calls, COALESCE(SUM(spend_cents), 0)::float8 AS cents FROM mcp_spend_log`,
   );
   return { calls: Number(r.rows[0]?.calls ?? 0), usd: Number(r.rows[0]?.cents ?? 0) / 100 };
+}
+
+/** The server ran with the agreed fixed shape: container limits known, max_connections=200. */
+function fixedServer(hardware: Record<string, unknown>): boolean {
+  const container = hardware.container as { cpus?: number | null; memoryBytes?: number | null } | null;
+  const pg = hardware.postgres as Record<string, string>;
+  return !!container?.cpus && !!container.memoryBytes && pg.max_connections === "200";
 }
 
 // ---------------------------------------------------------------- run context
@@ -423,7 +442,8 @@ async function scenarioS2(run: Run, brains: Loaded[], via: "direct" | "pooler", 
   const errors: ErrorCounts = {};
   for (const r of results) mergeErrors(errors, r.errors);
   const conn = connectionErrorCount(errors);
-  run.log(`s2 ${via}: ${conn} connection errors`);
+  const arms = armFailureCount(errors);
+  run.log(`s2 ${via}: ${conn} connection errors, ${arms} searches missing an arm`);
   return {
     via,
     chunksPerTenant: brains[0]?.stats.chunks ?? 0,
@@ -433,7 +453,8 @@ async function scenarioS2(run: Run, brains: Loaded[], via: "direct" | "pooler", 
     hybrid: summarizeRuns(Array.from({ length: run.p.runs }, (_, r) => results.flatMap((x) => x.runs[r] ?? []))),
     errors,
     connectionErrors: conn,
-    verdict: conn === 0 ? "pass" : "fail",
+    armFailures: arms,
+    verdict: conn === 0 && arms === 0 ? "pass" : "fail",
     peakConnections: run.sampler.takeScenarioPeak(),
   };
 }
@@ -450,7 +471,10 @@ function intOpt(name: string, v: number | undefined, dflt: number, min: number):
 function preflight(opts: ScaleBenchOptions, env: Env): void {
   // The production refusal outranks --scratch: it is checked whatever the flag says.
   assertNotProductionServer(opts.adminUrl, env);
-  if (opts.poolerUrl) assertNotProductionServer(opts.poolerUrl, env);
+  if (opts.poolerUrl) {
+    assertNotProductionServer(opts.poolerUrl, env);
+    assertPoolerBesideAdmin(opts.poolerUrl, opts.adminUrl);
+  }
   if (!opts.scratch) {
     throw new ScaleBenchRefusal(
       "bench_needs_scratch",
@@ -538,7 +562,11 @@ export async function runScaleBench(opts: ScaleBenchOptions): Promise<ScaleRepor
       },
       protocol: {
         floor: PROTOCOL_FLOOR,
-        compliant: p.queries >= PROTOCOL_FLOOR.queries && p.runs >= PROTOCOL_FLOOR.runs && p.warmup >= PROTOCOL_FLOOR.warmup,
+        compliant:
+          p.queries >= PROTOCOL_FLOOR.queries &&
+          p.runs >= PROTOCOL_FLOOR.runs &&
+          p.warmup >= PROTOCOL_FLOOR.warmup &&
+          fixedServer(hardware),
         percentile: "nearest-rank",
       },
       hardware,

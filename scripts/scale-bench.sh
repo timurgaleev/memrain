@@ -51,6 +51,7 @@ cleanup() {
   local c
   for c in "${STARTED[@]+"${STARTED[@]}"}"; do docker rm -f "$c" >/dev/null 2>&1 || true; done
   docker network rm "$NET" >/dev/null 2>&1 || true
+  docker rmi "memrain-scale-bench-pgbouncer:$TAG" >/dev/null 2>&1 || true
   [ -z "$TMP" ] || rm -rf "$TMP"
   echo "[scale-bench] cleaned up"
   exit "$status"
@@ -87,6 +88,9 @@ PORT="$(bun -e 'const s = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: {
 # Fixed limits and settings: they are part of the measurement, and the report
 # records what the server actually ran with. A parallel HNSW build puts
 # maintenance_work_mem in shared memory, far past Docker's 64 MB /dev/shm.
+# Registered before the run: a container Docker created but could not start
+# still needs removing.
+STARTED+=("$PG")
 docker run -d --name "$PG" --network "$NET" \
   --cpus "$CPUS" --memory "$MEMORY" --shm-size 1536m \
   -e POSTGRES_USER=memrain -e POSTGRES_PASSWORD="$PASSWORD" -e POSTGRES_DB=postgres \
@@ -94,7 +98,6 @@ docker run -d --name "$PG" --network "$NET" \
   "$IMAGE" \
   -c max_connections=200 -c shared_buffers=1GB -c effective_cache_size=3GB \
   -c maintenance_work_mem=1GB -c max_parallel_maintenance_workers=3 >/dev/null
-STARTED+=("$PG")
 wait_ready
 log "postgres $IMAGE on 127.0.0.1:$PORT (cpus=$CPUS memory=$MEMORY)"
 ADMIN_URL="postgres://memrain:${PASSWORD}@127.0.0.1:${PORT}/postgres?sslmode=disable"
@@ -126,12 +129,12 @@ ignore_startup_parameters = extra_float_digits,statement_timeout,idle_in_transac
 EOF
   printf '"memrain" "%s"\n' "$PASSWORD" >"$TMP/userlist.txt"
   chmod 0644 "$TMP/pgbouncer.ini" "$TMP/userlist.txt"
+  STARTED+=("$BOUNCER")
   docker run -d --name "$BOUNCER" --network "$NET" --cpus 1 --memory 256m \
     -v "$TMP/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro" \
     -v "$TMP/userlist.txt:/etc/pgbouncer/userlist.txt:ro" \
     -p 127.0.0.1::6432 \
     --entrypoint pgbouncer "memrain-scale-bench-pgbouncer:$TAG" /etc/pgbouncer/pgbouncer.ini >/dev/null
-  STARTED+=("$BOUNCER")
   BPORT="$(docker port "$BOUNCER" 6432/tcp | head -n1 | sed 's/.*://')"
   [ -n "$BPORT" ] || die "could not read the published port of $BOUNCER"
   POOLER_URL="postgres://memrain:${PASSWORD}@127.0.0.1:${BPORT}/postgres?sslmode=disable"

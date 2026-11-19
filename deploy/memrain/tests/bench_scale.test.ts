@@ -20,6 +20,8 @@ import {
   assertBenchTarget,
   assertBenchContainer,
   assertNotProductionServer,
+  assertPoolerBesideAdmin,
+  armFailures,
   judge,
   percentileNearestRank,
   runScaleBench,
@@ -92,6 +94,14 @@ describe("statistics", () => {
     expect(s.spreadP95).toBeCloseTo((32 - 30) / 31, 6);
   });
 
+  it("a search that lost an arm counts as a failure, not a sample", () => {
+    expect(armFailures(["keyword_arm_failed"])).toEqual(["keyword_arm_failed"]);
+    expect(armFailures(["vector_arm_failed", "keyword_zero"])).toEqual(["vector_arm_failed"]);
+    expect(armFailures(["embed_timeout", "keyword_timeout", "title_arm_failed"])).toHaveLength(3);
+    // No hit and an incomplete candidate list are results, not failures.
+    expect(armFailures(["keyword_zero", "vector_candidates_incomplete", "budget_truncated"])).toEqual([]);
+  });
+
   it("a miss against a Q51 target is marked fail, not thrown", () => {
     expect(judge(900, Q51_TARGETS.hybridP95Ms)).toBe("fail");
     expect(judge(100, Q51_TARGETS.hybridP95Ms)).toBe("pass");
@@ -159,6 +169,18 @@ describe("refusals that protect a live brain", () => {
     );
     expect((err as ScaleBenchRefusal).code).toBe("bench_refuses_pglite");
     expect(seen).toEqual([]);
+  });
+
+  it("refuses a pooler on any host but the admin server's, before connecting", async () => {
+    const err = await runScaleBench({
+      adminUrl: "postgres://u:p@127.0.0.1:1/postgres?sslmode=disable",
+      poolerUrl: "postgres://u:p@pooler.internal.example:6432/postgres",
+      scratch: true,
+      env: {},
+      chunks: 10,
+    }).catch((e: unknown) => e);
+    expect((err as ScaleBenchRefusal).code).toBe("bench_refuses_pooler_host");
+    assertPoolerBesideAdmin("postgres://u:p@localhost:6432/x", "postgres://u:p@127.0.0.1:5432/postgres");
   });
 
   it("restarts only a container the bench script started", () => {

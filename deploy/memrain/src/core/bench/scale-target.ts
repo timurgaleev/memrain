@@ -45,7 +45,8 @@ export type RefusalCode =
   | "bench_refuses_pglite"
   | "bench_refuses_foreign_db"
   | "bench_refuses_live_db"
-  | "bench_refuses_container";
+  | "bench_refuses_container"
+  | "bench_refuses_pooler_host";
 
 export class ScaleBenchRefusal extends Error {
   constructor(
@@ -97,6 +98,24 @@ export function assertNotProductionServer(url: string, env: Env): void {
   }
 }
 
+/**
+ * A pooler in front of anything but the admin server would send the bench's
+ * connections to a server nobody checked. Its host must be the admin URL's
+ * (the bench script runs both on loopback); the database behind it is then
+ * proven by the nonce like any other connection.
+ */
+export function assertPoolerBesideAdmin(poolerUrl: string, adminUrl: string): void {
+  const pooler = serverOf(poolerUrl);
+  const admin = serverOf(adminUrl);
+  const host = (server: string) => server.slice(0, server.lastIndexOf(":"));
+  if (pooler === null || admin === null || host(pooler) !== host(admin)) {
+    throw new ScaleBenchRefusal(
+      "bench_refuses_pooler_host",
+      "the pooler must run on the admin server's host, in front of the bench's own Postgres",
+    );
+  }
+}
+
 /** Only a container the bench script started may be restarted. */
 export function assertBenchContainer(name: string): void {
   if (!CONTAINER_PATTERN.test(name)) {
@@ -141,37 +160,53 @@ export async function createScratchDatabase(adminUrl: string, opts: { env: Env }
   try {
     await e.query(`CREATE TABLE ${MARKER_TABLE} (nonce TEXT PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
     await e.query(`INSERT INTO ${MARKER_TABLE} (nonce) VALUES ($1)`, [nonce]);
+  } catch (err) {
+    // Created a moment ago and handed to no one, but with no marker to prove
+    // it by later: it goes now rather than outliving the run unrecorded.
+    await e.close();
+    await dropDatabase(adminUrl, dbName);
+    throw err;
   } finally {
     await e.close();
   }
   return { dbName, nonce, url };
 }
 
-/** Drop a database this run created. The name is re-checked, so nothing else can be dropped. */
-export async function dropScratchDatabase(adminUrl: string, target: Pick<ScratchTarget, "dbName">): Promise<void> {
-  if (!DB_PATTERN.test(target.dbName)) {
-    throw new ScaleBenchRefusal("bench_refuses_foreign_db", "refusing to drop a database the bench did not name");
-  }
+async function dropDatabase(adminUrl: string, dbName: string): Promise<void> {
   const admin = new PostgresEngine({ url: adminUrl, max: 1, applicationName: APP_NAME });
   try {
-    await admin.query(`DROP DATABASE IF EXISTS ${target.dbName} WITH (FORCE)`);
+    await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
   } finally {
     await admin.close();
   }
 }
 
 /**
- * The gate in front of every write: this engine is Postgres, connected to the
- * database the bench named, which carries this run's nonce and no page or
- * document from any source but the bench's.
+ * Drop a database this run created, after proving it still carries this run's
+ * nonce. Already gone: nothing to do. Anything else under the name: refused.
  */
-export async function assertBenchTarget(
-  engine: Engine,
-  target: Pick<ScratchTarget, "dbName" | "nonce">,
-): Promise<void> {
-  if (engine.kind !== "postgres") {
-    throw new ScaleBenchRefusal("bench_refuses_pglite", "the bench runs only on its own Postgres database");
+export async function dropScratchDatabase(adminUrl: string, target: ScratchTarget): Promise<void> {
+  if (!DB_PATTERN.test(target.dbName)) {
+    throw new ScaleBenchRefusal("bench_refuses_foreign_db", "refusing to drop a database the bench did not name");
   }
+  const admin = new PostgresEngine({ url: adminUrl, max: 1, applicationName: APP_NAME });
+  try {
+    const exists = await admin.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [target.dbName]);
+    if (exists.rows.length === 0) return;
+  } finally {
+    await admin.close();
+  }
+  const e = new PostgresEngine({ url: target.url, max: 1, applicationName: APP_NAME });
+  try {
+    await assertOwnMarker(e, target);
+  } finally {
+    await e.close();
+  }
+  await dropDatabase(adminUrl, target.dbName);
+}
+
+/** Connected to the database the bench named, which carries this run's nonce. */
+async function assertOwnMarker(engine: Engine, target: Pick<ScratchTarget, "dbName" | "nonce">): Promise<void> {
   const db = (await engine.query<{ d: string }>("SELECT current_database() AS d")).rows[0]?.d;
   if (db !== target.dbName || !DB_PATTERN.test(db)) {
     throw new ScaleBenchRefusal("bench_refuses_foreign_db", "connected to a database the bench did not create");
@@ -189,6 +224,21 @@ export async function assertBenchTarget(
   if (Number(nonce.rows[0]?.n ?? 0) !== 1) {
     throw new ScaleBenchRefusal("bench_refuses_foreign_db", "the bench marker holds another run's nonce");
   }
+}
+
+/**
+ * The gate in front of every write: this engine is Postgres, connected to the
+ * database the bench named, which carries this run's nonce and no page or
+ * document from any source but the bench's.
+ */
+export async function assertBenchTarget(
+  engine: Engine,
+  target: Pick<ScratchTarget, "dbName" | "nonce">,
+): Promise<void> {
+  if (engine.kind !== "postgres") {
+    throw new ScaleBenchRefusal("bench_refuses_pglite", "the bench runs only on its own Postgres database");
+  }
+  await assertOwnMarker(engine, target);
   for (const table of ["pages", "documents"]) {
     const exists = await engine.query<{ ok: boolean }>(`SELECT to_regclass($1) IS NOT NULL AS ok`, [table]);
     if (!exists.rows[0]?.ok) continue;

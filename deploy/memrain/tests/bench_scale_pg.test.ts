@@ -78,6 +78,25 @@ describe.skipIf(!URL_)("bench scale on Postgres", () => {
     }
   });
 
+  it("drops only a database carrying this run's nonce", async () => {
+    const target = await createScratchDatabase(URL_!, { env: {} });
+    made.push(target);
+    const err = await dropScratchDatabase(URL_!, { ...target, nonce: "f".repeat(32) }).catch((e: unknown) => e);
+    expect((err as ScaleBenchRefusal).code).toBe("bench_refuses_foreign_db");
+    const admin = new PostgresEngine({ url: URL_!, max: 1 });
+    try {
+      const has = async () =>
+        (await admin.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [target.dbName])).rows.length;
+      expect(await has()).toBe(1);
+      await dropScratchDatabase(URL_!, target);
+      expect(await has()).toBe(0);
+      // Already gone: a second cleanup pass is a no-op, not an error.
+      await dropScratchDatabase(URL_!, target);
+    } finally {
+      await admin.close();
+    }
+  });
+
   it("runs a small end-to-end bench: report shape, zero spend, every hybrid vector from the seam, no database left", async () => {
     // Paid knobs set in the shell must not reach the run.
     const saved = { ...process.env };
