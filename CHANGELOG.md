@@ -6,6 +6,93 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-11-19
+
+Memrain becomes a platform: it reads your mail, calendars and chats, answers
+questions in its own chat, runs background workers under hard spend caps, and
+can host separate brains for clients. New features are off by default and
+cost nothing until you switch them on; a self-hosted brain upgrades in place
+(migrations 151–175). One default changes: outside text, including existing
+`github` sources, now passes the write gate in `flag` mode (see Changed).
+
+### Added
+- **Connectors** (bring your own OAuth app; read-only; credentials sealed in
+  the database with a separate key, `<prefix>/memrain-connector-kek`):
+  - Google Calendar and Gmail (`calendar.readonly`, `gmail.readonly`): 90-day
+    resumable backfill, history sync, one page per mail thread and per
+    calendar event or recurring series.
+  - Microsoft Outlook mail and calendar for personal accounts and work
+    tenants, with admin-consent handling and a calendar picker.
+  - Microsoft Teams chats (one page per chat and day) and meeting transcripts
+    with speakers, linked to the Outlook calendar page. Separate *Add Teams*
+    step with incremental consent.
+  - Slack: picked channels as channel days, through your own Slack app or a
+    pasted bot token; private channels opt-in, direct messages never read.
+  - Fireflies transcripts (API key).
+  - Each connector writes to a source of the matching kind (`mailbox`,
+    `calendar`, `chat`, `meeting`); a sync engine with cursors, a mass-delete guard,
+    versioned soft delete of upstream deletions and retention windows.
+  - Meeting join links, IDs, passcodes and dial-in PINs are stripped before
+    storage; `memrain connectors redact-meetings` cleans pages stored earlier.
+  - Guides in `docs/connectors/` (GOOGLE, GMAIL, MICROSOFT, SLACK, ENABLE, KEY).
+- **Ask** — the admin panel's own chat: answers from your brain with numbered
+  sources, a live trace of the search, the model and the cost of each answer;
+  save an answer as a page. `MEMRAIN_CHAT=1` turns it on; per-answer cap
+  ($0.02 default), per-owner day cap ($0.50) and the brain day cap; history
+  kept 90 days (`memrain erase chat`, `memrain export --owner`).
+- **Open loops** without a model: replies owed and awaited, promises and
+  unanswered invitations from mail, chats and calendars (`memrain waiting`,
+  MCP `loops_list`, `loops_sweep` daemon).
+- **Autonomy under caps**: a daemon scheduler with kill switches
+  (`memrain daemons enable|disable`), a spend wallet that holds every paid call
+  at its maximum cost first and pauses a path that overruns, and owner
+  notifications (admin, doctor, optional signed webhook).
+- **Trust**: every page, fact and document records who wrote it (`owner`,
+  `member`, `agent`, `external`); `min_trust` on search, query and context
+  pack; a deterministic write gate that flags, quarantines or rejects outside
+  text that reads as instructions to an AI.
+- **Members, groups and grant profiles** with narrowed tool surfaces
+  (`docs/TEAM-SETUP.md`).
+- **Hosted mode** (inert unless `MEMRAIN_TENANT_ID`/`MEMRAIN_CONTROL_URL` is
+  set): a control database with `memrain tenant create|suspend|resume|limits|
+  export|delete|usage`, one database, container and network per client, member
+  sign-in by invite and passkey on `/app`, a three-step onboarding wizard,
+  enrollment codes and member keys for Claude, ChatGPT and Claude Code,
+  hosting-wide and per-client spend caps, fenced export before delete with a
+  7-day window, an isolation smoke that must pass before a client container
+  serves, and a deploy loop per client. Runbook: `docs/HOSTING.md`.
+- **Scale**: PgBouncer transaction-mode support (`MEMRAIN_PG_POOLER`, DDL and
+  migrations only over the direct URL) and `memrain bench scale`, a
+  reproducible latency bench on synthetic brains (100k chunks: keyword p95
+  101 ms, hybrid p95 583 ms on a 4-CPU container).
+- **Search feedback** weights and password-protected **share links** for
+  answers, both off by default.
+- **Admin Office page**: a live 3D view of which apps and workers are busy,
+  showing only the kind of work.
+- **22 new agent skills** (ingestion, research, writing, self-host, skill
+  platform); the Claude Code and Codex plugin ships 11, generated from
+  `deploy/skills`.
+- Eval bench, `lme-r`, `eval promote` and search shadow mode; `--json` on the
+  main commands; generated `docs/ERRORS.md` and `docs/TOOLS.md`.
+
+### Changed
+- Outside text (connector, GitHub, webhook pages) is left out of paid
+  background phases (facts backfill, on-write extraction, contextual LLM, deep
+  synthesis). Existing `github` sources are outside sources to the write gate;
+  `MEMRAIN_WRITE_GATE_EXTERNAL=off` keeps the old behaviour.
+- Paid daemons do not run without `MEMRAIN_DAILY_BUDGET_USD`.
+- Facts extraction allows 4,000 output tokens per call.
+- The Postgres test suite runs in chunks; audit gates run inside git
+  worktrees.
+
+### Fixed
+- Concept pages name their concept; placeholder tags no longer get a hub.
+- Purge also removes a page's observations and citations.
+- A connector item that shrinks deletes the part pages it no longer has.
+- Refresh tokens are redacted from synced text, not only access tokens.
+- A malformed chat thread id is a 404; a chat run that throws is stored as an
+  error turn.
+
 ## [1.16.0] — 2026-11-14
 
 ### Added
