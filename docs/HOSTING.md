@@ -275,9 +275,9 @@ and `bash deploy/deploy.sh`. The tenant env file then points
 `MEMRAIN_POSTGRES_DIRECT_URL` (migrations and DDL, and the pooler's own
 upstream) and `MEMRAIN_PG_POOLER=pgbouncer`; the control URL is unchanged.
 The deploy rebuilds and starts each pooler and waits for its healthcheck before
-it recreates the tenant container. It stops at a tenant whose env file
-disagrees with the host `.env` (pooled on one side only), so re-fetch the env
-files whenever you turn the pooler on or off. The isolation smoke probes every
+it recreates the tenant container. Before touching any tenant it refuses to
+run while a tenant's env file disagrees with the host `.env` (pooled on one
+side only), so re-fetch the env files whenever you turn the pooler on or off. The isolation smoke probes every
 neighbour's pooler as well. `MEMRAIN_PGBOUNCER_SERVER_SSLMODE`
 (default `require`) and `MEMRAIN_PGBOUNCER_POOL_SIZE` (default 3 server
 connections per tenant) tune it.
@@ -359,7 +359,9 @@ Postgres connections and every percentile. It measures three scenarios:
   once: it passes only with no connection error and no search missing an arm. The
   script runs this scenario a second time through the hosting PgBouncer image
   (`deploy/pgbouncer`, its own entrypoint and config) with the engines in pooler
-  mode, as a hosted tenant connects.
+  mode and the pool size a tenant's pooler gets (3 server connections per brain,
+  read from `deploy/tenant/tenant.yml.tmpl`), as a hosted tenant connects: each
+  brain's 4th parallel query waits in PgBouncer.
 
 Each mode runs a fixed query mix, 50 warmup queries and then 3 runs of 200. p95 is
 nearest-rank over the 600 samples, and the report keeps each run's p95 so the run
@@ -371,18 +373,20 @@ One run on Docker Desktop on an arm64 laptop (seed 1):
 
 | Scenario | Result |
 |---|---|
-| 100k chunks, keyword | p50 46 ms, p95 123 ms (runs 126 / 121 / 121), p99 163 ms: under 300 ms |
-| 100k chunks, hybrid | p50 519 ms, p95 713 ms (runs 799 / 605 / 598), p99 809 ms: under 800 ms, with little margin |
-| Cold start (one query at a time) | p95 241 ms cold against 222 ms warm (1.1×); first query 577 ms |
-| 8 brains at once, direct | 0 connection errors, 0 failed arms, 42 connections at peak; hybrid p95 1.11 s |
-| 8 brains at once, through PgBouncer | 0 connection errors, 0 failed arms, 39 connections at peak; hybrid p95 1.12 s |
-| Load | 100k chunks in 39 s, HNSW index in 50 s |
+| 100k chunks, keyword | p50 41 ms, p95 101 ms (runs 99 / 96 / 103), p99 148 ms: under 300 ms |
+| 100k chunks, hybrid | p50 489 ms, p95 583 ms (runs 583 / 582 / 579), p99 628 ms: under 800 ms |
+| Cold start (one query at a time) | p95 234 ms cold against 198 ms warm (1.2×); first query 470 ms |
+| 8 brains at once, direct | 0 connection errors, 0 failed arms, 42 connections at peak; hybrid p95 1.27 s (runs 1.48 / 1.33 / 0.81 s) |
+| 8 brains at once, through PgBouncer (pool 3) | 0 connection errors, 0 failed arms, 31 connections at peak; hybrid p95 1.10 s (runs 1.20 / 1.20 / 0.82 s) |
+| Load | 100k chunks in 34 s, HNSW index in 39 s |
 
-Other runs on the same laptop gave hybrid p95 659–779 ms and a cold/warm ratio of
+Other runs on the same laptop gave hybrid p95 583–779 ms and a cold/warm ratio of
 1.1–1.6, and one run of 200 queries reached 799 ms on its own, so expect 15–25%
 between runs. The cold ratio stays under 2×, so HNSW prewarm is not worth building.
 With 8 brains at once, 32 hybrid queries share 4 CPUs. The latency shown there comes
-from CPU saturation, not connections, and the pooler adds none that shows.
+from CPU saturation, not connections, and its runs spread by 30–50%. Against that
+spread, the pooler's cap of 3 server connections per brain costs nothing that
+shows, and it holds 11 fewer connections at peak.
 
 These are laptop numbers. Docker Desktop has a faster disk and more memory than a
 small RDS instance. Run the bench once on the hosting stack before quoting a number
