@@ -90,6 +90,12 @@ describe("scope-lint pooler safety", () => {
       "q(`SET statement_timeout = 0`)",
       "q(`SET search_path TO evil`)",
       "q(`SELECT set_config('app.x', $1, false)`)",
+      "q(`CREATE TEMP TABLE scratch (id int)`)",
+      "q(`CREATE TEMPORARY TABLE scratch AS SELECT 1`)",
+      "q(`CREATE GLOBAL TEMPORARY TABLE scratch (id int)`)",
+      "q(`DECLARE c CURSOR WITH HOLD FOR SELECT 1`)",
+      "q(`DISCARD ALL`)",
+      "q(`DISCARD PLANS`)",
     ]) {
       expect({ sql, hits: findPoolerUnsafe("x.ts", sql).length }).toEqual({ sql, hits: 1 });
     }
@@ -104,6 +110,10 @@ describe("scope-lint pooler safety", () => {
       "q(`SELECT set_config(name, value, true) FROM s`)",
       "q(`UPDATE pages SET title = $1`)",
       "hint(\"Set MEMRAIN_PUBLIC_URL to the external origin\")",
+      "q(`CREATE TEMP TABLE scratch (id int) ON COMMIT DROP`)",
+      "q(`DECLARE c CURSOR WITHOUT HOLD FOR SELECT 1`)",
+      "hint(\"discard all pending changes, then hold with hold time\")",
+      "q(`CREATE TABLE IF NOT EXISTS embed_cache (k text)`)",
     ]) {
       expect({ sql, hits: findPoolerUnsafe("x.ts", sql).length }).toEqual({ sql, hits: 0 });
     }
