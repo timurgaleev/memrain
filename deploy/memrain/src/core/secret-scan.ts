@@ -29,7 +29,7 @@ import { encodedCandidates, protectEncodedAllowlist } from "./secret-scan-encode
  * Bumped whenever the rules change what is caught, so text stored under an
  * older version can be found and scanned again.
  */
-export const SECRET_SCAN_VERSION = 6;
+export const SECRET_SCAN_VERSION = 7;
 
 export interface SecretFinding {
   kind: string;
@@ -102,14 +102,23 @@ function decodesToUserPass(value: string): boolean {
 }
 
 /**
+ * A terminal colour code: raw `ESC[32m`, or written as `\e[`, `\033[`, `\x1b[`,
+ * `\u001b[`, the backslash escaped once more inside JSON. Forty parameter
+ * characters fit bold plus a true-colour foreground and background. Lower case:
+ * every pattern that uses it is case-insensitive.
+ */
+const SGR = String.raw`(?:\x1b|\\{1,2}(?:e|033|x1b|u001b))\[[0-9;]{0,40}m`;
+
+/**
  * The key of an assignment: a credential word, up to 64 identifier characters
  * after it (`_ACCESS_KEY`, `_2`), an optional closing quote, `:` or `=`. `_` and
  * `-` count as separators on the left, or `SMTP_PASSWORD` could not match its
- * own word. Every quantifier is bounded, so a run of `_token_token…` does
- * constant work per start.
+ * own word. An escape or a terminal colour code (see ESCAPE_TAIL) separates
+ * too. Every quantifier is bounded, so a run of `_token_token…` does constant
+ * work per start.
  */
 const ASSIGNMENT_KEY =
-  String.raw`(?:^|[^A-Z0-9]|\\(?:[bfnrt]|u[0-9a-f]{4})|%[0-9a-f]{2})(?:secret|token|passwd|password|passphrase|credential|api[_-]?key)[\w-]{0,64}` +
+  String.raw`(?:^|[^A-Z0-9]|\\(?:[bfnrt]|u[0-9a-f]{4})|%[0-9a-f]{2}|${SGR})(?:secret|token|passwd|password|passphrase|credential|api[_-]?key)[\w-]{0,64}` +
   // A quote escaped up to two levels (`\"`, `\u0022`, `%22`), and `:`/`=` escaped too. The
   // lookahead fails a non-separator fast, before the escape alternatives are tried.
   String.raw`(?=[\\%"' \t:=])(?:\\|\\u[0-9a-f]{4}|%[0-9a-f]{2}){0,2}["']?[ \t]{0,16}(?:[:=]|\\u003[ad]|%3[ad])[ \t]{0,16}`;
@@ -159,13 +168,13 @@ function clearsEntropyGate(value: string): boolean {
 
 /**
  * A JSON escape (`\n`, `\t`, `\u001b`), a percent escape (`%22`) or a
- * terminal colour code (raw `ESC[32m`, or written as `\e[`, `\033[`, `\x1b[`,
- * `\u001b[`) ending the text. Coloured CLI output glues the key to the `m`.
+ * terminal colour code ending the text. Coloured CLI output glues the key to
+ * the `m`.
  */
-const ESC = String.fromCharCode(0x1b);
-const ESCAPE_TAIL = new RegExp(String.raw`(?:\\(?:[bfnrt]|u[0-9A-Fa-f]{4})|%[0-9A-Fa-f]{2}|(?:${ESC}|\\(?:e|033|x1[Bb]|u001[Bb]))\[[0-9;]{0,16}m)$`);
-/** Longest ESCAPE_TAIL match: `\u001b[` plus 16 parameter characters and `m`. */
-const ESCAPE_TAIL_MAX = 24;
+const ESCAPE_TAIL = /(?:\\(?:[bfnrt]|u[0-9A-Fa-f]{4})|%[0-9A-Fa-f]{2})$/;
+const SGR_TAIL = new RegExp(`${SGR}$`, "i");
+/** Longest tail either matches: `\\u001b[` plus 40 parameter characters and `m`. */
+const ESCAPE_TAIL_MAX = 49;
 
 /**
  * Whether a key may start at `offset`. `left` (fixed shapes): anywhere but
@@ -179,7 +188,8 @@ const ESCAPE_TAIL_MAX = 24;
 function startAllowed(start: "left" | "glued", text: string, offset: number): boolean {
   const prev = text[offset - 1] ?? "";
   if (start === "left" ? !/[a-z0-9]/i.test(prev) : prev === "_" || prev === "-") return true;
-  return ESCAPE_TAIL.test(text.slice(Math.max(0, offset - ESCAPE_TAIL_MAX), offset));
+  const tail = text.slice(Math.max(0, offset - ESCAPE_TAIL_MAX), offset);
+  return ESCAPE_TAIL.test(tail) || SGR_TAIL.test(tail);
 }
 
 const left = (kind: string, body: string, echo?: Pattern["echo"]): Pattern => ({ kind, regex: new RegExp(body, "g"), start: "left", echo });
@@ -306,6 +316,9 @@ const SHAPE_PATTERNS: Pattern[] = [
   },
 ];
 
+/** One character of a quoted value, never the start of a colour code. */
+const QUOTED_CHAR = String.raw`(?!${SGR})(?:[^"'\s\\]|\\(?!\\{0,2}["']))`;
+
 /**
  * Quoted: any non-quote, non-space run. Unquoted: base64 characters plus
  * password punctuation — not `&` (sibling query parameters), not brackets (so
@@ -314,9 +327,10 @@ const SHAPE_PATTERNS: Pattern[] = [
  */
 const ASSIGNMENT_PATTERNS: Pattern[] = [
   // A backslash right before the closing (escaped) quote belongs to the quote.
+  // Colour codes around the value stay outside it; one inside is part of it.
   // The fast-fail lookahead in ASSIGNMENT_KEY is redundant by design:
   // eslint-disable-next-line regexp/no-useless-assertions
-  { kind: "high-entropy-assignment", regex: new RegExp(String.raw`(${ASSIGNMENT_KEY}\\?["'])((?:[^"'\s\\]|\\(?!\\{0,2}["'])){12,4096})`, "gi") },
+  { kind: "high-entropy-assignment", regex: new RegExp(String.raw`(${ASSIGNMENT_KEY}\\?["'](?:${SGR})*)(${QUOTED_CHAR}(?:(?:${SGR})*${QUOTED_CHAR}){11,4095})`, "gi") },
   {
     kind: "high-entropy-assignment",
     // eslint-disable-next-line regexp/no-useless-assertions

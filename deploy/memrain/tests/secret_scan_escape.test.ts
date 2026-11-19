@@ -68,10 +68,54 @@ describe("escaped and glued starts", () => {
     ["\\t before sk-ant-", String.raw`"\t${ant}"`, "anthropic-key", ant],
     ["%22 before sk-ant-", `%22${ant}%22`, "anthropic-key", ant],
     ["glued after _", `token_${ghp}`, "github-token", ghp],
+    ["ansi raw ESC[32m before an assignment", `\x1b[32mpassword=${v}`, "high-entropy-assignment", v],
+    ["ansi written \\e[1;32m before an assignment", String.raw`\e[1;32m` + `token: ${v}`, "high-entropy-assignment", v],
+    ["ansi written \\033[32m before a quoted assignment", String.raw`\033[32m` + `api_key="${v}"`, "high-entropy-assignment", v],
+    ["ansi json \\u001b[0m before an assignment", String.raw`\u001b[0m` + `secret=${v}`, "high-entropy-assignment", v],
+    ["ansi true colour before an assignment", String.raw`\e[1;38;2;255;255;255m` + `password=${v}`, "high-entropy-assignment", v],
+    ["ansi true colour fg and bg before ghp_", `\x1b[1;38;2;255;255;255;48;2;10;20;30m${ghp}`, "github-token", ghp],
   ])("%s", (_name, text, kind, secret) => {
     const r = scanSecrets(text);
     expect(r.findings.map((f) => f.kind)).toEqual([kind]);
     expect(r.text).not.toContain(secret);
+  });
+
+  it("an unterminated colour code stays glued to the assignment word", () => {
+    expect(kinds(String.raw`\e[32xpassword=${v}`)).toEqual([]);
+  });
+
+  it.each([
+    ["written", String.raw`\e[0m`],
+    ["raw", "\x1b[0m"],
+  ])("a %s colour code ends a quoted value, so the code stays and a bare echo is caught", (_name, reset) => {
+    const r = scanSecrets(`password="${v}${reset}" then ${v}`);
+    expect(r.findings.map((f) => f.kind)).toEqual(["high-entropy-assignment", "high-entropy-assignment-echo"]);
+    expect(r.text).toContain(`]${reset}" then [REDACTED:`);
+    expect(r.text).not.toContain(v);
+  });
+
+  it.each([
+    ["written", String.raw`\e[32m`, String.raw`\e[0m`],
+    ["raw", "\x1b[32m", "\x1b[0m"],
+    ["doubled", String.raw`\e[1m\e[31m`, String.raw`\e[0m\e[0m`],
+  ])("a %s colour code around a quoted value stays outside the redaction", (_name, on, off) => {
+    const r = scanSecrets(`password="${on}${v}${off}"`);
+    expect(r.findings.map((f) => f.kind)).toEqual(["high-entropy-assignment"]);
+    expect(r.text).toStartWith(`password="${on}[REDACTED:`);
+    expect(r.text).toEndWith(`]${off}"`);
+  });
+
+  it("a colour code inside a quoted value is redacted with it", () => {
+    const w = rnd(16, 34);
+    const r = scanSecrets(String.raw`password="${v}\e[31m${w}"`);
+    expect(r.text).not.toContain(v);
+    expect(r.text).not.toContain(w);
+  });
+
+  it("a JSON-escaped colour code after a quoted value keeps the JSON valid", () => {
+    const json = JSON.stringify({ out: String.raw`password="${v}\e[0m" then ${v}` });
+    const r = scanSecrets(json);
+    expect(JSON.parse(r.text).out).toMatch(/^password="\[REDACTED:[^\]]+\]\\e\[0m" then \[REDACTED:high-entropy-assignment-echo:/);
   });
 
   it("keeps the escaped quotes of a JSON-escaped assignment around the marker", () => {
@@ -233,6 +277,9 @@ describe("linear time", () => {
     "escaped vendor prefixes": (n) => String.raw`\nghp_\tAKIA%22sk-ant-`.repeat(n / 20),
     "glued open-length prefixes": (n) => "_hf_-xoxb-_glpat-_sb_secret_-sk-".repeat(n / 32),
     "escaped assignment keys": (n) => String.raw`\"password\":\"\u003a%3D\ntoken%3D`.repeat(n / 36),
+    "coloured assignment keys": (n) => String.raw`\e[1;32mpassword\u001b[0mtoken:`.repeat(n / 31),
+    "unterminated colour codes in a quoted value": (n) => `password="${String.raw`x\e[1;2;3;4;5;6;7;8;9;`.repeat(n / 21)}`,
+    "colour codes alone in a quoted value": (n) => `password="${String.raw`\e[0m\x1b[1;2m`.repeat(n / 14)}`,
     "escaped bearer headers": (n) => String.raw`Authorization\":\"Bearer `.repeat(n / 24),
     "encoded bearer headers": (n) => `Authorization%3D%22Bearer%20\\u003a%20`.repeat(n / 38),
     "five vendor prefixes": (n) => "sk-or-v1-gsk_xai-pplx-r8_".repeat(n / 25),

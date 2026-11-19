@@ -79,6 +79,18 @@ marked; this section is the one that stands.
 - A single-value link target cannot hold two separate periods (A, then B, then
   A again); the re-add is refused.
 
+## Follow-ups from the colour-code assignment fix
+
+- A `SECRET_SCAN_VERSION` bump only makes doctor warn that the last audit used
+  an older scanner; text already stored stays as it was until an operator runs
+  `memrain secrets audit`. Decide whether a version bump should queue that
+  audit (dry run) by itself.
+- The assignment rule still misses a colour code between the key and its
+  separator (`\e[1mpassword\e[0m: <value>`, a bold key) and right after the
+  separator (`password=\e[32m<value>`). Only colour codes are boundaries, not
+  cursor or erase codes (`\e[2K`); case-insensitive matching lets `\e[0M`
+  through as one, which only widens what is redacted.
+
 ## Follow-ups from the Postgres CI speed-up
 
 - `bun-arm64.yml` and `deps-audit.yml` still install `bun-version: latest`;
