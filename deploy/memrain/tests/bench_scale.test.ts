@@ -21,6 +21,7 @@ import {
   assertBenchContainer,
   assertNotProductionServer,
   assertPoolerBesideAdmin,
+  assertContainerServes,
   armFailures,
   judge,
   percentileNearestRank,
@@ -98,6 +99,8 @@ describe("statistics", () => {
     expect(armFailures(["keyword_arm_failed"])).toEqual(["keyword_arm_failed"]);
     expect(armFailures(["vector_arm_failed", "keyword_zero"])).toEqual(["vector_arm_failed"]);
     expect(armFailures(["embed_timeout", "keyword_timeout", "title_arm_failed"])).toHaveLength(3);
+    // Only a failed identifier probe reports this one.
+    expect(armFailures(["keyword_candidates_incomplete"])).toEqual(["keyword_candidates_incomplete"]);
     // No hit and an incomplete candidate list are results, not failures.
     expect(armFailures(["keyword_zero", "vector_candidates_incomplete", "budget_truncated"])).toEqual([]);
   });
@@ -181,6 +184,21 @@ describe("refusals that protect a live brain", () => {
     }).catch((e: unknown) => e);
     expect((err as ScaleBenchRefusal).code).toBe("bench_refuses_pooler_host");
     assertPoolerBesideAdmin("postgres://u:p@localhost:6432/x", "postgres://u:p@127.0.0.1:5432/postgres");
+  });
+
+  it("takes a container's limits only when it publishes the admin URL's port on loopback", () => {
+    const binding = (port: string, ip = "127.0.0.1") => ({ PortBindings: { "5432/tcp": [{ HostIp: ip, HostPort: port }] } });
+    const admin = "postgres://u:p@127.0.0.1:55432/postgres";
+    assertContainerServes(binding("55432"), admin);
+    for (const [cfg, url] of [
+      [binding("55433"), admin],
+      [{ PortBindings: {} }, admin],
+      [binding("55432"), "postgres://u:p@db.internal.example:55432/postgres"],
+    ] as const) {
+      expect(() => assertContainerServes(cfg, url)).toThrow(
+        expect.objectContaining({ code: "bench_refuses_container" }),
+      );
+    }
   });
 
   it("restarts only a container the bench script started", () => {

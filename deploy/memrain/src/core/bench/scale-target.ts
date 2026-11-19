@@ -116,6 +116,31 @@ export function assertPoolerBesideAdmin(poolerUrl: string, adminUrl: string): vo
   }
 }
 
+/** The slice of `docker inspect .HostConfig` that says which host port a container publishes. */
+export interface ContainerHostConfig {
+  PortBindings?: Record<string, { HostIp?: string; HostPort?: string }[] | null>;
+}
+
+/**
+ * The container named for restarts and limits must be the one serving the
+ * admin URL: it publishes Postgres on the URL's loopback port. Anything else
+ * would put another container's limits in the report, or restart a server the
+ * bench is not measuring.
+ */
+export function assertContainerServes(hostConfig: ContainerHostConfig, adminUrl: string): void {
+  const u = new URL(adminUrl);
+  const bindings = hostConfig.PortBindings?.["5432/tcp"] ?? [];
+  const serves =
+    LOOPBACK.has(u.hostname.toLowerCase()) &&
+    bindings.some((b) => b.HostPort === (u.port || "5432") && ["", "0.0.0.0", "127.0.0.1", "::1"].includes(b.HostIp ?? ""));
+  if (!serves) {
+    throw new ScaleBenchRefusal(
+      "bench_refuses_container",
+      "the container does not publish the admin URL's loopback port; it is not the server being measured",
+    );
+  }
+}
+
 /** Only a container the bench script started may be restarted. */
 export function assertBenchContainer(name: string): void {
   if (!CONTAINER_PATTERN.test(name)) {
@@ -136,6 +161,11 @@ export function withDatabase(url: string, db: string): string {
 export interface ScratchTarget {
   dbName: string;
   nonce: string;
+  /**
+   * pg_database oid at creation. A database dropped and re-created under the
+   * same name gets a new one, so the drop checks it on the session that drops.
+   */
+  oid: number;
   /** Connection URL of the scratch database (carries credentials; never reported). */
   url: string;
 }
@@ -150,8 +180,10 @@ export async function createScratchDatabase(adminUrl: string, opts: { env: Env }
   const dbName = `memrain_bench_${randomBytes(8).toString("hex")}`;
   const nonce = randomBytes(16).toString("hex");
   const admin = new PostgresEngine({ url: adminUrl, max: 1, applicationName: APP_NAME });
+  let oid: number;
   try {
     await admin.query(`CREATE DATABASE ${dbName}`);
+    oid = await databaseOid(admin, dbName) ?? Number.NaN;
   } finally {
     await admin.close();
   }
@@ -169,7 +201,12 @@ export async function createScratchDatabase(adminUrl: string, opts: { env: Env }
   } finally {
     await e.close();
   }
-  return { dbName, nonce, url };
+  return { dbName, nonce, oid, url };
+}
+
+async function databaseOid(admin: Engine, dbName: string): Promise<number | null> {
+  const r = await admin.query<{ oid: string }>(`SELECT oid::text AS oid FROM pg_database WHERE datname = $1`, [dbName]);
+  return r.rows[0] ? Number(r.rows[0].oid) : null;
 }
 
 async function dropDatabase(adminUrl: string, dbName: string): Promise<void> {
@@ -182,27 +219,38 @@ async function dropDatabase(adminUrl: string, dbName: string): Promise<void> {
 }
 
 /**
- * Drop a database this run created, after proving it still carries this run's
- * nonce. Already gone: nothing to do. Anything else under the name: refused.
+ * Drop a database this run created: it must carry this run's nonce, and the
+ * database under the name must still be the one created (same oid), checked
+ * again on the admin session right before the DROP. Already gone: nothing to
+ * do. Anything else under the name: refused.
  */
 export async function dropScratchDatabase(adminUrl: string, target: ScratchTarget): Promise<void> {
   if (!DB_PATTERN.test(target.dbName)) {
     throw new ScaleBenchRefusal("bench_refuses_foreign_db", "refusing to drop a database the bench did not name");
   }
+  const sameDatabase = async (admin: Engine): Promise<boolean> => {
+    const oid = await databaseOid(admin, target.dbName);
+    if (oid === null) return false;
+    if (oid !== target.oid) {
+      throw new ScaleBenchRefusal("bench_refuses_foreign_db", "another database now holds the name the bench created");
+    }
+    return true;
+  };
+  // One connection, so the oid check and the DROP run back to back on it.
   const admin = new PostgresEngine({ url: adminUrl, max: 1, applicationName: APP_NAME });
   try {
-    const exists = await admin.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [target.dbName]);
-    if (exists.rows.length === 0) return;
+    if (!(await sameDatabase(admin))) return;
+    const e = new PostgresEngine({ url: target.url, max: 1, applicationName: APP_NAME });
+    try {
+      await assertOwnMarker(e, target);
+    } finally {
+      await e.close();
+    }
+    if (!(await sameDatabase(admin))) return;
+    await admin.query(`DROP DATABASE ${target.dbName} WITH (FORCE)`);
   } finally {
     await admin.close();
   }
-  const e = new PostgresEngine({ url: target.url, max: 1, applicationName: APP_NAME });
-  try {
-    await assertOwnMarker(e, target);
-  } finally {
-    await e.close();
-  }
-  await dropDatabase(adminUrl, target.dbName);
 }
 
 /** Connected to the database the bench named, which carries this run's nonce. */

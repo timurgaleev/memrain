@@ -40,6 +40,7 @@ import {
   APP_NAME,
   ScaleBenchRefusal,
   assertBenchContainer,
+  assertContainerServes,
   assertBenchTarget,
   assertNotProductionServer,
   assertPoolerBesideAdmin,
@@ -50,6 +51,7 @@ import {
   openBenchBrain,
   withDatabase,
   type BenchBrain,
+  type ContainerHostConfig,
   type Env,
   type LoadStats,
   type ScratchTarget,
@@ -220,12 +222,14 @@ async function docker(args: string[]): Promise<string> {
   return text;
 }
 
-async function containerLimits(name: string): Promise<Record<string, unknown>> {
+/** The container's CPU/RAM limits, once it is shown to be the server at `adminUrl`. */
+async function containerLimits(name: string, adminUrl: string): Promise<Record<string, unknown>> {
   assertBenchContainer(name);
-  const raw = JSON.parse(await docker(["inspect", "--format", "{{json .HostConfig}}", name])) as {
+  const raw = JSON.parse(await docker(["inspect", "--format", "{{json .HostConfig}}", name])) as ContainerHostConfig & {
     NanoCpus?: number;
     Memory?: number;
   };
+  assertContainerServes(raw, adminUrl);
   return { cpus: raw.NanoCpus ? raw.NanoCpus / 1e9 : null, memoryBytes: raw.Memory || null };
 }
 
@@ -507,11 +511,13 @@ export async function runScaleBench(opts: ScaleBenchOptions): Promise<ScaleRepor
   }
   const startedAt = new Date().toISOString();
   try {
+    // Before any connection: a container that is not this server is refused here.
+    const container = opts.container ? await containerLimits(opts.container, opts.adminUrl) : null;
     const admin = run.track(new PostgresEngine({ url: opts.adminUrl, max: 1, applicationName: APP_NAME }));
     const hardware: Record<string, unknown> = {
       host: { platform: platform(), arch: arch(), cpus: cpus().length, cpuModel: cpus()[0]?.model ?? "", memoryBytes: totalmem() },
       postgres: await serverFacts(admin),
-      container: opts.container ? await containerLimits(opts.container) : null,
+      container,
       bun: Bun.version,
     };
     run.sampler.start();

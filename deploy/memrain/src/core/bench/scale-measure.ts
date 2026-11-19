@@ -153,11 +153,14 @@ export function connectionErrorCount(errors: ErrorCounts): number {
 
 /**
  * The degraded reasons that mean part of the search did not run: an arm
- * failed or timed out. A query with no hit, an incomplete candidate list or a
- * truncated budget was still served in full and stays a sample.
+ * failed or timed out. `keyword_candidates_incomplete` is one of them — only
+ * a failed identifier probe reports it. A query with no hit, an incomplete
+ * vector candidate list or a truncated budget was served and stays a sample.
  */
 export function armFailures(degraded: readonly string[]): string[] {
-  return degraded.filter((r) => r.endsWith("_failed") || r.endsWith("_timeout"));
+  return degraded.filter(
+    (r) => r.endsWith("_failed") || r.endsWith("_timeout") || r === "keyword_candidates_incomplete",
+  );
 }
 
 export function armFailureCount(errors: ErrorCounts): number {

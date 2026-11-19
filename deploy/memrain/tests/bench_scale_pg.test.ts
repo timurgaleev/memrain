@@ -97,6 +97,20 @@ describe.skipIf(!URL_)("bench scale on Postgres", () => {
     }
   });
 
+  it("refuses to drop a database that is no longer the one it created, even under the same name and nonce", async () => {
+    const target = await createScratchDatabase(URL_!, { env: {} });
+    made.push(target);
+    const err = await dropScratchDatabase(URL_!, { ...target, oid: target.oid + 1 }).catch((e: unknown) => e);
+    expect((err as ScaleBenchRefusal).code).toBe("bench_refuses_foreign_db");
+    const admin = new PostgresEngine({ url: URL_!, max: 1 });
+    try {
+      const left = await admin.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [target.dbName]);
+      expect(left.rows).toHaveLength(1);
+    } finally {
+      await admin.close();
+    }
+  });
+
   it("runs a small end-to-end bench: report shape, zero spend, every hybrid vector from the seam, no database left", async () => {
     // Paid knobs set in the shell must not reach the run.
     const saved = { ...process.env };
