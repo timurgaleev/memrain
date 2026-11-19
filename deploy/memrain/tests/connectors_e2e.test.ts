@@ -179,7 +179,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const queued = (await enqueueDueDaemons(e, at, { env: ENV })).filter(r => r.daemon === "connector_sync");
     const queue = new Queue(e);
     const dbNow = new Date((await e.query<{ now: Date | string }>(`SELECT NOW() AS now`)).rows[0]!.now);
-    const claimAt = new Date(Math.max(at.getTime(), dbNow.getTime()));
+    // A Date keeps milliseconds and NOW() microseconds: a job queued in the same
+    // millisecond would sort after the truncated time and not be claimed.
+    const claimAt = new Date(Math.max(at.getTime(), dbNow.getTime() + 1));
     const results: Array<Record<string, unknown>> = [];
     for (let job = await queue.claim({ now: claimAt, kinds: [CONNECTOR_SYNC_JOB_KIND] }); job; job = await queue.claim({ now: claimAt, kinds: [CONNECTOR_SYNC_JOB_KIND] })) {
       const out = (await getHandler(CONNECTOR_SYNC_JOB_KIND)!(job.payload, { job })) ?? {};
