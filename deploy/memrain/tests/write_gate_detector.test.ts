@@ -14,7 +14,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { detectInstructionLike, WRITE_GATE_DETECTOR_VERSION } from "../src/core/write-gate.ts";
+import { detectInstructionLike, joinSpacedLetters, WRITE_GATE_DETECTOR_VERSION } from "../src/core/write-gate.ts";
 
 interface Case { id: string; text: string; family?: string }
 
@@ -122,5 +122,30 @@ describe("write-gate detector cost", () => {
     const body = BENIGN.map(c => c.text).join("\n\n");
     const text = body.repeat(Math.ceil(100_000 / body.length)).slice(0, 100_000);
     expect(timeFor(text)).toBeLessThan(25);
+  });
+});
+
+describe("joinSpacedLetters", () => {
+  // The regex it replaced; the scanner must agree with it on every input.
+  const SPACED_LETTERS = /(^| )(\p{L}(?: \p{L}(?= |$)){2,})/gu;
+  const viaRegex = (t: string) => t.replace(SPACED_LETTERS, (_r, lead: string, letters: string) => lead + letters.replace(/ /g, ""));
+
+  it("joins spaced-out letters and leaves wider gaps alone", () => {
+    expect(joinSpacedLetters("please i g n o r e that")).toBe("please ignore that");
+    expect(joinSpacedLetters("и г н о р")).toBe("игнор");
+    expect(joinSpacedLetters("a b")).toBe("a b");
+    expect(joinSpacedLetters("a  b  c")).toBe("a  b  c");
+  });
+
+  it("matches the regex it replaced on 5000 generated inputs", () => {
+    const alphabet = ["a", "b", "é", "ж", "\u{1D49C}", "1", " ", " ", " ", "-"];
+    let seed = 7;
+    const rand = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed; };
+    for (let n = 0; n < 5000; n++) {
+      let t = "";
+      const len = rand() % 24;
+      for (let k = 0; k < len; k++) t += alphabet[rand() % alphabet.length];
+      expect(joinSpacedLetters(t)).toBe(viaRegex(t));
+    }
   });
 });
