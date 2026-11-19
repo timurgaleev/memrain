@@ -366,16 +366,18 @@ One run on Docker Desktop on an arm64 laptop (seed 1):
 
 | Scenario | Result |
 |---|---|
-| 100k chunks, keyword | p50 49 ms, p95 135 ms (runs 128 / 142 / 135), p99 179 ms: under 300 ms |
-| 100k chunks, hybrid | p50 588 ms, p95 721 ms (runs 706 / 692 / 789), p99 870 ms: under 800 ms, with little margin |
-| Cold start (one query at a time) | p95 369 ms cold against 245 ms warm (1.5×); first query 698 ms |
-| 8 brains at once, direct | 0 connection errors, 0 failed arms, 41 connections at peak; hybrid p95 1.55 s |
-| Load | 100k chunks in 35 s, HNSW index in 44 s |
+| 100k chunks, keyword | p50 46 ms, p95 123 ms (runs 126 / 121 / 121), p99 163 ms: under 300 ms |
+| 100k chunks, hybrid | p50 519 ms, p95 713 ms (runs 799 / 605 / 598), p99 809 ms: under 800 ms, with little margin |
+| Cold start (one query at a time) | p95 241 ms cold against 222 ms warm (1.1×); first query 577 ms |
+| 8 brains at once, direct | 0 connection errors, 0 failed arms, 42 connections at peak; hybrid p95 1.11 s |
+| 8 brains at once, through PgBouncer | 0 connection errors, 0 failed arms, 39 connections at peak; hybrid p95 1.12 s |
+| Load | 100k chunks in 39 s, HNSW index in 50 s |
 
-Earlier runs on the same laptop gave hybrid p95 659–779 ms and a cold/warm ratio of
-1.2–1.5, so expect about 15% between runs. The cold ratio stays under 2×, so HNSW
-prewarm is not worth building. With 8 brains at once, 32 hybrid queries share
-4 CPUs. The latency shown there comes from CPU saturation, not connections.
+Other runs on the same laptop gave hybrid p95 659–779 ms and a cold/warm ratio of
+1.1–1.6, and one run of 200 queries reached 799 ms on its own, so expect 15–25%
+between runs. The cold ratio stays under 2×, so HNSW prewarm is not worth building.
+With 8 brains at once, 32 hybrid queries share 4 CPUs. The latency shown there comes
+from CPU saturation, not connections, and the pooler adds none that shows.
 
 These are laptop numbers. Docker Desktop has a faster disk and more memory than a
 small RDS instance. Run the bench once on the hosting stack before quoting a number
