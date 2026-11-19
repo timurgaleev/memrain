@@ -93,6 +93,7 @@ describe("scope-lint pooler safety", () => {
       "q(`CREATE TEMP TABLE scratch (id int)`)",
       "q(`CREATE TEMPORARY TABLE scratch AS SELECT 1`)",
       "q(`CREATE GLOBAL TEMPORARY TABLE scratch (id int)`)",
+      "q(`CREATE TEMP TABLE kept (id int); CREATE TEMP TABLE gone (id int) ON COMMIT DROP`)",
       "q(`DECLARE c CURSOR WITH HOLD FOR SELECT 1`)",
       "q(`DISCARD ALL`)",
       "q(`DISCARD PLANS`)",
