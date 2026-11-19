@@ -32,7 +32,7 @@
  * The report never carries a URL's credentials: servers appear as host:port.
  */
 import { cpus, totalmem, platform, arch } from "node:os";
-import { PostgresEngine } from "../engine/postgres.ts";
+import { PostgresEngine, type PostgresEngineOptions } from "../engine/postgres.ts";
 import type { Engine } from "../engine/interface.ts";
 import { Storage } from "../storage.ts";
 import { BENCH_EMBED_MODEL, CHUNKS_PER_DOC, QUERY_MIX, queryList } from "./scale-corpus.ts";
@@ -316,6 +316,10 @@ class Run {
     return this.track(new PostgresEngine({ url, max, applicationName: APP_NAME }));
   }
 
+  tenantEngine(url: string, via: "direct" | "pooler"): PostgresEngine {
+    return this.track(new PostgresEngine(tenantEngineOptions(url, via)));
+  }
+
   async newBrain(corpusSeed: string, chunks: number): Promise<Loaded> {
     const target = await createScratchDatabase(this.adminUrl, { env: this.env });
     this.created.push(target);
@@ -429,13 +433,21 @@ async function scenarioS4(run: Run, s1: Loaded, container: string, open: Postgre
   };
 }
 
+/**
+ * A tenant container's engine: a tenant-sized pool and, through the pooler,
+ * pooler mode, so it sends what a hosted tenant sends (MEMRAIN_PG_POOLER).
+ */
+export function tenantEngineOptions(url: string, via: "direct" | "pooler"): PostgresEngineOptions {
+  return { url, max: TENANT_POOL_MAX, applicationName: APP_NAME, ...(via === "pooler" ? { pooler: "pgbouncer" as const } : {}) };
+}
+
 /** Every tenant brain querying at once, each through its own tenant-sized pool. */
 async function scenarioS2(run: Run, brains: Loaded[], via: "direct" | "pooler", poolerUrl?: string): Promise<S2Report> {
   run.sampler.takeScenarioPeak();
   const results = await Promise.all(
     brains.map(async (b) => {
       const url = via === "direct" ? b.target.url : withDatabase(poolerUrl!, b.target.dbName);
-      const e = run.queryEngine(url, TENANT_POOL_MAX);
+      const e = run.tenantEngine(url, via);
       await assertBenchTarget(e, b.target);
       const m = await measure(new Storage(e), `s2:${via}`, "hybrid", run.p, run.counters);
       await e.close();

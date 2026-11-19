@@ -351,9 +351,10 @@ Postgres connections and every percentile. It measures three scenarios:
 - the same brain right after a Postgres restart: the first 20 queries against the
   same 20 once warm;
 - 8 brains of 12.5k chunks, each with a tenant container's pool of 4, all queried at
-  once: it passes only with no connection error and no search missing an arm. When
-  `deploy/pgbouncer` is in the tree, the script runs this scenario through PgBouncer
-  as well.
+  once: it passes only with no connection error and no search missing an arm. The
+  script runs this scenario a second time through the hosting PgBouncer image
+  (`deploy/pgbouncer`, its own entrypoint and config) with the engines in pooler
+  mode, as a hosted tenant connects.
 
 Each mode runs a fixed query mix, 50 warmup queries and then 3 runs of 200. p95 is
 nearest-rank over the 600 samples, and the report keeps each run's p95 so the run

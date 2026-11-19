@@ -10,7 +10,7 @@
 #      so the bench's 8-tenant scenario also runs through the pooler;
 #   3. runs the bench with --container and --cold, so the cold-start scenario
 #      can restart this container (and only this one);
-#   4. removes the containers, the network and the temp files on exit, passed
+#   4. removes the containers, the network and the pooler image on exit, passed
 #      or failed.
 #
 # The bench creates its own uniquely named databases on this server and drops
@@ -43,7 +43,6 @@ TAG="$$-$RANDOM"
 PG="memrain-scale-bench-pg-$TAG"
 BOUNCER="memrain-scale-bench-bouncer-$TAG"
 NET="memrain-scale-bench-$TAG"
-TMP=""
 STARTED=()
 
 cleanup() {
@@ -52,7 +51,6 @@ cleanup() {
   for c in "${STARTED[@]+"${STARTED[@]}"}"; do docker rm -f "$c" >/dev/null 2>&1 || true; done
   docker network rm "$NET" >/dev/null 2>&1 || true
   docker rmi "memrain-scale-bench-pgbouncer:$TAG" >/dev/null 2>&1 || true
-  [ -z "$TMP" ] || rm -rf "$TMP"
   echo "[scale-bench] cleaned up"
   exit "$status"
 }
@@ -75,7 +73,6 @@ wait_ready() {
   done
 }
 
-TMP="$(mktemp -d -t scale-bench.XXXXXX)"
 PASSWORD="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 docker network create "$NET" >/dev/null
 
@@ -106,35 +103,27 @@ POOLER_URL="${SCALE_BENCH_POOLER_URL:-}"
 if [ -z "$POOLER_URL" ] && [ -f "$PGBOUNCER_DIR/Dockerfile" ]; then
   log "building the PgBouncer image from deploy/pgbouncer"
   docker build -q -t "memrain-scale-bench-pgbouncer:$TAG" "$PGBOUNCER_DIR" >/dev/null
-  # A bench-only config: every bench database routed to the Postgres above,
-  # transaction pooling, a tenant container's pool size per database. The
-  # timeouts the engine sends at startup are accepted and dropped, as they are
-  # set on the role in a hosted install.
-  cat >"$TMP/pgbouncer.ini" <<EOF
-[databases]
-* = host=$PG port=5432
-
-[pgbouncer]
-listen_addr = 0.0.0.0
-listen_port = 6432
-auth_type = scram-sha-256
-auth_file = /etc/pgbouncer/userlist.txt
-pool_mode = transaction
-default_pool_size = 4
-max_client_conn = 500
-max_db_connections = 0
-max_prepared_statements = 200
-server_tls_sslmode = disable
-ignore_startup_parameters = extra_float_digits,statement_timeout,idle_in_transaction_session_timeout
-EOF
-  printf '"memrain" "%s"\n' "$PASSWORD" >"$TMP/userlist.txt"
-  chmod 0644 "$TMP/pgbouncer.ini" "$TMP/userlist.txt"
+  # The hosting image with its own entrypoint and config, as a tenant runs it:
+  # transaction pooling, a tenant container's pool size per database, and no
+  # session startup parameter accepted but application_name. The bench's
+  # databases are created at run time, so every database on this server is
+  # served (PGBOUNCER_ANY_DATABASE, as scripts/test-pg.sh does).
   STARTED+=("$BOUNCER")
   docker run -d --name "$BOUNCER" --network "$NET" --cpus 1 --memory 256m \
-    -v "$TMP/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro" \
-    -v "$TMP/userlist.txt:/etc/pgbouncer/userlist.txt:ro" \
+    --read-only --tmpfs /run/pgbouncer:uid=10070,gid=10070,mode=0700 \
+    --cap-drop ALL --security-opt no-new-privileges:true \
+    -e PGBOUNCER_UPSTREAM_URL="postgres://memrain:${PASSWORD}@${PG}:5432/postgres" \
+    -e PGBOUNCER_SERVER_TLS_SSLMODE=disable \
+    -e PGBOUNCER_DEFAULT_POOL_SIZE=4 \
+    -e PGBOUNCER_ANY_DATABASE=1 \
     -p 127.0.0.1::6432 \
-    --entrypoint pgbouncer "memrain-scale-bench-pgbouncer:$TAG" /etc/pgbouncer/pgbouncer.ini >/dev/null
+    "memrain-scale-bench-pgbouncer:$TAG" >/dev/null
+  waited=0
+  until docker exec "$PG" pg_isready -q -h "$BOUNCER" -p 6432 -U memrain -d postgres >/dev/null 2>&1; do
+    [ "$waited" -lt 30 ] || { docker logs "$BOUNCER" >&2 || true; die "PgBouncer not ready after 30s"; }
+    sleep 1
+    waited=$((waited + 1))
+  done
   BPORT="$(docker port "$BOUNCER" 6432/tcp | head -n1 | sed 's/.*://')"
   [ -n "$BPORT" ] || die "could not read the published port of $BOUNCER"
   POOLER_URL="postgres://memrain:${PASSWORD}@127.0.0.1:${BPORT}/postgres?sslmode=disable"

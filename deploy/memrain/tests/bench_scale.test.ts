@@ -27,7 +27,9 @@ import {
   percentileNearestRank,
   runScaleBench,
   summarizeRuns,
+  tenantEngineOptions,
 } from "../src/core/bench/scale.ts";
+import { buildPostgresOptions } from "../src/core/engine/postgres.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 
 describe("scale corpus", () => {
@@ -208,5 +210,20 @@ describe("refusals that protect a live brain", () => {
         expect.objectContaining({ code: "bench_refuses_container" }),
       );
     }
+  });
+});
+
+describe("tenant engines", () => {
+  it("a pooled tenant connects as a hosted one does: no session timeouts at startup", () => {
+    const pooled = buildPostgresOptions(tenantEngineOptions("postgres://u:p@h/db?sslmode=disable", "pooler"));
+    expect(pooled.connection).not.toHaveProperty("statement_timeout");
+    expect(pooled.connection).not.toHaveProperty("idle_in_transaction_session_timeout");
+    expect(pooled.max).toBe(4);
+  });
+
+  it("a direct tenant keeps the timeouts it sends today", () => {
+    const direct = buildPostgresOptions(tenantEngineOptions("postgres://u:p@h/db?sslmode=disable", "direct"));
+    expect(direct.connection).toHaveProperty("statement_timeout");
+    expect(direct.max).toBe(4);
   });
 });
