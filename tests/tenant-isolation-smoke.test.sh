@@ -205,6 +205,12 @@ if [ "$RC" -eq 0 ] && ! called 'smoke-record'; then pass "--no-record checks wit
 ws_new; run_smoke SMOKE_SERVICE_PORT="$(port neighbour)"
 if [ "$RC" -ne 0 ] && ! called 'smoke-record' && grep -q 'FAIL neighbour' "$WS/out.log"; then pass "a reachable neighbour fails the smoke"; else die "reachable neighbour passed (rc=$RC)"; show; fi
 
+# A neighbour's own pooler (profile pooler) must be out of reach as well.
+ws_new; container_json pgbouncer-beta memrain_tenant_beta; run_smoke SMOKE_POOLER_PORT="$(port closed)"
+if [ "$RC" -eq 0 ] && called 'inspect pgbouncer-beta'; then pass "a neighbour's pooler is probed and out of reach"; else die "neighbour pooler not probed (rc=$RC)"; show; fi
+ws_new; container_json pgbouncer-beta memrain_tenant_beta; run_smoke SMOKE_POOLER_PORT="$(port neighbour)"
+if [ "$RC" -ne 0 ] && ! called 'smoke-record' && grep -q 'FAIL neighbour' "$WS/out.log"; then pass "a reachable neighbour pooler fails the smoke"; else die "reachable neighbour pooler passed (rc=$RC)"; show; fi
+
 ws_new; run_smoke SMOKE_IMDS_ADDR="127.0.0.1:$(port imds)"
 if [ "$RC" -ne 0 ] && ! called 'smoke-record' && grep -q 'FAIL imds' "$WS/out.log"; then pass "a reachable IMDS fails the smoke"; else die "reachable IMDS passed (rc=$RC)"; show; fi
 

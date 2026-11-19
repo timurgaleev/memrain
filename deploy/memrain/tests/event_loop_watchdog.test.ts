@@ -90,8 +90,8 @@ if (process.env.MEMRAIN_TEST_POSTGRES_URL) it("rolls back an interrupted Postgre
     const database = (await e.query<{ name: string }>("SELECT current_database() AS name")).rows[0]!.name;
     const url = new URL(process.env.MEMRAIN_TEST_POSTGRES_URL!);
     url.pathname = `/${database}`;
-    const script = `import { PostgresEngine } from ${JSON.stringify(new URL("../src/core/engine/postgres.ts", import.meta.url).pathname)};
-      const engine = new PostgresEngine({ url: process.env.WATCHDOG_FIXTURE_URL });
+    const script = `import { pgTestEngine } from ${JSON.stringify(new URL("./helpers/pg-test-engine.ts", import.meta.url).pathname)};
+      const engine = pgTestEngine({ url: process.env.WATCHDOG_FIXTURE_URL });
       startEventLoopWatchdog(15000); process.on("SIGTERM", () => {}); await Bun.sleep(3500);
       await engine.transaction(async tx => { await tx.exec("INSERT INTO watchdog_probe VALUES ('uncommitted')");
         await tx.query("SELECT pg_advisory_xact_lock(731821)"); console.log("locked"); while (true) {} });`;

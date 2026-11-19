@@ -7,7 +7,8 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import postgres, { type Sql } from "postgres";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 
 const URL_ = process.env.MEMRAIN_TEST_POSTGRES_URL;
 
@@ -20,7 +21,7 @@ describe.skipIf(!URL_)("postgres driver after a terminated backend", () => {
   };
 
   beforeAll(async () => {
-    engine = new PostgresEngine({ url: URL_!, max: 2 });
+    engine = pgTestEngine({ url: URL_!, max: 2 });
     await engine.ready();
     admin = postgres(URL_!, { max: 1, onnotice: () => {} });
   });

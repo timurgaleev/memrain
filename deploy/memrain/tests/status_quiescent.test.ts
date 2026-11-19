@@ -11,7 +11,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import { Queue } from "../src/core/jobs/queue.ts";
 import { MAINTENANCE_ENV, JOBS_WORKER_ENV } from "../src/core/quiescence.ts";
@@ -176,7 +177,7 @@ describe("quiescence status on PGLite", () => {
 describe.skipIf(!PG_URL)("quiescence status on Postgres", () => {
   let pg: PostgresEngine;
   beforeAll(async () => {
-    pg = new PostgresEngine({ url: PG_URL! });
+    pg = pgTestEngine({ url: PG_URL! });
     await new Storage(pg).init();
   });
   afterAll(async () => {

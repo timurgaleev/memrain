@@ -115,12 +115,31 @@ export async function checkConnectionBudget(engine: Engine): Promise<TenancyChec
   const name = "db-connection-budget";
   if (engine.kind !== "postgres") return { name, ok: true, status: "ok", detail: "not applicable to PGLite" };
   try {
-    const r = await engine.query<{ max: string; reserved: string; in_use: number }>(
+    const r = await engine.query<{
+      max: string; reserved: string; in_use: number; statement_timeout: string; idle_timeout: string;
+    }>(
       `SELECT current_setting('max_connections') AS max,
               current_setting('superuser_reserved_connections') AS reserved,
-              (SELECT count(*)::int FROM pg_stat_activity WHERE backend_type = 'client backend') AS in_use`,
+              (SELECT count(*)::int FROM pg_stat_activity WHERE backend_type = 'client backend') AS in_use,
+              current_setting('statement_timeout') AS statement_timeout,
+              current_setting('idle_in_transaction_session_timeout') AS idle_timeout`,
     );
     const row = r.rows[0];
+    if (engine.pooler) {
+      // Through a pooler the engine sends no timeout at connect; only the
+      // role's own settings bound a runaway query or an idle transaction.
+      const off = [
+        ["statement_timeout", row?.statement_timeout],
+        ["idle_in_transaction_session_timeout", row?.idle_timeout],
+      ].filter(([, v]) => v === undefined || v === "0").map(([k]) => k);
+      if (off.length > 0) {
+        return {
+          name, ok: false, status: "fail",
+          detail: `pooler mode: ${off.join(" and ")} read 0 through the pool, so the role timeout is not in effect; ` +
+            "set it on the role (ALTER ROLE … SET)",
+        };
+      }
+    }
     const verdict = connectionBudgetVerdict({
       maxConnections: Number(row?.max ?? 0),
       reserved: Number(row?.reserved ?? 0),
@@ -128,7 +147,10 @@ export async function checkConnectionBudget(engine: Engine): Promise<TenancyChec
       processes: positiveInt("MEMRAIN_PG_POOL_PROCESSES") ?? 1,
       inUse: Number(row?.in_use ?? 0),
     });
-    return { name, ok: true, status: verdict.status, detail: verdict.detail };
+    const pooled = engine.pooler
+      ? `; pooler ${engine.pooler}: statement_timeout ${row?.statement_timeout}, idle_in_transaction_session_timeout ${row?.idle_timeout} from the role`
+      : "";
+    return { name, ok: true, status: verdict.status, detail: verdict.detail + pooled };
   } catch (e) {
     return couldNotCheck(name, e);
   }

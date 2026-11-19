@@ -200,6 +200,32 @@ else
   die "--control file backend failed"
 fi
 
+echo "== --tenant with the per-tenant pooler (MEMRAIN_TENANT_PG_POOLER) =="
+ws_new; seed_acme
+printf 'MEMRAIN_TENANT_PG_POOLER=pgbouncer\n' >> "$WS/.env"
+if fetch -- --tenant acme; then pass "fetches a pooled tenant's secrets"; else die "pooled tenant fetch failed"; cat "$WS/out.log"; fi
+if [ "$(val MEMRAIN_POSTGRES_URL)" = "${PG_ACME/db.example.test:5432/pgbouncer-acme:6432}?sslmode=disable" ]; then
+  pass "the database URL points at the tenant's own pooler"
+else
+  die "pooled URL wrong"
+fi
+if [ "$(val MEMRAIN_POSTGRES_DIRECT_URL)" = "$PG_ACME" ] && [ "$(val MEMRAIN_PG_POOLER)" = pgbouncer ]; then
+  pass "the direct URL (migrations, the pooler's upstream) and pooler mode are set"
+else
+  die "direct URL or pooler mode missing"
+fi
+if [ "$(val MEMRAIN_CONTROL_URL)" = "$CTL_ACME" ] && [ "$(wc -l < "$OUT" | tr -d ' ')" = 5 ]; then
+  pass "the control URL still goes to the database directly, never the pooler"
+else
+  die "control URL changed or extra lines"
+fi
+if no_values_in_output; then pass "no value printed"; else die "a value reached the output"; fi
+
+ws_new; seed_acme
+printf 'MEMRAIN_TENANT_PG_POOLER=pgcat\n' >> "$WS/.env"
+if fetch -- --tenant acme; then die "an unknown pooler was accepted"; else pass "an unknown MEMRAIN_TENANT_PG_POOLER is refused"; fi
+if [ -e "$OUT" ]; then die "a file was written for an unknown pooler"; fi
+
 echo "== arguments =="
 ws_new
 if fetch -- --bogus; then die "an unknown argument was accepted"; else pass "an unknown argument is refused"; fi

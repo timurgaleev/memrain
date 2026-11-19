@@ -191,10 +191,28 @@ if [ -n "$HOSTING_MODE" ]; then
         fi
       done < "$other"
     done
-    { printf 'MEMRAIN_POSTGRES_URL=%s\n' "$PG_URL"
-      printf 'MEMRAIN_CONTROL_URL=%s\n' "$CTL_URL"
-      printf 'MEMRAIN_INTERNAL_TOKEN=%s\n' "$TOKEN"; } > "$OUT_TMP"
-    WHAT="tenant ${TENANT_ID}: database URL, control URL and internal token"
+    # MEMRAIN_TENANT_PG_POOLER=pgbouncer (host .env) routes the tenant's brain
+    # through its own pooler, pgbouncer-<id> on its own network
+    # (deploy/tenant/tenant.yml.tmpl, profile pooler). The pooler and the
+    # tenant's migrations use the direct URL; the control URL never changes.
+    case "${MEMRAIN_TENANT_PG_POOLER:-}" in
+      "") POOLED_URL="" ;;
+      pgbouncer)
+        rest="${PG_URL#*://}"
+        db="${rest#*@}"; db="${db#*/}"; db="${db%%\?*}"
+        POOLED_URL="postgres://${rest%%@*}@pgbouncer-${TENANT_ID}:6432/${db}?sslmode=disable" ;;
+      *) echo "[secrets] ERROR: MEMRAIN_TENANT_PG_POOLER must be unset or pgbouncer; nothing written" >&2; exit 1 ;;
+    esac
+    if [ -z "$POOLED_URL" ]; then
+      printf 'MEMRAIN_POSTGRES_URL=%s\n' "$PG_URL" > "$OUT_TMP"
+    else
+      { printf 'MEMRAIN_POSTGRES_URL=%s\n' "$POOLED_URL"
+        printf 'MEMRAIN_POSTGRES_DIRECT_URL=%s\n' "$PG_URL"
+        printf 'MEMRAIN_PG_POOLER=pgbouncer\n'; } > "$OUT_TMP"
+    fi
+    { printf 'MEMRAIN_CONTROL_URL=%s\n' "$CTL_URL"
+      printf 'MEMRAIN_INTERNAL_TOKEN=%s\n' "$TOKEN"; } >> "$OUT_TMP"
+    WHAT="tenant ${TENANT_ID}: database URL, control URL and internal token${POOLED_URL:+ (through pgbouncer-${TENANT_ID})}"
   else
     ADMIN_URL="$(hosting_value control-admin-url)"; require_pg_url control-admin-url "$ADMIN_URL"
     printf 'MEMRAIN_CONTROL_ADMIN_URL=%s\n' "$ADMIN_URL" > "$OUT_TMP"

@@ -307,3 +307,18 @@ if [ "$RC" -ne 0 ] && ! called '| build' && ! called 'tenant migrate-control' &&
 else
   die "single-tenant brain next to tenants: rc=$RC"
 fi
+
+# ---- 11. Per-tenant pooler -----------------------------------------------
+ws_new; tenants ta:active tb:active
+run_deploy
+if [ "$RC" -eq 0 ] && ! called 'pgbouncer-'; then pass "without MEMRAIN_TENANT_PG_POOLER no pooler is started"; else die "a pooler was started while off (rc=$RC)"; fi
+ws_new; tenants ta:active tb:active
+printf 'MEMRAIN_TENANT_PG_POOLER=pgbouncer\n' >> "$WS/.env"
+run_deploy
+pa="$(line_of 'up -d --no-deps pgbouncer-ta')"; ra="$(line_of '--force-recreate memrain-ta')"
+pb="$(line_of 'up -d --no-deps pgbouncer-tb')"; rb="$(line_of '--force-recreate memrain-tb')"
+if [ "$RC" -eq 0 ] && [ -n "$pa" ] && [ -n "$ra" ] && [ "$pa" -lt "$ra" ] && [ -n "$pb" ] && [ "$pb" -lt "$rb" ]; then
+  pass "with MEMRAIN_TENANT_PG_POOLER=pgbouncer each tenant's pooler starts before its container"
+else
+  die "pooler not started before the tenant (rc=$RC pa=$pa ra=$ra pb=$pb rb=$rb)"
+fi

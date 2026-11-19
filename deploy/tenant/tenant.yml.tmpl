@@ -67,6 +67,50 @@ services:
     networks:
       tenant-@TENANT_ID@: {}
 
+  # The tenant's own PgBouncer, off unless the host .env sets
+  # COMPOSE_PROFILES=pooler together with MEMRAIN_TENANT_PG_POOLER=pgbouncer
+  # (fetch-secrets.sh --tenant then points the brain at it and hands both the
+  # direct URL). One per tenant, on this network only, so no two tenants share
+  # a node; it serves this tenant's database and nothing else. The control
+  # database never goes through it.
+  pgbouncer-@TENANT_ID@:
+    profiles: ["pooler"]
+    build:
+      context: ../pgbouncer
+    image: memrain-pgbouncer:1.24.0
+    container_name: pgbouncer-@TENANT_ID@
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    init: true
+    read_only: true
+    tmpfs:
+      - /run/pgbouncer:uid=10070,gid=10070,mode=0700
+    mem_limit: 64m
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    expose:
+      - "6432"
+    environment:
+      # RDS takes TLS; a local database container may need disable.
+      - PGBOUNCER_SERVER_TLS_SSLMODE=${MEMRAIN_PGBOUNCER_SERVER_SSLMODE:-require}
+      - PGBOUNCER_DEFAULT_POOL_SIZE=${MEMRAIN_PGBOUNCER_POOL_SIZE:-3}
+      # The env file is the tenant's; the pooler needs only its direct URL.
+      - MEMRAIN_POSTGRES_URL=
+      - MEMRAIN_CONTROL_URL=
+      - MEMRAIN_INTERNAL_TOKEN=
+    env_file:
+      - path: ../.secrets/tenants/@TENANT_ID@.env
+        required: true
+    networks:
+      tenant-@TENANT_ID@: {}
+
   cloudflared:
     networks:
       tenant-@TENANT_ID@: {}

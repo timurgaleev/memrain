@@ -10,7 +10,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PGliteEngine } from "../../src/core/engine/pglite.ts";
-import { PostgresEngine } from "../../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./pg-test-engine.ts";
 import type { Engine } from "../../src/core/engine/interface.ts";
 import { runMigrations } from "../../src/core/migrate.ts";
 import { MANIFEST_SQL, runManifestScript } from "./manifest-script.ts";
@@ -117,7 +117,7 @@ export async function openPglite119(): Promise<Db> {
 /** A fresh database on the server `baseUrl` points at, migrated through 119. */
 export async function openPostgres119(baseUrl: string): Promise<Db> {
   const name = `mig120_${process.pid}_${Math.floor(Math.random() * 1e9)}`;
-  const admin = new PostgresEngine({ url: baseUrl, max: 1 });
+  const admin = pgTestEngine({ url: baseUrl, max: 1 });
   await admin.exec(`CREATE DATABASE ${name}`);
   await admin.close();
   const u = new URL(baseUrl);
@@ -126,7 +126,7 @@ export async function openPostgres119(baseUrl: string): Promise<Db> {
   // One connection: the down refuses while another session is open, so the
   // fixture's own pool must not hold a second one.
   const open = async () => {
-    const e = new PostgresEngine({ url, max: 1 });
+    const e = pgTestEngine({ url, max: 1 });
     await e.ready();
     return e;
   };
@@ -158,7 +158,7 @@ export async function openPostgres119(baseUrl: string): Promise<Db> {
     },
     close: async () => {
       await engine.close();
-      const a = new PostgresEngine({ url: baseUrl, max: 1 });
+      const a = pgTestEngine({ url: baseUrl, max: 1 });
       try {
         await a.exec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
       } finally {

@@ -134,6 +134,14 @@ deploy_one() {
     return 0
   fi
 
+  if hosting_pooler; then
+    # The tenant's own pooler (profile pooler; naming it starts it). Built on
+    # first use from deploy/pgbouncer, left alone when nothing changed.
+    echo "==> tenant ${id}: starting pgbouncer-${id}"
+    hosting_compose up -d --no-deps "pgbouncer-${id}" \
+      || fail_at "$id" pooler "docker compose could not start pgbouncer-${id}"
+  fi
+
   echo "==> tenant ${id}: recreating ${container}"
   hosting_compose up -d --no-build --no-deps --force-recreate "$container" \
     || fail_at "$id" recreate "docker compose could not start ${container}"

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import { _resetHandlersForTesting, registerHandler } from "../src/core/jobs/handlers.ts";
 import { _resetDaemonsForTesting, registerDaemon, type DaemonSpec } from "../src/core/daemons/registry.ts";
@@ -211,7 +211,7 @@ if (process.env.MEMRAIN_TEST_POSTGRES_URL) describe("daemon scheduler across two
     const e = db.storage.engine();
     const url = new URL(process.env.MEMRAIN_TEST_POSTGRES_URL!);
     url.pathname = `/${(await e.query<{ name: string }>("SELECT current_database() AS name")).rows[0]!.name}`;
-    const other = new PostgresEngine({ url: url.toString(), max: 2 });
+    const other = pgTestEngine({ url: url.toString(), max: 2 });
     try {
       registerDaemon(probe());
       await Promise.all([enqueueDueDaemons(e, MORNING, { env: ON }), enqueueDueDaemons(other, MORNING, { env: ON })]);

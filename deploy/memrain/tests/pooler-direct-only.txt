@@ -1,0 +1,26 @@
+# Postgres test files scripts/test-pg.sh runs against the database directly
+# in pooler mode (TEST_PG_POOLER=1); every other file goes through PgBouncer
+# in transaction mode. One per line: <file> <category> <reason>.
+#   control  the file tests the control plane (provisioning, control
+#            migrations and privileges, operator sessions). Control
+#            connections identify a tenant by session_user and never go
+#            through a pooler; tenant brains there use the URLs provisioning
+#            hands out, which point at the database.
+#   session  the code under test needs its own server session. At most 10:
+#            more means the brain is not pooler-compatible.
+control_migrations_pg.test.ts control control migrations run over the master URL, never pooled
+control_privileges_pg.test.ts control control-role privilege matrix logs in as each control role directly
+hosting_spend_pg.test.ts control spend functions identify the tenant by session_user on control
+tenant_cli_pg.test.ts control tenant CLI runs against the control admin URL
+tenant_delete_pg.test.ts control tenant delete drops roles and databases over the master URL
+tenant_operator_sessions_pg.test.ts control operator sessions log in as a temporary role (role option, a session)
+tenant_provision_pg.test.ts control provisioning creates roles and databases over the master URL
+tenant_purge_nonsuper_pg.test.ts control purge runs as a non-superuser master over control
+tenant_session_cleanup_pg.test.ts control operator-session cleanup works on the master URL
+tenant_silo_pg.test.ts control two tenants provisioned over control; brains on provisioning's URLs
+tenant_suspend_pg.test.ts control suspend flips roles and control rows over the master URL
+migration_120_up_down_up.test.ts session migration 120's down refuses while any other session is on the database, and a pooler keeps idle server sessions open; the down is an offline operator step
+migration_120_byte_for_byte.test.ts session runs migration 120's down, which refuses while the pooler's idle server sessions are connected
+lock_legacy_rows.test.ts session runs migration 120's down, which refuses while the pooler's idle server sessions are connected
+v1163_paths_post_migration.test.ts session runs migration 120's down, which refuses while the pooler's idle server sessions are connected
+data_manifest_sql.test.ts session the operator's psql manifest is proven against a search_path passed in PGOPTIONS, a startup parameter a pooler refuses

@@ -41,7 +41,8 @@ render acme --host acme.example.test
 F="$WS/deploy/tenants/acme.yml"
 if [ "$RC" -eq 0 ] && [ -f "$F" ]; then pass "renders deploy/tenants/acme.yml"; else die "render failed (rc=$RC)"; cat "$WS/out.log"; fi
 if grep -q '@[A-Z_]*@' "$F"; then die "placeholders left in the rendered file"; else pass "no placeholder left"; fi
-if grep -Eiq 'postgres(ql)?://|TOKEN=|BEARER=|PASSWORD' "$F"; then die "a secret-shaped literal in the rendered file"; else pass "no secret literal in the rendered file"; fi
+# An empty assignment (the pooler blanking what it must not get) is no literal.
+if grep -Eiq 'postgres(ql)?://|TOKEN=[^[:space:]]|BEARER=[^[:space:]]|PASSWORD' "$F"; then die "a secret-shaped literal in the rendered file"; else pass "no secret literal in the rendered file"; fi
 if grep -q 'MEMRAIN_PUBLIC_URL=https://acme.example.test$' "$F"; then pass "public URL from --host"; else die "public URL missing"; fi
 if grep -q 'MEMRAIN_PUBLIC_BEARER' "$F"; then die "the template sets a static public bearer"; else pass "no static public bearer"; fi
 
@@ -162,4 +163,66 @@ if (cd "$WS" && docker compose --env-file .env --profile ops -f deploy/tenant/co
   fi
 else
   die "compose config with --profile ops failed:"; sed 's/^/      /' "$TMPROOT/ops.err"
+fi
+
+# The per-tenant pooler (profile pooler) is off unless asked for. When on,
+# each tenant gets its own, on its own network only, and the control database
+# never goes through it.
+if jq -e '.services | keys | map(select(startswith("pgbouncer"))) | length == 0' "$CFG" >/dev/null; then
+  pass "without the pooler profile no pooler service exists"
+else
+  die "a pooler service exists without the pooler profile"
+fi
+POOL="$TMPROOT/pooler.json"
+printf 'MEMRAIN_POSTGRES_URL=postgres://acme_owner:pw@pgbouncer-acme:6432/tenant_acme?sslmode=disable\nMEMRAIN_POSTGRES_DIRECT_URL=postgres://acme_owner:pw@db.example.test:5432/tenant_acme\nMEMRAIN_PG_POOLER=pgbouncer\nMEMRAIN_CONTROL_URL=postgres://acme_ctl:pw@db.example.test:5432/memrain_control\nMEMRAIN_INTERNAL_TOKEN=token-acme-0123456789abcdef0123456789\n' > "$WS/deploy/.secrets/tenants/acme.env"
+pooler_config() { # [ENV_LINE] -> compose config with the pooler profile into $POOL
+  cp "$WS/.env" "$WS/.env.pooler"
+  [ $# -eq 0 ] || printf '%s\n' "$1" >> "$WS/.env.pooler"
+  (cd "$WS" && docker compose --env-file .env.pooler --profile pooler -f deploy/tenant/compose.hosting.yml \
+      -f deploy/tenants/acme.yml -f deploy/tenants/beta.yml config --format json) > "$POOL" 2> "$TMPROOT/pooler.err"
+}
+pv() { jq -r --arg s "$1" "$2" "$POOL"; }
+penv() { jq -r --arg s "$1" --arg k "$2" '.services[$s].environment[$k] // empty' "$POOL"; }
+if pooler_config; then
+  if [ "$(pv pgbouncer-acme '.services[$s].networks | keys | join(",")')" = "tenant-acme" ] \
+     && [ "$(pv pgbouncer-beta '.services[$s].networks | keys | join(",")')" = "tenant-beta" ]; then
+    pass "each tenant has its own pooler, on its own network only"
+  else
+    die "pooler networks: acme='$(pv pgbouncer-acme '.services[$s].networks | keys | join(",")')'"
+  fi
+  if [ "$(pv pgbouncer-acme '.services[$s].container_name')" = "pgbouncer-acme" ]; then pass "the pooler is named pgbouncer-<id>"; else die "pooler container name"; fi
+  if [ "$(pv pgbouncer-acme '.services[$s].ports // [] | length')" = "0" ]; then pass "the pooler publishes no port"; else die "the pooler publishes a port"; fi
+  if [ "$(pv pgbouncer-acme '.services[$s].read_only')" = "true" ] && [ "$(pv pgbouncer-acme '.services[$s].cap_drop | join(",")')" = "ALL" ] \
+     && pv pgbouncer-acme '.services[$s].tmpfs | join(",")' | grep -q '^/run/pgbouncer'; then
+    pass "the pooler runs read-only, caps dropped, config on a tmpfs"
+  else
+    die "pooler hardening missing"
+  fi
+  if pv pgbouncer-acme '.services[$s].image' | grep -Eq '^memrain-pgbouncer:[0-9]+\.[0-9]+\.[0-9]+$'; then pass "the pooler image tag names its PgBouncer version"; else die "pooler image: $(pv pgbouncer-acme '.services[$s].image')"; fi
+  if [ "$(penv pgbouncer-acme PGBOUNCER_SERVER_TLS_SSLMODE)" = require ]; then pass "server TLS to RDS: require by default"; else die "pooler sslmode default: '$(penv pgbouncer-acme PGBOUNCER_SERVER_TLS_SSLMODE)'"; fi
+  case "$(penv pgbouncer-acme MEMRAIN_POSTGRES_DIRECT_URL)" in
+    *@db.example.test:5432/tenant_acme) pass "the pooler's upstream is the tenant's own database, directly" ;;
+    *) die "pooler upstream is not acme's database" ;;
+  esac
+  if [ -z "$(penv pgbouncer-acme MEMRAIN_CONTROL_URL)" ] && [ -z "$(penv pgbouncer-acme MEMRAIN_INTERNAL_TOKEN)" ]; then
+    pass "the pooler gets neither the control URL nor the internal token"
+  else
+    die "the control URL or internal token reaches the pooler"
+  fi
+  case "$(penv memrain-acme MEMRAIN_CONTROL_URL)" in
+    *@pgbouncer*|"") die "the control URL goes through the pooler (or is missing)" ;;
+    *) pass "the tenant's control URL goes to the database directly, never the pooler" ;;
+  esac
+  if [ "$(penv memrain-acme MEMRAIN_PG_POOLER)" = pgbouncer ]; then
+    pass "the tenant runs in pooler mode when its env file says so"
+  else
+    die "MEMRAIN_PG_POOLER does not reach the tenant"
+  fi
+  if pooler_config MEMRAIN_PGBOUNCER_SERVER_SSLMODE=disable && [ "$(penv pgbouncer-acme PGBOUNCER_SERVER_TLS_SSLMODE)" = disable ]; then
+    pass "server TLS follows MEMRAIN_PGBOUNCER_SERVER_SSLMODE (disable for a local database)"
+  else
+    die "MEMRAIN_PGBOUNCER_SERVER_SSLMODE is not passed on"
+  fi
+else
+  die "compose config with --profile pooler failed:"; sed 's/^/      /' "$TMPROOT/pooler.err"
 fi

@@ -15,6 +15,7 @@
  * Diesel migrations.
  */
 import type { Engine } from "./engine/interface.ts";
+import { withDirectEngine } from "./engine/direct.ts";
 import { isDeadlockError, isRetryableConnError, isStatementTimeoutError } from "./retry.ts";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -327,6 +328,23 @@ async function applyOneWithRetry(
 }
 
 /**
+ * Ids recorded in `migrations`, or null while the table (or its `name`
+ * column) does not exist yet. Read-only.
+ */
+async function recordedMigrationIds(engine: Engine): Promise<Set<number> | null> {
+  const probe = await engine.query<{ present: boolean; named: boolean }>(
+    `SELECT to_regclass('migrations') IS NOT NULL AS present,
+            EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema = current_schema()
+                       AND table_name = 'migrations' AND column_name = 'name') AS named`,
+  );
+  const row = probe.rows[0];
+  if (!row?.present || !row.named) return null;
+  const r = await engine.query<{ id: number }>("SELECT id FROM migrations");
+  return new Set(r.rows.map((x) => Number(x.id)));
+}
+
+/**
  * Apply pending migrations. Idempotent. Bootstraps the migrations table
  * itself before the first real migration runs.
  *
@@ -338,6 +356,20 @@ export async function runMigrations(
   engine: Engine,
   dir: string = DEFAULT_DIR,
 ): Promise<MigrationResult> {
+  // Never through a transaction pooler: a pooled engine hands over a direct
+  // one, or the run is refused before any SQL (core/engine/direct.ts).
+  return withDirectEngine(engine, (direct) => applyPending(direct, dir));
+}
+
+async function applyPending(engine: Engine, dir: string): Promise<MigrationResult> {
+  // Read before writing: a database with nothing pending sees no DDL at all,
+  // not even the idempotent bootstrap below.
+  const onDisk = discoverMigrations(dir);
+  const recorded = await recordedMigrationIds(engine);
+  if (recorded && onDisk.every((f) => recorded.has(f.id))) {
+    return { applied: [], skipped: onDisk.length };
+  }
+
   await engine.exec(`
     CREATE TABLE IF NOT EXISTS migrations (
       id INTEGER PRIMARY KEY,
@@ -351,7 +383,7 @@ export async function runMigrations(
   );
   const seen = new Set(seenRows.rows.map((r) => r.id));
 
-  const files = discoverMigrations(dir);
+  const files = onDisk;
   const lockTimeout = resolveLockTimeout();
   const stmtTimeout = resolveMigrationStatementTimeout();
   const applied: { id: number; name: string }[] = [];
@@ -417,16 +449,18 @@ export async function revertMigration(
   id: number,
   dir: string = DEFAULT_DOWN_DIR,
 ): Promise<{ id: number; name: string }> {
-  const down = findDownMigration(id, dir);
-  const top = await engine.query<{ id: number | null }>("SELECT max(id) AS id FROM migrations");
-  const latest = top.rows[0]?.id ?? null;
-  if (latest === null || Number(latest) !== id) {
-    throw new Error(
-      `migration ${id} is not the latest applied migration (latest: ${latest ?? "none"}); only the latest can be reverted`,
-    );
-  }
-  await engine.transaction(async (tx) => {
-    await tx.exec(down.sql);
+  return withDirectEngine(engine, async (direct) => {
+    const down = findDownMigration(id, dir);
+    const top = await direct.query<{ id: number | null }>("SELECT max(id) AS id FROM migrations");
+    const latest = top.rows[0]?.id ?? null;
+    if (latest === null || Number(latest) !== id) {
+      throw new Error(
+        `migration ${id} is not the latest applied migration (latest: ${latest ?? "none"}); only the latest can be reverted`,
+      );
+    }
+    await direct.transaction(async (tx) => {
+      await tx.exec(down.sql);
+    });
+    return { id, name: down.name };
   });
-  return { id, name: down.name };
 }

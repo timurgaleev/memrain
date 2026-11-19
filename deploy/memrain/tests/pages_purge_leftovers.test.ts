@@ -11,7 +11,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { deletePage, putPage } from "../src/core/pages.ts";
 import { putRawData } from "../src/core/raw-data.ts";
@@ -129,7 +130,7 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
   const raceSlug = `people/purge-race-pg-${run}`;
 
   beforeAll(async () => {
-    pg = new PostgresEngine({ url: PG_URL! });
+    pg = pgTestEngine({ url: PG_URL! });
     storage = new Storage(pg);
     await storage.init();
   });
@@ -159,7 +160,7 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
     const id = (await addFact(storage, { entity_slug: `people/purge-forget-race-${run}`, fact: "Likes tea.", source_slug: page })).id!;
     await deletePage(storage, page);
     await pg.query(`UPDATE pages SET deleted_at = NOW() - interval '1000 hours' WHERE slug = $1`, [page]);
-    const forgetter = new PostgresEngine({ url: PG_URL!, max: 2 });
+    const forgetter = pgTestEngine({ url: PG_URL!, max: 2 });
     try {
       let purge!: Promise<Awaited<ReturnType<typeof purgeDeletedPages>>>;
       await forgetter.transaction(async (tx) => {
@@ -198,7 +199,7 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
   for (const [name, write] of racers) {
     it(`${name} racing an open purge leaves no orphan`, async () => {
       await putPage(storage, { slug: raceSlug, type: "person", source_id: "default" });
-      const purger = new PostgresEngine({ url: PG_URL!, max: 2 });
+      const purger = pgTestEngine({ url: PG_URL!, max: 2 });
       try {
         let settled!: Promise<unknown>;
         await purger.transaction(async (tx) => {
@@ -230,7 +231,7 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
     // A write that skipped that lock could insert on the old slug after the move.
     it(`${name} waits for the page's slug lock`, async () => {
       await putPage(storage, { slug: raceSlug, type: "person", source_id: "default" });
-      const holder = new PostgresEngine({ url: PG_URL!, max: 2 });
+      const holder = pgTestEngine({ url: PG_URL!, max: 2 });
       try {
         let settled!: Promise<unknown>;
         let finishedWhileLocked = false;

@@ -8,7 +8,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import { Queue } from "../src/core/jobs/queue.ts";
 import { Worker } from "../src/core/jobs/worker.ts";
@@ -258,7 +259,7 @@ function wellFormedJobCases(engine: () => Engine, tag: string): void {
     const q = new Queue(engine());
     const id = fresh();
     try {
-      await q.enqueue({ kind: id, id, payload: { text: "p\u0000q", bad: "r\ud800s" } });
+      await q.enqueue({ kind: id, id, payload: { text: "p\u0000q", bad: "r\uD800s" } });
       expect((await q.get(id))!.payload).toEqual({ text: "pq", bad: "r\uFFFDs" });
     } finally {
       await engine().query(`DELETE FROM jobs WHERE id = $1`, [id]);
@@ -272,7 +273,7 @@ function wellFormedJobCases(engine: () => Engine, tag: string): void {
       await q.enqueue({ kind: id, id });
       const claimed = await q.claim({ kinds: [id] });
       const gen = claimed!.claimGeneration;
-      expect(await q.updateProgress(id, gen, { note: "a\u0000b", bad: "x\ud800y" })).toBe(true);
+      expect(await q.updateProgress(id, gen, { note: "a\u0000b", bad: "x\uD800y" })).toBe(true);
       const done = await q.complete(id, gen, { note: "c\u0000d" });
       expect(done!.result).toEqual({ note: "cd" });
       expect((await q.get(id))!.progress).toEqual({ note: "ab", bad: "x\uFFFDy" });
@@ -289,7 +290,7 @@ describe("jsonb well-forming on PGLite", () => {
 describe.skipIf(!PG_URL)("jsonb well-forming on Postgres", () => {
   let pg: PostgresEngine;
   beforeAll(async () => {
-    pg = new PostgresEngine({ url: PG_URL! });
+    pg = pgTestEngine({ url: PG_URL! });
     await new Storage(pg).init();
   });
   afterAll(async () => {
