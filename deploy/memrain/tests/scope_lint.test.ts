@@ -97,6 +97,9 @@ describe("scope-lint pooler safety", () => {
       "q(`DECLARE c CURSOR WITH HOLD FOR SELECT 1`)",
       "q(`DISCARD ALL`)",
       "q(`DISCARD PLANS`)",
+      "q(`create temp table scratch (id int)`)",
+      "q(`declare c cursor with hold for select 1`)",
+      "q(`discard all`)",
     ]) {
       expect({ sql, hits: findPoolerUnsafe("x.ts", sql).length }).toEqual({ sql, hits: 1 });
     }

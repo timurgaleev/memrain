@@ -177,9 +177,10 @@ const POOLER_UNSAFE: Array<[RegExp, string]> = [
   [/^\s*SET\s+(?:SESSION\s+)?(?!LOCAL\b|TRANSACTION\b|CONSTRAINTS\b)[A-Za-z_][\w.]*\s*(?:=|TO\b)/, "session SET (use SET LOCAL)"],
   [/\bset_config\s*\([^)]*,\s*false\s*\)/i, "set_config(..., false) is session-scoped"],
   // A temp table lives in the server session; ON COMMIT DROP ends it with the transaction.
-  [/\bCREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?TEMP(?:ORARY)?\s+TABLE\b(?![^;]*\bON\s+COMMIT\s+DROP\b)/, "TEMP TABLE outlives the transaction (add ON COMMIT DROP)"],
-  [/\bWITH\s+HOLD\b/, "a WITH HOLD cursor outlives the transaction"],
-  [/^\s*DISCARD\s+(?:ALL|PLANS|SEQUENCES|TEMP|TEMPORARY)\b/, "DISCARD resets the shared server session"],
+  // These three read as SQL in either case; prose rarely matches their shape.
+  [/\bCREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?TEMP(?:ORARY)?\s+TABLE\b(?![^;]*\bON\s+COMMIT\s+DROP\b)/i, "TEMP TABLE outlives the transaction (add ON COMMIT DROP)"],
+  [/\bCURSOR\b[^;]*\bWITH\s+HOLD\b/i, "a WITH HOLD cursor outlives the transaction"],
+  [/^\s*DISCARD\s+(?:ALL|PLANS|SEQUENCES|TEMP|TEMPORARY)\s*;?\s*$/im, "DISCARD resets the shared server session"],
 ];
 
 export function findPoolerUnsafe(file: string, src: string): Array<ScopeHit & { why: string }> {
