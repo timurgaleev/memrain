@@ -31,6 +31,7 @@ import {
 } from "../src/core/bench/scale.ts";
 import { buildPostgresOptions } from "../src/core/engine/postgres.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
+import { LEGACY_ENV_PREFIX } from "../src/core/env-compat.ts";
 
 describe("scale corpus", () => {
   it("one seed gives one digest; another seed gives another", () => {
@@ -127,6 +128,15 @@ describe("refusals that protect a live brain", () => {
     ).toThrow(expect.objectContaining({ code: "bench_refuses_prod_url" }));
     // A different server is fine.
     assertNotProductionServer("postgres://u:p@127.0.0.1:55432/postgres", env);
+  });
+
+  it("refuses the server a legacy-named production URL points at", () => {
+    for (const name of ["POSTGRES_URL", "POSTGRES_DIRECT_URL", "CONTROL_URL"]) {
+      const env = { [LEGACY_ENV_PREFIX + name]: PROD };
+      expect(() =>
+        assertNotProductionServer("postgres://u:p@db.internal.example:5432/postgres", env),
+      ).toThrow(expect.objectContaining({ code: "bench_refuses_prod_url" }));
+    }
   });
 
   it("treats every loopback spelling as the same host", () => {

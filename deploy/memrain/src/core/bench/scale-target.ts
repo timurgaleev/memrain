@@ -10,6 +10,7 @@
  * connection is opened, whatever flag the caller passed.
  */
 import { randomBytes } from "node:crypto";
+import { ENV_PREFIX, LEGACY_ENV_PREFIX } from "../env-compat.ts";
 import { PostgresEngine } from "../engine/postgres.ts";
 import type { Engine } from "../engine/interface.ts";
 import { Storage } from "../storage.ts";
@@ -30,13 +31,14 @@ export const APP_NAME = "memrain-bench-scale";
 /** Index builds and bulk loads outlive the interactive 30s statement timeout. */
 const LOAD_STATEMENT_TIMEOUT_MS = 60 * 60_000;
 
-/** Environment URLs that name a live database. Their servers are never a bench target. */
-const PRODUCTION_URL_VARS = [
-  "MEMRAIN_POSTGRES_URL",
-  "MEMRAIN_POSTGRES_DIRECT_URL",
-  "MEMRAIN_CONTROL_URL",
-  "MEMEX_POSTGRES_URL",
-] as const;
+/**
+ * Environment URLs that name a live database, under either name prefix.
+ * Their servers are never a bench target.
+ */
+const PRODUCTION_URL_VARS = ["POSTGRES_URL", "POSTGRES_DIRECT_URL", "CONTROL_URL"].flatMap((name) => [
+  ENV_PREFIX + name,
+  LEGACY_ENV_PREFIX + name,
+]);
 
 export type RefusalCode =
   | "bench_needs_scratch"
