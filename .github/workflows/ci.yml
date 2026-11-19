@@ -146,7 +146,8 @@ jobs:
     # (PGLite serializes them).
     name: Postgres tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 228 files in chunks, each running its PGLite and Postgres halves: ~30-40 min.
+    timeout-minutes: 60
     services:
       postgres:
         image: pgvector/pgvector:pg16
