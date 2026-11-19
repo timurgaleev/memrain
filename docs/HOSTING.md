@@ -274,8 +274,11 @@ and `bash deploy/deploy.sh`. The tenant env file then points
 `MEMRAIN_POSTGRES_URL` at `pgbouncer-<id>:6432` and adds
 `MEMRAIN_POSTGRES_DIRECT_URL` (migrations and DDL, and the pooler's own
 upstream) and `MEMRAIN_PG_POOLER=pgbouncer`; the control URL is unchanged.
-The deploy starts each pooler before its tenant container, and the isolation
-smoke probes every neighbour's pooler as well. `MEMRAIN_PGBOUNCER_SERVER_SSLMODE`
+The deploy rebuilds and starts each pooler and waits for its healthcheck before
+it recreates the tenant container. It stops at a tenant whose env file
+disagrees with the host `.env` (pooled on one side only), so re-fetch the env
+files whenever you turn the pooler on or off. The isolation smoke probes every
+neighbour's pooler as well. `MEMRAIN_PGBOUNCER_SERVER_SSLMODE`
 (default `require`) and `MEMRAIN_PGBOUNCER_POOL_SIZE` (default 3 server
 connections per tenant) tune it.
 

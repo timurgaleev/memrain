@@ -72,6 +72,7 @@ case "$1" in
         svc="${*: -1}"
         case "$svc" in
           memrain-*) id="${svc#memrain-}"; touch "$S/up_$id"; printf '%s' "$MEMRAIN_VERSION" > "$S/ver_$id" ;;
+          pgbouncer-*) touch "$S/up_$svc" ;;
         esac ;;
     esac
     exit 0 ;;
@@ -79,6 +80,7 @@ case "$1" in
     printf 'docker %s\n' "$*" >> "$S/calls.log"
     c="$2"; id="${c#memrain-}"
     if [ "$c" = deploy-memrain-1 ]; then [ -e "$S/single_running" ] && echo true || echo false; exit 0; fi
+    case "$c" in pgbouncer-*) id="$c" ;; esac
     if [ -e "$S/up_$id" ] && [ ! -e "$S/unhealthy_$id" ]; then echo healthy; else echo starting; fi ;;
   exec)
     printf 'docker %s\n' "$*" >> "$S/calls.log"
@@ -312,13 +314,63 @@ fi
 ws_new; tenants ta:active tb:active
 run_deploy
 if [ "$RC" -eq 0 ] && ! called 'pgbouncer-'; then pass "without MEMRAIN_TENANT_PG_POOLER no pooler is started"; else die "a pooler was started while off (rc=$RC)"; fi
+# env_files POOLED|DIRECT ID... -> each tenant's env file, as fetch-secrets.sh
+# --tenant writes it with or without MEMRAIN_TENANT_PG_POOLER.
+env_files() {
+  local how="$1" id; shift
+  mkdir -p "$WS/deploy/.secrets/tenants"
+  for id in "$@"; do
+    if [ "$how" = POOLED ]; then
+      printf 'MEMRAIN_POSTGRES_URL=postgres://o:p@pgbouncer-%s:6432/d\nMEMRAIN_POSTGRES_DIRECT_URL=postgres://o:p@db/d\nMEMRAIN_PG_POOLER=pgbouncer\n' "$id"
+    else
+      printf 'MEMRAIN_POSTGRES_URL=postgres://o:p@db/d\n'
+    fi > "$WS/deploy/.secrets/tenants/$id.env"
+  done
+}
 ws_new; tenants ta:active tb:active
 printf 'MEMRAIN_TENANT_PG_POOLER=pgbouncer\n' >> "$WS/.env"
+env_files POOLED ta tb
 run_deploy
-pa="$(line_of 'up -d --no-deps pgbouncer-ta')"; ra="$(line_of '--force-recreate memrain-ta')"
-pb="$(line_of 'up -d --no-deps pgbouncer-tb')"; rb="$(line_of '--force-recreate memrain-tb')"
-if [ "$RC" -eq 0 ] && [ -n "$pa" ] && [ -n "$ra" ] && [ "$pa" -lt "$ra" ] && [ -n "$pb" ] && [ "$pb" -lt "$rb" ]; then
-  pass "with MEMRAIN_TENANT_PG_POOLER=pgbouncer each tenant's pooler starts before its container"
+pa="$(line_of 'up -d --build --no-deps pgbouncer-ta')"; ha="$(line_of 'inspect pgbouncer-ta')"; ra="$(line_of '--force-recreate memrain-ta')"
+pb="$(line_of 'up -d --build --no-deps pgbouncer-tb')"; hb="$(line_of 'inspect pgbouncer-tb')"; rb="$(line_of '--force-recreate memrain-tb')"
+if [ "$RC" -eq 0 ] && [ -n "$pa" ] && [ -n "$ha" ] && [ -n "$ra" ] && [ "$pa" -lt "$ha" ] && [ "$ha" -lt "$ra" ] \
+   && [ -n "$pb" ] && [ -n "$hb" ] && [ "$pb" -lt "$hb" ] && [ "$hb" -lt "$rb" ]; then
+  pass "with MEMRAIN_TENANT_PG_POOLER=pgbouncer each tenant's pooler is rebuilt, started and healthy before its container"
 else
-  die "pooler not started before the tenant (rc=$RC pa=$pa ra=$ra pb=$pb rb=$rb)"
+  die "pooler not built, started and healthy before the tenant (rc=$RC pa=$pa ha=$ha ra=$ra pb=$pb hb=$hb rb=$rb)"; sed 's/^/      /' "$WS/out.log"
+fi
+
+# The host asks for the pooler but the env file was not re-fetched: the
+# pooler cannot render, and the brain would stay on the direct URL.
+ws_new; tenants ta:active tb:active
+printf 'MEMRAIN_TENANT_PG_POOLER=pgbouncer\n' >> "$WS/.env"
+env_files DIRECT ta tb
+run_deploy
+if [ "$RC" -ne 0 ] && ! called 'memrain-ta' && report | grep -q 'ta FAILED pooler' && grep -q 'fetch-secrets' "$WS/out.log"; then
+  pass "a pooled host with a tenant env file not routed through the pooler stops before the tenant"
+else
+  die "unrouted env file accepted (rc=$RC)"; sed 's/^/      /' "$WS/out.log"
+fi
+
+# The env file points the brain at its pooler, but the host no longer runs one.
+ws_new; tenants ta:active
+env_files POOLED ta
+run_deploy
+if [ "$RC" -ne 0 ] && ! called 'memrain-ta' && report | grep -q 'ta FAILED pooler' && grep -q 'fetch-secrets' "$WS/out.log"; then
+  pass "a tenant env file routed through a pooler the host does not run stops before the tenant"
+else
+  die "env file routed to a missing pooler accepted (rc=$RC)"; sed 's/^/      /' "$WS/out.log"
+fi
+
+# The pooler never comes up (it exits 78 on a bad upstream and restarts).
+ws_new; tenants ta:active tb:active
+printf 'MEMRAIN_TENANT_PG_POOLER=pgbouncer\n' >> "$WS/.env"
+env_files POOLED ta tb
+touch "$S/unhealthy_pgbouncer-ta"
+run_deploy HEALTH_TIMEOUT_S=0
+if [ "$RC" -ne 0 ] && ! called '--force-recreate memrain-ta' && report | grep -q 'ta FAILED pooler' && report | grep -q 'tb not reached' \
+   && called 'logs --tail 40 pgbouncer-ta'; then
+  pass "a pooler that does not become healthy stops the deploy before its tenant, with its logs"
+else
+  die "unhealthy pooler accepted (rc=$RC)"; sed 's/^/      /' "$WS/out.log"
 fi

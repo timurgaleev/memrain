@@ -97,6 +97,15 @@ services:
       - ALL
     expose:
       - "6432"
+    # Listening means the config rendered and PgBouncer started (render.sh
+    # exits 78 on a bad upstream URL). The brain's own health then proves the
+    # login through it.
+    healthcheck:
+      test: ["CMD", "nc", "-z", "-w", "2", "127.0.0.1", "6432"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     environment:
       # RDS takes TLS; a local database container may need disable.
       - PGBOUNCER_SERVER_TLS_SSLMODE=${MEMRAIN_PGBOUNCER_SERVER_SSLMODE:-require}

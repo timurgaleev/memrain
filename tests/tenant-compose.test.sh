@@ -199,6 +199,7 @@ if pooler_config; then
     die "pooler hardening missing"
   fi
   if pv pgbouncer-acme '.services[$s].image' | grep -Eq '^memrain-pgbouncer:[0-9]+\.[0-9]+\.[0-9]+$'; then pass "the pooler image tag names its PgBouncer version"; else die "pooler image: $(pv pgbouncer-acme '.services[$s].image')"; fi
+  if pv pgbouncer-acme '.services[$s].healthcheck.test | join(" ")' | grep -q '6432'; then pass "the pooler has a healthcheck on its port"; else die "no pooler healthcheck"; fi
   if [ "$(penv pgbouncer-acme PGBOUNCER_SERVER_TLS_SSLMODE)" = require ]; then pass "server TLS to RDS: require by default"; else die "pooler sslmode default: '$(penv pgbouncer-acme PGBOUNCER_SERVER_TLS_SSLMODE)'"; fi
   case "$(penv pgbouncer-acme MEMRAIN_POSTGRES_DIRECT_URL)" in
     *@db.example.test:5432/tenant_acme) pass "the pooler's upstream is the tenant's own database, directly" ;;

@@ -10,7 +10,9 @@
 #      tenant is touched.
 #   4. list every tenant except deleting/deleted, so a suspended one never
 #      falls behind on schema
-#   5. per tenant, in id order: migrate its database, recreate its container,
+#   5. per tenant, in id order: migrate its database, with the pooler on
+#      check its env file agrees and start its pooler until healthy (an env
+#      file pooled on a host without the pooler fails too), recreate its container,
 #      wait for healthy, check the stamp, run the isolation smoke (which
 #      records the pass in control). Until that record exists the container
 #      answers 503 isolation_unverified on everything but /health.
@@ -125,8 +127,24 @@ fail_at() {
   exit 1
 }
 
+# wait_healthy ID CONTAINER STEP -> returns once CONTAINER reports healthy, or
+# fails tenant ID at STEP with the container's last log lines.
+wait_healthy() {
+  local id="$1" container="$2" step="$3" deadline health
+  deadline=$((SECONDS + HEALTH_TIMEOUT_S))
+  while true; do
+    health="$(docker inspect "$container" --format '{{.State.Health.Status}}' 2>/dev/null || echo missing)"
+    [ "$health" = "healthy" ] && return 0
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      docker logs --tail 40 "$container" >&2 || true
+      fail_at "$id" "$step" "${container} is '${health}' after ${HEALTH_TIMEOUT_S}s"
+    fi
+    sleep 5
+  done
+}
+
 deploy_one() {
-  local id="$1" status="$2" container="memrain-$1" deadline health running
+  local id="$1" status="$2" container="memrain-$1" env_file running pooled=0
   echo "==> tenant ${id} (${status}): migrating"
   hosting_ctl tenant migrate "$id" || fail_at "$id" migrate "brain migrations failed"
   if [ ! -f "${TENANTS_DIR}/${id}.yml" ]; then
@@ -134,28 +152,30 @@ deploy_one() {
     return 0
   fi
 
+  # The env file decides where the brain connects; it must agree with the host.
+  env_file="${DEPLOY_DIR}/.secrets/tenants/${id}.env"
+  grep -qx 'MEMRAIN_PG_POOLER=pgbouncer' "$env_file" 2>/dev/null && pooled=1
   if hosting_pooler; then
-    # The tenant's own pooler (profile pooler; naming it starts it). Built on
-    # first use from deploy/pgbouncer, left alone when nothing changed.
+    [ "$pooled" = 1 ] || fail_at "$id" pooler \
+      "the host runs tenants through their pooler but ${env_file} does not; run deploy/secrets/fetch-secrets.sh --tenant ${id} first"
+    # The tenant's own pooler (profile pooler; naming it starts it). The tag
+    # names the PgBouncer version only, so it is rebuilt every deploy to pick
+    # up a change in deploy/pgbouncer; the layer cache makes that a no-op
+    # otherwise, and compose then leaves the container alone.
     echo "==> tenant ${id}: starting pgbouncer-${id}"
-    hosting_compose up -d --no-deps "pgbouncer-${id}" \
+    hosting_compose up -d --build --no-deps "pgbouncer-${id}" \
       || fail_at "$id" pooler "docker compose could not start pgbouncer-${id}"
+    wait_healthy "$id" "pgbouncer-${id}" pooler
+  elif [ "$pooled" = 1 ]; then
+    fail_at "$id" pooler \
+      "${env_file} routes the tenant through pgbouncer-${id}, which this host does not run (MEMRAIN_TENANT_PG_POOLER is unset); run deploy/secrets/fetch-secrets.sh --tenant ${id} first"
   fi
 
   echo "==> tenant ${id}: recreating ${container}"
   hosting_compose up -d --no-build --no-deps --force-recreate "$container" \
     || fail_at "$id" recreate "docker compose could not start ${container}"
 
-  deadline=$((SECONDS + HEALTH_TIMEOUT_S))
-  while true; do
-    health="$(docker inspect "$container" --format '{{.State.Health.Status}}' 2>/dev/null || echo missing)"
-    [ "$health" = "healthy" ] && break
-    if [ "$SECONDS" -ge "$deadline" ]; then
-      docker logs --tail 40 "$container" >&2 || true
-      fail_at "$id" health "${container} is '${health}' after ${HEALTH_TIMEOUT_S}s"
-    fi
-    sleep 5
-  done
+  wait_healthy "$id" "$container" health
 
   running="$(timeout "$STATUS_TIMEOUT" docker exec "$container" wget -qO- http://localhost:18790/health 2>/dev/null | jq -r '.version // empty' || true)"
   [ "$running" = "$MEMRAIN_VERSION" ] \
