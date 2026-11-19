@@ -66,6 +66,10 @@ D="$TMPROOT/any"
 render "$D" PGBOUNCER_UPSTREAM_URL="$URL" PGBOUNCER_ANY_DATABASE=1
 if [ "$RC" -eq 0 ] && grep -q '^\* = host=db.example.test port=5432$' "$D/pgbouncer.ini"; then pass "PGBOUNCER_ANY_DATABASE=1 adds the wildcard (test runs only)"; else die "wildcard missing (rc=$RC)"; fi
 
+D="$TMPROOT/tenantenv"
+render "$D" MEMRAIN_POSTGRES_DIRECT_URL="$URL"
+[ "$RC" -eq 0 ] && grep -q '^tenant_acme = host=db.example.test ' "$D/pgbouncer.ini" && pass "falls back to the tenant's MEMRAIN_POSTGRES_DIRECT_URL" || die "no fallback to MEMRAIN_POSTGRES_DIRECT_URL (rc=$RC)"
+
 D="$TMPROOT/port"
 render "$D" PGBOUNCER_UPSTREAM_URL='postgres://u:p@db.example.test/brain'
 [ "$RC" -eq 0 ] && grep -q '^brain = host=db.example.test port=5432 dbname=brain$' "$D/pgbouncer.ini" && pass "port defaults to 5432" || die "default port (rc=$RC)"

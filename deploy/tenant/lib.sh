@@ -31,6 +31,14 @@ hosting_files() {
 
 hosting_compose() { docker compose --env-file "$ENV_FILE" "${HOSTING_COMPOSE_ARGS[@]}" "$@"; }
 
+# hosting_pooler -> succeeds when the host .env routes tenants through their
+# own pooler (MEMRAIN_TENANT_PG_POOLER=pgbouncer, read by fetch-secrets.sh).
+hosting_pooler() {
+  local v
+  v="$(sed -n 's/^MEMRAIN_TENANT_PG_POOLER=//p' "$ENV_FILE" 2>/dev/null | tail -1 | sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/')"
+  [ "$v" = pgbouncer ]
+}
+
 # hosting_running_version -> the newest memrain-hosting tag a running tenant
 # container runs, or fails when none runs.
 hosting_running_version() {

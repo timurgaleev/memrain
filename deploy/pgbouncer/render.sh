@@ -6,7 +6,9 @@
 # Env:
 #   PGBOUNCER_UPSTREAM_URL       postgres://user:password@host[:port]/database
 #                                (required). The pooler serves that database
-#                                only, logging in as that user.
+#                                only, logging in as that user. Unset, the
+#                                tenant's MEMRAIN_POSTGRES_DIRECT_URL stands in
+#                                (the hosting env file both containers read).
 #   PGBOUNCER_SERVER_TLS_SSLMODE TLS to the upstream: require (default, RDS),
 #                                disable (a local container), or any other
 #                                libpq sslmode.
@@ -20,7 +22,7 @@ set -eu
 
 TEMPLATE="$(dirname "$0")/pgbouncer.ini.tmpl"
 RUN_DIR="${PGBOUNCER_RUN_DIR:-/run/pgbouncer}"
-URL="${PGBOUNCER_UPSTREAM_URL:-}"
+URL="${PGBOUNCER_UPSTREAM_URL:-${MEMRAIN_POSTGRES_DIRECT_URL:-}}"
 SSLMODE="${PGBOUNCER_SERVER_TLS_SSLMODE:-require}"
 POOL="${PGBOUNCER_DEFAULT_POOL_SIZE:-3}"
 

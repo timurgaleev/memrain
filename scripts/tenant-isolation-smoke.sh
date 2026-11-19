@@ -13,8 +13,9 @@
 #            only its own Bedrock credentials directory
 #   rds      its own database host answers on TCP
 #   bedrock  bedrock-runtime.<region>.amazonaws.com:443 answers
-#   neighbour  every other tenant container, by name and by IP, does not
-#   imds     the instance metadata service does not answer
+#   neighbour  every other tenant container, and its pooler (pgbouncer-<id>)
+#            when one runs, by name and by IP, does not
+#   imds    the instance metadata service does not answer
 #   secrets  none of the other tenants' secrets, and not the control admin
 #            URL, can be read (no credentials, or AccessDenied)
 # On a pass it records the result in control (`memrain tenant smoke-record`),
@@ -22,7 +23,7 @@
 #
 # Debug and test knobs (shell env; never set them on a live host):
 #   SMOKE_BEDROCK_ADDR, SMOKE_IMDS_ADDR (host:port), SMOKE_SERVICE_PORT,
-#   SMOKE_BOOT_ID_FILE
+#   SMOKE_POOLER_PORT, SMOKE_BOOT_ID_FILE
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -39,6 +40,7 @@ command -v jq >/dev/null 2>&1 || { echo "FAIL: jq is required" >&2; exit 1; }
 
 C="memrain-${ID}"
 PORT="${SMOKE_SERVICE_PORT:-18790}"
+POOLER_PORT="${SMOKE_POOLER_PORT:-6432}"
 
 # env_value KEY -> KEY from the shell, else the last KEY= line of $ENV_FILE.
 env_value() {
@@ -92,6 +94,13 @@ while IFS= read -r other; do
   valid_tenant_id "$other" || fail "neighbours: '${other}' is not a tenant id"
   OTHERS=$((OTHERS + 1))
   for kind in postgres-url control-url internal-token; do FOREIGN+=("${PREFIX}/tenants/${other}/${kind}"); done
+  # A neighbour's own pooler (profile pooler) holds its database login.
+  if pinfo="$(docker inspect "pgbouncer-${other}" 2>/dev/null)" && [ "$(jq -r '.[0].State.Running' <<< "$pinfo")" = "true" ]; then
+    NEIGHBOURS+=("pgbouncer-${other}:${POOLER_PORT}")
+    while IFS= read -r ip; do
+      [ -n "$ip" ] && NEIGHBOURS+=("${ip}:${POOLER_PORT}")
+    done < <(jq -r '.[0].NetworkSettings.Networks[]?.IPAddress // empty' <<< "$pinfo")
+  fi
   oinfo="$(docker inspect "memrain-${other}" 2>/dev/null)" || { echo "note: memrain-${other} has no container; skipped"; continue; }
   [ "$(jq -r '.[0].State.Running' <<< "$oinfo")" = "true" ] || { echo "note: memrain-${other} is not running; skipped"; continue; }
   NEIGHBOURS+=("memrain-${other}:${PORT}")
