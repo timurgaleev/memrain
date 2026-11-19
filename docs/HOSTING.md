@@ -299,3 +299,46 @@ The template keeps 1024m anyway: the bench never runs the maintenance cycle or
 embeddings, and a cycle phase has reached several GB on a single-tenant brain.
 Lower `MEMRAIN_TENANT_MEM_LIMIT` only after a bench on the hosting instance
 that includes a cycle.
+
+## Scale
+
+`bash scripts/scale-bench.sh` starts its own Postgres (`pgvector/pgvector:0.8.6-pg16`,
+4 CPUs, 4 GiB, `max_connections=200`) and runs `memrain bench scale` against it. The
+bench builds synthetic brains from a seed (the same seed always gives the same chunks
+and vectors). It spends nothing on models, and it writes the JSON report named by
+`SCALE_BENCH_OUT`. The report holds the seed, the parameters, the hardware, the peak
+Postgres connections and every percentile. It measures three scenarios:
+
+- one brain at 100k chunks: keyword and hybrid p95 at 4 parallel queries, against
+  the targets 300 ms and 800 ms;
+- the same brain right after a Postgres restart: the first 20 queries against the
+  same 20 once warm;
+- 8 brains of 12.5k chunks, each with a tenant container's pool of 4, all queried at
+  once: it passes only with no connection error and no search missing an arm. When
+  `deploy/pgbouncer` is in the tree, the script runs this scenario through PgBouncer
+  as well.
+
+Each mode runs a fixed query mix, 50 warmup queries and then 3 runs of 200. p95 is
+nearest-rank over the 600 samples, and the report keeps each run's p95 so the run
+spread is visible. The bench writes only into `memrain_bench_<random>` databases it
+created and marked with a nonce, and it drops them at the end. It refuses the server
+of any production URL in its environment, even with `--scratch`.
+
+One run on Docker Desktop on an arm64 laptop (seed 1):
+
+| Scenario | Result |
+|---|---|
+| 100k chunks, keyword | p50 49 ms, p95 135 ms (runs 128 / 142 / 135), p99 179 ms: under 300 ms |
+| 100k chunks, hybrid | p50 588 ms, p95 721 ms (runs 706 / 692 / 789), p99 870 ms: under 800 ms, with little margin |
+| Cold start (one query at a time) | p95 369 ms cold against 245 ms warm (1.5×); first query 698 ms |
+| 8 brains at once, direct | 0 connection errors, 0 failed arms, 41 connections at peak; hybrid p95 1.55 s |
+| Load | 100k chunks in 35 s, HNSW index in 44 s |
+
+Earlier runs on the same laptop gave hybrid p95 659–779 ms and a cold/warm ratio of
+1.2–1.5, so expect about 15% between runs. The cold ratio stays under 2×, so HNSW
+prewarm is not worth building. With 8 brains at once, 32 hybrid queries share
+4 CPUs. The latency shown there comes from CPU saturation, not connections.
+
+These are laptop numbers. Docker Desktop has a faster disk and more memory than a
+small RDS instance. Run the bench once on the hosting stack before quoting a number
+to a customer.
