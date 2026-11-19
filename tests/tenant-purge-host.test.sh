@@ -33,7 +33,6 @@ cat > "$S/bin/docker" <<'STUB'
 printf '%s\n' "$*" >> "$STUB_DIR/calls.log"
 case "$*" in
   *"tenant-ctl tenant purge-deleted"*) cat "$STUB_DIR/purge.json" ;;
-  *"tenant-ctl tenant list --json --status deleted"*) cat "$STUB_DIR/deleted.json" 2>/dev/null || printf '{"ok":true,"tenants":[]}\n' ;;
 esac
 exit 0
 STUB
@@ -55,7 +54,7 @@ left() { find "$WS/deploy" -path "$WS/deploy/tenant" -prune -o -name "*$1*" -pri
 
 echo "== purge-deleted.sh =="
 seed acme acmex beta
-printf '{"ok":true,"purged":["acme"],"skipped":[{"id":"beta","why":"no longer due"}],"removedExports":{"acme":[]}}\n' > "$S/purge.json"
+printf '{"ok":true,"purged":["acme"],"skipped":[{"id":"beta","why":"no longer due"}],"removedExports":{"acme":[]},"finished":["acme"]}\n' > "$S/purge.json"
 run
 if [ "$RC" -eq 0 ] && [ -z "$(left acme)" ]; then pass "nothing with the purged id is left on the host"; else die "left: $(left acme | tr '\n' ' ') rc=$RC"; sed 's/^/      /' "$WS/out.log"; fi
 if [ -f "$WS/deploy/tenants/acmex.yml" ] && [ -f "$WS/deploy/.secrets/tenants/acmex.env" ] && [ -d "$WS/deploy/.bedrock/acmex" ] \
@@ -74,22 +73,20 @@ if grep -q -- '--secrets aws' "$S/calls.log" || ! grep -q 'tenant purge-deleted'
 if grep -q 'acme' "$WS/out.log"; then pass "reports what it purged"; else die "no report"; fi
 
 seed acme
-printf '{"ok":true,"purged":["../x"],"skipped":[],"removedExports":{}}\n' > "$S/purge.json"
+printf '{"ok":true,"purged":["../x"],"skipped":[],"removedExports":{},"finished":[]}\n' > "$S/purge.json"
 run
 if [ "$RC" -ne 0 ] && [ -f "$WS/deploy/tenants/acme.yml" ]; then pass "an invalid id from control is refused and nothing is removed"; else die "invalid id accepted (rc=$RC)"; fi
 
 # A run that stopped after control purged the tenant: the next one, with
 # nothing new to purge, still clears what the host holds of it.
 seed acme
-printf '{"ok":true,"purged":[],"skipped":[],"removedExports":{}}\n' > "$S/purge.json"
-printf '{"ok":true,"tenants":[{"id":"acme","status":"deleted","mode":null,"hostname":"acme.example.test"}]}\n' > "$S/deleted.json"
+printf '{"ok":true,"purged":[],"skipped":[],"removedExports":{},"finished":["acme"]}\n' > "$S/purge.json"
 run
 if [ "$RC" -eq 0 ] && [ -z "$(left acme)" ] && grep -q '^rm -f memrain-acme$' "$S/calls.log"; then
   pass "a rerun clears a tenant purged earlier whose host files were left"
 else
   die "rerun left: $(left acme | tr '\n' ' ') rc=$RC"; sed 's/^/      /' "$WS/out.log"
 fi
-rm -f "$S/deleted.json"
 
 printf 'not json\n' > "$S/purge.json"
 run

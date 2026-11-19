@@ -299,7 +299,15 @@ async function verifiedReceipt(control: Engine, t: TenantRow, fenceId: string): 
     [t.id, fenceId],
   );
   const row = r.rows[0];
-  if (!row || row.sha256 === null || !existsSync(row.out_dir) || exportDigest(row.out_dir) !== row.sha256) return null;
+  if (!row || row.sha256 === null || !existsSync(row.out_dir)) return null;
+  let digest: string;
+  try {
+    digest = exportDigest(row.out_dir);
+  } catch {
+    // Not a directory, or a file in it unreadable: as good as changed.
+    return null;
+  }
+  if (digest !== row.sha256) return null;
   const tables = typeof row.tables === "string" ? JSON.parse(row.tables) : row.tables;
   return {
     id: row.id, tenantId: t.id, kind: "fenced", fenceId, outDir: row.out_dir, sha256: row.sha256,
@@ -390,6 +398,11 @@ export interface PurgeResult {
   skipped: { id: string; why: string }[];
   /** Export copies removed from this host, per purged tenant. */
   removedExports: Record<string, string[]>;
+  /**
+   * Every tenant whose purge has completed, in this run or an earlier one:
+   * what the host may now clear of it (deploy/tenant/purge-deleted.sh).
+   */
+  finished: string[];
 }
 
 /**
@@ -461,5 +474,11 @@ export async function purgeDeleted(ctx: ExportContext, opts: PurgeOptions = {}):
     });
     purged.push(id);
   }
-  return { purged, skipped, removedExports };
+  const finished = (await ctx.control.query<{ id: string }>(
+    `SELECT t.id FROM tenants t
+      WHERE t.status = 'deleted'
+        AND EXISTS (SELECT 1 FROM tenant_events e WHERE e.tenant_id = t.id AND e.kind = 'purged')
+      ORDER BY t.id`,
+  )).rows.map((r) => r.id);
+  return { purged, skipped, removedExports, finished };
 }

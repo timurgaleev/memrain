@@ -7,8 +7,8 @@
 # `tenant purge-deleted` (in tenant-ctl) drops the database and roles of each
 # tenant with a good receipt under its current fence, removes its secrets
 # through the secret writer and every export copy under /provisioned. This
-# script then removes what only the host holds, for each id exactly that
-# control now holds as deleted (this run's and any earlier run left behind):
+# script then removes what only the host holds, for each id exactly whose
+# purge has completed (this run's, and any an earlier run left behind):
 # the container memrain-<id>, deploy/tenants/<id>.yml and <id>.*,
 # deploy/.secrets/tenants/<id>.env, deploy/.bedrock/<id>/, and
 # deploy/.secrets/provisioned/<id>/ and <id>.invite; then it refreshes
@@ -27,14 +27,10 @@ if ! OUT="$(hosting_ctl tenant purge-deleted "$@")" \
   echo "FAIL: tenant purge-deleted did not answer as expected; nothing on the host was removed" >&2
   exit 1
 fi
-# Every tenant control holds as deleted, not only this run's: a run that
+# Every tenant whose purge has completed, not only this run's: a run that
 # stopped after control purged a tenant leaves its host files for the next.
-if ! DELETED="$(hosting_ctl tenant list --json --status deleted)" \
-   || ! printf '%s' "$DELETED" | jq -e '.ok == true and (.tenants | type == "array")' >/dev/null 2>&1; then
-  echo "FAIL: cannot list the deleted tenants; nothing on the host was removed" >&2
-  exit 1
-fi
-IDS="$( { printf '%s' "$OUT" | jq -r '.purged[]'; printf '%s' "$DELETED" | jq -r '.tenants[].id'; } | sort -u)"
+# A tenant another run has claimed but not yet dropped is not among them.
+IDS="$(printf '%s' "$OUT" | jq -r '(.purged + (.finished // [])) | unique | .[]')"
 
 # Every id is checked before anything is removed.
 PURGED=()
@@ -60,4 +56,4 @@ if [ "${#PURGED[@]}" -gt 0 ]; then
   hosting_compose up -d --no-build --no-deps cloudflared || echo "warning: cloudflared was not refreshed; remove the networks by hand after it is" >&2
   for id in "${PURGED[@]}"; do docker network rm "memrain_tenant_${id}" >/dev/null 2>&1 || true; done
 fi
-printf '%s\n' "$OUT" | jq '{purged, skipped, removedExports}'
+printf '%s\n' "$OUT" | jq '{purged, skipped, removedExports, finished}'

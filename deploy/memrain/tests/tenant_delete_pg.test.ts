@@ -255,6 +255,7 @@ describe.skipIf(!PG_URL)("tenant delete behind a fence", () => {
     expect(del.receipt.sha256).toMatch(/^[0-9a-f]{64}$/);
     const r = await purgeDeleted({ ...ctx(), secrets }, { now: new Date(Date.now() + 8 * 86_400_000) });
     expect(r.purged).toContain(id);
+    expect(r.finished).toContain(id);
     const pg = await fx.control.query<{ name: string }>(
       `SELECT datname AS name FROM pg_database WHERE datname LIKE $1
        UNION ALL SELECT rolname FROM pg_roles WHERE rolname LIKE $1`, [`%${id.replace(/-/g, "_")}%`]);
@@ -292,7 +293,13 @@ describe.skipIf(!PG_URL)("tenant delete behind a fence", () => {
     expect((await requireTenant(fx.control, id)).status).toBe("deleting");
     const db = await fx.control.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [`tenant_${id}`]);
     expect(db.rows).toHaveLength(1);
+    // A path that is no longer a directory skips this tenant; it does not stop the purge.
     rmSync(del.receipt.outDir, { recursive: true, force: true });
+    writeFileSync(del.receipt.outDir, "not a directory\n");
+    const again = await purgeDeleted(ctx(), later);
+    expect(again.purged).not.toContain(id);
+    expect(again.finished).not.toContain(id);
+    rmSync(del.receipt.outDir, { force: true });
     expect((await purgeDeleted(ctx(), later)).purged).not.toContain(id);
   });
 });
