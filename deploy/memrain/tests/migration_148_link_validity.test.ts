@@ -3,7 +3,7 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 import { putPage } from "../src/core/pages.ts";
 import { addLink } from "../src/core/links.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 
 /** Only the latest migration can be reverted, so later ones go first. */
@@ -17,7 +17,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const e = db.storage.engine();
     const url = new URL(process.env.MEMRAIN_TEST_POSTGRES_URL!);
     url.pathname = `/${(await e.query<{ name: string }>("SELECT current_database() AS name")).rows[0]!.name}`;
-    const observer = new PostgresEngine({ url: url.toString(), max: 1 });
+    const observer = pgTestEngine({ url: url.toString(), max: 1 });
     const ready = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     let writer: Promise<void> | undefined;

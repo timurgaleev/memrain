@@ -45,6 +45,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--contextual",
   "--cosine-rescore",
   "--dry-run",
+  "--erase-personal-source",
   "--execute",
   "--expand",
   "--expect-operator",
@@ -345,7 +346,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
     new Set(["--apply", "--force", "--include-flagged", "--json", "--limit"]),
   ],
   ["write-gate", new Set(["--all", "--json"])],
-  ["member", new Set(["--all", "--client", "--email", "--enrollment", "--name", "--personal-source", "--token"])],
+  ["member", new Set(["--all", "--apply", "--client", "--email", "--enrollment", "--erase-personal-source", "--name", "--out", "--personal-source", "--token"])],
   ["group", new Set(["--allow-owner-source", "--name"])],
   ["secrets", new Set(["--apply", "--json", "--kinds", "--limit", "--source", "--yes"])],
   [
@@ -379,7 +380,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
       "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts",
     ]),
   ],
-  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors"])],
+  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member"])],
   ["--fix", new Set(["lint"])],
 ]);
 

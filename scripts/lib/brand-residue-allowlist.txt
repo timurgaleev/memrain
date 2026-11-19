@@ -164,6 +164,7 @@ deploy/memrain/tests/config.test.ts|COMPAT-TEST|2|covers legacy names or legacy 
 deploy/memrain/tests/config_cli.test.ts|COMPAT-TEST|7|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/config_paths.test.ts|COMPAT-TEST|27|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/connector_kek_not_in_db.test.ts|COMPAT-TEST|1|clears both the MEMRAIN_ and the legacy MEMEX_ connector key variables before asserting none is set
+deploy/memrain/tests/no_extension_unchanged.test.ts|COMPAT-TEST|3|covers legacy names: a legacy-prefixed runtime_config row must not change behaviour
 deploy/memrain/tests/notify_webhook_secret_not_in_db.test.ts|COMPAT-TEST|1|clears both the MEMRAIN_ and the legacy MEMEX_ webhook secret variables before asserting none is set
 deploy/memrain/tests/connectors_github.test.ts|COMPAT-TEST|6|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/content_flag.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
@@ -516,6 +517,7 @@ tests/deploy.test.sh|COMPAT-TEST|12|covers legacy names or legacy data (may also
 tests/entrypoint.test.sh|COMPAT-TEST|5|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/fetch-secrets-overrides.test.sh|COMPAT-TEST|27|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/fetch-secrets.test.sh|COMPAT-TEST|35|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
+tests/fixtures/deploy.trace|COMPAT-TEST|8|the recorded deploy.sh trace includes the pre-rename container guard's docker ps calls
 tests/init.test.sh|COMPAT-TEST|8|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/legacy-guard.test.sh|COMPAT-TEST|16|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_bootstrap_sh.py|COMPAT-TEST|27|covers legacy names or legacy data (may also carry incidental pre-rename test strings)

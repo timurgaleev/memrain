@@ -31,6 +31,7 @@ import {
 } from "./controls.ts";
 import { CronError, assertTimeZone, parseCron, previousFire, windowKey } from "./cron.ts";
 import { DEFAULT_DAEMON_SOURCE, listDaemons, type DaemonSpec, type DaemonTarget } from "./registry.ts";
+import { extension } from "../extension.ts";
 
 export const DAEMON_LOCK_ID = "memrain-daemons";
 const LOCK_TTL_MINUTES = 5;
@@ -265,6 +266,7 @@ export class DaemonScheduler {
       await this.dropLeadership();
       return { status: "disabled" };
     }
+    if (await extension().paused()) return { status: "disabled" };
     if (this.lock && !(await this.lock.refresh())) await this.dropLeadership();
     if (!this.lock) this.lock = await tryAcquireDbLock(this.engine, DAEMON_LOCK_ID, LOCK_TTL_MINUTES);
     this.lastTickAt = Date.now();

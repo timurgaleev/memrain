@@ -12,7 +12,8 @@
  * once against the Engine interface.
  */
 import postgres, { type Sql } from "postgres";
-import type { Engine, QueryResult } from "./interface.ts";
+import type { Engine, PoolerMode, QueryResult } from "./interface.ts";
+import { poolerMigrationRefused } from "./direct.ts";
 
 export interface PostgresEngineOptions {
   /** Postgres connection URL. Should include `?sslmode=require` for RDS. */
@@ -23,26 +24,46 @@ export interface PostgresEngineOptions {
   statementTimeoutMs?: number;
   /** `application_name` shown in pg_stat_activity; postgres-js's default when unset. */
   applicationName?: string;
+  /**
+   * Role every session starts as, sent at connect: each pooled connection
+   * acts as this role, and RESET ROLE returns to it.
+   */
+  role?: string;
+  /**
+   * `url` reaches the database through a transaction-mode pooler. No session
+   * startup parameter but `application_name` is sent (the pooler passes none
+   * through; the role carries the timeouts), and migrations and DDL go over
+   * `directUrl` instead (core/engine/direct.ts).
+   */
+  pooler?: PoolerMode;
+  /** The database itself, bypassing the pooler. Pooler mode only. */
+  directUrl?: string;
+  /** `false` turns postgres-js's named prepared statements off. Pooler mode only. */
+  prepare?: boolean;
 }
 
-export class PostgresEngine implements Engine {
-  readonly kind = "postgres" as const;
-  private sql: Sql;
-
-  constructor(opts: PostgresEngineOptions) {
-    const max = opts.max ?? 10;
-    const statementTimeout = opts.statementTimeoutMs ?? 30_000;
-    this.sql = postgres(opts.url, {
-      max,
-      // RDS requires TLS; postgres-js infers `ssl: true` when the URL has
-      // `sslmode=require`, but be explicit so it doesn't silently fall back
-      // to plaintext when someone fat-fingers the URL.
-      ssl: opts.url.includes("sslmode=disable") ? false : "require",
-      idle_timeout: 30,
-      // Fail a connect in bounded time instead of hanging a request on a dead
-      // endpoint.
-      connect_timeout: 10,
-      connection: {
+/** The options postgres-js receives for `opts`. */
+export function buildPostgresOptions(opts: PostgresEngineOptions) {
+  const max = opts.max ?? 10;
+  const statementTimeout = opts.statementTimeoutMs ?? 30_000;
+  const appName = opts.applicationName ? { application_name: opts.applicationName } : {};
+  return {
+    max,
+    // RDS requires TLS; postgres-js infers `ssl: true` when the URL has
+    // `sslmode=require`, but be explicit so it doesn't silently fall back
+    // to plaintext when someone fat-fingers the URL.
+    ssl: opts.url.includes("sslmode=disable") ? false : "require" as const,
+    idle_timeout: 30,
+    // Fail a connect in bounded time instead of hanging a request on a dead
+    // endpoint.
+    connect_timeout: 10,
+    ...(opts.pooler && opts.prepare === false ? { prepare: false } : {}),
+    connection: opts.pooler
+      // A transaction-mode pooler refuses or drops session startup
+      // parameters; the database role must carry both timeouts itself, and
+      // doctor `db-connection-budget` checks they hold through the pool.
+      ? appName
+      : {
         // Each session inherits this; ensures a runaway query can't pin a
         // worker forever.
         statement_timeout: statementTimeout,
@@ -51,11 +72,49 @@ export class PostgresEngine implements Engine {
         // Page writes hold a per-slug advisory lock for their transaction, so
         // that would freeze every write to the slug. End such a session.
         idle_in_transaction_session_timeout: 60_000,
-        ...(opts.applicationName ? { application_name: opts.applicationName } : {}),
+        ...appName,
+        ...(opts.role ? { role: opts.role } : {}),
       },
-      // Suppress the default debug logger; we route via the cycle / progress
-      // channels instead.
-      onnotice: () => {},
+    // Suppress the default debug logger; we route via the cycle / progress
+    // channels instead.
+    onnotice: () => {},
+  };
+}
+
+export class PostgresEngine implements Engine {
+  readonly kind = "postgres" as const;
+  readonly pooler?: PoolerMode;
+  private sql: Sql;
+  private readonly opts: PostgresEngineOptions;
+
+  constructor(opts: PostgresEngineOptions) {
+    if (opts.pooler && opts.role) {
+      throw new Error(
+        "postgres engine: a login role needs its own session, which a transaction pooler does not keep; connect directly",
+      );
+    }
+    this.opts = opts;
+    if (opts.pooler) this.pooler = opts.pooler;
+    this.sql = postgres(opts.url, buildPostgresOptions(opts));
+  }
+
+  /** The options handed to postgres-js. */
+  options(): ReturnType<typeof buildPostgresOptions> {
+    return buildPostgresOptions(this.opts);
+  }
+
+  /**
+   * A one-connection engine on the database itself, for migrations and DDL.
+   * Refuses (`pooler_migration_refused`) when this pooled engine has no direct
+   * URL. The caller closes it.
+   */
+  openDirect(): Engine {
+    if (!this.opts.directUrl) throw poolerMigrationRefused();
+    return new PostgresEngine({
+      url: this.opts.directUrl,
+      max: 1,
+      ...(this.opts.statementTimeoutMs !== undefined ? { statementTimeoutMs: this.opts.statementTimeoutMs } : {}),
+      ...(this.opts.applicationName ? { applicationName: this.opts.applicationName } : {}),
     });
   }
 

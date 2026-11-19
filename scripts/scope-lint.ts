@@ -22,7 +22,9 @@
  *     unsafe: session advisory locks (`pg_advisory_lock`, `pg_try_advisory_lock`,
  *     `pg_advisory_unlock`, the `_shared` forms), `LISTEN` / `UNLISTEN`, a bare
  *     `SET` (only `SET LOCAL`, `SET TRANSACTION` and `SET CONSTRAINTS` are
- *     transaction-scoped) and `set_config(..., false)`. No baseline: zero allowed.
+ *     transaction-scoped), `set_config(..., false)`, a `TEMP`/`TEMPORARY` table
+ *     without `ON COMMIT DROP`, a `WITH HOLD` cursor and `DISCARD`. No
+ *     baseline: zero allowed.
  *
  * A join counts as scoped once any source predicate is present: a join on
  * `a.source_id = b.source_id` carries one table's scope to the other, and
@@ -174,6 +176,11 @@ const POOLER_UNSAFE: Array<[RegExp, string]> = [
   [/^\s*(?:UN)?LISTEN\s+[\w*]/, "LISTEN/UNLISTEN outlives the transaction"],
   [/^\s*SET\s+(?:SESSION\s+)?(?!LOCAL\b|TRANSACTION\b|CONSTRAINTS\b)[A-Za-z_][\w.]*\s*(?:=|TO\b)/, "session SET (use SET LOCAL)"],
   [/\bset_config\s*\([^)]*,\s*false\s*\)/i, "set_config(..., false) is session-scoped"],
+  // A temp table lives in the server session; ON COMMIT DROP ends it with the transaction.
+  // These three read as SQL in either case; prose rarely matches their shape.
+  [/\bCREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?TEMP(?:ORARY)?\s+TABLE\b(?![^;]*\bON\s+COMMIT\s+DROP\b)/i, "TEMP TABLE outlives the transaction (add ON COMMIT DROP)"],
+  [/\bCURSOR\b[^;]*\bWITH\s+HOLD\b/i, "a WITH HOLD cursor outlives the transaction"],
+  [/^\s*DISCARD\s+(?:ALL|PLANS|SEQUENCES|TEMP|TEMPORARY)\s*;?\s*$/im, "DISCARD resets the shared server session"],
 ];
 
 export function findPoolerUnsafe(file: string, src: string): Array<ScopeHit & { why: string }> {

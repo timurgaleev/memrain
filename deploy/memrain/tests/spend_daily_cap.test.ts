@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import { runMigrations } from "../src/core/migrate.ts";
 import { openPostgres119, PG_URL } from "./helpers/migration-120.ts";
 import {
@@ -232,7 +232,7 @@ describe.skipIf(!PG_URL)("the brain-wide cap on Postgres", () => {
   it("books no more than the cap when calls race on separate connections", async () => {
     const db = (await openPostgres119(PG_URL!)) as Awaited<ReturnType<typeof openPostgres119>> & { url: string };
     await runMigrations(db.engine);
-    const pool = new PostgresEngine({ url: db.url, max: 10 });
+    const pool = pgTestEngine({ url: db.url, max: 10 });
     try {
       await pool.ready();
       setSpendLedgerEngine(pool);

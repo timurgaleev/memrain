@@ -8,7 +8,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import { Storage } from "../src/core/storage.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { indexFile } from "../src/core/indexer.ts";
@@ -24,7 +25,7 @@ describe.skipIf(!URL_)("document id fold on Postgres", () => {
   let savedVault: string | undefined;
 
   beforeAll(async () => {
-    pg = new PostgresEngine({ url: URL_! });
+    pg = pgTestEngine({ url: URL_! });
     storage = new Storage(pg);
     await storage.init();
     await registerSource(pg, { id: "timur", kind: "other", pathPrefix: "tenant:timur" }).catch(() => {});

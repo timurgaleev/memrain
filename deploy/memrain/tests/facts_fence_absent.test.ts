@@ -8,7 +8,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import { Storage } from "../src/core/storage.ts";
 import { putPage } from "../src/core/pages.ts";
 import { renderFactsFence, type ParsedFact } from "../src/core/facts-fence.ts";
@@ -110,7 +111,7 @@ describe.skipIf(!URL_)("facts fence absent (Postgres)", () => {
 
   beforeAll(async () => {
     process.env.MEMRAIN_PAGE_MIRROR_SYNC = "0";
-    pg = new PostgresEngine({ url: URL_! });
+    pg = pgTestEngine({ url: URL_! });
     storage = new Storage(pg);
     await storage.init();
   });

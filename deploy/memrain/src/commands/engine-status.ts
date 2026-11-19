@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { loadConfig } from "../core/config.ts";
-import { PostgresEngine } from "../core/engine/postgres.ts";
+import { PostgresEngine, type PostgresEngineOptions } from "../core/engine/postgres.ts";
+import { poolerEngineOptions } from "../core/engine/factory.ts";
 import { PGliteEngine } from "../core/engine/pglite.ts";
 import type { Engine } from "../core/engine/interface.ts";
 
@@ -69,7 +70,9 @@ export async function runEngineStatus(opts: { probe?: boolean; json?: boolean; c
   kind = db.type;
   if (db.type === "pglite" && process.env.MEMRAIN_REQUIRE_POSTGRES === "1") return emit("config_invalid");
   const url = db.type === "postgres" ? process.env.MEMRAIN_POSTGRES_URL ?? db.url : undefined;
+  let pooled: Partial<PostgresEngineOptions> = {};
   if (db.type === "postgres") {
+    try { pooled = poolerEngineOptions(); } catch { return emit("config_invalid"); }
     source = process.env.MEMRAIN_POSTGRES_URL !== undefined ? "MEMRAIN_POSTGRES_URL" : "config.database.url";
     if (!url) return emit("url_missing");
     const parsed = inspectPostgresUrl(url);
@@ -82,7 +85,7 @@ export async function runEngineStatus(opts: { probe?: boolean; json?: boolean; c
   let status: EngineStatus = "ok";
   try {
     probed = true;
-    engine = db.type === "postgres" ? new PostgresEngine({ url: url!, max: 1, statementTimeoutMs: 5000 }) : new PGliteEngine({ dbPath: db.path });
+    engine = db.type === "postgres" ? new PostgresEngine({ url: url!, max: 1, statementTimeoutMs: 5000, ...pooled }) : new PGliteEngine({ dbPath: db.path });
     await engine.ready();
     const result = await engine.query("SELECT 1 FROM pg_extension WHERE extname = 'vector'");
     if (result.rows.length === 0) status = "vector_missing";

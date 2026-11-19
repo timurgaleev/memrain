@@ -16,6 +16,9 @@
 
 export type EngineKind = "pglite" | "postgres";
 
+/** The transaction-mode pooler an engine connects through (MEMRAIN_PG_POOLER). */
+export type PoolerMode = "pgbouncer";
+
 export interface QueryResult<T = unknown> {
   rows: T[];
 }
@@ -23,6 +26,15 @@ export interface QueryResult<T = unknown> {
 export interface Engine {
   /** Adapter discriminator — use it to gate engine-specific code paths. */
   readonly kind: EngineKind;
+
+  /**
+   * Set when the engine reaches the database through a transaction-mode
+   * pooler: migrations and DDL then need `openDirect()` (core/engine/direct.ts).
+   */
+  readonly pooler?: PoolerMode;
+
+  /** A direct engine for migrations and DDL; only a pooled engine has one. */
+  openDirect?(): Engine;
 
   /** Wait until the engine is ready to accept queries. */
   ready(): Promise<void>;

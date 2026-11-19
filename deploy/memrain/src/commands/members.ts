@@ -6,6 +6,7 @@
  *   member show <id>
  *   member add <id> [--name N] [--email E] [--personal-source SRC]
  *   member disable|enable|remove <id>
+ *   member remove <id> --erase-personal-source [--apply --out DIR]
  *   member bind <id> --token NAME | --client CLIENT_ID | --enrollment ID
  *   member unbind --token NAME | --client CLIENT_ID | --enrollment ID
  *
@@ -47,9 +48,11 @@ import {
   removeGroupMember,
   revokeGroupSource,
 } from "../core/groups.ts";
+import { ErasureUsageError, eraseMemberPersonalSource } from "../core/member-offboarding.ts";
 import { cliActor } from "./auth.ts";
 import { withStorage } from "./with-storage.ts";
 import type { Engine } from "../core/engine/interface.ts";
+import { OperationError } from "../core/operation-error.ts";
 
 export const MEMBER_SUBCOMMANDS = ["list", "show", "add", "disable", "enable", "remove", "bind", "unbind"] as const;
 export const GROUP_SUBCOMMANDS = [
@@ -67,6 +70,10 @@ export interface MemberCmdOptions {
   client?: string;
   enrollment?: string;
   allowOwnerSource?: boolean;
+  /** `remove --erase-personal-source`: offboard the member's own source too. */
+  erasePersonalSource?: boolean;
+  apply?: boolean;
+  out?: string;
   configPath?: string;
 }
 
@@ -89,7 +96,8 @@ function credentialFrom(opts: MemberCmdOptions): CredentialRef {
   return { kind, id: id! };
 }
 
-async function memberCommand(engine: Engine, opts: MemberCmdOptions, who: MemberActor): Promise<unknown> {
+async function memberCommand(storage: Storage, opts: MemberCmdOptions, who: MemberActor): Promise<unknown> {
+  const engine = storage.engine();
   const [id] = opts.args;
   switch (opts.sub) {
     case "list":
@@ -118,6 +126,13 @@ async function memberCommand(engine: Engine, opts: MemberCmdOptions, who: Member
     case "enable":
       return { member: await enableMember(engine, need(id, "Usage: memrain member enable <id>"), who) };
     case "remove":
+      if (opts.erasePersonalSource) {
+        return eraseMemberPersonalSource(storage, need(id, "Usage: memrain member remove <id> --erase-personal-source [--apply --out DIR]"), {
+          apply: opts.apply === true,
+          ...(opts.out !== undefined ? { outDir: opts.out } : {}),
+          actor: who,
+        });
+      }
       return {
         ...(await removeMember(engine, need(id, "Usage: memrain member remove <id>"), who)),
         note: "Removal is permanent: the id is never reused and its keys stay refused. Revoke them to tidy up.",
@@ -174,12 +189,12 @@ async function run(kind: "member" | "group", opts: MemberCmdOptions): Promise<nu
     const who: MemberActor = { actor: cliActor(), via: "cli" };
     try {
       const out = kind === "member"
-        ? await memberCommand(storage.engine(), opts, who)
+        ? await memberCommand(storage, opts, who)
         : await groupCommand(storage.engine(), opts, who);
       console.log(JSON.stringify(out, null, 2));
       return 0;
     } catch (e) {
-      if (e instanceof MemberError || e instanceof UsageError) {
+      if (e instanceof MemberError || e instanceof UsageError || e instanceof ErasureUsageError || e instanceof OperationError) {
         console.error(`memrain ${kind}: ${e.message}`);
         return 1;
       }

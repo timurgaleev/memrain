@@ -36,9 +36,47 @@ const INVISIBLE = /\p{Default_Ignorable_Code_Point}/gu;
 const LINE_BREAKS = /\r\n?|[\u2028\u2029\u0085]/g;
 const EMPHASIS = /[*_`~]+/g;
 const NOT_WORDLIKE = /[^\p{L}\p{M}\p{N}'\- ]/gu;
-// A run of three or more single letters each followed by exactly one space:
-// "i g n o r e" -> "ignore". Wider gaps stay word separators.
-const SPACED_LETTERS = /(^| )(\p{L}(?: \p{L}(?= |$)){2,})/gu;
+const LETTER = /^\p{L}$/u;
+
+/**
+ * Joins a run of three or more single letters each followed by exactly one
+ * space: "i g n o r e" -> "ignore". Wider gaps stay word separators. A single
+ * forward scan rather than a regex, because the regex form fell off a
+ * performance cliff on long runs in some JavaScript engines.
+ */
+export function joinSpacedLetters(text: string): string {
+  const letterAt = (i: number): string | null => {
+    const cp = text.codePointAt(i);
+    if (cp === undefined) return null;
+    const ch = String.fromCodePoint(cp);
+    return LETTER.test(ch) ? ch : null;
+  };
+  let out = "";
+  let copied = 0;
+  let i = 0;
+  while (i < text.length) {
+    const first = i === 0 || text[i - 1] === " " ? letterAt(i) : null;
+    if (!first) { i++; continue; }
+    const letters = [first];
+    let end = i + first.length;
+    while (text[end] === " ") {
+      const next = letterAt(end + 1);
+      if (!next) break;
+      const after = end + 1 + next.length;
+      if (after !== text.length && text[after] !== " ") break;
+      letters.push(next);
+      end = after;
+    }
+    if (letters.length >= 3) {
+      out += text.slice(copied, i) + letters.join("");
+      copied = end;
+      i = end;
+    } else {
+      i++;
+    }
+  }
+  return copied === 0 ? text : out + text.slice(copied);
+}
 const SPACES = / {2,}/g;
 const WORD = /[\p{L}\p{M}\p{N}'-]+/gu;
 
@@ -83,10 +121,9 @@ function baseView(text: string): string {
 
 /** Padded with a space on each side: prose patterns open with a literal space. */
 function proseView(base: string): string {
-  const words = base
+  const words = joinSpacedLetters(base
     .replace(EMPHASIS, "")
-    .replace(NOT_WORDLIKE, " ")
-    .replace(SPACED_LETTERS, (_run, lead: string, letters: string) => lead + letters.replace(/ /g, ""))
+    .replace(NOT_WORDLIKE, " "))
     .replace(SPACES, " ")
     .replace(WORD, foldWord)
     .trim();

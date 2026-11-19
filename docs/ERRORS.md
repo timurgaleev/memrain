@@ -55,6 +55,8 @@ the entry below.
 | [`result_too_large`](#result_too_large) | invalid_request | no | 2 | The result is over the response size limit |
 | [`root_missing`](#root_missing) | not_found | no | 1 | The directory does not exist |
 | [`storage_error`](#storage_error) | transient | yes | 75 | The storage layer failed |
+| [`tenant_limit_reached`](#tenant_limit_reached) | limit | no | 1 | This brain has reached one of its limits |
+| [`tenant_suspended`](#tenant_suspended) | refused | no | 1 | This brain is suspended |
 | [`unsupported`](#unsupported) | invalid_request | no | 2 | This is not supported here |
 | [`version_conflict`](#version_conflict) | conflict | no | 1 | The page changed since you read it |
 | [`version_not_found`](#version_not_found) | not_found | no | 1 | That page version does not exist |
@@ -252,6 +254,22 @@ the entry below.
 **What happened.** A storage operation failed for a reason that may pass, such as an unavailable volume or connection.
 
 **What to do.** Retry later. If it persists, check `memrain doctor` and the server logs.
+
+### tenant_limit_reached
+
+**This brain has reached one of its limits.** Class: limit. Retryable: no. CLI exit: 1.
+
+**What happened.** An extension refused the write because this brain has reached a limit it sets, for example its number of pages. Reading, editing and deleting still work; only adding more is refused.
+
+**What to do.** Delete what you no longer need, or ask the operator to raise the limit.
+
+### tenant_suspended
+
+**This brain is suspended.** Class: refused. Retryable: no. CLI exit: 1.
+
+**What happened.** An extension refused the change because the operator suspended this brain. Its data is intact; while it is held read-only, reads still work and every change is refused.
+
+**What to do.** Ask the operator to resume the brain. Retrying does not help until then.
 
 ### unsupported
 

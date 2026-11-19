@@ -22,8 +22,18 @@
  */
 import { effectiveReadSourceIds } from "./auth-info.ts";
 import type { Engine } from "./engine/interface.ts";
+import { extension } from "./extension.ts";
 
 export const MEMBER_ID_RE = /^[a-z0-9][a-z0-9-]{1,62}$/;
+
+/**
+ * MEMRAIN_REQUIRE_MEMBER: refuse every credential (on /mcp and /ingest) that is
+ * not bound to a member. Environment-only, so the database cannot loosen it.
+ */
+export function memberRequired(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  const v = env["MEMRAIN_REQUIRE_MEMBER"]?.trim().toLowerCase();
+  return v === "1" || v === "true" || v === "on" || v === "yes";
+}
 
 export type MemberStatus = "enabled" | "disabled" | "removed";
 
@@ -41,7 +51,8 @@ export interface MemberRecord {
 /** Who changed a member or a group, recorded as data only; it authorizes nothing. */
 export interface MemberActor {
   actor: string;
-  via: "cli" | "admin_api";
+  /** `app`: the member acting on its own credentials, on its own session. */
+  via: "cli" | "admin_api" | "app";
 }
 
 export type MemberErrorCode =
@@ -52,7 +63,8 @@ export type MemberErrorCode =
   | "email_taken"
   | "credential_mixed"
   | "not_found"
-  | "owner_source";
+  | "owner_source"
+  | "source_shared";
 
 /** A refused member or group change; `code` maps to an HTTP status in the admin routes. */
 export class MemberError extends Error {
@@ -167,6 +179,7 @@ export async function addMember(
     const src = await engine.query(`SELECT 1 FROM sources WHERE id = $1`, [opts.personalSource]);
     if (src.rows.length === 0) throw new MemberError("not_found", `unknown source "${opts.personalSource}"`);
   }
+  await extension().beforeAddMember(engine);
   await engine.transaction(async (tx) => {
     await tx.query(
       `INSERT INTO members (id, display_name, email, personal_source_id) VALUES ($1, $2, $3, $4)`,

@@ -1,0 +1,10 @@
+# Postgres test files scripts/test-pg.sh runs against the database directly
+# in pooler mode (TEST_PG_POOLER=1); every other file goes through PgBouncer
+# in transaction mode. One per line: <file> <category> <reason>.
+#   session  the code under test needs its own server session. At most 10:
+#            more means the brain is not pooler-compatible.
+migration_120_up_down_up.test.ts session migration 120's down refuses while any other session is on the database, and a pooler keeps idle server sessions open; the down is an offline operator step
+migration_120_byte_for_byte.test.ts session runs migration 120's down, which refuses while the pooler's idle server sessions are connected
+lock_legacy_rows.test.ts session runs migration 120's down, which refuses while the pooler's idle server sessions are connected
+v1163_paths_post_migration.test.ts session runs migration 120's down, which refuses while the pooler's idle server sessions are connected
+data_manifest_sql.test.ts session the operator's psql manifest is proven against a search_path passed in PGOPTIONS, a startup parameter a pooler refuses

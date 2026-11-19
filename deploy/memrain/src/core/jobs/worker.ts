@@ -25,6 +25,7 @@ import type { Queue } from "./queue.ts";
 import { type JobRow, UnrecoverableJobError, jobSpendClient } from "./types.ts";
 import { workerNameFor, type JobActivity } from "./activity.ts";
 import type { Engine } from "../engine/interface.ts";
+import { extension } from "../extension.ts";
 import {
   acquireWorkerLock,
   heartbeatWorkerLock,
@@ -227,6 +228,7 @@ export class Worker {
   async drainOnce(): Promise<number> {
     let processed = 0;
     while (!this.stopping) {
+      if (await extension().paused()) break;
       const job = await this.queue.claim(this.claimOpts());
       if (!job) break;
       if (this.stopping) {
@@ -325,6 +327,7 @@ export class Worker {
         }
       }
       while (this.inflight < concurrency && !this.stopping) {
+        if (await extension().paused()) break;
         const job = await this.queue.claim(this.claimOpts(concurrency));
         if (!job) break;
         if (this.stopping) {
@@ -544,6 +547,9 @@ export class Worker {
     };
     const timer = setInterval(() => {
       if (renewing || stopped) return;
+      // Held mid-job: the attempt is handed back at its next batch boundary, as
+      // on shutdown, and waits for the hold to lift.
+      void extension().paused().then((p) => { if (p && !abort.signal.aborted) abort.abort(new WorkerShutdownError()); }, () => {});
       renewing = true;
       const until = Date.now() + lockMs;
       this.queue

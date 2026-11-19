@@ -28,12 +28,12 @@ import { callSonnet, type SonnetFn } from "../llm/sonnet.ts";
 import { embedText } from "../embedding.ts";
 import {
   brainDailyCapUsd,
-  brainDaySpendUsd,
   costUsd,
   priceFor,
   releaseReservation,
   reserveSpend,
   runInWallet,
+  runUnderHold,
   runWithSpendClient,
   settleSpend,
 } from "../budget.ts";
@@ -115,7 +115,8 @@ export type ChatStreamEvent =
 
 function turnTimeoutMs(env: NodeJS.ProcessEnv): number {
   const n = Number(env["MEMRAIN_CHAT_TIMEOUT_MS"]);
-  return Number.isFinite(n) && n >= 1000 ? Math.min(n, 600_000) : DEFAULT_TURN_TIMEOUT_MS;
+  // Stays a minute under the hold's lifetime so the hold never lapses mid-turn.
+  return Number.isFinite(n) && n >= 1000 ? Math.min(n, CHAT_HOLD_TTL_MS - 60_000) : DEFAULT_TURN_TIMEOUT_MS;
 }
 
 /** One turn per owner at a time: a second send while one runs is refused. */
@@ -300,11 +301,8 @@ async function turn(
   const model = t.model!;
   const answerCap = cfg.answerCapUsd;
 
-  // The brain's day, then the owner's: both before any model is called.
-  const brainCap = brainDailyCapUsd(env);
-  if (brainCap !== null && (await db(() => brainDaySpendUsd(engine))) + answerCap > brainCap) {
-    return refusal("budget", "budget_exhausted", model);
-  }
+  // The brain's day and the owner's, in one hold before any model is called.
+  // The turn's calls run under it (runUnderHold), so the day counts the turn once.
   const hold = await db(() => reserveSpend(engine, {
     clientId: owner.spendId,
     capUsd: cfg.userDayUsd,
@@ -313,6 +311,7 @@ async function turn(
     provider: "bedrock",
     ttlMs: CHAT_HOLD_TTL_MS,
     role: "chat",
+    brainCapUsd: brainDailyCapUsd(env),
   }));
   if (!hold.reserved) return refusal("budget", "budget_exhausted", model);
 
@@ -387,15 +386,16 @@ async function turn(
     // the turn's hold stays until that run ends and is closed then.
     const runP = runInWallet(
       { role: "chat", requiresBrainCap: true, callCapUsd: answerCap, runCapUsd: answerCap },
-      () => runWithSpendClient({ clientId: owner.spendId, capUsd: null }, run),
+      () => runWithSpendClient({ clientId: owner.spendId, capUsd: null }, () => runUnderHold(hold.reservationId, run)),
     );
     let result: ThinkResult | null = null;
     let leftBehind = false;
     try {
       result = await untilAborted(runP, stop.signal);
     } catch (e) {
-      if (!(e instanceof TurnStopped)) throw e;
-      leftBehind = true;
+      if (e instanceof TurnStopped) leftBehind = true;
+      // A run that throws still ends as a stored error turn, not a bare question.
+      else if (failure === null) failure = classifyChatFailure(e);
     }
     if (result) spentUsd += result.spentUsd;
     const spentBefore = spentUsd;

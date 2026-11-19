@@ -38,6 +38,8 @@ import { timingSafeEqual } from "node:crypto";
 // Canonical definition lives in core so the MCP layer shares it without
 // importing this http/ module (which would create an import cycle).
 import { publicReadBodiesAllowed } from "../core/public_redaction.ts";
+import { extension } from "../core/extension.ts";
+import { chatShareEnabled } from "../core/chat/share.ts";
 
 export interface PublicGuardOptions {
   /** Bearer token. If undefined, every public request is rejected. */
@@ -371,7 +373,42 @@ function isPreCredentialRoute(req: Request, url: URL): boolean {
   ) {
     return true;
   }
+  // A registered extension's own routes authenticate themselves.
+  if (extension().preCredentialRoute(req, url)) return true;
+  // A shared chat answer: the link's password is the credential (http/share.ts).
+  if (url.pathname.startsWith("/s/") && (req.method === "GET" || req.method === "POST") && chatShareEnabled()) return true;
   return url.pathname === "/admin" || url.pathname.startsWith("/admin/");
+}
+
+type Env = Readonly<Record<string, string | undefined>>;
+
+/**
+ * MEMRAIN_PUBLIC_AUTH: unset (the static public bearer guards the public
+ * ingress) or `oauth` (no static bearer; every public caller presents its own
+ * OAuth token or personal access token).
+ */
+export function publicAuthMode(env: Env = process.env): "oauth" | null {
+  const v = env["MEMRAIN_PUBLIC_AUTH"]?.trim() || null;
+  if (v !== null && v !== "oauth") throw new Error(`MEMRAIN_PUBLIC_AUTH must be unset or 'oauth', got '${v}'`);
+  return v;
+}
+
+/**
+ * Refuse to start on an ingress that would be open or ambiguous:
+ *   - MEMRAIN_PUBLIC_AUTH must be unset or `oauth`;
+ *   - `oauth` means there is no static public bearer, so one configured
+ *     alongside it is a mistake, not a fallback.
+ */
+export function assertIngressConfig(
+  opts: { publicBearerToken?: string; internalToken?: string },
+  env: Env = process.env,
+): void {
+  if (publicAuthMode(env) === "oauth" && opts.publicBearerToken) {
+    throw new Error(
+      "MEMRAIN_PUBLIC_AUTH=oauth takes no static public bearer; unset MEMRAIN_PUBLIC_BEARER " +
+        "(clients sign in with OAuth or a personal access token)",
+    );
+  }
 }
 
 export function evaluatePublicGuard(
@@ -405,6 +442,16 @@ export function evaluatePublicGuard(
       allow: false,
       status: 403,
       reason: `route ${url.pathname} is internal-only (set MEMRAIN_PUBLIC_WRITE=1 to opt in)`,
+    };
+  }
+
+  // No static public bearer: every public caller presents its own OAuth token
+  // or PAT, which the server verifies on this 401.
+  if (publicAuthMode() === "oauth") {
+    return {
+      allow: false,
+      status: 401,
+      reason: "missing or invalid bearer token",
     };
   }
 

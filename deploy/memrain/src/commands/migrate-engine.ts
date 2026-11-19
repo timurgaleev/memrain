@@ -28,6 +28,7 @@
 import { resolve } from "node:path";
 import { PGliteEngine } from "../core/engine/pglite.ts";
 import { PostgresEngine } from "../core/engine/postgres.ts";
+import { poolerMode } from "../core/engine/factory.ts";
 import { discoverMigrations, runMigrations } from "../core/migrate.ts";
 import { copyEngine, type CopySummary } from "../core/engine-copy.ts";
 import type { Engine } from "../core/engine/interface.ts";
@@ -64,8 +65,20 @@ export function resolveEndpoints(
     if (!p) throw new Error(`migrate-engine: ${flag} required for pglite endpoint`);
     return { kind: "pglite", path: resolve(p) };
   };
+  const directUrl = (): string => {
+    const direct = env.MEMRAIN_POSTGRES_DIRECT_URL;
+    if (!direct) {
+      throw new Error(
+        "migrate-engine: MEMRAIN_PG_POOLER is set, so MEMRAIN_POSTGRES_URL is the pooler; " +
+          "set MEMRAIN_POSTGRES_DIRECT_URL or pass --postgres-url with the database's own URL",
+      );
+    }
+    return direct;
+  };
   const postgresEp = (): Endpoint => {
-    const url = opts.postgresUrl ?? env.MEMRAIN_POSTGRES_URL;
+    // Behind a pooler MEMRAIN_POSTGRES_URL is the pooler, which keeps no
+    // session: the copy and the destination's migrations go to the database.
+    const url = opts.postgresUrl ?? (poolerMode(env) !== undefined ? directUrl() : env.MEMRAIN_POSTGRES_URL);
     if (!url) {
       throw new Error(
         "migrate-engine: --postgres-url or MEMRAIN_POSTGRES_URL required for postgres endpoint",

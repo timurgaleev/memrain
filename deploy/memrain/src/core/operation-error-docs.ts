@@ -146,6 +146,16 @@ export const OPERATION_ERROR_DOCS: Record<OperationErrorCode, OperationErrorDoc>
     cause: "A storage operation failed for a reason that may pass, such as an unavailable volume or connection.",
     fix: "Retry later. If it persists, check `memrain doctor` and the server logs.",
   },
+  tenant_limit_reached: {
+    title: "This brain has reached one of its limits",
+    cause: "An extension refused the write because this brain has reached a limit it sets, for example its number of pages. Reading, editing and deleting still work; only adding more is refused.",
+    fix: "Delete what you no longer need, or ask the operator to raise the limit.",
+  },
+  tenant_suspended: {
+    title: "This brain is suspended",
+    cause: "An extension refused the change because the operator suspended this brain. Its data is intact; while it is held read-only, reads still work and every change is refused.",
+    fix: "Ask the operator to resume the brain. Retrying does not help until then.",
+  },
   unsupported: {
     title: "This is not supported here",
     cause: "The mode, option or tool is not available in this configuration — for example a model call while `MEMRAIN_KEYWORD_ONLY` is on, or an option this tool does not offer.",

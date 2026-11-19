@@ -4,6 +4,7 @@
  * Loads config (created by `init`), opens PGLite, starts the server,
  * registers SIGINT/SIGTERM for graceful shutdown.
  */
+import { assertExtensionPresent } from "../core/extension.ts";
 import { randomBytes } from "node:crypto";
 import { Storage } from "../core/storage.ts";
 import { startServer } from "../http/server.ts";
@@ -131,6 +132,7 @@ export async function bootTokenSweep(
 }
 
 export async function runServe(opts: ServeOptions): Promise<void> {
+  assertExtensionPresent();
   const watchdogMs = eventLoopWatchdogMs();
   if (!opts.http) {
     throw new Error(
@@ -181,7 +183,8 @@ export async function runServe(opts: ServeOptions): Promise<void> {
   if (process.env.MEMRAIN_HNSW_ZOMBIE_SWEEP === "1") {
     try {
       const { dropZombieIndexes } = await import("../core/vector-index.ts");
-      const { dropped } = await dropZombieIndexes(storage.engine());
+      const { withDirectEngine } = await import("../core/engine/direct.ts");
+      const { dropped } = await withDirectEngine(storage.engine(), dropZombieIndexes);
       if (dropped.length > 0) {
         console.error(
           `[hnsw] startup sweep dropped ${dropped.length} invalid index(es): ${dropped.join(", ")}`,

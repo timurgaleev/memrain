@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import { getPage, putPage } from "../src/core/pages.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { parseFactsFence, renderFactsFence } from "../src/core/facts-fence.ts";
@@ -234,7 +234,7 @@ describe("re-rendered pages keep brain-added fences (PGLite)", () => {
 const URL_ = process.env.MEMRAIN_TEST_POSTGRES_URL;
 describe.skipIf(!URL_)("re-rendered pages keep brain-added fences (Postgres)", () => {
   it("a facts fence on a transcript part survives a re-import", async () => {
-    const pg = new PostgresEngine({ url: URL_! });
+    const pg = pgTestEngine({ url: URL_! });
     const storage = new Storage(pg);
     try {
       await storage.init();

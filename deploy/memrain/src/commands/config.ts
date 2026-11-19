@@ -21,7 +21,7 @@ import { loadConfig } from "../core/config.ts";
 import { legacyEnv } from "../core/env-compat.ts";
 import {
   canonicalKey,
-  ENV_ONLY_KEYS,
+  isEnvOnlyKey,
   getRuntimeConfig,
   isOverlayProjected,
   legacyKey,
@@ -119,7 +119,7 @@ export async function runConfig(opts: ConfigCmdOptions): Promise<number> {
         const env = realEnv(stored);
         const overriding = [stored, legacyKey(stored)].find(name => env[name] !== undefined);
         if (overriding) console.error(`memrain config: WARN — environment ${overriding} overrides this stored value`);
-        if (ENV_ONLY_KEYS.has(stored)) console.error("memrain config: WARN — this knob is environment-only; the stored row is ignored");
+        if (isEnvOnlyKey(stored)) console.error("memrain config: WARN — this knob is environment-only; the stored row is ignored");
         console.error("memrain config: serve reads stored settings on restart; actual environment values still take precedence");
         console.log(`Set ${stored} = ${redactConfigValue(stored, value)}`);
         return 0;

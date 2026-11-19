@@ -37,6 +37,7 @@ import {
 import type { TenantMode } from "../core/oauth-provider.ts";
 import { normalizeScopesInput } from "../core/scope.ts";
 import { isSameOriginPost } from "./same-origin.ts";
+import { extension } from "../core/extension.ts";
 import { handleAdminTool } from "./admin-tool.ts";
 import { defaultConnectorDeps, handleAdminConnectors } from "./admin-connectors.ts";
 import { handleAdminNotifications } from "./admin-notifications.ts";
@@ -46,6 +47,8 @@ import { handleAdminMembers } from "./admin-members.ts";
 import { handleAdminAutonomy } from "./admin-autonomy.ts";
 import { handleAdminOffice } from "./admin-office.ts";
 import { handleChatApi } from "./chat-api.ts";
+import { handleFeedbackApi } from "./feedback-api.ts";
+import { operatorOwner } from "../core/chat/chat-service.ts";
 import type { SonnetFn } from "../core/llm/sonnet.ts";
 import { controlDaemon, daemonsStatus } from "../core/daemons/status.ts";
 import { OperationError } from "../core/operation-error.ts";
@@ -187,6 +190,10 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
   }
   const engine = deps.storage.engine();
 
+  // A registered extension's admin routes, behind the same gates as ours.
+  const extra = await extension().adminRoutes(req, url, { storage: deps.storage }).catch((e: unknown) => serverError("extension", e));
+  if (extra) return extra;
+
   // POST /admin/api/tool — allowlisted MCP tools for the brain explorer.
   if (p === "/admin/api/tool") {
     return handleAdminTool(req, {
@@ -216,6 +223,7 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     }).catch((e: unknown) => serverError("chat", e));
     if (r) return r;
   }
+  if (p === "/admin/api/feedback") return handleFeedbackApi(req, { storage: deps.storage, owner: operatorOwner() }).catch((e: unknown) => serverError("feedback", e));
   if (p === "/admin/api/office") {
     const r = await handleAdminOffice(req, url, engine).catch((e: unknown) => serverError("office", e));
     if (r) return r;

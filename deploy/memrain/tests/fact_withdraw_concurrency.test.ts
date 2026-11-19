@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import postgres, { type Sql } from "postgres";
 import { runMigrations } from "../src/core/migrate.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import { lockWithdrawals, withdrawLockKey } from "../src/core/fact-withdrawals.ts";
 import { openPostgres119, PG_URL, type Db } from "./helpers/migration-120.ts";
 
@@ -143,7 +143,7 @@ describe.skipIf(!PG_URL)("fact-withdraw lock across the rename (Postgres)", () =
       CREATE TRIGGER entity_facts_withdrawn_on_insert BEFORE INSERT ON entity_facts FOR EACH ROW
         WHEN (NEW.forgotten_at IS NULL AND NEW.dimension IS NULL)
         EXECUTE FUNCTION memex_fact_withdrawn_on_insert();`);
-    const engine = new PostgresEngine({ url: db.url, max: 1 });
+    const engine = pgTestEngine({ url: db.url, max: 1 });
     try {
       const locked = gate();
       const release = gate();

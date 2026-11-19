@@ -76,7 +76,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: install deps
@@ -112,6 +112,11 @@ jobs:
           bun-version: latest
       - name: bun install (frozen lockfile)
         run: bun install --frozen-lockfile
+      - name: bun install admin (frozen lockfile)
+        # Tests import admin modules (the Office page pulls in three.js), so the
+        # typecheck and the suite need the admin dependencies too.
+        working-directory: deploy/memrain/admin
+        run: bun install --frozen-lockfile
       - name: typecheck
         # Runs BEFORE the suite: a type error is cheaper to read than a shard
         # failure, and until this step existed the compiler had never been run
@@ -141,7 +146,8 @@ jobs:
     # (PGLite serializes them).
     name: Postgres tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 228 files in chunks, each running its PGLite and Postgres halves: ~30-40 min.
+    timeout-minutes: 60
     services:
       postgres:
         image: pgvector/pgvector:pg16

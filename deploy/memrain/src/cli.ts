@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
-import { resolveSinceHours } from "./core/search/filters.ts";
-import { runAliasesSuggest } from "./commands/aliases.ts";
 /**
  * memrain CLI entrypoint.
  */
 import "./core/env-compat.ts";
+import { resolveSinceHours } from "./core/search/filters.ts";
+import { runAliasesSuggest } from "./commands/aliases.ts";
 import { VERSION } from "./version.ts";
 import { normalizeSourceFilterParam } from "./core/source-scope.ts";
 import { runInit } from "./commands/init.ts";
@@ -92,6 +92,7 @@ import { runWaiting } from "./commands/waiting.ts";
 import { runQuarantine, type QuarantineSub } from "./commands/quarantine.ts";
 import { runWriteGate } from "./commands/write-gate.ts";
 import { runGroup, runMember } from "./commands/members.ts";
+import { assertExtensionPresent, extension } from "./core/extension.ts";
 import { runSecretsAudit } from "./commands/secrets.ts";
 import {
   runEvalRunAll,
@@ -360,6 +361,7 @@ function printUsage(): void {
   console.log("  member list [--all] | show <id>        the people of a team brain");
   console.log("  member add <id> [--name N] [--email E] [--personal-source SRC]");
   console.log("  member disable|enable|remove <id>   disable stops every key bound to the member");
+  console.log("  member remove <id> --erase-personal-source [--apply --out DIR]   export, then erase the member's own source");
   console.log("  member bind <id> --token NAME|--client ID|--enrollment ID");
   console.log("  member unbind --token NAME|--client ID|--enrollment ID");
   console.log("  group list | show <id> | add <id> [--name N] | remove <id>");
@@ -373,6 +375,7 @@ function printUsage(): void {
   console.log("                               by default, never prints a value");
   console.log("  version | --version          print build version (git tag+sha, or 'dev')");
   console.log("  --help                       show this help");
+  for (const line of extension().usage) console.log(line);
 }
 
 /**
@@ -397,6 +400,10 @@ async function printCommandHelp(
 }
 
 async function main(argv: readonly string[]): Promise<number> {
+  // A registered extension's commands parse their own argv, before ours.
+  const extended = await extension().command(argv);
+  if (extended !== null) return extended;
+  assertExtensionPresent();
   const parsed = parseArgs(argv, { strict: false });
   const { cmd, flags, positional } = parsed;
 
@@ -1995,6 +2002,10 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (client !== undefined) opts.client = client;
       const enrollment = values.get("--enrollment");
       if (enrollment !== undefined) opts.enrollment = enrollment;
+      if (flags.has("--erase-personal-source")) opts.erasePersonalSource = true;
+      if (flags.has("--apply")) opts.apply = true;
+      const out = values.get("--out");
+      if (out !== undefined) opts.out = out;
       return await runMember(opts);
     }
     case "group": {

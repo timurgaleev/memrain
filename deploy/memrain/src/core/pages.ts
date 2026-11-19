@@ -37,6 +37,7 @@ import { storedTakeRowMax, syncTakesFromFence } from "./synthesis/takes-canon.ts
 import { takePageEligibleSql } from "./synthesis/takes-owner.ts";
 import { atomPageMatches, lockAtomSource, tryLockAtomSlugs, type AtomPageExpectation, type AtomSourceExpectation } from "./synthesis/atoms-source.ts";
 import type { TrustTier } from "./trust-tier.ts";
+import { extension } from "./extension.ts";
 
 // Catalogue of well-known page types. Not enforced at the DB level (see
 // migration 015 comment); kept here so application code can normalise +
@@ -575,6 +576,10 @@ export async function putPage(
                 p.source_id, p.deleted_at`,
       [input.slug],
     );
+
+    // A write that adds a live page asks the extension for room inside the
+    // transaction, so a limit holds under concurrent writers.
+    if (existing.rows.length === 0 || existing.rows[0]!.deleted_at !== null) await extension().beforePageAddInTx(tx);
 
     // No cross-tenant overwrite: a slug owned by another source is off-limits.
     // Only a caller that NAMES a source is fenced — the same exemption
@@ -1408,6 +1413,7 @@ export async function restorePage(
     if (r.rows.length === 0 || r.rows[0]!.deleted_at === null) {
       return { slug, restored: false };
     }
+    await extension().beforePageAddInTx(tx);
     const updated = await tx.query(
       `UPDATE pages SET deleted_at = NULL, updated_at = NOW() WHERE slug = $1${sourceFilter} RETURNING slug`,
       params,

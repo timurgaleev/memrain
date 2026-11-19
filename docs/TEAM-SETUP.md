@@ -287,6 +287,14 @@ Every change is written to `member_audit` with who made it. The admin API has
 the same operations under `/admin/api/members` and `/admin/api/groups`, behind
 the admin login.
 
+### Offboarding with the personal source
+
+`memrain member remove alice --erase-personal-source` shows what would go.
+Adding `--apply --out DIR` exports the source's pages and the member's chat
+threads into DIR first, then removes the member, revokes their keys, grants
+and sign-in sessions, erases their chat and every row of the personal source.
+A receipt stays in `member_audit`. Erasure cannot be undone; keep DIR.
+
 ### Give an existing token another source
 
 A personal access token's read set changes in place; there is no need to issue

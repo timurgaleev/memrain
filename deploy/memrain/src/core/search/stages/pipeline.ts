@@ -27,6 +27,7 @@ import { isCanonicalQuery } from "../recency-gate.ts";
 import { dedupByDocument, dedupByTextSimilarity, enforceTypeDiversity, getNearDupThreshold } from "../dedup.ts";
 import { rerank } from "../two-pass.ts";
 import { promoteExactLookup } from "../exact-lookup.ts";
+import { feedbackRankStage } from "../feedback-boost.ts";
 import { mergeExplain, recordStageFactor, snapshotScores, type SearchExplain } from "../explain.ts";
 import type { SearchOptions } from "../hybrid.ts";
 import type { Hit, RankStage, StageContext, StageInput } from "./types.ts";
@@ -429,6 +430,7 @@ export const POST_FUSION_STAGES: readonly RankStage[] = [
   exactMatch,
   aliasResolved,
   resort,
+  feedbackRankStage,
   perDocument,
   typeDiversity,
   twoPassRerank,

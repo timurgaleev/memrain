@@ -350,6 +350,44 @@ try {
     assert.equal(await page.getByRole("button", { name: "Save as page" }).count(), 0);
     assert.equal(chat.posts("/admin/api/chat/messages/m-1/save").length, 1);
   });
+  await check("With rating and sharing off an answer offers neither", "ask", async (page) => {
+    await fresh(page, chatScenario());
+    await ask(page, "When is the offsite?");
+    await page.getByRole("button", { name: "Save as page" }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Useful", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Share link" }).count(), 0);
+  });
+  await check("Rating a source sends one rating, shows it pressed, and pressing again withdraws it", "ask", async (page) => {
+    await fresh(page, chatScenario({ feedback: true }));
+    await ask(page, "When is the offsite?");
+    const useful = page.getByRole("group", { name: "Rate source: History fixture" }).getByRole("button", { name: "Useful", exact: true });
+    await useful.click();
+    await page.waitForFunction(() => document.querySelector('[aria-label="Useful"]')?.getAttribute("aria-pressed") === "true");
+    await useful.click();
+    await page.waitForFunction(() => document.querySelector('[aria-label="Useful"]')?.getAttribute("aria-pressed") === "false");
+    assert.deepEqual(chat.posts("/admin/api/feedback").map((r) => r.body), [
+      { message_id: "m-1", slug: "notes/history", rating: 1 },
+      { message_id: "m-1", slug: "notes/history", rating: 0 },
+    ]);
+  });
+  await check("Share link asks for a password, shows the link once, and can end it", "ask", async (page) => {
+    await fresh(page, chatScenario({ share: true }));
+    await ask(page, "When is the offsite?");
+    await page.getByRole("button", { name: "Share link" }).click();
+    await page.getByLabel("Password for the link").fill("short");
+    await page.getByRole("button", { name: "Create link" }).click();
+    await page.getByText("Use at least 8 characters.").waitFor();
+    assert.equal(chat.posts("/admin/api/chat/messages/m-1/share").length, 0);
+    await page.getByLabel("Password for the link").fill("long enough secret");
+    await page.getByRole("button", { name: "Create link" }).click();
+    const link = page.getByLabel("Share link", { exact: true });
+    await link.waitFor();
+    assert.match(await link.inputValue(), /\/s\/t{43}$/);
+    assert.deepEqual(chat.posts("/admin/api/chat/messages/m-1/share").map((r) => r.body), [{ password: "long enough secret" }]);
+    await page.getByRole("button", { name: "End link" }).click();
+    await page.getByText("Link ended.").waitFor();
+    assert.equal(chat.requests.filter((r) => r.method === "DELETE" && r.path === "/admin/api/chat/messages/m-1/share").length, 1);
+  });
   await check("An open conversation shows its messages, follows up in the same thread, and can be deleted", "ask#ask/t1", async (page) => {
     const followUp = OK_SCRIPT.map((s) => (s.event === "answer" ? { ...s, data: { ...ANSWER, thread_id: "t1", message_id: "m-2" } } : s));
     await fresh(page, chatScenario({ threads: [T1], details: { t1: THREAD }, script: followUp }));

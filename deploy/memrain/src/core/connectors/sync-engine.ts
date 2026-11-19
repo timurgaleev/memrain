@@ -76,6 +76,7 @@ import { deleteStaleParts, DETACHED_ORIGIN, massDeleteVerdict } from "./retentio
 import { accountRef, type ConnectorDataKind, type Person } from "./model.ts";
 import { mapLoopSignalsText, type LoopSignals } from "../loops/signals.ts";
 import { connectorsSwitchOn } from "./vault.ts";
+import { extension } from "../extension.ts";
 import { ReauthRequiredError, type ConnectorRunStatus, type ResponseClass } from "./types.ts";
 import {
   DELETE_CONFIRMED,
@@ -275,7 +276,8 @@ export type SyncStopReason =
   | "source_outage"
   | "items_failed"
   | "deletions_failed"
-  | "page_limit";
+  | "page_limit"
+  | "paused";
 
 export interface SyncCounts {
   items: number;
@@ -410,6 +412,7 @@ export async function runConnectorSync(storage: Storage, account: SyncAccount, d
   };
 
   if (!connectorsSwitchOn(env)) return skip("connectors_disabled");
+  if (await extension().paused()) return skip("paused");
   if (!account.enabled) return skip("account_disabled");
   if (account.status !== "active") return skip("account_inactive");
   if ((await getSource(engine, account.sourceId)) === null) {
@@ -623,6 +626,11 @@ class Run {
     const failures: PageFailure[] = [];
     for (const item of items) {
       // An adapter that ignores the budget is still stopped here, part-way through its page.
+      if (await extension().paused()) {
+        this.stop("paused");
+        this.fetchStopped = true;
+        return false;
+      }
       if (this.budget().remaining <= 0) {
         this.stop("item_cap_reached");
         this.fetchStopped = true;

@@ -52,3 +52,40 @@ if [ "$rc" -eq 1 ]; then pass "a colored skip line fails the run"; else die "col
 out="$(check ' 12 pass\n 2 todo\n 0 fail\n')"
 rc=$?
 if [ "$rc" -eq 1 ]; then pass "a todo line fails the run"; else die "todo passed (rc=$rc): $out"; fi
+
+echo "read_direct_only (pooler mode)"
+
+# Runs read_direct_only on a list holding $1 (printf format) against the found
+# files a.test.ts .. l.test.ts; prints its output and the routed files.
+direct() {
+  local list="$TMPROOT/direct.$RANDOM" found=() f
+  # shellcheck disable=SC2059 # the fixture text is the format on purpose
+  printf "$1" > "$list"
+  for f in a b c d e f g h i j k l; do found+=("tests/$f.test.ts"); done
+  # shellcheck source=scripts/test-pg.sh
+  (TEST_PG_SOURCE_ONLY=1 source "$TEST_PG_SH" && DIRECT_ONLY="$list" && read_direct_only "${found[@]}" \
+    && echo "routed ${DIRECT_FILES[*]} session=${DIRECT_SESSION}") 2>&1
+}
+
+out="$(direct '# comment\n\na.test.ts session holds a session SET\nb.test.ts session takes an advisory lock across statements\n')"
+rc=$?
+if [ "$rc" -eq 0 ] && [[ "$out" == *"routed tests/a.test.ts tests/b.test.ts session=2"* ]]; then pass "routes listed files, counted per category"; else die "valid list (rc=$rc): $out"; fi
+
+out="$(direct 'a.test.ts session\n')"
+rc=$?
+if [ "$rc" -eq 1 ] && [[ "$out" == *"no reason"* ]]; then pass "an entry without a reason fails"; else die "missing reason (rc=$rc): $out"; fi
+
+out="$(direct 'a.test.ts sometimes it is flaky\n')"
+rc=$?
+if [ "$rc" -eq 1 ] && [[ "$out" == *"category"* ]]; then pass "an unknown category fails"; else die "unknown category (rc=$rc): $out"; fi
+
+out="$(direct 'zz.test.ts session reason\n')"
+rc=$?
+if [ "$rc" -eq 1 ] && [[ "$out" == *"not a Postgres test file"* ]]; then pass "an entry naming no found file fails"; else die "unknown file (rc=$rc): $out"; fi
+
+eleven=""
+for f in a b c d e f g h i j k; do eleven+="$f.test.ts session needs its own session\n"; done
+out="$(direct "$eleven")"
+rc=$?
+if [ "$rc" -eq 1 ] && [[ "$out" == *"not pooler-compatible"* ]]; then pass "more than 10 session entries fail"; else die "11 session entries (rc=$rc): $out"; fi
+

@@ -49,6 +49,7 @@ import {
   revokeGroupSource,
 } from "../core/groups.ts";
 import { GRANT_PROFILE_CATALOG_VERSION, GRANT_PROFILES } from "../core/grant-profiles.ts";
+import { OperationError } from "../core/operation-error.ts";
 
 const WHO: MemberActor = { actor: "admin", via: "admin_api" };
 
@@ -61,6 +62,7 @@ const STATUS: Record<MemberErrorCode, number> = {
   email_taken: 409,
   credential_mixed: 409,
   owner_source: 409,
+  source_shared: 409,
 };
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "cache-control": "no-store" } });
@@ -172,6 +174,7 @@ export async function handleAdminMembers(req: Request, url: URL, engine: Engine)
     return null;
   } catch (e) {
     if (e instanceof MemberError) return json({ error: e.code, message: e.message }, STATUS[e.code]);
+    if (e instanceof OperationError && e.code === "tenant_limit_reached") return json({ error: e.code, message: e.message }, 409);
     // A malformed percent-escape in a path segment is the caller's mistake, not ours.
     if (e instanceof URIError) return bad("malformed path segment");
     throw e;

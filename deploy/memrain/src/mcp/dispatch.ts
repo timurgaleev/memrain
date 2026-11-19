@@ -297,6 +297,8 @@ import { listQuarantined } from "../core/quarantine-list.ts";
 import { extractionReview } from "../core/extraction-review.ts";
 import { findTypedConflicts } from "../core/typed-conflicts.ts";
 import { markGeneratedChunks } from "../core/search/generated-provenance.ts";
+import { extension } from "../core/extension.ts";
+import { observeRetrievalUse } from "../core/feedback/implicit.ts";
 
 export { OPERATOR_ONLY_TOOLS } from "./visibility.ts";
 
@@ -425,6 +427,8 @@ export interface DispatchOptions {
    * (a saved chat answer citing outside evidence). Transports never set it.
    */
   trustCeiling?: TrustTier;
+  /** A member's own write made on its own credentials (`member:<id>`), recorded as its principal. Transports never set it. */
+  memberPrincipal?: `member:${string}`;
 }
 
 /**
@@ -455,6 +459,7 @@ export async function dispatchTool(
   const { result: dispatched, cost } = await withRequestCost(() => runWithSpendClient(spendClient, () =>
     dispatchToolInner(storage, req, opts),
   ));
+  observeRetrievalUse(storage, req.name, req.arguments ?? {}, dispatched, writerPrincipal(opts));
   const enriched = withPageAdminUrl(req, dispatched, opts);
   // The operator reads stored text as it is; everyone else gets retrieval
   // results scanned for credentials that predate (or slipped past) the write scan.
@@ -582,6 +587,7 @@ async function dispatchToolInner(
   const takesHolders = effectiveTakesHolders(opts.authInfo);
   try {
     if (req.name === "search" || req.name === "query") opts.signal?.throwIfAborted();
+    await extension().admitOperation(req.name, () => storage.engine(), req.arguments);
     // Tool-level gates, in order: the fail-closed write gate (a scopeless
     // authenticated principal on a write op, default-OFF unless
     // MEMRAIN_TENANT_FAIL_CLOSED=1), operator-only tools for any authenticated
@@ -1004,11 +1010,14 @@ async function dispatchToolInner(
     if (isOperationError(e)) {
       return errResult(JSON.stringify(e.toEnvelope(opts.isPublic ?? false)));
     }
+    // An extension may treat authenticated callers as outsiders too: they then
+    // get the public ingress's closed text for anything unexpected.
+    const withhold = (opts.isPublic ?? false) || extension().withholdErrors(opts.authInfo !== undefined);
     const databaseError = databaseOperationError(e);
-    if (databaseError) return errResult(JSON.stringify(databaseError.toEnvelope(opts.isPublic ?? false)));
+    if (databaseError) return errResult(JSON.stringify(databaseError.toEnvelope(withhold)));
     // A raw exception (Postgres schema, DSN host, stack internals) must NOT
     // leak across the public boundary; fully redact it there, log server-side.
-    return errResult(publicSafeErrorMessage(e, opts.isPublic ?? false));
+    return errResult(publicSafeErrorMessage(e, withhold));
   }
 }
 
@@ -2865,6 +2874,7 @@ export function remoteWriterIdentity(opts: DispatchOptions): string | undefined 
 
 export function writerIdentity(opts: DispatchOptions): string {
   if (opts.isPublic) return "public";
+  if (opts.memberPrincipal) return opts.memberPrincipal;
   const id = opts.authInfo?.clientId;
   return id !== undefined && id.length > 0 ? `client:${id}` : "operator";
 }

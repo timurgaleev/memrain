@@ -70,6 +70,7 @@ import {
   resolveSemanticCacheConfig,
   type CachedQuery,
 } from "./query-cache.ts";
+import { feedbackCacheSuffix } from "./feedback-boost.ts";
 import { stampContentFlags, type ContentFlag } from "./content-flag.ts";
 import { currentDocumentClock } from "../generation.ts";
 import type { Engine } from "../engine/interface.ts";
@@ -831,7 +832,8 @@ async function hybridSearchUnbounded(
       backlinkBoostOn,
       titleArmOn,
       tokenBudget,
-    });
+    }) +
+    (cacheEnabled ? await feedbackCacheSuffix(engine) : "");
   if (cacheEnabled) {
     try {
       cacheClock = await currentDocumentClock(engine);
