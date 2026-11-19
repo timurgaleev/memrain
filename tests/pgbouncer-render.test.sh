@@ -20,7 +20,7 @@ trap 'rc=$?; rm -rf "$TMPROOT"; echo; echo "pgbouncer-render.test.sh: PASS=$PASS
 die() { echo "  ✗ $*"; FAIL=$((FAIL + 1)); }
 pass() { echo "  ✓ $*"; PASS=$((PASS + 1)); }
 
-URL='postgres://tenant_acme_owner:0123abcd@db.example.test:5432/tenant_acme?sslmode=require'
+URL='postgres://tenant_acme_owner:fakepw0123@db.example.test:5432/tenant_acme?sslmode=require'
 
 # render DIR ENV... -> runs render.sh into DIR with only ENV set; RC holds its status.
 render() {
@@ -48,11 +48,11 @@ if [ "$dbs" = "tenant_acme = host=db.example.test port=5432 dbname=tenant_acme" 
 else
   die "[databases]: '$dbs'"
 fi
-if grep -q '0123abcd' "$D/pgbouncer.ini"; then die "the password is in pgbouncer.ini"; else pass "no password in pgbouncer.ini"; fi
-if [ "$(cat "$D/userlist.txt")" = '"tenant_acme_owner" "0123abcd"' ]; then pass "userlist holds the upstream login"; else die "userlist: $(cat "$D/userlist.txt")"; fi
+if grep -q 'fakepw0123' "$D/pgbouncer.ini"; then die "the password is in pgbouncer.ini"; else pass "no password in pgbouncer.ini"; fi
+if [ "$(cat "$D/userlist.txt")" = '"tenant_acme_owner" "fakepw0123"' ]; then pass "userlist holds the upstream login"; else die "userlist: $(cat "$D/userlist.txt")"; fi
 mode="$(stat -c '%a' "$D/userlist.txt" 2>/dev/null || stat -f '%Lp' "$D/userlist.txt")"
 [ "$mode" = 600 ] && pass "userlist is 0600" || die "userlist mode $mode"
-if grep -q '0123abcd' "$D.log"; then die "render printed the password"; else pass "render prints no password"; fi
+if grep -q 'fakepw0123' "$D.log"; then die "render printed the password"; else pass "render prints no password"; fi
 
 D="$TMPROOT/local"
 render "$D" PGBOUNCER_UPSTREAM_URL="${URL%%\?*}?sslmode=disable" PGBOUNCER_SERVER_TLS_SSLMODE=disable
