@@ -203,7 +203,11 @@ describe.skipIf(!URL_)("bench scale on Postgres", () => {
       expect(json).not.toContain(URL_!);
       if (u.password) {
         expect(json).not.toContain(`:${u.password}@`);
-        expect(json).not.toContain(JSON.stringify(decodeURIComponent(u.password)));
+        const pw = decodeURIComponent(u.password);
+        expect(json).not.toContain(JSON.stringify(pw));
+        expect(json).not.toMatch(new RegExp(`password"?\\s*[=:]\\s*"?${pw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i"));
+        // A long password cannot be an ordinary word, so any appearance is a leak.
+        if (pw.length >= 12) expect(json).not.toContain(pw);
       }
 
       const admin = new PostgresEngine({ url: URL_!, max: 1 });
