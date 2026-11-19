@@ -17,24 +17,29 @@ a question, read [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md).
 ## Topology
 
 ```
-              MCP clients (Claude Code, Cursor, Codex)
-                            │
-                  https://brain.<domain>/mcp
-                            ▼
-                   cloudflared (sidecar)
-                            │
-            ┌── docker-compose internal bridge ──┐
-                            │
-                          memrain  (GET /health · POST /mcp)
-                            │
-        Bedrock Titan v2 (embeddings) + Claude Haiku (intent/expansion)
-                  + opt-in Claude Sonnet (LLM synthesis)
-                            │
-                  RDS Postgres + pgvector
-                            │
+   MCP clients (Claude Code, Codex,                 people in a browser
+   claude.ai, ChatGPT, Cursor)                      (admin panel)
+                │                                          │
+   https://brain.<domain>/mcp              https://brain.<domain>/admin
+                └──────────────────┬───────────────────────┘
+                                   ▼
+                  cloudflared (sidecar)  or  caddy (ingress_mode = "caddy")
+                                   │
+                ┌── docker-compose internal bridge ──┐
+                                   │
+     memrain  (/health · /mcp · /ingest · OAuth · /admin)
+       ├─ jobs worker + daemon scheduler (opt-in: MEMRAIN_DAEMONS=1)
+       │    cycle · connector_sync · notifications · loops_sweep
+       └─ connector sync  ──►  Google · Microsoft Graph · Slack · Fireflies
+                                   │                       (read-only, opt-in)
+     Bedrock Titan v2 (embeddings) + Claude Haiku (intent/expansion, Ask)
+                 + opt-in Claude Sonnet (synthesis, think)
+                                   │
+          RDS Postgres + pgvector  (directly, or through PgBouncer)
+                                   │
                   EFS (container runtime state)
-                            │
-                  AWS Secrets Manager
+                                   │
+       AWS Secrets Manager (incl. the optional connector key)
 ```
 
 The stack runs as one VPC + one EC2 + one RDS + one EFS in a single
@@ -45,7 +50,7 @@ external message broker — the whole runtime fits in `t4g.medium`.
 
 | Container | Image | Owns |
 |---|---|---|
-| `memrain` | built from `deploy/memrain/` (Bun + Alpine) | Knowledge brain: hybrid search (+ graph-signals ranking), entity + code call graph, code/markdown chunkers, fact extraction, push-context, advisor, MCP server (96 tools), a maintenance cycle (13 deterministic phases + 11 opt-in LLM-synthesis phases). Every route except `GET /health`, the OAuth metadata and flow endpoints (`/.well-known/*`, `/authorize`, `/token`, `/register`, `/revoke`) and the `/admin` pages (which carry their own login) needs a credential; `POST /mcp` is the agent contract and `POST /ingest` takes OAuth bearers with the `write` scope. Bedrock: Titan v2 embeddings, plus opt-in Claude Haiku (intent/expansion/rerank) and the opt-in, off-by-default Claude Sonnet note synthesis. Answer synthesis is the MCP client's job. |
+| `memrain` | built from `deploy/memrain/` (Bun + Alpine) | Knowledge brain: hybrid search (+ graph-signals ranking), entity + code call graph, code/markdown chunkers, fact extraction, push-context, advisor, MCP server (106 tools), a maintenance cycle (15 deterministic phases + 11 opt-in LLM-synthesis phases), and, each off until switched on, the daemon scheduler, connectors and the admin **Ask** chat. Every route except `GET /health`, the OAuth metadata and flow endpoints (`/.well-known/*`, `/authorize`, `/token`, `/register`, `/revoke`), the `/admin` pages (which carry their own sign-in) and `/s/` share links (when on; the link's password is the credential) needs a credential; `POST /mcp` is the agent contract and `POST /ingest` takes OAuth bearers with the `write` scope. Bedrock: Titan v2 embeddings, plus opt-in Claude Haiku (intent/expansion/rerank) and the opt-in, off-by-default Claude Sonnet note synthesis. Answer synthesis is the MCP client's job. |
 | `cloudflared` | `cloudflare/cloudflared:2025.4.0` (upstream) | Public HTTPS ingress (Cloudflare Tunnel), the default `ingress_mode`. The dashboard routes `brain.<domain>/mcp` to Memrain on the internal docker bridge. |
 | `caddy` | `caddy:2.10` (upstream) | The alternative ingress (`ingress_mode = "caddy"`): terminates TLS with Let's Encrypt on the instance's own public IP, no tunnel. Runs as a compose override, so exactly one of the two ingress containers exists per deployment. See [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md#alternative-caddy-ingress-no-cloudflare). |
 
@@ -85,12 +90,179 @@ so future contributors don't reach for them blindly.
 | `core/write-requests.ts` | Retry-safe writes. A `request_id` on `page_put`, `page_append`, `add_fact` or `add_timeline_event` claims a `write_requests` row keyed by caller grant, tool and id; a retry with the same arguments replays the stored result, other arguments are refused, and a retry during the first call gets `request_in_progress`. Conditional writes (`expected_version`) are checked in `core/pages.ts` under the slug's write lock. |
 | `core/cycle/phase-context.ts` | Cycle fencing. Each phase runs with its own abort signal and a lock fence in async context: `phaseCheckpoint()` at the top of each loop iteration stops a timed-out or aborted phase, and `phaseFenceCheck()` before a shared-state write confirms the cycle lock still carries this run's tenure, so a run whose lock was taken ends as `partial/lock_stolen` instead of overlapping the new holder. |
 | `core/transcripts/*` | Transcript import behind `memrain transcripts ingest`: format detection plus ChatGPT, Claude.ai, Codex rollout and Claude Code session adapters. Only what was said is kept (tool traffic, reasoning, sub-agent logs and system reminders are dropped); secrets are redacted before render and long sessions split into `-pN` parts at message boundaries. |
+| `core/connectors/*` | Connectors: provider adapters (Google, Microsoft Graph, Slack, Fireflies, GitHub), the token vault (`vault.ts`), the sync engine (`sync-engine.ts`, `sync-store.ts`), deletion and retention (`retention.ts`) and meeting-credential redaction. See [Connectors](#connectors). |
+| `core/daemons/*` | The daemon scheduler: registry, cron windows, per-daemon controls (`daemon_controls`), caps and status. |
+| `core/budget.ts` | The spend ledger and wallet: every paid call is held at its maximum cost before it is sent, then settled; day caps per brain, client, daemon and path. |
+| `core/trust-tier.ts` + `core/write-gate*.ts` + `core/trust-frame.ts` | Trust tiers and the write gate: who wrote a row, the deterministic instruction-text detector, held items, and the frame outside text is read back in. |
+| `core/chat/*` + `http/chat-api.ts` + `http/share.ts` | The **Ask** chat: one `think` synthesis per answer under a per-answer hold, threads, saving an answer as a page, optional share links. |
+| `core/loops/*` | Open loops: deterministic reply-owed / waiting / promise / RSVP detection over connector pages (`memrain waiting`, `loops_list`). |
+| `core/notifications/*` | Owner notifications: stored rows, the admin and doctor views, and the optional signed webhook. |
+| `core/members.ts` + `core/groups.ts` + `core/grant-profiles.ts` + `core/member-offboarding.ts` | Members, groups and grant profiles, and offboarding (export, then erase a member's own source). |
+| `http/admin-office.ts` | The admin **Office** page feed: which workers and clients exist and are busy, by name only. |
 | `http/oauth.ts` | **Default-OFF** optional OAuth/JWT bearer path. When `auth.oauth.enabled`, a Bearer JWT is verified against the issuer JWKS (RS256/ES256 via WebCrypto, no new dep); a valid token maps to the **public, redacted** read scope only — never internal, never a write path. |
 | `core/extension.ts` | Extension hooks for a build that wraps the server: request and operation admission, a hold on background work, member and page room checks, a second spend hold, extra routes, admin routes and CLI commands, extra env-only config keys. The wrapper's own entrypoint registers them before it loads the CLI; with nothing registered every hook is a no-op. Environment that only a wrapper understands (`MEMRAIN_TENANT_ID`, `MEMRAIN_CONTROL_URL`) with no extension registered stops startup, so a misstarted wrapper fails closed. |
 
-## Access — MCP only
+## Platform layer (2.0)
 
-Memrain has no chat surface. Clients reach it exclusively over MCP:
+Release 2.0 adds a layer around the brain: connectors that read outside
+accounts, background daemons under hard spend caps, trust tiers with a write
+gate, the **Ask** chat, and members and groups. Connectors, daemons other than
+`cycle`, Ask and members stay off until the operator switches them on. Two
+parts are active from the upgrade on: trust tiers are recorded on new writes,
+and the write gate checks outside text in `flag` mode (stored, marked and read
+back inside a stronger frame; nothing is hidden).
+
+```mermaid
+flowchart TD
+  P["Google · Microsoft Graph · Slack · Fireflies<br/>read-only provider APIs"]
+  subgraph M["memrain container"]
+    D["daemon scheduler<br/>cycle · connector_sync · notifications · loops_sweep"]
+    K["vault<br/>tokens sealed with the connector key"]
+    S["sync engine<br/>cursors · holds · mass-delete guard · retention"]
+    G["page write<br/>secret scan · write gate · trust tier"]
+    W["spend wallet<br/>hold max cost · settle · pause on overrun"]
+    A["Ask chat and MCP search<br/>min_trust · outside-text frame"]
+    L["open loops"]
+    N["notifications<br/>admin · doctor · signed webhook"]
+  end
+  DB[("Postgres<br/>pages · chunks · trust_tier<br/>connector_* · open_loops · chat_*")]
+  B["Bedrock"]
+  P --> S
+  D --> S
+  K --> S
+  S --> G --> DB
+  D --> L --> DB
+  D --> N
+  A --> DB
+  S -. embeddings .-> W
+  A -. model calls .-> W
+  W --> B
+```
+
+### Connectors
+
+- **Gates.** Connectors open only with a usable connector key and
+  `MEMRAIN_CONNECTORS_ENABLED=1`. Syncing also needs the scheduler
+  (`MEMRAIN_DAEMONS=1`), the `connector_sync` daemon enabled, and a brain-wide
+  `MEMRAIN_DAILY_BUDGET_USD`, because each written page is embedded.
+  [docs/connectors/ENABLE.md](./docs/connectors/ENABLE.md) is the order.
+- **Vault.** OAuth tokens and the operator's own OAuth client secrets are
+  sealed with AES-256-GCM under a key-encryption key that never reaches the
+  database: `<secrets_prefix>/memrain-connector-kek`, fetched as
+  `MEMRAIN_CONNECTOR_KEK` (or `MEMRAIN_CONNECTOR_KEK_FILE`). Each sealed row
+  records only the key's id and is bound to its row, so a copied or altered
+  ciphertext fails to open. Without a key, connectors stay closed; nothing is
+  stored in the clear. `memrain connectors rotate-kek` replaces the key
+  ([docs/connectors/KEY.md](./docs/connectors/KEY.md)).
+- **Sources by kind.** Every account writes into a source of the matching kind
+  and never into a notes source: `mailbox` (Gmail, Outlook mail), `calendar`
+  (Google Calendar, Outlook calendar), `chat` (Slack channel days, Teams chat
+  days) and `meeting` (Teams transcripts, Fireflies). These kinds, with
+  `github` and `webhook`, are outside sources.
+- **Sync engine.** One run per account under a run lock and the account's
+  daily item and dollar caps. A stream's cursor moves only once every item up
+  to its checkpoint is written, unchanged or held, so an interrupted run
+  resumes without a gap. Items that keep failing are held with a back-off. A
+  body past the part size is stored as a contents page plus `part-NNN` pages.
+  Live tokens are swept out of the text, and every item goes through the normal
+  page write as outside text, with embeddings booked to `connector:<account>`.
+- **Deletes and retention.** An item deleted at the provider soft-deletes its
+  page and parts (a tombstone version, out of search, `page_restore` until the
+  purge). Past the mass-delete guard (`MEMRAIN_CONNECTOR_MASS_DELETE_*`) the
+  deletions are held for the owner instead. Retention windows
+  (`MEMRAIN_CONNECTOR_RETENTION_DAYS_*`: mail and chat 180 days, calendar and
+  meetings 365) hard-delete a page and what was derived from it; a page a
+  person edited after the connector's last write is detached and kept.
+- **State.** `connector_accounts`, `connector_credentials`,
+  `connector_oauth_clients`, `connector_cursors`, `connector_items`,
+  `connector_notices`, `connector_oauth_states`, `connector_client_holds`
+  (migrations 152 to 154, 167 to 169).
+
+### Scheduler and spend wallet
+
+- **Daemons.** `MEMRAIN_DAEMONS=1` starts an in-process scheduler next to the
+  jobs worker. One process leads through a `cycle_locks` row and queues each
+  daemon window once. Built in: `cycle` (the maintenance cycle, its own loop),
+  `connector_sync` (every 15 minutes, paid), `notifications` (every 5
+  minutes) and `loops_sweep` (every 30 minutes). Only `cycle` is enabled by
+  default. `memrain daemons enable|disable|pause|resume|status` steer them;
+  `MEMRAIN_DAEMONS_DISABLED` switches one off from the environment, and five
+  failed runs in a row pause a daemon.
+- **Wallet.** Every paid call is held in the spend ledger at its maximum cost
+  before it is sent and settled afterwards, so a cap counts calls in flight.
+  Caps stack and the lowest wins: the brain day (`MEMRAIN_DAILY_BUDGET_USD`),
+  the cycle day, each daemon's day and run caps, and per-client caps. A paid
+  daemon does not run at all without the brain day cap. A path whose call
+  costs more than its hold is paused until `memrain spend resume <path>`.
+  `MEMRAIN_PROVIDER_LEASES` optionally caps parallel model calls per family.
+- **Notifications.** A needed reconnect, held deletions or items, a paused
+  path or daemon, write-gate holds and a refused OAuth app become rows in
+  `notifications`, shown in the admin and `memrain doctor`, and optionally
+  sent as a signed POST (`MEMRAIN_NOTIFY_WEBHOOK_URL`), retried when a
+  delivery fails.
+
+### Trust tiers and the write gate
+
+- **Tiers.** Pages and facts written since 2.0 record the least trusted writer
+  they have had (migration 158): `owner` (the operator, the CLI, the brain's own
+  writers), `member` (a member principal), `agent` (any other authenticated
+  client) or `external` (text in an outside source). A later owner edit never
+  raises a tier. A row with no stored tier (anything written before 2.0, and a
+  document indexed without one) gets it derived at read time. `search`, `query` and `context_pack` take `min_trust`.
+- **Write gate.** A deterministic check, with no model call, runs when
+  outside or agent text is indexed for search. It looks for text that reads as
+  instructions to an AI: directives that try to replace the reader's
+  instructions, chat-template role markers, tool-call shaped text, requests to
+  send data out, directives to the memory itself. `MEMRAIN_WRITE_GATE_EXTERNAL`
+  (default `flag`) and `MEMRAIN_WRITE_GATE_AGENT` (default `off`) choose
+  between `flag` (stored, marked, read back inside a stronger frame),
+  `quarantine` (out of search until `memrain write-gate approve|reject`) and,
+  for outside text only, `reject`.
+- **Paid phases skip outside text.** Facts backfill, on-write extraction and
+  the contextual-LLM tier leave connector pages (mail, calendar, chat,
+  meeting) alone. Deep synthesis gathers only pages at tier `agent` or above,
+  so no outside text, GitHub and webhook pages included, reaches its prompt.
+
+### Ask
+
+The admin **Ask** page (`MEMRAIN_CHAT=1`, which also needs
+`MEMRAIN_DAILY_BUDGET_USD`) answers from the brain through one `think`
+synthesis per answer. The model gets no tools and writes nothing; a follow-up
+is first rewritten into a standalone question by one short call. Each answer is
+held at `MEMRAIN_CHAT_ANSWER_MAX_USD` before the first call, inside a per-owner
+day and the brain day. Threads live in `chat_threads` / `chat_messages`
+(migration 170) and are purged after `MEMRAIN_CHAT_RETENTION_DAYS`. Saving an
+answer is a normal page write; with `MEMRAIN_CHAT_SHARE=1` an answer can also
+be shared by a password-protected link under `/s/`. See
+[docs/CHAT.md](./docs/CHAT.md).
+
+### Members, groups and open loops
+
+- **Members and groups** (migrations 162, 163). A member is a person whose
+  tokens, OAuth clients and enrollment grants are bound to them, so one command
+  disables them all. A group adds shared read sources to its members' keys and
+  never changes where a key writes. Grant profiles (`reader`, `writer`,
+  `coding-agent`) expand into scopes and a narrowed tool surface.
+  `memrain member remove <id> --erase-personal-source` exports a member's own
+  source and then erases it; `MEMRAIN_REQUIRE_MEMBER=1` refuses any credential
+  not bound to a member. See [docs/TEAM-SETUP.md](./docs/TEAM-SETUP.md).
+- **Open loops** (migration 161). The `loops_sweep` daemon reads mail, chat and
+  calendar connector pages and lists replies owed and awaited, promises and
+  unanswered invitations, by fixed rules with no model call
+  (`memrain waiting`, MCP `loops_list`). See
+  [docs/connectors/LOOPS.md](./docs/connectors/LOOPS.md).
+
+### PgBouncer mode
+
+`MEMRAIN_PG_POOLER=pgbouncer` tells the engine that `MEMRAIN_POSTGRES_URL`
+is a PgBouncer in transaction mode (1.21 or newer). The engine then sends no
+session settings at connect, so the role carries the timeouts, and migrations
+and DDL go only over `MEMRAIN_POSTGRES_DIRECT_URL`.
+
+## Access
+
+Agents reach Memrain over MCP. People also use the admin panel (with the
+**Ask** chat), which carries its own sign-in. The agent path:
 
 ```
 MCP client (Claude Code / Cursor / Codex)
@@ -177,7 +349,9 @@ Memrain is its own OAuth 2.1 authorization server and protected resource
 
 ## Scheduled work (host-side systemd timers)
 
-Installed once per deploy from `deploy/systemd/*.{service,timer}`.
+Installed once per deploy from `deploy/systemd/*.{service,timer}`. The
+in-process daemons (connector sync, notifications, open loops) are not
+timers; see [Scheduler and spend wallet](#scheduler-and-spend-wallet).
 Static checks in `tests/test_systemd_units.py` ensure every shipped
 unit references a script that exists in the repo.
 
@@ -204,7 +378,7 @@ second git checkout used by the Memrain code chunkers as their index
 source. `scripts/bootstrap.sh` clones it on first boot; re-run it via SSM to resync.
 
 The authoritative store is RDS Postgres, evolved by the numbered
-migration runner (`core/migrate.ts`, through 119). Beyond the core
+migration runner (`core/migrate.ts`, through 175). Beyond the core
 `documents` / `chunks` / `pages` / `entity_mentions` tables, the schema
 carries:
 
@@ -252,6 +426,15 @@ carries:
   call, plus every other call when `MEMRAIN_REQUEST_LOG_DB=1`. The purge phase
   deletes rows older than `MEMRAIN_REQUEST_LOG_RETENTION_DAYS` (default 180)
   in batches of 5000, at most 500,000 rows per cycle.
+- The 2.0 platform tables (migrations 151 to 175, all additive): the
+  `connector_*` tables; `daemon_controls`, `provider_leases` and
+  `spend_path_pauses`; a `trust_tier` column on `pages`, `documents` and
+  `entity_facts`; `write_gate_holds`; `notifications`; `loop_threads`,
+  `open_loops` and `loop_suppressions`; `members`, `member_audit`, `groups`,
+  `group_sources` and `group_members`; `chat_threads`, `chat_messages` and
+  `chat_shares`; `retrieval_feedback` and `retrieval_weights`;
+  `search_telemetry_shadow`; and a few empty tables that only an extension
+  writes to.
 
 ## Secrets — what goes where
 
@@ -262,6 +445,8 @@ carries:
 | `memrain-public-bearer` | Memrain | terraform — `random_password` resource generates at apply. Memrain validates incoming public `/mcp` bearers against it. Static unless the optional `memrain-rotate-bearer.timer` is installed. |
 | `memrain-internal-token` | Memrain (internal MCP write tools) | Generated by Terraform (`random_password`) at apply; gates write `tools/call` on the internal path. |
 | `github-deploy-key` | bootstrap | terraform — conditional, only when `use_ssh_deploy_key = true`. |
+| `memrain-connector-kek` (optional) | Memrain (connector vault, as `MEMRAIN_CONNECTOR_KEK`) | terraform creates the empty secret when `enable_connector_kek_secret = true`; the operator puts the value in by hand ([docs/connectors/KEY.md](./docs/connectors/KEY.md)). |
+| `memrain-notify-webhook` (optional) | Memrain (signs notification webhooks, as `MEMRAIN_NOTIFY_WEBHOOK_SECRET`) | terraform creates the empty secret when `enable_notify_webhook_secret = true`; the operator puts the value in. |
 
 `deploy/secrets/fetch-secrets.sh` reads these into the on-host
 `deploy/.secrets/*.env` files. Containers `env_file:` mount those at
@@ -306,19 +491,23 @@ The boot flow (cold start from a new instance):
 - **Bedrock for inference (Anthropic-only + Titan).** Titan v2 supplies
   embeddings; Claude Haiku is the utility model (intent classification +
   query expansion); the opt-in, default-OFF synthesis + facts slices use
-  Claude Sonnet. Answer synthesis is the MCP client's job. The
+  Claude Sonnet. Answer synthesis is the MCP client's job, except the
+  opt-in `think` tool and the **Ask** chat built on it. The
   deterministic core costs about $52/mo in infrastructure (see
   [docs/CONFIGURATION.md](./docs/CONFIGURATION.md)) even with daily use; the paid LLM
   slices only spend when explicitly enabled.
-- **MCP only, no agent framework.** Memrain speaks plain MCP JSON-RPC and
-  nothing else — no chat surface, no bot, no bespoke API. One contract.
+- **MCP for agents, no agent framework.** Agents reach Memrain over plain
+  MCP JSON-RPC: one contract, no bot, no bespoke API. The **Ask** chat is for
+  people, opt-in, and answers through the same retrieval under the same spend
+  wallet.
 - **One person's brain, scoped credentials.** A deploy is one user's
   brain on one account. The substrate is nonetheless source-isolated:
   every row carries a `source_id` key. Enforcement is application-layer
   `source_id` scoping plus write-time fail-closed checks; Postgres RLS is
   not the enforcement: migration 049 enables RLS only when the migrating role has BYPASSRLS (not on a stock RDS) and adds no policies. With `MEMRAIN_TENANT_FAIL_CLOSED=1`, each remote credential
   (OAuth app, PAT) sees only its granted sources, so a leaked app token
-  does not expose the whole brain.
+  does not expose the whole brain. Members and groups add people on top of
+  the same sources.
 
 ## Out-of-scope (deferred — see `TODO.md`)
 

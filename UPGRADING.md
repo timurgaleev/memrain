@@ -1,10 +1,12 @@
 # Upgrading to Memrain 1.0
 
-This page is only for people who already run a release from before Memrain 1.0,
+The first part of this page is for people who run a release from before Memrain 1.0,
 under the project's old name. It moves that install to 1.0 and keeps your
 data. Installing for the first time? You do not need this page: start with
 [docs/QUICKSTART.md](./docs/QUICKSTART.md), and read
 [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md) to see how Memrain works.
+Already on 1.0 or later? Skip to the section for your release, from
+[1.0.x to 1.1](#from-10x-to-11) through [1.16 to 2.0](#from-116-to-20).
 
 Memrain was called memex before 1.0.0. This guide takes an install of a
 pre-rename release (tags `memex-v1.x`) to Memrain 1.0.x without losing data.
@@ -460,3 +462,54 @@ start. Things to know:
   deleted rows come back only from a database backup. To see what the first
   run will remove:
   `SELECT count(*) FROM mcp_request_log WHERE created_at < now() - interval '180 days'`.
+
+## From 1.16 to 2.0
+
+2.0 is a normal deploy: `bash deploy/deploy.sh` applies migrations 151 to 175
+on start. They add tables, columns, indexes and triggers, and widen the list
+of allowed source kinds (`chat`, `meeting`); no existing row is rewritten. Rows written before 2.0 get no stored trust tier: it is derived
+when they are read. Each of these migrations has a down file in
+`deploy/memrain/src/core/migrations-down/`.
+
+Nothing is required. Connectors, daemons other than `cycle`, Ask and members
+are off until you switch them on. Two things are active from the upgrade on:
+new writes record a trust tier, and the write gate checks outside text (below).
+
+### The one default that changes
+
+**Outside text now passes the write gate in `flag` mode.** Outside sources are
+those of kind `mailbox`, `calendar`, `chat`, `meeting`, `webhook` and
+`github`. Existing `github` sources count, so issue and PR text that reads as
+instructions to an AI is stored with `content_flag: instruction_like` and read
+back inside a stronger frame. Nothing is deleted or hidden in `flag` mode. The
+gate runs each time an outside document is indexed, so existing GitHub pages
+pick up a verdict on their next sync or sweep. To keep the 1.16 behaviour:
+
+```bash
+memrain config set MEMRAIN_WRITE_GATE_EXTERNAL off
+```
+
+### Other changes to know
+
+- **Deep synthesis reads no outside text.** With `MEMRAIN_DEEP_SYNTH` on, it
+  now gathers only pages at trust tier `agent` or above, so GitHub and webhook
+  pages no longer reach its prompt. (Connector pages, new in 2.0, are also
+  left out of facts extraction and the contextual-LLM tier.)
+- **Paid daemons need a brain-wide cap.** A paid daemon does not start while
+  `MEMRAIN_DAILY_BUDGET_USD` is unset.
+- **Facts extraction may use up to 4,000 output tokens per call**, and a
+  truncated answer is retried once with 8,000 when the caller's budget allows
+  it, so one call can cost more than before.
+
+### What you can switch on, and where
+
+| Feature | Switch | Guide |
+|---|---|---|
+| Brain-wide daily cap (needed by Ask and every paid daemon) | `MEMRAIN_DAILY_BUDGET_USD` in the host `.env`, then `bash deploy/deploy.sh` | [docs/connectors/ENABLE.md](./docs/connectors/ENABLE.md#4-set-the-brain-wide-daily-budget) |
+| Ask, the admin chat | `MEMRAIN_CHAT=1` in the host `.env` | [docs/CHAT.md](./docs/CHAT.md) |
+| Connectors (Gmail, calendars, Outlook, Teams, Slack, Fireflies) | the connector key, `memrain config set MEMRAIN_CONNECTORS_ENABLED 1`, `memrain config set MEMRAIN_DAEMONS 1`, `memrain daemons enable connector_sync` | [docs/connectors/ENABLE.md](./docs/connectors/ENABLE.md), [docs/connectors/KEY.md](./docs/connectors/KEY.md) |
+| Open loops | `memrain daemons enable loops_sweep` (with connectors syncing) | [docs/connectors/LOOPS.md](./docs/connectors/LOOPS.md) |
+| Owner notifications by webhook | `MEMRAIN_NOTIFY_WEBHOOK_URL` and its secret, `memrain daemons enable notifications` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
+| Members, groups, offboarding | `memrain member add`, `memrain group add`, `memrain member remove <id> --erase-personal-source`; `MEMRAIN_REQUIRE_MEMBER=1` | [docs/TEAM-SETUP.md](./docs/TEAM-SETUP.md#members-and-groups) |
+| Stricter write gate | `memrain config set MEMRAIN_WRITE_GATE_EXTERNAL quarantine` (or `reject`); `memrain config set MEMRAIN_WRITE_GATE_AGENT flag` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
+| PgBouncer | `MEMRAIN_PG_POOLER=pgbouncer` and `MEMRAIN_POSTGRES_DIRECT_URL` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |

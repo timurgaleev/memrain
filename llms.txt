@@ -14,6 +14,17 @@ Self-hosted long-term memory for AI agents, reached over MCP only:
   is the MCP client's job, except the opt-in `think` tool. An opt-in, off-by-default LLM step distils notes
   into a separate `synth_*` store (source notes never touched). PGLite is a
   dev-only fallback.
+- **Platform layer (2.0; connectors, daemons, Ask and members are opt-in,
+  the write gate flags outside text by default)** — read-only
+  connectors (Gmail, Google Calendar, Outlook mail and calendar, Teams chats
+  and transcripts, Slack, Fireflies) with tokens sealed under a connector key;
+  an in-process daemon scheduler (`cycle`, `connector_sync`, `notifications`,
+  `loops_sweep`) under a spend wallet that holds every paid call at its
+  maximum cost; trust tiers (`owner` > `member` > `agent` > `external`) with a
+  deterministic write gate for outside text; open loops (`memrain waiting`,
+  `loops_list`); the admin **Ask** chat with optional share links; members,
+  groups and offboarding; PgBouncer transaction mode; extension hooks
+  (`core/extension.ts`, no-ops unless a wrapping build registers them).
 - **cloudflared** — public HTTPS ingress for the MCP server
   (`brain.<domain>/mcp`) so MCP clients (Claude Code, Codex, claude.ai,
   ChatGPT, …) connect.
@@ -35,12 +46,18 @@ Both run as Docker Compose services on a single `t4g.medium` EC2.
 - **Static public bearer** — `<prefix>/memrain-public-bearer`, permanent, no
   tenant, public read subset only. Not for people; hand out PATs or clients.
 
+People sign in separately to the admin panel (`/admin`, passkeys). A member's
+tokens, OAuth clients and enrollment grants are bound to them
+(`memrain member …`); `MEMRAIN_REQUIRE_MEMBER=1` refuses credentials bound to
+no member.
+
 `whoami` shows what a credential carries. Per-client guides: `docs/clients/`.
 
 ## Where to read first
 
 | Want to know... | Read |
 |---|---|
+| Every user-facing doc, one line each | `docs/README.md` |
 | Project conventions, gotchas, never-do-X rules | `CLAUDE.md` |
 | Topology + diagrams + resource inventory | `ARCHITECTURE.md` |
 | What changed when, with reasoning | `CHANGELOG.md` |
@@ -53,10 +70,14 @@ Both run as Docker Compose services on a single `t4g.medium` EC2.
 | Every MCP tool and its parameters (generated) | `docs/TOOLS.md` |
 | Every error code: class, retryable, what to do (generated) | `docs/ERRORS.md` |
 | Connecting a client (Claude Code, Codex, claude.ai, Claude Team/Enterprise, ChatGPT) | `docs/clients/*.md` |
-| One connector for a team, enrollment codes | `docs/TEAM-SETUP.md` |
+| One connector for a team, enrollment codes, members and groups, offboarding | `docs/TEAM-SETUP.md` |
+| Connectors: switch-on order, the connector key, each provider, open loops | `docs/connectors/*.md` (start with `ENABLE.md`) |
+| The admin Ask chat: switch, caps, privacy, HTTP API | `docs/CHAT.md` |
 | Install / ingress modes / upgrade | `docs/DEPLOYMENT.md` |
-| Upgrading an install from before the rename | `UPGRADING.md` |
-| Plain-language tour of the pipeline | `docs/HOW-IT-WORKS.md` |
+| Upgrading: the rename to 1.0, then each release through 1.16 → 2.0 | `UPGRADING.md` |
+| Plain-language tour of the pipeline, connectors, caps, trust | `docs/HOW-IT-WORKS.md` |
+| Importing ChatGPT, Claude, Codex and Claude Code transcripts | `docs/TRANSCRIPTS.md` |
+| Evaluating a change to ranking (bench, promote, LongMemEval) | `docs/eval/*.md` |
 | Local checks and test commands for contributors | `CONTRIBUTING.md` |
 
 ## Source code map
@@ -75,10 +96,19 @@ deploy/
 │   │   │                        reindex, doctor, cycle, jobs, auth, eval-*, …).
 │   │   │                        `bun run src/cli.ts --help` is the live list.
 │   │   ├── http/                /health, /mcp, OAuth discovery + /authorize +
-│   │   │                        /token, /ingest, /admin
+│   │   │                        /token, /ingest, /admin (incl. Ask, Office,
+│   │   │                        connectors), /s/ share links
 │   │   ├── mcp/                 JSON-RPC transport, tool dispatch, rate limiter
 │   │   └── core/
-│   │       └── engine/          adapter pattern (interface, pglite, postgres, factory)
+│   │       ├── engine/          adapter pattern (interface, pglite, postgres, factory)
+│   │       ├── connectors/      providers, vault, sync engine, retention
+│   │       ├── daemons/         scheduler, registry, controls, caps
+│   │       ├── chat/  loops/  notifications/  feedback/
+│   │       ├── budget.ts        spend ledger + wallet
+│   │       ├── trust-tier.ts, write-gate*.ts
+│   │       ├── extension.ts     hooks for a wrapping build (no-ops by default)
+│   │       └── migrations/      numbered SQL migrations (through 175)
+│   ├── admin/                   admin panel front end (Vite)
 │   └── docs/                    subsystem deep-dive (README, ARCHITECTURE, API, OPERATIONS)
 ├── skills/                      agent skillpack served over MCP (`get_skill`)
 ├── cloudflared/                 public ingress sidecar (upstream image, no Dockerfile)

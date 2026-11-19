@@ -19,7 +19,8 @@ Your notes, decisions and code, searchable from Claude, ChatGPT and Codex. Every
 **For developers and small teams who work with AI agents every day.** Memrain is
 free and open source (MIT). It runs in your own AWS account, so you pay only your
 AWS bill: about $52 a month for the server and database, plus model usage if you
-turn on the paid features. **To start, follow [docs/QUICKSTART.md](./docs/QUICKSTART.md).**
+turn on the paid features. Ask and every paid background worker stay off
+until you set a daily cap. **To start, follow [docs/QUICKSTART.md](./docs/QUICKSTART.md).**
 
 ## Why
 
@@ -46,6 +47,36 @@ and database passwords before anything is stored.
 marked superseded, not silently overwritten; forget one and it stops showing up
 in answers while the record of the change stays. Facts that contradict each other
 are flagged, so your agent does not repeat one of them as settled truth.
+
+## What's in 2.0
+
+Each feature that reads new data or costs money is off until you switch it on.
+One default changes: outside text (mail, chats, GitHub issues) now passes a
+write gate that flags text written as instructions to an AI.
+
+- **Connectors.** Read-only sync of Gmail, Google Calendar, Outlook mail and
+  calendar, Teams chats and meeting transcripts, Slack channels and Fireflies,
+  through your own OAuth app or key. [docs/connectors/ENABLE.md](./docs/connectors/ENABLE.md)
+- **Ask.** A chat in the admin panel that answers from your brain with
+  numbered sources and shows what each answer cost. [docs/CHAT.md](./docs/CHAT.md)
+- **Open loops.** Replies you owe, replies you are waiting for, promises and
+  unanswered invitations, found in your mail, chats and calendars without a
+  model call. [docs/connectors/LOOPS.md](./docs/connectors/LOOPS.md)
+- **Autonomy under spend caps.** Background workers run on a schedule. Every
+  paid call is held at its maximum cost before it is made, and a paid worker
+  does not start until you set a daily cap. [ARCHITECTURE.md](./ARCHITECTURE.md#scheduler-and-spend-wallet)
+- **Trust tiers and a write gate.** New pages and facts record who wrote them:
+  you, a team member, an agent, or someone outside. Outside text that reads
+  like instructions to an AI is flagged or held for you. [ARCHITECTURE.md](./ARCHITECTURE.md#trust-tiers-and-the-write-gate)
+- **Members and groups.** People with their own keys, shared sources per
+  group, one command to switch someone's keys off, and an offboarding command
+  that exports and then erases a member's own source.
+  [docs/TEAM-SETUP.md](./docs/TEAM-SETUP.md#members-and-groups)
+- **Connection pooler.** The Postgres engine can run behind PgBouncer in
+  transaction mode, with migrations on a direct connection.
+  [docs/CONFIGURATION.md](./docs/CONFIGURATION.md)
+
+Upgrading from 1.16 needs no action; see [UPGRADING.md](./UPGRADING.md#from-116-to-20).
 
 ## See it work
 
@@ -114,14 +145,16 @@ To report a vulnerability, see [SECURITY.md](./SECURITY.md).
 ## When Memrain is not the right fit
 
 - You do not want to run anything in AWS. A hosted version is planned; it is not available yet.
-- You want a chat app. Memrain is the memory behind your agent, not a chat window.
+- You want a general chat app. Memrain is the memory behind your agent; its Ask page only answers from what the brain holds.
 
 ## Documentation
 
 | Doc | What is in it |
 |---|---|
 | [docs/QUICKSTART.md](./docs/QUICKSTART.md) | Install, connect, credentials, day-to-day operation |
-| [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md) | How search works, what it costs |
+| [docs/README.md](./docs/README.md) | Every document, one line each |
+| [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md) | How search, connectors, caps and trust work, what it costs |
+| [docs/CHAT.md](./docs/CHAT.md) | The Ask chat: turning it on, money, privacy |
 | [docs/TEAM-SETUP.md](./docs/TEAM-SETUP.md) | One connector for a team, a private space per person |
 | [docs/connectors/ENABLE.md](./docs/connectors/ENABLE.md) | Sync your calendar, mail, chats and meetings: Google Calendar, Gmail, Outlook mail and calendar, Teams chats and transcripts, Slack, Fireflies |
 | [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Every install and update step in detail |

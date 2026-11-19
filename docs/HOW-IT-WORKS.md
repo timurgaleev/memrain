@@ -15,8 +15,15 @@ itself, see [QUICKSTART.md](./QUICKSTART.md).
 Memrain is a memory, not a chatbot. It reads your notes, code and chat history,
 remembers them, and when your AI agent asks a question it hands back the most
 relevant passages, each with the page it came from. Your agent (Claude Code,
-ChatGPT, Codex and so on) writes the answer from that evidence. The one
-exception is the opt-in `think` tool, which writes a cited answer itself.
+ChatGPT, Codex and so on) writes the answer from that evidence. The
+exceptions are the opt-in `think` tool and the **Ask** page built on it, which
+write a cited answer themselves.
+
+Since 2.0 it can also read your mail, calendars and chats, work in the
+background on a schedule, tell you who is waiting on a reply, and answer
+questions in its own chat. Each of these is off until you switch it on; the
+chat and every paid background worker also need a daily cap you set. Sections
+8 to 12 walk through them.
 
 ## 1. How your knowledge gets in
 
@@ -36,6 +43,9 @@ only what was said: tool calls and results, reasoning, sub-agent traffic and
 system reminders are dropped, credentials are redacted, and a long session is
 split into parts at message boundaries. Running it again on unchanged input
 writes nothing.
+
+Mail, calendars, chats and meeting transcripts can come in on their own,
+through connectors; see section 8.
 
 ## 2. How a question is answered
 
@@ -189,7 +199,128 @@ retrieval was, so quality drift shows up as a trend you can read
 (`memrain doctor`) rather than a surprise. It runs under a spend ceiling, so the
 self-check can't run up a bill.
 
-## 8. Under the hood: the tools
+## 8. Mail, calendars and chats (connectors)
+
+A connector reads one of your accounts and keeps a copy of it in the brain:
+Gmail, Google Calendar, Outlook mail and calendar, Teams chats and meeting
+transcripts, Slack channels you pick, and Fireflies transcripts. It only
+reads; it never sends, replies or changes anything at the provider. You bring
+your own OAuth app (Google, Microsoft, Slack) or key (Fireflies, or a Slack bot
+token), so no third party sits between you and your accounts.
+
+What happens on each run:
+
+1. **The login stays locked.** The tokens a provider hands back are encrypted
+   with a separate key that is kept outside the database (Secrets Manager
+   on the AWS deploy, or an environment variable or file). Without that
+   key, connectors stay off.
+2. **It fetches what changed** since the last run, from a saved position per
+   mailbox, calendar or channel. If a run stops halfway, the next one carries
+   on from there and skips nothing.
+3. **It writes one page per thing**: one per mail thread, per calendar event or
+   recurring series, per chat or channel and day, per meeting transcript.
+   Meeting join links, passcodes and dial-in PINs are stripped first. Each
+   account writes into a source of its own kind (`mailbox`, `calendar`,
+   `chat`, `meeting`), never into your notes.
+4. **It treats the text as outside text** (section 9): secrets are redacted,
+   and anything that reads like instructions to an AI is marked.
+5. **It follows deletions, carefully.** A mail you delete at the provider is
+   deleted in the brain too, but recoverably at first. If one run would delete
+   an unusual amount, it holds the deletions and asks you instead. Old pages
+   go after a retention window (180 days for mail and chats, 365 for calendars
+   and meetings), unless you edited them yourself.
+
+Embedding the new pages costs a little, so syncing needs a daily budget. The
+whole switch-on order is in [connectors/ENABLE.md](./connectors/ENABLE.md).
+
+## 9. Who wrote it: trust tiers and the write gate
+
+Once a brain reads your mail, anyone who can email you can put words into it.
+So since 2.0 every new page and fact remembers the least trusted hand that
+wrote it (older rows get a tier worked out when they are read):
+
+| Tier | Who |
+|---|---|
+| `owner` | you, your command line, and the brain's own housekeeping |
+| `member` | a person you added as a member |
+| `agent` | any other connected client: an AI agent with a token or OAuth sign-in |
+| `external` | text from outside: mail, calendars, chats, meetings, GitHub, webhooks |
+
+Your edit never promotes someone else's text: a page keeps its lowest tier. An
+agent can ask search for trusted text only (`min_trust` on `search`, `query`
+and `context_pack`).
+
+When outside text is indexed for search, a **write gate** reads it, with
+fixed rules and no model, for text that tries to talk to an AI: "ignore your instructions",
+fake chat-role markers, text shaped like a tool call, requests to send data
+somewhere, orders aimed at the memory itself. By default such text is stored
+but **flagged**: whenever it is read back, it comes wrapped in a notice that it
+is someone else's data, not an instruction. You can make the gate stricter, so
+flagged text is **held** until you approve it (`memrain write-gate approve`)
+or **refused** (a direct write is rejected; a synced page stays out of
+search). Mail, calendar, chat and meeting pages are also kept out of
+the paid background passes (fact extraction, contextual embedding), and deep
+synthesis reads no outside text at all, so a stranger's email cannot steer
+them.
+
+## 10. Working on its own, under a cap
+
+With `MEMRAIN_DAEMONS=1`, a small scheduler inside the container runs
+background workers on a timetable: connector sync (every 15 minutes), owner
+notifications and the open-loops sweep. Each worker
+can be paused, resumed or switched off with `memrain daemons`, and one that
+fails five times in a row pauses itself.
+
+Money is handled by a **spend wallet**. Before any paid model call, the
+wallet sets aside the most that call could cost; afterwards it books what it
+really cost. A cap therefore counts calls that are still running, and a burst
+of parallel calls cannot slip past it. Caps stack and the lowest wins: the
+whole brain per day (`MEMRAIN_DAILY_BUDGET_USD`), each worker per day and per
+run, each client per day. A paid worker does not start at all until the brain
+has a daily cap. If a call ever costs more than was set aside, that kind of
+work pauses until you resume it.
+
+When something needs you (a connector that must be reconnected, held
+deletions, a paused worker, text the write gate held), you get a
+**notification** in the admin panel and in `memrain doctor`, and, if you set
+one up, a signed webhook that carries only a link, never the text.
+
+**Open loops** is one of those workers. It reads the mail, chat and calendar
+pages and lists replies you owe, replies you are waiting for, things you
+promised, and invitations you have not answered, all by fixed rules, with no
+model and no cost. You see it with `memrain waiting`; your agent sees it with
+`loops_list`. Details in [connectors/LOOPS.md](./connectors/LOOPS.md).
+
+## 11. Ask: a chat over your brain
+
+The admin panel's **Ask** page (`MEMRAIN_CHAT=1`) answers a question from what
+the brain holds: it searches (a follow-up question is first rewritten to stand on its
+own), then a model call writes the answer with
+numbered links to the pages it used. It shows what it searched, which model
+answered and what the answer cost, and you can save a good answer as a page.
+The model gets no tools and cannot change the brain. Each answer has a price
+ceiling (2 cents by default), each person a daily one, and the brain's daily
+cap still applies. Conversations are deleted after 90 days by default. A good
+answer can also be shared by a link with a password (`MEMRAIN_CHAT_SHARE=1`).
+Details in [CHAT.md](./CHAT.md).
+
+## 12. More people
+
+**Members and groups.** A member is a person. Their personal access tokens,
+OAuth clients and enrollment grants are bound to them, so one command
+(`memrain member disable`) refuses all of those keys at once. It does not stop
+connector accounts: those sync on their own until you disconnect them. A group
+shares sources with its members for reading. When someone leaves,
+`memrain member remove <id> --erase-personal-source` exports their own source
+and then erases it. With `MEMRAIN_REQUIRE_MEMBER=1`, a credential that is not
+bound to a member is refused. See
+[TEAM-SETUP.md](./TEAM-SETUP.md#members-and-groups).
+
+**A connection pooler.** If many processes share one database, Memrain can work
+through PgBouncer in transaction mode (`MEMRAIN_PG_POOLER=pgbouncer`), with
+migrations kept on a direct connection (`MEMRAIN_POSTGRES_DIRECT_URL`).
+
+## 13. Under the hood: the tools
 
 Memrain's MCP tools are declared in `deploy/memrain/src/mcp/operations.ts`; the
 table below groups all of them. Each carries MCP `annotations` derived from its
@@ -200,14 +331,15 @@ what its scopes allow.
 
 | Group | Tools |
 |-------|-------|
-| **Search & pages** | `search`, `query`, `think`, `recall`, `volunteer_context`, `context_pack`, `context_delta`, `advisor`, `index`, `get_chunks`, `resolve_slugs`, `page_put`, `page_append`, `page_get`, `page_list`, `page_versions`, `page_revert`, `page_delete`, `page_restore`, `purge_deleted_pages`, `add_tag`, `remove_tag`, `get_tags`, `put_raw_data`, `get_raw_data`, `get_recent_transcripts` |
+| **Search & pages** | `search`, `search_exact`, `query`, `think`, `recall`, `volunteer_context`, `context_pack`, `context_delta`, `advisor`, `index`, `get_chunks`, `resolve_slugs`, `page_put`, `page_append`, `page_edit`, `page_rename`, `page_get`, `page_list`, `page_versions`, `page_revert`, `page_delete`, `page_restore`, `purge_deleted_pages`, `add_tag`, `remove_tag`, `get_tags`, `put_raw_data`, `get_raw_data`, `get_recent_transcripts` |
 | **Code** | `code_def`, `code_refs`, `code_callers`, `code_callees`, `code_blast`, `code_flow` |
 | **Facts, timeline & chronicle** | `add_fact`, `forget_fact`, `extract_facts`, `fact_supersessions`, `add_timeline_event`, `chronicle_day`, `chronicle_since`, `chronicle_on_this_day`, `chronicle_last_seen`, `chronicle_backfill`, `volunteer_chronicle`, `ontology_get`, `ontology_propose`, `ontology_dimensions`, `ontology_conflicts` |
 | **Graph & entities** | `backlinks`, `link`, `unlink`, `get_links`, `list_link_sources`, `graph_neighbors`, `graph_query`, `traverse_graph`, `relational_recall`, `entity_facts`, `entity_timeline`, `entity_recall`, `find_orphans`, `wanted_pages`, `find_experts`, `find_contradictions`, `find_trajectory`, `find_anomalies`, `get_recent_salience`, `list_concepts` |
 | **Takes** | `list_takes`, `takes_search`, `takes_add`, `takes_update`, `takes_resolve`, `set_take_status`, `takes_scorecard`, `takes_calibration`, `get_calibration_profile` |
 | **Jobs & agents** | `jobs_submit`, `jobs_cancel`, `jobs_list`, `jobs_get`, `jobs_logs`, `retry_job`, `get_job_progress`, `submit_agent`, `get_agent_job` |
 | **Skills** | `list_skills`, `get_skill`, `list_brain_skillpack` |
-| **Admin & diagnostics** | `stats`, `whoami`, `get_brain_identity`, `get_status_snapshot`, `run_doctor`, `source_health`, `sources_list`, `sources_status`, `log_friction`, `log_ingest`, `get_ingest_log`, `quarantine_list`, `extraction_review` |
+| **Connectors** | `loops_list` |
+| **Admin & diagnostics** | `stats`, `whoami`, `get_brain_identity`, `get_status_snapshot`, `run_doctor`, `source_health`, `sources_list`, `sources_status`, `daemons_status`, `log_friction`, `log_ingest`, `get_ingest_log`, `quarantine_list`, `extraction_review` |
 
 A few that are easy to miss:
 
