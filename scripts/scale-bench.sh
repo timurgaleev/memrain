@@ -101,10 +101,15 @@ ADMIN_URL="postgres://memrain:${PASSWORD}@127.0.0.1:${PORT}/postgres?sslmode=dis
 
 POOLER_URL="${SCALE_BENCH_POOLER_URL:-}"
 if [ -z "$POOLER_URL" ] && [ -f "$PGBOUNCER_DIR/Dockerfile" ]; then
+  # A tenant's pooler lends its brain this many server connections, fewer than
+  # the brain's own pool of 4, so a 4th parallel query waits in PgBouncer.
+  # shellcheck disable=SC2016 # the pattern matches a literal ${...}
+  POOL_SIZE="$(sed -n 's/.*PGBOUNCER_DEFAULT_POOL_SIZE=\${MEMRAIN_PGBOUNCER_POOL_SIZE:-\([0-9][0-9]*\)}.*/\1/p' "$REPO/deploy/tenant/tenant.yml.tmpl")"
+  [ -n "$POOL_SIZE" ] || die "no default PgBouncer pool size in deploy/tenant/tenant.yml.tmpl"
   log "building the PgBouncer image from deploy/pgbouncer"
   docker build -q -t "memrain-scale-bench-pgbouncer:$TAG" "$PGBOUNCER_DIR" >/dev/null
   # The hosting image with its own entrypoint and config, as a tenant runs it:
-  # transaction pooling, a tenant container's pool size per database, and no
+  # transaction pooling, a tenant pooler's pool size per database, and no
   # session startup parameter accepted but application_name. The bench's
   # databases are created at run time, so every database on this server is
   # served (PGBOUNCER_ANY_DATABASE, as scripts/test-pg.sh does).
@@ -114,7 +119,7 @@ if [ -z "$POOLER_URL" ] && [ -f "$PGBOUNCER_DIR/Dockerfile" ]; then
     --cap-drop ALL --security-opt no-new-privileges:true \
     -e PGBOUNCER_UPSTREAM_URL="postgres://memrain:${PASSWORD}@${PG}:5432/postgres" \
     -e PGBOUNCER_SERVER_TLS_SSLMODE=disable \
-    -e PGBOUNCER_DEFAULT_POOL_SIZE=4 \
+    -e PGBOUNCER_DEFAULT_POOL_SIZE="$POOL_SIZE" \
     -e PGBOUNCER_ANY_DATABASE=1 \
     -p 127.0.0.1::6432 \
     "memrain-scale-bench-pgbouncer:$TAG" >/dev/null
@@ -127,7 +132,7 @@ if [ -z "$POOLER_URL" ] && [ -f "$PGBOUNCER_DIR/Dockerfile" ]; then
   BPORT="$(docker port "$BOUNCER" 6432/tcp | head -n1 | sed 's/.*://')"
   [ -n "$BPORT" ] || die "could not read the published port of $BOUNCER"
   POOLER_URL="postgres://memrain:${PASSWORD}@127.0.0.1:${BPORT}/postgres?sslmode=disable"
-  log "pgbouncer on 127.0.0.1:$BPORT"
+  log "pgbouncer on 127.0.0.1:$BPORT (pool $POOL_SIZE per database)"
 elif [ -z "$POOLER_URL" ]; then
   log "no deploy/pgbouncer/Dockerfile in this tree: the pooler scenario is skipped (the report says so)"
 fi

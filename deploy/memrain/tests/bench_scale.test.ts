@@ -6,6 +6,8 @@
  * The database half lives in bench_scale_pg.test.ts.
  */
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   BENCH_EMBED_DIMS,
   QUERY_MIX,
@@ -229,6 +231,17 @@ describe("tenant engines", () => {
     expect(pooled.connection).not.toHaveProperty("statement_timeout");
     expect(pooled.connection).not.toHaveProperty("idle_in_transaction_session_timeout");
     expect(pooled.max).toBe(4);
+  });
+
+  it("the bench's pooler lends each brain the server pool a tenant's pooler does", () => {
+    const root = join(import.meta.dir, "../../..");
+    const script = readFileSync(join(root, "scripts/scale-bench.sh"), "utf8");
+    const template = readFileSync(join(root, "deploy/tenant/tenant.yml.tmpl"), "utf8");
+    expect(template).toMatch(/PGBOUNCER_DEFAULT_POOL_SIZE=\$\{MEMRAIN_PGBOUNCER_POOL_SIZE:-[0-9]+\}/);
+    // Taken from the template at run time, never a number of its own.
+    expect(script).not.toMatch(/PGBOUNCER_DEFAULT_POOL_SIZE=[0-9]/);
+    expect(script).toContain("deploy/tenant/tenant.yml.tmpl");
+    expect(script).toContain('-e PGBOUNCER_DEFAULT_POOL_SIZE="$POOL_SIZE"');
   });
 
   it("a direct tenant keeps the timeouts it sends today", () => {
