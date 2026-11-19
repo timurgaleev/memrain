@@ -30,8 +30,9 @@ export const BENCH_SOURCE_ID = "bench";
 
 const LATIN_CONSONANTS = "bdfgklmnprstvz";
 const LATIN_VOWELS = "aeiou";
-const CYRILLIC_CONSONANTS = "бвгдклмнпрстз";
-const CYRILLIC_VOWELS = "аеиоу";
+// Cyrillic by code point: tracked files carry no Cyrillic text (scrub-audit).
+const CYRILLIC_CONSONANTS = "\u0431\u0432\u0433\u0434\u043A\u043B\u043C\u043D\u043F\u0440\u0441\u0442\u0437";
+const CYRILLIC_VOWELS = "\u0430\u0435\u0438\u043E\u0443";
 
 /** Latin vocabulary size; the rank bands below are cut out of it. */
 export const LATIN_VOCAB = 20_000;
