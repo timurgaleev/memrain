@@ -37,11 +37,13 @@ export interface PurgeDeletedPagesResult {
   blocked: Array<{ slug: string; reason: string }>;
   /** The age cutoff in hours this run applied (the default or the caller's). */
   ttl_hours: number;
-  /** raw_data / tags / slug_aliases / volunteer-event rows removed with the pages (on a dry run: that would be). */
+  /** raw_data / tags / slug_aliases / volunteer-event / hot-memory / synthesis-evidence rows removed with the pages (on a dry run: that would be). */
   raw_data_rows: number;
   tags_rows: number;
   slug_aliases_rows: number;
   volunteer_event_rows: number;
+  hot_memory_rows: number;
+  synthesis_evidence_rows: number;
   /** Live facts written on the purged pages, retired with cause 'purge' (on a dry run: that would be). */
   facts_retired: number;
   /** Set on a dry run: nothing was deleted, `planned` is what a real run would reap now. */
@@ -72,26 +74,62 @@ export function purgePlanHash(entries: ReadonlyArray<{ slug: string; deleted_at:
 
 const FOREIGN_KEY_VIOLATION = "23503";
 
-type Leftovers = Pick<PurgeDeletedPagesResult, "raw_data_rows" | "tags_rows" | "slug_aliases_rows" | "volunteer_event_rows">;
+type Leftovers = Pick<PurgeDeletedPagesResult,
+  "raw_data_rows" | "tags_rows" | "slug_aliases_rows" | "volunteer_event_rows" | "hot_memory_rows" | "synthesis_evidence_rows">;
 
 /** Tables that name a page by slug with no foreign key to pages: [result key, table, slug column]. */
-const LEFTOVER_TABLES: ReadonlyArray<[keyof Leftovers, string, string]> = [
+export const LEFTOVER_TABLES: ReadonlyArray<[keyof Leftovers, string, string]> = [
   ["raw_data_rows", "raw_data", "slug"],
   ["tags_rows", "tags", "slug"],
   ["slug_aliases_rows", "slug_aliases", "canonical_slug"],
   ["volunteer_event_rows", "context_volunteer_events", "slug"],
+  // An observation seen on the page, and the citations of a synthesis page.
+  ["hot_memory_rows", "hot_memory", "source_slug"],
+  ["synthesis_evidence_rows", "synthesis_evidence", "synthesis_slug"],
 ];
 
-const NO_LEFTOVERS: Leftovers = { raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0, volunteer_event_rows: 0 };
+const NO_LEFTOVERS: Leftovers = {
+  raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0, volunteer_event_rows: 0, hot_memory_rows: 0, synthesis_evidence_rows: 0,
+};
+
+/**
+ * An observation that a purged one replaced would read as current once the
+ * foreign key nulls its `superseded_by`. Point it at the first surviving
+ * observation further along the chain instead, the one that replaced the
+ * purged one. A chain that ends inside the purged pages has no such row: the
+ * replaced observation is then the newest one a page still backs, as if the
+ * purged page had never been written, and it reads as current again.
+ */
+async function repointReplacedObservations(engine: Engine, slugs: string[]): Promise<void> {
+  await engine.query(
+    `WITH RECURSIVE gone AS (
+       SELECT id FROM hot_memory WHERE source_slug = ANY($1::text[])
+     ), chain AS (
+       SELECT g.id AS start, h.superseded_by AS next, 0 AS depth
+         FROM gone g JOIN hot_memory h ON h.id = g.id
+       UNION ALL
+       SELECT c.start, h.superseded_by, c.depth + 1
+         FROM chain c JOIN gone g ON g.id = c.next JOIN hot_memory h ON h.id = c.next
+        WHERE c.depth < 1000
+     ), heir AS (
+       SELECT start, next FROM chain WHERE next IS NOT NULL AND next NOT IN (SELECT id FROM gone)
+     )
+     UPDATE hot_memory h SET superseded_by = heir.next
+       FROM heir
+      WHERE h.superseded_by = heir.start AND h.id NOT IN (SELECT id FROM gone)`,
+    [slugs],
+  );
+}
 
 /**
  * Count (or, with `remove`, delete) the rows that would outlive the given
  * pages. `pages.slug` is the primary key, so a purged slug has no owner left
  * and every row on it goes, whatever its source_id.
  */
-async function leftovers(engine: Engine, slugs: string[], remove: boolean): Promise<Leftovers> {
+export async function leftovers(engine: Engine, slugs: string[], remove: boolean): Promise<Leftovers> {
   const out: Leftovers = { ...NO_LEFTOVERS };
   if (slugs.length === 0) return out;
+  if (remove) await repointReplacedObservations(engine, slugs);
   for (const [key, table, column] of LEFTOVER_TABLES) {
     const r = await engine.query<{ n: number }>(
       remove

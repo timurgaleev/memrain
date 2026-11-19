@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import postgres from "postgres";
 import { Storage } from "../src/core/storage.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import { runApplyMigrations } from "../src/commands/apply-migrations.ts";
 import { ENGINES, migrateTo120, seedLegacy, UP_120_SQL, type Db } from "./helpers/migration-120.ts";
 
@@ -145,7 +145,7 @@ for (const { name, open } of ENGINES) {
           // The command's own engine is a pool (default size); it must not count
           // as a second session against itself.
           await db.engine.close();
-          const cli = new Storage(new PostgresEngine({ url: (db as Db & { url: string }).url }));
+          const cli = new Storage(pgTestEngine({ url: (db as Db & { url: string }).url }));
           const log = console.log;
           console.log = () => {};
           try {

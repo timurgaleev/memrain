@@ -12,6 +12,7 @@
 import { diffMigrationIds, discoverMigrations, runMigrations, type MigrationResult } from "./migrate.ts";
 import type { Engine } from "./engine/interface.ts";
 import { makeEngine } from "./engine/factory.ts";
+import { directEngineFor } from "./engine/direct.ts";
 import type { Config } from "./config.ts";
 import { applyRuntimeEnvOverlay } from "./runtime-config.ts";
 import { setSpendLedgerEngine } from "./budget.ts";
@@ -62,8 +63,16 @@ export class Storage {
   }
 
   async init(): Promise<MigrationResult> {
-    await this._engine.ready();
-    const result = await runMigrations(this._engine);
+    // Behind a transaction pooler migrations go over the direct URL; without
+    // one this throws pooler_migration_refused before any SQL is sent.
+    const direct = directEngineFor(this._engine);
+    let result: MigrationResult;
+    try {
+      await this._engine.ready();
+      result = await runMigrations(direct.engine);
+    } finally {
+      await direct.close();
+    }
     // DB-plane knob overlay (`memrain config set`, migration 088): stored
     // MEMRAIN_* keys fill env gaps the container did not set. Fail-open, env
     // wins, MEMRAIN_NO_DB_CONFIG=1 skips. See core/runtime-config.ts.

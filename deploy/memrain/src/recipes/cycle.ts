@@ -20,6 +20,7 @@ import { consoleProgress } from "../core/output/progress.ts";
 import { phasesRunTodayUtc } from "../core/cycle/phase-runs.ts";
 import { runDeepSynthPhase } from "../core/synthesis/deep-synth.ts";
 import { backfillEnabled } from "../core/cycle/conversation-facts-backfill.ts";
+import { cycleDaemonPause, recordCycleRun } from "../core/daemons/cycle-daemon.ts";
 import {
   tryAcquireDbLock,
   reapDeadHolderLocks,
@@ -27,6 +28,12 @@ import {
   startLockHeartbeat,
   type DbLockHandle,
 } from "../core/db-lock.ts";
+
+export interface CycleRunEvent {
+  phase: "start" | "end";
+  ok?: boolean;
+  latencyMs?: number;
+}
 
 export interface CycleLoopOptions {
   /** Interval between ticks, ms. */
@@ -37,6 +44,16 @@ export interface CycleLoopOptions {
   quietStartHour?: number;
   /** Exclusive quiet-hour end in the configured zone (default 8). */
   quietEndHour?: number;
+  /** Live-activity hook around each cycle run. Errors it throws are dropped. */
+  onRun?: (e: CycleRunEvent) => void;
+}
+
+function notifyRun(hook: CycleLoopOptions["onRun"], e: CycleRunEvent): void {
+  try {
+    hook?.(e);
+  } catch {
+    // an observer must never touch the cycle
+  }
 }
 
 export interface CycleHandle {
@@ -233,6 +250,16 @@ export function startCycleLoop(
       /* best-effort sweep */
     }
 
+    // A paused cycle daemon (daemon_controls) skips the tick and looks again
+    // within the lock-TTL window, so a resume takes effect without waiting a
+    // full interval.
+    const pause = await cycleDaemonPause(storage.engine());
+    if (pause) {
+      console.log(`[cycle] tick status=skipped reason=paused (${pause})`);
+      if (!stopped) timer = setTimeout(runTick, nextTickDelayMs(options.intervalMs, true));
+      return;
+    }
+
     // Cross-process guard: another daemon (or a manual `cycle` run) may already
     // be working this brain. The DB lock serializes the maintenance pipeline so
     // two cycles don't fight over the same phases. A null handle means a live
@@ -270,7 +297,17 @@ export function startCycleLoop(
       // run alive under it, and its signal stops a run whose lock was taken.
       const heartbeat = startLockHeartbeat(lock);
       try {
-        const r = await runCycleOnce(storage.engine(), { ...opts, signal: heartbeat.signal });
+        const runStart = Date.now();
+        notifyRun(options.onRun, { phase: "start" });
+        let r;
+        try {
+          r = await runCycleOnce(storage.engine(), { ...opts, signal: heartbeat.signal });
+        } catch (e) {
+          notifyRun(options.onRun, { phase: "end", ok: false, latencyMs: Date.now() - runStart });
+          throw e;
+        }
+        notifyRun(options.onRun, { phase: "end", ok: r.status !== "fail", latencyMs: Date.now() - runStart });
+        await recordCycleRun(storage.engine(), r.status !== "fail", r.outcome);
         const mark = (s: string) => (s === "fail" ? "FAIL" : s); // ok | warn | FAIL
         const summary = r.phases
           .map((p) => `${p.phase}=${mark(p.status)}`)
@@ -308,6 +345,7 @@ export function startCycleLoop(
           }
         }
       } catch (e) {
+        await recordCycleRun(storage.engine(), false, "error");
         console.warn(
           `[cycle] tick failed:`,
           e instanceof Error ? e.message : e,

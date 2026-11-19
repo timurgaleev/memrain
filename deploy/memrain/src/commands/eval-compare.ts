@@ -23,6 +23,10 @@
  *       baseline's fails it; so does an expected_top1 query the baseline
  *       answered at rank 1 and this run does not.
  *       --write-baseline saves this run as the new baseline.
+ *       --bench scores the synthetic search bench (src/eval/bench/) on a
+ *       throwaway brain instead of the live one, at no model spend, against
+ *       its own baseline (<config-dir>/eval-bench-baseline.json); a decoy the
+ *       scorer accepts fails the run.
  */
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -52,6 +56,14 @@ import {
   type EvalSplit,
 } from "./eval.ts";
 import { deltaCi95, METRIC_GLOSSARY, type Ci95 } from "../core/search/bootstrap.ts";
+import {
+  benchSearchFn,
+  decoyReport,
+  loadBenchQrels,
+  openBenchBrain,
+  scoredQrels,
+  type DecoyReport,
+} from "../eval/bench/harness.ts";
 
 export interface EvalResultRecord {
   run_id: string;
@@ -219,6 +231,10 @@ export async function runEvalCompareCmd(opts: EvalCompareOptions = {}): Promise<
   const path = opts.input ?? defaultResultsPath();
   const records = readResults(path);
   if (records.length === 0) {
+    if (opts.json) {
+      console.log(JSON.stringify({ ok: true, input: path, grouped: {}, glossary: METRIC_GLOSSARY }, null, 2));
+      return 0;
+    }
     console.log(`No eval results found at ${path}.`);
     console.log(`Run: memrain eval run-all --modes ${SEARCH_MODES.join(",")}`);
     return 0;
@@ -360,10 +376,16 @@ export interface EvalGateOptions {
   allowErrors?: boolean;
   /** Fail when p50 or p95 latency exceeds this many times the baseline's. */
   maxLatencyX?: number;
+  /** Score the synthetic search bench on its own throwaway brain. */
+  bench?: boolean;
 }
 
 export function defaultBaselinePath(): string {
   return join(dirname(defaultConfigPath()), "eval-baseline.json");
+}
+
+export function defaultBenchBaselinePath(): string {
+  return join(dirname(defaultConfigPath()), "eval-bench-baseline.json");
 }
 
 export const DEFAULT_MAX_LATENCY_X = 2.0;
@@ -444,10 +466,11 @@ export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
     console.error("memrain eval gate: the sealed split is scored only by a recorded A/B");
     return 1;
   }
-  const qrels = filterSplit(loadQrels(opts.qrelsPath ?? defaultQrelsPath()), split);
+  const benchQrels = opts.bench ? loadBenchQrels(opts.qrelsPath) : null;
+  const qrels = filterSplit(benchQrels ? scoredQrels(benchQrels) : loadQrels(opts.qrelsPath ?? defaultQrelsPath()), split);
   const maxDrop = opts.maxDrop ?? 0.05;
   const minRecall = opts.minRecall ?? 0.6;
-  const baselinePath = opts.baseline ?? defaultBaselinePath();
+  const baselinePath = opts.baseline ?? (opts.bench ? defaultBenchBaselinePath() : defaultBaselinePath());
 
   let baseline: EvalBaseline | null = null;
   if (existsSync(baselinePath)) {
@@ -461,21 +484,36 @@ export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
     }
   }
 
-  const storage = new Storage(loadConfig(opts.configPath));
-  const report = await withStorage(storage, async () => {
+  const score = async (storage: Storage) => {
     const targets = expectedTargets(qrels);
     const stale = staleQrelsReason(targets, await presentTargetPaths(storage, targets));
     if (stale) {
       console.error(stale);
       return null;
     }
+    const searchFn = opts.searchFn ?? (opts.bench ? benchSearchFn : undefined);
     return evalRun(storage, qrels, { name: "gate" }, {
       split,
       ...(opts.k !== undefined ? { k: opts.k } : {}),
-      ...(opts.searchFn ? { searchFn: opts.searchFn } : {}),
+      ...(searchFn ? { searchFn } : {}),
     });
-  });
+  };
+  let report: EvalReport | null;
+  if (opts.bench) {
+    const brain = await openBenchBrain();
+    try {
+      report = await score(brain.storage);
+    } finally {
+      await brain.close();
+    }
+  } else {
+    const storage = new Storage(loadConfig(opts.configPath));
+    report = await withStorage(storage, () => score(storage));
+  }
   if (!report) return EXIT_STALE_QRELS;
+  // A scorer that accepts a planted wrong answer would accept the same
+  // mistake from the search; nothing else this run measured counts then.
+  const decoys: DecoyReport | null = benchQrels ? decoyReport(benchQrels, report.k) : null;
 
   const splitChanged = baseline !== null && (baseline.split ?? "all") !== split;
   const scoringComparable = comparableBaseline(baseline);
@@ -496,10 +534,14 @@ export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
     );
   }
   // The interval is reported next to the verdict; it does not decide it.
-  const verdict = gateVerdict(report, comparable, maxDrop, minRecall, {
+  const scored = gateVerdict(report, comparable, maxDrop, minRecall, {
     ...(opts.allowErrors !== undefined ? { allowErrors: opts.allowErrors } : {}),
     ...(opts.maxLatencyX !== undefined ? { maxLatencyX: opts.maxLatencyX } : {}),
   });
+  const reasons = decoys && decoys.passed.length > 0
+    ? [...scored.reasons, `the scorer accepted decoy answers: ${decoys.passed.join(", ")}`]
+    : scored.reasons;
+  const verdict = { pass: reasons.length === 0, reasons };
   const deltaCi = gateDeltaCi(report, comparable);
   const qrelsChanged =
     baseline?.qrels_sha256 !== undefined && baseline.qrels_sha256 !== report.qrels_sha256;
@@ -550,6 +592,7 @@ export async function runEvalGate(opts: EvalGateOptions = {}): Promise<number> {
         run_config_hash: report.run_config_hash,
         qrels_sha256: report.qrels_sha256,
         reasons: verdict.reasons,
+        ...(decoys ? { bench: true, decoys, decoys_line: `DECOYS: ${decoys.passed.length}/${decoys.total} passed` } : {}),
         baseline_written: Boolean(opts.writeBaseline && verdict.pass),
         glossary: METRIC_GLOSSARY,
       },

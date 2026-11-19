@@ -88,3 +88,18 @@ condition = "AND"
 commits = ["3d2362070a6f92d527f4682f1a5fefda97835096"]
 paths = ['''^deploy/memrain/tests/page_write_reason\.test\.ts$''']
 regexes = ['''^R7mdN2aQ8vLs5XcU1bZe4HjP9fWk6YtD$''']
+
+# Synthetic Google Calendar sync/page tokens and a test calendar id in the
+# connector fixtures; none is a live credential.
+[[allowlists]]
+description = "synthetic Google Calendar sync tokens in connector fixtures and tests"
+condition = "AND"
+commits = ["9ed15b780c1d76d24bafb4fe5450a7f296a945ad"]
+paths = ['''^deploy/memrain/tests/fixtures/connectors/google-calendar\.json$''', '''^deploy/memrain/tests/connectors_google_calendar\.test\.ts$''']
+
+# The Fireflies test key is assembled from fixed parts at run time.
+[[allowlists]]
+description = "assembled Fireflies test key in the recorded-responses helper"
+condition = "AND"
+commits = ["3ceebda65fb5459d69b092ce8913f7ec8b36a289"]
+paths = ['''^deploy/memrain/tests/helpers/fireflies-recorded\.ts$''']

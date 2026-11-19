@@ -163,4 +163,13 @@ describe("relationalRecall", () => {
     const hits = await relationalRecall(storage, "who works at acme?", { limit: 1 });
     expect(hits.length).toBe(1);
   });
+
+  it("applies min_trust before the walk's limit, so an eligible neighbour still fills it", async () => {
+    await putPage(storage, { slug: "companies/acme", type: "company", title: "companies/acme", markdown_body: "x, agent edit", written_by_principal: "client:bot" });
+    // Unfiltered, the agent-edited page comes first and would take the only slot.
+    const first = await relationalRecall(storage, "who introduced me to bob?", { depth: 1, limit: 1 });
+    expect(slugs(first)).toEqual(["companies/acme"]);
+    const owner = await relationalRecall(storage, "who introduced me to bob?", { depth: 1, limit: 1, filters: { minTrust: "owner" } });
+    expect(slugs(owner)).toEqual(["people/alice-smith"]);
+  });
 });

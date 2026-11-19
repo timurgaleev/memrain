@@ -247,4 +247,32 @@ describe("eval qrels build", () => {
       cap2.restore();
     }
   });
+
+  it("keeps a labelled query's stored split and every relevant document", async () => {
+    // The labelling screen stores the split and all relevant documents; a
+    // rebuild must not redraw the split or drop all but the first document,
+    // or the sealed run would score a different set than the screen counted.
+    const hashed = isSealed("lab1", 42, 0.5) ? "sealed" : "dev";
+    const stored = hashed === "sealed" ? "dev" : "sealed";
+    const s = new Storage({ dbPath });
+    await s.init();
+    try {
+      await s.engine().query(
+        `INSERT INTO eval_queries (id, query, k, expected_doc_id, expected_doc_ids, tag, source, split)
+         VALUES ('lab1', 'alpha and beta', 10, 'notes/a.md', $1::text::jsonb, 'good', 'admin-label', $2)`,
+        [JSON.stringify(["notes/a.md", "notes/gone.md", "notes/b.md"]), stored],
+      );
+    } finally {
+      await s.close();
+    }
+    const out = join(tmp, "out", "qrels.labelled.local.json");
+    const cap = quiet();
+    try {
+      expect(await runEvalQrelsBuild({ out, configPath: cfgPath, sealedFraction: 0.5, seed: 42 })).toBe(0);
+    } finally {
+      cap.restore();
+    }
+    const lab = JSON.parse(readFileSync(out, "utf-8")).queries.find((q: { id: string }) => q.id === "lab1");
+    expect(lab).toMatchObject({ split: stored, expected_paths: ["notes/a.md", "notes/b.md"] });
+  });
 });

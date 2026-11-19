@@ -23,6 +23,7 @@ import {
   collectTakesUngradeable,
   collectSetupSmells,
 } from "./collectors.ts";
+import { collectSpendWallet } from "../spend-notice.ts";
 
 /** Deterministic collector order (also the secondary sort key for ranking). */
 export const COLLECTORS: AdvisorCollector[] = [
@@ -35,6 +36,7 @@ export const COLLECTORS: AdvisorCollector[] = [
   collectEvalBlind,
   collectTakesUngradeable,
   collectSetupSmells,
+  collectSpendWallet,
 ];
 
 const SEV_RANK: Record<AdvisorSeverity, number> = {

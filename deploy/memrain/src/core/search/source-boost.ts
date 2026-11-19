@@ -31,6 +31,9 @@ const DEFAULT_WEIGHTS: Record<SourceKind, number> = {
   code: 0.85,
   // Issue and pull-request pages mirrored by the GitHub connector.
   github: 0.75,
+  // Connector chat days and meeting pages weigh like mail and transcripts.
+  chat: 0.6,
+  meeting: 0.65,
   other: 0.8,
 };
 

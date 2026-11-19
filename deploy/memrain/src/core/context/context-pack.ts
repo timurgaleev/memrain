@@ -31,7 +31,8 @@ import { extractCandidatesFromWindow } from "./entity-salience.ts";
 import { resolveEntitiesToPointers } from "./reflex.ts";
 import { parseWindow, VOLUNTEER_DEFAULT_MIN_CONFIDENCE } from "./volunteer.ts";
 import { newerMentionsEnabled, readNewerMentions } from "./newer-mentions.ts";
-import { frameExternal, readExternalTrust, type ExternalTrust } from "../trust-frame.ts";
+import { frameExternal, readExternalTrust, readTrustTiers, type ExternalTrust } from "../trust-frame.ts";
+import { meetsMinTrust, type TrustTier } from "../trust-tier.ts";
 import { contestedWith } from "../typed-conflicts.ts";
 
 export const CONTEXT_PACK_DEFAULT_ENTITIES = 5;
@@ -134,7 +135,23 @@ export interface ContextPackOpts {
   remote?: boolean;
   /** True when the caller must not see this entity (the diary fence). */
   fenced?: (slug: string) => Promise<boolean>;
+  /** Leave out pages, facts and events below this trust tier. Unset keeps every tier. */
+  minTrust?: TrustTier;
 }
+
+type TierMap<K> = ReadonlyMap<K, TrustTier> | undefined;
+
+/** Under min_trust a row the tier lookup cannot see is left out, never kept. */
+function keptAt<K>(minTrust: TrustTier | undefined, tiers: TierMap<K>, key: K): boolean {
+  if (minTrust === undefined) return true;
+  const tier = tiers?.get(key);
+  return tier !== undefined && meetsMinTrust(tier, minTrust);
+}
+
+const belowOwner = <K>(tiers: TierMap<K>, key: K): boolean => {
+  const tier = tiers?.get(key);
+  return tier !== undefined && tier !== "owner";
+};
 
 function clampInt(v: unknown, def: number, min: number, max: number): number {
   if (typeof v !== "number" || !Number.isFinite(v)) return def;
@@ -208,7 +225,7 @@ async function windowEntities(
 /** Explicit slugs first, then window-resolved ones, deduped and capped. */
 export async function selectPackEntities(
   storage: Storage,
-  opts: Pick<ContextPackOpts, "slugs" | "window" | "maxEntities" | "sourceIds" | "onDegraded">,
+  opts: Pick<ContextPackOpts, "slugs" | "window" | "maxEntities" | "sourceIds" | "onDegraded" | "minTrust">,
   isFenced: ((slug: string) => Promise<boolean>) | null = null,
 ): Promise<string[]> {
   const max = clampInt(opts.maxEntities, CONTEXT_PACK_DEFAULT_ENTITIES, 1, CONTEXT_PACK_MAX_ENTITIES);
@@ -224,9 +241,15 @@ export async function selectPackEntities(
   // A missing explicit slug takes a slot too, so fencing it later reveals
   // nothing. A window name that matches nothing never resolves, though, so a
   // fenced window match must not take a slot either.
-  for (const s of await windowEntities(storage, opts.window, max - out.length, opts.sourceIds, opts.onDegraded)) {
+  const fromWindow = await windowEntities(storage, opts.window, max - out.length, opts.sourceIds, opts.onDegraded);
+  // Like a fenced match, a window match below min_trust never gets a card, so
+  // it must not take a slot either. An explicit slug keeps its slot (above).
+  const windowTiers = opts.minTrust === undefined || fromWindow.length === 0 ? undefined
+    : (await readTrustTiers(storage.engine(), { pages: fromWindow }, opts.sourceIds)).pages;
+  for (const s of fromWindow) {
     if (out.length >= max) break;
     if (isFenced && (await isFenced(s))) continue;
+    if (!keptAt(opts.minTrust, windowTiers, s)) continue;
     take(s);
   }
   return out;
@@ -259,37 +282,43 @@ async function buildCard(
   // A soft-stub (facts without a page) and an out-of-grant page both read as
   // null here; neither gets a card.
   if (!r.page) return null;
-  const newer = newerMentionsEnabled()
+  const newerAll = newerMentionsEnabled()
     ? await readNewerMentions(storage, slug, {
         ...(opts.sourceIds !== undefined ? { sourceIds: opts.sourceIds } : {}),
         isFenced,
         includeDocuments: !opts.remote,
       })
     : [];
-  const external = opts.redact ? null : await readExternalTrust(storage.engine(), {
-    pages: [r.page.slug, ...newer.map(m => m.slug)], facts: r.facts.map(f => f.id), events: r.timeline.map(e => e.id),
+  const tiers = opts.redact && opts.minTrust === undefined ? null : await readTrustTiers(storage.engine(), {
+    pages: [r.page.slug, ...newerAll.map(m => m.slug)], facts: r.facts.map(f => f.id), events: r.timeline.map(e => e.id),
   }, opts.sourceIds);
-  const origins = opts.redact ? new Map() : await factProvenance(storage.engine(), r.facts.map(f => f.id), opts.sourceIds);
-  const pageExternal = external?.pages.has(r.page.slug) ?? false;
+  const kept = <K>(m: TierMap<K>, key: K) => keptAt(opts.minTrust, m, key);
+  const framed = <K>(m: TierMap<K>, key: K) => !opts.redact && belowOwner(m, key);
+  if (!kept(tiers?.pages, r.page.slug)) return null;
+  const facts = r.facts.filter(f => kept(tiers?.facts, f.id));
+  const timeline = r.timeline.filter(e => kept(tiers?.events, Number(e.id)));
+  const newer = newerAll.filter(m => kept(tiers?.pages, m.slug));
+  const origins = opts.redact ? new Map() : await factProvenance(storage.engine(), facts.map(f => f.id), opts.sourceIds);
+  const pageExternal = framed(tiers?.pages, r.page.slug);
   return {
     slug,
     title: pageExternal && r.page.title ? frameExternal(r.page.title) : r.page.title ?? null,
     type: r.page.type ?? null,
     ...(pageExternal ? { trust: "external" as const } : {}),
-    facts: speakerOrdered(r.facts).map((f) =>
+    facts: speakerOrdered(facts).map((f) =>
       opts.redact
         ? { id: f.id, confidence: f.confidence }
-        : { id: f.id, fact: contextFactText(f, origins), confidence: f.confidence, ...(external?.facts.has(f.id)
+        : { id: f.id, fact: contextFactText(f, origins), confidence: f.confidence, ...(framed(tiers?.facts, f.id)
           ? { fact: frameExternal(contextFactText(f, origins)), trust: "external" as const } : {}),
         ...(f.contested_with ? { contested_with: f.contested_with } : {}) },
     ),
-    recent: r.timeline.map((e) =>
-      opts.redact ? { date: toDate(e.occurred_at) } : { date: toDate(e.occurred_at), ...(external?.events.has(Number(e.id))
+    recent: timeline.map((e) =>
+      opts.redact ? { date: toDate(e.occurred_at) } : { date: toDate(e.occurred_at), ...(framed(tiers?.events, Number(e.id))
         ? { event: frameExternal(e.event), trust: "external" as const } : { event: e.event }) },
     ),
     ...(newer.length > 0
       ? { newer: newer.map((m) => (opts.redact ? { date: m.date } : { date: m.date, slug: m.slug, title: m.title,
-        ...(external?.pages.has(m.slug) ? { title: m.title ? frameExternal(m.title) : m.title, trust: "external" as const } : {}) })) }
+        ...(framed(tiers?.pages, m.slug) ? { title: m.title ? frameExternal(m.title) : m.title, trust: "external" as const } : {}) })) }
       : {}),
   };
 }
@@ -339,17 +368,18 @@ async function readCore(
   const verdicts = await readQuarantineVerdicts(storage.engine(), rows);
   const live = rows.filter((_, i) => !verdicts[i]);
   if (live.length === 0) return null;
-  const external = await readExternalTrust(storage.engine(), { pages: live.map((p) => p.slug) }, opts.sourceIds);
+  const tiers = (await readTrustTiers(storage.engine(), { pages: live.map((p) => p.slug) }, opts.sourceIds)).pages;
   let left = maxChars;
   let truncated = false;
   const drafts: CoreDraft[] = [];
   for (const p of live) {
+    if (!keptAt(opts.minTrust, tiers, p.slug)) continue;
     const body = (p.markdown_body ?? "").trim();
     const text = body.slice(0, left);
     if (text.length < body.length) truncated = true;
     if (body.length > 0 && text.length === 0) continue;
     left -= text.length;
-    drafts.push({ slug: p.slug, title: p.title ?? null, text, external: external.pages.has(p.slug) });
+    drafts.push({ slug: p.slug, title: p.title ?? null, text, external: belowOwner(tiers, p.slug) });
   }
   return { drafts, truncated };
 }
@@ -484,9 +514,12 @@ export async function buildContextPack(
       ...(opts.visibility?.length ? { visibility: opts.visibility } : {}),
     });
     kept.length = 0;
+    const rowTiers = opts.minTrust === undefined ? undefined
+      : (await readTrustTiers(storage.engine(), { facts: rows.map(f => f.id) }, opts.sourceIds)).facts;
     for (const f of rows) {
       if (kept.length >= factsLimit) break;
       if (onCards.has(f.id)) continue;
+      if (!keptAt(opts.minTrust, rowTiers, f.id)) continue;
       if (isFenced && (await isFenced(f.entity_slug))) continue;
       kept.push(f);
     }

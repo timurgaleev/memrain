@@ -11,12 +11,15 @@ import { Storage } from "../core/storage.ts";
 import { withStorage } from "./with-storage.ts";
 import { loadConfig } from "../core/config.ts";
 import { normalizeSourceFilterParam } from "../core/source-scope.ts";
+import { exportChatThreads } from "../core/chat/store.ts";
 
 export interface ExportCmdOptions {
   /** Output directory (default: ./export). */
   dir?: string;
   /** Restrict to these source ids (default: all tenants). */
   sourceIds?: string[];
+  /** Restrict the chat threads to this owner (default: every owner in scope). */
+  chatOwner?: string;
   /** @internal Injected Storage for hermetic tests (caller owns lifecycle). */
   storage?: Storage;
 }
@@ -70,9 +73,19 @@ export async function runExport(opts: ExportCmdOptions = {}): Promise<void> {
       writeFileSync(target, frontmatterBlock(row) + "\n" + body + "\n", { mode: 0o644 });
       written += 1;
     }
+    // Chat threads go beside the pages as JSON, one file per thread, under a
+    // directory no page slug can name.
+    const threads = await exportChatThreads(storage.engine(), {
+      ...(scoped ? { sourceIds } : {}),
+      ...(opts.chatOwner ? { ownerKey: opts.chatOwner } : {}),
+    });
+    if (threads.length > 0) mkdirSync(join(outDir, "_chat"), { recursive: true });
+    for (const t of threads) {
+      writeFileSync(join(outDir, "_chat", `${t.id}.json`), `${JSON.stringify(t, null, 2)}\n`, { mode: 0o600 });
+    }
     console.log(
       JSON.stringify(
-        { ok: true, dir: outDir, pages: written, scoped: scoped ? opts.sourceIds : "all" },
+        { ok: true, dir: outDir, pages: written, chat_threads: threads.length, scoped: scoped ? opts.sourceIds : "all" },
         null,
         2,
       ),

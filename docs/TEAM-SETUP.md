@@ -233,6 +233,85 @@ the fastest way to confirm an enrollment did what you meant.
 
 ---
 
+## Members and groups
+
+Nothing here is on until you add a member. A brain with no members verifies
+every key exactly as before.
+
+A **member** is a person. Bind their keys (personal access tokens, OAuth
+clients, enrollment grants) to them, and one command switches all of those keys
+off at once. A **group** names shared sources; every member in it reads them
+through their own keys. Both are stored in the database and read on every
+request, so each change below applies from the next call: no restart, no new
+token.
+
+```bash
+# The person, and the keys they use (each source must exist first: memrain sources register …)
+memrain member add alice --name Alice --email alice@example.com
+memrain auth create alice-laptop --source alice --profile writer
+memrain member bind alice --token alice-laptop        # or --client <client_id> / --enrollment <id>
+
+# A group that reads a shared source
+memrain sources register sales --kind other --path-prefix tenant:sales
+memrain group add sales-team --name Sales
+memrain group grant-source sales-team sales
+memrain group add-member sales-team alice
+
+memrain member show alice                             # status, groups, bound keys, recent audit
+memrain group show sales-team
+```
+
+**Switch someone off.** `memrain member disable alice` refuses every key bound
+to her on `/mcp` and `/ingest`, and a capture she queued before it never
+writes. `memrain member enable alice` turns them back on.
+
+**Someone leaves for good.** `memrain member remove alice` clears her email,
+drops her group memberships and keeps her keys refused forever: a removed id is
+never reused, never enabled again, and a key bound to it cannot be unbound or
+moved to someone else. Revoke those keys (`memrain auth revoke <name>`,
+`memrain auth revoke-grant <id>`) to tidy up. Her source and notes stay.
+
+**What a group can and cannot do.** It only adds read sources to a key that is
+already scoped to a source; it never changes where a key writes. The owner's own
+source `default` joins a group only with `--allow-owner-source`, and the audit
+row records that the override was used.
+
+**Ready-made profiles.** `--profile` on `auth create` (`reader`, `writer`) and
+on `auth register-client` (`reader`, `writer`, `coding-agent`) expands into the
+scopes you would otherwise list by hand, and is recorded on the key.
+`coding-agent` refuses to issue without `--bound-slug-prefixes` (for example
+`--bound-slug-prefixes projects/x`), and no profile combines with `--scopes`.
+`GET /admin/api/grant-profiles` lists the catalog.
+
+Every change is written to `member_audit` with who made it. The admin API has
+the same operations under `/admin/api/members` and `/admin/api/groups`, behind
+the admin login.
+
+### Offboarding with the personal source
+
+`memrain member remove alice --erase-personal-source` shows what would go.
+Adding `--apply --out DIR` exports the source's pages and the member's chat
+threads into DIR first, then removes the member, revokes their keys, grants
+and sign-in sessions, erases their chat and every row of the personal source.
+A receipt stays in `member_audit`. Erasure cannot be undone; keep DIR.
+
+### Give an existing token another source
+
+A personal access token's read set changes in place; there is no need to issue
+a new one when you connect a new source:
+
+```bash
+memrain auth permissions <name> set-read-sources default,me-calendar --dry-run   # shows before/after, changes nothing
+memrain auth permissions <name> set-read-sources default,me-calendar
+```
+
+The token's write source stays first and always readable (a token created
+without `--source` writes to `default`). Every source must exist. The change is
+audited as `pat:<id>` (`memrain auth grant-history pat:<id>`) and the token
+reads the new set from its next request.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -242,6 +321,8 @@ the fastest way to confirm an enrollment did what you meant.
 | `That code was not accepted` | used, expired, revoked, or issued for another client — deliberately indistinguishable | `auth enrollments` shows which; re-issue |
 | Person lands in the wrong space | codes were swapped at handover | revoke, re-issue, hand over again |
 | `budget_exhausted` on search or think | that person's daily cap is spent (their enrollment cap, or the connector's cap applied per person) | `set-budget <enrollment_id>`, or wait for the UTC day to roll |
+| A key that worked now gets `401` | it is bound to a member who is disabled or removed | `memrain member show <id>`; `member enable <id>`, or revoke the key |
+| A member does not see a group's source | the member is not in the group, the group does not read that source, or the key is not bound to the member | `memrain member show <id>`, `memrain group show <id>` |
 | Writes succeed but nothing is findable | budget ran out mid-index: the note is stored unembedded, on purpose | raise the cap, then `memrain embed` |
 
 ---

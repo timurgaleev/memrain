@@ -50,6 +50,8 @@ Both run as Docker Compose services on a single `t4g.medium` EC2.
 | What Memrain is, who it is for, what it costs (short product page) | `README.md` |
 | Onboarding (`make init` flow), local try-out, credentials, day-to-day operation | `docs/QUICKSTART.md` |
 | Every env knob, with cost tier | `docs/CONFIGURATION.md` |
+| Every MCP tool and its parameters (generated) | `docs/TOOLS.md` |
+| Every error code: class, retryable, what to do (generated) | `docs/ERRORS.md` |
 | Connecting a client (Claude Code, Codex, claude.ai, Claude Team/Enterprise, ChatGPT) | `docs/clients/*.md` |
 | One connector for a team, enrollment codes | `docs/TEAM-SETUP.md` |
 | Install / ingress modes / upgrade | `docs/DEPLOYMENT.md` |

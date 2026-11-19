@@ -1,0 +1,96 @@
+{
+  "token": {
+    "token_type": "Bearer",
+    "scope": "https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read profile openid email",
+    "expires_in": 3599,
+    "ext_expires_in": 3599,
+    "access_token": "test-ms-access-token-0123456789",
+    "refresh_token": "test-ms-refresh-token-9876543210",
+    "id_token": "header.payload.signature"
+  },
+  "tokenRefresh": {
+    "token_type": "Bearer",
+    "scope": "https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read profile openid email",
+    "expires_in": 3599,
+    "ext_expires_in": 3599,
+    "access_token": "test-ms-access-token-rotated-0002",
+    "refresh_token": "test-ms-refresh-token-rotated-0002"
+  },
+  "refreshExpiredInactive": {
+    "error": "invalid_grant",
+    "error_description": "AADSTS700082: The refresh token has expired due to inactivity. The token was issued on 2026-08-01T00:00:00Z and was inactive for 90.00:00:00.\r\nTrace ID: 00000000-0000-0000-0000-a00000000001\r\nCorrelation ID: 00000000-0000-0000-0000-a00000000002\r\nTimestamp: 2026-11-16 00:00:00Z",
+    "error_codes": [700082],
+    "timestamp": "2026-11-16 00:00:00Z",
+    "trace_id": "00000000-0000-0000-0000-a00000000001",
+    "correlation_id": "00000000-0000-0000-0000-a00000000002",
+    "error_uri": "https://login.microsoftonline.com/error?code=700082"
+  },
+  "refreshInteractionRequired": {
+    "error": "interaction_required",
+    "error_description": "AADSTS50076: Due to a configuration change made by your administrator, or because you moved to a new location, you must use multi-factor authentication to access the resource.\r\nTrace ID: 00000000-0000-0000-0000-a00000000003",
+    "error_codes": [50076],
+    "suberror": "basic_action"
+  },
+  "adminConsentRequired": {
+    "error": "invalid_grant",
+    "error_description": "AADSTS65001: The user or administrator has not consented to use the application with ID '00000000-0000-0000-0000-00000000c1d1' named 'memrain'. Send an interactive authorization request for this user and resource.\r\nTrace ID: 00000000-0000-0000-0000-a00000000004",
+    "error_codes": [65001]
+  },
+  "adminConsentWorkflow": {
+    "error": "invalid_grant",
+    "error_description": "AADSTS90094: The grant requires admin permission.\r\nTrace ID: 00000000-0000-0000-0000-a00000000005",
+    "error_codes": [90094]
+  },
+  "codeRedeemed": {
+    "error": "invalid_grant",
+    "error_description": "AADSTS54005: OAuth2 Authorization code was already redeemed, please retry with a new valid code or use an existing refresh token.\r\nTrace ID: 00000000-0000-0000-0000-a00000000006",
+    "error_codes": [54005]
+  },
+  "me": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,mail,userPrincipalName)/$entity",
+    "id": "87d349ed-44d7-43e1-9a83-5f2406dee5bd",
+    "mail": "Owner.Alias@example.test",
+    "userPrincipalName": "Owner@Example.test"
+  },
+  "meRenamed": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,mail,userPrincipalName)/$entity",
+    "id": "87d349ed-44d7-43e1-9a83-5f2406dee5bd",
+    "mail": "Owner.New@example.test",
+    "userPrincipalName": "Owner.New@Example.test"
+  },
+  "meConsumer": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,mail,userPrincipalName)/$entity",
+    "id": "0123456789abcdef",
+    "mail": null,
+    "userPrincipalName": "someone@outlook.example.test"
+  },
+  "meGuest": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,mail,userPrincipalName)/$entity",
+    "id": "11111111-2222-3333-4444-a55555555555",
+    "mail": "guest@partner.example.test",
+    "userPrincipalName": "guest_partner.example.test#EXT#@contoso.onmicrosoft.example"
+  },
+  "meNoAddress": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,mail,userPrincipalName)/$entity",
+    "id": "22222222-3333-4444-5555-a66666666666",
+    "mail": null,
+    "userPrincipalName": null
+  },
+  "mePhone": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,mail,userPrincipalName)/$entity",
+    "id": "00a1b2c3d4e5f607",
+    "mail": null,
+    "userPrincipalName": "+4915100000000"
+  },
+  "meSameAddressOtherUser": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,mail,userPrincipalName)/$entity",
+    "id": "fedcba9876543210",
+    "mail": null,
+    "userPrincipalName": "owner@example.test"
+  },
+  "meNoId": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,mail,userPrincipalName)/$entity",
+    "mail": "owner@example.test",
+    "userPrincipalName": "owner@example.test"
+  }
+}

@@ -216,6 +216,23 @@ describe("POST /ingest route", () => {
     }
   });
 
+  it("keeps one job per requested slug: the same bytes sent to two slugs are two captures", async () => {
+    const send = (slug?: string) => handleIngestRoute(
+      ingestReq("# same bytes", { "content-type": "text/markdown", ...(slug ? { "x-memex-slug": slug } : {}) }), deps(writeAuth));
+    const ids: string[] = [];
+    for (const slug of ["notes/first", "notes/second", "notes/first", undefined]) {
+      const res = await send(slug);
+      expect(res.status).toBe(202);
+      ids.push(((await res.json()) as { job_id: string }).job_id);
+    }
+    expect(ids[1]).not.toBe(ids[0]);
+    expect(ids[2]).toBe(ids[0]);
+    expect(new Set(ids).size).toBe(3);
+    // Without a slug the id keeps its shape: credential, submitter, content hash.
+    expect(ids[3]).toMatch(/^ingest:webhook:shortcuts-client:[^:]+:[0-9a-f]{64}$/);
+    expect((await jobRows()).length).toBe(3);
+  });
+
   it("rejects an invalid X-Memex-Slug with 400", async () => {
     const res = await handleIngestRoute(
       ingestReq("# hi", { "content-type": "text/markdown", "x-memex-slug": "Bad Slug!" }),
@@ -264,6 +281,15 @@ describe("ingest_capture job handler", () => {
     const page = await getPage(storage, slug);
     expect(page?.markdown_body).toBe("# hello from a webhook");
     expect(page?.source_id).toBe("default");
+  });
+
+  it("aims the default slug at the submitting source and the day the capture arrived", () => {
+    const event = { ...eventFor("identical bytes"), received_at: "2026-01-02T23:59:00.000Z" };
+    const other = { ...event, source_id: "tenant_b" };
+    expect(defaultSlugForEvent(event)).toMatch(/^inbox\/2026-01-02-[0-9a-f]{6}$/);
+    expect(defaultSlugForEvent(other)).toMatch(/^inbox\/2026-01-02-[0-9a-f]{6}$/);
+    expect(defaultSlugForEvent(other)).not.toBe(defaultSlugForEvent(event));
+    expect(defaultSlugForEvent({ ...event })).toBe(defaultSlugForEvent(event));
   });
 
   it("honors a caller-provided slug", async () => {

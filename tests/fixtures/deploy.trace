@@ -1,0 +1,101 @@
+### running app, cloudflared ingress
+docker compose --env-file .env -f deploy/docker-compose.yml config -q
+docker ps --filter label=com.docker.compose.service=memex --format {{.Names}}
+docker ps --filter name=^deploy-memex-1$ --format {{.Names}}
+git describe --tags --match v[0-9]* --always --dirty
+docker compose --env-file .env -f deploy/docker-compose.yml build memrain
+docker compose --env-file .env -f deploy/docker-compose.yml config --services
+docker compose --env-file .env -f deploy/docker-compose.yml stop cloudflared
+docker compose --env-file .env -f deploy/docker-compose.yml ps --status running --services
+docker inspect deploy-memrain-1 --format {{.State.Running}}
+timeout 60 docker exec deploy-memrain-1 wget -qO- http://localhost:18790/health
+docker exec deploy-memrain-1 wget -qO- http://localhost:18790/health
+timeout 60 docker exec deploy-memrain-1 bun run src/cli.ts status
+docker exec deploy-memrain-1 bun run src/cli.ts status
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --no-build --no-deps memrain
+docker inspect deploy-memrain-1 --format {{.State.Health.Status}}
+timeout 60 docker exec deploy-memrain-1 wget -qO- http://localhost:18790/health
+docker exec deploy-memrain-1 wget -qO- http://localhost:18790/health
+timeout 60 docker exec deploy-memrain-1 bun run src/cli.ts status
+docker exec deploy-memrain-1 bun run src/cli.ts status
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --no-build
+docker compose --env-file .env -f deploy/docker-compose.yml ps --status running --services
+docker compose --env-file .env -f deploy/docker-compose.yml config --services
+--- exit 0
+==> building memrain stamped v1.0.0
+==> stopping the ingress (cloudflared) until the new app passes its gates
+==> waiting for deploy-memrain-1 to report healthy (max 180s)
+OK: deploy-memrain-1 healthy, serving v1.0.0, db=postgres, pages=100, ingress up
+### first deploy, caddy overlay from .env
+docker compose --env-file .env -f deploy/docker-compose.yml -f /etc/memrain/compose.caddy.yml config -q
+docker ps --filter label=com.docker.compose.service=memex --format {{.Names}}
+docker ps --filter name=^deploy-memex-1$ --format {{.Names}}
+git describe --tags --match v[0-9]* --always --dirty
+docker compose --env-file .env -f deploy/docker-compose.yml -f /etc/memrain/compose.caddy.yml build memrain
+docker compose --env-file .env -f deploy/docker-compose.yml -f /etc/memrain/compose.caddy.yml config --services
+docker compose --env-file .env -f deploy/docker-compose.yml -f /etc/memrain/compose.caddy.yml stop caddy
+docker compose --env-file .env -f deploy/docker-compose.yml -f /etc/memrain/compose.caddy.yml ps --status running --services
+docker inspect deploy-memrain-1 --format {{.State.Running}}
+docker compose --env-file .env -f deploy/docker-compose.yml -f /etc/memrain/compose.caddy.yml up -d --no-build --no-deps memrain
+docker inspect deploy-memrain-1 --format {{.State.Health.Status}}
+timeout 60 docker exec deploy-memrain-1 wget -qO- http://localhost:18790/health
+docker exec deploy-memrain-1 wget -qO- http://localhost:18790/health
+timeout 60 docker exec deploy-memrain-1 bun run src/cli.ts status
+docker exec deploy-memrain-1 bun run src/cli.ts status
+docker compose --env-file .env -f deploy/docker-compose.yml -f /etc/memrain/compose.caddy.yml up -d --no-build
+docker compose --env-file .env -f deploy/docker-compose.yml -f /etc/memrain/compose.caddy.yml ps --status running --services
+docker compose --env-file .env -f deploy/docker-compose.yml -f /etc/memrain/compose.caddy.yml config --services
+--- exit 0
+==> building memrain stamped v1.0.0
+==> stopping the ingress (caddy) until the new app passes its gates
+==> waiting for deploy-memrain-1 to report healthy (max 180s)
+OK: deploy-memrain-1 healthy, serving v1.0.0, db=postgres, pages=100, ingress up
+### maintenance holds the ingress
+docker compose --env-file .env -f deploy/docker-compose.yml config -q
+docker ps --filter label=com.docker.compose.service=memex --format {{.Names}}
+docker ps --filter name=^deploy-memex-1$ --format {{.Names}}
+git describe --tags --match v[0-9]* --always --dirty
+docker compose --env-file .env -f deploy/docker-compose.yml build memrain
+docker compose --env-file .env -f deploy/docker-compose.yml config --services
+docker compose --env-file .env -f deploy/docker-compose.yml stop cloudflared
+docker compose --env-file .env -f deploy/docker-compose.yml ps --status running --services
+docker inspect deploy-memrain-1 --format {{.State.Running}}
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --no-build --no-deps memrain
+docker inspect deploy-memrain-1 --format {{.State.Health.Status}}
+timeout 60 docker exec deploy-memrain-1 wget -qO- http://localhost:18790/health
+docker exec deploy-memrain-1 wget -qO- http://localhost:18790/health
+timeout 60 docker exec deploy-memrain-1 bun run src/cli.ts status
+docker exec deploy-memrain-1 bun run src/cli.ts status
+--- exit 0
+==> building memrain stamped v1.0.0
+==> stopping the ingress (cloudflared) until the new app passes its gates
+==> waiting for deploy-memrain-1 to report healthy (max 180s)
+HELD: maintenance on; ingress not started
+  deploy-memrain-1 serves v1.0.0, db=postgres, pages=100. Next:
+  1. docker exec deploy-memrain-1 bun run src/cli.ts status --quiescent   (must exit 0)
+  2. psql "$URL" -X -A -t -q -v ON_ERROR_STOP=1 -f deploy/memrain/scripts/sql/data-manifest.sql > P.txt
+     and compare it with the baseline: diff B.txt P.txt
+  3. remove MEMRAIN_MAINTENANCE from .env and re-run bash deploy/deploy.sh
+### empty brain fails the page gate
+docker compose --env-file .env -f deploy/docker-compose.yml config -q
+docker ps --filter label=com.docker.compose.service=memex --format {{.Names}}
+docker ps --filter name=^deploy-memex-1$ --format {{.Names}}
+git describe --tags --match v[0-9]* --always --dirty
+docker compose --env-file .env -f deploy/docker-compose.yml build memrain
+docker compose --env-file .env -f deploy/docker-compose.yml config --services
+docker compose --env-file .env -f deploy/docker-compose.yml stop cloudflared
+docker compose --env-file .env -f deploy/docker-compose.yml ps --status running --services
+docker inspect deploy-memrain-1 --format {{.State.Running}}
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --no-build --no-deps memrain
+docker inspect deploy-memrain-1 --format {{.State.Health.Status}}
+timeout 60 docker exec deploy-memrain-1 wget -qO- http://localhost:18790/health
+docker exec deploy-memrain-1 wget -qO- http://localhost:18790/health
+timeout 60 docker exec deploy-memrain-1 bun run src/cli.ts status
+docker exec deploy-memrain-1 bun run src/cli.ts status
+docker compose --env-file .env -f deploy/docker-compose.yml stop memrain
+--- exit 1
+==> building memrain stamped v1.0.0
+==> stopping the ingress (cloudflared) until the new app passes its gates
+==> waiting for deploy-memrain-1 to report healthy (max 180s)
+FAIL: the brain has 0 pages (DEPLOY_ALLOW_EMPTY=1 to accept)
+      stopping memrain; the ingress was not started

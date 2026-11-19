@@ -236,16 +236,19 @@ else
 fi
 
 # --- T12: a spent MAX_SECONDS budget skips the shards not yet started ---
+# The budget is read in whole seconds (`date +%s`), so with a 1s budget a start
+# that crosses a second boundary already reads 1 and skips the first shard too.
+# A 2s budget leaves that start a full second.
 T12="$TMPROOT/t12"
 make_stub_bun "$T12"
 make_test_dir "$T12/tests" 3
 : > "$T12/calls"
-out=$(run_shards "$T12" env JOBS=1 SHARD_SIZE=1 TEST_DIR="$T12/tests" MAX_SECONDS=1 BUN_SLEEP=1.2 2>&1)
+out=$(run_shards "$T12" env JOBS=1 SHARD_SIZE=1 TEST_DIR="$T12/tests" MAX_SECONDS=2 BUN_SLEEP=2.2 2>&1)
 rc=$?
 shards=$(wc -l < "$T12/calls" | tr -d ' ')
-skipped=$(printf '%s\n' "$out" | grep -c 'wall-clock budget 1s reached')
+skipped=$(printf '%s\n' "$out" | grep -c 'wall-clock budget 2s reached')
 if [ "$rc" -eq 0 ] && [ "$shards" = "1" ] && [ "$skipped" = "2" ]; then
-  pass "T12 MAX_SECONDS=1 → first shard runs, the other two are skipped with a warning"
+  pass "T12 MAX_SECONDS=2 → first shard runs, the other two are skipped with a warning"
 else
   die "T12 expected rc=0, 1 shard run, 2 skipped; got rc=$rc shards=$shards skipped=$skipped"
 fi

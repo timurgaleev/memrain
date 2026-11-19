@@ -20,9 +20,12 @@ import { isDailyCapRefusal, isRolloverDailyCapRefusal, runWithSpendClient, runWi
 import { getHandler } from "./handlers.ts";
 import { kindDefaultTimeoutMs } from "./kind-defaults.ts";
 import { haltOf, llmHaltEnabled, noteHalt } from "./llm-halt.ts";
+import { isProviderLeaseBusy } from "./rate-leases.ts";
 import type { Queue } from "./queue.ts";
 import { type JobRow, UnrecoverableJobError, jobSpendClient } from "./types.ts";
+import { workerNameFor, type JobActivity } from "./activity.ts";
 import type { Engine } from "../engine/interface.ts";
+import { extension } from "../extension.ts";
 import {
   acquireWorkerLock,
   heartbeatWorkerLock,
@@ -41,12 +44,26 @@ export const DEFAULT_DRAIN_MS = 8000;
 /** How long stop() waits for aborted jobs to hand their rows back. */
 const HAND_BACK_WAIT_MS = 5000;
 const DAY_MS = 86_400_000;
+/** How long a job refused a provider lease waits before its next attempt. */
+const LEASE_DEFER_MS = 30_000;
 
 export interface WorkerOptions {
   /** Polling interval when idle. Default 1000 ms. */
   intervalMs?: number;
   /** Max concurrent in-flight jobs. Default 1 (single-thread). */
   concurrency?: number;
+  /**
+   * Kinds that run long (a daemon run, a remediation). With concurrency >= 2
+   * they may hold at most `concurrency - 1` slots, so a short job always has
+   * one; with concurrency 1 the single slot is shared as before.
+   */
+  longKinds?: readonly string[];
+  /**
+   * Live-activity hook: `start` once a claimed job's handler begins, `end`
+   * once the job was completed or failed (a retryable fail counts). A claim
+   * lost, a shutdown hand-back or a deferral emits no `end`. Errors it throws are dropped.
+   */
+  onJobEvent?: (e: JobActivity) => void;
   /** Hook for log lines — defaults to console.log/console.error. */
   logger?: (level: "info" | "warn" | "error", msg: string) => void;
   /** Seconds the running claim is valid for. Renewed every third of it while
@@ -108,6 +125,7 @@ export interface WorkerStats {
 export class Worker {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private inflight = 0;
+  private longInflight = 0;
   private stopping = false;
   private stopped = true;
   private lastStallSweep = 0;
@@ -210,6 +228,7 @@ export class Worker {
   async drainOnce(): Promise<number> {
     let processed = 0;
     while (!this.stopping) {
+      if (await extension().paused()) break;
       const job = await this.queue.claim(this.claimOpts());
       if (!job) break;
       if (this.stopping) {
@@ -222,8 +241,12 @@ export class Worker {
     return processed;
   }
 
-  private claimOpts(): Parameters<Queue["claim"]>[0] {
+  private claimOpts(concurrency = 1): Parameters<Queue["claim"]>[0] {
     const claimOpts: Parameters<Queue["claim"]>[0] = {};
+    const longKinds = this.opts.longKinds ?? [];
+    if (concurrency >= 2 && longKinds.length > 0 && this.longInflight >= concurrency - 1) {
+      claimOpts.excludeKinds = [...longKinds];
+    }
     if (this.opts.lockSeconds !== undefined) {
       claimOpts.lockSeconds = this.opts.lockSeconds;
     }
@@ -304,13 +327,16 @@ export class Worker {
         }
       }
       while (this.inflight < concurrency && !this.stopping) {
-        const job = await this.queue.claim(this.claimOpts());
+        if (await extension().paused()) break;
+        const job = await this.queue.claim(this.claimOpts(concurrency));
         if (!job) break;
         if (this.stopping) {
           await this.queue.releaseForShutdown(job.id, job.claimGeneration);
           break;
         }
         this.inflight++;
+        const long = this.opts.longKinds?.includes(job.kind) === true;
+        if (long) this.longInflight++;
         // Fire-and-forget; runJob updates inflight on completion. runJob never
         // throws (it guards its own bookkeeping), but keep a catch as a final
         // backstop so a stray rejection can never become an unhandledRejection.
@@ -318,6 +344,7 @@ export class Worker {
           .catch((e) => this.log("error", `[${job.id}] runJob: ${asMessage(e)}`))
           .finally(() => {
             this.inflight--;
+            if (long) this.longInflight--;
           })
           // Terminal backstop: even the catch's logger or finally must never
           // surface as an unhandledRejection.
@@ -338,6 +365,20 @@ export class Worker {
     // The claim token for this attempt: every write below presents it, so once
     // a newer attempt re-claims the row, this one's writes change nothing.
     const gen = job.claimGeneration;
+    const activity = { worker: workerNameFor(job), kind: job.kind };
+    const startedAt = Date.now();
+    const emit = (phase: JobActivity["phase"], ok?: boolean) => {
+      try {
+        this.opts.onJobEvent?.(
+          phase === "start"
+            ? { ...activity, phase }
+            : { ...activity, phase, ok, latencyMs: Date.now() - startedAt },
+        );
+      } catch {
+        // an observer must never touch the job
+      }
+    };
+    emit("start");
     const handler = getHandler(job.kind);
     if (!handler) {
       const msg = `no handler registered for kind '${job.kind}'`;
@@ -347,6 +388,7 @@ export class Worker {
         const updated = await this.queue.fail(job.id, gen, msg, { terminal: true });
         if (!updated && (await this.claimLost(job.id, gen))) return;
         this.stats.failed++;
+        if (updated) emit("end", false);
       } catch (e) {
         this.log("error", `[${job.id}] no-handler fail persist: ${asMessage(e)}`);
       }
@@ -419,6 +461,7 @@ export class Worker {
         );
         if (done || !(await this.claimLost(job.id, gen))) {
           this.stats.succeeded++;
+          if (done) emit("end", true);
         }
       } catch (e) {
         if (e instanceof WorkerShutdownError) {
@@ -453,6 +496,9 @@ export class Worker {
         if (!timedOut && !unrecoverable && (await this.deferForDailyCap(job, gen, e, message))) {
           return;
         }
+        if (!timedOut && !unrecoverable && (await this.deferForLease(job, gen, e, message))) {
+          return;
+        }
         this.log(
           "warn",
           `[${job.id}] ${job.kind} ${timedOut ? "timed out" : unrecoverable ? "failed (unrecoverable)" : "failed"}: ${message}`,
@@ -465,6 +511,7 @@ export class Worker {
         );
         if (timedOut) this.stats.timedOut++;
         if (!updated && (await this.claimLost(job.id, gen))) return;
+        if (updated) emit("end", false);
         if (updated && updated.status === "pending") {
           this.stats.retried++;
         } else {
@@ -500,6 +547,9 @@ export class Worker {
     };
     const timer = setInterval(() => {
       if (renewing || stopped) return;
+      // Held mid-job: the attempt is handed back at its next batch boundary, as
+      // on shutdown, and waits for the hold to lift.
+      void extension().paused().then((p) => { if (p && !abort.signal.aborted) abort.abort(new WorkerShutdownError()); }, () => {});
       renewing = true;
       const until = Date.now() + lockMs;
       this.queue
@@ -584,6 +634,30 @@ export class Worker {
       "warn",
       `[${job.id}] ${job.kind} deferred until ${until.toISOString()} (daily spend cap); no retry spent`,
     );
+    return true;
+  }
+
+  /**
+   * Put the attempt back for a short while when every provider lease slot was
+   * taken: nothing was sent, so a retry would be spent on a busy pool rather
+   * than on a failure. Counts toward MAX_DEFERS.
+   */
+  private async deferForLease(
+    job: JobRow,
+    gen: number,
+    err: unknown,
+    message: string,
+  ): Promise<boolean> {
+    if (!isProviderLeaseBusy(err)) return false;
+    if (job.deferredCount >= MAX_DEFERS) {
+      this.log("warn", `[${job.id}] ${job.kind} was deferred ${job.deferredCount} times; failing it`);
+      return false;
+    }
+    const until = new Date(Date.now() + LEASE_DEFER_MS);
+    const deferred = await this.queue.defer(job.id, gen, until, message.slice(0, 300));
+    if (!deferred) return this.claimLost(job.id, gen);
+    this.stats.deferred++;
+    this.log("warn", `[${job.id}] ${job.kind} deferred until ${until.toISOString()} (${err.key} slots busy); no retry spent`);
     return true;
   }
 

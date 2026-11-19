@@ -56,7 +56,7 @@ resource "aws_instance" "memrain" {
     # The bare-metal threat model that motivates hop_limit=1 (untrusted
     # host-side processes exfiltrating role creds) does not apply here:
     # the whole workload IS containerised.
-    http_put_response_hop_limit = 2
+    http_put_response_hop_limit = var.instance_metadata_hop_limit
   }
 
   root_block_device {

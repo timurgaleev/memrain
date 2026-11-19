@@ -38,6 +38,7 @@ import {
 } from "./cors.ts";
 import { handleIngestRoute } from "./ingest.ts";
 import {
+  assertIngressConfig,
   evaluatePublicGuard,
   evaluateInternalAuth,
   isPublicMcpToolForbidden,
@@ -58,9 +59,12 @@ import { RateLimiter, type RateLimiterOptions } from "../mcp/rate_limit.ts";
 import { resolveClientIp } from "./client-key.ts";
 import { createAdminAuth, type AdminAuth } from "./admin.ts";
 import { handleAdminApi } from "./admin-api.ts";
+import { handleConnectorCallbackPage } from "./admin-connectors.ts";
 import { serveAdminStatic } from "./admin-static.ts";
 import { handleAdminEventsRoute } from "./admin-events.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
+import { extension } from "../core/extension.ts";
+import { handleShareView } from "./share.ts";
 
 /** RFC 6749 §5.2-style throttle response for the rate-limited OAuth endpoints. */
 function rateLimited(): Response {
@@ -195,6 +199,12 @@ export interface ServerHandle {
 }
 
 export function startServer(opts: ServerOptions): ServerHandle {
+  const ingress = {
+    ...(opts.publicBearerToken ? { publicBearerToken: opts.publicBearerToken } : {}),
+    ...(opts.internalToken ? { internalToken: opts.internalToken } : {}),
+  };
+  assertIngressConfig(ingress);
+  extension().startupCheck(ingress, process.env);
   const mcpEnabled = opts.mcpEnabled !== false;
   const mcpHandler = mcpEnabled
     ? makeMcpHandler({
@@ -383,6 +393,8 @@ export function startServer(opts: ServerOptions): ServerHandle {
     port: opts.port,
     fetch: async (req, server) => {
       const url = new URL(req.url);
+      const refused = await extension().admitRequest(req, url);
+      if (refused) return refused;
 
       // CORS preflight — answered BEFORE auth: preflights carry no
       // credentials by design, so the bearer guard would 401 every browser
@@ -452,6 +464,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
                 budgetUsdPerDay: info.budgetUsdPerDay,
                 ...(info.spendId ? { spendId: info.spendId } : {}),
                 ...(info.principal ? { principal: info.principal } : {}),
+                ...(info.toolSurface ? { toolSurface: info.toolSurface } : {}),
                 isPublic: false,
               };
             } catch (e) {
@@ -635,6 +648,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
                 budgetUsdPerDay: info.budgetUsdPerDay,
                 ...(info.spendId ? { spendId: info.spendId } : {}),
                 ...(info.principal ? { principal: info.principal } : {}),
+                ...(info.toolSurface ? { toolSurface: info.toolSurface } : {}),
                 isPublic: guard.isPublic,
               };
             } catch (e) {
@@ -655,6 +669,12 @@ export function startServer(opts: ServerOptions): ServerHandle {
           clientIp: ip,
         });
       }
+      const extra = await extension().routes(req, url, {
+        storage: opts.storage,
+        ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
+        ...(opts.oauthProvider ? { oauthProvider: opts.oauthProvider } : {}),
+      });
+      if (extra) return extra;
       if (url.pathname === "/mcp" && mcpHandler) {
         // Evaluate the internal-token gate once per request; the handler
         // enforces it only for write tools on the internal path (read
@@ -671,6 +691,8 @@ export function startServer(opts: ServerOptions): ServerHandle {
           issuer: resolveIssuer(url, opts.publicUrl),
         });
       }
+      const shared = await handleShareView(req, url, opts.storage);
+      if (shared) return shared;
       if (adminAuth && (url.pathname === "/admin" || url.pathname.startsWith("/admin/"))) {
         // A1 auth routes, then A2 data/provisioning routes (each gates on
         // requireAdmin itself). The embedded SPA (B/C) dispatches here later.
@@ -680,9 +702,12 @@ export function startServer(opts: ServerOptions): ServerHandle {
           storage: opts.storage,
           requireAdmin: adminAuth.requireAdmin,
           sessionCooldown: adminAuth.sessionCooldown,
+          adminSessionId: adminAuth.adminSessionId,
           ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
         });
         if (r2) return r2;
+        const rcb = handleConnectorCallbackPage(req, url);
+        if (rcb) return rcb;
         // SSE live-activity feed (deferred #2) — requireAdmin-gated.
         const rsse = handleAdminEventsRoute(req, adminAuth.requireAdmin);
         if (rsse) return rsse;

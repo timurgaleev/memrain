@@ -44,3 +44,35 @@ it("probes one connection, reports missing vector, and closes on connection fail
     ready.mockRestore(); query.mockRestore(); close.mockRestore(); log.mockRestore();
   }
 });
+it("probes a pooled tenant the way its brain connects: no session startup parameter", async () => {
+  const keys = ["MEMRAIN_POSTGRES_URL", "MEMRAIN_PG_POOLER", "MEMRAIN_POSTGRES_DIRECT_URL", "MEMRAIN_PG_PREPARE"] as const;
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  process.env.MEMRAIN_POSTGRES_URL = "postgres://user:PRIVATE@pgbouncer-t1:6432/brain?sslmode=disable";
+  process.env.MEMRAIN_PG_POOLER = "pgbouncer";
+  process.env.MEMRAIN_POSTGRES_DIRECT_URL = "postgres://user:PRIVATE@db/brain?sslmode=require";
+  process.env.MEMRAIN_PG_PREPARE = "0";
+  writeFileSync(configPath, JSON.stringify({ database: { type: "postgres" }, embedding: { provider: "bedrock-titan" }, storage: {} }));
+  let seen: ReturnType<PostgresEngine["options"]> | undefined;
+  let pooler: string | undefined;
+  const ready = spyOn(PostgresEngine.prototype, "ready").mockImplementation(async function (this: PostgresEngine) {
+    seen = this.options();
+    pooler = this.pooler;
+  });
+  const query = spyOn(PostgresEngine.prototype, "query").mockResolvedValue({ rows: [{}] });
+  const close = spyOn(PostgresEngine.prototype, "close").mockResolvedValue();
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await runEngineStatus({ configPath, probe: true, json: true })).toBe(0);
+    expect(pooler).toBe("pgbouncer");
+    expect(seen!.max).toBe(1);
+    expect(seen!.connection).not.toHaveProperty("statement_timeout");
+    expect(seen!.connection).not.toHaveProperty("idle_in_transaction_session_timeout");
+    expect(seen).toHaveProperty("prepare", false);
+    process.env.MEMRAIN_PG_POOLER = "pgpool";
+    expect(await runEngineStatus({ configPath, probe: true, json: true })).toBe(1);
+    expect(JSON.parse(String(log.mock.calls[1]![0])).status).toBe("config_invalid");
+  } finally {
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    ready.mockRestore(); query.mockRestore(); close.mockRestore(); log.mockRestore();
+  }
+});

@@ -28,7 +28,8 @@ import { hybridSearch, type SearchOptions } from "../core/search/index.ts";
 import { resolveSearchKnobs } from "../core/search/hybrid.ts";
 import { applyTokenBudget, estTokens } from "../core/search/token-budget.ts";
 import { matchQueryFacts } from "../core/facts-query-match.ts";
-import { frameExternal, frameMarkedContent, markExternalChunks, readExternalTrust } from "../core/trust-frame.ts";
+import { frameExternal, frameMarkedContent, markChunkTrust, markExternalChunks, readExternalTrust, readTrustTiers } from "../core/trust-frame.ts";
+import { meetsMinTrust, parseMinTrust, principalTier, type TrustTier } from "../core/trust-tier.ts";
 import { runTakeMutation } from "../core/synthesis/takes-write-page.ts";
 import type { TakeFenceMutation } from "../core/synthesis/takes-write.ts";
 import { publicSearchMeta, type SearchMeta } from "../core/search/search-meta.ts";
@@ -124,6 +125,8 @@ import { getRecentSalience, findAnomalies } from "../core/usage-insights.ts";
 import { recallFact, forgetFact } from "../core/facts-recall.ts";
 import { brainIdentity } from "../core/identity.ts";
 import { purgeDeletedPages } from "../core/pages-purge.ts";
+import { daemonsStatus } from "../core/daemons/status.ts";
+import { isLoopType, listLoops, LOOPS_MAX_SYNC_AGE_HOURS as WAITING_MAX_SYNC_AGE_HOURS, syncFreshness, type LoopStatus } from "../core/loops/store.ts";
 import { queryRefine } from "../core/search/query-refine.ts";
 import { codeCallers, codeCallees, codeDefs, codeRefs } from "../core/code-graph.ts";
 import { runRecursiveWalk } from "../core/code-walk.ts";
@@ -294,6 +297,8 @@ import { listQuarantined } from "../core/quarantine-list.ts";
 import { extractionReview } from "../core/extraction-review.ts";
 import { findTypedConflicts } from "../core/typed-conflicts.ts";
 import { markGeneratedChunks } from "../core/search/generated-provenance.ts";
+import { extension } from "../core/extension.ts";
+import { observeRetrievalUse } from "../core/feedback/implicit.ts";
 
 export { OPERATOR_ONLY_TOOLS } from "./visibility.ts";
 
@@ -416,6 +421,14 @@ export interface DispatchOptions {
   adminPanel?: boolean;
   /** The admin panel request's own abort signal: a search the browser dropped skips its query embed. */
   signal?: AbortSignal;
+  /**
+   * The highest trust tier a page_put may leave its page at, set in the write's
+   * own transaction: an in-process writer whose text came from below the owner
+   * (a saved chat answer citing outside evidence). Transports never set it.
+   */
+  trustCeiling?: TrustTier;
+  /** A member's own write made on its own credentials (`member:<id>`), recorded as its principal. Transports never set it. */
+  memberPrincipal?: `member:${string}`;
 }
 
 /**
@@ -446,6 +459,7 @@ export async function dispatchTool(
   const { result: dispatched, cost } = await withRequestCost(() => runWithSpendClient(spendClient, () =>
     dispatchToolInner(storage, req, opts),
   ));
+  observeRetrievalUse(storage, req.name, req.arguments ?? {}, dispatched, writerPrincipal(opts));
   const enriched = withPageAdminUrl(req, dispatched, opts);
   // The operator reads stored text as it is; everyone else gets retrieval
   // results scanned for credentials that predate (or slipped past) the write scan.
@@ -573,6 +587,7 @@ async function dispatchToolInner(
   const takesHolders = effectiveTakesHolders(opts.authInfo);
   try {
     if (req.name === "search" || req.name === "query") opts.signal?.throwIfAborted();
+    await extension().admitOperation(req.name, () => storage.engine(), req.arguments);
     // Tool-level gates, in order: the fail-closed write gate (a scopeless
     // authenticated principal on a write op, default-OFF unless
     // MEMRAIN_TENANT_FAIL_CLOSED=1), operator-only tools for any authenticated
@@ -611,6 +626,13 @@ async function dispatchToolInner(
         ...errResult(JSON.stringify(scopeRefusal.toEnvelope(opts.isPublic ?? false))),
         _meta: { "mcp/www_authenticate": insufficientScopeChallenge(stepUp, opts.issuer) },
       };
+    }
+    if (refusal?.kind === "tool_surface") {
+      throw new OperationError(
+        "permission_denied",
+        `tool '${req.name}' is not on this credential's '${refusal.surface}' tool surface`,
+        "Ask the brain operator for a credential with a wider tool surface.",
+      );
     }
     if (refusal?.kind === "slug_bound") {
       throw new OperationError(
@@ -677,7 +699,7 @@ async function dispatchToolInner(
           opts.signal,
         );
       case "index":
-        return await callIndex(storage, args, writeSource, isOperator);
+        return await callIndex(storage, args, writeSource, isOperator, principalTier(writerPrincipal(opts)));
       case "backlinks":
         return await callBacklinks(storage, args, redact, readSources, remote);
       case "stats":
@@ -696,6 +718,7 @@ async function dispatchToolInner(
             remoteWriterIdentity(opts),
             receipt,
             writerPrincipal(opts),
+            opts.trustCeiling,
           ),
         );
       case "page_append":
@@ -810,6 +833,10 @@ async function dispatchToolInner(
         return await callJobsCancel(storage, args);
       case "jobs_logs":
         return await callJobsLogs(storage, args, redact);
+      case "daemons_status":
+        return jsonResult(await daemonsStatus(storage.engine()));
+      case "loops_list":
+        return await callLoopsList(storage, args, readSources);
       case "submit_agent": {
         // Loaded on use: the agent modules import dispatchTool themselves, so a
         // static import here would close a module cycle.
@@ -983,11 +1010,14 @@ async function dispatchToolInner(
     if (isOperationError(e)) {
       return errResult(JSON.stringify(e.toEnvelope(opts.isPublic ?? false)));
     }
+    // An extension may treat authenticated callers as outsiders too: they then
+    // get the public ingress's closed text for anything unexpected.
+    const withhold = (opts.isPublic ?? false) || extension().withholdErrors(opts.authInfo !== undefined);
     const databaseError = databaseOperationError(e);
-    if (databaseError) return errResult(JSON.stringify(databaseError.toEnvelope(opts.isPublic ?? false)));
+    if (databaseError) return errResult(JSON.stringify(databaseError.toEnvelope(withhold)));
     // A raw exception (Postgres schema, DSN host, stack internals) must NOT
     // leak across the public boundary; fully redact it there, log server-side.
-    return errResult(publicSafeErrorMessage(e, opts.isPublic ?? false));
+    return errResult(publicSafeErrorMessage(e, withhold));
   }
 }
 
@@ -1249,6 +1279,8 @@ async function callSearch(
   };
   const pageFilters = searchPageFilters(args);
   Object.assign(searchOpts, pageFilters);
+  const minTrust = parseMinTrust(args["min_trust"], "search");
+  if (minTrust) searchOpts.minTrust = minTrust;
   const typeNotice = await pageTypeNotice(storage, pageFilters, readSources, !isOperator);
   const since = dateBound("since");
   const until = dateBound("until");
@@ -1381,7 +1413,7 @@ async function frameSearchHits<T extends { chunkId: string; content: string; tit
   storage: Storage, hits: readonly T[], readSources?: string[], tokenBudget?: number,
 ) {
   const generated = await markGeneratedChunks(storage.engine(), hits, readSources);
-  const framed = (await markExternalChunks(storage.engine(), generated, readSources)).map(frameMarkedContent);
+  const framed = (await markChunkTrust(storage.engine(), generated, readSources)).map(frameMarkedContent);
   return tokenBudget === undefined ? framed : applyTokenBudget(framed, tokenBudget);
 }
 
@@ -1427,6 +1459,7 @@ async function callIndex(
   args: Record<string, unknown>,
   writeSource?: string,
   isOperator = false,
+  trustTier: TrustTier = "owner",
 ): Promise<ToolCallResult> {
   const path = args["path"];
   if (typeof path === "string" && path.length > 0) {
@@ -1486,7 +1519,7 @@ async function callIndex(
     const r = await indexDocument(
       storage,
       { sourcePath, text, ...(writeSource ? { sourceId: writeSource } : {}) },
-      { remote },
+      { remote, trustTier },
     );
     return jsonResult({ ok: true, ...r });
   }
@@ -1738,10 +1771,12 @@ async function callPagePut(
   remoteIdentity?: string,
   receipt?: WriteRequestKey,
   principal?: string,
+  trustCeiling?: TrustTier,
 ): Promise<ToolCallResult> {
   const input = asPageInput(args, remoteIdentity);
   if (typeof input === "string") return errResult(input);
   if (writeSource) input.source_id = writeSource;
+  if (trustCeiling !== undefined) input.trust_tier = trustCeiling;
   const { expectedVersion } = writePrecondition("page_put", args);
   if (expectedVersion !== undefined) input.expectedVersion = expectedVersion;
   if (receipt !== undefined) input.receipt = receipt;
@@ -2839,6 +2874,7 @@ export function remoteWriterIdentity(opts: DispatchOptions): string | undefined 
 
 export function writerIdentity(opts: DispatchOptions): string {
   if (opts.isPublic) return "public";
+  if (opts.memberPrincipal) return opts.memberPrincipal;
   const id = opts.authInfo?.clientId;
   return id !== undefined && id.length > 0 ? `client:${id}` : "operator";
 }
@@ -3714,6 +3750,7 @@ async function callQuery(
     remote: true,
   });
   const pageFilters = searchPageFilters(args);
+  const minTrust = parseMinTrust(args["min_trust"], "query");
   const typeNotice = await pageTypeNotice(storage, pageFilters, readSources, !isOperator);
   const refine = typeof args["refine"] === "string" ? args["refine"] : "";
   if (refine) {
@@ -3726,7 +3763,7 @@ async function callQuery(
     if (typeof args["refine_weight"] === "number") opts.refineWeight = args["refine_weight"];
     if (readSources !== undefined) opts.sourceIds = readSources;
     const reasons = new Set<SearchMeta["degraded"][number]>();
-    opts.search = { ...pageFilters, ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}),
+    opts.search = { ...pageFilters, ...(minTrust ? { minTrust } : {}), ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}),
       onMeta: m => { for (const reason of (isOperator ? m : publicSearchMeta(m)).degraded) reasons.add(reason); },
     };
     const hits = await queryRefine(storage, q, refine, opts);
@@ -3735,7 +3772,7 @@ async function callQuery(
       capHitSnippets(fenceDiaryHits(hits, isOperator), searchSnippetChars(), readSources), readSources,
       typeof args["token_budget"] === "number" ? args["token_budget"] : undefined);
     const ledger = await queryFactsForResult(storage, q, visible, readSources, !isOperator,
-      typeof args["token_budget"] === "number" ? args["token_budget"] : undefined);
+      typeof args["token_budget"] === "number" ? args["token_budget"] : undefined, minTrust);
     diagnostic?.mark("projection");
     return jsonResult({
       ok: true,
@@ -3753,7 +3790,7 @@ async function callQuery(
     typeof args["offset"] === "number"
       ? Math.max(0, Math.floor(args["offset"] as number))
       : 0;
-  const searchOpts: SearchOptions = { ...pageFilters, k: k + offset, ...(signal ? { signal } : {}) };
+  const searchOpts: SearchOptions = { ...pageFilters, k: k + offset, ...(signal ? { signal } : {}), ...(minTrust ? { minTrust } : {}) };
   if (onCapture) searchOpts.onCapture = onCapture;
   if (readSources !== undefined) searchOpts.sourceIds = readSources;
   // Paid LLM expansion: explicit per-call value wins; omitted follows the
@@ -3800,7 +3837,7 @@ async function callQuery(
   // Diary fence for the non-operator caller (mirrors callSearch).
   const snippets = capHitSnippets(fenceDiaryHits(hitsOffset, isOperator), searchSnippetChars(), readSources);
   const hits = await frameSearchHits(storage, snippets, readSources, resolveSearchKnobs(searchOpts).tokenBudget);
-  const ledger = await queryFactsForResult(storage, q, hits, readSources, !isOperator, resolveSearchKnobs(searchOpts).tokenBudget);
+  const ledger = await queryFactsForResult(storage, q, hits, readSources, !isOperator, resolveSearchKnobs(searchOpts).tokenBudget, minTrust);
   if (meta && (hits.length < snippets.length || ledger.truncated)) meta = { ...meta, degraded: [...new Set([...meta.degraded, "budget_truncated" as const])] };
   const metaOut = responseSearchMeta(meta, hits, isOperator);
   return jsonResult({ ok: true, hits, facts: ledger.facts, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}),
@@ -3811,11 +3848,13 @@ async function callQuery(
 
 async function queryFactsForResult(
   storage: Storage, q: string, hits: readonly { content: string; title?: string | null }[],
-  readSources: string[] | undefined, remote: boolean, tokenBudget?: number,
+  readSources: string[] | undefined, remote: boolean, tokenBudget?: number, minTrust?: TrustTier,
 ) {
-  const rows = await matchQueryFacts(storage.engine(), q, readSources, remote);
-  const external = await readExternalTrust(storage.engine(), { facts: rows.map(f => f.fact_id) }, readSources);
-  const framed = rows.map(f => external.facts.has(f.fact_id) ? { ...f, fact: frameExternal(f.fact), trust: "external" as const } : f);
+  const matched = await matchQueryFacts(storage.engine(), q, readSources, remote);
+  const tiers = (await readTrustTiers(storage.engine(), { facts: matched.map(f => f.fact_id) }, readSources)).facts;
+  const tierOf = (id: number): TrustTier => tiers.get(id) ?? "external";
+  const rows = matched.filter(f => meetsMinTrust(tierOf(f.fact_id), minTrust));
+  const framed = rows.map(f => tierOf(f.fact_id) !== "owner" ? { ...f, fact: frameExternal(f.fact), trust: "external" as const } : f);
   if (tokenBudget === undefined || tokenBudget <= 0) return { facts: framed, truncated: false };
   let used = hits.reduce((n, h) => n + estTokens(h.content) + estTokens(h.title ?? ""), 0);
   const facts: typeof framed = [];
@@ -4002,6 +4041,8 @@ async function callContextPack(
   if (typeof args["facts_limit"] === "number") opts.factsLimit = args["facts_limit"];
   if (typeof args["token_budget"] === "number") opts.tokenBudget = args["token_budget"];
   if (readSources !== undefined) opts.sourceIds = readSources;
+  const minTrust = parseMinTrust(args["min_trust"], "context_pack");
+  if (minTrust) opts.minTrust = minTrust;
   // Same floors as entity_facts / entity_recall: any non-operator caller reads
   // world-visible facts only, and decay (which reorders on hidden metadata) is
   // off wherever bodies are redacted; everyone else gets the MEMRAIN_FACT_DECAY
@@ -4533,9 +4574,11 @@ async function callThink(
       });
     }
   }
+  // The evidence list is for in-process callers; the tool's answer already names its citations.
+  const { evidence: _evidence, ...shown } = result;
   return jsonResult({
     ok: true,
-    ...result,
+    ...shown,
     synthesis_status: result.synthesisStatus,
     save_applied: safeSave,
     take_applied: safeTake,
@@ -4682,6 +4725,39 @@ async function callGetJobProgress(
   const progress = await getJobProgress(queue, args["id"]);
   if (!progress) return errResult(`get_job_progress: ${args["id"]} not found`);
   return jsonResult({ ok: true, ...progress });
+}
+
+/**
+ * Open loops in the caller's sources. Summaries carry a mail subject and a
+ * sender's name, so each is framed as outside text; the newest sync age is
+ * reported so a stale list never passes for a clean one.
+ */
+async function callLoopsList(
+  storage: Storage,
+  args: Record<string, unknown>,
+  readSources?: string[],
+): Promise<ToolCallResult> {
+  const engine = storage.engine();
+  const status = typeof args["status"] === "string" ? args["status"] as LoopStatus | "all" : "open";
+  const loops = await listLoops(engine, readSources, {
+    status,
+    ...(isLoopType(args["type"]) ? { loopType: args["type"] } : {}),
+    ...(typeof args["limit"] === "number" ? { limit: Math.min(args["limit"], 200) } : {}),
+  });
+  const now = new Date();
+  const fresh = await syncFreshness(engine, readSources, now, WAITING_MAX_SYNC_AGE_HOURS);
+  const stale = fresh.newest === null || now.getTime() - Date.parse(fresh.newest) >= WAITING_MAX_SYNC_AGE_HOURS * 3_600_000;
+  return jsonResult({
+    ok: true,
+    stale,
+    newest_sync: fresh.newest,
+    // Accounts with no clean sync in the window: their loops may be missing even when another account is fresh.
+    accounts_behind: fresh.stale.length,
+    ...(stale
+      ? { warning: `No mail, chat or calendar sync in the last ${WAITING_MAX_SYNC_AGE_HOURS} h: this list may be missing loops.` }
+      : fresh.stale.length > 0 ? { warning: `${fresh.stale.length} account(s) not synced in ${WAITING_MAX_SYNC_AGE_HOURS} h: their loops may be missing.` } : {}),
+    loops: loops.map(({ counterparty: _counterparty, ...l }) => ({ ...l, summary: frameExternal(l.summary), trust: "external" })),
+  });
 }
 
 async function callSourcesList(

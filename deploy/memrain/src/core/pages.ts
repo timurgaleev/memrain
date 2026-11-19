@@ -23,6 +23,7 @@ import { extractAliasNorms, setPageAliases } from "./page-aliases.ts";
 import { reconnectWantedLinks } from "./wanted-links.ts";
 import { resolveSlugWithAlias, setSlugAlias } from "./slug-aliases.ts";
 import { OperationError, PageNotFoundError, type PublicErrorEnvelope } from "./operation-error.ts";
+import { assertPageBodyWithinCap } from "./page-size.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { carryFactWithdrawals } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
@@ -35,6 +36,8 @@ import { assertTakeMutationHolder } from "./synthesis/takes-write.ts";
 import { storedTakeRowMax, syncTakesFromFence } from "./synthesis/takes-canon.ts";
 import { takePageEligibleSql } from "./synthesis/takes-owner.ts";
 import { atomPageMatches, lockAtomSource, tryLockAtomSlugs, type AtomPageExpectation, type AtomSourceExpectation } from "./synthesis/atoms-source.ts";
+import type { TrustTier } from "./trust-tier.ts";
+import { extension } from "./extension.ts";
 
 // Catalogue of well-known page types. Not enforced at the DB level (see
 // migration 015 comment); kept here so application code can normalise +
@@ -217,6 +220,12 @@ export interface PageInput {
   requireCleanNewSlug?: boolean;
   /** The authenticated principal behind the write (page_versions.written_by_principal). */
   written_by_principal?: string;
+  /**
+   * The highest tier this write may leave the page at, set in the same
+   * transaction as the write. It lowers a stored tier, never raises it.
+   * In-process writers only; no tool argument reaches it.
+   */
+  trust_tier?: TrustTier;
 }
 
 /**
@@ -568,6 +577,10 @@ export async function putPage(
       [input.slug],
     );
 
+    // A write that adds a live page asks the extension for room inside the
+    // transaction, so a limit holds under concurrent writers.
+    if (existing.rows.length === 0 || existing.rows[0]!.deleted_at !== null) await extension().beforePageAddInTx(tx);
+
     // No cross-tenant overwrite: a slug owned by another source is off-limits.
     // Only a caller that NAMES a source is fenced — the same exemption
     // `indexer-tx.ts` grants its trusted local callers, and for the same
@@ -714,6 +727,9 @@ export async function putPage(
       body = guarded.text;
       hashNew = hashBody(body);
     }
+    // Only a body this write changes is measured, so a page already over the
+    // cap can still have its title or truth edited.
+    if (current === undefined || body !== current.markdown_body) assertPageBodyWithinCap(input.slug, body);
     const requestedTruth = JSON.parse(truthJson) as Record<string, unknown>;
     const { [OUTSIDE_NEUTRALIZED]: _untrustedMarker, ...unmarkedTruth } = requestedTruth;
     const oldTruth = current?.compiled_truth as Record<string, unknown> | undefined;
@@ -794,9 +810,9 @@ export async function putPage(
       // Brand new page.
       await tx.query(
         `INSERT INTO pages (slug, type, title, compiled_truth,
-                            markdown_body, content_hash, source_id)
-         VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7)`,
-        [input.slug, type, title, truthJson, body, hashNew, sourceId],
+                            markdown_body, content_hash, source_id, trust_tier)
+         VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8)`,
+        [input.slug, type, title, truthJson, body, hashNew, sourceId, input.trust_tier ?? null],
       );
       await tx.query(
         `INSERT INTO page_versions
@@ -855,9 +871,11 @@ export async function putPage(
              markdown_body = $5,
              content_hash = $6,
              updated_at = NOW(),
-             deleted_at = NULL
+             deleted_at = NULL,
+             trust_tier = CASE WHEN $7::text IS NULL THEN trust_tier
+                               ELSE memrain_min_trust_tier(COALESCE(trust_tier, 'owner'), $7::text) END
        WHERE slug = $1 RETURNING slug`,
-      [input.slug, type, title, truthJson, body, hashNew],
+      [input.slug, type, title, truthJson, body, hashNew, input.trust_tier ?? null],
     );
     if (updated.rows.length !== 1) {
       throw new OperationError("conflict", `page '${input.slug}' vanished during the write`, "Retry the write.");
@@ -1306,44 +1324,51 @@ export async function deletePage(
     if (r.rows.length === 0 || r.rows[0]!.deleted_at !== null) {
       return { slug, already_deleted: true };
     }
-    const ts = new Date().toISOString();
-    const updated = await tx.query(
-      `UPDATE pages SET deleted_at = NOW(), updated_at = NOW()
-        WHERE slug = $1${sourceFilter} RETURNING slug`,
-      params,
-    );
-    if (updated.rows.length !== 1) {
-      throw new OperationError("conflict", `page '${slug}' vanished during the write`, "Retry the write.");
-    }
-    // Append a tombstone version so the history shows the deletion event.
-    const nextN = await tx.query<{ n: number }>(
-      `SELECT COALESCE(MAX(version_n), 0)::int + 1 AS n
-         FROM page_versions WHERE slug = $1`,
-      [slug],
-    );
-    const tombstone = JSON.stringify({ deleted_at: ts });
-    // The marker belongs to the page's owner, so its own scoped history read
-    // still sees the deletion.
-    await tx.query(
-      `INSERT INTO page_versions
-         (slug, version_n, hash_prev, hash_new,
-          body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id, written_by_principal, change_reason)
-       VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6, $7, $8)`,
-      [
-        slug,
-        nextN.rows[0]!.n,
-        r.rows[0]!.content_hash,
-        tombstone,
-        writtenBy ?? null,
-        r.rows[0]!.source_id,
-        opts.writtenByPrincipal ?? null,
-        reason === null ? null : guardedReason.text,
-      ],
-    );
-    await bumpPageGeneration(tx, slug);
+    await softDeleteLockedPage(tx, { slug, content_hash: r.rows[0]!.content_hash, source_id: r.rows[0]!.source_id }, {
+      writtenBy: writtenBy ?? null,
+      writtenByPrincipal: opts.writtenByPrincipal ?? null,
+      changeReason: reason === null ? null : guardedReason.text,
+    });
     await auditSecrets(tx, guardedReason.findings, slug, scope);
     return { slug, already_deleted: false };
   });
+}
+
+/**
+ * The soft delete itself, for a live page the caller has locked and read
+ * inside `tx`: set `deleted_at` and append a tombstone version, so the history
+ * shows the deletion and restorePage can undo it.
+ */
+export async function softDeleteLockedPage(
+  tx: Engine,
+  page: { slug: string; content_hash: string; source_id: string },
+  by: { writtenBy: string | null; writtenByPrincipal: string | null; changeReason: string | null },
+): Promise<void> {
+  const ts = new Date().toISOString();
+  const updated = await tx.query(
+    `UPDATE pages SET deleted_at = NOW(), updated_at = NOW()
+      WHERE slug = $1 AND source_id = $2 AND deleted_at IS NULL RETURNING slug`,
+    [page.slug, page.source_id],
+  );
+  if (updated.rows.length !== 1) {
+    throw new OperationError("conflict", `page '${page.slug}' vanished during the write`, "Retry the write.");
+  }
+  const nextN = await tx.query<{ n: number }>(
+    `SELECT COALESCE(MAX(version_n), 0)::int + 1 AS n
+       FROM page_versions WHERE slug = $1`,
+    [page.slug],
+  );
+  const tombstone = JSON.stringify({ deleted_at: ts });
+  // The marker belongs to the page's owner, so its own scoped history read
+  // still sees the deletion.
+  await tx.query(
+    `INSERT INTO page_versions
+       (slug, version_n, hash_prev, hash_new,
+        body_snapshot, compiled_truth_snapshot, written_by, written_at, source_id, written_by_principal, change_reason)
+     VALUES ($1, $2, $3, $3, '', $4::text::jsonb, $5, NOW(), $6, $7, $8)`,
+    [page.slug, nextN.rows[0]!.n, page.content_hash, tombstone, by.writtenBy, page.source_id, by.writtenByPrincipal, by.changeReason],
+  );
+  await bumpPageGeneration(tx, page.slug);
 }
 
 export interface RestoreResult {
@@ -1388,6 +1413,7 @@ export async function restorePage(
     if (r.rows.length === 0 || r.rows[0]!.deleted_at === null) {
       return { slug, restored: false };
     }
+    await extension().beforePageAddInTx(tx);
     const updated = await tx.query(
       `UPDATE pages SET deleted_at = NULL, updated_at = NOW() WHERE slug = $1${sourceFilter} RETURNING slug`,
       params,
@@ -1608,7 +1634,7 @@ export async function renamePage(
         throw new OperationError("invalid_params", "New page slugs cannot have repeated or trailing hyphens.");
       }
       const imported = await tx.query<{ managed: boolean }>(
-        `SELECT (s.kind IN ('github', 'transcript', 'mailbox', 'calendar', 'code', 'webhook')
+        `SELECT (s.kind IN ('github', 'transcript', 'mailbox', 'calendar', 'code', 'webhook', 'chat', 'meeting')
           OR p.compiled_truth->>'provider' = 'github'
           OR (p.compiled_truth ? 'conversation_id' AND p.compiled_truth ? 'format')
           OR EXISTS (SELECT 1 FROM page_versions v WHERE v.slug = p.slug
@@ -1637,9 +1663,9 @@ export async function renamePage(
     await tx.query(
       `INSERT INTO pages
          (slug, type, title, compiled_truth, markdown_body,
-          content_hash, source_id, created_at, updated_at)
+          content_hash, source_id, created_at, updated_at, trust_tier)
        SELECT $2, type, title, compiled_truth, markdown_body,
-              content_hash, source_id, created_at, NOW()
+              content_hash, source_id, created_at, NOW(), trust_tier
          FROM pages WHERE slug = $1`,
       [fromSlug, toSlug],
     );

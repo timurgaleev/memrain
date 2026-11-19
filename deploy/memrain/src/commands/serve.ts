@@ -4,9 +4,12 @@
  * Loads config (created by `init`), opens PGLite, starts the server,
  * registers SIGINT/SIGTERM for graceful shutdown.
  */
+import { assertExtensionPresent } from "../core/extension.ts";
 import { randomBytes } from "node:crypto";
 import { Storage } from "../core/storage.ts";
 import { startServer } from "../http/server.ts";
+import { publishJobEvent } from "../http/admin-events.ts";
+import { noteCycleRun, noteOfficeRuntime } from "../http/admin-office.ts";
 import { isRelyingParty, resolveRelyingParty } from "../core/webauthn-config.ts";
 import { loadConfig, selfIssuedMismatch } from "../core/config.ts";
 import { startCycleLoop, type CycleHandle } from "../recipes/cycle.ts";
@@ -31,6 +34,28 @@ import {
 import { basename } from "node:path";
 import { getFactsQueue } from "../core/facts-queue.ts";
 import { eventLoopWatchdogMs, startEventLoopWatchdog } from "../core/event-loop-watchdog.ts";
+import { REMEDIATION_JOB_KIND, SUBAGENT_JOB_KIND } from "../core/jobs/kinds.ts";
+import { longDaemonKinds } from "../core/daemons/registry.ts";
+import { envSwitches } from "../core/daemons/controls.ts";
+import { startDaemonScheduler, stopDaemonScheduler } from "../core/daemons/scheduler.ts";
+import { registerConnectorRuntimeIfEnabled } from "../core/connectors/runtime.ts";
+import { registerNotificationsDaemon } from "../core/notifications/job.ts";
+import { registerLoopsSweepDaemon } from "../core/loops/job.ts";
+
+const MAX_JOB_CONCURRENCY = 8;
+
+/**
+ * Worker concurrency and lanes. MEMRAIN_JOB_CONCURRENCY (1-8, default 1) sets
+ * the slots; at 2 or more the long kinds leave one slot for short jobs.
+ */
+export function workerLaneOptions(env: NodeJS.ProcessEnv = process.env): { concurrency: number; longKinds: string[] } {
+  const raw = env.MEMRAIN_JOB_CONCURRENCY?.trim();
+  const n = raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : 1;
+  return {
+    concurrency: n >= 1 && n <= MAX_JOB_CONCURRENCY ? n : 1,
+    longKinds: [REMEDIATION_JOB_KIND, SUBAGENT_JOB_KIND, ...longDaemonKinds()],
+  };
+}
 
 export interface ServeOptions {
   http: boolean;
@@ -107,6 +132,7 @@ export async function bootTokenSweep(
 }
 
 export async function runServe(opts: ServeOptions): Promise<void> {
+  assertExtensionPresent();
   const watchdogMs = eventLoopWatchdogMs();
   if (!opts.http) {
     throw new Error(
@@ -157,7 +183,8 @@ export async function runServe(opts: ServeOptions): Promise<void> {
   if (process.env.MEMRAIN_HNSW_ZOMBIE_SWEEP === "1") {
     try {
       const { dropZombieIndexes } = await import("../core/vector-index.ts");
-      const { dropped } = await dropZombieIndexes(storage.engine());
+      const { withDirectEngine } = await import("../core/engine/direct.ts");
+      const { dropped } = await withDirectEngine(storage.engine(), dropZombieIndexes);
       if (dropped.length > 0) {
         console.error(
           `[hnsw] startup sweep dropped ${dropped.length} invalid index(es): ${dropped.join(", ")}`,
@@ -310,6 +337,7 @@ export async function runServe(opts: ServeOptions): Promise<void> {
     watchdog.stop();
     console.log(`[memrain] received ${signal}, shutting down`);
     await getFactsQueue().shutdown();
+    await stopDaemonScheduler();
     await worker.stop();
     if (cycle) await cycle.stop();
     await server.stop();
@@ -441,6 +469,8 @@ export function startBackgroundWork(
     // overlap elects ONE active worker via the worker_lock row; the rest idle
     // until the holder's heartbeat lapses (migration 042).
     engine: storage.engine(),
+    ...workerLaneOptions(),
+    onJobEvent: e => publishJobEvent(e),
   };
   const jobTimeoutRaw = process.env.MEMRAIN_JOB_TIMEOUT_MS?.trim();
   // Strict: digits only (reject "100abc" -> 100, "1e9" -> 1, negatives, blanks),
@@ -467,6 +497,16 @@ export function startBackgroundWork(
   // Register the `page_mirror` handler: with MEMRAIN_PAGE_MIRROR_SYNC=0 the write
   // path queues the search mirror instead of running it inline.
   registerPageMirrorHandler(storage);
+  // Connector sync runs only with MEMRAIN_CONNECTORS_ENABLED on and a usable
+  // connector key; without the handler the scheduler queues no connector_sync.
+  // The notifications daemon is off until enabled; registering it only lets
+  // the scheduler queue it once the operator turns it on.
+  registerNotificationsDaemon(storage.engine());
+  // Same for loops_sweep: free, and off until the operator enables it.
+  registerLoopsSweepDaemon(storage.engine());
+  if (registerConnectorRuntimeIfEnabled(storage)) {
+    console.log("[memrain] connector sync enabled (connector_sync jobs; the daemon stays off until enabled)");
+  }
   // The operator's agent loop runs only when opted in: without the handler a
   // `subagent` submit is refused as an unknown kind.
   if (registerSubagentHandlerIfEnabled(storage)) {
@@ -478,8 +518,14 @@ export function startBackgroundWork(
     console.log(
       `[memrain] jobs worker started (intervalMs=${deps.workerIntervalMs}${
         workerOpts.jobTimeoutMs ? `, jobTimeoutMs=${workerOpts.jobTimeoutMs}` : ""
-      })`,
+      }${(workerOpts.concurrency ?? 1) > 1 ? `, concurrency=${workerOpts.concurrency}` : ""})`,
     );
+    // The daemon scheduler only queues work for the worker, so it runs where
+    // the worker does, and only when opted in.
+    if (envSwitches().on) {
+      startDaemonScheduler(storage.engine());
+      console.log("[memrain] daemon scheduler started (MEMRAIN_DAEMONS=1)");
+    }
   }
 
   // Cycle loop. Off by default; opt in via env or memrain.yml. The
@@ -501,7 +547,12 @@ export function startBackgroundWork(
     cycle = deps.startCycleLoop(storage, {
       intervalMs: cycleIntervalS * 1000,
       staleDays: cycleStaleDays,
+      onRun: e => {
+        noteCycleRun(e.phase);
+        publishJobEvent({ worker: "cycle", kind: "cycle", ...e });
+      },
     });
   }
+  noteOfficeRuntime({ jobsWorker: quiescence.jobsWorker, cycleLoop: cycle !== null });
   return { worker, cycle };
 }

@@ -40,13 +40,16 @@ export const QUARANTINE_OVERRIDE_KEY = "quarantine_override";
 /**
  * Frontmatter keys only the gate and trusted local paths may set. An untrusted
  * write has them stripped before the gate runs. `embed_skip` is spelled out
- * rather than imported: embed-skip.ts imports this module.
+ * rather than imported: embed-skip.ts imports this module. So are the write
+ * gate's verdict and approval keys (write-gate.ts WRITE_GATE_OWNED_KEYS).
  */
 export const GATE_OWNED_KEYS: readonly string[] = Object.freeze([
   QUARANTINE_KEY,
   CONTENT_FLAG_KEY,
   "embed_skip",
   QUARANTINE_OVERRIDE_KEY,
+  "write_gate",
+  "write_gate_approval",
 ]);
 
 export interface QuarantineOverride {

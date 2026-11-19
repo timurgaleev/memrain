@@ -11,11 +11,10 @@ tools:
   - page_get
   - page_list
   - entity_timeline
-  - recall
+  - entity_facts
   - fact_supersessions
   - get_recent_salience
   - chronicle_since
-  - chronicle_last_seen
   - run_doctor
 mutating: false
 ---
@@ -37,15 +36,15 @@ Compile a daily briefing from brain context.
 
 ## Phases
 
-0. **Hot memory pulse.** Before composing anything else, pull the
-   since-last-briefing window and its deltas:
+0. **Hot memory pulse.** Before composing anything else, pick the window:
+   the date of the last briefing when the operator gives one, otherwise
+   yesterday (`<since>`, `YYYY-MM-DD`). Then pull its deltas:
 
    ```
-   chronicle_last_seen            → when the operator was last briefed
-   recall { since: <last_seen> }  → new facts in the window
-   fact_supersessions             → contradictions resolved in the window
-   get_recent_salience            → top entities by recent activity
-   chronicle_since <last_seen>    → the narrative of what happened
+   fact_supersessions { since: <since> }         → contradictions resolved in the window
+   get_recent_salience { days: <window days> }   → top entities by recent activity
+   entity_facts { entity_slug, since: <since> }  → new facts, per top entity
+   chronicle_since { since: <since> }            → the narrative of what happened
    ```
 
    Fold the result into the briefing under a "Brain pulse" section at the top:
@@ -53,16 +52,16 @@ Compile a daily briefing from brain context.
       with these because they're new corrections to your model of the world.
    2. **Top mentions** — from `get_recent_salience` (top 5 entity slugs by
       recent-activity weight in the window).
-   3. **New facts since last briefing** — group the `recall` facts under each
+   3. **New facts since last briefing** — the `entity_facts` rows for each
       entity from the salience list; include `kind`, `notability`, and `confidence`.
    4. **Consolidation footer** — the brain's background cycle handles fact
       consolidation on its own schedule; if `run_doctor` reports the cycle in a
       warn state, note it so the operator can run `memrain cycle` before reading
       further.
 
-   `chronicle_last_seen` advances the cursor so the next briefing picks up
-   exactly where this one left off — no local cursor file to manage; the
-   brain tracks it server-side, which also makes timer-driven runs safe.
+   The brain keeps no briefing cursor. A timer-driven run passes its own
+   window (for example the last 24 hours), so runs never depend on state
+   left by an earlier one.
 
 1. **Today's meetings.** For each meeting on the calendar:
    - `search` the brain for each participant by name
@@ -163,5 +162,5 @@ When presenting facts from brain pages, include inline citations:
 - List pages by prefix (`page_list`)
 - Check brain health (`run_doctor`)
 - View timeline entries (`entity_timeline`)
-- Pull the since-last-run pulse (`recall`, `fact_supersessions`,
-  `get_recent_salience`, `chronicle_since`, `chronicle_last_seen`)
+- Pull the window's pulse (`fact_supersessions`, `get_recent_salience`,
+  `entity_facts`, `chronicle_since`)

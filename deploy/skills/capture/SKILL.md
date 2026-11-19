@@ -19,9 +19,12 @@ writes_pages:
 # capture — the single ingestion entrypoint
 
 When the user wants to save a thought, an article snippet, a transcript
-fragment, or any text into their brain, run `memrain capture`. Don't reach
-for a raw `page_put` from the shell — `capture` is the front door and it
-handles slugging, frontmatter, and the receipt for you.
+fragment, or any text into their brain, save it as one page under `inbox/`.
+From an MCP client (the plugin, or any agent without a shell on the brain's
+host), that is a `page_put` with an `inbox/YYYY-MM-DD-<hash8>` slug and the
+frontmatter stamps below. On the brain's host shell, `memrain capture` does
+the same and handles slugging, frontmatter, and the receipt for you; don't
+hand-roll a `page_put` from that shell.
 
 ## Contract
 
@@ -53,6 +56,15 @@ location. From an MCP client (no shell), the equivalent is a direct
 `page_put` with an `inbox/` slug and the same frontmatter stamps.
 
 ## How to use
+
+From an MCP client:
+
+```
+page_put { slug: "inbox/2026-05-21-abcdef12", type: "note",
+           markdown_body: "# The thought\n\nthe thought I want to remember" }
+```
+
+On the brain's host:
 
 ```bash
 memrain capture "the thought I want to remember"

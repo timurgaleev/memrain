@@ -332,8 +332,10 @@ export interface FanoutOptions {
   onSeedsResolved?: (n: number) => void;
 }
 
+const hasPageFilters = (f: PageFilters | undefined): boolean => Boolean(f?.types?.length || f?.slugPrefix || f?.minTrust);
+
 async function eligibleRelationalSlugs(storage: Storage, slugs: string[], opts: FanoutOptions): Promise<Set<string>> {
-  if (!opts.filters?.types?.length && !opts.filters?.slugPrefix) return new Set(slugs);
+  if (!hasPageFilters(opts.filters)) return new Set(slugs);
   if (slugs.length === 0) return new Set();
   const params: unknown[] = [slugs];
   const scope = andSourceScope("p.source_id", opts.sourceIds, params);
@@ -396,7 +398,7 @@ export async function fanoutRelational(
     const hits = await traverseGraph(storage, seedSlug, {
       direction: parsed.direction,
       maxDepth: depth,
-      limit: opts.filters?.types?.length || opts.filters?.slugPrefix ? 1000 : limit,
+      limit: hasPageFilters(opts.filters) ? 1000 : limit,
       sourceIds,
     });
     const eligible = await eligibleRelationalSlugs(storage, hits.map(h => h.slug), opts);

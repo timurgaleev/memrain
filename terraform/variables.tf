@@ -74,6 +74,53 @@ variable "use_ssh_deploy_key" {
   default     = false
 }
 
+variable "enable_connector_kek_secret" {
+  description = <<-EOT
+    Create the empty <secrets_prefix>/memrain-connector-kek secret that holds
+    the connector key (32 random bytes, base64) and let the instance role read
+    it. Terraform never writes the value: put it in by hand afterwards
+    (docs/connectors/KEY.md). Off by default; connectors stay closed without it.
+
+    The secret is prevent_destroy: flipping this back to false fails at plan
+    until the secret is dropped from state with
+    `terraform state rm 'aws_secretsmanager_secret.connector_kek[0]'`.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "enable_notify_webhook_secret" {
+  description = <<-EOT
+    Create the empty <secrets_prefix>/memrain-notify-webhook secret holding the
+    HMAC key that signs outgoing notification webhooks, and let the instance
+    role read it. Value put in by hand, like the connector key. Off by default.
+    prevent_destroy, same retirement path as enable_connector_kek_secret.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "rds_instance_class" {
+  description = "RDS instance class."
+  type        = string
+  default     = "db.t4g.micro"
+}
+
+variable "instance_metadata_hop_limit" {
+  description = <<-EOT
+    IMDSv2 PUT response hop limit of the EC2 instance. 2 lets containers reach
+    IMDS (the brain uses the instance role from its container). 1 stops every
+    container at the docker bridge; the host itself keeps IMDS.
+  EOT
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = contains([1, 2], var.instance_metadata_hop_limit)
+    error_message = "instance_metadata_hop_limit must be 1 or 2."
+  }
+}
+
 variable "ssh_public_key" {
   description = <<-EOT
     Public key (ssh-rsa / ssh-ed25519) to register as the EC2 key pair.

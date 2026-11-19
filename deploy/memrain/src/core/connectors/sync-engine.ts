@@ -1,0 +1,970 @@
+/**
+ * The connector sync engine: one run of one connector account.
+ *
+ * A provider adapter turns its API into pages of already-rendered items per
+ * stream (a mail history feed, a calendar, a channel). The engine owns
+ * everything the providers share:
+ *
+ *   - gates before anything is decrypted or fetched: the global switch
+ *     (MEMRAIN_CONNECTORS_ENABLED=1, off by default), the account being
+ *     enabled and active, its daily item cap and its daily dollar cap, and a
+ *     per-account run lock;
+ *   - writing: live connector tokens are swept out of the text, then each item
+ *     goes through putPage as outside text (secret scan under the redact
+ *     disposition whatever the operator set, gate keys stripped)
+ *     into the account's source and is mirrored into search, with every paid
+ *     embedding booked to `connector:<account>` under the account's cap;
+ *   - cursors: a stream's cursor moves to a page's checkpoint only when every
+ *     item up to it is written, unchanged, a duplicate or held, so an
+ *     interrupted run resumes without skipping anything;
+ *   - holds: an item failing ITEM_HOLD_AFTER runs in a row on one version is
+ *     held with a back-off and stops blocking its stream; a refusal no retry
+ *     can change is held at once; when at least SOURCE_OUTAGE_MIN items of a
+ *     page fail and half of them share one error, it is the source failing,
+ *     and no item is blamed;
+ *   - deletions: each upstream deletion is recorded as pending; at the end of
+ *     the run, past the mass-delete guard (retention.ts massDeleteVerdict:
+ *     more than 200 items, or at least 10 that are more than 5% of the
+ *     account's items, all configurable) holds them all for the owner,
+ *     otherwise each is handed to the deletion handler one by one (the
+ *     runtime's soft-deletes the page and its parts, retention.ts); with no
+ *     handler wired they stay pending, and a page a live duplicate still
+ *     points at is never handed over;
+ *   - size: a body past the part size (2 MiB, or MEMRAIN_PAGE_MAX_BYTES when
+ *     lower) is written as a contents page at the item's slug plus
+ *     `<slug>/part-NNN` pages carrying the item's truth and `part_of`, so a
+ *     long transcript is stored whole and deleted whole; when it shrinks,
+ *     the parts the new split lacks are soft-deleted (deleteStaleParts);
+ *   - enrichment: an item that carries its participants (enrich) is handed
+ *     to `onItemWritten` once its page is written and before its checkpoint
+ *     commits, which links the people pages the brain already has and, for an
+ *     event or meeting, writes one chronicle row (enrich-deterministic.ts);
+ *     an enrichment failure is recorded as an item failure, so the item is
+ *     not settled and the next run writes and enriches it again;
+ *   - a page retention detached for a person's edit (retention.ts) is never
+ *     written again: its item settles on it unchanged;
+ *   - retention: after the deletions, `sweepRetention` hard-deletes the
+ *     account's pages whose last activity is older than their kind's window
+ *     (retention.ts), at most 500 per run, past the same mass-delete guard:
+ *     over it, the aged pages are held for the owner and none is deleted;
+ *   - a page whose mirror into search failed is not settled: it counts as an
+ *     item failure, holds the cursor, and is mirrored again next run;
+ *   - a credential the provider will not renew pauses the account
+ *     (`markNeedsReconnect`), opens a notice and leaves every cursor where it
+ *     was, so reconnecting resumes from the same place;
+ *   - an OAuth app the provider refused ends the run at the first refusal
+ *     (`client_rejected`) and leaves the account as it is: no reconnect fixes
+ *     an app. While the runtime holds the app (`clientHeld`), a run asks the
+ *     provider nothing.
+ */
+import type { Storage } from "../storage.ts";
+import type { EmbedFn } from "../indexer.ts";
+import { putPage } from "../pages.ts";
+import { mirrorPage } from "../page-index.ts";
+import { syncWikilinksForPage } from "../links.ts";
+import { logIngest } from "../ingest-log.ts";
+import { OperationError, PageNotFoundError } from "../operation-error.ts";
+import { getSource } from "../sources.ts";
+import { DEFAULT_SPLIT_PART_BYTES, pageMaxBytes, splitLargeDocument, type PageDraft } from "../page-size.ts";
+import { sweepEchoes, withSecretDisposition, type SecretFinding } from "../secret-scan.ts";
+import { daySpendUsd, runWithSpendClient, utcDayStart } from "../budget.ts";
+import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
+import type { ConnectorClient, ConnectorResponse, TokenSource } from "./client.ts";
+import { isDeterministicRefusal } from "./github.ts";
+import type { ConnectorAccountStatus } from "./accounts.ts";
+import { deleteStaleParts, DETACHED_ORIGIN, massDeleteVerdict } from "./retention.ts";
+import { accountRef, type ConnectorDataKind, type Person } from "./model.ts";
+import { mapLoopSignalsText, type LoopSignals } from "../loops/signals.ts";
+import { connectorsSwitchOn } from "./vault.ts";
+import { extension } from "../extension.ts";
+import { ReauthRequiredError, type ConnectorRunStatus, type ResponseClass } from "./types.ts";
+import {
+  DELETE_CONFIRMED,
+  DELETE_PENDING,
+  getItem,
+  heldItemCount,
+  holdPendingDeletes,
+  itemsInDeletionState,
+  itemsPresent,
+  itemsSeenSince,
+  markDeletesPending,
+  markUnseenDeletesPending,
+  openNotice,
+  pageForDedupeKey,
+  pageSharedByLiveItem,
+  readCursor,
+  recordDeleteApplied,
+  recordItemFailure,
+  recordItemSettled,
+  resolveNotice,
+  RETENTION_STATES,
+  touchItem,
+  writeCursor,
+  DELETION_STATES,
+} from "./sync-store.ts";
+
+/** What the engine needs to know about a connector account. */
+export interface SyncAccount {
+  id: string;
+  sourceId: string;
+  provider: string;
+  enabled: boolean;
+  /** Only `active` runs; `paused`, `needs_reconnect`, `revoked` and the rest are skipped. */
+  status: ConnectorAccountStatus;
+  itemCapDaily: number;
+  spendCapUsdDaily: number;
+  /** The provider-side identity; adapters render with it and deletion matches its hash. */
+  accountLabel?: string;
+  /** The provider services this account was granted (`calendar`, `gmail`, ...). */
+  services?: readonly string[];
+  /** The account's settings (selected calendars, history window, ...); adapters validate what they read. */
+  config?: Readonly<Record<string, unknown>>;
+}
+
+/** What deterministic enrichment needs from an item once its page is stored. */
+export interface ItemEnrichment {
+  kind: ConnectorDataKind;
+  occurredAt: string;
+  participants: Person[];
+  bulk: boolean;
+  /** Reply state the loop sweep judges (loops/signals.ts). */
+  loop?: LoopSignals;
+}
+
+/** One provider item, rendered and ready to store. */
+export interface RenderedSyncItem {
+  externalId: string;
+  version: string | null;
+  slug: string;
+  type: string;
+  title: string;
+  body: string;
+  /** Stable across providers (Message-ID, iCalUID), so one thread seen twice is stored once. */
+  dedupeKey?: string | null;
+  /** Compiled truth from the renderer (`origin: connector`, the account's ref); deletion is fenced by it. */
+  truth?: Record<string, unknown>;
+  /** Set when the item's people and time should be linked once it is stored (`onItemWritten`). */
+  enrich?: ItemEnrichment;
+  failure?: undefined;
+}
+
+/**
+ * An item the adapter could not read or render; counted toward its hold.
+ * `holdNow` marks a failure no retry of the same version can fix: the item
+ * is held at once instead of blocking its stream for ITEM_HOLD_AFTER runs.
+ */
+export interface FailedSyncItem {
+  externalId: string;
+  version: string | null;
+  failure: { code: string; message: string; holdNow?: boolean };
+}
+
+export type SyncItem = RenderedSyncItem | FailedSyncItem;
+
+export type PageResult =
+  | {
+    ok: true;
+    items: SyncItem[];
+    /** External ids the provider reports deleted. */
+    deletions?: string[];
+    /** Where the stream resumes after this page; null when this page is no resume point. */
+    checkpoint: string | null;
+    /** No more pages in this run. */
+    done: boolean;
+    /**
+     * On the last page of a full relisting: every stored item whose external
+     * id starts with `prefix` and that this listing did not touch since
+     * `unseenSince` (ISO) is gone upstream and is deleted like a reported one.
+     * Only honoured when the whole page settled and `done` is set.
+     */
+    reconcile?: { prefix: string; unseenSince: string };
+  }
+  | { ok: false; response: ConnectorResponse };
+
+/**
+ * How many items the run may still store. The engine stops a run at the item
+ * cap even in the middle of a page, and a page that never settles never moves
+ * its stream's cursor: an adapter whose provider pages are larger than one run
+ * may store would replay the same first items forever. So an adapter keeps
+ * each page within `remaining`, or, when the provider wants the same page size
+ * on every request of a listing (a page token issued for one size), within
+ * `perRun`, which a later run can always settle whole.
+ */
+export interface ItemBudget {
+  /** Items this run may still store; at least 1 whenever `page` is called. */
+  remaining: number;
+  /** The most one run can ever store: the smaller of the per-run and the daily item cap. */
+  perRun: number;
+}
+
+export interface SyncAdapter {
+  streams(account: SyncAccount): string[];
+  page(ctx: { client: ConnectorClient; account: SyncAccount; stream: string; cursor: string | null; page: number; budget?: ItemBudget }): Promise<PageResult>;
+}
+
+export interface UpstreamDeletion {
+  accountId: string;
+  sourceId: string;
+  externalId: string;
+  pageSlug: string | null;
+}
+
+export interface AccountGateway {
+  /** Pause the account (status `needs_reconnect`) until its owner reconnects it. */
+  markNeedsReconnect(accountId: string, reason: string): Promise<void>;
+  /** Optional: remember the run on the account row. */
+  recordRun?(accountId: string, result: SyncRunResult): Promise<void>;
+  /**
+   * Optional: whether the provider refused the OAuth app this account renews
+   * with, recently enough that a run would only be refused again. A held run
+   * opens no credential and asks the provider nothing.
+   */
+  clientHeld?(account: SyncAccount): Promise<boolean>;
+}
+
+export interface SyncDeps {
+  adapter: SyncAdapter;
+  /**
+   * Open the account's credential. Throws when it cannot (no key, no row).
+   * Every token the credential holds, refresh tokens included, is handed to
+   * `secret` as soon as it is read or renewed, so a synced item quoting one
+   * is redacted before it is written.
+   */
+  tokenSource(account: SyncAccount, secret: (value: string) => void): Promise<TokenSource>;
+  client(account: SyncAccount, tokenSource: TokenSource): ConnectorClient;
+  accounts: AccountGateway;
+  /**
+   * Apply one upstream deletion to the brain. Without it a deletion is only
+   * recorded on the item row and the page stays.
+   */
+  onUpstreamDelete?(storage: Storage, item: UpstreamDeletion): Promise<void>;
+  /**
+   * Hard-delete the account's pages past their retention window, after the
+   * run's own deletions; returns how many went. Skipped on a run that stopped
+   * for a reconnect or a refusal, as the deletions are.
+   */
+  sweepRetention?(storage: Storage): Promise<number>;
+  /**
+   * Called once per stored item that carries `enrich`, after its page's
+   * wikilink sync (which replaces a page's wanted rows wholesale) and before
+   * the page's checkpoint commits. A PageNotFoundError is skipped; any other
+   * failure marks the item as failing, so the next run enriches it again.
+   */
+  onItemWritten?(storage: Storage, item: RenderedSyncItem & { enrich: ItemEnrichment }): Promise<void>;
+  embedFn?: EmbedFn;
+  now?: () => number;
+  env?: Record<string, string | undefined>;
+  /** This worker's name in the run lock. */
+  holder?: string;
+  /** Largest page body before an item is split into parts; defaults as described above. */
+  maxPartBytes?: number;
+}
+
+export type SyncStopReason =
+  | "connectors_disabled"
+  | "account_disabled"
+  | "account_inactive"
+  | "locked"
+  | "lock_lost"
+  | "cap_reached"
+  | "item_cap_reached"
+  | "credentials_unavailable"
+  | "needs_reconnect"
+  | "client_rejected"
+  | "forbidden"
+  | "fetch_failed"
+  | "source_outage"
+  | "items_failed"
+  | "deletions_failed"
+  | "page_limit"
+  | "paused";
+
+export interface SyncCounts {
+  items: number;
+  pages_written: number;
+  pages_unchanged: number;
+  duplicates: number;
+  items_failed: number;
+  items_held: number;
+  items_skipped_held: number;
+  deletions_seen: number;
+  deletions_applied: number;
+  deletions_held: number;
+  /** Pages past their retention window that the run's sweep hard-deleted. */
+  retention_deleted: number;
+  mirror_failures: number;
+}
+
+export interface SyncStreamResult {
+  stream: string;
+  cursor_before: string | null;
+  cursor_after: string | null;
+  pages: number;
+  clean: boolean;
+}
+
+export interface SyncRunResult {
+  account_id: string;
+  source_id: string;
+  status: ConnectorRunStatus | "skipped";
+  /** Why the run stopped short; null for a full run. */
+  stop_reason: SyncStopReason | null;
+  counts: SyncCounts;
+  streams: SyncStreamResult[];
+  error_class: ResponseClass | null;
+  http_status: number | null;
+  /** Safe to print: built from status codes and classes, tokens scrubbed. */
+  error: string | null;
+}
+
+const DEFAULT_MAX_ITEMS_PER_RUN = 500;
+/** Pages per stream per run; past it the run stops partial instead of looping. */
+export const MAX_PAGES_PER_STREAM = 1000;
+export const SOURCE_OUTAGE_MIN = 5;
+const RUN_LOCK_TTL_SEC = 900;
+const LOG_SLUG_CAP = 500;
+const WRITTEN_BY_PREFIX = "connector-";
+
+export function syncLockId(accountId: string): string {
+  return `connector-sync:${accountId}`;
+}
+
+/** The spend ledger client every paid call of this account's runs books to. */
+export function connectorSpendClient(accountId: string): string {
+  return `connector:${accountId}`;
+}
+
+type Env = Record<string, string | undefined>;
+
+function positiveInt(env: Env, name: string, fallback: number): number {
+  const n = Number((env[name] ?? "").trim());
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+
+function emptyCounts(): SyncCounts {
+  return {
+    items: 0, pages_written: 0, pages_unchanged: 0, duplicates: 0, items_failed: 0, items_held: 0,
+    items_skipped_held: 0, deletions_seen: 0, deletions_applied: 0, deletions_held: 0, retention_deleted: 0, mirror_failures: 0,
+  };
+}
+
+/** A token source that remembers every token it handed out, so none can be written into a page. */
+function recordingSource(inner: TokenSource, secret: (value: string) => void): TokenSource {
+  const keep = (t: string): string => {
+    secret(t);
+    return t;
+  };
+  return {
+    token: async () => keep(await inner.token()),
+    refresh: async (stale) => keep(await inner.refresh(stale)),
+  };
+}
+
+interface PageFailure {
+  externalId: string;
+  version: string | null;
+  code: string;
+  message: string;
+  deterministic: boolean;
+  /** The adapter held it (FailedSyncItem.holdNow): its own verdict on one item, never the source failing. */
+  adapterHold?: boolean;
+}
+
+/** The single error code shared by most of a page's failures, when the source itself is failing. */
+function sourceOutage(failures: readonly PageFailure[], pageItems: number): string | null {
+  if (failures.length < SOURCE_OUTAGE_MIN) return null;
+  const byCode = new Map<string, number>();
+  for (const f of failures) byCode.set(f.code, (byCode.get(f.code) ?? 0) + 1);
+  let top: [string, number] = ["", 0];
+  for (const entry of byCode) if (entry[1] > top[1]) top = entry;
+  return top[1] * 2 >= pageItems ? top[0] : null;
+}
+
+export async function runConnectorSync(storage: Storage, account: SyncAccount, deps: SyncDeps): Promise<SyncRunResult> {
+  const env = deps.env ?? process.env;
+  const now = deps.now ?? Date.now;
+  const engine = storage.engine();
+  const result: SyncRunResult = {
+    account_id: account.id,
+    source_id: account.sourceId,
+    status: "skipped",
+    stop_reason: null,
+    counts: emptyCounts(),
+    streams: [],
+    error_class: null,
+    http_status: null,
+    error: null,
+  };
+  const skip = (reason: SyncStopReason, status: SyncRunResult["status"] = "skipped"): SyncRunResult => {
+    result.status = status;
+    result.stop_reason = reason;
+    return result;
+  };
+  // A run its own cap or a missing credential stopped is reported to the
+  // account like a finished one, so its status does not keep showing the last
+  // good run. The gates before it (switch off, account off, run locked) did
+  // nothing worth recording.
+  const stopped = async (reason: SyncStopReason): Promise<SyncRunResult> => {
+    skip(reason, "partial");
+    await deps.accounts.recordRun?.(account.id, result);
+    return result;
+  };
+
+  if (!connectorsSwitchOn(env)) return skip("connectors_disabled");
+  if (await extension().paused()) return skip("paused");
+  if (!account.enabled) return skip("account_disabled");
+  if (account.status !== "active") return skip("account_inactive");
+  if ((await getSource(engine, account.sourceId)) === null) {
+    throw new OperationError("invalid_params", `connector account ${account.id} points at unknown source '${account.sourceId}'`);
+  }
+
+  const dayStart = utcDayStart(new Date(now()));
+  const seenToday = await itemsSeenSince(engine, account.id, dayStart);
+  if (seenToday >= account.itemCapDaily) return stopped("item_cap_reached");
+  const spendClient = connectorSpendClient(account.id);
+  const spentUsd = async (): Promise<number> => daySpendUsd(engine, spendClient, new Date(now()));
+  if (account.spendCapUsdDaily <= 0 || (await spentUsd()) >= account.spendCapUsdDaily) return stopped("cap_reached");
+
+  // Unique per run, whatever worker name is given: the worker runs jobs
+  // concurrently, and the lock lets its own holder back in.
+  const holder = `${deps.holder ?? `pid-${process.pid}`}:${crypto.randomUUID()}`;
+  const lockId = syncLockId(account.id);
+  if (!(await acquireWorkerLock(engine, lockId, holder, RUN_LOCK_TTL_SEC))) return skip("locked");
+  try {
+    if (await deps.accounts.clientHeld?.(account)) {
+      result.error = "the provider refused this account's OAuth app; sync waits until the app's current secret is saved";
+      return await stopped("client_rejected");
+    }
+    const tokens = new Map<string, string>();
+    const secret = (value: string): void => {
+      if (value.length > 0) tokens.set(value, "connector-token");
+    };
+    let source: TokenSource;
+    try {
+      source = await deps.tokenSource(account, secret);
+    } catch (e) {
+      if (e instanceof ReauthRequiredError) return await needsReconnect(storage, account, deps, result, null, now);
+      // A missing key or credential row is the operator's to fix, not the owner's: no pause.
+      result.error = `credentials unavailable (${e instanceof Error ? e.name : "error"})`;
+      return await stopped("credentials_unavailable");
+    }
+    const client = deps.client(account, recordingSource(source, secret));
+    const run = new Run(storage, account, deps, env, now, result, tokens, seenToday, spentUsd, () => heartbeatWorkerLock(engine, lockId, holder));
+    // Provider text is redacted, never refused or kept, whatever the operator's disposition.
+    await withSecretDisposition("redact", () =>
+      runWithSpendClient({ clientId: spendClient, capUsd: account.spendCapUsdDaily }, () => run.execute(client)));
+    if (result.stop_reason === "needs_reconnect") return await needsReconnect(storage, account, deps, result, result.http_status, now);
+    await deps.accounts.recordRun?.(account.id, result);
+    return result;
+  } finally {
+    await releaseWorkerLock(engine, lockId, holder);
+  }
+}
+
+async function needsReconnect(
+  storage: Storage,
+  account: SyncAccount,
+  deps: SyncDeps,
+  result: SyncRunResult,
+  httpStatus: number | null,
+  now: () => number,
+): Promise<SyncRunResult> {
+  result.status = "auth_required";
+  result.stop_reason = "needs_reconnect";
+  result.error_class = "auth_required";
+  result.http_status = httpStatus;
+  result.error ??= "the provider will not renew the credential; reconnect the account";
+  await deps.accounts.markNeedsReconnect(account.id, result.error);
+  await openNotice(
+    storage.engine(),
+    account.id,
+    "needs_reconnect",
+    `${account.provider} account for source '${account.sourceId}' needs a reconnect: sync is paused, its data and cursors are kept`,
+    new Date(now()),
+  );
+  await deps.accounts.recordRun?.(account.id, result);
+  return result;
+}
+
+/** One run's mutable state, split out so each step stays small. */
+class Run {
+  private readonly changed: Array<{ slug: string; body: string }> = [];
+  private readonly written: Array<RenderedSyncItem & { enrich: ItemEnrichment }> = [];
+  /** How many of `changed` and `written` linkStored has handled. */
+  private linkedPages = 0;
+  private enrichedItems = 0;
+  private itemsThisRun = 0;
+  private fetchStopped = false;
+
+  constructor(
+    private readonly storage: Storage,
+    private readonly account: SyncAccount,
+    private readonly deps: SyncDeps,
+    private readonly env: Env,
+    private readonly now: () => number,
+    private readonly result: SyncRunResult,
+    private readonly tokens: Map<string, string>,
+    private readonly seenToday: number,
+    private readonly spentUsd: () => Promise<number>,
+    private readonly heartbeat: () => Promise<boolean>,
+  ) {}
+
+  private get engine() {
+    return this.storage.engine();
+  }
+
+  private stop(reason: SyncStopReason): void {
+    // The first reason wins: it is the one that cut the run short.
+    this.result.stop_reason ??= reason;
+  }
+
+  async execute(client: ConnectorClient): Promise<void> {
+    for (const stream of this.deps.adapter.streams(this.account)) {
+      if (this.fetchStopped) break;
+      await this.syncStream(client, stream);
+    }
+    if (this.result.stop_reason !== "needs_reconnect" && this.result.stop_reason !== "forbidden") {
+      await this.settleDeletions();
+      if (this.deps.sweepRetention) this.result.counts.retention_deleted += await this.deps.sweepRetention(this.storage);
+    }
+    // What pages that never reached a checkpoint stored; they are read again next run.
+    await this.linkStored();
+    await this.updateHeldNotice();
+    this.finishStatus();
+    // A clean run proves the credential works again.
+    if (this.result.status === "success" || this.result.status === "nothing_new") {
+      await resolveNotice(this.engine, this.account.id, "needs_reconnect", this.date());
+    }
+    await this.logRun();
+  }
+
+  private async syncStream(client: ConnectorClient, stream: string): Promise<void> {
+    const before = await readCursor(this.engine, this.account.id, stream);
+    const s: SyncStreamResult = { stream, cursor_before: before, cursor_after: before, pages: 0, clean: false };
+    this.result.streams.push(s);
+    let cursor = before;
+    for (let page = 0; ; page++) {
+      if (page >= MAX_PAGES_PER_STREAM) {
+        this.stop("page_limit");
+        return;
+      }
+      if (!(await this.heartbeat())) {
+        this.stop("lock_lost");
+        this.fetchStopped = true;
+        return;
+      }
+      const budget = this.budget();
+      // Nothing more may be stored: a page fetched now could only be dropped.
+      if (budget.remaining <= 0) {
+        this.stop("item_cap_reached");
+        this.fetchStopped = true;
+        return;
+      }
+      const res = await this.deps.adapter.page({ client, account: this.account, stream, cursor, page, budget });
+      if (!res.ok) {
+        this.fetchFailed(res.response);
+        return;
+      }
+      s.pages++;
+      const settled = await this.processPage(res.items);
+      this.result.counts.deletions_seen += await markDeletesPending(this.engine, this.account.id, res.deletions ?? [], this.date());
+      if (!settled) return;
+      if (!(await this.linkStored())) return;
+      // Before the cursor moves past the relisting: if this fails, the next
+      // run reads the last page again and reconciles then.
+      if (res.done && res.reconcile !== undefined) {
+        this.result.counts.deletions_seen += await markUnseenDeletesPending(
+          this.engine, this.account.id, res.reconcile.prefix, new Date(res.reconcile.unseenSince), this.date(),
+        );
+      }
+      if (res.checkpoint !== null && res.checkpoint !== cursor) {
+        await writeCursor(this.engine, this.account.id, stream, res.checkpoint, this.date());
+        cursor = res.checkpoint;
+        s.cursor_after = cursor;
+      }
+      if (res.done) {
+        s.clean = true;
+        return;
+      }
+    }
+  }
+
+  private budget(): ItemBudget {
+    const perRun = positiveInt(this.env, "MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN", DEFAULT_MAX_ITEMS_PER_RUN);
+    const remaining = Math.min(perRun - this.itemsThisRun, this.account.itemCapDaily - this.seenToday - this.itemsThisRun);
+    return { remaining: Math.max(0, remaining), perRun: Math.max(1, Math.min(perRun, this.account.itemCapDaily)) };
+  }
+
+  private fetchFailed(res: ConnectorResponse): void {
+    this.result.error_class = res.class;
+    this.result.http_status = res.status === 0 ? null : res.status;
+    this.result.error = res.error;
+    if (res.class === "auth_required" && res.reauth === true) {
+      this.stop("needs_reconnect");
+      this.fetchStopped = true;
+    } else if (res.clientRejected === true) {
+      // Every request would be refused the same way: the operator fixes the app, the account waits.
+      this.stop("client_rejected");
+      this.fetchStopped = true;
+    } else if (res.class === "auth_required" || res.class === "forbidden") {
+      this.stop("forbidden");
+      this.fetchStopped = true;
+    } else {
+      this.stop("fetch_failed");
+      // A rate limit is the provider's for the whole account; other failures may be one stream's.
+      if (res.class === "rate_limited") this.fetchStopped = true;
+    }
+  }
+
+  private date(): Date {
+    return new Date(this.now());
+  }
+
+  /** Process one page. True when every item on it is settled, so its checkpoint may be committed. */
+  private async processPage(items: readonly SyncItem[]): Promise<boolean> {
+    const failures: PageFailure[] = [];
+    for (const item of items) {
+      // An adapter that ignores the budget is still stopped here, part-way through its page.
+      if (await extension().paused()) {
+        this.stop("paused");
+        this.fetchStopped = true;
+        return false;
+      }
+      if (this.budget().remaining <= 0) {
+        this.stop("item_cap_reached");
+        this.fetchStopped = true;
+        return false;
+      }
+      if (await this.spentUsd() >= this.account.spendCapUsdDaily) {
+        this.stop("cap_reached");
+        this.fetchStopped = true;
+        return false;
+      }
+      // A page can take longer than the lock lives; a run that lost it stops
+      // before writing anything else another run may now be writing too.
+      if (!(await this.heartbeat())) {
+        this.stop("lock_lost");
+        this.fetchStopped = true;
+        return false;
+      }
+      this.itemsThisRun++;
+      this.result.counts.items++;
+      const failure = await this.processItem(item);
+      if (failure !== null) failures.push(failure);
+    }
+    if (failures.length === 0) return true;
+
+    const outageCode = sourceOutage(failures.filter(f => f.adapterHold !== true), items.length);
+    if (outageCode !== null) {
+      this.stop("source_outage");
+      this.result.error ??= `${failures.length} of ${items.length} items failed with ${outageCode}; treated as a source failure`;
+      return false;
+    }
+    let blocking = 0;
+    for (const f of failures) {
+      this.result.counts.items_failed++;
+      const outcome = await recordItemFailure(this.engine, {
+        accountId: this.account.id, externalId: f.externalId, version: f.version,
+        code: f.code, message: f.message, now: this.date(), holdNow: f.deterministic,
+      });
+      if (outcome.held) this.result.counts.items_held++;
+      else blocking++;
+    }
+    if (blocking > 0) this.stop("items_failed");
+    return blocking === 0;
+  }
+
+  /** Settle one item; the failure to count when it could not be settled. */
+  private async processItem(item: SyncItem): Promise<PageFailure | null> {
+    const row = await getItem(this.engine, this.account.id, item.externalId);
+    const sameVersion = row !== null && row.external_version === item.version;
+    if (row !== null && sameVersion && row.held_reason !== null && !DELETION_STATES.includes(row.held_reason)
+      && row.held_until !== null && row.held_until.getTime() > this.now()) {
+      this.result.counts.items_skipped_held++;
+      return null;
+    }
+    if (item.failure !== undefined) {
+      const hold = item.failure.holdNow === true;
+      return { externalId: item.externalId, version: item.version, code: item.failure.code, message: item.failure.message, deterministic: hold, adapterHold: hold };
+    }
+    const settle = (pageSlug: string, contentHash: string | null) => recordItemSettled(this.engine, {
+      accountId: this.account.id, externalId: item.externalId, version: item.version, pageSlug,
+      contentHash, dedupeKey: item.dedupeKey ?? null, now: this.date(),
+    });
+    // A retention hold rides on a live, unchanged item: seeing it again keeps the hold.
+    const settled = row !== null && row.fail_count === 0
+      && (row.held_reason === null || RETENTION_STATES.includes(row.held_reason))
+      && row.deleted_upstream_at === null && row.page_slug === item.slug;
+    // Without a version there is nothing to compare: the write below decides
+    // by content hash.
+    if (settled && sameVersion && item.version !== null) {
+      await touchItem(this.engine, this.account.id, item.externalId, this.date());
+      this.result.counts.pages_unchanged++;
+      return null;
+    }
+    if (item.dedupeKey) {
+      const existing = await pageForDedupeKey(this.engine, this.account.id, item.dedupeKey, item.externalId);
+      if (existing !== null) {
+        await settle(existing, null);
+        this.result.counts.duplicates++;
+        return null;
+      }
+    }
+    // Retention handed this page to the brain for a person's edit: the item still
+    // maps to it, but no later version of the item writes over it.
+    if (await this.detached(item.slug)) {
+      await settle(item.slug, null);
+      this.result.counts.pages_unchanged++;
+      return null;
+    }
+    let hash: string | null;
+    try {
+      hash = await this.write(item, settled ? row.content_hash : null);
+    } catch (e) {
+      if (!(e instanceof OperationError)) throw e;
+      return { externalId: item.externalId, version: item.version, code: e.code, message: e.message, deterministic: isDeterministicRefusal(e) };
+    }
+    // A page that is not searchable is not settled: the cursor stays before
+    // it, and the next run, finding the page unchanged, mirrors it again.
+    if (hash === null) {
+      return { externalId: item.externalId, version: item.version, code: "mirror_failed", message: "the page was written but its mirror into search failed", deterministic: false };
+    }
+    // Before the item settles on its new slug: a failure leaves it unsettled,
+    // so the next run, still knowing the old page, retires it again.
+    if (row !== null && row.page_slug !== null && row.page_slug !== item.slug) {
+      try {
+        await this.retireMovedPage(item.externalId, row.page_slug);
+      } catch (e) {
+        if (!(e instanceof OperationError)) throw e;
+        return { externalId: item.externalId, version: item.version, code: "move_failed", message: "the item's previous page could not be retired", deterministic: false };
+      }
+    }
+    await settle(item.slug, hash);
+    if (item.enrich !== undefined) this.written.push({ ...item, enrich: item.enrich });
+    return null;
+  }
+
+  /**
+   * An item now rendered under another slug (a mail thread whose first message
+   * was deleted names a later month) leaves its old page behind, still holding
+   * what the provider dropped. It goes through the upstream deletion path, a
+   * recoverable soft delete, unless another live item still points at it. A
+   * move replaces a page one for one, so the mass-delete guard does not apply.
+   */
+  private async retireMovedPage(externalId: string, oldSlug: string): Promise<void> {
+    const handler = this.deps.onUpstreamDelete;
+    if (handler === undefined || await pageSharedByLiveItem(this.engine, this.account.id, oldSlug, externalId)) return;
+    await handler(this.storage, { accountId: this.account.id, sourceId: this.account.sourceId, externalId, pageSlug: oldSlug });
+  }
+
+  private async detached(slug: string): Promise<boolean> {
+    const r = await this.engine.query(
+      `SELECT 1 FROM pages WHERE slug = $1 AND source_id = $2 AND compiled_truth->>'origin' = $3`,
+      [slug, this.account.sourceId, DETACHED_ORIGIN],
+    );
+    return r.rows.length > 0;
+  }
+
+  /**
+   * Sync the wikilinks of the pages written since the last call, then enrich
+   * their items (after the wikilinks, which replace a page's wanted rows
+   * wholesale). Runs before a page's checkpoint commits: an item whose
+   * enrichment fails is recorded as failing, so it is not settled and the
+   * next run, reading that page again, writes and enriches it again. False
+   * when such an item blocks the checkpoint.
+   */
+  private async linkStored(): Promise<boolean> {
+    for (; this.linkedPages < this.changed.length; this.linkedPages++) {
+      const page = this.changed[this.linkedPages]!;
+      await syncWikilinksForPage(this.storage, page.slug, page.body, this.account.sourceId);
+    }
+    const hook = this.deps.onItemWritten;
+    let blocking = 0;
+    while (this.enrichedItems < this.written.length) {
+      const item = this.written[this.enrichedItems++]!;
+      if (hook === undefined) continue;
+      try {
+        await hook(this.storage, this.swept(item));
+      } catch (e) {
+        if (e instanceof PageNotFoundError) continue;
+        const outcome = await recordItemFailure(this.engine, {
+          accountId: this.account.id, externalId: item.externalId, version: item.version, code: "enrich_failed",
+          message: `linking the stored page failed (${e instanceof Error ? e.name : "error"})`, now: this.date(),
+        });
+        if (!(e instanceof OperationError)) throw e;
+        this.result.counts.items_failed++;
+        if (outcome.held) this.result.counts.items_held++;
+        else blocking++;
+      }
+    }
+    if (blocking > 0) this.stop("items_failed");
+    return blocking === 0;
+  }
+
+  /**
+   * The item as enrichment sees it. Its title and names reach the chronicle
+   * and wanted rows and the loop state from there, not from the page, so a live token is swept
+   * out of them as it is out of the page.
+   */
+  private swept(item: RenderedSyncItem & { enrich: ItemEnrichment }): RenderedSyncItem & { enrich: ItemEnrichment } {
+    if (this.tokens.size === 0) return item;
+    const sweep = (text: string): string => sweepEchoes(text, this.tokens, []);
+    const participants = item.enrich.participants.map(p => ({
+      ...p,
+      name: p.name === null ? null : sweep(p.name),
+      email: p.email === null ? null : sweep(p.email),
+    }));
+    const loop = item.enrich.loop ? { loop: mapLoopSignalsText(item.enrich.loop, sweep) } : {};
+    return { ...item, title: sweep(item.title), enrich: { ...item.enrich, participants, ...loop } };
+  }
+
+  /**
+   * Write the page and mirror it into search. Returns the stored content hash,
+   * or null when the mirror failed. An unchanged page is mirrored again unless
+   * `settledHash` (the hash this item last settled with) says it already was:
+   * that covers a page whose earlier mirror failed.
+   */
+  private async write(item: RenderedSyncItem, settledHash: string | null): Promise<string | null> {
+    // A live connector token must never reach a page, whatever the scan disposition.
+    const findings: SecretFinding[] = [];
+    const body = this.tokens.size > 0 ? sweepEchoes(item.body, this.tokens, findings) : item.body;
+    const title = this.tokens.size > 0 ? sweepEchoes(item.title, this.tokens, findings) : item.title;
+    const doc = splitLargeDocument({ slug: item.slug, title, body, maxPartBytes: this.partBytes() });
+    // Parts first: the contents page is what settles the item, so it is only
+    // written once every part it links to is stored and searchable.
+    for (const [i, part] of doc.parts.entries()) {
+      const truth = item.truth === undefined ? undefined : { ...item.truth, part_of: item.slug, part: i + 1 };
+      if ((await this.writeOne(part, item.type, truth, null)) === null) return null;
+    }
+    const hash = await this.writeOne(doc.parent, item.type, item.truth, settledHash);
+    // Parts an earlier, longer version had: once the contents page no longer
+    // links to them they would linger in search with text the item dropped.
+    if (hash !== null && this.account.accountLabel) {
+      await deleteStaleParts(this.storage, { sourceId: this.account.sourceId, accountRef: accountRef(this.account.accountLabel, this.account.provider) },
+        item.slug, doc.parts.map(p => p.slug));
+    }
+    return hash;
+  }
+
+  private partBytes(): number {
+    return this.deps.maxPartBytes ?? Math.min(DEFAULT_SPLIT_PART_BYTES, pageMaxBytes() ?? DEFAULT_SPLIT_PART_BYTES);
+  }
+
+  private async writeOne(draft: PageDraft, type: string, truth: Record<string, unknown> | undefined, settledHash: string | null): Promise<string | null> {
+    const { slug, title, body } = draft;
+    const put = await putPage(this.storage, {
+      slug,
+      type,
+      allowAdHocType: true,
+      title,
+      markdown_body: body,
+      ...(truth === undefined ? {} : { compiled_truth: truth }),
+      written_by: `${WRITTEN_BY_PREFIX}${this.account.provider}`,
+      source_id: this.account.sourceId,
+      outsideText: true,
+    });
+    if (put.held) throw new OperationError("conflict", `Import held: ${put.held}`);
+    const stored = put.outside_body ?? body;
+    if (!put.changed && !put.created) {
+      this.result.counts.pages_unchanged++;
+      if (put.content_hash === settledHash) return put.content_hash;
+    } else {
+      this.result.counts.pages_written++;
+      this.changed.push({ slug, body: stored });
+    }
+    const ok = await mirrorPage(
+      this.storage,
+      { slug, title, markdown_body: stored, content_hash: put.content_hash, source_id: this.account.sourceId },
+      { remote: true, timingLabel: `connector_${this.account.provider}`, ...(this.deps.embedFn ? { embedFn: this.deps.embedFn } : {}) },
+    );
+    if (ok) return put.content_hash;
+    this.result.counts.mirror_failures++;
+    return null;
+  }
+
+  /** Apply or hold the deletions this and earlier runs recorded. */
+  private async settleDeletions(): Promise<void> {
+    const engine = this.engine;
+    const pending = await itemsInDeletionState(engine, this.account.id, DELETE_PENDING);
+    // The guard wins over the delete: past it, nothing is deleted until the owner confirms.
+    if (pending.length > 0 && massDeleteVerdict(pending.length, await itemsPresent(engine, this.account.id), this.env).held) {
+      this.result.counts.deletions_held += await holdPendingDeletes(engine, this.account.id);
+      await openNotice(
+        engine,
+        this.account.id,
+        "mass_delete_held",
+        `${pending.length} item(s) deleted upstream are held for confirmation; nothing was deleted`,
+        this.date(),
+      );
+      await this.apply(await itemsInDeletionState(engine, this.account.id, DELETE_CONFIRMED));
+      return;
+    }
+    await this.apply([...pending, ...await itemsInDeletionState(engine, this.account.id, DELETE_CONFIRMED)]);
+  }
+
+  private async apply(rows: ReadonlyArray<{ external_id: string; page_slug: string | null }>): Promise<void> {
+    const handler = this.deps.onUpstreamDelete;
+    // Without a handler nothing can be deleted: the rows stay pending, so the
+    // deletion still runs once one is wired, although the cursor has moved on.
+    if (handler === undefined) return;
+    let failed = 0;
+    for (const row of rows) {
+      // A page a live duplicate still points at stays; only this item's claim on it ends.
+      const shared = row.page_slug !== null
+        && await pageSharedByLiveItem(this.engine, this.account.id, row.page_slug, row.external_id);
+      if (!shared) {
+        try {
+          await handler(this.storage, {
+            accountId: this.account.id, sourceId: this.account.sourceId, externalId: row.external_id, pageSlug: row.page_slug,
+          });
+        } catch (e) {
+          if (!(e instanceof OperationError)) throw e;
+          failed++;
+          continue;
+        }
+        this.result.counts.deletions_applied++;
+      }
+      await recordDeleteApplied(this.engine, this.account.id, row.external_id);
+    }
+    if (failed > 0) this.stop("deletions_failed");
+  }
+
+  private async updateHeldNotice(): Promise<void> {
+    const held = await heldItemCount(this.engine, this.account.id);
+    if (held > 0) {
+      await openNotice(this.engine, this.account.id, "items_held", `${held} item(s) held after repeated failures`, this.date());
+    } else {
+      await resolveNotice(this.engine, this.account.id, "items_held", this.date());
+    }
+  }
+
+  private finishStatus(): void {
+    const r = this.result;
+    if (r.stop_reason === "needs_reconnect") return;
+    if (r.stop_reason === "forbidden") {
+      r.status = "forbidden";
+      return;
+    }
+    if (r.stop_reason !== null) {
+      r.status = "partial";
+      return;
+    }
+    const c = r.counts;
+    r.status = c.items === 0 && c.deletions_seen === 0 ? "nothing_new" : "success";
+  }
+
+  private async logRun(): Promise<void> {
+    if (this.changed.length === 0) return;
+    const c = this.result.counts;
+    await logIngest(this.engine, {
+      source_type: `connector-${this.account.provider}`,
+      source_ref: this.account.id,
+      pages_updated: this.changed.slice(0, LOG_SLUG_CAP).map((p) => p.slug),
+      summary:
+        `status ${this.result.status}, items ${c.items}, written ${c.pages_written}, unchanged ${c.pages_unchanged}, ` +
+        `failed ${c.items_failed}, held ${c.items_held}, deletions applied ${c.deletions_applied}, held ${c.deletions_held}`,
+      source_id: this.account.sourceId,
+    });
+  }
+}

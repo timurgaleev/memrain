@@ -1,0 +1,219 @@
+/**
+ * Connection budget. With MEMRAIN_PG_POOL_RESERVE on, long holders (cycle,
+ * embed backfill, contextual re-embed) share at most pool-max − 1 slots, so one
+ * connection always stays free for /health, job claims and lock renewals.
+ * MEMRAIN_SEARCH_MAX_CONCURRENT bounds concurrent searches. Both are off by
+ * default. The Postgres half proves the reserve on a real pool of two.
+ */
+import { afterEach, describe, expect, it, setDefaultTimeout } from "bun:test";
+import {
+  applicationName,
+  connectionBudgetVerdict,
+  checkConnectionBudget,
+  longHoldSlots,
+  withLongHold,
+  withSearchSlot,
+} from "../src/core/pool-budget.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine, TEST_PG_POOLED } from "./helpers/pg-test-engine.ts";
+import { makeEngine } from "../src/core/engine/factory.ts";
+import type { Engine, QueryResult } from "../src/core/engine/interface.ts";
+import { storageEngines } from "./helpers/storage-engines.ts";
+
+setDefaultTimeout(60000);
+
+const ENV = ["MEMRAIN_PG_POOL_RESERVE", "MEMRAIN_PG_POOL_MAX", "MEMRAIN_SEARCH_MAX_CONCURRENT", "MEMRAIN_PG_APPLICATION_NAME", "MEMRAIN_PG_POOLER"];
+afterEach(() => { for (const k of ENV) delete process.env[k]; });
+
+const tick = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+async function peakConcurrency(n: number, run: (fn: () => Promise<void>) => Promise<void>): Promise<number> {
+  let active = 0;
+  let peak = 0;
+  await Promise.all(Array.from({ length: n }, () => run(async () => {
+    active++;
+    peak = Math.max(peak, active);
+    await tick(20);
+    active--;
+  })));
+  return peak;
+}
+
+describe("long-hold budget", () => {
+  it("leaves one slot for everything else", () => {
+    expect(longHoldSlots(10)).toBe(9);
+    expect(longHoldSlots(2)).toBe(1);
+    expect(longHoldSlots(1)).toBe(1);
+  });
+
+  it("does not limit anything while the reserve is off", async () => {
+    process.env["MEMRAIN_PG_POOL_MAX"] = "3";
+    expect(await peakConcurrency(5, withLongHold)).toBe(5);
+  });
+
+  it("caps concurrent long holders at pool-max − 1 when on", async () => {
+    process.env["MEMRAIN_PG_POOL_RESERVE"] = "1";
+    process.env["MEMRAIN_PG_POOL_MAX"] = "3";
+    expect(await peakConcurrency(6, withLongHold)).toBe(2);
+  });
+
+  it("lets a long holder nest another without deadlocking", async () => {
+    process.env["MEMRAIN_PG_POOL_RESERVE"] = "1";
+    process.env["MEMRAIN_PG_POOL_MAX"] = "2";
+    const out = await withLongHold(() => withLongHold(async () => "inner"));
+    expect(out).toBe("inner");
+  });
+
+  it("releases its slot when the work throws", async () => {
+    process.env["MEMRAIN_PG_POOL_RESERVE"] = "1";
+    process.env["MEMRAIN_PG_POOL_MAX"] = "2";
+    await expect(withLongHold(async () => { throw new Error("boom"); })).rejects.toThrow("boom");
+    expect(await withLongHold(async () => "next")).toBe("next");
+  });
+});
+
+describe("search concurrency", () => {
+  it("is unbounded when unset or malformed", async () => {
+    expect(await peakConcurrency(4, withSearchSlot)).toBe(4);
+    process.env["MEMRAIN_SEARCH_MAX_CONCURRENT"] = "abc";
+    expect(await peakConcurrency(4, withSearchSlot)).toBe(4);
+  });
+
+  it("bounds concurrent searches when set", async () => {
+    process.env["MEMRAIN_SEARCH_MAX_CONCURRENT"] = "2";
+    expect(await peakConcurrency(6, withSearchSlot)).toBe(2);
+  });
+});
+
+describe("application_name", () => {
+  it("is unset by default and sanitised when configured", () => {
+    expect(applicationName()).toBeUndefined();
+    process.env["MEMRAIN_PG_APPLICATION_NAME"] = "memrain:acme:serve";
+    expect(applicationName()).toBe("memrain:acme:serve");
+    process.env["MEMRAIN_PG_APPLICATION_NAME"] = "memrain:a b;DROP\n";
+    expect(applicationName()).toBe("memrain:abDROP");
+    process.env["MEMRAIN_PG_APPLICATION_NAME"] = "x".repeat(100);
+    expect(applicationName()!.length).toBe(63);
+  });
+});
+
+describe("doctor db-connection-budget", () => {
+  it("warns when the planned pools pass 80% of usable connections", () => {
+    expect(connectionBudgetVerdict({ maxConnections: 100, reserved: 3, poolMax: 10, processes: 2, inUse: 12 }).status).toBe("ok");
+    const planned = connectionBudgetVerdict({ maxConnections: 100, reserved: 3, poolMax: 40, processes: 2, inUse: 12 });
+    expect(planned.status).toBe("warn");
+    expect(planned.detail).toContain("80");
+    const busy = connectionBudgetVerdict({ maxConnections: 100, reserved: 3, poolMax: 10, processes: 1, inUse: 90 });
+    expect(busy.status).toBe("warn");
+  });
+
+  // A pooled engine as the doctor sees it: limits fine, timeouts as given.
+  function pooledEngine(statementTimeout: string, idleTimeout: string): Engine {
+    const e: Engine = {
+      kind: "postgres",
+      pooler: "pgbouncer",
+      async ready() {},
+      async query<T>(): Promise<QueryResult<T>> {
+        return { rows: [{ max: "100", reserved: "3", in_use: 4, statement_timeout: statementTimeout, idle_timeout: idleTimeout }] as T[] };
+      },
+      async exec() {},
+      async close() {},
+      async transaction<T>(fn: (tx: Engine) => Promise<T>) { return fn(e); },
+    };
+    return e;
+  }
+
+  it("fails in pooler mode when the role's statement_timeout is not in effect", async () => {
+    const c = await checkConnectionBudget(pooledEngine("0", "1min"));
+    expect(c).toMatchObject({ name: "db-connection-budget", ok: false, status: "fail" });
+    expect(c.detail).toContain("statement_timeout");
+  });
+
+  it("fails in pooler mode when idle_in_transaction_session_timeout is not in effect", async () => {
+    const c = await checkConnectionBudget(pooledEngine("1min", "0"));
+    expect(c).toMatchObject({ ok: false, status: "fail" });
+    expect(c.detail).toContain("idle_in_transaction_session_timeout");
+  });
+
+  it("passes in pooler mode when both role timeouts hold through the pool", async () => {
+    const c = await checkConnectionBudget(pooledEngine("1min", "1min"));
+    expect(c).toMatchObject({ ok: true, status: "ok" });
+    expect(c.detail).toContain("pooler");
+  });
+
+  it("does not apply to PGLite", async () => {
+    const [pglite] = storageEngines(undefined);
+    const { storage, close } = await pglite!.open();
+    try {
+      const c = await checkConnectionBudget(storage.engine());
+      expect(c).toMatchObject({ name: "db-connection-budget", ok: true, status: "ok" });
+    } finally {
+      await close();
+    }
+  });
+});
+
+const PG = process.env["MEMRAIN_TEST_POSTGRES_URL"];
+if (PG) {
+  describe("Postgres pool of two", () => {
+    // Two long transactions, then a health probe; returns how long the probe waited.
+    async function probeWhileBusy(engine: PostgresEngine, budgeted: boolean): Promise<number> {
+      const hold = () => engine.transaction(async tx => { await tx.query("SELECT pg_sleep(1.5)"); });
+      const run = budgeted ? () => withLongHold(hold) : hold;
+      const holders = [run(), run()];
+      await tick(200);
+      const t0 = performance.now();
+      await engine.query("SELECT 1");
+      const waited = performance.now() - t0;
+      await Promise.all(holders);
+      return waited;
+    }
+
+    it("control: without the reserve two long holders starve the health probe", async () => {
+      const engine = pgTestEngine({ url: PG, max: 2 });
+      try {
+        expect(await probeWhileBusy(engine, false)).toBeGreaterThan(1000);
+      } finally {
+        await engine.close();
+      }
+    });
+
+    it("with the reserve the health probe gets the spare connection", async () => {
+      process.env["MEMRAIN_PG_POOL_RESERVE"] = "1";
+      process.env["MEMRAIN_PG_POOL_MAX"] = "2";
+      const engine = pgTestEngine({ url: PG, max: 2 });
+      try {
+        expect(await probeWhileBusy(engine, true)).toBeLessThan(1000);
+      } finally {
+        await engine.close();
+      }
+    });
+
+    it("tags the connection with the configured application_name", async () => {
+      process.env["MEMRAIN_PG_APPLICATION_NAME"] = "memrain:test:serve";
+      // Through the test pooler the factory runs in pooler mode, as a tenant does.
+      if (TEST_PG_POOLED) process.env["MEMRAIN_PG_POOLER"] = "pgbouncer";
+      const engine = makeEngine({ database: { type: "postgres", url: PG } } as Parameters<typeof makeEngine>[0]);
+      try {
+        const r = await engine.query<{ name: string }>("SELECT current_setting('application_name') AS name");
+        expect(r.rows[0]?.name).toBe("memrain:test:serve");
+      } finally {
+        await engine.close();
+      }
+    });
+
+    it("reads the server's connection limits for the doctor", async () => {
+      const engine = pgTestEngine({ url: PG, max: 2 });
+      try {
+        const c = await checkConnectionBudget(engine);
+        expect(c.name).toBe("db-connection-budget");
+        expect(["ok", "warn"]).toContain(c.status);
+        // test-pg.sh gives the test role the same timeouts a tenant role has.
+        if (TEST_PG_POOLED) expect(c.detail).toContain("from the role");
+        expect(c.detail).toMatch(/max_connections/);
+      } finally {
+        await engine.close();
+      }
+    });
+  });
+}

@@ -1,0 +1,202 @@
+/**
+ * Save a chat answer as a page, through the same page_put every writer uses:
+ * the secret scanner and the caller's grant apply, and the page keeps the
+ * lowest trust tier of the evidence the answer was written from, cited or
+ * not. The citations become wikilinks, so the saved page links to its
+ * evidence.
+ */
+import type { Storage } from "../storage.ts";
+import type { Engine } from "../engine/interface.ts";
+import { dispatchTool, type DispatchOptions } from "../../mcp/dispatch.ts";
+import type { AuthInfo } from "../auth-info.ts";
+import { documentRankSql, isTrustTier, lowerTier, pageRankSql, tierOfRank, type TrustTier } from "../trust-tier.ts";
+import { readTrustTiers } from "../trust-frame.ts";
+import { ownedAnswer, setSavedSlug, type ChatOwner } from "./store.ts";
+
+const SLUG_WORDS_MAX = 60;
+const SLUG_ATTEMPTS = 9;
+
+/** What a refused save tells the client: a closed list, never the write's own text. */
+export type SaveError = "not_found" | "not_saveable" | "write_refused" | "slug_taken" | "busy";
+
+export type SaveAnswerResult =
+  | { ok: true; slug: string }
+  | { ok: false; status: 404 | 409 | 422; error: SaveError; message: string };
+
+const SAVE_MESSAGES: Record<SaveError, string> = {
+  not_found: "That answer does not exist.",
+  not_saveable: "Only a finished answer can be saved.",
+  write_refused: "The page write was refused. The server log says why.",
+  slug_taken: "A page with this name already exists.",
+  busy: "This answer is already being saved.",
+};
+
+const refuse = (status: 404 | 409 | 422, error: SaveError): SaveAnswerResult => ({ ok: false, status, error, message: SAVE_MESSAGES[error] });
+
+/** Answers being saved in this process: a second click waits for nothing and is refused. */
+const saving = new Set<number>();
+
+/** Lowercase words joined by single hyphens, no trailing hyphen. */
+export function slugWords(text: string): string {
+  const words = text.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+  let out = "";
+  for (const w of words) {
+    const next = out ? `${out}-${w}` : w;
+    if (next.length > SLUG_WORDS_MAX) break;
+    out = next;
+  }
+  return out || "answer";
+}
+
+function pageBody(question: string | null, answer: string, citations: Array<{ n: number; slug: string; title: string; kind: string }>): string {
+  const parts: string[] = [];
+  if (question) parts.push(`> ${question.replace(/\s+/g, " ").trim()}`);
+  parts.push(answer.trim());
+  const pages = citations.filter((c) => c.kind === "page");
+  if (pages.length > 0) {
+    parts.push("## Sources", pages.map((c) => `${c.n}. [[${c.slug}|${c.title.replace(/[[\]|]/g, " ").trim() || c.slug}]]`).join("\n"));
+  }
+  return `${parts.join("\n\n")}\n`;
+}
+
+interface ToolEnvelope { error?: unknown }
+
+/**
+ * The least trusted tier among an answer's evidence: page refs (slugs,
+ * `<source>/<slug>`, document paths or ids), take keys, and the entity_facts
+ * and timeline_events rows of a trajectory. The page is
+ * written by the operator, so without this an answer that repeats a synced
+ * Slack channel would turn that text into owner text. A take counts as the
+ * text it was distilled from; a ref no row backs any more is not vouched for.
+ */
+export async function evidenceTier(
+  engine: Engine,
+  evidence: { pages: readonly string[]; takes: readonly string[]; facts?: readonly number[]; events?: readonly number[] },
+): Promise<TrustTier> {
+  const facts = [...new Set(evidence.facts ?? [])];
+  const events = [...new Set(evidence.events ?? [])];
+  let rowsTier: TrustTier = "owner";
+  if (facts.length > 0 || events.length > 0) {
+    // scope: upstream the rows are the ones the owner's own turn was shown under its grant; reading wider only lowers the tier
+    const t = await readTrustTiers(engine, { facts, events });
+    if (t.facts.size < facts.length || t.events.size < events.length) return "external";
+    for (const tier of [...t.facts.values(), ...t.events.values()]) rowsTier = lowerTier(rowsTier, tier);
+  }
+  return lowerTier(rowsTier, await refsTier(engine, evidence));
+}
+
+async function refsTier(engine: Engine, evidence: { pages: readonly string[]; takes: readonly string[] }): Promise<TrustTier> {
+  const refs = [...new Set(evidence.pages)];
+  const takeKeys = [...new Set(evidence.takes)];
+  if (takeKeys.length > 0) {
+    const t = await engine.query<{ source_ref: string }>(
+      `SELECT DISTINCT ON (take_key) source_ref FROM synth_takes WHERE take_key = ANY($1::text[])`,
+      [takeKeys],
+    );
+    if (t.rows.length < takeKeys.length) return "external";
+    refs.push(...t.rows.map((r) => r.source_ref));
+  }
+  if (refs.length === 0) return "owner";
+  // scope: upstream the refs are the owner's own answer's citations, resolved under the owner's grant when it was answered; reading wider only lowers the tier
+  const r = await engine.query<{ ref: string; rank: number | string }>(
+    `SELECT pg.slug AS ref, (${pageRankSql("pg")})::int AS rank FROM pages pg
+      WHERE pg.slug = ANY($1::text[]) AND pg.deleted_at IS NULL
+     UNION ALL
+     -- page://<source>/<slug> also reads as the default page slugged <source>/<slug>.
+     SELECT pg.source_id || '/' || pg.slug AS ref, (${pageRankSql("pg")})::int AS rank FROM pages pg
+      WHERE pg.source_id <> 'default' AND pg.source_id || '/' || pg.slug = ANY($1::text[]) AND pg.deleted_at IS NULL
+     UNION ALL
+     SELECT d.source_path AS ref, (${documentRankSql("d")})::int AS rank FROM documents d WHERE d.source_path = ANY($1::text[])
+     UNION ALL
+     SELECT d.id AS ref, (${documentRankSql("d")})::int AS rank FROM documents d WHERE d.id = ANY($1::text[])`,
+    [refs],
+  );
+  const found = new Set(r.rows.map((row) => row.ref));
+  if (refs.some((ref) => !found.has(ref))) return "external";
+  return tierOfRank(Math.min(...r.rows.map((row) => Number(row.rank))));
+}
+
+/**
+ * The grant a member's save writes under: the member's personal source, the
+ * member's read set, and the member principal the page is attributed to. The
+ * operator saves with none and writes as the owner.
+ */
+export interface SaveGrant {
+  sourceId: string;
+  allowedSources: string[];
+  principal: `member:${string}`;
+  spendId: string;
+}
+
+function dispatchOptionsFor(grant: SaveGrant | undefined, tier: TrustTier): DispatchOptions {
+  if (!grant) return tier === "owner" ? {} : { trustCeiling: tier };
+  const authInfo: AuthInfo = {
+    token: "",
+    clientId: grant.spendId,
+    scopes: ["read", "write"],
+    sourceId: grant.sourceId,
+    allowedSources: grant.allowedSources,
+    budgetUsdPerDay: null,
+    isPublic: false,
+  };
+  return { authInfo, memberPrincipal: grant.principal, trustCeiling: lowerTier(tier, "member") };
+}
+
+export async function saveAnswerAsPage(storage: Storage, owner: ChatOwner, messageId: number, grant?: SaveGrant): Promise<SaveAnswerResult> {
+  if (saving.has(messageId)) return refuse(409, "busy");
+  saving.add(messageId);
+  try {
+    return await save(storage, owner, messageId, grant);
+  } finally {
+    saving.delete(messageId);
+  }
+}
+
+async function save(storage: Storage, owner: ChatOwner, messageId: number, grant: SaveGrant | undefined): Promise<SaveAnswerResult> {
+  const engine = storage.engine();
+  const found = await ownedAnswer(engine, owner, messageId);
+  if (!found) return refuse(404, "not_found");
+  const { message, question, evidenceTier: shown } = found;
+  if (message.saved_slug) return { ok: true, slug: message.saved_slug };
+  if (message.status !== "ok" || !message.content.trim()) return refuse(409, "not_saveable");
+  // Named by the answer's own day, so a retry on a later day tries the same names.
+  const base = `chats/${message.created_at.slice(0, 10)}-${slugWords(question ?? message.content)}`;
+  const title = (question ?? "Chat answer").replace(/\s+/g, " ").trim().slice(0, 200);
+  const body = pageBody(question, message.content, message.citations);
+  const cited = await evidenceTier(engine, {
+    pages: message.citations.filter((c) => c.kind === "page").map((c) => c.slug),
+    takes: message.citations.filter((c) => c.kind === "take").map((c) => c.slug),
+  });
+  // What the model was shown but did not cite can be restated all the same; unknown evidence is not vouched for.
+  const tier = lowerTier(cited, isTrustTier(shown) ? shown : "external");
+  for (let i = 1; i <= SLUG_ATTEMPTS; i++) {
+    const slug = i === 1 ? base : `${base}-${i}`;
+    // The write's receipt commits with the page: a save retried after the
+    // page was written but before its slug was recorded replays it instead of
+    // finding the name taken and writing the answer again under the next one.
+    const res = await dispatchTool(storage, {
+      name: "page_put",
+      arguments: {
+        slug, title, markdown_body: body, type: "note", expected_version: 0, written_by: grant ? "app-chat" : "admin-chat", reason: "saved from chat",
+        request_id: `chat-save:${messageId}:${slug}`,
+      },
+    }, dispatchOptionsFor(grant, tier));
+    const text = res.content?.[0]?.text ?? "";
+    if (!res.isError) {
+      await setSavedSlug(engine, messageId, slug);
+      return { ok: true, slug };
+    }
+    let env: ToolEnvelope = {};
+    try {
+      env = JSON.parse(text) as ToolEnvelope;
+    } catch {
+      // not an envelope; logged below
+    }
+    // A member's name can be held by a page of another source; it takes the next one.
+    if (env.error === "version_conflict" || (grant && env.error === "permission_denied")) continue;
+    if (env.error === "request_in_progress") return refuse(409, "busy");
+    console.error("[chat] save refused:", text.slice(0, 300));
+    return refuse(422, "write_refused");
+  }
+  return refuse(409, "slug_taken");
+}

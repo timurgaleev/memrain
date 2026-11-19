@@ -123,6 +123,19 @@ container; a red run fails the workflow.
 - The companion `make scrub-audit` runs a broader pre-publication
   sweep — categorised report, fails on HIGH-severity hits.
 
+### Skills
+
+- Edit skills only in `deploy/skills/`. The plugin's copies
+  (`plugins/memrain/skills/`), the routing table `deploy/skills/_resolver.md`
+  and the hash list `deploy/skills/skills.lock.json` are generated: run
+  `bun scripts/generate-plugin-tree.ts` in `deploy/memrain` after any skill
+  change (`--check` reports drift without writing).
+- `deploy/skills/plugin-lanes.json` records which skills ship in the plugin,
+  which are host-side only, and which are MCP prompts, each with a reason.
+- A skill declares only tools the server registers and names only `memrain`
+  commands that exist (`memrain skillpack lint`), and ships a
+  `routing-eval.jsonl` whose cases route to it.
+
 ## Test policy
 
 - Every new bash script gets a `tests/<name>.test.sh` with at least

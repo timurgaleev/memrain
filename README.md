@@ -60,8 +60,9 @@ are flagged, so your agent does not repeat one of them as settled truth.
   <img src="docs/assets/how-it-works-light.svg" alt="Five steps: your notes, code and chats; Memrain reads them; stored in your Postgres database; search by meaning and by words; your AI agent answers with sources." width="100%">
 </picture>
 
-Memrain does the remembering, not the talking (the opt-in `think` tool is the
-one exception). It returns ranked passages with
+Memrain does the remembering, not the talking (the opt-in `think` tool and the
+admin **Ask** page built on it, see [docs/CHAT.md](./docs/CHAT.md), are the
+exceptions). It returns ranked passages with
 their sources, and your agent writes the answer from them. A search costs one
 embedding call and no chat-model call by default. The full pipeline is in
 [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md).
@@ -122,6 +123,7 @@ To report a vulnerability, see [SECURITY.md](./SECURITY.md).
 | [docs/QUICKSTART.md](./docs/QUICKSTART.md) | Install, connect, credentials, day-to-day operation |
 | [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md) | How search works, what it costs |
 | [docs/TEAM-SETUP.md](./docs/TEAM-SETUP.md) | One connector for a team, a private space per person |
+| [docs/connectors/ENABLE.md](./docs/connectors/ENABLE.md) | Sync your calendar, mail, chats and meetings: Google Calendar, Gmail, Outlook mail and calendar, Teams chats and transcripts, Slack, Fireflies |
 | [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Every install and update step in detail |
 | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) | Every setting, quality tiers, budgets |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | What runs where, and the security model |

@@ -25,9 +25,18 @@ NOT_ENV = {
 }
 
 # Documented rows the source reads without spelling the full name:
-# resolve-model.ts builds MEMRAIN_<FEATURE>_MODEL at run time, and
-# search/ranking-flags.ts builds MEMRAIN_RANK_<FLAG>.
+# resolve-model.ts builds MEMRAIN_<FEATURE>_MODEL at run time,
+# search/ranking-flags.ts builds MEMRAIN_RANK_<FLAG>,
+# connectors/retention.ts builds MEMRAIN_CONNECTOR_RETENTION_DAYS_<KIND>, and
+# connectors/oauth-connect.ts builds MEMRAIN_<PROVIDER>_OAUTH_CLIENT_ID and
+# MEMRAIN_<PROVIDER>_OAUTH_TENANT.
 DOC_ONLY = {
+    "MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID",
+    "MEMRAIN_MICROSOFT_OAUTH_TENANT",
+    "MEMRAIN_CONNECTOR_RETENTION_DAYS_MAIL",
+    "MEMRAIN_CONNECTOR_RETENTION_DAYS_CALENDAR",
+    "MEMRAIN_CONNECTOR_RETENTION_DAYS_CHAT",
+    "MEMRAIN_CONNECTOR_RETENTION_DAYS_MEETING",
     "MEMRAIN_THINK_MODEL",
     "MEMRAIN_DRIFT_MODEL",
     "MEMRAIN_CONCEPTS_MODEL",

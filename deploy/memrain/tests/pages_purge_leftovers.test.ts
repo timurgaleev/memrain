@@ -11,7 +11,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { deletePage, putPage } from "../src/core/pages.ts";
 import { putRawData } from "../src/core/raw-data.ts";
@@ -75,6 +76,35 @@ describe("purge leftovers (PGLite)", () => {
     expect(left.rows.map((row) => row.slug)).toEqual(["people/keep"]);
   });
 
+  it("a purged page takes the observations and citations that name it, and only those", async () => {
+    await seedPurgeable(storage, "people/a");
+    const e = storage.engine();
+    await e.query(`INSERT INTO hot_memory (entity_slug, fact, source_slug) VALUES ('people/b', 'seen on a', 'people/a'), ('people/b', 'seen elsewhere', 'people/keep')`);
+    await e.query(`INSERT INTO synthesis_evidence (synthesis_slug, ref) VALUES ('people/a', 'page://notes/x'), ('synthesis/keep', 'page://notes/x')`);
+    const dry = await purgeDeletedPages(e, undefined, undefined, { dryRun: true });
+    expect(dry).toMatchObject({ hot_memory_rows: 1, synthesis_evidence_rows: 1 });
+    expect(await purgeDeletedPages(e)).toMatchObject({ count: 1, hot_memory_rows: 1, synthesis_evidence_rows: 1 });
+    expect((await e.query<{ source_slug: string }>(`SELECT source_slug FROM hot_memory`)).rows).toEqual([{ source_slug: "people/keep" }]);
+    expect((await e.query<{ synthesis_slug: string }>(`SELECT synthesis_slug FROM synthesis_evidence`)).rows).toEqual([{ synthesis_slug: "synthesis/keep" }]);
+  });
+
+  it("an observation the purged page's observation replaced points at the one that replaced that in turn", async () => {
+    await seedPurgeable(storage, "people/a");
+    const e = storage.engine();
+    const id = async (fact: string, source: string) => Number((await e.query<{ id: number }>(
+      `INSERT INTO hot_memory (entity_slug, fact, source_slug) VALUES ('people/b', $1, $2) RETURNING id`, [fact, source])).rows[0]!.id);
+    // old (kept page) -> mid (purged page) -> new (kept page): the old one stays replaced, by `new`.
+    const [oldId, midId, newId] = [await id("old", "people/keep"), await id("mid", "people/a"), await id("new", "people/other")];
+    // last (kept page) -> top (purged page, current): with nothing after it, `last` is the newest left.
+    const [lastId, topId] = [await id("last", "people/keep"), await id("top", "people/a")];
+    await e.query(`UPDATE hot_memory SET superseded_by = $2 WHERE id = $1`, [oldId, midId]);
+    await e.query(`UPDATE hot_memory SET superseded_by = $2 WHERE id = $1`, [midId, newId]);
+    await e.query(`UPDATE hot_memory SET superseded_by = $2 WHERE id = $1`, [lastId, topId]);
+    expect(await purgeDeletedPages(e)).toMatchObject({ count: 1, hot_memory_rows: 2 });
+    const rows = (await e.query<{ fact: string; superseded_by: number | null }>(`SELECT fact, superseded_by FROM hot_memory ORDER BY id`)).rows;
+    expect(rows.map(r => [r.fact, r.superseded_by === null ? null : Number(r.superseded_by)])).toEqual([["old", newId], ["new", null], ["last", null]]);
+  });
+
   it("dry-run reports the leftovers it would remove without touching them", async () => {
     await seedPurgeable(storage, "people/a");
     const r = await purgeDeletedPages(storage.engine(), undefined, undefined, { dryRun: true });
@@ -100,7 +130,7 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
   const raceSlug = `people/purge-race-pg-${run}`;
 
   beforeAll(async () => {
-    pg = new PostgresEngine({ url: PG_URL! });
+    pg = pgTestEngine({ url: PG_URL! });
     storage = new Storage(pg);
     await storage.init();
   });
@@ -130,7 +160,7 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
     const id = (await addFact(storage, { entity_slug: `people/purge-forget-race-${run}`, fact: "Likes tea.", source_slug: page })).id!;
     await deletePage(storage, page);
     await pg.query(`UPDATE pages SET deleted_at = NOW() - interval '1000 hours' WHERE slug = $1`, [page]);
-    const forgetter = new PostgresEngine({ url: PG_URL!, max: 2 });
+    const forgetter = pgTestEngine({ url: PG_URL!, max: 2 });
     try {
       let purge!: Promise<Awaited<ReturnType<typeof purgeDeletedPages>>>;
       await forgetter.transaction(async (tx) => {
@@ -169,7 +199,7 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
   for (const [name, write] of racers) {
     it(`${name} racing an open purge leaves no orphan`, async () => {
       await putPage(storage, { slug: raceSlug, type: "person", source_id: "default" });
-      const purger = new PostgresEngine({ url: PG_URL!, max: 2 });
+      const purger = pgTestEngine({ url: PG_URL!, max: 2 });
       try {
         let settled!: Promise<unknown>;
         await purger.transaction(async (tx) => {
@@ -201,7 +231,7 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
     // A write that skipped that lock could insert on the old slug after the move.
     it(`${name} waits for the page's slug lock`, async () => {
       await putPage(storage, { slug: raceSlug, type: "person", source_id: "default" });
-      const holder = new PostgresEngine({ url: PG_URL!, max: 2 });
+      const holder = pgTestEngine({ url: PG_URL!, max: 2 });
       try {
         let settled!: Promise<unknown>;
         let finishedWhileLocked = false;

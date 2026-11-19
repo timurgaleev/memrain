@@ -2,16 +2,16 @@
 // the first "/". Kept free of DOM and React so the root test runner can load it.
 
 export type RouteName =
-  | "login" | "overview" | "search" | "pages" | "page" | "entity" | "graph"
+  | "login" | "overview" | "ask" | "office" | "search" | "pages" | "page" | "entity" | "graph"
   | "timeline" | "spend" | "agents" | "log" | "jobs" | "calibration" | "glossary" | "setup"
-  | "enroll" | "security";
+  | "enroll" | "security" | "notifications" | "connections" | "autonomy" | "approvals" | "labelling";
 
 export interface Route { name: RouteName; param: string | null }
 
 const NAMES: ReadonlySet<string> = new Set<RouteName>([
-  "login", "overview", "search", "pages", "page", "entity", "graph",
+  "login", "overview", "ask", "office", "search", "pages", "page", "entity", "graph",
   "timeline", "spend", "agents", "log", "jobs", "calibration", "glossary", "setup",
-  "enroll", "security",
+  "enroll", "security", "notifications", "connections", "autonomy", "approvals", "labelling",
 ]);
 
 export function parseHash(hash: string): Route {

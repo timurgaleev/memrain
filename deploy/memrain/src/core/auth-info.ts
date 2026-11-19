@@ -103,6 +103,11 @@ export interface AuthInfo {
   spendId?: string;
   /** The credential behind this principal; absent for callers no token resolved. */
   principal?: PrincipalRef;
+  /**
+   * A narrowed tool menu (`tool_surface` on the token or client row); absent
+   * means the full surface. It only ever hides tools (mcp/surface.ts).
+   */
+  toolSurface?: "starter" | "verbs";
 }
 
 /**
@@ -113,8 +118,8 @@ export interface AuthInfo {
  * An empty `allowedSources: []` is treated as "no federated scope" and defers to
  * the scalar `sourceId`; it never widens to "all sources".
  */
-export function effectiveReadSourceIds(
-  auth: AuthInfo | undefined,
+export function effectiveReadSourceIds<A extends Pick<AuthInfo, "allowedSources" | "sourceId">>(
+  auth: A | undefined,
 ): string[] | undefined {
   const allowed = auth?.allowedSources;
   if (allowed && allowed.length > 0) return allowed;

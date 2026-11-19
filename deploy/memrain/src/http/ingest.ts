@@ -138,16 +138,16 @@ export function validateIngestionEvent(event: unknown): string | null {
 }
 
 /** Default capture slug: `inbox/YYYY-MM-DD-<hash6>` — stable for the same
- *  content on the same day, and the triage convention a downstream review
- *  skill can promote from. */
+ *  content from the same source on the day it arrived, and the triage
+ *  convention a downstream review skill can promote from. The hash covers the
+ *  source: a slug has one owner, so two sources sending the same bytes must
+ *  not aim at the same page. The day is the arrival's, not the worker's. */
 export function defaultSlugForEvent(
-  event: Pick<IngestionEvent, "content_hash">,
-  now: Date = new Date(),
+  event: Pick<IngestionEvent, "content_hash" | "source_id" | "received_at">,
 ): string {
-  const y = now.getUTCFullYear();
-  const m = String(now.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(now.getUTCDate()).padStart(2, "0");
-  return `inbox/${y}-${m}-${d}-${event.content_hash.slice(0, 6)}`;
+  const day = new Date(event.received_at).toISOString().slice(0, 10);
+  const hash = createHash("sha256").update(`${event.source_id}\n${event.content_hash}`).digest("hex");
+  return `inbox/${day}-${hash.slice(0, 6)}`;
 }
 
 /** Map a declared content type onto the closed taxonomy (null = reject 415). */
@@ -398,10 +398,13 @@ export async function handleIngestRoute(
   try {
     const queue = new Queue(deps.storage.engine());
     // Idempotency: same content from the same credential into the same source
-    // is a single durable job — retries and double-submits collapse.
+    // (and the same requested slug) is a single durable job — retries and
+    // double-submits collapse, while the same bytes sent to a second slug are
+    // a second capture.
+    const slugKey = callerSlug ? `:${createHash("sha256").update(callerSlug).digest("hex").slice(0, 16)}` : "";
     const job = await queue.enqueue({
       kind: INGEST_CAPTURE_JOB_KIND,
-      id: `ingest:webhook:${auth.clientId}:${ingestSubmitterKey(event.source_id, auth)}:${contentHash}`,
+      id: `ingest:webhook:${auth.clientId}:${ingestSubmitterKey(event.source_id, auth)}:${contentHash}${slugKey}`,
       payload: {
         event,
         ...(callerSlug ? { slug: callerSlug } : {}),
@@ -595,7 +598,7 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
 
 const INGEST_TERMINAL_CODES: ReadonlySet<string> = new Set([
   "permission_denied", "insufficient_scope", "invalid_params", "secret_detected", "secret_rejected",
-  "quarantined", "page_quarantined", "page_shrink_refused",
+  "quarantined", "page_quarantined", "page_shrink_refused", "page_too_large",
 ]);
 
 /**

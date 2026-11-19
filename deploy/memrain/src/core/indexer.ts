@@ -67,8 +67,11 @@ import { bumpDocumentClock } from "./generation.ts";
 import { guardLocalIndex, type RereadGuard } from "./sources.ts";
 import { newWriteTiming, noteWriteTiming, runWithWriteTiming } from "./write-timing.ts";
 import { acquireWriteEmbedSlot, writeEmbedWidth } from "./concurrency.ts";
+import { planWriteGate } from "./write-gate-index.ts";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
+import { isConnectorPageMirror } from "./connectors/page-kind.ts";
+import type { TrustTier } from "./trust-tier.ts";
 import {
   checkLocalWriteOwner,
   writeDocumentTransaction,
@@ -135,12 +138,20 @@ export interface IndexFileOptions {
    */
   remote?: boolean;
   /**
+   * Tier of the authenticated writer (core/trust-tier.ts), set by the MCP
+   * `index` tool. Recorded on the document, never above a tier it already
+   * holds; unset leaves the stored tier alone (sweeps, mirrors, the cycle).
+   */
+  trustTier?: TrustTier;
+  /**
    * Name of the interactive write this index serves (`page_put`, …). When set,
    * one line splitting its latency is logged — chunks reused vs paid, and paid
    * time into Bedrock, inflight-slot wait and spend-ledger work. Sweeps and
    * reindex leave it unset and stay quiet.
    */
   timingLabel?: string;
+  /** The path the timing line names in place of the source path, when the caller logs a redacted label. */
+  timingPath?: string;
   /** `indexFile` only: a guard the caller already loaded, in place of one over the configured roots. */
   rereadGuard?: RereadGuard;
   /** Reviewed repairs retain old chunks if any requested embedding fails. */
@@ -255,9 +266,10 @@ export async function indexDocument(
     // Logged for a failed write too — those are the ones worth decomposing.
     // The path is JSON-quoted: a source id is operator-set and not otherwise
     // screened for control characters, so it must not be able to split the line.
+    // stderr, because stdout is a command's result (`memrain call page_put --json`).
     const ms = (n: number) => Math.round(n);
-    console.log(
-      `[memrain] index-timing op=${opts.timingLabel} status=${status} path=${JSON.stringify(input.sourcePath)}` +
+    console.error(
+      `[memrain] index-timing op=${opts.timingLabel} status=${status} path=${JSON.stringify(opts.timingPath ?? input.sourcePath)}` +
         ` chunks=${stats.chunks} reused=${stats.reused} llm_ok=${stats.llmOk}` +
         ` llm_fallback=${stats.llmFallback} embeds=${stats.embeds} fence_embeds=${stats.fenceEmbeds}` +
         ` ms_total=${ms(performance.now() - started)} ms_bedrock=${ms(timing.sendMs - timing.queueMs)}` +
@@ -388,6 +400,27 @@ async function indexDocumentBody(
     frontmatter = stampSanityMarkers(baseFrontmatter, sanity);
   }
 
+  // Write gate (deterministic, free): outside text, and agent text when the
+  // operator turns it on, that reads as instructions to an AI is flagged or
+  // held for the owner before it becomes memory; `reject` refuses it here,
+  // before any embedding is paid for. See write-gate-index.ts.
+  const gateTitle =
+    parsed.title ??
+    (typeof baseFrontmatter["title"] === "string" ? (baseFrontmatter["title"] as string) : "");
+  const gate = await planWriteGate(storage.engine(), {
+    documentId: id,
+    sourcePath: input.sourcePath,
+    sourceId: input.sourceId ?? null,
+    remote: opts.remote === true,
+    ...(opts.trustTier ? { trustTier: opts.trustTier } : {}),
+    title: gateTitle,
+    // The whole text, not just the prose chunks: the facts and takes fences
+    // are stripped before chunking but still become stored rows.
+    body: text,
+    frontmatter: baseFrontmatter,
+  });
+  frontmatter = gate.stamp(frontmatter);
+
   // Embed BEFORE we touch the DB — if Bedrock fails, we don't half-write. A page
   // marked `embed_skip` is indexed + keyword-searchable but never embedded: its
   // chunks land with a null vector so the vector arm skips them. Keyword-only
@@ -409,8 +442,11 @@ async function indexDocumentBody(
   // Either flag (or an injected llmFn) turns wrapping on; the LLM tier is a
   // superset that upgrades the synopsis, so it must build the deterministic
   // prefix too (its fallback path).
+  // A connector page never takes the paid tier: its text is outside text the
+  // connector pipeline handles under its own caps.
   const llmActive =
-    (contextualLlmEnabled() || opts.contextualLlmFn !== undefined) && !isCode && !skipEmbed && !keywordOnly;
+    (contextualLlmEnabled() || opts.contextualLlmFn !== undefined) && !isCode && !skipEmbed && !keywordOnly &&
+    !(await isConnectorPageMirror(storage.engine(), input.sourcePath));
   const wrapActive =
     (contextualRetrievalEnabled() || llmActive) && !isCode;
   const deterministicPrefix = wrapActive
@@ -692,6 +728,8 @@ async function indexDocumentBody(
       ...(input.claimUnowned === true ? { claimUnowned: true } : {}),
       ...(input.expectOwner !== undefined ? { expectOwner: input.expectOwner } : {}),
       ...(opts.beforeCommit ? { beforeCommit: opts.beforeCommit } : {}),
+      ...(opts.trustTier ? { trustTier: opts.trustTier } : {}),
+      ...(gate.afterWrite ? { afterWrite: gate.afterWrite } : {}),
     },
     chunkWrites,
   );

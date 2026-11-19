@@ -49,7 +49,7 @@ function setWidth(n: number): void {
 let quiet: ReturnType<typeof spyOn>;
 
 beforeEach(async () => {
-  quiet = spyOn(console, "log").mockImplementation(() => {});
+  quiet = spyOn(console, "error").mockImplementation(() => {});
   prevWidth = process.env.MEMRAIN_EMBED_MAX_INFLIGHT;
   tmp = mkdtempSync(join(tmpdir(), "memrain-parallel-chunks-"));
   storage = new Storage({ dbPath: join(tmp, "db") });

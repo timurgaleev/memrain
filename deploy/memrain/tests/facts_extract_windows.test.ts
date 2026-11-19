@@ -158,10 +158,10 @@ describe("extractFactsForPage over windows", () => {
   it("stops at the first window the per-write cap refuses", async () => {
     process.env["MEMRAIN_FACTS_MAX_WINDOWS"] = "4";
     const { fn, users } = counting();
-    // A worst-case reservation is $0.027 at Sonnet prices; each settled call
+    // A worst-case reservation is $0.072 at Sonnet prices; each settled call
     // costs $0.0006, so the second reservation no longer fits.
     const r = await extractFactsForPage(storage, {
-      slug: "notes/long", type: "note", body: LONG, sonnetFn: fn, observationDate: null, maxBudgetUsd: 0.0275, modelId: "eu.anthropic.claude-sonnet-4-6",
+      slug: "notes/long", type: "note", body: LONG, sonnetFn: fn, observationDate: null, maxBudgetUsd: 0.0725, modelId: "eu.anthropic.claude-sonnet-4-6",
     });
     expect(users).toHaveLength(1);
     expect(r.windowsRun).toBe(1);

@@ -10,20 +10,48 @@
  * the provider says how long (`Retry-After`, or `X-RateLimit-Reset`) and the
  * wait fits under a cap; past the cap the client gives up with `rate_limited`
  * instead of parking the run for an hour. Server errors and network failures
- * are retried a bounded number of times with a growing back-off.
+ * are retried a bounded number of times with a growing back-off, or after the
+ * server's own Retry-After when it names one (capped like any wait).
  *
- * The token lives in the Authorization header only. Error text is built from
+ * The credential is a static token (GitHub) or a token source that can renew
+ * it. With a source, a 401 earns exactly one forced refresh and one retry; a
+ * second 401, or a refresh the provider refuses, ends the request
+ * `auth_required` with `reauth` set, which the sync engine turns into a paused
+ * account waiting for its owner to reconnect. A refresh refused because of
+ * the OAuth app itself ends it `auth_required` with `clientRejected` set
+ * instead: the operator fixes the app, and the account stays as it is.
+ *
+ * A request may bound the response body (`maxBytes`): a larger body is not
+ * buffered, the read stops past the bound and the request ends `challenge`
+ * with `tooLarge` set, never retried, so one huge item cannot exhaust memory.
+ *
+ * A token lives in the Authorization header only. Error text is built from
  * status codes and classes, and anything that does quote a thrown message has
- * the token scrubbed from it first.
+ * every token this client sent scrubbed from it first.
  */
 import { classifyResponse, CLASSIFY_BODY_PREFIX } from "./classify.ts";
-import type { ResponseClass } from "./types.ts";
+import type { ProviderLimiter } from "./limiter.ts";
+import { AccountAppRefusedError, OAuthClientRejectedError, ReauthRequiredError, type ResponseClass } from "./types.ts";
 
 export type FetchFn = (url: string, init: RequestInit) => Promise<Response>;
 
+/**
+ * A credential that can be renewed. `token` returns the access token to send;
+ * `refresh` is called with the token the provider just refused and returns a
+ * fresh one. Either throws ReauthRequiredError when only a reconnect helps.
+ */
+export interface TokenSource {
+  token(): Promise<string>;
+  refresh(stale: string): Promise<string>;
+}
+
 export interface ConnectorClientOptions {
   origin: string;
-  token: string;
+  /** A static token. Exactly one of `token` and `tokenSource`. */
+  token?: string;
+  tokenSource?: TokenSource;
+  /** Shared pacing for every client of one account; replaces `minSpacingMs`. */
+  limiter?: ProviderLimiter;
   /** Extra request headers (Accept, API version, User-Agent). */
   headers?: Record<string, string>;
   fetch?: FetchFn;
@@ -47,6 +75,60 @@ export interface ConnectorResponse {
   next: string | null;
   /** Why the request did not end `ok`, safe to print. */
   error: string | null;
+  /** Set on `auth_required` when the credential cannot be renewed: the owner has to reconnect. */
+  reauth?: boolean;
+  /** Set on `auth_required` when the provider refused the OAuth app itself: the operator has to fix the app. */
+  clientRejected?: boolean;
+  /**
+   * The parsed JSON body of a response that did not end `ok`, when it had one.
+   * GraphQL providers put their error code there; it is provider text, never
+   * printed, and read only for that code.
+   */
+  errorBody?: unknown;
+  /** Set when the body was larger than the request's `maxBytes` and was not read. */
+  tooLarge?: boolean;
+}
+
+export interface RequestOptions {
+  /** Largest response body read, in bytes; past it the request ends `tooLarge`. Default: unbounded. */
+  maxBytes?: number;
+  /** Headers for this request only (Graph's Prefer); the client's own and Authorization win. */
+  headers?: Record<string, string>;
+  /** Return a successful body as the raw string instead of parsing it as JSON (a WebVTT transcript). */
+  text?: boolean;
+}
+
+/** The body past `maxBytes`: the read stopped and the stream was cancelled. */
+const TOO_LARGE = Symbol("too large");
+
+/** The body as text, stopping past `maxBytes` instead of buffering it whole. */
+async function readBody(res: Response, maxBytes: number | undefined): Promise<string | typeof TOO_LARGE> {
+  if (maxBytes === undefined || res.body === null) return res.text();
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body.cancel().catch(() => {});
+    return TOO_LARGE;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return TOO_LARGE;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+/** A response body as text, or null past `maxBytes`, read without buffering more than that. */
+export async function readTextCapped(res: Response, maxBytes: number): Promise<string | null> {
+  const text = await readBody(res, maxBytes);
+  return text === TOO_LARGE ? null : text;
 }
 
 /** A path or pagination link the client refuses to request. */
@@ -79,7 +161,12 @@ export function parseNextLink(header: string | null): string | null {
 
 export class ConnectorClient {
   private readonly origin: string;
-  private readonly token: string;
+  private readonly tokenSource: TokenSource;
+  /** False for a static token: a 401 cannot be fixed by asking again. */
+  private readonly renewable: boolean;
+  private readonly limiter: ProviderLimiter | null;
+  /** Every token this client has put on the wire, for scrubbing error text. */
+  private readonly sent = new Set<string>();
   private readonly headers: Record<string, string>;
   private readonly fetchFn: FetchFn;
   private readonly now: () => number;
@@ -92,9 +179,15 @@ export class ConnectorClient {
   constructor(opts: ConnectorClientOptions) {
     const origin = new URL(opts.origin).origin;
     if (!origin.startsWith("https://")) throw new ConnectorRequestError(`connector origin must be https (got ${origin})`);
-    if (opts.token.length === 0) throw new ConnectorRequestError("connector token is empty");
+    if ((opts.token === undefined) === (opts.tokenSource === undefined)) {
+      throw new ConnectorRequestError("connector client takes exactly one of a token and a token source");
+    }
+    if (opts.token !== undefined && opts.token.length === 0) throw new ConnectorRequestError("connector token is empty");
     this.origin = origin;
-    this.token = opts.token;
+    const fixed = opts.token;
+    this.renewable = fixed === undefined;
+    this.tokenSource = opts.tokenSource ?? { token: async () => fixed!, refresh: async () => fixed! };
+    this.limiter = opts.limiter ?? null;
     this.headers = opts.headers ?? {};
     this.fetchFn = opts.fetch ?? ((url, init) => fetch(url, init));
     this.now = opts.now ?? Date.now;
@@ -130,13 +223,57 @@ export class ConnectorClient {
   }
 
   private scrub(text: string): string {
-    return text.split(this.token).join("[token]");
+    let out = text;
+    for (const token of this.sent) out = out.split(token).join("[token]");
+    return out;
   }
 
-  private async space(): Promise<void> {
-    if (this.lastRequestAt === null) return;
+  /** Wait for this request's slot; a reason string when it may not go at all. */
+  private async space(): Promise<string | null> {
+    if (this.limiter !== null) return this.limiter.acquire();
+    if (this.lastRequestAt === null) return null;
     const wait = this.lastRequestAt + this.minSpacingMs - this.now();
     if (wait > 0) await this.sleep(wait);
+    return null;
+  }
+
+  /** The token to send, or the response that ends the request when there is none. */
+  private async currentToken(): Promise<string | ConnectorResponse> {
+    try {
+      const token = await this.tokenSource.token();
+      if (token.length === 0) throw new ReauthRequiredError("the credential holds no access token");
+      return token;
+    } catch (e) {
+      return this.tokenFailure(e, "token unavailable");
+    }
+  }
+
+  private tokenFailure(e: unknown, what: string): ConnectorResponse {
+    if (e instanceof ReauthRequiredError) {
+      return {
+        class: "auth_required",
+        status: 0,
+        body: null,
+        next: null,
+        // Codes only, and the one case where the owner has to look elsewhere before reconnecting.
+        error: `${what}: ${e instanceof AccountAppRefusedError ? e.message : "the provider will not renew the credential; reconnect the account"}`,
+        reauth: true,
+      };
+    }
+    if (e instanceof OAuthClientRejectedError) {
+      return {
+        class: "auth_required",
+        status: 0,
+        body: null,
+        next: null,
+        error: `${what}: ${e.message}; save the app's current secret, or the right app`,
+        clientRejected: true,
+      };
+    }
+    // A token endpoint that is down or slow is not the owner's problem: the
+    // next run tries again.
+    const reason = this.scrub(e instanceof Error ? e.message : String(e));
+    return { class: "server_error", status: 0, body: null, next: null, error: `${what}: ${reason}` };
   }
 
   /** How long the provider asked us to wait, in ms, or the default. */
@@ -153,20 +290,41 @@ export class ConnectorClient {
     return UNSPECIFIED_RATE_LIMIT_WAIT_MS;
   }
 
-  async get(path: string): Promise<ConnectorResponse> {
+  async get(path: string, opts: RequestOptions = {}): Promise<ConnectorResponse> {
+    return this.request("GET", path, undefined, opts);
+  }
+
+  /** POST a JSON body to a path on the origin. */
+  async post(path: string, body: unknown): Promise<ConnectorResponse> {
+    return this.request("POST", path, JSON.stringify(body));
+  }
+
+  private async request(method: "GET" | "POST", path: string, body: string | undefined, opts: RequestOptions = {}): Promise<ConnectorResponse> {
     const url = this.urlFor(path);
+    let refreshed = false;
+    let pending = await this.currentToken();
     for (let attempt = 0; ; attempt++) {
-      await this.space();
+      if (typeof pending !== "string") return pending;
+      const token = pending;
+      const refusal = await this.space();
+      if (refusal !== null) return { class: "rate_limited", status: 0, body: null, next: null, error: refusal };
       this.lastRequestAt = this.now();
+      this.sent.add(token);
       let res: Response;
-      let text: string;
+      let read: string | typeof TOO_LARGE;
       try {
         res = await this.fetchFn(url, {
-          method: "GET",
+          method,
           redirect: "manual",
-          headers: { ...this.headers, Authorization: `Bearer ${this.token}` },
+          headers: {
+            ...opts.headers,
+            ...this.headers,
+            ...(body === undefined ? {} : { "content-type": "application/json" }),
+            Authorization: `Bearer ${token}`,
+          },
+          ...(body === undefined ? {} : { body }),
         });
-        text = await res.text();
+        read = await readBody(res, opts.maxBytes);
       } catch (e) {
         const reason = this.scrub(e instanceof Error ? e.message : String(e));
         if (attempt >= this.maxRetries) {
@@ -175,9 +333,35 @@ export class ConnectorClient {
         await this.sleep(Math.min(BASE_BACKOFF_MS * 2 ** attempt, this.maxWaitMs));
         continue;
       }
+      if (read === TOO_LARGE) {
+        return { class: "challenge", status: res.status, body: null, next: null, error: `HTTP ${res.status} body larger than ${opts.maxBytes} bytes; not read`, tooLarge: true };
+      }
+      const text = read;
 
       const cls = classifyResponse(res.status, res.headers, text.slice(0, CLASSIFY_BODY_PREFIX));
+      if (cls === "auth_required" && this.renewable) {
+        if (refreshed) {
+          return {
+            class: "auth_required",
+            status: res.status,
+            body: null,
+            next: null,
+            error: `HTTP ${res.status} after a token refresh; reconnect the account`,
+            reauth: true,
+          };
+        }
+        refreshed = true;
+        try {
+          pending = await this.tokenSource.refresh(token);
+        } catch (e) {
+          return this.tokenFailure(e, "token refresh failed");
+        }
+        // Asking with a renewed credential is not a retry of a flaky request.
+        attempt--;
+        continue;
+      }
       if (cls === "ok") {
+        if (opts.text === true) return { class: "ok", status: res.status, body: text, next: null, error: null };
         let body: unknown;
         try {
           body = JSON.parse(text);
@@ -200,11 +384,35 @@ export class ConnectorClient {
         await this.sleep(wait);
         continue;
       }
-      if (cls === "server_error" && attempt < this.maxRetries) {
-        await this.sleep(Math.min(BASE_BACKOFF_MS * 2 ** attempt, this.maxWaitMs));
-        continue;
+      if (cls === "server_error") {
+        // A 503 that says when to come back (Graph throttling) is waited out for
+        // that long; past the cap it is a rate limit, not a retry to send early.
+        const asked = res.headers.get("retry-after") === null ? null : this.rateLimitWait(res);
+        if (asked !== null && asked > this.maxWaitMs) {
+          return { class: "rate_limited", status: res.status, body: null, next: null, error: `HTTP ${res.status} rate limited; the provider asked for ${Math.ceil(asked / 1000)}s` };
+        }
+        if (attempt < this.maxRetries) {
+          await this.sleep(asked ?? Math.min(BASE_BACKOFF_MS * 2 ** attempt, this.maxWaitMs));
+          continue;
+        }
       }
-      return { class: cls, status: res.status, body: null, next: null, error: `HTTP ${res.status} (${cls})` };
+      const errorBody = parseJson(text);
+      return {
+        class: cls,
+        status: res.status,
+        body: null,
+        next: null,
+        error: `HTTP ${res.status} (${cls})`,
+        ...(errorBody === undefined ? {} : { errorBody }),
+      };
     }
+  }
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
   }
 }

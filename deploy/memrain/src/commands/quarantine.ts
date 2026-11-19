@@ -12,7 +12,9 @@
  *         unless --force. The clear records a `quarantine_override` bound to
  *         the title and body, so re-indexing the same content (and `scan`)
  *         keeps it released; any edit expires it. Cleared docs re-enter the vector arm via
- *         `memrain embed` (their chunks were never embedded).
+ *         `memrain embed` (their chunks were never embedded). A write-gate
+ *         hold is refused (release it with `memrain write-gate approve`) and
+ *         the gate's instruction-like flag is kept.
  *   scan  [--limit N] [--apply] [--json]
  *         re-assess already-indexed documents through the CURRENT gate
  *         thresholds — catches junk that predates the gate. Dry-run by
@@ -39,6 +41,7 @@ import {
 } from "../core/quarantine.ts";
 import { bumpDocumentClock } from "../core/generation.ts";
 import { clearCache } from "../core/search/query-cache.ts";
+import { INSTRUCTION_LIKE_REASON } from "../core/write-gate.ts";
 
 export type QuarantineSub = "list" | "clear" | "scan";
 
@@ -193,7 +196,24 @@ async function runClear(engine: Engine, opts: QuarantineCmdOptions): Promise<num
     return 2;
   }
   const fm = doc.frontmatter ?? {};
-  if (!("quarantine" in fm) && !("content_flag" in fm) && !("embed_skip" in fm)) {
+  const reasonOf = (key: string) => (fm[key] as { reason?: unknown } | undefined)?.reason;
+  // The write gate's hold is released only through its approval queue, which
+  // binds the release to the text the owner reviewed; its flag is not a
+  // sanity marker and stays.
+  if (reasonOf("quarantine") === INSTRUCTION_LIKE_REASON) {
+    const hold = await engine.query<{ id: string }>(
+      `SELECT id::text AS id FROM write_gate_holds WHERE document_id = $1 AND decision IS NULL ORDER BY id DESC LIMIT 1`,
+      [doc.id],
+    );
+    const id = hold.rows[0]?.id;
+    console.error(
+      `"${doc.source_path}" is held by the write gate, not the content-sanity gate. ` +
+        (id ? `Review it with \`memrain write-gate approve ${id}\` or \`reject ${id}\`.` : "Review it with `memrain write-gate list`."),
+    );
+    return 1;
+  }
+  const keepFlag = reasonOf("content_flag") === INSTRUCTION_LIKE_REASON;
+  if (!("quarantine" in fm) && !("embed_skip" in fm) && (keepFlag || !("content_flag" in fm))) {
     console.log(`"${doc.source_path}" carries no sanity marker — nothing to clear.`);
     return 0;
   }
@@ -222,10 +242,10 @@ async function runClear(engine: Engine, opts: QuarantineCmdOptions): Promise<num
   };
   await engine.query(
     `UPDATE documents
-        SET frontmatter = ((COALESCE(frontmatter, '{}'::jsonb) - 'quarantine') - 'content_flag' - 'embed_skip')
+        SET frontmatter = ((COALESCE(frontmatter, '{}'::jsonb) - 'quarantine') - (CASE WHEN $3::boolean THEN '' ELSE 'content_flag' END) - 'embed_skip')
                           || jsonb_build_object('${QUARANTINE_OVERRIDE_KEY}', $2::text::jsonb)
       WHERE id = $1`,
-    [doc.id, JSON.stringify(override)],
+    [doc.id, JSON.stringify(override), keepFlag],
   );
   // Visibility flipped — cached rankings that excluded the doc are stale.
   await bumpDocumentClock(engine);

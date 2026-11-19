@@ -1,0 +1,8 @@
+// Routing eval fixtures for skills/research-compendium.
+// Each line: {intent, expected_skill, ambiguous_with?}.
+// Rule: intent must paraphrase the trigger, not copy it.
+{"intent": "Research everything about spaced repetition and write me a compendium", "expected_skill": "research-compendium"}
+{"intent": "I want a definitive guide on cold-water swimming, sources archived", "expected_skill": "research-compendium"}
+{"intent": "Find the best papers on sleep, read them all and summarize each one", "expected_skill": "research-compendium"}
+{"intent": "Take the habit-formation compendium one level deeper", "expected_skill": "research-compendium"}
+{"intent": "What is the weather tomorrow", "expected_skill": null}

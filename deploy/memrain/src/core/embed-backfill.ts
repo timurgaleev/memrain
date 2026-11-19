@@ -59,6 +59,7 @@
  * Unmarked chunks embed raw content, unchanged.
  */
 import { classifyBedrockError, runInBatchScope } from "./llm/bedrock-errors.ts";
+import { withLongHold } from "./pool-budget.ts";
 import { isBudgetRefusal } from "./budget.ts";
 import type { Engine } from "./engine/interface.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
@@ -610,7 +611,7 @@ export async function runEmbedBackfill(
   engine: Engine,
   opts: EmbedBackfillOptions = {},
 ): Promise<EmbedBackfillResult> {
-  return runInBatchScope({ stopped: false, circuit: true }, () => runEmbedBackfillBody(engine, opts));
+  return withLongHold(() => runInBatchScope({ stopped: false, circuit: true }, () => runEmbedBackfillBody(engine, opts)));
 }
 
 async function runEmbedBackfillBody(

@@ -5,7 +5,8 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import type { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import { Storage } from "../src/core/storage.ts";
 import { OAuthProvider, REFRESH_REUSE_GRACE_SECONDS, type OAuthClientInfo } from "../src/core/oauth-provider.ts";
@@ -52,7 +53,7 @@ describe.skipIf(!URL_)("refresh family revocation on Postgres", () => {
   let provider: OAuthProvider;
 
   beforeAll(async () => {
-    pg = new PostgresEngine({ url: URL_! });
+    pg = pgTestEngine({ url: URL_! });
     await new Storage(pg).init();
     provider = new OAuthProvider({ engine: pg });
     await registerSource(pg, { id: "acme", kind: "other", pathPrefix: "/acme" }).catch(() => {});

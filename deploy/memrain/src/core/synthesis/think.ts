@@ -31,7 +31,7 @@ import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { callWithTruncationRetry, isTruncated } from "../llm/truncation.ts";
 import { parseModelJson } from "../llm/json-output.ts";
 import { clampOutputTokens, outputTokensFromEnv } from "../llm/output-limits.ts";
-import { BudgetTracker, BudgetExhausted, isBudgetRefusal, priceFor, type BudgetHold } from "../budget.ts";
+import { BudgetTracker, BudgetExhausted, costUsd, isBudgetRefusal, priceFor, type BudgetHold } from "../budget.ts";
 import { BedrockHalted, classifyBedrockError, bedrockFixHint } from "../llm/bedrock-errors.ts";
 import { embedText } from "../embedding.ts";
 import { classifyIntent, type Intent } from "./intent.ts";
@@ -45,7 +45,8 @@ import { isDiarySourcePath } from "../pages.ts";
 import { pageContentDate, questionDateWindow, resolveThinkTemporalContext } from "./think-temporal.ts";
 import { thinkQuoteVerifyEnabled, verifyQuotes, type QuoteCheck } from "./quote-verify.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
-import { frameExternal, markExternalChunks } from "../trust-frame.ts";
+import { frameForRead, markExternalChunks, readTrustTiers } from "../trust-frame.ts";
+import { meetsMinTrust, type TrustTier } from "../trust-tier.ts";
 
 export const THINK_PROMPT_VERSION = "v3-sonnet";
 
@@ -111,6 +112,30 @@ export interface ThinkFallback {
   note: string;
 }
 
+/** One step of a run, for a caller that shows progress (the admin chat). */
+export type ThinkTraceStep =
+  | "intent"
+  | "gather"
+  | "reserve"
+  | "model_start"
+  | "model_end"
+  | "citations"
+  | "quote_check"
+  | "settle";
+
+/**
+ * Counts, timings and the refs of gathered evidence only: never page text.
+ * The refs come from the same grant-scoped gather the model sees.
+ */
+export interface ThinkTraceEvent {
+  step: ThinkTraceStep;
+  count?: number;
+  slugs?: string[];
+  ms?: number;
+  usd?: number;
+  note?: string;
+}
+
 export interface ThinkOptions {
   question: string;
   /** Page hits to gather (default 12). */
@@ -161,6 +186,12 @@ export interface ThinkOptions {
    * the diary fence on `search`.
    */
   fenceDiary?: boolean;
+  /**
+   * Drop pages below this trust tier (core/trust-tier.ts) from every page
+   * stream. Set by the background synthesis no reader asked for, so outside
+   * text never reaches a paid prompt on its own.
+   */
+  minTrust?: TrustTier;
   /** Only gather pages whose content date is >= this ISO date (temporal focus). */
   since?: string;
   /** Only gather pages whose content date is <= this ISO date. */
@@ -184,6 +215,8 @@ export interface ThinkOptions {
    * date throws ReferenceDateError before any retrieval or spend.
    */
   referenceDate?: string;
+  /** Called at each step of the run. A throwing listener is ignored. */
+  onTrace?: (event: ThinkTraceEvent) => void;
 }
 
 export interface ThinkResult {
@@ -218,6 +251,12 @@ export interface ThinkResult {
   answer_raw?: string;
   quote_check?: QuoteCheck;
   unverified_quotes?: Array<{ text: string; reason: string }>;
+  /**
+   * Every page (source path), take (take key) and trajectory row (entity_facts
+   * and timeline_events ids) put before the model in any round, cited or
+   * not: what an answer may restate. Present when a model ran.
+   */
+  evidence?: { pages: string[]; takes: string[]; facts: number[]; events: number[] };
 }
 
 const THINK_SYSTEM_PROMPT = `You are memrain's synthesis engine. You answer a question by reasoning across a personal knowledge brain. Your inputs are wrapped in structural tags:
@@ -512,7 +551,7 @@ export function renderPagesBlock(
       const day = dates?.get(h.documentId);
       const date = day ? ` date="${attr(day)}"` : "";
       const trust = h.trust === "external" ? ' trust="external"' : "";
-      return `<page ref="${attr(h.sourcePath)}" rank="${idx + 1}"${date}${trust}>\n${h.trust === "external" ? frameExternal(excerpt) : excerpt}\n</page>`;
+      return `<page ref="${attr(h.sourcePath)}" rank="${idx + 1}"${date}${trust}>\n${frameForRead(excerpt, h)}\n</page>`;
     })
     .join("\n\n");
 }
@@ -543,10 +582,12 @@ async function gatherPages(
   window?: { since?: string; until?: string },
   embedQuery?: (text: string) => Promise<number[]>,
   onDegraded?: OnGatherFailure,
+  minTrust?: TrustTier,
 ): Promise<SearchHit[]> {
   try {
     return await hybridSearch(storage, question, {
       k,
+      ...(minTrust ? { minTrust } : {}),
       onMeta: (meta) => { for (const reason of publicSearchMeta(meta).degraded) onDegraded?.(reason); },
       ...(embedQuery ? { embedQuery } : {}),
       ...(sourceIds !== undefined ? { sourceIds } : {}),
@@ -557,6 +598,30 @@ async function gatherPages(
     onDegraded?.("pages_failed");
     return [];
   }
+}
+
+/**
+ * The hits at or above `minTrust`. A graph hit is judged by its page, any
+ * other by its chunk; a hit the lookup cannot see (an injected retriever's)
+ * is kept, since the default retriever already applied the floor.
+ */
+async function keepMinTrust(
+  engine: Engine,
+  hits: SearchHit[],
+  minTrust: TrustTier | undefined,
+  sourceIds?: readonly string[],
+): Promise<SearchHit[]> {
+  if (minTrust === undefined || hits.length === 0) return hits;
+  const graphSlug = (h: SearchHit) => (typeof h.chunkId === "string" && h.chunkId.startsWith("graph:") ? h.chunkId.slice(6) : null);
+  const tiers = await readTrustTiers(engine, {
+    chunks: hits.filter(h => typeof h.chunkId === "string" && graphSlug(h) === null).map(h => h.chunkId),
+    pages: hits.map(graphSlug).filter((s): s is string => s !== null),
+  }, sourceIds);
+  return hits.filter((h) => {
+    const slug = graphSlug(h);
+    const tier = slug !== null ? tiers.pages.get(slug) : tiers.chunks.get(h.chunkId);
+    return tier === undefined || meetsMinTrust(tier, minTrust);
+  });
 }
 
 /**
@@ -1176,7 +1241,7 @@ export function buildExtractiveFallback(
     const identity = `${p.title ?? ""} ${basenameWords(p.sourcePath)}`;
     const excerpt = selectRelevantExcerpt(p.content ?? "", question, perPage, identity).trim();
     if (!excerpt) continue;
-    const text = p.trust === "external" ? frameExternal(excerpt) : excerpt;
+    const text = frameForRead(excerpt, p);
     lines.push(`- [${p.sourcePath}] ${text.split("\n").join("\n  ")}`);
     cited.push({ ref: p.sourcePath, kind: "page", ...(p.trust === "external" ? { trust: "external" as const } : {}) });
   }
@@ -1256,11 +1321,49 @@ function defaultBudget(): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_BUDGET_USD;
 }
 
+/** Every page of a default gather: a citation can rest on any of them. */
+const TRACE_SLUGS = DEFAULT_PAGE_HITS;
+
+/** The ref a trace shows for a gathered page: its slug when it is a page mirror. */
+function traceRef(sourcePath: string): string {
+  const ref = mirrorSlug(sourcePath) ?? (sourcePath.startsWith("page-truth://") ? sourcePath.slice("page-truth://".length) : sourcePath);
+  return ref.slice(0, 200);
+}
+
+function traceGather(trace: (e: ThinkTraceEvent) => void, note: string, hits: SearchHit[], ms?: number): void {
+  trace({
+    step: "gather",
+    note,
+    count: hits.length,
+    slugs: hits.slice(0, TRACE_SLUGS).map((h) => traceRef(h.sourcePath)),
+    ...(ms !== undefined ? { ms } : {}),
+  });
+}
+
 /**
  * Run one think synthesis. Default-OFF: a live (paid) run needs MEMRAIN_THINK=1;
  * tests inject a sonnetFn, which both bypasses the gate and avoids any spend.
  */
 export async function runThink(storage: Storage, opts: ThinkOptions): Promise<ThinkResult> {
+  const listener = opts.onTrace;
+  const trace = (e: ThinkTraceEvent): void => {
+    if (!listener) return;
+    try {
+      listener(e);
+    } catch {
+      // Progress reporting never changes the run.
+    }
+  };
+  const result = await runThinkSteps(storage, opts, trace);
+  trace({ step: "settle", usd: result.spentUsd });
+  return result;
+}
+
+async function runThinkSteps(
+  storage: Storage,
+  opts: ThinkOptions,
+  trace: (e: ThinkTraceEvent) => void,
+): Promise<ThinkResult> {
   const question = (opts.question ?? "").trim();
   if (!question) {
     return blankResult("empty question");
@@ -1283,10 +1386,24 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   const budget = new BudgetTracker(opts.maxBudgetUsd ?? defaultBudget(), "think");
   const modelId = resolveModel("reasoning", opts.modelId, "think");
   // Price the pre-flight and the live call on the same model (test seam ignores).
-  const sonnetFn = resolveSonnetFn(opts.sonnetFn, { modelId });
+  const modelFn = resolveSonnetFn(opts.sonnetFn, { modelId });
+  const sonnetFn: SonnetFn = async (input) => {
+    trace({ step: "model_start" });
+    const started = Date.now();
+    try {
+      const resp = await modelFn(input);
+      const usd = priceFor(resp.modelId) ? costUsd(resp.modelId, resp.usage) : undefined;
+      trace({ step: "model_end", ms: Date.now() - started, ...(usd !== undefined ? { usd } : {}) });
+      return resp;
+    } catch (e) {
+      trace({ step: "model_end", ms: Date.now() - started, note: "failed" });
+      throw e;
+    }
+  };
 
   const diagnostics = gatherDiagnostics();
   const intent = classifyIntent(question);
+  trace({ step: "intent", note: intent });
   const engine = storage.engine();
   // Default embedder: the real Titan path ONLY on the live route (no injected
   // sonnetFn). When a sonnetFn is injected (tests / deep-synth), skip the
@@ -1313,9 +1430,10 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   const windowFields = window ? { window_source: questionWindow ? "question" as const : "explicit" as const, window } : {};
   const fence = (hits: SearchHit[]): SearchHit[] =>
     opts.fenceDiary ? hits.filter((h) => !isDiarySourcePath(h.sourcePath)) : hits;
-  const rawPagesFn = opts.pagesFn ?? ((q, kk) => gatherPages(storage, q, kk, scopeIds, window, opts.embedQuery, diagnostics.note));
+  const rawPagesFn = opts.pagesFn ?? ((q, kk) => gatherPages(storage, q, kk, scopeIds, window, opts.embedQuery, diagnostics.note, opts.minTrust));
   const pagesFn = async (q: string, kk: number): Promise<SearchHit[]> =>
-    markExternalChunks(engine, fence(await rawPagesFn(q, kk)), scopeIds);
+    markExternalChunks(engine, await keepMinTrust(engine, fence(await rawPagesFn(q, kk)), opts.minTrust, scopeIds), scopeIds);
+  const gatherStarted = Date.now();
   const [hybridPages, takesKw, takesVec] = await Promise.all([
     pagesFn(question, k),
     gatherTakes(engine, question, maxTakes, scopeIds, diagnostics.note),
@@ -1325,6 +1443,8 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   ]);
   // Fuse the keyword + vector take streams (RRF, dedup by take_key).
   const takes = takesVec.length > 0 ? fuseTakeStreams(takesKw, takesVec, maxTakes) : takesKw;
+  traceGather(trace, "pages", hybridPages, Date.now() - gatherStarted);
+  trace({ step: "gather", note: "takes", count: takes.length });
 
   // Trajectory injection — only for temporal / knowledge_update questions.
   // Anchors come from the caller OR, when none are named, are auto-derived from
@@ -1334,12 +1454,12 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   if (intent !== "other" && anchors.length === 0 && autoAnchorEnabled()) {
     anchors = await autoAnchors(storage, question, hybridPages, diagnostics.note);
   }
-  const trajectoryBlock =
+  const trajectories =
     intent !== "other" && anchors.length > 0
-      ? renderTrajectoryBlock(
-          await gatherTrajectories(storage, anchors, opts.sourceIds, diagnostics.note),
-        )
-      : "";
+      ? await gatherTrajectories(storage, anchors, opts.sourceIds, diagnostics.note)
+      : [];
+  const trajectoryBlock = renderTrajectoryBlock(trajectories);
+  const shownPoints = trajectoryBlock === "" ? [] : trajectories.flatMap((t) => t.points);
 
   // Anchor-subgraph gather stream: the anchors' 2-hop link neighborhood joins
   // the page evidence via RRF fusion, so an entity question sees the subgraph
@@ -1347,9 +1467,10 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   // WITHOUT anchors (hermetic paths stay hermetic).
   let pages = hybridPages;
   if (anchors.length > 0) {
-    const graphPages = await markExternalChunks(engine, fence(await gatherGraphPages(
+    const graphPages = await markExternalChunks(engine, await keepMinTrust(engine, fence(await gatherGraphPages(
       storage, anchors, k, scopeIds, diagnostics.note, questionWindow?.since,
-    )), scopeIds);
+    )), opts.minTrust, scopeIds), scopeIds);
+    traceGather(trace, "graph", graphPages);
     if (graphPages.length > 0) pages = fusePageStreams(hybridPages, graphPages, Math.max(k, hybridPages.length));
   }
 
@@ -1379,11 +1500,14 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   let status: SynthesisStatus = "ok";
   // The evidence blocks the kept synthesis was written from, for the quote check.
   let synthesisEvidence: string[] = [];
+  // Every page any round put before the model: a later round's fusion may drop one an earlier answer read.
+  const shownPages = new Set<string>();
   for (let round = 1; round <= rounds; round++) {
     if (round > 1) {
       if (!synthesis || synthesis.gaps.length === 0 || exhausted) break;
       const gapQuery = `${question}\n${synthesis.gaps.join("\n")}`.slice(0, 400);
       const gapPages = await pagesFn(gapQuery, k);
+      traceGather(trace, "gaps", gapPages);
       pages = fusePageStreams(pages, gapPages, Math.max(k, pages.length));
     }
 
@@ -1394,6 +1518,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
       await loadPageDates(engine, pages, temporal.timeZone, diagnostics.note),
     );
     const takesBlock = renderTakesBlock(takes);
+    for (const p of pages) shownPages.add(p.sourcePath);
     const user = buildThinkUserMessage({
       currentDate,
       question,
@@ -1407,6 +1532,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
     // The estimate is held until the call settles, so concurrent askers sharing
     // one tracker cannot all pass against the same headroom.
     const hold = budget.reserve(modelId, estimateUsage(THINK_SYSTEM_PROMPT, user, maxTokens));
+    trace(hold ? { step: "reserve", usd: hold.usd } : { step: "reserve", note: "refused" });
     if (hold === null) {
       if (round === 1) {
         // An unpriced model is refused by the same check, but more budget
@@ -1532,6 +1658,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
     });
     synthesis = { ...synthesis, citations: v.citations };
     dropped = v.dropped;
+    trace({ step: "citations", count: v.citations.length, ...(dropped.length > 0 ? { note: `citation_dropped:${dropped.length}` } : {}) });
     if (dropped.length > 0) {
       process.stderr.write(`[think] dropped ${dropped.length} unresolvable citation(s): ${dropped.join(", ")}\n`);
     }
@@ -1543,6 +1670,7 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
   if (synthesis && thinkQuoteVerifyEnabled()) {
     const check = verifyQuotes(synthesis.answer, synthesisEvidence);
     const q = check.quote_check;
+    trace({ step: "quote_check", count: q.grounded + q.repaired + q.unverified, ...(q.unverified > 0 ? { note: `unverified:${q.unverified}` } : {}) });
     if (q.grounded + q.repaired + q.unverified > 0) {
       quoteFields = {
         answer_raw: check.answer_raw,
@@ -1570,6 +1698,12 @@ export async function runThink(storage: Storage, opts: ThinkOptions): Promise<Th
     ...windowFields,
     evidence_truncated: pages.some(p => p.truncated === true || p.content.length > PAGE_EXCERPT_CHARS),
     ...quoteFields,
+    evidence: {
+      pages: [...shownPages],
+      takes: [...new Set(takes.map((t) => t.take_key))],
+      facts: [...new Set(shownPoints.filter((p) => p.source === "fact").map((p) => p.id))],
+      events: [...new Set(shownPoints.filter((p) => p.source === "event").map((p) => p.id))],
+    },
   }, question, pages);
 }
 

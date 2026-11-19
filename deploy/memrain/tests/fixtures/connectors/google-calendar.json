@@ -1,0 +1,347 @@
+{
+  "token": {
+    "access_token": "ya29.test-google-access-token-0123456789",
+    "expires_in": 3599,
+    "refresh_token": "1//test-google-refresh-token-9876543210",
+    "scope": "https://www.googleapis.com/auth/calendar.readonly openid https://www.googleapis.com/auth/userinfo.email",
+    "token_type": "Bearer",
+    "id_token": "header.payload.signature"
+  },
+  "tokenRefreshInvalidGrant": {
+    "error": "invalid_grant",
+    "error_description": "Token has been expired or revoked."
+  },
+  "userinfo": {
+    "sub": "110169484474386276334",
+    "email": "owner@example.test",
+    "email_verified": true
+  },
+  "calendarList": {
+    "kind": "calendar#calendarList",
+    "etag": "\"p33ofrsgavb5v40o\"",
+    "nextSyncToken": "CPDAlvWDx70CEPDAlvWDx70CGAU=",
+    "items": [
+      {
+        "kind": "calendar#calendarListEntry",
+        "etag": "\"1699999999999000\"",
+        "id": "owner@example.test",
+        "summary": "owner@example.test",
+        "timeZone": "Europe/Berlin",
+        "accessRole": "owner",
+        "selected": true,
+        "primary": true
+      },
+      {
+        "kind": "calendar#calendarListEntry",
+        "etag": "\"1699999999999001\"",
+        "id": "team0abc123@group.calendar.google.com",
+        "summary": "Team",
+        "timeZone": "Europe/Berlin",
+        "accessRole": "reader",
+        "selected": true
+      },
+      {
+        "kind": "calendar#calendarListEntry",
+        "etag": "\"1699999999999002\"",
+        "id": "free0busy@group.calendar.google.com",
+        "summary": "Busy only",
+        "timeZone": "Europe/Berlin",
+        "accessRole": "freeBusyReader",
+        "selected": true
+      }
+    ]
+  },
+  "eventsFullPage1": {
+    "kind": "calendar#events",
+    "etag": "\"p32g9nb5bt6fva0g\"",
+    "summary": "owner@example.test",
+    "updated": "2026-11-15T18:00:00.000Z",
+    "timeZone": "Europe/Berlin",
+    "accessRole": "owner",
+    "defaultReminders": [{ "method": "popup", "minutes": 10 }],
+    "nextPageToken": "CigKGjBxdGVzdHBhZ2V0b2tlbjAwMDE",
+    "items": [
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000000\"",
+        "id": "e1single0001",
+        "status": "confirmed",
+        "htmlLink": "https://www.google.com/calendar/event?eid=ZTFzaW5nbGU",
+        "created": "2026-11-01T09:00:00.000Z",
+        "updated": "2026-11-10T09:00:00.000Z",
+        "summary": "Roadmap review",
+        "description": "<p>Agenda: review the <b>roadmap</b>.</p>",
+        "location": "Room 4",
+        "creator": { "email": "owner@example.test", "self": true },
+        "organizer": { "email": "owner@example.test", "self": true },
+        "start": { "dateTime": "2026-11-18T10:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "end": { "dateTime": "2026-11-18T11:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "iCalUID": "e1single0001@google.com",
+        "sequence": 0,
+        "attendees": [
+          { "email": "owner@example.test", "organizer": true, "self": true, "responseStatus": "accepted" },
+          { "email": "ana@example.net", "displayName": "Ana Lee", "responseStatus": "accepted" },
+          { "email": "c_room4@resource.calendar.google.com", "displayName": "Room 4", "resource": true, "responseStatus": "accepted" }
+        ],
+        "eventType": "default"
+      },
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000100\"",
+        "id": "s1weekly0001",
+        "status": "confirmed",
+        "created": "2025-01-02T09:00:00.000Z",
+        "updated": "2026-10-01T09:00:00.000Z",
+        "summary": "Weekly sync",
+        "organizer": { "email": "owner@example.test", "self": true },
+        "start": { "dateTime": "2025-01-06T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "end": { "dateTime": "2025-01-06T09:30:00+01:00", "timeZone": "Europe/Berlin" },
+        "recurrence": ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+        "iCalUID": "s1weekly0001@google.com",
+        "sequence": 1,
+        "attendees": [
+          { "email": "owner@example.test", "self": true, "responseStatus": "accepted" },
+          { "email": "bo@example.net", "displayName": "Bo Chen", "responseStatus": "needsAction" }
+        ],
+        "eventType": "default"
+      },
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000200\"",
+        "id": "wl0001",
+        "status": "confirmed",
+        "summary": "Home",
+        "start": { "date": "2026-11-17" },
+        "end": { "date": "2026-11-18" },
+        "iCalUID": "wl0001@google.com",
+        "eventType": "workingLocation",
+        "workingLocationProperties": { "type": "homeOffice", "homeOffice": {} }
+      }
+    ]
+  },
+  "eventsFullPage2": {
+    "kind": "calendar#events",
+    "etag": "\"p32g9nb5bt6fva0h\"",
+    "summary": "owner@example.test",
+    "updated": "2026-11-15T18:00:00.000Z",
+    "timeZone": "Europe/Berlin",
+    "accessRole": "owner",
+    "nextSyncToken": "CPjI9LGu-YgDEPjI9LGu-YgDGAUggIDCrgI=",
+    "items": [
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000300\"",
+        "id": "e2allday0001",
+        "status": "tentative",
+        "summary": "Offsite",
+        "organizer": { "email": "lead@example.net", "displayName": "Team Lead" },
+        "start": { "date": "2026-11-20" },
+        "end": { "date": "2026-11-21" },
+        "iCalUID": "e2allday0001@google.com",
+        "attendees": [
+          { "email": "owner@example.test", "self": true, "responseStatus": "tentative" },
+          { "email": "lead@example.net", "displayName": "Team Lead", "organizer": true, "responseStatus": "accepted" }
+        ],
+        "eventType": "default"
+      },
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000400\"",
+        "id": "gone0001",
+        "status": "cancelled"
+      }
+    ]
+  },
+  "instancesS1": {
+    "kind": "calendar#events",
+    "summary": "owner@example.test",
+    "timeZone": "Europe/Berlin",
+    "accessRole": "owner",
+    "items": [
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000101\"",
+        "id": "s1weekly0001_20231106T080000Z",
+        "status": "confirmed",
+        "summary": "Weekly sync",
+        "start": { "dateTime": "2023-11-06T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "end": { "dateTime": "2023-11-06T09:30:00+01:00", "timeZone": "Europe/Berlin" },
+        "recurringEventId": "s1weekly0001",
+        "originalStartTime": { "dateTime": "2023-11-06T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "iCalUID": "s1weekly0001@google.com"
+      },
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000102\"",
+        "id": "s1weekly0001_20261109T080000Z",
+        "status": "confirmed",
+        "summary": "Weekly sync",
+        "start": { "dateTime": "2026-11-09T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "end": { "dateTime": "2026-11-09T09:30:00+01:00", "timeZone": "Europe/Berlin" },
+        "recurringEventId": "s1weekly0001",
+        "originalStartTime": { "dateTime": "2026-11-09T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "iCalUID": "s1weekly0001@google.com"
+      },
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000103\"",
+        "id": "s1weekly0001_20261116T080000Z",
+        "status": "confirmed",
+        "summary": "Weekly sync",
+        "start": { "dateTime": "2026-11-16T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "end": { "dateTime": "2026-11-16T09:30:00+01:00", "timeZone": "Europe/Berlin" },
+        "recurringEventId": "s1weekly0001",
+        "originalStartTime": { "dateTime": "2026-11-16T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "iCalUID": "s1weekly0001@google.com"
+      },
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000104\"",
+        "id": "s1weekly0001_20261123T080000Z",
+        "status": "confirmed",
+        "summary": "Weekly sync",
+        "start": { "dateTime": "2026-11-23T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "end": { "dateTime": "2026-11-23T09:30:00+01:00", "timeZone": "Europe/Berlin" },
+        "recurringEventId": "s1weekly0001",
+        "originalStartTime": { "dateTime": "2026-11-23T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "iCalUID": "s1weekly0001@google.com"
+      }
+    ]
+  },
+  "instancesS1AfterMove": {
+    "kind": "calendar#events",
+    "summary": "owner@example.test",
+    "timeZone": "Europe/Berlin",
+    "accessRole": "owner",
+    "items": [
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000102\"",
+        "id": "s1weekly0001_20261109T080000Z",
+        "status": "confirmed",
+        "summary": "Weekly sync",
+        "start": { "dateTime": "2026-11-09T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "end": { "dateTime": "2026-11-09T09:30:00+01:00", "timeZone": "Europe/Berlin" },
+        "recurringEventId": "s1weekly0001",
+        "originalStartTime": { "dateTime": "2026-11-09T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "iCalUID": "s1weekly0001@google.com"
+      },
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000103\"",
+        "id": "s1weekly0001_20261116T080000Z",
+        "status": "confirmed",
+        "summary": "Weekly sync",
+        "start": { "dateTime": "2026-11-16T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "end": { "dateTime": "2026-11-16T09:30:00+01:00", "timeZone": "Europe/Berlin" },
+        "recurringEventId": "s1weekly0001",
+        "originalStartTime": { "dateTime": "2026-11-16T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "iCalUID": "s1weekly0001@google.com"
+      },
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000700\"",
+        "id": "s1weekly0001_20261123T080000Z",
+        "status": "confirmed",
+        "summary": "Weekly sync (moved to Tuesday)",
+        "start": { "dateTime": "2026-11-24T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "end": { "dateTime": "2026-11-24T09:30:00+01:00", "timeZone": "Europe/Berlin" },
+        "recurringEventId": "s1weekly0001",
+        "originalStartTime": { "dateTime": "2026-11-23T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "iCalUID": "s1weekly0001@google.com"
+      }
+    ]
+  },
+  "eventS1Master": {
+    "kind": "calendar#event",
+    "etag": "\"3400000000000100\"",
+    "id": "s1weekly0001",
+    "status": "confirmed",
+    "summary": "Weekly sync",
+    "organizer": { "email": "owner@example.test", "self": true },
+    "start": { "dateTime": "2025-01-06T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+    "end": { "dateTime": "2025-01-06T09:30:00+01:00", "timeZone": "Europe/Berlin" },
+    "recurrence": ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+    "iCalUID": "s1weekly0001@google.com",
+    "attendees": [
+      { "email": "owner@example.test", "self": true, "responseStatus": "accepted" },
+      { "email": "bo@example.net", "displayName": "Bo Chen", "responseStatus": "needsAction" }
+    ],
+    "eventType": "default"
+  },
+  "eventsDelta": {
+    "kind": "calendar#events",
+    "etag": "\"p32g9nb5bt6fva0i\"",
+    "summary": "owner@example.test",
+    "updated": "2026-11-16T12:00:00.000Z",
+    "timeZone": "Europe/Berlin",
+    "accessRole": "owner",
+    "nextSyncToken": "CKjK9LGu-YgDEKjK9LGu-YgDGAUggIDCrgI=",
+    "items": [
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000500\"",
+        "id": "e1single0001",
+        "status": "confirmed",
+        "updated": "2026-11-16T11:00:00.000Z",
+        "summary": "Roadmap review (moved)",
+        "organizer": { "email": "owner@example.test", "self": true },
+        "start": { "dateTime": "2026-11-19T10:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "end": { "dateTime": "2026-11-19T11:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "iCalUID": "e1single0001@google.com",
+        "sequence": 1,
+        "attendees": [
+          { "email": "owner@example.test", "self": true, "responseStatus": "accepted" },
+          { "email": "ana@example.net", "displayName": "Ana Lee", "responseStatus": "accepted" }
+        ],
+        "eventType": "default"
+      },
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000600\"",
+        "id": "e2allday0001",
+        "status": "cancelled"
+      },
+      {
+        "kind": "calendar#event",
+        "etag": "\"3400000000000700\"",
+        "id": "s1weekly0001_20261123T080000Z",
+        "status": "confirmed",
+        "summary": "Weekly sync (moved to Tuesday)",
+        "start": { "dateTime": "2026-11-24T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "end": { "dateTime": "2026-11-24T09:30:00+01:00", "timeZone": "Europe/Berlin" },
+        "recurringEventId": "s1weekly0001",
+        "originalStartTime": { "dateTime": "2026-11-23T09:00:00+01:00", "timeZone": "Europe/Berlin" },
+        "iCalUID": "s1weekly0001@google.com"
+      }
+    ]
+  },
+  "eventsSeriesCancelled": {
+    "kind": "calendar#events",
+    "summary": "owner@example.test",
+    "timeZone": "Europe/Berlin",
+    "accessRole": "owner",
+    "nextSyncToken": "CLjL9LGu-YgDELjL9LGu-YgDGAUggIDCrgI=",
+    "items": [
+      { "kind": "calendar#event", "etag": "\"3400000000000800\"", "id": "s1weekly0001", "status": "cancelled" }
+    ]
+  },
+  "error410FullSyncRequired": {
+    "error": {
+      "errors": [
+        { "domain": "calendar", "reason": "fullSyncRequired", "message": "Sync token is no longer valid, a full sync is required." }
+      ],
+      "code": 410,
+      "message": "Sync token is no longer valid, a full sync is required."
+    }
+  },
+  "error403UserRateLimit": {
+    "error": {
+      "errors": [
+        { "domain": "usageLimits", "reason": "userRateLimitExceeded", "message": "User Rate Limit Exceeded" }
+      ],
+      "code": 403,
+      "message": "User Rate Limit Exceeded"
+    }
+  }
+}

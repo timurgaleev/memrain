@@ -12,6 +12,10 @@ directly comparable to published LongMemEval scores. Compare runs only when
 they share the dataset checksum, prompt hash and model ids. Each summary
 records all three.
 
+For a cheap figure with no answer model and no judge, `--retrieval-only` (lme-r)
+scores only whether the evidence sessions are retrieved; see
+[BENCH-AND-PROMOTE.md](BENCH-AND-PROMOTE.md).
+
 ## Dataset
 
 - Source: the cleaned LongMemEval release, file `longmemeval_s_cleaned.json`,

@@ -6,6 +6,7 @@
  */
 import {
   CHRONICLE_EXTRACT_JOB_KIND,
+  CONNECTOR_SYNC_JOB_KIND,
   INGEST_CAPTURE_JOB_KIND,
   PAGE_MIRROR_JOB_KIND,
   REMEDIATION_JOB_KIND,
@@ -18,6 +19,7 @@ export const KIND_DEFAULT_TIMEOUT_MS: Readonly<Record<string, number>> = {
   [CHRONICLE_EXTRACT_JOB_KIND]: 10 * 60_000,
   [INGEST_CAPTURE_JOB_KIND]: 5 * 60_000,
   [TRANSCRIPTS_INGEST_JOB_KIND]: 15 * 60_000,
+  [CONNECTOR_SYNC_JOB_KIND]: 30 * 60_000,
 };
 
 /** The built-in cap for `kind`, or undefined when it has none. */

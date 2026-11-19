@@ -18300,6 +18300,34 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## three 0.187.0
+
+License: MIT
+
+```
+The MIT License
+
+Copyright © 2010-2026 three.js authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
 ## tree-sitter-bash 0.25.1
 
 License: MIT
@@ -18554,3 +18582,73 @@ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 ```
 
+## Kenney Furniture Kit 2.0
+
+License: CC0-1.0
+
+Used for the office furniture models in
+`deploy/memrain/admin/src/assets/office3d/` (`*.glb`), re-exported with the
+unlit material flag removed so the models take scene lighting; geometry and
+colours unchanged. Source: https://kenney.nl/assets/furniture-kit
+
+```
+Furniture Kit (2.0)
+
+Created/distributed by Kenney (www.kenney.nl)
+Creation date: 20-10-2018 16:21
+
+------------------------------
+
+License: (Creative Commons Zero, CC0)
+http://creativecommons.org/publicdomain/zero/1.0/
+
+This content is free to use in personal, educational and commercial projects.
+Support us by crediting Kenney or www.kenney.nl (this is not mandatory)
+
+------------------------------
+
+Donate:   http://support.kenney.nl
+Request:  http://request.kenney.nl
+Patreon:  http://patreon.com/kenney/
+
+Follow on Twitter for updates:
+http://twitter.com/KenneyNL
+```
+
+## Kenney Mini Characters 2.0
+
+License: CC0-1.0
+
+Used for the office people in `deploy/memrain/admin/src/assets/office3d/`
+(`character-*.gltf`, `character-*.bin`, `colormap.png`), converted from the
+pack's GLB files with most animation clips removed and the texture path
+flattened. Source: https://kenney.nl/assets/mini-characters
+
+```
+Mini Characters (2.0)
+
+Created/distributed by Kenney (www.kenney.nl)
+Creation date: 07-11-2026 11:14
+
+------------------------------
+
+License: (Creative Commons Zero, CC0)
+http://creativecommons.org/publicdomain/zero/1.0/
+
+You can use this content for personal, educational, and commercial purposes.
+
+Support by crediting 'Kenney' or 'www.kenney.nl' (this is not a requirement)
+
+------------------------------
+
+• Website : www.kenney.nl
+• Donate  : www.kenney.nl/donate
+
+• Patreon : patreon.com/kenney
+
+Follow on social media for updates:
+
+• Twitter:	 twitter.com/KenneyNL
+• BlueSky:	 kenney.bsky.social
+• Instagram: instagram.com/kenney_nl
+```

@@ -25,7 +25,50 @@ const MIME: Record<string, string> = {
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
   ".png": "image/png",
+  ".glb": "model/gltf-binary",
+  ".gltf": "model/gltf+json",
+  ".bin": "application/octet-stream",
 };
+
+// Only files the Vite build manifest lists carry a content hash, so only those
+// may be cached for a year; everything else, index.html included, revalidates.
+const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
+
+interface ManifestEntry {
+  file?: unknown;
+  css?: unknown;
+  assets?: unknown;
+}
+
+const hashedFilesByDist = new Map<string, Set<string>>();
+
+// A missing or unreadable manifest is remembered too: the dist does not change under a
+// running server, so trying again on every request would only cost a disk read.
+async function hashedFiles(distDir: string): Promise<Set<string>> {
+  const known = hashedFilesByDist.get(distDir);
+  if (known) return known;
+  const files = await readManifest(distDir);
+  hashedFilesByDist.set(distDir, files);
+  return files;
+}
+
+async function readManifest(distDir: string): Promise<Set<string>> {
+  const manifest = Bun.file(resolve(distDir, ".vite", "manifest.json"));
+  if (!(await manifest.exists())) return new Set();
+  const files = new Set<string>();
+  try {
+    const entries = Object.values((await manifest.json()) as Record<string, ManifestEntry>);
+    for (const entry of entries) {
+      if (typeof entry.file === "string") files.add(entry.file);
+      for (const list of [entry.css, entry.assets]) {
+        if (Array.isArray(list)) for (const f of list) if (typeof f === "string") files.add(f);
+      }
+    }
+  } catch {
+    return new Set();
+  }
+  return files;
+}
 
 // The SPA ships its own scripts and styles and talks only to this origin.
 // React `style` props go through CSSOM, which style-src does not govern.
@@ -50,11 +93,15 @@ function mimeFor(path: string): string {
  * Returns null only when the built dist is missing (so the caller 404s rather
  * than masking a broken build). Never serves outside the dist dir.
  */
-export async function serveAdminStatic(url: URL, distDir: string = DIST_DIR): Promise<Response | null> {
+export async function serveAdminStatic(
+  url: URL,
+  distDir: string = DIST_DIR,
+  site: { mount: string; index: string } = { mount: "/admin", index: "index.html" },
+): Promise<Response | null> {
   // The asset path under dist. "/admin" or "/admin/" → index.html. A real asset
   // request is "/admin/assets/<file>"; anything else is SPA-routed → index.html.
-  let rel = url.pathname.slice("/admin".length).replace(/^\/+/, ""); // strip "/admin/"
-  if (rel === "" || !rel.startsWith("assets/")) rel = "index.html";
+  let rel = url.pathname.slice(site.mount.length).replace(/^\/+/, ""); // strip "/admin/"
+  if (rel === "" || !rel.startsWith("assets/")) rel = site.index;
 
   // Path-traversal guard: resolve, then check the file is genuinely INSIDE
   // the dist dir via a `relative()` boundary (a bare `startsWith` would admit a
@@ -69,10 +116,22 @@ export async function serveAdminStatic(url: URL, distDir: string = DIST_DIR): Pr
   const file = Bun.file(filePath);
   if (!(await file.exists())) {
     // Asset miss → SPA fallback; index miss → the build is absent.
-    if (rel === "index.html") return null;
-    const index = Bun.file(resolve(distDir, "index.html"));
+    if (rel === site.index) return null;
+    const index = Bun.file(resolve(distDir, site.index));
     if (!(await index.exists())) return null;
-    return new Response(index, { headers: { ...ADMIN_SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8" } });
+    return new Response(index, {
+      headers: {
+        ...ADMIN_SECURITY_HEADERS,
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-cache",
+      },
+    });
   }
-  return new Response(file, { headers: { ...ADMIN_SECURITY_HEADERS, "Content-Type": mimeFor(filePath) } });
+  return new Response(file, {
+    headers: {
+      ...ADMIN_SECURITY_HEADERS,
+      "Content-Type": mimeFor(filePath),
+      "Cache-Control": (await hashedFiles(distDir)).has(rel) ? IMMUTABLE_CACHE : "no-cache",
+    },
+  });
 }

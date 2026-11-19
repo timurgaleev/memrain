@@ -11,13 +11,17 @@
  * path.
  */
 import { isKnownTool } from "../mcp/param-redaction.ts";
+import { isKnownJobKind } from "../core/jobs/handlers.ts";
+import { getDaemon } from "../core/daemons/registry.ts";
 
 export interface AdminEvent {
   agent: string;
   operation: string;
   latency_ms: number;
-  status: "success" | "error";
+  status: "success" | "error" | "running";
   timestamp: string;
+  kind: "tool" | "job";
+  phase: "start" | "end";
 }
 
 const MAX_SUBSCRIBERS = 50;
@@ -42,7 +46,7 @@ class AdminEventBus {
     const frame = encoder.encode(`data: ${JSON.stringify(evt)}\n\n`);
     for (const c of [...this.subscribers]) {
       // Drop the frame (not the connection) for a backpressured client so a slow
-      // reader can't make the in-memory queue grow unbounded (codex). The feed
+      // reader can't make the in-memory queue grow unbounded. The feed
       // is a live tail, so a dropped event is acceptable; a dead client still
       // gets evicted by the enqueue throw below.
       if (c.desiredSize !== null && c.desiredSize <= 0) continue;
@@ -93,9 +97,40 @@ export function publishToolCallEvent(e: {
       latency_ms: Math.round(e.latencyMs),
       status: e.ok ? "success" : "error",
       timestamp: new Date().toISOString(),
+      kind: "tool",
+      phase: "end",
     });
   } catch {
     /* never break the request path */
+  }
+}
+
+const JOB_WORKER_NAMES = new Set(["worker", "assistant", "cycle"]);
+
+/**
+ * Publish a background-job or cycle event. Same redaction stance as tool
+ * calls: only registered job kinds and worker names go out, anything else
+ * becomes a fixed placeholder. Best-effort.
+ */
+export function publishJobEvent(e: {
+  worker: string;
+  kind: string;
+  phase: "start" | "end";
+  ok?: boolean;
+  latencyMs?: number;
+}): void {
+  try {
+    adminEventBus.publish({
+      agent: JOB_WORKER_NAMES.has(e.worker) || getDaemon(e.worker) ? e.worker : "worker",
+      operation: isKnownJobKind(e.kind) || e.kind === "cycle" ? e.kind : "other",
+      latency_ms: Math.round(e.latencyMs ?? 0),
+      status: e.phase === "start" ? "running" : e.ok ? "success" : "error",
+      timestamp: new Date().toISOString(),
+      kind: "job",
+      phase: e.phase,
+    });
+  } catch {
+    /* never break the worker */
   }
 }
 
@@ -111,14 +146,11 @@ export function handleAdminEventsRoute(req: Request, requireAdmin: (req: Request
     return Response.json({ error: "Admin authentication required" }, { status: 401 });
   }
 
+  // start() runs inside the constructor, so `controllerRef` is known right after it.
   let controllerRef: ReadableStreamDefaultController | null = null;
   const stream = new ReadableStream({
     start(controller) {
-      if (!adminEventBus.add(controller)) {
-        controller.enqueue(encoder.encode(`event: error\ndata: subscriber limit reached\n\n`));
-        controller.close();
-        return;
-      }
+      if (!adminEventBus.add(controller)) return;
       controllerRef = controller;
       controller.enqueue(encoder.encode(`: connected\n\n`)); // initial comment
     },
@@ -126,6 +158,10 @@ export function handleAdminEventsRoute(req: Request, requireAdmin: (req: Request
       if (controllerRef) adminEventBus.remove(controllerRef);
     },
   });
+  // A plain error rather than a stream that closes at once, which EventSource would reopen in a loop.
+  if (!controllerRef) {
+    return Response.json({ error: "Too many live feeds are open" }, { status: 503 });
+  }
 
   return new Response(stream, {
     headers: {

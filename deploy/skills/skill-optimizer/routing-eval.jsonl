@@ -1,0 +1,8 @@
+// Routing eval fixtures for skills/skill-optimizer.
+// Each line: {intent, expected_skill, ambiguous_with?}.
+// Rule: intent must paraphrase the trigger, not copy it.
+{"intent": "Optimize this skill so the agent stops picking the wrong one", "expected_skill": "skill-optimizer"}
+{"intent": "Tune the skill against the benchmark and tell me if the new triggers win", "expected_skill": "skill-optimizer"}
+{"intent": "Run skillopt on the query skill with my candidate file", "expected_skill": "skill-optimizer"}
+{"intent": "Make the skill route better for meeting requests", "expected_skill": "skill-optimizer"}
+{"intent": "Optimize the database query planner", "expected_skill": null}

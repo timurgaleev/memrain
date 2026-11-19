@@ -107,6 +107,10 @@ describe("patNameSpendConflict", () => {
     expect(patNameSpendConflict("memex_enr_abc")).toContain("memex_enr_");
   });
 
+  it("refuses the chat owners' spend-id prefix", () => {
+    expect(patNameSpendConflict("memrain_chat_operator")).toContain("memrain_chat_");
+  });
+
   it("allows ordinary names", () => {
     expect(patNameSpendConflict("timur-laptop")).toBeNull();
     expect(patNameSpendConflict("memex_client")).toBeNull();

@@ -73,7 +73,10 @@ Every message, meeting, email, or conversation that references a person or compa
 1. **Detect entities** — people, companies, deals mentioned
 2. **Load brain pages** — read existing pages for context before responding
 3. **Identify new information** — what does this signal tell us that the page doesn't know?
-4. **Write it back** — update the brain page with new info + timeline entry + source citation
+4. **Write it back only when it is new and durable** — a decision, a role or
+   status change, a commitment, a date — or when the user asks: update the brain
+   page with the new info + timeline entry + source citation. A passing mention
+   is not news; reading is enough.
 5. **Create if missing** — if notable and no page exists, create via enrich skill
 
 **User's direct statements are the highest-value data source.** Write them to brain

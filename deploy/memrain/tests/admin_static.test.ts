@@ -73,6 +73,19 @@ describe("serveAdminStatic security headers", () => {
     writeFileSync(join(dist, "index.html"), "<!doctype html><div id=\"root\"></div>");
     writeFileSync(join(dist, "assets", "app.css"), "body{}");
     writeFileSync(join(dist, "assets", "app.js"), "void 0;");
+    writeFileSync(join(dist, "assets", "room.gltf"), "{}");
+    writeFileSync(join(dist, "assets", "room.glb"), "glTF");
+    writeFileSync(join(dist, "assets", "room.bin"), "bin");
+    writeFileSync(join(dist, "assets", "index-abc.js"), "void 0;");
+    writeFileSync(join(dist, "assets", "office-characters.png"), "png");
+    writeFileSync(join(dist, "assets", "index-abc.css"), "body{}");
+    mkdirSync(join(dist, ".vite"));
+    writeFileSync(
+      join(dist, ".vite", "manifest.json"),
+      JSON.stringify({
+        "index.html": { file: "assets/index-abc.js", css: ["assets/index-abc.css"], assets: ["assets/office-characters.png"] },
+      }),
+    );
   });
   afterAll(() => rmSync(dist, { recursive: true, force: true }));
 
@@ -87,6 +100,62 @@ describe("serveAdminStatic security headers", () => {
   it("sets the headers on the traversal refusal too", async () => {
     const r = await serve("/admin/assets/..%2f..%2f..%2fetc%2fpasswd");
     expectSecurityHeaders(r);
+  });
+
+  it("serves 3D model files with their own content types", async () => {
+    expect((await serve("/admin/assets/room.gltf"))!.headers.get("Content-Type")).toBe("model/gltf+json");
+    expect((await serve("/admin/assets/room.glb"))!.headers.get("Content-Type")).toBe("model/gltf-binary");
+    expect((await serve("/admin/assets/room.bin"))!.headers.get("Content-Type")).toBe("application/octet-stream");
+  });
+
+  it("caches only files the build manifest lists for a year", async () => {
+    for (const p of ["index-abc.js", "index-abc.css", "office-characters.png"]) {
+      expect((await serve(`/admin/assets/${p}`))!.headers.get("Cache-Control")).toBe(
+        "public, max-age=31536000, immutable",
+      );
+    }
+  });
+
+  it("makes files outside the manifest, index.html and SPA routes revalidate", async () => {
+    for (const p of ["/admin/assets/app.js", "/admin/assets/room.glb", "/admin", "/admin/office", "/admin/assets/missing-asset.js"]) {
+      expect((await serve(p))!.headers.get("Cache-Control")).toBe("no-cache");
+    }
+  });
+
+  it("does not serve the manifest itself", async () => {
+    const r = await serve("/admin/.vite/manifest.json");
+    expect(r!.headers.get("Content-Type")).toContain("text/html");
+  });
+
+  it("revalidates everything when there is no manifest", async () => {
+    const bare = mkdtempSync(join(tmpdir(), "admin-dist-bare-"));
+    try {
+      mkdirSync(join(bare, "assets"));
+      writeFileSync(join(bare, "index.html"), "<div id=\"root\"></div>");
+      writeFileSync(join(bare, "assets", "index-abc.js"), "void 0;");
+      const r = await serveAdminStatic(new URL("http://h/admin/assets/index-abc.js"), bare);
+      expect(r!.headers.get("Cache-Control")).toBe("no-cache");
+    } finally {
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a broken manifest once, not on every request", async () => {
+    const broken = mkdtempSync(join(tmpdir(), "admin-dist-broken-"));
+    try {
+      mkdirSync(join(broken, "assets"));
+      mkdirSync(join(broken, ".vite"));
+      writeFileSync(join(broken, "index.html"), "<div id=\"root\"></div>");
+      writeFileSync(join(broken, "assets", "index-abc.js"), "void 0;");
+      writeFileSync(join(broken, ".vite", "manifest.json"), "{ not json");
+      const get = () => serveAdminStatic(new URL("http://h/admin/assets/index-abc.js"), broken);
+      expect((await get())!.headers.get("Cache-Control")).toBe("no-cache");
+      // Fixing the file on disk proves the failed read was kept rather than retried.
+      writeFileSync(join(broken, ".vite", "manifest.json"), JSON.stringify({ "index.html": { file: "assets/index-abc.js" } }));
+      expect((await get())!.headers.get("Cache-Control")).toBe("no-cache");
+    } finally {
+      rmSync(broken, { recursive: true, force: true });
+    }
   });
 
   it("allows passkey ceremonies in this document only, and leaves the CSP as it was", async () => {

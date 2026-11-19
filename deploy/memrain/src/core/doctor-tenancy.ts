@@ -19,6 +19,8 @@
  *   - source-routing-health : registered sources with zero documents (writes
  *     silently collapsed elsewhere) and documents with NULL source_id
  *     (invisible to every scoped reader — the migration-071 class). Warns.
+ *   - tenancy-isolation-config : more than one live non-operator credential
+ *     while MEMRAIN_TENANT_FAIL_CLOSED is off. Warns.
  *   - document-id-drift : filesystem documents whose id is not the hash of
  *     their source_path (a path rewritten in place, migration 099) and paths
  *     stored under more than one id. Warns; the next local re-read heals both.
@@ -28,6 +30,7 @@
  * clean bill either.
  */
 import { couldNotCheck, type CheckStatus } from "./doctor-categories.ts";
+import { tenantFailClosedEnabled } from "./auth-info.ts";
 import type { Engine } from "./engine/interface.ts";
 import { isAllowedRedirectUri } from "./oauth-provider.ts";
 import { collectPerSourceHealth } from "./source-health.ts";
@@ -411,6 +414,41 @@ export async function checkDocumentIdDrift(
         `${drifted} document(s) carry an id their source_path does not hash to; ` +
         `${duplicated} source_path(s) are stored under more than one id — ` +
         "each heals into one document on its next re-read (vault sweep, embed-stale, rechunk-sweep, reindex)",
+    };
+  } catch (e) {
+    return couldNotCheck(name, e);
+  }
+}
+
+/**
+ * More than one live non-operator credential means more than one tenant may
+ * reach the brain. Off, MEMRAIN_TENANT_FAIL_CLOSED lets an authenticated caller
+ * with no grant read as unscoped, so that state warns. Warn-level: a single
+ * owner with two devices is a legitimate reason to leave it off.
+ */
+export async function checkTenancyIsolationConfig(engine: Engine): Promise<TenancyCheck> {
+  const name = "tenancy-isolation-config";
+  try {
+    // scope: operator-only doctor counts every credential in the brain
+    const r = await engine.query<{ n: number | string }>(
+      `SELECT (SELECT COUNT(*) FROM access_tokens WHERE revoked_at IS NULL)
+            + (SELECT COUNT(*) FROM oauth_clients WHERE deleted_at IS NULL) AS n`,
+    );
+    const live = toInt(r.rows[0]?.n);
+    if (tenantFailClosedEnabled()) {
+      return { name, ok: true, status: "ok", detail: `fail-closed on; ${live} live non-operator credential(s)` };
+    }
+    if (live <= 1) {
+      return { name, ok: true, status: "ok", detail: `${live} live non-operator credential(s); fail-closed not needed yet` };
+    }
+    return {
+      name,
+      ok: true,
+      status: "warn",
+      detail:
+        `${live} live non-operator credentials and MEMRAIN_TENANT_FAIL_CLOSED is off: an authenticated ` +
+        "caller with no source grant reads the whole brain. Set MEMRAIN_TENANT_FAIL_CLOSED=1 once every " +
+        "credential carries a grant.",
     };
   } catch (e) {
     return couldNotCheck(name, e);

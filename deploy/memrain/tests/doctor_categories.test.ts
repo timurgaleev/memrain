@@ -40,6 +40,7 @@ describe("doctor categorize", () => {
       "code-graph",
       "config",
       "config-yml",
+      "connector-accounts",
       "connector-health",
       "contextual-coverage",
       "contradiction-trend",
@@ -47,6 +48,7 @@ describe("doctor categorize", () => {
       "cycle-phase-health",
       "dangling-slug-redirects",
       "db-backends",
+      "db-connection-budget",
       "document-id-drift",
       "duplicate-pages",
       "embed-backlog",
@@ -67,6 +69,7 @@ describe("doctor categorize", () => {
       "maintenance-held",
       "mixed-script-targets",
       "namespace-only-targets",
+      "notifications",
       "oauth-client-health",
       "oauth-client-hygiene",
       "oauth-self-issued-config",
@@ -76,6 +79,7 @@ describe("doctor categorize", () => {
       "per-source-embed-coverage",
       "person-name-duplicates",
       "pglite",
+      "planner-stats",
       "quarantined-pages",
       "queue-health",
       "redaction-markers",
@@ -87,12 +91,14 @@ describe("doctor categorize", () => {
       "skillpack",
       "source-health",
       "source-routing-health",
+      "spend-wallet",
       "stale-locks",
       "stats",
       // Pushed only when teardown FAILS, so a healthy run never carries it —
       // it is named in OPS so the categorizer does not bucket it as `meta`
       // with an "uncategorized" warning at the moment something is wrong.
       "storage-teardown",
+      "tenancy-isolation-config",
       "vault",
     ]);
   });

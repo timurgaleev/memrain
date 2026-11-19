@@ -14,6 +14,9 @@
  *                    scalar B     tenant B via sourceId, reading A's side
  *                    no grant     an authenticated caller with no source, fail-closed on
  *                    empty grant  allowedSources: [], fail-closed on
+ *                    member group tenant A's token bound to a member whose group
+ *                                 reads a third source, resolved by the real
+ *                                 token verifier
  *   brainwide      scoped callers get an answer, never a thrown error
  *   operator_only  every token caller is refused
  *
@@ -29,6 +32,11 @@ import { addFact } from "../src/core/facts.ts";
 import { dispatchTool, OPERATOR_ONLY_TOOLS, type ToolCallResult } from "../src/mcp/dispatch.ts";
 import { OPERATIONS, WRITE_SCOPED_TOOLS } from "../src/mcp/operations.ts";
 import type { AuthInfo } from "../src/core/auth-info.ts";
+import { createHash } from "node:crypto";
+import { registerSource } from "../src/core/sources.ts";
+import { OAuthProvider } from "../src/core/oauth-provider.ts";
+import { addMember, bindCredential } from "../src/core/members.ts";
+import { addGroup, addGroupMember, grantGroupSource } from "../src/core/groups.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 import { A, auth, B, ENTITY_SLUG, KEYWORD, seedTenantContract } from "./helpers/tenant_seed.ts";
 import { MATRIX, type MatrixRow, TENANT_A_TOKENS, TENANT_B_TOKENS } from "./fixtures/tenant_isolation_matrix.ts";
@@ -39,6 +47,7 @@ let tmp: string;
 let storage: Storage;
 let factIdA = 0;
 let factIdB = 0;
+let memberGroupA: AuthInfo;
 
 // Chronicle reads are windowed around "now"; derive the seed dates from it.
 const DAY = 86_400_000;
@@ -105,6 +114,12 @@ async function seedMatrixExtras(): Promise<void> {
     // Token callers read world facts only; give each tenant one on the shared entity.
     await addFact(storage, { entity_slug: ENTITY_SLUG, fact: `${tag}_FACT_world`, source_id: who, visibility: "world" });
     await addFact(storage, { entity_slug: ENTITY_SLUG, fact: `${KEYWORD} ${tag}_QUERY_FACT`, source_id: who, visibility: "world" });
+    // An open loop on each tenant's page, as the loops sweep would leave it.
+    await storage.engine().query(
+      `INSERT INTO open_loops (source_id, dedup_key, loop_type, detector, kind, page_slug, summary, opened_at, last_activity_at)
+       VALUES ($1, 'matrix', 'unanswered_inbound', 'deterministic', 'mail', $2, $3, NOW(), NOW())`,
+      [who, slug, `Reply owed: "${tag}_LOOP_subject"`],
+    );
   }
   await call("chronicle_backfill", {});
 }
@@ -115,7 +130,29 @@ beforeAll(async () => {
   await storage.init();
   ({ factIdA, factIdB } = await seedTenantContract(storage));
   await seedMatrixExtras();
+  memberGroupA = await seedMemberGroupCaller();
 });
+
+// Tenant A's token, bound to a member whose group reads a third source. Its
+// AuthInfo comes from the verifier, so the group widening is what is tested.
+async function seedMemberGroupCaller(): Promise<AuthInfo> {
+  const e = storage.engine();
+  const who = { actor: "matrix", via: "cli" } as const;
+  await registerSource(e, { id: "tenantShared", kind: "vault", pathPrefix: "/tenant-shared" });
+  await addMember(e, "matrix-alice", {}, who);
+  await addGroup(e, "matrix-team", {}, who);
+  await grantGroupSource(e, "matrix-team", "tenantShared", {}, who);
+  await addGroupMember(e, "matrix-team", "matrix-alice", who);
+  const token = "memrain_matrix_member_group_token";
+  await e.query(
+    `INSERT INTO access_tokens (name, token_hash, scopes, permissions) VALUES ('matrix-alice', $1, ARRAY['read','write'], $2::jsonb)`,
+    [createHash("sha256").update(token).digest("hex"), { source_id: A }],
+  );
+  await bindCredential(e, "matrix-alice", { kind: "token", id: "matrix-alice" }, who);
+  const info = await new OAuthProvider({ engine: e }).verifyAccessToken(token);
+  expect(info.allowedSources).toEqual([A, "tenantShared"]);
+  return { ...info, isPublic: false };
+}
 
 afterAll(async () => {
   await storage.close();
@@ -177,6 +214,7 @@ describe("isolated operations never cross the source boundary", () => {
         ["scalar B", auth(B), ownArgs, TENANT_A_TOKENS, false],
         ["no grant", noGrant, args, [...TENANT_B_TOKENS, ...TENANT_A_TOKENS], true],
         ["empty grant", emptyGrant, args, [...TENANT_B_TOKENS, ...TENANT_A_TOKENS], true],
+        ["member group", memberGroupA, args, TENANT_B_TOKENS, false],
       ];
       for (const [label, authInfo, rowArgs, tokens, failClosed] of principals) {
         if (failClosed) process.env["MEMRAIN_TENANT_FAIL_CLOSED"] = "1";

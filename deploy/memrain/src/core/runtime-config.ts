@@ -29,6 +29,7 @@ import {
   JOBS_WORKER_ENV,
   MAINTENANCE_ENV,
 } from "./quiescence.ts";
+import { extension } from "./extension.ts";
 
 export const RUNTIME_CONFIG_KEY_RE = /^(?:MEMRAIN|MEMEX)_[A-Z0-9_]{1,64}$/;
 
@@ -60,7 +61,51 @@ export const ENV_ONLY_KEYS: ReadonlySet<string> = new Set([
   CYCLE_ENV,
   "MEMRAIN_REQUIRE_POSTGRES",
   "MEMRAIN_EVENT_LOOP_WATCHDOG_MS",
+  "MEMRAIN_CONNECTOR_KEK",
+  "MEMRAIN_CONNECTOR_KEK_FILE",
+  "MEMRAIN_GOOGLE_OAUTH_CLIENT_SECRET",
+  "MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET",
+  "MEMRAIN_SLACK_OAUTH_CLIENT_SECRET",
+  "MEMRAIN_NOTIFY_WEBHOOK_SECRET",
+  "MEMRAIN_NOTIFY_WEBHOOK_SECRET_FILE",
+  // How the public ingress authenticates and whether credentials must belong
+  // to a member: the database must never loosen its own guard.
+  "MEMRAIN_PUBLIC_AUTH",
+  "MEMRAIN_REQUIRE_MEMBER",
+  // Startup refuses these without an extension (extension.ts); a stored row
+  // projected after that check must not be able to set them.
+  "MEMRAIN_TENANT_ID",
+  "MEMRAIN_CONTROL_URL",
 ]);
+
+/** ENV_ONLY_KEYS plus any a registered extension adds; read at call time, so registration order does not matter. */
+export function isEnvOnlyKey(key: string): boolean {
+  return ENV_ONLY_KEYS.has(key) || extension().envOnlyKeys.includes(key);
+}
+
+/**
+ * Keys `setRuntimeConfig` refuses to store at all: the connector key seals
+ * tokens kept in this same database, so a copy in runtime_config would let a
+ * dump open them; an OAuth client secret there would sit in the clear, where a
+ * bring-your-own one is sealed; the notification webhook secret would let a
+ * dump sign notifications the owner's receiver trusts.
+ */
+export const NEVER_STORED_KEYS: ReadonlySet<string> = new Set([
+  "MEMRAIN_CONNECTOR_KEK",
+  "MEMRAIN_CONNECTOR_KEK_FILE",
+  "MEMRAIN_GOOGLE_OAUTH_CLIENT_SECRET",
+  "MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET",
+  "MEMRAIN_SLACK_OAUTH_CLIENT_SECRET",
+  "MEMRAIN_NOTIFY_WEBHOOK_SECRET",
+  "MEMRAIN_NOTIFY_WEBHOOK_SECRET_FILE",
+  // A connection URL that can carry a database password.
+  "MEMRAIN_CONTROL_URL",
+]);
+
+/** NEVER_STORED_KEYS plus any a registered extension adds. */
+export function isNeverStoredKey(key: string): boolean {
+  return NEVER_STORED_KEYS.has(key) || extension().neverStoredKeys.includes(key);
+}
 
 /**
  * Sensitive-key detector shared by every display surface so `show` and the
@@ -111,6 +156,9 @@ export async function setRuntimeConfig(
   value: string,
 ): Promise<string> {
   const stored = isRuntimeConfigKey(key) ? canonicalKey(key) : key;
+  if (isNeverStoredKey(canonicalKey(key))) {
+    throw new Error(`${stored} is a secret kept out of this database; set it in the environment only`);
+  }
   await engine.query(
     `INSERT INTO runtime_config (key, value, updated_at)
      VALUES ($1, $2, NOW())
@@ -310,7 +358,7 @@ export async function applyRuntimeEnvOverlay(engine: Engine): Promise<string[]> 
       // Already projected by an earlier overlay in this process and left intact.
       // When a caller removed one name of the pair, both are projected again.
       if (cur !== undefined && old !== undefined) continue;
-      if (ENV_ONLY_KEYS.has(canon)) {
+      if (isEnvOnlyKey(canon)) {
         console.error(`[memrain] runtime_config ${row.key} ignored: env-only knob`);
         continue;
       }

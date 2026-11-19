@@ -35,14 +35,17 @@ import { nearest } from "./core/did-you-mean.ts";
 export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--all",
   "--allow-dropped-columns",
+  "--allow-owner-source",
   "--allow-mass-delete",
   "--allow-errors",
   "--apply",
+  "--bench",
   "--by-kind",
   "--catch-up",
   "--contextual",
   "--cosine-rescore",
   "--dry-run",
+  "--erase-personal-source",
   "--execute",
   "--expand",
   "--expect-operator",
@@ -57,6 +60,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--http",
   "--include-flagged",
   "--json",
+  "--k12",
   "--live",
   "--max-pool",
   "--no-embed",
@@ -78,6 +82,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--remediation-plan",
   "--rerank",
   "--respect-quiet-hours",
+  "--retrieval-only",
   "--save",
   "--stale",
   "--stdin",
@@ -86,6 +91,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--wait",
   "--with-calibration",
   "--write-baseline",
+  "--write-snapshot",
   "--yes",
 ]);
 
@@ -112,15 +118,16 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--bound-slug-prefixes", "--budget", "--client", "--client-file", "--config-a",
   "--config-b", "--corpus", "--rds-instance", "--efs-id", "--copy-report",
   "--date-context", "--days", "--dedup-type-ratio", "--depth", "--description", "--epsilon",
-  "--dir", "--down", "--example-limit", "--expect-source", "--expect-version",
+  "--dir", "--down", "--email", "--enrollment", "--example-limit", "--expect-source", "--expect-version",
   "--expected-doc", "--expected-revision", "--expected-top1", "--expected-version", "--family",
   "--federated-read", "--file", "--format",
   "--filter", "--from", "--grant", "--grant-types", "--host", "--id", "--indexed-policy",
-  "--input", "--judge-model", "--k", "--keep-days", "--kind", "--kinds", "--label", "--limit", "--max-drop",
+  "--input", "--judge-model", "--k", "--keep-days", "--lme-r", "--lme-r-base", "--kind", "--kinds", "--label", "--limit", "--max-drop",
+  "--new-file", "--old-file",
   "--max-cost-usd", "--max-jobs", "--max-latency-x", "--max-pages", "--max-retries", "--max-usd",
-  "--min-confidence", "--min-recall", "--model", "--modes", "--notes",
-  "--older-than-days", "--out", "--path-prefix", "--paths", "--pattern",
-  "--payload", "--pglite-path", "--phases", "--plan-hash", "--port", "--postgres-url",
+  "--min-confidence", "--min-recall", "--model", "--modes", "--name", "--notes",
+  "--older-than-days", "--out", "--owner", "--path-prefix", "--paths", "--pattern",
+  "--payload", "--personal-source", "--pglite-path", "--phases", "--plan-hash", "--port", "--postgres-url", "--profile",
   "--prereg", "--priority", "--qrels", "--query", "--question", "--rate-limit-per-minute",
   "--reason", "--redirect-uris", "--refresh-ttl", "--repeats", "--replaces", "--rounds", "--rrf-k", "--scopes", "--settle",
   "--via", "--sealed-fraction", "--search-mode", "--seed", "--severity", "--since", "--skill", "--slug", "--slugs", "--split",
@@ -138,6 +145,18 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
 export const KNOWN_FLAGS: ReadonlySet<string> = new Set([
   ...VALUELESS_FLAGS,
   ...VALUE_FLAGS,
+]);
+
+/**
+ * Commands whose `--json` output is guarded (cli-json.ts): stdout is exactly
+ * one JSON object whatever the command prints, errors included. They accept
+ * `--json` even when their case never reads it, because main() reads it for
+ * them. Streaming commands (`watch`, `serve`) must never join: the guard holds
+ * stdout until the command returns.
+ */
+export const JSON_GUARDED_COMMANDS: ReadonlySet<string> = new Set([
+  "call", "connectors", "daemons", "doctor", "engine", "eval", "export", "models",
+  "pages", "search", "secrets", "sources", "spend", "status", "version", "waiting",
 ]);
 
 /** Answered by every command, so no command lists it. */
@@ -163,7 +182,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["import", new Set(["--dir", "--source", "--apply", "--dry-run", "--plan-hash"])],
   ["mirror-adopt", new Set(["--source", "--limit", "--apply", "--plan-hash"])],
   ["atoms-retire", new Set(["--source-ref", "--completed-hash", "--apply", "--plan-hash"])],
-  ["erase", new Set(["--source", "--fact-ids", "--deleted-pages", "--apply", "--plan-hash"])],
+  ["erase", new Set(["--source", "--fact-ids", "--deleted-pages", "--apply", "--plan-hash", "--owner"])],
   ["init", new Set(["--pglite", "--postgres"])],
   ["serve", new Set(["--host", "--http", "--port"])],
   ["index", new Set<string>()],
@@ -196,7 +215,8 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--json", "--judge-model", "--k", "--limit", "--max-drop", "--max-latency-x", "--max-pool", "--max-usd",
       "--min-recall", "--modes", "--no-expand", "--out", "--prereg", "--qrels", "--record",
       "--relational-arm", "--rerank", "--rrf-k", "--sealed-fraction", "--seed", "--settle",
-      "--split", "--usd", "--via", "--write-baseline",
+      "--split", "--usd", "--via", "--write-baseline", "--k12", "--write-snapshot", "--bench",
+      "--retrieval-only", "--lme-r", "--lme-r-base", "--live",
     ]),
   ],
   ["eval-probe", new Set(["--limit", "--max-usd"])],
@@ -238,7 +258,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
     ]),
   ],
   ["eval-export", new Set(["--limit", "--out", "--since", "--source"])],
-  ["export", new Set(["--dir", "--source"])],
+  ["export", new Set(["--dir", "--source", "--owner"])],
   ["eval-prune", new Set(["--apply", "--keep-days", "--tool-name"])],
   ["apply-migrations", new Set(["--down", "--dry-run", "--yes"])],
   ["cache", new Set<string>()],
@@ -304,7 +324,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--access-ttl", "--bound-slug-prefixes", "--client", "--client-file", "--dry-run",
       "--expect-operator", "--expect-source", "--expect-version",
       "--expected-revision", "--federated-read", "--grant", "--grant-types", "--json",
-      "--label", "--limit", "--purge", "--redirect-uris", "--refresh-ttl", "--replaces", "--scopes", "--source",
+      "--label", "--limit", "--profile", "--purge", "--redirect-uris", "--refresh-ttl", "--replaces", "--scopes", "--source",
       "--takes-holders", "--tenant-mode", "--token",
       "--token-endpoint-auth-method", "--token-file", "--ttl",
     ]),
@@ -325,6 +345,9 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
     "quarantine",
     new Set(["--apply", "--force", "--include-flagged", "--json", "--limit"]),
   ],
+  ["write-gate", new Set(["--all", "--json"])],
+  ["member", new Set(["--all", "--apply", "--client", "--email", "--enrollment", "--erase-personal-source", "--name", "--out", "--personal-source", "--token"])],
+  ["group", new Set(["--allow-owner-source", "--name"])],
   ["secrets", new Set(["--apply", "--json", "--kinds", "--limit", "--source", "--yes"])],
   [
     "transcripts",
@@ -333,8 +356,10 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--source", "--token-file", "--url", "--plan-hash",
     ]),
   ],
-  ["connectors", new Set(["--dry-run", "--full", "--json", "--source", "--token-file"])],
-  ["version", new Set<string>()],
+  ["connectors", new Set(["--apply", "--dry-run", "--full", "--json", "--new-file", "--old-file", "--source", "--token-file", "--yes"])],
+  ["daemons", new Set(["--json", "--reason", "--source"])],
+  ["waiting", new Set(["--json", "--limit", "--source", "--stale", "--type"])],
+  ["version", new Set(["--json"])],
   ["help", new Set<string>()],
 ]);
 
@@ -355,7 +380,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
       "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts",
     ]),
   ],
-  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts"])],
+  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member"])],
   ["--fix", new Set(["lint"])],
 ]);
 
@@ -406,6 +431,7 @@ export function validateFlags(parsed: ParsedArgs): void {
   const seen = [...parsed.flags, ...parsed.values.keys()];
   for (const flag of seen) {
     if (UNIVERSAL_FLAGS.has(flag)) continue;
+    if (flag === "--json" && cmd !== undefined && JSON_GUARDED_COMMANDS.has(cmd)) continue;
     if (accepted === undefined ? KNOWN_FLAGS.has(flag) : accepted.has(flag)) continue;
     // Suggest only flags the CURRENT command accepts: suggesting a flag that
     // would itself be refused is worse than suggesting nothing.

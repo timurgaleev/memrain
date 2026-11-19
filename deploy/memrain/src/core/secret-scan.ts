@@ -18,6 +18,7 @@
  * The lookbehinds that let a key start after an escape or a `_` are bounded
  * (six characters at most), so they keep it linear.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { OperationError } from "./operation-error.ts";
 import type { Engine } from "./engine/interface.ts";
@@ -28,7 +29,7 @@ import { encodedCandidates, protectEncodedAllowlist } from "./secret-scan-encode
  * Bumped whenever the rules change what is caught, so text stored under an
  * older version can be found and scanned again.
  */
-export const SECRET_SCAN_VERSION = 5;
+export const SECRET_SCAN_VERSION = 6;
 
 export interface SecretFinding {
   kind: string;
@@ -75,7 +76,12 @@ interface Pattern {
 }
 
 /** Documentation passwords: `<password>`, `${VAR}`, `$VAR`, all `*`, all `x`. */
-const PLACEHOLDER = /^(?:<[^<>]*>|\$\{[^{}]*\}|\$[A-Z_]\w*|\*+|x+)$/i;
+const PLACEHOLDER = /^(?:<[^<>]*>|\$\{[^{}]*\}|\$[A-Z_]\w*|\*+|x+|%s)$/i;
+/**
+ * A database URL's placeholder: only an upper-case `$VAR` names a variable, so
+ * `$Summer2024` is a password; an all-`x` value is one too.
+ */
+const DB_PLACEHOLDER = /^(?:<[^<>]*>|\$\{[^{}]*\}|\$[A-Z_][A-Z0-9_]*|\*+|%s)$/;
 
 /** The password of a `scheme://user:password@` span (the user never holds a `:`). */
 function urlPassword(span: string): string {
@@ -265,9 +271,11 @@ const VENDOR_PATTERNS: Pattern[] = [
 
 /** Catch-alls run after every named prefix, so a vendor key or a JWT keeps its own kind. */
 const SHAPE_PATTERNS: Pattern[] = [
+  // A template's `${password}`, `***` or `%s` names a password, it is not one.
   {
     kind: "database-url",
     regex: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqp|mssql):\/\/[^\s:/@"']{0,128}:[^\s"']{1,256}@/g,
+    validate: (span) => !DB_PLACEHOLDER.test(urlPassword(span)),
     echo: { min: 8, pick: urlPassword },
   },
   // The password stops at `/`, `?` and `#` too (RFC 3986 escapes them in
@@ -553,9 +561,24 @@ export function scanSecrets(text: string, allow: ReadonlySet<string> = new Set()
 
 export type SecretDisposition = "redact" | "flag" | "reject";
 
+const _dispositionOverride = new AsyncLocalStorage<SecretDisposition>();
+
 export function secretDisposition(): SecretDisposition {
+  const forced = _dispositionOverride.getStore();
+  if (forced !== undefined) return forced;
   const v = (process.env.MEMRAIN_SECRET_SCAN_DISPOSITION ?? "").trim().toLowerCase();
   return v === "flag" || v === "reject" ? v : "redact";
+}
+
+/**
+ * Run `fn` with every scan inside it under `disposition`, whatever
+ * MEMRAIN_SECRET_SCAN_DISPOSITION says. Connector runs use it with `redact`:
+ * a provider's text is not the operator's to fix, so refusing a thread for a
+ * one-time token in it would hold the thread forever, and storing it as it
+ * came (`flag`) would keep the token.
+ */
+export function withSecretDisposition<T>(disposition: SecretDisposition, fn: () => T): T {
+  return _dispositionOverride.run(disposition, fn);
 }
 
 /** On unless the variable says `0`, `false`, `off` or `no`. */

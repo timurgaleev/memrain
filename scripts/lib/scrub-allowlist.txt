@@ -39,3 +39,17 @@ deploy/memrain/tests/*.test.ts
 
 # Existing PII fixture suite.
 tests/fixtures/repo-with-pii/**
+# The write gate's detector matches Russian as well as English: its pattern
+# table and look-alike folding table hold Cyrillic by design, and the benign
+# corpus holds Russian business mail it must not flag.
+deploy/memrain/src/core/write-gate-patterns.ts
+deploy/memrain/src/core/write-gate.ts
+deploy/memrain/tests/fixtures/write-gate/benign.jsonl
+# The open-loop detector reads Russian mail as well as English: its
+# acknowledgement and promise word lists and the calendar notice subject
+# prefixes hold Cyrillic by design.
+deploy/memrain/src/core/loops/detect.ts
+deploy/memrain/src/core/loops/signals.ts
+# The meeting-credential redactor reads Russian invitations as well as English
+# and German ones: its label table holds Cyrillic by design.
+deploy/memrain/src/core/connectors/meeting-redact.ts

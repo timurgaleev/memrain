@@ -88,6 +88,11 @@ export interface AgentUsageRow {
   usage: { requests_today: number; total_requests: number; last_used_at: string | null };
 }
 
+export interface OfficeSnapshot {
+  workers: { name: string; enabled: boolean; running: boolean }[];
+  clients: { id: string; display_name: string; last_seen: string | null }[];
+}
+
 export interface JobsWatch {
   counts: { status: string; n: number }[];
   recent: {
@@ -107,6 +112,8 @@ export interface FeedEvent {
   latency_ms: number;
   status: string;
   timestamp: string;
+  kind?: "tool" | "job";
+  phase?: "start" | "end";
 }
 
 /**
@@ -166,4 +173,61 @@ export interface OnboardingStatus {
     first_page: { done: boolean; pages: number };
     first_search: { done: boolean; source: "agent" | "any" | null };
   };
+}
+
+// GET /admin/api/notifications/summary — the sidebar badge.
+export interface NotificationSummary {
+  open: number;
+  unread: number;
+  by_kind: Record<string, number>;
+}
+
+// One owner notification: a pointer to a problem, never its text.
+export interface AdminNotification {
+  id: number;
+  source_id: string;
+  kind: string;
+  ref: string;
+  link: string;
+  hint: string;
+  created_at: string;
+  reopened_at: string | null;
+  resolved_at: string | null;
+  read_at: string | null;
+  webhook_state: "off" | "pending" | "delivered" | "failed" | "cancelled";
+  webhook_attempts: number;
+  webhook_error: string | null;
+}
+
+// GET /admin/api/notifications
+export interface NotificationList {
+  summary: NotificationSummary;
+  webhook: { state: "off" | "refused" | "on" };
+  notifications: AdminNotification[];
+}
+
+export interface EvalCandidate {
+  id: number;
+  captured_at: string;
+  tool_name: string;
+  query: string;
+  scrubbed: boolean;
+  result_count: number;
+}
+
+export interface EvalLabelCounts {
+  dev: number;
+  sealed: number;
+  target: number;
+}
+
+export interface EvalCandidateList {
+  candidates: EvalCandidate[];
+  labels: EvalLabelCounts;
+  capture: { enabled: boolean; scrub: boolean };
+}
+
+export interface EvalPreview {
+  query: string;
+  results: { document_id: string; source_path: string; title: string | null; snippet: string }[];
 }

@@ -1,0 +1,31 @@
+{
+  "_comment": "Which skills ship in the Claude Code and Codex plugin (plugins/memrain/skills, one folder both hosts read), which never do, and which are offered as MCP prompts. Every entry is a decision with its reason. scripts/generate-plugin-tree.ts copies the plugin lane out of deploy/skills; tests/skillpack_plugin_tree.test.ts fails when the copies drift or an operator skill lands in the plugin.",
+  "plugin": {
+    "query": "the core retrieval loop every session uses",
+    "capture": "saving a thought or link is the write half of the core loop",
+    "brain-ops": "day-to-day reads and writes a client agent performs constantly",
+    "briefing": "a daily view a client asks for by name",
+    "correction-pipeline": "user corrections become durable brain updates instead of session-local fixes",
+    "connect-client": "the plugin's own setup and verification path",
+    "fact-check": "checks a client's draft claim by claim with read-only brain tools",
+    "research-compendium": "deep research a client runs from chat, filed under research/",
+    "draft-in-voice": "ghostwriting from a validated profile; drafts only, never sends",
+    "resolve-before-asking": "stops a client asking the user what the brain already knows",
+    "brain-link-discipline": "every page a client reports carries a working link"
+  },
+  "operator_only": {
+    "db-repair": "diagnoses the host's database; needs host access and operator tools",
+    "install": "first install of the server on a host",
+    "brain-upgrade": "upgrades the server on its host",
+    "minion-orchestrator": "the durable job queue is operator-only",
+    "postgres-adopt": "moves the host's engine; host access and a reviewed plan",
+    "remote-mcp": "changes the host's reach and mints credentials",
+    "mcp-access": "owner administration of clients and grants",
+    "skill-optimizer": "paid, capped routing evaluation run by hand on the host",
+    "skill-autobench": "feeds the maintainer's benchmark files; reads the host's friction log",
+    "skillpack-harvest": "edits the shipped pack in the repository",
+    "company-brainify": "builds a team source and its grants; operator standing required",
+    "schema-unify": "retypes pages in bulk with a host command"
+  },
+  "starter": ["connect-client", "cross-modal-review", "daily-task-prep", "query"]
+}

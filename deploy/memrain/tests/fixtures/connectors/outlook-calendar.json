@@ -1,0 +1,281 @@
+{
+  "token": {
+    "token_type": "Bearer",
+    "scope": "Calendars.Read User.Read profile openid email",
+    "expires_in": 3599,
+    "access_token": "eyJ0eXAiOiJKV1QiLCJub25jZSI6InRlc3QifQ.graph-test-access-token",
+    "refresh_token": "M.C512_test-graph-refresh-token-value"
+  },
+  "tokenRefreshInvalidGrant": {
+    "error": "invalid_grant",
+    "error_description": "AADSTS70008: The provided authorization code or refresh token has expired due to inactivity.",
+    "error_codes": [70008]
+  },
+  "me": {
+    "id": "00000000-0000-4000-8000-0000000000aa",
+    "displayName": "Owner Example",
+    "mail": "Owner@Example.test",
+    "userPrincipalName": "owner_example.test#EXT#@tenant.example.test"
+  },
+  "calendars": {
+    "value": [
+      { "id": "AAMkCalTeam0001=", "name": "Team", "isDefaultCalendar": false, "canEdit": false, "owner": { "name": "Owner Example", "address": "Owner@Example.test" } },
+      { "id": "AAMkCalShared01=", "name": "Colleague's calendar", "isDefaultCalendar": false, "canEdit": false, "owner": { "name": "Ana Lee", "address": "ana@example.net" } },
+      { "id": "AAMkCalDefault01=", "name": "Calendar", "isDefaultCalendar": true, "canEdit": true, "owner": { "name": "Owner Example", "address": "owner@example.test" } }
+    ]
+  },
+  "calendarsPersonal": {
+    "value": [
+      { "id": "AQMkPersonalFamily=", "name": "Family", "isDefaultCalendar": false, "canEdit": true, "owner": { "name": "Someone" } },
+      { "id": "AQMkPersonalBirthdays=", "name": "Birthdays", "isDefaultCalendar": false, "canEdit": false },
+      { "id": "AQMkPersonalShared=", "name": "Ana's calendar", "isDefaultCalendar": false, "canEdit": false, "owner": { "name": "Ana Lee", "address": "ana@example.net" } },
+      { "id": 42, "name": "No string id" },
+      { "id": "AQMkPersonalOdd=", "name": { "text": "not a string" }, "isDefaultCalendar": "yes", "canEdit": "no", "owner": null },
+      { "id": "AQMkPersonalDefault=", "name": "Calendar", "isDefaultCalendar": true, "canEdit": true }
+    ]
+  },
+  "secondaryView": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users('owner')/calendars('AAMkCalTeam0001%3D')/calendarView",
+    "value": [
+      {
+        "id": "AAMkE4team=",
+        "changeKey": "ck-e4-1",
+        "type": "singleInstance",
+        "iCalUId": "040000008200E00074C5B7101A82E0080000000006E4",
+        "subject": "Team planning",
+        "body": { "contentType": "html", "content": "<p>Quarter plan.</p>" },
+        "start": { "dateTime": "2026-11-24T13:00:00.0000000", "timeZone": "UTC" },
+        "end": { "dateTime": "2026-11-24T14:00:00.0000000", "timeZone": "UTC" },
+        "isAllDay": false,
+        "isCancelled": false,
+        "isOrganizer": true,
+        "responseStatus": { "response": "organizer" },
+        "organizer": { "emailAddress": { "name": "Owner Example", "address": "owner@example.test" } },
+        "attendees": []
+      }
+    ]
+  },
+  "secondaryViewEmpty": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users('owner')/calendars('AAMkCalTeam0001%3D')/calendarView",
+    "value": []
+  },
+  "deltaFirstPage1": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Collection(event)",
+    "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/calendarView/delta?$skiptoken=skip-page-2",
+    "value": [
+      {
+        "@odata.etag": "W/\"ck-e1-1\"",
+        "id": "AAMkE1single=",
+        "changeKey": "ck-e1-1",
+        "type": "singleInstance",
+        "iCalUId": "040000008200E00074C5B7101A82E0080000000001E1",
+        "subject": "Roadmap review",
+        "body": { "contentType": "html", "content": "<html><body><p>Agenda: review the roadmap.</p></body></html>" },
+        "start": { "dateTime": "2026-11-18T09:00:00.0000000", "timeZone": "UTC" },
+        "end": { "dateTime": "2026-11-18T10:00:00.0000000", "timeZone": "UTC" },
+        "isAllDay": false,
+        "isCancelled": false,
+        "isOrganizer": false,
+        "responseRequested": true,
+        "responseStatus": { "response": "notResponded", "time": "0001-01-01T00:00:00Z" },
+        "location": { "displayName": "Room 4" },
+        "organizer": { "emailAddress": { "name": "Dan Park", "address": "dan@example.org" } },
+        "attendees": [
+          { "type": "required", "status": { "response": "accepted", "time": "2026-11-10T08:00:00Z" }, "emailAddress": { "name": "Ana Lee", "address": "ana@example.net" } },
+          { "type": "required", "status": { "response": "none", "time": "0001-01-01T00:00:00Z" }, "emailAddress": { "name": "Owner Example", "address": "owner@example.test" } },
+          { "type": "resource", "status": { "response": "accepted", "time": "0001-01-01T00:00:00Z" }, "emailAddress": { "name": "Room 4", "address": "room4@resource.example.test" } }
+        ],
+        "isOnlineMeeting": false,
+        "onlineMeeting": null
+      },
+      {
+        "id": "AAMkOccS1a=",
+        "changeKey": "ck-occ-1",
+        "type": "occurrence",
+        "seriesMasterId": "AAMkS1master=",
+        "iCalUId": "040000008200E00074C5B7101A82E0080000000002S1occ1",
+        "subject": "Weekly sync",
+        "start": { "dateTime": "2026-11-09T08:00:00.0000000", "timeZone": "UTC" },
+        "end": { "dateTime": "2026-11-09T08:30:00.0000000", "timeZone": "UTC" },
+        "isAllDay": false,
+        "isCancelled": false
+      }
+    ]
+  },
+  "deltaFirstPage2": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Collection(event)",
+    "@odata.deltaLink": "https://graph.microsoft.com/v1.0/me/calendarView/delta?$deltatoken=delta-one",
+    "value": [
+      {
+        "id": "AAMkE2allday=",
+        "changeKey": "ck-e2-1",
+        "type": "singleInstance",
+        "iCalUId": "040000008200E00074C5B7101A82E0080000000003E2",
+        "subject": "Offsite",
+        "body": { "contentType": "html", "content": "" },
+        "start": { "dateTime": "2026-11-20T00:00:00.0000000", "timeZone": "UTC" },
+        "end": { "dateTime": "2026-11-21T00:00:00.0000000", "timeZone": "UTC" },
+        "isAllDay": true,
+        "isCancelled": false,
+        "isOrganizer": true,
+        "responseRequested": true,
+        "responseStatus": { "response": "organizer", "time": "0001-01-01T00:00:00Z" },
+        "location": { "displayName": "" },
+        "organizer": { "emailAddress": { "name": "Owner Example", "address": "owner@example.test" } },
+        "attendees": []
+      },
+      {
+        "id": "AAMkE3online=",
+        "changeKey": "ck-e3-1",
+        "type": "singleInstance",
+        "iCalUId": "040000008200E00074C5B7101A82E0080000000004E3",
+        "subject": "Vendor sync",
+        "body": {
+          "contentType": "html",
+          "content": "<html><body><p>Quarterly check-in.</p><div><a href=\"https://teams.microsoft.com/l/meetup-join/19%3ameeting_vendor%40thread.v2/0?context=%7b%22Tid%22%3a%22t1%22%7d&amp;btype=a\">Join the meeting now</a></div><div>Meeting ID: 123 456 789</div><div>https://teams.microsoft.com/l/meetup-join/19%3ameeting_vendor%40thread.v2/0?context=%7b%22Tid%22%3a%22t1%22%7d&amp;btype=a</div></body></html>"
+        },
+        "start": { "dateTime": "2026-11-17T15:00:00.0000000", "timeZone": "UTC" },
+        "end": { "dateTime": "2026-11-17T15:30:00.0000000", "timeZone": "UTC" },
+        "isAllDay": false,
+        "isCancelled": false,
+        "isOrganizer": false,
+        "responseRequested": true,
+        "responseStatus": { "response": "accepted", "time": "2026-11-12T08:00:00Z" },
+        "organizer": { "emailAddress": { "name": "Eve Ng", "address": "eve@example.net" } },
+        "attendees": [
+          { "type": "required", "status": { "response": "none" }, "emailAddress": { "name": "Owner Example", "address": "owner@example.test" } }
+        ],
+        "isOnlineMeeting": true,
+        "onlineMeetingProvider": "teamsForBusiness",
+        "onlineMeeting": { "joinUrl": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_vendor%40thread.v2/0?context=%7b%22Tid%22%3a%22t1%22%7d&btype=a" }
+      },
+      {
+        "id": "AAMkOccS1b=",
+        "changeKey": "ck-occ-2",
+        "type": "occurrence",
+        "seriesMasterId": "AAMkS1master=",
+        "start": { "dateTime": "2026-11-16T08:00:00.0000000", "timeZone": "UTC" },
+        "end": { "dateTime": "2026-11-16T08:30:00.0000000", "timeZone": "UTC" },
+        "isAllDay": false,
+        "isCancelled": false
+      }
+    ]
+  },
+  "seriesS1Master": {
+    "id": "AAMkS1master=",
+    "changeKey": "ck-s1-1",
+    "type": "seriesMaster",
+    "iCalUId": "040000008200E00074C5B7101A82E0080000000005S1",
+    "subject": "Weekly sync",
+    "body": { "contentType": "html", "content": "<p>Status round.</p>" },
+    "start": { "dateTime": "2023-11-06T08:00:00.0000000", "timeZone": "UTC" },
+    "end": { "dateTime": "2023-11-06T08:30:00.0000000", "timeZone": "UTC" },
+    "isAllDay": false,
+    "isCancelled": false,
+    "isOrganizer": false,
+    "responseRequested": true,
+    "responseStatus": { "response": "accepted", "time": "2023-11-01T08:00:00Z" },
+    "organizer": { "emailAddress": { "name": "Ana Lee", "address": "ana@example.net" } },
+    "attendees": [
+      { "type": "required", "status": { "response": "none" }, "emailAddress": { "name": "Owner Example", "address": "owner@example.test" } }
+    ],
+    "recurrence": {
+      "pattern": { "type": "weekly", "interval": 1, "month": 0, "dayOfMonth": 0, "daysOfWeek": ["monday"], "firstDayOfWeek": "sunday", "index": "first" },
+      "range": { "type": "noEnd", "startDate": "2023-11-06", "endDate": "0001-01-01", "recurrenceTimeZone": "UTC", "numberOfOccurrences": 0 }
+    }
+  },
+  "instancesS1": {
+    "value": [
+      { "id": "AAMkOccS1a=", "changeKey": "ck-occ-1", "type": "occurrence", "seriesMasterId": "AAMkS1master=", "isCancelled": false,
+        "start": { "dateTime": "2026-11-09T08:00:00.0000000", "timeZone": "UTC" }, "end": { "dateTime": "2026-11-09T08:30:00.0000000", "timeZone": "UTC" } },
+      { "id": "AAMkOccS1b=", "changeKey": "ck-occ-2", "type": "occurrence", "seriesMasterId": "AAMkS1master=", "isCancelled": false,
+        "start": { "dateTime": "2026-11-16T08:00:00.0000000", "timeZone": "UTC" }, "end": { "dateTime": "2026-11-16T08:30:00.0000000", "timeZone": "UTC" } },
+      { "id": "AAMkOccS1c=", "changeKey": "ck-occ-3", "type": "exception", "seriesMasterId": "AAMkS1master=", "isCancelled": false,
+        "start": { "dateTime": "2026-11-23T09:00:00.0000000", "timeZone": "UTC" }, "end": { "dateTime": "2026-11-23T09:30:00.0000000", "timeZone": "UTC" } },
+      { "id": "AAMkOccS1d=", "changeKey": "ck-occ-4", "type": "occurrence", "seriesMasterId": "AAMkS1master=", "isCancelled": true,
+        "start": { "dateTime": "2026-11-30T08:00:00.0000000", "timeZone": "UTC" }, "end": { "dateTime": "2026-11-30T08:30:00.0000000", "timeZone": "UTC" } }
+    ]
+  },
+  "deltaChanges": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Collection(event)",
+    "@odata.deltaLink": "https://graph.microsoft.com/v1.0/me/calendarView/delta?$deltatoken=delta-two",
+    "value": [
+      { "@odata.type": "#microsoft.graph.event", "id": "AAMkE3online=", "@removed": { "reason": "deleted" } },
+      {
+        "id": "AAMkE1single=",
+        "changeKey": "ck-e1-2",
+        "type": "singleInstance",
+        "iCalUId": "040000008200E00074C5B7101A82E0080000000001E1",
+        "subject": "Roadmap review (moved)",
+        "body": { "contentType": "html", "content": "<p>Agenda: review the roadmap.</p>" },
+        "start": { "dateTime": "2026-11-19T09:00:00.0000000", "timeZone": "UTC" },
+        "end": { "dateTime": "2026-11-19T10:00:00.0000000", "timeZone": "UTC" },
+        "isAllDay": false,
+        "isCancelled": false,
+        "isOrganizer": false,
+        "responseRequested": true,
+        "responseStatus": { "response": "accepted", "time": "2026-11-16T09:00:00Z" },
+        "organizer": { "emailAddress": { "name": "Dan Park", "address": "dan@example.org" } },
+        "attendees": [
+          { "type": "required", "status": { "response": "accepted" }, "emailAddress": { "name": "Ana Lee", "address": "ana@example.net" } },
+          { "type": "required", "status": { "response": "none" }, "emailAddress": { "name": "Owner Example", "address": "owner@example.test" } }
+        ]
+      },
+      {
+        "id": "AAMkE2allday=",
+        "changeKey": "ck-e2-2",
+        "type": "singleInstance",
+        "iCalUId": "040000008200E00074C5B7101A82E0080000000003E2",
+        "subject": "Canceled: Offsite",
+        "start": { "dateTime": "2026-11-20T00:00:00.0000000", "timeZone": "UTC" },
+        "end": { "dateTime": "2026-11-21T00:00:00.0000000", "timeZone": "UTC" },
+        "isAllDay": true,
+        "isCancelled": true
+      }
+    ]
+  },
+  "deltaRelistOnly": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Collection(event)",
+    "@odata.deltaLink": "https://graph.microsoft.com/v1.0/me/calendarView/delta?$deltatoken=delta-three",
+    "value": [
+      {
+        "id": "AAMkE1single=",
+        "changeKey": "ck-e1-1",
+        "type": "singleInstance",
+        "iCalUId": "040000008200E00074C5B7101A82E0080000000001E1",
+        "subject": "Roadmap review",
+        "body": { "contentType": "html", "content": "<html><body><p>Agenda: review the roadmap.</p></body></html>" },
+        "start": { "dateTime": "2026-11-18T09:00:00.0000000", "timeZone": "UTC" },
+        "end": { "dateTime": "2026-11-18T10:00:00.0000000", "timeZone": "UTC" },
+        "isAllDay": false,
+        "isCancelled": false,
+        "isOrganizer": false,
+        "responseRequested": true,
+        "responseStatus": { "response": "notResponded" },
+        "location": { "displayName": "Room 4" },
+        "organizer": { "emailAddress": { "name": "Dan Park", "address": "dan@example.org" } },
+        "attendees": [
+          { "type": "required", "status": { "response": "accepted" }, "emailAddress": { "name": "Ana Lee", "address": "ana@example.net" } },
+          { "type": "required", "status": { "response": "none" }, "emailAddress": { "name": "Owner Example", "address": "owner@example.test" } }
+        ]
+      }
+    ]
+  },
+  "deltaEmpty": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Collection(event)",
+    "@odata.deltaLink": "https://graph.microsoft.com/v1.0/me/calendarView/delta?$deltatoken=delta-empty",
+    "value": []
+  },
+  "errorSyncStateNotFound": {
+    "error": { "code": "syncStateNotFound", "message": "The sync state was not found or has expired. Do a full sync." }
+  },
+  "errorThrottled": {
+    "error": { "code": "ApplicationThrottled", "message": "Application is over its MailboxConcurrency limit." }
+  },
+  "errorItemNotFound": {
+    "error": { "code": "ErrorItemNotFound", "message": "The specified object was not found in the store." }
+  },
+  "errorInvalidAuthenticationToken": {
+    "error": { "code": "InvalidAuthenticationToken", "message": "Access token has expired or is not yet valid." }
+  }
+}

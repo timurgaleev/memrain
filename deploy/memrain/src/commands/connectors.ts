@@ -2,6 +2,16 @@
  * `memrain connectors github sync <owner/repo> --source ID [--token-file F]
  *                               [--full] [--dry-run] [--json]`
  * `memrain connectors status [--json]`
+ * `memrain connectors redact-meetings [--source ID] [--apply --yes] [--json]`
+ *
+ * `redact-meetings` removes online-meeting credentials (ids, passcodes, PINs,
+ * join links) from connector mail and calendar pages stored before the
+ * renderers stripped them. Dry run by default, with counts per source;
+ * `--apply --yes` writes each changed page as a new version and re-mirrors it.
+ *
+ * `status` lists every connector account (state, last clean sync, last run,
+ * a waiting reconnect, a Google Testing-mode grant about to end) and every
+ * recipe connector's watermark and last run.
  *
  * A one-shot, operator-run mirror of a GitHub repository's issues and pull
  * requests into a `github` source (see src/core/connectors/). The token comes
@@ -31,10 +41,14 @@ import {
 } from "../core/connectors/github.ts";
 import type { ConnectorRunStatus } from "../core/connectors/types.ts";
 import { listConnectorStates } from "../core/connectors/watermark.ts";
+import { grantExpiryText, listAccountStatus, runCountsText, type AccountStatus } from "../core/connectors/account-status.ts";
+import { connectorsStatus } from "../core/connectors/vault.ts";
+import { sweepMeetingCredentials, type MeetingRedactSweepResult } from "../core/connectors/meeting-redact-sweep.ts";
 import { withStorage } from "./with-storage.ts";
+import { runRotateKek } from "./connectors-vault.ts";
 
 export interface ConnectorsCmdOptions {
-  /** `github` or `status`. */
+  /** `github`, `status`, `redact-meetings` or `rotate-kek`. */
   sub: string | undefined;
   /** `sync` under `github`. */
   action?: string;
@@ -44,13 +58,21 @@ export interface ConnectorsCmdOptions {
   tokenFile?: string;
   full?: boolean;
   dryRun?: boolean;
+  /** `redact-meetings`: write the changes (needs `yes`). */
+  apply?: boolean;
+  yes?: boolean;
   json?: boolean;
   configPath?: string;
+  /** Test seam: a Storage the caller opened and closes. */
+  storage?: Storage;
   /** Test seams: recorded responses, a fake clock, a deterministic embedder. */
   fetch?: FetchFn;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   embedFn?: EmbedFn;
+  /** `rotate-kek`: the current and the new connector key files. */
+  oldKekFile?: string;
+  newKekFile?: string;
 }
 
 const MAX_TOKEN_FILE_BYTES = 4096;
@@ -188,21 +210,49 @@ async function runGithubSync(opts: ConnectorsCmdOptions): Promise<number> {
   return code;
 }
 
+/** One account as the operator reads it in a terminal. */
+export function accountStatusLine(a: AccountStatus): string[] {
+  const head = `${a.provider} ${a.account_label} (${a.id.slice(0, 8)}) into ${a.source_id}: ${a.state}`;
+  const run = a.last_run;
+  const parts = [
+    ...(a.services.length > 0 ? [`services ${a.services.join(", ")}`] : []),
+    `last clean sync ${a.last_success_at ?? "never"}`,
+    ...(run
+      ? [`last run ${run.status}${run.stop_reason ? ` (${run.stop_reason})` : ""} at ${run.at}, ${runCountsText(run)}` + (run.error ? ` — ${run.error}` : "")]
+      : ["no run recorded yet"]),
+  ];
+  const lines = [`${head}, ${parts.join(", ")}`];
+  if (a.needs_reconnect) {
+    lines.push(`  needs a reconnect since ${a.reconnect_since}${a.status_reason ? ` (${a.status_reason})` : ""}: reconnect it on the admin Connections page; its data and cursors are kept`);
+  }
+  if (a.grant_expiry) lines.push(`  ${grantExpiryText(a.grant_expiry)}`);
+  return lines;
+}
+
 async function runStatus(opts: ConnectorsCmdOptions): Promise<number> {
   const storage = new Storage(loadConfig(opts.configPath));
-  const states = await withStorage(storage, () => listConnectorStates(storage.engine()));
+  const { states, accounts } = await withStorage(storage, async () => ({
+    states: await listConnectorStates(storage.engine()),
+    accounts: await listAccountStatus(storage.engine()),
+  }));
+  const gate = connectorsStatus();
   if (opts.json) {
-    console.log(JSON.stringify({ ok: true, connectors: states }, null, 2));
+    console.log(JSON.stringify({ ok: true, connectors_enabled: gate.enabled, connectors_reason: gate.reason, connectors: states, accounts }, null, 2));
     return 0;
   }
-  if (states.length === 0) {
-    console.log("no connector has run");
+  if (states.length === 0 && accounts.length === 0) {
+    console.log("no connector account and no connector has run");
     return 0;
   }
+  // An account's "sync on" is its own switch; this says whether any sync can run in this process at all.
+  console.log(gate.enabled ? "connectors: on" : `connectors: off (${gate.reason ?? "unknown"})`);
+  if (accounts.length > 0) console.log("accounts:");
+  for (const a of accounts) for (const line of accountStatusLine(a)) console.log(`  ${line}`);
+  if (states.length > 0) console.log("recipe connectors:");
   for (const s of states) {
     const run = s.last_run;
     console.log(
-      `${s.recipe_id}: watermark ${s.watermark ?? "none"}` +
+      `  ${s.recipe_id}: watermark ${s.watermark ?? "none"}` +
         (run ? `, last run ${run.status} at ${run.at}, last clean run ${run.last_success_at ?? "never"}` : "") +
         (s.refused.length > 0 ? `, ${s.refused.length} item(s) refused` : ""),
     );
@@ -210,9 +260,55 @@ async function runStatus(opts: ConnectorsCmdOptions): Promise<number> {
   return 0;
 }
 
+function printMeetingRedact(r: MeetingRedactSweepResult): void {
+  console.log(`connector meeting credentials (${r.applied ? "apply" : "dry run"}): ${r.pages_changed} of ${r.pages_scanned} page(s), ${r.removals} credential(s)`);
+  for (const [source, c] of Object.entries(r.by_source).sort(([a], [b]) => a.localeCompare(b))) {
+    console.log(`  ${source}: ${c.pages_changed} of ${c.pages_scanned} page(s), ${c.removals} credential(s)`);
+  }
+  if (r.applied) {
+    console.log(`  ${r.rewritten} page(s) written as a new version`);
+    if (r.mirror_failed > 0) {
+      console.log(`  ${r.mirror_failed} written page(s) not re-indexed yet: search returns their old text until the cycle's mirror-pages phase re-indexes them`);
+    }
+    if (r.moved > 0) console.log(`  ${r.moved} page(s) changed by a sync meanwhile; run again`);
+  }
+  if (r.pages_changed > 0) {
+    console.log(`Older version snapshots keep their text.${r.applied ? "" : " Run with --apply --yes to write the redacted pages."}`);
+  }
+  for (const e of r.errors) console.log(`  ${e}`);
+}
+
+async function runRedactMeetings(opts: ConnectorsCmdOptions): Promise<number> {
+  if (opts.apply && opts.dryRun) {
+    console.error("memrain connectors redact-meetings: choose --apply or --dry-run (a run without --apply is the dry run)");
+    return 2;
+  }
+  if (opts.apply && !opts.yes) {
+    console.error("memrain connectors redact-meetings: --apply writes a new version of each changed page; add --yes to confirm (run without --apply first to review)");
+    return 2;
+  }
+  const storage = opts.storage ?? new Storage(loadConfig(opts.configPath));
+  return withStorage(storage, async () => {
+    const r = await sweepMeetingCredentials(storage, {
+      ...(opts.sourceId !== undefined ? { sourceId: opts.sourceId } : {}),
+      apply: opts.apply === true,
+      ...(opts.embedFn ? { mirror: { embedFn: opts.embedFn } } : {}),
+    });
+    if (opts.json) console.log(JSON.stringify({ ok: r.errors.length === 0, ...r }, null, 2));
+    else printMeetingRedact(r);
+    return r.errors.length + r.mirror_failed + r.moved > 0 ? 1 : 0;
+  }, { owned: opts.storage === undefined });
+}
+
 export async function runConnectors(opts: ConnectorsCmdOptions): Promise<number> {
+  if ((opts.apply || opts.yes) && opts.sub !== "redact-meetings") {
+    console.error("memrain connectors: --apply and --yes belong to redact-meetings only");
+    return 2;
+  }
   if (opts.sub === "status") return runStatus(opts);
   if (opts.sub === "github") return runGithubSync(opts);
-  console.error("memrain connectors: subcommand required (github sync <owner/repo> | status)");
+  if (opts.sub === "redact-meetings") return runRedactMeetings(opts);
+  if (opts.sub === "rotate-kek") return runRotateKek(opts);
+  console.error("memrain connectors: subcommand required (github sync <owner/repo> | status | redact-meetings | rotate-kek)");
   return 1;
 }

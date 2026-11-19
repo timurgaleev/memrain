@@ -16,6 +16,7 @@ import { Storage } from "../core/storage.ts";
 import { withStorage, closeQuietly } from "./with-storage.ts";
 import { loadConfig } from "../core/config.ts";
 import { runMigrations, discoverMigrations, revertMigration } from "../core/migrate.ts";
+import { withDirectEngine } from "../core/engine/direct.ts";
 
 export interface ApplyMigrationsCmdOptions {
   /** Print the migration set without applying. Default false. */
@@ -58,8 +59,12 @@ export async function runApplyMigrations(
     }
     const storage = opts.storage ?? new Storage(loadConfig());
     try {
-      await storage.engine().ready();
-      const reverted = await revertMigration(storage.engine(), opts.down);
+      // Behind a pooler this is the direct engine, or a refusal before any SQL.
+      const down = opts.down;
+      const reverted = await withDirectEngine(storage.engine(), async (engine) => {
+        await engine.ready();
+        return revertMigration(engine, down);
+      });
       console.log(JSON.stringify({ ok: true, mode: "down", reverted }, null, 2));
     } finally {
       if (!opts.storage) await closeQuietly(storage);

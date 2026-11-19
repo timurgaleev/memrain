@@ -9,6 +9,28 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 
 ---
 
+## Reversed decisions (2026-11-14)
+
+The 2026-11-14 platform program reverses these earlier refusals. Entries
+further down that still state the old position are kept for history and are
+marked; this section is the one that stands.
+
+- **Live connectors are in scope.** Mail, calendar, meeting and chat sources
+  (Gmail, Google Calendar, Microsoft 365, Slack, Teams, meeting transcripts),
+  an outbound credential vault with OAuth, and open loops derived from them
+  ("who is waiting for a reply") are built behind default-off flags. This
+  replaces "life integrations stay removed", "Gmail/Calendar stay out" and the
+  "Not planned" entry for the credential vault, Google OAuth and email-derived
+  loops.
+- **An operator chat surface is in scope.** Answer synthesis stays the MCP
+  client's job for agents; the admin app gains its own chat for the operator.
+- **The skill pack gets an integrity lockfile.** It will ship to hosted
+  clients, so the earlier reasoning that it never leaves the repository no
+  longer holds.
+- **Skills declined earlier may be adapted.** The one exclusion that stands is
+  git- or markdown-canonical storage; skills declined as redundant or out of
+  scope are open again.
+
 ## Remaining comparison program
 
 - Run the pinned attribution, mirror-adoption and rechunk previews on the
@@ -51,18 +73,56 @@ Versions `v1.x` in items written before the rename mean `memex-v1.x`.
 - `page_delete` over MCP hard-deletes the page's fence facts at soft-delete
   time (`purgeFenceFactsForPage`), so restore and purge receipts cannot see
   them. Retire instead of delete, or move the removal to purge.
-- A capture job id leaves out the requested slug: the same credential sending
-  the same bytes to two slugs writes only the first.
-- The default capture slug depends only on the content, so two tenants sending
-  identical bytes without a slug aim at the same page.
 - Restating a claim on a second page with the same writer collapses onto the
   first page's fact row; purging the first page then retires the claim the
   second page still states. Record per-page support for collapsed claims.
-- Curated skill text: `brain-ops` writes back on every message naming a person
-  or company without being asked; `briefing` calls `chronicle_last_seen`
-  without an entity; `capture` points plugin users at a CLI they do not have.
 - A single-value link target cannot hold two separate periods (A, then B, then
   A again); the re-add is refused.
+
+## Follow-ups from the Office page
+
+- Dynamic client registration stores `client_name` with no length or
+  control-character cap (`src/core/oauth-provider.ts`); the Office snapshot
+  trims it, but the stored name needs its own fix and review on the auth path.
+- Open `/admin/events` streams stay open after the admin session expires or
+  the admin logs out.
+- The Office page's cached static floor canvas stays in memory after leaving
+  the page.
+- Unauthenticated local calls (agent `internal`) always show as "New app".
+- The Office snapshot runs one target query per daemon on every 30 s poll, for
+  each open tab.
+- Busy name tags crowd each other at phone width; consider hiding idle tags
+  below 600 px.
+- Measure the Office page's CPU and GPU use on a real laptop GPU after deploy.
+
+## Follow-ups from the meeting-credential review (2026-11-17)
+
+- Older versions of a page cleaned by `connectors redact-meetings` keep the
+  credentials: `page_versions` with bodies and `page_revert` still reach them.
+  Decided: history stays as it is (no scrub).
+- Teams chat days and meeting summaries (`renderChatDay` and the summary
+  renderer in `connectors/render.ts`) still guard with `g.text`, not
+  `g.invite`, and the sweep covers mail and calendar only.
+- A label can take the next line's value: `Access code` above a line starting
+  `2026-11-17` loses the date, and `Password:` then a blank line then `Thanks,`
+  loses `Thanks,`. A read-only count on prod found none.
+- The sweep selects connector pages by type and `compiled_truth.origin`, not
+  by source kind; check the kind as retention's `assertConnectorSource` does.
+- Purging a page deletes its `hot_memory` rows by `source_slug`, which has no
+  index, so every purge scans the table.
+- The concept hub gate reuses the entity junk list, so a real concept named
+  `meetings`, `customers`, `project` or `idea` can never get a hub page.
+
+## Deletion inventory gaps (2026-11-14)
+
+`tests/deletion_inventory.test.ts` gives every column that names a page or a
+source a fate on purge. These rows outlive what they name; fix each, then drop
+it from the test's known-gap list.
+
+- Source delete: `fact_withdrawals`, `ingest_log`, `slug_aliases`,
+  `synth_contradictions` and `take_nudge_log` are neither foreign-keyed to
+  `sources` nor counted by `sourceReferences`, so a new source created with a
+  deleted source's id inherits their rows.
 
 ## Follow-ups from the admin charts batch (1.5)
 
@@ -2916,7 +2976,7 @@ composite identity itself; a CI Postgres lane.
 **Why.** RM-14 imports exports and sessions the operator pushes. Continuous
 capture of ChatGPT/Claude.ai history, and of project history (issues, PRs,
 reviews) next to the code graph, is the remaining connector gap; neither was
-part of the removed life integrations.
+part of the removed life integrations (reversed 2026-11-14, see "Reversed decisions").
 
 **Scope.**
 
@@ -2950,7 +3010,7 @@ watermark does not advance on a partial run; a GitHub fixture repo mirrors
 issues/PRs with links and a webhook refresh updates one item; doctor flags an
 expired credential.
 
-**Needs operator go.** Yes (Gmail/Calendar stay out; see open decisions).
+**Needs operator go.** Yes (Gmail/Calendar stay out; see open decisions). Reversed 2026-11-14: see "Reversed decisions".
 
 **Progress.** R1 (1.151.0): the provider seam and the GitHub connector as a
 one-shot operator CLI. `core/connectors/`: a pure response classifier (ok,
@@ -3064,6 +3124,7 @@ Not in any roadmap item, with the reason:
   add it with the first feature that does.
 - **Outbound credential vault, Google OAuth, Google source, open-loop detection
   and email-derived loops** — life integrations were removed on purpose.
+  Reversed 2026-11-14: see "Reversed decisions".
 - **Keyless capability probe and a local IPC listener** — one provider,
   HTTP-only serving.
 - **Cross-source identity groups** — overlaps the deferred federation decision.
@@ -3183,7 +3244,7 @@ Closed operator decisions this roadmap does not re-raise:
    `resolve_slugs` + `entity_recall` exposes nothing a caller cannot already reach
    in two calls, and the RM-01 matrix supplies the proof. Reopen inside RM-12?
 7. **Life integrations stay removed** (Gmail/Calendar). Recommended default:
-   yes. Remnants remain (`src/core/recipe-state.ts`, `mailbox`/`calendar` source
+   yes. Reversed 2026-11-14: see "Reversed decisions". Remnants remain (`src/core/recipe-state.ts`, `mailbox`/`calendar` source
    kinds in migration 004).
 8. **Page/timeline FTS arm.** "Deferred real gap (2026-07-07) — page/timeline
    FTS" below calls it high value, while an earlier worklog marked it skipped
@@ -4288,6 +4349,8 @@ the capability back.
 
 _None currently — the Telegram/chat and life-integration capabilities
 were intentionally removed; memex is a brain reached over MCP only._
+Connectors and an operator chat come back as new work, not as revivals; see
+"Reversed decisions" at the top.
 
 ---
 

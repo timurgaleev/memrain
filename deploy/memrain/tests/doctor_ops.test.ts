@@ -292,6 +292,27 @@ describe("checkDuplicatePages", () => {
     expect(r.detail).toContain("notes/a, notes/b");
   });
 
+  it("leaves out connector pages, but still counts brain pages and pages retention handed to the brain", async () => {
+    const withOrigin = (slug: string, hash: string, origin: string) =>
+      storage.engine().query(
+        `INSERT INTO pages (slug, type, content_hash, compiled_truth) VALUES ($1, 'calendar_event', $2, $3::jsonb)`,
+        [slug, hash, JSON.stringify({ origin })],
+      );
+    await withOrigin("calendar/acct-a/meet", "hash-meet", "connector");
+    await withOrigin("calendar/acct-b/meet", "hash-meet", "connector");
+    expect(await checkDuplicatePages(storage.engine())).toMatchObject({ status: "ok", detail: "no duplicate pages" });
+
+    await withOrigin("calendar/acct-a/kept", "hash-kept", "connector_detached");
+    await withOrigin("calendar/acct-b/kept", "hash-kept", "connector_detached");
+    await insertPage("notes/a", "hash-note");
+    await insertPage("notes/b", "hash-note");
+    const r = await checkDuplicatePages(storage.engine());
+    expect(r.status).toBe("warn");
+    expect(r.detail).toContain("2 duplicate page group");
+    expect(r.detail).toContain("calendar/acct-a/kept, calendar/acct-b/kept");
+    expect(r.detail).not.toContain("meet");
+  });
+
   it("ignores distinct hashes and soft-deleted twins", async () => {
     await insertPage("notes/a", "hash-one");
     await insertPage("notes/b", "hash-two");

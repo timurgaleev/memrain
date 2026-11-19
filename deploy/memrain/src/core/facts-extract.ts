@@ -42,7 +42,8 @@ import {
 import { slugifyTarget } from "./links.ts";
 import { makeSlugResolver } from "./slug-canonicalize.ts";
 import { isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
-import { BudgetTracker, BudgetExhausted } from "./budget.ts";
+import { BudgetTracker, BudgetExhausted, runAsPath } from "./budget.ts";
+import { isConnectorPageType } from "./connectors/page-kind.ts";
 import {
   classifyFactsAbsorbError,
   writeFactsAbsorbLog,
@@ -424,9 +425,12 @@ export function parseFactsResponse(
 }
 
 /** Output-token cap for one extractor call. A turn is capped at ~12K chars in
- *  and 10 facts out, so this is generous; a truncated call is retried once at
+ *  and 10 facts out, each with about eleven keys: a complete answer averages
+ *  1.3K-1.4K tokens and some pass 2K, more for German or Russian text. A cut
+ *  answer is unreadable as a whole, so the cap leaves room for the largest;
+ *  Bedrock bills only the tokens produced. A truncated call is retried once at
  *  double this — but only when the caller says the retry fits its budget. */
-export const DEFAULT_EXTRACTION_MAX_TOKENS = 1000;
+export const DEFAULT_EXTRACTION_MAX_TOKENS = 4000;
 
 export interface ExtractTurnOptions {
   /** Injectable model seam — tests pass a fake; production resolves Sonnet. */
@@ -816,6 +820,7 @@ export function isFactsExtractionEligible(
     return { ok: false, reason: "subagent_namespace" };
   }
   const t = (type ?? "").trim().toLowerCase();
+  if (isConnectorPageType(t)) return { ok: false, reason: "connector_page" };
   if (!EXTRACTION_ELIGIBLE_TYPES.includes(t)) {
     return { ok: false, reason: `kind:${t || "unknown"}` };
   }
@@ -838,13 +843,18 @@ export function factsExtractionEnabled(
 }
 
 /** Per-write USD ceiling for one on-write extraction. Small — it prices a
- *  single page-body turn plus its one truncation retry (a full-window Sonnet
- *  page needs ~$0.06 for both). MEMRAIN_FACTS_WRITE_BUDGET_USD overrides. */
+ *  single page-body turn plus its one truncation retry: a full-window Sonnet
+ *  page cut at the output cap reaches ~$0.15 for both at Sonnet 5.5 prices,
+ *  ~$0.21 at Sonnet 4.6's. Most writes settle far below it.
+ *  MEMRAIN_FACTS_WRITE_BUDGET_USD overrides. */
 function perWriteBudgetUsd(): number {
   const raw = (process.env["MEMRAIN_FACTS_WRITE_BUDGET_USD"] ?? "").trim();
   const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : 0.08;
+  return Number.isFinite(n) && n > 0 ? n : 0.25;
 }
+
+/** The spend wallet path of facts extraction (on write and on demand). */
+export const FACTS_SPEND_PATH = "facts-extract";
 
 /** Conservative worst-case usage for the pre-flight budget guard (mirrors the
  *  CLI batch path's ceiling: ~12K sanitized chars in + the output cap). */
@@ -1061,7 +1071,14 @@ function outcomeAbsorbReason(outcome: ExtractOutcome): FactsAbsorbReason | null 
  * per window, each reserved against the same per-write tracker; the first
  * window the tracker refuses ends the run.
  */
-export async function extractFactsForPage(
+export function extractFactsForPage(
+  storage: Storage,
+  opts: ExtractForPageOptions,
+): Promise<ExtractForPageResult> {
+  return runAsPath(FACTS_SPEND_PATH, () => extractFactsForPageRun(storage, opts));
+}
+
+async function extractFactsForPageRun(
   storage: Storage,
   opts: ExtractForPageOptions,
 ): Promise<ExtractForPageResult> {
@@ -1273,9 +1290,16 @@ export interface OnDemandExtractResult {
  * `sonnetFn` (tests) bypasses the gate and never spends real Bedrock. Budget-
  * guarded with the same per-call ceiling as the on-write path.
  */
-export async function extractFactsOnDemand(
+export function extractFactsOnDemand(
   text: string,
   opts: OnDemandExtractOptions = {},
+): Promise<OnDemandExtractResult> {
+  return runAsPath(FACTS_SPEND_PATH, () => extractFactsOnDemandRun(text, opts));
+}
+
+async function extractFactsOnDemandRun(
+  text: string,
+  opts: OnDemandExtractOptions,
 ): Promise<OnDemandExtractResult> {
   if (opts.persist === true && !opts.storage) {
     throw new Error("extractFactsOnDemand: persist requires storage");

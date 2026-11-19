@@ -32,6 +32,8 @@ export type SourceKind =
   | "transcript"
   | "code"
   | "github"
+  | "chat"
+  | "meeting"
   | "other";
 
 export const SOURCE_KINDS: readonly SourceKind[] = [
@@ -43,8 +45,13 @@ export const SOURCE_KINDS: readonly SourceKind[] = [
   "transcript",
   "code",
   "github",
+  "chat",
+  "meeting",
   "other",
 ];
+
+/** Kinds whose text someone outside the brain wrote: senders, attendees, issue authors. */
+export const EXTERNAL_SOURCE_KINDS: readonly SourceKind[] = ["github", "mailbox", "calendar", "webhook", "chat", "meeting"];
 
 export type SyncPolicy = "synced" | "local-only" | "mirror";
 export type IndexedPolicy = "verbatim" | "hashed-only" | "tombstoned";
@@ -239,6 +246,7 @@ export async function sourceReferences(engine: Engine, id: string): Promise<Reco
        (SELECT COUNT(*) FROM tags WHERE source_id = $1)::int AS tags,
        (SELECT COUNT(*) FROM timeline_events WHERE source_id = $1)::int AS timeline_events,
        (SELECT COUNT(*) FROM synth_calibration_profile WHERE source_id = $1)::int AS calibration_profiles,
+       (SELECT COUNT(*) FROM connector_accounts WHERE source_id = $1)::int AS connector_accounts,
        -- Revoked clients count too: their row keeps a RESTRICT foreign key.
        (SELECT COUNT(*) FROM oauth_clients
          WHERE source_id = $1 OR $1 = ANY(federated_read))::int AS oauth_clients,

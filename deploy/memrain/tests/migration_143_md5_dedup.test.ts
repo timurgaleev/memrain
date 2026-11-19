@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { PGliteEngine } from "../src/core/engine/pglite.ts";
-import { PostgresEngine } from "../src/core/engine/postgres.ts";
+import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import { addFact } from "../src/core/facts.ts";
 import { putPage } from "../src/core/pages.ts";
@@ -42,18 +42,18 @@ async function openPglite(): Promise<Opened> {
 
 async function openPostgres(baseUrl: string): Promise<Opened> {
   const name = `mig143_${process.pid}_${Math.floor(Math.random() * 1e9)}`;
-  const admin = new PostgresEngine({ url: baseUrl, max: 1 });
+  const admin = pgTestEngine({ url: baseUrl, max: 1 });
   await admin.exec(`CREATE DATABASE ${name}`);
   await admin.close();
   const u = new URL(baseUrl);
   u.pathname = `/${name}`;
-  const storage = new Storage(new PostgresEngine({ url: u.toString(), max: 2 }));
+  const storage = new Storage(pgTestEngine({ url: u.toString(), max: 2 }));
   await storage.init();
   return {
     storage,
     close: async () => {
       await storage.close();
-      const a = new PostgresEngine({ url: baseUrl, max: 1 });
+      const a = pgTestEngine({ url: baseUrl, max: 1 });
       try {
         await a.exec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
       } finally {
@@ -196,16 +196,16 @@ async function openAt142(kind: "PGLite" | "Postgres"): Promise<{ engine: Engine;
     };
   } else {
     const name = `mig143_142_${process.pid}_${Math.floor(Math.random() * 1e9)}`;
-    const admin = new PostgresEngine({ url: PG_URL!, max: 1 });
+    const admin = pgTestEngine({ url: PG_URL!, max: 1 });
     await admin.exec(`CREATE DATABASE ${name}`);
     await admin.close();
     const u = new URL(PG_URL!);
     u.pathname = `/${name}`;
-    const pg = new PostgresEngine({ url: u.toString(), max: 2 });
+    const pg = pgTestEngine({ url: u.toString(), max: 2 });
     engine = pg;
     close = async () => {
       await pg.close();
-      const a = new PostgresEngine({ url: PG_URL!, max: 1 });
+      const a = pgTestEngine({ url: PG_URL!, max: 1 });
       try {
         await a.exec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
       } finally {

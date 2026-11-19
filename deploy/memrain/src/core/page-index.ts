@@ -562,6 +562,8 @@ export async function mirrorPageVerdict(
       {
         remote: opts.remote,
         ...(opts.timingLabel ? { timingLabel: opts.timingLabel } : {}),
+        // A slug can carry a credential; the timing line names the caller's redacted label.
+        ...(opts.logLabel ? { timingPath: pageSourcePath(opts.logLabel, page.source_id) } : {}),
         ...(opts.embedFn ? { embedFn: opts.embedFn } : {}),
         ...(opts.contextualLlmFn ? { contextualLlmFn: opts.contextualLlmFn } : {}),
       },

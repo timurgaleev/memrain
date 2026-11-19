@@ -129,6 +129,41 @@ describe("conversationFactsBackfillPhase", () => {
   });
 });
 
+describe("output cap", () => {
+  it("gives a full ten-fact answer room in one call, so a dense page is neither cut nor parked", async () => {
+    // A complete answer runs to ~1.3K-2.3K output tokens: ten facts of eleven
+    // keys each. Below the room it needs the model stops mid-array, the parser
+    // drops the whole answer, and the same page fails the same way after every backoff.
+    await putPage(storage, { slug: "notes/dense", type: "note", markdown_body: LONG_BODY });
+    const caps: number[] = [];
+    const facts = Array.from({ length: 10 }, (_, i) => ({
+      fact: `Alice confirmed detail number ${i} of the Acme rollout plan`,
+      kind: "fact",
+      entity: "people/alice",
+      confidence: 0.8,
+      notability: "medium",
+    }));
+    const fn: SonnetFn = async (input) => {
+      caps.push(input.maxTokens);
+      if (input.maxTokens < 2500) {
+        return {
+          text: JSON.stringify({ facts }).slice(0, 400),
+          modelId: "eu.anthropic.claude-sonnet-4-6",
+          usage: { inputTokens: 1000, outputTokens: input.maxTokens },
+          stopReason: "max_tokens",
+        };
+      }
+      return { text: JSON.stringify({ facts }), modelId: "eu.anthropic.claude-sonnet-4-6", usage: { inputTokens: 1000, outputTokens: 2300 } };
+    };
+    const r = await conversationFactsBackfillPhase(storage, { sonnetFn: fn });
+    expect(caps).toHaveLength(1);
+    expect(r.errors).toEqual([]);
+    expect(r.factsWritten).toBeGreaterThan(0);
+    expect((await storage.engine().query("SELECT phase FROM synth_failures WHERE phase = 'facts-backfill'")).rows).toEqual([]);
+    expect((await storage.engine().query("SELECT outcome FROM facts_backfill_scans WHERE slug = 'notes/dense'")).rows).toEqual([{ outcome: "extracted" }]);
+  });
+});
+
 describe("zero-yield memo (facts_backfill_scans)", () => {
   function countingSonnet(text: () => string): { fn: SonnetFn; calls: () => number } {
     let n = 0;

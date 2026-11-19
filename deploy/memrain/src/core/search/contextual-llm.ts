@@ -31,7 +31,7 @@ import {
   DEFAULT_HAIKU_MODEL,
 } from "../llm/haiku.ts";
 import { sanitizeForPrompt } from "../llm/sanitize.ts";
-import { BudgetTracker, BudgetExhausted } from "../budget.ts";
+import { BudgetTracker, BudgetExhausted, runAsPath } from "../budget.ts";
 import { isTruncated } from "../llm/truncation.ts";
 import { TERMINAL_STOP_REASONS } from "../llm/converse.ts";
 import type { SonnetUsage } from "../llm/sonnet.ts";
@@ -236,10 +236,18 @@ export interface GenerateChunkContextOptions {
  * Bedrock/network error, empty output) — the caller then falls back to the
  * deterministic prefix. This function NEVER throws for an LLM-path failure.
  */
-export async function generateChunkContext(
+export function generateChunkContext(
   docText: string,
   chunkText: string,
   opts: GenerateChunkContextOptions = {},
+): Promise<string | null> {
+  return runAsPath(CONTEXTUAL_LLM_LABEL, () => generateChunkContextRun(docText, chunkText, opts));
+}
+
+async function generateChunkContextRun(
+  docText: string,
+  chunkText: string,
+  opts: GenerateChunkContextOptions,
 ): Promise<string | null> {
   if (!chunkText || chunkText.trim().length === 0) return null;
 
