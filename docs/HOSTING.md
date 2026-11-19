@@ -69,9 +69,9 @@ The container's control-plane login (`tenant_<id>_ctl`) is its own, and so is
 its connection pool: `tenant_self()` and the spend functions recognise the
 tenant by `session_user`. Never put a connection pooler between tenant
 containers and `memrain_control` that shares server connections across
-tenants (PgBouncer in transaction or statement mode). If one is ever needed,
-give each tenant its own pool and login, or leave the control connections
-unpooled.
+tenants (PgBouncer in transaction or statement mode). The per-tenant pooler
+below pools the tenant's own database only; control connections always go to
+the database directly.
 
 Each tenant container sits on one network, `memrain_tenant_<id>`. That is a
 plain bridge, so outbound NAT to the database and Bedrock works. The only other
@@ -250,6 +250,43 @@ The first failure stops the loop. Tenants already done stay on the new
 version, the rest stay on the old one, and nothing is rolled back. The report
 is printed and kept in `deploy/tenants/.deploy-report`. Fix the cause and run
 the deploy again.
+
+## Connection pooler (off)
+
+Each tenant container holds up to `MEMRAIN_PG_POOL_MAX` (4) connections to its
+database, idle ones included. With many tenants on a small database, a
+PgBouncer per tenant lets those idle connections go: `pgbouncer-<id>` runs in
+transaction mode on the tenant's own network, serves that tenant's database
+only, and publishes no port. The image is `deploy/pgbouncer` (PgBouncer
+1.24.0, built locally; the build fails below 1.21).
+
+It is off. To turn it on for every tenant, set in the host `.env`:
+
+```
+MEMRAIN_TENANT_PG_POOLER=pgbouncer
+COMPOSE_PROFILES=pooler
+```
+
+then run `bash deploy/secrets/fetch-secrets.sh --tenant <id>` for each tenant
+and `bash deploy/deploy.sh`. The tenant env file then points
+`MEMRAIN_POSTGRES_URL` at `pgbouncer-<id>:6432` and adds
+`MEMRAIN_POSTGRES_DIRECT_URL` (migrations and DDL, and the pooler's own
+upstream) and `MEMRAIN_PG_POOLER=pgbouncer`; the control URL is unchanged.
+The deploy starts each pooler before its tenant container, and the isolation
+smoke probes every neighbour's pooler as well. `MEMRAIN_PGBOUNCER_SERVER_SSLMODE`
+(default `require`) and `MEMRAIN_PGBOUNCER_POOL_SIZE` (default 3 server
+connections per tenant) tune it.
+
+In pooler mode the brain sends no session settings at connect, so the
+tenant's `statement_timeout` and `idle_in_transaction_session_timeout` come
+from its database role (provisioning sets both); `memrain doctor` fails
+`db-connection-budget` when either reads 0 through the pool. Session-scoped
+SQL (session advisory locks, `LISTEN`, a bare `SET`, temp tables without
+`ON COMMIT DROP`, `WITH HOLD` cursors, `DISCARD`) is refused by `make audit`.
+`TEST_PG_POOLER=1 make test-pg` runs the Postgres suite through the same
+image, with `TEST_PG_PREPARE=0|1` for both prepared-statement modes; the few
+files that need their own session are listed with reasons in
+`deploy/memrain/tests/pooler-direct-only.txt`.
 
 ## Isolation smoke
 
