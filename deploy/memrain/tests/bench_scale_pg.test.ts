@@ -52,6 +52,8 @@ describe.skipIf(!URL_)("bench scale on Postgres", () => {
       expect(await count(brain.engine, "SELECT count(*)::int AS n FROM documents")).toBe(0);
       expect(await count(brain.engine, "SELECT count(*)::int AS n FROM embeddings")).toBe(0);
     } finally {
+      // The test's own row: clear it so afterAll can drop the database.
+      await brain.engine.query(`DELETE FROM pages`);
       await brain.engine.close();
     }
   });
@@ -93,6 +95,47 @@ describe.skipIf(!URL_)("bench scale on Postgres", () => {
       // Already gone: a second cleanup pass is a no-op, not an error.
       await dropScratchDatabase(URL_!, target);
     } finally {
+      await admin.close();
+    }
+  });
+
+  it("refuses a chunk that is not the bench's, even under a bench document", async () => {
+    const target = await createScratchDatabase(URL_!, { env: {} });
+    made.push(target);
+    const brain = await openBenchBrain(target);
+    try {
+      await brain.engine.query(
+        `INSERT INTO documents (id, source_id, source_path, title) VALUES ('d1', 'bench', 'bench/d1', 'D1')`,
+      );
+      await brain.engine.query(
+        `INSERT INTO chunks (id, document_id, chunk_index, content, source_id) VALUES ('c1', 'd1', 0, 'x', 'default')`,
+      );
+      const err = await assertBenchTarget(brain.engine, target).catch((e: unknown) => e);
+      expect((err as ScaleBenchRefusal).code).toBe("bench_refuses_live_db");
+    } finally {
+      await brain.engine.query(`DELETE FROM chunks`);
+      await brain.engine.close();
+    }
+  });
+
+  it("refuses to drop its own database once it holds rows that are not the bench's", async () => {
+    const target = await createScratchDatabase(URL_!, { env: {} });
+    made.push(target);
+    const brain = await openBenchBrain(target);
+    const admin = new PostgresEngine({ url: URL_!, max: 1 });
+    try {
+      await brain.engine.query(
+        `INSERT INTO pages (slug, type, title, content_hash, source_id)
+         VALUES ('people/someone', 'person', 'Someone', 'h', 'default')`,
+      );
+      const err = await dropScratchDatabase(URL_!, target).catch((e: unknown) => e);
+      expect((err as ScaleBenchRefusal).code).toBe("bench_refuses_live_db");
+      const left = await admin.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [target.dbName]);
+      expect(left.rows).toHaveLength(1);
+    } finally {
+      // The test's own row: clear it so afterAll can drop the database.
+      await brain.engine.query(`DELETE FROM pages`);
+      await brain.engine.close();
       await admin.close();
     }
   });

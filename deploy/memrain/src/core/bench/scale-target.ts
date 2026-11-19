@@ -219,9 +219,10 @@ async function dropDatabase(adminUrl: string, dbName: string): Promise<void> {
 }
 
 /**
- * Drop a database this run created: it must carry this run's nonce, and the
- * database under the name must still be the one created (same oid), checked
- * again on the admin session right before the DROP. Already gone: nothing to
+ * Drop a database this run created: it must carry this run's nonce and no
+ * row from any source but the bench's, and the database under the name must
+ * still be the one created (same oid), checked again on the admin session
+ * right before the DROP. Already gone: nothing to
  * do. Anything else under the name: refused.
  */
 export async function dropScratchDatabase(adminUrl: string, target: ScratchTarget): Promise<void> {
@@ -242,7 +243,7 @@ export async function dropScratchDatabase(adminUrl: string, target: ScratchTarge
     if (!(await sameDatabase(admin))) return;
     const e = new PostgresEngine({ url: target.url, max: 1, applicationName: APP_NAME });
     try {
-      await assertOwnMarker(e, target);
+      await assertBenchTarget(e, target);
     } finally {
       await e.close();
     }
@@ -276,8 +277,8 @@ async function assertOwnMarker(engine: Engine, target: Pick<ScratchTarget, "dbNa
 
 /**
  * The gate in front of every write: this engine is Postgres, connected to the
- * database the bench named, which carries this run's nonce and no page or
- * document from any source but the bench's.
+ * database the bench named, which carries this run's nonce and no page,
+ * document or chunk from any source but the bench's.
  */
 export async function assertBenchTarget(
   engine: Engine,
@@ -287,7 +288,7 @@ export async function assertBenchTarget(
     throw new ScaleBenchRefusal("bench_refuses_pglite", "the bench runs only on its own Postgres database");
   }
   await assertOwnMarker(engine, target);
-  for (const table of ["pages", "documents"]) {
+  for (const table of ["pages", "documents", "chunks"]) {
     const exists = await engine.query<{ ok: boolean }>(`SELECT to_regclass($1) IS NOT NULL AS ok`, [table]);
     if (!exists.rows[0]?.ok) continue;
     const foreign = await engine.query<{ n: number }>(
