@@ -37,7 +37,8 @@
  * `--live` with any other family is refused before anything bills.
  */
 
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
+import { runScaleBench, ScaleBenchRefusal, type ScaleBenchOptions } from "../core/bench/scale.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../core/storage.ts";
@@ -316,5 +317,104 @@ export async function runBenchCli(opts: BenchOptions = {}): Promise<number> {
     // Outside withStorage so the scratch directory goes even when the database
     // never opened — it is this command's, not the engine's.
     rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/** Flags only the behaviour bench reads. */
+export const BEHAVIOUR_BENCH_FLAGS: readonly string[] = ["--family", "--corpus", "--live"];
+
+/** Flags only `bench scale` reads (`--json` is shared). */
+export const SCALE_BENCH_FLAGS: readonly string[] = [
+  "--admin-url", "--scratch", "--chunks", "--tenants", "--concurrency", "--queries",
+  "--runs", "--warmup", "--seed", "--pooler-url", "--container", "--cold", "--out",
+];
+
+/**
+ * `memrain bench scale` flags as the CLI read them. Counts stay strings here
+ * so one parser decides what a malformed one means.
+ */
+export interface ScaleCliArgs {
+  adminUrl?: string;
+  scratch: boolean;
+  chunks?: string;
+  tenants?: string;
+  concurrency?: string;
+  queries?: string;
+  runs?: string;
+  warmup?: string;
+  seed?: string;
+  poolerUrl?: string;
+  container?: string;
+  cold: boolean;
+  out?: string;
+  json: boolean;
+}
+
+/** `100000`, `100k` or `12.5k` → an integer; anything else is a usage error. */
+export function parseCount(name: string, raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const m = /^(\d+(?:\.\d+)?)(k)?$/i.exec(raw.trim());
+  const n = m ? Number(m[1]) * (m[2] ? 1000 : 1) : Number.NaN;
+  if (!Number.isInteger(n)) {
+    throw new TypeError(`memrain bench scale: --${name} takes a whole number (100000 or 100k), got '${raw}'`);
+  }
+  return n;
+}
+
+/**
+ * The scale bench. Exit 0 on a completed run whatever the numbers say — a
+ * missed Q51 target is a finding in the report, not a failure. Exit 2 when the
+ * target is refused (not a throwaway bench server), 1 on bad usage.
+ */
+export async function runScaleBenchCli(a: ScaleCliArgs): Promise<number> {
+  if (!a.adminUrl) {
+    process.stderr.write(
+      "memrain bench scale: --admin-url is required (a throwaway Postgres server; scripts/scale-bench.sh starts one)\n",
+    );
+    return 1;
+  }
+  const opts: ScaleBenchOptions = {
+    adminUrl: a.adminUrl,
+    scratch: a.scratch,
+    cold: a.cold,
+    log: (line) => process.stderr.write(`[bench scale] ${line}\n`),
+  };
+  const chunks = parseCount("chunks", a.chunks);
+  const tenants = parseCount("tenants", a.tenants);
+  const concurrency = parseCount("concurrency", a.concurrency);
+  const queries = parseCount("queries", a.queries);
+  const runs = parseCount("runs", a.runs);
+  const warmup = parseCount("warmup", a.warmup);
+  if (chunks !== undefined) opts.chunks = chunks;
+  if (tenants !== undefined) opts.tenants = tenants;
+  if (concurrency !== undefined) opts.concurrency = concurrency;
+  if (queries !== undefined) opts.queries = queries;
+  if (runs !== undefined) opts.runs = runs;
+  if (warmup !== undefined) opts.warmup = warmup;
+  if (a.seed !== undefined) opts.seed = a.seed;
+  if (a.poolerUrl !== undefined) opts.poolerUrl = a.poolerUrl;
+  if (a.container !== undefined) opts.container = a.container;
+  try {
+    const report = await runScaleBench(opts);
+    const text = `${JSON.stringify(report, null, 2)}\n`;
+    if (a.out) writeFileSync(a.out, text);
+    if (a.json || !a.out) {
+      process.stdout.write(text);
+    } else {
+      const s1 = report.scenarios.s1;
+      process.stdout.write(
+        `bench scale: ${s1.chunks} chunks — keyword p95 ${s1.keyword.p95}ms (${s1.verdict.keyword}), ` +
+          `hybrid p95 ${s1.hybrid.p95}ms (${s1.verdict.hybrid}); ` +
+          `${report.params.tenants} tenants direct: ${report.scenarios.s2Direct.connectionErrors} connection errors; ` +
+          `report ${a.out}\n`,
+      );
+    }
+    return 0;
+  } catch (err) {
+    if (err instanceof ScaleBenchRefusal) {
+      process.stderr.write(`${err.message}\n`);
+      return 2;
+    }
+    throw err;
   }
 }
