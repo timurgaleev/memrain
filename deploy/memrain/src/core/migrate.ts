@@ -15,7 +15,7 @@
  * Diesel migrations.
  */
 import type { Engine } from "./engine/interface.ts";
-import { poolerMigrationRefused } from "./engine/direct.ts";
+import { withDirectEngine } from "./engine/direct.ts";
 import { isDeadlockError, isRetryableConnError, isStatementTimeoutError } from "./retry.ts";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -356,10 +356,12 @@ export async function runMigrations(
   engine: Engine,
   dir: string = DEFAULT_DIR,
 ): Promise<MigrationResult> {
-  // Through a transaction pooler the DDL below could land on any server
-  // session; the caller passes a direct engine (core/engine/direct.ts).
-  if (engine.pooler) throw poolerMigrationRefused();
+  // Never through a transaction pooler: a pooled engine hands over a direct
+  // one, or the run is refused before any SQL (core/engine/direct.ts).
+  return withDirectEngine(engine, (direct) => applyPending(direct, dir));
+}
 
+async function applyPending(engine: Engine, dir: string): Promise<MigrationResult> {
   // Read before writing: a database with nothing pending sees no DDL at all,
   // not even the idempotent bootstrap below.
   const onDisk = discoverMigrations(dir);
@@ -447,17 +449,18 @@ export async function revertMigration(
   id: number,
   dir: string = DEFAULT_DOWN_DIR,
 ): Promise<{ id: number; name: string }> {
-  if (engine.pooler) throw poolerMigrationRefused();
-  const down = findDownMigration(id, dir);
-  const top = await engine.query<{ id: number | null }>("SELECT max(id) AS id FROM migrations");
-  const latest = top.rows[0]?.id ?? null;
-  if (latest === null || Number(latest) !== id) {
-    throw new Error(
-      `migration ${id} is not the latest applied migration (latest: ${latest ?? "none"}); only the latest can be reverted`,
-    );
-  }
-  await engine.transaction(async (tx) => {
-    await tx.exec(down.sql);
+  return withDirectEngine(engine, async (direct) => {
+    const down = findDownMigration(id, dir);
+    const top = await direct.query<{ id: number | null }>("SELECT max(id) AS id FROM migrations");
+    const latest = top.rows[0]?.id ?? null;
+    if (latest === null || Number(latest) !== id) {
+      throw new Error(
+        `migration ${id} is not the latest applied migration (latest: ${latest ?? "none"}); only the latest can be reverted`,
+      );
+    }
+    await direct.transaction(async (tx) => {
+      await tx.exec(down.sql);
+    });
+    return { id, name: down.name };
   });
-  return { id, name: down.name };
 }

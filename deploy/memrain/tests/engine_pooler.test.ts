@@ -13,6 +13,7 @@ import { PoolerMigrationRefusedError, withDirectEngine } from "../src/core/engin
 import type { Engine, QueryResult } from "../src/core/engine/interface.ts";
 import { revertMigration, runMigrations } from "../src/core/migrate.ts";
 import { Storage } from "../src/core/storage.ts";
+import { runApplyMigrations } from "../src/commands/apply-migrations.ts";
 import type { Config } from "../src/core/config.ts";
 
 const ENV = [
@@ -140,9 +141,28 @@ describe("migrations through a pooler", () => {
     expect(e.sql).toEqual([]);
   });
 
+  it("runMigrations on a pooled engine with a direct one sends every statement to the direct one", async () => {
+    const direct = recordingEngine();
+    let closed = false;
+    const pooled = Object.assign(recordingEngine("pgbouncer"), {
+      openDirect: () => Object.assign(direct, { close: async () => { closed = true; } }),
+    });
+    await runMigrations(pooled);
+    expect(pooled.sql).toEqual([]);
+    expect(direct.sql.length).toBeGreaterThan(0);
+    expect(closed).toBe(true);
+  });
+
   it("revertMigration refuses a pooled engine before any SQL", async () => {
     const e = recordingEngine("pgbouncer");
     await expect(revertMigration(e, 175)).rejects.toBeInstanceOf(PoolerMigrationRefusedError);
+    expect(e.sql).toEqual([]);
+  });
+
+  it("apply-migrations --down without a direct URL refuses before the first SQL", async () => {
+    const e = recordingEngine("pgbouncer");
+    const err = await runApplyMigrations({ down: 175, yes: true, storage: new Storage(e) }).catch((x: unknown) => x);
+    expect(err).toBeInstanceOf(PoolerMigrationRefusedError);
     expect(e.sql).toEqual([]);
   });
 
@@ -213,6 +233,6 @@ describe("pending migrations are checked before any DDL", () => {
     const r = await runMigrations(e);
     expect(r.applied).toEqual([]);
     expect(r.skipped).toBe(ids.length);
-    expect(sql.filter((s) => /\b(CREATE|ALTER|DROP)\b/i.test(s))).toEqual([]);
+    expect(sql.filter((s) => /\b(?:CREATE|ALTER|DROP)\b/i.test(s))).toEqual([]);
   });
 });

@@ -59,9 +59,11 @@ export async function runApplyMigrations(
     }
     const storage = opts.storage ?? new Storage(loadConfig());
     try {
+      // Behind a pooler this is the direct engine, or a refusal before any SQL.
+      const down = opts.down;
       const reverted = await withDirectEngine(storage.engine(), async (engine) => {
         await engine.ready();
-        return revertMigration(engine, opts.down!);
+        return revertMigration(engine, down);
       });
       console.log(JSON.stringify({ ok: true, mode: "down", reverted }, null, 2));
     } finally {
@@ -73,7 +75,7 @@ export async function runApplyMigrations(
   const config = loadConfig();
   const storage = new Storage(config);
   return withStorage(storage, async () => {
-    const r = await withDirectEngine(storage.engine(), (engine) => runMigrations(engine));
+    const r = await runMigrations(storage.engine());
     console.log(JSON.stringify({ ok: true, ...r }, null, 2));
   });
 }
