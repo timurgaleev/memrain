@@ -344,10 +344,11 @@ fi
 # pooler cannot render, and the brain would stay on the direct URL.
 ws_new; tenants ta:active tb:active
 printf 'MEMRAIN_TENANT_PG_POOLER=pgbouncer\n' >> "$WS/.env"
-env_files DIRECT ta tb
+env_files POOLED ta
+env_files DIRECT tb
 run_deploy
-if [ "$RC" -ne 0 ] && ! called 'memrain-ta' && report | grep -q 'ta FAILED pooler' && grep -q 'fetch-secrets' "$WS/out.log"; then
-  pass "a pooled host with a tenant env file not routed through the pooler stops before the tenant"
+if [ "$RC" -ne 0 ] && ! called 'tenant migrate ' && ! called 'memrain-ta' && grep -q 'fetch-secrets' "$WS/out.log"; then
+  pass "a pooled host with a tenant env file not routed through the pooler stops before any tenant is migrated"
 else
   die "unrouted env file accepted (rc=$RC)"; sed 's/^/      /' "$WS/out.log"
 fi
@@ -356,8 +357,8 @@ fi
 ws_new; tenants ta:active
 env_files POOLED ta
 run_deploy
-if [ "$RC" -ne 0 ] && ! called 'memrain-ta' && report | grep -q 'ta FAILED pooler' && grep -q 'fetch-secrets' "$WS/out.log"; then
-  pass "a tenant env file routed through a pooler the host does not run stops before the tenant"
+if [ "$RC" -ne 0 ] && ! called 'tenant migrate ' && ! called 'memrain-ta' && grep -q 'fetch-secrets' "$WS/out.log"; then
+  pass "a tenant env file routed through a pooler the host does not run stops before any tenant is migrated"
 else
   die "env file routed to a missing pooler accepted (rc=$RC)"; sed 's/^/      /' "$WS/out.log"
 fi

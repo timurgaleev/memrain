@@ -9,10 +9,10 @@
 #   3. migrate the control database. A failure stops the deploy before any
 #      tenant is touched.
 #   4. list every tenant except deleting/deleted, so a suspended one never
-#      falls behind on schema
-#   5. per tenant, in id order: migrate its database, with the pooler on
-#      check its env file agrees and start its pooler until healthy (an env
-#      file pooled on a host without the pooler fails too), recreate its container,
+#      falls behind on schema, and check each rendered tenant's env file
+#      agrees with the host on MEMRAIN_TENANT_PG_POOLER
+#   5. per tenant, in id order: migrate its database, start its pooler (when
+#      on) until healthy, recreate its container,
 #      wait for healthy, check the stamp, run the isolation smoke (which
 #      records the pass in control). Until that record exists the container
 #      answers 503 isolation_unverified on everything but /health.
@@ -88,6 +88,22 @@ if ! LIST="$(hosting_ctl tenant list --json --status active,suspended,provisioni
   exit 1
 fi
 
+# pooler_agrees ID -> fails, saying why, when the tenant's env file and the
+# host .env disagree on routing it through its own pooler: an env file not
+# re-fetched after MEMRAIN_TENANT_PG_POOLER changed.
+pooler_agrees() {
+  local env_file="${DEPLOY_DIR}/.secrets/tenants/$1.env" pooled=0
+  grep -qx 'MEMRAIN_PG_POOLER=pgbouncer' "$env_file" 2>/dev/null && pooled=1
+  if hosting_pooler; then
+    [ "$pooled" = 1 ] && return 0
+    echo "FAIL: the host runs tenants through their pooler but ${env_file} does not; run deploy/secrets/fetch-secrets.sh --tenant $1; no tenant was touched" >&2
+  else
+    [ "$pooled" = 0 ] && return 0
+    echo "FAIL: ${env_file} routes tenant $1 through pgbouncer-$1, which this host does not run (MEMRAIN_TENANT_PG_POOLER is unset); run deploy/secrets/fetch-secrets.sh --tenant $1; no tenant was touched" >&2
+  fi
+  return 1
+}
+
 # id<TAB>status per tenant, in id order. Every id is checked before the first
 # tenant is migrated: a bad row stops the deploy, it is not skipped.
 ROWS="$(printf '%s' "$LIST" | jq -r '.tenants | sort_by(.id) | .[] | "\(.id)\t\(.status)"')"
@@ -108,6 +124,7 @@ while IFS=$'\t' read -r id status; do
     deleting|deleted) note "${id} skipped (${status})"; continue ;;
     *) echo "FAIL: tenant ${id} has unknown status '${status}'; no tenant was touched" >&2; exit 1 ;;
   esac
+  if [ -f "${TENANTS_DIR}/${id}.yml" ] && ! pooler_agrees "$id"; then exit 1; fi
   PLAN+=("${id}:${status}")
 done <<< "$ROWS"
 
@@ -144,7 +161,7 @@ wait_healthy() {
 }
 
 deploy_one() {
-  local id="$1" status="$2" container="memrain-$1" env_file running pooled=0
+  local id="$1" status="$2" container="memrain-$1" running
   echo "==> tenant ${id} (${status}): migrating"
   hosting_ctl tenant migrate "$id" || fail_at "$id" migrate "brain migrations failed"
   if [ ! -f "${TENANTS_DIR}/${id}.yml" ]; then
@@ -152,12 +169,7 @@ deploy_one() {
     return 0
   fi
 
-  # The env file decides where the brain connects; it must agree with the host.
-  env_file="${DEPLOY_DIR}/.secrets/tenants/${id}.env"
-  grep -qx 'MEMRAIN_PG_POOLER=pgbouncer' "$env_file" 2>/dev/null && pooled=1
   if hosting_pooler; then
-    [ "$pooled" = 1 ] || fail_at "$id" pooler \
-      "the host runs tenants through their pooler but ${env_file} does not; run deploy/secrets/fetch-secrets.sh --tenant ${id} first"
     # The tenant's own pooler (profile pooler; naming it starts it). The tag
     # names the PgBouncer version only, so it is rebuilt every deploy to pick
     # up a change in deploy/pgbouncer; the layer cache makes that a no-op
@@ -166,9 +178,6 @@ deploy_one() {
     hosting_compose up -d --build --no-deps "pgbouncer-${id}" \
       || fail_at "$id" pooler "docker compose could not start pgbouncer-${id}"
     wait_healthy "$id" "pgbouncer-${id}" pooler
-  elif [ "$pooled" = 1 ]; then
-    fail_at "$id" pooler \
-      "${env_file} routes the tenant through pgbouncer-${id}, which this host does not run (MEMRAIN_TENANT_PG_POOLER is unset); run deploy/secrets/fetch-secrets.sh --tenant ${id} first"
   fi
 
   echo "==> tenant ${id}: recreating ${container}"
