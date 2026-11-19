@@ -196,7 +196,15 @@ describe.skipIf(!URL_)("bench scale on Postgres", () => {
       expect(report.spend.hybridQueries).toBeGreaterThan(0);
       expect(report.peakConnections.total).toBeGreaterThan(0);
       expect(report.protocol.compliant).toBe(false);
-      expect(JSON.stringify(report)).not.toContain(new URL(URL_!).password || "\u0000");
+      // The password may be an ordinary word (CI uses one that also names the schema),
+      // so look for the credential itself, not the word.
+      const u = new URL(URL_!);
+      const json = JSON.stringify(report);
+      expect(json).not.toContain(URL_!);
+      if (u.password) {
+        expect(json).not.toContain(`:${u.password}@`);
+        expect(json).not.toContain(JSON.stringify(decodeURIComponent(u.password)));
+      }
 
       const admin = new PostgresEngine({ url: URL_!, max: 1 });
       try {
