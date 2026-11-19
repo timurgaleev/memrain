@@ -69,6 +69,15 @@ if grep -q '^rm -f memrain-acme$' "$S/calls.log" && grep -q '^network rm memrain
 else
   die "docker calls: $(tr '\n' ';' < "$S/calls.log")"
 fi
+# The pooler holds the deleted tenant's owner credentials and keeps its
+# network attached, so it goes before the network does.
+if grep -n '^rm -f pgbouncer-acme$' "$S/calls.log" | cut -d: -f1 | {
+     read -r rm_line && net_line="$(grep -n '^network rm memrain_tenant_acme$' "$S/calls.log" | cut -d: -f1)" && [ "$rm_line" -lt "$net_line" ]; } \
+   && ! grep -q 'pgbouncer-beta\|pgbouncer-acmex' "$S/calls.log"; then
+  pass "removes the purged tenant's pooler before its network, and no other pooler"
+else
+  die "docker calls: $(tr '\n' ';' < "$S/calls.log")"
+fi
 if grep -q -- '--secrets aws' "$S/calls.log" || ! grep -q 'tenant purge-deleted' "$S/calls.log"; then die "purge call wrong"; else pass "runs purge-deleted in tenant-ctl"; fi
 if grep -q 'acme' "$WS/out.log"; then pass "reports what it purged"; else die "no report"; fi
 

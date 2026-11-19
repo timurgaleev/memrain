@@ -224,7 +224,7 @@ owner can read.
    changes, so the old receipt no longer counts.
 5. After the window, `bash deploy/tenant/purge-deleted.sh`. It drops the
    database and roles and removes the tenant's secrets and every export copy
-   on the host. It then removes the container, the rendered file, the secrets
+   on the host. It then removes the containers (the brain and its pooler), the rendered file, the secrets
    file, the Bedrock credentials and the network of every tenant whose purge
    has completed, so a run that stopped half-way is finished by the next. With `--secrets aws` the
    secrets get a tombstone value instead, and the output reminds you to drop

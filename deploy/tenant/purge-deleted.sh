@@ -9,7 +9,7 @@
 # through the secret writer and every export copy under /provisioned. This
 # script then removes what only the host holds, for each id exactly whose
 # purge has completed (this run's, and any an earlier run left behind):
-# the container memrain-<id>, deploy/tenants/<id>.yml and <id>.*,
+# the containers memrain-<id> and pgbouncer-<id>, deploy/tenants/<id>.yml and <id>.*,
 # deploy/.secrets/tenants/<id>.env, deploy/.bedrock/<id>/, and
 # deploy/.secrets/provisioned/<id>/ and <id>.invite; then it refreshes
 # cloudflared without the tenant's network and removes the network. Take each
@@ -43,6 +43,8 @@ done <<< "$IDS"
 SECRETS_DIR="${DEPLOY_DIR}/.secrets"
 for id in ${PURGED[@]+"${PURGED[@]}"}; do
   docker rm -f "memrain-${id}" >/dev/null 2>&1 || true
+  # Its pooler holds the owner credentials and stays on the network.
+  docker rm -f "pgbouncer-${id}" >/dev/null 2>&1 || true
   rm -f "${TENANTS_DIR}/${id}.yml" "${TENANTS_DIR}/${id}".*
   rm -f "${SECRETS_DIR}/tenants/${id}.env" "${SECRETS_DIR}/provisioned/${id}.invite"
   rm -rf "${DEPLOY_DIR}/.bedrock/${id}" "${SECRETS_DIR}/provisioned/${id}"
