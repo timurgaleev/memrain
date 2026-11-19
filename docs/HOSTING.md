@@ -225,8 +225,8 @@ owner can read.
 5. After the window, `bash deploy/tenant/purge-deleted.sh`. It drops the
    database and roles and removes the tenant's secrets and every export copy
    on the host. It then removes the container, the rendered file, the secrets
-   file, the Bedrock credentials and the network of every tenant control holds
-   as deleted, so a run that stopped half-way is finished by the next. With `--secrets aws` the
+   file, the Bedrock credentials and the network of every tenant whose purge
+   has completed, so a run that stopped half-way is finished by the next. With `--secrets aws` the
    secrets get a tombstone value instead, and the output reminds you to drop
    the id from `hosting_tenants` and apply, which deletes the secrets.
 
