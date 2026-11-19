@@ -39,6 +39,10 @@ if [ "$RC" -eq 0 ] && [ -f "$D/pgbouncer.ini" ] && [ -f "$D/userlist.txt" ]; the
 [ "$(ini_value "$D" pool_mode)" = transaction ] && pass "pool_mode = transaction" || die "pool_mode: '$(ini_value "$D" pool_mode)'"
 mps="$(ini_value "$D" max_prepared_statements)"
 if [[ "$mps" =~ ^[1-9][0-9]*$ ]]; then pass "max_prepared_statements > 0 ($mps)"; else die "max_prepared_statements: '$mps'"; fi
+# A direct engine closes an idle connection after 30 s (postgres-js
+# idle_timeout); the pooler must not hold idle server connections longer.
+sit="$(ini_value "$D" server_idle_timeout)"
+if [[ "$sit" =~ ^[1-9][0-9]*$ ]] && [ "$sit" -le 30 ]; then pass "server_idle_timeout <= 30 s ($sit)"; else die "server_idle_timeout: '$sit' (PgBouncer's default is 600)"; fi
 [ "$(ini_value "$D" auth_type)" = scram-sha-256 ] && pass "auth_type = scram-sha-256" || die "auth_type: '$(ini_value "$D" auth_type)'"
 [ "$(ini_value "$D" server_tls_sslmode)" = require ] && pass "server_tls_sslmode = require for RDS" || die "server_tls_sslmode: '$(ini_value "$D" server_tls_sslmode)'"
 [ "$(ini_value "$D" ignore_startup_parameters)" = extra_float_digits ] && pass "ignores only extra_float_digits at startup" || die "ignore_startup_parameters: '$(ini_value "$D" ignore_startup_parameters)'"

@@ -253,11 +253,13 @@ the deploy again.
 
 ## Connection pooler (off)
 
-Each tenant container holds up to `MEMRAIN_PG_POOL_MAX` (4) connections to its
-database, idle ones included. With many tenants on a small database, a
-PgBouncer per tenant lets those idle connections go: `pgbouncer-<id>` runs in
-transaction mode on the tenant's own network, serves that tenant's database
-only, and publishes no port. The image is `deploy/pgbouncer` (PgBouncer
+Each tenant container opens up to `MEMRAIN_PG_POOL_MAX` (4) connections to its
+database and keeps each one until it has been idle for 30 s. With many tenants
+on a small database, a PgBouncer per tenant caps that: the database sees at most
+`MEMRAIN_PGBOUNCER_POOL_SIZE` (3) server connections per tenant, each lent out
+for one transaction at a time and closed after 30 s idle (`server_idle_timeout`).
+`pgbouncer-<id>` runs in transaction mode on the tenant's own network, serves
+that tenant's database only, and publishes no port. The image is `deploy/pgbouncer` (PgBouncer
 1.24.0, built locally; the build fails below 1.21).
 
 It is off. To turn it on for every tenant, set in the host `.env`:

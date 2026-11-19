@@ -25,6 +25,9 @@ pool_mode = transaction
 max_prepared_statements = 200
 default_pool_size = @DEFAULT_POOL_SIZE@
 max_client_conn = 100
+; Close a server connection idle this long, as a direct engine closes its own
+; after 30 s (postgres-js idle_timeout); PgBouncer's default is 600.
+server_idle_timeout = 30
 
 ; postgres-js sends none of these; a psql or JDBC client may.
 ignore_startup_parameters = extra_float_digits
