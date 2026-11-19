@@ -9,7 +9,7 @@
  *  - The benign corpus of ordinary business mail, chat and transcripts keeps
  *    false positives at or under FALSE_POSITIVE_BOUND.
  *  - Detection time grows linearly with input: measured through the real
- *    function on adversarial inputs at 10x and 100x.
+ *    function on adversarial inputs at 100x and 1000x (median of five runs).
  */
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -99,14 +99,22 @@ describe("write-gate detector cost", () => {
     return (performance.now() - t0) / 3;
   }
 
+  /** Median of five timed runs, so one GC pause or a lucky warm run cannot swing a ratio. */
+  function medianTimeFor(text: string): number {
+    const runs = Array.from({ length: 5 }, () => timeFor(text)).sort((a, b) => a - b);
+    return runs[2]!;
+  }
+
   for (const seed of SEEDS) {
     it(`grows linearly on ${JSON.stringify(seed.slice(0, 24))}`, () => {
       const unit = seed.repeat(Math.ceil(1000 / seed.length));
-      const t1 = Math.max(timeFor(unit.repeat(10)), 0.05);
-      const t100 = timeFor(unit.repeat(1000));
-      // 100x the input may cost at most ~100x the time, with room for timer noise
-      // on the small run; a quadratic pattern would cost ~10000x.
-      expect(t100 / t1).toBeLessThan(400);
+      // Both runs are large enough (~100 KB and ~1 MB) to time well above timer noise:
+      // a sub-millisecond small run made the old 100x ratio swing past its bound on CI.
+      const small = Math.max(medianTimeFor(unit.repeat(100)), 0.05);
+      const large = medianTimeFor(unit.repeat(1000));
+      // 10x the input costs ~10x the time when linear and ~100x when quadratic; the bound
+      // matches the old 400x-per-100x gate (20x per decade), so it is no looser.
+      expect(large / small).toBeLessThan(20);
     });
   }
 
