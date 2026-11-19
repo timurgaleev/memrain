@@ -38,7 +38,7 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "integrity": bare,
   "eval": subs("chronicle", "run-all", "compare", "gate"),
   "eval-probe": bare,
-  "bench": bare,
+  "bench": subs("scale"),
   "backlinks": free,
   "merge": free,
   "rename": free,

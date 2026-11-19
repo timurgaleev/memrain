@@ -24,7 +24,14 @@ import { runEvalLongMemEval } from "./commands/eval-longmemeval.ts";
 import { runEvalBench } from "./commands/eval-bench.ts";
 import { runEvalPromote } from "./commands/eval-promote.ts";
 import { runEvalProbe } from "./commands/eval-probe.ts";
-import { runBenchCli, isBenchFamilySelector } from "./commands/bench.ts";
+import {
+  runBenchCli,
+  isBenchFamilySelector,
+  runScaleBenchCli,
+  BEHAVIOUR_BENCH_FLAGS,
+  SCALE_BENCH_FLAGS,
+  type ScaleCliArgs,
+} from "./commands/bench.ts";
 import { runBacklinks } from "./commands/backlinks.ts";
 import { runMerge } from "./commands/merge.ts";
 import { runExtract } from "./commands/extract.ts";
@@ -193,6 +200,10 @@ function printUsage(): void {
   console.log("                               agent-facing behaviour bench (push / continuity / write-back");
   console.log("                               fidelity); own throwaway DB, zero model spend, always exits 0");
   console.log("  bench --live --family fidelity  paid lane: the fidelity corpus against the real extraction model, capped at $0.50");
+  console.log("  bench scale --admin-url URL --scratch [--chunks 100k] [--tenants 8] [--concurrency 4] [--seed S]");
+  console.log("              [--queries 200] [--runs 3] [--warmup 50] [--pooler-url URL] [--container NAME --cold] [--out FILE]");
+  console.log("                               latency + connection bench on synthetic brains it creates on a throwaway");
+  console.log("                               server (refuses any production server); zero model spend; scripts/scale-bench.sh");
   console.log("  backlinks <name> [--type T] [--limit N]");
   console.log("                               documents that mention this entity (default type=wikilink)");
   console.log("  extract [--all] [--vault P]  re-run regex entity extraction over existing chunks (cheap)");
@@ -803,6 +814,48 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       return 0;
     }
     case "bench": {
+      // The two benches share the command, not their flags: a flag the chosen
+      // one would drop is refused rather than ignored.
+      const scale = positional[0] === "scale";
+      const foreign = (scale ? BEHAVIOUR_BENCH_FLAGS : SCALE_BENCH_FLAGS).filter(
+        (f) => flags.has(f) || values.has(f),
+      );
+      if (foreign.length > 0) {
+        throw new Error(`memrain bench${scale ? " scale" : ""}: ${foreign.join(", ")} belongs to the other bench`);
+      }
+      if (scale) {
+        const scaleArgs: ScaleCliArgs = {
+          scratch: flags.has("--scratch"),
+          cold: flags.has("--cold"),
+          json: flags.has("--json"),
+        };
+        const adminUrl = values.get("--admin-url");
+        if (adminUrl !== undefined) scaleArgs.adminUrl = adminUrl;
+        const chunks = values.get("--chunks");
+        if (chunks !== undefined) scaleArgs.chunks = chunks;
+        const tenants = values.get("--tenants");
+        if (tenants !== undefined) scaleArgs.tenants = tenants;
+        const concurrency = values.get("--concurrency");
+        if (concurrency !== undefined) scaleArgs.concurrency = concurrency;
+        const queries = values.get("--queries");
+        if (queries !== undefined) scaleArgs.queries = queries;
+        const runs = values.get("--runs");
+        if (runs !== undefined) scaleArgs.runs = runs;
+        const warmup = values.get("--warmup");
+        if (warmup !== undefined) scaleArgs.warmup = warmup;
+        const seed = values.get("--seed");
+        if (seed !== undefined) scaleArgs.seed = seed;
+        const poolerUrl = values.get("--pooler-url");
+        if (poolerUrl !== undefined) scaleArgs.poolerUrl = poolerUrl;
+        const container = values.get("--container");
+        if (container !== undefined) scaleArgs.container = container;
+        const out = values.get("--out");
+        if (out !== undefined) scaleArgs.out = out;
+        return await runScaleBenchCli(scaleArgs);
+      }
+      if (positional.length > 0) {
+        throw new Error(`memrain bench: unknown subcommand '${positional[0]}' (expected scale, or none)`);
+      }
       const benchOpts: Parameters<typeof runBenchCli>[0] = {};
       const family = values.get("--family");
       if (family !== undefined) {
