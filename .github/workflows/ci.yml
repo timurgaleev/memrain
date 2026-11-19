@@ -112,6 +112,11 @@ jobs:
           bun-version: latest
       - name: bun install (frozen lockfile)
         run: bun install --frozen-lockfile
+      - name: bun install admin (frozen lockfile)
+        # Tests import admin modules (the Office page pulls in three.js), so the
+        # typecheck and the suite need the admin dependencies too.
+        working-directory: deploy/memrain/admin
+        run: bun install --frozen-lockfile
       - name: typecheck
         # Runs BEFORE the suite: a type error is cheaper to read than a shard
         # failure, and until this step existed the compiler had never been run

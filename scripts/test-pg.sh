@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2030,SC2031  # each chunk sets its database URL inside its own subshell on purpose
 #
 # Run the Postgres-only part of the memrain suite against a real Postgres 16
 # with pgvector. PGLite serializes transactions, so races and driver-specific

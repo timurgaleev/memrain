@@ -27,7 +27,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=deploy/tenant/lib.sh
+# shellcheck source=deploy/tenant/lib.sh disable=SC1091  # CI lints without -x
 . "${REPO_ROOT}/deploy/tenant/lib.sh"
 
 usage() { echo "usage: $0 <tenant-id> [--no-record]" >&2; exit 2; }

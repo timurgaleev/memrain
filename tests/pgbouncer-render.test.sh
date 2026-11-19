@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015  # pass and die always return 0, so check && pass || die is safe
 # tests/pgbouncer-render.test.sh — deploy/pgbouncer/render.sh and the image.
 #
 # render.sh turns one upstream URL into pgbouncer.ini and its userlist. The
@@ -15,6 +16,7 @@ DOCKERFILE="$REPO_ROOT/deploy/pgbouncer/Dockerfile"
 TMPROOT="$(mktemp -d -t pgbouncer-render.XXXXXX)"
 PASS=0
 FAIL=0
+# shellcheck disable=SC2154  # rc is assigned inside the trap string
 trap 'rc=$?; rm -rf "$TMPROOT"; echo; echo "pgbouncer-render.test.sh: PASS=$PASS FAIL=$FAIL"; if [ "$FAIL" -ne 0 ]; then exit 1; fi; exit "$rc"' EXIT
 
 die() { echo "  ✗ $*"; FAIL=$((FAIL + 1)); }

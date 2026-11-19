@@ -49,7 +49,7 @@ seed() {
     : > "$WS/deploy/.secrets/provisioned/$id.invite"
   done
 }
-run() { RC=0; (cd "$WS" && env -i PATH="$S/bin:$PATH" STUB_DIR="$S" MEMRAIN_VERSION=v9.9.9 bash deploy/tenant/purge-deleted.sh "$@") > "$WS/out.log" 2>&1 || RC=$?; }
+run() { RC=0; (cd "$WS" && env -i PATH="$S/bin:$PATH" STUB_DIR="$S" MEMRAIN_VERSION=v9.9.9 bash deploy/tenant/purge-deleted.sh) > "$WS/out.log" 2>&1 || RC=$?; }
 left() { find "$WS/deploy" -path "$WS/deploy/tenant" -prune -o -name "*$1*" -print | grep -v "/$1x" ; }
 
 echo "== purge-deleted.sh =="

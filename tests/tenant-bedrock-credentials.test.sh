@@ -66,7 +66,7 @@ if grep -q -- '--policy' "$S/calls.log" && grep -q 'bedrock:InvokeModel' "$S/cal
 else
   die "session policy missing or broad"
 fi
-if ls "$WS/deploy/.bedrock/alpha" | grep -qv '^credentials.json$'; then die "a temporary file was left behind"; else pass "no temporary file left"; fi
+if find "$WS/deploy/.bedrock/alpha" -mindepth 1 ! -name credentials.json | grep -q .; then die "a temporary file was left behind"; else pass "no temporary file left"; fi
 
 : > "$S/calls.log"
 run
