@@ -15,6 +15,7 @@
  * Diesel migrations.
  */
 import type { Engine } from "./engine/interface.ts";
+import { poolerMigrationRefused } from "./engine/direct.ts";
 import { isDeadlockError, isRetryableConnError, isStatementTimeoutError } from "./retry.ts";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -327,6 +328,23 @@ async function applyOneWithRetry(
 }
 
 /**
+ * Ids recorded in `migrations`, or null while the table (or its `name`
+ * column) does not exist yet. Read-only.
+ */
+async function recordedMigrationIds(engine: Engine): Promise<Set<number> | null> {
+  const probe = await engine.query<{ present: boolean; named: boolean }>(
+    `SELECT to_regclass('migrations') IS NOT NULL AS present,
+            EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema = current_schema()
+                       AND table_name = 'migrations' AND column_name = 'name') AS named`,
+  );
+  const row = probe.rows[0];
+  if (!row?.present || !row.named) return null;
+  const r = await engine.query<{ id: number }>("SELECT id FROM migrations");
+  return new Set(r.rows.map((x) => Number(x.id)));
+}
+
+/**
  * Apply pending migrations. Idempotent. Bootstraps the migrations table
  * itself before the first real migration runs.
  *
@@ -338,6 +356,18 @@ export async function runMigrations(
   engine: Engine,
   dir: string = DEFAULT_DIR,
 ): Promise<MigrationResult> {
+  // Through a transaction pooler the DDL below could land on any server
+  // session; the caller passes a direct engine (core/engine/direct.ts).
+  if (engine.pooler) throw poolerMigrationRefused();
+
+  // Read before writing: a database with nothing pending sees no DDL at all,
+  // not even the idempotent bootstrap below.
+  const onDisk = discoverMigrations(dir);
+  const recorded = await recordedMigrationIds(engine);
+  if (recorded && onDisk.every((f) => recorded.has(f.id))) {
+    return { applied: [], skipped: onDisk.length };
+  }
+
   await engine.exec(`
     CREATE TABLE IF NOT EXISTS migrations (
       id INTEGER PRIMARY KEY,
@@ -351,7 +381,7 @@ export async function runMigrations(
   );
   const seen = new Set(seenRows.rows.map((r) => r.id));
 
-  const files = discoverMigrations(dir);
+  const files = onDisk;
   const lockTimeout = resolveLockTimeout();
   const stmtTimeout = resolveMigrationStatementTimeout();
   const applied: { id: number; name: string }[] = [];
@@ -417,6 +447,7 @@ export async function revertMigration(
   id: number,
   dir: string = DEFAULT_DOWN_DIR,
 ): Promise<{ id: number; name: string }> {
+  if (engine.pooler) throw poolerMigrationRefused();
   const down = findDownMigration(id, dir);
   const top = await engine.query<{ id: number | null }>("SELECT max(id) AS id FROM migrations");
   const latest = top.rows[0]?.id ?? null;

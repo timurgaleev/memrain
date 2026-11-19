@@ -16,6 +16,7 @@ import { Storage } from "../core/storage.ts";
 import { withStorage, closeQuietly } from "./with-storage.ts";
 import { loadConfig } from "../core/config.ts";
 import { runMigrations, discoverMigrations, revertMigration } from "../core/migrate.ts";
+import { withDirectEngine } from "../core/engine/direct.ts";
 
 export interface ApplyMigrationsCmdOptions {
   /** Print the migration set without applying. Default false. */
@@ -58,8 +59,10 @@ export async function runApplyMigrations(
     }
     const storage = opts.storage ?? new Storage(loadConfig());
     try {
-      await storage.engine().ready();
-      const reverted = await revertMigration(storage.engine(), opts.down);
+      const reverted = await withDirectEngine(storage.engine(), async (engine) => {
+        await engine.ready();
+        return revertMigration(engine, opts.down!);
+      });
       console.log(JSON.stringify({ ok: true, mode: "down", reverted }, null, 2));
     } finally {
       if (!opts.storage) await closeQuietly(storage);
@@ -70,7 +73,7 @@ export async function runApplyMigrations(
   const config = loadConfig();
   const storage = new Storage(config);
   return withStorage(storage, async () => {
-    const r = await runMigrations(storage.engine());
+    const r = await withDirectEngine(storage.engine(), (engine) => runMigrations(engine));
     console.log(JSON.stringify({ ok: true, ...r }, null, 2));
   });
 }

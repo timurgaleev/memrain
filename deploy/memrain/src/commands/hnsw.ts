@@ -7,6 +7,7 @@
 import { loadConfig } from "../core/config.ts";
 import { Storage } from "../core/storage.ts";
 import { withStorage } from "./with-storage.ts";
+import { withDirectEngine } from "../core/engine/direct.ts";
 import { checkInvalidIndexes } from "../core/doctor-ops.ts";
 import {
   EMBEDDINGS_HNSW_SPEC,
@@ -45,7 +46,7 @@ export async function runHnsw(
         break;
       }
       case "sweep": {
-        const { dropped } = await dropZombieIndexes(engine);
+        const { dropped } = await withDirectEngine(engine, dropZombieIndexes);
         console.log(
           dropped.length === 0
             ? "hnsw sweep: no invalid indexes to drop"
@@ -54,10 +55,10 @@ export async function runHnsw(
         break;
       }
       case "rebuild": {
-        const res = await dropAndRebuild(engine, EMBEDDINGS_HNSW_SPEC, {
+        const res = await withDirectEngine(engine, (direct) => dropAndRebuild(direct, EMBEDDINGS_HNSW_SPEC, {
           reason: "cli",
           force: opts.force ?? false,
-        });
+        }));
         console.log(
           res.rebuilt
             ? `hnsw rebuild: ${EMBEDDINGS_HNSW_SPEC.name} rebuilt (temp ${res.tempName})`

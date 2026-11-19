@@ -16,12 +16,17 @@
  *   - `MEMRAIN_PG_POOL_MAX` (default 10)
  *   - `MEMRAIN_PG_STATEMENT_TIMEOUT_MS` (default 30000)
  *
+ * Behind a transaction-mode pooler (`MEMRAIN_PG_POOLER=pgbouncer`) the URL is
+ * the pooler's, `MEMRAIN_POSTGRES_DIRECT_URL` the database's own (migrations
+ * and DDL), and `MEMRAIN_PG_PREPARE=0` turns named prepared statements off.
+ * Both are read only in pooler mode.
+ *
  * `MEMRAIN_REQUIRE_POSTGRES=1` makes a pglite config fatal, so a host meant to
  * run on Postgres can never quietly open a local database instead (a missing
  * URL is already fatal). It also covers commands run with `docker exec`.
  */
 import type { Config } from "../config.ts";
-import type { Engine } from "./interface.ts";
+import type { Engine, PoolerMode } from "./interface.ts";
 import { PGliteEngine } from "./pglite.ts";
 import { PostgresEngine, type PostgresEngineOptions } from "./postgres.ts";
 import { applicationName } from "../pool-budget.ts";
@@ -30,6 +35,17 @@ import { applicationName } from "../pool-budget.ts";
 function positiveIntEnv(name: string): number | undefined {
   const n = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * MEMRAIN_PG_POOLER: unset (the default) connects as always; `pgbouncer` puts
+ * the engine in pooler mode. Anything else is refused rather than guessed at.
+ */
+export function poolerMode(env: Record<string, string | undefined> = process.env): PoolerMode | undefined {
+  const v = env.MEMRAIN_PG_POOLER;
+  if (v === undefined || v === "") return undefined;
+  if (v === "pgbouncer") return v;
+  throw new Error(`memrain: MEMRAIN_PG_POOLER must be unset or 'pgbouncer', got '${v}'`);
 }
 
 /** True when the host must run on Postgres (`MEMRAIN_REQUIRE_POSTGRES=1`). */
@@ -71,6 +87,13 @@ export function makeEngine(config: Config, opts: MakeEngineOptions = {}): Engine
     if (stmtTimeout !== undefined) opts.statementTimeoutMs = stmtTimeout;
     const appName = applicationName();
     if (appName !== undefined) opts.applicationName = appName;
+    const pooler = poolerMode();
+    if (pooler !== undefined) {
+      opts.pooler = pooler;
+      const direct = process.env.MEMRAIN_POSTGRES_DIRECT_URL;
+      if (direct) opts.directUrl = direct;
+      if (process.env.MEMRAIN_PG_PREPARE === "0") opts.prepare = false;
+    }
     return new PostgresEngine(opts);
   }
   throw new Error(

@@ -181,7 +181,8 @@ export async function runServe(opts: ServeOptions): Promise<void> {
   if (process.env.MEMRAIN_HNSW_ZOMBIE_SWEEP === "1") {
     try {
       const { dropZombieIndexes } = await import("../core/vector-index.ts");
-      const { dropped } = await dropZombieIndexes(storage.engine());
+      const { withDirectEngine } = await import("../core/engine/direct.ts");
+      const { dropped } = await withDirectEngine(storage.engine(), dropZombieIndexes);
       if (dropped.length > 0) {
         console.error(
           `[hnsw] startup sweep dropped ${dropped.length} invalid index(es): ${dropped.join(", ")}`,
