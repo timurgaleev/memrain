@@ -8,7 +8,9 @@
 # What it runs, in order:
 #   1. every migration, applied to an empty database;
 #   2. the migration set applied a second time — it must apply nothing;
-#   3. every test file under deploy/memrain/tests that reads
+#   3. one migrated PGLite directory and one migrated database named for
+#      this run, which the tests copy instead of migrating their own;
+#   4. every test file under deploy/memrain/tests that reads
 #      MEMRAIN_TEST_POSTGRES_URL (found by grep, so a new *_pg test is picked
 #      up without touching this script).
 #
@@ -17,7 +19,9 @@
 #     loopback port, removed on exit whether the run passed or failed.
 #   - MEMRAIN_TEST_POSTGRES_URL already set: use that database instead and
 #     start no container (CI passes a service container this way). It MUST
-#     be a scratch database — migrations and tests write to it. The legacy
+#     be a scratch database — migrations and tests write to it, and the
+#     run creates a `memrain_tpl_<pid>_<n>` database beside it, dropped on
+#     exit. The legacy
 #     MEMEX_TEST_POSTGRES_URL is accepted when the new name is unset.
 #
 # Env:
@@ -62,10 +66,25 @@ BOUNCER=""
 BOUNCER_DIR=""
 NETWORK=""
 OUT=""
+PG_TEMPLATE_DB=""
 
 cleanup() {
   local status=$?
   [ -z "$OUT" ] || rm -f "$OUT"
+  # A throwaway container takes the template with it; a supplied server keeps
+  # it unless it is dropped here.
+  if [ -n "$PG_TEMPLATE_DB" ] && [ -z "$CONTAINER" ]; then
+    # shellcheck disable=SC2016 # the TypeScript is meant to reach bun unexpanded
+    (cd "$PKG" && PG_TEMPLATE_DB="$PG_TEMPLATE_DB" DIRECT_URL="$DIRECT_URL" bun -e '
+      import { PostgresEngine } from "./src/core/engine/postgres.ts";
+      const admin = new PostgresEngine({ url: process.env.DIRECT_URL!, max: 1 });
+      try {
+        await admin.exec(`DROP DATABASE IF EXISTS ${process.env.PG_TEMPLATE_DB} WITH (FORCE)`);
+      } finally {
+        await admin.close();
+      }
+    ') >/dev/null 2>&1 || echo "[test-pg] could not drop template database $PG_TEMPLATE_DB" >&2
+  fi
   if [ -n "$BOUNCER" ]; then
     docker rm -f "$BOUNCER" >/dev/null 2>&1 || true
     echo "[test-pg] removed container $BOUNCER"
@@ -221,6 +240,53 @@ apply_migrations_twice() {
   ')
 }
 
+# Most of a case's cost was migrating a fresh database: every PGLite half from
+# an empty cluster, every Postgres half after its CREATE DATABASE. Build one
+# migrated copy of each up front, as test-sharded.sh does for PGLite, so a
+# case's database starts as a copy. Tests that must watch migrations run opt
+# out in the file; the two applies above still run every migration on an empty
+# Postgres.
+build_templates() {
+  local hash_cmd mig_hash
+  if command -v sha256sum >/dev/null 2>&1; then hash_cmd=(sha256sum); else hash_cmd=(shasum -a 256); fi
+  # Same key as test-sharded.sh, so both runners share one template directory.
+  mig_hash="$( { cd "$PKG" || exit 1; ls src/core/migrations; cat src/core/migrate.ts src/core/migrations/*; cat node_modules/@electric-sql/pglite/package.json 2>/dev/null; } | "${hash_cmd[@]}" | cut -c1-16)"
+  local tmp="${TMPDIR:-/tmp}"
+  export MEMRAIN_TEST_PGLITE_TEMPLATE="${tmp%/}/memrain-pglite-tpl-${mig_hash}"
+  (cd "$PKG" && bun scripts/build-test-template.ts "$MEMRAIN_TEST_PGLITE_TEMPLATE" >/dev/null) \
+    || die "could not build the PGLite test template at $MEMRAIN_TEST_PGLITE_TEMPLATE"
+  log "PGLite template $MEMRAIN_TEST_PGLITE_TEMPLATE"
+  # A name of its own, never derived from the supplied database: the run must
+  # not drop anything it did not create.
+  local name="memrain_tpl_$$_${RANDOM}"
+  # shellcheck disable=SC2016 # the TypeScript is meant to reach bun unexpanded
+  (cd "$PKG" && PG_TEMPLATE_DB="$name" bun -e '
+    import { PostgresEngine } from "./src/core/engine/postgres.ts";
+    const admin = new PostgresEngine({ url: process.env.MEMRAIN_TEST_POSTGRES_URL!, max: 1 });
+    try {
+      await admin.exec(`CREATE DATABASE ${process.env.PG_TEMPLATE_DB}`);
+    } finally {
+      await admin.close();
+    }
+  ') || die "could not create the Postgres test template $name"
+  PG_TEMPLATE_DB="$name"
+  # shellcheck disable=SC2016 # the TypeScript is meant to reach bun unexpanded
+  (cd "$PKG" && PG_TEMPLATE_DB="$name" bun -e '
+    import { PostgresEngine } from "./src/core/engine/postgres.ts";
+    import { Storage } from "./src/core/storage.ts";
+    const url = new URL(process.env.MEMRAIN_TEST_POSTGRES_URL!);
+    url.pathname = `/${process.env.PG_TEMPLATE_DB}`;
+    const storage = new Storage(new PostgresEngine({ url: url.toString(), max: 2 }));
+    try {
+      await storage.init();
+    } finally {
+      await storage.close();
+    }
+  ' >/dev/null) || die "could not migrate the Postgres test template $name"
+  export MEMRAIN_TEST_POSTGRES_TEMPLATE_DB="$PG_TEMPLATE_DB"
+  log "Postgres template database $PG_TEMPLATE_DB"
+}
+
 # run_chunks LABEL FILE... -> bun test over FILE... in chunks, output to $OUT.
 run_chunks() {
   local label="$1"; shift
@@ -267,6 +333,10 @@ run_pg_tests() {
     files+=("tests/$(basename "$f")")
   done < <(grep -l "$pattern" "$PKG"/tests/*.test.ts | sort)
   [ "${#files[@]}" -gt 0 ] || die "no test file reads MEMRAIN_TEST_POSTGRES_URL"
+  # The Bun sharded job runs these same files without a Postgres URL, so it
+  # already runs every PGLite half storageEngines() builds; here it builds the
+  # Postgres half only.
+  export MEMRAIN_TEST_POSTGRES_ONLY=1
   OUT="$(mktemp -t test-pg-out.XXXXXX)"
   if [ "$POOLER" != 1 ]; then
     log "running ${#files[@]} test file(s): ${files[*]}"
@@ -331,6 +401,7 @@ fi
 DIRECT_URL="$MEMRAIN_TEST_POSTGRES_URL"
 
 apply_migrations_twice
+build_templates
 if [ "$POOLER" = 1 ]; then
   start_bouncer
   assert_pooled_migration_refused

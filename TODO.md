@@ -79,6 +79,15 @@ marked; this section is the one that stands.
 - A single-value link target cannot hold two separate periods (A, then B, then
   A again); the re-add is refused.
 
+## Follow-ups from the Postgres CI speed-up
+
+- `bun-arm64.yml` and `deps-audit.yml` still install `bun-version: latest`;
+  ci.yml pins 1.4.4 to match the production image. Pin them too, or read the
+  version from the Dockerfile in one place.
+- No CI job runs the PGLite halves on a freshly migrated database any more:
+  both runners copy a template. Fresh-migration coverage comes from the tests
+  that opt out of the template and from `Storage.init` building it.
+
 ## Follow-ups from the Office page
 
 - Dynamic client registration stores `client_name` with no length or

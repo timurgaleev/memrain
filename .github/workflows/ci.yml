@@ -23,7 +23,7 @@ jobs:
       # scope-lint (part of make audit) is a dependency-free bun script.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: latest
+          bun-version: "1.4.4"
       - name: make audit
         run: make audit
       - name: make scrub-audit
@@ -109,7 +109,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: latest
+          bun-version: "1.4.4"
       - name: bun install (frozen lockfile)
         run: bun install --frozen-lockfile
       - name: bun install admin (frozen lockfile)
@@ -146,8 +146,9 @@ jobs:
     # (PGLite serializes them).
     name: Postgres tests
     runs-on: ubuntu-latest
-    # 228 files in chunks, each running its PGLite and Postgres halves: ~30-40 min.
-    timeout-minutes: 60
+    # Postgres halves only, each on a copy of a migrated template database
+    # (scripts/test-pg.sh): under 10 min. The cap is about twice that.
+    timeout-minutes: 20
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -166,7 +167,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: latest
+          bun-version: "1.4.4"
       - name: bun install (frozen lockfile)
         working-directory: deploy/memrain
         run: bun install --frozen-lockfile

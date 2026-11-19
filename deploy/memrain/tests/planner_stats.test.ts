@@ -23,7 +23,8 @@ setDefaultTimeout(120000);
 const FLAG = "MEMRAIN_PGLITE_AUTO_ANALYZE";
 afterEach(() => { delete process.env[FLAG]; });
 
-const [pglite, postgres] = storageEngines(process.env["MEMRAIN_TEST_POSTGRES_URL"]);
+const pglite = storageEngines(undefined)[0];
+const postgres = storageEngines(process.env["MEMRAIN_TEST_POSTGRES_URL"]).find(e => e.name === "Postgres");
 
 async function statRows(engine: { query<T>(s: string, p?: unknown[]): Promise<{ rows: T[] }> }, table: string): Promise<number> {
   const r = await engine.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_stats WHERE schemaname = 'public' AND tablename = $1`, [table]);

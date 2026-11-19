@@ -83,7 +83,7 @@ it("stopping the watchdog releases its worker and heartbeat handles", async () =
 });
 
 if (process.env.MEMRAIN_TEST_POSTGRES_URL) it("rolls back an interrupted PostgreSQL transaction and releases its advisory lock", async () => {
-  const db = await storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)[1]!.open();
+  const db = await storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL).find(x => x.name === "Postgres")!.open();
   try {
     const e = db.storage.engine();
     await e.exec("CREATE TABLE watchdog_probe (value text NOT NULL)");
