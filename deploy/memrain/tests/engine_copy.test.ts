@@ -493,4 +493,17 @@ describe("runMigrateEngine", () => {
     const ep = resolveEndpoints({ from: "postgres", to: "pglite", pgliteDbPath: "/tmp/y" }, { MEMRAIN_POSTGRES_URL: "postgres://h/db" });
     expect(ep.dst).toEqual({ kind: "pglite", path: "/tmp/y" });
   });
+
+  it("copies a pooled tenant over its direct URL, never through the pooler", () => {
+    const pooled = { MEMRAIN_POSTGRES_URL: "postgres://u:p@pgbouncer-t1:6432/db", MEMRAIN_PG_POOLER: "pgbouncer" };
+    const direct = "postgres://u:p@rds/db";
+    expect(resolveEndpoints({ from: "pglite", to: "postgres", pgliteDbPath: "/tmp/y" }, { ...pooled, MEMRAIN_POSTGRES_DIRECT_URL: direct }).dst)
+      .toEqual({ kind: "postgres", url: direct });
+    expect(resolveEndpoints({ from: "postgres", to: "pglite", pgliteDbPath: "/tmp/y" }, { ...pooled, MEMRAIN_POSTGRES_DIRECT_URL: direct }).src)
+      .toEqual({ kind: "postgres", url: direct });
+    expect(() => resolveEndpoints({ from: "pglite", to: "postgres", pgliteDbPath: "/tmp/y" }, pooled))
+      .toThrow(/MEMRAIN_POSTGRES_DIRECT_URL/);
+    expect(resolveEndpoints({ from: "pglite", to: "postgres", pgliteDbPath: "/tmp/y", postgresUrl: direct }, pooled).dst)
+      .toEqual({ kind: "postgres", url: direct });
+  });
 });

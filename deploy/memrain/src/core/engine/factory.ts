@@ -48,6 +48,24 @@ export function poolerMode(env: Record<string, string | undefined> = process.env
   throw new Error(`memrain: MEMRAIN_PG_POOLER must be unset or 'pgbouncer', got '${v}'`);
 }
 
+/**
+ * The pooler half of a Postgres engine's options, from the environment: empty
+ * unless MEMRAIN_PG_POOLER is set. Every engine on a pooled tenant's
+ * MEMRAIN_POSTGRES_URL needs it, or it sends startup parameters the pooler
+ * refuses.
+ */
+export function poolerEngineOptions(
+  env: Record<string, string | undefined> = process.env,
+): Pick<PostgresEngineOptions, "pooler" | "directUrl" | "prepare"> {
+  const pooler = poolerMode(env);
+  if (pooler === undefined) return {};
+  const opts: Pick<PostgresEngineOptions, "pooler" | "directUrl" | "prepare"> = { pooler };
+  const direct = env.MEMRAIN_POSTGRES_DIRECT_URL;
+  if (direct) opts.directUrl = direct;
+  if (env.MEMRAIN_PG_PREPARE === "0") opts.prepare = false;
+  return opts;
+}
+
 /** True when the host must run on Postgres (`MEMRAIN_REQUIRE_POSTGRES=1`). */
 export function requirePostgres(env: Record<string, string | undefined> = process.env): boolean {
   return env.MEMRAIN_REQUIRE_POSTGRES === "1";
@@ -87,14 +105,7 @@ export function makeEngine(config: Config, opts: MakeEngineOptions = {}): Engine
     if (stmtTimeout !== undefined) opts.statementTimeoutMs = stmtTimeout;
     const appName = applicationName();
     if (appName !== undefined) opts.applicationName = appName;
-    const pooler = poolerMode();
-    if (pooler !== undefined) {
-      opts.pooler = pooler;
-      const direct = process.env.MEMRAIN_POSTGRES_DIRECT_URL;
-      if (direct) opts.directUrl = direct;
-      if (process.env.MEMRAIN_PG_PREPARE === "0") opts.prepare = false;
-    }
-    return new PostgresEngine(opts);
+    return new PostgresEngine({ ...opts, ...poolerEngineOptions() });
   }
   throw new Error(
     `memrain: unknown database.type ${(db as { type: string }).type}`,
