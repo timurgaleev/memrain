@@ -142,9 +142,10 @@ async function read(e: Engine, legacyVersions = false) {
   };
 }
 
-// Keep the pre-reason schema covered after the release pointer advances.
+// Keep the pre-reason schema covered after the release pointer advances, and
+// the 2.0 schema once the pointer moves past it.
 const BASELINES = [...new Map([
-  { tag: "v1.14.0", lastMigration: 146 }, PREVIOUS_RELEASE,
+  { tag: "v1.14.0", lastMigration: 146 }, { tag: "v2.0.0", lastMigration: 175 }, PREVIOUS_RELEASE,
 ].map(release => [release.lastMigration, release])).values()];
 
 for (const baseline of BASELINES) for (const { name, open } of ENGINES) {

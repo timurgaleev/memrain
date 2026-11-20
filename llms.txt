@@ -107,7 +107,7 @@ deploy/
 │   │       ├── budget.ts        spend ledger + wallet
 │   │       ├── trust-tier.ts, write-gate*.ts
 │   │       ├── extension.ts     hooks for a wrapping build (no-ops by default)
-│   │       └── migrations/      numbered SQL migrations (through 175)
+│   │       └── migrations/      numbered SQL migrations (through 177)
 │   ├── admin/                   admin panel front end (Vite)
 │   └── docs/                    subsystem deep-dive (README, ARCHITECTURE, API, OPERATIONS)
 ├── skills/                      agent skillpack served over MCP (`get_skill`)

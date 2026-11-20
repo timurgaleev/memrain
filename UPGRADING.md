@@ -513,3 +513,25 @@ memrain config set MEMRAIN_WRITE_GATE_EXTERNAL off
 | Members, groups, offboarding | `memrain member add`, `memrain group add`, `memrain member remove <id> --erase-personal-source`; `MEMRAIN_REQUIRE_MEMBER=1` | [docs/TEAM-SETUP.md](./docs/TEAM-SETUP.md#members-and-groups) |
 | Stricter write gate | `memrain config set MEMRAIN_WRITE_GATE_EXTERNAL quarantine` (or `reject`); `memrain config set MEMRAIN_WRITE_GATE_AGENT flag` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
 | PgBouncer | `MEMRAIN_PG_POOLER=pgbouncer` and `MEMRAIN_POSTGRES_DIRECT_URL` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
+
+## From 2.0 to 2.1
+
+2.1 is a normal deploy: `bash deploy/deploy.sh` applies migrations 176 and 177
+on start. Both have a down file in `deploy/memrain/src/core/migrations-down/`.
+
+- **Migration 176** adds two partial indexes on `hot_memory` (`source_slug`
+  and `superseded_by`), so purging or renaming a page stops scanning the whole
+  table. It is a plain `CREATE INDEX`: writes to `hot_memory` wait while it
+  builds, and the deploy waits with them. The 10-second lock timeout
+  (`MEMRAIN_MIGRATION_LOCK_TIMEOUT`) only bounds the wait for the lock; the
+  build itself runs under the 30-minute migration statement timeout. Check the
+  table's size first (`SELECT count(*) FROM hot_memory`); on a large one,
+  deploy at a quiet time.
+- **Migration 177** ends the backoff of facts-backfill pages parked on a reply
+  the output cap cut. Their attempt count stays. The next scheduled backfill
+  reads them again under its usual daily budget and page cap, so the first
+  backfill after the upgrade may spend a little more than usual.
+- **The secret scanner is now version 7.** `memrain doctor` warns that the last
+  secrets audit used an older scanner until you run `memrain secrets audit`
+  again. It is a dry run; `memrain secrets audit --apply --yes` redacts what it
+  finds.

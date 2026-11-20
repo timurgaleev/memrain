@@ -6,6 +6,95 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-11-20
+
+A maintenance release on top of 2.0.0: Ask links each source to the passage
+it quoted, fact extraction keeps what a cut reply already holds, and the
+connectors and the secret scanner close the gaps found since. A brain
+upgrades in place (migrations 176–177). The secret scanner moves to version
+7, so `memrain doctor` reports that the last secrets audit used an older
+scanner until you run `memrain secrets audit` again.
+
+### Added
+- Ask: a source link opens its page with the passage the answer quoted from it
+  highlighted and scrolled into view (the citation carries `quote`; matched
+  across paragraphs, emphasis and typographic quotes and dashes).
+- `bun scripts/skillpack-diff-upstream.ts <skills dir> [--json]` (maintainer
+  script in deploy/memrain, not in the image): skills on one side only, and
+  per shared skill the triggers, tools and steps another pack added or
+  removed.
+- docs/DEPLOYMENT.md: an RDS restore drill — restore the latest restorable
+  time into a temporary instance, compare it with the live brain, delete it.
+
+### Changed
+- `memrain eval code` says when no code chunk carries a vector (code is
+  indexed graph-only, so its score measures keyword retrieval); `--json`
+  reports the count as `code_chunks_embedded`.
+- Search and code-graph tool descriptions no longer name internal columns and
+  formulas; `tools/list` is 94,563 bytes.
+- Concepts named by a topic noun that is not an entity name (meetings,
+  customers, project, idea) get a concept hub page; placeholders
+  (organization, unknown, n/a) still do not, and the doctor's junk-hub check
+  judges concept pages the same way.
+- Migration 176 indexes `hot_memory.source_slug` and
+  `hot_memory.superseded_by`, so purging or renaming a page no longer scans
+  the table (down file included).
+- CI pins Bun 1.4.4; the Postgres test job reuses migrated templates and runs
+  only Postgres halves (≈48 → 7 min).
+
+### Fixed
+- Fact extraction keeps the facts that closed before the output cap cut a
+  reply, instead of throwing the whole reply away and parking the page for
+  another paid try after every backoff; the retry at double the cap is skipped
+  when the cut reply already holds the ten facts a turn keeps, and a retry
+  that yields fewer facts than the first reply no longer replaces it.
+  Migration 177 ends the wait of facts-backfill pages parked on a cut reply
+  (their attempt count stays), so the next scheduled backfill reads them again
+  under its usual budget (down file included).
+- Teams chat messages and Fireflies/Teams meeting titles, summaries, action
+  items and transcript lines are stored without online-meeting credentials, as
+  mail and calendar text already were. `connectors redact-meetings` now also
+  cleans stored chat and meeting pages, and only pages of connector sources.
+- Meeting-credential redaction no longer takes the next line's value from an
+  empty label when that line is a real date (`Access code` above `2026-11-17
+  …`) or a sign-off word (`Password:` above `Thanks,`).
+- The secret scanner catches a `password=`/`token:`/`api_key=` assignment
+  printed right after a terminal colour code (raw `ESC[32m`, or written `\e[`,
+  `\033[`, `\x1b[`, `\u001b[`), accepts true-colour codes up to 40 parameter
+  characters, and keeps colour codes around a quoted value (runs up to 4096)
+  outside the redaction so the codes stay and a bare echo of the value is
+  redacted too. Scanner version 7: doctor warns until `memrain secrets audit`
+  runs again.
+- Merging two entities no longer leaves a person with two current employers or
+  locations: when each held one open `works_at`/`located_at` value, the
+  earlier one now ends where the other starts (ties and older overlaps stay
+  for the doctor check). A merge also keeps a manual link that collides only
+  with a derived link to the same target, instead of deleting it.
+- README no longer promises that every pair of contradicting facts is flagged:
+  only two values for one measured claim at the same time are marked
+  contested. CONFIGURATION.md now lists the four bundled skills offered as MCP
+  prompts.
+- Connector setup (ENABLE.md step 5) now also grants a new connector source to
+  personal access tokens with `auth permissions <token> set-read-sources …
+  --dry-run`, so an agent that signs in with a token sees your calendar, not
+  only OAuth clients.
+- Slack: a channel day or thread longer than 5,000 messages no longer stalls
+  the channel's sync on every run; the day is stored with its newest 5,000 (a
+  thread with its first 5,000 replies) and its page says it holds only part of
+  the day (`truncated: true`).
+- Slack: a private channel's day pages say "Private chat channel day" and
+  carry `private: true` in their truth. Pages synced before keep the old
+  header until their day is read again.
+- Teams: an edited or deleted chat message is picked up within an hour while
+  the chat's last message is at most three days old, instead of only when the
+  chat gets a new message; a long chat list keeps its place when the queue
+  fills.
+- The `briefing` and `query` skills (plugin and MCP prompt) no longer tell
+  client agents to call `run_doctor` or `stats`, which only the operator can
+  call.
+- HOW-IT-WORKS no longer says no bundled skill opts into MCP prompts; it names
+  the four that do.
+
 ## [2.0.0] — 2026-11-19
 
 Memrain becomes a platform: it reads your mail, calendars and chats, answers

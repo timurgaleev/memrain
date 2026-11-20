@@ -378,7 +378,7 @@ second git checkout used by the Memrain code chunkers as their index
 source. `scripts/bootstrap.sh` clones it on first boot; re-run it via SSM to resync.
 
 The authoritative store is RDS Postgres, evolved by the numbered
-migration runner (`core/migrate.ts`, through 175). Beyond the core
+migration runner (`core/migrate.ts`, through 177). Beyond the core
 `documents` / `chunks` / `pages` / `entity_mentions` tables, the schema
 carries:
 

@@ -79,6 +79,8 @@ write gate that flags text written as instructions to an AI.
   [docs/CONFIGURATION.md](./docs/CONFIGURATION.md)
 
 Upgrading from 1.16 needs no action; see [UPGRADING.md](./UPGRADING.md#from-116-to-20).
+2.1 builds on it with fixes; its upgrade notes are in
+[UPGRADING.md](./UPGRADING.md#from-20-to-21).
 
 ## See it work
 
