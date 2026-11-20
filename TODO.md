@@ -81,11 +81,27 @@ marked; this section is the one that stands.
 
 ## Code retrieval baseline
 
-- `memrain eval code` on production (2026-11-20, v2.0.0-7) scored hit@5 6%:
-  one of 16 indexed questions; three answers are not indexed yet, so the code
-  index likely predates them. Re-index the code source, run the eval again,
-  and if the score stays low, find out whether code chunks reach the vector arm
-  at all or only keyword hits on identifiers do.
+- `memrain eval code` scored hit@5 6% on production (2026-11-20, v2.0.0-7)
+  because code is indexed graph-only: code chunks get no vector
+  (`indexer-code.ts`), so a plain-words question reaches code through the
+  keyword arm alone while prose pages compete with both arms. Production's
+  `repo-source-code` source holds 6,619 code chunks and 50 embedded chunks,
+  all of them pages; a search scoped to that source still ranks `indexer.ts`
+  above `embedding.ts` for "embed one text string with Titan". Not a
+  regression: the eval now prints how many code chunks carry a vector.
+- The production code index is stale (documents dated 2026-10-12) and still
+  holds the pre-rename `deploy/memex/` tree next to `deploy/memrain/`, which
+  is why three answers read as not indexed. Operator steps, no paid call
+  except the eval's: `git pull` the checkout bind-mounted as `/repo-source`
+  (`EFS_REPO` in the host's `.env`), restart the memrain container so its
+  boot code sweep re-indexes changed files (`[code] boot sweep:` in the log),
+  check whether the `deploy/memex/` documents are gone and delete them if
+  not, then run `bun run src/cli.ts eval code` in the container (one Titan
+  embedding per question per run, 57 in all).
+- Whether code should get vectors at all is an operator decision: embedding
+  ~6,600 chunks with Titan v2 is a one-off paid run (a few cents) plus one
+  embedding per changed chunk on every sync, and it reverses the graph-only
+  choice for the code source.
 
 ## Follow-ups from the chat, Slack and Teams tails
 
@@ -163,18 +179,26 @@ marked; this section is the one that stands.
 - Older versions of a page cleaned by `connectors redact-meetings` keep the
   credentials: `page_versions` with bodies and `page_revert` still reach them.
   Decided: history stays as it is (no scrub).
-- Teams chat days and meeting summaries (`renderChatDay` and the summary
-  renderer in `connectors/render.ts`) still guard with `g.text`, not
-  `g.invite`, and the sweep covers mail and calendar only.
-- A label can take the next line's value: `Access code` above a line starting
-  `2026-11-17` loses the date, and `Password:` then a blank line then `Thanks,`
-  loses `Thanks,`. A read-only count on prod found none.
-- The sweep selects connector pages by type and `compiled_truth.origin`, not
-  by source kind; check the kind as retention's `assertConnectorSource` does.
-- Purging a page deletes its `hot_memory` rows by `source_slug`, which has no
-  index, so every purge scans the table.
-- The concept hub gate reuses the entity junk list, so a real concept named
-  `meetings`, `customers`, `project` or `idea` can never get a hub page.
+- Meeting transcripts are redacted turn by turn, so a credential split across
+  two turns (`Meeting ID:` at the end of one, the digits at the start of the
+  next) stays.
+- A connector account row connected before `provider_user_id` was stored
+  (Microsoft, before 2026-11-16) has no id to compare, so its first reconnect
+  is guarded by the address alone and pins whichever account signs in. Check
+  on the host: `SELECT id, account_label, config ? 'provider_user_id' FROM
+  connector_accounts WHERE provider = 'microsoft' AND status <> 'revoked'`;
+  a row without it is pinned by one careful reconnect. A sync-time backfill
+  (Graph `/me` with the stored grant) would close it in code but adds an
+  identity write to the sync path.
+- No reminder before a bring-your-own OAuth app's client secret expires: the
+  app knows only the secret, not its expiry (Entra does not return it), so a
+  reminder needs the expiry date typed in on save. Today the
+  `oauth_client_rejected` notice fires once the secret has expired and says
+  how to save a new one; the operator's own reminder covers the Microsoft
+  secret (~11.2027).
+- `tools/list` has 437 bytes left under its 95,000-byte budget after trimming
+  internal names from the search and code tool descriptions; a new tool needs
+  shorter descriptions elsewhere first.
 
 ## Deletion inventory gaps (2026-11-14)
 
