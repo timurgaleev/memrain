@@ -4,7 +4,9 @@ The admin panel's **Ask** page answers a question from what is in the brain.
 Each answer comes with numbered links to the pages it rests on, a list of what
 the brain does not know (gaps), the model that wrote it and what it cost. While
 the answer is prepared, the page shows how it was found: what was searched,
-how much was found, the money held and the model call.
+how much was found, the money held and the model call. When the answer quotes
+a page in quotation marks, that page's link carries the passage (`quote` on
+the citation), and opening it highlights the passage on the page.
 
 An answer is one `think` synthesis over your pages and takes. The model gets
 no tools: it writes text and changes nothing in the brain. A follow-up in the

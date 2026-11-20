@@ -38,6 +38,7 @@ import {
   settleSpend,
 } from "../budget.ts";
 import { runThink, type ThinkResult, type ThinkTraceEvent } from "../synthesis/think.ts";
+import { isQuoteInText, quotedSpans } from "../synthesis/quote-verify.ts";
 import { pageSourcePath, pageTruthSourcePath } from "../page-index.ts";
 import { andSourceScope } from "../source-scope.ts";
 import { chatConfig, CHAT_MAX_TAKES, CHAT_OUTPUT_TOKENS, CHAT_PAGE_HITS } from "./config.ts";
@@ -64,6 +65,8 @@ export const CHAT_MESSAGE_MAX_CHARS = 4000;
 /** How long the durable hold may outlive a crashed turn. */
 const CHAT_HOLD_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_TURN_TIMEOUT_MS = 120_000;
+/** A quoted passage longer than this is not carried on its citation. */
+const MAX_CITED_QUOTE_CHARS = 300;
 
 /** The operator's own chat: whole-brain reads, booked under its own spend id. */
 export function operatorOwner(): ChatOwner {
@@ -161,6 +164,7 @@ async function numberCitations(
 ): Promise<ChatCitation[]> {
   const engine = storage.engine();
   const out: ChatCitation[] = [];
+  const quotes = quotedSpans(result.synthesis?.answer ?? "").filter((q) => q.length <= MAX_CITED_QUOTE_CHARS);
   for (const c of result.synthesis?.citations ?? []) {
     const n = out.length + 1;
     if (c.kind === "take") {
@@ -170,11 +174,12 @@ async function numberCitations(
     }
     let slug = c.ref;
     let title = c.ref.split("/").pop() ?? c.ref;
+    let quote: string | undefined;
     for (const candidate of refSlugCandidates(c.ref)) {
       const params: unknown[] = [candidate];
       const scope = andSourceScope("source_id", owner.readSources, params);
-      const p = await engine.query<{ slug: string; title: string | null; source_id: string }>(
-        `SELECT slug, title, source_id FROM pages WHERE slug = $1 AND deleted_at IS NULL${scope}`,
+      const p = await engine.query<{ slug: string; title: string | null; source_id: string; markdown_body: string | null }>(
+        `SELECT slug, title, source_id, markdown_body FROM pages WHERE slug = $1 AND deleted_at IS NULL${scope}`,
         params,
       );
       const row = p.rows[0];
@@ -182,9 +187,11 @@ async function numberCitations(
       if (pageSourcePath(row.slug, row.source_id) !== c.ref && pageTruthSourcePath(row.slug, row.source_id) !== c.ref) continue;
       slug = row.slug;
       title = row.title ?? row.slug;
+      // The page view highlights this passage when the citation opens it.
+      quote = quotes.find((q) => isQuoteInText(q, row.markdown_body ?? ""));
       break;
     }
-    out.push({ n, slug, title: title.slice(0, 200), kind: "page" });
+    out.push({ n, slug, title: title.slice(0, 200), kind: "page", ...(quote !== undefined ? { quote } : {}) });
   }
   return out;
 }

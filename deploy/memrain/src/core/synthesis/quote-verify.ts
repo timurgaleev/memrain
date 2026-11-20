@@ -267,6 +267,21 @@ export function verifyQuotes(answer: string, evidence: readonly string[]): Quote
 }
 
 /**
+ * The quoted spans of `answer` that `verifyQuotes` checks (four or more
+ * words), as written inside their quotation marks, in order; at most
+ * MAX_QUOTES.
+ */
+export function quotedSpans(answer: string): string[] {
+  const out: string[] = [];
+  for (const m of answer.matchAll(QUOTE_SPAN)) {
+    if (out.length >= MAX_QUOTES) break;
+    const inner = (m[1] ?? m[2] ?? m[3])!.replace(/\s+/g, " ").trim();
+    if (trimTrailingPunct(inner).split(" ").filter((w) => w !== "" && w !== "...").length >= MIN_QUOTE_WORDS) out.push(inner);
+  }
+  return out;
+}
+
+/**
  * True when `quote` appears in `text` after the same folding `verifyQuotes`
  * uses (case, whitespace, typography, trailing punctuation, "..." elisions).
  */

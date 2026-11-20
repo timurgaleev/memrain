@@ -30,6 +30,8 @@ export interface ChatCitation {
   slug: string;
   title: string;
   kind: "page" | "take";
+  /** A page citation's passage the answer quotes, as the answer wrote it; absent when it quotes none. */
+  quote?: string;
 }
 
 export interface ChatTraceEvent {
