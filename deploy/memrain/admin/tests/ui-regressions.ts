@@ -79,6 +79,10 @@ const server = Bun.serve({
         case "page_get": {
           const version = typeof args.version === "number" ? args.version : 2;
           if (args.version !== undefined) historyRequests.push(version);
+          if (args.slug === "notes/blocks") {
+            data = { version, page: { slug: "notes/blocks", title: "Blocks", markdown_body: "The first paragraph ends **here**\n\nand the second one starts." } };
+            break;
+          }
           data = { version, page: { slug: "notes/history", title: "History fixture", markdown_body: version === 1 ? "Original historical text." : "Current replacement text." } };
           break;
         }
@@ -294,6 +298,14 @@ try {
       return h && h.size === 1 ? [...h][0]!.toString() : null;
     });
     assert.equal(await marked.jsonValue(), "replacement text");
+  });
+  await check("A quoted passage that runs across two paragraphs is highlighted across both", "ask#page/notes%2Fblocks?q=paragraph%20ends%20here%20and%20the%20second", async (page) => {
+    await page.getByText("and the second one starts.").waitFor();
+    const marked = await page.waitForFunction(() => {
+      const h = CSS.highlights.get("cite-quote");
+      return h && h.size === 1 ? [...h][0]!.toString() : null;
+    });
+    assert.equal(await marked.jsonValue(), "paragraph ends hereand the second");
   });
   await check("A second Send while the answer streams sends nothing, and Stop closes the stream", "ask", async (page) => {
     await fresh(page, chatScenario({ script: [{ event: "trace", data: { step: "intent" } }], hold: true }));

@@ -1,7 +1,9 @@
 // Where a quoted passage sits in a page's rendered text, which the renderer
 // splits across many text nodes (bold, links, list items). Free of DOM so the
 // root test runner can load it: the caller passes each text node's content
-// and turns the positions back into a Range.
+// and turns the positions back into a Range. The folding follows the
+// server's quote check (synthesis/quote-verify.ts), which matched the quote
+// against the page's markdown.
 
 export interface QuoteSpan {
   /** [text node index, offset] of the first character. */
@@ -10,7 +12,9 @@ export interface QuoteSpan {
   end: [number, number];
 }
 
-const FOLD: Record<string, string> = { "‘": "'", "’": "'", "“": "\"", "”": "\"" };
+const FOLD: Record<string, string> = { "‘": "'", "’": "'", "ʼ": "'", "“": "\"", "”": "\"", "–": "-", "—": "-", "−": "-" };
+/** Markdown emphasis and code marks are formatting, not words. */
+const SKIP = new Set(["*", "`"]);
 
 function foldChar(ch: string): string {
   const f = FOLD[ch] ?? ch;
@@ -18,28 +22,38 @@ function foldChar(ch: string): string {
   return lower.length === 1 ? lower : f;
 }
 
-/** Case, spacing and curly quotes folded, a trailing stop dropped; an elided quote keeps its first part. */
+/** Case, spacing, typography and marks folded, a trailing stop dropped; an elided quote keeps its first part. */
 function foldQuote(quote: string): string {
-  const head = quote.split(/\.\.\.|…/)[0] ?? "";
+  const head = quote.split(/\[\.\.\.\]|\[…\]|\.\.\.|…/).find((p) => p.trim() !== "") ?? "";
   let out = "";
   for (const ch of head.trim()) {
     if (/\s/.test(ch)) {
       if (!out.endsWith(" ")) out += " ";
-    } else {
+    } else if (!SKIP.has(ch)) {
       out += foldChar(ch);
     }
   }
   return out.trimEnd().replace(/[.,;:!?]+$/, "");
 }
 
-export function locateQuote(texts: readonly string[], quote: string): QuoteSpan | null {
+/**
+ * `blockStarts` names the nodes that begin a new block (a paragraph, a list
+ * item): a space is read before each, as the markdown had a line break there.
+ */
+export function locateQuote(texts: readonly string[], quote: string, blockStarts: readonly number[] = []): QuoteSpan | null {
   const needle = foldQuote(quote);
   if (needle === "") return null;
+  const breaks = new Set(blockStarts);
   let hay = "";
   const at: Array<[number, number]> = [];
   texts.forEach((text, i) => {
+    if (breaks.has(i) && hay !== "" && !hay.endsWith(" ")) {
+      hay += " ";
+      at.push([i, 0]);
+    }
     for (let j = 0; j < text.length; j++) {
       const ch = text[j]!;
+      if (SKIP.has(ch)) continue;
       if (/\s/.test(ch)) {
         if (hay.endsWith(" ")) continue;
         hay += " ";

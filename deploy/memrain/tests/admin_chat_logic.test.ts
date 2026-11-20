@@ -241,5 +241,14 @@ describe("chat copy", () => {
     expect(locateQuote(nodes, "  ")).toBeNull();
     // An elided quote highlights its first part.
     expect(locateQuote(nodes, "plant tomatoes ... heat")).toEqual({ start: [1, 0], end: [1, 16] });
+    expect(locateQuote(nodes, "... plant tomatoes")).toEqual({ start: [1, 0], end: [1, 16] });
+  });
+
+  it("folds dashes and markdown marks like the server's quote check, and reads across blocks", () => {
+    expect(locateQuote(["costs 5–10 euros"], "costs 5-10 euros")).toEqual({ start: [0, 0], end: [0, 16] });
+    expect(locateQuote(["the ", "final", " deck"], "the **final** deck")).toEqual({ start: [0, 0], end: [2, 5] });
+    // Two paragraphs: the server's check saw "is\n\nready", the page shows two blocks.
+    expect(locateQuote(["The plan is", "ready for review"], "plan is ready for review")).toBeNull();
+    expect(locateQuote(["The plan is", "ready for review"], "plan is ready for review", [1])).toEqual({ start: [0, 4], end: [1, 16] });
   });
 });

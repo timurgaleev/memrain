@@ -30,6 +30,8 @@ export function PageViewPage({ slug, quote = null }: { slug: string | null; quot
 }
 
 const QUOTE_HIGHLIGHT = "cite-quote";
+/** The rendered elements a markdown line break separates. */
+const QUOTE_BLOCKS = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote";
 
 /**
  * Marks `quote` in the rendered body with the CSS Custom Highlight API, which
@@ -44,7 +46,9 @@ function useQuoteHighlight(body: React.RefObject<HTMLElement | null>, quote: str
     const nodes: Text[] = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
-    const span = locateQuote(nodes.map((n) => n.data), quote);
+    const blockOf = (n: Text) => n.parentElement?.closest(QUOTE_BLOCKS) ?? null;
+    const starts = nodes.flatMap((n, i) => (i > 0 && blockOf(n) !== blockOf(nodes[i - 1]!) ? [i] : []));
+    const span = locateQuote(nodes.map((n) => n.data), quote, starts);
     if (!span) return;
     const range = document.createRange();
     range.setStart(nodes[span.start[0]]!, span.start[1]);
