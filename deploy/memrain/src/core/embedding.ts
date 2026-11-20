@@ -108,11 +108,13 @@ export interface EmbedOptions {
   /**
    * Per-attempt timeout for this call, overriding the client's. The search path
    * sets it to a fraction of its own budget so a hung attempt ends in time for
-   * the SDK to retry inside that budget.
+   * the spend wallet to retry inside that budget.
    */
   requestTimeoutMs?: number;
   /** Receives the input tokens Titan billed, as soon as the response reports them. */
   onUsage?: (usage: { inputTokens: number }) => void;
+  /** How many attempts the spend wallet may make (default: the wallet's). */
+  maxAttempts?: number;
 }
 
 interface TitanResponseV2 {
@@ -146,7 +148,11 @@ export async function embedText(
   });
 
   return trackedInvoke(
-    { operation: SPEND_OP, model: modelId, worstCase: { input: text, maxOutputTokens: 0 } },
+    {
+      operation: SPEND_OP, model: modelId, worstCase: { input: text, maxOutputTokens: 0 },
+      ...(opts.maxAttempts !== undefined ? { maxAttempts: opts.maxAttempts } : {}),
+      ...(opts.abortSignal ? { signal: opts.abortSignal } : {}),
+    },
     async (meter) => {
     const response = await client.send(command, {
       abortSignal: opts.abortSignal,

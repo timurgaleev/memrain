@@ -87,12 +87,15 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) {
       await seed();
       const plan = await buildRechunkPlan(storage, opts());
       let attempts: number | undefined;
+      let walletAttempts: number | undefined;
       const out = await applyRechunkPlan(storage, opts(), plan.plan_hash, { embedFn: async (text, options) => {
         attempts = await options?.client?.config.maxAttempts();
+        walletAttempts = options?.maxAttempts;
         return embed(text);
       } });
       expect(out.ok).toBe(true);
       expect(attempts).toBe(1);
+      expect(walletAttempts).toBe(1);
     });
 
     it("applies one markdown target within its ceiling and preserves authored pages/facts", async () => {

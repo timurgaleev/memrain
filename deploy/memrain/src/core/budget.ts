@@ -19,7 +19,7 @@ import { OperationError } from "./operation-error.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { noteWriteTiming } from "./write-timing.ts";
 import { beginRequestCost } from "./request-cost.ts";
-import { BedrockHalted, assertBedrockOpen, noteBedrockFailure, noteBedrockSuccess } from "./llm/bedrock-errors.ts";
+import { BedrockHalted, assertBedrockOpen, classifyBedrockError, noteBedrockFailure, noteBedrockSuccess } from "./llm/bedrock-errors.ts";
 import { keywordOnlyMode } from "./llm/gateway.ts";
 import { appendAudit, auditDir } from "./audit-week-file.ts";
 import { withProviderLease } from "./jobs/rate-leases.ts";
@@ -755,6 +755,15 @@ export interface TrackedCall {
    * their UTF-8 byte length, since no token is shorter than a byte.
    */
   worstCase: { input: string; cachedInput?: string; maxOutputTokens: number };
+  /**
+   * How many times the wallet may send the call (default WALLET_MAX_ATTEMPTS).
+   * Each attempt holds and books its own worst case. A caller that reserved for
+   * exactly one request, or whose answer is worth less than a retry's latency,
+   * passes 1.
+   */
+  maxAttempts?: number;
+  /** The caller's own deadline or cancellation: once aborted, nothing is retried. */
+  signal?: AbortSignal;
 }
 
 /** Per-message framing the provider adds on top of the text (role markers,
@@ -1337,17 +1346,41 @@ export async function trackedInvoke<T>(
     () => invokeTracked(call, send), { ownerJob: currentSpendTags().jobId ?? null });
 }
 
+/**
+ * Attempts the wallet makes of one call. The Bedrock clients send a single
+ * attempt (`bedrockClientConfig`), so every request that can reach the model
+ * passes through here and holds its own worst case: an SDK retry would bill
+ * again outside the one hold the wallet took.
+ */
+export const WALLET_MAX_ATTEMPTS = 4;
+const RETRY_BASE_MS = 100;
+const THROTTLE_RETRY_BASE_MS = 500;
+const RETRY_MAX_DELAY_MS = 20_000;
+
+/** What one attempt did, read by the retry decision. */
+interface AttemptState {
+  sent: boolean;
+  reported: boolean;
+}
+
+/** Throttles, timeouts and server-side failures may pass on a later attempt; a
+ *  caller's abort, a refused input or missing access will not. */
+function retryableAttempt(err: unknown): boolean {
+  if (err instanceof Error && err.name === "AbortError") return false;
+  const cls = classifyBedrockError(err);
+  return cls === "throttle" || cls === "timeout" || cls === "server";
+}
+
+/** Full-jitter exponential backoff, the SDK's own bases and ceiling. */
+function retryDelayMs(err: unknown, attempt: number): number {
+  const base = classifyBedrockError(err) === "throttle" ? THROTTLE_RETRY_BASE_MS : RETRY_BASE_MS;
+  return Math.random() * Math.min(RETRY_MAX_DELAY_MS, base * 2 ** (attempt - 1));
+}
+
 async function invokeTracked<T>(
   call: TrackedCall,
   send: (meter: SpendMeter) => Promise<T>,
 ): Promise<T> {
-  let usage: ReportedUsage | undefined;
-  const meter: SpendMeter = {
-    // A second report REPLACES the first: a retry inside `send` (the cachePoint
-    // fallback) is one logical call that was billed once, at whatever the
-    // attempt that actually reached the model consumed.
-    report: (u) => void (usage = { ...u }),
-  };
   if (keywordOnlyMode()) {
     throw new OperationError(
       "unsupported",
@@ -1355,6 +1388,37 @@ async function invokeTracked<T>(
       "Semantic search, embeddings and synthesis need AWS Bedrock: unset MEMRAIN_KEYWORD_ONLY and provide AWS credentials.",
     );
   }
+  const maxAttempts = Math.max(1, Math.floor(call.maxAttempts ?? WALLET_MAX_ATTEMPTS));
+  for (let attempt = 1; ; attempt++) {
+    const state: AttemptState = { sent: false, reported: false };
+    try {
+      return await attemptTracked(call, send, state);
+    } catch (err) {
+      // A hold refused before sending, a call that reported usage (it reached
+      // the model and billed) and a caller that gave up are never retried.
+      if (attempt >= maxAttempts || !state.sent || state.reported || call.signal?.aborted || !retryableAttempt(err)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(err, attempt)));
+      if (call.signal?.aborted) throw err;
+    }
+  }
+}
+
+/** One attempt: hold its worst case, send, settle and book it. */
+async function attemptTracked<T>(
+  call: TrackedCall,
+  send: (meter: SpendMeter) => Promise<T>,
+  state: AttemptState,
+): Promise<T> {
+  let usage: ReportedUsage | undefined;
+  const meter: SpendMeter = {
+    // A second report REPLACES the first: a retry inside `send` (the cachePoint
+    // fallback) is one logical call that was billed once, at whatever the
+    // attempt that actually reached the model consumed.
+    report: (u) => {
+      usage = { ...u };
+      state.reported = true;
+    },
+  };
   // Batch work stops at a failure that would only repeat (expired credentials,
   // a model the account may not use, a spent quota) instead of paying for it
   // once per item. Nothing was sent, so nothing is held or booked.
@@ -1371,6 +1435,7 @@ async function invokeTracked<T>(
   let failure: unknown;
   let outcome: SpendOutcome = "ok";
   try {
+    state.sent = true;
     const result = await send(meter);
     noteBedrockSuccess(call.model);
     return result;

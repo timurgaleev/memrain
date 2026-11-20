@@ -174,11 +174,13 @@ export function embedTimeoutMs(): number {
 }
 
 /**
- * Transport settings every Bedrock client in memrain shares. The SDK retries
- * throttles, 5xx and timeouts itself (adaptive mode also slows the send rate
- * when throttled), so nothing above it retries again. `throwOnRequestTimeout`
- * is what makes the timeout real: without it the handler only logs a warning
- * and the request keeps running — which is how a write reached 116 s.
+ * Transport settings every Bedrock client in memrain shares. The client sends
+ * one attempt: the spend wallet (`trackedInvoke`) retries throttles, 5xx and
+ * timeouts itself and holds each attempt's worst case, since an SDK retry would
+ * bill again outside the wallet's single hold. Adaptive mode still slows the
+ * send rate after a throttle. `throwOnRequestTimeout` is what makes the timeout
+ * real: without it the handler only logs a warning and the request keeps
+ * running — which is how a write reached 116 s.
  */
 export function bedrockClientConfig(timeoutMs: number): {
   maxAttempts: number;
@@ -187,7 +189,7 @@ export function bedrockClientConfig(timeoutMs: number): {
   credentials?: () => Promise<AwsCredentialIdentity>;
 } {
   return {
-    maxAttempts: 4,
+    maxAttempts: 1,
     retryMode: "adaptive",
     requestHandler: new NodeHttpHandler({ requestTimeout: timeoutMs, throwOnRequestTimeout: true }),
     // An extension may supply its own credentials provider.

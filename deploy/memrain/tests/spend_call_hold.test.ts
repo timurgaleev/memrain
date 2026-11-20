@@ -22,7 +22,7 @@ import {
   worstCaseUsd,
 } from "../src/core/budget.ts";
 import { expandQuery } from "../src/core/search/expansion.ts";
-import { withDeadline } from "../src/core/llm/gateway.ts";
+import { bedrockClientConfig, withDeadline } from "../src/core/llm/gateway.ts";
 
 const HAIKU = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
 
@@ -92,7 +92,7 @@ describe("a completed call", () => {
     const ctx = { clientId: "cut-off", capUsd: 5 };
     await expect(
       runWithSpendClient(ctx, () =>
-        trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async () => {
+        trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS, maxAttempts: 1 }, async () => {
           const e = new Error("request timed out");
           e.name = "TimeoutError";
           throw e;
@@ -106,7 +106,7 @@ describe("a completed call", () => {
     const ctx = { clientId: "deadline", capUsd: 5 };
     await expect(
       runWithSpendClient(ctx, () =>
-        trackedInvoke({ operation: "query-expansion", model: HAIKU, worstCase: TWO_CENTS }, () =>
+        trackedInvoke({ operation: "query-expansion", model: HAIKU, worstCase: TWO_CENTS, maxAttempts: 1 }, () =>
           withDeadline(10, () => new Promise(() => {})),
         ),
       ),
@@ -134,6 +134,133 @@ describe("a completed call", () => {
     );
     const holds = await storage.engine().query(`SELECT 1 FROM mcp_spend_reservations`);
     expect(holds.rows).toHaveLength(0);
+  });
+});
+
+const failure = (name: string, message: string): Error => {
+  const e = new Error(message);
+  e.name = name;
+  return e;
+};
+
+async function attemptRows(clientId: string): Promise<Array<{ outcome: string; usd: number }>> {
+  const r = await storage.engine().query<{ outcome: string; usd: number }>(
+    `SELECT outcome, spend_cents::float8 / 100 AS usd FROM mcp_spend_log WHERE client_id = $1 ORDER BY id`,
+    [clientId],
+  );
+  return r.rows;
+}
+
+describe("retries inside the wallet", () => {
+  it("leaves retrying to the wallet: every Bedrock client sends one attempt", () => {
+    expect(bedrockClientConfig(1_000).maxAttempts).toBe(1);
+  });
+
+  it("books a timed-out attempt at its worst case, and the retry that succeeds at its actual", async () => {
+    let sends = 0;
+    const value = await runWithSpendClient({ clientId: "retry-ok", capUsd: 5 }, () =>
+      trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async (m) => {
+        sends++;
+        if (sends === 1) throw failure("TimeoutError", "request timed out");
+        m.report({ inputTokens: 1_000, outputTokens: 100 });
+        return "answer";
+      }),
+    );
+    expect(value).toBe("answer");
+    expect(sends).toBe(2);
+    const actual = costUsd(HAIKU, { inputTokens: 1_000, outputTokens: 100 });
+    expect(await daySpendUsd(storage.engine(), "retry-ok")).toBeCloseTo(0.02 + actual, 4);
+    expect((await attemptRows("retry-ok")).map((r) => r.outcome)).toEqual(["error", "ok"]);
+    const holds = await storage.engine().query<{ status: string }>(
+      `SELECT status FROM mcp_spend_reservations WHERE client_id = 'retry-ok' ORDER BY created_at`,
+    );
+    expect(holds.rows.map((h) => h.status).sort()).toEqual(["pending", "settled"]);
+  });
+
+  it("keeps a timed-out attempt's worst case when the next attempt is refused by the service", async () => {
+    let sends = 0;
+    await expect(
+      runWithSpendClient({ clientId: "retry-refused", capUsd: 5 }, () =>
+        trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async () => {
+          sends++;
+          if (sends === 1) throw failure("TimeoutError", "request timed out");
+          throw failure("ValidationException", "malformed input");
+        }),
+      ),
+    ).rejects.toThrow("malformed input");
+    expect(sends).toBe(2);
+    expect(await daySpendUsd(storage.engine(), "retry-refused")).toBeCloseTo(0.02, 4);
+  });
+
+  it("books nothing for throttled attempts and the actual of the one that got through", async () => {
+    let sends = 0;
+    await runWithSpendClient({ clientId: "retry-throttle", capUsd: 5 }, () =>
+      trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async (m) => {
+        sends++;
+        if (sends < 3) throw failure("ThrottlingException", "Rate exceeded");
+        m.report({ inputTokens: 10, outputTokens: 10 });
+      }),
+    );
+    expect(sends).toBe(3);
+    expect(await daySpendUsd(storage.engine(), "retry-throttle")).toBeCloseTo(costUsd(HAIKU, { inputTokens: 10, outputTokens: 10 }), 9);
+    expect((await attemptRows("retry-throttle")).map((r) => r.outcome)).toEqual(["error", "error", "ok"]);
+  });
+
+  it("stops after four attempts, each held and booked on its own", async () => {
+    let sends = 0;
+    await expect(
+      runWithSpendClient({ clientId: "retry-spent", capUsd: 5 }, () =>
+        trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async () => {
+          sends++;
+          throw failure("TimeoutError", "request timed out");
+        }),
+      ),
+    ).rejects.toThrow("timed out");
+    expect(sends).toBe(4);
+    expect(await daySpendUsd(storage.engine(), "retry-spent")).toBeCloseTo(0.08, 4);
+  });
+
+  it("does not send a retry the cap cannot hold", async () => {
+    let sends = 0;
+    await expect(
+      runWithSpendClient({ clientId: "retry-capped", capUsd: 0.03 }, () =>
+        trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async () => {
+          sends++;
+          throw failure("TimeoutError", "request timed out");
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "budget_exhausted" });
+    expect(sends).toBe(1);
+    expect(await daySpendUsd(storage.engine(), "retry-capped")).toBeCloseTo(0.02, 4);
+  });
+
+  it("does not retry once the caller's signal is aborted", async () => {
+    let sends = 0;
+    const controller = new AbortController();
+    await expect(
+      runWithSpendClient({ clientId: "retry-aborted", capUsd: 5 }, () =>
+        trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS, signal: controller.signal }, async () => {
+          sends++;
+          controller.abort();
+          throw failure("TimeoutError", "request timed out");
+        }),
+      ),
+    ).rejects.toThrow("timed out");
+    expect(sends).toBe(1);
+  });
+
+  it("does not retry a call that reported usage before it failed", async () => {
+    let sends = 0;
+    await expect(
+      runWithSpendClient({ clientId: "retry-billed", capUsd: 5 }, () =>
+        trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async (m) => {
+          sends++;
+          m.report({ inputTokens: 10, outputTokens: 10 });
+          throw failure("TimeoutError", "read timed out after the response arrived");
+        }),
+      ),
+    ).rejects.toThrow("timed out");
+    expect(sends).toBe(1);
   });
 });
 

@@ -129,7 +129,7 @@ export async function expandQuery(
   const c = opts.client ?? client(region);
   try {
     return await trackedInvoke(
-      { operation: SPEND_OP, model: modelId, worstCase: { input: SYSTEM_PROMPT + safeQuery, maxOutputTokens: 120 } },
+      { operation: SPEND_OP, model: modelId, worstCase: { input: SYSTEM_PROMPT + safeQuery, maxOutputTokens: 120 }, maxAttempts: 1 },
       async (meter) => {
       const resp = await withDeadline(SEARCH_LLM_BUDGET_MS, (abortSignal) =>
         c.send(

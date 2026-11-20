@@ -91,6 +91,8 @@ export interface CallSonnetOptions {
   /** Override the Bedrock client. `SonnetFn` is the seam for faking the CALL;
    *  this is the seam for exercising the transport itself without a network. */
   client?: BedrockRuntimeClient;
+  /** How many attempts the spend wallet may make (default: the wallet's). */
+  maxAttempts?: number;
 }
 
 /** Ledger label for a reasoning-tier call whose caller didn't name itself. */
@@ -124,6 +126,7 @@ export async function callSonnet(
       operation: opts.operation ?? DEFAULT_REASONING_SPEND_OP,
       model: modelId,
       worstCase: { input: input.system + input.user, maxOutputTokens: input.maxTokens },
+      ...(opts.maxAttempts !== undefined ? { maxAttempts: opts.maxAttempts } : {}),
     },
     async (meter) => {
       const resp = await withInflightCap(() =>

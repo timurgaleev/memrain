@@ -22,9 +22,8 @@ import {
   logRerankFailure,
   type RerankFailureReason,
 } from "./rerank-audit.ts";
-import { awsRegion, generationFields, responseText } from "../llm/gateway.ts";
+import { awsRegion, bedrockClientConfig, generationFields, responseText } from "../llm/gateway.ts";
 import { trackedInvoke } from "../budget.ts";
-import { extension } from "../extension.ts";
 
 
 /** Ledger label — the opt-in paid rerank behind MEMRAIN_RERANK=1. */
@@ -53,7 +52,7 @@ function rerankTimeoutMs(): number {
 
 let _client: BedrockRuntimeClient | null = null;
 function client(region: string): BedrockRuntimeClient {
-  if (!_client) _client = new BedrockRuntimeClient({ region, ...extension().bedrockClientConfig() });
+  if (!_client) _client = new BedrockRuntimeClient({ region, ...bedrockClientConfig(rerankTimeoutMs()) });
   return _client;
 }
 
@@ -109,6 +108,8 @@ export async function rerank<T extends ChunkPayloadForRerank>(
         operation: SPEND_OP,
         model: modelId,
         worstCase: { input: SYSTEM_PROMPT + userMessage, maxOutputTokens: MAX_OUTPUT_TOKENS },
+        // An optional search step that fails open: a retry costs more latency than its answer is worth.
+        maxAttempts: 1,
       },
       async (meter) => {
       const resp = await c.send(

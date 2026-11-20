@@ -35,7 +35,8 @@ export async function runModels(opts: {
         if (!hold) { probes.push({ model, status: "budget_refused", hint: "Inspect the registered price and --max-cost-usd cap." }); continue; }
         try {
           const result = await callSonnet({ system: "Reply OK.", user: "Ping.", maxTokens: 1 },
-            { modelId: model, operation: "models-probe", ...(opts.client ? { client: opts.client } : {}) });
+            // One attempt: the probe reserved one call, and a timeout is itself the answer.
+            { modelId: model, operation: "models-probe", maxAttempts: 1, ...(opts.client ? { client: opts.client } : {}) });
           budget.settle(hold, model, result.usage);
           probes.push({ model, status: "ok" });
         } catch (error) {

@@ -65,6 +65,27 @@ marked; this section is the one that stands.
   Code callers without a visible starting definition retain the stricter
   identity boundary.
 
+## Follow-ups from the wallet retry change
+
+- In-process `BudgetTracker` budgets (contextual chunk context, synthesis,
+  facts extraction, agent runs, think) still reserve one call and settle the
+  final attempt's usage, so a call the wallet retried after a timeout counts
+  once against the feature budget while the durable caps count every attempt.
+  This matches the old behaviour under SDK retries; revisit when a feature
+  budget is used as a hard billing limit. Fix shape: let the caller's hold
+  absorb each kept attempt hold, or hand the tracker the wallet's per-attempt
+  outcome.
+- The wallet retry loop has no client-wide retry budget and ignores a
+  throttle's `Retry-After`; during a long 5xx spell every batch item makes all
+  four attempts, each held and booked (up to four pending worst-case holds per
+  call, so a daily cap fills faster). Its backoff wait is not cut short by the
+  caller's signal (at most ~3.5 s). A retry refused by a cap surfaces the cap
+  refusal rather than the throttle that caused it.
+- Haiku's cachePoint fallback starts again from the cached request on each
+  wallet attempt, adding one unbilled ValidationException round trip.
+- Within one `page_edit`, an edit's `old_text` holding U+0000 cannot match an
+  earlier edit's `new_text`, whose NULs were removed.
+
 ## Follow-ups from the 1.16 batch
 
 - OAuth callers on `/mcp` are treated as non-public, so an unexpected error

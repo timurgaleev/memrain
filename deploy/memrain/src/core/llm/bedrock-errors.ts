@@ -20,7 +20,7 @@ export type BedrockErrorClass =
   | "access"
   /** A service quota is exhausted for this model. */
   | "quota"
-  /** Rate-limited: the SDK already retries these with backoff. */
+  /** Rate-limited: the spend wallet retries these with backoff. */
   | "throttle"
   /** The input is larger than the model accepts; retrying cannot help. */
   | "input_too_long"

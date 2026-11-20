@@ -107,6 +107,7 @@ export async function converseTurn(input: ConverseTurnInput): Promise<ConverseTu
         input: JSON.stringify({ system: input.system, messages, tools }),
         maxOutputTokens: input.maxTokens,
       },
+      ...(input.signal ? { signal: input.signal } : {}),
     },
     async (meter) => {
       const resp = await withInflightCap(() =>

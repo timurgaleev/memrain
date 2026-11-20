@@ -37,7 +37,7 @@ describe("request-local MCP cost", () => {
   it("keeps unpriced usage and timed-out attempts unknown", async () => {
     const unpriced = await search("unknown forest", q => paid(q, 100, "unpriced-fixture"));
     expect(unpriced._meta?.cost).toEqual({ calls: 1, known_usd: 0, unknown_calls: 1, usd: null });
-    const timed = await search("timeout forest", q => trackedInvoke({ operation: "query-embedding", model: "amazon.titan-embed-text-v2:0", worstCase: { input: q, maxOutputTokens: 0 } }, async () => {
+    const timed = await search("timeout forest", q => trackedInvoke({ operation: "query-embedding", model: "amazon.titan-embed-text-v2:0", worstCase: { input: q, maxOutputTokens: 0 }, maxAttempts: 1 }, async () => {
       const error = new Error("request timed out"); error.name = "TimeoutError"; throw error;
     }));
     expect(timed._meta?.cost).toEqual({ calls: 1, known_usd: 0, unknown_calls: 1, usd: null });

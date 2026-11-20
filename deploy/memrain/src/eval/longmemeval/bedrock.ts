@@ -4,10 +4,10 @@
  * The output cap is passed through on every chat call.
  *
  * The ledger reserves one worst-case call per invocation, so each invocation
- * must reach the model at most once. The brain's shared clients retry up to
- * four times on their own, and a retried request can bill again; these
- * clients send a single attempt, and a failure surfaces to the harness, which
- * charges the reservation in full and stops.
+ * must reach the model at most once. The spend wallet retries up to four times
+ * by default, and a retried request can bill again; these calls make a single
+ * attempt, and a failure surfaces to the harness, which charges the
+ * reservation in full and stops.
  */
 import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { embedText } from "../../core/embedding.ts";
@@ -38,11 +38,11 @@ export function bedrockBoundary(calls: BoundaryCalls = {}): LmeBedrock {
   return {
     embed: async (text, modelId) => {
       let inputTokens = 0;
-      const vector = await embed(text, { modelId, client: embedClient, onUsage: (u) => { inputTokens = u.inputTokens; } });
+      const vector = await embed(text, { modelId, client: embedClient, maxAttempts: 1, onUsage: (u) => { inputTokens = u.inputTokens; } });
       return { vector, inputTokens };
     },
     converse: async ({ modelId, system, user, maxTokens }) => {
-      const r = await converse({ system, user, maxTokens, temperature: 0 }, { modelId, operation: "longmemeval", client: chatClient });
+      const r = await converse({ system, user, maxTokens, temperature: 0 }, { modelId, operation: "longmemeval", client: chatClient, maxAttempts: 1 });
       return {
         text: r.text, inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens,
         ...(r.stopReason ? { stopReason: r.stopReason } : {}),

@@ -476,7 +476,7 @@ export async function embedQueryBounded(
     modelId: embedOpts?.embeddingModel ?? EMBED_MODEL,
     abortSignal: dl.signal,
     // One attempt gets a third of the budget, so a hung attempt ends early
-    // enough for the SDK's retry to land inside the deadline; with the client's
+    // enough for the wallet's retry to land inside the deadline; with the client's
     // own 10 s per attempt, no retry could ever help a search.
     requestTimeoutMs: Math.max(500, Math.floor(QUERY_EMBED_TIMEOUT_MS / 3)),
   });

@@ -59,7 +59,7 @@ export async function applyRechunkPlan(storage: Storage, opts: RechunkOptions, p
           embedCalls++;
           client ??= new BedrockRuntimeClient({ region: plan.selection.region, ...bedrockClientConfig(embedTimeoutMs()),
             maxAttempts: plan.selection.max_attempts, retryMode: "standard" });
-          return embed(text, { ...model, client });
+          return embed(text, { ...model, client, maxAttempts: plan.selection.max_attempts });
         };
         await indexDocument(storage, { sourcePath: target.source_path, text: input.text,
           sourceId: target.source_id, expectOwner: target.source_id, mtimeMs: input.mtimeMs,

@@ -96,8 +96,9 @@ describe("classifying a failure", () => {
 });
 
 /** A paid call whose send counts its attempts and fails with `err`. */
+/** One attempt per call: these rows count what the circuit lets through, not wallet retries. */
 function failingCall(model: string, err: Error, sends: { n: number }) {
-  return trackedInvoke({ operation: "t", model, worstCase: W }, async () => {
+  return trackedInvoke({ operation: "t", model, worstCase: W, maxAttempts: 1 }, async () => {
     sends.n++;
     throw err;
   });

@@ -81,8 +81,8 @@ memrain eval longmemeval --out DIR --max-usd 40 [--limit 50]
   not a random or per-type sample, so the question types in a limited run are
   whatever the first N happen to be; read its per-type numbers with that in
   mind.
-- Each reserved call is sent once. The harness uses its own Bedrock clients
-  with SDK retries off, so a throttle or a 5xx fails the call instead of
+- Each reserved call is sent once. The harness makes single-attempt calls
+  (no SDK or wallet retry), so a throttle or a 5xx fails the call instead of
   silently sending it again outside its reservation; the run stops with exit
   `75` and the next invocation resumes.
 - Every paid call is reserved in `DIR/ledger.jsonl` before it is sent. That
