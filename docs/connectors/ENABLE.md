@@ -203,7 +203,7 @@ docker exec deploy-memrain-1 bun run src/cli.ts spend --days 2     # where the m
 
 ## Meeting credentials in pages stored earlier
 
-Mail and calendar pages are stored without online-meeting credentials: meeting
+Mail, calendar, chat and meeting-summary pages are stored without online-meeting credentials: meeting
 ids, passcodes, dial-in PINs, one-tap dial strings, SIP addresses and Teams,
 Zoom, Webex and Google Meet join links (with the Teams "Meeting options" and
 dial-in links, which carry the same ids), plus a password or PIN a mail spells

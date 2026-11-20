@@ -16,8 +16,8 @@ import { registerSource } from "../src/core/sources.ts";
 import { OUTSIDE_NEUTRALIZED } from "../src/core/fence-carry.ts";
 import { parseFactsFence, renderFactsFence } from "../src/core/facts-fence.ts";
 import { parseTakesFence, renderTakesFence } from "../src/core/synthesis/takes-fence.ts";
-import { accountRef, type CalendarEvent, type MailThread } from "../src/core/connectors/model.ts";
-import { renderCalendarEvent, renderMailThread, type RenderedConnectorPage } from "../src/core/connectors/render.ts";
+import { accountRef, type CalendarEvent, type ChatDay, type MailThread, type MeetingTranscript } from "../src/core/connectors/model.ts";
+import { renderCalendarEvent, renderChatDay, renderMailThread, renderMeeting, type RenderedConnectorPage } from "../src/core/connectors/render.ts";
 import { MEETING_REDACT_REASON, MEETING_REDACT_WRITER, sweepMeetingCredentials } from "../src/core/connectors/meeting-redact-sweep.ts";
 import { sweepRetention } from "../src/core/connectors/retention.ts";
 import { runConnectors } from "../src/commands/connectors.ts";
@@ -126,6 +126,37 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const again = await sweepMeetingCredentials(db.storage, { apply: true, mirror: { embedFn } });
     expect(again).toMatchObject({ pages_scanned: 4, pages_changed: 0, removals: 0, rewritten: 0 });
     expect((await versions(mail.slug)).length).toBe(2);
+  });
+
+  it("cleans Teams chat days and meeting summaries too", async () => {
+    await registerSource(db.storage.engine(), { id: "teams", kind: "chat", pathPrefix: "chat/" });
+    await registerSource(db.storage.engine(), { id: "transcripts", kind: "meeting", pathPrefix: "meeting/" });
+    const day: ChatDay = {
+      workspace: "acme", channelId: "19:abc@thread.v2", channelName: "standup", day: "2026-11-10",
+      messages: [{ id: "1", author: { name: "Bob Stone", email: null }, ts: "2026-11-10T09:00:00.000Z", text: "See you", threadId: null }],
+    };
+    const meeting: MeetingTranscript = {
+      id: "mt-1", title: "Pricing sync", start: "2026-11-11T15:00:00.000Z", end: null,
+      participants: [], summary: "Agreed on tiers.", actionItems: [], sentences: [],
+    };
+    const chat = await legacy(renderChatDay({ service: "teams_chat", accountLabel: OWNER }, day), "teams", ZOOM);
+    const minutes = await legacy(renderMeeting({ service: "teams_transcripts", accountLabel: OWNER }, meeting), "transcripts", TEAMS);
+
+    const applied = await sweepMeetingCredentials(db.storage, { apply: true, mirror: { embedFn } });
+    expect(applied).toMatchObject({ pages_scanned: 2, pages_changed: 2, rewritten: 2, errors: [] });
+    for (const slug of [chat.slug, minutes.slug]) {
+      const body = String(await scalar("SELECT markdown_body AS v FROM pages WHERE slug = $1", [slug]));
+      for (const s of SECRETS) expect([slug, s, body.includes(s)]).toEqual([slug, s, false]);
+    }
+  });
+
+  it("reads only pages of connector sources, whatever their type and truth say", async () => {
+    await registerSource(db.storage.engine(), { id: "notes", kind: "other", pathPrefix: "imported/" });
+    const copied = await legacy(mail, "notes", ZOOM);
+
+    const applied = await sweepMeetingCredentials(db.storage, { apply: true, mirror: { embedFn } });
+    expect(applied).toMatchObject({ pages_scanned: 0, pages_changed: 0, rewritten: 0 });
+    expect(String(await scalar("SELECT markdown_body AS v FROM pages WHERE slug = $1", [copied.slug]))).toContain("482913");
   });
 
   it("changes only the credentials: the brain's fences and the rendered page stay byte for byte", async () => {

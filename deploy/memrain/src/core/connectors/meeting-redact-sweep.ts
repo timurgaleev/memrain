@@ -4,7 +4,8 @@
  * The renderers strip them from every new render (meeting-redact.ts), but a
  * stored page is rendered again only when its item changes upstream: the sync
  * skips an item whose provider version is unchanged, and mail is never listed
- * again. This walks the live connector mail and calendar pages, parts
+ * again. This walks the live connector mail, calendar, chat and meeting pages
+ * of connector sources (the same kinds connector retention accepts), parts
  * included, and applies the same redaction to their title and body.
  *
  * Dry run by default: counts per source, nothing written. With `apply` each
@@ -31,13 +32,15 @@ import { mirrorPage, type MirrorPageOptions } from "../page-index.ts";
 import { withSecretDisposition } from "../secret-scan.ts";
 import { OUTSIDE_NEUTRALIZED } from "../fence-carry.ts";
 import { CONNECTOR_PAGE_TYPES } from "./render.ts";
+import { SOURCE_KIND_FOR } from "./model.ts";
 import { redactMeetingCredentials } from "./meeting-redact.ts";
 
 export const MEETING_REDACT_WRITER = "meeting-redact";
 export const MEETING_REDACT_REASON = "removed online-meeting credentials (ids, passcodes, PINs, join links)";
 
 const BATCH = 200;
-const PAGE_TYPES = [CONNECTOR_PAGE_TYPES.mail, CONNECTOR_PAGE_TYPES.calendar];
+const PAGE_TYPES = [CONNECTOR_PAGE_TYPES.mail, CONNECTOR_PAGE_TYPES.calendar, CONNECTOR_PAGE_TYPES.chat, CONNECTOR_PAGE_TYPES.meeting];
+const SOURCE_KINDS = [...new Set(Object.values(SOURCE_KIND_FOR))];
 
 export interface MeetingRedactSweepOptions {
   /** Only this source's pages. */
@@ -96,7 +99,7 @@ export async function sweepMeetingCredentials(storage: Storage, opts: MeetingRed
   const changedSlugs = new Map<string, string[]>();
   let after = "";
   for (;;) {
-    const params: unknown[] = [PAGE_TYPES, after];
+    const params: unknown[] = [PAGE_TYPES, after, SOURCE_KINDS];
     const sourceFilter = opts.sourceId === undefined ? "" : `AND p.source_id = $${params.push(opts.sourceId)}`;
     params.push(BATCH);
     const rows = (await engine.query<Row>(
@@ -104,6 +107,7 @@ export async function sweepMeetingCredentials(storage: Storage, opts: MeetingRed
       `SELECT p.slug, p.type, p.title, p.markdown_body, p.compiled_truth, p.source_id,
               (SELECT COALESCE(MAX(v.version_n), 0)::int FROM page_versions v WHERE v.slug = p.slug) AS version_n
          FROM pages p
+         JOIN sources s ON s.id = p.source_id AND s.kind = ANY($3::text[])
         WHERE p.deleted_at IS NULL AND p.type = ANY($1::text[]) AND p.compiled_truth->>'origin' = 'connector'
           AND p.slug > $2 ${sourceFilter}
         ORDER BY p.slug

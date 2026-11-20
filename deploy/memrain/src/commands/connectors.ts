@@ -5,7 +5,7 @@
  * `memrain connectors redact-meetings [--source ID] [--apply --yes] [--json]`
  *
  * `redact-meetings` removes online-meeting credentials (ids, passcodes, PINs,
- * join links) from connector mail and calendar pages stored before the
+ * join links) from connector mail, calendar, chat and meeting pages stored before the
  * renderers stripped them. Dry run by default, with counts per source;
  * `--apply --yes` writes each changed page as a new version and re-mirrors it.
  *
