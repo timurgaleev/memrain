@@ -328,9 +328,11 @@ const QUOTED_CHAR = String.raw`(?!${SGR})(?:[^"'\s\\]|\\(?!\\{0,2}["']))`;
 const ASSIGNMENT_PATTERNS: Pattern[] = [
   // A backslash right before the closing (escaped) quote belongs to the quote.
   // Colour codes around the value stay outside it; one inside is part of it.
+  // Runs of codes are bounded like the value: an unbounded run drops Bun's
+  // regex JIT onto a far slower path.
   // The fast-fail lookahead in ASSIGNMENT_KEY is redundant by design:
   // eslint-disable-next-line regexp/no-useless-assertions
-  { kind: "high-entropy-assignment", regex: new RegExp(String.raw`(${ASSIGNMENT_KEY}\\?["'](?:${SGR})*)(${QUOTED_CHAR}(?:(?:${SGR})*${QUOTED_CHAR}){11,4095})`, "gi") },
+  { kind: "high-entropy-assignment", regex: new RegExp(String.raw`(${ASSIGNMENT_KEY}\\?["'](?:${SGR}){0,4096})(${QUOTED_CHAR}(?:(?:${SGR}){0,4096}${QUOTED_CHAR}){11,4095})`, "gi") },
   {
     kind: "high-entropy-assignment",
     // eslint-disable-next-line regexp/no-useless-assertions

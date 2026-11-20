@@ -90,6 +90,9 @@ marked; this section is the one that stands.
   separator (`password=\e[32m<value>`). Only colour codes are boundaries, not
   cursor or erase codes (`\e[2K`); case-insensitive matching lets `\e[0M`
   through as one, which only widens what is redacted.
+- A quoted value is still missed after more than 4096 consecutive colour codes
+  (before it or between two of its characters). The run is bounded so Bun's
+  regex JIT stays on its fast path; such input was never redacted before either.
 
 ## Follow-ups from the Postgres CI speed-up
 

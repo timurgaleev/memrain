@@ -98,6 +98,7 @@ describe("escaped and glued starts", () => {
     ["written", String.raw`\e[32m`, String.raw`\e[0m`],
     ["raw", "\x1b[32m", "\x1b[0m"],
     ["doubled", String.raw`\e[1m\e[31m`, String.raw`\e[0m\e[0m`],
+    ["hundredfold", String.raw`\e[0m`.repeat(100), "\x1b[0m".repeat(100)],
   ])("a %s colour code around a quoted value stays outside the redaction", (_name, on, off) => {
     const r = scanSecrets(`password="${on}${v}${off}"`);
     expect(r.findings.map((f) => f.kind)).toEqual(["high-entropy-assignment"]);
@@ -280,6 +281,7 @@ describe("linear time", () => {
     "coloured assignment keys": (n) => String.raw`\e[1;32mpassword\u001b[0mtoken:`.repeat(n / 31),
     "unterminated colour codes in a quoted value": (n) => `password="${String.raw`x\e[1;2;3;4;5;6;7;8;9;`.repeat(n / 21)}`,
     "colour codes alone in a quoted value": (n) => `password="${String.raw`\e[0m\x1b[1;2m`.repeat(n / 14)}`,
+    "colour codes inside a quoted value": (n) => `password="a${String.raw`\e[0m\x1b[1;2m`.repeat(n / 14)}`,
     "escaped bearer headers": (n) => String.raw`Authorization\":\"Bearer `.repeat(n / 24),
     "encoded bearer headers": (n) => `Authorization%3D%22Bearer%20\\u003a%20`.repeat(n / 38),
     "five vendor prefixes": (n) => "sk-or-v1-gsk_xai-pplx-r8_".repeat(n / 25),
