@@ -10,6 +10,11 @@
  * (a code_def lookup): an unindexed answer is a stale question or a partial
  * index, not a retrieval miss. And nothing is scored unless the code index
  * reports `ready` — on any other state zero hits mean "unknown".
+ *
+ * Code is indexed graph-only (indexer-code.ts): its chunks get no vector, so a
+ * plain-words question reaches code through the keyword arm alone, while prose
+ * pages compete with both arms. The report counts code chunks with a vector so
+ * a low score reads as what it measures.
  */
 import type { Storage } from "../core/storage.ts";
 import { hybridSearch } from "../core/search/hybrid.ts";
@@ -71,6 +76,9 @@ export interface CodeRetrievalReport {
   hit_at_k: number | null;
   /** Scored questions whose first file was the same on every run. */
   top1_stable: number;
+  /** Live code chunks, and how many of them carry a vector the vector arm can return. */
+  code_chunks: number;
+  code_chunks_embedded: number;
 }
 
 export interface CodeRetrievalOptions {
@@ -96,8 +104,15 @@ export async function runCodeRetrievalEval(
   const engine = storage.engine();
   const readiness = (await codeIndexReadiness(engine)).state;
   if (readiness !== "ready") {
-    return { state: "unknown", readiness, k, runs, questions: [], scored: 0, hit_at_k: null, top1_stable: 0 };
+    return { state: "unknown", readiness, k, runs, questions: [], scored: 0, hit_at_k: null, top1_stable: 0, code_chunks: 0, code_chunks_embedded: 0 };
   }
+  const coverage = (await engine.query<{ code: number; embedded: number }>(
+    `SELECT COUNT(DISTINCT c.id)::int AS code, COUNT(DISTINCT em.chunk_id)::int AS embedded
+       FROM chunks c
+       JOIN documents d ON d.id = c.document_id
+       LEFT JOIN embeddings em ON em.chunk_id = c.id
+      WHERE d.deleted_at IS NULL AND NOT d.archived AND d.frontmatter->>'kind' = 'code'`,
+  )).rows[0];
 
   const results: CodeRetrievalQuestionResult[] = [];
   for (const q of questions) {
@@ -132,5 +147,7 @@ export async function runCodeRetrievalEval(
     scored: scored.length,
     hit_at_k: scored.length === 0 ? null : scored.filter((r) => r.hit).length / scored.length,
     top1_stable: scored.filter((r) => r.top1.every((p) => p === r.top1[0])).length,
+    code_chunks: coverage?.code ?? 0,
+    code_chunks_embedded: coverage?.embedded ?? 0,
   };
 }

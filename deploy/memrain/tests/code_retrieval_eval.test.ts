@@ -72,6 +72,25 @@ describe("runCodeRetrievalEval", () => {
     expect(r.top1_stable).toBe(r.scored);
   });
 
+  // Value: protects=the report says code reaches search only by keyword when no code chunk has a vector;
+  // fails_when=the eval stops counting code vectors; why_new=prod scored 6% on a graph-only code index
+  // and nothing in the report said the vector arm could not see code; seam=none
+  it("reports that code chunks carry no vectors, so hit@k measures keyword retrieval", async () => {
+    const r = await runCodeRetrievalEval(storage, { questions: onIndexed(), embedQuery: deterministicEmbedQuery });
+    expect(r.code_chunks).toBeGreaterThan(0);
+    expect(r.code_chunks_embedded).toBe(0);
+
+    const out: string[] = [];
+    const orig = console.log;
+    console.log = (...a: unknown[]) => out.push(a.map(String).join(" "));
+    try {
+      await runEvalCode({ storage, questions: onIndexed(), embedQuery: deterministicEmbedQuery });
+    } finally {
+      console.log = orig;
+    }
+    expect(out.join("\n")).toContain(`0 of ${r.code_chunks} code chunks have a vector: search reaches code by keyword only`);
+  });
+
   it("scores a deliberately wrong expectation as a miss", async () => {
     const wrong: CodeRetrievalQuestion = {
       id: "wrong", query: onIndexed().find((q) => q.symbol === "stripFactsFence")!.query,

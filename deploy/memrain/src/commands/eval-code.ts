@@ -32,6 +32,9 @@ export async function runEvalCode(opts: EvalCodeOptions): Promise<number> {
         `code retrieval: hit@${report.k} ${pct} over ${report.scored} indexed question(s) of ` +
           `${report.questions.length}; top-1 stable across ${report.runs} runs: ${report.top1_stable}`,
       );
+      if (report.code_chunks_embedded === 0) {
+        console.log(`  0 of ${report.code_chunks} code chunks have a vector: search reaches code by keyword only`);
+      }
       for (const q of report.questions) {
         const state = !q.indexed ? "NOT INDEXED" : q.hit ? `hit @${q.rank}` : "miss";
         console.log(`  ${q.id} ${state.padEnd(12)} ${q.symbol} (${q.path})`);
