@@ -675,6 +675,7 @@ input[type="date"] { color-scheme: dark; }
 .hit-path { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; margin-top: 2px; }
 .hit-snippet { color: var(--text-secondary); font-size: 13px; margin-top: 6px; max-width: 75ch; overflow-wrap: anywhere; }
 mark { background: rgba(250,204,21,0.22); color: #fde68a; border-radius: 2px; padding: 0 1px; }
+::highlight(cite-quote) { background-color: rgba(250,204,21,0.22); color: #fde68a; }
 
 /* Page view */
 .page-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }

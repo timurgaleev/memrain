@@ -283,6 +283,18 @@ try {
     await page.keyboard.press("Enter");
     await page.getByText("Current replacement text.").waitFor();
   });
+  await check("A source the answer quotes opens its page with the quoted passage highlighted", "ask", async (page) => {
+    const quoted = { ...ANSWER, citations: [{ n: 1, slug: "notes/history", title: "History fixture", quote: "replacement   text" }] };
+    await fresh(page, chatScenario({ script: OK_SCRIPT.map((s) => (s.event === "answer" ? { ...s, data: quoted } : s)) }));
+    await ask(page, "When is the offsite?");
+    await page.getByRole("link", { name: "Source 1: History fixture" }).click();
+    await page.getByText("Current replacement text.").waitFor();
+    const marked = await page.waitForFunction(() => {
+      const h = CSS.highlights.get("cite-quote");
+      return h && h.size === 1 ? [...h][0]!.toString() : null;
+    });
+    assert.equal(await marked.jsonValue(), "replacement text");
+  });
   await check("A second Send while the answer streams sends nothing, and Stop closes the stream", "ask", async (page) => {
     await fresh(page, chatScenario({ script: [{ event: "trace", data: { step: "intent" } }], hold: true }));
     const box = page.getByLabel("Question", { exact: true });

@@ -19,7 +19,7 @@ function AskFixture() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  if (route.name === "page") return <PageViewPage slug={route.param} />;
+  if (route.name === "page") return <PageViewPage slug={route.param} quote={route.quote ?? null} />;
   return <AskPage threadId={route.name === "ask" ? route.param : null} />;
 }
 

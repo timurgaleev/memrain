@@ -15,7 +15,8 @@ export interface TraceEvent {
 }
 
 /** `kind` is set only for a take; a page citation has none. */
-export interface Citation { n: number; slug: string; title: string; kind?: "take" }
+/** `quote` is the passage the answer quotes from the page, when it quotes one. */
+export interface Citation { n: number; slug: string; title: string; kind?: "take"; quote?: string }
 
 export const ANSWER_STATUSES = ["ok", "refused", "budget", "error", "disabled"] as const;
 export type AnswerStatus = (typeof ANSWER_STATUSES)[number];
@@ -110,7 +111,8 @@ export function parseCitations(v: unknown): Citation[] {
     const n = num(c.n);
     const slug = str(c.slug);
     if (n === null || !slug) continue;
-    out.push({ n, slug, title: str(c.title) || slug, ...(c.kind === "take" ? { kind: "take" as const } : {}) });
+    const quote = str(c.quote);
+    out.push({ n, slug, title: str(c.title) || slug, ...(c.kind === "take" ? { kind: "take" as const } : {}), ...(quote ? { quote } : {}) });
   }
   return out;
 }

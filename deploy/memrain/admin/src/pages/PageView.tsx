@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { tool } from "../api.ts";
 import { describeError, useAsync, useNow } from "../hooks.ts";
 import type { AsyncState } from "../hooks.ts";
@@ -13,10 +13,11 @@ import {
 } from "../lib/tool-result.ts";
 import type { LinkGroup } from "../lib/tool-result.ts";
 import { buildHash } from "../lib/route.ts";
+import { locateQuote } from "../lib/quote-find.ts";
 
 let toastSeq = 0;
 
-export function PageViewPage({ slug }: { slug: string | null }) {
+export function PageViewPage({ slug, quote = null }: { slug: string | null; quote?: string | null }) {
   if (!slug) {
     return (
       <>
@@ -25,10 +26,36 @@ export function PageViewPage({ slug }: { slug: string | null }) {
       </>
     );
   }
-  return <PageView key={slug} slug={slug} />;
+  return <PageView key={slug} slug={slug} quote={quote} />;
 }
 
-function PageView({ slug }: { slug: string }) {
+const QUOTE_HIGHLIGHT = "cite-quote";
+
+/**
+ * Marks `quote` in the rendered body with the CSS Custom Highlight API, which
+ * paints a Range without touching the DOM React owns, and scrolls it into
+ * view. A browser without the API, or a quote the body no longer holds, shows
+ * the page unmarked.
+ */
+function useQuoteHighlight(body: React.RefObject<HTMLElement | null>, quote: string | null, rendered: unknown): void {
+  useEffect(() => {
+    const root = body.current;
+    if (!quote || !root || typeof Highlight === "undefined" || !CSS.highlights) return;
+    const nodes: Text[] = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+    const span = locateQuote(nodes.map((n) => n.data), quote);
+    if (!span) return;
+    const range = document.createRange();
+    range.setStart(nodes[span.start[0]]!, span.start[1]);
+    range.setEnd(nodes[span.end[0]]!, span.end[1]);
+    CSS.highlights.set(QUOTE_HIGHLIGHT, new Highlight(range));
+    nodes[span.start[0]]!.parentElement?.scrollIntoView({ block: "center" });
+    return () => { CSS.highlights.delete(QUOTE_HIGHLIGHT); };
+  }, [body, quote, rendered]);
+}
+
+function PageView({ slug, quote }: { slug: string; quote: string | null }) {
   const now = useNow(30_000);
   const page = useAsync(async (s) => parsePageGet(await tool("page_get", { slug }, s)), [slug]);
   const tags = useAsync(async (s) => parseGetTags(await tool("get_tags", { slug }, s)), [slug]);
@@ -37,8 +64,10 @@ function PageView({ slug }: { slug: string }) {
   const neighbors = useAsync(async (s) => parseGraphNeighbors(await tool("graph_neighbors", { slug, direction: "both", limit: 20 }, s)), [slug]);
   const [raw, setRaw] = useState(false);
   const [openVersion, setOpenVersion] = useState<number | null>(null);
+  const body = useRef<HTMLDivElement>(null);
 
   const p = page.data?.kind === "page" ? page.data : null;
+  useQuoteHighlight(body, quote, raw ? null : p?.page.markdown_body);
   const title = p?.page.title || slug;
 
   return (
@@ -82,7 +111,7 @@ function PageView({ slug }: { slug: string }) {
                     <button className={raw ? "active" : ""} aria-pressed={raw} onClick={() => setRaw(true)}>Raw</button>
                   </div>
                 </div>
-                {raw ? <pre className="raw">{d.page.markdown_body}</pre> : <Markdown source={d.page.markdown_body} />}
+                {raw ? <pre className="raw">{d.page.markdown_body}</pre> : <div ref={body}><Markdown source={d.page.markdown_body} /></div>}
               </article>
             )}
           </Section>

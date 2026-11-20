@@ -386,7 +386,7 @@ export function App() {
         {page === "office" && <OfficePage />}
         {page === "search" && <SearchPage query={route.param} />}
         {page === "pages" && <PagesPage />}
-        {page === "page" && <PageViewPage slug={route.param} />}
+        {page === "page" && <PageViewPage slug={route.param} quote={route.quote ?? null} />}
         {page === "entity" && <EntityPage slug={route.param} />}
         {page === "graph" && <GraphPage slug={route.param} />}
         {page === "timeline" && <TimelinePage param={route.param} />}

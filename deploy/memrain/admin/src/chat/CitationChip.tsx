@@ -6,7 +6,7 @@ export function CitationChip({ citation }: { citation: Citation }) {
   return (
     <a
       className="chat-cite"
-      href={buildHash({ name: "page", param: citation.slug })}
+      href={buildHash({ name: "page", param: citation.slug, ...(citation.quote ? { quote: citation.quote } : {}) })}
       aria-label={`Source ${citation.n}: ${citation.title}`}
       title={citation.slug}
     >

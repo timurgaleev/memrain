@@ -6,7 +6,9 @@
  */
 import { describe, expect, it } from "bun:test";
 import { createSseParser, type SseMessage } from "../admin/src/chat/sse.ts";
+import { locateQuote } from "../admin/src/lib/quote-find.ts";
 import {
+  parseCitations,
   parseModels,
   parseThread,
   parseThreads,
@@ -217,5 +219,27 @@ describe("chat copy", () => {
     expect(parseHash("#ask")).toEqual({ name: "ask", param: null });
     expect(parseHash("#ask/t-1")).toEqual({ name: "ask", param: "t-1" });
     expect(buildHash({ name: "ask", param: "t-1" })).toBe("#ask/t-1");
+  });
+
+  it("carries a cited quote on a page link, apart from the slug", () => {
+    const hash = buildHash({ name: "page", param: "notes/plan?v2", quote: "plant tomatoes & beans?" });
+    expect(hash).toBe("#page/notes%2Fplan%3Fv2?q=plant%20tomatoes%20%26%20beans%3F");
+    expect(parseHash(hash)).toEqual({ name: "page", param: "notes/plan?v2", quote: "plant tomatoes & beans?" });
+    expect(parseHash("#page/notes%2Fplan")).toEqual({ name: "page", param: "notes/plan" });
+    expect(parseHash("#page/notes%2Fplan?q=")).toEqual({ name: "page", param: "notes/plan" });
+    expect(parseHash(buildHash({ name: "page", param: "deals/x", quote: "50% off + more" })).quote).toBe("50% off + more");
+    expect(parseCitations([{ n: 1, slug: "notes/plan", title: "Plan", quote: "plant tomatoes" }, { n: 2, slug: "x", title: "X", quote: 7 }]))
+      .toEqual([{ n: 1, slug: "notes/plan", title: "Plan", quote: "plant tomatoes" }, { n: 2, slug: "x", title: "X" }]);
+  });
+
+  it("finds a quote across text nodes, ignoring case, spacing, curly quotes and a trailing stop", () => {
+    // "The plan: **plant tomatoes**\n in May." rendered as three text nodes.
+    const nodes = ["The plan: ", "plant   Tomatoes", "\n in May’s heat."];
+    expect(locateQuote(nodes, "plant tomatoes in May's heat.")).toEqual({ start: [1, 0], end: [2, 15] });
+    expect(locateQuote(nodes, "The plan")).toEqual({ start: [0, 0], end: [0, 8] });
+    expect(locateQuote(nodes, "tomatoes in June")).toBeNull();
+    expect(locateQuote(nodes, "  ")).toBeNull();
+    // An elided quote highlights its first part.
+    expect(locateQuote(nodes, "plant tomatoes ... heat")).toEqual({ start: [1, 0], end: [1, 16] });
   });
 });
