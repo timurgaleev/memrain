@@ -87,6 +87,20 @@ marked; this section is the one that stands.
   and if the score stays low, find out whether code chunks reach the vector arm
   at all or only keyword hits on identifiers do.
 
+## Follow-ups from the chat, Slack and Teams tails
+
+- A Slack private-channel day stored before the private marking keeps the
+  plain header and no `private` in its truth until it is read again; a run
+  reads only the last three days. Re-marking older days needs a re-read of the
+  channel's history (delete the account's data and sync again), or a one-off
+  pass that sets the flag on stored pages of channels Slack reports private.
+- A Teams chat Graph refuses (403/404) is held with its watermark set to the
+  hold time; while its last message is under three days old, each hourly edit
+  round asks for it once more and holds it again.
+- A link typed by hand as `#page/notes/plan?v2` now opens `notes/plan`: what
+  follows a raw `?` is read as the quote parameter. Links the panel builds
+  encode `?` in the slug.
+
 ## Follow-ups from the single-value merge fix
 
 - An entity merge closes an open single-value link only when each side held
