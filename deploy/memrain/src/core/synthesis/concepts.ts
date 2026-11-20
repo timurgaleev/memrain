@@ -25,7 +25,7 @@ import { guardFields } from "../secret-scan.ts";
 import { resolveLlmFn, type LlmFn } from "../llm/haiku.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
 import { BudgetTracker } from "../budget.ts";
-import { isJunkEntitySlug } from "../entity-junk.ts";
+import { isJunkConceptSlug } from "../entity-junk.ts";
 import { synthPagesEnabled, slugifyTitle } from "./atoms.ts";
 import { readAtomCompletion } from "./atoms-lifecycle.ts";
 
@@ -223,8 +223,8 @@ export async function synthesizeConceptsPhase(
   const groups = new Map<string, { atomIds: number[]; titles: string[]; bodies: string[] }>();
   for (const r of currentRows) {
     for (const slug of parseConcepts(r.concepts)) {
-      // A placeholder tag ("organization") names no concept; every entity writer skips it too.
-      if (isJunkEntitySlug(slug)) continue;
+      // A placeholder tag ("organization") names no concept; a topic noun ("meetings") does.
+      if (isJunkConceptSlug(slug)) continue;
       const g = groups.get(slug) ?? { atomIds: [], titles: [], bodies: [] };
       g.atomIds.push(Number(r.id));
       g.titles.push(r.title);

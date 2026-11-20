@@ -113,3 +113,29 @@ export function isJunkEntitySlug(slug: string | null | undefined): boolean {
   }
   return false;
 }
+
+/** Junk entity names that are real topics: a note can be about meetings or
+ *  customers, but no person or company is called that. */
+const TOPIC_NOUNS: ReadonlySet<string> = new Set([
+  "meeting", "meetings", "customer", "customers", "client", "clients", "user", "users",
+  "team", "teams", "project", "task", "event", "idea",
+]);
+
+/**
+ * True when a concept slug is a placeholder ("organization", "unknown", "n/a")
+ * rather than a topic. The entity gate refuses the topic nouns above as names;
+ * as concepts they stand.
+ */
+export function isJunkConceptSlug(slug: string | null | undefined): boolean {
+  return isJunkEntitySlug(slug) && !isTopicNoun(slug!);
+}
+
+/** The display-name side of isJunkConceptSlug. */
+export function isJunkConceptName(raw: string | null | undefined): boolean {
+  return isJunkEntityName(raw) && !isTopicNoun(raw!);
+}
+
+function isTopicNoun(raw: string): boolean {
+  const key = normalizeName(raw);
+  return TOPIC_NOUNS.has(key.slice(key.lastIndexOf("/") + 1).trim());
+}

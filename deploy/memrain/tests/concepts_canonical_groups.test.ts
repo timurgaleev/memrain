@@ -68,4 +68,15 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     expect(await page("concepts/organization")).toBeUndefined();
     expect(await page("concepts/astro")).toBeDefined();
   });
+
+  // Value: protects=a real topic that is also a placeholder entity name ("meetings") still gets a hub;
+  // fails_when=the concepts phase goes back to the entity junk list; why_new=only the placeholder side was tested; seam=none
+  it("mints a hub for a topic noun the entity gate refuses as a name", async () => {
+    await atoms([["first insight", ["meetings", "customers", "organization"]], ["second insight", ["meetings", "customers", "organization"]]]);
+    const r = await synthesizeConceptsPhase(db.storage.engine(), { llmFn: noModel, storage: db.storage });
+    expect(r.errors).toEqual([]);
+    expect((await db.storage.engine().query("SELECT concept_slug FROM synth_concepts ORDER BY concept_slug")).rows)
+      .toEqual([{ concept_slug: "customers" }, { concept_slug: "meetings" }]);
+    expect(await page("concepts/organization")).toBeUndefined();
+  });
 });

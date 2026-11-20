@@ -233,6 +233,8 @@ describe("checkJunkEntityHubs", () => {
     await page("notes/team", "note", "Team");
     await page("companies/us", "company", "US");
     await page("concepts/it", "concept", "IT");
+    // A topic hub the concepts phase mints: no entity is called that, but a concept is.
+    await page("concepts/meetings", "concept", "Meetings");
     const r = await checkJunkEntityHubs(storage.engine());
     expect(r.status).toBe("ok");
     expect(r.detail).toBe("no junk-named entity pages");

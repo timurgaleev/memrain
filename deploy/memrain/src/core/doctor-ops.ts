@@ -12,7 +12,7 @@ import type { Engine } from "./engine/interface.ts";
 import { diffMigrationIds, discoverMigrations } from "./migrate.ts";
 import { EMBED_DIMENSIONS } from "./embedding.ts";
 import { grammarSelfCheck } from "./chunkers/parsers.ts";
-import { isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
+import { isJunkConceptName, isJunkConceptSlug, isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
 import { Queue } from "./jobs/queue.ts";
 import { bucketJobErrors } from "./jobs/error-classify.ts";
 import { hasFenceMarker } from "./fence-shared.ts";
@@ -497,14 +497,18 @@ export async function checkJunkEntityHubs(
   engine: Engine,
 ): Promise<OpsCheckResult> {
   const typeList = JUNK_HUB_TYPES.map((t) => `'${t}'`).join(", ");
-  const pages = await engine.query<{ slug: string; title: string | null }>(
-    `SELECT slug, title FROM pages
+  const pages = await engine.query<{ slug: string; type: string; title: string | null }>(
+    `SELECT slug, type, title FROM pages
       WHERE deleted_at IS NULL AND type IN (${typeList})
       ORDER BY slug
       LIMIT ${JUNK_HUB_SCAN_LIMIT}`,
   );
+  // A concept is judged as a topic: "meetings" names no entity but is a concept.
   const junk = pages.rows
-    .filter((p) => isJunkEntitySlug(p.slug) || (p.title !== null && p.title.trim() !== "" && isJunkEntityName(p.title)))
+    .filter((p) => {
+      const [slugJunk, nameJunk] = p.type === "concept" ? [isJunkConceptSlug, isJunkConceptName] : [isJunkEntitySlug, isJunkEntityName];
+      return slugJunk(p.slug) || (p.title !== null && p.title.trim() !== "" && nameJunk(p.title));
+    })
     .map((p) => p.slug);
   if (junk.length === 0) {
     return { ok: true, status: "ok", detail: "no junk-named entity pages" };
