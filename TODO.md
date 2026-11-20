@@ -79,6 +79,23 @@ marked; this section is the one that stands.
 - A single-value link target cannot hold two separate periods (A, then B, then
   A again); the re-add is refused.
 
+## Follow-ups from the single-value merge fix
+
+- An entity merge closes an open single-value link only when each side held
+  one open value of the type. A closed interval on one side that overlaps the
+  other side's open value (Acme 2020–2022 on the canonical, Globex from 2021
+  on the stub) stays as it is; the doctor overlap check reports it.
+- `addLink` on the stub slug while a merge of that stub runs is not serialized
+  against the link re-point, so a link written in that window stays on the
+  soft-deleted stub. This holds for every link type; the merge locks only the
+  canonical's single-value types.
+- Chronicle jobs carry only slug and source, so a queued job judges the page as
+  it is when the job runs. An edit inside the judged prefix between two
+  enqueues lets both jobs judge the newer text: one extra paid call. Skipping a
+  job whose key no longer matches would drop extraction when the edit came
+  through a path that does not enqueue (`page_revert`, `page_restore`, or a
+  write from a scoped or public caller).
+
 ## Follow-ups from the colour-code assignment fix
 
 - A `SECRET_SCAN_VERSION` bump only makes doctor warn that the last audit used
