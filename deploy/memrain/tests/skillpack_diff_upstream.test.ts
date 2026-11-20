@@ -70,6 +70,14 @@ describe("skillpack diff-upstream", () => {
     }]);
   });
 
+  it("prints upstream text without its control characters", () => {
+    const local = pack({ x: skill("x", ["a"], ["search"], "") });
+    const upstream = pack({ x: skill("x", ["a", "evil\u001b[2Jtrigger"], ["search"], "") });
+    const text = formatSkillpackDiff(diffSkillpacks(local, upstream));
+    expect(text).toContain("+ evil[2Jtrigger");
+    expect(text).not.toContain("\u001b");
+  });
+
   it("reads an upstream repository root through its skills folder", () => {
     const root = pack({});
     mkdirSync(join(root, "skills"));

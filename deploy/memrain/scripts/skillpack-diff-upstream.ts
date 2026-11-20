@@ -108,6 +108,10 @@ function line(label: string, c: Change): string | null {
   return `  ${label}: ${[...c.added.map((x) => `+ ${x}`), ...c.removed.map((x) => `- ${x}`)].join("; ")}`;
 }
 
+// Upstream text reaches a terminal: its control characters (escape sequences) are dropped.
+// eslint-disable-next-line no-control-regex
+const CONTROL_RE = /[\u0000-\u001F\u007F-\u009F]/g;
+
 export function formatSkillpackDiff(diff: SkillpackDiff): string {
   const out: string[] = [];
   if (diff.onlyLocal.length > 0) out.push(`only here: ${diff.onlyLocal.join(", ")}`);
@@ -115,7 +119,7 @@ export function formatSkillpackDiff(diff: SkillpackDiff): string {
   for (const c of diff.changed) {
     out.push(c.slug, ...[line("triggers", c.triggers), line("tools", c.tools), line("steps", c.steps)].filter((l): l is string => l !== null));
   }
-  return out.length === 0 ? "no differences" : out.join("\n");
+  return out.length === 0 ? "no differences" : out.map((l) => l.replace(CONTROL_RE, "")).join("\n");
 }
 
 if (import.meta.main) {
