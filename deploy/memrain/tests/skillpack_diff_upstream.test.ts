@@ -59,6 +59,17 @@ describe("skillpack diff-upstream", () => {
     expect(text).not.toContain("same");
   });
 
+  it("reads a skill without frontmatter as steps only", () => {
+    const local = pack({ plain: skill("plain", ["x"], ["search"], "1. Old step\n") });
+    const upstream = pack({ plain: "# Plain\n\n1. New step\n" });
+    expect(diffSkillpacks(local, upstream).changed).toEqual([{
+      slug: "plain",
+      triggers: { added: [], removed: ["x"] },
+      tools: { added: [], removed: ["search"] },
+      steps: { added: ["New step"], removed: ["Old step"] },
+    }]);
+  });
+
   it("reads an upstream repository root through its skills folder", () => {
     const root = pack({});
     mkdirSync(join(root, "skills"));

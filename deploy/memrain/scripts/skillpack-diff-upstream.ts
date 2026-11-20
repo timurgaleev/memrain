@@ -65,8 +65,10 @@ function readPack(dir: string): Map<string, Skill> {
   for (const slug of readdirSync(dir).sort()) {
     const file = join(dir, slug, "SKILL.md");
     if (slug.startsWith("_") || slug.startsWith(".") || !existsSync(file)) continue;
-    const fm = parseSkillFrontmatter(readFileSync(file, "utf8"));
-    out.set(slug, { triggers: fm.triggers, tools: fm.tools, steps: steps(fm.body) });
+    const text = readFileSync(file, "utf8");
+    // A skill with no frontmatter still has steps.
+    const fm = parseSkillFrontmatter(text);
+    out.set(slug, fm === null ? { triggers: [], tools: [], steps: steps(text) } : { triggers: fm.triggers, tools: fm.tools, steps: steps(fm.body) });
   }
   return out;
 }
