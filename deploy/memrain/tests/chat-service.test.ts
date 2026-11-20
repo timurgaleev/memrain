@@ -334,7 +334,7 @@ describe("chat turn (P5-C1)", () => {
     const run = runChatTurn(ctx(s.fn, { signal: abort.signal, pagesFn: gathering }), { message: "what is the garden plan?" }, (e) => {
       if (e.event === "trace" && (e.data as { step: string }).step === "intent") setTimeout(() => abort.abort(), 20);
     });
-    const outcome = await Promise.race([run, new Promise<"still running">(r => setTimeout(() => r("still running"), 3000))]);
+    const outcome = await Promise.race([run, new Promise<"still running">(r => setTimeout(r, 3000, "still running"))]);
     expect(outcome).not.toBe("still running");
     expect((outcome as { status: string }).status).toBe("error");
     const pending = async () => (await storage.engine().query<{ n: number }>(
