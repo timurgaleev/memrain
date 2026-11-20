@@ -209,6 +209,128 @@ describe("truncated extractor output", () => {
     ]);
   });
 
+  /** `n` complete facts, then a fact the output cap cut mid-string. */
+  function cutAfter(n: number, factText = (i: number) => `Alice confirmed rollout detail ${i}`): string {
+    const facts = Array.from({ length: n }, (_, i) => ({
+      fact: factText(i), kind: "fact", entity: "people/alice", confidence: 0.8, notability: "medium",
+    }));
+    return `${JSON.stringify({ facts }).slice(0, -2)},{"fact":"Alice confirmed rollout det`;
+  }
+
+  // Value: protects=a reply the output cap cut still yields the complete facts before the cut;
+  // fails_when=the parser drops the whole cut reply again; why_new=every cut fixture above has no complete fact; seam=none
+  it("keeps the complete facts a cut reply already holds", async () => {
+    const { fn } = scriptedFn([{ text: cutAfter(2), stopReason: "max_tokens" }]);
+    const result = await extractFactsFromTurn("Alice: the rollout plan", {
+      sonnetFn: fn,
+      canAffordRetry: () => false,
+    });
+    expect(result.facts.map((f) => f.fact)).toEqual([
+      "Alice confirmed rollout detail 0",
+      "Alice confirmed rollout detail 1",
+    ]);
+    expect(result.outcome).toBe("ok");
+  });
+
+  it("reads a complete fact whose text holds brackets, braces and escaped quotes", async () => {
+    const odd = 'Bob wrote "}]," and {x: [1]} in the \\ log';
+    const { fn } = scriptedFn([{ text: cutAfter(1, () => odd), stopReason: "max_tokens" }]);
+    const result = await extractFactsFromTurn("Bob: logs", { sonnetFn: fn, canAffordRetry: () => false });
+    expect(result.facts.map((f) => f.fact)).toEqual([odd]);
+  });
+
+  // Value: protects=no paid retry when the cut reply already holds the ten facts the parser keeps;
+  // fails_when=the retry fires on a reply whose first ten elements are complete; why_new=retry tests above use zero complete facts; seam=none
+  it("does not pay for a retry when the cut reply already holds the ten facts it keeps", async () => {
+    const { fn, seen } = scriptedFn([
+      { text: cutAfter(11), stopReason: "max_tokens" },
+      { text: GOOD, stopReason: "end_turn" },
+    ]);
+    const result = await extractFactsFromTurn("Alice: the rollout plan", {
+      sonnetFn: fn,
+      canAffordRetry: () => true,
+    });
+    expect(seen).toHaveLength(1);
+    expect(result.facts).toHaveLength(10);
+    expect(result.outcome).toBe("ok");
+  });
+
+  it("keeps the first reply's facts when the retry is cut sooner", async () => {
+    const { fn, seen } = scriptedFn([
+      { text: cutAfter(3), stopReason: "max_tokens" },
+      { text: '{"facts":[{"fact":"Alice conf', stopReason: "max_tokens" },
+    ]);
+    const result = await extractFactsFromTurn("Alice: the rollout plan", {
+      sonnetFn: fn,
+      canAffordRetry: () => true,
+    });
+    expect(seen).toHaveLength(2);
+    expect(result.facts).toHaveLength(3);
+    expect(result.usage).toEqual({ inputTokens: 200, outputTokens: 100 });
+  });
+
+  it("keeps the first reply's facts when the retry closes as many elements but none is a fact", async () => {
+    const { fn } = scriptedFn([
+      { text: cutAfter(3), stopReason: "max_tokens" },
+      { text: '{"facts":[{},{},{},{"fact":"Alice conf', stopReason: "max_tokens" },
+    ]);
+    const result = await extractFactsFromTurn("Alice: the rollout plan", { sonnetFn: fn, canAffordRetry: () => true });
+    expect(result.facts).toHaveLength(3);
+  });
+
+  it("takes the retry's facts when it yields as many as the first reply", async () => {
+    const retryText = cutAfter(4, (i) => `Bob signed contract ${i}`);
+    const complete = `${retryText.slice(0, retryText.lastIndexOf(',{"fact"'))}]}`;
+    const { fn } = scriptedFn([
+      { text: cutAfter(4), stopReason: "max_tokens" },
+      { text: complete, stopReason: "end_turn" },
+    ]);
+    const result = await extractFactsFromTurn("Bob: contracts", { sonnetFn: fn, canAffordRetry: () => true });
+    expect(result.facts.map((f) => f.fact)).toEqual([0, 1, 2, 3].map((i) => `Bob signed contract ${i}`));
+  });
+
+  it("keeps the first reply's facts when the retry finishes with none", async () => {
+    const { fn } = scriptedFn([
+      { text: cutAfter(3), stopReason: "max_tokens" },
+      { text: '{"facts":[]}', stopReason: "end_turn" },
+    ]);
+    const result = await extractFactsFromTurn("Alice: the rollout plan", { sonnetFn: fn, canAffordRetry: () => true });
+    expect(result.facts).toHaveLength(3);
+    expect(result.outcome).toBe("ok");
+  });
+
+  it("retries a cut reply whose ten closed elements hold no usable fact", async () => {
+    const { fn, seen } = scriptedFn([
+      { text: `{"facts":[${Array.from({ length: 10 }, () => "{}").join(",")},{"fact":"Ali`, stopReason: "max_tokens" },
+      { text: GOOD, stopReason: "end_turn" },
+    ]);
+    const result = await extractFactsFromTurn("Alice: I quit coffee", { sonnetFn: fn, canAffordRetry: () => true });
+    expect(seen).toHaveLength(2);
+    expect(result.facts.map((f) => f.fact)).toEqual(["Alice gave up coffee"]);
+  });
+
+  it("reads the reply's own facts array, not one quoted in a preamble", async () => {
+    const text = `Example: {"facts":[{"fact":"decoy"}]} and "facts":["decoy"]. ${cutAfter(1)}`;
+    const { fn } = scriptedFn([{ text, stopReason: "max_tokens" }]);
+    const result = await extractFactsFromTurn("Alice: plan", { sonnetFn: fn, canAffordRetry: () => false });
+    expect(result.facts.map((f) => f.fact)).toEqual(["Alice confirmed rollout detail 0"]);
+  });
+
+  it("still retries a cut reply with fewer than ten complete facts", async () => {
+    const complete = `${cutAfter(5).slice(0, cutAfter(5).lastIndexOf(',{"fact"'))}]}`;
+    const { fn, seen } = scriptedFn([
+      { text: cutAfter(3), stopReason: "max_tokens" },
+      { text: complete, stopReason: "end_turn" },
+    ]);
+    const result = await extractFactsFromTurn("Alice: the rollout plan", {
+      sonnetFn: fn,
+      canAffordRetry: () => true,
+    });
+    expect(seen).toHaveLength(2);
+    expect(result.facts).toHaveLength(5);
+    expect(result.outcome).toBe("ok");
+  });
+
   it("does not consult the budget gate when nothing was truncated", async () => {
     const { fn } = scriptedFn([{ text: GOOD, stopReason: "end_turn" }]);
     let asked = 0;

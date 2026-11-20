@@ -311,6 +311,46 @@ function normalizeFactKind(raw: unknown): FactKind {
   return FACT_KINDS.includes(v as FactKind) ? (v as FactKind) : DEFAULT_FACT_KIND;
 }
 
+/** Elements of the `facts` array the parser reads; the prompt asks for no more. */
+const MAX_FACTS_PER_TURN = 10;
+
+/**
+ * The complete elements of a `facts` array the output cap cut short, closed
+ * into a parseable `{"facts":[...]}`. Null when none closed. One pass that
+ * tracks only strings and nesting, so the cost is linear in the reply.
+ */
+export function closeCutFactsArray(text: string): string | null {
+  // The answer's own array is the last one opened: a `{"facts":[` quoted in a
+  // preamble comes before it, and one inside a fact's text is escaped.
+  let open: RegExpExecArray | undefined;
+  for (const m of text.matchAll(/\{\s*"facts"\s*:\s*\[/g)) open = m;
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let lastEnd = -1;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+    } else if (c === '"') {
+      inString = true;
+    } else if (c === "{" || c === "[") {
+      depth += 1;
+    } else if (c === "}" || c === "]") {
+      // A bracket at depth 0 closes the array itself: nothing after it is a fact.
+      if (depth === 0) break;
+      depth -= 1;
+      if (depth === 0) lastEnd = i;
+    }
+  }
+  if (lastEnd < 0) return null;
+  return `{"facts":[${text.slice(start, lastEnd + 1)}]}`;
+}
+
 /**
  * Parse + validate the model response into clean ExtractedFact rows, with a
  * status the caller can act on.
@@ -329,7 +369,7 @@ export function parseFactsResponse(
   }
   const junkFilter = opts.junkFilter ?? factsJunkFilterEnabled();
   const now = opts.now ?? new Date();
-  const considered = arr.slice(0, 10);
+  const considered = arr.slice(0, MAX_FACTS_PER_TURN);
   const out: ExtractedFact[] = [];
   let junkSkipped = 0;
   for (const raw of considered) {
@@ -427,9 +467,10 @@ export function parseFactsResponse(
 /** Output-token cap for one extractor call. A turn is capped at ~12K chars in
  *  and 10 facts out, each with about eleven keys: a complete answer averages
  *  1.3K-1.4K tokens and some pass 2K, more for German or Russian text. A cut
- *  answer is unreadable as a whole, so the cap leaves room for the largest;
- *  Bedrock bills only the tokens produced. A truncated call is retried once at
- *  double this — but only when the caller says the retry fits its budget. */
+ *  answer keeps only the facts that closed before the cut, so the cap leaves
+ *  room for the largest; Bedrock bills only the tokens produced. A truncated
+ *  call that holds fewer than ten complete facts is retried once at double
+ *  this — but only when the caller says the retry fits its budget. */
 export const DEFAULT_EXTRACTION_MAX_TOKENS = 4000;
 
 export interface ExtractTurnOptions {
@@ -548,13 +589,16 @@ export async function extractFactsFromTurn(
 
   let resp = await call(maxTokens);
   let usage = resp.usage;
+  const cutOf = (r: { text: string; stopReason?: string }) =>
+    r.stopReason === STOP_REASON_MAX_TOKENS ? closeCutFactsArray(r.text) : null;
+  let parsed = parseFactsResponse(cutOf(resp) ?? resp.text);
   // A response the output cap cut short is NOT authoritative: the JSON never
-  // closes, the parser throws it away, and a long page reports "zero facts"
-  // that were in fact never emitted. Retry once with double the room — but the
-  // caller only pre-flighted ONE call against its USD cap, so the second call
-  // has to clear that same cap first. Either way, say so out loud rather than
-  // pretending the page had nothing to say.
-  if (resp.stopReason === STOP_REASON_MAX_TOKENS) {
+  // closes, and only the facts that closed before the cut can be read. Retry
+  // once with double the room — unless the cut answer already holds every
+  // fact the parser keeps — but the caller only pre-flighted ONE call against
+  // its USD cap, so the second call has to clear that same cap first. Either
+  // way, say so out loud rather than pretending the page had nothing to say.
+  if (resp.stopReason === STOP_REASON_MAX_TOKENS && parsed.facts.length < MAX_FACTS_PER_TURN) {
     const retryCap = maxTokens * 2;
     // The retry replays the identical prompt, so its input is the first call's
     // actual input; only the output is open-ended, and `retryCap` bounds it.
@@ -573,21 +617,26 @@ export async function extractFactsFromTurn(
         inputTokens: usage.inputTokens + retry.usage.inputTokens,
         outputTokens: usage.outputTokens + retry.usage.outputTokens,
       };
-      resp = retry;
+      const retryParsed = parseFactsResponse(cutOf(retry) ?? retry.text);
+      // A retry that yields fewer facts than the first reply, cut or not, keeps
+      // the first reply's: both were paid for.
+      if (retryParsed.facts.length >= parsed.facts.length) {
+        resp = retry;
+        parsed = retryParsed;
+      }
       if (retry.stopReason === STOP_REASON_MAX_TOKENS) {
         process.stderr.write(
           `[facts-extract] WARN: extractor output STILL truncated at maxTokens=${retryCap} ` +
-            `(model=${retry.modelId}); facts for this turn are likely lost\n`,
+            `(model=${retry.modelId}); only the facts that closed before the cut are kept\n`,
         );
       }
     } else {
       process.stderr.write(
         `[facts-extract] WARN: extractor output truncated at maxTokens=${maxTokens} ` +
-          `(model=${resp.modelId}); no budget for a retry — facts for this turn are likely lost\n`,
+          `(model=${resp.modelId}); no budget for a retry — only the facts that closed before the cut are kept\n`,
       );
     }
   }
-  const parsed = parseFactsResponse(resp.text);
   if (parsed.status === "malformed") {
     process.stderr.write(
       `[facts-extract] WARN: unreadable extractor output ` +
@@ -598,6 +647,9 @@ export async function extractFactsFromTurn(
     facts: parsed.facts,
     modelId: resp.modelId,
     usage,
+    // A cut reply that still yielded facts counts as read, like the ten-fact
+    // and window caps: asking the same question again after each backoff paid
+    // for the same cut answer and never finished.
     outcome:
       resp.stopReason === STOP_REASON_MAX_TOKENS && parsed.facts.length === 0
         ? "truncated"

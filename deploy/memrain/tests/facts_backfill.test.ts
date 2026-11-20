@@ -162,6 +162,28 @@ describe("output cap", () => {
     expect((await storage.engine().query("SELECT phase FROM synth_failures WHERE phase = 'facts-backfill'")).rows).toEqual([]);
     expect((await storage.engine().query("SELECT outcome FROM facts_backfill_scans WHERE slug = 'notes/dense'")).rows).toEqual([{ outcome: "extracted" }]);
   });
+
+  // Value: protects=a page whose answer outruns every cap is extracted from the facts before the cut, not parked and re-paid each backoff;
+  // fails_when=a cut reply is again discarded whole; why_new=the test above only covers an answer that fits the cap; seam=none
+  it("writes the complete facts of an answer that outruns even the retry, and does not park the page", async () => {
+    await putPage(storage, { slug: "notes/endless", type: "note", markdown_body: LONG_BODY });
+    const facts = Array.from({ length: 3 }, (_, i) => ({
+      fact: `Alice confirmed detail number ${i} of the Acme rollout plan`,
+      kind: "fact", entity: "people/alice", confidence: 0.8, notability: "medium",
+    }));
+    const cut = `${JSON.stringify({ facts }).slice(0, -2)},{"fact":"Alice confirmed det`;
+    const caps: number[] = [];
+    const fn: SonnetFn = async (input) => {
+      caps.push(input.maxTokens);
+      return { text: cut, modelId: "eu.anthropic.claude-sonnet-4-6", usage: { inputTokens: 1000, outputTokens: input.maxTokens }, stopReason: "max_tokens" };
+    };
+    const r = await conversationFactsBackfillPhase(storage, { sonnetFn: fn });
+    expect(caps.length).toBeLessThanOrEqual(2);
+    expect(r.errors).toEqual([]);
+    expect(r.factsWritten).toBe(3);
+    expect((await storage.engine().query("SELECT phase FROM synth_failures WHERE phase = 'facts-backfill'")).rows).toEqual([]);
+    expect((await storage.engine().query("SELECT outcome FROM facts_backfill_scans WHERE slug = 'notes/endless'")).rows).toEqual([{ outcome: "extracted" }]);
+  });
 });
 
 describe("zero-yield memo (facts_backfill_scans)", () => {
