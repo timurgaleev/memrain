@@ -274,6 +274,28 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("stores a day longer than the listing cap with its newest messages and moves the cursor past it", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      // One message a page: 30 on the 14th is more pages than one listing walks.
+      w.historyPageSize = 1;
+      w.messages[RANDOM] = Array.from({ length: 30 }, (_, i) => ({
+        ts: slackTs(`2026-11-14T08:${String(i).padStart(2, "0")}:00Z`, 100 + i), user: "U0ANA00001", text: `msg-${String(i + 1).padStart(2, "0")}`,
+      }));
+      const account = await pasteToken(db.storage, w, [RANDOM]);
+
+      const result = await run(db.storage, w, account.id);
+      expect(result.status).toBe("success");
+      const day = (await body(e, daySlug(RANDOM, "2026-11-14")))!;
+      expect(day).toContain("msg-30");
+      expect(day).toContain("msg-06");
+      expect(day).not.toContain("msg-05");
+      expect(JSON.parse((await readCursor(e, account.id, slackStream(RANDOM)))!)).toEqual({ v: 1, through: "2026-11-16" });
+    } finally { await db.close(); }
+  });
+
   it("rebuilds a day whose message was edited inside the lookback, reading only that day's threads", async () => {
     const db = await open();
     try {

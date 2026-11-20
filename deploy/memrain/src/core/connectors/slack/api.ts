@@ -17,7 +17,7 @@ import type { ConnectorClient, ConnectorResponse } from "../client.ts";
 export const SLACK_API_ORIGIN = "https://slack.com";
 /** Messages per history or replies page, Slack's documented maximum. */
 const PAGE_LIMIT = 200;
-/** Cursor pages one listing may walk: 25 pages of 200 is more than any one channel day holds. */
+/** Cursor pages one listing may walk: 25 pages of 200, 5,000 messages. */
 const MAX_PAGES = 25;
 /** Channels the picker lists, at most. */
 const MAX_CHANNELS = 2000;
@@ -94,7 +94,12 @@ export interface SlackChannelInfo {
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
 const TS_RE = /^\d{1,12}\.\d{1,9}$/;
 
-async function paged<T>(client: ConnectorClient, method: string, params: Record<string, string>, field: string): Promise<SlackResult<T[]>> {
+/**
+ * Every page of a cursor listing. Past MAX_PAGES a listing fails, unless
+ * `capped` keeps what those pages held: a channel day or thread that long is
+ * stored in part rather than failing on every run and holding its cursor.
+ */
+async function paged<T>(client: ConnectorClient, method: string, params: Record<string, string>, field: string, capped = false): Promise<SlackResult<T[]>> {
   const out: T[] = [];
   let cursor = "";
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -108,6 +113,7 @@ async function paged<T>(client: ConnectorClient, method: string, params: Record<
     cursor = typeof next === "string" ? next : "";
     if (cursor === "") return { ok: true, body: out };
   }
+  if (capped) return { ok: true, body: out };
   return { ok: false, response: failed("challenge", `slack ${method} listed more than ${MAX_PAGES} pages`) };
 }
 
@@ -140,18 +146,18 @@ export async function conversationInfo(client: ConnectorClient, channel: string)
   };
 }
 
-/** Top-level messages with oldest <= ts < latest (epoch seconds), oldest first. */
+/** Top-level messages with oldest <= ts < latest (epoch seconds), oldest first; past MAX_PAGES, the newest that many pages hold. */
 export async function channelHistory(client: ConnectorClient, channel: string, oldest: number, latest: number): Promise<SlackResult<SlackApiMessage[]>> {
   const res = messages(await paged<SlackApiMessage>(client, "conversations.history",
-    { channel, oldest: oldest.toFixed(6), latest: latest.toFixed(6), inclusive: "true" }, "messages"), "conversations.history");
+    { channel, oldest: oldest.toFixed(6), latest: latest.toFixed(6), inclusive: "true" }, "messages", true), "conversations.history");
   if (!res.ok) return res;
   const at = (m: SlackApiMessage) => Number(m.ts);
   return { ok: true, body: res.body.filter(m => at(m) >= oldest && at(m) < latest).sort((a, b) => at(a) - at(b)) };
 }
 
-/** A thread's replies, oldest first, without its parent. */
+/** A thread's replies, oldest first, without its parent; past MAX_PAGES, the oldest that many pages hold. */
 export async function threadReplies(client: ConnectorClient, channel: string, threadTs: string): Promise<SlackResult<SlackApiMessage[]>> {
-  const res = messages(await paged<SlackApiMessage>(client, "conversations.replies", { channel, ts: threadTs }, "messages"), "conversations.replies");
+  const res = messages(await paged<SlackApiMessage>(client, "conversations.replies", { channel, ts: threadTs }, "messages", true), "conversations.replies");
   if (!res.ok) return res;
   return { ok: true, body: res.body.filter(m => m.ts !== threadTs).sort((a, b) => Number(a.ts) - Number(b.ts)) };
 }

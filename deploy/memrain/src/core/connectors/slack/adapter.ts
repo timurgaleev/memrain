@@ -31,9 +31,9 @@
  *     to its cap, past it the run ends partial and resumes from the cursor.
  *
  * Coverage limits: a reply to a thread that started before the lookback is not
- * seen unless it was also sent to the channel; a channel day or thread longer
- * than 25 listing pages (5,000 messages) fails its read and holds the
- * channel's cursor there.
+ * seen unless it was also sent to the channel; a channel day longer than 25
+ * listing pages (5,000 messages) is stored with its newest 5,000, and a
+ * thread that long with its first 5,000 replies.
  */
 import type { Engine } from "../../engine/interface.ts";
 import { getAccount } from "../accounts.ts";
