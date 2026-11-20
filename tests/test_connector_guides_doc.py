@@ -64,3 +64,21 @@ def test_relative_links_resolve() -> None:
             if path == "":
                 continue
             assert (doc.parent / path).resolve().exists(), f"{doc.name}: broken link {target}"
+
+
+def test_guides_run_the_cli_the_way_the_image_ships_it() -> None:
+    # The image installs only dependencies, so `memrain` is not on its PATH:
+    # `docker exec <container> memrain ...` fails with "executable not found".
+    dockerfile = (REPO / "deploy" / "memrain" / "Dockerfile").read_text()
+    assert not re.search(r"bun link|/usr/local/bin/memrain", dockerfile), "the image now ships a memrain binary; relax this guard"
+    bad = re.compile(r"\bexec\b.*\s(?:deploy-memrain-1|memrain)\s+memrain\b")
+    for doc in sorted((REPO / "docs").rglob("*.md")):
+        for n, line in enumerate(doc.read_text().splitlines(), 1):
+            assert not bad.search(line), f"{doc.relative_to(REPO)}:{n}: use `bun run src/cli.ts`, not `memrain`"
+
+
+def test_enable_grants_a_new_source_to_tokens_too() -> None:
+    # A personal access token keeps its own read set: rescoping the OAuth
+    # clients leaves it blind to a new connector source.
+    text = (GUIDES / "ENABLE.md").read_text()
+    assert "auth permissions <token-name> set-read-sources <current read sources>,me-calendar --dry-run" in text

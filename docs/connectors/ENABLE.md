@@ -122,6 +122,19 @@ docker exec deploy-memrain-1 bun run src/cli.ts auth rescope-client <client_id> 
   --federated-read <its current read sources>,me-calendar
 ```
 
+A personal access token keeps a read set of its own, so an agent that signs in
+with one does not see the new source until you add it there too.
+`set-read-sources` replaces the token's whole read set: list every source it
+reads today and add the new one at the end. Preview first:
+
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts auth permissions <token-name> set-read-sources <current read sources>,me-calendar --dry-run
+```
+
+Check that `before` and `after` differ only by `me-calendar`: a source missing
+from `after` is one the token would stop reading. Then run the same command
+without `--dry-run`.
+
 - Google Calendar: [GOOGLE.md](./GOOGLE.md) (a Google Cloud OAuth client of
   your own, then the Connect button).
 - Gmail: [GMAIL.md](./GMAIL.md) (the same Google client, the Gmail API turned
