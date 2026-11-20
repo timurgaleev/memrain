@@ -140,13 +140,13 @@ class Adapter implements SyncAdapter {
       const id = dayItemId(channelId, day);
       const read = await this.dayMessages(ctx.client, channelId, day);
       if ("failure" in read) return read.failure;
-      let messages = read.messages;
+      let { messages, capped } = read;
       // A stored day that comes back empty is read once more before its page
       // goes: one blank answer is not enough to delete what is already stored.
       if (messages.length === 0 && settled.has(id)) {
         const again = await this.dayMessages(ctx.client, channelId, day);
         if ("failure" in again) return again.failure;
-        messages = again.messages;
+        ({ messages, capped } = again);
       }
       if (messages.length === 0) {
         if (settled.has(id)) deletions.push(id);
@@ -155,7 +155,7 @@ class Adapter implements SyncAdapter {
       }
       const version = `${dayFingerprint(info, messages)}@${today}`;
       if (settled.get(id) !== version) {
-        const item = await this.renderDay(ctx.client, info, day, messages, version);
+        const item = await this.renderDay(ctx.client, info, day, messages, version, capped);
         if ("response" in item) return item;
         items.push(item);
       }
@@ -182,13 +182,13 @@ class Adapter implements SyncAdapter {
   }
 
   /** One day's top-level messages, join and leave notices left out. */
-  private async dayMessages(client: ConnectorClient, channelId: string, day: string): Promise<{ messages: SlackApiMessage[] } | { failure: PageResult }> {
+  private async dayMessages(client: ConnectorClient, channelId: string, day: string): Promise<{ messages: SlackApiMessage[]; capped: boolean } | { failure: PageResult }> {
     const history = await channelHistory(client, channelId, dayStartSec(day), dayStartSec(addDays(day, 1)));
     if (!history.ok) {
       if (history.channelUnavailable) return { failure: this.unavailable(channelId, history.channelUnavailable) };
       return { failure: { ok: false, response: history.response } };
     }
-    return { messages: history.body.filter(m => !skippedMessage(m)) };
+    return { messages: history.body.filter(m => !skippedMessage(m)), capped: history.capped === true };
   }
 
   /** The channel's info, once per run; a channel that cannot be synced is one held failure. */
@@ -236,12 +236,14 @@ class Adapter implements SyncAdapter {
     );
   }
 
-  private async renderDay(client: ConnectorClient, info: SlackChannelInfo, day: string, messages: SlackApiMessage[], version: string): Promise<SyncItem | { ok: false; response: ConnectorResponse }> {
+  private async renderDay(client: ConnectorClient, info: SlackChannelInfo, day: string, messages: SlackApiMessage[], version: string, capped: boolean): Promise<SyncItem | { ok: false; response: ConnectorResponse }> {
     const replies = new Map<string, SlackApiMessage[]>();
+    let truncated = capped;
     for (const m of messages) {
       if ((m.reply_count ?? 0) === 0 || m.subtype === "thread_broadcast") continue;
       const res = await threadReplies(client, info.id, m.ts);
       if (!res.ok) return { ok: false, response: res.response };
+      if (res.capped) truncated = true;
       replies.set(m.ts, res.body);
     }
     const users = await this.users(client, userIds([...messages, ...[...replies.values()].flat()]));
@@ -250,7 +252,7 @@ class Adapter implements SyncAdapter {
     try {
       const page = renderChatDay(
         { service: "slack", accountLabel: this.account.accountLabel ?? "" },
-        toChatDay(this.account.accountLabel ?? "", info, day, messages, replies, users.body),
+        { ...toChatDay(this.account.accountLabel ?? "", info, day, messages, replies, users.body), ...(truncated ? { truncated: true } : {}) },
       );
       return syncItemFromPage(page, version, { enrich: true });
     } catch (e) {

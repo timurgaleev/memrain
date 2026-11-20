@@ -444,11 +444,13 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
     bodies.push(text);
     lines.push(text === "" ? "_No text._" : text, "");
   }
+  if (day.truncated) lines.push("_Only part of this day is stored: a listing held more than 5,000 messages._", "");
   const loop = chatLoopSignals(day, bodies, channel, p => g.person(p));
   const lastActivity = messages.length ? iso(messages.at(-1)!.ts, "message time") : dayStart;
   const truth = baseTruth(ctx, "chat", `${day.channelId}:${day.day}`, dayStart, lastActivity);
   truth["messages"] = messages.length;
   if (day.private) truth["private"] = true;
+  if (day.truncated) truth["truncated"] = true;
   return {
     slug, type: CONNECTOR_PAGE_TYPES.chat, title, body: finish(lines), truth, findings: g.findings,
     kind: "chat", externalId: `${day.channelId}:${day.day}`, occurredAt: dayStart,

@@ -148,6 +148,8 @@ export interface ChatDay {
   direct?: boolean;
   /** A private channel: its pages say so, in the header and as `private` in the truth. */
   private?: boolean;
+  /** Only part of the day was read (a listing cap): the page says so, and `truncated` in the truth. */
+  truncated?: boolean;
 }
 
 export interface MeetingSentence {

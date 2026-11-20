@@ -28,7 +28,12 @@ const CHANNEL_ERRORS = new Set(["not_in_channel", "channel_not_found"]);
 const ERROR_CODE_RE = /^[a-z_]{1,64}$/;
 
 export type SlackResult<T> =
-  | { ok: true; body: T }
+  | {
+    ok: true;
+    body: T;
+    /** A listing that stopped at MAX_PAGES with more left: the body holds part of it. */
+    capped?: true;
+  }
   | {
     ok: false;
     response: ConnectorResponse;
@@ -113,7 +118,7 @@ async function paged<T>(client: ConnectorClient, method: string, params: Record<
     cursor = typeof next === "string" ? next : "";
     if (cursor === "") return { ok: true, body: out };
   }
-  if (capped) return { ok: true, body: out };
+  if (capped) return { ok: true, body: out, capped: true };
   return { ok: false, response: failed("challenge", `slack ${method} listed more than ${MAX_PAGES} pages`) };
 }
 
@@ -152,14 +157,16 @@ export async function channelHistory(client: ConnectorClient, channel: string, o
     { channel, oldest: oldest.toFixed(6), latest: latest.toFixed(6), inclusive: "true" }, "messages", true), "conversations.history");
   if (!res.ok) return res;
   const at = (m: SlackApiMessage) => Number(m.ts);
-  return { ok: true, body: res.body.filter(m => at(m) >= oldest && at(m) < latest).sort((a, b) => at(a) - at(b)) };
+  const body = res.body.filter(m => at(m) >= oldest && at(m) < latest).sort((a, b) => at(a) - at(b));
+  return { ok: true, body, ...(res.capped ? { capped: true as const } : {}) };
 }
 
 /** A thread's replies, oldest first, without its parent; past MAX_PAGES, the oldest that many pages hold. */
 export async function threadReplies(client: ConnectorClient, channel: string, threadTs: string): Promise<SlackResult<SlackApiMessage[]>> {
   const res = messages(await paged<SlackApiMessage>(client, "conversations.replies", { channel, ts: threadTs }, "messages", true), "conversations.replies");
   if (!res.ok) return res;
-  return { ok: true, body: res.body.filter(m => m.ts !== threadTs).sort((a, b) => Number(a.ts) - Number(b.ts)) };
+  const body = res.body.filter(m => m.ts !== threadTs).sort((a, b) => Number(a.ts) - Number(b.ts));
+  return { ok: true, body, ...(res.capped ? { capped: true as const } : {}) };
 }
 
 export interface SlackUser {

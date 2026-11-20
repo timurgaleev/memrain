@@ -191,7 +191,8 @@ then **Add apps**. For a private channel, invite the bot the same way.
 - A reply to a thread older than those three days is not picked up, unless it
   was also sent to the channel.
 - A channel day is stored whole up to 5,000 messages; past that, only its
-  newest 5,000. A thread keeps its first 5,000 replies.
+  newest 5,000. A thread keeps its first 5,000 replies. Such a page says it
+  holds only part of the day and carries `truncated: true` in its truth.
 - A day whose messages were all deleted in Slack is deleted from the brain the
   way any connector deletion is (recoverable for 30 days, see
   [PRIVACY.md](../../PRIVACY.md)).

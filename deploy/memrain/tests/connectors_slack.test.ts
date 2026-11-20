@@ -292,6 +292,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(day).toContain("msg-30");
       expect(day).toContain("msg-06");
       expect(day).not.toContain("msg-05");
+      expect(day).toContain("Only part of this day is stored: a listing held more than 5,000 messages.");
+      const truth = (await e.query<{ compiled_truth: Record<string, unknown> }>(`SELECT compiled_truth FROM pages WHERE slug = $1`, [daySlug(RANDOM, "2026-11-14")])).rows[0]!;
+      expect(truth.compiled_truth.truncated).toBe(true);
       expect(JSON.parse((await readCursor(e, account.id, slackStream(RANDOM)))!)).toEqual({ v: 1, through: "2026-11-16" });
     } finally { await db.close(); }
   });
