@@ -502,8 +502,9 @@ A few that are easy to miss:
   frontmatter.
 - A skill with `prompt: true` frontmatter can appear in MCP `prompts/list`
   when all its declared tools are available to the caller. `prompts/get`
-  returns its literal Markdown without arguments or execution. No bundled
-  skill opts in by default, and public callers receive no prompt access.
+  returns its literal Markdown without arguments or execution. Four bundled
+  read-only skills opt in: `query`, `connect-client`, `cross-modal-review`
+  and `daily-task-prep`. Public callers receive no prompt access.
 - `context_pack` builds a "what matters now" pack for the start of a turn:
   entity cards (title, type, top facts, recent events) for the slugs you name or
   the entities a conversation window mentions, then the top facts across your
