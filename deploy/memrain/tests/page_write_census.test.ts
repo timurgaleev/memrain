@@ -29,6 +29,8 @@ const audited = {
   "core/page-retype.ts": { pages: 1, reason: "Explicit type change" },
   "core/pages-purge.ts": { pages: 2, entity_facts: 1, reason: "Expired soft-delete purge with transaction retry; retires the purged page's facts with a receipt" },
   "core/pages.ts": { pages: 6, page_versions: 6, entity_facts: 2, reason: "Canonical page mutations under slug locks" },
+  "core/purge-leftovers.ts": { pages: 1, page_versions: 1, entity_facts: 1, reason: "Restore from an operator's purge-leftovers export: earlier page text as a new version under slug locks, and un-retires exactly the exported purge facts" },
+  "core/synthesis/derived-cleanup.ts": { pages: 1, page_versions: 1, entity_facts: 1, reason: "Purge cleanup of synthesis output under slug locks: a concept page rebuilt from its surviving atoms as a new version, and leftover facts retired with a receipt" },
   "core/transcripts/origin-repair.ts": { entity_facts: 1, reason: "Operator-gated attribution repair by exact source/session evidence; collisions roll back" },
   "eval/chronicle-harness.ts": { entity_facts: 1, reason: "Eval fixture seeding" },
 };

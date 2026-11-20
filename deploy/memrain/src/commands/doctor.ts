@@ -12,6 +12,7 @@ import { checkPersonNameDuplicates } from "../core/person-identity.ts";
  *   - vault path exists and is readable (when configured)
  *   - reports last_indexed_mtime spread (oldest / newest / count)
  */
+import { checkPurgeLeftovers } from "../core/purge-leftovers.ts";
 import { checkRuntimeConfigValues } from "../core/runtime-config-schema.ts";
 import { lintSkillpack } from "../core/skillpack/lint.ts";
 import { DEFAULT_SKILLS_DIR } from "../core/skillpack/brain-resident.ts";
@@ -464,6 +465,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["junk-entity-hubs", checkJunkEntityHubs],
       ["facts-without-entity-pages", checkFactsWithoutEntityPages],
       ["redaction-markers", checkRedactionMarkers],
+      ["purge-leftovers", checkPurgeLeftovers],
       ["facts-input-windows", checkFactsInputWindows],
       ["fence-rows-without-markers", checkFenceRowsWithoutMarkers],
       ["namespace-only-targets", checkNamespaceOnlyTargets],

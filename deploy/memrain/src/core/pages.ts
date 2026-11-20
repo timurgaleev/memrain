@@ -266,6 +266,21 @@ export class PageShrinkRefusedError extends OperationError {
   }
 }
 
+/**
+ * The write's content matches a page an explicit purge removed from this
+ * source. `invalid_params`, so a connector sync holds the one item and goes on.
+ */
+export class PurgedContentError extends OperationError {
+  constructor(slug: string) {
+    super(
+      "invalid_params",
+      `the content written to '${slug}' matches a page purged from this source, so it was not saved`,
+      "Do not resubmit the same content. Write it in new words if it is still true, or ask the operator to clear the tombstone (memrain unpurge <slug>).",
+    );
+    this.name = "PurgedContentError";
+  }
+}
+
 /** The warning a `warn` precondition policy attaches to an unconditional overwrite. */
 export const PRECONDITION_WARNING =
   "precondition_missing: this overwrote a live page without expected_version; read the page and pass its version to avoid losing a concurrent update";
@@ -393,8 +408,15 @@ function sortedKeysJson(value: unknown): string {
   );
 }
 
-function hashBody(body: string): string {
+export function hashBody(body: string): string {
   return createHash("sha256").update(body, "utf8").digest("hex");
+}
+
+const EMPTY_BODY_HASH = hashBody("");
+
+/** The advisory lock a purge tombstone and a write of the same content in a source share. */
+export function tombstoneLockKey(sourceId: string, contentHash: string): string {
+  return `memrain:page-purge:${sourceId}:${contentHash}`;
 }
 
 function normaliseType(
@@ -775,6 +797,18 @@ export async function putPage(
       if (storedBytes > LARGE_PAGE_BYTES && contentBytes < storedBytes / 2) {
         throw new PageShrinkRefusedError(storedBytes, contentBytes);
       }
+    }
+
+    // An explicit purge tombstoned this text: no write brings it back, under
+    // this slug or another one of the source.
+    if (hashNew !== EMPTY_BODY_HASH && (current === undefined || current.deleted_at !== null || current.content_hash !== hashNew)) {
+      const tombstoneSource = current?.source_id ?? sourceId;
+      await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [tombstoneLockKey(tombstoneSource, hashNew)]);
+      const purged = await tx.query<{ slug: string }>(
+        `SELECT slug FROM page_purges WHERE source_id = $1 AND content_hash = $2 LIMIT 1`,
+        [tombstoneSource, hashNew],
+      );
+      if (purged.rows.length > 0) throw new PurgedContentError(input.slug);
     }
 
     // Merge/rename fence — layered on top of the plain upsert below.

@@ -79,6 +79,7 @@ describe("synthesis INSERT guards", () => {
   });
 
   it("redacts a credential in a concept narrative", async () => {
+    await engine.query("INSERT INTO documents (id, source_path, source_id) VALUES ('d1', '/vault/d1.md', 'default') ON CONFLICT DO NOTHING");
     for (let i = 0; i < 5; i++) {
       await engine.query(
         `INSERT INTO synth_atoms (atom_key, source_ref, source_hash, title, body, concepts, model_id)

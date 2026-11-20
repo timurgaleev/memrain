@@ -9,6 +9,7 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
   afterAll(async () => { await db.close(); });
   it("groups equivalent labels once per atom and memoizes the same membership", async () => {
     for (const [key, labels] of [["a", ["Foo-Bar", "foo_bar"]], ["b", ["foo.bar"]]] as const) {
+      await db.storage.engine().query("INSERT INTO documents (id, source_path, source_id) VALUES ('source', '/vault/source.md', 'default') ON CONFLICT DO NOTHING");
       await db.storage.engine().query("INSERT INTO synth_atoms (atom_key, source_ref, source_hash, title, body, concepts, model_id) VALUES ($1, 'source', 'hash', $1, 'body', $2::text::jsonb, 'test')", [key, JSON.stringify(labels)]);
     }
     const first = await synthesizeConceptsPhase(db.storage.engine(), { llmFn: async () => { throw new Error("two atoms must use deterministic synthesis"); } });
@@ -29,6 +30,7 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
   const noModel = async (): Promise<never> => { throw new Error("a small group must use deterministic synthesis"); };
   const atoms = async (rows: ReadonlyArray<readonly [string, readonly string[]]>) => {
     for (const [key, labels] of rows) {
+      await db.storage.engine().query("INSERT INTO documents (id, source_path, source_id) VALUES ('source', '/vault/source.md', 'default') ON CONFLICT DO NOTHING");
       await db.storage.engine().query("INSERT INTO synth_atoms (atom_key, source_ref, source_hash, title, body, concepts, model_id) VALUES ($1, 'source', 'hash', $1, 'body', $2::text::jsonb, 'test')", [key, JSON.stringify(labels)]);
     }
   };

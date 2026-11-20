@@ -13,6 +13,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       return { text: "Concept narrative", modelId: MODEL, usage: { inputTokens: 20, outputTokens: 10 } };
     } });
     async function seed(i: number) {
+      await db.storage.engine().query("INSERT INTO documents (id, source_path, source_id) VALUES ('d1', '/vault/d1.md', 'default') ON CONFLICT DO NOTHING");
       await db.storage.engine().query(
         `INSERT INTO synth_atoms (atom_key, source_ref, source_hash, title, body, concepts, model_id)
          VALUES ($1, 'd1', 'h1', $1, 'body', '["alpha"]', 'm')`, [`a${i}`],

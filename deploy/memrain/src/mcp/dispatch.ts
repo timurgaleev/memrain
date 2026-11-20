@@ -3717,7 +3717,9 @@ async function callPurgeDeletedPages(
     return errResult("purge_deleted_pages: `slugs` must be an array of strings");
   }
   const r = await purgeDeletedPages(storage.engine(), olderThanHours, scope, {
-    ...(slugs !== undefined ? { slugs: slugs as string[] } : {}),
+    // Naming the pages makes this the owner's purge of them, not the TTL
+    // sweep: their text is tombstoned against being written back.
+    ...(slugs !== undefined ? { slugs: slugs as string[], tombstone: true } : {}),
     ...(args["dry_run"] === true ? { dryRun: true } : {}),
     ...(typeof args["expected_plan_hash"] === "string" ? { expectedPlanHash: args["expected_plan_hash"] } : {}),
   });

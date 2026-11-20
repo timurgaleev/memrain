@@ -2042,7 +2042,7 @@
   },
   {
     "name": "purge_deleted_pages",
-    "description": "HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days). Cascades versions, aliases and links; deletes raw_data, tags and redirects to purged slugs, with per-table counts. Returns reaped slugs, count and ttl_hours. Needs admin scope in the owning source or the internal token; the static public bearer is forbidden.",
+    "description": "HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days). Cascades versions, aliases and links; deletes raw_data, tags and redirects to purged slugs, with per-table counts; retires facts written on or about them and what synthesis derived from them. Returns reaped slugs, count and ttl_hours. Needs admin scope in the owning source or the internal token; the static public bearer is forbidden.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2056,7 +2056,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Only these slugs, and only those soft-deleted past the cutoff. Omit to reap every expired page."
+          "description": "Only these slugs, and only those soft-deleted past the cutoff; their text is tombstoned so no later write brings it back (memrain unpurge clears it). Omit to reap every expired page."
         },
         "dry_run": {
           "type": "boolean",

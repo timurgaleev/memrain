@@ -113,7 +113,7 @@ const FALSE_LITERALS: ReadonlySet<string> = new Set(["false", "0", "no"]);
  * typo, so adding a new value-taking flag means adding it here too.
  */
 export const VALUE_FLAGS: ReadonlySet<string> = new Set([
-  "--fact-ids", "--deleted-pages", "--source-ref", "--completed-hash",
+  "--fact-ids", "--deleted-pages", "--source-ref", "--completed-hash", "--export",
   "--access-ttl", "--anchor", "--answer-model", "--args", "--baseline", "--batch-size", "--boost-weight", "--candidate",
   "--bound-slug-prefixes", "--budget", "--client", "--client-file", "--config-a",
   "--config-b", "--corpus", "--rds-instance", "--efs-id", "--copy-report",
@@ -182,6 +182,8 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["import", new Set(["--dir", "--source", "--apply", "--dry-run", "--plan-hash"])],
   ["mirror-adopt", new Set(["--source", "--limit", "--apply", "--plan-hash"])],
   ["atoms-retire", new Set(["--source-ref", "--completed-hash", "--apply", "--plan-hash"])],
+  ["purge-leftovers", new Set(["--apply", "--plan-hash", "--export", "--from"])],
+  ["unpurge", new Set(["--source"])],
   ["erase", new Set(["--source", "--fact-ids", "--deleted-pages", "--apply", "--plan-hash", "--owner"])],
   ["init", new Set(["--pglite", "--postgres"])],
   ["serve", new Set(["--host", "--http", "--port"])],
@@ -380,7 +382,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
       "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts",
     ]),
   ],
-  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member"])],
+  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "purge-leftovers", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member"])],
   ["--fix", new Set(["lint"])],
 ]);
 

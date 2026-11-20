@@ -119,6 +119,7 @@ describe("extractAtomsPhase provenance + page mirror", () => {
 describe("synthesizeConceptsPhase page mirror", () => {
   it("writes a concepts/<slug> page per synthesized concept", async () => {
     // Two atoms sharing a concept tag → one T3 group.
+    await engine.query("INSERT INTO documents (id, source_path, source_id) VALUES ('d1', '/vault/d1.md', 'default') ON CONFLICT DO NOTHING");
     for (let i = 0; i < 2; i++) {
       await engine.query(
         `INSERT INTO synth_atoms (atom_key, source_ref, source_kind, source_hash, title, body, atom_type, concepts, model_id)

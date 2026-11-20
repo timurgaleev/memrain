@@ -11,8 +11,11 @@
  * transaction as the page — otherwise a later page on the same slug would
  * inherit them. Only redirects pointing AT a purged page go; a redirect FROM a
  * purged old name to a live page is the rename redirect and stays. Facts
- * written on a purged page are retired (cause 'purge') in that transaction
- * too, before the row goes, with a receipt naming the retired ids.
+ * written on or about a purged page are retired (cause 'purge') in that
+ * transaction too, before the row goes, with a receipt naming the retired ids,
+ * and so is what synthesis derived from the page (synthesis/derived-cleanup.ts).
+ * An explicit purge of named pages also tombstones their content hashes, so no
+ * later write brings the text back.
  *
  * The autopilot `purge` cycle phase (core/cycle/purge.ts) runs the same helper
  * unscoped with the page TTL (PAGE_SOFT_DELETE_TTL_HOURS, 30 days — longer than
@@ -27,6 +30,8 @@ import { PAGE_SOFT_DELETE_TTL_HOURS } from "./destructive-guard.ts";
 import { OperationError } from "./operation-error.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
+import { hashBody, tombstoneLockKey } from "./pages.ts";
+import { applyDerivedCleanup, pageMirrorDocIds, planDerivedCleanup, type DerivedCleanupPlan, type DerivedCleanupResult } from "./synthesis/derived-cleanup.ts";
 
 export interface PurgeDeletedPagesResult {
   /** Number of pages hard-deleted. */
@@ -44,8 +49,12 @@ export interface PurgeDeletedPagesResult {
   volunteer_event_rows: number;
   hot_memory_rows: number;
   synthesis_evidence_rows: number;
-  /** Live facts written on the purged pages, retired with cause 'purge' (on a dry run: that would be). */
+  /** Live facts written on or about the purged pages, retired with cause 'purge' (on a dry run: that would be). */
   facts_retired: number;
+  /** What synthesis derived from the purged pages, removed with them (on a dry run: that would be). */
+  synthesis: DerivedCleanupResult;
+  /** Content hashes recorded so the purged text cannot be written back (only with `tombstone`). */
+  tombstoned: number;
   /** Set on a dry run: nothing was deleted, `planned` is what a real run would reap now. */
   dry_run?: true;
   planned?: string[];
@@ -60,6 +69,72 @@ export interface PurgeDeletedPagesOptions {
   dryRun?: boolean;
   /** Refuse unless the current plan still hashes to this (from an earlier dry run). */
   expectedPlanHash?: string;
+  /**
+   * Record the content hash of each purged page and of every version it kept,
+   * so no write (a connector resync, a re-import, a restored snapshot) brings
+   * that text back under any slug of the source. For an explicit purge of
+   * named pages; the TTL reaper does not tombstone what it expires.
+   */
+  tombstone?: boolean;
+}
+
+const NO_SYNTHESIS: DerivedCleanupResult = {
+  atoms: 0, takes: 0, contradictions: 0, concepts: 0, atom_pages: 0, concepts_regenerated: 0, concept_pages: 0, facts: 0,
+};
+
+/** The counts a dry run reports from the cleanup plan. */
+function plannedSynthesis(plan: DerivedCleanupPlan): DerivedCleanupResult {
+  const pages = plan.concepts.filter((c) => c.page !== null && c.page.action !== "keep").length;
+  return {
+    atoms: plan.atoms.length, takes: plan.takes.length, contradictions: plan.contradictions.length,
+    concepts: plan.concepts.filter((c) => c.action === "retire").length,
+    concepts_regenerated: plan.concepts.filter((c) => c.action === "regenerate").length,
+    atom_pages: plan.atom_pages.filter((p) => p.action === "retire").length, concept_pages: pages, facts: 0,
+  };
+}
+
+function synthesisScope(pages: ReadonlyArray<PurgedPage>, factIds: readonly string[]) {
+  return {
+    docIds: pages.flatMap((p) => pageMirrorDocIds(p.slug, p.source_id)),
+    pageSlugs: pages.map((p) => p.slug),
+    factIds,
+  };
+}
+
+/**
+ * Record the hashes of what the pages held, now and in every kept version,
+ * skipping the empty body every soft-delete marker carries.
+ */
+async function tombstonePages(tx: Engine, pages: ReadonlyArray<PurgedPage>, purgeId: string): Promise<number> {
+  if (pages.length === 0) return 0;
+  const hashes = (await tx.query<{ source_id: string; h: string; slug: string }>(
+    // scope: upstream the pages this purge locked, each with its own source
+    `WITH gone AS (
+       SELECT * FROM unnest($1::text[], $2::text[]) AS g(slug, source_id)
+     )
+     SELECT g.source_id, p.content_hash AS h, g.slug FROM gone g JOIN pages p ON p.slug = g.slug
+     UNION
+     SELECT g.source_id, v.hash_new, g.slug FROM gone g JOIN page_versions v ON v.slug = g.slug WHERE v.body_snapshot <> ''
+     ORDER BY 1, 2, 3`,
+    [pages.map((p) => p.slug), pages.map((p) => p.source_id)],
+  )).rows.filter((row) => row.h !== null && row.h !== hashBody(""));
+  // The same lock a write takes before it checks for a tombstone, so no write
+  // of this content commits between the check and this insert.
+  for (const key of [...new Set(hashes.map((row) => tombstoneLockKey(row.source_id, row.h)))].sort()) {
+    await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [key]);
+  }
+  if (hashes.length === 0) return 0;
+  const r = await tx.query<{ n: number }>(
+    `WITH recorded AS (
+       INSERT INTO page_purges (source_id, content_hash, slug, purge_id)
+       SELECT source_id, h, slug, $4::uuid FROM unnest($1::text[], $2::text[], $3::text[]) AS t(source_id, h, slug)
+       ON CONFLICT (source_id, content_hash, slug) DO UPDATE SET purge_id = EXCLUDED.purge_id, purged_at = NOW()
+       RETURNING 1
+     )
+     SELECT count(*)::int AS n FROM recorded`,
+    [hashes.map((row) => row.source_id), hashes.map((row) => row.h), hashes.map((row) => row.slug), purgeId],
+  );
+  return r.rows[0]?.n ?? 0;
 }
 
 /**
@@ -145,33 +220,46 @@ export async function leftovers(engine: Engine, slugs: string[], remove: boolean
 type PurgedPage = { slug: string; source_id: string };
 
 /**
- * Retire the live facts written on the given pages, or with no `purgeId`
- * only count them. A fact is written on a page when its fence row came from
- * it, or, with no fence origin, when it names the page as its source, in the
- * page's own source. While the page was soft-deleted those facts were hidden
- * by `factSourceEligibleSql`; once its row is gone nothing hides them, and a
- * later page on the slug would inherit them. Another page stating the same
- * claim holds its own fact row, so nothing it supports is lost. Each page's
- * retired ids go into one receipt row, so the retirement can be undone by id.
+ * Retire the live facts written on or about the given pages, or with no
+ * `purgeId` only count them. A fact is written on a page when its fence row
+ * came from it, or, with no fence origin, when it names the page as its
+ * source, in the page's own source. A fact about a page (the page is its
+ * entity) goes too when the page it names as its source does not survive the
+ * purge either; one that names no source page was stated directly and stays,
+ * and so does an ontology observation (`dimension` set). While the page was soft-deleted those facts were
+ * hidden by `factSourceEligibleSql`; once its row is gone nothing hides them,
+ * and a later page on the slug would inherit them. Another page stating the
+ * same claim holds its own fact row, so nothing it supports is lost. Each
+ * page's retired ids go into one receipt row, so the retirement can be undone
+ * by id.
  */
-async function retireFacts(engine: Engine, pages: ReadonlyArray<PurgedPage>, purgeId: string | null): Promise<number> {
-  if (pages.length === 0) return 0;
+async function retireFacts(engine: Engine, pages: ReadonlyArray<PurgedPage>, purgeId: string | null): Promise<string[] | number> {
+  if (pages.length === 0) return purgeId === null ? 0 : [];
   const doomed = `WITH gone AS (
       SELECT * FROM unnest($1::text[], $2::text[]) AS g(slug, source_id)
-    ), doomed AS (
+    ), matched AS (
       SELECT f.id, g.slug, g.source_id
         FROM entity_facts f
         JOIN gone g
           ON (f.source_markdown_slug = g.slug OR (f.source_markdown_slug IS NULL AND f.source_slug = g.slug))
          AND COALESCE(f.source_id, 'default') = g.source_id
-       WHERE f.forgotten_at IS NULL)`;
+       WHERE f.forgotten_at IS NULL
+      UNION ALL
+      SELECT f.id, g.slug, g.source_id
+        FROM entity_facts f
+        JOIN gone g ON f.entity_slug = g.slug AND COALESCE(f.source_id, 'default') = g.source_id
+       WHERE f.forgotten_at IS NULL AND f.dimension IS NULL AND COALESCE(f.source_markdown_slug, f.source_slug) IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM pages hp WHERE hp.slug = COALESCE(f.source_markdown_slug, f.source_slug)
+                                                AND hp.slug <> ALL($1::text[]))
+    ), doomed AS (
+      SELECT DISTINCT ON (id) id, slug, source_id FROM matched ORDER BY id, slug)`;
   const params: unknown[] = [pages.map((p) => p.slug), pages.map((p) => p.source_id)];
   if (purgeId === null) {
     const r = await engine.query<{ n: number }>(`${doomed} SELECT count(*)::int AS n FROM doomed`, params);
     return r.rows[0]?.n ?? 0;
   }
   params.push(purgeId);
-  const r = await engine.query<{ n: number }>(
+  const r = await engine.query<{ id: string }>(
     `${doomed}, retired AS (
        UPDATE entity_facts f
           SET forgotten_at = NOW(), forgotten_cause = 'purge', forgotten_reason = 'page purged: ' || d.slug
@@ -183,10 +271,23 @@ async function retireFacts(engine: Engine, pages: ReadonlyArray<PurgedPage>, pur
        SELECT $3::uuid, slug, source_id, array_agg(id ORDER BY id) FROM retired GROUP BY slug, source_id
        RETURNING 1
      )
-     SELECT count(*)::int AS n FROM retired`,
+     SELECT id::text AS id FROM retired`,
     params,
   );
-  return r.rows[0]?.n ?? 0;
+  return r.rows.map((row) => row.id);
+}
+
+/**
+ * Inside the purge transaction, before the page rows go: retire the facts,
+ * remove what synthesis derived from the pages, and tombstone their content
+ * when asked.
+ */
+async function retireDerived(tx: Engine, pages: ReadonlyArray<PurgedPage>, purgeId: string, tombstone: boolean) {
+  const factIds = await retireFacts(tx, pages, purgeId) as string[];
+  const synthesis = pages.length === 0 ? { ...NO_SYNTHESIS }
+    : await applyDerivedCleanup(tx, await planDerivedCleanup(tx, synthesisScope(pages, factIds)), purgeId);
+  const tombstoned = tombstone ? await tombstonePages(tx, pages, purgeId) : 0;
+  return { facts_retired: factIds.length, synthesis, tombstoned };
 }
 
 /**
@@ -227,7 +328,10 @@ export async function purgeDeletedPages(
       return {
         count: 0, slugs: [], blocked: [], ttl_hours: olderThanHours,
         ...(await leftovers(engine, planned, false)),
-        facts_retired: await retireFacts(engine, plan.rows, null),
+        facts_retired: await retireFacts(engine, plan.rows, null) as number,
+        synthesis: plan.rows.length === 0 ? { ...NO_SYNTHESIS }
+          : plannedSynthesis(await planDerivedCleanup(engine, synthesisScope(plan.rows, []))),
+        tombstoned: 0,
         dry_run: true, planned, plan_hash: planHash,
       };
     }
@@ -255,7 +359,7 @@ export async function purgeDeletedPages(
         `SELECT slug, source_id FROM pages WHERE ${expiredWhere} ORDER BY slug FOR UPDATE`,
         params,
       );
-      const factsRetired = await retireFacts(tx, locked.rows, purgeId);
+      const derived = await retireDerived(tx, locked.rows, purgeId, opts.tombstone === true);
       const r = await tx.query<{ slug: string }>(
         `DELETE FROM pages WHERE slug = ANY($1::text[]) RETURNING slug`,
         [locked.rows.map((row) => row.slug)],
@@ -263,7 +367,7 @@ export async function purgeDeletedPages(
       const slugs = r.rows.map((row) => row.slug).sort();
       return {
         count: slugs.length, slugs, blocked: [], ttl_hours: olderThanHours,
-        ...(await leftovers(tx, slugs, true)), facts_retired: factsRetired,
+        ...(await leftovers(tx, slugs, true)), ...derived,
       };
     });
   } catch (err) {
@@ -281,6 +385,8 @@ export async function purgeDeletedPages(
   const blocked: Array<{ slug: string; reason: string }> = [];
   const removed: Leftovers = { ...NO_LEFTOVERS };
   let factsRetired = 0;
+  let tombstoned = 0;
+  const synthesis: DerivedCleanupResult = { ...NO_SYNTHESIS };
   for (const { slug, deleted_at: deletedAt } of expired.rows) {
     try {
       // Same predicate again, pinned to the deletion the scan saw (and so to
@@ -298,19 +404,27 @@ export async function purgeDeletedPages(
           rowParams,
         );
         if (locked.rows.length === 0) return null;
-        const retired = await retireFacts(tx, locked.rows, purgeId);
+        const derived = await retireDerived(tx, locked.rows, purgeId, opts.tombstone === true);
         await tx.query(`DELETE FROM pages WHERE slug = $1`, [slug]);
-        return { ...(await leftovers(tx, [slug], true)), facts_retired: retired };
+        return { ...(await leftovers(tx, [slug], true)), ...derived };
       });
       if (gone) {
         slugs.push(slug);
         for (const [key] of LEFTOVER_TABLES) removed[key] += gone[key];
         factsRetired += gone.facts_retired;
+        tombstoned += gone.tombstoned;
+        for (const key of Object.keys(synthesis) as Array<keyof DerivedCleanupResult>) synthesis[key] += gone.synthesis[key];
       }
     } catch (err) {
       if ((err as { code?: string })?.code !== FOREIGN_KEY_VIOLATION) throw err;
       blocked.push({ slug, reason: "still referenced by a row that does not cascade" });
     }
   }
-  return { count: slugs.length, slugs, blocked, ttl_hours: olderThanHours, ...removed, facts_retired: factsRetired };
+  return { count: slugs.length, slugs, blocked, ttl_hours: olderThanHours, ...removed, facts_retired: factsRetired, synthesis, tombstoned };
+}
+
+/** Clear the purge tombstones of `slug` in `sourceId`, so its old text can be written again. Returns how many went. */
+export async function clearPageTombstones(engine: Engine, slug: string, sourceId: string): Promise<number> {
+  const r = await engine.query(`DELETE FROM page_purges WHERE source_id = $1 AND slug = $2 RETURNING 1`, [sourceId, slug]);
+  return r.rows.length;
 }

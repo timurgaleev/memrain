@@ -615,6 +615,31 @@ UPDATE entity_facts
 Restored facts show in recall again at once, still naming the purged page as
 their source.
 
+Facts about a purged page go too when their own source page does not survive
+either: a fact whose entity is the page and whose source page is gone is
+retired. A fact about the page that names no source page was stated directly
+and stays, as do ontology observations (a `dimension` such as employer or
+location) and facts another surviving page holds.
+
+What synthesis derived from a purged page or document goes in the same
+transaction, since none of it has a foreign key to its source: the atoms and
+takes distilled from it, the atom pages published from it, and the
+contradiction rows that snapshot a retired fact or take. A concept narrated
+over a purged atom is rebuilt from the members it keeps, with a deterministic
+narrative and its member hash cleared so the next concepts run narrates it
+again; a concept left with no live member is retired and its page hidden, and
+it comes back once live atoms carry the tag again. Atom and concept pages
+someone edited keep their text. The result reports these counts as
+`synthesis`.
+
+`purge_deleted_pages` with named `slugs` is the owner's purge of those pages:
+it also records the content hash of each page and of every version it kept in
+`page_purges` (reported as `tombstoned`). A write of that content under any
+slug of the same source is then refused (`invalid_params`), so a connector
+resync, a re-import or a restored snapshot cannot bring the text back; a
+connector holds the one item and syncs the rest. The TTL purge leaves no
+tombstone. `memrain unpurge <slug> [--source ID]` clears a page's tombstones.
+
 `reindex --reconcile-deletes` soft-deletes documents whose file is gone. It
 refuses when the vault root is missing or not a directory, and when more than
 50 documents, or more than a quarter of the live documents under the root
@@ -942,6 +967,28 @@ page and soft-deletes only proven stale automatic pages. Manual edits and
 ambiguous legacy pages are held, not guessed from titles or footers. Page
 history remains intact. Apply exits 1 when any targets are held or the plan is
 truncated; a stale plan requires a fresh preview.
+
+```text
+memrain purge-leftovers
+memrain purge-leftovers --apply --plan-hash HASH64 --export FILE
+memrain purge-leftovers restore --from FILE
+```
+
+`purge-leftovers` previews what purges that ran before synthesis cleanup left
+behind: atoms, atom pages, takes and contradiction rows whose source document
+no longer exists (page slugs are left to the page purge, since a rename moves a
+page without its takes), the concepts narrated over them (rebuilt or retired as a purge does
+now), and live facts written on a page that is gone. Facts that only name a
+gone page as their source, with no purge receipt, are listed and kept. The
+preview prints every row with its source, action and reason, and `plan_hash`;
+`doctor` reports the same counts as `purge-leftovers`. Apply re-plans inside
+one transaction, refuses a different hash, writes every row it is about to
+change to `FILE` (a new file, mode 0600), and then applies. The synthesis
+tables have no soft delete, so that export is the undo: `restore --from FILE`
+puts the rows, the pages' earlier text and the retired facts back. It refuses
+when a page or concept it touched changed since the apply, and works only
+while the pages it hid are still soft-deleted (the 30-day page TTL). Search
+mirrors of the touched pages are rebuilt by the cycle's mirror phase.
 
 ```text
 memrain erase forgotten --source SOURCE [--fact-ids ID1,ID2] [--deleted-pages SLUG1,SLUG2]

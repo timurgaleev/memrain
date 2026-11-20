@@ -44,6 +44,7 @@ import { runImport } from "./commands/import.ts";
 import { runMirrorAdopt } from "./commands/mirror-adopt.ts";
 import { runErase } from "./commands/erase.ts";
 import { runAtomsRetire } from "./commands/atoms-retire.ts";
+import { runPurgeLeftovers, runUnpurge } from "./commands/purge-leftovers.ts";
 import { runBackupStatus } from "./commands/backup.ts";
 import { runEvalPrune } from "./commands/eval-prune.ts";
 import { runApplyMigrations } from "./commands/apply-migrations.ts";
@@ -119,6 +120,9 @@ function printUsage(): void {
   console.log("  import --dir DIR --source ID [--apply --plan-hash HASH]  preview create-only page import; indexing deferred");
   console.log("  mirror-adopt --source ID [--limit N] [--apply --plan-hash HASH]  preview proven mirror ownership repair");
   console.log("  atoms-retire --source-ref DOC --completed-hash HASH16 [--apply --plan-hash HASH64]  preview proven stale atom pages");
+  console.log("  purge-leftovers [--apply --plan-hash HASH64 --export FILE]  preview what purged sources left in synthesis and facts");
+  console.log("  purge-leftovers restore --from FILE  undo an apply from its export");
+  console.log("  unpurge <slug> [--source ID]  clear a purged page's tombstones so its text can be written again");
   console.log("  erase forgotten --source ID [--fact-ids CSV] [--deleted-pages CSV] [--apply --plan-hash HASH]");
   console.log("  erase chat --owner KEY [--apply]  preview, then delete one owner's chat threads");
   console.log("                               preview explicit database erasure of forgotten facts/deleted pages");
@@ -1168,6 +1172,17 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (positional.length) throw new Error("atoms-retire: use --source-ref and --completed-hash");
       return runAtomsRetire({ sourceRef: values.get("--source-ref") ?? "", completedHash: values.get("--completed-hash") ?? "",
         apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
+    }
+    case "purge-leftovers": {
+      if (positional.length > 1 || (positional.length === 1 && positional[0] !== "restore")) {
+        throw new Error("purge-leftovers: use purge-leftovers [--apply --plan-hash H --export FILE] or purge-leftovers restore --from FILE");
+      }
+      return runPurgeLeftovers({ ...(positional[0] === "restore" ? { sub: "restore" as const, from: values.get("--from") } : {}),
+        apply: flags.has("--apply"), planHash: values.get("--plan-hash"), exportPath: values.get("--export") });
+    }
+    case "unpurge": {
+      if (positional.length !== 1) throw new Error("unpurge: name one slug");
+      return runUnpurge({ slug: positional[0]!, source: values.get("--source") });
     }
     case "erase": {
       if (positional.length === 1 && positional[0] === "chat") {

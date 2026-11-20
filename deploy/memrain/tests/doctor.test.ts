@@ -150,6 +150,7 @@ describe("doctor", () => {
       "person-name-duplicates",
       "pglite",
       "planner-stats",
+      "purge-leftovers",
       "quarantined-pages",
       "queue-health",
       "redaction-markers",

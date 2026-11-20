@@ -32,6 +32,7 @@ let atomCounter = 0;
 async function seedAtom(concepts: string[], title = `atom-${atomCounter}`): Promise<number> {
   atomCounter += 1;
   const key = `k-${atomCounter}`;
+  await engine.query("INSERT INTO documents (id, source_path, source_id) VALUES ('d1', '/vault/d1.md', 'default') ON CONFLICT DO NOTHING");
   const { rows } = await engine.query<{ id: number }>(
     `INSERT INTO synth_atoms (atom_key, source_ref, source_hash, title, body, concepts, model_id)
      VALUES ($1, 'd1', 'h1', $2, 'body', $3::jsonb, 'm') RETURNING id`,

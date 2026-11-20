@@ -1478,12 +1478,12 @@ Enqueue one paid chronicle-extract job per eligible scoped conversation page, ex
 
 Scope: admin. Effect: writes, destructive.
 
-HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days). Cascades versions, aliases and links; deletes raw_data, tags and redirects to purged slugs, with per-table counts. Returns reaped slugs, count and ttl_hours. Needs admin scope in the owning source or the internal token; the static public bearer is forbidden.
+HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days). Cascades versions, aliases and links; deletes raw_data, tags and redirects to purged slugs, with per-table counts; retires facts written on or about them and what synthesis derived from them. Returns reaped slugs, count and ttl_hours. Needs admin scope in the owning source or the internal token; the static public bearer is forbidden.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `older_than_hours` | number (≥ 0) | no | Age cutoff in hours. Pages soft-deleted longer ago than this are reaped. Default 720 (30 days). |
-| `slugs` | string[] | no | Only these slugs, and only those soft-deleted past the cutoff. Omit to reap every expired page. |
+| `slugs` | string[] | no | Only these slugs, and only those soft-deleted past the cutoff; their text is tombstoned so no later write brings it back (memrain unpurge clears it). Omit to reap every expired page. |
 | `dry_run` | boolean | no | Reap nothing; return `planned` (the slugs a real run would reap now) and its `plan_hash`. |
 | `expected_plan_hash` | string | no | The `plan_hash` of an earlier dry run. The purge is refused unless the plan still hashes the same, so exactly the reviewed pages go. |
 

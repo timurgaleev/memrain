@@ -9,6 +9,7 @@
  */
 import type { Engine } from "./engine/interface.ts";
 import { bumpDocumentClock } from "./generation.ts";
+import { applyDerivedCleanup, planDerivedCleanup, type DerivedCleanupResult } from "./synthesis/derived-cleanup.ts";
 
 /** Hours a soft-deleted / archived document survives before hard purge. */
 export const SOFT_DELETE_TTL_HOURS = 72;
@@ -167,12 +168,16 @@ export async function restoreSource(
 export interface PurgeResult {
   purged_deleted: number;
   purged_archived: number;
+  /** What synthesis derived from the purged documents, removed with them. */
+  synthesis?: DerivedCleanupResult;
 }
 
 /**
  * Hard-delete documents past their TTL: soft-deleted older than `ttlHours`, and
  * archived whose `archive_expires_at` has passed. Cascades to chunks/embeddings
- * via FK. Set-based; safe to run every cycle.
+ * via FK; what synthesis derived from them (atoms, their pages, takes,
+ * concepts) has no foreign key and goes in the same transaction
+ * (synthesis/derived-cleanup.ts). Set-based; safe to run every cycle.
  */
 export async function purgeExpiredDocuments(
   engine: Engine,
@@ -180,6 +185,7 @@ export async function purgeExpiredDocuments(
 ): Promise<PurgeResult> {
   let purgedDeleted = 0;
   let purgedArchived = 0;
+  let synthesis: DerivedCleanupResult | undefined;
   await engine.transaction(async (tx) => {
     const d = await tx.query<{ id: string }>(
       `DELETE FROM documents
@@ -201,9 +207,13 @@ export async function purgeExpiredDocuments(
         RETURNING id`,
     );
     purgedArchived = a.rows.length;
-    if (purgedDeleted + purgedArchived > 0) await bumpDocumentClock(tx);
+    if (purgedDeleted + purgedArchived > 0) {
+      const docIds = [...d.rows, ...a.rows].map((row) => row.id);
+      synthesis = await applyDerivedCleanup(tx, await planDerivedCleanup(tx, { docIds, pageSlugs: [] }));
+      await bumpDocumentClock(tx);
+    }
   });
-  return { purged_deleted: purgedDeleted, purged_archived: purgedArchived };
+  return { purged_deleted: purgedDeleted, purged_archived: purgedArchived, ...(synthesis ? { synthesis } : {}) };
 }
 
 /** Build a WHERE fragment + params for a source-or-document target. */

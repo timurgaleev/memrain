@@ -65,6 +65,31 @@ marked; this section is the one that stands.
   Code callers without a visible starting definition retain the stricter
   identity boundary.
 
+## Follow-ups from the purge cleanup of synthesis output
+
+- **Restore rebuilds search mirrors only on the next mirror run.** The
+  purge-leftovers apply drops the search documents of the atom and concept
+  pages it hides or rewrites; `restore` puts the pages back but not those
+  documents, so restored pages are out of search until the cycle's mirror
+  phase runs. Re-mirror the restored slugs inside `restore` when a storage
+  handle is available.
+- **Connector retention still misses legacy atom pages.** Retention finds the
+  atom pages a deleted connector page published through
+  `compiled_truth.atom_origin` only; pages written before that field existed
+  carry it in the `Source:` line instead (derived-cleanup matches both).
+  Use the shared matcher in `publishedSynthesisPages`.
+- **Restore trusts `generated_at` to tell a concept was rewritten.** A link
+  added to a concept after a purge-leftovers apply without a new
+  `generated_at` would be kept while the older narrative and count come back;
+  only the concepts phase adds links today, and it always stamps the time.
+- **Contradiction rows carry no source.** A page-kind contradiction is matched
+  by slug alone, in retention and in the purge cleanup alike, so a slug reused
+  in another source could take the other source's row with it.
+- **Facts drawn from chunks that no longer exist.** Live facts whose
+  `source_chunk_id` names a chunk that is gone are not purge leftovers by
+  themselves (re-chunking changes chunk ids), so purge-leftovers does not
+  touch them; decide whether a re-index should carry or retire them.
+
 ## Follow-ups from the wallet retry change
 
 - In-process `BudgetTracker` budgets (contextual chunk context, synthesis,

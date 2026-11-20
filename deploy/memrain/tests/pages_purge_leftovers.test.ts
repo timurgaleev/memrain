@@ -174,7 +174,7 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
           waiting = (await forgetter.query(
             `SELECT 1 FROM pg_stat_activity
               WHERE datname = current_database() AND pid <> pg_backend_pid()
-                AND wait_event_type = 'Lock' AND query ILIKE '%fact_purge_receipts%'`,
+                AND wait_event_type = 'Lock' AND query ILIKE '%FROM entity_facts f%'`,
           )).rows.length > 0;
         }
         expect(waiting).toBe(true);

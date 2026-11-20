@@ -81,6 +81,27 @@ function conceptsBudgetUsd(): number {
   return n;
 }
 
+/** The writer of every concept page version this phase publishes. */
+export const CONCEPT_WRITER = "synthesize-concepts";
+
+/** The body of a concept page: the narrative and up to ten member titles. */
+export function conceptPageBody(narrative: string, titles: readonly string[]): string {
+  const mentions = titles.slice(0, 10).map((t) => `- ${t}`).join("\n");
+  return `${narrative}\n\n## Atoms (${titles.length})\n${mentions}\n`;
+}
+
+/**
+ * Whether the atom `a` (with its document LEFT JOINed as `d`) still has a live
+ * source: a document that exists and is not deleted, or a live page.
+ */
+export function atomSourceLiveSql(a: string, d: string): string {
+  // scope: operator-only synthesis rows have no source axis; this only asks whether the source is still live
+  return `CASE ${a}.source_kind
+            WHEN 'document' THEN ${d}.id IS NOT NULL AND ${d}.deleted_at IS NULL
+            WHEN 'page' THEN EXISTS (SELECT 1 FROM pages sp WHERE sp.slug = ${a}.source_ref AND sp.deleted_at IS NULL)
+            ELSE true END`;
+}
+
 const TIER_T1_MIN = 10;
 const TIER_T2_MIN = 5;
 const TIER_T3_MIN = 2;
@@ -140,7 +161,7 @@ interface ConceptGroup {
   bodies: string[];
 }
 
-function tierFor(count: number): ConceptTier {
+export function tierFor(count: number): ConceptTier {
   if (count >= TIER_T1_MIN) return "T1";
   if (count >= TIER_T2_MIN) return "T2";
   return "T3";
@@ -163,7 +184,7 @@ function parseConcepts(raw: unknown): string[] {
 }
 
 /** A concept's display name: the last slug segment, hyphens as spaces. */
-function conceptName(slug: string): string {
+export function conceptName(slug: string): string {
   return (slug.split("/").pop() ?? slug).replace(/-/g, " ");
 }
 
@@ -173,7 +194,7 @@ function conceptName(slug: string): string {
  * share their atoms, and without the name their pages would be byte-identical
  * and their search text would never say which concept it is.
  */
-export function deterministicNarrative(group: ConceptGroup): string {
+export function deterministicNarrative(group: Pick<ConceptGroup, "slug" | "tier" | "titles">): string {
   const n = group.titles.length;
   const top = group.titles.slice(0, 5).map((t) => `- ${t}`).join("\n");
   return `${group.tier} concept "${conceptName(group.slug)}". ${n} atom${n === 1 ? "" : "s"} reference this.\nTop mentions:\n${top}`;
@@ -209,9 +230,12 @@ export async function synthesizeConceptsPhase(
     errors: [],
   };
 
+  // An atom whose source is gone or deleted names nothing a reader can still
+  // see, so it backs no concept; a page atom needs its page live.
   const { rows } = await engine.query<AtomRow>(
     `SELECT a.id, a.title, a.body, a.concepts, a.source_hash, d.frontmatter AS source_frontmatter FROM synth_atoms a
-       LEFT JOIN documents d ON a.source_kind = 'document' AND d.id = a.source_ref`,
+       LEFT JOIN documents d ON a.source_kind = 'document' AND d.id = a.source_ref
+      WHERE ${atomSourceLiveSql("a", "d")}`,
   );
   const currentRows = rows.filter((row) => {
     const completion = readAtomCompletion(row.source_frontmatter ?? {});
@@ -249,10 +273,14 @@ export async function synthesizeConceptsPhase(
   let llmCalls = 0;
   for (const group of eligible) {
     const pageSlug = `concepts/${slugifyTitle(group.slug)}`;
-    const page = await engine.query<{ deleted_at: string | null }>(
-      "SELECT deleted_at FROM pages WHERE slug = $1", [pageSlug],
+    const page = await engine.query<{ deleted_at: string | null; deleted_by: string | null }>(
+      `SELECT p.deleted_at, (SELECT v.written_by FROM page_versions v WHERE v.slug = p.slug
+                               ORDER BY v.version_n DESC LIMIT 1) AS deleted_by
+         FROM pages p WHERE p.slug = $1`, [pageSlug],
     );
-    if (page.rows[0]?.deleted_at != null) {
+    // A page hidden because a purge took every atom it was built from comes
+    // back rebuilt from the current members; one a person deleted stays.
+    if (page.rows[0]?.deleted_at != null && page.rows[0].deleted_by !== CONCEPT_WRITER) {
       result.skippedDeleted += 1;
       continue;
     }
@@ -358,16 +386,15 @@ export async function synthesizeConceptsPhase(
     // cycle's mirror phase indexes pages). Idempotent putPage upsert; a page
     // failure never loses the synth_concepts row.
     if (writePages && opts.storage) {
-      const mentions = group.titles.slice(0, 10).map((t) => `- ${t}`).join("\n");
       try {
         const pageWrite = await putPage(opts.storage, {
           slug: pageSlug,
           type: "concept",
           title,
-          markdown_body: `${narrative}\n\n## Atoms (${group.titles.length})\n${mentions}\n`,
-          written_by: "synthesize-concepts",
+          markdown_body: conceptPageBody(narrative, group.titles),
+          written_by: CONCEPT_WRITER,
           written_by_principal: "operator",
-          onlyOverwriteWriter: "synthesize-concepts",
+          onlyOverwriteWriter: CONCEPT_WRITER,
         });
         if (pageWrite.held) result.pagesHeld += 1;
         else result.pagesWritten += 1;

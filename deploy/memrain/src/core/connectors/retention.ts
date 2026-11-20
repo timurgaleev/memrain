@@ -62,6 +62,7 @@ import { logIngest } from "../ingest-log.ts";
 import { OperationError } from "../operation-error.ts";
 import { deadlockSafeTransaction } from "../retry.ts";
 import { slugifyTitle } from "../synthesis/atoms.ts";
+import { deleteSynthesisDerived } from "../synthesis/derived-cleanup.ts";
 import { shortHash, SOURCE_KIND_FOR, type ConnectorDataKind } from "./model.ts";
 import {
   DELETION_STATES,
@@ -151,42 +152,6 @@ async function count(tx: Engine, sql: string, params: unknown[]): Promise<number
 }
 
 /**
- * Delete what synthesis distilled from the documents `docIds` of page `slug`,
- * inside `tx`, adding to `counts`: atoms, takes, concepts narrated over a
- * doomed atom, and the contradiction rows that snapshot one of `factIds`, a
- * doomed take or the page. Synthesis keeps all of it by reference, with no
- * foreign key, so nothing else would remove it; a concepts run rebuilds a
- * concept from the atoms that remain. Returns the concepts deleted.
- */
-async function deleteSynthesisDerived(tx: Engine, docIds: readonly string[], slug: string, factIds: readonly string[], counts: DeleteCounts): Promise<string[]> {
-  const concepts = (await tx.query<{ concept_slug: string }>(
-    `DELETE FROM synth_concepts WHERE concept_slug IN (
-       SELECT ca.concept_slug FROM synth_concept_atoms ca JOIN synth_atoms a ON a.id = ca.atom_id
-        WHERE a.source_kind = 'document' AND a.source_ref = ANY($1::text[]))
-     RETURNING concept_slug`,
-    [[...docIds]])).rows.map(r => r.concept_slug);
-  counts.concepts += concepts.length;
-  counts.atoms += await count(tx,
-    `WITH d AS (DELETE FROM synth_atoms WHERE source_kind = 'document' AND source_ref = ANY($1::text[]) RETURNING 1)
-     SELECT count(*)::int AS n FROM d`,
-    [[...docIds]]);
-  const takeKeys = (await tx.query<{ take_key: string }>(
-    `DELETE FROM synth_takes WHERE source_ref = ANY($1::text[]) RETURNING take_key`,
-    [[...docIds, slug]])).rows.map(r => r.take_key);
-  counts.takes += takeKeys.length;
-  const pairs = (await tx.query<{ pair_key: string }>(
-    `DELETE FROM synth_contradictions
-      WHERE (a_kind = 'fact' AND a_ref = ANY($1::text[])) OR (b_kind = 'fact' AND b_ref = ANY($1::text[]))
-         OR (a_kind = 'take' AND a_ref = ANY($2::text[])) OR (b_kind = 'take' AND b_ref = ANY($2::text[]))
-         OR (a_kind = 'page' AND a_ref = $3) OR (b_kind = 'page' AND b_ref = $3)
-     RETURNING pair_key`,
-    [[...factIds], takeKeys, slug])).rows.map(r => r.pair_key);
-  counts.contradictions += pairs.length;
-  if (pairs.length > 0) await tx.query(`DELETE FROM synth_contradiction_verdicts WHERE pair_key = ANY($1::text[])`, [pairs]);
-  return concepts;
-}
-
-/**
  * Delete one page and everything derived from it, inside `tx`, adding to
  * `counts`. Returns the ids of the page's search documents.
  */
@@ -223,7 +188,7 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
     `WITH d AS (DELETE FROM links WHERE source_slug = $1 OR origin_slug = $1 RETURNING 1)
      SELECT count(*)::int AS n FROM d`,
     [slug]);
-  const concepts = await deleteSynthesisDerived(tx, docIds, slug, factIds, counts);
+  const concepts = await deleteSynthesisDerived(tx, docIds, [slug], factIds, counts);
   counts.documents += await count(tx,
     // scope: upstream document ids come from the source-scoped read above
     `WITH d AS (DELETE FROM documents WHERE id = ANY($1::text[]) RETURNING 1) SELECT count(*)::int AS n FROM d`,
@@ -632,7 +597,7 @@ async function softDeletePages(tx: Engine, slugs: readonly string[], sourceId: s
       `WITH d AS (DELETE FROM timeline_events WHERE slug = $1 OR source_chunk_id = ANY($2::text[]) RETURNING 1)
        SELECT count(*)::int AS n FROM d`,
       [slug, chunkIds]);
-    concepts.push(...await deleteSynthesisDerived(tx, ids, slug, [...new Set([...factIds, ...dropped])], counts));
+    concepts.push(...await deleteSynthesisDerived(tx, ids, [slug], [...new Set([...factIds, ...dropped])], counts));
     counts.documents += await count(tx,
       // scope: upstream document ids come from the source-scoped read above
       `WITH d AS (DELETE FROM documents WHERE id = ANY($1::text[]) RETURNING 1) SELECT count(*)::int AS n FROM d`,

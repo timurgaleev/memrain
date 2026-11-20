@@ -1184,7 +1184,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "purge_deleted_pages",
     scope: "admin",
     description:
-      "HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days). Cascades versions, aliases and links; deletes raw_data, tags and redirects to purged slugs, with per-table counts. Returns reaped slugs, count and ttl_hours. Needs admin scope in the owning source or the internal token; the static public bearer is forbidden.",
+      "HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days). Cascades versions, aliases and links; deletes raw_data, tags and redirects to purged slugs, with per-table counts; retires facts written on or about them and what synthesis derived from them. Returns reaped slugs, count and ttl_hours. Needs admin scope in the owning source or the internal token; the static public bearer is forbidden.",
     params: {
       older_than_hours: num({
         minimum: 0,
@@ -1192,7 +1192,7 @@ export const OPERATIONS: readonly Operation[] = [
       }),
       slugs: arr({
         items: { type: "string" },
-        description: "Only these slugs, and only those soft-deleted past the cutoff. Omit to reap every expired page.",
+        description: "Only these slugs, and only those soft-deleted past the cutoff; their text is tombstoned so no later write brings it back (memrain unpurge clears it). Omit to reap every expired page.",
       }),
       dry_run: bool({
         description: "Reap nothing; return `planned` (the slugs a real run would reap now) and its `plan_hash`.",

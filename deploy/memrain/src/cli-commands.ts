@@ -49,6 +49,8 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "watch": bare,
   "cycle": bare,
   "atoms-retire": bare,
+  "purge-leftovers": subs("restore"),
+  "unpurge": free,
   "erase": subs("forgotten", "chat"),
   "extract": bare,
   "extract-conversation-facts": free,
