@@ -390,6 +390,9 @@ for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) descri
     await db.storage.engine().query("UPDATE pages SET deleted_at = now() WHERE slug = 'me/gone'");
     await putPage(db.storage, { slug: "other/secret", type: "note", title: "Other", markdown_body: "OTHER_BODY", source_id: "other" });
     await putPage(db.storage, { slug: "life/diary/2026-11-01", type: "journal", title: "Diary", markdown_body: "DIARY_BODY", allowAdHocType: true });
+    await putPage(db.storage, { slug: "me/held", type: "note", title: "Held", markdown_body: "HELD_BODY" });
+    await db.storage.engine().query(`INSERT INTO documents(id,source_path,title,source_id,frontmatter)
+      VALUES('core-held-doc','page://me/held','Held','default','{"quarantine":true}'::jsonb)`);
     await putPage(db.storage, { slug: "projects/acme", type: "note", title: "Acme", markdown_body: "a" });
   });
   afterAll(async () => {
@@ -419,9 +422,9 @@ for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) descri
     expect(p.cards.map((c) => c.slug)).toEqual(["projects/acme"]);
   });
 
-  it("leaves no trace of deleted, out-of-scope, fenced or redacted core pages", async () => {
+  it("leaves no trace of deleted, out-of-scope, fenced, quarantined or redacted core pages", async () => {
     const plain = await pack({ sourceIds: ["default"], remote: true, visibility: ["world"] });
-    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/gone,other/secret,life/diary/2026-11-01,not/a-page";
+    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/gone,other/secret,life/diary/2026-11-01,me/held,not/a-page";
     expect(await pack({ sourceIds: ["default"], remote: true, visibility: ["world"] })).toEqual(plain);
     process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/profile";
     expect(await pack({ redact: true })).not.toHaveProperty("core");
