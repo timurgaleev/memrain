@@ -165,7 +165,8 @@ async function numberCitations(
   const engine = storage.engine();
   const out: ChatCitation[] = [];
   const quotes = citedQuotes(result);
-  const citedRefs = (result.synthesis?.citations ?? []).map((c) => c.ref);
+  // A quote the answer gave a dropped citation is claimed too: it goes to no other page.
+  const citedRefs = [...(result.synthesis?.citations ?? []).map((c) => c.ref), ...(result.droppedCitations ?? [])];
   for (const c of result.synthesis?.citations ?? []) {
     const n = out.length + 1;
     if (c.kind === "take") {
