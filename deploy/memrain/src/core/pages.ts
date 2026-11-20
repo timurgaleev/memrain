@@ -18,7 +18,7 @@ import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
 import { bumpDocumentClock, bumpPageGeneration } from "./generation.ts";
 import { pageSourcePath, pageTruthSourcePath } from "./page-index.ts";
-import { wellFormJsonbValue } from "./well-form.ts";
+import { stripNul, wellFormJsonbValue } from "./well-form.ts";
 import { extractAliasNorms, setPageAliases } from "./page-aliases.ts";
 import { reconnectWantedLinks } from "./wanted-links.ts";
 import { resolveSlugWithAlias, setSlugAlias } from "./slug-aliases.ts";
@@ -455,11 +455,38 @@ async function reconnectWithStoredAliases(tx: Engine, slug: string, sourceId: st
   await reconnectWantedLinks(tx, slug, sourceId, aliases.rows.map((a) => a.alias_norm));
 }
 
+/**
+ * Postgres text and jsonb cannot hold U+0000, so one pasted NUL used to fail
+ * the whole write. It is removed from the text this write authors; old_text is
+ * left alone because stored text never holds a NUL, so it simply fails to match.
+ */
+function withoutPageTextNul(input: PageInput): PageInput {
+  let removed = 0;
+  const strip = (s: string): string => {
+    const r = stripNul(s);
+    removed += r.removed;
+    return r.text;
+  };
+  const out: PageInput = {
+    ...input,
+    ...(typeof input.title === "string" ? { title: strip(input.title) } : {}),
+    ...(typeof input.markdown_body === "string" ? { markdown_body: strip(input.markdown_body) } : {}),
+    ...(typeof input.appendContent === "string" ? { appendContent: strip(input.appendContent) } : {}),
+    ...(input.edits !== undefined ? { edits: input.edits.map((e) => ({ ...e, new_text: strip(e.new_text) })) } : {}),
+    ...(input.compiled_truth !== undefined ? { compiled_truth: wellFormJsonbValue(input.compiled_truth) as Record<string, unknown> } : {}),
+  };
+  if (removed > 0) {
+    console.warn(`[nul_removed] page '${input.slug}': removed ${removed} U+0000 character(s); the page is stored without them`);
+  }
+  return out;
+}
+
 export async function putPage(
   storage: Storage,
-  input: PageInput,
+  rawInput: PageInput,
 ): Promise<PutResult> {
-  validateSlug(input.slug);
+  validateSlug(rawInput.slug);
+  const input = withoutPageTextNul(rawInput);
   const changeReason = normalizeChangeReason(input.change_reason);
   if (input.takeMutation && (input.expectedVersion === undefined || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 1 ||
       input.markdown_body !== undefined || input.appendContent !== undefined || input.edits !== undefined || input.outsideText !== undefined ||

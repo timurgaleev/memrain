@@ -42,6 +42,17 @@ export function wellFormForJsonb(s: string): string {
 }
 
 /**
+ * Remove U+0000 from authored text and report how many went. Page and timeline
+ * writes call it before the secret scan, so a NUL inside a credential cannot
+ * split it out of the scanner's sight and then vanish in storage.
+ */
+export function stripNul(s: string): { text: string; removed: number } {
+  if (!s.includes(NUL)) return { text: s, removed: 0 };
+  const text = s.split(NUL).join("");
+  return { text, removed: s.length - text.length };
+}
+
+/**
  * Sanitize a string bound to a plain TEXT column parameter. Postgres TEXT
  * rejects the same two shapes as jsonb — U+0000 ("invalid byte sequence for
  * encoding UTF8: 0x00") and lone surrogates — so the sanitization is

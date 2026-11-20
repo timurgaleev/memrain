@@ -18,6 +18,7 @@
 import type { Storage } from "./storage.ts";
 import { validateSlug } from "./pages.ts";
 import { guardFields } from "./secret-scan.ts";
+import { stripNul } from "./well-form.ts";
 import { OperationError, PageNotFoundError } from "./operation-error.ts";
 import { isCalendarDate } from "./effective-date.ts";
 
@@ -149,14 +150,20 @@ export async function addTimelineEvent(
   input: AddTimelineEventInput,
 ): Promise<AddTimelineEventResult> {
   validateSlug(input.slug);
-  if (typeof input.event !== "string" || input.event.length === 0) {
+  // U+0000 cannot be stored in text; removed before the secret scan below.
+  const rawEvent = typeof input.event === "string" ? stripNul(input.event) : null;
+  if (rawEvent === null || rawEvent.text.length === 0) {
     throw new Error("event must be a non-empty string");
   }
   const occurred = normaliseOccurredAt(input.occurred_at);
   const chunkId = input.source_chunk_id ?? null;
   // mig079 columns — NOT NULL DEFAULT '' in the schema; normalize here so the
   // manual dedup key compares deterministically.
-  const rawDetail = typeof input.detail === "string" ? input.detail : "";
+  const strippedDetail = stripNul(typeof input.detail === "string" ? input.detail : "");
+  const rawDetail = strippedDetail.text;
+  if (rawEvent.removed + strippedDetail.removed > 0) {
+    console.warn(`[nul_removed] timeline event on '${input.slug}': removed ${rawEvent.removed + strippedDetail.removed} U+0000 character(s)`);
+  }
   const sourceLabel =
     typeof input.source_label === "string" ? input.source_label.trim() : "";
   // Tenant scope (mig047): stamp source_id only when provided so the NOT NULL
@@ -191,7 +198,7 @@ export async function addTimelineEvent(
     `timeline:${input.slug}`,
     sourceId,
     `timeline event on '${input.slug}'`,
-    { event: input.event, detail: rawDetail },
+    { event: rawEvent.text, detail: rawDetail },
   );
 
   // Manual/API events (no chunk id) dedup on the mig079 key (the wording
