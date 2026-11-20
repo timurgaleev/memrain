@@ -16,6 +16,7 @@ import {
   scanSecrets,
   shannonEntropy,
 } from "../src/core/secret-scan.ts";
+import { cpuMs } from "./helpers/cpu-time.ts";
 
 const ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const HEX = "0123456789abcdef";
@@ -285,16 +286,14 @@ describe("format and options", () => {
 });
 
 describe("linear time", () => {
-  /** Best-of-5 wall time of one scan, floored so sub-ms noise cannot fake a ratio. */
+  /**
+   * Best-of-5 CPU time of one scan, floored so sub-ms noise cannot fake a ratio.
+   * CPU time, not wall time: on a loaded machine a 20 ms run is preempted far
+   * more often than a 5 ms one, which pushed the wall-clock rate past 2.5.
+   */
   const time = (s: string) => {
     Bun.gc(true);
-    let best = Infinity;
-    for (let i = 0; i < 5; i++) {
-      const t = performance.now();
-      scanSecrets(s);
-      best = Math.min(best, performance.now() - t);
-    }
-    return Math.max(best, 2);
+    return Math.max(cpuMs(() => scanSecrets(s), { repeat: 5 }), 2);
   };
   const fill = (unit: string, n: number) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
   const families: Record<string, (n: number) => string> = {
@@ -322,10 +321,13 @@ describe("linear time", () => {
   for (const [name, make] of Object.entries(families)) {
     // Linear is 2x per doubling, quadratic 4x. The rate is taken over two
     // doublings (100 KB -> 400 KB) so one noisy sample cannot decide it.
+    // escape-assignment alone spends ~4 s of a CI runner's wall time here (its
+    // `\u003a` escapes cost ~1 us a character, linearly), so bun's 5 s
+    // default is no budget; the rate is what guards against a quadratic scan.
     it(`grows at most ~2.5x per doubling: ${name}`, () => {
       time(make(20_000));
       const [a, , c] = [100_000, 200_000, 400_000].map((n) => time(make(n)));
       expect(Math.sqrt(c! / a!)).toBeLessThan(2.5);
-    });
+    }, 30_000);
   }
 });

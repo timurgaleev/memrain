@@ -163,6 +163,11 @@ marked; this section is the one that stands.
 - A quoted value is still missed after more than 4096 consecutive colour codes
   (before it or between two of its characters). The run is bounded so Bun's
   regex JIT stays on its fast path; such input was never redacted before either.
+- Text made of repeated escaped assignments (`\"password\":\"\u003a%3D\ntoken%3D`)
+  scans linearly but at ~1 µs a character, about 8x the cost of other
+  adversarial input: 400 KB takes ~0.4 s locally and ~1 s on a CI runner.
+  Find which assignment alternative the `\u003a` escape sends down the slow
+  path before page bodies of that shape show up in write latency.
 
 ## Follow-ups from the Postgres CI speed-up
 

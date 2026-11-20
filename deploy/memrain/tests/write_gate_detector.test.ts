@@ -15,6 +15,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { detectInstructionLike, joinSpacedLetters, WRITE_GATE_DETECTOR_VERSION } from "../src/core/write-gate.ts";
+import { cpuMs } from "./helpers/cpu-time.ts";
 
 interface Case { id: string; text: string; family?: string }
 
@@ -92,11 +93,15 @@ describe("write-gate detector cost", () => {
     "a".repeat(200) + " ",
   ];
 
+  /**
+   * CPU time, not wall time: next to other test processes the ~1 MB runs were
+   * preempted far more than the ~100 KB ones and the ratio reached 36.
+   */
   function timeFor(text: string): number {
     detectInstructionLike([{ field: "body", text }]);
-    const t0 = performance.now();
-    for (let i = 0; i < 3; i++) detectInstructionLike([{ field: "body", text }]);
-    return (performance.now() - t0) / 3;
+    return cpuMs(() => {
+      for (let i = 0; i < 3; i++) detectInstructionLike([{ field: "body", text }]);
+    }, { repeat: 1 }) / 3;
   }
 
   /** Median of five timed runs, so one GC pause or a lucky warm run cannot swing a ratio. */
@@ -115,7 +120,7 @@ describe("write-gate detector cost", () => {
       // 10x the input costs ~10x the time when linear and ~100x when quadratic; the bound
       // matches the old 400x-per-100x gate (20x per decade), so it is no looser.
       expect(large / small).toBeLessThan(20);
-    });
+    }, 30_000); // ~3.5 s of wall time on a CI runner for the slowest seeds; the ratio is the guard
   }
 
   it("scans 100 KB of ordinary text within the budget", () => {
