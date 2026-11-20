@@ -153,7 +153,8 @@ class Adapter implements SyncAdapter {
         last = day;
         continue;
       }
-      const version = `${dayFingerprint(info, messages)}@${today}`;
+      // A capped read keeps a page that says so; the same messages read whole drop the notice.
+      const version = `${dayFingerprint(info, messages)}${capped ? ":capped" : ""}@${today}`;
       if (settled.get(id) !== version) {
         const item = await this.renderDay(ctx.client, info, day, messages, version, capped);
         if ("response" in item) return item;
