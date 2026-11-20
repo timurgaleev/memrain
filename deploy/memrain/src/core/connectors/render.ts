@@ -210,7 +210,8 @@ class Guard {
 
   /**
    * Text that can carry an online-meeting invitation (a mail body or subject,
-   * an event's description, title or place): its meeting credentials go first
+   * an event's description, title or place, a chat message, a meeting
+   * summary): its meeting credentials go first
    * (meeting-redact.ts), then it is guarded like any outside text.
    */
   invite(value: string | null | undefined): string {
@@ -440,7 +441,7 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
     // A thread reply posted on a later day stays with its thread and carries its own date.
     const stamp = at.slice(0, 10) === day.day ? at.slice(11, 16) : `${at.slice(0, 10)} ${at.slice(11, 16)}`;
     lines.push(`${stamp} ${g.person({ name: m.author.name, email: m.author.name ? null : m.author.email })}${m.threadId ? " (reply)" : ""}`);
-    const text = g.text(m.text).trim();
+    const text = g.invite(m.text).trim();
     bodies.push(text);
     lines.push(text === "" ? "_No text._" : text, "");
   }
@@ -472,7 +473,7 @@ export function renderMeeting(ctx: ConnectorContext, meeting: MeetingTranscript)
 
   const lines = [`# ${title}`, "", `Meeting · ${start}${end ? ` to ${end}` : ""}`, ""];
   if (meeting.participants.length) lines.push(`Participants: ${meeting.participants.map(p => g.person(p)).join(", ")}`, "");
-  const summary = g.text(meeting.summary).trim();
+  const summary = g.invite(meeting.summary).trim();
   if (summary) lines.push("## Summary", "", summary, "");
   if (meeting.actionItems.length) {
     lines.push("## Action items", "");

@@ -220,6 +220,20 @@ describe("chat", () => {
     expect(page.body).toContain("09:05 Carol Diaz (reply)");
     expect(page.truth).toMatchObject({ kind: "chat", trust: "untrusted", last_activity_at: "2026-11-10T09:05:00.000Z" });
   });
+
+  it("strips online-meeting credentials from a chat message, as from a mail or an event", () => {
+    const day: ChatDay = {
+      workspace: "acme", channelId: "19:abc@thread.v2", channelName: "standup", day: "2026-11-10",
+      messages: [{
+        id: "1", author: { name: "Bob Stone", email: null }, ts: "2026-11-10T09:00:00.000Z", threadId: null,
+        text: "Join here https://teams.microsoft.com/meet/311222333444555?p=Qw7er9Ty\nMeeting ID: 311 222 333 444 55\nPasscode: Zx8cv7Bn",
+      }],
+    };
+    const page = renderChatDay({ service: "teams_chat", accountLabel: ACCOUNT }, day);
+    for (const secret of ["311222333444555", "Qw7er9Ty", "311 222 333 444 55", "Zx8cv7Bn"]) expect([secret, page.body.includes(secret)]).toEqual([secret, false]);
+    expect(page.body).toContain("Join here [meeting link removed]");
+    expect(page.body).toMatch(/Passcode: \[removed\]/);
+  });
 });
 
 describe("meeting", () => {
@@ -240,6 +254,15 @@ describe("meeting", () => {
     expect(page.body).toContain("Bob Stone: sentence number 19999 with some words");
     expect(page.body).not.toContain("transcript truncated");
     expect(page.truth).toMatchObject({ kind: "meeting", trust: "untrusted", occurred_at: "2026-11-11T15:00:00.000Z" });
+  });
+
+  it("strips online-meeting credentials from the summary", () => {
+    const page = renderMeeting({ service: "teams_transcripts", accountLabel: ACCOUNT }, {
+      ...longMeeting([]),
+      summary: "Follow-up call: https://us02web.zoom.us/j/81234567890?pwd=Ab12Cd34Ef56\nMeeting ID: 812 3456 7890\nPasscode: 445566",
+    });
+    for (const secret of ["81234567890", "Ab12Cd34", "812 3456 7890", "445566"]) expect([secret, page.body.includes(secret)]).toEqual([secret, false]);
+    expect(page.body).toContain("Follow-up call: [meeting link removed]");
   });
 
   it("still cuts a transcript past its hard ceiling, with a marker", () => {
