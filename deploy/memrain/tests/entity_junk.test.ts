@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { isJunkEntityName, isJunkEntitySlug } from "../src/core/entity-junk.ts";
+import { isJunkConceptName, isJunkConceptSlug, isJunkEntityName, isJunkEntitySlug } from "../src/core/entity-junk.ts";
 import { writeExtractedFacts, type ExtractedFact } from "../src/core/facts-extract.ts";
 import { listFacts } from "../src/core/facts.ts";
 
@@ -95,5 +95,20 @@ describe("writeExtractedFacts", () => {
     for (const slug of ["team", "the-user", "42"]) {
       expect(await listFacts(storage, slug)).toHaveLength(0);
     }
+  });
+});
+
+describe("isJunkConceptSlug / isJunkConceptName", () => {
+  it("lets a topic noun be a concept, with or without a namespace or a leading article", () => {
+    for (const slug of ["meetings", "concepts/meetings", "the-meetings", "concepts/the-customers"]) expect([slug, isJunkConceptSlug(slug)]).toEqual([slug, false]);
+    expect(isJunkConceptName("The Meetings")).toBe(false);
+  });
+
+  it("refuses placeholders and a missing value without throwing", () => {
+    for (const slug of ["organization", "concepts/unknown", "n/a", "42"]) expect([slug, isJunkConceptSlug(slug)]).toEqual([slug, true]);
+    expect(isJunkConceptSlug(null)).toBe(true);
+    expect(isJunkConceptSlug(undefined)).toBe(true);
+    expect(isJunkConceptName(null)).toBe(true);
+    expect(isJunkConceptName(undefined)).toBe(true);
   });
 });

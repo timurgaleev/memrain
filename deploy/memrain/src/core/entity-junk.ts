@@ -127,15 +127,16 @@ const TOPIC_NOUNS: ReadonlySet<string> = new Set([
  * as concepts they stand.
  */
 export function isJunkConceptSlug(slug: string | null | undefined): boolean {
-  return isJunkEntitySlug(slug) && !isTopicNoun(slug!);
+  return isJunkEntitySlug(slug) && !isTopicNoun(slug);
 }
 
 /** The display-name side of isJunkConceptSlug. */
 export function isJunkConceptName(raw: string | null | undefined): boolean {
-  return isJunkEntityName(raw) && !isTopicNoun(raw!);
+  return isJunkEntityName(raw) && !isTopicNoun(raw);
 }
 
-function isTopicNoun(raw: string): boolean {
+function isTopicNoun(raw: string | null | undefined): boolean {
+  if (typeof raw !== "string") return false;
   const key = normalizeName(raw);
-  return TOPIC_NOUNS.has(key.slice(key.lastIndexOf("/") + 1).trim());
+  return TOPIC_NOUNS.has(key.slice(key.lastIndexOf("/") + 1).trim().replace(LEADING_ARTICLE, ""));
 }
