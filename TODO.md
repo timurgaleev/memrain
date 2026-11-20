@@ -103,6 +103,18 @@ marked; this section is the one that stands.
   embedding per changed chunk on every sync, and it reverses the graph-only
   choice for the code source.
 
+## Facts backfill: pages that always truncate
+
+- On production (2026-11-20, v2.0.0-43) nine pages sit in `synth_failures`
+  for `facts-backfill` with kind `truncated`: the extraction reply runs out
+  before it finishes. Eight still have the content that failed, so each retry
+  after its backoff asks the same question of the same model and is likely to
+  truncate again; doctor's `maintenance-held` counts only the ones inside a
+  backoff (3 that day), so a smaller number there does not mean they were
+  extracted. Every other page extracts (93 since 2026-11-17). Find out what
+  these pages share (length against `MEMRAIN_FACTS_MAX_WINDOWS`, fact
+  density) and either split the window or raise the reply budget for them.
+
 ## Follow-ups from the chat, Slack and Teams tails
 
 - A Slack private-channel day stored before the private marking keeps the
