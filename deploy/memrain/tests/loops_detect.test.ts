@@ -92,6 +92,24 @@ interface Row { name: string; messages: () => MailMessage[]; suppress?: (s: Thre
 const inbound = (who = "bob@example.com") => [{ type: "unanswered_inbound", counterparty: who }];
 const outbound = (who = "bob@example.com") => [{ type: "unanswered_outbound", counterparty: who }];
 
+const GMAIL_FORWARD = [
+  "---------- Forwarded message ---------",
+  "From: Carol Example <carol@example.com>",
+  "Date: Mon, Aug 17, 2026 at 9:00 AM",
+  "Subject: Venue for the offsite",
+  "To: Me Example <me@example.com>",
+  "",
+  "Which venue did we settle on for the offsite? I need a headcount by Friday.",
+].join("\n");
+const APPLE_FORWARD = [
+  "Begin forwarded message:",
+  "",
+  "From: Carol Example <carol@example.com>",
+  "Subject: Venue for the offsite",
+  "",
+  "Which venue did we settle on for the offsite?",
+].join("\n");
+
 const MAIL_CORPUS: Row[] = [
   // Inbound: I owe the reply.
   { name: "inbound to me in To, 48h old", messages: () => [bob(48)], expect: inbound() },
@@ -140,6 +158,15 @@ const MAIL_CORPUS: Row[] = [
   // Mutes.
   { name: "a muted sender opens nothing new", messages: () => [bob(48)], suppress: () => ({ senders: new Set([counterpartyKey("bob@example.com")]), threads: new Set() }), expect: null },
   { name: "a muted thread opens nothing new", messages: () => [bob(48)], suppress: s => ({ senders: new Set(), threads: new Set([s.threadRef]) }), expect: null },
+  // A forward is judged by the sender's own note above the separator; the
+  // forwarded message is someone else's words.
+  { name: "my Gmail forward with an FYI note over someone else's question", messages: () => [mine(96, { subject: "Fwd: Venue", body: `FYI, see below.\n\n${GMAIL_FORWARD}` })], expect: null },
+  { name: "my Apple Mail forward with a \"See below.\" note", messages: () => [mine(96, { subject: "Fwd: Venue", body: `See below.\n\n${APPLE_FORWARD}` })], expect: null },
+  { name: "my forward with no note at all", messages: () => [mine(96, { subject: "Fwd: Venue", body: GMAIL_FORWARD })], expect: null },
+  { name: "my FYI forward note that only shares a link", messages: () => [mine(96, { subject: "Fwd: Venue", body: `FYI, context: https://docs.example.com/view?id=42\n\n${GMAIL_FORWARD}` })], expect: null },
+  { name: "my forward whose own note asks still waits on them", messages: () => [mine(96, { subject: "Fwd: Venue", body: `Can you take this one?\n\n${GMAIL_FORWARD}` })], expect: outbound() },
+  { name: "their FYI forward is answered by my thanks", messages: () => [bob(40, { subject: "Fwd: Venue", body: `FYI, see below.\n\n${GMAIL_FORWARD}` }), mine(30, { body: "Thanks!" })], expect: null },
+  { name: "their forward that asks me in its note still owes a real answer", messages: () => [bob(40, { subject: "Fwd: Venue", body: `Can you answer Carol?\n\n${GMAIL_FORWARD}` }), mine(30, { body: "Thanks!" })], expect: inbound() },
   // HTML-only mail is read through its text.
   { name: "HTML-only question to me", messages: () => [bob(48, { html: "<p>Can you <b>approve</b> the budget?</p>" })], expect: inbound() },
 ];
@@ -185,6 +212,11 @@ describe("text rules", () => {
     expect(asksQuestion("Can you?")).toBe(true);
     expect(asksQuestion("see https://x.example/a?b=1")).toBe(false);
     expect(asksQuestion("see www.x.example/a?b=1 now")).toBe(false);
+  });
+  test("a question counts only in the text above a forward separator", () => {
+    expect(asksQuestion(`FYI, see below.\n\n${GMAIL_FORWARD}`)).toBe(false);
+    expect(asksQuestion(`Thoughts?\n\n${GMAIL_FORWARD}`)).toBe(true);
+    expect(asksQuestion("Is \"---------- Forwarded message ---------\" the separator Gmail writes?")).toBe(true);
   });
   test("acknowledgements", () => {
     for (const t of ["Thanks!", "thank you", "Got it, thanks.", "Thanks, Bob!", "Спасибо!", "ok"]) expect(isAcknowledgementOnly(t)).toBe(true);

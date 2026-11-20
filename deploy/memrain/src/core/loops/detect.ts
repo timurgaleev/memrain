@@ -21,7 +21,9 @@
  *   - their answer to my question that asks nothing back owes no reply
  *   - my thanks-only reply to their question is not an answer; it neither
  *     closes nor restarts anything ("Will do" is a promise and does count)
- *   - my message without a question mark outside a link is an FYI, not an ask
+ *   - my message without a question mark outside a link is an FYI, not an ask;
+ *     a question in the message a forward carries is someone else's, so only
+ *     the note above the forward separator counts
  *   - a thread where every participant is me opens nothing
  *   - grace: inbound 24 h, outbound 72 h, promises 24 h, measured from the
  *     oldest message of the trailing run, so a nudge never restarts the clock
@@ -86,9 +88,23 @@ export interface CalendarVerdict extends ThreadVerdict {
 const HOUR = 3_600_000;
 const URL_RE = /\b(?:https?:\/\/|www\.)\S+/gi;
 
-/** A question mark outside any link. */
+/** The separator line a mail client writes above a forwarded message. */
+export const FORWARD_MARKER = /^(?:-{2,}\s*Forwarded message\s*-{2,}|Begin forwarded message:)$/i;
+
+/**
+ * The sender's own words in a stored message body: the text above the first
+ * forward separator. The mail renderer keeps a forward whole, and what follows
+ * the separator was written by someone else.
+ */
+export function textAboveForward(text: string): string {
+  const lines = text.split("\n");
+  const at = lines.findIndex(l => FORWARD_MARKER.test(l.trim()));
+  return at < 0 ? text : lines.slice(0, at).join("\n");
+}
+
+/** A question mark outside any link, in the sender's own words (above a forward). */
 export function asksQuestion(text: string): boolean {
-  return text.replace(URL_RE, "").includes("?");
+  return textAboveForward(text).replace(URL_RE, "").includes("?");
 }
 
 const ACK_WORDS = String.raw`thanks|thank you|thx|ty|many thanks|thanks so much|thank you so much|got it|noted|received|ack|ok|okay|sounds good|cheers|great|perfect|спасибо|благодарю|спс|ок|окей|понял|поняла|принято|отлично`;

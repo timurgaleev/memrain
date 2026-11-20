@@ -16,6 +16,7 @@ import { guardSecrets, type SecretFinding } from "../secret-scan.ts";
 import { neutralizeOutsideText } from "../neutralize-outside-text.ts";
 import { OUTSIDE_NEUTRALIZED } from "../fence-carry.ts";
 import { calendarLoopSignals, chatLoopSignals, mailLoopSignals, type LoopSignals } from "../loops/signals.ts";
+import { FORWARD_MARKER } from "../loops/detect.ts";
 import { redactMeetingCredentials } from "./meeting-redact.ts";
 import {
   serviceAccountRef,
@@ -269,7 +270,6 @@ function finish(lines: string[]): string {
 // ---------------------------------------------------------------------------
 // Mail.
 
-const FORWARD_MARKER = /^(?:-{2,}\s*Forwarded message\s*-{2,}|Begin forwarded message:)$/i;
 const REPLY_MARKER = /^(?:On .{4,200} wrote:|-{2,}\s*Original Message\s*-{2,})$/i;
 const BULK_PRECEDENCE = new Set(["bulk", "list", "junk"]);
 /** A mail client's own footer line, only ever cut at the end of a message. */
