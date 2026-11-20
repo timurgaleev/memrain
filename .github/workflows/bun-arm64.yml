@@ -36,6 +36,10 @@ jobs:
           bun-version: latest
       - name: bun install (frozen lockfile)
         run: bun install --frozen-lockfile
+      - name: bun install admin (frozen lockfile)
+        # Tests import admin modules (the Office page pulls in three.js).
+        working-directory: deploy/memrain/admin
+        run: bun install --frozen-lockfile
       - name: bun test (sharded)
         env:
           # PGLite start-up and Bun.serve on a slow runner push single tests
