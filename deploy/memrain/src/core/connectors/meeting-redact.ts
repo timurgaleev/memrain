@@ -66,13 +66,19 @@ const keepPrefix: Replace = (_m, [prefix]) => `${prefix}${REMOVED}`;
 const keepLabel: Replace = (_m, [label, gap]) => `${label}${gap}${REMOVED}`;
 
 /** A real date, alone or with the hour of a time after it, which digit grouping alone would read as an id: `2026-11-17`, `17.11.2026`, `2026-11-17 10` (of `10:00`). */
-const DATE = /^(?:(\d{4})-(\d{2})-(\d{2})|(\d{1,2})[./](\d{1,2})[./]\d{4})(?: \d{1,2})?$/;
+const DATE = /^(?:(\d{4})-(\d{2})-(\d{2})|(\d{1,2})[./](\d{1,2})[./](\d{4}))(?: (\d{1,2}))?$/;
 function isDate(value: string | undefined): boolean {
   const m = DATE.exec(value ?? "");
   if (!m) return false;
-  const [a, b] = (m[1] === undefined ? [m[4], m[5]] : [m[2], m[3]]).map(Number) as [number, number];
-  // y-m-d, or d.m.y / m/d/y: one part a month, the other a day.
-  return m[1] === undefined ? a >= 1 && b >= 1 && a <= 31 && b <= 31 && (a <= 12 || b <= 12) : a >= 1 && a <= 12 && b >= 1 && b <= 31;
+  if (m[7] !== undefined && Number(m[7]) > 23) return false;
+  const real = (y: number, mo: number, d: number) => {
+    const t = new Date(Date.UTC(y, mo - 1, d));
+    return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
+  };
+  if (m[1] !== undefined) return real(Number(m[1]), Number(m[2]), Number(m[3]));
+  // d.m.y or m/d/y: either reading may be the real one.
+  const [a, b, y] = [Number(m[4]), Number(m[5]), Number(m[6])];
+  return real(y, b, a) || real(y, a, b);
 }
 /** Sign-off words a mail puts under an empty label (`Password:` then a blank line then `Thanks,`). */
 const SIGN_OFF = /^(?:thanks|thx|regards|best|cheers|danke|grüße|gruß|grüsse|merci|gracias|grazie|спасибо|bye|ciao),$/iu;

@@ -484,7 +484,7 @@ export function renderMeeting(ctx: ConnectorContext, meeting: MeetingTranscript)
     lines.push("## Transcript", "");
     let bytes = 0;
     for (const [i, s] of meeting.sentences.entries()) {
-      const row = `${g.line(s.speaker, 120) || "Speaker"}: ${g.inviteLine(s.text, 4000)}`;
+      const row = `${g.inviteLine(s.speaker, 120) || "Speaker"}: ${g.inviteLine(s.text, 4000)}`;
       bytes += Buffer.byteLength(row) + 1;
       if (bytes > MAX_TRANSCRIPT_BYTES) {
         lines.push("", `_transcript truncated: ${meeting.sentences.length - i} more line(s) not stored_`);

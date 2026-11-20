@@ -267,11 +267,14 @@ describe("meeting", () => {
 
   it("strips online-meeting credentials from the title, action items and transcript", () => {
     const page = renderMeeting({ service: "fireflies", accountLabel: ACCOUNT }, {
-      ...longMeeting([{ speaker: "Bob Stone", text: "Rejoin at https://us02web.zoom.us/j/81234567890?pwd=Ab12Cd34Ef56 passcode: 445566" }]),
+      ...longMeeting([
+        { speaker: "Bob Stone", text: "Rejoin at https://us02web.zoom.us/j/81234567890?pwd=Ab12Cd34Ef56 passcode: 445566" },
+        { speaker: "Room https://meet.google.com/qrs-tuvw-xyz", text: "hello" },
+      ]),
       title: "Sync https://meet.google.com/abc-defg-hij",
       actionItems: ["Send the Meeting ID: 812 3456 7890 to Carol"],
     });
-    for (const secret of ["abc-defg-hij", "81234567890", "Ab12Cd34", "812 3456 7890", "445566"]) {
+    for (const secret of ["abc-defg-hij", "81234567890", "Ab12Cd34", "812 3456 7890", "445566", "qrs-tuvw-xyz"]) {
       expect([secret, page.body.includes(secret) || page.title.includes(secret)]).toEqual([secret, false]);
     }
     expect(page.title).toBe("Sync [meeting link removed]");
