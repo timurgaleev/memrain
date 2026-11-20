@@ -279,7 +279,8 @@ class ChatAdapter implements SyncAdapter {
   async page({ client, cursor, budget }: Parameters<SyncAdapter["page"]>[0]): Promise<PageResult> {
     const state = parseTeamsChatCursor(cursor)
       ?? { v: 1 as const, floor: isoOf(this.now() - this.historyDays() * DAY_MS), marks: {}, queue: [], listing: null };
-    if (state.queue.length === 0 || state.listing !== null) {
+    // A list still under way goes on while the queue has room for one more page of chats.
+    if (state.queue.length === 0 || (state.listing !== null && state.queue.length + PAGE_SIZE <= MAX_QUEUE)) {
       const listed = await this.listChats(client, state);
       if ("response" in listed) return { ok: false, response: listed.response };
       return { ok: true, items: [], checkpoint: JSON.stringify(listed), done: listed.listing === null && listed.queue.length === 0 };
@@ -317,7 +318,7 @@ class ChatAdapter implements SyncAdapter {
       version: null,
       failure: { code: "chat_unavailable", message: `Graph did not show the chat's messages (HTTP ${res.status})`, holdNow: true },
     };
-    // Asked again only once the chat has a newer message.
+    // Asked again once the chat has a newer message, or by an edit round while its last message is recent.
     return through({ ...chat, mark: isoOf(this.now()) }, [item]);
   }
 
@@ -338,7 +339,7 @@ class ChatAdapter implements SyncAdapter {
     const editsAt = fresh && editRound ? isoOf(now) : state.editsAt;
     const recent = now - EDIT_LOOKBACK_DAYS * DAY_MS;
     let path: string | null = state.listing ?? `/v1.0/me/chats?$expand=lastMessagePreview&$top=${PAGE_SIZE}`;
-    for (let p = 0; p < MAX_CHAT_LIST_PAGES && path !== null && queue.length < MAX_QUEUE; p++) {
+    for (let p = 0; p < MAX_CHAT_LIST_PAGES && path !== null && queue.length + PAGE_SIZE <= MAX_QUEUE; p++) {
       const res = await graphGet(client, path, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
       if (res.class !== "ok") {
         if (res.class !== "forbidden") return { response: res };
@@ -371,8 +372,8 @@ class ChatAdapter implements SyncAdapter {
       path = next === undefined ? null : graphLinkPath(next);
       if (next !== undefined && path === null) return { response: { ...res, class: "challenge", body: null, error: "unexpected chat list next link" } };
     }
-    // A full queue ends the round's listing; the chats left are queued by the next round.
-    const listing = queue.length >= MAX_QUEUE ? null : path;
+    // A full queue keeps the list's place: the listing resumes there once the queue drains.
+    const listing = path;
     const { editRound: _, ...rest } = state;
     return {
       ...rest, marks, queue, listing,

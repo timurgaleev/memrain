@@ -278,6 +278,41 @@ describe("teams chat adapter", () => {
     expect(parseTeamsChatCursor(out.cursor)!.marks[shortHash(`tchat:${CHAT_A}`)]).toBe("2026-11-16T10:05:00.000Z");
   });
 
+  it("an edit round over more recent chats than one queue holds checks every one of them", async () => {
+    const ids = Array.from({ length: 520 }, (_, i) => `19:chat-${String(i).padStart(3, "0")}@thread.v2`);
+    const last = "2026-11-16T09:00:00.000Z";
+    const chats = ids.map(id => chat(id, "group", "Busy", last));
+    const lastId = ids.at(-1)!;
+    const byChat: Record<string, Array<ReturnType<typeof msg>>> = {};
+    for (const id of ids) byChat[id] = [msg(`${id}-1`, last)];
+    byChat[lastId] = [msg(`${lastId}-1`, last, { modified: "2026-11-16T10:30:00.000Z", text: "edited at the end of the list" })];
+    // Graph lists chats 50 a page.
+    const g = graph((url) => {
+      if (url.pathname === "/v1.0/me/chats") {
+        const skip = Number(url.searchParams.get("$skiptoken") ?? "0");
+        const next = new URL(url.toString());
+        next.searchParams.set("$skiptoken", String(skip + 50));
+        return { body: { value: chats.slice(skip, skip + 50), ...(skip + 50 < chats.length ? { "@odata.nextLink": next.toString() } : {}) } };
+      }
+      return messagesRoute(byChat)(url);
+    });
+    const state = {
+      v: 1, floor: "2026-10-17T10:00:00.000Z", marks: Object.fromEntries(ids.map(id => [shortHash(`tchat:${id}`), last])),
+      queue: [], listing: null, editsAt: new Date(T0 - 2 * 3_600_000).toISOString(),
+    };
+    const adapter = teamsChatAdapter(account("teams_chat"), { now: () => T0 + 3_600_000, env: {} });
+    let at: string | null = JSON.stringify(state);
+    const items: SyncItem[] = [];
+    for (let i = 0; ; i++) {
+      if (i > 2000) throw new Error("stream never finished");
+      const res = await page(adapter, g.client, TEAMS_CHAT_STREAM, at);
+      items.push(...res.items);
+      if (res.checkpoint !== null) at = res.checkpoint;
+      if (res.done) break;
+    }
+    expect(rendered(items).map(i => i.externalId)).toEqual([`${lastId}:2026-11-16`]);
+  });
+
   it("stores one day per page when the run's budget allows one, and resumes below it", async () => {
     const g = world([chat(CHAT_A, "oneOnOne", null, "2026-11-16T09:00:00.000Z")], { [CHAT_A]: chatAMessages });
     const adapter = teamsChatAdapter(account("teams_chat"), { now: () => T0, env: {} });
