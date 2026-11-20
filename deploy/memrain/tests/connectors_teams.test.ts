@@ -255,6 +255,29 @@ describe("teams chat adapter", () => {
     expect(g.calls.map(c => c.url.pathname)).toEqual(["/v1.0/me/chats"]);
   });
 
+  it("picks up an edit in a recently active chat with no new message, once the hourly edit check comes round", async () => {
+    const first = world([chat(CHAT_A, "oneOnOne", null, "2026-11-16T09:00:00.000Z")], { [CHAT_A]: chatAMessages });
+    const run1 = await drain(teamsChatAdapter(account("teams_chat"), { now: () => T0, env: {} }), first.client, TEAMS_CHAT_STREAM, null);
+    // A cursor written before the edit check still reads.
+    expect(parseTeamsChatCursor(JSON.stringify({ ...JSON.parse(run1.cursor!), editsAt: undefined }))).not.toBeNull();
+    const edited = msg("a1", "2026-11-15T16:00:00.000Z", { modified: "2026-11-16T10:05:00.000Z", text: "Can you share the final deck?" });
+    const messages = [...chatAMessages.slice(0, 3), edited];
+    // The chat list still shows 09:00 as the last message: an edit does not move it.
+    const listed = [chat(CHAT_A, "oneOnOne", null, "2026-11-16T09:00:00.000Z")];
+
+    const soon = world(listed, { [CHAT_A]: messages });
+    const quiet = await drain(teamsChatAdapter(account("teams_chat"), { now: () => T0 + 10 * 60_000, env: {} }), soon.client, TEAMS_CHAT_STREAM, run1.cursor);
+    expect(quiet.items).toEqual([]);
+    expect(soon.calls.map(c => c.url.pathname)).toEqual(["/v1.0/me/chats"]);
+
+    const g = world(listed, { [CHAT_A]: messages });
+    const out = await drain(teamsChatAdapter(account("teams_chat"), { now: () => T0 + 3_600_000, env: {} }), g.client, TEAMS_CHAT_STREAM, quiet.cursor);
+    const items = rendered(out.items);
+    expect(items.map(i => i.externalId)).toEqual([`${CHAT_A}:2026-11-15`]);
+    expect(items[0]!.body).toContain("final deck");
+    expect(parseTeamsChatCursor(out.cursor)!.marks[shortHash(`tchat:${CHAT_A}`)]).toBe("2026-11-16T10:05:00.000Z");
+  });
+
   it("stores one day per page when the run's budget allows one, and resumes below it", async () => {
     const g = world([chat(CHAT_A, "oneOnOne", null, "2026-11-16T09:00:00.000Z")], { [CHAT_A]: chatAMessages });
     const adapter = teamsChatAdapter(account("teams_chat"), { now: () => T0, env: {} });

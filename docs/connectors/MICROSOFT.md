@@ -486,8 +486,11 @@ meeting's transcription has stopped, within 15 minutes of the next sync.
 - Each chat keeps its own place: a sync reads only the chats with a message
   newer than the last one stored, and renders again only the days a new or
   changed message falls on. A day left with no message is deleted.
-- An edit or a deletion is seen when the chat next gets a message: Microsoft
-  shows only each chat's latest message in the chat list.
+- An edit or a deletion in a chat whose last message is at most three days old
+  is seen within an hour: once an hour a sync also checks those chats, one
+  request each. In a chat quiet for longer it is seen when the chat next gets
+  a message, since Microsoft shows only each chat's latest message in the chat
+  list.
 - A chat day is stored whole up to 10,000 messages; past that, only its
   newest 10,000.
 - A transcript needs a calendar event with a Teams join link, on your default

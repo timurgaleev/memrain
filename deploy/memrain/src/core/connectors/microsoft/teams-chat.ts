@@ -37,8 +37,12 @@
  * oldest day it stored, and the next page resumes with `createdDateTime lt
  * hi`; no message text is ever kept in the cursor.
  *
- * An edit or a deletion is seen when the chat next gets a message, since the
- * listing only shows the last one's time. A chat Graph will not show (left,
+ * The listing only shows each chat's last message time, which an edit or a
+ * deletion does not move. So once an hour a round also queues every chat
+ * whose last message is at most EDIT_LOOKBACK_DAYS old; its detect step costs
+ * one request and finds nothing unless something there changed. An edit in a
+ * chat quiet for longer is seen when the chat next gets a message. A chat
+ * Graph will not show (left,
  * removed: 403 or 404) is one held item, not a stopped run; a refused chat
  * list stops the run as forbidden with the permission named.
  *
@@ -78,6 +82,10 @@ const GRAPH_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const DAY_MS = 86_400_000;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const KEY_RE = /^[0-9a-f]{16}$/;
+/** How often a round also checks recently active chats for edits and deletions. */
+const EDIT_CHECK_MS = 3_600_000;
+/** A chat is checked for edits while its last message is at most this many days old. */
+const EDIT_LOOKBACK_DAYS = 3;
 
 type Json = Record<string, unknown>;
 
@@ -165,6 +173,10 @@ export interface TeamsChatState {
   queue: QueuedChat[];
   /** The chat list's next page while a round is still listing; null once the list is through. */
   listing: string | null;
+  /** When the last round that checked recent chats for edits began. */
+  editsAt?: string;
+  /** The round still listing is one that checks recent chats for edits. */
+  editRound?: boolean;
 }
 
 function isoOrNull(v: unknown): string | null | undefined {
@@ -210,7 +222,13 @@ export function parseTeamsChatCursor(cursor: string | null): TeamsChatState | nu
   }
   const listing = raw.listing ?? null;
   if (listing !== null && !isGraphPath(listing)) return null;
-  return { v: 1, floor: raw.floor as string, marks, queue, listing };
+  const editsAt = raw.editsAt === undefined ? undefined : isoOrNull(raw.editsAt);
+  if (editsAt === null || (raw.editsAt !== undefined && editsAt === undefined)) return null;
+  if (raw.editRound !== undefined && raw.editRound !== true) return null;
+  return {
+    v: 1, floor: raw.floor as string, marks, queue, listing,
+    ...(editsAt !== undefined ? { editsAt } : {}), ...(raw.editRound === true ? { editRound: true } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +333,10 @@ class ChatAdapter implements SyncAdapter {
     const marks = fresh ? Object.fromEntries(Object.entries(state.marks).filter(([, m]) => Date.parse(m) >= floor)) : state.marks;
     const queue: QueuedChat[] = fresh ? [] : [...state.queue];
     const queued = new Set(queue.map(q => q.id));
+    const now = this.now();
+    const editRound = fresh ? state.editsAt === undefined || now - Date.parse(state.editsAt) >= EDIT_CHECK_MS : state.editRound === true;
+    const editsAt = fresh && editRound ? isoOf(now) : state.editsAt;
+    const recent = now - EDIT_LOOKBACK_DAYS * DAY_MS;
     let path: string | null = state.listing ?? `/v1.0/me/chats?$expand=lastMessagePreview&$top=${PAGE_SIZE}`;
     for (let p = 0; p < MAX_CHAT_LIST_PAGES && path !== null && queue.length < MAX_QUEUE; p++) {
       const res = await graphGet(client, path, { maxBytes: GRAPH_MAX_RESPONSE_BYTES });
@@ -335,7 +357,7 @@ class ChatAdapter implements SyncAdapter {
         const last = timeMs(isRecord(c.lastMessagePreview) ? c.lastMessagePreview.createdDateTime : undefined);
         if (!Number.isFinite(last) || last < floor) continue;
         const mark = marks[chatKey(id)];
-        if (mark !== undefined && last <= Date.parse(mark)) continue;
+        if (mark !== undefined && last <= Date.parse(mark) && !(editRound && last >= recent)) continue;
         // The topic is outside text that reaches the page's title: its meeting credentials go too.
         const topic = str(c.topic) === null ? null : str(redactMeetingCredentials(c.topic as string).text.trim());
         queue.push({
@@ -350,7 +372,12 @@ class ChatAdapter implements SyncAdapter {
       if (next !== undefined && path === null) return { response: { ...res, class: "challenge", body: null, error: "unexpected chat list next link" } };
     }
     // A full queue ends the round's listing; the chats left are queued by the next round.
-    return { ...state, marks, queue, listing: queue.length >= MAX_QUEUE ? null : path };
+    const listing = queue.length >= MAX_QUEUE ? null : path;
+    const { editRound: _, ...rest } = state;
+    return {
+      ...rest, marks, queue, listing,
+      ...(editsAt !== undefined ? { editsAt } : {}), ...(editRound && listing !== null ? { editRound: true } : {}),
+    };
   }
 
   /** Which days of a chat changed since its watermark, and the watermark to commit after. */
