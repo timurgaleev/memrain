@@ -15,7 +15,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { detectInstructionLike, joinSpacedLetters, WRITE_GATE_DETECTOR_VERSION } from "../src/core/write-gate.ts";
-import { cpuMs } from "./helpers/cpu-time.ts";
+import { cpuMs, linearityRatio } from "./helpers/cpu-time.ts";
 
 interface Case { id: string; text: string; family?: string }
 
@@ -93,10 +93,6 @@ describe("write-gate detector cost", () => {
     "a".repeat(200) + " ",
   ];
 
-  /**
-   * CPU time, not wall time: next to other test processes the ~1 MB runs were
-   * preempted far more than the ~100 KB ones and the ratio reached 36.
-   */
   function timeFor(text: string): number {
     detectInstructionLike([{ field: "body", text }]);
     return cpuMs(() => {
@@ -104,22 +100,22 @@ describe("write-gate detector cost", () => {
     }, { repeat: 1 }) / 3;
   }
 
-  /** Median of five timed runs, so one GC pause or a lucky warm run cannot swing a ratio. */
-  function medianTimeFor(text: string): number {
-    const runs = Array.from({ length: 5 }, () => timeFor(text)).sort((a, b) => a - b);
-    return runs[2]!;
-  }
+  const scan = (text: string) => () => void detectInstructionLike([{ field: "body", text }]);
 
   for (const seed of SEEDS) {
     it(`grows linearly on ${JSON.stringify(seed.slice(0, 24))}`, () => {
       const unit = seed.repeat(Math.ceil(1000 / seed.length));
-      // Both runs are large enough (~100 KB and ~1 MB) to time well above timer noise:
-      // a sub-millisecond small run made the old 100x ratio swing past its bound on CI.
-      const small = Math.max(medianTimeFor(unit.repeat(100)), 0.05);
-      const large = medianTimeFor(unit.repeat(1000));
+      const small = unit.repeat(100);
+      const large = unit.repeat(1000);
+      scan(large)();
+      // Both sides are large enough (~100 KB and ~1 MB) to time well above timer noise.
+      // CPU time, best of five with the sides interleaved: a loaded machine only ever
+      // slows a run down (preemption, efficiency cores, memory pressure in a sharded
+      // run), and a median let that push the ratio to 36 on a linear scan. A
+      // quadratic scan has no fast run to pick.
       // 10x the input costs ~10x the time when linear and ~100x when quadratic; the bound
       // matches the old 400x-per-100x gate (20x per decade), so it is no looser.
-      expect(large / small).toBeLessThan(20);
+      expect(linearityRatio(scan(small), scan(large), { repeat: 5 })).toBeLessThan(20);
     }, 30_000); // ~3.5 s of wall time on a CI runner for the slowest seeds; the ratio is the guard
   }
 
