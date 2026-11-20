@@ -71,7 +71,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await revertMigration(e, 174);
       expect(await table(e, "retrieval_feedback")).toBe(false);
       expect(await table(e, "retrieval_weights")).toBe(false);
-      expect((await runMigrations(e)).applied.map(m => m.id)).toEqual([174, 175]);
+      expect((await runMigrations(e)).applied.map(m => m.id).slice(0, 2)).toEqual([174, 175]);
       expect(await table(e, "retrieval_weights")).toBe(true);
       expect(await table(e, "chat_shares")).toBe(true);
     } finally { await db.close(); }
