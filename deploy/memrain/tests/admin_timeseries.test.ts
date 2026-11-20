@@ -51,7 +51,7 @@ describe("adminTimeseries", () => {
 
   it("stays inside the performance budget on a seeded brain", async () => {
     const e = storage.engine();
-    const spread = "now() - (random() * 180 || ' days')::interval";
+    const spread = "now() - random() * 180 * interval '1 day'"; // not text: a tiny random() prints as 3e-05, which interval rejects
     await e.query(
       `INSERT INTO mcp_request_log (token_name, agent_name, operation, status, created_at)
        SELECT 'pat-' || (g % 9), 'pat', (ARRAY['search','query','page_get','page_put'])[1 + g % 4],
