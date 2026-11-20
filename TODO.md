@@ -103,17 +103,20 @@ marked; this section is the one that stands.
   embedding per changed chunk on every sync, and it reverses the graph-only
   choice for the code source.
 
-## Facts backfill: pages that always truncate
+## Facts extraction: cut replies
 
-- On production (2026-11-20, v2.0.0-43) nine pages sit in `synth_failures`
-  for `facts-backfill` with kind `truncated`: the extraction reply runs out
-  before it finishes. Eight still have the content that failed, so each retry
-  after its backoff asks the same question of the same model and is likely to
-  truncate again; doctor's `maintenance-held` counts only the ones inside a
-  backoff (3 that day), so a smaller number there does not mean they were
-  extracted. Every other page extracts (93 since 2026-11-17). Find out what
-  these pages share (length against `MEMRAIN_FACTS_MAX_WINDOWS`, fact
-  density) and either split the window or raise the reply budget for them.
+- A reply the output cap cuts now keeps the facts that closed before the cut
+  and counts as read, so a page extracted from a cut reply is watermarked
+  `extracted` and its claims past the cut are not asked for again until the
+  page changes. Only a stderr warning says so: no `facts:absorb` row, and
+  `extract_facts` reports no `output_truncated`. If cut replies start to show
+  up often, record a partial read the doctor can count.
+- The salvage reads the last `{"facts":[` opener in a reply. A reply that
+  closes its array and then opens a second one that the cap cuts empty is
+  still read as truncated, and an object with its own `facts` array inside a
+  fact (not in the extractor's schema) would be read in place of the real
+  array; trying each earlier opener in turn would make a hostile reply
+  quadratic to scan.
 
 ## Follow-ups from the chat, Slack and Teams tails
 
