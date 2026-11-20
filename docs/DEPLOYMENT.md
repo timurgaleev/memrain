@@ -203,6 +203,66 @@ A full restore uses RDS PITR/snapshots or the verified `migrate-engine` command
 Installing the import command does not perform a restore: keep a separate
 receipt for the actual source, target, created pages and verification.
 
+### Restore drill (RDS)
+
+A backup counts once it has been restored. Run this drill after the first
+deploy and then about twice a year. It restores into a **new, temporary**
+instance and never touches the live one, the terraform state or the running
+service.
+
+1. Note what the live brain holds, as the drill's expected values:
+
+   ```bash
+   # on the host
+   docker exec deploy-memrain-1 bun -e 'const r=await fetch("http://localhost:18790/health");console.log(await r.text())'
+   ```
+
+   and, through `psql` or `bun -e` with the live `MEMRAIN_POSTGRES_URL`:
+   `SELECT max(id), count(*) FROM migrations`,
+   `SELECT count(*) FROM pages WHERE deleted_at IS NULL`,
+   `SELECT max(updated_at) FROM pages`.
+
+2. Restore the latest restorable time into a new instance in the same subnet
+   group and security group (names from `terraform output` or the RDS console):
+
+   ```bash
+   aws rds restore-db-instance-to-point-in-time \
+     --source-db-instance-identifier <db-id> \
+     --target-db-instance-identifier <db-id>-drill \
+     --use-latest-restorable-time \
+     --db-subnet-group-name <subnet-group> \
+     --vpc-security-group-ids <rds-sg-id> \
+     --db-parameter-group-name <parameter-group> \
+     --no-publicly-accessible --no-multi-az --no-deletion-protection
+   aws rds wait db-instance-available --db-instance-identifier <db-id>-drill
+   ```
+
+   To test a snapshot instead, use `restore-db-instance-from-db-snapshot` with
+   `--db-snapshot-identifier <snapshot-id> --db-instance-identifier <db-id>-drill`
+   in place of the source, target and restore-time flags; the rest are the same.
+
+3. Check the copy from the host (same VPC). The restored instance keeps the
+   source's master user and password, so the live URL with only the host
+   swapped for the drill endpoint reaches it. Run the step 1 queries against it.
+   The copy reflects the restore point, not the moment you ran step 1:
+   `max(updated_at)` shows how recent that point is, the page count may trail
+   the live one by the writes made since, and a migration applied after the
+   restore point is missing from it. Every difference must be explained by that
+   gap; anything else is a failed drill. Record the restore point, both sets of
+   numbers and how long the restore took.
+
+4. Delete the drill instance. Check the identifier twice: it must end in
+   `-drill`.
+
+   ```bash
+   aws rds delete-db-instance --db-instance-identifier <db-id>-drill \
+     --skip-final-snapshot --delete-automated-backups
+   ```
+
+The drill instance is created outside terraform on purpose: it is temporary,
+terraform never learns about it and the next `plan` stays clean. Never point
+the running service at it.
+
 ### Deletion protection
 
 Terraform sets `lifecycle { prevent_destroy = true }` on every resource that
