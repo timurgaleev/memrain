@@ -265,6 +265,18 @@ describe("meeting", () => {
     expect(page.body).toContain("Follow-up call: [meeting link removed]");
   });
 
+  it("strips online-meeting credentials from the title, action items and transcript", () => {
+    const page = renderMeeting({ service: "fireflies", accountLabel: ACCOUNT }, {
+      ...longMeeting([{ speaker: "Bob Stone", text: "Rejoin at https://us02web.zoom.us/j/81234567890?pwd=Ab12Cd34Ef56 passcode: 445566" }]),
+      title: "Sync https://meet.google.com/abc-defg-hij",
+      actionItems: ["Send the Meeting ID: 812 3456 7890 to Carol"],
+    });
+    for (const secret of ["abc-defg-hij", "81234567890", "Ab12Cd34", "812 3456 7890", "445566"]) {
+      expect([secret, page.body.includes(secret) || page.title.includes(secret)]).toEqual([secret, false]);
+    }
+    expect(page.title).toBe("Sync [meeting link removed]");
+  });
+
   it("still cuts a transcript past its hard ceiling, with a marker", () => {
     const line = "w".repeat(3990);
     const page = renderMeeting({ service: "fireflies", accountLabel: ACCOUNT },

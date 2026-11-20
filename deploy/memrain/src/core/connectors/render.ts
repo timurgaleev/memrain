@@ -469,7 +469,7 @@ export function renderMeeting(ctx: ConnectorContext, meeting: MeetingTranscript)
   const end = meeting.end === null ? null : iso(meeting.end, "meeting end");
   const slug = `meeting/${serviceAccountRef(ctx)}/${start.slice(0, 10)}-${shortHash(`meeting:${ctx.service}:${meeting.id}`)}`;
   const g = new Guard(`connector meeting '${slug}'`);
-  const title = headingText(g.line(meeting.title), "(untitled meeting)");
+  const title = headingText(g.inviteLine(meeting.title), "(untitled meeting)");
 
   const lines = [`# ${title}`, "", `Meeting · ${start}${end ? ` to ${end}` : ""}`, ""];
   if (meeting.participants.length) lines.push(`Participants: ${meeting.participants.map(p => g.person(p)).join(", ")}`, "");
@@ -477,14 +477,14 @@ export function renderMeeting(ctx: ConnectorContext, meeting: MeetingTranscript)
   if (summary) lines.push("## Summary", "", summary, "");
   if (meeting.actionItems.length) {
     lines.push("## Action items", "");
-    for (const item of meeting.actionItems) lines.push(`- ${g.line(item, 1000)}`);
+    for (const item of meeting.actionItems) lines.push(`- ${g.inviteLine(item, 1000)}`);
     lines.push("");
   }
   if (meeting.sentences.length) {
     lines.push("## Transcript", "");
     let bytes = 0;
     for (const [i, s] of meeting.sentences.entries()) {
-      const row = `${g.line(s.speaker, 120) || "Speaker"}: ${g.line(s.text, 4000)}`;
+      const row = `${g.line(s.speaker, 120) || "Speaker"}: ${g.inviteLine(s.text, 4000)}`;
       bytes += Buffer.byteLength(row) + 1;
       if (bytes > MAX_TRANSCRIPT_BYTES) {
         lines.push("", `_transcript truncated: ${meeting.sentences.length - i} more line(s) not stored_`);
