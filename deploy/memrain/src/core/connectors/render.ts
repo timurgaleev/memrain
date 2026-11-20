@@ -433,7 +433,7 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
   const channel = headingText(g.line(day.channelName, 120), "channel");
   const title = `#${channel} · ${day.day}`;
 
-  const lines = [`# ${title}`, "", `Chat channel day · ${messages.length} message${messages.length === 1 ? "" : "s"}`, ""];
+  const lines = [`# ${title}`, "", `${day.private ? "Private chat" : "Chat"} channel day · ${messages.length} message${messages.length === 1 ? "" : "s"}`, ""];
   const bodies: string[] = [];
   for (const m of messages) {
     const at = iso(m.ts, "message time");
@@ -448,6 +448,7 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
   const lastActivity = messages.length ? iso(messages.at(-1)!.ts, "message time") : dayStart;
   const truth = baseTruth(ctx, "chat", `${day.channelId}:${day.day}`, dayStart, lastActivity);
   truth["messages"] = messages.length;
+  if (day.private) truth["private"] = true;
   return {
     slug, type: CONNECTOR_PAGE_TYPES.chat, title, body: finish(lines), truth, findings: g.findings,
     kind: "chat", externalId: `${day.channelId}:${day.day}`, occurredAt: dayStart,

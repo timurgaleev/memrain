@@ -179,7 +179,8 @@ then **Add apps**. For a private channel, invite the bot the same way.
 
 - Each channel day is one page in the `chat` source, in UTC days. A thread
   reply stays with the message that started the thread, with its own date
-  when it came on a later day.
+  when it came on a later day. A private channel's pages say "Private chat
+  channel day" under the title and carry `private: true` in their truth.
 - Every run reads each channel's last three days again, and today, with one
   history request per day. A day whose messages did not change costs that one
   request: its threads are not read and nothing is written. An edited or

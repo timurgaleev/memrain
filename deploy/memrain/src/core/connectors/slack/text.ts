@@ -132,5 +132,5 @@ export function toChatDay(
       out.push(chatMessage(r, users, m.ts));
     }
   }
-  return { workspace, channelId: channel.id, channelName: channel.name, day, messages: out };
+  return { workspace, channelId: channel.id, channelName: channel.name, day, messages: out, ...(channel.isPrivate ? { private: true } : {}) };
 }

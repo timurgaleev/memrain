@@ -548,6 +548,29 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  it("marks a granted private channel's day pages private, and a public channel's not", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      w.scope = `${SLACK_PUBLIC_SCOPE},${SLACK_PRIVATE_SCOPES.join(",")}`;
+      w.channels[SECRET] = { name: "plans", is_private: true };
+      w.messages[SECRET] = [{ ts: slackTs("2026-11-15T08:00:00Z", 7), user: "U0ANA00001", text: "roadmap" }];
+      const account = await pasteToken(db.storage, w, [SECRET, RANDOM]);
+      expect(account.services).toContain("slack_private");
+      await run(db.storage, w, account.id);
+
+      const page = async (slug: string) => (await e.query<{ compiled_truth: Record<string, unknown>; markdown_body: string }>(
+        `SELECT compiled_truth, markdown_body FROM pages WHERE slug = $1`, [slug])).rows[0]!;
+      const secret = await page(daySlug(SECRET, "2026-11-15"));
+      expect(secret.markdown_body).toContain("Private chat channel day");
+      expect(secret.compiled_truth.private).toBe(true);
+      const open_ = await page(daySlug(RANDOM, "2026-11-15"));
+      expect(open_.markdown_body).not.toContain("Private");
+      expect(open_.compiled_truth.private).toBeUndefined();
+    } finally { await db.close(); }
+  });
+
   it("a refused token parks the account for a reconnect and keeps its cursors", async () => {
     const db = await open();
     try {

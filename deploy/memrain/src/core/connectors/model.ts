@@ -146,6 +146,8 @@ export interface ChatDay {
   messages: ChatMessage[];
   /** A direct conversation (a 1:1 or group DM), not a channel. */
   direct?: boolean;
+  /** A private channel: its pages say so, in the header and as `private` in the truth. */
+  private?: boolean;
 }
 
 export interface MeetingSentence {
