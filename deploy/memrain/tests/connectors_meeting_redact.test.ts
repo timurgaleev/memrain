@@ -218,6 +218,21 @@ const CASES: Case[] = [
     kept: ["2026-11-17 is when", "17.11.2026", "2026-11-17 10:00", "Thanks,", "Regards,"],
   },
   {
+    // A date guard keeps only a whole, real date; a sign-off is a sign-off word.
+    name: "an id or a password that only looks like a date or a sign-off",
+    input: [
+      "Meeting ID: 2026-11-17-123456",
+      "Meeting ID: 17.11.2026 812 3456 7890",
+      "Meeting ID: 1234-56-78 9012",
+      "Password:",
+      "Tulpe,",
+      "Meeting password:",
+      "Regards, (123456 from phones)",
+    ].join("\n"),
+    gone: ["2026-11-17-123456", "812 3456 7890", "1234-56-78", "Tulpe,", "123456"],
+    kept: ["Meeting ID: ", "Password:"],
+  },
+  {
     name: "a value on the line after its label",
     input: "Password:\n\nhunter22\nAccess code\n123 456 789",
     gone: ["hunter22", "123 456 789"],

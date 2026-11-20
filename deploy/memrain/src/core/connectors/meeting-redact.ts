@@ -65,10 +65,18 @@ const link: Replace = () => LINK_REMOVED;
 const keepPrefix: Replace = (_m, [prefix]) => `${prefix}${REMOVED}`;
 const keepLabel: Replace = (_m, [label, gap]) => `${label}${gap}${REMOVED}`;
 
-/** A value that starts with a date, which digit grouping alone would read as an id: `2026-11-17 10:00`, `17.11.2026`. */
-const DATE = /^(?:\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{4})(?!\d)/;
-/** A label left empty above a sign-off (`Password:` then `Thanks,`) gives the sign-off no value role. */
-const signOffBelow = (gap: string | undefined, value: string | undefined) => /\n/.test(gap ?? "") && /^\p{L}+,$/u.test(value ?? "");
+/** A real date, alone or with the hour of a time after it, which digit grouping alone would read as an id: `2026-11-17`, `17.11.2026`, `2026-11-17 10` (of `10:00`). */
+const DATE = /^(?:(\d{4})-(\d{2})-(\d{2})|(\d{1,2})[./](\d{1,2})[./]\d{4})(?: \d{1,2})?$/;
+function isDate(value: string | undefined): boolean {
+  const m = DATE.exec(value ?? "");
+  if (!m) return false;
+  const [a, b] = (m[1] === undefined ? [m[4], m[5]] : [m[2], m[3]]).map(Number) as [number, number];
+  // y-m-d, or d.m.y / m/d/y: one part a month, the other a day.
+  return m[1] === undefined ? a >= 1 && b >= 1 && a <= 31 && b <= 31 && (a <= 12 || b <= 12) : a >= 1 && a <= 12 && b >= 1 && b <= 31;
+}
+/** Sign-off words a mail puts under an empty label (`Password:` then a blank line then `Thanks,`). */
+const SIGN_OFF = /^(?:thanks|thx|regards|best|cheers|danke|grüße|gruß|grüsse|merci|gracias|grazie|спасибо|bye|ciao),$/iu;
+const signOffBelow = (gap: string | undefined, value: string | undefined) => /\n/.test(gap ?? "") && SIGN_OFF.test(value ?? "");
 
 const RULES: readonly Rule[] = [
   // Join links: the link itself carries the meeting id, and often the passcode.
@@ -104,7 +112,7 @@ const RULES: readonly Rule[] = [
   // Labelled meeting ids, digits only.
   {
     re: new RegExp(`(${ID_LABELS})(${PAREN}(?:${COLON})?${GAP})(${ID_DIGITS})`, "gi"),
-    replace: (m, [label, gap, value]) => (DATE.test(value ?? "") ? m : `${label}${gap}${REMOVED}`),
+    replace: (m, [label, gap, value]) => (isDate(value) ? m : `${label}${gap}${REMOVED}`),
     labelled: true,
   },
   // Meeting passcodes. Without a digit the value counts only after a colon and
@@ -119,7 +127,7 @@ const RULES: readonly Rule[] = [
   {
     re: new RegExp(`(${SECRET_LABELS})(${PAREN}${COLON}${GAP})(${TOKEN})(${SP}{1,4}\\(\\d{4,16}[^()\\n]{0,60}\\))?(?=${LINE_END}|${SP}{1,4}\\()`, "gi"),
     replace: (m, [label, gap, value, phone]) =>
-      signOffBelow(gap, value) ? m : `${label}${gap}${REMOVED}${phone === undefined ? "" : phone.replace(/\d+/, REMOVED)}`,
+      signOffBelow(gap, value) && phone === undefined ? m : `${label}${gap}${REMOVED}${phone === undefined ? "" : phone.replace(/\d+/, REMOVED)}`,
     labelled: true,
   },
   // A labelled PIN. Case-sensitive, so "pin" in a word or in prose stays.
