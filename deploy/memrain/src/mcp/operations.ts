@@ -348,19 +348,19 @@ export const OPERATIONS: readonly Operation[] = [
       }),
       lang: str({
         description:
-          "Code chunks of this source language only (chunks.language, e.g. 'typescript').",
+          "Code chunks of this language only (e.g. 'typescript').",
       }),
       symbol_kind: str({
         description:
-          "Chunks of this symbol kind (chunks.symbol_type, e.g. 'function', 'class').",
+          "Chunks of this symbol kind (e.g. 'function', 'class').",
       }),
       since: str({
         description:
-          "Keep hits whose content date COALESCE(effective_date, updated_at) is >= this bound: ISO-8601 date/datetime or a duration back from now (7d/2w/6m/1y).",
+          "Keep hits whose content date (effective, else updated) is >= this: ISO-8601 date/datetime or a duration back from now (7d/2w/6m/1y).",
       }),
       until: str({
         description:
-          "Upper bound on COALESCE(effective_date,updated_at): ISO date/time (YYYY-MM-DD includes the whole day), or duration back from now: 7d/2w/6m/1y.",
+          "Upper bound on the content date: ISO date/time (YYYY-MM-DD includes the whole day), or duration back from now: 7d/2w/6m/1y.",
       }),
       near_symbol: str({
         description:
@@ -370,22 +370,22 @@ export const OPERATIONS: readonly Operation[] = [
         minimum: 0,
         maximum: 2,
         description:
-          "Structural walk depth 0-2 (default 0 = off) over code_edges_symbol, 1/(1+hop) score decay. Code corpora only; bypasses the query cache.",
+          "Code-graph walk depth 0-2 (default 0 = off); score decays per hop. Code corpora only; bypasses the query cache.",
       }),
       explain: bool({
         description:
-          "Stamp each hit with per-signal ranking attribution (`explain`: base score, each boost factor, reranker delta). Bypasses the query cache.",
+          "Stamp each hit with per-signal ranking attribution (base, boosts, rerank delta). Bypasses the query cache.",
       }),
       offset: int({
         minimum: 0,
         maximum: 1000,
         description:
-          "Skip the first N ranked hits (pagination). Applied after ranking; the widened fetch bypasses nothing else.",
+          "Skip the first N ranked hits (pagination), after ranking.",
       }),
       mode: str({
         enum: ["conservative", "balanced", "tokenmax"],
         description:
-          "Per-call search mode bundle. Operator only (local/static bearer); a tenant token's mode is silently ignored, so it cannot reach the paid tokenmax bundle.",
+          "Per-call search mode bundle. Operator only; a tenant token's mode is silently ignored.",
       }),
     },
   },
@@ -1264,7 +1264,7 @@ export const OPERATIONS: readonly Operation[] = [
     params: {
       name: str({ ...req, description: "Bare symbol name to find callers of (e.g. `hybridSearch`)." }),
       limit: int({ minimum: 1, maximum: 1000 }),
-      lang: str({ description: "Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`)." }),
+      lang: str({ description: "Only mentions in this source language (e.g. `typescript`)." }),
     },
   },
   {
@@ -1279,7 +1279,7 @@ export const OPERATIONS: readonly Operation[] = [
           "`<path>:<line>` of a symbol body (e.g. `src/x.ts:42`), or a symbol name, bare or qualified (e.g. `save` or `Repo::save`).",
       }),
       limit: int({ minimum: 1, maximum: 1000 }),
-      lang: str({ description: "Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`)." }),
+      lang: str({ description: "Only mentions in this source language (e.g. `typescript`)." }),
     },
   },
   {
@@ -1290,7 +1290,7 @@ export const OPERATIONS: readonly Operation[] = [
     params: {
       name: str({ ...req, description: "Bare symbol name to locate definitions of (e.g. `hybridSearch`, `Storage`)." }),
       limit: int({ minimum: 1, maximum: 1000 }),
-      lang: str({ description: "Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`)." }),
+      lang: str({ description: "Only mentions in this source language (e.g. `typescript`)." }),
     },
   },
   {
@@ -1301,7 +1301,7 @@ export const OPERATIONS: readonly Operation[] = [
     params: {
       name: str({ ...req, description: "Bare symbol name to find references to (e.g. `hybridSearch`)." }),
       limit: int({ minimum: 1, maximum: 1000 }),
-      lang: str({ description: "Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`)." }),
+      lang: str({ description: "Only mentions in this source language (e.g. `typescript`)." }),
     },
   },
   {

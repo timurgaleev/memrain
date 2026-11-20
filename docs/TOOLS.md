@@ -165,15 +165,15 @@ Ranked vector+keyword chunks, paths and titles. Language/symbol/date/type/slug-p
 | `k` | integer (1–100) | no | Number of hits to return. Default 20. |
 | `min_trust` | string (one of `owner`, `member`, `agent`, `external`) | no | Lowest tier kept: owner>member>agent>external. Hits report trust_tier. |
 | `token_budget` | integer (1–200000) | no | Cap returned title + content (~chars/4 tokens), including trust frames. Keep whole hits in rank order; stop before the first that overflows. Omitted: mode default. |
-| `lang` | string | no | Code chunks of this source language only (chunks.language, e.g. 'typescript'). |
-| `symbol_kind` | string | no | Chunks of this symbol kind (chunks.symbol_type, e.g. 'function', 'class'). |
-| `since` | string | no | Keep hits whose content date COALESCE(effective_date, updated_at) is >= this bound: ISO-8601 date/datetime or a duration back from now (7d/2w/6m/1y). |
-| `until` | string | no | Upper bound on COALESCE(effective_date,updated_at): ISO date/time (YYYY-MM-DD includes the whole day), or duration back from now: 7d/2w/6m/1y. |
+| `lang` | string | no | Code chunks of this language only (e.g. 'typescript'). |
+| `symbol_kind` | string | no | Chunks of this symbol kind (e.g. 'function', 'class'). |
+| `since` | string | no | Keep hits whose content date (effective, else updated) is >= this: ISO-8601 date/datetime or a duration back from now (7d/2w/6m/1y). |
+| `until` | string | no | Upper bound on the content date: ISO date/time (YYYY-MM-DD includes the whole day), or duration back from now: 7d/2w/6m/1y. |
 | `near_symbol` | string | no | Anchor retrieval at this qualified symbol (e.g. 'BrainEngine::searchKeyword'); its chunks join the candidates and seed the code-graph walk. Code corpora only. |
-| `walk_depth` | integer (0–2) | no | Structural walk depth 0-2 (default 0 = off) over code_edges_symbol, 1/(1+hop) score decay. Code corpora only; bypasses the query cache. |
-| `explain` | boolean | no | Stamp each hit with per-signal ranking attribution (`explain`: base score, each boost factor, reranker delta). Bypasses the query cache. |
-| `offset` | integer (0–1000) | no | Skip the first N ranked hits (pagination). Applied after ranking; the widened fetch bypasses nothing else. |
-| `mode` | string (one of `conservative`, `balanced`, `tokenmax`) | no | Per-call search mode bundle. Operator only (local/static bearer); a tenant token's mode is silently ignored, so it cannot reach the paid tokenmax bundle. |
+| `walk_depth` | integer (0–2) | no | Code-graph walk depth 0-2 (default 0 = off); score decays per hop. Code corpora only; bypasses the query cache. |
+| `explain` | boolean | no | Stamp each hit with per-signal ranking attribution (base, boosts, rerank delta). Bypasses the query cache. |
+| `offset` | integer (0–1000) | no | Skip the first N ranked hits (pagination), after ranking. |
+| `mode` | string (one of `conservative`, `balanced`, `tokenmax`) | no | Per-call search mode bundle. Operator only; a tenant token's mode is silently ignored. |
 
 ### backlinks
 
@@ -667,7 +667,7 @@ Call sites for symbol name (surface,chunk,path), with language/kind/line bounds 
 |---|---|---|---|
 | `name` | string | yes | Bare symbol name to find callers of (e.g. `hybridSearch`). |
 | `limit` | integer (1–1000) | no |  |
-| `lang` | string | no | Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`). |
+| `lang` | string | no | Only mentions in this source language (e.g. `typescript`). |
 
 ### code_callees
 
@@ -679,7 +679,7 @@ Callees of target path:line (innermost definition) or symbol; qualified names re
 |---|---|---|---|
 | `target` | string | yes | `<path>:<line>` of a symbol body (e.g. `src/x.ts:42`), or a symbol name, bare or qualified (e.g. `save` or `Repo::save`). |
 | `limit` | integer (1–1000) | no |  |
-| `lang` | string | no | Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`). |
+| `lang` | string | no | Only mentions in this source language (e.g. `typescript`). |
 
 ### code_def
 
@@ -691,7 +691,7 @@ Find code-def mentions for symbol name across indexed code: surface form, chunk,
 |---|---|---|---|
 | `name` | string | yes | Bare symbol name to locate definitions of (e.g. `hybridSearch`, `Storage`). |
 | `limit` | integer (1–1000) | no |  |
-| `lang` | string | no | Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`). |
+| `lang` | string | no | Only mentions in this source language (e.g. `typescript`). |
 
 ### code_refs
 
@@ -703,7 +703,7 @@ Non-call code-ref mentions for symbol name (imports/type uses/other references);
 |---|---|---|---|
 | `name` | string | yes | Bare symbol name to find references to (e.g. `hybridSearch`). |
 | `limit` | integer (1–1000) | no |  |
-| `lang` | string | no | Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`). |
+| `lang` | string | no | Only mentions in this source language (e.g. `typescript`). |
 
 ### code_blast
 

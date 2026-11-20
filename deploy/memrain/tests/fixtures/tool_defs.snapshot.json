@@ -87,19 +87,19 @@
         },
         "lang": {
           "type": "string",
-          "description": "Code chunks of this source language only (chunks.language, e.g. 'typescript')."
+          "description": "Code chunks of this language only (e.g. 'typescript')."
         },
         "symbol_kind": {
           "type": "string",
-          "description": "Chunks of this symbol kind (chunks.symbol_type, e.g. 'function', 'class')."
+          "description": "Chunks of this symbol kind (e.g. 'function', 'class')."
         },
         "since": {
           "type": "string",
-          "description": "Keep hits whose content date COALESCE(effective_date, updated_at) is >= this bound: ISO-8601 date/datetime or a duration back from now (7d/2w/6m/1y)."
+          "description": "Keep hits whose content date (effective, else updated) is >= this: ISO-8601 date/datetime or a duration back from now (7d/2w/6m/1y)."
         },
         "until": {
           "type": "string",
-          "description": "Upper bound on COALESCE(effective_date,updated_at): ISO date/time (YYYY-MM-DD includes the whole day), or duration back from now: 7d/2w/6m/1y."
+          "description": "Upper bound on the content date: ISO date/time (YYYY-MM-DD includes the whole day), or duration back from now: 7d/2w/6m/1y."
         },
         "near_symbol": {
           "type": "string",
@@ -109,17 +109,17 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 2,
-          "description": "Structural walk depth 0-2 (default 0 = off) over code_edges_symbol, 1/(1+hop) score decay. Code corpora only; bypasses the query cache."
+          "description": "Code-graph walk depth 0-2 (default 0 = off); score decays per hop. Code corpora only; bypasses the query cache."
         },
         "explain": {
           "type": "boolean",
-          "description": "Stamp each hit with per-signal ranking attribution (`explain`: base score, each boost factor, reranker delta). Bypasses the query cache."
+          "description": "Stamp each hit with per-signal ranking attribution (base, boosts, rerank delta). Bypasses the query cache."
         },
         "offset": {
           "type": "integer",
           "minimum": 0,
           "maximum": 1000,
-          "description": "Skip the first N ranked hits (pagination). Applied after ranking; the widened fetch bypasses nothing else."
+          "description": "Skip the first N ranked hits (pagination), after ranking."
         },
         "mode": {
           "type": "string",
@@ -128,7 +128,7 @@
             "balanced",
             "tokenmax"
           ],
-          "description": "Per-call search mode bundle. Operator only (local/static bearer); a tenant token's mode is silently ignored, so it cannot reach the paid tokenmax bundle."
+          "description": "Per-call search mode bundle. Operator only; a tenant token's mode is silently ignored."
         }
       },
       "required": [
@@ -2247,7 +2247,7 @@
         },
         "lang": {
           "type": "string",
-          "description": "Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`)."
+          "description": "Only mentions in this source language (e.g. `typescript`)."
         }
       },
       "required": [
@@ -2277,7 +2277,7 @@
         },
         "lang": {
           "type": "string",
-          "description": "Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`)."
+          "description": "Only mentions in this source language (e.g. `typescript`)."
         }
       },
       "required": [
@@ -2307,7 +2307,7 @@
         },
         "lang": {
           "type": "string",
-          "description": "Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`)."
+          "description": "Only mentions in this source language (e.g. `typescript`)."
         }
       },
       "required": [
@@ -2337,7 +2337,7 @@
         },
         "lang": {
           "type": "string",
-          "description": "Only mentions from chunks of this source language (e.g. `typescript`, `python`, `go`)."
+          "description": "Only mentions in this source language (e.g. `typescript`)."
         }
       },
       "required": [
