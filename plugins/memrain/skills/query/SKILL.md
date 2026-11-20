@@ -152,8 +152,9 @@ connected entities surface higher.
 ## Search Quality Awareness
 
 If search results seem off (wrong results, missing known pages, irrelevant hits):
-- Run `run_doctor` (or `memrain doctor` from the shell) to check index health
-- Check embedding coverage via `stats` -- partial embeddings degrade hybrid search
+- Check embedding coverage per source via `source_health` -- partial
+  embeddings degrade hybrid search
+- Ask the operator to run `memrain doctor` on the host to check index health
 - Check the active ranking configuration with `memrain search modes` (shell) to
   see which ranking stages are on for this brain
 - Report search quality issues in the maintain workflow (see maintain skill)

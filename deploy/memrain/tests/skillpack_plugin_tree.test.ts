@@ -10,6 +10,7 @@ import { describe, expect, it } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { OPERATOR_ONLY_TOOLS } from "../src/mcp/visibility.ts";
 import { getBrainSkill, listSkillCatalog } from "../src/core/skillpack/brain-resident.ts";
 import {
   LOCK_FILE,
@@ -55,6 +56,17 @@ describe("plugin lanes", () => {
       .filter((s) => /^prompt: true$/m.test(readFileSync(join(PACK_DIR, s.slug, "SKILL.md"), "utf8")))
       .map((s) => s.slug);
     expect([...lanes.starter].sort()).toEqual(served.sort());
+  });
+
+  it("a skill a client agent reads names no operator-only tool", () => {
+    const named: string[] = [];
+    for (const slug of new Set([...Object.keys(lanes.plugin), ...lanes.starter])) {
+      const text = readFileSync(join(PACK_DIR, slug, "SKILL.md"), "utf8");
+      for (const tool of OPERATOR_ONLY_TOOLS) {
+        if (text.includes(`\`${tool}\``) || new RegExp(`^\\s+- ${tool}$`, "m").test(text)) named.push(`${slug}: ${tool}`);
+      }
+    }
+    expect(named).toEqual([]);
   });
 
   it("flags a lane entry for a skill that does not exist and an operator skill in the plugin", () => {

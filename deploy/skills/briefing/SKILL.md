@@ -15,7 +15,6 @@ tools:
   - fact_supersessions
   - get_recent_salience
   - chronicle_since
-  - run_doctor
 mutating: false
 ---
 
@@ -54,10 +53,6 @@ Compile a daily briefing from brain context.
       recent-activity weight in the window).
    3. **New facts since last briefing** — the `entity_facts` rows for each
       entity from the salience list; include `kind`, `notability`, and `confidence`.
-   4. **Consolidation footer** — the brain's background cycle handles fact
-      consolidation on its own schedule; if `run_doctor` reports the cycle in a
-      warn state, note it so the operator can run `memrain cycle` before reading
-      further.
 
    The brain keeps no briefing cursor. A timer-driven run passes its own
    window (for example the last 24 hours), so runs never depend on state
@@ -80,8 +75,9 @@ Compile a daily briefing from brain context.
    - Updated in last 7 days
    - Have high activity (many recent timeline entries — cross-check
      `get_recent_salience`)
-6. **Stale alerts.** From `run_doctor`:
-   - Pages flagged as stale that are relevant to today's meetings
+6. **Stale alerts.** Among the pages read for today's meetings:
+   - Pages last updated more than 90 days ago, whose compiled truth may no
+     longer hold
 
 ## Brain-Native Context Loading
 
@@ -160,7 +156,6 @@ When presenting facts from brain pages, include inline citations:
 - Search the brain by name (`search`, `query`)
 - Read a page (`page_get`)
 - List pages by prefix (`page_list`)
-- Check brain health (`run_doctor`)
 - View timeline entries (`entity_timeline`)
 - Pull the window's pulse (`fact_supersessions`, `get_recent_salience`,
   `entity_facts`, `chronicle_since`)
