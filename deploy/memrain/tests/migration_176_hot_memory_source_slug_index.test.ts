@@ -1,6 +1,7 @@
 /**
- * Migration 176 — hot_memory.source_slug index: a page purge finds the page's
- * observations through it instead of scanning the table; up, down and up again.
+ * Migration 176 — hot_memory indexes on source_slug and superseded_by: a page
+ * purge finds the page's observations, and the foreign key the rows that point
+ * at a deleted one, without scanning the table; up, down and up again.
  */
 import { describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
@@ -8,10 +9,12 @@ import { discoverMigrations, revertMigration, runMigrations } from "../src/core/
 import type { Engine } from "../src/core/engine/interface.ts";
 
 async function hasIndex(e: Engine): Promise<boolean> {
-  const r = await e.query<{ indexdef: string }>(
-    `SELECT indexdef FROM pg_indexes WHERE tablename = 'hot_memory' AND indexname = 'hot_memory_source_slug_idx'`,
+  const r = await e.query<{ indexname: string; indexdef: string }>(
+    `SELECT indexname, indexdef FROM pg_indexes
+      WHERE tablename = 'hot_memory' AND indexname IN ('hot_memory_source_slug_idx', 'hot_memory_superseded_by_idx')
+      ORDER BY indexname`,
   );
-  return r.rows.length === 1 && r.rows[0]!.indexdef.includes("(source_slug)");
+  return r.rows.length === 2 && r.rows[0]!.indexdef.includes("(source_slug)") && r.rows[1]!.indexdef.includes("(superseded_by)");
 }
 
 for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`migration 176 (${name})`, () => {
@@ -25,18 +28,25 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         `INSERT INTO hot_memory (entity_slug, fact, source_slug)
          SELECT 'people/p' || g, 'fact ' || g, 'notes/n' || g FROM generate_series(1, 5000) g`,
       );
+      await e.query(`UPDATE hot_memory SET superseded_by = id - 1 WHERE id % 50 = 0`);
       await e.query(`ANALYZE hot_memory`);
       const plan = await e.transaction(async (tx) => {
         // The PGLite engine turns sequential scans off for its vector indexes;
         // turn them back on so the planner has the scan to prefer.
         await tx.query(`SET LOCAL enable_seqscan = on`);
-        const r = await tx.query<{ "QUERY PLAN": string }>(
+        const bySlug = await tx.query<{ "QUERY PLAN": string }>(
           `EXPLAIN SELECT id FROM hot_memory WHERE source_slug = ANY($1::text[])`,
           [["notes/n42"]],
         );
-        return r.rows.map((x) => x["QUERY PLAN"]).join("\n");
+        // The lookup ON DELETE SET NULL runs for every deleted row.
+        const byReplacement = await tx.query<{ "QUERY PLAN": string }>(
+          `EXPLAIN SELECT id FROM hot_memory WHERE superseded_by = $1`,
+          [42],
+        );
+        return [...bySlug.rows, ...byReplacement.rows].map((x) => x["QUERY PLAN"]).join("\n");
       });
       expect(plan).toContain("hot_memory_source_slug_idx");
+      expect(plan).toContain("hot_memory_superseded_by_idx");
     } finally { await db.close(); }
   });
 
