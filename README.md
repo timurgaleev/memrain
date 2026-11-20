@@ -45,8 +45,10 @@ and database passwords before anything is stored.
 
 **You stay in control of what it remembers.** Correct a fact and the old one is
 marked superseded, not silently overwritten; forget one and it stops showing up
-in answers while the record of the change stays. Facts that contradict each other
-are flagged, so your agent does not repeat one of them as settled truth.
+in answers while the record of the change stays. Two different values for the
+same measured claim, valid at the same time (one entity, source, metric, unit
+and period), are flagged as contested, so your agent does not repeat one of
+them as settled truth.
 
 ## What's in 2.0
 

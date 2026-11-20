@@ -451,7 +451,8 @@ Both are off unless switched on, and both run under a per-run dollar ceiling.
 | `MEMRAIN_SKILLS_DIR` | `deploy/skills` (compose: `/skills`) | Skill pack served by `list_skills` / `get_skill` and linted by `memrain skillpack lint`. Allowlisted. | free |
 
 Skills in this directory can also opt into MCP prompts with top-level
-`prompt: true` frontmatter. None of the bundled skills opt in by default.
+`prompt: true` frontmatter. Four bundled read-only skills opt in: `query`,
+`connect-client`, `cross-modal-review` and `daily-task-prep`.
 The caller must be able to use `list_skills`, `get_skill` and every tool the
 skill declares. Public callers cannot list or retrieve prompts. The existing
 path containment, symlink and 256 KiB file-size checks apply. A prompt returns

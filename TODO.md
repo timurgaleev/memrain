@@ -79,6 +79,14 @@ marked; this section is the one that stands.
 - A single-value link target cannot hold two separate periods (A, then B, then
   A again); the re-add is refused.
 
+## Code retrieval baseline
+
+- `memrain eval code` on production (2026-11-20, v2.0.0-7) scored hit@5 6%:
+  one of 16 indexed questions; three answers are not indexed yet, so the code
+  index likely predates them. Re-index the code source, run the eval again,
+  and if the score stays low, find out whether code chunks reach the vector arm
+  at all or only keyword hits on identifiers do.
+
 ## Follow-ups from the single-value merge fix
 
 - An entity merge closes an open single-value link only when each side held
