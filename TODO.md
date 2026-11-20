@@ -89,19 +89,32 @@ marked; this section is the one that stands.
   all of them pages; a search scoped to that source still ranks `indexer.ts`
   above `embedding.ts` for "embed one text string with Titan". Not a
   regression: the eval now prints how many code chunks carry a vector.
-- The production code index is stale (documents dated 2026-10-12) and still
-  holds the pre-rename `deploy/memex/` tree next to `deploy/memrain/`, which
-  is why three answers read as not indexed. Operator steps, no paid call
-  except the eval's: `git pull` the checkout bind-mounted as `/repo-source`
-  (`EFS_REPO` in the host's `.env`), restart the memrain container so its
-  boot code sweep re-indexes changed files (`[code] boot sweep:` in the log),
-  check whether the `deploy/memex/` documents are gone and delete them if
-  not, then run `bun run src/cli.ts eval code` in the container (one Titan
-  embedding per question per run, 57 in all).
-- Whether code should get vectors at all is an operator decision: embedding
-  ~6,600 chunks with Titan v2 is a one-off paid run (a few cents) plus one
+- **[DONE 2026-11-20] Stale production code index.** The `/repo-source`
+  checkout sat detached at v1.0.0. It now sits detached at v2.1.0;
+  `reindex --source code` then `reindex --source code --all` brought all 1,986
+  supported files to chunker v4 (12,324 code chunks, every one graph-only),
+  and the 179 code documents whose file is gone (165 under `deploy/memex/`,
+  14 others) were soft-deleted with `softDeleteDocuments`. Code eval: hit@5
+  1/16 (6%), MRR@5 0.013 before; 3/19 (16%), MRR@5 0.123 after, with all 19
+  answers indexed. Other sources' document counts are unchanged.
+- Whether code should get vectors at all is an operator decision: every embed
+  path excludes `kind: code` (`embeddableChunkFragment`), so it needs a code
+  change, not a flag. Embedding the 12,324 code chunks (17.2M characters,
+  about 5M tokens) with Titan v2 is a one-off run of about USD 0.10, plus one
   embedding per changed chunk on every sync, and it reverses the graph-only
-  choice for the code source.
+  choice for the code source. Until then a plain-words question reaches code
+  through the keyword arm alone.
+- `reindex --source code --rechunk-stale` stops at the first file with a
+  partial parse (`requireCompleteParse`, e.g. a `.sql` migration) and reports
+  `target_failed`, so such files drain through `reindex --source code --all`
+  or one at a time with `memrain index <file>`. The `--all` run on production
+  counted 122 files with a partial parse, indexed with what the grammar could
+  read.
+- The code sweep has no deletion reconcile (by design), so a file removed
+  from the repo keeps its code document until someone soft-deletes it.
+- The atoms phase admits `kind: code` documents as extraction candidates (25
+  per run under the spend cap); on production 23 of 1,986 code documents hold
+  atoms. Decide whether code should feed atoms at all.
 
 ## Facts extraction: cut replies
 
