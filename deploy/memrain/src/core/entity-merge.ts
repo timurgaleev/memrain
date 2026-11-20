@@ -41,6 +41,7 @@ import { lockPageSlugs, validateSlug } from "./pages.ts";
 import { carryFactWithdrawals } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { BODY_TIMELINE_KEY_PREFIX } from "./timeline-body.ts";
+import { SINGLE_VALUE_LINK_TYPES, closeMergedSingleValues, lockSingleValueLink, openSingleValues } from "./links.ts";
 
 export interface MergeOptions {
   /** Caller identifier for the audit trail (marker version rows). */
@@ -126,6 +127,9 @@ export async function mergePage(
         reason: "stub and canonical belong to different sources",
       };
     }
+    // Taken before any row lock, in a fixed order, so a concurrent addLink on
+    // the canonical waits here rather than deadlocking with the link re-point.
+    for (const type of [...SINGLE_VALUE_LINK_TYPES].sort()) await lockSingleValueLink(tx, owner, toSlug, type);
 
     const moved: Record<string, number> = {};
     const move = async (
@@ -196,9 +200,12 @@ export async function mergePage(
     if (withdrawnFacts > 0) moved.withdrawn_facts = withdrawnFacts;
 
     // ── links (outbound) ──────────────────────────────────────────────────
-    // Unique key (mig059): (source_slug, target_slug, type, source_id). Drop
-    // stub-outbound rows colliding with an existing canonical-outbound edge,
-    // then re-point source_slug.
+    // Unique key: (source_slug, target_slug, type, source_id, link_source).
+    // Drop stub-outbound rows colliding with an existing canonical-outbound
+    // edge, then re-point source_slug.
+    const linkEnds = [fromSlug, toSlug];
+    const canonicalValues = await openSingleValues(tx, owner, toSlug, linkEnds);
+    const stubValues = await openSingleValues(tx, owner, fromSlug, linkEnds);
     await tx.query(
       `DELETE FROM links l
         WHERE l.source_slug = $1 AND l.source_id = $3
@@ -206,7 +213,7 @@ export async function mergePage(
             SELECT 1 FROM links x
              WHERE x.source_slug = $2 AND x.source_id = $3
                AND x.target_slug = l.target_slug
-               AND x.type = l.type)`,
+               AND x.type = l.type AND x.link_source = l.link_source)`,
       [fromSlug, toSlug, owner],
     );
     await move(
@@ -224,7 +231,7 @@ export async function mergePage(
             SELECT 1 FROM links x
              WHERE x.target_slug = $2 AND x.source_id = $3
                AND x.source_slug = l.source_slug
-               AND x.type = l.type)`,
+               AND x.type = l.type AND x.link_source = l.link_source)`,
       [fromSlug, toSlug, owner],
     );
     await move(
@@ -240,6 +247,8 @@ export async function mergePage(
         WHERE source_slug = $1 AND target_slug = $1 AND source_id = $2`,
       [toSlug, owner],
     );
+    const closedValues = await closeMergedSingleValues(tx, owner, toSlug, canonicalValues, stubValues);
+    if (closedValues > 0) moved.single_values_closed = closedValues;
 
     // ── timeline_events ───────────────────────────────────────────────────
     // Dedup keys: (slug, occurred_at, source_chunk_id) WHERE chunk NOT NULL

@@ -3,6 +3,7 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { putPage } from "../src/core/pages.ts";
 import { addLink, graphQuery } from "../src/core/links.ts";
 import { checkSingleValueLinkOverlaps } from "../src/core/doctor-ops.ts";
+import { mergePage } from "../src/core/entity-merge.ts";
 
 for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) describe(`single-value links (${name})`, () => {
   let db: Awaited<ReturnType<typeof open>>;
@@ -191,5 +192,62 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(report.status).toBe("warn");
     expect(report.detail).toContain(p);
     expect(await intervals(p)).toEqual(before);
+  });
+  it("closes the earlier open value when a merge brings two together", async () => {
+    const canonical = await person();
+    const stub = await person();
+    await works(canonical, "orgs/acme", "2020-01-01");
+    await works(stub, "orgs/globex", "2023-06-01");
+    await addLink(db.storage, { source_slug: stub, target_slug: "orgs/initech", type: "knows" });
+    expect((await mergePage(db.storage, stub, canonical)).merged).toBe(true);
+    expect(await intervals(canonical)).toEqual([
+      { target_slug: "orgs/acme", valid_from: "2020-01-01", valid_until: "2023-06-01" },
+      { target_slug: "orgs/globex", valid_from: "2023-06-01", valid_until: null },
+    ]);
+    expect(await intervals(canonical, "knows")).toEqual([{ target_slug: "orgs/initech", valid_from: null, valid_until: null }]);
+  });
+
+  it("ignores a link the merge turns into a self-loop", async () => {
+    const canonical = await person();
+    const stub = await person();
+    await works(canonical, "orgs/acme", "2020-01-01");
+    await works(stub, canonical, "2023-06-01");
+    await mergePage(db.storage, stub, canonical);
+    expect(await intervals(canonical)).toEqual([{ target_slug: "orgs/acme", valid_from: "2020-01-01", valid_until: null }]);
+  });
+
+  it("leaves an overlap the canonical already held for the doctor", async () => {
+    const canonical = await person();
+    const stub = await person();
+    await db.storage.engine().query(
+      `INSERT INTO links (source_slug, target_slug, type, link_source, valid_from)
+       VALUES ($1, 'orgs/old-a', 'works_at', 'manual', '2020-01-01'), ($1, 'orgs/old-b', 'works_at', 'manual', '2023-01-01')`,
+      [canonical],
+    );
+    await mergePage(db.storage, stub, canonical);
+    expect((await intervals(canonical)).map((r) => r.valid_until)).toEqual([null, null]);
+  });
+
+  it("keeps a manual link that collides only with a derived one", async () => {
+    const canonical = await person();
+    const stub = await person();
+    await db.storage.engine().query(
+      `INSERT INTO links (source_slug, target_slug, type, link_source) VALUES ($1, 'orgs/globex', 'works_at', 'frontmatter')`,
+      [canonical],
+    );
+    await works(stub, "orgs/globex", "2023-06-01");
+    await mergePage(db.storage, stub, canonical);
+    expect(await intervals(canonical)).toEqual([{ target_slug: "orgs/globex", valid_from: "2023-06-01", valid_until: null }]);
+  });
+
+  it("leaves a merged tie open for the doctor instead of guessing", async () => {
+    const canonical = await person();
+    const stub = await person();
+    await works(canonical, "orgs/acme", "2021-01-01");
+    await works(stub, "orgs/globex", "2021-01-01");
+    await mergePage(db.storage, stub, canonical);
+    const rows = await intervals(canonical);
+    expect(rows.map((r) => r.valid_until)).toEqual([null, null]);
+    expect(overlapping(rows)).toBe(true);
   });
 });

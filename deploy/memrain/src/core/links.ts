@@ -329,6 +329,64 @@ export function planSingleValue(
   return null;
 }
 
+/** Serializes writers of one entity's single-value type within a transaction. */
+export async function lockSingleValueLink(tx: Engine, owner: string, sourceSlug: string, type: string): Promise<void> {
+  await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`memrain:link-value:${owner}|${sourceSlug}|${type}`]);
+}
+
+export interface OpenSingleValue {
+  type: string;
+  target_slug: string;
+  valid_from: string | null;
+}
+
+/** An entity's open manual single-value links, minus those pointing at `skipTargets`. */
+export async function openSingleValues(
+  tx: Engine, owner: string, sourceSlug: string, skipTargets: readonly string[],
+): Promise<OpenSingleValue[]> {
+  const { rows } = await tx.query<OpenSingleValue>(
+    `SELECT type, target_slug, valid_from::text AS valid_from FROM links
+      WHERE source_slug = $1 AND source_id = $2 AND link_source = 'manual'
+        AND type = ANY($3::text[]) AND valid_until IS NULL AND NOT (target_slug = ANY($4::text[]))`,
+    [sourceSlug, owner, [...SINGLE_VALUE_LINK_TYPES], [...skipTargets]],
+  );
+  return rows;
+}
+
+/**
+ * The `addLink` rule applied to a merge: when the canonical and the stub each
+ * held one open value of a type, for different targets, the one that started
+ * earlier (or has no start) ends where the other starts. Several open values
+ * on one side or a tie are left as they are for the doctor overlap check, so
+ * an overlap that existed before the merge is never rewritten.
+ */
+export async function closeMergedSingleValues(
+  tx: Engine, owner: string, slug: string, canonical: readonly OpenSingleValue[], stub: readonly OpenSingleValue[],
+): Promise<number> {
+  let closed = 0;
+  for (const type of SINGLE_VALUE_LINK_TYPES) {
+    const mine = canonical.filter((r) => r.type === type);
+    const theirs = stub.filter((r) => r.type === type);
+    if (mine.length !== 1 || theirs.length !== 1) continue;
+    const [a, b] = [mine[0]!, theirs[0]!];
+    if (a.target_slug === b.target_slug || a.valid_from === b.valid_from) continue;
+    const [older, newer] = a.valid_from === null || (b.valid_from !== null && a.valid_from < b.valid_from) ? [a, b] : [b, a];
+    // The newer row must have survived the merge's collision drops.
+    const { rows } = await tx.query<{ one: number }>(
+      `UPDATE links SET valid_until = $5::date
+        WHERE source_slug = $1 AND source_id = $2 AND type = $3 AND target_slug = $4
+          AND link_source = 'manual' AND valid_until IS NULL
+          AND EXISTS (SELECT 1 FROM links n
+                       WHERE n.source_slug = $1 AND n.source_id = $2 AND n.type = $3 AND n.target_slug = $6
+                         AND n.link_source = 'manual' AND n.valid_until IS NULL)
+        RETURNING 1 AS one`,
+      [slug, owner, type, older.target_slug, newer.valid_from, newer.target_slug],
+    );
+    closed += rows.length;
+  }
+  return closed;
+}
+
 export interface AddLinkResult {
   source_slug: string;
   target_slug: string;
@@ -398,7 +456,7 @@ export async function addLink(
   return storage.engine().transaction(async (tx) => {
     // One lock per call and nothing else taken under it, so writers of one
     // entity's value queue up instead of each closing the same open row.
-    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`memrain:link-value:${owner}|${input.source_slug}|${type}`]);
+    await lockSingleValueLink(tx, owner, input.source_slug, type);
     const { rows } = await tx.query<LinkInterval & { target_slug: string }>(
       `SELECT target_slug, valid_from::text AS valid_from, valid_until::text AS valid_until
          FROM links WHERE source_slug = $1 AND type = $2 AND source_id = $3 AND link_source = 'manual'`,
