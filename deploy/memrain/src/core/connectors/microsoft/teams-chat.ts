@@ -289,7 +289,7 @@ class ChatAdapter implements SyncAdapter {
     const through = (chat: QueuedChat, items: SyncItem[], deletions: string[] = []): PageResult => {
       const marks = { ...state.marks };
       if (chat.mark !== null) marks[chatKey(chat.id)] = chat.mark;
-      return { ok: true, items, deletions, checkpoint: JSON.stringify({ ...state, marks, queue: rest }), done: rest.length === 0 };
+      return { ok: true, items, deletions, checkpoint: JSON.stringify({ ...state, marks, queue: rest }), done: rest.length === 0 && state.listing === null };
     };
 
     let chat = head;
