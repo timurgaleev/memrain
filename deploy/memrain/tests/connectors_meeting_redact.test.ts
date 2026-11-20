@@ -198,6 +198,32 @@ const CASES: Case[] = [
     kept: ["(Kreditkarte)", "Ihre neue Karte"],
   },
   {
+    // A label with nothing after it does not take the next line: a date under
+    // "Access code", a sign-off under "Password:" or "Passcode:".
+    name: "a label whose next line is not its value",
+    input: [
+      "Access code",
+      "2026-11-17 is when the new codes go out.",
+      "Meeting ID:",
+      "17.11.2026",
+      "Conference ID: 2026-11-17 10:00",
+      "Password:",
+      "",
+      "Thanks,",
+      "Passcode:",
+      "Regards,",
+      "Bob",
+    ].join("\n"),
+    gone: [],
+    kept: ["2026-11-17 is when", "17.11.2026", "2026-11-17 10:00", "Thanks,", "Regards,"],
+  },
+  {
+    name: "a value on the line after its label",
+    input: "Password:\n\nhunter22\nAccess code\n123 456 789",
+    gone: ["hunter22", "123 456 789"],
+    kept: ["Password:", "Access code"],
+  },
+  {
     name: "prose that names the labels",
     input: [
       "Passwort zurücksetzen: klicken Sie hier, um es zu ändern.",

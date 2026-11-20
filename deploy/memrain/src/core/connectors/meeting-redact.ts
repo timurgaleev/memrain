@@ -65,6 +65,11 @@ const link: Replace = () => LINK_REMOVED;
 const keepPrefix: Replace = (_m, [prefix]) => `${prefix}${REMOVED}`;
 const keepLabel: Replace = (_m, [label, gap]) => `${label}${gap}${REMOVED}`;
 
+/** A value that starts with a date, which digit grouping alone would read as an id: `2026-11-17 10:00`, `17.11.2026`. */
+const DATE = /^(?:\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{4})(?!\d)/;
+/** A label left empty above a sign-off (`Password:` then `Thanks,`) gives the sign-off no value role. */
+const signOffBelow = (gap: string | undefined, value: string | undefined) => /\n/.test(gap ?? "") && /^\p{L}+,$/u.test(value ?? "");
+
 const RULES: readonly Rule[] = [
   // Join links: the link itself carries the meeting id, and often the passcode.
   // A Teams link that names the meeting thread goes too: behind the web client
@@ -97,19 +102,24 @@ const RULES: readonly Rule[] = [
   // straight after it and Zoom's `,,,,*<passcode>#` go.
   { re: /(\d)(,{2,8}\d{3,20}#(?:\*?\d{3,20}#)?(?:,{1,8}\*?\d{3,20}#?){0,2})/g, replace: (_m, [digit]) => `${digit},,${REMOVED}` },
   // Labelled meeting ids, digits only.
-  { re: new RegExp(`(${ID_LABELS})(${PAREN}(?:${COLON})?${GAP})(${ID_DIGITS})`, "gi"), replace: keepLabel, labelled: true },
+  {
+    re: new RegExp(`(${ID_LABELS})(${PAREN}(?:${COLON})?${GAP})(${ID_DIGITS})`, "gi"),
+    replace: (m, [label, gap, value]) => (DATE.test(value ?? "") ? m : `${label}${gap}${REMOVED}`),
+    labelled: true,
+  },
   // Meeting passcodes. Without a digit the value counts only after a colon and
   // when it ends its line, so "Passcode protected meeting" stays prose.
   {
     re: new RegExp(`(${CODE_LABELS})(${PAREN}(${COLON})?${GAP})(${CODE_GROUPS}|${TOKEN})(?=(${LINE_END})|\\s)`, "gi"),
     replace: (m, [label, gap, colon, value, lineEnd]) =>
-      /\d/.test(value ?? "") || (colon !== undefined && lineEnd !== undefined) ? `${label}${gap}${REMOVED}` : m,
+      !signOffBelow(gap, value) && (/\d/.test(value ?? "") || (colon !== undefined && lineEnd !== undefined)) ? `${label}${gap}${REMOVED}` : m,
     labelled: true,
   },
   // A labelled password; Webex adds the phone passcode in brackets after it.
   {
     re: new RegExp(`(${SECRET_LABELS})(${PAREN}${COLON}${GAP})(${TOKEN})(${SP}{1,4}\\(\\d{4,16}[^()\\n]{0,60}\\))?(?=${LINE_END}|${SP}{1,4}\\()`, "gi"),
-    replace: (_m, [label, gap, _value, phone]) => `${label}${gap}${REMOVED}${phone === undefined ? "" : phone.replace(/\d+/, REMOVED)}`,
+    replace: (m, [label, gap, value, phone]) =>
+      signOffBelow(gap, value) ? m : `${label}${gap}${REMOVED}${phone === undefined ? "" : phone.replace(/\d+/, REMOVED)}`,
     labelled: true,
   },
   // A labelled PIN. Case-sensitive, so "pin" in a word or in prose stays.
