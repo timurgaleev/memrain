@@ -38,7 +38,7 @@ import {
   settleSpend,
 } from "../budget.ts";
 import { runThink, type ThinkResult, type ThinkTraceEvent } from "../synthesis/think.ts";
-import { isQuoteInText, quotedSpans } from "../synthesis/quote-verify.ts";
+import { quotedSpans, quoteMatcher } from "../synthesis/quote-verify.ts";
 import { pageSourcePath, pageTruthSourcePath } from "../page-index.ts";
 import { andSourceScope } from "../source-scope.ts";
 import { chatConfig, CHAT_MAX_TAKES, CHAT_OUTPUT_TOKENS, CHAT_PAGE_HITS } from "./config.ts";
@@ -164,7 +164,8 @@ async function numberCitations(
 ): Promise<ChatCitation[]> {
   const engine = storage.engine();
   const out: ChatCitation[] = [];
-  const quotes = quotedSpans(result.synthesis?.answer ?? "").filter((q) => q.length <= MAX_CITED_QUOTE_CHARS);
+  const quotes = citedQuotes(result);
+  const citedRefs = (result.synthesis?.citations ?? []).map((c) => c.ref);
   for (const c of result.synthesis?.citations ?? []) {
     const n = out.length + 1;
     if (c.kind === "take") {
@@ -178,8 +179,8 @@ async function numberCitations(
     for (const candidate of refSlugCandidates(c.ref)) {
       const params: unknown[] = [candidate];
       const scope = andSourceScope("source_id", owner.readSources, params);
-      const p = await engine.query<{ slug: string; title: string | null; source_id: string; markdown_body: string | null }>(
-        `SELECT slug, title, source_id, markdown_body FROM pages WHERE slug = $1 AND deleted_at IS NULL${scope}`,
+      const p = await engine.query<{ slug: string; title: string | null; source_id: string; markdown_body?: string | null }>(
+        `SELECT slug, title, source_id${quotes.length > 0 ? ", markdown_body" : ""} FROM pages WHERE slug = $1 AND deleted_at IS NULL${scope}`,
         params,
       );
       const row = p.rows[0];
@@ -187,13 +188,44 @@ async function numberCitations(
       if (pageSourcePath(row.slug, row.source_id) !== c.ref && pageTruthSourcePath(row.slug, row.source_id) !== c.ref) continue;
       slug = row.slug;
       title = row.title ?? row.slug;
-      // The page view highlights this passage when the citation opens it.
-      quote = quotes.find((q) => isQuoteInText(q, row.markdown_body ?? ""));
+      // The page view highlights this passage when the citation opens it: the
+      // quote this citation's own marker follows, else one no other citation claims.
+      if (quotes.length > 0) {
+        const inPage = quoteMatcher(row.markdown_body ?? "");
+        const own = (q: CitedQuote) => q.ref !== null && refMatches(c.ref, q.ref);
+        const unclaimed = (q: CitedQuote) => q.ref === null || !citedRefs.some((r) => refMatches(r, q.ref!));
+        quote = (quotes.find((q) => own(q) && inPage(q.text)) ?? quotes.find((q) => unclaimed(q) && inPage(q.text)))?.text;
+      }
       break;
     }
     out.push({ n, slug, title: title.slice(0, 200), kind: "page", ...(quote !== undefined ? { quote } : {}) });
   }
   return out;
+}
+
+interface CitedQuote {
+  text: string;
+  /** The marker right after the quote, lower-cased; null when none follows before the next quote. */
+  ref: string | null;
+}
+
+/** A marker names a citation by its full ref or by the ref's last path segments, as renderMarkers reads it. */
+function refMatches(citationRef: string, marker: string): boolean {
+  const r = citationRef.toLowerCase();
+  return r === marker || r.endsWith(`/${marker}`);
+}
+
+/** The answer's checked quotes short enough to carry, each with the citation marker that follows it. */
+function citedQuotes(result: ThinkResult): CitedQuote[] {
+  const answer = result.synthesis?.answer ?? "";
+  const spans = quotedSpans(answer);
+  return spans
+    .map((s, i) => {
+      const upTo = spans[i + 1]?.start ?? answer.length;
+      const marker = /\[([^[\]\n]{1,300})\]/.exec(answer.slice(s.end, upTo));
+      return { text: s.text, ref: marker ? marker[1]!.trim().toLowerCase() : null };
+    })
+    .filter((q) => q.text.length <= MAX_CITED_QUOTE_CHARS);
 }
 
 /** Rewrite `[ref]` markers to `[n]`; markers for refs that were dropped go. */
