@@ -136,7 +136,7 @@ export async function runExtractConversationFacts(
     }
     let result;
     try {
-      result = await extractFactsFromTurn(turn, {
+      result = await budget.track(() => extractFactsFromTurn(turn, {
         ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
         modelId,
         observationDate: validFrom,
@@ -144,7 +144,7 @@ export async function runExtractConversationFacts(
         // a second paid call, so the hold widens to the projected TOTAL or the
         // retry is dropped.
         canAffordRetry: (projected) => budget.widen(hold, modelId, projected),
-      });
+      }));
     } catch {
       // A model/network error skips this turn; never abort the batch.
       budget.release(hold);

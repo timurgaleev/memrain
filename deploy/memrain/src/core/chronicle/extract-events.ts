@@ -345,7 +345,7 @@ export async function runChronicleExtract(
     defaultJudge(opts.sonnetFn, modelId, (projected) => budget.widen(hold, modelId, projected));
   let result: ChronicleJudgeResult;
   try {
-    result = await judge(judgeInput);
+    result = await budget.track(() => judge(judgeInput));
   } catch (err) {
     budget.release(hold);
     // Transient gateway errors propagate so the queue retries with backoff; a

@@ -286,7 +286,7 @@ async function generateChunkContextRun(
     : { system: SYSTEM_PROMPT, user, maxTokens, temperature: 0 };
 
   try {
-    const resp = await llmFn(callInput);
+    const resp = await budget.track(() => llmFn(callInput));
     // Prefer real token usage (Bedrock Converse reports it, including cache
     // read/write) so the budget reflects the true — cache-discounted — spend.
     // A fake seam or a transport with no usage falls back to a size estimate,

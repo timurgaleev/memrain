@@ -144,6 +144,9 @@ export interface BudgetHold {
   done: boolean;
 }
 
+/** The in-process trackers the current paid call runs under (`BudgetTracker.track`), outermost first. */
+const _trackerScope = new AsyncLocalStorage<readonly BudgetTracker[]>();
+
 export class BudgetTracker {
   private spent: number;
   private held = 0;
@@ -198,6 +201,24 @@ export class BudgetTracker {
     this.held += usd - hold.usd;
     hold.usd = usd;
     return true;
+  }
+
+  /**
+   * Run the paid call this tracker reserved for. The wallet may send it more
+   * than once; an attempt that may have billed without reporting usage (a
+   * timeout after sending) counts its worst case here, as it does against the
+   * durable caps, and against every enclosing tracker's. The caller still
+   * settles or releases its own hold for the attempt whose outcome it sees.
+   */
+  track<T>(fn: () => Promise<T>): Promise<T> {
+    return _trackerScope.run([...(_trackerScope.getStore() ?? []), this], fn);
+  }
+
+  /** An attempt the wallet kept at its worst case: counted, never thrown over the call. */
+  noteUnreportedAttempt(modelId: string, worstUsd: number): void {
+    this.spent += worstUsd;
+    this.calls += 1;
+    this.audit(modelId, { inputTokens: 0, outputTokens: 0 }, worstUsd);
   }
 
   /** Give a hold back without spending (the call failed before it cost). */
@@ -1454,6 +1475,10 @@ async function attemptTracked<T>(
     const actualUsd = usage && priceFor(call.model) ? costUsd(call.model, chargeableUsage(usage)) : null;
     settleRequestCost(usage ? actualUsd : failure !== undefined && !keepHold ? 0 : null);
     if (hold) settleRuns(hold.runs, hold.usd, keepHold ? hold.usd : (actualUsd ?? 0));
+    if (keepHold) {
+      const usd = hold?.usd ?? worstCaseUsd(call) ?? 0;
+      for (const t of new Set(_trackerScope.getStore())) t.noteUnreportedAttempt(call.model, usd);
+    }
     // A call that may have billed unreported keeps its external hold counted
     // (`unknown`); the extension decides what that hold becomes.
     if (hold?.external) await settleExternal(call, hold.external, keepHold ? { outcome: "unknown" } : usage ? { outcome: "done", actualUsd: actualUsd ?? hold.external.usd } : { outcome: "failed" });

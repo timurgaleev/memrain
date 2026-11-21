@@ -1200,7 +1200,7 @@ async function extractFactsForPageRun(
     }
     let result: ExtractTurnResult;
     try {
-      result = await extractFactsFromTurn(window, {
+      result = await budget.track(() => extractFactsFromTurn(window, {
         ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
         modelId,
         observationDate,
@@ -1208,7 +1208,7 @@ async function extractFactsForPageRun(
         // The truncation retry widens the SAME hold taken above — nothing
         // here bills past `cap`.
         canAffordRetry: (projected) => budget.widen(hold, modelId, projected),
-      });
+      }));
     } catch (e) {
       budget.release(hold);
       const reason = classifyFactsAbsorbError(e);
@@ -1371,12 +1371,12 @@ async function extractFactsOnDemandRun(
   }
   let result: ExtractTurnResult;
   try {
-    result = await extractFactsFromTurn(text, {
+    result = await budget.track(() => extractFactsFromTurn(text, {
       ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
       ...(opts.entityHints ? { entityHints: opts.entityHints } : {}),
       modelId,
       canAffordRetry: (projected) => budget.widen(hold, modelId, projected),
-    });
+    }));
   } catch {
     budget.release(hold);
     return { enabled: true, facts: [], modelId: null, spentUsd: 0, skipped: "model_error" };

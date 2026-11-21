@@ -243,12 +243,12 @@ export async function graphRerank(
 
   let order: number[];
   try {
-    const call = await callWithTruncationRetry(
+    const call = await budget.track(() => callWithTruncationRetry(
       "graph-rerank",
       maxTokens,
       (cap) => sonnetFn({ system: SYSTEM_PROMPT, user, maxTokens: cap, temperature: 0 }),
       (projected) => budget.widen(hold, modelId, projected),
-    );
+    ));
     const resp = call.resp;
     try {
       budget.settle(hold, resp.modelId, call.usage);

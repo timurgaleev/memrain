@@ -285,12 +285,12 @@ export async function relationalRecallLlm(
 
   let parsed: RelationalQuery | null;
   try {
-    const call = await callWithTruncationRetry(
+    const call = await budget.track(() => callWithTruncationRetry(
       "relational-llm",
       maxTokens,
       (cap) => sonnetFn({ system: EXTRACT_SYSTEM_PROMPT, user, maxTokens: cap, temperature: 0 }),
       (projected) => budget.widen(hold, modelId, projected),
-    );
+    ));
     const resp = call.resp;
     meta.ran = true;
     try {

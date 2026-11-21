@@ -174,7 +174,7 @@ async function deepSynthRun(
   let questionHold: BudgetHold | null = null;
   const baseSonnet = resolveSonnetFn(opts.sonnetFn, { modelId });
   const recordingSonnet: SonnetFn = async (input) => {
-    const resp = await baseSonnet(input);
+    const resp = await budget.track(() => baseSonnet(input));
     try {
       if (questionHold && !questionHold.done) budget.settle(questionHold, resp.modelId, resp.usage);
       else budget.record(resp.modelId, resp.usage);

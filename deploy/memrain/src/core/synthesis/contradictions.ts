@@ -638,7 +638,7 @@ export async function probeContradictionsPhase(
     let usedModel: string;
     let overCap = false;
     try {
-      const call = await callWithTruncationRetry(
+      const call = await budget.track(() => callWithTruncationRetry(
         "contradictions",
         JUDGE_MAX_TOKENS,
         (cap) =>
@@ -649,7 +649,7 @@ export async function probeContradictionsPhase(
             temperature: 0,
           }),
         (projected) => budget.widen(hold, probeModel, projected),
-      );
+      ));
       const resp = call.resp;
       usedModel = resp.modelId;
       try {

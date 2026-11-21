@@ -771,7 +771,7 @@ export async function gradeTakeEnsemble(
     // reported (truncatedJudges) instead of paying twice for the same cut.
     let call: TruncationRetryResult;
     try {
-      call = await callWithTruncationRetry(
+      call = await opts.budget.track(() => callWithTruncationRetry(
         "grade_takes_ensemble",
         GRADE_MAX_TOKENS,
         (cap) =>
@@ -782,7 +782,7 @@ export async function gradeTakeEnsemble(
             temperature: i === 0 ? 0 : 0.6,
           }),
         (projected) => opts.budget.widen(hold, probeModel, projected),
-      );
+      ));
     } catch (e) {
       opts.budget.release(hold);
       throw e;

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { Storage } from "../src/core/storage.ts";
 import {
+  BudgetTracker,
   costUsd,
   daySpendUsd,
   runWithSpendClient,
@@ -261,6 +262,87 @@ describe("retries inside the wallet", () => {
       ),
     ).rejects.toThrow("timed out");
     expect(sends).toBe(1);
+  });
+});
+
+describe("an in-process BudgetTracker around a retried call", () => {
+  const WORST = { inputTokens: 0, outputTokens: 4_000 };
+
+  it("counts a timed-out attempt's worst case as well as the retry's actual", async () => {
+    const budget = new BudgetTracker(1, "think");
+    const hold = budget.reserve(HAIKU, WORST)!;
+    let sends = 0;
+    await budget.track(() =>
+      trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async (m) => {
+        sends++;
+        if (sends === 1) throw failure("TimeoutError", "request timed out");
+        m.report({ inputTokens: 1_000, outputTokens: 100 });
+      }),
+    );
+    const actual = { inputTokens: 1_000, outputTokens: 100 };
+    budget.settle(hold, HAIKU, actual);
+    expect(sends).toBe(2);
+    expect(budget.totalSpent()).toBeCloseTo(0.02 + costUsd(HAIKU, actual), 4);
+    expect(budget.snapshot().callsRecorded).toBe(2);
+  });
+
+  it("counts every attempt of a call that timed out each time, after the caller releases its hold", async () => {
+    const budget = new BudgetTracker(1, "think");
+    const hold = budget.reserve(HAIKU, WORST)!;
+    await expect(
+      budget.track(() =>
+        trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async () => {
+          throw failure("TimeoutError", "request timed out");
+        }),
+      ),
+    ).rejects.toThrow("timed out");
+    budget.release(hold);
+    expect(budget.totalSpent()).toBeCloseTo(0.08, 4);
+  });
+
+  it("counts nothing extra for throttled attempts that never reached the model", async () => {
+    const budget = new BudgetTracker(1, "think");
+    const hold = budget.reserve(HAIKU, WORST)!;
+    let sends = 0;
+    await budget.track(() =>
+      trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async (m) => {
+        sends++;
+        if (sends < 3) throw failure("ThrottlingException", "Rate exceeded");
+        m.report({ inputTokens: 10, outputTokens: 10 });
+      }),
+    );
+    budget.settle(hold, HAIKU, { inputTokens: 10, outputTokens: 10 });
+    expect(budget.totalSpent()).toBeCloseTo(costUsd(HAIKU, { inputTokens: 10, outputTokens: 10 }), 9);
+  });
+
+  it("counts the attempt once against each enclosing tracker", async () => {
+    const outer = new BudgetTracker(1, "deep-synth");
+    const inner = new BudgetTracker(1, "think");
+    let sends = 0;
+    await outer.track(() => inner.track(() => outer.track(() =>
+      trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async (m) => {
+        sends++;
+        if (sends === 1) throw failure("TimeoutError", "request timed out");
+        m.report({ inputTokens: 1, outputTokens: 1 });
+      }),
+    )));
+    expect(outer.totalSpent()).toBeCloseTo(0.02, 4);
+    expect(inner.totalSpent()).toBeCloseTo(0.02, 4);
+  });
+
+  it("leaves a tracker the call does not run under untouched", async () => {
+    const outside = new BudgetTracker(1, "other");
+    const budget = new BudgetTracker(1, "think");
+    let sends = 0;
+    await budget.track(() =>
+      trackedInvoke({ operation: "think", model: HAIKU, worstCase: TWO_CENTS }, async (m) => {
+        sends++;
+        if (sends === 1) throw failure("TimeoutError", "request timed out");
+        m.report({ inputTokens: 1, outputTokens: 1 });
+      }),
+    );
+    expect(outside.totalSpent()).toBe(0);
+    expect(budget.totalSpent()).toBeCloseTo(0.02, 4);
   });
 });
 

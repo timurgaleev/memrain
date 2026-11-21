@@ -221,11 +221,13 @@ export async function classifyFact(
   }
 
   try {
-    const resp = await opts.llmFn({
+    const llmFn = opts.llmFn;
+    const classify = () => llmFn({
       system: CLASSIFIER_SYSTEM,
       user: buildClassifierUser(newFact, candidates),
       maxTokens: WORST_CASE_USAGE.outputTokens,
     });
+    const resp = await (budget ? budget.track(classify) : classify());
     // Price the call we just made; an exhausted budget still keeps THIS verdict
     // (already paid for) — the caller's next fact will find no room and fall back.
     if (budget && hold) {

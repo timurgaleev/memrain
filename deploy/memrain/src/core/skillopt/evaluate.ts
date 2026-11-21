@@ -168,14 +168,14 @@ export async function runRoutingEval(opts: RunRoutingEvalOptions): Promise<EvalR
         if (!hold) return done("budget_exhausted");
         let reply;
         try {
-          reply = await converse({
+          reply = await budget.track(() => converse({
             system,
             messages: [userMessage(c.intent)],
             tools: [],
             maxTokens: SKILLOPT_MAX_TOKENS,
             operation: SKILLOPT_SPEND_OP,
             modelId,
-          });
+          }));
         } catch (err) {
           budget.release(hold);
           if (isBudgetRefusal(err)) return done("budget_exhausted");

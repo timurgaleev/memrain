@@ -336,7 +336,7 @@ export async function enrichThinPhase(
     ran = true;
     let draft: EnrichDraft | null;
     try {
-      const call = await callWithTruncationRetry(
+      const call = await budget.track(() => callWithTruncationRetry(
         "enrich-thin",
         maxTokens,
         (cap) =>
@@ -347,7 +347,7 @@ export async function enrichThinPhase(
             temperature: 0,
           }),
         (projected) => budget.widen(hold, model, projected),
-      );
+      ));
       const resp = call.resp;
       try {
         budget.settle(hold, resp.modelId, call.usage);

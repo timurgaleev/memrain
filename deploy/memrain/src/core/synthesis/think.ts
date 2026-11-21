@@ -1567,13 +1567,13 @@ async function runThinkSteps(
       // needs a different remedy: more room, not another roll of the dice. The
       // hold is widened to the COMBINED projection because the first call has
       // not been settled yet at that point.
-      const call = await callWithTruncationRetry(
+      const call = await budget.track(() => callWithTruncationRetry(
         "think",
         maxTokens,
         (cap) =>
           sonnetFn({ system: THINK_SYSTEM_PROMPT, user, maxTokens: cap, temperature: 0 }),
         (projected) => budget.widen(hold, modelId, projected),
-      );
+      ));
       const resp = call.resp;
       usedModel = resp.modelId;
       try {
@@ -1599,12 +1599,12 @@ async function runThinkSteps(
         // of the expected format occasionally, and a parse miss on round 1
         // otherwise throws away the whole gather+prompt cycle ("no
         // synthesis" with the money already spent).
-        const retry = await sonnetFn({
+        const retry = await budget.track(() => sonnetFn({
           system: THINK_SYSTEM_PROMPT,
           user,
           maxTokens,
           temperature: 0,
-        });
+        }));
         usedModel = retry.modelId;
         try {
           budget.settle(retryHold, retry.modelId, retry.usage);

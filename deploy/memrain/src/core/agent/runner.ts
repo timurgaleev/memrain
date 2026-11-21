@@ -393,7 +393,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
 
     let reply;
     try {
-      reply = await converse({
+      reply = await budget.track(() => converse({
         system,
         messages: rows.map(asMessage),
         tools,
@@ -401,7 +401,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentRunResult> {
         operation: AGENT_SPEND_OP,
         modelId,
         ...(opts.signal ? { signal: opts.signal } : {}),
-      });
+      }));
     } catch (err) {
       budget.release(hold);
       // The brain's or cycle's cap clears at midnight: the worker defers the

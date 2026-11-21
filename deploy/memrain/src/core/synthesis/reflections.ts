@@ -284,7 +284,7 @@ export async function reflectionsPhase(
 
   let drafts: ReflectionDraft[];
   try {
-    const call = await callWithTruncationRetry(
+    const call = await budget.track(() => callWithTruncationRetry(
       "reflections",
       maxTokens,
       (cap) =>
@@ -295,7 +295,7 @@ export async function reflectionsPhase(
           temperature: 0,
         }),
       (projected) => budget.widen(hold, model, projected),
-    );
+    ));
     const resp = call.resp;
     try {
       budget.settle(hold, resp.modelId, call.usage);

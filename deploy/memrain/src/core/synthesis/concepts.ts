@@ -314,11 +314,11 @@ export async function synthesizeConceptsPhase(
       } else {
         llmCalls += 1;
         try {
-          const resp = await llm({
+          const resp = await budget.track(() => llm({
             system: SYSTEM_PROMPT,
             user,
             maxTokens: CONCEPT_MAX_OUTPUT_TOKENS,
-          });
+          }));
           const txt = resp.text.trim();
           if (txt.length > 0 && !isTruncated(resp) && !TERMINAL_STOP_REASONS.has(resp.stopReason ?? "")) {
             narrative = txt;

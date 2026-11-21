@@ -227,7 +227,7 @@ export async function patternsPhase(
 
   let drafts: PatternDraft[];
   try {
-    const call = await callWithTruncationRetry(
+    const call = await budget.track(() => callWithTruncationRetry(
       "patterns",
       maxTokens,
       (cap) =>
@@ -238,7 +238,7 @@ export async function patternsPhase(
           temperature: 0,
         }),
       (projected) => budget.widen(hold, model, projected),
-    );
+    ));
     const resp = call.resp;
     try {
       budget.settle(hold, resp.modelId, call.usage);
