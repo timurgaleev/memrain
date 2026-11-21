@@ -583,6 +583,24 @@ start. It has a down file in `deploy/memrain/src/core/migrations-down/`.
 
 ## From 2.3 to 2.4
 
+2.4 is a normal deploy: `bash deploy/deploy.sh` applies migrations 181 to 186
+on start. Each has a down file in `deploy/memrain/src/core/migrations-down/`.
+
+- **Requester scope on a shared brain.** Once a brain serves several people
+  (two or more enabled members, or config `access.serves` = `several`), a key
+  bound to no member and no source, and the static public bearer, are refused
+  for reads with `requester_scope_required`. A brain with one member is not
+  affected. Run `memrain doctor` first: the check `unscoped-shared-reads`
+  lists every key that would be refused, with its fix.
+- **Migration 181** adds owner-only sources. Rows derived before the upgrade
+  stay open until `memrain sources provenance --apply` records their origins
+  (run it without `--apply` first; it changes metadata only).
+- **Migration 182** adds fact slots. Only new extractions are tagged.
+- **Migrations 184 to 186** add trust tiers on derived rows, trust proposals
+  and per-credential read floors. Only new rows get a derived tier; no stored
+  row is rewritten. No credential has a read floor until you set one with
+  `memrain auth min-trust`. The 185 down file refuses while a proposal is
+  pending, and the 186 down file while a live credential has a floor.
 - **Migration 183** adds `write_gate_row_holds` and lets `write_gate_receipts`
   name a hold with verdict `quarantine`. Nothing changes until you set
   `MEMRAIN_WRITE_GATE_ROWS=quarantine`: facts, takes and timeline entries stay
