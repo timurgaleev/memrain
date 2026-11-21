@@ -6,6 +6,82 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-11-21
+
+A release about trust and correctness. Every new agent sign-in now waits for
+the owner's approval in the dashboard; tokens already issued keep working. A
+purge now removes what synthesis derived from the purged text, and a
+tombstone keeps a resync from writing that text back. Facts, takes and
+timeline entries an agent writes or an outside source brings in go through
+the write gate in flag mode. Bedrock retries happen inside the spend wallet,
+so every attempt counts against the caps. A brain upgrades in place
+(migrations 178–179); see UPGRADING.md for the approval default.
+
+### Changed
+- Every new agent sign-in now waits for the owner's approval in the dashboard:
+  `MEMRAIN_OAUTH_REQUIRE_LOGIN` is on unless set to `0`, `false`, `no` or
+  `off`. Tokens already issued and their refreshes keep working. A server with
+  no admin surface refuses every new sign-in until `MEMRAIN_ADMIN_BOOTSTRAP` is
+  set or approval is turned off; `memrain serve` always has one.
+- The Claude Code and Codex plugin now ships `media-ingest`, `idea-ingest` and
+  `meeting-ingestion`, the three skills `capture` hands work to.
+
+### Fixed
+- A page write (put, append, edit) or a timeline event whose text holds a
+  U+0000 character is now stored with that character removed instead of failing
+  the whole write on Postgres. The removal happens before the secret scan, so a
+  NUL inside a credential cannot hide it; the removed count goes to the log as
+  `[nul_removed]`.
+- Forwarding an email whose own note asks nothing (an "FYI, see below." over
+  someone else's question) no longer opens a "waiting on them" loop. Only the
+  note above the forward separator counts as the sender's ask.
+- Bedrock retries no longer escape the spend caps. The Bedrock clients now send
+  one attempt and the spend wallet retries throttles, timeouts and server
+  errors itself (up to 4 attempts with backoff), holding and booking each
+  attempt's own worst case. An attempt that timed out after it was sent counts
+  as spent, including when a later attempt is refused by the service.
+  Search-time steps (intent, query expansion, rerank) and `memrain models
+  --probe` make one attempt.
+- Purging a page or a document now also removes what synthesis derived from it:
+  its atoms and takes, the atom pages published from it, and the contradiction
+  rows that snapshot them. A concept narrated over a purged atom is rebuilt
+  from the members it keeps (deterministic narrative, re-narrated by the next
+  concepts run); a concept left with no live member is retired and comes back
+  once live atoms carry its tag again. Atom and concept pages someone edited
+  keep their text. Before, the purged note's text lived on in atoms and
+  `concepts/*` pages.
+- The concepts phase no longer builds concepts from atoms whose source document
+  or page is gone or deleted. Atoms distilled from a live page still count.
+- A page purge now also retires the facts about the purged page whose own
+  source page is gone too; facts stated directly (no source page) and ontology
+  observations stay.
+- Feature budgets held in process (synthesis, facts extraction, think, agent
+  runs, contextual chunk context and the rest) now count every attempt the
+  spend wallet kept at its worst case, the same way the durable caps do,
+  instead of only the attempt whose answer came back.
+- The plugin's `capture` skill no longer points at skills the plugin did not
+  ship.
+
+### Added
+- `purge_deleted_pages` with named `slugs` tombstones the purged pages' content
+  (page and every kept version, hashes only, migration 178 `page_purges`): a
+  write of that text under any slug of the source is refused, so a connector
+  resync or re-import cannot bring it back. `memrain unpurge <slug>` clears it.
+  The TTL purge leaves no tombstone.
+- `memrain purge-leftovers`: a dry-run-by-default repair for what older purges
+  left behind (synthesis rows with no source, the concepts over them, facts
+  written on a gone page). It prints a frozen plan with every row, its source,
+  action and reason, and a plan hash; `--apply --plan-hash H --export FILE`
+  writes every row it changes to a 0600 export first, and `restore --from FILE`
+  undoes it; both rebuild the search mirrors of the pages they rewrite.
+  `memrain doctor` reports the same counts as `purge-leftovers`.
+- Facts, takes and timeline entries an agent writes, or that land in an outside
+  source, now go through the write gate in flag mode: a match writes a receipt
+  to `write_gate_receipts` (migration 179) naming the row, the families and a
+  hash of the text, never the text. The row is stored and read as before;
+  nothing is held or refused yet. Both origins are checked unless
+  `MEMRAIN_WRITE_GATE_EXTERNAL` / `MEMRAIN_WRITE_GATE_AGENT` is `off`.
+
 ## [2.1.0] — 2026-11-20
 
 A maintenance release on top of 2.0.0: Ask links each source to the passage
