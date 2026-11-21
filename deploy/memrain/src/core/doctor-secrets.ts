@@ -3,14 +3,16 @@
  * current secret-scanner rules, and is anything it found still in place?
  *
  * Reads the last whole-brain `memrain secrets audit` run (every store, no
- * source filter) from secret_audit_runs;
- * it never scans. Warn, never fail: stored text that predates a rule is a
+ * source filter) from secret_audit_runs; it never scans. When every rule
+ * change since that run reached agent transcripts only, a transcript-lane
+ * audit under the current rules completes it, since connector mail is never
+ * rescanned for those rules. Warn, never fail: stored text that predates a rule is a
  * pending operator task, not a broken brain.
  */
 import type { Engine } from "./engine/interface.ts";
 import type { OpsCheckResult } from "./doctor-ops.ts";
-import { latestSecretAuditRun } from "./secret-audit.ts";
-import { SECRET_SCAN_VERSION } from "./secret-scan.ts";
+import { latestSecretAuditRun, latestTranscriptLaneRun, type SecretAuditRunSummary } from "./secret-audit.ts";
+import { SECRET_SCAN_VERSION, TRANSCRIPT_ONLY_SCAN_VERSIONS } from "./secret-scan.ts";
 
 /** An audit older than this no longer speaks for what was written since. */
 export const SECRET_AUDIT_MAX_AGE_DAYS = 30;
@@ -25,8 +27,15 @@ export async function checkSecretExposure(engine: Engine, now: Date = new Date()
     };
   }
   const problems: string[] = [];
-  if (run.scan_version < SECRET_SCAN_VERSION) {
+  const lane = run.scan_version < SECRET_SCAN_VERSION ? await transcriptLaneCompletes(engine, run.scan_version) : null;
+  if (run.scan_version < SECRET_SCAN_VERSION && lane === null) {
     problems.push(`last audit used scanner v${run.scan_version}, current is v${SECRET_SCAN_VERSION}`);
+  }
+  if (lane && !lane.applied && lane.hits_total > 0) {
+    problems.push(`${lane.hits_total} hit(s) in ${lane.rows_affected} transcript page(s) not yet redacted`);
+  }
+  if (lane && lane.applied && lane.errors_total > 0) {
+    problems.push(`${lane.errors_total} transcript page(s) the last apply could not rewrite`);
   }
   const ageDays = (now.getTime() - Date.parse(run.finished_at)) / 86_400_000;
   if (ageDays > SECRET_AUDIT_MAX_AGE_DAYS) {
@@ -45,7 +54,9 @@ export async function checkSecretExposure(engine: Engine, now: Date = new Date()
     return {
       ok: true,
       status: "ok",
-      detail: `audited ${run.finished_at} with scanner v${run.scan_version}; nothing left to redact`,
+      detail: `audited ${run.finished_at} with scanner v${run.scan_version}` +
+        (lane ? `, transcripts audited with scanner v${lane.scan_version} at ${lane.finished_at}` : "") +
+        "; nothing left to redact",
     };
   }
   return {
@@ -53,6 +64,15 @@ export async function checkSecretExposure(engine: Engine, now: Date = new Date()
     status: "warn",
     detail: `${problems.join("; ")} — rotate what it lists, then \`memrain secrets audit --apply --yes\``,
   };
+}
+
+/** The transcript-lane run that brings a store audit at `from` up to the current rules, or null. */
+async function transcriptLaneCompletes(engine: Engine, from: number): Promise<SecretAuditRunSummary | null> {
+  for (let v = from + 1; v <= SECRET_SCAN_VERSION; v++) {
+    if (!TRANSCRIPT_ONLY_SCAN_VERSIONS.has(v)) return null;
+  }
+  const lane = await latestTranscriptLaneRun(engine);
+  return lane !== null && lane.scan_version >= SECRET_SCAN_VERSION ? lane : null;
 }
 
 /**

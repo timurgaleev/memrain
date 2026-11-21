@@ -545,9 +545,9 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
   const echoOn = switchedOn("MEMRAIN_SECRET_SCAN_ECHO");
 
   const run = await engine.query<{ id: number }>(
-    `INSERT INTO secret_audit_runs (scan_version, started_at, source_id, kinds, applied)
-     VALUES ($1, $2, $3, $4::text[], $5) RETURNING id`,
-    [SECRET_SCAN_VERSION, startedAt, opts.sourceId ?? null, kinds, opts.apply === true],
+    `INSERT INTO secret_audit_runs (scan_version, started_at, source_id, kinds, applied, lane)
+     VALUES ($1, $2, $3, $4::text[], $5, $6) RETURNING id`,
+    [SECRET_SCAN_VERSION, startedAt, opts.sourceId ?? null, kinds, opts.apply === true, lane ? "transcripts" : null],
   );
   const runId = run.rows[0]?.id !== undefined ? Number(run.rows[0].id) : null;
 
@@ -769,14 +769,24 @@ export interface SecretAuditRunSummary {
  * narrower run leaves part of the brain unscanned, so it cannot speak for it.
  */
 export async function latestSecretAuditRun(engine: Engine): Promise<SecretAuditRunSummary | null> {
+  return latestRun(engine, `source_id IS NULL AND kinds @> $1::text[] AND lane IS NULL`, [[...AUDIT_STORES]]);
+}
+
+/** The last finished transcript-lane audit, or null. */
+export async function latestTranscriptLaneRun(engine: Engine): Promise<SecretAuditRunSummary | null> {
+  return latestRun(engine, `lane = 'transcripts'`, []);
+}
+
+async function latestRun(engine: Engine, where: string, params: unknown[]): Promise<SecretAuditRunSummary | null> {
   const r = await engine.query<Record<string, unknown>>(
+    // scope: operator-only audit run summaries for the doctor, counts only
     `SELECT id, scan_version, started_at::text AS started_at, finished_at::text AS finished_at,
             source_id, kinds, applied, rows_affected, hits_total, code_chunks_affected, errors_total
        FROM secret_audit_runs
-      WHERE finished_at IS NOT NULL AND source_id IS NULL AND kinds @> $1::text[]
+      WHERE finished_at IS NOT NULL AND ${where}
       ORDER BY finished_at DESC, id DESC
       LIMIT 1`,
-    [[...AUDIT_STORES]],
+    params,
   );
   const row = r.rows[0];
   if (!row) return null;

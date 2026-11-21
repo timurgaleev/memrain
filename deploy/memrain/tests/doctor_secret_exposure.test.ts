@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { checkSecretExposure } from "../src/core/doctor-secrets.ts";
-import { SECRET_SCAN_VERSION } from "../src/core/secret-scan.ts";
+import { SECRET_SCAN_VERSION, TRANSCRIPT_ONLY_SCAN_VERSIONS } from "../src/core/secret-scan.ts";
 import { OPS_CHECK_NAMES } from "../src/core/doctor-categories.ts";
 import { AUDIT_STORES } from "../src/core/secret-audit.ts";
 
@@ -36,10 +36,11 @@ async function run(o: {
   source?: string | null;
   kinds?: string[];
   errors?: number;
+  lane?: string;
 }): Promise<void> {
   await storage.engine().query(
-    `INSERT INTO secret_audit_runs (scan_version, started_at, finished_at, source_id, applied, rows_affected, hits_total, kinds, errors_total)
-     VALUES ($1, COALESCE($2::timestamptz, now()), $2::timestamptz, $3, $4, $5, $5, $6::text[], $7)`,
+    `INSERT INTO secret_audit_runs (scan_version, started_at, finished_at, source_id, applied, rows_affected, hits_total, kinds, errors_total, lane)
+     VALUES ($1, COALESCE($2::timestamptz, now()), $2::timestamptz, $3, $4, $5, $5, $6::text[], $7, $8)`,
     [
       o.version ?? SECRET_SCAN_VERSION,
       o.finished === undefined ? "2026-10-09T12:00:00Z" : o.finished,
@@ -48,6 +49,7 @@ async function run(o: {
       o.hits ?? 0,
       o.kinds ?? [...AUDIT_STORES],
       o.errors ?? 0,
+      o.lane ?? null,
     ],
   );
 }
@@ -108,5 +110,41 @@ describe("checkSecretExposure", () => {
     const r = await checkSecretExposure(storage.engine(), NOW);
     expect(r.status).toBe("warn");
     expect(r.detail).toContain("days old");
+  });
+
+  describe("a rule change that reaches agent transcripts only", () => {
+    const previous = SECRET_SCAN_VERSION - 1;
+    it("counts a clean transcript-lane audit under the current rules as complete", async () => {
+      expect(TRANSCRIPT_ONLY_SCAN_VERSIONS.has(SECRET_SCAN_VERSION)).toBe(true);
+      await run({ version: previous });
+      await run({ version: SECRET_SCAN_VERSION, kinds: ["pages"], lane: "transcripts", applied: true, hits: 2 });
+      const r = await checkSecretExposure(storage.engine(), NOW);
+      expect(r.status).toBe("ok");
+      expect(r.detail).toContain(`transcripts audited with scanner v${SECRET_SCAN_VERSION}`);
+    });
+
+    it("still warns while the transcript-lane audit has hits it did not redact", async () => {
+      await run({ version: previous });
+      await run({ version: SECRET_SCAN_VERSION, kinds: ["pages"], lane: "transcripts", hits: 4 });
+      const r = await checkSecretExposure(storage.engine(), NOW);
+      expect(r.status).toBe("warn");
+      expect(r.detail).toContain("4 hit(s)");
+    });
+
+    it("does not count a pages-only run that was not the transcript lane", async () => {
+      await run({ version: previous });
+      await run({ version: SECRET_SCAN_VERSION, kinds: ["pages"] });
+      const r = await checkSecretExposure(storage.engine(), NOW);
+      expect(r.status).toBe("warn");
+      expect(r.detail).toContain(`scanner v${previous}`);
+    });
+
+    it("does not stretch over a rule change that reaches every store", async () => {
+      await run({ version: previous - 1 });
+      await run({ version: SECRET_SCAN_VERSION, kinds: ["pages"], lane: "transcripts", applied: true });
+      const r = await checkSecretExposure(storage.engine(), NOW);
+      expect(r.status).toBe("warn");
+      expect(r.detail).toContain(`scanner v${previous - 1}`);
+    });
   });
 });

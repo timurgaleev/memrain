@@ -35,6 +35,13 @@ export { trailingDanglingLabel } from "./secret-scan-transcript.ts";
  */
 export const SECRET_SCAN_VERSION = 8;
 
+/**
+ * Versions whose rule changes reach agent transcripts only (v8: cookie values,
+ * `.netrc` passwords and split labels). Connector mail is never rescanned for
+ * them, so a transcript-lane audit under such a version completes it.
+ */
+export const TRANSCRIPT_ONLY_SCAN_VERSIONS: ReadonlySet<number> = new Set([8]);
+
 export interface SecretFinding {
   kind: string;
   /** First 16 hex of the SHA-256 of the secret. */
