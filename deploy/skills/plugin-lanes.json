@@ -11,7 +11,10 @@
     "research-compendium": "deep research a client runs from chat, filed under research/",
     "draft-in-voice": "ghostwriting from a validated profile; drafts only, never sends",
     "resolve-before-asking": "stops a client asking the user what the brain already knows",
-    "brain-link-discipline": "every page a client reports carries a working link"
+    "brain-link-discipline": "every page a client reports carries a working link",
+    "media-ingest": "capture hands bulk and media ingestion to it; page writes a client already makes",
+    "idea-ingest": "capture hands an article or link with author metadata to it",
+    "meeting-ingestion": "capture hands a meeting transcript to it for attendee enrichment"
   },
   "operator_only": {
     "db-repair": "diagnoses the host's database; needs host access and operator tools",

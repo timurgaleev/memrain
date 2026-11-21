@@ -85,9 +85,8 @@ unchanged and so are its credentials. Renaming its display name is optional.
 
 3. In Claude Code run `/mcp`, pick `memrain` and sign in in the browser.
 
-If the host runs with `MEMRAIN_OAUTH_REQUIRE_LOGIN=1` (bootstrap sets it when
-the `<prefix>/memrain-admin-bootstrap` secret exists; otherwise `/authorize`
-auto-approves), `/authorize` sends the browser to `/admin/login` first, which only
+With owner approval on (the default; `MEMRAIN_OAUTH_REQUIRE_LOGIN=0` makes
+`/authorize` auto-approve), `/authorize` sends the browser to `/admin/login` first, which only
 the operator can pass. For anyone else, use Option A, or give them an
 enrollment-mode client and a code as described in
 [CLAUDE_TEAM.md](./CLAUDE_TEAM.md).
@@ -96,9 +95,10 @@ enrollment-mode client and a code as described in
 
 The repository is also a Claude Code plugin marketplace. Its one plugin lives
 in `plugins/memrain`, so an install copies only that folder: the same `memrain`
-MCP server plus eleven skills: `query`, `brain-ops`, `capture`, `briefing`,
+MCP server plus fourteen skills: `query`, `brain-ops`, `capture`, `briefing`,
 `correction-pipeline`, `connect-client`, `fact-check`, `research-compendium`,
-`draft-in-voice`, `resolve-before-asking` and `brain-link-discipline` that teach the agent how to use it.
+`draft-in-voice`, `resolve-before-asking`, `brain-link-discipline`, `media-ingest`,
+`idea-ingest` and `meeting-ingestion` that teach the agent how to use it.
 They are generated from `deploy/skills`; `deploy/skills/plugin-lanes.json`
 decides which skills ship, and host-side skills never do.
 

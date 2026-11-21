@@ -69,6 +69,18 @@ describe("plugin lanes", () => {
     expect(named).toEqual([]);
   });
 
+  it("a plugin skill links only to skills the plugin ships", () => {
+    const shipped = new Set(Object.keys(lanes.plugin));
+    const dangling: string[] = [];
+    for (const slug of shipped) {
+      const text = readFileSync(join(PLUGIN_SKILLS, slug, "SKILL.md"), "utf8");
+      for (const m of text.matchAll(/skills\/([a-z0-9-]+)\/SKILL\.md/g)) {
+        if (!shipped.has(m[1]!)) dangling.push(`${slug} -> ${m[1]}`);
+      }
+    }
+    expect(dangling).toEqual([]);
+  });
+
   it("flags a lane entry for a skill that does not exist and an operator skill in the plugin", () => {
     const bad = {
       ...lanes,
