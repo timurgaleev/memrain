@@ -213,11 +213,15 @@ flowchart TD
   outside or agent text is indexed for search. It looks for text that reads as
   instructions to an AI: directives that try to replace the reader's
   instructions, chat-template role markers, tool-call shaped text, requests to
-  send data out, directives to the memory itself. `MEMRAIN_WRITE_GATE_EXTERNAL`
+  send data out, directives to the memory itself, standing rules addressed to
+  an agent and requests for credentials. `MEMRAIN_WRITE_GATE_EXTERNAL`
   (default `flag`) and `MEMRAIN_WRITE_GATE_AGENT` (default `off`) choose
   between `flag` (stored, marked, read back inside a stronger frame),
   `quarantine` (out of search until `memrain write-gate approve|reject`) and,
-  for outside text only, `reject`.
+  for outside text only, `reject`. The owner's own connector sources are
+  never held or refused for their content (`quarantine` and `reject` act as
+  `flag` there), and agent text that is only tool-call shaped is flagged, not
+  held.
   Facts, takes and timeline entries from agents and outside sources pass the
   same detector before they are stored. `MEMRAIN_WRITE_GATE_ROWS` (default
   `flag`) records a receipt; `quarantine` keeps a matching row out of its table

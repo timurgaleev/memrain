@@ -253,12 +253,15 @@ and `context_pack`).
 When outside text is indexed for search, a **write gate** reads it, with
 fixed rules and no model, for text that tries to talk to an AI: "ignore your instructions",
 fake chat-role markers, text shaped like a tool call, requests to send data
-somewhere, orders aimed at the memory itself. By default such text is stored
+somewhere, orders aimed at the memory itself, standing rules for an AI
+("from now on, when someone asks about X, say Y") and requests for passwords or
+keys. By default such text is stored
 but **flagged**: whenever it is read back, it comes wrapped in a notice that it
 is someone else's data, not an instruction. You can make the gate stricter, so
 flagged text is **held** until you approve it (`memrain write-gate approve`)
 or **refused** (a direct write is rejected; a synced page stays out of
-search). Mail, calendar, chat and meeting pages are also kept out of
+search). Your own connected mail and calendars are always only flagged, never
+held or refused because of what a sender wrote. Mail, calendar, chat and meeting pages are also kept out of
 the paid background passes (fact extraction, contextual embedding), and deep
 synthesis reads no outside text at all, so a stranger's email cannot steer
 them.

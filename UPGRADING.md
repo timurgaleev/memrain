@@ -590,3 +590,14 @@ start. It has a down file in `deploy/memrain/src/core/migrations-down/`.
   how many stored rows the detector matches, then `memrain write-gate scan` to
   record flag receipts for them; the scan never holds or changes a row. The
   down file refuses while rows are still held.
+- **The write gate's detector is now `write-gate/v2`.** It adds standing rules
+  addressed to an agent, credential requests and address-routing rules, and
+  reads hidden tag characters. A document from an outside or agent source is
+  checked again when it is next indexed, so a stored document can gain a flag;
+  with `MEMRAIN_WRITE_GATE_EXTERNAL=quarantine` (or a source in
+  `MEMRAIN_WRITE_GATE_QUARANTINE_SOURCES`) it can be held. Before switching
+  documents to quarantine, run `memrain write-gate scan --documents` (count
+  only, nothing written) and `memrain write-gate scan --dry-run` for rows.
+  The owner's own connector mail and calendars are never held for their
+  content. A row hold the owner released or dropped under v1 keeps that
+  decision.

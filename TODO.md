@@ -101,6 +101,29 @@ marked; this section is the one that stands.
   it was registered with; changing it is `memrain auth rescope-client`. Fold a
   picker into the grant editor (W6c, L4-22).
 
+## Follow-ups from the write gate detector v2 (W3c-2)
+
+- **Residual evasions the detector does not read**: Cherokee and other
+  look-alikes outside the folding maps, double-encoded entities
+  (`&amp;#64;`), `hxxps://` addresses, a rule split across the title and the
+  body, standing words such as "by default", "each time", "for every" (left out:
+  they read as ordinary business routing), and "the previous instructions no
+  longer apply".
+- **Descriptions of a habit still flag**: "I always forward invoices to
+  ap@company.example" or "If anyone asks, say I'm out" match the standing
+  rules. Owner mail is only flagged, never held, so the cost is a stronger read
+  frame on that mail.
+- **A revoked connector account still marks a source as the owner's**, so a
+  source reused later for outside text keeps the `flag` cap. Deliberate: a
+  sweep after a revoke must not start holding the owner's synced mail.
+- **Worst-case cost**: text built of repeated `to a@b.cc` runs costs about
+  5 µs per byte per field (linear, measured 100 KB vs 1 MB). A per-field length
+  cap would bound it.
+- **Two open row holds for one content**: a row still held under v1 that
+  arrives again under v2 opens a second hold; decided holds carry over.
+- **`write-gate scan --documents` cannot read a fence inside a non-page
+  document** (its text is stored only in the rows it produced).
+
 ## Follow-ups from the row write gate quarantine (W3c-1)
 
 - **Paid fact extraction from connectors waits for quarantine (W5, D4).** Turn
