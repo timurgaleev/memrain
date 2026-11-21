@@ -290,6 +290,7 @@ import {
 import { hasScope } from "../core/scope.ts";
 import { insufficientScopeChallenge } from "../http/oauth-metadata.ts";
 import { ADMIN_PANEL_ONLY_TOOLS, dispatchRefusal, SLUG_PARAMS_BY_WRITE_TOOL } from "./visibility.ts";
+import { READ_FLOOR_FILTERED, strictestFloor } from "./read-floor.ts";
 import { narrowReadSources } from "./read-source-filter.ts";
 import { withRequestCost } from "../core/request-cost.ts";
 import { readContextDelta } from "../core/context-delta.ts";
@@ -647,6 +648,13 @@ async function dispatchToolInner(
         _meta: { "mcp/www_authenticate": insufficientScopeChallenge(stepUp, opts.issuer) },
       };
     }
+    if (refusal?.kind === "trust_floor") {
+      throw new OperationError(
+        "permission_denied",
+        `tool '${req.name}' cannot apply this credential's trust floor (${refusal.floor} or higher), so it is not available to it`,
+        "Use search, query or context_pack, which return only rows at or above the floor.",
+      );
+    }
     if (refusal?.kind === "tool_surface") {
       throw new OperationError(
         "permission_denied",
@@ -671,6 +679,10 @@ async function dispatchToolInner(
     // by the catch below.
     const op = OP_BY_NAME.get(req.name);
     if (op) validateParams(op, args);
+    // A credential's read floor holds whatever the call asks for: the tools
+    // that filter by tier read the stricter of the two (mcp/read-floor.ts).
+    const floor = opts.authInfo?.minTrust;
+    if (floor !== undefined && READ_FLOOR_FILTERED.has(req.name)) args["min_trust"] = strictestFloor(floor, args["min_trust"]);
     const readSources = narrowReadSources(req.name, args, grantedReadSources);
     // Per-client slug-prefix write fence (oauth_clients.bound_slug_prefixes):
     // a bound principal may mutate only slugs under its prefixes. Deny-by-
@@ -3763,6 +3775,7 @@ async function callWhoami(
     read_sources: readSources ?? null,
     is_public: isPublic,
     owner: access.owner,
+    min_trust: authInfo?.minTrust ?? null,
     requester_scope: requesterScopeState(authInfo, isPublic, access.brain),
     ...capabilities,
   });
@@ -4657,6 +4670,7 @@ async function callThink(
         anchorSlug: anchor!,
         ...(result.modelId ? { modelId: result.modelId } : {}),
         ...(ctx.principal !== undefined ? { principal: ctx.principal } : {}),
+        ...(result.evidence ? { evidence: result.evidence } : {}),
       });
     }
   }

@@ -92,6 +92,9 @@ export interface OntologyMergeResult {
   /** True when a backdated observation was recorded as a closed historical row
    *  without rewriting the current value (out-of-order arrival). */
   conflict?: boolean;
+  /** The value would have closed a more trusted current value: it is stored
+   *  quarantined beside it, and a trust proposal asks the owner. */
+  contested?: { proposal_id: number; fact_id: number };
 }
 
 export interface OntologyValue {

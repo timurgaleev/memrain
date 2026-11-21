@@ -23,6 +23,8 @@ import { contentHash16 } from "./atoms.ts";
 import { takeKey } from "./takes.ts";
 import { flagRowAt, holdIfQuarantined, type RowHeld } from "../write-gate-rows.ts";
 import { stripGapsSection, type ThinkResult } from "./think.ts";
+import { evidenceTier, lowerPageTier, type DerivationEvidence } from "../trust-derived.ts";
+import { lowerTier, principalTier } from "../trust-tier.ts";
 
 /** Prompt-version marker for operator-committed think takes. */
 export const THINK_TAKE_PROMPT_VERSION = "think-take-v1";
@@ -118,6 +120,9 @@ export async function persistThinkSynthesis(
   }
 
   const engine = storage.engine();
+  // The page restates what the model read, so it is no more trusted than that.
+  const read = opts.result.evidence ? await evidenceTier(engine, opts.result.evidence) : undefined;
+  if (read !== undefined && read !== "owner") await lowerPageTier(engine, slug, opts.sourceId ?? "default", read);
   let inserted = 0;
   for (let i = 0; i < s.citations.length; i++) {
     const c = s.citations[i]!;
@@ -163,6 +168,8 @@ export async function saveThinkTake(
     modelId?: string;
     /** The credential that asked for the take; the operator when absent. */
     principal?: string | null;
+    /** What the think run read; the take is no more trusted than the least trusted of it. */
+    evidence?: DerivationEvidence;
   },
 ): Promise<SaveThinkTakeResult> {
   const claim = (opts.claim ?? "").trim();
@@ -184,10 +191,12 @@ export async function saveThinkTake(
     },
   }, { page: opts.anchorSlug, principal: opts.principal ?? null });
   if (held !== null) return { take_key: key, inserted: false, held };
+  const read = opts.evidence ? await evidenceTier(engine, opts.evidence) : undefined;
+  const writer = principalTier(opts.principal ?? null);
   const { rows } = await engine.query<{ id: number }>(
     `INSERT INTO synth_takes
-       (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, domain, status, model_id)
-     VALUES ($1, $2, $3, $4, $5, 'judgment', $6, $7, 'queued', $8)
+       (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, domain, status, model_id, trust_tier)
+     VALUES ($1, $2, $3, $4, $5, 'judgment', $6, $7, 'queued', $8, $9)
      ON CONFLICT (take_key) DO NOTHING
      RETURNING id`,
     [
@@ -199,6 +208,7 @@ export async function saveThinkTake(
       weight,
       opts.domain ?? null,
       opts.modelId ?? "operator",
+      read ? lowerTier(writer, read) : writer,
     ],
   );
   if (rows.length > 0) {

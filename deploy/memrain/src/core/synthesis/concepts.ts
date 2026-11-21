@@ -22,6 +22,7 @@ import { TERMINAL_STOP_REASONS } from "../llm/converse.ts";
 import type { Storage } from "../storage.ts";
 import { putPage } from "../pages.ts";
 import { recordConceptPageOrigins } from "../owner-only.ts";
+import { lowerConceptPageTier } from "../trust-derived.ts";
 import { guardFields } from "../secret-scan.ts";
 import { resolveLlmFn, type LlmFn } from "../llm/haiku.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
@@ -401,6 +402,7 @@ export async function synthesizeConceptsPhase(
         else {
           result.pagesWritten += 1;
           await recordConceptPageOrigins(engine, group.slug, pageSlug);
+          await lowerConceptPageTier(engine, group.slug, pageSlug);
         }
         await engine.query("UPDATE synth_concepts SET member_hash = $2 WHERE concept_slug = $1",
           [group.slug, memberHash(group.atomIds, modelId)]);

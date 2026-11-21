@@ -57,7 +57,7 @@ export async function readTrustTiers(engine: Engine, selected: TrustSelection, s
   add(selected.pages, "pages", "pages pg", "pg.slug", "pg.source_id", pageRankSql("pg"));
   add(selected.facts, "facts", "entity_facts r", "r.id", "r.source_id",
     factRankSql("r", "tt_p.slug IN (r.source_slug, r.source_markdown_slug)"), true);
-  add(selected.events, "events", "timeline_events r", "r.id", "r.source_id", factRankSql("r", "tt_p.slug = r.slug", false), true);
+  add(selected.events, "events", "timeline_events r", "r.id", "r.source_id", factRankSql("r", "tt_p.slug = r.slug"), true);
   const rows = arms.length ? (await engine.query<{ kind: string; id: string; rank: number }>(arms.join(" UNION ALL "), params)).rows : [];
   const pick = <K>(kind: string, key: (id: string) => K) =>
     new Map(rows.filter(r => r.kind === kind).map(r => [key(r.id), tierOfRank(Number(r.rank))] as const));

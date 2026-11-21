@@ -611,6 +611,38 @@ export function rowDecisionMessage(status: RowHoldDecisionStatus): string {
   }
 }
 
+/** A lower-tier write that would have replaced a more trusted fact or value. */
+export interface TrustProposal {
+  id: number;
+  guard: "conflict" | "replaces" | "ontology";
+  source_id: string;
+  entity_slug: string | null;
+  dimension: string | null;
+  target_id: number;
+  related_id: number;
+  old_tier: string;
+  new_tier: string;
+  old_fact: string | null;
+  new_fact: string | null;
+  status: "pending" | "accepted" | "rejected" | "stale";
+  created_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
+}
+
+export type TrustDecisionStatus = "accepted" | "rejected" | "stale" | "already_decided" | "not_found";
+
+/** What a trust-proposal decision did, in one sentence. */
+export function trustDecisionMessage(status: TrustDecisionStatus): string {
+  switch (status) {
+    case "accepted": return "Accepted: the new fact replaces the old one.";
+    case "rejected": return "Rejected: the more trusted fact stays and the other is retired.";
+    case "stale": return "One of the two facts changed since, so nothing was applied.";
+    case "already_decided": return "Someone already decided this proposal.";
+    case "not_found": return "That proposal no longer exists.";
+  }
+}
+
 /** The held entry's main text and its detail, whatever its kind. */
 export function rowHoldText(h: WriteGateRowHold): { text: string; detail: string } {
   const s = (k: string) => (typeof h.payload[k] === "string" ? h.payload[k] as string : "");

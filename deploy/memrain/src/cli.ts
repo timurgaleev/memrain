@@ -94,6 +94,7 @@ import { runDaemons } from "./commands/daemons.ts";
 import { runWaiting } from "./commands/waiting.ts";
 import { runQuarantine, type QuarantineSub } from "./commands/quarantine.ts";
 import { runWriteGate } from "./commands/write-gate.ts";
+import { runTrust } from "./commands/trust.ts";
 import { runGroup, runMember } from "./commands/members.ts";
 import { runIdentity } from "./commands/identity.ts";
 import { assertExtensionPresent, extension } from "./core/extension.ts";
@@ -322,10 +323,12 @@ function printUsage(): void {
   console.log("                               delete a client's tokens and codes; the client stays");
   console.log("  auth set-budget <id> <usd|none>");
   console.log("                               daily USD ceiling across every paid op ('none' = uncapped)");
+  console.log("  auth min-trust <id|name> <owner|member|agent|external|none>");
+  console.log("                               read floor: read only rows at or above that tier ('none' = no floor)");
   console.log("  auth grant-token <id> <secret> [--scopes S]");
   console.log("                               mint an access token locally (= POST /token)");
   console.log("  auth create <name> [--member M] [--takes-holders a,b] [--source SRC] [--federated-read a,b]");
-  console.log("                    [--scopes read,write]");
+  console.log("                    [--scopes read,write] [--min-trust TIER]");
   console.log("                               mint a long-lived personal access token (prints once)");
   console.log("  auth list                    JSON list of personal access tokens (no hashes)");
   console.log("  auth revoke <name>           soft-revoke a personal access token");
@@ -384,6 +387,8 @@ function printUsage(): void {
   console.log("  write-gate release|drop <id> [--json]");
   console.log("  write-gate scan [--dry-run] [--json]");
   console.log("  write-gate scan --documents [--json]");
+  console.log("  trust proposals [--all] [--json]   lower-tier writes that would replace a more trusted fact");
+  console.log("  trust accept|reject <id> [--json]  apply the replacement, or keep the more trusted fact");
   console.log("                               operator surface for the content-sanity gate");
   console.log("  secrets audit [--source ID] [--kinds K,K] [--limit N] [--json] [--apply --yes]");
   console.log("                               rescan stored text with the current secret rules; dry run");
@@ -2077,6 +2082,25 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       }
       if (flags.has("--json")) opts.json = true;
       return await runWriteGate(opts);
+    }
+    case "trust": {
+      const sub = positional[0];
+      if (sub !== "proposals" && sub !== "accept" && sub !== "reject") {
+        console.error("memrain trust: subcommand required (proposals|accept|reject)");
+        return 1;
+      }
+      const opts: Parameters<typeof runTrust>[0] = { sub };
+      if (sub === "proposals" && flags.has("--all")) opts.all = true;
+      if (sub === "accept" || sub === "reject") {
+        const id = Number(positional[1]);
+        if (!positional[1] || !Number.isInteger(id) || id < 1) {
+          console.error(`memrain trust ${sub}: <id> is required (see \`memrain trust proposals\`)`);
+          return 1;
+        }
+        opts.id = id;
+      }
+      if (flags.has("--json")) opts.json = true;
+      return await runTrust(opts);
     }
     case "secrets": {
       const storeSub = positional[0];

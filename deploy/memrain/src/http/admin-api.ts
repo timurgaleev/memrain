@@ -208,7 +208,7 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     const r = await handleAdminConnectors(req, url, defaultConnectorDeps(deps.storage, deps.publicUrl, deps.adminSessionId ?? (() => null)));
     if (r) return r;
   }
-  if (p.startsWith("/admin/api/write-gate/")) {
+  if (p.startsWith("/admin/api/write-gate/") || p.startsWith("/admin/api/trust/")) {
     const r = await handleAdminApprovals(req, url, deps.storage).catch((e: unknown) => serverError("write-gate", e));
     if (r) return r;
   }

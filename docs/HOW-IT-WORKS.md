@@ -250,6 +250,26 @@ Your edit never promotes someone else's text: a page keeps its lowest tier. An
 agent can ask search for trusted text only (`min_trust` on `search`, `query`
 and `context_pack`).
 
+What the brain derives keeps the tier of what it was derived from: an atom,
+take, timeline entry or fact drawn from an agent's page or a meeting is no
+more trusted than that page or meeting, and a concept page or a saved `think`
+answer is no more trusted than the least trusted text it was built from.
+
+A less trusted write never quietly replaces a more trusted fact. If an agent
+says "Ana now works at Globex" and you recorded "Ana works at Acme", your fact
+stays current, the agent's is stored beside it (an ontology value as
+quarantined), and a trust proposal waits for you: `memrain trust proposals`,
+then `memrain trust accept <id>` (apply the change) or `reject <id>` (keep
+yours; the other is retired). The admin Approvals page lists them too. A later
+slot value ("moved to Lisbon") only ends a value written at the same tier or
+lower.
+
+A credential can be given a read floor, `memrain auth min-trust <name> owner`
+(or `memrain auth create <name> --min-trust owner`): it then reads only text
+at or above that tier, through `search`, `query` and `context_pack`, and every
+other tool that would return stored text is hidden from it. `none` lifts the
+floor; no credential has one unless you set it.
+
 When outside text is indexed for search, a **write gate** reads it, with
 fixed rules and no model, for text that tries to talk to an AI: "ignore your instructions",
 fake chat-role markers, text shaped like a tool call, requests to send data

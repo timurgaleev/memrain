@@ -209,6 +209,17 @@ flowchart TD
   client) or `external` (text in an outside source). A later owner edit never
   raises a tier. A row with no stored tier (anything written before 2.0, and a
   document indexed without one) gets it derived at read time. `search`, `query` and `context_pack` take `min_trust`.
+  Rows derived from other text (atoms, takes, timeline entries, facts drawn
+  from a page or chunk, concept pages, think syntheses, consolidated facts)
+  take the least trusted tier of what they were drawn from (migration 184,
+  `core/trust-derived.ts`). A write less trusted than the fact or ontology
+  value it would replace leaves it in place and files a trust proposal
+  (migration 185, `core/trust-proposals.ts`) that the owner accepts or rejects
+  with `memrain trust` or on the admin Approvals page. A credential can carry a
+  read floor (`min_trust` on the token or client row, migration 186): it reads
+  through `search`, `query` and `context_pack` at that floor or stricter, and
+  every other tool that returns stored text is refused to it
+  (`mcp/read-floor.ts`).
 - **Write gate.** A deterministic check, with no model call, runs when
   outside or agent text is indexed for search. It looks for text that reads as
   instructions to an AI: directives that try to replace the reader's

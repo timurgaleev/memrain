@@ -8,8 +8,9 @@
  *             internal-token wall for an anonymous bridge caller;
  *   dispatch  the per-credential gates: a missing write source (fail-closed),
  *             operator-only tools, the per-op OAuth scope, the slug-bound
- *             client's deny-by-default for write tools that name no slug, and
- *             a narrowed tool surface (mcp/surface.ts).
+ *             client's deny-by-default for write tools that name no slug, a
+ *             read floor (mcp/read-floor.ts) and a narrowed tool surface
+ *             (mcp/surface.ts).
  *
  * Both layers ask this module, and `tools/list` advertises exactly the tools
  * for which it finds no refusal. Listing and calling therefore cannot drift:
@@ -27,6 +28,7 @@ import {
 import { hasScope } from "../core/scope.ts";
 import { OPERATIONS, WRITE_SCOPED_TOOLS } from "./operations.ts";
 import { toolOnSurface } from "./surface.ts";
+import { refusedUnderFloor } from "./read-floor.ts";
 import { TOOL_DEFS, type ToolDef } from "./tool_defs.ts";
 
 const OP_BY_NAME = new Map(OPERATIONS.map((o) => [o.name, o]));
@@ -132,6 +134,7 @@ export type ToolRefusal =
   | { kind: "operator_only" }
   | { kind: "insufficient_scope"; requiredScope: string }
   | { kind: "slug_bound" }
+  | { kind: "trust_floor"; floor: string }
   | { kind: "tool_surface"; surface: "starter" | "verbs" };
 
 /** What the transport knows about the caller of one request. */
@@ -191,6 +194,7 @@ export function dispatchRefusal(
   ) {
     return { kind: "slug_bound" };
   }
+  if (authInfo.minTrust !== undefined && refusedUnderFloor(name)) return { kind: "trust_floor", floor: authInfo.minTrust };
   const surface = authInfo.toolSurface;
   if (surface !== undefined && !toolOnSurface(name, surface)) return { kind: "tool_surface", surface };
   return null;

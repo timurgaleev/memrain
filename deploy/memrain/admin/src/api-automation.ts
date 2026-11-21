@@ -8,6 +8,8 @@ import type {
   HoldDecisionStatus,
   PausedSpendPath,
   RowHoldDecisionStatus,
+  TrustDecisionStatus,
+  TrustProposal,
   WriteGateHold,
   WriteGateRowHold,
 } from "./lib/automation.ts";
@@ -72,6 +74,16 @@ export const automationApi = {
   decideHold: async (id: number, decision: "approve" | "reject"): Promise<HoldDecisionStatus> => {
     // 404 and 409 still carry a status the page explains; only other failures throw.
     const r = await passkeyFetch<{ status?: HoldDecisionStatus }>(`/admin/api/write-gate/holds/${id}/decide`, post({ decision }));
+    if (r.status === 401) {
+      window.location.hash = "#login";
+      throw new ApiError("unauthorized", 401, r.body as Record<string, unknown>);
+    }
+    if (r.body.status) return r.body.status;
+    return expectOk(r) as never;
+  },
+  trustProposals: (status: "pending" | "all") => call<{ proposals: TrustProposal[] }>(`/admin/api/trust/proposals?status=${status}`),
+  decideTrustProposal: async (id: number, decision: "accept" | "reject"): Promise<TrustDecisionStatus> => {
+    const r = await passkeyFetch<{ status?: TrustDecisionStatus }>(`/admin/api/trust/proposals/${id}/decide`, post({ decision }));
     if (r.status === 401) {
       window.location.hash = "#login";
       throw new ApiError("unauthorized", 401, r.body as Record<string, unknown>);

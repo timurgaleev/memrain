@@ -33,6 +33,7 @@ import { phaseFenceCheck } from "./phase-context.ts";
 import { factSourceEligibleSql } from "../quarantine.ts";
 import { claimsDiverge } from "../fact-divergence.ts";
 import { holdIfQuarantined } from "../write-gate-rows.ts";
+import { minFactTier } from "../trust-derived.ts";
 
 /** Author stamped on a promoted take — also half its claim identity. */
 const CONSOLIDATE_WRITER = "facts-consolidate";
@@ -340,8 +341,8 @@ async function promoteCluster(
       const ins = await tx.query<{ id: number }>(
         `INSERT INTO entity_facts
            (entity_slug, fact, kind, confidence, written_by, source_id,
-            consolidated, consolidated_at, written_by_principal)
-         VALUES ($1, $2, $3, $4, $5, $6, true, NOW(), $7)
+            consolidated, consolidated_at, written_by_principal, trust_tier)
+         VALUES ($1, $2, $3, $4, $5, $6, true, NOW(), $7, $8)
          RETURNING id`,
         [
           bucket.entity_slug,
@@ -355,6 +356,8 @@ async function promoteCluster(
           CONSOLIDATE_WRITER,
           bucket.source_id,
           principal,
+          // The take restates its members, so it is no more trusted than the least of them.
+          (await minFactTier(tx, ids)) ?? null,
         ],
       );
       takeId = ins.rows[0]?.id ?? null;

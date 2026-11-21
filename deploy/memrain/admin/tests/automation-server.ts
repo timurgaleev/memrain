@@ -70,6 +70,7 @@ export interface AutomationState {
   pausedSpend: unknown[];
   holds: Array<Record<string, unknown>>;
   rowHolds: Array<Record<string, unknown>>;
+  proposals: Array<Record<string, unknown>>;
 }
 
 export const OWNER = "owner@example.test";
@@ -129,6 +130,7 @@ export function scenario(over: Partial<AutomationState["connectors"]> = {}): Aut
     pausedSpend: [],
     holds: [],
     rowHolds: [],
+    proposals: [],
   };
 }
 
@@ -141,7 +143,7 @@ export const automation = {
   },
 };
 
-const OWNED = ["/admin/api/connectors", "/admin/api/daemons", "/admin/api/spend/", "/admin/api/write-gate/"];
+const OWNED = ["/admin/api/connectors", "/admin/api/daemons", "/admin/api/spend/", "/admin/api/write-gate/", "/admin/api/trust/"];
 const PREVIEW = { pages: 3, chunks: 9, facts: 2, timeline_events: 1, plan_hash: "0123456789abcdef" };
 
 /** Answers an automation route, or null for a path it does not own. */
@@ -165,6 +167,7 @@ export async function automationRoute(request: Request): Promise<Response | null
     if (path === "/admin/api/spend/paused") return Response.json({ paths: st.pausedSpend });
     if (path === "/admin/api/write-gate/holds") return Response.json({ holds: st.holds });
     if (path === "/admin/api/write-gate/rows") return Response.json({ holds: st.rowHolds });
+    if (path === "/admin/api/trust/proposals") return Response.json({ proposals: st.proposals });
     return null;
   }
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
@@ -231,6 +234,13 @@ export async function automationRoute(request: Request): Promise<Response | null
     if (!hold) return Response.json({ status: "not_found" }, { status: 404 });
     hold.decision = body.decision === "approve" ? "approved" : "rejected";
     return Response.json({ status: hold.decision });
+  }
+  const decideProposal = /^\/admin\/api\/trust\/proposals\/(\d+)\/decide$/.exec(path);
+  if (decideProposal) {
+    const p = st.proposals.find((x) => String(x.id) === decideProposal[1]);
+    if (!p) return Response.json({ status: "not_found" }, { status: 404 });
+    p.status = body.decision === "accept" ? "accepted" : "rejected";
+    return Response.json({ id: p.id, status: p.status });
   }
   const decideRow = /^\/admin\/api\/write-gate\/rows\/(\d+)\/decide$/.exec(path);
   if (decideRow) {

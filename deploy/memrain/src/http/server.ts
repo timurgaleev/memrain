@@ -469,6 +469,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
                 ...(info.spendId ? { spendId: info.spendId } : {}),
                 ...(info.principal ? { principal: info.principal } : {}),
                 ...(info.toolSurface ? { toolSurface: info.toolSurface } : {}),
+                ...(info.minTrust ? { minTrust: info.minTrust } : {}),
                 ...(info.memberId ? { memberId: info.memberId } : {}),
                 isPublic: false,
               };
@@ -653,6 +654,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
                 ...(info.spendId ? { spendId: info.spendId } : {}),
                 ...(info.principal ? { principal: info.principal } : {}),
                 ...(info.toolSurface ? { toolSurface: info.toolSurface } : {}),
+                ...(info.minTrust ? { minTrust: info.minTrust } : {}),
                 ...(info.memberId ? { memberId: info.memberId } : {}),
                 isPublic: guard.isPublic,
               };

@@ -88,6 +88,7 @@ export async function runThinkCli(args: ThinkCliArgs): Promise<void> {
           claim: args.take,
           anchorSlug,
           ...(args.modelId !== undefined ? { modelId: args.modelId } : {}),
+          ...(report.evidence ? { evidence: report.evidence } : {}),
         });
       }
     }

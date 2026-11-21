@@ -4,7 +4,10 @@ import { describeError, useAsync, useNow } from "../hooks.ts";
 import { Section } from "../components/Tile.tsx";
 import { PageIntro } from "../components/PageIntro.tsx";
 import { fmtAgo } from "../lib/format.ts";
-import { decisionMessage, rowDecisionMessage, rowHoldText, type WriteGateHold, type WriteGateRowHold } from "../lib/automation.ts";
+import {
+  decisionMessage, rowDecisionMessage, rowHoldText, trustDecisionMessage,
+  type TrustProposal, type WriteGateHold, type WriteGateRowHold,
+} from "../lib/automation.ts";
 
 type Flash = { ok: boolean; message: string };
 const VIEWS = ["open", "all"] as const;
@@ -16,6 +19,12 @@ const DECIDED: Record<NonNullable<WriteGateHold["decision"]>, string> = {
 };
 
 const KIND_LABEL: Record<WriteGateRowHold["kind"], string> = { fact: "fact", take: "take", timeline: "timeline entry" };
+
+const TRUST_DECIDED: Record<Exclude<TrustProposal["status"], "pending">, string> = {
+  accepted: "Accepted",
+  rejected: "Rejected",
+  stale: "Out of date: a fact changed since",
+};
 
 export function ApprovalsPage() {
   const [view, setView] = useState<(typeof VIEWS)[number]>("open");
@@ -37,6 +46,23 @@ export function ApprovalsPage() {
     } finally {
       setRowBusy(null);
       rows.reload();
+    }
+  };
+
+  const proposals = useAsync<{ proposals: TrustProposal[] }>(
+    () => automationApi.trustProposals(view === "open" ? "pending" : "all"), [view], { intervalMs: 60_000 });
+  const [proposalBusy, setProposalBusy] = useState<number | null>(null);
+
+  const decideProposal = async (p: TrustProposal, decision: "accept" | "reject") => {
+    setProposalBusy(p.id);
+    try {
+      const status = await automationApi.decideTrustProposal(p.id, decision);
+      setFlash({ ok: status === "accepted" || status === "rejected", message: trustDecisionMessage(status) });
+    } catch (e) {
+      setFlash({ ok: false, message: describeError(e) });
+    } finally {
+      setProposalBusy(null);
+      proposals.reload();
     }
   };
 
@@ -190,6 +216,62 @@ export function ApprovalsPage() {
                   </li>
                 );
               })}
+            </ul>
+          )}
+        </Section>
+      </section>
+
+      <section className="panel">
+        <h2 className="panel-title">Trust proposals</h2>
+        <Section
+          state={proposals}
+          isEmpty={(d) => d.proposals.length === 0}
+          emptyText={view === "open"
+            ? "No trust proposal is waiting. When an agent or an outside source would replace a fact you or a more trusted writer recorded, the old fact stays and the change waits here."
+            : "No write has tried to replace a more trusted fact yet."}
+        >
+          {(d) => (
+            <ul className="hold-list">
+              {d.proposals.map((p) => (
+                <li key={p.id} className="hold-row">
+                  <div className="hold-head">
+                    <span className="mono hold-target">{p.entity_slug ?? `fact ${p.target_id}`}{p.dimension ? ` · ${p.dimension}` : ""}</span>
+                    <span className="chip">{p.old_tier} → {p.new_tier}</span>
+                    <span className="muted small">{fmtAgo(p.created_at, now)} · source <span className="mono">{p.source_id}</span></span>
+                  </div>
+                  {/* Fact text may be outside text: rendered as text nodes, never as markup. */}
+                  <div className="muted small">Current ({p.old_tier})</div>
+                  <blockquote className="hold-excerpt">{p.old_fact ?? ""}</blockquote>
+                  <div className="muted small">Proposed ({p.new_tier})</div>
+                  <blockquote className="hold-excerpt">{p.new_fact ?? ""}</blockquote>
+                  {p.status === "pending" ? (
+                    <div className="hold-actions">
+                      <button
+                        className="btn btn-primary btn-sm"
+                        disabled={proposalBusy !== null}
+                        aria-label={`Accept trust proposal ${p.id}`}
+                        onClick={() => decideProposal(p, "accept")}
+                      >
+                        Accept
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        disabled={proposalBusy !== null}
+                        aria-label={`Reject trust proposal ${p.id}`}
+                        onClick={() => decideProposal(p, "reject")}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="muted small">
+                      {TRUST_DECIDED[p.status]}
+                      {p.decided_by ? ` by ${p.decided_by}` : ""}
+                      {p.decided_at ? `, ${fmtAgo(p.decided_at, now)}` : ""}
+                    </div>
+                  )}
+                </li>
+              ))}
             </ul>
           )}
         </Section>

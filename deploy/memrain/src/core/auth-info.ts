@@ -21,6 +21,7 @@
 
 import { OperationError } from "./operation-error.ts";
 import { LEGACY_NO_SOURCE_SENTINEL } from "./brand.ts";
+import type { TrustTier } from "./trust-tier.ts";
 
 /**
  * Which credential a principal presented, by a reference that is not a bearer:
@@ -113,6 +114,11 @@ export interface AuthInfo {
    * means the full surface. It only ever hides tools (mcp/surface.ts).
    */
   toolSurface?: "starter" | "verbs";
+  /**
+   * The least trusted tier this credential may read (`min_trust` on the token
+   * or client row, migration 186); absent means no floor (mcp/read-floor.ts).
+   */
+  minTrust?: TrustTier;
 }
 
 /**

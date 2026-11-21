@@ -218,8 +218,10 @@ function releaseColumns(table: GatedRowTable, payload: Record<string, unknown>):
 /** Insert the held row as its writer would have; the id of the stored row, or null when an equal row was already there. */
 async function insertReleased(engine: Engine, hold: RowHold): Promise<string | null> {
   const table = TABLE_OF[hold.kind];
-  const cols = releaseColumns(table, hold.payload);
-  const params = cols.map(c => hold.payload[c] ?? null);
+  // The row keeps the tier the gate saw when it held it; the insert trigger
+  // only ever lowers it further (a payload never names trust_tier itself).
+  const cols = [...releaseColumns(table, hold.payload), "trust_tier"];
+  const params = cols.map(c => (c === "trust_tier" ? hold.tier : hold.payload[c] ?? null));
   const values = cols.map((_, i) => `$${i + 1}`).join(", ");
   let stored: string | null;
   if (table === "synth_takes") {

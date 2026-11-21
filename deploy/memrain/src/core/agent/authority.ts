@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import type { Engine } from "../engine/interface.ts";
 import { effectiveReadSourceIds, type AuthInfo } from "../auth-info.ts";
 import { hasScope, parseScopeString } from "../scope.ts";
+import { isTrustTier } from "../trust-tier.ts";
 
 export interface AgentAuthority {
   v: 1;
@@ -139,6 +140,7 @@ interface ClientRow {
   grant_revision: number | string;
   deleted_at: string | Date | null;
   budget_usd_per_day: string | number | null;
+  min_trust: string | null;
 }
 
 function sameSet(a: readonly string[], b: readonly string[]): boolean {
@@ -159,7 +161,7 @@ export async function resolveLiveAuthority(
 ): Promise<AuthInfo> {
   const r = await engine.query<ClientRow>(
     `SELECT client_id, scope, source_id, federated_read, bound_tools, grant_revision,
-            deleted_at, budget_usd_per_day
+            deleted_at, budget_usd_per_day, min_trust
        FROM oauth_clients WHERE client_id = $1`,
     [snap.clientId],
   );
@@ -189,6 +191,9 @@ export async function resolveLiveAuthority(
     return refuse("bound tools narrowed");
   }
   const scopes = snap.scopes.filter((s) => hasScope(rowScopes, s));
+  // A read floor set on the client after the job was queued holds for its
+  // remaining tool calls; a value that names no tier stops the job.
+  if (row.min_trust !== null && !isTrustTier(row.min_trust)) return refuse("read floor unreadable");
   return {
     token: "",
     clientId: snap.clientId,
@@ -197,5 +202,6 @@ export async function resolveLiveAuthority(
     ...(row.source_id ? { sourceId: row.source_id } : {}),
     allowedSources: [...snap.readSourceIds],
     ...(snap.spender !== snap.clientId ? { spendId: snap.spender } : {}),
+    ...(isTrustTier(row.min_trust) ? { minTrust: row.min_trust } : {}),
   };
 }

@@ -17,18 +17,24 @@
  *
  * The old fact must be about the same entity as the new one: a correction
  * about one person never retires, or points the supersede chain of, another's.
+ *
+ * A new fact less trusted than the old one does not retire it: a trust
+ * proposal waits for the owner instead (core/trust-proposals.ts).
  */
 import { ownerOnlyLineageSql } from "./owner-only.ts";
 import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { supersededValidUntilSql } from "./fact-validity.ts";
+import { contestIfLessTrusted } from "./trust-proposals.ts";
 
-export type ReplaceSkipReason = "not_live_or_out_of_scope" | "not_written" | "same_fact" | "entity_mismatch";
+export type ReplaceSkipReason = "not_live_or_out_of_scope" | "not_written" | "same_fact" | "entity_mismatch" | "contested";
 
 export interface ReplaceOutcome {
   replaced: boolean;
   /** Present only when `replaced` is false. */
   replace_reason?: ReplaceSkipReason;
+  /** With `contested`: the trust proposal the owner decides. */
+  proposal_id?: number;
 }
 
 /**
@@ -48,7 +54,7 @@ export async function replaceFact(
   // Restating the very fact being replaced refreshes it in place; retiring it
   // would leave the caller with no live copy at all.
   if (newId === oldId) return { replaced: false, replace_reason: "same_fact" };
-  const retired = await engine.transaction(async (tx): Promise<ReplaceSkipReason | null> => {
+  const retired = await engine.transaction(async (tx): Promise<ReplaceSkipReason | { proposal_id: number } | null> => {
     const params: unknown[] = [oldId];
     const scope = andSourceScope("source_id", sourceIds, params);
     const world = opts.worldOnly ? ` AND visibility = 'world' AND ${ownerOnlyLineageSql("fact", "entity_facts.id")}` : "";
@@ -65,6 +71,8 @@ export async function replaceFact(
       `SELECT entity_slug, valid_from::text AS valid_from FROM entity_facts WHERE id = $1`, [newId],
     );
     if (fresh.rows[0]?.entity_slug !== row.entity_slug) return "entity_mismatch";
+    const contested = await contestIfLessTrusted(tx, { oldId, newId, guard: "replaces" });
+    if (contested) return { proposal_id: contested.proposal_id };
     await tx.query(
       `UPDATE entity_facts
           SET forgotten_at = NOW(), forgotten_reason = $2,
@@ -75,5 +83,7 @@ export async function replaceFact(
     );
     return null;
   });
-  return retired === null ? { replaced: true } : { replaced: false, replace_reason: retired };
+  if (retired === null) return { replaced: true };
+  if (typeof retired === "object") return { replaced: false, replace_reason: "contested", proposal_id: retired.proposal_id };
+  return { replaced: false, replace_reason: retired };
 }

@@ -115,6 +115,22 @@ describe("consolidateFactsPhase", () => {
     );
   });
 
+  it("records the take at the least trusted tier among its members", async () => {
+    await seed("Alice prefers tea", 0, { confidence: 0.9 });
+    const agent = await seed("Alice likes tea", 0, { confidence: 0.7 });
+    await storage.engine().query(`UPDATE entity_facts SET trust_tier = 'agent' WHERE id = $1`, [agent]);
+    await seed("Alice moved to Gotham", 5);
+
+    const res = await consolidateFactsPhase(storage.engine(), { minOldestAgeMs: 0 });
+    expect(res.takesWritten).toBe(1);
+    const take = await storage.engine().query<{ fact: string; trust_tier: string }>(
+      `SELECT fact, trust_tier FROM entity_facts WHERE written_by = 'facts-consolidate' AND consolidated = true`,
+    );
+    // The owner's wording wins on confidence; the agent's member still lowers the take.
+    expect(take.rows[0]!.fact).toBe("Alice prefers tea");
+    expect(take.rows[0]!.trust_tier).toBe("agent");
+  });
+
   it("never folds an assistant's suggestion into the operator's take", async () => {
     await seed("Alice prefers tea", 0, { confidence: 0.7 });
     const suggested = await seed("Alice likes tea", 0, { confidence: 0.9 });

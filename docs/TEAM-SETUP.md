@@ -191,6 +191,7 @@ memrain auth enroll alice --label alice --client <client_id> --ttl 30d # a code 
 memrain auth list-clients                # who exists, in which mode, on which source
 memrain auth who-can-read notes/example  # read-only access verdicts; no page body or credentials
 memrain auth set-budget <client_id|token_name|enrollment_id> 2.00 # daily USD ceiling; 'none' removes it
+memrain auth min-trust <client_id|token_name> owner # read only owner-tier text; 'none' removes the floor
 memrain auth revoke-client <client_id>   # cut a connector off entirely
 ```
 

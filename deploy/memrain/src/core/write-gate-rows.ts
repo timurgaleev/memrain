@@ -186,7 +186,7 @@ function originQuery(origin: RowOrigin): { sql: string; params: unknown[] } {
   }
   if ("event" in origin) {
     // scope: upstream the row the caller just wrote, by its key
-    return { sql: `SELECT ${rankTierSql(factRankSql("r", "tt_p.slug = r.slug", false))} AS tier, r.source_id FROM timeline_events r WHERE r.id = $1`, params: [origin.event] };
+    return { sql: `SELECT ${rankTierSql(factRankSql("r", "tt_p.slug = r.slug"))} AS tier, r.source_id FROM timeline_events r WHERE r.id = $1`, params: [origin.event] };
   }
   if ("page" in origin) {
     // A caller's principal can only lower the page's tier.

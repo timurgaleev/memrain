@@ -86,6 +86,13 @@ describe("resolveLiveAuthority", () => {
     expect(live.spendId).toBeUndefined();
   });
 
+  it("carries a read floor set on the client after the job was queued", async () => {
+    const s = await snap();
+    expect((await resolveLiveAuthority(storage.engine(), s)).minTrust).toBeUndefined();
+    await storage.engine().query("UPDATE oauth_clients SET min_trust = 'owner' WHERE client_id = $1", [clientId]);
+    expect((await resolveLiveAuthority(storage.engine(), s)).minTrust).toBe("owner");
+  });
+
   it("refuses a hard-deleted client", async () => {
     const s = await snap();
     await storage.engine().query("DELETE FROM oauth_clients WHERE client_id = $1", [clientId]);

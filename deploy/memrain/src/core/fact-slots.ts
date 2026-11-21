@@ -12,6 +12,7 @@ import { normalizeDimension, valueHash } from "./chronicle/ontology.ts";
 import { factSourceEligibleSql } from "./quarantine.ts";
 import { factRemoteEligibleSql } from "./fact-visibility.ts";
 import { ownerOnlyLineageSql } from "./owner-only.ts";
+import { factRankSql } from "./trust-tier.ts";
 
 /** The dimensions a fact may carry as a slot. Each holds one value at a time. */
 export const SLOT_DIMENSIONS: ReadonlySet<string> = new Set(["location", "employer", "role"]);
@@ -35,6 +36,8 @@ export const CHANGE_CUE = /\b(?:moved|relocated|left|quit|joined|switched|transf
 export interface SlotRow {
   id: number; source_id: string; entity_slug: string; dimension: string; value_hash: string;
   valid_from: Date | string; source_markdown_slug: string | null; fact: string;
+  /** Effective trust rank (core/trust-tier.ts); absent means unknown and is not compared. */
+  trust_rank?: number;
 }
 
 export interface SlotEnd { at: Date; by: number }
@@ -45,6 +48,8 @@ export interface SlotEnd { at: Date; by: number }
  * restatement continues it). A stint ends where the next distinct value starts
  * when that value's first row is on a page one of the stint's rows came from,
  * or its fact matches CHANGE_CUE, and only when it starts later than the stint.
+ * A value less trusted than a row of the stint never ends it: replacing a more
+ * trusted value is the owner's decision (core/trust-proposals.ts).
  * Callers pass only rows the reader may see.
  */
 export function deriveSlotEnds(rows: readonly SlotRow[]): Map<number, SlotEnd> {
@@ -71,6 +76,7 @@ export function deriveSlotEnds(rows: readonly SlotRow[]): Map<number, SlotEnd> {
       if (time(next) <= time(stint[0]!)) continue;
       const samePage = next.source_markdown_slug != null && stint.some((r) => r.source_markdown_slug === next.source_markdown_slug);
       if (!samePage && !CHANGE_CUE.test(next.fact)) continue;
+      if (next.trust_rank !== undefined && stint.some((r) => r.trust_rank !== undefined && r.trust_rank > next.trust_rank!)) continue;
       for (const r of stint) ends.set(Number(r.id), { at: new Date(next.valid_from), by: Number(next.id) });
     }
   }
@@ -107,6 +113,9 @@ export function knownAsOfLiveSql(n: number): string {
                          AND pr.page_slug = COALESCE(entity_facts.source_markdown_slug, entity_facts.source_slug))))`;
 }
 
+/** A slot row's effective trust rank, over the unaliased entity_facts. */
+const SLOT_RANK_SQL = factRankSql("entity_facts", "tt_p.slug IN (entity_facts.source_slug, entity_facts.source_markdown_slug)");
+
 /** The date a slot value starts: its valid_from, else the day it was first written. */
 const SLOT_START_SQL = "COALESCE(valid_from, first_written_at::date, written_at::date)";
 
@@ -136,12 +145,13 @@ async function readSlotRows(engine: Engine, scope: SlotReadScope, keys: Readonly
   // scope: upstream keyed by the reader's own (source_id, entity_slug) pairs, plus its source grant when it has one.
   const r = await engine.query<SlotRow>(
     `SELECT id, source_id, entity_slug, slot_dimension AS dimension, slot_value_hash AS value_hash,
-            ${SLOT_START_SQL}::text AS valid_from, COALESCE(source_markdown_slug, source_slug) AS source_markdown_slug, fact
+            ${SLOT_START_SQL}::text AS valid_from, COALESCE(source_markdown_slug, source_slug) AS source_markdown_slug, fact,
+            (${SLOT_RANK_SQL})::int AS trust_rank
        FROM entity_facts WHERE ${where.join(" AND ")}
       ORDER BY ${SLOT_START_SQL}, id`,
     params,
   );
-  return r.rows.map((row) => ({ ...row, id: Number(row.id) }));
+  return r.rows.map((row) => ({ ...row, id: Number(row.id), trust_rank: Number(row.trust_rank) }));
 }
 
 /**

@@ -49,6 +49,7 @@ import { flagRowAt, holdIfQuarantined, type RowHeld } from "./write-gate-rows.ts
 import { readEntityIdentity, type EntityIdentity } from "./person-identity.ts";
 import { contestedWith } from "./typed-conflicts.ts";
 import { applySlotEnds, knownAsOfLiveSql, normalizeSlot, slotValueHash, type SlotReadScope } from "./fact-slots.ts";
+import { contestIfLessTrusted, type Contested } from "./trust-proposals.ts";
 
 /**
  * Insert-time dedup / supersede knobs (migration 038 fact embedding + the
@@ -517,6 +518,8 @@ export interface AddFactResult {
   withdrawn_detail?: WithdrawalDetail;
   /** Set when the write gate held the claim for the owner: nothing was stored and `id` is null. */
   held?: RowHeld;
+  /** Set when the fact would have replaced a more trusted one: that fact stays, and a trust proposal asks the owner. */
+  contested?: Contested;
 }
 
 /**
@@ -868,7 +871,10 @@ export async function addFact(
     // tombstone reuses the mig043 forget columns plus the mig085 `superseded_by`
     // pointer (so chains are SQL-traversable), and — paired with the reconcile
     // tombstone-preservation — survives a fence rebuild rather than resurrecting.
-    if (inserted && supersededId !== null && newId !== null) {
+    const contested = inserted && supersededId !== null && newId !== null
+      ? await contestIfLessTrusted(tx, { oldId: supersededId, newId, guard: "conflict" })
+      : null;
+    if (inserted && supersededId !== null && newId !== null && contested === null) {
       await tx.query(
         `UPDATE entity_facts
             SET forgotten_at = NOW(), forgotten_reason = $2,
@@ -878,7 +884,7 @@ export async function addFact(
         [supersededId, `superseded by fact ${newId}`, newId, validFrom],
       );
     }
-    return { id: newId, inserted };
+    return { id: newId, inserted, contested };
   });
   if (landed === null) {
     return {
@@ -896,7 +902,7 @@ export async function addFact(
       fields: [{ field: "fact", text: fact }, { field: "context", text: factContext ?? "" }],
     }, { fact: landed.id });
   }
-  return { id: landed.id, entity_slug: input.entity_slug, inserted: landed.inserted };
+  return { id: landed.id, entity_slug: input.entity_slug, inserted: landed.inserted, ...(landed.contested ? { contested: landed.contested } : {}) };
 }
 
 /**

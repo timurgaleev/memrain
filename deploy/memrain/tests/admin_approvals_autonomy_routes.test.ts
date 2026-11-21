@@ -11,6 +11,7 @@ import { indexDocument } from "../src/core/indexer.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { pausedSpendPaths } from "../src/core/budget.ts";
 import { addFact } from "../src/core/facts.ts";
+import { replaceFact } from "../src/core/facts-replace.ts";
 import { handleAdminApi, type AdminApiDeps } from "../src/http/admin-api.ts";
 import type { Storage } from "../src/core/storage.ts";
 
@@ -70,6 +71,33 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await db.close();
       if (prior === undefined) delete process.env["MEMRAIN_WRITE_GATE_ROWS"];
       else process.env["MEMRAIN_WRITE_GATE_ROWS"] = prior;
+    }
+  });
+
+  it("lists trust proposals, accepts one, rejects another, and refuses a repeat or a bad decision", async () => {
+    const db = await open();
+    try {
+      const s = db.storage;
+      const ids: number[] = [];
+      for (const who of ["sal", "tam"]) {
+        const old = await addFact(s, { entity_slug: `people/${who}`, fact: `${who} lives in Rome` });
+        const fresh = await addFact(s, { entity_slug: `people/${who}`, fact: `${who} lives in Milan`, written_by_principal: "client:abc" });
+        ids.push((await replaceFact(s.engine(), old.id!, fresh.id!, undefined)).proposal_id!);
+      }
+      const d = apiDeps(s);
+      const listed = await (await call(get("/admin/api/trust/proposals"), d)).json() as { proposals: Array<{ id: number; old_fact: string; new_fact: string; old_tier: string; new_tier: string }> };
+      expect(listed.proposals.map(p => p.id)).toEqual(ids);
+      expect(listed.proposals[0]).toMatchObject({ old_fact: "sal lives in Rome", new_fact: "sal lives in Milan", old_tier: "owner", new_tier: "agent" });
+      expect(await (await call(post(`/admin/api/trust/proposals/${ids[0]}/decide`, { decision: "accept" }), d)).json()).toEqual({ id: ids[0], status: "accepted" });
+      expect((await call(post(`/admin/api/trust/proposals/${ids[1]}/decide`, { decision: "reject" }), d)).status).toBe(200);
+      expect((await call(post(`/admin/api/trust/proposals/${ids[1]}/decide`, { decision: "reject" }), d)).status).toBe(409);
+      expect((await call(post(`/admin/api/trust/proposals/999999/decide`, { decision: "accept" }), d)).status).toBe(404);
+      expect((await call(post(`/admin/api/trust/proposals/${ids[1]}/decide`, { decision: "release" }), d)).status).toBe(400);
+      expect((await call(get("/admin/api/trust/proposals?status=bogus"), d)).status).toBe(400);
+      const all = await (await call(get("/admin/api/trust/proposals?status=all"), d)).json() as { proposals: Array<{ status: string; decided_by: string }> };
+      expect(all.proposals.map(p => [p.status, p.decided_by])).toEqual([["accepted", "admin"], ["rejected", "admin"]]);
+    } finally {
+      await db.close();
     }
   });
 

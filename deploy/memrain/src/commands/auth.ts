@@ -44,6 +44,11 @@
  *   set-budget <client_id|token_name> <usd-per-day|none>
  *              Set or clear the client's daily USD ceiling, enforced across
  *              every paid op. `none` removes the cap (the default).
+ *   min-trust <client_id|token_name> <owner|member|agent|external|none>
+ *              Set or clear the credential's read floor: it reads only rows
+ *              at or above that tier, through search, query and context_pack;
+ *              tools that cannot filter by tier are refused to it. `none`
+ *              removes the floor (the default).
  *   rescope-client <client_id> --source SRC [--federated-read a,b]
  *                              [--bound-slug-prefixes p1,p2] [--scopes read,write]
  *              Change an existing client's tenancy grant in place (write
@@ -61,7 +66,7 @@
  *              Exchange client_credentials for an access token locally (for a
  *              handoff / smoke test) — equivalent to POST /token.
  *   create <name> [--takes-holders a,b] [--source SRC] [--federated-read a,b]
- *          [--scopes read,write | --profile reader|writer]
+ *          [--scopes read,write | --profile reader|writer] [--min-trust TIER]
  *              Mint a long-lived personal access token (access_tokens row).
  *              Prints the token ONCE — only the SHA-256 hash persists. Tenant
  *              scope comes from `permissions.source_id`: a scalar is
@@ -105,6 +110,8 @@ import { patNameSpendConflict } from "../core/budget.ts";
 import { bindCredential, existingMember } from "../core/members.ts";
 import { assertCredentialScoped } from "../core/requester-scope.ts";
 import { resolveGrantProfile, type ResolvedGrantProfile } from "../core/grant-profiles.ts";
+import { isTrustTier, TRUST_TIERS, type TrustTier } from "../core/trust-tier.ts";
+import { setCredentialMinTrust } from "../core/token-min-trust.ts";
 import {
   OAuthProvider,
   needsOperatorConsent,
@@ -138,6 +145,7 @@ export type AuthSub =
   | "rescope-client"
   | "grant-history"
   | "set-budget"
+  | "min-trust"
   | "enroll"
   | "enrollments"
   | "revoke-enrollment"
@@ -601,6 +609,20 @@ async function setBudget(clientId: string, amount: string): Promise<void> {
   );
 }
 
+/** A read-floor argument: a trust tier, or `none` for no floor. */
+function parseFloorArg(raw: string): TrustTier | null {
+  if (raw === "none") return null;
+  if (!isTrustTier(raw)) throw new Error(`min-trust must be one of ${TRUST_TIERS.join(", ")} or none (got '${raw}')`);
+  return raw;
+}
+
+async function setMinTrust(target: string, value: string): Promise<void> {
+  if (!target || value === undefined) throw new Error("Usage: auth min-trust <client_id|token_name> <owner|member|agent|external|none>");
+  const tier = parseFloorArg(value);
+  const change = await withProvider((_p, storage) => setCredentialMinTrust(storage.raw(), target, tier));
+  console.log(JSON.stringify({ ...change, note: "Takes effect on the credential's next request." }, null, 2));
+}
+
 /** Parse `7d`, `24h`, `90m`, `3600s` or a bare number of seconds. */
 export function parseTtl(raw: string | undefined, fallbackSeconds: number): number {
   if (raw === undefined || raw === "") return fallbackSeconds;
@@ -712,7 +734,7 @@ function listFlag(raw: string | undefined): string[] | undefined {
 async function createToken(name: string, rest: string[]): Promise<void> {
   if (!name) {
     throw new Error(
-      "Usage: auth create <name> [--member M] [--takes-holders a,b] [--source SRC] [--federated-read a,b] [--scopes read,write | --profile reader|writer]",
+      "Usage: auth create <name> [--member M] [--takes-holders a,b] [--source SRC] [--federated-read a,b] [--scopes read,write | --profile reader|writer] [--min-trust TIER]",
     );
   }
   const nameConflict = patNameSpendConflict(name);
@@ -734,6 +756,7 @@ async function createToken(name: string, rest: string[]): Promise<void> {
   const profile = flags["profile"] !== undefined
     ? resolveGrantProfile(flags["profile"], "token", flags["scopes"] !== undefined ? { scopes: listFlag(flags["scopes"])! } : {})
     : undefined;
+  const minTrust = flags["min-trust"] !== undefined ? parseFloorArg(flags["min-trust"]) : null;
   const minted = await withProvider(async (_p, storage) => {
     const grant = await resolvePatGrant(storage.raw(), {
       ...(flags["source"] !== undefined ? { sourceId: flags["source"] } : {}),
@@ -764,11 +787,11 @@ async function createToken(name: string, rest: string[]): Promise<void> {
       // A re-minted name keeps its predecessor's daily cap: spend is booked
       // under the name, so a new row with no cap would silently uncap it.
       `INSERT INTO access_tokens (name, token_hash, scopes, permissions, budget_usd_per_day,
-                                  profile, profile_catalog_version, tool_surface)
+                                  profile, profile_catalog_version, tool_surface${minTrust ? ", min_trust" : ""})
        VALUES ($1, $2, $3::text[], $4::jsonb,
                (SELECT p.budget_usd_per_day FROM access_tokens p
                  WHERE p.name = $1 ORDER BY p.id DESC LIMIT 1),
-               $5, $6, $7)`,
+               $5, $6, $7${minTrust ? ", $8" : ""})`,
       [
         name,
         tokenHash,
@@ -780,6 +803,7 @@ async function createToken(name: string, rest: string[]): Promise<void> {
         profile?.profile ?? null,
         profile?.catalogVersion ?? null,
         profile?.toolSurface ?? "full",
+        ...(minTrust ? [minTrust] : []),
       ],
     );
     if (member !== undefined) await bindCredential(storage.engine(), member.id, { kind: "token", id: name }, { actor: cliActor(), via: "cli" });
@@ -794,6 +818,7 @@ async function createToken(name: string, rest: string[]): Promise<void> {
         ...(minted.sourceGrant !== undefined ? { source_id: minted.sourceGrant } : {}),
         ...(minted.memberId !== undefined ? { member: minted.memberId } : {}),
         ...(profile ? { profile: profile.profile, tool_surface: profile.toolSurface } : {}),
+        ...(minTrust ? { min_trust: minTrust } : {}),
         takes_holders: takesHolders,
         note: "Store the token now — only its hash persists. Revoke with: memrain auth revoke <name>.",
       },
@@ -816,8 +841,9 @@ async function listTokens(): Promise<void> {
         member_id: string | null;
         profile: string | null;
         tool_surface: string;
+        min_trust: string | null;
       }>(
-        `SELECT name, created_at, last_used_at, revoked_at, permissions, member_id, profile, tool_surface
+        `SELECT name, created_at, last_used_at, revoked_at, permissions, member_id, profile, tool_surface, min_trust
            FROM access_tokens ORDER BY created_at DESC`,
       )
       .then((r) => r.rows),
@@ -1194,6 +1220,8 @@ export async function runAuth(args: string[]): Promise<void> {
       return grantHistory(rest[0]!, rest.slice(1));
     case "set-budget":
       return setBudget(rest[0]!, rest[1]!);
+    case "min-trust":
+      return setMinTrust(rest[0]!, rest[1]!);
     case "enroll":
       return enroll(rest);
     case "enrollments":
@@ -1222,7 +1250,7 @@ export async function runAuth(args: string[]): Promise<void> {
       return doctorCommand(rest);
     default:
       console.error(
-        "Usage: memrain auth <register-client|list-clients|who-can-read|revoke-client|set-redirect-uris|rescope-client|grant-history|set-budget|enroll|enrollments|revoke-enrollment|revoke-grant|invalidate-tokens|grant-token|create|list|revoke|permissions|test|doctor>",
+        "Usage: memrain auth <register-client|list-clients|who-can-read|revoke-client|set-redirect-uris|rescope-client|grant-history|set-budget|min-trust|enroll|enrollments|revoke-enrollment|revoke-grant|invalidate-tokens|grant-token|create|list|revoke|permissions|test|doctor>",
       );
       process.exitCode = 1;
   }

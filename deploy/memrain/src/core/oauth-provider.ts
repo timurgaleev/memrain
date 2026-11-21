@@ -23,6 +23,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import type { PrincipalRef } from "./auth-info.ts";
+import { isTrustTier, type TrustTier } from "./trust-tier.ts";
 import { memberAccess, memberRequired, widenReadSources, writeMemberAudit } from "./members.ts";
 import { validateSlug as validatePageSlug } from "./pages.ts";
 import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "./jobs/kinds.ts";
@@ -420,6 +421,8 @@ export interface AuthInfo {
   principal?: PrincipalRef;
   /** A narrowed tool menu from the row's tool_surface; absent = full. */
   toolSurface?: "starter" | "verbs";
+  /** The least trusted tier the credential may read (min_trust); absent = no floor. */
+  minTrust?: TrustTier;
   /** The enabled member the credential is bound to. */
   memberId?: string;
 }
@@ -447,6 +450,14 @@ function toCapUsd(raw: unknown): number | null {
   const n = Number(raw);
   if (!Number.isFinite(n)) throw new InvalidTokenError("Corrupt budget_usd_per_day on token row");
   return n;
+}
+
+/** A row's min_trust as AuthInfo carries it: absent for none. A value that
+ *  names no tier fails the token rather than lifting the floor. */
+function readFloor(raw: unknown): { minTrust?: TrustTier } {
+  if (raw === undefined || raw === null) return {};
+  if (isTrustTier(raw)) return { minTrust: raw };
+  throw new InvalidTokenError("Corrupt min_trust on credential row");
 }
 
 /** A row's tool_surface as AuthInfo carries it: absent for full. An
@@ -1023,15 +1034,17 @@ async function revokeGrantIn(
 interface VerifierColumns {
   members: boolean;
   surface: boolean;
+  floor: boolean;
 }
 
-const ALL_VERIFIER_COLUMNS: VerifierColumns = { members: true, surface: true };
+const ALL_VERIFIER_COLUMNS: VerifierColumns = { members: true, surface: true, floor: true };
 
 /** The PAT columns the verifier reads. */
 function patSelect(cols: VerifierColumns): string {
   return "id, name, permissions, scopes, budget_usd_per_day" +
     (cols.members ? ", member_id" : "") +
-    (cols.surface ? ", tool_surface" : "");
+    (cols.surface ? ", tool_surface" : "") +
+    (cols.floor ? ", min_trust" : "");
 }
 
 function oauthGrantSelect(cols: VerifierColumns = ALL_VERIFIER_COLUMNS): string {
@@ -1050,7 +1063,8 @@ function oauthGrantSelect(cols: VerifierColumns = ALL_VERIFIER_COLUMNS): string 
               c.scope AS current_scope${cols.members ? `,
               CASE WHEN t.grant_bound THEN e.member_id END AS grant_member_id,
               c.member_id AS client_member_id` : ""}${cols.surface ? `,
-              c.tool_surface` : ""}
+              c.tool_surface` : ""}${cols.floor ? `,
+              c.min_trust` : ""}
        FROM oauth_tokens t
        LEFT JOIN oauth_clients c ON c.client_id = t.client_id
        LEFT JOIN oauth_enrollments e ON t.grant_bound AND e.id = t.grant_id`;
@@ -1117,6 +1131,7 @@ function oauthGrantFromRow(
     allowedSources,
     ...(boundSlugPrefixes ? { boundSlugPrefixes } : {}),
     ...narrowedSurface(row.tool_surface),
+    ...readFloor(row.min_trust),
     // A person enrolled on a shared connector spends under their own
     // enrollment, capped by it, else by the connector's cap on their own.
     // A replacement enrollment spends under its predecessor's key.
@@ -1181,6 +1196,7 @@ function legacyGrantFromRow(row: Record<string, unknown>): PrincipalGrant {
     allowedSources,
     ...(takesHolders && takesHolders.length > 0 ? { takesHolders } : {}),
     ...narrowedSurface(row.tool_surface),
+    ...readFloor(row.min_trust),
     budgetUsdPerDay: toCapUsd(row.budget_usd_per_day),
   };
 }
@@ -3128,7 +3144,7 @@ export class OAuthProvider {
     return this.withMembers({ ...first, scopes }, [rows[0]!.grant_member_id, rows[0]!.client_member_id]);
   }
 
-  /** Run a verifier read, retrying without whichever 162/164 column an older schema lacks. */
+  /** Run a verifier read, retrying without whichever 162/164/186 column an older schema lacks. */
   private async withPreMemberFallback<T>(read: (cols: VerifierColumns) => Promise<T>): Promise<T> {
     let cols = ALL_VERIFIER_COLUMNS;
     for (;;) {
@@ -3137,6 +3153,7 @@ export class OAuthProvider {
       } catch (err) {
         if (cols.members && isUndefinedColumnError(err, "member_id")) cols = { ...cols, members: false };
         else if (cols.surface && isUndefinedColumnError(err, "tool_surface")) cols = { ...cols, surface: false };
+        else if (cols.floor && isUndefinedColumnError(err, "min_trust")) cols = { ...cols, floor: false };
         else throw err;
       }
     }

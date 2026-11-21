@@ -287,6 +287,17 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     });
   });
 
+  it("has no tier while held, and a released think take keeps the agent's tier, not the anchor page's", async () => {
+    await withDb(async (s) => {
+      await putPage(s, { slug: "synthesis/q2", title: "Q2", written_by_principal: "operator" });
+      const r = await saveThinkTake(s.engine(), { claim: HOSTILE, anchorSlug: "synthesis/q2", principal: AGENT });
+      expect(await count(s, `SELECT count(*)::int AS n FROM synth_takes`)).toBe(0);
+      expect((await releaseRowHold(s, r.held!.hold_id, "operator")).status).toBe("released");
+      const t = await s.engine().query<{ trust_tier: string }>(`SELECT trust_tier FROM synth_takes WHERE source_ref = 'synthesis/q2'`);
+      expect(t.rows).toEqual([{ trust_tier: "agent" }]);
+    });
+  });
+
   it("holds a take the cycle proposed from an outside document, before it is embedded", async () => {
     await withDb(async (s) => {
       await s.engine().query(`INSERT INTO documents (id, source_path, title, source_id) VALUES ('mail-1', '/mail/1.eml', 'Mail', 'mail')`);

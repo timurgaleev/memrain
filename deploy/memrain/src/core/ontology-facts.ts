@@ -15,6 +15,7 @@
  */
 import { ownerOnlyLineageSql } from "./owner-only.ts";
 import { supersededValidUntilSql } from "./fact-validity.ts";
+import { contestIfLessTrusted } from "./trust-proposals.ts";
 import type { Storage } from "./storage.ts";
 import { guardFields } from "./secret-scan.ts";
 import { flagRowAt, holdIfQuarantined } from "./write-gate-rows.ts";
@@ -191,6 +192,15 @@ export async function mergeOntologyFact(
     const newId = Number(ins.rows[0]!.id);
 
     let supersededId: number | null = null;
+    // A value less trusted than the current one does not close it: it waits,
+    // quarantined, for the owner's decision on the trust proposal.
+    const contested = current && status === "active"
+      ? await contestIfLessTrusted(tx, { oldId: Number(current.id), newId, guard: "ontology" })
+      : null;
+    if (contested) {
+      await tx.query(`UPDATE entity_facts SET dim_status = 'quarantined' WHERE id = $1`, [newId]);
+      return { action: "inserted", factId: newId, supersededId: null, contested };
+    }
     // Only an ACTIVE observation supersedes; a quarantined novel value must not
     // silently close a confirmed current value.
     if (current && status === "active") {

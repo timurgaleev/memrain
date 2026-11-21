@@ -4414,6 +4414,36 @@ self-hosted + low-spend constraints):
 
 ## Defence-in-depth hardening (deferred)
 
+- **A remote `forget_fact` retires a more trusted world fact without the
+  owner** (`mcp/dispatch.ts` `callForgetFact`, `core/facts.ts` `forgetFact`).
+  Trust proposals (migration 185) cover replacements (`replaces`, the
+  classifier's supersede, ontology values, slot ends) but not a forget: an
+  agent token can still forget an owner fact it can see. The fix files a
+  `forget` proposal and answers `forget_requires_owner` instead, decided like
+  the others. P2, existed before trust proposals.
+
+- **An agent's edit of a page's facts or takes fence can retire the owner's
+  fence rows** (`core/facts-reconcile.ts`, `core/synthesis/takes-canon.ts`).
+  The rows re-derived from the edited page take the page's lowered tier, but
+  a row the edit removed or changed is retired without a proposal. Guard the
+  reconcile the same way: a row whose replacement is less trusted stays and
+  a proposal names the pair. P2, existed before trust proposals.
+
+- **A contested ontology value blocks the owner's later write of the same
+  value** (`core/ontology-facts.ts:184-202`). The quarantined agent row keeps
+  the migration 097 unique slot, whose predicate ignores `dim_status`, so the
+  owner's insert of the same value from the same page hits `ON CONFLICT DO
+  NOTHING`; accepting the proposal then lands the value at agent tier. Fix: on
+  conflict with a lower-tier quarantined row, retire it, mark its proposal
+  stale and insert the owner's row. LOW.
+
+- **The 184 down migration drops taint it cannot rebuild**
+  (`migrations-down/184_derived_trust_tiers.down.sql:38-40`). `trust_tier` on
+  `synth_takes`, `timeline_events` and `synth_atoms` is dropped; think-evidence
+  and meeting-timeline taint is not recomputed on re-apply, so those rows read
+  as owner after down and up. Fix: refuse the down migration while a stored
+  tier below owner exists. LOW.
+
 - **[DONE 2026-08-14] `storage.init()` is called OUTSIDE the `try`/`finally` in most command
   handlers** (`commands/jobs.ts`, `sources.ts`, and siblings follow the same
   shape). If `init()` throws (failed migration/connect) the `finally`'s

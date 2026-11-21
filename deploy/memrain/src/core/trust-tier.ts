@@ -10,6 +10,9 @@
  * resolved and the kind of the source it lands in, never from an argument.
  * `pages` and `entity_facts` carry it through the triggers in migration 158;
  * `documents` carry it when an authenticated client indexes inline text.
+ * Rows derived from other rows (atoms, takes, timeline entries, facts drawn
+ * from a page or chunk) take the least trusted tier of their origin too
+ * (migration 184, core/trust-derived.ts).
  *
  * Existing rows are not backfilled: their tier needs joins over sources and
  * page history, so a migration would have to rewrite every row. A NULL column
@@ -117,7 +120,7 @@ export function documentRankSql(alias: string): string {
       AND ${alias}.source_path IN (${PAGE_MIRROR_PATH_SQL}, ${PAGE_TRUTH_PATH_SQL}, p.slug, p.slug || '.md', p.slug || '.markdown')), ${OWNER_RANK}))`;
 }
 
-/** Effective rank of an `entity_facts` (or `timeline_events`, `withStored` false) row. */
+/** Effective rank of an `entity_facts` or `timeline_events` row; `withStored` false for a row not yet written. */
 export function factRankSql(alias: string, origin: string, withStored = true): string {
   return `LEAST(${withStored ? stored(`${alias}.trust_tier`) : OWNER_RANK},
     ${principalRankSql(`${alias}.written_by_principal`)},
