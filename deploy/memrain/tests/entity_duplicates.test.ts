@@ -124,7 +124,7 @@ describe("dedupe reject and confirm", () => {
   it("judges the other pairs of a group that holds a rejected pair", async () => {
     for (const slug of ["people/lu-a", "people/lu-b", "people/lu-c"]) await person(slug, "Lu Example", { email: "lu@example.org" });
     await rejectDuplicatePair(storage, "default", "people/lu-a", "people/lu-b");
-    expect(classes(await preview()).map(([, m]) => m)).toEqual([["people/lu-a", "people/lu-c"], ["people/lu-b", "people/lu-c"]]);
+    expect(classes(await preview()).map(([, m]) => m).sort()).toEqual([["people/lu-a", "people/lu-c"], ["people/lu-b", "people/lu-c"]]);
   });
 
   it("keeps a rejection to its own source", async () => {
@@ -140,11 +140,27 @@ describe("dedupe reject and confirm", () => {
   it("merges a confirmed pair with entity-merge", async () => {
     await person("people/hal", "Hal Example", { linkedin: "in/hal" });
     await person("people/hal-example", "Hal Example", { linkedin: "in/hal" });
-    const out = await confirmDuplicatePair(storage, "default", "people/hal", "people/hal-example");
+    const [group] = (await preview()).groups;
+    expect(await confirmDuplicatePair(storage, "default", "people/hal", "people/hal-example", [], "")).toMatchObject({ ok: false });
+    const out = await confirmDuplicatePair(storage, "default", "people/hal", "people/hal-example", [], group!.id);
     expect(out.ok).toBe(true);
     expect(await getPage(storage, "people/hal-example", ["default"])).not.toBeNull();
     const stub = await storage.engine().query<{ deleted: boolean }>(`SELECT deleted_at IS NOT NULL AS deleted FROM pages WHERE slug = 'people/hal'`);
     expect(stub.rows[0]!.deleted).toBe(true);
+  });
+
+  // Value: protects=a veto from a custom id field the preview read cannot vanish at confirm; fails_when=confirm re-reads with fewer id fields.
+  it("refuses a confirm that reads other id fields than the preview", async () => {
+    await company("companies/n1", "Nimbus", { email: "hello@nimbus.example", registry_no: "111" });
+    await company("companies/n2", "Nimbus", { email: "hello@nimbus.example", registry_no: "222" });
+    const engine = storage.engine();
+    const vetoed = findDuplicateGroups(await scanEntityPages(engine, { idFields: ["registry_no"] }), []);
+    expect(vetoed.groups.map((g) => g.class)).toEqual(["conflict"]);
+    const id = vetoed.groups[0]!.id;
+    expect(await confirmDuplicatePair(storage, "default", "companies/n1", "companies/n2", [], id)).toMatchObject({ ok: false });
+    expect(await confirmDuplicatePair(storage, "default", "companies/n1", "companies/n2", ["registry_no"], id)).toMatchObject({ ok: false });
+    const live = await engine.query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE type = 'company' AND deleted_at IS NULL`);
+    expect(live.rows[0]!.n).toBe(2);
   });
 
   it("refuses to merge a conflict, a pair with no shared key, or a rejected pair", async () => {
@@ -154,8 +170,10 @@ describe("dedupe reject and confirm", () => {
     await person("people/kim-a", "Kim Example", { github: "kim" });
     await person("people/kim-b", "Kim Example", { github: "kim" });
     await rejectDuplicatePair(storage, "default", "people/kim-a", "people/kim-b");
+    const conflict = (await preview()).groups.find((g) => g.members.includes("people/ivy"))!;
+    expect(conflict.class).toBe("conflict");
     for (const [a, b] of [["people/ivy", "people/ian"], ["people/ivy", "people/jo"], ["people/kim-a", "people/kim-b"]] as const) {
-      const out = await confirmDuplicatePair(storage, "default", a, b);
+      const out = await confirmDuplicatePair(storage, "default", a, b, [], conflict.id);
       expect(out.ok).toBe(false);
     }
     const live = await storage.engine().query<{ n: number }>(`SELECT count(*)::int AS n FROM pages WHERE type = 'person' AND deleted_at IS NULL`);

@@ -135,7 +135,8 @@ function printUsage(): void {
   console.log("  dedupe [--preview] [--json] [--source ID] [--kind person|company] [--id-field F,G]");
   console.log("                               read-only: person/company pages sharing an email, phone, handle, LinkedIn, GitHub, domain or id");
   console.log("  dedupe reject <a> <b> [--source ID]   record two pages as different; never proposed again");
-  console.log("  dedupe confirm <a> <b> [--source ID]  fold a into b (memrain merge) when they share a key and are not a conflict");
+  console.log("  dedupe confirm <a> <b> --group ID [--source ID] [--id-field F,G]");
+  console.log("                               fold a into b (memrain merge) when the preview group lists both and they are not a conflict");
   console.log("  models [--probe] [--max-cost-usd N] [--json]  resolved chat models and registered prices");
   console.log("  engine status [--probe] [--json]  inspect engine config; optionally test one connection");
   console.log("  init --pglite                initialize ~/.memrain/ + PGLite db");
@@ -908,6 +909,8 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (kind) opts.kind = kind;
       const idFields = values.get("--id-field");
       if (idFields) opts.idFields = idFields;
+      const group = values.get("--group");
+      if (group) opts.group = group;
       return await runDedupe(opts);
     }
     case "salience": {

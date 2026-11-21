@@ -158,8 +158,10 @@ reasons — and neither is "chatting with the user":
   it, never their values. It only reads, spends nothing and is a local operator
   command. A value more than five pages carry, a role mailbox (`info@`) on a
   person and a free-mail domain on a company are not counted. Nothing merges on
-  its own: `memrain dedupe confirm <a> <b>` folds `a` into `b` with the same
-  merge as `memrain merge`, for a pair that shares a key and is not a conflict;
+  its own: `memrain dedupe confirm <a> <b> --group <id>` folds `a` into `b`
+  with the same merge as `memrain merge`, for a pair the named preview group
+  lists that shares a key and is not a conflict (pass the preview's
+  `--id-field` again: the group id covers the id fields read);
   `memrain dedupe reject <a> <b>` records the two as different, and the pair is
   not proposed again, even after a rename.
 - **Reflections, then patterns** — over your recent sessions the brain writes short

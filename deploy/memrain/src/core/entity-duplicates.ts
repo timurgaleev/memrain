@@ -86,6 +86,8 @@ export interface DuplicateResult {
   schema_version: typeof DEDUPE_PREVIEW_SCHEMA_VERSION;
   groups: DuplicateGroup[];
   counts: { by_class: Record<DuplicateClass, number>; crowded_key_values: number; pages_scanned: number; truncated: boolean };
+  /** The declared id fields read; part of every group id, so a confirm must read the same ones. */
+  id_fields: string[];
 }
 
 export interface EntityScan {
@@ -94,6 +96,8 @@ export interface EntityScan {
   /** `<source>\n<keyId>\n<value>` -> the pages carrying it (crowded values removed). */
   carriers: Map<string, EntityPage[]>;
   crowded: number;
+  /** Declared id fields read, sorted. */
+  idFields: string[];
   truncated: boolean;
 }
 
@@ -240,7 +244,7 @@ function toPage(row: { slug: string; source_id: string; type: string; title: str
 
 /** Read the live person and company pages of the given sources (all when omitted). */
 export async function scanEntityPages(engine: Engine, opts: { sourceIds?: string[]; idFields?: readonly string[] } = {}): Promise<EntityScan> {
-  const idFields = [...new Set([...DEFAULT_ID_FIELDS, ...(opts.idFields ?? [])].map((f) => f.trim()).filter(Boolean))];
+  const idFields = [...new Set([...DEFAULT_ID_FIELDS, ...(opts.idFields ?? [])].map((f) => f.trim()).filter(Boolean))].sort();
   const fields = [...new Set([...KEY_SPECS.flatMap((s) => s.fields), "aliases", ...idFields])];
   const params: unknown[] = [fields];
   const scope = andSourceScope("p.source_id", opts.sourceIds, params);
@@ -275,7 +279,7 @@ export async function scanEntityPages(engine: Engine, opts: { sourceIds?: string
     }
     carriers.delete(cv);
   }
-  return { pages, byKey: new Map(pages.map((p) => [pageKey(p.source_id, p.slug), p])), carriers, crowded, truncated: rows.length > MAX_PAGES };
+  return { pages, byKey: new Map(pages.map((p) => [pageKey(p.source_id, p.slug), p])), carriers, crowded, idFields, truncated: rows.length > MAX_PAGES };
 }
 
 /** The class and evidence of one set of pages (same source and kind). */
@@ -360,7 +364,7 @@ export function findDuplicateGroups(scan: EntityScan, rejections: readonly Rejec
         seen.add(setKey);
         const { cls, evidence } = classifyGroup(set, scan.carriers);
         groups.push({
-          id: `dedupe/${createHash("sha256").update(setKey).digest("hex").slice(0, 16)}`,
+          id: `dedupe/${createHash("sha256").update(`${setKey}\n${scan.idFields.join(",")}`).digest("hex").slice(0, 16)}`,
           source_id: set[0]!.source_id, kind, class: cls, members: set.map((m) => m.slug), evidence,
         });
       }
@@ -373,6 +377,7 @@ export function findDuplicateGroups(scan: EntityScan, rejections: readonly Rejec
   return {
     schema_version: DEDUPE_PREVIEW_SCHEMA_VERSION, groups,
     counts: { by_class, crowded_key_values: scan.crowded, pages_scanned: scan.pages.length, truncated: scan.truncated },
+    id_fields: scan.idFields,
   };
 }
 

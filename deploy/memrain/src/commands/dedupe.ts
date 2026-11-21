@@ -6,10 +6,12 @@
  *       types that make the case (never their values)
  *   memrain dedupe reject <a> <b> [--source ID]
  *       record that the two pages are different; the pair is never proposed again
- *   memrain dedupe confirm <a> <b> [--source ID]
+ *   memrain dedupe confirm <a> <b> --group ID [--source ID] [--id-field F,G]
  *       fold <a> into <b> with entity-merge (`memrain merge <a> <b>`), but only
- *       for a pair that shares a key directly, is not a conflict and was not
- *       rejected
+ *       for a pair that shares a key directly, is not a conflict, was not
+ *       rejected, and sits in the preview group named. The group id covers the
+ *       declared id fields read, so confirm must pass the preview's --id-field:
+ *       a veto from a custom id field cannot vanish between the two
  *
  * Nothing is merged without `confirm`. A trusted local CLI only: no MCP
  * operation reads the finder, since it walks every source it is given.
@@ -30,6 +32,7 @@ import {
   type EntityKind,
   type EntityPage,
   type EntityScan,
+  DEFAULT_ID_FIELDS,
 } from "../core/entity-duplicates.ts";
 import { withStorage } from "./with-storage.ts";
 
@@ -42,10 +45,12 @@ export interface DedupeOptions {
   sourceId?: string;
   kind?: string;
   idFields?: string;
+  /** confirm: the preview group the pair was listed in. */
+  group?: string;
   configPath?: string;
 }
 
-const USAGE = "usage: memrain dedupe [--preview] [--json] [--source ID] [--kind person|company] [--id-field F,G] | reject <a> <b> [--source ID] | confirm <a> <b> [--source ID]";
+const USAGE = "usage: memrain dedupe [--preview] [--json] [--source ID] [--kind person|company] [--id-field F,G] | reject <a> <b> [--source ID] | confirm <a> <b> --group ID [--source ID] [--id-field F,G]";
 
 function evidenceText(e: DuplicateEvidence): string {
   const parts: string[] = [e.rule.replace("_", " ")];
@@ -63,11 +68,13 @@ export function renderPreview(result: DuplicateResult): string {
       `${c.pages_scanned} page(s) read${c.truncated ? " (scan truncated)" : ""}, ${c.crowded_key_values} crowded key value(s) ignored`,
   ];
   for (const g of result.groups) {
-    lines.push("", `${g.class.toUpperCase()}  ${g.kind}  ${g.source_id}: ${g.members.join("  ")}`);
+    lines.push("", `${g.class.toUpperCase()}  ${g.kind}  ${g.source_id}: ${g.members.join("  ")}  (${g.id})`);
     for (const e of g.evidence) lines.push(`    ${evidenceText(e)}`);
   }
   if (result.groups.length) {
-    lines.push("", "Nothing was changed. memrain dedupe confirm <a> <b> folds a into b; memrain dedupe reject <a> <b> keeps them apart.");
+    const extra = result.id_fields.filter((f) => !DEFAULT_ID_FIELDS.includes(f));
+    const flags = extra.length ? ` --id-field ${extra.join(",")}` : "";
+    lines.push("", `Nothing was changed. memrain dedupe confirm <a> <b> --group <id>${flags} folds a into b; memrain dedupe reject <a> <b> keeps them apart.`);
   }
   return lines.join("\n");
 }
@@ -108,7 +115,7 @@ export async function runDedupe(opts: DedupeOptions): Promise<number> {
     const sourceId = opts.sourceId ?? "default";
     const outcome = sub === "reject"
       ? await rejectDuplicatePair(storage, sourceId, a, b, idFields)
-      : await confirmDuplicatePair(storage, sourceId, a, b, idFields);
+      : await confirmDuplicatePair(storage, sourceId, a, b, idFields, opts.group ?? "");
     if (!outcome.ok) {
       console.error(`memrain dedupe ${sub}: ${outcome.error}`);
       for (const e of outcome.evidence ?? []) console.error(`    ${evidenceText(e)}`);
@@ -152,12 +159,18 @@ export async function rejectDuplicatePair(storage: Storage, sourceId: string, a:
  * Fold `a` into `b` with entity-merge, only for a pair that shares a key
  * directly, is not a conflict and was not recorded as different.
  */
-export async function confirmDuplicatePair(storage: Storage, sourceId: string, a: string, b: string, idFields: string[] = []): Promise<PairOutcome> {
+export async function confirmDuplicatePair(storage: Storage, sourceId: string, a: string, b: string, idFields: string[], groupId: string): Promise<PairOutcome> {
   if (a === b) return { ok: false, error: "two different page slugs are required" };
+  if (!groupId) return { ok: false, error: "--group <id> is required: the id of the preview group that lists both pages" };
   const pair = await pairPages(storage, sourceId, a, b, idFields);
   if ("error" in pair) return { ok: false, error: pair.error };
-  if (isRejectedPair(await readRejections(storage.engine(), [sourceId]), pair.pa, pair.pb)) {
+  const rejections = await readRejections(storage.engine(), [sourceId]);
+  if (isRejectedPair(rejections, pair.pa, pair.pb)) {
     return { ok: false, error: `${a} and ${b} were recorded as different; nothing merged (memrain merge folds them regardless)` };
+  }
+  const group = findDuplicateGroups(pair.scan, rejections).groups.find((g) => g.id === groupId);
+  if (!group || !group.members.includes(a) || !group.members.includes(b)) {
+    return { ok: false, error: `no current preview group ${groupId} lists both pages with these id fields; run a fresh preview and confirm with the same --id-field; nothing merged` };
   }
   const verdict = classifyGroup([pair.pa, pair.pb], pair.scan.carriers);
   if (verdict.shared === 0 || verdict.cls === "conflict") {
