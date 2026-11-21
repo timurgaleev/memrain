@@ -116,9 +116,11 @@ export function resolveSemanticCacheConfig(
  * diversity, full-window rerank head); `7` = compiled-truth boost rescoped to
  * detail=low only, ANN ef_search raised to the fanout, first-person
  * entity-intent phrasing; `8` = the identifier (title/slug) arm, which fuses
- * pages the query NAMES and so changes which candidates exist at all.
+ * pages the query NAMES and so changes which candidates exist at all; `9` = the
+ * per-page cap (a page's mirror, truth mirror and file twin share one) and the
+ * keyword-only any-word fill.
  */
-const RANKING_VERSION = "8";
+const RANKING_VERSION = "9";
 
 /**
  * Signature of the ranking inputs that are NOT function arguments, so a change

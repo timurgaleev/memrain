@@ -21,10 +21,11 @@ import { applyGraphSignals, computeFloorThreshold } from "../graph-signals.ts";
 import { applyBacklinkBoost } from "../backlink-boost.ts";
 import { exactMatchBoostForTaxonomy, exactMatchIndices } from "../intent-weights.ts";
 import { slugCandidatesForPath } from "../page-slug.ts";
+import { pageKeyFor } from "../page-fusion.ts";
 import { applyAliasResolvedBoost, ALIAS_RESOLVED_BOOST } from "../alias-resolved.ts";
 import { getTitleBoost, isTitlePhraseMatch } from "../title-match.ts";
 import { isCanonicalQuery } from "../recency-gate.ts";
-import { dedupByDocument, dedupByTextSimilarity, enforceTypeDiversity, getNearDupThreshold } from "../dedup.ts";
+import { dedupByDocument, dedupByTextSimilarity, enforceTypeDiversity, getMaxTypeRatio, getNearDupThreshold } from "../dedup.ts";
 import { rerank } from "../two-pass.ts";
 import { promoteExactLookup } from "../exact-lookup.ts";
 import { feedbackRankStage } from "../feedback-boost.ts";
@@ -341,8 +342,10 @@ const resort: RankStage = {
 //    its two best chunks, the rest yield slots to other pages). Skipped for
 //    `exact` intent and detail 'high' (the all-chunks view). Structural walks
 //    deliberately surface multiple neighbor chunks from the same document, so
-//    the cap widens with the walk depth. Under page fusion a page and its
-//    compiled-truth mirror share one cap.
+//    the cap widens with the walk depth. The cap is per PAGE, not per
+//    document: a page's mirror (`page://x`), its compiled-truth mirror
+//    (`page-truth://x`) and its file twin (`x.md`) are three documents that
+//    would otherwise take three caps' worth of slots.
 const perDocument: RankStage = {
   name: "per-document",
   costClass: "free",
@@ -353,11 +356,14 @@ const perDocument: RankStage = {
       : ctx.opts.detail === "low"
         ? 1
         : 2;
-    const pageKeys = ctx.pageKeys;
+    ctx.typeDiversityBasis = dedupByDocument(hits, { enabled: true, maxPerDoc }).length;
     return dedupByDocument(hits, {
       enabled: true,
       maxPerDoc,
-      ...(pageKeys ? { keyOf: (h) => pageKeys.get(h.chunkId) ?? `doc:${h.documentId}` } : {}),
+      keyOf: (h) => {
+        const p = (h as Hit).payload;
+        return pageKeyFor(p?.sourcePath, p?.source_id, h.documentId);
+      },
     });
   },
 };
@@ -370,7 +376,7 @@ const typeDiversity: RankStage = {
   name: "type-diversity",
   costClass: "free",
   enabled: (ctx) => !(ctx.intent === "exact" || ctx.structural || ctx.opts.detail === "high"),
-  apply: async (hits) => enforceTypeDiversity(hits),
+  apply: async (hits, ctx) => enforceTypeDiversity(hits, getMaxTypeRatio(), ctx.typeDiversityBasis),
 };
 
 // 8. Two-pass rerank (opt-in) — runs BEFORE near-dup so the reranker sees

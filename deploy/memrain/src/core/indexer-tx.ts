@@ -41,6 +41,8 @@ export interface ChunkWrite {
   endLine?: number | null;
   /** Optional embedding vector for this chunk (omit for graph-only sources). */
   embedding?: number[] | null;
+  /** What the vector was embedded from (migration 187); NULL = unknown. */
+  embeddingInputHash?: string | null;
   /** Bare symbol identifier — populated for code chunks, NULL for markdown. */
   symbolName?: string | null;
   /** Qualified symbol name (parent path :: name) — code chunks only. The key
@@ -386,13 +388,14 @@ export async function writeDocumentTransaction(
       if (ch.embedding) {
         const embModel = doc.embeddingModel ?? "unknown";
         await tx.query(
-          `INSERT INTO embeddings (chunk_id, vector, model, embedding_signature)
-           VALUES ($1, $2::vector, $3, $4)`,
+          `INSERT INTO embeddings (chunk_id, vector, model, embedding_signature, input_hash)
+           VALUES ($1, $2::vector, $3, $4, $5)`,
           [
             cid,
             JSON.stringify(ch.embedding),
             embModel,
             embeddingSignature(embModel, ch.embedding.length),
+            ch.embeddingInputHash ?? null,
           ],
         );
         embeddingsWritten++;

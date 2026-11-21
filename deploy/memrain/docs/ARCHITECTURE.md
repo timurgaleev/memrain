@@ -147,7 +147,7 @@ flowchart TD
   R --> H[hydrate from documents JOIN sources]
   H --> B[applySourceBoost]
   B --> RS[× recency updated_at  × salience frontmatter]
-  RS --> D[dedupByDocument]
+  RS --> D[dedup per page — mirror, truth mirror and file twin share cap 2]
   D --> RR{MEMRAIN_RERANK?}
   RR -->|yes| TP[Haiku two-pass rerank]
   RR -->|no| TK[trim to k]

@@ -12,8 +12,11 @@
  *   6. boosts: compiled-truth ×2, source, recency (decay + temporal boost),
  *      salience (+ mattering join), curation, title, graph/backlink,
  *      exact-match, alias-resolved
- *   7. dedup per documentId (cap 2; skipped for `exact` intent) + type diversity
+ *   7. dedup per page (cap 2 across a page's mirror, truth mirror and file
+ *      twin; skipped for `exact` intent) + type diversity
  *   8. (opt-in) two-pass Haiku rerank over the return window if MEMRAIN_RERANK=1
+ *   8e. relative time in the query lifts in-range hits into the first k
+ *   8f. keyword-only: pages holding some of the words fill the empty slots
  *   9. trim to k
  *
  * The exported `hybridSearch(storage, query, k)` API stays compatible
@@ -91,7 +94,9 @@ import {
 import type { DegradedReason, SearchCacheState, SearchMeta } from "./search-meta.ts";
 import { rankFlag } from "./ranking-flags.ts";
 import { downweightKeywordArm, KEYWORD_WEAK_WEIGHT } from "./arm-confidence.ts";
-import { fuseByPage, pageKeysForChunks } from "./page-fusion.ts";
+import { fuseByPage, pageKeyFor, pageKeysForChunks } from "./page-fusion.ts";
+import { applyTimeScope, dayInRange, parseQueryTimeRange } from "./time-range.ts";
+import { dayInZone, pageContentDate, thinkTimeZone } from "../synthesis/think-temporal.ts";
 import { CACHE_HIT_CONFIDENCE, gradeConfidence } from "./confidence-grade.ts";
 import { paidStageEnabled, runPostFusionStages } from "./stages/pipeline.ts";
 import { shadowCopy, shadowFlag, startShadow } from "./shadow.ts";
@@ -110,11 +115,6 @@ function relationalArmWeight(): number {
 
 // Moved with the rest of the post-fusion stages; re-exported for callers.
 export { compiledTruthBoost } from "./stages/pipeline.ts";
-
-/** A strict keyword pass with fewer rows than this triggers the OR retry. */
-const KEYWORD_RELAX_MIN_ROWS = 3;
-/** RRF weight of the OR-retry rows: they matched some of the query, not all of it. */
-const RELAXED_KEYWORD_WEIGHT = 0.5;
 
 /** The resolved per-call ranking knob set (see {@link resolveSearchKnobs}). */
 export interface ResolvedSearchKnobs {
@@ -590,6 +590,50 @@ async function hydrateByIds(
   return out;
 }
 
+const pageOfHit = (h: SearchHit): string => pageKeyFor(h.sourcePath, h.source_id ?? null, h.documentId);
+
+/**
+ * Pages holding some of the query's words (keywordSearchRelaxed: rare words
+ * first), for the slots a keyword-only result left empty. One chunk per page,
+ * pages already in `held` skipped, at most `room` rows, each scored below the
+ * lowest held row so the fill always sorts after it. Scope, visibility, the
+ * pushed-down filters and the hard-excludes apply as on any keyword row; the
+ * trust floor is enforced over the whole result by hybridSearch.
+ */
+async function anyWordFill(
+  engine: Engine,
+  query: string,
+  held: readonly SearchHit[],
+  room: number,
+  intent: Intent,
+  opts: { fanout: number; sourceIds?: readonly string[]; filters?: ChunkFilters; sourceBoost: boolean },
+): Promise<SearchHit[]> {
+  const rows = await keywordSearchRelaxed(engine, query, opts.fanout, {
+    sourceIds: opts.sourceIds,
+    filters: opts.filters,
+    maxPool: true,
+    sourceBoost: opts.sourceBoost,
+  });
+  const heldChunks = new Set(held.map((h) => h.chunkId));
+  const ids = rows.map((r) => r.id).filter((id) => !heldChunks.has(id));
+  if (ids.length === 0) return [];
+  const hydrated = await hydrateByIds(engine, ids, intent, opts.sourceIds);
+  const excludePrefixes = getSearchExcludePrefixes();
+  const pages = new Set(held.map(pageOfHit));
+  const picked: SearchHit[] = [];
+  for (const h of hydrated) {
+    if (picked.length >= room) break;
+    if (excludePrefixes.length > 0 && isExcludedPath(h.sourcePath, excludePrefixes)) continue;
+    const page = pageOfHit(h);
+    if (pages.has(page)) continue;
+    pages.add(page);
+    picked.push(h);
+  }
+  const floor = held.reduce((m, h) => (Number.isFinite(h.score) && h.score > 0 && h.score < m ? h.score : m), Infinity);
+  const top = Number.isFinite(floor) ? floor : 1;
+  return picked.map((h, i) => ({ ...h, score: (top * 0.5) / (i + 1) }));
+}
+
 /** Bounded by MEMRAIN_SEARCH_MAX_CONCURRENT when set (core/pool-budget.ts). */
 export function hybridSearch(
   storage: Storage,
@@ -672,7 +716,6 @@ async function hybridSearchUnbounded(
   const rank = {
     metadataGate: rankFlag("METADATA_GATE"),
     entityTruthSoft: rankFlag("ENTITY_TRUTH_SOFT"),
-    keywordOrRetry: rankFlag("KEYWORD_OR_RETRY"),
     pageFusion: rankFlag("PAGE_FUSION"),
     keywordConfidence: rankFlag("KEYWORD_CONFIDENCE"),
     exactLookup: rankFlag("EXACT_LOOKUP"),
@@ -702,6 +745,12 @@ async function hybridSearchUnbounded(
   const hasFilters = Boolean(
     opts.lang || opts.symbolKind || opts.since || opts.until || opts.types?.length || opts.slugPrefix || opts.minTrust,
   );
+  // Relative time in the query ("last month", "gestern") resolves to a day range
+  // that lifts hits dated inside it (step 8e). The caller's explicit
+  // since/until win over it. The range moves with the calendar day while the
+  // cache key does not, so a call that parsed one bypasses the query cache.
+  const timeZone = thinkTimeZone();
+  const timeRange = opts.since || opts.until ? null : parseQueryTimeRange(trimmed, dayInZone(new Date(), timeZone));
   // Pushed-down filter set (lang / symbol_kind / since / until). Threaded into
   // BOTH retrieval arms so the per-arm LIMIT budget is spent on already-matching
   // rows — a filtered match ranking below the fanout is no longer dropped. The
@@ -746,6 +795,7 @@ async function hybridSearchUnbounded(
     !explainOn &&
     !maxPoolRequested &&
     !rankingOverrides &&
+    !timeRange &&
     process.env.MEMRAIN_QUERY_CACHE !== "0";
   let cacheKey = "";
   let cacheClock = 0;
@@ -865,10 +915,10 @@ async function hybridSearchUnbounded(
   //    embedding failure is non-fatal.
   let queryVector: number[] | null = null;
   const degraded: DegradedReason[] = [];
-  const failArm = (error: unknown, arm: "keyword" | "vector" | "title" | "expansion" | "identifier"): void => {
+  const failArm = (error: unknown, arm: "keyword" | "vector" | "title" | "expansion" | "identifier" | "fill"): void => {
     opts.signal?.throwIfAborted();
     if (isOperationError(error) && error.code === "budget_exhausted") throw error;
-    const reason = arm === "identifier" ? "keyword_candidates_incomplete" : arm === "keyword"
+    const reason = arm === "identifier" || arm === "fill" ? "keyword_candidates_incomplete" : arm === "keyword"
       ? isStatementTimeoutError(error) ? "keyword_timeout" : "keyword_arm_failed"
       : arm === "expansion" ? "expansion_failed" : `${arm}_arm_failed` as DegradedReason;
     degraded.push(reason);
@@ -1036,34 +1086,6 @@ async function hybridSearchUnbounded(
       rrfWeights.push(relationalArmWeight());
     }
   }
-  // 3c. OR retry (MEMRAIN_RANK_KEYWORD_OR_RETRY): plainto_tsquery is AND-only,
-  //     so one stray word in the query empties the keyword arm. When the strict
-  //     pass is thin, chunks matching ANY query lexeme fuse as their own
-  //     low-weight list. They stay out of primaryKeywordIds, so they never earn
-  //     keyword_exact evidence nor count as a lexical vote for the gate.
-  //     Only while the vector arm returned nothing: next to a healthy vector
-  //     arm, any-word matches out-vote the semantic answer to a paraphrase
-  //     (the cross-lingual transcript in retrieval_quality_eval_misses drops
-  //     out of the window), so the retry is a rescue, not an extra voice.
-  if (
-    rank.keywordOrRetry &&
-    vectorIds.length === 0 &&
-    primaryKeywordIds.length < KEYWORD_RELAX_MIN_ROWS
-  ) {
-    const strict = new Set(primaryKeywordIds);
-    const relaxed = await keywordArm(() => keywordSearchRelaxed(engine, trimmed, fanout, {
-      sourceIds: opts.sourceIds,
-      filters: chunkFilters,
-      maxPool: maxPoolOn,
-      sourceBoost: armSourceBoost,
-    }));
-    const relaxedIds = relaxed.map((r) => r.id).filter((id) => !strict.has(id));
-    if (relaxedIds.length > 0) {
-      lists.push(relaxedIds);
-      listArms.push("keyword_relaxed");
-      rrfWeights.push(RELAXED_KEYWORD_WEIGHT);
-    }
-  }
   // 3d. Keyword-arm confidence (MEMRAIN_RANK_KEYWORD_CONFIDENCE): a keyword
   //     arm that cannot separate its top two pages fuses at half weight, title
   //     arm included. See arm-confidence.ts.
@@ -1125,6 +1147,14 @@ async function hybridSearchUnbounded(
   }
 
   diagnostic?.mark("retrieval");
+  // Any-word fill (step 8f): with no vector arm, plainto_tsquery is AND-only,
+  // so one stray word empties the keyword arm. Pages holding some of the words
+  // then fill the slots the strict rows left, below them. Not after a lexical
+  // arm failed: more keyword statements against a failing database or a query
+  // it cannot handle only fail again, and the empty result says so already.
+  const lexicalFailed = degraded.some((r) =>
+    r === "keyword_timeout" || r === "keyword_arm_failed" || r === "keyword_candidates_incomplete" || r === "title_arm_failed");
+  const anyWordFillOn = vectorIds.length === 0 && !structural && !lexicalFailed;
   if (fused.length === 0) {
     // Zero-result broadened retry (once). The only lever that can turn an empty
     // set non-empty is query expansion (different terms) — a bigger fanout can't
@@ -1149,17 +1179,19 @@ async function hybridSearchUnbounded(
         _zeroRetried: true,
       });
     }
-    await report({
-      vectorEnabled: queryVector !== null,
-      intent,
-      mode: resolveSearchMode(),
-      cache: cacheState,
-      degraded,
-      retrieved: 0,
-      returned: 0,
-      confidence: gradeConfidence([]),
-    });
-    return [];
+    if (!anyWordFillOn) {
+      await report({
+        vectorEnabled: queryVector !== null,
+        intent,
+        mode: resolveSearchMode(),
+        cache: cacheState,
+        degraded,
+        retrieved: 0,
+        returned: 0,
+        confidence: gradeConfidence([]),
+      });
+      return [];
+    }
   }
 
   // 5. Hydrate.
@@ -1171,7 +1203,8 @@ async function hybridSearchUnbounded(
   const hydrateParams: unknown[] = [ids];
   const hydrateSourceFilter = andSourceScope("d.source_id", opts.sourceIds, hydrateParams);
   const hydratePageFilter = pageFilterClauses(hydrateParams, chunkFilters);
-  const rows = await engine.query<{
+  // Nothing fused (a keyword-only search the any-word fill may still answer): no statement.
+  const rows = ids.length === 0 ? { rows: [] } : await engine.query<{
     id: string;
     document_id: string;
     content: string;
@@ -1184,6 +1217,7 @@ async function hybridSearchUnbounded(
     language: string | null;
     symbol_type: string | null;
     effective_date: string | null;
+    effective_date_source: string | null;
   }>(
     `SELECT c.id, c.document_id, c.content,
             d.source_path, d.title,
@@ -1193,7 +1227,8 @@ async function hybridSearchUnbounded(
             d.frontmatter,
             c.language,
             c.symbol_type,
-            d.effective_date::text AS effective_date
+            d.effective_date::text AS effective_date,
+            d.effective_date_source
      FROM chunks c
      JOIN documents d ON d.id = c.document_id
      LEFT JOIN sources s ON s.id = d.source_id
@@ -1223,6 +1258,7 @@ async function hybridSearchUnbounded(
         language: row.language,
         symbol_type: row.symbol_type,
         effective_date: row.effective_date ?? row.updated_at,
+        effective_date_source: row.effective_date_source,
         provenance: hitProvenance(row),
       },
     });
@@ -1306,7 +1342,6 @@ async function hybridSearchUnbounded(
     graphSignalsOn,
     backlinkBoostOn,
     rerankWanted,
-    pageKeys,
     votes: {
       vectorVoted: vectorIds.length > 0,
       lexicalVoted: primaryKeywordIds.length > 0 || titleIds.length > 0 || relationalIds.length > 0,
@@ -1356,6 +1391,33 @@ async function hybridSearchUnbounded(
       ...(opts.sourceIds ? { sourceIds: [...opts.sourceIds] } : {}),
     });
   }
+
+  // 8e. Relative-time scope (time-range.ts): the top half of the first k stays,
+  //     the other slots go to hits whose content date (never a row timestamp)
+  //     falls in the query's range. A permutation: nothing is dropped.
+  // 8f. Any-word fill: appended after every ranked row, never between them.
+  const contentDays = timeRange
+    ? new Map(final.map((h) => [h.chunkId, pageContentDate(h.payload?.effective_date, h.payload?.effective_date_source, timeZone)] as const))
+    : null;
+  const finishOrganic = async (list: SearchHit[]): Promise<SearchHit[]> => {
+    let out = timeRange && contentDays
+      ? applyTimeScope(list, k, (h) => dayInRange(contentDays.get(h.chunkId), timeRange))
+      : list;
+    if (anyWordFillOn && out.length < k) {
+      try {
+        out = [...out, ...(await anyWordFill(engine, trimmed, out, k - out.length, intent, {
+          fanout,
+          sourceIds: opts.sourceIds,
+          filters: chunkFilters,
+          sourceBoost: armSourceBoost,
+        }))];
+      } catch (error) {
+        failArm(error, "fill");
+      }
+    }
+    return out;
+  };
+  organic = await finishOrganic(organic);
 
   // 9. Trim to k (the ranked result, pre-token-budget).
   opts.signal?.throwIfAborted();
@@ -1474,7 +1536,7 @@ async function hybridSearchUnbounded(
   // return sizing, so it is compared with exactly what the caller got back.
   if (shadow && shadowHits) {
     startShadow(shadow, shadowHits, stageInput, kept, async (shadowRanked) => {
-      let view = (await withAliasHop(shadowRanked)).slice(0, k);
+      let view = (await finishOrganic(await withAliasHop(shadowRanked))).slice(0, k);
       if (tokenBudget !== undefined) view = applyTokenBudget(view, tokenBudget);
       return applyAdaptiveReturn(view, intent, adaptiveCfg).kept;
     });

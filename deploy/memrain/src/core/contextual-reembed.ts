@@ -46,6 +46,7 @@ import { withLongHold } from "./pool-budget.ts";
 import type { Engine } from "./engine/interface.ts";
 import type { Storage } from "./storage.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
+import { embeddingInputHash } from "./embedding-input-hash.ts";
 import { embedSkipFilterFragment } from "./embed-skip.ts";
 import {
   buildContextualPrefix,
@@ -314,7 +315,7 @@ async function runContextualReembedBody(
 
       // Embed OUTSIDE the transaction so a Bedrock failure never half-writes a
       // document (indexer.ts's ordering). Collect vectors first, then commit.
-      const writes: { id: string; content: string; vector: number[]; tier: "llm" | "deterministic" }[] = [];
+      const writes: { id: string; content: string; vector: number[]; tier: "llm" | "deterministic"; inputHash: string }[] = [];
       for (const ch of pending) {
         // Never trade a Haiku-situated vector for a deterministic one: a run
         // without the LLM tier leaves such a chunk exactly as it is.
@@ -345,10 +346,12 @@ async function runContextualReembedBody(
             deterministicFallback++;
           }
         }
-        const vector = await embed(
-          wrapChunkForEmbedding(ch.content, prefix, { isCode: false }),
-        );
-        writes.push({ id: ch.id, content: ch.content, vector, tier });
+        const input = wrapChunkForEmbedding(ch.content, prefix, { isCode: false });
+        const vector = await embed(input);
+        const inputHash = embeddingInputHash(tier === "llm"
+          ? { model, dimensions: vector.length, tier, input: ch.content, title: doc.title }
+          : { model, dimensions: vector.length, tier, input });
+        writes.push({ id: ch.id, content: ch.content, vector, tier, inputHash });
       }
 
       // Chunk ids are positional (`<doc>_c<i>`), so a re-index during the
@@ -361,16 +364,17 @@ async function runContextualReembedBody(
         let n = 0;
         for (const w of writes) {
           const ins = await tx.query<{ chunk_id: string }>(
-            `INSERT INTO embeddings (chunk_id, vector, model, embedding_signature)
-             SELECT c.id, $2::vector, $3, $4 FROM chunks c
+            `INSERT INTO embeddings (chunk_id, vector, model, embedding_signature, input_hash)
+             SELECT c.id, $2::vector, $3, $4, $6 FROM chunks c
               WHERE c.id = $1 AND c.content = $5
               FOR SHARE
              ON CONFLICT (chunk_id) DO UPDATE
                SET vector = EXCLUDED.vector,
                    model = EXCLUDED.model,
-                   embedding_signature = EXCLUDED.embedding_signature
+                   embedding_signature = EXCLUDED.embedding_signature,
+                   input_hash = EXCLUDED.input_hash
              RETURNING chunk_id`,
-            [w.id, JSON.stringify(w.vector), model, embeddingSignature(model, w.vector.length), w.content],
+            [w.id, JSON.stringify(w.vector), model, embeddingSignature(model, w.vector.length), w.content, w.inputHash],
           );
           if (ins.rows.length === 0) continue;
           await tx.query(

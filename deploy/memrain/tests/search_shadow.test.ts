@@ -127,9 +127,9 @@ describe("startShadow", () => {
     const input = {
       engine: e, query: "ledger", intent: "topic" as const, opts: {}, detailResolved: "medium" as const,
       suggestions: classifySuggestions("ledger"),
-      rank: { metadataGate: false, entityTruthSoft: false, keywordOrRetry: false, pageFusion: false, keywordConfidence: false, exactLookup: false },
+      rank: { metadataGate: false, entityTruthSoft: false, pageFusion: false, keywordConfidence: false, exactLookup: false },
       k: 5, structural: false, graphFloorRatio: undefined, graphSignalsOn: false, backlinkBoostOn: false, rerankWanted: false,
-      pageKeys: null, votes: { vectorVoted: true, lexicalVoted: false }, explainAcc: null,
+      votes: { vectorVoted: true, lexicalVoted: false }, explainAcc: null,
     };
     // Like an alias hop, the finisher puts the canonical page first on both
     // sides, so the first page the caller sees does not change.

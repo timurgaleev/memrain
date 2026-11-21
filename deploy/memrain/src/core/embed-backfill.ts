@@ -63,6 +63,7 @@ import { withLongHold } from "./pool-budget.ts";
 import { isBudgetRefusal } from "./budget.ts";
 import type { Engine } from "./engine/interface.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
+import { embeddingInputHash } from "./embedding-input-hash.ts";
 import { embeddableChunkFragment } from "./embed-skip.ts";
 import {
   buildContextualPrefix,
@@ -534,8 +535,8 @@ async function embedPage(
               `WITH cur AS (
                  SELECT id FROM chunks WHERE id = $1 AND content = $6 FOR SHARE
                ), ins AS (
-                 INSERT INTO embeddings (chunk_id, vector, model, embedding_signature)
-                 SELECT cur.id, $2::vector, $3, $4 FROM cur
+                 INSERT INTO embeddings (chunk_id, vector, model, embedding_signature, input_hash)
+                 SELECT cur.id, $2::vector, $3, $4, $7 FROM cur
                  ON CONFLICT (chunk_id) DO NOTHING
                  RETURNING chunk_id
                ), upd AS (
@@ -552,6 +553,12 @@ async function embedPage(
                 embeddingSignature(model, vec.length),
                 row.contextual_embedded ? "deterministic" : "none",
                 row.content,
+                embeddingInputHash({
+                  model,
+                  dimensions: vec.length,
+                  tier: row.contextual_embedded ? "deterministic" : "none",
+                  input: embedInput(row),
+                }),
               ],
             ),
           BULK_RETRY_OPTS,

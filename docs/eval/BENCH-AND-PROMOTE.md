@@ -120,7 +120,7 @@ bun run src/cli.ts eval promote EXACT_LOOKUP --live \
 ```
 
 `<FLAG>` is one of the ranking flags (`METADATA_GATE`, `ENTITY_TRUTH_SOFT`,
-`KEYWORD_OR_RETRY`, `PAGE_FUSION`, `KEYWORD_CONFIDENCE`, `EXACT_LOOKUP`), with
+`PAGE_FUSION`, `KEYWORD_CONFIDENCE`, `EXACT_LOOKUP`), with
 or without the `MEMRAIN_RANK_` prefix. The command scores the bench three
 times on one brain: the baseline twice and `MEMRAIN_RANK_<FLAG>=1` once. The
 noise floor of each metric is the larger of 0.01 and twice the gap between the

@@ -57,10 +57,22 @@ When your agent searches, Memrain:
 2. **Searches two ways at once**: by meaning, using the embedding of the
    question, and by exact words.
 3. **Merges the two result lists** into one ranking, then favours the right
-   kind of source and removes near-duplicates.
+   kind of source and removes near-duplicates. A page and its copies (its
+   compiled-truth summary, its file on disk) count as one page, so together
+   they take at most two places.
 4. **Optionally reorders the top results** with a Claude model, if you turned
    that on.
 5. **Returns the top passages, each with its source.**
+
+When the question names a time span ("last month", "yesterday", "this week",
+and the same words in German and Russian), results dated inside it move up into
+the first page of results. The top half stays where it was and nothing is dropped. An
+explicit `since` / `until` on the call wins over the words in the question.
+
+When the embedding is unavailable (an outage, or `MEMRAIN_KEYWORD_ONLY=1`),
+search runs on words alone. If fewer passages than asked for hold every word,
+pages holding some of the words fill the remaining places, below the full
+matches, the pages with the rarest words first.
 
 A default search makes one Titan embedding call and no Claude call. Asking a
 model to classify the question (`MEMRAIN_INTENT_LLM=1`), expanding the query

@@ -400,17 +400,6 @@
         "intent": "topic",
         "evidence": "weak_semantic",
         "create_safety": "unknown"
-      },
-      {
-        "chunkId": "zephyr_page_c0",
-        "documentId": "zephyr_page",
-        "sourcePath": "page://projects/zephyr",
-        "title": "Zephyr",
-        "content": "zephyr rollout plan for the edge fleet",
-        "score": 0.014056384952596104,
-        "intent": "topic",
-        "evidence": "weak_semantic",
-        "create_safety": "unknown"
       }
     ]
   },
@@ -434,17 +423,6 @@
         "title": "Zephyr",
         "content": "zephyr rollout plan for the edge fleet",
         "score": 0.03225806451612903,
-        "intent": "factual",
-        "evidence": "weak_semantic",
-        "create_safety": "unknown"
-      },
-      {
-        "chunkId": "zephyr_page_c1",
-        "documentId": "zephyr_page",
-        "sourcePath": "page://projects/zephyr",
-        "title": "Zephyr",
-        "content": "zephyr rollout risks and the rollback drill",
-        "score": 0.01639344262295082,
         "intent": "factual",
         "evidence": "weak_semantic",
         "create_safety": "unknown"
@@ -522,6 +500,17 @@
         "title": "Rollout calendar",
         "content": "rollout calendar for the quarter",
         "score": 0.014285714285714285,
+        "intent": "factual",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.014084507042253521,
         "intent": "factual",
         "evidence": "weak_semantic",
         "create_safety": "unknown"
@@ -604,21 +593,6 @@
         "explain": {
           "base": 0.03225806451612903,
           "final": 0.03225806451612903
-        },
-        "evidence": "weak_semantic",
-        "create_safety": "unknown"
-      },
-      {
-        "chunkId": "zephyr_page_c1",
-        "documentId": "zephyr_page",
-        "sourcePath": "page://projects/zephyr",
-        "title": "Zephyr",
-        "content": "zephyr rollout risks and the rollback drill",
-        "score": 0.01639344262295082,
-        "intent": "factual",
-        "explain": {
-          "base": 0.01639344262295082,
-          "final": 0.01639344262295082
         },
         "evidence": "weak_semantic",
         "create_safety": "unknown"
@@ -727,6 +701,21 @@
         },
         "evidence": "weak_semantic",
         "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.014084507042253521,
+        "intent": "factual",
+        "explain": {
+          "base": 0.014084507042253521,
+          "final": 0.014084507042253521
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
       }
     ],
     "detailLow": [
@@ -737,17 +726,6 @@
         "title": "Zephyr",
         "content": "zephyr is the edge fleet rollout program",
         "score": 0.06453291699193339,
-        "intent": "factual",
-        "evidence": "weak_semantic",
-        "create_safety": "unknown"
-      },
-      {
-        "chunkId": "zephyr_page_c0",
-        "documentId": "zephyr_page",
-        "sourcePath": "page://projects/zephyr",
-        "title": "Zephyr",
-        "content": "zephyr rollout plan for the edge fleet",
-        "score": 0.03225806451612903,
         "intent": "factual",
         "evidence": "weak_semantic",
         "create_safety": "unknown"
@@ -867,17 +845,6 @@
         "create_safety": "exists"
       },
       {
-        "chunkId": "zephyr_page_c1",
-        "documentId": "zephyr_page",
-        "sourcePath": "page://projects/zephyr",
-        "title": "Zephyr",
-        "content": "zephyr rollout risks and the rollback drill",
-        "score": 0.03192696700374211,
-        "intent": "topic",
-        "evidence": "high_vector_match",
-        "create_safety": "exists"
-      },
-      {
         "chunkId": "car_b_c0",
         "documentId": "car_b",
         "sourcePath": "notes/car-b",
@@ -953,6 +920,17 @@
         "intent": "topic",
         "evidence": "weak_semantic",
         "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.014270837427601038,
+        "intent": "topic",
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
       }
     ],
     "meta": {
@@ -989,15 +967,15 @@
           "create_safety": "probable"
         },
         {
-          "chunkId": "zephyr_page_c1",
-          "documentId": "zephyr_page",
-          "sourcePath": "page://projects/zephyr",
-          "title": "Zephyr",
-          "content": "zephyr rollout risks and the rollback drill",
-          "score": 0.015086911708651533,
+          "chunkId": "rollout_cal_c0",
+          "documentId": "rollout_cal",
+          "sourcePath": "notes/rollout-calendar",
+          "title": "Rollout calendar",
+          "content": "rollout calendar for the quarter",
+          "score": 0.01509083752486508,
           "intent": "topic",
-          "evidence": "keyword_exact",
-          "create_safety": "probable"
+          "evidence": "weak_semantic",
+          "create_safety": "unknown"
         }
       ],
       "meta": {
@@ -1041,22 +1019,6 @@
           "base": 0.049644025636567016,
           "recency": 0.9353885259363951,
           "final": 0.04643645196173703
-        },
-        "evidence": "high_vector_match",
-        "create_safety": "exists"
-      },
-      {
-        "chunkId": "zephyr_page_c1",
-        "documentId": "zephyr_page",
-        "sourcePath": "page://projects/zephyr",
-        "title": "Zephyr",
-        "content": "zephyr rollout risks and the rollback drill",
-        "score": 0.03192696700374211,
-        "intent": "topic",
-        "explain": {
-          "base": 0.03413230558048677,
-          "recency": 0.9353885259363951,
-          "final": 0.03192696700374211
         },
         "evidence": "high_vector_match",
         "create_safety": "exists"
@@ -1173,6 +1135,22 @@
         },
         "evidence": "weak_semantic",
         "create_safety": "unknown"
+      },
+      {
+        "chunkId": "survey_c0",
+        "documentId": "survey",
+        "sourcePath": "notes/survey-archive",
+        "title": "Survey archive",
+        "content": "survey results archive",
+        "score": 0.014270837427601038,
+        "intent": "topic",
+        "explain": {
+          "base": 0.015256588072122056,
+          "recency": 0.9353885259363951,
+          "final": 0.014270837427601038
+        },
+        "evidence": "weak_semantic",
+        "create_safety": "unknown"
       }
     ],
     "detailLow": [
@@ -1183,17 +1161,6 @@
         "title": "Zephyr",
         "content": "zephyr is the edge fleet rollout program",
         "score": 0.09287290392347405,
-        "intent": "topic",
-        "evidence": "high_vector_match",
-        "create_safety": "exists"
-      },
-      {
-        "chunkId": "zephyr_page_c0",
-        "documentId": "zephyr_page",
-        "sourcePath": "page://projects/zephyr",
-        "title": "Zephyr",
-        "content": "zephyr rollout plan for the edge fleet",
-        "score": 0.04696339065113635,
         "intent": "topic",
         "evidence": "high_vector_match",
         "create_safety": "exists"
@@ -1424,6 +1391,17 @@
           "intent": "topic",
           "evidence": "weak_semantic",
           "create_safety": "unknown"
+        },
+        {
+          "chunkId": "survey_c0",
+          "documentId": "survey",
+          "sourcePath": "notes/survey-archive",
+          "title": "Survey archive",
+          "content": "survey results archive",
+          "score": 0.007667119065052419,
+          "intent": "topic",
+          "evidence": "weak_semantic",
+          "create_safety": "unknown"
         }
       ],
       "meta": {
@@ -1436,7 +1414,7 @@
           "keyword_zero"
         ],
         "retrieved": 1,
-        "returned": 1
+        "returned": 2
       }
     },
     "explain": [
@@ -1665,17 +1643,6 @@
         "title": "Quandalore",
         "content": "tool rental platform for craft businesses",
         "score": 0.015977133206988115,
-        "intent": "topic",
-        "evidence": "weak_semantic",
-        "create_safety": "unknown"
-      },
-      {
-        "chunkId": "zephyr_page_c0",
-        "documentId": "zephyr_page",
-        "sourcePath": "page://projects/zephyr",
-        "title": "Zephyr",
-        "content": "zephyr rollout plan for the edge fleet",
-        "score": 0.01570881493938984,
         "intent": "topic",
         "evidence": "weak_semantic",
         "create_safety": "unknown"
@@ -2136,17 +2103,6 @@
         "intent": "topic",
         "evidence": "weak_semantic",
         "create_safety": "unknown"
-      },
-      {
-        "chunkId": "zephyr_page_c0",
-        "documentId": "zephyr_page",
-        "sourcePath": "page://projects/zephyr",
-        "title": "Zephyr",
-        "content": "zephyr rollout plan for the edge fleet",
-        "score": 0.014056384952596104,
-        "intent": "topic",
-        "evidence": "weak_semantic",
-        "create_safety": "unknown"
       }
     ]
   },
@@ -2580,17 +2536,6 @@
         "title": "Survey archive",
         "content": "survey results archive",
         "score": 0.01495533980421562,
-        "intent": "topic",
-        "evidence": "weak_semantic",
-        "create_safety": "unknown"
-      },
-      {
-        "chunkId": "zephyr_page_c0",
-        "documentId": "zephyr_page",
-        "sourcePath": "page://projects/zephyr",
-        "title": "Zephyr",
-        "content": "zephyr rollout plan for the edge fleet",
-        "score": 0.014056384952596104,
         "intent": "topic",
         "evidence": "weak_semantic",
         "create_safety": "unknown"
@@ -3029,22 +2974,11 @@
         "intent": "topic",
         "evidence": "weak_semantic",
         "create_safety": "unknown"
-      },
-      {
-        "chunkId": "zephyr_page_c0",
-        "documentId": "zephyr_page",
-        "sourcePath": "page://projects/zephyr",
-        "title": "Zephyr",
-        "content": "zephyr rollout plan for the edge fleet",
-        "score": 0.014056384952596104,
-        "intent": "topic",
-        "evidence": "weak_semantic",
-        "create_safety": "unknown"
       }
     ]
   },
   "__cache__": {
-    "rankingSignature": "8:tb=1.25:rd=:nd=0.85:gsf=undefined:ah=1:mode=conservative:gs=:cr=:bb=:xp=:rb=:cb=:sx=:mt=0.6:rw=",
-    "key": "8ad4c127a2a8323b0004ade36aa1730194986d5238ccef38c6cc5f87f7dec08b"
+    "rankingSignature": "9:tb=1.25:rd=:nd=0.85:gsf=undefined:ah=1:mode=conservative:gs=:cr=:bb=:xp=:rb=:cb=:sx=:mt=0.6:rw=",
+    "key": "3a1da3c4511d81bc7954761108dd95a61b0a8b1b6a91c5bccf8ded5d422843b7"
   }
 }

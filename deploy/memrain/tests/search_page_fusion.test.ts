@@ -82,10 +82,28 @@ describe("page fusion in hybridSearch", () => {
 
   const zephyrHits = (ids: string[]): string[] => ids.filter((id) => id.startsWith("zephyr_"));
 
+  // Value: protects=a page and its truth mirror share one result cap with fusion off too;
+  // fails_when=the cap is keyed by document again (three zephyr chunks come back).
   it("gives a page and its compiled-truth mirror one per-page cap", async () => {
     const off = await runSearch(fx.storage, "zephyr rollout");
-    expect(zephyrHits(off.hits.map((h) => h.chunkId))).toHaveLength(3);
+    expect(zephyrHits(off.hits.map((h) => h.chunkId))).toHaveLength(2);
+    // An exact-intent search keeps every chunk, so the cap is what drops the third.
+    const all = await runSearch(fx.storage, "zephyr rollout", { intent: "exact" });
+    expect(zephyrHits(all.hits.map((h) => h.chunkId))).toHaveLength(3);
+  });
 
+  // Value: protects=the page cap never makes type diversity drop a distinct page it kept before;
+  // fails_when=the type cap is computed over the candidates left after twins collapsed, which
+  // trades quokka / an invoice note for a second chunk of the already-shown zephyr page.
+  it("does not let the page cap shrink the type-diversity limit", async () => {
+    for (const q of ["automobile servicing", "vehicle repair"]) {
+      const ids = (await runSearch(fx.storage, q)).hits.map((h) => h.chunkId);
+      expect(ids).toContain("quokka_c0");
+      expect(ids).not.toContain("zephyr_page_c1");
+    }
+  });
+
+  it("carries the page vote on the lead chunk under page fusion", async () => {
     const on = await withRankFlag(FLAG, () => runSearch(fx.storage, "zephyr rollout", { explain: true }));
     const ids = zephyrHits(on.hits.map((h) => h.chunkId));
     expect(ids).toHaveLength(2);

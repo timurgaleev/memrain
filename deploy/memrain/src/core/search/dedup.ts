@@ -206,15 +206,21 @@ export function pageTypeOf(payload: TypedPayload | undefined): string {
  *
  * A SINGLE-type candidate set passes through untouched — there is nothing to
  * diversify toward, so truncating it would only lose recall on uniform corpora.
+ *
+ * `basis` (default: the number of hits) is the candidate count the cap is a
+ * share of. The per-page cap passes the count a per-document cap would have
+ * left, so folding a page's twins into one cap never shrinks the type limit
+ * and trades a distinct page for another chunk of a page already shown.
  */
 export function enforceTypeDiversity<T extends TypedPayload>(
   hits: readonly ChunkScore<T>[],
   maxRatio: number = getMaxTypeRatio(),
+  basis: number = hits.length,
 ): ChunkScore<T>[] {
   if (!(maxRatio < 1) || hits.length === 0) return [...hits];
   const types = hits.map((h) => pageTypeOf(h.payload));
   if (new Set(types).size <= 1) return [...hits];
-  const maxPerType = Math.max(1, Math.ceil(hits.length * maxRatio));
+  const maxPerType = Math.max(1, Math.ceil(Math.max(hits.length, basis) * maxRatio));
   const counts = new Map<string, number>();
   const kept: ChunkScore<T>[] = [];
   for (let i = 0; i < hits.length; i++) {

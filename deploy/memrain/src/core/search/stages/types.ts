@@ -32,6 +32,8 @@ export interface HitPayload extends BoostablePayload, ChunkPayloadForRerank {
   symbol_type?: string | null;
   /** Content date COALESCE(effective_date, updated_at), for since/until. */
   effective_date?: string | null;
+  /** Where effective_date came from (migration 080); 'fallback' / NULL is a row timestamp. */
+  effective_date_source?: string | null;
 }
 
 export type Hit = ChunkScore<HitPayload>;
@@ -40,7 +42,6 @@ export type Hit = ChunkScore<HitPayload>;
 export interface RankFlags {
   metadataGate: boolean;
   entityTruthSoft: boolean;
-  keywordOrRetry: boolean;
   pageFusion: boolean;
   keywordConfidence: boolean;
   exactLookup: boolean;
@@ -62,8 +63,6 @@ export interface StageInput {
   graphSignalsOn: boolean;
   backlinkBoostOn: boolean;
   rerankWanted: boolean;
-  /** Page-fusion keys (MEMRAIN_RANK_PAGE_FUSION), so a page and its truth mirror share a cap. */
-  pageKeys: Map<string, string> | null;
   /** Which arms voted, for the metadata-boost gate. */
   votes: { vectorVoted: boolean; lexicalVoted: boolean };
   /** Per-signal attribution, only when the caller asked for explain. */
@@ -75,6 +74,8 @@ export interface StageContext extends StageInput {
   skipMetadata: boolean;
   canonical: boolean;
   recencyBoostMode: "off" | "on" | "strong";
+  /** Set by the per-page cap: the candidates a per-document cap would have kept (type-diversity basis). */
+  typeDiversityBasis?: number;
 }
 
 export interface RankStage {

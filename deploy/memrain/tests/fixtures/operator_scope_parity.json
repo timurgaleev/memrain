@@ -9,7 +9,7 @@
       {
         "text": "SELECT qc.intent, qc.result_ids FROM query_cache qc WHERE qc.cache_key = $1 AND ( qc.clock_value = $2 OR ( qc.doc_generations <> '{}'::jsonb AND NOT EXISTS ( SELECT 1 FROM jsonb_each_text(qc.doc_generations) AS g(doc_id, stored_gen) LEFT JOIN documents d ON d.id = g.doc_id -- Compare as TEXT, not via (stored_gen)::bigint: a malformed snapshot -- value (only reachable by manual DB tampering — writes go through -- jsonb_object_agg of a BIGINT) would otherwise abort the read/prune/ -- stats query. As text, garbage simply fails to match → invalidate. WHERE d.id IS NULL -- document deleted → invalidate OR d.generation::text <> g.stored_gen -- document bumped → invalidate ) ) )",
         "params": [
-          "27d28095dc552003bd0bd3db3b9a05081e49856fa8980158786a854412a049e3",
+          "5c24a8c05752698de671411be510ee560bf9cc851fd0e09245862df923d5bf6a",
           2
         ]
       },
@@ -52,7 +52,7 @@
         ]
       },
       {
-        "text": "SELECT c.id, c.document_id, c.content, d.source_path, d.title, d.source_id, s.kind AS source_kind, d.updated_at::text AS updated_at, d.frontmatter, c.language, c.symbol_type, d.effective_date::text AS effective_date FROM chunks c JOIN documents d ON d.id = c.document_id LEFT JOIN sources s ON s.id = d.source_id WHERE c.id = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')",
+        "text": "SELECT c.id, c.document_id, c.content, d.source_path, d.title, d.source_id, s.kind AS source_kind, d.updated_at::text AS updated_at, d.frontmatter, c.language, c.symbol_type, d.effective_date::text AS effective_date, d.effective_date_source FROM chunks c JOIN documents d ON d.id = c.document_id LEFT JOIN sources s ON s.id = d.source_id WHERE c.id = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')",
         "params": [
           [
             "doc_591b77a7c7fd5f22_c0",
@@ -156,7 +156,7 @@
       {
         "text": "SELECT qc.intent, qc.result_ids FROM query_cache qc WHERE qc.cache_key = $1 AND ( qc.clock_value = $2 OR ( qc.doc_generations <> '{}'::jsonb AND NOT EXISTS ( SELECT 1 FROM jsonb_each_text(qc.doc_generations) AS g(doc_id, stored_gen) LEFT JOIN documents d ON d.id = g.doc_id -- Compare as TEXT, not via (stored_gen)::bigint: a malformed snapshot -- value (only reachable by manual DB tampering — writes go through -- jsonb_object_agg of a BIGINT) would otherwise abort the read/prune/ -- stats query. As text, garbage simply fails to match → invalidate. WHERE d.id IS NULL -- document deleted → invalidate OR d.generation::text <> g.stored_gen -- document bumped → invalidate ) ) )",
         "params": [
-          "e7e619fa1eb7bf54ea86f9e0839c7060bc5739d9378402a0f2b11552a0d9595a",
+          "cb7b8c23d279266302c87694f081f358d00d954213d4436704e25c3c4848cd48",
           2
         ]
       },
@@ -202,6 +202,38 @@
           null,
           null
         ]
+      },
+      {
+        "text": "SELECT pa.slug AS slug, pa.source_id AS source_id FROM page_aliases pa JOIN pages p ON p.slug = pa.slug AND p.source_id = pa.source_id AND p.deleted_at IS NULL WHERE pa.alias_norm = $1 ORDER BY source_id, pa.slug",
+        "params": [
+          "aardvark shared title"
+        ]
+      },
+      {
+        "text": "SELECT lexeme AS lex FROM unnest(to_tsvector('simple', $1)) ORDER BY positions[1], lexeme",
+        "params": [
+          "Aardvark Shared Title"
+        ]
+      },
+      {
+        "text": "SELECT u.lex, (SELECT count(*)::int FROM ( SELECT 1 FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.search_vector @@ plainto_tsquery('simple', u.lex) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') AND NOT (CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'test/%' OR CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'attachments/%' OR CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE '.raw/%') LIMIT $2::int) x) AS n FROM unnest($1::text[]) AS u(lex)",
+        "params": [
+          [
+            "aardvark",
+            "shared",
+            "title"
+          ],
+          401
+        ]
+      },
+      {
+        "text": "SELECT bpp.id, bpp.document_id, bpp.score FROM ( SELECT DISTINCT ON (COALESCE(d.source_id, 'default'), c.document_id) c.id AS id, c.document_id AS document_id, ts_rank_cd(c.search_vector, (plainto_tsquery('simple', $1) || plainto_tsquery('simple', $2) || plainto_tsquery('simple', $3))) * (CASE WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'media/articles/%' THEN 1.1 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'media/repos/%' THEN 1.1 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'originals/%' THEN 1.5 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'companies/%' THEN 1.2 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'concepts/%' THEN 1.3 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'meetings/%' THEN 1.1 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'extracts/%' THEN 0.3 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'writing/%' THEN 1.4 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'media/x/%' THEN 0.7 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'archive/%' THEN 0.5 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'people/%' THEN 1.2 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'deals/%' THEN 1.2 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'daily/%' THEN 0.8 WHEN CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'chat/%' THEN 0.5 ELSE 1.0 END) AS score FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.search_vector @@ (plainto_tsquery('simple', $1) || plainto_tsquery('simple', $2) || plainto_tsquery('simple', $3)) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') AND NOT (CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'test/%' OR CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'attachments/%' OR CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE '.raw/%') ORDER BY COALESCE(d.source_id, 'default'), c.document_id, score DESC, c.id COLLATE \"C\" ASC ) bpp ORDER BY bpp.score DESC, bpp.id COLLATE \"C\" ASC LIMIT $4",
+        "params": [
+          "aardvark",
+          "shared",
+          "title",
+          60
+        ]
       }
     ],
     "result": {
@@ -231,7 +263,7 @@
       {
         "text": "SELECT qc.intent, qc.result_ids FROM query_cache qc WHERE qc.cache_key = $1 AND ( qc.clock_value = $2 OR ( qc.doc_generations <> '{}'::jsonb AND NOT EXISTS ( SELECT 1 FROM jsonb_each_text(qc.doc_generations) AS g(doc_id, stored_gen) LEFT JOIN documents d ON d.id = g.doc_id -- Compare as TEXT, not via (stored_gen)::bigint: a malformed snapshot -- value (only reachable by manual DB tampering — writes go through -- jsonb_object_agg of a BIGINT) would otherwise abort the read/prune/ -- stats query. As text, garbage simply fails to match → invalidate. WHERE d.id IS NULL -- document deleted → invalidate OR d.generation::text <> g.stored_gen -- document bumped → invalidate ) ) )",
         "params": [
-          "27d28095dc552003bd0bd3db3b9a05081e49856fa8980158786a854412a049e3",
+          "5c24a8c05752698de671411be510ee560bf9cc851fd0e09245862df923d5bf6a",
           2
         ]
       },
@@ -274,7 +306,7 @@
         ]
       },
       {
-        "text": "SELECT c.id, c.document_id, c.content, d.source_path, d.title, d.source_id, s.kind AS source_kind, d.updated_at::text AS updated_at, d.frontmatter, c.language, c.symbol_type, d.effective_date::text AS effective_date FROM chunks c JOIN documents d ON d.id = c.document_id LEFT JOIN sources s ON s.id = d.source_id WHERE c.id = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')",
+        "text": "SELECT c.id, c.document_id, c.content, d.source_path, d.title, d.source_id, s.kind AS source_kind, d.updated_at::text AS updated_at, d.frontmatter, c.language, c.symbol_type, d.effective_date::text AS effective_date, d.effective_date_source FROM chunks c JOIN documents d ON d.id = c.document_id LEFT JOIN sources s ON s.id = d.source_id WHERE c.id = ANY($1::text[]) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')",
         "params": [
           [
             "doc_591b77a7c7fd5f22_c0",

@@ -23,6 +23,7 @@ import { qualifiedSymbolName } from "./code-edges.ts";
 import { stripFactsFence } from "./facts-fence.ts";
 import { stripTakesFence } from "./synthesis/takes-fence.ts";
 import { embedText, EMBED_DIMENSIONS } from "./embedding.ts";
+import { embeddingInputHash } from "./embedding-input-hash.ts";
 import { isEmbedSkipped } from "./embed-skip.ts";
 import { keywordOnlyMode } from "./llm/gateway.ts";
 import {
@@ -471,11 +472,13 @@ async function indexDocumentBody(
   // keeps it inside one tenant; a global contextual-mode flip still needs a full
   // `reindex --contextual`. Width is checked alongside model: MEMRAIN_EMBED_DIM can
   // change the dimension without changing the Titan model id, and mixing widths
-  // inside one document breaks the `<=>` scan. Under contextual retrieval a
-  // reused chunk keeps its prior document-level context (title/synopsis) even if
-  // an earlier chunk or the title changed — an accepted precision tradeoff.
-  const priorProse = new Map<string, { vec: number[]; tier: ContextualTier | undefined }>();
-  const priorFence = new Map<string, number[]>();
+  // inside one document breaks the `<=>` scan. A vector stored with an input
+  // hash (migration 187) is reused only while the hash of the chunk's current
+  // embedding input matches, so a title or synopsis change re-embeds the chunks
+  // whose wrapped input it changed. A vector without one (written before the
+  // hash existed, or by a writer that does not stamp it) keeps the text rule.
+  const priorProse = new Map<string, { vec: number[]; tier: ContextualTier | undefined; hash: string | null }>();
+  const priorFence = new Map<string, { vec: number[]; hash: string | null }>();
   if (!skipEmbed) {
     try {
       const priorRows = await storage.engine().query<{
@@ -485,9 +488,10 @@ async function indexDocumentBody(
         contextual_tier: ContextualTier | null;
         vec: string | null;
         model: string | null;
+        input_hash: string | null;
       }>(
         `SELECT c.content, c.chunk_source, c.contextual_embedded, c.contextual_tier,
-                e.vector::text AS vec, e.model
+                e.vector::text AS vec, e.model, e.input_hash
            FROM chunks c LEFT JOIN embeddings e ON e.chunk_id = c.id
           WHERE c.document_id = $1`,
         [id],
@@ -501,8 +505,9 @@ async function indexDocumentBody(
         if (fenced && r.contextual_embedded === true) continue;
         const vec = JSON.parse(r.vec) as number[];
         if (vec.length !== EMBED_DIMENSIONS) continue;
-        if (fenced) priorFence.set(r.content, vec);
-        else priorProse.set(r.content, { vec, tier: r.contextual_tier ?? undefined });
+        const hash = r.input_hash ?? null;
+        if (fenced) priorFence.set(r.content, { vec, hash });
+        else priorProse.set(r.content, { vec, tier: r.contextual_tier ?? undefined, hash });
       }
     } catch {
       // A read failure just means no reuse this pass — re-embed everything.
@@ -521,15 +526,43 @@ async function indexDocumentBody(
   // What a chunk embedded without the LLM tier gets: the deterministic prefix
   // when wrapping is on, raw text otherwise.
   const baseTier: ContextualTier = wrapActive ? "deterministic" : "none";
+  // The input hash of each chunk's vector, written next to it (migration 187).
+  const hashes: (string | null)[] = Array.from<string | null>({ length: parsed.chunks.length }).fill(null);
+  const baseHashOf = (i: number): string => embeddingInputHash({
+    model,
+    dimensions: EMBED_DIMENSIONS,
+    tier: baseTier,
+    input: wrapChunkForEmbedding(parsed.chunks[i]!, deterministicPrefix, { isCode }),
+  });
+  const llmHashOf = (i: number): string => embeddingInputHash({
+    model,
+    dimensions: EMBED_DIMENSIONS,
+    tier: "llm",
+    input: parsed.chunks[i]!,
+    title: ctxTitle,
+  });
   let deferredChunks = 0;
   // The first deferral's reason. Once set, the remaining chunks skip their paid
   // calls: the next one would only wait out the same outage or refusal.
   let deferReason: string | null = null;
 
-  // A stored vector for byte-identical text is reused instead of paid for again.
+  // A stored vector for byte-identical text is reused instead of paid for again,
+  // unless its input hash says it was embedded from a different input. With the
+  // paid tier on, only an LLM-tier vector is current: a deterministic fallback
+  // gets its LLM context retried. With it off, an LLM-tier vector whose title
+  // and text are unchanged stays (it never trades down to the deterministic
+  // prefix, as `reindex --contextual` does not either). Keyword-only mode cannot
+  // embed, so it keeps the stored vector of unchanged text even when its input
+  // moved: the stale hash makes the next embedding write replace it.
   // Checked before a write slot is taken: a chunk with nothing to pay for must
   // not queue behind the paid ones.
-  const reusable = (i: number) => priorProse.get(parsed.chunks[i]!) ?? null;
+  const reusable = (i: number) => {
+    const prior = priorProse.get(parsed.chunks[i]!);
+    if (!prior) return null;
+    if (prior.hash === null || keywordOnly) return prior;
+    if (prior.hash === llmHashOf(i)) return wrapActive ? prior : null;
+    return !llmActive && prior.hash === baseHashOf(i) ? prior : null;
+  };
 
   const vectorFor = async (i: number): Promise<void> => {
     if (deferReason !== null) {
@@ -554,12 +587,23 @@ async function indexDocumentBody(
         if (llmCtx) stats.llmOk++;
         else stats.llmFallback++;
       }
+      // The paid tier fell back again: a stored fallback vector for the same
+      // deterministic input is still current, so it is kept, not re-embedded.
+      const prior = llmCtx ? undefined : priorProse.get(chunk);
+      if (prior && prior.hash !== null && prior.hash === baseHashOf(i)) {
+        vectors[i] = prior.vec;
+        tiers[i] = prior.tier ?? baseTier;
+        hashes[i] = prior.hash;
+        if (stats) stats.reused++;
+        return;
+      }
     }
     const embedInput = wrapChunkForEmbedding(chunk, prefix, { isCode });
     try {
       if (stats) stats.embeds++;
       tiers[i] ??= baseTier;
       vectors[i] = await embed(embedInput, { modelId: model });
+      hashes[i] = tiers[i] === "llm" ? llmHashOf(i) : baseHashOf(i);
     } catch (e) {
       // A spent budget or a passing Bedrock failure (throttle, timeout, 5xx,
       // quota, a paused circuit) must not lose the caller's text: the vector can
@@ -592,6 +636,7 @@ async function indexDocumentBody(
       if (reused) {
         vectors[i] = reused.vec;
         tiers[i] = reused.tier;
+        hashes[i] = reused.hash;
         if (stats) stats.reused++;
         continue;
       }
@@ -629,6 +674,7 @@ async function indexDocumentBody(
     return {
       text,
       embedding: vectors[i] ?? null,
+      embeddingInputHash: vectors[i] ? hashes[i] ?? null : null,
       ...(tiers[i] ? { contextualTier: tiers[i] } : {}),
       entities: extractEntities(text, fm),
     };
@@ -654,7 +700,10 @@ async function indexDocumentBody(
       }
       for (const sym of parsedCode.symbols) {
         if (sym.kind === "module") continue; // the prose chunk already embeds these top-level calls
-        let vec: number[] | null = priorFence.get(sym.body) ?? null;
+        const symHash = embeddingInputHash({ model, dimensions: EMBED_DIMENSIONS, tier: "none", input: sym.body });
+        const prior = priorFence.get(sym.body);
+        let vec: number[] | null = prior && (prior.hash === null || prior.hash === symHash || keywordOnly) ? prior.vec : null;
+        let vecHash: string | null = vec ? prior!.hash : null;
         if (vec) {
           if (stats) stats.reused++;
         } else if (keywordOnly) {
@@ -666,6 +715,7 @@ async function indexDocumentBody(
           const release = await acquireWriteEmbedSlot();
           try {
             vec = await embed(sym.body, { modelId: model });
+            vecHash = symHash;
           } catch (e) {
             if (opts.requireCompleteEmbeddings || !(isBudgetRefusal(e) || isTransientBedrockError(e))) throw e;
             deferredChunks++;
@@ -679,6 +729,7 @@ async function indexDocumentBody(
           startLine: sym.startLine,
           endLine: sym.endLine,
           embedding: vec,
+          embeddingInputHash: vec ? vecHash : null,
           symbolName: sym.name,
           symbolNameQualified: qualifiedSymbolName(sym.parentSymbolPath, sym.name),
           symbolType: sym.kind,

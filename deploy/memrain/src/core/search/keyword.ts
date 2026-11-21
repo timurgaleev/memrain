@@ -97,7 +97,7 @@ export async function keywordIdentifierSearch(
   return runKeywordQuery(engine, tokens, tsquery, limit, opts);
 }
 
-/** Lexemes past this many are dropped from the OR retry: a long query already found its AND rows or it is prose. */
+/** Lexemes past this many are dropped from the OR form: a long query already found its AND rows or it is prose. */
 const MAX_RELAXED_LEXEMES = 16;
 
 /** Shorter lexemes match too many chunks to be a useful OR term. */
@@ -123,14 +123,25 @@ export const RELAXED_STOPWORDS: ReadonlySet<string> = new Set([
   "nur", "war", "wird", "werden", "kann", "hat", "haben",
 ]);
 
+/** A lexeme matching at most this many chunks is rare; its count stops one past it. */
+export const RARE_LEXEME_CHUNK_CAP = 400;
+
 /**
  * The OR form of {@link keywordSearch}: a chunk matching ANY of the query's
- * content lexemes. Used only as a retry when the strict AND pass came back
- * thin. The lexemes come from the same 'simple' parser the AND form uses, in
- * query order (the cap keeps the words the caller typed first), and each goes
- * back in as its own bound parameter, so no user text is ever spliced into a
- * tsquery string. A query with fewer than two lexemes has no OR form, and one
- * left with no content lexeme has nothing to match: both return [].
+ * content lexemes. Hybrid search uses it to fill a keyword-only result the
+ * strict AND pass left short. The lexemes come from the same 'simple' parser
+ * the AND form uses, in query order (the cap keeps the words the caller typed
+ * first), and each goes back in as its own bound parameter, so no user text is
+ * ever spliced into a tsquery string. A query with fewer than two lexemes has
+ * no OR form, and one left with no content lexeme has nothing to match: both
+ * return [].
+ *
+ * ts_rank knows no term rarity: a chunk naming a common word three times
+ * outranks the one page holding the rare word. So the chunks holding a rare
+ * lexeme (one matching at most RARE_LEXEME_CHUNK_CAP chunks, counted with a
+ * bounded read) come first, ordered by the summed 1/count of the rare lexemes
+ * they hold, then by ts_rank over the whole OR; chunks holding only common
+ * lexemes follow in ts_rank order.
  */
 export async function keywordSearchRelaxed(
   engine: Engine,
@@ -138,6 +149,8 @@ export async function keywordSearchRelaxed(
   limit: number,
   opts: KeywordSearchOptions = {},
 ): Promise<KeywordRow[]> {
+  // One word has no OR form; skip the round trip that would only say so.
+  if ((query.match(/[\p{L}\p{N}]+/gu) ?? []).length < 2) return [];
   const lex = await engine.query<{ lex: string }>(
     `SELECT lexeme AS lex FROM unnest(to_tsvector('simple', $1)) ORDER BY positions[1], lexeme`,
     [query],
@@ -149,13 +162,53 @@ export async function keywordSearchRelaxed(
     .slice(0, MAX_RELAXED_LEXEMES);
   if (lexemes.length === 0) return [];
   const tsquery = `(${lexemes.map((_, i) => `plainto_tsquery('simple', $${i + 1})`).join(" || ")})`;
-  return runKeywordQuery(engine, lexemes, tsquery, limit, opts);
+  const counts = await lexemeChunkCounts(engine, lexemes, opts.sourceIds, opts.filters);
+  const rare = lexemes
+    .map((l, i) => ({ index: i, count: counts.get(l) ?? 0 }))
+    .filter((t) => t.count > 0 && t.count <= RARE_LEXEME_CHUNK_CAP)
+    .map((t) => ({ index: t.index, weight: 1 / t.count }));
+  if (rare.length === 0) return runKeywordQuery(engine, lexemes, tsquery, limit, opts);
+  const first = await runKeywordQuery(engine, lexemes, tsquery, limit, opts, rare);
+  if (first.length >= limit) return first;
+  const seen = new Set(first.map((r) => r.id));
+  const rest = await runKeywordQuery(engine, lexemes, tsquery, limit, opts);
+  return [...first, ...rest.filter((r) => !seen.has(r.id))].slice(0, limit);
+}
+
+/** Chunks matching each lexeme, counted up to one past RARE_LEXEME_CHUNK_CAP, in the caller's scope and filters. */
+async function lexemeChunkCounts(
+  engine: Engine,
+  lexemes: readonly string[],
+  sourceIds: readonly string[] | undefined,
+  filters: ChunkFilters | undefined,
+): Promise<Map<string, number>> {
+  const params: unknown[] = [lexemes, RARE_LEXEME_CHUNK_CAP + 1];
+  let sourceFilter = "";
+  if (sourceIds !== undefined) {
+    params.push(sourceIds);
+    sourceFilter = ` AND d.source_id = ANY($3::text[])`;
+  }
+  sourceFilter += chunkFilterClauses(params, filters);
+  const r = await engine.query<{ lex: string; n: number | string }>(
+    `SELECT u.lex,
+            (SELECT count(*)::int FROM (
+               SELECT 1 FROM chunks c
+                 JOIN documents d ON d.id = c.document_id
+                WHERE c.search_vector @@ plainto_tsquery('simple', u.lex)
+                  AND ${visibilityClause("d")}${sourceFilter}${buildHardExcludeClauseSql("d.source_path")}
+                LIMIT $2::int) x) AS n
+       FROM unnest($1::text[]) AS u(lex)`,
+    params,
+  );
+  return new Map(r.rows.map((row) => [row.lex, Number(row.n)]));
 }
 
 /**
  * The keyword arm's SQL, parameterised on the tsquery expression. The query
  * text params are `$1..$n` (`queryParams`); every other param is appended after
- * them.
+ * them. With `rare` (indexes into `queryParams` and their weights), only chunks
+ * holding one of those lexemes match, ordered by the summed weight of the ones
+ * they hold before the rank score.
  */
 async function runKeywordQuery(
   engine: Engine,
@@ -163,6 +216,7 @@ async function runKeywordQuery(
   tsquery: string,
   limit: number,
   opts: KeywordSearchOptions,
+  rare?: ReadonlyArray<{ index: number; weight: number }>,
 ): Promise<KeywordRow[]> {
   // `undefined` is unscoped (operator, CLI, every pre-tenancy caller). An
   // EMPTY array is a caller granted nothing: the predicate still goes on and
@@ -185,6 +239,21 @@ async function runKeywordQuery(
   // Per-prefix authority factor folded into the ranking expression (LIMIT
   // shaping); '1.0' when disabled so the SQL shape stays uniform.
   const boostCase = opts.sourceBoost ? buildCurationBoostCaseSql("d.source_path") : "1.0";
+  // The plain arm's SQL is unchanged when there is no rarity to rank by.
+  let match = tsquery;
+  let rarityCol = "";
+  let byRarity = "";
+  let byPooledRarity = "";
+  if (rare && rare.length > 0) {
+    match = `(${rare.map((t) => `plainto_tsquery('simple', $${t.index + 1})`).join(" || ")})`;
+    const rarity = rare.map((t) => {
+      params.push(t.weight);
+      return `CASE WHEN c.search_vector @@ plainto_tsquery('simple', $${t.index + 1}) THEN $${params.length}::float8 ELSE 0 END`;
+    }).join(" + ");
+    rarityCol = `, (${rarity}) AS rarity`;
+    byRarity = "rarity DESC, ";
+    byPooledRarity = "bpp.rarity DESC, ";
+  }
   params.push(limit);
   const limitParam = `$${params.length}`;
   // Per-page max-pool (opt-in): pool the full match set to the best chunk per
@@ -199,23 +268,23 @@ async function runKeywordQuery(
          SELECT DISTINCT ON (COALESCE(d.source_id, 'default'), c.document_id)
                 c.id AS id,
                 c.document_id AS document_id,
-                ts_rank_cd(c.search_vector, ${tsquery}) * ${boostCase} AS score
+                ts_rank_cd(c.search_vector, ${tsquery}) * ${boostCase} AS score${rarityCol}
            FROM chunks c
            JOIN documents d ON d.id = c.document_id
-          WHERE c.search_vector @@ ${tsquery}
+          WHERE c.search_vector @@ ${match}
             AND ${vis}${sourceFilter}${filterClauses}${excludeClause}
           ORDER BY COALESCE(d.source_id, 'default'), c.document_id,
-                   score DESC, c.id COLLATE "C" ASC
+                   ${byRarity}score DESC, c.id COLLATE "C" ASC
        ) bpp
-       ORDER BY bpp.score DESC, bpp.id COLLATE "C" ASC
+       ORDER BY ${byPooledRarity}bpp.score DESC, bpp.id COLLATE "C" ASC
        LIMIT ${limitParam}`
     : `SELECT c.id, c.document_id,
-              ts_rank_cd(c.search_vector, ${tsquery}) * ${boostCase} AS score
+              ts_rank_cd(c.search_vector, ${tsquery}) * ${boostCase} AS score${rarityCol}
          FROM chunks c
        JOIN documents d ON d.id = c.document_id
-       WHERE c.search_vector @@ ${tsquery}
+       WHERE c.search_vector @@ ${match}
          AND ${vis}${sourceFilter}${filterClauses}${excludeClause}
-       ORDER BY score DESC, c.id COLLATE "C" ASC
+       ORDER BY ${byRarity}score DESC, c.id COLLATE "C" ASC
        LIMIT ${limitParam}`;
   const r = await engine.query<{ id: string; document_id: string; score: number | string }>(sql, params);
   return r.rows.map((row) => ({ id: row.id, documentId: row.document_id, score: Number(row.score) }));

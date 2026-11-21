@@ -6,7 +6,8 @@
  * with the closest meaning, and each collects one vote. A page both arms rank
  * second then loses to a page one arm ranks first. The compiled-truth mirror
  * (`page-truth://slug`) and the page itself (`page://slug`) are separate
- * documents too, so they split the votes the same way and take two slots.
+ * documents too, so they split the votes the same way (the per-page result cap
+ * in stages/pipeline.ts keeps them from taking two pages' worth of slots).
  *
  * Here every list votes for a page once, at that page's best rank in the list,
  * and the page's lead chunk (its largest own vote; first seen on a tie) carries
