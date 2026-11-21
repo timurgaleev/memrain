@@ -18,10 +18,14 @@
  * fail-open. A filter that cannot read the table returns the candidates
  * unfiltered (the pre-backoff behaviour), and a write that fails is reported
  * on stderr and dropped.
+ *
+ * The reflections phase also parks here a transcript the model read and found
+ * nothing in (recordSynthSkip, kind skipped): never eligible again on the same
+ * content and model.
  */
 import type { Engine } from "../engine/interface.ts";
 
-export type SynthPhase = "propose_takes" | "extract_atoms" | "facts-backfill";
+export type SynthPhase = "propose_takes" | "extract_atoms" | "facts-backfill" | "reflections";
 
 export type SynthFailureKind = "llm_error" | "unparseable" | "truncated";
 
@@ -110,6 +114,35 @@ export async function recordSynthFailure(engine: Engine, f: SynthFailureInput): 
     );
   } catch (e) {
     warn(`${f.phase} backoff record for ${f.docId}`, e);
+  }
+}
+
+/**
+ * Record that the model read a document and found nothing to make of it
+ * (migration 191). The row parks the document for good on this content hash
+ * and model: an edit or a model switch is a new question. A later failure on
+ * new content replaces it like any other row.
+ */
+export async function recordSynthSkip(
+  engine: Engine,
+  s: { docId: string; phase: SynthPhase; contentHash: string; model: string },
+): Promise<void> {
+  try {
+    await engine.query(
+      `INSERT INTO synth_failures
+         (doc_id, phase, content_hash, model, attempts, kind, next_eligible_at, last_at)
+       VALUES ($1, $2, $3, $4, 1, 'skipped', 'infinity'::timestamptz, now())
+       ON CONFLICT (doc_id, phase) DO UPDATE SET
+         attempts = 1,
+         kind = 'skipped',
+         next_eligible_at = 'infinity'::timestamptz,
+         content_hash = EXCLUDED.content_hash,
+         model = EXCLUDED.model,
+         last_at = now()`,
+      [s.docId, s.phase, s.contentHash, s.model],
+    );
+  } catch (e) {
+    warn(`${s.phase} skip record for ${s.docId}`, e);
   }
 }
 
