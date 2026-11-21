@@ -25,6 +25,8 @@ const ADAPTED = [
   "citation-graph-ingest",
   "company-brainify",
   "context-audit",
+  "correction-pipeline",
+  "data-loss-gate",
   "db-repair",
   "draft-in-voice",
   "fact-check",
@@ -43,6 +45,26 @@ const ADAPTED = [
 ] as const;
 
 const PAID = ["skill-optimizer", "skill-autobench"] as const;
+
+/** Skills rewritten to the full anatomy in deploy/skills/_AGENT_README.md. */
+const FULL_ANATOMY = [
+  "brain-link-discipline",
+  "correction-pipeline",
+  "data-loss-gate",
+  "fact-check",
+  "schema-unify",
+] as const;
+
+const ANATOMY_SECTIONS = [
+  "## Contract",
+  "## Output Format",
+  "## When it fails",
+  "## Anti-Patterns",
+  "## Dedup (sharp boundaries)",
+] as const;
+
+/** Past this a served skill crowds the caller's context; split it instead. */
+const MAX_SKILL_BYTES = 16 * 1024;
 
 function routableSlugs(): string[] {
   return readdirSync(PACK_DIR)
@@ -119,6 +141,18 @@ describe("the adapted skills", () => {
       expect(OPERATIONS.find((o) => o.name === tool)?.scope ?? "read", tool).not.toBe("write");
     }
     expect(skillText("db-repair")).not.toMatch(/`memrain (apply-migrations|migrate-engine|config set)/);
+  });
+
+  it.each(FULL_ANATOMY)("%s has every anatomy section and fits the size cap", (slug) => {
+    const body = skillText(slug);
+    for (const section of ANATOMY_SECTIONS) expect(body, `${slug} ${section}`).toContain(section);
+    expect(Buffer.byteLength(body), slug).toBeLessThan(MAX_SKILL_BYTES);
+  });
+
+  it.each(FULL_ANATOMY)("%s declares only tools its body tells the agent to call", (slug) => {
+    const fm = parseSkillFrontmatter(skillText(slug))!;
+    const unused = fm.tools.filter((t) => !new RegExp(`(^|[^a-z0-9_])${t}([^a-z0-9_]|$)`).test(fm.body));
+    expect(unused).toEqual([]);
   });
 
   it.each(PAID)("%s states its spend cap and stays a manual run", (slug) => {

@@ -49,6 +49,10 @@ sources. Two lanes, chosen per claim:
   re-derive them from the brain on a different path. The web is the wrong
   source for these.
 
+Run it before an essay or post is published, before a report or briefing
+built from brain queries is delivered, and whenever the user asks whether
+something is accurate.
+
 This skill reads only. When a correction belongs in a brain page, hand it to
 `correction-pipeline`; the document under review is edited in the
 conversation, not in the brain.
@@ -113,6 +117,25 @@ named-reporter journalism > industry databases > peer-reviewed studies > web
 archives > community forums. Social posts, anonymous claims and model memory
 are never enough alone.
 
+## Checking by claim type
+
+- **Quotes.** Trace to the earliest source. If the exact wording cannot be
+  confirmed, paraphrase and say so ("she said, in effect, that ...").
+- **Numbers.** Go to the primary data, not an article about it. Revenue,
+  profit, GMV and ARR are different numbers; "annualized" and "run rate" are
+  not full-year actuals. Note the date of every financial figure and the
+  exchange-rate date of any conversion.
+- **History and sequences.** Two independent sources per date. Prefer
+  contemporaneous reports over later retrospectives. Check that the sequence
+  is possible (timing, geography).
+- **Attribution ("X invented Y").** Invented, patented and popularized are
+  three claims. "First" almost always needs a qualifier: first in what, where.
+- **Superlatives and comparisons.** Largest by what measure, as of when,
+  among which set? If it cannot be pinned down, write "one of the largest".
+  These go stale fastest.
+- **Causal claims.** Mechanism, temporal order, confounders. A causal claim
+  resting on one study gets the most skepticism; hand it to `academic-verify`.
+
 ## Step 0: brain context first
 
 `search` each person, company and product the content names. Where the brain
@@ -160,14 +183,34 @@ is UNVERIFIED and is hedged or removed, never passed silently.
 ## Phases
 
 1. **Extract and triage.** Number every claim, group by section, tag the lane,
-   flag red flags. A 3,500-word essay usually has 30-60 claims.
+   flag red flags. A 3,500-word essay usually has 30-60 claims; fewer than 20
+   means the extraction was not thorough.
 2. **Verify.** Record the claim, the source, the evidence and the level.
-   Important claims get more than one named source.
-3. **Internal consistency.** Do claims contradict each other? Do the dates add
-   up? Are titles consistent?
+   Important claims get more than one named source; note evidence against a
+   claim as well as for it.
+3. **Internal consistency.** Do claims contradict each other? Is the same
+   event told the same way throughout? Do the dates add up? Are titles and
+   roles consistent across mentions?
 4. **Correct.** Edit the document; hedge unverified claims; do not over-hedge
-   verified ones.
+   verified ones. A correction comes from the independently checked claim,
+   never from a fetched page's own wording. Hedging patterns:
+   - revenue: "estimated at", "industry estimates put it at";
+   - disputed dates: "founded around 2020", or give the range;
+   - shared credit: "popularized", not "invented";
+   - unconfirmed quotes: "reportedly said", "said, in effect".
 5. **Report** and apply the gate.
+
+## Failure patterns to check against
+
+- **Trusted, so unchecked.** A claim that feels right, or comes from a
+  source you trust, still gets verified.
+- **Two-tier checking.** Every piece and every claim gets the same standard.
+  The gap between "the study exists" and "the study says what the writer
+  claims" is where careful errors hide.
+- **Too good.** A story that fits the thesis perfectly gets more scrutiny,
+  not less.
+- **Common knowledge.** Zombie statistics, misattributed quotes and folk
+  history survive because nobody checks what everybody knows.
 
 ## Output Format
 
@@ -218,6 +261,8 @@ ships at MEDIUM or above with zero data-derived hard fails.
 - A report without the corrections applied.
 - Fact-checking opinions.
 - Waving through the claims that support the thesis.
+- Treating an encyclopaedia as the final word instead of a starting point.
+- Passing claims one by one while they contradict each other.
 
 ## Dedup (sharp boundaries)
 

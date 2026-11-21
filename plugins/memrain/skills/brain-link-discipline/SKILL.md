@@ -22,7 +22,6 @@ tools:
   - resolve_slugs
   - search
   - get_links
-  - whoami
 mutating: false
 ---
 
@@ -67,6 +66,17 @@ its human view is the admin panel:
    produces an encrypted HTML file. Offer it as a file; never present it as a
    URL.
 
+## Sequence (write, then link)
+
+1. Write the page (`page_put`, `page_edit`, `page_append`, `page_rename`).
+2. Read the result. A version number means the write landed. An error means
+   there is nothing new to link; report the error.
+3. `search_pending` in the result only means the search index lags; the page
+   itself exists and `page_get` reads it. Link it, and say search may take a
+   moment to find it.
+4. In the same message that reports the write, give the link: a bare URL or
+   a markdown link, never a backticked code span.
+
 ## Check before linking
 
 Before a link goes out, confirm the page exists under that exact slug with
@@ -83,7 +93,10 @@ Never compose a slug from memory: if you are unsure, `resolve_slugs` or
 | Inside a page body | `[[people/alice-example]]` or `[Alice Example](people/alice-example)` | the brain extracts these into its link graph, which powers backlinks and relational recall; an absolute URL between two pages is invisible to it |
 
 Never write absolute admin URLs for page-to-page references inside a page.
-After a link-heavy write, `get_links` on the page shows what the brain
+Absolute URLs in a body are for genuinely external targets only.
+Frontmatter fields that name other pages (`company:` or `founded:` on a
+person, `attendees:` on a meeting) take bare slugs: the brain derives typed
+edges from them, and a URL there does not resolve to a page. After a link-heavy write, `get_links` on the page shows what the brain
 extracted.
 
 ## Subagent relays
@@ -111,8 +124,6 @@ Admin links open only for people who can sign in to the panel. That is right
 for the owner's own chat; for an outside audience use `publish`.
 
 ## Contract
-
-This skill guarantees:
 
 - Every message reporting a page write carries its link, or the fallback form,
   in that same message.
@@ -153,6 +164,8 @@ Without one:
 - Presenting `publish` output as a URL.
 - Absolute URLs between pages inside a page body.
 - Guessing a URL or slug.
+- A link in backticks where a clickable one was possible.
+- Linking before the write result came back.
 
 ## Dedup (sharp boundaries)
 
@@ -160,3 +173,7 @@ Without one:
   back to it.
 - `citation-fixer` fixes citations inside pages, not message links.
 - `reports` saves report pages; a message delivering one follows this skill.
+- `_output-rules` holds the cross-skill output canon; this skill holds the
+  per-message mechanics (link source, check, relay rewrite, bulk format).
+- `conventions/subagent-routing` says how to route work to subagents; this
+  skill adds the rewrite at the relay boundary.

@@ -23,6 +23,8 @@ tools:
   - ontology_conflicts
   - ontology_propose
   - page_append
+  - search
+  - link
   - get_skill
 mutating: true
 writes_pages: true
@@ -50,6 +52,29 @@ person, company, meeting, concept, article, source, project, note), with
 format and origin detail moved into frontmatter, aliases registered in the
 ontology so lookups by the old name still work, and every retype logged so
 it can be reversed.
+
+Run it when the user asks about cleaning up types, when an inventory shows
+many near-duplicate types, or when filtering by type keeps missing pages
+because the same kind of page carries three names. It is a hand-run,
+reviewed job; never schedule it.
+
+## Decision tree
+
+```
+A handful of types, each clearly distinct?
+  -> Nothing to unify. Stop and say so.
+Several sources in this brain?
+  -> Inventory and batch per source (--source-id); each source can be
+     unified on its own schedule.
+One cluster you are unsure about?
+  -> Leave it for last; start with the clearest cluster and a small batch.
+Pages that are really edges ("alice-example advises acme-example" and
+nothing else)?
+  -> Record the relation with `link`; deleting the page afterwards goes
+     through data-loss-gate.
+Fenced types (diary, journal)?
+  -> Out of scope. Never retype them.
+```
 
 ## Workflow
 
@@ -96,7 +121,12 @@ refuses a selection over 2,000 pages (narrow it by `--from`,
 out of the fenced types (`diary`, `journal`), because that would expose or
 half-hide private pages. Those refusals are by design; never work around them.
 
-### Phase 4: log, then apply
+### Phase 4: confirm, log, then apply
+
+A bulk retype changes many pages at once, so each batch goes through the
+`data-loss-gate` card first (`get_skill data-loss-gate`): the slug count,
+the old and new type, and the rollback command. One yes can cover the
+reviewed batch list; a new or changed list needs a new card.
 
 Before applying a batch, append it to `agent/taxonomy-log` with
 `page_append`: date, the command, and the full slug list with each slug's old
@@ -122,9 +152,8 @@ type returns the retyped pages.
 
 ## Contract
 
-This skill guarantees:
-
-- No retype runs before the user agreed to the mapping.
+- No retype runs before the user agreed to the mapping and confirmed the
+  batch through `data-loss-gate`.
 - Every batch is previewed, logged with its slugs and old types, then
   applied; every batch can be reversed from the log.
 - No batch exceeds the tool's 2,000-page limit, and the fenced-type refusals
@@ -157,9 +186,16 @@ Next:      <next batch | done>
 - Inventing a type for a one-off cluster (see schema-evolution).
 - Retyping fenced pages by any route.
 - Changing the filing rules' meaning instead of extending them.
+- Renaming slugs to match the new type. A retype changes only `type`; slugs,
+  `[[links]]` and backlinks keep working. Moving pages to a new prefix is a
+  separate `page_rename` decision.
+- Two batches running at the same time, or a batch run on a schedule.
+- Mapping every legacy type by hand; the long tail goes to `note` with the
+  log as its record.
 
 ## Dedup (sharp boundaries)
 
 - `schema-author` adds or evolves one type; this skill consolidates many.
 - `brain-taxonomist` decides where one page goes.
 - `frontmatter-guard` checks frontmatter shape, not the taxonomy.
+- `data-loss-gate` supplies the confirmation card before each apply.
