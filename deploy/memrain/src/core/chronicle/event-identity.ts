@@ -9,7 +9,8 @@
  *     and `kind`, the fields twins can differ in;
  *   - one member keeps the bare base slug, every other distinct member gets
  *     `<base>-<hash6>` (the hash of its discriminator), and identical copies
- *     past the first get `-2`, `-3`;
+ *     past the first get `-2`, `-3` when they name a time of day (copies of a
+ *     bare day are one event and share the page);
  *   - assignment reads the pages already at the candidate slugs, so it holds
  *     across reordered judge output and re-runs: the member whose
  *     discriminator the base page holds keeps the base, a member whose
@@ -37,6 +38,10 @@ function normalizedWhen(when: unknown): string {
   const text = typeof when === "string" ? when : when instanceof Date ? when.toISOString() : "";
   const at = Date.parse(text);
   return Number.isNaN(at) ? text : new Date(at).toISOString();
+}
+
+function hasTimeOfDay(when: unknown): boolean {
+  return typeof when === "string" && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(when.trim());
 }
 
 export function eventDiscriminator(fields: IdentityFields | null | undefined): string {
@@ -78,6 +83,12 @@ export function assignChronicleEventSlugs(events: SluggedEvent[], existing: Read
     const copies = new Map<string, number>();
     for (const i of members) {
       const slug = slugOf.get(keys[i]!)!;
+      // Two copies at one clock time can be two calls; two copies of a bare
+      // day are one event the judge listed twice, so they share the page.
+      if (!hasTimeOfDay(events[i]!.fields.when)) {
+        assigned[i] = slug;
+        continue;
+      }
       const n = (copies.get(slug) ?? 0) + 1;
       copies.set(slug, n);
       assigned[i] = n === 1 ? slug : `${slug}-${n}`;

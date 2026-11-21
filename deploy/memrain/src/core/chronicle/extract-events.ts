@@ -28,7 +28,7 @@ import { isJunkEntityName } from "../entity-junk.ts";
 import { BudgetTracker, BudgetExhausted } from "../budget.ts";
 import { classifyFactsAbsorbError } from "../ingest-log.ts";
 import type { ChronicleDropCounts, ChronicleDropReason } from "./types.ts";
-import { readAutoEvents, retireAutoEvents } from "./retire-events.ts";
+import { hasJudgedAutoEvents, readAutoEvents, retireAutoEvents } from "./retire-events.ts";
 import { eventDiscriminator, resolveChronicleEventSlugs } from "./event-identity.ts";
 import { CHRONICLE_INVITE_CAPTURED_VIA, inviteProjection } from "./invite-projection.ts";
 
@@ -345,11 +345,14 @@ export async function runChronicleExtract(
 
   // An ended calendar invite is structured enough to project without the paid
   // judge (invite-projection.ts); everything after the judge call is shared.
-  const invite = inviteProjection(
+  // A page the judge already read keeps the judged path: one "Scheduled:"
+  // event would otherwise retire the events judged from its body.
+  const projected = inviteProjection(
     { slug: opts.slug, type: page.type, title: page.title ?? "", truth: (page.compiled_truth ?? {}) as Record<string, unknown> },
     attendees,
     new Date(opts.now ?? Date.now()),
   );
+  const invite = projected && !(await hasJudgedAutoEvents(storage, opts.slug, sourceId)) ? projected : null;
   if (invite && "pending" in invite) return { slug: opts.slug, status: "skipped", events_written: 0, reason: "invite_not_ended" };
   let result: ChronicleJudgeResult;
   if (invite) {
@@ -410,15 +413,19 @@ export async function runChronicleExtract(
   }));
   const slugs = await resolveChronicleEventSlugs(storage, sourceId, based);
   const keepSlugs = new Set(slugs);
-  // Exact copies of one proposal get their own `-2` page, but they are one
-  // event as far as the shrink guard is concerned.
+  // Exact copies of one timed proposal get their own `-2` page, but they are
+  // one event as far as the shrink guard is concerned.
   const distinctEvents = new Set(based.map(b => `${b.slug}\n${eventDiscriminator(b.fields)}`)).size;
   const complete = !result.inputTruncated && proposals.length <= MAX_EVENTS_PER_PAGE &&
     Object.keys(dropped).length === 0 && !prior.truncated;
   if (complete && distinctEvents < prior.events.length / 2) {
     return { slug: opts.slug, status: "held_shrink", events_written: 0, reason: "event_count_below_half" };
   }
+  const writtenSlugs = new Set<string>();
   for (const [i, ev] of toWrite.entries()) {
+    // Copies of one day-only event share a page; write it once.
+    if (writtenSlugs.has(slugs[i]!)) continue;
+    writtenSlugs.add(slugs[i]!);
     const rawWho = ev.who.length ? ev.who : attendees;
     const who = rawWho.filter((w) => !isJunkEntityName(w));
     const when = ev.when || effectiveDate || new Date(opts.now ?? Date.now()).toISOString();

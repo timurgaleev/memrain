@@ -97,11 +97,24 @@ describe("same-day event identity", () => {
     expect((kept!.compiled_truth as { event: { when: string } }).event.when).toBe("2026-01-10T15:00:00Z");
   });
 
-  it("numbers identical copies after the first", () => {
-    const fields = { when: "2026-01-10", where: null, kind: "call" };
+  it("numbers identical copies at a clock time, and folds copies of a bare day", () => {
     const base = "life/events/2026-01-10-abcdef12";
-    expect(assignChronicleEventSlugs([{ slug: base, fields }, { slug: base, fields }], new Map()))
+    const timed = { when: "2026-01-10T10:00:00Z", where: null, kind: "call" };
+    expect(assignChronicleEventSlugs([{ slug: base, fields: timed }, { slug: base, fields: timed }], new Map()))
       .toEqual([base, `${base}-2`]);
+    const day = { when: "2026-01-10", where: null, kind: "call" };
+    expect(assignChronicleEventSlugs([{ slug: base, fields: day }, { slug: base, fields: day }], new Map()))
+      .toEqual([base, base]);
+  });
+
+  // Value: protects=a day-only event listed twice is one page and one timeline row; fails_when=copies fork a -2 twin.
+  it("writes a day-only event the judge listed twice once", async () => {
+    const slug = await seedMeeting();
+    const twice = { when: "2026-01-10", who: ["people/alice"], what: "Kickoff", kind: "meeting" };
+    const res = await runChronicleExtract(storage, { slug, judge: stubJudge([twice, twice]), now: new Date("2026-01-11T00:00:00Z") });
+    expect(res.events_written).toBe(1);
+    expect(await eventSlugs()).toHaveLength(1);
+    expect(await getTimelineForDate(storage, "2026-01-10", { sourceIds: ["default"] })).toHaveLength(1);
   });
 
   it("keeps a twin on the suffixed slug it already holds", () => {
@@ -155,6 +168,23 @@ describe("ended calendar invites", () => {
     const meeting = { slug: "meetings/a", type: "meeting", title: "A", markdown_body: LONG_BODY, compiled_truth: {} };
     expect(chronicleJudgeKey(meeting, new Date("2026-01-01T00:00:00Z")))
       .toBe(chronicleJudgeKey(meeting, new Date("2026-03-01T00:00:00Z")));
+  });
+
+  // Value: protects=events judged from a calendar page's notes survive its end; fails_when=the projection retires them.
+  it("keeps the judged path for a page whose body the judge already read", async () => {
+    // No end yet, so the judge reads the notes, as it did before projections existed.
+    const slug = await seedInvite({ start: "2026-01-10T10:00:00Z" });
+    const judged = stubJudge([
+      { when: "2026-01-10", who: ["people/alice"], what: "Decided to ship on Friday", kind: "decision" },
+      { when: "2026-01-10", who: ["people/bob"], what: "Bob takes the release notes", kind: "commitment" },
+    ]);
+    await runChronicleExtract(storage, { slug, judge: judged, now: new Date("2026-01-11T00:00:00Z") });
+    await storage.engine().query(`UPDATE pages SET compiled_truth = compiled_truth || '{"end": "2026-01-10T10:30:00Z"}'::jsonb WHERE slug = $1`, [slug]);
+    const before = await eventSlugs();
+    expect(before).toHaveLength(2);
+    const res = await runChronicleExtract(storage, { slug, judge: judged, now: new Date("2026-01-11T00:00:00Z") });
+    expect(res.status).toBe("extracted");
+    expect(await eventSlugs()).toEqual(before);
   });
 
   it("keeps the judged path for a cancelled or unstructured calendar page", async () => {

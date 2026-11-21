@@ -28,6 +28,17 @@ export async function readAutoEvents(storage: Storage, origin: string, source: s
   return { events: rows.slice(0, 1000), truncated: rows.length > 1000 };
 }
 
+/** Whether the judge has live events on this page (not invite projections). */
+export async function hasJudgedAutoEvents(storage: Storage, origin: string, source: string): Promise<boolean> {
+  const { rows } = await storage.engine().query<{ hit: number }>(
+    `SELECT 1 AS hit FROM pages p
+      WHERE ${automatic} AND p.compiled_truth->>'captured_via' = 'life-chronicle:auto'
+        AND p.source_id = $1 AND p.compiled_truth #>> '{event,depth}' = $2
+      LIMIT 1`, [source, origin],
+  );
+  return rows.length > 0;
+}
+
 export async function retireAutoEvents(storage: Storage, events: AutoEventSnapshot[], keep: ReadonlySet<string>,
   origin: { slug: string; version: number }): Promise<number> {
   let retired = 0;
