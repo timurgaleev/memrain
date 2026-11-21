@@ -580,3 +580,13 @@ start. It has a down file in `deploy/memrain/src/core/migrations-down/`.
 - **The secret scanner is now version 8.** `memrain doctor` warns that the last
   secrets audit used an older scanner until you run `memrain secrets audit`
   again.
+
+## From 2.3 to 2.4
+
+- **Migration 183** adds `write_gate_row_holds` and lets `write_gate_receipts`
+  name a hold with verdict `quarantine`. Nothing changes until you set
+  `MEMRAIN_WRITE_GATE_ROWS=quarantine`: facts, takes and timeline entries stay
+  in flag mode. Before switching, run `memrain write-gate scan --dry-run` to see
+  how many stored rows the detector matches, then `memrain write-gate scan` to
+  record flag receipts for them; the scan never holds or changes a row. The
+  down file refuses while rows are still held.

@@ -218,6 +218,11 @@ flowchart TD
   between `flag` (stored, marked, read back inside a stronger frame),
   `quarantine` (out of search until `memrain write-gate approve|reject`) and,
   for outside text only, `reject`.
+  Facts, takes and timeline entries from agents and outside sources pass the
+  same detector before they are stored. `MEMRAIN_WRITE_GATE_ROWS` (default
+  `flag`) records a receipt; `quarantine` keeps a matching row out of its table
+  in `write_gate_row_holds` until `memrain write-gate release|drop`, so no
+  reader needs a filter.
 - **Paid phases skip outside text.** Facts backfill, on-write extraction and
   the contextual-LLM tier leave connector pages (mail, calendar, chat,
   meeting) alone. Deep synthesis gathers only pages at tier `agent` or above,

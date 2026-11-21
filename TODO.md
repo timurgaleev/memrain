@@ -101,6 +101,38 @@ marked; this section is the one that stands.
   it was registered with; changing it is `memrain auth rescope-client`. Fold a
   picker into the grant editor (W6c, L4-22).
 
+## Follow-ups from the row write gate quarantine (W3c-1)
+
+- **Paid fact extraction from connectors waits for quarantine (W5, D4).** Turn
+  on paid extraction from mail, meetings and chats only once
+  `MEMRAIN_WRITE_GATE_ROWS=quarantine` runs on that install, so an
+  instruction-like fact drawn from outside text is held instead of stored.
+- **A hold statement that fails inside a writer's transaction aborts it**, like
+  the receipt above: `holdIfQuarantined` runs inside the fence-facts and
+  page-takes transactions. It fails closed (nothing is stored), but the page
+  write fails with it. Needs a savepoint the Engine interface does not have.
+- **Holds are never pruned.** Decided holds keep their payload (the row's text)
+  until their page or source is removed. Add retention for decided holds and
+  for receipts together.
+- **A hold survives the purge of the page its text came from** when that page
+  is not the one the row lands on (a fact extracted from a purged note about
+  someone else). The page purge removes holds by their own slug only.
+- **Chronicle event pages are written as `operator`** although their text is a
+  model summary of the source page, so a later reader or extractor sees owner
+  text. Trust inheritance for derived pages (W3c-3).
+- **A row whose tier cannot be read is let through**: a gated take pinned to a
+  page that does not exist, or a database error in the gate. Remote callers
+  cannot reach the first today (think takes are operator-only).
+- **`refreshClaim` writes a restated fact's `slot_value` before the gate**;
+  the slot value is not among the gated fields.
+- **A released consolidated take is stored as an ordinary fact** (no
+  `consolidated` flag, members not repointed), and a released proposed take has
+  no embedding until something re-embeds it.
+- **A release whose writer re-stores the row (fence rows, ontology) marks the
+  hold released before storing.** A crash in between leaves it released with
+  nothing stored: a fence row comes back on the next page write, an ontology
+  observation does not.
+
 ## Follow-ups from fact slots and known_as_of
 
 - LOW: the change cue that lets a later slot value on another page end an earlier one (`core/fact-slots.ts` CHANGE_CUE) is English only; a move or job change stated in German or Russian on a different page leaves both values open. Extend it with a measured cue list.
