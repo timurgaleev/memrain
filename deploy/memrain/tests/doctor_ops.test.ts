@@ -384,7 +384,9 @@ describe("checkFenceRowsWithoutMarkers", () => {
     const r = await checkFenceRowsWithoutMarkers(storage.engine());
     expect(r.status).toBe("warn");
     expect(r.detail).toContain("first 5000 scanned");
-  });
+    // Seeding 5001 facts runs the per-row trust tier trigger (migration 184);
+    // the check itself is fast, the setup outgrew the default 5s.
+  }, 30_000);
 });
 
 describe("checkNamespaceOnlyTargets", () => {
