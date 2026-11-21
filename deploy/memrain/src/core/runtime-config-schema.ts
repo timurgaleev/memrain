@@ -37,6 +37,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_CHRONICLE_TZ: "string",
   MEMRAIN_CHRONICLE_WRITE_BUDGET_USD: "string",
   MEMRAIN_CHUNK_OVERLAP: "int",
+  MEMRAIN_CODE_EMBED_MAX_USD: "string",
   MEMRAIN_CODE_PATHS: "string",
   MEMRAIN_CODE_SECRET_SCAN: "flag",
   MEMRAIN_CODE_SWEEP_DELAY_MS: "int",

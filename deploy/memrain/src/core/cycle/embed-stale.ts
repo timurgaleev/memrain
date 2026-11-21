@@ -64,6 +64,9 @@ export async function findStale(
      JOIN chunks c     ON c.document_id = d.id
      JOIN embeddings e ON e.chunk_id = c.id
      WHERE e.created_at < NOW() - ($1 || ' days')::interval
+       -- A code file re-read here would go through the markdown indexer and
+       -- come back as prose; its vectors age out with the file, not the clock.
+       AND COALESCE(d.frontmatter->>'kind','') <> 'code'
        AND ${rereadCandidateWhere(3)}
        AND ($4::text IS NULL OR d.source_path > $4::text)
      ORDER BY d.source_path

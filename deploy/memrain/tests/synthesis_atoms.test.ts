@@ -164,6 +164,22 @@ describe("extractAtomsPhase", () => {
     expect(calls).toBe(0);
   });
 
+  // Value: protects=atoms come from notes, never from source code; fails_when=discoverDocuments stops
+  // excluding kind=code; why_new=code documents were picked up as atom sources; seam=llmFn
+  it("never extracts from a code document, and still extracts from a note", async () => {
+    await seedDoc("src", "export function alpha() { return 1; }\n".repeat(20));
+    await engine.query(`UPDATE documents SET frontmatter = '{"kind":"code","language":"typescript"}'::jsonb WHERE id = 'src'`);
+    await seedDoc("note", "N".repeat(500));
+    const seen: string[] = [];
+    const llm: LlmFn = async (req) => {
+      seen.push(JSON.stringify(req));
+      return { text: atomJson("Note", "Note body."), modelId: "fake-nova" };
+    };
+    const r = await extractAtomsPhase(engine, { llmFn: llm });
+    expect(r.documentsScanned).toBe(1);
+    expect(seen.some((s) => s.includes("export function alpha"))).toBe(false);
+  });
+
   it("skips short documents (budget/quality floor)", async () => {
     await seedDoc("d1", "too short");
     const r = await extractAtomsPhase(engine, { llmFn: fakeLlm("[]") });

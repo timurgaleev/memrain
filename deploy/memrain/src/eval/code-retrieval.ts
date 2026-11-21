@@ -11,10 +11,10 @@
  * index, not a retrieval miss. And nothing is scored unless the code index
  * reports `ready` — on any other state zero hits mean "unknown".
  *
- * Code is indexed graph-only (indexer-code.ts): its chunks get no vector, so a
- * plain-words question reaches code through the keyword arm alone, while prose
- * pages compete with both arms. The report counts code chunks with a vector so
- * a low score reads as what it measures.
+ * A code chunk without a vector (indexed before code was embedded, or past the
+ * sweep's embedding cap until `memrain embed --code` fills it) is reachable by
+ * the keyword arm alone, while prose pages compete with both arms. The report
+ * counts code chunks with a vector so a low score reads as what it measures.
  */
 import type { Storage } from "../core/storage.ts";
 import { hybridSearch } from "../core/search/hybrid.ts";

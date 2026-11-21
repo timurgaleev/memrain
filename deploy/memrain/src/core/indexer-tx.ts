@@ -4,8 +4,9 @@
  * Used by both the markdown indexer (`core/indexer.ts`) and the code
  * indexer (`core/indexer-code.ts`). The two callers differ in two ways:
  *
- *   1. Markdown ships per-chunk Titan vectors → embeddings rows.
- *      Code is graph-only (Q1 = hashed-only) → no embeddings.
+ *   1. Markdown wraps chunks in a context prefix before embedding; code
+ *      embeds them raw, under the sweep's dollar cap. Both may ship chunks
+ *      without a vector, for a later fill.
  *   2. Code chunks have line ranges (start_line, end_line) populated by
  *      tree-sitter; markdown chunks leave them NULL.
  *

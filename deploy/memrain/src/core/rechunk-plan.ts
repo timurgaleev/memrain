@@ -20,6 +20,8 @@ import { awsRegion } from "./llm/gateway.ts";
 import { DEFAULT_MODEL_ID, EMBED_DIMENSIONS } from "./embedding.ts";
 import { EMBEDDING_PRICING, worstCaseUsd, type ModelPricing } from "./budget.ts";
 import { OperationError } from "./operation-error.ts";
+import { codeChunkTexts } from "./indexer-code.ts";
+import { codeEmbeddingInput } from "./code-embed.ts";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_CANDIDATES = 10_000;
@@ -175,9 +177,15 @@ export async function loadRechunkInput(engine: Engine, target: Pick<RechunkTarge
 }
 
 async function estimateCost(input: RechunkInput, target: RechunkTarget, selection: RechunkSelection): Promise<number> {
-  if (target.kind === "code") return 0;
-  if (contextualLlmEnabled()) throw new Error("contextual_llm_requires_separate_budgeted_command");
   if (selection.embedding_price === null) throw new Error("unpriced_embedding_model");
+  if (target.kind === "code") {
+    // Every chunk priced as if none kept its vector: the upper bound.
+    const texts = await codeChunkTexts(input.text, target.source_path);
+    return texts.map(codeEmbeddingInput).filter(text => text.trim().length > 0)
+      .reduce((sum, text) => sum + worstCaseUsd({ operation: "embedding", model: selection.model,
+        worstCase: { input: text, maxOutputTokens: 0 } })!, 0);
+  }
+  if (contextualLlmEnabled()) throw new Error("contextual_llm_requires_separate_budgeted_command");
   let text = guardSecrets(input.text, "rechunk preview").text;
   if (target.kind === "markdown") text = applyInference(target.source_path, text).content;
   const chunks = chunkMarkdown(stripTakesFence(stripFactsFence(text))).chunks;

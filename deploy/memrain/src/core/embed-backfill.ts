@@ -1,6 +1,5 @@
 /**
- * Embedding backfill — (re)embed non-code chunks that are missing an
- * `embeddings` row.
+ * Embedding backfill — (re)embed chunks that are missing an `embeddings` row.
  *
  * The markdown indexer embeds every chunk it writes, but a brain can still
  * accumulate non-code chunks with NO embedding: rows indexed before embedding
@@ -10,9 +9,11 @@
  * opens silently. This walks the missing chunks and computes their Titan
  * vectors so the vector arm sees the whole corpus again.
  *
- * Code chunks are graph-only by design (no embeddings) and are excluded: the
- * candidate set is `source-health`'s `embeddable` definition, the same SQL
- * (`embeddableChunkFragment`).
+ * The default candidate set is `source-health`'s `embeddable` definition, the
+ * same SQL (`embeddableChunkFragment`), which leaves code out. A code run
+ * (`kind: "code"`, `memrain embed --code`) walks code chunks instead
+ * (`codeEmbeddableChunkFragment`), embeds the input the code indexer would
+ * (`codeEmbeddingInput`), and is usually held to a dollar cap (`maxUsd`).
  *
  * Provenance auto-invalidation (migration 066, OPT-IN): when
  * `reembedOnSignatureChange` (env `MEMRAIN_REEMBED_ON_SIGNATURE_CHANGE=1`) is set,
@@ -60,11 +61,12 @@
  */
 import { classifyBedrockError, runInBatchScope } from "./llm/bedrock-errors.ts";
 import { withLongHold } from "./pool-budget.ts";
-import { isBudgetRefusal } from "./budget.ts";
+import { BudgetExhausted, costUsd, isBudgetRefusal, worstCaseUsd } from "./budget.ts";
+import { CODE_EMBED_MAX_CHARS, codeEmbeddingInput, EmbedSpendCap } from "./code-embed.ts";
 import type { Engine } from "./engine/interface.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
 import { embeddingInputHash } from "./embedding-input-hash.ts";
-import { embeddableChunkFragment } from "./embed-skip.ts";
+import { codeEmbeddableChunkFragment, embeddableChunkFragment } from "./embed-skip.ts";
 import {
   buildContextualPrefix,
   wrapChunkForEmbedding,
@@ -154,10 +156,21 @@ export interface EmbedBackfillOptions {
    * whole-corpus `--all`. Off by default: a routine backfill only fills gaps.
    */
   forceReembed?: boolean;
+  /**
+   * `"code"`: embed the chunks of code documents (`memrain embed --code`)
+   * instead of the prose corpus. Never combined with `forceReembed` or a
+   * signature swap: a code run only fills code chunks that have no vector.
+   */
+  kind?: "code";
+  /**
+   * Dollar cap for this run: each embed call reserves its worst case first and
+   * the run stops cleanly (`capReached`) at the first one that would cross it.
+   */
+  maxUsd?: number;
 }
 
 export interface EmbedBackfillResult {
-  /** Non-code chunks missing an embedding (capped by `limit`). */
+  /** Chunks missing an embedding in the run's corpus (capped by `limit`). */
   candidates: number;
   /** Rows successfully embedded + inserted. */
   embedded: number;
@@ -183,6 +196,24 @@ export interface EmbedBackfillResult {
    * when no candidate was processed (dry run, or nothing left to embed).
    */
   lastId: string | null;
+  /** `maxUsd` runs: the cap stopped the run before every candidate was embedded. */
+  capReached?: boolean;
+  /** `maxUsd` runs: worst-case dollars reserved by the calls made. */
+  reservedUsd?: number;
+  /**
+   * Code dry runs: UTF-8 bytes of the embedding inputs, a typical cost
+   * (bytes / 4 tokens) and the worst-case bound the cap is checked against.
+   */
+  bytes?: number;
+  estimatedUsd?: number;
+  costUpperBoundUsd?: number;
+}
+
+/** The run's own dollar cap stopped it (not a wallet or client cap). */
+class EmbedCapReached extends BudgetExhausted {
+  constructor(reason: string) {
+    super("cost", reason);
+  }
 }
 
 interface CandidateRow {
@@ -207,6 +238,8 @@ export interface EmbedScope {
   slugs?: string[];
   /** Candidates only: chunks below this many counted embed failures. */
   maxFailures?: number;
+  /** Candidates only: code chunks instead of the prose corpus. */
+  code?: boolean;
 }
 
 /**
@@ -254,8 +287,9 @@ function buildCandidateWhere(
   scope: EmbedScope | undefined,
 ): { where: string; params: unknown[] } {
   const params: unknown[] = [];
+  const corpus = scope?.code ? codeEmbeddableChunkFragment("d", "c") : embeddableChunkFragment("d", "c");
   let where = `em.chunk_id IS NULL
-        AND ${embeddableChunkFragment("d", "c")}`;
+        AND ${corpus}`;
   where += scopeFragment(params, scope);
   if (scope?.maxFailures !== undefined) {
     params.push(scope.maxFailures);
@@ -323,6 +357,47 @@ async function countCandidates(
   const raw = r.rows[0]?.n;
   const n = typeof raw === "number" ? raw : Number(raw) || 0;
   return limit !== undefined && limit > 0 ? Math.min(n, Math.floor(limit)) : n;
+}
+
+/**
+ * Price a code run before it is paid for: the candidates' embedding-input
+ * bytes (the stored text, cut at CODE_EMBED_MAX_CHARS), a typical cost at
+ * four bytes a token, and the worst case the cap reserves (a token per byte
+ * plus per-call framing — `worstCaseUsd` summed). With `limit`, only the
+ * chunks that run would take: the first `limit` in the walk's id order.
+ */
+async function priceCodeCandidates(
+  engine: Engine,
+  model: string,
+  cursor: string | undefined,
+  scope: EmbedScope,
+  limit: number | undefined,
+): Promise<{ bytes: number; estimatedUsd: number; costUpperBoundUsd: number }> {
+  const { where, params } = buildCandidateWhere(cursor, scope);
+  params.push(CODE_EMBED_MAX_CHARS);
+  const cut = `$${params.length}::int`;
+  const bounded = limit !== undefined && limit > 0 ? `LIMIT ${Math.floor(limit)}` : "";
+  // scope: operator-only the operator prices a code backfill from the local CLI
+  const r = await engine.query<{ n: number | string; bytes: number | string | null }>(
+    `SELECT count(*)::int AS n, COALESCE(sum(s.b), 0)::bigint AS bytes
+       FROM (SELECT octet_length(left(c.content, ${cut})) AS b
+               FROM chunks c
+               JOIN documents d ON d.id = c.document_id
+               LEFT JOIN embeddings em ON em.chunk_id = c.id
+              WHERE ${where}
+              ORDER BY c.id COLLATE "C" ASC
+              ${bounded}) s`,
+    params,
+  );
+  const n = Number(r.rows[0]?.n ?? 0);
+  const bytes = Number(r.rows[0]?.bytes ?? 0);
+  // One empty-input call prices the per-call framing the worst case adds.
+  const perCall = worstCaseUsd({ operation: "embedding", model, worstCase: { input: "", maxOutputTokens: 0 } }) ?? 0;
+  return {
+    bytes,
+    estimatedUsd: costUsd(model, { inputTokens: bytes / 4, outputTokens: 0 }),
+    costUpperBoundUsd: costUsd(model, { inputTokens: bytes, outputTokens: 0 }) + n * perCall,
+  };
 }
 
 /**
@@ -459,9 +534,11 @@ function resolvePageSize(opt?: number): number {
  * `contextual_embedded` re-wraps under the deterministic contextual prefix
  * (document title + first-two-sentence synopsis of the opening chunk) so its
  * replacement vector keeps the prefix its marker promises; anything else
- * embeds the raw content. Code docs are never candidates, so isCode is false.
+ * embeds the raw content. A code run embeds what the code indexer would
+ * (`codeEmbeddingInput`), so the stored input hash matches a later re-index.
  */
-function embedInput(row: CandidateRow): string {
+function embedInput(row: CandidateRow, code: boolean): string {
+  if (code) return codeEmbeddingInput(row.content);
   if (!row.contextual_embedded) return row.content;
   const prefix = buildContextualPrefix(
     row.title,
@@ -488,6 +565,7 @@ async function embedPage(
   onEmbedded: () => void,
   onFailed: () => void,
   onStale: () => void,
+  code: boolean,
 ): Promise<void> {
   let next = 0;
   const total = page.length;
@@ -502,7 +580,7 @@ async function embedPage(
       const row = page[i]!;
       let vec: number[];
       try {
-        vec = await embedWithRetry(embed, embedInput(row));
+        vec = await embedWithRetry(embed, embedInput(row, code));
       } catch (err) {
         if (stopsTheRun(err)) {
           fatal ??= { err };
@@ -551,13 +629,13 @@ async function embedPage(
                 JSON.stringify(vec),
                 model,
                 embeddingSignature(model, vec.length),
-                row.contextual_embedded ? "deterministic" : "none",
+                row.contextual_embedded && !code ? "deterministic" : "none",
                 row.content,
                 embeddingInputHash({
                   model,
                   dimensions: vec.length,
-                  tier: row.contextual_embedded ? "deterministic" : "none",
-                  input: embedInput(row),
+                  tier: row.contextual_embedded && !code ? "deterministic" : "none",
+                  input: embedInput(row, code),
                 }),
               ],
             ),
@@ -581,14 +659,14 @@ async function embedPage(
 
 /** An embed failure every later row would hit too: a budget refusal, or a
  *  credential, access or model config the operator has to fix. */
-function stopsTheRun(err: unknown): boolean {
+export function stopsTheRun(err: unknown): boolean {
   if (isBudgetRefusal(err)) return true;
   const cls = classifyBedrockError(err);
   return cls === "credential" || cls === "access" || cls === "model_not_found";
 }
 
 /** The model refused this text itself: the only failure counted against a chunk. */
-function isContentRejection(err: unknown): boolean {
+export function isContentRejection(err: unknown): boolean {
   const cls = classifyBedrockError(err);
   if (cls === "input_too_long") return true;
   return cls === "other" && (err as { name?: unknown } | null)?.name === "ValidationException";
@@ -628,14 +706,33 @@ async function runEmbedBackfillBody(
   // Record the same model id the embedder actually uses, so a backfilled row's
   // recorded model matches the embedder that produced it (no drift).
   const model = opts.model ?? DEFAULT_MODEL_ID;
-  const embed = opts.embed ?? ((t: string) => embedText(t, { modelId: model }));
+  const code = opts.kind === "code";
+  if (code && (opts.forceReembed || opts.reembedOnSignatureChange)) {
+    throw new Error("embed backfill: a code run only fills missing vectors (no forceReembed or signature swap)");
+  }
+  // The run's own cap, reserved synchronously before each call (throttle
+  // retries included: each attempt may bill), so concurrent workers cannot
+  // pass the same headroom. A capped call is sent once by the wallet, so one
+  // reservation covers one request; embedWithRetry's throttle retries reserve
+  // again.
+  const cap = opts.maxUsd !== undefined ? new EmbedSpendCap(opts.maxUsd) : null;
+  const rawEmbed = opts.embed ??
+    ((t: string) => embedText(t, { modelId: model, ...(cap ? { maxAttempts: 1 } : {}) }));
+  const embed = cap
+    ? (t: string): Promise<number[]> => {
+        if (!cap.tryReserve(model, t)) throw new EmbedCapReached(cap.stopReason ?? "embedding cap reached");
+        return rawEmbed(t);
+      }
+    : rawEmbed;
   const currentSig = embeddingSignature(model);
   const batch = opts.batch && opts.batch > 0 ? opts.batch : 50;
   const concurrency = resolveConcurrency(opts.concurrency);
   const pageSize = resolvePageSize(opts.pageSize);
-  const reembedOnSig =
+  // A code run never swaps signatures: the prose-wide selector would delete
+  // prose vectors the code run then never re-embeds.
+  const reembedOnSig = !code && (
     opts.reembedOnSignatureChange ??
-    process.env.MEMRAIN_REEMBED_ON_SIGNATURE_CHANGE === "1";
+    process.env.MEMRAIN_REEMBED_ON_SIGNATURE_CHANGE === "1");
   const scope: EmbedScope | undefined =
     opts.sourceId || (opts.slugs && opts.slugs.length > 0)
       ? {
@@ -646,7 +743,9 @@ async function runEmbedBackfillBody(
   // Candidates only: the forceReembed and signature selectors share EmbedScope
   // through scopeFragment, which never reads it.
   const candidateScope: EmbedScope | undefined =
-    opts.maxFailures !== undefined ? { ...scope, maxFailures: opts.maxFailures } : scope;
+    opts.maxFailures !== undefined || code
+      ? { ...scope, ...(opts.maxFailures !== undefined ? { maxFailures: opts.maxFailures } : {}), ...(code ? { code: true } : {}) }
+      : scope;
 
   // Provenance auto-invalidation (migration 066), opt-in. Count always (so a
   // dry run reports it); delete only on a real run so the freed rows become
@@ -683,6 +782,7 @@ async function runEmbedBackfillBody(
       forceCleared,
       dryRun: true,
       lastId: null,
+      ...(code ? await priceCodeCandidates(engine, model, opts.startAfterId, candidateScope!, opts.limit) : {}),
     };
   }
 
@@ -707,6 +807,7 @@ async function runEmbedBackfillBody(
   // Keyset walk: one page at a time, advancing the cursor by the last id seen.
   // The cap (`opts.limit`) bounds the total rows processed across pages; the
   // `em.chunk_id IS NULL` predicate + forward-only cursor keep it re-entrant.
+  let capReached = false;
   for (;;) {
     opts.signal?.throwIfAborted();
     if (opts.limit !== undefined && opts.limit > 0 && processed >= opts.limit) break;
@@ -717,7 +818,15 @@ async function runEmbedBackfillBody(
     const page = await fetchCandidatePage(engine, cursor, pageLimit, candidateScope);
     if (page.length === 0) break;
 
-    await embedPage(engine, page, model, embed, concurrency, onEmbedded, onFailed, onStale);
+    try {
+      await embedPage(engine, page, model, embed, concurrency, onEmbedded, onFailed, onStale, code);
+    } catch (err) {
+      // The run's own cap is a clean stop: what landed stays, the cache is
+      // still cleared below, and a re-run continues from the remaining gaps.
+      if (!(err instanceof EmbedCapReached)) throw err;
+      capReached = true;
+      break;
+    }
 
     processed += page.length;
     cursor = page[page.length - 1]!.id;
@@ -752,5 +861,6 @@ async function runEmbedBackfillBody(
     forceCleared,
     dryRun: false,
     lastId,
+    ...(cap ? { capReached, reservedUsd: cap.reservedUsd } : {}),
   };
 }

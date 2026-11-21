@@ -149,21 +149,28 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) {
       expect(out.status).toBe("partial");
     });
 
-    it("code graph-only apply costs zero and never invokes the embedding boundary", async () => {
+    // Value: protects=a reviewed code rechunk pays only inside its plan's cap and keeps code vectors;
+    // fails_when=code is priced at zero again (paid calls outside the cap) or apply drops the vectors;
+    // why_new=code chunks are embedded now; seam=embedFn (the plan's bounded embedder)
+    it("prices code embeddings in the plan and embeds them through the plan's bounded embedder", async () => {
       const path = join(root, "module.ts");
       const text = "export function answer() { return 42; }\n";
       writeFileSync(path, text);
       await indexCodeDocument(storage, { sourcePath: path, text });
       await storage.engine().exec("UPDATE documents SET chunker_version = 0");
-      const options: RechunkOptions = { source: "code", codePaths: [root], maxCostUsd: 0, limit: 1 };
+      const zero: RechunkOptions = { source: "code", codePaths: [root], maxCostUsd: 0, limit: 1 };
+      const unaffordable = await buildRechunkPlan(storage, zero);
+      expect(unaffordable.selected).toBe(1);
+      expect(unaffordable.cost_upper_bound_usd).toBeGreaterThan(0);
+      expect(unaffordable.applicable).toBe(false);
+      const options: RechunkOptions = { ...zero, maxCostUsd: 1 };
       const plan = await buildRechunkPlan(storage, options);
-      expect(plan.selected).toBe(1);
-      expect(plan.cost_upper_bound_usd).toBe(0);
       let calls = 0;
-      const result = await applyRechunkPlan(storage, options, plan.plan_hash, { embedFn: async () => { calls++; throw new Error("unexpected embed"); } });
+      const result = await applyRechunkPlan(storage, options, plan.plan_hash, { embedFn: async (t) => { calls++; return embed(t); } });
       expect(result.ok).toBe(true);
-      expect(calls).toBe(0);
-      expect((await storage.engine().query("SELECT chunk_id FROM embeddings")).rows).toEqual([]);
+      expect(calls).toBe(1);
+      expect(result.reserved_cost_upper_bound_usd).toBeLessThanOrEqual(plan.cost_upper_bound_usd);
+      expect((await storage.engine().query("SELECT chunk_id FROM embeddings")).rows.length).toBe(1);
     });
 
     it("includes body and truth mirrors only in source all and leaves v2 automatic maintenance idle", async () => {
@@ -193,10 +200,10 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) {
       await indexCodeDocument(storage, { sourcePath: path, text: "export function valid() { return 1; }" });
       await storage.engine().exec("UPDATE documents SET chunker_version = 0");
       writeFileSync(path, "export function broken( { return ???;");
-      const options: RechunkOptions = { source: "code", codePaths: [root], maxCostUsd: 0 };
+      const options: RechunkOptions = { source: "code", codePaths: [root], maxCostUsd: 1 };
       const plan = await buildRechunkPlan(storage, options);
       const before = await rechunkSnapshot(storage.engine(), plan.targets[0]!.document_id);
-      const result = await applyRechunkPlan(storage, options, plan.plan_hash);
+      const result = await applyRechunkPlan(storage, options, plan.plan_hash, { embedFn: embed });
       expect(result.completed).toEqual([]);
       expect(await rechunkSnapshot(storage.engine(), plan.targets[0]!.document_id)).toBe(before);
     });

@@ -43,6 +43,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--by-kind",
   "--catch-up",
   "--clear",
+  "--code",
   "--contextual",
   "--cosine-rescore",
   "--documents",
@@ -271,7 +272,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["cache", new Set<string>()],
   [
     "embed",
-    new Set(["--all", "--dry-run", "--limit", "--slugs", "--source", "--stale"]),
+    new Set(["--all", "--apply", "--code", "--dry-run", "--limit", "--max-usd", "--slugs", "--source", "--stale"]),
   ],
   ["call", new Set(["--args"])],
   [
@@ -389,7 +390,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
       "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts", "write-gate",
     ]),
   ],
-  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "purge-leftovers", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member", "sources"])],
+  ["--apply", new Set(["embed", "import", "mirror-adopt", "erase", "atoms-retire", "purge-leftovers", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member", "sources"])],
   ["--fix", new Set(["lint"])],
 ]);
 

@@ -593,10 +593,25 @@ place, force a full code pass:
 sudo docker exec deploy-memrain-1 bun run src/cli.ts reindex --source code --all
 ```
 
-It is graph-only (tree-sitter, no Bedrock calls, no spend). Run it once after
-upgrading past the release that stopped the entity re-extract from deleting
-code symbol mentions, or whenever an empty `code_def` reports readiness
-`no_symbols` while code documents exist.
+A chunk whose text is unchanged keeps its vector, so a forced pass pays only
+for new or changed code, under `MEMRAIN_CODE_EMBED_MAX_USD` (default $1 per
+sweep, worst case). Run it once after upgrading past the release that stopped
+the entity re-extract from deleting code symbol mentions, or whenever an empty
+`code_def` reports readiness `no_symbols` while code documents exist.
+
+Code chunks indexed before code was embedded, or past that cap, have no vector
+until you fill them. Price it first, then run it under an explicit cap:
+
+```bash
+sudo docker exec deploy-memrain-1 bun run src/cli.ts embed --code
+sudo docker exec deploy-memrain-1 bun run src/cli.ts embed --code --apply --max-usd 0.50
+```
+
+The dry run prints the count, `estimatedUsd` and `costUpperBoundUsd`; a cap at
+the upper bound finishes in one run. A smaller cap stops cleanly
+(`capReached: true`) and the same command continues from what is left.
+`bun run src/cli.ts eval code` before and after shows how many code chunks
+carry a vector and what that did to hit@5.
 
 The 6-hour maintenance cycle maintains the existing corpus (re-embeds stale
 documents, housekeeping) — it does **not** ingest new files on its own in

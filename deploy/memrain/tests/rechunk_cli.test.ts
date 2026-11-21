@@ -42,15 +42,20 @@ it("rechunk dry-run leaves the code corpus byte-identical at the CLI boundary", 
     const output = JSON.parse(run.stdout.toString());
     expect(output.plan_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(output.selected).toBe(1);
-    expect(output.cost_upper_bound_usd).toBe(0);
+    // Code chunks are embedded, so the plan prices them and a zero cap cannot apply it.
+    expect(output.cost_upper_bound_usd).toBeGreaterThan(0);
     await storage.close(); open = false;
     const apply = Bun.spawnSync([process.execPath, "src/cli.ts", "reindex", "--source", "code", "--paths", tmp,
       "--rechunk-stale", "--plan-hash", output.plan_hash, "--limit", "1", "--max-cost-usd", "0"], {
       cwd: join(import.meta.dir, ".."), env: { ...process.env, MEMRAIN_CONFIG_PATH: config, MEMRAIN_REQUIRE_POSTGRES: "0" },
       stdout: "pipe", stderr: "pipe",
     });
-    expect(apply.exitCode, apply.stderr.toString()).toBe(0);
-    expect(JSON.parse(apply.stdout.toString())).toMatchObject({ ok: true, dry_run: false, status: "complete", embedding_calls: 0 });
+    expect(apply.exitCode).not.toBe(0);
+    expect(apply.stderr.toString()).toContain("exceeds max-cost-usd");
+    storage = new Storage({ dbPath: db });
+    open = true;
+    await storage.init();
+    expect(await snapshot()).toBe(before);
   } finally {
     if (open) await storage.close();
     rmSync(tmp, { recursive: true, force: true });

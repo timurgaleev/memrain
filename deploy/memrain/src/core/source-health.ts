@@ -7,7 +7,8 @@
  * its data, and is the job queue healthy?":
  *
  *   - embed_coverage_pct : of the chunks that SHOULD carry a vector (markdown /
- *     non-code — code chunks are graph-only by design, `kind:'code'` — and not
+ *     non-code — code chunks, `kind:'code'`, fill through `memrain embed
+ *     --code` and are counted apart — and not
  *     under an `embed_skip` page, which the embed paths never touch), how many
  *     actually have an embeddings row. A low value means the vector arm of
  *     hybrid search can't see those chunks (keyword/FTS still can).
@@ -29,7 +30,7 @@ export interface BrainHealthMetrics {
   embedded_chunks: number;
   /** embedded / embeddable, in [0,1]. 1.0 when there is nothing to embed. */
   embed_coverage_pct: number;
-  /** Chunks that are graph-only by design (`kind:'code'`) — excluded from coverage. */
+  /** Code chunks (`kind:'code'`) — embedded by `memrain embed --code`, excluded from coverage. */
   code_chunks: number;
   /** now − newest document update, in seconds. null when no documents. */
   lag_seconds: number | null;
@@ -57,10 +58,10 @@ const LIVE_DOC = (alias: string): string => `${alias}.deleted_at IS NULL AND NOT
 /**
  * Compute the brain-level health metrics in a handful of cheap aggregate
  * queries. Code chunks (`documents.frontmatter->>'kind' = 'code'`) are excluded
- * from the embedding-coverage denominator because they are intentionally
- * graph-only, and chunks under an `embed_skip` page are excluded because the
- * embed paths never touch them — counting either would pin coverage below 100%
- * with no way to converge.
+ * from the embedding-coverage denominator because the automatic fills never
+ * embed them (the code indexer and `memrain embed --code` do), and chunks under
+ * an `embed_skip` page are excluded because the embed paths never touch them —
+ * counting either would pin coverage below 100% with no way to converge.
  */
 export async function brainHealthMetrics(
   engine: Engine,
@@ -140,7 +141,7 @@ export interface PerSourceHealth {
   embedded_chunks: number;
   /** embedded / embeddable, in [0,1]. 1.0 when there is nothing to embed. */
   embed_coverage_pct: number;
-  /** Chunks graph-only by design (`kind:'code'`) — excluded from coverage. */
+  /** Code chunks (`kind:'code'`) — embedded by `memrain embed --code`, excluded from coverage. */
   code_chunks: number;
   /** now − newest document update for this source, in seconds. */
   lag_seconds: number | null;

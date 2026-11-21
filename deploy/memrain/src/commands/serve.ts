@@ -386,7 +386,7 @@ export function startBackgroundWork(
   // CLI (both go through core/sweep.ts → indexer), or via MCP `page_put`.
   // No filesystem vault is watched at startup.
 
-  // code chunkers (graph-only, see TODO External-dep roadmap).
+  // code chunkers (tree-sitter symbols, embedded under MEMRAIN_CODE_EMBED_MAX_USD).
   // Register one source row per MEMRAIN_CODE_PATHS entry, then run a
   // boot sweep. Both are best-effort: registration errors are warned,
   // sweep errors are logged but do NOT abort serve startup.
@@ -409,7 +409,7 @@ export function startBackgroundWork(
         rateLimitPerMinute: 0,
         respectQuietHours: false,
         boostWeight: 1.2,
-        description: `Code corpus rooted at ${root} (graph-only via tree-sitter)`,
+        description: `Code corpus rooted at ${root} (tree-sitter symbols)`,
       }).catch((e) =>
         console.warn(
           `[code] source registration failed for ${sourceId}:`,

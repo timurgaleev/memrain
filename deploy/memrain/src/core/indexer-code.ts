@@ -1,9 +1,9 @@
 /**
  * Code indexer — turns a TypeScript / Python source file into rows in
- * `documents`, `chunks`, `entities`, `entity_mentions`. Graph-only:
- * no Titan calls, no rows in `embeddings`. (Q1 = `indexed_policy =
- * hashed-only`; flip later by computing vectors here and passing them
- * through to writeDocumentTransaction.)
+ * `documents`, `chunks`, `entities`, `entity_mentions` and `embeddings`.
+ * Each chunk is embedded raw (code-embed.ts) through the spend wallet, under
+ * a per-run dollar cap; a chunk whose text and input hash are unchanged keeps
+ * its stored vector, so re-indexing an unchanged file pays nothing.
  *
  * Idempotent at the file level — re-indexing the same source_path
  * replaces all of its chunks (cascade clears entity_mentions too).
@@ -37,6 +37,15 @@ import {
 import { normalizeSourcePath } from "./indexer.ts";
 import { guardLocalIndex, type RereadGuard } from "./sources.ts";
 import { auditSecrets, guardSecrets, guardWrite } from "./secret-scan.ts";
+import type { EmbedFn } from "./indexer.ts";
+import { DEFAULT_MODEL_ID, EMBED_DIMENSIONS, embedText } from "./embedding.ts";
+import { embeddingInputHash } from "./embedding-input-hash.ts";
+import { codeEmbeddingInput, codeEmbedMaxUsd, EmbedSpendCap } from "./code-embed.ts";
+import { acquireWriteEmbedSlot } from "./concurrency.ts";
+import { isLlmAvailable, keywordOnlyMode } from "./llm/gateway.ts";
+import { OperationError } from "./operation-error.ts";
+import { wellFormForText } from "./well-form.ts";
+import { isContentRejection, stopsTheRun } from "./embed-backfill.ts";
 
 export interface IndexCodeResult extends IndexTxResult {
   /**
@@ -50,6 +59,21 @@ export interface IndexCodeResult extends IndexTxResult {
   language: CodeLanguage | null;
   /** True if the file was skipped because the language is unsupported. */
   skipped: boolean;
+  /** Chunks written without a vector because of the cap or an embed failure. */
+  embeddingDeferred?: number;
+}
+
+export interface IndexCodeOptions {
+  /** Embedder; defaults to Titan when AWS is configured, else nothing is embedded. */
+  embedFn?: EmbedFn;
+  embeddingModel?: string;
+  /**
+   * Dollar cap the run's embed calls reserve against. A sweep shares one across
+   * its files; without one each document gets `MEMRAIN_CODE_EMBED_MAX_USD`.
+   */
+  embedCap?: EmbedSpendCap;
+  /** A chunk that cannot be embedded fails the write instead of landing without a vector. */
+  requireCompleteEmbeddings?: boolean;
 }
 
 export interface IndexCodeInput {
@@ -65,7 +89,7 @@ export interface IndexCodeInput {
 }
 
 /** `MEMRAIN_CODE_SECRET_SCAN=0` indexes source text unscanned. On by default. */
-function codeSecretScanOn(): boolean {
+export function codeSecretScanOn(): boolean {
   return !["0", "false", "off", "no"].includes((process.env.MEMRAIN_CODE_SECRET_SCAN ?? "").trim().toLowerCase());
 }
 
@@ -149,6 +173,7 @@ async function chunkCodeOrDegrade(
 export async function indexCodeDocument(
   storage: Storage,
   input: IndexCodeInput,
+  opts: IndexCodeOptions = {},
 ): Promise<IndexCodeResult> {
   if (!input.sourcePath || input.text === undefined) {
     throw new Error("indexCodeDocument: sourcePath and text are required");
@@ -251,18 +276,16 @@ export async function indexCodeDocument(
   // separators. Line stamps for the fallback: startLine 1,
   // endLine = the window's own line count (window offsets aren't tracked).
   // File-level imports, when present, attach to the first fallback chunk.
-  if (parsed.symbols.length === 0 && text.trim().length > 0) {
-    const windows = chunkPlainText(text);
-    for (let i = 0; i < windows.length; i++) {
-      chunkWrites.push({
-        text: windows[i]!,
-        startLine: 1,
-        endLine: windows[i]!.split(/\r?\n/).length,
-        embedding: null,
-        language, // not a symbol, but still this language
-        entities: i === 0 ? fileImportRefs : [],
-      });
-    }
+  const windows = fallbackWindows(parsed, text);
+  for (let i = 0; i < windows.length; i++) {
+    chunkWrites.push({
+      text: windows[i]!,
+      startLine: 1,
+      endLine: windows[i]!.split(/\r?\n/).length,
+      embedding: null,
+      language, // not a symbol, but still this language
+      entities: i === 0 ? fileImportRefs : [],
+    });
   }
 
   // A file that reached here with nothing to write is BLANK (0 bytes or only
@@ -272,6 +295,8 @@ export async function indexCodeDocument(
   // empty file produces the same zero chunks forever.
   const frontmatter: Record<string, unknown> = { language, kind: "code" };
   if (chunkWrites.length === 0) frontmatter[EMPTY_SOURCE_KEY] = true;
+
+  const embedded = await embedCodeChunks(storage, id, input.sourcePath, chunkWrites, opts);
 
   const result = await writeDocumentTransaction(
     storage,
@@ -287,13 +312,13 @@ export async function indexCodeDocument(
       // pre-fallback behaviour — the file is re-indexed every sweep and gets its
       // symbols back the moment the grammar links again.
       mtimeMs: parsed.degraded ? null : (input.mtimeMs ?? null),
-      embeddingModel: null,
+      embeddingModel: embedded.model,
       chunkerVersion: CODE_CHUNKER_VERSION,
       sourceId: input.sourceId ?? null,
       ...(input.expectOwner !== undefined ? { expectOwner: input.expectOwner } : {}),
       ...(input.beforeCommit ? { beforeCommit: input.beforeCommit } : {}),
     },
-    chunkWrites,
+    embedded.chunks,
     { codeEdges },
   );
 
@@ -302,7 +327,141 @@ export async function indexCodeDocument(
     hasParseError: parsed.hasParseError,
     language,
     skipped: false,
+    ...(embedded.deferred > 0 ? { embeddingDeferred: embedded.deferred } : {}),
   };
+}
+
+/** Plain text windows for a file whose parse yielded no symbol (see indexCodeDocument). */
+function fallbackWindows(parsed: CodeChunked, text: string): string[] {
+  return parsed.symbols.length === 0 && text.trim().length > 0 ? chunkPlainText(text) : [];
+}
+
+/**
+ * The chunk texts indexCodeDocument would write for `text` at `sourcePath`, for
+ * pricing a re-index before it runs. Same redaction, parse and fallback; no
+ * database, no audit.
+ */
+export async function codeChunkTexts(text: string, sourcePath: string): Promise<string[]> {
+  const language = languageForFile(sourcePath);
+  if (!language) return [];
+  const redacted = codeSecretScanOn() ? guardSecrets(text, sourcePath, { preserveLines: true }).text : text;
+  const parsed = await chunkCodeOrDegrade(redacted, sourcePath, language);
+  return [...parsed.symbols.map((symbol) => symbol.body), ...fallbackWindows(parsed, redacted)];
+}
+
+/**
+ * Give each chunk a vector before the write. A chunk whose stored vector was
+ * embedded from the same input (migration 187's hash; NULL = unknown, reused by
+ * text) keeps it for free. The rest are embedded one at a time, each reserving
+ * its worst case against the run's cap first.
+ *
+ * A vector is an extra on top of the code graph, so by default nothing here
+ * fails the write: a chunk that cannot be embedded lands without a vector and
+ * `memrain embed --code` fills it later. Which chunks that covers depends on
+ * the failure: the model refusing one chunk's text skips that chunk; a passing
+ * failure (throttle, timeout) skips the rest of this file; the cap, or a
+ * failure every call would repeat (a spent budget, credentials, access, an
+ * unknown model), stops the cap's whole run, so a sweep does not try again on
+ * every file. Without an injected embedder, embedding needs AWS configured
+ * (isLlmAvailable): an install without it indexes the graph quietly.
+ */
+async function embedCodeChunks(
+  storage: Storage,
+  documentId: string,
+  sourcePath: string,
+  chunks: readonly ChunkWrite[],
+  opts: IndexCodeOptions,
+): Promise<{ chunks: ChunkWrite[]; model: string | null; deferred: number }> {
+  const model = opts.embeddingModel ?? DEFAULT_MODEL_ID;
+  const keywordOnly = keywordOnlyMode();
+  // The wallet sends a capped call once, so one reservation covers one request.
+  const titan: EmbedFn = (text, o) => embedText(text, { ...o, maxAttempts: 1 });
+  const embed = keywordOnly ? null : (opts.embedFn ?? (isLlmAvailable() ? titan : null));
+  const prior = await priorCodeVectors(storage, documentId, model);
+  const cap = opts.embedCap ?? new EmbedSpendCap(codeEmbedMaxUsd());
+  const out: ChunkWrite[] = [];
+  let deferred = 0;
+  let fileStop: string | null = null;
+  let vectors = 0;
+  for (const chunk of chunks) {
+    const input = codeEmbeddingInput(chunk.text);
+    if (input.trim().length === 0) {
+      out.push(chunk);
+      continue;
+    }
+    const hash = embeddingInputHash({ model, dimensions: EMBED_DIMENSIONS, tier: "none", input });
+    const stored = prior.get(wellFormForText(chunk.text));
+    if (stored && (stored.hash === null || stored.hash === hash || keywordOnly)) {
+      out.push({ ...chunk, embedding: stored.vec, embeddingInputHash: stored.hash });
+      vectors++;
+      continue;
+    }
+    if (!embed) {
+      out.push(chunk);
+      continue;
+    }
+    if (fileStop !== null || !cap.tryReserve(model, input)) {
+      if (opts.requireCompleteEmbeddings) {
+        throw new OperationError(
+          "budget_exhausted",
+          `code chunk not embedded: ${fileStop ?? cap.stopReason}`,
+          "Raise the cap or index fewer files.",
+        );
+      }
+      out.push(chunk);
+      deferred++;
+      continue;
+    }
+    const release = await acquireWriteEmbedSlot();
+    try {
+      const vec = await embed(input, { modelId: model });
+      out.push({ ...chunk, embedding: vec, embeddingInputHash: hash });
+      vectors++;
+    } catch (e) {
+      if (opts.requireCompleteEmbeddings) throw e;
+      const reason = e instanceof Error ? e.message.slice(0, 200) : String(e);
+      if (stopsTheRun(e)) cap.stop(reason);
+      else if (!isContentRejection(e)) fileStop = reason;
+      out.push(chunk);
+      deferred++;
+    } finally {
+      release();
+    }
+  }
+  // A sweep shares one cap and reports its own total once; a lone document says it here.
+  if (deferred > 0 && opts.embedCap === undefined) {
+    console.warn(
+      `[code] ${deferred} chunk(s) of '${sourcePath}' stored without a vector ` +
+        `(${fileStop ?? cap.stopReason ?? "the model refused the text"}); \`memrain embed --code\` fills them`,
+    );
+  }
+  return { chunks: out, model: vectors > 0 ? model : null, deferred };
+}
+
+/** This document's stored vectors under `model` and the current width, keyed by chunk text. */
+async function priorCodeVectors(
+  storage: Storage,
+  documentId: string,
+  model: string,
+): Promise<Map<string, { vec: number[]; hash: string | null }>> {
+  const prior = new Map<string, { vec: number[]; hash: string | null }>();
+  try {
+    // scope: upstream the document is the one this write owns
+    const { rows } = await storage.engine().query<{ content: string; vec: string; input_hash: string | null }>(
+      `SELECT c.content, e.vector::text AS vec, e.input_hash
+         FROM chunks c JOIN embeddings e ON e.chunk_id = c.id
+        WHERE c.document_id = $1 AND e.model = $2`,
+      [documentId, model],
+    );
+    for (const r of rows) {
+      const vec = JSON.parse(r.vec) as number[];
+      if (vec.length === EMBED_DIMENSIONS) prior.set(r.content, { vec, hash: r.input_hash ?? null });
+    }
+  } catch {
+    // No reuse this pass: every chunk is embedded again.
+    prior.clear();
+  }
+  return prior;
 }
 
 /**
@@ -316,7 +475,7 @@ const MAX_INDEX_CODE_FILE_BYTES = 5 * 1024 * 1024;
 export async function indexCodeFile(
   storage: Storage,
   filePath: string,
-  opts: { rereadGuard?: RereadGuard } = {},
+  opts: { rereadGuard?: RereadGuard; embedCap?: EmbedSpendCap } = {},
 ): Promise<IndexCodeResult> {
   let stat;
   try {
@@ -343,5 +502,5 @@ export async function indexCodeFile(
     text,
     mtimeMs: Math.floor(stat.mtimeMs),
     expectOwner,
-  });
+  }, opts.embedCap ? { embedCap: opts.embedCap } : {});
 }

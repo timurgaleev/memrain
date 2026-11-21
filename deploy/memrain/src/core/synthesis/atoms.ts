@@ -282,7 +282,8 @@ export function isWellFormedEmptyExtraction(raw: string): boolean {
  * memrain stores body text in `chunks`, not on `documents`, so the per-document
  * text is the concatenation of its chunks (ordered). Soft-deleted documents
  * (migration 040 added `deleted_at`) are excluded, and so are quarantined
- * ones: text the gate hid from search must not come back as an atom.
+ * ones: text the gate hid from search must not come back as an atom. Code
+ * documents are left out too: source code is not a note to learn lessons from.
  */
 async function discoverDocuments(
   engine: Engine,
@@ -302,6 +303,7 @@ async function discoverDocuments(
        FROM documents d
        JOIN chunks c ON c.document_id = d.id
       WHERE d.deleted_at IS NULL
+        AND COALESCE(d.frontmatter->>'kind','') <> 'code'
         AND ${quarantineFilterFragment("d")}
         AND ${notSynthesizedDocSql("d")}
       GROUP BY d.id, d.source_id, d.effective_date, d.ingested_at

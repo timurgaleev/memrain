@@ -204,8 +204,9 @@ Keep the receipt with the before/after data manifest.
 Markdown work reserves its upper-bound embedding cost before each call;
 unknown embedding prices refuse the plan, and failed calls retain their
 reservation. This bounded path allows one SDK attempt per call, so hidden
-retries cannot multiply the ceiling. Code-only work is graph-only and accepts
-`--max-cost-usd 0`. With `MEMRAIN_CONTEXTUAL_LLM=1`, bounded Markdown rechunk
+retries cannot multiply the ceiling. Code work is priced the same way: every
+code chunk at its worst case, as if none kept its vector, so a code plan needs
+a non-zero `--max-cost-usd`. With `MEMRAIN_CONTEXTUAL_LLM=1`, bounded Markdown rechunk
 refuses the plan; the paid contextual tier has its separate
 `reindex --contextual` workflow. Deterministic contextual prefixes are priced
 within the rechunk ceiling.

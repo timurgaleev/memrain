@@ -53,8 +53,8 @@ export interface ReindexCommandOptions {
   /**
    * Preview only documents below their current chunker version. A planHash
    * applies that exact bounded selection; it does not run an incremental sweep
-   * alongside it. Source all includes canonical body/truth mirrors. Code stays
-   * graph-only; Markdown embedding calls share maxCostUsd.
+   * alongside it. Source all includes canonical body/truth mirrors. Code and
+   * Markdown embedding calls share maxCostUsd.
    */
   rechunkStale?: boolean;
   /**

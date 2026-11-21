@@ -242,6 +242,9 @@ function printUsage(): void {
   console.log("  embed [<slug>] [--slugs a,b] [--all] [--stale] [--source ID] [--limit N] [--dry-run]");
   console.log("                               backfill missing vectors; <slug>/--slugs/--all re-embed targets,");
   console.log("                               --stale also refreshes signature-stale rows");
+  console.log("  embed --code [--source ID] [--limit N] [--apply --max-usd X]");
+  console.log("                               vectors for code chunks that have none; a priced dry run");
+  console.log("                               unless --apply, which stops cleanly at the --max-usd cap");
   console.log("  eval-replay capture <id> --query Q --tag good|bad [--expected-doc D] [--k N] [--search-mode hybrid|keyword]");
   console.log("  eval-replay list [--tag T] [--limit N]");
   console.log("  eval-replay run [--tag T] [--limit N] [--promote]");
@@ -1327,6 +1330,11 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (flags.has("--stale")) opts.stale = true;
       const embedSource = values.get("--source");
       if (embedSource) opts.sourceId = embedSource;
+      // Code vectors: a dry run unless --apply, which needs --max-usd.
+      if (flags.has("--code")) opts.code = true;
+      if (flags.has("--apply")) opts.apply = true;
+      const maxUsdStr = values.get("--max-usd");
+      if (maxUsdStr !== undefined) opts.maxUsd = Number(maxUsdStr);
       return await runEmbed(opts);
     }
     case "call": {

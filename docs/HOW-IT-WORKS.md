@@ -36,6 +36,15 @@ or anything your agent saves through MCP. For each document it:
 3. **Stores** everything in Postgres in your AWS account. The database is the
    record, not the files on disk.
 
+Code is split by symbol (function, class, method) instead of by paragraph, and
+each symbol also lands in the code graph behind `code_def` and `code_callers`.
+Its passage is embedded raw, so a plain-words question can find the function
+that answers it. A re-index pays only for symbols whose text changed, and one
+sweep of the code never spends more than `MEMRAIN_CODE_EMBED_MAX_USD`; code
+that sweep left without a vector waits for `memrain embed --code`. Code is
+never a source for atoms (the lessons the maintenance cycle distils from
+notes).
+
 Chat history comes in the same way. `memrain transcripts ingest` reads ChatGPT
 and Claude.ai exports, Codex CLI rollouts (`~/.codex/sessions`) and Claude Code
 session logs (`~/.claude/projects`), one file or a whole directory. It keeps

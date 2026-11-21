@@ -19,13 +19,9 @@
  * WHAT IS SKIPPED (and why the vector arm stays correct):
  *   - Soft-deleted documents (`deleted_at IS NOT NULL`) — retired content.
  *   - `embed_skip` documents — intentionally never embedded (keyword-only).
- *   - Code documents (`frontmatter.kind = 'code'`) — graph-only by design. Code
- *     chunks carry NO `embeddings` row; that absence is the ONLY thing keeping
- *     code out of the vector arm (`core/search/vector.ts` has no kind filter).
- *     Creating a code embedding — even raw/unwrapped — would make code surface
- *     in vector search, breaking the graph-only invariant that
- *     `embed-backfill` also enforces. So code is excluded outright, never
- *     embedded and never marked.
+ *   - Code documents (`frontmatter.kind = 'code'`) — embedded raw by the code
+ *     indexer and `memrain embed --code` (`core/code-embed.ts`), never under a
+ *     context prefix. This command never touches or marks them.
  * This is the same "embeddable" candidate definition embed-backfill / source-
  * health use, so a chunk this command re-embeds is exactly a chunk that already
  * had (or should have) a vector.

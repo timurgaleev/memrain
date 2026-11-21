@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { Storage } from "./storage.ts";
 import { indexCodeFile } from "./indexer-code.ts";
+import { codeEmbedMaxUsd, EmbedSpendCap } from "./code-embed.ts";
 import { normalizeSourcePath } from "./indexer.ts";
 import { walkFiles } from "./walk.ts";
 import { listStaleChunkerDocIds } from "./chunker-version.ts";
@@ -64,6 +65,8 @@ export interface SweepCodeResult {
    * a clean drain. Same contract as `SweepResult.staleChunkerUnreached`.
    */
   staleChunkerUnreached?: string[];
+  /** Chunks this walk wrote without a vector (the embedding cap or an embed failure). */
+  embeddingDeferred?: number;
 }
 
 // Default ignore set for the CODE sweep. Intentionally narrower than
@@ -196,6 +199,10 @@ async function sweepCodeRootsInner(
   // is the provenance fence for the source classification below — a path the
   // walk merely saw proves nothing about who wrote the row sitting at it.
   const indexed: string[] = [];
+  // One embedding cap for the whole walk: a first sweep, or a forced one, must
+  // not pay per file without bound.
+  const embedCap = new EmbedSpendCap(codeEmbedMaxUsd());
+  let embeddingDeferred = 0;
 
   for (const root of opts.paths) {
     const perRoot = { root, files: 0, missing: !existsSync(root) };
@@ -242,7 +249,8 @@ async function sweepCodeRootsInner(
       }
       try {
         // Same re-check as the vault sweep: `known` is a snapshot.
-        const out = await indexCodeFile(storage, file.path, { rereadGuard: mayReread });
+        const out = await indexCodeFile(storage, file.path, { rereadGuard: mayReread, embedCap });
+        embeddingDeferred += out.embeddingDeferred ?? 0;
         result.reindexed++;
         indexed.push(canonical);
         if (out.hasParseError) result.parseErrors++;
@@ -257,6 +265,14 @@ async function sweepCodeRootsInner(
       }
     }
     result.perRoot.push(perRoot);
+  }
+
+  if (embeddingDeferred > 0) {
+    result.embeddingDeferred = embeddingDeferred;
+    console.warn(
+      `[code] ${embeddingDeferred} chunk(s) stored without a vector this sweep ` +
+        `(${embedCap.stopReason ?? "an embed failed"}); \`memrain embed --code\` fills them`,
+    );
   }
 
   // Only meaningful on a COMPLETE walk: a maxFiles break leaves later stale

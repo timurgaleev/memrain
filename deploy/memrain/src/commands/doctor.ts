@@ -373,7 +373,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
         name: "source-health", ok: true, status: h.failed_jobs_24h > 0 ? "warn" : "ok",
         detail: `embed_coverage=${(h.embed_coverage_pct * 100).toFixed(1)}% ` +
           `(${h.embedded_chunks}/${h.embeddable_chunks} embeddable` +
-          `${h.code_chunks > 0 ? `, ${h.code_chunks} code graph-only` : ""}) ` +
+          `${h.code_chunks > 0 ? `, ${h.code_chunks} code not counted` : ""}) ` +
           `lag=${h.lag_seconds === null ? "n/a" : `${h.lag_seconds}s`} ` +
           `queue=${h.queue_depth} failed_24h=${h.failed_jobs_24h}` +
           (h.failed_jobs_24h > 0 ? "; inspect failed jobs and their causes before memrain jobs retry <id>" : ""),

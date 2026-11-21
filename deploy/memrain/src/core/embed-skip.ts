@@ -72,6 +72,8 @@ export function embedSkipFilterFragment(docAlias = "d"): string {
  * coverage metric (source-health, and doctor / remediation behind it) counts
  * its denominator with it: a chunk one side counts and the other never embeds
  * pins coverage below 100% and fails every re-embed that "embedded nothing".
+ * Code chunks are embedded by the code indexer and `memrain embed --code`
+ * (`codeEmbeddableChunkFragment`), never by the automatic prose fills.
  */
 export function embeddableChunkFragment(docAlias = "d", chunkAlias = "c"): string {
   assertSqlAlias(docAlias);
@@ -79,5 +81,14 @@ export function embeddableChunkFragment(docAlias = "d", chunkAlias = "c"): strin
   return `${docAlias}.deleted_at IS NULL AND NOT ${docAlias}.archived
         AND COALESCE(${docAlias}.frontmatter->>'kind','') <> 'code'
         AND ${embedSkipFilterFragment(docAlias)}
+        AND length(btrim(${chunkAlias}.content)) > 0`;
+}
+
+/** The code half: a non-empty chunk of a live, unarchived code document. */
+export function codeEmbeddableChunkFragment(docAlias = "d", chunkAlias = "c"): string {
+  assertSqlAlias(docAlias);
+  assertSqlAlias(chunkAlias);
+  return `${docAlias}.deleted_at IS NULL AND NOT ${docAlias}.archived
+        AND ${docAlias}.frontmatter->>'kind' = 'code'
         AND length(btrim(${chunkAlias}.content)) > 0`;
 }

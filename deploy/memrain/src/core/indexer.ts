@@ -9,7 +9,7 @@
  *
  * The atomic doc+chunks+entities writer lives in `core/indexer-tx.ts` so
  * the markdown indexer (this file, embeds via Titan) and the code
- * indexer (`core/indexer-code.ts`, graph-only) share one txn shape.
+ * indexer (`core/indexer-code.ts`) share one txn shape.
  */
 import { auditSecrets, guardSecrets, guardWrite } from "./secret-scan.ts";
 import { lstatSync, readFileSync, statSync } from "node:fs";
