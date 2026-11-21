@@ -60,7 +60,7 @@ export async function contestIfLessTrusted(
   const ins = await tx.query<{ id: number }>(
     // scope: upstream the new fact the calling writer just inserted in its own scope
     `INSERT INTO trust_proposals (action, guard, source_id, target_id, related_id, before_state, proposer_principal)
-     SELECT 'supersede_fact', $1, f.source_id, $2, $3, $4::jsonb, f.written_by_principal
+     SELECT 'supersede_fact', $1, f.source_id, $2, $3, $4::text::jsonb, f.written_by_principal
        FROM entity_facts f WHERE f.id = $3
      ON CONFLICT (target_id, related_id) WHERE status = 'pending' DO NOTHING
      RETURNING id`,

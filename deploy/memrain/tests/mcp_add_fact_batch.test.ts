@@ -220,7 +220,7 @@ describe("add_fact replaces", () => {
     expect(r.replace_reason).toBe("not_live_or_out_of_scope");
     expect((await row(hidden.id!)).forgotten_at).toBeNull();
 
-    const shown = await addFact(storage, { entity_slug: "people/a", fact: "world claim", source_id: "tenant-a", visibility: "world" });
+    const shown = await addFact(storage, { entity_slug: "people/a", fact: "world claim", source_id: "tenant-a", visibility: "world", written_by_principal: "client:client-tenant-a" });
     const ok = body(await call({ entity_slug: "people/a", fact: "newer world claim", visibility: "world", replaces: shown.id }, { authInfo: tenant("tenant-a") }));
     expect(ok.replaced).toBe(true);
   });
