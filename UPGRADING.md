@@ -559,3 +559,24 @@ on start. Both have a down file in `deploy/memrain/src/core/migrations-down/`.
   write gate in flag mode; a match writes a receipt and nothing else. Set
   `MEMRAIN_WRITE_GATE_AGENT=off` or `MEMRAIN_WRITE_GATE_EXTERNAL=off` to skip
   an origin.
+
+## From 2.2 to 2.3
+
+2.3 is a normal deploy: `bash deploy/deploy.sh` applies migration 180 on
+start. It has a down file in `deploy/memrain/src/core/migrations-down/`.
+
+- **Migration 180** adds `secret_store` and `secret_store_occurrences`. From
+  now on a page write keeps the credential its redaction removed, sealed under
+  the connector key (`MEMRAIN_CONNECTOR_KEK` or `MEMRAIN_CONNECTOR_KEK_FILE`).
+  Without that key nothing is kept and writes go ahead as before. Values
+  redacted before the upgrade were never kept and cannot be recovered. See
+  SECURITY.md, "Kept originals".
+- **Transcripts get three more rules**: cookie values, `.netrc` passwords and a
+  label whose value sits alone on the next line or message. They run on
+  `memrain transcripts ingest` and `push` only, and keep what they redact in
+  the secret store. To rescan transcripts stored before the upgrade, run
+  `memrain secrets audit --transcripts` (a dry run that prints counts and page
+  slugs), then `--apply --yes`, which refuses without the connector key.
+- **The secret scanner is now version 8.** `memrain doctor` warns that the last
+  secrets audit used an older scanner until you run `memrain secrets audit`
+  again.

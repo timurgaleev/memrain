@@ -81,7 +81,8 @@ write gate that flags text written as instructions to an AI.
 Upgrading from 1.16 needs no action; see [UPGRADING.md](./UPGRADING.md#from-116-to-20).
 2.1 builds on it with fixes; its upgrade notes are in
 [UPGRADING.md](./UPGRADING.md#from-20-to-21). 2.2 makes owner approval the
-default for new agent sign-ins; see [UPGRADING.md](./UPGRADING.md#from-21-to-22).
+default for new agent sign-ins; see [UPGRADING.md](./UPGRADING.md#from-21-to-22). 2.3 keeps
+redacted originals in an encrypted store; see [UPGRADING.md](./UPGRADING.md#from-22-to-23).
 
 ## See it work
 

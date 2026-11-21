@@ -6,6 +6,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-11-21
+
+A release about secrets. A redaction no longer destroys what it removed: the
+value is sealed in an encrypted store under the connector key, so a false
+positive can be put back and a real credential stays recoverable for its
+owner, never for an agent. Agent transcripts get rules for what pasted
+sessions actually carry: session cookies, `.netrc` entries, and a key typed on
+the line after its label. A new transcript audit rescans what is already
+stored with those rules and keeps every original before it rewrites a page.
+Upgrade notes: [UPGRADING.md](./UPGRADING.md#from-22-to-23).
+
+### Added
+
+- Redacted credentials are no longer lost: when a page write (`page_put`, `page_append`, `page_edit`, the CLI) replaces a credential with its `[REDACTED:<kind>:<fingerprint>]` marker, the value it removed is kept in the new `secret_store` table (migration 180), sealed with AES-256-GCM under the connector key (`MEMRAIN_CONNECTOR_KEK` / `MEMRAIN_CONNECTOR_KEK_FILE`) and bound to its source and fingerprint. Without that key nothing is kept and the write goes ahead. Connector pages keep nothing. Values redacted before this release, and anything the whole-brain `memrain secrets audit --apply` redacts, were not kept and cannot be recovered. No log, receipt, response or ingest-log row carries a value.
+- `memrain secrets originals | reveal <slug> <fingerprint> | restore <slug> <fingerprint> [--apply --plan-hash H] | backup [--dir D] | restore-backup <file>`. A restore puts a false positive back only while the live page still holds the marker the redaction wrote there, as a new page version, and from then on the value is allowed in that source. Every reveal and restore leaves a `secret-revealed` / `secret-restored` ingest-log row (kind, fingerprint, actor; never the value) and, with `MEMRAIN_AUDIT_DIR`, a line in the 0600 audit file.
+- `reveal_secret` for the admin panel session. It is not listed or callable over MCP (internal token, OAuth or personal tokens, public ingress), so an agent steered by text it read cannot pull a kept credential back out; on the host, use `memrain secrets reveal`.
+- `memrain secrets backup` writes an encrypted export of the store (0600, `<config dir>/secret-store/backups/`, no slug, fingerprint or kind in clear); `restore-backup` brings back only originals whose live page still holds the marker, so it never undoes a purge. `memrain doctor` reports `secret-store`: unreadable entries, entries no page holds, or a store changed since the last backup.
+- Agent transcripts (`memrain transcripts ingest` and `push`) are scanned with three more rules: cookie values after a `Cookie:` or `Set-Cookie:` header or a curl `-b`/`--cookie` argument (cookie names, `Set-Cookie` attributes and values under 8 characters stay), a `.netrc` password on one line or inside a multi-line `machine` stanza, and a key, token or password label that ends a line or a message with the value alone on the next one. Markers name `cookie-header`, `netrc-password` or `labeled-credential`. Other writes, and connector mail, calendar and meeting pages, do not run them. Every original these rules redact is kept in the secret store; a push carries them to its worker sealed under the connector key, never in clear.
+- `memrain secrets audit --transcripts [--slug-prefixes P/,Q/]` rescans stored agent transcripts (default `transcripts/`; connector pages never, whatever the prefix) with those rules and reports counts by kind and page slugs only. `--apply --yes` refuses without the connector key, keeps every original in the store in the same transaction as the new version, and rewrites a page only when putting each original back over its marker gives the stored text exactly. Older versions of those pages keep what they held.
+
+### Changed
+
+- Purging a page (and a connector hard delete) removes its places in the secret store and every original no other page holds; a rename takes them along. `purge_deleted_pages` reports `secret_originals`. `memrain connectors rotate-kek` reseals the store too.
+- The secret scanner rules are at version 8, so `memrain doctor` reports `secret-exposure` until the next whole-brain `memrain secrets audit` runs.
+
+### Fixed
+
+- A credential-shaped assignment the scanner rejected (a path such as `token=./run.sh?…`, or an encoded URL) no longer hides a credential later in its value: the search resumes at the rejected value's start, so `…?password=<secret>` is still redacted.
+- Transcript ingest now leaves a value the owner restored in that source in place, as page writes already did.
+
 ## [2.2.0] — 2026-11-21
 
 A release about trust and correctness. Every new agent sign-in now waits for

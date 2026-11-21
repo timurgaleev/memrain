@@ -2,4 +2,4 @@
  * The release a live brain upgrades from: its tag and the last migration it
  * shipped. The release commit bumps it to the tag being cut.
  */
-export const PREVIOUS_RELEASE = { tag: "v2.2.0", lastMigration: 179 } as const;
+export const PREVIOUS_RELEASE = { tag: "v2.3.0", lastMigration: 180 } as const;
