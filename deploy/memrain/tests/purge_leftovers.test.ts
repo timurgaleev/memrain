@@ -16,6 +16,8 @@ import type { Engine } from "../src/core/engine/interface.ts";
 import { putPage } from "../src/core/pages.ts";
 import { planDerivedCleanup } from "../src/core/synthesis/derived-cleanup.ts";
 import { applyPurgeLeftovers, checkPurgeLeftovers, restorePurgeLeftovers } from "../src/core/purge-leftovers.ts";
+import { pageSourcePath } from "../src/core/page-index.ts";
+import { deterministicEmbed } from "./det-embed.ts";
 
 let storage: Storage;
 let engine: Engine;
@@ -131,6 +133,25 @@ describe("purge leftovers", () => {
     const after = await snapshot();
     await expect(restorePurgeLeftovers(engine, exportPath)).rejects.toThrow(/concepts\/mixed/);
     expect(await snapshot()).toEqual(after);
+  });
+
+  it("rebuilds the search mirrors of the pages it rewrites, and of the pages a restore brings back", async () => {
+    await seedLeftovers();
+    const embedFn = async (text: string) => deterministicEmbed(text);
+    const mirror = async (slug: string) => (await engine.query<{ chunks: number; embedded: number }>(
+      `SELECT count(c.id)::int AS chunks, count(e.chunk_id)::int AS embedded FROM documents d
+         JOIN chunks c ON c.document_id = d.id LEFT JOIN embeddings e ON e.chunk_id = c.id
+        WHERE d.source_path = $1`, [pageSourcePath(slug, "default")])).rows[0]!;
+    const plan = await planDerivedCleanup(engine, { orphans: true });
+    const exportPath = join(tmp, "export.json");
+    const applied = await applyPurgeLeftovers(engine, { planHash: plan.plan_hash, exportPath, storage, embedFn });
+    expect(applied.mirrors).toEqual({ mirrored: ["concepts/mixed"], failed: [] });
+    expect((await mirror("concepts/mixed")).embedded).toBeGreaterThan(0);
+    expect((await mirror("concepts/allgone")).chunks).toBe(0);
+    const restored = await restorePurgeLeftovers(engine, exportPath, { storage, embedFn });
+    expect(restored.mirrors.failed).toEqual([]);
+    expect(restored.mirrors.mirrored.sort()).toEqual(["atoms/2026-07-01/gone-one-aaaaaaaa", "concepts/allgone", "concepts/mixed"]);
+    for (const slug of restored.mirrors.mirrored) expect((await mirror(slug)).embedded).toBeGreaterThan(0);
   });
 
   it("exports, applies exactly the plan, and restores from the export", async () => {

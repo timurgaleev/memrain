@@ -987,8 +987,11 @@ change to `FILE` (a new file, mode 0600), and then applies. The synthesis
 tables have no soft delete, so that export is the undo: `restore --from FILE`
 puts the rows, the pages' earlier text and the retired facts back. It refuses
 when a page or concept it touched changed since the apply, and works only
-while the pages it hid are still soft-deleted (the 30-day page TTL). Search
-mirrors of the touched pages are rebuilt by the cycle's mirror phase.
+while the pages it hid are still soft-deleted (the 30-day page TTL). Apply and
+restore drop the search mirrors of the pages they rewrite and rebuild them
+from the new text right after the commit; a page whose mirror could not be
+rebuilt is listed under `mirrors.failed` with `next: memrain cycle --phases
+mirror-pages`, which retries it.
 
 ```text
 memrain erase forgotten --source SOURCE [--fact-ids ID1,ID2] [--deleted-pages SLUG1,SLUG2]

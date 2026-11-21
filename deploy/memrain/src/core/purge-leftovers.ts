@@ -10,12 +10,17 @@
  * one transaction it plans again, refuses when the hash differs, writes every
  * row it is about to change to the export (0600), and only then applies. The
  * synth tables have no soft delete, so that export is the undo: `restore`
- * puts the rows, the pages' earlier bodies and the facts back. The search
- * mirrors of the pages it touched are rebuilt by the mirror phase.
+ * puts the rows, the pages' earlier bodies and the facts back. Both drop the
+ * search mirrors of the pages they rewrite inside the transaction and, given a
+ * storage handle, rebuild them from the new bodies once it commits; a page
+ * whose mirror fails is listed and left to the cycle's mirror-pages phase.
  */
 import { randomUUID } from "node:crypto";
 import { writeFileSync, readFileSync } from "node:fs";
 import type { Engine } from "./engine/interface.ts";
+import type { Storage } from "./storage.ts";
+import type { EmbedFn } from "./indexer.ts";
+import { mirrorPage } from "./page-index.ts";
 import type { OpsCheckResult } from "./doctor-ops.ts";
 import { lockPageSlugs } from "./pages.ts";
 import { bumpClock, bumpPageGeneration } from "./generation.ts";
@@ -86,11 +91,40 @@ async function afterState(tx: Engine, rows: Record<string, unknown[]>): Promise<
   };
 }
 
+export interface MirrorRebuild {
+  mirrored: string[];
+  /** Pages whose mirror could not be rebuilt now: `memrain cycle --phases mirror-pages` retries them. */
+  failed: string[];
+}
+
+export interface MirrorOptions {
+  /** Rebuilds the search mirrors of the touched pages after the commit; without it they wait for the mirror phase. */
+  storage?: Storage;
+  /** Test seam; production embeds through the usual path. */
+  embedFn?: EmbedFn;
+}
+
+/** Mirror each of `slugs` that is live into search, from its current body. */
+async function rebuildMirrors(engine: Engine, slugs: readonly string[], opts: MirrorOptions): Promise<MirrorRebuild> {
+  const out: MirrorRebuild = { mirrored: [], failed: [] };
+  if (opts.storage === undefined) return out;
+  for (const slug of slugs) {
+    const page = (await engine.query<{ slug: string; title: string | null; markdown_body: string; content_hash: string; source_id: string }>(
+      // scope: upstream a page this repair just changed
+      `SELECT slug, title, markdown_body, content_hash, source_id FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [slug])).rows[0];
+    if (page === undefined) continue;
+    const ok = await mirrorPage(opts.storage, page, { remote: false, ...(opts.embedFn ? { embedFn: opts.embedFn } : {}) });
+    (ok ? out.mirrored : out.failed).push(slug);
+  }
+  return out;
+}
+
 export interface PurgeLeftoversApply {
   plan: DerivedCleanupPlan;
   result: DerivedCleanupResult;
   export_path: string;
   purge_id: string;
+  mirrors: MirrorRebuild;
 }
 
 /**
@@ -98,8 +132,8 @@ export interface PurgeLeftoversApply {
  * different hash, export, then apply. A failure anywhere leaves the brain as
  * it was (an export written before a failed apply is harmless).
  */
-export async function applyPurgeLeftovers(engine: Engine, opts: { planHash: string; exportPath: string }): Promise<PurgeLeftoversApply> {
-  return engine.transaction(async (tx) => {
+export async function applyPurgeLeftovers(engine: Engine, opts: { planHash: string; exportPath: string } & MirrorOptions): Promise<PurgeLeftoversApply> {
+  const applied = await engine.transaction(async (tx) => {
     const plan = await planDerivedCleanup(tx, { orphans: true });
     if (plan.plan_hash !== opts.planHash) {
       throw new OperationError("conflict", `the purge-leftovers plan changed since the preview (plan_hash now ${plan.plan_hash})`,
@@ -114,9 +148,12 @@ export async function applyPurgeLeftovers(engine: Engine, opts: { planHash: stri
     writeFileSync(opts.exportPath, `${JSON.stringify({ ...exported, after: await afterState(tx, exported.rows) }, null, 1)}\n`, { mode: 0o600 });
     return { plan, result, export_path: opts.exportPath, purge_id: purgeId };
   });
+  const rewritten = applied.plan.concepts.flatMap((c) => c.page?.action === "regenerate" ? [c.page.slug] : []);
+  return { ...applied, mirrors: await rebuildMirrors(engine, rewritten, opts) };
 }
 
 export interface PurgeLeftoversRestore {
+  mirrors: MirrorRebuild;
   atoms: number;
   concepts: number;
   takes: number;
@@ -126,7 +163,7 @@ export interface PurgeLeftoversRestore {
 }
 
 /** Put back everything an apply changed, from its export, as one transaction. */
-export async function restorePurgeLeftovers(engine: Engine, exportPath: string): Promise<PurgeLeftoversRestore> {
+export async function restorePurgeLeftovers(engine: Engine, exportPath: string, mirrorOpts: MirrorOptions = {}): Promise<PurgeLeftoversRestore> {
   const exported = JSON.parse(readFileSync(exportPath, "utf8")) as {
     kind?: string; purge_id?: string; rows?: Record<string, Array<Record<string, unknown>>>; after?: AfterState;
   };
@@ -136,7 +173,7 @@ export async function restorePurgeLeftovers(engine: Engine, exportPath: string):
   const expected = exported.after;
   const rows = exported.rows;
   const list = (table: string) => rows[table] ?? [];
-  return engine.transaction(async (tx) => {
+  const restored = await engine.transaction(async (tx) => {
     const insert = async (table: string, conflict = "ON CONFLICT DO NOTHING") => {
       const data = list(table);
       if (data.length === 0) return 0;
@@ -176,7 +213,7 @@ export async function restorePurgeLeftovers(engine: Engine, exportPath: string):
           JSON.stringify(page.compiled_truth ?? {}), RESTORE_WRITER, page.source_id, "restored from a purge-leftovers export"]);
       await bumpPageGeneration(tx, String(page.slug));
     }
-    const out: PurgeLeftoversRestore = {
+    const out: Omit<PurgeLeftoversRestore, "mirrors"> = {
       atoms: await insert("synth_atoms"),
       concepts: await insert("synth_concepts", `ON CONFLICT (concept_slug) DO UPDATE SET title = EXCLUDED.title, narrative = EXCLUDED.narrative,
         tier = EXCLUDED.tier, atom_count = EXCLUDED.atom_count, generated_at = EXCLUDED.generated_at, model_id = EXCLUDED.model_id,
@@ -203,4 +240,5 @@ export async function restorePurgeLeftovers(engine: Engine, exportPath: string):
     await bumpClock(tx);
     return out;
   });
+  return { ...restored, mirrors: await rebuildMirrors(engine, list("pages").map((p) => String(p.slug)), mirrorOpts) };
 }

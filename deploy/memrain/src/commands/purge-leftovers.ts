@@ -5,6 +5,11 @@ import { applyPurgeLeftovers, restorePurgeLeftovers } from "../core/purge-leftov
 import { clearPageTombstones } from "../core/pages-purge.ts";
 import { withStorage } from "./with-storage.ts";
 
+/** What to run when some page could not be mirrored back into search right away. */
+function mirrorNext(failed: readonly string[]): { next?: string } {
+  return failed.length > 0 ? { next: "memrain cycle --phases mirror-pages" } : {};
+}
+
 export interface PurgeLeftoversOptions {
   sub?: "restore";
   apply?: boolean;
@@ -28,16 +33,17 @@ export async function runPurgeLeftovers(opts: PurgeLeftoversOptions): Promise<nu
   return withStorage(storage, async () => {
     const engine = storage.engine();
     if (opts.sub === "restore") {
-      console.log(JSON.stringify({ ok: true, restored: await restorePurgeLeftovers(engine, opts.from!) }));
+      const restored = await restorePurgeLeftovers(engine, opts.from!, { storage });
+      console.log(JSON.stringify({ ok: true, restored, ...mirrorNext(restored.mirrors.failed) }));
       return 0;
     }
     if (!opts.apply) {
       console.log(JSON.stringify({ ok: true, dry_run: true, ...await planDerivedCleanup(engine, { orphans: true }) }));
       return 0;
     }
-    const r = await applyPurgeLeftovers(engine, { planHash: opts.planHash!, exportPath: opts.exportPath! });
+    const r = await applyPurgeLeftovers(engine, { planHash: opts.planHash!, exportPath: opts.exportPath!, storage });
     console.log(JSON.stringify({ ok: true, dry_run: false, plan_hash: r.plan.plan_hash, summary: r.plan.summary,
-      result: r.result, export_path: r.export_path, purge_id: r.purge_id }));
+      result: r.result, export_path: r.export_path, purge_id: r.purge_id, mirrors: r.mirrors, ...mirrorNext(r.mirrors.failed) }));
     return 0;
   }, { owned: !opts.storage, migrate: false });
 }
