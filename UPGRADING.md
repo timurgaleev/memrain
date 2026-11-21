@@ -6,7 +6,7 @@ data. Installing for the first time? You do not need this page: start with
 [docs/QUICKSTART.md](./docs/QUICKSTART.md), and read
 [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md) to see how Memrain works.
 Already on 1.0 or later? Skip to the section for your release, from
-[1.0.x to 1.1](#from-10x-to-11) through [1.16 to 2.0](#from-116-to-20).
+[1.0.x to 1.1](#from-10x-to-11) through [2.1 to 2.2](#from-21-to-22).
 
 Memrain was called memex before 1.0.0. This guide takes an install of a
 pre-rename release (tags `memex-v1.x`) to Memrain 1.0.x without losing data.
@@ -535,3 +535,27 @@ on start. Both have a down file in `deploy/memrain/src/core/migrations-down/`.
   secrets audit used an older scanner until you run `memrain secrets audit`
   again. It is a dry run; `memrain secrets audit --apply --yes` redacts what it
   finds.
+
+## From 2.1 to 2.2
+
+2.2 is a normal deploy: `bash deploy/deploy.sh` applies migrations 178 and 179
+on start. Both have a down file in `deploy/memrain/src/core/migrations-down/`.
+
+- **New agent sign-ins wait for your approval.** `MEMRAIN_OAUTH_REQUIRE_LOGIN`
+  is now on unless set to `0`, `false`, `no` or `off`. A client connecting for
+  the first time is sent to `/admin/login`, and after you sign in the dashboard
+  names the client and where its code would go; nothing is issued until you
+  approve. Tokens already issued and their refresh tokens keep working, and an
+  enrollment-mode client still signs in with its one-time code. To keep the old
+  auto-approve behaviour, set `MEMRAIN_OAUTH_REQUIRE_LOGIN=0` in `.env` before
+  deploying. Public client-mode clients that the old default refused can
+  connect again once you approve them.
+- **Migration 178** adds `page_purges`, the hash-only tombstone that keeps an
+  explicitly purged page's text from being written back by a resync.
+  `memrain purge-leftovers` previews what older purges left behind; it changes
+  nothing without `--apply`.
+- **Migration 179** adds `write_gate_receipts`. Facts, takes and timeline
+  entries an agent writes or that land in an outside source are checked by the
+  write gate in flag mode; a match writes a receipt and nothing else. Set
+  `MEMRAIN_WRITE_GATE_AGENT=off` or `MEMRAIN_WRITE_GATE_EXTERNAL=off` to skip
+  an origin.

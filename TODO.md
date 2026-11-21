@@ -84,16 +84,25 @@ marked; this section is the one that stands.
   themselves (re-chunking changes chunk ids), so purge-leftovers does not
   touch them; decide whether a re-index should carry or retire them.
 
+## Follow-ups from the row write gate and the approval default
+
+- **A receipt statement that fails inside a writer's transaction aborts it.**
+  `syncTakesFromFence` runs inside the page transaction, so a statement timeout
+  on the receipt insert would fail the page write. The insert cannot violate a
+  constraint and runs only for flagged rows; a savepoint would remove the rest,
+  but the Engine interface has none.
+- **Receipts are never pruned** and outlive the row they name (they hold no
+  text). Add retention when W3c-1 turns rows into holds.
+- **The CLI's public-client guard reads its own environment.** With the server
+  at `MEMRAIN_OAUTH_REQUIRE_LOGIN=0` and the CLI shell unset, `auth
+  register-client` accepts a public client-mode client the server then refuses.
+  Fails safe (the client cannot connect); the boot warning names it.
+- **The approval screen has no write-source picker.** A client keeps the source
+  it was registered with; changing it is `memrain auth rescope-client`. Fold a
+  picker into the grant editor (W6c, L4-22).
+
 ## Follow-ups from the wallet retry change
 
-- In-process `BudgetTracker` budgets (contextual chunk context, synthesis,
-  facts extraction, agent runs, think) still reserve one call and settle the
-  final attempt's usage, so a call the wallet retried after a timeout counts
-  once against the feature budget while the durable caps count every attempt.
-  This matches the old behaviour under SDK retries; revisit when a feature
-  budget is used as a hard billing limit. Fix shape: let the caller's hold
-  absorb each kept attempt hold, or hand the tracker the wallet's per-attempt
-  outcome.
 - The wallet retry loop has no client-wide retry budget and ignores a
   throttle's `Retry-After`; during a long 5xx spell every batch item makes all
   four attempts, each held and booked (up to four pending worst-case holds per
