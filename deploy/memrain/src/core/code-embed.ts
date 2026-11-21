@@ -11,23 +11,41 @@ import { worstCaseUsd } from "./budget.ts";
 import { wellFormForText } from "./well-form.ts";
 
 /**
- * Longest code chunk text sent to the embedder, in UTF-16 units. A symbol can
+ * Longest code chunk text sent to the embedder, in UTF-8 bytes. A symbol can
  * be a whole 200 KB class, far past what Titan accepts; its head (signature,
  * doc comment, first members) is what a question about it matches anyway.
+ * Titan v2 takes 8,192 tokens and its tokenizer never makes more tokens than
+ * bytes, so a byte cap under that holds for dense text too (hex, base64,
+ * minified code, CJK), where a character cap does not.
  */
-export const CODE_EMBED_MAX_CHARS = 16_000;
+export const CODE_EMBED_MAX_BYTES = 8_000;
+
+/**
+ * A model refusal of a code chunk's text repeats on every try (the input is
+ * deterministic), so `memrain embed --code` tries such a chunk once and then
+ * walks past it; a re-index of its file starts it again at zero.
+ */
+export const CODE_EMBED_MAX_FAILURES = 1;
 
 /**
  * The embedding input for a code chunk: the chunk text raw (code is never
  * wrapped in a context prefix), well-formed exactly as the chunk is stored
- * (indexer-tx sanitizes NUL and lone surrogates), and capped. Applying it to
- * the raw text or to the stored `chunks.content` gives the same string.
+ * (indexer-tx sanitizes NUL and lone surrogates), and cut on a code point at
+ * CODE_EMBED_MAX_BYTES. Applying it to the raw text or to the stored
+ * `chunks.content` gives the same string.
  */
 export function codeEmbeddingInput(text: string): string {
   const stored = wellFormForText(text);
-  if (stored.length <= CODE_EMBED_MAX_CHARS) return stored;
-  // A cut through a surrogate pair leaves a lone half: well-form it again.
-  return wellFormForText(stored.slice(0, CODE_EMBED_MAX_CHARS));
+  if (Buffer.byteLength(stored, "utf8") <= CODE_EMBED_MAX_BYTES) return stored;
+  let bytes = 0;
+  let end = 0;
+  for (const ch of stored) {
+    const size = Buffer.byteLength(ch, "utf8");
+    if (bytes + size > CODE_EMBED_MAX_BYTES) break;
+    bytes += size;
+    end += ch.length;
+  }
+  return stored.slice(0, end);
 }
 
 /** Per-run cap for code embeds written by the sweep / `memrain index` (USD, worst case). */

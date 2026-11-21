@@ -25,9 +25,10 @@
  * that have no vector one. A dry run unless `--apply`, and `--apply` needs
  * `--max-usd X`: the run reserves each call's worst case against X and stops
  * cleanly at the first that would cross it (`capReached`); a re-run continues
- * with the chunks still missing. The dry run prints the count, the input bytes,
- * a typical cost and the worst-case bound — a cap at the bound finishes in one
- * run.
+ * with the chunks still missing. A chunk the model refuses is tried once and
+ * then skipped until its file changes. The dry run prints the count, the input
+ * bytes, a typical cost and the worst-case bound — a cap at the bound finishes
+ * in one run.
  *
  * Idempotent — a re-run only embeds what is still missing. Exits non-zero
  * only on TOTAL failure (candidates existed, none embedded), so a cron can
@@ -37,6 +38,7 @@ import { Storage } from "../core/storage.ts";
 import { withStorage } from "./with-storage.ts";
 import { loadConfig } from "../core/config.ts";
 import { runEmbedBackfill } from "../core/embed-backfill.ts";
+import { CODE_EMBED_MAX_FAILURES } from "../core/code-embed.ts";
 
 export interface EmbedCmdOptions {
   limit?: number;
@@ -133,6 +135,9 @@ async function runCodeEmbed(opts: EmbedCmdOptions): Promise<number> {
     const result = await runEmbedBackfill(storage.engine(), {
       kind: "code",
       reembedOnSignatureChange: false,
+      // A chunk the model refused is not tried again, so a --limit run never
+      // stalls on the same refusals at the front of the id order.
+      maxFailures: CODE_EMBED_MAX_FAILURES,
       ...(apply ? { maxUsd: opts.maxUsd! } : { dryRun: true }),
       ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
       ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),

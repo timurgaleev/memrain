@@ -30,6 +30,7 @@ import { qualifiedSymbolName, type CodeEdgeInput } from "./code-edges.ts";
 import type { ExtractedEntity } from "./entities.ts";
 import type { Engine } from "./engine/interface.ts";
 import {
+  checkLocalWriteOwner,
   writeDocumentTransaction,
   type ChunkWrite,
   type IndexTxResult,
@@ -296,6 +297,14 @@ export async function indexCodeDocument(
   const frontmatter: Record<string, unknown> = { language, kind: "code" };
   if (chunkWrites.length === 0) frontmatter[EMPTY_SOURCE_KEY] = true;
 
+  // The write's owner fence, run before any embed is paid for: a file the
+  // transaction would refuse must not re-pay its vectors on every sweep.
+  await checkLocalWriteOwner(storage.raw(), {
+    documentId: id,
+    sourcePath: input.sourcePath,
+    sourceId: input.sourceId ?? null,
+    ...(input.expectOwner !== undefined ? { expectOwner: input.expectOwner } : {}),
+  });
   const embedded = await embedCodeChunks(storage, id, input.sourcePath, chunkWrites, opts);
 
   const result = await writeDocumentTransaction(

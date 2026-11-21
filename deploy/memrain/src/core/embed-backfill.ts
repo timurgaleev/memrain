@@ -62,7 +62,7 @@
 import { classifyBedrockError, runInBatchScope } from "./llm/bedrock-errors.ts";
 import { withLongHold } from "./pool-budget.ts";
 import { BudgetExhausted, costUsd, isBudgetRefusal, worstCaseUsd } from "./budget.ts";
-import { CODE_EMBED_MAX_CHARS, codeEmbeddingInput, EmbedSpendCap } from "./code-embed.ts";
+import { CODE_EMBED_MAX_BYTES, codeEmbeddingInput, EmbedSpendCap } from "./code-embed.ts";
 import type { Engine } from "./engine/interface.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
 import { embeddingInputHash } from "./embedding-input-hash.ts";
@@ -361,7 +361,7 @@ async function countCandidates(
 
 /**
  * Price a code run before it is paid for: the candidates' embedding-input
- * bytes (the stored text, cut at CODE_EMBED_MAX_CHARS), a typical cost at
+ * bytes (the stored text, capped at CODE_EMBED_MAX_BYTES), a typical cost at
  * four bytes a token, and the worst case the cap reserves (a token per byte
  * plus per-call framing — `worstCaseUsd` summed). With `limit`, only the
  * chunks that run would take: the first `limit` in the walk's id order.
@@ -374,13 +374,13 @@ async function priceCodeCandidates(
   limit: number | undefined,
 ): Promise<{ bytes: number; estimatedUsd: number; costUpperBoundUsd: number }> {
   const { where, params } = buildCandidateWhere(cursor, scope);
-  params.push(CODE_EMBED_MAX_CHARS);
+  params.push(CODE_EMBED_MAX_BYTES);
   const cut = `$${params.length}::int`;
   const bounded = limit !== undefined && limit > 0 ? `LIMIT ${Math.floor(limit)}` : "";
   // scope: operator-only the operator prices a code backfill from the local CLI
   const r = await engine.query<{ n: number | string; bytes: number | string | null }>(
     `SELECT count(*)::int AS n, COALESCE(sum(s.b), 0)::bigint AS bytes
-       FROM (SELECT octet_length(left(c.content, ${cut})) AS b
+       FROM (SELECT LEAST(octet_length(c.content), ${cut}) AS b
                FROM chunks c
                JOIN documents d ON d.id = c.document_id
                LEFT JOIN embeddings em ON em.chunk_id = c.id

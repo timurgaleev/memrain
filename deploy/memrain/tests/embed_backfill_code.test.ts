@@ -5,7 +5,7 @@
  * that a backfilled vector is one the code indexer then reuses.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
@@ -156,6 +156,47 @@ describe("runEmbedBackfill kind code", () => {
     }
     expect(await vectorCount("doc_note")).toBe(1);
     await expect(runEmbedBackfill(storage.engine(), { kind: "code", forceReembed: true, embed: detEmbed })).rejects.toThrow();
+  });
+
+  // Value: protects=an embed_skip code document stays out of the vector arm; fails_when=the code
+  // candidate filter drops the embed_skip predicate; why_new=review finding; seam=embed
+  it("leaves an embed_skip code document alone", async () => {
+    await storage.engine().query(
+      `UPDATE documents SET frontmatter = frontmatter || '{"embed_skip": true}'::jsonb WHERE id = 'doc_code'`,
+    );
+    const r = await runEmbedBackfill(storage.engine(), { kind: "code", embed: detEmbed, maxUsd: 1 });
+    expect(r.candidates).toBe(0);
+    expect(await vectorCount("doc_code")).toBe(0);
+  });
+});
+
+describe("memrain embed --code runs", () => {
+  // Value: protects=a chunk the model refuses does not stall later `--limit` runs on the same front of
+  // the id order; fails_when=runCodeEmbed stops passing maxFailures; why_new=review finding; seam=embed + config file
+  it("walks past a refused chunk on the next run", async () => {
+    await storage.close();
+    const config = join(tmp, "config.json");
+    writeFileSync(config, JSON.stringify({ database: { type: "pglite", path: join(tmp, "db") },
+      embedding: { provider: "bedrock-titan", model: DEFAULT_MODEL_ID, region: "eu-west-1" }, storage: {} }));
+    const savedRequire = process.env.MEMRAIN_REQUIRE_POSTGRES;
+    process.env.MEMRAIN_REQUIRE_POSTGRES = "0";
+    const seen: string[] = [];
+    const embed = async (t: string) => {
+      seen.push(t);
+      if (t === CODE_CHUNKS[0]) throw Object.assign(new Error("Input is too long for requested model"), { name: "ValidationException" });
+      return deterministicEmbed(t);
+    };
+    try {
+      expect(await runEmbed({ code: true, apply: true, maxUsd: 1, limit: 1, configPath: config, embed })).toBe(1);
+      expect(await runEmbed({ code: true, apply: true, maxUsd: 1, limit: 1, configPath: config, embed })).toBe(0);
+    } finally {
+      if (savedRequire === undefined) delete process.env.MEMRAIN_REQUIRE_POSTGRES;
+      else process.env.MEMRAIN_REQUIRE_POSTGRES = savedRequire;
+      storage = new Storage({ dbPath: join(tmp, "db") });
+      await storage.init();
+    }
+    expect(seen).toEqual(CODE_CHUNKS.slice(0, 2));
+    expect(await vectorCount("doc_code")).toBe(1);
   });
 });
 

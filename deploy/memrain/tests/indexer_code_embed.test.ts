@@ -9,10 +9,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { indexCodeDocument } from "../src/core/indexer-code.ts";
-import { CODE_EMBED_MAX_CHARS, codeEmbeddingInput, EmbedSpendCap } from "../src/core/code-embed.ts";
+import { CODE_EMBED_MAX_BYTES, codeEmbeddingInput, EmbedSpendCap } from "../src/core/code-embed.ts";
 import { embeddingInputHash } from "../src/core/embedding-input-hash.ts";
 import { DEFAULT_MODEL_ID, EMBED_DIMENSIONS } from "../src/core/embedding.ts";
 import { _resetParsersForTests } from "../src/core/chunkers/parsers.ts";
+import { registerSource } from "../src/core/sources.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "tb-indexer-code-embed-"));
@@ -176,6 +177,30 @@ describe("indexCodeDocument embeddings", () => {
     const body = `export function big() {\n${"  const x = 1;\n".repeat(3000)}}\n`;
     await indexCodeDocument(storage, { sourcePath: "src/big.ts", text: body }, { embedFn });
     expect(inputs.length).toBe(1);
-    expect(inputs[0]!.length).toBe(CODE_EMBED_MAX_CHARS);
+    expect(Buffer.byteLength(inputs[0]!, "utf8")).toBe(CODE_EMBED_MAX_BYTES);
+  });
+
+  // Value: protects=dense text (CJK, hex, base64) stays under Titan's token limit, which a character cap
+  // did not; fails_when=the cut counts characters instead of bytes or splits a code point; why_new=review
+  // finding on the 16k-character cut; seam=none
+  it("cuts dense text by bytes, on a code point boundary", () => {
+    const cjk = codeEmbeddingInput("漢".repeat(10_000)); // 3 bytes each
+    expect(Buffer.byteLength(cjk, "utf8")).toBeLessThanOrEqual(CODE_EMBED_MAX_BYTES);
+    expect(cjk).toBe("漢".repeat(Math.floor(CODE_EMBED_MAX_BYTES / 3)));
+    const emoji = codeEmbeddingInput("a" + "\u{1F600}".repeat(5_000)); // 4 bytes, a surrogate pair each
+    expect(Buffer.byteLength(emoji, "utf8")).toBeLessThanOrEqual(CODE_EMBED_MAX_BYTES);
+    expect(emoji).toBe("a" + "\u{1F600}".repeat(1999));
+  });
+
+  // Value: protects=a file the write's owner fence refuses pays for no vector; fails_when=embedding runs
+  // before the ownership check, so a refused file re-pays every sweep; why_new=review finding; seam=embedFn
+  it("refuses a file owned by another source before embedding anything", async () => {
+    const { inputs, embedFn } = counting();
+    const first = await indexCodeDocument(storage, { sourcePath: "src/owned.ts", text: TWO });
+    await registerSource(storage.raw(), { id: "src-b", kind: "code", pathPrefix: "/elsewhere/" });
+    await storage.raw().query("UPDATE documents SET source_id = 'src-b' WHERE id = $1", [first.documentId]);
+    await expect(indexCodeDocument(storage, { sourcePath: "src/owned.ts", text: TWO, expectOwner: "src-a" }, { embedFn }))
+      .rejects.toThrow();
+    expect(inputs).toEqual([]);
   });
 });

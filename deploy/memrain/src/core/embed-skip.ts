@@ -84,11 +84,12 @@ export function embeddableChunkFragment(docAlias = "d", chunkAlias = "c"): strin
         AND length(btrim(${chunkAlias}.content)) > 0`;
 }
 
-/** The code half: a non-empty chunk of a live, unarchived code document. */
+/** The code half: a non-empty chunk of a live, unarchived, not embed-skipped code document. */
 export function codeEmbeddableChunkFragment(docAlias = "d", chunkAlias = "c"): string {
   assertSqlAlias(docAlias);
   assertSqlAlias(chunkAlias);
   return `${docAlias}.deleted_at IS NULL AND NOT ${docAlias}.archived
         AND ${docAlias}.frontmatter->>'kind' = 'code'
+        AND ${embedSkipFilterFragment(docAlias)}
         AND length(btrim(${chunkAlias}.content)) > 0`;
 }

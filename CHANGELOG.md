@@ -8,8 +8,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Code chunks carry vectors, so search by meaning can return the function that answers a plain-words question. The code indexer embeds each symbol raw (its first 16,000 characters) through the spend wallet and keeps the stored vector of any symbol whose text is unchanged, so re-indexing an unchanged file pays nothing. One code sweep reserves at most `MEMRAIN_CODE_EMBED_MAX_USD` (default $1, worst case) before each call; past it, or after an embed failure, chunks are written without a vector and the code graph is written as before.
-- `memrain embed --code` fills code chunks that have no vector. It is a dry run that prints the count, the input bytes, a typical cost and the worst-case bound; `--apply --max-usd X` embeds under that cap, stops cleanly at the first call that would cross it (`capReached`), and a re-run continues. `--apply` without `--max-usd` is refused.
+- Code chunks carry vectors, so search by meaning can return the function that answers a plain-words question. The code indexer embeds each symbol raw (its first 8,000 UTF-8 bytes, under Titan's token limit however dense the text) through the spend wallet and keeps the stored vector of any symbol whose text is unchanged, so re-indexing an unchanged file pays nothing. One code sweep reserves at most `MEMRAIN_CODE_EMBED_MAX_USD` (default $1, worst case) before each call; past it, or after an embed failure, chunks are written without a vector and the code graph is written as before.
+- `memrain embed --code` fills code chunks that have no vector. It is a dry run that prints the count, the input bytes, a typical cost and the worst-case bound; `--apply --max-usd X` embeds under that cap, stops cleanly at the first call that would cross it (`capReached`), and a re-run continues. A chunk the model refuses is tried once and then skipped until its file changes. `--apply` without `--max-usd` is refused.
 
 ### Changed
 
