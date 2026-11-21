@@ -7,6 +7,9 @@
  */
 
 import { isSynthesizedPageSlug } from "../page-index.ts";
+import { CONNECTOR_PAGE_TYPES } from "../connectors/render.ts";
+
+const CONNECTOR_CALENDAR_TYPE = CONNECTOR_PAGE_TYPES.calendar;
 
 export type ChronicleEligibility = { ok: true } | { ok: false; reason: string };
 
@@ -38,6 +41,9 @@ export function isChronicleEligible(input: {
     return { ok: false, reason: "event_self" };
   }
   if (slug.startsWith("wiki/agents/")) return { ok: false, reason: "subagent_scratch" };
+  // A connector calendar page already gets its chronicle row from the sync,
+  // without a model (connectors/enrich-deterministic.ts).
+  if (type === CONNECTOR_CALENDAR_TYPE) return { ok: false, reason: "connector_page" };
   const bodyOk = (input.body?.length ?? MIN_BODY_CHARS) >= MIN_BODY_CHARS;
   if (!bodyOk) return { ok: false, reason: "too_short" };
   const typeOk = ELIGIBLE_TYPES.includes(type);

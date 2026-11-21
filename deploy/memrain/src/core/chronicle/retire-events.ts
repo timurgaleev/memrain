@@ -16,7 +16,7 @@ const latestVersion = `JOIN LATERAL (
 const untouched = `v.written_by = 'life-chronicle' AND v.hash_new = p.content_hash
   AND v.compiled_truth_snapshot = p.compiled_truth`;
 const automatic = `p.deleted_at IS NULL AND p.type = 'event' AND p.slug LIKE 'life/events/%'
-  AND p.compiled_truth->>'captured_via' = 'life-chronicle:auto'`;
+  AND p.compiled_truth->>'captured_via' IN ('life-chronicle:auto', 'life-chronicle:invite')`;
 
 export async function readAutoEvents(storage: Storage, origin: string, source: string) {
   const { rows } = await storage.engine().query<AutoEventSnapshot>(

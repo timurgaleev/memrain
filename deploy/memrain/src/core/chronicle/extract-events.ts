@@ -29,6 +29,8 @@ import { BudgetTracker, BudgetExhausted } from "../budget.ts";
 import { classifyFactsAbsorbError } from "../ingest-log.ts";
 import type { ChronicleDropCounts, ChronicleDropReason } from "./types.ts";
 import { readAutoEvents, retireAutoEvents } from "./retire-events.ts";
+import { eventDiscriminator, resolveChronicleEventSlugs } from "./event-identity.ts";
+import { CHRONICLE_INVITE_CAPTURED_VIA, inviteProjection } from "./invite-projection.ts";
 
 export type { ChronicleDropCounts, ChronicleDropReason } from "./types.ts";
 
@@ -307,9 +309,20 @@ export function chronicleJudgePrompt(input: ChronicleJudgeInput): string {
  * whole page: text appended past the judged prefix changes nothing the judge
  * sees, so it must not buy another paid call. That text also stays unread by
  * extraction — a limit of the 12,000-character window, not of this key.
+ *
+ * A structured calendar invite also folds in whether it has ended, so an
+ * invite queued before its meeting (skipped, no call) gets a fresh job once it
+ * is over and the backfill sweep projects it.
  */
-export function chronicleJudgeKey(page: Parameters<typeof chronicleJudgeInputFor>[0]): string {
-  return createHash("sha256").update(chronicleJudgePrompt(chronicleJudgeInputFor(page)), "utf8").digest("hex");
+export function chronicleJudgeKey(page: Parameters<typeof chronicleJudgeInputFor>[0], now: Date = new Date()): string {
+  const input = chronicleJudgeInputFor(page);
+  const invite = inviteProjection(
+    { slug: page.slug, type: page.type, title: page.title ?? "", truth: (page.compiled_truth ?? {}) as Record<string, unknown> },
+    input.attendees,
+    now,
+  );
+  const phase = invite === null ? "" : "pending" in invite ? "\ninvite:pending" : "\ninvite:ended";
+  return createHash("sha256").update(chronicleJudgePrompt(input) + phase, "utf8").digest("hex");
 }
 
 /**
@@ -330,41 +343,23 @@ export async function runChronicleExtract(
   const judgeInput = chronicleJudgeInputFor({ ...page, slug: opts.slug });
   const { effectiveDate, attendees } = judgeInput;
 
-  // Price-guard the paid judge call. A stub judge reports no usage and never
-  // spends, but the pre-flight is cheap and mirrors the facts on-write path.
-  const modelId = resolveFactsModel(opts.modelId);
-  const cap = opts.maxBudgetUsd ?? perRunBudgetUsd();
-  const budget = new BudgetTracker(cap, "chronicle-extract");
-  const hold = budget.reserve(modelId, WORST_CASE_USAGE);
-  if (hold === null) {
-    return { slug: opts.slug, status: "skipped", events_written: 0, reason: "budget_exhausted" };
-  }
-
-  const judge =
-    opts.judge ??
-    defaultJudge(opts.sonnetFn, modelId, (projected) => budget.widen(hold, modelId, projected));
+  // An ended calendar invite is structured enough to project without the paid
+  // judge (invite-projection.ts); everything after the judge call is shared.
+  const invite = inviteProjection(
+    { slug: opts.slug, type: page.type, title: page.title ?? "", truth: (page.compiled_truth ?? {}) as Record<string, unknown> },
+    attendees,
+    new Date(opts.now ?? Date.now()),
+  );
+  if (invite && "pending" in invite) return { slug: opts.slug, status: "skipped", events_written: 0, reason: "invite_not_ended" };
   let result: ChronicleJudgeResult;
-  try {
-    result = await budget.track(() => judge(judgeInput));
-  } catch (err) {
-    budget.release(hold);
-    // Transient gateway errors propagate so the queue retries with backoff; a
-    // permanent judge failure lands the job DONE with zero events.
-    if (isTransientJudgeError(err)) throw err;
-    return { slug: opts.slug, status: "skipped", events_written: 0, reason: "judge_error" };
-  }
-
-  // Price the (already-paid) call. A stub judge omits usage → nothing to record.
-  if (result.usage) {
-    try {
-      budget.settle(hold, result.modelId ?? modelId, result.usage);
-    } catch (e) {
-      if (!(e instanceof BudgetExhausted)) throw e;
-      // Over budget after the call — still persist what we got.
-    }
+  if (invite) {
+    result = { events: [invite.proposal] };
   } else {
-    budget.release(hold);
+    const judged = await runJudge(judgeInput, opts);
+    if ("skip" in judged) return { slug: opts.slug, status: "skipped", events_written: 0, reason: judged.skip };
+    result = judged.result;
   }
+  const capturedVia = invite ? CHRONICLE_INVITE_CAPTURED_VIA : "life-chronicle:auto";
 
   // A judge whose array was still cut off after the larger-cap retry (or whose
   // retry the budget refused) read only part of the page. Landing that as
@@ -402,19 +397,28 @@ export async function runChronicleExtract(
     return { slug: opts.slug, status: "skipped", events_written: 0, reason: "source_changed" };
   }
   const prior = await readAutoEvents(storage, opts.slug, sourceId);
-  const keepSlugs = new Set(kept.slice(0, MAX_EVENTS_PER_PAGE).map(ev =>
-    `life/events/${isoDay(ev.when, tz)}-${eventHash8(ev.who.length ? ev.who : attendees, ev.what, opts.slug, sourceId)}`));
-  const complete = !result.inputTruncated && proposals.length <= MAX_EVENTS_PER_PAGE &&
-    Object.keys(dropped).length === 0 && !prior.truncated;
-  if (complete && keepSlugs.size < prior.events.length / 2) {
-    return { slug: opts.slug, status: "held_shrink", events_written: 0, reason: "event_count_below_half" };
-  }
   // Cap per page AFTER the barrier: the whole batch had to validate, but only
   // the first N are written (a bound on fan-out from one page).
-  for (const ev of kept.slice(0, MAX_EVENTS_PER_PAGE)) {
-    // Placeholder participants ("team", "someone") are dropped from the stored
-    // `who`; the slug still hashes what the judge returned so a re-run upserts
-    // the page it wrote before this gate existed instead of forking a twin.
+  const toWrite = kept.slice(0, MAX_EVENTS_PER_PAGE);
+  // Placeholder participants ("team", "someone") are dropped from the stored
+  // `who`, but the base slug still hashes what the judge returned so a re-run
+  // upserts the page it wrote before that gate existed instead of forking a
+  // twin. Same-day twins are told apart in event-identity.ts.
+  const based = toWrite.map(ev => ({
+    slug: `life/events/${isoDay(ev.when, tz)}-${eventHash8(ev.who.length ? ev.who : attendees, ev.what, opts.slug, sourceId)}`,
+    fields: { when: ev.when, where: ev.where ?? null, kind: normalizeKind(ev.kind) },
+  }));
+  const slugs = await resolveChronicleEventSlugs(storage, sourceId, based);
+  const keepSlugs = new Set(slugs);
+  // Exact copies of one proposal get their own `-2` page, but they are one
+  // event as far as the shrink guard is concerned.
+  const distinctEvents = new Set(based.map(b => `${b.slug}\n${eventDiscriminator(b.fields)}`)).size;
+  const complete = !result.inputTruncated && proposals.length <= MAX_EVENTS_PER_PAGE &&
+    Object.keys(dropped).length === 0 && !prior.truncated;
+  if (complete && distinctEvents < prior.events.length / 2) {
+    return { slug: opts.slug, status: "held_shrink", events_written: 0, reason: "event_count_below_half" };
+  }
+  for (const [i, ev] of toWrite.entries()) {
     const rawWho = ev.who.length ? ev.who : attendees;
     const who = rawWho.filter((w) => !isJunkEntityName(w));
     const when = ev.when || effectiveDate || new Date(opts.now ?? Date.now()).toISOString();
@@ -422,8 +426,7 @@ export async function runChronicleExtract(
     // Full normalized instant for the projection so same-day events order by
     // real time, not insertion order (isValidProposal guaranteed `when` parses).
     const occurredAt = new Date(when).toISOString();
-    const hash = eventHash8(rawWho, ev.what, opts.slug, sourceId);
-    const eventSlug = `life/events/${day}-${hash}`;
+    const eventSlug = slugs[i]!;
     const pageWrite = await putPage(storage, {
       slug: eventSlug,
       written_by: "life-chronicle",
@@ -437,7 +440,7 @@ export async function runChronicleExtract(
           when, who, what: ev.what, where: ev.where ?? null,
           kind: normalizeKind(ev.kind), depth: opts.slug,
         },
-        captured_via: "life-chronicle:auto",
+        captured_via: capturedVia,
       },
       markdown_body: `${ev.what} — see [[${opts.slug}]].`,
       source_id: sourceId,
@@ -460,6 +463,48 @@ export async function runChronicleExtract(
     { slug: page.slug, version: page.version! }) : 0;
   return { slug: opts.slug, status: "extracted", events_written: written, events_retired: retired, pagesHeld, ...droppedField,
     ...(!complete ? { reason: "incomplete_extraction" } : {}) };
+}
+
+/**
+ * The paid judge call under its per-run budget. A stub judge reports no usage
+ * and never spends, but the pre-flight is cheap and mirrors the facts on-write
+ * path. Transient gateway errors propagate so the queue retries with backoff;
+ * a refused budget or a permanent judge failure is a skip reason.
+ */
+async function runJudge(
+  judgeInput: ChronicleJudgeInput,
+  opts: RunChronicleExtractOpts,
+): Promise<{ result: ChronicleJudgeResult } | { skip: string }> {
+  const modelId = resolveFactsModel(opts.modelId);
+  const cap = opts.maxBudgetUsd ?? perRunBudgetUsd();
+  const budget = new BudgetTracker(cap, "chronicle-extract");
+  const hold = budget.reserve(modelId, WORST_CASE_USAGE);
+  if (hold === null) return { skip: "budget_exhausted" };
+
+  const judge =
+    opts.judge ??
+    defaultJudge(opts.sonnetFn, modelId, (projected) => budget.widen(hold, modelId, projected));
+  let result: ChronicleJudgeResult;
+  try {
+    result = await budget.track(() => judge(judgeInput));
+  } catch (err) {
+    budget.release(hold);
+    if (isTransientJudgeError(err)) throw err;
+    return { skip: "judge_error" };
+  }
+
+  // Price the (already-paid) call. A stub judge omits usage → nothing to record.
+  if (result.usage) {
+    try {
+      budget.settle(hold, result.modelId ?? modelId, result.usage);
+    } catch (e) {
+      if (!(e instanceof BudgetExhausted)) throw e;
+      // Over budget after the call — still persist what we got.
+    }
+  } else {
+    budget.release(hold);
+  }
+  return { result };
 }
 
 const JUDGE_SYSTEM = [
