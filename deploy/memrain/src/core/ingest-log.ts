@@ -133,6 +133,9 @@ export const FACTS_ABSORB_REASONS = [
   "embed_failure",
   "budget_exhausted",
   "pipeline_error",
+  // The model declined part of a page (a refusal or a content filter), even
+  // read in halves. Logged with the character range only; the rest was read.
+  "model_declined",
 ] as const;
 
 export type FactsAbsorbReason = (typeof FACTS_ABSORB_REASONS)[number];

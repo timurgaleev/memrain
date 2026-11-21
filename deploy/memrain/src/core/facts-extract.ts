@@ -540,7 +540,7 @@ export function sanitizeEntityHints(hints: unknown): string[] {
 export const EXTRACT_WINDOW_CHARS = 12_000;
 
 /** Parse status widened with the one failure the parser cannot see by itself. */
-export type ExtractOutcome = FactsParseStatus | "truncated";
+export type ExtractOutcome = FactsParseStatus | "truncated" | "declined";
 
 export interface ExtractTurnResult {
   facts: ExtractedFact[];
@@ -600,6 +600,11 @@ export async function extractFactsFromTurn(
 
   let resp = await call(maxTokens);
   let usage = resp.usage;
+  // A refusal or content filter is not a quiet turn: the caller retries the
+  // text in smaller pieces and logs what is still declined.
+  if (resp.stopReason !== undefined && DECLINED_STOP_REASONS.has(resp.stopReason)) {
+    return { facts: [], modelId: resp.modelId, usage, outcome: "declined", junkSkipped: 0 };
+  }
   const cutOf = (r: { text: string; stopReason?: string }) =>
     r.stopReason === STOP_REASON_MAX_TOKENS ? closeCutFactsArray(r.text) : null;
   let parsed = parseFactsResponse(cutOf(resp) ?? resp.text);
@@ -1034,6 +1039,46 @@ export interface ExtractForPageResult {
   windowsRun: number;
   /** Facts the junk gate dropped across those calls. */
   junkSkipped: number;
+  /**
+   * Spans of the body the model declined to read (a refusal or a content
+   * filter), even after the window was retried as two halves. The rest of the
+   * page counts as read, so a declined span does not set `absorbed`.
+   */
+  declinedRanges?: DeclinedRange[];
+}
+
+/** A character range of a page body, `end` exclusive. */
+export interface DeclinedRange {
+  start: number;
+  end: number;
+}
+
+/** Bedrock Converse stop reasons for an answer the model declined to give. */
+const DECLINED_STOP_REASONS: ReadonlySet<string> = new Set(["content_filtered", "guardrail_intervened", "refusal"]);
+
+/** Below this many characters a declined window is not split again. */
+const MIN_SPLIT_CHARS = 400;
+
+/**
+ * The two halves a declined window is retried as, cut at the paragraph break
+ * (else the line break) nearest its middle; null when it is too short to split.
+ */
+export function splitDeclinedWindow(text: string): Array<{ text: string; offset: number }> | null {
+  if (text.trim().length < MIN_SPLIT_CHARS) return null;
+  const mid = Math.floor(text.length / 2);
+  const near = (sep: string): number => {
+    const before = text.lastIndexOf(sep, mid);
+    const after = text.indexOf(sep, mid);
+    const options = [before, after].filter((i) => i > text.length / 4 && i < (text.length * 3) / 4);
+    return options.length ? options.reduce((a, b) => (Math.abs(a - mid) <= Math.abs(b - mid) ? a : b)) : -1;
+  };
+  const para = near("\n\n");
+  const line = para >= 0 ? para : near("\n");
+  const cut = line >= 0 ? line : mid;
+  const first = text.slice(0, cut);
+  const second = text.slice(cut);
+  if (first.trim() === "" || second.trim() === "") return null;
+  return [{ text: first, offset: 0 }, { text: second, offset: cut }];
 }
 
 /**
@@ -1249,26 +1294,85 @@ async function extractFactsForPageRun(
   let junkSkipped = 0;
   let absorbed: FactsAbsorbReason | null = null;
   let readThrough = 0;
+  let consecutiveErrors = 0;
+  const declinedRanges: DeclinedRange[] = [];
+
+  // One extractor call reserved against the per-write tracker. "refused": the
+  // cap leaves no room; `error`: the call threw (filed as a facts:absorb row).
+  const callWindow = async (text: string): Promise<ExtractTurnResult | "refused" | { error: FactsAbsorbReason }> => {
+    const hold = budget.reserve(modelId, WORST_CASE_USAGE);
+    if (hold === null) return "refused";
+    let result: ExtractTurnResult;
+    try {
+      result = await budget.track(() => extractFactsFromTurn(text, {
+        ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
+        modelId,
+        observationDate,
+        entityHints,
+        // The truncation retry widens the SAME hold taken above — nothing
+        // here bills past `cap`.
+        canAffordRetry: (projected) => budget.widen(hold, modelId, projected),
+      }));
+    } catch (e) {
+      budget.release(hold);
+      const reason = classifyFactsAbsorbError(e);
+      await writeFactsAbsorbLog(storage.engine(), opts.slug, reason, e instanceof Error ? e.message : String(e), sourceId);
+      return { error: reason };
+    }
+    try {
+      budget.settle(hold, result.modelId, result.usage);
+    } catch (e) {
+      if (!(e instanceof BudgetExhausted)) throw e;
+      // Over budget after the (already-paid) call — still persist what we got.
+    }
+    return result;
+  };
+  const refusedLog = (ran: number) => writeFactsAbsorbLog(
+    storage.engine(),
+    opts.slug,
+    "budget_exhausted",
+    ran === 0
+      ? `per-write cap $${cap} leaves no room for a worst-case call`
+      : `per-write cap $${cap} stopped the run after ${ran} of ${windows.length} windows`,
+    sourceId,
+  );
+  // Keep what a readable answer gave. An unreadable answer is a DURABLE
+  // failure, not a quiet page: without its row the backfill's "page has no
+  // facts yet" marker cannot tell the two apart and re-pays for it every run.
+  const take = async (text: string, result: ExtractTurnResult) => {
+    junkSkipped += result.junkSkipped;
+    facts.push(...markKeptQuiet(text, result.facts));
+    const reason = outcomeAbsorbReason(result.outcome);
+    if (reason !== null) {
+      absorbed ??= reason;
+      await writeFactsAbsorbLog(storage.engine(), opts.slug, reason,
+        `extractor outcome=${result.outcome} (model=${result.modelId})`, sourceId);
+    }
+  };
+  // A span the model declined to read, even in halves: logged by position
+  // only, never its text. The rest of the page still counts as read.
+  const declined = async (start: number, end: number, model: string) => {
+    declinedRanges.push({ start, end });
+    process.stderr.write(`[facts-extract] ${opts.slug}: the model declined chars ${start}-${end}; skipped\n`);
+    await writeFactsAbsorbLog(storage.engine(), opts.slug, "model_declined",
+      `chars ${start}-${end} of ${opts.body.length} declined (model=${model})`, sourceId);
+  };
+
+  let stopped = false;
   for (const window of windows) {
+    if (stopped) break;
     if (readThrough > 0 && await held()) break;
     const start = opts.body.indexOf(window, readThrough);
-    const windowEnd = (start < 0 ? readThrough : start) + Math.min(window.length, EXTRACT_WINDOW_CHARS);
+    const windowStart = start < 0 ? readThrough : start;
+    const windowEnd = windowStart + Math.min(window.length, EXTRACT_WINDOW_CHARS);
     if (window.slice(0, EXTRACT_WINDOW_CHARS).trim() === "") {
       readThrough = windowEnd;
       continue;
     }
-    const hold = budget.reserve(modelId, WORST_CASE_USAGE);
-    if (hold === null) {
-      await writeFactsAbsorbLog(
-        storage.engine(),
-        opts.slug,
-        "budget_exhausted",
-        windowsRun === 0
-          ? `per-write cap $${cap} leaves no room for a worst-case call`
-          : `per-write cap $${cap} stopped the run after ${windowsRun} of ${windows.length} windows`,
-        sourceId,
-      );
-      if (windowsRun === 0) {
+    const result = await callWindow(window);
+    if (result === "refused") {
+      await refusedLog(windowsRun);
+      if (windowsRun === 0 && absorbed === null) {
         return {
           truncated_chars: Math.max(0, opts.body.length - readThrough),
           factsWritten: 0,
@@ -1283,66 +1387,57 @@ async function extractFactsForPageRun(
       absorbed ??= "budget_exhausted";
       break;
     }
-    let result: ExtractTurnResult;
-    try {
-      result = await budget.track(() => extractFactsFromTurn(window, {
-        ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
-        modelId,
-        observationDate,
-        entityHints,
-        // The truncation retry widens the SAME hold taken above — nothing
-        // here bills past `cap`.
-        canAffordRetry: (projected) => budget.widen(hold, modelId, projected),
-      }));
-    } catch (e) {
-      budget.release(hold);
-      const reason = classifyFactsAbsorbError(e);
-      await writeFactsAbsorbLog(
-        storage.engine(),
-        opts.slug,
-        reason,
-        e instanceof Error ? e.message : String(e),
-        sourceId,
-      );
-      if (windowsRun === 0) {
-        return {
-          truncated_chars: Math.max(0, opts.body.length - readThrough),
-          factsWritten: 0,
-          factsSkipped: 0,
-          factsFailed: 0,
-          spentUsd: 0,
-          absorbed: reason,
-          windowsRun: 0,
-          junkSkipped: 0,
-        };
-      }
-      absorbed ??= reason;
-      break;
+    if ("error" in result) {
+      // One failed window does not cost the windows after it; two in a row
+      // read as a gateway that is down, and the run stops.
+      absorbed ??= result.error;
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= 2) break;
+      continue;
     }
-    try {
-      budget.settle(hold, result.modelId, result.usage);
-    } catch (e) {
-      if (!(e instanceof BudgetExhausted)) throw e;
-      // Over budget after the (already-paid) call — still persist what we got.
-    }
+    consecutiveErrors = 0;
     windowsRun += 1;
     readThrough = windowEnd;
-    junkSkipped += result.junkSkipped;
-    facts.push(...markKeptQuiet(window, result.facts));
-    // An unreadable answer is a DURABLE failure, not a quiet page. Without this
-    // row the backfill's "page has no facts yet" idempotency marker cannot tell
-    // the two apart and re-pays Sonnet for the same broken page on every run.
-    const reason = outcomeAbsorbReason(result.outcome);
-    if (reason !== null) {
-      absorbed ??= reason;
-      await writeFactsAbsorbLog(
-        storage.engine(),
-        opts.slug,
-        reason,
-        `extractor outcome=${result.outcome} (model=${result.modelId})`,
-        sourceId,
-      );
+    if (result.outcome !== "declined") {
+      await take(window, result);
+      continue;
     }
+    // Declined (a refusal or a content filter): read the window once more as
+    // two halves, so one passage does not cost the facts around it. No
+    // further splitting.
+    const halves = splitDeclinedWindow(window.slice(0, EXTRACT_WINDOW_CHARS));
+    if (halves === null) {
+      await declined(windowStart, windowEnd, result.modelId);
+      continue;
+    }
+    for (const half of halves) {
+      const r = await callWindow(half.text);
+      if (r === "refused") {
+        await refusedLog(windowsRun);
+        absorbed ??= "budget_exhausted";
+        stopped = true;
+        break;
+      }
+      if ("error" in r) {
+        absorbed ??= r.error;
+        continue;
+      }
+      windowsRun += 1;
+      if (r.outcome === "declined") await declined(windowStart + half.offset, windowStart + half.offset + half.text.length, r.modelId);
+      else await take(half.text, r);
+    }
+  }
+  if (windowsRun === 0 && absorbed !== null && absorbed !== "budget_exhausted") {
+    return {
+      truncated_chars: Math.max(0, opts.body.length - readThrough),
+      factsWritten: 0,
+      factsSkipped: 0,
+      factsFailed: 0,
+      spentUsd: Number(budget.totalSpent().toFixed(6)),
+      absorbed,
+      windowsRun: 0,
+      junkSkipped: 0,
+    };
   }
   if (await held()) {
     return { factsWritten: 0, factsSkipped: facts.length, factsFailed: 0,
@@ -1369,6 +1464,7 @@ async function extractFactsForPageRun(
     windowsRun,
     junkSkipped,
     truncated_chars: Math.max(0, opts.body.length - readThrough),
+    ...(declinedRanges.length ? { declinedRanges } : {}),
   };
 }
 
