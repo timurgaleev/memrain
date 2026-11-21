@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { extractFactsForPage, splitDeclinedWindow } from "../src/core/facts-extract.ts";
+import { extractFactsForPage, extractFactsOnDemand, splitDeclinedWindow } from "../src/core/facts-extract.ts";
 import { putPage } from "../src/core/pages.ts";
 import type { SonnetCallResult, SonnetFn } from "../src/core/llm/sonnet.ts";
 
@@ -107,6 +107,16 @@ describe("declined windows", () => {
     expect(r.factsWritten).toBe(1);
     expect(r.declinedRanges).toHaveLength(2);
     expect(r.absorbed).toBeNull();
+  });
+
+  // Value: protects=extract_facts says why a refused text came back empty; fails_when=a refusal reads as a quiet turn.
+  it("reports a declined on-demand extraction as model_declined", async () => {
+    const { fn } = filtering();
+    const r = await extractFactsOnDemand(TOUCHY, { sonnetFn: fn, modelId: MODEL });
+    expect(r.facts).toEqual([]);
+    expect(r.skipped).toBe("model_declined");
+    const quiet = await extractFactsOnDemand(QUIET, { sonnetFn: fn, modelId: MODEL });
+    expect(quiet.skipped).toBeUndefined();
   });
 
   it("splits at the paragraph break nearest the middle", () => {

@@ -1501,8 +1501,9 @@ export interface OnDemandExtractResult {
   spentUsd: number;
   /**
    * Present when nothing usable came back: why (disabled / empty text / budget
-   * / model error / `parse_failure` / `output_truncated`). The last two mean the
-   * call WAS paid for and the answer could not be read — distinct from a turn
+   * / model error / `parse_failure` / `output_truncated` / `model_declined`).
+   * The last three mean the call WAS paid for and gave no readable answer (a
+   * refusal or content filter for `model_declined`) — distinct from a turn
    * that genuinely held no claims, which reports no `skipped` at all.
    */
   skipped?: string;
@@ -1581,7 +1582,9 @@ async function extractFactsOnDemandRun(
       ? { skipped: "output_truncated" }
       : result.outcome === "malformed"
         ? { skipped: "parse_failure" }
-        : {}),
+        : result.outcome === "declined"
+          ? { skipped: "model_declined" }
+          : {}),
   };
   if (opts.persist === true && opts.storage) {
     const w = await writeExtractedFacts(opts.storage, extracted, {
