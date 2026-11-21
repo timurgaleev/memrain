@@ -1,4 +1,4 @@
--- 190_entity_dedupe_rejections.sql — pairs of person or company pages the
+-- 188_entity_dedupe_rejections.sql — pairs of person or company pages the
 -- owner said are different entities.
 --
 -- `memrain dedupe --preview` lists pages that share an email, phone, handle,

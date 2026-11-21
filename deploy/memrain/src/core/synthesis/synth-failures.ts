@@ -119,7 +119,7 @@ export async function recordSynthFailure(engine: Engine, f: SynthFailureInput): 
 
 /**
  * Record that the model read a document and found nothing to make of it
- * (migration 191). The row parks the document for good on this content hash
+ * (migration 189). The row parks the document for good on this content hash
  * and model: an edit or a model switch is a new question. A later failure on
  * new content replaces it like any other row.
  */

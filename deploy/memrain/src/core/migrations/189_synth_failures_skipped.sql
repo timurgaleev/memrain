@@ -1,4 +1,4 @@
--- 191_synth_failures_skipped.sql — a synthesis phase can record "nothing here".
+-- 189_synth_failures_skipped.sql — a synthesis phase can record "nothing here".
 --
 -- The reflections phase sends recent transcripts that no reflection cites yet.
 -- When the model answers that nothing is worth reflecting on, nothing marked
