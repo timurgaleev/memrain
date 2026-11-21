@@ -42,6 +42,7 @@ import { resolveModel } from "../llm/resolve-model.ts";
 import { clearSynthFailure, filterBackedOff, recordSynthFailure } from "./synth-failures.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
 import { guardFields } from "../secret-scan.ts";
+import { flagRowAt } from "../write-gate-rows.ts";
 
 export const PROPOSE_TAKES_PROMPT_VERSION = "v1-nova";
 
@@ -604,6 +605,7 @@ export async function proposeTakesPhase(
           [key, doc.id, doc.contentHash16, promptVersion, take.claim_text, take.kind, take.weight, take.domain ?? null, modelId, embedding],
         );
         result.takesQueued += 1;
+        await flagRowAt(engine, { table: "synth_takes", targetId: key, fields: [{ field: "claim", text: take.claim_text }] }, { document: doc.id });
       } catch (e) {
         result.errors.push(`${doc.id} take write: ${e instanceof Error ? e.message : String(e)}`);
       }

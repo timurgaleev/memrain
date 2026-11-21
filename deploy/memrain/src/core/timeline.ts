@@ -21,6 +21,7 @@ import { guardFields } from "./secret-scan.ts";
 import { stripNul } from "./well-form.ts";
 import { OperationError, PageNotFoundError } from "./operation-error.ts";
 import { isCalendarDate } from "./effective-date.ts";
+import { flagRowAt } from "./write-gate-rows.ts";
 
 export interface AddTimelineEventInput {
   slug: string;
@@ -219,6 +220,7 @@ export async function addTimelineEvent(
        RETURNING ${input.includeRow ? TIMELINE_ROW_COLUMNS : "id"}`,
       params,
     );
+    await flagTimelineRow(storage, r.rows[0]?.id, event!, detail!);
     return timelineWriteResult(storage, input, occurred, event!, sourceLabel, r.rows[0]);
   }
   const params: unknown[] = [input.slug, occurred, event, detail, sourceLabel, chunkId];
@@ -233,7 +235,20 @@ export async function addTimelineEvent(
      RETURNING ${input.includeRow ? TIMELINE_ROW_COLUMNS : "id"}`,
     params,
   );
+  await flagTimelineRow(storage, r.rows[0]?.id, event!, detail!);
   return timelineWriteResult(storage, input, occurred, event!, sourceLabel, r.rows[0]);
+}
+
+/** Run a newly stored event through the write gate (flag mode, best effort). */
+async function flagTimelineRow(
+  storage: Storage, id: number | undefined, event: string, detail: string,
+): Promise<void> {
+  if (id === undefined) return;
+  await flagRowAt(storage.engine(), {
+    table: "timeline_events",
+    targetId: id,
+    fields: [{ field: "event", text: event }, { field: "detail", text: detail }],
+  }, { event: id });
 }
 
 export interface ListTimelineOptions {

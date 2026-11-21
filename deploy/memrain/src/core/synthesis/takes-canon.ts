@@ -27,6 +27,7 @@ import {
 import { contentHash16 } from "./atoms.ts";
 import { fenceBounds, hasFenceMarker } from "../fence-shared.ts";
 import { takeOwnerFilterSql } from "./takes-owner.ts";
+import { flagRowAt } from "../write-gate-rows.ts";
 
 /** Prompt-version marker for fence-derived rows — they never came from an LLM
  *  prompt, but the column is NOT NULL and doubles as provenance. */
@@ -278,6 +279,11 @@ export async function syncTakesFromFence(
       ],
     );
     result.rowsUpserted += 1;
+    await flagRowAt(engine, {
+      table: "synth_takes",
+      targetId: fenceTakeKey(sourceRef, t.rowNum),
+      fields: [{ field: "claim", text: t.claim }, { field: "evidence", text: t.resolvedEvidence ?? "" }],
+    }, { page: sourceRef });
   }
 
   if (options.deactivateMissing === false) return result;

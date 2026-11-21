@@ -84,6 +84,7 @@ const SOURCE_TABLES: Record<string, Disposition> = {
   "connector_accounts": { kind: "cascade" },
   "connector_oauth_states": { kind: "cascade" },
   "write_gate_holds": { kind: "cascade" },
+  "write_gate_receipts": { kind: "cascade" },
   "notifications": { kind: "cascade" },
   "open_loops": { kind: "cascade" },
   "loop_suppressions": { kind: "cascade" },

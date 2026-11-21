@@ -18,6 +18,7 @@ import type {
   ChronicleTimelineOpts,
   LastSeenResult,
 } from "./chronicle/types.ts";
+import { flagRowAt } from "./write-gate-rows.ts";
 
 /** Enforce the mandatory tenant scope. Returns the scope array or throws. */
 function requireScope(sourceIds: readonly string[] | undefined): string[] {
@@ -264,6 +265,14 @@ export async function upsertEventProjection(
       input.sourceId,
     ],
   );
+  const id = r.rows[0]?.id;
+  if (id !== undefined) {
+    await flagRowAt(storage.engine(), {
+      table: "timeline_events",
+      targetId: id,
+      fields: [{ field: "event", text: summary }, { field: "detail", text: detail }],
+    }, { event: id });
+  }
   return { projected: r.rows.length > 0 };
 }
 

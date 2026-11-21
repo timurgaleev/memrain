@@ -44,6 +44,7 @@ import type { BudgetTracker } from "./budget.ts";
 import { guardFields } from "./secret-scan.ts";
 import { withdrawLockKey } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
+import { flagRowAt } from "./write-gate-rows.ts";
 import { readEntityIdentity, type EntityIdentity } from "./person-identity.ts";
 import { contestedWith } from "./typed-conflicts.ts";
 
@@ -851,6 +852,13 @@ export async function addFact(
       withdrawn: true,
       withdrawn_detail: await getWithdrawalDetail(storage.engine(), withdrawalKey),
     };
+  }
+  if (landed.inserted && landed.id !== null) {
+    await flagRowAt(storage.engine(), {
+      table: "entity_facts",
+      targetId: landed.id,
+      fields: [{ field: "fact", text: fact }, { field: "context", text: factContext ?? "" }],
+    }, { fact: landed.id });
   }
   return { id: landed.id, entity_slug: input.entity_slug, inserted: landed.inserted };
 }
