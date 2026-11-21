@@ -107,6 +107,7 @@ const SOURCE_TABLES: Record<string, Disposition> = {
   "fact_purge_receipts": { kind: "exempt", reason: "ids-only undo and audit receipts, kept after the source is gone" },
   "page_purges": { kind: "exempt", reason: "content hashes only, no text; a tombstone of a deleted source never matches a write elsewhere" },
   "secret_audit_runs": { kind: "exempt", reason: "operator audit history of counts and ids, no content" },
+  "owner_only_retired_sources": { kind: "exempt", reason: "remembers that a deleted source was owner-only, so what was derived from it stays closed; ids only, no content" },
   "daemon_controls": { kind: "exempt", reason: "operator switches keyed by source id ('*' for all); a row for a deleted source is inert, since the scheduler only targets sources that exist, and holds no content" },
   "fact_withdrawals": { kind: "gap", reason: "withdrawals survive the source; a new source with the same id inherits them" },
   "ingest_log": { kind: "gap", reason: "the log survives the source; a new source with the same id reads it" },

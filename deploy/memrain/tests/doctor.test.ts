@@ -145,6 +145,8 @@ describe("doctor", () => {
       "oauth-client-hygiene",
       "oauth-self-issued-config",
       "outside-content-fences",
+      "owner-identity",
+      "owner-only-sources",
       "page-version-storage",
       "pat-scopes-recorded",
       "person-name-duplicates",
@@ -167,6 +169,7 @@ describe("doctor", () => {
       "stale-locks",
       "stats",
       "tenancy-isolation-config",
+      "unscoped-shared-reads",
       "vault",
     ]);
     // The eval-trend check is informational (ok) and reports the not-yet-run

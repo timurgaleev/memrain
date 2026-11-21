@@ -10,6 +10,7 @@
  * check can never reach past the scope the forget itself was allowed. The
  * result carries fact ids and scores only, never fact text.
  */
+import { ownerOnlyLineageSql } from "./owner-only.ts";
 import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
 
@@ -78,7 +79,7 @@ export async function similarActiveAfterForget(
       WHERE n.id = $1${scope}
         AND c.forgotten_at IS NULL
         AND c.dimension IS NULL
-        AND ($2::boolean = false OR c.visibility = 'world')
+        AND ($2::boolean = false OR (c.visibility = 'world' AND ${ownerOnlyLineageSql("fact", "c.id")}))
         ${extra}
         AND ${score} >= $3
       ORDER BY similarity DESC, c.id

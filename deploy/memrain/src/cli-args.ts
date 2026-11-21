@@ -42,6 +42,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--bench",
   "--by-kind",
   "--catch-up",
+  "--clear",
   "--contextual",
   "--cosine-rescore",
   "--dry-run",
@@ -126,7 +127,7 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--input", "--judge-model", "--k", "--keep-days", "--lme-r", "--lme-r-base", "--kind", "--kinds", "--label", "--limit", "--max-drop",
   "--new-file", "--old-file",
   "--max-cost-usd", "--max-jobs", "--max-latency-x", "--max-pages", "--max-retries", "--max-usd",
-  "--min-confidence", "--min-recall", "--model", "--modes", "--name", "--notes",
+  "--member", "--min-confidence", "--min-recall", "--model", "--modes", "--name", "--notes",
   "--older-than-days", "--out", "--owner", "--path-prefix", "--paths", "--pattern",
   "--payload", "--personal-source", "--pglite-path", "--phases", "--plan-hash", "--port", "--postgres-url", "--profile",
   "--prereg", "--priority", "--qrels", "--query", "--question", "--rate-limit-per-minute",
@@ -275,7 +276,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
     new Set([
       "--boost-weight", "--description", "--indexed-policy", "--kind",
       "--no-respect-quiet-hours", "--path-prefix", "--rate-limit-per-minute",
-      "--respect-quiet-hours", "--sync-policy",
+      "--respect-quiet-hours", "--sync-policy", "--apply",
     ]),
   ],
   [
@@ -327,7 +328,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--access-ttl", "--bound-slug-prefixes", "--client", "--client-file", "--dry-run",
       "--expect-operator", "--expect-source", "--expect-version",
       "--expected-revision", "--federated-read", "--grant", "--grant-types", "--json",
-      "--label", "--limit", "--profile", "--purge", "--redirect-uris", "--refresh-ttl", "--replaces", "--scopes", "--source",
+      "--label", "--limit", "--member", "--profile", "--purge", "--redirect-uris", "--refresh-ttl", "--replaces", "--scopes", "--source",
       "--takes-holders", "--tenant-mode", "--token",
       "--token-endpoint-auth-method", "--token-file", "--ttl",
     ]),
@@ -349,7 +350,8 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
     new Set(["--apply", "--force", "--include-flagged", "--json", "--limit"]),
   ],
   ["write-gate", new Set(["--all", "--json"])],
-  ["member", new Set(["--all", "--apply", "--client", "--email", "--enrollment", "--erase-personal-source", "--name", "--out", "--personal-source", "--token"])],
+  ["member", new Set(["--all", "--apply", "--clear", "--client", "--email", "--enrollment", "--erase-personal-source", "--name", "--out", "--personal-source", "--token"])],
+  ["identity", new Set(["--json", "--member"])],
   ["group", new Set(["--allow-owner-source", "--name"])],
   ["secrets", new Set(["--apply", "--dir", "--json", "--kinds", "--limit", "--plan-hash", "--slug", "--slug-prefixes", "--source", "--transcripts", "--yes"])],
   [
@@ -383,7 +385,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
       "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts",
     ]),
   ],
-  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "purge-leftovers", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member"])],
+  ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "purge-leftovers", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member", "sources"])],
   ["--fix", new Set(["lint"])],
 ]);
 

@@ -512,6 +512,7 @@ export async function buildContextPack(
       ...(opts.decay !== undefined ? { decay: opts.decay } : {}),
       ...(opts.sourceIds !== undefined ? { sourceIds: opts.sourceIds } : {}),
       ...(opts.visibility?.length ? { visibility: opts.visibility } : {}),
+      ...(opts.remote ? { excludeOwnerOnly: true } : {}),
     });
     kept.length = 0;
     const rowTiers = opts.minTrust === undefined ? undefined

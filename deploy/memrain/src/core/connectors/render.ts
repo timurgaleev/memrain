@@ -12,6 +12,7 @@
  * Slugs carry hashes, never addresses, names or subjects, so a slug can sit in
  * a receipt or a log line without leaking message text.
  */
+import { SPEAKER_OWNER_KEY, speakerOwnerFromTurns } from "../speaker-owner.ts";
 import { guardSecrets, type SecretFinding } from "../secret-scan.ts";
 import { neutralizeOutsideText } from "../neutralize-outside-text.ts";
 import { OUTSIDE_NEUTRALIZED } from "../fence-carry.ts";
@@ -436,11 +437,14 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
 
   const lines = [`# ${title}`, "", `${day.private ? "Private chat" : "Chat"} channel day · ${messages.length} message${messages.length === 1 ? "" : "s"}`, ""];
   const bodies: string[] = [];
+  const turns: Array<{ label: string; owner: boolean }> = [];
   for (const m of messages) {
     const at = iso(m.ts, "message time");
     // A thread reply posted on a later day stays with its thread and carries its own date.
     const stamp = at.slice(0, 10) === day.day ? at.slice(11, 16) : `${at.slice(0, 10)} ${at.slice(11, 16)}`;
-    lines.push(`${stamp} ${g.person({ name: m.author.name, email: m.author.name ? null : m.author.email })}${m.threadId ? " (reply)" : ""}`);
+    const speaker = g.person({ name: m.author.name, email: m.author.name ? null : m.author.email });
+    turns.push({ label: speaker, owner: m.fromSelf === true });
+    lines.push(`${stamp} ${speaker}${m.threadId ? " (reply)" : ""}`);
     const text = g.invite(m.text).trim();
     bodies.push(text);
     lines.push(text === "" ? "_No text._" : text, "");
@@ -452,6 +456,9 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
   truth["messages"] = messages.length;
   if (day.private) truth["private"] = true;
   if (day.truncated) truth["truncated"] = true;
+  // Which speaker is the account's own, only when the provider marked every message.
+  const owner = messages.every((m) => m.fromSelf !== undefined) ? speakerOwnerFromTurns(turns, "is_from_me", null) : null;
+  if (owner) truth[SPEAKER_OWNER_KEY] = owner;
   return {
     slug, type: CONNECTOR_PAGE_TYPES.chat, title, body: finish(lines), truth, findings: g.findings,
     kind: "chat", externalId: `${day.channelId}:${day.day}`, occurredAt: dayStart,

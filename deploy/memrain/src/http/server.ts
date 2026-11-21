@@ -469,6 +469,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
                 ...(info.spendId ? { spendId: info.spendId } : {}),
                 ...(info.principal ? { principal: info.principal } : {}),
                 ...(info.toolSurface ? { toolSurface: info.toolSurface } : {}),
+                ...(info.memberId ? { memberId: info.memberId } : {}),
                 isPublic: false,
               };
             } catch (e) {
@@ -652,6 +653,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
                 ...(info.spendId ? { spendId: info.spendId } : {}),
                 ...(info.principal ? { principal: info.principal } : {}),
                 ...(info.toolSurface ? { toolSurface: info.toolSurface } : {}),
+                ...(info.memberId ? { memberId: info.memberId } : {}),
                 isPublic: guard.isPublic,
               };
             } catch (e) {

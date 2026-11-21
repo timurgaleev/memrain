@@ -52,6 +52,7 @@ the entry below.
 | [`precondition_required`](#precondition_required) | invalid_request | no | 2 | The overwrite must name the version it read |
 | [`rate_limited`](#rate_limited) | limit | yes | 75 | Too many requests |
 | [`request_in_progress`](#request_in_progress) | conflict | yes | 75 | A call with this request_id is still running |
+| [`requester_scope_required`](#requester_scope_required) | permission | no | 1 | This brain serves several people and the credential is bound to nobody |
 | [`result_too_large`](#result_too_large) | invalid_request | no | 2 | The result is over the response size limit |
 | [`root_missing`](#root_missing) | not_found | no | 1 | The directory does not exist |
 | [`storage_error`](#storage_error) | transient | yes | 75 | The storage layer failed |
@@ -230,6 +231,14 @@ the entry below.
 **What happened.** An earlier call with the same `request_id` has claimed the write and has not finished yet.
 
 **What to do.** Retry shortly with the same `request_id` and arguments; you receive the first call's result instead of a second write.
+
+### requester_scope_required
+
+**This brain serves several people and the credential is bound to nobody.** Class: permission. Retryable: no. CLI exit: 1.
+
+**What happened.** The brain has two or more enabled members (or `access.serves` is `several`), and the credential names neither a member nor a source, so it cannot say whose reads it makes. Reads are refused; `whoami` still answers.
+
+**What to do.** On the brain host, bind the credential to the person it serves (`memrain member bind <member> --token <name>`), or scope it to a source.
 
 ### result_too_large
 

@@ -19,6 +19,7 @@ import { requestLogDbEnabled } from "../mcp/request-log-db.ts";
 import { requestLogRetentionDays } from "../core/request-log-retention.ts";
 import { resolveIssuer } from "./oauth-metadata.ts";
 import { patNameSpendConflict } from "../core/budget.ts";
+import { assertCredentialScoped } from "../core/requester-scope.ts";
 import { createHash, randomBytes } from "node:crypto";
 import type { Storage } from "../core/storage.ts";
 import type { Engine } from "../core/engine/interface.ts";
@@ -391,6 +392,12 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       });
     } catch (e) {
       return badRequest(e instanceof Error ? e.message : "invalid token grant");
+    }
+    try {
+      await assertCredentialScoped(engine, { sourceId: grant.sourceGrant ?? null }, "token", name);
+    } catch (e) {
+      if (e instanceof OperationError) return badRequest(`${e.message} ${e.suggestion ?? ""}`.trim());
+      throw e;
     }
     try {
       const dup = await engine.query<{ id: number }>(

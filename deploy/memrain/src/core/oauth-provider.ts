@@ -420,6 +420,8 @@ export interface AuthInfo {
   principal?: PrincipalRef;
   /** A narrowed tool menu from the row's tool_surface; absent = full. */
   toolSurface?: "starter" | "verbs";
+  /** The enabled member the credential is bound to. */
+  memberId?: string;
 }
 
 /** A live grant read back from a principal reference: no bearer, no expiry. */
@@ -3155,7 +3157,7 @@ export class OAuthProvider {
           "ask the brain operator to enable the member or rebind the credential",
       );
     }
-    return widenReadSources(grant, access.groupSources);
+    return { ...widenReadSources(grant, access.groupSources), memberId: access.memberId };
   }
 
   // -------------------------------------------------------------------------

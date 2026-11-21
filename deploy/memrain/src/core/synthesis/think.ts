@@ -20,6 +20,7 @@
  * rounds are wired; persistence (--save/--take) lives in think-persist.ts.
  * Sonnet injected via `sonnetFn`; NO live Bedrock in tests.
  */
+import { fenceOwnerOnlyHits } from "../owner-only.ts";
 import { gatherDiagnostics, type GatherFailure, type OnGatherFailure } from "../gather-degraded.ts";
 import { publicSearchMeta } from "../search/search-meta.ts";
 import { resolveModel } from "../llm/resolve-model.ts";
@@ -186,6 +187,11 @@ export interface ThinkOptions {
    * the diary fence on `search`.
    */
   fenceDiary?: boolean;
+  /**
+   * A non-owner remote caller: leave out pages, facts and timeline rows derived
+   * from an owner-only source (core/owner-only.ts).
+   */
+  fenceOwnerOnly?: boolean;
   /**
    * Drop pages below this trust tier (core/trust-tier.ts) from every page
    * stream. Set by the background synthesis no reader asked for, so outside
@@ -1004,6 +1010,7 @@ async function gatherTrajectories(
   anchors: string[],
   sourceIds?: readonly string[],
   onDegraded?: OnGatherFailure,
+  remote = false,
 ): Promise<Array<{ slug: string; points: TrajectoryPoint[] }>> {
   const slugs = Array.from(new Set(anchors.filter((s) => typeof s === "string" && s.length > 0))).slice(
     0,
@@ -1020,6 +1027,7 @@ async function gatherTrajectories(
         const points = await findTrajectory(storage, slug, {
           limit: TRAJECTORY_MAX_POINTS,
           ...(sourceIds !== undefined ? { sourceIds: [...sourceIds] } : {}),
+          ...(remote ? { remote: true } : {}),
         });
         return { slug, points };
       } catch {
@@ -1428,11 +1436,11 @@ async function runThinkSteps(
       ? { ...(opts.since ? { since: opts.since } : {}), ...(opts.until ? { until: opts.until } : {}) }
       : questionWindow;
   const windowFields = window ? { window_source: questionWindow ? "question" as const : "explicit" as const, window } : {};
-  const fence = (hits: SearchHit[]): SearchHit[] =>
-    opts.fenceDiary ? hits.filter((h) => !isDiarySourcePath(h.sourcePath)) : hits;
+  const fence = async (hits: SearchHit[]): Promise<SearchHit[]> =>
+    fenceOwnerOnlyHits(engine, opts.fenceDiary ? hits.filter((h) => !isDiarySourcePath(h.sourcePath)) : hits, opts.fenceOwnerOnly === true);
   const rawPagesFn = opts.pagesFn ?? ((q, kk) => gatherPages(storage, q, kk, scopeIds, window, opts.embedQuery, diagnostics.note, opts.minTrust));
   const pagesFn = async (q: string, kk: number): Promise<SearchHit[]> =>
-    markExternalChunks(engine, await keepMinTrust(engine, fence(await rawPagesFn(q, kk)), opts.minTrust, scopeIds), scopeIds);
+    markExternalChunks(engine, await keepMinTrust(engine, await fence(await rawPagesFn(q, kk)), opts.minTrust, scopeIds), scopeIds);
   const gatherStarted = Date.now();
   const [hybridPages, takesKw, takesVec] = await Promise.all([
     pagesFn(question, k),
@@ -1456,7 +1464,7 @@ async function runThinkSteps(
   }
   const trajectories =
     intent !== "other" && anchors.length > 0
-      ? await gatherTrajectories(storage, anchors, opts.sourceIds, diagnostics.note)
+      ? await gatherTrajectories(storage, anchors, opts.sourceIds, diagnostics.note, opts.fenceOwnerOnly === true)
       : [];
   const trajectoryBlock = renderTrajectoryBlock(trajectories);
   const shownPoints = trajectoryBlock === "" ? [] : trajectories.flatMap((t) => t.points);
@@ -1467,7 +1475,7 @@ async function runThinkSteps(
   // WITHOUT anchors (hermetic paths stay hermetic).
   let pages = hybridPages;
   if (anchors.length > 0) {
-    const graphPages = await markExternalChunks(engine, await keepMinTrust(engine, fence(await gatherGraphPages(
+    const graphPages = await markExternalChunks(engine, await keepMinTrust(engine, await fence(await gatherGraphPages(
       storage, anchors, k, scopeIds, diagnostics.note, questionWindow?.since,
     )), opts.minTrust, scopeIds), scopeIds);
     traceGather(trace, "graph", graphPages);

@@ -67,7 +67,7 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "cache": subs("stats", "prune", "clear"),
   "embed": free,
   "call": free,
-  "sources": subs("list", "show", "register", "update", "delete"),
+  "sources": subs("list", "show", "register", "update", "delete", "owner-only", "provenance"),
   "eval-replay": subs("capture", "list", "delete", "run"),
   "jobs": subs(
     "list",
@@ -126,7 +126,8 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "capture": free,
   "quarantine": subs("list", "clear", "scan"),
   "write-gate": subs("list", "approve", "reject"),
-  "member": subs("list", "show", "add", "disable", "enable", "remove", "bind", "unbind"),
+  "member": subs("list", "show", "add", "disable", "enable", "remove", "bind", "unbind", "owner"),
+  "identity": bare,
   "group": subs("list", "show", "add", "remove", "grant-source", "revoke-source", "add-member", "remove-member"),
   "waiting": subs("sweep", "done", "drop", "mute", "unmute"),
   "secrets": subs("audit", "originals", "reveal", "restore", "backup", "restore-backup"),

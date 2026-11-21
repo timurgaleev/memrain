@@ -101,6 +101,19 @@ marked; this section is the one that stands.
   it was registered with; changing it is `memrain auth rescope-client`. Fold a
   picker into the grant editor (W6c, L4-22).
 
+## Follow-ups from the brain owner and owner-only sources
+
+- HIGH (operator decision): `recall` (by fact id), `find_trajectory` and `fact_supersessions` return private and diary-derived facts to every remote caller in scope, while `entity_facts`, `entity_recall` and `context_pack` floor them to `world` (mig 085). W3a kept "every other caller reads as today" and left these three as they are (tests/tenant_isolation_* and dispatch_diary_fence encode it); closing them changes what OAuth clients and member keys see.
+
+- MEDIUM: keyed marker fingerprints. A `[REDACTED:<kind>:<fingerprint>]` marker shows a sha256 prefix of the value, so a weak password can be guessed offline by anyone who reads the page. The fix is a random store id in new markers plus a keyed MAC for dedup, which changes the marker format, `secret_store` lookups, reveal/restore/backup and the allowlist (about 25 files); it needs its own reviewed package. Existing markers must keep resolving.
+- MEDIUM: a non-owner key with an explicit write grant on an owner-only source can still read through write paths that load the current page from the write source (`page_edit`, `page_append` replies). Refuse writes into an owner-only source from non-owner keys on a shared brain, or narrow those reads.
+- MEDIUM: the hosted member chat (`ChatOwner.readSources`, built outside this repo) must apply `narrowOwnerOnlyScope` the way MCP dispatch does.
+- LOW: agent jobs re-read their principal without the member binding, so an owner's agent job reads as an ordinary key (safe, but it loses owner reads) and, on a shared brain, needs a source grant to read.
+- LOW: graph, backlinks and link listings can still name a concept page derived from an owner-only source (slug and title, not its text); fence them like `page_list`.
+- LOW: a concept page is written before its origins are recorded, outside one transaction; a failure between the two leaves that page open to non-owners until the next synthesis run or `memrain sources provenance --apply`.
+- LOW: `think` now fences owner-only pages and trajectory rows for non-owner callers, but no test drives it end to end (it needs a stub model through MCP).
+- LOW: use a trusted `speaker_owner` marker in fact extraction (tell the extractor which speaker label is the owner) and stamp it in the mail and meeting renders.
+
 ## Follow-ups from the secret store
 
 - **Two concurrent restores of one entry can undo each other's status.** A

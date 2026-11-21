@@ -15,6 +15,7 @@
  * future dream-cycle phase can mark superseded events but it never
  * mutates existing rows.
  */
+import { ownerOnlyLineageSql } from "./owner-only.ts";
 import type { Storage } from "./storage.ts";
 import { validateSlug } from "./pages.ts";
 import { guardFields } from "./secret-scan.ts";
@@ -262,6 +263,8 @@ export interface ListTimelineOptions {
    * to `source_id = ANY(...)`. Omitted -> unscoped (whole-brain); `[]` -> nothing.
    */
   sourceIds?: string[];
+  /** A non-owner remote read: rows derived from an owner-only source are left out (core/owner-only.ts). */
+  excludeOwnerOnly?: boolean;
 }
 
 export async function getEntityTimeline(
@@ -284,6 +287,7 @@ export async function getEntityTimeline(
     params.push(opts.sourceIds);
     where.push(`source_id = ANY($${params.length}::text[])`);
   }
+  if (opts.excludeOwnerOnly) where.push(ownerOnlyLineageSql("timeline", "te.id"));
   const limit =
     typeof opts.limit === "number" && opts.limit >= 1 && opts.limit <= 1000
       ? Math.floor(opts.limit)

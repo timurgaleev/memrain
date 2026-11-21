@@ -9,6 +9,7 @@
  *   member remove <id> --erase-personal-source [--apply --out DIR]
  *   member bind <id> --token NAME | --client CLIENT_ID | --enrollment ID
  *   member unbind --token NAME | --client CLIENT_ID | --enrollment ID
+ *   member owner [<id> | --clear]     show, name or clear the brain owner
  *
  *   group list
  *   group show <id>
@@ -49,12 +50,13 @@ import {
   revokeGroupSource,
 } from "../core/groups.ts";
 import { ErasureUsageError, eraseMemberPersonalSource } from "../core/member-offboarding.ts";
+import { clearOwner, ownerView, setOwner } from "../core/brain-owner.ts";
 import { cliActor } from "./auth.ts";
 import { withStorage } from "./with-storage.ts";
 import type { Engine } from "../core/engine/interface.ts";
 import { OperationError } from "../core/operation-error.ts";
 
-export const MEMBER_SUBCOMMANDS = ["list", "show", "add", "disable", "enable", "remove", "bind", "unbind"] as const;
+export const MEMBER_SUBCOMMANDS = ["list", "show", "add", "disable", "enable", "remove", "bind", "unbind", "owner"] as const;
 export const GROUP_SUBCOMMANDS = [
   "list", "show", "add", "remove", "grant-source", "revoke-source", "add-member", "remove-member",
 ] as const;
@@ -70,6 +72,8 @@ export interface MemberCmdOptions {
   client?: string;
   enrollment?: string;
   allowOwnerSource?: boolean;
+  /** `owner --clear`: name no owner. */
+  clear?: boolean;
   /** `remove --erase-personal-source`: offboard the member's own source too. */
   erasePersonalSource?: boolean;
   apply?: boolean;
@@ -77,7 +81,7 @@ export interface MemberCmdOptions {
   configPath?: string;
 }
 
-const MEMBER_USAGE = "Usage: memrain member <list|show|add|disable|enable|remove|bind|unbind> … (see memrain help)";
+const MEMBER_USAGE = "Usage: memrain member <list|show|add|disable|enable|remove|bind|unbind|owner> … (see memrain help)";
 const GROUP_USAGE = "Usage: memrain group <list|show|add|remove|grant-source|revoke-source|add-member|remove-member> … (see memrain help)";
 
 class UsageError extends Error {}
@@ -141,6 +145,15 @@ async function memberCommand(storage: Storage, opts: MemberCmdOptions, who: Memb
       return { binding: await bindCredential(engine, need(id, "Usage: memrain member bind <id> --token NAME|--client ID|--enrollment ID"), credentialFrom(opts), who) };
     case "unbind":
       return { binding: await bindCredential(engine, null, credentialFrom(opts), who) };
+    case "owner": {
+      if (opts.clear === true && id !== undefined) throw new UsageError("Usage: memrain member owner [<id> | --clear]");
+      if (opts.clear === true) return { owner: await clearOwner(engine) };
+      if (id === undefined) return { owner: await ownerView(engine) };
+      return {
+        owner: await setOwner(engine, id),
+        note: "Credentials bound to this member read the brain as its owner from their next request on.",
+      };
+    }
     default:
       throw new UsageError(MEMBER_USAGE);
   }

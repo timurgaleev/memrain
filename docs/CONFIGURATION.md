@@ -417,6 +417,8 @@ that stops making calls once the budget is spent. All default OFF.
 | `MEMRAIN_MCP_RATE_LIMIT_PER_TOKEN_PER_MINUTE` | unset (off) | Per-credential cap on `/mcp` requests per minute, applied after authentication, on top of the per-IP limiter. Allowlisted. | free |
 | `MEMRAIN_PUBLIC_AUTH` | unset | `oauth`: public requests have no static bearer; a missing or unknown credential gets 401 with the resource-metadata challenge, and OAuth tokens and personal access tokens are verified as usual. Refuses to start with `MEMRAIN_PUBLIC_BEARER` also set; any other value is refused. Environment only. | free |
 | `MEMRAIN_REQUIRE_MEMBER` | off (`=1` on) | Refuse a credential that is not bound to a member on `/mcp` and `/ingest`. Environment only. | free |
+| config `access.serves` | unset (derived) | `several` makes the brain serve several people (unbound keys refused for reads, owner-only sources closed) even with one member. Two or more enabled members always count as several, whatever it says. Set in the `config` table on the brain host. | free |
+| config `access.owner_member` | unset | The member whose keys read as the brain owner. Set with `memrain member owner <id>`. | free |
 | `MEMRAIN_TENANT_ID` | unset | Read only by a build that wraps the server with an extension (`core/extension.ts`). Set without one registered, the server refuses to start. Environment only. | free |
 | `MEMRAIN_CONTROL_URL` | unset | As `MEMRAIN_TENANT_ID`: meaningful only to a wrapping build; set without one registered, the server refuses to start. Environment only. | free |
 | `MEMRAIN_PUBLIC_READ_BODIES` | off (redacted) | When on, public reads return full page bodies instead of redacted snippets. Leave off on a shared brain. Code-only. | free |

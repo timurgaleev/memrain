@@ -50,6 +50,8 @@ import { runEvalPrune } from "./commands/eval-prune.ts";
 import { runApplyMigrations } from "./commands/apply-migrations.ts";
 import {
   runSources,
+  runSourceOwnerOnly,
+  runSourceProvenance,
   isSourceKind,
   isSyncPolicy,
   isIndexedPolicy,
@@ -93,6 +95,7 @@ import { runWaiting } from "./commands/waiting.ts";
 import { runQuarantine, type QuarantineSub } from "./commands/quarantine.ts";
 import { runWriteGate } from "./commands/write-gate.ts";
 import { runGroup, runMember } from "./commands/members.ts";
+import { runIdentity } from "./commands/identity.ts";
 import { assertExtensionPresent, extension } from "./core/extension.ts";
 import { runSecretsAudit, runSecretStore } from "./commands/secrets.ts";
 import {
@@ -253,6 +256,8 @@ function printUsage(): void {
   console.log("  sources update <id> [...same flags as register, all optional...]");
   console.log("                               [--no-respect-quiet-hours] to clear the flag");
   console.log("  sources delete <id>          refuses if any document still references it");
+  console.log("  sources owner-only <id> [on|off]   a personal mailbox/calendar only the owner reads on a shared brain");
+  console.log("  sources provenance [--apply]       record where older derived rows came from (dry run first)");
   console.log("  friction analyze [--since H|ISO|7d] [--limit N]");
   console.log("                               counts + recent + top-repeats from friction_events");
   console.log("  friction list [--kind K] [--skill S] [--since H|ISO|7d] [--limit N]");
@@ -319,7 +324,7 @@ function printUsage(): void {
   console.log("                               daily USD ceiling across every paid op ('none' = uncapped)");
   console.log("  auth grant-token <id> <secret> [--scopes S]");
   console.log("                               mint an access token locally (= POST /token)");
-  console.log("  auth create <name> [--takes-holders a,b] [--source SRC] [--federated-read a,b]");
+  console.log("  auth create <name> [--member M] [--takes-holders a,b] [--source SRC] [--federated-read a,b]");
   console.log("                    [--scopes read,write]");
   console.log("                               mint a long-lived personal access token (prints once)");
   console.log("  auth list                    JSON list of personal access tokens (no hashes)");
@@ -365,6 +370,8 @@ function printUsage(): void {
   console.log("  member list [--all] | show <id>        the people of a team brain");
   console.log("  member add <id> [--name N] [--email E] [--personal-source SRC]");
   console.log("  member disable|enable|remove <id>   disable stops every key bound to the member");
+  console.log("  member owner [<id> | --clear]   name the brain owner: its keys read private facts");
+  console.log("  identity [--member <id>] [--json]   who the brain takes its owner to be, and why");
   console.log("  member remove <id> --erase-personal-source [--apply --out DIR]   export, then erase the member's own source");
   console.log("  member bind <id> --token NAME|--client ID|--enrollment ID");
   console.log("  member unbind --token NAME|--client ID|--enrollment ID");
@@ -1308,6 +1315,8 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
     }
     case "sources": {
       const sub = positional[0];
+      if (sub === "owner-only") return await runSourceOwnerOnly(positional[1], positional[2]);
+      if (sub === "provenance") return await runSourceProvenance(flags.has("--apply"));
       if (
         sub !== "list" &&
         sub !== "show" &&
@@ -1316,7 +1325,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
         sub !== "delete"
       ) {
         console.error(
-          "memrain sources: subcommand required (list|show|register|update|delete)",
+          "memrain sources: subcommand required (list|show|register|update|delete|owner-only|provenance)",
         );
         return 1;
       }
@@ -2009,6 +2018,10 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (flags.has("--json")) opts.json = true;
       return await runQuarantine(opts);
     }
+    case "identity": {
+      const member = values.get("--member");
+      return await runIdentity({ ...(member !== undefined ? { member } : {}), json: flags.has("--json") });
+    }
     case "member": {
       const opts: Parameters<typeof runMember>[0] = { sub: positional[0] ?? "", args: positional.slice(1) };
       if (flags.has("--all")) opts.all = true;
@@ -2025,6 +2038,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       const enrollment = values.get("--enrollment");
       if (enrollment !== undefined) opts.enrollment = enrollment;
       if (flags.has("--erase-personal-source")) opts.erasePersonalSource = true;
+      if (flags.has("--clear")) opts.clear = true;
       if (flags.has("--apply")) opts.apply = true;
       const out = values.get("--out");
       if (out !== undefined) opts.out = out;

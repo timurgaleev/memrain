@@ -353,6 +353,17 @@ async function promoteCluster(
         RETURNING id`,
       [ids, bucket.source_id, takeId],
     );
+    // The take restates its members' text, so it inherits where they came
+    // from: a member drawn from an owner-only source keeps the take closed too.
+    if (takeId !== null) {
+      await tx.query(
+        `INSERT INTO derived_origins (row_kind, row_id, origin_source_id)
+         SELECT DISTINCT 'fact', $1::text, d.origin_source_id FROM derived_origins d
+          WHERE d.row_kind = 'fact' AND d.row_id = ANY($2::text[])
+         ON CONFLICT DO NOTHING`,
+        [String(takeId), ids.map(String)],
+      );
+    }
     return { takeWritten, factsConsolidated: upd.rows.length };
   });
 }

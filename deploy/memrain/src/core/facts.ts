@@ -14,6 +14,7 @@
  * under). Chunk-sourced facts keep their narrower index-backed idempotency on
  * (entity_slug, fact, source_chunk_id, speaker) on top of it (migration 132).
  */
+import { ownerOnlyLineageSql } from "./owner-only.ts";
 import { factSourceEligibleSql } from "./quarantine.ts";
 import { supersededValidUntilSql } from "./fact-validity.ts";
 import { factRemoteEligibleSql } from "./fact-visibility.ts";
@@ -889,6 +890,8 @@ async function refreshClaim(
 }
 
 export interface ListFactsOptions {
+  /** A non-owner remote read: facts derived from an owner-only source are left out (core/owner-only.ts). */
+  excludeOwnerOnly?: boolean;
   /** ISO timestamp lower bound on written_at. */
   since?: string | Date;
   /** Filter to a single source page. */
@@ -968,6 +971,7 @@ export async function listFacts(
   const params: unknown[] = [];
   const where: string[] = [];
   if (opts.excludeDiary) where.push(factRemoteEligibleSql());
+  else if (opts.excludeOwnerOnly) where.push(ownerOnlyLineageSql("fact", "entity_facts.id"));
   // entity_slug is OPTIONAL: omit it for a cross-entity "what did I learn"
   // recall (an entity-less filtered recall). The visibility floor
   // + source scoping applied by the caller still gate an entity-less scan.
@@ -1123,6 +1127,8 @@ function rankByDecay(rows: FactRow[], limit: number): FactRow[] {
 // ---------------------------------------------------------------------------
 
 export interface ListSupersessionsOptions {
+  /** A non-owner remote read: facts derived from an owner-only source are left out. */
+  remote?: boolean;
   /** Confine to one entity's ledger. Omitted -> brain/scope-wide. */
   entity_slug?: string;
   /** ISO lower bound on the retirement time (`forgotten_at`). */
@@ -1161,6 +1167,8 @@ export async function listSupersessions(
     params.push(opts.sourceIds);
     where.push(`source_id = ANY($${params.length}::text[])`);
   }
+  // A non-owner remote read: no fact derived from an owner-only source.
+  if (opts.remote) where.push(ownerOnlyLineageSql("fact", "entity_facts.id"));
   const limit =
     typeof opts.limit === "number" && opts.limit >= 1 && opts.limit <= 1000
       ? Math.floor(opts.limit)
@@ -1316,10 +1324,11 @@ export async function entityRecall(
     listOpts.visibility = opts.visibility;
   const scoped = opts.sourceIds;
   if (scoped !== undefined) listOpts.sourceIds = scoped;
+  if (opts.remote) listOpts.excludeOwnerOnly = true;
   const [page, facts, timeline] = await Promise.all([
     getPage(storage, slug, scoped),
     listFacts(storage, slug, listOpts),
-    getEntityTimeline(storage, slug, { limit: timelineLimit, sourceIds: scoped }),
+    getEntityTimeline(storage, slug, { limit: timelineLimit, sourceIds: scoped, ...(opts.remote ? { excludeOwnerOnly: true } : {}) }),
   ]);
   let outPage = page;
   if (page && opts.redact_body) {

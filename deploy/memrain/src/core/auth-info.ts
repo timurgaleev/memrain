@@ -104,6 +104,11 @@ export interface AuthInfo {
   /** The credential behind this principal; absent for callers no token resolved. */
   principal?: PrincipalRef;
   /**
+   * The enabled member the credential is bound to, set by the verifier only.
+   * A credential bound to the brain owner reads as the owner (core/caller-access.ts).
+   */
+  memberId?: string;
+  /**
    * A narrowed tool menu (`tool_surface` on the token or client row); absent
    * means the full surface. It only ever hides tools (mcp/surface.ts).
    */
@@ -191,14 +196,16 @@ export function effectiveReadSourceIdsForIngress(
  * `*` wildcard entry — the operator's "all holders" escape hatch).
  *
  * Fail-safe: a REMOTE authenticated principal whose credential carries no
- * holder knob is floored to ['world'] — any remote token without the
+ * holder knob is floored to ['world'] (the brain owner's credential is not) — any remote token without the
  * allow-list is defaulted the same way. Only the operator path is unscoped
  * by absence.
  */
 export function effectiveTakesHolders(
   auth: AuthInfo | undefined,
+  opts: { owner?: boolean } = {},
 ): string[] | undefined {
-  const remoteFloor = auth === undefined ? undefined : ["world"];
+  // The brain owner's credential reads every holder unless it stores its own list.
+  const remoteFloor = auth === undefined || opts.owner === true ? undefined : ["world"];
   const list = auth?.takesHolders;
   if (!Array.isArray(list) || list.length === 0) return remoteFloor;
   const cleaned = list.filter((s) => typeof s === "string" && s.length > 0);

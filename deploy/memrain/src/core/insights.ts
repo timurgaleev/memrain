@@ -17,6 +17,7 @@
  * Tables: pages (015), links (016), timeline_events (017), entity_facts (018 +
  * 037 metadata). No schema change — all columns queried already exist.
  */
+import { ownerOnlyLineageSql } from "./owner-only.ts";
 import { factSourceEligibleSql } from "./quarantine.ts";
 import type { Storage } from "./storage.ts";
 import { orphanExclusionSql } from "./orphan-policy.ts";
@@ -492,7 +493,7 @@ export interface ProbedContradictionRow {
  */
 export async function listProbedContradictions(
   storage: Storage,
-  opts: { limit?: number; sourceIds?: string[]; severity?: "low" | "medium" | "high" } = {},
+  opts: { limit?: number; sourceIds?: string[]; severity?: "low" | "medium" | "high"; remote?: boolean } = {},
 ): Promise<ProbedContradictionRow[]> {
   const limit = clampLimit(opts.limit, 20, 200);
   const params: unknown[] = [];
@@ -505,6 +506,12 @@ export async function listProbedContradictions(
   if (opts.severity === "low" || opts.severity === "medium" || opts.severity === "high") {
     params.push(opts.severity);
     sourceFilter += ` AND severity = $${params.length}`;
+  }
+  // A non-owner remote read: no pair quoting a fact or page derived from an owner-only source.
+  if (opts.remote) {
+    sourceFilter += ` AND NOT ((SELECT memrain_owner_only_active()) AND (
+      (COALESCE(a_kind, 'fact') IN ('fact', 'page') AND memrain_owner_only_row(COALESCE(a_kind, 'fact'), a_ref))
+      OR (COALESCE(b_kind, 'fact') IN ('fact', 'page') AND memrain_owner_only_row(COALESCE(b_kind, 'fact'), b_ref))))`;
   }
   params.push(limit);
   const r = await storage.engine().query<ProbedContradictionRow>(
@@ -535,6 +542,8 @@ export async function listProbedContradictions(
 // --- find_trajectory -------------------------------------------------------
 
 export interface FindTrajectoryOptions {
+  /** A non-owner remote read: rows derived from an owner-only source are left out. */
+  remote?: boolean;
   /** Lower bound (ISO timestamp) on the point's effective date. */
   since?: string;
   /** Upper bound (ISO timestamp). */
@@ -653,6 +662,11 @@ export async function findTrajectory(
     const idx = params.length;
     factBounds += ` AND f.source_id = ANY($${idx}::text[])`;
     eventBounds += ` AND ev.source_id = ANY($${idx}::text[])`;
+  }
+  // A non-owner remote read: no fact or timeline row derived from an owner-only source.
+  if (opts.remote) {
+    factBounds += ` AND ${ownerOnlyLineageSql("fact", "f.id")}`;
+    eventBounds += ` AND ${ownerOnlyLineageSql("timeline", "ev.id")}`;
   }
   if (metric !== undefined) {
     params.push(metric);

@@ -74,6 +74,8 @@ describe("doctor categorize", () => {
       "oauth-client-hygiene",
       "oauth-self-issued-config",
       "outside-content-fences",
+      "owner-identity",
+      "owner-only-sources",
       "page-version-storage",
       "pat-scopes-recorded",
       "per-source-embed-coverage",
@@ -101,6 +103,7 @@ describe("doctor categorize", () => {
       // with an "uncategorized" warning at the moment something is wrong.
       "storage-teardown",
       "tenancy-isolation-config",
+      "unscoped-shared-reads",
       "vault",
     ]);
   });

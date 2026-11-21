@@ -16,8 +16,11 @@
  *               [--no-respect-quiet-hours] [--boost-weight N]
  *   delete <id>                                  refuses if documents
  *                                                still reference it
+ *   owner-only <id> [on|off]                     show or set the owner-only flag
+ *   provenance [--apply]                         record origins of older derived rows
  */
 import { Storage } from "../core/storage.ts";
+import { provenanceBackfill, provenanceBackfilled, setSourceOwnerOnly } from "../core/owner-only.ts";
 import { withStorage } from "./with-storage.ts";
 import { loadConfig } from "../core/config.ts";
 import {
@@ -179,4 +182,45 @@ export function isSyncPolicy(s: string): s is SyncPolicy {
 
 export function isIndexedPolicy(s: string): s is IndexedPolicy {
   return VALID_INDEXED_POLICIES.has(s as IndexedPolicy);
+}
+
+/**
+ * `memrain sources owner-only <id> [on|off]`: marks a personal mailbox or
+ * calendar source owner-only (core/owner-only.ts). It closes once the brain
+ * serves several people; on a one-person brain it changes no read.
+ */
+export async function runSourceOwnerOnly(id: string | undefined, value: string | undefined): Promise<number> {
+  if (!id || (value !== undefined && value !== "on" && value !== "off")) {
+    console.error("Usage: memrain sources owner-only <id> [on|off]");
+    return 1;
+  }
+  const storage = new Storage(loadConfig());
+  return withStorage(storage, async () => {
+    const engine = storage.engine();
+    if (value === undefined) {
+      const r = await engine.query<{ owner_only: boolean }>(`SELECT owner_only FROM sources WHERE id = $1`, [id]);
+      if (!r.rows[0]) throw new Error(`unknown source "${id}"`);
+      console.log(JSON.stringify({ ok: true, source_id: id, owner_only: r.rows[0].owner_only === true }, null, 2));
+      return 0;
+    }
+    const set = await setSourceOwnerOnly(engine, id, value === "on");
+    const pending = set.owner_only && !(await provenanceBackfilled(engine));
+    console.log(JSON.stringify({
+      ok: true, ...set,
+      ...(pending ? { note: "Rows derived from this source before this release are not closed yet: run memrain sources provenance, then --apply." } : {}),
+    }, null, 2));
+    return 0;
+  });
+}
+
+/**
+ * `memrain sources provenance [--apply]`: records where derived rows written
+ * before migration 181 came from. Dry run unless --apply; metadata only.
+ */
+export async function runSourceProvenance(apply: boolean): Promise<number> {
+  const storage = new Storage(loadConfig());
+  return withStorage(storage, async () => {
+    console.log(JSON.stringify({ ok: true, ...(await provenanceBackfill(storage.engine(), { apply })) }, null, 2));
+    return 0;
+  });
 }

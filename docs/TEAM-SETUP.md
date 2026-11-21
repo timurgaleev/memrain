@@ -286,6 +286,69 @@ Every change is written to `member_audit` with who made it. The admin API has
 the same operations under `/admin/api/members` and `/admin/api/groups`, behind
 the admin login.
 
+### The brain owner
+
+Every credential reads the brain as an outsider unless it is bound to the
+member named as the brain's **owner**. The owner's keys read what the operator
+reads within their source grant: private facts, facts drawn from the diary,
+every takes holder their key does not narrow, and owner-only sources. They
+still cannot call operator-only tools. Nothing is guessed: the operator names
+the owner on the brain host.
+
+An install that has run with one personal key and no members marks that key
+as the owner's in three steps; no key changes and nothing is re-issued:
+
+```bash
+memrain member add me --email you@example.com         # the email is optional
+memrain member bind me --token <your-key-name>        # memrain auth list names the keys
+memrain member owner me                               # memrain member owner shows it, --clear removes it
+memrain identity                                      # who the brain takes its owner to be, and why
+```
+
+`memrain identity` works the owner's person page out from what the brain
+already stores: the owner member's email and the account of each connector
+source that is the owner's, matched exactly against a person page's `email`
+or `emails` (never by name). `MEMRAIN_OWNER_ENTITY` still overrides it. The
+doctor check `owner-identity` warns when ownership is ambiguous: an owner
+setting that names no enabled member, a brain that serves several people with
+no owner, an email two members claim, or several person pages carrying the
+owner's email. It never prints the email itself.
+
+### When the brain serves several people
+
+A brain serves several people once two members are enabled, or when the
+config row `access.serves` says `several` (that row can mark a one-person
+brain as shared, never the other way round). From then on:
+
+- **A key bound to nobody is refused for reads.** A token or client with no
+  member and no source grant, and the static public bearer, get
+  `requester_scope_required` on every read; `whoami` and `get_brain_identity`
+  still answer, and writes are unchanged. There is no grace period. Bind each
+  key to the person it serves (`memrain member bind <member> --token <name>`)
+  or scope it to a source. The doctor check `unscoped-shared-reads` lists every
+  key that would be refused, with its fix, and `memrain auth create` refuses to
+  mint such a key (pass `--member <id>` or `--source <id>`).
+  `MEMRAIN_REQUIRE_MEMBER=1` stays the stricter switch: it refuses unbound keys
+  on every brain, at verification.
+- **Owner-only sources close.** A personal mailbox or calendar marked
+  owner-only is read only by the operator and the owner's keys, even when a
+  group grants it. Everything derived from it closes with it: facts on shared
+  person pages, attendee timeline rows, concept pages built from its atoms.
+  On a one-person brain the flag changes no read.
+
+```bash
+memrain sources owner-only me-mail on       # show with: memrain sources owner-only me-mail
+memrain sources provenance                  # dry run: how many older derived rows would be recorded
+memrain sources provenance --apply          # records their origins; no row's content changes
+```
+
+Derived rows record where they came from as they are written. The provenance
+command does the same for rows written before this release; run it once after
+upgrading, dry run first. Until it has been applied, rows derived before the
+upgrade stay readable on a shared brain, and `owner-only-sources` warns. The doctor check `owner-only-sources` warns when a
+brain that serves several people leaves a mailbox, calendar or transcript
+source open.
+
 ### Offboarding with the personal source
 
 `memrain member remove alice --erase-personal-source` shows what would go.

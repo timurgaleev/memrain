@@ -1,5 +1,6 @@
 import { OperationError } from "./operation-error.ts";
 import { assertSqlAlias, factSourceEligibleSql } from "./quarantine.ts";
+import { ownerOnlyLineageSql } from "./owner-only.ts";
 
 export function readLimit(limit: number | undefined): number {
   if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
@@ -18,7 +19,7 @@ export function eligiblePageSql(alias: string, remote: boolean): string {
   assertSqlAlias(alias);
   const owner = `COALESCE(${alias}.source_id, 'default')`;
   const path = `CASE WHEN ${owner} = 'default' THEN ${alias}.slug ELSE ${owner} || '/' || ${alias}.slug END`;
-  return `${alias}.deleted_at IS NULL ${remote ? `AND ${nonDiaryPageSql(alias)}` : ""}
+  return `${alias}.deleted_at IS NULL ${remote ? `AND ${nonDiaryPageSql(alias)} AND ${ownerOnlyLineageSql("page", `${alias}.slug`)}` : ""}
     AND NOT EXISTS (SELECT 1 FROM documents held WHERE COALESCE(held.source_id, 'default') = ${owner}
       AND held.source_path IN ('page://' || ${path}, 'page-truth://' || ${path})
       AND (held.deleted_at IS NOT NULL OR COALESCE(held.frontmatter, '{}'::jsonb) ? 'quarantine'))`;
@@ -28,7 +29,7 @@ export function eligibleFactSql(alias: string, remote: boolean): string {
   assertSqlAlias(alias);
   return `${alias}.forgotten_at IS NULL AND ${alias}.superseded_by IS NULL AND ${alias}.consolidated_into IS NULL
     AND ${alias}.dimension IS NULL AND ${factSourceEligibleSql(alias)}
-    ${remote ? `AND ${alias}.visibility = 'world' AND NOT EXISTS (
+    ${remote ? `AND ${alias}.visibility = 'world' AND ${ownerOnlyLineageSql("fact", `${alias}.id`)} AND NOT EXISTS (
       SELECT 1 FROM unnest(ARRAY[${alias}.entity_slug, ${alias}.source_slug, ${alias}.source_markdown_slug]) origin(slug)
       WHERE origin.slug LIKE 'life/diary/%' OR EXISTS (SELECT 1 FROM pages diary
         WHERE diary.slug = origin.slug AND diary.source_id = ${alias}.source_id AND NOT (${nonDiaryPageSql("diary")})))` : ""}`;

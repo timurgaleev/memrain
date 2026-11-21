@@ -13,6 +13,7 @@
  *   (d) different value, backdated before the current        → closed history
  *   (e) novel dimension (not a seed/alias)                   → quarantined
  */
+import { ownerOnlyLineageSql } from "./owner-only.ts";
 import type { Storage } from "./storage.ts";
 import { guardFields } from "./secret-scan.ts";
 import {
@@ -35,7 +36,8 @@ const CORROBORATION_BUMP = 0.05;
 /** Remote read fence: only world-visible, non-diary-sourced rows reach an
  *  untrusted caller. Static SQL (no bound param), appended when worldOnly. */
 const WORLD_FENCE =
-  "AND visibility = 'world' AND (source_slug IS NULL OR source_slug NOT LIKE 'life/diary/%')";
+  "AND visibility = 'world' AND (source_slug IS NULL OR source_slug NOT LIKE 'life/diary/%') AND " +
+  ownerOnlyLineageSql("fact", "entity_facts.id");
 
 /** entity_facts.confidence is CHECK 0..1; default 0.7 when unset. */
 function clampConfidence(c: number | undefined): number {
@@ -218,7 +220,7 @@ export async function getOntology(
        AND COALESCE(valid_until, 'infinity'::date) > COALESCE($3::date, CURRENT_DATE)
        AND confidence >= $4
        AND ($5::boolean OR dim_status IS NULL OR dim_status = 'active')
-       AND ($6::boolean = false OR visibility = 'world')
+       AND ($6::boolean = false OR (visibility = 'world' AND ${ownerOnlyLineageSql("fact", "entity_facts.id")}))
      ORDER BY dimension, valid_from DESC NULLS LAST, confidence DESC, id DESC`,
     [entity, scope, asof, minConf, includeQ, worldOnly],
   );

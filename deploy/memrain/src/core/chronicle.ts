@@ -10,6 +10,7 @@
  * Every read REQUIRES an explicit tenant scope (sourceIds) — there is no
  * unscoped default, so a caller can never sweep the whole brain by accident.
  */
+import { ownerOnlyLineageSql } from "./owner-only.ts";
 import type { Storage } from "./storage.ts";
 import { finalizeLastSeen } from "./chronicle/last-seen.ts";
 import { guardFields } from "./secret-scan.ts";
@@ -67,7 +68,8 @@ const ROW_JOINS = `
 const DIARY_EXCLUSION = `
       AND p.type NOT IN ('diary','journal') AND p.slug NOT LIKE 'life/diary/%'
       AND (te.event_slug IS NULL
-           OR (ep.type NOT IN ('diary','journal') AND ep.slug NOT LIKE 'life/diary/%'))`;
+           OR (ep.type NOT IN ('diary','journal') AND ep.slug NOT LIKE 'life/diary/%'))
+      AND ${ownerOnlyLineageSql("timeline", "te.id")}`;
 
 /** Events on a single UTC day, or the ISO week containing it when opts.week. */
 export async function getTimelineForDate(

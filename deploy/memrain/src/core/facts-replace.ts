@@ -18,6 +18,7 @@
  * The old fact must be about the same entity as the new one: a correction
  * about one person never retires, or points the supersede chain of, another's.
  */
+import { ownerOnlyLineageSql } from "./owner-only.ts";
 import type { Engine } from "./engine/interface.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { supersededValidUntilSql } from "./fact-validity.ts";
@@ -50,7 +51,7 @@ export async function replaceFact(
   const retired = await engine.transaction(async (tx): Promise<ReplaceSkipReason | null> => {
     const params: unknown[] = [oldId];
     const scope = andSourceScope("source_id", sourceIds, params);
-    const world = opts.worldOnly ? " AND visibility = 'world'" : "";
+    const world = opts.worldOnly ? ` AND visibility = 'world' AND ${ownerOnlyLineageSql("fact", "entity_facts.id")}` : "";
     const locked = await tx.query<{ entity_slug: string }>(
       `SELECT entity_slug FROM entity_facts
         WHERE id = $1 AND forgotten_at IS NULL${scope}${world}

@@ -102,6 +102,8 @@ import {
   type Config,
 } from "../core/config.ts";
 import { patNameSpendConflict } from "../core/budget.ts";
+import { bindCredential, existingMember } from "../core/members.ts";
+import { assertCredentialScoped } from "../core/requester-scope.ts";
 import { resolveGrantProfile, type ResolvedGrantProfile } from "../core/grant-profiles.ts";
 import {
   OAuthProvider,
@@ -710,7 +712,7 @@ function listFlag(raw: string | undefined): string[] | undefined {
 async function createToken(name: string, rest: string[]): Promise<void> {
   if (!name) {
     throw new Error(
-      "Usage: auth create <name> [--takes-holders a,b] [--source SRC] [--federated-read a,b] [--scopes read,write | --profile reader|writer]",
+      "Usage: auth create <name> [--member M] [--takes-holders a,b] [--source SRC] [--federated-read a,b] [--scopes read,write | --profile reader|writer]",
     );
   }
   const nameConflict = patNameSpendConflict(name);
@@ -738,6 +740,11 @@ async function createToken(name: string, rest: string[]): Promise<void> {
       ...(profile ? { scopes: profile.scopes } : flags["scopes"] !== undefined ? { scopes: listFlag(flags["scopes"])! } : {}),
       ...(flags["federated-read"] !== undefined ? { federatedRead: listFlag(flags["federated-read"])! } : {}),
     });
+    const member = flags["member"] !== undefined ? await existingMember(storage.engine(), flags["member"]) : undefined;
+    if (member !== undefined && member.status !== "enabled") {
+      throw new Error(`member "${member.id}" is ${member.status}; only an enabled member can be bound`);
+    }
+    await assertCredentialScoped(storage.raw(), { memberId: member?.id ?? null, sourceId: grant.sourceGrant ?? null }, "token", name);
     const existing = await storage
       .raw()
       .query<{ id: number }>(
@@ -775,7 +782,8 @@ async function createToken(name: string, rest: string[]): Promise<void> {
         profile?.toolSurface ?? "full",
       ],
     );
-    return grant;
+    if (member !== undefined) await bindCredential(storage.engine(), member.id, { kind: "token", id: name }, { actor: cliActor(), via: "cli" });
+    return { ...grant, memberId: member?.id };
   });
   console.log(
     JSON.stringify(
@@ -784,6 +792,7 @@ async function createToken(name: string, rest: string[]): Promise<void> {
         token,
         scopes: minted.scopes,
         ...(minted.sourceGrant !== undefined ? { source_id: minted.sourceGrant } : {}),
+        ...(minted.memberId !== undefined ? { member: minted.memberId } : {}),
         ...(profile ? { profile: profile.profile, tool_surface: profile.toolSurface } : {}),
         takes_holders: takesHolders,
         note: "Store the token now — only its hash persists. Revoke with: memrain auth revoke <name>.",

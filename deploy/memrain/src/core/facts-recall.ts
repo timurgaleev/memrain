@@ -21,6 +21,7 @@
  *
  * Deterministic and LLM-free.
  */
+import { ownerOnlyLineageSql } from "./owner-only.ts";
 import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { lockWithdrawals } from "./fact-withdrawals.ts";
@@ -75,11 +76,14 @@ export async function recallFact(
   storage: Storage,
   id: number,
   sourceIds?: string[],
+  opts: { remote?: boolean } = {},
 ): Promise<RecalledFact | null> {
   const factId = normaliseId(id);
   const params: unknown[] = [factId];
   // Tenant scope (mig047): filter whenever a list is given; `[]` matches nothing.
-  const scopeFilter = andSourceScope("source_id", sourceIds, params);
+  // A non-owner remote read: no fact derived from an owner-only source.
+  const scopeFilter = andSourceScope("source_id", sourceIds, params) +
+    (opts.remote ? ` AND ${ownerOnlyLineageSql("fact", "entity_facts.id")}` : "");
   const r = await storage.engine().query<RecalledFact>(
     `SELECT id, entity_slug, fact, confidence,
             source_slug, source_chunk_id, written_by,
@@ -162,7 +166,7 @@ export async function forgetFact(
   // Structured cause (mig062) — defaults to 'forget'; a supersede/dedup path
   // passes 'supersede'. The CHECK constraint rejects any other value.
   const cause: ForgetCause = input.cause === "supersede" ? "supersede" : "forget";
-  const world = input.worldOnly === true ? " AND visibility = 'world'" : "";
+  const world = input.worldOnly === true ? ` AND visibility = 'world' AND ${ownerOnlyLineageSql("fact", "entity_facts.id")}` : "";
   // Tenant write scope (mig047): when a scope is given, the row lookup, the
   // tombstone UPDATE and the existence probe are confined to it. A fact owned by
   // another source neither flips nor reports found — a scoped caller can never
