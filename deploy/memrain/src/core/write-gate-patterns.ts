@@ -147,7 +147,8 @@ const CREDENTIAL = "(?:api[ _-]?keys?|passwords?|passphrases?|credentials?|secre
 const HAS_ADDRESS = "@|https?:\\/\\/|www\\.";
 /** What may open an address in mail: a bracket or quote, or "mailto:". */
 const ADDR_OPEN = "(?:mailto: ?)?[<(\\[\"']? ?";
-const CREDENTIAL_VERB = "(?:send(?: over)?|email|e-mail|share|reveal|paste|give|forward|upload|disclose|leak|dump|exfiltrate|tell|provide|submit|reply with)";
+/** "tell" asks for a credential only with a person after it ("tell me your password"), not in "tell the agent which credentials". */
+const CREDENTIAL_VERB = "(?:send(?: over)?|email|e-mail|share|reveal|paste|give|forward|upload|disclose|leak|dump|exfiltrate|tell(?= (?:me|us|them) )|provide|submit|reply with)";
 const PRIVATE_DATA = `(?:memor(?:y|ies)|conversation history|chat history|system prompt|private notes|user data|${CREDENTIAL})`;
 const MODAL = "(?:always|never|must|should|do not|don't|from now on|going forward)";
 
@@ -415,7 +416,9 @@ export const WRITE_GATE_PATTERNS: readonly GatePattern[] = Object.freeze([
     { preceded: `\\bnow (?:be|get|gets) (?:[a-z]{1,15} )?${PASSIVE_EXFIL}\\b${"(?: [a-z-]{1,15})?".repeat(2)} ?`, requires: [HAS_ADDRESS, "\\bnow\\b"], near: "\\bnow\\b" }),
   sentence("exfil_private_data_passive", "exfiltration", `${TO_ADDRESS_HEAD}(?:at |on |via )?${ADDR_OPEN}${ADDRESS}`,
     { preceded: `\\b${PRIVATE_DATA}\\b${CTX}{0,60}\\b(?:be|get|gets|got) (?:[a-z]{1,15} )?${PASSIVE_EXFIL}\\b${CTX}{0,20}`, requires: [HAS_ADDRESS, `\\b${PRIVATE_DATA}\\b`], near: `\\b${PRIVATE_DATA}\\b` }),
-  sentence("exfil_templated_url", "exfiltration", "https?:\\/\\/[^\\s)\"'<>]{1,200}[?&][a-z0-9_]{1,30}= ?(?:\\{|<|\\[|%7b|\\$\\{)"),
+  // A bracket opens a placeholder only around a data word: "?id=[subscriber]" in a newsletter link is a mail template.
+  sentence("exfil_templated_url", "exfiltration",
+    "https?:\\/\\/[^\\s)\"'<>]{1,200}[?&][a-z0-9_]{1,30}= ?(?:\\{|<|%7b|\\$\\{|\\[ ?(?:memor(?:y|ies)|data|secrets?|context|history|conversation|chat|user|passwords?|tokens?|keys?|notes?|prompt|system|instructions?))"),
 
   // --- Requests to hand over credentials ---------------------------------------
   sentence("credential_request", "credential", `\\b${CREDENTIAL}\\b`, {
