@@ -5,4 +5,5 @@
 {"intent": "Brainify my personal pages for the leadership team", "expected_skill": "company-brainify"}
 {"intent": "Scrub employee data before we share anything with the new hires", "expected_skill": "company-brainify"}
 {"intent": "Audit the shared brain for salary mentions that slipped in", "expected_skill": "company-brainify"}
+{"intent": "before the offsite, make the brain safe to share with my cofounders", "expected_skill": "company-brainify"}
 {"intent": "What does our company do for its holiday party", "expected_skill": null}

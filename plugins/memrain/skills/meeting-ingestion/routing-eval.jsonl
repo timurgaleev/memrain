@@ -1,0 +1,8 @@
+// Routing eval fixtures for skills/meeting-ingestion.
+// Each line: {intent, expected_skill, ambiguous_with?}.
+// Rule: intent must paraphrase the trigger, not copy it.
+{"intent": "can you process this meeting with the acme-example team from this morning", "expected_skill": "meeting-ingestion"}
+{"intent": "here is the meeting transcript from my call with alice-example, file it", "expected_skill": "meeting-ingestion"}
+{"intent": "turn these meeting notes into a page and update everyone who attended", "expected_skill": "meeting-ingestion"}
+{"intent": "my meeting recorder exported yesterday's standup, put it in the brain", "expected_skill": "meeting-ingestion"}
+{"intent": "please audit this meeting page, I think the speakers are mixed up", "expected_skill": "meeting-ingestion"}

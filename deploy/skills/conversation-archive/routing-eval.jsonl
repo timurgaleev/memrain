@@ -7,4 +7,7 @@
 {"intent": "how do I push my session log up to the hosted brain", "expected_skill": "conversation-archive"}
 {"intent": "did I already import this conversation into the brain", "expected_skill": "conversation-archive"}
 {"intent": "the conversation import failed with transcript_unreadable, what now", "expected_skill": "conversation-archive"}
+{"intent": "when did I first discuss pricing tiers with an assistant, can you check", "expected_skill": "conversation-archive"}
+{"intent": "I have a chatgpt export zip sitting in downloads, get it into the brain", "expected_skill": "conversation-archive"}
+{"intent": "search my old conversations for the thread about the garden shed", "expected_skill": "conversation-archive"}
 {"intent": "how long should a sourdough starter rest", "expected_skill": null, "ambiguous_with": []}

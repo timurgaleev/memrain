@@ -19,12 +19,15 @@ const REGISTRY: ReadonlySet<string> = new Set(OPERATIONS.map((o) => o.name));
 
 const ADAPTED = [
   "blog-ingest",
+  "book-mirror",
   "brain-link-discipline",
   "bulk-ingestion",
   "chat-connectors",
   "citation-graph-ingest",
   "company-brainify",
+  "concept-synthesis",
   "context-audit",
+  "conversation-archive",
   "correction-pipeline",
   "data-loss-gate",
   "db-repair",
@@ -33,6 +36,7 @@ const ADAPTED = [
   "mail-loops",
   "mcp-access",
   "measure-before-you-fix",
+  "meeting-ingestion",
   "postgres-adopt",
   "remote-mcp",
   "research-compendium",
@@ -48,10 +52,16 @@ const PAID = ["skill-optimizer", "skill-autobench"] as const;
 
 /** Skills rewritten to the full anatomy in deploy/skills/_AGENT_README.md. */
 const FULL_ANATOMY = [
+  "book-mirror",
   "brain-link-discipline",
+  "company-brainify",
+  "concept-synthesis",
+  "conversation-archive",
   "correction-pipeline",
   "data-loss-gate",
   "fact-check",
+  "meeting-ingestion",
+  "research-compendium",
   "schema-unify",
 ] as const;
 
