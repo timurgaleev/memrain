@@ -19,6 +19,9 @@ import type { SearchExplain } from "../explain.ts";
 import type { Intent } from "../intent.ts";
 import type { QuerySuggestions } from "../query-intent.ts";
 import type { SearchOptions } from "../hybrid.ts";
+import type { RerankOutcome } from "../search-meta.ts";
+
+export type { RerankOutcome };
 
 export interface HitPayload extends BoostablePayload, ChunkPayloadForRerank {
   provenance?: SearchProvenance;
@@ -67,6 +70,19 @@ export interface StageInput {
   votes: { vectorVoted: boolean; lexicalVoted: boolean };
   /** Per-signal attribution, only when the caller asked for explain. */
   explainAcc: Map<string, Partial<SearchExplain>> | null;
+  /** What the rerank gate and the relational pin read; absent means neither acts. */
+  rerankGate?: RerankGateArms;
+  /** Called after each enabled stage with its output (the target trace). */
+  onStage?: (stage: string, hits: readonly Hit[]) => void;
+  /** Called once when the two-pass rerank stage decides. */
+  onRerank?: (outcome: RerankOutcome) => void;
+}
+
+/** Page keys the arms put first, and the pages the relational arm returned. */
+export interface RerankGateArms {
+  vectorTopPage?: string;
+  keywordTopPage?: string;
+  relationalPages: ReadonlySet<string>;
 }
 
 /** Values every stage would otherwise recompute from the input. */

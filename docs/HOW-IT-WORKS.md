@@ -69,6 +69,18 @@ and the same words in German and Russian), results dated inside it move up into
 the first page of results. The top half stays where it was and nothing is dropped. An
 explicit `since` / `until` on the call wins over the words in the question.
 
+When the question uses another name a page declares for itself ("Bobby" for
+the page "Robert Smith"), the question is also searched with the page's own
+name in its place, so notes that only use that name are found. Only names the
+caller can read count, at most two per question, and with
+`MEMRAIN_ALIAS_FANOUT=0` this is off.
+
+When `query` returns a page whose claim a newer fact has replaced (a later
+value for where someone lives or works, or a fact recorded as replacing one
+taken from that page), the page carries `superseded_claim` with the newer
+fact, and that fact comes first in the facts list. Only facts the caller can
+read are used.
+
 When the embedding is unavailable (an outage, or `MEMRAIN_KEYWORD_ONLY=1`),
 search runs on words alone. If fewer passages than asked for hold every word,
 pages holding some of the words fill the remaining places, below the full
@@ -79,7 +91,14 @@ model to classify the question (`MEMRAIN_INTENT_LLM=1`), expanding the query
 with related words (`MEMRAIN_QUERY_EXPANSION=1`) and reranking
 (`MEMRAIN_RERANK=1`, or the paid Sonnet `MEMRAIN_GRAPH_RERANK=1`) are all
 opt-in. When they are on, they improve which passages come back. They never
-write the answer. The code is in `deploy/memrain/src/core/search/hybrid.ts`;
+write the answer. The Haiku rerank makes no call when the top result is already
+certain (its title holds the question, or both searches put it first), and on
+a relationship question ("who works at Acme") the pages the relationship
+points at go back to the top after it, since their text often never names
+what was asked about.
+
+`memrain search diagnose "<question>" --target <slug>` shows, for one page,
+its place at every step of the search and the first step that lost it. The code is in `deploy/memrain/src/core/search/hybrid.ts`;
 the two lists are merged with Reciprocal Rank Fusion.
 
 One optional shortcut sits in front of all of this: a cache that recognises a

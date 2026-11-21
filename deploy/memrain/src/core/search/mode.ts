@@ -54,7 +54,9 @@ export const MODE_BUNDLES: Readonly<Record<SearchMode, Readonly<ModeBundle>>> =
     }),
     // Balanced posture mapped onto memrain knobs: deterministic + paid-rerank
     // stages on, expansion still off (negligible measured lift), Sonnet-sized
-    // token cap.
+    // token cap. With rerank and the relational arm both on, the rerank pins
+    // relational pages back at the head (relational-pin.ts) and is skipped
+    // when the head is already certain (confidence-grade.ts).
     balanced: Object.freeze({
       expansion: false,
       rerank: true,

@@ -27,7 +27,7 @@ import {
 import { hybridSearch, type SearchOptions } from "../core/search/index.ts";
 import { resolveSearchKnobs } from "../core/search/hybrid.ts";
 import { applyTokenBudget, estTokens } from "../core/search/token-budget.ts";
-import { matchQueryFacts } from "../core/facts-query-match.ts";
+import { matchQueryFacts, supersededClaims } from "../core/facts-query-match.ts";
 import { frameExternal, frameMarkedContent, markChunkTrust, markExternalChunks, readExternalTrust, readTrustTiers } from "../core/trust-frame.ts";
 import { meetsMinTrust, parseMinTrust, principalTier, type TrustTier } from "../core/trust-tier.ts";
 import { runTakeMutation } from "../core/synthesis/takes-write-page.ts";
@@ -1306,7 +1306,7 @@ async function callSearch(
     typeof args["offset"] === "number"
       ? Math.max(0, Math.floor(args["offset"] as number))
       : 0;
-  const searchOpts: SearchOptions = { k: k + offset };
+  const searchOpts: SearchOptions = { k: k + offset, ...(remote ? { remote: true } : {}) };
   // Per-call mode bundle — OPERATOR ONLY (a tenant token cannot escalate to
   // the paid tokenmax bundle; its mode is silently ignored). Mapped onto
   // per-call knobs, which win over env + active bundle.
@@ -3853,7 +3853,7 @@ async function callQuery(
     if (typeof args["refine_weight"] === "number") opts.refineWeight = args["refine_weight"];
     if (readSources !== undefined) opts.sourceIds = readSources;
     const reasons = new Set<SearchMeta["degraded"][number]>();
-    opts.search = { ...pageFilters, ...(minTrust ? { minTrust } : {}), ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}),
+    opts.search = { ...pageFilters, ...(minTrust ? { minTrust } : {}), ...(remote ? { remote: true } : {}), ...(onCapture ? { onCapture } : {}), ...(signal ? { signal } : {}), ...(embedQuery ? { embedQuery } : {}),
       onMeta: m => { for (const reason of (isOperator ? m : publicSearchMeta(m)).degraded) reasons.add(reason); },
     };
     const hits = await queryRefine(storage, q, refine, opts);
@@ -3867,11 +3867,11 @@ async function callQuery(
     return jsonResult({
       ok: true,
       ...typeNotice,
-      hits: visible,
+      hits: ledger.hits,
       facts: ledger.facts,
       ...(diagnostic ? { meta: { degraded: [...reasons], ...await diagnostic.finish() } } : {}),
       ...(ledger.truncated ? { facts_truncated: true } : {}),
-      ...(visible.length === 0 && ledger.facts.length === 0 ? emptyRetrievalHint(readSources, { degraded: [...reasons] }) : {}),
+      ...(ledger.hits.length === 0 && ledger.facts.length === 0 ? emptyRetrievalHint(readSources, { degraded: [...reasons] }) : {}),
     });
   }
 
@@ -3880,7 +3880,7 @@ async function callQuery(
     typeof args["offset"] === "number"
       ? Math.max(0, Math.floor(args["offset"] as number))
       : 0;
-  const searchOpts: SearchOptions = { ...pageFilters, k: k + offset, ...(signal ? { signal } : {}), ...(minTrust ? { minTrust } : {}) };
+  const searchOpts: SearchOptions = { ...pageFilters, k: k + offset, ...(signal ? { signal } : {}), ...(minTrust ? { minTrust } : {}), ...(remote ? { remote: true } : {}) };
   if (onCapture) searchOpts.onCapture = onCapture;
   if (readSources !== undefined) searchOpts.sourceIds = readSources;
   // Paid LLM expansion: explicit per-call value wins; omitted follows the
@@ -3928,25 +3928,49 @@ async function callQuery(
   const snippets = capHitSnippets(await fenceOwnerOnlyHits(storage.engine(), fenceDiaryHits(hitsOffset, !remote), remote), searchSnippetChars(), readSources);
   const hits = await frameSearchHits(storage, snippets, readSources, resolveSearchKnobs(searchOpts).tokenBudget);
   const ledger = await queryFactsForResult(storage, q, hits, readSources, remote, resolveSearchKnobs(searchOpts).tokenBudget, minTrust);
-  if (meta && (hits.length < snippets.length || ledger.truncated)) meta = { ...meta, degraded: [...new Set([...meta.degraded, "budget_truncated" as const])] };
-  const metaOut = responseSearchMeta(meta, hits, isOperator);
-  return jsonResult({ ok: true, hits, facts: ledger.facts, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}),
+  if (meta && (ledger.hits.length < snippets.length || ledger.truncated)) meta = { ...meta, degraded: [...new Set([...meta.degraded, "budget_truncated" as const])] };
+  const metaOut = responseSearchMeta(meta, ledger.hits, isOperator);
+  return jsonResult({ ok: true, hits: ledger.hits, facts: ledger.facts, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}),
     ...(ledger.truncated ? { facts_truncated: true } : {}),
-    ...(hits.length === 0 && ledger.facts.length === 0 ? emptyRetrievalHint(readSources, metaOut) : {}),
+    ...(ledger.hits.length === 0 && ledger.facts.length === 0 ? emptyRetrievalHint(readSources, metaOut) : {}),
   });
 }
 
-async function queryFactsForResult(
-  storage: Storage, q: string, hits: readonly { content: string; title?: string | null }[],
+/**
+ * The facts block for a `query` result, and the hits with `superseded_claim`
+ * on any page whose claim a shown fact replaced (facts-query-match.ts). The
+ * mark carries the correction itself, framed like the block, so a token
+ * budget that cuts the block cannot hide it; the correcting facts also lead
+ * the block.
+ */
+async function queryFactsForResult<H extends { content: string; title?: string | null; sourcePath: string; source_id?: string | null }>(
+  storage: Storage, q: string, hits: readonly H[],
   readSources: string[] | undefined, remote: boolean, tokenBudget?: number, minTrust?: TrustTier,
 ) {
   const matched = await matchQueryFacts(storage.engine(), q, readSources, remote);
   const tiers = (await readTrustTiers(storage.engine(), { facts: matched.map(f => f.fact_id) }, readSources)).facts;
   const tierOf = (id: number): TrustTier => tiers.get(id) ?? "external";
   const rows = matched.filter(f => meetsMinTrust(tierOf(f.fact_id), minTrust));
-  const framed = rows.map(f => tierOf(f.fact_id) !== "owner" ? { ...f, fact: frameExternal(f.fact), trust: "external" as const } : f);
-  if (tokenBudget === undefined || tokenBudget <= 0) return { facts: framed, truncated: false };
-  let used = hits.reduce((n, h) => n + estTokens(h.content) + estTokens(h.title ?? ""), 0);
+  const allFramed = rows.map(f => tierOf(f.fact_id) !== "owner" ? { ...f, fact: frameExternal(f.fact), trust: "external" as const } : f);
+  const marks = await supersededClaims(storage.engine(), hits, allFramed, readSources, remote);
+  const byId = new Map(allFramed.map(f => [f.fact_id, f] as const));
+  const marked: Array<H & { superseded_claim?: { fact_id: number; fact: string; valid_from: string | null } }> = hits.map((h, i) => {
+    const fact = byId.get(marks.get(i) ?? -1);
+    return fact ? { ...h, superseded_claim: { fact_id: fact.fact_id, fact: fact.fact, valid_from: fact.valid_from } } : h;
+  });
+  const correcting = new Set(marks.values());
+  const framed = [...allFramed.filter(f => correcting.has(f.fact_id)), ...allFramed.filter(f => !correcting.has(f.fact_id))];
+  if (tokenBudget === undefined || tokenBudget <= 0) return { facts: framed, truncated: false, hits: marked };
+  // The hits were trimmed to the budget before the marks existed; a mark's
+  // text is part of its hit, so the trim runs again with it counted.
+  let used = 0;
+  const kept: typeof marked = [];
+  for (const h of marked) {
+    const cost = estTokens(h.content) + estTokens(h.title ?? "") + estTokens(h.superseded_claim?.fact ?? "");
+    if (used + cost > tokenBudget) break;
+    kept.push(h);
+    used += cost;
+  }
   const facts: typeof framed = [];
   for (const fact of framed) {
     const cost = estTokens(fact.fact) + estTokens(fact.entity_slug);
@@ -3954,7 +3978,7 @@ async function queryFactsForResult(
     facts.push(fact);
     used += cost;
   }
-  return { facts, truncated: facts.length < framed.length };
+  return { facts, truncated: facts.length < framed.length, hits: kept };
 }
 
 /** The optional `lang` filter of the code graph tools; empty means none. */

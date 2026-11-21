@@ -44,9 +44,18 @@ export interface SearchMeta {
   returned: number;
   /** How sure the answer is, from the returned hits' evidence (operator-only); "unknown" on a cache hit. */
   confidence?: SearchConfidence;
+  /** What the two-pass rerank did, when it was on (operator-only). */
+  rerank?: RerankOutcome;
   /** Operator explain only. Stage intervals use a monotonic clock. */
   timings_ms?: Record<string, number>;
   pending_embeddings?: number | null;
+}
+
+/** `ran`: the model was asked (its fail-open paths included); `skipped_confident`: no call was made. */
+export interface RerankOutcome {
+  outcome: "ran" | "skipped_confident";
+  /** Relational pages the pin placed at the head of the rerank window. */
+  pinned: number;
 }
 
 export interface PublicSearchMeta {

@@ -10,6 +10,8 @@
  *   alias   — is the normalized query a registered page_aliases alias of it?
  *   hybrid  — final rank + fused score + evidence + which boosts fired
  *             (explain-mode search, so the attribution is always stamped)
+ *   trace   — the target's rank at every pipeline stage and the first stage
+ *             that no longer held it (core/search/target-trace.ts)
  *
  * memrain adaptation: the raw arms return chunk ids without scores, so the
  * layer probes report ranks only; the hybrid layer carries the scores.
@@ -21,7 +23,7 @@ import type { Engine } from "../core/engine/interface.ts";
 import { keywordSearch } from "../core/search/keyword.ts";
 import { vectorSearch } from "../core/search/vector.ts";
 import { hybridSearch } from "../core/search/hybrid.ts";
-import { slugCandidatesForPath } from "../core/search/page-slug.ts";
+import { TargetTrace, diagnoseTarget, pathMatchesTarget } from "../core/search/target-trace.ts";
 import { normalizeAlias, resolveAliasCandidates } from "../core/page-aliases.ts";
 import { diagnosePageIndex } from "../core/page-index-state.ts";
 import { embedText } from "../core/embedding.ts";
@@ -40,15 +42,7 @@ interface HydratedChunk {
   sourceId: string | null;
 }
 
-/** True when a document source_path plausibly denotes the target slug/path. */
-export function pathMatchesTarget(
-  sourcePath: string,
-  sourceId: string | null | undefined,
-  target: string,
-): boolean {
-  if (sourcePath === target) return true;
-  return slugCandidatesForPath(sourcePath, sourceId ?? null).includes(target);
-}
+export { pathMatchesTarget };
 
 async function hydrateChunkPaths(
   engine: Engine,
@@ -155,11 +149,17 @@ export async function runSearchDiagnose(
 
     // Hybrid (production path). Explain mode: attribution always stamped;
     // explain also bypasses the query cache, which a diagnostic wants anyway.
+    const traceTarget = new TargetTrace();
     const hy = await hybridSearch(storage, opts.query, {
       k: PROBE_LIMIT,
       explain: true,
       noCache: true,
+      traceTarget,
       ...(opts.embedQueryFn ? { embedQuery: opts.embedQueryFn } : {}),
+      ...(opts.sourceId ? { sourceIds: [opts.sourceId] } : {}),
+    });
+    const trace = await diagnoseTarget(engine, traceTarget, opts.target, {
+      k: PROBE_LIMIT,
       ...(opts.sourceId ? { sourceIds: [opts.sourceId] } : {}),
     });
     let hybridRank: number | null = null;
@@ -207,6 +207,7 @@ export async function runSearchDiagnose(
       vector,
       alias_match: aliasMatch,
       hybrid,
+      trace,
       verdict,
     };
 
@@ -237,6 +238,18 @@ export async function runSearchDiagnose(
         .map(([k, v]) => `${k}=${(v as number).toFixed(3)}`)
         .join(" ");
       console.log(`            boosts: ${fired || "(none fired)"}`);
+    }
+    const stageLine = trace.stages
+      .map((s) => `${s.stage}=${s.present ? s.rank : "-"}`)
+      .join(" ");
+    console.log(`  trace:    ${stageLine || "(no stages recorded)"}`);
+    if (trace.lost_at) {
+      console.log(
+        `            lost at ${trace.lost_at} (${trace.why}), last rank ${trace.last_rank ?? "—"}` +
+          (trace.pushed_below_k_by ? `, pushed below k by ${trace.pushed_below_k_by}` : ""),
+      );
+    } else {
+      console.log(`            ${trace.state}${trace.rank ? ` at rank ${trace.rank}` : ""}`);
     }
     console.log(`\n  VERDICT: ${verdict}`);
     return 0;

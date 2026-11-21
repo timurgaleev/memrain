@@ -332,6 +332,7 @@ function canonicalJson(value: unknown): string {
  * bound cost or latency, and eval runs with the cache off.
  */
 const RANKING_ENV_KNOBS: readonly string[] = [
+  "MEMRAIN_ALIAS_FANOUT",
   "MEMRAIN_ALIAS_HOP",
   "MEMRAIN_CURATION_BOOST",
   "MEMRAIN_EMBED_DIM",

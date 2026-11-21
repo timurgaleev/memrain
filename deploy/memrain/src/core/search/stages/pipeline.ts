@@ -27,6 +27,8 @@ import { getTitleBoost, isTitlePhraseMatch } from "../title-match.ts";
 import { isCanonicalQuery } from "../recency-gate.ts";
 import { dedupByDocument, dedupByTextSimilarity, enforceTypeDiversity, getMaxTypeRatio, getNearDupThreshold } from "../dedup.ts";
 import { rerank } from "../two-pass.ts";
+import { hitPageKey, pinRelationalRows } from "../relational-pin.ts";
+import { rerankConfident } from "../confidence-grade.ts";
 import { promoteExactLookup } from "../exact-lookup.ts";
 import { feedbackRankStage } from "../feedback-boost.ts";
 import { mergeExplain, recordStageFactor, snapshotScores, type SearchExplain } from "../explain.ts";
@@ -385,25 +387,47 @@ const typeDiversity: RankStage = {
 //    return size (MEMRAIN_RERANK_WINDOW, default 30, clamped to at least k and
 //    to the candidates available) so a hit fused below the cutoff can still be
 //    promoted; the un-reranked tail keeps its fused order behind the window.
+//    No call when the head is already certain (rerankConfident), and the
+//    relational arm's pages go back to the head of the window afterwards
+//    (relational-pin.ts).
+export async function rerankWindow(
+  hits: Hit[],
+  ctx: StageContext,
+  rerankFn: (query: string, window: Hit[]) => Promise<Hit[]> = rerank,
+): Promise<Hit[]> {
+  const gate = ctx.rerankGate;
+  const top = hits[0];
+  const size = Math.min(hits.length, Math.max(ctx.k, resolveRerankWindow()));
+  if (gate && top && rerankConfident({
+    query: ctx.query,
+    topTitle: top.payload?.title,
+    otherTitles: hits.slice(1, size).map((h) => h.payload?.title),
+    topPage: hitPageKey(top),
+    vectorTopPage: gate.vectorTopPage,
+    keywordTopPage: gate.keywordTopPage,
+  })) {
+    ctx.onRerank?.({ outcome: "skipped_confident", pinned: 0 });
+    return hits;
+  }
+  const window = hits.slice(0, size);
+  const pin = pinRelationalRows(await rerankFn(ctx.query, window), window, gate?.relationalPages ?? new Set());
+  ctx.onRerank?.({ outcome: "ran", pinned: pin.pinned });
+  const reranked = [...pin.hits, ...hits.slice(size)];
+  if (ctx.explainAcc) {
+    const preRerankOrder = new Map(hits.map((h, i) => [h.chunkId, i] as const));
+    reranked.forEach((h, i) => {
+      const prev = preRerankOrder.get(h.chunkId);
+      if (prev !== undefined && prev !== i) mergeExplain(ctx.explainAcc!, h.chunkId, { rerank_delta: prev - i });
+    });
+  }
+  return reranked;
+}
+
 const twoPassRerank: RankStage = {
   name: "two-pass-rerank",
   costClass: "paid",
   enabled: (ctx) => ctx.rerankWanted,
-  apply: async (hits, ctx) => {
-    const rerankWindow = Math.min(hits.length, Math.max(ctx.k, resolveRerankWindow()));
-    const preRerankOrder = ctx.explainAcc ? new Map(hits.map((h, i) => [h.chunkId, i] as const)) : null;
-    const reranked = [
-      ...(await rerank(ctx.query, hits.slice(0, rerankWindow))),
-      ...hits.slice(rerankWindow),
-    ];
-    if (ctx.explainAcc && preRerankOrder) {
-      reranked.forEach((h, i) => {
-        const prev = preRerankOrder.get(h.chunkId);
-        if (prev !== undefined && prev !== i) mergeExplain(ctx.explainAcc!, h.chunkId, { rerank_delta: prev - i });
-      });
-    }
-    return reranked;
-  },
+  apply: (hits, ctx) => rerankWindow(hits, ctx),
 };
 
 // 8b. Near-dup dedup across documents (Jaccard on text) — two DIFFERENT docs
@@ -468,7 +492,9 @@ export async function runPostFusionStages(hits: Hit[], input: StageInput): Promi
   const ctx = stageContext(input);
   let current = hits;
   for (const stage of POST_FUSION_STAGES) {
-    if (stage.enabled(ctx)) current = await stage.apply(current, ctx);
+    if (!stage.enabled(ctx)) continue;
+    current = await stage.apply(current, ctx);
+    ctx.onStage?.(stage.name, current);
   }
   return current;
 }

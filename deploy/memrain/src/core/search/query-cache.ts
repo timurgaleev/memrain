@@ -48,6 +48,7 @@ import { getTitleBoost } from "./title-match.ts";
 import { getNearDupThreshold, getMaxTypeRatio } from "./dedup.ts";
 import { getGraphSignalsFloorRatio } from "./graph-signals.ts";
 import { aliasHopEnabled } from "./alias-hop.ts";
+import { aliasFanoutEnabled } from "./alias-fanout.ts";
 import { resolveSearchMode } from "./mode.ts";
 import { rankFlagsSignature } from "./ranking-flags.ts";
 
@@ -118,9 +119,10 @@ export function resolveSemanticCacheConfig(
  * entity-intent phrasing; `8` = the identifier (title/slug) arm, which fuses
  * pages the query NAMES and so changes which candidates exist at all; `9` = the
  * per-page cap (a page's mirror, truth mirror and file twin share one) and the
- * keyword-only any-word fill.
+ * keyword-only any-word fill; `10` = the alias fan-out lists, the confident
+ * rerank skip and the relational pin after the rerank.
  */
-const RANKING_VERSION = "9";
+const RANKING_VERSION = "10";
 
 /**
  * Signature of the ranking inputs that are NOT function arguments, so a change
@@ -135,6 +137,8 @@ const RANKING_VERSION = "9";
  *     changes which hits are eligible for a graph boost;
  *   - the alias-hop on/off flag (`MEMRAIN_ALIAS_HOP`), which can boost or inject
  *     the canonical page for an exact-alias query;
+ *   - the alias fan-out on/off flag (`MEMRAIN_ALIAS_FANOUT`), which fuses the
+ *     query searched under a page's name when it holds that page's alias;
  *   - the full ranking-knob set (the knobs-hash): the resolved
  *     search MODE (`MEMRAIN_SEARCH_MODE`) plus every stage-toggling env —
  *     graph-signals (`MEMRAIN_GRAPH_SIGNALS`), cosine re-score
@@ -169,7 +173,7 @@ export function rankingSignature(): string {
     `mt=${getMaxTypeRatio()}`,
     `rw=${env["MEMRAIN_RERANK_WINDOW"] ?? ""}`,
   ].join(":");
-  return `${RANKING_VERSION}:tb=${getTitleBoost()}:rd=${recency}:nd=${getNearDupThreshold()}:gsf=${getGraphSignalsFloorRatio()}:ah=${aliasHopEnabled() ? 1 : 0}:${knobs}${rankFlagsSignature()}`;
+  return `${RANKING_VERSION}:tb=${getTitleBoost()}:rd=${recency}:nd=${getNearDupThreshold()}:gsf=${getGraphSignalsFloorRatio()}:ah=${aliasHopEnabled() ? 1 : 0}:af=${aliasFanoutEnabled() ? 1 : 0}:${knobs}${rankFlagsSignature()}`;
 }
 
 /**

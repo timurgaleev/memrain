@@ -19,6 +19,7 @@
  */
 import type { Evidence } from "./evidence.ts";
 import { RANK_BAND } from "./evidence.ts";
+import { isTitlePhraseMatch } from "./title-match.ts";
 
 export type ConfidenceGrade = "strong" | "moderate" | "weak" | "unknown";
 
@@ -42,4 +43,31 @@ export function gradeConfidence(
   const later = hits.slice(1, RANK_BAND).find((h) => h.evidence !== undefined && h.evidence !== "weak_semantic");
   if (later?.evidence) return { grade: "moderate", reason: `top hit weak, head holds ${later.evidence}` };
   return { grade: "weak", reason: "head holds only weak_semantic hits" };
+}
+
+/** What the rerank gate knows about the arms before the rerank runs. */
+export interface RerankGateInput {
+  query: string;
+  /** Title of the current top hit. */
+  topTitle: string | null | undefined;
+  /** Titles of the other hits the rerank would see. */
+  otherTitles?: ReadonlyArray<string | null | undefined>;
+  /** Page key of the current top hit. */
+  topPage: string;
+  /** Page of the first hydrated row each primary arm returned. */
+  vectorTopPage?: string;
+  keywordTopPage?: string;
+}
+
+/**
+ * A strong grade, read before the paid rerank: the top hit's title holds the
+ * query as a phrase (`exact_title_match`) and no other hit in the window's
+ * does (two such titles are exactly what the rerank separates), or the vector
+ * and the keyword arm both put the top hit's page first. Stricter than the returned-hit grade,
+ * whose two-arm signal only asks that both 30-deep lists contain the chunk:
+ * that is too common to justify skipping the rerank on.
+ */
+export function rerankConfident(g: RerankGateInput): boolean {
+  if (isTitlePhraseMatch(g.query, g.topTitle) && !(g.otherTitles ?? []).some((t) => isTitlePhraseMatch(g.query, t))) return true;
+  return g.vectorTopPage !== undefined && g.vectorTopPage === g.topPage && g.keywordTopPage === g.topPage;
 }

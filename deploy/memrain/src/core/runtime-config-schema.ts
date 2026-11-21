@@ -11,6 +11,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_AGENT_ENABLED: "flag",
   MEMRAIN_AGENT_MAX_USD: "string",
   MEMRAIN_AGENT_TENANT_ENABLED: "flag",
+  MEMRAIN_ALIAS_FANOUT: "flag",
   MEMRAIN_ALIAS_HOP: "flag",
   MEMRAIN_ANOMALY_SIGMA: "string",
   MEMRAIN_ASSUME_PUBLIC: "flag",

@@ -9,7 +9,7 @@
       {
         "text": "SELECT qc.intent, qc.result_ids FROM query_cache qc WHERE qc.cache_key = $1 AND ( qc.clock_value = $2 OR ( qc.doc_generations <> '{}'::jsonb AND NOT EXISTS ( SELECT 1 FROM jsonb_each_text(qc.doc_generations) AS g(doc_id, stored_gen) LEFT JOIN documents d ON d.id = g.doc_id -- Compare as TEXT, not via (stored_gen)::bigint: a malformed snapshot -- value (only reachable by manual DB tampering — writes go through -- jsonb_object_agg of a BIGINT) would otherwise abort the read/prune/ -- stats query. As text, garbage simply fails to match → invalidate. WHERE d.id IS NULL -- document deleted → invalidate OR d.generation::text <> g.stored_gen -- document bumped → invalidate ) ) )",
         "params": [
-          "5c24a8c05752698de671411be510ee560bf9cc851fd0e09245862df923d5bf6a",
+          "7cd378122b8ac3c5451954db6ddd2a624e485a2a64fb8362a1cceb8137d80398",
           2
         ]
       },
@@ -156,7 +156,7 @@
       {
         "text": "SELECT qc.intent, qc.result_ids FROM query_cache qc WHERE qc.cache_key = $1 AND ( qc.clock_value = $2 OR ( qc.doc_generations <> '{}'::jsonb AND NOT EXISTS ( SELECT 1 FROM jsonb_each_text(qc.doc_generations) AS g(doc_id, stored_gen) LEFT JOIN documents d ON d.id = g.doc_id -- Compare as TEXT, not via (stored_gen)::bigint: a malformed snapshot -- value (only reachable by manual DB tampering — writes go through -- jsonb_object_agg of a BIGINT) would otherwise abort the read/prune/ -- stats query. As text, garbage simply fails to match → invalidate. WHERE d.id IS NULL -- document deleted → invalidate OR d.generation::text <> g.stored_gen -- document bumped → invalidate ) ) )",
         "params": [
-          "cb7b8c23d279266302c87694f081f358d00d954213d4436704e25c3c4848cd48",
+          "5e6ac1a936bb55993177ab595a6ff287a0aa257ef9dea5a3f59fc3409ec05e0e",
           2
         ]
       },
@@ -176,6 +176,18 @@
             "aardvark shared title",
             "shared",
             "shared title",
+            "title"
+          ]
+        ]
+      },
+      {
+        "text": "SELECT pa.alias_norm, pa.slug, pa.source_id, p.title FROM page_aliases pa JOIN pages p ON p.slug = pa.slug AND p.source_id = pa.source_id AND p.deleted_at IS NULL WHERE pa.alias_norm = ANY($1::text[]) AND EXISTS (SELECT 1 FROM documents d WHERE d.source_path = (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END) AND COALESCE(d.source_id, 'default') = p.source_id AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')) ORDER BY pa.alias_norm, pa.source_id, pa.slug",
+        "params": [
+          [
+            "aardvark shared",
+            "shared title",
+            "aardvark",
+            "shared",
             "title"
           ]
         ]
@@ -263,7 +275,7 @@
       {
         "text": "SELECT qc.intent, qc.result_ids FROM query_cache qc WHERE qc.cache_key = $1 AND ( qc.clock_value = $2 OR ( qc.doc_generations <> '{}'::jsonb AND NOT EXISTS ( SELECT 1 FROM jsonb_each_text(qc.doc_generations) AS g(doc_id, stored_gen) LEFT JOIN documents d ON d.id = g.doc_id -- Compare as TEXT, not via (stored_gen)::bigint: a malformed snapshot -- value (only reachable by manual DB tampering — writes go through -- jsonb_object_agg of a BIGINT) would otherwise abort the read/prune/ -- stats query. As text, garbage simply fails to match → invalidate. WHERE d.id IS NULL -- document deleted → invalidate OR d.generation::text <> g.stored_gen -- document bumped → invalidate ) ) )",
         "params": [
-          "5c24a8c05752698de671411be510ee560bf9cc851fd0e09245862df923d5bf6a",
+          "7cd378122b8ac3c5451954db6ddd2a624e485a2a64fb8362a1cceb8137d80398",
           2
         ]
       },

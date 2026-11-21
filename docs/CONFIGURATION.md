@@ -199,6 +199,7 @@ to `environment:` before overriding.
 | `MEMRAIN_GRAPH_SIGNALS_FLOOR` | unset (gate off) | Ratio in `0..1`; hits below the floor are excluded from the graph boost. Unset → every hit stays eligible. Fail-loud on out-of-range. | free |
 | `MEMRAIN_RECENCY_DECAY` | built-in map | Per-path-prefix half-life/floor overrides, merged over the default decay map (`prefix:halfLifeDays:floor`, CSV). Recency weighting is on by default. | free |
 | `MEMRAIN_ALIAS_HOP` | on (`=0` off) | Inject up to 3 alias/redirect hops so a query for an alias also surfaces the canonical page. | free |
+| `MEMRAIN_ALIAS_FANOUT` | on (`=0` off) | A phrase inside a longer query that a page declares as an alias is also searched under the page's name (keyword arm only, at most 2 names, each list at half the keyword weight). Not in the compose allowlist: turn it off with `memrain config set MEMRAIN_ALIAS_FANOUT 0`. | free (one alias-index read per multi-word query) |
 | `MEMRAIN_NEARDUP_JACCARD` | `0.85` | Jaccard threshold for near-duplicate collapse in results. A value `> 1.0` disables dedup. | free |
 | `MEMRAIN_TITLE_BOOST` | `1.25` (on) | Multiplier applied to hits whose title matches the query. A value in `(0,1)` is inert (boost only multiplies up). | free |
 | `MEMRAIN_CURATION_BOOST` | built-in map | Per-prefix score multipliers (`prefix:factor`, CSV). Set replaces the default map entirely. | free |
@@ -259,7 +260,7 @@ you opt in.
 
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
-| `MEMRAIN_RERANK` | off (`=1` on) | Two-pass rerank — reorders the top hybrid hits with one Claude Haiku call per search. The budget alternative to the paid Sonnet `MEMRAIN_GRAPH_RERANK`; near-identical ranking quality. | cheap (Haiku, ~$1–3/mo) |
+| `MEMRAIN_RERANK` | off (`=1` on) | Two-pass rerank — reorders the top hybrid hits with one Claude Haiku call per search. The budget alternative to the paid Sonnet `MEMRAIN_GRAPH_RERANK`; near-identical ranking quality. No call is made when the top hit's title holds the query as a phrase or the vector and keyword arms both rank its page first. With the relational arm on, up to 3 relational pages go back to the head of the reranked window. | cheap (Haiku, ~$1–3/mo) |
 | `MEMRAIN_DREAM_SYNTHESIS` | off (`=1` on) | Appends the Haiku synthesis chain to quiet-hours cycle ticks only. Idempotent, count-capped. | cheap (Haiku) |
 | `MEMRAIN_DREAM_SYNTHESIS_MAX_DOCS` | `25` | Max source docs fed per synthesis run. Code-only. | — |
 | `MEMRAIN_DREAM_SYNTHESIS_MAX_CONCEPTS` | `30` | Max concepts produced per run. Code-only. | — |

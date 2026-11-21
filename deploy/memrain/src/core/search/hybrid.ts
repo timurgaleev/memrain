@@ -7,6 +7,8 @@
  *      (both arms carry the curation prefix boost + default hard-excludes)
  *   3. (opt-in) query expansion → extra keyword passes
  *   3a. identifier arm (default ON): head chunk of every page the query NAMES
+ *   3c. alias fan-out (default ON): a phrase the alias index resolves is
+ *       searched again under the page's name (keyword arm, at most 2)
  *   4. RRF fuse all retrieval lists (per-list k/weight)
  *   5. hydrate top-(k * 3) chunks with parent doc + source kind
  *   6. boosts: compiled-truth ×2, source, recency (decay + temporal boost),
@@ -14,7 +16,8 @@
  *      exact-match, alias-resolved
  *   7. dedup per page (cap 2 across a page's mirror, truth mirror and file
  *      twin; skipped for `exact` intent) + type diversity
- *   8. (opt-in) two-pass Haiku rerank over the return window if MEMRAIN_RERANK=1
+ *   8. (opt-in) two-pass Haiku rerank over the return window if MEMRAIN_RERANK=1;
+ *      skipped when the head is certain, relational pages re-pinned after it
  *   8e. relative time in the query lifts in-range hits into the first k
  *   8f. keyword-only: pages holding some of the words fill the empty slots
  *   9. trim to k
@@ -81,6 +84,8 @@ import { expandQuery } from "./expansion.ts";
 import { graphRerank, graphRerankLiveEnabled } from "./graph-rerank.ts";
 import { getGraphSignalsFloorRatio } from "./graph-signals.ts";
 import { applyAliasHop, aliasHopEnabled } from "./alias-hop.ts";
+import { aliasFanoutEnabled, aliasFanoutQueries } from "./alias-fanout.ts";
+import type { TargetTrace } from "./target-trace.ts";
 import { titleArmChunkIds, titleArmEnabled, TITLE_ARM_WEIGHT } from "./title-arm.ts";
 import { expandAnchors } from "./structural-expand.ts";
 import { cosineReScore } from "./cosine-rescore.ts";
@@ -100,7 +105,7 @@ import { dayInZone, pageContentDate, thinkTimeZone } from "../synthesis/think-te
 import { CACHE_HIT_CONFIDENCE, gradeConfidence } from "./confidence-grade.ts";
 import { paidStageEnabled, runPostFusionStages } from "./stages/pipeline.ts";
 import { shadowCopy, shadowFlag, startShadow } from "./shadow.ts";
-import type { Hit as HitScore, HitPayload, StageInput } from "./stages/types.ts";
+import type { Hit as HitScore, HitPayload, RerankOutcome, StageInput } from "./stages/types.ts";
 
 /**
  * RRF weight for the deterministic relational arm (opt-in 4th arm). A gentle
@@ -373,6 +378,16 @@ export interface SearchOptions {
    * single re-run. Callers never set this.
    */
   _zeroRetried?: boolean;
+  /**
+   * @internal Records what every stage held, for `memrain search diagnose`
+   * (target-trace.ts). Never set on a served request.
+   */
+  traceTarget?: TargetTrace;
+  /**
+   * A non-operator caller: alias fan-out skips diary, journal and owner-only
+   * pages for it, as the remote fact readers do. Keyed into the query cache.
+   */
+  remote?: boolean;
 }
 
 export interface SearchCaptureInfo {
@@ -883,6 +898,7 @@ async function hybridSearchUnbounded(
       titleArmOn,
       tokenBudget,
     }) +
+    (opts.remote ? ":RM=1" : "") +
     (cacheEnabled ? await feedbackCacheSuffix(engine) : "");
   if (cacheEnabled) {
     try {
@@ -940,9 +956,9 @@ async function hybridSearchUnbounded(
 
   // Settle eagerly: no arm rejection is left unobserved while embedding runs.
   diagnostic?.mark("prepare_cache");
+  const keywordOpts = { sourceIds: opts.sourceIds, filters: chunkFilters, maxPool: maxPoolOn, sourceBoost: armSourceBoost };
   const lexical = Promise.allSettled([
     (async () => {
-      const keywordOpts = { sourceIds: opts.sourceIds, filters: chunkFilters, maxPool: maxPoolOn, sourceBoost: armSourceBoost };
       const primary = await keywordArm(() => keywordSearchScored(engine, trimmed, fanout, keywordOpts));
       const probe = await keywordIdentifierSearch(engine, trimmed, fanout, keywordOpts)
         .catch(error => { failArm(error, "identifier"); return []; });
@@ -955,6 +971,12 @@ async function hybridSearchUnbounded(
     relationalArmOn ? relationalArmChunkIds(storage, trimmed, {
       ...(opts.sourceIds !== undefined ? { sourceIds: [...opts.sourceIds] } : {}), limit: fanout, filters: chunkFilters,
     }) : Promise.resolve<string[]>([]),
+    // 3c. Alias fan-out: fail-open, an alias that cannot be resolved or searched adds no list.
+    aliasFanoutEnabled()
+      ? aliasFanoutQueries(engine, trimmed, { sourceIds: opts.sourceIds, ...(opts.remote ? { remote: true } : {}) })
+          .then((fan) => Promise.all(fan.map((f) => keywordSearch(engine, f.query, fanout, keywordOpts).catch(() => [] as string[]))))
+          .catch(() => [] as string[][])
+      : Promise.resolve<string[][]>([]),
   ]);
   const deadline = makeQueryEmbedDeadline();
   const dl = opts.signal
@@ -1023,10 +1045,12 @@ async function hybridSearchUnbounded(
   opts.signal?.throwIfAborted();
   if (vectorResult.status === "rejected") throw vectorResult.reason;
   if (lexicalResult.status === "rejected") throw lexicalResult.reason;
-  const [keywordResult, titleResult, relationalResult] = lexicalResult.value;
+  const [keywordResult, titleResult, relationalResult, aliasResult] = lexicalResult.value;
   if (keywordResult.status === "rejected") throw keywordResult.reason;
   if (titleResult.status === "rejected") throw titleResult.reason;
   if (relationalResult.status === "rejected") throw relationalResult.reason;
+  if (aliasResult.status === "rejected") throw aliasResult.reason;
+  const aliasLists = aliasResult.value.filter((list) => list.length > 0);
   const vectorIds = vectorResult.value;
   const primaryKeywordRows = keywordResult.value;
   const titleIds = titleResult.value;
@@ -1100,6 +1124,25 @@ async function hybridSearchUnbounded(
     rrfWeights[1] = rrfWeights[1]! * KEYWORD_WEAK_WEIGHT;
     if (titleListIdx >= 0) rrfWeights[titleListIdx] = rrfWeights[titleListIdx]! * KEYWORD_WEAK_WEIGHT;
   }
+  // 3c. Alias fan-out lists, each at half the keyword list's effective weight
+  //     (after the confidence downweight): they widen recall under another
+  //     name, never outvote the query as written.
+  const aliasWeight = rrfWeights[1]! * 0.5;
+  for (const list of aliasLists) {
+    lists.push(list);
+    listArms.push("alias");
+    rrfWeights.push(aliasWeight);
+  }
+  const trace = opts.traceTarget;
+  if (trace) {
+    const seenArm = new Map<string, number>();
+    lists.forEach((list, i) => {
+      const arm = listArms[i]!;
+      const n = (seenArm.get(arm) ?? 0) + 1;
+      seenArm.set(arm, n);
+      trace.observe(`arm:${arm}${n > 1 ? `:${n}` : ""}`, list);
+    });
+  }
   // 4a. Page-grain fusion (MEMRAIN_RANK_PAGE_FUSION), see page-fusion.ts. One
   //     extra lookup maps every listed chunk to its page.
   const pageKeys = rank.pageFusion ? await pageKeysForChunks(engine, lists.flat()) : null;
@@ -1146,6 +1189,7 @@ async function hybridSearchUnbounded(
     }
   }
 
+  trace?.observe("fused", fused.map((f) => f.id));
   diagnostic?.mark("retrieval");
   // Any-word fill (step 8f): with no vector arm, plainto_tsquery is AND-only,
   // so one stray word empties the keyword arm. Pages holding some of the words
@@ -1311,6 +1355,7 @@ async function hybridSearchUnbounded(
   // chunkId. The base is the fused RRF (+cosine) score captured here, right
   // before the first multiplicative boost. Only allocated/snapshotted when the
   // flag is on, so a normal search pays nothing.
+  trace?.observe("hydrated", scored.map((s) => s.chunkId));
   const explainAcc = explainOn ? new Map<string, Partial<SearchExplain>>() : null;
   if (explainAcc) for (const s of scored) explainAcc.set(s.chunkId, { base: s.score });
   if (explainAcc && pageFused) {
@@ -1324,6 +1369,7 @@ async function hybridSearchUnbounded(
     }
   }
 
+  let rerankOutcome: RerankOutcome | undefined;
   // 5d–8b2. The post-fusion stages (stages/pipeline.ts): compiled-truth,
   //     source, recency/salience/title/chronicle, mattering, graph signals,
   //     backlinks, exact match, alias-resolved, re-sort, per-document cap, type
@@ -1344,9 +1390,12 @@ async function hybridSearchUnbounded(
     rerankWanted,
     votes: {
       vectorVoted: vectorIds.length > 0,
-      lexicalVoted: primaryKeywordIds.length > 0 || titleIds.length > 0 || relationalIds.length > 0,
+      lexicalVoted: primaryKeywordIds.length > 0 || titleIds.length > 0 || relationalIds.length > 0 || aliasLists.length > 0,
     },
     explainAcc,
+    ...(rerankWanted ? { rerankGate: rerankGateArms(scored, vectorIds, primaryKeywordIds, relationalIds) } : {}),
+    onRerank: (outcome) => { rerankOutcome = outcome; },
+    ...(trace ? { onStage: (stage: string, list: readonly HitScore[]) => trace.observe(stage, list.map((h) => h.chunkId)) } : {}),
   };
   // Shadow ranking (MEMRAIN_RANK_SHADOW, off by default): keep a copy of the
   // candidates before the stages score them in place, rank it with the flag
@@ -1378,6 +1427,7 @@ async function hybridSearchUnbounded(
       : mapped;
   };
   let organic: SearchHit[] = await withAliasHop(final);
+  trace?.observe("alias-hop", organic.map((h) => h.chunkId));
 
   // 8d. Graph-aware Sonnet rerank (opt-in, default OFF) — reorder the top hits
   //     with one paid Sonnet call using a link-graph connectivity hint. Runs on
@@ -1390,6 +1440,7 @@ async function hybridSearchUnbounded(
       storage,
       ...(opts.sourceIds ? { sourceIds: [...opts.sourceIds] } : {}),
     });
+    trace?.observe("graph-rerank", organic.map((h) => h.chunkId));
   }
 
   // 8e. Relative-time scope (time-range.ts): the top half of the first k stays,
@@ -1399,10 +1450,12 @@ async function hybridSearchUnbounded(
   const contentDays = timeRange
     ? new Map(final.map((h) => [h.chunkId, pageContentDate(h.payload?.effective_date, h.payload?.effective_date_source, timeZone)] as const))
     : null;
-  const finishOrganic = async (list: SearchHit[]): Promise<SearchHit[]> => {
-    let out = timeRange && contentDays
-      ? applyTimeScope(list, k, (h) => dayInRange(contentDays.get(h.chunkId), timeRange))
-      : list;
+  const finishOrganic = async (list: SearchHit[], observe?: TargetTrace): Promise<SearchHit[]> => {
+    let out = list;
+    if (timeRange && contentDays) {
+      out = applyTimeScope(list, k, (h) => dayInRange(contentDays.get(h.chunkId), timeRange));
+      observe?.observe("time-scope", out.map((h) => h.chunkId));
+    }
     if (anyWordFillOn && out.length < k) {
       try {
         out = [...out, ...(await anyWordFill(engine, trimmed, out, k - out.length, intent, {
@@ -1411,17 +1464,19 @@ async function hybridSearchUnbounded(
           filters: chunkFilters,
           sourceBoost: armSourceBoost,
         }))];
+        observe?.observe("any-word-fill", out.map((h) => h.chunkId));
       } catch (error) {
         failArm(error, "fill");
       }
     }
     return out;
   };
-  organic = await finishOrganic(organic);
+  organic = await finishOrganic(organic, trace);
 
   // 9. Trim to k (the ranked result, pre-token-budget).
   opts.signal?.throwIfAborted();
   const ranked: SearchHit[] = organic.slice(0, k);
+  trace?.observe("limit", ranked.map((h) => h.chunkId));
 
   // 9·explain — stamp per-signal attribution on the FINAL ranked hits (opt-in).
   //     Uses each hit's returned score as `final`; a hit with no accumulated
@@ -1493,6 +1548,7 @@ async function hybridSearchUnbounded(
   if (tokenBudget !== undefined) {
     hits = applyTokenBudget(hits, tokenBudget);
     if (hits.length < ranked.length) degraded.push("budget_truncated");
+    trace?.observe("token-budget", hits.map((h) => h.chunkId));
   }
 
   // 10. Side-channel: optional capture hook for eval-capture wiring.
@@ -1532,10 +1588,13 @@ async function hybridSearchUnbounded(
   //     the cap is a pure view on the returned value: it never poisons the
   //     cache and never shrinks the eval window. Default OFF → `hits` unchanged.
   const kept = applyAdaptiveReturn(hits, intent, adaptiveCfg).kept;
+  if (adaptiveCfg.enabled) trace?.observe("adaptive-return", kept.map((h) => h.chunkId));
   // The shadow list takes the same alias hop, trim to k, token budget and
   // return sizing, so it is compared with exactly what the caller got back.
   if (shadow && shadowHits) {
-    startShadow(shadow, shadowHits, stageInput, kept, async (shadowRanked) => {
+    // The shadow run reports to neither the trace nor this call's meta.
+    const { onStage: _onStage, onRerank: _onRerank, ...shadowInput } = stageInput;
+    startShadow(shadow, shadowHits, shadowInput, kept, async (shadowRanked) => {
       let view = (await finishOrganic(await withAliasHop(shadowRanked))).slice(0, k);
       if (tokenBudget !== undefined) view = applyTokenBudget(view, tokenBudget);
       return applyAdaptiveReturn(view, intent, adaptiveCfg).kept;
@@ -1551,6 +1610,34 @@ async function hybridSearchUnbounded(
     retrieved: fused.length,
     returned: kept.length,
     confidence: gradeConfidence(kept),
+    ...(rerankOutcome ? { rerank: rerankOutcome } : {}),
   });
   return kept;
+}
+
+/**
+ * What the rerank gate and the relational pin read, as page keys: the page of
+ * the first hydrated row of the vector and the keyword arm, and the pages the
+ * relational arm returned. Rows the hydrate dropped (hidden, out of scope,
+ * filtered) map to no page and are skipped.
+ */
+function rerankGateArms(
+  scored: readonly HitScore[],
+  vectorIds: readonly string[],
+  keywordIds: readonly string[],
+  relationalIds: readonly string[],
+): NonNullable<StageInput["rerankGate"]> {
+  const pageOf = new Map(scored.map((h) => [h.chunkId, pageKeyFor(h.payload?.sourcePath, h.payload?.source_id, h.documentId)] as const));
+  const firstPage = (ids: readonly string[]): string | undefined => {
+    for (const id of ids) {
+      const page = pageOf.get(id);
+      if (page) return page;
+    }
+    return undefined;
+  };
+  return {
+    vectorTopPage: firstPage(vectorIds),
+    keywordTopPage: firstPage(keywordIds),
+    relationalPages: new Set(relationalIds.flatMap((id) => pageOf.get(id) ?? [])),
+  };
 }
