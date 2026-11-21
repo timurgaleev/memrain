@@ -4437,6 +4437,13 @@ self-hosted + low-spend constraints):
   conflict with a lower-tier quarantined row, retire it, mark its proposal
   stale and insert the owner's row. LOW.
 
+- **`addTimelineEvent` types its id as a number but returns a string on
+  Postgres** (`core/timeline.ts` `timelineWriteResult`). postgres.js returns
+  bigint as text; callers that key a map by number (`readTrustTiers`) miss the
+  row unless they wrap it in `Number()`. Fix: normalize the id in
+  `timelineWriteResult`, after checking which MCP replies would change shape.
+  LOW.
+
 - **The 184 down migration drops taint it cannot rebuild**
   (`migrations-down/184_derived_trust_tiers.down.sql:38-40`). `trust_tier` on
   `synth_takes`, `timeline_events` and `synth_atoms` is dropped; think-evidence

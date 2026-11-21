@@ -64,8 +64,10 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       source_chunk_id: "meeting-timeline:meet/call", source_id: "default",
     });
     expect(await tierOf("timeline_events", "id = $1", [r.id])).toBe("external");
-    const tiers = await readTrustTiers(db.storage.engine(), { events: [r.id!] });
-    expect(tiers.events.get(r.id!)).toBe("external");
+    // Postgres returns a bigint id as a string; the tier map is keyed by number.
+    const id = Number(r.id);
+    const tiers = await readTrustTiers(db.storage.engine(), { events: [id] });
+    expect(tiers.events.get(id)).toBe("external");
   });
 
   it("a chronicle projection takes its event page's tier, and a refresh never raises it", async () => {
