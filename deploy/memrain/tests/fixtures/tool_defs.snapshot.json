@@ -2042,7 +2042,7 @@
   },
   {
     "name": "purge_deleted_pages",
-    "description": "HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days). Cascades versions, aliases and links; deletes raw_data, tags and redirects to purged slugs, with per-table counts; retires facts written on or about them and what synthesis derived from them. Returns reaped slugs, count and ttl_hours. Needs admin scope in the owning source or the internal token; the static public bearer is forbidden.",
+    "description": "HARD-delete pages soft-deleted over older_than_hours ago (default 720) with versions, aliases, links, raw_data, tags, redirects, facts on them, synthesis output and secret originals only they held. Returns slugs, count, ttl_hours, per-table counts. Admin scope in the owning source or internal token; never the public bearer.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2538,6 +2538,31 @@
           "description": "Narrow to exact sources; [] reads nothing."
         }
       },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "reveal_secret",
+    "description": "Admin panel only, audited: kept original of a page's redaction marker.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "fingerprint"
+      ],
       "additionalProperties": false
     },
     "annotations": {

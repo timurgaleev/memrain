@@ -200,6 +200,55 @@ keeps what it carried. If you find a live credential in the brain:
 Add a fingerprint to `MEMRAIN_SECRET_SCAN_ALLOW` only for a value you have
 confirmed is not a credential.
 
+### Kept originals (the secret store)
+
+When a page write (`page_put`, `page_append`, `page_edit`, the CLI) replaces
+a credential with its marker, the value it removed is kept in the
+`secret_store` table, sealed with AES-256-GCM under the connector key
+(`MEMRAIN_CONNECTOR_KEK` or `MEMRAIN_CONNECTOR_KEK_FILE`) and bound to its
+source and fingerprint. Without that key nothing is kept and the write goes
+ahead. Connector pages keep nothing. Values redacted before the store
+existed, and anything `memrain secrets audit --apply` redacts, were not
+kept and cannot be recovered. No log, receipt, response or ingest-log row
+carries a value; only `reveal` does.
+
+On the host:
+
+```bash
+memrain secrets originals [--slug S]           # kinds, fingerprints and pages, never a value
+memrain secrets reveal <slug> <fingerprint>    # the original behind a marker on that page
+memrain secrets restore <slug> <fingerprint>   # preview putting a false positive back
+memrain secrets restore <slug> <fingerprint> --apply --plan-hash <hash>
+memrain secrets backup                         # encrypted export, see below
+memrain secrets restore-backup <file>
+```
+
+The MCP tool `reveal_secret` runs only from the admin panel session. No MCP
+client lists or calls it, the internal token included, so an agent steered by
+text it read cannot pull a kept credential back out; every OAuth or personal
+token and the public ingress are refused too. Every reveal and restore leaves a
+`secret-revealed` / `secret-restored` ingest-log row (kind, fingerprint,
+actor) and, with `MEMRAIN_AUDIT_DIR` set, a line in the 0600 audit file.
+
+A restore acts only on the page the redaction wrote the marker to, and only
+while that live page still holds it: a marker copied into another page binds
+to nothing. It writes a new page version, and from then on the value is
+allowed in that source, so later edits leave it in place. Purging a page
+removes its places in the store and every original no other page holds.
+A page rename takes its places with it. Rotating the connector key with
+`memrain connectors rotate-kek` reseals the store too.
+
+The database backup already carries the store. `memrain secrets backup`
+also writes one encrypted export to `<config dir>/secret-store/backups/`
+(on a Docker install, the persistent config mount): every entry as stored
+plus where it occurs, sealed again under the connector key, so no slug,
+fingerprint or kind is in clear. It restores only where the same key is
+loaded, and only for originals whose page is live and still holds the
+marker, so a restore never brings back what a purge removed. `memrain
+doctor` reports `secret-store`: a warning when kept originals cannot be read
+with the loaded key, when no page holds an entry any more, or when the store
+changed since the last backup.
+
 ## Known accepted risks
 
 These are documented choices, not bugs — report only if you've found a

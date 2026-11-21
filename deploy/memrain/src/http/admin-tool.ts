@@ -74,6 +74,8 @@ const ARG_RULES = new Map<string, Readonly<Record<string, ArgRule>>>([
   ["chronicle_since", { since: str(40), kind: str(64), limit: int(1, 100) }],
   ["chronicle_day", { date: str(40), week: bool, kind: str(64), limit: int(1, 100) }],
   ["chronicle_on_this_day", { date: str(40), limit: int(1, 100) }],
+  // The admin session is the owner: it may read a kept original (audited).
+  ["reveal_secret", { slug: str(512), fingerprint: str(16) }],
   ["add_tag", { slug: str(512), tag: str(100) }],
   ["remove_tag", { slug: str(512), tag: str(100) }],
 ]);

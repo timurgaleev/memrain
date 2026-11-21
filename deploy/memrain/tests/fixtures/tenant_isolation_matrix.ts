@@ -114,6 +114,7 @@ export const MATRIX: MatrixRow[] = [
   iso("context_pack", { slugs: [ENTITY_SLUG, "team-b/alice"], window: `talking about ${WIKI_NAME} and ${SHARED_TITLE}` }),
   iso("context_delta", { since: "2020-01-01", limit: 100 }),
   write("quarantine_list"),
+  write("reveal_secret"),
   write("extraction_review"),
   op("advisor"),
   wide("list_brain_skillpack", "repo skill pack, no tenant content"),

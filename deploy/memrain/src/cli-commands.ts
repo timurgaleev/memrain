@@ -129,7 +129,7 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "member": subs("list", "show", "add", "disable", "enable", "remove", "bind", "unbind"),
   "group": subs("list", "show", "add", "remove", "grant-source", "revoke-source", "add-member", "remove-member"),
   "waiting": subs("sweep", "done", "drop", "mute", "unmute"),
-  "secrets": subs("audit"),
+  "secrets": subs("audit", "originals", "reveal", "restore", "backup", "restore-backup"),
   "version": bare,
   "help": bare,
 };

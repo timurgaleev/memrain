@@ -457,6 +457,7 @@ export function sweepEchoes(text: string, echo: EchoDictionary, findings: Secret
       const kind = `${echo.get(value)}-echo`;
       const fingerprint = fingerprintSecret(value);
       findings.push({ kind, fingerprint });
+      recordOriginal(kind, fingerprint, value);
       parts.push(text.slice(at, bestPos), `[REDACTED:${kind}:${fingerprint}]`);
       at = bestPos + value.length;
     }
@@ -545,6 +546,7 @@ export function scanSecrets(text: string, allow: ReadonlySet<string> = new Set()
     if (isAllowed(hex, allow)) return null;
     const fingerprint = hex.slice(0, 16);
     findings.push({ kind, fingerprint });
+    recordOriginal(kind, fingerprint, value);
     if (echo && echoRule) addEcho(echo, echoRule.pick ? echoRule.pick(value) : value, kind, echoRule.min);
     return `[REDACTED:${kind}:${fingerprint}]`;
   };
@@ -573,6 +575,35 @@ export function scanSecrets(text: string, allow: ReadonlySet<string> = new Set()
   }
   if (echo && echo.size > 0) out = sweepEchoes(out, echo, findings);
   return { text: protectedValues.restore(out), findings };
+}
+
+/** A value a scan replaced with its marker, held only in memory until the write seals it. */
+export interface SecretOriginal {
+  kind: string;
+  fingerprint: string;
+  value: string;
+}
+
+/** What one page write collects for the secret store, and the fingerprints its source allows. */
+export interface SecretOriginalsScope {
+  originals: Map<string, SecretOriginal>;
+  allow: ReadonlySet<string>;
+}
+
+const _originalsScope = new AsyncLocalStorage<SecretOriginalsScope>();
+
+/**
+ * Run `fn` collecting every value its scans replace, so the write can seal the
+ * originals of the markers it stores (core/secret-store.ts). Scans outside
+ * such a scope keep nothing.
+ */
+export function withSecretOriginals<T>(scope: SecretOriginalsScope, fn: () => T): T {
+  return _originalsScope.run(scope, fn);
+}
+
+function recordOriginal(kind: string, fingerprint: string, value: string): void {
+  const scope = _originalsScope.getStore();
+  if (scope && !scope.originals.has(fingerprint)) scope.originals.set(fingerprint, { kind, fingerprint, value });
 }
 
 export type SecretDisposition = "redact" | "flag" | "reject";
@@ -633,7 +664,9 @@ export interface GuardOptions {
  *   reject           — refuse the write.
  */
 export function guardSecrets(text: string, where: string, opts: GuardOptions = {}): SecretScanResult {
-  const scanned = scanSecrets(text, allowedFingerprints(), {
+  const allow = allowedFingerprints();
+  for (const fingerprint of _originalsScope.getStore()?.allow ?? []) allow.add(fingerprint);
+  const scanned = scanSecrets(text, allow, {
     echo: switchedOn("MEMRAIN_SECRET_SCAN_ECHO") ? (opts.echo ?? new Map<string, string>()) : false,
     highEntropy: switchedOn("MEMRAIN_SECRET_SCAN_HIGH_ENTROPY"),
     preserveLines: opts.preserveLines === true,

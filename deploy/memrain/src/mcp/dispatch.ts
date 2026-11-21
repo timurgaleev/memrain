@@ -289,7 +289,7 @@ import {
 } from "../core/write-requests.ts";
 import { hasScope } from "../core/scope.ts";
 import { insufficientScopeChallenge } from "../http/oauth-metadata.ts";
-import { dispatchRefusal, SLUG_PARAMS_BY_WRITE_TOOL } from "./visibility.ts";
+import { ADMIN_PANEL_ONLY_TOOLS, dispatchRefusal, SLUG_PARAMS_BY_WRITE_TOOL } from "./visibility.ts";
 import { narrowReadSources } from "./read-source-filter.ts";
 import { withRequestCost } from "../core/request-cost.ts";
 import { readContextDelta } from "../core/context-delta.ts";
@@ -641,6 +641,10 @@ async function dispatchToolInner(
         "This client is bound to slug prefixes; only slug-addressed write tools are allowed.",
       );
     }
+    if (ADMIN_PANEL_ONLY_TOOLS.has(req.name) && opts.adminPanel !== true) {
+      throw new OperationError("permission_denied", `tool '${req.name}' runs only from the admin panel session`,
+        "On the brain host: memrain secrets reveal <slug> <fingerprint>");
+    }
     // Enforce the declared param contract (type / enum / min-max of present
     // params) before dispatch. Known tools only — an unknown name falls through
     // to the switch default. Throws OperationError('invalid_params'), rendered
@@ -670,6 +674,22 @@ async function dispatchToolInner(
         return jsonResult({ ok: true, ...await listQuarantined(storage.engine(), {
           limit: args.limit as number | undefined, sourceIds: readSources,
         }) });
+      case "reveal_secret": {
+        // Defence in depth: the admin panel is the operator (no token, not the public ingress).
+        if (!isOperator) throw new OperationError("permission_denied", "reveal_secret is for the brain owner only");
+        const { revealSecret } = await import("../core/secret-store.ts");
+        const { VaultError } = await import("../core/connectors/vault.ts");
+        const actor = "admin-panel";
+        try {
+          return jsonResult({ ok: true, ...await revealSecret(storage.engine(), {
+            slug: String(args.slug ?? ""), fingerprint: String(args.fingerprint ?? ""),
+          }, actor) });
+        } catch (e) {
+          // Vault messages are fixed text: never the value, the key or the AAD.
+          if (e instanceof VaultError) throw new OperationError("storage_error", `${e.code}: ${e.message}`);
+          throw e;
+        }
+      }
       case "extraction_review":
         return jsonResult({ ok: true, ...await extractionReview(storage.engine(), {
           limit: args.limit as number | undefined, sourceIds: readSources,

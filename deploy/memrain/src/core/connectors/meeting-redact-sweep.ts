@@ -165,6 +165,7 @@ async function rewrite(
     const put = await withSecretDisposition("redact", () => putPage(storage, {
       slug: row.slug,
       type: row.type,
+      sealSecrets: false,
       allowAdHocType: true,
       ...(title === null ? {} : { title }),
       markdown_body: body,

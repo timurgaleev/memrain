@@ -31,6 +31,7 @@ import { OperationError } from "./operation-error.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { hashBody, tombstoneLockKey } from "./pages.ts";
+import { purgeSecretOriginals } from "./secret-store.ts";
 import { applyDerivedCleanup, pageMirrorDocIds, planDerivedCleanup, type DerivedCleanupPlan, type DerivedCleanupResult } from "./synthesis/derived-cleanup.ts";
 
 export interface PurgeDeletedPagesResult {
@@ -55,6 +56,8 @@ export interface PurgeDeletedPagesResult {
   synthesis: DerivedCleanupResult;
   /** Content hashes recorded so the purged text cannot be written back (only with `tombstone`). */
   tombstoned: number;
+  /** Redacted originals in the secret store that only the purged pages held, removed with them (on a dry run: that would be). */
+  secret_originals: number;
   /** Set on a dry run: nothing was deleted, `planned` is what a real run would reap now. */
   dry_run?: true;
   planned?: string[];
@@ -287,7 +290,8 @@ async function retireDerived(tx: Engine, pages: ReadonlyArray<PurgedPage>, purge
   const synthesis = pages.length === 0 ? { ...NO_SYNTHESIS }
     : await applyDerivedCleanup(tx, await planDerivedCleanup(tx, synthesisScope(pages, factIds)), purgeId);
   const tombstoned = tombstone ? await tombstonePages(tx, pages, purgeId) : 0;
-  return { facts_retired: factIds.length, synthesis, tombstoned };
+  const secretOriginals = await purgeSecretOriginals(tx, pages.map((p) => p.slug));
+  return { facts_retired: factIds.length, synthesis, tombstoned, secret_originals: secretOriginals };
 }
 
 /**
@@ -332,6 +336,7 @@ export async function purgeDeletedPages(
         synthesis: plan.rows.length === 0 ? { ...NO_SYNTHESIS }
           : plannedSynthesis(await planDerivedCleanup(engine, synthesisScope(plan.rows, []))),
         tombstoned: 0,
+        secret_originals: await purgeSecretOriginals(engine, planned, true),
         dry_run: true, planned, plan_hash: planHash,
       };
     }
@@ -386,6 +391,7 @@ export async function purgeDeletedPages(
   const removed: Leftovers = { ...NO_LEFTOVERS };
   let factsRetired = 0;
   let tombstoned = 0;
+  let secretOriginals = 0;
   const synthesis: DerivedCleanupResult = { ...NO_SYNTHESIS };
   for (const { slug, deleted_at: deletedAt } of expired.rows) {
     try {
@@ -413,6 +419,7 @@ export async function purgeDeletedPages(
         for (const [key] of LEFTOVER_TABLES) removed[key] += gone[key];
         factsRetired += gone.facts_retired;
         tombstoned += gone.tombstoned;
+        secretOriginals += gone.secret_originals;
         for (const key of Object.keys(synthesis) as Array<keyof DerivedCleanupResult>) synthesis[key] += gone.synthesis[key];
       }
     } catch (err) {
@@ -420,7 +427,7 @@ export async function purgeDeletedPages(
       blocked.push({ slug, reason: "still referenced by a row that does not cascade" });
     }
   }
-  return { count: slugs.length, slugs, blocked, ttl_hours: olderThanHours, ...removed, facts_retired: factsRetired, synthesis, tombstoned };
+  return { count: slugs.length, slugs, blocked, ttl_hours: olderThanHours, ...removed, facts_retired: factsRetired, synthesis, tombstoned, secret_originals: secretOriginals };
 }
 
 /** Clear the purge tombstones of `slug` in `sourceId`, so its old text can be written again. Returns how many went. */

@@ -654,12 +654,13 @@ describe("admin tool route", () => {
     }
   });
 
-  it("B-T6 allowlist holds 18 read tools plus the two tag writes", () => {
-    expect(ADMIN_TOOLS.size).toBe(18);
+  it("B-T6 allowlist holds 16 read tools, the two tag writes and the owner's reveal_secret", () => {
+    expect(ADMIN_TOOLS.size).toBe(19);
     for (const name of ADMIN_TOOLS) {
       const op = OPERATIONS.find((o) => o.name === name);
       expect(op).toBeDefined();
       if (name === "add_tag" || name === "remove_tag") expect(op!.scope).toBe("write");
+      else if (name === "reveal_secret") expect(op!.scope).toBe("admin");
       else expect(op!.scope).toBeUndefined();
     }
   });

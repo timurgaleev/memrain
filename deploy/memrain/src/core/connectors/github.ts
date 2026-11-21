@@ -286,6 +286,7 @@ async function writeItem(
   const put = await putPage(storage, {
     slug: rendered.slug,
     type: rendered.type,
+    sealSecrets: false,
     allowAdHocType: true,
     title: rendered.title,
     markdown_body: rendered.body,

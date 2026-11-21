@@ -350,7 +350,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["write-gate", new Set(["--all", "--json"])],
   ["member", new Set(["--all", "--apply", "--client", "--email", "--enrollment", "--erase-personal-source", "--name", "--out", "--personal-source", "--token"])],
   ["group", new Set(["--allow-owner-source", "--name"])],
-  ["secrets", new Set(["--apply", "--json", "--kinds", "--limit", "--source", "--yes"])],
+  ["secrets", new Set(["--apply", "--dir", "--json", "--kinds", "--limit", "--plan-hash", "--slug", "--source", "--yes"])],
   [
     "transcripts",
     new Set([

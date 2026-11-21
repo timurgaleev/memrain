@@ -101,6 +101,25 @@ marked; this section is the one that stands.
   it was registered with; changing it is `memrain auth rescope-client`. Fold a
   picker into the grant editor (W6c, L4-22).
 
+## Follow-ups from the secret store
+
+- **Two concurrent restores of one entry can undo each other's status.** A
+  restore sets the entry `allowed` before its page write and puts the old
+  status back when the write fails; if another restore of the same entry on
+  another page succeeded meanwhile, the revert sets it `active` again and that
+  page's next write redacts the value once more. Move the status flip into the
+  page write's transaction.
+- **An inline `MEMRAIN_CONNECTOR_KEK` stays loaded until restart.** After
+  `connectors rotate-kek`, a running server still seals new originals under
+  the old key until it is restarted with the new one. Same for connector
+  tokens; document the restart in the rotation runbook.
+- **Admin panel reveals have no rate limit and no `Cache-Control: no-store`.**
+  The route is session- and same-origin-gated and every reveal is audited;
+  add both when the panel gets a reveal button.
+- **Originals the audit (`secrets audit --apply`) redacts are not kept.** The
+  audit hands putPage text that is already redacted. W2a seals them through
+  the store before it rewrites agent transcripts.
+
 ## Follow-ups from the wallet retry change
 
 - The wallet retry loop has no client-wide retry budget and ignores a

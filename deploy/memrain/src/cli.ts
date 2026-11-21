@@ -94,7 +94,7 @@ import { runQuarantine, type QuarantineSub } from "./commands/quarantine.ts";
 import { runWriteGate } from "./commands/write-gate.ts";
 import { runGroup, runMember } from "./commands/members.ts";
 import { assertExtensionPresent, extension } from "./core/extension.ts";
-import { runSecretsAudit } from "./commands/secrets.ts";
+import { runSecretsAudit, runSecretStore } from "./commands/secrets.ts";
 import {
   runEvalRunAll,
   runEvalCompareCmd,
@@ -377,6 +377,10 @@ function printUsage(): void {
   console.log("  secrets audit [--source ID] [--kinds K,K] [--limit N] [--json] [--apply --yes]");
   console.log("                               rescan stored text with the current secret rules; dry run");
   console.log("                               by default, never prints a value");
+  console.log("  secrets originals [--slug S] [--source ID] [--json]   redacted originals the store keeps (no values)");
+  console.log("  secrets reveal <slug> <fingerprint> [--json]          print the original behind a marker (audited)");
+  console.log("  secrets restore <slug> <fingerprint> [--apply --plan-hash H]  put a false positive back (preview first)");
+  console.log("  secrets backup [--dir D] | restore-backup <file>      encrypted export of the store / import it");
   console.log("  version | --version          print build version (git tag+sha, or 'dev')");
   console.log("  --help                       show this help");
   for (const line of extension().usage) console.log(line);
@@ -2050,8 +2054,19 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       return await runWriteGate(opts);
     }
     case "secrets": {
+      const storeSub = positional[0];
+      if (storeSub === "originals" || storeSub === "reveal" || storeSub === "restore" || storeSub === "backup" || storeSub === "restore-backup") {
+        const slug = values.get("--slug");
+        const src = values.get("--source");
+        const expect = values.get("--plan-hash");
+        const dir = values.get("--dir");
+        return await runSecretStore({
+          sub: storeSub, args: positional.slice(1), apply: flags.has("--apply"), json: flags.has("--json"),
+          ...(slug ? { slug } : {}), ...(src ? { sourceId: src } : {}), ...(expect ? { expect } : {}), ...(dir ? { dir } : {}),
+        });
+      }
       if (positional[0] !== "audit") {
-        console.error("memrain secrets: subcommand required (audit)");
+        console.error("memrain secrets: subcommand required (audit, originals, reveal, restore, backup, restore-backup)");
         return 1;
       }
       const opts: Parameters<typeof runSecretsAudit>[0] = {

@@ -117,7 +117,7 @@ MCP `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`); the gro
 - **Jobs** — `jobs_list`/`jobs_get`/`jobs_logs` + `jobs_submit`/`jobs_cancel`.
 - **Daemons** — `daemons_status`, operator only (pause and resume with `memrain daemons`).
 - **Admin / misc** — `index`, `log_friction`, `get_brain_identity`,
-  `quarantine_list`, `extraction_review`.
+  `quarantine_list`, `extraction_review`, `reveal_secret`.
 
 On the **public** ingress, write tools and any tool that surfaces page
 slugs / note content / operational state are filtered out of `tools/list`
@@ -260,6 +260,7 @@ the caller's grant; `[]` reads nothing).
 | `context_delta` | Read scope | Required `since`: `YYYY-MM-DD` or UTC ISO timestamp with seconds, optional 1–3 fractional digits and `Z` | `since`, `complete_change_log:false`, and independent `pages`, `facts`, `events` sections containing `items`, `truncated`, `time_basis` |
 | `quarantine_list` | Operator only; admin scope alone is insufficient | None | `items` containing `id`, `source_id`, `source_path`, `reason`, plus `truncated` |
 | `extraction_review` | Operator only; admin scope alone is insufficient | None | `candidates`, `truncated`, `scanned`, `scan_truncated` |
+| `reveal_secret` | Admin panel session only; not listed or callable over MCP (internal token, OAuth or personal tokens, public ingress) | Required `slug` and `fingerprint` (16 hex from the page's `[REDACTED:<kind>:<fingerprint>]` marker); no `limit`/`source_ids` | `value`, `kind`, `fingerprint`, `source_id`, `status`, `slugs`; audited without the value (SECURITY.md, "Kept originals") |
 
 `context_delta` applies the limit separately to each section after source,
 quarantine, lifecycle and remote diary filters. Page items contain slug,

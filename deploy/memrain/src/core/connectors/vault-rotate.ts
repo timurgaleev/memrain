@@ -1,18 +1,21 @@
 /**
- * Re-seal every connector secret under a new key-encryption key.
+ * Re-seal every connector secret, and every redacted original the secret
+ * store keeps under the same key, under a new key-encryption key.
  *
- * All three tables are rewritten in one transaction: if any row fails to open
+ * All four tables are rewritten in one transaction: if any row fails to open
  * under the old key (damaged, or sealed by a key that is not loaded) nothing is
  * changed and every row stays readable with the old key. Rows already under
  * the new key are skipped, so a rotation that is run again is a no-op.
  */
 import type { Engine } from "../engine/interface.ts";
 import { credentialAad, oauthClientAad, oauthStateAad, seal, unseal, type Kek } from "./vault.ts";
+import { secretStoreAad } from "../secret-store.ts";
 
 export interface RotationResult {
   credentials: number;
   oauthClients: number;
   oauthStates: number;
+  secretOriginals: number;
 }
 
 interface SealedRow {
@@ -23,7 +26,7 @@ interface SealedRow {
 
 export async function rotateKek(engine: Engine, oldKeys: Kek | readonly Kek[], next: Kek): Promise<RotationResult> {
   return engine.transaction(async (tx) => {
-    await tx.query(`LOCK TABLE connector_credentials, connector_oauth_clients, connector_oauth_states IN SHARE ROW EXCLUSIVE MODE`);
+    await tx.query(`LOCK TABLE connector_credentials, connector_oauth_clients, connector_oauth_states, secret_store IN SHARE ROW EXCLUSIVE MODE`);
 
     // scope: operator-only key rotation reseals every credential in the brain
     const creds = await tx.query<SealedRow & { account_id: string; provider: string }>(
@@ -71,6 +74,23 @@ export async function rotateKek(engine: Engine, oldKeys: Kek | readonly Kek[], n
       );
     }
 
-    return { credentials: creds.rows.length, oauthClients: clients.rows.length, oauthStates: states.rows.length };
+    // scope: operator-only key rotation reseals every kept redacted original
+    const originals = await tx.query<SealedRow & { id: string; source_id: string; fingerprint: string }>(
+      `SELECT id::text AS id, source_id, fingerprint, kek_id, nonce, ciphertext FROM secret_store WHERE kek_id <> $1 ORDER BY id`,
+      [next.id],
+    );
+    for (const row of originals.rows) {
+      const plain = unseal(oldKeys, row, secretStoreAad(row.source_id, row.fingerprint, row.kek_id));
+      const sealed = seal(next, plain, secretStoreAad(row.source_id, row.fingerprint, next.id));
+      await tx.query(
+        `UPDATE secret_store SET kek_id = $2, nonce = $3, ciphertext = $4, updated_at = NOW() WHERE id = $1`,
+        [row.id, sealed.kek_id, sealed.nonce, sealed.ciphertext],
+      );
+    }
+
+    return {
+      credentials: creds.rows.length, oauthClients: clients.rows.length, oauthStates: states.rows.length,
+      secretOriginals: originals.rows.length,
+    };
   });
 }

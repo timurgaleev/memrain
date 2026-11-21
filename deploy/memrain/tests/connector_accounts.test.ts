@@ -170,13 +170,13 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         [stateHash, sealedVerifier.kek_id, sealedVerifier.nonce, sealedVerifier.ciphertext]);
 
       const result = await rotateKek(e, kek, next);
-      expect(result).toEqual({ credentials: 1, oauthClients: 1, oauthStates: 1 });
+      expect(result).toEqual({ credentials: 1, oauthClients: 1, oauthStates: 1, secretOriginals: 0 });
       expect(await vaultCode(readCredential(e, kek, acct.id))).toBe("vault_wrong_key");
       expect((await readCredential(e, next, acct.id))?.tokens).toEqual(TOKENS);
       expect(await getOAuthClient(e, next, "test")).toEqual({ clientId: "client-123", clientSecret: "byo-secret", tenant: "organizations" });
       const states = await e.query<{ kek_id: string }>(`SELECT kek_id FROM connector_oauth_states`);
       expect(states.rows.map((r) => r.kek_id)).toEqual([next.id]);
-      expect(await rotateKek(e, kek, next)).toEqual({ credentials: 0, oauthClients: 0, oauthStates: 0 });
+      expect(await rotateKek(e, kek, next)).toEqual({ credentials: 0, oauthClients: 0, oauthStates: 0, secretOriginals: 0 });
     } finally { await db.close(); }
   });
 
@@ -191,7 +191,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         sourceId: "inbox", provider: "test", services: ["mail"], principalRef: "admin:operator", accountLabel: "late@example.test",
       });
       await storeCredential(e, kek, late, TOKENS, { scopes: ["read"], expiresAt: null });
-      expect(await rotateKek(e, [kek, next], next)).toEqual({ credentials: 1, oauthClients: 0, oauthStates: 0 });
+      expect(await rotateKek(e, [kek, next], next)).toEqual({ credentials: 1, oauthClients: 0, oauthStates: 0, secretOriginals: 0 });
       expect((await readCredential(e, next, late.id))?.tokens).toEqual(TOKENS);
       expect((await readCredential(e, next, first.id))?.tokens).toEqual(TOKENS);
     } finally { await db.close(); }

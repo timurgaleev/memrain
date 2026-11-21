@@ -89,6 +89,7 @@ describe("doctor categorize", () => {
       "runtime-config-values",
       "schema-version",
       "secret-exposure",
+      "secret-store",
       "skillpack",
       "source-health",
       "source-routing-health",

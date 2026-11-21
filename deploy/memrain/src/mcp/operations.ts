@@ -1184,7 +1184,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "purge_deleted_pages",
     scope: "admin",
     description:
-      "HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days). Cascades versions, aliases and links; deletes raw_data, tags and redirects to purged slugs, with per-table counts; retires facts written on or about them and what synthesis derived from them. Returns reaped slugs, count and ttl_hours. Needs admin scope in the owning source or the internal token; the static public bearer is forbidden.",
+      "HARD-delete pages soft-deleted over older_than_hours ago (default 720) with versions, aliases, links, raw_data, tags, redirects, facts on them, synthesis output and secret originals only they held. Returns slugs, count, ttl_hours, per-table counts. Admin scope in the owning source or internal token; never the public bearer.",
     params: {
       older_than_hours: num({
         minimum: 0,
@@ -1366,6 +1366,15 @@ export const OPERATIONS: readonly Operation[] = [
     params: {
       limit: int({ minimum: 1, maximum: 100 }),
       source_ids: arr({ items: { type: "string" }, description: "Narrow to exact sources; [] reads nothing." }),
+    },
+  },
+  {
+    name: "reveal_secret",
+    scope: "admin",
+    description: "Admin panel only, audited: kept original of a page's redaction marker.",
+    params: {
+      slug: str({ ...req }),
+      fingerprint: str({ ...req }),
     },
   },
   {

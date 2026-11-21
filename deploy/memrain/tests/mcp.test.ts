@@ -11,6 +11,7 @@ import { Storage } from "../src/core/storage.ts";
 import { startServer, type ServerHandle } from "../src/http/server.ts";
 import { RateLimiter } from "../src/mcp/rate_limit.ts";
 import { TOOL_DEFS } from "../src/mcp/tool_defs.ts";
+import { ADMIN_PANEL_ONLY_TOOLS } from "../src/mcp/visibility.ts";
 import { VERSION } from "../src/version.ts";
 
 let tmp: string;
@@ -109,7 +110,7 @@ describe("MCP HTTP transport", () => {
 
   it("tools/list returns the registered tools", async () => {
     const r = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    expect(r.result.tools.length).toBe(TOOL_DEFS.length);
+    expect(r.result.tools.length).toBe(TOOL_DEFS.length - ADMIN_PANEL_ONLY_TOOLS.size);
     const names = r.result.tools.map((t: any) => t.name).sort();
     expect(names).toEqual([
       "add_fact",
@@ -268,7 +269,7 @@ describe("MCP HTTP transport", () => {
     expect(Array.isArray(r)).toBe(true);
     expect(r.length).toBe(2);
     expect(r[0].result).toEqual({});
-    expect(r[1].result.tools.length).toBe(TOOL_DEFS.length);
+    expect(r[1].result.tools.length).toBe(TOOL_DEFS.length - ADMIN_PANEL_ONLY_TOOLS.size);
   });
 });
 

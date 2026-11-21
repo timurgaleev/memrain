@@ -63,6 +63,7 @@ import { OperationError } from "../operation-error.ts";
 import { deadlockSafeTransaction } from "../retry.ts";
 import { slugifyTitle } from "../synthesis/atoms.ts";
 import { deleteSynthesisDerived } from "../synthesis/derived-cleanup.ts";
+import { purgeSecretOriginals } from "../secret-store.ts";
 import { shortHash, SOURCE_KIND_FOR, type ConnectorDataKind } from "./model.ts";
 import {
   DELETION_STATES,
@@ -196,6 +197,7 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
   const rest = await leftovers(tx, [slug], true);
   counts.leftovers += rest.raw_data_rows + rest.tags_rows + rest.slug_aliases_rows + rest.volunteer_event_rows
     + rest.hot_memory_rows + rest.synthesis_evidence_rows;
+  await purgeSecretOriginals(tx, [slug]);
   await tx.query(`DELETE FROM pages WHERE slug = $1`, [slug]);
   return { docIds, concepts };
 }

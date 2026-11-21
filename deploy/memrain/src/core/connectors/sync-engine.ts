@@ -856,6 +856,7 @@ class Run {
     const put = await putPage(this.storage, {
       slug,
       type,
+      sealSecrets: false,
       allowAdHocType: true,
       title,
       markdown_body: body,

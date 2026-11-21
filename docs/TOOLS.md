@@ -3,7 +3,7 @@
 <!-- Generated from deploy/memrain/src/mcp/operations.ts.
      Do not edit by hand: run `bun scripts/gen-catalogs.ts` in deploy/memrain. -->
 
-Memrain serves 106 tools over MCP. This page lists each one with the
+Memrain serves 107 tools over MCP. This page lists each one with the
 parameters it accepts — the same definitions clients receive from `tools/list`.
 A client only sees the tools its credential may call, so a token may list
 fewer. From a shell, `memrain call <tool> --args '<json>'` runs any of them
@@ -94,6 +94,7 @@ locally. Errors are described in [ERRORS.md](ERRORS.md).
 | [`volunteer_context`](#volunteer_context) | read | read-only | no |
 | [`context_delta`](#context_delta) | read | read-only | no |
 | [`quarantine_list`](#quarantine_list) | admin | writes | yes |
+| [`reveal_secret`](#reveal_secret) | admin | writes | yes |
 | [`extraction_review`](#extraction_review) | admin | writes | yes |
 | [`context_pack`](#context_pack) | read | read-only | no |
 | [`advisor`](#advisor) | read | read-only | yes |
@@ -1478,7 +1479,7 @@ Enqueue one paid chronicle-extract job per eligible scoped conversation page, ex
 
 Scope: admin. Effect: writes, destructive.
 
-HARD-delete soft-deleted pages older than older_than_hours (default 720 = 30 days). Cascades versions, aliases and links; deletes raw_data, tags and redirects to purged slugs, with per-table counts; retires facts written on or about them and what synthesis derived from them. Returns reaped slugs, count and ttl_hours. Needs admin scope in the owning source or the internal token; the static public bearer is forbidden.
+HARD-delete pages soft-deleted over older_than_hours ago (default 720) with versions, aliases, links, raw_data, tags, redirects, facts on them, synthesis output and secret originals only they held. Returns slugs, count, ttl_hours, per-table counts. Admin scope in the owning source or internal token; never the public bearer.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -1497,6 +1498,17 @@ Operator-only, read-only quarantined IDs/sources/paths/fixed reason codes. No ti
 |---|---|---|---|
 | `limit` | integer (1–100) | no |  |
 | `source_ids` | string[] | no | Narrow to exact sources; [] reads nothing. |
+
+### reveal_secret
+
+Scope: admin. Effect: writes. Operator only.
+
+Admin panel only, audited: kept original of a page's redaction marker.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `slug` | string | yes |  |
+| `fingerprint` | string | yes |  |
 
 ### extraction_review
 

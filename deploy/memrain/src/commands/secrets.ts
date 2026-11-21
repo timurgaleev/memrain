@@ -96,3 +96,101 @@ export async function runSecretsAudit(opts: SecretsAuditCmdOptions): Promise<num
     { owned: opts.storage === undefined },
   );
 }
+
+export interface SecretStoreCmdOptions {
+  sub: "originals" | "reveal" | "restore" | "backup" | "restore-backup";
+  args: string[];
+  sourceId?: string;
+  slug?: string;
+  apply?: boolean;
+  expect?: string;
+  dir?: string;
+  json?: boolean;
+  configPath?: string;
+  /** Test seam: a storage the caller owns. */
+  storage?: Storage;
+}
+
+/** Fixed vault and operation messages; never a value. */
+function storeError(sub: string, e: unknown, json: boolean | undefined): number {
+  const code = (e as { code?: string }).code;
+  const message = e instanceof Error ? e.message : String(e);
+  if (code === undefined) throw e;
+  if (json) console.log(JSON.stringify({ ok: false, code, error: message }));
+  else console.error(`memrain secrets ${sub}: ${message}`);
+  return 1;
+}
+
+/**
+ * The secret store, on the brain host (trusted local CLI):
+ *   secrets originals [--slug S] [--source ID] [--json]   what is kept, never a value
+ *   secrets reveal <slug> <fingerprint> [--json]          the original behind a marker (audited)
+ *   secrets restore <slug> <fingerprint>                  preview putting a false positive back
+ *   secrets restore <slug> <fingerprint> --apply --plan-hash <hash>
+ *   secrets backup [--dir D]                              encrypted export, mode 0600
+ *   secrets restore-backup <file>                         import what the store does not hold
+ */
+export async function runSecretStore(opts: SecretStoreCmdOptions): Promise<number> {
+  const store = await import("../core/secret-store.ts");
+  const backup = await import("../core/secret-store-backup.ts");
+  const out = (value: unknown, human: string): void => {
+    console.log(opts.json ? JSON.stringify(value, null, 2) : human);
+  };
+  const [first, second] = opts.args;
+  if ((opts.sub === "reveal" || opts.sub === "restore") && (!first || !second)) {
+    console.error(`memrain secrets ${opts.sub}: <slug> <fingerprint> required`);
+    return 2;
+  }
+  if (opts.sub === "restore-backup" && !first) {
+    console.error("memrain secrets restore-backup: <file> required");
+    return 2;
+  }
+  if (opts.sub === "restore" && opts.apply && !opts.expect) {
+    console.error("memrain secrets restore: --apply needs --plan-hash <hash> from the preview");
+    return 2;
+  }
+  const storage = opts.storage ?? new Storage(loadConfig(opts.configPath));
+  return withStorage(storage, async () => {
+    const engine = storage.engine();
+    try {
+      switch (opts.sub) {
+        case "originals": {
+          const rows = await store.listSecretOriginals(engine, {
+            ...(opts.slug ? { slug: opts.slug } : {}), ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
+          });
+          out(rows, rows.length === 0 ? "no kept originals"
+            : rows.map((r) => `${r.kind}:${r.fingerprint} ${r.status}${r.readable ? "" : " (key not loaded)"} ${r.source_id} ${r.slugs.join(",")}`).join("\n"));
+          return 0;
+        }
+        case "reveal": {
+          const r = await store.revealSecret(engine, { slug: first!, fingerprint: second! }, "local-cli");
+          out(r, r.value);
+          return 0;
+        }
+        case "restore": {
+          if (!opts.apply) {
+            const p = await store.previewSecretRestore(engine, { slug: first!, fingerprint: second! });
+            out(p, `restore ${p.kind}:${p.fingerprint} into ${p.slug} (${p.fields.join(", ")}, version ${p.version_n})\nrun: ${p.command}`);
+            return 0;
+          }
+          const r = await store.applySecretRestore(storage, { slug: first!, fingerprint: second!, expect: opts.expect! }, "local-cli");
+          out(r, `restored ${r.fingerprint} into ${r.slug} as version ${r.version_n}; the value is now allowed in its source`);
+          return 0;
+        }
+        case "backup": {
+          const r = await backup.backupSecretStore(engine, opts.dir ? { dir: opts.dir } : {});
+          out(r, `backed up ${r.entries} original(s), ${r.occurrences} place(s) to ${r.file} (key ${r.kek_id})`);
+          return 0;
+        }
+        case "restore-backup": {
+          const r = await backup.restoreSecretStoreBackup(engine, first!);
+          out(r, `restored ${r.inserted} original(s) (${r.existing} already held, ${r.skipped_no_page} with no page holding the marker, `
+            + `${r.unreadable} unreadable), ${r.occurrences} place(s)`);
+          return 0;
+        }
+      }
+    } catch (e) {
+      return storeError(opts.sub, e, opts.json);
+    }
+  }, { owned: opts.storage === undefined });
+}

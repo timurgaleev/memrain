@@ -12,7 +12,8 @@
  * that step (slug + content_hash + chunkable body) without pulling
  * Bedrock into this module.
  */
-import { auditSecrets, guardEchoes, guardSecrets, guardSecretsDeep, guardWrite, type EchoDictionary, type SecretFinding } from "./secret-scan.ts";
+import { auditSecrets, guardEchoes, guardSecrets, guardSecretsDeep, guardWrite, withSecretOriginals, type EchoDictionary, type SecretFinding, type SecretOriginalsScope } from "./secret-scan.ts";
+import { allowedSecretFingerprints, moveSecretOccurrences, sealPageOriginals } from "./secret-store.ts";
 import { createHash } from "node:crypto";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
@@ -161,6 +162,13 @@ export interface PageInput {
   markdown_body?: string;
   /** Internal neutralizing importers only; never accepted from page-tool arguments. */
   outsideText?: true;
+  /**
+   * False keeps no original of what this write redacts (connector pages: their
+   * provider text is not the operator's). Default: kept in the secret store.
+   */
+  sealSecrets?: boolean;
+  /** Internal (secrets restore): fingerprints this write leaves unredacted. */
+  allowSecretFingerprints?: readonly string[];
   /**
    * An explicit empty `markdown_body` over a page that has a body is refused
    * unless this is set: an empty string is far more often a caller bug than an
@@ -508,6 +516,22 @@ export async function putPage(
   rawInput: PageInput,
 ): Promise<PutResult> {
   validateSlug(rawInput.slug);
+  if (rawInput.sealSecrets === false) return putPageScanned(storage, rawInput, null);
+  // The source a credential would be allowed in: the caller's, else the page's owner.
+  const owner = typeof rawInput.source_id === "string" && rawInput.source_id.trim().length > 0 ? rawInput.source_id
+    // scope: upstream an unscoped (operator) write; only the page's own source id is read
+    : (await storage.engine().query<{ source_id: string }>(`SELECT source_id FROM pages WHERE slug = $1`, [rawInput.slug])).rows[0]?.source_id ?? "default";
+  const allow = await allowedSecretFingerprints(storage.engine(), owner);
+  for (const fingerprint of rawInput.allowSecretFingerprints ?? []) allow.add(fingerprint);
+  const scope: SecretOriginalsScope = { originals: new Map(), allow };
+  return withSecretOriginals(scope, () => putPageScanned(storage, rawInput, scope));
+}
+
+async function putPageScanned(
+  storage: Storage,
+  rawInput: PageInput,
+  secretScope: SecretOriginalsScope | null,
+): Promise<PutResult> {
   const input = withoutPageTextNul(rawInput);
   const changeReason = normalizeChangeReason(input.change_reason);
   if (input.takeMutation && (input.expectedVersion === undefined || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 1 ||
@@ -984,6 +1008,15 @@ export async function putPage(
       if (projected.rowsUpserted !== takePrepared.changedRowNums.length) throw new OperationError("conflict", "Take mutation could not be projected");
     }
     if (r.changed && secretFindings.length > 0) await auditSecrets(tx, secretFindings, input.slug, callerSource);
+    if (r.changed && secretScope !== null && secretScope.originals.size > 0) {
+      // scope: upstream the page this write just stored under its slug lock; its own source
+      const owned = await tx.query<{ source_id: string }>(`SELECT source_id FROM pages WHERE slug = $1`, [input.slug]);
+      await sealPageOriginals(tx, {
+        slug: input.slug,
+        sourceId: owned.rows[0]?.source_id ?? sourceId,
+        fields: { body, title: title ?? "", truth: truthJson },
+      }, secretScope.originals);
+    }
     if (input.receipt !== undefined) {
       // A retry replays this receipt when the derived work after the commit
       // failed, so an edit stores page_edit's response shape, not the row's.
@@ -1838,6 +1871,7 @@ export async function renamePage(
     }
 
     // Drop the old row — its FK children are already moved, so nothing cascades.
+    await moveSecretOccurrences(tx, fromSlug, toSlug);
     await tx.query(`DELETE FROM pages WHERE slug = $1`, [fromSlug]);
 
     // Durable redirect old→new (source-scoped) + a tombstone version on the new

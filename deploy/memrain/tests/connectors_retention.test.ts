@@ -123,6 +123,25 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(receiptText).not.toContain("t1\"");
   });
 
+  it("takes the redacted originals a deleted page held out of the secret store", async () => {
+    const saved = process.env.MEMRAIN_CONNECTOR_KEK;
+    process.env.MEMRAIN_CONNECTOR_KEK = Buffer.alloc(32, 7).toString("base64");
+    try {
+      const e = db.storage.engine();
+      const page = mailPage("t9", "keyholder");
+      // A page under the connector source that kept an original (an atom page does; the sync engine opts out).
+      await ingest({ ...page, body: `${page.body}\nkey ${["AK", "IA", "Q3EXAMPLE7WXYZ56"].join("")}\n` });
+      expect((await e.query("SELECT 1 FROM secret_store_occurrences WHERE slug = $1", [page.slug])).rows).toHaveLength(1);
+      const result = await hardDeleteConnectorPage(db.storage, scope, { slug: page.slug, reason: "disconnect", externalId: "t9" });
+      expect(result.deleted).toBe(true);
+      expect((await e.query("SELECT 1 FROM secret_store_occurrences")).rows).toHaveLength(0);
+      expect((await e.query("SELECT 1 FROM secret_store")).rows).toHaveLength(0);
+    } finally {
+      if (saved === undefined) delete process.env.MEMRAIN_CONNECTOR_KEK;
+      else process.env.MEMRAIN_CONNECTOR_KEK = saved;
+    }
+  });
+
   it("deletes a split page's parts with it, and a retention sweep never takes a part alone", async () => {
     const e = db.storage.engine();
     const canary = "partcanary5150";

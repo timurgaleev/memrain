@@ -134,7 +134,7 @@ describe("pages", () => {
     await deletePage(storage, PURGE_SLUG, undefined, B);
     const none = await purgeDeletedPages(storage.engine(), 0, NONE);
     expect(none).toEqual({ count: 0, slugs: [], blocked: [], ttl_hours: 0, raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0, volunteer_event_rows: 0, hot_memory_rows: 0, synthesis_evidence_rows: 0, facts_retired: 0,
-      synthesis: { atoms: 0, takes: 0, contradictions: 0, concepts: 0, atom_pages: 0, concepts_regenerated: 0, concept_pages: 0, facts: 0 }, tombstoned: 0 });
+      synthesis: { atoms: 0, takes: 0, contradictions: 0, concepts: 0, atom_pages: 0, concepts_regenerated: 0, concept_pages: 0, facts: 0 }, tombstoned: 0, secret_originals: 0 });
     const rows = await storage.engine().query(`SELECT 1 FROM pages WHERE slug = $1`, [PURGE_SLUG]);
     expect(rows.rows.length).toBe(1);
     const all = await purgeDeletedPages(storage.engine(), 0);

@@ -73,7 +73,7 @@ import { checkMixedScriptTargets } from "../core/mixed-script-targets.ts";
 import { checkDbBackends, checkJsonbIntegrity, checkPageVersionStorage } from "../core/doctor-storage.ts";
 import { checkCyclePhaseHealth, checkMaintenanceHeld } from "../core/doctor-maintenance.ts";
 import { checkContextualCoverage, checkEmbedBacklog } from "../core/doctor-embed.ts";
-import { checkSecretExposure } from "../core/doctor-secrets.ts";
+import { checkSecretExposure, checkSecretStore } from "../core/doctor-secrets.ts";
 import { checkConnectorAccounts } from "../core/connectors/doctor.ts";
 import { checkSpendWallet } from "../core/spend-notice.ts";
 import { checkNotifications } from "../core/notifications/doctor.ts";
@@ -482,6 +482,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<void> {
       ["embed-backlog", checkEmbedBacklog],
       ["contextual-coverage", checkContextualCoverage],
       ["secret-exposure", checkSecretExposure],
+      ["secret-store", checkSecretStore],
     ] as const) {
       try {
         const r = await probe(storage.raw());

@@ -45,6 +45,8 @@ const OP_BY_NAME = new Map(OPERATIONS.map((o) => [o.name, o]));
 export const OPERATOR_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "quarantine_list",
   "extraction_review",
+  // The original value of a redacted credential (and admin panel only, see ADMIN_PANEL_ONLY_TOOLS).
+  "reveal_secret",
   "stats",
   "advisor",
   "jobs_submit",
@@ -76,6 +78,14 @@ export const OPERATOR_ONLY_TOOLS: ReadonlySet<string> = new Set([
   // tenant-reachable one.
   "chronicle_backfill",
 ]);
+
+/**
+ * Tools only the admin panel session reaches (http/admin-tool.ts dispatches
+ * them directly). No MCP caller lists or calls them, the internal token
+ * included: an agent steered by text it read must not be able to pull a kept
+ * credential back out.
+ */
+export const ADMIN_PANEL_ONLY_TOOLS: ReadonlySet<string> = new Set(["reveal_secret"]);
 
 /**
  * Which params of a write op name the slugs it MUTATES — the surface the
@@ -143,6 +153,7 @@ export function ingressRefusal(
 ): ToolRefusal | null {
   if (!forbidPublic(name)) return null;
   if (ctx.isPublic) return { kind: "public_ingress" };
+  if (ADMIN_PANEL_ONLY_TOOLS.has(name)) return { kind: "operator_only" };
   // An authenticated principal is judged on scope in dispatch, not on the
   // internal token — the wall defends against an anonymous bridge sibling.
   if (ctx.internalAuthOk === false && ctx.authInfo === undefined) {

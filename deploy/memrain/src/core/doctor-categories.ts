@@ -159,6 +159,7 @@ export const OPS_CHECK_NAMES: ReadonlySet<string> = new Set([
   "config-yml",
   "oauth-self-issued-config",
   "secret-exposure",
+  "secret-store",
   // Only ever pushed when teardown FAILED, so it is absent from a healthy run
   // and the drift test cannot see it — it still has to be named here or it
   // falls through to `meta` with an "uncategorized" warning.

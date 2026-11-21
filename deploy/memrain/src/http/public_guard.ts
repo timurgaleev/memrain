@@ -112,6 +112,8 @@ const PUBLIC_WRITE_TOOLS: ReadonlySet<string> = new Set([
 const FORBIDDEN_MCP_TOOLS_FROM_PUBLIC: ReadonlySet<string> = new Set([
   "context_delta",
   "quarantine_list",
+  // Returns the original of a redacted credential; operator-only.
+  "reveal_secret",
   "extraction_review",
   // Destructive writes — never reachable from public, even with the write flag.
   "log_friction",
