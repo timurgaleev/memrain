@@ -383,6 +383,7 @@ function printUsage(): void {
   console.log("  write-gate rows [--all] [--json]");
   console.log("  write-gate release|drop <id> [--json]");
   console.log("  write-gate scan [--dry-run] [--json]");
+  console.log("  write-gate scan --documents [--json]");
   console.log("                               operator surface for the content-sanity gate");
   console.log("  secrets audit [--source ID] [--kinds K,K] [--limit N] [--json] [--apply --yes]");
   console.log("                               rescan stored text with the current secret rules; dry run");
@@ -2064,6 +2065,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       const opts: Parameters<typeof runWriteGate>[0] = { sub: sub as (typeof subs)[number] };
       if ((sub === "list" || sub === "rows") && flags.has("--all")) opts.all = true;
       if (sub === "scan" && flags.has("--dry-run")) opts.dryRun = true;
+      if (sub === "scan" && flags.has("--documents")) opts.documents = true;
       if (sub === "approve" || sub === "reject" || sub === "release" || sub === "drop") {
         const id = Number(positional[1]);
         if (!positional[1] || !Number.isInteger(id) || id < 1) {

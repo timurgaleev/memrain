@@ -14,6 +14,8 @@
  *   drop    <id> [--json]      keep the row out
  *   scan    [--dry-run] [--json]  flag rows stored before the gate ran on them;
  *                              never holds or changes a row
+ *   scan --documents [--json]  count what the gate would do to stored documents
+ *                              on their next index; writes nothing
  *
  * Local CLI only: the operator decides, recorded as `operator`.
  */
@@ -21,7 +23,7 @@ import { loadConfig } from "../core/config.ts";
 import { Storage } from "../core/storage.ts";
 import { decideWriteGateHold, listWriteGateHolds } from "../core/write-gate-holds.ts";
 import { dropRowHold, listRowHolds, releaseRowHold, type RowHoldDecisionStatus } from "../core/write-gate-row-holds.ts";
-import { scanExistingRows, type RowScanReport } from "../core/write-gate-scan.ts";
+import { scanDocuments, scanExistingRows, type DocumentScanReport, type RowScanReport } from "../core/write-gate-scan.ts";
 import { withStorage } from "./with-storage.ts";
 
 export type WriteGateSub = "list" | "approve" | "reject" | "rows" | "release" | "drop" | "scan";
@@ -34,6 +36,8 @@ export interface WriteGateCmdOptions {
   all?: boolean;
   /** scan: count only, write no receipt. */
   dryRun?: boolean;
+  /** scan: the stored documents instead of rows (always count only). */
+  documents?: boolean;
   json?: boolean;
   configPath?: string;
 }
@@ -87,6 +91,12 @@ export async function runWriteGate(opts: WriteGateCmdOptions): Promise<number> {
 
 async function rowsCommand(storage: Storage, opts: WriteGateCmdOptions): Promise<number> {
   const engine = storage.engine();
+  if (opts.sub === "scan" && opts.documents) {
+    const report = await scanDocuments(engine);
+    if (opts.json) console.log(JSON.stringify(report, null, 2));
+    else printDocumentScan(report);
+    return 0;
+  }
   if (opts.sub === "scan") {
     const report = await scanExistingRows(engine, { dryRun: opts.dryRun === true });
     if (opts.json) console.log(JSON.stringify(report, null, 2));
@@ -140,3 +150,18 @@ function printScan(report: RowScanReport): void {
   }
   if (!report.dry_run) console.log(`  new receipts: ${report.receipts_written}`);
 }
+
+function printDocumentScan(report: DocumentScanReport): void {
+  console.log(`Write gate document scan [${report.detector_version}] (count only, nothing written)`);
+  console.log(`  scanned ${report.scanned} documents an agent or an outside source wrote; matched ${report.matched}; owner's matches (never gated) ${report.owner_matched}`);
+  for (const [source, t] of Object.entries(report.by_source)) {
+    console.log(`  ${source}: scanned ${t.scanned}, matched ${t.matched} (flag ${t.flag}, quarantine ${t.quarantine}, reject ${t.reject})`);
+  }
+  const list = (m: Record<string, number>) => Object.entries(m).map(([k, n]) => `${k} ${n}`).join(", ") || "none";
+  console.log(`  families: ${list(report.families)}`);
+  console.log(`  patterns: ${list(report.patterns)}`);
+  for (const m of report.matches) {
+    console.log(`  ${m.document_id}  ${m.source_id}  ${m.origin}  next: ${m.action}${m.approved ? " (approved before)" : ""}  stored: ${m.stored ?? "none"}  [${m.patterns.join(", ")}]`);
+  }
+}
+

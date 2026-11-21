@@ -10,12 +10,18 @@
  *   - `owner`: a trusted local re-index of the same title and body carries the
  *     stored verdict forward, and a trusted rewrite drops it.
  *
+ * Mail and calendars the owner connected are outside text, but never held or
+ * refused for their content alone: on those sources `quarantine` and
+ * `reject` are read as `flag` (owner-identity.ts says which sources are the
+ * owner's).
+ *
  * The hold for a quarantined document is written inside the document's own
  * transaction (DocumentWrite.afterWrite), so the two land or fail together.
  */
 import type { Engine } from "./engine/interface.ts";
 import { GATE_OWNED_KEYS } from "./quarantine.ts";
 import { logIngest } from "./ingest-log.ts";
+import { isOwnerConnectorSource } from "./owner-identity.ts";
 import { lowerTier, sourceKindTier, type TrustTier } from "./trust-tier.ts";
 import {
   WRITE_GATE_APPROVAL_KEY,
@@ -28,6 +34,8 @@ import {
   writeGateExcerpt,
   writeGateFields,
   writeGateOrigin,
+  type WriteGateMode,
+  type WriteGateOrigin,
   type WriteGateVerdict,
 } from "./write-gate.ts";
 import { WRITE_GATE_AUDIT_SOURCE_TYPE, recordWriteGateHold, supersedeWriteGateHolds } from "./write-gate-holds.ts";
@@ -49,6 +57,13 @@ export interface WriteGatePlan {
   verdict: WriteGateVerdict | null;
   stamp: (frontmatter: Record<string, unknown>) => Record<string, unknown>;
   afterWrite?: (tx: Engine, sourceId: string | null) => Promise<void>;
+}
+
+/** The mode a document write into `sourceId` runs under, the owner's connector sources capped at `flag`. */
+export async function documentGateMode(engine: Engine, origin: WriteGateOrigin, sourceId: string): Promise<WriteGateMode> {
+  const mode = resolveWriteGateMode(origin, sourceId);
+  if (origin === "external" && (mode === "quarantine" || mode === "reject") && await isOwnerConnectorSource(engine, sourceId)) return "flag";
+  return mode;
 }
 
 /** Decide the verdict for one write; throws WriteGateBlockError in `reject` mode. */
@@ -75,7 +90,7 @@ export async function planWriteGate(engine: Engine, input: WriteGatePlanInput): 
 
   let verdict: WriteGateVerdict | null;
   if (origin) {
-    verdict = assessWriteGate({ origin, mode: resolveWriteGateMode(origin, sourceId), fields, binding, approval: storedApproval });
+    verdict = assessWriteGate({ origin, mode: await documentGateMode(engine, origin, sourceId), fields, binding, approval: storedApproval });
     if (verdict.action === "reject") {
       await auditRefusal(engine, verdict, input.sourcePath, sourceId);
       throw new WriteGateBlockError(verdict);

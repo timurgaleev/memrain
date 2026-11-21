@@ -14,12 +14,23 @@
  */
 import type { Engine } from "./engine/interface.ts";
 import { logIngest } from "./ingest-log.ts";
+import { GATE_OWNED_KEYS } from "./quarantine.ts";
+import { PAGE_MIRROR_PATH_SQL } from "./page-index.ts";
+import { documentRankSql, isTrustTier, rankTierSql } from "./trust-tier.ts";
+import { documentGateMode } from "./write-gate-index.ts";
+import type { GateFamily } from "./write-gate-patterns.ts";
 import {
+  assessWriteGate,
   detectInstructionLike,
   writeGateBinding,
+  writeGateFields,
   writeGateOrigin,
   WRITE_GATE_DETECTOR_VERSION,
+  WRITE_GATE_APPROVAL_KEY,
+  WRITE_GATE_KEY,
   type GateField,
+  type WriteGateAction,
+  type WriteGateOrigin,
 } from "./write-gate.ts";
 import { effectiveRowTier, type GatedRowTable, type RowOrigin } from "./write-gate-rows.ts";
 
@@ -178,3 +189,119 @@ export async function scanExistingRows(engine: Engine, opts: RowScanOptions = {}
   }
   return report;
 }
+
+// --- Documents: what the next index would do --------------------------------
+
+export interface DocumentScanSource { scanned: number; matched: number; flag: number; quarantine: number; reject: number }
+
+export interface DocumentScanMatch {
+  document_id: string;
+  source_id: string;
+  origin: WriteGateOrigin;
+  /** What the gate would do on the next index under the current modes (`allow`: the gate is off for this origin). */
+  action: WriteGateAction;
+  /** The verdict stored on the document now (`write_gate.action`), if any. */
+  stored: string | null;
+  /** The owner approved this content before: the next index keeps it released (counted as `flag`). */
+  approved: boolean;
+  families: GateFamily[];
+  patterns: string[];
+}
+
+export interface DocumentScanReport {
+  detector_version: string;
+  /** Documents an agent or an outside source wrote. */
+  scanned: number;
+  matched: number;
+  /** The owner's documents the detector matched: counted only, never gated. */
+  owner_matched: number;
+  by_source: Record<string, DocumentScanSource>;
+  families: Record<string, number>;
+  patterns: Record<string, number>;
+  matches: DocumentScanMatch[];
+}
+
+/**
+ * Run the current detector over stored documents and report, by count and
+ * document id, what the gate would do when each is indexed again. Writes
+ * nothing. The body is read back from the document's chunks plus, for a page's
+ * mirror, the rows of its facts and takes fences, which never become chunks; a
+ * fence in any other document is not stored outside its rows and is not read.
+ */
+export async function scanDocuments(engine: Engine, opts: { batchSize?: number } = {}): Promise<DocumentScanReport> {
+  const batch = Math.max(1, Math.min(opts.batchSize ?? 200, 2000));
+  const report: DocumentScanReport = {
+    detector_version: WRITE_GATE_DETECTOR_VERSION, scanned: 0, matched: 0, owner_matched: 0, by_source: {}, families: {}, patterns: {}, matches: [],
+  };
+  const modes = new Map<string, Awaited<ReturnType<typeof documentGateMode>>>();
+  let cursor = "";
+  for (;;) {
+    const docs = (await engine.query<{ id: string; source_id: string; title: string | null; frontmatter: Record<string, unknown> | null; tier: string | null }>(
+      // scope: operator-only a whole-brain count run from the local CLI
+      `SELECT d.id, COALESCE(d.source_id, 'default') AS source_id, d.title, d.frontmatter, ${rankTierSql(documentRankSql("d"))} AS tier
+         FROM documents d WHERE d.id > $1 AND d.deleted_at IS NULL ORDER BY d.id LIMIT $2`,
+      [cursor, batch],
+    )).rows;
+    if (docs.length === 0) break;
+    const bodies = new Map((await engine.query<{ document_id: string; body: string }>(
+      // scope: operator-only the chunks of the documents this scan just read
+      `SELECT document_id, string_agg(content, E'\n\n' ORDER BY chunk_index) AS body FROM chunks WHERE document_id = ANY($1::text[]) GROUP BY document_id`,
+      [docs.map(d => d.id)],
+    )).rows.map(r => [r.document_id, r.body]));
+    const fences = new Map((await engine.query<{ id: string; fences: string }>(
+      // scope: operator-only the fence rows of the page mirrors this scan just read
+      `SELECT d.id, concat_ws(E'\n',
+              (SELECT string_agg(concat_ws(' | ', f.fact, f.context), E'\n' ORDER BY f.row_num) FROM entity_facts f
+                WHERE f.source_markdown_slug = p.slug AND f.source_id = p.source_id AND f.row_num IS NOT NULL AND f.forgotten_at IS NULL),
+              (SELECT string_agg(concat_ws(' | ', t.claim_text, t.resolved_source), E'\n' ORDER BY t.row_num) FROM synth_takes t
+                WHERE t.source_ref = p.slug AND t.row_num IS NOT NULL AND t.active
+                  -- takes carry no source: read them only when no other live page shares the slug
+                  AND NOT EXISTS (SELECT 1 FROM pages p2 WHERE p2.slug = p.slug AND p2.source_id <> p.source_id AND p2.deleted_at IS NULL))) AS fences
+         FROM documents d JOIN pages p ON p.source_id = COALESCE(d.source_id, 'default') AND d.source_path = ${PAGE_MIRROR_PATH_SQL}
+        WHERE d.id = ANY($1::text[])`,
+      [docs.map(d => d.id)],
+    )).rows.filter(r => r.fences).map(r => [r.id, r.fences]));
+    for (const d of docs) {
+      const frontmatter = d.frontmatter ?? {};
+      const body = [bodies.get(d.id), fences.get(d.id)].filter(Boolean).join("\n\n");
+      const fields = writeGateFields(d.title ?? "", body, frontmatter, GATE_OWNED_KEYS);
+      const origin = isTrustTier(d.tier) ? writeGateOrigin(d.tier) : null;
+      if (origin === null) {
+        if (detectInstructionLike(fields).flagged) report.owner_matched++;
+        continue;
+      }
+      const src = (report.by_source[d.source_id] ??= { scanned: 0, matched: 0, flag: 0, quarantine: 0, reject: 0 });
+      src.scanned++;
+      report.scanned++;
+      const key = `${origin}:${d.source_id}`;
+      if (!modes.has(key)) modes.set(key, await documentGateMode(engine, origin, d.source_id));
+      const mode = modes.get(key)!;
+      const result = detectInstructionLike(fields);
+      if (!result.flagged) continue;
+      // In `off` mode the verdict is `allow`: matched, but the gate would not act on it.
+      const verdict = mode === "off"
+        ? { action: "allow" as const }
+        : assessWriteGate({ origin, mode, fields, binding: "" }, () => result);
+      const stored = frontmatter[WRITE_GATE_KEY] as Record<string, unknown> | undefined;
+      const approval = frontmatter[WRITE_GATE_APPROVAL_KEY] as Record<string, unknown> | undefined;
+      // The scan cannot rebuild the exact binding (it reads chunks), so an approval counts while it still matches the stored verdict.
+      const approved = verdict.action === "quarantine" && typeof approval?.["binding"] === "string" && approval["binding"] === stored?.["binding"];
+      src.matched++;
+      report.matched++;
+      const counted = approved ? "flag" : verdict.action;
+      if (counted === "flag" || counted === "quarantine" || counted === "reject") src[counted]++;
+      for (const f of result.families) bump(report.families, f);
+      const patterns = [...new Set(result.matches.map(m => m.pattern))];
+      for (const p of patterns) bump(report.patterns, p);
+      report.matches.push({
+        document_id: d.id, source_id: d.source_id, origin, action: verdict.action,
+        stored: typeof stored?.["action"] === "string" ? stored["action"] : null,
+        approved, families: result.families, patterns,
+      });
+    }
+    cursor = docs[docs.length - 1]!.id;
+    if (docs.length < batch) break;
+  }
+  return report;
+}
+

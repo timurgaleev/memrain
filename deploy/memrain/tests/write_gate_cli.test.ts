@@ -94,4 +94,18 @@ describe("memrain write-gate", () => {
     expect(all.find(x => x.target_ref === "mail://1")).toMatchObject({ decision: "approved", decided_by: "operator" });
     expect(all.find(x => x.target_ref === "mail://2")).toMatchObject({ decision: "rejected", decided_by: "operator" });
   });
+
+  it("counts what the gate would do to stored documents, by id and without text", async () => {
+    const c = capture();
+    try {
+      expect(await runWriteGate({ sub: "scan", documents: true, json: true, configPath: cfgPath })).toBe(0);
+    } finally {
+      c.restore();
+    }
+    const out = c.lines.join("\n");
+    const r = JSON.parse(out) as { scanned: number; matched: number; matches: Array<{ source_id: string; patterns: string[] }> };
+    expect(r).toMatchObject({ scanned: 2, matched: 2 });
+    expect(r.matches.map(m => m.source_id)).toEqual(["mail", "mail"]);
+    expect(out).not.toContain("approve invoice");
+  });
 });

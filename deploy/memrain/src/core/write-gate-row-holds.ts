@@ -80,21 +80,28 @@ export interface NewRowHold {
   detectorError: boolean;
 }
 
-export type RowHoldLookup = { status: RowHoldStatus; id: number } | null;
+export type RowHoldLookup = { status: RowHoldStatus; id: number; detectorVersion: string } | null;
 
-/** The decided state of this content, if it was held before under this detector version. */
+/**
+ * The state of this content if it was held before: the hold under this
+ * detector version, else the latest one the owner decided under an earlier
+ * version, so a detector change never re-opens a release or a drop.
+ */
 export async function findRowHold(
   engine: Engine,
   key: { kind: RowHoldKind; sourceId: string; slug: string; fields: readonly GateField[]; detectorVersion: string },
 ): Promise<RowHoldLookup> {
   // scope: upstream the writer's own source and slug, by the hold's dedupe key
-  const r = await engine.query<{ id: number; status: RowHoldStatus }>(
-    `SELECT id::int AS id, status FROM write_gate_row_holds
-      WHERE source_id = $1 AND kind = $2 AND slug = $3 AND fingerprint = $4 AND detector_version = $5`,
+  const r = await engine.query<{ id: number; status: RowHoldStatus; detector_version: string }>(
+    `SELECT id::int AS id, status, detector_version FROM write_gate_row_holds
+      WHERE source_id = $1 AND kind = $2 AND slug = $3 AND fingerprint = $4
+        AND (detector_version = $5 OR status <> 'held')
+      ORDER BY (detector_version = $5) DESC, id DESC
+      LIMIT 1`,
     [key.sourceId, key.kind, key.slug, holdFingerprint(key.kind, key.fields.map(f => f.text)), key.detectorVersion],
   );
   const row = r.rows[0];
-  return row ? { id: Number(row.id), status: row.status } : null;
+  return row ? { id: Number(row.id), status: row.status, detectorVersion: row.detector_version } : null;
 }
 
 /**

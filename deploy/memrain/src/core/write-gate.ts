@@ -13,11 +13,11 @@
 import { createHash } from "node:crypto";
 import { neutralizeOutsideText } from "./neutralize-outside-text.ts";
 import { wellFormForText } from "./well-form.ts";
-import { WRITE_GATE_PATTERNS, type GateFamily, type GatePattern } from "./write-gate-patterns.ts";
+import { MAX_PRECEDING_CHARS, WRITE_GATE_PATTERNS, type GateFamily, type GatePattern } from "./write-gate-patterns.ts";
 import type { TrustTier } from "./trust-tier.ts";
 
 /** Bump whenever the pattern table or the normalization changes. */
-export const WRITE_GATE_DETECTOR_VERSION = "write-gate/v1";
+export const WRITE_GATE_DETECTOR_VERSION = "write-gate/v2";
 
 export interface GateField { field: string; text: string }
 export interface GateMatch { field: string; family: GateFamily; pattern: string }
@@ -31,8 +31,13 @@ export interface DetectorResult {
 // Invisible characters an attacker can thread through a word (soft hyphen,
 // zero-width and bidi controls, joiners, variation selectors, BOM, tag
 // characters): the Unicode Default_Ignorable_Code_Point set. Vertical tab and
-// form feed are plain whitespace to both views and need no mapping.
+// form feed are plain whitespace to every view and need no mapping.
 const INVISIBLE = /\p{Default_Ignorable_Code_Point}/gu;
+// Tag characters mirror printable ASCII invisibly, and a model reads them:
+// decode them so hidden text is scanned rather than dropped.
+const TAG_ASCII = /[\u{E0020}-\u{E007E}]/gu;
+const revealTag = (ch: string) => String.fromCharCode(ch.codePointAt(0)! - 0xE0000);
+const HORIZONTAL_SPACE = /[^\S\n]+/g;
 const LINE_BREAKS = /\r\n?|[\u2028\u2029\u0085]/g;
 const EMPHASIS = /[*_`~]+/g;
 const NOT_WORDLIKE = /[^\p{L}\p{M}\p{N}'\- ]/gu;
@@ -91,32 +96,96 @@ const TO_CYRILLIC: Record<string, string> = {
   a: "а", b: "в", c: "с", e: "е", h: "н", k: "к", m: "м", o: "о", p: "р", t: "т", x: "х", y: "у",
 };
 const LEET: Record<string, string> = { 0: "o", 1: "i", 3: "e", 4: "a", 5: "s", 7: "t" };
+// Look-alikes from no alphabet the brain's owners write in (Cyrillic letters
+// outside Russian and Ukrainian, small capitals, dotless i, Armenian): a word
+// that uses one is spelling Latin, even with no Latin letter in it.
+const FOREIGN_TO_LATIN: Record<string, string> = {
+  "ԁ": "d", "ԝ": "w", "ԛ": "q", "ӏ": "l", "һ": "h", "ѕ": "s", "ј": "j", "ı": "i", "ɑ": "a",
+  "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e", "ɢ": "g", "ʜ": "h", "ɪ": "i", "ᴊ": "j", "ᴋ": "k",
+  "ʟ": "l", "ᴍ": "m", "ɴ": "n", "ᴏ": "o", "ᴘ": "p", "ʀ": "r", "ꜱ": "s", "ᴛ": "t", "ᴜ": "u", "ᴠ": "v",
+  "ᴡ": "w", "ʏ": "y", "ᴢ": "z", "օ": "o", "ո": "n", "ս": "u", "հ": "h",
+};
+// Greek capitals whose lower case looks like another Latin letter (Ν -> ν reads
+// as "v"): mapped before lower-casing, inside words that also hold Latin letters.
+const GREEK_CAPITAL_TO_LATIN: Record<string, string> = { "Β": "B", "Η": "H", "Μ": "M", "Ν": "N", "Υ": "Y", "Ζ": "Z" };
+const GREEK_CAPITALS = /[ΒΗΜΝΥΖ]/g;
+const HAS_GREEK_CAPITAL = /[ΒΗΜΝΥΖ]/;
+const HAS_ASCII_LETTER = /[a-z]/i;
 
+/**
+ * A word made only of Latin letters and their look-alikes reads as Latin; a
+ * mixed word whose Latin letters all have Cyrillic twins reads as Cyrillic;
+ * otherwise the majority script wins. Digits in a Latin word read as letters.
+ */
 function foldWord(word: string): string {
   let latin = 0;
   let cyrillic = 0;
-  let greek = 0;
   let digits = 0;
-  for (let i = 0; i < word.length; i++) {
-    const c = word.charCodeAt(i);
+  let foreign = 0;
+  let unmapped = 0;
+  let nonAscii = false;
+  for (const ch of word) {
+    const c = ch.codePointAt(0)!;
     if (c >= 0x61 && c <= 0x7A) latin++;
     else if (c >= 0x30 && c <= 0x39) digits++;
-    else if (c >= 0x400 && c <= 0x52F) cyrillic++;
-    else if (c >= 0x370 && c <= 0x3FF) greek++;
+    else {
+      nonAscii = true;
+      if (FOREIGN_TO_LATIN[ch]) foreign++;
+      else {
+        if (c >= 0x400 && c <= 0x52F) cyrillic++;
+        if (!TO_LATIN[ch] && LETTER.test(ch)) unmapped++;
+      }
+    }
   }
-  if (latin === 0) return word;
-  if (cyrillic > latin) return Array.from(word, ch => TO_CYRILLIC[ch] ?? ch).join("");
-  if (cyrillic === 0 && greek === 0 && digits === 0) return word;
-  const leet = digits > 0;
-  return Array.from(word, ch => TO_LATIN[ch] ?? (leet ? LEET[ch] : undefined) ?? ch).join("");
+  if (latin === 0 && foreign === 0) return word;
+  const toLatin = () => Array.from(word, ch => FOREIGN_TO_LATIN[ch] ?? TO_LATIN[ch] ?? (digits > 0 ? LEET[ch] : undefined) ?? ch).join("");
+  if (unmapped === 0) return nonAscii || digits > 0 ? toLatin() : word;
+  const latinHasTwins = cyrillic > 0 && Array.from(word).every(ch => !/[a-z]/.test(ch) || TO_CYRILLIC[ch] !== undefined);
+  if (latinHasTwins || cyrillic > latin) return Array.from(word, ch => TO_CYRILLIC[ch] ?? ch).join("");
+  return toLatin();
 }
 
+// HTML character references, read once: "&#105;gnore" is "ignore" to a reader.
+const ENTITY = /&(?:#(\d{1,7})|#x([0-9a-f]{1,6})|(amp|lt|gt|quot|apos|nbsp));/gi;
+const NAMED_ENTITY: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " " };
+function decodeEntity(whole: string, dec?: string, hex?: string, name?: string): string {
+  if (name) return NAMED_ENTITY[name.toLowerCase()] ?? whole;
+  const cp = dec !== undefined ? Number(dec) : Number.parseInt(hex ?? "", 16);
+  return Number.isInteger(cp) && cp > 0 && cp <= 0x10FFFF && (cp < 0xD800 || cp > 0xDFFF) ? String.fromCodePoint(cp) : whole;
+}
+// Marks no precomposed letter absorbed (a strike-through overlay) left on a Latin letter.
+const LATIN_MARKS = /(?<=[a-z])\p{Mn}+/gu;
+// Inline markup and Markdown emphasis or code marks ("al**ways", "<b>al</b>ways",
+// "`password`"), and single letters joined by one punctuation mark
+// ("i-g-n-o-r-e"). A mark right after a colon stays, so a speaker label
+// ("**Assistant:**") still reads as a label rather than as an address.
+const INLINE_TAG = /<\/?(?:[bisu]|em|strong|span|del|ins|mark|sub|sup|small|big|font|code|tt)(?:\s[^<>]{0,200})?>/g;
+const EMPHASIS_MARKS = /(?<!:)[*_~`]+/g;
+const SEPARATED_LETTERS = /(?<![\p{L}\p{N}])\p{L}(?:[-._]\p{L}){2,}(?![\p{L}\p{N}])/gu;
+const ENCODED_AT = /(?<=[a-z0-9._+-])%40(?=[a-z0-9])/g;
+
+// Each optional step runs only when its trigger is in the text: most text is plain ASCII.
+const NON_ASCII = /[^\t\n\r\u0020-\u007E]/;
+const HAS_MARK = /\p{Mn}/u;
+const HAS_SEPARATED = /\p{L}[-._]\p{L}[-._]\p{L}/u;
+const HAS_EMPHASIS = /[*_~`]/;
+
 function baseView(text: string): string {
-  return wellFormForText(text)
-    .normalize("NFKC")
-    .replace(INVISIBLE, "")
-    .replace(LINE_BREAKS, "\n")
-    .toLowerCase();
+  let t = wellFormForText(text);
+  if (t.includes("&")) t = t.replace(ENTITY, decodeEntity);
+  if (NON_ASCII.test(t)) {
+    t = t.replace(TAG_ASCII, revealTag).normalize("NFKC").replace(INVISIBLE, "");
+    if (HAS_GREEK_CAPITAL.test(t)) t = t.replace(WORD, w => (HAS_ASCII_LETTER.test(w) ? w.replace(GREEK_CAPITALS, ch => GREEK_CAPITAL_TO_LATIN[ch] ?? ch) : w));
+  }
+  t = t.replace(LINE_BREAKS, "\n").toLowerCase();
+  return HAS_MARK.test(t) ? t.replace(LATIN_MARKS, "") : t;
+}
+
+/** What the word-level views read: inline markup and emphasis gone, separated letters joined. */
+function wordView(base: string): string {
+  let t = base.includes("<") ? base.replace(INLINE_TAG, "") : base;
+  if (HAS_EMPHASIS.test(t)) t = t.replace(EMPHASIS_MARKS, "");
+  return HAS_SEPARATED.test(t) ? t.replace(SEPARATED_LETTERS, m => m.replace(/[-._]/g, "")) : t;
 }
 
 /** Padded with a space on each side: prose patterns open with a literal space. */
@@ -128,6 +197,11 @@ function proseView(base: string): string {
     .replace(WORD, foldWord)
     .trim();
   return ` ${words} `;
+}
+
+/** Punctuation and line breaks kept, look-alikes folded: what sentence-level rules read. */
+function sentenceView(words: string): string {
+  return joinSpacedLetters(words.replace(ENCODED_AT, "@").replace(HORIZONTAL_SPACE, " ")).replace(WORD, foldWord);
 }
 
 /** Lines and sentences: the scope inside which a `seq` pattern's parts must meet. */
@@ -149,9 +223,37 @@ function seqMatches(parts: readonly RegExp[], segs: readonly string[]): boolean 
   return false;
 }
 
-function matches(p: GatePattern, prose: string, structural: string, segs: () => string[]): boolean {
-  if (p.re) return p.re.test(p.view === "prose" ? prose : structural);
-  return seqMatches(p.seq ?? [], segs());
+// Global copies for walking every match of a `preceded` pattern; the table's own regexes stay stateless.
+const ITERATORS: ReadonlyMap<string, RegExp> = new Map(
+  WRITE_GATE_PATTERNS.filter(p => p.preceded && p.re).map(p => [p.name, new RegExp(p.re!.source, `${p.re!.flags}g`)]),
+);
+
+/**
+ * True when some match of `p` has its context before it. Every match is
+ * tried, one character on from the last start, since a rejected match can
+ * overlap the one that holds. The text start counts as a line start.
+ */
+function matchesInContext(p: GatePattern, text: string): boolean {
+  const rx = ITERATORS.get(p.name)!;
+  rx.lastIndex = 0;
+  for (let m = rx.exec(text); m; m = rx.exec(text)) {
+    const at = m.index;
+    rx.lastIndex = at + 1;
+    const before = at > MAX_PRECEDING_CHARS ? text.slice(at - MAX_PRECEDING_CHARS, at) : `\n${text.slice(0, at)}`;
+    if (p.near && !p.near.test(before)) continue;
+    const context = p.preceded!.exec(before);
+    if (context && !context.groups?.["neg"]) return true;
+  }
+  return false;
+}
+
+interface Views { prose: string; structural: string; sentence: string; segs: () => string[] }
+
+function matches(p: GatePattern, v: Views): boolean {
+  if (!p.re) return seqMatches(p.seq ?? [], v.segs());
+  const text = p.view === "prose" ? v.prose : p.view === "sentence" ? v.sentence : v.structural;
+  if (p.requires && !p.requires.every(r => r.test(text))) return false;
+  return p.preceded ? matchesInContext(p, text) : p.re.test(text);
 }
 
 /** Scan each field for instruction-like text. Pure; never throws on string input. */
@@ -160,11 +262,11 @@ export function detectInstructionLike(fields: readonly GateField[]): DetectorRes
   for (const { field, text } of fields) {
     if (!text || !text.trim()) continue;
     const structural = baseView(text);
-    const prose = proseView(structural);
     let segs: string[] | null = null;
-    const lazySegs = () => (segs ??= segments(structural));
+    const words = wordView(structural);
+    const views: Views = { structural, prose: proseView(words), sentence: sentenceView(words), segs: () => (segs ??= segments(structural)) };
     for (const p of WRITE_GATE_PATTERNS) {
-      if (matches(p, prose, structural, lazySegs)) found.push({ field, family: p.family, pattern: p.name });
+      if (matches(p, views)) found.push({ field, family: p.family, pattern: p.name });
     }
   }
   const families = [...new Set(found.map(m => m.family))].sort();
@@ -197,6 +299,16 @@ export type WriteGateOrigin = Extract<TrustTier, "external" | "agent">;
 export function writeGateOrigin(tier: TrustTier): WriteGateOrigin | null {
   if (tier === "owner") return null;
   return tier === "external" ? "external" : "agent";
+}
+
+/**
+ * The matched families that can hold content back from this origin. Agents
+ * write notes about the tools they use ("call page_append instead of ..."),
+ * so text from an agent that is only shaped like a tool call is flagged,
+ * never held; from outside it is held like any other family.
+ */
+export function holdingFamilies(origin: WriteGateOrigin, families: readonly GateFamily[]): GateFamily[] {
+  return origin === "agent" ? families.filter(f => f !== "tool_call_shape") : [...families];
 }
 export type WriteGateAction = "allow" | "flag" | "quarantine" | "reject";
 
@@ -298,6 +410,7 @@ export function assessWriteGate(input: WriteGateInput, detect: typeof detectInst
   }
   const verdict = { ...base, families: result.families, detector_version: result.detector_version };
   if (!result.flagged) return { ...verdict, action: "allow" };
+  if (input.mode === "quarantine" && holdingFamilies(input.origin, result.families).length === 0) return { ...verdict, action: "flag" };
   if (input.mode === "quarantine" && parseApproval(input.approval)?.binding === input.binding) {
     return { ...verdict, action: "quarantine", approved: true };
   }

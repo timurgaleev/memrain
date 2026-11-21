@@ -27,6 +27,7 @@ import { findRowHold, holdKindOf, recordRowHold } from "./write-gate-row-holds.t
 import {
   WRITE_GATE_DETECTOR_VERSION,
   detectInstructionLike,
+  holdingFamilies,
   writeGateBinding,
   writeGateOrigin,
   type DetectorResult,
@@ -271,12 +272,17 @@ export async function holdIfQuarantined(
     const { tier, sourceId } = at;
     const gateOrigin = writeGateOrigin(tier);
     if (gateOrigin === null || resolveRowGateMode(gateOrigin, sourceId, env) !== "quarantine") return null;
+    if (result !== null && holdingFamilies(gateOrigin, result.families).length === 0) return null;
     const kind = holdKindOf(row.table);
     const detectorVersion = result?.detector_version ?? WRITE_GATE_DETECTOR_VERSION;
     const keyFields = row.identity === undefined ? row.fields : [...row.fields, { field: "identity", text: row.identity }];
     const prior = await findRowHold(engine, { kind, sourceId, slug: row.slug, fields: keyFields, detectorVersion });
     if (prior?.status === "released") return null;
     const families = result?.families ?? [];
+    // The owner dropped this content under an earlier detector: it stays dropped.
+    if (prior?.status === "dropped" && prior.detectorVersion !== detectorVersion) {
+      return { hold_id: prior.id, ref: `h${prior.id}`, status: "dropped", families: [...families] };
+    }
     const hold = await recordRowHold(engine, {
       kind, sourceId, slug: row.slug, fields: keyFields, payload: row.payload,
       origin: gateOrigin, tier, families, detectorVersion, detectorError: result === null,
