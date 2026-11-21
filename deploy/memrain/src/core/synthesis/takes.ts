@@ -42,7 +42,7 @@ import { resolveModel } from "../llm/resolve-model.ts";
 import { clearSynthFailure, filterBackedOff, recordSynthFailure } from "./synth-failures.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
 import { guardFields } from "../secret-scan.ts";
-import { flagRowAt } from "../write-gate-rows.ts";
+import { flagRowAt, holdIfQuarantined } from "../write-gate-rows.ts";
 
 export const PROPOSE_TAKES_PROMPT_VERSION = "v1-nova";
 
@@ -246,6 +246,8 @@ export interface ProposeTakesResult {
   documentsScanned: number;
   documentsProcessed: number;
   takesQueued: number;
+  /** Takes the write gate held for the owner instead of queueing (quarantine mode). */
+  takesHeld: number;
   /** Idempotency rows written for documents that extracted zero claims. */
   tombstonesWritten: number;
   /** Takes marked inactive because their document no longer yields claims. */
@@ -436,6 +438,7 @@ export async function proposeTakesPhase(
     documentsScanned: 0,
     documentsProcessed: 0,
     takesQueued: 0,
+    takesHeld: 0,
     tombstonesWritten: 0,
     takesRetired: 0,
     errors: [],
@@ -586,6 +589,20 @@ export async function proposeTakesPhase(
         continue;
       }
       const key = takeKey(doc.id, doc.contentHash16, promptVersion, take.claim_text);
+      const held = await holdIfQuarantined(engine, {
+        table: "synth_takes",
+        fields: [{ field: "claim", text: take.claim_text }],
+        slug: doc.id,
+        payload: {
+          take_key: key, source_ref: doc.id, source_hash: doc.contentHash16, prompt_version: promptVersion,
+          claim_text: take.claim_text, kind: take.kind, weight: take.weight, domain: take.domain ?? null,
+          status: "queued", model_id: modelId,
+        },
+      }, { document: doc.id });
+      if (held !== null) {
+        result.takesHeld += 1;
+        continue;
+      }
       // Embed the claim so `think`'s take VECTOR stream can rank it (opt-in;
       // fail-soft — an embed error leaves the column NULL, keyword recall intact).
       let embedding: string | null = null;

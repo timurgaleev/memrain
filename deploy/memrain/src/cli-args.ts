@@ -349,7 +349,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
     "quarantine",
     new Set(["--apply", "--force", "--include-flagged", "--json", "--limit"]),
   ],
-  ["write-gate", new Set(["--all", "--json"])],
+  ["write-gate", new Set(["--all", "--json", "--dry-run"])],
   ["member", new Set(["--all", "--apply", "--clear", "--client", "--email", "--enrollment", "--erase-personal-source", "--name", "--out", "--personal-source", "--token"])],
   ["identity", new Set(["--json", "--member"])],
   ["group", new Set(["--allow-owner-source", "--name"])],
@@ -382,7 +382,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
     "--dry-run",
     new Set([
       "apply-migrations", "auth", "embed", "eval", "extract", "jobs", "lint",
-      "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts",
+      "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts", "write-gate",
     ]),
   ],
   ["--apply", new Set(["import", "mirror-adopt", "erase", "atoms-retire", "purge-leftovers", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member", "sources"])],

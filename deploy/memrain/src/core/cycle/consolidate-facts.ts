@@ -32,6 +32,7 @@ import { DEFAULT_FACT_KIND } from "../facts-decay.ts";
 import { phaseFenceCheck } from "./phase-context.ts";
 import { factSourceEligibleSql } from "../quarantine.ts";
 import { claimsDiverge } from "../fact-divergence.ts";
+import { holdIfQuarantined } from "../write-gate-rows.ts";
 
 /** Author stamped on a promoted take — also half its claim identity. */
 const CONSOLIDATE_WRITER = "facts-consolidate";
@@ -313,6 +314,22 @@ async function promoteCluster(
     written_by: CONSOLIDATE_WRITER,
   };
 
+  // The take restates `best` word for word, so it keeps that member's writer:
+  // an agent's claim stays an agent's claim, and the row gate sees it as one.
+  // scope: upstream the member id comes from this bucket's own source-scoped read
+  const copied = await engine.query<{ p: string | null }>(`SELECT written_by_principal AS p FROM entity_facts WHERE id = $1`, [best.id]);
+  const principal = copied.rows[0]?.p ?? null;
+  const held = await holdIfQuarantined(engine, {
+    table: "entity_facts",
+    fields: [{ field: "fact", text: best.fact }, { field: "context", text: "" }],
+    slug: bucket.entity_slug,
+    payload: {
+      entity_slug: bucket.entity_slug, fact: best.fact, kind: best.kind ?? DEFAULT_FACT_KIND, confidence: avg,
+      written_by: CONSOLIDATE_WRITER, source_id: bucket.source_id, written_by_principal: principal,
+    },
+  }, { fact: best.id });
+  if (held !== null) return { takeWritten: false, factsConsolidated: 0 };
+
   return engine.transaction(async (tx) => {
     // The consolidated_into pointer (mig085) targets the promoted take; on an
     // idempotent re-run the take is already on file, so its id comes from the
@@ -323,8 +340,8 @@ async function promoteCluster(
       const ins = await tx.query<{ id: number }>(
         `INSERT INTO entity_facts
            (entity_slug, fact, kind, confidence, written_by, source_id,
-            consolidated, consolidated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, true, NOW())
+            consolidated, consolidated_at, written_by_principal)
+         VALUES ($1, $2, $3, $4, $5, $6, true, NOW(), $7)
          RETURNING id`,
         [
           bucket.entity_slug,
@@ -337,6 +354,7 @@ async function promoteCluster(
           avg,
           CONSOLIDATE_WRITER,
           bucket.source_id,
+          principal,
         ],
       );
       takeId = ins.rows[0]?.id ?? null;

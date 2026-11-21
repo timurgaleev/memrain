@@ -17,6 +17,7 @@ import { ownerOnlyLineageSql } from "./owner-only.ts";
 import { supersededValidUntilSql } from "./fact-validity.ts";
 import type { Storage } from "./storage.ts";
 import { guardFields } from "./secret-scan.ts";
+import { flagRowAt, holdIfQuarantined } from "./write-gate-rows.ts";
 import {
   valueHash,
   normalizeDimension,
@@ -77,8 +78,23 @@ export async function mergeOntologyFact(
   const sourceSlug = obs.source_slug ?? null;
   const factText = `${dimension}: ${obs.value}`;
   const lockKey = `${obs.sourceId}:${obs.entitySlug}:${dimension}`;
+  const principal = typeof obs.principal === "string" && obs.principal.length > 0 ? obs.principal : null;
 
-  return storage.engine().transaction(async (tx) => {
+  // A held observation is released as a new open row; it never closes the
+  // current value on its own.
+  const held = await holdIfQuarantined(storage.engine(), {
+    table: "entity_facts",
+    fields: [{ field: "fact", text: factText }, { field: "context", text: "" }],
+    slug: obs.entitySlug,
+    payload: {
+      entity_slug: obs.entitySlug, fact: factText, kind: "fact", visibility, dimension, value: obs.value, value_hash: vh,
+      dim_status: status, confidence: conf, source_slug: sourceSlug, valid_from: validFrom ?? new Date().toISOString().slice(0, 10),
+      valid_until: validTo, source_id: obs.sourceId, written_by_principal: principal,
+    },
+  }, { newFact: { principal, sourceId: obs.sourceId, sourceSlug } });
+  if (held !== null) return { action: "held", factId: null, supersededId: null };
+
+  const merged = await storage.engine().transaction(async (tx): Promise<OntologyMergeResult> => {
     // Serialize concurrent writers on this (tenant, entity, dimension) axis so a
     // read-modify-write supersession can't interleave into a double-current.
     await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [lockKey]);
@@ -122,12 +138,12 @@ export async function mergeOntologyFact(
         `INSERT INTO entity_facts
            (entity_slug, fact, kind, visibility, dimension, value, value_hash, dim_status,
             confidence, source_slug, valid_from, valid_until, forgotten_at, forgotten_cause,
-            consolidated_into, source_id)
+            consolidated_into, source_id, written_by_principal)
          VALUES ($1, $2, 'fact', $3, $4, $5, $6, $7, $8, $9,
-                 COALESCE($10::date, CURRENT_DATE), NULL, NOW(), 'consolidate', $11, $12)
+                 COALESCE($10::date, CURRENT_DATE), NULL, NOW(), 'consolidate', $11, $12, $13)
          RETURNING id`,
         [obs.entitySlug, factText, visibility, dimension, obs.value, vh, status, conf,
-          sourceSlug, validFrom, current.id, obs.sourceId],
+          sourceSlug, validFrom, current.id, obs.sourceId, principal],
       );
       await tx.query(
         `UPDATE entity_facts SET confidence = LEAST(1.0, confidence + $2) WHERE id = $1`,
@@ -147,11 +163,11 @@ export async function mergeOntologyFact(
       const ins = await tx.query<{ id: number }>(
         `INSERT INTO entity_facts
            (entity_slug, fact, kind, visibility, dimension, value, value_hash, dim_status,
-            confidence, source_slug, valid_from, valid_until, source_id)
-         VALUES ($1, $2, 'fact', $3, $4, $5, $6, $7, $8, $9, $10::date, $11::date, $12)
+            confidence, source_slug, valid_from, valid_until, source_id, written_by_principal)
+         VALUES ($1, $2, 'fact', $3, $4, $5, $6, $7, $8, $9, $10::date, $11::date, $12, $13)
          RETURNING id`,
         [obs.entitySlug, factText, visibility, dimension, obs.value, vh, status, conf,
-          sourceSlug, validFrom, current!.valid_from, obs.sourceId],
+          sourceSlug, validFrom, current!.valid_from, obs.sourceId, principal],
       );
       return { action: "inserted", factId: Number(ins.rows[0]!.id), supersededId: null, conflict: true };
     }
@@ -161,15 +177,15 @@ export async function mergeOntologyFact(
     const ins = await tx.query<{ id: number }>(
       `INSERT INTO entity_facts
          (entity_slug, fact, kind, visibility, dimension, value, value_hash, dim_status,
-          confidence, source_slug, valid_from, valid_until, source_id)
+          confidence, source_slug, valid_from, valid_until, source_id, written_by_principal)
        VALUES ($1, $2, 'fact', $3, $4, $5, $6, $7, $8, $9,
-               COALESCE($10::date, CURRENT_DATE), $11::date, $12)
+               COALESCE($10::date, CURRENT_DATE), $11::date, $12, $13)
        ON CONFLICT (source_id, entity_slug, dimension, value_hash, source_slug)
          WHERE dimension IS NOT NULL AND valid_until IS NULL AND forgotten_at IS NULL
        DO NOTHING
        RETURNING id`,
       [obs.entitySlug, factText, visibility, dimension, obs.value, vh, status, conf,
-        sourceSlug, validFrom, validTo, obs.sourceId],
+        sourceSlug, validFrom, validTo, obs.sourceId, principal],
     );
     if (ins.rows.length === 0) return { action: "noop", factId: null, supersededId: null };
     const newId = Number(ins.rows[0]!.id);
@@ -192,6 +208,12 @@ export async function mergeOntologyFact(
       supersededId,
     };
   });
+  if (merged.factId !== null && (merged.action === "inserted" || merged.action === "superseded_prior")) {
+    await flagRowAt(storage.engine(), {
+      table: "entity_facts", targetId: merged.factId, fields: [{ field: "fact", text: factText }, { field: "context", text: "" }],
+    }, { fact: merged.factId });
+  }
+  return merged;
 }
 
 /**

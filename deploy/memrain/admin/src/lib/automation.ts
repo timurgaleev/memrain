@@ -583,6 +583,40 @@ export function decisionMessage(status: HoldDecisionStatus): string {
   }
 }
 
+/** A fact, take or timeline entry the write gate held instead of storing. */
+export interface WriteGateRowHold {
+  id: number;
+  kind: "fact" | "take" | "timeline";
+  source_id: string;
+  slug: string;
+  origin: "external" | "agent";
+  families: string[];
+  payload: Record<string, unknown>;
+  status: "held" | "released" | "dropped";
+  seen_count: number;
+  created_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
+}
+
+export type RowHoldDecisionStatus = "released" | "dropped" | "already_decided" | "not_found";
+
+/** What a held-row decision did, in one sentence. */
+export function rowDecisionMessage(status: RowHoldDecisionStatus): string {
+  switch (status) {
+    case "released": return "Released: the entry is stored as written, still marked as instruction-like.";
+    case "dropped": return "Dropped: the entry stays out of memory.";
+    case "already_decided": return "Someone already decided this entry.";
+    case "not_found": return "That held entry no longer exists.";
+  }
+}
+
+/** The held entry's main text and its detail, whatever its kind. */
+export function rowHoldText(h: WriteGateRowHold): { text: string; detail: string } {
+  const s = (k: string) => (typeof h.payload[k] === "string" ? h.payload[k] as string : "");
+  return { text: s("fact") || s("claim_text") || s("event"), detail: s("detail") || s("context") };
+}
+
 /**
  * What a delete-everything did. Pages edited after the preview are kept, not
  * deleted, so the run is not done until the owner previews them again.

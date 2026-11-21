@@ -22,10 +22,15 @@ import { guardFields } from "./secret-scan.ts";
 import { stripNul } from "./well-form.ts";
 import { OperationError, PageNotFoundError } from "./operation-error.ts";
 import { isCalendarDate } from "./effective-date.ts";
-import { flagRowAt } from "./write-gate-rows.ts";
+import { flagRowAt, holdIfQuarantined, type RowHeld, type RowOrigin } from "./write-gate-rows.ts";
 
 export interface AddTimelineEventInput {
   slug: string;
+  /**
+   * The page the entry's text was drawn from, when it is not `slug` (a meeting
+   * title written onto an attendee's page): the write gate weighs it too.
+   */
+  drawn_from_slug?: string;
   /** ISO-8601 timestamp string OR a Date. */
   occurred_at: string | Date;
   /** One-line summary. */
@@ -65,6 +70,8 @@ export interface AddTimelineEventResult {
   /** False when the (slug, occurred_at, source_chunk_id) tuple already existed. */
   inserted: boolean;
   row?: TimelineEventRow | null;
+  /** Set when the write gate held the entry for the owner: nothing was stored. */
+  held?: RowHeld;
 }
 
 const TIMELINE_ROW_COLUMNS = `id, slug, occurred_at::text AS occurred_at, event,
@@ -203,6 +210,21 @@ export async function addTimelineEvent(
     { event: rawEvent.text, detail: rawDetail },
   );
 
+  const gateOrigin: RowOrigin = {
+    newEvent: { principal, sourceId: sourceId ?? "default", slug: input.slug, chunkId, drawnFrom: input.drawn_from_slug ?? null },
+  };
+  const held = await holdIfQuarantined(storage.engine(), {
+    table: "timeline_events",
+    fields: [{ field: "event", text: event! }, { field: "detail", text: detail! }],
+    slug: input.slug,
+    identity: `${occurred}|${sourceLabel}|${chunkId ?? ""}`,
+    payload: {
+      slug: input.slug, occurred_at: occurred, event, detail, source_label: sourceLabel, source_chunk_id: chunkId,
+      ...(sourceId !== null ? { source_id: sourceId } : {}), ...(principal !== null ? { written_by_principal: principal } : {}),
+    },
+  }, gateOrigin);
+  if (held !== null) return { id: null, slug: input.slug, occurred_at: occurred, inserted: false, held, ...(input.includeRow ? { row: null } : {}) };
+
   // Manual/API events (no chunk id) dedup on the mig079 key (the wording
   // hashed since mig143, so a long event fits the index): a retried write
   // with identical (slug, time, wording, label, tenant) is a no-op. Distinct
@@ -221,7 +243,7 @@ export async function addTimelineEvent(
        RETURNING ${input.includeRow ? TIMELINE_ROW_COLUMNS : "id"}`,
       params,
     );
-    await flagTimelineRow(storage, r.rows[0]?.id, event!, detail!);
+    await flagTimelineRow(storage, r.rows[0]?.id, event!, detail!, gateOrigin);
     return timelineWriteResult(storage, input, occurred, event!, sourceLabel, r.rows[0]);
   }
   const params: unknown[] = [input.slug, occurred, event, detail, sourceLabel, chunkId];
@@ -236,20 +258,20 @@ export async function addTimelineEvent(
      RETURNING ${input.includeRow ? TIMELINE_ROW_COLUMNS : "id"}`,
     params,
   );
-  await flagTimelineRow(storage, r.rows[0]?.id, event!, detail!);
+  await flagTimelineRow(storage, r.rows[0]?.id, event!, detail!, gateOrigin);
   return timelineWriteResult(storage, input, occurred, event!, sourceLabel, r.rows[0]);
 }
 
 /** Run a newly stored event through the write gate (flag mode, best effort). */
 async function flagTimelineRow(
-  storage: Storage, id: number | undefined, event: string, detail: string,
+  storage: Storage, id: number | undefined, event: string, detail: string, origin: RowOrigin,
 ): Promise<void> {
   if (id === undefined) return;
   await flagRowAt(storage.engine(), {
     table: "timeline_events",
     targetId: id,
     fields: [{ field: "event", text: event }, { field: "detail", text: detail }],
-  }, { event: id });
+  }, origin);
 }
 
 export interface ListTimelineOptions {

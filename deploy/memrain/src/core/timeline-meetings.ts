@@ -195,6 +195,7 @@ export async function extractMeetingTimelinePhase(
         event: `Attended ${title}`,
         source_chunk_id: sourceKey,
         source_id: m.source_id,
+        drawn_from_slug: m.slug,
       });
       result.entries_written += 1;
       touched.add(attendee);

@@ -78,12 +78,15 @@ export interface OntologyObservationInput {
   validFrom?: string | null;
   validTo?: string | null;
   visibility?: "private" | "world";
+  /** The credential that wrote it (`written_by_principal`); the operator when absent. */
+  principal?: string | null;
   /** Novel/LLM-proposed dimensions land 'quarantined' (excluded from reads). */
   status?: "active" | "quarantined";
 }
 
 export interface OntologyMergeResult {
-  action: "inserted" | "corroborated" | "superseded_prior" | "noop";
+  /** `held`: the write gate held the observation for the owner; nothing was stored. */
+  action: "inserted" | "corroborated" | "superseded_prior" | "noop" | "held";
   factId: number | null;
   supersededId: number | null;
   /** True when a backdated observation was recorded as a closed historical row

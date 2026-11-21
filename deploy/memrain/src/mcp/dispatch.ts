@@ -968,6 +968,7 @@ async function dispatchToolInner(
           callExtractFacts(storage, args, readSources, {
             ...(writeSource ? { writeSource } : {}),
             canPersist: canPersist && !(opts.isPublic ?? false),
+            principal: writerPrincipal(opts),
           }),
         );
       }
@@ -976,6 +977,7 @@ async function dispatchToolInner(
           callThink(storage, args, {
             isOperator,
             remote,
+            principal: writerPrincipal(opts),
             ...(opts.embedQuery ? { embedQuery: opts.embedQuery } : {}),
             ...(readSources ? { readSources } : {}),
             ...(writeSource ? { writeSource } : {}),
@@ -1020,7 +1022,7 @@ async function dispatchToolInner(
       case "ontology_get":
         return await callOntologyGet(storage, args, readSources, remote);
       case "ontology_propose":
-        return await callOntologyPropose(storage, args, writeSource);
+        return await callOntologyPropose(storage, args, writeSource, writerPrincipal(opts));
       case "ontology_dimensions":
         return await callOntologyDimensions(storage, readSources, remote);
       case "ontology_conflicts":
@@ -4332,7 +4334,7 @@ async function callExtractFacts(
   storage: Storage,
   args: Record<string, unknown>,
   readSources?: string[],
-  persistCtx: { writeSource?: string; canPersist?: boolean } = {},
+  persistCtx: { writeSource?: string; canPersist?: boolean; principal?: string } = {},
 ): Promise<ToolCallResult> {
   const persist = args["persist"] === true;
   if (persist && persistCtx.canPersist !== true) {
@@ -4386,6 +4388,7 @@ async function callExtractFacts(
             ? { sessionId: args["session_id"] }
             : {}),
           ...(visibility ? { visibility } : {}),
+          ...(persistCtx.principal ? { principal: persistCtx.principal } : {}),
         }
       : {}),
   });
@@ -4554,6 +4557,7 @@ async function callThink(
     readSources?: string[];
     writeSource?: string;
     embedQuery?: SearchOptions["embedQuery"];
+    principal?: string;
   },
 ): Promise<ToolCallResult> {
   const question = args["question"];
@@ -4652,6 +4656,7 @@ async function callThink(
         claim,
         anchorSlug: anchor!,
         ...(result.modelId ? { modelId: result.modelId } : {}),
+        ...(ctx.principal !== undefined ? { principal: ctx.principal } : {}),
       });
     }
   }
@@ -5188,6 +5193,7 @@ async function callOntologyPropose(
   storage: Storage,
   args: Record<string, unknown>,
   writeSource?: string,
+  principal?: string,
 ): Promise<ToolCallResult> {
   if (typeof args["entity"] !== "string" || args["entity"].length === 0) {
     return errResult("ontology_propose: `entity` is required");
@@ -5206,6 +5212,7 @@ async function callOntologyPropose(
     dimension: args["dimension"],
     value: args["value"],
     sourceId: writeSource ?? "default",
+    ...(principal !== undefined ? { principal } : {}),
   };
   if (typeof args["source"] === "string" && args["source"]) obs.source_slug = args["source"];
   if (typeof args["confidence"] === "number") obs.confidence = args["confidence"];

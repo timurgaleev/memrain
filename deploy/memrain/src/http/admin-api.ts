@@ -209,7 +209,7 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     if (r) return r;
   }
   if (p.startsWith("/admin/api/write-gate/")) {
-    const r = await handleAdminApprovals(req, url, engine).catch((e: unknown) => serverError("write-gate", e));
+    const r = await handleAdminApprovals(req, url, deps.storage).catch((e: unknown) => serverError("write-gate", e));
     if (r) return r;
   }
   if (p.startsWith("/admin/api/members") || p.startsWith("/admin/api/groups") || p === "/admin/api/grant-profiles") {

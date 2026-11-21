@@ -27,7 +27,7 @@ import {
 import { contentHash16 } from "./atoms.ts";
 import { fenceBounds, hasFenceMarker } from "../fence-shared.ts";
 import { takeOwnerFilterSql } from "./takes-owner.ts";
-import { flagRowAt } from "../write-gate-rows.ts";
+import { flagRowAt, holdIfQuarantined } from "../write-gate-rows.ts";
 
 /** Prompt-version marker for fence-derived rows — they never came from an LLM
  *  prompt, but the column is NOT NULL and doubles as provenance. */
@@ -165,6 +165,8 @@ export interface SyncTakesFenceResult {
   /** Rows previously synced from this page's fence but no longer present in
    *  it (hand-deleted) — marked inactive, never deleted. */
   rowsDeactivated: number;
+  /** Rows the write gate held for the owner instead of storing (quarantine mode). */
+  rowsHeld: number;
   weightsClamped: number;
   warnings: string[];
 }
@@ -196,6 +198,7 @@ export async function syncTakesFromFence(
   const result: SyncTakesFenceResult = {
     rowsUpserted: 0,
     rowsDeactivated: 0,
+    rowsHeld: 0,
     weightsClamped: 0,
     warnings,
   };
@@ -207,6 +210,28 @@ export async function syncTakesFromFence(
     const { weight, clamped } = normalizeWeightForStorage(t.weight);
     if (clamped) result.weightsClamped += 1;
     const resolution = t.resolvedQuality !== undefined ? fenceResolution(t) : null;
+    const row = {
+      take_key: fenceTakeKey(sourceRef, t.rowNum), source_ref: sourceRef, source_hash: contentHash16(t.claim),
+      prompt_version: FENCE_PROMPT_VERSION, claim_text: t.claim, kind: t.kind, weight, status: "accepted",
+      model_id: FENCE_MODEL_ID, holder: t.holder, active: t.active, row_num: t.rowNum,
+      since_date: t.sinceDate ?? null, until_date: t.untilDate ?? null,
+      resolved_at: resolution?.resolvedAt ?? null, resolved_quality: resolution?.quality ?? null,
+      resolved_outcome: resolution?.outcome ?? null, resolved_value: t.resolvedValue ?? null,
+      resolved_unit: t.resolvedUnit ?? null, resolved_source: t.resolvedEvidence ?? null, resolved_by: t.resolvedBy ?? null,
+    };
+    // A held row is not stored; the row already on file at this position, if
+    // any, stays as it was until the owner decides.
+    const held = await holdIfQuarantined(engine, {
+      table: "synth_takes",
+      fields: [{ field: "claim", text: t.claim }, { field: "evidence", text: t.resolvedEvidence ?? "" }],
+      slug: sourceRef,
+      identity: `row ${t.rowNum}`,
+      payload: row,
+    }, { page: sourceRef });
+    if (held !== null) {
+      result.rowsHeld += 1;
+      continue;
+    }
     await engine.query(
       `INSERT INTO synth_takes
          (take_key, source_ref, source_hash, prompt_version, claim_text, kind,

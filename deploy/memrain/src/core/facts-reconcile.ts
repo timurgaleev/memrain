@@ -47,6 +47,7 @@ import { fenceBounds } from "./fence-shared.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { LEGACY_FENCE_WRITER } from "./brand.ts";
 import { readQuarantineVerdict } from "./quarantine.ts";
+import { flagRowAt, holdIfQuarantined } from "./write-gate-rows.ts";
 import { pageObservationDate } from "./facts-extract.ts";
 
 /** Marks a fence-derived fact row's author (parallels the gazetteer's link_kind). */
@@ -107,6 +108,8 @@ export async function reconcileFactsForPage(
   fenceAbsent?: true;
   retained?: number;
   superseded_rows?: number[];
+  /** Rows the write gate held for the owner instead of storing (quarantine mode). */
+  held?: number;
 }> {
   if (!factsFenceEnabled()) return { removed: 0, added: 0 };
   validateSlug(pageSlug);
@@ -338,6 +341,7 @@ export async function reconcileFactsForPage(
       delParams,
     );
     let added = 0;
+    let held = 0;
     for (const f of facts) {
       if (superseded.has(JSON.stringify([f.rowNum, f.claim]))) continue;
       // A forgotten row stays forgotten across a fence rebuild (by row_num; legacy
@@ -363,19 +367,36 @@ export async function reconcileFactsForPage(
         f.eventType ?? null,
       ];
       if (scope !== null) insParams.push(scope);
-      await tx.query(
+      const insCols = ["entity_slug", "fact", "confidence", "source_slug", "written_by", "source_markdown_slug", "row_num",
+        "kind", "notability", "valid_from", "valid_until", "claim_metric", "claim_value", "claim_unit", "claim_period",
+        "event_type", ...(scope !== null ? ["source_id"] : [])];
+      const gateFields = [{ field: "fact", text: f.claim }, { field: "context", text: "" }];
+      const factOrigin = { sourceId: scope ?? "default", markdownSlug: pageSlug, sourceSlug: safeSourceSlug(f.source) };
+      const rowHeld = await holdIfQuarantined(tx, {
+        table: "entity_facts", fields: gateFields, slug: pageSlug,
+        payload: Object.fromEntries(insCols.map((c, i) => [c, insParams[i]])),
+      }, { newFact: factOrigin });
+      if (rowHeld !== null) {
+        held += 1;
+        continue;
+      }
+      const ins = await tx.query<{ id: number }>(
         `INSERT INTO entity_facts
            (entity_slug, fact, confidence, source_slug, source_chunk_id,
             written_by, source_markdown_slug, row_num,
             kind, notability, valid_from, valid_until,
             claim_metric, claim_value, claim_unit, claim_period, event_type${insCol})
          VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9, $10, $11,
-                 $12, $13, $14, $15, $16${insVal})`,
+                 $12, $13, $14, $15, $16${insVal})
+         RETURNING id`,
         insParams,
       );
       added += 1;
+      const newId = ins.rows[0]?.id;
+      if (newId !== undefined) await flagRowAt(tx, { table: "entity_facts", targetId: newId, fields: gateFields }, { fact: Number(newId) });
     }
     return { removed: del.rows[0]?.c ?? 0, added, ...(keepRows.size > 0 ? { unchanged: keepRows.size } : {}),
+      ...(held > 0 ? { held } : {}),
       ...(supersededRows.length > 0 ? { superseded_rows: supersededRows } : {}) };
   });
 }

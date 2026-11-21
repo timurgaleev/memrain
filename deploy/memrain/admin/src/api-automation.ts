@@ -7,7 +7,9 @@ import type {
   DataPreview,
   HoldDecisionStatus,
   PausedSpendPath,
+  RowHoldDecisionStatus,
   WriteGateHold,
+  WriteGateRowHold,
 } from "./lib/automation.ts";
 
 // Calls behind the Connections, Autonomy and Approvals pages. A 401 means the
@@ -70,6 +72,16 @@ export const automationApi = {
   decideHold: async (id: number, decision: "approve" | "reject"): Promise<HoldDecisionStatus> => {
     // 404 and 409 still carry a status the page explains; only other failures throw.
     const r = await passkeyFetch<{ status?: HoldDecisionStatus }>(`/admin/api/write-gate/holds/${id}/decide`, post({ decision }));
+    if (r.status === 401) {
+      window.location.hash = "#login";
+      throw new ApiError("unauthorized", 401, r.body as Record<string, unknown>);
+    }
+    if (r.body.status) return r.body.status;
+    return expectOk(r) as never;
+  },
+  rowHolds: (status: "held" | "all") => call<{ holds: WriteGateRowHold[] }>(`/admin/api/write-gate/rows?status=${status}`),
+  decideRowHold: async (id: number, decision: "release" | "drop"): Promise<RowHoldDecisionStatus> => {
+    const r = await passkeyFetch<{ status?: RowHoldDecisionStatus }>(`/admin/api/write-gate/rows/${id}/decide`, post({ decision }));
     if (r.status === 401) {
       window.location.hash = "#login";
       throw new ApiError("unauthorized", 401, r.body as Record<string, unknown>);

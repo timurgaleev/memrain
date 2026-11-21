@@ -21,6 +21,7 @@ import type { Engine } from "../engine/interface.ts";
 import { putPage } from "../pages.ts";
 import { contentHash16 } from "./atoms.ts";
 import { takeKey } from "./takes.ts";
+import { flagRowAt, holdIfQuarantined, type RowHeld } from "../write-gate-rows.ts";
 import { stripGapsSection, type ThinkResult } from "./think.ts";
 
 /** Prompt-version marker for operator-committed think takes. */
@@ -138,8 +139,10 @@ export async function persistThinkSynthesis(
 
 export interface SaveThinkTakeResult {
   take_key: string;
-  /** false = an identical take already existed (idempotent no-op). */
+  /** false = an identical take already existed (idempotent no-op), or it was held. */
   inserted: boolean;
+  /** Set when the write gate held the take for the owner. */
+  held?: RowHeld;
 }
 
 /**
@@ -158,6 +161,8 @@ export async function saveThinkTake(
     domain?: string;
     /** Provenance model id (the think run's model). Default "operator". */
     modelId?: string;
+    /** The credential that asked for the take; the operator when absent. */
+    principal?: string | null;
   },
 ): Promise<SaveThinkTakeResult> {
   const claim = (opts.claim ?? "").trim();
@@ -168,6 +173,17 @@ export async function saveThinkTake(
   const weight = Math.max(0, Math.min(1, opts.weight ?? 0.6));
   const sourceHash = contentHash16(claim);
   const key = takeKey(opts.anchorSlug, sourceHash, THINK_TAKE_PROMPT_VERSION, claim);
+  const held = await holdIfQuarantined(engine, {
+    table: "synth_takes",
+    fields: [{ field: "claim", text: claim.slice(0, 500) }],
+    slug: opts.anchorSlug,
+    payload: {
+      take_key: key, source_ref: opts.anchorSlug, source_hash: sourceHash, prompt_version: THINK_TAKE_PROMPT_VERSION,
+      claim_text: claim.slice(0, 500), kind: "judgment", weight, domain: opts.domain ?? null, status: "queued",
+      model_id: opts.modelId ?? "operator",
+    },
+  }, { page: opts.anchorSlug, principal: opts.principal ?? null });
+  if (held !== null) return { take_key: key, inserted: false, held };
   const { rows } = await engine.query<{ id: number }>(
     `INSERT INTO synth_takes
        (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, domain, status, model_id)
@@ -185,5 +201,9 @@ export async function saveThinkTake(
       opts.modelId ?? "operator",
     ],
   );
+  if (rows.length > 0) {
+    await flagRowAt(engine, { table: "synth_takes", targetId: key, fields: [{ field: "claim", text: claim.slice(0, 500) }] },
+      { page: opts.anchorSlug, principal: opts.principal ?? null });
+  }
   return { take_key: key, inserted: rows.length > 0 };
 }

@@ -1011,7 +1011,8 @@ async function putPageScanned(
     const r = await writeLocked(tx);
     if (takePrepared && r.changed) {
       const projected = await syncTakesFromFence(tx, input.slug, body, { changedRowNums: takePrepared.changedRowNums, deactivateMissing: false });
-      if (projected.rowsUpserted !== takePrepared.changedRowNums.length) throw new OperationError("conflict", "Take mutation could not be projected");
+      // A row the write gate held is accounted for: the page keeps it, the owner decides.
+      if (projected.rowsUpserted + projected.rowsHeld !== takePrepared.changedRowNums.length) throw new OperationError("conflict", "Take mutation could not be projected");
     }
     if (r.changed && secretFindings.length > 0) await auditSecrets(tx, secretFindings, input.slug, callerSource);
     if (r.changed && secretScope !== null && secretScope.originals.size > 0) {

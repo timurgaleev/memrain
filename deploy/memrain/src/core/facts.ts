@@ -45,7 +45,7 @@ import type { BudgetTracker } from "./budget.ts";
 import { guardFields } from "./secret-scan.ts";
 import { withdrawLockKey } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
-import { flagRowAt } from "./write-gate-rows.ts";
+import { flagRowAt, holdIfQuarantined, type RowHeld } from "./write-gate-rows.ts";
 import { readEntityIdentity, type EntityIdentity } from "./person-identity.ts";
 import { contestedWith } from "./typed-conflicts.ts";
 import { applySlotEnds, knownAsOfLiveSql, normalizeSlot, slotValueHash, type SlotReadScope } from "./fact-slots.ts";
@@ -515,6 +515,8 @@ export interface AddFactResult {
    *  nothing was written and `id` is null. */
   withdrawn?: true;
   withdrawn_detail?: WithdrawalDetail;
+  /** Set when the write gate held the claim for the owner: nothing was stored and `id` is null. */
+  held?: RowHeld;
 }
 
 /**
@@ -665,49 +667,6 @@ export async function addFact(
     }
   }
 
-  // Insert-time dedup / supersede (opt-in). Embed the new fact, fetch its
-  // entity-prefiltered nearest neighbours, and classify. A "duplicate" collapses
-  // (return the matched id, inserted:false); a "supersede" tombstones the old
-  // fact after the new one lands. Falls-open: an embed failure skips the whole
-  // path and the fact inserts as usual.
-  let supersededId: number | null = null;
-  let embeddingJson: string | null = null;
-  const dedup = resolveDedup(input);
-  if (dedup) {
-    let vec: number[] | null = null;
-    try {
-      vec = await dedup.embed(fact);
-    } catch {
-      vec = null;
-    }
-    if (vec && vec.length > 0) {
-      embeddingJson = JSON.stringify(vec);
-      const candidates = await fetchDedupCandidates(
-        storage,
-        input.entity_slug,
-        embeddingJson,
-        effectiveSource,
-        dedup.candidateLimit,
-        attributedTo,
-      );
-      const verdict = await classifyFact({ fact, kind }, candidates, {
-        ...(dedup.llmFn ? { llmFn: dedup.llmFn } : {}),
-        ...(dedup.budget ? { budget: dedup.budget } : {}),
-        ...(dedup.modelId ? { modelId: dedup.modelId } : {}),
-        cheapThreshold: dedup.cheapThreshold,
-        fallbackThreshold: dedup.fallbackThreshold,
-      });
-      if (verdict.decision === "duplicate") {
-        return {
-          id: verdict.matchedId,
-          entity_slug: input.entity_slug,
-          inserted: false,
-        };
-      }
-      if (verdict.decision === "supersede") supersededId = verdict.supersededId;
-    }
-  }
-
   // Build the INSERT dynamically: the always-present columns plus whichever of
   // notability / source_id / embedding are set. `embedding` needs a
   // ::vector cast; the rest are plain placeholders.
@@ -785,6 +744,59 @@ export async function addFact(
     cols.push("slot_dimension", "slot_value", "slot_value_hash");
     params.push(slot.dimension, slot.value, slotValueHash(slot.value));
   }
+  // In quarantine mode an instruction-like claim from an agent or an outside
+  // source is held for the owner instead, before the paid dedup path.
+  const held = await holdIfQuarantined(storage.engine(), {
+    table: "entity_facts",
+    fields: [{ field: "fact", text: fact }, { field: "context", text: factContext ?? "" }],
+    slug: input.entity_slug,
+    payload: Object.fromEntries(cols.map((c, i) => [c, params[i]])),
+  }, { newFact: { principal: input.written_by_principal ?? null, sourceId: effectiveSource, sourceSlug, chunkId } });
+  if (held !== null) return { id: null, entity_slug: input.entity_slug, inserted: false, held };
+
+  // Insert-time dedup / supersede (opt-in). Embed the new fact, fetch its
+  // entity-prefiltered nearest neighbours, and classify. A "duplicate" collapses
+  // (return the matched id, inserted:false); a "supersede" tombstones the old
+  // fact after the new one lands. Falls-open: an embed failure skips the whole
+  // path and the fact inserts as usual.
+  let supersededId: number | null = null;
+  let embeddingJson: string | null = null;
+  const dedup = resolveDedup(input);
+  if (dedup) {
+    let vec: number[] | null = null;
+    try {
+      vec = await dedup.embed(fact);
+    } catch {
+      vec = null;
+    }
+    if (vec && vec.length > 0) {
+      embeddingJson = JSON.stringify(vec);
+      const candidates = await fetchDedupCandidates(
+        storage,
+        input.entity_slug,
+        embeddingJson,
+        effectiveSource,
+        dedup.candidateLimit,
+        attributedTo,
+      );
+      const verdict = await classifyFact({ fact, kind }, candidates, {
+        ...(dedup.llmFn ? { llmFn: dedup.llmFn } : {}),
+        ...(dedup.budget ? { budget: dedup.budget } : {}),
+        ...(dedup.modelId ? { modelId: dedup.modelId } : {}),
+        cheapThreshold: dedup.cheapThreshold,
+        fallbackThreshold: dedup.fallbackThreshold,
+      });
+      if (verdict.decision === "duplicate") {
+        return {
+          id: verdict.matchedId,
+          entity_slug: input.entity_slug,
+          inserted: false,
+        };
+      }
+      if (verdict.decision === "supersede") supersededId = verdict.supersededId;
+    }
+  }
+
   if (embeddingJson !== null) {
     cols.push("embedding");
     params.push(embeddingJson);

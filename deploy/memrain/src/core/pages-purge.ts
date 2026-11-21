@@ -50,6 +50,8 @@ export interface PurgeDeletedPagesResult {
   volunteer_event_rows: number;
   hot_memory_rows: number;
   synthesis_evidence_rows: number;
+  /** Rows the write gate holds for the owner on the purged pages, removed with them. */
+  held_rows: number;
   /** Live facts written on or about the purged pages, retired with cause 'purge' (on a dry run: that would be). */
   facts_retired: number;
   /** What synthesis derived from the purged pages, removed with them (on a dry run: that would be). */
@@ -153,7 +155,7 @@ export function purgePlanHash(entries: ReadonlyArray<{ slug: string; deleted_at:
 const FOREIGN_KEY_VIOLATION = "23503";
 
 type Leftovers = Pick<PurgeDeletedPagesResult,
-  "raw_data_rows" | "tags_rows" | "slug_aliases_rows" | "volunteer_event_rows" | "hot_memory_rows" | "synthesis_evidence_rows">;
+  "raw_data_rows" | "tags_rows" | "slug_aliases_rows" | "volunteer_event_rows" | "hot_memory_rows" | "synthesis_evidence_rows" | "held_rows">;
 
 /** Tables that name a page by slug with no foreign key to pages: [result key, table, slug column]. */
 export const LEFTOVER_TABLES: ReadonlyArray<[keyof Leftovers, string, string]> = [
@@ -164,10 +166,12 @@ export const LEFTOVER_TABLES: ReadonlyArray<[keyof Leftovers, string, string]> =
   // An observation seen on the page, and the citations of a synthesis page.
   ["hot_memory_rows", "hot_memory", "source_slug"],
   ["synthesis_evidence_rows", "synthesis_evidence", "synthesis_slug"],
+  // A fact, take or timeline entry the write gate holds on the page.
+  ["held_rows", "write_gate_row_holds", "slug"],
 ];
 
 const NO_LEFTOVERS: Leftovers = {
-  raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0, volunteer_event_rows: 0, hot_memory_rows: 0, synthesis_evidence_rows: 0,
+  raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0, volunteer_event_rows: 0, hot_memory_rows: 0, synthesis_evidence_rows: 0, held_rows: 0,
 };
 
 /**

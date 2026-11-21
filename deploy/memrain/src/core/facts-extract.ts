@@ -708,6 +708,8 @@ export async function writeExtractedFacts(
     sourceId?: string;
     /** Capture-session id stamped on each fact (mig085 `source_session`). */
     sessionId?: string;
+    /** The credential that asked for the write (`written_by_principal`); the operator when absent. */
+    principal?: string;
     /** Default visibility for the batch (mig085; 'private' when omitted). */
     visibility?: string;
     /**
@@ -837,6 +839,7 @@ export async function writeExtractedFacts(
         ...(f.attributed_to ? { attributed_to: f.attributed_to } : {}),
         ...(opts.dedup ? { dedup: opts.dedup } : {}),
         written_by: opts.writtenBy ?? "facts-extract",
+        ...(opts.principal ? { written_by_principal: opts.principal } : {}),
       });
       if (r.inserted) written += 1;
       if (r.inserted && r.id !== null) factIds.push(r.id);
@@ -1387,6 +1390,8 @@ export interface OnDemandExtractOptions {
   sourceSlug?: string;
   /** Tenant the persisted facts are written to (mig047). */
   sourceId?: string;
+  /** The credential that asked for the persisted write (`written_by_principal`). */
+  principal?: string;
   /** Capture-session id stamped on persisted facts (mig085). */
   sessionId?: string;
   /** Canonical slugs to steer the extractor. */
@@ -1493,6 +1498,7 @@ async function extractFactsOnDemandRun(
       ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       ...(opts.visibility ? { visibility: opts.visibility } : {}),
+      ...(opts.principal ? { principal: opts.principal } : {}),
     });
     out.written = w.written;
     out.write_skipped = w.skipped;

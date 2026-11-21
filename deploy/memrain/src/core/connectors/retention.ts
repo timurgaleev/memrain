@@ -196,7 +196,7 @@ async function deletePageDerived(tx: Engine, slug: string, sourceId: string, cou
     [docIds]);
   const rest = await leftovers(tx, [slug], true);
   counts.leftovers += rest.raw_data_rows + rest.tags_rows + rest.slug_aliases_rows + rest.volunteer_event_rows
-    + rest.hot_memory_rows + rest.synthesis_evidence_rows;
+    + rest.hot_memory_rows + rest.synthesis_evidence_rows + rest.held_rows;
   await purgeSecretOriginals(tx, [slug]);
   await tx.query(`DELETE FROM pages WHERE slug = $1`, [slug]);
   return { docIds, concepts };

@@ -19,7 +19,7 @@ import type {
   ChronicleTimelineOpts,
   LastSeenResult,
 } from "./chronicle/types.ts";
-import { flagRowAt } from "./write-gate-rows.ts";
+import { flagRowAt, holdIfQuarantined } from "./write-gate-rows.ts";
 
 /** Enforce the mandatory tenant scope. Returns the scope array or throws. */
 function requireScope(sourceIds: readonly string[] | undefined): string[] {
@@ -245,6 +245,22 @@ export async function upsertEventProjection(
     `chronicle event '${input.eventSlug}'`,
     { summary: input.summary, detail: input.detail ?? "" },
   );
+  // The insert below writes nothing unless both pages exist; a hold must not either.
+  // scope: upstream both slugs are looked up in the caller's own source
+  const pagesFound = await storage.engine().query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM pages WHERE source_id = $1 AND slug IN ($2, $3)`, [input.sourceId, input.depthSlug, input.eventSlug]);
+  const bothPages = Number(pagesFound.rows[0]?.n ?? 0) === (input.depthSlug === input.eventSlug ? 1 : 2);
+  const held = !bothPages ? null : await holdIfQuarantined(storage.engine(), {
+    table: "timeline_events",
+    fields: [{ field: "event", text: summary }, { field: "detail", text: detail }],
+    slug: input.depthSlug,
+    identity: `${occurredAt}|${input.eventSlug}`,
+    payload: {
+      slug: input.depthSlug, occurred_at: occurredAt, event: summary, detail,
+      source_label: `chronicle:event:${input.eventSlug}`, event_slug: input.eventSlug, source_id: input.sourceId,
+    },
+  }, { newEvent: { sourceId: input.sourceId, slug: input.depthSlug } });
+  if (held !== null) return { projected: false };
   const r = await storage.engine().query<{ id: number }>(
     `INSERT INTO timeline_events
        (slug, occurred_at, event, detail, source_label, event_slug, source_id)

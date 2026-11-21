@@ -69,6 +69,7 @@ export interface AutomationState {
   daemons: unknown;
   pausedSpend: unknown[];
   holds: Array<Record<string, unknown>>;
+  rowHolds: Array<Record<string, unknown>>;
 }
 
 export const OWNER = "owner@example.test";
@@ -127,6 +128,7 @@ export function scenario(over: Partial<AutomationState["connectors"]> = {}): Aut
     },
     pausedSpend: [],
     holds: [],
+    rowHolds: [],
   };
 }
 
@@ -162,6 +164,7 @@ export async function automationRoute(request: Request): Promise<Response | null
     if (path === "/admin/api/daemons") return Response.json(st.daemons);
     if (path === "/admin/api/spend/paused") return Response.json({ paths: st.pausedSpend });
     if (path === "/admin/api/write-gate/holds") return Response.json({ holds: st.holds });
+    if (path === "/admin/api/write-gate/rows") return Response.json({ holds: st.rowHolds });
     return null;
   }
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
@@ -228,6 +231,13 @@ export async function automationRoute(request: Request): Promise<Response | null
     if (!hold) return Response.json({ status: "not_found" }, { status: 404 });
     hold.decision = body.decision === "approve" ? "approved" : "rejected";
     return Response.json({ status: hold.decision });
+  }
+  const decideRow = /^\/admin\/api\/write-gate\/rows\/(\d+)\/decide$/.exec(path);
+  if (decideRow) {
+    const hold = st.rowHolds.find((h) => String(h.id) === decideRow[1]);
+    if (!hold) return Response.json({ status: "not_found" }, { status: 404 });
+    hold.status = body.decision === "release" ? "released" : "dropped";
+    return Response.json({ status: hold.status });
   }
   return null;
 }

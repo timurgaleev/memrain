@@ -317,6 +317,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_WRITE_GATE_AGENT: "string",
   MEMRAIN_WRITE_GATE_EXTERNAL: "string",
   MEMRAIN_WRITE_GATE_QUARANTINE_SOURCES: "string",
+  MEMRAIN_WRITE_GATE_ROWS: "string",
 };
 
 export type ConfigValidation = { ok: true; value: string } | { ok: false; error: string };
