@@ -1,0 +1,10 @@
+// Routing eval fixtures for skills/cron-scheduler.
+// Each line: {intent, expected_skill, ambiguous_with?}.
+// Rule: intent must paraphrase the trigger, not copy it.
+{"intent": "Please run this every night after the backup finishes", "expected_skill": "cron-scheduler"}
+{"intent": "Pause the daemons while I move the database", "expected_skill": "cron-scheduler"}
+{"intent": "Nothing should ping me during quiet hours, hold it until the morning", "expected_skill": "cron-scheduler"}
+{"intent": "What jobs are running on this host on a timer?", "expected_skill": "cron-scheduler"}
+{"intent": "I want to schedule recurring work that digests my inbox weekly", "expected_skill": "cron-scheduler"}
+{"intent": "Retry job 17 that failed overnight", "expected_skill": "minion-orchestrator"}
+{"intent": "Book a recurring dentist appointment", "expected_skill": null}

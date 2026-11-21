@@ -1,0 +1,10 @@
+// Routing eval fixtures for skills/reports.
+// Each line: {intent, expected_skill, ambiguous_with?}.
+// Rule: intent must paraphrase the trigger, not copy it.
+{"intent": "Run a link quality check on this digest before it goes out", "expected_skill": "reports"}
+{"intent": "Validate report links in the weekly summary, no profile links allowed", "expected_skill": "reports"}
+{"intent": "Load latest report from the inbox sweep job", "expected_skill": "reports"}
+{"intent": "Do a report quality pass on the research summary", "expected_skill": "reports"}
+{"intent": "Please save report output from tonight's mentions scan", "expected_skill": "reports"}
+{"intent": "Give me the link to the page you just created", "expected_skill": "brain-link-discipline"}
+{"intent": "File my quarterly expense report with accounting", "expected_skill": null}

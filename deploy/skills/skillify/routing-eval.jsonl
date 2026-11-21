@@ -1,0 +1,9 @@
+// Routing eval fixtures for skills/skillify.
+// Each line: {intent, expected_skill, ambiguous_with?}.
+// Rule: intent must paraphrase the trigger, not copy it.
+{"intent": "Can you skillify the weekly digest routine I keep running by hand?", "expected_skill": "skillify"}
+{"intent": "Before we merge it, check skill completeness for the travel brief", "expected_skill": "skillify"}
+{"intent": "Take this skill through the checklist again, the date bug came back", "expected_skill": "skillify"}
+{"intent": "Add tests and evals for this workflow so it stops regressing", "expected_skill": "skillify"}
+{"intent": "Write me a new skill for logging workouts", "expected_skill": "skill-creator"}
+{"intent": "Which skills ship in the desktop plugin?", "expected_skill": null}

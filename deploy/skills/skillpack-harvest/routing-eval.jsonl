@@ -5,4 +5,7 @@
 {"intent": "I wrote a good triage skill locally, add this skill to memrain for everyone", "expected_skill": "skillpack-harvest"}
 {"intent": "Promote this skill from our team pack after scrubbing the names", "expected_skill": "skillpack-harvest"}
 {"intent": "Import a skill from a catalog and adapt it to our tools", "expected_skill": "skillpack-harvest"}
+{"intent": "My inbox triage works well now, promote my skill so other brains get it", "expected_skill": "skillpack-harvest"}
+{"intent": "Please share this skill with the pack once the private bits are gone", "expected_skill": "skillpack-harvest"}
 {"intent": "Harvest the tomatoes before the frost", "expected_skill": null}
+{"intent": "Promote my role on the company page", "expected_skill": null}
