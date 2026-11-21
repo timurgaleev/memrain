@@ -67,12 +67,6 @@ marked; this section is the one that stands.
 
 ## Follow-ups from the purge cleanup of synthesis output
 
-- **Restore rebuilds search mirrors only on the next mirror run.** The
-  purge-leftovers apply drops the search documents of the atom and concept
-  pages it hides or rewrites; `restore` puts the pages back but not those
-  documents, so restored pages are out of search until the cycle's mirror
-  phase runs. Re-mirror the restored slugs inside `restore` when a storage
-  handle is available.
 - **Connector retention still misses legacy atom pages.** Retention finds the
   atom pages a deleted connector page published through
   `compiled_truth.atom_origin` only; pages written before that field existed
