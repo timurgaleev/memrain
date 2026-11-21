@@ -60,7 +60,8 @@ writes_to:
 
 Daemons are declared in server code with their own cron and lane:
 `connector_sync` every 15 minutes, `loops_sweep` every 30, `notifications`
-every 5 (off by default), and `cycle` on its own loop. The scheduler runs only
+every 5, and `cycle` on its own loop. The first three are off by default:
+each needs `memrain daemons enable <name>` before it runs. The scheduler runs only
 where `MEMRAIN_DAEMONS=1`. A new daemon is a code change, not a config entry.
 
 ## Phases

@@ -96,7 +96,7 @@ before calling `page_put`.
 
 Every tool a skill names must be a real MCP tool on this brain (`search`,
 `page_put`, `jobs_submit`, ...) or a `memrain <cmd>` shell command where a
-shell step is genuinely meant. `memrain call <tool> <json>` invokes any MCP
+shell step is genuinely meant. `memrain call <tool> --args '<json>'` invokes any MCP
 tool from the shell when you are working host-side.
 
 ## Updates — when the server ships a new version

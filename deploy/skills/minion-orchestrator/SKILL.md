@@ -54,7 +54,8 @@ Three lanes, one skill:
   retried. The `jobs_*` tools are operator-only.
 - **Memrain agent jobs** (`submit_agent`, `memrain agent run`): a read-only
   research agent the server runs under the caller's grant and daily budget.
-  Off unless the host sets `MEMRAIN_AGENT_ENABLED=1`.
+  Off unless the host sets `MEMRAIN_AGENT_ENABLED=1`; a tenant's
+  `submit_agent` job also needs `MEMRAIN_AGENT_TENANT_ENABLED=1`.
 - **Harness subagents**: the agent's own runtime (for example the Claude Code
   Task tool). Each child reaches the brain over MCP like any client.
 
@@ -93,7 +94,8 @@ reasoning?"
 ## Server jobs
 
 The queue runs only kinds a worker knows. Built in: `chronicle_extract`,
-`ingest_capture`, `transcripts_ingest`, `remediation`, `page_mirror`.
+`ingest_capture`, `transcripts_ingest`, `remediation`, `page_mirror`, and the
+daemon kinds `loops_sweep` and `notifications`.
 `subagent` exists when `MEMRAIN_AGENT_ENABLED=1`, `connector_sync` when
 connectors are on. A submit naming any other kind is refused with the list of
 known kinds; invent none. Statuses: `pending`, `running`, `succeeded`,
@@ -241,7 +243,8 @@ Server jobs alongside: <id> (remediation) — running
   this host. Do not retry under another name; the handler has to exist first.
 - `permission_denied` or `insufficient_scope` on a `jobs_*` tool: the caller
   is not the operator; these tools are operator-only.
-- `submit_agent` refused: the agent lane is off, the caller lacks the
+- `submit_agent` refused: the agent lane is off (`MEMRAIN_AGENT_ENABLED`,
+  and `MEMRAIN_AGENT_TENANT_ENABLED` for a tenant), the caller lacks the
   `agent` scope or a daily budget, or no concurrency slot is free. Say which.
 - `budget_exhausted`: the day's cap is spent; report it, do not resubmit.
 - `rate_limited`: back off for the stated delay; submit nothing else

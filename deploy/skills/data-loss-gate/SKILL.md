@@ -108,9 +108,13 @@ present a backup as a verified restore.
 7. **Execute exactly the approved set, one target at a time.**
    - Pages: `page_delete` with `expected_version` and a `reason`.
    - Facts: `forget_fact` with the `id` and a `reason` naming the request.
-   - Purge: `purge_deleted_pages` with `dry_run: true` and the approved
-     `slugs` first; show the returned `planned` list, then run it with
-     `expected_plan_hash` set to the dry run's `plan_hash`. A purge without
+   - Purge: `purge_deleted_pages` with `dry_run: true`, the approved `slugs`
+     and a deliberate `older_than_hours` first. Only pages soft-deleted longer
+     ago than that cutoff (default 720 hours) are planned, so an empty
+     `planned` list means nothing is eligible yet, not that the purge is done.
+     Show the returned `planned` list, then run it with the same
+     `older_than_hours` and `expected_plan_hash` set to the dry run's
+     `plan_hash`. A purge without
      `slugs` reaps every expired page in the source; never use it for a
      subset.
    - Stop at the first error. Report what finished; do not widen or retry
@@ -126,7 +130,7 @@ version or the forgotten row. No separate log page is needed.
 ```
 page_delete {"slug": "notes/acme-example-scratch", "expected_version": 3, "reason": "user confirmed cleanup card 2026-11-21"}
 forget_fact {"id": 4812, "reason": "user asked to withdraw, card confirmed 2026-11-21"}
-purge_deleted_pages {"slugs": ["notes/acme-example-scratch"], "dry_run": true}
+purge_deleted_pages {"slugs": ["notes/acme-example-scratch"], "older_than_hours": 0, "dry_run": true}
 page_restore {"slug": "notes/acme-example-scratch"}
 ```
 

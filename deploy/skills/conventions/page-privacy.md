@@ -18,7 +18,7 @@ where it lives, not by what its frontmatter says.
   shared recall. Use that type or prefix only for genuinely private writing.
 - **Fact visibility.** `add_fact` writes `private` by default, which only the
   operator reads back. Pass `"visibility": "world"` only when the fact may be
-  read by tenant-scoped callers too.
+  read by tenant-scoped and public callers too.
 
 ## What does not
 
