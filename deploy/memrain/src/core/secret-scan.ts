@@ -24,12 +24,16 @@ import { OperationError } from "./operation-error.ts";
 import type { Engine } from "./engine/interface.ts";
 import { logIngest } from "./ingest-log.ts";
 import { encodedCandidates, protectEncodedAllowlist } from "./secret-scan-encoded.ts";
+import { COOKIE_VALUE_MIN_CHARS, labeledEchoEligible, transcriptClaims, type DanglingForm, type TranscriptClaim } from "./secret-scan-transcript.ts";
+
+export type { DanglingForm } from "./secret-scan-transcript.ts";
+export { trailingDanglingLabel } from "./secret-scan-transcript.ts";
 
 /**
  * Bumped whenever the rules change what is caught, so text stored under an
  * older version can be found and scanned again.
  */
-export const SECRET_SCAN_VERSION = 7;
+export const SECRET_SCAN_VERSION = 8;
 
 export interface SecretFinding {
   kind: string;
@@ -58,6 +62,10 @@ export interface ScanOptions {
   preserveLines?: boolean;
   /** The entropy-gated keyword assignment rule. Default on. */
   highEntropy?: boolean;
+  /** The transcript lane's cookie, `.netrc` and split-label rules (secret-scan-transcript.ts). Default off. */
+  transcriptRules?: boolean;
+  /** With transcriptRules: the label form the previous message left dangling for this text's first non-blank line. */
+  leadingDangling?: DanglingForm | null;
 }
 
 interface Pattern {
@@ -358,6 +366,9 @@ const PATTERNS_WITHOUT_ASSIGNMENTS = [...VENDOR_PATTERNS, ...SHAPE_PATTERNS, BEA
 const ECHO_MAX_VALUE = 512;
 /** The echo pass looks for at most this many values per write: a bounded number of linear sweeps. */
 const ECHO_MAX_VALUES = 64;
+/** Of those, the transcript-lane kinds take at most this many, so a pasted cookie jar cannot crowd out a later bearer. */
+const ECHO_MAX_TRANSCRIPT_VALUES = 32;
+const TRANSCRIPT_KINDS: ReadonlySet<string> = new Set<TranscriptClaim["kind"]>(["cookie-header", "netrc-password", "labeled-credential"]);
 /** A marker this scanner wrote; the echo pass never matches inside one. */
 const MARKER = /\[REDACTED:[a-z0-9-]{1,64}:[0-9a-f]{16}\]/g;
 
@@ -421,6 +432,7 @@ function unterminatedBlockEnd(text: string, bodyStart: number): number {
 function addEcho(echo: EchoDictionary, value: string, kind: string, min: number): void {
   if (value.length < min || value.length > ECHO_MAX_VALUE || PLACEHOLDER.test(value)) return;
   if (echo.has(value) || echo.size >= ECHO_MAX_VALUES) return;
+  if (TRANSCRIPT_KINDS.has(kind) && [...echo.values()].filter((k) => TRANSCRIPT_KINDS.has(k)).length >= ECHO_MAX_TRANSCRIPT_VALUES) return;
   echo.set(value, kind);
 }
 
@@ -561,20 +573,87 @@ export function scanSecrets(text: string, allow: ReadonlySet<string> = new Set()
   const protectedValues = protectEncodedAllowlist(text);
   out = redactEncoded(out, allow, opts.highEntropy !== false, claim, protectedValues.keep);
   for (const p of opts.highEntropy === false ? PATTERNS_WITHOUT_ASSIGNMENTS : PATTERNS) {
-    out = out.replace(p.regex, (match: string, ...groups: unknown[]) => {
-      const head = p.split ? (groups[0] as string) : "";
-      const value = p.split ? (groups[1] as string) : match;
-      if (p.entropyGated && (!clearsEntropyGate(value) || insideMarker(groups.at(-1) as string, groups.at(-2) as number, match.length))) {
-        return match;
-      }
-      if (p.start && !startAllowed(p.start, groups.at(-1) as string, groups.at(-2) as number)) return match;
-      if (p.validate && !p.validate(value)) return match;
+    out = replaceMatches(out, p, (m) => {
+      const head = p.split ? m[1]! : "";
+      const value = p.split ? m[2]! : m[0];
+      if (p.entropyGated && (!clearsEntropyGate(value) || insideMarker(m.input, m.index, m[0].length))) return null;
+      if (p.start && !startAllowed(p.start, m.input, m.index)) return null;
+      if (p.validate && !p.validate(value)) return null;
       const marker = claim(p.kind, value, p.echo);
-      return marker === null ? match : head + marker;
+      return marker === null ? m[0] : head + marker;
     });
   }
+  if (opts.transcriptRules === true) out = redactTranscriptClaims(out, opts.leadingDangling ?? null, claim);
   if (echo && echo.size > 0) out = sweepEchoes(out, echo, findings);
   return { text: protectedValues.restore(out), findings };
+}
+
+/**
+ * Replace each match `decide` accepts with what it returns. A rejected
+ * assignment resumes the search at its value's start rather than after it: a
+ * value the rules refuse (a path, an encoded URL) can run over a later
+ * `password=` on the same line, which must still be found.
+ */
+function replaceMatches(text: string, p: Pattern, decide: (m: RegExpExecArray) => string | null): string {
+  const re = p.regex;
+  re.lastIndex = 0;
+  const parts: string[] = [];
+  let at = 0;
+  for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+    if (m[0].length === 0) {
+      re.lastIndex++;
+      continue;
+    }
+    const replacement = decide(m);
+    if (replacement === null) {
+      if (p.split && p.entropyGated && m[1]!.length > 0) re.lastIndex = m.index + m[1]!.length;
+      continue;
+    }
+    parts.push(text.slice(at, m.index), replacement);
+    at = m.index + m[0].length;
+  }
+  parts.push(text.slice(at));
+  return parts.join("");
+}
+
+/**
+ * The transcript-lane claims over `text`, after the shared rules ran: each
+ * claim's characters outside the markers already written are replaced, so a
+ * vendor key inside a cookie keeps its own kind and nothing of the cookie is
+ * left behind.
+ */
+function redactTranscriptClaims(
+  text: string, leading: DanglingForm | null,
+  claim: (kind: string, value: string, echoRule?: Pattern["echo"]) => string | null,
+): string {
+  const claims = transcriptClaims(text, leading);
+  if (claims.length === 0) return text;
+  const taken = new Uint8Array(text.length);
+  for (const m of text.matchAll(MARKER)) taken.fill(1, m.index, m.index + m[0].length);
+  const spans: Array<{ start: number; end: number; marker: string }> = [];
+  for (const c of claims) {
+    const end = c.start + c.value.length;
+    for (let a = c.start, k = c.start; k <= end; k++) {
+      if (k < end && taken[k] === 0) continue;
+      if (a < k) {
+        const value = text.slice(a, k);
+        const echoRule = c.kind === "cookie-header" ? { min: COOKIE_VALUE_MIN_CHARS }
+          : labeledEchoEligible(value) ? { min: 8 } : undefined;
+        const marker = claim(c.kind, value, echoRule);
+        if (marker !== null) spans.push({ start: a, end: k, marker });
+        taken.fill(1, a, k);
+      }
+      a = k + 1;
+    }
+  }
+  const parts: string[] = [];
+  let at = 0;
+  for (const s of spans.sort((x, y) => x.start - y.start)) {
+    parts.push(text.slice(at, s.start), s.marker);
+    at = s.end;
+  }
+  parts.push(text.slice(at));
+  return parts.join("");
 }
 
 /** A value a scan replaced with its marker, held only in memory until the write seals it. */
@@ -655,6 +734,9 @@ export interface GuardOptions {
   echo?: EchoDictionary;
   /** See ScanOptions.preserveLines. */
   preserveLines?: boolean;
+  /** See ScanOptions.transcriptRules and leadingDangling. */
+  transcriptRules?: boolean;
+  leadingDangling?: DanglingForm | null;
 }
 
 /**
@@ -670,6 +752,7 @@ export function guardSecrets(text: string, where: string, opts: GuardOptions = {
     echo: switchedOn("MEMRAIN_SECRET_SCAN_ECHO") ? (opts.echo ?? new Map<string, string>()) : false,
     highEntropy: switchedOn("MEMRAIN_SECRET_SCAN_HIGH_ENTROPY"),
     preserveLines: opts.preserveLines === true,
+    ...(opts.transcriptRules === true ? { transcriptRules: true, leadingDangling: opts.leadingDangling ?? null } : {}),
   });
   if (scanned.findings.length === 0) return { text, findings: [] };
   const disposition = secretDisposition();

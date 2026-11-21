@@ -116,9 +116,35 @@ marked; this section is the one that stands.
 - **Admin panel reveals have no rate limit and no `Cache-Control: no-store`.**
   The route is session- and same-origin-gated and every reveal is audited;
   add both when the panel gets a reveal button.
-- **Originals the audit (`secrets audit --apply`) redacts are not kept.** The
-  audit hands putPage text that is already redacted. W2a seals them through
-  the store before it rewrites agent transcripts.
+- **Originals the whole-brain audit (`secrets audit --apply`) redacts are not
+  kept.** It hands putPage text that is already redacted. The transcript
+  audit (`--transcripts`) keeps them; the whole-brain one could reuse its
+  `secretOriginals` path for live non-connector pages.
+
+## Follow-ups from the transcript secret rules
+
+- **A marker's fingerprint lets a reader guess a weak password offline.** The
+  fingerprint is the first 64 bits of an unsalted SHA-256, so a short
+  `.netrc` or labeled password behind `[REDACTED:…:<fp>]` can be found by
+  hashing a wordlist. Vendor keys are not at risk. A keyed fingerprint (HMAC
+  under a brain secret) would need every marker, allow-list entry and store
+  row migrated.
+- **Older versions of an audited transcript keep the value.** The transcript
+  audit writes a new version; `page_versions` rows before it still hold the
+  cookie or password. Scrubbing them in place needs the store to bind
+  originals to versions, or the values are lost.
+- **The whole-brain audit's apply drops `outside_neutralized`.** It rewrites a
+  live page without `outsideText`, so a neutralized transcript loses the
+  marker. The transcript audit passes it; the whole-brain one should too.
+- **A transcript part with more than 256 distinct redacted values keeps only
+  256 originals.** The store's per-write cap warns and drops the rest while
+  the part is written. Split such a part, or refuse it, before the write.
+- **The stored-text audit does not join a label and value split across two
+  rendered speaker turns.** Ingest joins them before rendering; the audit sees
+  `User: api key:`, a blank line, then `Assistant: <value>`.
+- **A label left dangling across messages is carried one message only**, and
+  a pushed session log's messages are joined the same way, but not across two
+  separate pushes.
 
 ## Follow-ups from the wallet retry change
 

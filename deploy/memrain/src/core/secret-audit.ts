@@ -16,6 +16,15 @@
  * exception: payloads are counted without row details and are never rewritten.
  * Each run leaves one `secret_audit_runs` row, counts only, which the `secret-exposure` doctor
  * check reads.
+ *
+ * The transcript lane (`lane: "transcripts"`) rescans live agent transcripts
+ * (`transcripts/`, plus any slug prefixes the operator names) with the
+ * transcript rules: cookie values, `.netrc` passwords, split labels. Connector
+ * pages are never read, whatever the prefix. It reports counts by kind and the
+ * page slugs only. Its apply needs the connector key: every value it redacts is
+ * sealed in the secret store in the same transaction that writes the new
+ * version, and a page is rewritten only when putting each original back over
+ * its marker gives the stored text byte for byte.
  */
 import { createHash } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
@@ -27,9 +36,16 @@ import {
   SECRET_SCAN_VERSION,
   describeFindings,
   scanSecrets,
+  withSecretOriginals,
   type EchoDictionary,
   type SecretFinding,
+  type SecretOriginal,
 } from "./secret-scan.ts";
+import { connectorPageSql } from "./connectors/page-kind.ts";
+import { loadKek } from "./connectors/vault.ts";
+import { OperationError } from "./operation-error.ts";
+import { allowedSecretFingerprints } from "./secret-store.ts";
+import { carryForwardFences, OUTSIDE_NEUTRALIZED } from "./fence-carry.ts";
 
 export const AUDIT_STORES = [
   "pages",
@@ -88,6 +104,8 @@ export interface SecretAuditResult {
   mirror_failed: number;
   hits: SecretAuditHit[];
   hits_truncated: boolean;
+  /** Transcript lane only: the pages with a hit, by slug (hits are not listed there). */
+  slugs: string[];
   /** Rows an `apply` could not rewrite, by store and ref (no text). */
   errors: string[];
   /**
@@ -111,7 +129,17 @@ export interface SecretAuditOptions {
   now?: () => Date;
   /** Test seam for the page re-mirror. */
   mirror?: Pick<MirrorPageOptions, "embedFn" | "contextualLlmFn">;
+  /** Rescan live agent transcripts only, with the transcript rules (see the module comment). */
+  lane?: "transcripts";
+  /** Transcript lane: the slug prefixes to read, each ending in `/`. Default `transcripts/`. */
+  slugPrefixes?: string[];
 }
+
+export const TRANSCRIPT_LANE_PREFIXES: readonly string[] = ["transcripts/"];
+/** One page write seals at most this many originals (secret-store.ts); a page needing more is not rewritten. */
+const MAX_LANE_ORIGINALS_PER_PAGE = 256;
+/** A claimed value at least this long is redacted where the reported slug repeats it, like the scanner's echo pass. */
+const SLUG_ECHO_MIN = 8;
 
 interface StoreSpec {
   store: AuditStore;
@@ -223,8 +251,8 @@ interface FieldScan {
   keyCollisions?: number;
 }
 
-function scanText(text: string, field: string, echo: EchoDictionary | false, allow: ReadonlySet<string>, highEntropy: boolean): FieldScan {
-  const r = scanSecrets(text, allow, { echo, preserveLines: true, highEntropy });
+function scanTextWith(text: string, field: string, echo: EchoDictionary | false, allow: ReadonlySet<string>, highEntropy: boolean, transcriptRules = false): FieldScan {
+  const r = scanSecrets(text, allow, { echo, preserveLines: true, highEntropy, transcriptRules });
   if (r.findings.length === 0) return { value: text, hits: [] };
   const lines = findingLines(text, r.text, r.findings);
   return {
@@ -233,12 +261,12 @@ function scanText(text: string, field: string, echo: EchoDictionary | false, all
   };
 }
 
-function scanJson(value: unknown, field: string, echo: EchoDictionary | false, allow: ReadonlySet<string>, highEntropy: boolean): FieldScan {
+function scanJsonWith(value: unknown, field: string, echo: EchoDictionary | false, allow: ReadonlySet<string>, highEntropy: boolean, transcriptRules = false): FieldScan {
   const hits: FieldScan["hits"] = [];
   let keyCollisions = 0;
   const walk = (v: unknown): unknown => {
     if (typeof v === "string") {
-      const r = scanSecrets(v, allow, { echo, highEntropy });
+      const r = scanSecrets(v, allow, { echo, highEntropy, transcriptRules });
       for (const f of r.findings) hits.push({ field, secret_kind: f.kind, fingerprint: f.fingerprint, line: null });
       return r.text;
     }
@@ -297,9 +325,14 @@ function errorTag(e: unknown): string {
   return e instanceof Error ? e.name : "error";
 }
 
-async function fetchBatch(engine: Engine, spec: StoreSpec, cursor: unknown[] | null, sourceId: string | undefined): Promise<Row[]> {
+async function fetchBatch(engine: Engine, spec: StoreSpec, cursor: unknown[] | null, sourceId: string | undefined, lanePrefixes?: readonly string[]): Promise<Row[]> {
   const params: unknown[] = [];
   const where: string[] = [];
+  if (lanePrefixes) {
+    params.push([...lanePrefixes]);
+    where.push(`t.deleted_at IS NULL AND NOT ${connectorPageSql("t")}
+      AND EXISTS (SELECT 1 FROM unnest($${params.length}::text[]) AS lp(prefix) WHERE left(t.slug, length(lp.prefix)) = lp.prefix)`);
+  }
   if (cursor) {
     const placeholders = cursor.map((v) => {
       params.push(v);
@@ -338,17 +371,22 @@ async function applyRow(
   next: Record<string, unknown>,
   opts: SecretAuditOptions,
   ref: string,
+  originals?: ReadonlyMap<string, SecretOriginal>,
 ): Promise<"rewritten" | "moved" | "mirror_failed"> {
   const engine = storage.engine();
   if (spec.store === "pages" && row.deleted_at === null) {
+    const truth = (next.compiled_truth ?? parseJson(row.compiled_truth) ?? {}) as Record<string, unknown>;
     const put = await putPage(storage, {
+      ...(originals ? { secretOriginals: originals } : {}),
+      // A neutralized transcript stays neutralized: the redaction changes text the importer already wrapped.
+      ...(originals && truth[OUTSIDE_NEUTRALIZED] === 1 ? { outsideText: true as const } : {}),
       slug: String(row.slug),
       type: String(row.type),
       allowAdHocType: true,
       title: (next.title ?? row.title ?? undefined) as string | undefined,
       markdown_body: String(next.markdown_body ?? row.markdown_body ?? ""),
       allowEmptyBody: true,
-      compiled_truth: (next.compiled_truth ?? parseJson(row.compiled_truth) ?? {}) as Record<string, unknown>,
+      compiled_truth: truth,
       written_by: "secrets-audit",
       expectedVersion: Number(row.version_n),
     });
@@ -403,6 +441,82 @@ async function applyRow(
   return r.rows.length > 0 ? "rewritten" : "moved";
 }
 
+function lanePrefixesOf(prefixes: readonly string[] | undefined): string[] {
+  const out = prefixes && prefixes.length > 0 ? [...new Set(prefixes)] : [...TRANSCRIPT_LANE_PREFIXES];
+  for (const p of out) {
+    if (!/^[a-z0-9][\w.-]*(?:\/[a-z0-9][\w.-]*)*\/$/i.test(p)) {
+      throw new OperationError("invalid_params", `slug prefix '${p}' is not a slug path ending in '/'`, "Name prefixes such as transcripts/ or agents/.");
+    }
+  }
+  return out.sort();
+}
+
+/**
+ * Why a transcript-lane rewrite is not safe, or null. Each field's new text,
+ * with every new marker replaced by the original it stands for, must give the
+ * stored text back exactly: then the markers cover only the values the store
+ * keeps, and nothing else of the page changed.
+ */
+function laneUnproven(row: Row, next: Record<string, unknown>, originals: ReadonlyMap<string, SecretOriginal>, spec: StoreSpec): string | null {
+  if (originals.size > MAX_LANE_ORIGINALS_PER_PAGE) return `more than ${MAX_LANE_ORIGINALS_PER_PAGE} values to keep`;
+  // A neutralized page is written with its fences carried forward from the stored body; a fence
+  // the redaction changed would come back as it was, so the body the write would store must be the one proven.
+  const truth = (next.compiled_truth ?? parseJson(row.compiled_truth) ?? {}) as Record<string, unknown>;
+  if (truth[OUTSIDE_NEUTRALIZED] === 1 && typeof next.markdown_body === "string") {
+    let carried: string;
+    try {
+      carried = carryForwardFences({ slug: String(row.slug), markdown_body: String(row.markdown_body ?? ""), compiled_truth: truth }, next.markdown_body);
+    } catch {
+      return "its fences cannot be carried";
+    }
+    if (carried !== next.markdown_body) return "a fence it carries forward holds redacted text";
+  }
+  for (const [field, value] of Object.entries(next)) {
+    const json = spec.json.includes(field);
+    const before = json ? JSON.stringify(parseJson(row[field])) : String(row[field] ?? "");
+    const after = json ? JSON.stringify(value) : String(value);
+    if (json ? !jsonRestores(before, after, originals) : restoreMarkers(before, after, originals) !== before) {
+      return `the redacted ${field} does not restore to the stored text`;
+    }
+  }
+  return null;
+}
+
+const NEW_MARKER = /\[REDACTED:[a-z0-9-]{1,64}:([0-9a-f]{16})\]/g;
+
+/** `after` with every marker `before` did not already hold put back to its original; a key block takes back the newlines it kept. */
+function restoreMarkers(before: string, after: string, originals: ReadonlyMap<string, SecretOriginal>): string {
+  const held = new Set([...before.matchAll(NEW_MARKER)].map((m) => m[0]));
+  const parts: string[] = [];
+  let at = 0;
+  for (const m of after.matchAll(NEW_MARKER)) {
+    const original = originals.get(m[1]!);
+    if (!original || held.has(m[0])) continue;
+    let end = m.index + m[0].length;
+    if (original.kind === "private-key") end += original.value.split("\n").length - 1;
+    parts.push(after.slice(at, m.index), original.value);
+    at = end;
+  }
+  parts.push(after.slice(at));
+  return parts.join("");
+}
+
+/** JSON strings are compared after decoding, where a marker replaced exactly one value. */
+function jsonRestores(before: string, after: string, originals: ReadonlyMap<string, SecretOriginal>): boolean {
+  const walk = (b: unknown, a: unknown): boolean => {
+    if (typeof b === "string" && typeof a === "string") return restoreMarkers(b, a, originals) === b;
+    if (Array.isArray(b) && Array.isArray(a)) return b.length === a.length && b.every((v, i) => walk(v, a[i]));
+    if (b !== null && a !== null && typeof b === "object" && typeof a === "object") {
+      const bk = Object.keys(b);
+      const ak = Object.keys(a);
+      return bk.length === ak.length && ak.every((k, i) => restoreMarkers(bk[i]!, k, originals) === bk[i] &&
+        walk((b as Record<string, unknown>)[bk[i]!], (a as Record<string, unknown>)[k]));
+    }
+    return b === a;
+  };
+  return walk(JSON.parse(before), JSON.parse(after));
+}
+
 /**
  * Scan the stored text of every selected store. Never returns, logs or stores
  * a matched value; `apply` rewrites what it found.
@@ -411,11 +525,22 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
   const engine = storage.engine();
   const now = opts.now ?? (() => new Date());
   const startedAt = now().toISOString();
-  const requested = opts.kinds && opts.kinds.length > 0 ? AUDIT_STORES.filter((k) => opts.kinds!.includes(k)) : [...AUDIT_STORES];
+  const lane = opts.lane === "transcripts";
+  const lanePrefixes = lane ? lanePrefixesOf(opts.slugPrefixes) : undefined;
+  if (lane && opts.apply && loadKek().kek === null) {
+    throw new OperationError(
+      "invalid_params",
+      "the transcript audit keeps every original it redacts, and no connector key is loaded",
+      "Set MEMRAIN_CONNECTOR_KEK or MEMRAIN_CONNECTOR_KEK_FILE, then run the apply again.",
+    );
+  }
+  const laneAllow = new Map<string, Set<string>>();
+  const requested = lane ? (["pages"] as AuditStore[])
+    : opts.kinds && opts.kinds.length > 0 ? AUDIT_STORES.filter((k) => opts.kinds!.includes(k)) : [...AUDIT_STORES];
   const kinds = opts.sourceId === undefined ? requested : requested.filter((k) => SPECS[k].sourceCol !== null);
   const skipped = requested.filter((k) => !kinds.includes(k));
   const limit = opts.limit ?? DEFAULT_HIT_LIMIT;
-  const allow = allowedFingerprints();
+  const allowEnv = allowedFingerprints();
   const highEntropy = switchedOn("MEMRAIN_SECRET_SCAN_HIGH_ENTROPY");
   const echoOn = switchedOn("MEMRAIN_SECRET_SCAN_ECHO");
 
@@ -445,6 +570,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
     mirror_failed: 0,
     hits: [],
     hits_truncated: false,
+    slugs: [],
     errors: [],
     key_collisions: [],
     jobs: { rows_scanned: 0, rows_affected: 0, hits_total: 0, hits_withheld: 0, by_status: {}, by_secret_kind: {} },
@@ -454,7 +580,7 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
     const spec = SPECS[store];
     let cursor: unknown[] | null = null;
     for (;;) {
-      const rows = await fetchBatch(engine, spec, cursor, opts.sourceId);
+      const rows = await fetchBatch(engine, spec, cursor, opts.sourceId, lanePrefixes);
       if (rows.length === 0) break;
       for (const row of rows) {
         cursor = spec.keys.map((k) => row[k]);
@@ -462,6 +588,17 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
         if (store === "jobs") result.jobs.rows_scanned += 1;
         // One echo dictionary per row, shared by its fields, as on the write path.
         const echo: EchoDictionary | false = echoOn ? new Map() : false;
+        let allow = allowEnv;
+        const originals = new Map<string, SecretOriginal>();
+        if (lane) {
+          const src = String(row.source_id);
+          if (!laneAllow.has(src)) laneAllow.set(src, new Set([...allowEnv, ...await allowedSecretFingerprints(engine, src)]));
+          allow = laneAllow.get(src)!;
+        }
+        const scanText = (text: string, field: string, e: EchoDictionary | false, a: ReadonlySet<string>, he: boolean): FieldScan =>
+          withSecretOriginals({ originals, allow: new Set() }, () => scanTextWith(text, field, e, a, he, lane));
+        const scanJson = (value: unknown, field: string, e: EchoDictionary | false, a: ReadonlySet<string>, he: boolean): FieldScan =>
+          withSecretOriginals({ originals, allow: new Set() }, () => scanJsonWith(value, field, e, a, he, lane));
         const next: Record<string, unknown> = {};
         const hits: FieldScan["hits"] = [];
         const collidedFields: string[] = [];
@@ -516,6 +653,15 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
             if (s.keyCollisions && !collidedFields.includes(f)) collidedFields.push(f);
           }
         }
+        // The slug was scanned first: a value a later field claimed may sit in it too. Every
+        // claimed value is checked, not only the capped echo dictionary; the echo floor applies.
+        if (typeof slugRef === "string") {
+          for (const o of [...originals.values()].sort((x, y) => y.value.length - x.value.length)) {
+            if (o.value.length < SLUG_ECHO_MIN || !slugRef.includes(o.value)) continue;
+            slugRef = slugRef.split(o.value).join(`[REDACTED:${o.kind}:${o.fingerprint}]`);
+            slugHit = true;
+          }
+        }
         if (hits.length === 0) continue;
         const ref = refOf(spec, row, slugRef);
         result.rows_affected += 1;
@@ -537,14 +683,23 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
         for (const field of collidedFields) result.key_collisions.push({ kind: store, ref, field });
         for (const h of hits) {
           result.by_secret_kind[h.secret_kind] = (result.by_secret_kind[h.secret_kind] ?? 0) + 1;
+          if (lane) continue;
           if (result.hits.length < limit) result.hits.push({ kind: store, ref, ...h });
           else result.hits_truncated = true;
         }
+        if (lane) result.slugs.push(ref);
         if (!opts.apply) continue;
         if (slugHit) result.errors.push(`${store} ${ref}: its slug carries a credential; the audit never renames a page`);
         if (Object.keys(next).length === 0) continue;
+        if (lane) {
+          const unproven = laneUnproven(row, next, originals, spec);
+          if (unproven !== null) {
+            result.errors.push(`${store} ${ref}: ${unproven}; not rewritten`);
+            continue;
+          }
+        }
         try {
-          const outcome = await applyRow(storage, spec, row, next, opts, ref);
+          const outcome = await applyRow(storage, spec, row, next, opts, ref, lane ? originals : undefined);
           if (outcome !== "moved") {
             result.rows_rewritten += 1;
             if (outcome === "mirror_failed") result.mirror_failed += 1;

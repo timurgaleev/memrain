@@ -87,6 +87,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--stale",
   "--stdin",
   "--strict",
+  "--transcripts",
   "--verify-only",
   "--wait",
   "--with-calibration",
@@ -131,7 +132,7 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--prereg", "--priority", "--qrels", "--query", "--question", "--rate-limit-per-minute",
   "--reason", "--redirect-uris", "--refresh-ttl", "--repeats", "--replaces", "--rounds", "--rrf-k", "--scopes", "--settle",
   "--via", "--sealed-fraction", "--search-mode", "--seed", "--severity", "--since", "--skill", "--slug", "--slugs", "--split",
-  "--source", "--source-id", "--source-path", "--source-slug", "--stale-days",
+  "--slug-prefixes", "--source", "--source-id", "--source-path", "--source-slug", "--stale-days",
   "--status", "--sync-policy", "--tag", "--take", "--takes-holders",
   "--tables", "--target", "--tenant-mode", "--threshold", "--title", "--to",
   "--to-pglite-path", "--token",
@@ -350,7 +351,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["write-gate", new Set(["--all", "--json"])],
   ["member", new Set(["--all", "--apply", "--client", "--email", "--enrollment", "--erase-personal-source", "--name", "--out", "--personal-source", "--token"])],
   ["group", new Set(["--allow-owner-source", "--name"])],
-  ["secrets", new Set(["--apply", "--dir", "--json", "--kinds", "--limit", "--plan-hash", "--slug", "--source", "--yes"])],
+  ["secrets", new Set(["--apply", "--dir", "--json", "--kinds", "--limit", "--plan-hash", "--slug", "--slug-prefixes", "--source", "--transcripts", "--yes"])],
   [
     "transcripts",
     new Set([

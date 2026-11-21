@@ -64,6 +64,7 @@ tsvector. Embeddings: Bedrock Titan v2 (1024-dim).
 | `transcripts repair-origin PATH [--source ID] [--apply --plan-hash HASH]` | preview/correct agent-session fact attribution from explicit local logs |
 | `mirror-adopt --source ID [--limit N] [--apply --plan-hash HASH]` | preview/repair proven unowned page mirrors without re-embedding |
 | `secrets audit [--kinds jobs] [--json]` | inspect stored credentials; jobs are aggregate-only and never rewritten |
+| `secrets audit --transcripts [--slug-prefixes P/] [--apply --yes]` | rescan agent transcripts with the cookie, `.netrc` and split-label rules; counts and slugs only; the apply keeps every original |
 | `extract` | re-run the regex entity extractor over all chunks (no Bedrock) |
 | `backlinks <name>` | docs that mention this wikilink target |
 | `reconcile-links [--limit N]` | broken `[[wikilinks]]` |

@@ -29,7 +29,13 @@ import {
   type EchoDictionary,
   secretDisposition,
   type SecretFinding,
+  fingerprintSecret,
+  type SecretOriginal,
+  trailingDanglingLabel,
+  withSecretOriginals,
 } from "../secret-scan.ts";
+import { allowedSecretFingerprints } from "../secret-store.ts";
+import { loadKek, seal, unseal, type Sealed } from "../connectors/vault.ts";
 import { renderSession, sessionBaseSlug, type RenderedPart } from "./render.ts";
 import type { TranscriptSession } from "./types.ts";
 import type { TrustTier } from "../trust-tier.ts";
@@ -44,33 +50,93 @@ export interface PreparedSession {
   base: string;
   parts: RenderedPart[];
   findings: SecretFinding[];
+  /** The values this preparation redacted, by fingerprint, for the part writes to seal. Memory only. */
+  originals: Map<string, SecretOriginal>;
+}
+
+export interface PrepareSessionOptions {
+  /** Fingerprints the owner allowed in the session's source (restored false positives): left in place. */
+  allow?: ReadonlySet<string>;
 }
 
 /**
  * Redact (or, under `reject`, refuse) credentials across the whole session,
- * then render it. Pure: throws SecretRejectedError before any part exists.
+ * with the transcript lane's rules, then render it. Pure: throws
+ * SecretRejectedError before any part exists.
  */
-export function prepareSession(session: TranscriptSession): PreparedSession {
+export function prepareSession(session: TranscriptSession, opts: PrepareSessionOptions = {}): PreparedSession {
   const base = sessionBaseSlug(session);
   const where = `transcript '${base}'`;
   const findings: SecretFinding[] = [];
+  const originals = new Map<string, SecretOriginal>();
   // One dictionary for the whole session: a token claimed in message 9 is
   // also swept from the title and messages 1-8 that echoed it bare.
   const echo: EchoDictionary = new Map();
-  const guard = (text: string): string => {
-    const r = guardSecrets(text, where, { echo });
-    findings.push(...r.findings);
-    return r.text;
-  };
-  const sweep = (text: string): string => guardEchoes(text, echo, findings);
-  const title = session.title === null ? null : guard(session.title);
-  const texts = session.messages.map((m) => guard(m.text));
-  const clean: TranscriptSession = {
-    ...session,
-    title: title === null ? null : sweep(title),
-    messages: session.messages.map((m, i) => ({ ...m, text: sweep(texts[i]!) })),
-  };
-  return { session: clean, base, parts: renderSession(clean), findings };
+  return withSecretOriginals({ originals, allow: opts.allow ?? new Set() }, () => {
+    const guard = (text: string, leadingDangling: ReturnType<typeof trailingDanglingLabel> = null): string => {
+      const r = guardSecrets(text, where, { echo, transcriptRules: true, leadingDangling });
+      findings.push(...r.findings);
+      return r.text;
+    };
+    const sweep = (text: string): string => guardEchoes(text, echo, findings);
+    const title = session.title === null ? null : guard(session.title);
+    // A label that ends one message (`here is my API key:`) reads the first line of the next.
+    const texts = session.messages.map((m, i) => guard(m.text, i > 0 ? trailingDanglingLabel(session.messages[i - 1]!.text) : null));
+    const clean: TranscriptSession = {
+      ...session,
+      title: title === null ? null : sweep(title),
+      messages: session.messages.map((m, i) => ({ ...m, text: sweep(texts[i]!) })),
+    };
+    return { session: clean, base, parts: renderSession(clean), findings, originals };
+  });
+}
+
+/** A push's originals ride the queue sealed, never in clear; past this many the rest are not kept. */
+const MAX_QUEUED_ORIGINALS = 4096;
+
+function queuedOriginalsAad(sourceId: string, clientId: string): string {
+  return `memrain:transcript-originals:v1|${sourceId}|${clientId}`;
+}
+
+/**
+ * The originals a push's preparation redacted, sealed under the connector key
+ * for the queued job, so the worker that writes the pages can keep them. Null
+ * when there are none or no key is configured (nothing is kept, as on any write).
+ */
+export function sealQueuedOriginals(prepared: readonly PreparedSession[], sourceId: string, clientId: string): Sealed | null {
+  const all = new Map<string, SecretOriginal>();
+  let dropped = 0;
+  for (const p of prepared) {
+    for (const [fp, o] of p.originals) {
+      if (all.has(fp)) continue;
+      if (all.size < MAX_QUEUED_ORIGINALS) all.set(fp, o);
+      else dropped++;
+    }
+  }
+  if (dropped > 0) console.warn(`[transcripts_ingest] ${dropped} redacted original(s) past ${MAX_QUEUED_ORIGINALS} in one push are not kept`);
+  if (all.size === 0) return null;
+  const kek = loadKek().kek;
+  if (kek === null) return null;
+  return seal(kek, JSON.stringify([...all.values()]), queuedOriginalsAad(sourceId, clientId));
+}
+
+/** The worker's half of sealQueuedOriginals. A payload it cannot open keeps nothing; the pages are written regardless. */
+export function openQueuedOriginals(raw: unknown, sourceId: string, clientId: string): Map<string, SecretOriginal> {
+  const out = new Map<string, SecretOriginal>();
+  if (raw === undefined || raw === null) return out;
+  const kek = loadKek().kek;
+  try {
+    if (kek === null) throw new Error("no connector key");
+    const list = JSON.parse(unseal(kek, raw as Sealed, queuedOriginalsAad(sourceId, clientId))) as unknown;
+    if (!Array.isArray(list)) throw new Error("not a list");
+    for (const o of list.slice(0, MAX_QUEUED_ORIGINALS) as SecretOriginal[]) {
+      // An entry must be the value its fingerprint names; nothing else is kept.
+      if (typeof o?.kind === "string" && typeof o.value === "string" && o.fingerprint === fingerprintSecret(o.value)) out.set(o.fingerprint, o);
+    }
+  } catch {
+    console.warn("[transcripts_ingest] the queued redacted originals could not be opened; they are not kept");
+  }
+  return out;
 }
 
 export interface IngestTranscriptsOptions {
@@ -98,6 +164,8 @@ export interface IngestTranscriptsOptions {
    * writing on alongside the attempt that took over.
    */
   signal?: AbortSignal;
+  /** Originals redacted before the sessions got here (a push), for the part writes to seal. */
+  secretOriginals?: ReadonlyMap<string, SecretOriginal>;
 }
 
 export interface IngestTranscriptsResult {
@@ -187,6 +255,7 @@ async function writeSession(
         written_by: WRITTEN_BY,
         source_id: sourceId,
         outsideText: true,
+        secretOriginals: prepared.originals,
         ...(opts.trustTier ? { trust_tier: opts.trustTier } : {}),
       });
       if (put.held) throw new OperationError("conflict", `Import held: ${put.held}`);
@@ -269,12 +338,16 @@ export async function ingestSessions(
     failed: [],
   };
   const touched: string[] = [];
+  const allow = await allowedSecretFingerprints(engine, sourceId);
 
   for (const session of sessions) {
     opts.signal?.throwIfAborted();
     let prepared: PreparedSession;
     try {
-      prepared = prepareSession(session);
+      prepared = prepareSession(session, { allow });
+      for (const [fingerprint, original] of opts.secretOriginals ?? []) {
+        if (!prepared.originals.has(fingerprint)) prepared.originals.set(fingerprint, original);
+      }
     } catch (e) {
       if (!(e instanceof SecretRejectedError)) throw e;
       await auditRejectionOnce(storage, e, sessionBaseSlug(session), sourceId);

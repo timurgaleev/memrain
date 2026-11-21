@@ -377,6 +377,9 @@ function printUsage(): void {
   console.log("  secrets audit [--source ID] [--kinds K,K] [--limit N] [--json] [--apply --yes]");
   console.log("                               rescan stored text with the current secret rules; dry run");
   console.log("                               by default, never prints a value");
+  console.log("  secrets audit --transcripts [--slug-prefixes P/,P/] [--json] [--apply --yes]");
+  console.log("                               agent transcripts only, with the cookie/.netrc/split-label rules;");
+  console.log("                               counts and slugs only; apply keeps originals (needs the connector key)");
   console.log("  secrets originals [--slug S] [--source ID] [--json]   redacted originals the store keeps (no values)");
   console.log("  secrets reveal <slug> <fingerprint> [--json]          print the original behind a marker (audited)");
   console.log("  secrets restore <slug> <fingerprint> [--apply --plan-hash H]  put a false positive back (preview first)");
@@ -2078,6 +2081,9 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (src) opts.sourceId = src;
       const kinds = values.get("--kinds");
       if (kinds) opts.kinds = kinds.split(",").map((k) => k.trim()).filter(Boolean);
+      if (flags.has("--transcripts")) opts.transcripts = true;
+      const slugPrefixes = values.get("--slug-prefixes");
+      if (slugPrefixes) opts.slugPrefixes = slugPrefixes.split(",").map((k) => k.trim()).filter(Boolean);
       const limitStr = values.get("--limit");
       if (limitStr !== undefined) {
         const n = Number(limitStr);

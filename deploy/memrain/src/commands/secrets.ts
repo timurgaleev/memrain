@@ -9,6 +9,11 @@
  *         rewrites what it finds (pages through a new version and a re-mirror,
  *         other supported stores in place). Job payloads are count-only and
  *         never rewritten. `--apply` without `--yes` refuses.
+ *   secrets audit --transcripts [--slug-prefixes P/,P/] [--apply --yes]
+ *         live agent transcripts only (default prefix `transcripts/`; connector
+ *         pages never), with the transcript rules; reports counts by kind and
+ *         page slugs. The apply keeps every original in the secret store and
+ *         refuses without the connector key.
  *
  * Exit status: 0 when nothing was found (or everything found was rewritten),
  * 1 when hits remain, 2 on a usage error.
@@ -25,6 +30,9 @@ export interface SecretsAuditCmdOptions {
   yes?: boolean;
   limit?: number;
   json?: boolean;
+  /** The transcript lane (core/secret-audit.ts). */
+  transcripts?: boolean;
+  slugPrefixes?: string[];
   configPath?: string;
   /** Test seam: a storage the caller owns. */
   storage?: Storage;
@@ -40,6 +48,8 @@ function printHuman(r: SecretAuditResult): void {
     console.log(`  not scanned under --source (no source column): ${r.skipped_kinds.join(", ")}`);
   }
   for (const [kind, n] of Object.entries(r.by_kind)) console.log(`  ${kind}: ${n}`);
+  if (r.slugs.length > 0) for (const [kind, n] of Object.entries(r.by_secret_kind)) console.log(`  ${kind}: ${n}`);
+  for (const slug of r.slugs) console.log(`  page ${slug}`);
   if (r.kinds.includes("jobs")) {
     console.log(`  jobs: count-only; ${r.jobs.rows_scanned} payload(s) scanned, ${r.jobs.hits_total} hit(s); no payloads rewritten`);
     for (const [status, n] of Object.entries(r.jobs.by_status)) console.log(`    ${status}: ${n} hit(s)`);
@@ -86,6 +96,7 @@ export async function runSecretsAudit(opts: SecretsAuditCmdOptions): Promise<num
         ...(opts.sourceId !== undefined ? { sourceId: opts.sourceId } : {}),
         ...(kinds.length > 0 ? { kinds } : {}),
         ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+        ...(opts.transcripts ? { lane: "transcripts" as const, ...(opts.slugPrefixes ? { slugPrefixes: opts.slugPrefixes } : {}) } : {}),
         apply: opts.apply === true,
       });
       if (opts.json) console.log(JSON.stringify(r, null, 2));

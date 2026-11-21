@@ -147,7 +147,14 @@ Unicode escapes and selected zero-width inserts, percent-encoded URL
 separators, and base64 credential assignments that decode to a complete
 recognized vendor key. It does not normalize arbitrary prose or decode
 arbitrary blobs recursively. Source code is scanned the same way when it is
-indexed. No pattern set is complete, and text stored before a rule existed
+indexed. Agent transcripts (`memrain transcripts ingest` and `push`) also get
+three rules no other write runs, because a header name or a label is a much
+weaker signal than a credential's own shape: cookie values after a `Cookie:`
+or `Set-Cookie:` header or a curl `-b`/`--cookie` argument (names, attributes
+and values under 8 characters stay), a `.netrc` password (one line, or a
+`password` line inside a multi-line `machine` stanza), and a key, token or
+password label that ends a line or a message with the value alone on the next
+one. Connector mail, calendar and meeting pages never run them. No pattern set is complete, and text stored before a rule existed
 keeps what it carried. If you find a live credential in the brain:
 
 1. **Rotate the credential first.** Anything a connected agent could read is
@@ -174,6 +181,16 @@ keeps what it carried. If you find a live credential in the brain:
    ```bash
    memrain secrets audit --apply --yes
    ```
+
+   To rescan stored agent transcripts with the transcript rules, run
+   `memrain secrets audit --transcripts` (add `--slug-prefixes P/,Q/` for
+   other agent-written prefixes; connector pages are skipped whatever the
+   prefix). It reports counts by kind and the page slugs, nothing else. Its
+   `--apply --yes` refuses without the connector key: every value it redacts
+   is kept in the secret store in the same transaction that writes the new
+   version, and a page is rewritten only when putting each original back over
+   its marker gives the stored text exactly. Older versions of those pages
+   keep what they held.
 
    A live page gets a new version written by `secrets-audit` and is mirrored
    into search again. Older versions are rewritten in place and stamped
@@ -207,9 +224,11 @@ a credential with its marker, the value it removed is kept in the
 `secret_store` table, sealed with AES-256-GCM under the connector key
 (`MEMRAIN_CONNECTOR_KEK` or `MEMRAIN_CONNECTOR_KEK_FILE`) and bound to its
 source and fingerprint. Without that key nothing is kept and the write goes
-ahead. Connector pages keep nothing. Values redacted before the store
-existed, and anything `memrain secrets audit --apply` redacts, were not
-kept and cannot be recovered. No log, receipt, response or ingest-log row
+ahead. Connector pages keep nothing. Transcript ingest keeps them too, including a
+push, whose queued job carries the originals sealed, never in clear. Values
+redacted before the store existed, and anything the whole-brain `memrain
+secrets audit --apply` redacts, were not kept and cannot be recovered; the
+transcript audit (`--transcripts --apply`) keeps what it redacts. No log, receipt, response or ingest-log row
 carries a value; only `reveal` does.
 
 On the host:

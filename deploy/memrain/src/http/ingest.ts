@@ -47,7 +47,8 @@ import { runWithSpendClient } from "../core/budget.ts";
 import { UnrecoverableJobError } from "../core/jobs/types.ts";
 import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "../core/jobs/kinds.ts";
 import { parseTranscriptJsonl } from "../core/transcripts/detect.ts";
-import { ingestSessions, prepareSession, type PreparedSession } from "../core/transcripts/ingest.ts";
+import { ingestSessions, openQueuedOriginals, prepareSession, sealQueuedOriginals, type PreparedSession } from "../core/transcripts/ingest.ts";
+import { allowedSecretFingerprints } from "../core/secret-store.ts";
 import { sessionBaseSlug } from "../core/transcripts/render.ts";
 import {
   sessionsFromPayload,
@@ -537,8 +538,9 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
   // Scanned after the tenancy gates, as a capture is: the queued sessions sit
   // in the jobs table, so they hold redacted text only.
   const prepared: PreparedSession[] = [];
+  const allow = await allowedSecretFingerprints(deps.storage.engine(), sourceId);
   try {
-    for (const s of sessions) prepared.push(prepareSession(s));
+    for (const s of sessions) prepared.push(prepareSession(s, { allow }));
   } catch (e) {
     if (e instanceof SecretRejectedError) {
       void auditRejection(deps.storage.engine(), e, `transcript-push:${auth.clientId}`, sourceId).catch(() => {});
@@ -553,6 +555,7 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
 
   const contentHash = createHash("sha256").update(buf).digest("hex");
   const ref = `push:${auth.clientId}:${contentHash.slice(0, 12)}`;
+  const sealedOriginals = sealQueuedOriginals(prepared, sourceId, auth.clientId);
   try {
     const job = await new Queue(deps.storage.engine()).enqueue({
       kind: TRANSCRIPTS_INGEST_JOB_KIND,
@@ -562,6 +565,7 @@ async function handleTranscriptPush(deps: IngestRouteDeps, auth: AuthInfo, buf: 
         client_id: auth.clientId,
         ref,
         sessions: prepared.map((p) => p.session),
+        ...(sealedOriginals ? { sealed_originals: sealedOriginals } : {}),
         ...(boundPrefixes && boundPrefixes.length > 0 ? { bound_slug_prefixes: boundPrefixes } : {}),
         ...(auth.principal ? { principal: auth.principal } : {}),
       },
@@ -721,8 +725,9 @@ export function registerIngestCaptureHandler(storage: Storage): void {
       throw new UnrecoverableJobError("refused: transcripts_ingest: a session falls outside the credential's bound prefixes");
     }
     const ref = typeof payload.ref === "string" ? payload.ref : "push";
+    const secretOriginals = openQueuedOriginals(payload.sealed_originals, sourceId, typeof payload.client_id === "string" ? payload.client_id : "");
     const run = () =>
-      ingestSessions(storage, sessions, { sourceId, ref, remote: true, ...(ctx.signal ? { signal: ctx.signal } : {}) });
+      ingestSessions(storage, sessions, { sourceId, ref, remote: true, secretOriginals, ...(ctx.signal ? { signal: ctx.signal } : {}) });
     // Paid calls book under who the credential spends as now; the cap is looked
     // up when each call books, so a cap lowered after the push binds the job.
     const result = await runWithSpendClient({ clientId: auth.spendId ?? auth.clientId }, run);

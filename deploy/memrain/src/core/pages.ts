@@ -12,7 +12,7 @@
  * that step (slug + content_hash + chunkable body) without pulling
  * Bedrock into this module.
  */
-import { auditSecrets, guardEchoes, guardSecrets, guardSecretsDeep, guardWrite, withSecretOriginals, type EchoDictionary, type SecretFinding, type SecretOriginalsScope } from "./secret-scan.ts";
+import { auditSecrets, guardEchoes, guardSecrets, guardSecretsDeep, guardWrite, withSecretOriginals, type EchoDictionary, type SecretFinding, type SecretOriginal, type SecretOriginalsScope } from "./secret-scan.ts";
 import { allowedSecretFingerprints, moveSecretOccurrences, sealPageOriginals } from "./secret-store.ts";
 import { createHash } from "node:crypto";
 import type { Storage } from "./storage.ts";
@@ -169,6 +169,12 @@ export interface PageInput {
   sealSecrets?: boolean;
   /** Internal (secrets restore): fingerprints this write leaves unredacted. */
   allowSecretFingerprints?: readonly string[];
+  /**
+   * Internal: originals a caller redacted before this write (transcript ingest,
+   * the transcript audit), sealed with those this write's own scans collect.
+   * Only values whose marker the stored fields hold are kept.
+   */
+  secretOriginals?: ReadonlyMap<string, SecretOriginal>;
   /**
    * An explicit empty `markdown_body` over a page that has a body is refused
    * unless this is set: an empty string is far more often a caller bug than an
@@ -523,7 +529,7 @@ export async function putPage(
     : (await storage.engine().query<{ source_id: string }>(`SELECT source_id FROM pages WHERE slug = $1`, [rawInput.slug])).rows[0]?.source_id ?? "default";
   const allow = await allowedSecretFingerprints(storage.engine(), owner);
   for (const fingerprint of rawInput.allowSecretFingerprints ?? []) allow.add(fingerprint);
-  const scope: SecretOriginalsScope = { originals: new Map(), allow };
+  const scope: SecretOriginalsScope = { originals: new Map(rawInput.secretOriginals ?? []), allow };
   return withSecretOriginals(scope, () => putPageScanned(storage, rawInput, scope));
 }
 
