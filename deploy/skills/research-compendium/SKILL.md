@@ -92,8 +92,11 @@ research/<topic>/index                   manifest and depth ledger
 (URL, retrieval date, content hash, extractor) on the source page with
 `put_raw_data {"slug": "research/<topic>/sources/NN-<source>", "source": "fetch", "data": {...}}`;
 the payload is capped at 1 MB and replaces the previous one, so it holds
-metadata, not the PDF. Link both ways as you go with `link`: each source and
-the index, each summary and the compendium. Inside page bodies use
+metadata, not the PDF. When `get_skill research-compendium` lists
+`put_raw_data` under `unavailable_tools` (the static public bearer), write the
+same provenance as a short "Provenance" section in the source page body.
+
+Link both ways as you go with `link`: each source and the index, each summary and the compendium. Inside page bodies use
 `[[slug]]` links so the brain's own link extraction builds the graph.
 
 ### The index is the depth ledger

@@ -78,6 +78,11 @@ writes_to:
 | Pasted text or a recorder export | Nothing | Normalize, then run every phase below. |
 | A chat export or agent session log | Not a meeting | Route to `conversation-archive`. |
 
+Check `get_skill meeting-ingestion`'s `unavailable_tools` first. The static
+public bearer has neither `get_recent_transcripts` nor `put_raw_data`: ask the
+user for the transcript text, skip the raw payload, and name where the source
+file lives on the meeting page instead.
+
 `memrain transcripts ingest` imports chat history, not meeting recordings.
 
 ## Phases
@@ -196,9 +201,12 @@ source file lives instead. For a connector page, link to it.
 
 For each attendee:
 
-1. `entity_timeline {"slug": "people/<slug>", "limit": 20}`; skip if this
-   meeting is already there.
-2. `add_timeline_event {"slug": "people/<slug>", "occurred_at": "YYYY-MM-DD", "event": "Attended <title> (meetings/<slug>)"}`.
+1. `entity_timeline {"slug": "people/<slug>", "since": "YYYY-MM-DD", "until": "YYYY-MM-DD"}`
+   bounded to the meeting's date, not a newest-N window; skip if any event
+   on that day already names `meetings/<slug>`, whatever its wording.
+2. `add_timeline_event {"slug": "people/<slug>", "occurred_at": "YYYY-MM-DD", "event": "Attended <title> (meetings/<slug>)", "source_chunk_id": "meeting-ingest:meetings/<slug>"}`.
+   The same `source_chunk_id` on the same day makes a re-ingest idempotent
+   even when the title changed.
 3. Update their page with verified context only, via `page_edit` with the
    current `expected_version`.
 4. A verified durable claim (new role, commitment) becomes a fact:
