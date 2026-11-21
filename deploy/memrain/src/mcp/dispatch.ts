@@ -3172,6 +3172,13 @@ async function callEntityFacts(
   }
   if (args["include_forgotten"] === true && !scopedReader)
     opts.include_forgotten = true;
+  if (args["include_ended"] === true) opts.includeEnded = true;
+  if (typeof args["known_as_of"] === "string" && args["known_as_of"]) {
+    if (Number.isNaN(new Date(args["known_as_of"]).getTime())) {
+      throw new OperationError("invalid_params", "entity_facts: `known_as_of` must be an ISO time", "Pass e.g. 2026-01-31 or 2026-01-31T12:00:00Z.");
+    }
+    opts.knownAsOf = args["known_as_of"];
+  }
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   // Confidence decay is INTERNAL ONLY (mirrors entity_recall `query`/`decay`).
   // It reorders facts and drops expired ones using hidden `kind`/`valid_until`;

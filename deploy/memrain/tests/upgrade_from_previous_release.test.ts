@@ -118,7 +118,7 @@ async function seed(e: Engine): Promise<void> {
   `);
 }
 
-async function read(e: Engine, legacyVersions = false) {
+async function read(e: Engine, legacyVersions = false, legacyFacts = false) {
   const storage = new Storage(e);
   const auth = await new OAuthProvider({ engine: e }).verifyAccessToken(PAT);
   const versions = legacyVersions
@@ -131,7 +131,13 @@ async function read(e: Engine, legacyVersions = false) {
   return {
     page: (await getPage(storage, "people/alice"))?.markdown_body,
     versions,
-    facts: (await listFacts(storage, "people/alice"))
+    // The fact reader selects the slot columns migration 182 adds.
+    facts: (legacyFacts
+      ? (await e.query<{ fact: string; source_chunk_id: string | null; attributed_to: string | null }>(
+        `SELECT fact, source_chunk_id, attributed_to FROM entity_facts
+          WHERE entity_slug = $1 AND forgotten_at IS NULL AND dimension IS NULL`, ["people/alice"],
+      )).rows
+      : await listFacts(storage, "people/alice"))
       .map((f) => [f.fact, f.source_chunk_id, f.attributed_to])
       .sort(),
     links: await getLinks(storage, "people/alice"),
@@ -154,7 +160,7 @@ for (const baseline of BASELINES) for (const { name, open } of ENGINES) {
       const db = await open(baseline.lastMigration);
       try {
         await seed(db.engine);
-        const before = await read(db.engine, baseline.lastMigration < 147);
+        const before = await read(db.engine, baseline.lastMigration < 147, baseline.lastMigration < 182);
         expect(before.page).toContain("Second body.");
         expect(before.versions.map((v) => v.version_n)).toEqual([2, 1]);
         expect(before.facts).toEqual([["Lives in Paris", "c1", "user"], ["Plays chess", null, null]]);

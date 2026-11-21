@@ -3,6 +3,7 @@ import { andSourceScope } from "./source-scope.ts";
 import { factSourceEligibleSql } from "./quarantine.ts";
 import { factRemoteEligibleSql } from "./fact-visibility.ts";
 import { RELAXED_STOPWORDS } from "./search/keyword.ts";
+import { applySlotEnds } from "./fact-slots.ts";
 
 export interface QueryFact {
   fact_id: number;
@@ -12,6 +13,10 @@ export interface QueryFact {
   follow_up: "entity_facts";
   trust?: "external";
 }
+
+/** Facts the block shows, and the rows it reads so ended slot values never shorten it. */
+const QUERY_FACTS = 3;
+const QUERY_FACTS_READ = 12;
 
 const EXTRA_STOPWORDS = new Set(["is", "it", "an", "as", "at", "be", "by", "in", "of", "on", "or", "to", "we",
   "\u0447\u0442\u043E", "\u043A\u0430\u043A", "\u043A\u043E\u0433\u0434\u0430", "\u0433\u0434\u0435", "\u043A\u0442\u043E", "\u044D\u0442\u043E", "\u0434\u043B\u044F", "\u0438\u043B\u0438", "\u0435\u0441\u0442\u044C", "\u043F\u0440\u043E", "\u043F\u0440\u0438", "\u0447\u0435\u043C", "\u0435\u0433\u043E", "\u043E\u043D\u0430", "\u043E\u043D\u0438", "\u043D\u0430\u043C", "\u043D\u0430\u0441", "\u043F\u043E", "\u043D\u0430", "\u0438\u0437", "\u043E\u0442", "\u0434\u043E"]);
@@ -32,7 +37,7 @@ export async function matchQueryFacts(
   const scope = andSourceScope("f.source_id", sourceIds, params);
   const orQuery = words.map((_, i) => `plainto_tsquery('simple', ($1::text[])[${i + 1}])`).join(" || ");
   const key = "entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact)";
-  const result = await engine.query<QueryFact>(
+  const result = await engine.query<QueryFact & { source_id: string; slot_dimension: string | null; valid_until: string | null }>(
     `WITH eligible AS (
        SELECT f.*, to_tsvector('simple', f.fact) AS terms FROM entity_facts f
         WHERE f.forgotten_at IS NULL AND f.dimension IS NULL
@@ -47,8 +52,13 @@ export async function matchQueryFacts(
         ORDER BY ${key}, written_at DESC, id DESC
      )
      SELECT id AS fact_id, entity_slug, fact, valid_from::text AS valid_from,
-            'entity_facts'::text AS follow_up
-       FROM collapsed ORDER BY matched DESC, written_at DESC, id DESC LIMIT 3`, params,
+            'entity_facts'::text AS follow_up, source_id, slot_dimension, valid_until::text AS valid_until
+       FROM collapsed ORDER BY matched DESC, written_at DESC, id DESC LIMIT ${QUERY_FACTS_READ}`, params,
   );
-  return result.rows.map(r => ({ ...r, fact_id: Number(r.fact_id) }));
+  // A slot value a later one ended is no longer current, like a lapsed valid_until.
+  const current = await applySlotEnds(engine, {
+    ...(sourceIds !== undefined ? { sourceIds } : {}),
+    ...(remote ? { visibility: ["world"], excludeDiary: true } : {}),
+  }, result.rows.map(r => ({ ...r, id: Number(r.fact_id) })), { activeOnly: true });
+  return current.rows.slice(0, QUERY_FACTS).map(({ id, source_id: _s, slot_dimension: _d, valid_until: _v, slot_end: _e, ...r }) => ({ ...r, fact_id: id }));
 }

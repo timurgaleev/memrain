@@ -1103,7 +1103,7 @@
   },
   {
     "name": "entity_facts",
-    "description": "Entity facts ordered by confidence (default) or recency; omit entity_slug for cross-entity recall. Filter by written_at since, originating source_slug, capture session, case-insensitive grep or private/world visibility. include_forgotten adds audit tombstones for internal callers; public forces it off.",
+    "description": "Entity facts by confidence (default) or recency; omit entity_slug for cross-entity recall. Filters: since (written_at), source_slug, session, grep, visibility. include_forgotten adds tombstones (internal only). A newer location/employer/role value ends the older one (`slot`).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1130,23 +1130,29 @@
         },
         "session": {
           "type": "string",
-          "description": "Filter to facts captured under this session id."
+          "description": "Capture session id."
         },
         "grep": {
           "type": "string",
-          "description": "Case-insensitive substring filter on the fact text."
+          "description": "Case-insensitive substring of the fact."
         },
         "visibility": {
           "type": "string",
           "enum": [
             "private",
             "world"
-          ],
-          "description": "Filter by fact visibility."
+          ]
         },
         "include_forgotten": {
+          "type": "boolean"
+        },
+        "include_ended": {
           "type": "boolean",
-          "description": "Include tombstoned (forgotten) rows. Internal-only; default false."
+          "description": "Keep ended slot values, marked."
+        },
+        "known_as_of": {
+          "type": "string",
+          "description": "ISO time: what the brain knew then."
         },
         "limit": {
           "type": "integer",

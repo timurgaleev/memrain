@@ -79,6 +79,7 @@ beforeAll(async () => {
     fact: "diary interiority",
     source_slug: DIARY,
     source_id: SOURCE,
+    visibility: "world",
   });
   expect(diaryFact.id).not.toBeNull();
   diaryFactId = diaryFact.id!;
@@ -87,6 +88,7 @@ beforeAll(async () => {
     fact: "public claim",
     source_slug: NORMAL,
     source_id: SOURCE,
+    visibility: "world",
   });
   expect(normalFact.id).not.toBeNull();
   normalFactId = normalFact.id!;

@@ -21,6 +21,7 @@
  *
  * Deterministic and LLM-free.
  */
+import { factRemoteEligibleSql } from "./fact-visibility.ts";
 import { ownerOnlyLineageSql } from "./owner-only.ts";
 import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
@@ -81,9 +82,10 @@ export async function recallFact(
   const factId = normaliseId(id);
   const params: unknown[] = [factId];
   // Tenant scope (mig047): filter whenever a list is given; `[]` matches nothing.
-  // A non-owner remote read: no fact derived from an owner-only source.
+  // A non-owner remote read sees world facts only: none private, diary-derived
+  // or derived from an owner-only source, like every other fact reader.
   const scopeFilter = andSourceScope("source_id", sourceIds, params) +
-    (opts.remote ? ` AND ${ownerOnlyLineageSql("fact", "entity_facts.id")}` : "");
+    (opts.remote ? ` AND visibility = 'world' AND ${factRemoteEligibleSql()}` : "");
   const r = await storage.engine().query<RecalledFact>(
     `SELECT id, entity_slug, fact, confidence,
             source_slug, source_chunk_id, written_by,

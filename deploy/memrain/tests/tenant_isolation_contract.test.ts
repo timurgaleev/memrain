@@ -66,6 +66,8 @@ describe("contract: link counts honour source scope", () => {
 
 describe("contract: insight reads honour source scope", () => {
   it("find_trajectory: the merged ledger stays source-scoped", async () => {
+    // A tenant token reads world facts only; the seed writes them private.
+    await storage.engine().query("UPDATE entity_facts SET visibility = 'world' WHERE fact = ANY($1::text[])", [[A_FACT, B_FACT]]);
     const a = JSON.stringify(await call("find_trajectory", { entity_slug: ENTITY_SLUG }, auth(A)));
     expect(a).toContain(A_FACT);
     expect(a).toContain(A_EVENT);

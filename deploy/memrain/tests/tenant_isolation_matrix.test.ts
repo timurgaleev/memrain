@@ -129,6 +129,8 @@ beforeAll(async () => {
   storage = new Storage({ dbPath: join(tmp, "db") });
   await storage.init();
   ({ factIdA, factIdB } = await seedTenantContract(storage));
+  // A tenant token recalls world facts only; the seed writes them private.
+  await storage.engine().query("UPDATE entity_facts SET visibility = 'world' WHERE id = ANY($1::bigint[])", [[factIdA, factIdB]]);
   await seedMatrixExtras();
   memberGroupA = await seedMemberGroupCaller();
 });

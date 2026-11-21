@@ -25,8 +25,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await e.query("INSERT INTO entity_facts(entity_slug,fact) VALUES('people/migration-probe','Retained fact')");
       // 158 records a tier its readers rederive from principal and source; reverting
       // past 158 drops it and reapplying leaves it unrecorded, which loses nothing.
+      // 182 does the same with first_written_at: readers fall back to written_at.
       const factRows = async () => (await e.query<Record<string, unknown>>("SELECT * FROM entity_facts ORDER BY id")).rows
-        .map(({ trust_tier: _tier, ...row }) => row);
+        .map(({ trust_tier: _tier, first_written_at: _first, ...row }) => row);
       const data = await factRows();
       // By name: a later migration that creates a table gets new oids when it is reverted and reapplied.
       const rls = (await e.query("SELECT relname, relrowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace ORDER BY relname")).rows;

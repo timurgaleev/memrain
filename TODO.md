@@ -101,9 +101,16 @@ marked; this section is the one that stands.
   it was registered with; changing it is `memrain auth rescope-client`. Fold a
   picker into the grant editor (W6c, L4-22).
 
-## Follow-ups from the brain owner and owner-only sources
+## Follow-ups from fact slots and known_as_of
 
-- HIGH (operator decision): `recall` (by fact id), `find_trajectory` and `fact_supersessions` return private and diary-derived facts to every remote caller in scope, while `entity_facts`, `entity_recall` and `context_pack` floor them to `world` (mig 085). W3a kept "every other caller reads as today" and left these three as they are (tests/tenant_isolation_* and dispatch_diary_fence encode it); closing them changes what OAuth clients and member keys see.
+- LOW: the change cue that lets a later slot value on another page end an earlier one (`core/fact-slots.ts` CHANGE_CUE) is English only; a move or job change stated in German or Russian on a different page leaves both values open. Extend it with a measured cue list.
+- LOW: facts saved before migration 182 carry no slot, so their employer, city and role questions read as before until their pages are extracted again. A metadata-only re-tag command (paid, capped, dry run first) would close it; not built.
+- LOW: ended slot values are dropped after a bounded read: `entity_facts` widens up to 1,000 rows, the search facts block reads 12 matches and the hot-memory hint topK + 10, so a reader whose window is entirely ended slot values returns fewer rows than asked. Page past the window instead of capping it.
+- LOW: `fact_supersessions` floors the retired row to world, but its `superseded_by` can name the id of a private replacement (id only, no text). Keep-quiet narrowing makes private replacements more common.
+- LOW: a keep-quiet restatement narrows only the copy with the same writer and speaker; another writer's world copy of the same claim stays world.
+- LOW: `find_trajectory` lists forgotten and superseded facts in its fact arm (no `forgotten_at` filter), including withdrawn claims. Decide whether a withdrawn claim belongs in an entity's history.
+
+## Follow-ups from the brain owner and owner-only sources
 
 - MEDIUM: keyed marker fingerprints. A `[REDACTED:<kind>:<fingerprint>]` marker shows a sha256 prefix of the value, so a weak password can be guessed offline by anyone who reads the page. The fix is a random store id in new markers plus a keyed MAC for dedup, which changes the marker format, `secret_store` lookups, reveal/restore/backup and the allowlist (about 25 files); it needs its own reviewed package. Existing markers must keep resolving.
 - MEDIUM: a non-owner key with an explicit write grant on an owner-only source can still read through write paths that load the current page from the write source (`page_edit`, `page_append` replies). Refuse writes into an owner-only source from non-owner keys on a shared brain, or narrow those reads.

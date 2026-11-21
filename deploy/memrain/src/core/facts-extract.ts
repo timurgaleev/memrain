@@ -49,6 +49,15 @@ import {
   writeFactsAbsorbLog,
   type FactsAbsorbReason,
 } from "./ingest-log.ts";
+import { keepQuietClaims, keptQuiet, windowMessages } from "./fact-keep-quiet.ts";
+import {
+  SLOT_KINDS,
+  SLOT_TAG_MAX_FACTS,
+  SLOT_TAG_WORST_CASE,
+  tagSlots,
+  type SlotCandidate,
+  type SlotTagResult,
+} from "./fact-slot-tagging.ts";
 
 export const FACT_KINDS = [
   "event",
@@ -90,6 +99,8 @@ export interface ExtractedFact {
    * `parseExtractedEventDate`. Outranks the caller's turn date at write time.
    */
   valid_from?: string;
+  /** The speaker asked to keep this claim quiet (fact-keep-quiet.ts): it is stored private. */
+  keep_private?: true;
 }
 
 const EXTRACTOR_BASE = [
@@ -724,6 +735,13 @@ export async function writeExtractedFacts(
      * filter.
      */
     notabilityFilter?: "all" | "high-only";
+    /**
+     * Second, small call that tags facts about a live person page with a slot
+     * (fact-slot-tagging.ts), at most SLOT_TAG_MAX_FACTS per call. It returns
+     * one slot or null per candidate, or null when it could not run (budget,
+     * model error); either way the facts are written.
+     */
+    tagSlots?: (candidates: SlotCandidate[]) => Promise<Array<{ dimension: string; value: string } | null> | null>;
   } = {},
 ): Promise<{ written: number; skipped: number; failed: number; fact_ids: number[] }> {
   let written = 0;
@@ -744,6 +762,7 @@ export async function writeExtractedFacts(
       : null;
   // Built on the first owner claim only, so a batch without one reads nothing.
   let gazetteer: GazetteerEntry[] | undefined;
+  const planned: Array<{ f: ExtractedFact; slug: string; validFrom: ReturnType<typeof resolveValidFrom> }> = [];
   for (const f of facts) {
     // Notability gate: high-only drops non-HIGH facts.
     if (notabilityFilter === "high-only" && f.notability !== "high") {
@@ -793,6 +812,11 @@ export async function writeExtractedFacts(
       skipped += 1;
       continue;
     }
+    planned.push({ f, slug, validFrom });
+  }
+  const slots = opts.tagSlots ? await slotsFor(storage, planned, opts.sourceId ?? "default", opts.tagSlots) : new Map();
+  for (const [i, { f, slug, validFrom }] of planned.entries()) {
+    const slot = slots.get(i);
     try {
       const r = await addFact(storage, {
         entity_slug: slug,
@@ -807,8 +831,9 @@ export async function writeExtractedFacts(
         ...(opts.sourceSlug ? { source_slug: opts.sourceSlug } : {}),
         ...(opts.sourceId ? { source_id: opts.sourceId } : {}),
         ...(opts.sessionId ? { source_session: opts.sessionId } : {}),
-        ...(opts.visibility ? { visibility: opts.visibility } : {}),
+        ...(f.keep_private ? { visibility: "private" } : opts.visibility ? { visibility: opts.visibility } : {}),
         ...(validFrom ? { valid_from: validFrom.date } : {}),
+        ...(slot ? { slot } : {}),
         ...(f.attributed_to ? { attributed_to: f.attributed_to } : {}),
         ...(opts.dedup ? { dedup: opts.dedup } : {}),
         written_by: opts.writtenBy ?? "facts-extract",
@@ -823,6 +848,63 @@ export async function writeExtractedFacts(
     }
   }
   return { written, skipped, failed, fact_ids: factIds };
+}
+
+/** Slots by planned index for facts about a live person page, tagged in batches. */
+async function slotsFor(
+  storage: Storage,
+  planned: ReadonlyArray<{ f: ExtractedFact; slug: string }>,
+  sourceId: string,
+  tag: NonNullable<Parameters<typeof writeExtractedFacts>[2]>["tagSlots"] & {},
+): Promise<Map<number, { dimension: string; value: string }>> {
+  const out = new Map<number, { dimension: string; value: string }>();
+  const kinds = planned.flatMap((p, i) => SLOT_KINDS.has(p.f.kind) ? [i] : []);
+  if (kinds.length === 0) return out;
+  const people = new Map((await storage.engine().query<{ slug: string; title: string | null }>(
+    `SELECT slug, title FROM pages WHERE source_id = $1 AND deleted_at IS NULL AND type = 'person' AND slug = ANY($2::text[])`,
+    [sourceId, [...new Set(kinds.map((i) => planned[i]!.slug))]],
+  )).rows.map((p) => [p.slug, p.title || p.slug]));
+  const picked = kinds.filter((i) => people.has(planned[i]!.slug));
+  for (let start = 0; start < picked.length; start += SLOT_TAG_MAX_FACTS) {
+    const batch = picked.slice(start, start + SLOT_TAG_MAX_FACTS);
+    const slots = await tag(batch.map((i) => ({ fact: planned[i]!.f.fact, person: people.get(planned[i]!.slug)!, entity_slug: planned[i]!.slug })));
+    if (slots === null) break;
+    batch.forEach((i, n) => { if (slots[n]) out.set(i, slots[n]!); });
+  }
+  return out;
+}
+
+/**
+ * The slot tagger an extraction run hands to writeExtractedFacts: each call
+ * reserves its worst case on the run's own budget first and stops tagging
+ * (returns null) when the budget has no room or the call fails.
+ */
+function budgetedSlotTagger(budget: BudgetTracker, modelId: string, sonnetFn?: SonnetFn) {
+  const fn = resolveSonnetFn(sonnetFn, { modelId, feature: "facts_extract" });
+  return async (candidates: SlotCandidate[]): Promise<SlotTagResult["slots"] | null> => {
+    const hold = budget.reserve(modelId, SLOT_TAG_WORST_CASE);
+    if (hold === null) return null;
+    let result: SlotTagResult;
+    try {
+      result = await budget.track(() => tagSlots(fn, candidates));
+    } catch (e) {
+      budget.release(hold);
+      console.error(`[facts-extract] slot tagging failed, facts kept without slots: ${errorClass(e)}`);
+      return null;
+    }
+    try {
+      budget.settle(hold, result.modelId, result.usage);
+    } catch (e) {
+      if (!(e instanceof BudgetExhausted)) throw e;
+    }
+    return result.slots;
+  };
+}
+
+/** Marks each fact that restates a claim its window's speaker asked to keep quiet. */
+function markKeptQuiet(window: string, facts: readonly ExtractedFact[]): ExtractedFact[] {
+  const claims = keepQuietClaims(windowMessages(window));
+  return claims.length ? facts.map((f) => keptQuiet(f.fact, claims) ? { ...f, keep_private: true as const } : f) : [...facts];
 }
 // MEMRAIN_FACTS_EXTRACTION gate + BudgetTracker as the CLI batch path.
 // ---------------------------------------------------------------------------
@@ -1243,7 +1325,7 @@ async function extractFactsForPageRun(
     windowsRun += 1;
     readThrough = windowEnd;
     junkSkipped += result.junkSkipped;
-    facts.push(...result.facts);
+    facts.push(...markKeptQuiet(window, result.facts));
     // An unreadable answer is a DURABLE failure, not a quiet page. Without this
     // row the backfill's "page has no facts yet" idempotency marker cannot tell
     // the two apart and re-pays Sonnet for the same broken page on every run.
@@ -1273,6 +1355,7 @@ async function extractFactsForPageRun(
     writtenBy: ON_WRITE_WRITER,
     firstParty: attribution.firstParty,
     ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
+    tagSlots: budgetedSlotTagger(budget, modelId, opts.sonnetFn),
   });
   return {
     factsWritten: w.written,
@@ -1387,9 +1470,10 @@ async function extractFactsOnDemandRun(
     if (!(e instanceof BudgetExhausted)) throw e;
     // Over budget after the (already-paid) call — still return what we got.
   }
+  const extracted = markKeptQuiet(text, result.facts);
   const out: OnDemandExtractResult = {
     enabled: true,
-    facts: result.facts,
+    facts: extracted,
     modelId: result.modelId,
     spentUsd: Number(budget.totalSpent().toFixed(6)),
     // Same discriminator the on-write path files durably — here it rides back on
@@ -1402,8 +1486,9 @@ async function extractFactsOnDemandRun(
         : {}),
   };
   if (opts.persist === true && opts.storage) {
-    const w = await writeExtractedFacts(opts.storage, result.facts, {
+    const w = await writeExtractedFacts(opts.storage, extracted, {
       writtenBy: "extract-facts",
+      tagSlots: budgetedSlotTagger(budget, modelId, opts.sonnetFn),
       ...(opts.sourceSlug ? { sourceSlug: opts.sourceSlug } : {}),
       ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),

@@ -302,7 +302,7 @@ Breadth-first graph walk; each node appears once at shortest depth. truncated me
 
 Scope: read. Effect: read-only.
 
-Entity facts ordered by confidence (default) or recency; omit entity_slug for cross-entity recall. Filter by written_at since, originating source_slug, capture session, case-insensitive grep or private/world visibility. include_forgotten adds audit tombstones for internal callers; public forces it off.
+Entity facts by confidence (default) or recency; omit entity_slug for cross-entity recall. Filters: since (written_at), source_slug, session, grep, visibility. include_forgotten adds tombstones (internal only). A newer location/employer/role value ends the older one (`slot`).
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -311,10 +311,12 @@ Entity facts ordered by confidence (default) or recency; omit entity_slug for cr
 | `since` | string | no |  |
 | `source_slug` | string | no |  |
 | `order` | string (one of `confidence`, `recency`) | no |  |
-| `session` | string | no | Filter to facts captured under this session id. |
-| `grep` | string | no | Case-insensitive substring filter on the fact text. |
-| `visibility` | string (one of `private`, `world`) | no | Filter by fact visibility. |
-| `include_forgotten` | boolean | no | Include tombstoned (forgotten) rows. Internal-only; default false. |
+| `session` | string | no | Capture session id. |
+| `grep` | string | no | Case-insensitive substring of the fact. |
+| `visibility` | string (one of `private`, `world`) | no |  |
+| `include_forgotten` | boolean | no |  |
+| `include_ended` | boolean | no | Keep ended slot values, marked. |
+| `known_as_of` | string | no | ISO time: what the brain knew then. |
 | `limit` | integer (1–1000) | no |  |
 
 ### fact_supersessions

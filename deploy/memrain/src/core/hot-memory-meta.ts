@@ -21,10 +21,12 @@ import type { Storage } from "./storage.ts";
 import { andSourceScope } from "./source-scope.ts";
 import { factSourceEligibleSql } from "./quarantine.ts";
 import { packFactText } from "./fact-text.ts";
+import { applySlotEnds } from "./fact-slots.ts";
 
 const DEFAULT_TTL_MS = 30_000;
 const DEFAULT_TOP_K = 10;
 const MAX_TOP_K = 25;
+const SLOT_HEADROOM = 10;
 /** Confidence half-life: a fact's decay weight halves every this-many hours. */
 const DECAY_HALF_LIFE_HOURS = 24;
 /** Facts older than this (hours) are never surfaced regardless of confidence. */
@@ -86,7 +88,8 @@ export async function getBrainHotMemoryMeta(
   }
 
   const nowIso = new Date(now).toISOString();
-  const params: unknown[] = [nowIso, MAX_AGE_HOURS, DECAY_HALF_LIFE_HOURS, topK];
+  // Read past topK so slot values a later one ended never shorten the list.
+  const params: unknown[] = [nowIso, MAX_AGE_HOURS, DECAY_HALF_LIFE_HOURS, topK + SLOT_HEADROOM];
   const scope = andSourceScope("source_id", opts.sourceIds, params);
   const collapseKey = "entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact)";
   const r = await storage.engine().query<{
@@ -97,6 +100,9 @@ export async function getBrainHotMemoryMeta(
     collapsed_count: number;
     written_at: string | Date;
     score: number | string;
+    source_id: string;
+    slot_dimension: string | null;
+    valid_until: string | null;
   }>(
     `WITH eligible AS (
        SELECT * FROM entity_facts
@@ -109,6 +115,7 @@ export async function getBrainHotMemoryMeta(
          FROM eligible ORDER BY ${collapseKey}, written_at DESC, id DESC
      )
      SELECT id, entity_slug, fact, attributed_to, collapsed_count, written_at,
+            source_id, slot_dimension, valid_until::text AS valid_until,
             (confidence * power(0.5,
               GREATEST(0, EXTRACT(EPOCH FROM ($1::timestamptz - written_at)) / 3600.0) / $3
             ))::float8 AS score
@@ -117,14 +124,16 @@ export async function getBrainHotMemoryMeta(
       LIMIT $4`,
     params,
   );
-  if (r.rows.length === 0) {
+  const current = (await applySlotEnds(storage.engine(), opts.sourceIds !== undefined ? { sourceIds: opts.sourceIds } : {},
+    r.rows.map((row) => ({ ...row, id: Number(row.id) })), { activeOnly: true })).rows.slice(0, topK);
+  if (current.length === 0) {
     _cache.set(cacheKey, { expiresAt: now + ttl, payload: undefined });
     return undefined;
   }
 
   const payload = {
     brain_hot_memory: {
-      facts: r.rows.map((row) => ({
+      facts: current.map((row) => ({
         id: Number(row.id),
         entity_slug: row.entity_slug,
         fact: packFactText(row),

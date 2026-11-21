@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { addFact } from "../src/core/facts.ts";
+import { replaceFact } from "../src/core/facts-replace.ts";
 import { putPage } from "../src/core/pages.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { addMember, bindCredential, disableMember, enableMember, type MemberActor } from "../src/core/members.ts";
@@ -108,6 +109,43 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     const info = await provider.verifyAccessToken(token);
     expect(info.memberId).toBe("ora");
     expect(await facts({ authInfo: { ...info, isPublic: false } })).toEqual(["diary fact", "private fact", "world fact"]);
+  });
+
+  it("recall by id, find_trajectory and fact_supersessions show private and diary facts to the owner only", async () => {
+    const add = async (fact: string, visibility: string, source_slug?: string) =>
+      (await addFact(db.storage, { entity_slug: "people/history", fact, visibility, ...(source_slug ? { source_slug } : {}) })).id!;
+    const ids = {
+      world: await add("world claim", "world"),
+      private: await add("private claim", "private"),
+      diary: await add("diary claim", "world", "life/diary/2026-11-01"),
+    };
+    for (const [old, label] of [[ids.world, "world"], [ids.private, "private"], [ids.diary, "diary"]] as const) {
+      const fresh = await add(`${label} replacement`, label === "private" ? "private" : "world", label === "diary" ? "life/diary/2026-11-01" : undefined);
+      expect(await replaceFact(db.storage.engine(), old, fresh, ["default"])).toEqual({ replaced: true });
+    }
+    const live = {
+      world: await add("world now", "world"),
+      private: await add("private now", "private"),
+      diary: await add("diary now", "world", "life/diary/2026-11-01"),
+    };
+    const call = async (name: string, args: Record<string, unknown>, opts: Parameters<typeof dispatchTool>[2]) => {
+      const r = await dispatchTool(db.storage, { name, arguments: args }, opts);
+      return { isError: r.isError === true, body: JSON.parse(r.content[0]!.text) };
+    };
+    const view = async (opts: Parameters<typeof dispatchTool>[2]) => ({
+      recall: await Promise.all(Object.values(live).map(async (id) => !(await call("recall", { id }, opts)).isError)),
+      trajectory: ((await call("find_trajectory", { entity_slug: "people/history" }, opts)).body.points as Array<{ text: string }>)
+        .map((p) => p.text).filter((t) => /claim|now/.test(t)).sort(),
+      supersessions: ((await call("fact_supersessions", { entity_slug: "people/history" }, opts)).body.supersessions as Array<{ fact: string }>)
+        .map((f) => f.fact).sort(),
+    });
+    const all = { recall: [true, true, true], trajectory: ["diary claim", "diary now", "private claim", "private now", "world claim", "world now"],
+      supersessions: ["diary claim", "private claim", "world claim"] };
+    expect(await view({ authInfo: { ...base, memberId: "ora" } })).toEqual(all);
+    expect(await view({})).toEqual(all);
+    expect(await view({ authInfo: { ...base, memberId: "alice" } })).toEqual({
+      recall: [true, false, false], trajectory: ["world claim", "world now"], supersessions: ["world claim"],
+    });
   });
 
   it("clearing the owner turns the owner's credential back into an ordinary one", async () => {

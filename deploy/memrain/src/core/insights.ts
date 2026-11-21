@@ -18,6 +18,7 @@
  * 037 metadata). No schema change — all columns queried already exist.
  */
 import { ownerOnlyLineageSql } from "./owner-only.ts";
+import { factRemoteEligibleSql } from "./fact-visibility.ts";
 import { factSourceEligibleSql } from "./quarantine.ts";
 import type { Storage } from "./storage.ts";
 import { orphanExclusionSql } from "./orphan-policy.ts";
@@ -665,7 +666,7 @@ export async function findTrajectory(
   }
   // A non-owner remote read: no fact or timeline row derived from an owner-only source.
   if (opts.remote) {
-    factBounds += ` AND ${ownerOnlyLineageSql("fact", "f.id")}`;
+    factBounds += ` AND f.visibility = 'world' AND ${factRemoteEligibleSql("f")}`;
     eventBounds += ` AND ${ownerOnlyLineageSql("timeline", "ev.id")}`;
   }
   if (metric !== undefined) {

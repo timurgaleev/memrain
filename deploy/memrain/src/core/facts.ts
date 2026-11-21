@@ -48,6 +48,7 @@ import { deadlockSafeTransaction } from "./retry.ts";
 import { flagRowAt } from "./write-gate-rows.ts";
 import { readEntityIdentity, type EntityIdentity } from "./person-identity.ts";
 import { contestedWith } from "./typed-conflicts.ts";
+import { applySlotEnds, knownAsOfLiveSql, normalizeSlot, slotValueHash, type SlotReadScope } from "./fact-slots.ts";
 
 /**
  * Insert-time dedup / supersede knobs (migration 038 fact embedding + the
@@ -146,6 +147,12 @@ export interface AddFactInput {
    * governed by `MEMRAIN_FACTS_DEDUP` (default OFF, exact-tuple dedup only).
    */
   dedup?: FactDedupOptions;
+  /**
+   * The slot the fact states (migration 182): where the subject lives, who
+   * employs them or their role. Normalized by `normalizeSlot`; anything else
+   * stores no slot. A later value of the same slot ends this one at read time.
+   */
+  slot?: { dimension: string; value: string };
 }
 
 /** Allowed `kind` values — mirrors the migration 037 CHECK constraint. */
@@ -490,6 +497,12 @@ export interface FactRow {
   forgotten_at: string | null;
   /** Ids of visible typed claims this one conflicts with (recall only; absent when none). */
   contested_with?: number[];
+  /**
+   * The slot the fact states (migration 182), present only on slotted rows:
+   * when it was said (first written), and, once a later value of the same
+   * slot ended it at read time, when and by which fact.
+   */
+  slot?: { dimension: string; value: string; said_at: string; ended_at?: string; ended_by?: number };
 }
 
 export interface AddFactResult {
@@ -584,14 +597,16 @@ export async function addFact(
   const effectiveSource = sourceId ?? "default";
   // Credentials never reach the ledger — nor the dedup embed, which would send
   // them to the embedding provider.
-  const { fact, context } = await guardFields(
+  const requestedSlot = input.slot ? normalizeSlot(input.slot.dimension, input.slot.value, input.entity_slug) : null;
+  const { fact, context, slot_value: slotValue } = await guardFields(
     storage.engine(),
     `fact:${input.entity_slug}`,
     sourceId,
     `fact on '${input.entity_slug}'`,
-    { fact: input.fact, context: input.context },
+    { fact: input.fact, context: input.context, slot_value: requestedSlot?.value },
   );
   const factContext = normaliseText(context);
+  const slot = requestedSlot && slotValue ? { dimension: requestedSlot.dimension, value: slotValue } : null;
 
   // A forgotten claim stays forgotten. Checked before the restatement lookup
   // and the paid embed/classify path: a withdrawn claim costs nothing and
@@ -628,6 +643,8 @@ export async function addFact(
       // default — the same rule `valid_from` already follows below.
       confidence: input.confidence === undefined ? null : conf,
       validFrom,
+      slot,
+      narrowToPrivate: visibility === "private",
     });
     return { id: onFile, entity_slug: input.entity_slug, inserted: false };
   }
@@ -641,6 +658,8 @@ export async function addFact(
       await refreshClaim(storage.engine(), adopted, {
         confidence: input.confidence === undefined ? null : conf,
         validFrom,
+        slot,
+        narrowToPrivate: visibility === "private",
       });
       return { id: adopted, entity_slug: input.entity_slug, inserted: false };
     }
@@ -762,6 +781,10 @@ export async function addFact(
     cols.push("source_id");
     params.push(sourceId);
   }
+  if (slot !== null) {
+    cols.push("slot_dimension", "slot_value", "slot_value_hash");
+    params.push(slot.dimension, slot.value, slotValueHash(slot.value));
+  }
   if (embeddingJson !== null) {
     cols.push("embedding");
     params.push(embeddingJson);
@@ -877,15 +900,29 @@ export async function addFact(
 async function refreshClaim(
   q: Queryable,
   id: number,
-  patch: { confidence: number | null; validFrom: string | null },
+  patch: {
+    confidence: number | null;
+    validFrom: string | null;
+    slot?: { dimension: string; value: string } | null;
+    /** A restatement asked to be private (a keep-quiet claim): visibility only ever narrows. */
+    narrowToPrivate?: boolean;
+  },
 ): Promise<void> {
+  // first_written_at is filled here for a row written before migration 182:
+  // its written_at is the earliest time still on file.
   await q.query(
     `UPDATE entity_facts
-        SET written_at = NOW(),
+        SET first_written_at = COALESCE(first_written_at, written_at),
+            visibility = CASE WHEN $7::boolean THEN 'private' ELSE visibility END,
+            written_at = NOW(),
             confidence = COALESCE($2::real, confidence),
-            valid_from = COALESCE($3::date, valid_from)
+            valid_from = COALESCE($3::date, valid_from),
+            slot_dimension = COALESCE(slot_dimension, $4::text),
+            slot_value = CASE WHEN slot_dimension IS NULL THEN $5::text ELSE slot_value END,
+            slot_value_hash = CASE WHEN slot_dimension IS NULL THEN $6::text ELSE slot_value_hash END
       WHERE id = $1`,
-    [id, patch.confidence, patch.validFrom],
+    [id, patch.confidence, patch.validFrom, patch.slot?.dimension ?? null, patch.slot?.value ?? null,
+      patch.slot ? slotValueHash(patch.slot.value) : null, patch.narrowToPrivate === true],
   );
 }
 
@@ -939,6 +976,18 @@ export interface ListFactsOptions {
    * ['world']). Omitted/empty -> all visibilities (operator view).
    */
   visibility?: string[];
+  /**
+   * Keep slot values a later value ended at read time, marked with their end
+   * (`valid_until`, `slot.ended_at`, `slot.ended_by`). Default: dropped, so a
+   * read with a limit still fills it with current facts.
+   */
+  includeEnded?: boolean;
+  /**
+   * What the brain knew at this instant (ISO): facts first written by then and
+   * not forgotten by then, with slots ended as of then. Rows written before
+   * migration 182 and restated since count from their latest restatement.
+   */
+  knownAsOf?: string | Date;
 }
 
 /** When decay re-ranks in TS we fetch a wide candidate set first, then trim. */
@@ -997,9 +1046,18 @@ export async function listFacts(
     params.push(opts.sourceIds);
     where.push(`source_id = ANY($${params.length}::text[])`);
   }
+  const knownAsOf = opts.knownAsOf !== undefined ? normaliseSince(opts.knownAsOf) : undefined;
   // Tombstones are invisible by default (the mig043 contract); the audit
-  // surfaces opt in explicitly.
-  if (opts.include_forgotten !== true) {
+  // surfaces opt in explicitly. A known-as-of read keeps a row a later fact
+  // replaced, never one that was forgotten or purged: erased stays erased.
+  if (knownAsOf !== undefined) {
+    params.push(knownAsOf);
+    where.push(`COALESCE(first_written_at, written_at) <= $${params.length}::timestamptz`);
+    if (opts.include_forgotten !== true) {
+      where.push(knownAsOfLiveSql(params.length));
+      where.push(factSourceEligibleSql());
+    }
+  } else if (opts.include_forgotten !== true) {
     where.push("forgotten_at IS NULL");
     where.push(factSourceEligibleSql());
   }
@@ -1025,7 +1083,9 @@ export async function listFacts(
   // When `decay` is unset the global `MEMRAIN_FACT_DECAY` flag governs, so every
   // fact-reading surface (entity_facts + entity_recall) honors it uniformly.
   const decay = opts.decay ?? factDecayEnabled();
-  const wantDecay = decay && !hasQueryVector && opts.order !== "recency";
+  // Decay ages from now, so a known-as-of read ranks without it; it would also
+  // drop the ended slot values an include_ended read asks for.
+  const wantDecay = decay && !hasQueryVector && opts.order !== "recency" && knownAsOf === undefined && opts.includeEnded !== true;
 
   // When decaying, drop rows that are definitely past their `valid_until` at the
   // SQL layer so they do not consume slots in the `DECAY_FETCH_CAP` candidate
@@ -1069,7 +1129,6 @@ export async function listFacts(
   // with more than DECAY_FETCH_CAP live facts, where a fresh low-confidence fact
   // below the confidence-DESC window could be missed.
   const sqlLimit = wantDecay ? DECAY_FETCH_CAP : limit;
-  params.push(sqlLimit);
   const collapseKey = "entity_slug, COALESCE(attributed_to, ''), memrain_fact_claim_key(fact)";
   const eligible = `SELECT * FROM entity_facts WHERE ${where.join(" AND ")}`;
   const readSet = opts.include_forgotten === true ? eligible :
@@ -1077,7 +1136,7 @@ export async function listFacts(
             (count(*) OVER (PARTITION BY ${collapseKey}))::int AS collapsed_count
        FROM (${eligible}) eligible
        ORDER BY ${collapseKey}, written_at DESC, id DESC`;
-  const r = await storage.engine().query<FactRow>(
+  const fetch = async (n: number) => (await storage.engine().query<SlottedFactRow>(
     `SELECT id, source_id, entity_slug, fact, confidence,
             source_slug, source_chunk_id, written_by,
             written_at::text AS written_at,
@@ -1086,15 +1145,46 @@ export async function listFacts(
             valid_until::text AS valid_until,
             visibility, superseded_by, consolidated_into,
             context, source_session, attributed_to,
-            forgotten_at::text AS forgotten_at${opts.include_forgotten === true ? "" : ", collapsed_count"}
+            forgotten_at::text AS forgotten_at${opts.include_forgotten === true ? "" : ", collapsed_count"},
+            slot_dimension, slot_value, COALESCE(first_written_at, written_at)::text AS said_at
        FROM (${readSet}) facts
        ORDER BY ${order}
-       LIMIT $${params.length}`,
-    params,
-  );
-  const rows = r.rows.map(normalizeFactRow);
-  if (!wantDecay) return rows;
-  return rankByDecay(rows, limit);
+       LIMIT $${params.length + 1}`,
+    [...params, n],
+  )).rows.map(normalizeFactRow);
+  // The audit read (include_forgotten) shows rows as stored.
+  if (opts.include_forgotten === true) {
+    const rows = (await fetch(sqlLimit)).map(withSlot);
+    return wantDecay ? rankByDecay(rows, limit) : rows;
+  }
+  const scope: SlotReadScope = {
+    ...(opts.sourceIds !== undefined ? { sourceIds: opts.sourceIds } : {}),
+    ...(opts.visibility?.length ? { visibility: opts.visibility } : {}),
+    ...(opts.excludeDiary ? { excludeDiary: true } : opts.excludeOwnerOnly ? { excludeOwnerOnly: true } : {}),
+    ...(knownAsOf !== undefined ? { knownAsOf } : {}),
+  };
+  // Ended slot values are dropped before the limit cut: widen the read until
+  // it fills or runs dry, so an ended value never shortens the answer.
+  let n = sqlLimit;
+  for (;;) {
+    const fetched = await fetch(n);
+    const ended = await applySlotEnds(storage.engine(), scope, fetched, { activeOnly: opts.includeEnded !== true });
+    const rows = ended.rows.map(withSlot);
+    if (ended.dropped === 0 || fetched.length < n || n >= DECAY_FETCH_CAP) {
+      return wantDecay ? rankByDecay(rows, limit) : rows.slice(0, limit);
+    }
+    n = Math.min(DECAY_FETCH_CAP, n + ended.dropped * 2 + limit);
+  }
+}
+
+type SlottedFactRow = FactRow & { slot_dimension: string | null; slot_value: string | null; said_at: string };
+
+/** Fold the slot columns into the response's `slot` field, present only on slotted rows. */
+function withSlot(row: SlottedFactRow & { slot_end?: { at: Date; by: number } }): FactRow {
+  const { slot_dimension, slot_value, said_at, slot_end, ...rest } = row;
+  if (!slot_dimension || slot_value === null) return rest;
+  return { ...rest, slot: { dimension: slot_dimension, value: slot_value, said_at,
+    ...(slot_end ? { ended_at: slot_end.at.toISOString().slice(0, 10), ended_by: slot_end.by } : {}) } };
 }
 
 /**
@@ -1167,8 +1257,9 @@ export async function listSupersessions(
     params.push(opts.sourceIds);
     where.push(`source_id = ANY($${params.length}::text[])`);
   }
-  // A non-owner remote read: no fact derived from an owner-only source.
-  if (opts.remote) where.push(ownerOnlyLineageSql("fact", "entity_facts.id"));
+  // A non-owner remote read: world facts only, none diary-derived or derived
+  // from an owner-only source.
+  if (opts.remote) where.push("visibility = 'world'", factRemoteEligibleSql());
   const limit =
     typeof opts.limit === "number" && opts.limit >= 1 && opts.limit <= 1000
       ? Math.floor(opts.limit)
