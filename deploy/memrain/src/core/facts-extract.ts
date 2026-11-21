@@ -1294,7 +1294,6 @@ async function extractFactsForPageRun(
   let junkSkipped = 0;
   let absorbed: FactsAbsorbReason | null = null;
   let readThrough = 0;
-  let consecutiveErrors = 0;
   const declinedRanges: DeclinedRange[] = [];
 
   // One extractor call reserved against the per-write tracker. "refused": the
@@ -1388,14 +1387,11 @@ async function extractFactsForPageRun(
       break;
     }
     if ("error" in result) {
-      // One failed window does not cost the windows after it; two in a row
-      // read as a gateway that is down, and the run stops.
+      // A failed call ends the run: the facts read so far are kept, and the
+      // page, holding no watermark, is picked up again by the backfill.
       absorbed ??= result.error;
-      consecutiveErrors += 1;
-      if (consecutiveErrors >= 2) break;
-      continue;
+      break;
     }
-    consecutiveErrors = 0;
     windowsRun += 1;
     readThrough = windowEnd;
     if (result.outcome !== "declined") {
@@ -1420,7 +1416,8 @@ async function extractFactsForPageRun(
       }
       if ("error" in r) {
         absorbed ??= r.error;
-        continue;
+        stopped = true;
+        break;
       }
       windowsRun += 1;
       if (r.outcome === "declined") await declined(windowStart + half.offset, windowStart + half.offset + half.text.length, r.modelId);

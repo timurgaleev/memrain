@@ -121,6 +121,22 @@ describe("dedupe reject and confirm", () => {
     expect((await preview()).groups).toEqual([]);
   });
 
+  it("judges the other pairs of a group that holds a rejected pair", async () => {
+    for (const slug of ["people/lu-a", "people/lu-b", "people/lu-c"]) await person(slug, "Lu Example", { email: "lu@example.org" });
+    await rejectDuplicatePair(storage, "default", "people/lu-a", "people/lu-b");
+    expect(classes(await preview()).map(([, m]) => m)).toEqual([["people/lu-a", "people/lu-c"], ["people/lu-b", "people/lu-c"]]);
+  });
+
+  it("keeps a rejection to its own source", async () => {
+    await storage.engine().query(`INSERT INTO sources (id, kind, path_prefix) VALUES ('work', 'other', 'work/') ON CONFLICT DO NOTHING`);
+    await person("people/mo-a", "Mo Example", { github: "mo" });
+    await person("people/mo-b", "Mo Example", { github: "mo" });
+    await person("people/mo-c", "Mo Example", { github: "mo" }, "work");
+    await person("people/mo-d", "Mo Example", { github: "mo" }, "work");
+    await rejectDuplicatePair(storage, "default", "people/mo-a", "people/mo-b");
+    expect((await preview()).groups.map((g) => g.source_id)).toEqual(["work"]);
+  });
+
   it("merges a confirmed pair with entity-merge", async () => {
     await person("people/hal", "Hal Example", { linkedin: "in/hal" });
     await person("people/hal-example", "Hal Example", { linkedin: "in/hal" });

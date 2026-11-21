@@ -372,6 +372,13 @@ export async function reflectionsPhase(
     for (const t of transcripts) {
       await recordSynthSkip(engine, { docId: t.docId, phase: "reflections", contentHash: t.contentHash, model });
     }
+  } else if (parsed.status === "ok" && parsed.drafts.length === 0) {
+    // An array none of whose entries is usable (no valid slug, no cited
+    // transcript) would be paid for again every run: back off as for prose.
+    for (const t of transcripts) {
+      await recordSynthFailure(engine, { docId: t.docId, phase: "reflections", contentHash: t.contentHash, model, kind: "unparseable" });
+    }
+    base.errors.push("no usable reflection in the answer; transcripts parked");
   }
   const drafts = parsed.drafts;
 

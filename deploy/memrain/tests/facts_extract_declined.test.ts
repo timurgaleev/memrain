@@ -1,13 +1,13 @@
 /**
  * Fact extraction when the model declines a window (a refusal or a content
- * filter), and when one window's call fails: the rest of the page is still read.
+ * filter): the window is read again in halves and the rest of the page counts.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { EXTRACT_WINDOW_CHARS, extractFactsForPage, splitDeclinedWindow } from "../src/core/facts-extract.ts";
+import { extractFactsForPage, splitDeclinedWindow } from "../src/core/facts-extract.ts";
 import { putPage } from "../src/core/pages.ts";
 import type { SonnetCallResult, SonnetFn } from "../src/core/llm/sonnet.ts";
 
@@ -95,42 +95,23 @@ describe("declined windows", () => {
     expect(r.absorbed).toBe("budget_exhausted");
   });
 
+  // Value: protects=a declined window does not drop the windows after it; fails_when=a refusal ends the page's run.
+  it("still reads the windows after a declined one", async () => {
+    process.env["MEMRAIN_FACTS_MAX_WINDOWS"] = "2";
+    const touchyWindow = Array.from({ length: 30 }, () => TOUCHY).join("\n\n").slice(0, 11_000);
+    const body = `${touchyWindow}\n\n${QUIET.repeat(3)}`;
+    await putPage(storage, { slug: "notes/two", markdown_body: body });
+    const { fn, users } = filtering();
+    const r = await extractFactsForPage(storage, { slug: "notes/two", type: "note", body, sonnetFn: fn, observationDate: null, modelId: MODEL });
+    expect(users).toHaveLength(4);
+    expect(r.factsWritten).toBe(1);
+    expect(r.declinedRanges).toHaveLength(2);
+    expect(r.absorbed).toBeNull();
+  });
+
   it("splits at the paragraph break nearest the middle", () => {
     const text = `${"a".repeat(300)}\n\n${"b".repeat(300)}`;
     expect(splitDeclinedWindow(text)!.map((h) => h.offset)).toEqual([0, 300]);
     expect(splitDeclinedWindow("too short")).toBeNull();
-  });
-});
-
-describe("a failed window", () => {
-  const LONG = Array.from({ length: 60 }, (_, i) => `Paragraph ${i}: ${"word ".repeat(100)}`).join("\n\n");
-
-  // Value: protects=one failed call does not drop every later window; fails_when=the loop breaks on the first error again.
-  it("still reads the windows after it", async () => {
-    process.env["MEMRAIN_FACTS_MAX_WINDOWS"] = "3";
-    await putPage(storage, { slug: "notes/long", markdown_body: LONG });
-    let calls = 0;
-    const fn: SonnetFn = async () => {
-      calls += 1;
-      if (calls === 1) throw new Error("ValidationException: malformed request");
-      return answer(`Claim ${calls}.`);
-    };
-    const r = await extractFactsForPage(storage, { slug: "notes/long", type: "note", body: LONG, sonnetFn: fn, observationDate: null, modelId: MODEL });
-    expect(calls).toBe(3);
-    expect(r.windowsRun).toBe(2);
-    expect(r.factsWritten).toBe(2);
-    expect(r.absorbed).not.toBeNull();
-  });
-
-  it("stops after two failures in a row", async () => {
-    process.env["MEMRAIN_FACTS_MAX_WINDOWS"] = "3";
-    await putPage(storage, { slug: "notes/long", markdown_body: LONG });
-    let calls = 0;
-    const fn: SonnetFn = async () => { calls += 1; throw new Error("ValidationException: malformed request"); };
-    const r = await extractFactsForPage(storage, { slug: "notes/long", type: "note", body: LONG, sonnetFn: fn, observationDate: null, modelId: MODEL });
-    expect(calls).toBe(2);
-    expect(r.windowsRun).toBe(0);
-    expect(r.truncated_chars).toBe(LONG.length);
-    expect(EXTRACT_WINDOW_CHARS).toBeLessThan(LONG.length);
   });
 });

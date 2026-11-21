@@ -13,7 +13,8 @@
  * carry is only counted.
  *
  * Groups form inside one source (a merge never crosses sources), one per set
- * of pages that share a key value. Classes:
+ * of pages that share a key value; a set holding a rejected pair is judged
+ * pair by pair without it. Classes:
  *
  *   conflict  the pages share a key but their names differ, or two of them
  *             carry different LinkedIn, GitHub or declared ids and they share
@@ -24,8 +25,9 @@
  *   likely    everything else.
  *
  * Evidence names key types, never their values. A rejected pair stays apart
- * by its slugs, and by its two fingerprints (kind, name without titles or
- * company suffixes, strong key values), so a rename does not bring it back.
+ * in its source by its slugs, and by its two fingerprints (kind, name without
+ * titles or company suffixes, strong key values), so a rename does not bring it
+ * back.
  */
 import { createHash } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
@@ -327,12 +329,13 @@ export function classifyGroup(members: EntityPage[], carriers: EntityScan["carri
 
 function rejectedChecker(rejections: readonly Rejection[]) {
   const bySlug = new Set(rejections.map((r) => `${r.source_id}\t${r.a_slug}\t${r.b_slug}`));
-  const prints = rejections.filter((r) => r.a_fingerprint && r.b_fingerprint).map((r) => [r.a_fingerprint!, r.b_fingerprint!] as const);
+  // A decision belongs to its source: it never hides a pair in another one.
+  const prints = new Set(rejections.filter((r) => r.a_fingerprint && r.b_fingerprint)
+    .flatMap((r) => [`${r.source_id}\t${r.a_fingerprint}\t${r.b_fingerprint}`, `${r.source_id}\t${r.b_fingerprint}\t${r.a_fingerprint}`]));
   return (a: EntityPage, b: EntityPage): boolean => {
     const [x, y] = cmp(a.slug, b.slug) <= 0 ? [a, b] : [b, a];
     if (bySlug.has(`${x.source_id}\t${x.slug}\t${y.slug}`)) return true;
-    if (!a.fingerprint || !b.fingerprint) return false;
-    return prints.some(([p, q]) => (p === a.fingerprint && q === b.fingerprint) || (p === b.fingerprint && q === a.fingerprint));
+    return !!a.fingerprint && !!b.fingerprint && prints.has(`${a.source_id}\t${a.fingerprint}\t${b.fingerprint}`);
   };
 }
 
@@ -347,15 +350,20 @@ export function findDuplicateGroups(scan: EntityScan, rejections: readonly Rejec
     for (const [kind, members] of byKind) {
       if (members.length < 2 || (opts.kind && opts.kind !== kind)) continue;
       const sorted = [...members].sort((a, b) => cmp(a.slug, b.slug));
-      const setKey = `${sorted[0]!.source_id}\n${sorted.map((m) => m.slug).join("\n")}`;
-      if (seen.has(setKey)) continue;
-      seen.add(setKey);
-      if (sorted.some((a, i) => sorted.slice(i + 1).some((b) => rejected(a, b)))) continue;
-      const { cls, evidence } = classifyGroup(sorted, scan.carriers);
-      groups.push({
-        id: `dedupe/${createHash("sha256").update(setKey).digest("hex").slice(0, 16)}`,
-        source_id: sorted[0]!.source_id, kind, class: cls, members: sorted.map((m) => m.slug), evidence,
-      });
+      // A rejected pair inside a larger group leaves its other pairs to be judged one by one.
+      const sets = sorted.some((a, i) => sorted.slice(i + 1).some((b) => rejected(a, b)))
+        ? sorted.flatMap((a, i) => sorted.slice(i + 1).filter((b) => !rejected(a, b)).map((b) => [a, b]))
+        : [sorted];
+      for (const set of sets) {
+        const setKey = `${set[0]!.source_id}\n${set.map((m) => m.slug).join("\n")}`;
+        if (seen.has(setKey)) continue;
+        seen.add(setKey);
+        const { cls, evidence } = classifyGroup(set, scan.carriers);
+        groups.push({
+          id: `dedupe/${createHash("sha256").update(setKey).digest("hex").slice(0, 16)}`,
+          source_id: set[0]!.source_id, kind, class: cls, members: set.map((m) => m.slug), evidence,
+        });
+      }
     }
   }
   const rank: Record<DuplicateClass, number> = { clean: 0, likely: 1, conflict: 2 };

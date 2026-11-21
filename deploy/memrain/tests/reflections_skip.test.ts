@@ -95,6 +95,16 @@ describe("reflections skip", () => {
     expect(fn.prompts).toHaveLength(2);
   });
 
+  it("backs off when no entry of the array is usable", async () => {
+    await seed("notes/a", BODY);
+    const fn = scripted([JSON.stringify([{ topic_slug: "x", title: "T", body: "B", evidence: ["notes/invented"] }])]);
+    await reflectionsPhase(storage, { sonnetFn: fn, modelId: MODEL });
+    expect(fn.prompts).toHaveLength(1);
+    expect(await parkedKinds()).toEqual(["unparseable"]);
+    await reflectionsPhase(storage, { sonnetFn: fn, modelId: MODEL });
+    expect(fn.prompts).toHaveLength(1);
+  });
+
   it("re-opens a parked transcript once it is edited", async () => {
     await seed("notes/a", BODY);
     const fn = scripted(["[]"]);
