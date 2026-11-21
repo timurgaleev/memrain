@@ -69,6 +69,8 @@ const PAGE_COLUMNS: Record<string, Disposition> = {
   "chat_messages.saved_slug": { kind: "exempt", reason: "names the page a chat answer was saved as; the answer is the owner's own record and outlives a purge of that page" },
   "retrieval_feedback.slug": { kind: "cascade" },
   "retrieval_weights.slug": { kind: "cascade" },
+  "entity_dedupe_rejections.a_slug": { kind: "exempt", reason: "the owner's decision that two pages are different entities; it names slugs and fingerprints only, and keeps a page re-created on the slug from being proposed as that same pair again" },
+  "entity_dedupe_rejections.b_slug": { kind: "exempt", reason: "the second page of a rejected pair, kept for the same reason as a_slug" },
   "connector_items.page_slug": { kind: "exempt", reason: "the sync's record of which provider item a page came from; it outlives a page the owner purged so the next run does not recreate it, and goes with its account by cascade" },
 };
 
@@ -89,6 +91,7 @@ const SOURCE_TABLES: Record<string, Disposition> = {
   "write_gate_receipts": { kind: "cascade" },
   "write_gate_row_holds": { kind: "cascade" },
   "trust_proposals": { kind: "cascade" },
+  "entity_dedupe_rejections": { kind: "cascade" },
   "secret_store": { kind: "cascade" },
   "notifications": { kind: "cascade" },
   "open_loops": { kind: "cascade" },

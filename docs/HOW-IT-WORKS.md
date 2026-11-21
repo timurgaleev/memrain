@@ -151,6 +151,17 @@ reasons — and neither is "chatting with the user":
   retired when a newer one lands. You can also *declare* facts yourself in a
   `## Facts` block on a page — those claims are yours, and the brain won't quietly
   drop them even as it prunes its own.
+- **Duplicate people and companies** — `memrain dedupe --preview` lists person
+  and company pages in one source that share an email, phone, X handle,
+  LinkedIn, GitHub, a company domain or a declared id (`--id-field` names more),
+  each group classed `clean`, `likely` or `conflict` with the key types behind
+  it, never their values. It only reads, spends nothing and is a local operator
+  command. A value more than five pages carry, a role mailbox (`info@`) on a
+  person and a free-mail domain on a company are not counted. Nothing merges on
+  its own: `memrain dedupe confirm <a> <b>` folds `a` into `b` with the same
+  merge as `memrain merge`, for a pair that shares a key and is not a conflict;
+  `memrain dedupe reject <a> <b>` records the two as different, and the pair is
+  not proposed again, even after a rename.
 - **Reflections, then patterns** — over your recent sessions the brain writes short
   **reflections** (what happened, what was decided), then makes a second pass that
   reads across many reflections and surfaces the **patterns** — themes that keep

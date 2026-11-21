@@ -27,6 +27,7 @@ import { runEvalProbe } from "./commands/eval-probe.ts";
 import { runBenchCli, isBenchFamilySelector } from "./commands/bench.ts";
 import { runBacklinks } from "./commands/backlinks.ts";
 import { runMerge } from "./commands/merge.ts";
+import { runDedupe } from "./commands/dedupe.ts";
 import { runExtract } from "./commands/extract.ts";
 import { runExtractConversationFactsCli } from "./commands/extract-conversation-facts.ts";
 import { runThinkCli } from "./commands/think.ts";
@@ -131,6 +132,10 @@ function printUsage(): void {
   console.log("  erase chat --owner KEY [--apply]  preview, then delete one owner's chat threads");
   console.log("                               preview explicit database erasure of forgotten facts/deleted pages");
   console.log("  aliases suggest [--source ID] [--limit N] [--json]  preview undeclared name aliases");
+  console.log("  dedupe [--preview] [--json] [--source ID] [--kind person|company] [--id-field F,G]");
+  console.log("                               read-only: person/company pages sharing an email, phone, handle, LinkedIn, GitHub, domain or id");
+  console.log("  dedupe reject <a> <b> [--source ID]   record two pages as different; never proposed again");
+  console.log("  dedupe confirm <a> <b> [--source ID]  fold a into b (memrain merge) when they share a key and are not a conflict");
   console.log("  models [--probe] [--max-cost-usd N] [--json]  resolved chat models and registered prices");
   console.log("  engine status [--probe] [--json]  inspect engine config; optionally test one connection");
   console.log("  init --pglite                initialize ~/.memrain/ + PGLite db");
@@ -892,6 +897,18 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (writtenBy) opts.writtenBy = writtenBy;
       await runMerge(opts);
       return 0;
+    }
+    case "dedupe": {
+      const opts: Parameters<typeof runDedupe>[0] = {
+        sub: positional[0] ?? "", args: positional.slice(1), json: flags.has("--json"), preview: flags.has("--preview"),
+      };
+      const src = values.get("--source");
+      if (src) opts.sourceId = src;
+      const kind = values.get("--kind");
+      if (kind) opts.kind = kind;
+      const idFields = values.get("--id-field");
+      if (idFields) opts.idFields = idFields;
+      return await runDedupe(opts);
     }
     case "salience": {
       const typeStr = values.get("--type");

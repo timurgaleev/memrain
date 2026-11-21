@@ -41,6 +41,7 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "bench": bare,
   "backlinks": free,
   "merge": free,
+  "dedupe": subs("preview", "reject", "confirm"),
   "rename": free,
   "aliases": subs("suggest"),
   "models": bare,
