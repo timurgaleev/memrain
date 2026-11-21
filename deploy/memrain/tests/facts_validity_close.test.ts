@@ -15,10 +15,16 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     ["close", "2025-01-01", null, "2025-03-01", "2025-03-01"],
     ["tighten", "2025-01-01", "2025-04-01", "2025-03-01", "2025-03-01"],
     ["keep-earlier-end", "2025-01-01", "2025-02-01", "2025-03-01", "2025-02-01"],
-    ["same-day", "2025-03-01", null, "2025-03-01", null],
-    ["backdated", "2025-04-01", null, "2025-03-01", null],
-    ["undated-old", null, null, "2025-03-01", null],
-    ["undated-new", "2025-01-01", null, null, null],
+    // A replacement outside the retired window ends it now (or at its earlier
+    // stored end), never before its own start: it is never left open.
+    ["same-day", "2025-03-01", null, "2025-03-01", "today"],
+    ["backdated", "2025-04-01", null, "2025-03-01", "today"],
+    ["undated-old", null, null, "2025-03-01", "2025-03-01"],
+    ["undated-new", "2025-01-01", null, null, "today"],
+    ["future-replacement", "2025-01-01", null, "2999-01-01", "today"],
+    ["future-retired", "2999-01-01", null, null, "2999-01-01"],
+    // An interval stored inverted (end before start) is never moved later.
+    ["inverted-stored-end", "2025-04-01", "2025-02-01", null, "2025-02-01"],
   ] as const) it(`explicit replacement ${label}`, async () => {
     const entity_slug = `notes/${label}`;
     const old = await addFact(db.storage, { entity_slug, fact: "Old claim", ...(start ? { valid_from: start } : {}) });
@@ -26,7 +32,8 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     const fresh = await addFact(db.storage, { entity_slug, fact: "New claim", ...(replacement ? { valid_from: replacement } : {}) });
     expect(await replaceFact(db.storage.engine(), old.id!, fresh.id!, ["default"])).toEqual({ replaced: true });
     const row = (await listFacts(db.storage, entity_slug, { include_forgotten: true, decay: false })).find(f => f.id === old.id)!;
-    expect(row.valid_until).toBe(expected);
+    const today = (await db.storage.engine().query<{ d: string }>("SELECT CURRENT_DATE::text AS d")).rows[0]!.d;
+    expect(row.valid_until).toBe(expected === "today" ? today : expected);
     expect(row.superseded_by).toBe(fresh.id!);
     expect(row.forgotten_at).not.toBeNull();
   });

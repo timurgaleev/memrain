@@ -14,6 +14,7 @@
  *   (e) novel dimension (not a seed/alias)                   → quarantined
  */
 import { ownerOnlyLineageSql } from "./owner-only.ts";
+import { supersededValidUntilSql } from "./fact-validity.ts";
 import type { Storage } from "./storage.ts";
 import { guardFields } from "./secret-scan.ts";
 import {
@@ -179,7 +180,7 @@ export async function mergeOntologyFact(
     if (current && status === "active") {
       await tx.query(
         `UPDATE entity_facts
-            SET valid_until = COALESCE($2::date, CURRENT_DATE), superseded_by = $3
+            SET valid_until = ${supersededValidUntilSql(2)}, superseded_by = $3
           WHERE id = $1 AND valid_until IS NULL`,
         [current.id, validFrom, newId],
       );
