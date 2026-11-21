@@ -115,6 +115,7 @@ describe("checkSecretExposure", () => {
   describe("a rule change that reaches agent transcripts only", () => {
     const previous = SECRET_SCAN_VERSION - 1;
     it("counts a clean transcript-lane audit under the current rules as complete", async () => {
+      expect([...TRANSCRIPT_ONLY_SCAN_VERSIONS].sort()).toEqual([7, 8]);
       expect(TRANSCRIPT_ONLY_SCAN_VERSIONS.has(SECRET_SCAN_VERSION)).toBe(true);
       await run({ version: previous });
       await run({ version: SECRET_SCAN_VERSION, kinds: ["pages"], lane: "transcripts", applied: true, hits: 2 });
@@ -140,11 +141,11 @@ describe("checkSecretExposure", () => {
     });
 
     it("does not stretch over a rule change that reaches every store", async () => {
-      await run({ version: previous - 1 });
+      await run({ version: 5 });
       await run({ version: SECRET_SCAN_VERSION, kinds: ["pages"], lane: "transcripts", applied: true });
       const r = await checkSecretExposure(storage.engine(), NOW);
       expect(r.status).toBe("warn");
-      expect(r.detail).toContain(`scanner v${previous - 1}`);
+      expect(r.detail).toContain("scanner v5");
     });
   });
 });
