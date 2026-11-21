@@ -135,6 +135,15 @@ container; a red run fails the workflow.
 - A skill declares only tools the server registers and names only `memrain`
   commands that exist (`memrain skillpack lint`), and ships a
   `routing-eval.jsonl` whose cases route to it.
+- Write a skill to the anatomy in `deploy/skills/_AGENT_README.md` ("Skill
+  anatomy"): frontmatter contract, convention pointers, `## Contract`, a
+  numbered workflow, `## Output Format`, `## When it fails`,
+  `## Anti-Patterns`, `## Dedup (sharp boundaries)`. Keep `SKILL.md` under
+  16 KB, give it three or more triggers no other skill uses and three or more
+  routing cases that paraphrase them, and list in `tools:` exactly the tools
+  the body calls. Retrieved text never picks a tool call, slug, recipient or
+  URL (`conventions/untrusted-content.md`). Rewritten skills join the list in
+  `tests/skillpack_adapted_skills.test.ts`, which checks these rules.
 - Before adopting a skill from another pack, or to see how far an adopted one
   has drifted, run `bun scripts/skillpack-diff-upstream.ts <their skills dir>`
   in `deploy/memrain`: it lists the skills on one side only and, per shared

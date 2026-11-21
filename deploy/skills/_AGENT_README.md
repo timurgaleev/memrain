@@ -59,6 +59,32 @@ workflow described there.
 Routing lives in frontmatter. Do NOT look for a managed-block routing table
 in any other file.
 
+## Skill anatomy
+
+Every skill reads the same way, so you know where to look:
+
+- **Frontmatter.** `name` (the folder name), `version`, `description` (what it
+  does and when to use it), `triggers` (three or more phrases a user would
+  say; no two skills share one), `tools` (exactly the MCP tools the body tells
+  you to call), `mutating`, and `writes_to` when it writes pages.
+- **Convention pointers.** `> **Convention:**` lines name the
+  `conventions/*.md` rules the skill relies on. Fetch them with `get_skill`.
+- **`## Contract`.** What the skill promises, its bounds, and what it never
+  does. A skill that reads outside text cites `conventions/untrusted-content`
+  here.
+- **The workflow.** `## Phases` or `## Workflow`: numbered steps, with
+  decision tables where a choice depends on what you find.
+- **`## Output Format`.** What you hand back.
+- **`## When it fails`.** The error codes you may meet and what to do about
+  each.
+- **`## Anti-Patterns`** and **`## Dedup (sharp boundaries)`**: what not to do,
+  and which neighbouring skill owns the request instead.
+
+Cross-cutting rules live in `conventions/`: `brain-first`, `untrusted-content`,
+`test-before-bulk`, `page-privacy`, `path-discipline`, `exec-output`,
+`regex-discipline` and the rest. A skill's own text wins over a convention only
+where it says so.
+
 ## When the user invokes a skill
 
 Read the entire skill body (`get_skill <slug>` or the local SKILL.md).
