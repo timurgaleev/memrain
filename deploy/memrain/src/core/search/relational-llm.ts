@@ -29,6 +29,7 @@
 import type { Storage } from "../storage.ts";
 import { KNOWN_LINK_TYPES } from "../links.ts";
 import {
+  chainRelational,
   fanoutRelational,
   type RelationalQuery,
   type RelationalKind,
@@ -45,8 +46,9 @@ import { sanitizeForPrompt } from "../llm/sanitize.ts";
 import { BudgetTracker, BudgetExhausted } from "../budget.ts";
 import { callWithTruncationRetry } from "../llm/truncation.ts";
 import { parseModelJson } from "../llm/json-output.ts";
+import { CHAIN_LINK_TYPES, validateChainHops, type ChainHop } from "./relational-plan.ts";
 
-export const RELATIONAL_LLM_PROMPT_VERSION = "v1-sonnet";
+export const RELATIONAL_LLM_PROMPT_VERSION = "v2-sonnet";
 
 const DEFAULT_BUDGET_USD = 1.0;
 const DEFAULT_OUTPUT_TOKENS = 300;
@@ -73,6 +75,8 @@ export interface RelationalLlmOptions {
   depth?: number;
   /** Tenant scope: restrict edge fanout to these source_ids. */
   sourceIds?: string[];
+  /** Non-operator caller: answers and chain hops pass the remote page fence. */
+  remote?: boolean;
   /** USD ceiling for the run (default 1.0; MEMRAIN_RELATIONAL_LLM_BUDGET_USD overrides). */
   maxBudgetUsd?: number;
   /** Sonnet output-token cap (default 300 — the JSON intent is tiny). */
@@ -93,8 +97,8 @@ export interface RelationalLlmMeta {
   reason?: string;
   /** True when the model output validated into a RelationalQuery. */
   parsed: boolean;
-  /** The extracted archetype, or null when nothing validated. */
-  kind: RelationalKind | null;
+  /** The extracted archetype ("chain" for a multi-hop plan), or null when nothing validated. */
+  kind: RelationalKind | "chain" | null;
   /** How many seeds resolved to a real page. */
   seedsResolved: number;
   /** Candidate slugs returned. */
@@ -123,6 +127,10 @@ Archetypes:
 
 linkTypes MUST be null OR drawn ONLY from this closed set — never invent a relation type:
 ${KNOWN_LINK_TYPES.join(", ")}
+
+A question that chains two or three relations from ONE named entity ("who founded the companies alice invested in") is instead:
+{ "kind": "chain", "seeds": [the one entity], "hops": [{"link_type": ..., "toward": "object" | "subject"}, ...] }
+hops run from the named entity outward, 1-3 of them. link_type is one of: ${CHAIN_LINK_TYPES.join(", ")}. "toward": "object" walks subject -> object (investor -> company), "subject" walks object -> subject (company -> founder).
 
 seeds must be the literal entity names from the question (<= 80 chars each), with no leading articles and no surrounding quotes. If the question is NOT a relational/edge question, output {}.
 
@@ -216,6 +224,21 @@ export function parseRelationalLlmResponse(raw: string): RelationalQuery | null 
   };
 }
 
+/**
+ * A model-supplied chain plan, or null when the output is not a valid chain
+ * (then {@link parseRelationalLlmResponse} reads it as a single-hop intent).
+ */
+export function parseRelationalLlmChain(raw: string): { anchor: string; hops: ChainHop[] } | null {
+  const parsed = parseModelJson(raw, "{");
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const o = parsed as Record<string, unknown>;
+  if (o.kind !== "chain" || !Array.isArray(o.seeds)) return null;
+  const seed = typeof o.seeds[0] === "string" ? o.seeds[0].trim().replace(/^["'`]|["'`]$/g, "").trim() : "";
+  if (seed.length === 0 || seed.length > MAX_SEED_CHARS) return null;
+  const hops = validateChainHops(o.hops);
+  return hops ? { anchor: seed, hops } : null;
+}
+
 function liveEnabled(): boolean {
   const v = (process.env["MEMRAIN_RELATIONAL_LLM"] ?? "").trim().toLowerCase();
   return v === "1" || v === "true";
@@ -284,6 +307,7 @@ export async function relationalRecallLlm(
   }
 
   let parsed: RelationalQuery | null;
+  let chain: { anchor: string; hops: ChainHop[] } | null = null;
   try {
     const call = await budget.track(() => callWithTruncationRetry(
       "relational-llm",
@@ -300,27 +324,32 @@ export async function relationalRecallLlm(
       else throw e;
     }
     meta.spentUsd = Number(budget.totalSpent().toFixed(6));
-    parsed = parseRelationalLlmResponse(resp.text);
+    chain = parseRelationalLlmChain(resp.text);
+    parsed = chain ? null : parseRelationalLlmResponse(resp.text);
   } catch (e) {
     budget.release(hold);
     return finish([], `extraction call failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  if (!parsed) return finish([], "model output did not validate");
+  if (!parsed && !chain) return finish([], "model output did not validate");
   meta.parsed = true;
-  meta.kind = parsed.kind;
+  meta.kind = chain ? "chain" : parsed!.kind;
 
-  // Reuse the SAME deterministic fanout the regex arm runs. Fail-open: a fanout
-  // fault returns an empty arm, never breaking the caller.
+  // Reuse the SAME deterministic fanout / chain walk the deterministic arm
+  // runs. Fail-open: a fault returns an empty arm, never breaking the caller.
   try {
-    const list = await fanoutRelational(storage, parsed, {
+    const fanoutOpts = {
       limit: opts.limit,
       depth: opts.depth,
       sourceIds: opts.sourceIds,
-      onSeedsResolved: (n) => {
+      ...(opts.remote ? { remote: true } : {}),
+      onSeedsResolved: (n: number) => {
         meta.seedsResolved = n;
       },
-    });
+    };
+    const list = chain
+      ? await chainRelational(storage, { anchor: chain.anchor, hops: chain.hops, excludeAnchor: false }, fanoutOpts)
+      : await fanoutRelational(storage, parsed!, fanoutOpts);
     return finish(list);
   } catch (err) {
     console.error(

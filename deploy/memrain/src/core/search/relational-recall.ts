@@ -22,10 +22,13 @@
  * a standalone, additive MCP read tool (`relational_recall`), wired OUTSIDE
  * the hybridSearch hot path, so a fault here can never break search.
  *
- * Scope (v1, deliberate). Single-source, single-seed for the typed archetypes;
- * `connects` resolves two seeds and intersects their reachable sets. memrain has
- * no `introduced`/`knows`-style edge for "who introduced me to X", so that
- * archetype walks type-agnostically (any edge touching the seed is the signal).
+ * Scope. Single-seed for the typed archetypes; `connects` resolves two seeds
+ * and intersects their reachable sets. memrain has no `introduced`/`knows`-style
+ * edge for "who introduced me to X", so that archetype walks type-agnostically
+ * (any edge touching the seed is the signal). A question that chains two or
+ * three relations ("who founded the companies alice invested in") is planned
+ * first (relational-plan.ts) and walked hop by hop (relational-chain.ts); it
+ * never falls back to a one-hop guess.
  *
  * Tested in tests/relational_recall.test.ts.
  */
@@ -36,6 +39,8 @@ import { KNOWN_LINK_TYPES, graphNeighbors, traverseGraph } from "../links.ts";
 import { makeSlugResolver } from "../slug-canonicalize.ts";
 import { visibilityClause } from "../visibility.ts";
 import { andSourceScope } from "../source-scope.ts";
+import { parseRelationalPlan, relationalChainEnabled, type RelationalPlan } from "./relational-plan.ts";
+import { chainNodeFenceSql, runRelationalChain, type ChainStatus } from "./relational-chain.ts";
 
 export type RelationalKind = "who_rel" | "who_at" | "connects" | "intro";
 export type RelationalDirection = "outbound" | "inbound" | "both";
@@ -60,6 +65,8 @@ export interface RelationalRecallResult {
   relation: string;
   /** Hop distance from the seed (1 for the typed single-hop archetypes). */
   depth: number;
+  /** Multi-hop chains only: the best path, anchor first, this slug last. */
+  path?: string[];
 }
 
 export interface RelationalRecallOptions {
@@ -70,6 +77,8 @@ export interface RelationalRecallOptions {
   depth?: number;
   /** Tenant scope: restrict edge fanout to these source_ids. `undefined` => unscoped; `[]` => nothing. */
   sourceIds?: string[];
+  /** Non-operator caller: diary/journal pages and owner-only lineage never surface or carry a walk. */
+  remote?: boolean;
   /** Receives the parsed intent + outcome for telemetry. Never throws upstream. */
   onMeta?: (meta: RelationalRecallMeta) => void;
 }
@@ -77,14 +86,16 @@ export interface RelationalRecallOptions {
 export interface RelationalRecallMeta {
   /** True when the parse matched AND at least one candidate was found. */
   fired: boolean;
-  /** The matched archetype, or null when the query isn't relational. */
-  kind: RelationalKind | null;
+  /** The matched archetype ("chain" for a planned multi-hop question), or null when the query isn't relational. */
+  kind: RelationalKind | "chain" | null;
   /** How many seeds resolved to a real page. */
   seeds_resolved: number;
   /** Candidate slugs returned. */
   candidates: number;
   /** True when fanout threw and the arm failed open. */
   errored: boolean;
+  /** Planned multi-hop questions only: how the walk ended. */
+  chain_status?: ChainStatus;
 }
 
 // Bounded lazy seed capture: 1–80 chars, so the trailing anchor — not
@@ -328,6 +339,8 @@ export interface FanoutOptions {
   depth?: number;
   /** Tenant scope: restrict edge fanout to these source_ids. `undefined` => unscoped; `[]` => nothing. */
   sourceIds?: string[];
+  /** Non-operator caller: answers pass the same page fence a chain hop does. */
+  remote?: boolean;
   /** Receives how many seeds resolved to a real page (telemetry). */
   onSeedsResolved?: (n: number) => void;
 }
@@ -335,15 +348,57 @@ export interface FanoutOptions {
 const hasPageFilters = (f: PageFilters | undefined): boolean => Boolean(f?.types?.length || f?.slugPrefix || f?.minTrust);
 
 async function eligibleRelationalSlugs(storage: Storage, slugs: string[], opts: FanoutOptions): Promise<Set<string>> {
-  if (!hasPageFilters(opts.filters)) return new Set(slugs);
   if (slugs.length === 0) return new Set();
+  const fenced = opts.remote ? await remoteVisibleSlugs(storage, slugs, opts.sourceIds) : new Set(slugs);
+  if (!hasPageFilters(opts.filters)) return fenced;
   const params: unknown[] = [slugs];
   const scope = andSourceScope("p.source_id", opts.sourceIds, params);
   const filter = pageRowFilterClauses(params, opts.filters);
   const r = await storage.engine().query<{ slug: string }>(
     `SELECT p.slug FROM pages p WHERE p.slug = ANY($1::text[]) AND p.deleted_at IS NULL${scope}${filter}`, params,
   );
-  return new Set(r.rows.map(r => r.slug));
+  return new Set(r.rows.map(r => r.slug).filter(slug => fenced.has(slug)));
+}
+
+/** The slugs a remote caller may be handed: the chain node fence, applied to answers of every arm. */
+async function remoteVisibleSlugs(storage: Storage, slugs: string[], sourceIds: string[] | undefined): Promise<Set<string>> {
+  const params: unknown[] = [slugs];
+  const fence = chainNodeFenceSql("u.slug", { remote: true, ...(sourceIds !== undefined ? { sourceIds } : {}) }, params);
+  const r = await storage.engine().query<{ slug: string }>(
+    `SELECT u.slug FROM unnest($1::text[]) AS u(slug)
+      WHERE u.slug NOT LIKE 'life/diary/%' AND ${fence}`,
+    params,
+  );
+  return new Set(r.rows.map(row => row.slug));
+}
+
+
+/**
+ * Run a planned multi-hop question: resolve its anchor through the scoped
+ * resolver (an unresolved anchor answers nothing), walk the hops, then apply
+ * the caller's page filters to the answers. Does NOT catch.
+ */
+export async function chainRelational(
+  storage: Storage,
+  plan: Pick<RelationalPlan, "anchor" | "hops" | "excludeAnchor">,
+  opts: FanoutOptions & { onStatus?: (s: ChainStatus) => void } = {},
+): Promise<RelationalRecallResult[]> {
+  const limit = clampLimit(opts.limit);
+  const anchor = await resolveSeed(storage, plan.anchor, opts.sourceIds);
+  if (!anchor) return [];
+  opts.onSeedsResolved?.(1);
+  const minTrust = opts.filters?.minTrust;
+  const run = await runRelationalChain(storage, anchor, plan, {
+    ...(opts.sourceIds !== undefined ? { sourceIds: opts.sourceIds } : {}),
+    ...(opts.remote ? { remote: true } : {}),
+    ...(minTrust ? { minTrust } : {}),
+  });
+  opts.onStatus?.(run.status);
+  const eligible = await eligibleRelationalSlugs(storage, run.answers.map(a => a.slug), opts);
+  return run.answers
+    .filter(a => eligible.has(a.slug))
+    .slice(0, limit)
+    .map(a => ({ slug: a.slug, relation: a.relation, depth: a.path.length - 1, path: a.path }));
 }
 
 /**
@@ -374,8 +429,8 @@ export async function fanoutRelational(
     if (!a || !b) return [];
     opts.onSeedsResolved?.(2);
     const [fromA, fromB] = await Promise.all([
-      traverseGraph(storage, a, { direction: "both", maxDepth: depth, limit: 1000, sourceIds }),
-      traverseGraph(storage, b, { direction: "both", maxDepth: depth, limit: 1000, sourceIds }),
+      traverseGraph(storage, a, { direction: "both", maxDepth: depth, limit: 1000, sourceIds, excludeDiary: opts.remote }),
+      traverseGraph(storage, b, { direction: "both", maxDepth: depth, limit: 1000, sourceIds, excludeDiary: opts.remote }),
     ]);
     const depthB = new Map(fromB.map((h) => [h.slug, h.depth]));
     const endpoints = new Set([a, b]);
@@ -398,8 +453,9 @@ export async function fanoutRelational(
     const hits = await traverseGraph(storage, seedSlug, {
       direction: parsed.direction,
       maxDepth: depth,
-      limit: hasPageFilters(opts.filters) ? 1000 : limit,
+      limit: hasPageFilters(opts.filters) || opts.remote ? 1000 : limit,
       sourceIds,
+      excludeDiary: opts.remote,
     });
     const eligible = await eligibleRelationalSlugs(storage, hits.map(h => h.slug), opts);
     return hits.filter(h => eligible.has(h.slug)).slice(0, limit).map((h) => ({ slug: h.slug, relation: "related_to", depth: h.depth }));
@@ -415,6 +471,7 @@ export async function fanoutRelational(
       direction: parsed.direction,
       limit: 1000,
       sourceIds,
+      excludeDiary: opts.remote,
     });
     const eligible = await eligibleRelationalSlugs(storage, rows.map(row => otherEnd(row, seedSlug)), opts);
     for (const row of rows) {
@@ -448,20 +505,27 @@ export async function relationalRecall(
     return list;
   };
 
-  const parsed = parseRelationalQuery(query);
-  if (!parsed) return finish([]);
-  meta.kind = parsed.kind;
+  const fanoutOpts: FanoutOptions = {
+    limit: opts.limit,
+    depth: opts.depth,
+    sourceIds: opts.sourceIds,
+    filters: opts.filters,
+    ...(opts.remote ? { remote: true } : {}),
+    onSeedsResolved: (n) => {
+      meta.seeds_resolved = n;
+    },
+  };
+  // A planned multi-relation question runs as a chain and never falls back to
+  // a one-hop guess; anything the planner refuses stays on the regex parser.
+  const planned = relationalChainEnabled() ? parseRelationalPlan(query) : null;
+  const parsed = planned?.kind === "plan" ? null : parseRelationalQuery(query);
+  if (planned?.kind !== "plan" && !parsed) return finish([]);
+  meta.kind = planned?.kind === "plan" ? "chain" : parsed!.kind;
 
   try {
-    const list = await fanoutRelational(storage, parsed, {
-      limit: opts.limit,
-      depth: opts.depth,
-      sourceIds: opts.sourceIds,
-      filters: opts.filters,
-      onSeedsResolved: (n) => {
-        meta.seeds_resolved = n;
-      },
-    });
+    const list = planned?.kind === "plan"
+      ? await chainRelational(storage, planned.plan, { ...fanoutOpts, onStatus: (s) => { meta.chain_status = s; } })
+      : await fanoutRelational(storage, parsed!, fanoutOpts);
     return finish(list);
   } catch (err) {
     // Fail-open: a fanout fault returns an empty arm, never breaking the caller.

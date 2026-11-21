@@ -91,6 +91,7 @@ import { expandAnchors } from "./structural-expand.ts";
 import { cosineReScore } from "./cosine-rescore.ts";
 import type { ChunkFilters } from "./filters.ts";
 import { relationalArmChunkIds } from "./relational-recall.ts";
+import { ENTITY_ANCHOR_WEIGHT, entityAnchorChunkIds } from "./entity-anchor.ts";
 import {
   mergeExplain,
   finalizeExplain,
@@ -970,6 +971,7 @@ async function hybridSearchUnbounded(
     }) : Promise.resolve<string[]>([]),
     relationalArmOn ? relationalArmChunkIds(storage, trimmed, {
       ...(opts.sourceIds !== undefined ? { sourceIds: [...opts.sourceIds] } : {}), limit: fanout, filters: chunkFilters,
+      ...(opts.remote ? { remote: true } : {}),
     }) : Promise.resolve<string[]>([]),
     // 3c. Alias fan-out: fail-open, an alias that cannot be resolved or searched adds no list.
     aliasFanoutEnabled()
@@ -977,6 +979,10 @@ async function hybridSearchUnbounded(
           .then((fan) => Promise.all(fan.map((f) => keywordSearch(engine, f.query, fanout, keywordOpts).catch(() => [] as string[]))))
           .catch(() => [] as string[][])
       : Promise.resolve<string[][]>([]),
+    // 3e. Entity anchor (opt-in, MEMRAIN_ENTITY_ANCHOR=1): fail-open inside the helper.
+    entityAnchorChunkIds(engine, trimmed, {
+      sourceIds: opts.sourceIds, filters: chunkFilters, ...(opts.remote ? { remote: true } : {}),
+    }),
   ]);
   const deadline = makeQueryEmbedDeadline();
   const dl = opts.signal
@@ -1045,11 +1051,12 @@ async function hybridSearchUnbounded(
   opts.signal?.throwIfAborted();
   if (vectorResult.status === "rejected") throw vectorResult.reason;
   if (lexicalResult.status === "rejected") throw lexicalResult.reason;
-  const [keywordResult, titleResult, relationalResult, aliasResult] = lexicalResult.value;
+  const [keywordResult, titleResult, relationalResult, aliasResult, anchorResult] = lexicalResult.value;
   if (keywordResult.status === "rejected") throw keywordResult.reason;
   if (titleResult.status === "rejected") throw titleResult.reason;
   if (relationalResult.status === "rejected") throw relationalResult.reason;
   if (aliasResult.status === "rejected") throw aliasResult.reason;
+  if (anchorResult.status === "rejected") throw anchorResult.reason;
   const aliasLists = aliasResult.value.filter((list) => list.length > 0);
   const vectorIds = vectorResult.value;
   const primaryKeywordRows = keywordResult.value;
@@ -1132,6 +1139,11 @@ async function hybridSearchUnbounded(
     lists.push(list);
     listArms.push("alias");
     rrfWeights.push(aliasWeight);
+  }
+  if (anchorResult.value.length > 0) {
+    lists.push(anchorResult.value);
+    listArms.push("entity_anchor");
+    rrfWeights.push(ENTITY_ANCHOR_WEIGHT);
   }
   const trace = opts.traceTarget;
   if (trace) {

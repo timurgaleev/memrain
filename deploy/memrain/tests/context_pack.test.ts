@@ -394,6 +394,8 @@ for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) descri
     await db.storage.engine().query(`INSERT INTO documents(id,source_path,title,source_id,frontmatter)
       VALUES('core-held-doc','page://me/held','Held','default','{"quarantine":true}'::jsonb)`);
     await putPage(db.storage, { slug: "projects/acme", type: "note", title: "Acme", markdown_body: "a" });
+    await putPage(db.storage, { slug: "me/log", type: "note", title: "Log", markdown_body:
+      "Works on Memrain.\n\n## Timeline\n- 2026-11-01 \u2014 SHIPPED_ROW\n### 2026-11-02 \u2014 HEADER_ROW\n\n## Notes\nKeep it short.\n```\n## Timeline\n```" });
   });
   afterAll(async () => {
     await db.close();
@@ -420,6 +422,13 @@ for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) descri
     expect(p.core!.pages.reduce((n, c) => n + c.text.length, 0)).toBe(2000);
     expect(p.core!.truncated).toBe(true);
     expect(p.cards.map((c) => c.slug)).toEqual(["projects/acme"]);
+  });
+
+  it("renders the compiled truth without the timeline section", async () => {
+    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/log";
+    const p = await pack({ tokenBudget: 8000 });
+    expect(p.core!.pages).toEqual([{ slug: "me/log", title: "Log", text: "Works on Memrain.\n\n## Notes\nKeep it short.\n```\n## Timeline\n```" }]);
+    expect(p.core!.truncated).toBe(false);
   });
 
   it("leaves no trace of deleted, out-of-scope, fenced, quarantined or redacted core pages", async () => {

@@ -49,6 +49,8 @@ import { getNearDupThreshold, getMaxTypeRatio } from "./dedup.ts";
 import { getGraphSignalsFloorRatio } from "./graph-signals.ts";
 import { aliasHopEnabled } from "./alias-hop.ts";
 import { aliasFanoutEnabled } from "./alias-fanout.ts";
+import { entityAnchorEnabled } from "./entity-anchor.ts";
+import { relationalChainEnabled } from "./relational-plan.ts";
 import { resolveSearchMode } from "./mode.ts";
 import { rankFlagsSignature } from "./ranking-flags.ts";
 
@@ -152,7 +154,10 @@ const RANKING_VERSION = "10";
  *     env-level signature;
  *   - the MEMRAIN_RANK_* flags (ranking-flags.ts), appended only when one is
  *     on, so the all-off key is the key every existing cached row was stored
- *     under.
+ *     under;
+ *   - the entity anchor (`:ea=1`, only when on) and multi-hop relational chains
+ *     (`:rc=0`, only when turned off): either flip changes which pages fuse,
+ *     and the default keys stay those of the rows already stored.
  * NOTE: time-based recency (a hit ages between writes) still drifts the true
  * order within a cache lifetime — that is inherent to caching a wall-clock
  * ranking and is accepted by design (the cache is gated on the document
@@ -173,7 +178,7 @@ export function rankingSignature(): string {
     `mt=${getMaxTypeRatio()}`,
     `rw=${env["MEMRAIN_RERANK_WINDOW"] ?? ""}`,
   ].join(":");
-  return `${RANKING_VERSION}:tb=${getTitleBoost()}:rd=${recency}:nd=${getNearDupThreshold()}:gsf=${getGraphSignalsFloorRatio()}:ah=${aliasHopEnabled() ? 1 : 0}:af=${aliasFanoutEnabled() ? 1 : 0}:${knobs}${rankFlagsSignature()}`;
+  return `${RANKING_VERSION}:tb=${getTitleBoost()}:rd=${recency}:nd=${getNearDupThreshold()}:gsf=${getGraphSignalsFloorRatio()}:ah=${aliasHopEnabled() ? 1 : 0}:af=${aliasFanoutEnabled() ? 1 : 0}:${knobs}${rankFlagsSignature()}${entityAnchorEnabled() ? ":ea=1" : ""}${relationalChainEnabled() ? "" : ":rc=0"}`;
 }
 
 /**

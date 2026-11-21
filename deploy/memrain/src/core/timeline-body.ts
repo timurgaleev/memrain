@@ -109,6 +109,30 @@ function headingLevel(line: string): number {
   return next === undefined || next === " " || next === "\t" ? n : 0;
 }
 
+/**
+ * The page body without its `# Timeline` / `## Timeline` section: the section
+ * runs to the next heading of the same or a higher level. Headings inside a
+ * fenced code block are text, not structure. A body with no such section comes
+ * back unchanged.
+ */
+export function bodyWithoutTimeline(body: string): string {
+  const kept: string[] = [];
+  let fence: string | null = null;
+  let skipLevel = 0;
+  for (const line of body.split("\n")) {
+    const trimmed = line.trimStart();
+    const marker = trimmed.startsWith("```") ? "```" : trimmed.startsWith("~~~") ? "~~~" : null;
+    if (marker && (fence === null || fence === marker)) fence = fence === null ? marker : null;
+    else if (fence === null) {
+      const level = headingLevel(line.endsWith("\r") ? line.slice(0, -1) : line);
+      if (level > 0 && skipLevel > 0 && level <= skipLevel) skipLevel = 0;
+      if ((level === 1 || level === 2) && line.slice(level).trim().toLowerCase() === "timeline") skipLevel = level;
+    }
+    if (skipLevel === 0) kept.push(line);
+  }
+  return kept.join("\n");
+}
+
 interface CitationSpan {
   start: number;
   end: number; // exclusive, past the ']'

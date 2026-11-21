@@ -482,7 +482,7 @@ List a page's tags in lexical order. Empty list for an unknown or untagged page.
 
 Scope: read. Effect: read-only.
 
-Deterministic relational query — resolves a seed entity from a natural-language relationship question ('who does alice report to?', 'who works at acme', 'how is alice connected to bob') and fans out typed edges. Returns [{slug, relation, depth}]. No LLM.
+No-LLM relational query about a seed entity ('who works at acme', 'founders of companies alice invested in', up to 3 hops). Returns [{slug, relation, depth, path?}].
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -656,6 +656,7 @@ Hybrid retrieval with detail, salience/recency, date/code filters, offset and ad
 | `token_budget` | integer (1–200000) | no | Cap total returned content size (~chars/4 tokens). |
 | `adaptive_return` | boolean | no | Return a TIGHT intent-sized set instead of the full top-K (never empty when matches exist; first page only). |
 | `explain` | boolean | no | Stamp per-hit ranking attribution. Bypasses the query cache. |
+| `window` | integer (0–2) | no | Neighbour chunks per side of each hit. |
 | `refine` | string | no | LEGACY refinement: second term for the deterministic weighted-RRF blend. When set, only k/weights apply. |
 | `primary_weight` | number (≥ 0) | no | RRF weight for the primary query (refine mode). Default 1. |
 | `refine_weight` | number (≥ 0) | no | RRF weight for the refine term (refine mode). Default 1. |

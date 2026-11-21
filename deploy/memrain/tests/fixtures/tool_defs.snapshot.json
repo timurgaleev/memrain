@@ -1650,7 +1650,7 @@
   },
   {
     "name": "relational_recall",
-    "description": "Deterministic relational query — resolves a seed entity from a natural-language relationship question ('who does alice report to?', 'who works at acme', 'how is alice connected to bob') and fans out typed edges. Returns [{slug, relation, depth}]. No LLM.",
+    "description": "No-LLM relational query about a seed entity ('who works at acme', 'founders of companies alice invested in', up to 3 hops). Returns [{slug, relation, depth, path?}].",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2210,6 +2210,12 @@
         "explain": {
           "type": "boolean",
           "description": "Stamp per-hit ranking attribution. Bypasses the query cache."
+        },
+        "window": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Neighbour chunks per side of each hit."
         },
         "refine": {
           "type": "string",

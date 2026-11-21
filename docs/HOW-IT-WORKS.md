@@ -135,7 +135,10 @@ reasons — and neither is "chatting with the user":
 - **Graph rerank** (Sonnet): reorders the top hits using the knowledge-graph
   connections between pages — the most relevant, best-connected hit rises.
 - **Relational fallback** (Sonnet): kicks in only for relationship questions
-  ("who founded X") when plain hybrid search underperforms.
+  ("who founded X") that the deterministic parser cannot read. Questions that
+  chain two or three relations ("who founded the companies alice invested in")
+  are planned and walked hop by hop without a model; the fallback is never
+  paid for a question the planner already understood.
 
 **B. A knowledge layer, built in the background.**
 - **Synthesis** (`MEMRAIN_DREAM_SYNTHESIS`, Haiku): on quiet-hours ticks the brain

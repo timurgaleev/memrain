@@ -34,6 +34,7 @@ import { newerMentionsEnabled, readNewerMentions } from "./newer-mentions.ts";
 import { frameExternal, readExternalTrust, readTrustTiers, type ExternalTrust } from "../trust-frame.ts";
 import { meetsMinTrust, type TrustTier } from "../trust-tier.ts";
 import { contestedWith } from "../typed-conflicts.ts";
+import { bodyWithoutTimeline } from "../timeline-body.ts";
 
 export const CONTEXT_PACK_DEFAULT_ENTITIES = 5;
 export const CONTEXT_PACK_MAX_ENTITIES = 8;
@@ -347,7 +348,8 @@ interface CoreDraft {
 }
 
 /**
- * Live core pages the caller may read, cut to the character cap. A page that
+ * Live core pages the caller may read, cut to the character cap, each without
+ * its timeline section (the title rides in its own field). A page that
  * is deleted, outside the grant, fenced or quarantined is skipped without a
  * trace, and so is the whole block on the redacted (text-free) shape.
  */
@@ -374,7 +376,9 @@ async function readCore(
   const drafts: CoreDraft[] = [];
   for (const p of live) {
     if (!keptAt(opts.minTrust, tiers, p.slug)) continue;
-    const body = (p.markdown_body ?? "").trim();
+    // The compiled truth only: the dated log under `## Timeline` is history the
+    // timeline reads already serve, and it would eat the character cap first.
+    const body = bodyWithoutTimeline(p.markdown_body ?? "").trim();
     const text = body.slice(0, left);
     if (text.length < body.length) truncated = true;
     if (body.length > 0 && text.length === 0) continue;

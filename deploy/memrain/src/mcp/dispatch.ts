@@ -102,6 +102,7 @@ import { applyQuarantineVisibility, quarantineContent, redactQuarantinePage } fr
 import { type QuarantineVerdict, readQuarantineVerdict } from "../core/quarantine.ts";
 import { outputRedactionEnabled, redactToolResult } from "../core/output-redaction.ts";
 import { capHitSnippets, searchSnippetChars } from "../core/search/snippet-cap.ts";
+import { withChunkWindows } from "../core/search/chunk-windows.ts";
 import { allowedFingerprints } from "../core/secret-scan.ts";
 import { getChunksForPage, getChunksForSource } from "../core/chunks-read.ts";
 import { resolveSlugs, slugReferenceCounts } from "../core/slug-resolve.ts";
@@ -2887,21 +2888,28 @@ async function callRelationalRecall(
   if (typeof args["limit"] === "number") opts.limit = args["limit"];
   if (typeof args["depth"] === "number") opts.depth = args["depth"];
   if (readSources !== undefined) opts.sourceIds = readSources;
+  if (remote) opts.remote = true;
   // Diary fence, same rule as resolve_slugs: a non-operator caller is never
   // handed a diary slug, whichever arm produced it.
   const fence = (list: { slug: string }[]) =>
     remote ? list.filter((h) => !isDiarySlug(h.slug)) : list;
+  let planned = false;
+  opts.onMeta = (meta) => {
+    planned = meta.kind === "chain";
+  };
   const hits = await relationalRecall(storage, query, opts);
-  // Opt-in paid fallback (default OFF): when the deterministic regex arm found
+  // Opt-in paid fallback (default OFF): when the deterministic arm found
   // nothing, ask Sonnet to classify the edge-question and re-run the SAME
   // fanout. Reachable only when MEMRAIN_RELATIONAL_LLM=1 — live MCP stays free.
-  if (hits.length === 0 && process.env["MEMRAIN_RELATIONAL_LLM"] === "1") {
+  // A question the chain planner already understood never pays for a guess.
+  if (hits.length === 0 && !planned && process.env["MEMRAIN_RELATIONAL_LLM"] === "1") {
     // Forward only the shared scope/paging fields — the two arms carry distinct
     // onMeta shapes, so pass an explicit subset rather than the regex arm's opts.
     const llmOpts: Parameters<typeof relationalRecallLlm>[2] = {};
     if (opts.limit !== undefined) llmOpts.limit = opts.limit;
     if (opts.depth !== undefined) llmOpts.depth = opts.depth;
     if (opts.sourceIds !== undefined) llmOpts.sourceIds = [...opts.sourceIds];
+    if (remote) llmOpts.remote = true;
     // Only THIS arm spends Bedrock, so the client-budget refusal wraps it alone —
     // the deterministic arm above stays free and unmetered. The arm reports its
     // real cost through onMeta, echoed to the caller as `spentUsd`.
@@ -3841,8 +3849,15 @@ async function callQuery(
   });
   const pageFilters = searchPageFilters(args);
   const minTrust = parseMinTrust(args["min_trust"], "query");
-  const typeNotice = await pageTypeNotice(storage, pageFilters, readSources, !isOperator);
   const refine = typeof args["refine"] === "string" ? args["refine"] : "";
+  if (refine && typeof args["window"] === "number" && args["window"] > 0) {
+    throw new OperationError(
+      "invalid_params",
+      "query: `window` is not supported with `refine`",
+      "Drop `refine`, or drop `window` and read neighbours with get_chunks.",
+    );
+  }
+  const typeNotice = await pageTypeNotice(storage, pageFilters, readSources, !isOperator);
   if (refine) {
     const diagnostic = isOperator && args["explain"] === true
       ? (await import("../core/search/diagnostics.ts")).searchDiagnostics(storage, readSources, pageFilters, ["refinement", "projection"])
@@ -3930,7 +3945,17 @@ async function callQuery(
   const ledger = await queryFactsForResult(storage, q, hits, readSources, remote, resolveSearchKnobs(searchOpts).tokenBudget, minTrust);
   if (meta && (ledger.hits.length < snippets.length || ledger.truncated)) meta = { ...meta, degraded: [...new Set([...meta.degraded, "budget_truncated" as const])] };
   const metaOut = responseSearchMeta(meta, ledger.hits, isOperator);
-  return jsonResult({ ok: true, hits: ledger.hits, facts: ledger.facts, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}),
+  // Neighbour windows only take what a token budget leaves after the hits and
+  // the facts block, so the cap holds with them attached.
+  const windowRadius = typeof args["window"] === "number" ? Math.min(2, Math.max(0, Math.floor(args["window"]))) : 0;
+  const windowBudget = resolveSearchKnobs(searchOpts).tokenBudget;
+  const outHits = windowRadius > 0
+    ? await withChunkWindows(storage.engine(), ledger.hits, windowRadius, {
+        ...(readSources !== undefined ? { sourceIds: readSources } : {}), maxChars: searchSnippetChars(),
+        ...(windowBudget !== undefined ? { tokenRoom: windowBudget - ledger.used } : {}),
+      })
+    : ledger.hits;
+  return jsonResult({ ok: true, hits: outHits, facts: ledger.facts, ...typeNotice, ...(metaOut ? { meta: metaOut } : {}),
     ...(ledger.truncated ? { facts_truncated: true } : {}),
     ...(ledger.hits.length === 0 && ledger.facts.length === 0 ? emptyRetrievalHint(readSources, metaOut) : {}),
   });
@@ -3960,7 +3985,7 @@ async function queryFactsForResult<H extends { content: string; title?: string |
   });
   const correcting = new Set(marks.values());
   const framed = [...allFramed.filter(f => correcting.has(f.fact_id)), ...allFramed.filter(f => !correcting.has(f.fact_id))];
-  if (tokenBudget === undefined || tokenBudget <= 0) return { facts: framed, truncated: false, hits: marked };
+  if (tokenBudget === undefined || tokenBudget <= 0) return { facts: framed, truncated: false, hits: marked, used: 0 };
   // The hits were trimmed to the budget before the marks existed; a mark's
   // text is part of its hit, so the trim runs again with it counted.
   let used = 0;
@@ -3978,7 +4003,7 @@ async function queryFactsForResult<H extends { content: string; title?: string |
     facts.push(fact);
     used += cost;
   }
-  return { facts, truncated: facts.length < framed.length, hits: kept };
+  return { facts, truncated: facts.length < framed.length, hits: kept, used };
 }
 
 /** The optional `lang` filter of the code graph tools; empty means none. */

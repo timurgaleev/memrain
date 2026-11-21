@@ -1023,7 +1023,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "relational_recall",
     outputRedaction: "retrieval",
     description:
-      "Deterministic relational query — resolves a seed entity from a natural-language relationship question ('who does alice report to?', 'who works at acme', 'how is alice connected to bob') and fans out typed edges. Returns [{slug, relation, depth}]. No LLM.",
+      "No-LLM relational query about a seed entity ('who works at acme', 'founders of companies alice invested in', up to 3 hops). Returns [{slug, relation, depth, path?}].",
     params: {
       query: str(req),
       limit: int({ minimum: 1, maximum: 200 }),
@@ -1253,6 +1253,7 @@ export const OPERATIONS: readonly Operation[] = [
           "Return a TIGHT intent-sized set instead of the full top-K (never empty when matches exist; first page only).",
       }),
       explain: bool({ description: "Stamp per-hit ranking attribution. Bypasses the query cache." }),
+      window: int({ minimum: 0, maximum: 2, description: "Neighbour chunks per side of each hit." }),
       refine: str({ description: "LEGACY refinement: second term for the deterministic weighted-RRF blend. When set, only k/weights apply." }),
       primary_weight: num({ minimum: 0, description: "RRF weight for the primary query (refine mode). Default 1." }),
       refine_weight: num({ minimum: 0, description: "RRF weight for the refine term (refine mode). Default 1." }),
