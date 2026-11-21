@@ -70,7 +70,7 @@ unchanged and so are its credentials. Renaming its display name is optional.
 
 ### If the admin login page appears
 
-With `MEMRAIN_OAUTH_REQUIRE_LOGIN=1` (bootstrap writes it when the `<prefix>/memrain-admin-bootstrap` secret exists),
+With owner approval on (the default; `MEMRAIN_OAUTH_REQUIRE_LOGIN=0` turns it off),
 `/authorize` first sends the browser to `/admin/login`, which accepts only the
 operator's bootstrap token. That is right when the connector is the operator's
 own. For anyone else, either turn the flag off for the brain or give the person
@@ -90,7 +90,7 @@ On the host, `memrain auth list-clients` shows the client, its `grant_types`
 | Symptom | First check |
 |---|---|
 | Connect fails with `redirect_uri is not registered for this client` | The account uses a callback origin you did not register. `memrain auth set-redirect-uris <client_id> https://claude.ai/api/mcp/auth_callback https://claude.com/api/mcp/auth_callback`. |
-| Connect lands on the admin login page | `MEMRAIN_OAUTH_REQUIRE_LOGIN=1` is on and the person is not the operator. See [If the admin login page appears](#if-the-admin-login-page-appears). |
+| Connect lands on the admin login page | Owner approval is on (the default) and the person is not the operator. See [If the admin login page appears](#if-the-admin-login-page-appears). |
 | Connect fails with `invalid_client` | The secret was mistyped or the client was revoked (`memrain auth list-clients` no longer shows it). Register a new client. |
 | Connect fails with `invalid_target` | claude.ai named a `resource` that is not this server: the connector URL must be `<issuer>/mcp` on the host `MEMRAIN_PUBLIC_URL` names. |
 | Callback carries `error=unauthorized_client` | The client has no `authorization_code` grant, or it is a public client in `client` mode. Register it as above (with `--redirect-uris`, without `--token-endpoint-auth-method none`). |

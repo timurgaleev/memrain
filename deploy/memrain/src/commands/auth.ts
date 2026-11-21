@@ -304,7 +304,7 @@ async function registerClient(name: string, rest: string[]): Promise<void> {
         "auto-approving, its client_id alone would mint tokens for source " +
         `'${sourceId}'. Register a confidential client (drop ` +
         "--token-endpoint-auth-method none), use --tenant-mode enrollment, or " +
-        "run with MEMRAIN_OAUTH_REQUIRE_LOGIN=1 as the server does.",
+        "leave MEMRAIN_OAUTH_REQUIRE_LOGIN on (the default) as the server does.",
     );
   }
 

@@ -66,7 +66,7 @@ exact URL with `memrain auth set-redirect-uris`.
      ID and secret in its OAuth fields.
    - Connect; the browser goes to Memrain's `/authorize` and back.
 
-With `MEMRAIN_OAUTH_REQUIRE_LOGIN=1` the browser is sent to `/admin/login` first,
+With owner approval on (the default) the browser is sent to `/admin/login` first,
 which only the operator can pass. For anyone else, turn the flag off or use
 enrollment mode as below.
 
@@ -122,7 +122,7 @@ person's source. On the host, `memrain auth list-clients` shows the client and
 | `invalid_target` | ChatGPT sends `resource=<the URL you configured>`. Memrain accepts `<issuer>` and `<issuer>/mcp` only; fix the app's URL or `MEMRAIN_PUBLIC_URL`. |
 | Callback carries `error=unauthorized_client` | The client lacks the `authorization_code` grant, or it is public (no secret) in `client` mode. Register it as above. |
 | Connect fails with `invalid_client` | Secret mistyped, or the client was revoked. |
-| Connect lands on the admin login | `MEMRAIN_OAUTH_REQUIRE_LOGIN=1` and a `client`-mode client. Use enrollment mode, or take the flag off. |
+| Connect lands on the admin login | Owner approval is on (the default) and the client is in `client` mode. Use enrollment mode, or turn approval off with `MEMRAIN_OAUTH_REQUIRE_LOGIN=0`. |
 | "That code was not accepted." | Used, expired, revoked or another client's code. `memrain auth enrollments --client <client_id>`; issue a new one. |
 | Tools fail with `401`, `Bearer error="invalid_token"` | The token was revoked or its refresh chain broke. Reconnect; for an enrolled member, issue `enroll --replaces <enrollment_id>`. |
 | A tool returns `insufficient_scope` | The client was registered read-only. The result's `_meta["mcp/www_authenticate"]` names the scope to ask for. |

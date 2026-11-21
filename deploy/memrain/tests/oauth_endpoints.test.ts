@@ -43,6 +43,9 @@ describe("OAuth 2.1 authorization-code + PKCE / DCR / revoke", () => {
   let confClientSecret: string;
 
   beforeEach(async () => {
+    // These tests drive the flow with owner approval turned off; the approval
+    // posture (the default) has its own describe blocks below.
+    process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN = "0";
     tmp = mkdtempSync(join(tmpdir(), "memrain-oauth-ep-"));
     storage = new Storage({ dbPath: join(tmp, "db") });
     await storage.init();
@@ -103,6 +106,7 @@ describe("OAuth 2.1 authorization-code + PKCE / DCR / revoke", () => {
   let adminCookie = "";
 
   afterEach(async () => {
+    delete process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN;
     await server.stop();
     await storage.close();
     rmSync(tmp, { recursive: true, force: true });
@@ -144,7 +148,7 @@ describe("OAuth 2.1 authorization-code + PKCE / DCR / revoke", () => {
     } finally {
       await s.stop();
       delete process.env.MEMRAIN_ENABLE_DCR;
-      delete process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN;
+      process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN = "0";
     }
   }
 
@@ -1052,6 +1056,68 @@ describe("OAuth 2.1 authorization-code + PKCE / DCR / revoke", () => {
  * could not see the operator at all — the connector never finished, however
  * many times you signed in.
  */
+describe("owner approval is the default for a new agent sign-in", () => {
+  let tmp: string;
+  let storage: Storage;
+  let provider: OAuthProvider;
+  let saved: string | undefined;
+
+  beforeEach(async () => {
+    saved = process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN;
+    delete process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN;
+    tmp = mkdtempSync(join(tmpdir(), "memrain-oauth-default-"));
+    storage = new Storage({ dbPath: join(tmp, "db") });
+    await storage.init();
+    provider = new OAuthProvider({ engine: storage.raw() });
+  });
+
+  afterEach(async () => {
+    if (saved === undefined) delete process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN;
+    else process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN = saved;
+    await storage.close();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  async function authorizeOnce(): Promise<Response> {
+    const web = await provider.registerClientManual(
+      "default-web", ["authorization_code"], "read", [REDIRECT], "default",
+    );
+    const s = startServer({
+      host: "127.0.0.1", port: 0, storage, oauthProvider: provider, adminBootstrapToken: ADMIN_TOKEN,
+    });
+    try {
+      const { challenge } = pkce();
+      const q = new URLSearchParams({
+        response_type: "code",
+        client_id: web.clientId,
+        redirect_uri: REDIRECT,
+        code_challenge: challenge,
+        code_challenge_method: "S256",
+      });
+      return await fetch(`http://127.0.0.1:${s.port}/authorize?${q}`, { redirect: "manual" });
+    } finally {
+      await s.stop();
+    }
+  }
+
+  it("with the variable unset, /authorize mints no code and sends the browser to sign in", async () => {
+    const res = await authorizeOnce();
+    expect(res.status).toBe(302);
+    const loc = res.headers.get("location")!;
+    expect(loc).toStartWith("/admin/login?return_to=");
+    expect(loc).not.toContain("code=");
+  });
+
+  it("MEMRAIN_OAUTH_REQUIRE_LOGIN=0 turns approval off: a confidential client gets its code unattended", async () => {
+    process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN = "0";
+    const res = await authorizeOnce();
+    expect(res.status).toBe(302);
+    const loc = new URL(res.headers.get("location")!);
+    expect(loc.origin + loc.pathname).toBe(REDIRECT);
+    expect(loc.searchParams.get("code")).toMatch(/^memrain_code_/);
+  });
+});
+
 describe("MEMRAIN_OAUTH_REQUIRE_LOGIN with no admin surface fails closed", () => {
   it("refuses to issue a code rather than auto-approving", async () => {
     process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN = "1";

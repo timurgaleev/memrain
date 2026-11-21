@@ -255,10 +255,14 @@ export function needsOperatorConsent(client: {
   return client.client_secret === undefined && client.tenant_mode === "client";
 }
 
-/** `MEMRAIN_OAUTH_REQUIRE_LOGIN` as the server reads it: `1` or `true`. */
+/**
+ * `MEMRAIN_OAUTH_REQUIRE_LOGIN` as the server reads it. On unless explicitly
+ * turned off (`0`, `false`, `no`, `off`): every new agent sign-in waits for the
+ * owner's approval in the dashboard. Tokens already issued are not affected.
+ */
 export function oauthRequireLoginFromEnv(): boolean {
   const v = (process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN ?? "").trim().toLowerCase();
-  return v === "1" || v === "true";
+  return !(v === "0" || v === "false" || v === "no" || v === "off");
 }
 
 /** One issued enrollment code, as listed to the operator (never the code). */
@@ -1500,7 +1504,7 @@ export class OAuthProvider {
             code: "public_client_mode",
             detail:
               "a public client cannot be moved to client tenant mode while /authorize auto-approves; " +
-              "keep enrollment mode or run with MEMRAIN_OAUTH_REQUIRE_LOGIN=1",
+              "keep enrollment mode or leave MEMRAIN_OAUTH_REQUIRE_LOGIN on (the default)",
           },
         ]);
       }

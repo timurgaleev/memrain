@@ -313,7 +313,7 @@ describe("rescopeClient — validation", () => {
 describe("rescopeClient — public clients", () => {
   it("refuses to move a public client into client mode while /authorize auto-approves", async () => {
     const saved = process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN;
-    delete process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN;
+    process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN = "0";
     try {
       const reg = await provider.registerClientManual(
         "public-enroll",

@@ -391,13 +391,12 @@ export async function handleAuthorizeRoute(
   req: Request,
   provider: OAuthProvider,
   /**
-   * Resource-owner authentication gate. By DEFAULT this auto-approves (returns
-   * true), so a standard MCP client (Claude.ai etc.) completes the
-   * authorization-code flow with no extra step.
-   * An operator who wants the stricter posture sets `MEMRAIN_OAUTH_REQUIRE_LOGIN=1`
-   * (wired in server.ts), which passes `adminAuth.requireAdmin` here: then a code
-   * is only ever minted for a logged-in operator and an unauthenticated browser
-   * is bounced to `/admin/login`. DCR clients are read/write-only regardless, so
+   * Resource-owner authentication gate. The server (server.ts) passes the
+   * operator-approval check here unless `MEMRAIN_OAUTH_REQUIRE_LOGIN=0`: a code
+   * is only ever minted for a logged-in operator who approved the request, and
+   * an unauthenticated browser is bounced to `/admin/login`. This parameter's
+   * own default auto-approves (returns true), the posture the server runs with
+   * when approval is turned off. DCR clients are read/write-only regardless, so
    * auto-approve cannot yield an elevated token.
    */
   isResourceOwnerAuthenticated: (req: Request) => boolean = () => true,

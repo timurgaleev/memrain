@@ -162,10 +162,9 @@ one atomic `UPDATE`, so two people racing the same code cannot both win.
 
 ## The login gate
 
-`MEMRAIN_OAUTH_REQUIRE_LOGIN=1` — which bootstrap writes when the
-`<prefix>/memrain-admin-bootstrap` secret exists (see DEPLOYMENT.md "Admin
-surface and OAuth consent"; without it `/authorize` auto-approves) — gates `/authorize` on a
-signed-in operator.
+`MEMRAIN_OAUTH_REQUIRE_LOGIN` — on by default; `=0` makes `/authorize`
+auto-approve (see DEPLOYMENT.md "Admin surface and OAuth consent") — gates
+`/authorize` on a signed-in operator who approves the request.
 
 `/admin/login` accepts exactly one credential: the operator bootstrap token.
 There is no per-user login. So with that flag on, a teammate can only complete a

@@ -416,8 +416,9 @@ operator being signed in. Bootstrap only reads it on a run, so a secret created
 after first boot has no effect until you re-run bootstrap (step 6) and then
 `sudo bash deploy/deploy.sh` from `/opt/<project>` (on a brain with no pages
 yet: `sudo DEPLOY_ALLOW_EMPTY=1 bash deploy/deploy.sh`, see step 10). Leave the secret empty and
-the server mints a fresh token every restart and auto-approves every consent
-request instead — on a caddy install that consent screen is directly on the
+the server mints a fresh token every restart. Owner approval stays on either
+way (it is the default); only `MEMRAIN_OAUTH_REQUIRE_LOGIN=0` makes `/authorize`
+auto-approve — on a caddy install that consent screen is directly on the
 public internet.
 
 **If anyone but the operator will connect, that flag has to come off.**

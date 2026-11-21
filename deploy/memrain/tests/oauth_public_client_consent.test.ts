@@ -249,7 +249,7 @@ describe("registration", () => {
 
   it("the CLI refuses a public client-mode client unless login is required", async () => {
     const prior = process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN;
-    delete process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN;
+    process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN = "0";
     try {
       await expect(
         runAuth([
@@ -262,7 +262,8 @@ describe("registration", () => {
         ]),
       ).rejects.toThrow(/public client in client tenant mode/);
     } finally {
-      if (prior !== undefined) process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN = prior;
+      if (prior === undefined) delete process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN;
+      else process.env.MEMRAIN_OAUTH_REQUIRE_LOGIN = prior;
     }
   });
 });

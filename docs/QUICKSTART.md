@@ -254,7 +254,9 @@ See [docs/DEPLOYMENT.md](./DEPLOYMENT.md) and [docs/CONFIGURATION.md](./CONFIGUR
   `/admin` (which has its own sign-in) needs a credential. `/mcp` is the agent contract.
 - A built-in OAuth 2.1 server. Dynamic client registration is off unless
   `MEMRAIN_ENABLE_DCR=1`, and then the server boots only with
-  `MEMRAIN_OAUTH_REQUIRE_LOGIN=1` (or the explicit `MEMRAIN_ENABLE_DCR_INSECURE=1`).
+  owner approval on (`MEMRAIN_OAUTH_REQUIRE_LOGIN`, the default) or the explicit
+  `MEMRAIN_ENABLE_DCR_INSECURE=1`.
+- Every new agent sign-in waits for the owner's approval in the dashboard.
 - Enrollment codes are single-use, and only their SHA-256 is stored.
 - Credentials pasted into pages, facts, timeline entries, indexed files or
   `/ingest` are redacted before storage by default

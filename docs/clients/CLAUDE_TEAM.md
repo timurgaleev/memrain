@@ -108,7 +108,7 @@ grant as redeemed, with the time a token was last minted.
 
 | Symptom | First check |
 |---|---|
-| Member sees the admin login instead of a code field | The client is in `client` mode and `MEMRAIN_OAUTH_REQUIRE_LOGIN=1`. `memrain auth rescope-client <client_id> --source default --tenant-mode enrollment`. |
+| Member sees the admin login instead of a code field | The client is in `client` mode and owner approval is on (the default). `memrain auth rescope-client <client_id> --source default --tenant-mode enrollment`. |
 | "That code was not accepted." | Used, expired, revoked or issued for another client — deliberately indistinguishable. `memrain auth enrollments --client <client_id>` shows which. |
 | `redirect_uri is not registered for this client` | The organisation uses a callback origin you did not register. `memrain auth set-redirect-uris <client_id> <uri> <uri>`; the secret stays. |
 | `invalid_target` | The connector URL is not `<issuer>/mcp` on the host `MEMRAIN_PUBLIC_URL` names. |

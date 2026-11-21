@@ -290,8 +290,9 @@ export function startServer(opts: ServerOptions): ServerHandle {
     });
   }
 
-  // Opt-in strict OAuth: require a logged-in operator on /authorize. Default OFF
-  // (auto-approve) — see the /authorize handler below.
+  // Owner approval on /authorize: a logged-in operator must approve each new
+  // sign-in. On by default; MEMRAIN_OAUTH_REQUIRE_LOGIN=0 turns it off (auto-
+  // approve) — see the /authorize handler below.
   const oauthRequireLogin = oauthRequireLoginFromEnv();
   // Dynamic Client Registration is OFF by default. With it off, /register is
   // unavailable and the
@@ -312,7 +313,8 @@ export function startServer(opts: ServerOptions): ServerHandle {
   // A self-registered (DCR) client that completes the authorization_code flow
   // still receives a real, default-tenant token. That grant only carries
   // operator consent when /authorize is gated on a logged-in operator — i.e.
-  // MEMRAIN_OAUTH_REQUIRE_LOGIN=1 AND an admin mechanism is configured. When
+  // MEMRAIN_OAUTH_REQUIRE_LOGIN is on (the default) AND an admin mechanism is
+  // configured. When
   // /authorize auto-approves, an unauthenticated caller can register + run PKCE
   // + walk away with read/write on the default tenant, no operator in the loop.
   // Fail closed: refuse to boot with DCR on and consent off unless the operator
@@ -322,8 +324,8 @@ export function startServer(opts: ServerOptions): ServerHandle {
     throw new Error(
       "MEMRAIN_ENABLE_DCR is set but /authorize auto-approves, so a self-" +
         "registered client would obtain a token with no operator consent. " +
-        "Set MEMRAIN_OAUTH_REQUIRE_LOGIN=1 (with MEMRAIN_ADMIN_BOOTSTRAP) to gate " +
-        "/authorize on a logged-in operator, or set MEMRAIN_ENABLE_DCR_INSECURE=1 " +
+        "Leave MEMRAIN_OAUTH_REQUIRE_LOGIN on (the default) and set MEMRAIN_ADMIN_BOOTSTRAP " +
+        "to gate /authorize on a logged-in operator, or set MEMRAIN_ENABLE_DCR_INSECURE=1 " +
         "to accept unauthenticated self-registration.",
     );
   }
@@ -341,7 +343,8 @@ export function startServer(opts: ServerOptions): ServerHandle {
             "client-mode clients (no secret, PKCE alone): " +
             clients.map((c) => `${c.client_id} (${c.client_name})`).join(", ") +
             ". Re-register them as confidential clients, move them to " +
-            "--tenant-mode enrollment, or set MEMRAIN_OAUTH_REQUIRE_LOGIN=1.",
+            "--tenant-mode enrollment, or turn owner approval back on (unset " +
+            "MEMRAIN_OAUTH_REQUIRE_LOGIN, with MEMRAIN_ADMIN_BOOTSTRAP set).",
         );
       })
       .catch((e: unknown) => {
@@ -353,10 +356,11 @@ export function startServer(opts: ServerOptions): ServerHandle {
   }
   if (oauthRequireLogin && !adminAuth) {
     console.error(
-      "[memrain] WARNING: MEMRAIN_OAUTH_REQUIRE_LOGIN=1 but no admin surface is " +
-        "configured (MEMRAIN_ADMIN_BOOTSTRAP is unset), so no operator can ever " +
-        "approve an authorization. /authorize refuses every request until a " +
-        "bootstrap token is set.",
+      "[memrain] WARNING: owner approval for new agent sign-ins is on (the default; " +
+        "MEMRAIN_OAUTH_REQUIRE_LOGIN) but no admin surface is configured " +
+        "(MEMRAIN_ADMIN_BOOTSTRAP is unset), so no operator can ever approve an " +
+        "authorization. /authorize refuses every request until a bootstrap token " +
+        "is set, or until MEMRAIN_OAUTH_REQUIRE_LOGIN=0 turns approval off.",
     );
   }
   if (dcrEnabled) {
@@ -364,7 +368,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
       "[memrain] WARNING: Dynamic Client Registration is ON — any network " +
         "caller can self-register an OAuth client via POST /register. " +
         "Self-registered clients get the authorization_code grant; that grant " +
-        "carries operator consent only while MEMRAIN_OAUTH_REQUIRE_LOGIN=1 gates " +
+        "carries operator consent only while MEMRAIN_OAUTH_REQUIRE_LOGIN (on by default) gates " +
         "/authorize on a logged-in operator.",
     );
   }
@@ -568,11 +572,10 @@ export function startServer(opts: ServerOptions): ServerHandle {
             console.warn(`[oauth] ${req.method} /authorize rate-limited for bucket ${ip}`);
             return rateLimited();
           }
-          // Auto-approve by default, so a standard MCP client
-          // completes the flow unattended. Opt into the stricter operator-login
-          // gate with MEMRAIN_OAUTH_REQUIRE_LOGIN=1 — then a code is only minted
-          // for a logged-in admin who ALSO approved this exact request from the
-          // dashboard. The session alone is not consent: anything able to
+          // Owner approval by default: a code is only minted for a logged-in
+          // admin who ALSO approved this exact request from the dashboard.
+          // MEMRAIN_OAUTH_REQUIRE_LOGIN=0 turns it off, and a standard MCP
+          // client then completes the flow unattended. The session alone is not consent: anything able to
           // navigate the operator's browser same-site (a sibling subdomain, a
           // stale tab) would otherwise mint a code in silence. Without the
           // approval the request bounces to the dashboard, which shows who is

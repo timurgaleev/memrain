@@ -48,7 +48,7 @@ function withPrefix(prefix: string, knobs: Record<string, string>): Record<strin
 const KNOBS = {
   POSTGRES_URL: "postgres://u:p@127.0.0.1:1/probe?sslmode=disable",
   PUBLIC_URL: "https://brain.example.com/",
-  OAUTH_REQUIRE_LOGIN: "1",
+  OAUTH_REQUIRE_LOGIN: "0",
   PUBLIC_WRITE: "1",
   TENANT_FAIL_CLOSED: "1",
   MAINTENANCE: "0",
@@ -73,7 +73,7 @@ describe("env shim at process start", () => {
       postgresUrl: KNOBS.POSTGRES_URL,
       engine: "PostgresEngine",
       issuer: "https://brain.example.com",
-      oauthRequireLogin: true,
+      oauthRequireLogin: false,
       publicWrite: true,
       tenantFailClosed: true,
       quiescence: { maintenance: false, bootCodeSweep: false, jobsWorker: false, cycle: false, invalid: [] },
