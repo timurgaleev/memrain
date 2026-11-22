@@ -240,7 +240,7 @@ describe("transcripts cursor", () => {
   it("reads legacy ISO text, the deferred form, and anything else as a fresh start", () => {
     expect(parseTranscriptsCursor(since)).toEqual({ since, pending: {} });
     expect(parseTranscriptsCursor(JSON.stringify({ v: 2, since, pending: { "ff-a": since, "": since, "ff-b": "never" } })))
-      .toEqual({ since, pending: { "ff-a": since }, checked: null });
+      .toEqual({ since, pending: { "ff-a": { at: since, status: null, fails: 0 } }, checked: null });
     expect(parseTranscriptsCursor(null)).toEqual({ since: null, pending: {} });
     expect(parseTranscriptsCursor("{not json")).toEqual({ since: null, pending: {} });
     expect(parseTranscriptsCursor(JSON.stringify({ v: 9, since }))).toEqual({ since: null, pending: {} });
@@ -248,7 +248,7 @@ describe("transcripts cursor", () => {
 
   it("writes ISO text while nothing is deferred, and round-trips the deferred form", () => {
     expect(serializeTranscriptsCursor({ since, pending: {} })).toBe(since);
-    const state = { since, pending: { "ff-a": "2025-11-17T11:00:00.000Z" }, checked: "2025-11-17T12:00:00.000Z" };
+    const state = { since, pending: { "ff-a": { at: "2025-11-17T11:00:00.000Z", status: "processing", fails: 2 } }, checked: "2025-11-17T12:00:00.000Z" };
     expect(parseTranscriptsCursor(serializeTranscriptsCursor(state))).toEqual(state);
   });
 });

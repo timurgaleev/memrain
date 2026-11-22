@@ -82,14 +82,17 @@ outside text; nothing in it is ever acted on.
 ## How a sync works
 
 - The first run lists transcripts created in the last 90 days; later runs list
-  the window since the previous run plus 48 hours. The listing is repeated (up
-  to three passes) until a pass finds no transcript it had not seen, so a
+  the window since the previous run plus 48 hours, 50 transcripts a request.
+  A window longer than one page is listed again (up to three passes) until a
+  pass finds no transcript it had not seen, so a
   meeting added or deleted while the run pages through the list is not
   skipped; a list that keeps changing leaves the window open for the next run.
-- A transcript with no summary yet is not stored. Its id is kept and fetched
-  directly, at most once an hour, until it has a summary, until 48 hours
-  after the meeting began (it is then stored without one), or until Fireflies
-  no longer has it. After seven days it is stored as it is.
+- A transcript with no summary yet is not stored. Its id and summary status
+  are kept; it is fetched again when the listing shows its summary status
+  changed, and once 48 hours after the meeting began (it is then stored
+  without one). It leaves the queue once stored or gone from Fireflies. One
+  whose fetch fails three times, or still fails seven days after the meeting,
+  is dropped from the queue and held on the account.
 - A transcript whose title, time, length, people or summary status changed is
   fetched again, and one younger than 48 hours is read again once a day so an
   edit to its text lands. Fireflies reports no edit time, so an edit made later

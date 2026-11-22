@@ -163,11 +163,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(first.counts.pages_written).toBe(1);
     expect(ops(fake.requests)).toEqual(["FirefliesTranscripts", "FirefliesTranscript:ff-t1", "FirefliesTranscript:ff-t2", "FirefliesTranscriptIds"]);
     expect(fake.requests[0]!.variables).toEqual({
-      fromDate: new Date(T0 - 90 * 24 * HOUR).toISOString(), toDate: new Date(T0).toISOString(), limit: 25, skip: 0,
+      fromDate: new Date(T0 - 90 * 24 * HOUR).toISOString(), toDate: new Date(T0).toISOString(), limit: 50, skip: 0,
     });
     expect(fake.requests.every(r => r.authorization === `Bearer ${FIREFLIES_KEY}`)).toBe(true);
     expect(parseTranscriptsCursor(await readCursor(e, account.id, STREAM_TRANSCRIPTS))).toEqual({
-      since: new Date(T0).toISOString(), pending: { "ff-t2": "2025-11-15T13:00:00.000Z" }, checked: new Date(T0).toISOString(),
+      since: new Date(T0).toISOString(), pending: { "ff-t2": { at: "2025-11-15T13:00:00.000Z", status: "processing", fails: 0 } }, checked: new Date(T0).toISOString(),
     });
     expect(await readCursor(e, account.id, STREAM_RECONCILE)).toBe(new Date(T0).toISOString());
 
@@ -398,13 +398,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     await runAt(T0 + 2 * HOUR);
     expect(fetched()).toBe(30);
     expect(await count(e, `SELECT count(*)::int AS n FROM connector_items WHERE account_id = $1 AND page_slug IS NOT NULL`, [account.id])).toBe(30);
-    // The window's end is committed only once every transcript in it is stored
-    // and a second listing pass found nothing new; that third run spent its
-    // whole budget, so the confirming pass is the next run's, which fetches nothing.
-    expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBeNull();
-    await runAt(T0 + 3 * HOUR);
-    expect(fetched()).toBe(30);
-    expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBe(new Date(T0 + 3 * HOUR).toISOString());
+    // The window's end is committed only once every transcript in it is stored.
+    expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBe(new Date(T0 + 2 * HOUR).toISOString());
   });
 
   it("under a daily cap, stores new transcripts before re-reading the recent ones it already has", async () => {
@@ -518,36 +513,87 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
   // why_new=no case deferred a transcript before; seam=the real engine and recorded GraphQL shapes.
   it("defers a meeting still processing, then stores it once its summary arrives", async () => {
     let summary: Record<string, unknown> | null = null;
+    let status = "processing";
     const fake = firefliesFetch({
       user: () => "user",
-      list: () => listing([listed("ff-fresh", { date: T0 - HOUR })]),
+      list: () => listing([listed("ff-fresh", { date: T0 - HOUR, meeting_info: { summary_status: status } })]),
       ids: () => listing([{ id: "ff-fresh" }]),
-      transcript: (id) => transcript(id, [{ speaker_name: "Ana Lee", text: "Kick-off." }], { date: T0 - HOUR, dateString: new Date(T0 - HOUR).toISOString(), summary }),
+      transcript: (id) => transcript(id, [{ speaker_name: "Ana Lee", text: "Kick-off." }],
+        { date: T0 - HOUR, dateString: new Date(T0 - HOUR).toISOString(), summary, meeting_info: { summary_status: status } }),
     });
     const account = await connect(fake.fetch);
     const first = await sync(db.storage, account.id, fake.fetch, T0);
     expect(first.counts.pages_written).toBe(0);
     expect(await pageOf("ff-fresh", account.id)).toBeNull();
     expect(parseTranscriptsCursor(await readCursor(e, account.id, STREAM_TRANSCRIPTS))).toEqual({
-      since: new Date(T0).toISOString(), pending: { "ff-fresh": new Date(T0 - HOUR).toISOString() }, checked: new Date(T0).toISOString(),
+      since: new Date(T0).toISOString(), pending: { "ff-fresh": { at: new Date(T0 - HOUR).toISOString(), status: "processing", fails: 0 } },
+      checked: new Date(T0).toISOString(),
     });
 
-    summary = { overview: "The summary arrived." };
-    // Ten minutes on, the deferred transcript is not asked about again: each ask costs quota.
-    fake.requests.length = 0;
-    await sync(db.storage, account.id, fake.fetch, T0 + 10 * 60_000);
-    expect(ops(fake.requests)).toEqual(["FirefliesTranscripts"]);
+    // While the listing shows the same summary status, the deferred transcript is not
+    // fetched again, an hour later or five: each fetch costs quota.
+    for (const at of [T0 + 10 * 60_000, T0 + 2 * HOUR, T0 + 5 * HOUR]) {
+      fake.requests.length = 0;
+      await sync(db.storage, account.id, fake.fetch, at);
+      expect(ops(fake.requests)).toEqual(["FirefliesTranscripts"]);
+    }
     expect(await pageOf("ff-fresh", account.id)).toBeNull();
 
+    summary = { overview: "The summary arrived." };
+    status = "processed";
     fake.requests.length = 0;
-    const second = await sync(db.storage, account.id, fake.fetch, T0 + HOUR);
+    const second = await sync(db.storage, account.id, fake.fetch, T0 + 5 * HOUR + 10 * 60_000);
     expect(second.counts.pages_written).toBe(1);
-    // Fetched by id first; the listing then finds it stored and fetches nothing.
-    expect(ops(fake.requests)).toEqual(["FirefliesTranscript:ff-fresh", "FirefliesTranscripts"]);
+    // The listing shows the status moved, so it is fetched from there.
+    expect(ops(fake.requests)).toEqual(["FirefliesTranscripts", "FirefliesTranscript:ff-fresh"]);
     const slug = (await pageOf("ff-fresh", account.id))!;
     expect((await e.query<{ markdown_body: string }>(`SELECT markdown_body FROM pages WHERE slug = $1`, [slug])).rows[0]!.markdown_body)
       .toContain("The summary arrived.");
-    expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBe(new Date(T0 + HOUR).toISOString());
+    expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBe(new Date(T0 + 5 * HOUR + 10 * 60_000).toISOString());
+  });
+
+  // Value: protects=a deferred transcript whose fetch keeps failing neither blocks the queue nor costs requests
+  // forever; fails_when=a failed drain fetch blocks the checkpoint, or the id is never dropped; why_new=review finding;
+  // seam=the real engine, a Fireflies internal error recorded in a 200 body.
+  it("keeps a failing deferred transcript from blocking the queue, and drops it after three failures", async () => {
+    const internalError: Recorded = { status: 200, headers: { "content-type": "application/json" },
+      body: { data: null, errors: [{ message: "boom", code: "internal_server_error", extensions: { code: "internal_server_error", status: 500 } }] } };
+    let listBad = false;
+    const fake = firefliesFetch({
+      user: () => "user",
+      list: () => listing(listBad ? [listed("ff-bad", { date: T0 - 3 * HOUR })] : []),
+      ids: () => listing([{ id: "ff-ok" }]),
+      transcript: (id) => id === "ff-ok"
+        ? transcript(id, [{ speaker_name: "Ana Lee", text: "Fine." }], { date: T0 - 50 * HOUR, dateString: new Date(T0 - 50 * HOUR).toISOString() })
+        : internalError,
+    });
+    const account = await connect(fake.fetch);
+    await writeCursor(e, account.id, STREAM_TRANSCRIPTS, JSON.stringify({
+      v: 2, since: new Date(T0 - HOUR).toISOString(),
+      pending: {
+        "ff-bad": { at: new Date(T0 - 3 * HOUR).toISOString(), status: null, fails: 0 },
+        "ff-ancient": { at: new Date(T0 - 8 * 24 * HOUR).toISOString(), status: null, fails: 0 },
+        "ff-ok": { at: new Date(T0 - 50 * HOUR).toISOString(), status: null, fails: 0 },
+      },
+    }));
+    const pendingNow = async () => parseTranscriptsCursor(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).pending;
+
+    const first = await sync(db.storage, account.id, fake.fetch, T0);
+    // ff-ok is stored and leaves the queue; the past-age ff-ancient is dropped at its first failure and held.
+    expect(await pageOf("ff-ok", account.id)).not.toBeNull();
+    expect(first.counts.items_held).toBe(1);
+    expect(await pendingNow()).toEqual({ "ff-bad": { at: new Date(T0 - 3 * HOUR).toISOString(), status: null, fails: 1 } });
+
+    await sync(db.storage, account.id, fake.fetch, T0 + HOUR);
+    expect((await pendingNow())["ff-bad"]!.fails).toBe(2);
+    const third = await sync(db.storage, account.id, fake.fetch, T0 + 2 * HOUR);
+    expect(third.counts.items_held).toBe(1);
+    expect(await pendingNow()).toEqual({});
+    // Listed again while held, it waits out its hold (the engine's back-off) instead of being fetched every run.
+    listBad = true;
+    fake.requests.length = 0;
+    await sync(db.storage, account.id, fake.fetch, T0 + 2 * HOUR + 30 * 60_000);
+    expect(ops(fake.requests)).not.toContain("FirefliesTranscript:ff-bad");
   });
 
   // Value: protects=a deferred transcript cannot wait forever, and one deleted upstream leaves the queue;
@@ -624,7 +670,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
   // after a pass adds nothing; fails_when=the walk is a single pass or closes on an unstable pass;
   // why_new=new walk; seam=a listing whose offsets shift after its first page.
   it("walks the window to a fixed point when a transcript arrives mid-listing", async () => {
-    const older = Array.from({ length: 30 }, (_, i) => listed(`ff-s-${String(i).padStart(2, "0")}`, { date: T0 - 10 * 24 * HOUR - i * HOUR }));
+    const older = Array.from({ length: 60 }, (_, i) => listed(`ff-s-${String(i).padStart(2, "0")}`, { date: T0 - 10 * 24 * HOUR - i * HOUR }));
     let current = older;
     let listCalls = 0;
     const fake = firefliesFetch({
@@ -635,7 +681,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         if (++listCalls === 1) current = [listed("ff-s-new", { date: T0 - 9 * 24 * HOUR }), ...older];
         return listing(page);
       },
-      ids: () => listing(current.map(t => ({ id: t.id }))),
+      ids: (vars) => listing(current.slice(Number(vars.skip), Number(vars.skip) + Number(vars.limit)).map(t => ({ id: t.id }))),
       transcript: (id) => transcript(id, [{ speaker_name: "Ana Lee", text: `Notes for ${id}.` }], { date: current.find(t => t.id === id)!.date }),
     });
     const account = await connect(fake.fetch);
@@ -643,7 +689,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(run.status).toBe("success");
     const fetchedIds = fake.requests.filter(r => r.operation === "FirefliesTranscript").map(r => String(r.variables.id));
     expect(fetchedIds.sort()).toEqual(current.map(t => t.id).sort());
-    expect(new Set(fetchedIds).size).toBe(31);
+    expect(new Set(fetchedIds).size).toBe(61);
     // Pass 1 missed the arrival, pass 2 found it, pass 3 found nothing new and closed the window.
     expect(listCalls).toBe(6);
     expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBe(new Date(T0).toISOString());
@@ -652,7 +698,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
   // Value: protects=a listing that keeps shifting never closes its window on an incomplete walk;
   // fails_when=the cursor moves after MAX_LISTING_PASSES unstable passes; why_new=new walk; seam=as above.
   it("leaves the window open when the listing keeps changing on every pass", async () => {
-    const base = Array.from({ length: 30 }, (_, i) => listed(`ff-u-${String(i).padStart(2, "0")}`, { date: T0 - 10 * 24 * HOUR - i * HOUR }));
+    const base = Array.from({ length: 60 }, (_, i) => listed(`ff-u-${String(i).padStart(2, "0")}`, { date: T0 - 10 * 24 * HOUR - i * HOUR }));
     let current = base;
     let arrivals = 0;
     const fake = firefliesFetch({
@@ -663,7 +709,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         if (Number(vars.skip) === 0) current = [listed(`ff-u-new-${++arrivals}`, { date: T0 - 9 * 24 * HOUR + arrivals * HOUR }), ...current];
         return listing(page);
       },
-      ids: () => listing(current.map(t => ({ id: t.id }))),
+      ids: (vars) => listing(current.slice(Number(vars.skip), Number(vars.skip) + Number(vars.limit)).map(t => ({ id: t.id }))),
       transcript: (id) => transcript(id, [{ speaker_name: "Ana Lee", text: `Notes for ${id}.` }], { date: current.find(t => t.id === id)!.date }),
     });
     const account = await connect(fake.fetch);
