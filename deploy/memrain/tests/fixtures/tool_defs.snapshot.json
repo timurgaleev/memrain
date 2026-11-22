@@ -46,18 +46,18 @@
           "items": {
             "type": "string"
           },
-          "description": "Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call."
+          "description": "≤100 exact source IDs within your grant (omitted: whole grant). [] reads nothing; a forbidden ID refuses."
         },
         "types": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter."
+          "description": "≤20 lower-case page types; matches live pages and their mirrors/file twins, never non-page documents. Empty: no filter."
         },
         "slug_prefix": {
           "type": "string",
-          "description": "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits."
+          "description": "Literal canonical slug prefix (e.g. projects/x/), no wildcards; applied before limits."
         },
         "q": {
           "type": "string",
@@ -109,7 +109,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 2,
-          "description": "Code-graph walk depth 0-2 (default 0 = off); score decays per hop. Code corpora only; bypasses the query cache."
+          "description": "Code-graph walk depth (default 0 = off); score decays per hop. Code corpora only; bypasses the query cache."
         },
         "explain": {
           "type": "boolean",
@@ -227,7 +227,7 @@
   },
   {
     "name": "log_friction",
-    "description": "Record a friction event: retrieval missed, an answer felt wrong, a tool errored, OR a recall was unexpectedly good (`delight`). From a skill, include extra.skill = '<skill-slug>' so `memrain friction propose-fix` groups it with that skill. Set `severity` (confused/error/blocker/nit) on negative kinds for triage.",
+    "description": "Record a friction event: retrieval missed, an answer felt wrong, a tool errored, OR a recall was unexpectedly good (`delight`). From a skill, include extra.skill = '<skill-slug>' so `memrain friction propose-fix` groups it with that skill. Set severity on negative kinds for triage.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -285,7 +285,7 @@
       "properties": {
         "reason": {
           "type": "string",
-          "description": "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version."
+          "description": "Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version."
         },
         "slug": {
           "type": "string",
@@ -307,7 +307,7 @@
         },
         "written_by": {
           "type": "string",
-          "description": "Optional caller identifier for the audit trail (skill slug, recipe name, …)."
+          "description": "Optional caller id for the audit trail (skill slug, recipe, …)."
         },
         "allowAdHocType": {
           "type": "boolean"
@@ -322,20 +322,20 @@
         },
         "wait_for_index": {
           "type": "boolean",
-          "description": "Write the search mirror before returning even when mirrors are queued, so the page is searchable the moment this call returns. Slower."
+          "description": "Index before returning even when mirrors are queued, so the page is searchable on return. Slower."
         },
         "expected_version": {
           "type": "integer",
           "minimum": 0,
-          "description": "Require this page_get version/page_versions version_n; 0 requires absence. Deleted pages retain versions: use current_version from a failed 0 attempt. Mismatch writes nothing and returns current_version. Omit for an unconditional write, subject to precondition policy."
+          "description": "page_get version or page_versions version_n; 0 requires absence (deleted pages keep versions: use current_version from a failed 0). Mismatch writes nothing, returns current_version. Omit: unconditional, subject to precondition policy."
         },
         "force": {
           "type": "boolean",
-          "description": "Overwrite unconditionally, on purpose. Cannot be combined with expected_version."
+          "description": "Deliberate unconditional overwrite; not with expected_version."
         },
         "request_id": {
           "type": "string",
-          "description": "Optional retry id (1-128 chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused."
+          "description": "Optional retry id (1-128 chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused."
         }
       },
       "required": [
@@ -367,11 +367,11 @@
         },
         "wait_for_index": {
           "type": "boolean",
-          "description": "Write the search mirror before returning even when mirrors are queued, so the page is searchable the moment this call returns. Slower."
+          "description": "Index before returning even when mirrors are queued, so the page is searchable on return. Slower."
         },
         "request_id": {
           "type": "string",
-          "description": "Optional retry id (1-128 chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused."
+          "description": "Optional retry id (1-128 chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused."
         }
       },
       "required": [
@@ -394,7 +394,7 @@
       "properties": {
         "reason": {
           "type": "string",
-          "description": "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version."
+          "description": "Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version."
         },
         "slug": {
           "type": "string",
@@ -430,15 +430,15 @@
         },
         "written_by": {
           "type": "string",
-          "description": "Optional caller identifier for the audit trail (skill slug, recipe name, …)."
+          "description": "Optional caller id for the audit trail (skill slug, recipe, …)."
         },
         "wait_for_index": {
           "type": "boolean",
-          "description": "Write the search mirror before returning even when mirrors are queued, so the change is searchable the moment this call returns. Slower."
+          "description": "Index before returning even when mirrors are queued, so the change is searchable on return. Slower."
         },
         "request_id": {
           "type": "string",
-          "description": "Optional retry id (1-128 chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused."
+          "description": "Optional retry id (1-128 chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused."
         }
       },
       "required": [
@@ -492,7 +492,7 @@
       "properties": {
         "reason": {
           "type": "string",
-          "description": "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version."
+          "description": "Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version."
         },
         "slug": {
           "type": "string"
@@ -503,11 +503,11 @@
         "expected_version": {
           "type": "integer",
           "minimum": 0,
-          "description": "Require this page_get version/page_versions version_n; 0 requires absence. Deleted pages retain versions: use current_version from a failed 0 attempt. Mismatch writes nothing and returns current_version. Omit for an unconditional write, subject to precondition policy."
+          "description": "page_get version or page_versions version_n; 0 requires absence (deleted pages keep versions: use current_version from a failed 0). Mismatch writes nothing, returns current_version. Omit: unconditional, subject to precondition policy."
         },
         "force": {
           "type": "boolean",
-          "description": "Overwrite unconditionally, on purpose. Cannot be combined with expected_version."
+          "description": "Deliberate unconditional overwrite; not with expected_version."
         }
       },
       "required": [
@@ -524,7 +524,7 @@
   },
   {
     "name": "page_restore",
-    "description": "Undelete a soft-deleted page (clears deleted_at). The inverse of page_delete; no-op if the page is missing or already live. WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
+    "description": "Undelete a soft-deleted page (clears deleted_at). The inverse of page_delete; no-op if the page is missing or already live. Requires source-scoped write or internal token; static public bearer forbidden.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -555,7 +555,7 @@
       "properties": {
         "reason": {
           "type": "string",
-          "description": "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version."
+          "description": "Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version."
         },
         "slug": {
           "type": "string"
@@ -570,11 +570,11 @@
         "expected_version": {
           "type": "integer",
           "minimum": 0,
-          "description": "Require this page_get version/page_versions version_n; 0 requires absence. Deleted pages retain versions: use current_version from a failed 0 attempt. Mismatch writes nothing and returns current_version. Omit for an unconditional write, subject to precondition policy."
+          "description": "page_get version or page_versions version_n; 0 requires absence (deleted pages keep versions: use current_version from a failed 0). Mismatch writes nothing, returns current_version. Omit: unconditional, subject to precondition policy."
         },
         "force": {
           "type": "boolean",
-          "description": "Overwrite unconditionally, on purpose. Cannot be combined with expected_version."
+          "description": "Deliberate unconditional overwrite; not with expected_version."
         }
       },
       "required": [
@@ -645,7 +645,7 @@
   },
   {
     "name": "page_list",
-    "description": "List pages, newest-first by default. Optional filters: `type`, `tag` (normalized), `since` (ISO timestamp), `limit` (1..100, default 50). `sort` picks the order (updated_desc default | updated_asc | created_desc | slug); `include_deleted:true` adds soft-deleted pages with deleted_at populated.",
+    "description": "List pages; sort defaults to updated_desc (newest first). tag is normalized; since is an ISO timestamp; limit default 50. include_deleted:true adds soft-deleted pages with deleted_at.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -654,7 +654,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call."
+          "description": "≤100 exact source IDs within your grant (omitted: whole grant). [] reads nothing; a forbidden ID refuses."
         },
         "type": {
           "type": "string"
@@ -763,7 +763,7 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "description": "0..1, default 1.0 for agent-asserted edges. Use <1.0 only for deterministic-extractor outputs whose surface form was ambiguous."
+          "description": "Default 1.0 for agent-asserted edges. Use <1.0 only for deterministic-extractor outputs whose surface form was ambiguous."
         },
         "source_chunk_id": {
           "type": "string"
@@ -788,7 +788,7 @@
   },
   {
     "name": "unlink",
-    "description": "Remove a manually created typed link. Returns removed and derived_from_text for edges still supplied by markdown/frontmatter/mentions; edit the source page with page_edit to remove those. Idempotent. WRITE — static public bearer: forbidden; authenticated token: requires write scope in its source; internal token: allowed.",
+    "description": "Remove a manually created typed link. Returns removed and derived_from_text for edges still supplied by markdown/frontmatter/mentions; edit the source page with page_edit to remove those. Idempotent. Requires source-scoped write or internal token; static public bearer forbidden.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -830,11 +830,11 @@
             "expired",
             "future"
           ],
-          "description": "Filter manual link validity; default all. Half-open end date."
+          "description": "Manual link validity; default all; end date exclusive."
         },
         "as_of": {
           "type": "string",
-          "description": "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC."
+          "description": "YYYY-MM-DD for a status other than all; default today UTC."
         },
         "slug": {
           "type": "string"
@@ -882,11 +882,11 @@
             "expired",
             "future"
           ],
-          "description": "Filter manual link validity; default all. Half-open end date."
+          "description": "Manual link validity; default all; end date exclusive."
         },
         "as_of": {
           "type": "string",
-          "description": "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC."
+          "description": "YYYY-MM-DD for a status other than all; default today UTC."
         },
         "type": {
           "type": "string"
@@ -915,7 +915,7 @@
   },
   {
     "name": "traverse_graph",
-    "description": "Breadth-first graph walk; each node appears once at shortest depth. truncated means eligible nodes within max_depth exceeded limit: narrow type/depth. Direction defaults outbound (also inbound/both); depth default 3, range 1..10; limit default 100, range 1..1000.",
+    "description": "Breadth-first graph walk; each node appears once at shortest depth. truncated means eligible nodes within max_depth exceeded limit: narrow type/depth. Defaults: direction outbound, max_depth 3, limit 100.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -927,11 +927,11 @@
             "expired",
             "future"
           ],
-          "description": "Filter manual link validity; default all. Half-open end date."
+          "description": "Manual link validity; default all; end date exclusive."
         },
         "as_of": {
           "type": "string",
-          "description": "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC."
+          "description": "YYYY-MM-DD for a status other than all; default today UTC."
         },
         "start_slug": {
           "type": "string"
@@ -1039,11 +1039,11 @@
             "private",
             "world"
           ],
-          "description": "Who may read the fact back. `private` (the default) is operator-only; `world` is also readable by tenant-scoped and public callers. Ignored on public ingress, which always writes `private`."
+          "description": "Who may read it back: private (default) is operator-only; world also tenant-scoped and public callers. Public ingress always writes private."
         },
         "request_id": {
           "type": "string",
-          "description": "Optional retry id (1-128 chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused."
+          "description": "Optional retry id (1-128 chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused."
         },
         "replaces": {
           "type": "integer",
@@ -1085,7 +1085,7 @@
         },
         "request_id": {
           "type": "string",
-          "description": "Optional retry id (1-128 chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused."
+          "description": "Optional retry id (1-128 chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused."
         }
       },
       "required": [
@@ -1169,7 +1169,7 @@
   },
   {
     "name": "fact_supersessions",
-    "description": "Supersession audit log: facts retired WITH a replacement pointer (forgotten_at + superseded_by both set), newest retirement first. Each row is the RETIRED fact; superseded_by points at its replacement. Optional `entity_slug` / `since` (ISO, on the retirement time) / `limit` (1..1000, default 50). Tenant-scoped. Read-only; no LLM.",
+    "description": "Supersession audit log: facts retired WITH a replacement pointer (forgotten_at + superseded_by both set), newest retirement first. Each row is the RETIRED fact; superseded_by points at its replacement. limit default 50. Tenant-scoped. Read-only; no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1250,16 +1250,16 @@
         },
         "redact_body": {
           "type": "boolean",
-          "description": "When true, strips markdown_body from the page row. The HTTP public-bearer path forces this on by default; internal MCP callers default false."
+          "description": "Strip markdown_body from the page row. Forced on for the public bearer; default false otherwise."
         },
         "token_budget": {
           "type": "integer",
           "minimum": 1,
-          "description": "Approximate whole-response token cap, measured on serialized visible rows after redaction. Server reallocates unused page/facts/timeline shares and truncates the body. budget reports facts_dropped, timeline_dropped, page_truncated and page_dropped; page:null with page_dropped means it did not fit, not that it is absent."
+          "description": "Approximate whole-response token cap over serialized visible rows after redaction; unused page/facts/timeline shares are reallocated and the body truncated. budget reports facts_dropped, timeline_dropped, page_truncated, page_dropped; page:null with page_dropped means it did not fit, not absence."
         },
         "include_pending": {
           "type": "boolean",
-          "description": "Piggy-back `pending_consolidation_count` (live facts not yet folded into a consolidated take) on the response. One round trip; field omitted when false."
+          "description": "Add `pending_consolidation_count` (live facts not yet folded into a consolidated take); omitted when false."
         }
       },
       "required": [
@@ -1349,7 +1349,7 @@
   },
   {
     "name": "jobs_list",
-    "description": "List jobs newest-first. Optional filters: status, kind, parent_job_id, since (ISO timestamp), limit (1..1000, default 100).",
+    "description": "List jobs newest-first; since is an ISO timestamp; limit default 100.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1604,7 +1604,7 @@
   },
   {
     "name": "remove_tag",
-    "description": "Remove a tag from a page. Idempotent (removing an absent tag is a no-op). WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
+    "description": "Remove a tag from a page. Idempotent (removing an absent tag is a no-op). Requires source-scoped write or internal token; static public bearer forbidden.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1680,7 +1680,7 @@
   },
   {
     "name": "get_links",
-    "description": "Edges touching slug, grouped by type and outbound/inbound direction (source/target respectively). Groups sort by type, outbound first; edges newest first. limit caps each direction: default/max 1000, minimum 1.",
+    "description": "Edges touching slug, grouped by type and outbound/inbound direction (source/target respectively). Groups sort by type, outbound first; edges newest first. limit caps each direction; default 1000.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1692,11 +1692,11 @@
             "expired",
             "future"
           ],
-          "description": "Filter manual link validity; default all. Half-open end date."
+          "description": "Manual link validity; default all; end date exclusive."
         },
         "as_of": {
           "type": "string",
-          "description": "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC."
+          "description": "YYYY-MM-DD for a status other than all; default today UTC."
         },
         "slug": {
           "type": "string"
@@ -1719,7 +1719,7 @@
   },
   {
     "name": "list_link_sources",
-    "description": "The link-type catalogue with live per-type edge counts. Every KNOWN_LINK_TYPES entry is returned (count 0 when unused), plus any ad-hoc type present in the graph (known:false). Ordered by count DESC then type ASC, so the most-used relationship types surface first while the full vocabulary stays discoverable. Returns [{type, count, known}].",
+    "description": "The link-type catalogue with live per-type edge counts. Every KNOWN_LINK_TYPES entry is returned (count 0 when unused), plus any ad-hoc type present in the graph (known:false). Ordered by count DESC then type ASC. Returns [{type, count, known}].",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -1732,7 +1732,7 @@
   },
   {
     "name": "find_orphans",
-    "description": "Pages with zero inbound links — nothing in the graph references them. The natural enrichment targets (a page nobody links to is new or forgotten). Newest-first. Optional `type` page-type filter; `limit` (1..1000, default 50). Deterministic, no LLM.",
+    "description": "Pages with zero inbound links — nothing in the graph references them. The natural enrichment targets (a page nobody links to is new or forgotten). Newest-first; limit default 50. Deterministic, no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1755,7 +1755,7 @@
   },
   {
     "name": "wanted_pages",
-    "description": "Unresolved targets linked by live visible pages in your sources, most-referenced first. Returns target_slug,referenced_by,sample_from (≤3 slugs),surface,first_seen. Hidden pages never count. Limit default 50, range 1..200. Deterministic, no LLM.",
+    "description": "Unresolved targets linked by live visible pages in your sources, most-referenced first. Returns target_slug,referenced_by,sample_from (≤3 slugs),surface,first_seen. Hidden pages never count. Limit default 50. Deterministic, no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1774,13 +1774,13 @@
   },
   {
     "name": "find_experts",
-    "description": "With topic: person/company expertise from hybrid search × relationship recency (6-month half-life) × salience. Without topic: graph hubs by distinct live in/out neighbours, excluding unresolved stubs. type overrides topic candidates or filters hubs. Limit default 5, range 1..200; deterministic, no LLM.",
+    "description": "With topic: person/company expertise from hybrid search × relationship recency (6-month half-life) × salience. Without topic: graph hubs by distinct live in/out neighbours, excluding unresolved stubs. type overrides topic candidates or filters hubs. Limit default 5; deterministic, no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "topic": {
           "type": "string",
-          "description": "Optional topic query. When set, ranks person/company pages by expertise + recency + salience. When omitted, returns graph link-degree hubs."
+          "description": "Topic query; omitted returns graph hubs."
         },
         "type": {
           "type": "string",
@@ -1805,7 +1805,7 @@
   },
   {
     "name": "find_contradictions",
-    "description": "Read conflicts without an LLM call. Default returns explicit contradicts page edges and cached opt-in probe findings (severity/axis/confidence/resolution_command; empty before probing). slug filters either edge endpoint; limit default 20, max 200. mode:typed finds overlapping numeric disagreements; use entity_slug, not slug/severity.",
+    "description": "Read conflicts without an LLM call. Default returns explicit contradicts page edges and cached opt-in probe findings (severity/axis/confidence/resolution_command; empty before probing). slug filters either edge endpoint; limit default 20. mode:typed finds overlapping numeric disagreements; use entity_slug, not slug/severity.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1848,7 +1848,7 @@
   },
   {
     "name": "find_trajectory",
-    "description": "Chronological 'how did this entity change?' log for one slug — the merged, oldest-first view of its entity_facts ledger and its timeline_events. Each fact anchors at its valid_from (else written_at); each event at occurred_at. Optional `since`/`until` ISO bounds on that anchor; `limit` (1..500, default 100). Deterministic, no LLM.",
+    "description": "Chronological 'how did this entity change?' log for one slug — the merged, oldest-first view of its entity_facts ledger and its timeline_events. Each fact anchors at its valid_from (else written_at); each event at occurred_at. since/until bound that anchor; limit default 100. Deterministic, no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1858,7 +1858,7 @@
         },
         "metric": {
           "type": "string",
-          "description": "Filter to a single canonical metric label (mig070 claim_metric, e.g. 'mrr'); timeline events are excluded for a metric query."
+          "description": "Filter to a single canonical metric label (claim_metric, e.g. 'mrr'); timeline events are excluded for a metric query."
         },
         "kind": {
           "type": "string",
@@ -1867,7 +1867,7 @@
             "event",
             "all"
           ],
-          "description": "Row-shape filter (mig070): 'metric' = typed-claim fact rows only, 'event' = event-shaped rows (event_type facts + timeline events), 'all' (default) = merged chronology."
+          "description": "metric: typed-claim facts only; event: event_type facts + timeline events; all (default): merged chronology."
         },
         "since": {
           "type": "string",
@@ -1895,7 +1895,7 @@
   },
   {
     "name": "get_recent_salience",
-    "description": "Live pages ranked by the deterministic `salience` score (migration 036: high-emotion tags + graph link-degree, recomputed by the recompute-salience cycle phase) — the 'what matters' read. Optional `type` filter and `days` recency window. No LLM, no Bedrock. Surfaces page slugs/titles — hidden from public ingress.",
+    "description": "Live pages ranked by the deterministic `salience` score (high-emotion tags + graph link-degree, recomputed each cycle) — the 'what matters' read. No LLM, no Bedrock. Surfaces page slugs/titles — hidden from public ingress.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1918,7 +1918,7 @@
             "flat",
             "on"
           ],
-          "description": "'flat' (default) = pure salience order (historical behavior). 'on' = rank by salience x 1/(1+days_old) — 'what's been salient lately'."
+          "description": "flat (default): pure salience order; on: salience x 1/(1+days_old), 'what's been salient lately'."
         },
         "limit": {
           "type": "integer",
@@ -2092,18 +2092,18 @@
           "items": {
             "type": "string"
           },
-          "description": "Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call."
+          "description": "≤100 exact source IDs within your grant (omitted: whole grant). [] reads nothing; a forbidden ID refuses."
         },
         "types": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter."
+          "description": "≤20 lower-case page types; matches live pages and their mirrors/file twins, never non-page documents. Empty: no filter."
         },
         "slug_prefix": {
           "type": "string",
-          "description": "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits."
+          "description": "Literal canonical slug prefix (e.g. projects/x/), no wildcards; applied before limits."
         },
         "q": {
           "type": "string",
@@ -2195,7 +2195,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 2,
-          "description": "Structural walk depth 0-2 (code corpora)."
+          "description": "Structural walk depth (code corpora)."
         },
         "token_budget": {
           "type": "integer",
@@ -2244,7 +2244,7 @@
   },
   {
     "name": "code_callers",
-    "description": "Call sites for symbol name (surface,chunk,path), with language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200, range 1..1000; optional lang. Deterministic, no LLM.",
+    "description": "Call sites for symbol name (surface,chunk,path), with language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200. Deterministic, no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2259,7 +2259,7 @@
         },
         "lang": {
           "type": "string",
-          "description": "Only mentions in this source language (e.g. `typescript`)."
+          "description": "Only this source language (e.g. `typescript`)."
         }
       },
       "required": [
@@ -2274,7 +2274,7 @@
   },
   {
     "name": "code_callees",
-    "description": "Callees of target path:line (innermost definition) or symbol; qualified names restrict sites. resolved_symbol is definition or null. Returns language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness; only ready proves absence. Limit default 200/max 1000; optional lang. Deterministic, no LLM.",
+    "description": "Callees of target path:line (innermost definition) or symbol; qualified names restrict sites. resolved_symbol is definition or null. Returns language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness; only ready proves absence. Limit default 200. Deterministic, no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2289,7 +2289,7 @@
         },
         "lang": {
           "type": "string",
-          "description": "Only mentions in this source language (e.g. `typescript`)."
+          "description": "Only this source language (e.g. `typescript`)."
         }
       },
       "required": [
@@ -2304,7 +2304,7 @@
   },
   {
     "name": "code_def",
-    "description": "Find code-def mentions for symbol name across indexed code: surface form, chunk, source path, language, kind, line bounds and an authorized opening snippet. Empty reads carry scoped readiness: not_built, indexing, no_symbols or ready. Only ready proves absence. Deterministic, no LLM; limit defaults 200 (max 1000), optional lang.",
+    "description": "Find code-def mentions for symbol name across indexed code: surface form, chunk, source path, language, kind, line bounds and an authorized opening snippet. Empty reads carry scoped readiness: not_built, indexing, no_symbols or ready. Only ready proves absence. Deterministic, no LLM; limit default 200.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2319,7 +2319,7 @@
         },
         "lang": {
           "type": "string",
-          "description": "Only mentions in this source language (e.g. `typescript`)."
+          "description": "Only this source language (e.g. `typescript`)."
         }
       },
       "required": [
@@ -2334,7 +2334,7 @@
   },
   {
     "name": "code_refs",
-    "description": "Non-call code-ref mentions for symbol name (imports/type uses/other references); complements code_callers. Includes language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200, range 1..1000; optional lang. Deterministic, no LLM.",
+    "description": "Non-call code-ref mentions for symbol name (imports/type uses/other references); complements code_callers. Includes language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200. Deterministic, no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2349,7 +2349,7 @@
         },
         "lang": {
           "type": "string",
-          "description": "Only mentions in this source language (e.g. `typescript`)."
+          "description": "Only this source language (e.g. `typescript`)."
         }
       },
       "required": [
@@ -2364,7 +2364,7 @@
   },
   {
     "name": "code_blast",
-    "description": "Transitive callers by BFS depth for change-impact checks. depth default 5/max 8; max_nodes default 200. Returns result (ok/not_found/ambiguous), depth_groups, cycles_detected, truncation and optional candidates/did_you_mean. Nodes: symbol,chunk_id,def_chunk_id,resolved (definition-backed vs by-name). Empty reads carry scoped readiness; only ready proves absence. No LLM.",
+    "description": "Transitive callers by BFS depth for change-impact checks. Defaults: depth 5, max_nodes 200. Returns result (ok/not_found/ambiguous), depth_groups, cycles_detected, truncation and optional candidates/did_you_mean. Nodes: symbol,chunk_id,def_chunk_id,resolved (definition-backed vs by-name). Empty reads carry scoped readiness; only ready proves absence. No LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2376,7 +2376,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 8,
-          "description": "Hop cap. Default 5, max 8."
+          "description": "Hop cap. Default 5."
         },
         "max_nodes": {
           "type": "integer",
@@ -2390,7 +2390,7 @@
         },
         "lang": {
           "type": "string",
-          "description": "Walk only chunks of this source language. Omitted: the start symbol's language when all its definitions share one."
+          "description": "Walk only this source language; omitted: the start symbol's, when all its definitions share one."
         }
       },
       "required": [
@@ -2405,7 +2405,7 @@
   },
   {
     "name": "code_flow",
-    "description": "Transitive callees by BFS depth; code_blast envelope plus terminal_nodes [{symbol,sink_kind:db_call/http_call/file_io/process_exec}]. depth default 8/max 12; max_nodes default 200. Language-specific names detect sinks; generic get/put/read/write do not. Empty reads carry readiness; only ready proves absence. No LLM.",
+    "description": "Transitive callees by BFS depth; code_blast envelope plus terminal_nodes [{symbol,sink_kind:db_call/http_call/file_io/process_exec}]. Defaults: depth 8, max_nodes 200. Language-specific names detect sinks; generic get/put/read/write do not. Empty reads carry readiness; only ready proves absence. No LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2417,7 +2417,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 12,
-          "description": "Hop cap. Default 8, max 12."
+          "description": "Hop cap. Default 8."
         },
         "max_nodes": {
           "type": "integer",
@@ -2431,7 +2431,7 @@
         },
         "lang": {
           "type": "string",
-          "description": "Walk only chunks of this source language. Omitted: the start symbol's language when all its definitions share one."
+          "description": "Walk only this source language; omitted: the start symbol's, when all its definitions share one."
         }
       },
       "required": [
@@ -2462,13 +2462,13 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 5,
-          "description": "Max pages volunteered (default 3, cap 5)."
+          "description": "Max pages volunteered (default 3)."
         },
         "min_confidence": {
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "description": "Confidence gate 0..1 (default 0.7). At the default, slug-suffix matches never volunteer."
+          "description": "Confidence gate (default 0.7). At the default, slug-suffix matches never volunteer."
         },
         "session_id": {
           "type": "string",
@@ -2533,7 +2533,7 @@
   },
   {
     "name": "quarantine_list",
-    "description": "Operator-only, read-only quarantined IDs/sources/paths/fixed reason codes. No titles, bodies or free-form details. Default 20, max 100.",
+    "description": "Operator-only, read-only quarantined IDs/sources/paths/fixed reason codes. No titles, bodies or free-form details. Default 20.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2628,19 +2628,19 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 8,
-          "description": "Max entity cards (default 5, cap 8)."
+          "description": "Max entity cards (default 5)."
         },
         "facts_limit": {
           "type": "integer",
           "minimum": 1,
           "maximum": 25,
-          "description": "Max brain facts after the cards (default 10, cap 25)."
+          "description": "Max brain facts after the cards (default 10)."
         },
         "token_budget": {
           "type": "integer",
           "minimum": 200,
           "maximum": 8000,
-          "description": "Token budget for cards + facts (default 1500, clamped 200..8000)."
+          "description": "Token budget for cards + facts (default 1500)."
         },
         "min_trust": {
           "type": "string",
@@ -2708,7 +2708,7 @@
   },
   {
     "name": "list_takes",
-    "description": "List synthesized 'takes' (opinionated claims the propose-takes phase derived, optionally graded): take_key, claim_text, kind, weight, domain, status (queued/accepted/rejected). Optional filters: `kind`, `domain`; `sort` (generated_at default | weight), `offset` for pagination. Advisory only — never mutates notes. Read-only; internal-only.",
+    "description": "List synthesized 'takes' (opinionated claims the propose-takes phase derived, optionally graded): take_key, claim_text, kind, weight, domain, status (queued/accepted/rejected). Advisory only — never mutates notes. Read-only; internal-only.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3086,7 +3086,7 @@
         },
         "holder": {
           "type": "string",
-          "description": "Filter to this holder (world|brain|<slug>). Still gated by the token's takes-holder allow-list."
+          "description": "Holder (world|brain|<slug>), within the token's takes-holder allow-list."
         },
         "since": {
           "type": "string",
@@ -3122,7 +3122,7 @@
         },
         "holder": {
           "type": "string",
-          "description": "Filter to this holder (world|brain|<slug>). Still gated by the token's takes-holder allow-list."
+          "description": "Holder (world|brain|<slug>), within the token's takes-holder allow-list."
         }
       },
       "additionalProperties": false
@@ -3222,7 +3222,7 @@
   },
   {
     "name": "get_recent_transcripts",
-    "description": "Recently-ingested conversation transcript pages (types: meeting, email, journal, note), newest-first, within a day window. Returns each page's slug/type/title/updated_at plus a summary (first ~300 chars) or — with summary=false — the body capped at 100 KB. Tenant-scoped; limit-capped (default 50, max 200). Surfaces page bodies — hidden from public ingress. Read-only; no LLM.",
+    "description": "Recently-ingested conversation transcript pages (types: meeting, email, journal, note), newest-first, within a day window. Returns each page's slug/type/title/updated_at plus a summary or the body (see summary). Tenant-scoped. Surfaces page bodies — hidden from public ingress. Read-only; no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3356,7 +3356,7 @@
   },
   {
     "name": "get_raw_data",
-    "description": "Read a page's raw_data sidecar rows, newest first. Optional `source` filter to one data-source label; `limit` (1..200, default 50). Tenant-scoped via the owning page. Read-only; no LLM.",
+    "description": "Read a page's raw_data sidecar rows, newest first. limit default 50. Tenant-scoped via the owning page. Read-only; no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3420,7 +3420,7 @@
   },
   {
     "name": "get_ingest_log",
-    "description": "Recent ingestion-log entries, newest first, scoped to the caller's read set. Optional `source_type` filter; `limit` (1..50, default 20). Read-only; no LLM.",
+    "description": "Recent ingestion-log entries, newest first, scoped to the caller's read set. limit default 20. Read-only; no LLM.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3465,7 +3465,7 @@
   },
   {
     "name": "get_job_progress",
-    "description": "Read a job's live progress envelope: status + the handler-reported `progress` JSON (mig083). Cheap poll target while a long job runs. Operator-only; read-only.",
+    "description": "Read a job's live progress envelope: status + the handler-reported `progress` JSON. Cheap poll target while a long job runs. Operator-only; read-only.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3725,7 +3725,7 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "description": "0..1, default 0.7."
+          "description": "Default 0.7."
         },
         "valid_from": {
           "type": "string",
@@ -3796,7 +3796,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 50,
-          "description": "Lookback window for the recent timeline (default 7, cap 50)."
+          "description": "Lookback window for the recent timeline (default 7)."
         },
         "entities": {
           "type": "array",
@@ -3824,7 +3824,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 500,
-          "description": "Max pages to sweep (default 100, hard cap 500)."
+          "description": "Max pages to sweep (default 100)."
         }
       },
       "additionalProperties": false

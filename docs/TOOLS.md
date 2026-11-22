@@ -159,9 +159,9 @@ Ranked vector+keyword chunks, paths and titles. Language/symbol/date/type/slug-p
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `source_ids` | string[] | no | Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call. |
-| `types` | string[] | no | Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter. |
-| `slug_prefix` | string | no | Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits. |
+| `source_ids` | string[] | no | ≤100 exact source IDs within your grant (omitted: whole grant). [] reads nothing; a forbidden ID refuses. |
+| `types` | string[] | no | ≤20 lower-case page types; matches live pages and their mirrors/file twins, never non-page documents. Empty: no filter. |
+| `slug_prefix` | string | no | Literal canonical slug prefix (e.g. projects/x/), no wildcards; applied before limits. |
 | `q` | string | yes | Natural-language query. |
 | `k` | integer (1–100) | no | Number of hits to return. Default 20. |
 | `min_trust` | string (one of `owner`, `member`, `agent`, `external`) | no | Lowest tier kept: owner>member>agent>external. Hits report trust_tier. |
@@ -171,7 +171,7 @@ Ranked vector+keyword chunks, paths and titles. Language/symbol/date/type/slug-p
 | `since` | string | no | Keep hits whose content date (effective, else updated) is >= this: ISO-8601 date/datetime or a duration back from now (7d/2w/6m/1y). |
 | `until` | string | no | Upper bound on the content date: ISO date/time (YYYY-MM-DD includes the whole day), or duration back from now: 7d/2w/6m/1y. |
 | `near_symbol` | string | no | Anchor retrieval at this qualified symbol (e.g. 'BrainEngine::searchKeyword'); its chunks join the candidates and seed the code-graph walk. Code corpora only. |
-| `walk_depth` | integer (0–2) | no | Code-graph walk depth 0-2 (default 0 = off); score decays per hop. Code corpora only; bypasses the query cache. |
+| `walk_depth` | integer (0–2) | no | Code-graph walk depth (default 0 = off); score decays per hop. Code corpora only; bypasses the query cache. |
 | `explain` | boolean | no | Stamp each hit with per-signal ranking attribution (base, boosts, rerank delta). Bypasses the query cache. |
 | `offset` | integer (0–1000) | no | Skip the first N ranked hits (pagination), after ranking. |
 | `mode` | string (one of `conservative`, `balanced`, `tokenmax`) | no | Per-call search mode bundle. Operator only; a tenant token's mode is silently ignored. |
@@ -225,11 +225,11 @@ Read a page or error on absence. fuzzy:true resolves a unique fuzzy miss; multip
 
 Scope: read. Effect: read-only.
 
-List pages, newest-first by default. Optional filters: `type`, `tag` (normalized), `since` (ISO timestamp), `limit` (1..100, default 50). `sort` picks the order (updated_desc default \| updated_asc \| created_desc \| slug); `include_deleted:true` adds soft-deleted pages with deleted_at populated.
+List pages; sort defaults to updated_desc (newest first). tag is normalized; since is an ISO timestamp; limit default 50. include_deleted:true adds soft-deleted pages with deleted_at.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `source_ids` | string[] | no | Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call. |
+| `source_ids` | string[] | no | ≤100 exact source IDs within your grant (omitted: whole grant). [] reads nothing; a forbidden ID refuses. |
 | `type` | string | no |  |
 | `since` | string | no |  |
 | `tag` | string | no | Filter to pages carrying this tag. |
@@ -260,8 +260,8 @@ Links touching slug, newest first, with direction per row. Select outbound, inbo
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `status` | string (one of `all`, `active`, `expired`, `future`) | no | Filter manual link validity; default all. Half-open end date. |
-| `as_of` | string | no | Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC. |
+| `status` | string (one of `all`, `active`, `expired`, `future`) | no | Manual link validity; default all; end date exclusive. |
+| `as_of` | string | no | YYYY-MM-DD for a status other than all; default today UTC. |
 | `slug` | string | yes |  |
 | `type` | string | no | Filter to a single link type. |
 | `direction` | string (one of `outbound`, `inbound`, `both`) | no | Default `both`. |
@@ -275,8 +275,8 @@ Typed links matching type and at least one of source_slug/target_slug; e.g. work
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `status` | string (one of `all`, `active`, `expired`, `future`) | no | Filter manual link validity; default all. Half-open end date. |
-| `as_of` | string | no | Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC. |
+| `status` | string (one of `all`, `active`, `expired`, `future`) | no | Manual link validity; default all; end date exclusive. |
+| `as_of` | string | no | YYYY-MM-DD for a status other than all; default today UTC. |
 | `type` | string | yes |  |
 | `source_slug` | string | no |  |
 | `target_slug` | string | no |  |
@@ -286,12 +286,12 @@ Typed links matching type and at least one of source_slug/target_slug; e.g. work
 
 Scope: read. Effect: read-only.
 
-Breadth-first graph walk; each node appears once at shortest depth. truncated means eligible nodes within max_depth exceeded limit: narrow type/depth. Direction defaults outbound (also inbound/both); depth default 3, range 1..10; limit default 100, range 1..1000.
+Breadth-first graph walk; each node appears once at shortest depth. truncated means eligible nodes within max_depth exceeded limit: narrow type/depth. Defaults: direction outbound, max_depth 3, limit 100.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `status` | string (one of `all`, `active`, `expired`, `future`) | no | Filter manual link validity; default all. Half-open end date. |
-| `as_of` | string | no | Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC. |
+| `status` | string (one of `all`, `active`, `expired`, `future`) | no | Manual link validity; default all; end date exclusive. |
+| `as_of` | string | no | YYYY-MM-DD for a status other than all; default today UTC. |
 | `start_slug` | string | yes |  |
 | `direction` | string (one of `outbound`, `inbound`, `both`) | no |  |
 | `type` | string | no |  |
@@ -323,7 +323,7 @@ Entity facts by confidence (default) or recency; omit entity_slug for cross-enti
 
 Scope: read. Effect: read-only.
 
-Supersession audit log: facts retired WITH a replacement pointer (forgotten_at + superseded_by both set), newest retirement first. Each row is the RETIRED fact; superseded_by points at its replacement. Optional `entity_slug` / `since` (ISO, on the retirement time) / `limit` (1..1000, default 50). Tenant-scoped. Read-only; no LLM.
+Supersession audit log: facts retired WITH a replacement pointer (forgotten_at + superseded_by both set), newest retirement first. Each row is the RETIRED fact; superseded_by points at its replacement. limit default 50. Tenant-scoped. Read-only; no LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -356,9 +356,9 @@ One-shot 'what do I know about X?': the entity's page (compiled_truth + body), t
 | `query` | string | no | Optional semantic fact focus (e.g. funding history), replacing confidence order; falls back to confidence when embedding is unavailable. |
 | `fact_limit` | integer (1–200) | no |  |
 | `timeline_limit` | integer (1–200) | no |  |
-| `redact_body` | boolean | no | When true, strips markdown_body from the page row. The HTTP public-bearer path forces this on by default; internal MCP callers default false. |
-| `token_budget` | integer (≥ 1) | no | Approximate whole-response token cap, measured on serialized visible rows after redaction. Server reallocates unused page/facts/timeline shares and truncates the body. budget reports facts_dropped, timeline_dropped, page_truncated and page_dropped; page:null with page_dropped means it did not fit, not that it is absent. |
-| `include_pending` | boolean | no | Piggy-back `pending_consolidation_count` (live facts not yet folded into a consolidated take) on the response. One round trip; field omitted when false. |
+| `redact_body` | boolean | no | Strip markdown_body from the page row. Forced on for the public bearer; default false otherwise. |
+| `token_budget` | integer (≥ 1) | no | Approximate whole-response token cap over serialized visible rows after redaction; unused page/facts/timeline shares are reallocated and the body truncated. budget reports facts_dropped, timeline_dropped, page_truncated, page_dropped; page:null with page_dropped means it did not fit, not absence. |
+| `include_pending` | boolean | no | Add `pending_consolidation_count` (live facts not yet folded into a consolidated take); omitted when false. |
 
 ### jobs_submit
 
@@ -393,7 +393,7 @@ Cancel a pending job. By default cascades to all pending descendants. WRITE — 
 
 Scope: read. Effect: read-only. Operator only.
 
-List jobs newest-first. Optional filters: status, kind, parent_job_id, since (ISO timestamp), limit (1..1000, default 100).
+List jobs newest-first; since is an ISO timestamp; limit default 100.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -494,12 +494,12 @@ No-LLM relational query about a seed entity ('who works at acme', 'founders of c
 
 Scope: read. Effect: read-only.
 
-Edges touching slug, grouped by type and outbound/inbound direction (source/target respectively). Groups sort by type, outbound first; edges newest first. limit caps each direction: default/max 1000, minimum 1.
+Edges touching slug, grouped by type and outbound/inbound direction (source/target respectively). Groups sort by type, outbound first; edges newest first. limit caps each direction; default 1000.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `status` | string (one of `all`, `active`, `expired`, `future`) | no | Filter manual link validity; default all. Half-open end date. |
-| `as_of` | string | no | Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC. |
+| `status` | string (one of `all`, `active`, `expired`, `future`) | no | Manual link validity; default all; end date exclusive. |
+| `as_of` | string | no | YYYY-MM-DD for a status other than all; default today UTC. |
 | `slug` | string | yes |  |
 | `limit` | integer (1–1000) | no |  |
 
@@ -507,7 +507,7 @@ Edges touching slug, grouped by type and outbound/inbound direction (source/targ
 
 Scope: read. Effect: read-only.
 
-The link-type catalogue with live per-type edge counts. Every KNOWN_LINK_TYPES entry is returned (count 0 when unused), plus any ad-hoc type present in the graph (known:false). Ordered by count DESC then type ASC, so the most-used relationship types surface first while the full vocabulary stays discoverable. Returns [{type, count, known}].
+The link-type catalogue with live per-type edge counts. Every KNOWN_LINK_TYPES entry is returned (count 0 when unused), plus any ad-hoc type present in the graph (known:false). Ordered by count DESC then type ASC. Returns [{type, count, known}].
 
 No parameters.
 
@@ -515,7 +515,7 @@ No parameters.
 
 Scope: read. Effect: read-only.
 
-Pages with zero inbound links — nothing in the graph references them. The natural enrichment targets (a page nobody links to is new or forgotten). Newest-first. Optional `type` page-type filter; `limit` (1..1000, default 50). Deterministic, no LLM.
+Pages with zero inbound links — nothing in the graph references them. The natural enrichment targets (a page nobody links to is new or forgotten). Newest-first; limit default 50. Deterministic, no LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -526,7 +526,7 @@ Pages with zero inbound links — nothing in the graph references them. The natu
 
 Scope: read. Effect: read-only.
 
-Unresolved targets linked by live visible pages in your sources, most-referenced first. Returns target_slug,referenced_by,sample_from (≤3 slugs),surface,first_seen. Hidden pages never count. Limit default 50, range 1..200. Deterministic, no LLM.
+Unresolved targets linked by live visible pages in your sources, most-referenced first. Returns target_slug,referenced_by,sample_from (≤3 slugs),surface,first_seen. Hidden pages never count. Limit default 50. Deterministic, no LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -536,11 +536,11 @@ Unresolved targets linked by live visible pages in your sources, most-referenced
 
 Scope: read. Effect: read-only.
 
-With topic: person/company expertise from hybrid search × relationship recency (6-month half-life) × salience. Without topic: graph hubs by distinct live in/out neighbours, excluding unresolved stubs. type overrides topic candidates or filters hubs. Limit default 5, range 1..200; deterministic, no LLM.
+With topic: person/company expertise from hybrid search × relationship recency (6-month half-life) × salience. Without topic: graph hubs by distinct live in/out neighbours, excluding unresolved stubs. type overrides topic candidates or filters hubs. Limit default 5; deterministic, no LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `topic` | string | no | Optional topic query. When set, ranks person/company pages by expertise + recency + salience. When omitted, returns graph link-degree hubs. |
+| `topic` | string | no | Topic query; omitted returns graph hubs. |
 | `type` | string | no | Restrict to a single page type (overrides the person/company default in topic mode). |
 | `explain` | boolean | no | Topic mode only: include the per-result factor breakdown (expertise, recency, salience) behind `score`. |
 | `limit` | integer (1–200) | no |  |
@@ -549,7 +549,7 @@ With topic: person/company expertise from hybrid search × relationship recency 
 
 Scope: read. Effect: read-only.
 
-Read conflicts without an LLM call. Default returns explicit contradicts page edges and cached opt-in probe findings (severity/axis/confidence/resolution_command; empty before probing). slug filters either edge endpoint; limit default 20, max 200. mode:typed finds overlapping numeric disagreements; use entity_slug, not slug/severity.
+Read conflicts without an LLM call. Default returns explicit contradicts page edges and cached opt-in probe findings (severity/axis/confidence/resolution_command; empty before probing). slug filters either edge endpoint; limit default 20. mode:typed finds overlapping numeric disagreements; use entity_slug, not slug/severity.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -563,13 +563,13 @@ Read conflicts without an LLM call. Default returns explicit contradicts page ed
 
 Scope: read. Effect: read-only.
 
-Chronological 'how did this entity change?' log for one slug — the merged, oldest-first view of its entity_facts ledger and its timeline_events. Each fact anchors at its valid_from (else written_at); each event at occurred_at. Optional `since`/`until` ISO bounds on that anchor; `limit` (1..500, default 100). Deterministic, no LLM.
+Chronological 'how did this entity change?' log for one slug — the merged, oldest-first view of its entity_facts ledger and its timeline_events. Each fact anchors at its valid_from (else written_at); each event at occurred_at. since/until bound that anchor; limit default 100. Deterministic, no LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `entity_slug` | string | yes | The entity to chart (e.g. companies/acme, people/alice). |
-| `metric` | string | no | Filter to a single canonical metric label (mig070 claim_metric, e.g. 'mrr'); timeline events are excluded for a metric query. |
-| `kind` | string (one of `metric`, `event`, `all`) | no | Row-shape filter (mig070): 'metric' = typed-claim fact rows only, 'event' = event-shaped rows (event_type facts + timeline events), 'all' (default) = merged chronology. |
+| `metric` | string | no | Filter to a single canonical metric label (claim_metric, e.g. 'mrr'); timeline events are excluded for a metric query. |
+| `kind` | string (one of `metric`, `event`, `all`) | no | metric: typed-claim facts only; event: event_type facts + timeline events; all (default): merged chronology. |
 | `since` | string | no | Lower bound (ISO timestamp) on the point's anchor date. |
 | `until` | string | no | Upper bound (ISO timestamp). |
 | `limit` | integer (1–500) | no |  |
@@ -578,14 +578,14 @@ Chronological 'how did this entity change?' log for one slug — the merged, old
 
 Scope: read. Effect: read-only.
 
-Live pages ranked by the deterministic `salience` score (migration 036: high-emotion tags + graph link-degree, recomputed by the recompute-salience cycle phase) — the 'what matters' read. Optional `type` filter and `days` recency window. No LLM, no Bedrock. Surfaces page slugs/titles — hidden from public ingress.
+Live pages ranked by the deterministic `salience` score (high-emotion tags + graph link-degree, recomputed each cycle) — the 'what matters' read. No LLM, no Bedrock. Surfaces page slugs/titles — hidden from public ingress.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `type` | string | no | Filter to a single page type (exact match), e.g. person. |
 | `days` | integer (≥ 1) | no | Only pages updated within the last N days. Omit for all-time. |
 | `slug_prefix` | string | no | Optional slug-prefix filter, e.g. 'people' or 'projects/x'. |
-| `recency_bias` | string (one of `flat`, `on`) | no | 'flat' (default) = pure salience order (historical behavior). 'on' = rank by salience x 1/(1+days_old) — 'what's been salient lately'. |
+| `recency_bias` | string (one of `flat`, `on`) | no | flat (default): pure salience order; on: salience x 1/(1+days_old), 'what's been salient lately'. |
 | `limit` | integer (1–200) | no | Max rows (default 20). |
 
 ### find_anomalies
@@ -635,9 +635,9 @@ Hybrid retrieval with detail, salience/recency, date/code filters, offset and ad
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `source_ids` | string[] | no | Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call. |
-| `types` | string[] | no | Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter. |
-| `slug_prefix` | string | no | Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits. |
+| `source_ids` | string[] | no | ≤100 exact source IDs within your grant (omitted: whole grant). [] reads nothing; a forbidden ID refuses. |
+| `types` | string[] | no | ≤20 lower-case page types; matches live pages and their mirrors/file twins, never non-page documents. Empty: no filter. |
+| `slug_prefix` | string | no | Literal canonical slug prefix (e.g. projects/x/), no wildcards; applied before limits. |
 | `q` | string | yes | Natural-language query. |
 | `k` | integer (1–100) | no | Number of hits to return. Default 20; without refine, token_budget and no k uses up to 100 candidates. |
 | `min_trust` | string (one of `owner`, `member`, `agent`, `external`) | no | Lowest tier kept, as in search; also filters ledger facts. |
@@ -652,7 +652,7 @@ Hybrid retrieval with detail, salience/recency, date/code filters, offset and ad
 | `lang` | string | no | Filter to chunks of a source language (code corpora). |
 | `symbol_kind` | string | no | Filter to chunks of a symbol kind (code corpora). |
 | `near_symbol` | string | no | Anchor retrieval at this qualified symbol name (code corpora). |
-| `walk_depth` | integer (0–2) | no | Structural walk depth 0-2 (code corpora). |
+| `walk_depth` | integer (0–2) | no | Structural walk depth (code corpora). |
 | `token_budget` | integer (1–200000) | no | Cap total returned content size (~chars/4 tokens). |
 | `adaptive_return` | boolean | no | Return a TIGHT intent-sized set instead of the full top-K (never empty when matches exist; first page only). |
 | `explain` | boolean | no | Stamp per-hit ranking attribution. Bypasses the query cache. |
@@ -665,77 +665,77 @@ Hybrid retrieval with detail, salience/recency, date/code filters, offset and ad
 
 Scope: read. Effect: read-only.
 
-Call sites for symbol name (surface,chunk,path), with language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200, range 1..1000; optional lang. Deterministic, no LLM.
+Call sites for symbol name (surface,chunk,path), with language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200. Deterministic, no LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | Bare symbol name to find callers of (e.g. `hybridSearch`). |
 | `limit` | integer (1–1000) | no |  |
-| `lang` | string | no | Only mentions in this source language (e.g. `typescript`). |
+| `lang` | string | no | Only this source language (e.g. `typescript`). |
 
 ### code_callees
 
 Scope: read. Effect: read-only.
 
-Callees of target path:line (innermost definition) or symbol; qualified names restrict sites. resolved_symbol is definition or null. Returns language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness; only ready proves absence. Limit default 200/max 1000; optional lang. Deterministic, no LLM.
+Callees of target path:line (innermost definition) or symbol; qualified names restrict sites. resolved_symbol is definition or null. Returns language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness; only ready proves absence. Limit default 200. Deterministic, no LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `target` | string | yes | `<path>:<line>` of a symbol body (e.g. `src/x.ts:42`), or a symbol name, bare or qualified (e.g. `save` or `Repo::save`). |
 | `limit` | integer (1–1000) | no |  |
-| `lang` | string | no | Only mentions in this source language (e.g. `typescript`). |
+| `lang` | string | no | Only this source language (e.g. `typescript`). |
 
 ### code_def
 
 Scope: read. Effect: read-only.
 
-Find code-def mentions for symbol name across indexed code: surface form, chunk, source path, language, kind, line bounds and an authorized opening snippet. Empty reads carry scoped readiness: not_built, indexing, no_symbols or ready. Only ready proves absence. Deterministic, no LLM; limit defaults 200 (max 1000), optional lang.
+Find code-def mentions for symbol name across indexed code: surface form, chunk, source path, language, kind, line bounds and an authorized opening snippet. Empty reads carry scoped readiness: not_built, indexing, no_symbols or ready. Only ready proves absence. Deterministic, no LLM; limit default 200.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | Bare symbol name to locate definitions of (e.g. `hybridSearch`, `Storage`). |
 | `limit` | integer (1–1000) | no |  |
-| `lang` | string | no | Only mentions in this source language (e.g. `typescript`). |
+| `lang` | string | no | Only this source language (e.g. `typescript`). |
 
 ### code_refs
 
 Scope: read. Effect: read-only.
 
-Non-call code-ref mentions for symbol name (imports/type uses/other references); complements code_callers. Includes language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200, range 1..1000; optional lang. Deterministic, no LLM.
+Non-call code-ref mentions for symbol name (imports/type uses/other references); complements code_callers. Includes language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200. Deterministic, no LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | Bare symbol name to find references to (e.g. `hybridSearch`). |
 | `limit` | integer (1–1000) | no |  |
-| `lang` | string | no | Only mentions in this source language (e.g. `typescript`). |
+| `lang` | string | no | Only this source language (e.g. `typescript`). |
 
 ### code_blast
 
 Scope: read. Effect: read-only.
 
-Transitive callers by BFS depth for change-impact checks. depth default 5/max 8; max_nodes default 200. Returns result (ok/not_found/ambiguous), depth_groups, cycles_detected, truncation and optional candidates/did_you_mean. Nodes: symbol,chunk_id,def_chunk_id,resolved (definition-backed vs by-name). Empty reads carry scoped readiness; only ready proves absence. No LLM.
+Transitive callers by BFS depth for change-impact checks. Defaults: depth 5, max_nodes 200. Returns result (ok/not_found/ambiguous), depth_groups, cycles_detected, truncation and optional candidates/did_you_mean. Nodes: symbol,chunk_id,def_chunk_id,resolved (definition-backed vs by-name). Empty reads carry scoped readiness; only ready proves absence. No LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `symbol` | string | yes | Bare or qualified symbol name (e.g. `performSync` or `Foo::performSync`). |
-| `depth` | integer (1–8) | no | Hop cap. Default 5, max 8. |
+| `depth` | integer (1–8) | no | Hop cap. Default 5. |
 | `max_nodes` | integer (1–200) | no | Result-set cap. Default 200. |
 | `exact` | boolean | no | Skip bare-name disambiguation; treat `symbol` as an exact qualified name. |
-| `lang` | string | no | Walk only chunks of this source language. Omitted: the start symbol's language when all its definitions share one. |
+| `lang` | string | no | Walk only this source language; omitted: the start symbol's, when all its definitions share one. |
 
 ### code_flow
 
 Scope: read. Effect: read-only.
 
-Transitive callees by BFS depth; code_blast envelope plus terminal_nodes [{symbol,sink_kind:db_call/http_call/file_io/process_exec}]. depth default 8/max 12; max_nodes default 200. Language-specific names detect sinks; generic get/put/read/write do not. Empty reads carry readiness; only ready proves absence. No LLM.
+Transitive callees by BFS depth; code_blast envelope plus terminal_nodes [{symbol,sink_kind:db_call/http_call/file_io/process_exec}]. Defaults: depth 8, max_nodes 200. Language-specific names detect sinks; generic get/put/read/write do not. Empty reads carry readiness; only ready proves absence. No LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `symbol` | string | yes | Entry-point symbol name (bare or qualified). |
-| `depth` | integer (1–12) | no | Hop cap. Default 8, max 12. |
+| `depth` | integer (1–12) | no | Hop cap. Default 8. |
 | `max_nodes` | integer (1–200) | no | Result-set cap. Default 200. |
 | `exact` | boolean | no | Skip bare-name disambiguation; treat `symbol` as an exact qualified name. |
-| `lang` | string | no | Walk only chunks of this source language. Omitted: the start symbol's language when all its definitions share one. |
+| `lang` | string | no | Walk only this source language; omitted: the start symbol's, when all its definitions share one. |
 
 ### volunteer_context
 
@@ -747,8 +747,8 @@ Resolve rolling-window entity mentions to page pointers: alias .9/title .8/slug-
 |---|---|---|---|
 | `window` | string | no | Conversation window text. 'user:'/'assistant:' line prefixes set the role; unprefixed input is one user turn. Required unless stats:true. |
 | `prior_context` | string | no | Already-surfaced context (pointer blocks / opened page bodies). Pages whose slug appears here are not re-volunteered. |
-| `max_pages` | integer (1–5) | no | Max pages volunteered (default 3, cap 5). |
-| `min_confidence` | number (0–1) | no | Confidence gate 0..1 (default 0.7). At the default, slug-suffix matches never volunteer. |
+| `max_pages` | integer (1–5) | no | Max pages volunteered (default 3). |
+| `min_confidence` | number (0–1) | no | Confidence gate (default 0.7). At the default, slug-suffix matches never volunteer. |
 | `session_id` | string | no | Opaque session id stamped on each logged volunteer event. |
 | `turn` | integer (≥ 0) | no | Turn number stamped on each logged volunteer event. |
 | `stats` | boolean | no | Return per-arm used/volunteered precision stats instead of volunteering. |
@@ -776,9 +776,9 @@ Budgeted entity cards (title,type,facts,events; no body), up to 8: explicit slug
 |---|---|---|---|
 | `slugs` | array | no | Entity page slugs to build cards for, in priority order (array of strings). |
 | `window` | string | no | Conversation window text; entities it names fill the card slots left after `slugs`. 'user:'/'assistant:' line prefixes set the role. |
-| `max_entities` | integer (1–8) | no | Max entity cards (default 5, cap 8). |
-| `facts_limit` | integer (1–25) | no | Max brain facts after the cards (default 10, cap 25). |
-| `token_budget` | integer (200–8000) | no | Token budget for cards + facts (default 1500, clamped 200..8000). |
+| `max_entities` | integer (1–8) | no | Max entity cards (default 5). |
+| `facts_limit` | integer (1–25) | no | Max brain facts after the cards (default 10). |
+| `token_budget` | integer (200–8000) | no | Token budget for cards + facts (default 1500). |
 | `min_trust` | string (one of `owner`, `member`, `agent`, `external`) | no | Lowest tier kept for cards, facts, core. |
 
 ### advisor
@@ -811,7 +811,7 @@ List synthesized concept pages (LLM-derived from the corpus by the synthesize-co
 
 Scope: read. Effect: read-only.
 
-List synthesized 'takes' (opinionated claims the propose-takes phase derived, optionally graded): take_key, claim_text, kind, weight, domain, status (queued/accepted/rejected). Optional filters: `kind`, `domain`; `sort` (generated_at default \| weight), `offset` for pagination. Advisory only — never mutates notes. Read-only; internal-only.
+List synthesized 'takes' (opinionated claims the propose-takes phase derived, optionally graded): take_key, claim_text, kind, weight, domain, status (queued/accepted/rejected). Advisory only — never mutates notes. Read-only; internal-only.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -851,7 +851,7 @@ Read latest grades of synthesized takes: total/graded/resolved, verdict counts, 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `domain` | string | no | Filter to takes tagged with this domain. |
-| `holder` | string | no | Filter to this holder (world\|brain\|<slug>). Still gated by the token's takes-holder allow-list. |
+| `holder` | string | no | Holder (world\|brain\|<slug>), within the token's takes-holder allow-list. |
 | `since` | string | no | Only takes generated on/after this ISO date (YYYY-MM-DD). |
 | `until` | string | no | Only takes generated on/before this ISO date (YYYY-MM-DD). |
 
@@ -865,7 +865,7 @@ Reliability buckets for latest correct/incorrect take grades: observed hit-rate 
 |---|---|---|---|
 | `bucket_size` | number (0–1) | no | Bucket width in (0,1]. Default 0.1. |
 | `domain` | string | no | Filter to takes tagged with this domain. |
-| `holder` | string | no | Filter to this holder (world\|brain\|<slug>). Still gated by the token's takes-holder allow-list. |
+| `holder` | string | no | Holder (world\|brain\|<slug>), within the token's takes-holder allow-list. |
 
 ### list_skills
 
@@ -892,7 +892,7 @@ Fetch one brain-resident skill's full markdown body by slug (as returned by list
 
 Scope: read. Effect: read-only.
 
-Recently-ingested conversation transcript pages (types: meeting, email, journal, note), newest-first, within a day window. Returns each page's slug/type/title/updated_at plus a summary (first ~300 chars) or — with summary=false — the body capped at 100 KB. Tenant-scoped; limit-capped (default 50, max 200). Surfaces page bodies — hidden from public ingress. Read-only; no LLM.
+Recently-ingested conversation transcript pages (types: meeting, email, journal, note), newest-first, within a day window. Returns each page's slug/type/title/updated_at plus a summary or the body (see summary). Tenant-scoped. Surfaces page bodies — hidden from public ingress. Read-only; no LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -904,7 +904,7 @@ Recently-ingested conversation transcript pages (types: meeting, email, journal,
 
 Scope: read. Effect: read-only.
 
-Read a page's raw_data sidecar rows, newest first. Optional `source` filter to one data-source label; `limit` (1..200, default 50). Tenant-scoped via the owning page. Read-only; no LLM.
+Read a page's raw_data sidecar rows, newest first. limit default 50. Tenant-scoped via the owning page. Read-only; no LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -916,7 +916,7 @@ Read a page's raw_data sidecar rows, newest first. Optional `source` filter to o
 
 Scope: read. Effect: read-only.
 
-Recent ingestion-log entries, newest first, scoped to the caller's read set. Optional `source_type` filter; `limit` (1..50, default 20). Read-only; no LLM.
+Recent ingestion-log entries, newest first, scoped to the caller's read set. limit default 20. Read-only; no LLM.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -927,7 +927,7 @@ Recent ingestion-log entries, newest first, scoped to the caller's read set. Opt
 
 Scope: read. Effect: read-only. Operator only.
 
-Read a job's live progress envelope: status + the handler-reported `progress` JSON (mig083). Cheap poll target while a long job runs. Operator-only; read-only.
+Read a job's live progress envelope: status + the handler-reported `progress` JSON. Cheap poll target while a long job runs. Operator-only; read-only.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -1055,7 +1055,7 @@ Push-based chronicle context: the recent timeline plus the validity-resolved ont
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `days` | integer (1–50) | no | Lookback window for the recent timeline (default 7, cap 50). |
+| `days` | integer (1–50) | no | Lookback window for the recent timeline (default 7). |
 | `entities` | array | no | Entity slugs to resolve current ontology for (array or comma-separated string). |
 
 ## Write tools
@@ -1076,7 +1076,7 @@ Index a markdown document. Either pass `path` (an absolute path the daemon can r
 
 Scope: write. Effect: writes.
 
-Record a friction event: retrieval missed, an answer felt wrong, a tool errored, OR a recall was unexpectedly good (`delight`). From a skill, include extra.skill = '<skill-slug>' so `memrain friction propose-fix` groups it with that skill. Set `severity` (confused/error/blocker/nit) on negative kinds for triage.
+Record a friction event: retrieval missed, an answer felt wrong, a tool errored, OR a recall was unexpectedly good (`delight`). From a skill, include extra.skill = '<skill-slug>' so `memrain friction propose-fix` groups it with that skill. Set severity on negative kinds for triage.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -1097,20 +1097,20 @@ Call shape: `{slug, markdown_body, expected_version?}`
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `reason` | string | no | Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version. |
+| `reason` | string | no | Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version. |
 | `slug` | string | yes | kebab-case identifier with optional `/` namespaces (e.g. people/alice, journal/2026/05/2026-05-18). New slugs cannot have repeated or trailing hyphens in any segment; existing slugs remain writable. |
 | `type` | string | no | Optional: concept/person/company/meeting/idea/journal/note/email/event/decision/task/source. Inferred from slug prefix (people/→person), else note. Other types require allowAdHocType:true. |
 | `title` | string | no |  |
 | `compiled_truth` | object | no | Editable jsonb header (tags, related slugs, tier, enriched_at, …). |
 | `markdown_body` | string | no |  |
-| `written_by` | string | no | Optional caller identifier for the audit trail (skill slug, recipe name, …). |
+| `written_by` | string | no | Optional caller id for the audit trail (skill slug, recipe, …). |
 | `allowAdHocType` | boolean | no |  |
 | `allow_empty_body` | boolean | no | Clear the page's body on purpose. Without it an empty markdown_body over a page that has one is refused; an OMITTED markdown_body keeps the current body. |
 | `allow_shrink` | boolean | no | Allow an intentional replacement smaller than half of a body over 32 KiB when the write-precondition policy is enabled. Prefer page_edit for partial changes. |
-| `wait_for_index` | boolean | no | Write the search mirror before returning even when mirrors are queued, so the page is searchable the moment this call returns. Slower. |
-| `expected_version` | integer (≥ 0) | no | Require this page_get version/page_versions version_n; 0 requires absence. Deleted pages retain versions: use current_version from a failed 0 attempt. Mismatch writes nothing and returns current_version. Omit for an unconditional write, subject to precondition policy. |
-| `force` | boolean | no | Overwrite unconditionally, on purpose. Cannot be combined with expected_version. |
-| `request_id` | string | no | Optional retry id (1-128 chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused. |
+| `wait_for_index` | boolean | no | Index before returning even when mirrors are queued, so the page is searchable on return. Slower. |
+| `expected_version` | integer (≥ 0) | no | page_get version or page_versions version_n; 0 requires absence (deleted pages keep versions: use current_version from a failed 0). Mismatch writes nothing, returns current_version. Omit: unconditional, subject to precondition policy. |
+| `force` | boolean | no | Deliberate unconditional overwrite; not with expected_version. |
+| `request_id` | string | no | Optional retry id (1-128 chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused. |
 
 ### page_append
 
@@ -1123,8 +1123,8 @@ Append to an existing page body and add a version; use page_put to create. Searc
 | `slug` | string | yes |  |
 | `content` | string | yes |  |
 | `written_by` | string | no |  |
-| `wait_for_index` | boolean | no | Write the search mirror before returning even when mirrors are queued, so the page is searchable the moment this call returns. Slower. |
-| `request_id` | string | no | Optional retry id (1-128 chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused. |
+| `wait_for_index` | boolean | no | Index before returning even when mirrors are queued, so the page is searchable on return. Slower. |
+| `request_id` | string | no | Optional retry id (1-128 chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused. |
 
 ### page_edit
 
@@ -1136,13 +1136,13 @@ Call shape: `{slug, expected_version, edits:[{old_text, new_text}]}`
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `reason` | string | no | Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version. |
+| `reason` | string | no | Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version. |
 | `slug` | string | yes | The page to edit; it must exist. |
 | `expected_version` | integer (≥ 1) | yes | The page's current version (`version` from page_get). On a mismatch nothing is written and the error names the current version. |
 | `edits` | object[] | yes | 1 to 50 replacements, applied in order, all or nothing. |
-| `written_by` | string | no | Optional caller identifier for the audit trail (skill slug, recipe name, …). |
-| `wait_for_index` | boolean | no | Write the search mirror before returning even when mirrors are queued, so the change is searchable the moment this call returns. Slower. |
-| `request_id` | string | no | Optional retry id (1-128 chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused. |
+| `written_by` | string | no | Optional caller id for the audit trail (skill slug, recipe, …). |
+| `wait_for_index` | boolean | no | Index before returning even when mirrors are queued, so the change is searchable on return. Slower. |
+| `request_id` | string | no | Optional retry id (1-128 chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused. |
 
 ### page_rename
 
@@ -1164,17 +1164,17 @@ Idempotent soft-delete: sets deleted_at, retains page and version history. Requi
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `reason` | string | no | Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version. |
+| `reason` | string | no | Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version. |
 | `slug` | string | yes |  |
 | `written_by` | string | no |  |
-| `expected_version` | integer (≥ 0) | no | Require this page_get version/page_versions version_n; 0 requires absence. Deleted pages retain versions: use current_version from a failed 0 attempt. Mismatch writes nothing and returns current_version. Omit for an unconditional write, subject to precondition policy. |
-| `force` | boolean | no | Overwrite unconditionally, on purpose. Cannot be combined with expected_version. |
+| `expected_version` | integer (≥ 0) | no | page_get version or page_versions version_n; 0 requires absence (deleted pages keep versions: use current_version from a failed 0). Mismatch writes nothing, returns current_version. Omit: unconditional, subject to precondition policy. |
+| `force` | boolean | no | Deliberate unconditional overwrite; not with expected_version. |
 
 ### page_restore
 
 Scope: write. Effect: writes, idempotent.
 
-Undelete a soft-deleted page (clears deleted_at). The inverse of page_delete; no-op if the page is missing or already live. WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.
+Undelete a soft-deleted page (clears deleted_at). The inverse of page_delete; no-op if the page is missing or already live. Requires source-scoped write or internal token; static public bearer forbidden.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -1189,12 +1189,12 @@ Restore a prior body snapshot as a NEW version, retaining history. version names
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `reason` | string | no | Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version. |
+| `reason` | string | no | Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version. |
 | `slug` | string | yes |  |
 | `version` | integer (≥ 1) | yes |  |
 | `written_by` | string | no |  |
-| `expected_version` | integer (≥ 0) | no | Require this page_get version/page_versions version_n; 0 requires absence. Deleted pages retain versions: use current_version from a failed 0 attempt. Mismatch writes nothing and returns current_version. Omit for an unconditional write, subject to precondition policy. |
-| `force` | boolean | no | Overwrite unconditionally, on purpose. Cannot be combined with expected_version. |
+| `expected_version` | integer (≥ 0) | no | page_get version or page_versions version_n; 0 requires absence (deleted pages keep versions: use current_version from a failed 0). Mismatch writes nothing, returns current_version. Omit: unconditional, subject to precondition policy. |
+| `force` | boolean | no | Deliberate unconditional overwrite; not with expected_version. |
 
 ### link
 
@@ -1209,7 +1209,7 @@ Assert a typed source→target link; repeating (source,target,type) updates conf
 | `source_slug` | string | yes | The source page slug. Must reference an existing page (FK constraint). |
 | `target_slug` | string | yes | The target slug (soft reference; the page may or may not yet exist). Loose names like `Alice Smith` are normalised to `alice-smith`. |
 | `type` | string | yes | One of: wikilink, mentions, works_at, attended, founded, advises, invested_in, knows, met, located_at, related_to, supersedes, contradicts. Pass allowAdHocType=true to accept other types. |
-| `confidence` | number (0–1) | no | 0..1, default 1.0 for agent-asserted edges. Use <1.0 only for deterministic-extractor outputs whose surface form was ambiguous. |
+| `confidence` | number (0–1) | no | Default 1.0 for agent-asserted edges. Use <1.0 only for deterministic-extractor outputs whose surface form was ambiguous. |
 | `source_chunk_id` | string | no |  |
 | `allowAdHocType` | boolean | no |  |
 
@@ -1217,7 +1217,7 @@ Assert a typed source→target link; repeating (source,target,type) updates conf
 
 Scope: write. Effect: writes, destructive, idempotent.
 
-Remove a manually created typed link. Returns removed and derived_from_text for edges still supplied by markdown/frontmatter/mentions; edit the source page with page_edit to remove those. Idempotent. WRITE — static public bearer: forbidden; authenticated token: requires write scope in its source; internal token: allowed.
+Remove a manually created typed link. Returns removed and derived_from_text for edges still supplied by markdown/frontmatter/mentions; edit the source page with page_edit to remove those. Idempotent. Requires source-scoped write or internal token; static public bearer forbidden.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -1248,8 +1248,8 @@ Call shape: `{entity_slug, fact} or {entity_slug, items:[{fact}]}`
 | `source_slug` | string | no | Page the fact was extracted from. |
 | `source_chunk_id` | string | no |  |
 | `written_by` | string | no |  |
-| `visibility` | string (one of `private`, `world`) | no | Who may read the fact back. `private` (the default) is operator-only; `world` is also readable by tenant-scoped and public callers. Ignored on public ingress, which always writes `private`. |
-| `request_id` | string | no | Optional retry id (1-128 chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused. |
+| `visibility` | string (one of `private`, `world`) | no | Who may read it back: private (default) is operator-only; world also tenant-scoped and public callers. Public ingress always writes private. |
+| `request_id` | string | no | Optional retry id (1-128 chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused. |
 | `replaces` | integer (≥ 1) | no | Id of a live fact in your own source that this fact replaces. Not combinable with `items` (put it on the item instead). |
 | `items` | array | no | Batch 1..20 {fact,entity_slug?,confidence?,visibility?,replaces?}, instead of fact. Items override top-level valid_from/kind/notability/claim_metric/value/unit/period defaults. |
 
@@ -1267,7 +1267,7 @@ Call shape: `{slug, occurred_at, event}`
 | `occurred_at` | string | yes | When the event happened (ISO-8601). Not when it was recorded. |
 | `event` | string | yes |  |
 | `source_chunk_id` | string | no |  |
-| `request_id` | string | no | Optional retry id (1-128 chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused. |
+| `request_id` | string | no | Optional retry id (1-128 chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused. |
 
 ### add_tag
 
@@ -1284,7 +1284,7 @@ Add a tag to a page (normalized: trim + lowercase). Idempotent. The page must ex
 
 Scope: write. Effect: writes, destructive, idempotent.
 
-Remove a tag from a page. Idempotent (removing an absent tag is a no-op). WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.
+Remove a tag from a page. Idempotent (removing an absent tag is a no-op). Requires source-scoped write or internal token; static public bearer forbidden.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -1461,7 +1461,7 @@ Record a dimensional observation about an entity (entity has dimension=value, e.
 | `dimension` | string | yes | Axis name (e.g. role, employer, location). |
 | `value` | string | yes | The value on that axis. |
 | `source` | string | no | Provenance page slug (source_slug); omit for a manual claim. |
-| `confidence` | number (0–1) | no | 0..1, default 0.7. |
+| `confidence` | number (0–1) | no | Default 0.7. |
 | `valid_from` | string | no | Start of validity, YYYY-MM-DD. Default today; null = -infinity. |
 | `visibility` | string (one of `private`, `world`) | no | Row visibility (default private). |
 
@@ -1474,7 +1474,7 @@ Enqueue one paid chronicle-extract job per eligible scoped conversation page, ex
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `dry_run` | boolean | no | Count eligible pages without enqueuing (default false). |
-| `limit` | integer (1–500) | no | Max pages to sweep (default 100, hard cap 500). |
+| `limit` | integer (1–500) | no | Max pages to sweep (default 100). |
 
 ## Admin tools
 
@@ -1495,7 +1495,7 @@ HARD-delete pages soft-deleted over older_than_hours ago (default 720) with vers
 
 Scope: admin. Effect: writes. Operator only.
 
-Operator-only, read-only quarantined IDs/sources/paths/fixed reason codes. No titles, bodies or free-form details. Default 20, max 100.
+Operator-only, read-only quarantined IDs/sources/paths/fixed reason codes. No titles, bodies or free-form details. Default 20.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

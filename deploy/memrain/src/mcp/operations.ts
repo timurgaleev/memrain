@@ -303,15 +303,15 @@ export const MAX_REQUEST_ID_LEN = 128;
 const expectedVersionParam = int({
   minimum: 0,
   description:
-    "Require this page_get version/page_versions version_n; 0 requires absence. Deleted pages retain versions: use current_version from a failed 0 attempt. Mismatch writes nothing and returns current_version. Omit for an unconditional write, subject to precondition policy.",
+    "page_get version or page_versions version_n; 0 requires absence (deleted pages keep versions: use current_version from a failed 0). Mismatch writes nothing, returns current_version. Omit: unconditional, subject to precondition policy.",
 });
 const forceParam = bool({
   description:
-    "Overwrite unconditionally, on purpose. Cannot be combined with expected_version.",
+    "Deliberate unconditional overwrite; not with expected_version.",
 });
 const requestIdParam = str({
   description:
-    `Optional retry id (1-${MAX_REQUEST_ID_LEN} chars), retained 7 days. Same id+arguments replays the first result (replayed:true), without writing; changed arguments are refused.`,
+    `Optional retry id (1-${MAX_REQUEST_ID_LEN} chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused.`,
 });
 
 export const OPERATIONS: readonly Operation[] = [
@@ -334,9 +334,9 @@ export const OPERATIONS: readonly Operation[] = [
       "Ranked vector+keyword chunks, paths and titles. Language/symbol/date/type/slug-prefix filters precede limits and bypass cache. Broad concept/set questions can use query expand:true (paid, default-off); search has no expand. Hits are not exhaustive. meta exposes vectorEnabled/degraded; intent/mode/cache/counts are operator-only. Empty results include a recovery hint.",
     argAliases: { query: "q", limit: "k" },
     params: {
-      source_ids: arr({ items: { type: "string" }, description: "Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call." }),
-      types: arr({ items: { type: "string" }, description: "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter." }),
-      slug_prefix: str({ description: "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits." }),
+      source_ids: arr({ items: { type: "string" }, description: "≤100 exact source IDs within your grant (omitted: whole grant). [] reads nothing; a forbidden ID refuses." }),
+      types: arr({ items: { type: "string" }, description: "≤20 lower-case page types; matches live pages and their mirrors/file twins, never non-page documents. Empty: no filter." }),
+      slug_prefix: str({ description: "Literal canonical slug prefix (e.g. projects/x/), no wildcards; applied before limits." }),
       q: str({ ...req, description: "Natural-language query." }),
       k: int({ minimum: 1, maximum: 100, description: "Number of hits to return. Default 20." }),
       min_trust: str({ enum: [...TRUST_TIERS], description: "Lowest tier kept: owner>member>agent>external. Hits report trust_tier." }),
@@ -370,7 +370,7 @@ export const OPERATIONS: readonly Operation[] = [
         minimum: 0,
         maximum: 2,
         description:
-          "Code-graph walk depth 0-2 (default 0 = off); score decays per hop. Code corpora only; bypasses the query cache.",
+          "Code-graph walk depth (default 0 = off); score decays per hop. Code corpora only; bypasses the query cache.",
       }),
       explain: bool({
         description:
@@ -426,7 +426,7 @@ export const OPERATIONS: readonly Operation[] = [
   {
     name: "log_friction",
     description:
-      "Record a friction event: retrieval missed, an answer felt wrong, a tool errored, OR a recall was unexpectedly good (`delight`). From a skill, include extra.skill = '<skill-slug>' so `memrain friction propose-fix` groups it with that skill. Set `severity` (confused/error/blocker/nit) on negative kinds for triage.",
+      "Record a friction event: retrieval missed, an answer felt wrong, a tool errored, OR a recall was unexpectedly good (`delight`). From a skill, include extra.skill = '<skill-slug>' so `memrain friction propose-fix` groups it with that skill. Set severity on negative kinds for triage.",
     // Appends a friction_events row that has no source axis, so a read-scoped
     // token must not reach it — the op is a mutation and is tagged as one.
     scope: "write",
@@ -458,7 +458,7 @@ export const OPERATIONS: readonly Operation[] = [
     description:
       "Create/replace a DB-canonical page; identical content is a no-op, changes append history. Prefer page_edit for partial changes. Mirrors normally return search_indexed; queued ones return search_pending + search_job_id; wait_for_index waits. MEMRAIN_REQUIRE_WRITE_PRECONDITION makes missing expected_version/force warn or refuse with precondition_required + current_version. Public writes need MEMRAIN_PUBLIC_WRITE=1.",
     params: {
-      reason: str({ description: "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version." }),
+      reason: str({ description: "Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version." }),
       slug: str({
         ...req,
         description:
@@ -476,7 +476,7 @@ export const OPERATIONS: readonly Operation[] = [
       markdown_body: str(),
       written_by: str({
         description:
-          "Optional caller identifier for the audit trail (skill slug, recipe name, …).",
+          "Optional caller id for the audit trail (skill slug, recipe, …).",
       }),
       allowAdHocType: bool(),
       allow_empty_body: bool({
@@ -489,7 +489,7 @@ export const OPERATIONS: readonly Operation[] = [
       }),
       wait_for_index: bool({
         description:
-          "Write the search mirror before returning even when mirrors are queued, so the page is searchable the moment this call returns. Slower.",
+          "Index before returning even when mirrors are queued, so the page is searchable on return. Slower.",
       }),
       expected_version: expectedVersionParam,
       force: forceParam,
@@ -508,7 +508,7 @@ export const OPERATIONS: readonly Operation[] = [
       written_by: str(),
       wait_for_index: bool({
         description:
-          "Write the search mirror before returning even when mirrors are queued, so the page is searchable the moment this call returns. Slower.",
+          "Index before returning even when mirrors are queued, so the page is searchable on return. Slower.",
       }),
       request_id: requestIdParam,
     },
@@ -522,7 +522,7 @@ export const OPERATIONS: readonly Operation[] = [
     description:
       "Atomically apply 1..50 ordered exact-text body replacements, keeping title/frontmatter. Copy unique old_text from page_get; misses/duplicates give edit_no_match/edit_ambiguous_match. Facts/takes fences are protected (edit_protected_span). Requires expected_version; a conflict returns current_version. Returns version and a diff capped at 8 KB (diff_truncated). Indexing as page_put; wait_for_index waits. Public writes need MEMRAIN_PUBLIC_WRITE=1.",
     params: {
-      reason: str({ description: "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version." }),
+      reason: str({ description: "Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version." }),
       slug: str({ ...req, description: "The page to edit; it must exist." }),
       expected_version: int({
         ...req,
@@ -545,11 +545,11 @@ export const OPERATIONS: readonly Operation[] = [
       }),
       written_by: str({
         description:
-          "Optional caller identifier for the audit trail (skill slug, recipe name, …).",
+          "Optional caller id for the audit trail (skill slug, recipe, …).",
       }),
       wait_for_index: bool({
         description:
-          "Write the search mirror before returning even when mirrors are queued, so the change is searchable the moment this call returns. Slower.",
+          "Index before returning even when mirrors are queued, so the change is searchable on return. Slower.",
       }),
       request_id: requestIdParam,
     },
@@ -571,7 +571,7 @@ export const OPERATIONS: readonly Operation[] = [
     description:
       "Idempotent soft-delete: sets deleted_at, retains page and version history. Requires source-scoped write or internal token; static public bearer forbidden.",
     params: {
-      reason: str({ description: "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version." }),
+      reason: str({ description: "Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version." }),
       slug: str(req),
       written_by: str(),
       expected_version: expectedVersionParam,
@@ -582,7 +582,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "page_restore",
     scope: "write",
     description:
-      "Undelete a soft-deleted page (clears deleted_at). The inverse of page_delete; no-op if the page is missing or already live. WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
+      "Undelete a soft-deleted page (clears deleted_at). The inverse of page_delete; no-op if the page is missing or already live. Requires source-scoped write or internal token; static public bearer forbidden.",
     params: {
       slug: str(req),
       written_by: str(),
@@ -594,7 +594,7 @@ export const OPERATIONS: readonly Operation[] = [
     description:
       "Restore a prior body snapshot as a NEW version, retaining history. version names the target version_n from page_versions. Requires source-scoped write or internal token; static public bearer forbidden.",
     params: {
-      reason: str({ description: "Optional trimmed one-line reason, ≤500 Unicode code points; secret-scanned, stored only with a new version." }),
+      reason: str({ description: "Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version." }),
       slug: str(req),
       version: int({ ...req, minimum: 1 }),
       written_by: str(),
@@ -625,12 +625,12 @@ export const OPERATIONS: readonly Operation[] = [
     name: "page_list",
     outputRedaction: "retrieval",
     description:
-      "List pages, newest-first by default. Optional filters: `type`, `tag` (normalized), `since` (ISO timestamp), `limit` (1..100, default 50). `sort` picks the order (updated_desc default | updated_asc | created_desc | slug); `include_deleted:true` adds soft-deleted pages with deleted_at populated.",
+      "List pages; sort defaults to updated_desc (newest first). tag is normalized; since is an ISO timestamp; limit default 50. include_deleted:true adds soft-deleted pages with deleted_at.",
     argAliases: {
       prefix: "slug_prefix",
     },
     params: {
-      source_ids: arr({ items: { type: "string" }, description: "Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call." }),
+      source_ids: arr({ items: { type: "string" }, description: "≤100 exact source IDs within your grant (omitted: whole grant). [] reads nothing; a forbidden ID refuses." }),
       type: str(),
       since: str(),
       tag: str({ description: "Filter to pages carrying this tag." }),
@@ -682,7 +682,7 @@ export const OPERATIONS: readonly Operation[] = [
         minimum: 0,
         maximum: 1,
         description:
-          "0..1, default 1.0 for agent-asserted edges. Use <1.0 only for deterministic-extractor outputs whose surface form was ambiguous.",
+          "Default 1.0 for agent-asserted edges. Use <1.0 only for deterministic-extractor outputs whose surface form was ambiguous.",
       }),
       source_chunk_id: str(),
       allowAdHocType: bool(),
@@ -692,7 +692,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "unlink",
     scope: "write",
     description:
-      "Remove a manually created typed link. Returns removed and derived_from_text for edges still supplied by markdown/frontmatter/mentions; edit the source page with page_edit to remove those. Idempotent. WRITE — static public bearer: forbidden; authenticated token: requires write scope in its source; internal token: allowed.",
+      "Remove a manually created typed link. Returns removed and derived_from_text for edges still supplied by markdown/frontmatter/mentions; edit the source page with page_edit to remove those. Idempotent. Requires source-scoped write or internal token; static public bearer forbidden.",
     params: {
       source_slug: str(req),
       target_slug: str(req),
@@ -705,8 +705,8 @@ export const OPERATIONS: readonly Operation[] = [
     description:
       "Links touching slug, newest first, with direction per row. Select outbound, inbound or both and optional type.",
     params: {
-      status: str({ enum: ["all", "active", "expired", "future"], description: "Filter manual link validity; default all. Half-open end date." }),
-      as_of: str({ description: "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC." }),
+      status: str({ enum: ["all", "active", "expired", "future"], description: "Manual link validity; default all; end date exclusive." }),
+      as_of: str({ description: "YYYY-MM-DD for a status other than all; default today UTC." }),
       slug: str(req),
       type: str({ description: "Filter to a single link type." }),
       direction: str({
@@ -722,8 +722,8 @@ export const OPERATIONS: readonly Operation[] = [
     description:
       "Typed links matching type and at least one of source_slug/target_slug; e.g. works_at + a person source finds their companies, or a company target finds its people.",
     params: {
-      status: str({ enum: ["all", "active", "expired", "future"], description: "Filter manual link validity; default all. Half-open end date." }),
-      as_of: str({ description: "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC." }),
+      status: str({ enum: ["all", "active", "expired", "future"], description: "Manual link validity; default all; end date exclusive." }),
+      as_of: str({ description: "YYYY-MM-DD for a status other than all; default today UTC." }),
       type: str(req),
       source_slug: str(),
       target_slug: str(),
@@ -734,10 +734,10 @@ export const OPERATIONS: readonly Operation[] = [
     name: "traverse_graph",
     outputRedaction: "retrieval",
     description:
-      "Breadth-first graph walk; each node appears once at shortest depth. truncated means eligible nodes within max_depth exceeded limit: narrow type/depth. Direction defaults outbound (also inbound/both); depth default 3, range 1..10; limit default 100, range 1..1000.",
+      "Breadth-first graph walk; each node appears once at shortest depth. truncated means eligible nodes within max_depth exceeded limit: narrow type/depth. Defaults: direction outbound, max_depth 3, limit 100.",
     params: {
-      status: str({ enum: ["all", "active", "expired", "future"], description: "Filter manual link validity; default all. Half-open end date." }),
-      as_of: str({ description: "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC." }),
+      status: str({ enum: ["all", "active", "expired", "future"], description: "Manual link validity; default all; end date exclusive." }),
+      as_of: str({ description: "YYYY-MM-DD for a status other than all; default today UTC." }),
       start_slug: str(req),
       direction: str({ enum: ["outbound", "inbound", "both"] }),
       type: str(),
@@ -772,7 +772,7 @@ export const OPERATIONS: readonly Operation[] = [
       visibility: str({
         enum: ["private", "world"],
         description:
-          "Who may read the fact back. `private` (the default) is operator-only; `world` is also readable by tenant-scoped and public callers. Ignored on public ingress, which always writes `private`.",
+          "Who may read it back: private (default) is operator-only; world also tenant-scoped and public callers. Public ingress always writes private.",
       }),
       request_id: requestIdParam,
       replaces: int({
@@ -834,7 +834,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "fact_supersessions",
     outputRedaction: "retrieval",
     description:
-      "Supersession audit log: facts retired WITH a replacement pointer (forgotten_at + superseded_by both set), newest retirement first. Each row is the RETIRED fact; superseded_by points at its replacement. Optional `entity_slug` / `since` (ISO, on the retirement time) / `limit` (1..1000, default 50). Tenant-scoped. Read-only; no LLM.",
+      "Supersession audit log: facts retired WITH a replacement pointer (forgotten_at + superseded_by both set), newest retirement first. Each row is the RETIRED fact; superseded_by points at its replacement. limit default 50. Tenant-scoped. Read-only; no LLM.",
     params: {
       entity_slug: str({ description: "Confine to one entity's ledger." }),
       since: str({ description: "ISO lower bound on forgotten_at." }),
@@ -869,16 +869,16 @@ export const OPERATIONS: readonly Operation[] = [
       timeline_limit: int({ minimum: 1, maximum: 200 }),
       redact_body: bool({
         description:
-          "When true, strips markdown_body from the page row. The HTTP public-bearer path forces this on by default; internal MCP callers default false.",
+          "Strip markdown_body from the page row. Forced on for the public bearer; default false otherwise.",
       }),
       token_budget: int({
         minimum: 1,
         description:
-          "Approximate whole-response token cap, measured on serialized visible rows after redaction. Server reallocates unused page/facts/timeline shares and truncates the body. budget reports facts_dropped, timeline_dropped, page_truncated and page_dropped; page:null with page_dropped means it did not fit, not that it is absent.",
+          "Approximate whole-response token cap over serialized visible rows after redaction; unused page/facts/timeline shares are reallocated and the body truncated. budget reports facts_dropped, timeline_dropped, page_truncated, page_dropped; page:null with page_dropped means it did not fit, not absence.",
       }),
       include_pending: bool({
         description:
-          "Piggy-back `pending_consolidation_count` (live facts not yet folded into a consolidated take) on the response. One round trip; field omitted when false.",
+          "Add `pending_consolidation_count` (live facts not yet folded into a consolidated take); omitted when false.",
       }),
     },
   },
@@ -911,7 +911,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "jobs_list",
     outputRedaction: "retrieval",
     description:
-      "List jobs newest-first. Optional filters: status, kind, parent_job_id, since (ISO timestamp), limit (1..1000, default 100).",
+      "List jobs newest-first; since is an ISO timestamp; limit default 100.",
     params: {
       status: str(),
       kind: str(),
@@ -1006,7 +1006,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "remove_tag",
     scope: "write",
     description:
-      "Remove a tag from a page. Idempotent (removing an absent tag is a no-op). WRITE — static public bearer: forbidden; authenticated token: requires the `write` scope (source-scoped); internal token: allowed.",
+      "Remove a tag from a page. Idempotent (removing an absent tag is a no-op). Requires source-scoped write or internal token; static public bearer forbidden.",
     params: {
       slug: str(req),
       tag: str(req),
@@ -1034,10 +1034,10 @@ export const OPERATIONS: readonly Operation[] = [
     name: "get_links",
     outputRedaction: "retrieval",
     description:
-      "Edges touching slug, grouped by type and outbound/inbound direction (source/target respectively). Groups sort by type, outbound first; edges newest first. limit caps each direction: default/max 1000, minimum 1.",
+      "Edges touching slug, grouped by type and outbound/inbound direction (source/target respectively). Groups sort by type, outbound first; edges newest first. limit caps each direction; default 1000.",
     params: {
-      status: str({ enum: ["all", "active", "expired", "future"], description: "Filter manual link validity; default all. Half-open end date." }),
-      as_of: str({ description: "Calendar date YYYY-MM-DD for an explicit status other than all; defaults to today UTC." }),
+      status: str({ enum: ["all", "active", "expired", "future"], description: "Manual link validity; default all; end date exclusive." }),
+      as_of: str({ description: "YYYY-MM-DD for a status other than all; default today UTC." }),
       slug: str(req),
       limit: int({ minimum: 1, maximum: 1000 }),
     },
@@ -1045,14 +1045,14 @@ export const OPERATIONS: readonly Operation[] = [
   {
     name: "list_link_sources",
     description:
-      "The link-type catalogue with live per-type edge counts. Every KNOWN_LINK_TYPES entry is returned (count 0 when unused), plus any ad-hoc type present in the graph (known:false). Ordered by count DESC then type ASC, so the most-used relationship types surface first while the full vocabulary stays discoverable. Returns [{type, count, known}].",
+      "The link-type catalogue with live per-type edge counts. Every KNOWN_LINK_TYPES entry is returned (count 0 when unused), plus any ad-hoc type present in the graph (known:false). Ordered by count DESC then type ASC. Returns [{type, count, known}].",
     params: {},
   },
   {
     name: "find_orphans",
     outputRedaction: "retrieval",
     description:
-      "Pages with zero inbound links — nothing in the graph references them. The natural enrichment targets (a page nobody links to is new or forgotten). Newest-first. Optional `type` page-type filter; `limit` (1..1000, default 50). Deterministic, no LLM.",
+      "Pages with zero inbound links — nothing in the graph references them. The natural enrichment targets (a page nobody links to is new or forgotten). Newest-first; limit default 50. Deterministic, no LLM.",
     params: {
       type: str({ description: "Restrict to a single page type (e.g. person)." }),
       limit: int({ minimum: 1, maximum: 1000 }),
@@ -1062,7 +1062,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "wanted_pages",
     outputRedaction: "retrieval",
     description:
-      "Unresolved targets linked by live visible pages in your sources, most-referenced first. Returns target_slug,referenced_by,sample_from (≤3 slugs),surface,first_seen. Hidden pages never count. Limit default 50, range 1..200. Deterministic, no LLM.",
+      "Unresolved targets linked by live visible pages in your sources, most-referenced first. Returns target_slug,referenced_by,sample_from (≤3 slugs),surface,first_seen. Hidden pages never count. Limit default 50. Deterministic, no LLM.",
     params: {
       limit: int({ minimum: 1, maximum: 200 }),
     },
@@ -1071,11 +1071,11 @@ export const OPERATIONS: readonly Operation[] = [
     name: "find_experts",
     outputRedaction: "retrieval",
     description:
-      "With topic: person/company expertise from hybrid search × relationship recency (6-month half-life) × salience. Without topic: graph hubs by distinct live in/out neighbours, excluding unresolved stubs. type overrides topic candidates or filters hubs. Limit default 5, range 1..200; deterministic, no LLM.",
+      "With topic: person/company expertise from hybrid search × relationship recency (6-month half-life) × salience. Without topic: graph hubs by distinct live in/out neighbours, excluding unresolved stubs. type overrides topic candidates or filters hubs. Limit default 5; deterministic, no LLM.",
     params: {
       topic: str({
         description:
-          "Optional topic query. When set, ranks person/company pages by expertise + recency + salience. When omitted, returns graph link-degree hubs.",
+          "Topic query; omitted returns graph hubs.",
       }),
       type: str({ description: "Restrict to a single page type (overrides the person/company default in topic mode)." }),
       explain: bool({
@@ -1089,7 +1089,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "find_contradictions",
     outputRedaction: "retrieval",
     description:
-      "Read conflicts without an LLM call. Default returns explicit contradicts page edges and cached opt-in probe findings (severity/axis/confidence/resolution_command; empty before probing). slug filters either edge endpoint; limit default 20, max 200. mode:typed finds overlapping numeric disagreements; use entity_slug, not slug/severity.",
+      "Read conflicts without an LLM call. Default returns explicit contradicts page edges and cached opt-in probe findings (severity/axis/confidence/resolution_command; empty before probing). slug filters either edge endpoint; limit default 20. mode:typed finds overlapping numeric disagreements; use entity_slug, not slug/severity.",
     params: {
       mode: str({ enum: ["typed"], description: "typed: deterministic overlapping numeric conflicts in the same unit/period/month/source. Omit for asserted/probed findings." }),
       entity_slug: str({ description: "Exact entity filter for typed mode only." }),
@@ -1105,17 +1105,17 @@ export const OPERATIONS: readonly Operation[] = [
     name: "find_trajectory",
     outputRedaction: "retrieval",
     description:
-      "Chronological 'how did this entity change?' log for one slug — the merged, oldest-first view of its entity_facts ledger and its timeline_events. Each fact anchors at its valid_from (else written_at); each event at occurred_at. Optional `since`/`until` ISO bounds on that anchor; `limit` (1..500, default 100). Deterministic, no LLM.",
+      "Chronological 'how did this entity change?' log for one slug — the merged, oldest-first view of its entity_facts ledger and its timeline_events. Each fact anchors at its valid_from (else written_at); each event at occurred_at. since/until bound that anchor; limit default 100. Deterministic, no LLM.",
     params: {
       entity_slug: str({ ...req, description: "The entity to chart (e.g. companies/acme, people/alice)." }),
       metric: str({
         description:
-          "Filter to a single canonical metric label (mig070 claim_metric, e.g. 'mrr'); timeline events are excluded for a metric query.",
+          "Filter to a single canonical metric label (claim_metric, e.g. 'mrr'); timeline events are excluded for a metric query.",
       }),
       kind: str({
         enum: ["metric", "event", "all"],
         description:
-          "Row-shape filter (mig070): 'metric' = typed-claim fact rows only, 'event' = event-shaped rows (event_type facts + timeline events), 'all' (default) = merged chronology.",
+          "metric: typed-claim facts only; event: event_type facts + timeline events; all (default): merged chronology.",
       }),
       since: str({ description: "Lower bound (ISO timestamp) on the point's anchor date." }),
       until: str({ description: "Upper bound (ISO timestamp)." }),
@@ -1126,7 +1126,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "get_recent_salience",
     outputRedaction: "retrieval",
     description:
-      "Live pages ranked by the deterministic `salience` score (migration 036: high-emotion tags + graph link-degree, recomputed by the recompute-salience cycle phase) — the 'what matters' read. Optional `type` filter and `days` recency window. No LLM, no Bedrock. Surfaces page slugs/titles — hidden from public ingress.",
+      "Live pages ranked by the deterministic `salience` score (high-emotion tags + graph link-degree, recomputed each cycle) — the 'what matters' read. No LLM, no Bedrock. Surfaces page slugs/titles — hidden from public ingress.",
     params: {
       type: str({ description: "Filter to a single page type (exact match), e.g. person." }),
       days: int({ minimum: 1, description: "Only pages updated within the last N days. Omit for all-time." }),
@@ -1134,7 +1134,7 @@ export const OPERATIONS: readonly Operation[] = [
       recency_bias: str({
         enum: ["flat", "on"],
         description:
-          "'flat' (default) = pure salience order (historical behavior). 'on' = rank by salience x 1/(1+days_old) — 'what's been salient lately'.",
+          "flat (default): pure salience order; on: salience x 1/(1+days_old), 'what's been salient lately'.",
       }),
       limit: int({ minimum: 1, maximum: 200, description: "Max rows (default 20)." }),
     },
@@ -1211,9 +1211,9 @@ export const OPERATIONS: readonly Operation[] = [
     description:
       "Hybrid retrieval with detail, salience/recency, date/code filters, offset and adaptive_return. expand is paid (mode default); mode overrides are operator-only. refine+weights uses deterministic two-query RRF. Otherwise returns search meta; counts are operator-only. token_budget without k considers 100 hits; explicit k wins. Adds ≤3 lexical ledger facts within budget, respecting source/visibility/diary fences; chunk filters affect hits. Empty results include a recovery hint.",
     params: {
-      source_ids: arr({ items: { type: "string" }, description: "Narrow to ≤100 exact source IDs in your grant. Omitted uses grant; [] reads nothing; any forbidden ID refuses the call." }),
-      types: arr({ items: { type: "string" }, description: "Up to 20 lower-case page type names. Matches canonical live pages and their indexed mirrors/file twins; non-page documents are excluded. Empty means no type filter." }),
-      slug_prefix: str({ description: "Literal canonical page slug prefix, e.g. projects/x/. No wildcards. Applied before retrieval limits." }),
+      source_ids: arr({ items: { type: "string" }, description: "≤100 exact source IDs within your grant (omitted: whole grant). [] reads nothing; a forbidden ID refuses." }),
+      types: arr({ items: { type: "string" }, description: "≤20 lower-case page types; matches live pages and their mirrors/file twins, never non-page documents. Empty: no filter." }),
+      slug_prefix: str({ description: "Literal canonical slug prefix (e.g. projects/x/), no wildcards; applied before limits." }),
       q: str({ ...req, description: "Natural-language query." }),
       k: int({ minimum: 1, maximum: 100, description: "Number of hits to return. Default 20; without refine, token_budget and no k uses up to 100 candidates." }),
       min_trust: str({ enum: [...TRUST_TIERS], description: "Lowest tier kept, as in search; also filters ledger facts." }),
@@ -1246,7 +1246,7 @@ export const OPERATIONS: readonly Operation[] = [
       lang: str({ description: "Filter to chunks of a source language (code corpora)." }),
       symbol_kind: str({ description: "Filter to chunks of a symbol kind (code corpora)." }),
       near_symbol: str({ description: "Anchor retrieval at this qualified symbol name (code corpora)." }),
-      walk_depth: int({ minimum: 0, maximum: 2, description: "Structural walk depth 0-2 (code corpora)." }),
+      walk_depth: int({ minimum: 0, maximum: 2, description: "Structural walk depth (code corpora)." }),
       token_budget: int({ minimum: 1, maximum: 200000, description: "Cap total returned content size (~chars/4 tokens)." }),
       adaptive_return: bool({
         description:
@@ -1263,18 +1263,18 @@ export const OPERATIONS: readonly Operation[] = [
     name: "code_callers",
     outputRedaction: "retrieval",
     description:
-      "Call sites for symbol name (surface,chunk,path), with language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200, range 1..1000; optional lang. Deterministic, no LLM.",
+      "Call sites for symbol name (surface,chunk,path), with language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200. Deterministic, no LLM.",
     params: {
       name: str({ ...req, description: "Bare symbol name to find callers of (e.g. `hybridSearch`)." }),
       limit: int({ minimum: 1, maximum: 1000 }),
-      lang: str({ description: "Only mentions in this source language (e.g. `typescript`)." }),
+      lang: str({ description: "Only this source language (e.g. `typescript`)." }),
     },
   },
   {
     name: "code_callees",
     outputRedaction: "retrieval",
     description:
-      "Callees of target path:line (innermost definition) or symbol; qualified names restrict sites. resolved_symbol is definition or null. Returns language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness; only ready proves absence. Limit default 200/max 1000; optional lang. Deterministic, no LLM.",
+      "Callees of target path:line (innermost definition) or symbol; qualified names restrict sites. resolved_symbol is definition or null. Returns language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness; only ready proves absence. Limit default 200. Deterministic, no LLM.",
     params: {
       target: str({
         ...req,
@@ -1282,55 +1282,55 @@ export const OPERATIONS: readonly Operation[] = [
           "`<path>:<line>` of a symbol body (e.g. `src/x.ts:42`), or a symbol name, bare or qualified (e.g. `save` or `Repo::save`).",
       }),
       limit: int({ minimum: 1, maximum: 1000 }),
-      lang: str({ description: "Only mentions in this source language (e.g. `typescript`)." }),
+      lang: str({ description: "Only this source language (e.g. `typescript`)." }),
     },
   },
   {
     name: "code_def",
     outputRedaction: "retrieval",
     description:
-      "Find code-def mentions for symbol name across indexed code: surface form, chunk, source path, language, kind, line bounds and an authorized opening snippet. Empty reads carry scoped readiness: not_built, indexing, no_symbols or ready. Only ready proves absence. Deterministic, no LLM; limit defaults 200 (max 1000), optional lang.",
+      "Find code-def mentions for symbol name across indexed code: surface form, chunk, source path, language, kind, line bounds and an authorized opening snippet. Empty reads carry scoped readiness: not_built, indexing, no_symbols or ready. Only ready proves absence. Deterministic, no LLM; limit default 200.",
     params: {
       name: str({ ...req, description: "Bare symbol name to locate definitions of (e.g. `hybridSearch`, `Storage`)." }),
       limit: int({ minimum: 1, maximum: 1000 }),
-      lang: str({ description: "Only mentions in this source language (e.g. `typescript`)." }),
+      lang: str({ description: "Only this source language (e.g. `typescript`)." }),
     },
   },
   {
     name: "code_refs",
     outputRedaction: "retrieval",
     description:
-      "Non-call code-ref mentions for symbol name (imports/type uses/other references); complements code_callers. Includes language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200, range 1..1000; optional lang. Deterministic, no LLM.",
+      "Non-call code-ref mentions for symbol name (imports/type uses/other references); complements code_callers. Includes language/kind/line bounds and authorized opening snippets. Empty reads carry scoped readiness {state,code_documents,symbols}: not_built/indexing/no_symbols/ready; only ready proves absence. Limit default 200. Deterministic, no LLM.",
     params: {
       name: str({ ...req, description: "Bare symbol name to find references to (e.g. `hybridSearch`)." }),
       limit: int({ minimum: 1, maximum: 1000 }),
-      lang: str({ description: "Only mentions in this source language (e.g. `typescript`)." }),
+      lang: str({ description: "Only this source language (e.g. `typescript`)." }),
     },
   },
   {
     name: "code_blast",
     outputRedaction: "retrieval",
     description:
-      "Transitive callers by BFS depth for change-impact checks. depth default 5/max 8; max_nodes default 200. Returns result (ok/not_found/ambiguous), depth_groups, cycles_detected, truncation and optional candidates/did_you_mean. Nodes: symbol,chunk_id,def_chunk_id,resolved (definition-backed vs by-name). Empty reads carry scoped readiness; only ready proves absence. No LLM.",
+      "Transitive callers by BFS depth for change-impact checks. Defaults: depth 5, max_nodes 200. Returns result (ok/not_found/ambiguous), depth_groups, cycles_detected, truncation and optional candidates/did_you_mean. Nodes: symbol,chunk_id,def_chunk_id,resolved (definition-backed vs by-name). Empty reads carry scoped readiness; only ready proves absence. No LLM.",
     params: {
       symbol: str({ ...req, description: "Bare or qualified symbol name (e.g. `performSync` or `Foo::performSync`)." }),
-      depth: int({ minimum: 1, maximum: 8, description: "Hop cap. Default 5, max 8." }),
+      depth: int({ minimum: 1, maximum: 8, description: "Hop cap. Default 5." }),
       max_nodes: int({ minimum: 1, maximum: 200, description: "Result-set cap. Default 200." }),
       exact: bool({ description: "Skip bare-name disambiguation; treat `symbol` as an exact qualified name." }),
-      lang: str({ description: "Walk only chunks of this source language. Omitted: the start symbol's language when all its definitions share one." }),
+      lang: str({ description: "Walk only this source language; omitted: the start symbol's, when all its definitions share one." }),
     },
   },
   {
     name: "code_flow",
     outputRedaction: "retrieval",
     description:
-      "Transitive callees by BFS depth; code_blast envelope plus terminal_nodes [{symbol,sink_kind:db_call/http_call/file_io/process_exec}]. depth default 8/max 12; max_nodes default 200. Language-specific names detect sinks; generic get/put/read/write do not. Empty reads carry readiness; only ready proves absence. No LLM.",
+      "Transitive callees by BFS depth; code_blast envelope plus terminal_nodes [{symbol,sink_kind:db_call/http_call/file_io/process_exec}]. Defaults: depth 8, max_nodes 200. Language-specific names detect sinks; generic get/put/read/write do not. Empty reads carry readiness; only ready proves absence. No LLM.",
     params: {
       symbol: str({ ...req, description: "Entry-point symbol name (bare or qualified)." }),
-      depth: int({ minimum: 1, maximum: 12, description: "Hop cap. Default 8, max 12." }),
+      depth: int({ minimum: 1, maximum: 12, description: "Hop cap. Default 8." }),
       max_nodes: int({ minimum: 1, maximum: 200, description: "Result-set cap. Default 200." }),
       exact: bool({ description: "Skip bare-name disambiguation; treat `symbol` as an exact qualified name." }),
-      lang: str({ description: "Walk only chunks of this source language. Omitted: the start symbol's language when all its definitions share one." }),
+      lang: str({ description: "Walk only this source language; omitted: the start symbol's, when all its definitions share one." }),
     },
   },
   {
@@ -1344,8 +1344,8 @@ export const OPERATIONS: readonly Operation[] = [
         description:
           "Already-surfaced context (pointer blocks / opened page bodies). Pages whose slug appears here are not re-volunteered.",
       }),
-      max_pages: int({ minimum: 1, maximum: 5, description: "Max pages volunteered (default 3, cap 5)." }),
-      min_confidence: num({ minimum: 0, maximum: 1, description: "Confidence gate 0..1 (default 0.7). At the default, slug-suffix matches never volunteer." }),
+      max_pages: int({ minimum: 1, maximum: 5, description: "Max pages volunteered (default 3)." }),
+      min_confidence: num({ minimum: 0, maximum: 1, description: "Confidence gate (default 0.7). At the default, slug-suffix matches never volunteer." }),
       session_id: str({ description: "Opaque session id stamped on each logged volunteer event." }),
       turn: int({ minimum: 0, description: "Turn number stamped on each logged volunteer event." }),
       stats: bool({ description: "Return per-arm used/volunteered precision stats instead of volunteering." }),
@@ -1365,7 +1365,7 @@ export const OPERATIONS: readonly Operation[] = [
   {
     name: "quarantine_list",
     scope: "admin",
-    description: "Operator-only, read-only quarantined IDs/sources/paths/fixed reason codes. No titles, bodies or free-form details. Default 20, max 100.",
+    description: "Operator-only, read-only quarantined IDs/sources/paths/fixed reason codes. No titles, bodies or free-form details. Default 20.",
     params: {
       limit: int({ minimum: 1, maximum: 100 }),
       source_ids: arr({ items: { type: "string" }, description: "Narrow to exact sources; [] reads nothing." }),
@@ -1397,9 +1397,9 @@ export const OPERATIONS: readonly Operation[] = [
     params: {
       slugs: arr({ description: "Entity page slugs to build cards for, in priority order (array of strings)." }),
       window: str({ description: "Conversation window text; entities it names fill the card slots left after `slugs`. 'user:'/'assistant:' line prefixes set the role." }),
-      max_entities: int({ minimum: 1, maximum: 8, description: "Max entity cards (default 5, cap 8)." }),
-      facts_limit: int({ minimum: 1, maximum: 25, description: "Max brain facts after the cards (default 10, cap 25)." }),
-      token_budget: int({ minimum: 200, maximum: 8000, description: "Token budget for cards + facts (default 1500, clamped 200..8000)." }),
+      max_entities: int({ minimum: 1, maximum: 8, description: "Max entity cards (default 5)." }),
+      facts_limit: int({ minimum: 1, maximum: 25, description: "Max brain facts after the cards (default 10)." }),
+      token_budget: int({ minimum: 200, maximum: 8000, description: "Token budget for cards + facts (default 1500)." }),
       min_trust: str({ enum: [...TRUST_TIERS], description: "Lowest tier kept for cards, facts, core." }),
     },
   },
@@ -1430,7 +1430,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "list_takes",
     outputRedaction: "retrieval",
     description:
-      "List synthesized 'takes' (opinionated claims the propose-takes phase derived, optionally graded): take_key, claim_text, kind, weight, domain, status (queued/accepted/rejected). Optional filters: `kind`, `domain`; `sort` (generated_at default | weight), `offset` for pagination. Advisory only — never mutates notes. Read-only; internal-only.",
+      "List synthesized 'takes' (opinionated claims the propose-takes phase derived, optionally graded): take_key, claim_text, kind, weight, domain, status (queued/accepted/rejected). Advisory only — never mutates notes. Read-only; internal-only.",
     params: {
       status: str({ enum: ["queued", "accepted", "rejected", "graded"], description: "Filter by review status." }),
       kind: str({ description: "Filter to one take kind (e.g. bet, judgment)." }),
@@ -1501,7 +1501,7 @@ export const OPERATIONS: readonly Operation[] = [
       "Read latest grades of synthesized takes: total/graded/resolved, verdict counts, accuracy=correct/(correct+incorrect), partial_rate, Brier score over correct/incorrect bets versus stated weight. Zero before opt-in grading. Filter domain/holder and generated since/until; source and holder grants apply. Internal-only, no LLM.",
     params: {
       domain: str({ description: "Filter to takes tagged with this domain." }),
-      holder: str({ description: "Filter to this holder (world|brain|<slug>). Still gated by the token's takes-holder allow-list." }),
+      holder: str({ description: "Holder (world|brain|<slug>), within the token's takes-holder allow-list." }),
       since: str({ description: "Only takes generated on/after this ISO date (YYYY-MM-DD)." }),
       until: str({ description: "Only takes generated on/before this ISO date (YYYY-MM-DD)." }),
     },
@@ -1514,7 +1514,7 @@ export const OPERATIONS: readonly Operation[] = [
     params: {
       bucket_size: num({ minimum: 0, maximum: 1, description: "Bucket width in (0,1]. Default 0.1." }),
       domain: str({ description: "Filter to takes tagged with this domain." }),
-      holder: str({ description: "Filter to this holder (world|brain|<slug>). Still gated by the token's takes-holder allow-list." }),
+      holder: str({ description: "Holder (world|brain|<slug>), within the token's takes-holder allow-list." }),
     },
   },
   {
@@ -1553,7 +1553,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "get_recent_transcripts",
     outputRedaction: "retrieval",
     description:
-      "Recently-ingested conversation transcript pages (types: meeting, email, journal, note), newest-first, within a day window. Returns each page's slug/type/title/updated_at plus a summary (first ~300 chars) or — with summary=false — the body capped at 100 KB. Tenant-scoped; limit-capped (default 50, max 200). Surfaces page bodies — hidden from public ingress. Read-only; no LLM.",
+      "Recently-ingested conversation transcript pages (types: meeting, email, journal, note), newest-first, within a day window. Returns each page's slug/type/title/updated_at plus a summary or the body (see summary). Tenant-scoped. Surfaces page bodies — hidden from public ingress. Read-only; no LLM.",
     params: {
       days: int({ minimum: 0, description: "Only pages updated within the last N days. Default 30." }),
       summary: bool({ description: "true (default) returns a ~300-char summary; false returns the body capped at 100 KB." }),
@@ -1595,7 +1595,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "get_raw_data",
     outputRedaction: "retrieval",
     description:
-      "Read a page's raw_data sidecar rows, newest first. Optional `source` filter to one data-source label; `limit` (1..200, default 50). Tenant-scoped via the owning page. Read-only; no LLM.",
+      "Read a page's raw_data sidecar rows, newest first. limit default 50. Tenant-scoped via the owning page. Read-only; no LLM.",
     params: {
       slug: str(req),
       source: str({ description: "Filter to one data-source label." }),
@@ -1618,7 +1618,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "get_ingest_log",
     outputRedaction: "retrieval",
     description:
-      "Recent ingestion-log entries, newest first, scoped to the caller's read set. Optional `source_type` filter; `limit` (1..50, default 20). Read-only; no LLM.",
+      "Recent ingestion-log entries, newest first, scoped to the caller's read set. limit default 20. Read-only; no LLM.",
     params: {
       source_type: str({ description: "Filter to one event family." }),
       limit: int({ minimum: 1, maximum: 50 }),
@@ -1637,7 +1637,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "get_job_progress",
     outputRedaction: "retrieval",
     description:
-      "Read a job's live progress envelope: status + the handler-reported `progress` JSON (mig083). Cheap poll target while a long job runs. Operator-only; read-only.",
+      "Read a job's live progress envelope: status + the handler-reported `progress` JSON. Cheap poll target while a long job runs. Operator-only; read-only.",
     params: {
       id: str({ ...req, description: "Job id (see jobs_list)." }),
     },
@@ -1742,7 +1742,7 @@ export const OPERATIONS: readonly Operation[] = [
       dimension: str({ ...req, description: "Axis name (e.g. role, employer, location)." }),
       value: str({ ...req, description: "The value on that axis." }),
       source: str({ description: "Provenance page slug (source_slug); omit for a manual claim." }),
-      confidence: num({ minimum: 0, maximum: 1, description: "0..1, default 0.7." }),
+      confidence: num({ minimum: 0, maximum: 1, description: "Default 0.7." }),
       valid_from: str({ description: "Start of validity, YYYY-MM-DD. Default today; null = -infinity." }),
       visibility: str({ enum: ["private", "world"], description: "Row visibility (default private)." }),
     },
@@ -1769,7 +1769,7 @@ export const OPERATIONS: readonly Operation[] = [
     description:
       "Push-based chronicle context: the recent timeline plus the validity-resolved ontology for the named entities, composed with zero LLM. Non-operator callers get a redacted view (diary-sourced + private-visibility ontology stripped). Tenant-scoped. Read-only; no LLM.",
     params: {
-      days: int({ minimum: 1, maximum: 50, description: "Lookback window for the recent timeline (default 7, cap 50)." }),
+      days: int({ minimum: 1, maximum: 50, description: "Lookback window for the recent timeline (default 7)." }),
       entities: arr({ description: "Entity slugs to resolve current ontology for (array or comma-separated string)." }),
     },
   },
@@ -1780,7 +1780,7 @@ export const OPERATIONS: readonly Operation[] = [
       "Enqueue one paid chronicle-extract job per eligible scoped conversation page, excluding diary/events. Returns pages_enqueued and per-page MEMRAIN_CHRONICLE_WRITE_BUDGET_USD for worst-case spend. dry_run:true counts only. Operator-only write; public forbidden.",
     params: {
       dry_run: bool({ description: "Count eligible pages without enqueuing (default false)." }),
-      limit: int({ minimum: 1, maximum: 500, description: "Max pages to sweep (default 100, hard cap 500)." }),
+      limit: int({ minimum: 1, maximum: 500, description: "Max pages to sweep (default 100)." }),
     },
   },
 ];
