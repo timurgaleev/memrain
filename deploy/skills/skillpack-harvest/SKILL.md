@@ -149,8 +149,9 @@ Copy the staged folder to `deploy/skills/<slug>/` and run
 `memrain skillify check <slug>` from the repository root (it reads
 `deploy/skills` relative to the working directory, so it runs only once the
 skill is there). Add the lane to `deploy/skills/plugin-lanes.json`
-(`plugin` with a one-line reason, or `operator_only` for host-side work; a
-`plugin` skill may not depend on operator-only tools or operator-lane skills)
+(`plugin` with a one-line reason, `operator_only` for host-side work, or
+`excluded` with the reason; a `plugin` skill may not name operator-only tools
+or hand off to a skill outside the plugin)
 and regenerate, in `deploy/memrain`:
 
 ```bash
@@ -173,7 +174,7 @@ Show the user the diff and the gate results. A person approves and commits.
 Harvested: <slug>  (from <where, described generically>)
 Files: deploy/skills/<slug>/SKILL.md, routing-eval.jsonl
 Dropped: <steps or tools Memrain has no equivalent for> | none
-Lane: plugin | operator_only — <reason>
+Lane: plugin | operator_only | excluded — <reason>
 Gates: lint ok · skillify check ok · routing N/N · audit ok · scrub-audit HIGH:0
 Next: review the diff and commit
 ```

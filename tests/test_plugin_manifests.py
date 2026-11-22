@@ -32,6 +32,7 @@ SOURCE_SKILLS = REPO / "deploy" / "skills"
 LANES = json.loads((SOURCE_SKILLS / "plugin-lanes.json").read_text(encoding="utf-8"))
 CURATED = set(LANES["plugin"])
 OPERATOR_ONLY = set(LANES["operator_only"])
+EXCLUDED = set(LANES["excluded"])
 
 # A literal bearer value, a Memrain token, a long hex or base64 secret, an AWS key.
 CREDENTIAL = re.compile(
@@ -112,6 +113,7 @@ def test_plugin_ships_the_curated_skills():
     shipped = {p.name for p in PLUGIN_SKILLS.iterdir() if p.is_dir()}
     assert shipped == CURATED
     assert not shipped & OPERATOR_ONLY, sorted(shipped & OPERATOR_ONLY)
+    assert not shipped & EXCLUDED, sorted(shipped & EXCLUDED)
     assert {"query", "capture", "connect-client"} <= CURATED
     for name in CURATED:
         assert (PLUGIN_SKILLS / name / "SKILL.md").is_file(), f"{name}/SKILL.md missing"

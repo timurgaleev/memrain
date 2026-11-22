@@ -133,7 +133,11 @@ container; a red run fails the workflow.
   outside the generated block (its head and the disambiguation rules) is
   written by hand and kept.
 - `deploy/skills/plugin-lanes.json` records which skills ship in the plugin,
-  which are host-side only, and which are MCP prompts, each with a reason.
+  which are host-side only, which the plugin leaves out for another reason,
+  and which are MCP prompts, each with a reason. Every skill sits in exactly
+  one of `plugin`, `operator_only` and `excluded`, and a `plugin` skill names
+  no operator-only tool and hands off only to skills the plugin ships; the
+  generator and `tests/skillpack_plugin_tree.test.ts` refuse anything else.
 - A skill declares only tools the server registers and names only `memrain`
   commands, subcommands and flags that exist (`memrain skillpack lint`), and
   ships a `routing-eval.jsonl` whose cases route to it. `memrain skillpack

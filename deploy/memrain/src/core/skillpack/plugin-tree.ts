@@ -16,7 +16,8 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
+import { OPERATOR_ONLY_TOOLS } from "../../mcp/visibility.ts";
 import { listSkillCatalog } from "./brain-resident.ts";
 import { parseSkillFrontmatter } from "./frontmatter.ts";
 
@@ -29,6 +30,12 @@ export interface PluginLanes {
   plugin: Record<string, string>;
   /** Host-side skills that never ship in the plugin, each with the reason. */
   operator_only: Record<string, string>;
+  /**
+   * Skills the brain serves but the plugin leaves out for another reason
+   * (unsuited to a client install, or they hand off to a skill the plugin
+   * does not ship), each with the reason.
+   */
+  excluded: Record<string, string>;
   /** Skills served as MCP prompts (`prompt: true` in their frontmatter). */
   starter: string[];
 }
@@ -56,6 +63,7 @@ export function readPluginLanes(skillsDir: string): PluginLanes {
   return {
     plugin: reasonMap(r.plugin, "plugin"),
     operator_only: reasonMap(r.operator_only, "operator_only"),
+    excluded: reasonMap(r.excluded, "excluded"),
     starter: starter as string[],
   };
 }
@@ -69,12 +77,127 @@ function isPrompt(skillsDir: string, slug: string): boolean {
   return fm?.scalars.prompt === "true";
 }
 
-/** Every problem with the lanes record; empty when it is sound. */
-export function validateLanes(lanes: PluginLanes, skillsDir: string): string[] {
+/** Every folder of the pack that holds a skill, sorted. */
+function packSkills(skillsDir: string): string[] {
+  return readdirSync(skillsDir)
+    .filter((name) => /^[a-z0-9][a-z0-9-]*$/.test(name) && existsSync(skillFile(skillsDir, name)))
+    .sort();
+}
+
+const DECISION_LANES = ["plugin", "operator_only", "excluded"] as const;
+
+/**
+ * What keeps a plugin skill usable on a client install, for each skill in
+ * the plugin lane: it names no operator-only tool, every skill it hands off
+ * to (a `skills/<slug>` path or a `get_skill <slug>` call) ships in the
+ * plugin too, every shared rule it defers to (`_<name>`,
+ * `conventions/<name>`, which the brain serves to any client) exists, and
+ * every relative link lands on a file the plugin ships.
+ */
+export function pluginClosureErrors(
+  lanes: PluginLanes,
+  skillsDir: string,
+  operatorTools: ReadonlySet<string> = OPERATOR_ONLY_TOOLS,
+): string[] {
+  const errors = new Set<string>();
+  const shipped = new Set(Object.keys(lanes.plugin));
+  const skills = new Set(packSkills(skillsDir));
+  const shippedFiles = new Set<string>();
+  for (const slug of shipped) {
+    if (!skills.has(slug)) continue;
+    for (const rel of listFiles(join(skillsDir, slug))) shippedFiles.add(`${slug}/${rel}`);
+  }
+  const sharedRuleExists = (target: string): boolean => {
+    if (target.startsWith("conventions/")) {
+      const name = target.slice("conventions/".length);
+      return /^[a-z0-9][\w.-]*$/i.test(name) && !name.includes("..")
+        && existsSync(join(skillsDir, "conventions", name.includes(".") ? name : `${name}.md`));
+    }
+    return /^_[a-z0-9][\w-]*$/i.test(target) && existsSync(join(skillsDir, `${target}.md`));
+  };
+  const checkTarget = (slug: string, target: string): void => {
+    if (target.startsWith("_") || target.startsWith("conventions/")) {
+      if (!sharedRuleExists(target)) errors.add(`plugin: ${slug} defers to ${target}, which is not a shared rule in the pack`);
+    } else if (!skills.has(target)) {
+      errors.add(`plugin: ${slug} hands off to ${target}, which is not a skill in the pack`);
+    } else if (!shipped.has(target)) {
+      errors.add(`plugin: ${slug} hands off to ${target}, which the plugin does not ship`);
+    }
+  };
+  for (const slug of [...shipped].sort()) {
+    if (!skills.has(slug)) continue;
+    for (const rel of listFiles(join(skillsDir, slug))) {
+      if (!rel.endsWith(".md")) continue;
+      const text = readFileSync(join(skillsDir, slug, rel), "utf8");
+      for (const tool of operatorTools) {
+        if (text.includes(`\`${tool}\``) || new RegExp(`^\\s+- ${tool}$`, "m").test(text)) {
+          errors.add(`plugin: ${slug} names operator-only tool ${tool}`);
+        }
+      }
+      for (const m of text.matchAll(/skills\/(_?[a-z0-9][\w-]*)(?![\w-])/g)) {
+        const target = m[1]!;
+        if (target !== slug && target !== "conventions") checkTarget(slug, target);
+      }
+      for (const m of text.matchAll(/`get_skill ([^`\s]+)`/g)) {
+        if (m[1] !== slug) checkTarget(slug, m[1]!);
+      }
+      for (const m of text.matchAll(/\]\((\.{1,2}\/[^)\s]+)\)/g)) {
+        const link = m[1]!;
+        if (/[<{$]/.test(link)) continue;
+        const target = posix.normalize(posix.join(posix.dirname(`${slug}/${rel}`), link.split("#")[0]!));
+        if (target.startsWith("../") || !shippedFiles.has(target)) {
+          errors.add(`plugin: ${slug} links ${link}, which the plugin does not ship`);
+        }
+      }
+    }
+  }
+  return [...errors];
+}
+
+/** A heading over text that tells neighbouring skills apart rather than handing work to them. */
+const BOUNDARY_HEADING = /sharp boundaries|related skills|see also|integration/i;
+
+/**
+ * Hand-offs a plugin skill makes in prose to a skill the plugin does not
+ * ship, as `<skill> -> <target>`, sorted: the target named as `` `slug` ``,
+ * `**slug**` or "slug skill". Sections that only tell neighbours apart
+ * (`BOUNDARY_HEADING`) are skipped. Unlike `pluginClosureErrors` these are
+ * not lane errors: prose cannot be checked exactly, so the test pins the
+ * list and it may only shrink.
+ */
+export function pluginProseHandOffs(lanes: PluginLanes, skillsDir: string): string[] {
+  const shipped = new Set(Object.keys(lanes.plugin));
+  const outside = new Set(packSkills(skillsDir).filter((s) => !shipped.has(s)));
+  const found = new Set<string>();
+  for (const slug of [...shipped].sort()) {
+    if (!existsSync(skillFile(skillsDir, slug))) continue;
+    let boundary = false;
+    for (const line of readFileSync(skillFile(skillsDir, slug), "utf8").split("\n")) {
+      if (/^#{1,6} /.test(line)) boundary = BOUNDARY_HEADING.test(line);
+      if (boundary) continue;
+      for (const m of line.matchAll(/`([a-z0-9][a-z0-9-]*)`|\*\*([a-z0-9][a-z0-9-]*)\*\*|\b([a-z0-9][a-z0-9-]*) skill\b/g)) {
+        const target = m[1] ?? m[2] ?? m[3]!;
+        if (outside.has(target)) found.add(`${slug} -> ${target}`);
+      }
+    }
+  }
+  return [...found].sort();
+}
+
+/**
+ * Every problem with the lanes record; empty when it is sound. Each skill in
+ * the pack is a recorded decision: it sits in exactly one of `plugin`,
+ * `operator_only` and `excluded`, with a reason, and the plugin lane is
+ * closed under hand-offs (`pluginClosureErrors`).
+ */
+export function validateLanes(
+  lanes: PluginLanes,
+  skillsDir: string,
+  operatorTools: ReadonlySet<string> = OPERATOR_ONLY_TOOLS,
+): string[] {
   const errors: string[] = [];
   const named: Array<[string, string]> = [
-    ...Object.keys(lanes.plugin).map((s): [string, string] => ["plugin", s]),
-    ...Object.keys(lanes.operator_only).map((s): [string, string] => ["operator_only", s]),
+    ...DECISION_LANES.flatMap((lane) => Object.keys(lanes[lane]).map((s): [string, string] => [lane, s])),
     ...lanes.starter.map((s): [string, string] => ["starter", s]),
   ];
   for (const [lane, slug] of named) {
@@ -82,14 +205,17 @@ export function validateLanes(lanes: PluginLanes, skillsDir: string): string[] {
       errors.push(`${lane}: ${slug} is not a skill in the pack`);
     }
   }
-  for (const [lane, map] of [["plugin", lanes.plugin], ["operator_only", lanes.operator_only]] as const) {
-    for (const [slug, reason] of Object.entries(map)) {
+  for (const lane of DECISION_LANES) {
+    for (const [slug, reason] of Object.entries(lanes[lane])) {
       if (reason.trim() === "") errors.push(`${lane}: ${slug} has no reason`);
     }
   }
-  for (const slug of Object.keys(lanes.plugin)) {
-    if (Object.hasOwn(lanes.operator_only, slug)) errors.push(`plugin: ${slug} is operator-only`);
+  for (const slug of packSkills(skillsDir)) {
+    const placed = DECISION_LANES.filter((lane) => Object.hasOwn(lanes[lane], slug));
+    if (placed.length === 0) errors.push(`${slug} is in no lane: add it to plugin, operator_only or excluded with a reason`);
+    if (placed.length > 1) errors.push(`${slug} is in more than one lane: ${placed.join(", ")}`);
   }
+  errors.push(...pluginClosureErrors(lanes, skillsDir, operatorTools));
   for (const slug of lanes.starter) {
     if (existsSync(skillFile(skillsDir, slug)) && !isPrompt(skillsDir, slug)) {
       errors.push(`starter: ${slug} is not served as a prompt`);

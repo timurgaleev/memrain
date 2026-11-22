@@ -113,10 +113,13 @@ are with a one-time code instead.
 
 The repository is also a Codex plugin marketplace. Its one plugin lives in
 `plugins/memrain`, so an install copies only that folder: the `memrain` MCP
-server plus fourteen skills: `query`, `brain-ops`, `capture`, `briefing`,
-`correction-pipeline`, `connect-client`, `fact-check`, `research-compendium`,
-`draft-in-voice`, `resolve-before-asking`, `brain-link-discipline`, `media-ingest`,
-`idea-ingest` and `meeting-ingestion`. They are generated from `deploy/skills`; the
+server plus 31 skills: the core loop (`query`, `capture`, `brain-ops`,
+`briefing`, `correction-pipeline`), ingestion (`ingest`, `ingest-gate`,
+`media-ingest`, `idea-ingest`, `meeting-ingestion`, `blog-ingest`,
+`bulk-ingestion` and more), research and checking (`fact-check`,
+`research-compendium`, `academic-verify`, `citation-fixer`), daily work
+(`daily-task-prep`, `daily-task-manager`, `mail-loops`, `reports`) and
+`connect-client` for setup. They are generated from `deploy/skills`; the
 lanes in `deploy/skills/plugin-lanes.json` decide which skills ship, and host-side
 skills (database diagnosis, engine moves, client administration) never do.
 

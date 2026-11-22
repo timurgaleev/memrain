@@ -61,7 +61,7 @@ Numbering is stable; other skills cite items by number.
 [ ] 5.  Tests           code paths and their regressions covered      bun test tests/<file>.test.ts
 [ ] 6.  Routing         3+ unique triggers, routing-eval.jsonl        pack routing test
 [ ] 7.  Untrusted text  Contract cites conventions/untrusted-content  only if it reads outside text
-[ ] 8.  Lane            entry in deploy/skills/plugin-lanes.json      plugin | operator_only
+[ ] 8.  Lane            entry in deploy/skills/plugin-lanes.json      plugin | operator_only | excluded
 [ ] 9.  Generated files plugin tree, _resolver.md, skills.lock.json   bun scripts/generate-plugin-tree.ts
 [ ] 10. Filing          writes_to prefixes sanctioned                 _brain-filing-rules.md
 ```
@@ -187,7 +187,9 @@ full suite through `bun run test:sharded` in `deploy/memrain` (a bare full
 ### 7. Lane and generated files (items 8, 9)
 
 Add the slug to `deploy/skills/plugin-lanes.json`: `plugin` with a one-line
-reason when a client agent uses it, `operator_only` for host-side work. Then,
+reason when a client agent uses it, `operator_only` for host-side work,
+`excluded` with the reason when neither fits. A `plugin` skill names no
+operator-only tool and hands off only to skills the plugin ships. Then,
 in `deploy/memrain`:
 
 ```bash
@@ -223,7 +225,7 @@ Score:    <passed>/<applicable>  (item 4 informational)
 Review:   ran, <n> cycles, <findings closed>/<found> | waived: <reason>
 Routing:  <n> own cases, routing test <ok | failing case>
 Lint:     skillpack lint ok | <issue>   skillify check ok | <issue>
-Lane:     plugin | operator_only — <reason>
+Lane:     plugin | operator_only | excluded — <reason>
 Gaps:     <item: what is missing and why> | none
 Next:     review the diff and commit
 ```

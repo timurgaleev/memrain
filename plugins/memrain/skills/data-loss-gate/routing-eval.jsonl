@@ -1,0 +1,10 @@
+// Routing eval fixtures for skills/data-loss-gate.
+// Each line: {intent, expected_skill, ambiguous_with?}.
+// Rule: intent must paraphrase the trigger, not copy it.
+{"intent": "review data loss", "expected_skill": "data-loss-gate"}
+{"intent": "confirm bulk deletion", "expected_skill": "data-loss-gate"}
+{"intent": "show tomorrow weather forecast", "expected_skill": null, "ambiguous_with": []}
+{"intent": "Bulk delete every scratch page under notes/old-example", "expected_skill": "data-loss-gate"}
+{"intent": "I want to bulk forget the facts extracted from that transcript", "expected_skill": "data-loss-gate"}
+{"intent": "Purge the deleted pages that have been sitting there for a month", "expected_skill": "data-loss-gate"}
+{"intent": "Before I remove those three pages, is this deletion reversible?", "expected_skill": "data-loss-gate"}
