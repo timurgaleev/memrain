@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { vectorSearch } from "../src/core/search/vector.ts";
 import {
-  EMBEDDINGS_HNSW_SPEC,
+  EMBEDDINGS_HNSW_INDEX,
+  embeddingsHnswSpec,
   hnswEfSearchFor,
   checkActiveBuild,
   dropZombieIndexes,
@@ -34,11 +35,17 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-describe("EMBEDDINGS_HNSW_SPEC", () => {
-  it("targets the migration-001 index", () => {
-    expect(EMBEDDINGS_HNSW_SPEC.name).toBe("embeddings_vector_idx");
-    expect(EMBEDDINGS_HNSW_SPEC.table).toBe("embeddings");
-    expect(EMBEDDINGS_HNSW_SPEC.using).toContain("hnsw");
+describe("embeddingsHnswSpec", () => {
+  // Value: protects=a rebuild names the opclass of the column it rebuilds; fails_when=a halfvec column
+  // gets vector_cosine_ops (Postgres refuses the CREATE INDEX).
+  it("targets the production index with the column's operator class", () => {
+    for (const type of ["vector", "halfvec"] as const) {
+      const spec = embeddingsHnswSpec(type);
+      expect(spec.name).toBe(EMBEDDINGS_HNSW_INDEX);
+      expect(spec.name).toBe("embeddings_vector_idx");
+      expect(spec.table).toBe("embeddings");
+      expect(spec.using).toBe(`hnsw (vector ${type}_cosine_ops)`);
+    }
   });
 });
 
@@ -54,7 +61,7 @@ describe("PGLite no-op guards", () => {
   });
 
   it("dropAndRebuild reports not-rebuilt (postgres-only)", async () => {
-    const r = await dropAndRebuild(storage.engine(), EMBEDDINGS_HNSW_SPEC);
+    const r = await dropAndRebuild(storage.engine(), embeddingsHnswSpec("halfvec"));
     expect(r.rebuilt).toBe(false);
     expect(r.tempName).toBe("embeddings_vector_idx");
   });

@@ -10,11 +10,13 @@ import { withStorage } from "./with-storage.ts";
 import { withDirectEngine } from "../core/engine/direct.ts";
 import { checkInvalidIndexes } from "../core/doctor-ops.ts";
 import {
-  EMBEDDINGS_HNSW_SPEC,
+  EMBEDDINGS_HNSW_INDEX,
+  embeddingsHnswSpec,
   checkActiveBuild,
   dropZombieIndexes,
   dropAndRebuild,
 } from "../core/vector-index.ts";
+import { embeddingVectorType } from "../core/embedding-column.ts";
 
 export interface HnswOptions {
   force?: boolean;
@@ -29,13 +31,13 @@ export async function runHnsw(
     const engine = storage.engine();
     switch (sub) {
       case "status": {
-        const active = await checkActiveBuild(engine, EMBEDDINGS_HNSW_SPEC.name);
+        const active = await checkActiveBuild(engine, EMBEDDINGS_HNSW_INDEX);
         const invalid = await checkInvalidIndexes(engine);
         console.log(
           JSON.stringify(
             {
               engine: engine.kind,
-              index: EMBEDDINGS_HNSW_SPEC.name,
+              index: EMBEDDINGS_HNSW_INDEX,
               active_build: active,
               invalid_indexes: invalid,
             },
@@ -55,13 +57,13 @@ export async function runHnsw(
         break;
       }
       case "rebuild": {
-        const res = await withDirectEngine(engine, (direct) => dropAndRebuild(direct, EMBEDDINGS_HNSW_SPEC, {
+        const res = await withDirectEngine(engine, async (direct) => dropAndRebuild(direct, embeddingsHnswSpec(await embeddingVectorType(direct)), {
           reason: "cli",
           force: opts.force ?? false,
         }));
         console.log(
           res.rebuilt
-            ? `hnsw rebuild: ${EMBEDDINGS_HNSW_SPEC.name} rebuilt (temp ${res.tempName})`
+            ? `hnsw rebuild: ${EMBEDDINGS_HNSW_INDEX} rebuilt (temp ${res.tempName})`
             : `hnsw rebuild: skipped (engine=${engine.kind}, an active build may be in flight — pass --force)`,
         );
         break;

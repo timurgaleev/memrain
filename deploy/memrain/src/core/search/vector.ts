@@ -6,6 +6,7 @@
  */
 import type { Engine } from "../engine/interface.ts";
 import { hnswEfSearchFor } from "../vector-index.ts";
+import { embeddingCast } from "../embedding-column.ts";
 import { visibilityClause } from "../visibility.ts";
 import { chunkFilterClauses, type ChunkFilters } from "./filters.ts";
 import {
@@ -171,12 +172,13 @@ export async function vectorSearch(
     limit,
   });
   const relaxed = settings["hnsw.iterative_scan"] === "relaxed_order";
+  const vectorCast = await embeddingCast(engine);
   const sql = opts.maxPool
     ? boostCase
       ? `SELECT bpp.chunk_id FROM (
            SELECT DISTINCT ON (COALESCE(d.source_id, 'default'), c.document_id)
                   e.chunk_id AS chunk_id,
-                  (1 - (e.vector <=> $1::vector)) * ${boostCase} AS sim
+                  (1 - (e.vector <=> $1${vectorCast})) * ${boostCase} AS sim
              FROM embeddings e
              JOIN chunks c    ON c.id = e.chunk_id
              JOIN documents d ON d.id = c.document_id
@@ -189,7 +191,7 @@ export async function vectorSearch(
       : `SELECT bpp.chunk_id FROM (
            SELECT DISTINCT ON (COALESCE(d.source_id, 'default'), c.document_id)
                   e.chunk_id AS chunk_id,
-                  (e.vector <=> $1::vector) AS dist
+                  (e.vector <=> $1${vectorCast}) AS dist
              FROM embeddings e
              JOIN chunks c    ON c.id = e.chunk_id
              JOIN documents d ON d.id = c.document_id
@@ -204,13 +206,13 @@ export async function vectorSearch(
          JOIN chunks c     ON c.id = e.chunk_id
          JOIN documents d  ON d.id = c.document_id
          WHERE ${where}
-         ORDER BY (1 - (e.vector <=> $1::vector)) * ${boostCase} DESC, e.chunk_id COLLATE "C" ASC
+         ORDER BY (1 - (e.vector <=> $1${vectorCast})) * ${boostCase} DESC, e.chunk_id COLLATE "C" ASC
          LIMIT ${limitParam}`
       : relaxed
         ? // A relaxed iterative scan may return rows slightly out of order;
           // the materialized CTE keeps the index scan and re-sorts its output.
           `WITH ann AS MATERIALIZED (
-             SELECT e.chunk_id, e.vector <=> $1::vector AS dist
+             SELECT e.chunk_id, e.vector <=> $1${vectorCast} AS dist
                FROM embeddings e
                JOIN chunks c     ON c.id = e.chunk_id
                JOIN documents d  ON d.id = c.document_id
@@ -223,7 +225,7 @@ export async function vectorSearch(
        JOIN chunks c     ON c.id = e.chunk_id
        JOIN documents d  ON d.id = c.document_id
        WHERE ${where}
-       ORDER BY e.vector <=> $1::vector
+       ORDER BY e.vector <=> $1${vectorCast}
        LIMIT ${limitParam}`;
   // Settings are applied transaction-locally (set_config is_local=true); see
   // vectorScanSettings for which apply where.

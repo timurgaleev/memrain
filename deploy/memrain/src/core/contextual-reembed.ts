@@ -43,6 +43,7 @@ import type { Engine } from "./engine/interface.ts";
 import type { Storage } from "./storage.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
 import { embeddingInputHash } from "./embedding-input-hash.ts";
+import { embeddingCast } from "./embedding-column.ts";
 import { embedSkipFilterFragment } from "./embed-skip.ts";
 import {
   buildContextualPrefix,
@@ -356,12 +357,13 @@ async function runContextualReembedBody(
       // FOR SHARE holds that row: a re-index deleting it concurrently makes the
       // guard wait and then drop it, instead of passing on the old row and
       // overwriting the vector the re-index writes for the new one.
+      const vectorCast = await embeddingCast(engine);
       const { written, skipped: staleHere } = await engine.transaction(async (tx) => {
         let n = 0;
         for (const w of writes) {
           const ins = await tx.query<{ chunk_id: string }>(
             `INSERT INTO embeddings (chunk_id, vector, model, embedding_signature, input_hash)
-             SELECT c.id, $2::vector, $3, $4, $6 FROM chunks c
+             SELECT c.id, $2${vectorCast}, $3, $4, $6 FROM chunks c
               WHERE c.id = $1 AND c.content = $5
               FOR SHARE
              ON CONFLICT (chunk_id) DO UPDATE

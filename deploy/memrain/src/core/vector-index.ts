@@ -25,6 +25,7 @@
  * is single-connection and has no pg_stat_activity / concurrent-build surface.
  */
 import type { Engine } from "./engine/interface.ts";
+import type { EmbeddingVectorType } from "./embedding-column.ts";
 
 /**
  * ef_search must cover the requested ANN candidate pool: pgvector's HNSW scan
@@ -36,20 +37,28 @@ export function hnswEfSearchFor(limit: number): number {
   return Math.min(1000, Math.max(40, limit));
 }
 
-/** memrain's production HNSW index (migration 001). */
-export const EMBEDDINGS_HNSW_SPEC: IndexSpec = {
-  name: "embeddings_vector_idx",
-  table: "embeddings",
-  column: "vector",
-  using: "hnsw (vector vector_cosine_ops)",
-};
+/** memrain's production HNSW index (migration 001; halfvec opclass since 191). */
+export const EMBEDDINGS_HNSW_INDEX = "embeddings_vector_idx";
+
+/**
+ * The production index spec for the column's storage type: the operator class
+ * must match the column (`vector_cosine_ops` refuses a halfvec column).
+ */
+export function embeddingsHnswSpec(type: EmbeddingVectorType): IndexSpec {
+  return {
+    name: EMBEDDINGS_HNSW_INDEX,
+    table: "embeddings",
+    column: "vector",
+    using: `hnsw (vector ${type === "halfvec" ? "halfvec_cosine_ops" : "vector_cosine_ops"})`,
+  };
+}
 
 export interface IndexSpec {
   /** The CURRENT (production) index name. */
   name: string;
   table: string;
   column: string;
-  /** USING clause body — e.g. `hnsw (vector vector_cosine_ops)`. */
+  /** USING clause body — e.g. `hnsw (vector halfvec_cosine_ops)`. */
   using: string;
   /** Optional WHERE predicate (without the WHERE keyword). */
   condition?: string;

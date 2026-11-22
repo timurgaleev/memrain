@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
+import { embeddingVectorType } from "../src/core/embedding-column.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
 const hasColumn = async (e: Engine, table: string, col: string) => (await e.query<{ n: number }>(
@@ -31,7 +32,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await hasColumn(e, "embeddings", "input_hash")).toBe(true);
       const row = (await e.query<{ vec: string; input_hash: string | null }>(
         `SELECT vector::text AS vec, input_hash FROM embeddings WHERE chunk_id = 'legacy_c0'`)).rows[0]!;
-      expect(row.vec).toBe(before);
+      // runMigrations also applies the later ones, and 191 stores the column at
+      // half precision: the vector must be the same one at the column's precision.
+      const type = await embeddingVectorType(e);
+      const expected = (await e.query<{ v: string }>(`SELECT $1::text::${type}::text AS v`, [before])).rows[0]!.v;
+      expect(row.vec).toBe(expected);
       expect(row.input_hash).toBeNull();
       expect((await runMigrations(e)).applied).toEqual([]);
     } finally { await db.close(); }

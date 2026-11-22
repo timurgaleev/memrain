@@ -23,6 +23,7 @@ import type { Engine } from "./engine/interface.ts";
 import type { Storage } from "./storage.ts";
 import { bumpDocumentClock } from "./generation.ts";
 import { embeddingSignature } from "./embedding.ts";
+import { embeddingCast } from "./embedding-column.ts";
 import { withRetry, BULK_RETRY_OPTS } from "./retry.ts";
 import { OperationError } from "./operation-error.ts";
 import { insertCodeEdges, type CodeEdgeInput } from "./code-edges.ts";
@@ -164,6 +165,7 @@ export async function writeDocumentTransaction(
     doc.frontmatter,
     doc.sourcePath,
   );
+  const vectorCast = chunks.some((ch) => ch.embedding) ? await embeddingCast(engine) : "::vector";
 
   // Wrap the whole transaction (not individual queries) in a connection-retry:
   // a dropped socket kills the tx, so retry must restart from BEGIN on a fresh
@@ -390,7 +392,7 @@ export async function writeDocumentTransaction(
         const embModel = doc.embeddingModel ?? "unknown";
         await tx.query(
           `INSERT INTO embeddings (chunk_id, vector, model, embedding_signature, input_hash)
-           VALUES ($1, $2::vector, $3, $4, $5)`,
+           VALUES ($1, $2${vectorCast}, $3, $4, $5)`,
           [
             cid,
             JSON.stringify(ch.embedding),

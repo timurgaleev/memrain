@@ -154,6 +154,7 @@ export class PostgresEngine implements Engine {
     return this.sql.begin(async (sql) => {
       const tx: Engine = {
         kind: "postgres",
+        root: this,
         async ready() {
           /* noop — already inside an open transaction */
         },

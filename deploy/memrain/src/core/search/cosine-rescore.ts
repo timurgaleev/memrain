@@ -20,6 +20,7 @@
 import type { Engine } from "../engine/interface.ts";
 import type { ChunkScore } from "./dedup.ts";
 import { andSourceScope } from "../source-scope.ts";
+import { embeddingCast } from "../embedding-column.ts";
 
 /** Fraction of the blended score contributed by the normalized RRF score. */
 export const RRF_BLEND_WEIGHT = 0.7;
@@ -48,9 +49,10 @@ export async function fetchCosineSimilarities(
       " JOIN chunks c ON c.id = e.chunk_id JOIN documents d ON d.id = c.document_id";
     sourceFilter = andSourceScope("d.source_id", sourceIds, params);
   }
+  const vectorCast = await embeddingCast(engine);
   const rows = await engine.query<{ chunk_id: string; cosine: number }>(
     `SELECT e.chunk_id AS chunk_id,
-            1 - (e.vector <=> $1::vector) AS cosine
+            1 - (e.vector <=> $1${vectorCast}) AS cosine
        FROM embeddings e${join}
       WHERE e.chunk_id = ANY($2::text[])${sourceFilter}`,
     params,

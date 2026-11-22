@@ -113,13 +113,14 @@ describe("parallel chunk embedding", () => {
     await indexDocument(storage, { sourcePath: "/p/order.md", text: doc(5) }, { embedFn: fn, timingLabel: "page_put" });
     const rows = await storedVectors("/p/order.md");
     expect(rows).toHaveLength(5);
-    // pgvector stores float4, so compare within rounding — and require each
-    // stored vector to be far from every OTHER chunk's, or a swap would pass.
+    // The column is halfvec (2-byte floats), so compare within half-precision
+    // rounding — and require each stored vector to be far from every OTHER
+    // chunk's, or a swap would pass.
     const expected = await Promise.all(rows.map((row) => deterministicEmbed(row.content)));
     const gap = (a: number[], b: number[]) => Math.max(...a.map((x, k) => Math.abs(x - b[k]!)));
     rows.forEach((row, i) => {
       const stored = JSON.parse(row.vec) as number[];
-      expect(gap(stored, expected[i]!)).toBeLessThan(1e-6);
+      expect(gap(stored, expected[i]!)).toBeLessThan(5e-4);
       expected.forEach((other, j) => {
         if (j !== i) expect(gap(stored, other)).toBeGreaterThan(1e-3);
       });

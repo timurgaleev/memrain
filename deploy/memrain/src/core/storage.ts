@@ -13,6 +13,7 @@ import { diffMigrationIds, discoverMigrations, runMigrations, type MigrationResu
 import type { Engine } from "./engine/interface.ts";
 import { makeEngine } from "./engine/factory.ts";
 import { directEngineFor } from "./engine/direct.ts";
+import { forgetEmbeddingVectorType } from "./embedding-column.ts";
 import type { Config } from "./config.ts";
 import { applyRuntimeEnvOverlay } from "./runtime-config.ts";
 import { setSpendLedgerEngine } from "./budget.ts";
@@ -73,6 +74,8 @@ export class Storage {
     } finally {
       await direct.close();
     }
+    // Behind a pooler the migrations ran on another engine object.
+    if (result.applied.length > 0) forgetEmbeddingVectorType(this._engine);
     // DB-plane knob overlay (`memrain config set`, migration 088): stored
     // MEMRAIN_* keys fill env gaps the container did not set. Fail-open, env
     // wins, MEMRAIN_NO_DB_CONFIG=1 skips. See core/runtime-config.ts.

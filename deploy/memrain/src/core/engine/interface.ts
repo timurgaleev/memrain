@@ -33,6 +33,13 @@ export interface Engine {
    */
   readonly pooler?: PoolerMode;
 
+  /**
+   * On a transaction handle: the engine it was opened from. Per-engine caches
+   * (schema probes) key on this, so a probe inside a transaction is shared
+   * with the pool instead of repeated per transaction.
+   */
+  readonly root?: Engine;
+
   /** A direct engine for migrations and DDL; only a pooled engine has one. */
   openDirect?(): Engine;
 

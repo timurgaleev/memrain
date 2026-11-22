@@ -16,6 +16,7 @@
  */
 import type { Engine } from "./engine/interface.ts";
 import { withDirectEngine } from "./engine/direct.ts";
+import { forgetEmbeddingVectorType } from "./embedding-column.ts";
 import { isDeadlockError, isRetryableConnError, isStatementTimeoutError } from "./retry.ts";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -358,7 +359,10 @@ export async function runMigrations(
 ): Promise<MigrationResult> {
   // Never through a transaction pooler: a pooled engine hands over a direct
   // one, or the run is refused before any SQL (core/engine/direct.ts).
-  return withDirectEngine(engine, (direct) => applyPending(direct, dir));
+  const result = await withDirectEngine(engine, (direct) => applyPending(direct, dir));
+  // A migration may have changed the embedding column's type (191).
+  if (result.applied.length > 0) forgetEmbeddingVectorType(engine);
+  return result;
 }
 
 async function applyPending(engine: Engine, dir: string): Promise<MigrationResult> {
@@ -461,6 +465,8 @@ export async function revertMigration(
     await direct.transaction(async (tx) => {
       await tx.exec(down.sql);
     });
+    forgetEmbeddingVectorType(direct);
+    forgetEmbeddingVectorType(engine);
     return { id, name: down.name };
   });
 }

@@ -11,6 +11,7 @@ import type { CheckStatus } from "./doctor-categories.ts";
 import type { Engine } from "./engine/interface.ts";
 import { diffMigrationIds, discoverMigrations } from "./migrate.ts";
 import { EMBED_DIMENSIONS } from "./embedding.ts";
+import { embeddingVectorType } from "./embedding-column.ts";
 import { grammarSelfCheck } from "./chunkers/parsers.ts";
 import { isJunkConceptName, isJunkConceptSlug, isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
 import { Queue } from "./jobs/queue.ts";
@@ -572,9 +573,10 @@ export async function checkQuarantinedPages(
 
 /**
  * Embedding-width consistency: the stored vector width vs the configured
- * EMBED_DIMENSIONS (MEMRAIN_EMBED_DIM). The `vector(N)` column is fixed-width, so
- * a mismatch means the config was changed without migrating the column — new
- * embeds would break. Flips ok:false so the drift is visible before it bites.
+ * EMBED_DIMENSIONS (MEMRAIN_EMBED_DIM). The column (`halfvec(N)`, or `vector(N)`
+ * where pgvector lacks halfvec) is fixed-width, so a mismatch means the config
+ * was changed without migrating the column — new embeds would break. Flips
+ * ok:false so the drift is visible before it bites. `vector_dims` reads both types.
  */
 export async function checkEmbeddingWidth(
   engine: Engine,
@@ -600,11 +602,12 @@ export async function checkEmbeddingWidth(
   }
   const stored = widths[0]!;
   const ok = stored === EMBED_DIMENSIONS;
+  const type = await embeddingVectorType(engine);
   return {
     ok,
     status: ok ? "ok" : "fail",
     detail: ok
-      ? `embeddings are ${stored}-dim (matches configured ${EMBED_DIMENSIONS})`
+      ? `embeddings are ${stored}-dim ${type} (matches configured ${EMBED_DIMENSIONS})`
       : `stored embeddings are ${stored}-dim but config expects ${EMBED_DIMENSIONS} — reindex or align MEMRAIN_EMBED_DIM`,
   };
 }

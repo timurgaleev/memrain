@@ -66,6 +66,7 @@ import { CODE_EMBED_MAX_BYTES, codeEmbeddingInput, EmbedSpendCap } from "./code-
 import type { Engine } from "./engine/interface.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
 import { embeddingInputHash } from "./embedding-input-hash.ts";
+import { embeddingCast } from "./embedding-column.ts";
 import { codeEmbeddableChunkFragment, embeddableChunkFragment } from "./embed-skip.ts";
 import {
   buildContextualPrefix,
@@ -569,6 +570,7 @@ async function embedPage(
 ): Promise<void> {
   let next = 0;
   const total = page.length;
+  const vectorCast = await embeddingCast(engine);
   // A failure no other row would escape (a spent budget, broken credentials,
   // the database): the pool stops taking rows and the run fails with it.
   let fatal: { err: unknown } | undefined;
@@ -614,7 +616,7 @@ async function embedPage(
                  SELECT id FROM chunks WHERE id = $1 AND content = $6 FOR SHARE
                ), ins AS (
                  INSERT INTO embeddings (chunk_id, vector, model, embedding_signature, input_hash)
-                 SELECT cur.id, $2::vector, $3, $4, $7 FROM cur
+                 SELECT cur.id, $2${vectorCast}, $3, $4, $7 FROM cur
                  ON CONFLICT (chunk_id) DO NOTHING
                  RETURNING chunk_id
                ), upd AS (

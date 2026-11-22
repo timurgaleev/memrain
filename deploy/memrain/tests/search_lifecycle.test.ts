@@ -54,10 +54,11 @@ it("makes the vector settings transaction read-only before any statement", async
     kind: "postgres",
     async exec(sql: string) { statements.push(sql); },
     async query(sql: string) { statements.push(sql); return { rows: [{ chunk_id: "chunk" }] }; },
-    async transaction(fn: (tx: Engine) => Promise<unknown>) { return fn(engine as unknown as Engine); },
+    async transaction(fn: (tx: Engine) => Promise<unknown>) { statements.push("BEGIN"); return fn(engine as unknown as Engine); },
   } as unknown as Engine;
   await vectorSearch(engine, [1, 0], 50);
-  expect(statements[0]).toBe("SET TRANSACTION READ ONLY");
+  // The column-type probe runs before the transaction opens.
+  expect(statements[statements.indexOf("BEGIN") + 1]).toBe("SET TRANSACTION READ ONLY");
 });
 
 it("carries the HTTP request cancellation into MCP dispatch", async () => {
