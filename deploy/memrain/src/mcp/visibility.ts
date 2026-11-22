@@ -166,6 +166,13 @@ export function ingressRefusal(
 }
 
 /**
+ * Write tools that refuse an authenticated caller with no write source
+ * whatever MEMRAIN_TENANT_FAIL_CLOSED says: their unscoped fallback would
+ * reach every source's rows.
+ */
+const FAIL_CLOSED_WRITE_TOOLS: ReadonlySet<string> = new Set(["loops_update"]);
+
+/**
  * The per-credential gates dispatch applies before any handler runs, in the
  * order dispatch reports them. The operator path (`authInfo === undefined`)
  * passes every one.
@@ -177,7 +184,7 @@ export function dispatchRefusal(
 ): ToolRefusal | null {
   if (authInfo === undefined) return null;
   const writeDenied =
-    isNoSourceSentinel(effectiveWriteSourceIdForIngress(authInfo, { failClosed }));
+    isNoSourceSentinel(effectiveWriteSourceIdForIngress(authInfo, { failClosed: failClosed || FAIL_CLOSED_WRITE_TOOLS.has(name) }));
   if (writeDenied && WRITE_SCOPED_TOOLS.has(name)) return { kind: "no_write_source" };
   if (OPERATOR_ONLY_TOOLS.has(name)) return { kind: "operator_only" };
   const scope = OP_BY_NAME.get(name)?.scope;

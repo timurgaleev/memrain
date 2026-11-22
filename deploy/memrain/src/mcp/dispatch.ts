@@ -127,7 +127,7 @@ import { recallFact, forgetFact } from "../core/facts-recall.ts";
 import { brainIdentity } from "../core/identity.ts";
 import { purgeDeletedPages } from "../core/pages-purge.ts";
 import { daemonsStatus } from "../core/daemons/status.ts";
-import { isLoopType, listLoops, LOOPS_MAX_SYNC_AGE_HOURS as WAITING_MAX_SYNC_AGE_HOURS, syncFreshness, type LoopStatus } from "../core/loops/store.ts";
+import { closeLoop, isLoopType, listLoops, LOOPS_MAX_SYNC_AGE_HOURS as WAITING_MAX_SYNC_AGE_HOURS, muteLoop, syncFreshness, type LoopStatus } from "../core/loops/store.ts";
 import { queryRefine } from "../core/search/query-refine.ts";
 import { codeCallers, codeCallees, codeDefs, codeRefs } from "../core/code-graph.ts";
 import { runRecursiveWalk } from "../core/code-walk.ts";
@@ -899,6 +899,8 @@ async function dispatchToolInner(
         return jsonResult(await daemonsStatus(storage.engine()));
       case "loops_list":
         return await callLoopsList(storage, args, readSources);
+      case "loops_update":
+        return await callLoopsUpdate(storage, args, opts);
       case "submit_agent": {
         // Loaded on use: the agent modules import dispatchTool themselves, so a
         // static import here would close a module cycle.
@@ -4915,6 +4917,48 @@ async function callLoopsList(
       : fresh.stale.length > 0 ? { warning: `${fresh.stale.length} account(s) not synced in ${WAITING_MAX_SYNC_AGE_HOURS} h: their loops may be missing.` } : {}),
     loops: loops.map(({ counterparty: _counterparty, ...l }) => ({ ...l, summary: frameExternal(l.summary), trust: "external" })),
   });
+}
+
+const LOOP_MUTES: Readonly<Record<string, { kind: "sender" | "thread"; mute: boolean }>> = {
+  mute_sender: { kind: "sender", mute: true },
+  mute_thread: { kind: "thread", mute: true },
+  unmute_sender: { kind: "sender", mute: false },
+  unmute_thread: { kind: "thread", mute: false },
+};
+
+/**
+ * Close, mute or unmute one loop. Only the caller's WRITE source is in scope:
+ * a federated read grant never authorizes a loop write, and an authenticated
+ * caller with no write source is refused whatever the global fail-closed flag
+ * says (an unscoped write would reach every source). A loop outside the write
+ * source reads as not found.
+ */
+async function callLoopsUpdate(storage: Storage, args: Record<string, unknown>, opts: DispatchOptions): Promise<ToolCallResult> {
+  let scope: string[] | undefined;
+  if (opts.authInfo !== undefined || opts.isPublic === true) {
+    const ws = effectiveWriteSourceIdForIngress(opts.authInfo, { failClosed: true });
+    if (ws === undefined || isNoSourceSentinel(ws)) {
+      throw new OperationError("permission_denied", "loops_update: this connection has no write source",
+        "Nothing changed. Ask the brain owner for a credential with a write source, or run `memrain waiting` on the brain host.");
+    }
+    scope = [ws];
+  }
+  const engine = storage.engine();
+  const id = Number(args["id"]);
+  const action = String(args["action"]);
+  const dryRun = args["dry_run"] === true;
+  const notFound = () => new OperationError("not_found", `loops_update: no ${action === "done" || action === "dropped" ? "open " : ""}loop ${id} in your write source`,
+    "List loops with loops_list and pass an id from it.");
+  const mute = LOOP_MUTES[action];
+  if (!mute) {
+    const loop = await closeLoop(engine, scope, id, action === "done" ? "done" : "dropped", { dryRun });
+    if (!loop) throw notFound();
+    const { counterparty: _counterparty, ...rest } = loop;
+    return jsonResult({ ok: true, ...(dryRun ? { dry_run: true } : {}), loop: { ...rest, summary: frameExternal(rest.summary), trust: "external" } });
+  }
+  const r = await muteLoop(engine, scope, id, mute.kind, mute.mute, { dryRun });
+  if (!r) throw notFound();
+  return jsonResult({ ok: true, ...r });
 }
 
 async function callSourcesList(

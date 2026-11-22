@@ -393,7 +393,7 @@ function printUsage(): void {
   console.log("  daemons enable|disable <name> [--source ID] [--json]");
   console.log("  waiting [--source ID] [--type T] [--limit N] [--stale] [--json]");
   console.log("                               who waits on a reply, whom you wait on, promises, RSVPs (refuses if syncs are >24h old)");
-  console.log("  waiting sweep [--source ID] | done|drop <id> | mute|unmute sender|thread <id>");
+  console.log("  waiting sweep [--source ID] | done|drop <id> [--dry-run] | mute|unmute sender|thread <id> [--dry-run]");
   console.log("  quarantine list [--include-flagged] [--json]");
   console.log("  quarantine clear <slug|path> [--force]");
   console.log("  quarantine scan [--limit N] [--apply]");
@@ -2079,6 +2079,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
         opts.limit = n;
       }
       if (flags.has("--stale")) opts.stale = true;
+      if (flags.has("--dry-run")) opts.dryRun = true;
       if (flags.has("--json")) opts.json = true;
       return await runWaiting(opts);
     }

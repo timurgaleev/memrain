@@ -114,6 +114,30 @@ describe("memrain waiting", () => {
     await storage.engine().query(`DELETE FROM connector_accounts WHERE source_id = 'chat'`);
   });
 
+  // Value: protects=the CLI shows which loops a mute closes and an unmute brings back, and --dry-run writes nothing;
+  // fails_when=the CLI and MCP disagree on the shared store result or a preview plants a suppression.
+  it("mute --dry-run previews, mute prints the loops it closed, unmute the ones it reopened", async () => {
+    const [loop] = (JSON.parse((await run({ sub: undefined, json: true })).out) as { loops: Array<{ id: number }> }).loops;
+    const preview = await run({ sub: "mute", target: "sender", id: String(loop!.id), dryRun: true, json: true });
+    expect(JSON.parse(preview.out)).toMatchObject({ ok: true, dry_run: true, would_close: [loop!.id] });
+    expect((await storage.engine().query(`SELECT 1 FROM loop_suppressions`)).rows).toEqual([]);
+    expect((await run({ sub: "mute", target: "sender", id: String(loop!.id) })).out).toBe(`muted the sender of #${loop!.id}; closed: #${loop!.id}`);
+    expect((await run({ sub: "unmute", target: "sender", id: String(loop!.id) })).out).toBe(`unmuted the sender of #${loop!.id}; reopened: #${loop!.id}`);
+  });
+
+  // Value: protects=a preview flag never runs a write; fails_when=done --dry-run closes or sweep --dry-run sweeps.
+  it("done --dry-run previews without closing, and --dry-run on sweep or the list refuses", async () => {
+    const [loop] = (JSON.parse((await run({ sub: undefined, json: true })).out) as { loops: Array<{ id: number }> }).loops;
+    const preview = await run({ sub: "done", id: String(loop!.id), dryRun: true });
+    expect(preview.out).toBe(`would close as done: #${loop!.id}`);
+    expect((JSON.parse((await run({ sub: undefined, json: true })).out) as { loops: unknown[] }).loops).toHaveLength(1);
+    for (const sub of ["sweep", undefined]) {
+      const refused = await run({ sub, dryRun: true });
+      expect(refused.code).toBe(1);
+      expect(refused.err).toContain("--dry-run applies to done, drop, mute and unmute");
+    }
+  });
+
   it("mutes, unmutes, drops and refuses unknown ids", async () => {
     const [loop] = (JSON.parse((await run({ sub: undefined, json: true })).out) as { loops: Array<{ id: number }> }).loops;
     expect((await run({ sub: "mute", target: "sender", id: String(loop!.id) })).code).toBe(0);

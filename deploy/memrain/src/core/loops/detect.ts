@@ -28,7 +28,8 @@
  *   - grace: inbound 24 h, outbound 72 h, promises 24 h, measured from the
  *     oldest message of the trailing run, so a nudge never restarts the clock
  *   - nothing opens from a thread whose last activity is older than 14 days
- *   - a muted sender or thread opens nothing new; existing loops stay as they are
+ *   - a muted sender or thread opens nothing new (the mute itself closes its
+ *     open reply-owed loops: store.ts muteLoop)
  *
  * Only a turn flip closes a loop: my reply closes the inbound side, theirs the
  * outbound side, a later message of mine a promise. Grace, CC-only, list mail

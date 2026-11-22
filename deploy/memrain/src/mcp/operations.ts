@@ -952,6 +952,18 @@ export const OPERATIONS: readonly Operation[] = [
     },
   },
   {
+    name: "loops_update",
+    scope: "write",
+    outputRedaction: "retrieval",
+    description:
+      "Change a loop from loops_list in your write source. done/dropped closes it. mute_* stops new loops for that sender/thread and closes its open reply-owed loops (closed); unmute_* re-judges those from stored replies: reopened, answered, stayed_muted, unverifiable. dry_run previews. Unknown or closed id: not_found.",
+    params: {
+      id: int({ ...req, minimum: 1 }),
+      action: str({ ...req, enum: ["done", "dropped", "mute_sender", "mute_thread", "unmute_sender", "unmute_thread"] }),
+      dry_run: bool(),
+    },
+  },
+  {
     name: "submit_agent",
     description:
       "Queue a read-only research agent under your own grant: it reads only your sources with your client's read tools, spends your daily budget, and stops if your grant changes. Returns a job_id; poll get_agent_job. Needs the 'agent' scope, a client daily budget and a free concurrency slot. Writes nothing.",
@@ -1844,6 +1856,7 @@ const IDEMPOTENT_TOOLS: ReadonlySet<string> = new Set([
   "forget_fact",
   "set_take_status",
   "put_raw_data",
+  "loops_update",
 ]);
 
 export interface ToolAnnotations {

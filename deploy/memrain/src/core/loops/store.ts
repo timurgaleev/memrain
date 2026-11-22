@@ -3,8 +3,8 @@
  * sweep concludes from them, and the owner's mutes and closes.
  *
  * One SQL text for both engines. A loop closes by changing its status, never
- * by deletion; `closed_by` is a short code (reply, owner, page_deleted,
- * expired, cancelled). Every read takes a source scope (source-scope.ts): the
+ * by deletion; `closed_by` is a short code (reply, owner, muted, unmuted,
+ * page_deleted, expired, cancelled). Every read takes a source scope (source-scope.ts): the
  * operator passes none, a caller with no grant reads nothing.
  */
 import type { Engine } from "../engine/interface.ts";
@@ -138,8 +138,7 @@ async function judgeThreads(engine: Engine, sourceId: string, rows: readonly Thr
     groups.set(key, [...(groups.get(key) ?? []), row]);
   }
   for (const group of groups.values()) {
-    const parsed = group.map(r => ({ row: r, signals: typeof r.signals === "string" ? JSON.parse(r.signals) as unknown : r.signals }))
-      .filter((x): x is { row: ThreadRow; signals: LoopSignals } => isLoopSignals(x.signals));
+    const parsed = parseThreadRows(group);
     if (parsed.length === 0) continue;
     result.threads++;
     const first = parsed[0]!;
@@ -152,14 +151,27 @@ async function judgeThreads(engine: Engine, sourceId: string, rows: readonly Thr
       for (const o of v.open) if (await upsertLoop(engine, sourceId, "calendar", first.signals.threadRef, first.row.page_slug, o)) result.opened++;
       continue;
     }
-    const threads = parsed.map(p => p.signals as ThreadLoopSignals);
-    const merged = threads.length === 1 ? threads[0]! : mergeThreadSignals(threads);
-    const latestPage = parsed.reduce((a, b) => (signalsActivityAt(b.signals) > signalsActivityAt(a.signals) ? b : a)).row.page_slug;
+    const { merged, latestPage } = mergeThread(parsed);
     const v = detectThread(merged, now, suppress);
     const desired = new Set(v.open.map(o => o.loopType));
     result.closed += await closeThread(engine, sourceId, merged.threadRef, v.close.filter(t => !desired.has(t)), "done", "reply");
     for (const o of v.open) if (await upsertLoop(engine, sourceId, merged.kind, merged.threadRef, latestPage, o)) result.opened++;
   }
+}
+
+type ParsedThreadRow = { row: ThreadRow; signals: LoopSignals };
+
+function parseThreadRows(rows: readonly ThreadRow[]): ParsedThreadRow[] {
+  return rows.map(r => ({ row: r, signals: typeof r.signals === "string" ? JSON.parse(r.signals) as unknown : r.signals }))
+    .filter((x): x is ParsedThreadRow => isLoopSignals(x.signals));
+}
+
+/** One mail or chat conversation from all its pages: the merged signals and the page with the newest activity. */
+function mergeThread(parsed: readonly ParsedThreadRow[]): { merged: ThreadLoopSignals; latestPage: string } {
+  const threads = parsed.map(p => p.signals as ThreadLoopSignals);
+  const merged = threads.length === 1 ? threads[0]! : mergeThreadSignals(threads);
+  const latestPage = parsed.reduce((a, b) => (signalsActivityAt(b.signals) > signalsActivityAt(a.signals) ? b : a)).row.page_slug;
+  return { merged, latestPage };
 }
 
 async function closeWhere(engine: Engine, sourceId: string, where: string, params: unknown[], status: LoopStatus, closedBy: string): Promise<number> {
@@ -179,8 +191,12 @@ async function closeThread(engine: Engine, sourceId: string, threadRef: string, 
 /**
  * Open (or keep open) one loop. A loop someone closed reopens only on newer
  * activity, so a re-sync of an unchanged thread never undoes the owner's
- * "done". Nothing is written for a page that is gone. True when the row was
- * inserted or a closed one reopened.
+ * "done". Nothing is written for a page that is gone, or for a key muted
+ * since the sweep read its suppressions (a mute closes loops concurrently).
+ * A loop a mute closed is never reopened here, only by its unmute: on
+ * Postgres the suppression check above can miss a mute still committing,
+ * while the conflict update re-reads the row the mute closed.
+ * True when the row was inserted or a closed one reopened.
  */
 async function upsertLoop(engine: Engine, sourceId: string, kind: string, threadRef: string, pageSlug: string, o: LoopSpec): Promise<boolean> {
   const r = await engine.query<{ was_open: boolean | null }>(
@@ -189,6 +205,8 @@ async function upsertLoop(engine: Engine, sourceId: string, kind: string, thread
                              counterparty_label, counterparty_key, summary, evidence, due_at, opened_at, last_activity_at)
      SELECT $1, $2, $3, 'deterministic', $4, $5, p.slug, $6, $7, $8, $9::text::jsonb, $10::timestamptz, $11::timestamptz, $12::timestamptz
        FROM pages p WHERE p.slug = $13 AND p.source_id = $1 AND p.deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM loop_suppressions s WHERE s.source_id = $1
+                         AND ((s.kind = 'sender' AND s.value_hash = $7) OR (s.kind = 'thread' AND s.value_hash = $5)))
      ON CONFLICT (source_id, dedup_key) DO UPDATE SET
        opened_at = CASE WHEN open_loops.status = 'open' THEN LEAST(open_loops.opened_at, EXCLUDED.opened_at) ELSE EXCLUDED.opened_at END,
        status = 'open', page_slug = EXCLUDED.page_slug,
@@ -196,7 +214,8 @@ async function upsertLoop(engine: Engine, sourceId: string, kind: string, thread
        summary = EXCLUDED.summary, evidence = EXCLUDED.evidence, due_at = EXCLUDED.due_at,
        last_activity_at = GREATEST(open_loops.last_activity_at, EXCLUDED.last_activity_at),
        closed_at = NULL, closed_by = NULL, updated_at = NOW()
-     WHERE open_loops.status = 'open' OR EXCLUDED.last_activity_at > open_loops.last_activity_at
+     WHERE open_loops.status = 'open'
+        OR (EXCLUDED.last_activity_at > open_loops.last_activity_at AND open_loops.closed_by IS DISTINCT FROM 'muted')
      RETURNING (SELECT status = 'open' FROM prev) AS was_open`,
     [
       sourceId, `${kind}:${threadRef}:${o.loopType}`, o.loopType, kind, threadRef,
@@ -260,39 +279,198 @@ function toLoopRow(row: Record<string, unknown>): OpenLoopRow {
   };
 }
 
-/** The owner closes a loop (done or dropped). Null when no open loop with that id is in scope. */
-export async function closeLoop(engine: Engine, scope: SourceScope, id: number, status: "done" | "dropped"): Promise<OpenLoopRow | null> {
-  const params: unknown[] = [id, status];
+/**
+ * The owner closes a loop (done or dropped). Null when no open loop with that
+ * id is in scope. A dry run returns the loop as it is and writes nothing.
+ */
+export async function closeLoop(engine: Engine, scope: SourceScope, id: number, status: "done" | "dropped", opts: { dryRun?: boolean } = {}): Promise<OpenLoopRow | null> {
+  const params: unknown[] = [id];
+  const where = `WHERE id = $1 AND status = 'open'${andSourceScope("source_id", scope, params)}`;
+  params.push(status);
   const r = await engine.query<Record<string, unknown>>(
-    `UPDATE open_loops SET status = $2, closed_at = NOW(), closed_by = 'owner', updated_at = NOW()
-      WHERE id = $1 AND status = 'open'${andSourceScope("source_id", scope, params)} RETURNING ${LOOP_COLUMNS}`,
-    params,
+    // scope: upstream `where` carries andSourceScope
+    opts.dryRun
+      ? `SELECT ${LOOP_COLUMNS} FROM open_loops ${where}`
+      : `UPDATE open_loops SET status = $${params.length}, closed_at = NOW(), closed_by = 'owner', updated_at = NOW()
+          ${where} RETURNING ${LOOP_COLUMNS}`,
+    opts.dryRun ? params.slice(0, -1) : params,
   );
   return r.rows[0] ? toLoopRow(r.rows[0]) : null;
 }
 
 export type MuteKind = "sender" | "thread";
 
+export interface MuteResult {
+  source_id: string;
+  kind: MuteKind;
+  /** The suppression row was added (mute) or removed (unmute); on a dry run, would be. */
+  changed: boolean;
+  dry_run?: true;
+  /** Mute: the reply-owed loops it closed (`would_close` on a dry run). */
+  closed?: number[];
+  would_close?: number[];
+  /** Unmute: what became of each loop the mute had closed. */
+  reopened?: number[];
+  answered?: number[];
+  stayed_muted?: number[];
+  unverifiable?: number[];
+}
+
+interface MutedLoopRow { id: number; kind: string; thread_ref: string | null; counterparty_key: string | null }
+
+type Recheck =
+  | { outcome: "reopened"; page: string; spec: LoopSpec | undefined }
+  /** `owedTo`: the reply is now owed to another muted sender, whose unmute brings it back. */
+  | { outcome: "stayed_muted"; page?: string; owedTo?: LoopSpec }
+  | { outcome: "answered" | "unverifiable" };
+
 /**
- * Mute the sender or the thread of a loop: new loops stop opening for it.
- * The loop itself, and every other existing loop, stays as it is.
+ * Mute or unmute the sender or the thread of a loop, in its own source.
+ *
+ * A mute stops new loops opening for that key and closes its open reply-owed
+ * (unanswered_inbound) loops as dropped with closed_by `muted`; other loop
+ * types keep their state. An unmute re-judges each loop the mute closed from
+ * the stored reply state, with the same live-page and merged-thread rules as
+ * the sweep: answered since the mute closes it as done/reply, otherwise it
+ * reopens. A loop another mute still covers stays closed, re-keyed to the
+ * muted sender it is now owed to; one whose thread has no live page left
+ * cannot be re-judged and stays closed (`unmuted`). Loops
+ * the owner closed are never touched. Each change runs in one transaction,
+ * serialized per source, so the suppression and the loops never disagree.
  */
-export async function muteLoop(engine: Engine, scope: SourceScope, id: number, kind: MuteKind, mute: boolean): Promise<{ source_id: string; kind: MuteKind; changed: boolean } | null> {
-  const params: unknown[] = [id];
-  const r = await engine.query<{ source_id: string; counterparty_key: string | null; thread_ref: string | null }>(
-    `SELECT source_id, counterparty_key, thread_ref FROM open_loops WHERE id = $1${andSourceScope("source_id", scope, params)}`,
-    params,
+export async function muteLoop(
+  engine: Engine, scope: SourceScope, id: number, kind: MuteKind, mute: boolean,
+  opts: { dryRun?: boolean; now?: Date } = {},
+): Promise<MuteResult | null> {
+  const readLoop = async (e: Engine) => {
+    const params: unknown[] = [id];
+    return (await e.query<{ source_id: string; counterparty_key: string | null; thread_ref: string | null }>(
+      `SELECT source_id, counterparty_key, thread_ref FROM open_loops WHERE id = $1${andSourceScope("source_id", scope, params)}`,
+      params,
+    )).rows[0];
+  };
+  const run = async (tx: Engine, row: { source_id: string; counterparty_key: string | null; thread_ref: string | null }): Promise<MuteResult> => {
+    const value = kind === "sender" ? row.counterparty_key : row.thread_ref;
+    if (value === null) {
+      return { source_id: row.source_id, kind, changed: false, ...(mute
+        ? opts.dryRun ? { would_close: [] } : { closed: [] }
+        : { reopened: [], answered: [], stayed_muted: [], unverifiable: [] }) };
+    }
+    return mute
+      ? applyMute(tx, row.source_id, kind, value, opts.dryRun === true)
+      : applyUnmute(tx, row.source_id, kind, value, opts.now ?? new Date(), opts.dryRun === true);
+  };
+  const first = await readLoop(engine);
+  if (!first) return null;
+  if (opts.dryRun) return { ...await run(engine, first), dry_run: true };
+  return engine.transaction(async (tx) => {
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`memrain:loop-mutes:${first.source_id}`]);
+    // Read the key again under the lock: an unmute that held it may have re-keyed the loop.
+    const row = await readLoop(tx);
+    return row ? run(tx, row) : null;
+  });
+}
+
+const muteColumn = (kind: MuteKind) => (kind === "sender" ? "counterparty_key" : "thread_ref");
+const ids = (rows: ReadonlyArray<{ id: unknown }>) => rows.map(x => Number(x.id)).sort((a, b) => a - b);
+
+async function applyMute(tx: Engine, sourceId: string, kind: MuteKind, value: string, dryRun: boolean): Promise<MuteResult> {
+  const covered = `source_id = $1 AND status = 'open' AND loop_type = 'unanswered_inbound' AND ${muteColumn(kind)} = $2`;
+  if (dryRun) {
+    const present = await tx.query(`SELECT 1 FROM loop_suppressions WHERE source_id = $1 AND kind = $2 AND value_hash = $3`, [sourceId, kind, value]);
+    // scope: upstream `covered` pins source_id to the loop's own source
+    const would = await tx.query<{ id: number }>(`SELECT id FROM open_loops WHERE ${covered}`, [sourceId, value]);
+    return { source_id: sourceId, kind, changed: present.rows.length === 0, would_close: ids(would.rows) };
+  }
+  const added = await tx.query(`INSERT INTO loop_suppressions (source_id, kind, value_hash) VALUES ($1, $2, $3)
+                                ON CONFLICT DO NOTHING RETURNING value_hash`, [sourceId, kind, value]);
+  const closed = await tx.query<{ id: number }>(
+    `UPDATE open_loops SET status = 'dropped', closed_at = NOW(), closed_by = 'muted', updated_at = NOW() WHERE ${covered} RETURNING id`,
+    [sourceId, value],
   );
-  const row = r.rows[0];
-  if (!row) return null;
-  const value = kind === "sender" ? row.counterparty_key : row.thread_ref;
-  if (value === null) return { source_id: row.source_id, kind, changed: false };
-  const changed = mute
-    ? await engine.query(`INSERT INTO loop_suppressions (source_id, kind, value_hash) VALUES ($1, $2, $3)
-                          ON CONFLICT DO NOTHING RETURNING value_hash`, [row.source_id, kind, value])
-    : await engine.query(`DELETE FROM loop_suppressions WHERE source_id = $1 AND kind = $2 AND value_hash = $3
-                          RETURNING value_hash`, [row.source_id, kind, value]);
-  return { source_id: row.source_id, kind, changed: changed.rows.length > 0 };
+  return { source_id: sourceId, kind, changed: added.rows.length > 0, closed: ids(closed.rows) };
+}
+
+async function applyUnmute(tx: Engine, sourceId: string, kind: MuteKind, value: string, now: Date, dryRun: boolean): Promise<MuteResult> {
+  const removed = await tx.query(
+    dryRun
+      ? `SELECT value_hash FROM loop_suppressions WHERE source_id = $1 AND kind = $2 AND value_hash = $3`
+      : `DELETE FROM loop_suppressions WHERE source_id = $1 AND kind = $2 AND value_hash = $3 RETURNING value_hash`,
+    [sourceId, kind, value],
+  );
+  const left = await loadSuppressions(tx, sourceId);
+  const suppress: LoopSuppressions = kind === "sender"
+    ? { senders: new Set([...left.senders].filter(v => v !== value)), threads: left.threads }
+    : { senders: left.senders, threads: new Set([...left.threads].filter(v => v !== value)) };
+  const muted = await tx.query<MutedLoopRow>(
+    `SELECT id, kind, thread_ref, counterparty_key FROM open_loops
+      WHERE source_id = $1 AND status = 'dropped' AND closed_by = 'muted' AND loop_type = 'unanswered_inbound' AND ${muteColumn(kind)} = $2
+      ORDER BY id`,
+    [sourceId, value],
+  );
+  const result: MuteResult = { source_id: sourceId, kind, changed: removed.rows.length > 0, reopened: [], answered: [], stayed_muted: [], unverifiable: [] };
+  for (const loop of muted.rows) {
+    const check = await recheckMutedLoop(tx, sourceId, loop, now, suppress);
+    result[check.outcome]!.push(Number(loop.id));
+    if (!dryRun) await settleMutedLoop(tx, Number(loop.id), check);
+  }
+  return result;
+}
+
+/** Re-judge one mute-closed loop from its thread's stored reply state, on its live pages only. */
+async function recheckMutedLoop(tx: Engine, sourceId: string, loop: MutedLoopRow, now: Date, suppress: LoopSuppressions): Promise<Recheck> {
+  if ((loop.thread_ref !== null && suppress.threads.has(loop.thread_ref))
+    || (loop.counterparty_key !== null && suppress.senders.has(loop.counterparty_key))) return { outcome: "stayed_muted" };
+  if (loop.thread_ref === null) return { outcome: "unverifiable" };
+  const rows = (await tx.query<ThreadRow>(
+    `SELECT t.page_slug, t.kind, t.thread_ref, t.signals, t.updated_at, (p.deleted_at IS NOT NULL) AS deleted
+       FROM loop_threads t JOIN pages p ON p.slug = t.page_slug
+      WHERE t.source_id = $1 AND t.kind = $2 AND t.thread_ref = $3
+      ORDER BY t.last_activity_at`,
+    [sourceId, loop.kind, loop.thread_ref],
+  )).rows;
+  const parsed = parseThreadRows(rows.filter(r => !r.deleted)).filter(p => p.signals.kind !== "calendar");
+  if (parsed.length === 0) return { outcome: "unverifiable" };
+  const { merged, latestPage } = mergeThread(parsed);
+  const v = detectThread(merged, now, suppress);
+  const spec = v.open.find(o => o.loopType === "unanswered_inbound");
+  // Only a reply of mine closes it, as in the sweep: grace, the open window
+  // and list rules withhold a new loop but never fabricate an answer.
+  if (!spec && v.close.includes("unanswered_inbound")) return { outcome: "answered" };
+  if (!spec) {
+    // Withheld only by a mute: someone else, still muted, wrote last.
+    const owedTo = detectThread(merged, now, { senders: new Set(), threads: new Set() }).open.find(o => o.loopType === "unanswered_inbound");
+    if (owedTo?.counterpartyKey && suppress.senders.has(owedTo.counterpartyKey)) return { outcome: "stayed_muted", page: latestPage, owedTo };
+  }
+  return { outcome: "reopened", page: latestPage, spec };
+}
+
+async function settleMutedLoop(tx: Engine, id: number, check: Recheck): Promise<void> {
+  const guard = `WHERE id = $1 AND status = 'dropped' AND closed_by = 'muted'`;
+  if (check.outcome === "stayed_muted") {
+    if (check.owedTo) await setLoopCounterparty(tx, id, guard, check.page!, check.owedTo);
+    return;
+  }
+  if (check.outcome !== "reopened") {
+    if (check.outcome === "unverifiable") {
+      await tx.query(`UPDATE open_loops SET closed_by = 'unmuted', updated_at = NOW() ${guard}`, [id]);
+    } else if (check.outcome === "answered") {
+      await tx.query(`UPDATE open_loops SET status = 'done', closed_at = NOW(), closed_by = 'reply', updated_at = NOW() ${guard}`, [id]);
+    }
+    return;
+  }
+  if (check.spec) await setLoopCounterparty(tx, id, guard, check.page, check.spec);
+  await tx.query(`UPDATE open_loops SET status = 'open', closed_at = NULL, closed_by = NULL, page_slug = $2, updated_at = NOW() ${guard}`, [id, check.page]);
+}
+
+/** Point a mute-closed loop at whom and what it is owed now, as the sweep's upsert would. */
+async function setLoopCounterparty(tx: Engine, id: number, guard: string, page: string, o: LoopSpec): Promise<void> {
+  await tx.query(
+    `UPDATE open_loops SET page_slug = $2, counterparty_label = $3, counterparty_key = $4, summary = $5, evidence = $6::text::jsonb,
+            last_activity_at = GREATEST(last_activity_at, $7::timestamptz), updated_at = NOW() ${guard}`,
+    [id, page, o.counterpartyLabel === null ? null : o.counterpartyLabel.slice(0, 300), o.counterpartyKey, o.summary,
+      JSON.stringify([{ page_slug: page, at: o.evidenceAt }]), o.lastActivityAt],
+  );
 }
 
 /** A loop list is stale when no mail, chat or calendar account synced cleanly for this long. */

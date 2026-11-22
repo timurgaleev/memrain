@@ -1472,6 +1472,44 @@
     }
   },
   {
+    "name": "loops_update",
+    "description": "Change a loop from loops_list in your write source. done/dropped closes it. mute_* stops new loops for that sender/thread and closes its open reply-owed loops (closed); unmute_* re-judges those from stored replies: reopened, answered, stayed_muted, unverifiable. dry_run previews. Unknown or closed id: not_found.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "done",
+            "dropped",
+            "mute_sender",
+            "mute_thread",
+            "unmute_sender",
+            "unmute_thread"
+          ]
+        },
+        "dry_run": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "submit_agent",
     "description": "Queue a read-only research agent under your own grant: it reads only your sources with your client's read tools, spends your daily budget, and stops if your grant changes. Returns a job_id; poll get_agent_job. Needs the 'agent' scope, a client daily budget and a free concurrency slot. Writes nothing.",
     "inputSchema": {

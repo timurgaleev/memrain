@@ -1,8 +1,8 @@
 /**
  * `memrain waiting [--source ID] [--type T] [--limit N] [--stale] [--json]`
  * `memrain waiting sweep [--source ID] [--json]`
- * `memrain waiting done|drop <id> [--json]`
- * `memrain waiting mute|unmute sender|thread <id> [--json]`
+ * `memrain waiting done|drop <id> [--dry-run] [--json]`
+ * `memrain waiting mute|unmute sender|thread <id> [--dry-run] [--json]`
  *
  * Who is waiting for a reply from the owner, whom the owner is waiting on,
  * what the owner promised, and which invitations want an answer: the open
@@ -32,6 +32,8 @@ export interface WaitingCmdOptions {
   type?: string;
   limit?: number;
   stale?: boolean;
+  /** done/drop/mute/unmute: report what would change, write nothing. */
+  dryRun?: boolean;
   json?: boolean;
   configPath?: string;
   /** An open Storage owned by the caller. */
@@ -39,7 +41,7 @@ export interface WaitingCmdOptions {
   now?: () => Date;
 }
 
-const USAGE = "usage: memrain waiting [--source ID] [--type T] [--limit N] [--stale] | sweep | done|drop <id> | mute|unmute sender|thread <id>";
+const USAGE = "usage: memrain waiting [--source ID] [--type T] [--limit N] [--stale] | sweep | done|drop <id> [--dry-run] | mute|unmute sender|thread <id> [--dry-run]";
 
 function fail(msg: string, json: boolean | undefined): number {
   if (json) console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
@@ -69,6 +71,8 @@ export async function runWaiting(opts: WaitingCmdOptions): Promise<number> {
   if ((sub === "mute" || sub === "unmute") && opts.target !== "sender" && opts.target !== "thread") {
     return fail(`${sub}: say what to ${sub}: sender or thread`, opts.json);
   }
+  // A preview flag a subcommand would ignore must refuse, never run the write.
+  if (opts.dryRun && (sub === undefined || sub === "sweep")) return fail(`--dry-run applies to done, drop, mute and unmute`, opts.json);
   const id = parseId(opts.id);
   if ((sub === "done" || sub === "drop" || sub === "mute" || sub === "unmute") && id === null) {
     return fail(`${sub}: a loop id is required (see \`memrain waiting\`)`, opts.json);
@@ -91,17 +95,24 @@ export async function runWaiting(opts: WaitingCmdOptions): Promise<number> {
       return 0;
     }
     if (sub === "done" || sub === "drop") {
-      const closed = await closeLoop(engine, scope, id!, sub === "done" ? "done" : "dropped");
+      const closed = await closeLoop(engine, scope, id!, sub === "done" ? "done" : "dropped", { dryRun: opts.dryRun === true });
       if (!closed) return fail(`no open loop ${id}${opts.sourceId ? ` in ${opts.sourceId}` : ""}`, opts.json);
-      if (opts.json) console.log(JSON.stringify({ ok: true, loop: closed }, null, 2));
-      else console.log(`${sub === "done" ? "done" : "dropped"}: #${id}`);
+      if (opts.json) console.log(JSON.stringify({ ok: true, ...(opts.dryRun ? { dry_run: true } : {}), loop: closed }, null, 2));
+      else console.log(`${opts.dryRun ? "would close as " : ""}${sub === "done" ? "done" : "dropped"}: #${id}`);
       return 0;
     }
     if (sub === "mute" || sub === "unmute") {
-      const r = await muteLoop(engine, scope, id!, opts.target as "sender" | "thread", sub === "mute");
+      const r = await muteLoop(engine, scope, id!, opts.target as "sender" | "thread", sub === "mute", { dryRun: opts.dryRun === true, now: now() });
       if (!r) return fail(`no loop ${id}${opts.sourceId ? ` in ${opts.sourceId}` : ""}`, opts.json);
-      if (opts.json) console.log(JSON.stringify({ ok: true, ...r }, null, 2));
-      else console.log(`${sub}d the ${r.kind} of #${id}${r.changed ? "" : " (no change)"}; existing loops are left as they are`);
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: true, ...r }, null, 2));
+        return 0;
+      }
+      const list = (label: string, xs: number[] | undefined) => (xs && xs.length > 0 ? `; ${label}: ${xs.map(x => `#${x}`).join(" ")}` : "");
+      const head = `${opts.dryRun ? `would ${sub}` : `${sub}d`} the ${r.kind} of #${id}${r.changed ? "" : " (no change)"}`;
+      console.log(sub === "mute"
+        ? `${head}${list(opts.dryRun ? "would close" : "closed", opts.dryRun ? r.would_close : r.closed)}`
+        : `${head}${list("reopened", r.reopened)}${list("answered", r.answered)}${list("still muted", r.stayed_muted)}${list("unverifiable", r.unverifiable)}`);
       return 0;
     }
 

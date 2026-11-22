@@ -373,7 +373,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ],
   ["connectors", new Set(["--apply", "--cap", "--days", "--disable", "--dry-run", "--enable", "--export", "--forget", "--full", "--json", "--new-file", "--old-file", "--plan-hash", "--source", "--token-file", "--yes"])],
   ["daemons", new Set(["--json", "--reason", "--source"])],
-  ["waiting", new Set(["--json", "--limit", "--source", "--stale", "--type"])],
+  ["waiting", new Set(["--dry-run", "--json", "--limit", "--source", "--stale", "--type"])],
   ["version", new Set(["--json"])],
   ["help", new Set<string>()],
 ]);
@@ -392,7 +392,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
     "--dry-run",
     new Set([
       "apply-migrations", "auth", "embed", "eval", "extract", "jobs", "lint",
-      "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts", "write-gate",
+      "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts", "waiting", "write-gate",
     ]),
   ],
   ["--apply", new Set(["code", "embed", "import", "mirror-adopt", "erase", "atoms-retire", "purge-leftovers", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member", "sources"])],

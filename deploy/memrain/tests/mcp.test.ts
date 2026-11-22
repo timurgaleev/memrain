@@ -174,6 +174,7 @@ describe("MCP HTTP transport", () => {
       "log_friction",
       "log_ingest",
       "loops_list",
+      "loops_update",
       "ontology_conflicts",
       "ontology_dimensions",
       "ontology_get",

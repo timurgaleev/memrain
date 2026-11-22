@@ -109,13 +109,28 @@ answer says `stale: true` when no sync landed in 24 hours.
 ```sh
 docker exec deploy-memrain-1 bun run src/cli.ts waiting done 42      # handled
 docker exec deploy-memrain-1 bun run src/cli.ts waiting drop 42      # not a real loop
+docker exec deploy-memrain-1 bun run src/cli.ts waiting mute sender 42 --dry-run
 docker exec deploy-memrain-1 bun run src/cli.ts waiting mute sender 42
 docker exec deploy-memrain-1 bun run src/cli.ts waiting mute thread 42
 docker exec deploy-memrain-1 bun run src/cli.ts waiting unmute sender 42
 ```
 
 A loop you close stays closed until the thread moves on. A mute stops new loops
-from that sender or thread; it does not close the loops already open.
+from that sender or thread and closes its open reply-owed loops (dropped, with
+`closed_by` `muted`); promises and RSVPs keep their state. `--dry-run` lists what
+a mute would close and changes nothing.
+
+An unmute re-judges each loop the mute closed from the stored reply state, with
+the same page rules as the sweep: a loop you answered since is closed as done,
+one still owed reopens, one another mute still covers stays closed, and one
+whose thread has no page left stays closed (`closed_by` `unmuted`). Loops you
+closed yourself are never touched.
+
+`loops_update` does the same for an MCP client (`done`, `dropped`,
+`mute_sender`, `mute_thread`, `unmute_sender`, `unmute_thread`, with
+`dry_run`), only inside the client's write source: a source the grant only reads
+is out of reach, a client with no write source is refused, and the public bearer
+never sees the tool.
 
 ## What is stored
 

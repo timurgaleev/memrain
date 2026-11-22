@@ -227,8 +227,9 @@ const FORBIDDEN_MCP_TOOLS_FROM_PUBLIC: ReadonlySet<string> = new Set([
   "jobs_logs",
   "daemons_status",
   // Open loops name correspondents and mail subjects; the unscoped public
-  // bearer would read every source's.
+  // bearer would read (and close or mute) every source's.
   "loops_list",
+  "loops_update",
   "stats",
   "sources_list",
   "sources_status",

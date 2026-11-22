@@ -3,7 +3,7 @@
 <!-- Generated from deploy/memrain/src/mcp/operations.ts.
      Do not edit by hand: run `bun scripts/gen-catalogs.ts` in deploy/memrain. -->
 
-Memrain serves 107 tools over MCP. This page lists each one with the
+Memrain serves 108 tools over MCP. This page lists each one with the
 parameters it accepts — the same definitions clients receive from `tools/list`.
 A client only sees the tools its credential may call, so a token may list
 fewer. From a shell, `memrain call <tool> --args '<json>'` runs any of them
@@ -62,6 +62,7 @@ locally. Errors are described in [ERRORS.md](ERRORS.md).
 | [`jobs_logs`](#jobs_logs) | read | read-only | yes |
 | [`daemons_status`](#daemons_status) | read | read-only | yes |
 | [`loops_list`](#loops_list) | read | read-only | no |
+| [`loops_update`](#loops_update) | write | writes, idempotent | no |
 | [`submit_agent`](#submit_agent) | agent | writes | no |
 | [`get_agent_job`](#get_agent_job) | agent | read-only | no |
 | [`get_chunks`](#get_chunks) | read | read-only | no |
@@ -1268,6 +1269,18 @@ Call shape: `{slug, occurred_at, event}`
 | `event` | string | yes |  |
 | `source_chunk_id` | string | no |  |
 | `request_id` | string | no | Optional retry id (1-128 chars), retained 7 days. Same id+args replays the first result (replayed:true) without writing; changed args refused. |
+
+### loops_update
+
+Scope: write. Effect: writes, idempotent.
+
+Change a loop from loops_list in your write source. done/dropped closes it. mute_* stops new loops for that sender/thread and closes its open reply-owed loops (closed); unmute_* re-judges those from stored replies: reopened, answered, stayed_muted, unverifiable. dry_run previews. Unknown or closed id: not_found.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id` | integer (≥ 1) | yes |  |
+| `action` | string (one of `done`, `dropped`, `mute_sender`, `mute_thread`, `unmute_sender`, `unmute_thread`) | yes |  |
+| `dry_run` | boolean | no |  |
 
 ### add_tag
 

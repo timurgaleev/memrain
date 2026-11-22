@@ -50,11 +50,12 @@ describe("outputRedaction policy", () => {
   });
 
   it("no mutating tool is tagged unless its response echoes stored text", () => {
-    // page_edit quotes stored lines; timeline retries return the original row.
+    // page_edit quotes stored lines; timeline retries return the original row;
+    // loops_update returns the closed loop's summary.
     const tagged = OPERATIONS.filter((op) => !operationAnnotations(op).readOnlyHint && op.outputRedaction).map(
       (op) => op.name,
     );
-    expect(tagged).toEqual(["page_edit", "add_timeline_event", "takes_add", "takes_update", "takes_resolve"]);
+    expect(tagged).toEqual(["page_edit", "add_timeline_event", "loops_update", "takes_add", "takes_update", "takes_resolve"]);
   });
 });
 
