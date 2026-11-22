@@ -110,7 +110,9 @@ describe("gmail message reading", () => {
       JSON.stringify({ v: 1, historyId: "1", historyPage: null, walk: { lowMs: -1, queryFloorMs: 1, resumeFloorMs: 1, pageToken: null } })]) {
       expect(parseGmailCursor(bad)).toBeNull();
     }
-    expect(parseGmailCursor(JSON.stringify({ v: 1, historyId: "9", historyPage: null, walk: null }))).toEqual({ v: 1, historyId: "9", historyPage: null, pending: null, floorMs: null, walk: null });
+    expect(parseGmailCursor(JSON.stringify({ v: 1, historyId: "9", historyPage: null, walk: null }))).toEqual({
+      v: 1, historyId: "9", historyPage: null, pending: null, floorMs: null, walk: null, coveredLowMs: null, widenFloorMs: null, backfill: null,
+    });
   });
 
   it("fills the reply-state fields the loop detector reads: SENT, Reply-To and a calendar part's METHOD", () => {

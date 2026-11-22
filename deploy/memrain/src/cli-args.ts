@@ -367,7 +367,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--source", "--token-file", "--url", "--plan-hash",
     ]),
   ],
-  ["connectors", new Set(["--apply", "--dry-run", "--full", "--json", "--new-file", "--old-file", "--source", "--token-file", "--yes"])],
+  ["connectors", new Set(["--apply", "--days", "--dry-run", "--full", "--json", "--new-file", "--old-file", "--plan-hash", "--source", "--token-file", "--yes"])],
   ["daemons", new Set(["--json", "--reason", "--source"])],
   ["waiting", new Set(["--json", "--limit", "--source", "--stale", "--type"])],
   ["version", new Set(["--json"])],

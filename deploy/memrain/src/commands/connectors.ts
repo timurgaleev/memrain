@@ -3,6 +3,8 @@
  *                               [--full] [--dry-run] [--json]`
  * `memrain connectors status [--json]`
  * `memrain connectors redact-meetings [--source ID] [--apply --yes] [--json]`
+ * `memrain connectors gmail-widen <account-id> --days N [--apply --plan-hash H] [--json]`
+ *   (connectors-gmail-widen.ts)
  *
  * `redact-meetings` removes online-meeting credentials (ids, passcodes, PINs,
  * join links) from connector mail, calendar, chat and meeting pages stored before the
@@ -46,6 +48,7 @@ import { connectorsStatus } from "../core/connectors/vault.ts";
 import { sweepMeetingCredentials, type MeetingRedactSweepResult } from "../core/connectors/meeting-redact-sweep.ts";
 import { withStorage } from "./with-storage.ts";
 import { runRotateKek } from "./connectors-vault.ts";
+import { runGmailWiden } from "./connectors-gmail-widen.ts";
 
 export interface ConnectorsCmdOptions {
   /** `github`, `status`, `redact-meetings` or `rotate-kek`. */
@@ -73,6 +76,9 @@ export interface ConnectorsCmdOptions {
   /** `rotate-kek`: the current and the new connector key files. */
   oldKekFile?: string;
   newKekFile?: string;
+  /** `gmail-widen`: the new history window and the dry run's plan hash. */
+  days?: string;
+  planHash?: string;
 }
 
 const MAX_TOKEN_FILE_BYTES = 4096;
@@ -301,6 +307,21 @@ async function runRedactMeetings(opts: ConnectorsCmdOptions): Promise<number> {
 }
 
 export async function runConnectors(opts: ConnectorsCmdOptions): Promise<number> {
+  if (opts.sub === "gmail-widen") {
+    if (opts.yes || (opts.dryRun && opts.apply)) {
+      console.error("memrain connectors gmail-widen: choose --apply or --dry-run (a run without --apply is the dry run); --apply takes --plan-hash, not --yes");
+      return 2;
+    }
+    return runGmailWiden({
+      accountId: opts.action, days: opts.days,
+      ...(opts.apply ? { apply: true } : {}), ...(opts.planHash !== undefined ? { planHash: opts.planHash } : {}),
+      ...(opts.json ? { json: true } : {}), ...(opts.configPath ? { configPath: opts.configPath } : {}),
+    });
+  }
+  if ((opts.days !== undefined || opts.planHash !== undefined) && opts.sub !== "gmail-widen") {
+    console.error("memrain connectors: --days and --plan-hash belong to gmail-widen only");
+    return 2;
+  }
   if ((opts.apply || opts.yes) && opts.sub !== "redact-meetings") {
     console.error("memrain connectors: --apply and --yes belong to redact-meetings only");
     return 2;
@@ -309,6 +330,6 @@ export async function runConnectors(opts: ConnectorsCmdOptions): Promise<number>
   if (opts.sub === "github") return runGithubSync(opts);
   if (opts.sub === "redact-meetings") return runRedactMeetings(opts);
   if (opts.sub === "rotate-kek") return runRotateKek(opts);
-  console.error("memrain connectors: subcommand required (github sync <owner/repo> | status | redact-meetings | rotate-kek)");
+  console.error("memrain connectors: subcommand required (github sync <owner/repo> | status | redact-meetings | rotate-kek | gmail-widen <account-id>)");
   return 1;
 }

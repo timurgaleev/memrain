@@ -24,9 +24,30 @@
  *     reporting during that gap is not seen; retention still ages the page out.
  *     (developers.google.com/workspace/gmail/api/guides/sync)
  *
- * Nothing older than the first sync's window floor is ever stored: the
- * floor is kept in the cursor and never moves, and a thread a recent reply
- * brings in keeps only its messages from the floor on.
+ * Nothing older than the window floor is ever stored: the floor is kept in
+ * the cursor, and a thread a recent reply brings in keeps only its messages
+ * from the floor on. The floor moves only when `history_days` is widened:
+ *
+ *   - The cursor also keeps the oldest mail a listing has covered
+ *     (`coveredLowMs`; a cursor written before it was kept reads its floor).
+ *     When the window reaches more than a day below it and no walk is open, a
+ *     backfill lists `[window, covered)` newest first, the same way the walk
+ *     does. Meanwhile every thread read, the history lane's too, keeps its
+ *     messages from the new window floor (`widenFloorMs`), so a reply to a
+ *     backfilled thread never cuts it short again.
+ *   - The floor itself drops only in the checkpoint that completes the
+ *     backfill, together with `coveredLowMs`. Code that predates these fields
+ *     keeps the old floor and drops the rest, so after such a rollback the
+ *     next run of this code finds the gap still uncovered and reopens it.
+ *   - A backfilled thread carries the version `<historyId>:f<floor day>`: a
+ *     thread already stored, with messages on both sides of the old floor,
+ *     fails the engine's same-version skip and is rendered again with its
+ *     older messages. It stays one item (its id is the thread id); if its
+ *     first message moves it to another month's slug, the engine retires the
+ *     old page.
+ *   - Narrowing the window while a backfill is open ends it at what it has
+ *     covered: `coveredLowMs` never moves up past mail a listing never read,
+ *     and the floor drops no lower than the listing reached.
  *
  * A page of results (a listing page, or the threads one history page touched)
  * is handed to the engine in batches of at most BATCH_THREADS threads, never
@@ -94,7 +115,8 @@ const DROPPED_LABELS = new Set(["SPAM", "TRASH", "DRAFT"]);
 const EXCLUDED_CATEGORIES = new Set(["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL"]);
 /** Label flips that change nothing on the page. */
 const VOLATILE_LABELS = new Set(["UNREAD", "STARRED", "IMPORTANT"]);
-const LIST_EXCLUSIONS = "-in:spam -in:trash -in:draft -category:promotions -category:social";
+/** What every listing leaves out: Spam, Trash, drafts, Promotions and Social. */
+export const GMAIL_LIST_EXCLUSIONS = "-in:spam -in:trash -in:draft -category:promotions -category:social";
 
 type Json = Record<string, unknown>;
 
@@ -123,9 +145,15 @@ export interface GmailCursor {
   /** A history listing part-way through its pages. */
   historyPage: string | null;
   pending: GmailPending | null;
-  /** The first sync's window floor (ms): nothing older is stored. */
+  /** The window floor (ms): nothing older is stored. */
   floorMs: number | null;
   walk: GmailWalk | null;
+  /** The oldest mail a listing has covered (ms); `floorMs` for a cursor written before it was kept. */
+  coveredLowMs: number | null;
+  /** While a backfill is open: the widened window's floor, which every thread read keeps its messages from. */
+  widenFloorMs: number | null;
+  /** The listing of a widened window below `coveredLowMs`, part-way through. */
+  backfill: GmailWalk | null;
 }
 
 function isRecord(v: unknown): v is Json {
@@ -172,22 +200,46 @@ export function parseGmailCursor(cursor: string | null): GmailCursor | null {
     else if (typeof hid === "string") pending = { threads: threads as string[], next: { historyId: hid } };
     else return null;
   }
-  let walk: GmailWalk | null = null;
-  if (raw.walk !== null) {
-    if (!isRecord(raw.walk)) return null;
-    const lowMs = ms(raw.walk.lowMs);
-    const queryFloorMs = ms(raw.walk.queryFloorMs);
-    const resumeFloorMs = ms(raw.walk.resumeFloorMs);
-    const pageToken = field(raw.walk.pageToken);
-    if (lowMs === null || queryFloorMs === null || resumeFloorMs === null || pageToken === undefined) return null;
-    walk = { lowMs, queryFloorMs, resumeFloorMs, pageToken };
-  }
-  return { v: 1, historyId, historyPage, pending, floorMs, walk };
+  const walk = raw.walk === null ? null : parseWalk(raw.walk);
+  if (walk === undefined) return null;
+  // Fields added after the first cursors were written are optional.
+  const backfill = raw.backfill === undefined || raw.backfill === null ? null : parseWalk(raw.backfill);
+  const coveredLowMs = optionalMs(raw.coveredLowMs, floorMs);
+  const widenFloorMs = optionalMs(raw.widenFloorMs, null);
+  if (backfill === undefined || coveredLowMs === undefined || widenFloorMs === undefined) return null;
+  return { v: 1, historyId, historyPage, pending, floorMs, walk, coveredLowMs, widenFloorMs, backfill };
 }
 
-function configInt(account: SyncAccount, key: string, min: number, max: number): number | null {
-  const v = account.config?.[key];
+function parseWalk(v: unknown): GmailWalk | undefined {
+  if (!isRecord(v)) return undefined;
+  const lowMs = ms(v.lowMs);
+  const queryFloorMs = ms(v.queryFloorMs);
+  const resumeFloorMs = ms(v.resumeFloorMs);
+  const pageToken = field(v.pageToken);
+  if (lowMs === null || queryFloorMs === null || resumeFloorMs === null || pageToken === undefined) return undefined;
+  return { lowMs, queryFloorMs, resumeFloorMs, pageToken };
+}
+
+/** An optional ms field: `absent` when missing or null, undefined when unreadable. */
+function optionalMs(v: unknown, absent: number | null): number | null | undefined {
+  if (v === undefined || v === null) return absent;
+  return ms(v) ?? undefined;
+}
+
+function configInt(config: Readonly<Record<string, unknown>> | undefined, key: string, min: number, max: number): number | null {
+  const v = config?.[key];
   return typeof v === "number" && Number.isInteger(v) && v >= min && v <= max ? v : null;
+}
+
+/**
+ * The earliest mail an account keeps, in ms: its history window
+ * (`historyDays`, else `config.history_days`, default 90), never past mail
+ * retention.
+ */
+export function gmailWindowLow(config: Readonly<Record<string, unknown>> | undefined, env: NodeJS.ProcessEnv, now: number, historyDays?: number): number {
+  const days = historyDays ?? configInt(config, "history_days", 1, MAX_MAIL_HISTORY_DAYS) ?? DEFAULT_MAIL_HISTORY_DAYS;
+  const keep = retentionDays("mail", configInt(config, "retention_days", 0, 100_000), env);
+  return now - (keep === null ? days : Math.min(days, keep)) * DAY_MS;
 }
 
 function invalid(res: ConnectorResponse, what: string): PageResult {
@@ -307,15 +359,9 @@ class Adapter implements SyncAdapter {
     return (this.account.services ?? []).includes(GOOGLE_GMAIL_SERVICE) ? [GMAIL_STREAM] : [];
   }
 
-  private retention(): number | null {
-    return retentionDays("mail", configInt(this.account, "retention_days", 0, 100_000), this.env);
-  }
-
   /** The earliest mail this account keeps, in ms: the history window, never past retention. */
   private windowLow(): number {
-    const days = configInt(this.account, "history_days", 1, MAX_MAIL_HISTORY_DAYS) ?? DEFAULT_MAIL_HISTORY_DAYS;
-    const keep = this.retention();
-    return this.now() - (keep === null ? days : Math.min(days, keep)) * DAY_MS;
+    return gmailWindowLow(this.account.config, this.env, this.now());
   }
 
   /**
@@ -341,8 +387,61 @@ class Adapter implements SyncAdapter {
     if (st === null || st.historyId === null) return this.anchor(client, st);
     if (st.pending !== null) return this.pendingPage(client, st, st.pending);
     if (page === 0 || st.historyPage !== null) return this.historyPage(client, st);
-    if (st.walk !== null) return this.walkPage(client, st, st.walk);
+    if (st.walk !== null) return this.listPage(client, st, st.walk, "walk");
+    if (st.backfill !== null || this.widened(st)) return this.backfillPage(client, st);
     return { ok: true, items: [], checkpoint: JSON.stringify(st), done: true };
+  }
+
+  /** Whether the cursor has listing work left after its history: a walk, a backfill, or a widened window. */
+  private more(st: GmailCursor): boolean {
+    return st.walk !== null || st.backfill !== null || this.widened(st);
+  }
+
+  /** The window reaches more than a day below what the listings have covered, and no backfill is open yet. */
+  private widened(st: GmailCursor): boolean {
+    const covered = st.coveredLowMs ?? st.floorMs;
+    return st.backfill === null && covered !== null && this.windowLow() < covered - DAY_MS;
+  }
+
+  /**
+   * The cursor with its backfill planned against the current window: opened
+   * below `coveredLowMs`, carried lower when the window widened again,
+   * re-listed from where it stands when the window narrowed, or closed at
+   * what it covered when the window no longer reaches below that.
+   */
+  private planBackfill(st: GmailCursor): GmailCursor {
+    const low = this.windowLow();
+    const b = st.backfill;
+    if (b === null) {
+      const covered = st.coveredLowMs ?? st.floorMs ?? low;
+      return { ...st, widenFloorMs: low, backfill: { lowMs: low, queryFloorMs: covered, resumeFloorMs: covered, pageToken: null } };
+    }
+    const relist = (lowMs: number): GmailWalk => ({ lowMs, queryFloorMs: b.resumeFloorMs, resumeFloorMs: b.resumeFloorMs, pageToken: null });
+    if (low > b.lowMs + DAY_MS) return low >= b.resumeFloorMs ? this.closeBackfill(st, b.resumeFloorMs) : { ...st, widenFloorMs: low, backfill: relist(low) };
+    if (low < b.lowMs - DAY_MS) return { ...st, widenFloorMs: Math.min(st.widenFloorMs ?? low, low), backfill: relist(low) };
+    return st;
+  }
+
+  /**
+   * The checkpoint that ends a backfill having listed mail down to
+   * `coveredTo`: the floor and the covered bound drop to it, and neither
+   * ever moves up.
+   */
+  private closeBackfill(st: GmailCursor, coveredTo: number): GmailCursor {
+    const covered = st.coveredLowMs ?? st.floorMs;
+    return {
+      ...st,
+      backfill: null,
+      widenFloorMs: null,
+      coveredLowMs: covered === null ? coveredTo : Math.min(covered, coveredTo),
+      floorMs: st.floorMs === null ? coveredTo : Math.min(st.floorMs, coveredTo),
+    };
+  }
+
+  private async backfillPage(client: ConnectorClient, st: GmailCursor): Promise<PageResult> {
+    const planned = this.planBackfill(st);
+    if (planned.backfill === null) return { ok: true, items: [], checkpoint: JSON.stringify(planned), done: !this.more(planned) };
+    return this.listPage(client, planned, planned.backfill, "backfill");
   }
 
   /** The history anchor, taken before anything is listed; a walk of the window follows. */
@@ -351,7 +450,11 @@ class Adapter implements SyncAdapter {
     if (res.class !== "ok") return { ok: false, response: res };
     const historyId = isRecord(res.body) ? str(res.body.historyId) : null;
     if (historyId === null || historyId.length > MAX_CURSOR_FIELD) return invalid(res, "profile");
-    const next: GmailCursor = { v: 1, historyId, historyPage: null, pending: null, floorMs: st?.floorMs ?? this.windowLow(), walk: st?.walk ?? this.newWalk() };
+    const floorMs = st?.floorMs ?? this.windowLow();
+    const next: GmailCursor = {
+      v: 1, historyId, historyPage: null, pending: null, floorMs, walk: st?.walk ?? this.newWalk(),
+      coveredLowMs: st?.coveredLowMs ?? floorMs, widenFloorMs: st?.widenFloorMs ?? null, backfill: st?.backfill ?? null,
+    };
     return { ok: true, items: [], checkpoint: JSON.stringify(next), done: false };
   }
 
@@ -372,7 +475,7 @@ class Adapter implements SyncAdapter {
   private afterHistory(st: GmailCursor, next: GmailPending["next"]): { cursor: GmailCursor; done: boolean } {
     if ("page" in next) return { cursor: { ...st, historyPage: next.page, pending: null }, done: false };
     const cursor: GmailCursor = { ...st, historyId: next.historyId, historyPage: null, pending: null };
-    return { cursor, done: cursor.walk === null };
+    return { cursor, done: !this.more(cursor) };
   }
 
   /** The next batch of threads a history page touched. */
@@ -418,25 +521,37 @@ class Adapter implements SyncAdapter {
     const historyId = isRecord(res.body) ? str(res.body.historyId) : null;
     if (historyId === null || historyId.length > MAX_CURSOR_FIELD) return invalid(res, "profile");
     // The history after the old anchor is gone, threads it named included.
-    const next: GmailCursor = { v: 1, historyId, historyPage: null, pending: null, floorMs: this.floorOf(st), walk: this.newWalk() };
+    // An open backfill and the covered bound carry over: the walk relists the
+    // window down to what was covered, and the backfill (open, or opened
+    // after it for a widened window) lists the rest, so no thread is read twice.
+    const floorMs = st.floorMs ?? this.windowLow();
+    const coveredLowMs = st.coveredLowMs ?? floorMs;
+    const walk = this.newWalk();
+    const next: GmailCursor = { ...st, historyId, historyPage: null, pending: null, floorMs, coveredLowMs, walk: { ...walk, lowMs: Math.max(walk.lowMs, coveredLowMs) } };
     return { ok: true, items: [], checkpoint: JSON.stringify(next), done: false };
   }
 
-  /** The cursor's floor, or the first sync's window for a cursor written before it was kept. */
+  /**
+   * Where a thread read keeps messages from: the cursor's floor (the first
+   * sync's window for a cursor written before it was kept), or the widened
+   * floor while a backfill is open.
+   */
   private floorOf(st: GmailCursor): number {
-    return st.floorMs ?? this.windowLow();
+    const floor = st.floorMs ?? this.windowLow();
+    return st.widenFloorMs === null ? floor : Math.min(floor, st.widenFloorMs);
   }
 
   private listPath(walk: GmailWalk): string {
     const q = new URLSearchParams({
       maxResults: String(this.batch()),
-      q: `after:${Math.floor(walk.lowMs / 1000)} before:${Math.ceil(walk.queryFloorMs / 1000)} ${LIST_EXCLUSIONS}`,
+      q: `after:${Math.floor(walk.lowMs / 1000)} before:${Math.ceil(walk.queryFloorMs / 1000)} ${GMAIL_LIST_EXCLUSIONS}`,
     });
     if (walk.pageToken !== null) q.set("pageToken", walk.pageToken);
     return `${API}/messages?${q.toString()}`;
   }
 
-  private async walkPage(client: ConnectorClient, st: GmailCursor, start: GmailWalk): Promise<PageResult> {
+  /** One listing page of the walk, or of the backfill, and the threads it names. */
+  private async listPage(client: ConnectorClient, st: GmailCursor, start: GmailWalk, lane: "walk" | "backfill"): Promise<PageResult> {
     let walk = start;
     let res = await client.get(this.listPath(walk));
     if (walk.pageToken !== null && res.status === 400) {
@@ -458,8 +573,9 @@ class Adapter implements SyncAdapter {
     const items: SyncItem[] = [];
     const deletions: string[] = [];
     let oldest = walk.resumeFloorMs;
+    const suffix = lane === "backfill" ? `:f${Math.floor((st.widenFloorMs ?? walk.lowMs) / DAY_MS)}` : undefined;
     for (const [tid, ids] of listed) {
-      const out = await this.readThread(client, st, tid, false, ids);
+      const out = await this.readThread(client, st, tid, false, ids, suffix);
       if (out.kind === "stop") return { ok: false, response: out.response };
       if (out.kind === "gone") deletions.push(out.threadId);
       if (out.kind === "item") {
@@ -471,15 +587,20 @@ class Adapter implements SyncAdapter {
     const nextPage = str(res.body.nextPageToken);
     if (nextPage !== null && nextPage.length > MAX_CURSOR_FIELD) return invalid(res, "messages (page token too long)");
     const nextWalk: GmailWalk | null = nextPage === null ? null : { ...walk, resumeFloorMs: oldest, pageToken: nextPage };
-    const next: GmailCursor = { ...st, walk: nextWalk };
-    return { ok: true, items, deletions, checkpoint: JSON.stringify(next), done: nextWalk === null };
+    const next: GmailCursor = lane === "walk"
+      ? { ...st, walk: nextWalk }
+      : nextWalk === null ? this.closeBackfill(st, walk.lowMs) : { ...st, backfill: nextWalk };
+    return { ok: true, items, deletions, checkpoint: JSON.stringify(next), done: !this.more(next) };
   }
 
   /**
    * Read one thread. `fromHistory` threads older than the window are left
    * alone unless they are gone (a stored page may still need deleting).
+   * `versionSuffix` marks a backfill read (see the header).
    */
-  private async readThread(client: ConnectorClient, st: GmailCursor, threadId: string, fromHistory: boolean, listedIds?: Set<string>): Promise<ThreadOutcome> {
+  private async readThread(
+    client: ConnectorClient, st: GmailCursor, threadId: string, fromHistory: boolean, listedIds?: Set<string>, versionSuffix?: string,
+  ): Promise<ThreadOutcome> {
     const res = await client.get(`${API}/threads/${encodeURIComponent(threadId)}?format=full`, { maxBytes: GMAIL_MAX_THREAD_BYTES });
     if (res.tooLarge === true) {
       const message = `the thread is larger than ${GMAIL_MAX_THREAD_BYTES / (1024 * 1024)} MiB and was not read`;
@@ -488,7 +609,8 @@ class Adapter implements SyncAdapter {
     if (res.status === 404) return { kind: "gone", threadId };
     if (res.class !== "ok") return { kind: "stop", response: res };
     if (!isRecord(res.body) || !Array.isArray(res.body.messages)) return { kind: "stop", response: { ...res, class: "challenge", body: null, error: "unexpected thread response" } };
-    const version = str(res.body.historyId);
+    const historyId = str(res.body.historyId);
+    const version = historyId !== null && versionSuffix !== undefined ? `${historyId}${versionSuffix}` : historyId;
     const messages = res.body.messages as unknown[];
     // An unreadable message must not read as a gone thread: that would delete its page.
     if (messages.length === 0 || messages.some(m => rawMessage(m)?.payload === undefined)) {

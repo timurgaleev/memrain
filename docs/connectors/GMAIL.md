@@ -161,6 +161,26 @@ The window never reaches past mail retention: pages are hard-deleted 180 days
 after a thread's last message by default
 (`MEMRAIN_CONNECTOR_RETENTION_DAYS_MAIL`, see [PRIVACY.md](../../PRIVACY.md)).
 
+To reach further back later, widen the account's window from the container
+(it needs the account's token):
+
+```sh
+memrain connectors gmail-widen <account-id> --days 180
+```
+
+Without `--apply` this is a dry run that changes nothing in the brain (like
+any sync, it may renew a stale access token). It lists the message
+ids between the new window and what the account already covers (no message is
+read) and prints how many threads that is, how many are already stored (they
+are rendered again with their older messages, never duplicated), how many it
+would add, how many stored threads would move to an older month's page (the
+old page is soft-deleted), the Gmail quota and embedding cost, and a plan
+hash. Rerun it with `--apply --plan-hash <hash>` to set `history_days`; a
+hash that no longer matches, or a listing too large to count in full, is
+refused. The next runs backfill the older mail under the account's usual
+caps. Do not roll back to a release before this one while that backfill is
+running: set `history_days` back first.
+
 ## What lands in the brain
 
 - One page per thread, under `mail/`, titled with the subject. Each message
@@ -168,9 +188,9 @@ after a thread's last message by default
   history, a `-- ` signature and a closing "Sent from my iPhone" style line
   are cut, a forwarded message is kept whole,
   and a message longer than 20,000 characters is cut with a marker. New
-  replies are appended to the same page. Nothing older than the first sync's
-  window is stored: a recent reply in an old thread brings in only the
-  messages from that point on.
+  replies are appended to the same page. Nothing older than the window is
+  stored: a recent reply in an old thread brings in only the messages from
+  that point on.
 - The thread's labels (Inbox, Sent, categories, your own labels by id) in the
   page's truth. Read, starred and important flags are left out, so reading
   mail does not rewrite pages or spend Gmail quota.

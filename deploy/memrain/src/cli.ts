@@ -382,6 +382,9 @@ function printUsage(): void {
   console.log("                               remove meeting ids, passcodes, PINs and join links from stored connector");
   console.log("                               mail and calendar pages (dry run with counts per source unless --apply)");
   console.log("  connectors rotate-kek --old-file F --new-file F [--json]   re-seal connector secrets under a new key");
+  console.log("  connectors gmail-widen <account-id> --days N [--apply --plan-hash HASH] [--json]");
+  console.log("                               widen a Gmail account's history window; the dry run counts the threads the");
+  console.log("                               backfill would add or re-render and prints the plan hash --apply needs");
   console.log("  daemons status [--json]      background daemons: schedule, pauses, last run, scheduler leader");
   console.log("  daemons pause|resume <name|all> [--source ID] [--reason TEXT] [--json]");
   console.log("  daemons enable|disable <name> [--source ID] [--json]");
@@ -2023,6 +2026,10 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (oldKekFile) opts.oldKekFile = oldKekFile;
       const newKekFile = values.get("--new-file");
       if (newKekFile) opts.newKekFile = newKekFile;
+      const days = values.get("--days");
+      if (days !== undefined) opts.days = days;
+      const planHash = values.get("--plan-hash");
+      if (planHash !== undefined) opts.planHash = planHash;
       if (flags.has("--full")) opts.full = true;
       if (flags.has("--dry-run")) opts.dryRun = true;
       if (flags.has("--apply")) opts.apply = true;
