@@ -249,7 +249,8 @@ export async function runSearchDiagnose(
           (trace.pushed_below_k_by ? `, pushed below k by ${trace.pushed_below_k_by}` : ""),
       );
     } else {
-      console.log(`            ${trace.state}${trace.rank ? ` at rank ${trace.rank}` : ""}`);
+      console.log(`            ${trace.state}${trace.rank ? ` at rank ${trace.rank}` : ""}` +
+        (trace.sources ? ` in ${trace.sources.join(", ")}: pass --source to pick one` : ""));
     }
     console.log(`\n  VERDICT: ${verdict}`);
     return 0;

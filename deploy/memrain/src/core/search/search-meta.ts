@@ -10,7 +10,8 @@
  * the caller that hidden content matched its query.
  */
 import type { Intent } from "./intent.ts";
-import type { SearchConfidence } from "./confidence-grade.ts";
+import type { RerankGateReason, SearchConfidence } from "./confidence-grade.ts";
+import type { FanoutMeta } from "./alias-fanout.ts";
 
 export const DEGRADED_REASONS = [
   "embed_timeout",
@@ -46,16 +47,21 @@ export interface SearchMeta {
   confidence?: SearchConfidence;
   /** What the two-pass rerank did, when it was on (operator-only). */
   rerank?: RerankOutcome;
+  /** What the alias fan-out searched, when the query named an entity (operator-only). */
+  fanout?: FanoutMeta;
   /** Operator explain only. Stage intervals use a monotonic clock. */
   timings_ms?: Record<string, number>;
   pending_embeddings?: number | null;
 }
 
-/** `ran`: the model was asked (its fail-open paths included); `skipped_confident`: no call was made. */
+/** `ran`: the model was asked (its fail-open paths included). */
 export interface RerankOutcome {
-  outcome: "ran" | "skipped_confident";
+  outcome: "ran";
   /** Relational pages the pin placed at the head of the rerank window. */
   pinned: number;
+  /** MEMRAIN_RERANK_GATE=shadow only: whether the gate would have skipped the call, and on what. */
+  would_skip?: boolean;
+  gate_reason?: RerankGateReason;
 }
 
 export interface PublicSearchMeta {

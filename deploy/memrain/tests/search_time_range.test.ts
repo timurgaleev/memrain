@@ -24,9 +24,9 @@ describe("parseQueryTimeRange", () => {
     expect(parseQueryTimeRange("\u0441\u0435\u0433\u043E\u0434\u043D\u044F \u0432\u0441\u0442\u0440\u0435\u0447\u0430", ref)).toMatchObject({ start: ref, end: ref });
   });
 
-  it("runs weeks Monday to Sunday and ends this week at the reference day", () => {
+  it("runs weeks Monday to Sunday", () => {
     for (const q of ["this week", "\u043D\u0430 \u044D\u0442\u043E\u0439 \u043D\u0435\u0434\u0435\u043B\u0435", "diese Woche"]) {
-      expect(parseQueryTimeRange(q, ref)).toMatchObject({ start: "2026-11-16", end: ref });
+      expect(parseQueryTimeRange(q, ref)).toMatchObject({ start: "2026-11-16", end: "2026-11-22" });
     }
     for (const q of ["last week", "\u043D\u0430 \u043F\u0440\u043E\u0448\u043B\u043E\u0439 \u043D\u0435\u0434\u0435\u043B\u0435", "letzte Woche"]) {
       expect(parseQueryTimeRange(q, ref)).toMatchObject({ start: "2026-11-09", end: "2026-11-15" });
@@ -38,13 +38,57 @@ describe("parseQueryTimeRange", () => {
   it("crosses the year boundary", () => {
     expect(parseQueryTimeRange("last month", "2026-01-10")).toMatchObject({ start: "2025-12-01", end: "2025-12-31" });
     expect(parseQueryTimeRange("\u0432 \u043F\u0440\u043E\u0448\u043B\u043E\u043C \u0433\u043E\u0434\u0443", "2026-01-10")).toMatchObject({ start: "2025-01-01", end: "2025-12-31" });
-    expect(parseQueryTimeRange("this year", "2026-01-10")).toMatchObject({ start: "2026-01-01", end: "2026-01-10" });
+    expect(parseQueryTimeRange("this year", "2026-01-10")).toMatchObject({ start: "2026-01-01", end: "2026-12-31" });
   });
 
-  it("abstains on two different spans, no cue, or a cue inside another word", () => {
+  // Value: protects="the last month" is the last 30 days, not October;
+  // fails_when=a rolling phrase resolves to the previous calendar span.
+  it("reads the past / the last as a rolling window", () => {
+    for (const q of ["what did I do in the last month", "over the past month", "notes from the past month"]) {
+      expect(parseQueryTimeRange(q, "2026-11-22")).toMatchObject({ start: "2026-10-23", end: "2026-11-22" });
+    }
+    expect(parseQueryTimeRange("in the last week", "2026-11-22")).toMatchObject({ start: "2026-11-15", end: "2026-11-22" });
+    expect(parseQueryTimeRange("the last year", "2026-11-22")).toMatchObject({ start: "2025-11-22", end: "2026-11-22" });
+    // "this past" is the calendar span, like "last".
+    expect(parseQueryTimeRange("this past week", ref)).toMatchObject({ start: "2026-11-09", end: "2026-11-15" });
+  });
+
+  // Value: protects=dates, months, quarters, years, "ago", weekdays and seasons scope a search;
+  // fails_when=only the relative this/last cues resolve.
+  it("resolves absolute and other relative cues", () => {
+    expect(parseQueryTimeRange("the 2026-05-03 standup", ref)).toMatchObject({ start: "2026-05-03", end: "2026-05-03" });
+    expect(parseQueryTimeRange("what happened on May 3", ref)).toMatchObject({ start: "2026-05-03", end: "2026-05-03" });
+    expect(parseQueryTimeRange("the 3rd of May notes", ref)).toMatchObject({ start: "2026-05-03", end: "2026-05-03" });
+    expect(parseQueryTimeRange("what did we ship in March", ref)).toMatchObject({ start: "2026-03-01", end: "2026-03-31" });
+    // A month still ahead this year means last year's.
+    expect(parseQueryTimeRange("plans made in December", ref)).toMatchObject({ start: "2025-12-01", end: "2025-12-31" });
+    expect(parseQueryTimeRange("revenue in Q2 2026", ref)).toMatchObject({ start: "2026-04-01", end: "2026-06-30" });
+    expect(parseQueryTimeRange("what changed in 2025", ref)).toMatchObject({ start: "2025-01-01", end: "2025-12-31" });
+    expect(parseQueryTimeRange("the call two weeks ago", ref)).toMatchObject({ start: "2026-11-04", end: "2026-11-10" });
+    expect(parseQueryTimeRange("dinner last Tuesday", ref)).toMatchObject({ start: "2026-11-17", end: "2026-11-17" });
+    expect(parseQueryTimeRange("the offsite last summer", ref)).toMatchObject({ start: "2026-06-01", end: "2026-08-31" });
+    expect(parseQueryTimeRange("what did I read last night", ref)).toMatchObject({ start: "2026-11-20", end: "2026-11-20" });
+  });
+
+  it("reads a yearless day still ahead this month as last year's", () => {
+    expect(parseQueryTimeRange("what happened on March 20", "2026-03-01")).toMatchObject({ start: "2025-03-20", end: "2025-03-20" });
+    expect(parseQueryTimeRange("what happened on March 1", "2026-03-01")).toMatchObject({ start: "2026-03-01", end: "2026-03-01" });
+  });
+
+  it("merges joined mentions into one range", () => {
+    expect(parseQueryTimeRange("between March and April", ref)).toMatchObject({ start: "2026-03-01", end: "2026-04-30" });
+    expect(parseQueryTimeRange("between May 3 and May 9", ref)).toMatchObject({ start: "2026-05-03", end: "2026-05-09" });
+  });
+
+  it("abstains on two different spans, no cue, a cue inside another word, a quoted name or a duration question", () => {
     expect(parseQueryTimeRange("yesterday versus last week", ref)).toBeNull();
+    expect(parseQueryTimeRange("which June deadline did we cancel in May", ref)).toBeNull();
     expect(parseQueryTimeRange("quarterly budget review", ref)).toBeNull();
     expect(parseQueryTimeRange("Todayscape launch", ref)).toBeNull();
+    expect(parseQueryTimeRange("notes on \"Last Summer\" the film", ref)).toBeNull();
+    expect(parseQueryTimeRange("how long ago was the move in March", ref)).toBeNull();
+    expect(parseQueryTimeRange("how many days since last month's review", ref)).toBeNull();
+    expect(parseQueryTimeRange("Turbocharged Tuesdays recap", ref)).toBeNull();
   });
 });
 

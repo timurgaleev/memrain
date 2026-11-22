@@ -97,6 +97,27 @@ export async function keywordIdentifierSearch(
   return runKeywordQuery(engine, tokens, tsquery, limit, opts);
 }
 
+/**
+ * Chunks that contain `name` as a phrase, ranked by the phrase OR each of
+ * `terms` (the query's other content words), for the alias fan-out: a record
+ * filed under one of an entity's names need not hold every other query word,
+ * only the name. Every value is its own bound parameter, so neither the name
+ * nor a term is ever spliced into a tsquery string.
+ */
+export async function keywordSearchAliasRequired(
+  engine: Engine,
+  name: string,
+  terms: readonly string[],
+  limit: number,
+  opts: KeywordSearchOptions = {},
+): Promise<string[]> {
+  if (!/[\p{L}\p{N}]/u.test(name)) return [];
+  const phrase = "phraseto_tsquery('simple', $1)";
+  const rank = `(${[phrase, ...terms.map((_, i) => `plainto_tsquery('simple', $${i + 2})`)].join(" || ")})`;
+  const rows = await runKeywordQuery(engine, [name, ...terms], rank, limit, opts, undefined, phrase);
+  return rows.map((row) => row.id);
+}
+
 /** Lexemes past this many are dropped from the OR form: a long query already found its AND rows or it is prose. */
 const MAX_RELAXED_LEXEMES = 16;
 
@@ -162,7 +183,9 @@ export async function keywordSearchRelaxed(
     .slice(0, MAX_RELAXED_LEXEMES);
   if (lexemes.length === 0) return [];
   const tsquery = `(${lexemes.map((_, i) => `plainto_tsquery('simple', $${i + 1})`).join(" || ")})`;
-  const counts = await lexemeChunkCounts(engine, lexemes, opts.sourceIds, opts.filters);
+  // The rarity read only orders the rows: when it fails, the plain OR still answers.
+  const counts = await lexemeChunkCounts(engine, lexemes, opts.sourceIds, opts.filters).catch(() => null);
+  if (counts === null) return runKeywordQuery(engine, lexemes, tsquery, limit, opts);
   const rare = lexemes
     .map((l, i) => ({ index: i, count: counts.get(l) ?? 0 }))
     .filter((t) => t.count > 0 && t.count <= RARE_LEXEME_CHUNK_CAP)
@@ -208,7 +231,8 @@ async function lexemeChunkCounts(
  * text params are `$1..$n` (`queryParams`); every other param is appended after
  * them. With `rare` (indexes into `queryParams` and their weights), only chunks
  * holding one of those lexemes match, ordered by the summed weight of the ones
- * they hold before the rank score.
+ * they hold before the rank score. With `matchTsquery`, rows must match it
+ * while `tsquery` only ranks them.
  */
 async function runKeywordQuery(
   engine: Engine,
@@ -217,6 +241,7 @@ async function runKeywordQuery(
   limit: number,
   opts: KeywordSearchOptions,
   rare?: ReadonlyArray<{ index: number; weight: number }>,
+  matchTsquery?: string,
 ): Promise<KeywordRow[]> {
   // `undefined` is unscoped (operator, CLI, every pre-tenancy caller). An
   // EMPTY array is a caller granted nothing: the predicate still goes on and
@@ -240,7 +265,7 @@ async function runKeywordQuery(
   // shaping); '1.0' when disabled so the SQL shape stays uniform.
   const boostCase = opts.sourceBoost ? buildCurationBoostCaseSql("d.source_path") : "1.0";
   // The plain arm's SQL is unchanged when there is no rarity to rank by.
-  let match = tsquery;
+  let match = matchTsquery ?? tsquery;
   let rarityCol = "";
   let byRarity = "";
   let byPooledRarity = "";

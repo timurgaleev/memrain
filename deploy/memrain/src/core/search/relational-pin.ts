@@ -8,13 +8,22 @@
  * merely holds the query's words, and on a relationship question that pushes
  * the right answer out of the first few places.
  *
- * After the rerank, each relational page in the window (at most `max`) gets
- * back the place the reranker took from it: it claims
- * `min(preRerankIndex, rerankedIndex)` in the window, so the pin only restores
- * places, never lifts a page above where it stood before the rerank, and a
- * page the reranker lifted keeps the lift. Text rows fill the other places in
- * the reranker's order, so one lands at its reranked position or at most
- * `pinned` places lower, never higher.
+ * After the rerank, the relational pages in the window (at most `max`) form a
+ * block at the head of the window, above the reranked text rows. Each claims
+ * `min(relationalRank, rerankedIndex)`, where `relationalRank` is its 0-based
+ * rank among the relational pages in the pre-rerank order: the first
+ * relational answer claims place 0 wherever fusion put it, and one the
+ * reranker itself lifted keeps that claim. Claims sort ascending, ties going
+ * to the pre-rerank order (the reranker cannot judge an edge-derived row, so
+ * it may reorder them only when strictly decisive). Every other row (text
+ * rows, and relational rows past `max`) follows in its reranked order, so it
+ * lands at its reranked position or at most `pinned` places lower.
+ *
+ * Known cost: the pin trusts the relational arm. A wrong arm (the parser
+ * matched a relationship shape and the anchor resolved, but the edges are
+ * stale) puts up to `max` edge-derived pages at the head. The size is the
+ * MEMRAIN_RELATIONAL_RERANK_PIN knob (0..10, default 3); 0 or `off` turns the
+ * pin off and leaves the reranked order as it is.
  *
  * A permutation of the reranked window: nothing is added or removed, a row
  * below the window (which the reranker never saw) is never lifted, and a page
@@ -28,8 +37,22 @@
 import type { Hit } from "./stages/types.ts";
 import { pageKeyFor } from "./page-fusion.ts";
 
-/** How many relational pages the pin may hold at the head (covers hit@3). */
+/** Default pin size (covers hit@3). */
 export const RELATIONAL_PIN_MAX = 3;
+/** Largest pin size the knob accepts. */
+export const RELATIONAL_PIN_LIMIT = 10;
+
+/**
+ * MEMRAIN_RELATIONAL_RERANK_PIN: an integer 0..RELATIONAL_PIN_LIMIT, or
+ * `off` / `false` for 0. Unset or anything else is the default.
+ */
+export function relationalPinMax(raw: string | undefined = process.env["MEMRAIN_RELATIONAL_RERANK_PIN"]): number {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (v === "off" || v === "false") return 0;
+  if (!/^\d+$/.test(v)) return RELATIONAL_PIN_MAX;
+  const n = Number(v);
+  return n <= RELATIONAL_PIN_LIMIT ? n : RELATIONAL_PIN_MAX;
+}
 
 export function hitPageKey(h: Hit): string {
   return pageKeyFor(h.payload?.sourcePath, h.payload?.source_id, h.documentId);
@@ -58,43 +81,28 @@ export function pinRelationalRows(
     return unchanged;
   }
 
-  // Each page's place before the rerank (its first row in the window).
-  const preIndex = new Map<string, number>();
-  preRerank.forEach((h, i) => {
+  // Each relational page's rank among the relational pages before the rerank.
+  const relRank = new Map<string, number>();
+  for (const h of preRerank) {
     const key = hitPageKey(h);
-    if (relationalPages.has(key) && !preIndex.has(key)) preIndex.set(key, i);
-  });
+    if (relationalPages.has(key) && !relRank.has(key)) relRank.set(key, relRank.size);
+  }
 
   const seen = new Set<string>();
-  const claims: Array<{ idx: number; pre: number; claim: number }> = [];
+  const claims: Array<{ idx: number; rel: number; claim: number }> = [];
   reranked.forEach((h, idx) => {
     const key = hitPageKey(h);
-    const pre = preIndex.get(key);
-    if (pre === undefined || seen.has(key)) return;
+    const rel = relRank.get(key);
+    if (rel === undefined || seen.has(key)) return;
     seen.add(key);
-    claims.push({ idx, pre, claim: Math.min(pre, idx) });
+    claims.push({ idx, rel, claim: Math.min(rel, idx) });
   });
   if (claims.length === 0) return unchanged;
 
-  // Ties go to the pre-rerank order: the reranker cannot judge an edge-derived
-  // row, so it may lift one past another only when strictly ahead.
-  claims.sort((a, b) => a.claim - b.claim || a.pre - b.pre || a.idx - b.idx);
+  claims.sort((a, b) => a.claim - b.claim || a.rel - b.rel || a.idx - b.idx);
   const block = claims.slice(0, max);
   const inBlock = new Set(block.map((c) => c.idx));
-  const rest = reranked.filter((_, i) => !inBlock.has(i));
-  // A pinned row takes its claimed place, or the next free one; text rows fill the rest.
-  const order: Hit[] = [];
-  let b = 0;
-  let r = 0;
-  while (order.length < reranked.length) {
-    const next = block[b];
-    if (next && (next.claim <= order.length || r >= rest.length)) {
-      order.push(reranked[next.idx]!);
-      b++;
-    } else {
-      order.push(rest[r++]!);
-    }
-  }
+  const order: Hit[] = [...block.map((c) => reranked[c.idx]!), ...reranked.filter((_, i) => !inBlock.has(i))];
   if (order.every((h, i) => h === reranked[i])) return { hits: [...reranked], pinned: block.length };
   return { hits: order.map((h, i) => ({ ...h, score: order.length - i })), pinned: block.length };
 }

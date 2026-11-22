@@ -152,7 +152,7 @@ export async function applyAliasHop(
  * to the given sources and the visibility filter. Returns null when the page
  * has no live indexed chunk in scope.
  */
-async function fetchPageHeadHit(
+export async function fetchPageHeadHit(
   engine: Engine,
   slug: string,
   intent: Intent,

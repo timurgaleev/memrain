@@ -27,6 +27,21 @@ export function cutAtWordBoundary(text: string, max: number): string {
 }
 
 /**
+ * The last `max` characters of `text`, starting after the first whitespace
+ * inside the window when the cut lands mid-word, otherwise hard at the cut.
+ * For text that leads up to something (the context before a hit), where the
+ * end is the part worth keeping.
+ */
+export function cutTailAtWordBoundary(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const from = text.length - max;
+  const window = text.slice(from);
+  if (/\s/.test(text[from - 1]!)) return window.trimStart();
+  const firstSpace = window.search(/\s/);
+  return (firstSpace >= 0 && firstSpace < window.length - 1 ? window.slice(firstSpace) : window).trimStart();
+}
+
+/**
  * The page slug a hit's mirror document belongs to, or null for a hit that is
  * not a page (a file, a code chunk). The hit's owning source disambiguates
  * tenant prefixes from default-source slugs. Legacy callers without provenance

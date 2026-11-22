@@ -35,7 +35,15 @@ export interface StageRank {
 }
 
 export interface TargetDiagnosis {
-  state: "returned" | "reinjected" | "dropped" | "not_retrieved";
+  /**
+   * `reinjected`: returned, but some stage between retrieval and the end did
+   * not hold it (an arm found it and the fused window missed it, or a stage
+   * dropped it) before a later stage put it back. `target_ambiguous`: the
+   * target names pages in more than one source; pass `source:slug`.
+   */
+  state: "returned" | "reinjected" | "dropped" | "not_retrieved" | "target_ambiguous";
+  /** For `target_ambiguous`: the sources holding the target. */
+  sources?: string[];
   /** 1-based page rank in what the caller got back. */
   rank?: number;
   /** Arms that retrieved the page, with its page rank in each list. */
@@ -76,7 +84,8 @@ export function diagnoseObservations(stages: readonly StageRank[], k?: number): 
   const base = { arms, stages: [...stages] };
   const last = steps.at(-1);
   if (last?.present) {
-    const firstSeen = steps.findIndex((s) => s.present);
+    // Retrieved by an arm, any stage missing it means a later one put it back.
+    const firstSeen = arms.length > 0 ? 0 : steps.findIndex((s) => s.present);
     const gap = steps.slice(firstSeen).some((s) => !s.present);
     return { ...base, state: gap ? "reinjected" : "returned", rank: last.rank! };
   }
@@ -130,6 +139,10 @@ export async function diagnoseTarget(
     params,
   )).rows;
   const byId = new Map(rows.map((r) => [r.id, r]));
+  if (opts.sourceIds === undefined || opts.sourceIds.length > 1) {
+    const sources = [...new Set(rows.filter((r) => pathMatchesTarget(r.source_path, r.source_id, target)).map((r) => r.source_id ?? "default"))].sort();
+    if (sources.length > 1) return { state: "target_ambiguous", sources, arms: [], stages: [] };
+  }
   const stages = trace.observations.map(({ stage, ids: list }): StageRank => {
     const pages = new Set<string>();
     for (const id of list) {

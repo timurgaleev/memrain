@@ -1,12 +1,12 @@
 /**
- * The two-pass rerank keeps relational answers at the head and is skipped when
- * the head is already certain (relational-pin.ts, confidence-grade.ts,
+ * The two-pass rerank keeps relational answers at the head, and its confidence
+ * gate grades the head in shadow only (relational-pin.ts, confidence-grade.ts,
  * stages/pipeline.ts rerankWindow). The reranker is a stub function here: no
  * Bedrock, no module mocks.
  */
 import { describe, expect, it } from "bun:test";
-import { pinRelationalRows, RELATIONAL_PIN_MAX } from "../src/core/search/relational-pin.ts";
-import { rerankConfident } from "../src/core/search/confidence-grade.ts";
+import { pinRelationalRows, RELATIONAL_PIN_MAX, relationalPinMax } from "../src/core/search/relational-pin.ts";
+import { rerankConfident, rerankGateMode } from "../src/core/search/confidence-grade.ts";
 import { rerankWindow, stageContext } from "../src/core/search/stages/pipeline.ts";
 import type { Hit, RerankOutcome, StageInput } from "../src/core/search/stages/types.ts";
 import { classifyQuerySuggestions } from "../src/core/search/query-intent.ts";
@@ -31,8 +31,9 @@ describe("pinRelationalRows", () => {
   it("gives reranked-down relational pages back the places the reranker took", () => {
     const reranked = [pre[1]!, pre[2]!, pre[4]!, pre[3]!, pre[0]!];
     const out = pinRelationalRows(reranked, pre, rel);
-    // alice held 1st before the rerank and gets it back; bob held 4th and keeps it.
-    expect(slugs(out.hits)).toEqual(["people/alice", "notes/a", "notes/b", "people/bob", "notes/c"]);
+    // alice and bob were the first and second relational pages before the rerank:
+    // they form the head block in that order, the text rows follow in reranked order.
+    expect(slugs(out.hits)).toEqual(["people/alice", "people/bob", "notes/a", "notes/b", "notes/c"]);
     expect(out.pinned).toBe(2);
     expect(out.hits.map((h) => h.score)).toEqual([5, 4, 3, 2, 1]);
   });
@@ -60,13 +61,27 @@ describe("pinRelationalRows", () => {
     expect(out.hits).toHaveLength(many.length);
   });
 
-  // Value: protects=the pin only restores places, so a low relational row never takes the
-  // reranker's top answers; fails_when=relational rows are moved to the head regardless.
-  it("leaves relational rows the reranker did not demote where they are", () => {
+  // Value: protects=the first relational answer claims the head wherever fusion put it;
+  // fails_when=a relational page only gets back the slot it held before the rerank.
+  it("puts the relational pages at the head even when fusion placed them low", () => {
     const window = ["t0", "t1", "t2", "t3", "t4", "r5", "r6", "r7"].map((s, i) => hit(s, 1 - i / 10));
     const reranked = [window[1]!, window[0]!, window[3]!, window[2]!, window[4]!, window[5]!, window[6]!, window[7]!];
     const out = pinRelationalRows(reranked, window, new Set(["r5", "r6", "r7"].map(page)));
-    expect(slugs(out.hits)).toEqual(slugs(reranked));
+    expect(slugs(out.hits)).toEqual(["r5", "r6", "r7", "t1", "t0", "t3", "t2", "t4"]);
+    expect(out.pinned).toBe(3);
+  });
+
+  // Value: protects=the operator can size or turn off the pin; fails_when=the size is fixed.
+  it("takes its size from MEMRAIN_RELATIONAL_RERANK_PIN, 0 or off leaving the reranked order", () => {
+    expect(relationalPinMax(undefined)).toBe(RELATIONAL_PIN_MAX);
+    expect(relationalPinMax("0")).toBe(0);
+    expect(relationalPinMax("off")).toBe(0);
+    expect(relationalPinMax("1")).toBe(1);
+    expect(relationalPinMax("11")).toBe(RELATIONAL_PIN_MAX);
+    expect(relationalPinMax("-2")).toBe(RELATIONAL_PIN_MAX);
+    const reranked = [pre[1]!, pre[2]!, pre[4]!, pre[3]!, pre[0]!];
+    expect(slugs(pinRelationalRows(reranked, pre, rel, 0).hits)).toEqual(slugs(reranked));
+    expect(slugs(pinRelationalRows(reranked, pre, rel, 1).hits)).toEqual(["people/alice", "notes/a", "notes/b", "notes/c", "people/bob"]);
   });
 
   it("is a no-op without relational pages in the window", () => {
@@ -77,13 +92,22 @@ describe("pinRelationalRows", () => {
 });
 
 describe("rerankConfident", () => {
-  it("is strong on a title phrase match or both arms putting the top page first", () => {
+  it("is strong on a whole-title match or both arms putting the top page first", () => {
     const base = { query: "ledger reconciliation", topTitle: "Other", topPage: page("a") };
-    expect(rerankConfident({ ...base, topTitle: "Ledger reconciliation runbook" })).toBe(true);
-    expect(rerankConfident({ ...base, vectorTopPage: page("a"), keywordTopPage: page("a") })).toBe(true);
-    expect(rerankConfident({ ...base, vectorTopPage: page("a"), keywordTopPage: page("b") })).toBe(false);
-    expect(rerankConfident({ ...base, keywordTopPage: page("a") })).toBe(false);
-    expect(rerankConfident(base)).toBe(false);
+    expect(rerankConfident({ ...base, topTitle: "Ledger Reconciliation" })).toBe("exact_title_match");
+    // A phrase inside a longer title is not identity.
+    expect(rerankConfident({ ...base, topTitle: "Ledger reconciliation runbook" })).toBeNull();
+    expect(rerankConfident({ ...base, vectorTopPage: page("a"), keywordTopPage: page("a") })).toBe("arms_agree");
+    expect(rerankConfident({ ...base, vectorTopPage: page("a"), keywordTopPage: page("b") })).toBeNull();
+    expect(rerankConfident({ ...base, keywordTopPage: page("a") })).toBeNull();
+    expect(rerankConfident(base)).toBeNull();
+  });
+
+  it("reads MEMRAIN_RERANK_GATE as off unless it says shadow", () => {
+    expect(rerankGateMode(undefined)).toBe("off");
+    expect(rerankGateMode("shadow")).toBe("shadow");
+    expect(rerankGateMode(" Shadow ")).toBe("shadow");
+    expect(rerankGateMode("on")).toBe("off");
   });
 });
 
@@ -110,30 +134,46 @@ describe("rerankWindow", () => {
     expect(outcomes).toEqual([{ outcome: "ran", pinned: 1 }]);
   });
 
-  // Value: protects=no paid call when both arms put the top page first;
-  // fails_when=the gate is ignored and the reranker runs.
-  it("skips the reranker when the head is certain", async () => {
-    let calls = 0;
-    const counting = async (q: string, w: Hit[]) => { calls++; return reversed(q, w); };
-    const outcomes: RerankOutcome[] = [];
-    const gate = { vectorTopPage: page("people/alice"), keywordTopPage: page("people/alice"), relationalPages: new Set<string>() };
-    const out = await rerankWindow(pool, ctxFor(gate, outcomes), counting);
-    expect(calls).toBe(0);
-    expect(slugs(out)).toEqual(slugs(pool));
-    expect(outcomes).toEqual([{ outcome: "skipped_confident", pinned: 0 }]);
+  // Value: protects=the gate never skips the paid rerank, it only records what it would do;
+  // fails_when=a confident head skips the call live.
+  it("runs the reranker on a certain head and, in shadow mode, records that it would skip", async () => {
+    const saved = process.env["MEMRAIN_RERANK_GATE"];
+    try {
+      let calls = 0;
+      const counting = async (q: string, w: Hit[]) => { calls++; return reversed(q, w); };
+      const gate = { vectorTopPage: page("people/alice"), keywordTopPage: page("people/alice"), relationalPages: new Set<string>() };
+      delete process.env["MEMRAIN_RERANK_GATE"];
+      const off: RerankOutcome[] = [];
+      await rerankWindow(pool, ctxFor(gate, off), counting);
+      expect(calls).toBe(1);
+      expect(off).toEqual([{ outcome: "ran", pinned: 0 }]);
+      process.env["MEMRAIN_RERANK_GATE"] = "shadow";
+      const shadow: RerankOutcome[] = [];
+      const out = await rerankWindow(pool, ctxFor(gate, shadow), counting);
+      expect(calls).toBe(2);
+      expect(slugs(out)).toEqual(slugs([...pool].reverse()));
+      expect(shadow).toEqual([{ outcome: "ran", pinned: 0, would_skip: true, gate_reason: "arms_agree" }]);
+    } finally {
+      if (saved === undefined) delete process.env["MEMRAIN_RERANK_GATE"];
+      else process.env["MEMRAIN_RERANK_GATE"] = saved;
+    }
   });
 
-  // Value: protects=a rerank still separates two pages whose titles both hold the query;
-  // fails_when=a title phrase match on the top hit alone skips the call.
-  it("runs the reranker when another hit in the window also holds the query in its title", async () => {
-    let calls = 0;
-    const counting = async (q: string, w: Hit[]) => { calls++; return reversed(q, w); };
-    const atlas = [hit("notes/atlas-2023", 1, "Project Atlas Budget 2023"), hit("notes/atlas-2026", 0.9, "Project Atlas Budget 2026"), hit("notes/x", 0.8)];
-    await rerankWindow(atlas, ctxFor({ relationalPages: new Set<string>() }, [], "project atlas budget"), counting);
-    expect(calls).toBe(1);
-    const single = [atlas[0]!, hit("notes/y", 0.9), hit("notes/x", 0.8)];
-    await rerankWindow(single, ctxFor({ relationalPages: new Set<string>() }, [], "project atlas budget"), counting);
-    expect(calls).toBe(1);
+  it("in shadow mode does not grade a head whose title another hit shares as certain", async () => {
+    const saved = process.env["MEMRAIN_RERANK_GATE"];
+    process.env["MEMRAIN_RERANK_GATE"] = "shadow";
+    try {
+      const atlas = [hit("notes/atlas-a", 1, "Project Atlas Budget"), hit("notes/atlas-b", 0.9, "Project Atlas Budget"), hit("notes/x", 0.8)];
+      const twin: RerankOutcome[] = [];
+      await rerankWindow(atlas, ctxFor({ relationalPages: new Set<string>() }, twin, "project atlas budget"), reversed);
+      expect(twin[0]!.would_skip).toBe(false);
+      const single: RerankOutcome[] = [];
+      await rerankWindow([atlas[0]!, hit("notes/y", 0.9), hit("notes/x", 0.8)], ctxFor({ relationalPages: new Set<string>() }, single, "project atlas budget"), reversed);
+      expect(single[0]).toMatchObject({ would_skip: true, gate_reason: "exact_title_match" });
+    } finally {
+      if (saved === undefined) delete process.env["MEMRAIN_RERANK_GATE"];
+      else process.env["MEMRAIN_RERANK_GATE"] = saved;
+    }
   });
 
   it("runs the reranker once when the arms disagree", async () => {

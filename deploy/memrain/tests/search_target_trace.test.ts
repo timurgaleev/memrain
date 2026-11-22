@@ -45,6 +45,13 @@ describe("diagnoseObservations", () => {
       .toMatchObject({ state: "returned", rank: 1 });
     expect(diagnoseObservations([{ stage: "fused", present: true, rank: 3 }, { stage: "type-diversity", present: false }, { stage: "alias-hop", present: true, rank: 1 }]))
       .toMatchObject({ state: "reinjected", rank: 1 });
+    // An arm had it, the fused window missed it, a late stage added it back.
+    expect(diagnoseObservations([{ stage: "arm:keyword", present: true, rank: 40 }, { stage: "fused", present: false },
+      { stage: "any-word-fill", present: true, rank: 3 }, { stage: "limit", present: true, rank: 3 }]))
+      .toMatchObject({ state: "reinjected", rank: 3 });
+    // No arm had it: a page only a late stage brought in was never lost.
+    expect(diagnoseObservations([{ stage: "arm:keyword", present: false }, { stage: "fused", present: false },
+      { stage: "alias-hop", present: true, rank: 1 }]).state).toBe("returned");
   });
 });
 
@@ -60,11 +67,12 @@ describe("target trace through hybridSearch", () => {
       `INSERT INTO sources (id, kind, path_prefix) VALUES ('tenant-b', 'other', '__tenant_b__') ON CONFLICT (id) DO NOTHING`,
     );
     // More repeats of the word rank higher in the keyword arm.
-    for (const [id, repeats, source] of [["t1", 5, "default"], ["t2", 3, "default"], ["t3", 1, "default"], ["tb", 4, "tenant-b"]] as const) {
+    for (const [id, repeats, source, path] of [["t1", 5, "default", "t1"], ["t2", 3, "default", "t2"], ["t3", 1, "default", "t3"], ["tb", 4, "tenant-b", "tb"],
+      ["tw-a", 2, "default", "twin"], ["tw-b", 2, "tenant-b", "twin"]] as const) {
       const text = `${Array.from({ length: repeats }, () => "harbor").join(" ")} crane schedule`;
       await writeDocumentTransaction(
         storage,
-        { documentId: id, sourcePath: `concepts/${id}`, title: id, frontmatter: {}, embeddingModel: "deterministic-test", sourceId: source },
+        { documentId: id, sourcePath: `concepts/${path}`, title: id, frontmatter: {}, embeddingModel: "deterministic-test", sourceId: source },
         [{ text, entities: [], embedding: deterministicEmbed(text) }],
       );
     }
@@ -94,6 +102,13 @@ describe("target trace through hybridSearch", () => {
 
   it("reports the top page as returned", async () => {
     expect(await run("concepts/t1", 1, ["default"])).toMatchObject({ state: "returned", rank: 1 });
+  });
+
+  // Value: protects=a slug two sources hold is not traced as whichever one ranks first;
+  // fails_when=the diagnosis silently picks one source.
+  it("asks for a source when the target names pages in two sources", async () => {
+    expect(await run("concepts/twin", 5)).toMatchObject({ state: "target_ambiguous", sources: ["default", "tenant-b"] });
+    expect((await run("concepts/twin", 5, ["default"])).state).not.toBe("target_ambiguous");
   });
 
   it("never counts a page outside the caller's sources", async () => {

@@ -9,7 +9,7 @@
       {
         "text": "SELECT qc.intent, qc.result_ids FROM query_cache qc WHERE qc.cache_key = $1 AND ( qc.clock_value = $2 OR ( qc.doc_generations <> '{}'::jsonb AND NOT EXISTS ( SELECT 1 FROM jsonb_each_text(qc.doc_generations) AS g(doc_id, stored_gen) LEFT JOIN documents d ON d.id = g.doc_id -- Compare as TEXT, not via (stored_gen)::bigint: a malformed snapshot -- value (only reachable by manual DB tampering — writes go through -- jsonb_object_agg of a BIGINT) would otherwise abort the read/prune/ -- stats query. As text, garbage simply fails to match → invalidate. WHERE d.id IS NULL -- document deleted → invalidate OR d.generation::text <> g.stored_gen -- document bumped → invalidate ) ) )",
         "params": [
-          "7cd378122b8ac3c5451954db6ddd2a624e485a2a64fb8362a1cceb8137d80398",
+          "7be252433445c0562ce2fe2afad501184062196966880e3767a4a82940c36af9",
           2
         ]
       },
@@ -22,6 +22,14 @@
       },
       {
         "text": "SELECT d.id AS document_id, d.source_path, btrim(regexp_replace(lower(COALESCE(d.title, '')), '[^[:alnum:]]+', ' ', 'g')) AS ident_title, btrim(regexp_replace(lower(regexp_replace(regexp_replace(CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END, '^.*/', ''), '\\.(md|markdown)$', '')), '[^[:alnum:]]+', ' ', 'g')) AS ident_leaf FROM documents d WHERE (btrim(regexp_replace(lower(COALESCE(d.title, '')), '[^[:alnum:]]+', ' ', 'g')) = ANY($1::text[]) OR btrim(regexp_replace(lower(regexp_replace(regexp_replace(CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END, '^.*/', ''), '\\.(md|markdown)$', '')), '[^[:alnum:]]+', ' ', 'g')) = ANY($1::text[])) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') AND NOT (CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'test/%' OR CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'attachments/%' OR CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE '.raw/%')",
+        "params": [
+          [
+            "kangaroo"
+          ]
+        ]
+      },
+      {
+        "text": "SELECT 'alias' AS via, pa.alias_norm AS norm, pa.slug, pa.source_id FROM page_aliases pa JOIN pages p ON p.slug = pa.slug AND p.source_id = pa.source_id WHERE pa.alias_norm = ANY($1::text[]) AND p.deleted_at IS NULL AND EXISTS (SELECT 1 FROM documents d WHERE d.source_path = (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END) AND COALESCE(d.source_id, 'default') = p.source_id AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')) UNION ALL SELECT 'title' AS via, lower(regexp_replace(btrim(p.title), '\\s+', ' ', 'g')) AS norm, p.slug, p.source_id FROM (SELECT DISTINCT slug, source_id FROM page_aliases) ta JOIN pages p ON p.slug = ta.slug AND p.source_id = ta.source_id WHERE lower(regexp_replace(btrim(p.title), '\\s+', ' ', 'g')) = ANY($1::text[]) AND p.deleted_at IS NULL AND EXISTS (SELECT 1 FROM documents d WHERE d.source_path = (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END) AND COALESCE(d.source_id, 'default') = p.source_id AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')) ORDER BY 1, 2, 4, 3",
         "params": [
           [
             "kangaroo"
@@ -156,7 +164,7 @@
       {
         "text": "SELECT qc.intent, qc.result_ids FROM query_cache qc WHERE qc.cache_key = $1 AND ( qc.clock_value = $2 OR ( qc.doc_generations <> '{}'::jsonb AND NOT EXISTS ( SELECT 1 FROM jsonb_each_text(qc.doc_generations) AS g(doc_id, stored_gen) LEFT JOIN documents d ON d.id = g.doc_id -- Compare as TEXT, not via (stored_gen)::bigint: a malformed snapshot -- value (only reachable by manual DB tampering — writes go through -- jsonb_object_agg of a BIGINT) would otherwise abort the read/prune/ -- stats query. As text, garbage simply fails to match → invalidate. WHERE d.id IS NULL -- document deleted → invalidate OR d.generation::text <> g.stored_gen -- document bumped → invalidate ) ) )",
         "params": [
-          "5e6ac1a936bb55993177ab595a6ff287a0aa257ef9dea5a3f59fc3409ec05e0e",
+          "e23efb47030f4b517ae97aec90d0c9025b236bc8880e114bd097433dc5c35918",
           2
         ]
       },
@@ -181,9 +189,10 @@
         ]
       },
       {
-        "text": "SELECT pa.alias_norm, pa.slug, pa.source_id, p.title FROM page_aliases pa JOIN pages p ON p.slug = pa.slug AND p.source_id = pa.source_id AND p.deleted_at IS NULL WHERE pa.alias_norm = ANY($1::text[]) AND EXISTS (SELECT 1 FROM documents d WHERE d.source_path = (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END) AND COALESCE(d.source_id, 'default') = p.source_id AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')) ORDER BY pa.alias_norm, pa.source_id, pa.slug",
+        "text": "SELECT 'alias' AS via, pa.alias_norm AS norm, pa.slug, pa.source_id FROM page_aliases pa JOIN pages p ON p.slug = pa.slug AND p.source_id = pa.source_id WHERE pa.alias_norm = ANY($1::text[]) AND p.deleted_at IS NULL AND EXISTS (SELECT 1 FROM documents d WHERE d.source_path = (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END) AND COALESCE(d.source_id, 'default') = p.source_id AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')) UNION ALL SELECT 'title' AS via, lower(regexp_replace(btrim(p.title), '\\s+', ' ', 'g')) AS norm, p.slug, p.source_id FROM (SELECT DISTINCT slug, source_id FROM page_aliases) ta JOIN pages p ON p.slug = ta.slug AND p.source_id = ta.source_id WHERE lower(regexp_replace(btrim(p.title), '\\s+', ' ', 'g')) = ANY($1::text[]) AND p.deleted_at IS NULL AND EXISTS (SELECT 1 FROM documents d WHERE d.source_path = (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END) AND COALESCE(d.source_id, 'default') = p.source_id AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')) ORDER BY 1, 2, 4, 3",
         "params": [
           [
+            "aardvark shared title",
             "aardvark shared",
             "shared title",
             "aardvark",
@@ -275,7 +284,7 @@
       {
         "text": "SELECT qc.intent, qc.result_ids FROM query_cache qc WHERE qc.cache_key = $1 AND ( qc.clock_value = $2 OR ( qc.doc_generations <> '{}'::jsonb AND NOT EXISTS ( SELECT 1 FROM jsonb_each_text(qc.doc_generations) AS g(doc_id, stored_gen) LEFT JOIN documents d ON d.id = g.doc_id -- Compare as TEXT, not via (stored_gen)::bigint: a malformed snapshot -- value (only reachable by manual DB tampering — writes go through -- jsonb_object_agg of a BIGINT) would otherwise abort the read/prune/ -- stats query. As text, garbage simply fails to match → invalidate. WHERE d.id IS NULL -- document deleted → invalidate OR d.generation::text <> g.stored_gen -- document bumped → invalidate ) ) )",
         "params": [
-          "7cd378122b8ac3c5451954db6ddd2a624e485a2a64fb8362a1cceb8137d80398",
+          "7be252433445c0562ce2fe2afad501184062196966880e3767a4a82940c36af9",
           2
         ]
       },
@@ -288,6 +297,14 @@
       },
       {
         "text": "SELECT d.id AS document_id, d.source_path, btrim(regexp_replace(lower(COALESCE(d.title, '')), '[^[:alnum:]]+', ' ', 'g')) AS ident_title, btrim(regexp_replace(lower(regexp_replace(regexp_replace(CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END, '^.*/', ''), '\\.(md|markdown)$', '')), '[^[:alnum:]]+', ' ', 'g')) AS ident_leaf FROM documents d WHERE (btrim(regexp_replace(lower(COALESCE(d.title, '')), '[^[:alnum:]]+', ' ', 'g')) = ANY($1::text[]) OR btrim(regexp_replace(lower(regexp_replace(regexp_replace(CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END, '^.*/', ''), '\\.(md|markdown)$', '')), '[^[:alnum:]]+', ' ', 'g')) = ANY($1::text[])) AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine') AND NOT (CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'test/%' OR CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE 'attachments/%' OR CASE WHEN d.source_path LIKE 'page-truth://%' THEN substr(d.source_path, 14) WHEN d.source_path LIKE 'page://%' THEN substr(d.source_path, 8) ELSE d.source_path END LIKE '.raw/%')",
+        "params": [
+          [
+            "kangaroo"
+          ]
+        ]
+      },
+      {
+        "text": "SELECT 'alias' AS via, pa.alias_norm AS norm, pa.slug, pa.source_id FROM page_aliases pa JOIN pages p ON p.slug = pa.slug AND p.source_id = pa.source_id WHERE pa.alias_norm = ANY($1::text[]) AND p.deleted_at IS NULL AND EXISTS (SELECT 1 FROM documents d WHERE d.source_path = (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END) AND COALESCE(d.source_id, 'default') = p.source_id AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')) UNION ALL SELECT 'title' AS via, lower(regexp_replace(btrim(p.title), '\\s+', ' ', 'g')) AS norm, p.slug, p.source_id FROM (SELECT DISTINCT slug, source_id FROM page_aliases) ta JOIN pages p ON p.slug = ta.slug AND p.source_id = ta.source_id WHERE lower(regexp_replace(btrim(p.title), '\\s+', ' ', 'g')) = ANY($1::text[]) AND p.deleted_at IS NULL AND EXISTS (SELECT 1 FROM documents d WHERE d.source_path = (CASE WHEN p.source_id = 'default' THEN 'page://' || p.slug ELSE 'page://' || p.source_id || '/' || p.slug END) AND COALESCE(d.source_id, 'default') = p.source_id AND d.deleted_at IS NULL AND NOT d.archived AND NOT (COALESCE(d.frontmatter, '{}'::jsonb) ? 'quarantine')) ORDER BY 1, 2, 4, 3",
         "params": [
           [
             "kangaroo"

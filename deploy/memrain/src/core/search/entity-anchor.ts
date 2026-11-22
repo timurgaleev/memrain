@@ -9,6 +9,14 @@
  * first, then up to {@link ENTITY_ANCHOR_MAX} pages that link to it, newest
  * first. Fused as one more list beside the title and relational arms.
  *
+ * Fusion, not a pin: the anchored pages enter RRF at the title arm's weight
+ * instead of being placed above the organic rows, so a page the other arms
+ * also found rises and one only this list found competes like a single-arm
+ * hit. That softer reorder is the intent: the anchor should lift the newest
+ * linked notes into the window, not decide the head on its own. Only linking
+ * pages are anchored; a note that names the entity without a link is left to
+ * the other arms, since finding it would mean a text scan of every page.
+ *
  * Off by default (MEMRAIN_ENTITY_ANCHOR=1): it reorders the head of a result
  * list. When on it joins the query-cache ranking signature, so a cached
  * ordering from either setting is never served to the other.

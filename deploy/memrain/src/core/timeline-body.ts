@@ -109,28 +109,68 @@ function headingLevel(line: string): number {
   return next === undefined || next === " " || next === "\t" ? n : 0;
 }
 
+/** A bullet that opens with a year: "- 2026 ...", "* **2026-11-01** ...". */
+const YEAR_BULLET_RE = /^\s*[-*+]\s+\**\d{4}\b/;
+
+/**
+ * True when a Timeline section's lines are a timeline: dated bullets or dated
+ * `###` headers (with the text under a header), blank lines, and indented
+ * continuations of a bullet, with at least one dated entry. Prose milestones
+ * ("Q1: ship X") are content, not a timeline.
+ */
+function timelineShaped(lines: readonly string[]): boolean {
+  let entries = 0;
+  let underHeader = false;
+  for (const raw of lines) {
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    if (line.trim() === "") continue;
+    if (DATED_HEADER_RE.test(line)) {
+      entries++;
+      underHeader = true;
+      continue;
+    }
+    if (DATED_BULLET_RE.test(line) || YEAR_BULLET_RE.test(line)) {
+      entries++;
+      continue;
+    }
+    if (underHeader && headingLevel(line) === 0) continue;
+    if (entries > 0 && /^\s{2,}\S/.test(line)) continue;
+    return false;
+  }
+  return entries > 0;
+}
+
 /**
  * The page body without its `# Timeline` / `## Timeline` section: the section
- * runs to the next heading of the same or a higher level. Headings inside a
- * fenced code block are text, not structure. A body with no such section comes
- * back unchanged.
+ * runs to the next heading of the same or a higher level. Only a section that
+ * is a timeline (dated bullets or dated headers) goes; a Timeline section of
+ * prose stays. Headings inside a fenced code block are text, not structure. A
+ * body with no such section comes back unchanged.
  */
 export function bodyWithoutTimeline(body: string): string {
-  const kept: string[] = [];
+  const lines = body.split("\n");
+  const sections: Array<{ start: number; end: number }> = [];
   let fence: string | null = null;
-  let skipLevel = 0;
-  for (const line of body.split("\n")) {
+  let open: { start: number; level: number } | null = null;
+  lines.forEach((line, i) => {
     const trimmed = line.trimStart();
     const marker = trimmed.startsWith("```") ? "```" : trimmed.startsWith("~~~") ? "~~~" : null;
-    if (marker && (fence === null || fence === marker)) fence = fence === null ? marker : null;
-    else if (fence === null) {
-      const level = headingLevel(line.endsWith("\r") ? line.slice(0, -1) : line);
-      if (level > 0 && skipLevel > 0 && level <= skipLevel) skipLevel = 0;
-      if ((level === 1 || level === 2) && line.slice(level).trim().toLowerCase() === "timeline") skipLevel = level;
+    if (marker && (fence === null || fence === marker)) {
+      fence = fence === null ? marker : null;
+      return;
     }
-    if (skipLevel === 0) kept.push(line);
-  }
-  return kept.join("\n");
+    if (fence !== null) return;
+    const level = headingLevel(line.endsWith("\r") ? line.slice(0, -1) : line);
+    if (level > 0 && open && level <= open.level) {
+      sections.push({ start: open.start, end: i });
+      open = null;
+    }
+    if ((level === 1 || level === 2) && line.slice(level).trim().toLowerCase() === "timeline") open = { start: i, level };
+  });
+  if (open) sections.push({ start: (open as { start: number }).start, end: lines.length });
+  const drop = sections.filter((sec) => timelineShaped(lines.slice(sec.start + 1, sec.end)));
+  if (drop.length === 0) return body;
+  return lines.filter((_, i) => !drop.some((sec) => i >= sec.start && i < sec.end)).join("\n");
 }
 
 interface CitationSpan {

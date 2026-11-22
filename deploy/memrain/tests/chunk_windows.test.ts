@@ -36,6 +36,15 @@ beforeAll(async () => {
   await doc("long", "default", 3);
   await storage.engine().query(`UPDATE chunks SET content = $1 WHERE id = 'long-0'`, ["word ".repeat(1000)]);
   await storage.engine().query(`UPDATE documents SET archived = true WHERE id = 'gone'`);
+  await doc("setup", "default", 2);
+  await storage.engine().query(`UPDATE chunks SET content = $1 WHERE id = 'setup-0'`,
+    [`opening ${"filler words ".repeat(300)}and here is the setup sentence right before the hit.`]);
+  await doc("ov", "default", 3);
+  const shared1 = "shared overlap between chunk one and two";
+  const shared2 = "shared overlap between chunk two and three";
+  await storage.engine().query(`UPDATE chunks SET content = $1 WHERE id = 'ov-0'`, [`first chunk body ${shared1}`]);
+  await storage.engine().query(`UPDATE chunks SET content = $1 WHERE id = 'ov-1'`, [`${shared1} middle ${shared2}`]);
+  await storage.engine().query(`UPDATE chunks SET content = $1 WHERE id = 'ov-2'`, [`${shared2} and the third chunk.`]);
 });
 
 afterAll(async () => {
@@ -95,9 +104,35 @@ describe("withChunkWindows", () => {
     const hits = [{ chunkId: "a-2", trust: "external" as const }, { chunkId: "b-1" }];
     const out = await withChunkWindows(storage.engine(), hits, 1, { maxChars: 6 });
     expect(out[0]!.window!.before).toContain("<external_content");
-    expect(out[0]!.window!.before).toContain("a part");
-    expect(out[0]!.window!.before).not.toContain("part 1");
-    expect(out[1]!.window).toEqual({ before: "b part", after: "" });
+    // `before` keeps the text right before the hit, `after` the text right after it.
+    expect(out[0]!.window!.before).toContain("part 1");
+    expect(out[0]!.window!.before).not.toContain("a part");
+    expect(out[0]!.window!.after).toContain("a part");
+    expect(out[1]!.window).toEqual({ before: "part 0", after: "" });
+  });
+
+  // Value: protects=the context window shows the sentence that leads into the hit;
+  // fails_when=the before side is cut from its start, keeping text farthest from the hit.
+  it("keeps the end of a long preceding chunk, the part next to the hit", async () => {
+    const [h] = await withChunkWindows(storage.engine(), [{ chunkId: "setup-1" }], 1, { maxChars: 60 });
+    expect(h!.window!.before).toContain("the setup sentence right before the hit.");
+    expect(h!.window!.before).not.toContain("opening");
+    expect(h!.window!.before.length).toBeLessThanOrEqual(60);
+  });
+
+  // Value: protects=two hits of one document do not repeat each other in their windows;
+  // fails_when=a window reads past a neighbouring hit chunk.
+  it("stops a side at another hit of the same answer", async () => {
+    const out = await withChunkWindows(storage.engine(), [{ chunkId: "a-1" }, { chunkId: "a-2" }], 2);
+    expect(out[0]!.window).toEqual({ before: "a part 0", after: "" });
+    expect(out[1]!.window).toEqual({ before: "", after: "a part 3\n\na part 4" });
+  });
+
+  // Value: protects=the chunker's overlap is not shown twice; fails_when=windows keep the
+  // text adjacent chunks repeat from the hit.
+  it("drops the overlap neighbour chunks share with the hit", async () => {
+    const w = await readChunkWindows(storage.engine(), ["ov-1"], 1);
+    expect(w.get("ov-1")).toEqual({ before: "first chunk body ", after: " and the third chunk." });
   });
 
   it("under a token budget attaches windows in rank order until one does not fit", async () => {

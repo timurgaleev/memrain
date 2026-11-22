@@ -11,7 +11,7 @@ import { Storage } from "../src/core/storage.ts";
 import { addLink, KNOWN_LINK_TYPES } from "../src/core/links.ts";
 import { deletePage, putPage } from "../src/core/pages.ts";
 import { CHAIN_LINK_TYPES, parseRelationalPlan, validateChainHops } from "../src/core/search/relational-plan.ts";
-import { byteCompare, FRONTIER_CAP, NEIGHBOR_CAP, runRelationalChain } from "../src/core/search/relational-chain.ts";
+import { byteCompare, FRONTIER_CAP, hubWeight, NEIGHBOR_CAP, runRelationalChain } from "../src/core/search/relational-chain.ts";
 import { relationalRecall, type RelationalRecallMeta } from "../src/core/search/relational-recall.ts";
 import { parseRelationalLlmChain, relationalRecallLlm } from "../src/core/search/relational-llm.ts";
 import type { SonnetCallResult, SonnetFn } from "../src/core/llm/sonnet.ts";
@@ -96,6 +96,16 @@ describe("parseRelationalPlan", () => {
     expect(parseRelationalPlan("who founded the companies alice invested in before 2020").kind).toBe("unsupported");
     expect(parseRelationalPlan("who founded the companies alice and bob invested in").kind).toBe("unsupported");
     expect(parseRelationalPlan("who works at the meetings alice attended").kind).toBe("unsupported");
+  });
+
+  it("knows the longer relation phrasings", () => {
+    const r = parseRelationalPlan("who founded the companies bob is an advisor for");
+    expect(r.kind).toBe("plan");
+    if (r.kind !== "plan") return;
+    expect(r.plan.anchor).toBe("bob");
+    expect(r.plan.hops.map(h => [h.linkType, h.toward])).toEqual([["advises", "object"], ["founded", "subject"]]);
+    const m = parseRelationalPlan("who founded the companies alice holds an investment in");
+    expect(m.kind === "plan" && m.plan.hops.map(h => h.linkType)).toEqual(["invested_in", "founded"]);
   });
 
   it("walks only link types ingest can write", () => {
@@ -229,7 +239,85 @@ describe("relationalRecall chains", () => {
     expect(run.perHop[0]!.edges).toBe(NEIGHBOR_CAP);
     expect(run.perHop[1]!.frontier).toBe(FRONTIER_CAP);
     expect(run.answers.map(a => a.slug)).toEqual(["people/f"]);
-    expect(run.answers[0]!.score).toBe(FRONTIER_CAP);
+    // FRONTIER_CAP paths, each through a company with two chain neighbours.
+    expect(run.answers[0]!.score).toBeCloseTo(FRONTIER_CAP * hubWeight(2), 9);
+  });
+
+  // Value: protects=a hub intermediate no longer outranks a specific answer;
+  // fails_when=every path counts 1 whatever the degree of the node it passes.
+  it("dampens paths through a hub intermediate", async () => {
+    await page("people/ann", "person");
+    await page("companies/bighub", "company");
+    await page("companies/niche", "company");
+    await page("people/hubfounder", "person");
+    await page("people/nichefounder", "person");
+    await link("people/ann", "companies/bighub", "invested_in");
+    await link("people/ann", "companies/niche", "invested_in");
+    await link("people/hubfounder", "companies/bighub", "founded");
+    await link("people/nichefounder", "companies/niche", "founded");
+    for (let i = 0; i < 40; i++) {
+      await page(`people/backer${i}`, "person");
+      await link(`people/backer${i}`, "companies/bighub", "invested_in");
+    }
+    const run = await runRelationalChain(storage, "people/ann", {
+      hops: [{ linkType: "invested_in", toward: "object" }, { linkType: "founded", toward: "subject" }],
+      excludeAnchor: false,
+    });
+    const score = (slug: string) => run.answers.find(a => a.slug === slug)!.score;
+    expect(score("people/nichefounder")).toBeCloseTo(hubWeight(2), 9);
+    expect(score("people/hubfounder")).toBeLessThan(0.5);
+    expect(run.answers[0]!.slug).toBe("people/nichefounder");
+  });
+
+  // Value: protects=a body-derived edge stored against the relation's direction still walks;
+  // fails_when=hops read only the stored direction ("founded by [[x]]" on a company page).
+  it("reads a reversed body-derived edge by its page types", async () => {
+    await page("companies/zeta", "company");
+    await link("companies/zeta", "people/alice", "founded");
+    await storage.engine().query(`UPDATE links SET link_source = 'markdown' WHERE source_slug = 'companies/zeta'`);
+    try {
+      const founders = await runRelationalChain(storage, "companies/zeta", {
+        hops: [{ linkType: "founded", toward: "subject" }], excludeAnchor: false,
+      });
+      expect(founders.answers.map(a => a.slug)).toEqual(["people/alice"]);
+      expect(founders.answers[0]!.score).toBe(1);
+      const founded = await runRelationalChain(storage, "people/alice", {
+        hops: [{ linkType: "founded", toward: "object" }], excludeAnchor: false,
+      });
+      expect(founded.answers.map(a => a.slug)).toEqual(["companies/zeta"]);
+      // An explicit writer's edge keeps its stored direction: a reversed manual edge is no hop.
+      await storage.engine().query(`UPDATE links SET link_source = 'manual' WHERE source_slug = 'companies/zeta'`);
+      const manual = await runRelationalChain(storage, "companies/zeta", {
+        hops: [{ linkType: "founded", toward: "subject" }], excludeAnchor: false,
+      });
+      expect(manual.answers).toEqual([]);
+    } finally {
+      await storage.engine().query(`DELETE FROM links WHERE source_slug = 'companies/zeta'`);
+    }
+  });
+
+  // Value: protects=an unmarked state relation means the current one; fails_when=hops walk
+  // ended relationships by default ("the companies dave works at" includes his old job).
+  it("walks current relationships unless the hop says otherwise", async () => {
+    await storage.engine().query(`UPDATE links SET valid_until = '2020-01-01' WHERE source_slug = 'people/dave' AND type = 'works_at'`);
+    try {
+      const hops = (status?: "all" | "expired") => [{ linkType: "works_at", toward: "object" as const, ...(status ? { status } : {}) }];
+      expect((await runRelationalChain(storage, "people/dave", { hops: hops(), excludeAnchor: false })).answers).toEqual([]);
+      expect((await runRelationalChain(storage, "people/dave", { hops: hops("all"), excludeAnchor: false })).answers.map(a => a.slug)).toEqual(["companies/beta"]);
+      expect((await runRelationalChain(storage, "people/dave", { hops: hops("expired"), excludeAnchor: false })).answers.map(a => a.slug)).toEqual(["companies/beta"]);
+    } finally {
+      await storage.engine().query(`UPDATE links SET valid_until = NULL WHERE source_slug = 'people/dave' AND type = 'works_at'`);
+    }
+  });
+
+  // Value: protects=a refused multi-relation question is never answered by a one-hop guess
+  // (nor handed to the paid fallback); fails_when=it falls through to the regex parser.
+  it("returns nothing for a question the planner refuses, and says why", async () => {
+    let meta: RelationalRecallMeta | undefined;
+    const hits = await relationalRecall(storage, "who founded the companies alice invested in before 2020", { onMeta: (m) => { meta = m; } });
+    expect(hits).toEqual([]);
+    expect(meta?.kind).toBe("chain");
+    expect(meta?.unsupported).toContain("time");
   });
 
   it("orders ties by UTF-8 bytes", () => {

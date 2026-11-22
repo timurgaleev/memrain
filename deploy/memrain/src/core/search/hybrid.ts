@@ -36,7 +36,7 @@ import { reciprocalRankFusion } from "../rrf.ts";
 import { isStatementTimeoutError } from "../retry.ts";
 import { DEGRADED_REASONS } from "./search-meta.ts";
 import { vectorSearch } from "./vector.ts";
-import { keywordSearch, keywordSearchRelaxed, keywordSearchScored, keywordIdentifierSearch } from "./keyword.ts";
+import { keywordSearch, keywordSearchAliasRequired, keywordSearchRelaxed, keywordSearchScored, keywordIdentifierSearch } from "./keyword.ts";
 import { resolveDateBoundary, pageFilterClauses, validatePageFilters } from "./filters.ts";
 import { visibilityClause } from "../visibility.ts";
 import { searchDiagnostics } from "./diagnostics.ts";
@@ -83,8 +83,16 @@ import type { Engine } from "../engine/interface.ts";
 import { expandQuery } from "./expansion.ts";
 import { graphRerank, graphRerankLiveEnabled } from "./graph-rerank.ts";
 import { getGraphSignalsFloorRatio } from "./graph-signals.ts";
-import { applyAliasHop, aliasHopEnabled } from "./alias-hop.ts";
-import { aliasFanoutEnabled, aliasFanoutQueries } from "./alias-fanout.ts";
+import { applyAliasHop, aliasHopEnabled, fetchPageHeadHit } from "./alias-hop.ts";
+import { collapseEnabled, collapseResults, type CollapsedRef } from "./collapse.ts";
+import {
+  aliasFanoutEnabled,
+  aliasFanoutPlan,
+  fanoutMeta,
+  FANOUT_ROWS_PER_ALIAS,
+  stampMatchedAlias,
+  type AliasFanoutPlan,
+} from "./alias-fanout.ts";
 import type { TargetTrace } from "./target-trace.ts";
 import { titleArmChunkIds, titleArmEnabled, TITLE_ARM_WEIGHT } from "./title-arm.ts";
 import { expandAnchors } from "./structural-expand.ts";
@@ -429,6 +437,12 @@ export interface SearchHit extends Partial<SearchProvenance> {
    * opt-in `explain` flag. See explain.ts / SearchOptions.explain.
    */
   explain?: SearchExplain;
+  /** The entity name an alias fan-out list found this hit under (alias-fanout.ts); absent otherwise. */
+  matched_alias?: string;
+  /** Redirect stubs and cross-source twins folded into this page (collapse.ts). */
+  collapsed?: CollapsedRef[];
+  /** A redirect stub whose target could not be shown: the target as the stub writes it (collapse.ts). */
+  redirect_to?: string;
 }
 
 const EMBED_MODEL = "amazon.titan-embed-text-v2:0";
@@ -611,7 +625,7 @@ const pageOfHit = (h: SearchHit): string => pageKeyFor(h.sourcePath, h.source_id
 /**
  * Pages holding some of the query's words (keywordSearchRelaxed: rare words
  * first), for the slots a keyword-only result left empty. One chunk per page,
- * pages already in `held` skipped, at most `room` rows, each scored below the
+ * pages already in `held` or in `skipPages` skipped, at most `room` rows, each scored below the
  * lowest held row so the fill always sorts after it. Scope, visibility, the
  * pushed-down filters and the hard-excludes apply as on any keyword row; the
  * trust floor is enforced over the whole result by hybridSearch.
@@ -622,7 +636,7 @@ async function anyWordFill(
   held: readonly SearchHit[],
   room: number,
   intent: Intent,
-  opts: { fanout: number; sourceIds?: readonly string[]; filters?: ChunkFilters; sourceBoost: boolean },
+  opts: { fanout: number; sourceIds?: readonly string[]; filters?: ChunkFilters; sourceBoost: boolean; skipPages?: ReadonlySet<string> },
 ): Promise<SearchHit[]> {
   const rows = await keywordSearchRelaxed(engine, query, opts.fanout, {
     sourceIds: opts.sourceIds,
@@ -635,7 +649,7 @@ async function anyWordFill(
   if (ids.length === 0) return [];
   const hydrated = await hydrateByIds(engine, ids, intent, opts.sourceIds);
   const excludePrefixes = getSearchExcludePrefixes();
-  const pages = new Set(held.map(pageOfHit));
+  const pages = new Set([...held.map(pageOfHit), ...(opts.skipPages ?? [])]);
   const picked: SearchHit[] = [];
   for (const h of hydrated) {
     if (picked.length >= room) break;
@@ -958,9 +972,13 @@ async function hybridSearchUnbounded(
   // Settle eagerly: no arm rejection is left unobserved while embedding runs.
   diagnostic?.mark("prepare_cache");
   const keywordOpts = { sourceIds: opts.sourceIds, filters: chunkFilters, maxPool: maxPoolOn, sourceBoost: armSourceBoost };
+  // Rows the strict all-word pass returned; at the fanout, more all-word rows exist past the cut.
+  let strictKeywordRows = 0;
+  let fanoutPlan: AliasFanoutPlan | null = null;
   const lexical = Promise.allSettled([
     (async () => {
       const primary = await keywordArm(() => keywordSearchScored(engine, trimmed, fanout, keywordOpts));
+      strictKeywordRows = primary.length;
       const probe = await keywordIdentifierSearch(engine, trimmed, fanout, keywordOpts)
         .catch(error => { failArm(error, "identifier"); return []; });
       const primaryIds = new Set(primary.map(row => row.id));
@@ -973,10 +991,15 @@ async function hybridSearchUnbounded(
       ...(opts.sourceIds !== undefined ? { sourceIds: [...opts.sourceIds] } : {}), limit: fanout, filters: chunkFilters,
       ...(opts.remote ? { remote: true } : {}),
     }) : Promise.resolve<string[]>([]),
-    // 3c. Alias fan-out: fail-open, an alias that cannot be resolved or searched adds no list.
+    // 3c. Alias fan-out: fail-open, an entity that cannot be resolved or searched adds no list.
     aliasFanoutEnabled()
-      ? aliasFanoutQueries(engine, trimmed, { sourceIds: opts.sourceIds, ...(opts.remote ? { remote: true } : {}) })
-          .then((fan) => Promise.all(fan.map((f) => keywordSearch(engine, f.query, fanout, keywordOpts).catch(() => [] as string[]))))
+      ? aliasFanoutPlan(engine, trimmed, { sourceIds: opts.sourceIds, ...(opts.remote ? { remote: true } : {}) })
+          .then(async (plan) => {
+            if (!plan) return [] as string[][];
+            fanoutPlan = plan;
+            return Promise.all(plan.names.map((n) =>
+              keywordSearchAliasRequired(engine, n.alias, plan.terms, FANOUT_ROWS_PER_ALIAS, keywordOpts).catch(() => [] as string[])));
+          })
           .catch(() => [] as string[][])
       : Promise.resolve<string[][]>([]),
     // 3e. Entity anchor (opt-in, MEMRAIN_ENTITY_ANCHOR=1): fail-open inside the helper.
@@ -1057,7 +1080,8 @@ async function hybridSearchUnbounded(
   if (relationalResult.status === "rejected") throw relationalResult.reason;
   if (aliasResult.status === "rejected") throw aliasResult.reason;
   if (anchorResult.status === "rejected") throw anchorResult.reason;
-  const aliasLists = aliasResult.value.filter((list) => list.length > 0);
+  const fanoutLists = aliasResult.value;
+  const aliasLists = fanoutLists.filter((list) => list.length > 0);
   const vectorIds = vectorResult.value;
   const primaryKeywordRows = keywordResult.value;
   const titleIds = titleResult.value;
@@ -1207,10 +1231,12 @@ async function hybridSearchUnbounded(
   // so one stray word empties the keyword arm. Pages holding some of the words
   // then fill the slots the strict rows left, below them. Not after a lexical
   // arm failed: more keyword statements against a failing database or a query
-  // it cannot handle only fail again, and the empty result says so already.
+  // it cannot handle only fail again, and the empty result says so already. Nor
+  // when the strict pass filled its fanout: the all-word rows past the cut
+  // outrank any partial-word page, so a short list there is the page cap's doing.
   const lexicalFailed = degraded.some((r) =>
     r === "keyword_timeout" || r === "keyword_arm_failed" || r === "keyword_candidates_incomplete" || r === "title_arm_failed");
-  const anyWordFillOn = vectorIds.length === 0 && !structural && !lexicalFailed;
+  const anyWordFillOn = vectorIds.length === 0 && !structural && !lexicalFailed && strictKeywordRows < fanout;
   if (fused.length === 0) {
     // Zero-result broadened retry (once). The only lever that can turn an empty
     // set non-empty is query expansion (different terms) — a bigger fanout can't
@@ -1434,10 +1460,31 @@ async function hybridSearchUnbounded(
       score: h.score,
       intent,
     }));
-    return aliasHopEnabled()
-      ? applyAliasHop(mapped, storage, trimmed, intent, opts.sourceIds, { filters: chunkFilters })
+    const hopped = aliasHopEnabled()
+      ? await applyAliasHop(mapped, storage, trimmed, intent, opts.sourceIds, { filters: chunkFilters })
       : mapped;
+    // Redirect stubs and cross-source twins give their places up (collapse.ts).
+    if (!collapseEnabled()) return hopped;
+    const collapsed = await collapseResults(hopped, {
+          engine,
+          intent,
+          frontmatterOf: new Map(hits.map((h) => [h.chunkId, h.payload?.frontmatter] as const)),
+          ...(opts.sourceIds !== undefined ? { sourceIds: opts.sourceIds } : {}),
+          filters: chunkFilters,
+          ...(opts.remote ? { remote: true } : {}),
+          // Only a live page's mirror: a mirror left behind by a deleted page is never brought back.
+          fetchHead: async (slug, sourceId) => {
+            const live = await engine.query(
+              `SELECT 1 FROM pages WHERE slug = $1 AND source_id = $2 AND deleted_at IS NULL`, [slug, sourceId]);
+            return live.rows.length > 0 ? fetchPageHeadHit(engine, slug, intent, [sourceId], chunkFilters) : null;
+          },
+        });
+    const kept = new Set(collapsed.map(pageOfHit));
+    for (const h of hopped) if (!kept.has(pageOfHit(h))) foldedPages.add(pageOfHit(h));
+    return collapsed;
   };
+  // Pages the collapse folded away; the any-word fill must not bring them back.
+  const foldedPages = new Set<string>();
   let organic: SearchHit[] = await withAliasHop(final);
   trace?.observe("alias-hop", organic.map((h) => h.chunkId));
 
@@ -1472,6 +1519,7 @@ async function hybridSearchUnbounded(
       try {
         out = [...out, ...(await anyWordFill(engine, trimmed, out, k - out.length, intent, {
           fanout,
+          skipPages: foldedPages,
           sourceIds: opts.sourceIds,
           filters: chunkFilters,
           sourceBoost: armSourceBoost,
@@ -1512,6 +1560,12 @@ async function hybridSearchUnbounded(
   //     A hit surfaced only by an expansion pass classifies weak_semantic
   //     (conservative, never a false `exists`).
   stampEvidence(ranked, new Set(vectorIds), new Set(primaryKeywordIds), trimmed);
+  // A hit only an alias fan-out list found says which name found it.
+  if (fanoutPlan && aliasLists.length > 0) {
+    const stamped = stampMatchedAlias(ranked, fanoutLists, (fanoutPlan as AliasFanoutPlan).names,
+      new Set([...vectorIds, ...primaryKeywordIds, ...titleIds]));
+    ranked.splice(0, ranked.length, ...stamped);
+  }
 
   // 9·content_flag — stamp the WARN marker on any flagged page (best-effort,
   //     post-fusion). Pure-additive; never reorders or breaks search.
@@ -1623,6 +1677,7 @@ async function hybridSearchUnbounded(
     returned: kept.length,
     confidence: gradeConfidence(kept),
     ...(rerankOutcome ? { rerank: rerankOutcome } : {}),
+    ...(fanoutPlan ? { fanout: fanoutMeta(fanoutPlan, fanoutLists) } : {}),
   });
   return kept;
 }

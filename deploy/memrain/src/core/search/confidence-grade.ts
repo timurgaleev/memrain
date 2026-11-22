@@ -19,7 +19,7 @@
  */
 import type { Evidence } from "./evidence.ts";
 import { RANK_BAND } from "./evidence.ts";
-import { isTitlePhraseMatch } from "./title-match.ts";
+import { tokenizeTitle } from "./title-match.ts";
 
 export type ConfidenceGrade = "strong" | "moderate" | "weak" | "unknown";
 
@@ -59,15 +59,37 @@ export interface RerankGateInput {
   keywordTopPage?: string;
 }
 
+/** Why the gate would call the head certain. */
+export type RerankGateReason = "exact_title_match" | "arms_agree";
+
+/** MEMRAIN_RERANK_GATE: `off` (default) or `shadow`. */
+export type RerankGateMode = "off" | "shadow";
+
 /**
- * A strong grade, read before the paid rerank: the top hit's title holds the
- * query as a phrase (`exact_title_match`) and no other hit in the window's
- * does (two such titles are exactly what the rerank separates), or the vector
- * and the keyword arm both put the top hit's page first. Stricter than the returned-hit grade,
- * whose two-arm signal only asks that both 30-deep lists contain the chunk:
- * that is too common to justify skipping the rerank on.
+ * The gate's mode. `shadow` grades the head before the rerank and records
+ * whether it would have skipped the call; the rerank still runs. Nothing
+ * skips it live: no signal here has been measured against the rerank on a
+ * corpus yet, so the grade is recorded for that comparison only.
  */
-export function rerankConfident(g: RerankGateInput): boolean {
-  if (isTitlePhraseMatch(g.query, g.topTitle) && !(g.otherTitles ?? []).some((t) => isTitlePhraseMatch(g.query, t))) return true;
-  return g.vectorTopPage !== undefined && g.vectorTopPage === g.topPage && g.keywordTopPage === g.topPage;
+export function rerankGateMode(raw: string | undefined = process.env["MEMRAIN_RERANK_GATE"]): RerankGateMode {
+  return (raw ?? "").trim().toLowerCase() === "shadow" ? "shadow" : "off";
+}
+
+const sameTokens = (a: string, b: string | null | undefined): boolean => {
+  const x = tokenizeTitle(a);
+  const y = tokenizeTitle(b ?? "");
+  return x.length > 0 && x.length === y.length && x.every((t, i) => t === y[i]);
+};
+
+/**
+ * A strong grade, read before the paid rerank, or null. The top hit's whole
+ * title is the query (a phrase inside a longer title is not identity) and no
+ * other hit in the window has that title, or the vector and the keyword arm
+ * both put the top hit's page first. Stricter than the returned-hit grade,
+ * whose two-arm signal only asks that both 30-deep lists contain the chunk.
+ */
+export function rerankConfident(g: RerankGateInput): RerankGateReason | null {
+  if (sameTokens(g.query, g.topTitle) && !(g.otherTitles ?? []).some((t) => sameTokens(g.query, t))) return "exact_title_match";
+  if (g.vectorTopPage !== undefined && g.vectorTopPage === g.topPage && g.keywordTopPage === g.topPage) return "arms_agree";
+  return null;
 }

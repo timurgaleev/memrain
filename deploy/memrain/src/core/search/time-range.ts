@@ -1,30 +1,40 @@
 /**
- * Relative time in a search query ("last month", "gestern", and the Russian
- * forms) → the calendar range it points at, and a soft scope that lifts hits
- * dated inside that range without dropping any. The Russian words are written
- * as \u escapes, which the RegExp source reads as the letters themselves.
+ * Time in a search query ("last month", "in March", "two weeks ago", "Q3 2025",
+ * "gestern", and the Russian forms) -> the calendar range it points at, and a
+ * soft scope that lifts hits dated inside that range without dropping any.
  *
- * The parser is deterministic and deliberately small: today, yesterday, this
- * or last week, month and year, in English, German and Russian (the languages
- * the brain is written in). Weeks run Monday to Sunday. "This week / month /
- * year" ends at the reference day. A query naming two different spans ("what
- * changed between last month and this week") abstains rather than guess which
- * one the caller meant. Days are calendar days, compared as YYYY-MM-DD.
+ * The English cues come from the deterministic grammar (temporal-grammar.ts):
+ * explicit dates, months, quarters, years, "N days ago", weekdays, seasons,
+ * calendar spans ("last month" is the previous calendar month) and rolling
+ * windows ("in the last month" is the last 30 days). German and Russian (the
+ * other languages the brain is written in) add today, yesterday and this or
+ * last week, month and year. The Russian words are written as \u escapes,
+ * which the RegExp source reads as the letters themselves.
+ *
+ * The parser abstains, leaving retrieval unscoped, on a question that asks for
+ * a duration ("how long…", "how many days since…") and on one that names two
+ * separate times ("what changed between last month and this week"); mentions
+ * joined by "and/or/to/through/-" ("in March and April", "between May 3 and
+ * May 9") are one range. Cues inside quotes are names, not times. Days are
+ * calendar days, compared as YYYY-MM-DD; weeks run Monday to Sunday.
  */
+import {
+  addDays,
+  asksForDuration,
+  calendarUnitRange,
+  findTimeMentions,
+  type DayRange,
+  type RelativeUnit,
+  type Rule,
+  type TimeMention,
+} from "./temporal-grammar.ts";
 
-export interface DayRange {
-  /** First day, YYYY-MM-DD, inclusive. */
-  start: string;
-  /** Last day, YYYY-MM-DD, inclusive. */
-  end: string;
-}
+export { addDays, type DayRange };
 
 export interface QueryTimeRange extends DayRange {
   /** The phrase the range came from, as written. */
   cue: string;
 }
-
-type Span = "today" | "yesterday" | "this_week" | "last_week" | "this_month" | "last_month" | "this_year" | "last_year";
 
 const L = String.raw`(?<![\p{L}\p{N}])`;
 const R = String.raw`(?![\p{L}\p{N}])`;
@@ -33,75 +43,60 @@ const LAST_DE = String.raw`(?:letzte|vorige|vergangene)[nrsm]?`;
 const THIS_DE = String.raw`(?:diese[nrsm]?|in diesem|in dieser)`;
 const LAST_RU = String.raw`(?:\u043F\u0440\u043E\u0448\u043B|\u043F\u0440\u0435\u0434\u044B\u0434\u0443\u0449)${W}`;
 const THIS_RU = String.raw`(?:\u044D\u0442\u043E\u043C|\u044D\u0442\u043E\u0442|\u044D\u0442\u0443|\u044D\u0442\u043E\u0439|\u044D\u0442\u0430|\u0442\u0435\u043A\u0443\u0449${W})`;
+const WEEK = String.raw`woche|\u043D\u0435\u0434\u0435\u043B${W}`;
+const MONTH = String.raw`monat|\u043C\u0435\u0441\u044F\u0446${W}`;
+const YEAR = String.raw`jahr|\u0433\u043E\u0434${W}`;
 
-const CUES: ReadonlyArray<{ span: Span; pattern: string }> = [
-  { span: "today", pattern: String.raw`today|heute|\u0441\u0435\u0433\u043E\u0434\u043D\u044F` },
-  { span: "yesterday", pattern: String.raw`yesterday|gestern|\u0432\u0447\u0435\u0440\u0430` },
-  { span: "this_week", pattern: String.raw`this week|${THIS_DE} woche|${THIS_RU} \u043D\u0435\u0434\u0435\u043B${W}` },
-  { span: "last_week", pattern: String.raw`last week|${LAST_DE} woche|${LAST_RU} \u043D\u0435\u0434\u0435\u043B${W}` },
-  { span: "this_month", pattern: String.raw`this month|${THIS_DE} monat|${THIS_RU} \u043C\u0435\u0441\u044F\u0446${W}` },
-  { span: "last_month", pattern: String.raw`last month|${LAST_DE} monat|${LAST_RU} \u043C\u0435\u0441\u044F\u0446${W}` },
-  { span: "this_year", pattern: String.raw`this year|${THIS_DE} jahr|${THIS_RU} \u0433\u043E\u0434${W}` },
-  { span: "last_year", pattern: String.raw`last year|${LAST_DE} jahr|${LAST_RU} \u0433\u043E\u0434${W}` },
+const word = (pattern: string): RegExp => new RegExp(`${L}(?:${pattern.replaceAll(" ", String.raw`\s+`)})${R}`, "giu");
+
+/** German and Russian cues, resolved the way their English counterparts are. */
+const LOCAL_RULES: Rule[] = [
+  { re: word(String.raw`heute|\u0441\u0435\u0433\u043E\u0434\u043D\u044F`), resolve: (_m, ref) => ({ start: ref, end: ref, kind: "relative" }) },
+  { re: word(String.raw`gestern|\u0432\u0447\u0435\u0440\u0430`), resolve: (_m, ref) => {
+    const d = addDays(ref, -1);
+    return { start: d, end: d, kind: "relative" };
+  } },
+  ...(["this", "last"] as const).flatMap(lead => ([["week", WEEK], ["month", MONTH], ["year", YEAR]] as const).map(([unit, noun]): Rule => {
+    const leadDe = lead === "this" ? THIS_DE : LAST_DE;
+    const leadRu = lead === "this" ? THIS_RU : LAST_RU;
+    const [de, ru] = noun.split("|") as [string, string];
+    return {
+      re: word(`${leadDe} ${de}|${leadRu} ${ru}`),
+      resolve: (_m, ref) => ({ ...calendarUnitRange(lead, unit as RelativeUnit, ref), kind: "relative" }),
+    };
+  })),
 ];
 
-const CUE_RES = CUES.map(({ span, pattern }) => ({
-  span,
-  re: new RegExp(`${L}(?:${pattern.replaceAll(" ", String.raw`\s+`)})${R}`, "giu"),
-}));
-
-const DAY_MS = 86_400_000;
-const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
-
-function toDay(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-function parseDay(day: string): Date {
-  return new Date(`${day}T00:00:00.000Z`);
-}
-
-export function addDays(day: string, n: number): string {
-  return toDay(new Date(parseDay(day).getTime() + n * DAY_MS));
-}
-
-function resolveSpan(span: Span, ref: string): DayRange {
-  const r = parseDay(ref);
-  const y = r.getUTCFullYear();
-  const m = r.getUTCMonth();
-  const monday = addDays(ref, -((r.getUTCDay() + 6) % 7));
-  switch (span) {
-    case "today": return { start: ref, end: ref };
-    case "yesterday": { const d = addDays(ref, -1); return { start: d, end: d }; }
-    case "this_week": return { start: monday, end: ref };
-    case "last_week": return { start: addDays(monday, -7), end: addDays(monday, -1) };
-    case "this_month": return { start: toDay(new Date(Date.UTC(y, m, 1))), end: ref };
-    case "last_month": return { start: toDay(new Date(Date.UTC(y, m - 1, 1))), end: toDay(new Date(Date.UTC(y, m, 0))) };
-    case "this_year": return { start: `${y}-01-01`, end: ref };
-    case "last_year": return { start: `${y - 1}-01-01`, end: `${y - 1}-12-31` };
-  }
+/** Two mentions joined by "and/or/to/through/-" with nothing else between them are one span. */
+function joined(text: string, a: TimeMention, b: TimeMention): boolean {
+  const between = text.slice(a.index + a.cue.length, b.index).trim().toLowerCase();
+  return /^(?:and|or|to|through|until|till|-|\u2013|\u2014|und|oder|bis|\u0438|\u0438\u043B\u0438|\u0434\u043E)$/u.test(between);
 }
 
 /**
- * The span a query's relative time words name, resolved against `referenceDay`
- * (YYYY-MM-DD), or null when it names none or names more than one.
+ * The range a query's time words name, resolved against `referenceDay`
+ * (YYYY-MM-DD), or null when it names none, asks for a duration, or names two
+ * separate times.
  */
 export function parseQueryTimeRange(query: string, referenceDay: string): QueryTimeRange | null {
-  if (!ISO_DAY.test(referenceDay)) return null;
-  let found: { span: Span; cue: string } | null = null;
-  for (const { span, re } of CUE_RES) {
-    for (const m of query.matchAll(re)) {
-      if (found && found.span !== span) return null;
-      found ??= { span, cue: m[0] };
-    }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(referenceDay)) return null;
+  const mentions = findTimeMentions(query, referenceDay, "past", LOCAL_RULES);
+  if (mentions.length === 0 || asksForDuration(query)) return null;
+  let start = mentions[0]!.start;
+  let end = mentions[0]!.end;
+  let cue = mentions[0]!.cue;
+  for (let i = 1; i < mentions.length; i++) {
+    if (!joined(query, mentions[i - 1]!, mentions[i]!)) return null;
+    start = mentions[i]!.start < start ? mentions[i]!.start : start;
+    end = mentions[i]!.end > end ? mentions[i]!.end : end;
+    cue = query.slice(mentions[0]!.index, mentions[i]!.index + mentions[i]!.cue.length);
   }
-  if (!found) return null;
-  return { ...resolveSpan(found.span, referenceDay), cue: found.cue };
+  return { start, end, cue };
 }
 
 /** Whether a content day falls in the range, widened by `slackDays` on each side. */
 export function dayInRange(day: string | null | undefined, range: DayRange, slackDays = 2): boolean {
-  if (!day || !ISO_DAY.test(day)) return false;
+  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
   return day >= addDays(range.start, -slackDays) && day <= addDays(range.end, slackDays);
 }
 

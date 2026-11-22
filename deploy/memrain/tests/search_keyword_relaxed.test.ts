@@ -27,6 +27,13 @@ const EXTRA = [
     chunks: Array.from({ length: RARE_LEXEME_CHUNK_CAP + 1 }, (_, i) => `blorp entry ${i}`),
   },
   {
+    id: "wombats",
+    path: "notes/wombats",
+    title: "Wombats",
+    chunks: Array.from({ length: 25 }, (_, i) => `wombat census entry ${i}`),
+  },
+  { id: "wombat_only", path: "notes/wombat-only", title: "Burrows", chunks: ["wombat burrows"] },
+  {
     id: "excluded_fixture",
     path: "test/zorblat-fixture",
     title: "Fixture",
@@ -95,6 +102,24 @@ describe("keywordSearchRelaxed", () => {
     expect(ids.slice(1).sort()).toEqual([...rank].sort());
   });
 
+  // Value: protects=a failed rarity count costs ordering, not results;
+  // fails_when=the count's error makes the whole relaxed search throw.
+  it("falls back to the plain OR when the rarity count fails", async () => {
+    const real = fx.storage.engine();
+    const engine = new Proxy(real, {
+      get(target, prop, recv) {
+        const v = Reflect.get(target, prop, recv);
+        if (prop !== "query" || typeof v !== "function") return v;
+        return (sql: string, params?: unknown[]) => {
+          if (sql.includes("FROM unnest($1::text[]) AS u(lex)")) return Promise.reject(new Error("count timed out"));
+          return (v as (s: string, p?: unknown[]) => unknown).call(target, sql, params);
+        };
+      },
+    }) as typeof real;
+    const ids = (await keywordSearchRelaxed(engine, "acme zorblat", 20)).map((r) => r.id);
+    expect(ids.sort()).toEqual((await keywordSearchRelaxed(real, "acme zorblat", 20)).map((r) => r.id).sort());
+  });
+
   // Value: protects=an any-word search still returns pages holding only a common word;
   // fails_when=the OR is narrowed to the rare words.
   it("keeps chunks holding only a common word, after the rare ones", async () => {
@@ -126,5 +151,13 @@ describe("any-word fill in hybridSearch", () => {
     // The zephyr page already holds its slots; the rollout calendar fills the next one.
     expect(filled.hits.slice(2).map((h) => h.chunkId)).toEqual(["rollout_cal_c0"]);
     expect(filled.hits[2]!.score).toBeLessThan(filled.hits[1]!.score);
+  });
+
+  // Value: protects=partial-word pages never take slots while more all-word rows exist;
+  // fails_when=the fill runs after a strict pass that filled its fanout and was cut by the page cap.
+  it("does not fill when the strict pass filled its fanout", async () => {
+    const { hits } = await runSearch(fx.storage, "wombat census", { embedQuery: failingEmbed, k: 3 });
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((h) => h.documentId === "wombats")).toBe(true);
   });
 });

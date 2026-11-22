@@ -27,8 +27,8 @@ import { getTitleBoost, isTitlePhraseMatch } from "../title-match.ts";
 import { isCanonicalQuery } from "../recency-gate.ts";
 import { dedupByDocument, dedupByTextSimilarity, enforceTypeDiversity, getMaxTypeRatio, getNearDupThreshold } from "../dedup.ts";
 import { rerank } from "../two-pass.ts";
-import { hitPageKey, pinRelationalRows } from "../relational-pin.ts";
-import { rerankConfident } from "../confidence-grade.ts";
+import { hitPageKey, pinRelationalRows, relationalPinMax } from "../relational-pin.ts";
+import { rerankConfident, rerankGateMode } from "../confidence-grade.ts";
 import { promoteExactLookup } from "../exact-lookup.ts";
 import { feedbackRankStage } from "../feedback-boost.ts";
 import { mergeExplain, recordStageFactor, snapshotScores, type SearchExplain } from "../explain.ts";
@@ -387,9 +387,10 @@ const typeDiversity: RankStage = {
 //    return size (MEMRAIN_RERANK_WINDOW, default 30, clamped to at least k and
 //    to the candidates available) so a hit fused below the cutoff can still be
 //    promoted; the un-reranked tail keeps its fused order behind the window.
-//    No call when the head is already certain (rerankConfident), and the
-//    relational arm's pages go back to the head of the window afterwards
-//    (relational-pin.ts).
+//    The relational arm's pages go back to the head of the window afterwards
+//    (relational-pin.ts). With MEMRAIN_RERANK_GATE=shadow the head is graded
+//    first (rerankConfident) and the outcome says whether the call would have
+//    been skipped; it always runs.
 export async function rerankWindow(
   hits: Hit[],
   ctx: StageContext,
@@ -398,20 +399,25 @@ export async function rerankWindow(
   const gate = ctx.rerankGate;
   const top = hits[0];
   const size = Math.min(hits.length, Math.max(ctx.k, resolveRerankWindow()));
-  if (gate && top && rerankConfident({
-    query: ctx.query,
-    topTitle: top.payload?.title,
-    otherTitles: hits.slice(1, size).map((h) => h.payload?.title),
-    topPage: hitPageKey(top),
-    vectorTopPage: gate.vectorTopPage,
-    keywordTopPage: gate.keywordTopPage,
-  })) {
-    ctx.onRerank?.({ outcome: "skipped_confident", pinned: 0 });
-    return hits;
-  }
+  const graded = gate && top && rerankGateMode() === "shadow"
+    ? {
+        reason: rerankConfident({
+          query: ctx.query,
+          topTitle: top.payload?.title,
+          otherTitles: hits.slice(1, size).map((h) => h.payload?.title),
+          topPage: hitPageKey(top),
+          vectorTopPage: gate.vectorTopPage,
+          keywordTopPage: gate.keywordTopPage,
+        }),
+      }
+    : null;
   const window = hits.slice(0, size);
-  const pin = pinRelationalRows(await rerankFn(ctx.query, window), window, gate?.relationalPages ?? new Set());
-  ctx.onRerank?.({ outcome: "ran", pinned: pin.pinned });
+  const pin = pinRelationalRows(await rerankFn(ctx.query, window), window, gate?.relationalPages ?? new Set(), relationalPinMax());
+  ctx.onRerank?.({
+    outcome: "ran",
+    pinned: pin.pinned,
+    ...(graded ? { would_skip: graded.reason !== null, ...(graded.reason ? { gate_reason: graded.reason } : {}) } : {}),
+  });
   const reranked = [...pin.hits, ...hits.slice(size)];
   if (ctx.explainAcc) {
     const preRerankOrder = new Map(hits.map((h, i) => [h.chunkId, i] as const));

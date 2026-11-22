@@ -48,7 +48,9 @@ import { getTitleBoost } from "./title-match.ts";
 import { getNearDupThreshold, getMaxTypeRatio } from "./dedup.ts";
 import { getGraphSignalsFloorRatio } from "./graph-signals.ts";
 import { aliasHopEnabled } from "./alias-hop.ts";
-import { aliasFanoutEnabled } from "./alias-fanout.ts";
+import { aliasFanoutEnabled, aliasFanoutMax, DEFAULT_ALIAS_FANOUT_MAX } from "./alias-fanout.ts";
+import { relationalPinMax, RELATIONAL_PIN_MAX } from "./relational-pin.ts";
+import { collapseEnabled } from "./collapse.ts";
 import { entityAnchorEnabled } from "./entity-anchor.ts";
 import { relationalChainEnabled } from "./relational-plan.ts";
 import { resolveSearchMode } from "./mode.ts";
@@ -122,9 +124,13 @@ export function resolveSemanticCacheConfig(
  * pages the query NAMES and so changes which candidates exist at all; `9` = the
  * per-page cap (a page's mirror, truth mirror and file twin share one) and the
  * keyword-only any-word fill; `10` = the alias fan-out lists, the confident
- * rerank skip and the relational pin after the rerank.
+ * rerank skip and the relational pin after the rerank; `11` = fan-out by the
+ * entity's names with a required-phrase query, the rerank always running (its
+ * gate shadow-only), the relational pin as a head block, the time grammar
+ * (rolling windows, dates, months), redirect and twin folding, and chain hops
+ * read by page type and weighted by hub degree.
  */
-const RANKING_VERSION = "10";
+const RANKING_VERSION = "11";
 
 /**
  * Signature of the ranking inputs that are NOT function arguments, so a change
@@ -163,6 +169,16 @@ const RANKING_VERSION = "10";
  * ranking and is accepted by design (the cache is gated on the document
  * generation clock, so any document write refreshes it).
  */
+function pinSig(): string {
+  const n = relationalPinMax();
+  return n === RELATIONAL_PIN_MAX ? "" : `:rp=${n}`;
+}
+
+function fanoutMaxSig(): string {
+  const n = aliasFanoutMax();
+  return n === DEFAULT_ALIAS_FANOUT_MAX ? "" : `:afm=${n}`;
+}
+
 export function rankingSignature(): string {
   const env = process.env;
   const recency = env["MEMRAIN_RECENCY_DECAY"] ?? "";
@@ -178,7 +194,7 @@ export function rankingSignature(): string {
     `mt=${getMaxTypeRatio()}`,
     `rw=${env["MEMRAIN_RERANK_WINDOW"] ?? ""}`,
   ].join(":");
-  return `${RANKING_VERSION}:tb=${getTitleBoost()}:rd=${recency}:nd=${getNearDupThreshold()}:gsf=${getGraphSignalsFloorRatio()}:ah=${aliasHopEnabled() ? 1 : 0}:af=${aliasFanoutEnabled() ? 1 : 0}:${knobs}${rankFlagsSignature()}${entityAnchorEnabled() ? ":ea=1" : ""}${relationalChainEnabled() ? "" : ":rc=0"}`;
+  return `${RANKING_VERSION}:tb=${getTitleBoost()}:rd=${recency}:nd=${getNearDupThreshold()}:gsf=${getGraphSignalsFloorRatio()}:ah=${aliasHopEnabled() ? 1 : 0}:af=${aliasFanoutEnabled() ? 1 : 0}:${knobs}${rankFlagsSignature()}${entityAnchorEnabled() ? ":ea=1" : ""}${relationalChainEnabled() ? "" : ":rc=0"}${pinSig()}${fanoutMaxSig()}${collapseEnabled() ? "" : ":co=0"}`;
 }
 
 /**

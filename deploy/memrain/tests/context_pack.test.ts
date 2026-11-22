@@ -396,6 +396,8 @@ for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) descri
     await putPage(db.storage, { slug: "projects/acme", type: "note", title: "Acme", markdown_body: "a" });
     await putPage(db.storage, { slug: "me/log", type: "note", title: "Log", markdown_body:
       "Works on Memrain.\n\n## Timeline\n- 2026-11-01 \u2014 SHIPPED_ROW\n### 2026-11-02 \u2014 HEADER_ROW\n\n## Notes\nKeep it short.\n```\n## Timeline\n```" });
+    await putPage(db.storage, { slug: "me/plan", type: "note", title: "Plan", markdown_body:
+      "Roadmap.\n\n## Timeline\nQ1: ship the importer\nQ2: open the beta\n\n## Notes\nn" });
   });
   afterAll(async () => {
     await db.close();
@@ -429,6 +431,14 @@ for (const spec of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) descri
     const p = await pack({ tokenBudget: 8000 });
     expect(p.core!.pages).toEqual([{ slug: "me/log", title: "Log", text: "Works on Memrain.\n\n## Notes\nKeep it short.\n```\n## Timeline\n```" }]);
     expect(p.core!.truncated).toBe(false);
+  });
+
+  // Value: protects=a prose Timeline section stays in the always-loaded block;
+  // fails_when=every section titled Timeline is stripped whatever it holds.
+  it("keeps a Timeline section of prose milestones", async () => {
+    process.env["MEMRAIN_CONTEXT_CORE_SLUGS"] = "me/plan";
+    const p = await pack({ tokenBudget: 8000 });
+    expect(p.core!.pages[0]!.text).toContain("Q1: ship the importer");
   });
 
   it("leaves no trace of deleted, out-of-scope, fenced, quarantined or redacted core pages", async () => {

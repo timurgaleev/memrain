@@ -19,6 +19,22 @@
  * NEIGHBOR_CAP edges, and at most PATHS_PER_NODE paths are kept per node, so
  * the work per hop is bounded whatever a hub's degree.
  *
+ * Orientation: an edge is read by the relation's page-type signature, not only
+ * by its stored direction. Edges an explicit writer stored (frontmatter, a
+ * manual `link` call) keep their direction and count only when it fits the
+ * signature. Body-derived edges ("founded by [[alice]]" on a company page is
+ * stored company -> person) are read forward when the stored direction fits,
+ * flipped when only the reverse fits, and walked at UNCERTAIN_EDGE_WEIGHT when
+ * both fit; an edge that fits neither is no hop. A page with no chain type
+ * (untyped, or typed outside the signatures) fits either side, since many
+ * brains type loosely: such an edge keeps its stored direction at full weight.
+ *
+ * Scoring: a path's weight is the product of the hub weight of every node it
+ * passes through (half at CHAIN_HUB_HALF_DEGREE caller-visible chain neighbours)
+ * and of UNCERTAIN_EDGE_WEIGHT for each uncertain edge; a node scores the sum
+ * of its paths' weights. A hub with many founders or investors then no longer
+ * outranks a specific answer, nor pushes it out of the frontier.
+ *
  * Visibility: every hop reads only links stored in the caller's sources, with
  * both ends live (`liveEdgeSql`), and lands only on nodes `chainNodeFenceSql`
  * admits: a node with a page row must be readable by the caller (source, soft
@@ -36,13 +52,26 @@ import { andSourceScope } from "../source-scope.ts";
 import { eligiblePageSql } from "../bounded-read.ts";
 import { assertSqlAlias } from "../quarantine.ts";
 import { pageRankSql, trustRank, type TrustTier } from "../trust-tier.ts";
-import { LINK_SIGNATURES, type ChainHop, type RelationalPlan } from "./relational-plan.ts";
+import { CHAIN_LINK_TYPES, LINK_SIGNATURES, signatureOf, type ChainHop, type RelationalPlan } from "./relational-plan.ts";
 
 export const FRONTIER_CAP = 50;
 export const NEIGHBOR_CAP = 100;
 export const PATHS_PER_NODE = 10;
 /** Link rows read per frontier node before (from, to) duplicates collapse. */
 const RAW_PER_NODE = NEIGHBOR_CAP * 2 + 1;
+/** Degree at which a path's weight through an intermediate node halves. */
+export const CHAIN_HUB_HALF_DEGREE = 32;
+/** Weight of an edge whose direction the page types cannot settle. */
+export const UNCERTAIN_EDGE_WEIGHT = 0.5;
+/** Neighbours counted per node for its hub weight; past this the weight barely moves. */
+const DEGREE_SATURATION = 1000;
+
+/** `1 / (1 + ((max(n, 1) - 1) / h)^2)`: 1 for a leaf, 0.5 at degree h + 1. */
+export function hubWeight(degree: number, h: number = CHAIN_HUB_HALF_DEGREE): number {
+  if (!(h > 0) || !Number.isFinite(degree)) return 1;
+  const x = (Math.max(degree, 1) - 1) / h;
+  return 1 / (1 + x * x);
+}
 
 export interface ChainScope {
   /** Tenant scope. `undefined` => unscoped; `[]` => nothing. */
@@ -55,7 +84,7 @@ export interface ChainScope {
 
 export interface ChainAnswer {
   slug: string;
-  /** Number of retained paths that end here. */
+  /** Summed weight of the retained paths that end here. */
   score: number;
   /** Best path, anchor first, answer last. */
   path: string[];
@@ -76,6 +105,7 @@ interface PathRec {
   slugs: string[];
   relation: string;
   key: string;
+  weight: number;
 }
 
 const encoder = new TextEncoder();
@@ -113,69 +143,146 @@ function aggregate(paths: PathRec[]): Array<{ slug: string; score: number; paths
       agg = { slug, score: 0, paths: [] };
       byNode.set(slug, agg);
     }
-    agg.score += 1;
     agg.paths.push(p);
   }
-  for (const agg of byNode.values()) agg.paths.sort((a, b) => byteCompare(a.key, b.key));
+  for (const agg of byNode.values()) {
+    // Summed in key order, so the float total is the same whatever order the rows came in.
+    agg.paths.sort((a, b) => byteCompare(a.key, b.key));
+    agg.score = agg.paths.reduce((sum, p) => sum + p.weight, 0);
+    agg.paths.sort((a, b) => b.weight - a.weight || byteCompare(a.key, b.key));
+  }
   return [...byNode.values()].sort((a, b) => b.score - a.score || byteCompare(a.slug, b.slug));
 }
 
-interface HopEdge { from_slug: string; to_slug: string; capped: boolean }
+type Orientation = "canonical" | "stored" | "flipped" | "uncertain";
+
+interface HopEdge { from_slug: string; to_slug: string; orientation: Orientation; capped: boolean }
 
 const SIGNATURE_TYPES: ReadonlySet<string> = new Set(
   Object.values(LINK_SIGNATURES).flatMap(s => [...s.subject, ...s.object]),
 );
 
+/**
+ * The orientation of a link row by its endpoints' page types (module header),
+ * as SQL over `fp`/`tp` (the pages at the stored source and target) and the
+ * signature arrays bound at `subj`/`obj`/`sig`. NULL: the edge is no hop.
+ */
+function orientationSql(alias: string, subj: string, obj: string, sig: string): string {
+  const known = (t: string) => `COALESCE(${t}.type = ANY(${sig}::text[]), false)`;
+  const fits = (t: string, side: string) => `(NOT ${known(t)} OR ${t}.type = ANY(${side}::text[]))`;
+  const fwd = `(${fits("fp", subj)} AND ${fits("tp", obj)})`;
+  const rev = `(${fits("tp", subj)} AND ${fits("fp", obj)})`;
+  return `CASE
+      WHEN ${alias}.link_source IN ('frontmatter', 'manual') THEN CASE WHEN ${fwd} THEN 'canonical' END
+      WHEN ${fwd} AND ${rev} THEN CASE WHEN ${known("fp")} AND ${known("tp")} THEN 'uncertain' ELSE 'stored' END
+      WHEN ${fwd} THEN 'stored'
+      WHEN ${rev} THEN 'flipped'
+    END`;
+}
+
 async function hopEdges(storage: Storage, frontier: string[], hop: ChainHop, scope: ChainScope): Promise<HopEdge[]> {
-  const fromCol = hop.toward === "object" ? "l.source_slug" : "l.target_slug";
-  const toCol = hop.toward === "object" ? "l.target_slug" : "l.source_slug";
-  const params: unknown[] = [frontier, hop.linkType];
-  const sourceScope = andSourceScope("l.source_id", scope.sourceIds, params);
-  const validity = linkValiditySql("l", { status: hop.status ?? "all" }, params);
-  const diary = linkDiarySql("l", scope.remote, params);
-  const fence = chainNodeFenceSql(toCol, scope, params);
+  const sig = signatureOf(hop.linkType) ?? { subject: [], object: [] };
+  const params: unknown[] = [frontier, hop.linkType, [...sig.subject], [...sig.object], [...SIGNATURE_TYPES]];
+  // One branch per stored direction the frontier node can sit on; each reads
+  // the edge's semantic subject and object after orientation.
+  const branch = (frontierCol: "source_slug" | "target_slug"): string => {
+    const a = frontierCol === "source_slug" ? "lo" : "li";
+    const sourceScope = andSourceScope(`${a}.source_id`, scope.sourceIds, params);
+    const validity = linkValiditySql(a, { status: hop.status ?? "active" }, params);
+    const diary = linkDiarySql(a, scope.remote, params);
+    return `SELECT ${a}.id, ${a}.written_at, ${a}.source_slug, ${a}.target_slug,
+             ${orientationSql(a, "$3", "$4", "$5")} AS orientation
+        FROM links ${a}
+        LEFT JOIN pages fp ON fp.slug = ${a}.source_slug
+        LEFT JOIN pages tp ON tp.slug = ${a}.target_slug
+       WHERE ${a}.${frontierCol} = f.from_slug AND ${a}.type = $2 AND ${a}.source_slug <> ${a}.target_slug${sourceScope}${validity}${diary}
+         AND ${liveEdgeSql(a)}`;
+  };
+  const outBranch = branch("source_slug");
+  const inBranch = branch("target_slug");
+  // Walking toward the object leaves from the subject, and the reverse.
+  const [fromSide, toSide] = hop.toward === "object" ? ["subj", "obj"] : ["obj", "subj"];
+  const fence = chainNodeFenceSql(`o.${toSide}`, scope, params);
   // A head noun ("which companies") drops landing pages typed as another chain
   // type before the per-node cap, so wrong-typed neighbours never use it up;
   // untyped or otherwise typed pages stay, since many brains type loosely.
   const otherTypes = hop.nodeType ? [...SIGNATURE_TYPES].filter(t => t !== hop.nodeType) : [];
   const typeFilter = otherTypes.length > 0
-    ? ` AND NOT EXISTS (SELECT 1 FROM pages xp WHERE xp.slug = ${toCol} AND xp.type = ANY($${params.push(otherTypes)}::text[])${andSourceScope("xp.source_id", scope.sourceIds, params)})`
+    ? ` AND NOT EXISTS (SELECT 1 FROM pages xp WHERE xp.slug = o.${toSide} AND xp.type = ANY($${params.push(otherTypes)}::text[])${andSourceScope("xp.source_id", scope.sourceIds, params)})`
     : "";
   // Each frontier node reads at most RAW_PER_NODE link rows, newest first, so a
   // hub costs the same as any other node. Twice the cap leaves room for the
-  // odd duplicate (from, to) row; duplicates collapse below, newest kept.
+  // odd duplicate (from, to) row; duplicates collapse below, the best
+  // orientation kept.
   params.push(RAW_PER_NODE);
   const rawParam = `$${params.length}`;
-  const r = await storage.engine().query<{ from_slug: string; to_slug: string }>(
-    `SELECT f.from_slug, e.to_slug
+  const r = await storage.engine().query<{ from_slug: string; to_slug: string; orientation: Orientation }>(
+    `SELECT f.from_slug, e.to_slug, e.orientation
        FROM unnest($1::text[]) AS f(from_slug)
        CROSS JOIN LATERAL (
-         SELECT ${toCol} AS to_slug, l.written_at, l.id
-           FROM links l
-          WHERE ${fromCol} = f.from_slug AND l.type = $2 AND ${toCol} <> f.from_slug${sourceScope}${validity}${diary}${typeFilter}
-            AND ${liveEdgeSql("l")}
+         SELECT o.${toSide} AS to_slug, o.orientation, o.written_at, o.id
+           FROM (
+             SELECT c.id, c.written_at, c.orientation,
+                    CASE WHEN c.orientation = 'flipped' THEN c.target_slug ELSE c.source_slug END AS subj,
+                    CASE WHEN c.orientation = 'flipped' THEN c.source_slug ELSE c.target_slug END AS obj
+               FROM (${outBranch} UNION ALL ${inBranch}) c
+              WHERE c.orientation IS NOT NULL
+           ) o
+          WHERE o.${fromSide} = f.from_slug AND o.${toSide} <> f.from_slug${typeFilter}
             AND ${fence}
-          ORDER BY l.written_at DESC, ${toCol} COLLATE "C" ASC, l.id DESC
+          ORDER BY o.written_at DESC, o.${toSide} COLLATE "C" ASC, o.id DESC
           LIMIT ${rawParam}
        ) e
       ORDER BY f.from_slug COLLATE "C" ASC, e.written_at DESC, e.to_slug COLLATE "C" ASC, e.id DESC`,
     params,
   );
-  const seen = new Map<string, { tos: Set<string>; rows: number }>();
-  const out: Array<{ from_slug: string; to_slug: string }> = [];
+  const rank: Record<Orientation, number> = { canonical: 0, stored: 1, flipped: 2, uncertain: 3 };
+  const seen = new Map<string, { tos: Map<string, { from_slug: string; to_slug: string; orientation: Orientation }>; rows: number }>();
   for (const row of r.rows) {
-    const s = seen.get(row.from_slug) ?? { tos: new Set<string>(), rows: 0 };
+    const s = seen.get(row.from_slug) ?? { tos: new Map<string, { from_slug: string; to_slug: string; orientation: Orientation }>(), rows: 0 };
     seen.set(row.from_slug, s);
     s.rows += 1;
-    if (s.tos.has(row.to_slug)) continue;
-    s.tos.add(row.to_slug);
-    if (s.tos.size <= NEIGHBOR_CAP) out.push(row);
+    const prev = s.tos.get(row.to_slug);
+    if (prev) {
+      // Two rows for one logical edge: the better-established direction stands.
+      if (rank[row.orientation] < rank[prev.orientation]) s.tos.set(row.to_slug, { ...prev, orientation: row.orientation });
+      continue;
+    }
+    s.tos.set(row.to_slug, row);
   }
-  const capped = (from: string) => {
-    const s = seen.get(from)!;
-    return s.tos.size > NEIGHBOR_CAP || s.rows >= RAW_PER_NODE;
-  };
-  return out.map(row => ({ from_slug: row.from_slug, to_slug: row.to_slug, capped: capped(row.from_slug) }));
+  const out: HopEdge[] = [];
+  for (const [from, s] of seen) {
+    const capped = s.tos.size > NEIGHBOR_CAP || s.rows >= RAW_PER_NODE;
+    for (const row of [...s.tos.values()].slice(0, NEIGHBOR_CAP)) out.push({ from_slug: from, to_slug: row.to_slug, orientation: row.orientation, capped });
+  }
+  return out;
+}
+
+/**
+ * Caller-visible chain neighbours of each node (distinct pages over every
+ * chain relation, live and readable), counted up to DEGREE_SATURATION, for
+ * the hub weight of a node a path passes through.
+ */
+async function chainDegrees(storage: Storage, nodes: string[], scope: ChainScope): Promise<Map<string, number>> {
+  if (nodes.length === 0) return new Map();
+  const params: unknown[] = [nodes, CHAIN_LINK_TYPES, DEGREE_SATURATION];
+  const sourceScope = andSourceScope("l.source_id", scope.sourceIds, params);
+  const diary = linkDiarySql("l", scope.remote, params);
+  const fence = chainNodeFenceSql("nb.slug", scope, params);
+  const r = await storage.engine().query<{ slug: string; n: number | string }>(
+    `SELECT f.slug, (SELECT count(*)::int FROM (
+         SELECT DISTINCT nb.slug FROM (
+           SELECT CASE WHEN l.source_slug = f.slug THEN l.target_slug ELSE l.source_slug END AS slug
+             FROM links l
+            WHERE (l.source_slug = f.slug OR l.target_slug = f.slug) AND l.source_slug <> l.target_slug
+              AND l.type = ANY($2::text[])${sourceScope}${diary} AND ${liveEdgeSql("l")}
+         ) nb
+         WHERE ${fence}
+         LIMIT $3::int) x) AS n
+       FROM unnest($1::text[]) AS f(slug)`,
+    params,
+  );
+  return new Map(r.rows.map(row => [row.slug, Number(row.n)]));
 }
 
 /** True when the anchor page itself passes the node fence (a fenced anchor walks nowhere). */
@@ -201,7 +308,7 @@ export async function runRelationalChain(
   const perHop: ChainResult["perHop"] = [];
   if (!(await anchorAdmitted(storage, anchorSlug, scope))) return { answers: [], status: "anchor_fenced", perHop };
   let truncated = false;
-  let paths: PathRec[] = [{ slugs: [anchorSlug], relation: "", key: anchorSlug }];
+  let paths: PathRec[] = [{ slugs: [anchorSlug], relation: "", key: anchorSlug, weight: 1 }];
 
   for (let i = 0; i < plan.hops.length; i++) {
     const hop = plan.hops[i]!;
@@ -215,7 +322,12 @@ export async function runRelationalChain(
       if (n.paths.length > PATHS_PER_NODE) truncated = true;
       paths.push(...n.paths.slice(0, PATHS_PER_NODE));
     }
-    const edges = await hopEdges(storage, nodes.map(n => n.slug), hop, scope);
+    const frontier = nodes.map(n => n.slug);
+    const [edges, degrees] = await Promise.all([
+      hopEdges(storage, frontier, hop, scope),
+      // The anchor is not an intermediate: only later frontiers are dampened.
+      i > 0 ? chainDegrees(storage, frontier, scope) : Promise.resolve(new Map<string, number>()),
+    ]);
     const byFrom = new Map<string, HopEdge[]>();
     for (const e of edges) {
       if (e.capped) truncated = true;
@@ -227,9 +339,11 @@ export async function runRelationalChain(
     const next: PathRec[] = [];
     for (const p of paths) {
       const tail = p.slugs[p.slugs.length - 1]!;
+      const hub = i > 0 ? hubWeight(degrees.get(tail) ?? 1) : 1;
       for (const e of byFrom.get(tail) ?? []) {
         if (!last && p.slugs.includes(e.to_slug)) continue;
-        next.push({ slugs: [...p.slugs, e.to_slug], relation: hop.linkType, key: `${p.key}\u0001${e.to_slug}` });
+        const weight = p.weight * hub * (e.orientation === "uncertain" ? UNCERTAIN_EDGE_WEIGHT : 1);
+        next.push({ slugs: [...p.slugs, e.to_slug], relation: hop.linkType, key: `${p.key}\u0001${e.to_slug}`, weight });
       }
     }
     perHop.push({ linkType: hop.linkType, toward: hop.toward, frontier: nodes.length, edges: next.length });

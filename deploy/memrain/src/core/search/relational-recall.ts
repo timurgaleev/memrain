@@ -96,6 +96,8 @@ export interface RelationalRecallMeta {
   errored: boolean;
   /** Planned multi-hop questions only: how the walk ended. */
   chain_status?: ChainStatus;
+  /** A multi-relation question the planner refused, and why; the arm stays empty. */
+  unsupported?: string;
 }
 
 // Bounded lazy seed capture: 1–80 chars, so the trailing anchor — not
@@ -516,8 +518,16 @@ export async function relationalRecall(
     },
   };
   // A planned multi-relation question runs as a chain and never falls back to
-  // a one-hop guess; anything the planner refuses stays on the regex parser.
+  // a one-hop guess. One the planner refuses (negation, a time window, a
+  // comparative, more than three hops, a chain whose types disagree) gets no
+  // answer at all: a one-hop reading would drop the constraint it refused.
+  // Only a question with fewer than two relations goes to the regex parser.
   const planned = relationalChainEnabled() ? parseRelationalPlan(query) : null;
+  if (planned?.kind === "unsupported") {
+    meta.kind = "chain";
+    meta.unsupported = planned.reason;
+    return finish([]);
+  }
   const parsed = planned?.kind === "plan" ? null : parseRelationalQuery(query);
   if (planned?.kind !== "plan" && !parsed) return finish([]);
   meta.kind = planned?.kind === "plan" ? "chain" : parsed!.kind;
