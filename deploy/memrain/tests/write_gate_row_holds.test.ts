@@ -33,6 +33,8 @@ import { dispatchTool, type DispatchOptions } from "../src/mcp/dispatch.ts";
 import { resolveRowGateMode } from "../src/core/write-gate-rows.ts";
 import { dropRowHold, holdFingerprint, listRowHolds, releaseRowHold } from "../src/core/write-gate-row-holds.ts";
 import type { Storage } from "../src/core/storage.ts";
+import { addMember } from "../src/core/members.ts";
+import { setOwner } from "../src/core/brain-owner.ts";
 
 setDefaultTimeout(120_000);
 
@@ -130,15 +132,16 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     });
   });
 
-  it("stores a fact in the owner's own connected mailbox, flagged and never held", async () => {
+  it("holds a fact drawn from the owner's own connected mailbox too: outsiders write most of what lands there", async () => {
     await withDb(async (s) => {
       await registerSource(s.engine(), { id: "me-mail", kind: "mailbox", pathPrefix: "/me-mail" });
       await s.engine().query(
         `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES ('00000000-0000-4000-8000-0000000000a1', 'me-mail', 'test', 'admin:operator', 'owner@example.test')`);
+      await addMember(s.engine(), "ora", {}, { actor: "ops", via: "cli" });
+      await setOwner(s.engine(), "ora");
       const r = await addFact(s, { entity_slug: "people/bob", fact: HOSTILE, source_id: "me-mail" });
-      expect(r.held).toBeUndefined();
-      expect(r.inserted).toBe(true);
-      expect(await listRowHolds(s.engine(), { status: "all" })).toEqual([]);
+      expect(r.held?.status).toBe("held");
+      expect((await listRowHolds(s.engine()))[0]).toMatchObject({ origin: "external", source_id: "me-mail" });
     });
   });
 

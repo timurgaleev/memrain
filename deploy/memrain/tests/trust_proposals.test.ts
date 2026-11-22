@@ -7,6 +7,9 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { addFact } from "../src/core/facts.ts";
 import { replaceFact } from "../src/core/facts-replace.ts";
+import { forgetInTx } from "../src/core/facts-recall.ts";
+import { registerSource } from "../src/core/sources.ts";
+import { setSourceOwnerOnly } from "../src/core/owner-only.ts";
 import { getOntology, mergeOntologyFact } from "../src/core/ontology-facts.ts";
 import { deriveSlotEnds, type SlotRow } from "../src/core/fact-slots.ts";
 import { decideTrustProposal, listTrustProposals } from "../src/core/trust-proposals.ts";
@@ -153,6 +156,39 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect((await listTrustProposals(db.storage.engine(), { status: "pending" })).filter(x => x.target_id === owned.id)).toHaveLength(0);
   });
 
+  it("an agent forgetting its own copy of a claim the owner also wrote files a proposal on the owner's copy and withdraws nothing", async () => {
+    const auth = { token: "t", clientId: "bot", scopes: ["read", "write"], isPublic: false };
+    const owned = await addFact(db.storage, { entity_slug: "people/kai", fact: "Kai lives in Oslo", written_by_principal: "operator", visibility: "world" });
+    const mine = await addFact(db.storage, { entity_slug: "people/kai", fact: "kai lives  in Oslo", written_by_principal: "client:bot", visibility: "world", source_slug: "notes/kai-bot" });
+    expect(mine.id).not.toBe(owned.id);
+    const r = await dispatchTool(db.storage, { name: "forget_fact", arguments: { id: mine.id } }, { authInfo: auth as never });
+    expect(r.isError).toBe(true);
+    const message = JSON.parse(r.content[0]!.text).message as string;
+    expect(message).toContain("would also withdraw a more trusted copy");
+    // The copy may be one the caller cannot read: its id never reaches the caller.
+    expect(message).not.toContain(`fact ${owned.id} `);
+    expect((await fact(owned.id!)).forgotten_at).toBeNull();
+    expect((await fact(mine.id!)).forgotten_at).toBeNull();
+    const withdrawn = await db.storage.engine().query(`SELECT 1 FROM fact_withdrawals WHERE entity_slug = 'people/kai'`);
+    expect(withdrawn.rows).toHaveLength(0);
+    const [p] = (await listTrustProposals(db.storage.engine(), { status: "pending" })).filter(x => x.entity_slug === "people/kai");
+    expect(p).toMatchObject({ action: "forget", target_id: owned.id, old_tier: "owner", new_tier: "agent" });
+    // The owner re-adding the claim is not blocked.
+    const again = await addFact(db.storage, { entity_slug: "people/kai", fact: "Kai lives in Oslo", written_by_principal: "operator", visibility: "world" });
+    expect(again.id).not.toBeNull();
+  });
+
+  it("a remote forget that meets a more trusted copy under the withdraw lock rolls back whole", async () => {
+    // As if the owner's copy committed after the caller's check: forgetInTx itself refuses.
+    const owned = await addFact(db.storage, { entity_slug: "people/lea", fact: "Lea plays cello", written_by_principal: "operator", visibility: "world" });
+    const mine = await addFact(db.storage, { entity_slug: "people/lea", fact: "lea plays cello", written_by_principal: "client:bot", visibility: "world" });
+    await expect(db.storage.engine().transaction((tx) => forgetInTx(tx, mine.id!, { reason: null, cause: "forget", writerTier: "agent" })))
+      .rejects.toThrow(/more trusted copy/);
+    expect((await fact(mine.id!)).forgotten_at).toBeNull();
+    expect((await fact(owned.id!)).forgotten_at).toBeNull();
+    expect((await db.storage.engine().query(`SELECT 1 FROM fact_withdrawals WHERE entity_slug = 'people/lea'`)).rows).toHaveLength(0);
+  });
+
   it("an agent forgets its own fact at once, and rejecting a forget proposal keeps the fact", async () => {
     const auth = { token: "t", clientId: "bot", scopes: ["read", "write"], isPublic: false };
     const mine = await addFact(db.storage, { entity_slug: "people/jo", fact: "Jo likes jazz", written_by_principal: "client:bot", visibility: "world" });
@@ -163,6 +199,22 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const [p] = (await listTrustProposals(db.storage.engine(), { status: "pending" })).filter(x => x.target_id === owned.id);
     expect((await decideTrustProposal(db.storage.engine(), p!.id, "reject", "admin")).status).toBe("rejected");
     expect((await fact(owned.id!)).forgotten_at).toBeNull();
+  });
+
+  // Last: it marks a source owner-only, which closes lineage for the rest of this database.
+  it("a more trusted copy the caller cannot read is neither named nor retired by its forget", async () => {
+    const e = db.storage.engine();
+    await registerSource(e, { id: "own-mail", kind: "mailbox", pathPrefix: "/own-mail" });
+    await setSourceOwnerOnly(e, "own-mail", true);
+    const hidden = await addFact(db.storage, { entity_slug: "people/max", fact: "Max moved to Riga", written_by_principal: "operator", visibility: "world" });
+    await e.query(`INSERT INTO derived_origins (row_kind, row_id, origin_source_id) VALUES ('fact', $1, 'own-mail')`, [String(hidden.id)]);
+    const mine = await addFact(db.storage, { entity_slug: "people/max", fact: "max moved to riga", written_by_principal: "client:bot", visibility: "world" });
+    const auth = { token: "t", clientId: "bot", scopes: ["read", "write"], isPublic: false };
+    const r = await dispatchTool(db.storage, { name: "forget_fact", arguments: { id: mine.id } }, { authInfo: auth as never });
+    expect(r.isError).toBeFalsy();
+    expect(r.content[0]!.text).not.toContain(String(hidden.id));
+    expect((await fact(mine.id!)).forgotten_at).not.toBeNull();
+    expect((await fact(hidden.id!)).forgotten_at).toBeNull();
   });
 });
 

@@ -57,7 +57,7 @@ export async function checkUnscopedSharedReads(engine: Engine): Promise<TenancyC
   }
 }
 
-/** Warns when a shared brain leaves a mailbox, calendar or transcript source open to every member. */
+/** Warns when a mailbox, calendar or transcript source is not owner-only, or owner-only sources have no owner to read them. */
 export async function checkOwnerOnlySources(engine: Engine): Promise<TenancyCheck> {
   const name = "owner-only-sources";
   try {
@@ -81,10 +81,11 @@ export async function checkOwnerOnlySources(engine: Engine): Promise<TenancyChec
           "Name the owner with memrain member owner <id> and bind the owner's keys to that member.",
       };
     }
-    if (!serves.several || open.rows.length === 0) return { name, ok: true, status: "ok", detail: ownerOnlySources.length > 0 ? `${marked}; closed to every remote key but the owner's` : marked };
+    if (open.rows.length === 0) return { name, ok: true, status: "ok", detail: ownerOnlySources.length > 0 ? `${marked}; closed to every remote key but the owner's` : marked };
+    const readers = serves.several ? "every member and key they are granted to" : "every remote key they are granted to, the owner's or not";
     return {
       name, ok: true, status: "warn",
-      detail: `the brain serves several people and ${open.rows.length} personal source(s) are readable by every member they are granted to: ${open.rows.map((r) => r.id).join(", ")}. ` +
+      detail: `${open.rows.length} personal source(s) are not owner-only, so ${readers} reads them: ${open.rows.map((r) => r.id).join(", ")}. ` +
         "Mark the owner's own with memrain sources owner-only <id> on, then run memrain sources provenance (dry run) and --apply.",
     };
   } catch (e) {

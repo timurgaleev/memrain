@@ -402,6 +402,12 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await registerSource(e, { id: "hook", kind: "webhook", pathPrefix: "/hook" });
       await e.query(`INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES (gen_random_uuid(), 'me-mail', 'test', 'admin:operator', 'owner@example.test')`);
       process.env["MEMRAIN_WRITE_GATE_QUARANTINE_SOURCES"] = "me-mail";
+      // With no owner member named, nothing shows the mailbox is the owner's: it is held like any outside source.
+      process.env["MEMRAIN_WRITE_GATE_EXTERNAL"] = "quarantine";
+      await indexDocument(s, { sourcePath: "me-mail://unowned", text: INJECTION, sourceId: "me-mail" }, { embedFn, remote: true });
+      expect((await fm(s, "me-mail://unowned"))["quarantine"]).toBeDefined();
+      await addMember(e, "ora", {}, { actor: "ops", via: "cli" });
+      await setOwner(e, "ora");
       for (const mode of ["quarantine", "reject"]) {
         process.env["MEMRAIN_WRITE_GATE_EXTERNAL"] = mode;
         await indexDocument(s, { sourcePath: `me-mail://${mode}`, text: INJECTION, sourceId: "me-mail" }, { embedFn, remote: true });
@@ -412,7 +418,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       process.env["MEMRAIN_WRITE_GATE_EXTERNAL"] = "quarantine";
       await indexDocument(s, { sourcePath: "hook://1", text: INJECTION, sourceId: "hook" }, { embedFn, remote: true });
       expect((await fm(s, "hook://1"))["quarantine"]).toBeDefined();
-      expect((await listWriteGateHolds(e, { status: "open" })).map(h => h.source_id)).toEqual(["hook"]);
+      expect((await listWriteGateHolds(e, { status: "open" })).map(h => h.source_id).sort()).toEqual(["hook", "me-mail"]);
     });
   });
 

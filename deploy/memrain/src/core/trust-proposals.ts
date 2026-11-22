@@ -18,6 +18,8 @@ import type { Engine } from "./engine/interface.ts";
 import { supersededValidUntilSql } from "./fact-validity.ts";
 import { factRankSql, tierOfRank, trustRank, type TrustTier } from "./trust-tier.ts";
 import { forgetInTx } from "./facts-recall.ts";
+import { deadlockSafeTransaction } from "./retry.ts";
+import { factRemoteEligibleSql } from "./fact-visibility.ts";
 
 type Queryable = Pick<Engine, "query">;
 
@@ -82,17 +84,82 @@ export async function contestIfLessTrusted(
 }
 
 /**
- * Inside a remote forget's transaction, with the fact's row locked: when the
- * caller is less trusted than the fact, record (or reuse) the pending
- * `forget` proposal and return it; null when the forget may go ahead.
+ * Locks a fact and every live copy of its claim in its source (same
+ * visibility and subject), in id order, and returns their ids. A remote forget
+ * and the owner's decision on a forget proposal both lock through here before
+ * anything else, so they take the same rows in the same order and cannot
+ * deadlock each other.
+ */
+export async function lockClaimCopies(tx: Queryable, factId: number): Promise<number[]> {
+  const r = await tx.query<{ id: number }>(
+    // scope: upstream the named fact and copies of its claim in its own source, which the caller already resolved in its scope
+    `SELECT c.id FROM entity_facts t
+       JOIN entity_facts c ON c.source_id = t.source_id AND c.visibility = t.visibility AND c.entity_slug = t.entity_slug
+                          AND memrain_fact_claim_key(c.fact) = memrain_fact_claim_key(t.fact)
+                          AND (c.id = t.id OR (c.forgotten_at IS NULL AND c.dimension IS NULL AND t.dimension IS NULL))
+      WHERE t.id = $1
+      ORDER BY c.id
+      FOR UPDATE OF c`,
+    [factId],
+  );
+  return r.rows.map(x => Number(x.id));
+}
+
+/**
+ * How many live copies of a fact's claim (other than the fact) that a remote
+ * caller can read are more trusted than `tier`. A plain read: a remote forget
+ * calls it while holding the withdraw lock, where it must not wait on a row lock.
+ */
+export async function claimCopiesAbove(tx: Queryable, factId: number, tier: TrustTier): Promise<number> {
+  const r = await tx.query<{ id: number }>(
+    // scope: upstream copies of the claim in the named fact's own source, which the calling forget already resolved in its scope
+    `SELECT c.id FROM entity_facts t
+       JOIN entity_facts c ON c.source_id = t.source_id AND c.visibility = t.visibility AND c.entity_slug = t.entity_slug
+                          AND memrain_fact_claim_key(c.fact) = memrain_fact_claim_key(t.fact)
+                          AND c.id <> t.id AND c.forgotten_at IS NULL AND c.dimension IS NULL
+      WHERE t.id = $1 AND t.dimension IS NULL AND ${factRemoteEligibleSql("c")}`,
+    [factId],
+  );
+  const tiers = await factTiers(tx, r.rows.map(x => Number(x.id)));
+  return [...tiers.values()].filter(t => trustRank(t) > trustRank(tier)).length;
+}
+
+/** Of these fact ids, the ones a remote caller may read (no diary origin, no owner-only lineage). */
+async function remoteReadable(tx: Queryable, ids: readonly number[]): Promise<Set<number>> {
+  const r = await tx.query<{ id: number }>(
+    // scope: upstream fact ids the calling forget already locked in its own scope
+    `SELECT c.id FROM entity_facts c WHERE c.id = ANY($1::bigint[]) AND ${factRemoteEligibleSql("c")}`,
+    [[...ids]],
+  );
+  return new Set(r.rows.map(x => Number(x.id)));
+}
+
+/**
+ * Inside a remote forget's transaction, with the fact and its claim's copies
+ * locked (lockClaimCopies). A forget withdraws the claim and retires every
+ * live copy of it in the source, so the caller must outrank (or match) each
+ * copy, not only the one it named. When a copy is more trusted than the
+ * caller, record (or reuse) the pending `forget` proposal on the most trusted
+ * copy and return it; null when the forget may go ahead. Only copies the
+ * caller can read count: one it cannot read is never named to it, and the
+ * forget's sweep leaves it alone (forgetInTx caps the sweep at its tier).
  */
 export async function contestForget(
   tx: Queryable,
-  input: { factId: number; writerTier: TrustTier; principal: string | null; hasReason: boolean },
-): Promise<{ proposal_id: number; fact_tier: TrustTier } | null> {
-  const factTier = (await factTiers(tx, [input.factId])).get(input.factId);
+  input: { factId: number; copies: readonly number[]; writerTier: TrustTier; principal: string | null; hasReason: boolean },
+): Promise<{ proposal_id: number; fact_id: number; fact_tier: TrustTier } | null> {
+  const others = input.copies.filter(id => id !== input.factId);
+  const readable = others.length > 0 ? await remoteReadable(tx, others) : new Set<number>();
+  const ids = [input.factId, ...others.filter(id => readable.has(id))];
+  const tiers = await factTiers(tx, ids);
+  let factId = input.factId;
+  let factTier = tiers.get(input.factId);
+  for (const id of ids) {
+    const t = tiers.get(id);
+    if (t !== undefined && (factTier === undefined || trustRank(t) > trustRank(factTier))) { factId = id; factTier = t; }
+  }
   if (factTier === undefined || trustRank(input.writerTier) >= trustRank(factTier)) return null;
-  const before = { old: { id: input.factId, tier: factTier }, new: { tier: input.writerTier }, ...(input.hasReason ? { has_reason: true } : {}) };
+  const before = { old: { id: factId, tier: factTier }, new: { tier: input.writerTier }, ...(factId !== input.factId ? { asked_id: input.factId } : {}), ...(input.hasReason ? { has_reason: true } : {}) };
   const ins = await tx.query<{ id: number }>(
     // scope: upstream the fact the calling forget already locked in its own write scope
     `INSERT INTO trust_proposals (action, guard, source_id, target_id, related_id, before_state, proposer_principal)
@@ -100,19 +167,19 @@ export async function contestForget(
        FROM entity_facts f WHERE f.id = $1
      ON CONFLICT (target_id) WHERE status = 'pending' AND action = 'forget' DO NOTHING
      RETURNING id`,
-    [input.factId, JSON.stringify(before), input.principal],
+    [factId, JSON.stringify(before), input.principal],
   );
   let id = ins.rows[0]?.id;
   if (id === undefined) {
     const found = await tx.query<{ id: number }>(
       // scope: upstream the fact id the calling forget already resolved
       `SELECT id FROM trust_proposals WHERE target_id = $1 AND action = 'forget' AND status = 'pending'`,
-      [input.factId],
+      [factId],
     );
     id = found.rows[0]?.id;
   }
   if (id === undefined) throw new Error("forget proposal insert conflicted but no pending row was found");
-  return { proposal_id: Number(id), fact_tier: factTier };
+  return { proposal_id: Number(id), fact_id: factId, fact_tier: factTier };
 }
 
 export interface TrustProposal {
@@ -208,7 +275,18 @@ export async function decideTrustProposal(
   decision: "accept" | "reject",
   decidedBy: string,
 ): Promise<{ id: number; status: TrustDecisionStatus }> {
-  const status = await engine.transaction(async (tx): Promise<TrustDecisionStatus> => {
+  const status = await deadlockSafeTransaction(engine, async (tx): Promise<TrustDecisionStatus> => {
+    // Facts first, then the proposal: the order a writer filing a proposal
+    // takes them in (it holds the facts while it files), so the two never
+    // deadlock. A forget proposal locks every live copy of its claim, as the
+    // remote forget does (lockClaimCopies), since accepting it retires them.
+    const peek = await tx.query<{ action: TrustProposalAction; target_id: number; related_id: number | null }>(
+      // scope: operator-only a decision names one proposal by id from the owner's queue
+      `SELECT action, target_id, related_id FROM trust_proposals WHERE id = $1`, [id]);
+    const first = peek.rows[0];
+    if (!first) return "not_found";
+    if (first.action === "forget") await lockClaimCopies(tx, Number(first.target_id));
+    else await lockFacts(tx, [first.target_id, first.related_id].filter((x): x is number => x !== null).map(Number));
     const p = await tx.query<{ action: TrustProposalAction; guard: TrustProposalGuard; status: string; target_id: number; related_id: number | null }>(
       // scope: operator-only a decision names one proposal by id from the owner's queue
       `SELECT action, guard, status, target_id, related_id FROM trust_proposals WHERE id = $1 FOR UPDATE`, [id]);

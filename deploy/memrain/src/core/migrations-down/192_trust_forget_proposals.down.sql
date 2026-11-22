@@ -3,7 +3,11 @@
 --   bun run src/cli.ts apply-migrations --down 192 --yes
 --
 -- Refuses while a forget proposal awaits a decision. Decided forget proposals
--- go; the facts they named stay as they are.
+-- go; the facts they named stay as they are: a fact forgotten by an accepted
+-- proposal stays forgotten and its claim stays withdrawn (fact_withdrawals is
+-- not touched), and a rejected one stays live. Code from the release that
+-- shipped 192 still files forget proposals and fails against the restored
+-- CHECK, so roll the code back with the schema.
 
 SET LOCAL lock_timeout = '10s';
 SELECT pg_advisory_xact_lock(hashtext('memrain:migrations'));

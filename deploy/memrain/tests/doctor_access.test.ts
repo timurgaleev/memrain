@@ -21,11 +21,14 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
   });
   afterAll(async () => { await db.close(); });
 
-  it("a fresh brain is ok on all three", async () => {
+  it("a fresh brain is ok on identity and unbound keys, and names a mailbox left open even while it serves one person", async () => {
     const e = db.storage.engine();
     expect((await checkOwnerIdentity(e, "")).status).toBe("ok");
     expect((await checkUnscopedSharedReads(e)).status).toBe("ok");
-    expect((await checkOwnerOnlySources(e)).status).toBe("ok");
+    const open = await checkOwnerOnlySources(e);
+    expect(open.status).toBe("warn");
+    expect(open.detail).toContain("every remote key they are granted to");
+    expect(open.detail).toContain("me-mail");
   });
 
   it("an owner with an email is ok, and the email never reaches the check", async () => {

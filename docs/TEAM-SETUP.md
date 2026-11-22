@@ -359,8 +359,8 @@ command does the same for rows written before this release; run it once after
 upgrading, dry run first. Until it has been applied, rows derived before the
 upgrade stay readable to remote keys, and `owner-only-sources` warns. The
 doctor check `owner-only-sources` also warns when owner-only sources exist but
-no owner member is set, and when a brain that serves several people leaves a
-mailbox, calendar or transcript source open.
+no owner member is set, and when a mailbox, calendar or transcript source is
+not owner-only, whether the brain serves one person or several.
 
 ### Offboarding with the personal source
 

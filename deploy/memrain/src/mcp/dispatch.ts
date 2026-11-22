@@ -3730,8 +3730,11 @@ async function callForgetFact(
   if (r.contested) {
     throw new OperationError(
       "permission_denied",
-      `forget_requires_owner: fact ${r.id} is ${r.contested.fact_tier}-written, so this credential cannot forget it; trust proposal ${r.contested.proposal_id} asks the owner`,
-      `Do not retry. Tell the user fact ${r.id} needs their decision: memrain trust accept ${r.contested.proposal_id} on the brain host, or the admin Approvals page.`,
+      // A more trusted copy of the claim may be one this caller cannot read, so it is never named.
+      r.contested.fact_id === r.id
+        ? `forget_requires_owner: fact ${r.id} is ${r.contested.fact_tier}-written, so this credential cannot forget it; trust proposal ${r.contested.proposal_id} asks the owner`
+        : `forget_requires_owner: forgetting fact ${r.id} would also withdraw a more trusted copy of the same claim, so nothing was forgotten; trust proposal ${r.contested.proposal_id} asks the owner`,
+      `Do not retry. Tell the user forgetting fact ${r.id} needs their decision: memrain trust accept ${r.contested.proposal_id} on the brain host, or the admin Approvals page.`,
     );
   }
   if (!r.forgotten) return jsonResult({ ok: true, ...r });

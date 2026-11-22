@@ -30,8 +30,19 @@ import { deadlockSafeTransaction } from "./retry.ts";
 import { normalizeFactRow } from "./facts.ts";
 import type { SimilarActive } from "./facts-similar-active.ts";
 import type { Engine } from "./engine/interface.ts";
-import type { TrustTier } from "./trust-tier.ts";
-import { contestForget } from "./trust-proposals.ts";
+import { factRankSql, trustRank, type TrustTier } from "./trust-tier.ts";
+import { claimCopiesAbove, contestForget, lockClaimCopies } from "./trust-proposals.ts";
+
+/** A more trusted copy of the claim appeared while a remote forget ran; it rolled back. */
+class RemoteForgetRaced extends Error {
+  constructor() {
+    super("a more trusted copy of the claim appeared while it was being forgotten");
+    this.name = "RemoteForgetRaced";
+  }
+}
+
+/** A copy's effective rank in the duplicate sweep, over the unaliased entity_facts. */
+const SWEEP_RANK_SQL = factRankSql("entity_facts", "tt_p.slug IN (entity_facts.source_slug, entity_facts.source_markdown_slug)");
 
 /**
  * A single fact row as returned by `recallFact`. Mirrors the projection in
@@ -152,7 +163,7 @@ export interface ForgetFactResult {
    */
   withdrawn_duplicates: number;
   /** Set when the fact is more trusted than the caller: nothing was forgotten and the owner decides. */
-  contested?: { proposal_id: number; fact_tier: TrustTier };
+  contested?: { proposal_id: number; fact_id: number; fact_tier: TrustTier };
   /** Close live rewordings left behind; added by the MCP `forget_fact` handler
    *  after a flip (see facts-similar-active.ts). */
   similar_active?: SimilarActive;
@@ -188,25 +199,35 @@ export async function forgetFact(
   // scope touches nothing. Unset → whole-brain by id. The withdrawal and the
   // duplicate sweep take the flipped row's own source, so they can never reach
   // past what the scope already allowed.
-  const flipped = await deadlockSafeTransaction(storage.engine(), async (tx) => {
+  const attempt = () => deadlockSafeTransaction(storage.engine(), async (tx) => {
     if (input.writerTier !== undefined) {
-      // The tier is read with the row locked, so a fact that becomes more
-      // trusted while this forget waits is contested, not forgotten.
-      const lockParams: unknown[] = [factId];
-      const lockFilter = andSourceScope("source_id", sourceIds, lockParams) + world;
+      const eligibleParams: unknown[] = [factId];
+      const eligibleFilter = andSourceScope("source_id", sourceIds, eligibleParams) + world;
       // scope: upstream the caller's write scope, applied by andSourceScope on the line above
       // Only a fact this forget would act on: live, or retired and not yet withdrawn.
-      const locked = await tx.query<{ id: number }>(
+      const eligible = await tx.query<{ id: number }>(
         `SELECT id FROM entity_facts WHERE id = $1
-            AND (forgotten_at IS NULL OR (forgotten_cause IN ('supersede', 'consolidate') AND dimension IS NULL))${lockFilter}
-          FOR UPDATE`, lockParams);
-      if (locked.rows[0]) {
-        const contested = await contestForget(tx, { factId, writerTier: input.writerTier, principal: input.principal ?? null, hasReason: reason !== null });
+            AND (forgotten_at IS NULL OR (forgotten_cause IN ('supersede', 'consolidate') AND dimension IS NULL))${eligibleFilter}`,
+        eligibleParams);
+      if (eligible.rows[0]) {
+        // Tiers are read with the fact and every live copy of its claim
+        // locked, so one that becomes more trusted meanwhile is contested.
+        const copies = await lockClaimCopies(tx, factId);
+        const contested = await contestForget(tx, { factId, copies, writerTier: input.writerTier, principal: input.principal ?? null, hasReason: reason !== null });
         if (contested) return { contested };
       }
     }
-    return forgetInTx(tx, factId, { reason, cause, sourceIds, world });
+    return forgetInTx(tx, factId, { reason, cause, sourceIds, world, ...(input.writerTier !== undefined ? { writerTier: input.writerTier } : {}) });
   });
+  let flipped: Awaited<ReturnType<typeof attempt>>;
+  try {
+    flipped = await attempt();
+  } catch (e) {
+    // A more trusted copy committed between the check and the withdrawal:
+    // nothing was changed, and the next attempt contests it.
+    if (!(e instanceof RemoteForgetRaced)) throw e;
+    flipped = await attempt();
+  }
   if (flipped !== null && "contested" in flipped) {
     return { id: factId, found: true, forgotten: false, withdrawn_duplicates: 0, contested: flipped.contested };
   }
@@ -244,10 +265,15 @@ export async function forgetFact(
 export async function forgetInTx(
   tx: Engine,
   factId: number,
-  opts: { reason: string | null; cause: ForgetCause; sourceIds?: string[]; world?: string },
+  opts: {
+    reason: string | null; cause: ForgetCause; sourceIds?: string[]; world?: string;
+    /** A remote caller's tier: the duplicate sweep never retires a copy more trusted than it. */
+    writerTier?: TrustTier;
+  },
 ): Promise<{ duplicates: number; retired: boolean } | null> {
   const { reason, cause, sourceIds } = opts;
   const world = opts.world ?? "";
+  const rankCap = opts.writerTier === undefined ? "" : ` AND ${SWEEP_RANK_SQL} <= ${trustRank(opts.writerTier)}`;
   {
     // Flip first, lock after (the lock order in fact-withdrawals.ts): the
     // UPDATE may wait on a fence reconcile that deleted this row and is about
@@ -299,7 +325,7 @@ export async function forgetInTx(
             AND memrain_fact_claim_key(fact) = $4
             AND id <> $5
             AND forgotten_at IS NULL
-            AND dimension IS NULL
+            AND dimension IS NULL${rankCap}
           RETURNING id`,
         [
           hit.source_id,
@@ -318,6 +344,10 @@ export async function forgetInTx(
     // exclusive lock is granted, the second sweep (a new statement) sees it.
     const early = await sweep();
     await lockWithdrawals(tx, [hit.source_id]);
+    // Under the exclusive lock no new copy can commit: a more trusted copy
+    // that committed after the caller's check would outlive the sweep while
+    // the withdrawal shut out its future copies, so the whole forget rolls back.
+    if (opts.writerTier !== undefined && await claimCopiesAbove(tx, factId, opts.writerTier) > 0) throw new RemoteForgetRaced();
     return { duplicates: early + (await sweep()), retired: !upd.rows[0] };
   }
 }

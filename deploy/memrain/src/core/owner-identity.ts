@@ -132,15 +132,17 @@ export async function ownerIdentity(engine: Engine, opts: { member?: string; env
  * Whether `sourceId` is one of the owner's own connector sources, by the rule
  * above: a connector account was ever connected to it, and it is the owner
  * member's personal source, or no enabled member holds it while the owner is
- * the only enabled member (or there are none).
+ * the only enabled member. With no owner member named (or none enabled) no
+ * source counts as the owner's: nobody has been shown to own it.
  */
 export async function isOwnerConnectorSource(engine: Engine, sourceId: string): Promise<boolean> {
   // scope: operator-only whether a source ever had a connector account, by its id
   const r = await engine.query<{ n: number }>(`SELECT count(*)::int AS n FROM connector_accounts WHERE source_id = $1`, [sourceId]);
   if (!Number(r.rows[0]?.n ?? 0)) return false;
   const owner = await ownerMemberId(engine);
+  if (owner === null) return false;
   const people = (await listMembers(engine)).filter((m) => m.status === "enabled");
   const holder = people.find((m) => m.personal_source_id === sourceId);
   if (holder) return holder.id === owner;
-  return people.every((m) => m.id === owner);
+  return people.length > 0 && people.every((m) => m.id === owner);
 }

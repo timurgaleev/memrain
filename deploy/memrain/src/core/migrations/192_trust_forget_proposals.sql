@@ -5,6 +5,12 @@
 -- asks to forget a fact whose tier is higher than its own, the fact stays and
 -- a `forget` proposal waits for the owner (core/trust-proposals.ts). It names
 -- the fact only; accepting it applies the forget.
+--
+-- The ALTERs take a brief ACCESS EXCLUSIVE lock on trust_proposals. The runner
+-- applies each migration in one transaction under its own SET LOCAL
+-- lock_timeout (10s, or MEMRAIN_MIGRATION_LOCK_TIMEOUT), so a busy table fails
+-- the migration fast instead of hanging the deploy; this file does not set its
+-- own, which would override that knob.
 ALTER TABLE trust_proposals ALTER COLUMN related_id DROP NOT NULL;
 
 ALTER TABLE trust_proposals DROP CONSTRAINT IF EXISTS trust_proposals_action_check;

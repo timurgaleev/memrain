@@ -12,8 +12,9 @@
  *   quarantine  the row is not stored: writers call `holdIfQuarantined` before
  *               their insert, and a matching row goes to
  *               `write_gate_row_holds` (migration 183) until the owner releases
- *               or drops it (write-gate-row-holds.ts); rows in the owner's own
- *               mail and calendar sources are flagged, never held
+ *               or drops it (write-gate-row-holds.ts). Rows in the owner's own
+ *               mail and calendars are held too: what lands there was mostly
+ *               written by other people, the main way instructions get in
  *   off         no check
  *
  * Recording is best effort: a failure is logged and never fails the write.
@@ -22,7 +23,6 @@
  * that cannot violate a constraint (a missing source writes nothing).
  */
 import type { Engine } from "./engine/interface.ts";
-import { isOwnerConnectorSource } from "./owner-identity.ts";
 import type { TrustTier } from "./trust-tier.ts";
 import { documentRankSql, factRankSql, isTrustTier, pageRankSql, rankTierSql, tierRankSql } from "./trust-tier.ts";
 import { findRowHold, holdKindOf, recordRowHold } from "./write-gate-row-holds.ts";
@@ -290,8 +290,6 @@ export async function holdIfQuarantined(
     const gateOrigin = writeGateOrigin(tier);
     if (gateOrigin === null || resolveRowGateMode(gateOrigin, sourceId, env) !== "quarantine") return null;
     if (result !== null && holdingFamilies(gateOrigin, result.families).length === 0) return null;
-    // The owner's own mail and calendars are flagged, never held, as documents are (write-gate-index.ts).
-    if (gateOrigin === "external" && await isOwnerConnectorSource(engine, sourceId)) return null;
     const kind = holdKindOf(row.table);
     const detectorVersion = result?.detector_version ?? WRITE_GATE_DETECTOR_VERSION;
     const keyFields = row.identity === undefined ? row.fields : [...row.fields, { field: "identity", text: row.identity }];
