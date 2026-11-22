@@ -361,7 +361,7 @@ Memrain is its own OAuth 2.1 authorization server and protected resource
 | Compute | EC2 (t4g.medium, on-demand) | `terraform/compute.tf` | `lifecycle.ignore_changes = [ami, user_data]` — never replace on plan. |
 | Compute | EIP | `terraform/compute.tf` | Public IP for Cloudflare Tunnel edge port (7844). |
 | Storage | EFS file system + mount target | `terraform/efs.tf` | Backs container runtime state (Memrain config + recipe state). |
-| Storage | RDS Postgres 16 (`db.t4g.micro`) | `terraform/rds.tf` | Hosts the Memrain index; `pgvector` extension enabled. |
+| Storage | RDS Postgres 16 (`db.t4g.micro`) | `terraform/rds.tf` | Hosts the Memrain index; `pgvector` extension enabled. Chunk embeddings are stored as `halfvec(1024)` with an HNSW index (migration 191) so the index stays inside the instance's small cache; rebuild it with `memrain hnsw rebuild`, never `REINDEX ... CONCURRENTLY`. |
 | Storage | S3 — terraform state | `terraform/main.tf` (partial backend) | Bucket supplied via `terraform/backend.hcl` from `make init`. |
 | Storage | S3 — scripts | `terraform/ec2.tf` | `<project>-scripts-<account_id>`; holds `scripts/bootstrap.sh`. |
 | Identity | IAM role + instance profile | `terraform/iam.tf` | Bedrock invoke (Titan + Claude Haiku/Sonnet), Secrets Manager read/rotate, CloudWatch Logs write. |
