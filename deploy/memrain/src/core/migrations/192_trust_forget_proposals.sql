@@ -1,4 +1,4 @@
--- 210_trust_forget_proposals.sql — an agent cannot forget a more trusted fact.
+-- 192_trust_forget_proposals.sql — an agent cannot forget a more trusted fact.
 --
 -- A forget withdraws the claim (migration 112), so a later insert of it lands
 -- forgotten: a stronger override than a supersession. When a remote caller

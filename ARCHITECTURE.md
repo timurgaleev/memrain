@@ -219,7 +219,7 @@ flowchart TD
   takes, concept, atom and think pages) is also capped at `agent`. A write less
   trusted than the fact or ontology value it would replace, or a remote forget
   of a more trusted fact, leaves it in place and files a trust proposal
-  (migrations 185 and 210, `core/trust-proposals.ts`) that the owner accepts or
+  (migrations 185 and 192, `core/trust-proposals.ts`) that the owner accepts or
   rejects with `memrain trust` or on the admin Approvals page. A credential can carry a
   read floor (`min_trust` on the token or client row, migration 186): it reads
   through `search`, `query` and `context_pack` at that floor or stricter, and

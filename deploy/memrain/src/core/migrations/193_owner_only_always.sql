@@ -1,4 +1,4 @@
--- 211_owner_only_always.sql — an owner-only source is closed whether the brain
+-- 193_owner_only_always.sql — an owner-only source is closed whether the brain
 -- serves one person or several.
 --
 -- Migration 181 applied owner-only lineage only once the brain served several
