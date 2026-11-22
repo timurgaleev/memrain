@@ -30,11 +30,30 @@ export function requiresRequesterScope(op: { name: string; scope?: string } | un
   return true;
 }
 
-/** The caller names whose reads it makes: a bound member or a source grant. */
+/**
+ * The source every OAuth client is registered with unless the operator picks
+ * another (dynamic registration, `auth register-client`): a grant of it alone
+ * says nothing about whose reads the client makes.
+ */
+const REGISTRATION_DEFAULT_SOURCE = "default";
+
+/** An OAuth session of a client in client tenant mode (an enrollment spends as its own id). */
+function oauthClientMode(auth: AuthInfo): boolean {
+  const kind = auth.principal?.kind;
+  return (kind === "oauth_family" || kind === "oauth_token") && (auth.spendId === undefined || auth.spendId === auth.clientId);
+}
+
+/**
+ * The caller names whose reads it makes: a bound member, or a source grant.
+ * An OAuth client in client tenant mode whose grant is only the registration
+ * default names nobody, so it must be bound to a member.
+ */
 export function callerIsScoped(auth: AuthInfo | undefined): boolean {
   if (auth === undefined) return false;
   if (typeof auth.memberId === "string" && auth.memberId.length > 0) return true;
-  return effectiveReadSourceIds(auth) !== undefined;
+  const reads = effectiveReadSourceIds(auth);
+  if (reads === undefined) return false;
+  return !(oauthClientMode(auth) && reads.every((s) => s === REGISTRATION_DEFAULT_SOURCE));
 }
 
 function why(serves: ServesPolicy): string {
@@ -90,7 +109,9 @@ export async function assertCredentialScoped(
   kind: "token" | "client",
   name: string,
 ): Promise<void> {
-  const sourced = Array.isArray(grant.sourceId) ? grant.sourceId.length > 0 : !!grant.sourceId;
+  const sources = (Array.isArray(grant.sourceId) ? grant.sourceId : [grant.sourceId]).filter((s): s is string => !!s);
+  // A client's grant of only the registration default names nobody (callerIsScoped).
+  const sourced = kind === "client" ? sources.some((s) => s !== REGISTRATION_DEFAULT_SOURCE) : sources.length > 0;
   if (grant.memberId || sourced) return;
   const { serves } = await readBrainAccess(engine);
   if (!serves.several) return;
@@ -119,10 +140,12 @@ export async function unscopedConnections(engine: Pick<Engine, "query">): Promis
   );
   const clients = await engine.query<{ client_id: string }>(
     // scope: operator-only lists unbound credentials for the doctor
+    // A client-mode client whose grant is only the registration default is as unbound as one with none.
     `SELECT client_id FROM oauth_clients
-      WHERE deleted_at IS NULL AND member_id IS NULL AND source_id IS NULL AND bound_source_id IS NULL
-        AND COALESCE(cardinality(federated_read), 0) = 0
+      WHERE deleted_at IS NULL AND member_id IS NULL AND tenant_mode = 'client'
+        AND COALESCE(source_id, $1) = $1 AND COALESCE(federated_read, '{}') <@ ARRAY[$1]::text[]
       ORDER BY client_id`,
+    [REGISTRATION_DEFAULT_SOURCE],
   );
   return {
     serves,

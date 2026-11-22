@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { putPage } from "../src/core/pages.ts";
 import { extractFactsOnDemand } from "../src/core/facts-extract.ts";
+import { forgetFact } from "../src/core/facts-recall.ts";
 import { keepQuietClaims, keptQuiet, windowMessages } from "../src/core/fact-keep-quiet.ts";
 import { SLOT_TAG_SYSTEM, tagSlots } from "../src/core/fact-slot-tagging.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
@@ -50,6 +51,10 @@ describe("keep-quiet matching", () => {
   it("reads speaker turns from the transcript shapes the importers write", () => {
     expect(windowMessages("**Alice Example:** Hi there\n**assistant** (2026-03-10 9:03 AM): Noted.\nmore of it\nUser: Off the record, yes."))
       .toEqual([{ speaker: "Alice Example", text: "Hi there" }, { speaker: "assistant", text: "Noted.\nmore of it" }, { speaker: "User", text: "Off the record, yes." }]);
+    expect(windowMessages("Alice (10:02): I got the offer (at Acme) but please keep it quiet"))
+      .toEqual([{ speaker: "Alice", text: "I got the offer (at Acme) but please keep it quiet" }]);
+    expect(windowMessages("Alice: I got the offer (at Acme) but please keep it quiet"))
+      .toEqual([{ speaker: "Alice", text: "I got the offer (at Acme) but please keep it quiet" }]);
   });
 });
 
@@ -135,6 +140,41 @@ describe("extraction stores keep-quiet facts private and tags slots", () => {
     await extractFactsOnDemand("Bob: Off the record, Beta Example signs the lease in May.", { sonnetFn: fn, persist: true, storage, visibility: "world" });
     const rows = (await storage.engine().query<{ visibility: string }>("SELECT visibility FROM entity_facts WHERE fact = $1", [fact.fact])).rows;
     expect(rows).toEqual([{ visibility: "private" }]);
+  });
+
+  it("a keep-quiet restatement of a claim forgotten while world-visible does not bring it back as private", async () => {
+    const fact = { fact: "Gamma Example opens a Porto office", kind: "fact", entity: "companies/acme-example", confidence: 0.9, notability: "high" };
+    const fn: SonnetFn = async (input) => input.system === SLOT_TAG_SYSTEM ? reply("{\"slots\":[]}") : reply(JSON.stringify({ facts: [fact] }));
+    const first = await extractFactsOnDemand("Bob: Gamma Example opens a Porto office.", { sonnetFn: fn, persist: true, storage, visibility: "world" });
+    expect((await forgetFact(storage, first.fact_ids![0]!, { reason: "wrong" })).forgotten).toBe(true);
+    await extractFactsOnDemand("Bob: Between us, Gamma Example opens a Porto office.", { sonnetFn: fn, persist: true, storage, visibility: "world" });
+    const live = (await storage.engine().query("SELECT visibility FROM entity_facts WHERE fact = $1 AND forgotten_at IS NULL", [fact.fact])).rows;
+    expect(live).toEqual([]);
+  });
+
+  it("a keep-quiet restatement of a claim forgotten while private is not written world-visible either", async () => {
+    const fact = { fact: "Delta Example cuts its prices", kind: "fact", entity: "companies/acme-example", confidence: 0.9, notability: "high" };
+    const fn: SonnetFn = async (input) => input.system === SLOT_TAG_SYSTEM ? reply("{\"slots\":[]}") : reply(JSON.stringify({ facts: [fact] }));
+    const first = await extractFactsOnDemand("Bob: Off the record, Delta Example cuts its prices.", { sonnetFn: fn, persist: true, storage, visibility: "world" });
+    expect((await forgetFact(storage, first.fact_ids![0]!, { reason: "wrong" })).forgotten).toBe(true);
+    await extractFactsOnDemand("Bob: Between us, Delta Example cuts its prices.", { sonnetFn: fn, persist: true, storage, visibility: "world" });
+    const live = (await storage.engine().query("SELECT visibility FROM entity_facts WHERE fact = $1 AND forgotten_at IS NULL", [fact.fact])).rows;
+    expect(live).toEqual([]);
+  });
+
+  it("a fact whose person was only guessed from a partial name is not slot-tagged", async () => {
+    let tagCalls = 0;
+    const guessed = { fact: "Alice moved to Berlin", kind: "event", entity: "Alice", confidence: 0.9, notability: "high" };
+    const fn: SonnetFn = async (input) => {
+      if (input.system === SLOT_TAG_SYSTEM) { tagCalls++; return reply(JSON.stringify({ slots: [{ i: 1, dimension: "location", value: "Berlin" }] })); }
+      return reply(JSON.stringify({ facts: [guessed] }));
+    };
+    await extractFactsOnDemand("Bob: Alice moved to Berlin.", { sonnetFn: fn, persist: true, storage, visibility: "world" });
+    const rows = (await storage.engine().query<{ entity_slug: string; slot_dimension: string | null }>(
+      "SELECT entity_slug, slot_dimension FROM entity_facts WHERE fact = $1", [guessed.fact])).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.slot_dimension).toBeNull();
+    expect(tagCalls).toBe(0);
   });
 
   it("a budget with no room for the tagging call still writes the facts, without slots", async () => {

@@ -90,13 +90,17 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     for (const a of [own, legacy]) await q(`INSERT INTO synth_concept_atoms (concept_slug, atom_id) VALUES ('orchard', $1)`, [a.id]);
     await putPage(db.storage, { slug: "concepts/orchard", markdown_body: "Concept", written_by_principal: "operator" });
     await lowerConceptPageTier(db.storage.engine(), "orchard", "concepts/orchard");
-    expect(await tierOf("pages", "slug = $1", ["concepts/orchard"])).toBe("owner");
+    // Model output from owner atoms is still at most an agent's.
+    expect(await tierOf("pages", "slug = $1 AND source_id = 'default'", ["concepts/orchard"])).toBe("agent");
     await q(`INSERT INTO synth_concept_atoms (concept_slug, atom_id) VALUES ('orchard', $1)`, [agent.id]);
+    const inboxAtom = await atom("doc-inbox", "document");
+    await q(`INSERT INTO synth_concept_atoms (concept_slug, atom_id) VALUES ('orchard', $1)`, [inboxAtom.id]);
     await lowerConceptPageTier(db.storage.engine(), "orchard", "concepts/orchard");
-    expect(await tierOf("pages", "slug = $1", ["concepts/orchard"])).toBe("agent");
+    expect(await tierOf("pages", "slug = $1 AND source_id = 'default'", ["concepts/orchard"])).toBe("external");
+    await q(`DELETE FROM synth_concept_atoms WHERE atom_id = $1`, [inboxAtom.id]);
     // A later owner rewrite does not raise it back.
     await putPage(db.storage, { slug: "concepts/orchard", markdown_body: "Concept again", written_by_principal: "operator" });
-    expect(await tierOf("pages", "slug = $1", ["concepts/orchard"])).toBe("agent");
+    expect(await tierOf("pages", "slug = $1 AND source_id = 'default'", ["concepts/orchard"])).toBe("external");
   });
 
   it("lowerPageTier never raises a page", async () => {
@@ -119,17 +123,17 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     evidence: { pages, takes: [], facts: [], events: [] },
   } as unknown as ThinkResult);
 
-  it("a saved think synthesis takes the tier of the least trusted evidence it read", async () => {
+  it("a saved think synthesis is at most an agent's, lower when its evidence is", async () => {
     const own = await persistThinkSynthesis(db.storage, { question: "Owner only question", result: thinkResult(["notes/own"]) });
-    expect(await tierOf("pages", "slug = $1", [own.slug])).toBe("owner");
+    expect(await tierOf("pages", "slug = $1", [own.slug])).toBe("agent");
     const mixed = await persistThinkSynthesis(db.storage, { question: "Mixed question", result: thinkResult(["notes/own", "meet/call"]) });
     expect(await tierOf("pages", "slug = $1", [mixed.slug])).toBe("external");
   });
 
-  it("a think take takes the tier of the least trusted evidence it read", async () => {
+  it("a think take is at most an agent's, lower when its evidence is", async () => {
     const own = await saveThinkTake(db.storage.engine(), { claim: "Owner-grounded claim", anchorSlug: "notes/own", evidence: { pages: ["notes/own"], takes: [], facts: [], events: [] } });
-    expect(await tierOf("synth_takes", "take_key = $1", [own.take_key])).toBe("owner");
-    const agent = await saveThinkTake(db.storage.engine(), { claim: "Agent-grounded claim", anchorSlug: "notes/own", evidence: { pages: ["notes/agent"], takes: [], facts: [], events: [] } });
-    expect(await tierOf("synth_takes", "take_key = $1", [agent.take_key])).toBe("agent");
+    expect(await tierOf("synth_takes", "take_key = $1", [own.take_key])).toBe("agent");
+    const outside = await saveThinkTake(db.storage.engine(), { claim: "Meeting-grounded claim", anchorSlug: "notes/own", evidence: { pages: ["meet/call"], takes: [], facts: [], events: [] } });
+    expect(await tierOf("synth_takes", "take_key = $1", [outside.take_key])).toBe("external");
   });
 });

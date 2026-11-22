@@ -215,10 +215,12 @@ flowchart TD
   Rows derived from other text (atoms, takes, timeline entries, facts drawn
   from a page or chunk, concept pages, think syntheses, consolidated facts)
   take the least trusted tier of what they were drawn from (migration 184,
-  `core/trust-derived.ts`). A write less trusted than the fact or ontology
-  value it would replace leaves it in place and files a trust proposal
-  (migration 185, `core/trust-proposals.ts`) that the owner accepts or rejects
-  with `memrain trust` or on the admin Approvals page. A credential can carry a
+  `core/trust-derived.ts`); a row a model wrote (atoms, proposed and think
+  takes, concept, atom and think pages) is also capped at `agent`. A write less
+  trusted than the fact or ontology value it would replace, or a remote forget
+  of a more trusted fact, leaves it in place and files a trust proposal
+  (migrations 185 and 210, `core/trust-proposals.ts`) that the owner accepts or
+  rejects with `memrain trust` or on the admin Approvals page. A credential can carry a
   read floor (`min_trust` on the token or client row, migration 186): it reads
   through `search`, `query` and `context_pack` at that floor or stricter, and
   every other tool that returns stored text is refused to it

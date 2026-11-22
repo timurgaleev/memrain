@@ -77,6 +77,8 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
   it("a shared brain with no owner warns that nobody reads private facts", async () => {
     const e = db.storage.engine();
     await e.query(`DELETE FROM config WHERE key = 'access.owner_member'`);
+    // Owner-only sources with no owner: only the local operator reads them.
+    expect((await checkOwnerOnlySources(e)).detail).toContain("no owner member is set");
     expect((await checkOwnerIdentity(e, "")).detail).toContain("names no owner member");
   });
 });

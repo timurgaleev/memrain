@@ -17,10 +17,12 @@
 import type { Engine } from "./engine/interface.ts";
 import { supersededValidUntilSql } from "./fact-validity.ts";
 import { factRankSql, tierOfRank, trustRank, type TrustTier } from "./trust-tier.ts";
+import { forgetInTx } from "./facts-recall.ts";
 
 type Queryable = Pick<Engine, "query">;
 
-export type TrustProposalGuard = "conflict" | "replaces" | "ontology";
+export type TrustProposalGuard = "conflict" | "replaces" | "ontology" | "remote_forget";
+export type TrustProposalAction = "supersede_fact" | "forget";
 export type TrustProposalStatus = "pending" | "accepted" | "rejected" | "stale";
 export type TrustDecisionStatus = "accepted" | "rejected" | "stale" | "already_decided" | "not_found";
 
@@ -79,15 +81,53 @@ export async function contestIfLessTrusted(
   return { proposal_id: Number(id), fact_id: input.oldId };
 }
 
+/**
+ * Inside a remote forget's transaction, with the fact's row locked: when the
+ * caller is less trusted than the fact, record (or reuse) the pending
+ * `forget` proposal and return it; null when the forget may go ahead.
+ */
+export async function contestForget(
+  tx: Queryable,
+  input: { factId: number; writerTier: TrustTier; principal: string | null; hasReason: boolean },
+): Promise<{ proposal_id: number; fact_tier: TrustTier } | null> {
+  const factTier = (await factTiers(tx, [input.factId])).get(input.factId);
+  if (factTier === undefined || trustRank(input.writerTier) >= trustRank(factTier)) return null;
+  const before = { old: { id: input.factId, tier: factTier }, new: { tier: input.writerTier }, ...(input.hasReason ? { has_reason: true } : {}) };
+  const ins = await tx.query<{ id: number }>(
+    // scope: upstream the fact the calling forget already locked in its own write scope
+    `INSERT INTO trust_proposals (action, guard, source_id, target_id, related_id, before_state, proposer_principal)
+     SELECT 'forget', 'remote_forget', f.source_id, $1, NULL, $2::text::jsonb, $3
+       FROM entity_facts f WHERE f.id = $1
+     ON CONFLICT (target_id) WHERE status = 'pending' AND action = 'forget' DO NOTHING
+     RETURNING id`,
+    [input.factId, JSON.stringify(before), input.principal],
+  );
+  let id = ins.rows[0]?.id;
+  if (id === undefined) {
+    const found = await tx.query<{ id: number }>(
+      // scope: upstream the fact id the calling forget already resolved
+      `SELECT id FROM trust_proposals WHERE target_id = $1 AND action = 'forget' AND status = 'pending'`,
+      [input.factId],
+    );
+    id = found.rows[0]?.id;
+  }
+  if (id === undefined) throw new Error("forget proposal insert conflicted but no pending row was found");
+  return { proposal_id: Number(id), fact_tier: factTier };
+}
+
 export interface TrustProposal {
   id: number;
+  /** `forget`: a remote caller asked to forget the fact; accepting applies the forget. */
+  action: TrustProposalAction;
   guard: TrustProposalGuard;
   source_id: string;
   entity_slug: string | null;
   dimension: string | null;
   target_id: number;
-  related_id: number;
+  /** Null for a `forget` proposal. */
+  related_id: number | null;
   old_tier: TrustTier;
+  /** The replacing fact's tier; for a `forget`, the tier of the caller that asked. */
   new_tier: TrustTier;
   /** Fact text, for the owner's own review surfaces only. */
   old_fact: string | null;
@@ -107,7 +147,7 @@ export async function listTrustProposals(
   const limit = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
   const r = await q.query<Record<string, unknown>>(
     // scope: operator-only the owner's review queue
-    `SELECT tp.id, tp.guard, tp.source_id, tp.target_id, tp.related_id, tp.before_state, tp.proposer_principal, tp.status,
+    `SELECT tp.id, tp.action, tp.guard, tp.source_id, tp.target_id, tp.related_id, tp.before_state, tp.proposer_principal, tp.status,
             tp.created_at::text AS created_at, tp.decided_at::text AS decided_at, tp.decided_by,
             o.entity_slug, o.dimension, o.fact AS old_fact, n.fact AS new_fact
        FROM trust_proposals tp
@@ -124,12 +164,13 @@ export async function listTrustProposals(
     };
     return {
       id: Number(row.id),
+      action: row.action as TrustProposalAction,
       guard: row.guard as TrustProposalGuard,
       source_id: String(row.source_id),
       entity_slug: (row.entity_slug as string | null) ?? null,
       dimension: (row.dimension as string | null) ?? null,
       target_id: Number(row.target_id),
-      related_id: Number(row.related_id),
+      related_id: row.related_id === null || row.related_id === undefined ? null : Number(row.related_id),
       old_tier: before.old.tier,
       new_tier: before.new.tier,
       old_fact: (row.old_fact as string | null) ?? null,
@@ -168,12 +209,13 @@ export async function decideTrustProposal(
   decidedBy: string,
 ): Promise<{ id: number; status: TrustDecisionStatus }> {
   const status = await engine.transaction(async (tx): Promise<TrustDecisionStatus> => {
-    const p = await tx.query<{ guard: TrustProposalGuard; status: string; target_id: number; related_id: number }>(
+    const p = await tx.query<{ action: TrustProposalAction; guard: TrustProposalGuard; status: string; target_id: number; related_id: number | null }>(
       // scope: operator-only a decision names one proposal by id from the owner's queue
-      `SELECT guard, status, target_id, related_id FROM trust_proposals WHERE id = $1 FOR UPDATE`, [id]);
+      `SELECT action, guard, status, target_id, related_id FROM trust_proposals WHERE id = $1 FOR UPDATE`, [id]);
     const row = p.rows[0];
     if (!row) return "not_found";
     if (row.status !== "pending") return "already_decided";
+    if (row.action === "forget") return decideForget(tx, id, Number(row.target_id), decision, decidedBy);
     const oldId = Number(row.target_id);
     const newId = Number(row.related_id);
     const facts = await lockFacts(tx, [oldId, newId]);
@@ -217,4 +259,23 @@ export async function decideTrustProposal(
     return next;
   });
   return { id, status };
+}
+
+/**
+ * A `forget` proposal: accepting forgets the fact as the caller asked (the
+ * claim is withdrawn); rejecting keeps it. A fact no longer on file, or
+ * already withdrawn, makes the proposal stale.
+ */
+async function decideForget(tx: Engine, id: number, factId: number, decision: "accept" | "reject", decidedBy: string): Promise<TrustDecisionStatus> {
+  const fact = (await lockFacts(tx, [factId])).get(factId);
+  let next: TrustProposalStatus = fact === undefined ? "stale" : decision === "accept" ? "accepted" : "rejected";
+  if (next === "accepted") {
+    const done = await forgetInTx(tx, factId, { reason: `forgotten by the owner (accepted trust proposal ${id})`, cause: "forget" });
+    if (done === null) next = "stale";
+  }
+  await tx.query(
+    `UPDATE trust_proposals SET status = $2, decided_at = NOW(), decided_by = $3 WHERE id = $1 AND status = 'pending'`,
+    [id, next, decidedBy],
+  );
+  return next;
 }

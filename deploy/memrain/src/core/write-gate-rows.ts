@@ -12,7 +12,8 @@
  *   quarantine  the row is not stored: writers call `holdIfQuarantined` before
  *               their insert, and a matching row goes to
  *               `write_gate_row_holds` (migration 183) until the owner releases
- *               or drops it (write-gate-row-holds.ts)
+ *               or drops it (write-gate-row-holds.ts); rows in the owner's own
+ *               mail and calendar sources are flagged, never held
  *   off         no check
  *
  * Recording is best effort: a failure is logged and never fails the write.
@@ -21,8 +22,9 @@
  * that cannot violate a constraint (a missing source writes nothing).
  */
 import type { Engine } from "./engine/interface.ts";
+import { isOwnerConnectorSource } from "./owner-identity.ts";
 import type { TrustTier } from "./trust-tier.ts";
-import { documentRankSql, factRankSql, isTrustTier, pageRankSql, rankTierSql } from "./trust-tier.ts";
+import { documentRankSql, factRankSql, isTrustTier, pageRankSql, rankTierSql, tierRankSql } from "./trust-tier.ts";
 import { findRowHold, holdKindOf, recordRowHold } from "./write-gate-row-holds.ts";
 import {
   WRITE_GATE_DETECTOR_VERSION,
@@ -42,9 +44,11 @@ const ROW_MODES: readonly RowGateMode[] = ["off", "flag", "quarantine"];
 const warnedRowModes = new Set<string>();
 
 /**
- * MEMRAIN_WRITE_GATE_ROWS (default `flag`) for both origins, unless the
- * origin's own variable (MEMRAIN_WRITE_GATE_EXTERNAL / MEMRAIN_WRITE_GATE_AGENT)
- * is `off`. The document modes of those variables do not carry over to rows.
+ * MEMRAIN_WRITE_GATE_ROWS (default `flag`) for both origins, capped by the
+ * origin's own variable (MEMRAIN_WRITE_GATE_EXTERNAL / MEMRAIN_WRITE_GATE_AGENT):
+ * `off` turns the row gate off for that origin and `flag` holds none of its
+ * rows, so quarantine can be kept to outside rows while agent rows are only
+ * flagged. Unset, `quarantine` or `reject` leave the row mode as it is.
  */
 export function resolveRowGateMode(
   origin: WriteGateOrigin,
@@ -52,7 +56,13 @@ export function resolveRowGateMode(
   env: Record<string, string | undefined> = process.env,
 ): RowGateMode {
   const key = origin === "external" ? "MEMRAIN_WRITE_GATE_EXTERNAL" : "MEMRAIN_WRITE_GATE_AGENT";
-  if (env[key]?.trim().toLowerCase() === "off") return "off";
+  const own = env[key]?.trim().toLowerCase();
+  if (own === "off") return "off";
+  const mode = rowsMode(env);
+  return own === "flag" && mode === "quarantine" ? "flag" : mode;
+}
+
+function rowsMode(env: Record<string, string | undefined>): RowGateMode {
   const raw = env["MEMRAIN_WRITE_GATE_ROWS"]?.trim().toLowerCase();
   if (!raw) return "flag";
   if ((ROW_MODES as readonly string[]).includes(raw)) return raw as RowGateMode;
@@ -133,10 +143,14 @@ async function recordFlag(
 export type RowOrigin =
   | { fact: number }
   | { event: number }
-  /** A take on a page's takes fence, or one a caller pinned to the page. */
-  | { page: string; principal?: string | null }
-  /** A take proposed from a document. */
-  | { document: string }
+  /**
+   * A take on a page's takes fence, or one a caller pinned to the page.
+   * `floor` is a tier the row is known to be at most (a model-derived take, a
+   * stored take's recorded tier); it can only lower the page's.
+   */
+  | { page: string; principal?: string | null; floor?: TrustTier | null }
+  /** A take proposed from a document; `floor` as above. */
+  | { document: string; floor?: TrustTier | null }
   /** A fact about to be inserted, by the columns its tier is read from. */
   | { newFact: ProspectiveFact }
   /** A timeline entry about to be inserted. */
@@ -192,11 +206,14 @@ function originQuery(origin: RowOrigin): { sql: string; params: unknown[] } {
     // A caller's principal can only lower the page's tier.
     const principal = `CASE WHEN $2::text IS NULL OR $2::text IN ('', 'operator') THEN 3 WHEN $2::text LIKE 'member:%' THEN 2 ELSE 1 END`;
     // scope: upstream the row the caller just wrote, by its key
-    return { sql: `SELECT ${rankTierSql(`LEAST(${pageRankSql("pg")}, ${principal})`)} AS tier, pg.source_id FROM pages pg WHERE pg.slug = $1`, params: [origin.page, origin.principal ?? null] };
+    return { sql: `SELECT ${rankTierSql(`LEAST(${pageRankSql("pg")}, ${principal}, ${FLOOR_RANK_SQL(3)})`)} AS tier, pg.source_id FROM pages pg WHERE pg.slug = $1`, params: [origin.page, origin.principal ?? null, origin.floor ?? null] };
   }
   // scope: upstream the document the caller just drew the row from, by its key
-  return { sql: `SELECT ${rankTierSql(documentRankSql("d"))} AS tier, COALESCE(d.source_id, 'default') AS source_id FROM documents d WHERE d.id = $1`, params: [origin.document] };
+  return { sql: `SELECT ${rankTierSql(`LEAST(${documentRankSql("d")}, ${FLOOR_RANK_SQL(2)})`)} AS tier, COALESCE(d.source_id, 'default') AS source_id FROM documents d WHERE d.id = $1`, params: [origin.document, origin.floor ?? null] };
 }
+
+/** The rank of an optional tier ceiling in parameter `n`; the owner's rank when none is given. */
+const FLOOR_RANK_SQL = (n: number): string => `COALESCE(${tierRankSql(`$${n}::text`)}, 3)`;
 
 /** A row's effective tier and source, read the way trust-frame.ts reads it; null when the row is not found. */
 export async function effectiveRowTier(engine: Engine, origin: RowOrigin): Promise<{ tier: TrustTier; sourceId: string } | null> {
@@ -273,6 +290,8 @@ export async function holdIfQuarantined(
     const gateOrigin = writeGateOrigin(tier);
     if (gateOrigin === null || resolveRowGateMode(gateOrigin, sourceId, env) !== "quarantine") return null;
     if (result !== null && holdingFamilies(gateOrigin, result.families).length === 0) return null;
+    // The owner's own mail and calendars are flagged, never held, as documents are (write-gate-index.ts).
+    if (gateOrigin === "external" && await isOwnerConnectorSource(engine, sourceId)) return null;
     const kind = holdKindOf(row.table);
     const detectorVersion = result?.detector_version ?? WRITE_GATE_DETECTOR_VERSION;
     const keyFields = row.identity === undefined ? row.fields : [...row.fields, { field: "identity", text: row.identity }];

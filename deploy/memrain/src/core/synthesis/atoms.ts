@@ -21,6 +21,7 @@ import { isTruncated } from "../llm/truncation.ts";
 import { TERMINAL_STOP_REASONS } from "../llm/converse.ts";
 import { phaseFenceCheck, PhaseStoppedError } from "../cycle/phase-context.ts";
 import { lockAtomSource } from "./atoms-source.ts";
+import { MODEL_DERIVED_TIER, lowerModelPageTier } from "../trust-derived.ts";
 import { readAtomCompletion, readCurrentAtomPage, retireCompletedAtomPages, validateCompletedPages,
   type AtomPageSnapshot } from "./atoms-lifecycle.ts";
 
@@ -406,6 +407,7 @@ async function writeAtomPage(storage: Storage, doc: SourceDoc, atom: StagedAtom)
   });
   if (result.held === "source_busy") throw new Error("atom page publication held: source_busy");
   if (result.held) return { held: result.held };
+  await lowerModelPageTier(storage.engine(), atom.slug, doc.sourceId!, doc.id);
   return { slug: atom.slug, version: result.version_n, hash: result.content_hash, atom_key: atom.key, source_hash: doc.contentHash16 };
 }
 
@@ -422,11 +424,11 @@ async function publishAtoms(engine: Engine, doc: SourceDoc, atoms: StagedAtom[],
     for (const atom of atoms) {
       await tx.query(
         `INSERT INTO synth_atoms
-           (atom_key, source_ref, source_kind, source_hash, title, body, atom_type, concepts, source_quote, lesson, model_id)
-         VALUES ($1, $2, 'document', $3, $4, $5, $6, $7::text::jsonb, $8, $9, $10)
+           (atom_key, source_ref, source_kind, source_hash, title, body, atom_type, concepts, source_quote, lesson, model_id, trust_tier)
+         VALUES ($1, $2, 'document', $3, $4, $5, $6, $7::text::jsonb, $8, $9, $10, $11)
          ON CONFLICT (atom_key) DO NOTHING`,
         [atom.key, doc.id, doc.contentHash16, atom.title, atom.body, atom.atom_type,
-          JSON.stringify(atom.concepts), atom.source_quote ?? null, atom.lesson ?? null, modelId],
+          JSON.stringify(atom.concepts), atom.source_quote ?? null, atom.lesson ?? null, modelId, MODEL_DERIVED_TIER],
       );
     }
     await tx.query(

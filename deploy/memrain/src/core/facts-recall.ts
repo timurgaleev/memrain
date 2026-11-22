@@ -29,6 +29,9 @@ import { lockWithdrawals } from "./fact-withdrawals.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { normalizeFactRow } from "./facts.ts";
 import type { SimilarActive } from "./facts-similar-active.ts";
+import type { Engine } from "./engine/interface.ts";
+import type { TrustTier } from "./trust-tier.ts";
+import { contestForget } from "./trust-proposals.ts";
 
 /**
  * A single fact row as returned by `recallFact`. Mirrors the projection in
@@ -125,6 +128,13 @@ export interface ForgetFactInput {
   /** A remote (non-operator) caller reads only world facts, so it may only
    *  forget, or learn of, those. */
   worldOnly?: boolean;
+  /**
+   * The remote caller's tier. A fact more trusted than it is not forgotten:
+   * a `forget` proposal waits for the owner instead (core/trust-proposals.ts).
+   */
+  writerTier?: TrustTier;
+  /** The credential asking, recorded on a proposal. */
+  principal?: string | null;
 }
 
 export interface ForgetFactResult {
@@ -141,6 +151,8 @@ export interface ForgetFactResult {
    * unflipped call.
    */
   withdrawn_duplicates: number;
+  /** Set when the fact is more trusted than the caller: nothing was forgotten and the owner decides. */
+  contested?: { proposal_id: number; fact_tier: TrustTier };
   /** Close live rewordings left behind; added by the MCP `forget_fact` handler
    *  after a flip (see facts-similar-active.ts). */
   similar_active?: SimilarActive;
@@ -177,6 +189,66 @@ export async function forgetFact(
   // duplicate sweep take the flipped row's own source, so they can never reach
   // past what the scope already allowed.
   const flipped = await deadlockSafeTransaction(storage.engine(), async (tx) => {
+    if (input.writerTier !== undefined) {
+      // The tier is read with the row locked, so a fact that becomes more
+      // trusted while this forget waits is contested, not forgotten.
+      const lockParams: unknown[] = [factId];
+      const lockFilter = andSourceScope("source_id", sourceIds, lockParams) + world;
+      // scope: upstream the caller's write scope, applied by andSourceScope on the line above
+      // Only a fact this forget would act on: live, or retired and not yet withdrawn.
+      const locked = await tx.query<{ id: number }>(
+        `SELECT id FROM entity_facts WHERE id = $1
+            AND (forgotten_at IS NULL OR (forgotten_cause IN ('supersede', 'consolidate') AND dimension IS NULL))${lockFilter}
+          FOR UPDATE`, lockParams);
+      if (locked.rows[0]) {
+        const contested = await contestForget(tx, { factId, writerTier: input.writerTier, principal: input.principal ?? null, hasReason: reason !== null });
+        if (contested) return { contested };
+      }
+    }
+    return forgetInTx(tx, factId, { reason, cause, sourceIds, world });
+  });
+  if (flipped !== null && "contested" in flipped) {
+    return { id: factId, found: true, forgotten: false, withdrawn_duplicates: 0, contested: flipped.contested };
+  }
+  if (flipped !== null) {
+    return {
+      id: factId,
+      found: true,
+      forgotten: !flipped.retired,
+      ...(flipped.retired ? { withdrawn: true as const, reason: "already_retired" as const } : {}),
+      withdrawn_duplicates: flipped.duplicates,
+    };
+  }
+  // No flip: either the id is unknown (or out of scope), or it was already
+  // forgotten. One cheap, same-scope existence probe tells the two apart so the
+  // caller gets an honest envelope without leaking another tenant's row.
+  const probeParams: unknown[] = [factId];
+  const probeFilter = andSourceScope("source_id", sourceIds, probeParams) + world;
+  const exists = await storage.engine().query<{ id: number }>(
+    `SELECT id FROM entity_facts WHERE id = $1${probeFilter}`,
+    probeParams,
+  );
+  return {
+    id: factId,
+    found: exists.rows.length > 0,
+    forgotten: false,
+    withdrawn_duplicates: 0,
+  };
+}
+
+/**
+ * The forget itself, inside the caller's transaction: flip the row, then for a
+ * `forget` record the withdrawal and retire every other live copy of the claim
+ * in the row's source. Null when no row in scope matched.
+ */
+export async function forgetInTx(
+  tx: Engine,
+  factId: number,
+  opts: { reason: string | null; cause: ForgetCause; sourceIds?: string[]; world?: string },
+): Promise<{ duplicates: number; retired: boolean } | null> {
+  const { reason, cause, sourceIds } = opts;
+  const world = opts.world ?? "";
+  {
     // Flip first, lock after (the lock order in fact-withdrawals.ts): the
     // UPDATE may wait on a fence reconcile that deleted this row and is about
     // to insert under the shared lock, so it must not hold the exclusive one.
@@ -247,29 +319,5 @@ export async function forgetFact(
     const early = await sweep();
     await lockWithdrawals(tx, [hit.source_id]);
     return { duplicates: early + (await sweep()), retired: !upd.rows[0] };
-  });
-  if (flipped !== null) {
-    return {
-      id: factId,
-      found: true,
-      forgotten: !flipped.retired,
-      ...(flipped.retired ? { withdrawn: true as const, reason: "already_retired" as const } : {}),
-      withdrawn_duplicates: flipped.duplicates,
-    };
   }
-  // No flip: either the id is unknown (or out of scope), or it was already
-  // forgotten. One cheap, same-scope existence probe tells the two apart so the
-  // caller gets an honest envelope without leaking another tenant's row.
-  const probeParams: unknown[] = [factId];
-  const probeFilter = andSourceScope("source_id", sourceIds, probeParams) + world;
-  const exists = await storage.engine().query<{ id: number }>(
-    `SELECT id FROM entity_facts WHERE id = $1${probeFilter}`,
-    probeParams,
-  );
-  return {
-    id: factId,
-    found: exists.rows.length > 0,
-    forgotten: false,
-    withdrawn_duplicates: 0,
-  };
 }

@@ -611,15 +611,17 @@ export function rowDecisionMessage(status: RowHoldDecisionStatus): string {
   }
 }
 
-/** A lower-tier write that would have replaced a more trusted fact or value. */
+/** A lower-tier write that would have replaced or forgotten a more trusted fact or value. */
 export interface TrustProposal {
   id: number;
-  guard: "conflict" | "replaces" | "ontology";
+  /** `forget`: a less trusted credential asked to forget the fact; there is no new fact. */
+  action: "supersede_fact" | "forget";
+  guard: "conflict" | "replaces" | "ontology" | "remote_forget";
   source_id: string;
   entity_slug: string | null;
   dimension: string | null;
   target_id: number;
-  related_id: number;
+  related_id: number | null;
   old_tier: string;
   new_tier: string;
   old_fact: string | null;
@@ -635,9 +637,9 @@ export type TrustDecisionStatus = "accepted" | "rejected" | "stale" | "already_d
 /** What a trust-proposal decision did, in one sentence. */
 export function trustDecisionMessage(status: TrustDecisionStatus): string {
   switch (status) {
-    case "accepted": return "Accepted: the new fact replaces the old one.";
-    case "rejected": return "Rejected: the more trusted fact stays and the other is retired.";
-    case "stale": return "One of the two facts changed since, so nothing was applied.";
+    case "accepted": return "Accepted: the change it asked for is applied.";
+    case "rejected": return "Rejected: the more trusted fact stays.";
+    case "stale": return "A fact it names changed since, so nothing was applied.";
     case "already_decided": return "Someone already decided this proposal.";
     case "not_found": return "That proposal no longer exists.";
   }

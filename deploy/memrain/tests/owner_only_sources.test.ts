@@ -1,10 +1,10 @@
 /**
- * Owner-only sources: once the brain serves several people, a source marked
- * owner_only — and every row derived from it and stored elsewhere (a fact on a
- * shared person page, an attendee's timeline row, a concept page built from
- * its atoms) — is read only by the operator and the owner's credential. A
- * one-person brain reads exactly as before. The provenance backfill for rows
- * written before migration 181 is metadata only.
+ * Owner-only sources: a source marked owner_only — and every row derived from
+ * it and stored elsewhere (a fact on a shared person page, an attendee's
+ * timeline row, a concept page built from its atoms, a think answer built on
+ * them) — is read only by the operator and the owner's credential, whether the
+ * brain serves one person or several. The provenance backfill for rows written
+ * before migration 181 is metadata only.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
@@ -18,6 +18,8 @@ import { provenanceBackfill, provenanceBackfilled, recordConceptPageOrigins, set
 import { dispatchTool } from "../src/mcp/dispatch.ts";
 import { consolidateFactsPhase } from "../src/core/cycle/consolidate-facts.ts";
 import type { AuthInfo } from "../src/core/auth-info.ts";
+import { persistThinkSynthesis, saveThinkTake } from "../src/core/synthesis/think-persist.ts";
+import type { ThinkResult } from "../src/core/synthesis/think.ts";
 
 const OPS: MemberActor = { actor: "ops", via: "cli" };
 
@@ -34,7 +36,7 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     ((await call("entity_timeline", { slug: "people/bob" }, opts)).body.timeline as Array<{ event: string }>).map((e) => e.event).sort();
   const SOURCE: Record<string, string> = { "mail/thread-1": "me-mail", "notes/team": "shared", "concepts/relocation": "default" };
   const visible = async (slug: string, opts: Parameters<typeof dispatchTool>[2]) =>
-    !(await call("page_get", { slug, source_id: SOURCE[slug] }, opts)).isError;
+    !(await call("page_get", { slug, source_id: SOURCE[slug] ?? (slug.startsWith("synthesis/") ? "shared" : undefined) }, opts)).isError;
 
   const listed = async (opts: Parameters<typeof dispatchTool>[2]) =>
     ((await call("page_list", { slug_prefix: "concepts/" }, opts)).body.pages as Array<{ slug: string }>).map((p) => p.slug);
@@ -88,11 +90,31 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
   });
   afterAll(async () => { await db.close(); });
 
-  it("a one-person brain reads exactly as before", async () => {
-    expect(await facts({ authInfo: auth() })).toEqual(["from mail", "from team notes"]);
-    expect(await timeline({ authInfo: auth() })).toEqual(["Joined the team", "Meeting: call"]);
-    expect(await visible("mail/thread-1", { authInfo: auth() })).toBe(true);
-    expect(await visible("concepts/relocation", { authInfo: auth() })).toBe(true);
+  it("a one-person brain already closes the source and its lineage to an unbound key, not to the owner's", async () => {
+    expect(await facts({ authInfo: auth() })).toEqual(["from team notes"]);
+    expect(await timeline({ authInfo: auth() })).toEqual(["Joined the team"]);
+    expect(await visible("mail/thread-1", { authInfo: auth() })).toBe(false);
+    expect(await visible("concepts/relocation", { authInfo: auth() })).toBe(false);
+    expect(await visible("notes/team", { authInfo: auth() })).toBe(true);
+    expect(await facts({ authInfo: auth("ora") })).toEqual(["from mail", "from team notes"]);
+    expect(await visible("mail/thread-1", { authInfo: auth("ora") })).toBe(true);
+  });
+
+  it("a think answer and take built on a fact from the owner-only source stay closed with it", async () => {
+    const evidence = { pages: [], takes: [], facts: [mailFactId], events: [] };
+    const result = {
+      ran: true, pagesGathered: 0, takesGathered: 0, spentUsd: 0, modelId: "m", budgetExhausted: false, synthesisStatus: "ok",
+      synthesis: { answer: "Bob relocates to Lisbon.", citations: [], gaps: [] }, evidence,
+    } as unknown as ThinkResult;
+    const saved = await persistThinkSynthesis(db.storage, { question: "Where is Bob moving", result, sourceId: "shared" });
+    expect(await visible(saved.slug, { authInfo: auth() })).toBe(false);
+    expect(await visible(saved.slug, { authInfo: auth("ora") })).toBe(true);
+    const take = await saveThinkTake(db.storage.engine(), { claim: "Bob relocates to Lisbon", anchorSlug: "notes/team", evidence });
+    expect(take.inserted).toBe(true);
+    const takes = async (opts: Parameters<typeof dispatchTool>[2]) =>
+      ((await call("list_takes", {}, opts)).body.takes as Array<{ take_key: string }>).map((t) => t.take_key);
+    expect(await takes({ authInfo: auth() })).not.toContain(take.take_key);
+    expect(await takes({ authInfo: auth("ora") })).toContain(take.take_key);
   });
 
   it("on a shared brain another member reads neither the source nor what was derived from it", async () => {

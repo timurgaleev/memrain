@@ -271,7 +271,7 @@ function printUsage(): void {
   console.log("  sources update <id> [...same flags as register, all optional...]");
   console.log("                               [--no-respect-quiet-hours] to clear the flag");
   console.log("  sources delete <id>          refuses if any document still references it");
-  console.log("  sources owner-only <id> [on|off]   a personal mailbox/calendar only the owner reads on a shared brain");
+  console.log("  sources owner-only <id> [on|off]   a personal mailbox/calendar only the owner reads");
   console.log("  sources provenance [--apply]       record where older derived rows came from (dry run first)");
   console.log("  friction analyze [--since H|ISO|7d] [--limit N]");
   console.log("                               counts + recent + top-repeats from friction_events");

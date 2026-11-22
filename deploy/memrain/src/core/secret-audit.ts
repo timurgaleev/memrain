@@ -544,10 +544,14 @@ export async function auditStoredSecrets(storage: Storage, opts: SecretAuditOpti
   const highEntropy = switchedOn("MEMRAIN_SECRET_SCAN_HIGH_ENTROPY");
   const echoOn = switchedOn("MEMRAIN_SECRET_SCAN_ECHO");
 
+  // A lane run that skips one of the default prefixes is recorded as partial,
+  // so the doctor never counts it as having audited every transcript.
+  const laneName = !lanePrefixes ? null
+    : TRANSCRIPT_LANE_PREFIXES.every((p) => lanePrefixes.includes(p)) ? "transcripts" : "transcripts:partial";
   const run = await engine.query<{ id: number }>(
     `INSERT INTO secret_audit_runs (scan_version, started_at, source_id, kinds, applied, lane)
      VALUES ($1, $2, $3, $4::text[], $5, $6) RETURNING id`,
-    [SECRET_SCAN_VERSION, startedAt, opts.sourceId ?? null, kinds, opts.apply === true, lane ? "transcripts" : null],
+    [SECRET_SCAN_VERSION, startedAt, opts.sourceId ?? null, kinds, opts.apply === true, laneName],
   );
   const runId = run.rows[0]?.id !== undefined ? Number(run.rows[0].id) : null;
 
@@ -772,9 +776,9 @@ export async function latestSecretAuditRun(engine: Engine): Promise<SecretAuditR
   return latestRun(engine, `source_id IS NULL AND kinds @> $1::text[] AND lane IS NULL`, [[...AUDIT_STORES]]);
 }
 
-/** The last finished transcript-lane audit, or null. */
+/** The last finished transcript-lane audit over every source and the default prefixes, or null. */
 export async function latestTranscriptLaneRun(engine: Engine): Promise<SecretAuditRunSummary | null> {
-  return latestRun(engine, `lane = 'transcripts'`, []);
+  return latestRun(engine, `lane = 'transcripts' AND source_id IS NULL`, []);
 }
 
 async function latestRun(engine: Engine, where: string, params: unknown[]): Promise<SecretAuditRunSummary | null> {

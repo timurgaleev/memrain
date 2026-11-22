@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import { logIngest } from "./ingest-log.ts";
 import { wellFormForText } from "./well-form.ts";
-import type { GateField } from "./write-gate.ts";
+import { gateBaseView, type GateField } from "./write-gate.ts";
 import { flagGatedRow, type GatedRowTable } from "./write-gate-rows.ts";
 import type { TrustTier } from "./trust-tier.ts";
 import type { Storage } from "./storage.ts";
@@ -61,9 +61,21 @@ const RELEASE_COLUMNS: Readonly<Record<GatedRowTable, readonly string[]>> = {
   ],
 };
 
-/** Dedupe key for a held row: its kind plus the normalized text of every gated field. */
+/**
+ * Dedupe key for a held row: its kind plus every gated field as the detector
+ * reads it (hidden tag characters decoded, invisible characters removed,
+ * NFKC), so the same content with a zero-width space in it is the same hold.
+ */
 export function holdFingerprint(kind: RowHoldKind, texts: readonly string[]): string {
-  const norm = texts.map(t => wellFormForText(t).toLowerCase().replace(/\s+/g, " ").trim());
+  return fingerprintOf(kind, texts.map(t => gateBaseView(t).replace(/\s+/g, " ").trim()));
+}
+
+/** The key holds written before write-gate/v3 carry, so an earlier decision still counts. */
+function legacyHoldFingerprint(kind: RowHoldKind, texts: readonly string[]): string {
+  return fingerprintOf(kind, texts.map(t => wellFormForText(t).toLowerCase().replace(/\s+/g, " ").trim()));
+}
+
+function fingerprintOf(kind: RowHoldKind, norm: readonly string[]): string {
   return createHash("sha256").update(`${kind}\u0000${norm.join("\u0001")}`, "utf8").digest("hex");
 }
 
@@ -83,22 +95,24 @@ export interface NewRowHold {
 export type RowHoldLookup = { status: RowHoldStatus; id: number; detectorVersion: string } | null;
 
 /**
- * The state of this content if it was held before: the hold under this
- * detector version, else the latest one the owner decided under an earlier
- * version, so a detector change never re-opens a release or a drop.
+ * The state of this content if it was held before: the latest decision the
+ * owner made on it under any detector version, else the hold still pending
+ * under this one. A detector change never re-opens a release or a drop, and
+ * a release of an older hold is not undone by a newer pending one.
  */
 export async function findRowHold(
   engine: Engine,
   key: { kind: RowHoldKind; sourceId: string; slug: string; fields: readonly GateField[]; detectorVersion: string },
 ): Promise<RowHoldLookup> {
+  const texts = key.fields.map(f => f.text);
   // scope: upstream the writer's own source and slug, by the hold's dedupe key
   const r = await engine.query<{ id: number; status: RowHoldStatus; detector_version: string }>(
     `SELECT id::int AS id, status, detector_version FROM write_gate_row_holds
-      WHERE source_id = $1 AND kind = $2 AND slug = $3 AND fingerprint = $4
+      WHERE source_id = $1 AND kind = $2 AND slug = $3 AND fingerprint = ANY($4::text[])
         AND (detector_version = $5 OR status <> 'held')
-      ORDER BY (detector_version = $5) DESC, id DESC
+      ORDER BY (status <> 'held') DESC, id DESC
       LIMIT 1`,
-    [key.sourceId, key.kind, key.slug, holdFingerprint(key.kind, key.fields.map(f => f.text)), key.detectorVersion],
+    [key.sourceId, key.kind, key.slug, [holdFingerprint(key.kind, texts), legacyHoldFingerprint(key.kind, texts)], key.detectorVersion],
   );
   const row = r.rows[0];
   return row ? { id: Number(row.id), status: row.status, detectorVersion: row.detector_version } : null;

@@ -23,8 +23,8 @@ export interface TrustCmdOptions {
 }
 
 const NOTES: Record<TrustDecisionStatus, (id: number) => string> = {
-  accepted: id => `Proposal #${id} accepted: the replacement is applied.`,
-  rejected: id => `Proposal #${id} rejected: the more trusted fact stays and the other is retired.`,
+  accepted: id => `Proposal #${id} accepted: the change it asked for is applied.`,
+  rejected: id => `Proposal #${id} rejected: the more trusted fact stays.`,
   stale: id => `Proposal #${id} is stale: one of its facts changed since, so nothing was applied.`,
   already_decided: id => `Proposal #${id} was already decided.`,
   not_found: id => `No trust proposal #${id}.`,
@@ -47,10 +47,12 @@ export async function runTrust(opts: TrustCmdOptions): Promise<number> {
       for (const p of rows) {
         const state = p.status === "pending" ? "pending" : `${p.status} by ${p.decided_by}`;
         const what = p.dimension ? `${p.entity_slug} ${p.dimension}` : (p.entity_slug ?? "");
-        console.log(`#${p.id}  ${p.created_at}  ${p.guard}  ${p.source_id}  ${what}  ${p.old_tier} fact ${p.target_id} <- ${p.new_tier} fact ${p.related_id}  ${state}`);
+        const change = p.action === "forget" ? `forget asked by an ${p.new_tier} credential` : `${p.new_tier} fact ${p.related_id}`;
+        console.log(`#${p.id}  ${p.created_at}  ${p.guard}  ${p.source_id}  ${what}  ${p.old_tier} fact ${p.target_id} <- ${change}  ${state}`);
         // Fact text may be outside text: JSON-quoted so it cannot pose as CLI output.
         console.log(`      current:  ${JSON.stringify(p.old_fact ?? "")}`);
-        console.log(`      proposed: ${JSON.stringify(p.new_fact ?? "")}`);
+        if (p.action === "forget") console.log("      proposed: forget it (accept forgets the fact, reject keeps it)");
+        else console.log(`      proposed: ${JSON.stringify(p.new_fact ?? "")}`);
       }
       return 0;
     }

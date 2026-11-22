@@ -23,8 +23,9 @@ import { contentHash16 } from "./atoms.ts";
 import { takeKey } from "./takes.ts";
 import { flagRowAt, holdIfQuarantined, type RowHeld } from "../write-gate-rows.ts";
 import { stripGapsSection, type ThinkResult } from "./think.ts";
-import { evidenceTier, lowerPageTier, type DerivationEvidence } from "../trust-derived.ts";
-import { lowerTier, principalTier } from "../trust-tier.ts";
+import { MODEL_DERIVED_TIER, evidenceTier, lowerPageTier, type DerivationEvidence } from "../trust-derived.ts";
+import { lowerTier, principalTier, type TrustTier } from "../trust-tier.ts";
+import { recordDerivationOrigins } from "../owner-only.ts";
 
 /** Prompt-version marker for operator-committed think takes. */
 export const THINK_TAKE_PROMPT_VERSION = "think-take-v1";
@@ -120,9 +121,12 @@ export async function persistThinkSynthesis(
   }
 
   const engine = storage.engine();
-  // The page restates what the model read, so it is no more trusted than that.
-  const read = opts.result.evidence ? await evidenceTier(engine, opts.result.evidence) : undefined;
-  if (read !== undefined && read !== "owner") await lowerPageTier(engine, slug, opts.sourceId ?? "default", read);
+  const sourceId = opts.sourceId ?? "default";
+  // Model output, so at most an agent's, and no more trusted than what the model read.
+  await lowerPageTier(engine, slug, sourceId, await derivedTier(engine, opts.result.evidence));
+  // It also carries where its inputs came from, so an answer built on an
+  // owner-only source stays closed with it.
+  if (opts.result.evidence) await recordDerivationOrigins(engine, "page", slug, sourceId, opts.result.evidence);
   let inserted = 0;
   for (let i = 0; i < s.citations.length; i++) {
     const c = s.citations[i]!;
@@ -180,6 +184,10 @@ export async function saveThinkTake(
   const weight = Math.max(0, Math.min(1, opts.weight ?? 0.6));
   const sourceHash = contentHash16(claim);
   const key = takeKey(opts.anchorSlug, sourceHash, THINK_TAKE_PROMPT_VERSION, claim);
+  // The take is model output drawn from the evidence: its tier, and the tier
+  // the gate assesses it at, is the lowest of the writer, what it read, and an agent's.
+  const tier = lowerTier(principalTier(opts.principal ?? null), await derivedTier(engine, opts.evidence));
+  const origin = { page: opts.anchorSlug, principal: opts.principal ?? null, floor: tier };
   const held = await holdIfQuarantined(engine, {
     table: "synth_takes",
     fields: [{ field: "claim", text: claim.slice(0, 500) }],
@@ -189,10 +197,8 @@ export async function saveThinkTake(
       claim_text: claim.slice(0, 500), kind: "judgment", weight, domain: opts.domain ?? null, status: "queued",
       model_id: opts.modelId ?? "operator",
     },
-  }, { page: opts.anchorSlug, principal: opts.principal ?? null });
+  }, origin);
   if (held !== null) return { take_key: key, inserted: false, held };
-  const read = opts.evidence ? await evidenceTier(engine, opts.evidence) : undefined;
-  const writer = principalTier(opts.principal ?? null);
   const { rows } = await engine.query<{ id: number }>(
     `INSERT INTO synth_takes
        (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, domain, status, model_id, trust_tier)
@@ -208,12 +214,18 @@ export async function saveThinkTake(
       weight,
       opts.domain ?? null,
       opts.modelId ?? "operator",
-      read ? lowerTier(writer, read) : writer,
+      tier,
     ],
   );
   if (rows.length > 0) {
-    await flagRowAt(engine, { table: "synth_takes", targetId: key, fields: [{ field: "claim", text: claim.slice(0, 500) }] },
-      { page: opts.anchorSlug, principal: opts.principal ?? null });
+    if (opts.evidence) await recordDerivationOrigins(engine, "take", String(rows[0]!.id), null, opts.evidence);
+    await flagRowAt(engine, { table: "synth_takes", targetId: key, fields: [{ field: "claim", text: claim.slice(0, 500) }] }, origin);
   }
   return { take_key: key, inserted: rows.length > 0 };
+}
+
+/** A model-derived row's ceiling: an agent's, lowered to the least trusted of what it read. */
+async function derivedTier(engine: Engine, evidence: DerivationEvidence | undefined): Promise<TrustTier> {
+  const read = evidence ? await evidenceTier(engine, evidence) : undefined;
+  return read ? lowerTier(MODEL_DERIVED_TIER, read) : MODEL_DERIVED_TIER;
 }

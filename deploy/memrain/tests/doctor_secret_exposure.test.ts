@@ -132,6 +132,15 @@ describe("checkSecretExposure", () => {
       expect(r.detail).toContain("4 hit(s)");
     });
 
+    it("does not count a transcript-lane run narrowed to one source or recorded as partial", async () => {
+      await run({ version: previous });
+      await run({ version: SECRET_SCAN_VERSION, kinds: ["pages"], lane: "transcripts", applied: true, source: "default" });
+      await run({ version: SECRET_SCAN_VERSION, kinds: ["pages"], lane: "transcripts:partial", applied: true });
+      const r = await checkSecretExposure(storage.engine(), NOW);
+      expect(r.status).toBe("warn");
+      expect(r.detail).toContain(`scanner v${previous}`);
+    });
+
     it("does not count a pages-only run that was not the transcript lane", async () => {
       await run({ version: previous });
       await run({ version: SECRET_SCAN_VERSION, kinds: ["pages"] });

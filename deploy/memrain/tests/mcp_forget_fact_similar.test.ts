@@ -109,7 +109,7 @@ describe("forget_fact similar_active", () => {
   });
 
   it("stays inside the caller's source and shows a remote caller only world facts", async () => {
-    const gone = await seed("Alice works at Acme Corporation in Berlin", { source_id: "tenant-a", visibility: "world" });
+    const gone = await seed("Alice works at Acme Corporation in Berlin", { source_id: "tenant-a", visibility: "world", written_by_principal: "client:client-a" });
     const own = await seed("Alice works at the Acme Corporation in Berlin", { source_id: "tenant-a", visibility: "world" });
     await seed("Alice works at the Acme Corporation in Berlin.", { source_id: "tenant-b", visibility: "world" });
     await seed("Alice works at the Acme Corporation, Berlin", { source_id: "tenant-a", visibility: "private" });
@@ -118,7 +118,7 @@ describe("forget_fact similar_active", () => {
   });
 
   it("never names private facts to a tenant, though the operator sees them", async () => {
-    const tenantGone = await seed("Alice works at Acme Corporation in Berlin", { source_id: "tenant-a", visibility: "world" });
+    const tenantGone = await seed("Alice works at Acme Corporation in Berlin", { source_id: "tenant-a", visibility: "world", written_by_principal: "client:client-a" });
     await seed("Alice works at the Acme Corporation in Berlin", { source_id: "tenant-a" });
     expect((await forget(tenantGone, { authInfo: tenantA })).body.similar_active!.candidates).toEqual([]);
     const opGone = await seed("Alice lives in Lisbon, Portugal", { source_id: "tenant-a" });

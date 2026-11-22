@@ -526,16 +526,17 @@ export interface AddFactResult {
  * True when a forget has withdrawn this claim for this source, visibility and
  * subject (migration 112). The claim key is computed by the same SQL function
  * the insert trigger uses, so the two cannot disagree on what "the same claim"
- * means.
+ * means. A null visibility matches a withdrawal at any visibility: a writer
+ * that narrows a claim's visibility must not bring back one forgotten at another.
  */
 export async function isClaimWithdrawn(
   q: Queryable,
-  key: { source_id: string; visibility: string; entity_slug: string; fact: string },
+  key: { source_id: string; visibility: string | null; entity_slug: string; fact: string },
 ): Promise<boolean> {
   const r = await q.query<{ hit: number }>(
     `SELECT 1 AS hit FROM fact_withdrawals
-      WHERE source_id = $1 AND visibility = $2 AND entity_slug = $3
-        AND claim_key = memrain_fact_claim_key($4)`,
+      WHERE source_id = $1 AND ($2::text IS NULL OR visibility = $2) AND entity_slug = $3
+        AND claim_key = memrain_fact_claim_key($4) LIMIT 1`,
     [key.source_id, key.visibility, key.entity_slug, key.fact],
   );
   return r.rows.length > 0;

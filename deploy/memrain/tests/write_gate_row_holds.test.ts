@@ -63,9 +63,22 @@ describe("row gate mode", () => {
     expect(resolveRowGateMode("agent", "default", {})).toBe("flag");
   });
 
+  it("an origin's own flag keeps that origin's rows out of quarantine", () => {
+    const env = { MEMRAIN_WRITE_GATE_ROWS: "quarantine", MEMRAIN_WRITE_GATE_AGENT: "flag" };
+    expect(resolveRowGateMode("agent", "default", env)).toBe("flag");
+    expect(resolveRowGateMode("external", "mail", env)).toBe("quarantine");
+    expect(resolveRowGateMode("external", "mail", { MEMRAIN_WRITE_GATE_ROWS: "quarantine", MEMRAIN_WRITE_GATE_EXTERNAL: "quarantine" })).toBe("quarantine");
+    expect(resolveRowGateMode("agent", "default", { MEMRAIN_WRITE_GATE_ROWS: "off", MEMRAIN_WRITE_GATE_AGENT: "quarantine" })).toBe("off");
+  });
+
   it("fingerprints ignore case and spacing, and differ by kind", () => {
     expect(holdFingerprint("fact", [HOSTILE])).toBe(holdFingerprint("fact", [`  ${HOSTILE.toUpperCase().replace(/ /g, "   ")} `]));
     expect(holdFingerprint("fact", [HOSTILE])).not.toBe(holdFingerprint("take", [HOSTILE]));
+  });
+
+  it("fingerprints read through characters the detector reads through", () => {
+    expect(holdFingerprint("fact", [HOSTILE])).toBe(holdFingerprint("fact", [HOSTILE.replace("previous", "pre​vious")]));
+    expect(holdFingerprint("fact", [HOSTILE])).toBe(holdFingerprint("fact", [HOSTILE.replace("wire", "ｗire")]));
   });
 });
 
@@ -117,6 +130,18 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     });
   });
 
+  it("stores a fact in the owner's own connected mailbox, flagged and never held", async () => {
+    await withDb(async (s) => {
+      await registerSource(s.engine(), { id: "me-mail", kind: "mailbox", pathPrefix: "/me-mail" });
+      await s.engine().query(
+        `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES ('00000000-0000-4000-8000-0000000000a1', 'me-mail', 'test', 'admin:operator', 'owner@example.test')`);
+      const r = await addFact(s, { entity_slug: "people/bob", fact: HOSTILE, source_id: "me-mail" });
+      expect(r.held).toBeUndefined();
+      expect(r.inserted).toBe(true);
+      expect(await listRowHolds(s.engine(), { status: "all" })).toEqual([]);
+    });
+  });
+
   it("counts the same content on one hold, and opens another for another entity", async () => {
     await withDb(async (s) => {
       const a = await addFact(s, { entity_slug: "people/carol", fact: HOSTILE, written_by_principal: AGENT });
@@ -126,6 +151,20 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const holds = await listRowHolds(s.engine());
       expect(holds).toHaveLength(2);
       expect(holds.find(h => h.id === a.held!.hold_id)?.seen_count).toBe(2);
+    });
+  });
+
+  it("a release under an earlier detector is not undone by a hold still pending under the current one", async () => {
+    await withDb(async (s) => {
+      const r = await addFact(s, { entity_slug: "people/zed", fact: HOSTILE, written_by_principal: AGENT });
+      // The same content held again after a detector change, then the older hold released.
+      await s.engine().query(`UPDATE write_gate_row_holds SET detector_version = 'write-gate/v1' WHERE id = $1`, [r.held!.hold_id]);
+      const again = await addFact(s, { entity_slug: "people/zed", fact: HOSTILE, written_by_principal: AGENT });
+      expect(again.held?.hold_id).not.toBe(r.held!.hold_id);
+      await s.engine().query(`UPDATE write_gate_row_holds SET status = 'released', decided_at = NOW(), decided_by = 'operator' WHERE id = $1`, [r.held!.hold_id]);
+      const stored = await addFact(s, { entity_slug: "people/zed", fact: HOSTILE, written_by_principal: AGENT });
+      expect(stored.held).toBeUndefined();
+      expect(stored.inserted).toBe(true);
     });
   });
 
@@ -283,6 +322,22 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const r = await saveThinkTake(s.engine(), { claim: HOSTILE, anchorSlug: "synthesis/q1", principal: AGENT });
       expect(r.inserted).toBe(false);
       expect(r.held?.hold_id).toBeGreaterThan(0);
+      expect(await count(s, `SELECT count(*)::int AS n FROM synth_takes`)).toBe(0);
+    });
+  });
+
+  it("gates the owner's own think take as model output: held at its evidence's tier", async () => {
+    await withDb(async (s) => {
+      await putPage(s, { slug: "synthesis/q3", title: "Q3", written_by_principal: "operator" });
+      await putPage(s, { slug: "mail/msg", title: "Msg", source_id: "mail" });
+      const own = await saveThinkTake(s.engine(), { claim: HOSTILE, anchorSlug: "synthesis/q3" });
+      expect(own.held).toMatchObject({ status: "held" });
+      const outside = await saveThinkTake(s.engine(), {
+        claim: `${HOSTILE} Now.`, anchorSlug: "synthesis/q3", evidence: { pages: ["mail/msg"], takes: [], facts: [], events: [] },
+      });
+      expect(outside.held).toMatchObject({ status: "held" });
+      const holds = await listRowHolds(s.engine());
+      expect(holds.map((h) => h.origin).sort()).toEqual(["agent", "external"]);
       expect(await count(s, `SELECT count(*)::int AS n FROM synth_takes`)).toBe(0);
     });
   });

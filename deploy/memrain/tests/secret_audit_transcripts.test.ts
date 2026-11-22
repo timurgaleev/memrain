@@ -74,6 +74,12 @@ describe("transcript audit, dry run", () => {
     const r = await auditStoredSecrets(storage, { lane: "transcripts", slugPrefixes: ["transcripts/", "agents/", "mail/"] });
     expect(r.slugs).toEqual(["agents/run-1", TRANSCRIPT]);
   });
+
+  it("records a run that skips the default prefix as partial", async () => {
+    await auditStoredSecrets(storage, { lane: "transcripts", slugPrefixes: ["agents/"] });
+    const last = await storage.engine().query<{ lane: string }>(`SELECT lane FROM secret_audit_runs ORDER BY id DESC LIMIT 1`);
+    expect(last.rows[0]!.lane).toBe("transcripts:partial");
+  });
 });
 
 describe("transcript audit, apply", () => {

@@ -1,5 +1,6 @@
 import { assertSqlAlias, quarantineFilterFragment } from "../quarantine.ts";
 import { normalizeScope } from "../source-scope.ts";
+import { ownerOnlyLineageSql } from "../owner-only.ts";
 
 /** Legacy canonical grades cannot establish which editable claim they judged. */
 export function currentTakeGradeSql(grade: string, take: string): string {
@@ -49,11 +50,13 @@ export function takeOwnerFilterSql(alias: string, params: unknown[], options: {
 } = {}): string {
   const owner = takeOwnerSourceSql(alias, options.excludeDiary);
   const sources = normalizeScope(options.sourceIds);
+  // A remote read (the diary fence's caller) also skips a take drawn from an owner-only source.
+  const lineage = options.excludeDiary ? ` AND ${ownerOnlyLineageSql("take", `${alias}.id`)}` : "";
   if (sources !== undefined) {
     params.push(sources);
-    return ` AND ${owner} = ANY($${params.length}::text[])`;
+    return ` AND ${owner} = ANY($${params.length}::text[])${lineage}`;
   }
-  if (options.excludeDiary) return ` AND ${owner} IS NOT NULL`;
+  if (options.excludeDiary) return ` AND ${owner} IS NOT NULL${lineage}`;
   // Preserve unscoped legacy rows without inventing an owner for grading or scoped reads.
   return ` AND (${owner} IS NOT NULL OR (${alias}.row_num IS NULL AND NOT EXISTS (
     SELECT 1 FROM documents take_origin WHERE take_origin.id = ${alias}.source_ref

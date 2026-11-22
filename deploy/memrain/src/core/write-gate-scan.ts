@@ -32,7 +32,7 @@ import {
   type WriteGateAction,
   type WriteGateOrigin,
 } from "./write-gate.ts";
-import { effectiveRowTier, type GatedRowTable, type RowOrigin } from "./write-gate-rows.ts";
+import { effectiveRowTier, resolveRowGateMode, type GatedRowTable, type RowOrigin } from "./write-gate-rows.ts";
 
 export const ROW_SCAN_TABLES: readonly GatedRowTable[] = ["entity_facts", "synth_takes", "timeline_events"];
 
@@ -46,6 +46,8 @@ export interface RowScanTableReport {
   owner: number;
   /** Matches whose tier could not be read (row gone mid-scan, or a take with no page or document). */
   unresolved: number;
+  /** Matches at an origin whose row gate is off: counted only, as the writer would record nothing. */
+  gate_off: number;
   by_origin: { agent: number; external: number };
   /** Flagged rows per family. */
   families: Record<string, number>;
@@ -89,17 +91,19 @@ const SPECS: Readonly<Record<GatedRowTable, TableSpec>> = {
   },
   synth_takes: {
     // scope: operator-only a whole-brain scan run from the local CLI
-    sql: `SELECT id, source_ref, row_num, claim_text, resolved_source FROM synth_takes WHERE active AND id > $1 ORDER BY id LIMIT $2`,
+    sql: `SELECT id, source_ref, row_num, claim_text, resolved_source, trust_tier FROM synth_takes WHERE active AND id > $1 ORDER BY id LIMIT $2`,
     toRow: r => {
       const ref = text(r["source_ref"]);
       const fence = r["row_num"] !== null && r["row_num"] !== undefined;
+      // The tier the take recorded (a think take is at most an agent's) can only lower its page's or document's.
+      const floor = isTrustTier(r["trust_tier"]) ? r["trust_tier"] : null;
       return {
         id: Number(r["id"]),
         fields: fence
           ? [{ field: "claim", text: text(r["claim_text"]) }, { field: "evidence", text: text(r["resolved_source"]) }]
           : [{ field: "claim", text: text(r["claim_text"]) }],
         // A fence take is its page's; a proposed take its document's; a think take its anchor page's.
-        origins: fence ? [{ page: ref }] : [{ document: ref }, { page: ref }],
+        origins: fence ? [{ page: ref, floor }] : [{ document: ref, floor }, { page: ref, floor }],
       };
     },
   },
@@ -115,7 +119,7 @@ const SPECS: Readonly<Record<GatedRowTable, TableSpec>> = {
 };
 
 function emptyTable(): RowScanTableReport {
-  return { scanned: 0, matched: 0, flagged: 0, owner: 0, unresolved: 0, by_origin: { agent: 0, external: 0 }, families: {}, patterns: {} };
+  return { scanned: 0, matched: 0, flagged: 0, owner: 0, unresolved: 0, gate_off: 0, by_origin: { agent: 0, external: 0 }, families: {}, patterns: {} };
 }
 
 const bump = (m: Record<string, number>, k: string) => { m[k] = (m[k] ?? 0) + 1; };
@@ -155,6 +159,8 @@ export async function scanExistingRows(engine: Engine, opts: RowScanOptions = {}
         if (at === null) { out.unresolved++; continue; }
         const origin = writeGateOrigin(at.tier);
         if (origin === null) { out.owner++; continue; }
+        // The writer records nothing for an origin whose gate is off, and neither does the scan.
+        if (resolveRowGateMode(origin, at.sourceId) === "off") { out.gate_off++; continue; }
         out.flagged++;
         out.by_origin[origin]++;
         for (const f of result.families) bump(out.families, f);

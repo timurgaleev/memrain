@@ -17,7 +17,7 @@ import { MAX_PRECEDING_CHARS, WRITE_GATE_PATTERNS, type GateFamily, type GatePat
 import type { TrustTier } from "./trust-tier.ts";
 
 /** Bump whenever the pattern table or the normalization changes. */
-export const WRITE_GATE_DETECTOR_VERSION = "write-gate/v2";
+export const WRITE_GATE_DETECTOR_VERSION = "write-gate/v3";
 
 export interface GateField { field: string; text: string }
 export interface GateMatch { field: string; family: GateFamily; pattern: string }
@@ -169,6 +169,11 @@ const NON_ASCII = /[^\t\n\r\u0020-\u007E]/;
 const HAS_MARK = /\p{Mn}/u;
 const HAS_SEPARATED = /\p{L}[-._]\p{L}[-._]\p{L}/u;
 const HAS_EMPHASIS = /[*_~`]/;
+
+/** The text as every detector view starts from it: entities and hidden tag characters decoded, invisible characters gone, NFKC, lower case. */
+export function gateBaseView(text: string): string {
+  return baseView(text);
+}
 
 function baseView(text: string): string {
   let t = wellFormForText(text);

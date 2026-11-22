@@ -49,7 +49,8 @@ export interface SlotEnd { at: Date; by: number }
  * when that value's first row is on a page one of the stint's rows came from,
  * or its fact matches CHANGE_CUE, and only when it starts later than the stint.
  * A value less trusted than a row of the stint never ends it: replacing a more
- * trusted value is the owner's decision (core/trust-proposals.ts).
+ * trusted value is the owner's decision (core/trust-proposals.ts); such a stint
+ * is compared with each later value until one ends it or no longer can.
  * Callers pass only rows the reader may see.
  */
 export function deriveSlotEnds(rows: readonly SlotRow[]): Map<number, SlotEnd> {
@@ -70,17 +71,32 @@ export function deriveSlotEnds(rows: readonly SlotRow[]): Map<number, SlotEnd> {
       if (last && last[0]!.value_hash === r.value_hash) last.push(r);
       else stints.push([r]);
     }
+    // A stint kept open only because a less trusted value followed it stays a
+    // target for every later value: that value was never accepted, so a later
+    // value the stint does not outrank still ends it.
+    let carried: SlotRow[][] = [];
     for (let i = 0; i + 1 < stints.length; i++) {
-      const stint = stints[i]!;
       const next = stints[i + 1]![0]!;
-      if (time(next) <= time(stint[0]!)) continue;
-      const samePage = next.source_markdown_slug != null && stint.some((r) => r.source_markdown_slug === next.source_markdown_slug);
-      if (!samePage && !CHANGE_CUE.test(next.fact)) continue;
-      if (next.trust_rank !== undefined && stint.some((r) => r.trust_rank !== undefined && r.trust_rank > next.trust_rank!)) continue;
-      for (const r of stint) ends.set(Number(r.id), { at: new Date(next.valid_from), by: Number(next.id) });
+      const targets = [...carried, stints[i]!];
+      carried = [];
+      for (const stint of targets) {
+        // Its own value restated: still open, and still ended by the next change.
+        if (stint[0]!.value_hash === next.value_hash) { carried.push(stint); continue; }
+        const verdict = slotEndVerdict(stint, next, time);
+        if (verdict === "end") for (const r of stint) ends.set(Number(r.id), { at: new Date(next.valid_from), by: Number(next.id) });
+        else if (verdict === "less-trusted") carried.push(stint);
+      }
     }
   }
   return ends;
+}
+
+function slotEndVerdict(stint: readonly SlotRow[], next: SlotRow, time: (r: SlotRow) => number): "end" | "keep" | "less-trusted" {
+  if (time(next) <= time(stint[0]!)) return "keep";
+  const samePage = next.source_markdown_slug != null && stint.some((r) => r.source_markdown_slug === next.source_markdown_slug);
+  if (!samePage && !CHANGE_CUE.test(next.fact)) return "keep";
+  if (next.trust_rank !== undefined && stint.some((r) => r.trust_rank !== undefined && r.trust_rank > next.trust_rank!)) return "less-trusted";
+  return "end";
 }
 
 /** The read policy of the reader asking: the same predicates its own fact read applies. */

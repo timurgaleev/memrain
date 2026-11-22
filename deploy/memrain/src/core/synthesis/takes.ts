@@ -43,6 +43,7 @@ import { clearSynthFailure, filterBackedOff, recordSynthFailure } from "./synth-
 import { quarantineFilterFragment } from "../quarantine.ts";
 import { guardFields } from "../secret-scan.ts";
 import { flagRowAt, holdIfQuarantined } from "../write-gate-rows.ts";
+import { MODEL_DERIVED_TIER } from "../trust-derived.ts";
 
 export const PROPOSE_TAKES_PROMPT_VERSION = "v1-nova";
 
@@ -598,7 +599,7 @@ export async function proposeTakesPhase(
           claim_text: take.claim_text, kind: take.kind, weight: take.weight, domain: take.domain ?? null,
           status: "queued", model_id: modelId,
         },
-      }, { document: doc.id });
+      }, { document: doc.id, floor: MODEL_DERIVED_TIER });
       if (held !== null) {
         result.takesHeld += 1;
         continue;
@@ -616,13 +617,13 @@ export async function proposeTakesPhase(
       try {
         await engine.query(
           `INSERT INTO synth_takes
-             (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, domain, status, model_id, embedding)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', $9, $10::vector)
+             (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, domain, status, model_id, embedding, trust_tier)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', $9, $10::vector, $11)
            ON CONFLICT (take_key) DO NOTHING`,
-          [key, doc.id, doc.contentHash16, promptVersion, take.claim_text, take.kind, take.weight, take.domain ?? null, modelId, embedding],
+          [key, doc.id, doc.contentHash16, promptVersion, take.claim_text, take.kind, take.weight, take.domain ?? null, modelId, embedding, MODEL_DERIVED_TIER],
         );
         result.takesQueued += 1;
-        await flagRowAt(engine, { table: "synth_takes", targetId: key, fields: [{ field: "claim", text: take.claim_text }] }, { document: doc.id });
+        await flagRowAt(engine, { table: "synth_takes", targetId: key, fields: [{ field: "claim", text: take.claim_text }] }, { document: doc.id, floor: MODEL_DERIVED_TIER });
       } catch (e) {
         result.errors.push(`${doc.id} take write: ${e instanceof Error ? e.message : String(e)}`);
       }

@@ -422,10 +422,12 @@ export const WRITE_GATE_PATTERNS: readonly GatePattern[] = Object.freeze([
 
   // --- Requests to hand over credentials ---------------------------------------
   sentence("credential_request", "credential", `\\b${CREDENTIAL}\\b`, {
-    // A negation counts only a few plain words before the verb ("will never ask you to send"), not after "why", and not
-    // in "don't hesitate / forget / fail to". Without a determiner ("email API keys to me") the verb must open a sentence
-    // or follow "please", so "use the manager to share credentials" stays a description.
-    preceded: `(?:(?:(?<neg>(?<!\\bwhy )\\bnever|(?<!\\bwhy )\\bnot|(?<!\\bwhy do)n't|\\bno)\\b(?! (?:hesitate|forget|fail)\\b)(?: [a-z']{1,15}){0,4} )?`
+    // A negation counts only right before the verb ("never send", "do not share"), or across "ever" and an asking verb
+    // ("will never ask you to send"); "I'm not at my desk so send me your password" is still a request. Not after
+    // "why", and not in "don't hesitate / forget / fail to". Without a determiner ("email API keys to me") the verb must
+    // open a sentence or follow "please", so "use the manager to share credentials" stays a description.
+    preceded: `(?:(?:(?<neg>(?<!\\bwhy )\\bnever|(?<!\\bwhy )\\bnot|(?<!\\bwhy do)n't|\\bno)\\b(?! (?:hesitate|forget|fail)\\b)`
+      + `(?: ever)?(?: (?:ask|request|require|want|need|expect)(?: (?:you|anyone|users?|customers?|staff|employees))? to)? )?`
       + `\\b${CREDENTIAL_VERB}\\b (?:me |us |them )?(?:all |any |a copy of )?(?:of )?(?:your|the|their|our|my|these|those|all|any) `
       + `|(?:[.!?:;\\n] ?|\\bplease )${CREDENTIAL_VERB}\\b (?:me |us |them )?)(?:[a-z0-9-]{1,20} ){0,3}`,
     near: `\\b${CREDENTIAL_VERB}\\b`,

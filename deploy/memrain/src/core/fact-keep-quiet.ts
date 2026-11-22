@@ -59,8 +59,9 @@ export function keptQuiet(fact: string, claims: readonly Set<string>[]): boolean
 
 /** A turn label: `Name:`, `**Name:**`, `**Name** (time):` or `Name (time):`; null for any other line. */
 function turnOf(line: string): { speaker: string; text: string } | null {
-  // The time a label may carry can hold a colon of its own ("9:03 AM").
-  const unstamped = line.replace(/\([^()\n]{0,40}\)/, "");
+  // The time a label may carry can hold a colon of its own ("9:03 AM"). Only a
+  // parenthetical inside the label goes; one in the message text stays.
+  const unstamped = line.replace(/^([^:()\n]{1,64})\([^()\n]{0,40}\)(?=[\s*]*:)/, "$1");
   const colon = unstamped.indexOf(":");
   if (colon < 1) return null;
   const speaker = unstamped.slice(0, colon).replaceAll("*", "").trim();

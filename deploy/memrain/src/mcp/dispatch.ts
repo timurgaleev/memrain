@@ -924,7 +924,7 @@ async function dispatchToolInner(
       case "recall":
         return await callRecall(storage, args, readSources, remote);
       case "forget_fact":
-        return await callForgetFact(storage, args, writeSource, remote);
+        return await callForgetFact(storage, args, writeSource, remote, writerPrincipal(opts));
       case "get_brain_identity":
         return await callGetBrainIdentity(storage, readSources);
       case "whoami":
@@ -3712,6 +3712,7 @@ async function callForgetFact(
   args: Record<string, unknown>,
   writeSource?: string,
   remote = false,
+  principal: string | null = null,
 ): Promise<ToolCallResult> {
   const id = args["id"];
   if (!Number.isInteger(id) || (id as number) < 1) {
@@ -3719,12 +3720,20 @@ async function callForgetFact(
   }
   const opts: Parameters<typeof forgetFact>[2] = {};
   if (typeof args["reason"] === "string") opts.reason = args["reason"];
-  if (remote) opts.worldOnly = true;
+  // A remote caller forgets only world facts no more trusted than itself.
+  if (remote) Object.assign(opts, { worldOnly: true, writerTier: principalTier(principal), principal });
   // A destructive write scopes to the caller's SINGLE write source (a scalar),
   // never the federated READ set — a tenant may read many sources but must only
   // forget within its own write source. Undefined → unscoped, unchanged.
   const scope = writeSource ? [writeSource] : undefined;
   const r = await forgetFact(storage, id as number, opts, scope);
+  if (r.contested) {
+    throw new OperationError(
+      "permission_denied",
+      `forget_requires_owner: fact ${r.id} is ${r.contested.fact_tier}-written, so this credential cannot forget it; trust proposal ${r.contested.proposal_id} asks the owner`,
+      `Do not retry. Tell the user fact ${r.id} needs their decision: memrain trust accept ${r.contested.proposal_id} on the brain host, or the admin Approvals page.`,
+    );
+  }
   if (!r.forgotten) return jsonResult({ ok: true, ...r });
   invalidateHotMemoryMeta();
   // Advisory: the forget already committed, so a failed lookup must not turn

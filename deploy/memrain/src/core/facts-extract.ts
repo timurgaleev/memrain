@@ -11,7 +11,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import type { Storage } from "./storage.ts";
 import { createHash } from "node:crypto";
 import { pageEntityHints } from "./facts-extract-hints.ts";
-import { addFact } from "./facts.ts";
+import { addFact, isClaimWithdrawn } from "./facts.ts";
 import { DEFAULT_FACT_KIND } from "./facts-decay.ts";
 import { sanitizeForPrompt } from "./llm/sanitize.ts";
 import {
@@ -770,7 +770,10 @@ export async function writeExtractedFacts(
       : null;
   // Built on the first owner claim only, so a batch without one reads nothing.
   let gazetteer: GazetteerEntry[] | undefined;
-  const planned: Array<{ f: ExtractedFact; slug: string; validFrom: ReturnType<typeof resolveValidFrom> }> = [];
+  // `exact`: the person was named exactly (the owner, a gazetteer name, or an
+  // exact slug, alias or tail match). Only those facts are slot-tagged: a slot
+  // ends the entity's earlier value, so a prefix or fuzzy guess must not.
+  const planned: Array<{ f: ExtractedFact; slug: string; exact: boolean; validFrom: ReturnType<typeof resolveValidFrom> }> = [];
   for (const f of facts) {
     // Notability gate: high-only drops non-HIGH facts.
     if (notabilityFilter === "high-only" && f.notability !== "high") {
@@ -781,6 +784,7 @@ export async function writeExtractedFacts(
     // `User`, which the speaker gate rightly never treats as a name. The
     // owner slug is used as given — it names the operator's page exactly.
     let slug: string | null;
+    let exact = true;
     if (owner !== null && f.entity === null && f.attributed_to === "user") {
       if (gazetteer === undefined) {
         try {
@@ -805,8 +809,10 @@ export async function writeExtractedFacts(
       try {
         const r = await resolver.resolve(f.entity);
         slug = r.resolved ? r.slug : slugifyEntity(f.entity);
+        exact = r.resolved && EXACT_RESOLVE_STAGES.has(r.stage);
       } catch {
         slug = slugifyEntity(f.entity);
+        exact = false;
       }
     }
     // The observation date is prompt context only: a claim the model left
@@ -820,12 +826,23 @@ export async function writeExtractedFacts(
       skipped += 1;
       continue;
     }
-    planned.push({ f, slug, validFrom });
+    planned.push({ f, slug, exact, validFrom });
   }
   const slots = opts.tagSlots ? await slotsFor(storage, planned, opts.sourceId ?? "default", opts.tagSlots) : new Map();
   for (const [i, { f, slug, validFrom }] of planned.entries()) {
     const slot = slots.get(i);
     try {
+      // Kept quiet narrows the claim to private. A kept-quiet claim forgotten at
+      // any visibility is not written at all: the withdrawal guard matches the
+      // row's own visibility, so neither narrowing it nor writing it at the
+      // batch's visibility may bring it back.
+      const keepPrivate = f.keep_private === true;
+      if (keepPrivate && await isClaimWithdrawn(storage.engine(), {
+        source_id: opts.sourceId ?? "default", visibility: null, entity_slug: slug, fact: f.fact,
+      })) {
+        skipped += 1;
+        continue;
+      }
       const r = await addFact(storage, {
         entity_slug: slug,
         fact: f.fact,
@@ -839,7 +856,7 @@ export async function writeExtractedFacts(
         ...(opts.sourceSlug ? { source_slug: opts.sourceSlug } : {}),
         ...(opts.sourceId ? { source_id: opts.sourceId } : {}),
         ...(opts.sessionId ? { source_session: opts.sessionId } : {}),
-        ...(f.keep_private ? { visibility: "private" } : opts.visibility ? { visibility: opts.visibility } : {}),
+        ...(keepPrivate ? { visibility: "private" } : opts.visibility ? { visibility: opts.visibility } : {}),
         ...(validFrom ? { valid_from: validFrom.date } : {}),
         ...(slot ? { slot } : {}),
         ...(f.attributed_to ? { attributed_to: f.attributed_to } : {}),
@@ -859,15 +876,18 @@ export async function writeExtractedFacts(
   return { written, skipped, failed, fact_ids: factIds };
 }
 
-/** Slots by planned index for facts about a live person page, tagged in batches. */
+/** Resolver stages that name an existing page exactly (no prefix, name-variant or fuzzy guess). */
+const EXACT_RESOLVE_STAGES: ReadonlySet<string> = new Set(["redirect", "exact", "alias", "exact_tail"]);
+
+/** Slots by planned index for facts about a live person page named exactly, tagged in batches. */
 async function slotsFor(
   storage: Storage,
-  planned: ReadonlyArray<{ f: ExtractedFact; slug: string }>,
+  planned: ReadonlyArray<{ f: ExtractedFact; slug: string; exact: boolean }>,
   sourceId: string,
   tag: NonNullable<Parameters<typeof writeExtractedFacts>[2]>["tagSlots"] & {},
 ): Promise<Map<number, { dimension: string; value: string }>> {
   const out = new Map<number, { dimension: string; value: string }>();
-  const kinds = planned.flatMap((p, i) => SLOT_KINDS.has(p.f.kind) ? [i] : []);
+  const kinds = planned.flatMap((p, i) => p.exact && SLOT_KINDS.has(p.f.kind) ? [i] : []);
   if (kinds.length === 0) return out;
   const people = new Map((await storage.engine().query<{ slug: string; title: string | null }>(
     `SELECT slug, title FROM pages WHERE source_id = $1 AND deleted_at IS NULL AND type = 'person' AND slug = ANY($2::text[])`,

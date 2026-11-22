@@ -99,6 +99,27 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     });
   });
 
+  it("reads a think take's recorded tier, and records nothing for an origin whose gate is off", async () => {
+    await seeded(async (s) => {
+      const e = s.engine();
+      // A think take on the owner's page, recorded at the agent's tier.
+      await e.query(`INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, status, model_id, trust_tier)
+                     VALUES ('k3', 'people/mo', 'h3', 'think-take-v1', $1, 'judgment', 0.6, 'queued', 'm', 'agent')`, [`${HOSTILE} Again.`]);
+      const report = await scanExistingRows(e, { dryRun: true });
+      expect(report.tables.synth_takes).toMatchObject({ matched: 2, flagged: 2, owner: 0 });
+      const prior = process.env.MEMRAIN_WRITE_GATE_EXTERNAL;
+      process.env.MEMRAIN_WRITE_GATE_EXTERNAL = "off";
+      try {
+        const off = await scanExistingRows(e);
+        expect(off.tables.timeline_events).toMatchObject({ matched: 1, flagged: 0, gate_off: 1 });
+        expect((await receipts(s)).some(r => r.origin === "external")).toBe(false);
+      } finally {
+        if (prior === undefined) delete process.env.MEMRAIN_WRITE_GATE_EXTERNAL;
+        else process.env.MEMRAIN_WRITE_GATE_EXTERNAL = prior;
+      }
+    });
+  });
+
   it("adds nothing when run again", async () => {
     await seeded(async (s) => {
       await scanExistingRows(s.engine());

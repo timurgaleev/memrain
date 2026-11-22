@@ -4,16 +4,22 @@
  *
  * A concept page is built from many atoms, a think synthesis or take from the
  * pages, facts, events and takes the model read, a consolidated fact from its
- * members. Each takes the least trusted tier among its inputs. Pages are only
- * ever lowered here: the page trigger (158) already keeps a later write from
- * raising a page, so a derivation recomputed from better inputs stays at the
- * lower tier it once had.
+ * members. Each takes the least trusted tier among its inputs. A row a model
+ * wrote (an atom, a proposed or think take, a concept, atom or think page) is
+ * also capped at MODEL_DERIVED_TIER whatever it read: model output never reads
+ * as the owner's own words. A consolidated fact copies one member verbatim with
+ * no model, so only its inputs bound it. Pages are only ever lowered here: the
+ * page trigger (158) already keeps a later write from raising a page, so a
+ * derivation recomputed from better inputs stays at the lower tier it once had.
  */
 import type { Engine } from "./engine/interface.ts";
 import { readTrustTiers } from "./trust-frame.ts";
 import { factRankSql, isTrustTier, lowerTier, tierOfRank, type TrustTier } from "./trust-tier.ts";
 
 type Queryable = Pick<Engine, "query">;
+
+/** The highest tier a model-written row can hold. */
+export const MODEL_DERIVED_TIER: TrustTier = "agent";
 
 /** What a think run placed in the model's context. */
 export interface DerivationEvidence {
@@ -33,23 +39,34 @@ export async function lowerPageTier(q: Queryable, slug: string, sourceId: string
 }
 
 /**
- * Lowers a concept page to its least trusted atom. An atom's tier is the lower
- * of the one it recorded (184) and the tier of the page or document it names
- * now, so an atom written before 184 counts too.
+ * Lowers a concept page to MODEL_DERIVED_TIER and to its least trusted atom.
+ * An atom's tier is the lower of the one it recorded (184) and the tier of the
+ * page or document it names now, so an atom written before 184 counts too.
  */
-export async function lowerConceptPageTier(q: Queryable, conceptSlug: string, pageSlug: string): Promise<void> {
+export async function lowerConceptPageTier(q: Queryable, conceptSlug: string, pageSlug: string, sourceId = "default"): Promise<void> {
   await q.query(
     // scope: operator-only lowers the tier of a concept page the synthesis cycle just wrote
     `WITH low AS (
-       SELECT memrain_rank_trust_tier(MIN(memrain_trust_rank(
-                memrain_min_trust_tier(COALESCE(a.trust_tier, 'owner'), memrain_ref_trust_tier(a.source_ref, NULL))))) AS tier
+       SELECT memrain_min_trust_tier($4, memrain_rank_trust_tier(MIN(memrain_trust_rank(
+                memrain_min_trust_tier(COALESCE(a.trust_tier, 'owner'), memrain_ref_trust_tier(a.source_ref, NULL)))))) AS tier
          FROM synth_concept_atoms ca JOIN synth_atoms a ON a.id = ca.atom_id
         WHERE ca.concept_slug = $1)
      UPDATE pages p SET trust_tier = memrain_min_trust_tier(COALESCE(p.trust_tier, 'owner'), low.tier)
        FROM low
-      WHERE p.slug = $2 AND low.tier IS NOT NULL
+      WHERE p.slug = $2 AND p.source_id = $3
         AND p.trust_tier IS DISTINCT FROM memrain_min_trust_tier(COALESCE(p.trust_tier, 'owner'), low.tier)`,
-    [conceptSlug, pageSlug],
+    [conceptSlug, pageSlug, sourceId, MODEL_DERIVED_TIER],
+  );
+}
+
+/** Lowers a page a model wrote from one page or document (an atom page) to MODEL_DERIVED_TIER and that origin's tier. */
+export async function lowerModelPageTier(q: Queryable, slug: string, sourceId: string, originRef: string | null): Promise<void> {
+  await q.query(
+    // scope: operator-only lowers the tier of a page the synthesis cycle just wrote in its own source
+    `UPDATE pages SET trust_tier = memrain_min_trust_tier(COALESCE(trust_tier, 'owner'), memrain_min_trust_tier($3, memrain_ref_trust_tier($4, NULL)))
+      WHERE slug = $1 AND source_id = $2
+        AND trust_tier IS DISTINCT FROM memrain_min_trust_tier(COALESCE(trust_tier, 'owner'), memrain_min_trust_tier($3, memrain_ref_trust_tier($4, NULL)))`,
+    [slug, sourceId, MODEL_DERIVED_TIER, originRef],
   );
 }
 

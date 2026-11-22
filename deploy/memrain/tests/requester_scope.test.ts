@@ -90,6 +90,19 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     expect(JSON.parse(who.content[0]!.text).requester_scope).toBe("scoped");
   });
 
+  it("an OAuth client whose grant is only the registration default is refused until it is bound; a tenant source or an enrollment reads", async () => {
+    const client: AuthInfo = {
+      token: "t", clientId: "mcp-app", scopes: ["read"], isPublic: false, sourceId: "default", allowedSources: ["default"],
+      principal: { kind: "oauth_family", id: "f1", client_id: "mcp-app" },
+    };
+    expect(await errorCode("entity_facts", { entity_slug: "people/one" }, { authInfo: client })).toBe("requester_scope_required");
+    expect(await errorCode("entity_facts", { entity_slug: "people/one" }, { authInfo: { ...client, memberId: "alice" } })).toBe("ok");
+    expect(await errorCode("page_get", { slug: "notes/plan" }, { authInfo: { ...client, sourceId: "team", allowedSources: ["team"] } })).toBe("ok");
+    expect(await errorCode("entity_facts", { entity_slug: "people/one" }, { authInfo: { ...client, spendId: "enr-1" } })).toBe("ok");
+    // A PAT scoped to the default source still names its source.
+    expect(await errorCode("entity_facts", { entity_slug: "people/one" }, { authInfo: { ...unbound, sourceId: "default", allowedSources: ["default"] } })).toBe("ok");
+  });
+
   it("the public bearer is refused too", async () => {
     expect(await errorCode("entity_facts", { entity_slug: "people/one" }, { isPublic: true })).toBe("requester_scope_required");
   });
@@ -115,6 +128,8 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     await expect(assertCredentialScoped(engine, {}, "token", "new-key")).rejects.toThrow(/serves several people/);
     await assertCredentialScoped(engine, { memberId: "alice" }, "token", "new-key");
     await assertCredentialScoped(engine, { sourceId: "team" }, "token", "new-key");
+    await expect(assertCredentialScoped(engine, { sourceId: "default" }, "client", "new-app")).rejects.toThrow(/serves several people/);
+    await assertCredentialScoped(engine, { sourceId: ["default", "team"] }, "client", "new-app");
   });
 
   it("doctor lists every live unbound credential with its fix", async () => {
@@ -123,8 +138,13 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
          ('loose', 'h-loose', ARRAY['read'], '{"takes_holders":["world"]}'::jsonb),
          ('scoped', 'h-scoped', ARRAY['read'], '{"source_id":"team"}'::jsonb)`,
     );
+    await db.storage.raw().query(
+      `INSERT INTO oauth_clients (client_id, client_name, redirect_uris, grant_types, scope, token_endpoint_auth_method, client_id_issued_at, source_id, federated_read)
+       VALUES ('dcr-app', 'dcr', '{}', '{client_credentials}', 'read', 'client_secret_post', 0, 'default', '{default}'),
+              ('team-app', 'team', '{}', '{client_credentials}', 'read', 'client_secret_post', 0, 'team', '{team}')`,
+    );
     const found = await unscopedConnections(db.storage.engine());
-    expect(found?.connections.map((c) => c.name)).toEqual(["loose"]);
+    expect(found?.connections.map((c) => c.name)).toEqual(["loose", "dcr-app"]);
     expect(found?.connections[0]?.fix).toBe("memrain member bind <member> --token loose");
   });
 });

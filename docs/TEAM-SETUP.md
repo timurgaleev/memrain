@@ -326,16 +326,27 @@ brain as shared, never the other way round). From then on:
   `requester_scope_required` on every read; `whoami` and `get_brain_identity`
   still answer, and writes are unchanged. There is no grace period. Bind each
   key to the person it serves (`memrain member bind <member> --token <name>`)
-  or scope it to a source. The doctor check `unscoped-shared-reads` lists every
-  key that would be refused, with its fix, and `memrain auth create` refuses to
-  mint such a key (pass `--member <id>` or `--source <id>`).
+  or scope it to a source. An OAuth client (not an enrollment) whose grant is
+  only the `default` source it was registered with counts as bound to nobody:
+  bind it to a member, or give it a source of its own. The doctor check
+  `unscoped-shared-reads` lists every key that would be refused, with its fix;
+  `memrain auth create` refuses to mint such a key (pass `--member <id>` or
+  `--source <id>`), and `memrain auth register-client` refuses such a client
+  (pass `--source <id>`, then bind it).
   `MEMRAIN_REQUIRE_MEMBER=1` stays the stricter switch: it refuses unbound keys
   on every brain, at verification.
-- **Owner-only sources close.** A personal mailbox or calendar marked
-  owner-only is read only by the operator and the owner's keys, even when a
-  group grants it. Everything derived from it closes with it: facts on shared
-  person pages, attendee timeline rows, concept pages built from its atoms.
-  On a one-person brain the flag changes no read.
+
+### Owner-only sources
+
+A personal mailbox or calendar marked owner-only is read only by the operator
+and the owner's keys, even when a group grants it, whether the brain serves
+one person or several. Every other remote key (one bound to nobody, the
+public bearer, another member's) reads it as if it did not exist. Everything
+derived from it closes with it: facts on shared person pages, attendee
+timeline rows, concept pages built from its atoms, and saved `think` answers
+and takes built on any of those. Name the owner first (`memrain member owner
+<id>`) and bind the owner's keys to that member: with no owner set, no remote
+key reads an owner-only source.
 
 ```bash
 memrain sources owner-only me-mail on       # show with: memrain sources owner-only me-mail
@@ -346,9 +357,10 @@ memrain sources provenance --apply          # records their origins; no row's co
 Derived rows record where they came from as they are written. The provenance
 command does the same for rows written before this release; run it once after
 upgrading, dry run first. Until it has been applied, rows derived before the
-upgrade stay readable on a shared brain, and `owner-only-sources` warns. The doctor check `owner-only-sources` warns when a
-brain that serves several people leaves a mailbox, calendar or transcript
-source open.
+upgrade stay readable to remote keys, and `owner-only-sources` warns. The
+doctor check `owner-only-sources` also warns when owner-only sources exist but
+no owner member is set, and when a brain that serves several people leaves a
+mailbox, calendar or transcript source open.
 
 ### Offboarding with the personal source
 

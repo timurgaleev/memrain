@@ -329,15 +329,20 @@ What the brain derives keeps the tier of what it was derived from: an atom,
 take, timeline entry or fact drawn from an agent's page or a meeting is no
 more trusted than that page or meeting, and a concept page or a saved `think`
 answer is no more trusted than the least trusted text it was built from.
+Whatever a model wrote (atoms, proposed and `think` takes, concept and `think`
+pages) is at most an agent's, even when it was built only from your notes:
+model output never reads as your own words.
 
 A less trusted write never quietly replaces a more trusted fact. If an agent
 says "Ana now works at Globex" and you recorded "Ana works at Acme", your fact
 stays current, the agent's is stored beside it (an ontology value as
 quarantined), and a trust proposal waits for you: `memrain trust proposals`,
 then `memrain trust accept <id>` (apply the change) or `reject <id>` (keep
-yours; the other is retired). The admin Approvals page lists them too. A later
-slot value ("moved to Lisbon") only ends a value written at the same tier or
-lower.
+yours; the other is retired). The same goes for an agent asking to forget a
+fact you wrote: nothing is forgotten until you accept its proposal. The admin
+Approvals page lists them too. A later slot value ("moved to Lisbon") only
+ends a value written at the same tier or lower, and a value it could not end
+still ends at your own next change.
 
 A credential can be given a read floor, `memrain auth min-trust <name> owner`
 (or `memrain auth create <name> --min-trust owner`): it then reads only text

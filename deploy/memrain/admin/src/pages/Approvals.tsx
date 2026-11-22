@@ -242,8 +242,14 @@ export function ApprovalsPage() {
                   {/* Fact text may be outside text: rendered as text nodes, never as markup. */}
                   <div className="muted small">Current ({p.old_tier})</div>
                   <blockquote className="hold-excerpt">{p.old_fact ?? ""}</blockquote>
-                  <div className="muted small">Proposed ({p.new_tier})</div>
-                  <blockquote className="hold-excerpt">{p.new_fact ?? ""}</blockquote>
+                  {p.action === "forget" ? (
+                    <div className="muted small">An {p.new_tier} credential asked to forget it. Accept forgets it; reject keeps it.</div>
+                  ) : (
+                    <>
+                      <div className="muted small">Proposed ({p.new_tier})</div>
+                      <blockquote className="hold-excerpt">{p.new_fact ?? ""}</blockquote>
+                    </>
+                  )}
                   {p.status === "pending" ? (
                     <div className="hold-actions">
                       <button

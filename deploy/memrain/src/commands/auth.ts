@@ -320,6 +320,10 @@ async function registerClient(name: string, rest: string[]): Promise<void> {
 
   warnIfSelfIssuedOff();
   const { clientId, clientSecret } = await withProvider(async (p, storage) => {
+    // An enrollment client names its person per enrollment; a client-mode one must name a source of its own.
+    if (tenantMode === "client") {
+      await assertCredentialScoped(storage.raw(), { sourceId: federatedRead?.length ? [sourceId, ...federatedRead] : sourceId }, "client", name);
+    }
     const registered = await p.registerClientManual(
       name,
       grantTypes,

@@ -61,7 +61,7 @@ export async function checkUnscopedSharedReads(engine: Engine): Promise<TenancyC
 export async function checkOwnerOnlySources(engine: Engine): Promise<TenancyCheck> {
   const name = "owner-only-sources";
   try {
-    const { serves, ownerOnlySources } = await readBrainAccess(engine);
+    const { serves, ownerOnlySources, ownerMember } = await readBrainAccess(engine);
     const open = await engine.query<{ id: string }>(
       // scope: operator-only doctor lists personal source kinds
       `SELECT id FROM sources WHERE NOT owner_only AND archived IS NOT TRUE AND kind IN ('mailbox', 'calendar', 'transcript') ORDER BY id`,
@@ -70,11 +70,18 @@ export async function checkOwnerOnlySources(engine: Engine): Promise<TenancyChec
     if (ownerOnlySources.length > 0 && !(await provenanceBackfilled(engine))) {
       return {
         name, ok: true, status: "warn",
-        detail: `${marked}, but the origins of rows derived before this release were never recorded, so those rows stay readable once the brain is shared. ` +
+        detail: `${marked}, but the origins of rows derived before this release were never recorded, so those rows stay readable to remote keys. ` +
           "Run memrain sources provenance (dry run), then memrain sources provenance --apply.",
       };
     }
-    if (!serves.several || open.rows.length === 0) return { name, ok: true, status: "ok", detail: serves.several ? marked : `${marked}; the brain serves one person, so none is closed yet` };
+    if (ownerOnlySources.length > 0 && ownerMember === null) {
+      return {
+        name, ok: true, status: "warn",
+        detail: `${marked}, and no owner member is set, so no remote key reads them, only the local operator. ` +
+          "Name the owner with memrain member owner <id> and bind the owner's keys to that member.",
+      };
+    }
+    if (!serves.several || open.rows.length === 0) return { name, ok: true, status: "ok", detail: ownerOnlySources.length > 0 ? `${marked}; closed to every remote key but the owner's` : marked };
     return {
       name, ok: true, status: "warn",
       detail: `the brain serves several people and ${open.rows.length} personal source(s) are readable by every member they are granted to: ${open.rows.map((r) => r.id).join(", ")}. ` +

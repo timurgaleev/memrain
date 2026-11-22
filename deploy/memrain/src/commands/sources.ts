@@ -186,8 +186,8 @@ export function isIndexedPolicy(s: string): s is IndexedPolicy {
 
 /**
  * `memrain sources owner-only <id> [on|off]`: marks a personal mailbox or
- * calendar source owner-only (core/owner-only.ts). It closes once the brain
- * serves several people; on a one-person brain it changes no read.
+ * calendar source owner-only (core/owner-only.ts). It closes at once to every
+ * remote key but the owner's, whether the brain serves one person or several.
  */
 export async function runSourceOwnerOnly(id: string | undefined, value: string | undefined): Promise<number> {
   if (!id || (value !== undefined && value !== "on" && value !== "off")) {

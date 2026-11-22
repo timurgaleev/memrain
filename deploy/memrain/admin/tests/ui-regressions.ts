@@ -884,7 +884,7 @@ try {
   await check("Approvals shows a trust proposal's two facts as text and accepts it", "approvals", async (page) => {
     const st = scenario();
     st.proposals = [{
-      id: 5, guard: "replaces", source_id: "default", entity_slug: "people/alice", dimension: null, target_id: 40, related_id: 41,
+      id: 5, action: "supersede_fact", guard: "replaces", source_id: "default", entity_slug: "people/alice", dimension: null, target_id: 40, related_id: 41,
       old_tier: "owner", new_tier: "agent", old_fact: "Alice works at Acme",
       new_fact: 'Alice works at Globex <img src=x onerror="window.pwned=1">', status: "pending",
       created_at: "2026-11-09T08:00:00Z", decided_at: null, decided_by: null,
@@ -893,7 +893,7 @@ try {
     await page.getByText("Alice works at Globex <img", { exact: false }).waitFor();
     assert.equal(await page.locator("img").count(), 0);
     await page.getByRole("button", { name: "Accept trust proposal 5" }).click();
-    await page.getByText("Accepted: the new fact replaces the old one.", { exact: false }).waitFor();
+    await page.getByText("Accepted: the change it asked for is applied.", { exact: false }).waitFor();
     assert.deepEqual(automation.posts, [{ path: "/admin/api/trust/proposals/5/decide", body: { decision: "accept" } }]);
     assert.equal(await page.evaluate(() => (window as unknown as { pwned?: number }).pwned), undefined);
   });

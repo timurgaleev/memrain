@@ -1,8 +1,9 @@
 /**
- * Owner-only sources. A source marked owner_only (migration 181) is read only
- * by the trusted local operator and by a credential bound to the brain owner,
- * once the brain serves several people (core/caller-access.ts). Every other
- * remote caller gets what a source that does not exist gets: dispatch drops it
+ * Owner-only sources. A source marked owner_only (migrations 181, 211) is read
+ * only by the trusted local operator and by a credential bound to the brain
+ * owner (core/caller-access.ts), whether the brain serves one person or
+ * several. Every other remote caller (an unbound key, the public ingress,
+ * another member) gets what a source that does not exist gets: dispatch drops it
  * from the caller's read scope, so every source-scoped read path (pages,
  * documents, chunks, facts and timeline rows stored there, takes and atoms
  * whose origin is there, chronicle events written there) closes at once.
@@ -13,7 +14,7 @@
  * sources in derived_origins (insert triggers, and `memrain sources provenance`
  * for rows written before 181; until it has been applied, rows derived before
  * then stay open and doctor `owner-only-sources` says so), and the remote read
- * paths test them with ownerOnlyLineageSql. On a one-person brain, or one with no owner-only
+ * paths test them with ownerOnlyLineageSql. On a brain with no owner-only
  * source, the test is one InitPlan that reads false.
  */
 import type { Engine } from "./engine/interface.ts";
@@ -33,7 +34,7 @@ export async function provenanceBackfilled(engine: Pick<Engine, "query">): Promi
 
 /**
  * ` NOT (owner-only lineage)` for one derived row: true unless the brain
- * serves several people, holds an owner-only source and the row came from it.
+ * holds (or held) an owner-only source and the row came from it.
  * `idExpr` is an `alias.column` literal from code, never caller input.
  */
 export function ownerOnlyLineageSql(kind: DerivedRowKind, idExpr: string): string {
@@ -47,7 +48,7 @@ export function narrowOwnerOnlyScope(
   brain: BrainAccess | null,
   remote: boolean,
 ): string[] | undefined {
-  if (!remote || brain === null || !brain.serves.several || brain.ownerOnlySources.length === 0) return granted;
+  if (!remote || brain === null || brain.ownerOnlySources.length === 0) return granted;
   const closed = new Set(brain.ownerOnlySources);
   return (granted ?? brain.allSources).filter((id) => !closed.has(id));
 }
@@ -108,6 +109,52 @@ export async function recordConceptPageOrigins(engine: Pick<Engine, "query">, co
        ON CONFLICT DO NOTHING RETURNING 1)
      SELECT count(*)::int AS n FROM ins`,
     [conceptSlug, pageSlug],
+  );
+  return Number(r.rows[0]?.n ?? 0);
+}
+
+/** What a derivation placed in the model's context (core/trust-derived.ts DerivationEvidence). */
+export interface DerivationInputs {
+  pages: readonly string[];
+  takes: readonly string[];
+  facts: readonly number[];
+  events: readonly number[];
+}
+
+/**
+ * Records the origins of a row a model wrote from many inputs (a think
+ * synthesis page or take): the source of every input, and every origin an
+ * input already carries, so a fact drawn from an owner-only mailbox keeps the
+ * answer built on it closed too. `ownSource` is the row's own source, which
+ * is not an origin; null for a take, which has none.
+ */
+export async function recordDerivationOrigins(
+  engine: Pick<Engine, "query">,
+  kind: "page" | "take",
+  rowId: string,
+  ownSource: string | null,
+  inputs: DerivationInputs,
+): Promise<number> {
+  if (inputs.pages.length + inputs.takes.length + inputs.facts.length + inputs.events.length === 0) return 0;
+  const r = await engine.query<{ n: number }>(
+    // scope: operator-only records lineage metadata for a row the caller just derived from inputs it already read
+    `WITH o(src) AS (
+       SELECT memrain_ref_source(s) FROM unnest($4::text[]) AS s
+       UNION SELECT d.origin_source_id FROM derived_origins d WHERE d.row_kind = 'page' AND d.row_id = ANY($4::text[])
+       UNION SELECT f.source_id FROM entity_facts f WHERE f.id = ANY($5::text[]::bigint[])
+       UNION SELECT d.origin_source_id FROM derived_origins d WHERE d.row_kind = 'fact' AND d.row_id = ANY($5::text[])
+       UNION SELECT e.source_id FROM timeline_events e WHERE e.id = ANY($6::text[]::bigint[])
+       UNION SELECT d.origin_source_id FROM derived_origins d WHERE d.row_kind = 'timeline' AND d.row_id = ANY($6::text[])
+       UNION SELECT memrain_ref_source(t.source_ref) FROM synth_takes t WHERE t.take_key = ANY($7::text[])
+       UNION SELECT d.origin_source_id FROM synth_takes t JOIN derived_origins d ON d.row_kind = 'take' AND d.row_id = t.id::text
+              WHERE t.take_key = ANY($7::text[])),
+     ins AS (
+       INSERT INTO derived_origins (row_kind, row_id, origin_source_id)
+       SELECT DISTINCT $1::text, $2::text, o.src FROM o
+        WHERE o.src IS NOT NULL AND o.src IS DISTINCT FROM $3::text
+       ON CONFLICT DO NOTHING RETURNING 1)
+     SELECT count(*)::int AS n FROM ins`,
+    [kind, rowId, ownSource, [...inputs.pages], inputs.facts.map(String), inputs.events.map(String), [...inputs.takes]],
   );
   return Number(r.rows[0]?.n ?? 0);
 }

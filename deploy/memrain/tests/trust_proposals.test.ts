@@ -49,8 +49,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(r.status).toBe("accepted");
     const old = await fact(p!.target_id);
     expect(old.forgotten_cause).toBe("supersede");
-    expect(Number(old.superseded_by)).toBe(p!.related_id);
-    expect((await fact(p!.related_id)).forgotten_at).toBeNull();
+    expect(Number(old.superseded_by)).toBe(p!.related_id!);
+    expect((await fact(p!.related_id!)).forgotten_at).toBeNull();
     expect((await decideTrustProposal(db.storage.engine(), p!.id, "reject", "operator")).status).toBe("already_decided");
     expect((await decideTrustProposal(db.storage.engine(), 999_999, "accept", "operator")).status).toBe("not_found");
   });
@@ -124,6 +124,46 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(body.proposal_id).toBeGreaterThan(0);
     expect((await fact(old.id!)).forgotten_at).toBeNull();
   });
+
+  it("an agent's forget of an owner fact files a forget proposal and forgets nothing; accepting forgets it", async () => {
+    const owned = await addFact(db.storage, { entity_slug: "people/ivy", fact: "Ivy lives in Rome", written_by_principal: "operator", visibility: "world" });
+    const auth = { token: "t", clientId: "bot", scopes: ["read", "write"], isPublic: false };
+    const forget = async () => {
+      const r = await dispatchTool(db.storage, { name: "forget_fact", arguments: { id: owned.id, reason: "wrong" } }, { authInfo: auth as never });
+      return { isError: r.isError === true, body: JSON.parse(r.content[0]!.text) };
+    };
+    const first = await forget();
+    expect(first.isError).toBe(true);
+    expect(first.body.error).toBe("permission_denied");
+    expect(first.body.message).toContain("forget_requires_owner");
+    expect((await fact(owned.id!)).forgotten_at).toBeNull();
+    const withdrawn = await db.storage.engine().query(`SELECT 1 FROM fact_withdrawals WHERE first_fact_id = $1`, [owned.id]);
+    expect(withdrawn.rows).toHaveLength(0);
+    const pending = (await listTrustProposals(db.storage.engine(), { status: "pending" })).filter(x => x.target_id === owned.id);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ action: "forget", guard: "remote_forget", related_id: null, old_tier: "owner", new_tier: "agent", proposer_principal: "client:bot" });
+    // A retry reuses the pending proposal.
+    await forget();
+    expect((await listTrustProposals(db.storage.engine(), { status: "pending" })).filter(x => x.target_id === owned.id)).toHaveLength(1);
+    expect((await decideTrustProposal(db.storage.engine(), pending[0]!.id, "accept", "operator")).status).toBe("accepted");
+    expect((await fact(owned.id!)).forgotten_cause).toBe("forget");
+    expect((await db.storage.engine().query(`SELECT 1 FROM fact_withdrawals WHERE first_fact_id = $1`, [owned.id])).rows).toHaveLength(1);
+    // A retry once the fact is forgotten files nothing new.
+    await forget();
+    expect((await listTrustProposals(db.storage.engine(), { status: "pending" })).filter(x => x.target_id === owned.id)).toHaveLength(0);
+  });
+
+  it("an agent forgets its own fact at once, and rejecting a forget proposal keeps the fact", async () => {
+    const auth = { token: "t", clientId: "bot", scopes: ["read", "write"], isPublic: false };
+    const mine = await addFact(db.storage, { entity_slug: "people/jo", fact: "Jo likes jazz", written_by_principal: "client:bot", visibility: "world" });
+    const r = await dispatchTool(db.storage, { name: "forget_fact", arguments: { id: mine.id } }, { authInfo: auth as never });
+    expect(JSON.parse(r.content[0]!.text).forgotten).toBe(true);
+    const owned = await addFact(db.storage, { entity_slug: "people/jo", fact: "Jo lives in Nice", written_by_principal: "operator", visibility: "world" });
+    await dispatchTool(db.storage, { name: "forget_fact", arguments: { id: owned.id } }, { authInfo: auth as never });
+    const [p] = (await listTrustProposals(db.storage.engine(), { status: "pending" })).filter(x => x.target_id === owned.id);
+    expect((await decideTrustProposal(db.storage.engine(), p!.id, "reject", "admin")).status).toBe("rejected");
+    expect((await fact(owned.id!)).forgotten_at).toBeNull();
+  });
 });
 
 describe("fact slots and trust", () => {
@@ -137,5 +177,20 @@ describe("fact slots and trust", () => {
   it("an equally or more trusted later value ends it as before", () => {
     expect(deriveSlotEnds([row(1, "berlin", "2026-01-01", 1), row(2, "lisbon", "2026-03-01", 3)]).get(1)?.by).toBe(2);
     expect(deriveSlotEnds([row(1, "berlin", "2026-01-01"), row(2, "lisbon", "2026-03-01")]).get(1)?.by).toBe(2);
+  });
+  it("a later trusted change still ends the trusted value after a less trusted one in between", () => {
+    const ends = deriveSlotEnds([row(1, "berlin", "2026-01-01", 3), row(2, "lisbon", "2026-03-01", 1), row(3, "paris", "2026-05-01", 3)]);
+    expect(ends.get(1)?.by).toBe(3);
+    expect(ends.get(2)?.by).toBe(3);
+    expect(ends.has(3)).toBe(false);
+  });
+  it("a trusted value restated after a less trusted one is not ended by its own restatement", () => {
+    const ends = deriveSlotEnds([row(1, "berlin", "2026-01-01", 3), row(2, "lisbon", "2026-03-01", 1), row(3, "berlin", "2026-05-01", 3)]);
+    expect(ends.has(1)).toBe(false);
+    expect(ends.get(2)?.by).toBe(3);
+    // ...and the next trusted change ends the first row along with its restatement.
+    const later = deriveSlotEnds([row(1, "berlin", "2026-01-01", 3), row(2, "lisbon", "2026-03-01", 1), row(3, "berlin", "2026-05-01", 3), row(4, "paris", "2026-07-01", 3)]);
+    expect(later.get(1)?.by).toBe(4);
+    expect(later.get(3)?.by).toBe(4);
   });
 });
