@@ -87,7 +87,7 @@ outside text; nothing in it is ever acted on.
   meeting added or deleted while the run pages through the list is not
   skipped; a list that keeps changing leaves the window open for the next run.
 - A transcript with no summary yet is not stored. Its id is kept and fetched
-  directly at the start of every run until it has a summary, until 48 hours
+  directly, at most once an hour, until it has a summary, until 48 hours
   after the meeting began (it is then stored without one), or until Fireflies
   no longer has it. After seven days it is stored as it is.
 - A transcript whose title, time, length, people or summary status changed is

@@ -167,7 +167,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     });
     expect(fake.requests.every(r => r.authorization === `Bearer ${FIREFLIES_KEY}`)).toBe(true);
     expect(parseTranscriptsCursor(await readCursor(e, account.id, STREAM_TRANSCRIPTS))).toEqual({
-      since: new Date(T0).toISOString(), pending: { "ff-t2": "2025-11-15T13:00:00.000Z" },
+      since: new Date(T0).toISOString(), pending: { "ff-t2": "2025-11-15T13:00:00.000Z" }, checked: new Date(T0).toISOString(),
     });
     expect(await readCursor(e, account.id, STREAM_RECONCILE)).toBe(new Date(T0).toISOString());
 
@@ -529,19 +529,25 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect(first.counts.pages_written).toBe(0);
     expect(await pageOf("ff-fresh", account.id)).toBeNull();
     expect(parseTranscriptsCursor(await readCursor(e, account.id, STREAM_TRANSCRIPTS))).toEqual({
-      since: new Date(T0).toISOString(), pending: { "ff-fresh": new Date(T0 - HOUR).toISOString() },
+      since: new Date(T0).toISOString(), pending: { "ff-fresh": new Date(T0 - HOUR).toISOString() }, checked: new Date(T0).toISOString(),
     });
 
     summary = { overview: "The summary arrived." };
+    // Ten minutes on, the deferred transcript is not asked about again: each ask costs quota.
     fake.requests.length = 0;
-    const second = await sync(db.storage, account.id, fake.fetch, T0 + 10 * 60_000);
+    await sync(db.storage, account.id, fake.fetch, T0 + 10 * 60_000);
+    expect(ops(fake.requests)).toEqual(["FirefliesTranscripts"]);
+    expect(await pageOf("ff-fresh", account.id)).toBeNull();
+
+    fake.requests.length = 0;
+    const second = await sync(db.storage, account.id, fake.fetch, T0 + HOUR);
     expect(second.counts.pages_written).toBe(1);
     // Fetched by id first; the listing then finds it stored and fetches nothing.
     expect(ops(fake.requests)).toEqual(["FirefliesTranscript:ff-fresh", "FirefliesTranscripts"]);
     const slug = (await pageOf("ff-fresh", account.id))!;
     expect((await e.query<{ markdown_body: string }>(`SELECT markdown_body FROM pages WHERE slug = $1`, [slug])).rows[0]!.markdown_body)
       .toContain("The summary arrived.");
-    expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBe(new Date(T0 + 10 * 60_000).toISOString());
+    expect(await readCursor(e, account.id, STREAM_TRANSCRIPTS)).toBe(new Date(T0 + HOUR).toISOString());
   });
 
   // Value: protects=a deferred transcript cannot wait forever, and one deleted upstream leaves the queue;

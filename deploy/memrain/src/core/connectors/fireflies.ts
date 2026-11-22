@@ -67,6 +67,13 @@ export const LOOKBACK_MS = 48 * 60 * 60_000;
 export const SUMMARY_WAIT_MS = 48 * 60 * 60_000;
 /** A deferred (still processing) transcript older than this is stored as it is. */
 export const PENDING_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+/**
+ * Deferred transcripts are asked about again at most this often: runs come
+ * every few minutes, and each ask is a request against the key's daily quota.
+ */
+export const PENDING_RECHECK_MS = 60 * 60_000;
+/** Deferred transcripts asked about per run, at most; the rest wait for the next check. */
+export const MAX_PENDING_CHECKS = 50;
 /** Listing passes per window before the walk counts as unstable and the window stays open. */
 export const MAX_LISTING_PASSES = 3;
 /** Listing pages in one pass past which the listing is treated as endless. */
@@ -442,18 +449,20 @@ function timeOf(value: string | null): number | null {
 /**
  * The transcripts cursor. With nothing deferred it is the end of the last
  * closed window as ISO text, the form older releases read; while transcripts
- * wait on Fireflies it is `{"v":2,"since":…,"pending":{"<id>":"<meeting start>"}}`.
+ * wait on Fireflies it is `{"v":2,"since":…,"pending":{"<id>":"<meeting start>"},"checked":…}`,
+ * `checked` being when they were last asked about.
  */
 export interface TranscriptsState {
   since: string | null;
   pending: Readonly<Record<string, string>>;
+  checked?: string | null;
 }
 
 export function parseTranscriptsCursor(cursor: string | null): TranscriptsState {
   if (cursor === null) return { since: null, pending: {} };
   if (!cursor.startsWith("{")) return { since: timeOf(cursor) === null ? null : cursor, pending: {} };
   try {
-    const v = JSON.parse(cursor) as { v?: unknown; since?: unknown; pending?: unknown };
+    const v = JSON.parse(cursor) as { v?: unknown; since?: unknown; pending?: unknown; checked?: unknown };
     if (v.v !== 2) return { since: null, pending: {} };
     const since = typeof v.since === "string" && timeOf(v.since) !== null ? v.since : null;
     const pending: Record<string, string> = {};
@@ -462,7 +471,8 @@ export function parseTranscriptsCursor(cursor: string | null): TranscriptsState 
         if (idOf({ id }) !== null && typeof at === "string" && timeOf(at) !== null) pending[id] = at;
       }
     }
-    return { since, pending };
+    const checked = typeof v.checked === "string" && timeOf(v.checked) !== null ? v.checked : null;
+    return { since, pending, checked };
   } catch {
     return { since: null, pending: {} };
   }
@@ -471,7 +481,7 @@ export function parseTranscriptsCursor(cursor: string | null): TranscriptsState 
 export function serializeTranscriptsCursor(state: TranscriptsState): string | null {
   // No cap needed: a transcript leaves the queue once final, which it is SUMMARY_WAIT_MS after its meeting.
   if (Object.keys(state.pending).length === 0) return state.since;
-  return JSON.stringify({ v: 2, since: state.since, pending: state.pending });
+  return JSON.stringify({ v: 2, since: state.since, pending: state.pending, checked: state.checked ?? null });
 }
 
 /**
@@ -516,8 +526,8 @@ function idOf(row: unknown): string | null {
  *     only once the walk is stable and every transcript in it is stored or
  *     deferred. A transcript Fireflies is still processing (no summary yet,
  *     meeting under SUMMARY_WAIT_MS old) is deferred: its id is kept in the
- *     cursor and fetched directly at the start of every run until it is
- *     final, gone, or PENDING_MAX_AGE_MS old.
+ *     cursor and fetched directly at the start of a run, at most once per
+ *     PENDING_RECHECK_MS, until it is final, gone, or PENDING_MAX_AGE_MS old.
  *   - `transcripts.reconcile`: at most once per RECONCILE_EVERY_MS, every id
  *     the key can see is listed; a stored transcript missing from that list
  *     is probed by id, and only an `object_not_found` answer reports it
@@ -597,7 +607,8 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
     const pending = { ...s.pending };
     if (at === null) delete pending[id];
     else pending[id] = at;
-    return { ...s, pending };
+    // A transcript just found still processing was just asked about.
+    return { ...s, pending, checked: s.checked ?? new Date(runAt).toISOString() };
   };
 
   /** Deferred transcripts first, fetched by id whatever the listing window. */
@@ -605,9 +616,11 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
     let s = from;
     const room = budget?.remaining ?? Number.POSITIVE_INFINITY;
     const items: SyncItem[] = [];
+    let asked = 0;
     for (const [id, at] of Object.entries(from.pending)) {
       // The rest stay deferred for the next run.
-      if (items.length >= room) break;
+      if (items.length >= room || asked >= MAX_PENDING_CHECKS) break;
+      asked++;
       const got = await fetchItem(client, id, null, Date.parse(at));
       if (got.kind === "stop") return { ok: false, response: got.response };
       if (got.kind === "gone") s = withPending(s, id, null);
@@ -617,6 +630,7 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
         if (!("failure" in got.item)) s = withPending(s, id, null);
       }
     }
+    s = { ...s, checked: new Date(runAt).toISOString() };
     state = s;
     return { ok: true, items, checkpoint: serializeTranscriptsCursor(s), done: false };
   }
@@ -626,7 +640,8 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
     state = s;
     if (!drained) {
       drained = true;
-      if (Object.keys(s.pending).length > 0) return drainPending(client, s, budget);
+      const checked = timeOf(s.checked ?? null);
+      if (Object.keys(s.pending).length > 0 && (checked === null || runAt - checked >= PENDING_RECHECK_MS)) return drainPending(client, s, budget);
     }
     if (passPage >= MAX_LISTING_PAGES) {
       return { ok: false, response: {
