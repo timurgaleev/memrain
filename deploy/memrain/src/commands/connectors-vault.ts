@@ -51,6 +51,8 @@ export async function runRotateKek(opts: RotateKekOptions): Promise<number> {
   else {
     console.log(`rotated connector key ${summary.from} -> ${summary.to}: ${summary.credentials} credential(s), `
       + `${summary.oauth_clients} oauth client(s), ${summary.oauth_states} pending connect(s)`);
+    // The live store is resealed; an export taken before this opens only under the old key.
+    console.log("secret store backups taken before this rotation open only under the old key: run `memrain secrets backup` now");
   }
   return 0;
 }

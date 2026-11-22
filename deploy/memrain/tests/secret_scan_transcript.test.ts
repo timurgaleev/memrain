@@ -205,6 +205,53 @@ describe("labeled-credential: a label at the end of a line, the value alone on t
   });
 });
 
+describe("labeled-credential: the label and its value on one line", () => {
+  const PW = ["hunt", "er2"].join("");
+  const PW2 = ["Summer", "2024"].join("");
+  const PAIR = ["s3", "cret!x"].join("");
+  it("a password label with its value", () => {
+    expect(one(`password: ${PW}!`)).toBe("password: <labeled-credential>!");
+    expect(one(`passwd=${PW2}!`)).toBe("passwd=<labeled-credential>!");
+    expect(one(`DB_PASSWORD="${PW} two"`)).toBe('DB_PASSWORD="<labeled-credential>"');
+    expect(one(`**Password:** ${PW}`)).toBe("**Password:** <labeled-credential>");
+  });
+  it("a user/password pair keeps the user", () => {
+    expect(one(`login: alice / ${PAIR}`)).toBe("login: alice / <labeled-credential>");
+    expect(one(`creds alice:${PAIR}`)).toBe("creds alice:<labeled-credential>");
+  });
+  it("a password flag and openssl's pass: argument", () => {
+    expect(one(`mysql -u root --password ${PW2}x -h db`)).toBe("mysql -u root --password <labeled-credential> -h db");
+    expect(one(`tool --db-pass "${PW} two"`)).toBe('tool --db-pass "<labeled-credential>"');
+    expect(one(`openssl rsa -in k.pem -passin pass:${PW2}x`)).toBe("openssl rsa -in k.pem -passin pass:<labeled-credential>");
+  });
+  it("a Markdown password column and a password key cell", () => {
+    expect(one(`| user | Password |\n|---|---|\n| alice | ${PW2}x |`)).toBe("| user | Password |\n|---|---|\n| alice | <labeled-credential> |");
+    expect(one(`| host | db1 |\n| password | \`${PW2}x\` |`)).toBe("| host | db1 |\n| password | `<labeled-credential>` |");
+  });
+  it("prose, settings, placeholders, flags and code stay", () => {
+    for (const text of [
+      "password: required",
+      "the password: see below",
+      "PASSWORD_FILE=/run/secrets/db",
+      "PASSWORD_MIN_LENGTH=12",
+      "password: <your-password>",
+      "password: ${DB_PASSWORD}",
+      "mysql --password --host db",
+      "tool --password-file creds.txt",
+      "login: Google/Codeberg SSO",
+      "credentials: docs/auth.md",
+      "set `password=` in the config",
+      "join https://zoom.example.test/j/1?pwd=abc123XYZ",
+      "| Password | Notes |\n|---|---|\n| required | set on first login |",
+    ]) {
+      expect(one(text)).toBe(text);
+    }
+  });
+  it("is off outside the transcript lane", () => {
+    expect(one(`password: ${PW}!`, {})).toBe(`password: ${PW}!`);
+  });
+});
+
 describe("the transcript rules are off everywhere else", () => {
   it("a write without transcriptRules keeps cookies, .netrc passwords and split labels", () => {
     const pw = ["Synth", "Netrc98765"].join("");
@@ -241,6 +288,10 @@ describe("the transcript rules scan in linear time", () => {
     "here is my API key:\n",
     "login: alice /\n",
     "machine api password ",
+    "password: a ",
+    "login: a / b ",
+    "--password x ",
+    "| password | x |\n",
   ];
   for (const seed of seeds) {
     it(`grows linearly on ${JSON.stringify(seed)}`, () => {

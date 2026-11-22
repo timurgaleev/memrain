@@ -33,15 +33,16 @@ export { trailingDanglingLabel } from "./secret-scan-transcript.ts";
  * Bumped whenever the rules change what is caught, so text stored under an
  * older version can be found and scanned again.
  */
-export const SECRET_SCAN_VERSION = 8;
+export const SECRET_SCAN_VERSION = 9;
 
 /**
  * Versions whose rule changes reach agent transcripts only: v7 (terminal colour
  * codes as a boundary, which only captured terminal output carries) and v8
- * (cookie values, `.netrc` passwords, split labels). Connector mail is never
+ * (cookie values, `.netrc` passwords, split labels) and v9 (same-line password
+ * labels, user/password pairs, password flags and table cells). Connector mail is never
  * rescanned for them, so a transcript-lane audit under such a version completes it.
  */
-export const TRANSCRIPT_ONLY_SCAN_VERSIONS: ReadonlySet<number> = new Set([7, 8]);
+export const TRANSCRIPT_ONLY_SCAN_VERSIONS: ReadonlySet<number> = new Set([7, 8, 9]);
 
 export interface SecretFinding {
   kind: string;

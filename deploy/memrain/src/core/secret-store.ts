@@ -24,6 +24,7 @@ import { logIngest } from "./ingest-log.ts";
 import { appendAudit, auditDir } from "./audit-week-file.ts";
 import { OperationError } from "./operation-error.ts";
 import type { SecretOriginal } from "./secret-scan.ts";
+import { carryForwardFences, OUTSIDE_NEUTRALIZED } from "./fence-carry.ts";
 
 export type SecretField = "body" | "title" | "truth";
 const MARKER = /\[REDACTED:([a-z0-9-]{1,64}):([0-9a-f]{16})\]/g;
@@ -324,6 +325,14 @@ export async function applySecretRestore(
   const page = (await livePage(engine, ref.slug))!;
   const truth = (page.compiled_truth ?? {}) as Record<string, unknown>;
   const jsonValue = JSON.stringify(value).slice(1, -1);
+  const body = preview.fields.includes("body") ? replaceAll(page.markdown_body, preview.markers, value) : page.markdown_body;
+  // A neutralized transcript or GitHub page stays neutralized, or its next re-import would hold on
+  // every fence the brain added. Its fences are carried forward, so the restored body must be what they give back.
+  const neutralized = truth[OUTSIDE_NEUTRALIZED] === 1;
+  if (neutralized && carryForwardFences({ slug: ref.slug, markdown_body: page.markdown_body, compiled_truth: truth }, body) !== body) {
+    throw new OperationError("conflict", `restoring ${row.fingerprint} on '${ref.slug}' would change a fence the page's re-import carries forward`,
+      "Edit the fence by hand, or leave the value redacted.");
+  }
   const { putPage } = await import("./pages.ts");
   // Allowed before the write, so no concurrent write redacts it again in between; a failed write puts the status back.
   await engine.query(`UPDATE secret_store SET status = 'allowed', updated_at = NOW() WHERE id = $1`, [row.id]);
@@ -333,8 +342,9 @@ export async function applySecretRestore(
     slug: ref.slug,
     source_id: page.source_id,
     title: preview.fields.includes("title") ? replaceAll(page.title ?? "", preview.markers, value) : (page.title ?? undefined),
-    markdown_body: preview.fields.includes("body") ? replaceAll(page.markdown_body, preview.markers, value) : page.markdown_body,
+    markdown_body: body,
     allowEmptyBody: true,
+    ...(neutralized ? { outsideText: true as const } : {}),
     compiled_truth: preview.fields.includes("truth")
       ? JSON.parse(replaceAll(JSON.stringify(truth), preview.markers, jsonValue)) as Record<string, unknown>
       : truth,

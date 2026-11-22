@@ -13,6 +13,8 @@ import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { withSecretDisposition } from "../src/core/secret-scan.ts";
 import { kekFromBytes } from "../src/core/connectors/vault.ts";
 import { rotateKek } from "../src/core/connectors/vault-rotate.ts";
+import { parseFactsFence, renderFactsFence } from "../src/core/facts-fence.ts";
+import { OUTSIDE_NEUTRALIZED } from "../src/core/fence-carry.ts";
 import {
   applySecretRestore,
   listSecretOriginals,
@@ -186,6 +188,26 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await expect(applySecretRestore(storage, { slug: "notes/order", fingerprint: m!.fingerprint, expect: preview.hash }, "t")).rejects.toThrow();
       expect((await storage.engine().query<{ status: string }>(`SELECT status FROM secret_store`)).rows[0]!.status).toBe("active");
       expect(await bodyOf("notes/order")).not.toContain(AWS);
+    });
+
+    it("keeps a neutralized transcript neutralized, so its next re-import still carries the brain's fence", async () => {
+      const slug = "transcripts/chatgpt/restore-p1";
+      const render = `session ${AWS}\n`;
+      await putPage(storage, { slug, type: "conversation", allowAdHocType: true, markdown_body: render, written_by: "transcripts-ingest", outsideText: true });
+      const page = (await getPage(storage, slug))!;
+      const fence = renderFactsFence([{ rowNum: 1, claim: "Uses staging.", confidence: 1, active: true }]);
+      await putPage(storage, { slug, type: "conversation", allowAdHocType: true, compiled_truth: page.compiled_truth,
+        markdown_body: `${page.markdown_body}\n## Facts\n\n${fence}\n`, written_by: "agent" });
+      const [m] = markersOf(await bodyOf(slug));
+      const preview = await previewSecretRestore(storage.engine(), { slug, fingerprint: m!.fingerprint });
+      await applySecretRestore(storage, { slug, fingerprint: m!.fingerprint, expect: preview.hash }, "t");
+      expect((await getPage(storage, slug))!.compiled_truth).toMatchObject({ [OUTSIDE_NEUTRALIZED]: 1 });
+
+      const again = await putPage(storage, { slug, type: "conversation", allowAdHocType: true, markdown_body: render, written_by: "transcripts-ingest", outsideText: true });
+      expect(again.held).toBeUndefined();
+      const body = await bodyOf(slug);
+      expect(body).toContain(AWS);
+      expect(parseFactsFence(body).map((f) => f.claim)).toEqual(["Uses staging."]);
     });
 
     it("refuses once the page no longer holds the marker", async () => {

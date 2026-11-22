@@ -115,7 +115,7 @@ describe("checkSecretExposure", () => {
   describe("a rule change that reaches agent transcripts only", () => {
     const previous = SECRET_SCAN_VERSION - 1;
     it("counts a clean transcript-lane audit under the current rules as complete", async () => {
-      expect([...TRANSCRIPT_ONLY_SCAN_VERSIONS].sort()).toEqual([7, 8]);
+      expect([...TRANSCRIPT_ONLY_SCAN_VERSIONS].sort()).toEqual([7, 8, 9]);
       expect(TRANSCRIPT_ONLY_SCAN_VERSIONS.has(SECRET_SCAN_VERSION)).toBe(true);
       await run({ version: previous });
       await run({ version: SECRET_SCAN_VERSION, kinds: ["pages"], lane: "transcripts", applied: true, hits: 2 });

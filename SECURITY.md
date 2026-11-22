@@ -148,13 +148,18 @@ separators, and base64 credential assignments that decode to a complete
 recognized vendor key. It does not normalize arbitrary prose or decode
 arbitrary blobs recursively. Source code is scanned the same way when it is
 indexed. Agent transcripts (`memrain transcripts ingest` and `push`) also get
-three rules no other write runs, because a header name or a label is a much
+rules no other write runs, because a header name or a label is a much
 weaker signal than a credential's own shape: cookie values after a `Cookie:`
 or `Set-Cookie:` header or a curl `-b`/`--cookie` argument (names, attributes
 and values under 8 characters stay), a `.netrc` password (one line, or a
-`password` line inside a multi-line `machine` stanza), and a key, token or
-password label that ends a line or a message with the value alone on the next
-one. Connector mail, calendar and meeting pages never run them. No pattern set is complete, and text stored before a rule existed
+`password` line inside a multi-line `machine` stanza), a password label with
+its value on the same line (`password: hunter2`), the password half of a
+user/password pair (`login: alice / s3cret!`), a password flag (`--password
+X`, openssl `-passin pass:X`), a cell under a password column or after a
+password key cell in a Markdown table, and a key, token or password label
+that ends a line or a message with the value alone on the next one.
+Placeholders, setting names such as `PASSWORD_FILE=`, code references and
+common words after a label stay. Connector mail, calendar and meeting pages never run them. No pattern set is complete, and text stored before a rule existed
 keeps what it carried. If you find a live credential in the brain:
 
 1. **Rotate the credential first.** Anything a connected agent could read is
@@ -228,7 +233,10 @@ ahead. Connector pages keep nothing. Transcript ingest keeps them too, including
 push, whose queued job carries the originals sealed, never in clear. Values
 redacted before the store existed, and anything the whole-brain `memrain
 secrets audit --apply` redacts, were not kept and cannot be recovered; the
-transcript audit (`--transcripts --apply`) keeps what it redacts. No log, receipt, response or ingest-log row
+transcript audit (`--transcripts --apply`) keeps what it redacts. Only a
+page's body, title and compiled truth are kept: a value redacted in a version's
+change reason, a timeline entry, a fact, a take, raw data or a link's context
+is gone for good. No log, receipt, response or ingest-log row
 carries a value; only `reveal` does.
 
 On the host:
@@ -255,7 +263,9 @@ to nothing. It writes a new page version, and from then on the value is
 allowed in that source, so later edits leave it in place. Purging a page
 removes its places in the store and every original no other page holds.
 A page rename takes its places with it. Rotating the connector key with
-`memrain connectors rotate-kek` reseals the store too.
+`memrain connectors rotate-kek` reseals the store too, but not a backup taken
+before it: such a backup opens only under the old key, so take a new backup
+right after a rotation.
 
 The database backup already carries the store. `memrain secrets backup`
 also writes one encrypted export to `<config dir>/secret-store/backups/`

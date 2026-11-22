@@ -4,10 +4,12 @@ Memrain stores chat history as `conversation` pages under
 `transcripts/<format>/<session>-p<n>`. Each session is redacted for
 credentials, split into parts small enough to embed and extract from, and
 written idempotently: re-importing an unchanged session writes nothing.
-Transcripts get three rules other writes do not: cookie values after a
+Transcripts get rules other writes do not: cookie values after a
 `Cookie:`/`Set-Cookie:` header or a curl `-b`/`--cookie` argument, a `.netrc`
-password, and a key, token or password label whose value sits alone on the
-next line or opens the next message. With the connector key set, every value a
+password, a password label with its value on the same line, the password half
+of a `login: user / password` pair, a password flag (`--password X`), a cell
+under a password column of a Markdown table, and a key, token or password
+label whose value sits alone on the next line or opens the next message. With the connector key set, every value a
 redaction removes is kept in the secret store (see SECURITY.md, "Kept
 originals"); `memrain secrets audit --transcripts` rescans transcripts already
 stored. Re-import keeps established managed Facts/Takes fences while replacing the
