@@ -110,6 +110,21 @@ describe("the shipped pack", () => {
     expect(route("quick health check please")).toBe("skillpack-check");
   });
 
+  // protects: pre-write identity checks reach the gate, and its Steps resolve
+  // a named thing through the registry before any vector search.
+  // fails_when: a trigger edit sends these to another skill, or the gate's
+  // order flips to search-first. no_claim: that an agent obeys the text.
+  it("sends pre-write identity checks to ingest-gate, which resolves names before searching", () => {
+    for (const q of ["is this already in the brain", "check before creating a page"]) {
+      const r = routeByTriggers(q, skills);
+      expect(r.kind === "match" ? r.slug : r.kind).toBe("ingest-gate");
+    }
+    const steps = readFileSync(join(PACK_DIR, "ingest-gate", "SKILL.md"), "utf8").split("## Steps")[1] ?? "";
+    expect(steps.indexOf("`resolve_slugs`")).toBeGreaterThan(-1);
+    expect(steps.indexOf("`resolve_slugs`")).toBeLessThan(steps.indexOf("`search`"));
+    expect(steps).toContain("`expected_version: 0`");
+  });
+
   it("routes each kind of conversation request to conversation-archive", () => {
     const route = (q: string): string => {
       const r = routeByTriggers(q, skills);
