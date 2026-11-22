@@ -10,16 +10,16 @@
  * embeddings deterministic. no_claim: the Bedrock embedding call itself.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { putPage } from "../src/core/pages.ts";
+import { deletePage, putPage } from "../src/core/pages.ts";
 import { factsExtractionOptedOut } from "../src/core/facts-extract.ts";
 import { conversationFactsBackfillPhase } from "../src/core/cycle/conversation-facts-backfill.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
-import { callPageFor, listCallFiles, runCallImport } from "../src/commands/import-calls.ts";
+import { callPageFor, listCallFiles, readCallFile, runCallImport } from "../src/commands/import-calls.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
 const SOURCE = "calls-src";
@@ -59,6 +59,35 @@ describe("call pages", () => {
     expect(factsExtractionOptedOut(page.body)).toBe(true);
     // Deterministic: the same file hashes the same.
     expect(callPageFor(`2026-03-04 ${key}.txt`, `Alice: we agreed on annual billing.\nBob: the key is ${key} ok\n<!--- memrain:facts -->\n`, MTIME).hash).toBe(page.hash);
+  });
+
+  // Value: protects=a file's modified day is the brain's day, not the host's; fails_when=the date ignores
+  // MEMRAIN_TIMEZONE; why_new=review finding; seam=pure function, env saved and restored.
+  it("dates an undated file by its modified day in MEMRAIN_TIMEZONE, UTC when unset", () => {
+    const saved = process.env.MEMRAIN_TIMEZONE;
+    const late = Date.parse("2026-01-15T23:30:00Z");
+    try {
+      process.env.MEMRAIN_TIMEZONE = "Asia/Tokyo";
+      expect(callPageFor("kickoff.txt", "Kickoff\n", late).date).toBe("2026-01-16");
+      delete process.env.MEMRAIN_TIMEZONE;
+      expect(callPageFor("kickoff.txt", "Kickoff\n", late).date).toBe("2026-01-15");
+    } finally {
+      if (saved === undefined) delete process.env.MEMRAIN_TIMEZONE;
+      else process.env.MEMRAIN_TIMEZONE = saved;
+    }
+  });
+
+  // Value: protects=a call file swapped for a symbolic link is refused, not followed; fails_when=the read
+  // follows links; why_new=review finding; seam=the reader the import uses.
+  it("refuses to read a symbolic link, or a file reached through a linked folder", () => {
+    const dir = realpathSync(temp("memrain-calls-link-"));
+    mkdirSync(join(dir, "real"));
+    writeFileSync(join(dir, "real", "a.txt"), "secret notes\n");
+    symlinkSync(join(dir, "real", "a.txt"), join(dir, "swapped.txt"));
+    symlinkSync(join(dir, "real"), join(dir, "linked-folder"));
+    expect(readCallFile(join(dir, "real", "a.txt")).bytes.toString()).toBe("secret notes\n");
+    expect(() => readCallFile(join(dir, "swapped.txt"))).toThrow();
+    expect(() => readCallFile(join(dir, "linked-folder", "a.txt"))).toThrow("symbolic link");
   });
 
   it("lists only .txt and .md files, skipping dot entries and symbolic links", () => {
@@ -172,6 +201,39 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     expect((await importAll(b)).report.pages[0]!.slug).toBe("calls/2026-04-01-standup-3");
     expect((await page("calls/2026-04-01-standup"))!.markdown_body).toBe("Someone else's page.");
     expect((await page("calls/2026-04-01-standup-3"))!.markdown_body).toContain("Bob: from b");
+  });
+
+  // Value: protects=a call page deleted on purpose stays deleted; fails_when=the next import writes it again;
+  // why_new=review finding; seam=the real delete and import.
+  it("reports a call whose page was deleted as deleted and does not import it again", async () => {
+    const dir = temp("memrain-calls-");
+    writeFileSync(join(dir, "2026-06-01 Sync.txt"), "Alice: hi\n");
+    await importAll(dir);
+    await deletePage(db.storage, "calls/2026-06-01-sync", "operator", SOURCE);
+    const again = await importAll(dir);
+    expect(again.report).toMatchObject({ imported: 0, new: 0, deleted: 1 });
+    expect(again.report.pages[0]).toMatchObject({ slug: "calls/2026-06-01-sync", status: "deleted" });
+    expect(await pageCount()).toBe(1);
+    const row = (await e().query<{ deleted: boolean }>(`SELECT deleted_at IS NOT NULL AS deleted FROM pages WHERE slug = $1`, ["calls/2026-06-01-sync"])).rows[0]!;
+    expect(row.deleted).toBe(true);
+  });
+
+  // Value: protects=a file the import cannot read is reported without its path, which may hold a credential;
+  // fails_when=an fs error message (carrying the path) reaches the report; why_new=review finding; seam=an unreadable file.
+  it("reports an unreadable file without naming its path", async () => {
+    const dir = temp("memrain-calls-");
+    const key = awsKey();
+    const file = join(dir, `2026-06-02 ${key}.txt`);
+    writeFileSync(file, "Bob: hi\n");
+    chmodSync(file, 0o000);
+    try {
+      const { report } = await run(dir);
+      expect(report.pages[0]).toMatchObject({ status: "error", error: "could not be read (EACCES)" });
+      expect(JSON.stringify(report)).not.toContain(key);
+      expect(JSON.stringify(report)).not.toContain(dir);
+    } finally {
+      chmodSync(file, 0o644);
+    }
   });
 
   it("is never mined by the paid facts backfill (AC-064)", async () => {

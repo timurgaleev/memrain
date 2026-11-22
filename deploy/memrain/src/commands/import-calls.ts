@@ -4,7 +4,8 @@
  * `calls/<date>-<title>`.
  *
  *   - The date is the file name's leading YYYY-MM-DD, else the first date on
- *     the first line, else the file's modified day; the title is the rest of a
+ *     the first line, else the file's modified day in MEMRAIN_TIMEZONE (UTC
+ *     when unset); the title is the rest of a
  *     dated file name, else the first line, else the file name.
  *   - The words are kept as written, after the transcript lane's credential
  *     redaction over the text, the title and the file path (one dictionary, so
@@ -19,13 +20,16 @@
  *     real path and the file's path under it (`call_import.path_digest`); a
  *     rerun from that folder or any folder above it finds the page and reports
  *     it unchanged, or kept when the file changed since, and never writes it
- *     again. A slug another page holds gets a `-2` (then `-3` …) suffix.
+ *     again; one whose page was deleted is reported deleted and not brought
+ *     back. A slug another page holds gets a `-2` (then `-3` …) suffix.
+ *   - A file is opened without following a symbolic link, and no message
+ *     about a file names its path.
  *   - A run without --apply is a dry run: it prints the plan and its
  *     plan_hash and writes nothing; --apply recomputes the plan against the
  *     live brain and refuses unless the hash still matches.
  */
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { Storage } from "../core/storage.ts";
 import { loadConfig } from "../core/config.ts";
@@ -34,6 +38,7 @@ import { putPage, validateSlug } from "../core/pages.ts";
 import { mirrorPage } from "../core/page-index.ts";
 import { neutralizeOutsideText } from "../core/neutralize-outside-text.ts";
 import { auditSecrets, guardEchoes, guardSecrets, withSecretDisposition, type EchoDictionary, type SecretFinding } from "../core/secret-scan.ts";
+import { dayInZone, thinkTimeZone } from "../core/synthesis/think-temporal.ts";
 import { withStorage } from "./with-storage.ts";
 
 export const CALL_FILE_RE = /\.(txt|md)$/i;
@@ -67,7 +72,8 @@ export interface CallPage {
 export interface CallPlanEntry {
   file: string;
   slug: string;
-  status: "new" | "unchanged" | "kept" | "error";
+  /** `deleted`: the file's page was imported and later deleted; it is not imported again. */
+  status: "new" | "unchanged" | "kept" | "deleted" | "error";
   date_from?: CallPage["date_from"];
   redactions?: number;
   hash?: string;
@@ -99,10 +105,44 @@ const validDay = (day: string | undefined): string | null => {
   return Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== day ? null : day;
 };
 
-const localDay = (ms: number): string => {
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+/** The calendar day of `ms` in the brain's zone (MEMRAIN_TIMEZONE, else UTC). */
+const brainDay = (ms: number): string => dayInZone(new Date(ms), thinkTimeZone());
+
+/**
+ * One call file's bytes and modified time. Opened without following a link,
+ * through real folders only, and measured on the open handle, so a file or a
+ * folder swapped for a link after the listing is refused instead of read.
+ */
+export function readCallFile(abs: string): { bytes: Buffer; mtimeMs: number } {
+  // The listing walked real folders; a folder on the way swapped for a link since is refused too.
+  if (realpathSync(abs) !== abs) throw new CallFileError("reached through a symbolic link; not followed");
+  const fd = openSync(abs, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new CallFileError("not a regular file");
+    // Checked again once open: a folder swapped for a link and back in between would have to land
+    // exactly inside this window. (Node has no per-component no-follow open to close it fully.)
+    const now = lstatSync(abs);
+    if (realpathSync(abs) !== abs || now.ino !== st.ino || now.dev !== st.dev) throw new CallFileError("changed while it was read; import again");
+    if (st.size > MAX_FILE) throw new CallFileError("larger than 1 MiB; split the transcript");
+    return { bytes: readFileSync(fd), mtimeMs: st.mtimeMs };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** A refusal whose message names no path, so it can be printed as it is. */
+class CallFileError extends Error {}
+
+/** What went wrong with one file, in words that never carry its path (which may hold a credential). */
+function callFileProblem(err: unknown): string {
+  if (err instanceof CallFileError) return err.message;
+  if (err instanceof TypeError) return "not UTF-8 text";
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code === "ELOOP" || code === "EMLINK") return "a symbolic link; not followed";
+  if (typeof code === "string" && /^E[A-Z]{2,15}$/.test(code)) return `could not be read (${code})`;
+  return "could not be read";
+}
 
 /** The first non-empty line of the text, past a leading frontmatter block, without heading marks. */
 function firstLine(text: string): string {
@@ -157,7 +197,7 @@ export function callPageFor(rel: string, text: string, mtimeMs: number): CallPag
     const line = firstLine(transcript);
     const fromName = validDay(lead?.[1]);
     const fromLine = fromName ? null : validDay(ANY_DATE_RE.exec(line)?.[1]);
-    const date = fromName ?? fromLine ?? localDay(mtimeMs);
+    const date = fromName ?? fromLine ?? brainDay(mtimeMs);
     // Separators in a file name read as spaces, except inside a redaction marker.
     const nameTitle = (fromName ? afterDate : name).split(MARKER_SPLIT_RE).map((part, i) => i % 2 ? part : part.replace(/[_-]+/g, " ")).join("").trim();
     const lineTitle = trimEdges(line.replace(ANY_DATE_RE, ""));
@@ -200,10 +240,12 @@ async function planCalls(storage: Storage, dir: string, source: string): Promise
   const files = listCallFiles(root);
   const e = storage.engine();
   // scope: upstream every read below is narrowed to the target source, or names slugs, which are global
-  const prior = (await e.query<{ slug: string; path: string | null; hash: string | null }>(
-    `SELECT slug, compiled_truth->'call_import'->>'path_digest' AS path, compiled_truth->'call_import'->>'hash' AS hash
+  // Deleted pages too: a call deliberately deleted is not brought back by the next import.
+  const prior = (await e.query<{ slug: string; path: string | null; hash: string | null; deleted: boolean }>(
+    `SELECT slug, compiled_truth->'call_import'->>'path_digest' AS path, compiled_truth->'call_import'->>'hash' AS hash,
+            deleted_at IS NOT NULL AS deleted
        FROM pages
-      WHERE source_id = $1 AND deleted_at IS NULL AND left(slug, $3) = $2
+      WHERE source_id = $1 AND left(slug, $3) = $2
         AND compiled_truth->'call_import'->>'path_digest' IS NOT NULL`,
     [source, `${CALL_PREFIX}/`, CALL_PREFIX.length + 1],
   )).rows;
@@ -214,19 +256,23 @@ async function planCalls(storage: Storage, dir: string, source: string): Promise
     const rel = relative(root, abs);
     let page: CallPage;
     try {
-      if (lstatSync(abs).size > MAX_FILE) throw new Error("larger than 1 MiB; split the transcript");
-      const text = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(abs));
-      page = callPageFor(rel, text, lstatSync(abs).mtimeMs);
-      validateSlug(page.slug);
+      const { bytes, mtimeMs } = readCallFile(abs);
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      page = callPageFor(rel, text, mtimeMs);
     } catch (err) {
-      const message = err instanceof TypeError ? "not UTF-8 text" : err instanceof Error ? err.message : String(err);
-      built.push({ entry: { file: callPageFor(rel, "", 0).file, slug: "", status: "error", error: message } });
+      built.push({ entry: { file: callPageFor(rel, "", 0).file, slug: "", status: "error", error: callFileProblem(err) } });
+      continue;
+    }
+    try {
+      validateSlug(page.slug);
+    } catch {
+      built.push({ entry: { file: page.file, slug: "", status: "error", error: "no valid page name could be made from its date and title; rename the file" } });
       continue;
     }
     const base = { file: page.file, date_from: page.date_from, redactions: page.redactions, hash: page.hash };
     const found = callPathDigests(abs).map(d => byPath.get(d)).find(r => r !== undefined);
     if (found) {
-      built.push({ entry: { ...base, slug: found.slug, status: found.hash === page.hash ? "unchanged" : "kept" } });
+      built.push({ entry: { ...base, slug: found.slug, status: found.deleted ? "deleted" : found.hash === page.hash ? "unchanged" : "kept" } });
       continue;
     }
     built.push({ entry: { ...base, slug: page.slug, status: "new" }, page, pathDigest: callPathDigest(root, rel) });
@@ -278,7 +324,7 @@ export async function runCallImport(opts: CallImportOptions): Promise<number> {
     const count = (s: CallPlanEntry["status"]) => manifest.filter(m => m.status === s).length;
     const report = {
       ok: count("error") === 0, dry_run: !opts.apply, mode: "calls", source: opts.source, prefix: CALL_PREFIX, plan_hash: plan.planHash,
-      total_files: manifest.length, new: count("new"), unchanged: count("unchanged"), kept: count("kept"), errors: count("error"),
+      total_files: manifest.length, new: count("new"), unchanged: count("unchanged"), kept: count("kept"), deleted: count("deleted"), errors: count("error"),
       redactions: manifest.filter(m => m.status === "new").reduce((n, m) => n + (m.redactions ?? 0), 0),
       facts_extraction: false, pages: manifest,
     };
