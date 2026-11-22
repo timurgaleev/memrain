@@ -6,6 +6,67 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-11-22
+
+A release about search quality and memory headroom. Embeddings move to half precision, code gets vectors without crowding notes out of ordinary search, search learns page twins, alias fan-out, relative time and multi-hop relations, and the trust model closes owner-only sources and guards remote forgets.
+
+### Added
+
+- Code chunks carry vectors, so search by meaning can return the function that answers a plain-words question. Each symbol is embedded raw (its first 8,000 UTF-8 bytes) through the spend wallet, and an unchanged symbol keeps its stored vector. Code embedding is opt-in: `MEMRAIN_CODE_EMBED_MAX_USD` defaults to `0`. Above `0`, one sweep spends at most that much, and it stops adding vectors once the projected HNSW index (`rows x (vector bytes + 640) x 1.1`) would exceed the database's `shared_buffers`.
+- `memrain embed --code` fills code chunks that have no vector. Without flags it is a dry run that prints the count, the cost bounds and the projected index against `shared_buffers`. `--apply --max-usd X` embeds under that cap and refuses a run whose index would not fit. A re-run continues where the last one stopped.
+- Per-source `federated` flag (migration 195). A search, query, recall, think, `context_pack`, `volunteer_context`, `page_list` or `find_experts` call that names no source reads only the `default` source and federated sources. Code sources are not federated, so code chunks no longer crowd notes out of ordinary search. Explicit `source_ids`, a grant that lists a source, the code filters (`lang`, `near_symbol`, `symbol_kind`) and the `code_*` tools still reach unfederated sources. New commands: `memrain sources federate <id>` / `unfederate <id>`; `sources list` shows the flag.
+- Retired code files (migration 190). After a complete walk, the code sweep soft-deletes the documents of files gone from a code root and records each one in `code_prunes`. It skips a root that is missing, empty or partly unreadable, and it withholds a pass over 200 documents or 20% of a root. `memrain code prune [--apply]` and `memrain code restore <doc-id> | --sweep <id>` work until the 72 h purge. A file that returns is revived by the next sweep. `MEMRAIN_CODE_PRUNE=0` turns the automatic pass off.
+- Alias fan-out (`MEMRAIN_ALIAS_FANOUT`, default on). A 1–4 word phrase that resolves to exactly one readable page in the alias index adds one extra keyword list under that page's name, at half the keyword weight. It makes no model or embedding call. The title lookup is indexed (migration 194).
+- `superseded_claim` on `query` hits. When a shown fact replaced a claim taken from a returned page, the hit carries the newer fact, and that fact leads the facts block. Public callers do not get the field.
+- `memrain search diagnose` traces a target through every search stage and prints the first stage that lost it.
+- Relative time in a search question: "today", "last week", "this month" and similar, in English, German and Russian, resolve to a day range in `MEMRAIN_TIMEZONE`. In-range hits take the lower half of the first k places. An explicit `since` / `until` wins. Lowercase "may" and month-named people ("What did April say?") no longer scope a search.
+- Keyword-only any-word fill. With no vector arm, pages holding some of the query words fill the places left after every full match, rarer words first.
+- Embedding input hash (migration 187). A retitle or synopsis change re-embeds the wrapped chunks it changed. Vectors stored before this release are reused by their text, so nothing is re-embedded on upgrade.
+- Multi-hop `relational_recall`: up to three typed relations are planned without a model, walked with bounded queries, and returned with a `path`. Ambiguous chains are refused. `MEMRAIN_RELATIONAL_CHAIN=0` turns planning off.
+- Entity anchor (`MEMRAIN_ENTITY_ANCHOR=1`, default off) for present-state questions about one named entity.
+- `query` `window: 1|2` attaches the neighbouring chunks of each hit.
+- `memrain dedupe --preview | reject | confirm` finds person and company pages that share an email, phone, handle, domain or declared id, records a pair as different (migration 188), or folds one into the other. Nothing merges on its own.
+- `memrain skillpack check` checks the skill pack as a routing tree. `skillpack lint` also checks every flag a skill writes against the dispatcher and caps each SKILL.md at 16 KB.
+
+### Changed
+
+- Chunk embeddings are stored as `halfvec(1024)` where pgvector supports it (0.7+), with an HNSW index on `halfvec_cosine_ops` (migration 191). Vectors and the index take half the memory, and nothing is re-embedded. `memrain hnsw rebuild` rebuilds the index in one transaction, without CONCURRENTLY and without parallel workers. Equal vector distances are broken by chunk id.
+- Owner-only sources (mail, calendars) and everything derived from them are closed to every key except the owner's on any brain, not only on a shared one (migration 193). The doctor warns when owner-only sources exist and no owner member is set.
+- An agent's `forget_fact` on a more trusted fact, or on a claim that a more trusted copy also holds, files a trust proposal instead of forgetting (migration 192). The owner accepts it with `memrain trust accept <id>` or on the Approvals page.
+- Atoms, takes, and concept, atom and think pages written by the model are at most agent tier.
+- Rows drawn from the owner's own mail and calendars that match the write gate are held like other outside text. Write-gate detector v3. `MEMRAIN_WRITE_GATE_AGENT` / `MEMRAIN_WRITE_GATE_EXTERNAL=flag` keep that origin's rows out of quarantine.
+- On a shared brain, an OAuth client registered with only the `default` source must be bound to a member.
+- A page, its compiled-truth mirror and its file twin share one per-page result cap. Copies across sources fold only when the whole documents match. A remote caller's diary or owner-only pages never fold into, or get named on, a visible result.
+- With the relational arm on, up to three relational pages in the rerank window return to its head after the rerank.
+- The `context_pack` core block leaves out each page's `## Timeline` section.
+- Code chunker v5: a symbol's chunk starts at its decorators, and nested calls credit the enclosing symbol. Code documents are no longer atom sources.
+- The query-cache ranking version is 10.
+- Facts extraction retries a declined window as two halves, and one failed window no longer ends the run. A reflections answer of `[]` parks those transcripts (migration 189). Same-day twin chronicle events keep separate slugs, and ended calendar invites become events without a paid judge call.
+- Transcripts: labels keep prose and type hints out, uncited transcripts and declined reflections are parked, restored transcripts stay neutralized, and same-line password labels are redacted. Pages can opt out of fact extraction.
+
+### Removed
+
+- `MEMRAIN_RANK_KEYWORD_OR_RETRY`. Its any-word rescue is now the keyword-only fill. A stale value is ignored.
+
+### Fixed
+
+- The cycle's embed-stale phase skips code documents, which it used to rewrite as prose.
+- `get_chunks` and the code commands skip soft-deleted documents.
+
+### Upgrading
+
+- Migrations 187–195 run on start. Migration 191 locks `embeddings` while it converts the column and builds the index: vector search waits (minutes on a small instance), keyword search keeps working. On a small database, run it from the new image with the app stopped:
+  1. Build the image.
+  2. Stop the memrain container.
+  3. Run `memrain apply-migrations` with `MEMRAIN_MIGRATION_STATEMENT_TIMEOUT=15min` and `MEMRAIN_MIGRATION_LOCK_TIMEOUT=2min`.
+  4. Confirm the column is `halfvec(1024)`.
+  5. Deploy.
+- Bind the owner's keys to the owner member before upgrading (`memrain member owner <id>`, then `memrain member bind <id> --token <name>`). Otherwise those keys lose mail and calendar access.
+- Code embedding is now off by default. To keep embedding code, set `MEMRAIN_CODE_EMBED_MAX_USD`, and run `memrain embed --code` first to see whether the index fits.
+- Searches that name no source no longer read code sources. Run `memrain sources federate <id>` to include one.
+- The query-cache ranking version is 10, so the first searches after deploy run uncached.
+- Remove `MEMRAIN_RANK_KEYWORD_OR_RETRY` from `.env`. If it was stored with `memrain config set`, run `memrain config unset MEMRAIN_RANK_KEYWORD_OR_RETRY`.
+
 ## [2.4.0] — 2026-11-21
 
 A release about who owns a brain and how far its rows are trusted. A brain names its owner, closes personal sources to everyone else once it serves several people, reads fact slots and `known_as_of` at read time, holds instruction-like facts, takes and timeline entries for the owner, and keeps every derived row at the trust tier of what it was drawn from: a less trusted write files a proposal instead of replacing a more trusted fact, and a credential can carry a read floor.
