@@ -224,8 +224,11 @@ describe("skillpack check --fix", () => {
   it("replaces a committed, unmodified copy with a pointer, and leaves the rest alone", () => {
     const dir = pack("fix-apply", `## Back-links\n\n${COPY}\n\n## Next\n\nKeep me.`);
     commitAll(dir);
-    const r = checkSkillTree(dir, { fix: true });
+    const r = checkSkillTree(dir, { fix: true, strict: true });
     expect(r.fixes.map((f) => `${f.status} ${f.line}`)).toEqual(["applied 15"]);
+    // The report describes the tree after the fix: the copy it replaced is no longer a warning.
+    expect(r.warnings.filter((i) => i.rule === "dry-copy")).toEqual([]);
+    expect(r.ok).toBe(true);
     const text = readFileSync(join(dir, "alpha", "SKILL.md"), "utf8");
     expect(text).toContain("## Back-links\n\n> **Convention:** see `conventions/quality.md` (via `get_skill conventions/quality`) for Back-Linking.\n\n## Next\n\nKeep me.\n");
     expect(text).not.toContain("An unlinked mention");

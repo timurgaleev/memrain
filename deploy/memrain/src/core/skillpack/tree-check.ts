@@ -272,7 +272,13 @@ function checkDry(
     } catch {
       continue; // `skillpack lint` reports a skill it cannot read
     }
-    const findings = findDryIssues(text, docs);
+    let findings = findDryIssues(text, docs);
+    // Fix first, then report what is left, so the report and the exit code describe the tree after the fix.
+    if (fix) {
+      const outcomes = fixDryCopies(skillsDir, s.slug, file, findings);
+      fixes.push(...outcomes);
+      if (outcomes.some((o) => o.status === "applied")) findings = findDryIssues(readSkillText(file, skillsDir), docs);
+    }
     for (const f of findings) {
       issues.push(f.kind === "copy"
         ? {
@@ -292,7 +298,6 @@ function checkDry(
             action: `point at ${f.doc} (via \`get_skill ${f.doc}\`) where the rule is used`,
           });
     }
-    if (fix) fixes.push(...fixDryCopies(skillsDir, s.slug, file, findings));
   }
   return fixes;
 }

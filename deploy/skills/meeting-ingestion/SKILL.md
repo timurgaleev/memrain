@@ -156,7 +156,9 @@ contradicts what the brain holds, the established record wins and the
 conflict goes in the report for the user. Check plausibility too (a company
 founded last year was not acquired five years ago). A claim the transcript
 only implies is written as an uncertain note on the meeting page, never into
-an entity page or a fact. A failed claim fans out nowhere.
+an entity page or a fact. A failed claim fans out nowhere: not to another
+entity page, not to a timeline, and not onto the verified meeting page,
+because fact extraction (below) carries that page's claims to entity pages.
 
 ### 6. Write the meeting page
 
@@ -164,7 +166,20 @@ New page: `page_put` with `type` `meeting`. Existing page: `page_get` for
 its `version`, then `page_edit {"slug": "...", "expected_version": N,
 "edits": [...]}`.
 
+When the brain runs automatic fact extraction (`MEMRAIN_FACTS_EXTRACTION=1`),
+every save of a `meeting` page queues one paid extraction call, and the facts
+it finds are filed on the entity pages the meeting names. So draft the page
+with `facts_extraction: false` in its frontmatter: nothing is extracted, on
+write or by the backfill, while the page is still being corrected. When the
+verification checklist passes, save it once more without that line (the
+final step of the checklist). Everything left on the verified page is
+extraction input, so an uncertain note there becomes a lower-confidence fact.
+Do not call `extract_facts` for the meeting.
+
 ```markdown
+---
+facts_extraction: false
+---
 # {Title} — {YYYY-MM-DD}
 
 Attendees: [[people/alice-example]], [[people/bob-example]]
@@ -253,6 +268,10 @@ re-check until all pass.
    participant missing from it usually means a skipped timeline event. A
    hard order contradiction blocks the report until fixed or the user waives
    it; a waiver is reported as acknowledged, not resolved.
+7. Final save: no claim that failed phase 5 is left on the page. Then
+   `page_get` for its `version` and `page_edit` the `facts_extraction: false`
+   line (and the frontmatter block, if that was its only line) away. This is
+   the one save that queues fact extraction.
 
 ## Sensitive meetings
 

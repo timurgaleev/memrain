@@ -130,7 +130,7 @@ run steps 6 and 7.
 | STALE_DATA | Once true, no longer true | page edit plus a fact with `replaces` and the new `valid_from` |
 | CROSS_CONTAMINATION | A true fact about A is filed on B | fix both entities |
 | IMPORTED_SOURCE | The wrong text is in an imported document or transcript | correct it where it is owned, then re-import |
-| OUTSIDE_BRAIN | It lives in agent-side memory or instructions outside the brain | tell the user where it lives; the brain cannot edit it |
+| OUTSIDE_BRAIN | It lives in agent-side memory or instructions outside the brain | fix the local memory line when you have file access; otherwise tell the user where it lives |
 | HALLUCINATION | No source anywhere; confabulated from partial signals | name the seed, write a guard fact |
 
 ## Fix per class
@@ -170,8 +170,15 @@ run steps 6 and 7.
 - **IMPORTED_SOURCE.** Do not rewrite an imported transcript or document to
   say something it never said. Correct it with its owner, then re-import. A
   note on the page quoting the user's correction is fine meanwhile.
-- **OUTSIDE_BRAIN.** Say which file or setting probably holds it, if you can
-  tell, and that the user has to change it there.
+- **OUTSIDE_BRAIN.** A client with local file access (Claude Code and other
+  plugin clients) searches the harness's always-loaded memory files for the
+  wrong claim (`MEMORY.md`, `memory/*.md`, the project `CLAUDE.md` or
+  `AGENTS.md`) and replaces the line with the corrected one, adding
+  `(corrected <YYYY-MM-DD>: <what was wrong>)`, so the next session does not
+  seed the same error again after the brain is fixed. Change only the wrong
+  line, and show the user the diff. A remote-only client says which file or
+  setting probably holds it, if it can tell, and that the user has to change
+  it there.
 - **HALLUCINATION.** Name the partial signal that seeded it (a co-mention, a
   similar name, a stale summary). Write a guard fact on the entity so it
   cannot reseed:

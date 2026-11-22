@@ -117,13 +117,38 @@ where `MEMRAIN_DAEMONS=1`. A new daemon is a code change, not a config entry.
 
 Pages are database-canonical, so there is nothing to sync. The only recurring
 corpus work is indexing read-only note directories, and one consolidated
-entry covers them all:
+entry covers them all. The `memrain` CLI exists only inside the serving
+container, so the entry is a host systemd timer that runs it there, with
+stdout and stderr appended to a log and the exit code left to systemd
+(`systemctl status` shows a failed run):
 
-```cron
-*/30 * * * * memrain reindex
+```ini
+# /etc/systemd/system/memrain-reindex.service
+[Unit]
+Description=Reindex the read-only note directories into the brain
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker exec deploy-memrain-1 bun run src/cli.ts reindex
+StandardOutput=append:/var/log/memrain/memrain-reindex.log
+StandardError=append:/var/log/memrain/memrain-reindex.log
+
+# /etc/systemd/system/memrain-reindex.timer
+[Timer]
+OnCalendar=*:05/30
+Persistent=true
+
+[Install]
+WantedBy=timers.target
 ```
 
-It picks up new note directories without a timer edit. Avoid one
+Install it as in phase 6 (`systemctl enable --now memrain-reindex.timer`)
+and run the service once by hand first (`systemctl start
+memrain-reindex.service`, then read the log). The directories must be mounted
+into the container; a path only the host sees indexes nothing. The entry
+picks up new note directories without a timer edit. Avoid one
 `memrain index <path>` entry per directory: each new directory needs manual
 deconfliction, and a slow one races a fast one on the index lock. Check
 `memrain doctor` before adding any indexing entry.

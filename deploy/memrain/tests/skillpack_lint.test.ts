@@ -257,6 +257,33 @@ describe("lintSkillpack", () => {
     ]);
   });
 
+  // Value: protects=a flag on a continuation line is checked; fails_when=fenced lines are scanned one by one again.
+  it("joins a fenced command continued with a backslash and reports it at its first line", () => {
+    const md = [`${FENCE}bash`, "memrain transcripts push session.jsonl \\", "  --token-file t.txt --dry-run \\", "  --json   # comment", "memrain doctor", FENCE].join("\n");
+    expect(extractCliReferences(md)).toEqual([
+      { command: "transcripts", subcommand: "push", flags: ["--token-file", "--dry-run", "--json"], line: 2 },
+      { command: "doctor", subcommand: null, flags: [], line: 5 },
+    ]);
+    // A dangling backslash never swallows the closing fence.
+    expect(extractCliReferences([FENCE, "memrain doctor \\", FENCE, "`memrain status`"].join("\n"))).toEqual([
+      { command: "doctor", subcommand: null, flags: [], line: 2 },
+      { command: "status", subcommand: null, flags: [], line: 4 },
+    ]);
+  });
+
+  // Value: protects=list_skills stays small; fails_when=a description grows past the cap unnoticed.
+  it("caps the frontmatter description at 1024 bytes", () => {
+    const withDescription = (name: string, d: string) =>
+      `---\nname: ${name}\ndescription: ${d}\ntriggers:\n  - "run ${name}"\ntools: [page_get]\n---\n\n# ${name}\n`;
+    const pack = writePack("desc-cap", {
+      "long/SKILL.md": withDescription("long", "d".repeat(1025)),
+      "fits/SKILL.md": withDescription("fits", "d".repeat(1024)),
+    });
+    expect(lintSkillpack(pack).issues).toEqual([
+      { slug: "long", rule: "skill-description-too-large", detail: "description is 1025 bytes, over the 1024-byte cap; move detail into the body", line: 3 },
+    ]);
+  });
+
   it("caps a skill at 16 KB unless skill-budgets.tsv gives it a ceiling", () => {
     const big = (name: string, bytes: number): string => {
       const head = skill(name, "[page_get]", "");

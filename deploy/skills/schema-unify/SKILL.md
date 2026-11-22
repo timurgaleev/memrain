@@ -91,8 +91,11 @@ existing types and aliases.
 For each existing type, decide by the schema-evolution decision tree:
 
 - **Canonical:** keep it.
-- **Collapse into a canonical type:** `tweet-thread` → `tweet` with
-  `format: thread` in frontmatter.
+- **Collapse into a canonical type:** `tweet-thread` → `tweet`.
+  `page-retype` changes only the type: no frontmatter is written, so the old
+  type survives only in the `agent/taxonomy-log` entry (Phase 4). Collapse
+  only when the old type carries no detail worth keeping; otherwise keep it
+  as its own type or alias.
 - **Alias:** a name people search by that should resolve to a canonical type;
   propose it with `ontology_propose` and check `ontology_conflicts` first.
 - **Long tail:** fewer than about 20 pages and no clear home → `note`, with

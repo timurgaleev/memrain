@@ -4,7 +4,8 @@ version: 1.1.0
 description: |
   Confirmation gate before any operation that can lose brain data: forgetting
   facts, deleting or purging pages, reverting with force, stripping page
-  content, bulk retypes and host-side erasure. Inspects the exact targets,
+  content, bulk retypes, host-side erasure, and shell or raw-SQL deletion on
+  the brain host (rm -rf, docker volumes, TRUNCATE, DROP TABLE). Inspects the exact targets,
   presents a recoverability card and waits for the user's explicit yes before
   anything runs.
 triggers:
@@ -16,6 +17,11 @@ triggers:
   - "purge the deleted pages"
   - "wipe the brain"
   - "is this deletion reversible"
+  - "rm -rf"
+  - "truncate the table"
+  - "drop the table"
+  - "free up disk space"
+  - "delete the docker volume"
 tools:
   - whoami
   - page_get
@@ -75,6 +81,17 @@ mutating: true
 | `memrain page-retype` with `--apply` | Yes | Retype back from the batch log (`schema-unify` owns this flow) |
 | `memrain merge` over many pairs | Partly | `page_restore` brings back the stub; facts and links stay re-pointed |
 | `memrain erase forgotten` / `memrain erase chat` | No | None. Host commands that physically erase forgotten facts, deleted pages or chat threads |
+| `rm -rf` on a directory with data on the brain host (`/opt/memrain`, `.secrets/`, the backup or attachment directories, a mounted note directory) | No | None, unless the operator holds a verified copy elsewhere. `/opt/memrain` is a git checkout, but its `.env`, `.secrets/` and local files are not in git |
+| `rm`, `unlink` or `sed -i` over more than 10 files; overwriting files with smaller versions; `git rm` on tracked files | Partly | Tracked files come back from git history; untracked ones and uncommitted edits do not |
+| `docker volume rm`, `docker compose down -v`, `docker system prune --volumes` | No | None. The volume holds the local Postgres or PGLite data, the search index and anything else the stack keeps on disk |
+| Raw SQL against the brain database (`psql`, a script, a migration): `DROP TABLE`, `TRUNCATE`, `DELETE` or `UPDATE` without a narrow `WHERE` | No, short of a database restore | A database snapshot the operator has verified. The server's history (versions, supersessions, audit rows) lives in the same database and goes with it |
+| "Free up disk space" or "clean up the host" that touches data files, logs or volumes | Depends | Inspect each path first (`du -sh`, `docker system df`); logs and build caches are regenerable, data directories and volumes are not |
+
+Shell and SQL rows run outside the server, so none of its guards apply: the
+card is the only check. Inspect the target with reads first (`ls`, `du -sh`,
+`docker volume inspect`, `SELECT count(*)` with the same `WHERE`), name the
+exact paths or the exact statement on the card, and never chain the deletion
+behind another command or run it in the background.
 
 `page_rename` is not destructive: it keeps history and redirects the old slug.
 A single ordinary `page_delete` the user asked for by slug does not need the
@@ -150,7 +167,7 @@ The card, before anything runs:
 ```
 DATA LOSS: confirmation required
 
-What:      <operation> on <N> <pages|facts|links>
+What:      <operation> on <N> <pages|facts|links|files|rows>
 Targets:   <one line per slug or fact id; no private body text>
 Source:    <source id>
 Why:       <the user's request, in their words>

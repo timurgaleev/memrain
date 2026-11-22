@@ -43,6 +43,7 @@ export type SkillLintRule =
   | "trigger-overlap"
   | "operator-only-tool"
   | "skill-too-large"
+  | "skill-description-too-large"
   | "skill-budget-invalid"
   | "skill-budget-stale"
   | "unreadable";
@@ -252,9 +253,11 @@ type SegmentVisitor = (code: string, line: number) => void;
 
 /**
  * Hand every code segment — fenced lines (minus a trailing comment) and inline
- * code spans — to `visit`. Linear: fences are tracked line by line and
- * backtick runs are paired through a precomputed next-run-of-the-same-length
- * table.
+ * code spans — to `visit`. A fenced line ending in `\` is joined with the
+ * lines it continues and reported at its first line, so a flag on a
+ * continuation line is checked with its command. Linear: fences are tracked
+ * line by line and backtick runs are paired through a precomputed
+ * next-run-of-the-same-length table.
  */
 function forEachCodeSegment(markdown: string, firstLine: number, visit: SegmentVisitor): void {
   const lines = markdown.split("\n");
@@ -270,7 +273,12 @@ function forEachCodeSegment(markdown: string, firstLine: number, visit: SegmentV
       continue;
     }
     if (fence !== null) {
-      visit(raw.slice(0, commentStart(raw)), lineNo);
+      let code = raw.slice(0, commentStart(raw)).trimEnd();
+      while (code.endsWith("\\") && idx + 1 < lines.length && !(lines[idx + 1] ?? "").trimStart().startsWith(fence)) {
+        const next = lines[++idx] ?? "";
+        code = `${code.slice(0, -1)} ${next.slice(0, commentStart(next)).trim()}`;
+      }
+      visit(code, lineNo);
       continue;
     }
     forEachInlineSpan(raw, lineNo, visit);
@@ -619,6 +627,8 @@ function readText(file: string, slug: string, issues: SkillLintIssue[], skillsDi
 
 /** Bytes a routable skill may hold without a row in the budgets file. */
 export const SKILL_SIZE_CAP = 16_384;
+/** Descriptions are served by `list_skills` and loaded into every session, so they get their own cap. */
+export const SKILL_DESCRIPTION_CAP = 1_024;
 export const SKILL_BUDGETS_FILE = "skill-budgets.tsv";
 
 interface SkillBudget {
@@ -680,6 +690,19 @@ function checkSize(
       line: 1,
     });
   }
+}
+
+function checkDescriptionSize(slug: string, text: string, issues: SkillLintIssue[]): void {
+  const fm = parseSkillFrontmatter(text);
+  if (fm === null) return; // frontmatter-missing is reported by lintSkillFile
+  const bytes = Buffer.byteLength((fm.description ?? "").trim());
+  if (bytes <= SKILL_DESCRIPTION_CAP) return;
+  issues.push({
+    slug,
+    rule: "skill-description-too-large",
+    detail: `description is ${bytes} bytes, over the ${SKILL_DESCRIPTION_CAP}-byte cap; move detail into the body`,
+    line: fm.keyLines["description"] ?? 1,
+  });
 }
 
 /** Rows the default cap now covers, or that name no skill: advice, not failure. */
@@ -765,6 +788,7 @@ export function lintSkillpack(skillsDir: string, opts: SkillLintOptions = {}): S
     const triggers = lintSkillFile(slug, text, surfaces, issues);
     if (triggers !== null) triggerLines.push(triggers);
     checkSize(slug, bytes, budgets, issues);
+    checkDescriptionSize(slug, text, issues);
   }
   checkTriggerOverlap(triggerLines, issues);
   checkStaleBudgets(budgets, sizes, issues);
