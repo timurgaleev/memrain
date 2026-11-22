@@ -273,12 +273,13 @@ function forEachCodeSegment(markdown: string, firstLine: number, visit: SegmentV
       continue;
     }
     if (fence !== null) {
-      let code = raw.slice(0, commentStart(raw)).trimEnd();
-      while (code.endsWith("\\") && idx + 1 < lines.length && !(lines[idx + 1] ?? "").trimStart().startsWith(fence)) {
+      const parts = [raw.slice(0, commentStart(raw)).trimEnd()];
+      while (parts[parts.length - 1]!.endsWith("\\") && idx + 1 < lines.length && !(lines[idx + 1] ?? "").trimStart().startsWith(fence)) {
+        parts[parts.length - 1] = parts[parts.length - 1]!.slice(0, -1);
         const next = lines[++idx] ?? "";
-        code = `${code.slice(0, -1)} ${next.slice(0, commentStart(next)).trim()}`;
+        parts.push(next.slice(0, commentStart(next)).trim());
       }
-      visit(code, lineNo);
+      visit(parts.join(" "), lineNo);
       continue;
     }
     forEachInlineSpan(raw, lineNo, visit);

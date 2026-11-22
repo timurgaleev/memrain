@@ -136,6 +136,30 @@ describe("reflections skip", () => {
     };
     await reflectionsPhase(storage, { sonnetFn: declined, modelId: MODEL });
     expect(prompts).toHaveLength(1);
+    // Both batches are parked with backoff, so neither is re-sent on the next run.
+    expect(await parkedKinds()).toEqual(["unparseable"]);
+    await reflectionsPhase(storage, { sonnetFn: declined, modelId: MODEL });
+    expect(prompts).toHaveLength(1);
+  });
+
+  // Value: protects=evidence of a held reflection is retried, not parked forever; fails_when=held drafts count as written for parking.
+  it("leaves open the transcripts only a held reflection cites", async () => {
+    await seed("notes/a", BODY);
+    await seed("notes/b", `${BODY} b`);
+    await seed("notes/c", `${BODY} c`);
+    await putPage(storage, { slug: "reflections/held", type: "note", title: "Mine", markdown_body: "human edit", source_id: "default", written_by: "operator" });
+    const fn = scripted([JSON.stringify([
+      { topic_slug: "scope", title: "Scope", body: "Weighing scope [[notes/a]].", evidence: ["notes/a"] },
+      { topic_slug: "held", title: "Held", body: "On [[notes/b]].", evidence: ["notes/b"] },
+    ])]);
+    const r = await reflectionsPhase(storage, { sonnetFn: fn, modelId: MODEL });
+    expect(r.reflectionsWritten).toBe(1);
+    expect(r.pagesHeld).toBe(1);
+    const parked = (await storage.engine().query<{ doc_id: string }>(
+      "SELECT doc_id FROM synth_failures WHERE phase = 'reflections'",
+    )).rows.map((row) => row.doc_id);
+    expect(parked).toHaveLength(1);
+    expect(parked[0]).toContain("notes/c");
   });
 
   it("re-opens a parked transcript once it is edited", async () => {

@@ -177,17 +177,35 @@ describe("ended calendar invites", () => {
       if (previous) registerHandler(CHRONICLE_EXTRACT_JOB_KIND, previous);
     }
     const page = (await getPage(storage, slug, ["default"]))!;
-    const endedId = chronicleExtractJobId("default", { ...page, slug }, new Date(end));
+    const endedId = `${chronicleExtractJobId("default", { ...page, slug }, new Date(end))}:${Date.parse(end)}`;
     expect(endedId).not.toBe(chronicleExtractJobId("default", { ...page, slug }));
     const jobs = await storage.engine().query<{ id: string; status: string; at: string }>(
       `SELECT id, status, next_attempt_at::text AS at FROM jobs WHERE kind = 'chronicle_extract'`,
     );
     expect(jobs.rows.map((j) => [j.id, j.status])).toEqual([[endedId, "pending"]]);
     expect(new Date(jobs.rows[0]!.at).toISOString()).toBe(end);
-    // A meeting moved later gets a job for its new end, not the id the old end already holds.
-    const later = new Date(Date.parse(end) + 3_600_000);
-    const moved = { ...page, slug, compiled_truth: { ...(page.compiled_truth as Record<string, unknown>), end: later.toISOString() } };
-    expect(chronicleExtractJobId("default", moved, later)).not.toBe(endedId);
+  });
+
+  // Value: protects=a meeting moved later is queued again for its new end; fails_when=the follow-up id ignores the end instant.
+  it("queues a moved meeting again for its new end", async () => {
+    const end = new Date(Date.now() + 5_400_000).toISOString();
+    const later = new Date(Date.parse(end) + 3_600_000).toISOString();
+    const slug = await seedInvite({ start: new Date(Date.now() + 3_600_000).toISOString(), end });
+    const first = await runChronicleExtract(storage, { slug, judge: throwingJudge });
+    await storage.engine().query(`UPDATE pages SET compiled_truth = compiled_truth || jsonb_build_object('end', $2::text) WHERE slug = $1`, [slug, later]);
+    const second = await runChronicleExtract(storage, { slug, judge: throwingJudge });
+    expect(first.retry?.at).toBe(end);
+    expect(second.retry?.at).toBe(later);
+    expect(second.retry?.job_id).not.toBe(first.retry?.job_id);
+  });
+
+  // Value: protects=a calendar page the judge already read keeps its job key; fails_when=the ended key changes and re-buys the paid judge.
+  it("keeps the ended key of a judged calendar page independent of its end instant", () => {
+    const page = { slug: "calendar/work/y", type: "calendar-event", title: "Y", markdown_body: LONG_BODY,
+      compiled_truth: { start: "2026-02-10T10:00:00Z", end: "2026-02-10T10:30:00Z" } };
+    const moved = { ...page, compiled_truth: { ...page.compiled_truth, end: "2026-02-10T11:00:00Z" } };
+    const after = new Date("2026-03-01T00:00:00Z");
+    expect(chronicleJudgeKey(moved, after)).toBe(chronicleJudgeKey(page, after));
   });
 
   it("gives an invite a new job key once it has ended", async () => {

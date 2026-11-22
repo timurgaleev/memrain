@@ -353,8 +353,14 @@ export async function reflectionsPhase(
     // array, so "nothing here" can be recorded instead of paid for every run.
     // A cut-off answer is not prose; never more than one follow-up. A refused or
     // filtered answer, or broken JSON (a `{` in it), would not come back as the array either.
-    if (parsed.status === "unreadable" && !first.truncated && first.resp.text.trim() !== ""
-      && !DECLINED_STOP_REASONS.has(first.resp.stopReason ?? "") && !first.resp.text.includes("{")) {
+    const declined = DECLINED_STOP_REASONS.has(first.resp.stopReason ?? "") || first.resp.text.includes("{");
+    if (parsed.status === "unreadable" && !first.truncated && first.resp.text.trim() !== "" && declined) {
+      // No follow-up, but the batch must not be paid for again every run: park it with the usual backoff.
+      for (const t of transcripts) {
+        await recordSynthFailure(engine, { docId: t.docId, phase: "reflections", contentHash: t.contentHash, model, kind: "unparseable" });
+      }
+      base.errors.push("model declined or answered with broken JSON; transcripts parked");
+    } else if (parsed.status === "unreadable" && !first.truncated && first.resp.text.trim() !== "") {
       const second = await ask(`${prompt}\n\n${REFLECTIONS_REASK}`);
       if (second === null) base.budgetExhausted = true;
       else {
@@ -389,6 +395,8 @@ export async function reflectionsPhase(
 
   let written = 0;
   const cited = new Set<string>();
+  // Evidence of a draft that was held or failed to write stays open for the next run.
+  const pending = new Set<string>();
   for (const d of drafts) {
     const slug = `${prefix}${d.topic_slug}`;
     const sourcesMd = d.evidence.map((s) => `- [[${s}]]`).join("\n");
@@ -405,13 +413,16 @@ export async function reflectionsPhase(
         written_by_principal: "operator",
         onlyOverwriteWriter: "reflection",
       });
-      if (pageWrite.held) base.pagesHeld += 1;
-      else {
+      if (pageWrite.held) {
+        base.pagesHeld += 1;
+        for (const s of d.evidence) pending.add(s);
+      } else {
         written += 1;
         for (const s of d.evidence) cited.add(s);
       }
     } catch (e) {
       base.errors.push(`${slug}: ${String(e instanceof Error ? e.message : e)}`);
+      for (const s of d.evidence) pending.add(s);
     }
   }
   // A transcript the model read but no written reflection cites is neither linked
@@ -419,7 +430,7 @@ export async function reflectionsPhase(
   // failed to write leaves its evidence open for the next run.
   if (written > 0) {
     for (const t of transcripts) {
-      if (cited.has(t.slug)) continue;
+      if (cited.has(t.slug) || pending.has(t.slug)) continue;
       await recordSynthSkip(engine, { docId: t.docId, phase: "reflections", contentHash: t.contentHash, model });
     }
   }

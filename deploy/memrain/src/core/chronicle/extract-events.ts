@@ -312,10 +312,9 @@ export function chronicleJudgePrompt(input: ChronicleJudgeInput): string {
  * sees, so it must not buy another paid call. That text also stays unread by
  * extraction — a limit of the 12,000-character window, not of this key.
  *
- * A structured calendar invite also folds in whether it has ended, and the
- * ended phase its end instant, so an invite queued before its meeting
- * (skipped, no call) gets a fresh job once it is over, and one whose meeting
- * moved later gets another job for the new end.
+ * A structured calendar invite also folds in whether it has ended, so an
+ * invite queued before its meeting (skipped, no call) gets a fresh job once it
+ * is over and the backfill sweep projects it.
  */
 export function chronicleJudgeKey(page: Parameters<typeof chronicleJudgeInputFor>[0], now: Date = new Date()): string {
   const input = chronicleJudgeInputFor(page);
@@ -324,7 +323,7 @@ export function chronicleJudgeKey(page: Parameters<typeof chronicleJudgeInputFor
     input.attendees,
     now,
   );
-  const phase = invite === null ? "" : "pending" in invite ? "\ninvite:pending" : `\ninvite:ended:${invite.until}`;
+  const phase = invite === null ? "" : "pending" in invite ? "\ninvite:pending" : "\ninvite:ended";
   return createHash("sha256").update(chronicleJudgePrompt(input) + phase, "utf8").digest("hex");
 }
 
@@ -369,9 +368,11 @@ export async function runChronicleExtract(
   );
   const invite = projected && !(await hasJudgedAutoEvents(storage, opts.slug, sourceId)) ? projected : null;
   if (invite && "pending" in invite) {
-    // The job that runs once the meeting is over carries the ended-phase id, so it is a new row, not this one.
+    // The follow-up is a new row per end instant: a meeting moved later is queued again for its new end,
+    // and the key of a page the judge read stays as it was.
+    const ended = chronicleExtractJobId(sourceId, { ...page, slug: opts.slug }, new Date(invite.until));
     return { slug: opts.slug, status: "skipped", events_written: 0, reason: "invite_not_ended",
-      retry: { at: invite.until, job_id: chronicleExtractJobId(sourceId, { ...page, slug: opts.slug }, new Date(invite.until)) } };
+      retry: { at: invite.until, job_id: `${ended}:${Date.parse(invite.until)}` } };
   }
   let result: ChronicleJudgeResult;
   if (invite) {

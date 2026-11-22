@@ -243,12 +243,20 @@ describe("labeled-credential: the label and its value on one line", () => {
       "set `password=` in the config",
       "join https://zoom.example.test/j/1?pwd=abc123XYZ",
       "| Password | Notes |\n|---|---|\n| required | set on first login |",
+      "| `DB_PASSWORD` | Password for the database user |",
+      "| Setting | Password |\n|---|---|\n| db | ask the on-call engineer |",
+      "def connect(password: Optional[str] = None):",
+      "password: List<String>",
     ]) {
       expect(one(text)).toBe(text);
     }
   });
   it("is off outside the transcript lane", () => {
     expect(one(`password: ${PW}!`, {})).toBe(`password: ${PW}!`);
+  });
+  it("never echoes a type annotation across the rest of the text", () => {
+    const text = "def connect(password: Optional[str] = None):\n    key: Optional[str] = None";
+    expect(one(text)).toBe(text);
   });
 });
 

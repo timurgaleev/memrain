@@ -30,7 +30,7 @@ function instant(value: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-export type InviteProjection = { proposal: ChronicleEventProposal; until: string } | { pending: true; until: string } | null;
+export type InviteProjection = { proposal: ChronicleEventProposal } | { pending: true; until: string } | null;
 
 /**
  * The one event an ended invite projects to, `pending` (with the end instant
@@ -53,7 +53,6 @@ export function inviteProjection(
   if (end.getTime() > now.getTime()) return { pending: true, until: end.toISOString() };
   const location = typeof page.truth.location === "string" && page.truth.location.trim() ? page.truth.location.trim() : null;
   return {
-    until: end.toISOString(),
     proposal: {
       when: (page.truth.start as string).trim(),
       who: attendees,

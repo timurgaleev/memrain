@@ -200,6 +200,7 @@ const LABELED_STOPLIST: ReadonlySet<string> = new Set([
   "style", "format", "syntax", "mode", "option", "options", "parameter", "param", "argument", "arg",
   "await", "async", "function", "fn", "lambda", "return", "yield", "typeof", "const", "let", "var", "def",
   "self", "cls", "getpass", "require", "import", "readline", "ask", "read",
+  "any", "dict", "list", "union", "optional", "secretbytes",
 ]);
 
 const PLACEHOLDER_PREFIX_RE = /^(?:<|\[|\{|\$|%|\\|@\{|#\{|\)|\]|\})/;
@@ -261,7 +262,8 @@ export function labeledValueIsCredential(value: string, form: "single" | "pair" 
   if (head.endsWith("`") && closesCodeSpan(head)) return false;
   if (QUERY_PWD_RE.test(head)) return false;
   if (PLACEHOLDER_PREFIX_RE.test(value) || MASK_RE.test(value) || URL_RE.test(value) || PATH_RE.test(value)) return false;
-  if (value.includes("(") || DOTTED_IDENTIFIER_RE.test(value)) return false;
+  // A type annotation or call (`Optional[str]`, `getpass()`, `List<String>`) is code, not a value.
+  if (/[([<]/.test(value) || DOTTED_IDENTIFIER_RE.test(value)) return false;
   const digitless = !/\d/.test(value);
   if (IDENTIFIER_RE.test(value) && digitless && (LABEL_WORD_RE.test(value) || COMPOUND_IDENTIFIER_RE.test(value))) return false;
   if (form !== "pair") return true;
@@ -357,7 +359,8 @@ function tableCredentialCells(line: string, next: string | undefined, state: Tab
   state.previous = cells;
   const claim = (cell: TableCell | undefined): void => {
     const v = cell ? cellValue(cell) : null;
-    if (v && !isLabelCell(v.value) && labeledValueIsCredential(v.value, "single")) out.push(v);
+    // A cell with a space is a description ("Password for the database user"), not a credential.
+    if (v && !/\s/.test(v.value) && !isLabelCell(v.value) && labeledValueIsCredential(v.value, "single")) out.push(v);
   };
   const columns = new Set(state.columns ?? []);
   for (const k of columns) claim(cells[k]);
