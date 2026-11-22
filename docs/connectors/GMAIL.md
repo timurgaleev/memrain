@@ -173,13 +173,16 @@ any sync, it may renew a stale access token). It lists the message
 ids between the new window and what the account already covers (no message is
 read) and prints how many threads that is, how many are already stored (they
 are rendered again with their older messages, never duplicated), how many it
-would add, how many stored threads would move to an older month's page (the
-old page is soft-deleted), the Gmail quota and embedding cost, and a plan
-hash. Rerun it with `--apply --plan-hash <hash>` to set `history_days`; a
-hash that no longer matches, or a listing too large to count in full, is
-refused. The next runs backfill the older mail under the account's usual
-caps. Do not roll back to a release before this one while that backfill is
-running: set `history_days` back first.
+would add, how many stored threads the backfill would move to an older
+month's page (the old page is soft-deleted), the Gmail quota and embedding
+cost, and a plan hash. Rerun it with `--apply --plan-hash <hash>` to set the
+account's `gmail_history_days`; a hash that no longer matches, a listing too
+large to count in full, or an account whose sync state predates the window
+floor is refused. The next runs backfill the older mail under the account's
+usual caps. This command is the only way to widen Gmail: the shared
+`history_days` setting (which the calendar picker saves) sets only the first
+sync's window. Do not roll back to a release before this one while that
+backfill is running: remove `gmail_history_days` first.
 
 ## What lands in the brain
 
@@ -198,7 +201,8 @@ running: set `history_days` back first.
   people page is linked to it; nobody new is created. Newsletters, auto-replies,
   mailing lists and machine senders (no-reply, postmaster, notification
   addresses) link nobody.
-- Your send-as aliases (Gmail settings, "Send mail as") count as your own
+- Your verified send-as aliases (Gmail settings, "Send mail as"; one still
+  waiting for verification does not count) count as your own
   address: mail to an alias can owe you a reply on the open-loops list, and
   an alias is never linked as a person. Memrain reads the alias list on the
   first run and again at most once a day; if Google refuses the list, the one

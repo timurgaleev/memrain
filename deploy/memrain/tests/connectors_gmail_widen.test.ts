@@ -112,7 +112,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(first.coveredLowMs).toBe(first.floorMs);
       await writeCursor(e, id, GMAIL_STREAM, strip(first), new Date(T0));
 
-      await setAccountConfig(e, id, { history_days: 120 });
+      await setAccountConfig(e, id, { gmail_history_days: 120 });
       w.calls.length = 0;
       expect((await run(db.storage, w, id)).status).toBe("success");
       expect(threadCalls(w).sort()).toEqual(OLD.map(m => m.threadId).sort());
@@ -131,6 +131,55 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  // Value: protects=saving the calendar picker never starts a Gmail backfill; fails_when=the shared history_days key the picker writes (admin-connectors.ts calendarsAction) widens the Gmail window and skips the dry run, page cap and plan hash; why_new=review finding (HIGH); seam=the exact config patch the picker saves. Regression proof: red while Gmail widened on history_days.
+  it("a calendar-picker save of history_days starts no Gmail backfill", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      const w = world([...RECENT, ...OLD]);
+      await run(db.storage, w, id);
+      const before = (await cursorOf(e, id))!;
+      await setAccountConfig(e, id, { calendars: [], history_days: 365 });
+      w.calls.length = 0;
+      await run(db.storage, w, id, ENV, T0 + HOUR);
+      expect(threadCalls(w)).toEqual([]);
+      expect(await items(e, id)).toEqual(["r0", "r1", "r2"]);
+      const after = (await cursorOf(e, id))!;
+      expect(after.backfill).toBeNull();
+      expect(after.floorMs).toBe(before.floorMs);
+      expect(after.coveredLowMs).toBe(before.coveredLowMs);
+
+      // An expired history id then relists only the covered window, not the picker's 365 days.
+      w.history = start => (start === "120020" ? { status: 404, body: { error: { code: 404, message: "Requested entity was not found." } } } : { status: 200, body: { historyId: start } });
+      w.profile = "profileAfterExpiry";
+      w.calls.length = 0;
+      await run(db.storage, w, id, ENV, T0 + 2 * HOUR);
+      expect(threadCalls(w).sort()).toEqual(["r0", "r1", "r2"]);
+      expect(await items(e, id)).toEqual(["r0", "r1", "r2"]);
+    } finally { await db.close(); }
+  });
+
+  // Value: protects=a cursor that never kept a floor takes no window from the picker's history_days when its history expires; fails_when=the floorless fallback reads the shared key and the relist backfills the wider window; why_new=review finding; seam=a cursor as the oldest code wrote it. Regression proof: red while the fallback read history_days.
+  it("a floorless cursor relisted after a picker save keeps to the default window", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      const w = world([...RECENT, ...OLD]);
+      await run(db.storage, w, id);
+      await writeCursor(e, id, GMAIL_STREAM, JSON.stringify({ v: 1, historyId: "120020", historyPage: null, pending: null, floorMs: null, walk: null }), new Date(T0));
+      await setAccountConfig(e, id, { calendars: [], history_days: 365 });
+      w.history = start => (start === "120020" ? { status: 404, body: { error: { code: 404, message: "Requested entity was not found." } } } : { status: 200, body: { historyId: start } });
+      w.profile = "profileAfterExpiry";
+      w.calls.length = 0;
+      await run(db.storage, w, id);
+      expect(threadCalls(w).sort()).toEqual(["r0", "r1", "r2"]);
+      expect(await items(e, id)).toEqual(["r0", "r1", "r2"]);
+      expect((await cursorOf(e, id))!.floorMs).toBe(T0 - 90 * DAY);
+    } finally { await db.close(); }
+  });
+
   // Value: protects=narrowing mid-backfill records what was really covered, and widening again fetches only the gap; fails_when=covered jumps to the narrow window (mail skipped) or stays put (mail read twice); why_new=new behavior; seam=recorded Gmail fake.
   it("narrowing mid-backfill keeps the covered bound; widening again fetches only the missing threads, and wider still only the newer gap", async () => {
     const db = await open();
@@ -142,14 +191,14 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await run(db.storage, w, id);
       expect(await items(e, id)).toEqual([]);
 
-      await setAccountConfig(e, id, { history_days: 120 });
+      await setAccountConfig(e, id, { gmail_history_days: 120 });
       const partial = await run(db.storage, w, id, CAP2);
       expect(partial.stop_reason).toBe("item_cap_reached");
       expect(await items(e, id)).toEqual(["d0", "d1"]);
       expect((await cursorOf(e, id))!.backfill!.resumeFloorMs).toBe(T0 - 50 * DAY);
 
       // A 4-day window: nothing is fetched, and the covered bound is the 50 days really listed.
-      await setAccountConfig(e, id, { history_days: 4 });
+      await setAccountConfig(e, id, { gmail_history_days: 4 });
       w.calls.length = 0;
       await run(db.storage, w, id);
       expect(threadCalls(w)).toEqual([]);
@@ -160,7 +209,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(narrowed.floorMs).toBe(T0 - 50 * DAY);
 
       // Back to 120 days: only the four unread archive threads.
-      await setAccountConfig(e, id, { history_days: 120 });
+      await setAccountConfig(e, id, { gmail_history_days: 120 });
       w.calls.length = 0;
       expect((await run(db.storage, w, id)).status).toBe("success");
       expect(threadCalls(w).sort()).toEqual(["d2", "d3", "d4", "d5"]);
@@ -168,7 +217,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
 
       // Wider still (capped by the 180-day mail retention): only the gap below 120 days.
       w.messages.push(one("d9", T0 - 150 * DAY));
-      await setAccountConfig(e, id, { history_days: 200 });
+      await setAccountConfig(e, id, { gmail_history_days: 200 });
       w.calls.length = 0;
       expect((await run(db.storage, w, id)).status).toBe("success");
       expect(threadCalls(w)).toEqual(["d9"]);
@@ -184,7 +233,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const id = await connected(db.storage);
       const w = world([...RECENT, ...OLD]);
       await run(db.storage, w, id);
-      await setAccountConfig(e, id, { history_days: 120 });
+      await setAccountConfig(e, id, { gmail_history_days: 120 });
       // The backfill reads the two newest archive threads, then stops at the run cap.
       expect((await run(db.storage, w, id, CAP2)).stop_reason).toBe("item_cap_reached");
       expect((await cursorOf(e, id))!.backfill).not.toBeNull();
@@ -223,7 +272,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await run(db.storage, w, id);
       const oldFloor = (await cursorOf(e, id))!.floorMs;
       expect(oldFloor).toBe(T0 - 90 * DAY);
-      await setAccountConfig(e, id, { history_days: 120 });
+      await setAccountConfig(e, id, { gmail_history_days: 120 });
       await run(db.storage, w, id, CAP2);
       const mid = (await cursorOf(e, id))!;
       expect(mid.backfill).not.toBeNull();
@@ -256,7 +305,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const id = await connected(db.storage);
       const w = world([...RECENT, ...OLD]);
       await run(db.storage, w, id);
-      await setAccountConfig(e, id, { history_days: 120 });
+      await setAccountConfig(e, id, { gmail_history_days: 120 });
       await run(db.storage, w, id, CAP2);
       const mid = (await cursorOf(e, id))!;
       expect(mid.backfill).not.toBeNull();
@@ -290,7 +339,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(before).toContain("The recent answer.");
       expect(before).not.toContain("The opening message.");
 
-      await setAccountConfig(e, id, { history_days: 120 });
+      await setAccountConfig(e, id, { gmail_history_days: 120 });
       expect((await run(db.storage, w, id)).status).toBe("success");
       const after = await bodyOf(e, id, "sp");
       expect(after).toHaveLength(1);
@@ -340,7 +389,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(dry.code).toBe(0);
       expect(dry.out).toMatchObject({
         ok: true, dry_run: true, days: 120, current_days: 90, threads_in_range: 26, already_stored_spanning: 1, would_add: 25,
-        would_move_on_touch: 1, truncated: false, covered_low: new Date(T0 - 90 * DAY).toISOString(), new_low: new Date(T0 - 120 * DAY).toISOString(),
+        would_move_in_backfill: 1, truncated: false, covered_low: new Date(T0 - 90 * DAY).toISOString(), new_low: new Date(T0 - 120 * DAY).toISOString(),
       });
       expect(Number(dry.out.quota_units)).toBeGreaterThan(0);
       expect(Number(dry.out.est_embed_usd)).toBeLessThan(0.1);
@@ -361,7 +410,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
 
       const applied = await widen(db.storage, w, { accountId: id, days: "120", apply: true, planHash: String(dry.out.plan_hash) });
       expect(applied.code).toBe(0);
-      expect((await getAccount(e, id))!.config.history_days).toBe(120);
+      expect((await getAccount(e, id))!.config.gmail_history_days).toBe(120);
+      expect((await getAccount(e, id))!.config.history_days).toBeUndefined();
       expect(await items(e, id)).toEqual(before.items);
 
       // The backfill then adds exactly what the dry run counted.
@@ -385,7 +435,26 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(dry.out).toMatchObject({ truncated: true, list_pages: 200 });
       const apply = await widen(db.storage, w, { accountId: id, days: "120", apply: true, planHash: String(dry.out.plan_hash) });
       expect(apply.code).not.toBe(0);
-      expect((await getAccount(e, id))!.config.history_days).toBeUndefined();
+      expect((await getAccount(e, id))!.config.gmail_history_days).toBeUndefined();
+    } finally { await db.close(); }
+  });
+
+  // Value: protects=a cursor that never kept a floor is not silently "widened"; fails_when=--apply sets the window although no backfill can open; why_new=review finding; seam=the command over a cursor written by the oldest code. Regression proof: red before the no_floor refusal.
+  it("gmail-widen: a cursor without a floor is reported, and --apply refuses instead of doing nothing", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const id = await connected(db.storage);
+      const w = world([...RECENT, ...OLD]);
+      await run(db.storage, w, id);
+      await writeCursor(e, id, GMAIL_STREAM, JSON.stringify({ v: 1, historyId: "120020", historyPage: null, pending: null, floorMs: null, walk: null }), new Date(T0));
+      const dry = await widen(db.storage, w, { accountId: id, days: "120" });
+      expect(dry.code).toBe(0);
+      expect(dry.out).toMatchObject({ cursor_state: "no_floor", threads_in_range: 0 });
+      const apply = await widen(db.storage, w, { accountId: id, days: "120", apply: true, planHash: String(dry.out.plan_hash) });
+      expect(apply.code).toBe(1);
+      expect(String(apply.out.error)).toContain("floor");
+      expect((await getAccount(e, id))!.config.gmail_history_days).toBeUndefined();
     } finally { await db.close(); }
   });
 });

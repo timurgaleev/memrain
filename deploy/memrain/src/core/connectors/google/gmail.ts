@@ -7,9 +7,9 @@
  *     lands while the backfill runs is newer than the anchor, so the history
  *     feed replays it; nothing between the two is lost.
  *   - The walk drains a time window newest first with `messages.list`: the
- *     history window on the first sync (`config.history_days`, default 90,
- *     never past mail retention), the whole window again when the history id
- *     has expired. Its query leaves out Spam, Trash, drafts and the Promotions
+ *     history window on the first sync (`config.gmail_history_days`, else
+ *     `config.history_days`, default 90, never past mail retention), the
+ *     window down to what was covered again when the history id has expired. Its query leaves out Spam, Trash, drafts and the Promotions
  *     and Social categories. One listing keeps its query and follows its page
  *     tokens; the cursor also keeps the oldest message settled so far, so a
  *     walk whose page token Google no longer takes starts a new listing below
@@ -26,7 +26,11 @@
  *
  * Nothing older than the window floor is ever stored: the floor is kept in
  * the cursor, and a thread a recent reply brings in keeps only its messages
- * from the floor on. The floor moves only when `history_days` is widened:
+ * from the floor on. The floor moves only when the Gmail window is widened,
+ * and only through `config.gmail_history_days`, which `connectors gmail-widen
+ * --apply` alone writes after its dry run. The shared `history_days` (the
+ * calendar picker saves it) sets the first sync's window and never starts a
+ * backfill:
  *
  *   - The cursor also keeps the oldest mail a listing has covered
  *     (`coveredLowMs`; a cursor written before it was kept reads its floor).
@@ -115,6 +119,9 @@ const DROPPED_LABELS = new Set(["SPAM", "TRASH", "DRAFT"]);
 const EXCLUDED_CATEGORIES = new Set(["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL"]);
 /** Label flips that change nothing on the page. */
 const VOLATILE_LABELS = new Set(["UNREAD", "STARRED", "IMPORTANT"]);
+/** The account config key only `connectors gmail-widen --apply` writes: the window a backfill widens to. */
+export const GMAIL_HISTORY_DAYS = "gmail_history_days";
+
 /** What every listing leaves out: Spam, Trash, drafts, Promotions and Social. */
 export const GMAIL_LIST_EXCLUSIONS = "-in:spam -in:trash -in:draft -category:promotions -category:social";
 
@@ -231,13 +238,17 @@ function configInt(config: Readonly<Record<string, unknown>> | undefined, key: s
   return typeof v === "number" && Number.isInteger(v) && v >= min && v <= max ? v : null;
 }
 
+/** The account's Gmail window in days: `gmail_history_days`, else the shared `history_days`, else 90. */
+export function gmailHistoryDays(config: Readonly<Record<string, unknown>> | undefined): number {
+  return configInt(config, GMAIL_HISTORY_DAYS, 1, MAX_MAIL_HISTORY_DAYS) ?? configInt(config, "history_days", 1, MAX_MAIL_HISTORY_DAYS) ?? DEFAULT_MAIL_HISTORY_DAYS;
+}
+
 /**
  * The earliest mail an account keeps, in ms: its history window
- * (`historyDays`, else `config.history_days`, default 90), never past mail
- * retention.
+ * (`historyDays`, else gmailHistoryDays), never past mail retention.
  */
 export function gmailWindowLow(config: Readonly<Record<string, unknown>> | undefined, env: NodeJS.ProcessEnv, now: number, historyDays?: number): number {
-  const days = historyDays ?? configInt(config, "history_days", 1, MAX_MAIL_HISTORY_DAYS) ?? DEFAULT_MAIL_HISTORY_DAYS;
+  const days = historyDays ?? gmailHistoryDays(config);
   const keep = retentionDays("mail", configInt(config, "retention_days", 0, 100_000), env);
   return now - (keep === null ? days : Math.min(days, keep)) * DAY_MS;
 }
@@ -365,6 +376,22 @@ class Adapter implements SyncAdapter {
   }
 
   /**
+   * The floor of a cursor written before the floor was kept: the
+   * `gmail_history_days` window or the default, never the shared
+   * `history_days`, which must not widen mail.
+   */
+  private legacyFloor(): number {
+    const days = configInt(this.account.config, GMAIL_HISTORY_DAYS, 1, MAX_MAIL_HISTORY_DAYS) ?? DEFAULT_MAIL_HISTORY_DAYS;
+    return gmailWindowLow(this.account.config, this.env, this.now(), days);
+  }
+
+  /** The floor a backfill may widen to: the `gmail_history_days` window, or null when that key is not set. */
+  private widenLow(): number | null {
+    const days = configInt(this.account.config, GMAIL_HISTORY_DAYS, 1, MAX_MAIL_HISTORY_DAYS);
+    return days === null ? null : gmailWindowLow(this.account.config, this.env, this.now(), days);
+  }
+
+  /**
    * Threads per page handed to the engine: never more than one run, or one
    * day under the account's item cap, may store. A larger page would stop
    * part-way, keep its checkpoint and replay the same threads every day.
@@ -397,10 +424,11 @@ class Adapter implements SyncAdapter {
     return st.walk !== null || st.backfill !== null || this.widened(st);
   }
 
-  /** The window reaches more than a day below what the listings have covered, and no backfill is open yet. */
+  /** The widened window reaches more than a day below what the listings have covered, and no backfill is open yet. */
   private widened(st: GmailCursor): boolean {
     const covered = st.coveredLowMs ?? st.floorMs;
-    return st.backfill === null && covered !== null && this.windowLow() < covered - DAY_MS;
+    const low = this.widenLow();
+    return st.backfill === null && covered !== null && low !== null && low < covered - DAY_MS;
   }
 
   /**
@@ -410,7 +438,8 @@ class Adapter implements SyncAdapter {
    * what it covered when the window no longer reaches below that.
    */
   private planBackfill(st: GmailCursor): GmailCursor {
-    const low = this.windowLow();
+    // Without `gmail_history_days` an open backfill has no window left: it closes at what it covered.
+    const low = this.widenLow() ?? this.now();
     const b = st.backfill;
     if (b === null) {
       const covered = st.coveredLowMs ?? st.floorMs ?? low;
@@ -524,7 +553,7 @@ class Adapter implements SyncAdapter {
     // An open backfill and the covered bound carry over: the walk relists the
     // window down to what was covered, and the backfill (open, or opened
     // after it for a widened window) lists the rest, so no thread is read twice.
-    const floorMs = st.floorMs ?? this.windowLow();
+    const floorMs = st.floorMs ?? this.legacyFloor();
     const coveredLowMs = st.coveredLowMs ?? floorMs;
     const walk = this.newWalk();
     const next: GmailCursor = { ...st, historyId, historyPage: null, pending: null, floorMs, coveredLowMs, walk: { ...walk, lowMs: Math.max(walk.lowMs, coveredLowMs) } };
@@ -532,12 +561,12 @@ class Adapter implements SyncAdapter {
   }
 
   /**
-   * Where a thread read keeps messages from: the cursor's floor (the first
-   * sync's window for a cursor written before it was kept), or the widened
-   * floor while a backfill is open.
+   * Where a thread read keeps messages from: the cursor's floor (legacyFloor
+   * for a cursor written before it was kept), or the widened floor while a
+   * backfill is open.
    */
   private floorOf(st: GmailCursor): number {
-    const floor = st.floorMs ?? this.windowLow();
+    const floor = st.floorMs ?? this.legacyFloor();
     return st.widenFloorMs === null ? floor : Math.min(floor, st.widenFloorMs);
   }
 

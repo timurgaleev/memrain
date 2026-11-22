@@ -1,7 +1,8 @@
 /**
  * `memrain connectors gmail-widen <account-id> --days N [--apply --plan-hash H] [--json]`
  *
- * Widen a Gmail account's history window (`config.history_days`). The next
+ * Widen a Gmail account's history window (`config.gmail_history_days`, which
+ * nothing else writes: the shared `history_days` never starts a backfill). The next
  * sync then backfills the mail between the new window floor and what the
  * account's listings have covered (google/gmail.ts). Without `--apply` this
  * is a dry run: it lists the message ids in that gap (ids only, no message is
@@ -12,18 +13,22 @@
  *                            with their older messages, never duplicated
  *   would_add                threads the backfill would add (at most: a thread
  *                            left with only Promotions or Social mail is not)
- *   would_move_on_touch      stored threads whose first message moves to an
+ *   would_move_in_backfill   stored threads the backfill re-renders under an
  *                            older month: the page moves to that month's slug
- *                            and the old one is soft-deleted
+ *                            and the old one is soft-deleted (a thread whose
+ *                            older mail is only in Promotions or Social is not
+ *                            listed, so the backfill leaves it; a later reply
+ *                            can still move it)
  *   quota_units, est_embed_usd  what the backfill costs in Gmail quota and
  *                            embeddings (under the account's own caps)
  *
  * and a plan hash. `--apply --plan-hash H` lists the gap again, refuses when
- * the hash no longer matches or the listing is incomplete, and only then sets
- * `history_days`. Run it in the container: it reads the account's token.
+ * the hash no longer matches, the listing is incomplete, or the cursor keeps
+ * no floor to widen from, and only then sets `gmail_history_days`. Run it in
+ * the container: it reads the account's token.
  *
  * Exit codes: 0 dry run or applied; 1 refused (stale hash, incomplete listing,
- * Gmail error, not a Gmail account); 2 usage.
+ * no floor, Gmail error, not a Gmail account); 2 usage.
  */
 import { createHash } from "node:crypto";
 import { loadConfig } from "../core/config.ts";
@@ -38,10 +43,11 @@ import { connectorRuntime, toSyncAccount } from "../core/connectors/runtime.ts";
 import { readCursor } from "../core/connectors/sync-store.ts";
 import { loadKek, type Kek } from "../core/connectors/vault.ts";
 import {
-  DEFAULT_MAIL_HISTORY_DAYS,
+  GMAIL_HISTORY_DAYS,
   GMAIL_LIST_EXCLUSIONS,
   GMAIL_STREAM,
   GOOGLE_GMAIL_SERVICE,
+  gmailHistoryDays,
   gmailWindowLow,
   MAX_MAIL_HISTORY_DAYS,
   parseGmailCursor,
@@ -63,13 +69,19 @@ export interface GmailWidenPreview {
   account_id: string;
   days: number;
   current_days: number;
-  /** The oldest mail the account's listings have covered, or null before its first sync. */
+  /**
+   * `none` before the first sync (it reads the whole window), `no_floor` for
+   * a cursor written before the floor was kept (nothing can widen from it),
+   * `ok` otherwise.
+   */
+  cursor_state: "none" | "no_floor" | "ok";
+  /** The oldest mail the account's listings have covered, or null when the cursor keeps none. */
   covered_low: string | null;
   new_low: string;
   threads_in_range: number;
   already_stored_spanning: number;
   would_add: number;
-  would_move_on_touch: number;
+  would_move_in_backfill: number;
   list_pages: number;
   quota_units: number;
   est_embed_usd: number;
@@ -122,11 +134,6 @@ async function listGap(client: ConnectorClient, low: number, high: number): Prom
   return { threads, pages, truncated: false };
 }
 
-function currentDays(account: ConnectorAccount): number {
-  const v = account.config.history_days;
-  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_MAIL_HISTORY_DAYS ? v : DEFAULT_MAIL_HISTORY_DAYS;
-}
-
 /**
  * What widening `account` to `days` would backfill, read live from Gmail and
  * the stored items. Writes nothing to the brain; the token source may renew a
@@ -171,13 +178,14 @@ export async function previewGmailWiden(
   return {
     account_id: account.id,
     days,
-    current_days: currentDays(account),
+    current_days: gmailHistoryDays(account.config),
+    cursor_state: cursor === null ? "none" : covered === null ? "no_floor" : "ok",
     covered_low: covered === null ? null : new Date(covered).toISOString(),
     new_low: new Date(newLow).toISOString(),
     threads_in_range: ids.length,
     already_stored_spanning: stored.length,
     would_add: wouldAdd,
-    would_move_on_touch: moves,
+    would_move_in_backfill: moves,
     list_pages: listed.pages,
     quota_units: listed.pages * LIST_UNITS + ids.length * THREAD_READ_UNITS,
     est_embed_usd: Number(costUsd(DEFAULT_MODEL_ID, { inputTokens: ids.length * EMBED_TOKENS_PER_THREAD, outputTokens: 0 }).toFixed(6)),
@@ -204,10 +212,11 @@ export interface GmailWidenOptions {
 }
 
 function printPreview(p: GmailWidenPreview, applied: boolean): void {
-  console.log(`gmail-widen ${p.account_id} (${applied ? "applied" : "dry run"}): history_days ${p.current_days} -> ${p.days}`);
+  console.log(`gmail-widen ${p.account_id} (${applied ? "applied" : "dry run"}): gmail_history_days ${p.current_days} -> ${p.days}`);
+  if (p.cursor_state === "no_floor") console.log("  the account's cursor keeps no window floor, so nothing can be widened from it; --apply refuses");
   console.log(`  window floor ${p.new_low}; listings cover mail from ${p.covered_low ?? "nothing yet (the first sync reads the whole window)"}`);
   console.log(`  threads in the gap: ${p.threads_in_range} (${p.already_stored_spanning} already stored, rendered again with older messages; ${p.would_add} to add at most)`);
-  console.log(`  stored threads that would move to an older month's page: ${p.would_move_on_touch}`);
+  console.log(`  stored threads the backfill would move to an older month's page: ${p.would_move_in_backfill}`);
   console.log(`  cost: ${p.list_pages} listing page(s) read; about ${p.quota_units} Gmail quota units and $${p.est_embed_usd} of embeddings for the backfill`);
   if (p.truncated) console.log(`  the listing stopped at ${MAX_LIST_PAGES} pages: the counts are incomplete and --apply refuses`);
   console.log(`  plan hash: ${p.plan_hash}`);
@@ -254,9 +263,12 @@ export async function runGmailWiden(opts: GmailWidenOptions): Promise<number> {
       return refuse(e instanceof Error ? e.message : "the preview failed", opts.json, 1);
     }
     if (opts.apply) {
+      if (preview.cursor_state === "no_floor") {
+        return refuse("the account's cursor keeps no window floor, so no backfill can open from it; nothing was changed", opts.json, 1, preview);
+      }
       if (preview.truncated) return refuse(`the listing is incomplete (over ${MAX_LIST_PAGES} pages); nothing was changed`, opts.json, 1, preview);
       if (preview.plan_hash !== opts.planHash) return refuse("stale plan hash: the gap changed since the dry run; preview again", opts.json, 1, preview);
-      await setAccountConfig(engine, account.id, { history_days: days });
+      await setAccountConfig(engine, account.id, { [GMAIL_HISTORY_DAYS]: days });
     }
     if (opts.json) console.log(JSON.stringify({ ok: true, dry_run: !opts.apply, applied: opts.apply === true, ...preview }, null, 2));
     else printPreview(preview, opts.apply === true);
