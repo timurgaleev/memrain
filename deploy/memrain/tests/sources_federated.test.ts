@@ -158,7 +158,7 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     expect((await flags(e))[CODE]).toBe(true);
     await setSourceFederated(e, CODE, false);
 
-    await revertMigration(e, 195);
+    await revertDownTo(e, 195);
     await runMigrations(e);
     expect(await flags(e)).toEqual({ default: true, [NOTES]: true, [CODE]: false, "repo-source-code": false });
   });
