@@ -45,23 +45,60 @@ describe("chunkCode (TypeScript)", () => {
   });
 
   it("records the full ancestor chain for deeply nested symbols", async () => {
-    // A class nested inside a function exercises a depth-2 scope chain —
+    // A class nested inside a class exercises a depth-2 scope chain —
     // the case migration 027's scalar parent_symbol_path dropped.
-    const src = `function outer() {
-  class Inner {
-    deepMethod(): number { return 1; }
-  }
-  return Inner;
-}
+    const src = `class Outer:
+    class Inner:
+        def deep_method(self):
+            return 1
 `;
-    const r = await chunkCode(src, "nested.ts", "typescript");
-    const deep = r.symbols.find((s) => s.name === "deepMethod")!;
+    const r = await chunkCode(src, "nested.py", "python");
+    const deep = r.symbols.find((s) => s.name === "deep_method")!;
     expect(deep).toBeDefined();
-    expect(deep.parentSymbolPath).toEqual(["outer", "Inner"]);
+    expect(deep.parentSymbolPath).toEqual(["Outer", "Inner"]);
     // `enclosing` stays the innermost parent (code-entities back-compat).
     expect(deep.enclosing).toBe("Inner");
     const inner = r.symbols.find((s) => s.name === "Inner")!;
-    expect(inner.parentSymbolPath).toEqual(["outer"]);
+    expect(inner.parentSymbolPath).toEqual(["Outer"]);
+  });
+
+  // Value: protects=no method text is chunked (and so embedded) twice; fails_when=the class chunk carries its
+  // methods' bodies again; why_new=code chunks are embedded, so overlap costs vectors; seam=none
+  it("keeps a class chunk to the text outside its members, with a member list and its line numbers", async () => {
+    const src = `export class Repo {
+  /** Saves. */
+  @logged
+  save(): void { write(); }
+  private cache = makeCache();
+  load(): void { read(); }
+}
+`;
+    const r = await chunkCode(src, "repo.ts", "typescript");
+    const repo = r.symbols.find((s) => s.name === "Repo")!;
+    expect(repo.body).not.toContain("write()");
+    expect(repo.body).not.toContain("read()");
+    expect(repo.body).not.toContain("Saves.");
+    expect(repo.body).not.toContain("@logged");
+    expect(repo.body).toContain("private cache = makeCache();");
+    expect(repo.body.endsWith("// Members: save, load")).toBe(true);
+    // The field stays on its own line: line 5 of the file is line 5 of the class's text.
+    expect(repo.body.split("\n")[4]).toBe("  private cache = makeCache();");
+    expect(r.symbols.find((s) => s.name === "save")!.body).toBe("save(): void { write(); }");
+  });
+
+  // Value: protects=a helper nested in a function stays in that function's chunk instead of being chunked
+  // (and embedded) again; fails_when=nested functions are emitted as chunks of their own; why_new=nothing
+  // is indexed twice; seam=none
+  it("keeps functions nested in a function inside its chunk", async () => {
+    const src = `function outer() {
+  function innerHelper() { return 1; }
+  const arrow = () => innerHelper();
+  return arrow();
+}
+`;
+    const r = await chunkCode(src, "nested.ts", "typescript");
+    expect(r.symbols.map((s) => s.name)).toEqual(["outer"]);
+    expect(r.symbols[0]!.body).toContain("function innerHelper()");
   });
 
   it("extracts arrow-function const bindings", async () => {

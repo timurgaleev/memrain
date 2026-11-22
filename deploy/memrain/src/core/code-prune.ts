@@ -21,22 +21,37 @@
  *
  * A root is pruned only after a complete walk: it exists, the walk read every
  * directory and file it met, it found at least one file, and no file budget
- * cut it short. Past that, the valve withholds a pass that would retire more
- * than CODE_PRUNE_MAX_DELETES documents, or more than one that is also more
- * than CODE_PRUNE_MAX_RATIO of the root's live code documents: a half-mounted
+ * cut it short. A missing document whose content arrived at a new path in the
+ * same walk (`git mv`, a renamed folder) is a move: it is retired without
+ * counting toward the valve. Past that, the valve (`codePruneTrip`) withholds
+ * the deletions of a pass that would retire more than half of a root's live
+ * code documents, more than CODE_PRUNE_MAX_DELETES of them, or more than
+ * CODE_PRUNE_MAX_RATIO of them once past CODE_PRUNE_RATIO_FLOOR: a half-mounted
  * checkout looks exactly like a mass deletion. Only `memrain code prune
  * --apply --allow-mass-delete` goes past it.
  */
 import { randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
+import { resolve } from "node:path";
 import type { Engine } from "./engine/interface.ts";
 import { bumpDocumentClock } from "./generation.ts";
 import { owningSource } from "./sources.ts";
 
+/** A pass retiring more than this share of a root's live code documents is withheld, once the root holds more than CODE_PRUNE_MASS_MIN_DOCS. */
+export const CODE_PRUNE_MASS_RATIO = 0.5;
+/** Below this many live code documents the half-of-the-root check does not apply. */
+export const CODE_PRUNE_MASS_MIN_DOCS = 20;
 /** A pass retiring more documents than this is withheld. */
-export const CODE_PRUNE_MAX_DELETES = 200;
-/** A pass retiring more than one document and more than this share of the root's live code documents is withheld. */
-export const CODE_PRUNE_MAX_RATIO = 0.2;
+export const CODE_PRUNE_MAX_DELETES = 500;
+/** A pass retiring more than CODE_PRUNE_RATIO_FLOOR documents and more than this share of the root's live code documents is withheld. */
+export const CODE_PRUNE_MAX_RATIO = 0.01;
+/** The share check only applies past this many deletions, so a small root's ordinary deletion of a folder is not withheld. */
+export const CODE_PRUNE_RATIO_FLOOR = 50;
+/**
+ * How much longer than the purge TTL a pruned document whose file is back may
+ * wait for a code sweep to revive it. Past that the purge goes ahead.
+ */
+export const CODE_PRUNE_PURGE_HOLD_HOURS = 72;
 
 /** `MEMRAIN_CODE_PRUNE=0` stops the code sweep pruning on its own. On by default. */
 export function codePruneAutoEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -55,6 +70,8 @@ export interface CodeWalkEvidence {
   walkErrors: number;
   /** A file budget stopped the walk before it finished. */
   partial: boolean;
+  /** Documents this walk created at paths that had none: new files, or the new end of a move. */
+  arrived?: string[];
 }
 
 export type CodePruneRefusal = "root_missing" | "empty_walk" | "walk_errors" | "partial_walk" | "mass_delete";
@@ -76,6 +93,8 @@ export interface CodePruneRootReport {
   missing?: number;
   /** Documents whose file could not be checked (kept). */
   unknown?: number;
+  /** Of the missing, documents whose content arrived at a new path in this walk: retired as moves, outside the valve. */
+  moved?: number;
   /** Missing documents an operator restored before; only the CLI prunes them again. */
   held?: number;
   pruned?: number;
@@ -118,9 +137,49 @@ function withSlash(root: string): string {
   return root.endsWith("/") ? root : `${root}/`;
 }
 
-/** The valve: true when retiring `missing` of `live` documents looks like a broken mount, not a deletion. */
-export function codePruneTrip(missing: number, live: number): boolean {
-  return missing > CODE_PRUNE_MAX_DELETES || (missing > 1 && missing > live * CODE_PRUNE_MAX_RATIO);
+/** The valve: true when retiring `deletes` of `live` documents looks like a broken mount, not a deletion. */
+export function codePruneTrip(deletes: number, live: number): boolean {
+  if (deletes <= 0) return false;
+  if (live > CODE_PRUNE_MASS_MIN_DOCS && deletes > live * CODE_PRUNE_MASS_RATIO) return true;
+  if (deletes > CODE_PRUNE_MAX_DELETES) return true;
+  return deletes > CODE_PRUNE_RATIO_FLOOR && deletes > live * CODE_PRUNE_MAX_RATIO;
+}
+
+/**
+ * A digest of each document's stored chunk texts in order. A moved file is
+ * re-indexed into the same chunks under its new path, so equal digests pair a
+ * document left behind with the one its content arrived as.
+ */
+async function contentDigests(engine: Engine, ids: readonly string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  // scope: operator-only digests of documents the operator's code walk just planned or wrote
+  const r = await engine.query<{ document_id: string; digest: string }>(
+    `SELECT c.document_id, md5(string_agg(c.content, chr(31) ORDER BY c.chunk_index)) AS digest
+       FROM chunks c
+      WHERE c.document_id = ANY($1::text[])
+      GROUP BY c.document_id`,
+    [[...ids]],
+  );
+  return new Map(r.rows.map((row) => [row.document_id, row.digest]));
+}
+
+/** Of `targets`, those whose content arrived elsewhere; each arrival pairs with one target. */
+async function pairMoves(
+  engine: Engine,
+  targets: readonly CodePruneCandidate[],
+  arrivals: Map<string, number>,
+): Promise<CodePruneCandidate[]> {
+  if (arrivals.size === 0) return [];
+  const digests = await contentDigests(engine, targets.map((t) => t.id));
+  const moved: CodePruneCandidate[] = [];
+  for (const t of targets) {
+    const digest = digests.get(t.id);
+    const left = digest === undefined ? 0 : (arrivals.get(digest) ?? 0);
+    if (left === 0) continue;
+    arrivals.set(digest!, left - 1);
+    moved.push(t);
+  }
+  return moved;
 }
 
 function refusal(evidence: CodeWalkEvidence): CodePruneRefusal | null {
@@ -244,6 +303,11 @@ export async function pruneCodeRoots(
   opts: CodePruneOptions,
 ): Promise<CodePruneResult> {
   const result: CodePruneResult = { pruned: 0, roots: [] };
+  // One pool for the whole walk: a file may move from one root to another.
+  const arrivals = new Map<string, number>();
+  for (const digest of (await contentDigests(engine, roots.flatMap((r) => r.arrived ?? []))).values()) {
+    arrivals.set(digest, (arrivals.get(digest) ?? 0) + 1);
+  }
   for (const evidence of roots) {
     const refused = refusal(evidence);
     if (refused) {
@@ -266,12 +330,14 @@ export async function pruneCodeRoots(
       result.roots.push(report);
       continue;
     }
-    if (codePruneTrip(targets.length, plan.live) && !opts.allowMassDelete) {
-      result.roots.push({ ...report, status: "withheld", reason: "mass_delete" });
-      continue;
-    }
-    if (!opts.apply) {
-      result.roots.push({ ...report, status: "dry_run" });
+    const moved = await pairMoves(engine, targets, arrivals);
+    if (moved.length > 0) report.moved = moved.length;
+    // A move is retired even when the valve withholds the pass's deletions.
+    const tripped = codePruneTrip(targets.length - moved.length, plan.live) && !opts.allowMassDelete;
+    const retiring = tripped ? moved : targets;
+    const withheld = { status: "withheld", reason: "mass_delete" } as const;
+    if (!opts.apply || retiring.length === 0) {
+      result.roots.push({ ...report, ...(tripped ? withheld : { status: "dry_run" as const }) });
       continue;
     }
     // The walk proved the root earlier; a mount that went away since would make
@@ -281,9 +347,13 @@ export async function pruneCodeRoots(
       continue;
     }
     result.sweep_id ??= newSweepId();
-    const retired = await retire(engine, evidence.root, targets, result.sweep_id, opts.trigger);
+    const retired = await retire(engine, evidence.root, retiring, result.sweep_id, opts.trigger);
     result.pruned += retired.length;
-    result.roots.push({ ...report, status: retired.length > 0 ? "pruned" : "clean", pruned: retired.length });
+    result.roots.push({
+      ...report,
+      ...(tripped ? withheld : { status: retired.length > 0 ? "pruned" as const : "clean" as const }),
+      pruned: retired.length,
+    });
   }
   if (result.pruned === 0) delete result.sweep_id;
   return result;
@@ -375,20 +445,35 @@ export async function releaseCodePruneHold(engine: Engine, documentId: string): 
   );
 }
 
+/** The code roots `MEMRAIN_CODE_PATHS` configures, spelled the way prunes record them. */
+export function configuredCodeRoots(env: NodeJS.ProcessEnv = process.env): string[] {
+  return (env.MEMRAIN_CODE_PATHS ?? "").split(",").map((s) => s.trim()).filter((s) => s.length > 0).map((s) => resolve(s));
+}
+
 /**
  * Pruned documents past `ttlHours` the purge must keep for now: their file is
- * back (or cannot be checked), and only a code sweep re-reads and revives a
- * pruned document. A file still missing lets the purge go ahead.
+ * back (or cannot be checked) and their root is still a configured code root,
+ * so a code sweep will re-read and revive them. The hold lasts at most
+ * CODE_PRUNE_PURGE_HOLD_HOURS past the TTL: a file the sweep never revives
+ * (its reread is refused, it stays unreadable) does not keep its rows forever.
+ * A file still missing lets the purge go ahead.
  */
-export async function codePrunesKeptFromPurge(engine: Engine, ttlHours: number): Promise<string[]> {
+export async function codePrunesKeptFromPurge(
+  engine: Engine,
+  ttlHours: number,
+  codeRoots: readonly string[] = configuredCodeRoots(),
+): Promise<string[]> {
+  if (codeRoots.length === 0) return [];
   // scope: operator-only the purge cycle phase runs for the whole brain
   const r = await engine.query<{ document_id: string; source_path: string }>(
     `SELECT p.document_id, p.source_path
        FROM code_prunes p
        JOIN documents d ON d.id = p.document_id AND d.deleted_at = p.pruned_at
       WHERE p.restored_at IS NULL
-        AND d.deleted_at <= NOW() - ($1 || ' hours')::interval`,
-    [String(ttlHours)],
+        AND p.root = ANY($3::text[])
+        AND d.deleted_at <= NOW() - ($1 || ' hours')::interval
+        AND d.deleted_at > NOW() - ($2 || ' hours')::interval`,
+    [String(ttlHours), String(ttlHours + CODE_PRUNE_PURGE_HOLD_HOURS), [...codeRoots]],
   );
   return r.rows.filter((row) => fileState(row.source_path) !== "missing").map((row) => row.document_id);
 }

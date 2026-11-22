@@ -38,9 +38,15 @@ or anything your agent saves through MCP. For each document it:
 
 Code is split by symbol (function, class, method) instead of by paragraph, and
 each symbol also lands in the code graph behind `code_def` and `code_callers`.
-Its passage is embedded raw, so a plain-words question can find the function
-that answers it. A re-index pays only for symbols whose text changed, and one
-sweep of the code never spends more than `MEMRAIN_CODE_EMBED_MAX_USD`; code
+A class chunk keeps only its declaration and fields and lists its methods,
+which have chunks of their own; a helper nested in a function stays in that
+function's chunk, so nothing is indexed twice. Code vectors are opt-in
+(`MEMRAIN_CODE_EMBED_MAX_USD`, 0 by default). Once on, each symbol is embedded
+with a header naming its language, file, kind, name and class, plus its doc
+comment, so a plain-words question can find the function that answers it. A
+re-index pays only for symbols whose text changed, one sweep of the code never
+spends more than `MEMRAIN_CODE_EMBED_MAX_USD`, and it stops adding vectors
+before the vector index would outgrow the database's `shared_buffers`; code
 that sweep left without a vector waits for `memrain embed --code`. Code is
 never a source for atoms (the lessons the maintenance cycle distils from
 notes).
@@ -50,10 +56,13 @@ its document, so its symbols leave search and the code tools. Each one is
 recorded with the pass that removed it, and `memrain code restore` brings it
 back with its chunks and vectors until the purge removes it 72 hours later. A
 file that comes back is re-read and restored by the next sweep, and the purge
-keeps its document until then. The sweep does nothing
-when a root is missing, empty or only partly readable, and it holds back a
-pass that would remove a large share of a root for `memrain code prune` to
-review, because a failed mount looks exactly like a mass deletion.
+keeps its document until then, for at most 72 more hours and only while its
+root is still configured. A file moved to a new path (`git mv`, a renamed
+folder) is re-read there and its old document retired in the same sweep. The
+sweep does nothing when a root is missing, empty or only partly readable, and
+it holds back a pass that would remove a large share of a root for `memrain
+code prune` to review, because a failed mount looks exactly like a mass
+deletion.
 
 Chat history comes in the same way. `memrain transcripts ingest` reads ChatGPT
 and Claude.ai exports, Codex CLI rollouts (`~/.codex/sessions`) and Claude Code

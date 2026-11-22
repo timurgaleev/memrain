@@ -20,8 +20,7 @@ import { awsRegion } from "./llm/gateway.ts";
 import { DEFAULT_MODEL_ID, EMBED_DIMENSIONS } from "./embedding.ts";
 import { EMBEDDING_PRICING, worstCaseUsd, type ModelPricing } from "./budget.ts";
 import { OperationError } from "./operation-error.ts";
-import { codeChunkTexts } from "./indexer-code.ts";
-import { codeEmbeddingInput } from "./code-embed.ts";
+import { codeChunkEmbeddingInputs } from "./indexer-code.ts";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_CANDIDATES = 10_000;
@@ -180,8 +179,8 @@ async function estimateCost(input: RechunkInput, target: RechunkTarget, selectio
   if (selection.embedding_price === null) throw new Error("unpriced_embedding_model");
   if (target.kind === "code") {
     // Every chunk priced as if none kept its vector: the upper bound.
-    const texts = await codeChunkTexts(input.text, target.source_path);
-    return texts.map(codeEmbeddingInput).filter(text => text.trim().length > 0)
+    const inputs = await codeChunkEmbeddingInputs(input.text, target.source_path);
+    return inputs
       .reduce((sum, text) => sum + worstCaseUsd({ operation: "embedding", model: selection.model,
         worstCase: { input: text, maxOutputTokens: 0 } })!, 0);
   }

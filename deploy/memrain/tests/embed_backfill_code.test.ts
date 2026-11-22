@@ -12,8 +12,9 @@ import { Storage } from "../src/core/storage.ts";
 import { writeDocumentTransaction } from "../src/core/indexer-tx.ts";
 import { indexCodeDocument } from "../src/core/indexer-code.ts";
 import { runEmbedBackfill } from "../src/core/embed-backfill.ts";
-import { codeEmbeddingInput } from "../src/core/code-embed.ts";
+import { _setVectorCacheBytesForTests, codeEmbeddingInput, hnswIndexMb } from "../src/core/code-embed.ts";
 import { embeddingInputHash } from "../src/core/embedding-input-hash.ts";
+import { embeddingVectorType } from "../src/core/embedding-column.ts";
 import { DEFAULT_MODEL_ID, EMBED_DIMENSIONS } from "../src/core/embedding.ts";
 import { worstCaseUsd } from "../src/core/budget.ts";
 import { runEmbed } from "../src/commands/embed.ts";
@@ -22,6 +23,11 @@ import { deterministicEmbed } from "./det-embed.ts";
 const detEmbed = (t: string) => Promise.resolve(deterministicEmbed(t));
 // Three code chunks of equal length, so one call's worst case prices them all.
 const CODE_CHUNKS = ["function alpha() { return 1; }", "function bravo() { return 2; }", "function gamma() { return 3; }"];
+const CODE_PATH = "/src/x.ts";
+/** The input the code run sends for one of CODE_CHUNKS (the chunks carry no symbol metadata). */
+const inputOf = (text: string) => codeEmbeddingInput({ text, sourcePath: CODE_PATH });
+/** The dry run's upper bound on one CODE_CHUNKS input: text, full path and the header's fixed bytes. */
+const boundOf = (text: string) => Buffer.byteLength(text) + Buffer.byteLength(CODE_PATH) + 32;
 
 let tmp: string;
 let storage: Storage;
@@ -40,7 +46,7 @@ beforeEach(async () => {
   await storage.init();
   await writeDocumentTransaction(
     storage,
-    { documentId: "doc_code", sourcePath: "/src/x.ts", title: "x.ts", frontmatter: { kind: "code", language: "typescript" } },
+    { documentId: "doc_code", sourcePath: CODE_PATH, title: "x.ts", frontmatter: { kind: "code", language: "typescript" } },
     CODE_CHUNKS.map((text) => ({ text, entities: [] })),
   );
   await writeDocumentTransaction(
@@ -51,6 +57,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  _setVectorCacheBytesForTests(undefined);
   await storage.close();
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -74,17 +81,46 @@ describe("runEmbedBackfill kind code", () => {
   it("prices the run in a dry run and writes nothing", async () => {
     const r = await runEmbedBackfill(storage.engine(), { kind: "code", dryRun: true });
     expect(r.candidates).toBe(3);
-    const bytes = CODE_CHUNKS.reduce((n, t) => n + Buffer.byteLength(t), 0);
+    const bytes = CODE_CHUNKS.reduce((n, t) => n + boundOf(t), 0);
     expect(r.bytes).toBe(bytes);
-    const perCall = worstCaseUsd({ operation: "embedding", model: DEFAULT_MODEL_ID, worstCase: { input: CODE_CHUNKS[0]!, maxOutputTokens: 0 } })!;
+    // The bound covers what is really sent.
+    for (const t of CODE_CHUNKS) expect(Buffer.byteLength(inputOf(t))).toBeLessThanOrEqual(boundOf(t));
+    const perCall = worstCaseUsd({ operation: "embedding", model: DEFAULT_MODEL_ID, worstCase: { input: "x".repeat(boundOf(CODE_CHUNKS[0]!)), maxOutputTokens: 0 } })!;
     expect(r.costUpperBoundUsd).toBeCloseTo(perCall * 3, 12);
     expect(r.estimatedUsd!).toBeLessThan(r.costUpperBoundUsd!);
     expect(await vectorCount("doc_code")).toBe(0);
     // A limited run is priced for the chunks it would take, not the whole corpus.
     const limited = await runEmbedBackfill(storage.engine(), { kind: "code", dryRun: true, limit: 1 });
     expect(limited.candidates).toBe(1);
-    expect(limited.bytes).toBe(Buffer.byteLength(CODE_CHUNKS[0]!));
+    expect(limited.bytes).toBe(boundOf(CODE_CHUNKS[0]!));
     expect(limited.costUpperBoundUsd).toBeCloseTo(perCall, 12);
+  });
+
+  // Value: protects=the operator sees how big the vector index gets before paying, and a run the database
+  // cache cannot hold is refused before any call; fails_when=the dry run omits the projection or --apply
+  // embeds past shared_buffers (the 1 GB RDS overload); why_new=code backfill overloaded prod; seam=cache bytes
+  it("projects the vector index and refuses a run the database cache cannot hold", async () => {
+    await runEmbedBackfill(storage.engine(), { embed: detEmbed }); // one prose vector already stored
+    const vectorBytes = 8 + EMBED_DIMENSIONS * ((await embeddingVectorType(storage.engine())) === "halfvec" ? 2 : 4);
+    const rowBytes = (vectorBytes + 640) * 1.1;
+    // Room for the stored vector and two more, not three.
+    _setVectorCacheBytesForTests(Math.floor(rowBytes * 3.5));
+    const dry = await runEmbedBackfill(storage.engine(), { kind: "code", dryRun: true });
+    expect(dry.vectorIndex).toMatchObject({ rows: 1, fits: false, projectedMb: hnswIndexMb(4, vectorBytes) });
+    let calls = 0;
+    const embed = async (t: string) => {
+      calls++;
+      return deterministicEmbed(t);
+    };
+    const refused = await runEmbedBackfill(storage.engine(), { kind: "code", embed, maxUsd: 1 });
+    expect(refused.indexFull).toContain("shared_buffers");
+    expect(refused.embedded).toBe(0);
+    expect(calls).toBe(0);
+    expect(await vectorCount("doc_code")).toBe(0);
+    // Sized down with --limit, the run fits and goes ahead.
+    const sized = await runEmbedBackfill(storage.engine(), { kind: "code", embed, maxUsd: 1, limit: 2 });
+    expect(sized.indexFull).toBeUndefined();
+    expect(sized.embedded).toBe(2);
   });
 
   // Value: protects=the cap is a hard ceiling checked before each call, and a capped run resumes;
@@ -123,7 +159,8 @@ describe("runEmbedBackfill kind code", () => {
     expect(rows.length).toBe(2);
     for (const row of rows) {
       expect(row.input_hash).toBe(embeddingInputHash({
-        model: DEFAULT_MODEL_ID, dimensions: EMBED_DIMENSIONS, tier: "none", input: codeEmbeddingInput(row.content),
+        model: DEFAULT_MODEL_ID, dimensions: EMBED_DIMENSIONS, tier: "none",
+        input: codeEmbeddingInput({ text: row.content, sourcePath: "src/two.ts", language: "typescript", symbolType: "function", symbolName: row.content.includes("alpha") ? "alpha" : "bravo" }),
       }));
     }
     let calls = 0;
@@ -183,7 +220,7 @@ describe("memrain embed --code runs", () => {
     const seen: string[] = [];
     const embed = async (t: string) => {
       seen.push(t);
-      if (t === CODE_CHUNKS[0]) throw Object.assign(new Error("Input is too long for requested model"), { name: "ValidationException" });
+      if (t === inputOf(CODE_CHUNKS[0]!)) throw Object.assign(new Error("Input is too long for requested model"), { name: "ValidationException" });
       return deterministicEmbed(t);
     };
     try {
@@ -195,7 +232,7 @@ describe("memrain embed --code runs", () => {
       storage = new Storage({ dbPath: join(tmp, "db") });
       await storage.init();
     }
-    expect(seen).toEqual(CODE_CHUNKS.slice(0, 2));
+    expect(seen).toEqual(CODE_CHUNKS.slice(0, 2).map(inputOf));
     expect(await vectorCount("doc_code")).toBe(1);
   });
 });

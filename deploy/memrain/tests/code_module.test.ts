@@ -43,8 +43,8 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     await runEmbedBackfill(db.storage.engine(), { embed: async text => { calls++; return deterministicEmbed(text); } });
     expect(calls).toBe(0);
     expect(doc.embeddings).toBe(0);
-    expect(CODE_CHUNKER_VERSION).toBe(4);
-    await db.storage.engine().query(`UPDATE documents SET chunker_version = 3 WHERE id = $1`, [doc.documentId]);
+    expect(CODE_CHUNKER_VERSION).toBe(5);
+    await db.storage.engine().query(`UPDATE documents SET chunker_version = 4 WHERE id = $1`, [doc.documentId]);
     expect(await countStaleChunkerDocs(db.storage.engine())).toBe(1);
   });
   it("does not add module vectors when the same code is inside a markdown fence", async () => {

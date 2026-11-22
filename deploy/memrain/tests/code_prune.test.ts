@@ -143,7 +143,14 @@ describe("code sweep prune", () => {
     const gone = (await docOf(fileOf(dir, 1)))!.id;
     writeFileSync(fileOf(dir, 0), body("lima", 0));
 
-    await purgeExpiredDocuments(storage.engine(), 0);
+    const saved = process.env.MEMRAIN_CODE_PATHS;
+    process.env.MEMRAIN_CODE_PATHS = dir;
+    try {
+      await purgeExpiredDocuments(storage.engine(), 0);
+    } finally {
+      if (saved === undefined) delete process.env.MEMRAIN_CODE_PATHS;
+      else process.env.MEMRAIN_CODE_PATHS = saved;
+    }
     expect(await docOf(fileOf(dir, 1))).toBeUndefined();
     expect((await docOf(fileOf(dir, 0)))?.id).toBe(back);
     expect(gone).not.toBe(back);
@@ -152,6 +159,65 @@ describe("code sweep prune", () => {
     expect(r.restored).toBe(1);
     expect((await docOf(fileOf(dir, 0)))!.deleted_at).toBeNull();
     expect((await codeDefs(storage.engine(), "limaFn0")).count).toBe(1);
+  });
+
+  // Value: protects=a pruned document the sweep can never revive does not keep its rows forever; fails_when=the
+  // purge holds a returned file's document after its root left the config, or past one extra TTL.
+  it("lets the purge go ahead once the root is no longer configured or the extra hold ran out", async () => {
+    const dir = makeRepo("mike", 10);
+    await sweepCodeRoots(storage, { paths: [dir], prune: true });
+    unlinkSync(fileOf(dir, 0));
+    unlinkSync(fileOf(dir, 1));
+    expect((await sweepCodeRoots(storage, { paths: [dir], prune: true })).prune?.pruned).toBe(2);
+    writeFileSync(fileOf(dir, 0), body("mike", 0));
+    writeFileSync(fileOf(dir, 1), body("mike", 1));
+    // File 1's deletion is older than the TTL plus the extra hold.
+    const old = (await docOf(fileOf(dir, 1)))!.id;
+    await storage.engine().query(
+      `UPDATE documents SET deleted_at = deleted_at - interval '100 hours' WHERE id = $1`, [old]);
+    await storage.engine().query(
+      `UPDATE code_prunes SET pruned_at = pruned_at - interval '100 hours' WHERE document_id = $1`, [old]);
+    const saved = process.env.MEMRAIN_CODE_PATHS;
+    try {
+      process.env.MEMRAIN_CODE_PATHS = dir;
+      await purgeExpiredDocuments(storage.engine(), 0);
+      expect(await docOf(fileOf(dir, 1))).toBeUndefined();
+      expect(await docOf(fileOf(dir, 0))).toBeDefined();
+      // The root left the config: no sweep will revive file 0, so the purge takes it.
+      process.env.MEMRAIN_CODE_PATHS = join(tmp, "elsewhere");
+      await purgeExpiredDocuments(storage.engine(), 0);
+      expect(await docOf(fileOf(dir, 0))).toBeUndefined();
+    } finally {
+      if (saved === undefined) delete process.env.MEMRAIN_CODE_PATHS;
+      else process.env.MEMRAIN_CODE_PATHS = saved;
+    }
+  });
+
+  // Value: protects=a folder moved with git mv is a move, not a mass deletion: the old paths are retired in the
+  // same sweep and no symbol is answered twice; fails_when=moved files count toward the valve, which withholds
+  // the root on every sweep and leaves duplicate symbols live.
+  it("retires the old paths of moved files without counting them toward the valve", async () => {
+    const dir = makeRepo("november", 60);
+    await sweepCodeRoots(storage, { paths: [dir], prune: true });
+    mkdirSync(join(dir, "lib"));
+    for (let i = 0; i < 55; i++) renameSync(fileOf(dir, i), join(dir, "lib", `f${i}.ts`));
+    const r = await sweepCodeRoots(storage, { paths: [dir], prune: true });
+    expect(r.prune?.roots[0]).toMatchObject({ status: "pruned", missing: 55, moved: 55, pruned: 55 });
+    expect(await liveDocs(dir)).toBe(60);
+    expect((await codeDefs(storage.engine(), "novemberFn3")).count).toBe(1);
+    expect((await docOf(fileOf(dir, 3)))!.deleted_at).not.toBeNull();
+    expect((await docOf(join(dir, "lib", "f3.ts")))!.deleted_at).toBeNull();
+  });
+
+  // Value: protects=a small root's ordinary deletion of a few files is applied, not withheld until the CLI;
+  // fails_when=the valve trips on 2 of 9 files.
+  it("prunes an ordinary deletion in a small root", async () => {
+    const dir = makeRepo("oscar", 9);
+    await sweepCodeRoots(storage, { paths: [dir], prune: true });
+    unlinkSync(fileOf(dir, 0));
+    unlinkSync(fileOf(dir, 1));
+    const r = await sweepCodeRoots(storage, { paths: [dir], prune: true });
+    expect(r.prune?.roots[0]).toMatchObject({ status: "pruned", pruned: 2 });
   });
 
   // Value: protects=an unmounted checkout never wipes the index; fails_when=a missing root reads as "every file deleted".
@@ -199,19 +265,19 @@ describe("code sweep prune", () => {
   });
 
   // Value: protects=the valve withholds a mass deletion and only the explicit CLI override passes it;
-  // fails_when=the sweep retires 30% of a root, or the override does not work.
+  // fails_when=the sweep retires more than half of a root, or the override does not work.
   it("withholds a pass over the valve; code prune --apply --allow-mass-delete retires it", async () => {
-    const dir = makeRepo("echo", 10);
+    const dir = makeRepo("echo", 22);
     await sweepCodeRoots(storage, { paths: [dir], prune: true });
-    for (let i = 0; i < 3; i++) unlinkSync(fileOf(dir, i));
+    for (let i = 0; i < 12; i++) unlinkSync(fileOf(dir, i));
     const r = await sweepCodeRoots(storage, { paths: [dir], prune: true });
-    expect(r.prune?.roots[0]).toMatchObject({ status: "withheld", reason: "mass_delete", live: 10, missing: 3 });
-    expect(await liveDocs(dir)).toBe(10);
+    expect(r.prune?.roots[0]).toMatchObject({ status: "withheld", reason: "mass_delete", live: 22, missing: 12 });
+    expect(await liveDocs(dir)).toBe(22);
 
     await runCodePrune({ paths: dir, apply: true, storage });
-    expect(await liveDocs(dir)).toBe(10);
+    expect(await liveDocs(dir)).toBe(22);
     await runCodePrune({ paths: dir, apply: true, allowMassDelete: true, storage });
-    expect(await liveDocs(dir)).toBe(7);
+    expect(await liveDocs(dir)).toBe(10);
     const trig = await storage.engine().query<{ trigger: string }>(
       "SELECT DISTINCT trigger FROM code_prunes WHERE root = $1", [normalizeSourcePath(dir)]);
     expect(trig.rows).toEqual([{ trigger: "cli" }]);

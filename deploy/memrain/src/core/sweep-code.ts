@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { Storage } from "./storage.ts";
 import { indexCodeFile } from "./indexer-code.ts";
-import { codeEmbedMaxUsd, EmbedSpendCap } from "./code-embed.ts";
+import { codeEmbedCap } from "./code-embed.ts";
 import { normalizeSourcePath } from "./indexer.ts";
 import { walkFiles } from "./walk.ts";
 import { listStaleChunkerDocIds } from "./chunker-version.ts";
@@ -244,8 +244,9 @@ async function sweepCodeRootsInner(
   // walk merely saw proves nothing about who wrote the row sitting at it.
   const indexed: string[] = [];
   // One embedding cap for the whole walk: a first sweep, or a forced one, must
-  // not pay per file without bound.
-  const embedCap = new EmbedSpendCap(codeEmbedMaxUsd());
+  // not pay per file without bound, nor add more vectors than the database
+  // cache holds.
+  const embedCap = await codeEmbedCap(storage.raw());
   let embeddingDeferred = 0;
   const prune = opts.prune ?? codePruneAutoEnabled();
   // Documents a prune retired whose deletion is still the prune's: when the
@@ -266,6 +267,7 @@ async function sweepCodeRootsInner(
       files: 0,
       walkErrors: 0,
       partial: false,
+      arrived: [],
     };
     evidence.push(walked);
     if (perRoot.missing) {
@@ -330,6 +332,9 @@ async function sweepCodeRootsInner(
         embeddingDeferred += out.embeddingDeferred ?? 0;
         result.reindexed++;
         indexed.push(canonical);
+        // A path with no document before this walk: a new file, or one end of a
+        // move the prune pairs with the document its old path left behind.
+        if (stored === null) walked.arrived!.push(id);
         if (out.hasParseError) result.parseErrors++;
         if (returned) {
           pruned.delete(id);
@@ -361,6 +366,8 @@ async function sweepCodeRootsInner(
 
   if (embeddingDeferred > 0) {
     result.embeddingDeferred = embeddingDeferred;
+  }
+  if (embeddingDeferred > 0 && !embedCap.off) {
     console.warn(
       `[code] ${embeddingDeferred} chunk(s) stored without a vector this sweep ` +
         `(${embedCap.stopReason ?? "an embed failed"}); \`memrain embed --code\` fills them`,
@@ -398,6 +405,9 @@ function logPrune(r: CodePruneResult): void {
     );
   }
   for (const root of r.roots) {
+    if ((root.moved ?? 0) > 0) {
+      console.log(`[code] ${root.moved} document(s) under ${root.root} moved to a new path; their old paths were retired`);
+    }
     if (root.reason === "mass_delete") {
       console.warn(
         `[code] prune withheld for ${root.root}: ${root.missing} of ${root.live} code document(s) have no file; ` +

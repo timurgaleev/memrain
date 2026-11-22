@@ -62,7 +62,15 @@
 import { classifyBedrockError, runInBatchScope } from "./llm/bedrock-errors.ts";
 import { withLongHold } from "./pool-budget.ts";
 import { BudgetExhausted, costUsd, isBudgetRefusal, worstCaseUsd } from "./budget.ts";
-import { CODE_EMBED_MAX_BYTES, codeEmbeddingInput, EmbedSpendCap } from "./code-embed.ts";
+import {
+  CODE_EMBED_MAX_BYTES,
+  codeEmbeddingInput,
+  EmbedSpendCap,
+  hnswIndexMb,
+  readVectorIndexBudget,
+  vectorIndexFullReason,
+  type VectorIndexBudget,
+} from "./code-embed.ts";
 import type { Engine } from "./engine/interface.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
 import { embeddingInputHash } from "./embedding-input-hash.ts";
@@ -208,6 +216,14 @@ export interface EmbedBackfillResult {
   bytes?: number;
   estimatedUsd?: number;
   costUpperBoundUsd?: number;
+  /**
+   * Code runs: the embeddings index now and after this run's candidates are
+   * embedded (HNSW estimate, MB), and the database cache it must fit (null on
+   * PGLite, where no cache bound applies).
+   */
+  vectorIndex?: { rows: number; indexMb: number; projectedMb: number; sharedBuffersMb: number | null; fits: boolean };
+  /** Code runs: refused before any call because the projected index would not fit the database cache. */
+  indexFull?: string;
 }
 
 /** The run's own dollar cap stopped it (not a wallet or client cap). */
@@ -220,6 +236,13 @@ class EmbedCapReached extends BudgetExhausted {
 interface CandidateRow {
   id: string;
   content: string;
+  /** What a code chunk's embedding input is built from besides its text. */
+  source_path: string;
+  language: string | null;
+  symbol_name: string | null;
+  symbol_type: string | null;
+  parent_symbol_path: string[] | null;
+  doc_comment: string | null;
   /** Migration 057 marker — this chunk's vector carries the contextual prefix. */
   contextual_embedded: boolean;
   /** Document title — the contextual prefix's first line (marked chunks). */
@@ -318,7 +341,8 @@ async function fetchCandidatePage(
   // contextual prefix's synopsis, exactly the source `reindex --contextual`
   // uses, so a backfilled vector matches what that command would produce.
   const r = await engine.query<CandidateRow>(
-    `SELECT c.id, c.content, c.contextual_embedded, d.title,
+    `SELECT c.id, c.content, c.contextual_embedded, d.title, d.source_path,
+            c.language, c.symbol_name, c.symbol_type, c.parent_symbol_path, c.doc_comment,
             CASE WHEN c.contextual_embedded THEN (
               SELECT c2.content FROM chunks c2
                WHERE c2.document_id = c.document_id
@@ -362,10 +386,12 @@ async function countCandidates(
 
 /**
  * Price a code run before it is paid for: the candidates' embedding-input
- * bytes (the stored text, capped at CODE_EMBED_MAX_BYTES), a typical cost at
- * four bytes a token, and the worst case the cap reserves (a token per byte
- * plus per-call framing — `worstCaseUsd` summed). With `limit`, only the
- * chunks that run would take: the first `limit` in the walk's id order.
+ * bytes, a typical cost at four bytes a token, and the worst case the cap
+ * reserves (a token per byte plus per-call framing — `worstCaseUsd` summed).
+ * The bytes bound each input from above: the stored text, the doc comment, the
+ * full source path and the symbol names, plus the header's fixed characters,
+ * capped at CODE_EMBED_MAX_BYTES. With `limit`, only the chunks that run would
+ * take: the first `limit` in the walk's id order.
  */
 async function priceCodeCandidates(
   engine: Engine,
@@ -381,7 +407,11 @@ async function priceCodeCandidates(
   // scope: operator-only the operator prices a code backfill from the local CLI
   const r = await engine.query<{ n: number | string; bytes: number | string | null }>(
     `SELECT count(*)::int AS n, COALESCE(sum(s.b), 0)::bigint AS bytes
-       FROM (SELECT LEAST(octet_length(c.content), ${cut}) AS b
+       FROM (SELECT LEAST(octet_length(c.content) + COALESCE(octet_length(c.doc_comment), 0)
+                          + octet_length(d.source_path) + COALESCE(octet_length(c.symbol_type), 0)
+                          + COALESCE(octet_length(c.symbol_name), 0)
+                          + COALESCE(octet_length(array_to_string(c.parent_symbol_path, '.')), 0)
+                          + ${CODE_HEADER_FIXED_BYTES}, ${cut}) AS b
                FROM chunks c
                JOIN documents d ON d.id = c.document_id
                LEFT JOIN embeddings em ON em.chunk_id = c.id
@@ -539,7 +569,17 @@ function resolvePageSize(opt?: number): number {
  * (`codeEmbeddingInput`), so the stored input hash matches a later re-index.
  */
 function embedInput(row: CandidateRow, code: boolean): string {
-  if (code) return codeEmbeddingInput(row.content);
+  if (code) {
+    return codeEmbeddingInput({
+      text: row.content,
+      sourcePath: row.source_path,
+      language: row.language,
+      symbolName: row.symbol_name,
+      symbolType: row.symbol_type,
+      parentSymbolPath: row.parent_symbol_path,
+      docComment: row.doc_comment,
+    });
+  }
   if (!row.contextual_embedded) return row.content;
   const prefix = buildContextualPrefix(
     row.title,
@@ -659,6 +699,24 @@ async function embedPage(
   if (fatal) throw fatal.err;
 }
 
+/**
+ * Fixed header characters a code embedding input adds around the path and the
+ * symbol names: the bracketed language label, spaces, ` (in )`, and the blank
+ * line and newline around the doc comment. A bound, not an exact count.
+ */
+const CODE_HEADER_FIXED_BYTES = 32;
+
+/** The embeddings index now and once `newRows` more vectors land, for the code dry run. */
+function indexProjection(budget: VectorIndexBudget, newRows: number): NonNullable<EmbedBackfillResult["vectorIndex"]> {
+  return {
+    rows: budget.rows,
+    indexMb: hnswIndexMb(budget.rows, budget.vectorBytes),
+    projectedMb: hnswIndexMb(budget.rows + newRows, budget.vectorBytes),
+    sharedBuffersMb: budget.cacheBytes === null ? null : Math.floor(budget.cacheBytes / (1024 * 1024)),
+    fits: budget.headroomRows === null || newRows <= budget.headroomRows,
+  };
+}
+
 /** An embed failure every later row would hit too: a budget refusal, or a
  *  credential, access or model config the operator has to fix. */
 export function stopsTheRun(err: unknown): boolean {
@@ -717,7 +775,15 @@ async function runEmbedBackfillBody(
   // pass the same headroom. A capped call is sent once by the wallet, so one
   // reservation covers one request; embedWithRetry's throttle retries reserve
   // again.
-  const cap = opts.maxUsd !== undefined ? new EmbedSpendCap(opts.maxUsd) : null;
+  // A code run also stops before the vector index outgrows the database cache.
+  const budget = code ? await readVectorIndexBudget(engine) : null;
+  const headroom = budget?.headroomRows ?? null;
+  const cap = opts.maxUsd !== undefined || headroom !== null
+    ? new EmbedSpendCap(opts.maxUsd ?? Number.POSITIVE_INFINITY, headroom === null ? {} : {
+        maxCalls: headroom,
+        callsReason: vectorIndexFullReason(budget!, headroom + 1),
+      })
+    : null;
   const rawEmbed = opts.embed ??
     ((t: string) => embedText(t, { modelId: model, ...(cap ? { maxAttempts: 1 } : {}) }));
   const embed = cap
@@ -785,6 +851,24 @@ async function runEmbedBackfillBody(
       dryRun: true,
       lastId: null,
       ...(code ? await priceCodeCandidates(engine, model, opts.startAfterId, candidateScope!, opts.limit) : {}),
+      ...(budget ? { vectorIndex: indexProjection(budget, total) } : {}),
+    };
+  }
+
+  // A code run the cache cannot hold is refused whole, before any call: one
+  // that stopped at the cache's edge would leave the index filling it.
+  if (budget && headroom !== null && total > headroom) {
+    return {
+      candidates: 0,
+      embedded: 0,
+      failed: 0,
+      stale: 0,
+      signatureStale,
+      forceCleared,
+      dryRun: false,
+      lastId: null,
+      vectorIndex: indexProjection(budget, total),
+      indexFull: vectorIndexFullReason(budget, total),
     };
   }
 

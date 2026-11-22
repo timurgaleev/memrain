@@ -594,12 +594,13 @@ sudo docker exec deploy-memrain-1 bun run src/cli.ts reindex --source code --all
 ```
 
 A chunk whose text is unchanged keeps its vector, so a forced pass pays only
-for new or changed code, under `MEMRAIN_CODE_EMBED_MAX_USD` (default $1 per
-sweep, worst case). Run it once after upgrading past the release that stopped
-the entity re-extract from deleting code symbol mentions, or whenever an empty
-`code_def` reports readiness `no_symbols` while code documents exist.
+for new or changed code, under `MEMRAIN_CODE_EMBED_MAX_USD` (default $0: code
+is indexed without vectors unless you set it). Run it once after upgrading
+past the release that stopped the entity re-extract from deleting code symbol
+mentions, or whenever an empty `code_def` reports readiness `no_symbols` while
+code documents exist.
 
-Code chunks indexed before code was embedded, or past that cap, have no vector
+Code chunks indexed with embedding off, or past that cap, have no vector
 until you fill them. Price it first, then run it under an explicit cap:
 
 ```bash
@@ -609,7 +610,12 @@ sudo docker exec deploy-memrain-1 bun run src/cli.ts embed --code --apply --max-
 
 The dry run prints the count, `estimatedUsd` and `costUpperBoundUsd`; a cap at
 the upper bound finishes in one run. A smaller cap stops cleanly
-(`capReached: true`) and the same command continues from what is left.
+(`capReached: true`) and the same command continues from what is left. It also
+prints `vectorIndex`: the HNSW index now and after the run (`indexMb`,
+`projectedMb`) next to `sharedBuffersMb`. On a small instance every vector
+search reads an index that does not fit `shared_buffers` from disk, so
+`--apply` refuses a run with `fits: false` before any call; size it down with
+`--limit`.
 `bun run src/cli.ts eval code` before and after shows how many code chunks
 carry a vector and what that did to hit@5.
 

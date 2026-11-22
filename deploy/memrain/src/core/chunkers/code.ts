@@ -12,9 +12,12 @@
  *       * arrow functions assigned to top-level `const/let`
  *       * class declarations (and one chunk per method inside them)
  *       * Python `def` / `async def` / `class` (including methods)
- *   - For nested functions inside a top-level function we DO emit
- *     them as separate chunks (so `code-def innerHelper` resolves),
- *     with `enclosing` set to the outer symbol's name.
+ *   - Nothing is indexed twice. A class-like symbol is a scope: its members
+ *     (methods, nested classes) get their own chunks, and the class chunk
+ *     keeps only the text outside them (declaration, fields, an empty line
+ *     where each member was, so call-site line numbers still hold) plus a
+ *     member list. A function, method or arrow is a leaf: a helper nested in
+ *     it stays in its body and is not a chunk of its own.
  *   - On parse error (`tree.rootNode.hasError`) we still return what we
  *     could extract — partial coverage beats zero coverage. Sweep
  *     escalates parse errors to a per-file warning.
@@ -30,8 +33,10 @@ import { getParser, withParsedTree, type CodeLanguage } from "./parsers.ts";
  *
  * Module symbols capture calls outside named declarations. Their bodies mask
  * declarations already indexed separately, preserving call-site line numbers.
+ * Class chunks mask their members the same way, and symbols nested in a
+ * function are part of its chunk.
  */
-export const CODE_CHUNKER_VERSION = 4;
+export const CODE_CHUNKER_VERSION = 5;
 import type { Node as TSNode } from "web-tree-sitter";
 
 export type SymbolKind =
@@ -94,31 +99,91 @@ function clipDocComment(s: string): string | null {
  * documents `x`, not the symbol below it.
  */
 function jsPrecedingComment(node: TSNode): string | null {
+  const parts = jsLeadingRun(node).comments;
+  return parts.length > 0 ? clipDocComment(parts.join("\n")) : null;
+}
+
+/**
+ * The decorators and doc comment run above a JS/TS symbol: where that run
+ * starts in the source, and the comment texts in order.
+ */
+function jsLeadingRun(node: TSNode): { startIndex: number; comments: string[] } {
   let stmt: TSNode = node;
   while (stmt.parent && stmt.parent.type === "export_statement") {
     stmt = stmt.parent;
   }
+  let startIndex = stmt.startIndex;
   let adjacentRow = stmt.startPosition.row;
   let sib = stmt.previousNamedSibling;
   // Skip leading decorators (a decorated method's previous sibling is the
   // `decorator`, with the doc comment above it). Track the row so adjacency is
   // measured against the decorator, not the symbol below it.
   while (sib && sib.type === "decorator") {
+    startIndex = sib.startIndex;
     adjacentRow = sib.startPosition.row;
     sib = sib.previousNamedSibling;
   }
-  const parts: string[] = [];
+  const comments: string[] = [];
   while (sib && sib.type === "comment" && adjacentRow - sib.endPosition.row <= 1) {
     const prev = sib.previousNamedSibling;
     // A comment sharing its start line with the end of a preceding node is a
     // trailing comment (code on the same line) — it documents that node, not
     // ours. Stop here.
     if (prev && prev.endPosition.row === sib.startPosition.row) break;
-    parts.unshift(sib.text);
+    comments.unshift(sib.text);
+    startIndex = sib.startIndex;
     adjacentRow = sib.startPosition.row;
     sib = prev;
   }
-  return parts.length > 0 ? clipDocComment(parts.join("\n")) : null;
+  return { startIndex, comments };
+}
+
+/**
+ * Where a class member's text starts once its decorators and doc comment are
+ * counted in: the member chunk carries all three (its doc comment in
+ * `docComment`), so the class chunk leaves them out too.
+ */
+function memberStart(node: TSNode, lang: CodeLanguage): number {
+  if (lang === "python") {
+    return node.parent?.type === "decorated_definition" ? node.parent.startIndex : node.startIndex;
+  }
+  if (lang === "typescript" || lang === "tsx") return jsLeadingRun(node).startIndex;
+  return node.startIndex;
+}
+
+/** The line-comment marker of a language, for the member list a class chunk ends with. */
+function lineComment(lang: CodeLanguage): string {
+  if (lang === "python" || lang === "bash") return "#";
+  if (lang === "sql") return "--";
+  return "//";
+}
+
+interface MemberRange {
+  start: number;
+  end: number;
+  name: string;
+}
+
+/** Most member names a class chunk lists. */
+const MEMBER_LIST_MAX = 20;
+
+/**
+ * A class's own text: its source with each member's text blanked out (line
+ * breaks kept, so every line of what remains keeps its line number), then the
+ * member list.
+ */
+function scopeText(source: string, start: number, end: number, members: readonly MemberRange[], lang: CodeLanguage): string {
+  let text = "";
+  let at = start;
+  for (const m of [...members].sort((a, b) => a.start - b.start)) {
+    const from = Math.max(m.start, at);
+    if (from >= m.end) continue;
+    text += source.slice(at, from) + source.slice(from, m.end).replace(/[^\r\n]/g, "");
+    at = m.end;
+  }
+  text += source.slice(at, end);
+  const names = members.map((m) => m.name).slice(0, MEMBER_LIST_MAX).join(", ");
+  return `${text}\n\n${lineComment(lang)} Members: ${names}`;
 }
 
 /** Strip Python string quoting (prefixes r/b/f/u + ' '' ''' " "" """). */
@@ -323,23 +388,27 @@ function arrowBindingFromLexicalDecl(node: TSNode): { name: string; arrow: TSNod
 }
 
 /**
- * Walk the AST iteratively (BFS via stack) and emit one CodeSymbol per
- * matching node. Tracks the innermost-enclosing function/method/class so
- * each emitted symbol records its parent name.
+ * Walk the AST iteratively (DFS via stack) and emit one CodeSymbol per
+ * matching node that is not inside a function-like symbol. Tracks the
+ * enclosing class chain so each emitted symbol records its parents, and each
+ * class's members so the class chunk can leave their text out.
  */
-function* visitSymbols(
+function visitSymbols(
   root: TSNode,
   lang: CodeLanguage,
   source: string,
-): Generator<CodeSymbol> {
+): CodeSymbol[] {
   const symbolTypes = SYMBOL_NODE_TYPES[lang];
-  type Frame = { node: TSNode; enclosingPath: string[] };
-  const stack: Frame[] = [{ node: root, enclosingPath: [] }];
+  type Scope = { symbol: CodeSymbol; start: number; end: number; members: MemberRange[] };
+  type Frame = { node: TSNode; enclosingPath: string[]; owner: Scope | null };
+  const stack: Frame[] = [{ node: root, enclosingPath: [], owner: null }];
+  const symbols: CodeSymbol[] = [];
+  const scopes: Scope[] = [];
 
   while (stack.length > 0) {
     const frame = stack.pop();
     if (!frame) break;
-    const { node, enclosingPath } = frame;
+    const { node, enclosingPath, owner } = frame;
 
     let emittedName: string | null = null;
     let emittedKind: SymbolKind | null = null;
@@ -380,8 +449,9 @@ function* visitSymbols(
       }
     }
 
+    let nextOwner = owner;
     if (emittedName && emittedKind) {
-      yield {
+      const symbol: CodeSymbol = {
         name: emittedName,
         kind: emittedKind,
         body: source.slice(bodyNode.startIndex, bodyNode.endIndex),
@@ -395,6 +465,13 @@ function* visitSymbols(
         parentSymbolPath: [...enclosingPath],
         docComment: extractDocComment(bodyNode, lang),
       };
+      symbols.push(symbol);
+      owner?.members.push({ start: memberStart(bodyNode, lang), end: bodyNode.endIndex, name: emittedName });
+      // A function-like symbol is a leaf: whatever is nested in it stays in its body.
+      if (emittedKind !== "class") continue;
+      const scope: Scope = { symbol, start: bodyNode.startIndex, end: bodyNode.endIndex, members: [] };
+      scopes.push(scope);
+      nextOwner = scope;
     }
 
     // Push children in reverse so document order pops first. A named symbol
@@ -405,9 +482,15 @@ function* visitSymbols(
       : enclosingPath;
     for (let i = childCount - 1; i >= 0; i--) {
       const child = node.namedChild(i);
-      if (child) stack.push({ node: child, enclosingPath: nextPath });
+      if (child) stack.push({ node: child, enclosingPath: nextPath, owner: nextOwner });
     }
   }
+
+  for (const scope of scopes) {
+    if (scope.members.length === 0) continue;
+    scope.symbol.body = scopeText(source, scope.start, scope.end, scope.members, lang);
+  }
+  return symbols;
 }
 
 const IMPORT_NODE_TYPES_PER_LANG: Record<CodeLanguage, ReadonlySet<string>> = {

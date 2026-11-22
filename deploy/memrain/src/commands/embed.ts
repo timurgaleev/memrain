@@ -28,7 +28,9 @@
  * with the chunks still missing. A chunk the model refuses is tried once and
  * then skipped until its file changes. The dry run prints the count, the input
  * bytes, a typical cost and the worst-case bound — a cap at the bound finishes
- * in one run.
+ * in one run — and the vector index now and after the run next to the
+ * database's shared_buffers. On a Postgres server a run whose index would not
+ * fit shared_buffers is refused before any call; `--limit` can size it down.
  *
  * Idempotent — a re-run only embeds what is still missing. Exits non-zero
  * only on TOTAL failure (candidates existed, none embedded), so a cron can
@@ -144,8 +146,21 @@ async function runCodeEmbed(opts: EmbedCmdOptions): Promise<number> {
       ...(opts.embed ? { embed: opts.embed } : {}),
       onProgress: (done, total) => console.error(`embed-backfill: ${done}/${total}`),
     });
-    console.log(JSON.stringify({ ok: true, kind: "code", ...result }, null, 2));
+    console.log(JSON.stringify({ ok: !result.indexFull, kind: "code", ...result }, null, 2));
+    if (result.indexFull) {
+      console.error(
+        `memrain embed --code: refused, nothing embedded: ${result.indexFull}. ` +
+          "Embed fewer chunks with --limit, or give the database more memory first.",
+      );
+      return 1;
+    }
     if (!apply) {
+      if (result.vectorIndex && !result.vectorIndex.fits) {
+        console.error(
+          `memrain embed --code: the vector index would grow to about ${result.vectorIndex.projectedMb} MB, ` +
+            `past shared_buffers (${result.vectorIndex.sharedBuffersMb} MB); --apply would be refused. Use --limit to size the run down.`,
+        );
+      }
       console.error(
         "memrain embed --code: dry run. Run with --apply --max-usd X; a cap at " +
           "costUpperBoundUsd finishes in one run, a smaller one stops early and a re-run continues.",
