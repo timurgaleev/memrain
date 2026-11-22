@@ -1,8 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
-import { registerSource, SOURCE_KINDS } from "../src/core/sources.ts";
+import { SOURCE_KINDS } from "../src/core/sources.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
+
+/** Inserts a source with only the columns every reverted schema here has; registerSource writes later columns. */
+const seedSource = (e: Engine, id: string, kind: string, pathPrefix: string) =>
+  e.query(`INSERT INTO sources (id, kind, path_prefix) VALUES ($1, $2, $3)`, [id, kind, pathPrefix]);
 
 /** Only the latest migration can be reverted, so later ones go first. */
 async function revertLaterThan151(e: Engine): Promise<void> {
@@ -20,8 +24,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     try {
       expect(SOURCE_KINDS).toContain("chat");
       expect(SOURCE_KINDS).toContain("meeting");
-      await registerSource(e, { id: "slack-team", kind: "chat", pathPrefix: "chat/team/" });
-      await registerSource(e, { id: "meetings", kind: "meeting", pathPrefix: "meeting/acme/" });
+      await seedSource(e, "slack-team", "chat", "chat/team/");
+      await seedSource(e, "meetings", "meeting", "meeting/acme/");
       const kinds = (await e.query<{ kind: string }>("SELECT kind FROM sources WHERE id IN ('slack-team','meetings') ORDER BY id")).rows;
       expect(kinds.map(r => r.kind)).toEqual(["meeting", "chat"]);
     } finally { await db.close(); }
@@ -32,7 +36,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const e = db.storage.engine();
     try {
       await revertLaterThan151(e);
-      await registerSource(e, { id: "slack-team", kind: "chat", pathPrefix: "chat/team/" });
+      await seedSource(e, "slack-team", "chat", "chat/team/");
       await expect(revertMigration(e, 151)).rejects.toThrow("chat or meeting");
       expect(await kindCheck(e)).toContain("chat");
 

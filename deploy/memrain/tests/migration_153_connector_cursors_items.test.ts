@@ -2,7 +2,10 @@ import { describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
-import { registerSource } from "../src/core/sources.ts";
+
+/** Inserts a source with only the columns every reverted schema here has; registerSource writes later columns. */
+const seedSource = (e: Engine, id: string, kind: string, pathPrefix: string) =>
+  e.query(`INSERT INTO sources (id, kind, path_prefix) VALUES ($1, $2, $3)`, [id, kind, pathPrefix]);
 
 const ACCOUNT = "4f1c2a8e-6b0d-4c55-9a77-0d3e5f6a7b81";
 const TABLES = ["connector_cursors", "connector_items", "connector_notices"] as const;
@@ -14,7 +17,7 @@ async function revertLaterThan153(e: Engine): Promise<void> {
 
 /** Migration 152 makes connector_accounts the parent of every row here. */
 async function seedAccount(e: Engine): Promise<void> {
-  await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "mail/" });
+  await seedSource(e, "inbox", "mailbox", "mail/");
   await e.query(
     `INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES ($1, 'inbox', 'test', 'admin:operator', 'owner@example.test')`,
     [ACCOUNT],

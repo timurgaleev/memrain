@@ -1,9 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
-import { registerSource } from "../src/core/sources.ts";
 import { putPage } from "../src/core/pages.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
+
+/** Inserts a source with only the columns every reverted schema here has; registerSource writes later columns. */
+const seedSource = (e: Engine, id: string, kind: string, pathPrefix: string) =>
+  e.query(`INSERT INTO sources (id, kind, path_prefix) VALUES ($1, $2, $3)`, [id, kind, pathPrefix]);
 
 const table = async (e: Engine, name: string) => (await e.query<{ t: string | null }>(
   `SELECT to_regclass($1)::text AS t`, [name])).rows[0]!.t;
@@ -34,7 +37,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const db = await open();
     const e = db.storage.engine();
     try {
-      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "/inbox" });
+      await seedSource(e, "inbox", "mailbox", "/inbox");
       await seedAccount(e, "inbox");
       await expect(e.query(`DELETE FROM sources WHERE id = 'inbox'`)).rejects.toThrow();
     } finally { await db.close(); }
@@ -44,7 +47,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const db = await open();
     const e = db.storage.engine();
     try {
-      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "/inbox" });
+      await seedSource(e, "inbox", "mailbox", "/inbox");
       await putPage(db.storage, { slug: "mail/kept", markdown_body: "stays", source_id: "inbox" });
       const id = await seedAccount(e, "inbox");
       await e.query(`DELETE FROM connector_accounts WHERE id = $1`, [id]);
@@ -57,7 +60,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const db = await open();
     const e = db.storage.engine();
     try {
-      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "/inbox" });
+      await seedSource(e, "inbox", "mailbox", "/inbox");
       const id = await seedAccount(e, "inbox");
       await e.query(`UPDATE connector_accounts SET status = 'needs_reconnect' WHERE id = $1`, [id]);
       await expect(e.query(`UPDATE connector_accounts SET status = 'reauth_required' WHERE id = $1`, [id])).rejects.toThrow();
@@ -71,7 +74,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const later = discoverMigrations().map((m) => m.id).filter((id) => id > 154).sort((a, b) => b - a);
       for (const id of later) await revertMigration(e, id);
 
-      await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "/inbox" });
+      await seedSource(e, "inbox", "mailbox", "/inbox");
       await e.query(
         `INSERT INTO connector_oauth_states
            (state_hash, provider, source_id, principal_ref, admin_session_hash, kek_id, nonce,
