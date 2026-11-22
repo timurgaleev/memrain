@@ -1,12 +1,29 @@
 /**
  * A claim the speaker asked to keep quiet ("keep this quiet for now, but ...",
- * "between us", "off the record") is stored private. Deterministic and
- * English only: the extractor prompt is unchanged, and a fact is marked only
- * when its words match the claim of a keep-quiet sentence in its own window.
+ * "between us", "off the record", "keep this secret", and the Russian
+ * equivalents) is stored private. Deterministic, English and Russian: the
+ * extractor prompt is unchanged, and a fact is marked only when its words
+ * match the claim of a keep-quiet sentence in its own window.
  * Marking only narrows a fact's visibility, so the owner's reads are unchanged.
  */
 
 const CUE = /\b(?:keep (?:this|it|that) (?:quiet|between us|to yourself|under wraps|on the down ?low)|off the record|(?:do not|don'?t) (?:share|repeat|spread) (?:this|it|that)|(?:do not|don'?t) tell anyone)\b|^(?:just |strictly )?between (?:you and me|us|ourselves)(?=\s*(?:[,.:;!]|$|but\b))/i;
+/**
+ * Secrecy cues the list above misses, with Unicode word edges so the Russian
+ * ones match whole words: "keep this (a) secret", "this is confidential", the
+ * Russian "keep (this) secret" and "don't tell / don't say to anyone" in either
+ * form of address, and a sentence that opens with the Russian "(only /
+ * strictly) between us" (trailing, it is the idiom, not a request).
+ */
+const EXTRA_CUE = /(?<![\p{L}\p{N}])(?:keep (?:this|it|that) (?:a )?secret|(?:this is|it'?s|that'?s) (?:strictly )?confidential|\u0434\u0435\u0440\u0436\u0438(?:\u0442\u0435)? (?:\u044D\u0442\u043E )?\u0432 \u0441\u0435\u043A\u0440\u0435\u0442\u0435|\u043D\u0438\u043A\u043E\u043C\u0443 \u043D\u0435 (?:\u0433\u043E\u0432\u043E\u0440\u0438|\u0440\u0430\u0441\u0441\u043A\u0430\u0437\u044B\u0432\u0430\u0439)(?:\u0442\u0435)?)(?![\p{L}\p{N}])|^(?:\u0442\u043E\u043B\u044C\u043A\u043E |\u0441\u0442\u0440\u043E\u0433\u043E )?\u043C\u0435\u0436\u0434\u0443 \u043D\u0430\u043C\u0438(?=\s*(?:[,.:;!]|$|\u043D\u043E(?![\p{L}\p{N}])))/iu;
+
+/** The earliest keep-quiet cue in a sentence, from either list. */
+function cueIn(sentence: string): RegExpExecArray | null {
+  const a = CUE.exec(sentence);
+  const b = EXTRA_CUE.exec(sentence);
+  return a && b ? (a.index <= b.index ? a : b) : a ?? b;
+}
+
 const STOP = new Set(("the and but for now this that these those with from into onto about after before over under just also very "
   + "its it's his her their our your you they them she him was were are has have had will would could should can may might "
   + "not yet any all some more most then than when what which who whom whose where why how been being one two get got "
@@ -26,7 +43,7 @@ export function keepQuietClaims(messages: ReadonlyArray<{ speaker: string; text:
   return messages.filter((message) => message.speaker.trim().toLowerCase() !== "assistant").flatMap((message) => {
     const sentences = message.text.split(/(?<=[.!?])\s+|\n+/).map((sentence) => sentence.trim().replace(/^[^\p{L}\p{N}]+/u, "")).filter(Boolean);
     return sentences.flatMap((sentence, i) => {
-      const cue = CUE.exec(sentence);
+      const cue = cueIn(sentence);
       if (!cue) return [];
       const after = words(sentence.slice(cue.index + cue[0].length));
       if (after.size >= 2) return [after];

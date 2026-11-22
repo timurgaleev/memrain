@@ -7,6 +7,11 @@
  * Pipeline: parseConversation (deterministic) → per-turn Sonnet extraction
  * (budget-gated) → addFact into entity_facts. Stops cleanly when the budget is
  * exhausted; partial progress is kept.
+ *
+ * A turn the model declines to read (a refusal or a content filter) is read
+ * once more as two halves, so one passage does not cost the facts around it;
+ * what still declines is counted, never logged by its text. A fact restating a
+ * claim the speaker asked to keep quiet is stored private.
  */
 import { readFileSync } from "node:fs";
 import { Storage } from "../core/storage.ts";
@@ -15,8 +20,13 @@ import { loadConfig } from "../core/config.ts";
 import { parseConversation } from "../core/conversation-parser.ts";
 import {
   DEFAULT_EXTRACTION_MAX_TOKENS,
+  EXTRACT_WINDOW_CHARS,
   extractFactsFromTurn,
+  markKeptQuiet,
+  splitDeclinedWindow,
   writeExtractedFacts,
+  type ExtractTurnResult,
+  type ExtractedFact,
 } from "../core/facts-extract.ts";
 import { isOwnerSpeaker } from "../core/facts-owner.ts";
 import { isPasteOnly } from "../core/transcripts/pasted-content.ts";
@@ -52,6 +62,10 @@ export interface ExtractConvFactsReport {
   factsSkipped: number;
   /** Facts the model returned that failed to write (a subset of factsSkipped). */
   factsFailed: number;
+  /** Turns the model declined to read in part or whole, even as two halves. */
+  declinedWindows: number;
+  /** Facts stored private because their speaker asked to keep the claim quiet. */
+  keptQuiet: number;
   spentUsd: number;
   budgetExhausted: boolean;
 }
@@ -95,6 +109,8 @@ export async function runExtractConversationFacts(
       factsWritten: 0,
       factsSkipped: 0,
       factsFailed: 0,
+      declinedWindows: 0,
+      keptQuiet: 0,
       spentUsd: 0,
       budgetExhausted: false,
     };
@@ -112,7 +128,44 @@ export async function runExtractConversationFacts(
   let factsWritten = 0;
   let factsSkipped = 0;
   let factsFailed = 0;
+  let declinedWindows = 0;
+  let keptQuiet = 0;
   let exhausted = false;
+
+  // One budgeted extractor call. "refused": the cap leaves no room for a
+  // worst-case call; "error": the call threw (the text is skipped);
+  // `overCap`: the call was paid for but pushed the run past its cap, so its
+  // facts are still written and the run stops.
+  type TurnCall = { result: ExtractTurnResult; overCap: boolean } | "refused" | "error";
+  const callTurn = async (text: string, observationDate: string | null): Promise<TurnCall> => {
+    // Pre-flight: don't dispatch a paid call when the worst-case cost would
+    // breach the cap (also stops unpriced models — reserve returns null).
+    const hold = budget.reserve(modelId, WORST_CASE_USAGE);
+    if (hold === null) return "refused";
+    let result: ExtractTurnResult;
+    try {
+      result = await budget.track(() => extractFactsFromTurn(text, {
+        ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
+        modelId,
+        observationDate,
+        // The hold above sized ONE call against the cap; a truncation retry is
+        // a second paid call, so the hold widens to the projected TOTAL or the
+        // retry is dropped.
+        canAffordRetry: (projected) => budget.widen(hold, modelId, projected),
+      }));
+    } catch {
+      // A model/network error skips this text; never abort the batch.
+      budget.release(hold);
+      return "error";
+    }
+    try {
+      budget.settle(hold, result.modelId, result.usage);
+    } catch (e) {
+      if (e instanceof BudgetExhausted) return { result, overCap: true };
+      throw e;
+    }
+    return { result, overCap: false };
+  };
 
   for (const msg of messages) {
     const turn = `${msg.speaker}: ${msg.text}`.trim();
@@ -127,47 +180,61 @@ export async function runExtractConversationFacts(
       firstParty: isOwnerSpeaker(msg.speaker),
       ...(opts.ownerEntity ? { ownerEntity: opts.ownerEntity } : {}),
     };
-    // Pre-flight: don't dispatch a paid call when the worst-case cost would
-    // breach the cap (also stops unpriced models — reserve returns null).
-    const hold = budget.reserve(modelId, WORST_CASE_USAGE);
-    if (hold === null) {
+    // The keep-quiet match reads the text the facts came from, speaker label
+    // included: an assistant's "I will keep that quiet" names no claim.
+    const write = async (text: string, facts: readonly ExtractedFact[]): Promise<void> => {
+      const marked = markKeptQuiet(text, facts);
+      keptQuiet += marked.filter((f) => f.keep_private === true).length;
+      const w = await writeExtractedFacts(storage, marked, writeOpts);
+      factsWritten += w.written;
+      factsSkipped += w.skipped;
+      factsFailed += w.failed;
+    };
+
+    const first = await callTurn(turn, validFrom);
+    if (first === "refused") {
       exhausted = true;
       break;
     }
-    let result;
-    try {
-      result = await budget.track(() => extractFactsFromTurn(turn, {
-        ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
-        modelId,
-        observationDate: validFrom,
-        // The hold above sized ONE call against the cap; a truncation retry is
-        // a second paid call, so the hold widens to the projected TOTAL or the
-        // retry is dropped.
-        canAffordRetry: (projected) => budget.widen(hold, modelId, projected),
-      }));
-    } catch {
-      // A model/network error skips this turn; never abort the batch.
-      budget.release(hold);
-      continue;
-    }
-    try {
-      budget.settle(hold, result.modelId, result.usage);
-    } catch (e) {
-      if (e instanceof BudgetExhausted) {
+    if (first === "error") continue;
+    if (first.result.outcome !== "declined") {
+      await write(turn, first.result.facts);
+      if (first.overCap) {
         exhausted = true;
-        // Still persist this last turn's facts (already paid for), then stop.
-        const w = await writeExtractedFacts(storage, result.facts, writeOpts);
-        factsWritten += w.written;
-        factsSkipped += w.skipped;
-        factsFailed += w.failed;
         break;
       }
-      throw e;
+      continue;
     }
-    const w = await writeExtractedFacts(storage, result.facts, writeOpts);
-    factsWritten += w.written;
-    factsSkipped += w.skipped;
-    factsFailed += w.failed;
+    // Declined: read the turn once more as two halves, each under the
+    // speaker's label. No further splitting.
+    const halves = first.overCap ? null : splitDeclinedWindow(msg.text.slice(0, EXTRACT_WINDOW_CHARS));
+    if (halves === null) {
+      declinedWindows += 1;
+      if (first.overCap) {
+        exhausted = true;
+        break;
+      }
+      continue;
+    }
+    let stillDeclined = false;
+    for (const half of halves) {
+      const text = `${msg.speaker}: ${half.text}`;
+      const r = await callTurn(text, validFrom);
+      if (r === "refused") {
+        exhausted = true;
+        stillDeclined = true;
+        break;
+      }
+      if (r === "error") continue;
+      if (r.result.outcome === "declined") stillDeclined = true;
+      else await write(text, r.result.facts);
+      if (r.overCap) {
+        exhausted = true;
+        break;
+      }
+    }
+    if (stillDeclined) declinedWindows += 1;
+    if (exhausted) break;
   }
 
   return {
@@ -176,6 +243,8 @@ export async function runExtractConversationFacts(
     factsWritten,
     factsSkipped,
     factsFailed,
+    declinedWindows,
+    keptQuiet,
     spentUsd: Number(budget.totalSpent().toFixed(6)),
     budgetExhausted: exhausted,
   };
@@ -211,6 +280,8 @@ export async function runExtractConversationFactsCli(
       console.log(
         `extract-conversation-facts: ${report.turns} turns, ${report.factsWritten} facts written` +
           ` (${report.factsSkipped} skipped, ${report.factsFailed} failed), spent $${report.spentUsd.toFixed(4)}` +
+          (report.declinedWindows > 0 ? `, ${report.declinedWindows} turn(s) declined by the model` : "") +
+          (report.keptQuiet > 0 ? `, ${report.keptQuiet} fact(s) kept private on request` : "") +
           (report.budgetExhausted ? " [budget exhausted]" : ""),
       );
     }

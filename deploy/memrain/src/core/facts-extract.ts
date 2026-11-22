@@ -931,7 +931,7 @@ function budgetedSlotTagger(budget: BudgetTracker, modelId: string, sonnetFn?: S
 }
 
 /** Marks each fact that restates a claim its window's speaker asked to keep quiet. */
-function markKeptQuiet(window: string, facts: readonly ExtractedFact[]): ExtractedFact[] {
+export function markKeptQuiet(window: string, facts: readonly ExtractedFact[]): ExtractedFact[] {
   const claims = keepQuietClaims(windowMessages(window));
   return claims.length ? facts.map((f) => keptQuiet(f.fact, claims) ? { ...f, keep_private: true as const } : f) : [...facts];
 }

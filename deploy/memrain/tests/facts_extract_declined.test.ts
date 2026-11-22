@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { extractFactsForPage, extractFactsOnDemand, splitDeclinedWindow } from "../src/core/facts-extract.ts";
 import { putPage } from "../src/core/pages.ts";
+import { conversationFactsBackfillPhase } from "../src/core/cycle/conversation-facts-backfill.ts";
 import type { SonnetCallResult, SonnetFn } from "../src/core/llm/sonnet.ts";
 
 let tmp: string;
@@ -117,6 +118,28 @@ describe("declined windows", () => {
     expect(r.skipped).toBe("model_declined");
     const quiet = await extractFactsOnDemand(QUIET, { sonnetFn: fn, modelId: MODEL });
     expect(quiet.skipped).toBeUndefined();
+  });
+
+  // Value: protects=a page the model declined in part is asked again later instead of being memoized as read;
+  // fails_when=the backfill watermarks a declined page (or its on-write facts hide it) and never retries it;
+  // why_new=the backfill treated a declined span as a clean read; seam=the backfill phase, model faked.
+  it("the backfill parks a page with a declined span and asks again after the backoff", async () => {
+    const body = `${QUIET}\n\n${TOUCHY}`;
+    await putPage(storage, { slug: "notes/mixed", type: "note", markdown_body: body });
+    const { fn, users } = filtering();
+    const first = await conversationFactsBackfillPhase(storage, { sonnetFn: fn, modelId: MODEL });
+    expect(first.factsWritten).toBe(1);
+    expect(first.zeroYieldRecorded).toBe(0);
+    expect(first.errors.map((e) => e.slug)).toEqual(["notes/mixed"]);
+    const scans = await storage.engine().query("SELECT 1 FROM facts_backfill_scans WHERE slug = 'notes/mixed'");
+    expect(scans.rows).toHaveLength(0);
+    // Parked: the next run does not pay for it again.
+    await conversationFactsBackfillPhase(storage, { sonnetFn: fn, modelId: MODEL });
+    expect(users).toHaveLength(3);
+    // After the backoff the page is read again, despite the fact the partial read wrote.
+    await storage.engine().query("UPDATE synth_failures SET next_eligible_at = now() - interval '1 minute' WHERE phase = 'facts-backfill'");
+    await conversationFactsBackfillPhase(storage, { sonnetFn: fn, modelId: MODEL });
+    expect(users).toHaveLength(6);
   });
 
   it("splits at the paragraph break nearest the middle", () => {

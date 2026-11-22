@@ -19,8 +19,11 @@
  * (slug, source_id) — the coverage pages had before the watermark existed —
  * until a backfill run writes a watermark for it, and only while the page has
  * not been updated since the newest such fact. Malformed, truncated, budget
- * and model-error outcomes, and extracted facts that failed to write, write no
- * row and stay retryable.
+ * and model-error outcomes, a span the model declined to read (a refusal or a
+ * content filter, even in halves), and extracted facts that failed to write,
+ * write no row and stay retryable; a parked failure on the page's current body
+ * also outranks that on-write coverage, so the retry is not hidden by the facts
+ * the partial read already wrote.
  *
  * FALLS-OPEN: a per-page failure is collected in `errors[]`; the phase never
  * throws (the cycle marks it `warn` when errors[] is non-empty).
@@ -178,6 +181,11 @@ async function backfillRun(
                AND x.slug = p.slug
                AND x.outcome = 'extracted'
           )
+          AND NOT EXISTS (
+            SELECT 1 FROM synth_failures pf
+             WHERE pf.doc_id = ${PAGE_MIRROR_PATH_SQL} AND pf.phase = 'facts-backfill'
+               AND pf.content_hash = p.content_hash AND pf.kind <> 'skipped'
+          )
         )
         -- Before LIMIT, so memoized zero-yield pages do not take this run's slots.
         AND NOT EXISTS (
@@ -267,7 +275,17 @@ async function backfillRun(
           message: `extraction absorbed: ${r.absorbed}`,
         });
       }
-      if (r.absorbed === null) await clearSynthFailure(storage.engine(), pageSourcePath(page.slug, page.source_id), "facts-backfill");
+      // A span the model declined leaves the page unfinished: it is parked
+      // like a failed read and asked again after the backoff, never memoized.
+      const declined = r.declinedRanges?.length ?? 0;
+      if (declined > 0) {
+        await recordSynthFailure(storage.engine(), {
+          docId: pageSourcePath(page.slug, page.source_id), phase: "facts-backfill",
+          contentHash: page.content_hash, model, kind: "llm_error",
+        });
+        result.errors.push({ slug: page.slug, message: `the model declined ${declined} span(s); retried after the backoff` });
+      }
+      if (r.absorbed === null && declined === 0) await clearSynthFailure(storage.engine(), pageSourcePath(page.slug, page.source_id), "facts-backfill");
       // Facts that failed to write were never persisted: the page is not
       // empty, so it must stay open for the next run rather than be memoized.
       if (r.factsFailed > 0) {
@@ -278,7 +296,7 @@ async function backfillRun(
       }
       // A clean read is watermarked against the body it read, so an edit
       // re-opens the page; `zero_yield` when it wrote nothing new.
-      if (r.absorbed === null && r.factsFailed === 0) {
+      if (r.absorbed === null && r.factsFailed === 0 && declined === 0) {
         const outcome = r.factsWritten === 0 ? "zero_yield" : "extracted";
         await storage.engine().query(
           `INSERT INTO facts_backfill_scans

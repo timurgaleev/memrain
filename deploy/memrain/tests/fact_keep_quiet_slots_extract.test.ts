@@ -48,6 +48,39 @@ describe("keep-quiet matching", () => {
     expect(marks(said(["user", "Acme Example closed its seed round."]), [SEED])).toHaveLength(0);
   });
 
+  // Value: protects=a request for secrecy in the words people use ("keep this secret", "this is confidential",
+  // and the Russian forms) narrows the claim to private; fails_when=a cue is dropped from the list, or a near miss
+  // ("secretary", a past-tense "told no one", a trailing "between us") marks an ordinary claim;
+  // why_new=the original cue list knew none of these phrasings; seam=the pure matcher the extractors call.
+  it("secrecy cues in English and Russian mark their claim, and near misses do not", () => {
+    const JOIN = "Acme Example is joining Beta Example.";
+    const hits = (text: string, fact = JOIN, speaker = "user") => marks(said([speaker, text]), [fact]).length;
+    expect(hits("Please keep this secret: Acme Example is joining Beta Example.")).toBe(1);
+    expect(hits("Keep it a secret, but Acme Example is joining Beta Example.")).toBe(1);
+    expect(hits("This is confidential: Acme Example is joining Beta Example.")).toBe(1);
+    expect(hits("Acme Example is joining Beta Example. It's confidential.")).toBe(1);
+    expect(hits("Keep this secretary posted: Acme Example is joining Beta Example.")).toBe(0);
+    expect(hits("Put the confidential info in the contract template for Acme Example and Beta Example.")).toBe(0);
+    // The same request from the assistant names no claim.
+    expect(hits("Please keep this secret: Acme Example is joining Beta Example.", JOIN, "assistant")).toBe(0);
+
+    // "Ivan is moving to Yandex", Russian.
+    const IVAN = "\u0418\u0432\u0430\u043D \u043F\u0435\u0440\u0435\u0445\u043E\u0434\u0438\u0442 \u0432 \u042F\u043D\u0434\u0435\u043A\u0441";
+    const ru = (cue: string) => hits(cue.replace("{}", IVAN), `${IVAN}.`);
+    // "Keep (this) secret: ..." / "Keep it secret" in the polite form.
+    expect(ru("\u0414\u0435\u0440\u0436\u0438 \u0432 \u0441\u0435\u043A\u0440\u0435\u0442\u0435: {}.")).toBe(1);
+    expect(ru("{}. \u0414\u0435\u0440\u0436\u0438\u0442\u0435 \u044D\u0442\u043E \u0432 \u0441\u0435\u043A\u0440\u0435\u0442\u0435.")).toBe(1);
+    // "Don't tell anyone, ..." / "don't say to anyone".
+    expect(ru("\u041D\u0438\u043A\u043E\u043C\u0443 \u043D\u0435 \u0433\u043E\u0432\u043E\u0440\u0438, {}.")).toBe(1);
+    expect(ru("{}. \u041D\u0438\u043A\u043E\u043C\u0443 \u043D\u0435 \u0440\u0430\u0441\u0441\u043A\u0430\u0437\u044B\u0432\u0430\u0439\u0442\u0435.")).toBe(1);
+    // "Between us, ..." opening the sentence.
+    expect(ru("\u041C\u0435\u0436\u0434\u0443 \u043D\u0430\u043C\u0438, {}.")).toBe(1);
+    // Near misses: "kept in the secretaire", "told no one" (past), "the difference between us".
+    expect(ru("\u0414\u0435\u0440\u0436\u0438 \u0432 \u0441\u0435\u043A\u0440\u0435\u0442\u0435\u0440\u0435 \u043F\u0430\u043F\u043A\u0443: {}.")).toBe(0);
+    expect(ru("\u041D\u0438\u043A\u043E\u043C\u0443 \u043D\u0435 \u0433\u043E\u0432\u043E\u0440\u0438\u043B, \u0447\u0442\u043E {}.")).toBe(0);
+    expect(ru("{}, \u0438 \u0432 \u044D\u0442\u043E\u043C \u0440\u0430\u0437\u043D\u0438\u0446\u0430 \u043C\u0435\u0436\u0434\u0443 \u043D\u0430\u043C\u0438.")).toBe(0);
+  });
+
   it("reads speaker turns from the transcript shapes the importers write", () => {
     expect(windowMessages("**Alice Example:** Hi there\n**assistant** (2026-03-10 9:03 AM): Noted.\nmore of it\nUser: Off the record, yes."))
       .toEqual([{ speaker: "Alice Example", text: "Hi there" }, { speaker: "assistant", text: "Noted.\nmore of it" }, { speaker: "User", text: "Off the record, yes." }]);
@@ -131,6 +164,21 @@ describe("extraction stores keep-quiet facts private and tags slots", () => {
       { fact: "Acme Example closed its seed round", visibility: "private", slot_dimension: null, slot_value: null },
       { fact: "Alice Example sends the plan on Thursday", visibility: "world", slot_dimension: null, slot_value: null },
     ]);
+  });
+
+  // Value: protects=a user's "keep this secret" keeps that claim off a world-visible batch end to end, while the
+  // same words from the assistant change nothing; fails_when=the new cue stops reaching the writer;
+  // why_new=the cue list missed this phrasing; seam=the extract_facts persist path, model faked.
+  it("a user's \"keep this secret\" stores the claim private on a world batch; the assistant's does not", async () => {
+    const fact = { fact: "Zeta Example is joining Omega Example", kind: "fact", entity: "companies/acme-example", confidence: 0.9, notability: "high" };
+    const fn: SonnetFn = async (input) => input.system === SLOT_TAG_SYSTEM ? reply("{\"slots\":[]}") : reply(JSON.stringify({ facts: [fact] }));
+    await extractFactsOnDemand("assistant: Please keep this secret: Zeta Example is joining Omega Example.", { sonnetFn: fn, persist: true, storage, visibility: "world" });
+    const byAssistant = (await storage.engine().query<{ visibility: string }>("SELECT visibility FROM entity_facts WHERE fact = $1", [fact.fact])).rows;
+    expect(byAssistant).toEqual([{ visibility: "world" }]);
+    await storage.engine().query("DELETE FROM entity_facts WHERE fact = $1", [fact.fact]);
+    await extractFactsOnDemand("user: Please keep this secret: Zeta Example is joining Omega Example.", { sonnetFn: fn, persist: true, storage, visibility: "world" });
+    const byUser = (await storage.engine().query<{ visibility: string }>("SELECT visibility FROM entity_facts WHERE fact = $1", [fact.fact])).rows;
+    expect(byUser).toEqual([{ visibility: "private" }]);
   });
 
   it("a keep-quiet restatement of a claim already saved world narrows it to private", async () => {
