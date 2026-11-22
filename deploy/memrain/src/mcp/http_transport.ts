@@ -442,6 +442,7 @@ async function handleSingle(
             isPublic: ctx.isPublic,
             authInfo: ctx.authInfo,
             signal,
+            mcpIngress: true,
             ...(ctx.issuer !== undefined ? { issuer: ctx.issuer } : {}),
           },
         );

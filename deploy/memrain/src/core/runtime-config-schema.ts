@@ -176,6 +176,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_MAX_FENCES_PER_PAGE: "int",
   MEMRAIN_MAX_MARKUP_RATIO: "string",
   MEMRAIN_MAX_TYPE_RATIO: "string",
+  MEMRAIN_MCP_FORCE_SURFACE: "string",
   MEMRAIN_MCP_INSTRUCTIONS: "string",
   MEMRAIN_MCP_LENIENT_ARGS: "flag",
   MEMRAIN_MCP_MAX_RESULT_BYTES: "int",

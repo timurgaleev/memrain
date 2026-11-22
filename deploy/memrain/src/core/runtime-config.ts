@@ -72,6 +72,8 @@ export const ENV_ONLY_KEYS: ReadonlySet<string> = new Set([
   // to a member: the database must never loosen its own guard.
   "MEMRAIN_PUBLIC_AUTH",
   "MEMRAIN_REQUIRE_MEMBER",
+  // An incident switch: a forgotten row must not keep every connection narrowed.
+  "MEMRAIN_MCP_FORCE_SURFACE",
   // Startup refuses these without an extension (extension.ts); a stored row
   // projected after that check must not be able to set them.
   "MEMRAIN_TENANT_ID",

@@ -27,7 +27,7 @@ import {
 } from "../core/auth-info.ts";
 import { hasScope } from "../core/scope.ts";
 import { OPERATIONS, WRITE_SCOPED_TOOLS } from "./operations.ts";
-import { toolOnSurface } from "./surface.ts";
+import { readForceSurfaceEnv, toolOnSurface } from "./surface.ts";
 import { refusedUnderFloor } from "./read-floor.ts";
 import { TOOL_DEFS, type ToolDef } from "./tool_defs.ts";
 
@@ -135,7 +135,7 @@ export type ToolRefusal =
   | { kind: "insufficient_scope"; requiredScope: string }
   | { kind: "slug_bound" }
   | { kind: "trust_floor"; floor: string }
-  | { kind: "tool_surface"; surface: "starter" | "verbs" };
+  | { kind: "tool_surface"; surface: "starter" | "verbs"; forced?: true };
 
 /** What the transport knows about the caller of one request. */
 export interface CallerContext {
@@ -207,13 +207,24 @@ export function dispatchRefusal(
   return null;
 }
 
-/** Every tool-level refusal a caller meets, ingress first, as a call would. */
+/**
+ * The operator's MEMRAIN_MCP_FORCE_SURFACE, for every /mcp caller alike (the
+ * operator bearer and the public bearer included). It only adds a refusal on
+ * top of the credential's own surface, so it never widens one. The local CLI
+ * and in-process callers do not come through /mcp and are not narrowed.
+ */
+export function forcedSurfaceRefusal(name: string): ToolRefusal | null {
+  const forced = readForceSurfaceEnv();
+  return forced !== null && !toolOnSurface(name, forced) ? { kind: "tool_surface", surface: forced, forced: true } : null;
+}
+
+/** Every tool-level refusal a /mcp caller meets, ingress first, as a call would. */
 export function toolRefusal(
   name: string,
   ctx: CallerContext,
   forbidPublic: (name: string) => boolean,
 ): ToolRefusal | null {
-  return ingressRefusal(name, ctx, forbidPublic) ?? dispatchRefusal(name, ctx.authInfo);
+  return ingressRefusal(name, ctx, forbidPublic) ?? forcedSurfaceRefusal(name) ?? dispatchRefusal(name, ctx.authInfo);
 }
 
 /** The `tools/list` answer for this caller: every tool it can actually call. */

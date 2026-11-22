@@ -54,3 +54,23 @@ export function toolOnSurface(name: string, surface: ToolSurface): boolean {
   if (surface === "full") return true;
   return (surface === "verbs" ? VERB_TOOLS : STARTER_TOOLS).has(name);
 }
+
+let warnedBadForceValue = false;
+
+/**
+ * `MEMRAIN_MCP_FORCE_SURFACE`: the operator's incident switch for every /mcp
+ * connection. Narrow-only: it is applied on top of each credential's own
+ * surface, so it can clamp a deployment down but never widen a credential.
+ * Unset or `full` is off; an unknown value is ignored with one warning
+ * (ignoring it can only leave surfaces as configured). Read on every request.
+ */
+export function readForceSurfaceEnv(warn: (msg: string) => void = (msg) => console.warn(msg)): "starter" | "verbs" | null {
+  const raw = process.env["MEMRAIN_MCP_FORCE_SURFACE"]?.trim().toLowerCase();
+  if (raw === undefined || raw === "" || raw === "full") return null;
+  if (raw === "starter" || raw === "verbs") return raw;
+  if (!warnedBadForceValue) {
+    warnedBadForceValue = true;
+    warn(`[mcp] ignoring unknown MEMRAIN_MCP_FORCE_SURFACE="${raw.slice(0, 40)}" (use verbs | starter | full); surfaces stay as configured`);
+  }
+  return null;
+}

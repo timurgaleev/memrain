@@ -52,6 +52,7 @@ PRE_RENAME_SUFFIXES = {
 QUIESCENCE_SWITCHES = {"MAINTENANCE", "BOOT_CODE_SWEEP", "JOBS_WORKER", "CYCLE"}
 ADDED_SUFFIXES = {
     "MCP_MAX_RESULT_BYTES",
+    "MCP_FORCE_SURFACE",
     "OUTPUT_REDACTION",
     "REQUIRE_WRITE_PRECONDITION",
     "CODE_SECRET_SCAN",
@@ -226,6 +227,7 @@ def test_serve_time_env_vars_reach_the_container(compose):
         "MEMRAIN_BOOT_CODE_SWEEP",
         "MEMRAIN_JOBS_WORKER",
         "MEMRAIN_CYCLE",
+        "MEMRAIN_MCP_FORCE_SURFACE",
     }
     # Guard the list itself: a name that no longer exists in the source is a
     # stale assertion, not a real requirement.

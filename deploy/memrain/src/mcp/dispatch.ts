@@ -290,7 +290,7 @@ import {
 } from "../core/write-requests.ts";
 import { hasScope } from "../core/scope.ts";
 import { insufficientScopeChallenge } from "../http/oauth-metadata.ts";
-import { ADMIN_PANEL_ONLY_TOOLS, dispatchRefusal, SLUG_PARAMS_BY_WRITE_TOOL } from "./visibility.ts";
+import { ADMIN_PANEL_ONLY_TOOLS, dispatchRefusal, forcedSurfaceRefusal, SLUG_PARAMS_BY_WRITE_TOOL } from "./visibility.ts";
 import { READ_FLOOR_FILTERED, strictestFloor } from "./read-floor.ts";
 import { narrowReadSources, readsFederatedScope } from "./read-source-filter.ts";
 import { withRequestCost } from "../core/request-cost.ts";
@@ -434,6 +434,8 @@ export interface DispatchOptions {
   trustCeiling?: TrustTier;
   /** A member's own write made on its own credentials (`member:<id>`), recorded as its principal. Transports never set it. */
   memberPrincipal?: `member:${string}`;
+  /** Set by the /mcp transport only: the operator's MEMRAIN_MCP_FORCE_SURFACE applies to this call. */
+  mcpIngress?: boolean;
 }
 
 /**
@@ -621,7 +623,7 @@ async function dispatchToolInner(
     // and trusted-local path (`authInfo === undefined`) are the operator and
     // pass all of them. tools/list asks the same predicate (mcp/visibility.ts),
     // so a listed tool is never refused here.
-    const refusal = dispatchRefusal(req.name, opts.authInfo);
+    const refusal = (opts.mcpIngress === true ? forcedSurfaceRefusal(req.name) : null) ?? dispatchRefusal(req.name, opts.authInfo);
     if (refusal?.kind === "no_write_source") {
       throw new OperationError(
         "permission_denied",
@@ -659,11 +661,18 @@ async function dispatchToolInner(
         "Use search, query or context_pack, which return only rows at or above the floor.",
       );
     }
+    if (refusal?.kind === "tool_surface" && refusal.forced) {
+      throw new OperationError(
+        "permission_denied",
+        `tool '${req.name}' is not on the '${refusal.surface}' tool surface`,
+        `The brain operator has narrowed every connection to the '${refusal.surface}' surface for now; use a tool on it.`,
+      );
+    }
     if (refusal?.kind === "tool_surface") {
       throw new OperationError(
         "permission_denied",
         `tool '${req.name}' is not on this credential's '${refusal.surface}' tool surface`,
-        "Ask the brain operator for a credential with a wider tool surface.",
+        "Ask the brain owner to widen this credential's tool surface in admin → Credentials.",
       );
     }
     if (refusal?.kind === "slug_bound") {
