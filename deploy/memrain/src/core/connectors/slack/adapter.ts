@@ -29,8 +29,11 @@
  *     page of a run already under way: its pages stay.
  *   - A channel Slack reports private has its stored days that are not marked
  *     private yet re-stamped from their stored copy, at most RESTAMP_PER_RUN a
- *     run, until none is left (restamp.ts); that holds for a channel this
- *     account is not granted to read too.
+ *     run and at most half of the run's item budget, until none is left
+ *     (restamp.ts); that holds for a channel this account is not granted to
+ *     read too, and for one Slack no longer shows the bot (not found, or the
+ *     bot not in it), which is how a channel turned private with the bot
+ *     removed answers.
  *   - Slack's rate limits are the connector client's: a 429 is waited out up
  *     to its cap, past it the run ends partial and resumes from the cursor.
  *
@@ -60,6 +63,8 @@ export const MAX_SLACK_CHANNELS = 100;
 /** Days one page call reads, at most; the engine commits the cursor after each. */
 const DAYS_PER_PAGE = 7;
 const CHANNEL_ID_RE = /^[CG][A-Z0-9]{2,30}$/;
+/** Slack's answers for a channel the bot cannot see or is not in. */
+const NOT_READABLE = new Set(["channel_not_found", "not_in_channel"]);
 const USER_CACHE_TTL_MS = 86_400_000;
 const USER_CACHE_MAX = 5000;
 
@@ -126,7 +131,9 @@ class Adapter implements SyncAdapter {
     const info = await this.channel(ctx.client, channelId);
     // Once a run, before anything else of a private channel, even one this account may no longer read.
     const restamped = ctx.page === 0 && this.engine !== null && this.privateChannels.has(channelId)
-      ? await restampItems(this.engine, this.account, channelId, ctx.budget?.remaining ?? RESTAMP_PER_RUN)
+      // At most half of what the run may still store, less the one item a held channel takes,
+      // so the channel's own reads, or its access hold, keep room.
+      ? await restampItems(this.engine, this.account, channelId, Math.floor(((ctx.budget?.remaining ?? 2 * RESTAMP_PER_RUN + 1) - 1) / 2))
       : [];
     if ("failure" in info) {
       const failed = info.failure;
@@ -212,7 +219,12 @@ class Adapter implements SyncAdapter {
     if (known) return known;
     const res = await conversationInfo(client, channelId);
     if (!res.ok) {
-      if (res.channelUnavailable) return { failure: this.unavailable(channelId, res.channelUnavailable) };
+      if (res.channelUnavailable) {
+        // A channel turned private with the bot removed answers like one the bot was never in:
+        // its stored days are treated as private, from the stored copy.
+        if (NOT_READABLE.has(res.channelUnavailable)) this.privateChannels.add(channelId);
+        return { failure: this.unavailable(channelId, res.channelUnavailable) };
+      }
       return { failure: { ok: false, response: res.response } };
     }
     const info = res.body;
@@ -221,7 +233,10 @@ class Adapter implements SyncAdapter {
     if (info.isPrivate && !(this.account.services ?? []).includes(SLACK_PRIVATE_SERVICE)) {
       return { failure: this.unavailable(channelId, "private_channel_not_granted") };
     }
-    if (!info.isMember) return { failure: this.unavailable(channelId, "not_in_channel") };
+    if (!info.isMember) {
+      this.privateChannels.add(channelId);
+      return { failure: this.unavailable(channelId, "not_in_channel") };
+    }
     await this.clearAccessHold(channelId);
     this.infos.set(channelId, info);
     return info;

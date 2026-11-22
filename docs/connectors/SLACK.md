@@ -184,8 +184,11 @@ then **Add apps**. For a private channel, invite the bot the same way.
 - When a channel turns private in Slack, the days already stored become
   private too, older ones included, from the stored copy and without asking
   Slack (a day Slack no longer returns is kept, not deleted). Up to 200 days
-  are re-marked per run; a longer history finishes over the next runs. This
-  happens even when the account was not granted private channels.
+  are re-marked per run (never more than half of a run's item budget); a
+  longer history finishes over the next runs. This happens even when the
+  account was not granted private channels, and when Slack no longer shows
+  the channel to the bot (not found, or the bot removed from it): a channel
+  turned private with the bot taken out answers that way.
 - `private: true` is a label, not access control: who reads a page is decided
   by its source. Keep private channels in an owner-only source
   (`memrain sources owner-only <source> on`); `memrain connectors status`

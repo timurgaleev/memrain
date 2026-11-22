@@ -8,7 +8,8 @@
  * its stored days that are not marked private yet from their stored copy,
  * without asking Slack: the page gains `private: true` in its compiled truth
  * and the renderer's "Private chat" header, and is written back through the
- * engine like any item. At most RESTAMP_PER_RUN days a run; the rest are
+ * engine like any item. A day whose item is held (a write that kept failing)
+ * is skipped, so it cannot stall the days behind it. At most RESTAMP_PER_RUN days a run; the rest are
  * found again by the next run's query, so a channel with many stored days
  * finishes over several runs, and a run that fails part-way loses nothing.
  *
@@ -52,7 +53,7 @@ export async function restampItems(engine: Engine, account: Pick<SyncAccount, "i
        FROM connector_items ci
        JOIN pages p ON p.slug = ci.page_slug AND p.source_id = $2
       WHERE ci.account_id = $1 AND left(ci.external_id, $4) = $3
-        AND ci.deleted_upstream_at IS NULL AND p.deleted_at IS NULL
+        AND ci.deleted_upstream_at IS NULL AND ci.held_reason IS NULL AND p.deleted_at IS NULL
         AND p.compiled_truth->>'origin' = 'connector'
         AND (p.compiled_truth->>'private') IS DISTINCT FROM 'true'
       ORDER BY p.slug DESC

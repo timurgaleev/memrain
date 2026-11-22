@@ -634,6 +634,30 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  // Value: protects=a channel turned private with the bot removed (Slack answers channel_not_found) still has its
+  // stored days marked private, and a held day does not stall the others; fails_when=re-stamping waits on
+  // conversations.info succeeding, or a held day is picked again; why_new=review finding; seam=the fake workspace.
+  it("re-stamps a channel Slack no longer shows the bot, skipping a held day", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      const account = await pasteToken(db.storage, w, [GENERAL]);
+      await run(db.storage, w, account.id);
+      await run(db.storage, w, account.id, T0 + 10 * DAY);
+      await e.query(`UPDATE connector_items SET held_reason = 'render_failed', held_until = now() + interval '1 day' WHERE account_id = $1 AND external_id = $2`,
+        [account.id, `${GENERAL}:2026-11-15`]);
+      delete w.channels[GENERAL];
+      w.calls.length = 0;
+      const result = await run(db.storage, w, account.id, T0 + 11 * DAY);
+      expect(result.counts.deletions_seen).toBe(0);
+      expect(slackCalls(w, "conversations.history")).toHaveLength(0);
+      expect((await truthOf(e, daySlug(GENERAL, "2026-11-14")))!.private).toBe(true);
+      expect(await body(e, daySlug(GENERAL, "2026-11-14"))).toContain("Private chat channel day");
+      expect((await truthOf(e, daySlug(GENERAL, "2026-11-15")))!.private).toBeUndefined();
+    } finally { await db.close(); }
+  });
+
   // Value: protects=the same for a granted private channel read as usual; fails_when=a second run rewrites
   // the re-stamped days; why_new=as above; seam=a token granted private channels.
   it("re-stamps a granted channel once and leaves it alone on the next run", async () => {
