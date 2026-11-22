@@ -125,6 +125,7 @@ function printUsage(): void {
   console.log("  backup status [--rds-instance ID] [--efs-id ID] [--copy-report FILE]  inspect backup evidence");
   console.log("  export [--dir DIR] [--source ID] [--owner KEY]  export live pages as markdown and chat threads as JSON");
   console.log("  import --dir DIR --source ID [--apply --plan-hash HASH]  preview create-only page import; indexing deferred");
+  console.log("  import --calls --dir DIR --source ID [--apply --plan-hash HASH]  call transcripts (.txt/.md) as calls/<date>-<title> pages, redacted, once each");
   console.log("  mirror-adopt --source ID [--limit N] [--apply --plan-hash HASH]  preview proven mirror ownership repair");
   console.log("  atoms-retire --source-ref DOC --completed-hash HASH16 [--apply --plan-hash HASH64]  preview proven stale atom pages");
   console.log("  purge-leftovers [--apply --plan-hash HASH64 --export FILE]  preview what purged sources left in synthesis and facts");
@@ -1244,6 +1245,10 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
     case "import": {
       if (positional.length) throw new Error("import: use --dir and --source");
       if (flags.has("--apply") && flags.has("--dry-run")) throw new Error("import: choose --apply or --dry-run");
+      if (flags.has("--calls")) {
+        const { runCallImport } = await import("./commands/import-calls.ts");
+        return runCallImport({ dir: values.get("--dir") ?? "", source: values.get("--source") ?? "", apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
+      }
       return runImport({ dir: values.get("--dir") ?? "", source: values.get("--source") ?? "", apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
     }
     case "atoms-retire": {

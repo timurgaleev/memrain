@@ -61,6 +61,7 @@ tsvector. Embeddings: Bedrock Titan v2 (1024-dim).
 | `reindex [--all] [--vault P]` | walk a vault, re-ingest changed files |
 | `reindex --rechunk-stale [--source vault\|code\|all] [--limit N] [--max-cost-usd N]` | preview a bounded chunker upgrade; apply by repeating the options with `--plan-hash HASH` |
 | `import --dir DIR --source ID [--apply --plan-hash HASH]` | preview/create new pages from an export; never overwrite existing or deleted slugs |
+| `import --calls --dir DIR --source ID [--apply --plan-hash HASH]` | preview/import call transcripts (`.txt`/`.md`) as `calls/<date>-<title>` meeting pages: credentials redacted, out of automatic fact extraction, each file once (a changed file is reported `kept`, never overwritten) |
 | `transcripts repair-origin PATH [--source ID] [--apply --plan-hash HASH]` | preview/correct agent-session fact attribution from explicit local logs |
 | `mirror-adopt --source ID [--limit N] [--apply --plan-hash HASH]` | preview/repair proven unowned page mirrors without re-embedding |
 | `secrets audit [--kinds jobs] [--json]` | inspect stored credentials; jobs are aggregate-only and never rewritten |
