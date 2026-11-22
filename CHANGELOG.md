@@ -6,20 +6,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-
-- Code chunks carry vectors, so search by meaning can return the function that answers a plain-words question. The code indexer embeds each symbol raw (its first 8,000 UTF-8 bytes, under Titan's token limit however dense the text) through the spend wallet and keeps the stored vector of any symbol whose text is unchanged, so re-indexing an unchanged file pays nothing. One code sweep reserves at most `MEMRAIN_CODE_EMBED_MAX_USD` (default $1, worst case) before each call; past it, or after an embed failure, chunks are written without a vector and the code graph is written as before.
-- `memrain embed --code` fills code chunks that have no vector. It is a dry run that prints the count, the input bytes, a typical cost and the worst-case bound; `--apply --max-usd X` embeds under that cap, stops cleanly at the first call that would cross it (`capReached`), and a re-run continues. A chunk the model refuses is tried once and then skipped until its file changes. `--apply` without `--max-usd` is refused.
-
-### Changed
-
-- A reviewed code rechunk (`reindex --rechunk-stale --source code`) prices its code embeddings in the plan and embeds them through the plan's bounded embedder; a code plan needs a non-zero `--max-cost-usd`.
-- Code documents are no longer atom sources.
-
-### Fixed
-
-- The cycle's embed-stale phase skips code documents: one with an old vector would have been re-read through the markdown indexer and rewritten as prose.
-
 ## [2.4.0] — 2026-11-21
 
 A release about who owns a brain and how far its rows are trusted. A brain names its owner, closes personal sources to everyone else once it serves several people, reads fact slots and `known_as_of` at read time, holds instruction-like facts, takes and timeline entries for the owner, and keeps every derived row at the trust tier of what it was drawn from: a less trusted write files a proposal instead of replacing a more trusted fact, and a credential can carry a read floor.
