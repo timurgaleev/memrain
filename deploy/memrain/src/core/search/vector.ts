@@ -171,7 +171,6 @@ export async function vectorSearch(
     indexServed,
     limit,
   });
-  const relaxed = settings["hnsw.iterative_scan"] === "relaxed_order";
   const vectorCast = await embeddingCast(engine);
   const sql = opts.maxPool
     ? boostCase
@@ -208,25 +207,22 @@ export async function vectorSearch(
          WHERE ${where}
          ORDER BY (1 - (e.vector <=> $1${vectorCast})) * ${boostCase} DESC, e.chunk_id COLLATE "C" ASC
          LIMIT ${limitParam}`
-      : relaxed
-        ? // A relaxed iterative scan may return rows slightly out of order;
-          // the materialized CTE keeps the index scan and re-sorts its output.
-          `WITH ann AS MATERIALIZED (
-             SELECT e.chunk_id, e.vector <=> $1${vectorCast} AS dist
-               FROM embeddings e
-               JOIN chunks c     ON c.id = e.chunk_id
-               JOIN documents d  ON d.id = c.document_id
-              WHERE ${where}
-              ORDER BY dist
-              LIMIT ${limitParam}
-           )
-           SELECT chunk_id FROM ann ORDER BY dist, chunk_id COLLATE "C"`
-        : `SELECT e.chunk_id FROM embeddings e
-       JOIN chunks c     ON c.id = e.chunk_id
-       JOIN documents d  ON d.id = c.document_id
-       WHERE ${where}
-       ORDER BY e.vector <=> $1${vectorCast}
-       LIMIT ${limitParam}`;
+      : // The materialized CTE keeps the index scan (ORDER BY distance alone is
+        // what HNSW serves) and re-sorts its rows by distance, then chunk id:
+        // equal distances are common (chunks sharing the same terms, or values
+        // equal at halfvec precision) and would otherwise come back in whatever
+        // order the index walk found them. A relaxed iterative scan may also
+        // return rows slightly out of order; the re-sort covers that too.
+        `WITH ann AS MATERIALIZED (
+           SELECT e.chunk_id, e.vector <=> $1${vectorCast} AS dist
+             FROM embeddings e
+             JOIN chunks c     ON c.id = e.chunk_id
+             JOIN documents d  ON d.id = c.document_id
+            WHERE ${where}
+            ORDER BY dist
+            LIMIT ${limitParam}
+         )
+         SELECT chunk_id FROM ann ORDER BY dist, chunk_id COLLATE "C"`;
   // Settings are applied transaction-locally (set_config is_local=true); see
   // vectorScanSettings for which apply where.
   const names = Object.keys(settings);

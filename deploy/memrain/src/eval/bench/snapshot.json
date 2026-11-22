@@ -133,7 +133,7 @@
       "/bench/vault/people/amara-nwosu.md",
       "/bench/vault/people/hana-sato.md",
       "/bench/vault/people/bram-oyelaran.md",
-      "/bench/vault/projects/pebble.md"
+      "/bench/vault/people/maren-holt.md"
     ],
     "a-tom-pager": [
       "/bench/vault/people/tomasz-wierzba.md",
@@ -145,7 +145,7 @@
       "/bench/vault/people/odile-varga.md",
       "/bench/vault/people/greta-lindqvist.md",
       "/bench/vault/code/access-export.md",
-      "/bench/vault/projects/pebble.md"
+      "/bench/vault/people/maren-holt.md"
     ],
     "a-search-rewrite": [
       "/bench/vault/projects/kestrel.md",
@@ -235,8 +235,8 @@
       "/bench/vault/projects/heron.md",
       "/bench/vault/meetings/heron-pilot-retro.md",
       "/bench/vault/code/access-export.md",
-      "/bench/vault/concepts/no-show-rate.md",
       "/bench/vault/projects/thistle.md",
+      "/bench/vault/concepts/no-show-rate.md",
       "/bench/vault/people/bram-oyelaran.md",
       "/bench/vault/meetings/roadmap-planning.md",
       "/bench/vault/meetings/lantern-model-review.md",
@@ -269,14 +269,14 @@
     ],
     "s-ines-owns": [
       "/bench/vault/people/ines-castellano.md",
-      "/bench/vault/meetings/design-critique-pebble.md",
       "/bench/vault/meetings/roadmap-planning.md",
+      "/bench/vault/meetings/design-critique-pebble.md",
       "/bench/vault/projects/heron.md",
       "/bench/vault/meetings/kestrel-ranking-review.md",
       "/bench/vault/meetings/heron-pilot-retro.md",
       "/bench/vault/transcripts/kestrel-standup.md",
-      "/bench/vault/decisions/quiet-hours.md",
       "/bench/vault/decisions/data-retention.md",
+      "/bench/vault/decisions/quiet-hours.md",
       "/bench/vault/code/hl7-parser.md"
     ],
     "s-amara-owns": [
@@ -397,14 +397,14 @@
       "/bench/vault/meetings/tidewater-month-end.md",
       "/bench/vault/projects/beacon.md",
       "/bench/vault/concepts/reciprocal-rank-fusion.md",
-      "/bench/vault/meetings/security-incident-review.md"
+      "/bench/vault/concepts/shadow-mode.md"
     ],
     "r-exclusivity": [
       "/bench/vault/transcripts/partner-negotiation.md",
       "/bench/vault/meetings/roadmap-planning.md",
       "/bench/vault/meetings/lantern-model-review.md",
-      "/bench/vault/code/reminder-sender.md",
       "/bench/vault/people/yusuf-demir.md",
+      "/bench/vault/code/reminder-sender.md",
       "/bench/vault/meetings/tidewater-month-end.md",
       "/bench/vault/projects/heron.md",
       "/bench/vault/people/lucien-moreau.md",
@@ -548,8 +548,8 @@
       "/bench/vault/decisions/data-retention.md",
       "/bench/vault/transcripts/billing-call.md",
       "/bench/vault/code/ledger-sync.md",
-      "/bench/vault/meetings/design-critique-pebble.md",
       "/bench/vault/meetings/roadmap-planning.md",
+      "/bench/vault/meetings/design-critique-pebble.md",
       "/bench/vault/people/odile-varga.md",
       "/bench/vault/concepts/variance-report.md",
       "/bench/vault/code/reminder-sender.md",
@@ -596,8 +596,8 @@
       "/bench/vault/decisions/quiet-hours.md",
       "/bench/vault/code/pebble-datepicker.md",
       "/bench/vault/de/zugriffspruefung.md",
-      "/bench/vault/de/abrechnung-monatsabschluss.md",
       "/bench/vault/meetings/lantern-model-review.md",
+      "/bench/vault/de/abrechnung-monatsabschluss.md",
       "/bench/vault/meetings/tidewater-month-end.md",
       "/bench/vault/concepts/reciprocal-rank-fusion.md",
       "/bench/vault/projects/saffron.md",
@@ -689,8 +689,8 @@
     ],
     "abs-4": [
       "/bench/vault/meetings/roadmap-planning.md",
-      "/bench/vault/code/hl7-parser.md",
       "/bench/vault/meetings/partner-sync-saffron.md",
+      "/bench/vault/code/hl7-parser.md",
       "/bench/vault/projects/thistle.md",
       "/bench/vault/people/ines-castellano.md",
       "/bench/vault/meetings/heron-pilot-retro.md",

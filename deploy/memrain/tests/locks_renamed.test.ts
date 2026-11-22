@@ -84,12 +84,14 @@ for (const { name, open } of ENGINES) {
 
     it("the migrator takes memrain:migrations only", async () => {
       const log: Call[] = [];
-      await db.engine.query(`DELETE FROM migrations WHERE id = 1`);
+      // Re-applies an idempotent migration. Not 001: its HNSW index names
+      // vector_cosine_ops, which a column converted to halfvec (191) refuses.
+      await db.engine.query(`DELETE FROM migrations WHERE id = 187`);
       try {
         const r = await runMigrations(recording(db.engine, log));
-        expect(r.applied.map((m) => m.id)).toEqual([1]);
+        expect(r.applied.map((m) => m.id)).toEqual([187]);
       } finally {
-        await db.engine.query(`INSERT INTO migrations (id, name) VALUES (1, 'initial') ON CONFLICT DO NOTHING`);
+        await db.engine.query(`INSERT INTO migrations (id, name) VALUES (187, 'embedding_input_hash') ON CONFLICT DO NOTHING`);
       }
       expect([...new Set(advisoryKeys(log))]).toEqual(["memrain:migrations"]);
     });
