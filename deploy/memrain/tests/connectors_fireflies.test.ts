@@ -13,6 +13,9 @@ import {
   FIREFLIES_API_ORIGIN,
   FirefliesKeyError,
   firefliesQuery,
+  isFinalTranscript,
+  parseTranscriptsCursor,
+  serializeTranscriptsCursor,
   normalizeTranscript,
   transcriptVersion,
   verifyFirefliesKey,
@@ -225,5 +228,44 @@ describe("verifyFirefliesKey", () => {
       return new Response(JSON.stringify(noEmail.body), { status: 200, headers: noEmail.headers });
     }, apiKey: FIREFLIES_KEY }).catch((e: unknown) => e);
     expect((err as FirefliesKeyError).code).toBe("identity");
+  });
+});
+
+// Value: protects=the transcripts cursor reads both the ISO text older releases wrote and the deferred-queue form,
+// and writes ISO text whenever nothing is deferred; fails_when=either form stops parsing or the compact form is lost
+// (a rollback would then re-read 90 days); why_new=the cursor gained a second form; seam=pure functions.
+describe("transcripts cursor", () => {
+  const since = "2025-11-17T12:00:00.000Z";
+
+  it("reads legacy ISO text, the deferred form, and anything else as a fresh start", () => {
+    expect(parseTranscriptsCursor(since)).toEqual({ since, pending: {} });
+    expect(parseTranscriptsCursor(JSON.stringify({ v: 2, since, pending: { "ff-a": since, "": since, "ff-b": "never" } })))
+      .toEqual({ since, pending: { "ff-a": since } });
+    expect(parseTranscriptsCursor(null)).toEqual({ since: null, pending: {} });
+    expect(parseTranscriptsCursor("{not json")).toEqual({ since: null, pending: {} });
+    expect(parseTranscriptsCursor(JSON.stringify({ v: 9, since }))).toEqual({ since: null, pending: {} });
+  });
+
+  it("writes ISO text while nothing is deferred, and round-trips the deferred form", () => {
+    expect(serializeTranscriptsCursor({ since, pending: {} })).toBe(since);
+    const state = { since, pending: { "ff-a": "2025-11-17T11:00:00.000Z" } };
+    expect(parseTranscriptsCursor(serializeTranscriptsCursor(state))).toEqual(state);
+  });
+});
+
+// Value: protects=finality follows a summary or the 48-hour wait; fails_when=a transcript without a summary is
+// stored at once or waits forever; why_new=finality is new; seam=pure function over recorded shapes.
+describe("isFinalTranscript", () => {
+  const at = Date.parse("2025-11-17T12:00:00.000Z");
+  const meeting = (over: Record<string, unknown>) => ({ id: "ff-x", date: at - 3_600_000, ...over });
+
+  it("is final with an overview or action items, or 48 hours after the meeting began", () => {
+    expect(isFinalTranscript(meeting({ summary: { overview: "Done." } }), at)).toBe(true);
+    expect(isFinalTranscript(meeting({ summary: { action_items: "- Send it" } }), at)).toBe(true);
+    expect(isFinalTranscript(meeting({ summary: { keywords: "only keywords" } }), at)).toBe(false);
+    expect(isFinalTranscript(meeting({ summary: null }), at)).toBe(false);
+    expect(isFinalTranscript(meeting({ summary: null, date: at - 48 * 3_600_000 }), at)).toBe(true);
+    expect(isFinalTranscript(transcriptOf("transcript-t2"), at)).toBe(false);
+    expect(isFinalTranscript(transcriptOf("transcript-t2-summarized"), at)).toBe(true);
   });
 });

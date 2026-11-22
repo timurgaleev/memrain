@@ -38,7 +38,7 @@ import type { ApiKeyProvider } from "./providers.ts";
 import { renderMeeting } from "./render.ts";
 import type { ItemBudget, PageResult, SyncAccount, SyncAdapter, SyncItem } from "./sync-engine.ts";
 import { syncItemFromPage } from "./sync-item.ts";
-import { liveItemIds, settledItemVersions } from "./sync-store.ts";
+import { liveItemIds, readCursor, settledItemVersions } from "./sync-store.ts";
 import type { ResponseClass } from "./types.ts";
 
 export const FIREFLIES_PROVIDER_ID = "fireflies";
@@ -63,6 +63,14 @@ export const BACKFILL_DAYS = 90;
  * pure created-after cursor would step over it.
  */
 export const LOOKBACK_MS = 48 * 60 * 60_000;
+/** A transcript with no summary this long after its meeting began is stored without one. */
+export const SUMMARY_WAIT_MS = 48 * 60 * 60_000;
+/** A deferred (still processing) transcript older than this is stored as it is. */
+export const PENDING_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+/** Listing passes per window before the walk counts as unstable and the window stays open. */
+export const MAX_LISTING_PASSES = 3;
+/** Listing pages in one pass past which the listing is treated as endless. */
+export const MAX_LISTING_PAGES = 400;
 /** Deletions are reconciled at most this often; listing every id costs requests. */
 export const RECONCILE_EVERY_MS = 24 * 60 * 60_000;
 /** Transcripts probed for deletion per run; the rest wait for the next reconcile. */
@@ -399,6 +407,25 @@ export function transcriptVersion(listed: Raw, refreshDay: number | null = null)
   return createHash("sha256").update(basis, "utf8").digest("hex").slice(0, 16);
 }
 
+/**
+ * Whether Fireflies is done with a transcript: it has a summary (an overview
+ * or action items), or its meeting began SUMMARY_WAIT_MS ago, after which it is
+ * stored without one. One still processing is deferred, not stored half-done.
+ */
+export function isFinalTranscript(raw: unknown, now: number): boolean {
+  if (raw === null || typeof raw !== "object") return false;
+  const t = raw as Raw;
+  const s = t.summary !== null && typeof t.summary === "object" ? t.summary as Raw : null;
+  if (s !== null && ((str(s.overview) ?? str(s.short_summary)) !== null || summaryOf(s).actionItems.length > 0)) return true;
+  let start: number;
+  try {
+    start = Date.parse(startOf(t));
+  } catch {
+    return false;
+  }
+  return now - start >= SUMMARY_WAIT_MS;
+}
+
 // ---------------------------------------------------------------------------
 // The sync adapter.
 
@@ -410,6 +437,41 @@ function timeOf(value: string | null): number | null {
   if (value === null) return null;
   const t = Date.parse(value);
   return Number.isFinite(t) ? t : null;
+}
+
+/**
+ * The transcripts cursor. With nothing deferred it is the end of the last
+ * closed window as ISO text, the form older releases read; while transcripts
+ * wait on Fireflies it is `{"v":2,"since":…,"pending":{"<id>":"<meeting start>"}}`.
+ */
+export interface TranscriptsState {
+  since: string | null;
+  pending: Readonly<Record<string, string>>;
+}
+
+export function parseTranscriptsCursor(cursor: string | null): TranscriptsState {
+  if (cursor === null) return { since: null, pending: {} };
+  if (!cursor.startsWith("{")) return { since: timeOf(cursor) === null ? null : cursor, pending: {} };
+  try {
+    const v = JSON.parse(cursor) as { v?: unknown; since?: unknown; pending?: unknown };
+    if (v.v !== 2) return { since: null, pending: {} };
+    const since = typeof v.since === "string" && timeOf(v.since) !== null ? v.since : null;
+    const pending: Record<string, string> = {};
+    if (v.pending !== null && typeof v.pending === "object" && !Array.isArray(v.pending)) {
+      for (const [id, at] of Object.entries(v.pending as Record<string, unknown>)) {
+        if (idOf({ id }) !== null && typeof at === "string" && timeOf(at) !== null) pending[id] = at;
+      }
+    }
+    return { since, pending };
+  } catch {
+    return { since: null, pending: {} };
+  }
+}
+
+export function serializeTranscriptsCursor(state: TranscriptsState): string | null {
+  // No cap needed: a transcript leaves the queue once final, which it is SUMMARY_WAIT_MS after its meeting.
+  if (Object.keys(state.pending).length === 0) return state.since;
+  return JSON.stringify({ v: 2, since: state.since, pending: state.pending });
 }
 
 /**
@@ -446,13 +508,22 @@ function idOf(row: unknown): string | null {
  *   - `transcripts`: the listing over a creation-date window, fetching only
  *     the transcripts whose listed version is not already stored. The window
  *     starts BACKFILL_DAYS back on the first run and LOOKBACK_MS before the
- *     cursor afterwards, and ends when the run started; the cursor moves to
- *     that end only once every page of the window is settled.
+ *     cursor afterwards, and ends when the run started. It is walked to a
+ *     fixed point: listing passes repeat until a pass finds no transcript the
+ *     run had not seen, so an offset shift from an arrival or a deletion during
+ *     the walk cannot skip one; after MAX_LISTING_PASSES unstable passes the
+ *     window stays open for the next run. The cursor moves to the window's end
+ *     only once the walk is stable and every transcript in it is stored or
+ *     deferred. A transcript Fireflies is still processing (no summary yet,
+ *     meeting under SUMMARY_WAIT_MS old) is deferred: its id is kept in the
+ *     cursor and fetched directly at the start of every run until it is
+ *     final, gone, or PENDING_MAX_AGE_MS old.
  *   - `transcripts.reconcile`: at most once per RECONCILE_EVERY_MS, every id
  *     the key can see is listed; a stored transcript missing from that list
  *     is probed by id, and only an `object_not_found` answer reports it
- *     deleted. A listing that merely misses an item deletes nothing, and the
- *     engine's mass-delete guard holds a large batch for the owner.
+ *     deleted. A listing that merely misses an item deletes nothing, a
+ *     deferred transcript is never probed, and the engine's mass-delete guard
+ *     holds a large batch for the owner.
  */
 export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; now: () => number }): SyncAdapter {
   if (!account.accountLabel) throw new Error(`Fireflies account ${account.id} has no label`);
@@ -472,22 +543,39 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
     return Number.isFinite(created) && runAt - created < LOOKBACK_MS ? Math.floor(runAt / 86_400_000) : null;
   };
 
-  /** The item to store, null when the transcript is gone, or the response that ends the stream. */
-  async function fetchItem(client: ConnectorClient, id: string, version: string): Promise<SyncItem | ConnectorResponse | null> {
+  type Fetched =
+    | { kind: "item"; item: SyncItem }
+    | { kind: "deferred"; startedAt: string }
+    | { kind: "gone" }
+    | { kind: "stop"; response: ConnectorResponse };
+
+  /**
+   * One transcript fetched by id. `version` is the listed one, or null for a
+   * deferred transcript fetched directly, whose version comes from the answer.
+   * `deferredAt` is when a deferred transcript's meeting began: one still not
+   * final is deferred again only while younger than PENDING_MAX_AGE_MS.
+   */
+  async function fetchItem(client: ConnectorClient, id: string, version: string | null, deferredAt: number | null): Promise<Fetched> {
     const got = await firefliesQuery<{ transcript: unknown }>(client, TRANSCRIPT_QUERY, { id });
+    const failed = (code: string, message: string): Fetched => ({ kind: "item", item: { externalId: id, version: version ?? "pending", failure: { code, message } } });
     if (!got.ok) {
       // Gone between the listing and the fetch: the reconcile decides that.
-      if (got.code === "object_not_found") return null;
+      if (got.code === "object_not_found") return { kind: "gone" };
       const cls = got.response.class;
-      if (cls === "auth_required" || cls === "forbidden" || cls === "rate_limited") return got.response;
-      return { externalId: id, version, failure: { code: got.code ?? cls, message: got.response.error ?? "Fireflies fetch failed" } };
+      if (cls === "auth_required" || cls === "forbidden" || cls === "rate_limited") return { kind: "stop", response: got.response };
+      return failed(got.code ?? cls, got.response.error ?? "Fireflies fetch failed");
     }
+    const raw = got.data.transcript;
     try {
-      const meeting = normalizeTranscript(got.data.transcript);
+      const meeting = normalizeTranscript(raw);
       if (meeting.id !== id) throw new Error("Fireflies answered with another transcript");
-      return syncItemFromPage(renderMeeting(render, meeting), version, { enrich: true });
+      if (!isFinalTranscript(raw, runAt) && (deferredAt === null || runAt - deferredAt < PENDING_MAX_AGE_MS)) {
+        return { kind: "deferred", startedAt: meeting.start };
+      }
+      const itemVersion = version ?? transcriptVersion(raw as Raw, refreshDayOf(raw as Raw));
+      return { kind: "item", item: syncItemFromPage(renderMeeting(render, meeting), itemVersion, { enrich: true }) };
     } catch (e) {
-      return { externalId: id, version, failure: { code: "invalid_transcript", message: e instanceof Error ? e.message : "unreadable transcript" } };
+      return failed("invalid_transcript", e instanceof Error ? e.message : "unreadable transcript");
     }
   }
 
@@ -496,16 +584,71 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
    * the window's end may not be committed after that, whatever later pages say.
    */
   let windowCut = false;
+  /** The stream's state for this run: read from the cursor on its first page, then carried page to page. */
+  let state: TranscriptsState | null = null;
+  let drained = false;
+  /** This run's walk of its window: the pass, the page within it, and every id listed so far. */
+  let pass = 0;
+  let passPage = 0;
+  let addedThisPass = 0;
+  const windowIds = new Set<string>();
 
-  async function transcriptsPage(client: ConnectorClient, cursor: string | null, page: number, budget: ItemBudget | undefined): Promise<PageResult> {
-    const since = timeOf(cursor);
+  const withPending = (s: TranscriptsState, id: string, at: string | null): TranscriptsState => {
+    const pending = { ...s.pending };
+    if (at === null) delete pending[id];
+    else pending[id] = at;
+    return { ...s, pending };
+  };
+
+  /** Deferred transcripts first, fetched by id whatever the listing window. */
+  async function drainPending(client: ConnectorClient, from: TranscriptsState, budget: ItemBudget | undefined): Promise<PageResult> {
+    let s = from;
+    const room = budget?.remaining ?? Number.POSITIVE_INFINITY;
+    const items: SyncItem[] = [];
+    for (const [id, at] of Object.entries(from.pending)) {
+      // The rest stay deferred for the next run.
+      if (items.length >= room) break;
+      const got = await fetchItem(client, id, null, Date.parse(at));
+      if (got.kind === "stop") return { ok: false, response: got.response };
+      if (got.kind === "gone") s = withPending(s, id, null);
+      else if (got.kind === "item") {
+        items.push(got.item);
+        // A failed fetch stays deferred and is retried; the engine holds it if it keeps failing.
+        if (!("failure" in got.item)) s = withPending(s, id, null);
+      }
+    }
+    state = s;
+    return { ok: true, items, checkpoint: serializeTranscriptsCursor(s), done: false };
+  }
+
+  async function transcriptsPage(client: ConnectorClient, cursor: string | null, budget: ItemBudget | undefined): Promise<PageResult> {
+    let s = state ?? parseTranscriptsCursor(cursor);
+    state = s;
+    if (!drained) {
+      drained = true;
+      if (Object.keys(s.pending).length > 0) return drainPending(client, s, budget);
+    }
+    if (passPage >= MAX_LISTING_PAGES) {
+      return { ok: false, response: {
+        class: "server_error", status: 0, body: null, next: null,
+        error: `Fireflies error listing_unbounded: the transcript listing did not end after ${MAX_LISTING_PAGES} pages`,
+      } };
+    }
+    const since = timeOf(s.since);
     const fromDate = new Date(since === null ? runAt - BACKFILL_DAYS * 86_400_000 : since - LOOKBACK_MS).toISOString();
     const toDate = new Date(runAt).toISOString();
-    const res = await firefliesQuery<{ transcripts?: unknown }>(client, LIST_QUERY, { fromDate, toDate, limit: LIST_PAGE_SIZE, skip: page * LIST_PAGE_SIZE });
+    const res = await firefliesQuery<{ transcripts?: unknown }>(client, LIST_QUERY, { fromDate, toDate, limit: LIST_PAGE_SIZE, skip: passPage * LIST_PAGE_SIZE });
     if (!res.ok) return { ok: false, response: res.response };
+    passPage++;
     const rows = rowsOf(res.data);
     const listed = rows.filter((t): t is ListedTranscript => idOf(t) !== null);
-    const versions = new Map(listed.map(t => [t.id, transcriptVersion(t, refreshDayOf(t))]));
+    for (const t of listed) {
+      if (windowIds.has(t.id)) continue;
+      windowIds.add(t.id);
+      addedThisPass++;
+    }
+    // A deferred transcript is fetched by id at the start of each run, never from the listing.
+    const versions = new Map(listed.filter(t => s.pending[t.id] === undefined).map(t => [t.id, transcriptVersion(t, refreshDayOf(t))]));
     const settled = await settledItemVersions(ctx.engine, account.id, [...versions.keys()]);
     const items: SyncItem[] = [];
     // A transcript fetched past what the run may store would be dropped by the
@@ -522,13 +665,32 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
         windowCut = true;
         break;
       }
-      const item = await fetchItem(client, id, version);
-      if (item === null) continue;
-      if ("class" in item) return { ok: false, response: item };
-      items.push(item);
+      const got = await fetchItem(client, id, version, null);
+      if (got.kind === "stop") return { ok: false, response: got.response };
+      if (got.kind === "deferred") s = withPending(s, id, got.startedAt);
+      else if (got.kind === "item") items.push(got.item);
     }
-    const done = rows.length < LIST_PAGE_SIZE && !windowCut;
-    return { ok: true, items, checkpoint: done ? toDate : null, done };
+    state = s;
+    // Never past the window's start, so every page is a resume point that keeps what was deferred.
+    const keep = serializeTranscriptsCursor(s);
+    if (rows.length >= LIST_PAGE_SIZE) return { ok: true, items, checkpoint: keep, done: false };
+
+    // The pass ended. The first is stable when it fit one page (nothing could
+    // shift under it); a later one when it listed nothing the run had not seen.
+    const stable = pass === 0 ? windowIds.size < LIST_PAGE_SIZE : addedThisPass === 0;
+    if (!stable && pass + 1 < MAX_LISTING_PASSES) {
+      pass++;
+      passPage = 0;
+      addedThisPass = 0;
+      return { ok: true, items, checkpoint: keep, done: false };
+    }
+    if (windowCut) return { ok: true, items, checkpoint: keep, done: false };
+    if (!stable) {
+      console.warn(`[connectors] fireflies account ${account.id}: the transcript listing kept changing across ${MAX_LISTING_PASSES} passes; the window stays open for the next run`);
+      return { ok: true, items, checkpoint: keep, done: true };
+    }
+    state = { ...s, since: toDate };
+    return { ok: true, items, checkpoint: serializeTranscriptsCursor(state), done: true };
   }
 
   async function reconcilePage(client: ConnectorClient, cursor: string | null, page: number): Promise<PageResult> {
@@ -548,8 +710,9 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
     // A cycle that needs several runs resumes after the last id it probed. Sorted
     // here, not by the database, whose collation need not agree with `>`.
     const after = state.probeAfter;
+    const deferred = parseTranscriptsCursor(await readCursor(ctx.engine, account.id, STREAM_TRANSCRIPTS)).pending;
     const missing = (await liveItemIds(ctx.engine, account.id))
-      .filter(id => !seenIds.has(id) && (after === null || id > after))
+      .filter(id => !seenIds.has(id) && deferred[id] === undefined && (after === null || id > after))
       .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     const batch = missing.slice(0, MAX_DELETE_PROBES);
     const deletions: string[] = [];
@@ -568,7 +731,7 @@ export function firefliesAdapter(account: SyncAccount, ctx: { engine: Engine; no
   return {
     streams: () => [STREAM_TRANSCRIPTS, STREAM_RECONCILE],
     page: async ({ client, stream, cursor, page, budget }) => {
-      if (stream === STREAM_TRANSCRIPTS) return transcriptsPage(client, cursor, page, budget);
+      if (stream === STREAM_TRANSCRIPTS) return transcriptsPage(client, cursor, budget);
       if (stream === STREAM_RECONCILE) return reconcilePage(client, cursor, page);
       throw new Error(`unknown Fireflies stream ${stream}`);
     },

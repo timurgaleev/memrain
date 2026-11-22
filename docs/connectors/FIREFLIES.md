@@ -63,8 +63,8 @@ account paused as `needs_reconnect` from where it stopped.
 
 With `connector_sync` enabled ([ENABLE.md](./ENABLE.md) step 6), the account
 syncs within 15 minutes. The first sync reads the last 90 days of meetings.
-Every later run reads again the 48 hours before where it stopped, so a meeting
-whose summary Fireflies had not produced yet is picked up once it has one.
+Every later run reads again the 48 hours before where it stopped. A meeting
+Fireflies is still processing waits until it has a summary (see below).
 
 ## What lands in the brain
 
@@ -82,11 +82,18 @@ outside text; nothing in it is ever acted on.
 ## How a sync works
 
 - The first run lists transcripts created in the last 90 days; later runs list
-  the window since the previous run plus 48 hours. A transcript whose title,
-  time, length, people or summary status changed is fetched again, and one
-  younger than 48 hours is read again once a day so an edit to its text lands.
-  Fireflies reports no edit time, so an edit made later than that is not
-  picked up.
+  the window since the previous run plus 48 hours. The listing is repeated (up
+  to three passes) until a pass finds no transcript it had not seen, so a
+  meeting added or deleted while the run pages through the list is not
+  skipped; a list that keeps changing leaves the window open for the next run.
+- A transcript with no summary yet is not stored. Its id is kept and fetched
+  directly at the start of every run until it has a summary, until 48 hours
+  after the meeting began (it is then stored without one), or until Fireflies
+  no longer has it. After seven days it is stored as it is.
+- A transcript whose title, time, length, people or summary status changed is
+  fetched again, and one younger than 48 hours is read again once a day so an
+  edit to its text lands. Fireflies reports no edit time, so an edit made later
+  than that is not picked up.
 - About once a day every transcript id the key can see is listed. A stored
   transcript missing from that list is asked for by id, and only a "not found"
   answer deletes it: its page and parts are soft-deleted with a receipt that
@@ -131,7 +138,8 @@ its last run. Search the brain for the title of a recent meeting.
 |---|---|---|
 | The account shows `needs_reconnect` | Fireflies refused the key (revoked or regenerated) | Copy the current key from Fireflies, choose **Enter the Fireflies key again** on the account's row, and save it under **Connect Fireflies** into the same source |
 | Runs stop `partial` every day | The daily quota of your plan is used up | Wait for midnight UTC; the backlog drains over the next days |
-| A meeting has no summary | Fireflies had not finished it when the run read it | Runs within the next 48 hours pick it up |
+| A recent meeting is missing | Fireflies has not produced its summary yet | It is stored once the summary exists, or 48 hours after the meeting began |
+| A meeting has no summary | Fireflies produced none within 48 hours of the meeting | Nothing to fix; the transcript is stored without one |
 | The Connections page answers `connectors_disabled` | Connectors are off or the connector key did not load | [ENABLE.md](./ENABLE.md) step 3 |
 
 ## Disconnecting
