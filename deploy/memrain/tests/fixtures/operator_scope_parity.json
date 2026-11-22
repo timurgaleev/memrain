@@ -3,6 +3,12 @@
     "call": "search {\"q\":\"kangaroo\"}",
     "sql": [
       {
+        "text": "SELECT COALESCE(array_agg(id ORDER BY id) FILTER (WHERE federated OR id = $1), '{}') AS federated, COALESCE(array_agg(id ORDER BY id) FILTER (WHERE NOT federated AND id <> $1), '{}') AS isolated FROM sources",
+        "params": [
+          "default"
+        ]
+      },
+      {
         "text": "SELECT value FROM document_generation_clock WHERE id = 1",
         "params": null
       },
@@ -158,6 +164,12 @@
     "call": "search {\"q\":\"Aardvark Shared Title\"}",
     "sql": [
       {
+        "text": "SELECT COALESCE(array_agg(id ORDER BY id) FILTER (WHERE federated OR id = $1), '{}') AS federated, COALESCE(array_agg(id ORDER BY id) FILTER (WHERE NOT federated AND id <> $1), '{}') AS isolated FROM sources",
+        "params": [
+          "default"
+        ]
+      },
+      {
         "text": "SELECT value FROM document_generation_clock WHERE id = 1",
         "params": null
       },
@@ -277,6 +289,12 @@
   {
     "call": "query {\"q\":\"kangaroo\"}",
     "sql": [
+      {
+        "text": "SELECT COALESCE(array_agg(id ORDER BY id) FILTER (WHERE federated OR id = $1), '{}') AS federated, COALESCE(array_agg(id ORDER BY id) FILTER (WHERE NOT federated AND id <> $1), '{}') AS isolated FROM sources",
+        "params": [
+          "default"
+        ]
+      },
       {
         "text": "SELECT value FROM document_generation_clock WHERE id = 1",
         "params": null
@@ -491,6 +509,12 @@
   {
     "call": "page_list {}",
     "sql": [
+      {
+        "text": "SELECT COALESCE(array_agg(id ORDER BY id) FILTER (WHERE federated OR id = $1), '{}') AS federated, COALESCE(array_agg(id ORDER BY id) FILTER (WHERE NOT federated AND id <> $1), '{}') AS isolated FROM sources",
+        "params": [
+          "default"
+        ]
+      },
       {
         "text": "SELECT slug, type, title, compiled_truth, markdown_body, content_hash, source_id, created_at::text AS created_at, updated_at::text AS updated_at, deleted_at::text AS deleted_at FROM pages WHERE deleted_at IS NULL ORDER BY pages.updated_at DESC, slug COLLATE \"C\" ASC LIMIT $1",
         "params": [
@@ -790,6 +814,12 @@
   {
     "call": "find_experts {\"limit\":5}",
     "sql": [
+      {
+        "text": "SELECT COALESCE(array_agg(id ORDER BY id) FILTER (WHERE federated OR id = $1), '{}') AS federated, COALESCE(array_agg(id ORDER BY id) FILTER (WHERE NOT federated AND id <> $1), '{}') AS isolated FROM sources",
+        "params": [
+          "default"
+        ]
+      },
       {
         "text": "WITH edges AS ( SELECT source_slug AS slug, target_slug AS neighbour FROM links WHERE source_slug <> target_slug AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) UNION ALL SELECT target_slug AS slug, source_slug AS neighbour FROM links WHERE source_slug <> target_slug AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = source_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = target_slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ), degrees AS ( SELECT e.slug, COUNT(DISTINCT e.neighbour) AS degree FROM edges e JOIN pages np ON np.slug = e.neighbour AND np.deleted_at IS NULL GROUP BY e.slug ) SELECT p.slug, p.type, p.title, COALESCE(d.degree, 0) AS degree FROM pages p LEFT JOIN degrees d ON d.slug = p.slug WHERE p.deleted_at IS NULL AND NOT EXISTS ( SELECT 1 FROM pages hp WHERE hp.slug = p.slug AND (hp.deleted_at IS NOT NULL OR EXISTS ( SELECT 1 FROM documents hd WHERE hd.source_path = CASE WHEN hp.source_id IS NULL OR hp.source_id = 'default' THEN 'page://' || hp.slug ELSE 'page://' || hp.source_id || '/' || hp.slug END AND (hd.archived OR NOT NOT (COALESCE(hd.frontmatter, '{}'::jsonb) ? 'quarantine'))))) ORDER BY COALESCE(d.degree, 0) DESC, p.updated_at DESC, p.slug COLLATE \"C\" ASC LIMIT $1",
         "params": [
@@ -1303,7 +1333,14 @@
   },
   {
     "call": "volunteer_context {\"window\":\"kangaroo\"}",
-    "sql": [],
+    "sql": [
+      {
+        "text": "SELECT COALESCE(array_agg(id ORDER BY id) FILTER (WHERE federated OR id = $1), '{}') AS federated, COALESCE(array_agg(id ORDER BY id) FILTER (WHERE NOT federated AND id <> $1), '{}') AS isolated FROM sources",
+        "params": [
+          "default"
+        ]
+      }
+    ],
     "result": {
       "content": [
         {
@@ -1317,7 +1354,7 @@
     "call": "sources_list {}",
     "sql": [
       {
-        "text": "SELECT id, kind, path_prefix, sync_policy, indexed_policy, rate_limit_per_minute, respect_quiet_hours, boost_weight, description FROM sources ORDER BY path_prefix",
+        "text": "SELECT id, kind, path_prefix, sync_policy, indexed_policy, rate_limit_per_minute, respect_quiet_hours, boost_weight, description, federated FROM sources ORDER BY path_prefix",
         "params": []
       }
     ],
@@ -1325,7 +1362,7 @@
       "content": [
         {
           "type": "text",
-          "text": "{\"ok\":true,\"count\":3,\"sources\":[{\"id\":\"tenantA\",\"kind\":\"vault\",\"path_prefix\":\"/tenant-a\",\"sync_policy\":\"synced\",\"indexed_policy\":\"verbatim\",\"rate_limit_per_minute\":60,\"respect_quiet_hours\":false,\"boost_weight\":1,\"description\":null},{\"id\":\"tenantB\",\"kind\":\"vault\",\"path_prefix\":\"/tenant-b\",\"sync_policy\":\"synced\",\"indexed_policy\":\"verbatim\",\"rate_limit_per_minute\":60,\"respect_quiet_hours\":false,\"boost_weight\":1,\"description\":null},{\"id\":\"default\",\"kind\":\"other\",\"path_prefix\":\"__default__\",\"sync_policy\":\"synced\",\"indexed_policy\":\"verbatim\",\"rate_limit_per_minute\":60,\"respect_quiet_hours\":false,\"boost_weight\":1,\"description\":null}]}"
+          "text": "{\"ok\":true,\"count\":3,\"sources\":[{\"id\":\"tenantA\",\"kind\":\"vault\",\"path_prefix\":\"/tenant-a\",\"sync_policy\":\"synced\",\"indexed_policy\":\"verbatim\",\"rate_limit_per_minute\":60,\"respect_quiet_hours\":false,\"boost_weight\":1,\"description\":null,\"federated\":true},{\"id\":\"tenantB\",\"kind\":\"vault\",\"path_prefix\":\"/tenant-b\",\"sync_policy\":\"synced\",\"indexed_policy\":\"verbatim\",\"rate_limit_per_minute\":60,\"respect_quiet_hours\":false,\"boost_weight\":1,\"description\":null,\"federated\":true},{\"id\":\"default\",\"kind\":\"other\",\"path_prefix\":\"__default__\",\"sync_policy\":\"synced\",\"indexed_policy\":\"verbatim\",\"rate_limit_per_minute\":60,\"respect_quiet_hours\":false,\"boost_weight\":1,\"description\":null,\"federated\":true}]}"
         }
       ]
     }
@@ -1436,6 +1473,12 @@
   {
     "call": "recall {\"id\":\"$factIdB\"}",
     "sql": [
+      {
+        "text": "SELECT COALESCE(array_agg(id ORDER BY id) FILTER (WHERE federated OR id = $1), '{}') AS federated, COALESCE(array_agg(id ORDER BY id) FILTER (WHERE NOT federated AND id <> $1), '{}') AS isolated FROM sources",
+        "params": [
+          "default"
+        ]
+      },
       {
         "text": "SELECT id, entity_slug, fact, confidence, source_slug, source_chunk_id, written_by, written_at::text AS written_at, kind, notability, valid_from::text AS valid_from, valid_until::text AS valid_until, visibility, superseded_by, consolidated_into, context, source_session, attributed_to, forgotten_at::text AS forgotten_at FROM entity_facts WHERE id = $1 AND forgotten_at IS NULL",
         "params": [

@@ -476,7 +476,7 @@ shapes mean different things:
 
 | `sourceIds` | Who | Reads |
 |---|---|---|
-| `undefined` | the local CLI, the internal token, the operator | the whole brain — no predicate at all |
+| `undefined` | the local CLI, the internal token, the operator | the whole brain — no predicate at all (unqualified searches narrow to federated sources first, see below) |
 | `[]` | an authenticated caller granted nothing | **nothing** |
 | `[NO_SOURCE_SENTINEL]` | the write-side floor; a read helper that meets it treats it as `[]` | nothing (same as `[]`) |
 | `['a', 'b']` | a scoped or federated grant | only those sources |
@@ -537,6 +537,39 @@ Three tests hold the contract in place:
   and fails when an operation has none. Each `isolated` read must first show
   the operator a second tenant's data (otherwise the row is vacuous and fails),
   then must not show it to a scoped, a federated or a no-grant caller.
+
+### Federated sources
+
+Every source carries a `federated` flag (migration 195). A read that names no
+source, from a caller whose grant names none (the operator, the CLI, `memrain
+eval`, a key with `read_sources` null), reads the `default` source plus the
+federated sources only. That holds for `search`, `query`, `recall`, `think`,
+`context_pack`, `volunteer_context`, `page_list` and `find_experts`, and for
+`memrain search` and `memrain eval`. A source that is not federated is reached
+only by:
+
+- an explicit `source_ids` on `search`, `query` or `page_list`;
+- a token or client grant that lists it (grants are never changed by the flag);
+- a code filter on `search` or `query` (`lang`, `near_symbol`, `symbol_kind`);
+- the code tools (`code_def`, `code_refs`, `code_callers`, `code_callees`,
+  `code_blast`, `code_flow`), which read every source in the caller's grant.
+
+A source registered with `--kind code` starts unfederated, so its chunks stay
+out of ordinary search; every other kind starts federated, so connectors and
+note sources read as before. Migration 195 left every existing source
+federated except code sources (kind `code`, and `repo-source-code`).
+Re-registering a source keeps its flag. Change it on the brain host:
+
+```bash
+memrain sources unfederate repo-source-code   # only grants, source_ids and code tools reach it
+memrain sources federate repo-source-code     # unscoped reads reach it again
+memrain sources list                          # each row shows "federated"
+```
+
+When every source is federated, an unscoped read keeps the `undefined` scope
+and its SQL is unchanged. Otherwise the scope becomes the list of federated
+sources, and like every source list it leaves out documents no source owns
+(`source_id` NULL).
 
 Hybrid search honours the contract end to end: query-cache keys for `[]` differ
 from the unscoped key, both hydration passes are scoped, and the identifier,

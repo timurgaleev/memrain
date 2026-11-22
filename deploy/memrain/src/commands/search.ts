@@ -14,6 +14,7 @@ import { hybridSearch } from "../core/search/index.ts";
 import { formatExplainList } from "../core/search/explain.ts";
 import { formatDegradedNotice, type SearchMeta } from "../core/search/search-meta.ts";
 import { loadConfig } from "../core/config.ts";
+import { federatedReadScope } from "../core/sources.ts";
 
 export interface SearchCommandOptions {
   query: string;
@@ -32,8 +33,11 @@ export async function runSearch(
   const storage = new Storage(config);
   return withStorage(storage, async () => {
     let meta: SearchMeta | undefined;
+    // An unqualified search reads the default and federated sources only.
+    const sourceIds = await federatedReadScope(storage.engine(), undefined);
     const hits = await hybridSearch(storage, opts.query, {
       ...(opts.k ? { k: opts.k } : {}),
+      ...(sourceIds ? { sourceIds } : {}),
       ...(opts.explain ? { explain: true } : {}),
       onMeta: (m) => {
         meta = m;

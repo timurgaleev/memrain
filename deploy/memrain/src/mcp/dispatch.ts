@@ -217,7 +217,7 @@ import {
   persistThinkSynthesis,
   saveThinkTake,
 } from "../core/synthesis/think-persist.ts";
-import { listSources, getSource, resolveSourceForPath, SOURCE_KINDS, type SourceKind } from "../core/sources.ts";
+import { federatedReadScope, listSources, getSource, resolveSourceForPath, SOURCE_KINDS, type SourceKind } from "../core/sources.ts";
 import { cacheStats } from "../core/search/query-cache.ts";
 import { currentDocumentClock } from "../core/generation.ts";
 import {
@@ -292,7 +292,7 @@ import { hasScope } from "../core/scope.ts";
 import { insufficientScopeChallenge } from "../http/oauth-metadata.ts";
 import { ADMIN_PANEL_ONLY_TOOLS, dispatchRefusal, SLUG_PARAMS_BY_WRITE_TOOL } from "./visibility.ts";
 import { READ_FLOOR_FILTERED, strictestFloor } from "./read-floor.ts";
-import { narrowReadSources } from "./read-source-filter.ts";
+import { narrowReadSources, readsFederatedScope } from "./read-source-filter.ts";
 import { withRequestCost } from "../core/request-cost.ts";
 import { readContextDelta } from "../core/context-delta.ts";
 import { listQuarantined } from "../core/quarantine-list.ts";
@@ -608,6 +608,9 @@ async function dispatchToolInner(
       remote = false;
       takesHolders = effectiveTakesHolders(opts.authInfo, { owner: true });
     }
+    // A grant that names no source: an unqualified read then reaches only the
+    // default and federated sources. A grant that lists sources keeps them all.
+    const unscopedGrant = grantedReadSources === undefined;
     grantedReadSources = narrowOwnerOnlyScope(grantedReadSources, access.brain, remote);
     await extension().admitOperation(req.name, () => storage.engine(), req.arguments);
     // Tool-level gates, in order: the fail-closed write gate (a scopeless
@@ -684,7 +687,10 @@ async function dispatchToolInner(
     // that filter by tier read the stricter of the two (mcp/read-floor.ts).
     const floor = opts.authInfo?.minTrust;
     if (floor !== undefined && READ_FLOOR_FILTERED.has(req.name)) args["min_trust"] = strictestFloor(floor, args["min_trust"]);
-    const readSources = narrowReadSources(req.name, args, grantedReadSources);
+    let readSources = narrowReadSources(req.name, args, grantedReadSources);
+    if (unscopedGrant && readsFederatedScope(req.name, args)) {
+      readSources = await federatedReadScope(storage.engine(), readSources);
+    }
     // Per-client slug-prefix write fence (oauth_clients.bound_slug_prefixes):
     // a bound principal may mutate only slugs under its prefixes. Deny-by-
     // default — a write/admin op that names no slug (index, extract_facts,

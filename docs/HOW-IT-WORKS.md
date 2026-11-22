@@ -419,6 +419,14 @@ and then erases it. With `MEMRAIN_REQUIRE_MEMBER=1`, a credential that is not
 bound to a member is refused. See
 [TEAM-SETUP.md](./TEAM-SETUP.md#members-and-groups).
 
+**Federated sources.** A search that names no source, from someone whose key
+names none, reads the `default` source plus the federated sources. A code
+repository registered as a source is not federated, so its code does not crowd
+your notes out of ordinary search; `source_ids`, a key granted that source and
+the code tools still reach it. `memrain sources federate <id>` and
+`unfederate <id>` change it. See
+[CONFIGURATION.md](./CONFIGURATION.md#federated-sources).
+
 **A connection pooler.** If many processes share one database, Memrain can work
 through PgBouncer in transaction mode (`MEMRAIN_PG_POOLER=pgbouncer`), with
 migrations kept on a direct connection (`MEMRAIN_POSTGRES_DIRECT_URL`).

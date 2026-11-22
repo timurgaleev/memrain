@@ -362,6 +362,15 @@ doctor check `owner-only-sources` also warns when owner-only sources exist but
 no owner member is set, and when a mailbox, calendar or transcript source is
 not owner-only, whether the brain serves one person or several.
 
+### Federated sources
+
+A search, query or recall that names no source, from a key whose grant names
+none, reads the `default` source plus the federated sources. Code sources start
+unfederated; every other kind starts federated. A key whose grant lists a
+source reads it whether it is federated or not, so per-person grants are
+unaffected. `memrain sources federate <id>` / `unfederate <id>` change the flag;
+see [CONFIGURATION.md](./CONFIGURATION.md#federated-sources).
+
 ### Offboarding with the personal source
 
 `memrain member remove alice --erase-personal-source` shows what would go.

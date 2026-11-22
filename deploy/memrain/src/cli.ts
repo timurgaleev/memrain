@@ -52,6 +52,7 @@ import { runApplyMigrations } from "./commands/apply-migrations.ts";
 import {
   runSources,
   runSourceOwnerOnly,
+  runSourceFederate,
   runSourceProvenance,
   isSourceKind,
   isSyncPolicy,
@@ -272,6 +273,8 @@ function printUsage(): void {
   console.log("                               [--no-respect-quiet-hours] to clear the flag");
   console.log("  sources delete <id>          refuses if any document still references it");
   console.log("  sources owner-only <id> [on|off]   a personal mailbox/calendar only the owner reads");
+  console.log("  sources federate <id>        unscoped reads (search, query, recall, ...) reach the source");
+  console.log("  sources unfederate <id>      only grants, source_ids and the code tools reach it (code sources start so)");
   console.log("  sources provenance [--apply]       record where older derived rows came from (dry run first)");
   console.log("  friction analyze [--since H|ISO|7d] [--limit N]");
   console.log("                               counts + recent + top-repeats from friction_events");
@@ -1377,6 +1380,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
     case "sources": {
       const sub = positional[0];
       if (sub === "owner-only") return await runSourceOwnerOnly(positional[1], positional[2]);
+      if (sub === "federate" || sub === "unfederate") return await runSourceFederate(positional[1], sub === "federate");
       if (sub === "provenance") return await runSourceProvenance(flags.has("--apply"));
       if (
         sub !== "list" &&
@@ -1386,7 +1390,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
         sub !== "delete"
       ) {
         console.error(
-          "memrain sources: subcommand required (list|show|register|update|delete|owner-only|provenance)",
+          "memrain sources: subcommand required (list|show|register|update|delete|owner-only|federate|unfederate|provenance)",
         );
         return 1;
       }

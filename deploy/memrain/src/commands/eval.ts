@@ -47,6 +47,7 @@ import { withStorage } from "./with-storage.ts";
 import { loadConfig } from "../core/config.ts";
 import { dispatchTool } from "../mcp/dispatch.ts";
 import { hybridSearch } from "../core/search/index.ts";
+import { federatedReadScope } from "../core/sources.ts";
 import { resolveSearchKnobs } from "../core/search/hybrid.ts";
 import { DEFAULT_RRF_K } from "../core/rrf.ts";
 import { embeddingSignature } from "../core/embedding.ts";
@@ -478,9 +479,12 @@ async function defaultSearchFn(
   cfg: EvalKnobConfig,
   k: number,
 ): Promise<string[]> {
+  // Scored as the operator searches: the default and federated sources only.
+  const sourceIds = await federatedReadScope(storage.engine(), undefined);
   const hits = await hybridSearch(storage, query, {
     k: k * PAGE_OVERFETCH,
     noCache: true,
+    ...(sourceIds ? { sourceIds } : {}),
     ...(cfg.rrfK !== undefined ? { rrfK: cfg.rrfK } : {}),
     ...(cfg.expansion !== undefined ? { expansion: cfg.expansion } : {}),
     ...(cfg.rerank !== undefined ? { rerank: cfg.rerank } : {}),

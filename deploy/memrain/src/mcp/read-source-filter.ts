@@ -16,3 +16,24 @@ export function narrowReadSources(tool: string, args: Record<string, unknown>, g
   }
   return [...new Set(requested as string[])].sort();
 }
+
+/** The reads that, unqualified, reach only the default source and the federated ones (core/sources.ts federatedReadScope). */
+const FEDERATED_SCOPE_TOOLS = new Set([
+  "search", "query", "recall", "think", "context_pack", "volunteer_context", "page_list", "find_experts",
+]);
+
+/** search and query filters that ask for code, which lives in sources that are not federated. */
+const CODE_FILTERS = ["lang", "near_symbol", "symbol_kind"] as const;
+
+/**
+ * True when this call is an unqualified read: a federated-scope tool, no
+ * `source_ids`, and no code filter. Dispatch applies it only when the
+ * credential's grant names no source; a grant that lists sources is kept as is.
+ * A `query` with `refine` does not apply the code filters, so they do not lift
+ * federation there.
+ */
+export function readsFederatedScope(tool: string, args: Record<string, unknown>): boolean {
+  if (!FEDERATED_SCOPE_TOOLS.has(tool) || args.source_ids !== undefined) return false;
+  if (tool === "query" && typeof args.refine === "string" && args.refine !== "") return true;
+  return !CODE_FILTERS.some(k => typeof args[k] === "string" && args[k] !== "");
+}

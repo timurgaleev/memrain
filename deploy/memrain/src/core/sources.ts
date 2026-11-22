@@ -66,6 +66,8 @@ export interface SourceRow {
   respect_quiet_hours: boolean;
   boost_weight: number;
   description: string | null;
+  /** Unscoped reads reach this source (see `federatedReadScope`). */
+  federated: boolean;
 }
 
 export interface RegisterSourceOptions {
@@ -82,7 +84,7 @@ export interface RegisterSourceOptions {
 
 const SELECT_COLS =
   "id, kind, path_prefix, sync_policy, indexed_policy, " +
-  "rate_limit_per_minute, respect_quiet_hours, boost_weight, description";
+  "rate_limit_per_minute, respect_quiet_hours, boost_weight, description, federated";
 
 interface RawSourceRow extends Omit<SourceRow, "boost_weight"> {
   boost_weight: number | string;
@@ -115,11 +117,14 @@ export async function registerSource(
     throw new Error(`registerSource: "${opts.id}" is reserved`);
   }
   assertPathPrefix(opts.pathPrefix);
+  // A new code source is not federated: its chunks would crowd notes out of
+  // every unscoped search. Re-registering keeps whatever federation the source
+  // already has; `memrain sources federate|unfederate` changes it.
   const r = await engine.query<RawSourceRow>(
     `INSERT INTO sources (
        id, kind, path_prefix, sync_policy, indexed_policy,
-       rate_limit_per_minute, respect_quiet_hours, boost_weight, description
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       rate_limit_per_minute, respect_quiet_hours, boost_weight, description, federated
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $2 <> 'code')
      ON CONFLICT (id) DO UPDATE SET
        kind = EXCLUDED.kind,
        path_prefix = EXCLUDED.path_prefix,
@@ -272,6 +277,49 @@ export async function sourceReferences(engine: Engine, id: string): Promise<Reco
   const row = r.rows[0] ?? {};
   const refs = Object.fromEntries(Object.entries(row).filter(([, n]) => Number(n) > 0).map(([k, n]) => [k, Number(n)]));
   return id === FALLBACK_SOURCE ? { fallback_source: 1, ...refs } : refs;
+}
+
+/** `memrain sources federate|unfederate <id>`: whether unscoped reads reach the source. */
+export async function setSourceFederated(
+  engine: Pick<Engine, "query">,
+  id: string,
+  federated: boolean,
+): Promise<{ source_id: string; federated: boolean }> {
+  const r = await engine.query<{ id: string; federated: boolean }>(
+    `UPDATE sources SET federated = $2 WHERE id = $1 RETURNING id, federated`,
+    [id, federated],
+  );
+  if (!r.rows[0]) throw new Error(`unknown source "${id}"`);
+  return { source_id: r.rows[0].id, federated: r.rows[0].federated === true };
+}
+
+/**
+ * The read scope of an unqualified read: one that names no source and comes
+ * from a caller whose grant names none (the operator, the CLI, an unscoped
+ * key). It reads the `default` source plus the federated sources, so a source
+ * that is not federated (a code repository, by default) is reached only by an
+ * explicit grant, an explicit `source_ids`, or the code tools.
+ *
+ * `scope` is what the caller could read before federation applies: undefined
+ * for the whole brain, or that list narrowed by owner-only sources. When every
+ * source is federated it comes back unchanged, so an unscoped read keeps its
+ * unscoped SQL; otherwise the sources that are not federated are dropped from
+ * it. Like every source list, that leaves out documents no source owns
+ * (source_id NULL).
+ */
+export async function federatedReadScope(
+  engine: Pick<Engine, "query">,
+  scope: readonly string[] | undefined,
+): Promise<string[] | undefined> {
+  const r = await engine.query<{ federated: string[] | null; isolated: string[] | null }>(
+    `SELECT COALESCE(array_agg(id ORDER BY id) FILTER (WHERE federated OR id = $1), '{}') AS federated,
+            COALESCE(array_agg(id ORDER BY id) FILTER (WHERE NOT federated AND id <> $1), '{}') AS isolated
+       FROM sources`,
+    [FALLBACK_SOURCE],
+  );
+  const isolated = new Set(r.rows[0]?.isolated ?? []);
+  if (isolated.size === 0) return scope === undefined ? undefined : [...scope];
+  return (scope ?? r.rows[0]?.federated ?? []).filter((id) => !isolated.has(id));
 }
 
 const FOREIGN_KEY_VIOLATION = "23503";

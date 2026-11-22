@@ -17,6 +17,7 @@
  *   delete <id>                                  refuses if documents
  *                                                still reference it
  *   owner-only <id> [on|off]                     show or set the owner-only flag
+ *   federate <id> / unfederate <id>              whether unscoped reads reach it
  *   provenance [--apply]                         record origins of older derived rows
  */
 import { Storage } from "../core/storage.ts";
@@ -30,6 +31,7 @@ import {
   updateSource,
   deleteSource,
   sourceReferences,
+  setSourceFederated,
   SOURCE_KINDS,
   type SourceKind,
   type SyncPolicy,
@@ -209,6 +211,24 @@ export async function runSourceOwnerOnly(id: string | undefined, value: string |
       ok: true, ...set,
       ...(pending ? { note: "Rows derived from this source before this release are not closed yet: run memrain sources provenance, then --apply." } : {}),
     }, null, 2));
+    return 0;
+  });
+}
+
+/**
+ * `memrain sources federate <id>` / `unfederate <id>`: whether a read that
+ * names no source, from a caller whose grant names none, reaches this source
+ * (core/sources.ts federatedReadScope). Grants that list the source are not
+ * touched.
+ */
+export async function runSourceFederate(id: string | undefined, federated: boolean): Promise<number> {
+  if (!id) {
+    console.error(`Usage: memrain sources ${federated ? "federate" : "unfederate"} <id>`);
+    return 1;
+  }
+  const storage = new Storage(loadConfig());
+  return withStorage(storage, async () => {
+    console.log(JSON.stringify({ ok: true, ...(await setSourceFederated(storage.engine(), id, federated)) }, null, 2));
     return 0;
   });
 }
